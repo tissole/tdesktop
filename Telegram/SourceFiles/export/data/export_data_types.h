@@ -89,6 +89,7 @@ struct StoriesInfo {
 struct FileLocation {
 	int dcId = 0;
 	MTPInputFileLocation data;
+	uint64 randomId = 0;
 
 	explicit operator bool() const {
 		return dcId != 0;
@@ -112,6 +113,7 @@ struct File {
 	QString suggestedPath;
 
 	QString relativePath;
+	uint64 randomId = 0;
 	SkipReason skipReason = SkipReason::None;
 };
 

@@ -32,20 +32,18 @@ struct Content {
 };
 
 [[nodiscard]] Content ContentFromState(
-	not_null<Settings*> settings,
-	const ProcessingState &state);
+	const ProcessingState &state); // <-- REMOVE 'settings' argument
 [[nodiscard]] Content ContentFromState(const FinishedState &state);
 
 [[nodiscard]] inline auto ContentFromState(
-		not_null<Settings*> settings,
-		rpl::producer<State> state) {
+		rpl::producer<State> state) { // <-- REMOVE 'settings' argument
 	return std::move(
 		state
 	) | rpl::filter([](const State &state) {
 		return v::is<ProcessingState>(state) || v::is<FinishedState>(state);
-	}) | rpl::map([=](const State &state) {
+	}) | rpl::map([=](const State &state) { // <-- REMOVE 'settings' from capture
 		if (const auto process = std::get_if<ProcessingState>(&state)) {
-			return ContentFromState(settings, *process);
+			return ContentFromState(*process); // <-- REMOVE 'settings' argument
 		} else if (const auto done = std::get_if<FinishedState>(&state)) {
 			return ContentFromState(*done);
 		}

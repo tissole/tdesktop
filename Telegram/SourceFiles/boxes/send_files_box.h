@@ -279,6 +279,7 @@ private:
 	bool _invertCaption = false;
 
 	object_ptr<Ui::InputField> _caption = { nullptr };
+	object_ptr<Ui::InputField> _fileCaptions = { nullptr };  // New field for file captions
 	std::unique_ptr<ChatHelpers::FieldAutocomplete> _autocomplete;
 	TextWithTags _prefilledCaptionText;
 	object_ptr<Ui::EmojiButton> _emojiToggle = { nullptr };

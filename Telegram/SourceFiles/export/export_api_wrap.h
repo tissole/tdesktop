@@ -10,6 +10,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_concurrent_sender.h"
 #include "data/data_peer_id.h"
 
+namespace base {
+class Timer;
+} // namespace base
+
 namespace Export {
 namespace Data {
 struct File;
@@ -92,6 +96,8 @@ public:
 
 	void requestMessages(
 		const Data::DialogInfo &info,
+		int32 fromId,
+		int32 tillId,
 		FnMut<bool(const Data::DialogInfo &)> start,
 		Fn<bool(DownloadProgress)> progress,
 		Fn<bool(Data::MessagesSlice&&)> slice,
@@ -111,7 +117,11 @@ private:
 	struct StoriesProcess;
 	struct OtherDataProcess;
 	struct FileProcess;
-	struct FileProgress;
+	struct FileProgress {
+		uint64 randomId = 0;
+		int64 ready = 0;
+		int64 total = 0;
+	};
 	struct ChatsProcess;
 	struct LeftChannelsProcess;
 	struct DialogsProcess;
@@ -199,7 +209,7 @@ private:
 	[[nodiscard]] Data::Message *currentFileMessage() const;
 	[[nodiscard]] Data::FileOrigin currentFileMessageOrigin() const;
 
-	bool processFileLoad(
+	void processFileLoad(
 		Data::File &file,
 		const Data::FileOrigin &origin,
 		Fn<bool(FileProgress)> progress,
@@ -207,26 +217,24 @@ private:
 		Data::Message *message = nullptr,
 		Data::Story *story = nullptr);
 	std::unique_ptr<FileProcess> prepareFileProcess(
-		const Data::File &file,
+		Data::File &file,
 		const Data::FileOrigin &origin) const;
 	bool writePreloadedFile(
 		Data::File &file,
 		const Data::FileOrigin &origin);
 	void loadFile(
-		const Data::File &file,
+		Data::File &file,
 		const Data::FileOrigin &origin,
 		Fn<bool(FileProgress)> progress,
 		FnMut<void(QString)> done);
-	void loadFilePart();
-	void filePartDone(int64 offset, const MTPupload_File &result);
-	void filePartUnavailable();
-	void filePartRefreshReference(int64 offset);
-	void filePartExtractReference(
-		int64 offset,
-		const MTPmessages_Messages &result);
-	void filePartExtractReference(
-		int64 offset,
-		const MTPstories_Stories &result);
+	void scheduleMoreFiles();	
+	void loadFilePart(FileProcess &process);
+	void finishFile(uint64 randomId, const QString &relativePath);
+	void filePartDone(uint64 randomId, int64 offset, const MTPupload_File &result);
+	void filePartUnavailable(uint64 randomId);
+	void filePartRefreshReference(uint64 randomId, int64 offset);
+	void filePartExtractReference(uint64 randomId, int64 offset, const MTPmessages_Messages &result);
+	void filePartExtractReference(uint64 randomId, int64 offset, const MTPstories_Stories &result);
 
 	template <typename Request>
 	class RequestBuilder;
@@ -239,7 +247,8 @@ private:
 
 	[[nodiscard]] auto fileRequest(
 		const Data::FileLocation &location,
-		int64 offset);
+		int64 offset,
+		int chunkSize);
 
 	void error(const MTP::Error &error);
 	void error(const QString &text);
@@ -259,7 +268,29 @@ private:
 	std::unique_ptr<UserpicsProcess> _userpicsProcess;
 	std::unique_ptr<StoriesProcess> _storiesProcess;
 	std::unique_ptr<OtherDataProcess> _otherDataProcess;
-	std::unique_ptr<FileProcess> _fileProcess;
+	
+	std::map<uint64, std::unique_ptr<FileProcess>> _fileProcesses;
+	std::deque<uint64> _fileDownloadQueue;
+    class RequestThrottler {
+    	public:
+    		RequestThrottler(Fn<void(FnMut<void()>)> runner);
+    		void schedule(FnMut<void()> task);
+    		~RequestThrottler();
+    
+    	private:
+    		void tryProcessQueue();
+    
+    		Fn<void(FnMut<void()>)> _runner;
+    		std::deque<FnMut<void()>> _taskQueue;
+    		int _tokens = 28; // Start with a full burst capacity.
+    		std::unique_ptr<base::Timer> _tokenRefreshTimer;
+    	};
+    
+    	int _filesDownloading = 0;
+    
+    	RequestThrottler _throttler;
+    	std::unique_ptr<base::Timer> _batchDelayTimer;
+	
 	std::unique_ptr<LeftChannelsProcess> _leftChannelsProcess;
 	std::unique_ptr<DialogsProcess> _dialogsProcess;
 	std::unique_ptr<ChatProcess> _chatProcess;

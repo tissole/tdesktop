@@ -88,6 +88,7 @@ struct PreparedFile {
 	QSize originalDimensions;
 	Type type = Type::File;
 	bool spoiler = false;
+	TextWithTags fileNameCaption;  // New field for individual file captions (renamed from 'caption')
 };
 
 [[nodiscard]] bool CanBeInAlbumType(PreparedFile::Type type, AlbumType album);

@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/widgets/continuous_sliders.h"
+#include "ui/widgets/fields/input_field.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/padding_wrap.h"
 #include "ui/wrap/slide_wrap.h"
@@ -148,12 +149,12 @@ void SettingsWidget::setupContent() {
 	setupOptions(content);
 	setupPathAndFormat(content);
 
-	sizeValue(
-	) | rpl::start_with_next([=](QSize size) {
-		scroll->resize(size.width(), size.height() - buttons->height());
-		wrap->resizeToWidth(size.width());
-		content->resizeToWidth(size.width());
-	}, lifetime());
+	sizeValue()
+		| rpl::start_with_next([=](QSize size) {
+			scroll->resize(size.width(), size.height() - buttons->height());
+			wrap->resizeToWidth(size.width());
+			content->resizeToWidth(size.width());
+		}, lifetime());
 }
 
 void SettingsWidget::setupOptions(not_null<Ui::VerticalLayout*> container) {
@@ -224,22 +225,24 @@ void SettingsWidget::setupMediaOptions(
 	addHeader(media, tr::lng_export_header_media(tr::now));
 	addMediaOptions(media);
 
-	value() | rpl::map([](const Settings &data) {
-		return data.types;
-	}) | rpl::distinct_until_changed(
-	) | rpl::start_with_next([=](Settings::Types types) {
-		mediaWrap->toggle((types & (Type::PersonalChats
-			| Type::BotChats
-			| Type::PrivateGroups
-			| Type::PrivateChannels
-			| Type::PublicGroups
-			| Type::PublicChannels)) != 0, anim::type::normal);
-	}, mediaWrap->lifetime());
+	value()
+		| rpl::map([](const Settings &data) {
+			return data.types;
+		})
+		| rpl::distinct_until_changed()
+		| rpl::start_with_next([=](Settings::Types types) {
+			mediaWrap->toggle((types & (Type::PersonalChats
+				| Type::BotChats
+				| Type::PrivateGroups
+				| Type::PrivateChannels
+				| Type::PublicGroups
+				| Type::PublicChannels)) != 0, anim::type::normal);
+		}, mediaWrap->lifetime());
 
-	widthValue(
-	) | rpl::start_with_next([=](int width) {
-		mediaWrap->resizeToWidth(width);
-	}, mediaWrap->lifetime());
+	widthValue()
+		| rpl::start_with_next([=](int width) {
+			mediaWrap->resizeToWidth(width);
+		}, mediaWrap->lifetime());
 }
 
 void SettingsWidget::setupOtherOptions(
@@ -291,19 +294,21 @@ void SettingsWidget::setupPathAndFormat(
 void SettingsWidget::addLocationLabel(
 		not_null<Ui::VerticalLayout*> container) {
 #ifndef OS_MAC_STORE
-	auto pathLink = value() | rpl::map([](const Settings &data) {
-		return data.path;
-	}) | rpl::distinct_until_changed(
-	) | rpl::map([=](const QString &path) {
-		const auto text = IsDefaultPath(_session, path)
-			? Core::App().canReadDefaultDownloadPath()
-			? u"Downloads/"_q + File::DefaultDownloadPathFolder(_session)
-			: tr::lng_download_path_temp(tr::now)
-			: path;
-		return Ui::Text::Link(
-			QDir::toNativeSeparators(text),
-			QString("internal:edit_export_path"));
-	});
+	auto pathLink = value()
+		| rpl::map([](const Settings &data) {
+			return data.path;
+		})
+		| rpl::distinct_until_changed()
+		| rpl::map([=](const QString &path) {
+			const auto text = IsDefaultPath(_session, path)
+				? Core::App().canReadDefaultDownloadPath()
+				? u"Downloads/"_q + File::DefaultDownloadPathFolder(_session)
+				: tr::lng_download_path_temp(tr::now)
+				: path;
+			return Ui::Text::Link(
+				QDir::toNativeSeparators(text),
+				QString("internal:edit_export_path"));
+		});
 	const auto label = container->add(
 		object_ptr<Ui::FlatLabel>(
 			container,
@@ -340,30 +345,34 @@ void SettingsWidget::chooseFormat() {
 void SettingsWidget::addFormatAndLocationLabel(
 		not_null<Ui::VerticalLayout*> container) {
 #ifndef OS_MAC_STORE
-	auto pathLink = value() | rpl::map([](const Settings &data) {
-		return data.path;
-	}) | rpl::distinct_until_changed(
-	) | rpl::map([=](const QString &path) {
-		const auto text = IsDefaultPath(_session, path)
-			? Core::App().canReadDefaultDownloadPath()
-			? u"Downloads/"_q + File::DefaultDownloadPathFolder(_session)
-			: tr::lng_download_path_temp(tr::now)
-			: path;
-		return Ui::Text::Link(
-			QDir::toNativeSeparators(text),
-			u"internal:edit_export_path"_q);
-	});
-	auto formatLink = value() | rpl::map([](const Settings &data) {
-		return data.format;
-	}) | rpl::distinct_until_changed(
-	) | rpl::map([](Format format) {
-		const auto text = (format == Format::Html)
-			? "HTML"
-			: (format == Format::Json)
-			? "JSON"
-			: tr::lng_export_option_html_and_json(tr::now);
-		return Ui::Text::Link(text, u"internal:edit_format"_q);
-	});
+	auto pathLink = value()
+		| rpl::map([](const Settings &data) {
+			return data.path;
+		})
+		| rpl::distinct_until_changed()
+		| rpl::map([=](const QString &path) {
+			const auto text = IsDefaultPath(_session, path)
+				? Core::App().canReadDefaultDownloadPath()
+				? u"Downloads/"_q + File::DefaultDownloadPathFolder(_session)
+				: tr::lng_download_path_temp(tr::now)
+				: path;
+			return Ui::Text::Link(
+				QDir::toNativeSeparators(text),
+				u"internal:edit_export_path"_q);
+		});
+	auto formatLink = value()
+		| rpl::map([](const Settings &data) {
+			return data.format;
+		})
+		| rpl::distinct_until_changed()
+		| rpl::map([](Format format) {
+			const auto text = (format == Format::Html)
+				? "HTML"
+				: (format == Format::Json)
+				? "JSON"
+				: tr::lng_export_option_html_and_json(tr::now);
+			return Ui::Text::Link(text, u"internal:edit_format"_q);
+		});
 	const auto label = container->add(
 		object_ptr<Ui::FlatLabel>(
 			container,
@@ -389,61 +398,108 @@ void SettingsWidget::addFormatAndLocationLabel(
 
 void SettingsWidget::addLimitsLabel(
 		not_null<Ui::VerticalLayout*> container) {
-	auto fromDateLink = value() | rpl::map([](const Settings &data) {
-		return data.singlePeerFrom;
-	}) | rpl::distinct_until_changed(
-	) | rpl::map([](TimeId from) {
-		return (from
-			? rpl::single(langDayOfMonthFull(
-				base::unixtime::parse(from).date()))
-			: tr::lng_export_beginning()
-		) | Ui::Text::ToLink(u"internal:edit_from"_q);
-	}) | rpl::flatten_latest();
+	// Add export mode selection (date range or ID range)
+	const auto modeGroup = std::make_shared<Ui::RadioenumGroup<bool>>(
+		readData().useIdRange ? true : false);
+
+	[[maybe_unused]] const auto dateMode = container->add(
+		object_ptr<Ui::Radioenum<bool>>(
+			container,
+			modeGroup,
+			false, // date mode
+			tr::lng_export_mode_date(tr::now),
+			st::defaultBoxCheckbox),
+		st::exportSettingPadding);
+
+	[[maybe_unused]] const auto idMode = container->add(
+		object_ptr<Ui::Radioenum<bool>>(
+			container,
+			modeGroup,
+			true, // ID mode
+			tr::lng_export_mode_id(tr::now),
+			st::defaultBoxCheckbox),
+		st::exportSettingPadding);
+
+	modeGroup->setChangedCallback([=](bool useIdRange) {
+		changeData([&](Settings &settings) {
+			settings.useIdRange = useIdRange;
+		});
+	});
+
+	// Date range UI (visible when date mode is selected)
+	auto fromDateLink = value()
+		| rpl::map([](const Settings &data) {
+			return data.singlePeerFrom;
+		})
+		| rpl::distinct_until_changed()
+		| rpl::map([](TimeId from) {
+			if (from) {
+				return rpl::single(langDayOfMonthFull(base::unixtime::parse(from).date()));
+			} else {
+				return rpl::single(tr::lng_export_beginning(tr::now));
+			}
+		})
+		| rpl::flatten_latest()
+		| Ui::Text::ToLink(u"internal:edit_from"_q);
 
 	const auto mapToTime = [](TimeId id, const QString &link) {
 		return rpl::single(id
 			? QLocale().toString(
 				base::unixtime::parse(id).time(),
 				QLocale::ShortFormat)
-			: QString()
-		) | Ui::Text::ToLink(link);
+			: QString())
+			| Ui::Text::ToLink(link);
 	};
+
+	auto fromTimeLink = value()
+		| rpl::map([](const Settings &data) {
+			return data.singlePeerFrom;
+		})
+		| rpl::distinct_until_changed()
+		| rpl::map([=](TimeId from) {
+			return mapToTime(from, u"internal:edit_from_time"_q);
+		})
+		| rpl::flatten_latest();
+
+	auto fromLink = rpl::combine(
+		std::move(fromDateLink),
+		std::move(fromTimeLink)
+	) | rpl::map([](TextWithEntities date, TextWithEntities link) {
+		return link.text.isEmpty()
+			? date
+			: date.append(u", "_q).append(std::move(link));
+	});
+
+	auto tillDateLink = value()
+		| rpl::map([](const Settings &data) {
+			return data.singlePeerTill;
+		})
+		| rpl::distinct_until_changed()
+		| rpl::map([](TimeId till) {
+			if (till) {
+				return rpl::single(langDayOfMonthFull(base::unixtime::parse(till).date()));
+			} else {
+				return rpl::single(tr::lng_export_end(tr::now));
+			}
+		})
+		| rpl::flatten_latest()
+		| Ui::Text::ToLink(u"internal:edit_till"_q);
+
+	auto tillTimeLink = value()
+		| rpl::map([](const Settings &data) {
+			return data.singlePeerTill;
+		})
+		| rpl::distinct_until_changed()
+		| rpl::map([=](TimeId till) {
+			return mapToTime(till, u"internal:edit_till_time"_q);
+		})
+		| rpl::flatten_latest();
 
 	const auto concat = [](TextWithEntities date, TextWithEntities link) {
 		return link.text.isEmpty()
 			? date
 			: date.append(u", "_q).append(std::move(link));
 	};
-
-	auto fromTimeLink = value() | rpl::map([](const Settings &data) {
-		return data.singlePeerFrom;
-	}) | rpl::distinct_until_changed(
-	) | rpl::map([=](TimeId from) {
-		return mapToTime(from, u"internal:edit_from_time"_q);
-	}) | rpl::flatten_latest();
-
-	auto fromLink = rpl::combine(
-		std::move(fromDateLink),
-		std::move(fromTimeLink)
-	) | rpl::map(concat);
-
-	auto tillDateLink = value() | rpl::map([](const Settings &data) {
-		return data.singlePeerTill;
-	}) | rpl::distinct_until_changed(
-	) | rpl::map([](TimeId till) {
-		return (till
-			? rpl::single(langDayOfMonthFull(
-				base::unixtime::parse(till).date()))
-			: tr::lng_export_end()
-		) | Ui::Text::ToLink(u"internal:edit_till"_q);
-	}) | rpl::flatten_latest();
-
-	auto tillTimeLink = value() | rpl::map([](const Settings &data) {
-		return data.singlePeerTill;
-	}) | rpl::distinct_until_changed(
-	) | rpl::map([=](TimeId till) {
-		return mapToTime(till, u"internal:edit_till_time"_q);
-	}) | rpl::flatten_latest();
 
 	auto tillLink = rpl::combine(
 		std::move(tillDateLink),
@@ -460,12 +516,137 @@ void SettingsWidget::addLimitsLabel(
 		container->resizeToWidth(container->width());
 	});
 
-	const auto label = container->add(
+	const auto dateLabel = container->add(
 		object_ptr<Ui::FlatLabel>(
 			container,
 			std::move(datesText),
 			st::boxLabel),
 		st::exportLimitsPadding);
+
+	// ID range UI (visible when ID mode is selected)
+	const auto idContainer = container->add(
+		object_ptr<Ui::VerticalLayout>(container),
+		st::exportSettingPadding);
+
+	[[maybe_unused]] const auto fromIdLabel = idContainer->add(
+		object_ptr<Ui::FlatLabel>(
+			idContainer,
+			tr::lng_export_id_from_label(tr::now),
+			st::defaultFlatLabel),
+		st::exportSettingPadding);
+
+	const auto fromIdInput = idContainer->add(
+		object_ptr<Ui::InputField>(
+			idContainer,
+			st::defaultInputField,
+			rpl::single(tr::lng_export_id_from_placeholder(tr::now))),
+		st::exportSettingPadding);
+
+	[[maybe_unused]] const auto tillIdLabel = idContainer->add(
+		object_ptr<Ui::FlatLabel>(
+			idContainer,
+			tr::lng_export_id_till_label(tr::now),
+			st::defaultFlatLabel),
+		st::exportSettingPadding);
+
+	const auto tillIdInput = idContainer->add(
+		object_ptr<Ui::InputField>(
+			idContainer,
+			st::defaultInputField,
+			rpl::single(tr::lng_export_id_till_placeholder(tr::now))),
+		st::exportSettingPadding);
+
+	// Bind inputs to data
+	value()
+		| rpl::map([](const Settings &data) {
+			return data.singlePeerFromId;
+		})
+		| rpl::start_with_next([=](int32 fromId) {
+			fromIdInput->setText(QString::number(fromId));
+		}, fromIdInput->lifetime());
+
+	value()
+		| rpl::map([](const Settings &data) {
+			return data.singlePeerTillId;
+		})
+		| rpl::start_with_next([=](int32 tillId) {
+			tillIdInput->setText(QString::number(tillId));
+		}, tillIdInput->lifetime());
+
+	const auto errorLabel = idContainer->add(
+		object_ptr<Ui::FlatLabel>(
+			idContainer,
+			rpl::single(QString()),
+			st::exportErrorLabel),
+		st::exportSettingPadding);
+
+	// Handle input changes with validation
+	fromIdInput->changes() | rpl::start_with_next([=] {
+		errorLabel->setText(QString());
+		const auto text = fromIdInput->getLastText();
+		bool ok = false;
+		const auto value = text.toInt(&ok);
+
+		if (!ok && !text.isEmpty()) {
+			errorLabel->setText(tr::lng_export_error_invalid_id(tr::now));
+			return;
+		} else if (ok && value < 1) {
+			errorLabel->setText(tr::lng_export_error_from_invalid(tr::now));
+			return;
+		} else if (!ok) {
+			changeData([&](Settings &settings) {
+				settings.singlePeerFromId = 0;
+			});
+			return;
+		}
+
+		const auto currentTillId = readData().singlePeerTillId;
+		if (currentTillId > 0 && value > currentTillId) {
+			errorLabel->setText(tr::lng_export_error_from_too_high(tr::now));
+			return;
+		}
+
+		changeData([&](Settings &settings) {
+			settings.singlePeerFromId = value;
+		});
+	}, fromIdInput->lifetime());
+
+	tillIdInput->changes() | rpl::start_with_next([=] {
+		errorLabel->setText(QString());
+		const auto text = tillIdInput->getLastText();
+		bool ok = false;
+		const auto value = text.toInt(&ok);
+
+		if (!ok || value < 1) {
+			errorLabel->setText(tr::lng_export_error_invalid_id(tr::now));
+			return;
+		}
+
+		const auto currentFromId = readData().singlePeerFromId;
+		if (currentFromId > 0 && value < currentFromId) {
+			errorLabel->setText(tr::lng_export_error_till_too_low(tr::now));
+			return;
+		}
+
+		changeData([&](Settings &settings) {
+			settings.singlePeerTillId = value;
+		});
+	}, tillIdInput->lifetime());
+
+	// Toggle visibility based on mode
+	value()
+		| rpl::map([](const Settings &data) {
+			return data.useIdRange;
+		})
+		| rpl::start_with_next([=](bool useIdRange) {
+			dateLabel->setVisible(!useIdRange);
+			idContainer->setVisible(useIdRange);
+			container->resizeToWidth(container->width());
+		}, container->lifetime());
+
+	// Initially set visibility
+	dateLabel->setVisible(!readData().useIdRange);
+	idContainer->setVisible(readData().useIdRange);
 
 	const auto removeTime = [](TimeId dateTime) {
 		return base::unixtime::serialize(
@@ -487,11 +668,10 @@ void SettingsWidget::addLimitsLabel(
 				true);
 			const auto widget = box->addRow(std::move(result.widget));
 			const auto toSave = widget->lifetime().make_state<TimeId>(0);
-			std::move(
-				result.secondsValue
-			) | rpl::start_with_next([=](TimeId t) {
-				*toSave = t;
-			}, box->lifetime());
+			std::move(result.secondsValue)
+				| rpl::start_with_next([=](TimeId t) {
+					*toSave = t;
+				}, box->lifetime());
 			box->addButton(tr::lng_settings_save(), [=] {
 				done(*toSave);
 				box->closeBox();
@@ -505,7 +685,7 @@ void SettingsWidget::addLimitsLabel(
 
 	constexpr auto kOffset = 600;
 
-	label->overrideLinkClickHandler([=](const QString &url) {
+	dateLabel->overrideLinkClickHandler([=](const QString &url) {
 		if (url == u"internal:edit_from"_q) {
 			const auto done = [=](TimeId limit) {
 				changeData([&](Settings &settings) {
@@ -637,8 +817,6 @@ void SettingsWidget::editDateLimit(
 not_null<Ui::RpWidget*> SettingsWidget::setupButtons(
 		not_null<Ui::ScrollArea*> scroll,
 		not_null<Ui::RpWidget*> wrap) {
-	using namespace rpl::mappers;
-
 	const auto buttonsPadding = st::defaultBox.buttonPadding;
 	const auto buttonsHeight = buttonsPadding.top()
 		+ st::defaultBoxButton.height
@@ -648,35 +826,39 @@ not_null<Ui::RpWidget*> SettingsWidget::setupButtons(
 		buttonsHeight);
 	const auto topShadow = Ui::CreateChild<Ui::FadeShadow>(this);
 	const auto bottomShadow = Ui::CreateChild<Ui::FadeShadow>(this);
-	topShadow->toggleOn(scroll->scrollTopValue(
-	) | rpl::map(_1 > 0));
-	bottomShadow->toggleOn(rpl::combine(
-		scroll->heightValue(),
-		scroll->scrollTopValue(),
-		wrap->heightValue(),
-		_2
-	) | rpl::map([=](int top) {
-		return top < scroll->scrollTopMax();
-	}));
+	topShadow->toggleOn(
+		scroll->scrollTopValue() | rpl::map(rpl::mappers::_1 > 0)
+	);
+	bottomShadow->toggleOn(
+		rpl::combine(
+			scroll->heightValue(),
+			scroll->scrollTopValue(),
+			wrap->heightValue()
+		) | rpl::map([=](int height, int top, int contentHeight) {
+			return top < scroll->scrollTopMax();
+		})
+	);
 
-	value() | rpl::map([](const Settings &data) {
-		return (data.types != Types(0)) || data.onlySinglePeer();
-	}) | rpl::distinct_until_changed(
-	) | rpl::start_with_next([=](bool canStart) {
-		refreshButtons(buttons, canStart);
-		topShadow->raise();
-		bottomShadow->raise();
-	}, buttons->lifetime());
+	value()
+		| rpl::map([](const Settings &data) {
+			return (data.types != Types(0)) || data.onlySinglePeer();
+		})
+		| rpl::distinct_until_changed()
+		| rpl::start_with_next([=](bool canStart) {
+			refreshButtons(buttons, canStart);
+			topShadow->raise();
+			bottomShadow->raise();
+		}, buttons->lifetime());
 
-	sizeValue(
-	) | rpl::start_with_next([=](QSize size) {
-		buttons->resizeToWidth(size.width());
-		buttons->moveToLeft(0, size.height() - buttons->height());
-		topShadow->resizeToWidth(size.width());
-		topShadow->moveToLeft(0, 0);
-		bottomShadow->resizeToWidth(size.width());
-		bottomShadow->moveToLeft(0, buttons->y() - st::lineWidth);
-	}, buttons->lifetime());
+	sizeValue()
+		| rpl::start_with_next([=](QSize size) {
+			buttons->resizeToWidth(size.width());
+			buttons->moveToLeft(0, size.height() - buttons->height());
+			topShadow->resizeToWidth(size.width());
+			topShadow->moveToLeft(0, 0);
+			bottomShadow->resizeToWidth(size.width());
+			bottomShadow->moveToLeft(0, buttons->y() - st::lineWidth);
+		}, buttons->lifetime());
 
 	return buttons;
 }
@@ -703,16 +885,16 @@ not_null<Ui::Checkbox*> SettingsWidget::addOption(
 			((readData().types & types) == types),
 			st::defaultBoxCheckbox),
 		st::exportSettingPadding);
-	checkbox->checkedChanges(
-	) | rpl::start_with_next([=](bool checked) {
-		changeData([&](Settings &data) {
-			if (checked) {
-				data.types |= types;
-			} else {
-				data.types &= ~types;
-			}
-		});
-	}, checkbox->lifetime());
+	checkbox->checkedChanges()
+		| rpl::start_with_next([=](bool checked) {
+			changeData([&](Settings &data) {
+				if (checked) {
+					data.types |= types;
+				} else {
+					data.types &= ~types;
+				}
+			});
+		}, checkbox->lifetime());
 	return checkbox;
 }
 
@@ -746,16 +928,16 @@ void SettingsWidget::addChatOption(
 				st::defaultBoxCheckbox),
 			st::exportSubSettingPadding));
 
-	onlyMy->entity()->checkedChanges(
-	) | rpl::start_with_next([=](bool checked) {
-		changeData([&](Settings &data) {
-			if (checked) {
-				data.fullChats &= ~types;
-			} else {
-				data.fullChats |= types;
-			}
-		});
-	}, onlyMy->lifetime());
+	onlyMy->entity()->checkedChanges()
+		| rpl::start_with_next([=](bool checked) {
+			changeData([&](Settings &data) {
+				if (checked) {
+					data.fullChats &= ~types;
+				} else {
+					data.fullChats |= types;
+				}
+			});
+		}, onlyMy->lifetime());
 
 	onlyMy->toggleOn(checkbox->checkedValue());
 
@@ -809,16 +991,16 @@ void SettingsWidget::addMediaOption(
 			((readData().media.types & type) == type),
 			st::defaultBoxCheckbox),
 		st::exportSettingPadding);
-	checkbox->checkedChanges(
-	) | rpl::start_with_next([=](bool checked) {
-		changeData([&](Settings &data) {
-			if (checked) {
-				data.media.types |= type;
-			} else {
-				data.media.types &= ~type;
-			}
-		});
-	}, checkbox->lifetime());
+	checkbox->checkedChanges()
+		| rpl::start_with_next([=](bool checked) {
+			changeData([&](Settings &data) {
+				if (checked) {
+					data.media.types |= type;
+				} else {
+					data.media.types &= ~type;
+				}
+			});
+		}, checkbox->lifetime());
 }
 
 void SettingsWidget::addSizeSlider(
@@ -842,17 +1024,19 @@ void SettingsWidget::addSizeSlider(
 	const auto label = Ui::CreateChild<Ui::LabelSimple>(
 		container.get(),
 		st::exportFileSizeLabel);
-	value() | rpl::map([](const Settings &data) {
-		return data.media.sizeLimit;
-	}) | rpl::start_with_next([=](int64 sizeLimit) {
-		const auto limit = sizeLimit / kMegabyte;
-		const auto size = QString::number(limit) + " MB";
-		const auto text = tr::lng_export_option_size_limit(
-			tr::now,
-			lt_size,
-			size);
-		label->setText(text);
-	}, slider->lifetime());
+	value()
+		| rpl::map([](const Settings &data) {
+			return data.media.sizeLimit;
+		})
+		| rpl::start_with_next([=](int64 sizeLimit) {
+			const auto limit = sizeLimit / kMegabyte;
+			const auto size = QString::number(limit) + " MB";
+			const auto text = tr::lng_export_option_size_limit(
+				tr::now,
+				lt_size,
+				size);
+			label->setText(text);
+		}, slider->lifetime());
 
 	rpl::combine(
 		label->widthValue(),
@@ -886,12 +1070,12 @@ void SettingsWidget::refreshButtons(
 		start->show();
 		_startClicks = start->clicks() | rpl::to_empty;
 
-		container->sizeValue(
-		) | rpl::start_with_next([=](QSize size) {
-			const auto right = st::defaultBox.buttonPadding.right();
-			const auto top = st::defaultBox.buttonPadding.top();
-			start->moveToRight(right, top);
-		}, start->lifetime());
+		container->sizeValue()
+			| rpl::start_with_next([=](QSize size) {
+				const auto right = st::defaultBox.buttonPadding.right();
+				const auto top = st::defaultBox.buttonPadding.top();
+				start->moveToRight(right, top);
+			}, start->lifetime());
 	}
 
 	const auto cancel = Ui::CreateChild<Ui::RoundButton>(
@@ -936,17 +1120,11 @@ rpl::producer<Settings> SettingsWidget::value() const {
 }
 
 rpl::producer<> SettingsWidget::startClicks() const {
-	return _startClicks.value(
-	) | rpl::map([](Wrap &&wrap) {
-		return std::move(wrap.value);
-	}) | rpl::flatten_latest();
+	return _startClicks.value() | rpl::flatten_latest();
 }
 
 rpl::producer<> SettingsWidget::cancelClicks() const {
-	return _cancelClicks.value(
-	) | rpl::map([](Wrap &&wrap) {
-		return std::move(wrap.value);
-	}) | rpl::flatten_latest();
+	return _cancelClicks.value() | rpl::flatten_latest();
 }
 
 } // namespace View

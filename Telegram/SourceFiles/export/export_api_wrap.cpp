@@ -11,25 +11,61 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/data/export_data_types.h"
 #include "export/output/export_output_result.h"
 #include "export/output/export_output_file.h"
+#include "export/output/export_output_stats.h"
 #include "mtproto/mtproto_response.h"
 #include "base/bytes.h"
 #include "base/options.h"
 #include "base/random.h"
+#include "base/timer.h"
 #include <set>
 #include <deque>
+#include <atomic>
+#include <chrono>
+#include <unordered_map>
+#include <algorithm>
+#include <QRegularExpression>
+
 
 namespace Export {
 namespace {
 
+
+
+constexpr auto kMaxParallelFiles = 10;
+constexpr auto kMegabyte = 1024 * 1024;
+
+// Rate limiting: Target 28 requests/sec for safety margin (one every ~35ms)
+constexpr auto kMinRequestIntervalMs = 1000 / 28;
+
+// Transient retry settings (per-chunk).
+constexpr auto kMaxChunkRetries = 3;
+constexpr auto kRetryBaseDelayMs = 200;   // 200, 400, 800 ms
+constexpr auto kRetryMaxDelayMs = 2000;   // clamp upper bound
+
+int GetChunkSizeForFile(int64 fileSize) {
+	if (fileSize > 100 * kMegabyte) {
+		return 1 * kMegabyte; // 1MB for large files
+	} else if (fileSize > 10 * kMegabyte) {
+		return 512 * 1024; // 512KB for medium files
+	}
+	return 256 * 1024; // 256KB for small files
+}
+
+int GetConcurrentChunksForFile(int64 fileSize) {
+	if (fileSize > 50 * kMegabyte) {
+		return 4; // More concurrency for large files
+	}
+	return 2; // Less concurrency for smaller files
+}
+
+
+// Other slice limits.
 constexpr auto kUserpicsSliceLimit = 100;
-constexpr auto kFileChunkSize = 1024 * 1024;
-constexpr auto kFileRequestsCount = 2;
-//constexpr auto kFileNextRequestDelay = crl::time(20);
 constexpr auto kChatsSliceLimit = 100;
 constexpr auto kMessagesSliceLimit = 100;
 constexpr auto kTopPeerSliceLimit = 100;
 constexpr auto kFileMaxSize = 4000 * int64(1024 * 1024);
-constexpr auto kLocationCacheSize = 100'000;
+constexpr auto kLocationCacheSize = 1'000'000;
 constexpr auto kMaxEmojiPerRequest = 100;
 constexpr auto kStoriesSliceLimit = 100;
 
@@ -90,6 +126,41 @@ Settings::Type SettingsFromDialogsType(Data::DialogInfo::Type type) {
 
 } // namespace
 
+ApiWrap::RequestThrottler::RequestThrottler(Fn<void(FnMut<void()>)> runner)
+: _runner(std::move(runner))
+, _tokenRefreshTimer(std::make_unique<base::Timer>()) {
+	_tokenRefreshTimer->setCallback([this] {
+		// Add one token back to the bucket, up to the maximum burst capacity.
+		if (_tokens < 28) {
+			_tokens++;
+		}
+		// After adding a token, try to process any waiting tasks.
+		tryProcessQueue();
+	});
+	_tokenRefreshTimer->callEach(kMinRequestIntervalMs);
+}
+
+ApiWrap::RequestThrottler::~RequestThrottler() = default;
+
+void ApiWrap::RequestThrottler::schedule(FnMut<void()> task) {
+	_runner([this, task = std::move(task)]() mutable {
+		_taskQueue.push_back(std::move(task));
+		tryProcessQueue();
+	});
+}
+
+void ApiWrap::RequestThrottler::tryProcessQueue() {
+	_runner([this] {
+		// Process as many tasks as we have tokens for.
+		while (!_taskQueue.empty() && _tokens > 0) {
+			--_tokens;
+			auto task = std::move(_taskQueue.front());
+			_taskQueue.pop_front();
+			task();
+		}
+	});
+}
+
 class ApiWrap::LoadedFileCache {
 public:
 	using Location = Data::FileLocation;
@@ -139,7 +210,7 @@ struct ApiWrap::UserpicsProcess {
 	std::optional<Data::UserpicsSlice> slice;
 	uint64 maxId = 0;
 	bool lastSlice = false;
-	int fileIndex = 0;
+	int pendingFiles = 0;
 };
 
 struct ApiWrap::StoriesProcess {
@@ -152,7 +223,7 @@ struct ApiWrap::StoriesProcess {
 	std::optional<Data::StoriesSlice> slice;
 	int offsetId = 0;
 	bool lastSlice = false;
-	int fileIndex = 0;
+	int pendingFiles = 0;
 };
 
 struct ApiWrap::OtherDataProcess {
@@ -161,9 +232,13 @@ struct ApiWrap::OtherDataProcess {
 };
 
 struct ApiWrap::FileProcess {
-	FileProcess(const QString &path, Output::Stats *stats);
+	FileProcess(Data::File &file, const QString &fullPath, Output::Stats *stats)
+	: fileRef(file)
+	, outputFile(fullPath, stats) {
+	}
 
-	Output::File file;
+	Data::File &fileRef;
+	Output::File outputFile;
 	QString relativePath;
 
 	Fn<bool(FileProgress)> progress;
@@ -174,18 +249,15 @@ struct ApiWrap::FileProcess {
 	Data::FileOrigin origin;
 	int64 offset = 0;
 	int64 size = 0;
-
 	struct Request {
 		int64 offset = 0;
 		QByteArray bytes;
 	};
 	std::deque<Request> requests;
-	mtpRequestId requestId = 0;
-};
-
-struct ApiWrap::FileProgress {
-	int64 ready = 0;
-	int64 total = 0;
+	std::map<mtpRequestId, int64> activeRequestOffsets;
+    std::deque<int64> pendingRetryOffsets;                 // offsets that need retry
+    std::unordered_map<int64, int> retryCounts;            // per-offset retry counter
+	bool active = false;
 };
 
 struct ApiWrap::ChatsProcess {
@@ -212,6 +284,8 @@ struct ApiWrap::DialogsProcess : ChatsProcess {
 
 struct ApiWrap::ChatProcess {
 	Data::DialogInfo info;
+	int32 fromId = 0;
+	int32 tillId = 0;
 
 	FnMut<bool(const Data::DialogInfo &)> start;
 	Fn<bool(DownloadProgress)> fileProgress;
@@ -226,8 +300,22 @@ struct ApiWrap::ChatProcess {
 	Data::ParseMediaContext context;
 	std::optional<Data::MessagesSlice> slice;
 	bool lastSlice = false;
-	int fileIndex = 0;
+	int pendingFiles = 0;
+
+	// Track messages processed (only when a whole message is completed)
+	int messagesProcessed = 0;
+
+	// Map file randomId -> message index in current slice
+	std::unordered_map<uint64, int> fileToMessageIndex;
+
+	// Per-message parts in current slice
+	std::vector<int> messageFilesRequired;
+	std::vector<int> messageFilesDone;
+
+	// Emoji id -> list of message indices depending on that emoji in current slice
+	std::unordered_map<uint64, std::vector<int>> emojiToMessageIndices;
 };
+
 
 
 template <typename Request>
@@ -338,10 +426,6 @@ std::optional<QString> ApiWrap::LoadedFileCache::find(
 	return std::nullopt;
 }
 
-ApiWrap::FileProcess::FileProcess(const QString &path, Output::Stats *stats)
-: file(path, stats) {
-}
-
 template <typename Request>
 auto ApiWrap::mainRequest(Request &&request) {
 	Expects(_takeoutId.has_value());
@@ -360,56 +444,40 @@ template <typename Request>
 auto ApiWrap::splitRequest(int index, Request &&request) {
 	Expects(index < _splits.size());
 
-	//if (index == _splits.size() - 1) {
-	//	return mainRequest(std::forward<Request>(request));
-	//}
 	return mainRequest(MTPInvokeWithMessagesRange<Request>(
 		_splits[index],
 		std::forward<Request>(request)));
 }
 
-auto ApiWrap::fileRequest(const Data::FileLocation &location, int64 offset) {
-	Expects(location.dcId != 0
-		|| location.data.type() == mtpc_inputTakeoutFileLocation);
+auto ApiWrap::fileRequest(const Data::FileLocation &location, int64 offset, int chunkSize) {
+	Expects(location);
 	Expects(_takeoutId.has_value());
-	Expects(_fileProcess->requestId == 0);
 
-	return std::move(_mtp.request(MTPInvokeWithTakeout<MTPupload_GetFile>(
+	auto original = std::move(_mtp.request(MTPInvokeWithTakeout<MTPupload_GetFile>(
 		MTP_long(*_takeoutId),
 		MTPupload_GetFile(
 			MTP_flags(0),
 			location.data,
 			MTP_long(offset),
-			MTP_int(kFileChunkSize))
-	)).fail([=](const MTP::Error &result) {
-		_fileProcess->requestId = 0;
-		if (result.type() == u"TAKEOUT_FILE_EMPTY"_q
-			&& _otherDataProcess != nullptr) {
-			filePartDone(
-				0,
-				MTP_upload_file(
-					MTP_storage_filePartial(),
-					MTP_int(0),
-					MTP_bytes()));
-		} else if (result.type() == u"LOCATION_INVALID"_q
-			|| result.type() == u"VERSION_INVALID"_q
-			|| result.type() == u"LOCATION_NOT_AVAILABLE"_q) {
-			filePartUnavailable();
-		} else if (result.code() == 400
-			&& result.type().startsWith(u"FILE_REFERENCE_"_q)) {
-			filePartRefreshReference(offset);
-		} else {
-			error(std::move(result));
-		}
-	}).toDC(MTP::ShiftDcId(location.dcId, MTP::kExportMediaDcShift)));
+			MTP_int(chunkSize))
+	)).toDC(MTP::ShiftDcId(location.dcId, MTP::kExportMediaDcShift)));
+
+	return RequestBuilder<MTPInvokeWithTakeout<MTPupload_GetFile>>(
+		std::move(original),
+		[=](const MTP::Error &result) { error(result); });
 }
 
-ApiWrap::ApiWrap(
-	base::weak_qptr<MTP::Instance> weak,
-	Fn<void(FnMut<void()>)> runner)
-: _mtp(weak, std::move(runner))
-, _fileCache(std::make_unique<LoadedFileCache>(kLocationCacheSize)) {
+ApiWrap::ApiWrap(base::weak_qptr<MTP::Instance> weak, Fn<void(FnMut<void()>)> runner)
+: _mtp(weak, runner)
+, _fileCache(std::make_unique<LoadedFileCache>(kLocationCacheSize))
+, _throttler(std::move(runner))
+, _batchDelayTimer(std::make_unique<base::Timer>())
+{
+	_batchDelayTimer->setCallback([this] {
+		scheduleMoreFiles();
+	});
 }
+
 
 rpl::producer<MTP::Error> ApiWrap::errors() const {
 	return _errors.events();
@@ -807,27 +875,31 @@ void ApiWrap::loadUserpicsFiles(Data::UserpicsSlice &&slice) {
 		_userpicsProcess->lastSlice = true;
 	}
 	_userpicsProcess->slice = std::move(slice);
-	_userpicsProcess->fileIndex = 0;
-	loadNextUserpic();
+	_userpicsProcess->pendingFiles = 0;
+	for (const auto &photo : _userpicsProcess->slice->list) {
+		if (photo.image.file.location) {
+			_userpicsProcess->pendingFiles++;
+		}
+	}
+
+	if (_userpicsProcess->pendingFiles > 0) {
+		loadNextUserpic();
+	} else {
+		finishUserpicsSlice();
+	}
 }
 
 void ApiWrap::loadNextUserpic() {
 	Expects(_userpicsProcess != nullptr);
 	Expects(_userpicsProcess->slice.has_value());
 
-	for (auto &list = _userpicsProcess->slice->list
-		; _userpicsProcess->fileIndex < list.size()
-		; ++_userpicsProcess->fileIndex) {
-		const auto ready = processFileLoad(
-			list[_userpicsProcess->fileIndex].image.file,
+	for (auto &photo : _userpicsProcess->slice->list) {
+		processFileLoad(
+			photo.image.file,
 			Data::FileOrigin(),
 			[=](FileProgress value) { return loadUserpicProgress(value); },
 			[=](const QString &path) { loadUserpicDone(path); });
-		if (!ready) {
-			return;
-		}
 	}
-	finishUserpicsSlice();
 }
 
 void ApiWrap::finishUserpicsSlice() {
@@ -858,35 +930,32 @@ void ApiWrap::finishUserpicsSlice() {
 }
 
 bool ApiWrap::loadUserpicProgress(FileProgress progress) {
-	Expects(_fileProcess != nullptr);
-	Expects(_userpicsProcess != nullptr);
-	Expects(_userpicsProcess->slice.has_value());
-	Expects((_userpicsProcess->fileIndex >= 0)
-		&& (_userpicsProcess->fileIndex
-			< _userpicsProcess->slice->list.size()));
+	const auto it = _fileProcesses.find(progress.randomId);
+	if (it == end(_fileProcesses)) {
+		return false;
+	}
+	const auto &process = *it->second;
 
-	return _userpicsProcess->fileProgress(DownloadProgress{
-		_fileProcess->randomId,
-		_fileProcess->relativePath,
-		_userpicsProcess->fileIndex,
-		progress.ready,
-		progress.total });
+	Expects(_userpicsProcess != nullptr);
+
+	return _userpicsProcess->fileProgress({
+		.randomId = process.randomId,
+		.path = process.relativePath,
+		.itemIndex = _userpicsProcess->processed, // This is an approximation now.
+		.ready = progress.ready,
+		.total = progress.total,
+	});
 }
 
 void ApiWrap::loadUserpicDone(const QString &relativePath) {
 	Expects(_userpicsProcess != nullptr);
-	Expects(_userpicsProcess->slice.has_value());
-	Expects((_userpicsProcess->fileIndex >= 0)
-		&& (_userpicsProcess->fileIndex
-			< _userpicsProcess->slice->list.size()));
 
-	const auto index = _userpicsProcess->fileIndex;
-	auto &file = _userpicsProcess->slice->list[index].image.file;
-	file.relativePath = relativePath;
-	if (relativePath.isEmpty()) {
-		file.skipReason = Data::File::SkipReason::Unavailable;
+	--_userpicsProcess->pendingFiles;
+	Assert(_userpicsProcess->pendingFiles >= 0);
+
+	if (_userpicsProcess->pendingFiles == 0) {
+		finishUserpicsSlice();
 	}
-	loadNextUserpic();
 }
 
 void ApiWrap::finishUserpics() {
@@ -940,42 +1009,45 @@ void ApiWrap::loadStoriesFiles(Data::StoriesSlice &&slice) {
 		_storiesProcess->lastSlice = true;
 	}
 	_storiesProcess->slice = std::move(slice);
-	_storiesProcess->fileIndex = 0;
-	loadNextStory();
+	_storiesProcess->pendingFiles = 0;
+	for (const auto &story : _storiesProcess->slice->list) {
+		if (story.file().location) {
+			_storiesProcess->pendingFiles++;
+		}
+		if (story.thumb().file.location) {
+			_storiesProcess->pendingFiles++;
+		}
+	}
+
+	if (_storiesProcess->pendingFiles > 0) {
+		loadNextStory();
+	} else {
+		finishStoriesSlice();
+	}
 }
 
 void ApiWrap::loadNextStory() {
 	Expects(_storiesProcess != nullptr);
 	Expects(_storiesProcess->slice.has_value());
 
-	for (auto &list = _storiesProcess->slice->list
-		; _storiesProcess->fileIndex < list.size()
-		; ++_storiesProcess->fileIndex) {
-		auto &story = list[_storiesProcess->fileIndex];
+	for (auto &story : _storiesProcess->slice->list) {
 		const auto origin = Data::FileOrigin{ .storyId = story.id };
-		const auto ready = processFileLoad(
+		processFileLoad(
 			story.file(),
 			origin,
 			[=](FileProgress value) { return loadStoryProgress(value); },
-			[=](const QString &path) { loadStoryDone(path); });
-		if (!ready) {
-			return;
-		}
-		const auto thumbProgress = [=](FileProgress value) {
-			return loadStoryThumbProgress(value);
-		};
-		const auto thumbReady = processFileLoad(
+			[=](const QString &path) { loadStoryDone(path); },
+			nullptr,
+			&story);
+
+		processFileLoad(
 			story.thumb().file,
 			origin,
-			thumbProgress,
+			[=](FileProgress value) { return loadStoryThumbProgress(value); },
 			[=](const QString &path) { loadStoryThumbDone(path); },
 			nullptr,
 			&story);
-		if (!thumbReady) {
-			return;
-		}
 	}
-	finishStoriesSlice();
 }
 
 void ApiWrap::finishStoriesSlice() {
@@ -1005,35 +1077,29 @@ void ApiWrap::finishStoriesSlice() {
 }
 
 bool ApiWrap::loadStoryProgress(FileProgress progress) {
-	Expects(_fileProcess != nullptr);
-	Expects(_storiesProcess != nullptr);
-	Expects(_storiesProcess->slice.has_value());
-	Expects((_storiesProcess->fileIndex >= 0)
-		&& (_storiesProcess->fileIndex
-			< _storiesProcess->slice->list.size()));
+	const auto it = _fileProcesses.find(progress.randomId);
+	if (it == end(_fileProcesses)) {
+		return false;
+	}
+	const auto &process = *it->second;
 
-	return _storiesProcess->fileProgress(DownloadProgress{
-		_fileProcess->randomId,
-		_fileProcess->relativePath,
-		_storiesProcess->fileIndex,
-		progress.ready,
-		progress.total });
+	Expects(_storiesProcess != nullptr);
+
+	return _storiesProcess->fileProgress({
+		.randomId = process.randomId,
+		.path = process.relativePath,
+		.itemIndex = _storiesProcess->processed,
+		.ready = progress.ready,
+		.total = progress.total });
 }
 
 void ApiWrap::loadStoryDone(const QString &relativePath) {
 	Expects(_storiesProcess != nullptr);
-	Expects(_storiesProcess->slice.has_value());
-	Expects((_storiesProcess->fileIndex >= 0)
-		&& (_storiesProcess->fileIndex
-			< _storiesProcess->slice->list.size()));
-
-	const auto index = _storiesProcess->fileIndex;
-	auto &file = _storiesProcess->slice->list[index].file();
-	file.relativePath = relativePath;
-	if (relativePath.isEmpty()) {
-		file.skipReason = Data::File::SkipReason::Unavailable;
+	--_storiesProcess->pendingFiles;
+	Assert(_storiesProcess->pendingFiles >= 0);
+	if (_storiesProcess->pendingFiles == 0) {
+		finishStoriesSlice();
 	}
-	loadNextStory();
 }
 
 bool ApiWrap::loadStoryThumbProgress(FileProgress progress) {
@@ -1042,18 +1108,11 @@ bool ApiWrap::loadStoryThumbProgress(FileProgress progress) {
 
 void ApiWrap::loadStoryThumbDone(const QString &relativePath) {
 	Expects(_storiesProcess != nullptr);
-	Expects(_storiesProcess->slice.has_value());
-	Expects((_storiesProcess->fileIndex >= 0)
-		&& (_storiesProcess->fileIndex
-			< _storiesProcess->slice->list.size()));
-
-	const auto index = _storiesProcess->fileIndex;
-	auto &file = _storiesProcess->slice->list[index].thumb().file;
-	file.relativePath = relativePath;
-	if (relativePath.isEmpty()) {
-		file.skipReason = Data::File::SkipReason::Unavailable;
+	--_storiesProcess->pendingFiles;
+	Assert(_storiesProcess->pendingFiles >= 0);
+	if (_storiesProcess->pendingFiles == 0) {
+		finishStoriesSlice();
 	}
-	loadNextStory();
 }
 
 void ApiWrap::finishStories() {
@@ -1169,6 +1228,8 @@ void ApiWrap::requestSessions(FnMut<void(Data::SessionsList&&)> done) {
 
 void ApiWrap::requestMessages(
 		const Data::DialogInfo &info,
+		int32 fromId,
+		int32 tillId,
 		FnMut<bool(const Data::DialogInfo &)> start,
 		Fn<bool(DownloadProgress)> progress,
 		Fn<bool(Data::MessagesSlice&&)> slice,
@@ -1177,8 +1238,9 @@ void ApiWrap::requestMessages(
 	Expects(_selfId.has_value());
 
 	_chatProcess = std::make_unique<ChatProcess>();
-	_chatProcess->context.selfPeerId = peerFromUser(*_selfId);
 	_chatProcess->info = info;
+	_chatProcess->fromId = fromId;
+	_chatProcess->tillId = tillId;
 	_chatProcess->start = std::move(start);
 	_chatProcess->fileProgress = std::move(progress);
 	_chatProcess->handleSlice = std::move(slice);
@@ -1271,14 +1333,25 @@ void ApiWrap::finishExport(FnMut<void()> done) {
 }
 
 void ApiWrap::skipFile(uint64 randomId) {
-	if (!_fileProcess || _fileProcess->randomId != randomId) {
+	auto it = _fileProcesses.find(randomId);
+	if (it == end(_fileProcesses)) {
+		// Not found, maybe not processed yet. Remove from queue.
+		_fileDownloadQueue.erase(
+			std::remove(
+				_fileDownloadQueue.begin(),
+				_fileDownloadQueue.end(),
+				randomId),
+			_fileDownloadQueue.end());
 		return;
 	}
+
 	LOG(("Export Info: File skipped."));
-	Assert(!_fileProcess->requests.empty());
-	Assert(_fileProcess->requestId != 0);
-	_mtp.request(base::take(_fileProcess->requestId)).cancel();
-	base::take(_fileProcess)->done(QString());
+	auto &process = *it->second;
+	for (const auto &[requestId, offset] : process.activeRequestOffsets) {
+		_mtp.request(requestId).cancel();
+	}
+
+	finishFile(randomId, QString());
 }
 
 void ApiWrap::cancelExportFast() {
@@ -1650,12 +1723,16 @@ void ApiWrap::requestChatMessages(
 	const auto realSplitIndex = (splitIndex >= 0)
 		? splitIndex
 		: (splitsCount + splitIndex);
+
+	const auto minId = _settings->useIdRange ? _chatProcess->fromId : 0;
+	const auto maxId = _settings->useIdRange ? _chatProcess->tillId : 0;
+
 	if (_chatProcess->info.onlyMyMessages) {
 		splitRequest(realSplitIndex, MTPmessages_Search(
 			MTP_flags(MTPmessages_Search::Flag::f_from_id),
 			realPeerInput,
 			MTP_string(), // query
-			outgoingInput,
+			MTP_inputPeerSelf(),
 			MTPInputPeer(), // saved_peer_id
 			MTPVector<MTPReaction>(), // saved_reaction
 			MTPint(), // top_msg_id
@@ -1665,8 +1742,8 @@ void ApiWrap::requestChatMessages(
 			MTP_int(offsetId),
 			MTP_int(addOffset),
 			MTP_int(limit),
-			MTP_int(0), // max_id
-			MTP_int(0), // min_id
+			MTP_int(maxId), // max_id
+			MTP_int(minId), // min_id
 			MTP_long(0) // hash
 		)).done(doneHandler).send();
 	} else {
@@ -1676,9 +1753,9 @@ void ApiWrap::requestChatMessages(
 			MTP_int(0), // offset_date
 			MTP_int(addOffset),
 			MTP_int(limit),
-			MTP_int(0), // max_id
-			MTP_int(0), // min_id
-			MTP_long(0)  // hash
+			MTP_int(maxId), // max_id
+			MTP_int(minId), // min_id
+			MTP_long(0)	 // hash
 		)).fail([=](const MTP::Error &error) {
 			Expects(_chatProcess != nullptr);
 
@@ -1691,10 +1768,10 @@ void ApiWrap::requestChatMessages(
 					_chatProcess->info.onlyMyMessages = true;
 					requestChatMessages(
 						splitIndex,
-						offsetId,
-						addOffset,
-						limit,
-						base::take(_chatProcess->requestDone));
+							offsetId,
+							addOffset,
+							limit,
+							base::take(_chatProcess->requestDone));
 					return true;
 				}
 			}
@@ -1702,6 +1779,7 @@ void ApiWrap::requestChatMessages(
 		}).done(doneHandler).send();
 	}
 }
+
 
 void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 	Expects(_chatProcess != nullptr);
@@ -1712,10 +1790,53 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 	if (slice.list.empty()) {
 		_chatProcess->lastSlice = true;
 	}
-	_chatProcess->slice = std::move(slice);
-	_chatProcess->fileIndex = 0;
+	_chatProcess->slice.emplace(std::move(slice));
+	auto &s = *_chatProcess->slice;
 
-	resolveCustomEmoji();
+	_chatProcess->pendingFiles = 0;
+	_chatProcess->fileToMessageIndex.clear();
+	_chatProcess->messageFilesRequired.assign(s.list.size(), 0);
+	_chatProcess->messageFilesDone.assign(s.list.size(), 0);
+	_chatProcess->emojiToMessageIndices.clear();
+
+	for (int i = 0; i < int(s.list.size()); ++i) {
+		const auto &message = s.list[i];
+
+		int required = 0;
+		if (message.file().location) {
+			++required;
+			++_chatProcess->pendingFiles;
+		}
+		if (message.thumb().file.location) {
+			++required;
+			++_chatProcess->pendingFiles;
+		}
+		for (const auto &part : message.text) {
+			if (part.type == Data::TextPart::Type::CustomEmoji) {
+				if (const auto id = part.additional.toULongLong()) {
+					++required;
+					++_chatProcess->pendingFiles;
+					_chatProcess->emojiToMessageIndices[id].push_back(i);
+				}
+			}
+		}
+		for (const auto &reaction : message.reactions) {
+			if (reaction.type == Data::Reaction::Type::CustomEmoji) {
+				if (const auto id = reaction.documentId.toULongLong()) {
+					++required;
+					++_chatProcess->pendingFiles;
+					_chatProcess->emojiToMessageIndices[id].push_back(i);
+				}
+			}
+		}
+		_chatProcess->messageFilesRequired[i] = required;
+	}
+
+	if (_chatProcess->pendingFiles > 0) {
+		resolveCustomEmoji();
+	} else {
+		finishMessagesSlice();
+	}
 }
 
 void ApiWrap::collectMessagesCustomEmoji(const Data::MessagesSlice &slice) {
@@ -1791,30 +1912,6 @@ void ApiWrap::resolveCustomEmoji() {
 	}).send();
 }
 
-Data::Message *ApiWrap::currentFileMessage() const {
-	Expects(_chatProcess != nullptr);
-	Expects(_chatProcess->slice.has_value());
-
-	return &_chatProcess->slice->list[_chatProcess->fileIndex];
-}
-
-Data::FileOrigin ApiWrap::currentFileMessageOrigin() const {
-	Expects(_chatProcess != nullptr);
-	Expects(_chatProcess->slice.has_value());
-
-	const auto splitIndex = _chatProcess->info.splits[
-		_chatProcess->localSplitIndex];
-	auto result = Data::FileOrigin();
-	result.messageId = currentFileMessage()->id;
-	result.split = (splitIndex >= 0)
-		? splitIndex
-		: (int(_splits.size()) + splitIndex);
-	result.peer = (splitIndex >= 0)
-		? _chatProcess->info.input
-		: _chatProcess->info.migratedFromInput;
-	return result;
-}
-
 std::optional<QByteArray> ApiWrap::getCustomEmoji(QByteArray &data) {
 	if (const auto id = data.toULongLong()) {
 		const auto i = _resolvedCustomEmoji.find(id);
@@ -1822,26 +1919,12 @@ std::optional<QByteArray> ApiWrap::getCustomEmoji(QByteArray &data) {
 			return Data::TextPart::UnavailableEmoji();
 		}
 		auto &file = i->second.file;
-		const auto fileProgress = [=](FileProgress value) {
-			return loadMessageEmojiProgress(value);
-		};
-		const auto ready = processFileLoad(
+		processFileLoad(
 			file,
 			{ .customEmojiId = id },
-			fileProgress,
+			[=](FileProgress value) { return loadMessageEmojiProgress(value); },
 			[=](const QString &path) { loadMessageEmojiDone(id, path); });
-		if (!ready) {
-			return std::nullopt;
-		}
-		using SkipReason = Data::File::SkipReason;
-		if (file.skipReason == SkipReason::Unavailable) {
-			return Data::TextPart::UnavailableEmoji();
-		} else if (file.skipReason == SkipReason::FileType
-			|| file.skipReason == SkipReason::FileSize) {
-			return QByteArray();
-		} else {
-			return file.relativePath.toUtf8();
-		}
+		return std::nullopt;
 	}
 	return data;
 }
@@ -1874,101 +1957,158 @@ void ApiWrap::loadNextMessageFile() {
 	Expects(_chatProcess != nullptr);
 	Expects(_chatProcess->slice.has_value());
 
-	for (auto &list = _chatProcess->slice->list
-		; _chatProcess->fileIndex < list.size()
-		; ++_chatProcess->fileIndex) {
-		auto &message = list[_chatProcess->fileIndex];
+	for (int i = 0; i < int(_chatProcess->slice->list.size()); ++i) {
+		auto &message = _chatProcess->slice->list[i];
 		if (Data::SkipMessageByDate(message, *_settings)) {
 			continue;
 		}
 		if (!messageCustomEmojiReady(message)) {
 			return;
 		}
-		const auto fileProgress = [=](FileProgress value) {
-			return loadMessageFileProgress(value);
-		};
-		const auto ready = processFileLoad(
-			list[_chatProcess->fileIndex].file(),
-			currentFileMessageOrigin(),
-			fileProgress,
-			[=](const QString &path) { loadMessageFileDone(path); },
-			currentFileMessage());
-		if (!ready) {
-			return;
+
+		const auto splitIndex = _chatProcess->info.splits[
+			_chatProcess->localSplitIndex];
+		auto origin = Data::FileOrigin();
+		origin.messageId = message.id;
+		origin.split = (splitIndex >= 0)
+			? splitIndex
+			: (int(_splits.size()) + splitIndex);
+		origin.peer = (splitIndex >= 0)
+			? _chatProcess->info.input
+			: _chatProcess->info.migratedFromInput;
+
+		if (message.file().location) {		
+			processFileLoad(
+				message.file(),
+				origin,
+				[=](FileProgress value) {
+					if (_chatProcess
+					 && _chatProcess->fileToMessageIndex.find(value.randomId)
+						 == end(_chatProcess->fileToMessageIndex)) {
+						_chatProcess->fileToMessageIndex.emplace(value.randomId, i);
+					}
+					return loadMessageFileProgress(value);
+				},
+				[=](const QString &path) { loadMessageFileDone(path); },
+				&message);
 		}
-		const auto thumbProgress = [=](FileProgress value) {
-			return loadMessageThumbProgress(value);
-		};
-		const auto thumbReady = processFileLoad(
-			list[_chatProcess->fileIndex].thumb().file,
-			currentFileMessageOrigin(),
-			thumbProgress,
-			[=](const QString &path) { loadMessageThumbDone(path); },
-			currentFileMessage());
-		if (!thumbReady) {
-			return;
+
+		if (message.thumb().file.location) {
+			processFileLoad(
+				message.thumb().file,
+				origin,
+				[=](FileProgress value) {
+					if (_chatProcess
+					 && _chatProcess->fileToMessageIndex.find(value.randomId)
+						 == end(_chatProcess->fileToMessageIndex)) {
+						_chatProcess->fileToMessageIndex.emplace(value.randomId, i);
+					}
+					return loadMessageThumbProgress(value);
+				},
+				[=](const QString &path) { loadMessageThumbDone(path); },
+				&message);
 		}
 	}
-	finishMessagesSlice();
+
+	if (_chatProcess->pendingFiles == 0) {
+		finishMessagesSlice();
+	}
 }
 
 void ApiWrap::finishMessagesSlice() {
 	Expects(_chatProcess != nullptr);
-	Expects(_chatProcess->slice.has_value());
+
+	if (!_chatProcess->slice.has_value()) {
+		if (_chatProcess->lastSlice) {
+			if (++_chatProcess->localSplitIndex >= _chatProcess->info.splits.size()) {
+				finishMessages();
+			} else {
+				_chatProcess->lastSlice = false;
+				_chatProcess->largestIdPlusOne = 1;
+				const auto minId = _chatProcess->fromId;
+				const auto maxId = _chatProcess->tillId;
+				if (minId > maxId) {
+					requestMessagesSlice();
+				} else {
+					requestMessagesSlice();
+				}
+			}
+		}
+		return;
+	}
 
 	auto slice = *base::take(_chatProcess->slice);
 	if (!slice.list.empty()) {
 		_chatProcess->largestIdPlusOne = slice.list.back().id + 1;
-		const auto splitIndex = _chatProcess->info.splits[
-			_chatProcess->localSplitIndex];
+
+		const auto splitIndex = _chatProcess->info.splits[_chatProcess->localSplitIndex];
 		if (splitIndex < 0) {
 			slice = AdjustMigrateMessageIds(std::move(slice));
 		}
 		if (!_chatProcess->handleSlice(std::move(slice))) {
-			return;
+			return; // Canceled by user.
 		}
 	}
-	if (_chatProcess->lastSlice
-		&& (++_chatProcess->localSplitIndex
-			< _chatProcess->info.splits.size())) {
-		_chatProcess->lastSlice = false;
-		_chatProcess->largestIdPlusOne = 1;
-	}
-	if (!_chatProcess->lastSlice) {
-		requestMessagesSlice();
+
+	_chatProcess->fileToMessageIndex.clear();
+
+	if (_chatProcess->lastSlice) {
+		if (++_chatProcess->localSplitIndex < _chatProcess->info.splits.size()) {
+			_chatProcess->lastSlice = false;
+			_chatProcess->largestIdPlusOne = 1;
+			requestMessagesSlice();
+		} else {
+			finishMessages();
+		}
 	} else {
-		finishMessages();
+		requestMessagesSlice();
 	}
 }
 
 bool ApiWrap::loadMessageFileProgress(FileProgress progress) {
-	Expects(_fileProcess != nullptr);
-	Expects(_chatProcess != nullptr);
-	Expects(_chatProcess->slice.has_value());
-	Expects((_chatProcess->fileIndex >= 0)
-		&& (_chatProcess->fileIndex < _chatProcess->slice->list.size()));
+	const auto it = _fileProcesses.find(progress.randomId);
+	if (it == end(_fileProcesses)) {
+		return false;
+	}
+	const auto &process = *it->second;
 
-	return _chatProcess->fileProgress(DownloadProgress{
-		.randomId = _fileProcess->randomId,
-		.path = _fileProcess->relativePath,
-		.itemIndex = _chatProcess->fileIndex,
+	Expects(_chatProcess != nullptr);
+
+	auto mIt = _chatProcess->fileToMessageIndex.find(progress.randomId);
+	int messageIndexInSlice = 0;
+	if (mIt != end(_chatProcess->fileToMessageIndex)) {
+		messageIndexInSlice = mIt->second;
+	} else if (_chatProcess->slice) {
+		auto &s = *_chatProcess->slice;
+		for (int i = 0; i < int(s.list.size()); ++i) {
+			const auto &msg = s.list[i];
+			if ((msg.file().randomId && msg.file().randomId == progress.randomId)
+			 || (msg.thumb().file.randomId && msg.thumb().file.randomId == progress.randomId)) {
+				_chatProcess->fileToMessageIndex.emplace(progress.randomId, i);
+				messageIndexInSlice = i;
+				break;
+			}
+		}
+	}
+
+	const int itemIndex = _chatProcess->messagesProcessed + messageIndexInSlice;
+
+	return _chatProcess->fileProgress({
+		.randomId = process.randomId,
+		.path = process.relativePath,
+		.itemIndex = itemIndex,
 		.ready = progress.ready,
 		.total = progress.total });
 }
 
+
 void ApiWrap::loadMessageFileDone(const QString &relativePath) {
 	Expects(_chatProcess != nullptr);
-	Expects(_chatProcess->slice.has_value());
-	Expects((_chatProcess->fileIndex >= 0)
-		&& (_chatProcess->fileIndex < _chatProcess->slice->list.size()));
-
-	const auto index = _chatProcess->fileIndex;
-	auto &file = _chatProcess->slice->list[index].file();
-	file.relativePath = relativePath;
-	if (relativePath.isEmpty()) {
-		file.skipReason = Data::File::SkipReason::Unavailable;
+	--_chatProcess->pendingFiles;
+	Assert(_chatProcess->pendingFiles >= 0);
+	if (_chatProcess->pendingFiles == 0) {
+		finishMessagesSlice();
 	}
-	loadNextMessageFile();
 }
 
 bool ApiWrap::loadMessageThumbProgress(FileProgress progress) {
@@ -1977,17 +2117,11 @@ bool ApiWrap::loadMessageThumbProgress(FileProgress progress) {
 
 void ApiWrap::loadMessageThumbDone(const QString &relativePath) {
 	Expects(_chatProcess != nullptr);
-	Expects(_chatProcess->slice.has_value());
-	Expects((_chatProcess->fileIndex >= 0)
-		&& (_chatProcess->fileIndex < _chatProcess->slice->list.size()));
-
-	const auto index = _chatProcess->fileIndex;
-	auto &file = _chatProcess->slice->list[index].thumb().file;
-	file.relativePath = relativePath;
-	if (relativePath.isEmpty()) {
-		file.skipReason = Data::File::SkipReason::Unavailable;
+	--_chatProcess->pendingFiles;
+	Assert(_chatProcess->pendingFiles >= 0);
+	if (_chatProcess->pendingFiles == 0) {
+		finishMessagesSlice();
 	}
-	loadNextMessageFile();
 }
 
 bool ApiWrap::loadMessageEmojiProgress(FileProgress progress) {
@@ -2002,7 +2136,31 @@ void ApiWrap::loadMessageEmojiDone(uint64 id, const QString &relativePath) {
 			i->second.file.skipReason = Data::File::SkipReason::Unavailable;
 		}
 	}
-	loadNextMessageFile();
+	if (_chatProcess && _chatProcess->slice) {
+		auto j = _chatProcess->emojiToMessageIndices.find(id);
+		if (j != end(_chatProcess->emojiToMessageIndices)) {
+			for (const auto messageIndex : j->second) {
+				// Inline onMessagePartDone(messageIndex)
+				if (messageIndex >= 0
+				 && messageIndex < int(_chatProcess->messageFilesRequired.size())) {
+					auto &done = _chatProcess->messageFilesDone[messageIndex];
+					const auto need = _chatProcess->messageFilesRequired[messageIndex];
+					if (++done == need) {
+						++_chatProcess->messagesProcessed;
+					}
+				}
+				--_chatProcess->pendingFiles;
+			}
+			_chatProcess->emojiToMessageIndices.erase(j);
+			if (_chatProcess->pendingFiles == 0) {
+				finishMessagesSlice();
+				return;
+			}
+		}
+	}
+	if (_chatProcess && _chatProcess->slice) {
+		loadNextMessageFile();
+	}
 }
 
 void ApiWrap::finishMessages() {
@@ -2013,7 +2171,8 @@ void ApiWrap::finishMessages() {
 	process->done();
 }
 
-bool ApiWrap::processFileLoad(
+
+void ApiWrap::processFileLoad(
 		Data::File &file,
 		const Data::FileOrigin &origin,
 		Fn<bool(FileProgress)> progress,
@@ -2024,12 +2183,15 @@ bool ApiWrap::processFileLoad(
 
 	if (!file.relativePath.isEmpty()
 		|| file.skipReason != SkipReason::None) {
-		return true;
+		done(file.relativePath);
+		return;
 	} else if (!file.location && file.content.isEmpty()) {
 		file.skipReason = SkipReason::Unavailable;
-		return true;
+		done(QString());
+		return;
 	} else if (writePreloadedFile(file, origin)) {
-		return !file.relativePath.isEmpty();
+		done(file.relativePath);
+		return;
 	}
 
 	using Type = MediaSettings::Type;
@@ -2062,19 +2224,21 @@ bool ApiWrap::processFileLoad(
 		: story
 		? story->file().size
 		: file.size;
-	if (message && Data::SkipMessageByDate(*message, *_settings)) {
-		file.skipReason = SkipReason::DateLimits;
-		return true;
-	} else if (!story && (_settings->media.types & type) != type) {
+	if (!story && (_settings->media.types & type) != type) {
 		file.skipReason = SkipReason::FileType;
-		return true;
+		done(QString());
+		return;
 	} else if (!story && fullSize >= _settings->media.sizeLimit) {
-		// Don't load thumbs for large files that we skip.
 		file.skipReason = SkipReason::FileSize;
-		return true;
+		done(QString());
+		return;
 	}
+    if (_stats
+        && origin.messageId != 0
+        && !file.suggestedPath.endsWith(u"_thumb.jpg"_q)) {
+        _stats->incrementUserMediaFiles();
+    }
 	loadFile(file, origin, std::move(progress), std::move(done));
-	return false;
 }
 
 bool ApiWrap::writePreloadedFile(
@@ -2088,8 +2252,8 @@ bool ApiWrap::writePreloadedFile(
 		file.relativePath = *path;
 		return true;
 	} else if (!file.content.isEmpty()) {
-		const auto process = prepareFileProcess(file, origin);
-		if (const auto result = process->file.writeBlock(file.content)) {
+		auto process = prepareFileProcess(file, origin);
+		if (const auto result = process->outputFile.writeBlock(file.content)) {
 			file.relativePath = process->relativePath;
 			_fileCache->save(file.location, file.relativePath);
 		} else {
@@ -2101,45 +2265,42 @@ bool ApiWrap::writePreloadedFile(
 }
 
 void ApiWrap::loadFile(
-		const Data::File &file,
+		Data::File &file,
 		const Data::FileOrigin &origin,
 		Fn<bool(FileProgress)> progress,
 		FnMut<void(QString)> done) {
-	Expects(_fileProcess == nullptr);
-	Expects(file.location.dcId != 0
-		|| file.location.data.type() == mtpc_inputTakeoutFileLocation);
+	Expects(file.location);
 
-	_fileProcess = prepareFileProcess(file, origin);
-	_fileProcess->progress = std::move(progress);
-	_fileProcess->done = std::move(done);
+	auto process = prepareFileProcess(file, origin);
+	process->progress = std::move(progress);
+	process->done = std::move(done);
 
-	if (_fileProcess->progress) {
-		const auto progress = FileProgress{
-			_fileProcess->file.size(),
-			_fileProcess->size
-		};
-		if (!_fileProcess->progress(progress)) {
-			return;
-		}
-	}
+	const auto randomId = process->randomId;
+	file.randomId = randomId;
+	process->location.randomId = randomId;
 
-	loadFilePart();
+	_fileProcesses.emplace(randomId, std::move(process));
+	_fileDownloadQueue.push_back(randomId);
 
-	Ensures(_fileProcess->requestId != 0);
+	scheduleMoreFiles();
 }
 
-auto ApiWrap::prepareFileProcess(
-	const Data::File &file,
+std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
+	Data::File &file,
 	const Data::FileOrigin &origin) const
--> std::unique_ptr<FileProcess> {
+{
 	Expects(_settings != nullptr);
 
 	const auto relativePath = Output::File::PrepareRelativePath(
 		_settings->path,
 		file.suggestedPath);
+	
+	const auto fullPath = _settings->path + relativePath;
 	auto result = std::make_unique<FileProcess>(
-		_settings->path + relativePath,
+		file,
+		fullPath,
 		_stats);
+
 	result->relativePath = relativePath;
 	result->location = file.location;
 	result->size = file.size;
@@ -2148,116 +2309,334 @@ auto ApiWrap::prepareFileProcess(
 	return result;
 }
 
-void ApiWrap::loadFilePart() {
-	if (!_fileProcess
-		|| _fileProcess->requestId
-		|| _fileProcess->requests.size() >= kFileRequestsCount
-		|| (_fileProcess->size > 0
-			&& _fileProcess->offset >= _fileProcess->size)) {
+void ApiWrap::scheduleMoreFiles() {
+	if (_batchDelayTimer->isActive()) {
 		return;
 	}
 
-	const auto offset = _fileProcess->offset;
-	_fileProcess->requests.push_back({ offset });
-	_fileProcess->requestId = fileRequest(
-		_fileProcess->location,
-		_fileProcess->offset
-	).done([=](const MTPupload_File &result) {
-		_fileProcess->requestId = 0;
-		filePartDone(offset, result);
-	}).send();
-	_fileProcess->offset += kFileChunkSize;
+	while (!_fileDownloadQueue.empty()) {
+		if (_filesDownloading >= kMaxParallelFiles) {
+			break;
+		}
 
-	if (_fileProcess->size > 0
-		&& _fileProcess->requests.size() < kFileRequestsCount) {
-		// Only one request at a time supported right now.
-		//const auto runner = _runner;
-		//crl::on_main([=] {
-		//	QTimer::singleShot(kFileNextRequestDelay, [=] {
-		//		runner([=] {
-		//			loadFilePart();
-		//		});
-		//	});
-		//});
+		const auto randomId = _fileDownloadQueue.front();
+		const auto it = _fileProcesses.find(randomId);
+		if (it == end(_fileProcesses)) {
+			_fileDownloadQueue.pop_front();
+			continue;
+		}
+
+		_fileDownloadQueue.pop_front();
+		auto &process = *it->second;
+		process.active = true;
+		++_filesDownloading;
+
+		loadFilePart(process);
 	}
 }
 
-void ApiWrap::filePartDone(int64 offset, const MTPupload_File &result) {
-	Expects(_fileProcess != nullptr);
-	Expects(!_fileProcess->requests.empty());
+
+void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
+	auto it = _fileProcesses.find(randomId);
+	if (it == end(_fileProcesses)) {
+		return;
+	}
+	auto process = std::move(it->second);
+	_fileProcesses.erase(it);
+
+	if (process->active) {
+		--_filesDownloading;
+	}
+
+	process->fileRef.relativePath = relativePath;
+	if (relativePath.isEmpty()) {
+		process->fileRef.skipReason = Data::File::SkipReason::Unavailable;
+	} else {
+		_fileCache->save(process->location, relativePath);
+	}
+
+	process->done(relativePath);
+
+	scheduleMoreFiles();
+}
+
+void ApiWrap::loadFilePart(FileProcess &process) {
+	if (!process.active) {
+		return;
+	}
+
+	const auto requestsCount = GetConcurrentChunksForFile(process.size);
+	const auto chunkSize = GetChunkSizeForFile(process.size);
+
+	const auto scheduleRequest = [&](int64 offset) {
+		const auto randomId = process.randomId;
+		_throttler.schedule([=, &process] {
+			const auto requestId = fileRequest(
+				process.location,
+				offset,
+				chunkSize
+			).done([=](const MTPupload_File &result) {
+				filePartDone(randomId, offset, result);
+			}).fail([=](const MTP::Error &error) {
+				// Free this slot for this offset.
+				if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
+					auto &proc = *itp->second;
+					for (auto it = proc.activeRequestOffsets.begin(); it != proc.activeRequestOffsets.end();) {
+						if (it->second == offset) it = proc.activeRequestOffsets.erase(it);
+						else ++it;
+					}
+				}
+
+				// Special cases.
+				if (error.type() == u"TAKEOUT_FILE_EMPTY"_q && _otherDataProcess != nullptr) {
+					filePartDone(
+						randomId,
+						0,
+						MTP_upload_file(
+							MTP_storage_filePartial(),
+							MTP_int(0),
+							MTP_bytes()));
+					return true;
+				} else if (error.type() == u"LOCATION_INVALID"_q
+					|| error.type() == u"VERSION_INVALID"_q
+					|| error.type() == u"LOCATION_NOT_AVAILABLE"_q) {
+					filePartUnavailable(randomId);
+					return true;
+				} else if (error.code() == 400
+					&& error.type().startsWith(u"FILE_REFERENCE_"_q)) {
+					filePartRefreshReference(randomId, offset);
+					return true;
+				}
+
+				// FLOOD_WAIT_*: respect exact server wait time (using proper regex parsing)
+				if (error.code() == 420 || error.type().startsWith(u"FLOOD_WAIT"_q)) {
+					static const auto FloodWaitRegExp = QRegularExpression("^FLOOD_WAIT_(\\d+)$");
+					const auto match = FloodWaitRegExp.match(error.type());
+					const int seconds = match.hasMatch() ? match.captured(1).toInt() : 2;
+					const int ms = seconds * 1000;
+					if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
+						auto &proc = *itp->second;
+						if (std::find(proc.pendingRetryOffsets.begin(), proc.pendingRetryOffsets.end(), offset)
+							== proc.pendingRetryOffsets.end()) {
+							proc.pendingRetryOffsets.push_back(offset);
+						}
+					}
+					_batchDelayTimer->callOnce(ms);
+					return true;
+				}
+
+				// Transient errors: retry with backoff up to 3 tries.
+				if (error.code() >= 500
+					|| error.type() == u"TIMEOUT"_q
+					|| error.type() == u"RPC_CALL_FAIL"_q
+					|| error.type() == u"INTERNAL"_q) {
+					if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
+						auto &proc = *itp->second;
+						const int tries = ++proc.retryCounts[offset];
+						if (tries <= kMaxChunkRetries) {
+							if (std::find(proc.pendingRetryOffsets.begin(), proc.pendingRetryOffsets.end(), offset)
+								== proc.pendingRetryOffsets.end()) {
+								proc.pendingRetryOffsets.push_back(offset);
+							}
+							const int delay = std::min(kRetryBaseDelayMs << (tries - 1), kRetryMaxDelayMs);
+							_batchDelayTimer->callOnce(delay);
+							return true;
+						} else {
+							filePartUnavailable(randomId);
+							return true;
+						}
+					}
+				}
+
+				return false;
+			}).send();
+
+			if (requestId) {
+				process.activeRequestOffsets.emplace(requestId, offset);
+			}
+		});
+	};
+
+	// First, retry failed offsets (if any).
+	while (!process.pendingRetryOffsets.empty()
+		&& process.activeRequestOffsets.size() < requestsCount) {
+		const auto retryOffset = process.pendingRetryOffsets.front();
+		process.pendingRetryOffsets.pop_front();
+
+		const auto alreadyActive = std::any_of(
+			process.activeRequestOffsets.begin(),
+			process.activeRequestOffsets.end(),
+			[&](const auto &p) { return p.second == retryOffset; });
+		if (alreadyActive) {
+			continue;
+		}
+
+		auto &requests = process.requests;
+		const auto rIt = ranges::find(
+			requests,
+			retryOffset,
+			[](const FileProcess::Request &r) { return r.offset; });
+		if (rIt == end(requests)) {
+			requests.push_back({ retryOffset });
+		}
+		scheduleRequest(retryOffset);
+	}
+
+	// Then fill remaining slots with fresh offsets.
+	while (process.activeRequestOffsets.size() < requestsCount) {
+		if (process.size > 0 && process.offset >= process.size) {
+			break;
+		}
+
+		const auto offset = process.offset;
+		process.requests.push_back({ offset });
+		process.offset += chunkSize;
+
+		scheduleRequest(offset);
+
+		if (process.size == 0) {
+			break;
+		}
+	}
+
+	if (!process.pendingRetryOffsets.empty()) {
+		_batchDelayTimer->callOnce(100);
+	}
+}
+
+void ApiWrap::filePartDone(
+		uint64 randomId,
+		int64 offset,
+		const MTPupload_File &result) {
+	const auto it = _fileProcesses.find(randomId);
+	if (it == end(_fileProcesses)) {
+		return;
+	}
+	auto &process = *it->second;
+
+	auto removed = false;
+	for (auto i = begin(process.activeRequestOffsets); i != end(process.activeRequestOffsets); ++i) {
+		if (i->second == offset) {
+			process.activeRequestOffsets.erase(i);
+			removed = true;
+			break;
+		}
+	}
+	if (!removed && offset != 0) {
+		return;
+	}
+
+	// Clear retry bookkeeping for this offset on success.
+	if (const auto itc = process.retryCounts.find(offset); itc != process.retryCounts.end()) {
+		process.retryCounts.erase(itc);
+	}
+	if (!process.pendingRetryOffsets.empty()) {
+		const auto e = std::remove(process.pendingRetryOffsets.begin(), process.pendingRetryOffsets.end(), offset);
+		if (e != process.pendingRetryOffsets.end()) {
+			process.pendingRetryOffsets.erase(e, process.pendingRetryOffsets.end());
+		}
+	}
 
 	if (result.type() == mtpc_upload_fileCdnRedirect) {
 		error("Cdn redirect is not supported.");
 		return;
 	}
 	const auto &data = result.c_upload_file();
-	if (data.vbytes().v.isEmpty()) {
-		if (_fileProcess->size > 0) {
+	const auto receivedEmpty = data.vbytes().v.isEmpty();
+
+	if (receivedEmpty) {
+		if (process.size > 0) {
 			error("Empty bytes received in file part.");
-			return;
-		}
-		const auto result = _fileProcess->file.writeBlock({});
-		if (!result) {
-			ioError(result);
 			return;
 		}
 	} else {
 		using Request = FileProcess::Request;
-		auto &requests = _fileProcess->requests;
+		auto &requests = process.requests;
 		const auto i = ranges::find(
 			requests,
 			offset,
 			[](const Request &request) { return request.offset; });
 		Assert(i != end(requests));
-
 		i->bytes = data.vbytes().v;
+	}
 
-		auto &file = _fileProcess->file;
-		while (!requests.empty() && !requests.front().bytes.isEmpty()) {
-			const auto &bytes = requests.front().bytes;
-			if (const auto result = file.writeBlock(bytes); !result) {
-				ioError(result);
-				return;
-			}
-			requests.pop_front();
+	auto &outputFile = process.outputFile;
+	auto &requests = process.requests;
+	while (!requests.empty() && !requests.front().bytes.isEmpty()) {
+		const auto &bytes = requests.front().bytes;
+		if (const auto writeResult = outputFile.writeBlock(bytes); !writeResult) {
+			ioError(writeResult);
+			finishFile(randomId, QString());
+			return;
 		}
+		requests.pop_front();
+	}
 
-		if (_fileProcess->progress) {
-			_fileProcess->progress(FileProgress{
-				file.size(),
-				_fileProcess->size });
-		}
-
-		if (!requests.empty()
-			|| !_fileProcess->size
-			|| _fileProcess->size > _fileProcess->offset) {
-			loadFilePart();
+	if (process.progress) {
+		if (!process.progress({
+			.randomId = randomId,
+			.ready = outputFile.size(),
+			.total = process.size,
+		})) {
+			finishFile(randomId, QString());
 			return;
 		}
 	}
 
-	auto process = base::take(_fileProcess);
-	const auto relativePath = process->relativePath;
-	_fileCache->save(process->location, relativePath);
-	process->done(process->relativePath);
+	const auto allPartsRequested = (process.size > 0)
+		&& (process.offset >= process.size);
+	if (process.activeRequestOffsets.empty() && (allPartsRequested || receivedEmpty)) {
+		// Mark message as fully processed if all its parts are done.
+		if (_chatProcess && _chatProcess->slice) {
+			const auto mIt = _chatProcess->fileToMessageIndex.find(randomId);
+			if (mIt != end(_chatProcess->fileToMessageIndex)) {
+				const int messageIndex = mIt->second;
+				if (messageIndex >= 0
+				 && messageIndex < int(_chatProcess->messageFilesRequired.size())) {
+					auto &done = _chatProcess->messageFilesDone[messageIndex];
+					const auto need = _chatProcess->messageFilesRequired[messageIndex];
+					if (++done == need) {
+						++_chatProcess->messagesProcessed;
+					}
+				}
+			}
+		}
+		finishFile(randomId, process.relativePath);
+	} else if (process.active) {
+		// CORRECTED: A chunk slot for this file just opened up.
+		// Try to immediately fill it with the next chunk for the same file.
+		// No timers or delays here.
+		loadFilePart(process);
+	}
 }
 
-void ApiWrap::filePartRefreshReference(int64 offset) {
-	Expects(_fileProcess != nullptr);
-	Expects(_fileProcess->requestId == 0);
+void ApiWrap::filePartUnavailable(uint64 randomId) {
+	LOG(("Export Error: File unavailable."));
+	finishFile(randomId, QString());
+}
 
-	const auto &origin = _fileProcess->origin;
+void ApiWrap::filePartRefreshReference(uint64 randomId, int64 offset) {
+	const auto it = _fileProcesses.find(randomId);
+	if (it == end(_fileProcesses)) {
+		return;
+	}
+	auto &process = *it->second;
+
+	for (const auto &[requestId, reqOffset] : process.activeRequestOffsets) {
+		_mtp.request(requestId).cancel();
+	}
+	process.activeRequestOffsets.clear();
+
+	const auto &origin = process.origin;
 	if (origin.storyId) {
-		_fileProcess->requestId = mainRequest(MTPstories_GetStoriesByID(
+		mainRequest(MTPstories_GetStoriesByID(
 			MTP_inputPeerSelf(),
 			MTP_vector<MTPint>(1, MTP_int(origin.storyId))
 		)).fail([=](const MTP::Error &error) {
-			_fileProcess->requestId = 0;
-			filePartUnavailable();
+			filePartUnavailable(randomId);
 			return true;
 		}).done([=](const MTPstories_Stories &result) {
-			_fileProcess->requestId = 0;
-			filePartExtractReference(offset, result);
+			filePartExtractReference(randomId, offset, result);
 		}).send();
 		return;
 	} else if (!origin.messageId) {
@@ -2274,21 +2653,19 @@ void ApiWrap::filePartRefreshReference(int64 offset) {
 				origin.peer.c_inputPeerChannelFromMessage().vpeer(),
 				origin.peer.c_inputPeerChannelFromMessage().vmsg_id(),
 				origin.peer.c_inputPeerChannelFromMessage().vchannel_id());
-		_fileProcess->requestId = mainRequest(MTPchannels_GetMessages(
+		mainRequest(MTPchannels_GetMessages(
 			channel,
 			MTP_vector<MTPInputMessage>(
 				1,
 				MTP_inputMessageID(MTP_int(origin.messageId)))
 		)).fail([=](const MTP::Error &error) {
-			_fileProcess->requestId = 0;
-			filePartUnavailable();
+			filePartUnavailable(randomId);
 			return true;
 		}).done([=](const MTPmessages_Messages &result) {
-			_fileProcess->requestId = 0;
-			filePartExtractReference(offset, result);
+			filePartExtractReference(randomId, offset, result);
 		}).send();
 	} else {
-		_fileProcess->requestId = splitRequest(
+		splitRequest(
 			origin.split,
 			MTPmessages_GetMessages(
 				MTP_vector<MTPInputMessage>(
@@ -2296,98 +2673,102 @@ void ApiWrap::filePartRefreshReference(int64 offset) {
 					MTP_inputMessageID(MTP_int(origin.messageId)))
 			)
 		).fail([=](const MTP::Error &error) {
-			_fileProcess->requestId = 0;
-			filePartUnavailable();
+			filePartUnavailable(randomId);
 			return true;
 		}).done([=](const MTPmessages_Messages &result) {
-			_fileProcess->requestId = 0;
-			filePartExtractReference(offset, result);
+			filePartExtractReference(randomId, offset, result);
 		}).send();
 	}
 }
 
 void ApiWrap::filePartExtractReference(
+		uint64 randomId,
 		int64 offset,
 		const MTPmessages_Messages &result) {
-	Expects(_fileProcess != nullptr);
-	Expects(_fileProcess->requestId == 0);
+	const auto it = _fileProcesses.find(randomId);
+	if (it == end(_fileProcesses)) {
+		return;
+	}
+	auto &process = *it->second;
 
-	result.match([&](const MTPDmessages_messagesNotModified &data) {
-		error("Unexpected messagesNotModified received.");
-	}, [&](const auto &data) {
+	const auto handle = [&](
+			const MTPVector<MTPMessage> &messages,
+			const MTPVector<MTPUser> &users,
+			const MTPVector<MTPChat> &chats) {
 		Expects(_selfId.has_value());
 
 		auto context = Data::ParseMediaContext();
 		context.selfPeerId = peerFromUser(*_selfId);
-		const auto messages = Data::ParseMessagesSlice(
+		const auto parsed = Data::ParseMessagesSlice(
 			context,
-			data.vmessages(),
-			data.vusers(),
-			data.vchats(),
-			_chatProcess->info.relativePath);
-		for (const auto &message : messages.list) {
-			if (message.id == _fileProcess->origin.messageId) {
+			messages,
+			users,
+			chats,
+			_chatProcess ? _chatProcess->info.relativePath : QString());
+		for (const auto &message : parsed.list) {
+			if (message.id == process.origin.messageId) {
 				const auto refresh1 = Data::RefreshFileReference(
-					_fileProcess->location,
+					process.location,
 					message.file().location);
 				const auto refresh2 = Data::RefreshFileReference(
-					_fileProcess->location,
+					process.location,
 					message.thumb().file.location);
 				if (refresh1 || refresh2) {
-					_fileProcess->requestId = fileRequest(
-						_fileProcess->location,
-						offset
-					).done([=](const MTPupload_File &result) {
-						_fileProcess->requestId = 0;
-						filePartDone(offset, result);
-					}).send();
+					// Also update the original reference in the message.
+					Data::RefreshFileReference(
+						process.fileRef.location,
+						process.location);
+					loadFilePart(process);
 					return;
 				}
 			}
 		}
-		filePartUnavailable();
+		filePartUnavailable(randomId);
+	};
+
+	result.match([&](const MTPDmessages_messages &data) {
+		handle(data.vmessages(), data.vusers(), data.vchats());
+	}, [&](const MTPDmessages_messagesSlice &data) {
+		handle(data.vmessages(), data.vusers(), data.vchats());
+	}, [&](const MTPDmessages_channelMessages &data) {
+		handle(data.vmessages(), data.vusers(), data.vchats());
+	}, [&](const MTPDmessages_messagesNotModified &data) {
+		error("Unexpected messagesNotModified received.");
 	});
 }
 
 void ApiWrap::filePartExtractReference(
+		uint64 randomId,
 		int64 offset,
 		const MTPstories_Stories &result) {
-	Expects(_fileProcess != nullptr);
-	Expects(_fileProcess->requestId == 0);
+	const auto it = _fileProcesses.find(randomId);
+	if (it == end(_fileProcesses)) {
+		return;
+	}
+	auto &process = *it->second;
 
-	const auto stories = Data::ParseStoriesSlice(
-		result.data().vstories(),
-		0);
-	for (const auto &story : stories.list) {
-		if (story.id == _fileProcess->origin.storyId) {
-			const auto refresh1 = Data::RefreshFileReference(
-				_fileProcess->location,
-				story.file().location);
-			const auto refresh2 = Data::RefreshFileReference(
-				_fileProcess->location,
-				story.thumb().file.location);
-			if (refresh1 || refresh2) {
-				_fileProcess->requestId = fileRequest(
-					_fileProcess->location,
-					offset
-				).done([=](const MTPupload_File &result) {
-					_fileProcess->requestId = 0;
-					filePartDone(offset, result);
-				}).send();
-				return;
+	result.match([&](const MTPDstories_stories &data) {
+		const auto stories = Data::ParseStoriesSlice(data.vstories(), 0);
+		for (const auto &story : stories.list) {
+			if (story.id == process.origin.storyId) {
+				const auto refresh1 = Data::RefreshFileReference(
+					process.location,
+					story.file().location);
+				const auto refresh2 = Data::RefreshFileReference(
+					process.location,
+					story.thumb().file.location);
+				if (refresh1 || refresh2) {
+					// Also update the original reference in the story.
+					Data::RefreshFileReference(
+						process.fileRef.location,
+						process.location);
+					loadFilePart(process);
+					return;
+				}
 			}
 		}
-	}
-	filePartUnavailable();
-}
-
-void ApiWrap::filePartUnavailable() {
-	Expects(_fileProcess != nullptr);
-	Expects(!_fileProcess->requests.empty());
-
-	LOG(("Export Error: File unavailable."));
-
-	base::take(_fileProcess)->done(QString());
+		filePartUnavailable(randomId);
+	});
 }
 
 void ApiWrap::error(const MTP::Error &error) {

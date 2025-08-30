@@ -85,6 +85,11 @@ struct Settings {
 	MTPInputPeer singlePeer = MTP_inputPeerEmpty();
 	TimeId singlePeerFrom = 0;
 	TimeId singlePeerTill = 0;
+	
+	// ID range export fields
+	int32 singlePeerFromId = 0;  // 0 means no limit
+	int32 singlePeerTillId = 0;  // 0 means no limit
+	bool useIdRange = false;     // Flag to indicate ID range export
 
 	TimeId availableAt = 0;
 

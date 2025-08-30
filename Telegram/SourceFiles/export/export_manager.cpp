@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "export/export_manager.h"
 
+#include "window/window_session_controller.h"
+
 #include "export/export_controller.h"
 #include "export/view/export_view_panel_controller.h"
 #include "data/data_peer.h"
@@ -32,26 +34,30 @@ void Manager::start(
 		_panel->activatePanel();
 		return;
 	}
-	_controller = std::make_unique<Controller>(
-		&session->mtp(),
-		singlePeer);
-	_panel = std::make_unique<View::PanelController>(
-		session,
-		_controller.get());
-	session->account().sessionChanges(
-	) | rpl::filter([=](Main::Session *value) {
-		return (value != session);
-	}) | rpl::start_with_next([=] {
-		stop();
-	}, _panel->lifetime());
+	if (const auto window = session->tryResolveWindow()) {
+		_show = window->uiShow();
+		_controller = std::make_unique<Controller>(
+			_show.get(),
+			&session->mtp(),
+			singlePeer);
+		_panel = std::make_unique<View::PanelController>(
+			session,
+			_controller.get());
+		session->account().sessionChanges(
+		) | rpl::filter([=](Main::Session *value) {
+			return (value != session);
+		}) | rpl::start_with_next([=] {
+			stop();
+		}, _panel->lifetime());
 
-	_viewChanges.fire(_panel.get());
+		_viewChanges.fire(_panel.get());
 
-	_panel->stopRequests(
-	) | rpl::start_with_next([=] {
-		LOG(("Export Info: Stop requested."));
-		stop();
-	}, _controller->lifetime());
+		_panel->stopRequests(
+		) | rpl::start_with_next([=] {
+			LOG(("Export Info: Stop requested."));
+			stop();
+		}, _controller->lifetime());
+	}
 }
 
 rpl::producer<View::PanelController*> Manager::currentView(

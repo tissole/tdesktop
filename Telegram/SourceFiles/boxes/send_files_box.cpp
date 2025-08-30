@@ -79,6 +79,22 @@ using Ui::SendFilesWay;
 	return data->hasImage() || CanAddUrls(Core::ReadMimeUrls(data));
 }
 
+// Helper function to extract file names from a list of prepared files
+[[nodiscard]] QStringList ExtractFileNames(const std::vector<Ui::PreparedFile> &files) {
+	QStringList fileNames;
+	for (const auto &file : files) {
+		if (!file.path.isEmpty()) {
+			QFileInfo fileInfo(file.path);
+			fileNames.append(fileInfo.fileName());
+		} else if (!file.content.isEmpty()) {
+			// For files from clipboard or other sources, we might not have a path
+			// In this case, we'll use a generic name
+			fileNames.append("file");
+		}
+	}
+	return fileNames;
+}
+
 void FileDialogCallback(
 		FileDialog::OpenResult &&result,
 		Fn<bool(const Ui::PreparedList&)> checkResult,
@@ -175,9 +191,9 @@ void EditPriceBox(
 			field->showError();
 			return;
 		}
-		const auto weak = base::make_weak(box);
+		const auto weak = Ui::MakeWeak(box);
 		apply(now);
-		if (const auto strong = weak.get()) {
+		if (const auto strong = weak.data()) {
 			strong->closeBox();
 		}
 	};
@@ -597,7 +613,7 @@ void SendFilesBox::enqueueNextPrepare() {
 	}
 	auto file = std::move(_list.filesToProcess.front());
 	_list.filesToProcess.pop_front();
-	const auto weak = base::make_weak(this);
+	const auto weak = Ui::MakeWeak(this);
 	_preparing = true;
 	const auto sideLimit = PhotoSideLimit(); // Get on main thread.
 	crl::async([weak, sideLimit, file = std::move(file)]() mutable {
@@ -683,6 +699,12 @@ void SendFilesBox::refreshAllAfterChanges(int fromItem, Fn<void()> perform) {
 	_inner->resizeToWidth(st::boxWideWidth);
 	refreshControls();
 	captionResized();
+	
+	// Set focus to comment field if caption setting is active and we have multiple files
+	// This ensures consistent behavior with selecting multiple files at once
+	if (GetEnhancedBool("caption_from_file_name") && _caption && !_caption->isHidden() && _list.files.size() > 1) {
+		_caption->setFocusFast();
+	}
 }
 
 void SendFilesBox::openDialogToAddFileToAlbum() {
@@ -803,7 +825,7 @@ void SendFilesBox::toggleSpoilers(bool enabled) {
 }
 
 void SendFilesBox::changePrice() {
-	const auto weak = base::make_weak(this);
+	const auto weak = Ui::MakeWeak(this);
 	const auto session = &_show->session();
 	const auto now = _price.current();
 	_show->show(Box(EditPriceBox, session, now, [=](uint64 price) {
@@ -990,20 +1012,60 @@ void SendFilesBox::updateCaptionPlaceholder() {
 		return;
 	}
 	const auto way = _sendWay.current();
-	if (!_list.canAddCaption(
-			way.groupFiles() && way.sendImagesAsPhotos(),
-			way.sendImagesAsPhotos())
-		&& ((_limits & SendFilesAllow::OnlyOne)
-			|| !(_limits & SendFilesAllow::Texts))) {
-		_caption->hide();
-		if (_emojiToggle) {
-			_emojiToggle->hide();
+	
+	// Handle mutual exclusivity between _caption and _fileCaptions fields
+	if (_fileCaptions && GetEnhancedBool("caption_from_file_name") && !_list.files.empty() && !way.groupFiles()) {
+		// When caption setting is active and files are ungrouped, show _fileCaptions
+		_fileCaptions->show();
+		// Set proper placeholder for file captions
+		_fileCaptions->setPlaceholder(tr::lng_photo_caption());
+		// For single files, hide comment field; for multiple files, always show comment field
+		if (_list.files.size() == 1) {
+			_caption->hide();
+			if (_emojiToggle) {
+				_emojiToggle->hide();
+			}
+		} else {
+			_caption->show();
+			_caption->setPlaceholder(tr::lng_photos_comment());
+			if (_emojiToggle) {
+				_emojiToggle->show();
+			}
+		}
+	} else if (_fileCaptions) {
+		// When caption setting is inactive or files are grouped, hide _fileCaptions
+		_fileCaptions->hide();
+		// Always show comment field for multiple files, show for single files only when setting is inactive
+		if (_list.files.size() > 1) {
+			_caption->show();
+			_caption->setPlaceholder(tr::lng_photos_comment());
+			if (_emojiToggle) {
+				_emojiToggle->show();
+			}
+		} else if (!GetEnhancedBool("caption_from_file_name")) {
+			_caption->show();
+			_caption->setPlaceholder(FieldPlaceholder(_list, way));
+			if (_emojiToggle) {
+				_emojiToggle->show();
+			}
 		}
 	} else {
-		_caption->setPlaceholder(FieldPlaceholder(_list, way));
-		_caption->show();
-		if (_emojiToggle) {
-			_emojiToggle->show();
+		// Original caption visibility logic when _fileCaptions doesn't exist
+		if (!_list.canAddCaption(
+				way.groupFiles() && way.sendImagesAsPhotos(),
+				way.sendImagesAsPhotos())
+			&& ((_limits & SendFilesAllow::OnlyOne)
+				|| !(_limits & SendFilesAllow::Texts))) {
+			_caption->hide();
+			if (_emojiToggle) {
+				_emojiToggle->hide();
+			}
+		} else {
+			_caption->setPlaceholder(FieldPlaceholder(_list, way));
+			_caption->show();
+			if (_emojiToggle) {
+				_emojiToggle->show();
+			}
 		}
 	}
 }
@@ -1281,6 +1343,31 @@ void SendFilesBox::refreshControls(bool initial) {
 	refreshPriceTag();
 	refreshTitleText();
 	updateSendWayControls();
+	
+	// Update file captions with file names if the setting is active
+	if (GetEnhancedBool("caption_from_file_name") && _fileCaptions && !_fileCaptions->isHidden()) {
+		const auto way = _sendWay.current();
+		// Auto-fill for single files or ungrouped multiple files
+		if (!way.groupFiles()) {
+			const auto fileNames = ExtractFileNames(_list.files);
+			if (!fileNames.isEmpty()) {
+				TextWithTags captionText;
+				captionText.text = fileNames.join("\n");
+				_fileCaptions->setTextWithTags(captionText);
+			} else {
+				// Clear captions if no file names
+				_fileCaptions->setTextWithTags(TextWithTags());
+			}
+		} else {
+			// Clear captions for grouped files
+			_fileCaptions->setTextWithTags(TextWithTags());
+		}
+		// Update placeholder text
+		if (!_list.files.empty() && !way.groupFiles()) {
+			_fileCaptions->setPlaceholder(tr::lng_photo_caption());
+		}
+	}
+	
 	updateCaptionPlaceholder();
 }
 
@@ -1304,6 +1391,29 @@ void SendFilesBox::setupSendWayControls() {
 	) | rpl::start_with_next([=](SendFilesWay value) {
 		_groupFiles->setChecked(value.groupFiles());
 		_sendImagesAsPhotos->setChecked(value.sendImagesAsPhotos());
+		
+		// Update file captions with file names if the setting is active
+		if (GetEnhancedBool("caption_from_file_name") && _fileCaptions && !_fileCaptions->isHidden()) {
+			// Auto-fill for single files or ungrouped multiple files
+			if (!value.groupFiles()) {
+				const auto fileNames = ExtractFileNames(_list.files);
+				if (!fileNames.isEmpty()) {
+					TextWithTags captionText;
+					captionText.text = fileNames.join("\n");
+					_fileCaptions->setTextWithTags(captionText);
+				} else {
+					// Clear captions if no file names
+					_fileCaptions->setTextWithTags(TextWithTags());
+				}
+				// Update placeholder text
+				_fileCaptions->setPlaceholder(tr::lng_photo_caption());
+			} else {
+				// Clear captions for grouped files
+				_fileCaptions->setTextWithTags(TextWithTags());
+			}
+		}
+		
+		updateCaptionPlaceholder();
 	}, lifetime());
 
 	_groupFiles->checkedChanges(
@@ -1315,6 +1425,29 @@ void SendFilesBox::setupSendWayControls() {
 		sendWay.setGroupFiles(checked);
 		if (checkWithWay(sendWay)) {
 			_sendWay = sendWay;
+			
+			// Update file captions with file names if the setting is active
+			if (GetEnhancedBool("caption_from_file_name") && _fileCaptions && !_fileCaptions->isHidden()) {
+				// Auto-fill for single files or ungrouped multiple files
+				if (!sendWay.groupFiles()) {
+					const auto fileNames = ExtractFileNames(_list.files);
+					if (!fileNames.isEmpty()) {
+						TextWithTags captionText;
+						captionText.text = fileNames.join("\n");
+						_fileCaptions->setTextWithTags(captionText);
+					} else {
+						// Clear captions if no file names
+						_fileCaptions->setTextWithTags(TextWithTags());
+					}
+					// Update placeholder text
+					_fileCaptions->setPlaceholder(tr::lng_photo_caption());
+				} else {
+					// Clear captions for grouped files
+					_fileCaptions->setTextWithTags(TextWithTags());
+				}
+			}
+			
+			updateCaptionPlaceholder();
 		} else {
 			Ui::PostponeCall(_groupFiles.data(), [=] {
 				_groupFiles->setChecked(!checked);
@@ -1462,6 +1595,77 @@ void SendFilesBox::setupCaption() {
 		}
 		Unexpected("action in MimeData hook.");
 	});
+
+	// Setup file captions field
+	_fileCaptions.create(
+		this,
+		_st.files.caption,
+		Ui::InputField::Mode::MultiLine);
+	_fileCaptions->setSubmitSettings(
+		Core::App().settings().sendSubmitWay());
+	_fileCaptions->setMaxLength(kMaxMessageLength);
+	_fileCaptions->setPlaceholder(tr::lng_photo_caption());
+
+	// Setup handlers for file captions field
+	const auto allowCaptions = [=](not_null<DocumentData*> emoji) {
+		return _captionToPeer
+			? Data::AllowEmojiWithoutPremium(_captionToPeer, emoji)
+			: (_limits & SendFilesAllow::EmojiWithoutPremium);
+	};
+	InitMessageFieldHandlers({
+		.session = &show->session(),
+		.show = show,
+		.field = _fileCaptions.data(),
+		.customEmojiPaused = [=] {
+			return show->paused(Window::GifPauseReason::Layer);
+		},
+		.allowPremiumEmoji = allowCaptions,
+		.fieldStyle = &_st.files.caption,
+	});
+
+	_fileCaptions->heightChanges(
+	) | rpl::start_with_next([=] {
+		captionResized();
+	}, _fileCaptions->lifetime());
+	_fileCaptions->submits(
+	) | rpl::start_with_next([=](Qt::KeyboardModifiers modifiers) {
+		const auto ctrlShiftEnter = modifiers.testFlag(Qt::ShiftModifier)
+			&& (modifiers.testFlag(Qt::ControlModifier)
+				|| modifiers.testFlag(Qt::MetaModifier));
+		send({}, ctrlShiftEnter);
+	}, _fileCaptions->lifetime());
+	_fileCaptions->cancelled(
+	) | rpl::start_with_next([=] {
+		closeBox();
+	}, _fileCaptions->lifetime());
+	_fileCaptions->setMimeDataHook([=](
+			not_null<const QMimeData*> data,
+			Ui::InputField::MimeAction action) {
+		if (action == Ui::InputField::MimeAction::Check) {
+			return CanAddFiles(data);
+		} else if (action == Ui::InputField::MimeAction::Insert) {
+			return addFiles(data);
+		}
+		Unexpected("action in MimeData hook.");
+	});
+
+	// Auto-fill file captions with file names if the setting is active
+	if (GetEnhancedBool("caption_from_file_name") && !_list.files.empty()) {
+		const auto way = _sendWay.current();
+		// Auto-fill for single files or ungrouped multiple files
+		if (!way.groupFiles()) {
+			const auto fileNames = ExtractFileNames(_list.files);
+			if (!fileNames.isEmpty()) {
+				TextWithTags captionText;
+				captionText.text = fileNames.join("\n");
+				_fileCaptions->setTextWithTags(captionText);
+			}
+		}
+		// Set placeholder text
+		if (!way.groupFiles()) {
+			_fileCaptions->setPlaceholder(tr::lng_photo_caption());
+		}
+	}
 
 	updateCaptionPlaceholder();
 	setupEmojiPanel();
@@ -1628,6 +1832,9 @@ void SendFilesBox::emojiFilterForGeometry(not_null<QEvent*> event) {
 }
 
 void SendFilesBox::updateEmojiPanelGeometry() {
+	if (!_emojiPanel || !_emojiToggle) {
+		return;
+	}
 	const auto parent = _emojiPanel->parentWidget();
 	const auto global = _emojiToggle->mapToGlobal({ 0, 0 });
 	const auto local = parent->mapFromGlobal(global);
@@ -1706,6 +1913,16 @@ void SendFilesBox::addPreparedAsyncFile(Ui::PreparedFile &&file) {
 void SendFilesBox::addFile(Ui::PreparedFile &&file) {
 	// canBeSentInSlowmode checks for non empty filesToProcess.
 	auto saved = base::take(_list.filesToProcess);
+	
+	// Initialize fileNameCaption with file name if setting is active and files are not grouped
+	if (GetEnhancedBool("caption_from_file_name") && !file.path.isEmpty()) {
+		const auto way = _sendWay.current();
+		if (!way.groupFiles()) {  // Only populate if files will actually use individual captions
+			QFileInfo fileInfo(file.path);
+			file.fileNameCaption = TextWithTags{fileInfo.fileName(), {}};
+		}
+	}
+	
 	_list.files.push_back(std::move(file));
 	const auto lastOk = [&] {
 		auto way = _sendWay.current();
@@ -1722,6 +1939,27 @@ void SendFilesBox::addFile(Ui::PreparedFile &&file) {
 	}();
 	if (!lastOk) {
 		_list.files.pop_back();
+	} else {
+		// Update file captions field if setting is active
+		if (GetEnhancedBool("caption_from_file_name") && _fileCaptions && !_fileCaptions->isHidden()) {
+			const auto way = _sendWay.current();
+			// Auto-fill for single files or ungrouped multiple files
+			if (!way.groupFiles()) {
+				const auto fileNames = ExtractFileNames(_list.files);
+				if (!fileNames.isEmpty()) {
+					TextWithTags captionText;
+					captionText.text = fileNames.join("\n");
+					_fileCaptions->setTextWithTags(captionText);
+				}
+			}
+		}
+		updateCaptionPlaceholder();
+		
+		// Set focus to comment field if caption setting is active and we have multiple files
+		// This ensures consistent behavior with selecting multiple files at once
+		if (GetEnhancedBool("caption_from_file_name") && _caption && !_caption->isHidden() && _list.files.size() > 1) {
+			_caption->setFocusFast();
+		}
 	}
 	_list.filesToProcess = std::move(saved);
 }
@@ -1752,6 +1990,13 @@ void SendFilesBox::refreshTitleText() {
 
 void SendFilesBox::updateBoxSize() {
 	auto footerHeight = 0;
+	
+	// Account for file captions field
+	if (_fileCaptions && !_fileCaptions->isHidden()) {
+		footerHeight += st::boxPhotoCaptionSkip + _fileCaptions->height();
+	}
+	
+	// Account for comment field
 	if (_caption && !_caption->isHidden()) {
 		footerHeight += st::boxPhotoCaptionSkip + _caption->height();
 	}
@@ -1807,6 +2052,17 @@ void SendFilesBox::resizeEvent(QResizeEvent *e) {
 
 void SendFilesBox::updateControlsGeometry() {
 	auto bottom = height();
+	
+	// Position file captions field first (if visible)
+	if (_fileCaptions && !_fileCaptions->isHidden()) {
+		_fileCaptions->resize(st::sendMediaPreviewSize, _fileCaptions->height());
+		_fileCaptions->moveToLeft(
+			st::boxPhotoPadding.left(),
+			bottom - _fileCaptions->height());
+		bottom -= st::boxPhotoCaptionSkip + _fileCaptions->height();
+	}
+	
+	// Position comment field (if visible)
 	if (_caption && !_caption->isHidden()) {
 		_caption->resize(st::sendMediaPreviewSize, _caption->height());
 		_caption->moveToLeft(
@@ -1915,9 +2171,9 @@ void SendFilesBox::send(
 		saveSendWaySettings();
 	}
 
-	//for (auto &item : _list.files) {
-	//	item.spoiler = false;
-	//}
+	for (auto &item : _list.files) {
+		item.spoiler = false;
+	}
 	applyBlockChanges();
 
 	Storage::ApplyModifications(_list);
@@ -1937,6 +2193,24 @@ void SendFilesBox::send(
 				file.spoiler = false;
 			}
 		}
+		
+		// Apply file captions if the setting is active and we have ungrouped files
+		if (GetEnhancedBool("caption_from_file_name") && _fileCaptions && !_fileCaptions->isHidden()) {
+			const auto way = _sendWay.current();
+			if (!way.groupFiles()) {
+				// Split the file captions by newlines
+				const auto captionText = _fileCaptions->getTextWithAppliedMarkdown().text;
+				const auto captions = captionText.split("\n", Qt::SkipEmptyParts);
+				
+				// Apply captions to individual files
+				for (auto i = 0; i < std::min(captions.size(), static_cast<int>(_list.files.size())); ++i) {
+					TextWithTags fileCaption;
+					fileCaption.text = captions[i];
+					_list.files[i].fileNameCaption = std::move(fileCaption);
+				}
+			}
+		}
+		
 		_confirmedCallback(
 			std::move(_list),
 			_sendWay.current(),

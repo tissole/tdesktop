@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "chat_helpers/compose/compose_show.h"
+
 class PeerData;
 
 namespace Ui {
@@ -42,6 +44,7 @@ public:
 	void stop();
 
 private:
+	std::shared_ptr<ChatHelpers::Show> _show;
 	std::unique_ptr<Controller> _controller;
 	std::unique_ptr<View::PanelController> _panel;
 	rpl::event_stream<View::PanelController*> _viewChanges;

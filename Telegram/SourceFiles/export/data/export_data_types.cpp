@@ -2527,6 +2527,16 @@ bool SingleMessageAfter(
 }
 
 bool SkipMessageByDate(const Message &message, const Settings &settings) {
+	// Handle ID range filtering
+	if (settings.useIdRange) {
+		const auto goodFromId = (settings.singlePeerFromId <= 0) 
+			|| (settings.singlePeerFromId <= message.id);
+		const auto goodTillId = (settings.singlePeerTillId <= 0) 
+			|| (message.id <= settings.singlePeerTillId);
+		return !goodFromId || !goodTillId;
+	}
+	
+	// Handle date range filtering (existing logic)
 	const auto goodFrom = (settings.singlePeerFrom <= 0)
 		|| (settings.singlePeerFrom <= message.date);
 	const auto goodTill = (settings.singlePeerTill <= 0)

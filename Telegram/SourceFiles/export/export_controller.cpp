@@ -14,6 +14,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/output/export_output_result.h"
 #include "export/output/export_output_stats.h"
 #include "mtproto/mtp_instance.h"
+#include "ui/widgets/buttons.h"
+#include "ui/widgets/labels.h"
+#include "ui/boxes/confirm_box.h"
+#include "ui/layers/show.h"
+#include "lang/lang_keys.h"
+#include "base/weak_ptr.h"
 
 namespace Export {
 namespace {
@@ -34,6 +40,7 @@ Settings NormalizeSettings(const Settings &settings) {
 class ControllerObject {
 public:
 	ControllerObject(
+		not_null<Ui::Show*> show,
 		crl::weak_on_queue<ControllerObject> weak,
 		QPointer<MTP::Instance> mtproto,
 		const MTPInputPeer &peer);
@@ -53,10 +60,16 @@ public:
 		const Environment &environment);
 	void skipFile(uint64 randomId);
 	void cancelExportFast();
+	
+	// Message export functions
+	void exportNextDialog();
+	void startExportMessages(const Data::DialogInfo *info, uint64 fromId, uint64 tillId);
 
 private:
 	using Step = ProcessingState::Step;
 	using DownloadProgress = ApiWrap::DownloadProgress;
+	
+	base::flat_map<uint64, FileDownloadProgress> _activeDownloads;
 
 	[[nodiscard]] bool stopped() const;
 	void setState(State &&state);
@@ -80,7 +93,6 @@ private:
 	void exportSessions();
 	void exportOtherData();
 	void exportDialogs();
-	void exportNextDialog();
 
 	template <typename Callback = const decltype(kNullStateCallback) &>
 	ProcessingState prepareState(
@@ -103,6 +115,7 @@ private:
 
 	int substepsInStep(Step step) const;
 
+	not_null<Ui::Show*> _show;
 	ApiWrap _api;
 	Settings _settings;
 	Environment _environment;
@@ -134,16 +147,21 @@ private:
 	std::vector<Step> _steps;
 	int _stepIndex = -1;
 
+	crl::weak_on_queue<ControllerObject> _weak;
+
 	rpl::lifetime _lifetime;
 
 };
 
 ControllerObject::ControllerObject(
+	not_null<Ui::Show*> show,
 	crl::weak_on_queue<ControllerObject> weak,
 	QPointer<MTP::Instance> mtproto,
 	const MTPInputPeer &peer)
-: _api(mtproto, weak.runner())
-, _state(PasswordCheckState{}) {
+: _show(show)
+, _api(mtproto, weak.runner())
+, _state(PasswordCheckState{})
+, _weak(std::move(weak)) {
 	_api.errors(
 	) | rpl::start_with_next([=](const MTP::Error &error) {
 		setState(ApiErrorState{ error });
@@ -200,50 +218,6 @@ bool ControllerObject::ioCatchError(Output::Result result) {
 	return false;
 }
 
-//void ControllerObject::submitPassword(const QString &password) {
-//
-//}
-//
-//void ControllerObject::requestPasswordRecover() {
-//
-//}
-//
-//rpl::producer<PasswordUpdate> ControllerObject::passwordUpdate() const {
-//	return nullptr;
-//}
-//
-//void ControllerObject::reloadPasswordState() {
-//	//_mtp.request(base::take(_passwordRequestId)).cancel();
-//	requestPasswordState();
-//}
-//
-//void ControllerObject::requestPasswordState() {
-//	if (_passwordRequestId) {
-//		return;
-//	}
-//	//_passwordRequestId = _mtp.request(MTPaccount_GetPassword(
-//	//)).done([=](const MTPaccount_Password &result) {
-//	//	_passwordRequestId = 0;
-//	//	passwordStateDone(result);
-//	//}).fail([=](const MTP::Error &error) {
-//	//	apiError(error);
-//	//}).send();
-//}
-//
-//void ControllerObject::passwordStateDone(const MTPaccount_Password &result) {
-//	auto state = PasswordCheckState();
-//	state.checked = false;
-//	state.requesting = false;
-//	state.hasPassword;
-//	state.hint;
-//	state.unconfirmedPattern;
-//	setState(std::move(state));
-//}
-//
-//void ControllerObject::cancelUnconfirmedPassword() {
-//
-//}
-
 void ControllerObject::startExport(
 		const Settings &settings,
 		const Environment &environment) {
@@ -263,6 +237,7 @@ void ControllerObject::skipFile(uint64 randomId) {
 	if (stopped()) {
 		return;
 	}
+	_activeDownloads.remove(randomId);
 	_api.skipFile(randomId);
 }
 
@@ -411,14 +386,24 @@ void ControllerObject::exportUserpics() {
 		_userpicsCount = start.count;
 		return true;
 	}, [=](DownloadProgress progress) {
-		setState(stateUserpics(progress));
+		if (progress.total > 0 && progress.ready >= progress.total) {
+			_activeDownloads.remove(progress.randomId);
+		} else if (progress.total > 0) {
+			_activeDownloads[progress.randomId] = {
+				progress.randomId,
+				progress.path,
+				progress.ready,
+				progress.total
+			};
+		}
+		setState(stateUserpics({}));
 		return true;
 	}, [=](Data::UserpicsSlice &&slice) {
 		if (ioCatchError(_writer->writeUserpicsSlice(slice))) {
 			return false;
 		}
 		_userpicsWritten += slice.list.size();
-		setState(stateUserpics(DownloadProgress()));
+		setState(stateUserpics({}));
 		return true;
 	}, [=] {
 		if (ioCatchError(_writer->writeUserpicsEnd())) {
@@ -437,6 +422,16 @@ void ControllerObject::exportStories() {
 		_storiesCount = start.count;
 		return true;
 	}, [=](DownloadProgress progress) {
+		if (progress.total > 0 && progress.ready >= progress.total) {
+			_activeDownloads.remove(progress.randomId);
+		} else if (progress.total > 0) {
+			_activeDownloads[progress.randomId] = {
+				progress.randomId,
+				progress.path,
+				progress.ready,
+				progress.total
+			};
+		}
 		setState(stateStories(progress));
 		return true;
 	}, [=](Data::StoriesSlice &&slice) {
@@ -444,7 +439,7 @@ void ControllerObject::exportStories() {
 			return false;
 		}
 		_storiesWritten += slice.list.size();
-		setState(stateStories(DownloadProgress()));
+		setState(stateStories({}));
 		return true;
 	}, [=] {
 		if (ioCatchError(_writer->writeStoriesEnd())) {
@@ -496,103 +491,110 @@ void ControllerObject::exportDialogs() {
 void ControllerObject::exportNextDialog() {
 	const auto index = ++_dialogIndex;
 	const auto info = _dialogsInfo.item(index);
-	if (info) {
-		_api.requestMessages(*info, [=](const Data::DialogInfo &info) {
-			if (ioCatchError(_writer->writeDialogStart(info))) {
-				return false;
-			}
-			_messagesWritten = 0;
-			_messagesCount = ranges::accumulate(
-				info.messagesCountPerSplit,
-				0);
-			setState(stateDialogs(DownloadProgress()));
-			return true;
-		}, [=](DownloadProgress progress) {
-			setState(stateDialogs(progress));
-			return true;
-		}, [=](Data::MessagesSlice &&result) {
-			if (ioCatchError(_writer->writeDialogSlice(result))) {
-				return false;
-			}
-			_messagesWritten += result.list.size();
-			setState(stateDialogs(DownloadProgress()));
-			return true;
-		}, [=] {
-			if (ioCatchError(_writer->writeDialogEnd())) {
-				return;
-			}
-			exportNextDialog();
-		});
+	if (!info) {
+		if (ioCatchError(_writer->writeDialogsEnd())) {
+			return;
+		}
+		exportNext();
 		return;
 	}
-	if (ioCatchError(_writer->writeDialogsEnd())) {
-		return;
+
+	const auto fromId = _settings.useIdRange
+		? _settings.singlePeerFromId
+		: 0;
+	const auto tillId = _settings.useIdRange
+		? _settings.singlePeerTillId
+		: 0;
+
+	if (tillId > 0 && tillId > info->topMessageId) {
+		const auto tillIdCorrected = info->topMessageId;
+		auto args = Ui::ConfirmBoxArgs{
+			tr::lng_export_till_id_corrected(
+				tr::now,
+				lt_text,
+				QString::number(tillIdCorrected)),
+			[=] {
+				_weak.with([=](ControllerObject &object) {
+						object.startExportMessages(info, fromId, tillIdCorrected);
+					});
+			},
+			[=] {
+				_weak.with([=](ControllerObject &object) {
+						object.exportNextDialog();
+					});
+			}
+		};
+		_show->showBox(Box(Ui::ConfirmBox, std::move(args)));
+	} else {
+		startExportMessages(info, fromId, tillId);
 	}
-	exportNext();
 }
 
-template <typename Callback>
-ProcessingState ControllerObject::prepareState(
-		Step step,
-		Callback &&callback) const {
-	if (step != _lastProcessingStep) {
-		_substepsPassed += substepsInStep(_lastProcessingStep);
-		_lastProcessingStep = step;
-	}
-
-	auto result = ProcessingState();
-	callback(result);
-	result.step = step;
-	result.substepsPassed = _substepsPassed;
-	result.substepsNow = substepsInStep(_lastProcessingStep);
-	result.substepsTotal = _substepsTotal;
-	return result;
+void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 fromId, uint64 tillId) {
+	_api.requestMessages(*info, fromId, tillId, [=](const Data::DialogInfo &info) {
+		if (ioCatchError(_writer->writeDialogStart(info))) {
+			return false;
+		}
+		_messagesWritten = 0;
+		_messagesCount = 0;
+		for (int count : info.messagesCountPerSplit) {
+			_messagesCount += count;
+		}
+		setState(stateDialogs(DownloadProgress{ 0, QString(), 0, 0 }));
+		return true;
+	}, [=](DownloadProgress progress) {
+		if (progress.total > 0 && progress.ready >= progress.total) {
+			_activeDownloads.remove(progress.randomId);
+		} else if (progress.total > 0) {
+			_activeDownloads[progress.randomId] = {
+				progress.randomId,
+				progress.path,
+				progress.ready,
+				progress.total
+			};
+		}
+		setState(stateDialogs(progress));
+		return true;
+	}, [=](Data::MessagesSlice &&result) {
+		if (ioCatchError(_writer->writeDialogSlice(result))) {
+			return false;
+		}
+		_messagesWritten += result.list.size();
+		setState(stateDialogs(DownloadProgress{ 0, QString(), _messagesWritten, 0 }));
+		return true;
+	}, [=] {
+		if (ioCatchError(_writer->writeDialogEnd())) {
+			return;
+		}
+		exportNextDialog();
+	});
 }
 
 ProcessingState ControllerObject::stateInitializing() const {
-	return ProcessingState();
+	return prepareState(Step::Initializing);
 }
 
 ProcessingState ControllerObject::stateDialogsList(int processed) const {
-	const auto step = Step::DialogsList;
-	return prepareState(step, [&](ProcessingState &result) {
-		result.entityIndex = processed;
-		result.entityCount = std::max(
-			processed,
-			substepsInStep(Step::Dialogs));
+	return prepareState(Step::DialogsList, [=](ProcessingState &result) {
+		result.itemIndex = processed;
 	});
 }
+
 ProcessingState ControllerObject::statePersonalInfo() const {
 	return prepareState(Step::PersonalInfo);
 }
 
-ProcessingState ControllerObject::stateUserpics(
-		const DownloadProgress &progress) const {
-	return prepareState(Step::Userpics, [&](ProcessingState &result) {
-		result.entityIndex = _userpicsWritten + progress.itemIndex;
-		result.entityCount = std::max(_userpicsCount, result.entityIndex);
-		result.bytesRandomId = progress.randomId;
-		if (!progress.path.isEmpty()) {
-			const auto last = progress.path.lastIndexOf('/');
-			result.bytesName = progress.path.mid(last + 1);
-		}
-		result.bytesLoaded = progress.ready;
-		result.bytesCount = progress.total;
+ProcessingState ControllerObject::stateUserpics(const DownloadProgress &progress) const {
+	return prepareState(Step::Userpics, [=](ProcessingState &result) {
+		result.itemIndex = progress.itemIndex;
+		result.itemCount = progress.total;
 	});
 }
 
-ProcessingState ControllerObject::stateStories(
-		const DownloadProgress &progress) const {
-	return prepareState(Step::Stories, [&](ProcessingState &result) {
-		result.entityIndex = _storiesWritten + progress.itemIndex;
-		result.entityCount = std::max(_storiesCount, result.entityIndex);
-		result.bytesRandomId = progress.randomId;
-		if (!progress.path.isEmpty()) {
-			const auto last = progress.path.lastIndexOf('/');
-			result.bytesName = progress.path.mid(last + 1);
-		}
-		result.bytesLoaded = progress.ready;
-		result.bytesCount = progress.total;
+ProcessingState ControllerObject::stateStories(const DownloadProgress &progress) const {
+	return prepareState(Step::Stories, [=](ProcessingState &result) {
+		result.itemIndex = progress.itemIndex;
+		result.itemCount = progress.total;
 	});
 }
 
@@ -608,132 +610,15 @@ ProcessingState ControllerObject::stateOtherData() const {
 	return prepareState(Step::OtherData);
 }
 
-ProcessingState ControllerObject::stateDialogs(
-		const DownloadProgress &progress) const {
-	const auto step = Step::Dialogs;
-	return prepareState(step, [&](ProcessingState &result) {
-		fillMessagesState(
-			result,
-			_dialogsInfo,
-			_dialogIndex,
-			progress);
+ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress) const {
+	return prepareState(Step::Dialogs, [=](ProcessingState &result) {
+		result.itemIndex = progress.itemIndex;
+		result.itemCount = progress.total;
 	});
-}
-
-void ControllerObject::fillMessagesState(
-		ProcessingState &result,
-		const Data::DialogsInfo &info,
-		int index,
-		const DownloadProgress &progress) const {
-	const auto dialog = info.item(index);
-	Assert(dialog != nullptr);
-
-	result.entityIndex = index;
-	result.entityCount = info.chats.size() + info.left.size();
-	result.entityName = dialog->name;
-	result.entityType = (dialog->type == Data::DialogInfo::Type::Self)
-		? ProcessingState::EntityType::SavedMessages
-		: (dialog->type == Data::DialogInfo::Type::Replies)
-		? ProcessingState::EntityType::RepliesMessages
-		: (dialog->type == Data::DialogInfo::Type::VerifyCodes)
-		? ProcessingState::EntityType::VerifyCodes
-		: ProcessingState::EntityType::Chat;
-	result.itemIndex = _messagesWritten + progress.itemIndex;
-	result.itemCount = std::max(_messagesCount, result.itemIndex);
-	result.bytesRandomId = progress.randomId;
-	if (!progress.path.isEmpty()) {
-		const auto last = progress.path.lastIndexOf('/');
-		result.bytesName = progress.path.mid(last + 1);
-	}
-	result.bytesLoaded = progress.ready;
-	result.bytesCount = progress.total;
-}
-
-int ControllerObject::substepsInStep(Step step) const {
-	Expects(_substepsInStep.size() > static_cast<int>(step));
-
-	return _substepsInStep[static_cast<int>(step)];
-}
-
-void ControllerObject::setFinishedState() {
-	setState(FinishedState{
-		_writer->mainFilePath(),
-		_stats.filesCount(),
-		_stats.bytesCount() });
-}
-
-Controller::Controller(
-	QPointer<MTP::Instance> mtproto,
-	const MTPInputPeer &peer)
-: _wrapped(std::move(mtproto), peer) {
-}
-
-rpl::producer<State> Controller::state() const {
-	return _wrapped.producer_on_main([=](const Implementation &unwrapped) {
-		return unwrapped.state();
-	});
-}
-
-//void Controller::submitPassword(const QString &password) {
-//	_wrapped.with([=](Implementation &unwrapped) {
-//		unwrapped.submitPassword(password);
-//	});
-//}
-//
-//void Controller::requestPasswordRecover() {
-//	_wrapped.with([=](Implementation &unwrapped) {
-//		unwrapped.requestPasswordRecover();
-//	});
-//}
-//
-//rpl::producer<PasswordUpdate> Controller::passwordUpdate() const {
-//	return _wrapped.producer_on_main([=](const Implementation &unwrapped) {
-//		return unwrapped.passwordUpdate();
-//	});
-//}
-//
-//void Controller::reloadPasswordState() {
-//	_wrapped.with([=](Implementation &unwrapped) {
-//		unwrapped.reloadPasswordState();
-//	});
-//}
-//
-//void Controller::cancelUnconfirmedPassword() {
-//	_wrapped.with([=](Implementation &unwrapped) {
-//		unwrapped.cancelUnconfirmedPassword();
-//	});
-//}
-
-void Controller::startExport(
-		const Settings &settings,
-		const Environment &environment) {
-	LOG(("Export Info: Started export to '%1'.").arg(settings.path));
-
-	_wrapped.with([=](Implementation &unwrapped) {
-		unwrapped.startExport(settings, environment);
-	});
-}
-
-void Controller::skipFile(uint64 randomId) {
-	_wrapped.with([=](Implementation &unwrapped) {
-		unwrapped.skipFile(randomId);
-	});
-}
-
-void Controller::cancelExportFast() {
-	LOG(("Export Info: Cancelled export."));
-
-	_wrapped.with([=](Implementation &unwrapped) {
-		unwrapped.cancelExportFast();
-	});
-}
-
-rpl::lifetime &Controller::lifetime() {
-	return _lifetime;
 }
 
 Controller::~Controller() {
-	LOG(("Export Info: Controller destroyed."));
+	// No need to manually manage these resources as they're handled by the object_on_queue
 }
 
 } // namespace Export

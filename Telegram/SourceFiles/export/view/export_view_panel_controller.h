@@ -53,7 +53,6 @@ public:
 
 	auto progressState() const {
 		return ContentFromState(
-			_settings.get(),
 			rpl::single(_state) | rpl::then(_process->state()));
 	}
 

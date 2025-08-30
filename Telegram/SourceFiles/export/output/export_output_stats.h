@@ -19,13 +19,16 @@ public:
 
 	void incrementFiles();
 	void incrementBytes(int count);
+	void  incrementUserMediaFiles(); 
 
 	int filesCount() const;
 	int64 bytesCount() const;
+	int   userMediaFilesCount() const;
 
 private:
 	std::atomic<int> _files;
 	std::atomic<int64> _bytes;
+	std::atomic<int>   _userMediaFiles; 
 
 };
 

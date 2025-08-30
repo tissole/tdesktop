@@ -112,16 +112,9 @@ private:
 	// Use through readData / changeData wrappers.
 	Settings _internal_data;
 
-	struct Wrap {
-		Wrap(rpl::producer<> value = nullptr)
-		: value(std::move(value)) {
-		}
-
-		rpl::producer<> value;
-	};
 	rpl::event_stream<Settings> _changes;
-	rpl::variable<Wrap> _startClicks;
-	rpl::variable<Wrap> _cancelClicks;
+	rpl::variable<rpl::producer<>> _startClicks;
+	rpl::variable<rpl::producer<>> _cancelClicks;
 
 };
 

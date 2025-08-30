@@ -22,7 +22,7 @@ constexpr auto kMaxAlbumCount = 10;
 
 } // namespace
 
-PreparedFile::PreparedFile(const QString &path) : path(path) {
+PreparedFile::PreparedFile(const QString &path) : path(path), fileNameCaption() {
 }
 
 PreparedFile::PreparedFile(PreparedFile &&other) = default;

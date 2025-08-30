@@ -17,7 +17,6 @@ namespace View {
 const QString Content::kDoneId = "done";
 
 Content ContentFromState(
-		not_null<Settings*> settings,
 		const ProcessingState &state) {
 	using Step = ProcessingState::Step;
 
@@ -56,19 +55,7 @@ Content ContentFromState(
 			: addPart(state.entityIndex, state.entityCount);
 		push("main", label, info, doneProgress + addProgress);
 	};
-	const auto pushBytes = [&](
-			const QString &id,
-			const QString &label,
-			uint64 randomId) {
-		if (!state.bytesCount) {
-			return;
-		}
-		const auto progress = state.bytesLoaded / float64(state.bytesCount);
-		const auto info = Ui::FormatDownloadText(
-			state.bytesLoaded,
-			state.bytesCount);
-		push(id, label, info, progress, randomId);
-	};
+
 	switch (state.step) {
 	case Step::Initializing:
 		pushMain(tr::lng_export_state_initializing(tr::now));
@@ -81,20 +68,12 @@ Content ContentFromState(
 		break;
 	case Step::Userpics:
 		pushMain(tr::lng_export_state_userpics(tr::now));
-		pushBytes(
-			"userpic" + QString::number(state.entityIndex),
-			state.bytesName,
-			state.bytesRandomId);
 		break;
 	case Step::Contacts:
 		pushMain(tr::lng_export_option_contacts(tr::now));
 		break;
 	case Step::Stories:
 		pushMain(tr::lng_export_option_stories(tr::now));
-		pushBytes(
-			"story" + QString::number(state.entityIndex),
-			state.bytesName,
-			state.bytesRandomId);
 		break;
 	case Step::Sessions:
 		pushMain(tr::lng_export_option_sessions(tr::now));
@@ -123,20 +102,26 @@ Content ContentFromState(
 			(state.itemCount > 0
 				? (state.itemIndex / float64(state.itemCount))
 				: 0.));
-		pushBytes(
-			("file"
-				+ QString::number(state.entityIndex)
-				+ '_'
-				+ QString::number(state.itemIndex)),
-			state.bytesName,
-			state.bytesRandomId);
 		break;
 	default: Unexpected("Step in ContentFromState.");
 	}
-	const auto requiredRows = settings->onlySinglePeer() ? 2 : 3;
-	while (result.rows.size() < requiredRows) {
+
+	for (const auto &[id, download] : state.activeDownloads) {
+		const auto progress = (download.total > 0)
+			? (download.ready / float64(download.total))
+			: 0.;
+		const auto info = Ui::FormatDownloadText(
+			download.ready,
+			download.total);
+		const auto lastSlash = download.path.lastIndexOf('/');
+		const auto name = download.path.mid(lastSlash + 1);
+		push("file_" + QString::number(id), name, info, progress, id);
+	}
+
+	if (result.rows.empty()) {
 		result.rows.emplace_back();
 	}
+
 	return result;
 }
 

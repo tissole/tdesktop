@@ -26,22 +26,34 @@ bool MediaSettings::validate() const {
 }
 
 bool Settings::validate() const {
-	using Format = Output::Format;
-	const auto MustBeFull = Type::PersonalChats | Type::BotChats;
-	const auto MustNotBeFull = Type::PublicGroups | Type::PublicChannels;
-	if ((types | Type::AllMask) != Type::AllMask) {
+	// Check date range validity.
+	if (singlePeerFrom > 0 && singlePeerTill > 0 && singlePeerTill <= singlePeerFrom) {
 		return false;
-	} else if ((fullChats | Type::AllMask) != Type::AllMask) {
+	}
+	
+	// Check ID range validity.
+	if (useIdRange) {
+		// When using ID range, From ID must be >= 1 if specified
+		if (singlePeerFromId > 0 && singlePeerFromId < 1) {
+			return false;
+		}
+		// To ID must be >= From ID if both are specified
+		if (singlePeerFromId > 0 && singlePeerTillId > 0 && singlePeerTillId < singlePeerFromId) {
+			return false;
+		}
+	}
+	
+	// Ensure only one export mode is active
+	if (useIdRange && (singlePeerFrom > 0 || singlePeerTill > 0)) {
 		return false;
-	} else if ((fullChats & MustBeFull) != MustBeFull) {
+	}
+	
+	if (!useIdRange && (singlePeerFromId > 0 || singlePeerTillId > 0)) {
+		// If ID fields are set but useIdRange is false, that's invalid
 		return false;
-	} else if ((fullChats & MustNotBeFull) != 0) {
-		return false;
-	} else if (format != Format::Html && format != Format::Json) {
-		return false;
-	} else if (!media.validate()) {
-		return false;
-	} else if (singlePeerTill > 0 && singlePeerTill <= singlePeerFrom) {
+	}
+
+	if (!media.validate()) {
 		return false;
 	}
 	return true;

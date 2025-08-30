@@ -305,7 +305,7 @@ void PanelController::showProgress() {
 	auto progress = base::make_unique_q<ProgressWidget>(
 		_panel.get(),
 		rpl::single(
-			ContentFromState(_settings.get(), ProcessingState())
+			ContentFromState(ProcessingState())
 		) | rpl::then(progressState()));
 
 	progress->skipFileClicks(

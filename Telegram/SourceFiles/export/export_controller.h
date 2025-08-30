@@ -9,9 +9,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/variant.h"
 #include "mtproto/mtproto_response.h"
+#include "export/data/export_data_types.h"
 
 #include <QtCore/QPointer>
 #include <crl/crl_object_on_queue.h>
+#include "base/flat_map.h"
+
+namespace Ui {
+class Show;
+}
 
 namespace MTP {
 class Instance;
@@ -22,6 +28,13 @@ namespace Export {
 class ControllerObject;
 struct Settings;
 struct Environment;
+
+struct FileDownloadProgress {
+	uint64 randomId = 0;
+	QString path;
+	int64 ready = 0;
+	int64 total = 0;
+};
 
 struct PasswordCheckState {
 	QString hint;
@@ -66,10 +79,11 @@ struct ProcessingState {
 	int itemIndex = 0;
 	int itemCount = 0;
 
-	uint64 bytesRandomId = 0;
-	QString bytesName;
-	int64 bytesLoaded = 0;
-	int64 bytesCount = 0;
+	//uint64 bytesRandomId = 0;
+	//QString bytesName;
+	//int64 bytesLoaded = 0;
+	//int64 bytesCount = 0;
+	base::flat_map<uint64, FileDownloadProgress> activeDownloads;
 };
 
 struct ApiErrorState {
@@ -112,6 +126,7 @@ using State = std::variant<
 class Controller {
 public:
 	Controller(
+		not_null<Ui::Show*> show,
 		QPointer<MTP::Instance> mtproto,
 		const MTPInputPeer &peer);
 

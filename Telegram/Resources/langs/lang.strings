@@ -1302,7 +1302,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_edit_privacy_phone_number_warning" = "Users who have your number saved in their contacts will also see it on Telegram.";
 "lng_edit_privacy_phone_number_always_empty" = "Always share with";
 "lng_edit_privacy_phone_number_never_empty" = "Never share with";
-"lng_edit_privacy_phone_number_exceptions" = "Add users or groups to override the settings above.";
+"lng_edit_privacy_phone_number_exceptions" = "Add users or groups to override the settings above.";
 "lng_edit_privacy_phone_number_always_title" = "Always share with";
 "lng_edit_privacy_phone_number_never_title" = "Never share with";
 
@@ -6012,6 +6012,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_export_about_web_sessions" = "We store this to display the websites where you logged in using authentication via Telegram. This information is shown in Settings > Privacy & Security > Active Sessions.";
 "lng_export_about_chats" = "This page lists all chats from this export.";
 "lng_export_about_left_chats" = "Below are the supergroups and channels from this export that you've left or where you were banned.\n\nNote that when you leave a channel or supergroup you've created, you have the option to either delete it, or simply leave (in case you want to rejoin later, or keep the community alive despite not being a member).";
+"lng_export_mode_date" = "By date range";
+"lng_export_mode_id" = "By message ID range";
+"lng_export_id_from_label" = "From ID:";
+"lng_export_id_till_label" = "To ID:";
+"lng_export_id_from_placeholder" = "Enter start message ID";
+"lng_export_id_till_placeholder" = "Enter end message ID";
+"lng_export_error_invalid_id" = "Please enter a valid message ID.";
+"lng_export_error_from_too_high" = "'From' ID can't be greater than 'To' ID.";
+"lng_export_error_till_too_low" = "'To' ID can't be less than 'From' ID.";
+"lng_export_error_from_invalid" = "'From' ID can't be less than 1.";
+"lng_export_till_id_corrected" = "The 'To' ID is higher than the last message in this chat. Do you want to export up to the last message (ID {text})?";
 
 "lng_language_switch_title" = "Change language?";
 "lng_language_switch_about_official" = "You are about to apply a language pack ({lang_name}) that is {percent}% complete.\n\nThis will translate the entire interface. You can suggest corrections in the {link}.\n\nYou can change your language back at any time in Settings.";
@@ -6493,7 +6504,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_stories_channel_save_sure_many#one" = "Do you want to post {count} story to the channel page?";
 "lng_stories_channel_save_sure_many#other" = "Do you want to post {count} stories to the channel page?";
 "lng_stories_channel_save_done" = "This story is posted to the channel page.";
-"lng_stories_channel_save_done_many#one" = "{count} story posted to the channel page.";
+"lng_stories_channel_save_done_many#one" = "{count} story posted to the channel page.";
 "lng_stories_channel_save_done_many#other" = "{count} stories posted to the channel page.";
 "lng_stories_channel_save_done_about" = "Posted stories can be viewed by others on the channel page until an admin removes them.";
 "lng_stories_channel_archive_sure" = "Do you want to hide this story from the channel page?";
@@ -6980,6 +6991,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_settings_show_group_sender_avatar" = "Show sender's avatar in groups";
 "lng_settings_show_seconds" = "Time with seconds";
 "lng_settings_show_view_as_json" = "Show View As JSON";
+"lng_settings_caption_from_file_name" = "Caption with file name";
 "lng_settings_hide_counter" = "Hide online users counter";
 "lng_settings_hide_stories" = "Hide Stories";
 "lng_settings_translate_to_tc" = "使用正體中文翻譯訊息";
