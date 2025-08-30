@@ -8,7 +8,7 @@
 
 ## Prepare folder
 
-The build is done in **Visual Studio 2022** with **10.0.22000.0** SDK version.
+The build is done in **Visual Studio 2022** with **10.0.26100.0** SDK version.
 
 Choose an empty folder for the future build, for example **D:\\TBuild**. It will be named ***BuildPath*** in the rest of this document. Create two folders there, ***BuildPath*\\ThirdParty** and ***BuildPath*\\Libraries**.
 
@@ -27,7 +27,7 @@ You will require **api_id** and **api_hash** to access the Telegram API servers.
 
 Open **x86 Native Tools Command Prompt for VS 2022.bat**, go to ***BuildPath*** and run
 
-    git clone --recursive https://github.com/TDesktop-x64/tdesktop.git
+    git clone --recursive https://github.com/telegramdesktop/tdesktop.git
     tdesktop\Telegram\build\prepare\win.bat
 
 ## Build the project
