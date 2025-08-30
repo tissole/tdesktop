@@ -3783,11 +3783,8 @@ void ApiWrap::sendFiles(
 				: nullptr),
 			uploadWithType,
 			to,
-			// Use individual file caption when files are not grouped and caption setting is active,
-			// otherwise use shared caption/comment
-			(album == nullptr && GetEnhancedBool("caption_from_file_name")) 
+			(GetEnhancedBool("caption_from_file_name")) 
 				? [&]() {
-					// If fileNameCaption is not yet populated, populate it now
 					if (file.fileNameCaption.text.isEmpty() && !file.path.isEmpty()) {
 						QFileInfo fileInfo(file.path);
 						return TextWithTags{fileInfo.fileName(), {}};
@@ -3797,8 +3794,7 @@ void ApiWrap::sendFiles(
 				: caption,
 			file.spoiler,
 			album));
-		// Only clear caption for next file if we're not using individual captions or files are grouped
-		if (!(album == nullptr && GetEnhancedBool("caption_from_file_name"))) {
+		if (!GetEnhancedBool("caption_from_file_name")) {
 			caption = TextWithTags();
 		}
 	}
