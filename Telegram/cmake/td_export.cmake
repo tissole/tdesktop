@@ -42,6 +42,7 @@ PUBLIC
 
 target_link_libraries(td_export
 PUBLIC
+    tdesktop::td_ui
     desktop-app::lib_base
     tdesktop::td_scheme
 )
