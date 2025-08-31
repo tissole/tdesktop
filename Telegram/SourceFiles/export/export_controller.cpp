@@ -507,7 +507,7 @@ void ControllerObject::exportNextDialog() {
 		: 0;
 
 	if (tillId > 0 && tillId > info->topMessageId) {
-		_show->showBox(Box(Ui::InformBox, tr::lng_export_error_till_too_high(tr::now)));
+		_show->showBox(Ui::MakeInformBox({ .text = tr::lng_export_error_till_too_high(tr::now) }));
 	} else {
 		startExportMessages(info, fromId, tillId);
 	}
