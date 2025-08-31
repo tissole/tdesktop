@@ -507,24 +507,7 @@ void ControllerObject::exportNextDialog() {
 		: 0;
 
 	if (tillId > 0 && tillId > info->topMessageId) {
-		const auto tillIdCorrected = info->topMessageId;
-		auto args = Ui::ConfirmBoxArgs{
-			tr::lng_export_till_id_corrected(
-				tr::now,
-				lt_text,
-				QString::number(tillIdCorrected)),
-			[=] {
-				_weak.with([=](ControllerObject &object) {
-						object.startExportMessages(info, fromId, tillIdCorrected);
-					});
-			},
-			[=] {
-				_weak.with([=](ControllerObject &object) {
-						object.exportNextDialog();
-					});
-			}
-		};
-		_show->showBox(Box(Ui::ConfirmBox, std::move(args)));
+		_show->showBox(Box(Ui::InformBox, tr::lng_export_error_till_too_high(tr::now)));
 	} else {
 		startExportMessages(info, fromId, tillId);
 	}
