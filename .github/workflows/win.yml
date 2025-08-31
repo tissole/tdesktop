@@ -182,6 +182,11 @@ jobs:
           del /S Libraries\*.pch
           del /S Libraries\*.obj
 
+      - name: Debug list lib_ui contents
+        run: |
+          echo "Listing contents of ${{ env.TBUILD }}\\${{ env.REPO_NAME }}\\Telegram\\lib_ui"
+          dir ${{ env.TBUILD }}\\${{ env.REPO_NAME }}\\Telegram\\lib_ui /s
+
       - name: Telegram Desktop build.
         if: env.ONLY_CACHE == 'false'
         run: |
