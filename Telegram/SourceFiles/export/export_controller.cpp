@@ -679,7 +679,7 @@ Controller::Controller(
 	not_null<Ui::Show*> show,
 	QPointer<MTP::Instance> mtproto,
 	MTPInputPeer peer)
-: _wrapped(show, mtproto, peer) {
+: _wrapped(show, mtproto, std::move(peer)) {
 }
 
 rpl::producer<State> Controller::state() const {
