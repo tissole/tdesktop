@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "export/export_controller.h"
 
+#include <memory>
+
 #include "export/export_api_wrap.h"
 #include "export/export_settings.h"
 #include "export/data/export_data_types.h"
@@ -37,7 +39,7 @@ Settings NormalizeSettings(const Settings &settings) {
 
 } // namespace
 
-class ControllerObject {
+class ControllerObject : public std::enable_shared_from_this<ControllerObject> {
 public:
 	ControllerObject(
 		not_null<Ui::Show*> show,
@@ -676,13 +678,15 @@ Controller::Controller(
 	not_null<Ui::Show*> show,
 	QPointer<MTP::Instance> mtproto,
 	const MTPInputPeer &peer)
-: _private(std::make_unique<ControllerObject>(show, mtproto, peer)) {
+: _private(std::make_shared<ControllerObject>(show, mtproto, peer)) {
 }
 
 rpl::producer<State> Controller::state() const {
 	auto result = rpl::variable<State>(v::null);
 	crl::on_main_sync([&] {
-		result = _private->state();
+		if (_private) {
+			result = _private->state();
+		}
 	});
 	return result.value();
 }
@@ -690,20 +694,20 @@ rpl::producer<State> Controller::state() const {
 void Controller::startExport(
 		const Settings &settings,
 		const Environment &environment) {
-	crl::on_main(_private.get(), [=] {
-		_private->startExport(settings, environment);
+	crl::on_main(_private, [=](const auto &p) {
+		p->startExport(settings, environment);
 	});
 }
 
 void Controller::skipFile(uint64 randomId) {
-	crl::on_main(_private.get(), [=] {
-		_private->skipFile(randomId);
+	crl::on_main(_private, [=](const auto &p) {
+		p->skipFile(randomId);
 	});
 }
 
 void Controller::cancelExportFast() {
-	crl::on_main(_private.get(), [=] {
-		_private->cancelExportFast();
+	crl::on_main(_private, [=](const auto &p) {
+		p->cancelExportFast();
 	});
 }
 

@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include <memory>
+
 #include "base/variant.h"
 #include "mtproto/mtproto_response.h"
 #include "export/data/export_data_types.h"
@@ -152,7 +154,7 @@ public:
 
 private:
 	using Implementation = ControllerObject;
-	std::unique_ptr<ControllerObject> _private;
+	std::shared_ptr<ControllerObject> _private;
 	rpl::lifetime _lifetime;
 
 };
