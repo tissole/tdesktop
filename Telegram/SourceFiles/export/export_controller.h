@@ -12,7 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/data/export_data_types.h"
 
 #include <QtCore/QPointer>
-#include <crl/crl_object_on_queue.h>
+
 #include "base/flat_map.h"
 
 namespace Ui {
@@ -128,7 +128,7 @@ public:
 	Controller(
 		not_null<Ui::Show*> show,
 		QPointer<MTP::Instance> mtproto,
-		MTPInputPeer peer);
+		const MTPInputPeer &peer);
 
 	rpl::producer<State> state() const;
 
@@ -152,7 +152,7 @@ public:
 
 private:
 	using Implementation = ControllerObject;
-	crl::object_on_queue<Implementation> _wrapped;
+	std::unique_ptr<ControllerObject> _private;
 	rpl::lifetime _lifetime;
 
 };

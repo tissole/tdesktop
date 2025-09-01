@@ -40,10 +40,9 @@ Settings NormalizeSettings(const Settings &settings) {
 class ControllerObject {
 public:
 	ControllerObject(
-		crl::weak_on_queue<ControllerObject> weak,
 		not_null<Ui::Show*> show,
 		QPointer<MTP::Instance> mtproto,
-		MTPInputPeer peer);
+		const MTPInputPeer &peer);
 
 	rpl::producer<State> state() const;
 
@@ -147,21 +146,19 @@ private:
 	std::vector<Step> _steps;
 	int _stepIndex = -1;
 
-	crl::weak_on_queue<ControllerObject> _weak;
+	
 
 	rpl::lifetime _lifetime;
 
 };
 
 ControllerObject::ControllerObject(
-	crl::weak_on_queue<ControllerObject> weak,
 	not_null<Ui::Show*> show,
 	QPointer<MTP::Instance> mtproto,
-	MTPInputPeer peer)
+	const MTPInputPeer &peer)
 : _show(show)
-, _api(mtproto, weak.runner())
-, _state(PasswordCheckState{})
-, _weak(std::move(weak)) {
+, _api(mtproto, [=](FnMut<void()> task) { crl::on_main(std::move(task)); })
+, _state(PasswordCheckState{}) {
 	_api.errors(
 	) | rpl::start_with_next([=](const MTP::Error &error) {
 		setState(ApiErrorState{ error });
@@ -595,12 +592,45 @@ ProcessingState ControllerObject::stateOtherData() const {
 
 ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress) const {
 	return prepareState(Step::Dialogs, [=](ProcessingState &result) {
-		fillMessagesState(
-			result,
-			_dialogsInfo,
-			_dialogIndex,
-			progress);
+		result.itemIndex = progress.itemIndex;
+		result.itemCount = progress.total;
 	});
+}
+
+
+
+void ControllerObject::setFinishedState() {
+	setState(FinishedState{
+		.path = _writer->mainFilePath(),
+		.filesCount = _stats.filesCount(),
+		.bytesCount = _stats.bytesCount(),
+	});
+}
+
+template <typename Callback>
+ProcessingState ControllerObject::prepareState(
+		Step step,
+		Callback &&callback) const {
+	auto result = ProcessingState();
+	result.step = step;
+
+	if (_lastProcessingStep != step) {
+		_substepsPassed += substepsInStep(_lastProcessingStep);
+		_lastProcessingStep = step;
+	}
+	result.substepsPassed = _substepsPassed;
+	result.substepsNow = substepsInStep(step);
+	result.substepsTotal = _substepsTotal;
+
+	callback(result);
+	return result;
+}
+
+int ControllerObject::substepsInStep(Step step) const {
+	const auto index = static_cast<int>(step);
+	return (index >= 0 && index < _substepsInStep.size())
+		? _substepsInStep[index]
+		: 0;
 }
 
 void ControllerObject::fillMessagesState(
@@ -641,70 +671,39 @@ void ControllerObject::fillMessagesState(
 	result.activeDownloads = _activeDownloads;
 }
 
-int ControllerObject::substepsInStep(Step step) const {
-	const auto index = static_cast<int>(step);
-	return (index >= 0 && index < _substepsInStep.size())
-		? _substepsInStep[index]
-		: 0;
-}
-
-void ControllerObject::setFinishedState() {
-	setState(FinishedState{
-		.path = _writer->mainFilePath(),
-		.filesCount = _stats.filesCount(),
-		.bytesCount = _stats.bytesCount(),
-	});
-}
-
-template <typename Callback>
-ProcessingState ControllerObject::prepareState(
-		Step step,
-		Callback &&callback) const {
-	auto result = ProcessingState();
-	result.step = step;
-
-	if (_lastProcessingStep != step) {
-		_substepsPassed += substepsInStep(_lastProcessingStep);
-		_lastProcessingStep = step;
-	}
-	result.substepsPassed = _substepsPassed;
-	result.substepsNow = substepsInStep(step);
-	result.substepsTotal = _substepsTotal;
-
-	callback(result);
-	return result;
-}
 
 Controller::Controller(
 	not_null<Ui::Show*> show,
 	QPointer<MTP::Instance> mtproto,
-	MTPInputPeer peer)
-: _wrapped(show, mtproto, std::move(peer)) {
+	const MTPInputPeer &peer)
+: _private(std::make_unique<ControllerObject>(show, mtproto, peer)) {
 }
 
 rpl::producer<State> Controller::state() const {
-	return _wrapped.producer_on_main([](const Implementation &unwrapped) {
-		return unwrapped.state();
+	auto result = rpl::variable<State>(v::null);
+	crl::on_main_sync([&] {
+		result = _private->state();
 	});
+	return result.value();
 }
 
 void Controller::startExport(
 		const Settings &settings,
 		const Environment &environment) {
-	_wrapped.with([=](Implementation &value) {
-		value.startExport(settings, environment);
+	crl::on_main(_private.get(), [=] {
+		_private->startExport(settings, environment);
 	});
 }
 
 void Controller::skipFile(uint64 randomId) {
-	_wrapped.with([=](Implementation &value) {
-		value.skipFile(randomId);
+	crl::on_main(_private.get(), [=] {
+		_private->skipFile(randomId);
 	});
 }
 
 void Controller::cancelExportFast() {
-	_wrapped.with([=](Implementation &value) {
-		value.cancelExportFast();
+	crl::on_main(_private.get(), [=] {
+		_private->cancelExportFast();
 	});
 }
 
@@ -713,7 +712,9 @@ rpl::lifetime &Controller::lifetime() {
 }
 
 Controller::~Controller() {
-	// No need to manually manage these resources as they're handled by the object_on_queue
+	crl::on_main([p = std::move(_private)]() mutable {
+		p.reset();
+	});
 }
 
 } // namespace Export
