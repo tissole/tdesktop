@@ -43,7 +43,7 @@ public:
 		crl::weak_on_queue<ControllerObject> weak,
 		not_null<Ui::Show*> show,
 		QPointer<MTP::Instance> mtproto,
-		const MTPInputPeer &peer);
+		MTPInputPeer peer);
 
 	rpl::producer<State> state() const;
 
@@ -157,7 +157,7 @@ ControllerObject::ControllerObject(
 	crl::weak_on_queue<ControllerObject> weak,
 	not_null<Ui::Show*> show,
 	QPointer<MTP::Instance> mtproto,
-	const MTPInputPeer &peer)
+	MTPInputPeer peer)
 : _show(show)
 , _api(mtproto, weak.runner())
 , _state(PasswordCheckState{})
@@ -663,7 +663,6 @@ ProcessingState ControllerObject::prepareState(
 	auto result = ProcessingState();
 	result.step = step;
 
-	const auto i = static_cast<int>(step);
 	if (_lastProcessingStep != step) {
 		_substepsPassed += substepsInStep(_lastProcessingStep);
 		_lastProcessingStep = step;
@@ -679,7 +678,7 @@ ProcessingState ControllerObject::prepareState(
 Controller::Controller(
 	not_null<Ui::Show*> show,
 	QPointer<MTP::Instance> mtproto,
-	const MTPInputPeer &peer)
+	MTPInputPeer peer)
 : _wrapped(show, mtproto, peer) {
 }
 

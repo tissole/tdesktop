@@ -128,7 +128,7 @@ public:
 	Controller(
 		not_null<Ui::Show*> show,
 		QPointer<MTP::Instance> mtproto,
-		const MTPInputPeer &peer);
+		MTPInputPeer peer);
 
 	rpl::producer<State> state() const;
 
