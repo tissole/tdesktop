@@ -193,7 +193,7 @@ void EditPriceBox(
 		}
 		const auto weak = base::make_weak(box);
 		apply(now);
-		if (const auto strong = weak.data()) {
+		if (const auto strong = weak.get()) {
 			strong->closeBox();
 		}
 	};
