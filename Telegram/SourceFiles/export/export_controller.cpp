@@ -595,9 +595,107 @@ ProcessingState ControllerObject::stateOtherData() const {
 
 ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress) const {
 	return prepareState(Step::Dialogs, [=](ProcessingState &result) {
-		result.itemIndex = progress.itemIndex;
-		result.itemCount = progress.total;
+		fillMessagesState(
+			result,
+			_dialogsInfo,
+			_dialogIndex,
+			progress);
 	});
+}
+
+void ControllerObject::fillMessagesState(
+		ProcessingState &result,
+		const Data::DialogsInfo &info,
+		int index,
+		const DownloadProgress &progress) const {
+	const auto i = info.item(index);
+	Assert(i != nullptr);
+
+	result.entityType = (i->peer->isSelf() || i->peer->isRepliesMessages())
+		? ProcessingState::EntityType::SavedMessages
+		: i->peer->isUser()
+		? ProcessingState::EntityType::Chat
+		: i->peer->isChat()
+		? ProcessingState::EntityType::Chat
+		: i->peer->isChannel()
+		? ProcessingState::EntityType::Chat
+		: ProcessingState::EntityType::Other;
+	result.entityName = i->name;
+	result.entityIndex = index + 1;
+	result.entityCount = info.size();
+	result.itemIndex = _messagesWritten + progress.itemIndex;
+	result.itemCount = _messagesCount;
+	result.activeDownloads = _activeDownloads;
+}
+
+int ControllerObject::substepsInStep(Step step) const {
+	const auto index = static_cast<int>(step);
+	return (index >= 0 && index < _substepsInStep.size())
+		? _substepsInStep[index]
+		: 0;
+}
+
+void ControllerObject::setFinishedState() {
+	setState(FinishedState{
+		.path = _writer->mainFilePath(),
+		.filesCount = _stats.files,
+		.bytesCount = _stats.bytes,
+	});
+}
+
+template <typename Callback>
+ProcessingState ControllerObject::prepareState(
+		Step step,
+		Callback &&callback) const {
+	auto result = ProcessingState();
+	result.step = step;
+
+	const auto i = static_cast<int>(step);
+	if (_lastProcessingStep != step) {
+		_substepsPassed += substepsInStep(_lastProcessingStep);
+		_lastProcessingStep = step;
+	}
+	result.substepsPassed = _substepsPassed;
+	result.substepsNow = substepsInStep(step);
+	result.substepsTotal = _substepsTotal;
+
+	callback(result);
+	return result;
+}
+
+Controller::Controller(
+	not_null<Ui::Show*> show,
+	QPointer<MTP::Instance> mtproto,
+	const MTPInputPeer &peer)
+: _wrapped(crl::thread::main(), show, mtproto, peer) {
+}
+
+rpl::producer<State> Controller::state() const {
+	return _wrapped.sync_get()->state();
+}
+
+void Controller::startExport(
+		const Settings &settings,
+		const Environment &environment) {
+	_wrapped.with([=](Implementation &value) {
+		value.startExport(settings, environment);
+	});
+}
+
+void Controller::skipFile(uint64 randomId) {
+	_wrapped.with([=](Implementation &value) {
+		value.skipFile(randomId);
+	});
+}
+
+void Controller::cancelExportFast() {
+	_wrapped.with([=](Implementation &value) {
+		value.cancelExportFast();
+	});
+}
+
+rpl::lifetime &Controller::lifetime() {
+	return _lifetime;
 }
 
 Controller::~Controller() {
