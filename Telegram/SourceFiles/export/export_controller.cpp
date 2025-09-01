@@ -40,8 +40,8 @@ Settings NormalizeSettings(const Settings &settings) {
 class ControllerObject {
 public:
 	ControllerObject(
-		not_null<Ui::Show*> show,
 		crl::weak_on_queue<ControllerObject> weak,
+		not_null<Ui::Show*> show,
 		QPointer<MTP::Instance> mtproto,
 		const MTPInputPeer &peer);
 
@@ -154,8 +154,8 @@ private:
 };
 
 ControllerObject::ControllerObject(
-	not_null<Ui::Show*> show,
 	crl::weak_on_queue<ControllerObject> weak,
+	not_null<Ui::Show*> show,
 	QPointer<MTP::Instance> mtproto,
 	const MTPInputPeer &peer)
 : _show(show)
@@ -611,18 +611,31 @@ void ControllerObject::fillMessagesState(
 	const auto i = info.item(index);
 	Assert(i != nullptr);
 
-	result.entityType = (i->peer->isSelf() || i->peer->isRepliesMessages())
-		? ProcessingState::EntityType::SavedMessages
-		: i->peer->isUser()
-		? ProcessingState::EntityType::Chat
-		: i->peer->isChat()
-		? ProcessingState::EntityType::Chat
-		: i->peer->isChannel()
-		? ProcessingState::EntityType::Chat
-		: ProcessingState::EntityType::Other;
+	switch (i->type) {
+	case Data::DialogInfo::Type::Self:
+	case Data::DialogInfo::Type::Replies:
+		result.entityType = ProcessingState::EntityType::SavedMessages;
+		break;
+	case Data::DialogInfo::Type::Personal:
+	case Data::DialogInfo::Type::Bot:
+	case Data::DialogInfo::Type::PrivateGroup:
+	case Data::DialogInfo::Type::PrivateSupergroup:
+	case Data::DialogInfo::Type::PublicSupergroup:
+	case Data::DialogInfo::Type::PrivateChannel:
+	case Data::DialogInfo::Type::PublicChannel:
+		result.entityType = ProcessingState::EntityType::Chat;
+		break;
+	case Data::DialogInfo::Type::VerifyCodes:
+		result.entityType = ProcessingState::EntityType::VerifyCodes;
+		break;
+	default:
+		result.entityType = ProcessingState::EntityType::Other;
+		break;
+	}
+
 	result.entityName = i->name;
 	result.entityIndex = index + 1;
-	result.entityCount = info.size();
+	result.entityCount = info.chats.size() + info.left.size();
 	result.itemIndex = _messagesWritten + progress.itemIndex;
 	result.itemCount = _messagesCount;
 	result.activeDownloads = _activeDownloads;
@@ -638,8 +651,8 @@ int ControllerObject::substepsInStep(Step step) const {
 void ControllerObject::setFinishedState() {
 	setState(FinishedState{
 		.path = _writer->mainFilePath(),
-		.filesCount = _stats.files,
-		.bytesCount = _stats.bytes,
+		.filesCount = _stats.filesCount(),
+		.bytesCount = _stats.bytesCount(),
 	});
 }
 
@@ -667,11 +680,13 @@ Controller::Controller(
 	not_null<Ui::Show*> show,
 	QPointer<MTP::Instance> mtproto,
 	const MTPInputPeer &peer)
-: _wrapped(crl::thread::main(), show, mtproto, peer) {
+: _wrapped(show, mtproto, peer) {
 }
 
 rpl::producer<State> Controller::state() const {
-	return _wrapped.sync_get()->state();
+	return _wrapped.producer_on_main([](const Implementation &unwrapped) {
+		return unwrapped.state();
+	});
 }
 
 void Controller::startExport(
