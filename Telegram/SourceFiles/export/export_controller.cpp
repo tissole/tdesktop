@@ -39,10 +39,10 @@ Settings NormalizeSettings(const Settings &settings) {
 
 } // namespace
 
-class ControllerObject : public std::enable_shared_from_this<ControllerObject> {
+class ControllerObject {
 public:
 	ControllerObject(
-		not_null<Ui::Show*> show,
+		crl::weak_on_queue<ControllerObject> weak,
 		QPointer<MTP::Instance> mtproto,
 		const MTPInputPeer &peer);
 
@@ -61,7 +61,7 @@ public:
 		const Environment &environment);
 	void skipFile(uint64 randomId);
 	void cancelExportFast();
-	
+
 	// Message export functions
 	void exportNextDialog();
 	void startExportMessages(const Data::DialogInfo *info, uint64 fromId, uint64 tillId);
@@ -69,7 +69,7 @@ public:
 private:
 	using Step = ProcessingState::Step;
 	using DownloadProgress = ApiWrap::DownloadProgress;
-	
+
 	base::flat_map<uint64, FileDownloadProgress> _activeDownloads;
 
 	[[nodiscard]] bool stopped() const;
@@ -116,7 +116,6 @@ private:
 
 	int substepsInStep(Step step) const;
 
-	not_null<Ui::Show*> _show;
 	ApiWrap _api;
 	Settings _settings;
 	Environment _environment;
@@ -148,18 +147,15 @@ private:
 	std::vector<Step> _steps;
 	int _stepIndex = -1;
 
-	
-
 	rpl::lifetime _lifetime;
 
 };
 
 ControllerObject::ControllerObject(
-	not_null<Ui::Show*> show,
+	crl::weak_on_queue<ControllerObject> weak,
 	QPointer<MTP::Instance> mtproto,
 	const MTPInputPeer &peer)
-: _show(show)
-, _api(mtproto, [=](FnMut<void()> task) { crl::on_main(std::move(task)); })
+: _api(mtproto, weak.runner())
 , _state(PasswordCheckState{}) {
 	_api.errors(
 	) | rpl::start_with_next([=](const MTP::Error &error) {
@@ -506,7 +502,7 @@ void ControllerObject::exportNextDialog() {
 		: 0;
 
 	if (tillId > 0 && tillId > info->topMessageId) {
-		_show->showBox(Ui::MakeInformBox({ .text = tr::lng_export_error_till_too_high(tr::now) }));
+		setState(ApiErrorState{ MTP::Error(400, "TILL_ID_TOO_HIGH") });
 	} else {
 		startExportMessages(info, fromId, tillId);
 	}
@@ -522,7 +518,7 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 		for (int count : info.messagesCountPerSplit) {
 			_messagesCount += count;
 		}
-		setState(stateDialogs(DownloadProgress{ 0, QString(), 0, 0 }));
+		setState(stateDialogs(DownloadProgress()));
 		return true;
 	}, [=](DownloadProgress progress) {
 		if (progress.total > 0 && progress.ready >= progress.total) {
@@ -542,7 +538,7 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 			return false;
 		}
 		_messagesWritten += result.list.size();
-		setState(stateDialogs(DownloadProgress{ 0, QString(), _messagesWritten, 0 }));
+		setState(stateDialogs(DownloadProgress()));
 		return true;
 	}, [=] {
 		if (ioCatchError(_writer->writeDialogEnd())) {
@@ -594,12 +590,13 @@ ProcessingState ControllerObject::stateOtherData() const {
 
 ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress) const {
 	return prepareState(Step::Dialogs, [=](ProcessingState &result) {
-		result.itemIndex = progress.itemIndex;
-		result.itemCount = progress.total;
+		fillMessagesState(
+			result,
+			_dialogsInfo,
+			_dialogIndex,
+			progress);
 	});
 }
-
-
 
 void ControllerObject::setFinishedState() {
 	setState(FinishedState{
@@ -675,39 +672,64 @@ void ControllerObject::fillMessagesState(
 
 
 Controller::Controller(
-	not_null<Ui::Show*> show,
 	QPointer<MTP::Instance> mtproto,
 	const MTPInputPeer &peer)
-: _private(std::make_shared<ControllerObject>(show, mtproto, peer)) {
+: _wrapped(mtproto, peer) {
 }
 
 rpl::producer<State> Controller::state() const {
-	auto result = rpl::variable<State>(v::null);
-	crl::on_main_sync([&] {
-		if (_private) {
-			result = _private->state();
-		}
+	return _wrapped.producer_on_main([=](const Implementation &unwrapped) {
+		return unwrapped.state();
 	});
-	return result.value();
 }
+
+//void Controller::submitPassword(const QString &password) {
+//	_wrapped.with([=](Implementation &unwrapped) {
+//		unwrapped.submitPassword(password);
+//	});
+//}
+//
+//void Controller::requestPasswordRecover() {
+//	_wrapped.with([=](Implementation &unwrapped) {
+//		unwrapped.requestPasswordRecover();
+//	});
+//}
+//
+//rpl::producer<PasswordUpdate> Controller::passwordUpdate() const {
+//	return _wrapped.producer_on_main([=](const Implementation &unwrapped) {
+//		return unwrapped.passwordUpdate();
+//	});
+//}
+//
+//void Controller::reloadPasswordState() {
+//	_wrapped.with([=](Implementation &unwrapped) {
+//		unwrapped.reloadPasswordState();
+//	});
+//}
+//
+//void Controller::cancelUnconfirmedPassword() {
+//	_wrapped.with([=](Implementation &unwrapped) {
+//		unwrapped.cancelUnconfirmedPassword();
+//	});
+//}
 
 void Controller::startExport(
 		const Settings &settings,
 		const Environment &environment) {
-	crl::on_main(_private, [=](const auto &p) {
-		p->startExport(settings, environment);
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.startExport(settings, environment);
 	});
 }
 
 void Controller::skipFile(uint64 randomId) {
-	crl::on_main(_private, [=](const auto &p) {
-		p->skipFile(randomId);
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.skipFile(randomId);
 	});
 }
 
 void Controller::cancelExportFast() {
-	crl::on_main(_private, [=](const auto &p) {
-		p->cancelExportFast();
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.cancelExportFast();
 	});
 }
 
@@ -716,9 +738,6 @@ rpl::lifetime &Controller::lifetime() {
 }
 
 Controller::~Controller() {
-	crl::on_main([p = std::move(_private)]() mutable {
-		p.reset();
-	});
 }
 
 } // namespace Export

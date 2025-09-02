@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/data/export_data_types.h"
 
 #include <QtCore/QPointer>
+#include <crl/crl_object_on_queue.h>
 
 #include "base/flat_map.h"
 
@@ -38,13 +39,6 @@ struct FileDownloadProgress {
 	int64 total = 0;
 };
 
-inline bool operator==(const FileDownloadProgress &a, const FileDownloadProgress &b) {
-	return (a.randomId == b.randomId)
-		&& (a.path == b.path)
-		&& (a.ready == b.ready)
-		&& (a.total == b.total);
-}
-
 struct PasswordCheckState {
 	QString hint;
 	QString unconfirmedPattern;
@@ -53,15 +47,6 @@ struct PasswordCheckState {
 	bool checked = false;
 	MTPInputPeer singlePeer = MTP_inputPeerEmpty();
 };
-
-inline bool operator==(const PasswordCheckState &a, const PasswordCheckState &b) {
-	return (a.hint == b.hint)
-		&& (a.unconfirmedPattern == b.unconfirmedPattern)
-		&& (a.requesting == b.requesting)
-		&& (a.hasPassword == b.hasPassword)
-		&& (a.checked == b.checked)
-		&& (a.singlePeer == b.singlePeer);
-}
 
 struct ProcessingState {
 	enum class Step {
@@ -97,61 +82,25 @@ struct ProcessingState {
 	int itemIndex = 0;
 	int itemCount = 0;
 
-	//uint64 bytesRandomId = 0;
-	//QString bytesName;
-	//int64 bytesLoaded = 0;
-	//int64 bytesCount = 0;
 	base::flat_map<uint64, FileDownloadProgress> activeDownloads;
 };
-
-inline bool operator==(const ProcessingState &a, const ProcessingState &b) {
-	return (a.step == b.step)
-		&& (a.substepsPassed == b.substepsPassed)
-		&& (a.substepsNow == b.substepsNow)
-		&& (a.substepsTotal == b.substepsTotal)
-		&& (a.entityType == b.entityType)
-		&& (a.entityName == b.entityName)
-		&& (a.entityIndex == b.entityIndex)
-		&& (a.entityCount == b.entityCount)
-		&& (a.itemIndex == b.itemIndex)
-		&& (a.itemCount == b.itemCount)
-		&& (a.activeDownloads == b.activeDownloads);
-}
 
 struct ApiErrorState {
 	MTP::Error data;
 };
 
-inline bool operator==(const ApiErrorState &a, const ApiErrorState &b) {
-	return a.data == b.data;
-}
-
 struct OutputErrorState {
 	QString path;
 };
 
-inline bool operator==(const OutputErrorState &a, const OutputErrorState &b) {
-	return a.path == b.path;
-}
-
 struct CancelledState {
 };
-
-inline bool operator==(const CancelledState &a, const CancelledState &b) {
-	return true;
-}
 
 struct FinishedState {
 	QString path;
 	int filesCount = 0;
 	int64 bytesCount = 0;
 };
-
-inline bool operator==(const FinishedState &a, const FinishedState &b) {
-	return (a.path == b.path)
-		&& (a.filesCount == b.filesCount)
-		&& (a.bytesCount == b.bytesCount);
-}
 
 using State = std::variant<
 	v::null_t,
@@ -176,7 +125,6 @@ using State = std::variant<
 class Controller {
 public:
 	Controller(
-		not_null<Ui::Show*> show,
 		QPointer<MTP::Instance> mtproto,
 		const MTPInputPeer &peer);
 
@@ -202,7 +150,7 @@ public:
 
 private:
 	using Implementation = ControllerObject;
-	std::shared_ptr<ControllerObject> _private;
+	crl::object_on_queue<Implementation> _wrapped;
 	rpl::lifetime _lifetime;
 
 };
