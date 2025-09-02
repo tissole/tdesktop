@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/export_controller.h"
 
 #include <memory>
+#include <QStringLiteral>
 
 #include "export/export_api_wrap.h"
 #include "export/export_settings.h"
@@ -506,7 +507,7 @@ void ControllerObject::exportNextDialog() {
 		: 0;
 
 	if (tillId > 0 && tillId > info->topMessageId) {
-		setState(ApiErrorState{ MTP::Error(400, qsl("TILL_ID_TOO_HIGH"), tr::lng_export_error_till_too_high(tr::now)) });
+		setState(ApiErrorState{ MTP::Error(400, QStringLiteral("TILL_ID_TOO_HIGH"), tr::lng_export_error_till_too_high(tr::now)) });
 	} else {
 		startExportMessages(info, fromId, tillId);
 	}
