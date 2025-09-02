@@ -192,6 +192,7 @@ rpl::producer<State> ControllerObject::state() const {
 bool ControllerObject::stopped() const {
 	return v::is<CancelledState>(_state)
 		|| v::is<ApiErrorState>(_state)
+		|| v::is<ValueErrorState>(_state)
 		|| v::is<OutputErrorState>(_state)
 		|| v::is<FinishedState>(_state);
 }
@@ -507,7 +508,7 @@ void ControllerObject::exportNextDialog() {
 		: 0;
 
 	if (tillId > 0 && tillId > info->topMessageId) {
-		setState(ApiErrorState{ MTP::Error(400, QStringLiteral("TILL_ID_TOO_HIGH"), tr::lng_export_error_till_too_high(tr::now)) });
+		setState(ValueErrorState{ tr::lng_export_error_till_too_high(tr::now) });
 	} else {
 		startExportMessages(info, fromId, tillId);
 	}

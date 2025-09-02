@@ -89,6 +89,10 @@ struct ApiErrorState {
 	MTP::Error data;
 };
 
+struct ValueErrorState {
+	QString message;
+};
+
 struct OutputErrorState {
 	QString path;
 };
@@ -107,6 +111,7 @@ using State = std::variant<
 	PasswordCheckState,
 	ProcessingState,
 	ApiErrorState,
+	ValueErrorState,
 	OutputErrorState,
 	CancelledState,
 	FinishedState>;
