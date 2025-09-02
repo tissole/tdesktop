@@ -132,6 +132,8 @@ private:
 	int _storiesWritten = 0;
 	int _storiesCount = 0;
 
+	int _contentFilesCount = 0;
+
 	// rpl::variable<State> fails to compile in MSVC :(
 	State _state;
 	rpl::event_stream<State> _stateChanges;
@@ -383,6 +385,7 @@ void ControllerObject::exportUserpics() {
 	}, [=](DownloadProgress progress) {
 		if (progress.total > 0 && progress.ready >= progress.total) {
 			_activeDownloads.remove(progress.randomId);
+			_contentFilesCount++;
 		} else if (progress.total > 0) {
 			_activeDownloads[progress.randomId] = {
 				progress.randomId,
@@ -419,6 +422,7 @@ void ControllerObject::exportStories() {
 	}, [=](DownloadProgress progress) {
 		if (progress.total > 0 && progress.ready >= progress.total) {
 			_activeDownloads.remove(progress.randomId);
+			_contentFilesCount++;
 		} else if (progress.total > 0) {
 			_activeDownloads[progress.randomId] = {
 				progress.randomId,
@@ -523,6 +527,7 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 	}, [=](DownloadProgress progress) {
 		if (progress.total > 0 && progress.ready >= progress.total) {
 			_activeDownloads.remove(progress.randomId);
+			_contentFilesCount++;
 		} else if (progress.total > 0) {
 			_activeDownloads[progress.randomId] = {
 				progress.randomId,
@@ -601,7 +606,7 @@ ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress)
 void ControllerObject::setFinishedState() {
 	setState(FinishedState{
 		.path = _writer->mainFilePath(),
-		.filesCount = _stats.filesCount(),
+		.filesCount = _contentFilesCount,
 		.bytesCount = _stats.bytesCount(),
 	});
 }
