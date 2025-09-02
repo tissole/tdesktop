@@ -506,7 +506,7 @@ void ControllerObject::exportNextDialog() {
 		: 0;
 
 	if (tillId > 0 && tillId > info->topMessageId) {
-		setState(ApiErrorState{ MTP::Error(400, "TILL_ID_TOO_HIGH") });
+		setState(ApiErrorState{ MTP::Error(400, qsl("TILL_ID_TOO_HIGH"), tr::lng_export_error_till_too_high(tr::now)) });
 	} else {
 		startExportMessages(info, fromId, tillId);
 	}
