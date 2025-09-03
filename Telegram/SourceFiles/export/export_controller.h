@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <crl/crl_object_on_queue.h>
 
 #include "base/flat_map.h"
+#include "tl/tl_boxed.h"
 
 namespace Ui {
 class Show;
@@ -154,7 +155,7 @@ public:
 	~Controller();
 
 private:
-	using Implementation = ControllerObject;
+	class Implementation;
 	crl::object_on_queue<Implementation> _wrapped;
 	rpl::lifetime _lifetime;
 

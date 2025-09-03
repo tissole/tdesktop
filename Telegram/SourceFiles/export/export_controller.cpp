@@ -40,12 +40,12 @@ Settings NormalizeSettings(const Settings &settings) {
 
 } // namespace
 
-class ControllerObject {
+class Controller::Implementation {
 public:
-	ControllerObject(
-		crl::weak_on_queue<ControllerObject> weak,
+	Implementation(
+		crl::weak_on_queue<Implementation> weak,
 		QPointer<MTP::Instance> mtproto,
-		const MTPInputPeer &peer);
+		const tl::boxed<MTPInputPeer> &peer);
 
 	rpl::producer<State> state() const;
 
@@ -154,10 +154,10 @@ private:
 
 };
 
-ControllerObject::ControllerObject(
-	crl::weak_on_queue<ControllerObject> weak,
+Controller::Implementation::Implementation(
+	crl::weak_on_queue<Implementation> weak,
 	QPointer<MTP::Instance> mtproto,
-	const MTPInputPeer &peer)
+	const tl::boxed<MTPInputPeer> &peer)
 : _api(mtproto, weak.runner())
 , _state(PasswordCheckState{}) {
 	_api.errors(
@@ -174,11 +174,11 @@ ControllerObject::ControllerObject(
 	auto state = PasswordCheckState();
 	state.checked = false;
 	state.requesting = false;
-	state.singlePeer = peer;
+	state.singlePeer = *peer;
 	setState(std::move(state));
 }
 
-rpl::producer<State> ControllerObject::state() const {
+rpl::producer<State> Controller::Implementation::state() const {
 	return rpl::single(
 		_state
 	) | rpl::then(
@@ -189,7 +189,7 @@ rpl::producer<State> ControllerObject::state() const {
 	});
 }
 
-bool ControllerObject::stopped() const {
+bool Controller::Implementation::stopped() const {
 	return v::is<CancelledState>(_state)
 		|| v::is<ApiErrorState>(_state)
 		|| v::is<ValueErrorState>(_state)
@@ -197,7 +197,7 @@ bool ControllerObject::stopped() const {
 		|| v::is<FinishedState>(_state);
 }
 
-void ControllerObject::setState(State &&state) {
+void Controller::Implementation::setState(State &&state) {
 	if (stopped()) {
 		return;
 	}
@@ -205,11 +205,11 @@ void ControllerObject::setState(State &&state) {
 	_stateChanges.fire_copy(_state);
 }
 
-void ControllerObject::ioError(const QString &path) {
+void Controller::Implementation::ioError(const QString &path) {
 	setState(OutputErrorState{ path });
 }
 
-bool ControllerObject::ioCatchError(Output::Result result) {
+bool Controller::Implementation::ioCatchError(Output::Result result) {
 	if (!result) {
 		ioError(result.path);
 		return true;
@@ -217,7 +217,7 @@ bool ControllerObject::ioCatchError(Output::Result result) {
 	return false;
 }
 
-void ControllerObject::startExport(
+void Controller::Implementation::startExport(
 		const Settings &settings,
 		const Environment &environment) {
 	if (!_settings.path.isEmpty()) {
@@ -232,7 +232,7 @@ void ControllerObject::startExport(
 	exportNext();
 }
 
-void ControllerObject::skipFile(uint64 randomId) {
+void Controller::Implementation::skipFile(uint64 randomId) {
 	if (stopped()) {
 		return;
 	}
@@ -240,7 +240,7 @@ void ControllerObject::skipFile(uint64 randomId) {
 	_api.skipFile(randomId);
 }
 
-void ControllerObject::fillExportSteps() {
+void Controller::Implementation::fillExportSteps() {
 	using Type = Settings::Type;
 	_steps.push_back(Step::Initializing);
 	if (_settings.types & Type::AnyChatsMask) {
@@ -269,7 +269,7 @@ void ControllerObject::fillExportSteps() {
 	}
 }
 
-void ControllerObject::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
+void Controller::Implementation::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
 	auto result = std::vector<int>();
 	const auto push = [&](Step step, int count) {
 		const auto index = static_cast<int>(step);
@@ -307,12 +307,12 @@ void ControllerObject::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
 	_substepsTotal = ranges::accumulate(_substepsInStep, 0);
 }
 
-void ControllerObject::cancelExportFast() {
+void Controller::Implementation::cancelExportFast() {
 	_api.cancelExportFast();
 	setState(CancelledState());
 }
 
-void ControllerObject::exportNext() {
+void Controller::Implementation::exportNext() {
 	if (++_stepIndex >= _steps.size()) {
 		if (ioCatchError(_writer->finish())) {
 			return;
@@ -335,17 +335,17 @@ void ControllerObject::exportNext() {
 	case Step::OtherData: return exportOtherData();
 	case Step::Dialogs: return exportDialogs();
 	}
-	Unexpected("Step in ControllerObject::exportNext.");
+	Unexpected("Step in Controller::Implementation::exportNext.");
 }
 
-void ControllerObject::initialize() {
+void Controller::Implementation::initialize() {
 	setState(stateInitializing());
 	_api.startExport(_settings, &_stats, [=](ApiWrap::StartInfo info) {
 		initialized(info);
 	});
 }
 
-void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
+void Controller::Implementation::initialized(const ApiWrap::StartInfo &info) {
 	if (ioCatchError(_writer->start(_settings, _environment, &_stats))) {
 		return;
 	}
@@ -353,7 +353,7 @@ void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
 	exportNext();
 }
 
-void ControllerObject::collectDialogsList() {
+void Controller::Implementation::collectDialogsList() {
 	setState(stateDialogsList(0));
 	_api.requestDialogsList([=](int count) {
 		if (count > 0) {
@@ -366,7 +366,7 @@ void ControllerObject::collectDialogsList() {
 	});
 }
 
-void ControllerObject::exportPersonalInfo() {
+void Controller::Implementation::exportPersonalInfo() {
 	setState(statePersonalInfo());
 	_api.requestPersonalInfo([=](Data::PersonalInfo &&result) {
 		if (ioCatchError(_writer->writePersonal(result))) {
@@ -376,7 +376,7 @@ void ControllerObject::exportPersonalInfo() {
 	});
 }
 
-void ControllerObject::exportUserpics() {
+void Controller::Implementation::exportUserpics() {
 	_api.requestUserpics([=](Data::UserpicsInfo &&start) {
 		if (ioCatchError(_writer->writeUserpicsStart(start))) {
 			return false;
@@ -413,7 +413,7 @@ void ControllerObject::exportUserpics() {
 	});
 }
 
-void ControllerObject::exportStories() {
+void Controller::Implementation::exportStories() {
 	_api.requestStories([=](Data::StoriesInfo &&start) {
 		if (ioCatchError(_writer->writeStoriesStart(start))) {
 			return false;
@@ -450,7 +450,7 @@ void ControllerObject::exportStories() {
 	});
 }
 
-void ControllerObject::exportContacts() {
+void Controller::Implementation::exportContacts() {
 	setState(stateContacts());
 	_api.requestContacts([=](Data::ContactsList &&result) {
 		if (ioCatchError(_writer->writeContactsList(result))) {
@@ -460,7 +460,7 @@ void ControllerObject::exportContacts() {
 	});
 }
 
-void ControllerObject::exportSessions() {
+void Controller::Implementation::exportSessions() {
 	setState(stateSessions());
 	_api.requestSessions([=](Data::SessionsList &&result) {
 		if (ioCatchError(_writer->writeSessionsList(result))) {
@@ -470,7 +470,7 @@ void ControllerObject::exportSessions() {
 	});
 }
 
-void ControllerObject::exportOtherData() {
+void Controller::Implementation::exportOtherData() {
 	setState(stateOtherData());
 	const auto relativePath = "lists/other_data.json";
 	_api.requestOtherData(relativePath, [=](Data::File &&result) {
@@ -481,7 +481,7 @@ void ControllerObject::exportOtherData() {
 	});
 }
 
-void ControllerObject::exportDialogs() {
+void Controller::Implementation::exportDialogs() {
 	if (ioCatchError(_writer->writeDialogsStart(_dialogsInfo))) {
 		return;
 	}
@@ -489,7 +489,7 @@ void ControllerObject::exportDialogs() {
 	exportNextDialog();
 }
 
-void ControllerObject::exportNextDialog() {
+void Controller::Implementation::exportNextDialog() {
 	const auto index = ++_dialogIndex;
 	const auto info = _dialogsInfo.item(index);
 	if (!info) {
@@ -514,7 +514,7 @@ void ControllerObject::exportNextDialog() {
 	}
 }
 
-void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 fromId, uint64 tillId) {
+void Controller::Implementation::startExportMessages(const Data::DialogInfo *info, uint64 fromId, uint64 tillId) {
 	_api.requestMessages(*info, fromId, tillId, [=](const Data::DialogInfo &info) {
 		if (ioCatchError(_writer->writeDialogStart(info))) {
 			return false;
@@ -555,47 +555,47 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 	});
 }
 
-ProcessingState ControllerObject::stateInitializing() const {
+ProcessingState Controller::Implementation::stateInitializing() const {
 	return prepareState(Step::Initializing);
 }
 
-ProcessingState ControllerObject::stateDialogsList(int processed) const {
+ProcessingState Controller::Implementation::stateDialogsList(int processed) const {
 	return prepareState(Step::DialogsList, [=](ProcessingState &result) {
 		result.itemIndex = processed;
 	});
 }
 
-ProcessingState ControllerObject::statePersonalInfo() const {
+ProcessingState Controller::Implementation::statePersonalInfo() const {
 	return prepareState(Step::PersonalInfo);
 }
 
-ProcessingState ControllerObject::stateUserpics(const DownloadProgress &progress) const {
+ProcessingState Controller::Implementation::stateUserpics(const DownloadProgress &progress) const {
 	return prepareState(Step::Userpics, [=](ProcessingState &result) {
 		result.itemIndex = progress.itemIndex;
 		result.itemCount = progress.total;
 	});
 }
 
-ProcessingState ControllerObject::stateStories(const DownloadProgress &progress) const {
+ProcessingState Controller::Implementation::stateStories(const DownloadProgress &progress) const {
 	return prepareState(Step::Stories, [=](ProcessingState &result) {
 		result.itemIndex = progress.itemIndex;
 		result.itemCount = progress.total;
 	});
 }
 
-ProcessingState ControllerObject::stateContacts() const {
+ProcessingState Controller::Implementation::stateContacts() const {
 	return prepareState(Step::Contacts);
 }
 
-ProcessingState ControllerObject::stateSessions() const {
+ProcessingState Controller::Implementation::stateSessions() const {
 	return prepareState(Step::Sessions);
 }
 
-ProcessingState ControllerObject::stateOtherData() const {
+ProcessingState Controller::Implementation::stateOtherData() const {
 	return prepareState(Step::OtherData);
 }
 
-ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress) const {
+ProcessingState Controller::Implementation::stateDialogs(const DownloadProgress &progress) const {
 	return prepareState(Step::Dialogs, [=](ProcessingState &result) {
 		fillMessagesState(
 			result,
@@ -605,7 +605,7 @@ ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress)
 	});
 }
 
-void ControllerObject::setFinishedState() {
+void Controller::Implementation::setFinishedState() {
 	setState(FinishedState{
 		.path = _writer->mainFilePath(),
 		.filesCount = _contentFilesCount,
@@ -614,7 +614,7 @@ void ControllerObject::setFinishedState() {
 }
 
 template <typename Callback>
-ProcessingState ControllerObject::prepareState(
+ProcessingState Controller::Implementation::prepareState(
 		Step step,
 		Callback &&callback) const {
 	auto result = ProcessingState();
@@ -632,14 +632,14 @@ ProcessingState ControllerObject::prepareState(
 	return result;
 }
 
-int ControllerObject::substepsInStep(Step step) const {
+int Controller::Implementation::substepsInStep(Step step) const {
 	const auto index = static_cast<int>(step);
 	return (index >= 0 && index < _substepsInStep.size())
 		? _substepsInStep[index]
 		: 0;
 }
 
-void ControllerObject::fillMessagesState(
+void Controller::Implementation::fillMessagesState(
 		ProcessingState &result,
 		const Data::DialogsInfo &info,
 		int index,
