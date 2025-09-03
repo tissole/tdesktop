@@ -132,7 +132,7 @@ class Controller {
 public:
 	Controller(
 		QPointer<MTP::Instance> mtproto,
-		const MTPInputPeer &peer);
+		MTPInputPeer peer);
 
 	rpl::producer<State> state() const;
 
