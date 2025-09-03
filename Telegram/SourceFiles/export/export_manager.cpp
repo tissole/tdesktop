@@ -37,9 +37,8 @@ void Manager::start(
 	if (const auto window = session->tryResolveWindow()) {
 		_show = window->uiShow();
 		_controller = std::make_unique<Controller>(
-			_show.get(),
 			&session->mtp(),
-			singlePeer);
+				singlePeer);
 		_panel = std::make_unique<View::PanelController>(
 			session,
 			_controller.get());
