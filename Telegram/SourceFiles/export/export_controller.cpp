@@ -508,7 +508,8 @@ void Controller::Implementation::exportNextDialog() {
 		: 0;
 
 	if (tillId > 0 && tillId > info->topMessageId) {
-		setState(ValueErrorState{ tr::lng_export_error_till_too_high(tr::now) });
+		const auto errorMessage = tr::lng_export_error_till_too_high(tr::now);
+		setState(ValueErrorState{ errorMessage });
 	} else {
 		startExportMessages(info, fromId, tillId);
 	}
