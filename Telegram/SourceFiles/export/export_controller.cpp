@@ -503,16 +503,15 @@ void Controller::Implementation::exportNextDialog() {
 	const auto fromId = _settings.useIdRange
 		? _settings.singlePeerFromId
 		: 0;
-	const auto tillId = _settings.useIdRange
+	auto tillId = _settings.useIdRange
 		? _settings.singlePeerTillId
 		: 0;
 
 	if (tillId > 0 && tillId > info->topMessageId) {
-		const auto errorMessage = tr::lng_export_error_till_too_high(tr::now);
-		setState(ValueErrorState{ errorMessage });
-	} else {
-		startExportMessages(info, fromId, tillId);
+		// Automatically correct tillId to the last message ID instead of showing an error
+		tillId = info->topMessageId;
 	}
+	startExportMessages(info, fromId, tillId);
 }
 
 void Controller::Implementation::startExportMessages(const Data::DialogInfo *info, uint64 fromId, uint64 tillId) {

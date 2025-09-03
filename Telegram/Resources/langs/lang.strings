@@ -6022,8 +6022,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_export_error_from_too_high" = "'From' ID can't be greater than 'To' ID.";
 "lng_export_error_till_too_low" = "'To' ID can't be less than 'From' ID.";
 "lng_export_error_from_invalid" = "'From' ID can't be less than 1.";
-"lng_export_till_id_corrected" = "The 'To' ID is higher than the last message in this chat. Do you want to export up to the last message (ID {text})?";
-"lng_export_error_till_too_high" = "The message ID is too high. Please enter a correct value.";
 
 "lng_language_switch_title" = "Change language?";
 "lng_language_switch_about_official" = "You are about to apply a language pack ({lang_name}) that is {percent}% complete.\n\nThis will translate the entire interface. You can suggest corrections in the {link}.\n\nYou can change your language back at any time in Settings.";
