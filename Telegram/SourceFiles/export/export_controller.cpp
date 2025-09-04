@@ -40,12 +40,12 @@ Settings NormalizeSettings(const Settings &settings) {
 
 } // namespace
 
-class Controller::Implementation {
+class ControllerObject {
 public:
-	Implementation(
-		crl::weak_on_queue<Implementation> weak,
+	ControllerObject(
+		crl::weak_on_queue<ControllerObject> weak,
 		QPointer<MTP::Instance> mtproto,
-		MTPInputPeer peer);
+		const MTPInputPeer &peer);
 
 	rpl::producer<State> state() const;
 
@@ -154,10 +154,10 @@ private:
 
 };
 
-Controller::Implementation::Implementation(
-	crl::weak_on_queue<Implementation> weak,
+ControllerObject::ControllerObject(
+	crl::weak_on_queue<ControllerObject> weak,
 	QPointer<MTP::Instance> mtproto,
-	MTPInputPeer peer)
+	const MTPInputPeer &peer)
 : _api(mtproto, weak.runner())
 , _state(PasswordCheckState{}) {
 	_api.errors(
@@ -174,11 +174,11 @@ Controller::Implementation::Implementation(
 	auto state = PasswordCheckState();
 	state.checked = false;
 	state.requesting = false;
-	state.singlePeer = std::move(peer);
+	state.singlePeer = peer;
 	setState(std::move(state));
 }
 
-rpl::producer<State> Controller::Implementation::state() const {
+rpl::producer<State> ControllerObject::state() const {
 	return rpl::single(
 		_state
 	) | rpl::then(
@@ -189,7 +189,7 @@ rpl::producer<State> Controller::Implementation::state() const {
 	});
 }
 
-bool Controller::Implementation::stopped() const {
+bool ControllerObject::stopped() const {
 	return v::is<CancelledState>(_state)
 		|| v::is<ApiErrorState>(_state)
 		|| v::is<ValueErrorState>(_state)
@@ -197,7 +197,7 @@ bool Controller::Implementation::stopped() const {
 		|| v::is<FinishedState>(_state);
 }
 
-void Controller::Implementation::setState(State &&state) {
+void ControllerObject::setState(State &&state) {
 	if (stopped()) {
 		return;
 	}
@@ -205,11 +205,11 @@ void Controller::Implementation::setState(State &&state) {
 	_stateChanges.fire_copy(_state);
 }
 
-void Controller::Implementation::ioError(const QString &path) {
+void ControllerObject::ioError(const QString &path) {
 	setState(OutputErrorState{ path });
 }
 
-bool Controller::Implementation::ioCatchError(Output::Result result) {
+bool ControllerObject::ioCatchError(Output::Result result) {
 	if (!result) {
 		ioError(result.path);
 		return true;
@@ -217,7 +217,51 @@ bool Controller::Implementation::ioCatchError(Output::Result result) {
 	return false;
 }
 
-void Controller::Implementation::startExport(
+//void ControllerObject::submitPassword(const QString &password) {
+//
+//}
+//
+//void ControllerObject::requestPasswordRecover() {
+//
+//}
+//
+//rpl::producer<PasswordUpdate> ControllerObject::passwordUpdate() const {
+//	return nullptr;
+//}
+//
+//void ControllerObject::reloadPasswordState() {
+//	//_mtp.request(base::take(_passwordRequestId)).cancel();
+//	requestPasswordState();
+//}
+//
+//void ControllerObject::requestPasswordState() {
+//	if (_passwordRequestId) {
+//		return;
+//	}
+//	//_passwordRequestId = _mtp.request(MTPaccount_GetPassword(
+//	//)).done([=](const MTPaccount_Password &result) {
+//	//	_passwordRequestId = 0;
+//	//	passwordStateDone(result);
+//	//}).fail([=](const MTP::Error &error) {
+//	//	apiError(error);
+//	//}).send();
+//}
+//
+//void ControllerObject::passwordStateDone(const MTPaccount_Password &result) {
+//	auto state = PasswordCheckState();
+//	state.checked = false;
+//	state.requesting = false;
+//	state.hasPassword;
+//	state.hint;
+//	state.unconfirmedPattern;
+//	setState(std::move(state));
+//}
+//
+//void ControllerObject::cancelUnconfirmedPassword() {
+//
+//}
+
+void ControllerObject::startExport(
 		const Settings &settings,
 		const Environment &environment) {
 	if (!_settings.path.isEmpty()) {
@@ -232,7 +276,7 @@ void Controller::Implementation::startExport(
 	exportNext();
 }
 
-void Controller::Implementation::skipFile(uint64 randomId) {
+void ControllerObject::skipFile(uint64 randomId) {
 	if (stopped()) {
 		return;
 	}
@@ -240,7 +284,7 @@ void Controller::Implementation::skipFile(uint64 randomId) {
 	_api.skipFile(randomId);
 }
 
-void Controller::Implementation::fillExportSteps() {
+void ControllerObject::fillExportSteps() {
 	using Type = Settings::Type;
 	_steps.push_back(Step::Initializing);
 	if (_settings.types & Type::AnyChatsMask) {
@@ -269,7 +313,7 @@ void Controller::Implementation::fillExportSteps() {
 	}
 }
 
-void Controller::Implementation::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
+void ControllerObject::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
 	auto result = std::vector<int>();
 	const auto push = [&](Step step, int count) {
 		const auto index = static_cast<int>(step);
@@ -307,12 +351,12 @@ void Controller::Implementation::fillSubstepsInSteps(const ApiWrap::StartInfo &i
 	_substepsTotal = ranges::accumulate(_substepsInStep, 0);
 }
 
-void Controller::Implementation::cancelExportFast() {
+void ControllerObject::cancelExportFast() {
 	_api.cancelExportFast();
 	setState(CancelledState());
 }
 
-void Controller::Implementation::exportNext() {
+void ControllerObject::exportNext() {
 	if (++_stepIndex >= _steps.size()) {
 		if (ioCatchError(_writer->finish())) {
 			return;
@@ -335,17 +379,17 @@ void Controller::Implementation::exportNext() {
 	case Step::OtherData: return exportOtherData();
 	case Step::Dialogs: return exportDialogs();
 	}
-	Unexpected("Step in Controller::Implementation::exportNext.");
+	Unexpected("Step in ControllerObject::exportNext.");
 }
 
-void Controller::Implementation::initialize() {
+void ControllerObject::initialize() {
 	setState(stateInitializing());
 	_api.startExport(_settings, &_stats, [=](ApiWrap::StartInfo info) {
 		initialized(info);
 	});
 }
 
-void Controller::Implementation::initialized(const ApiWrap::StartInfo &info) {
+void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
 	if (ioCatchError(_writer->start(_settings, _environment, &_stats))) {
 		return;
 	}
@@ -353,7 +397,7 @@ void Controller::Implementation::initialized(const ApiWrap::StartInfo &info) {
 	exportNext();
 }
 
-void Controller::Implementation::collectDialogsList() {
+void ControllerObject::collectDialogsList() {
 	setState(stateDialogsList(0));
 	_api.requestDialogsList([=](int count) {
 		if (count > 0) {
@@ -366,7 +410,7 @@ void Controller::Implementation::collectDialogsList() {
 	});
 }
 
-void Controller::Implementation::exportPersonalInfo() {
+void ControllerObject::exportPersonalInfo() {
 	setState(statePersonalInfo());
 	_api.requestPersonalInfo([=](Data::PersonalInfo &&result) {
 		if (ioCatchError(_writer->writePersonal(result))) {
@@ -376,7 +420,7 @@ void Controller::Implementation::exportPersonalInfo() {
 	});
 }
 
-void Controller::Implementation::exportUserpics() {
+void ControllerObject::exportUserpics() {
 	_api.requestUserpics([=](Data::UserpicsInfo &&start) {
 		if (ioCatchError(_writer->writeUserpicsStart(start))) {
 			return false;
@@ -396,14 +440,14 @@ void Controller::Implementation::exportUserpics() {
 				progress.total
 			};
 		}
-		setState(stateUserpics({}));
+		setState(stateUserpics(progress));
 		return true;
 	}, [=](Data::UserpicsSlice &&slice) {
 		if (ioCatchError(_writer->writeUserpicsSlice(slice))) {
 			return false;
 		}
 		_userpicsWritten += slice.list.size();
-		setState(stateUserpics({}));
+		setState(stateUserpics(DownloadProgress()));
 		return true;
 	}, [=] {
 		if (ioCatchError(_writer->writeUserpicsEnd())) {
@@ -413,7 +457,7 @@ void Controller::Implementation::exportUserpics() {
 	});
 }
 
-void Controller::Implementation::exportStories() {
+void ControllerObject::exportStories() {
 	_api.requestStories([=](Data::StoriesInfo &&start) {
 		if (ioCatchError(_writer->writeStoriesStart(start))) {
 			return false;
@@ -440,7 +484,7 @@ void Controller::Implementation::exportStories() {
 			return false;
 		}
 		_storiesWritten += slice.list.size();
-		setState(stateStories({}));
+		setState(stateStories(DownloadProgress()));
 		return true;
 	}, [=] {
 		if (ioCatchError(_writer->writeStoriesEnd())) {
@@ -450,7 +494,7 @@ void Controller::Implementation::exportStories() {
 	});
 }
 
-void Controller::Implementation::exportContacts() {
+void ControllerObject::exportContacts() {
 	setState(stateContacts());
 	_api.requestContacts([=](Data::ContactsList &&result) {
 		if (ioCatchError(_writer->writeContactsList(result))) {
@@ -460,7 +504,7 @@ void Controller::Implementation::exportContacts() {
 	});
 }
 
-void Controller::Implementation::exportSessions() {
+void ControllerObject::exportSessions() {
 	setState(stateSessions());
 	_api.requestSessions([=](Data::SessionsList &&result) {
 		if (ioCatchError(_writer->writeSessionsList(result))) {
@@ -470,7 +514,7 @@ void Controller::Implementation::exportSessions() {
 	});
 }
 
-void Controller::Implementation::exportOtherData() {
+void ControllerObject::exportOtherData() {
 	setState(stateOtherData());
 	const auto relativePath = "lists/other_data.json";
 	_api.requestOtherData(relativePath, [=](Data::File &&result) {
@@ -481,7 +525,7 @@ void Controller::Implementation::exportOtherData() {
 	});
 }
 
-void Controller::Implementation::exportDialogs() {
+void ControllerObject::exportDialogs() {
 	if (ioCatchError(_writer->writeDialogsStart(_dialogsInfo))) {
 		return;
 	}
@@ -489,7 +533,7 @@ void Controller::Implementation::exportDialogs() {
 	exportNextDialog();
 }
 
-void Controller::Implementation::exportNextDialog() {
+void ControllerObject::exportNextDialog() {
 	const auto index = ++_dialogIndex;
 	const auto info = _dialogsInfo.item(index);
 	if (!info) {
@@ -514,7 +558,7 @@ void Controller::Implementation::exportNextDialog() {
 	startExportMessages(info, fromId, tillId);
 }
 
-void Controller::Implementation::startExportMessages(const Data::DialogInfo *info, uint64 fromId, uint64 tillId) {
+void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 fromId, uint64 tillId) {
 	_api.requestMessages(*info, fromId, tillId, [=](const Data::DialogInfo &info) {
 		if (ioCatchError(_writer->writeDialogStart(info))) {
 			return false;
@@ -555,47 +599,47 @@ void Controller::Implementation::startExportMessages(const Data::DialogInfo *inf
 	});
 }
 
-ProcessingState Controller::Implementation::stateInitializing() const {
+ProcessingState ControllerObject::stateInitializing() const {
 	return prepareState(Step::Initializing);
 }
 
-ProcessingState Controller::Implementation::stateDialogsList(int processed) const {
+ProcessingState ControllerObject::stateDialogsList(int processed) const {
 	return prepareState(Step::DialogsList, [=](ProcessingState &result) {
 		result.itemIndex = processed;
 	});
 }
 
-ProcessingState Controller::Implementation::statePersonalInfo() const {
+ProcessingState ControllerObject::statePersonalInfo() const {
 	return prepareState(Step::PersonalInfo);
 }
 
-ProcessingState Controller::Implementation::stateUserpics(const DownloadProgress &progress) const {
+ProcessingState ControllerObject::stateUserpics(const DownloadProgress &progress) const {
 	return prepareState(Step::Userpics, [=](ProcessingState &result) {
 		result.itemIndex = progress.itemIndex;
 		result.itemCount = progress.total;
 	});
 }
 
-ProcessingState Controller::Implementation::stateStories(const DownloadProgress &progress) const {
+ProcessingState ControllerObject::stateStories(const DownloadProgress &progress) const {
 	return prepareState(Step::Stories, [=](ProcessingState &result) {
 		result.itemIndex = progress.itemIndex;
 		result.itemCount = progress.total;
 	});
 }
 
-ProcessingState Controller::Implementation::stateContacts() const {
+ProcessingState ControllerObject::stateContacts() const {
 	return prepareState(Step::Contacts);
 }
 
-ProcessingState Controller::Implementation::stateSessions() const {
+ProcessingState ControllerObject::stateSessions() const {
 	return prepareState(Step::Sessions);
 }
 
-ProcessingState Controller::Implementation::stateOtherData() const {
+ProcessingState ControllerObject::stateOtherData() const {
 	return prepareState(Step::OtherData);
 }
 
-ProcessingState Controller::Implementation::stateDialogs(const DownloadProgress &progress) const {
+ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress) const {
 	return prepareState(Step::Dialogs, [=](ProcessingState &result) {
 		fillMessagesState(
 			result,
@@ -605,7 +649,7 @@ ProcessingState Controller::Implementation::stateDialogs(const DownloadProgress 
 	});
 }
 
-void Controller::Implementation::setFinishedState() {
+void ControllerObject::setFinishedState() {
 	setState(FinishedState{
 		.path = _writer->mainFilePath(),
 		.filesCount = _contentFilesCount,
@@ -614,7 +658,7 @@ void Controller::Implementation::setFinishedState() {
 }
 
 template <typename Callback>
-ProcessingState Controller::Implementation::prepareState(
+ProcessingState ControllerObject::prepareState(
 		Step step,
 		Callback &&callback) const {
 	auto result = ProcessingState();
@@ -632,14 +676,14 @@ ProcessingState Controller::Implementation::prepareState(
 	return result;
 }
 
-int Controller::Implementation::substepsInStep(Step step) const {
+int ControllerObject::substepsInStep(Step step) const {
 	const auto index = static_cast<int>(step);
 	return (index >= 0 && index < _substepsInStep.size())
 		? _substepsInStep[index]
 		: 0;
 }
 
-void Controller::Implementation::fillMessagesState(
+void ControllerObject::fillMessagesState(
 		ProcessingState &result,
 		const Data::DialogsInfo &info,
 		int index,
@@ -680,8 +724,8 @@ void Controller::Implementation::fillMessagesState(
 
 Controller::Controller(
 	QPointer<MTP::Instance> mtproto,
-	MTPInputPeer peer)
-: _wrapped(mtproto, peer) {
+	const MTPInputPeer &peer)
+: _wrapped(std::move(mtproto), peer) {
 }
 
 rpl::producer<State> Controller::state() const {
@@ -723,6 +767,8 @@ rpl::producer<State> Controller::state() const {
 void Controller::startExport(
 		const Settings &settings,
 		const Environment &environment) {
+	LOG(("Export Info: Started export to '%1'.").arg(settings.path));
+
 	_wrapped.with([=](Implementation &unwrapped) {
 		unwrapped.startExport(settings, environment);
 	});
@@ -735,6 +781,8 @@ void Controller::skipFile(uint64 randomId) {
 }
 
 void Controller::cancelExportFast() {
+	LOG(("Export Info: Cancelled export."));
+
 	_wrapped.with([=](Implementation &unwrapped) {
 		unwrapped.cancelExportFast();
 	});
@@ -745,6 +793,7 @@ rpl::lifetime &Controller::lifetime() {
 }
 
 Controller::~Controller() {
+	LOG(("Export Info: Controller destroyed."));	
 }
 
 } // namespace Export
