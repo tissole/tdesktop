@@ -793,7 +793,7 @@ rpl::lifetime &Controller::lifetime() {
 }
 
 Controller::~Controller() {
-	LOG(("Export Info: Controller destroyed."));	
+	LOG(("Export Info: Controller destroyed."));
 }
 
 } // namespace Export

@@ -132,7 +132,7 @@ class Controller {
 public:
 	Controller(
 		QPointer<MTP::Instance> mtproto,
-		MTPInputPeer peer);
+		const MTPInputPeer &peer);
 
 	rpl::producer<State> state() const;
 
@@ -155,7 +155,7 @@ public:
 	~Controller();
 
 private:
-	class Implementation;
+	using Implementation = ControllerObject;
 	crl::object_on_queue<Implementation> _wrapped;
 	rpl::lifetime _lifetime;
 
