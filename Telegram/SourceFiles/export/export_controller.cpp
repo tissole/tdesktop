@@ -681,7 +681,7 @@ void Controller::Implementation::fillMessagesState(
 Controller::Controller(
 	QPointer<MTP::Instance> mtproto,
 	MTPInputPeer peer)
-: _wrapped(mtproto, std::move(peer)) {
+: _wrapped(mtproto, peer) {
 }
 
 rpl::producer<State> Controller::state() const {
