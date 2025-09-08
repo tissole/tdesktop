@@ -86,10 +86,6 @@ using Ui::SendFilesWay;
 		if (!file.path.isEmpty()) {
 			QFileInfo fileInfo(file.path);
 			fileNames.append(fileInfo.fileName());
-		} else if (!file.content.isEmpty()) {
-			// For files from clipboard or other sources, we might not have a path
-			// In this case, we'll use a generic name
-			fileNames.append("file");
 		}
 	}
 	return fileNames;
@@ -1014,43 +1010,46 @@ void SendFilesBox::updateCaptionPlaceholder() {
 	const auto way = _sendWay.current();
 	
 	// Handle mutual exclusivity between _caption and _fileCaptions fields
-	if (_fileCaptions && GetEnhancedBool("caption_from_file_name") && !_list.files.empty() && !way.groupFiles()) {
-		// When caption setting is active and files are ungrouped, show _fileCaptions
-		_fileCaptions->show();
-		// Set proper placeholder for file captions
-		_fileCaptions->setPlaceholder(tr::lng_photo_caption());
-		// For single files, hide comment field; for multiple files, always show comment field
+	if (GetEnhancedBool("caption_from_file_name") && !_list.files.empty()) {
+		// When caption setting is active, behavior depends on file count
 		if (_list.files.size() == 1) {
-			_caption->hide();
+			// For single file, use _caption field (same as when selecting single file initially)
+			_fileCaptions->hide();
+			_caption->show();
+			_caption->setPlaceholder(tr::lng_photo_caption());
 			if (_emojiToggle) {
-				_emojiToggle->hide();
+				_emojiToggle->show();
 			}
 		} else {
+			// For multiple files, use _fileCaptions for individual captions + _caption for comment
+			_fileCaptions->show();
+			_fileCaptions->setPlaceholder(tr::lng_photo_caption());
 			_caption->show();
 			_caption->setPlaceholder(tr::lng_photos_comment());
 			if (_emojiToggle) {
 				_emojiToggle->show();
 			}
 		}
-	} else if (_fileCaptions) {
-		// When caption setting is inactive or files are grouped, hide _fileCaptions
+	} else if (!GetEnhancedBool("caption_from_file_name") && !_list.files.empty()) {
+		// When caption setting is inactive, hide _fileCaptions
 		_fileCaptions->hide();
-		// Always show comment field for multiple files, show for single files only when setting is inactive
-		if (_list.files.size() > 1) {
+		// Always show comment field, but use correct placeholder based on file count
+		if (_list.files.size() == 1) {
+			// For single file, use "Caption" placeholder (same behavior as when setting is inactive)
+			_caption->setPlaceholder(tr::lng_photo_caption());
 			_caption->show();
-			_caption->setPlaceholder(tr::lng_photos_comment());
 			if (_emojiToggle) {
 				_emojiToggle->show();
 			}
-		} else if (!GetEnhancedBool("caption_from_file_name")) {
+		} else {
+			// For multiple files, use "Comment" placeholder
 			_caption->show();
-			_caption->setPlaceholder(FieldPlaceholder(_list, way));
+			_caption->setPlaceholder(tr::lng_photos_comment());
 			if (_emojiToggle) {
 				_emojiToggle->show();
 			}
 		}
 	} else {
-		// Original caption visibility logic when _fileCaptions doesn't exist
 		if (!_list.canAddCaption(
 				way.groupFiles() && way.sendImagesAsPhotos(),
 				way.sendImagesAsPhotos())
@@ -1061,7 +1060,12 @@ void SendFilesBox::updateCaptionPlaceholder() {
 				_emojiToggle->hide();
 			}
 		} else {
-			_caption->setPlaceholder(FieldPlaceholder(_list, way));
+			// Ensure single files show "Caption" placeholder, multiple files show appropriate placeholder
+			if (_list.files.size() == 1) {
+				_caption->setPlaceholder(tr::lng_photo_caption());
+			} else {
+				_caption->setPlaceholder(FieldPlaceholder(_list, way));
+			}
 			_caption->show();
 			if (_emojiToggle) {
 				_emojiToggle->show();
