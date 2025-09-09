@@ -3783,7 +3783,7 @@ void ApiWrap::sendFiles(
 				: nullptr),
 			uploadWithType,
 			to,
-		    (GetEnhancedBool("caption_from_file_name")) 
+			(GetEnhancedBool("caption_from_file_name")) 
 			    ? [&]() {
 				    if (!file.path.isEmpty()) {
 					    QFileInfo fileInfo(file.path);
