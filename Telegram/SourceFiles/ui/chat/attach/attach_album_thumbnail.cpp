@@ -35,7 +35,7 @@ AlbumThumbnail::AlbumThumbnail(
 	Fn<void()> deleteCallback)
 : _st(st)
 , _layout(layout)
-, _fullPreview(file.videoCover ? file.videoCover->preview : file.preview)
+, _fullPreview(file.preview)
 , _shrinkSize(int(std::ceil(st::roundRadiusLarge / 1.4)))
 , _isPhoto(file.type == PreparedFile::Type::Photo)
 , _isVideo(file.type == PreparedFile::Type::Video)
@@ -100,19 +100,6 @@ AlbumThumbnail::AlbumThumbnail(
 		_nameWidth = st::semiboldFont->width(_name);
 	}
 	_statusWidth = st::normalFont->width(_status);
-	
-	// Extract and prepare caption from fileNameCaption
-	_caption = file.fileNameCaption.text;
-	if (!_caption.isEmpty()) {
-		_captionWidth = st::normalFont->width(_caption);
-		if (_captionWidth > availableFileWidth) {
-			_caption = st::normalFont->elided(
-				_caption,
-				availableFileWidth,
-				Qt::ElideMiddle);
-			_captionWidth = st::normalFont->width(_caption);
-		}
-	}
 
 	_editMedia.create(parent, _st.files.buttonFile);
 	_deleteMedia.create(parent, _st.files.buttonFile);
@@ -197,15 +184,9 @@ int AlbumThumbnail::photoHeight() const {
 }
 
 int AlbumThumbnail::fileHeight() const {
-	const auto baseHeight = _isCompressedSticker
+	return _isCompressedSticker
 		? photoHeight()
 		: st::attachPreviewThumbLayout.thumbSize;
-		
-	// Add space for caption if it exists
-	if (!_caption.isEmpty()) {
-		return baseHeight + st::normalFont->height + st::normalFont->spacew;
-	}
-	return baseHeight;
 }
 
 bool AlbumThumbnail::isCompressedSticker() const {
@@ -516,19 +497,6 @@ void AlbumThumbnail::paintFile(
 		outerWidth,
 		_status,
 		_statusWidth);
-
-	// Draw caption if it exists
-	if (!_caption.isEmpty()) {
-		const auto captionTop = st.statusTop + st::normalFont->height + st::normalFont->spacew;
-		p.setFont(st::normalFont);
-		p.setPen(_st.files.statusFg);
-		p.drawTextLeft(
-			textLeft,
-			top + captionTop,
-			outerWidth,
-			_caption,
-			_captionWidth);
-	}
 
 	_lastRectOfModify = QRect(
 		QPoint(left, top),

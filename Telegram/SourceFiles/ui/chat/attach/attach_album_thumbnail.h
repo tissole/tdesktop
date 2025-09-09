@@ -101,10 +101,8 @@ private:
 	QPixmap _fileThumb;
 	QString _name;
 	QString _status;
-	QString _caption;  // Add caption field
 	int _nameWidth = 0;
 	int _statusWidth = 0;
-	int _captionWidth = 0;  // Add caption width
 	float64 _suggestedMove = 0.;
 	Animations::Simple _suggestedMoveAnimation;
 	int _lastShrinkValue = 0;
