@@ -3785,7 +3785,7 @@ void ApiWrap::sendFiles(
 			to,
 		    (GetEnhancedBool("caption_from_file_name")) 
 			    ? [&]() {
-				    if !file.path.isEmpty()) {
+				    if !file.path.isEmpty() {
 					    QFileInfo fileInfo(file.path);
 					    return TextWithTags{fileInfo.fileName(), {}};
 				    }
