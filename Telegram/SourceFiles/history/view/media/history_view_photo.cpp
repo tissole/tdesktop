@@ -838,6 +838,26 @@ void Photo::drawGrouped(
 			_animation->radial.draw(p, rinner, line, sti->historyFileThumbRadialFg);
 		}
 	}
+	
+	// Draw caption for individual item in group if caption_from_file_name is enabled
+	if (GetEnhancedBool("caption_from_file_name")) {
+		// Get the caption from the item's text (which should contain the fileNameCaption)
+		const auto &text = _parent->data()->fullText();
+		if (!text.isEmpty()) {
+			// Create a simple text element to draw the caption
+			auto captionText = Text::String(st::msgNameStyle);
+			captionText.setText(st::defaultTextStyle, text, Ui::NameTextOptions());
+			
+			// Calculate caption position (below the image)
+			const auto captionTop = geometry.y() + geometry.height() + st::mediaCaptionSkip;
+			const auto captionWidth = std::min(geometry.width(), st::msgMaxWidth);
+			
+			// Draw the caption text
+			p.setPen(st->historyTextFg());
+			p.setFont(st::normalFont);
+			captionText.drawElided(p, geometry.x(), captionTop, captionWidth);
+		}
+	}
 }
 
 TextState Photo::getStateGrouped(
