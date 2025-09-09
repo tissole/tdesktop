@@ -519,7 +519,8 @@ void AlbumThumbnail::paintFile(
 
 	// Draw caption if it exists
 	if (!_caption.isEmpty()) {
-		const auto captionTop = st.statusTop + st::normalFont->height + 2; // Simple spacing
+		const auto captionSpacing = st::normalFont->height + st::normalFont->spacew;
+		const auto captionTop = st.statusTop + captionSpacing;
 		p.setFont(st::normalFont);
 		p.setPen(_st.files.statusFg);
 		p.drawTextLeft(
