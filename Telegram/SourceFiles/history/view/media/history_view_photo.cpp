@@ -743,6 +743,7 @@ void Photo::drawGrouped(
 	const auto sti = context.imageStyle();
 	const auto preview = _data->extendedMediaPreview();
 	const auto loaded = preview || _dataMedia->loaded();
+
 	const auto displayLoading = !preview && _data->displayLoading();
 
 	if (displayLoading) {
@@ -784,7 +785,7 @@ void Photo::drawGrouped(
 
 	const auto paintInCenter = !_sensitiveSpoiler
 		&& (radial
-			|| (!loaded && !_data->loading())
+			|| (!loaded && !_data->uploading())
 			|| _data->waitingForAlbum());
 	if (paintInCenter) {
 		const auto radialOpacity = radial
@@ -841,8 +842,8 @@ void Photo::drawGrouped(
 	
 	// Draw caption for individual item in group if caption_from_file_name is enabled
 	if (GetEnhancedBool("caption_from_file_name")) {
-		// Get the caption from the item's text (which should contain the fileNameCaption)
-		const auto &text = _parent->data()->fullText();
+		// Get the caption from the item's original text (which should contain the fileNameCaption)
+		const auto &text = _parent->data()->originalText().text;
 		if (!text.isEmpty()) {
 			// Create a simple text element to draw the caption
 			auto captionText = Text::String(st::msgNameStyle);
