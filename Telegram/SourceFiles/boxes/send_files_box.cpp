@@ -1037,6 +1037,9 @@ void SendFilesBox::updateCaptionPlaceholder() {
 			if (_emojiToggle) {
 				_emojiToggle->show();
 			}
+			// CLEAR _caption field for multiple files - leave it empty for user to type group comment
+			// The _fileCaptions field will be auto-filled with individual filenames by the existing logic
+			_caption->setTextWithTags(TextWithTags());
 		}
 	} else if (!GetEnhancedBool("caption_from_file_name") && !_list.files.empty()) {
 		// When caption setting is inactive, hide _fileCaptions
@@ -2208,17 +2211,22 @@ void SendFilesBox::send(
 				// For single file, caption is in _caption field
 				_list.files[0].fileNameCaption = _caption->getTextWithAppliedMarkdown();
 			} else {
-				// For multiple files, captions are in _fileCaptions field
-				// Split the file captions by newlines
-				const auto captionText = _fileCaptions->getTextWithAppliedMarkdown().text;
-				const auto captions = captionText.split("\n", Qt::SkipEmptyParts);
+				// For multiple files, _caption field contains the GROUP COMMENT
+				// and _fileCaptions field contains individual file captions
+				
+				// Apply individual file captions from _fileCaptions field
+				const auto fileCaptionText = _fileCaptions->getTextWithAppliedMarkdown().text;
+				const auto fileCaptions = fileCaptionText.split("\n", Qt::SkipEmptyParts);
 				
 				// Apply captions to individual files
-				for (auto i = 0; i < std::min(captions.size(), static_cast<int>(_list.files.size())); ++i) {
+				for (auto i = 0; i < std::min(fileCaptions.size(), static_cast<int>(_list.files.size())); ++i) {
 					TextWithTags fileCaption;
-					fileCaption.text = captions[i];
+					fileCaption.text = fileCaptions[i];
 					_list.files[i].fileNameCaption = std::move(fileCaption);
 				}
+				
+				// The group comment is already in the 'caption' variable from the beginning of this function
+				// Nothing else to do here - just don't overwrite the caption variable
 			}
 		}
 		

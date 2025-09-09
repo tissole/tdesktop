@@ -845,18 +845,14 @@ void Photo::drawGrouped(
 		// Get the caption from the item's original text (which should contain the fileNameCaption)
 		const auto &text = _parent->data()->originalText().text;
 		if (!text.isEmpty()) {
-			// Create a simple text element to draw the caption
-			auto captionText = Text::String(st::msgNameStyle);
-			captionText.setText(st::defaultTextStyle, text, Ui::NameTextOptions());
-			
 			// Calculate caption position (below the image)
 			const auto captionTop = geometry.y() + geometry.height() + st::mediaCaptionSkip;
 			const auto captionWidth = std::min(geometry.width(), st::msgMaxWidth);
 			
-			// Draw the caption text
-			p.setPen(st->historyTextFg());
+			// Draw the caption text using the same approach as other text drawing in this file
 			p.setFont(st::normalFont);
-			captionText.drawElided(p, geometry.x(), captionTop, captionWidth);
+			p.setPen(st->msgDateImgFg());
+			p.drawTextLeft(geometry.x(), captionTop, width(), text, captionWidth);
 		}
 	}
 }
