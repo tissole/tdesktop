@@ -3376,8 +3376,8 @@ void ApiWrap::finishForwarding(const SendAction &action) {
 			return;
 		}
 
-		forwardMessages(std::move(toForward), action);
 		history->setForwardDraft(topicRootId, monoforumPeerId, {});
+		forwardMessages(std::move(toForward), action);
 	}
 
 	_session->data().sendHistoryChangeNotifications();
@@ -3783,17 +3783,15 @@ void ApiWrap::sendFiles(
 				: nullptr),
 			uploadWithType,
 			to,
-			(GetEnhancedBool("caption_from_file_name")) 
-			    ? [&]() {
-				    if (!file.path.isEmpty()) {
-					    QFileInfo fileInfo(file.path);
-					    return TextWithTags{fileInfo.fileName(), {}};
-				    }
-				    return file.fileNameCaption;
-			    }() 
-			    : caption,
-		    file.spoiler,
-		    album));
+			(GetEnhancedBool("caption_from_file_name"))
+				? file.fileNameCaption
+				: caption,
+			file.spoiler,
+			album));
+			
+		if (!GetEnhancedBool("caption_from_file_name")) {
+			caption = TextWithTags();
+		}
 	}
 	if (album) {
 		_sendingAlbums.emplace(album->groupId, album);
