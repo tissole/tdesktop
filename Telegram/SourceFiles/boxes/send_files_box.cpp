@@ -2214,37 +2214,25 @@ void SendFilesBox::send(
 			}
 		}
 		
-		// Apply file captions if the setting is active
 		if (GetEnhancedBool("caption_from_file_name")) {
 			if (_list.files.size() == 1) {
 				// For single file, caption is in _caption field
 				_list.files[0].fileNameCaption = _caption->getTextWithAppliedMarkdown();
 			} else {
-				// For multiple files, _caption field contains the GROUP COMMENT
-				// and _fileCaptions field contains individual file captions
-				
-				// Apply individual file captions from _fileCaptions field
 				const auto fileCaptionText = _fileCaptions->getTextWithAppliedMarkdown().text;
 				const auto fileCaptions = fileCaptionText.split("\n", Qt::SkipEmptyParts);
-				
-				// Apply captions to individual files
+
 				for (auto i = 0; i < std::min(fileCaptions.size(), static_cast<int>(_list.files.size())); ++i) {
 					TextWithTags fileCaption;
 					fileCaption.text = fileCaptions[i];
 					_list.files[i].fileNameCaption = std::move(fileCaption);
 				}
-				
-				// The group comment is already in the 'caption' variable from the beginning of this function
-				// Nothing else to do here - just don't overwrite the caption variable
 			}
 		}
 		
-		// Handle comment as separate message specifically for grouped photos/videos
-		// This fixes the issue where _caption field was treated as group caption instead of separate comment
 		const auto sendWay = _sendWay.current();
 		const auto isGroupedMedia = (sendWay.groupFiles() && _list.files.size() > 1);
 		
-		// Check if we have photos/videos that can be grouped (not regular files)
 		const auto hasGroupableMedia = [&] {
 			using Type = Ui::PreparedFile::Type;
 			for (const auto &file : _list.files) {
@@ -2255,25 +2243,19 @@ void SendFilesBox::send(
 			return false;
 		}();
 		
-		// Only apply special handling for grouped photos/videos
-		if (isGroupedMedia && hasGroupableMedia) {
-			// Create a separate text message with the comment
-			auto commentList = Ui::PreparedList(Ui::PreparedList::Error::None, QString());
-			auto commentFile = Ui::PreparedFile(QString());
-			commentFile.type = Ui::PreparedFile::Type::None;
-			commentFile.content = caption.text.toUtf8();
-			commentList.files.push_back(std::move(commentFile));
+		if (isGroupedMedia && hasGroupableMedia && !caption.text.isEmpty()) {
+			TextWithTags commentText = std::move(caption);
+			caption = TextWithTags(); 
 			
-			// Send the comment as a separate message first
-			_confirmedCallback(
-				std::move(commentList),
-				SendFilesWay(), // Default way for text
-				TextWithTags(), // No additional caption for text
-				options,
-				ctrlShiftEnter);
-				
-			// Clear the caption so it's not sent again with the media
-			caption = TextWithTags();
+			if (_confirmedCallback) {
+				auto commentList = Ui::PreparedList(Ui::PreparedList::Error::None, QString());
+				_confirmedCallback(
+					std::move(commentList),
+					Ui::SendFilesWay(),
+					std::move(commentText),
+					options,
+					ctrlShiftEnter);
+			}
 		}
 		
 		_confirmedCallback(
