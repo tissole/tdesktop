@@ -2230,6 +2230,31 @@ void SendFilesBox::send(
 			}
 		}
 		
+		// Handle comment as separate message when media is grouped
+		const auto sendWay = _sendWay.current();
+		const auto isGroupedMedia = (sendWay.groupFiles() && _list.files.size() > 1);
+		
+		// If media is grouped, send comment as separate message first (even if empty)
+		if (isGroupedMedia) {
+			// Create a separate text message with the comment
+			auto commentList = Ui::PreparedList(Ui::PreparedList::Error::None, QString());
+			auto commentFile = Ui::PreparedFile(QString());
+			commentFile.type = Ui::PreparedFile::Type::None;
+			commentFile.content = caption.text.toUtf8();
+			commentList.files.push_back(std::move(commentFile));
+			
+			// Send the comment as a separate message first
+			_confirmedCallback(
+				std::move(commentList),
+				SendFilesWay(), // Default way for text
+				TextWithTags(), // No additional caption for text
+				options,
+				ctrlShiftEnter);
+				
+			// Clear the caption so it's not sent again with the media
+			caption = TextWithTags();
+		}
+		
 		_confirmedCallback(
 			std::move(_list),
 			_sendWay.current(),
