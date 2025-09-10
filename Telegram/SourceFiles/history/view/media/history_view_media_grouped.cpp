@@ -439,6 +439,29 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			highlightOpacity,
 			&part.cacheKey,
 			&part.cache);
+			
+		// Draw individual file caption for this part if caption_from_file_name is enabled
+		if (GetEnhancedBool("caption_from_file_name")) {
+			// Get the individual file caption from the part's item
+			const auto &text = part.item->originalText().text;
+			if (!text.isEmpty()) {
+				// Calculate caption position (below the image)
+				const auto &geometry = part.geometry.translated(0, groupPadding.top());
+				const auto captionTop = geometry.y() + geometry.height() + st::mediaCaptionSkip;
+				const auto captionWidth = std::min(geometry.width(), st::msgMaxWidth);
+				
+				// Draw a border around the photo/video
+				const auto borderPen = QPen(context.st->msgDateImgBg(), st::lineWidth);
+				p.setPen(borderPen);
+				p.setBrush(Qt::NoBrush);
+				p.drawRect(geometry);
+				
+				// Draw the caption text
+				p.setFont(st::normalFont);
+				p.setPen(context.st->msgDateImgFg());
+				p.drawTextLeft(geometry.x(), captionTop, width(), text, captionWidth);
+			}
+		}
 		if (!part.cache.isNull()) {
 			nowCache = true;
 		}
