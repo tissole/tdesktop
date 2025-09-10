@@ -1601,30 +1601,6 @@ void Gif::drawGrouped(
 		}
 		p.setOpacity(1.);
 	}
-	
-	// Draw caption for individual item in group if caption_from_file_name is enabled
-	if (GetEnhancedBool("caption_from_file_name")) {
-		// Always draw a border to verify this code is executing
-		const auto borderPen = QPen(Qt::red, 2); // Use red border for visibility
-		p.setPen(borderPen);
-		p.setBrush(Qt::NoBrush);
-		p.drawRect(geometry);
-		
-		// Get the caption from the item's original text (which should contain the fileNameCaption)
-		const auto &text = _parent->data()->originalText().text;
-		// Always draw text to verify data access
-		const auto displayText = text.isEmpty() ? "[NO TEXT]" : text;
-		
-		// Calculate caption position (below the image)
-		const auto captionTop = geometry.y() + geometry.height() + st::mediaCaptionSkip;
-		const auto captionWidth = std::min(geometry.width(), st::msgMaxWidth);
-		
-		// Draw the caption text using the same approach as corner status
-		p.setFont(st::normalFont);
-		p.setPen(Qt::red); // Use red text for visibility
-		p.drawTextLeft(geometry.x(), captionTop, width(), displayText, captionWidth);
-	}
-	
 	if (!_smallGroupPart) {
 		drawCornerStatus(p, context, geometry.topLeft());
 	}
