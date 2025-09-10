@@ -81,14 +81,23 @@ using Ui::SendFilesWay;
 
 // Helper function to extract file names from a list of prepared files
 [[nodiscard]] QStringList ExtractFileNames(const std::vector<Ui::PreparedFile> &files) {
-	QStringList fileNames;
-	for (const auto &file : files) {
-		if (!file.path.isEmpty()) {
-			QFileInfo fileInfo(file.path);
-			fileNames.append(fileInfo.fileName());
-		}
-	}
-	return fileNames;
+    QStringList fileNames;
+    int genericCounter = 1;
+    for (const auto &file : files) {
+        if (!file.path.isEmpty()) {
+            // Priority 1: Use the actual file path if it exists.
+            QFileInfo fileInfo(file.path);
+            fileNames.append(fileInfo.fileName());
+        } else if (!file.fileNameCaption.text.isEmpty()) {
+            // Priority 2: Use the pre-saved caption (e.g., "Pasted_Image.png").
+            fileNames.append(file.fileNameCaption.text);
+        } else if (!file.content.isEmpty()) {
+            // Priority 3 (Fallback): Use a generic, but unique, name.
+            fileNames.append(QString("file_%1").arg(genericCounter++));
+        }
+        // If a file has no path, no caption, and no content, we add nothing.
+    }
+    return fileNames;
 }
 
 void FileDialogCallback(
