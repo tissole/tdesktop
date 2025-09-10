@@ -265,8 +265,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 	newHeight += groupPadding.top() + groupPadding.bottom();
 	
 	// Add extra space for individual file captions when caption_from_file_name is enabled
-	if (GetEnhancedBool("caption_from_file_name") && _mode == Mode::Column) {
-		// In column mode, we add space after each photo/video that has a caption
+	if (GetEnhancedBool("caption_from_file_name")) {
+		// Add space for captions in both Row and Column modes
 		for (const auto &part : _parts) {
 			const auto &text = part.item->originalText().text;
 			if (!text.isEmpty()) {
@@ -468,42 +468,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			if (!text.isEmpty()) {
 				const auto &geometry = part.geometry.translated(0, groupPadding.top());
 				
-				// Choose one of the following approaches:
-				
-				// Approach 1: Draw caption below the photo/video with a margin (currently active)
+				// Draw caption below the photo/video with a margin
 				const auto captionTop = geometry.y() + geometry.height() + st::mediaCaptionSkip;
 				const auto captionWidth = std::min(geometry.width(), st::msgMaxWidth);
 				p.setFont(st::normalFont);
 				p.setPen(context.st->msgDateImgFg());
 				p.drawTextLeft(geometry.x(), captionTop, width(), text, captionWidth);
-				
-				// Approach 2: Draw caption directly on the photo/video at the center bottom (commented out)
-				/*
-				// Create a text layout to handle text wrapping
-				QTextOption option(Qt::AlignCenter);
-				option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-				
-				// Calculate the text rectangle at the bottom of the image
-				const auto textHeight = st::normalFont->height;
-				const auto textRect = QRect(
-					geometry.x(), 
-					geometry.y() + geometry.height() - textHeight - st::mediaCaptionSkip,
-					geometry.width(), 
-					textHeight
-				);
-				
-				// Draw a semi-transparent background for the text
-				p.setPen(Qt::NoPen);
-				p.setBrush(context.st->msgDateImgBg());
-				p.setOpacity(0.8);
-				p.drawRect(textRect);
-				p.setOpacity(1.0);
-				
-				// Draw the caption text
-				p.setFont(st::normalFont);
-				p.setPen(context.st->msgDateImgFg());
-				p.drawText(textRect, text, option);
-				*/
 			}
 		}
 		if (!part.cache.isNull()) {

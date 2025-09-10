@@ -2261,7 +2261,12 @@ void SendFilesBox::send(
 			return false;
 		}();
 		
-		if (isGroupedMedia && hasGroupableMedia && !caption.text.isEmpty()) {
+		const auto currentSendWay = _sendWay.current();
+		const auto canAddCaption = _list.canAddCaption(
+			currentSendWay.groupFiles() && currentSendWay.sendImagesAsPhotos(),
+			currentSendWay.sendImagesAsPhotos());
+		
+		if (isGroupedMedia && hasGroupableMedia && !caption.text.isEmpty() && !canAddCaption) {
 			TextWithTags commentText = std::move(caption);
 			caption = TextWithTags(); 
 			
