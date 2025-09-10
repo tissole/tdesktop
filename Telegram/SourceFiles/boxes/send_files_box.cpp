@@ -2230,13 +2230,24 @@ void SendFilesBox::send(
 			}
 		}
 		
-		// Handle comment as separate message when media is grouped
+		// Handle comment as separate message specifically for grouped photos/videos
+		// This fixes the issue where _caption field was treated as group caption instead of separate comment
 		const auto sendWay = _sendWay.current();
 		const auto isGroupedMedia = (sendWay.groupFiles() && _list.files.size() > 1);
 		
-		// If media is grouped, send comment as separate message first (even if empty)
-		// This ensures that _caption field always behaves as a comment, not as a group caption
-		if (isGroupedMedia) {
+		// Check if we have photos/videos that can be grouped (not regular files)
+		const auto hasGroupableMedia = [&] {
+			using Type = Ui::PreparedFile::Type;
+			for (const auto &file : _list.files) {
+				if (file.type == Type::Photo || file.type == Type::Video) {
+					return true;
+				}
+			}
+			return false;
+		}();
+		
+		// Only apply special handling for grouped photos/videos
+		if (isGroupedMedia && hasGroupableMedia) {
 			// Create a separate text message with the comment
 			auto commentList = Ui::PreparedList(Ui::PreparedList::Error::None, QString());
 			auto commentFile = Ui::PreparedFile(QString());
