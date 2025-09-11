@@ -49,7 +49,31 @@ std::vector<Ui::GroupMediaLayout> LayoutPlaylist(
 		top += size.height();
 	}
 	result.front().sides |= RectPart::Top;
-	result.back().sides |= RectPart::Bottom;
+	if (GetEnhancedBool("caption_from_file_name")) {
+		for (auto &part : result) {
+			part.sides |= RectPart::Bottom;
+		}
+	} else {
+		// Check if any item has a normal caption that would need border space
+		const auto hasNormalCaption = [&] {
+			for (const auto &part : result) {
+				const auto &text = part.item->originalText().text;
+				if (!text.isEmpty()) {
+					return true;
+				}
+			}
+			return false;
+		}();
+		
+		if (hasNormalCaption) {
+			// Add bottom borders to all items for normal caption display
+			for (auto &part : result) {
+				part.sides |= RectPart::Bottom;
+			}
+		} else {
+			result.back().sides |= RectPart::Bottom;
+		}
+	}
 	return result;
 }
 
@@ -204,8 +228,6 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			part.geometry = QRect(0, top, newWidth, size.height());
 			top += size.height();
 			
-			// Add extra space for caption if caption_from_file_name is enabled
-			// Only for photo/video files
 			if (GetEnhancedBool("caption_from_file_name")) {
 				const auto content = part.content.get();
 				if (content) {
@@ -216,8 +238,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 					if (isPhoto || isVideo) {
 						const auto &text = part.item->originalText().text;
 						if (!text.isEmpty()) {
-							// Add space for the caption text and the skip margin
-							top += st::normalFont->height + st::mediaCaptionSkip;
+							top += (st::normalFont->height + st::mediaCaptionSkip) * 3;
 						}
 					}
 				}
@@ -274,11 +295,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 	const auto groupPadding = groupedPadding();
 	newHeight += groupPadding.top() + groupPadding.bottom();
 	
-	// Add extra space for individual file captions when caption_from_file_name is enabled
 	if (GetEnhancedBool("caption_from_file_name")) {
-		// Add space for captions only for photo/video files
 		for (const auto &part : _parts) {
-			// Check if this is a photo or video
 			const auto content = part.content.get();
 			if (content) {
 				const auto isPhoto = (content->getPhoto() != nullptr);
@@ -288,10 +306,16 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				if (isPhoto || isVideo) {
 					const auto &text = part.item->originalText().text;
 					if (!text.isEmpty()) {
-						// Add space for the caption text and the skip margin
-						newHeight += st::normalFont->height + st::mediaCaptionSkip;
+						newHeight += (st::normalFont->height + st::mediaCaptionSkip) * 3;
 					}
 				}
+			}
+		}
+	} else {
+		for (const auto &part : _parts) {
+			const auto &text = part.item->originalText().text;
+			if (!text.isEmpty()) {
+				newHeight += (st::normalFont->height + st::mediaCaptionSkip) * 3;
 			}
 		}
 	}
@@ -327,8 +351,6 @@ Ui::BubbleRounding GroupedMedia::applyRoundingSides(
 
 QMargins GroupedMedia::groupedPadding() const {
 	if (_mode != Mode::Column) {
-		// For Row mode, also add padding if the first item has a caption
-		// This handles the case when caption_from_file_name is OFF and a caption is applied to the first item
 		const auto firstHasCaption = !_parts.empty() && !_parts.front().item->emptyText();
 		const auto addToBottom = firstHasCaption ? st::msgPadding.bottom() : 0;
 		const auto normal = st::msgFileLayout.padding;

@@ -1031,13 +1031,12 @@ void SendFilesBox::updateCaptionPlaceholder() {
 			_fileCaptions->setPlaceholder(tr::lng_photo_caption());
 			_caption->show();
 			_caption->setPlaceholder(tr::lng_photos_comment());
+			_caption->setTextWithTags(TextWithTags());
 			if (_emojiToggle) {
 				_emojiToggle->show();
 			}
 		}
 	} else if (!GetEnhancedBool("caption_from_file_name") && !_list.files.empty()) {
-		_fileCaptions->hide();
-		
 		if (!_list.canAddCaption(
 				way.groupFiles() && way.sendImagesAsPhotos(),
 				way.sendImagesAsPhotos())
@@ -1054,19 +1053,7 @@ void SendFilesBox::updateCaptionPlaceholder() {
 				_emojiToggle->show();
 			}
 		}
-	} else {
-		if (!_list.canAddCaption(
-				way.groupFiles() && way.sendImagesAsPhotos(),
-				way.sendImagesAsPhotos())
-			&& ((_limits & SendFilesAllow::OnlyOne)
-				|| !(_limits & SendFilesAllow::Texts))) {
-			_caption->hide();
-			if (_emojiToggle) {
-				_emojiToggle->hide();
-			}
-		} else {
-			if (_list.files.size() == 1) {
-				_caption->setPlaceholder(tr::lng_photo_caption());
+	}
 			} else {
 				_caption->setPlaceholder(FieldPlaceholder(_list, way));
 			}
