@@ -2241,9 +2241,10 @@ void SendFilesBox::send(
 				sendWay.groupFiles() && sendWay.sendImagesAsPhotos(),
 				sendWay.sendImagesAsPhotos());
 			
-			if (canAddCaption && !caption.text.isEmpty()) {
+			if ((_list.files.size() == 1 && !caption.text.isEmpty()) || 
+				(canAddCaption && !caption.text.isEmpty())) {
 				_list.files[0].fileNameCaption = caption;
-				caption = TextWithTags(); // Clear caption so it's not sent as comment
+				caption = TextWithTags();
 			}
 		}
 		
