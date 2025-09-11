@@ -1054,15 +1054,6 @@ void SendFilesBox::updateCaptionPlaceholder() {
 			}
 		}
 	}
-			} else {
-				_caption->setPlaceholder(FieldPlaceholder(_list, way));
-			}
-			_caption->show();
-			if (_emojiToggle) {
-				_emojiToggle->show();
-			}
-		}
-	}
 }
 
 void SendFilesBox::preparePreview() {
