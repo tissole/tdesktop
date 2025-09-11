@@ -208,11 +208,17 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			// Only for photo/video files
 			if (GetEnhancedBool("caption_from_file_name")) {
 				const auto content = part.content.get();
-				if (content && (content->isPhoto() || content->isVideo())) {
-					const auto &text = part.item->originalText().text;
-					if (!text.isEmpty()) {
-						// Add space for the caption text and the skip margin
-						top += st::normalFont->height + st::mediaCaptionSkip;
+				if (content) {
+					const auto isPhoto = (content->getPhoto() != nullptr);
+					const auto document = content->getDocument();
+					const auto isVideo = document && document->isVideoFile();
+					
+					if (isPhoto || isVideo) {
+						const auto &text = part.item->originalText().text;
+						if (!text.isEmpty()) {
+							// Add space for the caption text and the skip margin
+							top += st::normalFont->height + st::mediaCaptionSkip;
+						}
 					}
 				}
 			}
@@ -274,11 +280,17 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		for (const auto &part : _parts) {
 			// Check if this is a photo or video
 			const auto content = part.content.get();
-			if (content && (content->isPhoto() || content->isVideo())) {
-				const auto &text = part.item->originalText().text;
-				if (!text.isEmpty()) {
-					// Add space for the caption text and the skip margin
-					newHeight += st::normalFont->height + st::mediaCaptionSkip;
+			if (content) {
+				const auto isPhoto = (content->getPhoto() != nullptr);
+				const auto document = content->getDocument();
+				const auto isVideo = document && document->isVideoFile();
+				
+				if (isPhoto || isVideo) {
+					const auto &text = part.item->originalText().text;
+					if (!text.isEmpty()) {
+						// Add space for the caption text and the skip margin
+						newHeight += st::normalFont->height + st::mediaCaptionSkip;
+					}
 				}
 			}
 		}
@@ -484,18 +496,24 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		if (GetEnhancedBool("caption_from_file_name")) {
 			// Only draw captions for photo/video files
 			const auto content = part.content.get();
-			if (content && (content->isPhoto() || content->isVideo())) {
-				// Get the individual file caption from the part's item
-				const auto &text = part.item->originalText().text;
-				if (!text.isEmpty()) {
-					const auto &geometry = part.geometry.translated(0, groupPadding.top());
-					
-					// Draw caption below the photo/video with a margin, centered
-					const auto captionTop = geometry.y() + geometry.height() + st::mediaCaptionSkip;
-					const auto captionWidth = std::min(geometry.width(), st::msgMaxWidth);
-					p.setFont(st::normalFont);
-					p.setPen(context.st->msgDateImgFg());
-					p.drawTextLeft(geometry.x() + (geometry.width() - captionWidth) / 2, captionTop, width(), text, captionWidth);
+			if (content) {
+				const auto isPhoto = (content->getPhoto() != nullptr);
+				const auto document = content->getDocument();
+				const auto isVideo = document && document->isVideoFile();
+				
+				if (isPhoto || isVideo) {
+					// Get the individual file caption from the part's item
+					const auto &text = part.item->originalText().text;
+					if (!text.isEmpty()) {
+						const auto &geometry = part.geometry.translated(0, groupPadding.top());
+						
+						// Draw caption below the photo/video with a margin, centered
+						const auto captionTop = geometry.y() + geometry.height() + st::mediaCaptionSkip;
+						const auto captionWidth = std::min(geometry.width(), st::msgMaxWidth);
+						p.setFont(st::normalFont);
+						p.setPen(context.st->msgDateImgFg());
+						p.drawTextLeft(geometry.x() + (geometry.width() - captionWidth) / 2, captionTop, width(), text, captionWidth);
+					}
 				}
 			}
 		}
