@@ -307,7 +307,18 @@ Ui::BubbleRounding GroupedMedia::applyRoundingSides(
 
 QMargins GroupedMedia::groupedPadding() const {
 	if (_mode != Mode::Column) {
-		return QMargins();
+		// For Row mode, also add padding if the first item has a caption
+		// This handles the case when caption_from_file_name is OFF and a caption is applied to the first item
+		const auto firstHasCaption = !_parts.empty() && !_parts.front().item->emptyText();
+		const auto addToBottom = firstHasCaption ? st::msgPadding.bottom() : 0;
+		const auto normal = st::msgFileLayout.padding;
+		const auto grouped = st::msgFileLayoutGrouped.padding;
+		const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+		return QMargins(
+			0,
+			(normal.top() - grouped.top()) - topMinus,
+			0,
+			(normal.bottom() - grouped.bottom()) + addToBottom);
 	}
 	const auto normal = st::msgFileLayout.padding;
 	const auto grouped = st::msgFileLayoutGrouped.padding;

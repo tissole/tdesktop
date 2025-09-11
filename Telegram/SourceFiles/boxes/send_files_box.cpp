@@ -1034,7 +1034,6 @@ void SendFilesBox::updateCaptionPlaceholder() {
 			if (_emojiToggle) {
 				_emojiToggle->show();
 			}
-			_caption->setTextWithTags(TextWithTags());
 		}
 	} else if (!GetEnhancedBool("caption_from_file_name") && !_list.files.empty()) {
 		_fileCaptions->hide();
