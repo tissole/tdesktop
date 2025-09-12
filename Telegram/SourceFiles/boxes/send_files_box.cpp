@@ -1037,6 +1037,7 @@ void SendFilesBox::updateCaptionPlaceholder() {
 			}
 		}
 	} else if (!GetEnhancedBool("caption_from_file_name") && !_list.files.empty()) {
+		_fileCaptions->hide();
 		if (!_list.canAddCaption(
 				way.groupFiles() && way.sendImagesAsPhotos(),
 				way.sendImagesAsPhotos())
@@ -1344,7 +1345,6 @@ void SendFilesBox::refreshControls(bool initial) {
 			_fileCaptions->setPlaceholder(tr::lng_photo_caption());
 		}
 	}
-
 	updateCaptionPlaceholder();
 }
 
@@ -1381,16 +1381,6 @@ void SendFilesBox::setupSendWayControls() {
 			if (!_list.files.empty()) {
 				_fileCaptions->setPlaceholder(tr::lng_photo_caption());
 			}
-		} else if (!GetEnhancedBool("caption_from_file_name") && !_list.files.empty()) {
-			const auto canAddCaption = _list.canAddCaption(
-				value.groupFiles() && value.sendImagesAsPhotos(),
-				value.sendImagesAsPhotos());
-			
-			if (canAddCaption) {
-				_caption->setTextWithTags(_list.files[0].fileNameCaption);
-			}
-		}
-		
 		updateCaptionPlaceholder();
 	}, lifetime());
 
@@ -2048,7 +2038,6 @@ void SendFilesBox::resizeEvent(QResizeEvent *e) {
 void SendFilesBox::updateControlsGeometry() {
 	auto bottom = height();
 	
-	// Position file captions field first (if visible)
 	if (_fileCaptions && !_fileCaptions->isHidden()) {
 		_fileCaptions->resize(st::sendMediaPreviewSize, _fileCaptions->height());
 		_fileCaptions->moveToLeft(
@@ -2057,7 +2046,6 @@ void SendFilesBox::updateControlsGeometry() {
 		bottom -= st::boxPhotoCaptionSkip + _fileCaptions->height();
 	}
 	
-	// Position comment field (if visible)
 	if (_caption && !_caption->isHidden()) {
 		_caption->resize(st::sendMediaPreviewSize, _caption->height());
 		_caption->moveToLeft(

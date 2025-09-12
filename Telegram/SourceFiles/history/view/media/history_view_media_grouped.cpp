@@ -207,24 +207,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		auto top = 0;
 		for (auto &part : _parts) {
 			const auto size = part.content->sizeForGrouping(newWidth);
-			auto itemHeight = size.height();
-			
-			// Add space for caption if caption_from_file_name is enabled
-			if (GetEnhancedBool("caption_from_file_name")) {
-				const auto content = part.content.get();
-				if (content) {
-					const auto isPhoto = (content->getPhoto() != nullptr);
-					const auto document = content->getDocument();
-					const auto isVideo = document && document->isVideoFile();
-					
-					if (isPhoto || isVideo) {
-						const auto &text = part.item->originalText().text;
-						if (!text.isEmpty()) {
-							itemHeight += (st::normalFont->height + st::mediaCaptionSkip) * 3;
-						}
-					}
-				}
-			}
+			const auto itemHeight = size.height();
 			
 			part.geometry = QRect(0, top, newWidth, itemHeight);
 			top += itemHeight;
@@ -281,22 +264,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 	newHeight += groupPadding.top() + groupPadding.bottom();
 	
 	if (GetEnhancedBool("caption_from_file_name")) {
-		for (const auto &part : _parts) {
-			const auto content = part.content.get();
-			if (content) {
-				const auto isPhoto = (content->getPhoto() != nullptr);
-				const auto document = content->getDocument();
-				const auto isVideo = document && document->isVideoFile();
-				
-				if (isPhoto || isVideo) {
-					const auto &text = part.item->originalText().text;
-					if (!text.isEmpty()) {
-						newHeight += (st::normalFont->height + st::mediaCaptionSkip) * 3;
-					}
-				}
-			}
-		}
+		// No extra height needed when caption setting is ON - captions drawn on existing space
 	} else {
+		// Add extra height for normal captions when caption setting is OFF
 		for (const auto &part : _parts) {
 			const auto &text = part.item->originalText().text;
 			if (!text.isEmpty()) {
@@ -514,8 +484,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					if (!text.isEmpty()) {
 						const auto &geometry = part.geometry.translated(0, groupPadding.top());
 						
-						// Draw caption at the bottom of the expanded geometry, centered
-						const auto captionTop = geometry.y() + geometry.height() - (st::normalFont->height + st::mediaCaptionSkip) * 3 + st::mediaCaptionSkip;
+						// Draw caption at the bottom center of the image/video thumbnail
+						const auto captionTop = geometry.y() + geometry.height() - st::normalFont->height - st::mediaCaptionSkip;
 						const auto captionWidth = std::min(geometry.width(), st::msgMaxWidth);
 						p.setFont(st::normalFont);
 						p.setPen(context.st->msgDateImgFg());
