@@ -266,13 +266,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 	if (GetEnhancedBool("caption_from_file_name")) {
 		// No extra height needed when caption setting is ON - captions drawn on existing space
 	} else {
-		// Add extra height for normal captions when caption setting is OFF
-		for (const auto &part : _parts) {
-			const auto &text = part.item->originalText().text;
-			if (!text.isEmpty()) {
-				newHeight += (st::normalFont->height + st::mediaCaptionSkip) * 3;
-			}
-		}
+		// When caption_from_file_name is OFF, use original Telegram behavior (no extra space)
+		// Original implementation doesn't add extra height for captions
 	}
 
 	return { newWidth, newHeight };
