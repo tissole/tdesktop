@@ -1343,17 +1343,6 @@ void SendFilesBox::refreshControls(bool initial) {
 		if (!_list.files.empty()) {
 			_fileCaptions->setPlaceholder(tr::lng_photo_caption());
 		}
-
-	} else if (!GetEnhancedBool("caption_from_file_name") && !_list.files.empty()) {
-		const auto sendWay = _sendWay.current();
-		const auto canAddCaption = _list.canAddCaption(
-			sendWay.groupFiles() && sendWay.sendImagesAsPhotos(),
-			sendWay.sendImagesAsPhotos()
-		);
-
-		if (canAddCaption) {
-			_caption->setTextWithTags(_list.files[0].fileNameCaption);
-		}
 	}
 
 	updateCaptionPlaceholder();
@@ -2212,17 +2201,9 @@ void SendFilesBox::send(
 					fileCaption.text = fileCaptions[i];
 					_list.files[i].fileNameCaption = std::move(fileCaption);
 				}
-			}
-		} else if (!GetEnhancedBool("caption_from_file_name") && !_list.files.empty()) {
-			const auto sendWay = _sendWay.current();
-			const auto canAddCaption = _list.canAddCaption(
-				sendWay.groupFiles() && sendWay.sendImagesAsPhotos(),
-				sendWay.sendImagesAsPhotos());
-			
-			if ((_list.files.size() == 1 && !caption.text.isEmpty()) || 
-				(canAddCaption && !caption.text.isEmpty())) {
-				_list.files[0].fileNameCaption = caption;
-				caption = TextWithTags();
+				
+				if (!caption.text.isEmpty()) {
+				}
 			}
 		}
 		
@@ -2244,7 +2225,7 @@ void SendFilesBox::send(
 			currentSendWay.groupFiles() && currentSendWay.sendImagesAsPhotos(),
 			currentSendWay.sendImagesAsPhotos());
 		
-		if (isGroupedMedia && hasGroupableMedia && !caption.text.isEmpty() && !canAddCaption) {
+		if (GetEnhancedBool("caption_from_file_name") && isGroupedMedia && hasGroupableMedia && !caption.text.isEmpty()) {
 			TextWithTags commentText = std::move(caption);
 			caption = TextWithTags(); 
 			

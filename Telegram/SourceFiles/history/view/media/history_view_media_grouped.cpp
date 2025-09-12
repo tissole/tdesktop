@@ -49,7 +49,6 @@ std::vector<Ui::GroupMediaLayout> LayoutPlaylist(
 		top += size.height();
 	}
 	result.front().sides |= RectPart::Top;
-	// Add extra space for filename captions when caption_from_file_name is enabled
 	if (GetEnhancedBool("caption_from_file_name")) {
 		for (auto &part : result) {
 			part.sides |= RectPart::Bottom;
@@ -208,9 +207,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		auto top = 0;
 		for (auto &part : _parts) {
 			const auto size = part.content->sizeForGrouping(newWidth);
-			part.geometry = QRect(0, top, newWidth, size.height());
-			top += size.height();
+			auto itemHeight = size.height();
 			
+			// Add space for caption if caption_from_file_name is enabled
 			if (GetEnhancedBool("caption_from_file_name")) {
 				const auto content = part.content.get();
 				if (content) {
@@ -221,11 +220,14 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 					if (isPhoto || isVideo) {
 						const auto &text = part.item->originalText().text;
 						if (!text.isEmpty()) {
-							top += (st::normalFont->height + st::mediaCaptionSkip) * 3;
+							itemHeight += (st::normalFont->height + st::mediaCaptionSkip) * 3;
 						}
 					}
 				}
 			}
+			
+			part.geometry = QRect(0, top, newWidth, itemHeight);
+			top += itemHeight;
 		}
 		newHeight = top;
 	} else {
@@ -512,8 +514,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					if (!text.isEmpty()) {
 						const auto &geometry = part.geometry.translated(0, groupPadding.top());
 						
-						// Draw caption below the photo/video with a margin, centered
-						const auto captionTop = geometry.y() + geometry.height() + st::mediaCaptionSkip;
+						// Draw caption at the bottom of the expanded geometry, centered
+						const auto captionTop = geometry.y() + geometry.height() - (st::normalFont->height + st::mediaCaptionSkip) * 3 + st::mediaCaptionSkip;
 						const auto captionWidth = std::min(geometry.width(), st::msgMaxWidth);
 						p.setFont(st::normalFont);
 						p.setPen(context.st->msgDateImgFg());
