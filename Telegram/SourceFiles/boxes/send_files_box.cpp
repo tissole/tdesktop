@@ -1381,6 +1381,7 @@ void SendFilesBox::setupSendWayControls() {
 			if (!_list.files.empty()) {
 				_fileCaptions->setPlaceholder(tr::lng_photo_caption());
 			}
+		}
 		updateCaptionPlaceholder();
 	}, lifetime());
 
