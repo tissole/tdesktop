@@ -49,13 +49,12 @@ std::vector<Ui::GroupMediaLayout> LayoutPlaylist(
 		top += size.height();
 	}
 	result.front().sides |= RectPart::Top;
-	if (GetEnhancedBool("caption_from_file_name")) {
-		for (auto &part : result) {
-			part.sides |= RectPart::Bottom;
-		}
-	} else {
+	// When caption_from_file_name is ON, filename captions are drawn directly on image (no extra borders needed)
+	// When caption_from_file_name is OFF, use original Telegram behavior
+	if (!GetEnhancedBool("caption_from_file_name")) {
 		result.back().sides |= RectPart::Bottom;
 	}
+	// When caption_from_file_name is ON, no extra borders for any items
 	return result;
 }
 
