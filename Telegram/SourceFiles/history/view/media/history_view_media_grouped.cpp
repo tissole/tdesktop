@@ -481,9 +481,21 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 						// Draw caption at the bottom center of the image/video thumbnail
 						const auto captionTop = geometry.y() + geometry.height() - st::normalFont->height - st::mediaCaptionSkip;
 						const auto captionWidth = std::min(geometry.width(), st::msgMaxWidth);
+						const auto captionLeft = geometry.x() + (geometry.width() - captionWidth) / 2;
+						
+						// Draw semi-transparent background for better visibility on all photo colors
+						p.setPen(Qt::NoPen);
+						p.setBrush(QColor(0, 0, 0, 150)); // Semi-transparent black background
+						p.drawRoundedRect(captionLeft - st::mediaCaptionSkip, 
+										captionTop - st::mediaCaptionSkip, 
+										captionWidth + st::mediaCaptionSkip * 2, 
+										st::normalFont->height + st::mediaCaptionSkip * 2,
+										st::roundRadiusSmall, st::roundRadiusSmall);
+						
+						// Draw black text for better contrast
 						p.setFont(st::normalFont);
-						p.setPen(context.st->msgDateImgFg());
-						p.drawTextLeft(geometry.x() + (geometry.width() - captionWidth) / 2, captionTop, width(), text, captionWidth);
+						p.setPen(Qt::black);
+						p.drawTextLeft(captionLeft, captionTop, width(), text, captionWidth);
 					}
 				}
 			}
