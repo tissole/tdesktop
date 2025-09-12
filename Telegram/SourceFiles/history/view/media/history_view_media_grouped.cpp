@@ -49,30 +49,13 @@ std::vector<Ui::GroupMediaLayout> LayoutPlaylist(
 		top += size.height();
 	}
 	result.front().sides |= RectPart::Top;
+	// Add extra space for filename captions when caption_from_file_name is enabled
 	if (GetEnhancedBool("caption_from_file_name")) {
 		for (auto &part : result) {
 			part.sides |= RectPart::Bottom;
 		}
 	} else {
-		// Check if any item has a normal caption that would need border space
-		const auto hasNormalCaption = [&] {
-			for (const auto &part : result) {
-				const auto &text = part.item->originalText().text;
-				if (!text.isEmpty()) {
-					return true;
-				}
-			}
-			return false;
-		}();
-		
-		if (hasNormalCaption) {
-			// Add bottom borders to all items for normal caption display
-			for (auto &part : result) {
-				part.sides |= RectPart::Bottom;
-			}
-		} else {
-			result.back().sides |= RectPart::Bottom;
-		}
+		result.back().sides |= RectPart::Bottom;
 	}
 	return result;
 }
