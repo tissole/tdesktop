@@ -202,26 +202,6 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		for (auto &part : _parts) {
 			const auto size = part.content->sizeForGrouping(newWidth);
 			auto itemHeight = size.height();
-			
-			// When caption_from_file_name is ON, add dynamic space for filename captions
-			if (GetEnhancedBool("caption_from_file_name")) {
-				const auto content = part.content.get();
-				if (content) {
-					const auto isPhoto = (content->getPhoto() != nullptr);
-					const auto document = content->getDocument();
-					const auto isVideo = document && document->isVideoFile();
-					
-					if (isPhoto || isVideo) {
-						const auto &text = part.item->originalText().text;
-						if (!text.isEmpty()) {
-							// Calculate dynamic height needed for caption text
-							const auto lineCount = (text.length() / 40) + 1;
-							itemHeight += st::normalFont->height * lineCount + st::mediaCaptionSkip * 2;
-						}
-					}
-				}
-			}
-			
 			part.geometry = QRect(0, top, newWidth, itemHeight);
 			top += itemHeight;
 		}
@@ -461,36 +441,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 			
-		if (GetEnhancedBool("caption_from_file_name")) {
-			const auto content = part.content.get();
-			if (content) {
-				const auto isPhoto = (content->getPhoto() != nullptr);
-				const auto document = content->getDocument();
-				const auto isVideo = document && document->isVideoFile();
-				
-				if (isPhoto || isVideo) {
-					const auto &text = part.item->originalText().text;
-					if (!text.isEmpty()) {
-						const auto &geometry = part.geometry.translated(0, groupPadding.top());
-						
-						const auto contentHeight = part.content->sizeForGrouping(geometry.width()).height();
-						const auto captionTop = geometry.y() + contentHeight + st::mediaCaptionSkip;
-						const auto captionWidth = std::min(geometry.width(), st::msgMaxWidth);
-						
-						p.setPen(Qt::NoPen);
-						p.setBrush(QColor(255, 255, 255, 180)); // Semi-transparent white background
-						p.drawRoundedRect(geometry.x(), captionTop, captionWidth, st::normalFont->height + st::mediaCaptionSkip * 2, st::roundRadiusSmall, st::roundRadiusSmall);
-						
-						p.setFont(st::normalFont);
-						p.setPen(Qt::black);
-						p.drawTextLeft(geometry.x() + st::mediaCaptionSkip, captionTop + st::mediaCaptionSkip, width(), text, captionWidth);
-					}
-				}
-			}
-		}
-		if (!part.cache.isNull()) {
-			nowCache = true;
-		}
+		&part.cacheKey,
+		&part.cache);
+		
+	if (!part.cache.isNull()) {
+		nowCache = true;
+	}
 		if (tagged || _purchasedPriceTag) {
 			fullRect = fullRect.united(part.geometry);
 		}
