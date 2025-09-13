@@ -153,7 +153,7 @@ QSize GroupedMedia::countOptimalSize() {
 	for (const auto &part : _parts) {
 		const auto last = (++index == _parts.size());
 		sizes.push_back(
-			part.content->sizeForGroupingOptimal(maxWidth, last));
+			part.content->sizeForGroupingOptimal(maxWidth, last)).grown(0, part._captionHeight));
 	}
 
 	const auto layout = (_mode == Mode::Grid)
@@ -170,7 +170,7 @@ QSize GroupedMedia::countOptimalSize() {
 		const auto &item = layout[i];
 		accumulate_max(maxWidth, item.geometry.x() + item.geometry.width());
 		accumulate_max(minHeight, item.geometry.y() + item.geometry.height());
-		_parts[i].initialGeometry = item.geometry;
+		_parts[i].initialGeometry = item.geometry.grown(0, _parts[i]._captionHeight);
 		_parts[i].sides = item.sides;
 	}
 
@@ -235,7 +235,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			const auto height = scale(initialBottom)
 				- top
 				- (needBottomSkip ? spacing : 0);
-			part.geometry = QRect(left, top, width, height);
+			part.geometry = QRect(left, top, width, height + scale(part._captionHeight));
 
 			accumulate_max(newHeight, top + height);
 		}
@@ -432,27 +432,35 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		if (!part.cache.isNull()) {
 			wasCache = true;
 		}
+		// Calculate media geometry
+		auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
+		if (GetEnhancedBool("caption_from_file_name") && part._captionHeight > 0) {
+			mediaGeometry.setHeight(mediaGeometry.height() - part._captionHeight);
+		}
+
 		part.content->drawGrouped(
 			p,
 			partContext,
-			part.geometry.translated(0, groupPadding.top()),
+			mediaGeometry, // Pass the modified geometry
 			part.sides,
 			applyRoundingSides(rounding, part.sides),
 			highlightOpacity,
 			&part.cacheKey,
 			&part.cache);
 
-		if (GetEnhancedBool("caption_from_file_name") && !part.item->emptyText()) {
+		if (GetEnhancedBool("caption_from_file_name") && part._captionHeight > 0) {
 			Ui::Text::String caption(st::messageTextStyle, part.item->originalText(), kDefaultTextOptions);
 			const auto &partGeometry = part.geometry.translated(0, groupPadding.top());
 			const auto padding = QMargins(8, 4, 8, 4);
-			auto captionHeight = caption.countHeight(partGeometry.width() - padding.left() - padding.right());
-			captionHeight += padding.top() + padding.bottom();
+			
+			auto captionRect = QRect(
+				partGeometry.left(),
+				partGeometry.bottom(),
+				partGeometry.width(),
+				part._captionHeight
+			);
 
-			auto captionRect = partGeometry;
-			captionRect.setTop(captionRect.bottom() - captionHeight);
-
-			p.fillRect(captionRect, QColor(255, 255, 255, 200));
+			p.fillRect(captionRect, QColor(255, 255, 255, 128));
 
 			p.setPen(Qt::black);
 			caption.draw(p,
@@ -781,6 +789,7 @@ bool GroupedMedia::applyGroup(const DataMediaRange &medias) {
 			continue;
 		}
 		_parts.push_back(Part(_parent, media));
+        
 	}
 	if (_parts.empty()) {
 		return false;
