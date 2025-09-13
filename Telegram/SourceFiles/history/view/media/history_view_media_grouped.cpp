@@ -454,21 +454,20 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					if (!text.isEmpty()) {
 						const auto &geometry = part.geometry.translated(0, groupPadding.top());
 						
-						const auto captionTop = geometry.y() + geometry.height() - st::normalFont->height - st::mediaCaptionSkip;
+						// Position caption under the image on bottom left (like original behavior)
+						const auto captionTop = geometry.y() + geometry.height() + st::mediaCaptionSkip;
 						const auto captionWidth = std::min(geometry.width(), st::msgMaxWidth);
-						const auto captionLeft = geometry.x() + (geometry.width() - captionWidth) / 2;
 						
+						// Draw semi-transparent white background (like original behavior)
 						p.setPen(Qt::NoPen);
-						p.setBrush(QColor(0, 0, 0, 150)); // Semi-transparent black background
-						p.drawRoundedRect(captionLeft - st::mediaCaptionSkip, 
-										captionTop - st::mediaCaptionSkip, 
-										captionWidth + st::mediaCaptionSkip * 2, 
-										st::normalFont->height + st::mediaCaptionSkip * 2,
-										st::roundRadiusSmall, st::roundRadiusSmall);
+						p.setBrush(QColor(255, 255, 255, 180)); // Semi-transparent white background
+						p.drawRoundedRect(geometry.x(), captionTop, captionWidth, st::normalFont->height + st::mediaCaptionSkip * 2, st::roundRadiusSmall, st::roundRadiusSmall);
 						
+						// Draw black text (like original behavior)
 						p.setFont(st::normalFont);
-						p.setPen(Qt::white);
-						p.drawTextLeft(captionLeft, captionTop, width(), text, captionWidth);
+						p.setPen(Qt::black);
+						p.drawTextLeft(geometry.x() + st::mediaCaptionSkip, captionTop + st::mediaCaptionSkip, width(), text, captionWidth);
+					}
 					}
 				}
 			}
