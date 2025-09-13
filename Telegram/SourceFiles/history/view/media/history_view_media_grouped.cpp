@@ -201,9 +201,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		auto top = 0;
 		for (auto &part : _parts) {
 			const auto size = part.content->sizeForGrouping(newWidth);
-			auto itemHeight = size.height();
-			part.geometry = QRect(0, top, newWidth, itemHeight);
-			top += itemHeight;
+			part.geometry = QRect(0, top, newWidth, size.height());
+			top += size.height();
 		}
 		newHeight = top;
 	} else {
@@ -440,13 +439,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			highlightOpacity,
 			&part.cacheKey,
 			&part.cache);
-			
-		&part.cacheKey,
-		&part.cache);
-		
-	if (!part.cache.isNull()) {
-		nowCache = true;
-	}
+		if (!part.cache.isNull()) {
+			nowCache = true;
+		}
 		if (tagged || _purchasedPriceTag) {
 			fullRect = fullRect.united(part.geometry);
 		}
