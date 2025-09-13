@@ -201,7 +201,27 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		auto top = 0;
 		for (auto &part : _parts) {
 			const auto size = part.content->sizeForGrouping(newWidth);
-			const auto itemHeight = size.height();
+			auto itemHeight = size.height();
+			
+			// When caption_from_file_name is ON, add dynamic space for filename captions
+			if (GetEnhancedBool("caption_from_file_name")) {
+				const auto content = part.content.get();
+				if (content) {
+					const auto isPhoto = (content->getPhoto() != nullptr);
+					const auto document = content->getDocument();
+					const auto isVideo = document && document->isVideoFile();
+					
+					if (isPhoto || isVideo) {
+						const auto &text = part.item->originalText().text;
+						if (!text.isEmpty()) {
+							// Calculate dynamic height needed for caption text
+							const auto captionWidth = std::min(newWidth, st::msgMaxWidth);
+							const auto metrics = st::normalFont->margins(text, captionWidth);
+							itemHeight += metrics.height() + st::mediaCaptionSkip * 2;
+						}
+					}
+				}
+			}
 			
 			part.geometry = QRect(0, top, newWidth, itemHeight);
 			top += itemHeight;
