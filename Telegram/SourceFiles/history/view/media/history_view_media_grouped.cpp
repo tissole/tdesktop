@@ -22,6 +22,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_style.h"
 #include "ui/chat/message_bubble.h"
 #include "ui/text/text_options.h"
+#include "ui/text/text.h"
+#include "settings.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "layout/layout_selection.h"
@@ -439,6 +441,27 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			highlightOpacity,
 			&part.cacheKey,
 			&part.cache);
+
+		if (GetEnhancedBool("caption_from_file_name") && !part.item->emptyText()) {
+			Ui::Text::String caption(st::messageTextStyle, part.item->text(), kDefaultTextOptions);
+			const auto &partGeometry = part.geometry.translated(0, groupPadding.top());
+			const auto padding = QMargins(8, 4, 8, 4);
+			auto captionHeight = caption.countHeight(partGeometry.width() - padding.left() - padding.right()).minHeight;
+			captionHeight += padding.top() + padding.bottom();
+
+			auto captionRect = partGeometry;
+			captionRect.setTop(captionRect.bottom() - captionHeight);
+
+			p.fillRect(captionRect, QColor(255, 255, 255, 200));
+
+			p.setPen(st::black->b);
+			caption.draw(p,
+				captionRect.left() + padding.left(),
+				captionRect.top() + padding.top(),
+				captionRect.width() - padding.left() - padding.right(),
+				style::al_left);
+		}
+
 		if (!part.cache.isNull()) {
 			nowCache = true;
 		}
