@@ -446,7 +446,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			Ui::Text::String caption(st::messageTextStyle, part.item->originalText(), kDefaultTextOptions);
 			const auto &partGeometry = part.geometry.translated(0, groupPadding.top());
 			const auto padding = QMargins(8, 4, 8, 4);
-			auto captionHeight = caption.countHeight(partGeometry.width() - padding.left() - padding.right()).minHeight;
+			auto captionHeight = caption.countHeight(partGeometry.width() - padding.left() - padding.right());
 			captionHeight += padding.top() + padding.bottom();
 
 			auto captionRect = partGeometry;
