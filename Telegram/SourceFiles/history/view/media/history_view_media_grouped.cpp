@@ -443,7 +443,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cache);
 
 		if (GetEnhancedBool("caption_from_file_name") && !part.item->emptyText()) {
-			Ui::Text::String caption(st::messageTextStyle, part.item->text(), kDefaultTextOptions);
+			Ui::Text::String caption(st::messageTextStyle, part.item->originalText(), kDefaultTextOptions);
 			const auto &partGeometry = part.geometry.translated(0, groupPadding.top());
 			const auto padding = QMargins(8, 4, 8, 4);
 			auto captionHeight = caption.countHeight(partGeometry.width() - padding.left() - padding.right()).minHeight;
@@ -454,7 +454,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			p.fillRect(captionRect, QColor(255, 255, 255, 200));
 
-			p.setPen(st::black->b);
+			p.setPen(Qt::black);
 			caption.draw(p,
 				captionRect.left() + padding.left(),
 				captionRect.top() + padding.top(),
