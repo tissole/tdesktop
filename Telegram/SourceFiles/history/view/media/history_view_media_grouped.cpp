@@ -22,6 +22,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_style.h"
 #include "ui/chat/message_bubble.h"
 #include "ui/text/text_options.h"
+#include "ui/text/text.h"
+#include "settings.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "layout/layout_selection.h"
@@ -166,10 +168,20 @@ QSize GroupedMedia::countOptimalSize() {
 	auto minHeight = 0;
 	for (auto i = 0, count = int(layout.size()); i != count; ++i) {
 		const auto &item = layout[i];
-		accumulate_max(maxWidth, item.geometry.x() + item.geometry.width());
-		accumulate_max(minHeight, item.geometry.y() + item.geometry.height());
-		_parts[i].initialGeometry = item.geometry;
-		_parts[i].sides = item.sides;
+		auto &part = _parts[i];
+		part.initialGeometry = item.geometry;
+		part.sides = item.sides;
+
+		if (GetEnhancedBool("caption_from_file_name") && !part.item->originalText().empty()) {
+			Ui::Text::String caption(st::messageTextStyle, part.item->originalText(), kDefaultTextOptions);
+			const auto padding = QMargins(8, 4, 8, 4);
+			part._captionHeight = caption.countHeight(part.initialGeometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
+		} else {
+			part._captionHeight = 0;
+		}
+
+		accumulate_max(maxWidth, part.initialGeometry.x() + part.initialGeometry.width());
+		accumulate_max(minHeight, part.initialGeometry.y() + part.initialGeometry.height() + part._captionHeight);
 	}
 
 	if (_mode == Mode::Column
@@ -201,30 +213,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		auto top = 0;
 		for (auto &part : _parts) {
 			const auto size = part.content->sizeForGrouping(newWidth);
-			auto itemHeight = size.height();
-			
-			// When caption_from_file_name is ON, add dynamic space for filename captions
-			if (GetEnhancedBool("caption_from_file_name")) {
-				const auto content = part.content.get();
-				if (content) {
-					const auto isPhoto = (content->getPhoto() != nullptr);
-					const auto document = content->getDocument();
-					const auto isVideo = document && document->isVideoFile();
-					
-					if (isPhoto || isVideo) {
-						const auto &text = part.item->originalText().text;
-						if (!text.isEmpty()) {
-							// Calculate dynamic height needed for caption text
-							const auto captionWidth = std::min(newWidth, st::msgMaxWidth);
-							const auto metrics = st::normalFont->margins(text, captionWidth);
-							itemHeight += metrics.height() + st::mediaCaptionSkip * 2;
-						}
-					}
-				}
-			}
-			
-			part.geometry = QRect(0, top, newWidth, itemHeight);
-			top += itemHeight;
+			part.geometry = QRect(0, top, newWidth, size.height());
+			top += size.height();
 		}
 		newHeight = top;
 	} else {
@@ -257,7 +247,15 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				- (needBottomSkip ? spacing : 0);
 			part.geometry = QRect(left, top, width, height);
 
-			accumulate_max(newHeight, top + height);
+			if (GetEnhancedBool("caption_from_file_name") && !part.item->originalText().empty()) {
+				Ui::Text::String caption(st::messageTextStyle, part.item->originalText(), kDefaultTextOptions);
+				const auto padding = QMargins(8, 4, 8, 4);
+				part._captionHeight = caption.countHeight(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
+			} else {
+				part._captionHeight = 0;
+			}
+
+			accumulate_max(newHeight, part.geometry.y() + part.geometry.height() + part._captionHeight);
 		}
 	}
 	if (_mode == Mode::Column
@@ -452,43 +450,40 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		if (!part.cache.isNull()) {
 			wasCache = true;
 		}
+		// Calculate media geometry
+		auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
+
 		part.content->drawGrouped(
 			p,
 			partContext,
-			part.geometry.translated(0, groupPadding.top()),
+			mediaGeometry, // Pass the modified geometry
 			part.sides,
 			applyRoundingSides(rounding, part.sides),
 			highlightOpacity,
 			&part.cacheKey,
 			&part.cache);
+
+		if (GetEnhancedBool("caption_from_file_name") && part._captionHeight > 0) {
+			Ui::Text::String caption(st::messageTextStyle, part.item->originalText(), kDefaultTextOptions);
+			const auto padding = QMargins(8, 4, 8, 4);
 			
-		if (GetEnhancedBool("caption_from_file_name")) {
-			const auto content = part.content.get();
-			if (content) {
-				const auto isPhoto = (content->getPhoto() != nullptr);
-				const auto document = content->getDocument();
-				const auto isVideo = document && document->isVideoFile();
-				
-				if (isPhoto || isVideo) {
-					const auto &text = part.item->originalText().text;
-					if (!text.isEmpty()) {
-						const auto &geometry = part.geometry.translated(0, groupPadding.top());
-						
-						const auto contentHeight = part.content->sizeForGrouping(newWidth).height();
-						const auto captionTop = geometry.y() + contentHeight + st::mediaCaptionSkip;
-						const auto captionWidth = std::min(geometry.width(), st::msgMaxWidth);
-						
-						p.setPen(Qt::NoPen);
-						p.setBrush(QColor(255, 255, 255, 180)); // Semi-transparent white background
-						p.drawRoundedRect(geometry.x(), captionTop, captionWidth, st::normalFont->height + st::mediaCaptionSkip * 2, st::roundRadiusSmall, st::roundRadiusSmall);
-						
-						p.setFont(st::normalFont);
-						p.setPen(Qt::black);
-						p.drawTextLeft(geometry.x() + st::mediaCaptionSkip, captionTop + st::mediaCaptionSkip, width(), text, captionWidth);
-					}
-				}
-			}
+			auto captionRect = QRect(
+				mediaGeometry.left(),
+				mediaGeometry.bottom() + 1,
+				mediaGeometry.width(),
+				part._captionHeight
+			);
+
+			p.fillRect(captionRect, QColor(255, 255, 255, 128));
+
+			p.setPen(Qt::black);
+			caption.draw(p,
+				captionRect.left() + padding.left(),
+				captionRect.top() + padding.top(),
+				captionRect.width() - padding.left() - padding.right(),
+				style::al_left);
 		}
+
 		if (!part.cache.isNull()) {
 			nowCache = true;
 		}
@@ -808,6 +803,7 @@ bool GroupedMedia::applyGroup(const DataMediaRange &medias) {
 			continue;
 		}
 		_parts.push_back(Part(_parent, media));
+        
 	}
 	if (_parts.empty()) {
 		return false;
