@@ -152,8 +152,9 @@ QSize GroupedMedia::countOptimalSize() {
 	auto index = 0;
 	for (const auto &part : _parts) {
 		const auto last = (++index == _parts.size());
-		sizes.push_back(
-			part.content->sizeForGroupingOptimal(maxWidth, last)).grown(0, part._captionHeight));
+		auto size = part.content->sizeForGroupingOptimal(maxWidth, last);
+		size.setHeight(size.height() + part._captionHeight);
+		sizes.push_back(size);
 	}
 
 	const auto layout = (_mode == Mode::Grid)
@@ -170,7 +171,7 @@ QSize GroupedMedia::countOptimalSize() {
 		const auto &item = layout[i];
 		accumulate_max(maxWidth, item.geometry.x() + item.geometry.width());
 		accumulate_max(minHeight, item.geometry.y() + item.geometry.height());
-		_parts[i].initialGeometry = item.geometry.grown(0, _parts[i]._captionHeight);
+		_parts[i].initialGeometry = item.geometry.adjusted(0, 0, 0, _parts[i]._captionHeight);
 		_parts[i].sides = item.sides;
 	}
 
