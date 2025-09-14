@@ -163,42 +163,13 @@ QSize GroupedMedia::countOptimalSize() {
 		: LayoutPlaylist(sizes);
 	Assert(layout.size() == _parts.size());
 
-	std::map<int, std::vector<int>> rows;
-	for (auto i = 0; i != _parts.size(); ++i) {
-		_parts[i].initialGeometry = layout[i].geometry;
-		_parts[i].sides = layout[i].sides;
-		rows[layout[i].geometry.y()].push_back(i);
-	}
-
-	auto y = 0.;
-	const auto spacing = (_mode == Mode::Grid) ? st::historyGroupSkip : 0.;
-	for (auto const& [rowY, indices] : rows) {
-		auto maxMediaHeight = 0.;
-		auto maxCaptionHeight = 0.;
-		for (const auto i : indices) {
-			auto &part = _parts[i];
-			accumulate_max(maxMediaHeight, float64(part.initialGeometry.height()));
-			const auto originalText = part.item->originalText();
-			if ((_mode == Mode::Grid) && GetEnhancedBool("caption_from_file_name") && !originalText.empty()) {
-				Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
-				const auto padding = QMargins(8, 4, 8, 4);
-				part._captionHeight = caption.countHeight(part.initialGeometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
-			} else {
-				part._captionHeight = 0;
-			}
-			accumulate_max(maxCaptionHeight, float64(part._captionHeight));
-		}
-		const auto rowHeight = maxMediaHeight + maxCaptionHeight;
-		for (const auto i : indices) {
-			_parts[i].initialGeometry.setY(y);
-			_parts[i].initialGeometry.setHeight(maxMediaHeight);
-		}
-		y += rowHeight + spacing;
-	}
-
-	auto minHeight = y > 0 ? (y - spacing) : 0;
-	for (auto i = 0; i != _parts.size(); ++i) {
-		accumulate_max(maxWidth, _parts[i].initialGeometry.x() + _parts[i].initialGeometry.width());
+	auto minHeight = 0;
+	for (auto i = 0, count = int(layout.size()); i != count; ++i) {
+		const auto &item = layout[i];
+		accumulate_max(maxWidth, item.geometry.x() + item.geometry.width());
+		accumulate_max(minHeight, item.geometry.y() + item.geometry.height());
+		_parts[i].initialGeometry = item.geometry;
+		_parts[i].sides = item.sides;
 	}
 
 	if (_mode == Mode::Column
@@ -218,7 +189,7 @@ QSize GroupedMedia::countOptimalSize() {
 	const auto groupPadding = groupedPadding();
 	minHeight += groupPadding.top() + groupPadding.bottom();
 
-	return { maxWidth, int(base::SafeRound(minHeight)) };
+	return { maxWidth, minHeight };
 }
 
 QSize GroupedMedia::countCurrentSize(int newWidth) {
@@ -235,52 +206,38 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		}
 		newHeight = top;
 	} else {
+		const auto initialSpacing = st::historyGroupSkip;
 		const auto factor = newWidth / float64(maxWidth());
-		const auto scale = [&](float64 value) {
-			return value * factor;
+		const auto scale = [&](int value) {
+			return int(base::SafeRound(value * factor));
 		};
+		const auto spacing = scale(initialSpacing);
+		for (auto &part : _parts) {
+			const auto sides = part.sides;
+			const auto initialGeometry = part.initialGeometry;
+			const auto needRightSkip = !(sides & RectPart::Right);
+			const auto needBottomSkip = !(sides & RectPart::Bottom);
+			const auto initialLeft = initialGeometry.x();
+			const auto initialTop = initialGeometry.y();
+			const auto initialRight = initialLeft
+				+ initialGeometry.width()
+				+ (needRightSkip ? initialSpacing : 0);
+			const auto initialBottom = initialTop
+				+ initialGeometry.height()
+				+ (needBottomSkip ? initialSpacing : 0);
+			const auto left = scale(initialLeft);
+			const auto top = scale(initialTop);
+			const auto width = scale(initialRight)
+				- left
+				- (needRightSkip ? spacing : 0);
+			const auto height = scale(initialBottom)
+				- top
+				- (needBottomSkip ? spacing : 0);
+			part.geometry = QRect(left, top, width, height);
 
-		std::map<int, std::vector<int>> rows;
-		for (auto i = 0; i != _parts.size(); ++i) {
-			rows[_parts[i].initialGeometry.y()].push_back(i);
+			accumulate_max(newHeight, top + height);
 		}
-
-		auto y = 0.;
-		const auto spacing = scale((_mode == Mode::Grid) ? st::historyGroupSkip : 0.);
-		for (auto const& [rowY, indices] : rows) {
-			auto maxMediaHeight = 0.;
-			auto maxCaptionHeight = 0.;
-			for (const auto i : indices) {
-				auto &part = _parts[i];
-				const auto initial = part.initialGeometry;
-				const auto sides = part.sides;
-				const auto needRightSkip = !(sides & RectPart::Right);
-				const auto left = scale(initial.x());
-				const auto width = scale(initial.x() + initial.width() + (needRightSkip ? spacing : 0))
-					- left
-					- (needRightSkip ? scale(spacing) : 0);
-				part.geometry = QRect(left, y, width, scale(initial.height()));
-				accumulate_max(maxMediaHeight, float64(part.geometry.height()));
-
-				const auto originalText = part.item->originalText();
-				if ((_mode == Mode::Grid) && GetEnhancedBool("caption_from_file_name") && !originalText.empty()) {
-					Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
-					const auto padding = QMargins(8, 4, 8, 4);
-					part._captionHeight = caption.countHeight(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
-				} else {
-					part._captionHeight = 0;
-				}
-				accumulate_max(maxCaptionHeight, float64(part._captionHeight));
-			}
-			const auto rowHeight = maxMediaHeight + maxCaptionHeight;
-			for (const auto i : indices) {
-				_parts[i].geometry.setY(y + (maxMediaHeight - _parts[i].geometry.height()));
-			}
-			y += rowHeight + spacing;
-		}
-		newHeight = (y > 0) ? (y - spacing) : 0;
 	}
-
 	if (_mode == Mode::Column
 		&& isBubbleBottom()
 		&& _parts.back().item->emptyText()) {
@@ -298,7 +255,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 	const auto groupPadding = groupedPadding();
 	newHeight += groupPadding.top() + groupPadding.bottom();
 
-	return { newWidth, int(base::SafeRound(newHeight)) };
+	return { newWidth, newHeight };
 }
 
 void GroupedMedia::refreshParentId(
@@ -473,32 +430,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		if (!part.cache.isNull()) {
 			wasCache = true;
 		}
-		if ((_mode == Mode::Grid) && GetEnhancedBool("caption_from_file_name") && part._captionHeight > 0) {
-			const auto originalText = part.item->originalText();
-			Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
-			const auto padding = QMargins(8, 4, 8, 4);
-			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
-			
-			auto captionRect = QRect(
-				mediaGeometry.left(),
-				mediaGeometry.bottom() + 1,
-				mediaGeometry.width(),
-				part._captionHeight
-			);
-
-			const auto oldOpacity = p.opacity();
-			p.setOpacity(oldOpacity * 0.5);
-			p.fillRect(captionRect, Qt::white);
-			p.setOpacity(oldOpacity);
-
-			p.setPen(Qt::black);
-			caption.draw(p,
-				captionRect.left() + padding.left(),
-				captionRect.top() + padding.top(),
-				captionRect.width() - padding.left() - padding.right(),
-				style::al_left);
-		}
-
 		part.content->drawGrouped(
 			p,
 			partContext,
