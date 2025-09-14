@@ -77,6 +77,18 @@ GroupedMedia::GroupedMedia(
 	const auto result = applyGroup(truncated);
 
 	Ensures(result);
+
+	if (GetEnhancedBool("caption_from_file_name")) {
+		const auto padding = QMargins(8, 4, 8, 4);
+		const auto height = st::messageTextStyle.font->height
+			+ padding.top()
+			+ padding.bottom();
+		for (auto &part : _parts) {
+			if (!part.item->originalText().isEmpty()) {
+				part._captionHeight = height;
+			}
+		}
+	}
 }
 
 GroupedMedia::GroupedMedia(
@@ -91,6 +103,18 @@ GroupedMedia::GroupedMedia(
 	const auto result = applyGroup(medias);
 
 	Ensures(result);
+
+	if (GetEnhancedBool("caption_from_file_name")) {
+		const auto padding = QMargins(8, 4, 8, 4);
+		const auto height = st::messageTextStyle.font->height
+			+ padding.top()
+			+ padding.bottom();
+		for (auto &part : _parts) {
+			if (!part.item->originalText().isEmpty()) {
+				part._captionHeight = height;
+			}
+		}
+	}
 }
 
 GroupedMedia::~GroupedMedia() {
@@ -456,7 +480,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			
 			auto captionRect = QRect(
 				partGeometry.left(),
-				partGeometry.bottom(),
+				partGeometry.bottom() - part._captionHeight + 1,
 				partGeometry.width(),
 				part._captionHeight
 			);
