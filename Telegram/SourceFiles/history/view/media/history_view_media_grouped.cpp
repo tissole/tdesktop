@@ -77,6 +77,18 @@ GroupedMedia::GroupedMedia(
 	const auto result = applyGroup(truncated);
 
 	Ensures(result);
+
+	if (GetEnhancedBool("caption_from_file_name")) {
+		const auto padding = QMargins(8, 4, 8, 4);
+		const auto height = st::messageTextStyle.font->height
+			+ padding.top()
+			+ padding.bottom();
+		for (auto &part : _parts) {
+			if (!part.item->originalText().empty()) {
+				part._captionHeight = height;
+			}
+		}
+	}
 }
 
 GroupedMedia::GroupedMedia(
@@ -91,6 +103,18 @@ GroupedMedia::GroupedMedia(
 	const auto result = applyGroup(medias);
 
 	Ensures(result);
+
+	if (GetEnhancedBool("caption_from_file_name")) {
+		const auto padding = QMargins(8, 4, 8, 4);
+		const auto height = st::messageTextStyle.font->height
+			+ padding.top()
+			+ padding.bottom();
+		for (auto &part : _parts) {
+			if (!part.item->originalText().empty()) {
+				part._captionHeight = height;
+			}
+		}
+	}
 }
 
 GroupedMedia::~GroupedMedia() {
@@ -152,8 +176,9 @@ QSize GroupedMedia::countOptimalSize() {
 	auto index = 0;
 	for (const auto &part : _parts) {
 		const auto last = (++index == _parts.size());
-		sizes.push_back(
-			part.content->sizeForGroupingOptimal(maxWidth, last));
+		auto size = part.content->sizeForGroupingOptimal(maxWidth, last);
+		size.setHeight(size.height() + part._captionHeight);
+		sizes.push_back(size);
 	}
 
 	const auto layout = (_mode == Mode::Grid)
@@ -168,20 +193,10 @@ QSize GroupedMedia::countOptimalSize() {
 	auto minHeight = 0;
 	for (auto i = 0, count = int(layout.size()); i != count; ++i) {
 		const auto &item = layout[i];
-		auto &part = _parts[i];
-		part.initialGeometry = item.geometry;
-		part.sides = item.sides;
-
-		if (GetEnhancedBool("caption_from_file_name") && !part.item->originalText().isEmpty()) {
-			Ui::Text::String caption(st::messageTextStyle, part.item->originalText(), kDefaultTextOptions);
-			const auto padding = QMargins(8, 4, 8, 4);
-			part._captionHeight = caption.height(part.initialGeometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
-		} else {
-			part._captionHeight = 0;
-		}
-
-		accumulate_max(maxWidth, part.initialGeometry.x() + part.initialGeometry.width());
-		accumulate_max(minHeight, part.initialGeometry.y() + part.initialGeometry.height() + part._captionHeight);
+		accumulate_max(maxWidth, item.geometry.x() + item.geometry.width());
+		accumulate_max(minHeight, item.geometry.y() + item.geometry.height());
+		_parts[i].initialGeometry = item.geometry.adjusted(0, 0, 0, _parts[i]._captionHeight);
+		_parts[i].sides = item.sides;
 	}
 
 	if (_mode == Mode::Column
@@ -245,17 +260,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			const auto height = scale(initialBottom)
 				- top
 				- (needBottomSkip ? spacing : 0);
-			part.geometry = QRect(left, top, width, height);
+			part.geometry = QRect(left, top, width, height + scale(part._captionHeight));
 
-			if (GetEnhancedBool("caption_from_file_name") && !part.item->originalText().isEmpty()) {
-				Ui::Text::String caption(st::messageTextStyle, part.item->originalText(), kDefaultTextOptions);
-				const auto padding = QMargins(8, 4, 8, 4);
-				part._captionHeight = caption.height(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
-			} else {
-				part._captionHeight = 0;
-			}
-
-			accumulate_max(newHeight, part.geometry.y() + part.geometry.height() + part._captionHeight);
+			accumulate_max(newHeight, top + height);
 		}
 	}
 	if (_mode == Mode::Column
@@ -452,6 +459,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		}
 		// Calculate media geometry
 		auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
+		if (GetEnhancedBool("caption_from_file_name") && part._captionHeight > 0) {
+			mediaGeometry.setHeight(mediaGeometry.height() - part._captionHeight);
+		}
 
 		part.content->drawGrouped(
 			p,
@@ -465,12 +475,13 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 		if (GetEnhancedBool("caption_from_file_name") && part._captionHeight > 0) {
 			Ui::Text::String caption(st::messageTextStyle, part.item->originalText(), kDefaultTextOptions);
+			const auto &partGeometry = part.geometry.translated(0, groupPadding.top());
 			const auto padding = QMargins(8, 4, 8, 4);
 			
 			auto captionRect = QRect(
-				mediaGeometry.left(),
-				mediaGeometry.bottom() + 1,
-				mediaGeometry.width(),
+				partGeometry.left(),
+				partGeometry.bottom() - part._captionHeight + 1,
+				partGeometry.width(),
 				part._captionHeight
 			);
 
