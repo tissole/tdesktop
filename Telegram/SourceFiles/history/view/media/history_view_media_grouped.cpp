@@ -5,6 +5,7 @@ the official desktop application for the Telegram messaging service.
 For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
+#include "ui/click_handler.h"
 #include "history/view/media/history_view_media_grouped.h"
 
 #include "history/history_item_components.h"
@@ -430,6 +431,17 @@ void GroupedMedia::drawHighlight(
 }
 
 void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
+	auto hoveredPartIndex = -1;
+	if (const auto link = context.activeLink) {
+		if (const auto url = dynamic_cast<const UrlClickHandler*>(link.get())) {
+			const auto urlString = url->url();
+			if (urlString.startsWith(qstr("internal:grouped_part_"))) {
+				hoveredPartIndex = urlString.mid(
+					qstr("internal:grouped_part_").length()).toInt();
+			}
+		}
+	}
+
 	auto wasCache = false;
 	auto nowCache = false;
 	const auto groupPadding = groupedPadding();
@@ -473,11 +485,22 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		if (!part.cache.isNull()) {
 			wasCache = true;
 		}
+
+		part.content->drawGrouped(
+			p,
+			partContext,
+			part.geometry.translated(0, groupPadding.top()),
+			part.sides,
+			applyRoundingSides(rounding, part.sides),
+			highlightOpacity,
+			&part.cacheKey,
+			&part.cache);
+
 		if ((_mode == Mode::Grid) && GetEnhancedBool("caption_from_file_name") && part._captionHeight > 0) {
 			const auto originalText = part.item->originalText();
 			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
 
-			const auto isHovered = (context.hoveredItemId == part.item->fullId());
+			const auto isHovered = (i == hoveredPartIndex);
 
 			QString textToDraw;
 			if (isHovered) {
@@ -518,15 +541,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				style::al_left);
 		}
 
-		part.content->drawGrouped(
-			p,
-			partContext,
-			part.geometry.translated(0, groupPadding.top()),
-			part.sides,
-			applyRoundingSides(rounding, part.sides),
-			highlightOpacity,
-			&part.cacheKey,
-			&part.cache);
 		if (!part.cache.isNull()) {
 			nowCache = true;
 		}
@@ -573,7 +587,8 @@ TextState GroupedMedia::getPartState(
 		QPoint point,
 		StateRequest request) const {
 	auto shift = 0;
-	for (const auto &part : _parts) {
+	for (auto i = 0; i != _parts.size(); ++i) {
+		const auto &part = _parts[i];
 		if (part.geometry.contains(point)) {
 			auto result = part.content->getStateGrouped(
 				part.geometry,
@@ -582,6 +597,10 @@ TextState GroupedMedia::getPartState(
 				request);
 			result.symbol += shift;
 			result.itemId = part.item->fullId();
+			if (!result.link && result.itemId && _mode == Mode::Grid) {
+				result.link = std::make_shared<UrlClickHandler>(
+					QString("internal:grouped_part_%1").arg(i));
+			}
 			return result;
 		}
 		shift += part.content->fullSelectionLength();
