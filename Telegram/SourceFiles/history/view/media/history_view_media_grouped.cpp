@@ -508,9 +508,19 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				part._captionHeight
 			);
 
-			p.fillRect(captionRect, QColor(0, 0, 0, 128));
+			QPainterPath path;
+			path.addRoundedRect(captionRect, 6, 6);
 
-			p.setPen(Qt::white);
+			QLinearGradient grad(captionRect.topLeft(), captionRect.bottomLeft());
+			grad.setColorAt(0.0, QColor(255, 255, 255, 90));
+			grad.setColorAt(1.0, QColor(255, 255, 255, 30));
+			p.fillPath(path, grad);
+
+			QPen borderPen(QColor(255, 255, 255, 180), 1.5);
+			p.setPen(borderPen);
+			p.drawPath(path);
+
+			p.setPen(Qt::black);
 			caption.draw(p,
 				captionRect.left() + padding.left(),
 				captionRect.top() + padding.top(),
