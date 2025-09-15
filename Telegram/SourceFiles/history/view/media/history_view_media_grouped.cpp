@@ -477,7 +477,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto originalText = part.item->originalText();
 			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
 
-			const auto isHovered = mediaGeometry.contains(context.point);
+			const auto isHovered = (context.hoveredItemId == part.item->fullId());
 
 			QString textToDraw;
 			if (isHovered) {
