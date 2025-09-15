@@ -492,7 +492,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
 			const auto padding = QMargins(8, 0, 8, 0);
 			const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
-			if (fullCaption.countHeight(textWidth) > st::messageTextStyle.font->height) {
+			if (fullCaption.maxWidth() > textWidth) {
 				QFontMetrics metrics(st::messageTextStyle.font);
 				textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
 			} else {
@@ -508,13 +508,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				part._captionHeight
 			);
 
-			p.setCompositionMode(QPainter::CompositionMode_SourceOver);
-			const auto oldOpacity = p.opacity();
-			p.setOpacity(oldOpacity * 0.5);
-			p.fillRect(captionRect, Qt::white);
-			p.setOpacity(oldOpacity);
+			p.fillRect(captionRect, QColor(0, 0, 0, 128));
 
-			p.setPen(Qt::black);
+			p.setPen(Qt::white);
 			caption.draw(p,
 				captionRect.left() + padding.left(),
 				captionRect.top() + padding.top(),
@@ -584,7 +580,7 @@ TextState GroupedMedia::getPartState(
 					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
 					const auto padding = QMargins(8, 0, 8, 0);
 					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
-					if (fullCaption.countHeight(textWidth) > st::messageTextStyle.font->height) {
+					if (fullCaption.maxWidth() > textWidth) {
 						result.customTooltip = true;
 						result.customTooltipText = originalText.text;
 					}
