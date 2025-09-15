@@ -247,7 +247,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 	}
 	if (_mode == Mode::Column
 		&& isBubbleBottom()
-		&& _parts.back().item->emptyText()) {
+		&& _parts.back().item->emptyText()
+		&& !GetEnhancedBool("caption_from_file_name")) { // Don't add extra space when caption setting is ON
 		const auto item = _parent->data();
 		const auto msgsigned = item->Get<HistoryMessageSigned>();
 		const auto views = item->Get<HistoryMessageViews>();
