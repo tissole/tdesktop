@@ -49,7 +49,12 @@ std::vector<Ui::GroupMediaLayout> LayoutPlaylist(
 		top += size.height();
 	}
 	result.front().sides |= RectPart::Top;
-	result.back().sides |= RectPart::Bottom;
+	// When caption_from_file_name is ON, filename captions are drawn directly on image (no extra borders needed)
+	// When caption_from_file_name is OFF, use original Telegram behavior
+	if (!GetEnhancedBool("caption_from_file_name")) {
+		result.back().sides |= RectPart::Bottom;
+	}
+	// When caption_from_file_name is ON, no extra borders for any items
 	return result;
 }
 
@@ -257,6 +262,13 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 	const auto groupPadding = groupedPadding();
 	newHeight += groupPadding.top() + groupPadding.bottom();
 	
+	if (GetEnhancedBool("caption_from_file_name")) {
+		// No extra height needed when caption setting is ON - captions drawn on existing space
+	} else {
+		// When caption_from_file_name is OFF, use original Telegram behavior (no extra space)
+		// Original implementation doesn't add extra height for captions
+	}
+
 	return { newWidth, newHeight };
 }
 
@@ -288,7 +300,16 @@ Ui::BubbleRounding GroupedMedia::applyRoundingSides(
 
 QMargins GroupedMedia::groupedPadding() const {
 	if (_mode != Mode::Column) {
-		return QMargins();
+		const auto firstHasCaption = !_parts.empty() && !_parts.front().item->emptyText();
+		const auto addToBottom = firstHasCaption ? st::msgPadding.bottom() : 0;
+		const auto normal = st::msgFileLayout.padding;
+		const auto grouped = st::msgFileLayoutGrouped.padding;
+		const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+		return QMargins(
+			0,
+			(normal.top() - grouped.top()) - topMinus,
+			0,
+			(normal.bottom() - grouped.bottom()) + addToBottom);
 	}
 	const auto normal = st::msgFileLayout.padding;
 	const auto grouped = st::msgFileLayoutGrouped.padding;
@@ -442,7 +463,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 			
+		// Draw individual file caption for this part if caption_from_file_name is enabled
 		if (GetEnhancedBool("caption_from_file_name")) {
+			// Only draw captions for photo/video files
 			const auto content = part.content.get();
 			if (content) {
 				const auto isPhoto = (content->getPhoto() != nullptr);
@@ -450,14 +473,17 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto isVideo = document && document->isVideoFile();
 				
 				if (isPhoto || isVideo) {
+					// Get the individual file caption from the part's item
 					const auto &text = part.item->originalText().text;
 					if (!text.isEmpty()) {
 						const auto &geometry = part.geometry.translated(0, groupPadding.top());
 						
+						// Draw caption at the bottom center of the image/video thumbnail
 						const auto captionTop = geometry.y() + geometry.height() - st::normalFont->height - st::mediaCaptionSkip;
 						const auto captionWidth = std::min(geometry.width(), st::msgMaxWidth);
 						const auto captionLeft = geometry.x() + (geometry.width() - captionWidth) / 2;
 						
+						// Draw semi-transparent background for better visibility on all photo colors
 						p.setPen(Qt::NoPen);
 						p.setBrush(QColor(0, 0, 0, 150)); // Semi-transparent black background
 						p.drawRoundedRect(captionLeft - st::mediaCaptionSkip, 
@@ -466,6 +492,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 										st::normalFont->height + st::mediaCaptionSkip * 2,
 										st::roundRadiusSmall, st::roundRadiusSmall);
 						
+						// Draw white text for better contrast against dark backgrounds
 						p.setFont(st::normalFont);
 						p.setPen(Qt::white);
 						p.drawTextLeft(captionLeft, captionTop, width(), text, captionWidth);
