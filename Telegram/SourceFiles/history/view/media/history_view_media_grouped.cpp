@@ -585,8 +585,8 @@ TextState GroupedMedia::getPartState(
 					const auto padding = QMargins(8, 0, 8, 0);
 					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
 					if (fullCaption.countHeight(textWidth) > st::messageTextStyle.font->height) {
-						result.customTooltip = originalText.text;
-						result.customTooltipLink = result.link;
+						result.customTooltip = true;
+						result.customTooltipText = originalText.text;
 					}
 				}
 			}
