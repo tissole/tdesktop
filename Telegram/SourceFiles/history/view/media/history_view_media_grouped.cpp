@@ -5,7 +5,6 @@ the official desktop application for the Telegram messaging service.
 For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
-#include "ui/click_handler.h"
 #include "history/view/media/history_view_media_grouped.h"
 
 #include "history/history_item_components.h"
@@ -431,17 +430,6 @@ void GroupedMedia::drawHighlight(
 }
 
 void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
-	auto hoveredPartIndex = -1;
-	if (const auto link = context.activeLink) {
-		if (const auto url = dynamic_cast<const UrlClickHandler*>(link.get())) {
-			const auto urlString = url->url();
-			if (urlString.startsWith(qstr("internal:grouped_part_"))) {
-				hoveredPartIndex = urlString.mid(
-					qstr("internal:grouped_part_").length()).toInt();
-			}
-		}
-	}
-
 	auto wasCache = false;
 	auto nowCache = false;
 	const auto groupPadding = groupedPadding();
@@ -500,25 +488,18 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto originalText = part.item->originalText();
 			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
 
-			const auto isHovered = (i == hoveredPartIndex);
-
 			QString textToDraw;
-			if (isHovered) {
-				textToDraw = originalText.text;
+			Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+			const auto padding = QMargins(8, 0, 8, 0);
+			const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
+			if (fullCaption.countHeight(textWidth) > st::messageTextStyle.font->height) {
+				QFontMetrics metrics(st::messageTextStyle.font);
+				textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
 			} else {
-				Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
-				const auto padding = QMargins(8, 0, 8, 0);
-				const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
-				if (fullCaption.countHeight(textWidth) > st::messageTextStyle.font->height) {
-					QFontMetrics metrics(st::messageTextStyle.font);
-					textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
-				} else {
-					textToDraw = originalText.text;
-				}
+				textToDraw = originalText.text;
 			}
 
 			Ui::Text::String caption(st::messageTextStyle, { textToDraw });
-			const auto padding = QMargins(8, 0, 8, 0);
 			
 			auto captionRect = QRect(
 				mediaGeometry.left(),
@@ -587,8 +568,7 @@ TextState GroupedMedia::getPartState(
 		QPoint point,
 		StateRequest request) const {
 	auto shift = 0;
-	for (auto i = 0; i != _parts.size(); ++i) {
-		const auto &part = _parts[i];
+	for (const auto &part : _parts) {
 		if (part.geometry.contains(point)) {
 			auto result = part.content->getStateGrouped(
 				part.geometry,
@@ -597,10 +577,20 @@ TextState GroupedMedia::getPartState(
 				request);
 			result.symbol += shift;
 			result.itemId = part.item->fullId();
-			if (!result.link && result.itemId && _mode == Mode::Grid) {
-				result.link = std::make_shared<UrlClickHandler>(
-					QString("internal:grouped_part_%1").arg(i));
+
+			if (result.itemId && _mode == Mode::Grid && GetEnhancedBool("caption_from_file_name")) {
+				const auto originalText = part.item->originalText();
+				if (!originalText.empty()) {
+					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+					const auto padding = QMargins(8, 0, 8, 0);
+					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
+					if (fullCaption.countHeight(textWidth) > st::messageTextStyle.font->height) {
+						result.customTooltip = originalText.text;
+						result.customTooltipLink = result.link;
+					}
+				}
 			}
+
 			return result;
 		}
 		shift += part.content->fullSelectionLength();
