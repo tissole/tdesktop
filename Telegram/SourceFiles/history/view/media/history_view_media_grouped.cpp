@@ -201,7 +201,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		auto top = 0;
 		for (auto &part : _parts) {
 			const auto size = part.content->sizeForGrouping(newWidth);
-			auto itemHeight = size.height();
+			const auto itemHeight = size.height();
+			
 			part.geometry = QRect(0, top, newWidth, itemHeight);
 			top += itemHeight;
 		}
@@ -255,7 +256,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 	const auto groupPadding = groupedPadding();
 	newHeight += groupPadding.top() + groupPadding.bottom();
-
+	
 	return { newWidth, newHeight };
 }
 
@@ -441,12 +442,39 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 			
-		&part.cacheKey,
-		&part.cache);
-		
-	if (!part.cache.isNull()) {
-		nowCache = true;
-	}
+		if (GetEnhancedBool("caption_from_file_name")) {
+			const auto content = part.content.get();
+			if (content) {
+				const auto isPhoto = (content->getPhoto() != nullptr);
+				const auto document = content->getDocument();
+				const auto isVideo = document && document->isVideoFile();
+				
+				if (isPhoto || isVideo) {
+					const auto &text = part.item->originalText().text;
+					if (!text.isEmpty()) {
+						const auto &geometry = part.geometry.translated(0, groupPadding.top());
+						
+						// Position caption under the image on bottom left (like original behavior)
+						const auto captionTop = geometry.y() + geometry.height() + st::mediaCaptionSkip;
+						const auto captionWidth = std::min(geometry.width(), st::msgMaxWidth);
+						
+						// Draw semi-transparent white background (like original behavior)
+						p.setPen(Qt::NoPen);
+						p.setBrush(QColor(255, 255, 255, 180)); // Semi-transparent white background
+						p.drawRoundedRect(geometry.x(), captionTop, captionWidth, st::normalFont->height + st::mediaCaptionSkip * 2, st::roundRadiusSmall, st::roundRadiusSmall);
+						
+						// Draw black text (like original behavior)
+						p.setFont(st::normalFont);
+						p.setPen(Qt::black);
+						p.drawTextLeft(geometry.x() + st::mediaCaptionSkip, captionTop + st::mediaCaptionSkip, width(), text, captionWidth);
+					}
+					}
+				}
+			}
+		}
+		if (!part.cache.isNull()) {
+			nowCache = true;
+		}
 		if (tagged || _purchasedPriceTag) {
 			fullRect = fullRect.united(part.geometry);
 		}
