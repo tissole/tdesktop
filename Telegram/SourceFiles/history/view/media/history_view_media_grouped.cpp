@@ -181,7 +181,7 @@ QSize GroupedMedia::countOptimalSize() {
 			const auto originalText = part.item->originalText();
 			if ((_mode == Mode::Grid) && GetEnhancedBool("caption_from_file_name") && !originalText.empty()) {
 				Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
-				const auto padding = QMargins(8, 4, 8, 4);
+				const auto padding = QMargins(8, 0, 8, 0);
 				part._captionHeight = caption.countHeight(part.initialGeometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
 			} else {
 				part._captionHeight = 0;
@@ -265,7 +265,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				const auto originalText = part.item->originalText();
 				if ((_mode == Mode::Grid) && GetEnhancedBool("caption_from_file_name") && !originalText.empty()) {
 					Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
-					const auto padding = QMargins(8, 4, 8, 4);
+					const auto padding = QMargins(8, 0, 8, 0);
 					part._captionHeight = caption.countHeight(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
 				} else {
 					part._captionHeight = 0;
@@ -475,9 +475,27 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		}
 		if ((_mode == Mode::Grid) && GetEnhancedBool("caption_from_file_name") && part._captionHeight > 0) {
 			const auto originalText = part.item->originalText();
-			Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
-			const auto padding = QMargins(8, 4, 8, 4);
 			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
+
+			const auto isHovered = mediaGeometry.contains(context.point);
+
+			QString textToDraw;
+			if (isHovered) {
+				textToDraw = originalText.text;
+			} else {
+				Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+				const auto padding = QMargins(8, 0, 8, 0);
+				const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
+				if (fullCaption.countHeight(textWidth) > st::messageTextStyle.font->height) {
+					QFontMetrics metrics(st::messageTextStyle.font);
+					textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
+				} else {
+					textToDraw = originalText.text;
+				}
+			}
+
+			Ui::Text::String caption(st::messageTextStyle, { textToDraw });
+			const auto padding = QMargins(8, 0, 8, 0);
 			
 			auto captionRect = QRect(
 				mediaGeometry.left(),
@@ -486,6 +504,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				part._captionHeight
 			);
 
+			p.setCompositionMode(QPainter::CompositionMode_SourceOver);
 			const auto oldOpacity = p.opacity();
 			p.setOpacity(oldOpacity * 0.5);
 			p.fillRect(captionRect, Qt::white);
