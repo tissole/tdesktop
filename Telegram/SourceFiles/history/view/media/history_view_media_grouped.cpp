@@ -49,12 +49,7 @@ std::vector<Ui::GroupMediaLayout> LayoutPlaylist(
 		top += size.height();
 	}
 	result.front().sides |= RectPart::Top;
-	// When caption_from_file_name is ON, filename captions are drawn directly on image (no extra borders needed)
-	// When caption_from_file_name is OFF, use original Telegram behavior
-	if (!GetEnhancedBool("caption_from_file_name")) {
-		result.back().sides |= RectPart::Bottom;
-	}
-	// When caption_from_file_name is ON, no extra borders for any items
+	result.back().sides |= RectPart::Bottom;
 	return result;
 }
 
@@ -168,13 +163,42 @@ QSize GroupedMedia::countOptimalSize() {
 		: LayoutPlaylist(sizes);
 	Assert(layout.size() == _parts.size());
 
-	auto minHeight = 0;
-	for (auto i = 0, count = int(layout.size()); i != count; ++i) {
-		const auto &item = layout[i];
-		accumulate_max(maxWidth, item.geometry.x() + item.geometry.width());
-		accumulate_max(minHeight, item.geometry.y() + item.geometry.height());
-		_parts[i].initialGeometry = item.geometry;
-		_parts[i].sides = item.sides;
+	std::map<int, std::vector<int>> rows;
+	for (auto i = 0; i != _parts.size(); ++i) {
+		_parts[i].initialGeometry = layout[i].geometry;
+		_parts[i].sides = layout[i].sides;
+		rows[layout[i].geometry.y()].push_back(i);
+	}
+
+	auto y = 0.;
+	const auto spacing = (_mode == Mode::Grid) ? st::historyGroupSkip : 0.;
+	for (auto const& [rowY, indices] : rows) {
+		auto maxMediaHeight = 0.;
+		auto maxCaptionHeight = 0.;
+		for (const auto i : indices) {
+			auto &part = _parts[i];
+			accumulate_max(maxMediaHeight, float64(part.initialGeometry.height()));
+			const auto originalText = part.item->originalText();
+			if ((_mode == Mode::Grid) && GetEnhancedBool("caption_from_file_name") && !originalText.empty()) {
+				Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
+				const auto padding = QMargins(8, 4, 8, 4);
+				part._captionHeight = caption.countHeight(part.initialGeometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
+			} else {
+				part._captionHeight = 0;
+			}
+			accumulate_max(maxCaptionHeight, float64(part._captionHeight));
+		}
+		const auto rowHeight = maxMediaHeight + maxCaptionHeight;
+		for (const auto i : indices) {
+			_parts[i].initialGeometry.setY(y);
+			_parts[i].initialGeometry.setHeight(maxMediaHeight);
+		}
+		y += rowHeight + spacing;
+	}
+
+	auto minHeight = y > 0 ? (y - spacing) : 0;
+	for (auto i = 0; i != _parts.size(); ++i) {
+		accumulate_max(maxWidth, _parts[i].initialGeometry.x() + _parts[i].initialGeometry.width());
 	}
 
 	if (_mode == Mode::Column
@@ -194,7 +218,7 @@ QSize GroupedMedia::countOptimalSize() {
 	const auto groupPadding = groupedPadding();
 	minHeight += groupPadding.top() + groupPadding.bottom();
 
-	return { maxWidth, minHeight };
+	return { maxWidth, int(base::SafeRound(minHeight)) };
 }
 
 QSize GroupedMedia::countCurrentSize(int newWidth) {
@@ -206,45 +230,57 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		auto top = 0;
 		for (auto &part : _parts) {
 			const auto size = part.content->sizeForGrouping(newWidth);
-			const auto itemHeight = size.height();
-			
-			part.geometry = QRect(0, top, newWidth, itemHeight);
-			top += itemHeight;
+			part.geometry = QRect(0, top, newWidth, size.height());
+			top += size.height();
 		}
 		newHeight = top;
 	} else {
-		const auto initialSpacing = st::historyGroupSkip;
 		const auto factor = newWidth / float64(maxWidth());
-		const auto scale = [&](int value) {
-			return int(base::SafeRound(value * factor));
+		const auto scale = [&](float64 value) {
+			return value * factor;
 		};
-		const auto spacing = scale(initialSpacing);
-		for (auto &part : _parts) {
-			const auto sides = part.sides;
-			const auto initialGeometry = part.initialGeometry;
-			const auto needRightSkip = !(sides & RectPart::Right);
-			const auto needBottomSkip = !(sides & RectPart::Bottom);
-			const auto initialLeft = initialGeometry.x();
-			const auto initialTop = initialGeometry.y();
-			const auto initialRight = initialLeft
-				+ initialGeometry.width()
-				+ (needRightSkip ? initialSpacing : 0);
-			const auto initialBottom = initialTop
-				+ initialGeometry.height()
-				+ (needBottomSkip ? initialSpacing : 0);
-			const auto left = scale(initialLeft);
-			const auto top = scale(initialTop);
-			const auto width = scale(initialRight)
-				- left
-				- (needRightSkip ? spacing : 0);
-			const auto height = scale(initialBottom)
-				- top
-				- (needBottomSkip ? spacing : 0);
-			part.geometry = QRect(left, top, width, height);
 
-			accumulate_max(newHeight, top + height);
+		std::map<int, std::vector<int>> rows;
+		for (auto i = 0; i != _parts.size(); ++i) {
+			rows[_parts[i].initialGeometry.y()].push_back(i);
 		}
+
+		auto y = 0.;
+		const auto spacing = scale((_mode == Mode::Grid) ? st::historyGroupSkip : 0.);
+		for (auto const& [rowY, indices] : rows) {
+			auto maxMediaHeight = 0.;
+			auto maxCaptionHeight = 0.;
+			for (const auto i : indices) {
+				auto &part = _parts[i];
+				const auto initial = part.initialGeometry;
+				const auto sides = part.sides;
+				const auto needRightSkip = !(sides & RectPart::Right);
+				const auto left = scale(initial.x());
+				const auto width = scale(initial.x() + initial.width() + (needRightSkip ? spacing : 0))
+					- left
+					- (needRightSkip ? scale(spacing) : 0);
+				part.geometry = QRect(left, y, width, scale(initial.height()));
+				accumulate_max(maxMediaHeight, float64(part.geometry.height()));
+
+				const auto originalText = part.item->originalText();
+				if ((_mode == Mode::Grid) && GetEnhancedBool("caption_from_file_name") && !originalText.empty()) {
+					Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
+					const auto padding = QMargins(8, 4, 8, 4);
+					part._captionHeight = caption.countHeight(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
+				} else {
+					part._captionHeight = 0;
+				}
+				accumulate_max(maxCaptionHeight, float64(part._captionHeight));
+			}
+			const auto rowHeight = maxMediaHeight + maxCaptionHeight;
+			for (const auto i : indices) {
+				_parts[i].geometry.setY(y + (maxMediaHeight - _parts[i].geometry.height()));
+			}
+			y += rowHeight + spacing;
+		}
+		newHeight = (y > 0) ? (y - spacing) : 0;
 	}
+
 	if (_mode == Mode::Column
 		&& isBubbleBottom()
 		&& _parts.back().item->emptyText()) {
@@ -261,15 +297,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 	const auto groupPadding = groupedPadding();
 	newHeight += groupPadding.top() + groupPadding.bottom();
-	
-	if (GetEnhancedBool("caption_from_file_name")) {
-		// No extra height needed when caption setting is ON - captions drawn on existing space
-	} else {
-		// When caption_from_file_name is OFF, use original Telegram behavior (no extra space)
-		// Original implementation doesn't add extra height for captions
-	}
 
-	return { newWidth, newHeight };
+	return { newWidth, int(base::SafeRound(newHeight)) };
 }
 
 void GroupedMedia::refreshParentId(
@@ -300,16 +329,7 @@ Ui::BubbleRounding GroupedMedia::applyRoundingSides(
 
 QMargins GroupedMedia::groupedPadding() const {
 	if (_mode != Mode::Column) {
-		const auto firstHasCaption = !_parts.empty() && !_parts.front().item->emptyText();
-		const auto addToBottom = firstHasCaption ? st::msgPadding.bottom() : 0;
-		const auto normal = st::msgFileLayout.padding;
-		const auto grouped = st::msgFileLayoutGrouped.padding;
-		const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-		return QMargins(
-			0,
-			(normal.top() - grouped.top()) - topMinus,
-			0,
-			(normal.bottom() - grouped.bottom()) + addToBottom);
+		return QMargins();
 	}
 	const auto normal = st::msgFileLayout.padding;
 	const auto grouped = st::msgFileLayoutGrouped.padding;
@@ -453,6 +473,32 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		if (!part.cache.isNull()) {
 			wasCache = true;
 		}
+		if ((_mode == Mode::Grid) && GetEnhancedBool("caption_from_file_name") && part._captionHeight > 0) {
+			const auto originalText = part.item->originalText();
+			Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
+			const auto padding = QMargins(8, 4, 8, 4);
+			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
+			
+			auto captionRect = QRect(
+				mediaGeometry.left(),
+				mediaGeometry.bottom() + 1,
+				mediaGeometry.width(),
+				part._captionHeight
+			);
+
+			const auto oldOpacity = p.opacity();
+			p.setOpacity(oldOpacity * 0.5);
+			p.fillRect(captionRect, Qt::white);
+			p.setOpacity(oldOpacity);
+
+			p.setPen(Qt::black);
+			caption.draw(p,
+				captionRect.left() + padding.left(),
+				captionRect.top() + padding.top(),
+				captionRect.width() - padding.left() - padding.right(),
+				style::al_left);
+		}
+
 		part.content->drawGrouped(
 			p,
 			partContext,
@@ -462,44 +508,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			highlightOpacity,
 			&part.cacheKey,
 			&part.cache);
-			
-		// Draw individual file caption for this part if caption_from_file_name is enabled
-		if (GetEnhancedBool("caption_from_file_name")) {
-			// Only draw captions for photo/video files
-			const auto content = part.content.get();
-			if (content) {
-				const auto isPhoto = (content->getPhoto() != nullptr);
-				const auto document = content->getDocument();
-				const auto isVideo = document && document->isVideoFile();
-				
-				if (isPhoto || isVideo) {
-					// Get the individual file caption from the part's item
-					const auto &text = part.item->originalText().text;
-					if (!text.isEmpty()) {
-						const auto &geometry = part.geometry.translated(0, groupPadding.top());
-						
-						// Draw caption at the bottom center of the image/video thumbnail
-						const auto captionTop = geometry.y() + geometry.height() - st::normalFont->height - st::mediaCaptionSkip;
-						const auto captionWidth = std::min(geometry.width(), st::msgMaxWidth);
-						const auto captionLeft = geometry.x() + (geometry.width() - captionWidth) / 2;
-						
-						// Draw semi-transparent background for better visibility on all photo colors
-						p.setPen(Qt::NoPen);
-						p.setBrush(QColor(0, 0, 0, 150)); // Semi-transparent black background
-						p.drawRoundedRect(captionLeft - st::mediaCaptionSkip, 
-										captionTop - st::mediaCaptionSkip, 
-										captionWidth + st::mediaCaptionSkip * 2, 
-										st::normalFont->height + st::mediaCaptionSkip * 2,
-										st::roundRadiusSmall, st::roundRadiusSmall);
-						
-						// Draw black text for better contrast
-						p.setFont(st::normalFont);
-						p.setPen(Qt::black);
-						p.drawTextLeft(captionLeft, captionTop, width(), text, captionWidth);
-					}
-				}
-			}
-		}
 		if (!part.cache.isNull()) {
 			nowCache = true;
 		}
