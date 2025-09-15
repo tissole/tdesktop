@@ -247,8 +247,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 	}
 	if (_mode == Mode::Column
 		&& isBubbleBottom()
-		&& _parts.back().item->emptyText()
-		&& !GetEnhancedBool("caption_from_file_name")) { // Don't add extra space when caption setting is ON
+		&& _parts.back().item->emptyText()) {
 		const auto item = _parent->data();
 		const auto msgsigned = item->Get<HistoryMessageSigned>();
 		const auto views = item->Get<HistoryMessageViews>();
@@ -493,9 +492,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 										st::normalFont->height + st::mediaCaptionSkip * 2,
 										st::roundRadiusSmall, st::roundRadiusSmall);
 						
-						// Draw white text for better contrast against dark backgrounds
+						// Draw black text for better contrast
 						p.setFont(st::normalFont);
-						p.setPen(Qt::white);
+						p.setPen(Qt::black);
 						p.drawTextLeft(captionLeft, captionTop, width(), text, captionWidth);
 					}
 				}
