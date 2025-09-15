@@ -488,18 +488,25 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto originalText = part.item->originalText();
 			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
 
+			const auto isHovered = (i == _hoveredPart);
+
 			QString textToDraw;
-			Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
-			const auto padding = QMargins(8, 0, 8, 0);
-			const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
-			if (fullCaption.maxWidth() > textWidth) {
-				QFontMetrics metrics(st::messageTextStyle.font);
-				textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
-			} else {
+			if (isHovered) {
 				textToDraw = originalText.text;
+			} else {
+				Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+				const auto padding = QMargins(8, 0, 8, 0);
+				const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
+				if (fullCaption.maxWidth() > textWidth) {
+					QFontMetrics metrics(st::messageTextStyle.font);
+					textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
+				} else {
+					textToDraw = originalText.text;
+				}
 			}
 
 			Ui::Text::String caption(st::messageTextStyle, { textToDraw });
+			const auto padding = QMargins(8, 0, 8, 0);
 			
 			auto captionRect = QRect(
 				mediaGeometry.left(),
@@ -583,20 +590,6 @@ TextState GroupedMedia::getPartState(
 				request);
 			result.symbol += shift;
 			result.itemId = part.item->fullId();
-
-			if (result.itemId && _mode == Mode::Grid && GetEnhancedBool("caption_from_file_name")) {
-				const auto originalText = part.item->originalText();
-				if (!originalText.empty()) {
-					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
-					const auto padding = QMargins(8, 0, 8, 0);
-					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
-					if (fullCaption.maxWidth() > textWidth) {
-						result.customTooltip = true;
-						result.customTooltipText = originalText.text;
-					}
-				}
-			}
-
 			return result;
 		}
 		shift += part.content->fullSelectionLength();
@@ -620,7 +613,22 @@ PointState GroupedMedia::pointState(QPoint point) const {
 
 TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 	const auto groupPadding = groupedPadding();
-	auto result = getPartState(point - QPoint(0, groupPadding.top()), request);
+	const auto localPoint = point - QPoint(0, groupPadding.top());
+
+	auto hoveredPart = -1;
+	for (auto i = 0; i != _parts.size(); ++i) {
+		if (_parts[i].geometry.contains(localPoint)) {
+			hoveredPart = i;
+			break;
+		}
+	}
+
+	if (_hoveredPart != hoveredPart) {
+		_hoveredPart = hoveredPart;
+		_parent->update();
+	}
+
+	auto result = getPartState(localPoint, request);
 	if (const auto tagged = lookupSpoilerTagMedia()) {
 		if (QRect(0, 0, width(), height()).contains(point)) {
 			if (auto link = tagged->spoilerTagLink()) {
