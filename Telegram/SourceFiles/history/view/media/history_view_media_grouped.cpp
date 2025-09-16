@@ -518,12 +518,10 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			QPainterPath path;
 			path.addRoundedRect(captionRect, 6, 6);
 
-			QLinearGradient grad(captionRect.topLeft(), captionRect.bottomLeft());
-			grad.setColorAt(0.0, QColor(255, 255, 255, 90));
-			grad.setColorAt(1.0, QColor(255, 255, 255, 30));
-			p.fillPath(path, grad);
+			p.setPen(Qt::NoPen);
+			p.fillPath(path, QColor(255, 255, 255, 30));
 
-			QPen borderPen(QColor(255, 255, 255, 180), 1.5);
+			QPen borderPen(QColor(255, 255, 255, 100), 1.5);
 			p.setPen(borderPen);
 			p.drawPath(path);
 
