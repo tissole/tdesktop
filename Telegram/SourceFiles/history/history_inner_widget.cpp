@@ -4581,7 +4581,7 @@ void HistoryInner::mouseActionUpdate() {
 		|| dragState.cursor == CursorState::Date
 		|| dragState.cursor == CursorState::Forwarded
 		|| dragState.customTooltip) {
-		Ui::Tooltip::Show(1000, this);
+		Ui::Tooltip::Show(300, this);
 	}
 
 	Qt::CursorShape cur = style::cur_default;
