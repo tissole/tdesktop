@@ -517,7 +517,21 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				part._captionHeight
 			);
 
-			p.fillRect(captionRect, QColor(255, 255, 255, 100));
+			QPainterPath path;
+			path.addRoundedRect(captionRect, 6, 6);
+
+			// A subtle gradient for the background to mimic lighting.
+			QLinearGradient grad(captionRect.topLeft(), captionRect.bottomLeft());
+			grad.setColorAt(0.0, QColor(255, 255, 255, 70)); // More transparent at the top
+			grad.setColorAt(1.0, QColor(255, 255, 255, 40)); // Less transparent at the bottom
+
+			p.setPen(Qt::NoPen);
+			p.fillPath(path, grad);
+
+			// A thin, lighter border to define the edge.
+			QPen borderPen(QColor(255, 255, 255, 120), 1);
+			p.setPen(borderPen);
+			p.drawPath(path);
 
 			p.setPen(Qt::black);
 			caption.draw(p,
