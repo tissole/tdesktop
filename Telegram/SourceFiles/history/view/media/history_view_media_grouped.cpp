@@ -514,12 +514,10 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				mediaGeometry.width(),
 				part._captionHeight
 			);
+			part.captionRect = captionRect;
 
 			QPainterPath path;
 			path.addRoundedRect(captionRect, 6, 6);
-
-			p.setPen(Qt::NoPen);
-			p.fillPath(path, QColor(255, 255, 255, 30));
 
 			QPen borderPen(QColor(255, 255, 255, 100), 1.5);
 			p.setPen(borderPen);
@@ -615,7 +613,8 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 
 	auto hoveredPart = -1;
 	for (auto i = 0; i != _parts.size(); ++i) {
-		if (_parts[i].geometry.contains(localPoint)) {
+		if (_parts[i].geometry.contains(localPoint)
+			|| _parts[i].captionRect.contains(localPoint)) {
 			hoveredPart = i;
 			break;
 		}

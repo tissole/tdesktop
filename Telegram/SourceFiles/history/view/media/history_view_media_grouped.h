@@ -125,6 +125,7 @@ private:
 		mutable uint64 cacheKey = 0;
 		mutable QPixmap cache;
         int _captionHeight = 0;
+		mutable QRect captionRect;
 
 	};
 
