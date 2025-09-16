@@ -565,7 +565,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				part._captionHeight
 			);
 
-			p.setPen(Qt::white);
+			p.setPen(Qt::black);
 			caption.draw(p,
 				captionRect.left() + padding.left(),
 				captionRect.top() + padding.top(),
