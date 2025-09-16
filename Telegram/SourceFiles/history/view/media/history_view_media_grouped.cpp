@@ -590,6 +590,20 @@ TextState GroupedMedia::getPartState(
 				request);
 			result.symbol += shift;
 			result.itemId = part.item->fullId();
+
+			if (result.itemId && _mode == Mode::Grid && GetEnhancedBool("caption_from_file_name")) {
+				const auto originalText = part.item->originalText();
+				if (!originalText.empty()) {
+					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+					const auto padding = QMargins(8, 0, 8, 0);
+					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
+					if (fullCaption.countHeight(textWidth) > st::messageTextStyle.font->height) {
+						result.customTooltip = originalText.text;
+						result.customTooltipLink = result.link;
+					}
+				}
+			}
+
 			return result;
 		}
 		shift += part.content->fullSelectionLength();
@@ -613,22 +627,7 @@ PointState GroupedMedia::pointState(QPoint point) const {
 
 TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 	const auto groupPadding = groupedPadding();
-	const auto localPoint = point - QPoint(0, groupPadding.top());
-
-	auto hoveredPart = -1;
-	for (auto i = 0; i != _parts.size(); ++i) {
-		if (_parts[i].geometry.contains(localPoint)) {
-			hoveredPart = i;
-			break;
-		}
-	}
-
-	if (_hoveredPart != hoveredPart) {
-		_hoveredPart = hoveredPart;
-		_parent->update();
-	}
-
-	auto result = getPartState(localPoint, request);
+	auto result = getPartState(point - QPoint(0, groupPadding.top()), request);
 	if (const auto tagged = lookupSpoilerTagMedia()) {
 		if (QRect(0, 0, width(), height()).contains(point)) {
 			if (auto link = tagged->spoilerTagLink()) {
