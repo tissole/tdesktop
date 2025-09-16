@@ -274,7 +274,16 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			}
 			const auto rowHeight = maxMediaHeight + maxCaptionHeight;
 			for (const auto i : indices) {
-				_parts[i].geometry.setY(y + (maxMediaHeight - _parts[i].geometry.height()));
+				auto &part = _parts[i];
+				part.geometry.setY(y + (maxMediaHeight - part.geometry.height()));
+				const auto mediaGeometry = part.geometry;
+				part.captionRect = (part._captionHeight > 0)
+					? QRect(
+						mediaGeometry.left(),
+						mediaGeometry.bottom() + 1,
+						mediaGeometry.width(),
+						part._captionHeight)
+					: QRect();
 			}
 			y += rowHeight + spacing;
 		}
@@ -488,8 +497,18 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto originalText = part.item->originalText();
 			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
 
+			QString textToDraw;
+			Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
 			const auto padding = QMargins(8, 0, 8, 0);
-			Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
+			const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
+			if (fullCaption.maxWidth() > textWidth) {
+				QFontMetrics metrics(st::messageTextStyle.font);
+				textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
+			} else {
+				textToDraw = originalText.text;
+			}
+
+			Ui::Text::String caption(st::messageTextStyle, { textToDraw });
 			
 			auto captionRect = QRect(
 				mediaGeometry.left(),
@@ -555,7 +574,9 @@ TextState GroupedMedia::getPartState(
 		StateRequest request) const {
 	auto shift = 0;
 	for (const auto &part : _parts) {
-		if (part.geometry.contains(point)) {
+		const auto isInside = part.geometry.contains(point)
+			|| (!part.captionRect.isEmpty() && part.captionRect.contains(point));
+		if (isInside) {
 			auto result = part.content->getStateGrouped(
 				part.geometry,
 				part.sides,
@@ -563,6 +584,23 @@ TextState GroupedMedia::getPartState(
 				request);
 			result.symbol += shift;
 			result.itemId = part.item->fullId();
+
+			if (result.itemId
+				&& _mode == Mode::Grid
+				&& GetEnhancedBool("caption_from_file_name")
+				&& !part.captionRect.isEmpty()
+				&& part.captionRect.contains(point)) {
+				const auto originalText = part.item->originalText();
+				if (!originalText.empty()) {
+					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+					const auto padding = QMargins(8, 0, 8, 0);
+					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
+					if (fullCaption.maxWidth() > textWidth) {
+						result.customTooltip = true;
+						result.customTooltipText = originalText.text;
+					}
+				}
+			}
 
 			return result;
 		}

@@ -157,7 +157,7 @@ private:
 
 	mutable std::optional<HistoryItem*> _captionItem;
 	std::vector<Part> _parts;
-	mutable int _hoveredPart = -1;
+	
 	Mode _mode = Mode::Grid;
 	bool _needBubble : 1 = false;
 	bool _purchasedPriceTag : 1 = false;
