@@ -625,7 +625,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 
 	if (_hoveredPart != hoveredPart) {
 		_hoveredPart = hoveredPart;
-		_parent->update();
+		_parent->repaint();
 	}
 
 	auto result = getPartState(localPoint, request);
