@@ -488,18 +488,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto originalText = part.item->originalText();
 			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
 
-			QString textToDraw;
-			Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
 			const auto padding = QMargins(8, 0, 8, 0);
-			const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
-			if (fullCaption.maxWidth() > textWidth) {
-				QFontMetrics metrics(st::messageTextStyle.font);
-				textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
-			} else {
-				textToDraw = originalText.text;
-			}
-
-			Ui::Text::String caption(st::messageTextStyle, { textToDraw });
+			Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
 			
 			auto captionRect = QRect(
 				mediaGeometry.left(),
@@ -573,19 +563,6 @@ TextState GroupedMedia::getPartState(
 				request);
 			result.symbol += shift;
 			result.itemId = part.item->fullId();
-
-			if (result.itemId && _mode == Mode::Grid && GetEnhancedBool("caption_from_file_name")) {
-				const auto originalText = part.item->originalText();
-				if (!originalText.empty()) {
-					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
-					const auto padding = QMargins(8, 0, 8, 0);
-					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
-					if (fullCaption.maxWidth() > textWidth) {
-						result.customTooltip = true;
-						result.customTooltipText = originalText.text;
-					}
-				}
-			}
 
 			return result;
 		}
