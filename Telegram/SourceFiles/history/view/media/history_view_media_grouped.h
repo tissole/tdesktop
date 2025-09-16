@@ -162,6 +162,12 @@ private:
 	bool _needBubble : 1 = false;
 	bool _purchasedPriceTag : 1 = false;
 
+	void drawMessageIdInfo(
+		Painter &p,
+		const PaintContext &context,
+		const QRect &itemGeometry,
+		not_null<HistoryItem*> item) const;
+
 };
 
 } // namespace HistoryView

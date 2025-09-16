@@ -26,6 +26,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/power_saving.h"
 #include "layout/layout_selection.h"
 #include "styles/style_chat.h"
+#include "styles/style_basic.h"
+#include "core/enhanced_settings.h"
 
 namespace HistoryView {
 namespace {
@@ -61,6 +63,47 @@ GroupedMedia::Part::Part(
 : item(media->parent())
 , content(media->createView(parent, item)) {
 	Assert(media->canBeGrouped());
+}
+
+void GroupedMedia::drawMessageIdInfo(
+		Painter &p,
+		const PaintContext &context,
+		const QRect &itemGeometry,
+		not_null<HistoryItem*> item) const {
+	if (!GetEnhancedBool("show_messages_id")) {
+		return;
+	}
+
+	const auto msgId = item->fullId().msg;
+	if (msgId <= 0) {
+		return;
+	}
+
+	// Create the message ID text
+	const auto msgIdText = QString::number(msgId.bare);
+	
+	// Use the same styling as image info for consistency
+	p.setFont(st::msgDateFont);
+	p.setPen(context.st->msgDateImgFg());
+
+	// Calculate text dimensions
+	const auto textWidth = st::msgDateFont->width(msgIdText);
+	const auto textHeight = st::msgDateFont->height;
+
+	// Position in the upper-right corner with the same padding as image info
+	const auto skipx = (st::msgDateImgDelta + st::msgDateImgPadding.x());
+	const auto skipy = (st::msgDateImgDelta + st::msgDateImgPadding.y());
+	const auto dateX = itemGeometry.x() + itemGeometry.width() - skipx;
+	const auto dateY = itemGeometry.y() + skipy;
+	const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
+	const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
+
+	// Draw background with the same style as image info
+	Ui::FillRoundRect(p, dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), dateW, dateH, 
+		context.st->msgDateImgBg(), context.st->msgDateImgBgCorners());
+
+	// Draw the message ID text
+	p.drawText(dateX, dateY + st::msgDateFont->ascent, msgIdText);
 }
 
 GroupedMedia::GroupedMedia(
@@ -492,6 +535,11 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			highlightOpacity,
 			&part.cacheKey,
 			&part.cache);
+
+		// Draw message ID info for each part in the grid mode (except the last one)
+		if (_mode == Mode::Grid && GetEnhancedBool("show_messages_id") && i != count - 1) {
+			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
+		}
 
 		if ((_mode == Mode::Grid) && GetEnhancedBool("caption_from_file_name") && part._captionHeight > 0) {
 			const auto originalText = part.item->originalText();
@@ -974,7 +1022,7 @@ bool GroupedMedia::needsBubble() const {
 QPoint GroupedMedia::resolveCustomInfoRightBottom() const {
 	const auto skipx = (st::msgDateImgDelta + st::msgDateImgPadding.x());
 	const auto skipy = (st::msgDateImgDelta + st::msgDateImgPadding.y());
-	return QPoint(width() - skipx, height() - skipy);
+	return QPoint(width() - skipx, skipy);
 }
 
 std::optional<PaidInformation> GroupedMedia::paidInformation() const {
