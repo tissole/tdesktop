@@ -83,8 +83,10 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto msgIdText = QString::number(msgId.bare);
 	
 	// Use the same styling as image info for consistency
+	const auto st = context.st;
+	const auto sti = context.imageStyle();
 	p.setFont(st::msgDateFont);
-	p.setPen(context.st->msgDateImgFg());
+	p.setPen(st->msgDateImgFg());
 
 	// Calculate text dimensions
 	const auto textWidth = st::msgDateFont->width(msgIdText);
@@ -100,7 +102,7 @@ void GroupedMedia::drawMessageIdInfo(
 
 	// Draw background with the same style as image info
 	Ui::FillRoundRect(p, dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), dateW, dateH, 
-		context.st->msgDateImgBg(), context.st->msgDateImgBgCorners());
+		sti->msgDateImgBg, sti->msgDateImgBgCorners);
 
 	// Draw the message ID text
 	p.drawText(dateX, dateY + st::msgDateFont->ascent, msgIdText);
@@ -564,8 +566,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				mediaGeometry.width(),
 				part._captionHeight
 			);
-
-			p.fillRect(captionRect, QColor(255, 255, 255, 100));
 
 			p.setPen(Qt::black);
 			caption.draw(p,
