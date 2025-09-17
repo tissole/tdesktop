@@ -80,7 +80,7 @@ void GroupedMedia::drawMessageIdInfo(
 	}
 
 	// Create the message ID text
-	const auto msgIdText = QString::number(msgId.bare);
+	QString msgIdText = QString::number(msgId.bare);
 	
 	// Use the same styling as image info for consistency
 	const auto st = context.st;
@@ -89,19 +89,53 @@ void GroupedMedia::drawMessageIdInfo(
 	p.setPen(st->msgDateImgFg());
 
 	// Calculate text dimensions
-	const auto textWidth = st::msgDateFont->width(msgIdText);
-	const auto textHeight = st::msgDateFont->height;
+	auto textWidth = st::msgDateFont->width(msgIdText);
+	auto textHeight = st::msgDateFont->height;
 
 	// Position in the upper-right corner with the same padding as image info
 	const auto skipx = (st::msgDateImgDelta + st::msgDateImgPadding.x());
 	const auto skipy = (st::msgDateImgDelta + st::msgDateImgPadding.y());
-	const auto dateX = itemGeometry.x() + itemGeometry.width() - skipx;
-	const auto dateY = itemGeometry.y() + skipy;
+	
+	// Ensure the message ID fits within the item bounds
 	const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
 	const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
+	
+	// Adjust position if it would overflow
+	auto dateX = itemGeometry.x() + itemGeometry.width() - skipx;
+	auto dateY = itemGeometry.y() + skipy;
+	
+	// Make sure it doesn't go outside the item bounds
+	if (dateX - st::msgDateImgPadding.x() < itemGeometry.x()) {
+		dateX = itemGeometry.x() + st::msgDateImgPadding.x();
+	}
+	
+	if (dateX + dateW > itemGeometry.x() + itemGeometry.width()) {
+		// Try to shorten the text if it's too long
+		const auto availableWidth = itemGeometry.width() - 2 * st::msgDateImgPadding.x();
+		if (availableWidth > st::msgDateFont->width("...")) {
+			// Elide the text to fit
+			QFontMetrics metrics(st::msgDateFont);
+			msgIdText = metrics.elidedText(msgIdText, Qt::ElideRight, availableWidth);
+			textWidth = st::msgDateFont->width(msgIdText);
+		} else {
+			// Not enough space, don't draw
+			return;
+		}
+	}
+	
+	// Make sure it doesn't go outside the item bounds vertically
+	if (dateY - st::msgDateImgPadding.y() < itemGeometry.y()) {
+		dateY = itemGeometry.y() + st::msgDateImgPadding.y();
+	}
+	
+	if (dateY + dateH > itemGeometry.y() + itemGeometry.height()) {
+		// Not enough vertical space, don't draw
+		return;
+	}
 
 	// Draw background with the same style as image info
-	Ui::FillRoundRect(p, dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), dateW, dateH, 
+	Ui::FillRoundRect(p, dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), 
+		textWidth + 2 * st::msgDateImgPadding.x(), dateH, 
 		sti->msgDateImgBg, sti->msgDateImgBgCorners);
 
 	// Draw the message ID text
@@ -224,7 +258,9 @@ QSize GroupedMedia::countOptimalSize() {
 			auto &part = _parts[i];
 			accumulate_max(maxMediaHeight, float64(part.initialGeometry.height()));
 			const auto originalText = part.item->originalText();
-			if ((_mode == Mode::Grid) && GetEnhancedBool("caption_from_file_name") && !originalText.empty()) {
+			if ((_mode == Mode::Grid) && 
+				(GetEnhancedBool("caption_from_file_name") || GetEnhancedBool("show_messages_id")) && 
+				!originalText.empty()) {
 				Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
 				const auto padding = QMargins(8, 0, 8, 0);
 				part._captionHeight = caption.countHeight(part.initialGeometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
@@ -245,6 +281,9 @@ QSize GroupedMedia::countOptimalSize() {
 	for (auto i = 0; i != _parts.size(); ++i) {
 		accumulate_max(maxWidth, _parts[i].initialGeometry.x() + _parts[i].initialGeometry.width());
 	}
+
+	// Add 10% extra width to prevent overflow issues
+	maxWidth = int(maxWidth * 1.1);
 
 	if (_mode == Mode::Column
 		&& isBubbleBottom()
@@ -543,38 +582,50 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
 		}
 
-		if ((_mode == Mode::Grid) && GetEnhancedBool("caption_from_file_name") && part._captionHeight > 0) {
+		if ((_mode == Mode::Grid) && 
+			(GetEnhancedBool("caption_from_file_name") || GetEnhancedBool("show_messages_id")) && 
+			part._captionHeight > 0) {
 			const auto originalText = part.item->originalText();
 			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
 
 			QString textToDraw;
-			Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
-			const auto padding = QMargins(8, 0, 8, 0);
-			const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
-			if (fullCaption.maxWidth() > textWidth) {
-				QFontMetrics metrics(st::messageTextStyle.font);
-				textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
-			} else {
-				textToDraw = originalText.text;
+			if (GetEnhancedBool("caption_from_file_name") && !originalText.empty()) {
+				// Display the actual caption
+				Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+				const auto padding = QMargins(8, 0, 8, 0);
+				const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
+				if (fullCaption.maxWidth() > textWidth) {
+					QFontMetrics metrics(st::messageTextStyle.font);
+					textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
+				} else {
+					textToDraw = originalText.text;
+				}
+			} else if (GetEnhancedBool("show_messages_id")) {
+				// Display only the message ID
+				const auto msgId = part.item->fullId().msg;
+				if (msgId > 0) {
+					textToDraw = QString::number(msgId.bare);
+				}
 			}
 
-			Ui::Text::String caption(st::messageTextStyle, { textToDraw });
-			
-			auto captionRect = QRect(
-				mediaGeometry.left(),
-				mediaGeometry.bottom() + 1,
-				mediaGeometry.width(),
-				part._captionHeight
-			);
+			if (!textToDraw.isEmpty()) {
+				Ui::Text::String caption(st::messageTextStyle, { textToDraw });
+				
+				auto captionRect = QRect(
+					mediaGeometry.left(),
+					mediaGeometry.bottom() + 1,
+					mediaGeometry.width(),
+					part._captionHeight
+				);
 
-			p.fillRect(captionRect, QColor(255, 255, 255, 100));
-
-			p.setPen(Qt::black);
-			caption.draw(p,
-				captionRect.left() + padding.left(),
-				captionRect.top() + padding.top(),
-				captionRect.width() - padding.left() - padding.right(),
-				style::al_left);
+				p.setPen(Qt::black);
+				const auto padding = QMargins(8, 0, 8, 0);
+				caption.draw(p,
+					captionRect.left() + padding.left(),
+					captionRect.top() + padding.top(),
+					captionRect.width() - padding.left() - padding.right(),
+					style::al_left);
+			}
 		}
 
 		if (!part.cache.isNull()) {
@@ -601,13 +652,18 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		auto fullRight = width();
 		auto fullBottom = height();
 		if (needInfoDisplay()) {
-			_parent->drawInfo(
-				p,
-				context,
-				fullRight,
-				fullBottom,
-				width(),
-				InfoDisplayType::Image);
+			// Draw info for the last item instead of the parent item
+			if (!_parts.empty()) {
+				const auto lastPart = &_parts.back();
+				// Use the last item's element to draw info
+				if (const auto lastElement = lastPart->item->mainView()) {
+					lastElement->drawInfo(p, context, fullRight, fullBottom, width(), InfoDisplayType::Image);
+				} else {
+					_parent->drawInfo(p, context, fullRight, fullBottom, width(), InfoDisplayType::Image);
+				}
+			} else {
+				_parent->drawInfo(p, context, fullRight, fullBottom, width(), InfoDisplayType::Image);
+			}
 		}
 		if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 			auto fastShareLeft = _parent->hasRightLayout()
