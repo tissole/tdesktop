@@ -100,8 +100,8 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
 	const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
 	
-	// Adjust position if it would overflow
-	auto dateX = itemGeometry.x() + itemGeometry.width() - skipx;
+	// Adjust position if it would overflow - move slightly to the left
+	auto dateX = itemGeometry.x() + itemGeometry.width() - skipx - 2; // Move 2 pixels to the left
 	auto dateY = itemGeometry.y() + skipy;
 	
 	// Make sure it doesn't go outside the item bounds
@@ -111,7 +111,7 @@ void GroupedMedia::drawMessageIdInfo(
 	
 	if (dateX + dateW > itemGeometry.x() + itemGeometry.width()) {
 		// Try to shorten the text if it's too long
-		const auto availableWidth = itemGeometry.width() - 2 * st::msgDateImgPadding.x();
+		const auto availableWidth = itemGeometry.width() - 2 * st::msgDateImgPadding.x() - 4; // Leave some margin
 		if (availableWidth > st::msgDateFont->width("...")) {
 			// Elide the text to fit
 			QFontMetrics metrics(st::msgDateFont);
@@ -134,8 +134,7 @@ void GroupedMedia::drawMessageIdInfo(
 	}
 
 	// Draw background with the same style as image info
-	Ui::FillRoundRect(p, dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), 
-		textWidth + 2 * st::msgDateImgPadding.x(), dateH, 
+	Ui::FillRoundRect(p, dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), dateW, dateH, 
 		sti->msgDateImgBg, sti->msgDateImgBgCorners);
 
 	// Draw the message ID text
@@ -249,6 +248,9 @@ QSize GroupedMedia::countOptimalSize() {
 		rows[layout[i].geometry.y()].push_back(i);
 	}
 
+	// Increase item width by 10% to ensure message IDs fit
+	const auto widthIncreaseFactor = 1.1;
+
 	auto y = 0.;
 	const auto spacing = (_mode == Mode::Grid) ? st::historyGroupSkip : 0.;
 	for (auto const& [rowY, indices] : rows) {
@@ -256,6 +258,13 @@ QSize GroupedMedia::countOptimalSize() {
 		auto maxCaptionHeight = 0.;
 		for (const auto i : indices) {
 			auto &part = _parts[i];
+			// Increase width by 10%
+			const auto originalWidth = part.initialGeometry.width();
+			const auto newWidth = int(originalWidth * widthIncreaseFactor);
+			part.initialGeometry.setWidth(newWidth);
+			// Adjust x position to keep items centered
+			const auto widthIncrease = newWidth - originalWidth;
+			part.initialGeometry.setX(part.initialGeometry.x() + widthIncrease / 2);
 			accumulate_max(maxMediaHeight, float64(part.initialGeometry.height()));
 			const auto originalText = part.item->originalText();
 			if ((_mode == Mode::Grid) && 
@@ -281,9 +290,6 @@ QSize GroupedMedia::countOptimalSize() {
 	for (auto i = 0; i != _parts.size(); ++i) {
 		accumulate_max(maxWidth, _parts[i].initialGeometry.x() + _parts[i].initialGeometry.width());
 	}
-
-	// Add 10% extra width to prevent overflow issues
-	maxWidth = int(maxWidth * 1.1);
 
 	if (_mode == Mode::Column
 		&& isBubbleBottom()
@@ -347,7 +353,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				accumulate_max(maxMediaHeight, float64(part.geometry.height()));
 
 				const auto originalText = part.item->originalText();
-				if ((_mode == Mode::Grid) && GetEnhancedBool("caption_from_file_name") && !originalText.empty()) {
+				if ((_mode == Mode::Grid) && 
+					(GetEnhancedBool("caption_from_file_name") || GetEnhancedBool("show_messages_id")) && 
+					!originalText.empty()) {
 					Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
 					const auto padding = QMargins(8, 0, 8, 0);
 					part._captionHeight = caption.countHeight(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
@@ -652,18 +660,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		auto fullRight = width();
 		auto fullBottom = height();
 		if (needInfoDisplay()) {
-			// Draw info for the last item instead of the parent item
-			if (!_parts.empty()) {
-				const auto lastPart = &_parts.back();
-				// Use the last item's element to draw info
-				if (const auto lastElement = lastPart->item->mainView()) {
-					lastElement->drawInfo(p, context, fullRight, fullBottom, width(), InfoDisplayType::Image);
-				} else {
-					_parent->drawInfo(p, context, fullRight, fullBottom, width(), InfoDisplayType::Image);
-				}
-			} else {
-				_parent->drawInfo(p, context, fullRight, fullBottom, width(), InfoDisplayType::Image);
-			}
+			// Position the info in the upper-right corner of the last item
+			// The resolveCustomInfoRightBottom method already does this
+			_parent->drawInfo(p, context, fullRight, fullBottom, width(), InfoDisplayType::Image);
 		}
 		if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 			auto fastShareLeft = _parent->hasRightLayout()
