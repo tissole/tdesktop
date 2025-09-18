@@ -162,12 +162,6 @@ private:
 	bool _needBubble : 1 = false;
 	bool _purchasedPriceTag : 1 = false;
 
-	TextState bottomInfoTextState(
-		int right,
-		int bottom,
-		QPoint point,
-		InfoDisplayType type) const override;
-
 	void drawMessageIdInfo(
 		Painter &p,
 		const PaintContext &context,

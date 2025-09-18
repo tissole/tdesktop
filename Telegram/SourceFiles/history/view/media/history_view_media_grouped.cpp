@@ -769,6 +769,54 @@ TextState GroupedMedia::getPartState(
 		}
 		shift += part.content->fullSelectionLength();
 	}
+	
+	// Check if we're hovering over the last item's info area
+	if (!_parts.empty() && needInfoDisplay()) {
+		const auto lastPart = &_parts.back();
+		const auto groupPadding = groupedPadding();
+		const auto lastItemGeometry = lastPart->geometry.translated(0, groupPadding.top());
+		// Position info in upper-right corner of the last item
+		const auto skipx = (st::msgDateImgDelta + st::msgDateImgPadding.x());
+		const auto skipy = (st::msgDateImgDelta + st::msgDateImgPadding.y());
+		const auto infoX = lastItemGeometry.x() + lastItemGeometry.width() - skipx;
+		const auto infoY = lastItemGeometry.y() + skipy;
+		
+		// Create the info text with last item's data for tooltip
+		QString infoText;
+		// Add views if available
+		if (const auto views = lastPart->item->Get<HistoryMessageViews>()) {
+			if (views->views.count >= 0) {
+				infoText += QString::number(views->views.count) + " ";
+			}
+		}
+		// Add time
+		const auto dateText = Lang::FormatDateTime(lastPart->item->date(), Lang::TimeFormat::Default);
+		infoText += dateText + " ";
+		// Add message ID (using last item's ID)
+		const auto msgId = lastPart->item->fullId().msg;
+		if (msgId > 0) {
+			infoText += "#" + QString::number(msgId.bare);
+		}
+		
+		// Calculate the info area rectangle
+		const auto textWidth = st::msgDateFont->width(infoText);
+		const auto textHeight = st::msgDateFont->height;
+		const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
+		const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
+		const auto dateX = infoX - dateW;
+		const auto dateY = infoY;
+		
+		const auto infoRect = QRect(dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), dateW, dateH);
+		
+		// Check if point is within the info area
+		if (infoRect.contains(point)) {
+			auto result = TextState(_parent->data());
+			result.customTooltip = true;
+			result.customTooltipText = infoText;
+			return result;
+		}
+	}
+	
 	return TextState(_parent->data());
 }
 
@@ -818,77 +866,6 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 				result.link = _parent->rightActionLink(point
 					- QPoint(fastShareLeft, fastShareTop));
 			}
-		}
-	}
-	return result;
-}
-
-TextState GroupedMedia::bottomInfoTextState(
-		int right,
-		int bottom,
-		QPoint point,
-		InfoDisplayType type) const {
-	auto result = TextState(_parent->data());
-	if (_parent->media() == this
-		&& (!_parent->hasBubble() || isBubbleBottom())) {
-		auto fullRight = width();
-		auto fullBottom = height();
-		// Check if we're hovering over the last item's info area
-		if (!_parts.empty()) {
-			const auto lastPart = &_parts.back();
-			const auto groupPadding = groupedPadding();
-			const auto lastItemGeometry = lastPart->geometry.translated(0, groupPadding.top());
-			// Position info in upper-right corner of the last item
-			const auto skipx = (st::msgDateImgDelta + st::msgDateImgPadding.x());
-			const auto skipy = (st::msgDateImgDelta + st::msgDateImgPadding.y());
-			const auto infoX = lastItemGeometry.x() + lastItemGeometry.width() - skipx;
-			const auto infoY = lastItemGeometry.y() + skipy;
-			
-			// Create the info text with last item's data for tooltip
-			QString infoText;
-			// Add views if available
-			if (const auto views = lastPart->item->Get<HistoryMessageViews>()) {
-				if (views->views.count >= 0) {
-					infoText += QString::number(views->views.count) + " ";
-				}
-			}
-			// Add time
-			const auto dateText = Lang::FormatDateTime(lastPart->item->date(), Lang::TimeFormat::Default);
-			infoText += dateText + " ";
-			// Add message ID (using last item's ID)
-			const auto msgId = lastPart->item->fullId().msg;
-			if (msgId > 0) {
-				infoText += "#" + QString::number(msgId.bare);
-			}
-			
-			// Calculate the info area rectangle
-			const auto textWidth = st::msgDateFont->width(infoText);
-			const auto textHeight = st::msgDateFont->height;
-			const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-			const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
-			const auto dateX = infoX - dateW;
-			const auto dateY = infoY;
-			
-			const auto infoRect = QRect(dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), dateW, dateH);
-			
-			// Check if point is within the info area
-			if (infoRect.contains(point)) {
-				result.customTooltip = true;
-				result.customTooltipText = infoText;
-				return result;
-			}
-		}
-		
-		// Fall back to parent's implementation
-		const auto bottomInfoResult = _parent->bottomInfoTextState(
-			fullRight,
-			fullBottom,
-			point,
-			InfoDisplayType::Image);
-		if (bottomInfoResult.link
-			|| bottomInfoResult.cursor != CursorState::None
-			|| bottomInfoResult.customTooltip) {
-			return bottomInfoResult;
 		}
 	}
 	return result;
