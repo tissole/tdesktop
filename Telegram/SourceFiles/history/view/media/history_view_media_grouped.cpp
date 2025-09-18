@@ -166,7 +166,7 @@ void GroupedMedia::drawLastItemInfo(
 	}
 	
 	// Add time
-	const auto dateText = Lang::FormatDateTime(item->date(), Lang::TimeFormat::Default);
+	const auto dateText = QLocale().toString(item->date().time(), QLocale::ShortFormat);
 	infoText += dateText + " ";
 	
 	// Add message ID (this is the key part - using the last item's ID)
@@ -790,7 +790,7 @@ TextState GroupedMedia::getPartState(
 			}
 		}
 		// Add time
-		const auto dateText = Lang::FormatDateTime(lastPart->item->date(), Lang::TimeFormat::Default);
+		const auto dateText = QLocale().toString(lastPart->item->date().time(), QLocale::ShortFormat);
 		infoText += dateText + " ";
 		// Add message ID (using last item's ID)
 		const auto msgId = lastPart->item->fullId().msg;
