@@ -125,7 +125,7 @@ void GroupedMedia::drawMessageIdInfo(
 	}
 	
 	// Recalculate position with potentially shortened text
-	dateX = itemGeometry.x() + itemGeometry.width() - skipx - (textWidth + 2 * st::msgDateImgPadding.x());
+	dateX = itemGeometry.x() + itemGeometry.width() - skipx - dateW;
 	
 	// Make sure it doesn't go outside the item bounds vertically
 	if (dateY < itemGeometry.y()) {
@@ -176,7 +176,7 @@ void GroupedMedia::drawLastItemInfo(
 	// Add message ID (this is the key part - using the last item's ID)
 	const auto msgId = item->fullId().msg;
 	if (msgId > 0) {
-		infoText += QString::number(msgId.bare);
+		infoText += "(" + QString::number(msgId.bare) + ")";
 	}
 	
 	// Use the same styling as image info for consistency
@@ -199,16 +199,25 @@ void GroupedMedia::drawLastItemInfo(
 
 	// Draw views icon if there are views
 	if (hasViews) {
-		// Draw the eye icon
+		// Draw the eye icon centered vertically
 		const auto iconLeft = dateX - st::msgDateImgPadding.x() + st::msgDateImgPadding.x();
 		const auto iconTop = dateY - st::msgDateImgPadding.y() + st::msgDateImgPadding.y() + (dateH - st::historyViewsWidth) / 2;
 		const auto &icon = stm->historyViewsIcon;
 		icon.paint(p, iconLeft, iconTop, dateW);
+		
+		// Draw the views count and rest of text after the icon
+		const auto viewsText = QString::number(viewsCount) + " ";
+		const auto restText = dateText + " (" + QString::number(msgId.bare) + ")";
+		const auto viewsWidth = st::msgDateFont->width(viewsText);
+		
+		// Draw views count
+		p.drawText(iconLeft + st::historyViewsWidth + st::historyViewsSpace, dateY + st::msgDateFont->ascent, viewsText);
+		// Draw rest of text
+		p.drawText(iconLeft + st::historyViewsWidth + st::historyViewsSpace + viewsWidth, dateY + st::msgDateFont->ascent, restText);
+	} else {
+		// Draw all text normally if no views
+		p.drawText(dateX, dateY + st::msgDateFont->ascent, infoText);
 	}
-
-	// Draw the info text, offset if there's an icon
-	const auto textOffset = hasViews ? (st::historyViewsWidth + st::historyViewsSpace) : 0;
-	p.drawText(dateX + textOffset, dateY + st::msgDateFont->ascent, infoText);
 }
 
 GroupedMedia::GroupedMedia(
@@ -305,8 +314,8 @@ QSize GroupedMedia::countOptimalSize() {
 	const auto layout = (_mode == Mode::Grid)
 		? Ui::LayoutMediaGroup(
 			sizes,
-			st::historyGroupWidthMax,
-			st::historyGroupWidthMin,
+			int(st::historyGroupWidthMax * 1.1),  // Increase max width by 10%
+			int(st::historyGroupWidthMin * 1.1),  // Increase min width by 10%
 			st::historyGroupSkip)
 		: LayoutPlaylist(sizes);
 	Assert(layout.size() == _parts.size());
@@ -328,12 +337,8 @@ QSize GroupedMedia::countOptimalSize() {
 		auto maxCaptionHeight = 0.;
 		for (const auto i : indices) {
 			auto &part = _parts[i];
-			// Increase width by 10% for all items
-			const auto originalWidth = part.initialGeometry.width();
-			const auto newWidth = int(originalWidth * widthIncreaseFactor);
-			part.initialGeometry.setWidth(newWidth);
-			// Don't adjust x position - let the layout algorithm handle positioning
 			accumulate_max(maxMediaHeight, float64(part.initialGeometry.height()));
+			
 			const auto originalText = part.item->originalText();
 			if ((_mode == Mode::Grid) && 
 				GetEnhancedBool("caption_from_file_name") && 
@@ -686,7 +691,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				}
 			}
 
-			if (!textToDraw.isEmpty()) {
+			if (!textToDraw.isEmpty() && part._captionHeight > 0) {
 				Ui::Text::String caption(st::messageTextStyle, { textToDraw });
 				
 				auto captionRect = QRect(
@@ -795,9 +800,10 @@ TextState GroupedMedia::getPartState(
 	if (!_parts.empty() && needInfoDisplay()) {
 		const auto lastPart = &_parts.back();
 		// Note: point is already adjusted by subtracting groupPadding.top() in textState
-		// So we use the geometry directly without additional translation
-		const auto lastItemGeometry = lastPart->geometry;
-		// Position info in upper-right corner of the last item
+		// But in drawing we add groupPadding.top() to the geometry, so we need to account for this
+		const auto groupPadding = groupedPadding();
+		const auto lastItemGeometry = lastPart->geometry.translated(0, groupPadding.top());
+		// Position info in upper-right corner of the last item (same as drawing code)
 		const auto skipx = (st::msgDateImgDelta + st::msgDateImgPadding.x());
 		const auto skipy = (st::msgDateImgDelta + st::msgDateImgPadding.y());
 		const auto infoX = lastItemGeometry.x() + lastItemGeometry.width() - skipx;
