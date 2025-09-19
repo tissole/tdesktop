@@ -101,7 +101,7 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
 	
 	// Position the message ID in the upper-right corner with better fitting
-	auto dateX = itemGeometry.x() + itemGeometry.width() - skipx - dateW;
+	auto dateX = itemGeometry.x() + itemGeometry.width() - skipx - dateW - 1; // Move 1 pixel closer to right edge
 	auto dateY = itemGeometry.y() + skipy;
 	
 	// Make sure it doesn't go outside the item bounds
@@ -154,14 +154,18 @@ void GroupedMedia::drawLastItemInfo(
 	// Draw the info for the last item with proper positioning and styling
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
+	const auto stm = context.messageStyle();
 	
 	// Create the info text (views, time, and message ID)
 	QString infoText;
+	bool hasViews = false;
+	int viewsCount = 0;
 	
 	// Add views if available
 	if (const auto views = item->Get<HistoryMessageViews>()) {
 		if (views->views.count >= 0) {
-			infoText += QString::number(views->views.count) + " ";
+			viewsCount = views->views.count;
+			hasViews = true;
 		}
 	}
 	
@@ -172,7 +176,7 @@ void GroupedMedia::drawLastItemInfo(
 	// Add message ID (this is the key part - using the last item's ID)
 	const auto msgId = item->fullId().msg;
 	if (msgId > 0) {
-		infoText += "#" + QString::number(msgId.bare);
+		infoText += QString::number(msgId.bare);
 	}
 	
 	// Use the same styling as image info for consistency
@@ -193,8 +197,18 @@ void GroupedMedia::drawLastItemInfo(
 	Ui::FillRoundRect(p, dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), 
 		dateW, dateH, sti->msgDateImgBg, sti->msgDateImgBgCorners);
 
-	// Draw the info text
-	p.drawText(dateX, dateY + st::msgDateFont->ascent, infoText);
+	// Draw views icon if there are views
+	if (hasViews) {
+		// Draw the eye icon
+		const auto iconLeft = dateX - st::msgDateImgPadding.x() + st::msgDateImgPadding.x();
+		const auto iconTop = dateY - st::msgDateImgPadding.y() + st::msgDateImgPadding.y() + (dateH - st::historyViewsWidth) / 2;
+		const auto &icon = stm->historyViewsIcon;
+		icon.paint(p, iconLeft, iconTop, dateW);
+	}
+
+	// Draw the info text, offset if there's an icon
+	const auto textOffset = hasViews ? (st::historyViewsWidth + st::historyViewsSpace) : 0;
+	p.drawText(dateX + textOffset, dateY + st::msgDateFont->ascent, infoText);
 }
 
 GroupedMedia::GroupedMedia(
@@ -344,6 +358,9 @@ QSize GroupedMedia::countOptimalSize() {
 		accumulate_max(maxWidth, _parts[i].initialGeometry.x() + _parts[i].initialGeometry.width());
 	}
 
+	// Increase album width by 10% to match the increased item widths
+	maxWidth = int(maxWidth * 1.1);
+
 	if (_mode == Mode::Column
 		&& isBubbleBottom()
 		&& _parts.back().item->emptyText()) {
@@ -407,7 +424,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 				const auto originalText = part.item->originalText();
 				if ((_mode == Mode::Grid) && 
-					(GetEnhancedBool("caption_from_file_name") || GetEnhancedBool("show_messages_id")) && 
+					GetEnhancedBool("caption_from_file_name") && 
 					!originalText.empty()) {
 					Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
 					const auto padding = QMargins(8, 0, 8, 0);
@@ -661,8 +678,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				} else {
 					textToDraw = originalText.text;
 				}
-			} else if (GetEnhancedBool("show_messages_id")) {
-				// Display only the message ID
+			} else if (GetEnhancedBool("caption_from_file_name") && GetEnhancedBool("show_messages_id")) {
+				// Display only the message ID when caption_from_file_name is enabled
 				const auto msgId = part.item->fullId().msg;
 				if (msgId > 0) {
 					textToDraw = QString::number(msgId.bare);
@@ -716,10 +733,14 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			// Draw info for the last item directly to show correct data
 			if (!_parts.empty()) {
 				const auto lastPart = &_parts.back();
-				// Use custom positioning to show info in upper-right with last item's data
+				const auto groupPadding = groupedPadding();
+				const auto lastItemGeometry = lastPart->geometry.translated(0, groupPadding.top());
+				// Position info in upper-right corner of the LAST item
 				const auto skipx = (st::msgDateImgDelta + st::msgDateImgPadding.x());
 				const auto skipy = (st::msgDateImgDelta + st::msgDateImgPadding.y());
-				drawLastItemInfo(p, context, width() - skipx, skipy, lastPart->item);
+				const auto infoX = lastItemGeometry.x() + lastItemGeometry.width() - skipx;
+				const auto infoY = lastItemGeometry.y() + skipy;
+				drawLastItemInfo(p, context, infoX, infoY, lastPart->item);
 			}
 		}
 		if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
@@ -773,8 +794,9 @@ TextState GroupedMedia::getPartState(
 	// Check if we're hovering over the last item's info area
 	if (!_parts.empty() && needInfoDisplay()) {
 		const auto lastPart = &_parts.back();
-		const auto groupPadding = groupedPadding();
-		const auto lastItemGeometry = lastPart->geometry.translated(0, groupPadding.top());
+		// Note: point is already adjusted by subtracting groupPadding.top() in textState
+		// So we use the geometry directly without additional translation
+		const auto lastItemGeometry = lastPart->geometry;
 		// Position info in upper-right corner of the last item
 		const auto skipx = (st::msgDateImgDelta + st::msgDateImgPadding.x());
 		const auto skipy = (st::msgDateImgDelta + st::msgDateImgPadding.y());
@@ -795,17 +817,18 @@ TextState GroupedMedia::getPartState(
 		// Add message ID (using last item's ID)
 		const auto msgId = lastPart->item->fullId().msg;
 		if (msgId > 0) {
-			infoText += "#" + QString::number(msgId.bare);
+			infoText += QString::number(msgId.bare);
 		}
 		
-		// Calculate the info area rectangle
+		// Calculate the info area rectangle (same as in drawLastItemInfo)
 		const auto textWidth = st::msgDateFont->width(infoText);
 		const auto textHeight = st::msgDateFont->height;
 		const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
 		const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
-		const auto dateX = infoX - dateW;
+		const auto dateX = infoX - dateW;  // Same calculation as in drawLastItemInfo
 		const auto dateY = infoY;
 		
+		// Rectangle for the background (same as in drawLastItemInfo)
 		const auto infoRect = QRect(dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), dateW, dateH);
 		
 		// Check if point is within the info area
