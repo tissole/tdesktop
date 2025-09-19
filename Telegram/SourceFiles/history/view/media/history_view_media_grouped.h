@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/media/history_view_media.h"
 #include "data/data_document.h"
 #include "data/data_photo.h"
+#include "history/history_item_helpers.h"
 
 namespace Data {
 class Media;
