@@ -39,9 +39,9 @@ std::vector<Ui::GroupMediaLayout> LayoutPlaylist(
 	auto result = std::vector<Ui::GroupMediaLayout>();
 	result.reserve(sizes.size());
 	const auto width = ranges::max_element(
-		sizes,
-		std::less<>(),
-		&QSize::width)->width();
+			sizes,
+			std::less<>(),
+			&QSize::width)->width();
 	auto top = 0;
 	for (const auto &size : sizes) {
 		result.push_back({
@@ -157,7 +157,7 @@ void GroupedMedia::drawLastItemInfo(
 		infoText += QString::number(msgId.bare);  // Removed parentheses
 	}
 	
-	p.setFont(st::msgDateFont);
+p.setFont(st::msgDateFont);
 	p.setPen(st->msgDateImgFg());
 
 	const auto textWidth = st::msgDateFont->width(infoText);
@@ -190,13 +190,13 @@ void GroupedMedia::drawLastItemInfo(
 
 GroupedMedia::GroupedMedia(
 	not_null<Element*> parent,
-	const std::vector<std::unique_ptr<Data::Media>> &medias)
+	const std::vector<std::unique_ptr<Data::Media>> &medias) 
 : Media(parent) {
 	const auto truncated = ranges::views::all(
-		medias
-	) | ranges::views::transform([](const std::unique_ptr<Data::Media> &v) {
-		return v.get();
-	}) | ranges::views::take(kMaxSize);
+			medias
+		) | ranges::views::transform([](const std::unique_ptr<Data::Media> &v) {
+			return v.get();
+		}) | ranges::views::take(kMaxSize);
 	const auto result = applyGroup(truncated);
 
 	Ensures(result);
@@ -204,13 +204,13 @@ GroupedMedia::GroupedMedia(
 
 GroupedMedia::GroupedMedia(
 	not_null<Element*> parent,
-	const std::vector<not_null<HistoryItem*>> &items)
+	const std::vector<not_null<HistoryItem*>> &items) 
 : Media(parent) {
 	const auto medias = ranges::views::all(
-		items
-	) | ranges::views::transform([](not_null<HistoryItem*> item) {
-		return item->media();
-	}) | ranges::views::take(kMaxSize);
+			items
+		) | ranges::views::transform([](not_null<HistoryItem*> item) {
+			return item->media();
+		}) | ranges::views::take(kMaxSize);
 	const auto result = applyGroup(medias);
 
 	Ensures(result);
@@ -281,10 +281,10 @@ QSize GroupedMedia::countOptimalSize() {
 
 	const auto layout = (_mode == Mode::Grid)
 		? Ui::LayoutMediaGroup(
-			sizes,
-			int(st::historyGroupWidthMax * 1.1), 
-			int(st::historyGroupWidthMin * 1.1),  
-			st::historyGroupSkip)
+			 sizes,
+			 int(st::historyGroupWidthMax * 1.1), 
+			 int(st::historyGroupWidthMin * 1.1),  
+			 st::historyGroupSkip)
 		: LayoutPlaylist(sizes);
 	Assert(layout.size() == _parts.size());
 
@@ -292,7 +292,8 @@ QSize GroupedMedia::countOptimalSize() {
 	for (auto i = 0; i != _parts.size(); ++i) {
 		_parts[i].initialGeometry = layout[i].geometry;
 		_parts[i].sides = layout[i].sides;
-		rows[layout[i].geometry.y()].push_back(i);
+	
+rows[layout[i].geometry.y()].push_back(i);
 	}
 
 	const auto widthIncreaseFactor = 1.1;
@@ -306,9 +307,11 @@ QSize GroupedMedia::countOptimalSize() {
 		);
 	}
 
-	rows.clear();
+
+rows.clear();
 	for (auto i = 0; i != _parts.size(); ++i) {
-		rows[_parts[i].initialGeometry.y()].push_back(i);
+	
+rows[_parts[i].initialGeometry.y()].push_back(i);
 	}
 
 	auto y = 0.;
@@ -385,7 +388,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 		std::map<int, std::vector<int>> rows;
 		for (auto i = 0; i != _parts.size(); ++i) {
-			rows[_parts[i].initialGeometry.y()].push_back(i);
+		
+rows[_parts[i].initialGeometry.y()].push_back(i);
 		}
 
 		auto y = 0.;
@@ -406,16 +410,16 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				accumulate_max(maxMediaHeight, float64(part.geometry.height()));
 
 				const auto originalText = part.item->originalText();
-				if ((_mode == Mode::Grid) && 
-					GetEnhancedBool("caption_from_file_name") && 
-					!originalText.empty()) {
-					Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
-					const auto padding = QMargins(8, 0, 8, 0);
-					part._captionHeight = caption.countHeight(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
-				} else {
-					part._captionHeight = 0;
-				}
-				accumulate_max(maxCaptionHeight, float64(part._captionHeight));
+			if ((_mode == Mode::Grid) && 
+				GetEnhancedBool("caption_from_file_name") && 
+				!originalText.empty()) {
+				Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
+				const auto padding = QMargins(8, 0, 8, 0);
+				part._captionHeight = caption.countHeight(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
+			} else {
+				part._captionHeight = 0;
+			}
+			accumulate_max(maxCaptionHeight, float64(part._captionHeight));
 			}
 			const auto rowHeight = maxMediaHeight + maxCaptionHeight;
 			for (const auto i : indices) {
@@ -809,7 +813,7 @@ TextState GroupedMedia::getPartState(
 			auto result = TextState(item);
 			result.customTooltip = true;
 			result.customTooltipText = (msgId > 0)
-				? (dateText + ' ' + timeText + " (" + QString::number(msgId.bare) + ')')
+				? (dateText + ' ' + timeText + " (" + QString::number(msgId.bare) + ")")
 				: (dateText + ' ' + timeText);
 			return result;
 		}
@@ -845,16 +849,6 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 	if (_parent->media() == this && (!_parent->hasBubble() || isBubbleBottom())) {
 		auto fullRight = width();
 		auto fullBottom = height();
-		const auto bottomInfoResult = _parent->bottomInfoTextState(
-			fullRight,
-			fullBottom,
-			point,
-			InfoDisplayType::Image);
-		if (bottomInfoResult.link
-			|| bottomInfoResult.cursor != CursorState::None
-			|| bottomInfoResult.customTooltip) {
-			return bottomInfoResult;
-		}
 		if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 			auto fastShareLeft = _parent->hasRightLayout()
 				? (-size->width() - st::historyFastShareLeft)
@@ -999,7 +993,7 @@ TextSelection GroupedMedia::selectionFromQuote(
 }
 
 auto GroupedMedia::getBubbleSelectionIntervals(
-	TextSelection selection) const
+		TextSelection selection) const
 -> std::vector<Ui::BubbleSelectionInterval> {
 	if (_mode != Mode::Column) {
 		return {};
@@ -1227,13 +1221,6 @@ bool GroupedMedia::needInfoDisplay() const {
 	return (_mode != Mode::Column)
 		&& (item->isSending()
 			|| item->awaitingVideoProcessing()
-			|| item->hasFailed()
-			|| _parent->isUnderCursor()
-			|| (_parent->delegate()->elementContext() == Context::ChatPreview)
-			|| _parent->isLastAndSelfMessage());
-}
-
-} // namespace HistoryViewcessing()
 			|| item->hasFailed()
 			|| _parent->isUnderCursor()
 			|| (_parent->delegate()->elementContext() == Context::ChatPreview)
