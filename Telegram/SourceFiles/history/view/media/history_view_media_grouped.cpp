@@ -173,16 +173,16 @@ void GroupedMedia::drawLastItemInfo(
 
 	if (hasViews) {
 		const auto iconLeft = dateX - st::msgDateImgPadding.x() + st::msgDateImgPadding.x();
-		const auto iconTop = dateY + (dateH - st::historyViewsWidth) / 2; 
 		const auto &icon = stm->historyViewsIcon;
+		const auto iconTop = dateY + (dateH - icon.height()) / 2;
 		icon.paint(p, iconLeft, iconTop, dateW);
-		
+
 		const auto viewsText = QString::number(viewsCount) + " ";
 		const auto restText = dateText + " " + QString::number(msgId.bare);
 		const auto viewsWidth = st::msgDateFont->width(viewsText);
-		
-		p.drawText(iconLeft + st::historyViewsWidth + st::historyViewsSpace, dateY + st::msgDateFont->ascent, viewsText);
-		p.drawText(iconLeft + st::historyViewsWidth + st::historyViewsSpace + viewsWidth, dateY + st::msgDateFont->ascent, restText);
+
+		p.drawText(iconLeft + st::historyViewsWidth, dateY + st::msgDateFont->ascent, viewsText);
+		p.drawText(iconLeft + st::historyViewsWidth + viewsWidth, dateY + st::msgDateFont->ascent, restText);
 	} else {
 		p.drawText(dateX, dateY + st::msgDateFont->ascent, infoText);
 	}
@@ -282,8 +282,8 @@ QSize GroupedMedia::countOptimalSize() {
 	const auto layout = (_mode == Mode::Grid)
 		? Ui::LayoutMediaGroup(
 			sizes,
-			int(st::historyGroupWidthMax * 1.1),  // Increase max width by 10%
-			int(st::historyGroupWidthMin * 1.1),  // Increase min width by 10%
+			int(st::historyGroupWidthMax * 1.1), 
+			int(st::historyGroupWidthMin * 1.1),  
 			st::historyGroupSkip)
 		: LayoutPlaylist(sizes);
 	Assert(layout.size() == _parts.size());
@@ -795,9 +795,16 @@ TextState GroupedMedia::getPartState(
 		const auto infoRect = QRect(dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), dateW, dateH);
 		
 		if (infoRect.contains(point)) {
-			auto result = TextState(_parent->data());
+			const auto item = lastPart->item;
+			const auto dateText = QLocale().toString(ItemDateTime(item).date(), QLocale::ShortFormat);
+			const auto timeText = QLocale().toString(ItemDateTime(item).time(), QLocale::ShortFormat);
+			const auto msgId = item->fullId().msg;
+
+			auto result = TextState(item);
 			result.customTooltip = true;
-			result.customTooltipText = infoText;
+			result.customTooltipText = (msgId > 0)
+				? (dateText + ' ' + timeText + " (" + QString::number(msgId.bare) + ')')
+				: (dateText + ' ' + timeText);
 			return result;
 		}
 	}
@@ -1214,6 +1221,13 @@ bool GroupedMedia::needInfoDisplay() const {
 	return (_mode != Mode::Column)
 		&& (item->isSending()
 			|| item->awaitingVideoProcessing()
+			|| item->hasFailed()
+			|| _parent->isUnderCursor()
+			|| (_parent->delegate()->elementContext() == Context::ChatPreview)
+			|| _parent->isLastAndSelfMessage());
+}
+
+} // namespace HistoryViewcessing()
 			|| item->hasFailed()
 			|| _parent->isUnderCursor()
 			|| (_parent->delegate()->elementContext() == Context::ChatPreview)
