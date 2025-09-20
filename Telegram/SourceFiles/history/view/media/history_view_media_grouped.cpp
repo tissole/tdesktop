@@ -296,13 +296,19 @@ QSize GroupedMedia::countOptimalSize() {
 	}
 
 	const auto widthIncreaseFactor = 1.1;
-	
+	for (auto &part : _parts) {
+		auto &geom = part.initialGeometry;
+		geom.setRect(
+			int(base::SafeRound(geom.x() * widthIncreaseFactor)),
+			int(base::SafeRound(geom.y() * widthIncreaseFactor)),
+			int(base::SafeRound(geom.width() * widthIncreaseFactor)),
+			int(base::SafeRound(geom.height() * widthIncreaseFactor))
+		);
+	}
+
+	rows.clear();
 	for (auto i = 0; i != _parts.size(); ++i) {
-		auto &part = _parts[i];
-		const auto originalWidth = part.initialGeometry.width();
-		const auto newWidth = int(originalWidth * widthIncreaseFactor);
-		const auto widthIncrease = newWidth - originalWidth;
-		part.initialGeometry.setWidth(newWidth);
+		rows[_parts[i].initialGeometry.y()].push_back(i);
 	}
 
 	auto y = 0.;
