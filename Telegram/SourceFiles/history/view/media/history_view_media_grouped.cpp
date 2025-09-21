@@ -120,8 +120,10 @@ void GroupedMedia::drawMessageIdInfo(
 		return;
 	}
 
+	auto bgColor = st->msgDateImgBg;
+	bgColor.c.setAlpha(160);
 	Ui::FillRoundRect(p, dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), dateW, dateH, 
-		QColor(0, 0, 0, 160), sti->msgDateImgBgCorners);
+		bgColor, sti->msgDateImgBgCorners);
 
 	auto font = st::msgDateFont;
 	p.setFont(font->bold());
@@ -169,9 +171,13 @@ p.setFont(st::msgDateFont);
 	const auto dateX = infoX - dateW;
 	const auto dateY = infoY;
 
+	auto bgColor = st->msgDateImgBg;
+	bgColor.c.setAlpha(160);
 	Ui::FillRoundRect(p, dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), 
-		dateW, dateH, sti->msgDateImgBg, sti->msgDateImgBgCorners);
+		dateW, dateH, bgColor, sti->msgDateImgBgCorners);
 
+	auto font = st::msgDateFont;
+	p.setFont(font->bold());
 	if (hasViews) {
 		const auto iconLeft = dateX - st::msgDateImgPadding.x() + st::msgDateImgPadding.x();
 		const auto &icon = stm->historyViewsIcon;
@@ -180,18 +186,158 @@ p.setFont(st::msgDateFont);
 
 		const auto viewsText = QString::number(viewsCount) + " ";
 		const auto restText = dateText + " " + QString::number(msgId.bare);
-		const auto viewsWidth = st::msgDateFont->width(viewsText);
+		const auto viewsWidth = p.fontMetrics().width(viewsText);
 
-		p.drawText(iconLeft + st::historyViewsWidth, dateY + st::msgDateFont->ascent, viewsText);
-		p.drawText(iconLeft + st::historyViewsWidth + viewsWidth + st::historyViewsSpace, dateY + st::msgDateFont->ascent, restText);
+		p.drawText(iconLeft + st::historyViewsWidth, dateY + font->ascent, viewsText);
+		p.drawText(iconLeft + st::historyViewsWidth + viewsWidth + st::historyViewsSpace, dateY + font->ascent, restText);
 	} else {
-		p.drawText(dateX, dateY + st::msgDateFont->ascent, infoText);
+		p.drawText(dateX, dateY + font->ascent, infoText);
 	}
+	p.setFont(font);
+}
+
+GroupedMedia::Part::Part(
+		not_null<Element*> parent,
+		not_null<Data::Media*> media)
+: item(media->parent())
+, content(media->createView(parent, item)) {
+	Assert(media->canBeGrouped());
+}
+
+void GroupedMedia::drawMessageIdInfo(
+		Painter &p,
+		const PaintContext &context,
+		const QRect &itemGeometry,
+		not_null<HistoryItem*> item) const {
+	if (!GetEnhancedBool("show_messages_id")) {
+		return;
+	}
+
+	const auto msgId = item->fullId().msg;
+	if (msgId <= 0) {
+		return;
+	}
+
+	QString msgIdText = QString::number(msgId.bare);
+	
+	const auto st = context.st;
+	const auto sti = context.imageStyle();
+	p.setFont(st::msgDateFont);
+	p.setPen(st->msgDateImgFg());
+
+	auto textWidth = st::msgDateFont->width(msgIdText);
+	auto textHeight = st::msgDateFont->height;
+
+	const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
+	const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
+	
+	auto dateX = itemGeometry.x() + itemGeometry.width() - dateW - 1;
+	auto dateY = itemGeometry.y() + 1;
+	
+	if (dateX < itemGeometry.x()) {
+		dateX = itemGeometry.x();
+	}
+	
+	if (dateW > itemGeometry.width() - 2 * st::msgDateImgPadding.x()) {
+		const auto availableWidth = itemGeometry.width() - 2 * st::msgDateImgPadding.x() - 4; // Leave some margin
+		if (availableWidth > st::msgDateFont->width("...")) {
+			QFontMetrics metrics(st::msgDateFont);
+			msgIdText = metrics.elidedText(msgIdText, Qt::ElideRight, availableWidth);
+			textWidth = st::msgDateFont->width(msgIdText);
+		} else {
+			return;
+		}
+	}
+	
+	dateX = itemGeometry.x() + itemGeometry.width() - dateW - 1;
+	
+	if (dateY < itemGeometry.y()) {
+		dateY = itemGeometry.y();
+	}
+	
+	if (dateY + dateH > itemGeometry.y() + itemGeometry.height()) {
+		return;
+	}
+
+	auto bgColor = st->msgDateImgBg;
+	bgColor.c.setAlpha(160);
+	Ui::FillRoundRect(p, dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), dateW, dateH, 
+		bgColor, sti->msgDateImgBgCorners);
+
+	auto font = st::msgDateFont;
+	p.setFont(font->bold());
+	p.drawText(dateX, dateY + font->ascent, msgIdText);
+	p.setFont(font);
+}
+
+void GroupedMedia::drawLastItemInfo(
+		Painter &p,
+		const PaintContext &context,
+		int infoX,
+		int infoY,
+		not_null<HistoryItem*> item) const {
+	const auto st = context.st;
+	const auto sti = context.imageStyle();
+	const auto stm = context.messageStyle();
+	
+	QString infoText;
+	bool hasViews = false;
+	int viewsCount = 0;
+	
+	if (const auto views = item->Get<HistoryMessageViews>()) {
+		if (views->views.count >= 0) {
+			viewsCount = views->views.count;
+			hasViews = true;
+		}
+	}
+	
+	const auto dateText = QLocale().toString(ItemDateTime(item).time(), QLocale::ShortFormat);
+	infoText += dateText + " ";
+	
+	const auto msgId = item->fullId().msg;
+	if (msgId > 0) {
+		infoText += QString::number(msgId.bare);  // Removed parentheses
+	}
+	
+p.setFont(st::msgDateFont);
+	p.setPen(st->msgDateImgFg());
+
+	const auto textWidth = st::msgDateFont->width(infoText);
+	const auto textHeight = st::msgDateFont->height;
+
+	const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
+	const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
+	const auto dateX = infoX - dateW;
+	const auto dateY = infoY;
+
+	auto bgColor = st->msgDateImgBg;
+	bgColor.c.setAlpha(160);
+	Ui::FillRoundRect(p, dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), 
+		dateW, dateH, bgColor, sti->msgDateImgBgCorners);
+
+	auto font = st::msgDateFont;
+	p.setFont(font->bold());
+	if (hasViews) {
+		const auto iconLeft = dateX - st::msgDateImgPadding.x() + st::msgDateImgPadding.x();
+		const auto &icon = stm->historyViewsIcon;
+		const auto iconTop = dateY + (dateH - icon.height()) / 2;
+		icon.paint(p, iconLeft, iconTop, dateW);
+
+		const auto viewsText = QString::number(viewsCount) + " ";
+		const auto restText = dateText + " " + QString::number(msgId.bare);
+		const auto viewsWidth = p.fontMetrics().width(viewsText);
+
+		p.drawText(iconLeft + st::historyViewsWidth, dateY + font->ascent, viewsText);
+		p.drawText(iconLeft + st::historyViewsWidth + viewsWidth + st::historyViewsSpace, dateY + font->ascent, restText);
+	} else {
+		p.drawText(dateX, dateY + font->ascent, infoText);
+	}
+	p.setFont(font);
 }
 
 GroupedMedia::GroupedMedia(
-	not_null<Element*> parent,
-	const std::vector<std::unique_ptr<Data::Media>> &medias) 
+		not_null<Element*> parent,
+		const std::vector<std::unique_ptr<Data::Media>> &medias) 
 : Media(parent) {
 	const auto truncated = ranges::views::all(
 			medias
@@ -204,8 +350,8 @@ GroupedMedia::GroupedMedia(
 }
 
 GroupedMedia::GroupedMedia(
-	not_null<Element*> parent,
-	const std::vector<not_null<HistoryItem*>> &items) 
+		not_null<Element*> parent,
+		const std::vector<not_null<HistoryItem*>> &items) 
 : Media(parent) {
 	const auto medias = ranges::views::all(
 			items
@@ -293,7 +439,8 @@ QSize GroupedMedia::countOptimalSize() {
 	for (auto i = 0; i != _parts.size(); ++i) {
 		_parts[i].initialGeometry = layout[i].geometry;
 		_parts[i].sides = layout[i].sides;
-		rows[layout[i].geometry.y()].push_back(i);
+	
+rows[layout[i].geometry.y()].push_back(i);
 	}
 
 	const auto widthIncreaseFactor = 1.15;
@@ -307,9 +454,11 @@ QSize GroupedMedia::countOptimalSize() {
 		);
 	}
 
-	rows.clear();
+
+rows.clear();
 	for (auto i = 0; i != _parts.size(); ++i) {
-ows[_parts[i].initialGeometry.y()].push_back(i);
+	
+rows[_parts[i].initialGeometry.y()].push_back(i);
 	}
 
 	auto y = 0.;
@@ -386,7 +535,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 		std::map<int, std::vector<int>> rows;
 		for (auto i = 0; i != _parts.size(); ++i) {
-ows[_parts[i].initialGeometry.y()].push_back(i);
+		
+rows[_parts[i].initialGeometry.y()].push_back(i);
 		}
 
 		auto y = 0.;
@@ -416,15 +566,16 @@ ows[_parts[i].initialGeometry.y()].push_back(i);
 			} else {
 				part._captionHeight = 0;
 			}
-							accumulate_max(maxCaptionHeight, float64(part._captionHeight));
-						}
-			
-						if (!indices.empty()) {
-							auto &last_part_in_row = _parts[indices.back()];
-							if (!(last_part_in_row.sides & RectPart::Right)) {
-								last_part_in_row.geometry.setRight(newWidth);
-							}
-						}			const auto rowHeight = maxMediaHeight + maxCaptionHeight;
+				accumulate_max(maxCaptionHeight, float64(part._captionHeight));
+			}
+
+			if (!indices.empty()) {
+				auto &last_part_in_row = _parts[indices.back()];
+				if (!(last_part_in_row.sides & RectPart::Right)) {
+					last_part_in_row.geometry.setRight(newWidth);
+				}
+			}
+			const auto rowHeight = maxMediaHeight + maxCaptionHeight;
 			for (const auto i : indices) {
 				auto &part = _parts[i];
 				part.geometry.setY(y + (maxMediaHeight - part.geometry.height()));
@@ -779,8 +930,10 @@ TextState GroupedMedia::getPartState(
 	if (!_parts.empty() && needInfoDisplay()) {
 		const auto lastPart = &_parts.back();
 		const auto groupPadding = groupedPadding();
-		                const auto skipx = 1;
-		                const auto skipy = 1;		const auto infoX = lastItemGeometry.x() + lastItemGeometry.width() - skipx;
+		const auto lastItemGeometry = lastPart->geometry.translated(0, groupPadding.top());
+		const auto skipx = 1;
+		const auto skipy = 1;
+		const auto infoX = lastItemGeometry.x() + lastItemGeometry.width() - skipx;
 		const auto infoY = lastItemGeometry.y() + skipy;
 		
 		QString infoText;
