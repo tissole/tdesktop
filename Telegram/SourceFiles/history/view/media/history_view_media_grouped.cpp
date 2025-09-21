@@ -120,10 +120,11 @@ void GroupedMedia::drawMessageIdInfo(
 		return;
 	}
 
-	auto bgColor = sti->msgDateImgBg;
-	bgColor.c.setAlpha(160);
+	auto originalColor = sti->msgDateImgBg->c;
+	auto modifiedQColor = QColor(originalColor.red(), originalColor.green(), originalColor.blue(), 160);
+	const auto bgColor = style::internal::OwnedColor(modifiedQColor);
 	Ui::FillRoundRect(p, dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), dateW, dateH, 
-		bgColor, sti->msgDateImgBgCorners);
+		bgColor.color(), sti->msgDateImgBgCorners);
 
 	auto font = st::msgDateFont;
 	p.setFont(font->bold());
@@ -171,10 +172,11 @@ p.setFont(st::msgDateFont);
 	const auto dateX = infoX - dateW;
 	const auto dateY = infoY;
 
-	auto bgColor = sti->msgDateImgBg;
-	bgColor.c.setAlpha(160);
+	auto originalColor = sti->msgDateImgBg->c;
+	auto modifiedQColor = QColor(originalColor.red(), originalColor.green(), originalColor.blue(), 160);
+	const auto bgColor = style::internal::OwnedColor(modifiedQColor);
 	Ui::FillRoundRect(p, dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), 
-		dateW, dateH, bgColor, sti->msgDateImgBgCorners);
+		dateW, dateH, bgColor.color(), sti->msgDateImgBgCorners);
 
 	auto font = st::msgDateFont;
 	p.setFont(font->bold());
