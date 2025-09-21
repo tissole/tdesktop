@@ -100,7 +100,7 @@ void GroupedMedia::drawMessageIdInfo(
 	}
 	
 	if (dateW > itemGeometry.width() - 2 * st::msgDateImgPadding.x()) {
-		const auto availableWidth = itemGeometry.width() - 2 * st::msgDateImgPadding.x() - 4; // Leave some margin
+		const auto availableWidth = itemGeometry.width() - 2 * st::msgDateImgPadding.x() - 4;
 		if (availableWidth > st::msgDateFont->width("...")) {
 			QFontMetrics metrics(st::msgDateFont);
 			msgIdText = metrics.elidedText(msgIdText, Qt::ElideRight, availableWidth);
@@ -158,7 +158,7 @@ void GroupedMedia::drawLastItemInfo(
 	
 	const auto msgId = item->fullId().msg;
 	if (msgId > 0) {
-		infoText += QString::number(msgId.bare);  // Removed parentheses
+		infoText += QString::number(msgId.bare);  
 	}
 	
 p.setFont(st::msgDateFont);
@@ -292,8 +292,8 @@ QSize GroupedMedia::countOptimalSize() {
 	const auto layout = (_mode == Mode::Grid)
 		? Ui::LayoutMediaGroup(
 			 sizes,
-			 int(st::historyGroupWidthMax * 1.1),
-			 int(st::historyGroupWidthMin * 1.1),
+			 int(st::historyGroupWidthMax * 1.15),
+			 int(st::historyGroupWidthMin * 1.15),
 			 st::historyGroupSkip)
 		: LayoutPlaylist(sizes);
 	Assert(layout.size() == _parts.size());
@@ -302,26 +302,7 @@ QSize GroupedMedia::countOptimalSize() {
 	for (auto i = 0; i != _parts.size(); ++i) {
 		_parts[i].initialGeometry = layout[i].geometry;
 		_parts[i].sides = layout[i].sides;
-	
-rows[layout[i].geometry.y()].push_back(i);
-	}
-
-	const auto widthIncreaseFactor = 1.15;
-	for (auto &part : _parts) {
-		auto &geom = part.initialGeometry;
-		geom.setRect(
-			int(base::SafeRound(geom.x() * widthIncreaseFactor)),
-			int(base::SafeRound(geom.y() * widthIncreaseFactor)),
-			int(base::SafeRound(geom.width() * widthIncreaseFactor)),
-			int(base::SafeRound(geom.height() * widthIncreaseFactor))
-		);
-	}
-
-
-rows.clear();
-	for (auto i = 0; i != _parts.size(); ++i) {
-	
-rows[_parts[i].initialGeometry.y()].push_back(i);
+		rows[layout[i].geometry.y()].push_back(i);
 	}
 
 	auto y = 0.;
