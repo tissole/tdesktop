@@ -89,13 +89,11 @@ void GroupedMedia::drawMessageIdInfo(
 	auto textWidth = st::msgDateFont->width(msgIdText);
 	auto textHeight = st::msgDateFont->height;
 
-	const auto skipy = (st::msgDateImgDelta + st::msgDateImgPadding.y());
-	
 	const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
 	const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
 	
 	auto dateX = itemGeometry.x() + itemGeometry.width() - dateW - 1;
-	auto dateY = itemGeometry.y() + skipy;
+	auto dateY = itemGeometry.y() + 1;
 	
 	if (dateX < itemGeometry.x()) {
 		dateX = itemGeometry.x();
@@ -123,9 +121,12 @@ void GroupedMedia::drawMessageIdInfo(
 	}
 
 	Ui::FillRoundRect(p, dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), dateW, dateH, 
-		sti->msgDateImgBg, sti->msgDateImgBgCorners);
+		QColor(0, 0, 0, 160), sti->msgDateImgBgCorners);
 
-	p.drawText(dateX, dateY + st::msgDateFont->ascent, msgIdText);
+	auto font = st::msgDateFont;
+	p.setFont(font->bold());
+	p.drawText(dateX, dateY + font->ascent, msgIdText);
+	p.setFont(font);
 }
 
 void GroupedMedia::drawLastItemInfo(
@@ -182,7 +183,7 @@ p.setFont(st::msgDateFont);
 		const auto viewsWidth = st::msgDateFont->width(viewsText);
 
 		p.drawText(iconLeft + st::historyViewsWidth, dateY + st::msgDateFont->ascent, viewsText);
-		p.drawText(iconLeft + st::historyViewsWidth + viewsWidth, dateY + st::msgDateFont->ascent, restText);
+		p.drawText(iconLeft + st::historyViewsWidth + viewsWidth + st::historyViewsSpace, dateY + st::msgDateFont->ascent, restText);
 	} else {
 		p.drawText(dateX, dateY + st::msgDateFont->ascent, infoText);
 	}
@@ -282,8 +283,8 @@ QSize GroupedMedia::countOptimalSize() {
 	const auto layout = (_mode == Mode::Grid)
 		? Ui::LayoutMediaGroup(
 			 sizes,
-			 int(st::historyGroupWidthMax * 1.1), 
-			 int(st::historyGroupWidthMin * 1.1),  
+			 int(st::historyGroupWidthMax * 1.1),
+			 int(st::historyGroupWidthMin * 1.1),
 			 st::historyGroupSkip)
 		: LayoutPlaylist(sizes);
 	Assert(layout.size() == _parts.size());
@@ -292,11 +293,10 @@ QSize GroupedMedia::countOptimalSize() {
 	for (auto i = 0; i != _parts.size(); ++i) {
 		_parts[i].initialGeometry = layout[i].geometry;
 		_parts[i].sides = layout[i].sides;
-	
-rows[layout[i].geometry.y()].push_back(i);
+		rows[layout[i].geometry.y()].push_back(i);
 	}
 
-	const auto widthIncreaseFactor = 1.1;
+	const auto widthIncreaseFactor = 1.15;
 	for (auto &part : _parts) {
 		auto &geom = part.initialGeometry;
 		geom.setRect(
@@ -307,11 +307,9 @@ rows[layout[i].geometry.y()].push_back(i);
 		);
 	}
 
-
-rows.clear();
+	rows.clear();
 	for (auto i = 0; i != _parts.size(); ++i) {
-	
-rows[_parts[i].initialGeometry.y()].push_back(i);
+ows[_parts[i].initialGeometry.y()].push_back(i);
 	}
 
 	auto y = 0.;
@@ -388,8 +386,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 		std::map<int, std::vector<int>> rows;
 		for (auto i = 0; i != _parts.size(); ++i) {
-		
-rows[_parts[i].initialGeometry.y()].push_back(i);
+ows[_parts[i].initialGeometry.y()].push_back(i);
 		}
 
 		auto y = 0.;
@@ -419,9 +416,15 @@ rows[_parts[i].initialGeometry.y()].push_back(i);
 			} else {
 				part._captionHeight = 0;
 			}
-			accumulate_max(maxCaptionHeight, float64(part._captionHeight));
-			}
-			const auto rowHeight = maxMediaHeight + maxCaptionHeight;
+							accumulate_max(maxCaptionHeight, float64(part._captionHeight));
+						}
+			
+						if (!indices.empty()) {
+							auto &last_part_in_row = _parts[indices.back()];
+							if (!(last_part_in_row.sides & RectPart::Right)) {
+								last_part_in_row.geometry.setRight(newWidth);
+							}
+						}			const auto rowHeight = maxMediaHeight + maxCaptionHeight;
 			for (const auto i : indices) {
 				auto &part = _parts[i];
 				part.geometry.setY(y + (maxMediaHeight - part.geometry.height()));
@@ -718,8 +721,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto lastPart = &_parts.back();
 				const auto groupPadding = groupedPadding();
 				const auto lastItemGeometry = lastPart->geometry.translated(0, groupPadding.top());
-				const auto skipx = (st::msgDateImgDelta + st::msgDateImgPadding.x());
-				const auto skipy = (st::msgDateImgDelta + st::msgDateImgPadding.y());
+				const auto skipx = 1;
+				const auto skipy = 1;
 				const auto infoX = lastItemGeometry.x() + lastItemGeometry.width() - skipx;
 				const auto infoY = lastItemGeometry.y() + skipy;
 				drawLastItemInfo(p, context, infoX, infoY, lastPart->item);
@@ -776,10 +779,8 @@ TextState GroupedMedia::getPartState(
 	if (!_parts.empty() && needInfoDisplay()) {
 		const auto lastPart = &_parts.back();
 		const auto groupPadding = groupedPadding();
-		const auto lastItemGeometry = lastPart->geometry.translated(0, groupPadding.top());
-		const auto skipx = (st::msgDateImgDelta + st::msgDateImgPadding.x());
-		const auto skipy = (st::msgDateImgDelta + st::msgDateImgPadding.y());
-		const auto infoX = lastItemGeometry.x() + lastItemGeometry.width() - skipx;
+		                const auto skipx = 1;
+		                const auto skipy = 1;		const auto infoX = lastItemGeometry.x() + lastItemGeometry.width() - skipx;
 		const auto infoY = lastItemGeometry.y() + skipy;
 		
 		QString infoText;
@@ -806,15 +807,20 @@ TextState GroupedMedia::getPartState(
 		
 		if (infoRect.contains(point)) {
 			const auto item = lastPart->item;
-			const auto dateText = QLocale().toString(ItemDateTime(item).date(), QLocale::ShortFormat);
-			const auto timeText = QLocale().toString(ItemDateTime(item).time(), QLocale::ShortFormat);
+			const auto dateTime = ItemDateTime(item);
+			const auto dateText = QLocale().toString(dateTime.date(), QLocale::LongFormat);
+			const auto timeText = QLocale().toString(dateTime.time(), "hh:mm:ss");
+			const auto line1 = dateText + ' ' + timeText;
 			const auto msgId = item->fullId().msg;
+			const auto line2 = (msgId > 0)
+				? ("Message ID: " + QString::number(msgId.bare))
+				: QString();
 
 			auto result = TextState(item);
 			result.customTooltip = true;
-			result.customTooltipText = (msgId > 0)
-				? (dateText + ' ' + timeText + " (" + QString::number(msgId.bare) + ")")
-				: (dateText + ' ' + timeText);
+			result.customTooltipText = line2.isEmpty()
+				? line1
+				: (line1 + '\n' + line2);
 			return result;
 		}
 	}
