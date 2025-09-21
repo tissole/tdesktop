@@ -92,8 +92,8 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
 	const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
 	
-	auto dateX = itemGeometry.x() + itemGeometry.width() - dateW - 1;
-	auto dateY = itemGeometry.y() + 1;
+	auto dateX = itemGeometry.x() + itemGeometry.width() - dateW - st::msgDateImgDelta;
+	auto dateY = itemGeometry.y() + st::msgDateImgDelta;
 	
 	if (dateX < itemGeometry.x()) {
 		dateX = itemGeometry.x();
@@ -110,7 +110,7 @@ void GroupedMedia::drawMessageIdInfo(
 		}
 	}
 	
-	dateX = itemGeometry.x() + itemGeometry.width() - dateW - 1;
+	dateX = itemGeometry.x() + itemGeometry.width() - dateW - st::msgDateImgDelta;
 	
 	if (dateY < itemGeometry.y()) {
 		dateY = itemGeometry.y();
@@ -302,7 +302,8 @@ QSize GroupedMedia::countOptimalSize() {
 	for (auto i = 0; i != _parts.size(); ++i) {
 		_parts[i].initialGeometry = layout[i].geometry;
 		_parts[i].sides = layout[i].sides;
-		rows[layout[i].geometry.y()].push_back(i);
+	
+rows[layout[i].geometry.y()].push_back(i);
 	}
 
 	const auto widthIncreaseFactor = 1.15;
@@ -316,9 +317,11 @@ QSize GroupedMedia::countOptimalSize() {
 		);
 	}
 
-	rows.clear();
+
+rows.clear();
 	for (auto i = 0; i != _parts.size(); ++i) {
-		rows[_parts[i].initialGeometry.y()].push_back(i);
+	
+rows[_parts[i].initialGeometry.y()].push_back(i);
 	}
 
 	auto y = 0.;
@@ -395,7 +398,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 		std::map<int, std::vector<int>> rows;
 		for (auto i = 0; i != _parts.size(); ++i) {
-			rows[_parts[i].initialGeometry.y()].push_back(i);
+		
+rows[_parts[i].initialGeometry.y()].push_back(i);
 		}
 
 		auto y = 0.;
@@ -731,8 +735,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto lastPart = &_parts.back();
 				const auto groupPadding = groupedPadding();
 				const auto lastItemGeometry = lastPart->geometry.translated(0, groupPadding.top());
-				const auto skipx = 1;
-				const auto skipy = 1;
+				const auto skipx = st::msgDateImgDelta;
+				const auto skipy = st::msgDateImgDelta;
 				const auto infoX = lastItemGeometry.x() + lastItemGeometry.width() - skipx;
 				const auto infoY = lastItemGeometry.y() + skipy;
 				drawLastItemInfo(p, context, infoX, infoY, lastPart->item);
@@ -790,8 +794,8 @@ TextState GroupedMedia::getPartState(
 		const auto lastPart = &_parts.back();
 		const auto groupPadding = groupedPadding();
 		const auto lastItemGeometry = lastPart->geometry.translated(0, groupPadding.top());
-		const auto skipx = 1;
-		const auto skipy = 1;
+		const auto skipx = st::msgDateImgDelta;
+		const auto skipy = st::msgDateImgDelta;
 		const auto infoX = lastItemGeometry.x() + lastItemGeometry.width() - skipx;
 		const auto infoY = lastItemGeometry.y() + skipy;
 		
