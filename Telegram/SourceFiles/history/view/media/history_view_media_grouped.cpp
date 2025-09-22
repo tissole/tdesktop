@@ -167,24 +167,24 @@ void GroupedMedia::drawLastItemInfo(
 	const auto textWidth = st::msgDateFont->width(infoText);
 	const auto textHeight = st::msgDateFont->height;
 
-	const auto bubbleW = textWidth + 2 * st::msgDateImgPadding.x();
-	const auto bubbleH = textHeight + 2 * st::msgDateImgPadding.y();
-	const auto bubbleX = infoX - bubbleW;
-	const auto bubbleY = infoY;
+	const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
+	const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
+	const auto dateX = infoX - dateW;
+	const auto dateY = infoY;
 
 	auto originalColor = sti->msgDateImgBg->c;
 	auto modifiedQColor = QColor(originalColor.red(), originalColor.green(), originalColor.blue(), 160);
 	const auto bgColor = style::internal::OwnedColor(modifiedQColor);
-	Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, bgColor.color(), sti->msgDateImgBgCorners);
+	Ui::FillRoundRect(p, dateX, dateY, dateW, dateH, bgColor.color(), sti->msgDateImgBgCorners);
 
 	auto font = st::msgDateFont;
 	p.setFont(font->bold());
-	const auto textX = bubbleX + st::msgDateImgPadding.x();
-	const auto textY = bubbleY + st::msgDateImgPadding.y();
+	const auto textX = dateX + st::msgDateImgPadding.x();
+	const auto textY = dateY + st::msgDateImgPadding.y();
 	if (hasViews) {
 		const auto &icon = stm->historyViewsIcon;
-		const auto iconTop = bubbleY + (bubbleH - icon.height()) / 2;
-		icon.paint(p, textX, iconTop, bubbleW);
+		const auto iconTop = dateY + (dateH - icon.height()) / 2;
+		icon.paint(p, textX, iconTop, dateW);
 
 		const auto viewsText = QString::number(viewsCount) + " ";
 		const auto restText = dateText + " " + QString::number(msgId.bare);
@@ -289,11 +289,12 @@ QSize GroupedMedia::countOptimalSize() {
 			part.content->sizeForGroupingOptimal(maxWidth, last));
 	}
 
+	// Step 1: Calculate layout with STANDARD widths.
 	const auto layout = (_mode == Mode::Grid)
 		? Ui::LayoutMediaGroup(
 			 sizes,
-			 int(st::historyGroupWidthMax * 1.15),
-			 int(st::historyGroupWidthMin * 1.15),
+			 st::historyGroupWidthMax,
+			 st::historyGroupWidthMin,
 			 st::historyGroupSkip)
 		: LayoutPlaylist(sizes);
 	Assert(layout.size() == _parts.size());
@@ -302,7 +303,7 @@ QSize GroupedMedia::countOptimalSize() {
 	for (auto i = 0; i != _parts.size(); ++i) {
 		_parts[i].initialGeometry = layout[i].geometry;
 		_parts[i].sides = layout[i].sides;
-		rows[layout[i].initialGeometry.y()].push_back(i);	
+		rows[layout[i].initialGeometry.y()].push_back(i);
 	}
 
 	auto y = 0.;
@@ -313,10 +314,10 @@ QSize GroupedMedia::countOptimalSize() {
 		for (const auto i : indices) {
 			auto &part = _parts[i];
 			accumulate_max(maxMediaHeight, float64(part.initialGeometry.height()));
-			
+
 			const auto originalText = part.item->originalText();
-			if ((_mode == Mode::Grid) && 
-				GetEnhancedBool("caption_from_file_name") && 
+			if ((_mode == Mode::Grid) &&
+				GetEnhancedBool("caption_from_file_name") &&
 				!originalText.empty()) {
 				Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
 				const auto padding = QMargins(8, 0, 8, 0);
@@ -334,8 +335,15 @@ QSize GroupedMedia::countOptimalSize() {
 	}
 
 	auto minHeight = y > 0 ? (y - spacing) : 0;
+	// Recalculate maxWidth from the now-finalized initial geometries.
+	maxWidth = 0;
 	for (auto i = 0; i != _parts.size(); ++i) {
 		accumulate_max(maxWidth, _parts[i].initialGeometry.x() + _parts[i].initialGeometry.width());
+	}
+
+	// Step 2: Scale the FINAL calculated width by 15%.
+	if (_mode == Mode::Grid) {
+		maxWidth = int(base::SafeRound(maxWidth * 1.15));
 	}
 
 	if (_mode == Mode::Column
@@ -797,11 +805,11 @@ TextState GroupedMedia::getPartState(
 
 		const auto textWidth = st::msgDateFont->width(infoText);
 		const auto textHeight = st::msgDateFont->height;
-		const auto bubbleW = textWidth + 2 * st::msgDateImgPadding.x();
-		const auto bubbleH = textHeight + 2 * st::msgDateImgPadding.y();
-		const auto bubbleX = infoX - bubbleW;
-		const auto bubbleY = infoY;
-		const auto infoRect = QRect(bubbleX, bubbleY, bubbleW, bubbleH);
+		const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
+		const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
+		const auto dateX = infoX - dateW;
+		const auto dateY = infoY;
+		const auto infoRect = QRect(dateX, dateY, dateW, dateH);
 
 		if (infoRect.contains(point)) {
 			const auto item = lastPart->item;
