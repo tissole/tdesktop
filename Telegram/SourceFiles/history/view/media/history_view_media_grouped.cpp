@@ -778,7 +778,6 @@ TextState GroupedMedia::getPartState(
 		shift += part.content->fullSelectionLength();
 	}
 
-	// Tooltip hover detection for the info bubble on the last item.
 	if (!_parts.empty() && needInfoDisplay()) {
 		const auto lastPart = &_parts.back();
 		const auto groupPadding = groupedPadding();
@@ -822,11 +821,11 @@ TextState GroupedMedia::getPartState(
 				"hh:mm:ss");
 			const auto line1 = fullDateText + ' ' + fullTimeText;
 			const auto lastMsgId = item->fullId().msg;
-			const auto line2 = (lastMsgId > 0)
-				? (tr::lng_context_message_id(tr::now)
-					+ ' '
-					+ QString::number(lastMsgId.bare))
-				: QString();
+
+			QString line2;
+			if (lastMsgId > 0) {
+				line2 = "Message ID: " + QString::number(lastMsgId.bare);
+			}
 
 			auto result = TextState(item);
 			result.customTooltip = true;
