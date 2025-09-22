@@ -92,8 +92,8 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
 	const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
 	
-	auto dateX = itemGeometry.x() + itemGeometry.width() - dateW - 4;
-	auto dateY = itemGeometry.y() + 4;
+	auto dateX = itemGeometry.x() + itemGeometry.width() - dateW;
+	auto dateY = itemGeometry.y();
 	
 	if (dateX < itemGeometry.x()) {
 		dateX = itemGeometry.x();
@@ -110,7 +110,7 @@ void GroupedMedia::drawMessageIdInfo(
 		}
 	}
 	
-	dateX = itemGeometry.x() + itemGeometry.width() - dateW - 4;
+	dateX = itemGeometry.x() + itemGeometry.width() - dateW;
 	
 	if (dateY < itemGeometry.y()) {
 		dateY = itemGeometry.y();
@@ -141,59 +141,59 @@ void GroupedMedia::drawLastItemInfo(
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
 	const auto stm = context.messageStyle();
-	
+
 	QString infoText;
 	bool hasViews = false;
 	int viewsCount = 0;
-	
+
 	if (const auto views = item->Get<HistoryMessageViews>()) {
 		if (views->views.count >= 0) {
 			viewsCount = views->views.count;
 			hasViews = true;
 		}
 	}
-	
+
 	const auto dateText = QLocale().toString(ItemDateTime(item).time(), QLocale::ShortFormat);
 	infoText += dateText + " ";
-	
+
 	const auto msgId = item->fullId().msg;
 	if (msgId > 0) {
-		infoText += QString::number(msgId.bare);  // Removed parentheses
+		infoText += QString::number(msgId.bare);
 	}
-	
-p.setFont(st::msgDateFont);
+
+	p.setFont(st::msgDateFont);
 	p.setPen(st->msgDateImgFg());
 
 	const auto textWidth = st::msgDateFont->width(infoText);
 	const auto textHeight = st::msgDateFont->height;
 
-	const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-	const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
-	const auto dateX = infoX - dateW;
-	const auto dateY = infoY;
+	const auto bubbleW = textWidth + 2 * st::msgDateImgPadding.x();
+	const auto bubbleH = textHeight + 2 * st::msgDateImgPadding.y();
+	const auto bubbleX = infoX - bubbleW;
+	const auto bubbleY = infoY;
 
 	auto originalColor = sti->msgDateImgBg->c;
 	auto modifiedQColor = QColor(originalColor.red(), originalColor.green(), originalColor.blue(), 160);
 	const auto bgColor = style::internal::OwnedColor(modifiedQColor);
-	Ui::FillRoundRect(p, dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), 
-		dateW, dateH, bgColor.color(), sti->msgDateImgBgCorners);
+	Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, bgColor.color(), sti->msgDateImgBgCorners);
 
 	auto font = st::msgDateFont;
 	p.setFont(font->bold());
+	const auto textX = bubbleX + st::msgDateImgPadding.x();
+	const auto textY = bubbleY + st::msgDateImgPadding.y();
 	if (hasViews) {
-		const auto iconLeft = dateX - st::msgDateImgPadding.x() + st::msgDateImgPadding.x();
 		const auto &icon = stm->historyViewsIcon;
-		const auto iconTop = dateY + (dateH - icon.height()) / 2;
-		icon.paint(p, iconLeft, iconTop, dateW);
+		const auto iconTop = bubbleY + (bubbleH - icon.height()) / 2;
+		icon.paint(p, textX, iconTop, bubbleW);
 
 		const auto viewsText = QString::number(viewsCount) + " ";
 		const auto restText = dateText + " " + QString::number(msgId.bare);
 		const auto viewsWidth = p.fontMetrics().width(viewsText);
 
-		p.drawText(iconLeft + st::historyViewsWidth, dateY + font->ascent, viewsText);
-		p.drawText(iconLeft + st::historyViewsWidth + viewsWidth + st::historyViewsSpace, dateY + font->ascent, restText);
+		p.drawText(textX + st::historyViewsWidth, textY + font->ascent, viewsText);
+		p.drawText(textX + st::historyViewsWidth + viewsWidth + st::historyViewsSpace, textY + font->ascent, restText);
 	} else {
-		p.drawText(dateX, dateY + font->ascent, infoText);
+		p.drawText(textX, textY + font->ascent, infoText);
 	}
 	p.setFont(font);
 }
@@ -302,7 +302,8 @@ QSize GroupedMedia::countOptimalSize() {
 	for (auto i = 0; i != _parts.size(); ++i) {
 		_parts[i].initialGeometry = layout[i].geometry;
 		_parts[i].sides = layout[i].sides;
-		rows[_parts[i].initialGeometry.y()].push_back(i);	}
+		rows[layout[i].initialGeometry.y()].push_back(i);	
+	}
 
 	auto y = 0.;
 	const auto spacing = (_mode == Mode::Grid) ? st::historyGroupSkip : 0.;
@@ -425,7 +426,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				part.captionRect = (part._captionHeight > 0)
 					? QRect(
 						mediaGeometry.left(),
-						mediaGeometry.bottom() + 1,
+						mediaGeometry.bottom(),
 						mediaGeometry.width(),
 						part._captionHeight)
 					: QRect();
@@ -714,8 +715,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto lastPart = &_parts.back();
 				const auto groupPadding = groupedPadding();
 				const auto lastItemGeometry = lastPart->geometry.translated(0, groupPadding.top());
-				const auto skipx = 4;
-				const auto skipy = 4;
+				const auto skipx = 0;
+				const auto skipy = 0;
 				const auto infoX = lastItemGeometry.x() + lastItemGeometry.width() - skipx;
 				const auto infoY = lastItemGeometry.y() + skipy;
 				drawLastItemInfo(p, context, infoX, infoY, lastPart->item);
@@ -753,7 +754,7 @@ TextState GroupedMedia::getPartState(
 				&& !part.captionRect.isEmpty()
 				&& part.captionRect.contains(point)) {
 				const auto originalText = part.item->originalText();
-			if (!originalText.empty()) {
+				if (!originalText.empty()) {
 					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
 					const auto padding = QMargins(8, 0, 8, 0);
 					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
@@ -768,47 +769,55 @@ TextState GroupedMedia::getPartState(
 		}
 		shift += part.content->fullSelectionLength();
 	}
-	
+
+	// Tooltip hover detection for the info bubble on the last item.
 	if (!_parts.empty() && needInfoDisplay()) {
 		const auto lastPart = &_parts.back();
 		const auto groupPadding = groupedPadding();
-		const auto lastItemGeometry = lastPart->geometry.translated(0, groupPadding.top());
-		const auto skipx = 4;
-		const auto skipy = 4;
-		const auto infoX = lastItemGeometry.x() + lastItemGeometry.width() - skipx;
-		const auto infoY = lastItemGeometry.y() + skipy;
-		
+		const auto lastItemGeometry = lastPart->geometry.translated(
+			0,
+			groupPadding.top());
+		const auto infoX = lastItemGeometry.x() + lastItemGeometry.width();
+		const auto infoY = lastItemGeometry.y();
+
 		QString infoText;
 		if (const auto views = lastPart->item->Get<HistoryMessageViews>()) {
 			if (views->views.count >= 0) {
 				infoText += QString::number(views->views.count) + " ";
 			}
 		}
-		const auto dateText = QLocale().toString(ItemDateTime(lastPart->item).time(), QLocale::ShortFormat);
+		const auto dateText = QLocale().toString(
+			ItemDateTime(lastPart->item).time(),
+			QLocale::ShortFormat);
 		infoText += dateText + " ";
 		const auto msgId = lastPart->item->fullId().msg;
 		if (msgId > 0) {
 			infoText += QString::number(msgId.bare);
 		}
-		
+
 		const auto textWidth = st::msgDateFont->width(infoText);
 		const auto textHeight = st::msgDateFont->height;
-		const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-		const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
-		const auto dateX = infoX - dateW;
-		const auto dateY = infoY;
-		
-		const auto infoRect = QRect(dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), dateW, dateH);
-		
+		const auto bubbleW = textWidth + 2 * st::msgDateImgPadding.x();
+		const auto bubbleH = textHeight + 2 * st::msgDateImgPadding.y();
+		const auto bubbleX = infoX - bubbleW;
+		const auto bubbleY = infoY;
+		const auto infoRect = QRect(bubbleX, bubbleY, bubbleW, bubbleH);
+
 		if (infoRect.contains(point)) {
 			const auto item = lastPart->item;
 			const auto dateTime = ItemDateTime(item);
-			const auto dateText = QLocale().toString(dateTime.date(), QLocale::LongFormat);
-			const auto timeText = QLocale().toString(dateTime.time(), "hh:mm:ss");
-			const auto line1 = dateText + ' ' + timeText;
-			const auto msgId = item->fullId().msg;
-			const auto line2 = (msgId > 0)
-				? ("Message ID: " + QString::number(msgId.bare))
+			const auto fullDateText = QLocale().toString(
+				dateTime.date(),
+				QLocale::LongFormat);
+			const auto fullTimeText = QLocale().toString(
+				dateTime.time(),
+				"hh:mm:ss");
+			const auto line1 = fullDateText + ' ' + fullTimeText;
+			const auto lastMsgId = item->fullId().msg;
+			const auto line2 = (lastMsgId > 0)
+				? (tr::lng_context_message_id(tr::now)
+					+ ' '
+					+ QString::number(lastMsgId.bare))
 				: QString();
 
 			auto result = TextState(item);
@@ -819,7 +828,7 @@ TextState GroupedMedia::getPartState(
 			return result;
 		}
 	}
-	
+
 	return TextState(_parent->data());
 }
 
