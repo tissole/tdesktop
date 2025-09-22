@@ -302,8 +302,7 @@ QSize GroupedMedia::countOptimalSize() {
 	for (auto i = 0; i != _parts.size(); ++i) {
 		_parts[i].initialGeometry = layout[i].geometry;
 		_parts[i].sides = layout[i].sides;
-	ows[layout[i].geometry.y()].push_back(i);
-	}
+		rows[_parts[i].initialGeometry.y()].push_back(i);	}
 
 	auto y = 0.;
 	const auto spacing = (_mode == Mode::Grid) ? st::historyGroupSkip : 0.;
