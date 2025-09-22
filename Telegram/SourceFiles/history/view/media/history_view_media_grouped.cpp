@@ -289,7 +289,6 @@ QSize GroupedMedia::countOptimalSize() {
 			part.content->sizeForGroupingOptimal(maxWidth, last));
 	}
 
-	// Step 1: Calculate layout with STANDARD widths.
 	const auto layout = (_mode == Mode::Grid)
 		? Ui::LayoutMediaGroup(
 			 sizes,
@@ -303,7 +302,7 @@ QSize GroupedMedia::countOptimalSize() {
 	for (auto i = 0; i != _parts.size(); ++i) {
 		_parts[i].initialGeometry = layout[i].geometry;
 		_parts[i].sides = layout[i].sides;
-		rows[layout[i].initialGeometry.y()].push_back(i);
+		rows[layout[i].geometry.y()].push_back(i);
 	}
 
 	auto y = 0.;
@@ -335,13 +334,11 @@ QSize GroupedMedia::countOptimalSize() {
 	}
 
 	auto minHeight = y > 0 ? (y - spacing) : 0;
-	// Recalculate maxWidth from the now-finalized initial geometries.
 	maxWidth = 0;
 	for (auto i = 0; i != _parts.size(); ++i) {
 		accumulate_max(maxWidth, _parts[i].initialGeometry.x() + _parts[i].initialGeometry.width());
 	}
 
-	// Step 2: Scale the FINAL calculated width by 15%.
 	if (_mode == Mode::Grid) {
 		maxWidth = int(base::SafeRound(maxWidth * 1.15));
 	}
