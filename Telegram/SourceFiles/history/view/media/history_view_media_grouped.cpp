@@ -80,55 +80,59 @@ void GroupedMedia::drawMessageIdInfo(
 	}
 
 	QString msgIdText = QString::number(msgId.bare);
-	
+
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
 	p.setFont(st::msgDateFont);
 	p.setPen(st->msgDateImgFg());
 
 	auto textWidth = st::msgDateFont->width(msgIdText);
-	auto textHeight = st::msgDateFont->height;
+	const auto textHeight = st::msgDateFont->height;
 
-	const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
+	auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
 	const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
-	
-	auto dateX = itemGeometry.x() + itemGeometry.width() - dateW;
-	auto dateY = itemGeometry.y();
-	
-	if (dateX < itemGeometry.x()) {
-		dateX = itemGeometry.x();
-	}
-	
-	if (dateW > itemGeometry.width() - 2 * st::msgDateImgPadding.x()) {
-		const auto availableWidth = itemGeometry.width() - 2 * st::msgDateImgPadding.x() - 4; // Leave some margin
+
+	if (dateW > itemGeometry.width()) {
+		const auto availableWidth = itemGeometry.width()
+			- (2 * st::msgDateImgPadding.x());
 		if (availableWidth > st::msgDateFont->width("...")) {
-			QFontMetrics metrics(st::msgDateFont);
-			msgIdText = metrics.elidedText(msgIdText, Qt::ElideRight, availableWidth);
+			const QFontMetrics metrics(st::msgDateFont);
+			msgIdText = metrics.elidedText(
+				msgIdText,
+				Qt::ElideRight,
+				availableWidth);
 			textWidth = st::msgDateFont->width(msgIdText);
+			dateW = textWidth + 2 * st::msgDateImgPadding.x();
 		} else {
 			return;
 		}
 	}
-	
-	dateX = itemGeometry.x() + itemGeometry.width() - dateW;
-	
-	if (dateY < itemGeometry.y()) {
-		dateY = itemGeometry.y();
-	}
-	
-	if (dateY + dateH > itemGeometry.y() + itemGeometry.height()) {
-		return;
-	}
+
+	const auto bubbleX = itemGeometry.x() + itemGeometry.width() - dateW;
+	const auto bubbleY = itemGeometry.y();
 
 	auto originalColor = sti->msgDateImgBg->c;
-	auto modifiedQColor = QColor(originalColor.red(), originalColor.green(), originalColor.blue(), 160);
+	auto modifiedQColor = QColor(
+		originalColor.red(),
+		originalColor.green(),
+		originalColor.blue(),
+		160);
 	const auto bgColor = style::internal::OwnedColor(modifiedQColor);
-	Ui::FillRoundRect(p, dateX - st::msgDateImgPadding.x(), dateY - st::msgDateImgPadding.y(), dateW, dateH, 
-		bgColor.color(), sti->msgDateImgBgCorners);
+	Ui::FillRoundRect(
+		p,
+		bubbleX,
+		bubbleY,
+		dateW,
+		dateH,
+		bgColor.color(),
+		sti->msgDateImgBgCorners);
 
 	auto font = st::msgDateFont;
 	p.setFont(font->bold());
-	p.drawText(dateX, dateY + font->ascent, msgIdText);
+	p.drawText(
+		bubbleX + st::msgDateImgPadding.x(),
+		bubbleY + st::msgDateImgPadding.y() + font->ascent,
+		msgIdText);
 	p.setFont(font);
 }
 
@@ -153,13 +157,11 @@ void GroupedMedia::drawLastItemInfo(
 		}
 	}
 
-	const auto dateText = QLocale().toString(ItemDateTime(item).time(), QLocale::ShortFormat);
-	infoText += dateText + " ";
-
-	const auto msgId = item->fullId().msg;
-	if (msgId > 0) {
-		infoText += QString::number(msgId.bare);
-	}
+	const auto dateText = QLocale().toString(
+		ItemDateTime(item).time(),
+		QLocale::ShortFormat);
+	const auto msgId = item->fullId().msg.bare;
+	infoText = dateText + " " + QString::number(msgId);
 
 	p.setFont(st::msgDateFont);
 	p.setPen(st->msgDateImgFg());
@@ -173,9 +175,20 @@ void GroupedMedia::drawLastItemInfo(
 	const auto dateY = infoY;
 
 	auto originalColor = sti->msgDateImgBg->c;
-	auto modifiedQColor = QColor(originalColor.red(), originalColor.green(), originalColor.blue(), 160);
+	auto modifiedQColor = QColor(
+		originalColor.red(),
+		originalColor.green(),
+		originalColor.blue(),
+		160);
 	const auto bgColor = style::internal::OwnedColor(modifiedQColor);
-	Ui::FillRoundRect(p, dateX, dateY, dateW, dateH, bgColor.color(), sti->msgDateImgBgCorners);
+	Ui::FillRoundRect(
+		p,
+		dateX,
+		dateY,
+		dateW,
+		dateH,
+		bgColor.color(),
+		sti->msgDateImgBgCorners);
 
 	auto font = st::msgDateFont;
 	p.setFont(font->bold());
@@ -187,11 +200,17 @@ void GroupedMedia::drawLastItemInfo(
 		icon.paint(p, textX, iconTop, dateW);
 
 		const auto viewsText = QString::number(viewsCount) + " ";
-		const auto restText = dateText + " " + QString::number(msgId.bare);
+		const auto restText = infoText;
 		const auto viewsWidth = p.fontMetrics().width(viewsText);
 
-		p.drawText(textX + st::historyViewsWidth, textY + font->ascent, viewsText);
-		p.drawText(textX + st::historyViewsWidth + viewsWidth + st::historyViewsSpace, textY + font->ascent, restText);
+		p.drawText(
+			textX + st::historyViewsWidth,
+			textY + font->ascent,
+			viewsText);
+		p.drawText(
+			textX + st::historyViewsWidth + viewsWidth + st::historyViewsSpace,
+			textY + font->ascent,
+			restText);
 	} else {
 		p.drawText(textX, textY + font->ascent, infoText);
 	}
@@ -289,12 +308,15 @@ QSize GroupedMedia::countOptimalSize() {
 			part.content->sizeForGroupingOptimal(maxWidth, last));
 	}
 
+	const auto widthMax = (_mode == Mode::Grid)
+		? int(base::SafeRound(st::historyGroupWidthMax * 1.15))
+		: st::historyGroupWidthMax;
 	const auto layout = (_mode == Mode::Grid)
 		? Ui::LayoutMediaGroup(
-			 sizes,
-			 st::historyGroupWidthMax,
-			 st::historyGroupWidthMin,
-			 st::historyGroupSkip)
+			sizes,
+			widthMax,
+			st::historyGroupWidthMin,
+			st::historyGroupSkip)
 		: LayoutPlaylist(sizes);
 	Assert(layout.size() == _parts.size());
 
@@ -318,9 +340,17 @@ QSize GroupedMedia::countOptimalSize() {
 			if ((_mode == Mode::Grid) &&
 				GetEnhancedBool("caption_from_file_name") &&
 				!originalText.empty()) {
-				Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
+				Ui::Text::String caption(
+					st::messageTextStyle,
+					originalText,
+					kDefaultTextOptions);
 				const auto padding = QMargins(8, 0, 8, 0);
-				part._captionHeight = caption.countHeight(part.initialGeometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
+				part._captionHeight = caption.countHeight(
+					part.initialGeometry.width()
+						- padding.left()
+						- padding.right())
+					+ padding.top()
+					+ padding.bottom();
 			} else {
 				part._captionHeight = 0.;
 			}
@@ -336,11 +366,9 @@ QSize GroupedMedia::countOptimalSize() {
 	auto minHeight = y > 0 ? (y - spacing) : 0;
 	maxWidth = 0;
 	for (auto i = 0; i != _parts.size(); ++i) {
-		accumulate_max(maxWidth, _parts[i].initialGeometry.x() + _parts[i].initialGeometry.width());
-	}
-
-	if (_mode == Mode::Grid) {
-		maxWidth = int(base::SafeRound(maxWidth * 1.15));
+		accumulate_max(
+			maxWidth,
+			_parts[i].initialGeometry.x() + _parts[i].initialGeometry.width());
 	}
 
 	if (_mode == Mode::Column
@@ -719,11 +747,11 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			if (!_parts.empty()) {
 				const auto lastPart = &_parts.back();
 				const auto groupPadding = groupedPadding();
-				const auto lastItemGeometry = lastPart->geometry.translated(0, groupPadding.top());
-				const auto skipx = 0;
-				const auto skipy = 0;
-				const auto infoX = lastItemGeometry.x() + lastItemGeometry.width() - skipx;
-				const auto infoY = lastItemGeometry.y() + skipy;
+				const auto lastItemGeometry = lastPart->geometry.translated(
+					0,
+					groupPadding.top());
+				const auto infoX = lastItemGeometry.x() + lastItemGeometry.width();
+				const auto infoY = lastItemGeometry.y();
 				drawLastItemInfo(p, context, infoX, infoY, lastPart->item);
 			}
 		}
@@ -778,9 +806,7 @@ TextState GroupedMedia::getPartState(
 	if (!_parts.empty() && needInfoDisplay()) {
 		const auto lastPart = &_parts.back();
 		const auto groupPadding = groupedPadding();
-		const auto lastItemGeometry = lastPart->geometry.translated(
-			0,
-			groupPadding.top());
+		const auto lastItemGeometry = lastPart->geometry; // <-- THE FIX IS HERE
 		const auto infoX = lastItemGeometry.x() + lastItemGeometry.width();
 		const auto infoY = lastItemGeometry.y();
 
