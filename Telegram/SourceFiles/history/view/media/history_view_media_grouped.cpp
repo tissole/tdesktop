@@ -766,20 +766,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				infoText = dateText + " " + QString::number(msgId);
 				const auto textWidth = st::msgDateFont->width(infoText);
 				const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-				// Calculate the width of the info bubble
-				QString infoText;
-				if (const auto views = lastPart->item->Get<HistoryMessageViews>()) {
-					if (views->views.count >= 0) {
-						infoText += QString::number(views->views.count) + " ";
-					}
-				}
-				const auto dateText = QLocale().toString(
-					ItemDateTime(lastPart->item).time(),
-					QLocale::ShortFormat);
-				const auto msgId = lastPart->item->fullId().msg.bare;
-				infoText = dateText + " " + QString::number(msgId);
-				const auto textWidth = st::msgDateFont->width(infoText);
-				const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
 				
 				// Position the info bubble within the item bounds
 				// Pass the right edge of the item as infoX
