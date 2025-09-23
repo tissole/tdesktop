@@ -108,7 +108,8 @@ void GroupedMedia::drawMessageIdInfo(
 		}
 	}
 
-	const auto bubbleX = itemGeometry.x() + itemGeometry.width() - dateW;
+	// Position bubble inside the item bounds to prevent overflow
+	const auto bubbleX = (dateW > itemGeometry.width()) ? itemGeometry.x() : (itemGeometry.x() + itemGeometry.width() - dateW);
 	const auto bubbleY = itemGeometry.y();
 
 	auto originalColor = sti->msgDateImgBg->c;
@@ -301,18 +302,26 @@ QSize GroupedMedia::countOptimalSize() {
 			accumulate_max(maxWidth, media->maxWidth());
 		}
 	}
+	// Apply 15% scaling to all sizes for grid mode
 	auto index = 0;
 	for (const auto &part : _parts) {
 		const auto last = (++index == _parts.size());
-		sizes.push_back(
-			part.content->sizeForGroupingOptimal(maxWidth, last));
+		auto size = part.content->sizeForGroupingOptimal(maxWidth, last);
+		if (_mode == Mode::Grid) {
+			// Scale up sizes by 15% to make album larger
+			size = QSize(int(base::SafeRound(size.width() * 1.15)), int(base::SafeRound(size.height() * 1.15)));
+		}
+		sizes.push_back(size);
 	}
 
-	const auto widthMax = st::historyGroupWidthMax;
+	const auto baseWidthMax = st::historyGroupWidthMax;
+	const auto scaledWidthMax = (_mode == Mode::Grid)
+		? int(base::SafeRound(baseWidthMax * 1.15))  // 15% increase for layout algorithm
+		: baseWidthMax;
 	const auto layout = (_mode == Mode::Grid)
 		? Ui::LayoutMediaGroup(
-			sizes,
-			widthMax,
+			sizes,  // These sizes are already 15% scaled up
+			scaledWidthMax,
 			st::historyGroupWidthMin,
 			st::historyGroupSkip)
 		: LayoutPlaylist(sizes);
@@ -446,10 +455,11 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			if (!indices.empty()) {
 				auto &last_part_in_row = _parts[indices.back()];
 				if (!(last_part_in_row.sides & RectPart::Right)) {
-					// Only extend if there's a meaningful gap to fill (more than 1 pixel)
-					const auto currentRight = last_part_in_row.geometry.right();
-					if (newWidth - currentRight > 1) {
-						last_part_in_row.geometry.setRight(newWidth);
+					// Fix: Only expand the last item in the row if it's not the last item in the whole album
+					// This prevents the extra space on the right side of the last item
+					if (last_part_in_row.geometry.x() + last_part_in_row.geometry.width() < newWidth) {
+						const auto availableWidth = newWidth - last_part_in_row.geometry.x();
+						last_part_in_row.geometry.setWidth(availableWidth);
 					}
 				}
 			}
@@ -674,8 +684,27 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 
-		if (_mode == Mode::Grid && GetEnhancedBool("show_messages_id") && i != count - 1) {
+		if (_mode == Mode::Grid && GetEnhancedBool("show_messages_id")) {
+			// Draw message ID for all items but position bubble correctly
 			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
+			
+			// Add tooltip capability for message ID bubble
+			const auto itemGeometry = part.geometry.translated(0, groupPadding.top());
+			QString msgIdText = QString::number(part.item->fullId().msg.bare);
+			const auto textWidth = st::msgDateFont->width(msgIdText);
+			const auto textHeight = st::msgDateFont->height;
+			auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
+			const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
+			const auto bubbleX = (dateW > itemGeometry.width()) ? itemGeometry.x() : (itemGeometry.x() + itemGeometry.width() - dateW);
+			const auto bubbleY = itemGeometry.y();
+			const auto bubbleRect = QRect(bubbleX, bubbleY, dateW, dateH);
+			
+			if (bubbleRect.contains(point - QPoint(0, groupPadding.top()))) {
+				auto result = TextState(part.item);
+				result.customTooltip = true;
+				result.customTooltipText = "Message ID: " + QString::number(part.item->fullId().msg.bare);
+				return result;
+			}
 		}
 
 		if ((_mode == Mode::Grid) && 
@@ -752,37 +781,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto lastItemGeometry = lastPart->geometry.translated(
 					0,
 					groupPadding.top());
-				// Calculate the width of the info bubble
-				QString infoText;
-				if (const auto views = lastPart->item->Get<HistoryMessageViews>()) {
-					if (views->views.count >= 0) {
-						infoText += QString::number(views->views.count) + " ";
-					}
-				}
-				const auto dateText = QLocale().toString(
-					ItemDateTime(lastPart->item).time(),
-					QLocale::ShortFormat);
-				const auto msgId = lastPart->item->fullId().msg.bare;
-				infoText = dateText + " " + QString::number(msgId);
-				const auto textWidth = st::msgDateFont->width(infoText);
-				const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-				// Calculate the width of the info bubble
-				QString infoText;
-				if (const auto views = lastPart->item->Get<HistoryMessageViews>()) {
-					if (views->views.count >= 0) {
-						infoText += QString::number(views->views.count) + " ";
-					}
-				}
-				const auto dateText = QLocale().toString(
-					ItemDateTime(lastPart->item).time(),
-					QLocale::ShortFormat);
-				const auto msgId = lastPart->item->fullId().msg.bare;
-				infoText = dateText + " " + QString::number(msgId);
-				const auto textWidth = st::msgDateFont->width(infoText);
-				const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-				
-				// Position the info bubble within the item bounds
-				// Pass the right edge of the item as infoX
 				const auto infoX = lastItemGeometry.x() + lastItemGeometry.width();
 				const auto infoY = lastItemGeometry.y();
 				drawLastItemInfo(p, context, infoX, infoY, lastPart->item);
@@ -839,10 +837,10 @@ TextState GroupedMedia::getPartState(
 	if (!_parts.empty() && needInfoDisplay()) {
 		const auto lastPart = &_parts.back();
 		const auto groupPadding = groupedPadding();
-		const auto lastItemGeometry = lastPart->geometry.translated(
-			0,
-			groupPadding.top());
-		// Calculate the width of the info bubble
+		const auto lastItemGeometry = lastPart->geometry.translated(0, groupPadding.top()); // Use translated geometry
+		const auto infoX = lastItemGeometry.x() + lastItemGeometry.width();
+		const auto infoY = lastItemGeometry.y();
+
 		QString infoText;
 		if (const auto views = lastPart->item->Get<HistoryMessageViews>()) {
 			if (views->views.count >= 0) {
@@ -852,17 +850,18 @@ TextState GroupedMedia::getPartState(
 		const auto dateText = QLocale().toString(
 			ItemDateTime(lastPart->item).time(),
 			QLocale::ShortFormat);
-		const auto msgId = lastPart->item->fullId().msg.bare;
-		infoText = dateText + " " + QString::number(msgId);
+		infoText += dateText + " ";
+		const auto msgId = lastPart->item->fullId().msg;
+		if (msgId > 0) {
+			infoText += QString::number(msgId.bare);
+		}
+
 		const auto textWidth = st::msgDateFont->width(infoText);
 		const auto textHeight = st::msgDateFont->height;
 		const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
 		const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
-		// Position the info bubble within the item bounds
-		// Use the right edge of the item as the reference point (consistent with drawLastItemInfo)
-		const auto infoX = lastItemGeometry.x() + lastItemGeometry.width();
 		const auto dateX = infoX - dateW;
-		const auto dateY = lastItemGeometry.y();
+		const auto dateY = infoY;
 		const auto infoRect = QRect(dateX, dateY, dateW, dateH);
 
 		if (infoRect.contains(point)) {
@@ -875,7 +874,7 @@ TextState GroupedMedia::getPartState(
 				dateTime.time(),
 				"hh:mm:ss");
 			const auto line1 = fullDateText + ' ' + fullTimeText;
-			const auto lastMsgId = item->fullId().msg;
+			const auto lastMsgId = item->fullId().msg; // Use last item's msg ID
 
 			QString line2;
 			if (lastMsgId > 0) {
