@@ -169,7 +169,7 @@ mediaInPaletteSelected: TextPalette(defaultTextPalette) {
 }
 
 minPhotoSize: 100px;
-maxMediaSize: 430px;
+maxMediaSize: 495px;
 maxStickerSize: 256px;
 maxAnimatedEmojiSize: 112px;
 maxGifSize: 320px;

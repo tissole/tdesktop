@@ -308,9 +308,7 @@ QSize GroupedMedia::countOptimalSize() {
 			part.content->sizeForGroupingOptimal(maxWidth, last));
 	}
 
-	const auto widthMax = (_mode == Mode::Grid)
-		? int(base::SafeRound(st::historyGroupWidthMax * 1.15))
-		: st::historyGroupWidthMax;
+	const auto widthMax = st::historyGroupWidthMax;
 	const auto layout = (_mode == Mode::Grid)
 		? Ui::LayoutMediaGroup(
 			sizes,
@@ -448,7 +446,11 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			if (!indices.empty()) {
 				auto &last_part_in_row = _parts[indices.back()];
 				if (!(last_part_in_row.sides & RectPart::Right)) {
-					last_part_in_row.geometry.setRight(newWidth);
+					// Only extend if there's a meaningful gap to fill (more than 1 pixel)
+					const auto currentRight = last_part_in_row.geometry.right();
+					if (newWidth - currentRight > 1) {
+						last_part_in_row.geometry.setRight(newWidth);
+					}
 				}
 			}
 			const auto rowHeight = maxMediaHeight + maxCaptionHeight;
@@ -750,6 +752,37 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto lastItemGeometry = lastPart->geometry.translated(
 					0,
 					groupPadding.top());
+				// Calculate the width of the info bubble
+				QString infoText;
+				if (const auto views = lastPart->item->Get<HistoryMessageViews>()) {
+					if (views->views.count >= 0) {
+						infoText += QString::number(views->views.count) + " ";
+					}
+				}
+				const auto dateText = QLocale().toString(
+					ItemDateTime(lastPart->item).time(),
+					QLocale::ShortFormat);
+				const auto msgId = lastPart->item->fullId().msg.bare;
+				infoText = dateText + " " + QString::number(msgId);
+				const auto textWidth = st::msgDateFont->width(infoText);
+				const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
+				// Calculate the width of the info bubble
+				QString infoText;
+				if (const auto views = lastPart->item->Get<HistoryMessageViews>()) {
+					if (views->views.count >= 0) {
+						infoText += QString::number(views->views.count) + " ";
+					}
+				}
+				const auto dateText = QLocale().toString(
+					ItemDateTime(lastPart->item).time(),
+					QLocale::ShortFormat);
+				const auto msgId = lastPart->item->fullId().msg.bare;
+				infoText = dateText + " " + QString::number(msgId);
+				const auto textWidth = st::msgDateFont->width(infoText);
+				const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
+				
+				// Position the info bubble within the item bounds
+				// Pass the right edge of the item as infoX
 				const auto infoX = lastItemGeometry.x() + lastItemGeometry.width();
 				const auto infoY = lastItemGeometry.y();
 				drawLastItemInfo(p, context, infoX, infoY, lastPart->item);
@@ -806,10 +839,10 @@ TextState GroupedMedia::getPartState(
 	if (!_parts.empty() && needInfoDisplay()) {
 		const auto lastPart = &_parts.back();
 		const auto groupPadding = groupedPadding();
-		const auto lastItemGeometry = lastPart->geometry; // <-- THE FIX IS HERE
-		const auto infoX = lastItemGeometry.x() + lastItemGeometry.width();
-		const auto infoY = lastItemGeometry.y();
-
+		const auto lastItemGeometry = lastPart->geometry.translated(
+			0,
+			groupPadding.top());
+		// Calculate the width of the info bubble
 		QString infoText;
 		if (const auto views = lastPart->item->Get<HistoryMessageViews>()) {
 			if (views->views.count >= 0) {
@@ -819,18 +852,17 @@ TextState GroupedMedia::getPartState(
 		const auto dateText = QLocale().toString(
 			ItemDateTime(lastPart->item).time(),
 			QLocale::ShortFormat);
-		infoText += dateText + " ";
-		const auto msgId = lastPart->item->fullId().msg;
-		if (msgId > 0) {
-			infoText += QString::number(msgId.bare);
-		}
-
+		const auto msgId = lastPart->item->fullId().msg.bare;
+		infoText = dateText + " " + QString::number(msgId);
 		const auto textWidth = st::msgDateFont->width(infoText);
 		const auto textHeight = st::msgDateFont->height;
 		const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
 		const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
+		// Position the info bubble within the item bounds
+		// Use the right edge of the item as the reference point (consistent with drawLastItemInfo)
+		const auto infoX = lastItemGeometry.x() + lastItemGeometry.width();
 		const auto dateX = infoX - dateW;
-		const auto dateY = infoY;
+		const auto dateY = lastItemGeometry.y();
 		const auto infoRect = QRect(dateX, dateY, dateW, dateH);
 
 		if (infoRect.contains(point)) {
