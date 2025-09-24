@@ -816,26 +816,43 @@ TextState GroupedMedia::getPartState(
 		shift += part.content->fullSelectionLength();
 	}
 
-	// Check for message ID bubble tooltip for all items
-	if (_mode == Mode::Grid && GetEnhancedBool("show_messages_id")) {
-		const auto groupPadding = groupedPadding();
-		for (const auto &part : _parts) {
-			const auto itemGeometry = part.geometry.translated(0, groupPadding.top());
-			QString msgIdText = QString::number(part.item->fullId().msg.bare);
-			const auto textWidth = st::msgDateFont->width(msgIdText);
-			const auto textHeight = st::msgDateFont->height;
-			auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-			const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
-			const auto bubbleX = (dateW > itemGeometry.width()) ? itemGeometry.x() : (itemGeometry.x() + itemGeometry.width() - dateW);
-			const auto bubbleY = itemGeometry.y();
-			const auto bubbleRect = QRect(bubbleX, bubbleY, dateW, dateH);
-			
-			if (bubbleRect.contains(point)) {
-				auto result = TextState(part.item);
-				result.customTooltip = true;
-				result.customTooltipText = "Message ID: " + QString::number(part.item->fullId().msg.bare);
-				return result;
+	// Check for message ID bubble tooltip for the last item only
+	if (_mode == Mode::Grid && GetEnhancedBool("show_messages_id") && !_parts.empty()) {
+		const auto &lastPart = _parts.back();
+		const auto itemGeometry = lastPart.geometry; // Use geometry without padding since point is already adjusted
+		QString msgIdText = QString::number(lastPart.item->fullId().msg.bare);
+		const auto textWidth = st::msgDateFont->width(msgIdText);
+		const auto textHeight = st::msgDateFont->height;
+		auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
+		const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
+		const auto bubbleX = (dateW > itemGeometry.width()) ? itemGeometry.x() : (itemGeometry.x() + itemGeometry.width() - dateW);
+		const auto bubbleY = itemGeometry.y();
+		const auto bubbleRect = QRect(bubbleX, bubbleY, dateW, dateH);
+		
+		if (bubbleRect.contains(point)) {
+			// Show the last item's ID, date and time in tooltip
+			const auto item = lastPart.item;
+			const auto dateTime = ItemDateTime(item);
+			const auto fullDateText = QLocale().toString(
+				dateTime.date(),
+				QLocale::LongFormat);
+			const auto fullTimeText = QLocale().toString(
+				dateTime.time(),
+				"hh:mm:ss");
+			const auto line1 = fullDateText + ' ' + fullTimeText;
+			const auto lastMsgId = item->fullId().msg;
+
+			QString line2;
+			if (lastMsgId > 0) {
+				line2 = "Message ID: " + QString::number(lastMsgId.bare);
 			}
+			
+			auto result = TextState(item);
+			result.customTooltip = true;
+			result.customTooltipText = line2.isEmpty()
+				? line1
+				: (line1 + '\n' + line2);
+			return result;
 		}
 	}
 
