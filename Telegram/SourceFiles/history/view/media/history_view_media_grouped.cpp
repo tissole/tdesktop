@@ -534,7 +534,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				accumulate_max(maxCaptionHeight, float64(part._captionHeight));
 			}
 
-			if (!indices.empty()) {
+				if (!indices.empty()) {
 				auto &last_part_in_row = _parts[indices.back()];
 				if (!(last_part_in_row.sides & RectPart::Right)) {
 					// Fix: Only expand the last item in the row if it's not the last item in the whole album
@@ -543,6 +543,12 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 						const auto availableWidth = newWidth - last_part_in_row.geometry.x();
 						last_part_in_row.geometry.setWidth(availableWidth);
 					}
+				}
+				// Fix: Remove right border from the last item in each row to prevent extra vertical line
+				// except if this item is also the very last item of the entire album
+				const auto isLastItemInAlbum = (&last_part_in_row == &_parts.back());
+				if (!isLastItemInAlbum) {
+					last_part_in_row.sides = last_part_in_row.sides & (~RectPart::Right);
 				}
 			}
 			const auto rowHeight = maxMediaHeight + maxCaptionHeight;
