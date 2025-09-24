@@ -687,24 +687,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		if (_mode == Mode::Grid && GetEnhancedBool("show_messages_id")) {
 			// Draw message ID for all items but position bubble correctly
 			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
-			
-			// Add tooltip capability for message ID bubble
-			const auto itemGeometry = part.geometry.translated(0, groupPadding.top());
-			QString msgIdText = QString::number(part.item->fullId().msg.bare);
-			const auto textWidth = st::msgDateFont->width(msgIdText);
-			const auto textHeight = st::msgDateFont->height;
-			auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-			const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
-			const auto bubbleX = (dateW > itemGeometry.width()) ? itemGeometry.x() : (itemGeometry.x() + itemGeometry.width() - dateW);
-			const auto bubbleY = itemGeometry.y();
-			const auto bubbleRect = QRect(bubbleX, bubbleY, dateW, dateH);
-			
-			if (bubbleRect.contains(point - QPoint(0, groupPadding.top()))) {
-				auto result = TextState(part.item);
-				result.customTooltip = true;
-				result.customTooltipText = "Message ID: " + QString::number(part.item->fullId().msg.bare);
-				return result;
-			}
 		}
 
 		if ((_mode == Mode::Grid) && 
@@ -832,6 +814,29 @@ TextState GroupedMedia::getPartState(
 			return result;
 		}
 		shift += part.content->fullSelectionLength();
+	}
+
+	// Check for message ID bubble tooltip for all items
+	if (_mode == Mode::Grid && GetEnhancedBool("show_messages_id")) {
+		const auto groupPadding = groupedPadding();
+		for (const auto &part : _parts) {
+			const auto itemGeometry = part.geometry.translated(0, groupPadding.top());
+			QString msgIdText = QString::number(part.item->fullId().msg.bare);
+			const auto textWidth = st::msgDateFont->width(msgIdText);
+			const auto textHeight = st::msgDateFont->height;
+			auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
+			const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
+			const auto bubbleX = (dateW > itemGeometry.width()) ? itemGeometry.x() : (itemGeometry.x() + itemGeometry.width() - dateW);
+			const auto bubbleY = itemGeometry.y();
+			const auto bubbleRect = QRect(bubbleX, bubbleY, dateW, dateH);
+			
+			if (bubbleRect.contains(point)) {
+				auto result = TextState(part.item);
+				result.customTooltip = true;
+				result.customTooltipText = "Message ID: " + QString::number(part.item->fullId().msg.bare);
+				return result;
+			}
+		}
 	}
 
 	if (!_parts.empty() && needInfoDisplay()) {
