@@ -384,26 +384,17 @@ QSize GroupedMedia::countOptimalSize() {
 			accumulate_max(maxWidth, media->maxWidth());
 		}
 	}
-	// Apply 15% scaling to all sizes for grid mode
 	auto index = 0;
 	for (const auto &part : _parts) {
 		const auto last = (++index == _parts.size());
-		auto size = part.content->sizeForGroupingOptimal(maxWidth, last);
-		if (_mode == Mode::Grid) {
-			// Scale up sizes by 15% to make album larger
-			size = QSize(int(base::SafeRound(size.width() * 1.15)), int(base::SafeRound(size.height() * 1.15)));
-		}
-		sizes.push_back(size);
+		sizes.push_back(
+			part.content->sizeForGroupingOptimal(maxWidth, last));
 	}
 
-	const auto baseWidthMax = st::historyGroupWidthMax;
-	const auto scaledWidthMax = (_mode == Mode::Grid)
-		? int(base::SafeRound(baseWidthMax * 1.15))  // 15% increase for layout algorithm
-		: baseWidthMax;
 	const auto layout = (_mode == Mode::Grid)
 		? Ui::LayoutMediaGroup(
-			sizes,  // These sizes are already 15% scaled up
-			scaledWidthMax,
+			sizes,
+			st::historyGroupWidthMax,
 			st::historyGroupWidthMin,
 			st::historyGroupSkip)
 		: LayoutPlaylist(sizes);
@@ -544,16 +535,14 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 						last_part_in_row.geometry.setWidth(availableWidth);
 					}
 				}
-				// Fix: Remove right border from the last item in each row to prevent extra vertical line
-				// except if this item is also the very last item of the entire album
-				const auto isLastItemInAlbum = (&last_part_in_row == &_parts.back());
-				if (!isLastItemInAlbum) {
-					last_part_in_row.sides = last_part_in_row.sides & (~RectPart::Right);
-				}
 			}
 			const auto rowHeight = maxMediaHeight + maxCaptionHeight;
 			for (const auto i : indices) {
 				auto &part = _parts[i];
+				// If this is the last item in the row (rightmost), remove the right border
+				if (i == indices.back()) {
+					part.sides = part.sides & (~RectPart::Right);
+				}
 				part.geometry.setY(y + (maxMediaHeight - part.geometry.height()));
 				const auto mediaGeometry = part.geometry;
 				part.captionRect = (part._captionHeight > 0)
