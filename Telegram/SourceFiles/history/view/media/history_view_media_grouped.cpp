@@ -137,6 +137,88 @@ void GroupedMedia::drawMessageIdInfo(
 	p.setFont(font);
 }
 
+void GroupedMedia::drawComprehensiveInfoBubble(
+		Painter &p,
+		const PaintContext &context,
+		const QRect &itemGeometry,
+		not_null<HistoryItem*> item) const {
+	if (!GetEnhancedBool("show_messages_id")) {
+		return;
+	}
+
+	// Build the comprehensive content: view icon, count, time, and msg id
+	QString infoText;
+	if (const auto views = item->Get<HistoryMessageViews>()) {
+		if (views->views.count >= 0) {
+			infoText = QString::number(views->views.count) + " ";
+		}
+	}
+	const auto dateText = QLocale().toString(
+		ItemDateTime(item).time(),
+		QLocale::ShortFormat);
+	infoText += dateText + " ";
+	const auto msgId = item->fullId().msg;
+	if (msgId > 0) {
+		infoText += QString::number(msgId.bare);
+	}
+
+	const auto st = context.st;
+	const auto sti = context.imageStyle();
+	p.setFont(st::msgDateFont);
+	p.setPen(st->msgDateImgFg());
+
+	auto textWidth = st::msgDateFont->width(infoText);
+	const auto textHeight = st::msgDateFont->height;
+
+	auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
+	const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
+
+	if (dateW > itemGeometry.width()) {
+		// If it doesn't fit, we can truncate or use a simpler format
+		const auto availableWidth = itemGeometry.width()
+			- (2 * st::msgDateImgPadding.x());
+		if (availableWidth > st::msgDateFont->width("...")) {
+			const QFontMetrics metrics(st::msgDateFont);
+			infoText = metrics.elidedText(
+				infoText,
+				Qt::ElideRight,
+				availableWidth);
+			textWidth = st::msgDateFont->width(infoText);
+			dateW = textWidth + 2 * st::msgDateImgPadding.x();
+		} else {
+			return; // Don't draw if too small
+		}
+	}
+
+	// Position bubble inside the item bounds to prevent overflow
+	const auto bubbleX = (dateW > itemGeometry.width()) ? itemGeometry.x() : (itemGeometry.x() + itemGeometry.width() - dateW);
+	const auto bubbleY = itemGeometry.y();
+
+	auto originalColor = sti->msgDateImgBg->c;
+	auto modifiedQColor = QColor(
+		originalColor.red(),
+		originalColor.green(),
+		originalColor.blue(),
+		160);
+	const auto bgColor = style::internal::OwnedColor(modifiedQColor);
+	Ui::FillRoundRect(
+		p,
+		bubbleX,
+		bubbleY,
+		dateW,
+		dateH,
+		bgColor.color(),
+		sti->msgDateImgBgCorners);
+
+	auto font = st::msgDateFont;
+	p.setFont(font->bold());
+	p.drawText(
+		bubbleX + st::msgDateImgPadding.x(),
+		bubbleY + st::msgDateImgPadding.y() + font->ascent,
+		infoText);
+	p.setFont(font);
+}
+
 void GroupedMedia::drawLastItemInfo(
 		Painter &p,
 		const PaintContext &context,
@@ -757,16 +839,15 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	if (_parent->media() == this && (!_parent->hasBubble() || isBubbleBottom())) {
 		auto fullRight = width();
 		auto fullBottom = height();
-		// Draw info for the first item with views, time and msg ID (always visible)
+		// Draw comprehensive info bubble for the first item inside the item bounds (always visible)
 		if (!_parts.empty()) {
 			const auto firstPart = &_parts.front();
 			const auto groupPadding = groupedPadding();
 			const auto firstItemGeometry = firstPart->geometry.translated(
 				0,
 				groupPadding.top());
-			const auto infoX = firstItemGeometry.x() + firstItemGeometry.width();
-			const auto infoY = firstItemGeometry.y();
-			drawLastItemInfo(p, context, infoX, infoY, firstPart->item);
+			// Draw the comprehensive bubble inside the item, positioned like msg ID bubbles
+			drawComprehensiveInfoBubble(p, context, firstItemGeometry, firstPart->item);
 		}
 		if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 			auto fastShareLeft = _parent->hasRightLayout()
@@ -820,9 +901,8 @@ TextState GroupedMedia::getPartState(
 		const auto firstPart = &_parts.front();
 		const auto groupPadding = groupedPadding();
 		const auto firstItemGeometry = firstPart->geometry.translated(0, groupPadding.top()); // Use translated geometry
-		const auto infoX = firstItemGeometry.x() + firstItemGeometry.width();
-		const auto infoY = firstItemGeometry.y();
-
+		
+		// Build tooltip content for comprehensive bubble
 		QString infoText;
 		if (const auto views = firstPart->item->Get<HistoryMessageViews>()) {
 			if (views->views.count >= 0) {
@@ -842,8 +922,9 @@ TextState GroupedMedia::getPartState(
 		const auto textHeight = st::msgDateFont->height;
 		const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
 		const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
-		const auto dateX = infoX - dateW;
-		const auto dateY = infoY;
+		// Position the tooltip rectangle inside the item like the comprehensive bubble
+		const auto dateX = (dateW > firstItemGeometry.width()) ? firstItemGeometry.x() : (firstItemGeometry.x() + firstItemGeometry.width() - dateW);
+		const auto dateY = firstItemGeometry.y();
 		const auto infoRect = QRect(dateX, dateY, dateW, dateH);
 
 		if (infoRect.contains(point)) {
