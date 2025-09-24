@@ -685,8 +685,10 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cache);
 
 		if (_mode == Mode::Grid && GetEnhancedBool("show_messages_id")) {
-			// Draw message ID for all items but position bubble correctly
-			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
+			// Draw message ID for all items except the first one (which has comprehensive bubble) but position bubble correctly
+			if (&part != &_parts.front()) {  // Don't draw separate msg ID for first item
+				drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
+			}
 		}
 
 		if ((_mode == Mode::Grid) && 
@@ -755,18 +757,16 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	if (_parent->media() == this && (!_parent->hasBubble() || isBubbleBottom())) {
 		auto fullRight = width();
 		auto fullBottom = height();
-		if (needInfoDisplay()) {
-			// Draw info for the last item directly to show correct data
-			if (!_parts.empty()) {
-				const auto lastPart = &_parts.back();
-				const auto groupPadding = groupedPadding();
-				const auto lastItemGeometry = lastPart->geometry.translated(
-					0,
-					groupPadding.top());
-				const auto infoX = lastItemGeometry.x() + lastItemGeometry.width();
-				const auto infoY = lastItemGeometry.y();
-				drawLastItemInfo(p, context, infoX, infoY, lastPart->item);
-			}
+		// Draw info for the first item with views, time and msg ID (always visible)
+		if (!_parts.empty()) {
+			const auto firstPart = &_parts.front();
+			const auto groupPadding = groupedPadding();
+			const auto firstItemGeometry = firstPart->geometry.translated(
+				0,
+				groupPadding.top());
+			const auto infoX = firstItemGeometry.x() + firstItemGeometry.width();
+			const auto infoY = firstItemGeometry.y();
+			drawLastItemInfo(p, context, infoX, infoY, firstPart->item);
 		}
 		if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 			auto fastShareLeft = _parent->hasRightLayout()
@@ -816,64 +816,24 @@ TextState GroupedMedia::getPartState(
 		shift += part.content->fullSelectionLength();
 	}
 
-	// Check for message ID bubble tooltip for the last item only
-	if (_mode == Mode::Grid && GetEnhancedBool("show_messages_id") && !_parts.empty()) {
-		const auto &lastPart = _parts.back();
-		const auto itemGeometry = lastPart.geometry; // Use geometry without padding since point is already adjusted
-		QString msgIdText = QString::number(lastPart.item->fullId().msg.bare);
-		const auto textWidth = st::msgDateFont->width(msgIdText);
-		const auto textHeight = st::msgDateFont->height;
-		auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-		const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
-		const auto bubbleX = (dateW > itemGeometry.width()) ? itemGeometry.x() : (itemGeometry.x() + itemGeometry.width() - dateW);
-		const auto bubbleY = itemGeometry.y();
-		const auto bubbleRect = QRect(bubbleX, bubbleY, dateW, dateH);
-		
-		if (bubbleRect.contains(point)) {
-			// Show the last item's ID, date and time in tooltip
-			const auto item = lastPart.item;
-			const auto dateTime = ItemDateTime(item);
-			const auto fullDateText = QLocale().toString(
-				dateTime.date(),
-				QLocale::LongFormat);
-			const auto fullTimeText = QLocale().toString(
-				dateTime.time(),
-				"hh:mm:ss");
-			const auto line1 = fullDateText + ' ' + fullTimeText;
-			const auto lastMsgId = item->fullId().msg;
-
-			QString line2;
-			if (lastMsgId > 0) {
-				line2 = "Message ID: " + QString::number(lastMsgId.bare);
-			}
-			
-			auto result = TextState(item);
-			result.customTooltip = true;
-			result.customTooltipText = line2.isEmpty()
-				? line1
-				: (line1 + '\n' + line2);
-			return result;
-		}
-	}
-
 	if (!_parts.empty() && needInfoDisplay()) {
-		const auto lastPart = &_parts.back();
+		const auto firstPart = &_parts.front();
 		const auto groupPadding = groupedPadding();
-		const auto lastItemGeometry = lastPart->geometry.translated(0, groupPadding.top()); // Use translated geometry
-		const auto infoX = lastItemGeometry.x() + lastItemGeometry.width();
-		const auto infoY = lastItemGeometry.y();
+		const auto firstItemGeometry = firstPart->geometry.translated(0, groupPadding.top()); // Use translated geometry
+		const auto infoX = firstItemGeometry.x() + firstItemGeometry.width();
+		const auto infoY = firstItemGeometry.y();
 
 		QString infoText;
-		if (const auto views = lastPart->item->Get<HistoryMessageViews>()) {
+		if (const auto views = firstPart->item->Get<HistoryMessageViews>()) {
 			if (views->views.count >= 0) {
 				infoText += QString::number(views->views.count) + " ";
 			}
 		}
 		const auto dateText = QLocale().toString(
-			ItemDateTime(lastPart->item).time(),
+			ItemDateTime(firstPart->item).time(),
 			QLocale::ShortFormat);
 		infoText += dateText + " ";
-		const auto msgId = lastPart->item->fullId().msg;
+		const auto msgId = firstPart->item->fullId().msg;
 		if (msgId > 0) {
 			infoText += QString::number(msgId.bare);
 		}
@@ -887,27 +847,18 @@ TextState GroupedMedia::getPartState(
 		const auto infoRect = QRect(dateX, dateY, dateW, dateH);
 
 		if (infoRect.contains(point)) {
-			const auto item = lastPart->item;
+			const auto item = firstPart->item;
 			const auto dateTime = ItemDateTime(item);
-			const auto fullDateText = QLocale().toString(
-				dateTime.date(),
-				QLocale::LongFormat);
-			const auto fullTimeText = QLocale().toString(
-				dateTime.time(),
-				"hh:mm:ss");
-			const auto line1 = fullDateText + ' ' + fullTimeText;
-			const auto lastMsgId = item->fullId().msg; // Use last item's msg ID
-
-			QString line2;
-			if (lastMsgId > 0) {
-				line2 = "Message ID: " + QString::number(lastMsgId.bare);
-			}
-
+			// Format the date and time as requested: "sambata, 20 septembrie 2025 09:39:42"
+			const auto dayName = QLocale().toString(dateTime.date(), "dddd"); // Full day name
+			const auto formattedDate = QLocale().toString(dateTime.date(), "d MMMM yyyy"); // Day month year
+			const auto formattedTime = QLocale().toString(dateTime.time(), "hh:mm:ss"); // Time
+			const auto line1 = dayName + ", " + formattedDate + " " + formattedTime;
+			// Since the msg ID is always displayed in the bubble, we omit it from the tooltip
+			// as requested to only show date/time in tooltip
 			auto result = TextState(item);
 			result.customTooltip = true;
-			result.customTooltipText = line2.isEmpty()
-				? line1
-				: (line1 + '\n' + line2);
+			result.customTooltipText = line1;
 			return result;
 		}
 	}
