@@ -1068,7 +1068,8 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 					const auto dateTime = ItemDateTime(firstPart->item);
 					const auto tooltipText = dateTime.date().toString("dddd, dd MMMM yyyy") + 
 						" " + dateTime.time().toString("HH:mm:ss");
-					result.customTooltip = tooltipText;
+					result.customTooltip = true;
+					result.customTooltipText = tooltipText;
 				}
 			}
 		}
