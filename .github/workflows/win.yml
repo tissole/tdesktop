@@ -182,6 +182,16 @@ jobs:
           del /S Libraries\*.pch
           del /S Libraries\*.obj
 
+      
+      - name: Maximize build space
+              uses: easimon/maximize-build-space@v10
+              with:
+              root-reserve-mb: 512
+              swap-size-mb: 1024
+              remove-dotnet: 'true'
+              remove-android: 'true'
+              remove-haskell: 'true'
+            
       - name: Telegram Desktop build.
         if: env.ONLY_CACHE == 'false'
         run: |
@@ -196,11 +206,6 @@ jobs:
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF ^
           -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /Oi /Ot /DNDEBUG" ^
-          -D CMAKE_EXE_LINKER_FLAGS_RELEASE="/OPT:REF /OPT:ICF /INCREMENTAL:NO" ^
-          REM -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /Oi /Ot /GL /Z7 /DNDEBUG" ^
-          REM -D CMAKE_EXE_LINKER_FLAGS_RELEASE="/LTCG /OPT:REF /OPT:ICF" ^
-          REM -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /Oi /Ot /DNDEBUG" ^
-          REM -D CMAKE_EXE_LINKER_FLAGS_RELEASE="/OPT:REF /OPT:ICF" ^
           %TDESKTOP_BUILD_DEFINE%
           
           cmake --build ..\out --config Release --parallel
