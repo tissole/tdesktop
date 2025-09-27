@@ -200,10 +200,8 @@ jobs:
           -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF ^
-          REM -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /Oi /Ot /GL /Z7 /DNDEBUG" ^
-          REM -D CMAKE_EXE_LINKER_FLAGS_RELEASE="/LTCG /OPT:REF /OPT:ICF" ^
-          REM -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /Oi /Ot /DNDEBUG" ^
-          REM -D CMAKE_EXE_LINKER_FLAGS_RELEASE="/OPT:REF /OPT:ICF" ^
+          -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /Oi /Ot /DNDEBUG" ^
+          -D CMAKE_EXE_LINKER_FLAGS_RELEASE="/OPT:REF /OPT:ICF" ^
           %TDESKTOP_BUILD_DEFINE%
           
           cmake --build ..\out --config Release --parallel
@@ -215,11 +213,9 @@ jobs:
 
           mkdir artifact
           mkdir artifact\Release
-          REM mkdir artifact\Symbols
           
           move %OUT%\Telegram.exe artifact\Release\
           move %OUT%\Updater.exe artifact\Release\
-          REM move %OUT%\Telegram.pdb artifact\Symbols\
 
       - uses: actions/upload-artifact@v4
         name: Upload Release Build
@@ -227,10 +223,3 @@ jobs:
         with:
           name: ${{ env.ARTIFACT_NAME }}_Release
           path: artifact/Release/
-          
-#      - uses: actions/upload-artifact@v4
-#        name: Upload Release Symbols
-#        if: env.UPLOAD_ARTIFACT == 'true'
-#        with:
-#          name: ${{ env.ARTIFACT_NAME }}_Symbols
-#          path: artifact/Symbols/
