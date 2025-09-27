@@ -182,11 +182,6 @@ jobs:
           del /S Libraries\*.pch
           del /S Libraries\*.obj
 
-      - name: Clean out directory
-        run: |
-          if exist ..\out rmdir /S /Q ..\out
-        working-directory: ${{ env.TBUILD }}\${{ env.REPO_NAME }}\Telegram
-
       - name: Telegram Desktop build.
         if: env.ONLY_CACHE == 'false'
         run: |
@@ -201,7 +196,6 @@ jobs:
           -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF ^
-          -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /Oi /Ot /DNDEBUG" ^
           -D CMAKE_EXE_LINKER_FLAGS_RELEASE="/DEBUG:NONE" ^
 
           %TDESKTOP_BUILD_DEFINE%
