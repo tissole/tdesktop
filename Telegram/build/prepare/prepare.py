@@ -467,7 +467,7 @@ win:
     SET CHERE_INVOKING=enabled_from_arguments
     SET MSYS2_PATH_TYPE=inherit
 
-    powershell -Command "iwr -OutFile ./msys64.exe https://github.com/msys2/msys2-installer/releases/download/2025-02-21/msys2-base-x86_64-20250221.sfx.exe"
+    powershell -Command "iwr -OutFile ./msys64.exe https://github.com/msys2/msys2-installer/releases/download/2025-08-30/msys2-base-x86_64-20250830.sfx.exe"
     msys64.exe
     del msys64.exe
 
@@ -995,6 +995,7 @@ win:
         -DCMAKE_INSTALL_PREFIX=%LIBS_DIR%/local ^
         -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ^
         -DBUILD_SHARED_LIBS=OFF ^
+        -DCMAKE_DISABLE_FIND_PACKAGE_Doxygen=ON ^
         -DBUILD_TESTING=OFF ^
         -DENABLE_PLUGIN_LOADING=OFF ^
         -DWITH_LIBDE265=ON ^
@@ -1019,6 +1020,7 @@ mac:
         -D CMAKE_OSX_DEPLOYMENT_TARGET:STRING=$MACOSX_DEPLOYMENT_TARGET \\
         -D CMAKE_INSTALL_PREFIX:STRING=$USED_PREFIX \\
         -D BUILD_SHARED_LIBS=OFF \\
+        -D CMAKE_DISABLE_FIND_PACKAGE_Doxygen=ON \\
         -D BUILD_TESTING=OFF \\
         -D ENABLE_PLUGIN_LOADING=OFF \\
         -D WITH_AOM_ENCODER=OFF \\
@@ -1108,7 +1110,6 @@ winarm:
     SET "TOOLCHAIN=arm64-win64-vs17"
 win:
 depends:patches/build_libvpx_win.sh
-    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/-j8/-j%NUMBER_OF_PROCESSORS%/g' ../patches/build_libvpx_win.sh
     bash --login ../patches/build_libvpx_win.sh
 
     SET PATH=%PATH_BACKUP_%
@@ -1217,7 +1218,6 @@ winarm:
     SET "ARCH_PARAM=--arch=aarch64"
 win:
 depends:patches/build_ffmpeg_win.sh
-    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/-j8/-j%NUMBER_OF_PROCESSORS%/g' ../patches/build_ffmpeg_win.sh
     bash --login ../patches/build_ffmpeg_win.sh
 
     SET PATH=%PATH_BACKUP_%
@@ -1626,12 +1626,6 @@ win:
 
     jom -j %NUMBER_OF_PROCESSORS%
     jom -j %NUMBER_OF_PROCESSORS% install
-    #jom -C qtbase -j %NUMBER_OF_PROCESSORS%
-    #jom -C qtimageformats -j %NUMBER_OF_PROCESSORS%
-    #jom -C qtsvg -j %NUMBER_OF_PROCESSORS%
-    #jom -C qtbase -j %NUMBER_OF_PROCESSORS% install
-    #jom -C qtimageformats -j %NUMBER_OF_PROCESSORS% install
-    #jom -C qtsvg -j %NUMBER_OF_PROCESSORS% install
 mac:
     find ../../patches/qtbase_$QT -type f -print0 | sort -z | xargs -0 git apply
     cd ..
@@ -1763,7 +1757,7 @@ win:
 stage('tg_owt', """
     git clone https://github.com/desktop-app/tg_owt.git
     cd tg_owt
-    git checkout 62321fd
+    git checkout 5c5c71258777d0196dbb3a09cc37d2f56ead28ab
     git submodule update --init --recursive
 win:
     SET MOZJPEG_PATH=$LIBS_DIR/mozjpeg
