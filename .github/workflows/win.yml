@@ -66,8 +66,8 @@ jobs:
     steps:
       - name: Prepare directories.
         run: |
-          mkdir %userprofile%\TBuild\Libraries
-          mklink /d %GITHUB_WORKSPACE%\TBuild %userprofile%\TBuild
+          mkdir D:\build\Libraries
+          mklink /d %GITHUB_WORKSPACE%\TBuild D:\build
           echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
 
       - name: Get repository name.
@@ -188,9 +188,9 @@ jobs:
       
       - name: Full workspace cleanup
         run: |
-          rd /s /q D:\a\64Gram\64Gram\TBuild || echo "No TBuild directory"
-          rd /s /q D:\a\64Gram\64Gram\Libraries || echo "No Libraries directory"
-          rd /s /q D:\a\64Gram\64Gram\out || echo "No out directory"
+          rd /s /q D:\build\TBuild || echo "No TBuild directory"
+          rd /s /q D:\build\Libraries || echo "No Libraries directory"
+          rd /s /q D:\build\out || echo "No out directory"
       
       - name: Show disk usage after cleanup
         run: |
@@ -216,8 +216,8 @@ jobs:
       - name: Move Artifacts
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
-          set OUT=%TBUILD%\%REPO_NAME%\out
-
+          set OUT=D:\build\out
+      
           mkdir artifact
           mkdir artifact\Release
           
