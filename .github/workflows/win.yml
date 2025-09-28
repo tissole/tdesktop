@@ -66,8 +66,8 @@ jobs:
     steps:
       - name: Prepare directories.
         run: |
-          mkdir D:\build\Libraries
-          mklink /d %GITHUB_WORKSPACE%\TBuild D:\build
+          mkdir %userprofile%\TBuild\Libraries
+          mklink /d %GITHUB_WORKSPACE%\TBuild %userprofile%\TBuild
           echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
 
       - name: Get repository name.
@@ -182,20 +182,6 @@ jobs:
           del /S Libraries\*.pch
           del /S Libraries\*.obj
 
-      - name: Show disk usage before cleanup
-        run: |
-          powershell -command "Get-PSDrive -PSProvider FileSystem"
-      
-      - name: Full workspace cleanup
-        run: |
-          rd /s /q D:\build\TBuild || echo "No TBuild directory"
-          rd /s /q D:\build\Libraries || echo "No Libraries directory"
-          rd /s /q D:\build\out || echo "No out directory"
-      
-      - name: Show disk usage after cleanup
-        run: |
-          powershell -command "Get-PSDrive -PSProvider FileSystem"
-
       - name: Telegram Desktop build.
         if: env.ONLY_CACHE == 'false'
         run: |
@@ -211,18 +197,19 @@ jobs:
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF ^
           %TDESKTOP_BUILD_DEFINE%
           
-          cmake --build ..\out --config Release 
+          cmake --build ..\out --config Release --parallel
 
       - name: Move Artifacts
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
-          set OUT=D:\build\out
-      
+          set OUT=%TBUILD%\%REPO_NAME%\out
+
           mkdir artifact
           mkdir artifact\Release
           
           move %OUT%\Telegram.exe artifact\Release\
           move %OUT%\Updater.exe artifact\Release\
+
 
       - uses: actions/upload-artifact@v4
         name: Upload Release Build
@@ -230,4 +217,3 @@ jobs:
         with:
           name: ${{ env.ARTIFACT_NAME }}_Release
           path: artifact/Release/
-          
