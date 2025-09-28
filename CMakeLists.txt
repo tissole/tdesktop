@@ -4,6 +4,8 @@
 # For license and copyright information please follow this link:
 # https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
+add_compile_options(/EHsc)
+
 cmake_minimum_required(VERSION 3.25...3.31)
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
