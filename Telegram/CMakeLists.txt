@@ -1960,10 +1960,9 @@ endif()
 set_target_properties(Telegram PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${output_folder})
 
 if (MSVC)
-    target_link_libraries(Telegram
-    PRIVATE
-        delayimp
-    )
+    target_compile_options(Telegram PRIVATE /bigobj)
+    target_compile_options(Telegram PRIVATE /EHsc)
+    target_link_libraries(Telegram PRIVATE /delayimp)
     target_link_options(Telegram
     PRIVATE
         /DELAYLOAD:secur32.dll
