@@ -5,8 +5,8 @@ on:
   push:
     paths-ignore:
       - 'docs/**'
-      - '!docs/building-win*.md'
       - '**.md'
+      - '!docs/building-win*.md'
       - 'changelog.txt'
       - 'LEGAL'
       - 'LICENSE'
@@ -24,8 +24,8 @@ on:
   pull_request:
     paths-ignore:
       - 'docs/**'
-      - '!docs/building-win*.md'
       - '**.md'
+      - '!docs/building-win*.md'
       - 'changelog.txt'
       - 'LEGAL'
       - 'LICENSE'
@@ -50,7 +50,7 @@ jobs:
     strategy:
       matrix:
         arch: [x64]
-        generator: ["Ninja"]
+        generator: ["", "Ninja"]
 
     env:
       UPLOAD_ARTIFACT: "true"
@@ -72,13 +72,24 @@ jobs:
 
       - name: Get repository name.
         shell: bash
-        run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+        run: |
+          REPO_NAME=$(echo "${GITHUB_REPOSITORY##*/}" | sed 's/[^a-zA-Z0-9._-]/_/g')
+          echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV
 
       - name: Clone.
         uses: actions/checkout@v5
         with:
           submodules: recursive
           path: ${{ env.TBUILD }}\${{ env.REPO_NAME }}
+
+      - name: Explicitly update submodules
+        working-directory: ${{ env.TBUILD }}\${{ env.REPO_NAME }}
+        run: git submodule update --init --recursive
+
+      - name: Debug list repository contents
+        run: |           
+          echo "Listing contents of ${{ env.TBUILD }}\\${{ env.REPO_NAME }}\\Telegram"
+          dir ${{ env.TBUILD }}\\${{ env.REPO_NAME }}\\Telegram
            
       - name: First set up.
         shell: bash
@@ -178,7 +189,7 @@ jobs:
       - name: Free up some disk space.
         run: |
           cd %TBUILD%
-          del /S Libraries\*.pdb
+          REM del /S Libraries\*.pdb
           del /S Libraries\*.pch
           del /S Libraries\*.obj
 
@@ -195,6 +206,10 @@ jobs:
           -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF ^
+          REM -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /Oi /Ot /GL /Z7 /DNDEBUG" ^
+          REM -D CMAKE_EXE_LINKER_FLAGS_RELEASE="/LTCG /OPT:REF /OPT:ICF" ^
+          -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /Oi /Ot /DNDEBUG" ^
+          -D CMAKE_EXE_LINKER_FLAGS_RELEASE="/OPT:REF /OPT:ICF" ^
           %TDESKTOP_BUILD_DEFINE%
           
           cmake --build ..\out --config Release --parallel
@@ -202,13 +217,24 @@ jobs:
       - name: Move Artifacts
         if: env.UPLOAD_ARTIFACT == 'true'
         run: |
-          set OUT=%TBUILD%\%REPO_NAME%\out
+          set OUT_DIR=%TBUILD%\%REPO_NAME%\out
+          
+          REM Determine the correct output path for Release artifacts
+          if "%TDESKTOP_BUILD_GENERATOR%"=="" (
+            set OUTR=%OUT_DIR%\Release
+          ) else (
+            set OUTR=%OUT_DIR%
+          )
 
           mkdir artifact
           mkdir artifact\Release
+          mkdir artifact\Symbols
           
-          move %OUT%\Telegram.exe artifact\Release\
-          move %OUT%\Updater.exe artifact\Release\
+          move %OUTR%\Telegram.exe artifact\Release\
+          move %OUTR%\Updater.exe artifact\Release\
+          
+          REM The .pdb file is generated alongside the .exe
+          move %OUTR%\Telegram.pdb artifact\Symbols\
 
       - uses: actions/upload-artifact@v4
         name: Upload Release Build
@@ -217,3 +243,9 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}_Release
           path: artifact/Release/
           
+      - uses: actions/upload-artifact@v4
+        name: Upload Release Symbols
+        if: env.UPLOAD_ARTIFACT == 'true'
+        with:
+          name: ${{ env.ARTIFACT_NAME }}_Symbols
+          path: artifact/Symbols/
