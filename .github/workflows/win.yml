@@ -182,6 +182,12 @@ jobs:
           del /S Libraries\*.pch
           del /S Libraries\*.obj
 
+      - name: Full workspace cleanup
+        run: |
+          rd /s /q D:\a\64Gram\64Gram\TBuild || echo "No TBuild directory"
+          rd /s /q D:\a\64Gram\64Gram\Libraries || echo "No Libraries directory"
+          rd /s /q D:\a\64Gram\64Gram\out || echo "No out directory"
+          
       - name: Telegram Desktop build.
         if: env.ONLY_CACHE == 'false'
         run: |
