@@ -177,8 +177,6 @@ jobs:
 
       - name: Free up some disk space.
         run: |
-          wmic logicaldisk get size,freespace,caption
-          dir D:\a /s
           cd %TBUILD%
           del /S Libraries\*.pdb
           del /S Libraries\*.pch
@@ -197,6 +195,7 @@ jobs:
           -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF ^
+          -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /Oi /Ot /DNDEBUG /Z7" ^
           %TDESKTOP_BUILD_DEFINE%
           
           cmake --build ..\out --config Release --parallel
