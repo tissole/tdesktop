@@ -1,7 +1,6 @@
 name: Windows.
 
 on:
-  workflow_dispatch:
   push:
     paths-ignore:
       - 'docs/**'
@@ -58,6 +57,11 @@ jobs:
       PREPARE_PATH: "Telegram/build/prepare/prepare.py"
       GOOGLE_TRANSLATE_API_KEY: ${{ secrets.GOOGLE_TRANSLATE_API_KEY }}
       GOOGLE_TRANSLATE_ANDROID_CERT: ${{ secrets.GOOGLE_TRANSLATE_ANDROID_CERT }}
+      
+    env:
+      UPLOAD_ARTIFACT: "true"
+      ONLY_CACHE: "false"
+      PREPARE_PATH: "Telegram/build/prepare/prepare.py"
 
     defaults:
       run:
@@ -75,11 +79,11 @@ jobs:
         run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
 
       - name: Clone.
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           submodules: recursive
           path: ${{ env.TBUILD }}\${{ env.REPO_NAME }}
-           
+
       - name: First set up.
         shell: bash
         run: |
@@ -129,13 +133,13 @@ jobs:
           GYP_MSVS_VERSION: 2022
         run: |
           cd %TBUILD%
-          %REPO_NAME%\Telegram\build\prepare\win.bat silent
+          %REPO_NAME%\Telegram\build\prepare\win.bat skip-release silent
 
       - name: Read configuration matrix.
         shell: bash
         run: |
           ARTIFACT_NAME="Telegram"
-      
+
           ARCH=""
           if [ -n "${{ matrix.arch }}" ]; then
             case "${{ matrix.arch }}" in
@@ -145,7 +149,7 @@ jobs:
             echo "Architecture from matrix: $ARCH"
             ARTIFACT_NAME="${ARTIFACT_NAME}_${{ matrix.arch }}"
           fi
-      
+
           GENERATOR=""
           if [ -n "${{ matrix.generator }}" ]; then
             GENERATOR="-G \"${{ matrix.generator }}\""
@@ -153,7 +157,6 @@ jobs:
             ARTIFACT_NAME="${ARTIFACT_NAME}_${{ matrix.generator }}"
           fi
           echo "TDESKTOP_BUILD_GENERATOR=$GENERATOR" >> $GITHUB_ENV
-
 
           [ -n "$GENERATOR" ] && ARCH=""
           echo "TDESKTOP_BUILD_ARCH=$ARCH" >> $GITHUB_ENV
@@ -178,14 +181,9 @@ jobs:
       - name: Free up some disk space.
         run: |
           cd %TBUILD%
-          REM del /S Libraries\*.pdb
+          del /S Libraries\*.pdb
           del /S Libraries\*.pch
           del /S Libraries\*.obj
-
-      - name: Debug list lib_ui contents
-        run: |
-          echo "Listing contents of ${{ env.TBUILD }}\\${{ env.REPO_NAME }}\\Telegram\\lib_ui"
-          dir ${{ env.TBUILD }}\\${{ env.REPO_NAME }}\\Telegram\\lib_ui /s
 
       - name: Telegram Desktop build.
         if: env.ONLY_CACHE == 'false'
@@ -197,36 +195,24 @@ jobs:
           %TDESKTOP_BUILD_ARCH% ^
           %TDESKTOP_BUILD_API% ^
           -D CMAKE_CONFIGURATION_TYPES=Release ^
-          -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
+          -D CMAKE_COMPILE_WARNING_AS_ERROR=ON ^
+          -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF ^
           %TDESKTOP_BUILD_DEFINE%
-          
+
           cmake --build ..\out --config Release --parallel
 
-      - name: Move Artifacts
-        if: env.UPLOAD_ARTIFACT == 'true'
+      - name: Move artifact.
+        if: (env.UPLOAD_ARTIFACT == 'true') || (github.ref == 'refs/heads/nightly')
         run: |
-          set OUT=%TBUILD%\%REPO_NAME%\out
-
+          set OUT=%TBUILD%\%REPO_NAME%\out\Debug
           mkdir artifact
-          mkdir artifact\Release
-          mkdir artifact\Symbols
-          
-          move %OUT%\Telegram.exe artifact\Release\
-          move %OUT%\Updater.exe artifact\Release\
-          move %OUT%\Telegram.pdb artifact\Symbols\
-
+          move %OUT%\Telegram.exe artifact/
+          move %OUT%\Updater.exe artifact/
       - uses: actions/upload-artifact@v4
-        name: Upload Release Build
-        if: env.UPLOAD_ARTIFACT == 'true'
+        name: Upload artifact.
+        if: (env.UPLOAD_ARTIFACT == 'true') || (github.ref == 'refs/heads/nightly')
         with:
-          name: ${{ env.ARTIFACT_NAME }}_Release
-          path: artifact/Release/
-          
-      - uses: actions/upload-artifact@v4
-        name: Upload Release Symbols
-        if: env.UPLOAD_ARTIFACT == 'true'
-        with:
-          name: ${{ env.ARTIFACT_NAME }}_Symbols
-          path: artifact/Symbols/
+          name: ${{ env.ARTIFACT_NAME }}
+          path: artifact\
