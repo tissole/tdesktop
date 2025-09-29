@@ -177,6 +177,8 @@ jobs:
 
       - name: Free up some disk space.
         run: |
+          wmic logicaldisk get size,freespace,caption
+          dir D:\a /s
           cd %TBUILD%
           del /S Libraries\*.pdb
           del /S Libraries\*.pch
