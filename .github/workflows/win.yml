@@ -42,6 +42,7 @@ on:
       - 'Telegram/Telegram.plist'
 
 jobs:
+
   windows:
     name: Windows
     runs-on: windows-latest
@@ -78,7 +79,7 @@ jobs:
         with:
           submodules: recursive
           path: ${{ env.TBUILD }}\${{ env.REPO_NAME }}
-
+           
       - name: First set up.
         shell: bash
         run: |
@@ -128,13 +129,13 @@ jobs:
           GYP_MSVS_VERSION: 2022
         run: |
           cd %TBUILD%
-          %REPO_NAME%\Telegram\build\prepare\win.bat skip-release silent
+          %REPO_NAME%\Telegram\build\prepare\win.bat silent
 
       - name: Read configuration matrix.
         shell: bash
         run: |
           ARTIFACT_NAME="Telegram"
-
+      
           ARCH=""
           if [ -n "${{ matrix.arch }}" ]; then
             case "${{ matrix.arch }}" in
@@ -144,7 +145,7 @@ jobs:
             echo "Architecture from matrix: $ARCH"
             ARTIFACT_NAME="${ARTIFACT_NAME}_${{ matrix.arch }}"
           fi
-
+      
           GENERATOR=""
           if [ -n "${{ matrix.generator }}" ]; then
             GENERATOR="-G \"${{ matrix.generator }}\""
@@ -152,6 +153,7 @@ jobs:
             ARTIFACT_NAME="${ARTIFACT_NAME}_${{ matrix.generator }}"
           fi
           echo "TDESKTOP_BUILD_GENERATOR=$GENERATOR" >> $GITHUB_ENV
+
 
           [ -n "$GENERATOR" ] && ARCH=""
           echo "TDESKTOP_BUILD_ARCH=$ARCH" >> $GITHUB_ENV
@@ -179,18 +181,7 @@ jobs:
           del /S Libraries\*.pdb
           del /S Libraries\*.pch
           del /S Libraries\*.obj
-          
-      - name: Check disk usage
-        shell: powershell
-        run: |
-          echo "=== Disk Usage ==="
-          Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free, @{Name="UsedGB";Expression={[math]::Round($_.Used/1GB,2)}}, @{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}}
-          echo "=== Largest directories in TBuild ==="
-          Get-ChildItem $env:TBUILD -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-            $size = (Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum / 1GB
-            [PSCustomObject]@{Path=$_.Name; SizeGB=[math]::Round($size,2)}
-          } | Sort-Object SizeGB -Descending | Select-Object -First 10
-    
+
       - name: Telegram Desktop build.
         if: env.ONLY_CACHE == 'false'
         run: |
@@ -201,26 +192,31 @@ jobs:
           %TDESKTOP_BUILD_ARCH% ^
           %TDESKTOP_BUILD_API% ^
           -D CMAKE_CONFIGURATION_TYPES=Release ^
-          -D CMAKE_COMPILE_WARNING_AS_ERROR=ON ^
-          -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
+          -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF ^
-          -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /Oi /Ot /DNDEBUG" ^
+          -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /Oi /Ot /DNDEBUG /Zi" ^
+          -D CMAKE_EXE_LINKER_FLAGS_RELEASE="/OPT:REF /OPT:ICF" ^
           -D DESKTOP_APP_NO_PDB=ON
           %TDESKTOP_BUILD_DEFINE%
+          
+          cmake --build ..\out --config Release --parallel
 
-          cmake --build ..\out --config
-
-      - name: Move artifact.
-        if: (env.UPLOAD_ARTIFACT == 'true') || (github.ref == 'refs/heads/nightly')
+      - name: Move Artifacts
+        if: env.UPLOAD_ARTIFACT == 'true'
         run: |
-          set OUT=%TBUILD%\%REPO_NAME%\out\Release
+          set OUT=%TBUILD%\%REPO_NAME%\out
+
           mkdir artifact
-          move %OUT%\Telegram.exe artifact/
-          move %OUT%\Updater.exe artifact/
+          mkdir artifact\Release
+          
+          move %OUT%\Telegram.exe artifact\Release\
+          move %OUT%\Updater.exe artifact\Release\
+
       - uses: actions/upload-artifact@v4
-        name: Upload artifact.
-        if: (env.UPLOAD_ARTIFACT == 'true') || (github.ref == 'refs/heads/nightly')
+        name: Upload Release Build
+        if: env.UPLOAD_ARTIFACT == 'true'
         with:
-          name: ${{ env.ARTIFACT_NAME }}
-          path: artifact\
+          name: ${{ env.ARTIFACT_NAME }}_Release
+          path: artifact/Release/
+          
