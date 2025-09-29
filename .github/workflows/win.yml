@@ -210,11 +210,11 @@ jobs:
 
           mkdir artifact
           mkdir artifact\Release
-          mkdir artifact\Symbols
+          REM mkdir artifact\Symbols
           
           move %OUT%\Telegram.exe artifact\Release\
           move %OUT%\Updater.exe artifact\Release\
-          move %OUT%\Telegram.pdb artifact\Symbols\
+          REM move %OUT%\Telegram.pdb artifact\Symbols\
 
       - uses: actions/upload-artifact@v4
         name: Upload Release Build
@@ -223,9 +223,9 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}_Release
           path: artifact/Release/
           
-      - uses: actions/upload-artifact@v4
-        name: Upload Release Symbols
-        if: env.UPLOAD_ARTIFACT == 'true'
-        with:
-          name: ${{ env.ARTIFACT_NAME }}_Symbols
-          path: artifact/Symbols/
+#      - uses: actions/upload-artifact@v4
+#        name: Upload Release Symbols
+#        if: env.UPLOAD_ARTIFACT == 'true'
+#        with:
+#          name: ${{ env.ARTIFACT_NAME }}_Symbols
+#          path: artifact/Symbols/
