@@ -52,5 +52,7 @@ set(desktop_app_skip_libs
     variant
 )
 
+set(MSVC_DEBUG_INFORMATION_FORMAT "OldStyle" CACHE STRING "MSVC debug information format" FORCE)
+
 add_subdirectory(cmake)
 add_subdirectory(Telegram)
