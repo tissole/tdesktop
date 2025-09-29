@@ -1962,9 +1962,12 @@ set_target_properties(Telegram PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${output_fold
 if (MSVC)
     target_compile_options(Telegram PRIVATE /bigobj)
     target_compile_options(Telegram PRIVATE /EHsc)
+    target_link_libraries(Telegram
+    PRIVATE
+        delayimp
+    )
     target_link_options(Telegram
     PRIVATE
-        /delayimp
         /DELAYLOAD:secur32.dll
         # /DELAYLOAD:winmm.dll
         /DELAYLOAD:ws2_32.dll
