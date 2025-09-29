@@ -179,7 +179,18 @@ jobs:
           del /S Libraries\*.pdb
           del /S Libraries\*.pch
           del /S Libraries\*.obj
-
+          
+      - name: Check disk usage
+        shell: powershell
+        run: |
+          echo "=== Disk Usage ==="
+          Get-PSDrive -PSProvider FileSystem | Select-Object Name, Used, Free, @{Name="UsedGB";Expression={[math]::Round($_.Used/1GB,2)}}, @{Name="FreeGB";Expression={[math]::Round($_.Free/1GB,2)}}
+          echo "=== Largest directories in TBuild ==="
+          Get-ChildItem $env:TBUILD -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            $size = (Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum / 1GB
+            [PSCustomObject]@{Path=$_.Name; SizeGB=[math]::Round($size,2)}
+          } | Sort-Object SizeGB -Descending | Select-Object -First 10
+    
       - name: Telegram Desktop build.
         if: env.ONLY_CACHE == 'false'
         run: |
