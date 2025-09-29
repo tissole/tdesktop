@@ -182,11 +182,6 @@ jobs:
           del /S Libraries\*.pch
           del /S Libraries\*.obj
 
-      - name: Debug list lib_ui contents
-        run: |
-          echo "Listing contents of ${{ env.TBUILD }}\\${{ env.REPO_NAME }}\\Telegram\\lib_ui"
-          dir ${{ env.TBUILD }}\\${{ env.REPO_NAME }}\\Telegram\\lib_ui /s
-
       - name: Telegram Desktop build.
         if: env.ONLY_CACHE == 'false'
         run: |
@@ -200,6 +195,8 @@ jobs:
           -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF ^
+          -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /Oi /Ot /DNDEBUG" ^
+          -D CMAKE_EXE_LINKER_FLAGS_RELEASE="/OPT:REF /OPT:ICF" ^
           %TDESKTOP_BUILD_DEFINE%
           
           cmake --build ..\out --config Release --parallel
@@ -211,11 +208,9 @@ jobs:
 
           mkdir artifact
           mkdir artifact\Release
-          mkdir artifact\Symbols
           
           move %OUT%\Telegram.exe artifact\Release\
           move %OUT%\Updater.exe artifact\Release\
-          move %OUT%\Telegram.pdb artifact\Symbols\
 
       - uses: actions/upload-artifact@v4
         name: Upload Release Build
@@ -224,9 +219,3 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}_Release
           path: artifact/Release/
           
-      - uses: actions/upload-artifact@v4
-        name: Upload Release Symbols
-        if: env.UPLOAD_ARTIFACT == 'true'
-        with:
-          name: ${{ env.ARTIFACT_NAME }}_Symbols
-          path: artifact/Symbols/
