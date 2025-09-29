@@ -204,7 +204,7 @@ jobs:
           -D CMAKE_EXE_LINKER_FLAGS_RELEASE="/OPT:REF /OPT:ICF" ^
           %TDESKTOP_BUILD_DEFINE%
           
-          cmake --build ..\out --config Release --parallel
+          cmake --build ..\out --config Release
 
       - name: Move Artifacts
         if: env.UPLOAD_ARTIFACT == 'true'
