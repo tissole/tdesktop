@@ -1,6 +1,7 @@
 name: Windows.
 
 on:
+  workflow_dispatch:
   push:
     paths-ignore:
       - 'docs/**'
@@ -41,7 +42,6 @@ on:
       - 'Telegram/Telegram.plist'
 
 jobs:
-
   windows:
     name: Windows
     runs-on: windows-latest
@@ -57,11 +57,6 @@ jobs:
       PREPARE_PATH: "Telegram/build/prepare/prepare.py"
       GOOGLE_TRANSLATE_API_KEY: ${{ secrets.GOOGLE_TRANSLATE_API_KEY }}
       GOOGLE_TRANSLATE_ANDROID_CERT: ${{ secrets.GOOGLE_TRANSLATE_ANDROID_CERT }}
-      
-    env:
-      UPLOAD_ARTIFACT: "true"
-      ONLY_CACHE: "false"
-      PREPARE_PATH: "Telegram/build/prepare/prepare.py"
 
     defaults:
       run:
