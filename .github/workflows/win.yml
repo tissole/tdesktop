@@ -199,7 +199,7 @@ jobs:
           -D CMAKE_CXX_FLAGS="/FS" ^
           %TDESKTOP_BUILD_DEFINE%
           
-          cmake --build ..\out --config Release --parallel
+          cmake --build ..\out --config Release --parallel 1
 
       - name: Move Artifacts
         if: env.UPLOAD_ARTIFACT == 'true'
