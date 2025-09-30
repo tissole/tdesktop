@@ -195,11 +195,11 @@ jobs:
           -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF ^
-          -DCMAKE_CXX_FLAGS=/FS
-          -D DESKTOP_APP_NO_PDB=ON
+          -D DESKTOP_APP_NO_PDB=ON ^
+          -D CMAKE_CXX_FLAGS="/FS" ^
           %TDESKTOP_BUILD_DEFINE%
           
-          cmake --build ..\out --config Release --parallel 2
+          cmake --build ..\out --config Release --parallel
 
       - name: Move Artifacts
         if: env.UPLOAD_ARTIFACT == 'true'
