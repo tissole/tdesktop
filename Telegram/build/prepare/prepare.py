@@ -1110,7 +1110,7 @@ winarm:
     SET "TOOLCHAIN=arm64-win64-vs17"
 win:
 depends:patches/build_libvpx_win.sh
-    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/-j%NUMBER_OF_PROCESSORS%/g' ../patches/build_libvpx_win.sh
+    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/-j8/-j%NUMBER_OF_PROCESSORS%/g' ../patches/build_libvpx_win.sh
     bash --login ../patches/build_libvpx_win.sh
 
     SET PATH=%PATH_BACKUP_%
@@ -1219,7 +1219,7 @@ winarm:
     SET "ARCH_PARAM=--arch=aarch64"
 win:
 depends:patches/build_ffmpeg_win.sh
-    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/-j%NUMBER_OF_PROCESSORS%/g' ../patches/build_ffmpeg_win.sh
+    %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/-j8/-j%NUMBER_OF_PROCESSORS%/g' ../patches/build_ffmpeg_win.sh
     bash --login ../patches/build_ffmpeg_win.sh
 
     SET PATH=%PATH_BACKUP_%
@@ -1627,14 +1627,8 @@ win:
         -platform win32-msvc
 
 
-    #jom -j %NUMBER_OF_PROCESSORS%
-    #jom -j %NUMBER_OF_PROCESSORS% install
-    jom -C qtbase -j %NUMBER_OF_PROCESSORS%
-    jom -C qtimageformats -j %NUMBER_OF_PROCESSORS%
-    jom -C qtsvg -j %NUMBER_OF_PROCESSORS%
-    jom -C qtbase -j %NUMBER_OF_PROCESSORS% install
-    jom -C qtimageformats -j %NUMBER_OF_PROCESSORS% install
-    jom -C qtsvg -j %NUMBER_OF_PROCESSORS% install
+    jom -j%NUMBER_OF_PROCESSORS%
+    jom -j%NUMBER_OF_PROCESSORS% install
 mac:
     find ../../patches/qtbase_$QT -type f -print0 | sort -z | xargs -0 git apply
     cd ..
