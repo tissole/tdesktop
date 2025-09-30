@@ -201,7 +201,7 @@ jobs:
           -D DESKTOP_APP_NO_PDB=ON
           %TDESKTOP_BUILD_DEFINE%
           
-          cmake --build ..\out --config Release --parallel
+          cmake --build ..\out --config Release --parallel 2
 
       - name: Move Artifacts
         if: env.UPLOAD_ARTIFACT == 'true'
