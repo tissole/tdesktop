@@ -67,9 +67,21 @@ jobs:
       - name: Free up disk space on Windows
         shell: pwsh
         run: |
+          $drive = Get-PSDrive C
+          $freeSpaceBeforeGB = [math]::Round($drive.Free / 1GB, 2)
+          Write-Host "Initial free space: $freeSpaceBeforeGB GB"
+          
+          Write-Host "Removing .NET templates, Android SDK, and hosted tool cache..."
           Get-ChildItem "C:\Program Files\dotnet" -directory | Where-Object { $_.Name -ne "sdk" -and $_.Name -ne "host" } | ForEach-Object { Remove-Item $_.FullName -Recurse -Force }
-          Remove-Item -Recurse -Force "C:\Program Files (x86)\Android"
-          Remove-Item -Recurse -Force "C:\hostedtoolcache\windows"
+          if (Test-Path "C:\Program Files (x86)\Android") { Remove-Item -Recurse -Force "C:\Program Files (x86)\Android" }
+          if (Test-Path "C:\hostedtoolcache\windows") { Remove-Item -Recurse -Force "C:\hostedtoolcache\windows" }
+          Write-Host "Cleanup complete."
+
+          $drive = Get-PSDrive C
+          $freeSpaceAfterGB = [math]::Round($drive.Free / 1GB, 2)
+          $spaceFreedGB = $freeSpaceAfterGB - $freeSpaceBeforeGB
+          Write-Host "Space freed: $spaceFreedGB GB"
+          Write-Host "Final free space: $freeSpaceAfterGB GB"
           
       - name: Prepare directories.
         run: |
