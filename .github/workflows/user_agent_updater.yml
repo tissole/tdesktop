@@ -12,6 +12,8 @@ on:
 jobs:
   User-agent:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: desktop-app/action_code_updater@master
         with:
