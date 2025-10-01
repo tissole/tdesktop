@@ -64,6 +64,13 @@ jobs:
         shell: cmd
 
     steps:
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@v10
+        with:
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          
       - name: Prepare directories.
         run: |
           mkdir %userprofile%\TBuild\Libraries
@@ -181,15 +188,6 @@ jobs:
           del /S Libraries\*.pdb
           del /S Libraries\*.pch
           del /S Libraries\*.obj
-          
-      - name: Free up disk space
-              uses: easimon/maximize-build-space@v10
-              with:
-                root-reserve-mb: 512
-                swap-size-mb: 1024
-                remove-dotnet: 'true'
-                remove-android: 'true'
-                remove-haskell: 'true
                 
       - name: Telegram Desktop build.
         if: env.ONLY_CACHE == 'false'
@@ -204,8 +202,8 @@ jobs:
           -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF ^
+          -D DESKTOP_APP_NO_PDB=ON ^
           -D CMAKE_CXX_FLAGS="/FS" ^
-          -D CMAKE_EXE_LINKER_FLAGS_RELEASE="/DEBUG:NONE" ^
           %TDESKTOP_BUILD_DEFINE%
           
           cmake --build ..\out --config Release --parallel
