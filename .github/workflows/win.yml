@@ -64,11 +64,12 @@ jobs:
         shell: cmd
 
     steps:
-      - name: Maximize build space
-        uses: easimon/maximize-build-space@v10
-        with:
-          remove-android: 'true'
-          remove-haskell: 'true'
+      - name: Free up disk space on Windows
+        shell: pwsh
+        run: |
+          Get-ChildItem "C:\Program Files\dotnet" -directory | Where-Object { $_.Name -ne "sdk" -and $_.Name -ne "host" } | ForEach-Object { Remove-Item $_.FullName -Recurse -Force }
+          Remove-Item -Recurse -Force "C:\Program Files (x86)\Android"
+          Remove-Item -Recurse -Force "C:\hostedtoolcache\windows"
           
       - name: Prepare directories.
         run: |
