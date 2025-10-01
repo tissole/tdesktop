@@ -71,10 +71,9 @@ jobs:
           $freeSpaceBeforeGB = [math]::Round($drive.Free / 1GB, 2)
           Write-Host "Initial free space: $freeSpaceBeforeGB GB"
           
-          Write-Host "Removing .NET templates, Android SDK, and hosted tool cache..."
+          Write-Host "Removing .NET templates and Android SDK..."
           Get-ChildItem "C:\Program Files\dotnet" -directory | Where-Object { $_.Name -ne "sdk" -and $_.Name -ne "host" } | ForEach-Object { Remove-Item $_.FullName -Recurse -Force }
           if (Test-Path "C:\Program Files (x86)\Android") { Remove-Item -Recurse -Force "C:\Program Files (x86)\Android" }
-          if (Test-Path "C:\hostedtoolcache\windows") { Remove-Item -Recurse -Force "C:\hostedtoolcache\windows" }
           Write-Host "Cleanup complete."
 
           $drive = Get-PSDrive C
