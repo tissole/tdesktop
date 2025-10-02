@@ -72,5 +72,5 @@ EnhancedSetting gEnhancedOptions;
 
 int gNetRequestsCount = 2;
 int gNetUploadSessionsCount = 2;
-int gNetUploadRequestInterval = 500;
+int gNetUploadRequestInterval = 200;
 int gAlwaysDeleteFor = 0;

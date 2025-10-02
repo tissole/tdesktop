@@ -44,7 +44,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace {
 
-constexpr auto kThumbnailQuality = 87;
+constexpr auto kThumbnailQuality = 100;
 constexpr auto kThumbnailSize = 320;
 constexpr auto kPhotoUploadPartSize = 32 * 1024;
 constexpr auto kRecompressAfterBpp = 4;
@@ -182,24 +182,16 @@ struct PreparedFileThumbnail {
 		QImage &full,
 		const QByteArray &bytes,
 		const QByteArray &format) {
-	if (!bytes.isEmpty()
-		&& (bytes.size()
-			<= full.width() * full.height() * kRecompressAfterBpp / 8)
-		&& (format == u"jpeg"_q)) {
-		if (!Images::IsProgressiveJpeg(bytes)) {
-			if (const auto result = Images::MakeProgressiveJpeg(bytes)
-				; !result.isEmpty()) {
-				return result;
-			}
-		} else {
-			return bytes;
-		}
+	// If we have the original bytes and it's a JPEG, just return them.
+	if (!bytes.isEmpty() && (format == u"jpeg"_q)) {
+		return bytes;
 	}
 
+	// Fallback to recompression only if original bytes are not available.
 	auto result = QByteArray();
 	QBuffer buffer(&result);
 	QImageWriter writer(&buffer, "JPEG");
-	writer.setQuality(87);
+	writer.setQuality(100);
 	writer.setProgressiveScanWrite(true);
 	writer.write(full);
 	buffer.close();
@@ -562,6 +554,7 @@ bool FileLoadTask::CheckForSong(
 	static const auto mimes = {
 		u"audio/mp3"_q,
 		u"audio/m4a"_q,
+		u"audio/m4b"_q,
 		u"audio/aac"_q,
 		u"audio/ogg"_q,
 		u"audio/flac"_q,
@@ -570,6 +563,7 @@ bool FileLoadTask::CheckForSong(
 	static const auto extensions = {
 		u".mp3"_q,
 		u".m4a"_q,
+		u".m4b"_q,
 		u".aac"_q,
 		u".ogg"_q,
 		u".flac"_q,
@@ -603,10 +597,13 @@ bool FileLoadTask::CheckForVideo(
 		std::unique_ptr<Ui::PreparedFileInformation> &result) {
 	static const auto mimes = {
 		u"video/mp4"_q,
+		u"video/x-matroska"_q,
 		u"video/quicktime"_q,
+		u"video/webm"_q,
 	};
 	static const auto extensions = {
 		u".mp4"_q,
+		u".mkv"_q,
 		u".mov"_q,
 		u".m4v"_q,
 		u".webm"_q,
@@ -627,9 +624,13 @@ bool FileLoadTask::CheckForVideo(
 		return false;
 	}
 
-	if (filepath.endsWith(u".mp4"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	}
+    if (filepath.endsWith(u".mp4"_q, Qt::CaseInsensitive)) {
+    		result->filemime = u"video/mp4"_q;
+    	} else if (filepath.endsWith(u".mkv"_q, Qt::CaseInsensitive)) {
+    		result->filemime = u"video/x-matroska"_q;
+    	} else if (filepath.endsWith(u".webm"_q, Qt::CaseInsensitive)) {
+    		result->filemime = u"video/webm"_q;
+    	}
 	result->media = std::move(media);
 	return true;
 }

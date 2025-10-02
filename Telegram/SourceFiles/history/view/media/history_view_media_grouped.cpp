@@ -354,6 +354,7 @@ QSize GroupedMedia::countOptimalSize() {
 			} else {
 				part._captionHeight = 0.;
 			}
+			accumulate_max(maxCaptionHeight, float64(part._captionHeight));
 		}
 		const auto rowHeight = maxMediaHeight + maxCaptionHeight;
 		for (const auto i : indices) {
@@ -526,6 +527,10 @@ Ui::BubbleRounding GroupedMedia::applyRoundingSides(
 
 QMargins GroupedMedia::groupedPadding() const {
 	if (_mode != Mode::Column) {
+		if (isBubbleBottom() && GetEnhancedBool("caption_from_file_name")) {
+			const auto padding = st::msgPadding;
+			return QMargins(0, 0, 0, padding.bottom());
+		}
 		return QMargins();
 	}
 	const auto normal = st::msgFileLayout.padding;
@@ -761,122 +766,85 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto firstItemGeometry = firstPart->geometry.translated(
 				0,
 				groupPadding.top());
-			// Draw the info bubble inside the item, positioned like msg ID bubbles
-			// When show_messages_id is enabled, show comprehensive info (views, time, msg id)
-			// When show_messages_id is disabled, show just views and time
-			if (GetEnhancedBool("show_messages_id")) {
-				// Build the comprehensive content: view icon, count, time, and msg id
-				QString infoText;
-				if (const auto views = firstPart->item->Get<HistoryMessageViews>()) {
-					if (views->views.count >= 0) {
-						infoText = QString::number(views->views.count) + " ";
-					}
+
+			const auto st = context.st;
+			const auto sti = context.imageStyle();
+			const auto stm = context.messageStyle();
+			p.setFont(st::msgDateFont);
+			p.setPen(st->msgDateImgFg());
+
+			QString infoText;
+			bool hasViews = false;
+			int viewsCount = 0;
+			if (const auto views = firstPart->item->Get<HistoryMessageViews>()) {
+				if (views->views.count >= 0) {
+					viewsCount = views->views.count;
+					hasViews = true;
 				}
-				const auto dateText = QLocale().toString(
-					ItemDateTime(firstPart->item).time(),
-					QLocale::ShortFormat);
-				infoText += dateText + " ";
+			}
+
+			const auto dateText = QLocale().toString(
+				ItemDateTime(firstPart->item).time(),
+				QLocale::ShortFormat);
+
+			if (GetEnhancedBool("show_messages_id")) {
 				const auto msgId = firstPart->item->fullId().msg;
 				if (msgId > 0) {
-					infoText += QString::number(msgId.bare);
-				}
-
-				const auto st = context.st;
-				const auto sti = context.imageStyle();
-				p.setFont(st::msgDateFont);
-				p.setPen(st->msgDateImgFg());
-
-				auto textWidth = st::msgDateFont->width(infoText);
-				const auto textHeight = st::msgDateFont->height;
-
-				auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-				const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
-
-				if (dateW <= firstItemGeometry.width()) {
-					// Position bubble inside the item bounds to prevent overflow
-					const auto bubbleX = (dateW > firstItemGeometry.width()) ? firstItemGeometry.x() : (firstItemGeometry.x() + firstItemGeometry.width() - dateW);
-					const auto bubbleY = firstItemGeometry.y();
-
-					auto originalColor = sti->msgDateImgBg->c;
-					auto modifiedQColor = QColor(
-						originalColor.red(),
-						originalColor.green(),
-						originalColor.blue(),
-						160);
-					const auto bgColor = style::internal::OwnedColor(modifiedQColor);
-					Ui::FillRoundRect(
-						p,
-						bubbleX,
-						bubbleY,
-						dateW,
-						dateH,
-						bgColor.color(),
-						sti->msgDateImgBgCorners);
-
-					auto font = st::msgDateFont;
-					p.setFont(font->bold());
-					p.drawText(
-						bubbleX + st::msgDateImgPadding.x(),
-						bubbleY + st::msgDateImgPadding.y() + font->ascent,
-						infoText);
-					p.setFont(font);
+					infoText = dateText + " " + QString::number(msgId.bare);
+				} else {
+					infoText = dateText;
 				}
 			} else {
-				// Show simplified info bubble with just views and time (no msg ID)
-				QString infoText;
-				if (const auto views = firstPart->item->Get<HistoryMessageViews>()) {
-					if (views->views.count >= 0) {
-						infoText = QString::number(views->views.count) + " ";
-					}
+				infoText = dateText;
+			}
+
+			const auto viewsText = hasViews ? (QString::number(viewsCount) + " ") : QString();
+			const auto viewsWidth = hasViews ? st::msgDateFont->width(viewsText) : 0;
+			const auto iconWidth = hasViews ? stm->historyViewsIcon.width() : 0;
+			auto textWidth = st::msgDateFont->width(infoText);
+			if (hasViews) {
+				textWidth += viewsWidth + iconWidth;
+			}
+
+			const auto textHeight = st::msgDateFont->height;
+			auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
+			const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
+
+			if (dateW <= firstItemGeometry.width()) {
+				const auto bubbleX = firstItemGeometry.x() + firstItemGeometry.width() - dateW;
+				const auto bubbleY = firstItemGeometry.y();
+
+				auto originalColor = sti->msgDateImgBg->c;
+				auto modifiedQColor = QColor(
+					originalColor.red(),
+					originalColor.green(),
+					originalColor.blue(),
+					160);
+				const auto bgColor = style::internal::OwnedColor(modifiedQColor);
+				Ui::FillRoundRect(
+					p,
+					bubbleX,
+					bubbleY,
+					dateW,
+					dateH,
+					bgColor.color(),
+					sti->msgDateImgBgCorners);
+
+				auto font = st::msgDateFont;
+				p.setFont(font->bold());
+				auto currentX = bubbleX + st::msgDateImgPadding.x();
+				const auto currentY = bubbleY + st::msgDateImgPadding.y() + font->ascent;
+
+				if (hasViews) {
+					const auto &icon = stm->historyViewsIcon;
+					const auto iconTop = bubbleY + (dateH - icon.height()) / 2;
+					icon.paint(p, currentX, iconTop, dateW);
+					currentX += icon.width();
+					p.drawText(currentX, currentY, viewsText);
+					currentX += viewsWidth;
 				}
-				const auto dateText = QLocale().toString(
-					ItemDateTime(firstPart->item).time(),
-					QLocale::ShortFormat);
-				infoText += dateText;
-
-				// Only draw if we have information to show
-				if (!infoText.trimmed().isEmpty()) {
-					const auto st = context.st;
-					const auto sti = context.imageStyle();
-					p.setFont(st::msgDateFont);
-					p.setPen(st->msgDateImgFg());
-
-					auto textWidth = st::msgDateFont->width(infoText);
-					const auto textHeight = st::msgDateFont->height;
-
-					auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-					const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
-
-					if (dateW <= firstItemGeometry.width()) {
-						// Position bubble inside the item bounds to prevent overflow
-						const auto bubbleX = (dateW > firstItemGeometry.width()) ? firstItemGeometry.x() : (firstItemGeometry.x() + firstItemGeometry.width() - dateW);
-						const auto bubbleY = firstItemGeometry.y();
-
-						auto originalColor = sti->msgDateImgBg->c;
-						auto modifiedQColor = QColor(
-							originalColor.red(),
-							originalColor.green(),
-							originalColor.blue(),
-							160);
-						const auto bgColor = style::internal::OwnedColor(modifiedQColor);
-						Ui::FillRoundRect(
-							p,
-							bubbleX,
-							bubbleY,
-							dateW,
-							dateH,
-							bgColor.color(),
-							sti->msgDateImgBgCorners);
-
-						auto font = st::msgDateFont;
-						p.setFont(font->bold());
-						p.drawText(
-							bubbleX + st::msgDateImgPadding.x(),
-							bubbleY + st::msgDateImgPadding.y() + font->ascent,
-							infoText);
-						p.setFont(font);
-					}
-				}
+				p.drawText(currentX, currentY, infoText);
+				p.setFont(font);
 			}
 		}
 		if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
