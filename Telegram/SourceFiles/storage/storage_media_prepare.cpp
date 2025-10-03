@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/platform_file_utilities.h"
 #include "lang/lang_keys.h"
 #include "storage/localimageloader.h"
+#include "storage/localimageloader.h"
 #include "core/mime_type.h"
 #include "ui/image/image_prepare.h"
 #include "ui/chat/attach/attach_prepare.h"
@@ -318,6 +319,11 @@ void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
 			Assert(!file.preview.isNull());
 			file.preview.setDevicePixelRatio(style::DevicePixelRatio());
 			file.type = PreparedFile::Type::Video;
+
+			// Create videoCover from video->thumbnail
+			if (!video->thumbnail.isNull()) {
+				file.videoCover = CreateVideoCoverFilePrepareResult(base::duplicate(video->thumbnail));
+			}
 		}
 	} else if (v::is<Song>(file.information->media)) {
 		file.type = PreparedFile::Type::Music;
