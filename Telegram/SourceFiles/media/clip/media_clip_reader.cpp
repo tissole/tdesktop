@@ -982,12 +982,12 @@ Ui::PreparedFileInformation PrepareForSending(
 			seekPositionMs = (durationMs > 15000) ? 15000 : (durationMs / 2);
 			if (seekPositionMs > 0) {
 				if (!reader->inspectAt(seekPositionMs)) {
-					if (durationMs > 5000) {
-						seekPositionMs = 5000;
-						if (!reader->inspectAt(seekPositionMs)) {
-							return { .media = result };
-						}
-					} else {
+					// Try at 7 seconds if middle/15s failed
+					seekPositionMs = 7000;
+					if (durationMs < 7000) {
+						seekPositionMs = durationMs / 2; // For short videos, try middle
+					}
+					if (!reader->inspectAt(seekPositionMs)) {
 						return { .media = result };
 					}
 				}
