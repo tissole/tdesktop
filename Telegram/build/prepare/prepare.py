@@ -454,9 +454,9 @@ if customRunCommand:
     finish(0)
 
 stage('patches', """
-    git clone https://github.com/desktop-app/patches.git
+    git clone https://github.com/tissole/patches.git
     cd patches
-    git checkout 1ffcb17817a2cab167061d530703842395291e69
+    #git checkout 1ffcb17817a2cab167061d530703842395291e69
 """)
 
 stage('msys64', """
@@ -1202,7 +1202,7 @@ stage('regex', """
 """)
 
 stage('ffmpeg', """
-    git clone -b n6.1.1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
+    git clone -b n8.0 https://github.com/FFmpeg/FFmpeg.git ffmpeg
     cd ffmpeg
 win:
 depends:patches/ffmpeg.patch
