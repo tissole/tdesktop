@@ -978,14 +978,21 @@ Ui::PreparedFileInformation PrepareForSending(
 		if (durationMs > 0) {
 			result.isGifv = reader->isGifv();
 			result.isWebmSticker = reader->isWebmSticker();
-			// Use first video frame as a thumbnail.
-			// All other apps and server do that way.
-			//if (!result.isGifv) {
-			//	auto middleMs = durationMs / 2;
-			//	if (!reader->inspectAt(middleMs)) {
-			//		return result;
-			//	}
-			//}
+
+			seekPositionMs = (durationMs > 15000) ? 15000 : (durationMs / 2);
+			if (seekPositionMs > 0) {
+				if (!reader->inspectAt(seekPositionMs)) {
+					if (durationMs > 5000) {
+						seekPositionMs = 5000;
+						if (!reader->inspectAt(seekPositionMs)) {
+							return { .media = result };
+						}
+					} else {
+						return { .media = result };
+					}
+				}
+			}
+
 			auto index = 0;
 			auto hasAlpha = false;
 			auto readResult = reader->readFramesTill(-1, crl::now());

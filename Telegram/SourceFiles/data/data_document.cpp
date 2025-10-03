@@ -447,8 +447,8 @@ void DocumentData::setattributes(
 	}
 
 	// Any "video/webm" file is treated as a video-sticker,
-	// unless it is a video file.
-	if (hasMimeType(u"video/webm"_q) && !isVideoFile()) {
+	// unless it has video attributes (indicating it's a video file, not a sticker).
+	if (hasMimeType(u"video/webm"_q) && type != VideoDocument) {
 		if (type == FileDocument) {
 			type = StickerDocument;
 			_additional = std::make_unique<StickerData>();
@@ -1755,25 +1755,43 @@ bool DocumentData::isSongWithCover() const {
 }
 
 bool DocumentData::isAudioFile() const {
-	if (isVoiceMessage() || isVideoFile()) {
-		return false;
-	} else if (isSong()) {
-		return true;
-	}
-	const auto prefix = u"audio/"_q;
-	if (!_mimeString.startsWith(prefix, Qt::CaseInsensitive)) {
-		if (_filename.endsWith(u".opus"_q, Qt::CaseInsensitive)) {
-			return true;
-		}
-		return false;
-	} else if (!_filename.isEmpty()
-		&& _nameType != Core::NameType::Audio
-		&& _nameType != Core::NameType::Video) {
-		return false;
-	}
-	const auto left = _mimeString.mid(prefix.size());
-	const auto types = { u"x-wav"_q, u"wav"_q, u"mp4"_q };
-	return ranges::contains(types, left);
+      if (isVoiceMessage() || isVideoFile()) {
+              return false;
+      } else if (isSong()) {
+              return true;
+      }
+      const auto prefix = u"audio/"_q;
+      if (_filename.endsWith(u".opus"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".dsf"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".dff"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".caf"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".tta"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".ra"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".gsm"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".awb"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".amr"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".ac4"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".als"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".atrac"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".ape"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".mpc"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".usac"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".aiff"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".aif"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".aifc"_q, Qt::CaseInsensitive)
+              || _filename.endsWith(u".wma"_q, Qt::CaseInsensitive)) {
+              return true;
+      }
+      if (!_mimeString.startsWith(prefix, Qt::CaseInsensitive)) {
+              return false;
+      } else if (!_filename.isEmpty()
+              && _nameType != Core::NameType::Audio
+              && _nameType != Core::NameType::Video) {
+              return false;
+      }
+      const auto left = _mimeString.mid(prefix.size());
+      const auto types = { u"x-wav"_q, u"wav"_q, u"mp4"_q };
+      return ranges::contains(types, left);
 }
 
 bool DocumentData::isSharedMediaMusic() const {

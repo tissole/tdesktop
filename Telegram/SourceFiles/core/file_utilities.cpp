@@ -332,7 +332,7 @@ QString ImagesOrAllFilter() {
 }
 
 QString FileDialog::PhotoVideoFilesFilter() {
-	return u"Image and Video Files (*"_q + Ui::ImageExtensions().join(u" *"_q) + u" *.mp4 *.mov *.m4v *.webm *.mkv);;"_q
+	return u"Image and Video Files (*"_q + Ui::ImageExtensions().join(u" *"_q) + u" *.mp4 *.mov *.m4v *.webm *.mkv *.asf *.avi *.wmv *.flv *.qt *.f4v *.f4b *.3gp *.3g2 *.m4a *.m4b *.vob *.mts *.m2ts *.rmvb *.divx *.xvid *.ogv *.ogx *.ogm *.mpg *.mpeg *.m2v *.ts *.tsv *.m2p *.ps);;"_q
 		+ AllFilesFilter();
 }
 

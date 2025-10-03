@@ -559,6 +559,22 @@ bool FileLoadTask::CheckForSong(
 		u"audio/ogg"_q,
 		u"audio/flac"_q,
 		u"audio/opus"_q,
+		u"audio/x-dsf"_q,
+		u"audio/x-dff"_q,
+		u"audio/x-caf"_q,
+		u"audio/x-tta"_q,
+		u"audio/vnd.rn-realaudio"_q,
+		u"audio/gsm"_q,
+		u"audio/amr-wb"_q,
+		u"audio/amr"_q,
+		u"audio/ac4"_q,
+		u"audio/als"_q,
+		u"audio/atrac"_q,
+		u"audio/x-monkeys-audio"_q,
+		u"audio/x-musepack"_q,
+		u"audio/usac"_q,
+		u"audio/x-aiff"_q,
+		u"audio/x-ms-wma"_q,
 	};
 	static const auto extensions = {
 		u".mp3"_q,
@@ -569,6 +585,24 @@ bool FileLoadTask::CheckForSong(
 		u".flac"_q,
 		u".opus"_q,
 		u".oga"_q,
+		u".dsf"_q,
+		u".dff"_q,
+		u".caf"_q,
+		u".tta"_q,
+		u".ra"_q,
+		u".gsm"_q,
+		u".awb"_q,
+		u".amr"_q,
+		u".ac4"_q,
+		u".als"_q,
+		u".atrac"_q,
+		u".ape"_q,
+		u".mpc"_q,
+		u".usac"_q,
+		u".aiff"_q,
+		u".aif"_q,
+		u".aifc"_q,
+		u".wma"_q,
 	};
 	if (!filepath.isEmpty()
 		&& !CheckMimeOrExtensions(
@@ -600,6 +634,16 @@ bool FileLoadTask::CheckForVideo(
 		u"video/x-matroska"_q,
 		u"video/quicktime"_q,
 		u"video/webm"_q,
+		u"video/x-ms-asf"_q,
+		u"video/x-msvideo"_q,
+		u"video/x-flv"_q,
+		u"video/3gpp"_q,
+		u"video/3gpp2"_q,
+		u"video/mp2t"_q,
+		u"video/vnd.rn-realvideo"_q,
+		u"video/x-ms-wmv"_q,
+		u"video/ogg"_q,
+		u"video/mpeg"_q,
 	};
 	static const auto extensions = {
 		u".mp4"_q,
@@ -607,6 +651,33 @@ bool FileLoadTask::CheckForVideo(
 		u".mov"_q,
 		u".m4v"_q,
 		u".webm"_q,
+		u".asf"_q,
+		u".avi"_q,
+		u".wmv"_q,
+		u".flv"_q,
+		u".qt"_q,
+		u".f4v"_q,
+		u".f4b"_q,
+		u".3gp"_q,
+		u".3g2"_q,
+		u".m4a"_q,
+		u".m4b"_q,
+		u".vob"_q,
+		u".mts"_q,
+		u".m2ts"_q,
+		u".rmvb"_q,
+		u".divx"_q,
+		u".xvid"_q,
+		u".ogv"_q,
+		u".ogx"_q,
+		u".ogm"_q,
+		u".mpg"_q,
+		u".mpeg"_q,
+		u".m2v"_q,
+		u".ts"_q,
+		u".tsv"_q,
+		u".m2p"_q,
+		u".ps"_q,
 	};
 	if (!CheckMimeOrExtensions(filepath, result->filemime, mimes, extensions)) {
 		return false;
@@ -630,6 +701,12 @@ bool FileLoadTask::CheckForVideo(
     		result->filemime = u"video/x-matroska"_q;
     	} else if (filepath.endsWith(u".webm"_q, Qt::CaseInsensitive)) {
     		result->filemime = u"video/webm"_q;
+    	} else if (filepath.endsWith(u".avi"_q, Qt::CaseInsensitive)) {
+    		result->filemime = u"video/x-msvideo"_q;
+    	} else if (filepath.endsWith(u".wmv"_q, Qt::CaseInsensitive)) {
+    		result->filemime = u"video/x-ms-wmv"_q;
+    	} else if (filepath.endsWith(u".flv"_q, Qt::CaseInsensitive)) {
+    		result->filemime = u"video/x-flv"_q;
     	}
 	result->media = std::move(media);
 	return true;
