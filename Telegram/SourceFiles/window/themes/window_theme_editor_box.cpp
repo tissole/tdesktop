@@ -400,7 +400,7 @@ std::shared_ptr<FilePrepareResult> PrepareThemeMedia(
 	auto thumbnailBytes = QByteArray();
 	{
 		QBuffer buffer(&thumbnailBytes);
-		thumbnail.save(&buffer, "JPG", 87);
+		thumbnail.save(&buffer, "JPG", 100);
 	}
 
 	sizes.push_back(MTP_photoSize(
@@ -764,7 +764,7 @@ struct CollectedData {
 	parsed.isPng = false;
 	if (changed) {
 		QBuffer buffer(&parsed.background);
-		background.save(&buffer, "JPG", 87);
+		background.save(&buffer, "JPG", 100);
 	} else {
 		// Use existing background serialization.
 		parsed.background = originalParsed.background;

@@ -3503,7 +3503,7 @@ void Account::writeRoundPlaceholder(const QImage &placeholder) {
 
 	auto bytes = QByteArray();
 	auto buffer = QBuffer(&bytes);
-	placeholder.save(&buffer, "JPG", 87);
+	placeholder.save(&buffer, "JPG", 100);
 
 	quint32 size = Serialize::bytearraySize(bytes);
 	if (!_roundPlaceholderKey) {
