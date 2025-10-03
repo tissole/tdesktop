@@ -331,8 +331,8 @@ QString ImagesOrAllFilter() {
 	return ImagesFilter() + u";;"_q + AllFilesFilter();
 }
 
-QString PhotoVideoFilesFilter() {
-	return u"Image and Video Files (*"_q + Ui::ImageExtensions().join(u" *"_q) + u" *.mp4 *.mov *.m4v);;"_q
+QString FileDialog::PhotoVideoFilesFilter() {
+	return u"Image and Video Files (*"_q + Ui::ImageExtensions().join(u" *"_q) + u" *.mp4 *.mov *.m4v *.webm *.mkv);;"_q
 		+ AllFilesFilter();
 }
 
