@@ -47,7 +47,7 @@ namespace {
 constexpr auto kThumbnailQuality = 100;
 constexpr auto kThumbnailSize = 320;
 constexpr auto kPhotoUploadPartSize = 32 * 1024;
-constexpr auto kRecompressAfterBpp = 4;
+constexpr auto kRecompressAfterBpp = 16;
 
 using Ui::ValidateThumbDimensions;
 
