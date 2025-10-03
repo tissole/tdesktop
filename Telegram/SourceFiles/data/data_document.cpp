@@ -348,10 +348,18 @@ void DocumentData::setattributes(
 			}
 		}, [&](const MTPDdocumentAttributeSticker &data) {
 			const auto was = type;
-			if (type == FileDocument || type == VideoDocument) {
+			// If it's already a VideoDocument, don't reclassify as StickerDocument
+			// unless it's explicitly a mask or part of a sticker set.
+			if (type == VideoDocument) {
+				if (data.is_mask() || data.vstickerset().type() != MTPInputStickerSet::Type::inputStickerSetEmpty) {
+					type = StickerDocument;
+					_additional = std::make_unique<StickerData>();
+				}
+			} else if (type == FileDocument) { // If it's a generic file, classify as sticker
 				type = StickerDocument;
 				_additional = std::make_unique<StickerData>();
 			}
+
 			if (const auto info = sticker()) {
 				info->setType = data.is_mask()
 					? Data::StickersType::Masks
@@ -447,8 +455,8 @@ void DocumentData::setattributes(
 	}
 
 	// Any "video/webm" file is treated as a video-sticker,
-	// unless it has video attributes (indicating it's a video file, not a sticker).
-	if (hasMimeType(u"video/webm"_q) && type != VideoDocument) {
+	// unless it is a video file.
+	if (hasMimeType(u"video/webm"_q) && !isVideoFile()) {
 		if (type == FileDocument) {
 			type = StickerDocument;
 			_additional = std::make_unique<StickerData>();
