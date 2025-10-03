@@ -131,41 +131,6 @@ struct PreparedFileThumbnail {
 	return std::move(prepared);
 }
 
-std::shared_ptr<FilePrepareResult> CreateVideoCoverFilePrepareResult(QImage &&image) {
-	if (image.isNull()) {
-		return nullptr;
-	}
-
-	auto result = std::make_shared<FilePrepareResult>(FilePrepareDescriptor{});
-	result->type = SendMediaType::Photo;
-
-	QByteArray imageBytes;
-	QBuffer buffer(&imageBytes);
-	image.save(&buffer, "PNG", kThumbnailQuality);
-
-	QVector<MTPPhotoSize> photoSizes;
-	photoSizes.push_back(MTP_photoSize(
-		MTP_string("x"), // 'x' is a common size identifier for original
-		MTP_int(image.width()),
-		MTP_int(image.height()),
-		MTP_int(imageBytes.size())));
-
-	result->photo = MTP_photo(
-		MTP_flags(0),
-		MTP_long(base::RandomValue<uint64>()), // id
-		MTP_long(0), // access_hash
-		MTP_bytes(), // file_reference
-		MTP_int(base::unixtime::now()), // date
-		MTP_vector<MTPPhotoSize>(photoSizes),
-		MTPVector<MTPVideoSize>(),
-		MTP_int(0)); // dc_id
-
-	result->setFileData(imageBytes);
-	result->setThumbData(imageBytes); // Use the same for thumb data
-
-	return result;
-}
-
 [[nodiscard]] auto FindAlbumItem(
 		std::vector<SendingAlbum::Item> &items,
 		not_null<HistoryItem*> item) {
