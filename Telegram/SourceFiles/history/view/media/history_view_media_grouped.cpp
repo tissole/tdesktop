@@ -90,7 +90,7 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto textHeight = st::msgDateFont->height;
 
 	auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-	const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
+	const auto dateH = textHeight + st::msgDateImgPadding.y();
 
 	if (dateW > itemGeometry.width()) {
 		const auto availableWidth = itemGeometry.width()
@@ -756,7 +756,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		drawPurchasedTag(p, fullRect, context);
 	}
 
-	if (_parent->media() == this && (!_parent->hasBubble() || isBubbleBottom())) {
+	if (_mode == Mode::Grid && _parent->media() == this && (!_parent->hasBubble() || isBubbleBottom())) {
 		auto fullRight = width();
 		auto fullBottom = height();
 		// Draw comprehensive info bubble for the first item inside the item bounds (always visible)
@@ -803,12 +803,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto iconWidth = hasViews ? stm->historyViewsIcon.width() : 0;
 			auto textWidth = st::msgDateFont->width(infoText);
 			if (hasViews) {
-				textWidth += viewsWidth + iconWidth;
+				textWidth += viewsWidth + iconWidth + st::historyViewsSpace;
 			}
 
 			const auto textHeight = st::msgDateFont->height;
 			auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-			const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
+			const auto dateH = textHeight + st::msgDateImgPadding.y();
 
 			if (dateW <= firstItemGeometry.width()) {
 				const auto bubbleX = firstItemGeometry.x() + firstItemGeometry.width() - dateW;
@@ -833,13 +833,13 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				auto font = st::msgDateFont;
 				p.setFont(font->bold());
 				auto currentX = bubbleX + st::msgDateImgPadding.x();
-				const auto currentY = bubbleY + st::msgDateImgPadding.y() + font->ascent;
+				const auto currentY = bubbleY + (dateH - textHeight) / 2 + font->ascent;
 
 				if (hasViews) {
 					const auto &icon = stm->historyViewsIcon;
 					const auto iconTop = bubbleY + (dateH - icon.height()) / 2;
 					icon.paint(p, currentX, iconTop, dateW);
-					currentX += icon.width();
+					currentX += icon.width() + st::historyViewsSpace;
 					p.drawText(currentX, currentY, viewsText);
 					currentX += viewsWidth;
 				}
