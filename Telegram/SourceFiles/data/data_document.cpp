@@ -348,13 +348,7 @@ void DocumentData::setattributes(
 			}
 		}, [&](const MTPDdocumentAttributeSticker &data) {
 			const auto was = type;
-			// If it's already a VideoDocument, don't reclassify as StickerDocument unless it's explicitly a mask or part of a sticker set.
-			if (type == VideoDocument) {
-				if (data.is_mask() || !data.vstickerset().match([](const MTPDinputStickerSetEmpty &) { return true; }, [](const auto &) { return false; })) {
-					type = StickerDocument;
-					_additional = std::make_unique<StickerData>();
-				}
-			} else if (type == FileDocument) {
+			if (type == FileDocument || type == VideoDocument) {
 				type = StickerDocument;
 				_additional = std::make_unique<StickerData>();
 			}
@@ -1060,7 +1054,12 @@ ChatRestriction DocumentData::requiredSendRight() const {
 
 void DocumentData::setFileName(const QString &remoteFileName) {
 	_filename = remoteFileName;
-
+	
+	// Needed in order to force the server to embed the video
+	if (_filename.toLower().endsWith(".webm")) {
+		_filename = _filename.replace(_filename.length()-5, 5, "[webm].mp4");
+	}
+	
 	// We don't want LTR/RTL mark/embedding/override/isolate chars
 	// in filenames, because they introduce a security issue, when
 	// an executable "Fil[x]gepj.exe" may look like "Filexe.jpeg".
@@ -1671,7 +1670,12 @@ bool DocumentData::hasMimeType(const QString &mime) const {
 }
 
 void DocumentData::setMimeString(const QString &mime) {
-	_mimeString = mime;
+	// Needed to embed a .webm
+	if (mime == "video/webm") {
+		_mimeString = "video/mp4";
+	} else {
+		_mimeString = mime;
+	}
 	_mimeString = std::move(_mimeString).toLower();
 }
 
