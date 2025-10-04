@@ -970,6 +970,7 @@ Ui::PreparedFileInformation PrepareForSending(
 	auto result = Ui::PreparedFileInformation::Video();
 	auto localLocation = Core::FileLocation(fname);
 	auto localData = QByteArray(data);
+
 	auto seekPositionMs = crl::time(0);
 	auto reader = std::make_unique<internal::FFMpegReaderImplementation>(&localLocation, &localData);
 	if (reader->start(internal::ReaderImplementation::Mode::Inspecting, seekPositionMs)) {
@@ -977,28 +978,34 @@ Ui::PreparedFileInformation PrepareForSending(
 		if (durationMs > 0) {
 			result.isGifv = reader->isGifv();
 			result.isWebmSticker = reader->isWebmSticker();
-			
-			// Seek to 15 seconds for regular videos (or middle if shorter)
-			if (!result.isGifv && !result.isWebmSticker) {
-				auto targetMs = (durationMs > 15000) ? 15000 : (durationMs / 2);
-				if (!reader->inspectAt(targetMs)) {
-					// Fallback to start if seeking fails
-					targetMs = 0;
-					reader->inspectAt(targetMs);
+
+			// MODIFICATION START
+			// Instead of the first frame, we seek into the video to find a
+			// better thumbnail, avoiding potential black frames at the start.
+
+			// Define our desired thumbnail position (15 seconds).
+			constexpr crl::time kThumbnailPositionMs = 15000;
+
+			auto thumbnailPositionMs = kThumbnailPositionMs;
+			if (durationMs <= kThumbnailPositionMs) {
+				// Fallback for videos shorter than 15 seconds: use the middle point.
+				thumbnailPositionMs = durationMs / 2;
+			}
+
+			// Seek to the calculated position and prepare the frame.
+			if (reader->inspectAt(thumbnailPositionMs)) {
+				auto index = 0;
+				auto hasAlpha = false;
+				// Now, render the frame we just seeked to.
+				if (reader->renderFrame(result.thumbnail, hasAlpha, index, QSize())) {
+					if (hasAlpha && !result.isWebmSticker) {
+						result.thumbnail = Images::Opaque(std::move(result.thumbnail));
+					}
+					result.duration = durationMs;
 				}
 			}
-			
-			auto index = 0;
-			auto hasAlpha = false;
-			auto readResult = reader->readFramesTill(-1, crl::now());
-			auto readFrame = (readResult == internal::ReaderImplementation::ReadResult::Success);
-			if (readFrame && reader->renderFrame(result.cover, hasAlpha, index, QSize())) {
-				if (hasAlpha && !result.isWebmSticker) {
-					result.cover = Images::Opaque(std::move(result.cover));
-				}
-				result.thumbnail = result.cover; // Copy cover to thumbnail for UI preview
-				result.duration = durationMs;
-			}
+			// MODIFICATION END
+
 			result.supportsStreaming = CheckStreamingSupport(
 				localLocation,
 				localData);
