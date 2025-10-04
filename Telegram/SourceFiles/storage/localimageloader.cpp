@@ -621,13 +621,7 @@ bool FileLoadTask::CheckForVideo(
 		u"video/webm"_q,
 		u"video/x-ms-asf"_q,
 		u"video/x-msvideo"_q,
-		u"video/x-flv"_q,
-		u"video/3gpp"_q,
-		u"video/3gpp2"_q,
 		u"video/mp2t"_q,
-		u"video/x-ms-wmv"_q,
-		u"video/ogg"_q,
-		u"video/mpeg"_q,
 	};
 	static const auto extensions = {
 		u".mp4"_q,
@@ -639,30 +633,10 @@ bool FileLoadTask::CheckForVideo(
 		u".asx"_q,
 		u".avi"_q,
 		u".wmv"_q,
-		u".flv"_q,
-		u".qt"_q,
 		u".f4v"_q,
-		u".f4b"_q,
-		u".3gp"_q,
-		u".3g2"_q,
-		u".m4a"_q,
-		u".m4b"_q,
-		u".vob"_q,
+		u".ts"_q,		
 		u".mts"_q,
 		u".m2ts"_q,
-		u".rmvb"_q,
-		u".divx"_q,
-		u".xvid"_q,
-		u".ogv"_q,
-		u".ogx"_q,
-		u".ogm"_q,
-		u".mpg"_q,
-		u".mpeg"_q,
-		u".m2v"_q,
-		u".ts"_q,
-		u".tsv"_q,
-		u".m2p"_q,
-		u".ps"_q,
 	};
 	if (!CheckMimeOrExtensions(filepath, result->filemime, mimes, extensions)) {
 		return false;
@@ -682,6 +656,8 @@ bool FileLoadTask::CheckForVideo(
 
     if (filepath.endsWith(u".mp4"_q, Qt::CaseInsensitive)) {
     		result->filemime = u"video/mp4"_q;
+    	} else if (filepath.endsWith(u".mov"_q, Qt::CaseInsensitive)) {
+    		result->filemime = u"video/quicktime"_q;
     	} else if (filepath.endsWith(u".mkv"_q, Qt::CaseInsensitive)) {
     		result->filemime = u"video/x-matroska"_q;
     	} else if (filepath.endsWith(u".webm"_q, Qt::CaseInsensitive)) {
@@ -689,10 +665,12 @@ bool FileLoadTask::CheckForVideo(
     	} else if (filepath.endsWith(u".avi"_q, Qt::CaseInsensitive)) {
     		result->filemime = u"video/x-msvideo"_q;
     	} else if (filepath.endsWith(u".wmv"_q, Qt::CaseInsensitive)) {
-    		result->filemime = u"video/x-ms-wmv"_q;
-    	} else if (filepath.endsWith(u".flv"_q, Qt::CaseInsensitive)) {
-    		result->filemime = u"video/x-flv"_q;
-    	}
+    		result->filemime = u"video/x-ms-asf"_q;
+        } else if (filepath.endsWith(u".ts"_q, Qt::CaseInsensitive) ||
+                       filepath.endsWith(u".mts"_q, Qt::CaseInsensitive) ||
+                       filepath.endsWith(u".m2ts"_q, Qt::CaseInsensitive)) {
+            result->filemime = u"video/mp2t"_q;
+        }
 	result->media = std::move(media);
 	return true;
 }
