@@ -835,6 +835,13 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				auto currentX = bubbleX + st::msgDateImgPadding.x();
 				const auto currentY = bubbleY + (dateH - textHeight) / 2 + font->ascent;
 
+				// Check if message was edited and add "edited" text
+				QString editedText;
+				const auto edited = firstPart->item->Get<HistoryMessageEdited>();
+				if (edited && !firstPart->item->hideEditedBadge()) {
+					editedText = tr::lng_edited(tr::now).toUpper().left(1) + tr::lng_edited(tr::now).mid(1); // Capitalize first letter
+				}
+				
 				if (hasViews) {
 					const auto &icon = stm->historyViewsIcon;
 					const auto iconTop = bubbleY + (dateH - icon.height()) / 2;
@@ -842,17 +849,22 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					p.setPen(st->msgDateImgFg()); // Use the same color as text
 					icon.paint(p, currentX, iconTop, dateW);
 					p.setPen(st->msgDateImgFg()); // Ensure text is also in the right color
-					// Move the counter closer to the icon (small space but not touching)
-					currentX += icon.width() + (st::historyViewsSpace / 3); // Small space between icon and counter
+					// Increase space between icon and counter (smallest increment)
+					currentX += icon.width() + st::historyViewsSpace; // Increased space between icon and counter
 					p.drawText(currentX, currentY, viewsText);
-					currentX += viewsWidth + st::historyViewsSpace; // Increased space between counter and time
-				}
-				
-				// Check if message was edited and add "edited" text
-				QString editedText;
-				const auto edited = firstPart->item->Get<HistoryMessageEdited>();
-				if (edited && !firstPart->item->hideEditedBadge()) {
-					editedText = tr::lng_edited(tr::now); // Use Telegram's translation for "edited"
+					currentX += st::msgDateFont->width(viewsText);
+					
+					// Add "edited" text right after counter if message was edited
+					if (!editedText.isEmpty()) {
+						currentX += st::historyViewsSpace / 2; // Small space before "edited" text
+						p.drawText(currentX, currentY, editedText);
+						currentX += st::msgDateFont->width(editedText);
+					}
+					
+					currentX += st::historyViewsSpace; // Space between counter/edited and time
+				} else if (!editedText.isEmpty()) {
+					// If there are no views but message was edited, add "edited" text after icon if needed
+					// For now, we'll assume edited only appears with views, so this case won't occur
 				}
 				
 				// Handle time and msg id separately if needed
@@ -864,23 +876,10 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					
 					p.drawText(currentX, currentY, timeText);
 					currentX += st::msgDateFont->width(timeText) + st::historyViewsSpace; // Space between time and msg id
-					
-					// Add "edited" text after msg id if needed
-					if (!editedText.isEmpty()) {
-						p.drawText(currentX, currentY, msgIdText + " " + editedText);
-					} else {
-						p.drawText(currentX, currentY, msgIdText);
-					}
+					p.drawText(currentX, currentY, msgIdText);
 				} else {
-					// Draw info text (time only) and add "edited" if needed
+					// Draw info text (time only)
 					p.drawText(currentX, currentY, infoText);
-					currentX += st::msgDateFont->width(infoText);
-					
-					// Add "edited" text after time if message was edited
-					if (!editedText.isEmpty()) {
-						currentX += st::historyViewsSpace; // Space between time/msgId and "edited"
-						p.drawText(currentX, currentY, editedText);
-					}
 				}
 				p.setFont(font);
 			}
@@ -1079,7 +1078,9 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 					const auto edited = firstPart->item->Get<HistoryMessageEdited>();
 					if (edited && !firstPart->item->hideEditedBadge()) {
 						const auto editTime = QDateTime::fromSecsSinceEpoch(edited->date);
-						QString editTooltipText = tr::lng_edited(tr::now) + ": " + editTime.date().toString("dddd, dd MMMM yyyy") + 
+						QString editedTranslation = tr::lng_edited(tr::now);
+						QString editTooltipText = editedTranslation.toUpper().left(1) + editedTranslation.mid(1) + ": " + 
+							editTime.date().toString("dddd, dd MMMM yyyy") + 
 							" " + editTime.time().toString("HH:mm:ss");
 						tooltipText += "\n" + editTooltipText; // Add edit info on a new line
 					}

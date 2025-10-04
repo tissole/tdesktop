@@ -979,32 +979,35 @@ Ui::PreparedFileInformation PrepareForSending(
 			result.isGifv = reader->isGifv();
 			result.isWebmSticker = reader->isWebmSticker();
 
-			// MODIFICATION START
-			// Instead of the first frame, we seek into the video to find a
-			// better thumbnail, avoiding potential black frames at the start.
+			// --- MODIFICATION START ---
 
 			// Define our desired thumbnail position (15 seconds).
 			constexpr crl::time kThumbnailPositionMs = 15000;
 
 			auto thumbnailPositionMs = kThumbnailPositionMs;
 			if (durationMs <= kThumbnailPositionMs) {
-				// Fallback for videos shorter than 15 seconds: use the middle point.
+				// Fallback for videos shorter than 15s: use the middle point.
 				thumbnailPositionMs = durationMs / 2;
 			}
 
-			// Seek to the calculated position and prepare the frame.
+			// STEP 1: Seek to the calculated position in the video stream.
 			if (reader->inspectAt(thumbnailPositionMs)) {
-				auto index = 0;
-				auto hasAlpha = false;
-				// Now, render the frame we just seeked to.
-				if (reader->renderFrame(result.thumbnail, hasAlpha, index, QSize())) {
-					if (hasAlpha && !result.isWebmSticker) {
-						result.thumbnail = Images::Opaque(std::move(result.thumbnail));
+				// STEP 2: **THE CRITICAL FIX** - Now, actually read the frame data at this new position.
+				// The '-1' tells it to read the very next available frame.
+				auto readResult = reader->readFramesTill(-1, crl::now());
+				if (readResult == internal::ReaderImplementation::ReadResult::Success) {
+					// STEP 3: Now that the frame is safely decoded in memory, render it.
+					auto index = 0;
+					auto hasAlpha = false;
+					if (reader->renderFrame(result.thumbnail, hasAlpha, index, QSize())) {
+						if (hasAlpha && !result.isWebmSticker) {
+							result.thumbnail = Images::Opaque(std::move(result.thumbnail));
+						}
+						result.duration = durationMs;
 					}
-					result.duration = durationMs;
 				}
 			}
-			// MODIFICATION END
+			// --- MODIFICATION END ---
 
 			result.supportsStreaming = CheckStreamingSupport(
 				localLocation,

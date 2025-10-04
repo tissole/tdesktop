@@ -244,7 +244,7 @@ bool FFMpegReaderImplementation::renderFrame(
 	} else {
 		if ((_swsSize != toSize) || (_frame->format != -1 && _frame->format != _codecContext->pix_fmt) || !_swsContext) {
 			_swsSize = toSize;
-			_swsContext = sws_getCachedContext(_swsContext, _frame->width, _frame->height, AVPixelFormat(_frame->format), toSize.width(), toSize.height(), AV_PIX_FMT_BGRA, SWS_LANCZOS, nullptr, nullptr, nullptr);
+			_swsContext = sws_getCachedContext(_swsContext, _frame->width, _frame->height, AVPixelFormat(_frame->format), toSize.width(), toSize.height(), AV_PIX_FMT_BGRA, 0, nullptr, nullptr, nullptr);
 		}
 		// AV_NUM_DATA_POINTERS defined in AVFrame struct
 		uint8_t *toData[AV_NUM_DATA_POINTERS] = { to.bits(), nullptr };

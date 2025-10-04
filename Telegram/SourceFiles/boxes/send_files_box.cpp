@@ -81,16 +81,14 @@ using Ui::SendFilesWay;
 
 [[nodiscard]] QStringList ExtractFileNames(const std::vector<Ui::PreparedFile> &files) {
     QStringList fileNames;
-    int genericCounter = 1;
     for (const auto &file : files) {
-        // Use fileNameCaption if available (for renamed files like [webm].mp4)
+        // Check if user has set a custom caption (override)
         if (!file.fileNameCaption.text.isEmpty()) {
             fileNames.append(file.fileNameCaption.text);
-        } else if (!file.path.isEmpty()) {
+        } else {
+            // Use the actual filename from path
             QFileInfo fileInfo(file.path);
             fileNames.append(fileInfo.fileName());
-        } else if (!file.content.isEmpty()) {
-            fileNames.append(QString("file_%1").arg(genericCounter++));
         }
     }
     return fileNames;
@@ -1916,7 +1914,15 @@ void SendFilesBox::addFile(Ui::PreparedFile &&file) {
 	
 	if (GetEnhancedBool("caption_from_file_name") && !file.path.isEmpty()) {
 		QFileInfo fileInfo(file.path);
-		file.fileNameCaption = TextWithTags{fileInfo.fileName(), {}};
+		QString fileName = fileInfo.fileName();
+		
+		// Apply the same WebM-to-MP4 renaming logic that happens in DocumentData::setFileName
+		// This ensures the caption matches what will be uploaded
+		if (fileName.toLower().endsWith(".webm")) {
+			fileName = fileName.replace(fileName.length()-5, 5, "[webm].mp4");
+		}
+		
+		file.fileNameCaption = TextWithTags{fileName, {}};
 	}
 	
 	_list.files.push_back(std::move(file));
