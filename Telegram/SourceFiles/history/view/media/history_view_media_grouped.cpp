@@ -842,44 +842,69 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					editedText = tr::lng_edited(tr::now).toUpper().left(1) + tr::lng_edited(tr::now).mid(1); // Capitalize first letter
 				}
 				
+				// Check for available width to properly center content
+				QString timeText = infoText;
+				QString msgIdText;
+				if (GetEnhancedBool("show_messages_id") && infoText.contains(' ')) {
+					const auto lastSpacePos = infoText.lastIndexOf(' ');
+					timeText = infoText.left(lastSpacePos);
+					msgIdText = infoText.mid(lastSpacePos + 1);
+				}
+				
+				// Calculate total required width for all elements
+				int totalRequiredWidth = 2 * st::msgDateImgPadding.x(); // Left and right padding
+				if (hasViews) {
+					totalRequiredWidth += stm->historyViewsIcon.width(); // Icon width
+					totalRequiredWidth += (st::historyViewsSpace / 2); // Space between icon and counter (reduced)
+					totalRequiredWidth += st::msgDateFont->width(viewsText); // Counter width
+					if (!editedText.isEmpty()) {
+						totalRequiredWidth += (st::historyViewsSpace / 2); // Space before "edited" text
+						totalRequiredWidth += st::msgDateFont->width(editedText); // "edited" text width
+					}
+					totalRequiredWidth += st::historyViewsSpace; // Space between counter/edited and time
+				}
+				totalRequiredWidth += st::msgDateFont->width(timeText); // Time text width
+				if (!msgIdText.isEmpty()) {
+					totalRequiredWidth += st::historyViewsSpace; // Space between time and msg id
+					totalRequiredWidth += st::msgDateFont->width(msgIdText); // Msg id width
+				}
+				
+				// Calculate centered position but ensure it doesn't go beyond bounds
+				const auto maxAvailableWidth = std::min(dateW, (firstItemGeometry.width() - 4)); // Leave small margin
+				const auto centeredStartX = std::max(bubbleX, bubbleX + (maxAvailableWidth - totalRequiredWidth) / 2);
+				
+				auto adjustedCurrentX = centeredStartX + st::msgDateImgPadding.x();
+				
 				if (hasViews) {
 					const auto &icon = stm->historyViewsIcon;
 					const auto iconTop = bubbleY + (dateH - icon.height()) / 2;
 					// Make the icon as white as the text by using the same pen color
 					p.setPen(st->msgDateImgFg()); // Use the same color as text
-					icon.paint(p, currentX, iconTop, dateW);
+					icon.paint(p, adjustedCurrentX, iconTop, dateW);
 					p.setPen(st->msgDateImgFg()); // Ensure text is also in the right color
-					// Increase space between icon and counter (smallest increment)
-					currentX += icon.width() + st::historyViewsSpace; // Increased space between icon and counter
-					p.drawText(currentX, currentY, viewsText);
-					currentX += st::msgDateFont->width(viewsText);
+					// Reduce space between icon and counter (smallest increment)
+					adjustedCurrentX += icon.width() + (st::historyViewsSpace / 2); // Reduced space between icon and counter
+					p.drawText(adjustedCurrentX, currentY, viewsText);
+					adjustedCurrentX += st::msgDateFont->width(viewsText);
 					
 					// Add "edited" text right after counter if message was edited
 					if (!editedText.isEmpty()) {
-						currentX += st::historyViewsSpace / 2; // Small space before "edited" text
-						p.drawText(currentX, currentY, editedText);
-						currentX += st::msgDateFont->width(editedText);
+						adjustedCurrentX += (st::historyViewsSpace / 2); // Space before "edited" text
+						p.drawText(adjustedCurrentX, currentY, editedText);
+						adjustedCurrentX += st::msgDateFont->width(editedText);
 					}
 					
-					currentX += st::historyViewsSpace; // Space between counter/edited and time
-				} else if (!editedText.isEmpty()) {
-					// If there are no views but message was edited, add "edited" text after icon if needed
-					// For now, we'll assume edited only appears with views, so this case won't occur
+					adjustedCurrentX += st::historyViewsSpace; // Space between counter/edited and time
 				}
 				
-				// Handle time and msg id separately if needed
-				if (GetEnhancedBool("show_messages_id") && infoText.contains(' ')) {
-					// Split infoText into time and msg id
-					const auto lastSpacePos = infoText.lastIndexOf(' ');
-					const auto timeText = infoText.left(lastSpacePos);
-					const auto msgIdText = infoText.mid(lastSpacePos + 1);
-					
-					p.drawText(currentX, currentY, timeText);
-					currentX += st::msgDateFont->width(timeText) + st::historyViewsSpace; // Space between time and msg id
-					p.drawText(currentX, currentY, msgIdText);
-				} else {
-					// Draw info text (time only)
-					p.drawText(currentX, currentY, infoText);
+				// Draw time text
+				p.drawText(adjustedCurrentX, currentY, timeText);
+				adjustedCurrentX += st::msgDateFont->width(timeText);
+				
+				// Draw msg id if present
+				if (!msgIdText.isEmpty()) {
+					adjustedCurrentX += st::historyViewsSpace; // Space between time and msg id
+					p.drawText(adjustedCurrentX, currentY, msgIdText);
 				}
 				p.setFont(font);
 			}

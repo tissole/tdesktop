@@ -523,6 +523,26 @@ SendFilesBox::SendFilesBox(QWidget*, SendFilesBoxDescriptor &&descriptor)
 , _inner(
 	_scroll->setOwnedWidget(
 		object_ptr<Ui::VerticalLayout>(_scroll.data()))) {
+	
+	// Apply WebM renaming to any existing files that were pre-loaded
+	if (GetEnhancedBool("caption_from_file_name")) {
+		for (auto &file : _list.files) {
+			if (!file.path.isEmpty() && !file.fileNameCaption.text.isEmpty()) {
+				QFileInfo fileInfo(file.path);
+				QString originalFileName = fileInfo.fileName();
+				
+				// Check if the original file was a WebM and if caption still shows original extension
+				if (originalFileName.toLower().endsWith(".webm") && 
+					file.fileNameCaption.text.toLower().endsWith(".webm") &&
+					!file.fileNameCaption.text.contains("[webm].mp4")) {
+					// Apply the same WebM-to-MP4 renaming logic that happens in DocumentData::setFileName
+					QString newFileName = originalFileName.replace(originalFileName.length()-5, 5, "[webm].mp4");
+					file.fileNameCaption = TextWithTags{newFileName, {}};
+				}
+			}
+		}
+	}
+	
 	enqueueNextPrepare();
 }
 
