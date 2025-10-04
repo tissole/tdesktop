@@ -971,23 +971,27 @@ Ui::PreparedFileInformation PrepareForSending(
 	auto localLocation = Core::FileLocation(fname);
 	auto localData = QByteArray(data);
 
-	auto seekPositionMs = crl::time(0);
-	auto reader = std::make_unique<internal::FFMpegReaderImplementation>(&localLocation, &localData);
-	if (reader->start(internal::ReaderImplementation::Mode::Inspecting, seekPositionMs)) {
-		const auto durationMs = reader->durationMs();
-		if (durationMs > 0) {
-			result.isGifv = reader->isGifv();
-			result.isWebmSticker = reader->isWebmSticker();
-			// Use first video frame as a thumbnail.
-			// All other apps and server do that way.
-			if (!result.isGifv) {
-				auto middleMs = durationMs / 2;
-				if (!reader->inspectAt(middleMs)) {
-					return result;
-				}
-			}
-			auto index = 0;
-			auto hasAlpha = false;
+    auto seekPositionMs = crl::time(0);
+    auto reader = std::make_unique<internal::FFMpegReaderImplementation>(&localLocation, &localData);
+    if (reader->start(internal::ReaderImplementation::Mode::Inspecting, seekPositionMs)) {
+        const auto durationMs = reader->durationMs();
+        if (durationMs > 0) {
+            result.isGifv = reader->isGifv();
+            result.isWebmSticker = reader->isWebmSticker();
+            
+            // Seek to 15 seconds for regular videos
+            if (!result.isGifv && !result.isWebmSticker) {
+                auto targetMs = (durationMs > 15000) ? 15000 : (durationMs / 2);
+                if (!reader->inspectAt(targetMs)) {
+                    // Fallback: restart reader at beginning if seek fails
+                    reader.reset();
+                    reader = std::make_unique<internal::FFMpegReaderImplementation>(&localLocation, &localData);
+                    reader->start(internal::ReaderImplementation::Mode::Inspecting, crl::time(0));
+                }
+            }
+            
+            auto index = 0;
+            auto hasAlpha = false;
 			auto readResult = reader->readFramesTill(-1, crl::now());
 			auto readFrame = (readResult == internal::ReaderImplementation::ReadResult::Success);
 			if (readFrame && reader->renderFrame(result.thumbnail, hasAlpha, index, QSize())) {
