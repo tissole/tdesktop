@@ -83,11 +83,12 @@ using Ui::SendFilesWay;
     QStringList fileNames;
     int genericCounter = 1;
     for (const auto &file : files) {
-        if (!file.path.isEmpty()) {
+        // Use fileNameCaption if available (for renamed files like [webm].mp4)
+        if (!file.fileNameCaption.text.isEmpty()) {
+            fileNames.append(file.fileNameCaption.text);
+        } else if (!file.path.isEmpty()) {
             QFileInfo fileInfo(file.path);
             fileNames.append(fileInfo.fileName());
-        } else if (!file.fileNameCaption.text.isEmpty()) {
-            fileNames.append(file.fileNameCaption.text);
         } else if (!file.content.isEmpty()) {
             fileNames.append(QString("file_%1").arg(genericCounter++));
         }

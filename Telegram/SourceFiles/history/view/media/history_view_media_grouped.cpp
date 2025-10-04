@@ -838,12 +838,50 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				if (hasViews) {
 					const auto &icon = stm->historyViewsIcon;
 					const auto iconTop = bubbleY + (dateH - icon.height()) / 2;
+					// Make the icon as white as the text by using the same pen color
+					p.setPen(st->msgDateImgFg()); // Use the same color as text
 					icon.paint(p, currentX, iconTop, dateW);
-					currentX += icon.width() + st::historyViewsSpace;
+					p.setPen(st->msgDateImgFg()); // Ensure text is also in the right color
+					// Move the counter closer to the icon (small space but not touching)
+					currentX += icon.width() + (st::historyViewsSpace / 3); // Small space between icon and counter
 					p.drawText(currentX, currentY, viewsText);
-					currentX += viewsWidth;
+					currentX += viewsWidth + st::historyViewsSpace; // Increased space between counter and time
 				}
-				p.drawText(currentX, currentY, infoText);
+				
+				// Check if message was edited and add "edited" text
+				QString editedText;
+				const auto edited = firstPart->item->Get<HistoryMessageEdited>();
+				if (edited && !firstPart->item->hideEditedBadge()) {
+					editedText = tr::lng_edited(tr::now); // Use Telegram's translation for "edited"
+				}
+				
+				// Handle time and msg id separately if needed
+				if (GetEnhancedBool("show_messages_id") && infoText.contains(' ')) {
+					// Split infoText into time and msg id
+					const auto lastSpacePos = infoText.lastIndexOf(' ');
+					const auto timeText = infoText.left(lastSpacePos);
+					const auto msgIdText = infoText.mid(lastSpacePos + 1);
+					
+					p.drawText(currentX, currentY, timeText);
+					currentX += st::msgDateFont->width(timeText) + st::historyViewsSpace; // Space between time and msg id
+					
+					// Add "edited" text after msg id if needed
+					if (!editedText.isEmpty()) {
+						p.drawText(currentX, currentY, msgIdText + " " + editedText);
+					} else {
+						p.drawText(currentX, currentY, msgIdText);
+					}
+				} else {
+					// Draw info text (time only) and add "edited" if needed
+					p.drawText(currentX, currentY, infoText);
+					currentX += st::msgDateFont->width(infoText);
+					
+					// Add "edited" text after time if message was edited
+					if (!editedText.isEmpty()) {
+						currentX += st::historyViewsSpace; // Space between time/msgId and "edited"
+						p.drawText(currentX, currentY, editedText);
+					}
+				}
 				p.setFont(font);
 			}
 		}
@@ -1034,8 +1072,18 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 				// Only show tooltip when the bubble would actually be visible
 				if (GetEnhancedBool("show_messages_id") || !infoText.trimmed().isEmpty()) {
 					const auto dateTime = ItemDateTime(firstPart->item);
-					const auto tooltipText = dateTime.date().toString("dddd, dd MMMM yyyy") + 
+					QString tooltipText = dateTime.date().toString("dddd, dd MMMM yyyy") + 
 						" " + dateTime.time().toString("HH:mm:ss");
+					
+					// Check if message was edited and add edit time to tooltip
+					const auto edited = firstPart->item->Get<HistoryMessageEdited>();
+					if (edited && !firstPart->item->hideEditedBadge()) {
+						const auto editDateTime = edited->date;
+						QString editTooltipText = tr::lng_edited(tr::now) + ": " + editDateTime.date().toString("dddd, dd MMMM yyyy") + 
+							" " + editDateTime.time().toString("HH:mm:ss");
+						tooltipText += "\n" + editTooltipText; // Add edit info on a new line
+					}
+					
 					result.customTooltip = true;
 					result.customTooltipText = tooltipText;
 				}
