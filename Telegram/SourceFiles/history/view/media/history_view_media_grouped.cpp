@@ -731,12 +731,13 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			}
 
 			const auto fullWidth = firstItemGeometry.width() - 2 * st::msgDateImgPadding.x();
+			auto textWidth = st::msgDateFont->width(infoText);
 			if (textWidth > fullWidth) {
 				const auto lastSpacePos = infoText.lastIndexOf(' ');
 				if (lastSpacePos != -1) {
 					infoText = infoText.left(lastSpacePos) + "...";
 				} else {
-					infoText = st::msgDateFont->elided(infoText, Qt::ElideRight, fullWidth);
+					infoText = st::msgDateFont->elided(infoText, fullWidth, Qt::ElideRight);
 				}
 				textWidth = st::msgDateFont->width(infoText);
 			}
