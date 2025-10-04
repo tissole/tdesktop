@@ -317,7 +317,6 @@ void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
 				auto coverImageInfo = PreparedFileInformation::Image();
 				coverImageInfo.data = video->thumbnail;
 				coverImageInfo.animated = false;
-				coverImageInfo.valid = true;
 				coverInfo->filemime = u"image/jpeg"_q;
 				coverInfo->media = coverImageInfo;
 				
