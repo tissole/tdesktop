@@ -990,7 +990,7 @@ void FileLoadTask::process(Args &&args) {
 				MTPstring())); // video_codec
 
 			if (args.generateGoodThumbnail) {
-				goodThumbnail = video->thumbnail;
+				goodThumbnail = video->cover.isNull() ? video->thumbnail : video->cover;
 				{
 					QBuffer buffer(&goodThumbnailBytes);
 					goodThumbnail.save(&buffer, "JPG", kThumbnailQuality);

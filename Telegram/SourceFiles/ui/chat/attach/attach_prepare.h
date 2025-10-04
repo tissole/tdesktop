@@ -39,6 +39,7 @@ struct PreparedFileInformation {
 		bool supportsStreaming = false;
 		crl::time duration = -1;
 		QImage thumbnail;
+		QImage cover;
 	};
 
 	QString filemime;

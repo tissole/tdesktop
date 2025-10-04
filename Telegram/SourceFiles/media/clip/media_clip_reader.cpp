@@ -970,37 +970,35 @@ Ui::PreparedFileInformation PrepareForSending(
 	auto result = Ui::PreparedFileInformation::Video();
 	auto localLocation = Core::FileLocation(fname);
 	auto localData = QByteArray(data);
-
-    auto seekPositionMs = crl::time(0);
-    auto reader = std::make_unique<internal::FFMpegReaderImplementation>(&localLocation, &localData);
-    if (reader->start(internal::ReaderImplementation::Mode::Inspecting, seekPositionMs)) {
-        const auto durationMs = reader->durationMs();
-        if (durationMs > 0) {
-            result.isGifv = reader->isGifv();
-            result.isWebmSticker = reader->isWebmSticker();
-            
-            // Seek to 15 seconds for regular videos
-            if (!result.isGifv && !result.isWebmSticker) {
-                auto targetMs = (durationMs > 15000) ? 15000 : (durationMs / 2);
-                if (!reader->inspectAt(targetMs)) {
-                    // Fallback: restart reader at beginning if seek fails
-                    reader.reset();
-                    reader = std::make_unique<internal::FFMpegReaderImplementation>(&localLocation, &localData);
-                    reader->start(internal::ReaderImplementation::Mode::Inspecting, crl::time(0));
-                }
-            }
-            
-            auto index = 0;
-            auto hasAlpha = false;
+	auto seekPositionMs = crl::time(0);
+	auto reader = std::make_unique<internal::FFMpegReaderImplementation>(&localLocation, &localData);
+	if (reader->start(internal::ReaderImplementation::Mode::Inspecting, seekPositionMs)) {
+		const auto durationMs = reader->durationMs();
+		if (durationMs > 0) {
+			result.isGifv = reader->isGifv();
+			result.isWebmSticker = reader->isWebmSticker();
+			
+			// Seek to 15 seconds for regular videos (or middle if shorter)
+			if (!result.isGifv && !result.isWebmSticker) {
+				auto targetMs = (durationMs > 15000) ? 15000 : (durationMs / 2);
+				if (!reader->inspectAt(targetMs)) {
+					// Fallback to start if seeking fails
+					targetMs = 0;
+					reader->inspectAt(targetMs);
+				}
+			}
+			
+			auto index = 0;
+			auto hasAlpha = false;
 			auto readResult = reader->readFramesTill(-1, crl::now());
 			auto readFrame = (readResult == internal::ReaderImplementation::ReadResult::Success);
-			if (readFrame && reader->renderFrame(result.thumbnail, hasAlpha, index, QSize())) {
+			if (readFrame && reader->renderFrame(result.cover, hasAlpha, index, QSize())) {
 				if (hasAlpha && !result.isWebmSticker) {
-					result.thumbnail = Images::Opaque(std::move(result.thumbnail));
+					result.cover = Images::Opaque(std::move(result.cover));
 				}
+				result.thumbnail = result.cover; // Copy cover to thumbnail for UI preview
 				result.duration = durationMs;
 			}
-
 			result.supportsStreaming = CheckStreamingSupport(
 				localLocation,
 				localData);
