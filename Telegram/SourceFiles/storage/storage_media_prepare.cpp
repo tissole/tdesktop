@@ -306,6 +306,27 @@ void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
 	} else if (const auto video = std::get_if<Video>(
 			&file.information->media)) {
 		if (ValidVideoForAlbum(*video)) {
+			// Create video cover from the thumbnail if it exists (e.g., 15s frame)
+			if (!video->thumbnail.isNull()) {
+				// Create a separate prepared file for the video cover
+				auto coverFile = std::make_unique<Ui::PreparedFile>(QString());
+				coverFile->type = PreparedFile::Type::Photo;
+				
+				// Set up the cover file's information
+				auto coverInfo = std::make_unique<PreparedFileInformation>();
+				auto coverImageInfo = PreparedFileInformation::Image();
+				coverImageInfo.data = video->thumbnail;
+				coverImageInfo.animated = false;
+				coverImageInfo.valid = true;
+				coverInfo->filemime = u"image/jpeg"_q;
+				coverInfo->media = coverImageInfo;
+				
+				coverFile->information = std::move(coverInfo);
+				
+				// Assign it as the video cover
+				file.videoCover = std::move(coverFile);
+			}
+			
 			auto blurred = Images::Blur(
 				Images::Opaque(base::duplicate(video->thumbnail)));
 			file.originalDimensions = video->thumbnail.size();
