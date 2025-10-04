@@ -182,12 +182,20 @@ struct PreparedFileThumbnail {
 		QImage &full,
 		const QByteArray &bytes,
 		const QByteArray &format) {
-	// If we have the original bytes and it's a JPEG, just return them.
-	if (!bytes.isEmpty() && (format == u"jpeg"_q)) {
-		return bytes;
+	if (!bytes.isEmpty()
+		&& (bytes.size()
+			<= full.width() * full.height() * kRecompressAfterBpp / 8)
+		&& (format == u"jpeg"_q)) {
+		if (!Images::IsProgressiveJpeg(bytes)) {
+			if (const auto result = Images::MakeProgressiveJpeg(bytes)
+				; !result.isEmpty()) {
+				return result;
+			}
+		} else {
+			return bytes;
+		}
 	}
 
-	// Fallback to recompression only if original bytes are not available.
 	auto result = QByteArray();
 	QBuffer buffer(&result);
 	QImageWriter writer(&buffer, "JPEG");

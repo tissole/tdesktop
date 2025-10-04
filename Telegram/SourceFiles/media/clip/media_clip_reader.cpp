@@ -978,21 +978,14 @@ Ui::PreparedFileInformation PrepareForSending(
 		if (durationMs > 0) {
 			result.isGifv = reader->isGifv();
 			result.isWebmSticker = reader->isWebmSticker();
-
-			seekPositionMs = (durationMs > 15000) ? 15000 : (durationMs / 2);
-			if (seekPositionMs > 0) {
-				if (!reader->inspectAt(seekPositionMs)) {
-					// Try at 7 seconds if middle/15s failed
-					seekPositionMs = 7000;
-					if (durationMs < 7000) {
-						seekPositionMs = durationMs / 2; // For short videos, try middle
-					}
-					if (!reader->inspectAt(seekPositionMs)) {
-						return { .media = result };
-					}
+			// Use first video frame as a thumbnail.
+			// All other apps and server do that way.
+			if (!result.isGifv) {
+				auto middleMs = durationMs / 2;
+				if (!reader->inspectAt(middleMs)) {
+					return result;
 				}
 			}
-
 			auto index = 0;
 			auto hasAlpha = false;
 			auto readResult = reader->readFramesTill(-1, crl::now());
