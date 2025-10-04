@@ -139,86 +139,7 @@ void GroupedMedia::drawMessageIdInfo(
 
 
 
-void GroupedMedia::drawLastItemInfo(
-		Painter &p,
-		const PaintContext &context,
-		int infoX,
-		int infoY,
-		not_null<HistoryItem*> item) const {
-	const auto st = context.st;
-	const auto sti = context.imageStyle();
-	const auto stm = context.messageStyle();
 
-	QString infoText;
-	bool hasViews = false;
-	int viewsCount = 0;
-
-	if (const auto views = item->Get<HistoryMessageViews>()) {
-		if (views->views.count >= 0) {
-			viewsCount = views->views.count;
-			hasViews = true;
-		}
-	}
-
-	const auto dateText = QLocale().toString(
-		ItemDateTime(item).time(),
-		QLocale::ShortFormat);
-	const auto msgId = item->fullId().msg.bare;
-	infoText = dateText + " " + QString::number(msgId);
-
-	p.setFont(st::msgDateFont);
-	p.setPen(st->msgDateImgFg());
-
-	const auto textWidth = st::msgDateFont->width(infoText);
-	const auto textHeight = st::msgDateFont->height;
-
-	const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-	const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
-	const auto dateX = infoX - dateW;
-	const auto dateY = infoY;
-
-	auto originalColor = sti->msgDateImgBg->c;
-	auto modifiedQColor = QColor(
-		originalColor.red(),
-		originalColor.green(),
-		originalColor.blue(),
-		160);
-	const auto bgColor = style::internal::OwnedColor(modifiedQColor);
-	Ui::FillRoundRect(
-		p,
-		dateX,
-		dateY,
-		dateW,
-		dateH,
-		bgColor.color(),
-		sti->msgDateImgBgCorners);
-
-	auto font = st::msgDateFont;
-	p.setFont(font->bold());
-	const auto textX = dateX + st::msgDateImgPadding.x();
-	const auto textY = dateY + st::msgDateImgPadding.y();
-	if (hasViews) {
-		const auto &icon = stm->historyViewsIcon;
-		const auto iconTop = dateY + (dateH - icon.height()) / 2;
-		icon.paint(p, textX, iconTop, dateW);
-
-		const auto viewsText = QString::number(viewsCount) + " ";
-		const auto restText = infoText;
-		const auto viewsWidth = p.fontMetrics().width(viewsText);
-
-		p.drawText(
-			textX + st::historyViewsWidth,
-			textY + font->ascent,
-			viewsText);
-		p.drawText(
-			textX + st::historyViewsWidth + viewsWidth + st::historyViewsSpace,
-			textY + font->ascent,
-			restText);
-	} else {
-		p.drawText(textX, textY + font->ascent, infoText);
-	}
-	p.setFont(font);
-}
 
 GroupedMedia::GroupedMedia(
 	not_null<Element*> parent,
@@ -798,6 +719,28 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				infoText = dateText;
 			}
 
+			const auto fullWidth = firstItemGeometry.width() - 2 * st::msgDateImgPadding.x();
+			if (textWidth > fullWidth) {
+				const auto lastSpacePos = infoText.lastIndexOf(' ');
+				if (lastSpacePos != -1) {
+					infoText = infoText.left(lastSpacePos) + "...";
+				} else {
+					infoText = st::msgDateFont->elided(infoText, Qt::ElideRight, fullWidth);
+				}
+				textWidth = st::msgDateFont->width(infoText);
+			}
+
+			const auto fullWidth = firstItemGeometry.width() - 2 * st::msgDateImgPadding.x();
+			if (textWidth > fullWidth) {
+				const auto lastSpacePos = infoText.lastIndexOf(' ');
+				if (lastSpacePos != -1) {
+					infoText = infoText.left(lastSpacePos) + "...";
+				} else {
+					infoText = st::msgDateFont->elided(infoText, Qt::ElideRight, fullWidth);
+				}
+				textWidth = st::msgDateFont->width(infoText);
+			}
+
 			const auto viewsText = hasViews ? (QString::number(viewsCount) + " ") : QString();
 			const auto viewsWidth = hasViews ? st::msgDateFont->width(viewsText) : 0;
 			const auto iconWidth = hasViews ? stm->historyViewsIcon.width() : 0;
@@ -839,7 +782,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				QString editedText;
 				const auto edited = firstPart->item->Get<HistoryMessageEdited>();
 				if (edited && !firstPart->item->hideEditedBadge()) {
-					editedText = tr::lng_edited(tr::now).toUpper().left(1) + tr::lng_edited(tr::now).mid(1); // Capitalize first letter
+					editedText = tr::lng_edited(tr::now); // Use lowercase "edited"
 				}
 				
 				// Check for available width to properly center content
@@ -857,12 +800,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					totalRequiredWidth += stm->historyViewsIcon.width(); // Icon width
 					totalRequiredWidth += (st::historyViewsSpace / 2); // Space between icon and counter (reduced)
 					totalRequiredWidth += st::msgDateFont->width(viewsText); // Counter width
-					if (!editedText.isEmpty()) {
-						totalRequiredWidth += (st::historyViewsSpace / 2); // Space before "edited" text
-						totalRequiredWidth += st::msgDateFont->width(editedText); // "edited" text width
-					}
-					totalRequiredWidth += st::historyViewsSpace; // Space between counter/edited and time
 				}
+				if (!editedText.isEmpty()) {
+					totalRequiredWidth += (st::historyViewsSpace / 2); // Space before "edited" text
+					totalRequiredWidth += st::msgDateFont->width(editedText); // "edited" text width
+				}
+				totalRequiredWidth += st::historyViewsSpace; // Space between counter/edited and time
 				totalRequiredWidth += st::msgDateFont->width(timeText); // Time text width
 				if (!msgIdText.isEmpty()) {
 					totalRequiredWidth += st::historyViewsSpace; // Space between time and msg id
@@ -886,16 +829,16 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					adjustedCurrentX += icon.width() + (st::historyViewsSpace / 2); // Reduced space between icon and counter
 					p.drawText(adjustedCurrentX, currentY, viewsText);
 					adjustedCurrentX += st::msgDateFont->width(viewsText);
-					
-					// Add "edited" text right after counter if message was edited
-					if (!editedText.isEmpty()) {
-						adjustedCurrentX += (st::historyViewsSpace / 2); // Space before "edited" text
-						p.drawText(adjustedCurrentX, currentY, editedText);
-						adjustedCurrentX += st::msgDateFont->width(editedText);
-					}
-					
-					adjustedCurrentX += st::historyViewsSpace; // Space between counter/edited and time
 				}
+				
+				// Add "edited" text right after counter if message was edited
+				if (!editedText.isEmpty()) {
+					adjustedCurrentX += (st::historyViewsSpace / 2); // Space before "edited" text
+					p.drawText(adjustedCurrentX, currentY, editedText);
+					adjustedCurrentX += st::msgDateFont->width(editedText);
+				}
+				
+				adjustedCurrentX += st::historyViewsSpace; // Space between counter/edited and time
 				
 				// Draw time text
 				p.drawText(adjustedCurrentX, currentY, timeText);
