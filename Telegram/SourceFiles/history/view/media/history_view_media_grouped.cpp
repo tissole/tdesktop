@@ -1078,7 +1078,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 					// Check if message was edited and add edit time to tooltip
 					const auto edited = firstPart->item->Get<HistoryMessageEdited>();
 					if (edited && !firstPart->item->hideEditedBadge()) {
-						const auto editTime = base::unixtime::parse(edited->date);
+						const auto editTime = QDateTime::fromSecsSinceEpoch(edited->date);
 						QString editTooltipText = tr::lng_edited(tr::now) + ": " + editTime.date().toString("dddd, dd MMMM yyyy") + 
 							" " + editTime.time().toString("HH:mm:ss");
 						tooltipText += "\n" + editTooltipText; // Add edit info on a new line
