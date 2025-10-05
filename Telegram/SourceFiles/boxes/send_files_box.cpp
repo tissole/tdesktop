@@ -88,7 +88,29 @@ using Ui::SendFilesWay;
         } else {
             // Use the actual filename from path
             QFileInfo fileInfo(file.path);
-            fileNames.append(fileInfo.fileName());
+            QString fileName = fileInfo.fileName();
+            
+            // Apply renaming logic for video files to ensure compatibility with server processing
+            // and consistent captions
+            if (fileName.toLower().endsWith(".webm")) {
+                fileName = fileName.replace(fileName.length()-5, 5, "[webm].mp4");
+            } else if (fileName.toLower().endsWith(".ts")) {
+                fileName = fileName.replace(fileName.length()-3, 3, "[ts].mp4");
+            } else if (fileName.toLower().endsWith(".mts")) {
+                fileName = fileName.replace(fileName.length()-4, 4, "[mts].mp4");
+            } else if (fileName.toLower().endsWith(".m2ts")) {
+                fileName = fileName.replace(fileName.length()-5, 5, "[m2ts].mp4");
+            } else if (fileName.toLower().endsWith(".avi")) {
+                fileName = fileName.replace(fileName.length()-4, 4, "[avi].mp4");
+            } else if (fileName.toLower().endsWith(".asf")) {
+                fileName = fileName.replace(fileName.length()-4, 4, "[asf].mp4");
+            } else if (fileName.toLower().endsWith(".asx")) {
+                fileName = fileName.replace(fileName.length()-4, 4, "[asx].mp4");
+            } else if (fileName.toLower().endsWith(".wmv")) {
+                fileName = fileName.replace(fileName.length()-4, 4, "[wmv].mp4");
+            }
+            
+            fileNames.append(fileName);
         }
     }
     return fileNames;
@@ -523,26 +545,6 @@ SendFilesBox::SendFilesBox(QWidget*, SendFilesBoxDescriptor &&descriptor)
 , _inner(
 	_scroll->setOwnedWidget(
 		object_ptr<Ui::VerticalLayout>(_scroll.data()))) {
-	
-	// Apply WebM renaming to any existing files that were pre-loaded
-	if (GetEnhancedBool("caption_from_file_name")) {
-		for (auto &file : _list.files) {
-			if (!file.path.isEmpty() && !file.fileNameCaption.text.isEmpty()) {
-				QFileInfo fileInfo(file.path);
-				QString originalFileName = fileInfo.fileName();
-				
-				// Check if the original file was a WebM and if caption still shows original extension
-				if (originalFileName.toLower().endsWith(".webm") && 
-					file.fileNameCaption.text.toLower().endsWith(".webm") &&
-					!file.fileNameCaption.text.contains("[webm].mp4")) {
-					// Apply the same WebM-to-MP4 renaming logic that happens in DocumentData::setFileName
-					QString newFileName = originalFileName.replace(originalFileName.length()-5, 5, "[webm].mp4");
-					file.fileNameCaption = TextWithTags{newFileName, {}};
-				}
-			}
-		}
-	}
-	
 	enqueueNextPrepare();
 }
 
@@ -1934,15 +1936,28 @@ void SendFilesBox::addFile(Ui::PreparedFile &&file) {
 	
 	if (GetEnhancedBool("caption_from_file_name") && !file.path.isEmpty()) {
 		QFileInfo fileInfo(file.path);
-		QString fileName = fileInfo.fileName();
-		
-		// Apply the same WebM-to-MP4 renaming logic that happens in DocumentData::setFileName
-		// This ensures the caption matches what will be uploaded
-		if (fileName.toLower().endsWith(".webm")) {
-			fileName = fileName.replace(fileName.length()-5, 5, "[webm].mp4");
-		}
-		
-		file.fileNameCaption = TextWithTags{fileName, {}};
+		QString fileName = fileInfo.fileName();																 
+																										   
+		 // Apply renaming logic for video files to ensure captions show the renamed versions				  
+		 if (fileName.toLower().endsWith(".webm")) {														 
+			 fileName = fileName.replace(fileName.length()-5, 5, "[webm].mp4");							 
+		 } else if (fileName.toLower().endsWith(".ts")) {												  
+			 fileName = fileName.replace(fileName.length()-3, 3, "[ts].mp4");						   
+		 } else if (fileName.toLower().endsWith(".mts")) {													  
+			 fileName = fileName.replace(fileName.length()-4, 4, "[mts].mp4");								  
+		 } else if (fileName.toLower().endsWith(".m2ts")) {													  
+			 fileName = fileName.replace(fileName.length()-5, 5, "[m2ts].mp4");								  
+		 } else if (fileName.toLower().endsWith(".avi")) {													  
+			 fileName = fileName.replace(fileName.length()-4, 4, "[avi].mp4");								  
+		 } else if (fileName.toLower().endsWith(".asf")) {													  
+			 fileName = fileName.replace(fileName.length()-4, 4, "[asf].mp4");								  
+		 } else if (fileName.toLower().endsWith(".asx")) {													  
+			 fileName = fileName.replace(fileName.length()-4, 4, "[asx].mp4");								  
+		 } else if (fileName.toLower().endsWith(".wmv")) {													  
+			 fileName = fileName.replace(fileName.length()-4, 4, "[wmv].mp4");								  
+		}																									 
+																										
+		file.fileNameCaption = TextWithTags{fileName, {}};													 
 	}
 	
 	_list.files.push_back(std::move(file));

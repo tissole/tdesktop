@@ -1055,11 +1055,6 @@ ChatRestriction DocumentData::requiredSendRight() const {
 void DocumentData::setFileName(const QString &remoteFileName) {
 	_filename = remoteFileName;
 	
-	// Needed in order to force the server to embed the video
-	if (_filename.toLower().endsWith(".webm")) {
-		_filename = _filename.replace(_filename.length()-5, 5, "[webm].mp4");
-	}
-	
 	// We don't want LTR/RTL mark/embedding/override/isolate chars
 	// in filenames, because they introduce a security issue, when
 	// an executable "Fil[x]gepj.exe" may look like "Filexe.jpeg".
@@ -1670,12 +1665,9 @@ bool DocumentData::hasMimeType(const QString &mime) const {
 }
 
 void DocumentData::setMimeString(const QString &mime) {
-	// Needed to embed a .webm
-	if (mime == "video/webm") {
-		_mimeString = "video/mp4";
-	} else {
-		_mimeString = mime;
-	}
+	// WebM-to-MP4 conversion now handled in send_files_box before upload
+	// Keeping original MIME type from server
+	_mimeString = mime;
 	_mimeString = std::move(_mimeString).toLower();
 }
 
