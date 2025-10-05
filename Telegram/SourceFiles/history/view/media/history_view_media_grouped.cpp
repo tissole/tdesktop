@@ -1012,6 +1012,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 				// Format the tooltip as "sambata, 20 septembrie 2025 09:39:42"
 				// Only show tooltip when the bubble would actually be visible
 				if (GetEnhancedBool("show_messages_id") || !infoText.trimmed().isEmpty()) {
+					const auto dateTime = ItemDateTime(firstPart->item);
 					QString tooltipText = dateTime.date().toString("dddd, dd MMMM yyyy") + 
 						" " + dateTime.time().toString("HH:mm:ss");
 					
