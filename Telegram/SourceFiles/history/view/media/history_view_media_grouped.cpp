@@ -137,10 +137,6 @@ void GroupedMedia::drawMessageIdInfo(
 	p.setFont(font);
 }
 
-
-
-
-
 GroupedMedia::GroupedMedia(
 	not_null<Element*> parent,
 	const std::vector<std::unique_ptr<Data::Media>> &medias) 
@@ -719,29 +715,46 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				infoText = dateText;
 			}
 
-			auto textWidth = st::msgDateFont->width(infoText);
-			const auto fullWidth = firstItemGeometry.width() - 2 * st::msgDateImgPadding.x();
-			if (textWidth > fullWidth) {
-				const auto lastSpacePos = infoText.lastIndexOf(' ');
-				if (lastSpacePos != -1) {
-					infoText = infoText.left(lastSpacePos) + "...";
-				} else {
-					infoText = st::msgDateFont->elided(infoText, fullWidth, Qt::ElideRight);
+				// Check if message was edited to account for "edited" text in width calculations
+				QString editedText;
+				const auto edited = firstPart->item->Get<HistoryMessageEdited>();
+				if (edited && !firstPart->item->hideEditedBadge()) {
+					editedText = tr::lng_edited(tr::now); // Use Telegram's translation, lowercase first
 				}
-				textWidth = st::msgDateFont->width(infoText);
-			}
+				
+				const auto viewsText = hasViews ? (QString::number(viewsCount) + " ") : QString();
+				const auto viewsWidth = hasViews ? st::msgDateFont->width(viewsText) : 0;
+				const auto iconWidth = hasViews ? stm->historyViewsIcon.width() : 0;
+				const auto editedWidth = !editedText.isEmpty() ? st::msgDateFont->width(editedText) : 0;
+				const auto editedSpace = !editedText.isEmpty() ? (st::historyViewsSpace / 2) : 0; // Space before "edited" text
+				const auto minimalSpace = (st::historyViewsSpace / 4); // Minimal space between icon and counter
+				const auto doubleSpace = (st::historyViewsSpace / 2); // Double minimal space between other elements
+				
+				auto textWidth = st::msgDateFont->width(infoText);
+				if (hasViews) {
+					// Calculate total width including all elements with proper spacing
+					textWidth = iconWidth + minimalSpace +  // Minimal space between icon and counter
+								viewsWidth + editedSpace + editedWidth;  // Space before and width of "edited" text
+					
+					// Add spacing and time/msg id width
+					if (GetEnhancedBool("show_messages_id") && infoText.contains(' ')) {
+						// Split infoText into time and msg id
+						const auto lastSpacePos = infoText.lastIndexOf(' ');
+						const auto timeText = infoText.left(lastSpacePos);
+						const auto msgIdText = infoText.mid(lastSpacePos + 1);
+						textWidth += doubleSpace +  // Space between edited/counter and time
+									 st::msgDateFont->width(timeText) +
+									 doubleSpace +  // Space between time and msg id
+									 st::msgDateFont->width(msgIdText);
+					} else {
+						textWidth += doubleSpace +  // Space between edited/counter and time
+									 st::msgDateFont->width(infoText); // Just the time text
+					}
+				}
 
-			const auto viewsText = hasViews ? (QString::number(viewsCount) + " ") : QString();
-			const auto viewsWidth = hasViews ? st::msgDateFont->width(viewsText) : 0;
-			const auto iconWidth = hasViews ? stm->historyViewsIcon.width() : 0;
-			auto textWidth = st::msgDateFont->width(infoText);
-			if (hasViews) {
-				textWidth += viewsWidth + iconWidth + st::historyViewsSpace;
-			}
-
-			const auto textHeight = st::msgDateFont->height;
-			auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-			const auto dateH = textHeight + st::msgDateImgPadding.y();
+				const auto textHeight = st::msgDateFont->height;
+				auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
+				const auto dateH = textHeight + st::msgDateImgPadding.y();
 
 			if (dateW <= firstItemGeometry.width()) {
 				const auto bubbleX = firstItemGeometry.x() + firstItemGeometry.width() - dateW;
@@ -772,72 +785,43 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				QString editedText;
 				const auto edited = firstPart->item->Get<HistoryMessageEdited>();
 				if (edited && !firstPart->item->hideEditedBadge()) {
-					editedText = tr::lng_edited(tr::now); // Use lowercase "edited"
+					editedText = tr::lng_edited(tr::now); // Use Telegram's translation, lowercase first
 				}
-				
-				// Check for available width to properly center content
-				QString timeText = infoText;
-				QString msgIdText;
-				if (GetEnhancedBool("show_messages_id") && infoText.contains(' ')) {
-					const auto lastSpacePos = infoText.lastIndexOf(' ');
-					timeText = infoText.left(lastSpacePos);
-					msgIdText = infoText.mid(lastSpacePos + 1);
-				}
-				
-				// Calculate total required width for all elements
-				int totalRequiredWidth = 2 * st::msgDateImgPadding.x(); // Left and right padding
-				if (hasViews) {
-					totalRequiredWidth += stm->historyViewsIcon.width(); // Icon width
-					totalRequiredWidth += (st::historyViewsSpace / 2); // Space between icon and counter (reduced)
-					totalRequiredWidth += st::msgDateFont->width(viewsText); // Counter width
-				}
-				if (!editedText.isEmpty()) {
-					totalRequiredWidth += (st::historyViewsSpace / 2); // Space before "edited" text
-					totalRequiredWidth += st::msgDateFont->width(editedText); // "edited" text width
-				}
-				totalRequiredWidth += st::historyViewsSpace; // Space between counter/edited and time
-				totalRequiredWidth += st::msgDateFont->width(timeText); // Time text width
-				if (!msgIdText.isEmpty()) {
-					totalRequiredWidth += st::historyViewsSpace; // Space between time and msg id
-					totalRequiredWidth += st::msgDateFont->width(msgIdText); // Msg id width
-				}
-				
-				// Calculate centered position but ensure it doesn't go beyond bounds
-				const auto maxAvailableWidth = std::min(dateW, (firstItemGeometry.width() - 4)); // Leave small margin
-				const auto centeredStartX = std::max(bubbleX, bubbleX + (maxAvailableWidth - totalRequiredWidth) / 2);
-				
-				auto adjustedCurrentX = centeredStartX + st::msgDateImgPadding.x();
 				
 				if (hasViews) {
 					const auto &icon = stm->historyViewsIcon;
 					const auto iconTop = bubbleY + (dateH - icon.height()) / 2;
 					// Make the icon as white as the text by using the same pen color
 					p.setPen(st->msgDateImgFg()); // Use the same color as text
-					icon.paint(p, adjustedCurrentX, iconTop, dateW);
-					p.setPen(st->msgDateImgFg()); // Ensure text is also in the right color
-					// Reduce space between icon and counter (smallest increment)
-					adjustedCurrentX += icon.width() + (st::historyViewsSpace / 2); // Reduced space between icon and counter
-					p.drawText(adjustedCurrentX, currentY, viewsText);
-					adjustedCurrentX += st::msgDateFont->width(viewsText);
+					icon.paint(p, currentX, iconTop, dateW);
+					// Minimal space between icon and counter
+					currentX += icon.width() + (st::historyViewsSpace / 4); // Minimal space between icon and counter
+					p.drawText(currentX, currentY, viewsText);
+					currentX += viewsWidth;
+					
+					// Add "edited" text right after counter if message was edited
+					if (!editedText.isEmpty()) {
+						currentX += (st::historyViewsSpace / 2); // Space before "edited" text (same as time-msgid spacing)
+						p.drawText(currentX, currentY, editedText);
+						currentX += st::msgDateFont->width(editedText);
+					}
+					
+					currentX += (st::historyViewsSpace / 2); // Space between counter/edited and time (double minimal)
 				}
 				
-				// Add "edited" text right after counter if message was edited
-				if (!editedText.isEmpty()) {
-					adjustedCurrentX += (st::historyViewsSpace / 2); // Space before "edited" text
-					p.drawText(adjustedCurrentX, currentY, editedText);
-					adjustedCurrentX += st::msgDateFont->width(editedText);
-				}
-				
-				adjustedCurrentX += st::historyViewsSpace; // Space between counter/edited and time
-				
-				// Draw time text
-				p.drawText(adjustedCurrentX, currentY, timeText);
-				adjustedCurrentX += st::msgDateFont->width(timeText);
-				
-				// Draw msg id if present
-				if (!msgIdText.isEmpty()) {
-					adjustedCurrentX += st::historyViewsSpace; // Space between time and msg id
-					p.drawText(adjustedCurrentX, currentY, msgIdText);
+				// Handle time and msg id separately if needed
+				if (GetEnhancedBool("show_messages_id") && infoText.contains(' ')) {
+					// Split infoText into time and msg id
+					const auto lastSpacePos = infoText.lastIndexOf(' ');
+					const auto timeText = infoText.left(lastSpacePos);
+					const auto msgIdText = infoText.mid(lastSpacePos + 1);
+					
+					p.drawText(currentX, currentY, timeText);
+					currentX += st::msgDateFont->width(timeText) + (st::historyViewsSpace / 2); // Space between time and msg id (double minimal)
+					p.drawText(currentX, currentY, msgIdText);
+				} else {
+					// Draw info text (time only)
+					p.drawText(currentX, currentY, infoText);
 				}
 				p.setFont(font);
 			}
@@ -1028,18 +1012,18 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 				// Format the tooltip as "sambata, 20 septembrie 2025 09:39:42"
 				// Only show tooltip when the bubble would actually be visible
 				if (GetEnhancedBool("show_messages_id") || !infoText.trimmed().isEmpty()) {
-					const auto dateTime = ItemDateTime(firstPart->item);
 					QString tooltipText = dateTime.date().toString("dddd, dd MMMM yyyy") + 
 						" " + dateTime.time().toString("HH:mm:ss");
 					
-					// Check if message was edited and add edit time to tooltip
+					// Check if message was edited and add edit time to tooltip with first letter capitalized
 					const auto edited = firstPart->item->Get<HistoryMessageEdited>();
 					if (edited && !firstPart->item->hideEditedBadge()) {
-						const auto editTime = QDateTime::fromSecsSinceEpoch(edited->date);
+						const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
+						const auto editLocalTime = editUTCTime.toLocalTime(); // Convert to local time
 						QString editedTranslation = tr::lng_edited(tr::now);
 						QString editTooltipText = editedTranslation.toUpper().left(1) + editedTranslation.mid(1) + ": " + 
-							editTime.date().toString("dddd, dd MMMM yyyy") + 
-							" " + editTime.time().toString("HH:mm:ss");
+							editLocalTime.date().toString("dddd, dd MMMM yyyy") + 
+							" " + editLocalTime.time().toString("HH:mm:ss");
 						tooltipText += "\n" + editTooltipText; // Add edit info on a new line
 					}
 					
