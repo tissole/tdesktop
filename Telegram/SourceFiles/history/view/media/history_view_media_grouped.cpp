@@ -255,7 +255,9 @@ QSize GroupedMedia::countOptimalSize() {
 
 			QString fileNameForCaption;
 			if (GetEnhancedBool("caption_from_file_name")) {
-				const auto document = part.item->document();
+				const auto media = part.item->media();
+				const auto documentMedia = dynamic_cast<const Data::DocumentMedia*>(media);
+				const auto document = documentMedia ? documentMedia->document() : nullptr;
 				if (document && document->isVideoFile()) {
 					// Use the document's filename which has been renamed to include [ext].mp4 format
 					fileNameForCaption = document->filename();
@@ -363,7 +365,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 				QString fileNameForCaption;
 			if (GetEnhancedBool("caption_from_file_name")) {
-				const auto document = part.item->document();
+				const auto media = part.item->media();
+				const auto documentMedia = dynamic_cast<const Data::DocumentMedia*>(media);
+				const auto document = documentMedia ? documentMedia->document() : nullptr;
 				if (document && document->isVideoFile()) {
 					// Use the document's filename which has been renamed to include [ext].mp4 format
 					fileNameForCaption = document->filename();
@@ -636,7 +640,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			part._captionHeight > 0) {
 			QString fileNameForCaption;
 			if (GetEnhancedBool("caption_from_file_name")) {
-				const auto document = part.item->document();
+				const auto media = part.item->media();
+				const auto documentMedia = dynamic_cast<const Data::DocumentMedia*>(media);
+				const auto document = documentMedia ? documentMedia->document() : nullptr;
 				if (document && document->isVideoFile()) {
 					// Use the document's filename which has been renamed to include [ext].mp4 format
 					fileNameForCaption = document->filename();
@@ -889,7 +895,9 @@ TextState GroupedMedia::getPartState(
 				&& !part.captionRect.isEmpty()
 				&& part.captionRect.contains(point)) {
 				QString fileNameForTooltip;
-				const auto document = part.item->document();
+				const auto media = part.item->media();
+				const auto documentMedia = dynamic_cast<const Data::DocumentMedia*>(media);
+				const auto document = documentMedia ? documentMedia->document() : nullptr;
 				if (document && document->isVideoFile()) {
 					// Use the document's filename which has been renamed to include [ext].mp4 format
 					fileNameForTooltip = document->filename();

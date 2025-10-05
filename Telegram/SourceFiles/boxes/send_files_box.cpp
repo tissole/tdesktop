@@ -108,6 +108,12 @@ using Ui::SendFilesWay;
                 fileName = fileName.replace(fileName.length()-4, 4, "[asx].mp4");
             } else if (fileName.toLower().endsWith(".wmv")) {
                 fileName = fileName.replace(fileName.length()-4, 4, "[wmv].mp4");
+            } else if (fileName.toLower().endsWith(".flv")) {
+                fileName = fileName.replace(fileName.length()-4, 4, "[flv].mp4");
+            } else if (fileName.toLower().endsWith(".m2v")) {
+                fileName = fileName.replace(fileName.length()-4, 4, "[m2v].mp4");
+            } else if (fileName.toLower().endsWith(".vob")) {
+                fileName = fileName.replace(fileName.length()-4, 4, "[vob].mp4");
             }
             
             fileNames.append(fileName);
@@ -1955,7 +1961,13 @@ void SendFilesBox::addFile(Ui::PreparedFile &&file) {
 			 fileName = fileName.replace(fileName.length()-4, 4, "[asx].mp4");								  
 		 } else if (fileName.toLower().endsWith(".wmv")) {													  
 			 fileName = fileName.replace(fileName.length()-4, 4, "[wmv].mp4");								  
-		}																									 
+		 } else if (fileName.toLower().endsWith(".flv")) {													  
+			 fileName = fileName.replace(fileName.length()-4, 4, "[flv].mp4");								  
+		 } else if (fileName.toLower().endsWith(".m2v")) {													  
+			 fileName = fileName.replace(fileName.length()-4, 4, "[m2v].mp4");								  
+		 } else if (fileName.toLower().endsWith(".vob")) {													  
+			 fileName = fileName.replace(fileName.length()-4, 4, "[vob].mp4");								  
+		}																								 
 																										
 		file.fileNameCaption = TextWithTags{fileName, {}};													 
 	}
