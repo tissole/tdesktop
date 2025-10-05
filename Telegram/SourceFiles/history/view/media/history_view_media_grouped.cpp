@@ -252,24 +252,11 @@ QSize GroupedMedia::countOptimalSize() {
 		for (const auto i : indices) {
 			auto &part = _parts[i];
 			accumulate_max(maxMediaHeight, float64(part.initialGeometry.height()));
-
-			QString fileNameForCaption;
-			if (GetEnhancedBool("caption_from_file_name")) {
-				const auto media = part.item->media();
-				const auto documentMedia = dynamic_cast<const Data::DocumentMedia*>(media);
-				const auto document = documentMedia ? documentMedia->document() : nullptr;
-				if (document && document->isVideoFile()) {
-					// Use the document's filename which has been renamed to include [ext].mp4 format
-					fileNameForCaption = document->filename();
-				} else {
-					// Fallback to originalText for non-video files
-					fileNameForCaption = part.item->originalText().text;
-				}
-			}
+			
+			const auto originalText = part.item->originalText();
 			if ((_mode == Mode::Grid) &&
 				GetEnhancedBool("caption_from_file_name") &&
-				!fileNameForCaption.isEmpty()) {
-				const auto originalText = TextWithEntities{ fileNameForCaption, {} };
+				!originalText.empty()) {
 				Ui::Text::String caption(
 					st::messageTextStyle,
 					originalText,
@@ -363,23 +350,11 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				part.geometry = QRect(left, y, width, scale(initial.height()));
 				accumulate_max(maxMediaHeight, float64(part.geometry.height()));
 
-				QString fileNameForCaption;
-			if (GetEnhancedBool("caption_from_file_name")) {
-				const auto media = part.item->media();
-				const auto documentMedia = dynamic_cast<const Data::DocumentMedia*>(media);
-				const auto document = documentMedia ? documentMedia->document() : nullptr;
-				if (document && document->isVideoFile()) {
-					// Use the document's filename which has been renamed to include [ext].mp4 format
-					fileNameForCaption = document->filename();
-				} else {
-					// Fallback to originalText for non-video files
-					fileNameForCaption = part.item->originalText().text;
-				}
-			}
+				const auto originalText = part.item->originalText();
 			if ((_mode == Mode::Grid) && 
-				GetEnhancedBool("caption_from_file_name") && 
-				!fileNameForCaption.isEmpty()) {
-				Ui::Text::String caption(st::messageTextStyle, { fileNameForCaption, {} }, kDefaultTextOptions);
+				GetEnhancedBool("caption_from_file_name") &&
+				!originalText.empty()) {
+				Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);		
 				const auto padding = QMargins(8, 0, 8, 0);
 				part._captionHeight = caption.countHeight(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
 			} else {
@@ -638,31 +613,19 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		if ((_mode == Mode::Grid) && 
 			(GetEnhancedBool("caption_from_file_name") || GetEnhancedBool("show_messages_id")) && 
 			part._captionHeight > 0) {
-			QString fileNameForCaption;
-			if (GetEnhancedBool("caption_from_file_name")) {
-				const auto media = part.item->media();
-				const auto documentMedia = dynamic_cast<const Data::DocumentMedia*>(media);
-				const auto document = documentMedia ? documentMedia->document() : nullptr;
-				if (document && document->isVideoFile()) {
-					// Use the document's filename which has been renamed to include [ext].mp4 format
-					fileNameForCaption = document->filename();
-				} else {
-					// Fallback to originalText for non-video files
-					fileNameForCaption = part.item->originalText().text;
-				}
-			}
+			const auto originalText = part.item->originalText();	
 			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
 
 			QString textToDraw;
-			if (GetEnhancedBool("caption_from_file_name") && !fileNameForCaption.isEmpty()) {
-				Ui::Text::String fullCaption(st::messageTextStyle, { fileNameForCaption, {} }, kDefaultTextOptions);
+			if (GetEnhancedBool("caption_from_file_name") && !originalText.empty()) {
+				Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
 				const auto padding = QMargins(8, 0, 8, 0);
 				const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
 				if (fullCaption.maxWidth() > textWidth) {
 					QFontMetrics metrics(st::messageTextStyle.font);
-					textToDraw = metrics.elidedText(fileNameForCaption, Qt::ElideRight, textWidth);
+					textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
 				} else {
-					textToDraw = fileNameForCaption;
+					textToDraw = originalText.text;
 				}
 			} else if (GetEnhancedBool("caption_from_file_name") && GetEnhancedBool("show_messages_id")) {
 				const auto msgId = part.item->fullId().msg;
@@ -894,25 +857,15 @@ TextState GroupedMedia::getPartState(
 				&& GetEnhancedBool("caption_from_file_name")
 				&& !part.captionRect.isEmpty()
 				&& part.captionRect.contains(point)) {
-				QString fileNameForTooltip;
-				const auto media = part.item->media();
-				const auto documentMedia = dynamic_cast<const Data::DocumentMedia*>(media);
-				const auto document = documentMedia ? documentMedia->document() : nullptr;
-				if (document && document->isVideoFile()) {
-					// Use the document's filename which has been renamed to include [ext].mp4 format
-					fileNameForTooltip = document->filename();
-				} else {
-					// Fallback to originalText for non-video files
-					fileNameForTooltip = part.item->originalText().text;
-				}
-				 if (!fileNameForTooltip.isEmpty()) {
-					 Ui::Text::String fullCaption(st::messageTextStyle, { fileNameForTooltip, {} }, kDefaultTextOptions);
-					 const auto padding = QMargins(8, 0, 8, 0);
-					 const auto textWidth = part.geometry.width() - padding.left() - padding.right();
-					 if (fullCaption.maxWidth() > textWidth) {
-						 result.customTooltip = true;
-						 result.customTooltipText = fileNameForTooltip;
-					 }
+				const auto originalText = part.item->originalText();
+				if (!originalText.empty()) {
+					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+					const auto padding = QMargins(8, 0, 8, 0);
+					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
+					if (fullCaption.maxWidth() > textWidth) {
+						result.customTooltip = true;
+						result.customTooltipText = originalText.text;
+					}
 				}
 			}
 
