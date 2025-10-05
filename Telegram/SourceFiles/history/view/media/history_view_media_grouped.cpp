@@ -253,10 +253,21 @@ QSize GroupedMedia::countOptimalSize() {
 			auto &part = _parts[i];
 			accumulate_max(maxMediaHeight, float64(part.initialGeometry.height()));
 
-			const auto originalText = part.item->originalText();
+			QString fileNameForCaption;
+			if (GetEnhancedBool("caption_from_file_name")) {
+				const auto document = part.item->media() ? part.item->media()->getDocument() : nullptr;
+				if (document && document->isVideoFile()) {
+					// Use the document's filename which has been renamed to include [ext].mp4 format
+					fileNameForCaption = document->filename();
+				} else {
+					// Fallback to originalText for non-video files
+					fileNameForCaption = part.item->originalText().text;
+				}
+			}
 			if ((_mode == Mode::Grid) &&
 				GetEnhancedBool("caption_from_file_name") &&
-				!originalText.empty()) {
+				!fileNameForCaption.isEmpty()) {
+				const auto originalText = TextWithEntities{ fileNameForCaption, {} };
 				Ui::Text::String caption(
 					st::messageTextStyle,
 					originalText,
@@ -350,11 +361,21 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				part.geometry = QRect(left, y, width, scale(initial.height()));
 				accumulate_max(maxMediaHeight, float64(part.geometry.height()));
 
-				const auto originalText = part.item->originalText();
+				QString fileNameForCaption;
+			if (GetEnhancedBool("caption_from_file_name")) {
+				const auto document = part.item->media() ? part.item->media()->getDocument() : nullptr;
+				if (document && document->isVideoFile()) {
+					// Use the document's filename which has been renamed to include [ext].mp4 format
+					fileNameForCaption = document->filename();
+				} else {
+					// Fallback to originalText for non-video files
+					fileNameForCaption = part.item->originalText().text;
+				}
+			}
 			if ((_mode == Mode::Grid) && 
 				GetEnhancedBool("caption_from_file_name") && 
-				!originalText.empty()) {
-				Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
+				!fileNameForCaption.isEmpty()) {
+				Ui::Text::String caption(st::messageTextStyle, { fileNameForCaption, {} }, kDefaultTextOptions);
 				const auto padding = QMargins(8, 0, 8, 0);
 				part._captionHeight = caption.countHeight(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
 			} else {
@@ -605,7 +626,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 		if (_mode == Mode::Grid && GetEnhancedBool("show_messages_id")) {
 			// Draw message ID for all items except the first one (which has comprehensive bubble) but position bubble correctly
-			if (&part != &_parts.front()) {  // Don't draw separate msg ID for first item
+			if (&part != &_parts.front()) {	 // Don't draw separate msg ID for first item
 				drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
 			}
 		}
@@ -613,19 +634,29 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		if ((_mode == Mode::Grid) && 
 			(GetEnhancedBool("caption_from_file_name") || GetEnhancedBool("show_messages_id")) && 
 			part._captionHeight > 0) {
-			const auto originalText = part.item->originalText();
+			QString fileNameForCaption;
+			if (GetEnhancedBool("caption_from_file_name")) {
+				const auto document = part.item->media() ? part.item->media()->getDocument() : nullptr;
+				if (document && document->isVideoFile()) {
+					// Use the document's filename which has been renamed to include [ext].mp4 format
+					fileNameForCaption = document->filename();
+				} else {
+					// Fallback to originalText for non-video files
+					fileNameForCaption = part.item->originalText().text;
+				}
+			}
 			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
 
 			QString textToDraw;
-			if (GetEnhancedBool("caption_from_file_name") && !originalText.empty()) {
-				Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+			if (GetEnhancedBool("caption_from_file_name") && !fileNameForCaption.isEmpty()) {
+				Ui::Text::String fullCaption(st::messageTextStyle, { fileNameForCaption, {} }, kDefaultTextOptions);
 				const auto padding = QMargins(8, 0, 8, 0);
 				const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
 				if (fullCaption.maxWidth() > textWidth) {
 					QFontMetrics metrics(st::messageTextStyle.font);
-					textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
+					textToDraw = metrics.elidedText(fileNameForCaption, Qt::ElideRight, textWidth);
 				} else {
-					textToDraw = originalText.text;
+					textToDraw = fileNameForCaption;
 				}
 			} else if (GetEnhancedBool("caption_from_file_name") && GetEnhancedBool("show_messages_id")) {
 				const auto msgId = part.item->fullId().msg;
@@ -733,8 +764,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				auto textWidth = st::msgDateFont->width(infoText);
 				if (hasViews) {
 					// Calculate total width including all elements with proper spacing
-					textWidth = iconWidth + minimalSpace +  // Minimal space between icon and counter
-								viewsWidth + editedSpace + editedWidth;  // Space before and width of "edited" text
+					textWidth = iconWidth + minimalSpace +	// Minimal space between icon and counter
+								viewsWidth + editedSpace + editedWidth;	 // Space before and width of "edited" text
 					
 					// Add spacing and time/msg id width
 					if (GetEnhancedBool("show_messages_id") && infoText.contains(' ')) {
@@ -742,12 +773,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 						const auto lastSpacePos = infoText.lastIndexOf(' ');
 						const auto timeText = infoText.left(lastSpacePos);
 						const auto msgIdText = infoText.mid(lastSpacePos + 1);
-						textWidth += doubleSpace +  // Space between edited/counter and time
+						textWidth += doubleSpace +	// Space between edited/counter and time
 									 st::msgDateFont->width(timeText) +
-									 doubleSpace +  // Space between time and msg id
+									 doubleSpace +	// Space between time and msg id
 									 st::msgDateFont->width(msgIdText);
 					} else {
-						textWidth += doubleSpace +  // Space between edited/counter and time
+						textWidth += doubleSpace +	// Space between edited/counter and time
 									 st::msgDateFont->width(infoText); // Just the time text
 					}
 				}
@@ -857,16 +888,24 @@ TextState GroupedMedia::getPartState(
 				&& GetEnhancedBool("caption_from_file_name")
 				&& !part.captionRect.isEmpty()
 				&& part.captionRect.contains(point)) {
-				const auto originalText = part.item->originalText();
-				if (!originalText.empty()) {
-					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
-					const auto padding = QMargins(8, 0, 8, 0);
-					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
-					if (fullCaption.maxWidth() > textWidth) {
-						result.customTooltip = true;
-						result.customTooltipText = originalText.text;
-					}
+				QString fileNameForTooltip;
+				const auto document = part.item->media() ? part.item->media()->getDocument() : nullptr;
+				if (document && document->isVideoFile()) {
+					// Use the document's filename which has been renamed to include [ext].mp4 format
+					fileNameForTooltip = document->filename();
+				} else {
+					// Fallback to originalText for non-video files
+					fileNameForTooltip = part.item->originalText().text;
 				}
+				 if (!fileNameForTooltip.isEmpty()) {
+					 Ui::Text::String fullCaption(st::messageTextStyle, { fileNameForTooltip, {} }, kDefaultTextOptions);
+					 const auto padding = QMargins(8, 0, 8, 0);
+					 const auto textWidth = part.geometry.width() - padding.left() - padding.right();
+					 if (fullCaption.maxWidth() > textWidth) {
+						 result.customTooltip = true;
+						 result.customTooltipText = fileNameForTooltip;
+					 }
+				 }
 			}
 
 			return result;
