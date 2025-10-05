@@ -656,6 +656,24 @@ bool FileLoadTask::CheckForVideo(
 
     if (filepath.endsWith(u".mp4"_q, Qt::CaseInsensitive)) {
     		result->filemime = u"video/mp4"_q;
+    	} else if (filepath.endsWith(u".mov"_q, Qt::CaseInsensitive)) {
+    		result->filemime = u"video/quicktime"_q;
+    	} else if (filepath.endsWith(u".mkv"_q, Qt::CaseInsensitive)) {
+    		result->filemime = u"video/x-matroska"_q;
+    	} else if (filepath.endsWith(u".webm"_q, Qt::CaseInsensitive)) {
+    		result->filemime = u"video/mp4"_q;
+    	} else if (filepath.endsWith(u".asf"_q, Qt::CaseInsensitive)) {
+    		result->filemime = u"video/mp4"_q;
+    	} else if (filepath.endsWith(u".asx"_q, Qt::CaseInsensitive)) {
+    		result->filemime = u"video/mp4"_q;			
+    	} else if (filepath.endsWith(u".avi"_q, Qt::CaseInsensitive)) {
+    		result->filemime = u"video/mp4"_q;
+    	} else if (filepath.endsWith(u".wmv"_q, Qt::CaseInsensitive)) {
+    		result->filemime = u"video/mp4"_q;
+        } else if (filepath.endsWith(u".ts"_q, Qt::CaseInsensitive) ||
+                       filepath.endsWith(u".mts"_q, Qt::CaseInsensitive) ||
+                       filepath.endsWith(u".m2ts"_q, Qt::CaseInsensitive)) {
+            result->filemime = u"video/mp4"_q;
         }
 	result->media = std::move(media);
 	return true;
