@@ -315,26 +315,6 @@ QSize GroupedMedia::countOptimalSize() {
 	return { maxWidth, int(base::SafeRound(minHeight)) };
 }
 
-//	if (_mode == Mode::Column
-//		&& isBubbleBottom()
-//		&& _parts.back().item->emptyText()) {
-//		const auto item = _parent->data();
-//		const auto msgsigned = item->Get<HistoryMessageSigned>();
-//		const auto views = item->Get<HistoryMessageViews>();
-//		if ((msgsigned && !msgsigned->isAnonymousRank)
-//			|| (views
-//				&& (views->views.count >= 0 || views->replies.count > 0))
-//			|| displayedEditBadge()) {
-//			minHeight += st::msgDateFont->height - st::msgDateDelta.y();
-//		}
-//	}
-
-	const auto groupPadding = groupedPadding();
-	minHeight += groupPadding.top() + groupPadding.bottom();
-
-	return { maxWidth, int(base::SafeRound(minHeight)) };
-}
-
 QSize GroupedMedia::countCurrentSize(int newWidth) {
 	accumulate_min(newWidth, maxWidth());
 	auto newHeight = 0;
