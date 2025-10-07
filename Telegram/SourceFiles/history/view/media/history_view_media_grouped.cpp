@@ -655,7 +655,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			if (!infoText.isEmpty()) {
 				p.setFont(st::msgDateFont);
-				p.setPen(st::msgDateFg);
+				p.setPen(st->msgDateFg()->c);
 
 				const auto itemRect = part.geometry.translated(
 					0,
