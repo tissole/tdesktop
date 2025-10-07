@@ -98,15 +98,15 @@ void GroupedMedia::drawMessageIdInfo(
 
 	auto textWidth = st::msgDateFont->width(infoText);
 	const auto textHeight = st::msgDateFont->height;
-	const auto verticalPadding = 2;
-	const auto horizontalPadding = 3; // Using 3px for a slightly less cramped look.
+	
+	// CORRECTED PADDING:
+	const auto horizontalPadding = 2; // 2px on left and right, as requested.
+	const auto verticalPadding = 2;   // 2px total, for 1px on top and bottom (untouched).
 
 	auto dateW = textWidth + (2 * horizontalPadding);
 	const auto dateH = textHeight + verticalPadding;
 
 	if (dateW > itemGeometry.width()) {
-		// Elision logic might be complex with an icon. For now, we simplify.
-		// A more advanced solution could elide only the msgId part.
 		const auto availableWidth = itemGeometry.width()
 			- (2 * horizontalPadding);
 		if (availableWidth > st::msgDateFont->width("...")) {
