@@ -88,7 +88,7 @@ void GroupedMedia::drawMessageIdInfo(
 
 	auto textWidth = st::msgDateFont->width(msgIdText);
 	const auto textHeight = st::msgDateFont->height;
-	const auto verticalPadding = 2;   // Total vertical padding (1px top, 1px bottom).
+	const auto verticalPadding = 2;	  // Total vertical padding (1px top, 1px bottom).
 	const auto horizontalPadding = 1; // CHANGED: Set horizontal padding to 1px on each side.
 
 	auto dateW = textWidth + (2 * horizontalPadding); // Use new horizontal padding.
@@ -133,7 +133,7 @@ void GroupedMedia::drawMessageIdInfo(
 	auto font = st::msgDateFont;
 	p.setFont(font->bold());
 	p.drawText(
-		bubbleX + horizontalPadding,                      // Use new horizontal padding.
+		bubbleX + horizontalPadding,					  // Use new horizontal padding.
 		bubbleY + (dateH - textHeight) / 2 + font->ascent, // Center text vertically.
 		msgIdText);
 	p.setFont(font);
@@ -768,10 +768,11 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				infoText = dateText;
 			}
 
+
 				// Check if message was edited to account for "edited" text in width calculations
 				QString editedText;
-				const auto edited = firstPart->item->Get<HistoryMessageEdited>();
-				if (edited && !firstPart->item->hideEditedBadge()) {
+				const auto edited = this->displayedEditBadge(); // FIXED: Check all items in the album.
+				if (edited && !edited->item()->hideEditedBadge()) {
 					editedText = tr::lng_edited(tr::now); // Use Telegram's translation, lowercase first
 				}
 				
@@ -836,8 +837,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				// Check if message was edited and add "edited" text
 				QString editedText;
-				const auto edited = firstPart->item->Get<HistoryMessageEdited>();
-				if (edited && !firstPart->item->hideEditedBadge()) {
+				const auto edited = this->displayedEditBadge(); // FIXED: Check all items in the album.
+				if (edited && !edited->item()->hideEditedBadge()) {
 					editedText = tr::lng_edited(tr::now); // Use Telegram's translation, lowercase first
 				}
 				
@@ -1129,17 +1130,17 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 						" " + dateTime.time().toString("HH:mm:ss");
 					
 					// Check if message was edited and add edit time to tooltip with first letter capitalized
-					const auto edited = firstPart->item->Get<HistoryMessageEdited>();
-					if (edited && !firstPart->item->hideEditedBadge()) {
+					const auto edited = this->displayedEditBadge(); // FIXED: Check all items in the album.
+					if (edited && !edited->item()->hideEditedBadge()) {
 						const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
 						const auto editLocalTime = editUTCTime.toLocalTime(); // Convert to local time
 						QString editedTranslation = tr::lng_edited(tr::now);
-						QString editTooltipText = editedTranslation.toUpper().left(1) + editedTranslation.mid(1) + ": " + 
-							editLocalTime.date().toString("dddd, dd MMMM yyyy") + 
+						QString editTooltipText = editedTranslation.toUpper().left(1) + editedTranslation.mid(1) + ": " +
+							editLocalTime.date().toString("dddd, dd MMMM yyyy") +
 							" " + editLocalTime.time().toString("HH:mm:ss");
 						tooltipText += "\n" + editTooltipText; // Add edit info on a new line
 					}
-					
+										
 					result.customTooltip = true;
 					result.customTooltipText = tooltipText;
 				}
