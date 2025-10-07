@@ -70,48 +70,61 @@ void GroupedMedia::drawMessageIdInfo(
 		const PaintContext &context,
 		const QRect &itemGeometry,
 		not_null<HistoryItem*> item) const {
-	if (!GetEnhancedBool("show_messages_id")) {
-		return;
+	// Build the info string first.
+	QString infoText;
+	const auto edited = item->Get<HistoryMessageEdited>();
+	if (edited && !item->hideEditedBadge()) {
+		infoText += QString::fromUtf8("✏️");
 	}
 
-	const auto msgId = item->fullId().msg;
-	if (msgId <= 0) {
-		return;
+	if (GetEnhancedBool("show_messages_id")) {
+		const auto msgId = item->fullId().msg;
+		if (msgId > 0) {
+			if (!infoText.isEmpty()) {
+				infoText += ' '; // Space between icon and ID.
+			}
+			infoText += QString::number(msgId.bare);
+		}
 	}
 
-	QString msgIdText = QString::number(msgId.bare);
+	if (infoText.isEmpty()) {
+		return;
+	}
 
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
 	p.setFont(st::msgDateFont);
 	p.setPen(st->msgDateImgFg());
 
-	auto textWidth = st::msgDateFont->width(msgIdText);
+	auto textWidth = st::msgDateFont->width(infoText);
 	const auto textHeight = st::msgDateFont->height;
-	const auto verticalPadding = 2;	  // Total vertical padding (1px top, 1px bottom).
-	const auto horizontalPadding = 1; // CHANGED: Set horizontal padding to 1px on each side.
+	const auto verticalPadding = 2;
+	const auto horizontalPadding = 3; // Using 3px for a slightly less cramped look.
 
-	auto dateW = textWidth + (2 * horizontalPadding); // Use new horizontal padding.
-	const auto dateH = textHeight + verticalPadding;   // Use new vertical padding.
+	auto dateW = textWidth + (2 * horizontalPadding);
+	const auto dateH = textHeight + verticalPadding;
 
 	if (dateW > itemGeometry.width()) {
+		// Elision logic might be complex with an icon. For now, we simplify.
+		// A more advanced solution could elide only the msgId part.
 		const auto availableWidth = itemGeometry.width()
-			- (2 * horizontalPadding); // Use new horizontal padding for elision.
+			- (2 * horizontalPadding);
 		if (availableWidth > st::msgDateFont->width("...")) {
 			const QFontMetrics metrics(st::msgDateFont);
-			msgIdText = metrics.elidedText(
-				msgIdText,
+			infoText = metrics.elidedText(
+				infoText,
 				Qt::ElideRight,
 				availableWidth);
-			textWidth = st::msgDateFont->width(msgIdText);
-			dateW = textWidth + (2 * horizontalPadding); // Recalculate with new padding.
+			textWidth = st::msgDateFont->width(infoText);
+			dateW = textWidth + (2 * horizontalPadding);
 		} else {
 			return;
 		}
 	}
 
-	// Position bubble inside the item bounds to prevent overflow
-	const auto bubbleX = (dateW > itemGeometry.width()) ? itemGeometry.x() : (itemGeometry.x() + itemGeometry.width() - dateW);
+	const auto bubbleX = (dateW > itemGeometry.width())
+		? itemGeometry.x()
+		: (itemGeometry.x() + itemGeometry.width() - dateW);
 	const auto bubbleY = itemGeometry.y();
 
 	auto originalColor = sti->msgDateImgBg->c;
@@ -133,9 +146,9 @@ void GroupedMedia::drawMessageIdInfo(
 	auto font = st::msgDateFont;
 	p.setFont(font->bold());
 	p.drawText(
-		bubbleX + horizontalPadding,					  // Use new horizontal padding.
-		bubbleY + (dateH - textHeight) / 2 + font->ascent, // Center text vertically.
-		msgIdText);
+		bubbleX + horizontalPadding,
+		bubbleY + (dateH - textHeight) / 2 + font->ascent,
+		infoText);
 	p.setFont(font);
 }
 
@@ -173,6 +186,12 @@ GroupedMedia::~GroupedMedia() {
 }
 
 HistoryItem *GroupedMedia::itemForText() const {
+	if (_mode == Mode::Grid) {
+		// This album uses per-item captions. Never allow the official
+		// single bottom caption to be created for Grid albums. This prevents
+		// duplicate/leftover borders when editing captions.
+		return nullptr;
+	}
 	if (_mode == Mode::Column) {
 		return Media::itemForText();
 	} else if (!_captionItem) {
@@ -257,8 +276,7 @@ QSize GroupedMedia::countOptimalSize() {
 			
 			const auto originalText = part.item->originalText();
 			if ((_mode == Mode::Grid) &&
-				GetEnhancedBool("caption_from_file_name") &&
-				!originalText.empty()) {
+				!originalText.empty()) { // REMOVED GetEnhancedBool check
 				Ui::Text::String caption(
 					st::messageTextStyle,
 					originalText,
@@ -290,6 +308,12 @@ QSize GroupedMedia::countOptimalSize() {
 			maxWidth,
 			_parts[i].initialGeometry.x() + _parts[i].initialGeometry.width());
 	}
+
+	const auto groupPadding = groupedPadding();
+	minHeight += groupPadding.top() + groupPadding.bottom();
+
+	return { maxWidth, int(base::SafeRound(minHeight)) };
+}
 
 //	if (_mode == Mode::Column
 //		&& isBubbleBottom()
@@ -353,19 +377,18 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				accumulate_max(maxMediaHeight, float64(part.geometry.height()));
 
 				const auto originalText = part.item->originalText();
-			if ((_mode == Mode::Grid) && 
-				GetEnhancedBool("caption_from_file_name") &&
-				!originalText.empty()) {
-				Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);		
-				const auto padding = QMargins(8, 0, 8, 0);
-				part._captionHeight = caption.countHeight(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
-			} else {
-				part._captionHeight = 0;
-			}
+				if ((_mode == Mode::Grid) &&
+					!originalText.empty()) { // REMOVED GetEnhancedBool check
+					Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
+					const auto padding = QMargins(8, 0, 8, 0);
+					part._captionHeight = caption.countHeight(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
+				} else {
+					part._captionHeight = 0;
+				}
 				accumulate_max(maxCaptionHeight, float64(part._captionHeight));
 			}
 
-				if (!indices.empty()) {
+			if (!indices.empty()) {
 				auto &last_part_in_row = _parts[indices.back()];
 				if (!(last_part_in_row.sides & RectPart::Right)) {
 					// Fix: Only expand the last item in the row if it's not the last item in the whole album
@@ -397,6 +420,12 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		}
 		newHeight = (y > 0) ? (y - spacing) : 0;
 	}
+
+	const auto groupPadding = groupedPadding();
+	newHeight += groupPadding.top() + groupPadding.bottom();
+
+	return { newWidth, int(base::SafeRound(newHeight)) };
+}
 
 //	if (_mode == Mode::Column
 //		&& isBubbleBottom()
@@ -605,9 +634,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 
-		// ===================================================================
-		// START: New logic for Column album items.
-		// ===================================================================
 		if (_mode == Mode::Column) {
 			QString infoText;
 			const auto item = part.item;
@@ -621,7 +647,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto msgId = item->fullId().msg;
 				if (msgId > 0) {
 					if (!infoText.isEmpty()) {
-						infoText += ' '; // Add space between icon and ID
+						infoText += ' ';
 					}
 					infoText += '(' + QString::number(msgId.bare) + ')';
 				}
@@ -637,13 +663,11 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto textWidth = st::msgDateFont->width(infoText);
 				const auto &padding = st::msgFileLayout.padding;
 
-				// Position vertically aligned with the file size text line.
 				const auto y = itemRect.y()
 					+ itemRect.height()
 					- padding.bottom()
 					- st::msgDateFont->ascent;
 
-				// Position horizontally on the far right.
 				const auto x = itemRect.x()
 					+ itemRect.width()
 					- padding.right()
@@ -652,25 +676,20 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				p.drawText(x, y, infoText);
 			}
 		}
-		// ===================================================================
-		// END: New logic for Column album items.
-		// ===================================================================
 
 		if (_mode == Mode::Grid && GetEnhancedBool("show_messages_id")) {
-			// Draw message ID for all items except the first one (which has comprehensive bubble) but position bubble correctly
-			if (&part != &_parts.front()) {	 // Don't draw separate msg ID for first item
+			if (&part != &_parts.front()) {
 				drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
 			}
 		}
 
 		if ((_mode == Mode::Grid) &&
-			(GetEnhancedBool("caption_from_file_name") || GetEnhancedBool("show_messages_id")) &&
 			part._captionHeight > 0) {
 			const auto originalText = part.item->originalText();
 			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
 
 			QString textToDraw;
-			if (GetEnhancedBool("caption_from_file_name") && !originalText.empty()) {
+			if (!originalText.empty()) {
 				Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
 				const auto padding = QMargins(8, 0, 8, 0);
 				const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
@@ -679,11 +698,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
 				} else {
 					textToDraw = originalText.text;
-				}
-			} else if (GetEnhancedBool("caption_from_file_name") && GetEnhancedBool("show_messages_id")) {
-				const auto msgId = part.item->fullId().msg;
-				if (msgId > 0) {
-					textToDraw = QString::number(msgId.bare);
 				}
 			}
 
@@ -729,7 +743,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	if (_mode == Mode::Grid && _parent->media() == this && (!_parent->hasBubble() || isBubbleBottom())) {
 		auto fullRight = width();
 		auto fullBottom = height();
-		// Draw comprehensive info bubble for the first item inside the item bounds (always visible)
 		if (!_parts.empty()) {
 			const auto firstPart = &_parts.front();
 			const auto groupPadding = groupedPadding();
@@ -768,41 +781,37 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				infoText = dateText;
 			}
 
-
-				// Check if message was edited to account for "edited" text in width calculations
 				QString editedText;
-				const auto edited = this->displayedEditBadge(); // FIXED: Check all items in the album.
-				if (edited && !edited->item()->hideEditedBadge()) {
-					editedText = tr::lng_edited(tr::now); // Use Telegram's translation, lowercase first
+				// CHANGED: Check ONLY the first item for its edited status.
+				const auto edited = firstPart->item->Get<HistoryMessageEdited>();
+				if (edited && !firstPart->item->hideEditedBadge()) {
+					editedText = QString::fromUtf8("✏️"); // CHANGED: Use icon.
 				}
 				
 				const auto viewsText = hasViews ? (QString::number(viewsCount) + " ") : QString();
 				const auto viewsWidth = hasViews ? st::msgDateFont->width(viewsText) : 0;
 				const auto iconWidth = hasViews ? stm->historyViewsIcon.width() : 0;
 				const auto editedWidth = !editedText.isEmpty() ? st::msgDateFont->width(editedText) : 0;
-				const auto editedSpace = !editedText.isEmpty() ? (st::historyViewsSpace / 2) : 0; // Space before "edited" text
-				const auto minimalSpace = (st::historyViewsSpace / 4); // Minimal space between icon and counter
-				const auto doubleSpace = (st::historyViewsSpace / 2); // Double minimal space between other elements
+				const auto editedSpace = !editedText.isEmpty() ? (st::historyViewsSpace / 2) : 0;
+				const auto minimalSpace = (st::historyViewsSpace / 4);
+				const auto doubleSpace = (st::historyViewsSpace / 2);
 				
 				auto textWidth = st::msgDateFont->width(infoText);
 				if (hasViews) {
-					// Calculate total width including all elements with proper spacing
-					textWidth = iconWidth + minimalSpace +	// Minimal space between icon and counter
-								viewsWidth + editedSpace + editedWidth;	 // Space before and width of "edited" text
+					textWidth = iconWidth + minimalSpace +
+								viewsWidth + editedSpace + editedWidth;
 					
-					// Add spacing and time/msg id width
 					if (GetEnhancedBool("show_messages_id") && infoText.contains(' ')) {
-						// Split infoText into time and msg id
 						const auto lastSpacePos = infoText.lastIndexOf(' ');
 						const auto timeText = infoText.left(lastSpacePos);
 						const auto msgIdText = infoText.mid(lastSpacePos + 1);
-						textWidth += doubleSpace +	// Space between edited/counter and time
+						textWidth += doubleSpace +
 									 st::msgDateFont->width(timeText) +
-									 doubleSpace +	// Space between time and msg id
+									 doubleSpace +
 									 st::msgDateFont->width(msgIdText);
 					} else {
-						textWidth += doubleSpace +	// Space between edited/counter and time
-									 st::msgDateFont->width(infoText); // Just the time text
+						textWidth += doubleSpace +
+									 st::msgDateFont->width(infoText);
 					}
 				}
 
@@ -835,46 +844,37 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				auto currentX = bubbleX + st::msgDateImgPadding.x();
 				const auto currentY = bubbleY + (dateH - textHeight) / 2 + font->ascent;
 
-				// Check if message was edited and add "edited" text
-				QString editedText;
-				const auto edited = this->displayedEditBadge(); // FIXED: Check all items in the album.
-				if (edited && !edited->item()->hideEditedBadge()) {
-					editedText = tr::lng_edited(tr::now); // Use Telegram's translation, lowercase first
-				}
+				// NOTE: The second 'editedText' definition block is now redundant
+				// because we already defined it above for width calculation.
+				// We just use its value here.
 				
 				if (hasViews) {
 					const auto &icon = stm->historyViewsIcon;
 					const auto iconTop = bubbleY + (dateH - icon.height()) / 2;
-					// Make the icon as white as the text by using the same pen color
-					p.setPen(st->msgDateImgFg()); // Use the same color as text
+					p.setPen(st->msgDateImgFg());
 					icon.paint(p, currentX, iconTop, dateW);
-					// Minimal space between icon and counter
-					currentX += icon.width() + (st::historyViewsSpace / 4); // Minimal space between icon and counter
+					currentX += icon.width() + (st::historyViewsSpace / 4);
 					p.drawText(currentX, currentY, viewsText);
 					currentX += viewsWidth;
 					
-					// Add "edited" text right after counter if message was edited
 					if (!editedText.isEmpty()) {
-						currentX += (st::historyViewsSpace / 2); // Space before "edited" text (same as time-msgid spacing)
+						currentX += (st::historyViewsSpace / 2);
 						p.drawText(currentX, currentY, editedText);
 						currentX += st::msgDateFont->width(editedText);
 					}
 					
-					currentX += (st::historyViewsSpace / 2); // Space between counter/edited and time (double minimal)
+					currentX += (st::historyViewsSpace / 2);
 				}
 				
-				// Handle time and msg id separately if needed
 				if (GetEnhancedBool("show_messages_id") && infoText.contains(' ')) {
-					// Split infoText into time and msg id
 					const auto lastSpacePos = infoText.lastIndexOf(' ');
 					const auto timeText = infoText.left(lastSpacePos);
 					const auto msgIdText = infoText.mid(lastSpacePos + 1);
 					
 					p.drawText(currentX, currentY, timeText);
-					currentX += st::msgDateFont->width(timeText) + (st::historyViewsSpace / 2); // Space between time and msg id (double minimal)
+					currentX += st::msgDateFont->width(timeText) + (st::historyViewsSpace / 2);
 					p.drawText(currentX, currentY, msgIdText);
 				} else {
-					// Draw info text (time only)
 					p.drawText(currentX, currentY, infoText);
 				}
 				p.setFont(font);
@@ -906,14 +906,11 @@ TextState GroupedMedia::getPartState(
 			result.symbol += shift;
 			result.itemId = part.item->fullId();
 
-			// ===================================================================
-			// START: New tooltip logic for Column album items.
-			// ===================================================================
+			const auto item = part.item;
+			const auto edited = item->Get<HistoryMessageEdited>();
+
 			if (_mode == Mode::Column) {
 				QString infoText;
-				const auto item = part.item;
-				const auto edited = item->Get<HistoryMessageEdited>();
-
 				if (edited && !item->hideEditedBadge()) {
 					infoText += QString::fromUtf8("✏️");
 				}
@@ -945,33 +942,68 @@ TextState GroupedMedia::getPartState(
 
 					const QRect infoRect(x, y, textWidth, textHeight);
 
-					if (infoRect.contains(point)) {
-						if (edited && !item->hideEditedBadge()) {
-							const auto editUTCTime = QDateTime::fromSecsSinceEpoch(
-								edited->date);
-							const auto editLocalTime = editUTCTime.toLocalTime();
-							QString editedTranslation = tr::lng_edited(tr::now);
-
-							editedTranslation = editedTranslation.toUpper().left(1)
-								+ editedTranslation.mid(1);
-
-							const QString tooltipText = editedTranslation + ", "
-								+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
-								+ editLocalTime.time().toString("HH:mm:ss");
-
-							result.customTooltip = true;
-							result.customTooltipText = tooltipText;
-						}
+					if (infoRect.contains(point) && edited && !item->hideEditedBadge()) {
+						const auto editUTCTime = QDateTime::fromSecsSinceEpoch(
+							edited->date);
+						const auto editLocalTime = editUTCTime.toLocalTime();
+						QString editedTranslation = tr::lng_edited(tr::now);
+						editedTranslation = editedTranslation.toUpper().left(1)
+							+ editedTranslation.mid(1);
+						const QString tooltipText = editedTranslation + ", "
+							+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
+							+ editLocalTime.time().toString("HH:mm:ss");
+						result.customTooltip = true;
+						result.customTooltipText = tooltipText;
 					}
 				}
+			} else if (_mode == Mode::Grid && (&part != &_parts.front())) {
+				// START: New tooltip logic for Grid album items (2..N).
+				QString infoText;
+				if (edited && !item->hideEditedBadge()) {
+					infoText += QString::fromUtf8("✏️");
+				}
+				if (GetEnhancedBool("show_messages_id")) {
+					const auto msgId = item->fullId().msg;
+					if (msgId > 0) {
+						if (!infoText.isEmpty()) infoText += ' ';
+						infoText += QString::number(msgId.bare);
+					}
+				}
+
+				if (!infoText.isEmpty()) {
+					const auto textWidth = st::msgDateFont->width(infoText);
+					const auto textHeight = st::msgDateFont->height;
+					const auto verticalPadding = 2;
+					const auto horizontalPadding = 3;
+					const auto dateW = textWidth + (2 * horizontalPadding);
+					const auto dateH = textHeight + verticalPadding;
+					const auto itemRect = part.geometry;
+
+					const auto bubbleX = (dateW > itemRect.width())
+						? itemRect.x()
+						: (itemRect.x() + itemRect.width() - dateW);
+					const auto bubbleY = itemRect.y();
+					const QRect infoRect(bubbleX, bubbleY, dateW, dateH);
+
+					if (infoRect.contains(point) && edited && !item->hideEditedBadge()) {
+						const auto editUTCTime = QDateTime::fromSecsSinceEpoch(
+							edited->date);
+						const auto editLocalTime = editUTCTime.toLocalTime();
+						QString editedTranslation = tr::lng_edited(tr::now);
+						editedTranslation = editedTranslation.toUpper().left(1)
+							+ editedTranslation.mid(1);
+						const QString tooltipText = editedTranslation + ", "
+							+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
+							+ editLocalTime.time().toString("HH:mm:ss");
+						result.customTooltip = true;
+						result.customTooltipText = tooltipText;
+					}
+				}
+				// END: New tooltip logic for Grid album items (2..N).
 			}
-			// ===================================================================
-			// END: New tooltip logic for Column album items.
-			// ===================================================================
 
 			if (result.itemId
 				&& _mode == Mode::Grid
-				&& GetEnhancedBool("caption_from_file_name")
 				&& !part.captionRect.isEmpty()
 				&& part.captionRect.contains(point)) {
 				const auto originalText = part.item->originalText();
@@ -1075,17 +1107,14 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			}
 		}
 		
-		// Check if the mouse is over the first item's info bubble area to show tooltip
 		if (!_parts.empty()) {
 			const auto firstPart = &_parts.front();
 			const auto firstItemGeometry = firstPart->geometry.translated(
 				0,
 				groupPadding.top());
 				
-			// Recreate the same bubble positioning logic as in the draw method
 			QString infoText;
 			if (GetEnhancedBool("show_messages_id")) {
-				// When show_messages_id is on, use comprehensive info for bubble detection
 				if (const auto views = firstPart->item->Get<HistoryMessageViews>()) {
 					if (views->views.count >= 0) {
 						infoText = QString::number(views->views.count) + " ";
@@ -1100,7 +1129,6 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 					infoText += QString::number(msgId.bare);
 				}
 			} else {
-				// When show_messages_id is off, use simplified info for bubble detection
 				if (const auto views = firstPart->item->Get<HistoryMessageViews>()) {
 					if (views->views.count >= 0) {
 						infoText = QString::number(views->views.count) + " ";
@@ -1116,29 +1144,26 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
 			auto dateH = st::msgDateFont->height + 2 * st::msgDateImgPadding.y();
 
-			// Position bubble in the same place as in the draw method
 			const auto bubbleX = (dateW > firstItemGeometry.width()) ? firstItemGeometry.x() : (firstItemGeometry.x() + firstItemGeometry.width() - dateW);
 			const auto bubbleY = firstItemGeometry.y();
 			
 			const QRect bubbleRect(bubbleX, bubbleY, dateW, dateH);
 			if (bubbleRect.contains(point)) {
-				// Format the tooltip as "sambata, 20 septembrie 2025 09:39:42"
-				// Only show tooltip when the bubble would actually be visible
 				if (GetEnhancedBool("show_messages_id") || !infoText.trimmed().isEmpty()) {
 					const auto dateTime = ItemDateTime(firstPart->item);
-					QString tooltipText = dateTime.date().toString("dddd, dd MMMM yyyy") + 
+					QString tooltipText = dateTime.date().toString("dddd, dd MMMM yyyy") +
 						" " + dateTime.time().toString("HH:mm:ss");
 					
-					// Check if message was edited and add edit time to tooltip with first letter capitalized
-					const auto edited = this->displayedEditBadge(); // FIXED: Check all items in the album.
-					if (edited && !edited->item()->hideEditedBadge()) {
+					// CHANGED: Check ONLY the first item for its edited status.
+					const auto edited = firstPart->item->Get<HistoryMessageEdited>();
+					if (edited && !firstPart->item->hideEditedBadge()) {
 						const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
-						const auto editLocalTime = editUTCTime.toLocalTime(); // Convert to local time
+						const auto editLocalTime = editUTCTime.toLocalTime();
 						QString editedTranslation = tr::lng_edited(tr::now);
 						QString editTooltipText = editedTranslation.toUpper().left(1) + editedTranslation.mid(1) + ": " +
 							editLocalTime.date().toString("dddd, dd MMMM yyyy") +
 							" " + editLocalTime.time().toString("HH:mm:ss");
-						tooltipText += "\n" + editTooltipText; // Add edit info on a new line
+						tooltipText += "\n" + editTooltipText;
 					}
 										
 					result.customTooltip = true;
