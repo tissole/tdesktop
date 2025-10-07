@@ -307,7 +307,7 @@ void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
 			&file.information->media)) {
 		if (ValidVideoForAlbum(*video)) {
 			// Create video cover from the thumbnail if it exists (e.g., 15s frame)
-			if (!video->thumbnail.isNull()) {
+			if (!video->thumbnail.isNull() && !video->thumbnail.size().isEmpty()) {
 				// Create a separate prepared file for the video cover
 				auto coverFile = std::make_unique<Ui::PreparedFile>(QString());
 				coverFile->type = PreparedFile::Type::Photo;

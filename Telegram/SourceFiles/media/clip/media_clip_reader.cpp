@@ -1000,10 +1000,12 @@ Ui::PreparedFileInformation PrepareForSending(
 					auto index = 0;
 					auto hasAlpha = false;
 					if (reader->renderFrame(result.thumbnail, hasAlpha, index, QSize())) {
-						if (hasAlpha && !result.isWebmSticker) {
-							result.thumbnail = Images::Opaque(std::move(result.thumbnail));
+						if (!result.thumbnail.isNull()) {  // Validate that the thumbnail was properly created
+							if (hasAlpha && !result.isWebmSticker) {
+								result.thumbnail = Images::Opaque(std::move(result.thumbnail));
+							}
+							result.duration = durationMs;
 						}
-						result.duration = durationMs;
 					}
 				}
 			}
