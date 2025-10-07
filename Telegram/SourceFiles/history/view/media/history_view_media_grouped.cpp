@@ -88,13 +88,15 @@ void GroupedMedia::drawMessageIdInfo(
 
 	auto textWidth = st::msgDateFont->width(msgIdText);
 	const auto textHeight = st::msgDateFont->height;
+	const auto verticalPadding = 2;   // Total vertical padding (1px top, 1px bottom).
+	const auto horizontalPadding = 1; // CHANGED: Set horizontal padding to 1px on each side.
 
-	auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-	const auto dateH = textHeight + st::msgDateImgPadding.y();
+	auto dateW = textWidth + (2 * horizontalPadding); // Use new horizontal padding.
+	const auto dateH = textHeight + verticalPadding;   // Use new vertical padding.
 
 	if (dateW > itemGeometry.width()) {
 		const auto availableWidth = itemGeometry.width()
-			- (2 * st::msgDateImgPadding.x());
+			- (2 * horizontalPadding); // Use new horizontal padding for elision.
 		if (availableWidth > st::msgDateFont->width("...")) {
 			const QFontMetrics metrics(st::msgDateFont);
 			msgIdText = metrics.elidedText(
@@ -102,7 +104,7 @@ void GroupedMedia::drawMessageIdInfo(
 				Qt::ElideRight,
 				availableWidth);
 			textWidth = st::msgDateFont->width(msgIdText);
-			dateW = textWidth + 2 * st::msgDateImgPadding.x();
+			dateW = textWidth + (2 * horizontalPadding); // Recalculate with new padding.
 		} else {
 			return;
 		}
@@ -131,8 +133,8 @@ void GroupedMedia::drawMessageIdInfo(
 	auto font = st::msgDateFont;
 	p.setFont(font->bold());
 	p.drawText(
-		bubbleX + st::msgDateImgPadding.x(),
-		bubbleY + st::msgDateImgPadding.y() + font->ascent,
+		bubbleX + horizontalPadding,                      // Use new horizontal padding.
+		bubbleY + (dateH - textHeight) / 2 + font->ascent, // Center text vertically.
 		msgIdText);
 	p.setFont(font);
 }
@@ -793,7 +795,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					const auto iconTop = bubbleY + (dateH - icon.height()) / 2;
 					// Make the icon as white as the text by using the same pen color
 					p.setPen(st->msgDateImgFg()); // Use the same color as text
-					icon.paint(p, currentX, iconTop, dateW, st->msgDateImgFg()->c);
+					icon.paint(p, currentX, iconTop, dateW);
 					// Minimal space between icon and counter
 					currentX += icon.width() + (st::historyViewsSpace / 4); // Minimal space between icon and counter
 					p.drawText(currentX, currentY, viewsText);
