@@ -407,26 +407,6 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 	return { newWidth, int(base::SafeRound(newHeight)) };
 }
 
-//	if (_mode == Mode::Column
-//		&& isBubbleBottom()
-//		&& _parts.back().item->emptyText()) {
-//		const auto item = _parent->data();
-//		const auto msgsigned = item->Get<HistoryMessageSigned>();
-//		const auto views = item->Get<HistoryMessageViews>();
-//		if ((msgsigned && !msgsigned->isAnonymousRank)
-//			|| (views
-//				&& (views->views.count >= 0 || views->replies.count > 0))
-//			|| displayedEditBadge()) {
-//			newHeight += st::msgDateFont->height - st::msgDateDelta.y();
-//		}
-//	}
-
-	const auto groupPadding = groupedPadding();
-	newHeight += groupPadding.top() + groupPadding.bottom();
-
-	return { newWidth, int(base::SafeRound(newHeight)) };
-}
-
 void GroupedMedia::refreshParentId(
 		not_null<HistoryItem*> realParent) {
 	for (const auto &part : _parts) {
