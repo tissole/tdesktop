@@ -274,6 +274,81 @@ std::optional<PreparedList> PreparedFileFromFilesDialog(
 	}
 }
 
+// Version 1
+
+//void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
+//	if (!file.path.isEmpty()) {
+//		file.information = FileLoadTask::ReadMediaInformation(
+//			file.path,
+//			QByteArray(),
+//			Core::MimeTypeForFile(QFileInfo(file.path)).name());
+//	} else if (!file.content.isEmpty()) {
+//		file.information = FileLoadTask::ReadMediaInformation(
+//			QString(),
+//			file.content,
+//			Core::MimeTypeForData(file.content).name());
+//	} else {
+//		Assert(file.information != nullptr);
+//	}
+//
+//	using Video = PreparedFileInformation::Video;
+//	using Song = PreparedFileInformation::Song;
+//	if (const auto image = std::get_if<Image>(
+//			&file.information->media)) {
+//		Assert(!image->data.isNull());
+//		if (ValidPhotoForAlbum(*image, file.information->filemime)) {
+//			UpdateImageDetails(file, previewWidth, sideLimit);
+//			file.type = PreparedFile::Type::Photo;
+//		} else {
+//			file.originalDimensions = image->data.size();
+//			if (image->animated) {
+//				file.type = PreparedFile::Type::None;
+//			}
+//		}
+//	} else if (const auto video = std::get_if<Video>(
+//			&file.information->media)) {
+//		if (ValidVideoForAlbum(*video)) {
+//			// Create video cover from the thumbnail if it exists (e.g., 15s frame)
+//			if (!video->thumbnail.isNull() && !video->thumbnail.size().isEmpty()) {
+//				// Create a separate prepared file for the video cover
+//				auto coverFile = std::make_unique<Ui::PreparedFile>(QString());
+//				coverFile->type = PreparedFile::Type::Photo;
+//				
+//				// Set up the cover file's information
+//				auto coverInfo = std::make_unique<PreparedFileInformation>();
+//				auto coverImageInfo = PreparedFileInformation::Image();
+//				coverImageInfo.data = video->thumbnail;
+//				coverImageInfo.animated = false;
+//				coverInfo->filemime = u"image/jpeg"_q;
+//				coverInfo->media = coverImageInfo;
+//				
+//				coverFile->information = std::move(coverInfo);
+//				
+//				// Assign it as the video cover
+//				file.videoCover = std::move(coverFile);
+//			}
+//			
+//			auto blurred = Images::Blur(
+//				Images::Opaque(base::duplicate(video->thumbnail)));
+//			file.originalDimensions = video->thumbnail.size();
+//			file.shownDimensions = PrepareShownDimensions(
+//				video->thumbnail,
+//				sideLimit);
+//			file.preview = std::move(blurred).scaledToWidth(
+//				previewWidth * style::DevicePixelRatio(),
+//				Qt::SmoothTransformation);
+//			Assert(!file.preview.isNull());
+//			file.preview.setDevicePixelRatio(style::DevicePixelRatio());
+//			file.type = PreparedFile::Type::Video;
+//		}
+//	} else if (v::is<Song>(file.information->media)) {
+//		file.type = PreparedFile::Type::Music;
+//	}
+//}
+
+
+// Version 2 additional checks
+
 void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
 	if (!file.path.isEmpty()) {
 		file.information = FileLoadTask::ReadMediaInformation(
@@ -306,13 +381,22 @@ void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
 	} else if (const auto video = std::get_if<Video>(
 			&file.information->media)) {
 		if (ValidVideoForAlbum(*video)) {
-			// Create video cover from the thumbnail if it exists (e.g., 15s frame)
-			if (!video->thumbnail.isNull() && !video->thumbnail.size().isEmpty()) {
-				// Create a separate prepared file for the video cover
+			// --- THE CRITICAL FIX IS HERE ---
+			// First, check if the thumbnail is valid. If not, we can't do anything.
+			if (video->thumbnail.isNull()) {
+				// The thumbnail is invalid, so we cannot generate a preview.
+				// Mark it as 'None' or just return to prevent a crash.
+				file.type = PreparedFile::Type::None;
+				return;
+			}
+
+			// NOW we know video->thumbnail is safe to use for the rest of the function.
+
+			// Create video cover from the thumbnail
+			if (!video->thumbnail.size().isEmpty()) { // No need for isNull() again
 				auto coverFile = std::make_unique<Ui::PreparedFile>(QString());
 				coverFile->type = PreparedFile::Type::Photo;
 				
-				// Set up the cover file's information
 				auto coverInfo = std::make_unique<PreparedFileInformation>();
 				auto coverImageInfo = PreparedFileInformation::Image();
 				coverImageInfo.data = video->thumbnail;
@@ -321,8 +405,6 @@ void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
 				coverInfo->media = coverImageInfo;
 				
 				coverFile->information = std::move(coverInfo);
-				
-				// Assign it as the video cover
 				file.videoCover = std::move(coverFile);
 			}
 			
@@ -343,6 +425,7 @@ void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
 		file.type = PreparedFile::Type::Music;
 	}
 }
+
 
 void UpdateImageDetails(
 		PreparedFile &file,

@@ -793,7 +793,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					const auto iconTop = bubbleY + (dateH - icon.height()) / 2;
 					// Make the icon as white as the text by using the same pen color
 					p.setPen(st->msgDateImgFg()); // Use the same color as text
-					icon.paint(p, currentX, iconTop, dateW);
+					icon.paint(p, currentX, iconTop, dateW, st->msgDateImgFg()->c);
 					// Minimal space between icon and counter
 					currentX += icon.width() + (st::historyViewsSpace / 4); // Minimal space between icon and counter
 					p.drawText(currentX, currentY, viewsText);
