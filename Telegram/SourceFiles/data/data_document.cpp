@@ -1066,6 +1066,8 @@ void DocumentData::setFileName(const QString &remoteFileName) {
 		_filename = _filename.replace(_filename.length()-4, 4, "[mts].mp4");
 	} else if (lowerName.endsWith(".m2ts")) {
 		_filename = _filename.replace(_filename.length()-5, 5, "[m2ts].mp4");
+	} else if (lowerName.endsWith(".m2v")) {
+		_filename = _filename.replace(_filename.length()-4, 4, "[m2v].mp4");		
 	} else if (lowerName.endsWith(".avi")) {
 		_filename = _filename.replace(_filename.length()-4, 4, "[avi].mp4");
 	} else if (lowerName.endsWith(".asf")) {
@@ -1074,6 +1076,10 @@ void DocumentData::setFileName(const QString &remoteFileName) {
 		_filename = _filename.replace(_filename.length()-4, 4, "[asx].mp4");
 	} else if (lowerName.endsWith(".wmv")) {
 		_filename = _filename.replace(_filename.length()-4, 4, "[wmv].mp4");
+	} else if (lowerName.endsWith(".flv")) {
+		_filename = _filename.replace(_filename.length()-4, 4, "[flv].mp4");
+	} else if (lowerName.endsWith(".vob")) {
+		_filename = _filename.replace(_filename.length()-4, 4, "[vob].mp4");
 	}
 	
 	// We don't want LTR/RTL mark/embedding/override/isolate chars

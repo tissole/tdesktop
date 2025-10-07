@@ -557,6 +557,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	const auto tagged = lookupSpoilerTagMedia();
 	auto fullRect = QRect();
 	const auto subpartHighlight = IsSubGroupSelection(highlight);
+	const auto st = context.st; // Declaration moved to the top.
+
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
 		auto partContext = context.withSelection(fullSelection
@@ -615,7 +617,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			if (!infoText.isEmpty()) {
 				p.setFont(st::msgDateFont);
-				p.setPen(st->msgDateFg()->c);
+				p.setPen(st->msgDateFg()); // Corrected this line.
 
 				const auto itemRect = part.geometry.translated(
 					0,
@@ -710,7 +712,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				0,
 				groupPadding.top());
 
-			const auto st = context.st;
+			// const auto st = context.st; // This is now at the top.
 			const auto sti = context.imageStyle();
 			const auto stm = context.messageStyle();
 			p.setFont(st::msgDateFont);
