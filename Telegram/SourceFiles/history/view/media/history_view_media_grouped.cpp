@@ -291,19 +291,19 @@ QSize GroupedMedia::countOptimalSize() {
 			_parts[i].initialGeometry.x() + _parts[i].initialGeometry.width());
 	}
 
-	if (_mode == Mode::Column
-		&& isBubbleBottom()
-		&& _parts.back().item->emptyText()) {
-		const auto item = _parent->data();
-		const auto msgsigned = item->Get<HistoryMessageSigned>();
-		const auto views = item->Get<HistoryMessageViews>();
-		if ((msgsigned && !msgsigned->isAnonymousRank)
-			|| (views
-				&& (views->views.count >= 0 || views->replies.count > 0))
-			|| displayedEditBadge()) {
-			minHeight += st::msgDateFont->height - st::msgDateDelta.y();
-		}
-	}
+//	if (_mode == Mode::Column
+//		&& isBubbleBottom()
+//		&& _parts.back().item->emptyText()) {
+//		const auto item = _parent->data();
+//		const auto msgsigned = item->Get<HistoryMessageSigned>();
+//		const auto views = item->Get<HistoryMessageViews>();
+//		if ((msgsigned && !msgsigned->isAnonymousRank)
+//			|| (views
+//				&& (views->views.count >= 0 || views->replies.count > 0))
+//			|| displayedEditBadge()) {
+//			minHeight += st::msgDateFont->height - st::msgDateDelta.y();
+//		}
+//	}
 
 	const auto groupPadding = groupedPadding();
 	minHeight += groupPadding.top() + groupPadding.bottom();
@@ -398,19 +398,19 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		newHeight = (y > 0) ? (y - spacing) : 0;
 	}
 
-	if (_mode == Mode::Column
-		&& isBubbleBottom()
-		&& _parts.back().item->emptyText()) {
-		const auto item = _parent->data();
-		const auto msgsigned = item->Get<HistoryMessageSigned>();
-		const auto views = item->Get<HistoryMessageViews>();
-		if ((msgsigned && !msgsigned->isAnonymousRank)
-			|| (views
-				&& (views->views.count >= 0 || views->replies.count > 0))
-			|| displayedEditBadge()) {
-			newHeight += st::msgDateFont->height - st::msgDateDelta.y();
-		}
-	}
+//	if (_mode == Mode::Column
+//		&& isBubbleBottom()
+//		&& _parts.back().item->emptyText()) {
+//		const auto item = _parent->data();
+//		const auto msgsigned = item->Get<HistoryMessageSigned>();
+//		const auto views = item->Get<HistoryMessageViews>();
+//		if ((msgsigned && !msgsigned->isAnonymousRank)
+//			|| (views
+//				&& (views->views.count >= 0 || views->replies.count > 0))
+//			|| displayedEditBadge()) {
+//			newHeight += st::msgDateFont->height - st::msgDateDelta.y();
+//		}
+//	}
 
 	const auto groupPadding = groupedPadding();
 	newHeight += groupPadding.top() + groupPadding.bottom();
@@ -605,6 +605,57 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 
+		// ===================================================================
+		// START: New logic for Column album items.
+		// ===================================================================
+		if (_mode == Mode::Column) {
+			QString infoText;
+			const auto item = part.item;
+
+			const auto edited = item->Get<HistoryMessageEdited>();
+			if (edited && !item->hideEditedBadge()) {
+				infoText += QString::fromUtf8("✏️");
+			}
+
+			if (GetEnhancedBool("show_messages_id")) {
+				const auto msgId = item->fullId().msg;
+				if (msgId > 0) {
+					if (!infoText.isEmpty()) {
+						infoText += ' '; // Add space between icon and ID
+					}
+					infoText += '(' + QString::number(msgId.bare) + ')';
+				}
+			}
+
+			if (!infoText.isEmpty()) {
+				p.setFont(st::msgDateFont);
+				p.setPen(st::msgDateFg);
+
+				const auto itemRect = part.geometry.translated(
+					0,
+					groupPadding.top());
+				const auto textWidth = st::msgDateFont->width(infoText);
+				const auto &padding = st::msgFileLayout.padding;
+
+				// Position vertically aligned with the file size text line.
+				const auto y = itemRect.y()
+					+ itemRect.height()
+					- padding.bottom()
+					- st::msgDateFont->ascent;
+
+				// Position horizontally on the far right.
+				const auto x = itemRect.x()
+					+ itemRect.width()
+					- padding.right()
+					- textWidth;
+
+				p.drawText(x, y, infoText);
+			}
+		}
+		// ===================================================================
+		// END: New logic for Column album items.
+		// ===================================================================
+
 		if (_mode == Mode::Grid && GetEnhancedBool("show_messages_id")) {
 			// Draw message ID for all items except the first one (which has comprehensive bubble) but position bubble correctly
 			if (&part != &_parts.front()) {	 // Don't draw separate msg ID for first item
@@ -612,10 +663,10 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			}
 		}
 
-		if ((_mode == Mode::Grid) && 
-			(GetEnhancedBool("caption_from_file_name") || GetEnhancedBool("show_messages_id")) && 
+		if ((_mode == Mode::Grid) &&
+			(GetEnhancedBool("caption_from_file_name") || GetEnhancedBool("show_messages_id")) &&
 			part._captionHeight > 0) {
-			const auto originalText = part.item->originalText();	
+			const auto originalText = part.item->originalText();
 			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
 
 			QString textToDraw;
@@ -638,7 +689,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			if (!textToDraw.isEmpty() && part._captionHeight > 0) {
 				Ui::Text::String caption(st::messageTextStyle, { textToDraw });
-				
+
 				auto captionRect = QRect(
 					mediaGeometry.left(),
 					mediaGeometry.bottom() + 1,
@@ -756,7 +807,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				const auto textHeight = st::msgDateFont->height;
 				auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-				const auto dateH = textHeight + st::msgDateImgPadding.y();
+				const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
 
 			if (dateW <= firstItemGeometry.width()) {
 				const auto bubbleX = firstItemGeometry.x() + firstItemGeometry.width() - dateW;
@@ -854,6 +905,69 @@ TextState GroupedMedia::getPartState(
 			result.symbol += shift;
 			result.itemId = part.item->fullId();
 
+			// ===================================================================
+			// START: New tooltip logic for Column album items.
+			// ===================================================================
+			if (_mode == Mode::Column) {
+				QString infoText;
+				const auto item = part.item;
+				const auto edited = item->Get<HistoryMessageEdited>();
+
+				if (edited && !item->hideEditedBadge()) {
+					infoText += QString::fromUtf8("✏️");
+				}
+
+				if (GetEnhancedBool("show_messages_id")) {
+					const auto msgId = item->fullId().msg;
+					if (msgId > 0) {
+						if (!infoText.isEmpty()) {
+							infoText += ' ';
+						}
+						infoText += '(' + QString::number(msgId.bare) + ')';
+					}
+				}
+
+				if (!infoText.isEmpty()) {
+					const auto textWidth = st::msgDateFont->width(infoText);
+					const auto textHeight = st::msgDateFont->height;
+					const auto &padding = st::msgFileLayout.padding;
+					const auto itemRect = part.geometry;
+
+					const auto y = itemRect.y()
+						+ itemRect.height()
+						- padding.bottom()
+						- textHeight;
+					const auto x = itemRect.x()
+						+ itemRect.width()
+						- padding.right()
+						- textWidth;
+
+					const QRect infoRect(x, y, textWidth, textHeight);
+
+					if (infoRect.contains(point)) {
+						if (edited && !item->hideEditedBadge()) {
+							const auto editUTCTime = QDateTime::fromSecsSinceEpoch(
+								edited->date);
+							const auto editLocalTime = editUTCTime.toLocalTime();
+							QString editedTranslation = tr::lng_edited(tr::now);
+
+							editedTranslation = editedTranslation.toUpper().left(1)
+								+ editedTranslation.mid(1);
+
+							const QString tooltipText = editedTranslation + ", "
+								+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
+								+ editLocalTime.time().toString("HH:mm:ss");
+
+							result.customTooltip = true;
+							result.customTooltipText = tooltipText;
+						}
+					}
+				}
+			}
+			// ===================================================================
+			// END: New tooltip logic for Column album items.
+			// ===================================================================
+
 			if (result.itemId
 				&& _mode == Mode::Grid
 				&& GetEnhancedBool("caption_from_file_name")
@@ -879,9 +993,8 @@ TextState GroupedMedia::getPartState(
 	if (!_parts.empty() && needInfoDisplay()) {
 		const auto firstPart = &_parts.front();
 		const auto groupPadding = groupedPadding();
-		const auto firstItemGeometry = firstPart->geometry.translated(0, groupPadding.top()); // Use translated geometry
-		
-		// Build tooltip content for comprehensive bubble
+		const auto firstItemGeometry = firstPart->geometry.translated(0, groupPadding.top());
+
 		QString infoText;
 		if (const auto views = firstPart->item->Get<HistoryMessageViews>()) {
 			if (views->views.count >= 0) {
@@ -901,7 +1014,6 @@ TextState GroupedMedia::getPartState(
 		const auto textHeight = st::msgDateFont->height;
 		const auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
 		const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
-		// Position the tooltip rectangle inside the item like the comprehensive bubble
 		const auto dateX = (dateW > firstItemGeometry.width()) ? firstItemGeometry.x() : (firstItemGeometry.x() + firstItemGeometry.width() - dateW);
 		const auto dateY = firstItemGeometry.y();
 		const auto infoRect = QRect(dateX, dateY, dateW, dateH);
@@ -909,13 +1021,11 @@ TextState GroupedMedia::getPartState(
 		if (infoRect.contains(point)) {
 			const auto item = firstPart->item;
 			const auto dateTime = ItemDateTime(item);
-			// Format the date and time as requested: "sambata, 20 septembrie 2025 09:39:42"
-			const auto dayName = QLocale().toString(dateTime.date(), "dddd"); // Full day name
-			const auto formattedDate = QLocale().toString(dateTime.date(), "d MMMM yyyy"); // Day month year
-			const auto formattedTime = QLocale().toString(dateTime.time(), "hh:mm:ss"); // Time
+			const auto dayName = QLocale().toString(dateTime.date(), "dddd");
+			const auto formattedDate = QLocale().toString(dateTime.date(), "d MMMM yyyy");
+			const auto formattedTime = QLocale().toString(dateTime.time(), "hh:mm:ss");
 			const auto line1 = dayName + ", " + formattedDate + " " + formattedTime;
-			// Since the msg ID is always displayed in the bubble, we omit it from the tooltip
-			// as requested to only show date/time in tooltip
+
 			auto result = TextState(item);
 			result.customTooltip = true;
 			result.customTooltipText = line1;
