@@ -96,9 +96,9 @@ void GroupedMedia::drawMessageIdInfo(
 
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
+	const auto stm = context.messageStyle();
 	p.setFont(st::msgDateFont);
-	// FIX 1: Use the correct style object (messageStyle) for the foreground color.
-	p.setPen(context.messageStyle()->mediaFg);
+	p.setPen(stm->mediaFg);
 
 	auto textWidth = st::msgDateFont->width(infoText);
 	const auto textHeight = st::msgDateFont->height;
@@ -130,8 +130,8 @@ void GroupedMedia::drawMessageIdInfo(
 		: (itemGeometry.x() + itemGeometry.width() - dateW);
 	const auto bubbleY = itemGeometry.y();
 
-	// FIX 2: Convert style::color to QColor by simple assignment.
-	const QColor originalColor = sti->msgDateImgBg;
+	// FINAL VERIFIED FIX: Use the overloaded -> operator on the style::color object.
+	const auto originalColor = (sti->msgDateImgBg)->c;
 	auto modifiedQColor = QColor(
 		originalColor.red(),
 		originalColor.green(),
@@ -562,6 +562,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	auto fullRect = QRect();
 	const auto subpartHighlight = IsSubGroupSelection(highlight);
 	const auto st = context.st;
+	const auto stm = context.messageStyle();
 
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
@@ -622,7 +623,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			if (!infoText.isEmpty()) {
 				p.setFont(st::msgDateFont);
-				p.setPen(context.messageStyle()->msgDateFg);
+				p.setPen(stm->msgDateFg);
 
 				const auto itemRect = part.geometry.translated(
 					0,
@@ -714,9 +715,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				groupPadding.top());
 
 			const auto sti = context.imageStyle();
-			const auto stm = context.messageStyle();
 			p.setFont(st::msgDateFont);
-			// FIX 1: Use the correct style object (messageStyle) for the foreground color.
 			p.setPen(stm->mediaFg);
 
 			QString infoText;
@@ -779,8 +778,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto bubbleX = firstItemGeometry.x() + firstItemGeometry.width() - dateW;
 				const auto bubbleY = firstItemGeometry.y();
 
-				// FIX 2: Convert style::color to QColor by simple assignment.
-				const QColor originalColor = sti->msgDateImgBg;
+				// FINAL VERIFIED FIX: Use the overloaded -> operator on the style::color object.
+				const auto originalColor = (sti->msgDateImgBg)->c;
 				auto modifiedQColor = QColor(
 					originalColor.red(),
 					originalColor.green(),
@@ -804,7 +803,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				if (hasViews) {
 					const auto &icon = stm->historyViewsIcon;
 					const auto iconTop = bubbleY + (dateH - icon.height()) / 2;
-					// FIX 1: Use the correct style object (messageStyle) for the foreground color.
 					p.setPen(stm->mediaFg);
 					icon.paint(p, currentX, iconTop, dateW);
 					currentX += icon.width() + (st::historyViewsSpace / 4);
