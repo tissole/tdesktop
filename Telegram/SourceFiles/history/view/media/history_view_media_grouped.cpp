@@ -70,13 +70,15 @@ void GroupedMedia::drawMessageIdInfo(
 		const PaintContext &context,
 		const QRect &itemGeometry,
 		not_null<HistoryItem*> item) const {
-	// Build the info string first.
+	// Build the info string based on the new logic.
 	QString infoText;
 	const auto edited = item->Get<HistoryMessageEdited>();
+	// The "edited" icon is always added if the item was edited, regardless of settings.
 	if (edited && !item->hideEditedBadge()) {
 		infoText += QString::fromUtf8("✏️");
 	}
 
+	// The message ID is added only if the setting is enabled.
 	if (GetEnhancedBool("show_messages_id")) {
 		const auto msgId = item->fullId().msg;
 		if (msgId > 0) {
@@ -87,6 +89,7 @@ void GroupedMedia::drawMessageIdInfo(
 		}
 	}
 
+	// If the string is empty (not edited AND IDs are off), draw nothing.
 	if (infoText.isEmpty()) {
 		return;
 	}
@@ -94,7 +97,7 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
 	p.setFont(st::msgDateFont);
-	p.setPen(st->msgDateImgFg); // FIX: Removed parentheses. It's a member, not a function.
+	p.setPen(sti->msgDateImgFg);
 
 	auto textWidth = st::msgDateFont->width(infoText);
 	const auto textHeight = st::msgDateFont->height;
@@ -595,15 +598,16 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 
+		// NEW LOGIC FOR COLUMN MODE
 		if (_mode == Mode::Column) {
 			QString infoText;
 			const auto item = part.item;
-
 			const auto edited = item->Get<HistoryMessageEdited>();
+			// "Edited" icon is independent of the setting.
 			if (edited && !item->hideEditedBadge()) {
 				infoText += QString::fromUtf8("✏️");
 			}
-
+			// Message ID is controlled by the setting.
 			if (GetEnhancedBool("show_messages_id")) {
 				const auto msgId = item->fullId().msg;
 				if (msgId > 0) {
@@ -623,25 +627,23 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					groupPadding.top());
 				const auto textWidth = st::msgDateFont->width(infoText);
 				const auto &padding = st::msgFileLayout.padding;
-
 				const auto y = itemRect.y()
 					+ itemRect.height()
 					- padding.bottom()
 					- st::msgDateFont->ascent;
-
 				const auto x = itemRect.x()
 					+ itemRect.width()
 					- padding.right()
 					- textWidth;
-
 				p.drawText(x, y, infoText);
 			}
 		}
 
-		if (_mode == Mode::Grid && GetEnhancedBool("show_messages_id")) {
-			if (&part != &_parts.front()) {
-				drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
-			}
+		// NEW LOGIC FOR GRID MODE (ITEMS 2..N)
+		// We no longer check the setting here. The helper function `drawMessageIdInfo`
+		// will do nothing if there's nothing to draw (not edited AND IDs are off).
+		if (_mode == Mode::Grid && &part != &_parts.front()) {
+			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
 		}
 
 		if ((_mode == Mode::Grid) &&
@@ -664,14 +666,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			if (!textToDraw.isEmpty() && part._captionHeight > 0) {
 				Ui::Text::String caption(st::messageTextStyle, { textToDraw });
-
 				auto captionRect = QRect(
 					mediaGeometry.left(),
 					mediaGeometry.bottom() + 1,
 					mediaGeometry.width(),
 					part._captionHeight
 				);
-
 				p.setPen(Qt::black);
 				const auto padding = QMargins(8, 0, 8, 0);
 				caption.draw(p,
@@ -714,7 +714,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto sti = context.imageStyle();
 			const auto stm = context.messageStyle();
 			p.setFont(st::msgDateFont);
-			p.setPen(sti->msgDateImgFg); // Corrected this line
+			p.setPen(sti->msgDateImgFg);
 
 			QString infoText;
 			bool hasViews = false;
@@ -730,54 +730,51 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				ItemDateTime(firstPart->item).time(),
 				QLocale::ShortFormat);
 
+			// NEW LOGIC FOR MAIN BUBBLE (FIRST ITEM)
+			// Message ID is now added conditionally, independent of other info.
+			infoText = dateText;
 			if (GetEnhancedBool("show_messages_id")) {
 				const auto msgId = firstPart->item->fullId().msg;
 				if (msgId > 0) {
-					infoText = dateText + " " + QString::number(msgId.bare);
-				} else {
-					infoText = dateText;
+					infoText += " " + QString::number(msgId.bare);
 				}
-			} else {
-				infoText = dateText;
 			}
-
-				QString editedText;
-				// CHANGED: Check ONLY the first item for its edited status.
-				const auto edited = firstPart->item->Get<HistoryMessageEdited>();
-				if (edited && !firstPart->item->hideEditedBadge()) {
-					editedText = QString::fromUtf8("✏️"); // CHANGED: Use icon.
-				}
+			
+			// "Edited" icon is independent of the setting.
+			QString editedText;
+			const auto edited = firstPart->item->Get<HistoryMessageEdited>();
+			if (edited && !firstPart->item->hideEditedBadge()) {
+				editedText = QString::fromUtf8("✏️");
+			}
+			
+			const auto viewsText = hasViews ? (QString::number(viewsCount) + " ") : QString();
+			const auto viewsWidth = hasViews ? st::msgDateFont->width(viewsText) : 0;
+			const auto iconWidth = hasViews ? stm->historyViewsIcon.width() : 0;
+			const auto editedWidth = !editedText.isEmpty() ? st::msgDateFont->width(editedText) : 0;
+			const auto editedSpace = !editedText.isEmpty() ? (st::historyViewsSpace / 2) : 0;
+			const auto minimalSpace = (st::historyViewsSpace / 4);
+			const auto doubleSpace = (st::historyViewsSpace / 2);
+			
+			auto textWidth = st::msgDateFont->width(infoText);
+			if (hasViews) {
+				textWidth = iconWidth + minimalSpace +
+							viewsWidth + editedSpace + editedWidth;
 				
-				const auto viewsText = hasViews ? (QString::number(viewsCount) + " ") : QString();
-				const auto viewsWidth = hasViews ? st::msgDateFont->width(viewsText) : 0;
-				const auto iconWidth = hasViews ? stm->historyViewsIcon.width() : 0;
-				const auto editedWidth = !editedText.isEmpty() ? st::msgDateFont->width(editedText) : 0;
-				const auto editedSpace = !editedText.isEmpty() ? (st::historyViewsSpace / 2) : 0;
-				const auto minimalSpace = (st::historyViewsSpace / 4);
-				const auto doubleSpace = (st::historyViewsSpace / 2);
-				
-				auto textWidth = st::msgDateFont->width(infoText);
-				if (hasViews) {
-					textWidth = iconWidth + minimalSpace +
-								viewsWidth + editedSpace + editedWidth;
-					
-					if (GetEnhancedBool("show_messages_id") && infoText.contains(' ')) {
-						const auto lastSpacePos = infoText.lastIndexOf(' ');
-						const auto timeText = infoText.left(lastSpacePos);
-						const auto msgIdText = infoText.mid(lastSpacePos + 1);
-						textWidth += doubleSpace +
-									 st::msgDateFont->width(timeText) +
-									 doubleSpace +
-									 st::msgDateFont->width(msgIdText);
-					} else {
-						textWidth += doubleSpace +
-									 st::msgDateFont->width(infoText);
+				// Re-add date and optional ID width
+				auto timeAndIdText = dateText;
+				if (GetEnhancedBool("show_messages_id")) {
+					const auto msgId = firstPart->item->fullId().msg;
+					if (msgId > 0) {
+						timeAndIdText += " " + QString::number(msgId.bare);
 					}
 				}
+				textWidth += doubleSpace + st::msgDateFont->width(timeAndIdText);
 
-				const auto textHeight = st::msgDateFont->height;
-				auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-				const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
+			}
+
+			const auto textHeight = st::msgDateFont->height;
+			auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
+			const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
 
 			if (dateW <= firstItemGeometry.width()) {
 				const auto bubbleX = firstItemGeometry.x() + firstItemGeometry.width() - dateW;
@@ -807,7 +804,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				if (hasViews) {
 					const auto &icon = stm->historyViewsIcon;
 					const auto iconTop = bubbleY + (dateH - icon.height()) / 2;
-					p.setPen(sti->msgDateImgFg); // Corrected this line as well
+					p.setPen(sti->msgDateImgFg);
 					icon.paint(p, currentX, iconTop, dateW);
 					currentX += icon.width() + (st::historyViewsSpace / 4);
 					p.drawText(currentX, currentY, viewsText);
@@ -822,17 +819,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					currentX += (st::historyViewsSpace / 2);
 				}
 				
-				if (GetEnhancedBool("show_messages_id") && infoText.contains(' ')) {
-					const auto lastSpacePos = infoText.lastIndexOf(' ');
-					const auto timeText = infoText.left(lastSpacePos);
-					const auto msgIdText = infoText.mid(lastSpacePos + 1);
-					
-					p.drawText(currentX, currentY, timeText);
-					currentX += st::msgDateFont->width(timeText) + (st::historyViewsSpace / 2);
-					p.drawText(currentX, currentY, msgIdText);
-				} else {
-					p.drawText(currentX, currentY, infoText);
-				}
+				p.drawText(currentX, currentY, infoText);
 				p.setFont(font);
 			}
 		}
