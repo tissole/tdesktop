@@ -94,14 +94,13 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
 	p.setFont(st::msgDateFont);
-	p.setPen(st->msgDateImgFg());
+	p.setPen(st->msgDateImgFg); // FIX: Removed parentheses. It's a member, not a function.
 
 	auto textWidth = st::msgDateFont->width(infoText);
 	const auto textHeight = st::msgDateFont->height;
 	
-	// CORRECTED PADDING:
-	const auto horizontalPadding = 2; // 2px on left and right, as requested.
-	const auto verticalPadding = 2;   // 2px total, for 1px on top and bottom (untouched).
+	const auto horizontalPadding = 2;
+	const auto verticalPadding = 2;
 
 	auto dateW = textWidth + (2 * horizontalPadding);
 	const auto dateH = textHeight + verticalPadding;
@@ -127,7 +126,7 @@ void GroupedMedia::drawMessageIdInfo(
 		: (itemGeometry.x() + itemGeometry.width() - dateW);
 	const auto bubbleY = itemGeometry.y();
 
-	auto originalColor = sti->msgDateImgBg->c;
+	auto originalColor = sti->msgDateImgBg.c;
 	auto modifiedQColor = QColor(
 		originalColor.red(),
 		originalColor.green(),
@@ -557,7 +556,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	const auto tagged = lookupSpoilerTagMedia();
 	auto fullRect = QRect();
 	const auto subpartHighlight = IsSubGroupSelection(highlight);
-	const auto st = context.st; // Declaration moved to the top.
+	const auto st = context.st;
 
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
@@ -617,7 +616,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			if (!infoText.isEmpty()) {
 				p.setFont(st::msgDateFont);
-				p.setPen(st->msgDateFg()); // Corrected this line.
+				p.setPen(context.messageStyle()->msgDateFg);
 
 				const auto itemRect = part.geometry.translated(
 					0,
@@ -712,11 +711,10 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				0,
 				groupPadding.top());
 
-			// const auto st = context.st; // This is now at the top.
 			const auto sti = context.imageStyle();
 			const auto stm = context.messageStyle();
 			p.setFont(st::msgDateFont);
-			p.setPen(st->msgDateImgFg());
+			p.setPen(sti->msgDateImgFg); // Corrected this line
 
 			QString infoText;
 			bool hasViews = false;
@@ -785,7 +783,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto bubbleX = firstItemGeometry.x() + firstItemGeometry.width() - dateW;
 				const auto bubbleY = firstItemGeometry.y();
 
-				auto originalColor = sti->msgDateImgBg->c;
+				auto originalColor = sti->msgDateImgBg.c;
 				auto modifiedQColor = QColor(
 					originalColor.red(),
 					originalColor.green(),
@@ -805,15 +803,11 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				p.setFont(font->bold());
 				auto currentX = bubbleX + st::msgDateImgPadding.x();
 				const auto currentY = bubbleY + (dateH - textHeight) / 2 + font->ascent;
-
-				// NOTE: The second 'editedText' definition block is now redundant
-				// because we already defined it above for width calculation.
-				// We just use its value here.
 				
 				if (hasViews) {
 					const auto &icon = stm->historyViewsIcon;
 					const auto iconTop = bubbleY + (dateH - icon.height()) / 2;
-					p.setPen(st->msgDateImgFg());
+					p.setPen(sti->msgDateImgFg); // Corrected this line as well
 					icon.paint(p, currentX, iconTop, dateW);
 					currentX += icon.width() + (st::historyViewsSpace / 4);
 					p.drawText(currentX, currentY, viewsText);
