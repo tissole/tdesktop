@@ -97,7 +97,8 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
 	p.setFont(st::msgDateFont);
-	p.setPen(sti->mediaFg); // FIX 1: Renamed msgDateImgFg to mediaFg
+	// FIX 1: Use the correct style object (messageStyle) for the foreground color.
+	p.setPen(context.messageStyle()->mediaFg);
 
 	auto textWidth = st::msgDateFont->width(infoText);
 	const auto textHeight = st::msgDateFont->height;
@@ -129,7 +130,8 @@ void GroupedMedia::drawMessageIdInfo(
 		: (itemGeometry.x() + itemGeometry.width() - dateW);
 	const auto bubbleY = itemGeometry.y();
 
-	const auto originalColor = sti->msgDateImgBg.color(); // FIX 2: Changed .c to .color()
+	// FIX 2: Convert style::color to QColor by simple assignment.
+	const QColor originalColor = sti->msgDateImgBg;
 	auto modifiedQColor = QColor(
 		originalColor.red(),
 		originalColor.green(),
@@ -714,7 +716,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto sti = context.imageStyle();
 			const auto stm = context.messageStyle();
 			p.setFont(st::msgDateFont);
-			p.setPen(sti->mediaFg); // FIX 1: Renamed msgDateImgFg to mediaFg
+			// FIX 1: Use the correct style object (messageStyle) for the foreground color.
+			p.setPen(stm->mediaFg);
 
 			QString infoText;
 			bool hasViews = false;
@@ -730,8 +733,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				ItemDateTime(firstPart->item).time(),
 				QLocale::ShortFormat);
 
-			// NEW LOGIC FOR MAIN BUBBLE (FIRST ITEM)
-			// Message ID is now added conditionally, independent of other info.
 			infoText = dateText;
 			if (GetEnhancedBool("show_messages_id")) {
 				const auto msgId = firstPart->item->fullId().msg;
@@ -740,7 +741,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				}
 			}
 			
-			// "Edited" icon is independent of the setting.
 			QString editedText;
 			const auto edited = firstPart->item->Get<HistoryMessageEdited>();
 			if (edited && !firstPart->item->hideEditedBadge()) {
@@ -760,7 +760,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				textWidth = iconWidth + minimalSpace +
 							viewsWidth + editedSpace + editedWidth;
 				
-				// Re-add date and optional ID width
 				auto timeAndIdText = dateText;
 				if (GetEnhancedBool("show_messages_id")) {
 					const auto msgId = firstPart->item->fullId().msg;
@@ -780,7 +779,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto bubbleX = firstItemGeometry.x() + firstItemGeometry.width() - dateW;
 				const auto bubbleY = firstItemGeometry.y();
 
-				const auto originalColor = sti->msgDateImgBg.color(); // FIX 2: Changed .c to .color()
+				// FIX 2: Convert style::color to QColor by simple assignment.
+				const QColor originalColor = sti->msgDateImgBg;
 				auto modifiedQColor = QColor(
 					originalColor.red(),
 					originalColor.green(),
@@ -804,7 +804,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				if (hasViews) {
 					const auto &icon = stm->historyViewsIcon;
 					const auto iconTop = bubbleY + (dateH - icon.height()) / 2;
-					p.setPen(sti->mediaFg); // FIX 1: Renamed msgDateImgFg to mediaFg
+					// FIX 1: Use the correct style object (messageStyle) for the foreground color.
+					p.setPen(stm->mediaFg);
 					icon.paint(p, currentX, iconTop, dateW);
 					currentX += icon.width() + (st::historyViewsSpace / 4);
 					p.drawText(currentX, currentY, viewsText);
