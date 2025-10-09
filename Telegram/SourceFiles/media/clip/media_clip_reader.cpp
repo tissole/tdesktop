@@ -979,37 +979,47 @@ Ui::PreparedFileInformation PrepareForSending(
 			result.isGifv = reader->isGifv();
 			result.isWebmSticker = reader->isWebmSticker();
 
-			// --- MODIFICATION START ---
+			bool thumbnailRendered = false;
 
-			// Define our desired thumbnail position (15 seconds).
+			// --- ATTEMPT 1: Try to get the frame at 15 seconds ---
 			constexpr crl::time kThumbnailPositionMs = 15000;
+			auto thumbnailPositionMs = (durationMs > kThumbnailPositionMs)
+				? kThumbnailPositionMs
+				: (durationMs / 2);
 
-			auto thumbnailPositionMs = kThumbnailPositionMs;
-			if (durationMs <= kThumbnailPositionMs) {
-				// Fallback for videos shorter than 15s: use the middle point.
-				thumbnailPositionMs = durationMs / 2;
-			}
-
-			// STEP 1: Seek to the calculated position in the video stream.
 			if (reader->inspectAt(thumbnailPositionMs)) {
-				// STEP 2: **THE CRITICAL FIX** - Now, actually read the frame data at this new position.
-				// The '-1' tells it to read the very next available frame.
-				auto readResult = reader->readFramesTill(-1, crl::now());
-				if (readResult == internal::ReaderImplementation::ReadResult::Success) {
-					// STEP 3: Now that the frame is safely decoded in memory, render it.
+				if (reader->readFramesTill(-1, crl::now()) == internal::ReaderImplementation::ReadResult::Success) {
 					auto index = 0;
 					auto hasAlpha = false;
 					if (reader->renderFrame(result.thumbnail, hasAlpha, index, QSize())) {
-						if (!result.thumbnail.isNull()) {  // Validate that the thumbnail was properly created
-							if (hasAlpha && !result.isWebmSticker) {
-								result.thumbnail = Images::Opaque(std::move(result.thumbnail));
-							}
-							result.duration = durationMs;
+						thumbnailRendered = !result.thumbnail.isNull();
+						if (thumbnailRendered && hasAlpha && !result.isWebmSticker) {
+							result.thumbnail = Images::Opaque(std::move(result.thumbnail));
 						}
 					}
 				}
 			}
-			// --- MODIFICATION END ---
+
+			// --- ATTEMPT 2 (FALLBACK): If the seek failed, get the first frame ---
+			if (!thumbnailRendered) {
+				// We need to re-initialize the reader to go back to the beginning.
+				reader = std::make_unique<internal::FFMpegReaderImplementation>(&localLocation, &localData);
+				if (reader->start(internal::ReaderImplementation::Mode::Inspecting, 0)) {
+					if (reader->readFramesTill(-1, crl::now()) == internal::ReaderImplementation::ReadResult::Success) {
+						auto index = 0;
+						auto hasAlpha = false;
+						if (reader->renderFrame(result.thumbnail, hasAlpha, index, QSize())) {
+							if (!result.thumbnail.isNull() && hasAlpha && !result.isWebmSticker) {
+								result.thumbnail = Images::Opaque(std::move(result.thumbnail));
+							}
+						}
+					}
+				}
+			}
+
+			if (!result.thumbnail.isNull()) {
+				result.duration = durationMs;
+			}
 
 			result.supportsStreaming = CheckStreamingSupport(
 				localLocation,
@@ -1017,10 +1027,6 @@ Ui::PreparedFileInformation PrepareForSending(
 		}
 	}
 	return { .media = result };
-}
-
-void Finish() {
-	Workers.clear();
 }
 
 Reader *const ReaderPointer::BadPointer = reinterpret_cast<Reader*>(1);
