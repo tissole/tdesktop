@@ -601,9 +601,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 
-		// --- START: MODIFIED LOGIC FOR COLUMN MODE ---
-		// We now draw info for all items EXCEPT the first and last, as the first gets the
-		// comprehensive bubble and the last has its info included in the standard bubble.
 		if (_mode == Mode::Column && &part != &_parts.front() && &part != &_parts.back()) {
 			QString infoText;
 			const auto item = part.item;
@@ -646,7 +643,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				p.drawText(x, y, infoText);
 			}
 		}
-		// --- END: MODIFIED LOGIC FOR COLUMN MODE ---
 
 		if (_mode == Mode::Grid && &part != &_parts.front()) {
 			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
@@ -654,7 +650,38 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 		if ((_mode == Mode::Grid) &&
 			part._captionHeight > 0) {
-			// ... (caption drawing logic remains the same) ...
+			const auto originalText = part.item->originalText();
+			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
+
+			QString textToDraw;
+			if (!originalText.empty()) {
+				Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+				const auto padding = QMargins(8, 0, 8, 0);
+				const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
+				if (fullCaption.maxWidth() > textWidth) {
+					QFontMetrics metrics(st::messageTextStyle.font);
+					textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
+				} else {
+					textToDraw = originalText.text;
+				}
+			}
+
+			if (!textToDraw.isEmpty() && part._captionHeight > 0) {
+				Ui::Text::String caption(st::messageTextStyle, { textToDraw });
+				auto captionRect = QRect(
+					mediaGeometry.left(),
+					mediaGeometry.bottom() + 1,
+					mediaGeometry.width(),
+					part._captionHeight
+				);
+				p.setPen(Qt::black);
+				const auto padding = QMargins(8, 0, 8, 0);
+				caption.draw(p,
+					captionRect.left() + padding.left(),
+					captionRect.top() + padding.top(),
+					captionRect.width() - padding.left() - padding.right(),
+					style::al_left);
+			}
 		}
 
 		if (!part.cache.isNull()) {
@@ -676,7 +703,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		drawPurchasedTag(p, fullRect, context);
 	}
 
-	// --- START: NEW COMPREHENSIVE BUBBLE LOGIC (GRID & COLUMN) ---
 	const bool isGridWithBubble = (_mode == Mode::Grid && _parent->media() == this && (!_parent->hasBubble() || isBubbleBottom()));
 	const bool isColumnWithBubble = (_mode == Mode::Column);
 
@@ -688,13 +714,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 		const auto sti = context.imageStyle();
 		
-		// Use a slightly darker, less transparent color for better contrast.
-		const QColor textColor = stm->mediaFg->c;
-		const QColor darkerTextColor = QColor(textColor.red(), textColor.green(), textColor.blue(), 220);
+		// ------------------- FIX 1: USE THE CORRECT, DARKER COLOR -------------------
+		// Use msgDateFg, which is designed for status text and is darker than mediaFg.
 		p.setFont(st::msgDateFont);
-		p.setPen(darkerTextColor);
+		p.setPen(stm->msgDateFg);
+		// -------------------------------------------------------------------------
 
-		// Build the full info string.
 		QString infoText;
 		bool hasViews = false;
 		int viewsCount = 0;
@@ -709,7 +734,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			ItemDateTime(firstPart->item).time(),
 			QLocale::ShortFormat);
 
-		// Edited icon - ONLY for the first item.
 		QString editedText;
 		const auto edited = firstPart->item->Get<HistoryMessageEdited>();
 		if (edited && !firstPart->item->hideEditedBadge()) {
@@ -718,7 +742,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		
 		const auto viewsText = hasViews ? (QString::number(viewsCount) + " ") : QString();
 
-		// Add time and optional ID.
 		infoText = dateText;
 		if (GetEnhancedBool("show_messages_id")) {
 			const auto msgId = firstPart->item->fullId().msg;
@@ -727,7 +750,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			}
 		}
 
-		// Calculate total width.
 		const auto viewsWidth = hasViews ? st::msgDateFont->width(viewsText) : 0;
 		const auto iconWidth = hasViews ? stm->historyViewsIcon.width() : 0;
 		const auto editedWidth = !editedText.isEmpty() ? st::msgDateFont->width(editedText) : 0;
@@ -746,7 +768,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		if (hasViews && !editedText.isEmpty()) {
 			totalWidth += editedSpace;
 		}
-		if (totalWidth > 0) { // Add space before time if there was other info
+		if (totalWidth > 0) {
 			totalWidth += doubleSpace;
 		}
 		totalWidth += timeAndIdWidth;
@@ -781,13 +803,13 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto currentY = bubbleY + (dateH - textHeight) / 2 + font->ascent;
 			
 			if (hasViews) {
-				const auto &icon = stm->historyViewsIcon;
+				// --- FIX 2: USE A COLORIZED VERSION OF THE ICON ---
+				// This creates a version of the icon tinted with the same darker color as the text.
+				const auto &icon = stm->historyViewsIcon.c_colored(stm->msgDateFg);
+				// ---------------------------------------------------
 				const auto iconTop = bubbleY + (dateH - icon.height()) / 2;
-
-				// Create a painter to apply opacity mask for a darker icon
-				QPainter iconPainter(&p.device()->paintEngine()->paintDevice());
-				iconPainter.setOpacity(0.85); // Make icon slightly darker/less transparent
-				icon.paint(iconPainter, currentX, iconTop, dateW);
+				
+				icon.paint(p, currentX, iconTop, dateW);
 				
 				currentX += icon.width() + minimalSpace;
 				p.drawText(currentX, currentY, viewsText);
@@ -820,7 +842,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			}
 		}
 	}
-	// --- END: NEW COMPREHENSIVE BUBBLE LOGIC ---
 }
 
 TextState GroupedMedia::getPartState(
