@@ -1004,7 +1004,11 @@ Ui::PreparedFileInformation PrepareForSending(
 			if (!thumbnailRendered) {
 				// We need to re-initialize the reader to go back to the beginning.
 				reader = std::make_unique<internal::FFMpegReaderImplementation>(&localLocation, &localData);
-				if (reader->start(internal::ReaderImplementation::Mode::Inspecting, 0)) {
+				
+				// --- THIS IS THE FIX ---
+				// Create a variable for the position and pass it by reference.
+				auto fallbackPositionMs = crl::time(0);
+				if (reader->start(internal::ReaderImplementation::Mode::Inspecting, fallbackPositionMs)) {
 					if (reader->readFramesTill(-1, crl::now()) == internal::ReaderImplementation::ReadResult::Success) {
 						auto index = 0;
 						auto hasAlpha = false;
