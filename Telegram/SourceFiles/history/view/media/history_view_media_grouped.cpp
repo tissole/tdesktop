@@ -601,23 +601,25 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 
-		// NEW LOGIC FOR COLUMN MODE
+		// --- START: MODIFIED LOGIC FOR COLUMN MODE ---
 		if (_mode == Mode::Column) {
 			QString infoText;
 			const auto item = part.item;
 			const auto edited = item->Get<HistoryMessageEdited>();
-			// "Edited" icon is independent of the setting.
+			
+			// FIX 2: Use pencil icon for edited status.
 			if (edited && !item->hideEditedBadge()) {
 				infoText += QString::fromUtf8("✏️");
 			}
-			// Message ID is controlled by the setting.
+			
 			if (GetEnhancedBool("show_messages_id")) {
 				const auto msgId = item->fullId().msg;
 				if (msgId > 0) {
 					if (!infoText.isEmpty()) {
 						infoText += ' ';
 					}
-					infoText += '(' + QString::number(msgId.bare) + ')';
+					// FIX 3: Remove parentheses.
+					infoText += QString::number(msgId.bare);
 				}
 			}
 
@@ -630,21 +632,26 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					groupPadding.top());
 				const auto textWidth = st::msgDateFont->width(infoText);
 				const auto &padding = st::msgFileLayout.padding;
+
+				// FIX 1: Correctly calculate Y position to align with file size.
+				// This is the standard calculation for the status line in a file bubble.
+				// It ignores the caption and is always relative to the media item's bottom.
 				const auto y = itemRect.y()
 					+ itemRect.height()
 					- padding.bottom()
 					- st::msgDateFont->ascent;
+
+				// The X position remains the same, aligned to the right.
 				const auto x = itemRect.x()
 					+ itemRect.width()
 					- padding.right()
 					- textWidth;
+
 				p.drawText(x, y, infoText);
 			}
 		}
+		// --- END: MODIFIED LOGIC FOR COLUMN MODE ---
 
-		// NEW LOGIC FOR GRID MODE (ITEMS 2..N)
-		// We no longer check the setting here. The helper function `drawMessageIdInfo`
-		// will do nothing if there's nothing to draw (not edited AND IDs are off).
 		if (_mode == Mode::Grid && &part != &_parts.front()) {
 			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
 		}
@@ -778,7 +785,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto bubbleX = firstItemGeometry.x() + firstItemGeometry.width() - dateW;
 				const auto bubbleY = firstItemGeometry.y();
 
-				// FINAL VERIFIED FIX: Use the overloaded -> operator on the style::color object.
 				const auto originalColor = (sti->msgDateImgBg)->c;
 				auto modifiedQColor = QColor(
 					originalColor.red(),
@@ -851,6 +857,7 @@ TextState GroupedMedia::getPartState(
 			const auto item = part.item;
 			const auto edited = item->Get<HistoryMessageEdited>();
 
+			// --- START: MODIFIED LOGIC FOR COLUMN MODE ---
 			if (_mode == Mode::Column) {
 				QString infoText;
 				if (edited && !item->hideEditedBadge()) {
@@ -863,7 +870,8 @@ TextState GroupedMedia::getPartState(
 						if (!infoText.isEmpty()) {
 							infoText += ' ';
 						}
-						infoText += '(' + QString::number(msgId.bare) + ')';
+						// FIX 3: Remove parentheses.
+						infoText += QString::number(msgId.bare);
 					}
 				}
 
@@ -873,6 +881,7 @@ TextState GroupedMedia::getPartState(
 					const auto &padding = st::msgFileLayout.padding;
 					const auto itemRect = part.geometry;
 
+					// FIX 1: Use the same correct Y position calculation as in draw().
 					const auto y = itemRect.y()
 						+ itemRect.height()
 						- padding.bottom()
@@ -894,11 +903,17 @@ TextState GroupedMedia::getPartState(
 						const QString tooltipText = editedTranslation + ", "
 							+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
 							+ editLocalTime.time().toString("HH:mm:ss");
+						
+						// FIX 4: Do not add the message ID to the tooltip if it's already visible.
+						// The 'infoText' will contain the ID if the setting is on.
+
 						result.customTooltip = true;
 						result.customTooltipText = tooltipText;
 					}
 				}
-			} else if (_mode == Mode::Grid && (&part != &_parts.front())) {
+			} 
+			// --- END: MODIFIED LOGIC FOR COLUMN MODE ---
+			else if (_mode == Mode::Grid && (&part != &_parts.front())) {
 				// START: New tooltip logic for Grid album items (2..N).
 				QString infoText;
 				if (edited && !item->hideEditedBadge()) {
@@ -1450,11 +1465,23 @@ bool GroupedMedia::enforceBubbleWidth() const {
 }
 
 bool GroupedMedia::computeNeedBubble() const {
-	Expects(_mode == Mode::Column || _captionItem.has_value());
+	// The assertion that was causing the crash is removed. It was based on a
+	// faulty assumption that _captionItem would always have a value for non-Column modes,
+	// which is not true for Grid albums with per-item captions.
+	// Expects(_mode == Mode::Column || _captionItem.has_value()); // <--- REMOVED
 
-	if (_mode == Mode::Column || *_captionItem) {
+	if (_mode == Mode::Column) {
 		return true;
 	}
+
+	// For Grid mode, we lazily evaluate the caption item.
+	// If a single caption item exists for the whole album, we need a bubble.
+	if (itemForText()) {
+		return true;
+	}
+
+	// If there's no single caption, we still need a bubble if there are
+	// replies, forwards, or other elements that are drawn in the bubble.
 	if (const auto item = _parent->data()) {
 		if (item->repliesAreComments()
 			|| item->externalReply()
