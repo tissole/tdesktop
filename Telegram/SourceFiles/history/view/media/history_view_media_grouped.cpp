@@ -601,7 +601,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 
-		if (_mode == Mode::Column && &part != &_parts.front() && &part != &_parts.back()) {
+		// Draw individual info for items 2 to (N-1) in a Column.
+		if (_mode == Mode::Column && i > 0 && i < count - 1) {
 			QString infoText;
 			const auto item = part.item;
 			const auto edited = item->Get<HistoryMessageEdited>();
@@ -624,9 +625,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				p.setFont(st::msgDateFont);
 				p.setPen(stm->msgDateFg);
 
-				const auto itemRect = part.geometry.translated(
-					0,
-					groupPadding.top());
+				const auto itemRect = part.geometry.translated(0, groupPadding.top());
 				const auto textWidth = st::msgDateFont->width(infoText);
 				const auto &padding = st::msgFileLayout.padding;
 
@@ -644,46 +643,11 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			}
 		}
 
-		if (_mode == Mode::Grid && &part != &_parts.front()) {
+		// Draw individual info for items 2 to N in a Grid.
+		if (_mode == Mode::Grid && i > 0) {
 			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
 		}
-
-		if ((_mode == Mode::Grid) &&
-			part._captionHeight > 0) {
-			const auto originalText = part.item->originalText();
-			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
-
-			QString textToDraw;
-			if (!originalText.empty()) {
-				Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
-				const auto padding = QMargins(8, 0, 8, 0);
-				const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
-				if (fullCaption.maxWidth() > textWidth) {
-					QFontMetrics metrics(st::messageTextStyle.font);
-					textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
-				} else {
-					textToDraw = originalText.text;
-				}
-			}
-
-			if (!textToDraw.isEmpty() && part._captionHeight > 0) {
-				Ui::Text::String caption(st::messageTextStyle, { textToDraw });
-				auto captionRect = QRect(
-					mediaGeometry.left(),
-					mediaGeometry.bottom() + 1,
-					mediaGeometry.width(),
-					part._captionHeight
-				);
-				p.setPen(Qt::black);
-				const auto padding = QMargins(8, 0, 8, 0);
-				caption.draw(p,
-					captionRect.left() + padding.left(),
-					captionRect.top() + padding.top(),
-					captionRect.width() - padding.left() - padding.right(),
-					style::al_left);
-			}
-		}
-
+		
 		if (!part.cache.isNull()) {
 			nowCache = true;
 		}
@@ -703,133 +667,29 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		drawPurchasedTag(p, fullRect, context);
 	}
 
+	// --- FINAL CORRECTED DRAWING LOGIC ---
 	const bool isGridWithBubble = (_mode == Mode::Grid && _parent->media() == this && (!_parent->hasBubble() || isBubbleBottom()));
 	const bool isColumnWithBubble = (_mode == Mode::Column);
 
 	if ((isGridWithBubble || isColumnWithBubble) && !_parts.empty()) {
+		// For both Grid and Column, draw the main info bubble relative to the first item.
 		const auto firstPart = &_parts.front();
-		const auto firstItemGeometry = firstPart->geometry.translated(
-			0,
-			groupPadding.top());
+		const auto firstItemGeometry = firstPart->geometry.translated(0, groupPadding.top());
 
-		const auto sti = context.imageStyle();
+		// We use the parent's drawInfo method, which handles all colors, icons, and layout correctly.
+		// We just need to give it the correct coordinates.
+		const auto right = firstItemGeometry.x() + firstItemGeometry.width();
+		const auto bottom = firstItemGeometry.y() + firstItemGeometry.height();
 		
-		// ------------------- FIX 1: USE THE CORRECT, DARKER COLOR -------------------
-		// Use msgDateFg, which is designed for status text and is darker than mediaFg.
-		p.setFont(st::msgDateFont);
-		p.setPen(stm->msgDateFg);
-		// -------------------------------------------------------------------------
+		_parent->drawInfo(
+			p,
+			context,
+			right,
+			bottom,
+			firstItemGeometry.width(),
+			InfoDisplayType::Image,
+			firstPart->item); // Pass the specific item to draw info for.
 
-		QString infoText;
-		bool hasViews = false;
-		int viewsCount = 0;
-		if (const auto views = firstPart->item->Get<HistoryMessageViews>()) {
-			if (views->views.count >= 0) {
-				viewsCount = views->views.count;
-				hasViews = true;
-			}
-		}
-
-		const auto dateText = QLocale().toString(
-			ItemDateTime(firstPart->item).time(),
-			QLocale::ShortFormat);
-
-		QString editedText;
-		const auto edited = firstPart->item->Get<HistoryMessageEdited>();
-		if (edited && !firstPart->item->hideEditedBadge()) {
-			editedText = QString::fromUtf8("✏️");
-		}
-		
-		const auto viewsText = hasViews ? (QString::number(viewsCount) + " ") : QString();
-
-		infoText = dateText;
-		if (GetEnhancedBool("show_messages_id")) {
-			const auto msgId = firstPart->item->fullId().msg;
-			if (msgId > 0) {
-				infoText += " " + QString::number(msgId.bare);
-			}
-		}
-
-		const auto viewsWidth = hasViews ? st::msgDateFont->width(viewsText) : 0;
-		const auto iconWidth = hasViews ? stm->historyViewsIcon.width() : 0;
-		const auto editedWidth = !editedText.isEmpty() ? st::msgDateFont->width(editedText) : 0;
-		const auto editedSpace = !editedText.isEmpty() ? st::historyViewsSpace : 0;
-		const auto timeAndIdWidth = st::msgDateFont->width(infoText);
-		const auto minimalSpace = (st::historyViewsSpace / 4);
-		const auto doubleSpace = st::historyViewsSpace;
-
-		auto totalWidth = 0;
-		if (hasViews) {
-			totalWidth += iconWidth + minimalSpace + viewsWidth;
-		}
-		if (!editedText.isEmpty()) {
-			totalWidth += editedWidth;
-		}
-		if (hasViews && !editedText.isEmpty()) {
-			totalWidth += editedSpace;
-		}
-		if (totalWidth > 0) {
-			totalWidth += doubleSpace;
-		}
-		totalWidth += timeAndIdWidth;
-
-		const auto textHeight = st::msgDateFont->height;
-		auto dateW = totalWidth + 2 * st::msgDateImgPadding.x();
-		const auto dateH = textHeight + 2 * st::msgDateImgPadding.y();
-
-		if (dateW <= firstItemGeometry.width()) {
-			const auto bubbleX = firstItemGeometry.x() + firstItemGeometry.width() - dateW;
-			const auto bubbleY = firstItemGeometry.y();
-
-			const auto originalColor = (sti->msgDateImgBg)->c;
-			auto modifiedQColor = QColor(
-				originalColor.red(),
-				originalColor.green(),
-				originalColor.blue(),
-				160);
-			const auto bgColor = style::internal::OwnedColor(modifiedQColor);
-			Ui::FillRoundRect(
-				p,
-				bubbleX,
-				bubbleY,
-				dateW,
-				dateH,
-				bgColor.color(),
-				sti->msgDateImgBgCorners);
-
-			auto font = st::msgDateFont;
-			p.setFont(font->bold());
-			auto currentX = bubbleX + st::msgDateImgPadding.x();
-			const auto currentY = bubbleY + (dateH - textHeight) / 2 + font->ascent;
-			
-			if (hasViews) {
-				// --- FIX 2: USE A COLORIZED VERSION OF THE ICON ---
-				// This creates a version of the icon tinted with the same darker color as the text.
-				const auto &icon = stm->historyViewsIcon.c_colored(stm->msgDateFg);
-				// ---------------------------------------------------
-				const auto iconTop = bubbleY + (dateH - icon.height()) / 2;
-				
-				icon.paint(p, currentX, iconTop, dateW);
-				
-				currentX += icon.width() + minimalSpace;
-				p.drawText(currentX, currentY, viewsText);
-				currentX += viewsWidth;
-			}
-			
-			if (!editedText.isEmpty()) {
-				if (hasViews) currentX += editedSpace;
-				p.drawText(currentX, currentY, editedText);
-				currentX += editedWidth;
-			}
-			
-			if (hasViews || !editedText.isEmpty()) {
-				currentX += doubleSpace;
-			}
-
-			p.drawText(currentX, currentY, infoText);
-			p.setFont(font);
-		}
-		
 		if (isGridWithBubble) {
 			if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 				auto fullRight = width();
@@ -1057,63 +917,28 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 		}
 	}
 
-	// --- START: MODIFIED TOOLTIP LOGIC ---
 	const bool isGridWithBubble = (_mode == Mode::Grid && _parent->media() == this && (!_parent->hasBubble() || isBubbleBottom()));
 	const bool isColumnWithBubble = (_mode == Mode::Column);
 
 	if ((isGridWithBubble || isColumnWithBubble) && !_parts.empty()) {
-		// This block handles the comprehensive bubble for both Grid and Column modes.
 		const auto firstPart = &_parts.front();
-		const auto firstItemGeometry = firstPart->geometry.translated(
-			0,
-			groupPadding.top());
-		
-		// We need to calculate the bubble's rect again to hit-test it for the tooltip.
-		// This logic is duplicated from draw() but is necessary here.
-		const auto stm = context.messageStyle(); // Assume context is available or get it.
-		                                         // Let's rely on st:: for simplicity if context is not here.
-		QString infoTextForWidth;
-		bool hasViews = false;
-		if (const auto views = firstPart->item->Get<HistoryMessageViews>()) {
-			if (views->views.count >= 0) hasViews = true;
-		}
-		const auto dateText = QLocale().toString(ItemDateTime(firstPart->item).time(), QLocale::ShortFormat);
-		QString editedText;
-		if (const auto edited = firstPart->item->Get<HistoryMessageEdited>(); edited && !firstPart->item->hideEditedBadge()) {
-			editedText = " ";
-		}
-		if (hasViews) infoTextForWidth += "  "; // icon + views
-		if (!editedText.isEmpty()) infoTextForWidth += "  "; // icon
-		infoTextForWidth += dateText;
-		if (GetEnhancedBool("show_messages_id")) infoTextForWidth += " 1234567"; // Aproximate width
-		
-		auto textWidth = st::msgDateFont->width(infoTextForWidth) + st::historyViewsSpace * 2;
-		auto dateW = textWidth + 2 * st::msgDateImgPadding.x();
-		auto dateH = st::msgDateFont->height + 2 * st::msgDateImgPadding.y();
-		const auto bubbleX = firstItemGeometry.x() + firstItemGeometry.width() - dateW;
-		const auto bubbleY = firstItemGeometry.y();
-		const QRect bubbleRect(bubbleX, bubbleY, dateW, dateH);
+		const auto firstItemGeometry = firstPart->geometry.translated(0, groupPadding.top());
 
-		if (bubbleRect.contains(point)) {
-			const auto dateTime = ItemDateTime(firstPart->item);
-			QString tooltipText = dateTime.date().toString("dddd, dd MMMM yyyy") +
-				" " + dateTime.time().toString("HH:mm:ss");
-			
-			const auto edited = firstPart->item->Get<HistoryMessageEdited>();
-			if (edited && !firstPart->item->hideEditedBadge()) {
-				const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
-				const auto editLocalTime = editUTCTime.toLocalTime();
-				QString editedTranslation = tr::lng_edited(tr::now);
-				QString editTooltipText = editedTranslation.toUpper().left(1) + editedTranslation.mid(1) + ": " +
-					editLocalTime.date().toString("dddd, dd MMMM yyyy") +
-					" " + editLocalTime.time().toString("HH:mm:ss");
-				tooltipText += "\n" + editTooltipText;
-			}
-								
-			result.customTooltip = true;
-			result.customTooltipText = tooltipText;
-		}
+		const auto right = firstItemGeometry.x() + firstItemGeometry.width();
+		const auto bottom = firstItemGeometry.y() + firstItemGeometry.height();
 		
+		const auto bottomInfoResult = _parent->bottomInfoTextState(
+			right,
+			bottom,
+			point,
+			InfoDisplayType::Image,
+			firstPart->item); // Pass the specific item.
+		if (bottomInfoResult.link
+			|| bottomInfoResult.cursor != CursorState::None
+			|| bottomInfoResult.customTooltip) {
+			return bottomInfoResult;
+		}
+
 		if (isGridWithBubble) {
 			if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 				auto fullRight = width();
@@ -1129,7 +954,6 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			}
 		}
 	}
-	// --- END: MODIFIED TOOLTIP LOGIC ---
 	return result;
 }
 
