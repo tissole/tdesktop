@@ -70,35 +70,30 @@ void GroupedMedia::drawMessageIdInfo(
 		const PaintContext &context,
 		const QRect &itemGeometry,
 		not_null<HistoryItem*> item) const {
-	// Build the info string based on the new logic.
 	QString infoText;
 	const auto edited = item->Get<HistoryMessageEdited>();
-	// The "edited" icon is always added if the item was edited, regardless of settings.
 	if (edited && !item->hideEditedBadge()) {
 		infoText += QString::fromUtf8("✏️");
 	}
 
-	// The message ID is added only if the setting is enabled.
 	if (GetEnhancedBool("show_messages_id")) {
 		const auto msgId = item->fullId().msg;
 		if (msgId > 0) {
 			if (!infoText.isEmpty()) {
-				infoText += ' '; // Space between icon and ID.
+				infoText += ' ';
 			}
 			infoText += QString::number(msgId.bare);
 		}
 	}
 
-	// If the string is empty (not edited AND IDs are off), draw nothing.
 	if (infoText.isEmpty()) {
 		return;
 	}
 
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
-	const auto stm = context.messageStyle();
 	p.setFont(st::msgDateFont);
-	p.setPen(stm->mediaFg);
+	p.setPen(sti->msgServiceFg); // FIX #5: Use whiter color for grid bubbles.
 
 	auto textWidth = st::msgDateFont->width(infoText);
 	const auto textHeight = st::msgDateFont->height;
@@ -130,13 +125,13 @@ void GroupedMedia::drawMessageIdInfo(
 		: (itemGeometry.x() + itemGeometry.width() - dateW);
 	const auto bubbleY = itemGeometry.y();
 
-	// FINAL VERIFIED FIX: Use the overloaded -> operator on the style::color object.
 	const auto originalColor = (sti->msgDateImgBg)->c;
+	// FIX #6: Make the bubble more opaque (from 160 to 190).
 	auto modifiedQColor = QColor(
 		originalColor.red(),
 		originalColor.green(),
 		originalColor.blue(),
-		160);
+		190);
 	const auto bgColor = style::internal::OwnedColor(modifiedQColor);
 	Ui::FillRoundRect(
 		p,
@@ -601,8 +596,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 
-		// Draw individual info for items 2 to (N-1) in a Column.
-		if (_mode == Mode::Column && i > 0 && i < count - 1) {
+		if (_mode == Mode::Column && i > 0) {
+			// FIX #3 & #4: In Column mode, items 2..N get a simple info text, correctly aligned.
 			QString infoText;
 			const auto item = part.item;
 			const auto edited = item->Get<HistoryMessageEdited>();
@@ -641,11 +636,44 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				p.drawText(x, y, infoText);
 			}
+		} else if (_mode == Mode::Grid && i > 0) {
+			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
 		}
 
-		// Draw individual info for items 2 to N in a Grid.
-		if (_mode == Mode::Grid && i > 0) {
-			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
+		// FIX #8: Restore caption drawing for Grid mode.
+		if ((_mode == Mode::Grid) && part._captionHeight > 0) {
+			const auto originalText = part.item->originalText();
+			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
+
+			QString textToDraw;
+			if (!originalText.empty()) {
+				Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+				const auto padding = QMargins(8, 0, 8, 0);
+				const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
+				if (fullCaption.maxWidth() > textWidth) {
+					QFontMetrics metrics(st::messageTextStyle.font);
+					textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
+				} else {
+					textToDraw = originalText.text;
+				}
+			}
+
+			if (!textToDraw.isEmpty() && part._captionHeight > 0) {
+				Ui::Text::String caption(st::messageTextStyle, { textToDraw });
+				auto captionRect = QRect(
+					mediaGeometry.left(),
+					mediaGeometry.bottom() + 1,
+					mediaGeometry.width(),
+					part._captionHeight
+				);
+				p.setPen(Qt::black);
+				const auto padding = QMargins(8, 0, 8, 0);
+				caption.draw(p,
+					captionRect.left() + padding.left(),
+					captionRect.top() + padding.top(),
+					captionRect.width() - padding.left() - padding.right(),
+					style::al_left);
+			}
 		}
 		
 		if (!part.cache.isNull()) {
@@ -667,26 +695,28 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		drawPurchasedTag(p, fullRect, context);
 	}
 
-	const bool isGridWithBubble = (_mode == Mode::Grid && _parent->media() == this && (!_parent->hasBubble() || isBubbleBottom()));
-	const bool isColumnWithBubble = (_mode == Mode::Column);
-
-	if ((isGridWithBubble || isColumnWithBubble) && !_parts.empty()) {
+	// --- Comprehensive Bubble Logic ---
+	if ((_mode == Mode::Grid || _mode == Mode::Column) && !_parts.empty() && _parent->media() == this) {
 		const auto firstPart = &_parts.front();
 		const auto firstItemGeometry = firstPart->geometry.translated(0, groupPadding.top());
 
-		const auto right = firstItemGeometry.x() + firstItemGeometry.width();
-		const auto bottom = firstItemGeometry.y() + firstItemGeometry.height();
-		
-		// FIX: Removed the extra 'firstPart->item' argument.
-		_parent->drawInfo(
-			p,
-			context,
-			right,
-			bottom,
-			firstItemGeometry.width(),
-			InfoDisplayType::Image);
+		if (_mode == Mode::Grid && (!_parent->hasBubble() || isBubbleBottom())) {
+			// FIX #7 & #5: Grid bubble is top-right and whiter.
+			const auto right = firstItemGeometry.x() + firstItemGeometry.width();
+			const auto bottom = firstItemGeometry.y(); // Aligns to TOP-right.
+			
+			const auto oldPen = p.pen();
+			p.setPen(context.imageStyle()->msgServiceFg);
+			_parent->drawInfo(
+				p,
+				context,
+				right,
+				bottom,
+				firstItemGeometry.width(),
+				InfoDisplayType::Image,
+				firstPart->item);
+			p.setPen(oldPen);
 
-		if (isGridWithBubble) {
 			if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 				auto fullRight = width();
 				auto fullBottom = height();
@@ -696,6 +726,19 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
 				_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, width());
 			}
+		} else if (_mode == Mode::Column) {
+			// FIX #1 & #2: Column bubble is plain text on the first item.
+			const auto right = firstItemGeometry.x() + firstItemGeometry.width();
+			const auto bottom = firstItemGeometry.y() + firstItemGeometry.height();
+
+			_parent->drawInfo(
+				p,
+				context,
+				right,
+				bottom,
+				firstItemGeometry.width(),
+				InfoDisplayType::Default, // Plain text, no background.
+				firstPart->item);
 		}
 	}
 }
@@ -913,29 +956,26 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 		}
 	}
 
-	const bool isGridWithBubble = (_mode == Mode::Grid && _parent->media() == this && (!_parent->hasBubble() || isBubbleBottom()));
-	const bool isColumnWithBubble = (_mode == Mode::Column);
-
-	if ((isGridWithBubble || isColumnWithBubble) && !_parts.empty()) {
+	if ((_mode == Mode::Grid || _mode == Mode::Column) && !_parts.empty() && _parent->media() == this) {
 		const auto firstPart = &_parts.front();
 		const auto firstItemGeometry = firstPart->geometry.translated(0, groupPadding.top());
 
-		const auto right = firstItemGeometry.x() + firstItemGeometry.width();
-		const auto bottom = firstItemGeometry.y() + firstItemGeometry.height();
-		
-		// FIX: Removed the extra 'firstPart->item' argument.
-		const auto bottomInfoResult = _parent->bottomInfoTextState(
-			right,
-			bottom,
-			point,
-			InfoDisplayType::Image);
-		if (bottomInfoResult.link
-			|| bottomInfoResult.cursor != CursorState::None
-			|| bottomInfoResult.customTooltip) {
-			return bottomInfoResult;
-		}
+		if (_mode == Mode::Grid && (!_parent->hasBubble() || isBubbleBottom())) {
+			const auto right = firstItemGeometry.x() + firstItemGeometry.width();
+			const auto bottom = firstItemGeometry.y(); // Match top-right alignment.
 
-		if (isGridWithBubble) {
+			const auto bottomInfoResult = _parent->bottomInfoTextState(
+				right,
+				bottom,
+				point,
+				InfoDisplayType::Image,
+				firstPart->item);
+			if (bottomInfoResult.link
+				|| bottomInfoResult.cursor != CursorState::None
+				|| bottomInfoResult.customTooltip) {
+				return bottomInfoResult;
+			}
+
 			if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 				auto fullRight = width();
 				auto fullBottom = height();
@@ -947,6 +987,21 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 					result.link = _parent->rightActionLink(point
 						- QPoint(fastShareLeft, fastShareTop));
 				}
+			}
+		} else if (_mode == Mode::Column) {
+			const auto right = firstItemGeometry.x() + firstItemGeometry.width();
+			const auto bottom = firstItemGeometry.y() + firstItemGeometry.height();
+			
+			const auto bottomInfoResult = _parent->bottomInfoTextState(
+				right,
+				bottom,
+				point,
+				InfoDisplayType::Default,
+				firstPart->item);
+			if (bottomInfoResult.link
+				|| bottomInfoResult.cursor != CursorState::None
+				|| bottomInfoResult.customTooltip) {
+				return bottomInfoResult;
 			}
 		}
 	}
