@@ -35,28 +35,14 @@ AlbumThumbnail::AlbumThumbnail(
 	Fn<void()> deleteCallback)
 : _st(st)
 , _layout(layout)
-, _fullPreview([&file]() {
-	// Check if the video cover preview is available
-	if (file.videoCover && !file.videoCover->preview.isNull()) {
-		return file.videoCover->preview;
-	}
-	// Otherwise use file preview, but if that's null too, create a fallback
-	if (file.preview.isNull()) {
-		// Create a default/fallback preview image if no valid preview is available
-		QImage fallback(QSize(100, 100), QImage::Format_ARGB32);
-		fallback.fill(Qt::lightGray);
-		return fallback;
-	}
-	return file.preview;
-}())
+, _fullPreview(file.videoCover ? file.videoCover->preview : file.preview)
 , _shrinkSize(int(std::ceil(st::roundRadiusLarge / 1.4)))
 , _isPhoto(file.type == PreparedFile::Type::Photo)
 , _isVideo(file.type == PreparedFile::Type::Video)
 , _isCompressedSticker(Core::IsMimeSticker(file.information->filemime))
 , _repaint(std::move(repaint)) {
-	// The assertion has been removed since we now handle null previews gracefully
-	// Expects(!_fullPreview.isNull()); // This would crash if preview is null
-	
+	Expects(!_fullPreview.isNull());
+
 	moveToLayout(layout);
 
 	using Option = Images::Option;
