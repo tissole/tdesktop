@@ -393,7 +393,7 @@ void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
 			// NOW we know video->thumbnail is safe to use for the rest of the function.
 
 			// Create video cover from the thumbnail
-			if (!video->thumbnail.size().isEmpty()) { // No need for isNull() again
+			if (!video->thumbnail.isNull() && !video->thumbnail.size().isEmpty()) {
 				auto coverFile = std::make_unique<Ui::PreparedFile>(QString());
 				coverFile->type = PreparedFile::Type::Photo;
 				
@@ -405,11 +405,29 @@ void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
 				coverInfo->media = coverImageInfo;
 				
 				coverFile->information = std::move(coverInfo);
+				
+				// Set the preview, original dimensions, and shown dimensions for the cover
+				coverFile->preview = video->thumbnail;
+				coverFile->originalDimensions = video->thumbnail.size();
+				coverFile->shownDimensions = PrepareShownDimensions(video->thumbnail, sideLimit);
+				
 				file.videoCover = std::move(coverFile);
 			}
 			
-			auto blurred = Images::Blur(
-				Images::Opaque(base::duplicate(video->thumbnail)));
+			auto duplicatedThumbnail = base::duplicate(video->thumbnail);
+			if (duplicatedThumbnail.isNull()) {
+				// If thumbnail duplication fails, we cannot generate a preview.
+				file.type = PreparedFile::Type::None;
+				return;
+			}
+			
+			auto blurred = Images::Blur(Images::Opaque(std::move(duplicatedThumbnail)));
+			if (blurred.isNull()) {
+				// If blur operation fails, we cannot generate a preview.
+				file.type = PreparedFile::Type::None;
+				return;
+			}
+			
 			file.originalDimensions = video->thumbnail.size();
 			file.shownDimensions = PrepareShownDimensions(
 				video->thumbnail,
@@ -417,7 +435,13 @@ void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
 			file.preview = std::move(blurred).scaledToWidth(
 				previewWidth * style::DevicePixelRatio(),
 				Qt::SmoothTransformation);
-			Assert(!file.preview.isNull());
+				
+			if (file.preview.isNull()) {
+				// If scaling fails, we cannot generate a preview.
+				file.type = PreparedFile::Type::None;
+				return;
+			}
+			
 			file.preview.setDevicePixelRatio(style::DevicePixelRatio());
 			file.type = PreparedFile::Type::Video;
 		}
