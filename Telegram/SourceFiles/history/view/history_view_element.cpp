@@ -393,7 +393,14 @@ QString DateTooltipText(not_null<Element*> view) {
 		dateText += '\n' + tr::lng_you_paid_stars(tr::now, lt_count, stars);
 	}
 	if (const auto msgId = view->data()->fullId().msg) {
-		dateText += '\n' + tr::lng_message_id(tr::now) + QString::number(msgId.bare);
+		const auto media = view->media();
+		const auto isGrouped = media
+			&& (dynamic_cast<const GroupedMedia*>(media) != nullptr);
+		if (!isGrouped) {
+			dateText += '\n'
+				+ tr::lng_message_id(tr::now)
+				+ QString::number(msgId.bare);
+		}
 	}
 	return dateText;
 }

@@ -93,7 +93,7 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
 	p.setFont(st::msgDateFont);
-	p.setPen(context.messageStyle()->mediaFg); // FIX #5: Use whiter color for grid bubbles.
+	p.setPen(st::white); // FIX #5: Use whiter color for grid bubbles.
 
 	auto textWidth = st::msgDateFont->width(infoText);
 	const auto textHeight = st::msgDateFont->height;
@@ -123,7 +123,7 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto bubbleX = (dateW > itemGeometry.width())
 		? itemGeometry.x()
 		: (itemGeometry.x() + itemGeometry.width() - dateW);
-	const auto bubbleY = itemGeometry.y();
+	const auto bubbleY = itemGeometry.y() + 1;
 
 	const auto originalColor = (sti->msgDateImgBg)->c;
 	// FIX #6: Make the bubble more opaque (from 160 to 190).
@@ -131,7 +131,7 @@ void GroupedMedia::drawMessageIdInfo(
 		originalColor.red(),
 		originalColor.green(),
 		originalColor.blue(),
-		190);
+		220);
 	const auto bgColor = style::internal::OwnedColor(modifiedQColor);
 	Ui::FillRoundRect(
 		p,
@@ -257,25 +257,13 @@ QSize GroupedMedia::countOptimalSize() {
 		: LayoutPlaylist(sizes);
 	Assert(layout.size() == _parts.size());
 
-	std::map<int, std::vector<int>> rows;
-	for (auto i = 0; i != _parts.size(); ++i) {
-		_parts[i].initialGeometry = layout[i].geometry;
-		_parts[i].sides = layout[i].sides;
-		rows[layout[i].geometry.y()].push_back(i);
-	}
-
-	auto y = 0.;
-	const auto spacing = (_mode == Mode::Grid) ? st::historyGroupSkip : 0.;
-	for (auto const& [rowY, indices] : rows) {
-		auto maxMediaHeight = 0.;
-		auto maxCaptionHeight = 0.;
-		for (const auto i : indices) {
+	// Calculate globalMaxCaptionHeight (new step)
+	float64 globalMaxCaptionHeight = 0.;
+	if (_mode == Mode::Grid) { // Only for grid mode
+		for (auto i = 0; i != _parts.size(); ++i) {
 			auto &part = _parts[i];
-			accumulate_max(maxMediaHeight, float64(part.initialGeometry.height()));
-			
 			const auto originalText = part.item->originalText();
-			if ((_mode == Mode::Grid) &&
-				!originalText.empty()) { // REMOVED GetEnhancedBool check
+			if (!originalText.empty()) {
 				Ui::Text::String caption(
 					st::messageTextStyle,
 					originalText,
@@ -290,9 +278,26 @@ QSize GroupedMedia::countOptimalSize() {
 			} else {
 				part._captionHeight = 0.;
 			}
-			accumulate_max(maxCaptionHeight, float64(part._captionHeight));
+			accumulate_max(globalMaxCaptionHeight, float64(part._captionHeight));
 		}
-		const auto rowHeight = maxMediaHeight + maxCaptionHeight;
+	}
+
+	std::map<int, std::vector<int>> rows;
+	for (auto i = 0; i != _parts.size(); ++i) {
+		_parts[i].initialGeometry = layout[i].geometry;
+		_parts[i].sides = layout[i].sides;
+		rows[layout[i].geometry.y()].push_back(i);
+	}
+
+	auto y = 0.;
+	const auto spacing = (_mode == Mode::Grid) ? st::historyGroupSkip : 0.;
+	for (auto const& [rowY, indices] : rows) {
+		auto maxMediaHeight = 0.;
+		for (const auto i : indices) {
+			auto &part = _parts[i];
+			accumulate_max(maxMediaHeight, float64(part.initialGeometry.height()));
+		}
+		const auto rowHeight = maxMediaHeight + globalMaxCaptionHeight;
 		for (const auto i : indices) {
 			_parts[i].initialGeometry.setY(y);
 			_parts[i].initialGeometry.setHeight(maxMediaHeight);
@@ -618,16 +623,14 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			if (!infoText.isEmpty()) {
 				p.setFont(st::msgDateFont);
-				p.setPen(stm->msgDateFg);
+				p.setPen(stm->msgServiceFg);
 
 				const auto itemRect = part.geometry.translated(0, groupPadding.top());
 				const auto textWidth = st::msgDateFont->width(infoText);
-				const auto &padding = st::msgFileLayout.padding;
-
-				const auto y = itemRect.y()
-					+ itemRect.height()
-					- padding.bottom()
-					- st::msgDateFont->ascent;
+				const auto &docStyle = st::msgFileLayoutGrouped;
+				const auto topMinus = st::msgFileTopMinus;
+				const auto statustop = docStyle.statusTop - topMinus;
+				const auto y = itemRect.y() + statustop + st::normalFont->ascent;
 
 				const auto x = itemRect.x()
 					+ itemRect.width()
@@ -701,20 +704,83 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		const auto firstItemGeometry = firstPart->geometry.translated(0, groupPadding.top());
 
 		if (_mode == Mode::Grid && (!_parent->hasBubble() || isBubbleBottom())) {
-			// FIX #7 & #5: Grid bubble is top-right and whiter.
-			const auto right = firstItemGeometry.x() + firstItemGeometry.width();
-			const auto bottom = firstItemGeometry.y(); // Aligns to TOP-right.
+			// --- 1. Gather data and prepare text parts ---
+			const auto item = firstPart->item;
+			const auto st = context.st;
+			const auto font = st::msgDateFont;
+			p.setFont(font);
+
+			const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+			const auto dateText = QLocale().toString(
+				ItemDateTime(item).time(),
+				GetEnhancedBool("show_seconds")
+					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+					: QLocale::system().timeFormat(QLocale::ShortFormat));
 			
-			const auto oldPen = p.pen();
-			p.setPen(context.messageStyle()->mediaFg);
-			_parent->drawInfo(
-				p,
-				context,
-				right,
-				bottom,
-				firstItemGeometry.width(),
-				InfoDisplayType::Image);
-			p.setPen(oldPen);
+			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+				? QString(" (%1)").arg(item->fullId().msg.bare)
+				: QString();
+
+			const auto views = item->Get<HistoryMessageViews>();
+			const auto viewsText = (views && views->views.count >= 0)
+				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+				: QString();
+
+			// --- 2. Calculate layout from right to left ---
+			int totalWidth = 0;
+			const int iconPadding = st::historyViewsSpace;
+			const int textPadding = font->spacew;
+
+			const int dateWidth = font->width(dateText + msgIdText);
+			totalWidth += dateWidth;
+
+			if (edited) {
+				const auto editedWidth = font->width(QString::fromUtf8("✏️") + " ");
+				totalWidth += editedWidth;
+			}
+
+			int viewsWidth = 0;
+			if (!viewsText.isEmpty()) {
+				viewsWidth = st::historyViewsWidth + iconPadding + font->width(viewsText);
+				totalWidth += textPadding + viewsWidth;
+			}
+
+			// --- 3. Draw bubble ---
+			const auto sti = context.imageStyle();
+			const auto textHeight = font->height;
+			const auto hPadding = st::msgDateImgPadding.x();
+			const auto vPadding = st::msgDateImgPadding.y();
+			const auto bubbleW = totalWidth + 2 * hPadding;
+			const auto bubbleH = textHeight + 2 * vPadding;
+
+			const auto bubbleX = firstItemGeometry.x() + firstItemGeometry.width() - bubbleW - st::msgDateImgDelta;
+			const auto bubbleY = firstItemGeometry.y() + st::msgDateImgDelta;
+
+			auto bgColor = sti->msgDateImgBg->c;
+			bgColor.setAlpha(220); // More opaque background.
+			Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, bgColor, sti->msgDateImgBgCorners);
+
+			// --- 4. Draw content ---
+			p.setPen(st::white); // Brighter text.
+			const int textBaseY = bubbleY + vPadding + font->ascent;
+			int currentRight = bubbleX + bubbleW - hPadding;
+
+			p.drawText(currentRight - dateWidth, textBaseY, dateText + msgIdText);
+			currentRight -= dateWidth;
+
+			if (edited) {
+				const auto editedText = QString::fromUtf8("✏️") + " ";
+				const auto editedWidth = font->width(editedText);
+				currentRight -= editedWidth;
+				p.drawText(currentRight, textBaseY, editedText);
+			}
+
+			if (!viewsText.isEmpty()) {
+				currentRight -= (textPadding + viewsWidth);
+				const auto &icon = st->historyViewsInvertedIcon();
+				icon.paint(p, currentRight, bubbleY + vPadding + st::historyViewsTop, width());
+				p.drawText(currentRight + st::historyViewsWidth + iconPadding, textBaseY, viewsText);
+			}
 
 			if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 				auto fullRight = width();
@@ -911,19 +977,7 @@ TextState GroupedMedia::getPartState(
 		const auto dateY = firstItemGeometry.y();
 		const auto infoRect = QRect(dateX, dateY, dateW, dateH);
 
-		if (infoRect.contains(point)) {
-			const auto item = firstPart->item;
-			const auto dateTime = ItemDateTime(item);
-			const auto dayName = QLocale().toString(dateTime.date(), "dddd");
-			const auto formattedDate = QLocale().toString(dateTime.date(), "d MMMM yyyy");
-			const auto formattedTime = QLocale().toString(dateTime.time(), "hh:mm:ss");
-			const auto line1 = dayName + ", " + formattedDate + " " + formattedTime;
 
-			auto result = TextState(item);
-			result.customTooltip = true;
-			result.customTooltipText = line1;
-			return result;
-		}
 	}
 
 	return TextState(_parent->data());
@@ -1258,6 +1312,18 @@ DocumentData *GroupedMedia::getDocument() const {
 }
 
 HistoryMessageEdited *GroupedMedia::displayedEditBadge() const {
+	if (_mode == Mode::Column) {
+		if (_parts.empty()) {
+			return nullptr;
+		}
+		const auto &part = _parts.front();
+		if (!part.item->hideEditedBadge()) {
+			if (const auto edited = part.item->Get<HistoryMessageEdited>()) {
+				return edited;
+			}
+		}
+		return nullptr;
+	}
 	for (const auto &part : _parts) {
 		if (!part.item->hideEditedBadge()) {
 			if (const auto edited = part.item->Get<HistoryMessageEdited>()) {

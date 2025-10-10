@@ -409,7 +409,7 @@ void BottomInfo::layout() {
 
 void BottomInfo::layoutDateText() {
 	const auto edited = (_data.flags & Data::Flag::Edited)
-		? (tr::lng_edited(tr::now) + ' ')
+		? (QString::fromUtf8("✏️") + ' ')
 		: (_data.flags & Data::Flag::EstimateDate)
 		? (tr::lng_approximate(tr::now) + ' ')
 		: QString();
@@ -634,7 +634,7 @@ BottomInfo::Data BottomInfoDataFromMessage(not_null<Message*> message) {
 	//}
 	if (GetEnhancedBool("show_messages_id")) {
 		if (item->fullId().msg > 0)
-			result.msgId = QString(" (%1)").arg(item->fullId().msg.bare);
+			result.msgId = QString(" %1").arg(item->fullId().msg.bare);
 	}
 	return result;
 }
