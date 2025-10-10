@@ -93,7 +93,7 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
 	p.setFont(st::msgDateFont);
-	p.setPen(st::white); // FIX #5: Use whiter color for grid bubbles.
+	p.setPen(sti->msgDateImgFg); // FIX #5: Use whiter color for grid bubbles.
 
 	auto textWidth = st::msgDateFont->width(infoText);
 	const auto textHeight = st::msgDateFont->height;
@@ -631,7 +631,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto topMinus = st::msgFileTopMinus;
 				const auto statustop = docStyle.statusTop - topMinus;
 				const auto y = itemRect.y() + statustop + st::normalFont->ascent;
-
+				const auto padding = QMargins(8, 0, 8, 0);	// Define padding variable
 				const auto x = itemRect.x()
 					+ itemRect.width()
 					- padding.right()
@@ -669,7 +669,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					mediaGeometry.width(),
 					part._captionHeight
 				);
-				p.setPen(Qt::black);
+				p.setPen(stm->msgInFg);
 				const auto padding = QMargins(8, 0, 8, 0);
 				caption.draw(p,
 					captionRect.left() + padding.left(),
@@ -758,10 +758,10 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			auto bgColor = sti->msgDateImgBg->c;
 			bgColor.setAlpha(220); // More opaque background.
-			Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, bgColor, sti->msgDateImgBgCorners);
+			Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, sti->msgDateImgBg, sti->msgDateImgBgCorners);
 
 			// --- 4. Draw content ---
-			p.setPen(st::white); // Brighter text.
+			p.setPen(sti->msgDateImgFg); // Brighter text.
 			const int textBaseY = bubbleY + vPadding + font->ascent;
 			int currentRight = bubbleX + bubbleW - hPadding;
 

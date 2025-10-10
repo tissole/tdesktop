@@ -693,24 +693,24 @@ bool FileLoadTask::CheckForVideo(
 			result->filemime = u"video/x-matroska"_q;
 		} else if (filepath.endsWith(u".webm"_q, Qt::CaseInsensitive)) {
 			result->filemime = u"video/mp4"_q;
-		} else if (filepath.endsWith(u".asf"_q, Qt::CaseInsensitive)) {
-			result->filemime = u"video/mp4"_q;
-		} else if (filepath.endsWith(u".asx"_q, Qt::CaseInsensitive)) {
-			result->filemime = u"video/mp4"_q;			
-		} else if (filepath.endsWith(u".avi"_q, Qt::CaseInsensitive)) {
-			result->filemime = u"video/mp4"_q;
-		} else if (filepath.endsWith(u".wmv"_q, Qt::CaseInsensitive)) {
-			result->filemime = u"video/mp4"_q;
-		} else if (filepath.endsWith(u".ts"_q, Qt::CaseInsensitive) ||
-					   filepath.endsWith(u".mts"_q, Qt::CaseInsensitive) ||
-					   filepath.endsWith(u".m2ts"_q, Qt::CaseInsensitive)) {
-			result->filemime = u"video/mp4"_q;
-		} else if (filepath.endsWith(u".flv"_q, Qt::CaseInsensitive)) {
-			result->filemime = u"video/mp4"_q;			
-		} else if (filepath.endsWith(u".m2v"_q, Qt::CaseInsensitive)) {
-			result->filemime = u"video/mp4"_q;
-		} else if (filepath.endsWith(u".vob"_q, Qt::CaseInsensitive)) {
-			result->filemime = u"video/mp4"_q;
+		//} else if (filepath.endsWith(u".asf"_q, Qt::CaseInsensitive)) {
+		//	result->filemime = u"video/mp4"_q;
+		//} else if (filepath.endsWith(u".asx"_q, Qt::CaseInsensitive)) {
+		//	result->filemime = u"video/mp4"_q;			
+		//} else if (filepath.endsWith(u".avi"_q, Qt::CaseInsensitive)) {
+		//	result->filemime = u"video/mp4"_q;
+		//} else if (filepath.endsWith(u".wmv"_q, Qt::CaseInsensitive)) {
+		//	result->filemime = u"video/mp4"_q;
+		//} else if (filepath.endsWith(u".ts"_q, Qt::CaseInsensitive) ||
+		//			   filepath.endsWith(u".mts"_q, Qt::CaseInsensitive) ||
+		//			   filepath.endsWith(u".m2ts"_q, Qt::CaseInsensitive)) {
+		//	result->filemime = u"video/mp4"_q;
+		//} else if (filepath.endsWith(u".flv"_q, Qt::CaseInsensitive)) {
+		//	result->filemime = u"video/mp4"_q;			
+		//} else if (filepath.endsWith(u".m2v"_q, Qt::CaseInsensitive)) {
+		//	result->filemime = u"video/mp4"_q;
+		//} else if (filepath.endsWith(u".vob"_q, Qt::CaseInsensitive)) {
+		//	result->filemime = u"video/mp4"_q;
 		}			
 	result->media = std::move(media);
 	return true;
