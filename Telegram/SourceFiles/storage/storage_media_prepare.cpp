@@ -407,7 +407,17 @@ void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
 				coverFile->information = std::move(coverInfo);
 				
 				// Set the preview, original dimensions, and shown dimensions for the cover
-				coverFile->preview = video->thumbnail;
+				// Use the same logic as the main video preview to ensure proper sizing
+				auto coverPreview = Images::Opaque(base::duplicate(video->thumbnail));
+				if (!coverPreview.isNull()) {
+					coverFile->preview = coverPreview.scaledToWidth(
+						previewWidth * style::DevicePixelRatio(),
+						Qt::SmoothTransformation);
+					if (!coverFile->preview.isNull()) {
+						coverFile->preview.setDevicePixelRatio(style::DevicePixelRatio());
+					}
+				}
+				
 				coverFile->originalDimensions = video->thumbnail.size();
 				coverFile->shownDimensions = PrepareShownDimensions(video->thumbnail, sideLimit);
 				
