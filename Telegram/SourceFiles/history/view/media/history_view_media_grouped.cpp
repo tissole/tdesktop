@@ -93,7 +93,7 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
 	p.setFont(st::msgDateFont);
-	p.setPen(sti->msgServiceFg); // FIX #5: Use whiter color for grid bubbles.
+	p.setPen(context.messageStyle()->mediaFg); // FIX #5: Use whiter color for grid bubbles.
 
 	auto textWidth = st::msgDateFont->width(infoText);
 	const auto textHeight = st::msgDateFont->height;
@@ -706,15 +706,14 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto bottom = firstItemGeometry.y(); // Aligns to TOP-right.
 			
 			const auto oldPen = p.pen();
-			p.setPen(context.imageStyle()->msgServiceFg);
+			p.setPen(context.messageStyle()->mediaFg);
 			_parent->drawInfo(
 				p,
 				context,
 				right,
 				bottom,
 				firstItemGeometry.width(),
-				InfoDisplayType::Image,
-				firstPart->item);
+				InfoDisplayType::Image);
 			p.setPen(oldPen);
 
 			if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
@@ -737,8 +736,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				right,
 				bottom,
 				firstItemGeometry.width(),
-				InfoDisplayType::Default, // Plain text, no background.
-				firstPart->item);
+				InfoDisplayType::Default); // Plain text, no background.
 		}
 	}
 }
@@ -968,8 +966,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 				right,
 				bottom,
 				point,
-				InfoDisplayType::Image,
-				firstPart->item);
+				InfoDisplayType::Image);
 			if (bottomInfoResult.link
 				|| bottomInfoResult.cursor != CursorState::None
 				|| bottomInfoResult.customTooltip) {
@@ -996,8 +993,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 				right,
 				bottom,
 				point,
-				InfoDisplayType::Default,
-				firstPart->item);
+				InfoDisplayType::Default);
 			if (bottomInfoResult.link
 				|| bottomInfoResult.cursor != CursorState::None
 				|| bottomInfoResult.customTooltip) {
