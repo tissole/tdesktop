@@ -667,28 +667,24 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		drawPurchasedTag(p, fullRect, context);
 	}
 
-	// --- FINAL CORRECTED DRAWING LOGIC ---
 	const bool isGridWithBubble = (_mode == Mode::Grid && _parent->media() == this && (!_parent->hasBubble() || isBubbleBottom()));
 	const bool isColumnWithBubble = (_mode == Mode::Column);
 
 	if ((isGridWithBubble || isColumnWithBubble) && !_parts.empty()) {
-		// For both Grid and Column, draw the main info bubble relative to the first item.
 		const auto firstPart = &_parts.front();
 		const auto firstItemGeometry = firstPart->geometry.translated(0, groupPadding.top());
 
-		// We use the parent's drawInfo method, which handles all colors, icons, and layout correctly.
-		// We just need to give it the correct coordinates.
 		const auto right = firstItemGeometry.x() + firstItemGeometry.width();
 		const auto bottom = firstItemGeometry.y() + firstItemGeometry.height();
 		
+		// FIX: Removed the extra 'firstPart->item' argument.
 		_parent->drawInfo(
 			p,
 			context,
 			right,
 			bottom,
 			firstItemGeometry.width(),
-			InfoDisplayType::Image,
-			firstPart->item); // Pass the specific item to draw info for.
+			InfoDisplayType::Image);
 
 		if (isGridWithBubble) {
 			if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
@@ -927,12 +923,12 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 		const auto right = firstItemGeometry.x() + firstItemGeometry.width();
 		const auto bottom = firstItemGeometry.y() + firstItemGeometry.height();
 		
+		// FIX: Removed the extra 'firstPart->item' argument.
 		const auto bottomInfoResult = _parent->bottomInfoTextState(
 			right,
 			bottom,
 			point,
-			InfoDisplayType::Image,
-			firstPart->item); // Pass the specific item.
+			InfoDisplayType::Image);
 		if (bottomInfoResult.link
 			|| bottomInfoResult.cursor != CursorState::None
 			|| bottomInfoResult.customTooltip) {
