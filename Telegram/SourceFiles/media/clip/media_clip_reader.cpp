@@ -1033,6 +1033,10 @@ Ui::PreparedFileInformation PrepareForSending(
 	return { .media = result };
 }
 
+void Finish() {
+	Workers.clear();
+}
+
 Reader *const ReaderPointer::BadPointer = reinterpret_cast<Reader*>(1);
 
 ReaderPointer::~ReaderPointer() {
