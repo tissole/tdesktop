@@ -619,9 +619,22 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			if (i == 0) {
 				// Custom drawing logic for the first item in a column.
 				// 1. Draw Status Icon (checks/clock)
-				if (const auto status = _parent->displayedState()) {
-					status->icon.paint(p, currentRight - status->width, y - st::msgDateFont->ascent, width());
-					currentRight -= status->width;
+				if (item->out()) {
+					const auto unread = _parent->delegate()->elementShownUnread(_parent);
+					const auto &icon = (item->isSending() || item->hasFailed())
+						? (context.outbg
+							? st->historySendingInvertedIcon()
+							: st->historySendingIcon())
+						: unread
+						? (context.outbg
+							? st->historySentInvertedIcon()
+							: stm->historySentIcon)
+						: (context.outbg
+							? st->historyReceivedInvertedIcon()
+							: stm->historyReceivedIcon);
+					const auto statusWidth = icon.width() + st::msgDateSpace;
+					icon.paint(p, currentRight - statusWidth, y - st::msgDateFont->ascent + st::historySendStatePosition.y(), width());
+					currentRight -= statusWidth;
 				}
 
 				// 2. Draw Timestamp
@@ -818,7 +831,8 @@ TextState GroupedMedia::getPartState(
 		QPoint point,
 		StateRequest request) const {
 	auto shift = 0;
-	for (const auto &part : _parts) {
+	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
+		const auto &part = _parts[i];
 		const auto isInside = part.geometry.contains(point)
 			|| (!part.captionRect.isEmpty() && part.captionRect.contains(point));
 		if (isInside) {
