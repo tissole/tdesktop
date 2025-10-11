@@ -3499,7 +3499,7 @@ void Message::drawInfo(
 	case InfoDisplayType::Default:
 		infoRight -= st::msgPadding.right() - st::msgDateDelta.x();
 		infoBottom -= st::msgPadding.bottom() - st::msgDateDelta.y();
-		p.setPen(stm->historyFileNameFg);
+		p.setPen(stm->msgDateFg);
 	break;
 	case InfoDisplayType::Image:
 		infoRight -= st::msgDateImgDelta + st::msgDateImgPadding.x();
