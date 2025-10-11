@@ -121,9 +121,8 @@ void GroupedMedia::drawMessageIdInfo(
 		}
 	}
 
-	const auto bubbleY = itemGeometry.y() + 1;
-	const auto bubbleX = itemGeometry.x() + itemGeometry.width() - dateW - st::msgDateImgDelta;
 	const auto bubbleY = itemGeometry.y() + st::msgDateImgDelta;
+	const auto bubbleX = itemGeometry.x() + itemGeometry.width() - dateW - st::msgDateImgDelta;
 
 	const auto originalColor = (sti->msgDateImgBg)->c;
 	// FIX #6: Make the bubble more opaque (from 160 to 190).
@@ -819,6 +818,7 @@ TextState GroupedMedia::getPartState(
 		QPoint point,
 		StateRequest request) const {
 	auto shift = 0;
+	auto i = 0;
 	for (const auto &part : _parts) {
 		const auto isInside = part.geometry.contains(point)
 			|| (!part.captionRect.isEmpty() && part.captionRect.contains(point));
@@ -979,6 +979,7 @@ TextState GroupedMedia::getPartState(
 			return result;
 		}
 		shift += part.content->fullSelectionLength();
+		++i;
 	}
 
 	if (!_parts.empty() && needInfoDisplay()) {
