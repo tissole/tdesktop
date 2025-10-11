@@ -93,7 +93,8 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
 	p.setFont(st::msgDateFont);
-	p.setPen(sti->msgDateImgFg); // FIX #5: Use whiter color for grid bubbles.
+	// Use a high-contrast color for text inside the info bubble on top of media.
+	p.setPen(context.messageStyle()->msgServiceFg); // FIX #5: Use whiter color for grid bubbles.
 
 	auto textWidth = st::msgDateFont->width(infoText);
 	const auto textHeight = st::msgDateFont->height;
@@ -623,14 +624,15 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			if (!infoText.isEmpty()) {
 				p.setFont(st::msgDateFont);
-				p.setPen(stm->msgServiceFg);
+				// Use the standard dark file name color for better visibility.
+				p.setPen(stm->historyFileNameFg);
 
 				const auto itemRect = part.geometry.translated(0, groupPadding.top());
 				const auto textWidth = st::msgDateFont->width(infoText);
 				const auto &docStyle = st::msgFileLayoutGrouped;
 				const auto topMinus = st::msgFileTopMinus;
 				const auto statustop = docStyle.statusTop - topMinus;
-				const auto y = itemRect.y() + statustop + st::normalFont->ascent;
+				const auto y = itemRect.y() + statustop + st::msgDateFont->ascent;
 				const auto padding = QMargins(8, 0, 8, 0);	// Define padding variable
 				const auto x = itemRect.x()
 					+ itemRect.width()
@@ -669,7 +671,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					mediaGeometry.width(),
 					part._captionHeight
 				);
-				p.setPen(stm->msgInFg);
+				// Use the standard message text color for captions.
+				p.setPen(stm->historyTextFg);
 				const auto padding = QMargins(8, 0, 8, 0);
 				caption.draw(p,
 					captionRect.left() + padding.left(),
@@ -761,7 +764,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, sti->msgDateImgBg, sti->msgDateImgBgCorners);
 
 			// --- 4. Draw content ---
-			p.setPen(sti->msgDateImgFg); // Brighter text.
+			// Use a high-contrast color for text inside the info bubble on top of media.
+			p.setPen(context.messageStyle()->msgServiceFg); // Brighter text.
 			const int textBaseY = bubbleY + vPadding + font->ascent;
 			int currentRight = bubbleX + bubbleW - hPadding;
 
@@ -792,17 +796,22 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, width());
 			}
 		} else if (_mode == Mode::Column) {
-			// FIX #1 & #2: Column bubble is plain text on the first item.
+			// Position the info bubble on the same row as the file size.
 			const auto right = firstItemGeometry.x() + firstItemGeometry.width();
-			const auto bottom = firstItemGeometry.y() + firstItemGeometry.height();
+			const auto &docStyle = st::msgFileLayoutGrouped;
+			const auto topMinus = st::msgFileTopMinus;
+			const auto statustop = docStyle.statusTop - topMinus;
+			const auto statusRowBottom = firstItemGeometry.y()
+				+ statustop
+				+ st::msgDateFont->height;
 
 			_parent->drawInfo(
 				p,
 				context,
 				right,
-				bottom,
+				statusRowBottom,
 				firstItemGeometry.width(),
-				InfoDisplayType::Default); // Plain text, no background.
+				InfoDisplayType::Default);
 		}
 	}
 }
