@@ -94,7 +94,7 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto sti = context.imageStyle();
 	p.setFont(st::msgDateFont);
 	// Use a high-contrast color for text inside the info bubble on top of media.
-	p.setPen(context.messageStyle()->msgServiceFg); // FIX #5: Use whiter color for grid bubbles.
+	p.setPen(context.messageStyle()->mediaFg); // FIX #5: Use whiter color for grid bubbles.
 
 	auto textWidth = st::msgDateFont->width(infoText);
 	const auto textHeight = st::msgDateFont->height;
@@ -121,10 +121,9 @@ void GroupedMedia::drawMessageIdInfo(
 		}
 	}
 
-	const auto bubbleX = (dateW > itemGeometry.width())
-		? itemGeometry.x()
-		: (itemGeometry.x() + itemGeometry.width() - dateW);
 	const auto bubbleY = itemGeometry.y() + 1;
+	const auto bubbleX = itemGeometry.x() + itemGeometry.width() - dateW - st::msgDateImgDelta;
+	const auto bubbleY = itemGeometry.y() + st::msgDateImgDelta;
 
 	const auto originalColor = (sti->msgDateImgBg)->c;
 	// FIX #6: Make the bubble more opaque (from 160 to 190).
@@ -602,72 +601,44 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 
-		if (_mode == Mode::Column) {
+		if (_mode == Mode::Column && i > 0) {
+			// FIX #3 & #4: In Column mode, items 2..N get a simple info text, correctly aligned.
+			QString infoText;
 			const auto item = part.item;
-			const auto itemRect = part.geometry.translated(0, groupPadding.top());
-			const auto &docStyle = st::msgFileLayoutGrouped;
-			const auto topMinus = st::msgFileTopMinus;
-			const auto statustop = docStyle.statusTop - topMinus;
-			const auto y = itemRect.y() + statustop + st::msgDateFont->ascent;
-			const auto padding = QMargins(8, 0, 8, 0);
-			int currentRight = itemRect.x() + itemRect.width() - padding.right();
-
-			// Use the darker file name color for all info text in the column.
-			p.setFont(st::msgDateFont);
-			p.setPen(stm->historyFileNameFg);
-
-			if (i == 0) {
-				// Custom drawing logic for the first item in a column.
-				// 1. Draw Status Icon (checks/clock)
-				if (item->out()) {
-					const auto unread = _parent->delegate()->elementShownUnread(_parent);
-					const auto &icon = (item->isSending() || item->hasFailed())
-						? (context.outbg
-							? st->historySendingInvertedIcon()
-							: st->historySendingIcon())
-						: unread
-						? (context.outbg
-							? st->historySentInvertedIcon()
-							: stm->historySentIcon)
-						: (context.outbg
-							? st->historyReceivedInvertedIcon()
-							: stm->historyReceivedIcon);
-					const auto statusWidth = icon.width() + st::msgDateSpace;
-					icon.paint(p, currentRight - statusWidth, y - st::msgDateFont->ascent + st::historySendStatePosition.y(), width());
-					currentRight -= statusWidth;
-				}
-
-				// 2. Draw Timestamp
-				const auto dateText = QLocale().toString(ItemDateTime(item).time(), QLocale::ShortFormat);
-				const auto dateWidth = st::msgDateFont->width(dateText);
-				p.drawText(currentRight - dateWidth, y, dateText);
-				currentRight -= dateWidth;
-
-				// 3. Draw Edited Badge (if any)
-				if (const auto edited = item->Get<HistoryMessageEdited>(); edited && !item->hideEditedBadge()) {
-					const auto editedText = QString::fromUtf8("✏️ ");
-					const auto editedWidth = st::msgDateFont->width(editedText);
-					p.drawText(currentRight - editedWidth, y, editedText);
-					currentRight -= editedWidth;
-				}
-			} else {
-				// Logic for items 2..N
-				QString infoText;
-				const auto edited = item->Get<HistoryMessageEdited>();
-				if (edited && !item->hideEditedBadge()) {
-					infoText += QString::fromUtf8("✏️");
-				}
-				if (GetEnhancedBool("show_messages_id")) {
-					const auto msgId = item->fullId().msg;
-					if (msgId > 0) {
-						if (!infoText.isEmpty()) infoText += ' ';
-						infoText += QString::number(msgId.bare);
+			const auto edited = item->Get<HistoryMessageEdited>();
+			
+			if (edited && !item->hideEditedBadge()) {
+				infoText += QString::fromUtf8("✏️");
+			}
+			
+			if (GetEnhancedBool("show_messages_id")) {
+				const auto msgId = item->fullId().msg;
+				if (msgId > 0) {
+					if (!infoText.isEmpty()) {
+						infoText += ' ';
 					}
+					infoText += QString::number(msgId.bare);
 				}
-				if (!infoText.isEmpty()) {
-					const auto textWidth = st::msgDateFont->width(infoText);
-					p.drawText(currentRight - textWidth, y, infoText);
-				}
+			}
+
+			if (!infoText.isEmpty()) {
+				p.setFont(st::msgDateFont);
+				// Use the standard dark file name color for better visibility.
+				p.setPen(stm->historyFileNameFg);
+
+				const auto itemRect = part.geometry.translated(0, groupPadding.top());
+				const auto textWidth = st::msgDateFont->width(infoText);
+				const auto &docStyle = st::msgFileLayoutGrouped;
+				const auto topMinus = st::msgFileTopMinus;
+				const auto statustop = docStyle.statusTop - topMinus;
+				const auto y = itemRect.y() + statustop + st::msgDateFont->ascent;
+				const auto padding = QMargins(8, 0, 8, 0);	// Define padding variable
+				const auto x = itemRect.x()
+					+ itemRect.width()
+					- padding.right()
+					- textWidth;
+
+				p.drawText(x, y, infoText);
 			}
 		} else if (_mode == Mode::Grid && i > 0) {
 			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
@@ -779,7 +750,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			// --- 3. Draw bubble ---
 			const auto sti = context.imageStyle();
 			const auto textHeight = font->height;
-			const auto hPadding = st::msgDateImgPadding.x();
+			const auto hPadding = 2;
 			const auto vPadding = st::msgDateImgPadding.y();
 			const auto bubbleW = totalWidth + 2 * hPadding;
 			const auto bubbleH = textHeight + 2 * vPadding;
@@ -792,8 +763,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, sti->msgDateImgBg, sti->msgDateImgBgCorners);
 
 			// --- 4. Draw content ---
-			// Use a high-contrast color for text inside the info bubble on top of media.
-			p.setPen(context.messageStyle()->msgServiceFg); // Brighter text.
+			// Use the standard media foreground color for text on top of media.
+			p.setPen(context.messageStyle()->mediaFg); 
 			const int textBaseY = bubbleY + vPadding + font->ascent;
 			int currentRight = bubbleX + bubbleW - hPadding;
 
@@ -823,6 +794,23 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
 				_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, width());
 			}
+		} else if (_mode == Mode::Column) {
+			// Position the info bubble on the same row as the file size.
+			const auto right = firstItemGeometry.x() + firstItemGeometry.width();
+			const auto &docStyle = st::msgFileLayoutGrouped;
+			const auto topMinus = st::msgFileTopMinus;
+			const auto statustop = docStyle.statusTop - topMinus;
+			const auto statusRowBottom = firstItemGeometry.y()
+				+ statustop
+				+ st::msgDateFont->height;
+
+			_parent->drawInfo(
+				p,
+				context,
+				right,
+				statusRowBottom,
+				firstItemGeometry.width(),
+				InfoDisplayType::Default);
 		}
 	}
 }
@@ -831,8 +819,7 @@ TextState GroupedMedia::getPartState(
 		QPoint point,
 		StateRequest request) const {
 	auto shift = 0;
-	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
-		const auto &part = _parts[i];
+	for (const auto &part : _parts) {
 		const auto isInside = part.geometry.contains(point)
 			|| (!part.captionRect.isEmpty() && part.captionRect.contains(point));
 		if (isInside) {
@@ -849,80 +836,56 @@ TextState GroupedMedia::getPartState(
 
 			// --- START: MODIFIED LOGIC FOR COLUMN MODE ---
 			if (_mode == Mode::Column) {
-				const auto &docStyle = st::msgFileLayoutGrouped;
-				const auto topMinus = st::msgFileTopMinus;
-				const auto statustop = docStyle.statusTop - topMinus;
-				const auto itemRect = part.geometry;
-				const auto y = itemRect.y() + statustop;
-				const auto padding = docStyle.padding;
-				const int currentRight = itemRect.x() + itemRect.width() - padding.right();
+				QString infoText;
+				if (edited && !item->hideEditedBadge()) {
+					infoText += QString::fromUtf8("✏️");
+				}
 
-				QRect infoRect;
-				int totalWidth = 0;
-
-				if (i == 0) {
-					// Calculate hover rect for the first item.
-					int dateWidth = 0;
-					int editedWidth = 0;
-					int statusWidth = 0;
-
-					if (const auto status = _parent->displayedState()) {
-						statusWidth = status->width;
-					}
-					const auto dateText = QLocale().toString(ItemDateTime(item).time(), QLocale::ShortFormat);
-					dateWidth = st::msgDateFont->width(dateText);
-					if (edited && !item->hideEditedBadge()) {
-						const auto editedText = QString::fromUtf8("✏️ ");
-						editedWidth = st::msgDateFont->width(editedText);
-					}
-					totalWidth = statusWidth + dateWidth + editedWidth;
-					infoRect = QRect(currentRight - totalWidth, y, totalWidth, st::msgDateFont->height);
-
-					if (infoRect.contains(point)) {
-						if (edited && !item->hideEditedBadge()) {
-							const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
-							const auto editLocalTime = editUTCTime.toLocalTime();
-							QString editedTranslation = tr::lng_edited(tr::now);
-							editedTranslation = editedTranslation.toUpper().left(1)
-								+ editedTranslation.mid(1);
-							const QString tooltipText = editedTranslation + ", "
-								+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
-								+ editLocalTime.time().toString("HH:mm:ss");
-							result.customTooltip = true;
-							result.customTooltipText = tooltipText;
-						} else {
-							result.cursor = CursorState::Date;
+				if (GetEnhancedBool("show_messages_id")) {
+					const auto msgId = item->fullId().msg;
+					if (msgId > 0) {
+						if (!infoText.isEmpty()) {
+							infoText += ' ';
 						}
+						// FIX 3: Remove parentheses.
+						infoText += QString::number(msgId.bare);
 					}
-				} else {
-					// Calculate hover rect for items 2..N.
-					QString infoText;
-					if (edited && !item->hideEditedBadge()) {
-						infoText += QString::fromUtf8("✏️");
-					}
-					if (GetEnhancedBool("show_messages_id")) {
-						const auto msgId = item->fullId().msg;
-						if (msgId > 0) {
-							if (!infoText.isEmpty()) infoText += ' ';
-							infoText += QString::number(msgId.bare);
-						}
-					}
-					if (!infoText.isEmpty()) {
-						totalWidth = st::msgDateFont->width(infoText);
-						infoRect = QRect(currentRight - totalWidth, y, totalWidth, st::msgDateFont->height);
+				}
 
-						if (infoRect.contains(point) && edited && !item->hideEditedBadge()) {
-							const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
-							const auto editLocalTime = editUTCTime.toLocalTime();
-							QString editedTranslation = tr::lng_edited(tr::now);
-							editedTranslation = editedTranslation.toUpper().left(1)
-								+ editedTranslation.mid(1);
-							const QString tooltipText = editedTranslation + ", "
-								+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
-								+ editLocalTime.time().toString("HH:mm:ss");
-							result.customTooltip = true;
-							result.customTooltipText = tooltipText;
-						}
+				if (!infoText.isEmpty()) {
+					const auto textWidth = st::msgDateFont->width(infoText);
+					const auto textHeight = st::msgDateFont->height;
+					const auto &padding = st::msgFileLayout.padding;
+					const auto itemRect = part.geometry;
+
+					// FIX 1: Use the same correct Y position calculation as in draw().
+					const auto y = itemRect.y()
+						+ itemRect.height()
+						- padding.bottom()
+						- textHeight;
+					const auto x = itemRect.x()
+						+ itemRect.width()
+						- padding.right()
+						- textWidth;
+
+					const QRect infoRect(x, y, textWidth, textHeight);
+
+					if (infoRect.contains(point) && edited && !item->hideEditedBadge()) {
+						const auto editUTCTime = QDateTime::fromSecsSinceEpoch(
+							edited->date);
+						const auto editLocalTime = editUTCTime.toLocalTime();
+						QString editedTranslation = tr::lng_edited(tr::now);
+						editedTranslation = editedTranslation.toUpper().left(1)
+							+ editedTranslation.mid(1);
+						const QString tooltipText = editedTranslation + ", "
+							+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
+							+ editLocalTime.time().toString("HH:mm:ss");
+						
+						// FIX 4: Do not add the message ID to the tooltip if it's already visible.
+						// The 'infoText' will contain the ID if the setting is on.
+
+						result.customTooltip = true;
+						result.customTooltipText = tooltipText;
 					}
 				}
 			} 
