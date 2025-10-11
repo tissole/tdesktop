@@ -1024,15 +1024,64 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			const auto right = firstItemGeometry.x() + firstItemGeometry.width();
 			const auto bottom = firstItemGeometry.y(); // Match top-right alignment.
 
-			const auto bottomInfoResult = _parent->bottomInfoTextState(
-				right,
-				bottom,
-				point,
-				InfoDisplayType::Image);
-			if (bottomInfoResult.link
-				|| bottomInfoResult.cursor != CursorState::None
-				|| bottomInfoResult.customTooltip) {
-				return bottomInfoResult;
+			// Manually calculate the info rect to match the drawing logic.
+			const auto item = firstPart->item;
+			const auto font = st::msgDateFont;
+
+			const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+			const auto dateText = QLocale().toString(
+				ItemDateTime(item).time(),
+				GetEnhancedBool("show_seconds")
+					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+					: QLocale::system().timeFormat(QLocale::ShortFormat));
+			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+				? QString(" (%1)").arg(item->fullId().msg.bare)
+				: QString();
+			const auto views = item->Get<HistoryMessageViews>();
+			const auto viewsText = (views && views->views.count >= 0)
+				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+				: QString();
+
+			int totalWidth = 0;
+			const int iconPadding = st::historyViewsSpace;
+			const int textPadding = font->spacew;
+			const int dateWidth = font->width(dateText + msgIdText);
+			totalWidth += dateWidth;
+			if (edited) {
+				const auto editedWidth = font->width(QString::fromUtf8("✏️") + " ");
+				totalWidth += editedWidth;
+			}
+			int viewsWidth = 0;
+			if (!viewsText.isEmpty()) {
+				viewsWidth = st::historyViewsWidth + iconPadding + font->width(viewsText);
+				totalWidth += textPadding + viewsWidth;
+			}
+
+			const auto hPadding = 2;
+			const auto vPadding = st::msgDateImgPadding.y();
+			const auto bubbleW = totalWidth + 2 * hPadding;
+			const auto bubbleH = font->height + 2 * vPadding;
+			const auto bubbleX = right - bubbleW - st::msgDateImgDelta;
+			const auto bubbleY = bottom + st::msgDateImgDelta; // 'bottom' here is actually the top edge.
+
+			const QRect infoRect(bubbleX, bubbleY, bubbleW, bubbleH);
+			if (infoRect.contains(point)) {
+				if (edited) {
+					const auto editUTCTime = QDateTime::fromSecsSinceEpoch(
+						item->Get<HistoryMessageEdited>()->date);
+					const auto editLocalTime = editUTCTime.toLocalTime();
+					QString editedTranslation = tr::lng_edited(tr::now);
+					editedTranslation = editedTranslation.toUpper().left(1)
+						+ editedTranslation.mid(1);
+					const QString tooltipText = editedTranslation + ", "
+						+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
+						+ editLocalTime.time().toString("HH:mm:ss");
+					result.customTooltip = true;
+					result.customTooltipText = tooltipText;
+				} else {
+					result.cursor = CursorState::Date;
+				}
+				return result;
 			}
 
 			if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
