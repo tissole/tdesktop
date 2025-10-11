@@ -836,86 +836,62 @@ TextState GroupedMedia::getPartState(
 
 			// --- START: MODIFIED LOGIC FOR COLUMN MODE ---
 			if (_mode == Mode::Column) {
-				const auto &docStyle = st::msgFileLayoutGrouped;
-				const auto topMinus = st::msgFileTopMinus;
-				const auto statustop = docStyle.statusTop - topMinus;
-				const auto itemRect = part.geometry;
-				const auto y = itemRect.y() + statustop;
-				const auto padding = docStyle.padding;
-				const int currentRight = itemRect.x() + itemRect.width() - padding.right();
-			
-				QRect infoRect;
-				int totalWidth = 0;
-			
-				if (i == 0) {
-					// Calculate hover rect for the first item.
-					int dateWidth = 0;
-					int editedWidth = 0;
-					int statusWidth = 0;
-					if (item->out()) {
-						statusWidth = st::historySendStateSpace;
-					}
-			
-					const auto dateText = QLocale().toString(ItemDateTime(item).time(), QLocale::ShortFormat);
-					dateWidth = st::msgDateFont->width(dateText);
-					if (edited && !item->hideEditedBadge()) {
-						const auto editedText = QString::fromUtf8("✏️ ");
-						editedWidth = st::msgDateFont->width(editedText);
-					}
-					totalWidth = statusWidth + dateWidth + editedWidth;
-					infoRect = QRect(currentRight - totalWidth, y, totalWidth, st::msgDateFont->height);
-			
-					if (infoRect.contains(point)) {
-						if (edited && !item->hideEditedBadge()) {
-							const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
-							const auto editLocalTime = editUTCTime.toLocalTime();
-							QString editedTranslation = tr::lng_edited(tr::now);
-							editedTranslation = editedTranslation.toUpper().left(1)
-								+ editedTranslation.mid(1);
-							const QString tooltipText = editedTranslation + ", "
-								+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
-								+ editLocalTime.time().toString("HH:mm:ss");
-							result.customTooltip = true;
-							result.customTooltipText = tooltipText;
-						} else {
-							result.cursor = CursorState::Date;
+				QString infoText;
+				if (edited && !item->hideEditedBadge()) {
+					infoText += QString::fromUtf8("✏️");
+				}
+
+				if (GetEnhancedBool("show_messages_id")) {
+					const auto msgId = item->fullId().msg;
+					if (msgId > 0) {
+						if (!infoText.isEmpty()) {
+							infoText += ' ';
 						}
-					}
-				} else {
-					// Calculate hover rect for items 2..N.
-					QString infoText;
-					if (edited && !item->hideEditedBadge()) {
-						infoText += QString::fromUtf8("✏️");
-					}
-					if (GetEnhancedBool("show_messages_id")) {
-						const auto msgId = item->fullId().msg;
-						if (msgId > 0) {
-							if (!infoText.isEmpty()) infoText += ' ';
-							infoText += QString::number(msgId.bare);
-						}
-					}
-					if (!infoText.isEmpty()) {
-						totalWidth = st::msgDateFont->width(infoText);
-						infoRect = QRect(currentRight - totalWidth, y, totalWidth, st::msgDateFont->height);
-			
-						if (infoRect.contains(point) && edited && !item->hideEditedBadge()) {
-							const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
-							const auto editLocalTime = editUTCTime.toLocalTime();
-							QString editedTranslation = tr::lng_edited(tr::now);
-							editedTranslation = editedTranslation.toUpper().left(1)
-								+ editedTranslation.mid(1);
-							const QString tooltipText = editedTranslation + ", "
-								+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
-								+ editLocalTime.time().toString("HH:mm:ss");
-							result.customTooltip = true;
-							result.customTooltipText = tooltipText;
-						}
+						// FIX 3: Remove parentheses.
+						infoText += QString::number(msgId.bare);
 					}
 				}
-			}
+
+				if (!infoText.isEmpty()) {
+					const auto textWidth = st::msgDateFont->width(infoText);
+					const auto textHeight = st::msgDateFont->height;
+					const auto &padding = st::msgFileLayout.padding;
+					const auto itemRect = part.geometry;
+
+					// FIX 1: Use the same correct Y position calculation as in draw().
+					const auto y = itemRect.y()
+						+ itemRect.height()
+						- padding.bottom()
+						- textHeight;
+					const auto x = itemRect.x()
+						+ itemRect.width()
+						- padding.right()
+						- textWidth;
+
+					const QRect infoRect(x, y, textWidth, textHeight);
+
+					if (infoRect.contains(point) && edited && !item->hideEditedBadge()) {
+						const auto editUTCTime = QDateTime::fromSecsSinceEpoch(
+							edited->date);
+						const auto editLocalTime = editUTCTime.toLocalTime();
+						QString editedTranslation = tr::lng_edited(tr::now);
+						editedTranslation = editedTranslation.toUpper().left(1)
+							+ editedTranslation.mid(1);
+						const QString tooltipText = editedTranslation + ", "
+							+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
+							+ editLocalTime.time().toString("HH:mm:ss");
+						
+						// FIX 4: Do not add the message ID to the tooltip if it's already visible.
+						// The 'infoText' will contain the ID if the setting is on.
+
+						result.customTooltip = true;
+						result.customTooltipText = tooltipText;
+					}
+				}
+			} 
 			// --- END: MODIFIED LOGIC FOR COLUMN MODE ---
-				// START: New tooltip logic for Grid album items (2..N).
 			else if (_mode == Mode::Grid && (&part != &_parts.front())) {
+				// START: New tooltip logic for Grid album items (2..N).
 				QString infoText;
 				if (edited && !item->hideEditedBadge()) {
 					infoText += QString::fromUtf8("✏️");
