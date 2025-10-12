@@ -964,10 +964,10 @@ TextState GroupedMedia::getPartState(
 				if (!infoText.isEmpty()) {
 					const auto textWidth = st::msgDateFont->width(infoText);
 					const auto textHeight = st::msgDateFont->height;
-					const auto verticalPadding = 2;
-					const auto horizontalPadding = 3;
-					const auto dateW = textWidth + (2 * horizontalPadding);
-					const auto dateH = textHeight + verticalPadding;
+					const auto hPadding = 2;
+					const auto vPadding = st::msgDateImgPadding.y();
+					const auto dateW = textWidth + (2 * hPadding);
+					const auto dateH = textHeight + 2 * vPadding;
 					const auto itemRect = part.geometry;
 
 					const auto bubbleX = (dateW > itemRect.width())
