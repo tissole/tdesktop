@@ -1006,6 +1006,9 @@ TextState GroupedMedia::getPartState(
 				&& part.captionRect.contains(point)) {
 				const auto originalText = part.item->originalText();
 				if (!originalText.empty()) {
+					// Provide click-to-copy for captions in Grid mode.
+					result.link = ClickHandlerPtr{ new HiddenUrlClickHandler(originalText.text) };
+					// Keep tooltip for ellipsized captions.
 					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
 					const auto padding = QMargins(8, 0, 8, 0);
 					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
