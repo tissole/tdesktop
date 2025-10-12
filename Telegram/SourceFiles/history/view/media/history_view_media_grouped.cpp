@@ -631,10 +631,11 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto topMinus = st::msgFileTopMinus;
 				const auto statustop = docStyle.statusTop - topMinus;
 
-				const auto horizontalPadding = 2;
-				const auto verticalPadding = 2;
-				const auto dateW = textWidth + (2 * horizontalPadding);
-				const auto dateH = textHeight + verticalPadding;
+				// Unify bubble sizing with consistent paddings
+				const auto hPadding = 2;
+				const auto vPadding = st::msgDateImgPadding.y();
+				const auto dateW = textWidth + (2 * hPadding);
+				const auto dateH = textHeight + 2 * vPadding;
 
 				// Position on same row as file size
 				const auto bubbleX = itemRect.x() + itemRect.width() - dateW - st::msgDateImgDelta;
@@ -660,7 +661,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				auto font = st::msgDateFont;
 				p.setFont(font->bold());
 				p.drawText(
-					bubbleX + horizontalPadding,
+					bubbleX + hPadding,
 					bubbleY + (dateH - textHeight) / 2 + font->ascent,
 					infoText);
 				p.setFont(font);
@@ -877,10 +878,10 @@ TextState GroupedMedia::getPartState(
 					if (!infoText.isEmpty()) {
 						const auto textWidth = st::msgDateFont->width(infoText);
 						const auto textHeight = st::msgDateFont->height;
-						const auto horizontalPadding = 2;
-						const auto verticalPadding = 2;
-						const auto dateW = textWidth + (2 * horizontalPadding);
-						const auto dateH = textHeight + verticalPadding;
+						const auto hPadding = 2;
+						const auto vPadding = st::msgDateImgPadding.y();
+						const auto dateW = textWidth + (2 * hPadding);
+						const auto dateH = textHeight + 2 * vPadding;
 						const auto bubbleX = currentRight - dateW - st::msgDateImgDelta;
 						const auto bubbleY = y;
 						const QRect infoRect(bubbleX, bubbleY, dateW, dateH);
@@ -920,8 +921,15 @@ TextState GroupedMedia::getPartState(
 						}
 					}
 					if (!infoText.isEmpty()) {
-						totalWidth = st::msgDateFont->width(infoText);
-						infoRect = QRect(currentRight - totalWidth, y, totalWidth, st::msgDateFont->height);
+						const auto textWidth = st::msgDateFont->width(infoText);
+						const auto textHeight = st::msgDateFont->height;
+						const auto hPadding = 2;
+						const auto vPadding = st::msgDateImgPadding.y();
+						const auto dateW = textWidth + (2 * hPadding);
+						const auto dateH = textHeight + 2 * vPadding;
+						const auto bubbleX = currentRight - dateW - st::msgDateImgDelta;
+						const auto bubbleY = y;
+						const QRect infoRect(bubbleX, bubbleY, dateW, dateH);
 			
 						if (infoRect.contains(point) && edited && !item->hideEditedBadge()) {
 							const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
