@@ -746,8 +746,13 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			}
 			Ui::FillRoundRect(p, style::rtlrect(statusX - st::msgDateImgPadding.x(), statusY - st::msgDateImgPadding.y(), statusW, statusH, width()), sti->msgServiceBg, sti->msgServiceBgCornersSmall);
 			p.setFont(st::normalFont);
-			p.setPen(st->msgServiceFg());
-			p.drawTextLeft(statusX, statusY, width(), _statusText, statusW - 2 * st::msgDateImgPadding.x());
+			// Use consistent edited glyph and color for status
+			const auto editedGlyph = (_realParent->data()->Get<HistoryMessageEdited>() && !_realParent->data()->hideEditedBadge())
+				? (QString::fromUtf8("✏️") + " ")
+				: QString();
+			const auto statusText = editedGlyph + _statusText;
+			p.setPen(st->msgDateImgFg());
+			p.drawTextLeft(statusX, statusY, width(), statusText, statusW - 2 * st::msgDateImgPadding.x());
 			if (mediaUnread) {
 				p.setPen(Qt::NoPen);
 				p.setBrush(st->msgServiceFg());
