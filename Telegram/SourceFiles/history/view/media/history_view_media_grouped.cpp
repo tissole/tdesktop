@@ -124,22 +124,18 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto bubbleY = itemGeometry.y() + st::msgDateImgDelta;
 	const auto bubbleX = itemGeometry.x() + itemGeometry.width() - dateW - st::msgDateImgDelta;
 
-	// Use semi-transparent black with slightly reduced opacity for consistency
-	const auto originalColor = (sti->msgDateImgBg)->c;
-	auto modifiedQColor = QColor(
-		originalColor.red(),
-		originalColor.green(),
-		originalColor.blue(),
-		200);
-	const auto bgColor = style::internal::OwnedColor(modifiedQColor);
+	// Draw with uniform style brush to avoid edge transparency differences
+	p.save();
+	p.setOpacity(0.85);
 	Ui::FillRoundRect(
 		p,
 		bubbleX,
 		bubbleY,
 		dateW,
 		dateH,
-		bgColor.color(),
+		sti->msgDateImgBg,
 		sti->msgDateImgBgCorners);
+	p.restore();
 
 	auto font = st::msgDateFont;
 	p.setFont(font->bold());
@@ -436,8 +432,15 @@ Ui::BubbleRounding GroupedMedia::applyRoundingSides(
 QMargins GroupedMedia::groupedPadding() const {
 	if (_mode != Mode::Column) {
 		if (isBubbleBottom() && GetEnhancedBool("caption_from_file_name")) {
-			const auto padding = st::msgPadding;
-			return QMargins(0, 0, 0, padding.bottom());
+			// Add bottom padding only if any Grid item actually has a caption.
+			bool hasAnyCaption = false;
+			for (const auto &part : _parts) {
+				if (part._captionHeight > 0) { hasAnyCaption = true; break; }
+			}
+			if (hasAnyCaption) {
+				const auto padding = st::msgPadding;
+				return QMargins(0, 0, 0, padding.bottom());
+			}
 		}
 		return QMargins();
 	}
@@ -598,7 +601,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cache);
 
 		if (_mode == Mode::Column) {
-			// Draw info text for ALL items in Column mode, aligned to size row (no black background)
+			// Draw info for first item (views/date/id), msg-id bubbles for the rest in Column mode
 			QString infoText;
 			const auto item = part.item;
 			const auto edited = item->Get<HistoryMessageEdited>();
@@ -617,12 +620,46 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				}
 			}
 
-			if (!infoText.isEmpty()) {
+			if (i == 0) {
+				// First item: draw combined info line (views/edited/time/id) on size row
+				QString infoText;
+				if (const auto views = item->Get<HistoryMessageViews>()) {
+					if (views->views.count >= 0) {
+						infoText += Lang::FormatCountToShort(std::max(views->views.count, 1)).string + " ";
+					}
+				}
+				if (item->Get<HistoryMessageEdited>() && !item->hideEditedBadge()) {
+					infoText += QString::fromUtf8("✏️") + " ";
+				}
+				const auto timeText = QLocale().toString(
+					ItemDateTime(item).time(),
+					GetEnhancedBool("show_seconds")
+						? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+						: QLocale::system().timeFormat(QLocale::ShortFormat));
+				infoText += timeText;
+				if (GetEnhancedBool("show_messages_id")) {
+					const auto msgId = item->fullId().msg;
+					if (msgId > 0) infoText += " " + QString::number(msgId.bare);
+				}
+
+				if (!infoText.isEmpty()) {
+					const auto st = context.st;
+					p.setFont(st::msgDateFont);
+					p.setPen(st->msgDateImgFg());
+
+					const auto itemRect = part.geometry.translated(0, groupPadding.top());
+					const auto textWidth = st::msgDateFont->width(infoText);
+					const auto &docStyle = st::msgFileLayoutGrouped;
+					const auto statustop = docStyle.statusTop - st::msgFileTopMinus;
+					const auto textX = itemRect.x() + itemRect.width() - textWidth - st::msgDateImgDelta;
+					const auto textY = itemRect.y() + statustop + st::msgDateFont->ascent;
+					p.drawText(textX, textY, infoText);
+				}
+			} else if (!infoText.isEmpty()) {
 				const auto st = context.st;
-				const auto stm = context.messageStyle();
 				p.setFont(st::msgDateFont);
-				// Use regular history text color in Column mode (no black background)
-				p.setPen(stm->historyTextFg);
+				// Use faint gray color similar to Grid bubbles
+				p.setPen(st->msgDateImgFg());
 
 				const auto itemRect = part.geometry.translated(0, groupPadding.top());
 				const auto textWidth = st::msgDateFont->width(infoText);
@@ -698,7 +735,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	// --- Comprehensive Bubble Logic ---
-	if ((_mode == Mode::Grid || _mode == Mode::Column) && !_parts.empty() && _parent->media() == this) {
+	if ((_mode == Mode::Grid) && !_parts.empty() && _parent->media() == this) {
 		const auto firstPart = &_parts.front();
 		const auto firstItemGeometry = firstPart->geometry.translated(0, groupPadding.top());
 
@@ -755,15 +792,11 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto bubbleX = firstItemGeometry.x() + firstItemGeometry.width() - bubbleW - st::msgDateImgDelta;
 			const auto bubbleY = firstItemGeometry.y() + st::msgDateImgDelta;
 
-			// Use semi-transparent black with slightly reduced opacity for consistency
-			const auto originalColor = (sti->msgDateImgBg)->c;
-			auto modifiedQColor = QColor(
-				originalColor.red(),
-				originalColor.green(),
-				originalColor.blue(),
-				200);
-			const auto bgColor = style::internal::OwnedColor(modifiedQColor);
-			Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, bgColor.color(), sti->msgDateImgBgCorners);
+			// Draw with uniform style brush to avoid edge transparency differences
+			p.save();
+			p.setOpacity(0.85);
+			Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, sti->msgDateImgBg, sti->msgDateImgBgCorners);
+			p.restore();
 
 			// --- 4. Draw content ---
 			// Use proper white color for text on image bubbles
@@ -772,26 +805,25 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const int textBaseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
 			int currentRight = bubbleX + bubbleW - hPadding;
 
-			p.drawText(currentRight - dateWidth, textBaseY, dateText + msgIdText);
-			currentRight -= dateWidth;
+			// Order: icon, views, edited, time, id
+			if (!viewsText.isEmpty()) {
+				currentRight -= ((2 * textPadding) + viewsWidth);
+				const auto &icon = st->historyViewsInvertedIcon();
+				const auto iconY = bubbleY + (bubbleH - st::historyViewsWidth) / 2;
+				icon.paint(p, currentRight, iconY, st::historyViewsWidth);
+				p.drawText(currentRight + st::historyViewsWidth + iconPadding, textBaseY, viewsText);
+			}
 
 			if (edited) {
 				const auto editedText = QString::fromUtf8("✏️") + " ";
 				const auto editedWidth = font->width(editedText);
-				// Add space between edited icon and time
 				currentRight -= textPadding;
 				currentRight -= editedWidth;
 				p.drawText(currentRight, textBaseY, editedText);
 			}
 
-			if (!viewsText.isEmpty()) {
-				// Add extra space between views counter and edited icon
-				currentRight -= ((2 * textPadding) + viewsWidth);
-				const auto &icon = st->historyViewsInvertedIcon();
-				// Paint the views icon inside the bubble bounds using icon width
-				icon.paint(p, currentRight, bubbleY + vPadding + st::historyViewsTop, st::historyViewsWidth);
-				p.drawText(currentRight + st::historyViewsWidth + iconPadding, textBaseY, viewsText);
-			}
+			p.drawText(currentRight - dateWidth, textBaseY, dateText + msgIdText);
+			currentRight -= dateWidth;
 
 			if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 				auto fullRight = width();
