@@ -124,13 +124,13 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto bubbleY = itemGeometry.y() + st::msgDateImgDelta;
 	const auto bubbleX = itemGeometry.x() + itemGeometry.width() - dateW - st::msgDateImgDelta;
 
-	// Use semi-transparent black with higher opacity for consistent visibility
+	// Use semi-transparent black with slightly reduced opacity for consistency
 	const auto originalColor = (sti->msgDateImgBg)->c;
 	auto modifiedQColor = QColor(
 		originalColor.red(),
 		originalColor.green(),
 		originalColor.blue(),
-		240);  // Increased opacity for better text visibility
+		200);
 	const auto bgColor = style::internal::OwnedColor(modifiedQColor);
 	Ui::FillRoundRect(
 		p,
@@ -598,7 +598,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cache);
 
 		if (_mode == Mode::Column) {
-			// Draw info text for ALL items in Column mode, aligned to size row
+			// Draw info text for ALL items in Column mode, aligned to size row (no black background)
 			QString infoText;
 			const auto item = part.item;
 			const auto edited = item->Get<HistoryMessageEdited>();
@@ -619,10 +619,10 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			if (!infoText.isEmpty()) {
 				const auto st = context.st;
-				const auto sti = context.imageStyle();
+				const auto stm = context.messageStyle();
 				p.setFont(st::msgDateFont);
-				// Use same color as Grid mode msg ID bubbles
-				p.setPen(st->msgDateImgFg());
+				// Use regular history text color in Column mode (no black background)
+				p.setPen(stm->historyTextFg);
 
 				const auto itemRect = part.geometry.translated(0, groupPadding.top());
 				const auto textWidth = st::msgDateFont->width(infoText);
@@ -631,40 +631,11 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto topMinus = st::msgFileTopMinus;
 				const auto statustop = docStyle.statusTop - topMinus;
 
-				// Unify bubble sizing with consistent paddings
-				const auto hPadding = 2;
-				const auto vPadding = st::msgDateImgPadding.y();
-				const auto dateW = textWidth + (2 * hPadding);
-				const auto dateH = textHeight + 2 * vPadding;
+				// Position on same row as file size (right aligned)
+				const auto textX = itemRect.x() + itemRect.width() - textWidth - st::msgDateImgDelta;
+				const auto textY = itemRect.y() + statustop + st::msgDateFont->ascent;
 
-				// Position on same row as file size
-				const auto bubbleX = itemRect.x() + itemRect.width() - dateW - st::msgDateImgDelta;
-				const auto bubbleY = itemRect.y() + statustop;
-
-				// Use semi-transparent black with higher opacity for consistent visibility
-				const auto originalColor = (sti->msgDateImgBg)->c;
-				auto modifiedQColor = QColor(
-					originalColor.red(),
-					originalColor.green(),
-					originalColor.blue(),
-					240);
-				const auto bgColor = style::internal::OwnedColor(modifiedQColor);
-				Ui::FillRoundRect(
-					p,
-					bubbleX,
-					bubbleY,
-					dateW,
-					dateH,
-					bgColor.color(),
-					sti->msgDateImgBgCorners);
-
-				auto font = st::msgDateFont;
-				p.setFont(font->bold());
-				p.drawText(
-					bubbleX + hPadding,
-					bubbleY + (dateH - textHeight) / 2 + font->ascent,
-					infoText);
-				p.setFont(font);
+				p.drawText(textX, textY, infoText);
 			}
 		} else if (_mode == Mode::Grid && i > 0) {
 			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
@@ -746,7 +717,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					: QLocale::system().timeFormat(QLocale::ShortFormat));
 			
 			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-				? QString(" (%1)").arg(item->fullId().msg.bare)
+				? QString(" %1").arg(item->fullId().msg.bare)
 				: QString();
 
 			const auto views = item->Get<HistoryMessageViews>();
@@ -784,13 +755,13 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto bubbleX = firstItemGeometry.x() + firstItemGeometry.width() - bubbleW - st::msgDateImgDelta;
 			const auto bubbleY = firstItemGeometry.y() + st::msgDateImgDelta;
 
-			// Use semi-transparent black with higher opacity for consistent visibility
+			// Use semi-transparent black with slightly reduced opacity for consistency
 			const auto originalColor = (sti->msgDateImgBg)->c;
 			auto modifiedQColor = QColor(
 				originalColor.red(),
 				originalColor.green(),
 				originalColor.blue(),
-				240);  // Increased opacity for better text visibility
+				200);
 			const auto bgColor = style::internal::OwnedColor(modifiedQColor);
 			Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, bgColor.color(), sti->msgDateImgBgCorners);
 
@@ -807,15 +778,18 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			if (edited) {
 				const auto editedText = QString::fromUtf8("✏️") + " ";
 				const auto editedWidth = font->width(editedText);
+				// Add space between edited icon and time
+				currentRight -= textPadding;
 				currentRight -= editedWidth;
 				p.drawText(currentRight, textBaseY, editedText);
 			}
 
 			if (!viewsText.isEmpty()) {
-				currentRight -= (textPadding + viewsWidth);
+				// Add extra space between views counter and edited icon
+				currentRight -= ((2 * textPadding) + viewsWidth);
 				const auto &icon = st->historyViewsInvertedIcon();
-				// Fix: Position icon inside bubble using bubbleW instead of width()
-				icon.paint(p, currentRight, bubbleY + vPadding + st::historyViewsTop, bubbleW);
+				// Paint the views icon inside the bubble bounds using icon width
+				icon.paint(p, currentRight, bubbleY + vPadding + st::historyViewsTop, st::historyViewsWidth);
 				p.drawText(currentRight + st::historyViewsWidth + iconPadding, textBaseY, viewsText);
 			}
 
@@ -889,8 +863,9 @@ TextState GroupedMedia::getPartState(
 						if (infoRect.contains(point)) {
 							const auto uploadUTCTime = QDateTime::fromSecsSinceEpoch(item->date());
 							const auto uploadLocalTime = uploadUTCTime.toLocalTime();
-							QString tooltipText = QString("Uploaded: ")
-								+ uploadLocalTime.date().toString("dddd, dd MMMM yyyy");
+							QString tooltipText = tr::lng_uploaded(tr::now) + ": "
+								+ uploadLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
+								+ uploadLocalTime.time().toString("HH:mm:ss");
 
 							if (edited && !item->hideEditedBadge()) {
 								const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
@@ -1093,7 +1068,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
 					: QLocale::system().timeFormat(QLocale::ShortFormat));
 			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-				? QString(" (%1)").arg(item->fullId().msg.bare)
+				? QString(" %1").arg(item->fullId().msg.bare)
 				: QString();
 			const auto views = item->Get<HistoryMessageViews>();
 			const auto viewsText = (views && views->views.count >= 0)
@@ -1126,8 +1101,9 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			if (infoRect.contains(point)) {
 				const auto uploadUTCTime = QDateTime::fromSecsSinceEpoch(item->date());
 				const auto uploadLocalTime = uploadUTCTime.toLocalTime();
-				QString tooltipText = QString("Uploaded: ")
-					+ uploadLocalTime.date().toString("dddd, dd MMMM yyyy");
+				QString tooltipText = tr::lng_uploaded(tr::now) + ": "
+					+ uploadLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
+					+ uploadLocalTime.time().toString("HH:mm:ss");
 
 				if (edited) {
 					const auto editUTCTime = QDateTime::fromSecsSinceEpoch(

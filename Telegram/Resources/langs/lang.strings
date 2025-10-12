@@ -7107,3 +7107,4 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 "lng_blocked_user_hint" = "[Blocked User Message]\n";
 // Keys finished
+"lng_uploaded" = "Uploaded";
