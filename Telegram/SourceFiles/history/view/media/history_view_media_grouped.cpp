@@ -797,7 +797,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			// Use proper white color for text on image bubbles
 			p.setPen(st->msgDateImgFg());
 			p.setFont(font->bold());
-			const int textBaseY = bubbleY + vPadding + font->ascent;
+			const int textBaseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
 			int currentRight = bubbleX + bubbleW - hPadding;
 
 			p.drawText(currentRight - dateWidth, textBaseY, dateText + msgIdText);
