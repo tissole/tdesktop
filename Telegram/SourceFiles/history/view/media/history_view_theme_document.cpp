@@ -259,8 +259,9 @@ void ThemeDocument::draw(Painter &p, const PaintContext &context) const {
 			auto statusH = st::normalFont->height + 2 * st::msgDateImgPadding.y();
 			Ui::FillRoundRect(p, style::rtlrect(statusX - st::msgDateImgPadding.x(), statusY - st::msgDateImgPadding.y(), statusW, statusH, width()), sti->msgDateImgBg, sti->msgDateImgBgCorners);
 			p.setFont(st::normalFont);
-			// Prepend edited glyph for consistency
-			const auto editedGlyph = (_data->parent()->Get<HistoryMessageEdited>() && !_data->parent()->hideEditedBadge())
+			// Prepend edited glyph for consistency; use the message item from parent()
+			const auto editedGlyph = (parent()->data()->Get<HistoryMessageEdited>()
+				&& !parent()->data()->hideEditedBadge())
 				? (QString::fromUtf8("✏️") + " ")
 				: QString();
 			const auto statusText = editedGlyph + _statusText;
