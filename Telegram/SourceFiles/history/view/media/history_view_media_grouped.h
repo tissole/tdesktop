@@ -87,7 +87,8 @@ public:
 	void updateNeedBubbleState() override;
 	bool needsBubble() const override;
 	bool customInfoLayout() const override {
-		return (_mode != Mode::Column);
+		// Suppress default bottom info in Column mode; we provide custom first-item info.
+		return true;
 	}
 	QPoint resolveCustomInfoRightBottom() const override;
 

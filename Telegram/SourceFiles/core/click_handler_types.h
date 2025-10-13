@@ -74,9 +74,6 @@ public:
 		const auto button = context.button;
 		if (button == Qt::LeftButton || button == Qt::MiddleButton) {
 			Open(url(), context.other);
-			if (auto show = base::get_optional<Window::SessionController*>(context.other, QStringLiteral("show"))) {
-				(*show)->showToast(tr::lng_copied(tr::now));
-			}
 		}
 	}
 

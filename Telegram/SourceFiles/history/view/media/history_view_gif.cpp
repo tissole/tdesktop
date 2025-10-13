@@ -746,8 +746,8 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			}
 			Ui::FillRoundRect(p, style::rtlrect(statusX - st::msgDateImgPadding.x(), statusY - st::msgDateImgPadding.y(), statusW, statusH, width()), sti->msgServiceBg, sti->msgServiceBgCornersSmall);
 			p.setFont(st::normalFont);
-			// Use consistent edited glyph and color for status
-			const auto editedGlyph = (_realParent->data()->Get<HistoryMessageEdited>() && !_realParent->data()->hideEditedBadge())
+			// Use consistent edited glyph and color for status; rely on this item's edited state
+			const auto editedGlyph = (item->Get<HistoryMessageEdited>() && !item->hideEditedBadge())
 				? (QString::fromUtf8("✏️") + " ")
 				: QString();
 			const auto statusText = editedGlyph + _statusText;
