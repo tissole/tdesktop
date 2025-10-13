@@ -128,7 +128,7 @@ void GroupedMedia::drawMessageIdInfo(
 
 	// Draw with uniform style brush to avoid edge transparency differences
 	p.save();
-p.setOpacity(0.88);
+p.setOpacity(0.90);
 	Ui::FillRoundRect(
 		p,
 		bubbleX,
@@ -451,7 +451,11 @@ QMargins GroupedMedia::groupedPadding() const {
 	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 	const auto lastHasCaption = isBubbleBottom()
 		&& !_parts.back().item->emptyText();
-	const auto addToBottom = lastHasCaption ? st::msgPadding.bottom() : 0;
+	// Suppress legacy bottom space from the old bottom bubble when captions
+	// come from file name: do not add extra bottom padding in Column mode.
+	const auto addToBottom = GetEnhancedBool("caption_from_file_name")
+		? 0
+		: (lastHasCaption ? st::msgPadding.bottom() : 0);
 	return QMargins(
 		0,
 		(normal.top() - grouped.top()) - topMinus,
@@ -623,45 +627,69 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			}
 
 			if (i == 0) {
-				// First item: draw combined info line (views/edited/time/id) on size row
-				QString infoText;
-				if (const auto views = item->Get<HistoryMessageViews>()) {
-					if (views->views.count >= 0) {
-						infoText += Lang::FormatCountToShort(std::max(views->views.count, 1)).string + " ";
-					}
-				}
-				if (item->Get<HistoryMessageEdited>() && !item->hideEditedBadge()) {
-					infoText += QString::fromUtf8("✏️") + " ";
-				}
+				// First item: draw views icon + views count + edited (if any) + time + id
+				const auto st = context.st;
+				const auto stm = context.messageStyle();
+				p.setFont(st::msgDateFont);
+				p.setPen(stm->msgDateFg);
+
+				const auto itemRect = part.geometry.translated(0, groupPadding.top());
+				const auto &docStyle = st::msgFileLayoutGrouped;
+				const auto statustop = docStyle.statusTop - st::msgFileTopMinus;
+				const auto baseY = itemRect.y() + statustop + st::msgDateFont->ascent;
+
+				// Compose pieces
+				const auto views = item->Get<HistoryMessageViews>();
+				const auto viewsText = (views && views->views.count >= 0)
+					? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+					: QString();
+				const bool editedNow = (item->Get<HistoryMessageEdited>() && !item->hideEditedBadge());
+				const auto editText = editedNow ? (QString::fromUtf8("✏️") + " ") : QString();
 				const auto timeText = QLocale().toString(
 					ItemDateTime(item).time(),
 					GetEnhancedBool("show_seconds")
 						? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
 						: QLocale::system().timeFormat(QLocale::ShortFormat));
-				infoText += timeText;
-				if (GetEnhancedBool("show_messages_id")) {
-					const auto msgId = item->fullId().msg;
-					if (msgId > 0) infoText += " " + QString::number(msgId.bare);
-				}
+				const auto idText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+					? (QString(" ") + QString::number(item->fullId().msg.bare))
+					: QString();
 
-				if (!infoText.isEmpty()) {
-					const auto st = context.st;
-					p.setFont(st::msgDateFont);
-					p.setPen(st->msgDateImgFg());
+				// Metrics and layout
+				const int iconGap = 2;
+				const int textGap = st::msgDateFont->spacew; // general gap between blocks
+				const int iconW = st::historyViewsWidth;
+				const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + st::msgDateFont->width(viewsText));
+				const int editedW = editedNow ? st::msgDateFont->width(editText) : 0;
+				const int timeIdW = st::msgDateFont->width(timeText + idText);
+				int totalW = 0;
+				if (viewsW > 0) totalW += viewsW + textGap;
+				if (editedW > 0) totalW += editedW + textGap;
+				totalW += timeIdW;
 
-					const auto itemRect = part.geometry.translated(0, groupPadding.top());
-					const auto textWidth = st::msgDateFont->width(infoText);
-					const auto &docStyle = st::msgFileLayoutGrouped;
-					const auto statustop = docStyle.statusTop - st::msgFileTopMinus;
-					const auto textX = itemRect.x() + itemRect.width() - textWidth - st::msgDateImgDelta;
-					const auto textY = itemRect.y() + statustop + st::msgDateFont->ascent;
-					p.drawText(textX, textY, infoText);
+				int x = itemRect.x() + itemRect.width() - totalW - st::msgDateImgDelta;
+				// Draw views icon + count
+				if (viewsW > 0) {
+					const auto &icon = st->historyViewsInvertedIcon();
+					const int iconH = icon.height();
+					const int scaledH = (iconH * iconW) / std::max(1, icon.width());
+					const int iconTop = baseY - st::msgDateFont->ascent + (st::msgDateFont->height - scaledH) / 2;
+					icon.paint(p, x, iconTop, iconW);
+					p.drawText(x + iconW + iconGap, baseY, viewsText);
+					x += viewsW + textGap;
 				}
+				// Draw edited icon if any
+				if (editedW > 0) {
+					p.drawText(x, baseY, editText);
+					x += editedW + textGap;
+				}
+				// Draw time + id
+				p.drawText(x, baseY, timeText + idText);
 			} else if (!infoText.isEmpty()) {
 				const auto st = context.st;
+				const auto stm = context.messageStyle();
 				p.setFont(st::msgDateFont);
-				// Use faint gray color similar to Grid bubbles
-				p.setPen(st->msgDateImgFg());
+				// Match single-document bubbles color
+				p.setPen(stm->msgDateFg);
 
 				const auto itemRect = part.geometry.translated(0, groupPadding.top());
 				const auto textWidth = st::msgDateFont->width(infoText);
@@ -779,8 +807,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			}
 
 			int viewsWidth = 0;
+			const int viewsIconGap = 2; // tighter gap between views icon and count
 			if (!viewsText.isEmpty()) {
-				viewsWidth = st::historyViewsWidth + iconPadding + font->width(viewsText);
+				viewsWidth = st::historyViewsWidth + viewsIconGap + font->width(viewsText);
 				// Include extra spacing around views block to match Column order
 				totalWidth += (2 * textPadding) + viewsWidth;
 			}
@@ -798,7 +827,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			// Draw with uniform style brush to avoid edge transparency differences
 			p.save();
-			p.setOpacity(0.88);
+			p.setOpacity(0.90);
 			Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, sti->msgDateImgBg, sti->msgDateImgBgCorners);
 			p.restore();
 
@@ -813,9 +842,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			if (!viewsText.isEmpty()) {
 				currentRight -= ((2 * textPadding) + viewsWidth);
 				const auto &icon = st->historyViewsInvertedIcon();
-				const auto iconY = bubbleY + (bubbleH - st::historyViewsWidth) / 2;
+				const auto baseIconW = std::max(1, icon.width());
+				const auto baseIconH = icon.height();
+				const auto scaledIconH = (baseIconH * st::historyViewsWidth) / baseIconW;
+				const auto iconY = bubbleY + (bubbleH - scaledIconH) / 2;
 				icon.paint(p, currentRight, iconY, st::historyViewsWidth);
-				p.drawText(currentRight + st::historyViewsWidth + iconPadding, textBaseY, viewsText);
+				p.drawText(currentRight + st::historyViewsWidth + viewsIconGap, textBaseY, viewsText);
 			}
 
 			if (edited) {
@@ -872,75 +904,67 @@ TextState GroupedMedia::getPartState(
 				const int currentRight = itemRect.x() + itemRect.width();
 
 				if (i == 0) {
-					// Calculate hover rect for the first item.
-					QString infoText;
-					if (edited && !item->hideEditedBadge()) {
-						infoText += QString::fromUtf8("✏️");
+					// Three hover areas for first item: views (icon+count), edited+time+id (if edited), time+id.
+					const auto font = st::msgDateFont;
+					const auto timeText = QLocale().toString(
+						ItemDateTime(item).time(),
+						GetEnhancedBool("show_seconds")
+							? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+							: QLocale::system().timeFormat(QLocale::ShortFormat));
+					const auto idText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+						? QString(" %1").arg(item->fullId().msg.bare)
+						: QString();
+					const bool editedNow = (edited && !item->hideEditedBadge());
+					const int editedW = editedNow ? font->width(QString::fromUtf8("✏️") + " ") : 0;
+					const int timeIdW = font->width(timeText + idText);
+					const auto views = item->Get<HistoryMessageViews>();
+					const auto viewsText = (views && views->views.count >= 0)
+						? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+						: QString();
+					const int iconGap = 2;
+					const int iconW = st::historyViewsWidth;
+					const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
+
+					int right = currentRight - st::msgDateImgDelta;
+					const int lineTop = y;
+					const int lineH = font->height;
+
+					QRect viewsRect;
+					if (viewsW > 0) {
+						viewsRect = QRect(right - viewsW, lineTop, viewsW, lineH);
+						right -= (viewsW + font->spacew);
 					}
-					if (GetEnhancedBool("show_messages_id")) {
-						const auto msgId = item->fullId().msg;
-						if (msgId > 0) {
-							if (!infoText.isEmpty()) infoText += ' ';
-							infoText += QString::number(msgId.bare);
-						}
-					}
+					const QRect timeIdRect(right - timeIdW, lineTop, timeIdW, lineH);
+					const QRect editedRect = editedNow
+						? QRect(timeIdRect.left() - editedW, lineTop, editedW + timeIdW, lineH)
+						: QRect();
 
-					if (!infoText.isEmpty()) {
-						const auto textWidth = st::msgDateFont->width(infoText);
-						const auto textHeight = st::msgDateFont->height;
-						const auto hPadding = 2;
-						const auto vPadding = st::msgDateImgPadding.y();
-						const auto dateW = textWidth + (2 * hPadding);
-						const auto dateH = textHeight + 2 * vPadding;
-						const auto bubbleX = currentRight - dateW - st::msgDateImgDelta;
-						const auto bubbleY = y;
-						const QRect infoRect(bubbleX, bubbleY, dateW, dateH);
-
-						if (infoRect.contains(point)) {
-							const auto uploadUTCTime = QDateTime::fromSecsSinceEpoch(item->date());
-							const auto uploadLocalTime = uploadUTCTime.toLocalTime();
-							QString tooltipText = tr::lng_uploaded(tr::now) + ": "
-								+ uploadLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
-								+ uploadLocalTime.time().toString("HH:mm:ss");
-							// Append Message ID at end of Uploaded line
-							const auto msgIdValue = item->fullId().msg;
-							if (msgIdValue > 0) {
-								tooltipText += "  ID: " + QString::number(msgIdValue.bare);
-							}
-
-							if (edited && !item->hideEditedBadge()) {
-								const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
-								const auto editLocalTime = editUTCTime.toLocalTime();
-								QString editedTranslation = tr::lng_edited(tr::now);
-								editedTranslation = editedTranslation.toUpper().left(1)
-									+ editedTranslation.mid(1);
-								tooltipText += "\n" + editedTranslation + ": "
-									+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
-									+ editLocalTime.time().toString("HH:mm:ss");
-							}
-
-							result.customTooltip = true;
-							result.customTooltipText = tooltipText;
-						}
-
-						// Views tooltip region (only for first item line): icon + views text at the left of the line
-						if (const auto views = item->Get<HistoryMessageViews>()) {
-							if (views->views.count >= 0) {
-								const auto font = st::msgDateFont;
-								const auto viewsText = Lang::FormatCountToShort(std::max(views->views.count, 1)).string;
-								const auto iconW = st::historyViewsWidth;
-								const auto iconPad = st::historyViewsSpace;
-								const auto textW = font->width(viewsText);
-								const auto totalW = iconW + iconPad + textW;
-								const auto lineTop = y; // same row start
-								const QRect viewsRect(infoRect.right() - dateW, lineTop, totalW, st::msgDateFont->height);
-								if (viewsRect.contains(point)) {
-									const auto viewsString = QString("Views: ") + viewsText;
-									result.customTooltip = true;
-									result.customTooltipText = viewsString;
-								}
-							}
-						}
+					// Views tooltip
+					if (viewsW > 0 && viewsRect.contains(point)) {
+						result.customTooltip = true;
+						result.customTooltipText = QString("Views: ") + viewsText;
+					// Edited tooltip (includes both Uploaded and Edited lines)
+					} else if (editedNow && editedRect.contains(point)) {
+						const auto uploadLocal = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+						QString tooltipText = tr::lng_uploaded(tr::now) + ": "
+							+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
+							+ uploadLocal.time().toString("HH:mm:ss");
+						const auto editLocal = QDateTime::fromSecsSinceEpoch(edited->date).toLocalTime();
+						QString editedTranslation = tr::lng_edited(tr::now);
+						editedTranslation = editedTranslation.toUpper().left(1) + editedTranslation.mid(1);
+						tooltipText += "\n" + editedTranslation + ": "
+							+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
+							+ editLocal.time().toString("HH:mm:ss");
+						result.customTooltip = true;
+						result.customTooltipText = tooltipText;
+					// Uploaded tooltip (time+id area)
+					} else if (timeIdRect.contains(point)) {
+						const auto uploadLocal = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+						QString tooltipText = tr::lng_uploaded(tr::now) + ": "
+							+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
+							+ uploadLocal.time().toString("HH:mm:ss");
+						result.customTooltip = true;
+						result.customTooltipText = tooltipText;
 					}
 				} else {
 					// Calculate hover rect for items 2..N.
