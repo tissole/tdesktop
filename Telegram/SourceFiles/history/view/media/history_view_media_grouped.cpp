@@ -28,6 +28,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat.h"
 #include "styles/style_basic.h"
 #include "core/enhanced_settings.h"
+// For HiddenUrlClickHandler used in Grid caption click-to-copy
+#include "core/click_handler_types.h"
 
 namespace HistoryView {
 namespace {
