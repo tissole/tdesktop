@@ -1049,18 +1049,31 @@ TextState GroupedMedia::getPartState(
 					const auto bubbleY = itemRect.y();
 					const QRect infoRect(bubbleX, bubbleY, dateW, dateH);
 
-					if (infoRect.contains(point) && edited && !item->hideEditedBadge()) {
-						const auto editUTCTime = QDateTime::fromSecsSinceEpoch(
-							edited->date);
-						const auto editLocalTime = editUTCTime.toLocalTime();
-						QString editedTranslation = tr::lng_edited(tr::now);
-						editedTranslation = editedTranslation.toUpper().left(1)
-							+ editedTranslation.mid(1);
-						const QString tooltipText = editedTranslation + ", "
-							+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
-							+ editLocalTime.time().toString("HH:mm:ss");
-						result.customTooltip = true;
-						result.customTooltipText = tooltipText;
+					if (infoRect.contains(point)) {
+						QString tooltipText;
+						// Always show Message ID tooltip
+						if (GetEnhancedBool("show_messages_id")) {
+							const auto msgId = item->fullId().msg;
+							if (msgId > 0) {
+								tooltipText = QString("Message ID: ") + QString::number(msgId.bare);
+							}
+						}
+						// If edited, add edited time on a new line
+						if (edited && !item->hideEditedBadge()) {
+							const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
+							const auto editLocalTime = editUTCTime.toLocalTime();
+							QString editedTranslation = tr::lng_edited(tr::now);
+							editedTranslation = editedTranslation.toUpper().left(1)
+								+ editedTranslation.mid(1);
+							if (!tooltipText.isEmpty()) tooltipText += "\n";
+							tooltipText += editedTranslation + ": "
+								+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
+								+ editLocalTime.time().toString("HH:mm:ss");
+						}
+						if (!tooltipText.isEmpty()) {
+							result.customTooltip = true;
+							result.customTooltipText = tooltipText;
+						}
 					}
 				}
 				// END: New tooltip logic for Grid album items (2..N).
@@ -1200,30 +1213,58 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			const auto bubbleY = bottom + st::msgDateImgDelta; // 'bottom' here is actually the top edge.
 
 			const QRect infoRect(bubbleX, bubbleY, bubbleW, bubbleH);
-			if (infoRect.contains(point)) {
-				const auto uploadUTCTime = QDateTime::fromSecsSinceEpoch(item->date());
-				const auto uploadLocalTime = uploadUTCTime.toLocalTime();
+			// Build three hover areas for Grid first bubble: views (icon+count), edited+time+id (if edited), time+id.
+			const int iconGap = 2;
+			const int iconW = st::historyViewsWidth;
+			const int viewsBlockW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
+			const int editedW = edited ? font->width(QString::fromUtf8("✏️") + " ") : 0;
+			const int timeIdW = font->width(dateText + msgIdText);
+			int right = bubbleX + bubbleW - hPadding;
+			QRect viewsRect, timeIdRect, editedRect;
+			if (viewsBlockW > 0) {
+				viewsRect = QRect(right - viewsBlockW, bubbleY, viewsBlockW, bubbleH);
+				right -= (viewsBlockW + textPadding);
+			}
+			timeIdRect = QRect(right - timeIdW, bubbleY, timeIdW, bubbleH);
+			if (edited) {
+				editedRect = QRect(timeIdRect.left() - editedW, bubbleY, editedW + timeIdW, bubbleH);
+			}
+			// Views tooltip
+			if (viewsBlockW > 0 && viewsRect.contains(point)) {
+				result.customTooltip = true;
+				result.customTooltipText = QString("Views: ") + viewsText;
+				return result;
+			}
+			// Edited tooltip includes Uploaded + Edited lines
+			if (edited && editedRect.contains(point)) {
+				const auto uploadLocalTime = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 				QString tooltipText = tr::lng_uploaded(tr::now) + ": "
 					+ uploadLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
 					+ uploadLocalTime.time().toString("HH:mm:ss");
-				// Append Message ID to the Uploaded line
 				const auto msgIdValue = item->fullId().msg;
 				if (msgIdValue > 0) {
 					tooltipText += "  ID: " + QString::number(msgIdValue.bare);
 				}
-
-				if (edited) {
-					const auto editUTCTime = QDateTime::fromSecsSinceEpoch(
-						item->Get<HistoryMessageEdited>()->date);
-					const auto editLocalTime = editUTCTime.toLocalTime();
-					QString editedTranslation = tr::lng_edited(tr::now);
-					editedTranslation = editedTranslation.toUpper().left(1)
-						+ editedTranslation.mid(1);
-					tooltipText += "\n" + editedTranslation + ": "
-						+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
-						+ editLocalTime.time().toString("HH:mm:ss");
+				const auto editLocalTime = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
+				QString editedTranslation = tr::lng_edited(tr::now);
+				editedTranslation = editedTranslation.toUpper().left(1) + editedTranslation.mid(1);
+				tooltipText += "\n" + editedTranslation + ": "
+					+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
+					+ editLocalTime.time().toString("HH:mm:ss");
+				result.customTooltip = true;
+				result.customTooltipText = tooltipText;
+				return result;
+			}
+			// Uploaded tooltip for time+id area
+			if (timeIdRect.contains(point)) {
+				const auto uploadLocalTime = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+				QString tooltipText = tr::lng_uploaded(tr::now) + ": "
+					+ uploadLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
+					+ uploadLocalTime.time().toString("HH:mm:ss");
+				const auto msgIdValue = item->fullId().msg;
+				if (msgIdValue > 0) {
+					tooltipText += "  ID: " + QString::number(msgIdValue.bare);
 				}
-
 				result.customTooltip = true;
 				result.customTooltipText = tooltipText;
 				return result;
