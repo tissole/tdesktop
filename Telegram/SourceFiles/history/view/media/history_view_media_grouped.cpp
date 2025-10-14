@@ -921,18 +921,36 @@ TextState GroupedMedia::getPartState(
 					const int iconW = st::historyViewsWidth;
 					const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
 
-					int right = currentRight - st::msgDateImgDelta;
+					// Build hover rects from the left edge of the bubble to match drawing order.
+					const int textGap = font->spacew;
 					const int lineTop = y;
 					const int lineH = font->height;
 
+					int totalW = 0;
+					if (viewsW > 0) totalW += viewsW + textGap;
+					if (editedW > 0) totalW += editedW + textGap;
+					totalW += timeIdW;
+
+					const int startX = currentRight - st::msgDateImgDelta - totalW;
+					int currentX = startX;
+
 					QRect viewsRect;
 					if (viewsW > 0) {
-						viewsRect = QRect(right - viewsW, lineTop, viewsW, lineH);
-						right -= (viewsW + font->spacew);
+						viewsRect = QRect(currentX, lineTop, viewsW, lineH);
+						currentX += viewsW + textGap;
 					}
-					const QRect timeIdRect(right - timeIdW, lineTop, timeIdW, lineH);
+					QRect editedOnlyRect;
+					if (editedW > 0) {
+						editedOnlyRect = QRect(currentX, lineTop, editedW, lineH);
+						currentX += editedW + textGap;
+					}
+					const QRect timeIdRect(currentX, lineTop, timeIdW, lineH);
+					// Edited tooltip should cover both the edited icon and the time+id area when present.
 					const QRect editedRect = editedNow
-						? QRect(timeIdRect.left() - editedW, lineTop, editedW + timeIdW, lineH)
+						? QRect(editedOnlyRect.isNull() ? timeIdRect.left() : editedOnlyRect.left(),
+							lineTop,
+							(editedOnlyRect.isNull() ? 0 : editedOnlyRect.width()) + timeIdRect.width(),
+							lineH)
 						: QRect();
 
 					// Views tooltip
@@ -1209,22 +1227,32 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			const auto bubbleY = bottom + st::msgDateImgDelta; // 'bottom' here is actually the top edge.
 
 			const QRect infoRect(bubbleX, bubbleY, bubbleW, bubbleH);
-			// Build three hover areas for Grid first bubble: views (icon+count), edited+time+id (if edited), time+id.
-			const int iconGap = 2;
-			const int iconW = st::historyViewsWidth;
-			const int viewsBlockW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
-			const int editedW = edited ? font->width(QString::fromUtf8("✏️") + " ") : 0;
-			const int timeIdW = font->width(dateText + msgIdText);
-			int hoverRight = bubbleX + bubbleW - hPadding;
-			QRect viewsRect, timeIdRect, editedRect;
-			if (viewsBlockW > 0) {
-				viewsRect = QRect(hoverRight - viewsBlockW, bubbleY, viewsBlockW, bubbleH);
-				hoverRight -= (viewsBlockW + textPadding);
-			}
-			timeIdRect = QRect(hoverRight - timeIdW, bubbleY, timeIdW, bubbleH);
-			if (edited) {
-				editedRect = QRect(timeIdRect.left() - editedW, bubbleY, editedW + timeIdW, bubbleH);
-			}
+				// Build three hover areas for Grid first bubble from the left edge:
+				// views (icon+count), edited+time+id (if edited), time+id.
+				const int iconGap = 2;
+				const int iconW = st::historyViewsWidth;
+				const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
+				const int editedW = edited ? font->width(QString::fromUtf8("✏️") + " ") : 0;
+				const int timeIdW = font->width(dateText + msgIdText);
+				int hoverLeft = bubbleX + hPadding;
+				QRect viewsRect, timeIdRect, editedRect;
+				if (viewsW > 0) {
+					viewsRect = QRect(hoverLeft, bubbleY, viewsW, bubbleH);
+					hoverLeft += viewsW + textPadding;
+				}
+				QRect editedOnlyRect;
+				if (edited) {
+					editedOnlyRect = QRect(hoverLeft, bubbleY, editedW, bubbleH);
+					hoverLeft += editedW + textPadding;
+				}
+				timeIdRect = QRect(hoverLeft, bubbleY, timeIdW, bubbleH);
+				// Edited tooltip covers both the edited icon and the time+id area when present.
+				if (edited) {
+					editedRect = QRect(editedOnlyRect.isNull() ? timeIdRect.left() : editedOnlyRect.left(),
+						bubbleY,
+						(editedOnlyRect.isNull() ? 0 : editedOnlyRect.width()) + timeIdRect.width(),
+						bubbleH);
+				}
 			// Views tooltip
 			if (viewsBlockW > 0 && viewsRect.contains(point)) {
 				result.customTooltip = true;
@@ -1266,21 +1294,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 				return result;
 			}
 
-			// Views tooltip area (first item only): views icon + count block on the right side
-			if (!viewsText.isEmpty()) {
-				const int iconPad = st::historyViewsSpace;
-				const int iconW = st::historyViewsWidth;
-				const int textW = font->width(viewsText);
-				const int viewsBlockW = (2 * textPadding) + iconW + iconPad + textW;
-				const int viewsRight = bubbleX + bubbleW - hPadding;
-				const int viewsLeft = viewsRight - viewsBlockW;
-				const QRect viewsRect(viewsLeft, bubbleY, viewsBlockW, bubbleH);
-				if (viewsRect.contains(point)) {
-					result.customTooltip = true;
-					result.customTooltipText = QString("Views: ") + viewsText;
-					return result;
-				}
-			}
+				// Remove conflicting right-anchored views hover area; views belong to the left.
 
 			if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 				auto fullRight = width();
