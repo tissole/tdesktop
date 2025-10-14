@@ -770,7 +770,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				const auto itemRect = part.geometry.translated(0, groupPadding.top());
 				const auto textWidth = st::msgDateFont->width(infoText);
-				const auto textHeight = st::msgDateFont->height;
+				// const auto textHeight = st::msgDateFont->height; // Unused.
 				const auto &docStyle = st::msgFileLayoutGrouped;
 				const auto topMinus = st::msgFileTopMinus;
 				const auto statustop = docStyle.statusTop - topMinus;
@@ -1331,8 +1331,8 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 						(editedOnlyRect.isNull() ? 0 : editedOnlyRect.width()) + timeIdRect.width(),
 						bubbleH);
 				}
-			// Views tooltip
-			if (viewsBlockW > 0 && viewsRect.contains(point)) {
+				// Views tooltip
+				if (viewsW > 0 && viewsRect.contains(point)) {
 				result.customTooltip = true;
 				result.customTooltipText = QString("Views: ") + viewsText;
 				return result;
