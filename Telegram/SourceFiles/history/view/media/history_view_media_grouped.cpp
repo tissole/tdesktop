@@ -1176,7 +1176,9 @@ TextState GroupedMedia::getPartState(
 				const auto originalText = part.item->originalText();
 				if (!originalText.empty()) {
 					// Provide click-to-copy for captions in Grid mode with toast via internal scheme.
-					const auto copyUrl = QString("internal:copycaption:") + originalText.text;
+					// Percent-encode caption to avoid breaking the internal handler with special characters.
+					const auto encoded = QUrl::toPercentEncoding(originalText.text);
+					const auto copyUrl = QString("internal:copycaption:") + QString::fromUtf8(encoded);
 					result.link = ClickHandlerPtr{ new HiddenUrlClickHandler(copyUrl) };
 					// Keep tooltip for ellipsized captions.
 					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
