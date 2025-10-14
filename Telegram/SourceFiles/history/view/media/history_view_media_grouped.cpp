@@ -794,7 +794,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			// --- 2. Calculate layout from right to left ---
 			int totalWidth = 0;
-			const int iconPadding = st::historyViewsSpace;
+			// iconPadding not used in hover layout; keep only textPadding below
 			const int textPadding = font->spacew;
 
 			const int dateWidth = font->width(dateText + msgIdText);
@@ -1219,13 +1219,13 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			const int viewsBlockW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
 			const int editedW = edited ? font->width(QString::fromUtf8("✏️") + " ") : 0;
 			const int timeIdW = font->width(dateText + msgIdText);
-			int right = bubbleX + bubbleW - hPadding;
+			int hoverRight = bubbleX + bubbleW - hPadding;
 			QRect viewsRect, timeIdRect, editedRect;
 			if (viewsBlockW > 0) {
-				viewsRect = QRect(right - viewsBlockW, bubbleY, viewsBlockW, bubbleH);
-				right -= (viewsBlockW + textPadding);
+				viewsRect = QRect(hoverRight - viewsBlockW, bubbleY, viewsBlockW, bubbleH);
+				hoverRight -= (viewsBlockW + textPadding);
 			}
-			timeIdRect = QRect(right - timeIdW, bubbleY, timeIdW, bubbleH);
+			timeIdRect = QRect(hoverRight - timeIdW, bubbleY, timeIdW, bubbleH);
 			if (edited) {
 				editedRect = QRect(timeIdRect.left() - editedW, bubbleY, editedW + timeIdW, bubbleH);
 			}
