@@ -31,6 +31,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/enhanced_settings.h"
 // For HiddenUrlClickHandler used in Grid caption click-to-copy
 #include "core/click_handler_types.h"
+#include <QtCore/QUrl>
 #include "data/data_photo.h"
 
 namespace HistoryView {
@@ -1169,8 +1170,7 @@ TextState GroupedMedia::getPartState(
 				// END: New tooltip logic for Grid album items (2..N).
 			}
 
-			if (result.itemId
-				&& _mode == Mode::Grid
+			if (_mode == Mode::Grid
 				&& !part.captionRect.isEmpty()
 				&& part.captionRect.contains(point)) {
 				const auto originalText = part.item->originalText();

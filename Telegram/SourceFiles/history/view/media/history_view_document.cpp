@@ -1588,8 +1588,8 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = maxWidth
-			- st::msgPadding.left()
-			- st::msgPadding.right();
+			- st.padding.left()
+			- st.padding.right();
 		height += captioned->caption.countHeight(captionw);
 	}
 	return { maxWidth, height };
@@ -1601,8 +1601,8 @@ QSize Document::sizeForGrouping(int width) const {
 	auto height = st.padding.top() + st.thumbSize + st.padding.bottom();
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
-			- st::msgPadding.left()
-			- st::msgPadding.right();
+			- st.padding.left()
+			- st.padding.right();
 		height += captioned->caption.countHeight(captionw);
 	}
 	return { maxWidth(), height };
