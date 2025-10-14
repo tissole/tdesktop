@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_style.h"
 #include "ui/chat/message_bubble.h"
 #include "ui/text/text_options.h"
+#include "ui/text/format_values.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "layout/layout_selection.h"
@@ -30,6 +31,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/enhanced_settings.h"
 // For HiddenUrlClickHandler used in Grid caption click-to-copy
 #include "core/click_handler_types.h"
+#include "data/data_photo.h"
 
 namespace HistoryView {
 namespace {
@@ -601,6 +603,63 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 
+		// Draw video info bubble (duration + size) on Grid albums, top-left, for all videos.
+		if (_mode == Mode::Grid) {
+			const auto dataMedia = part.item->media();
+			qint64 durSeconds = -1;
+			qint64 sizeBytes = -1;
+			if (const auto file = dynamic_cast<Data::MediaFile*>(dataMedia)) {
+				const auto document = file->document();
+				if (document && document->isVideoFile()) {
+					durSeconds = std::max<qint64>(0, document->duration() / 1000);
+					sizeBytes = document->size;
+				}
+			} else if (const auto photoMedia = dynamic_cast<Data::MediaPhoto*>(dataMedia)) {
+				const auto photo = photoMedia->photo();
+				if (photo && photo->videoCanBePlayed()) {
+					if (const auto d = photo->extendedMediaVideoDuration()) {
+						durSeconds = std::max<qint64>(0, *d);
+					} else {
+						durSeconds = 0;
+					}
+					sizeBytes = photo->videoByteSize(Data::PhotoSize::Large);
+				}
+			}
+
+			if (durSeconds >= 0 && sizeBytes > 0) {
+				const auto font = st::msgDateFont;
+				const auto sti = context.imageStyle();
+				const auto text = Ui::FormatDurationText(durSeconds) + QChar(' ') + Ui::FormatSizeText(sizeBytes);
+				const auto textWidth = font->width(text);
+				const auto textHeight = font->height;
+				const auto hPadding = 2;
+				const auto vPadding = st::msgDateImgPadding.y();
+				const auto bubbleW = textWidth + 2 * hPadding;
+				const auto bubbleH = textHeight + 2 * vPadding;
+
+				auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
+				const auto bubbleX = mediaGeometry.x() + st::msgDateImgDelta;
+				const auto bubbleY = mediaGeometry.y() + st::msgDateImgDelta;
+
+				p.save();
+				p.setOpacity(0.95);
+				Ui::FillRoundRect(
+					p,
+					bubbleX,
+					bubbleY,
+					bubbleW,
+					bubbleH,
+					sti->msgDateImgBg,
+					sti->msgDateImgBgCorners);
+				p.restore();
+
+				p.setPen(st->msgDateImgFg());
+				p.setFont(font->bold());
+				const auto baseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
+				p.drawText(bubbleX + hPadding, baseY, text);
+			}
+		}
+
 		if (_mode == Mode::Column) {
 			// Draw info for first item (views/date/id), msg-id bubbles for the rest in Column mode
 			QString infoText;
@@ -662,6 +721,28 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				totalW += timeIdW;
 
 				int x = itemRect.x() + itemRect.width() - totalW - st::msgDateImgDelta;
+				// Prevent overlay from overlapping the document status text (e.g., "12.9 MB").
+				// Compute the left bound of the status text area for Column grouped layout.
+				int reservedLeft = 0;
+				{
+					const auto &docStyle = st::msgFileLayoutGrouped;
+					const int nameleft = docStyle.padding.left() + docStyle.thumbSize + docStyle.thumbSkip;
+					QString statusText;
+					if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
+						if (const auto document = fileMedia->document()) {
+							statusText = Ui::FormatSizeText(document->size);
+						}
+					}
+					if (!statusText.isEmpty()) {
+						reservedLeft = nameleft + st::normalFont->width(statusText) + st::normalFont->spacew;
+					}
+				}
+				// If the overlay would overlap the status text, push it right to leave a gap.
+				if (reservedLeft > 0) {
+					const auto minGap = st::normalFont->spacew;
+					const auto minX = reservedLeft + minGap;
+					if (x < minX) x = minX;
+				}
 				// Draw views icon + count
 				if (viewsW > 0) {
 					// Use non-inverted icon to match text color inside the bubble.
