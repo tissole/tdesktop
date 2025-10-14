@@ -128,7 +128,7 @@ void GroupedMedia::drawMessageIdInfo(
 
 	// Draw with uniform style brush to avoid edge transparency differences
 	p.save();
-p.setOpacity(0.90);
+p.setOpacity(0.95);
 	Ui::FillRoundRect(
 		p,
 		bubbleX,
@@ -669,7 +669,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				int x = itemRect.x() + itemRect.width() - totalW - st::msgDateImgDelta;
 				// Draw views icon + count
 				if (viewsW > 0) {
-					const auto &icon = st->historyViewsInvertedIcon();
+					// Use non-inverted icon to match text color inside the bubble.
+					const auto &icon = stm->historyViewsIcon;
 					const int iconH = icon.height();
 					const int scaledH = (iconH * iconW) / std::max(1, icon.width());
 					const int iconTop = baseY - st::msgDateFont->ascent + (st::msgDateFont->height - scaledH) / 2;
@@ -827,7 +828,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			// Draw with uniform style brush to avoid edge transparency differences
 			p.save();
-			p.setOpacity(0.90);
+			p.setOpacity(0.95);
 			Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, sti->msgDateImgBg, sti->msgDateImgBgCorners);
 			p.restore();
 
@@ -836,30 +837,25 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			p.setPen(st->msgDateImgFg());
 			p.setFont(font->bold());
 			const int textBaseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
-			int currentRight = bubbleX + bubbleW - hPadding;
-
-			// Order: icon, views, edited, time, id
+			// Draw left-to-right: views icon + count, edited icon, time + id
+			int currentLeft = bubbleX + hPadding;
 			if (!viewsText.isEmpty()) {
-				currentRight -= ((2 * textPadding) + viewsWidth);
 				const auto &icon = st->historyViewsInvertedIcon();
-				const auto baseIconW = std::max(1, icon.width());
-				const auto baseIconH = icon.height();
-				const auto scaledIconH = (baseIconH * st::historyViewsWidth) / baseIconW;
-				const auto iconY = bubbleY + (bubbleH - scaledIconH) / 2;
-				icon.paint(p, currentRight, iconY, st::historyViewsWidth);
-				p.drawText(currentRight + st::historyViewsWidth + viewsIconGap, textBaseY, viewsText);
+				const int baseIconW = std::max(1, icon.width());
+				const int baseIconH = icon.height();
+				const int scaledIconH = (baseIconH * st::historyViewsWidth) / baseIconW;
+				const int iconY = bubbleY + (bubbleH - scaledIconH) / 2;
+				icon.paint(p, currentLeft, iconY, st::historyViewsWidth);
+				p.drawText(currentLeft + st::historyViewsWidth + viewsIconGap, textBaseY, viewsText);
+				currentLeft += viewsWidth + textPadding;
 			}
-
 			if (edited) {
 				const auto editedText = QString::fromUtf8("✏️") + " ";
 				const auto editedWidth = font->width(editedText);
-				currentRight -= textPadding;
-				currentRight -= editedWidth;
-				p.drawText(currentRight, textBaseY, editedText);
+				p.drawText(currentLeft, textBaseY, editedText);
+				currentLeft += editedWidth + textPadding;
 			}
-
-			p.drawText(currentRight - dateWidth, textBaseY, dateText + msgIdText);
-			currentRight -= dateWidth;
+			p.drawText(currentLeft, textBaseY, dateText + msgIdText);
 
 			if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 				auto fullRight = width();
@@ -967,58 +963,58 @@ TextState GroupedMedia::getPartState(
 						result.customTooltipText = tooltipText;
 					}
 				} else {
-					// Calculate hover rect for items 2..N.
-					QString infoText;
-					if (edited && !item->hideEditedBadge()) {
-						infoText += QString::fromUtf8("✏️");
+				// Calculate hover rect for items 2..N.
+				QString infoText;
+				if (edited && !item->hideEditedBadge()) {
+					infoText += QString::fromUtf8("✏️");
+				}
+				if (GetEnhancedBool("show_messages_id")) {
+					const auto msgId = item->fullId().msg;
+					if (msgId > 0) {
+						if (!infoText.isEmpty()) infoText += ' ';
+						infoText += QString::number(msgId.bare);
 					}
-					if (GetEnhancedBool("show_messages_id")) {
-						const auto msgId = item->fullId().msg;
-						if (msgId > 0) {
-							if (!infoText.isEmpty()) infoText += ' ';
-							infoText += QString::number(msgId.bare);
-						}
-					}
-					if (!infoText.isEmpty()) {
-						const auto textWidth = st::msgDateFont->width(infoText);
-						const auto textHeight = st::msgDateFont->height;
-						const auto hPadding = 2;
-						const auto vPadding = st::msgDateImgPadding.y();
-						const auto dateW = textWidth + (2 * hPadding);
-						const auto dateH = textHeight + 2 * vPadding;
-						const auto bubbleX = currentRight - dateW - st::msgDateImgDelta;
-						const auto bubbleY = y;
-						const QRect infoRect(bubbleX, bubbleY, dateW, dateH);
+				}
+				if (!infoText.isEmpty()) {
+					const auto textWidth = st::msgDateFont->width(infoText);
+					const auto textHeight = st::msgDateFont->height;
+					const auto hPadding = 2;
+					const auto vPadding = st::msgDateImgPadding.y();
+					const auto dateW = textWidth + (2 * hPadding);
+					const auto dateH = textHeight + 2 * vPadding;
+					const auto bubbleX = currentRight - dateW - st::msgDateImgDelta;
+					const auto bubbleY = y;
+					const QRect infoRect(bubbleX, bubbleY, dateW, dateH);
 
-						if (infoRect.contains(point)) {
-							QString tooltipText;
-							// Always show Message ID tooltip
-							if (GetEnhancedBool("show_messages_id")) {
-								const auto msgId = item->fullId().msg;
-								if (msgId > 0) {
-									tooltipText = QString("Message ID: ") + QString::number(msgId.bare);
-								}
+					if (infoRect.contains(point)) {
+						QString tooltipText;
+						// Always show Message ID tooltip
+						if (GetEnhancedBool("show_messages_id")) {
+							const auto msgId = item->fullId().msg;
+							if (msgId > 0) {
+								tooltipText = QString("Message ID: ") + QString::number(msgId.bare);
 							}
-							// If edited, add edited time on a new line
-							if (edited && !item->hideEditedBadge()) {
-								const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
-								const auto editLocalTime = editUTCTime.toLocalTime();
-								QString editedTranslation = tr::lng_edited(tr::now);
-								editedTranslation = editedTranslation.toUpper().left(1)
-									+ editedTranslation.mid(1);
-								if (!tooltipText.isEmpty()) tooltipText += "\n";
-								tooltipText += editedTranslation + ": "
-									+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
-									+ editLocalTime.time().toString("HH:mm:ss");
-							}
-							if (!tooltipText.isEmpty()) {
-								result.customTooltip = true;
-								result.customTooltipText = tooltipText;
-							}
+						}
+						// If edited, add edited time on a new line
+						if (edited && !item->hideEditedBadge()) {
+							const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
+							const auto editLocalTime = editUTCTime.toLocalTime();
+							QString editedTranslation = tr::lng_edited(tr::now);
+							editedTranslation = editedTranslation.toUpper().left(1)
+								+ editedTranslation.mid(1);
+							if (!tooltipText.isEmpty()) tooltipText += "\n";
+							tooltipText += editedTranslation + ": "
+								+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
+								+ editLocalTime.time().toString("HH:mm:ss");
+						}
+						if (!tooltipText.isEmpty()) {
+							result.customTooltip = true;
+							result.customTooltipText = tooltipText;
 						}
 					}
 				}
 			}
+		}
 			// --- END: MODIFIED LOGIC FOR COLUMN MODE ---
 				// START: New tooltip logic for Grid album items (2..N).
 			else if (_mode == Mode::Grid && (&part != &_parts.front())) {
