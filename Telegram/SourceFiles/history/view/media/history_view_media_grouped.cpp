@@ -449,18 +449,13 @@ QMargins GroupedMedia::groupedPadding() const {
 	const auto normal = st::msgFileLayout.padding;
 	const auto grouped = st::msgFileLayoutGrouped.padding;
 	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-	const auto lastHasCaption = isBubbleBottom()
-		&& !_parts.back().item->emptyText();
-	// Suppress legacy bottom space from the old bottom bubble when captions
-	// come from file name: do not add extra bottom padding in Column mode.
-	const auto addToBottom = GetEnhancedBool("caption_from_file_name")
-		? 0
-		: (lastHasCaption ? st::msgPadding.bottom() : 0);
+	// Do not add extra bottom padding in Column mode for captions.
+	// Extra padding created a visible empty row after the last caption.
 	return QMargins(
 		0,
 		(normal.top() - grouped.top()) - topMinus,
 		0,
-		(normal.bottom() - grouped.bottom()) + addToBottom);
+		(normal.bottom() - grouped.bottom()));
 }
 
 Media *GroupedMedia::lookupSpoilerTagMedia() const {
@@ -655,7 +650,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					: QString();
 
 				// Metrics and layout
-				const int iconGap = 2;
+				const int iconGap = 1;
 				const int textGap = st::msgDateFont->spacew; // general gap between blocks
 				const int iconW = st::historyViewsWidth;
 				const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + st::msgDateFont->width(viewsText));
@@ -808,7 +803,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			}
 
 			int viewsWidth = 0;
-			const int viewsIconGap = 2; // tighter gap between views icon and count
+			const int viewsIconGap = 1; // gap between views icon and count
 			if (!viewsText.isEmpty()) {
 				viewsWidth = st::historyViewsWidth + viewsIconGap + font->width(viewsText);
 				// Include extra spacing around views block to match Column order
@@ -917,7 +912,7 @@ TextState GroupedMedia::getPartState(
 					const auto viewsText = (views && views->views.count >= 0)
 						? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
 						: QString();
-					const int iconGap = 2;
+					const int iconGap = 1;
 					const int iconW = st::historyViewsWidth;
 					const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
 
@@ -1229,7 +1224,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			const QRect infoRect(bubbleX, bubbleY, bubbleW, bubbleH);
 				// Build three hover areas for Grid first bubble from the left edge:
 				// views (icon+count), edited+time+id (if edited), time+id.
-				const int iconGap = 2;
+				const int iconGap = 1;
 				const int iconW = st::historyViewsWidth;
 				const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
 				const int editedW = edited ? font->width(QString::fromUtf8("✏️") + " ") : 0;
