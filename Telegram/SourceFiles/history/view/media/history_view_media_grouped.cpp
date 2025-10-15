@@ -637,8 +637,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto bubbleH = textHeight + 2 * vPadding;
 
 				auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
-				const auto bubbleX = mediaGeometry.x() + st::msgDateImgDelta;
-				const auto bubbleY = mediaGeometry.y() + st::msgDateImgDelta;
+				const auto bubbleX = mediaGeometry.x() + mediaGeometry.width() - bubbleW - st::msgDateImgDelta;
+				const auto bubbleY = mediaGeometry.y() + mediaGeometry.height() - bubbleH - st::msgDateImgDelta;
 
 				p.save();
 				p.setOpacity(0.95);
