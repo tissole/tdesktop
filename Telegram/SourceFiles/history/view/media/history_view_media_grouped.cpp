@@ -143,12 +143,10 @@ p.setOpacity(0.95);
 	p.restore();
 
 	auto font = st::msgDateFont;
-	p.setFont(font->bold());
 	p.drawText(
 		bubbleX + horizontalPadding,
 		bubbleY + (dateH - textHeight) / 2 + font->ascent,
 		infoText);
-	p.setFont(font);
 }
 
 GroupedMedia::GroupedMedia(
@@ -929,8 +927,10 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			if (edited) {
 				const auto editedText = QString::fromUtf8("✏️") + " ";
 				const auto editedWidth = font->width(editedText);
+				p.setFont(font);
 				p.drawText(currentLeft, textBaseY, editedText);
 				currentLeft += editedWidth + textPadding;
+				p.setFont(font->bold());
 			}
 			p.drawText(currentLeft, textBaseY, dateText + msgIdText);
 
@@ -956,6 +956,28 @@ TextState GroupedMedia::getPartState(
 		const auto isInside = part.geometry.contains(point)
 			|| (!part.captionRect.isEmpty() && part.captionRect.contains(point));
 		if (isInside) {
+			if (_mode == Mode::Grid
+				&& !part.captionRect.isEmpty()
+				&& part.captionRect.contains(point)) {
+				const auto originalText = part.item->originalText();
+				if (!originalText.empty()) {
+					auto result = TextState(part.item);
+					// Provide click-to-copy for captions in Grid mode with toast via internal scheme.
+					// Percent-encode caption to avoid breaking the internal handler with special characters.
+					const auto encoded = QUrl::toPercentEncoding(originalText.text);
+					const auto copyUrl = QString("internal:copycaption:") + QString::fromUtf8(encoded);
+					result.link = ClickHandlerPtr{ new HiddenUrlClickHandler(copyUrl) };
+					// Keep tooltip for ellipsized captions.
+					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+					const auto padding = QMargins(8, 0, 8, 0);
+					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
+					if (fullCaption.maxWidth() > textWidth) {
+						result.customTooltip = true;
+						result.customTooltipText = originalText.text;
+					}
+					return result;
+				}
+			}
 			auto result = part.content->getStateGrouped(
 				part.geometry,
 				part.sides,
@@ -1170,26 +1192,7 @@ TextState GroupedMedia::getPartState(
 				// END: New tooltip logic for Grid album items (2..N).
 			}
 
-			if (_mode == Mode::Grid
-				&& !part.captionRect.isEmpty()
-				&& part.captionRect.contains(point)) {
-				const auto originalText = part.item->originalText();
-				if (!originalText.empty()) {
-					// Provide click-to-copy for captions in Grid mode with toast via internal scheme.
-					// Percent-encode caption to avoid breaking the internal handler with special characters.
-					const auto encoded = QUrl::toPercentEncoding(originalText.text);
-					const auto copyUrl = QString("internal:copycaption:") + QString::fromUtf8(encoded);
-					result.link = ClickHandlerPtr{ new HiddenUrlClickHandler(copyUrl) };
-					// Keep tooltip for ellipsized captions.
-					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
-					const auto padding = QMargins(8, 0, 8, 0);
-					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
-					if (fullCaption.maxWidth() > textWidth) {
-						result.customTooltip = true;
-						result.customTooltipText = originalText.text;
-					}
-				}
-			}
+
 
 			return result;
 		}
