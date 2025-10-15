@@ -709,7 +709,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				// Metrics and layout
 				const int iconGap = 1;
-				const int textGap = st::msgDateFont->spacew; // general gap between blocks
+				const int textGap = st::msgDateFont->width(' '); // general gap between blocks
 				const int iconW = st::historyViewsWidth;
 				const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + st::msgDateFont->width(viewsText));
 				const int editedW = editedNow ? st::msgDateFont->width(editText) : 0;
@@ -870,8 +870,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			// --- 2. Calculate layout from right to left ---
 			int totalWidth = 0;
-			// iconPadding not used in hover layout; keep only textPadding below
-			const int textPadding = font->spacew;
+			const int textPadding = font->width(' ');
 
 			const int dateWidth = font->width(dateText + msgIdText);
 			totalWidth += dateWidth;
