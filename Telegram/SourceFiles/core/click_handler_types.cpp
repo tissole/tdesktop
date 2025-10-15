@@ -133,19 +133,6 @@ QString HiddenUrlClickHandler::dragText() const {
 }
 
 void HiddenUrlClickHandler::Open(QString url, QVariant context) {
-    // Internal: copy caption to clipboard with toast
-    const auto kCopyPrefix = u"internal:copycaption:"_q;
-    if (url.startsWith(kCopyPrefix, Qt::CaseInsensitive)) {
-        // Percent-decode the remainder to support special characters safely.
-        const auto encoded = url.mid(kCopyPrefix.size());
-        const auto decoded = QUrl::fromPercentEncoding(encoded.toUtf8());
-        TextUtilities::SetClipboardText(TextForMimeData::Simple(decoded));
-        const auto my = context.value<ClickHandlerContext>();
-        if (const auto controller = my.sessionWindow.get()) {
-            controller->showToast(u"Caption copied"_q);
-        }
-        return;
-    }
 	url = Core::TryConvertUrlToLocal(url);
 	if (Core::InternalPassportLink(url)) {
 		return;
