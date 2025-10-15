@@ -1595,10 +1595,11 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	return { maxWidth, height };
 }
 
-QSize Document::sizeForGrouping(int width) const {
+QSize Document::sizeForGrouping(int width, bool last) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	auto height = st.padding.top() + st.thumbSize + st.padding.bottom();
+	const_cast<Document*>(this)->refreshCaption(last);
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
 			- st::msgPadding.left()

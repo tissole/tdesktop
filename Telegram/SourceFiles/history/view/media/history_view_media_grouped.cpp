@@ -319,8 +319,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		return { newWidth, newHeight };
 	} else if (_mode == Mode::Column) {
 		auto top = 0;
-		for (auto &part : _parts) {
-			const auto size = part.content->sizeForGrouping(newWidth);
+		for (auto i = 0, count = _parts.size(); i != count; ++i) {
+			auto &part = _parts[i];
+			const auto size = part.content->sizeForGrouping(newWidth, (i == count - 1));
 			part.geometry = QRect(0, top, newWidth, size.height());
 			top += size.height();
 		}
