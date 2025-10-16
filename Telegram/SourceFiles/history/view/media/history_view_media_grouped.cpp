@@ -28,6 +28,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "layout/layout_selection.h"
 #include "styles/style_chat.h"
 #include "styles/style_basic.h"
+#include <QDebug>
 #include "core/enhanced_settings.h"
 #include <QtCore/QUrl>
 #include "data/data_photo.h"
@@ -959,6 +960,7 @@ TextState GroupedMedia::getPartState(
 				&& part.captionRect.contains(point)) {
 				const auto originalText = part.item->originalText();
 				if (!originalText.empty()) {
+					qDebug() << "Click is inside caption rect";
 					Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
 					auto result = TextState(part.item, caption.getState(
 						point - part.captionRect.topLeft(),
@@ -971,6 +973,7 @@ TextState GroupedMedia::getPartState(
 						result.customTooltip = true;
 						result.customTooltipText = originalText.text;
 					}
+					qDebug() << "Returning textstate with link: " << result.link.get();
 					return result;
 				}
 			}
