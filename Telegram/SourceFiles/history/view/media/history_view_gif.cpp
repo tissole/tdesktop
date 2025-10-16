@@ -1388,7 +1388,7 @@ QSize Gif::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	return sizeForAspectRatio();
 }
 
-QSize Gif::sizeForGrouping(int width, bool last) const {
+QSize Gif::sizeForGrouping(int width) const {
 	return sizeForAspectRatio();
 }
 

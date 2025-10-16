@@ -70,7 +70,7 @@ public:
 	QMargins bubbleMargins() const override;
 
 	QSize sizeForGroupingOptimal(int maxWidth, bool last) const override;
-	QSize sizeForGrouping(int width, bool last) const override;
+	QSize sizeForGrouping(int width) const override;
 	void drawGrouped(
 		Painter &p,
 		const PaintContext &context,

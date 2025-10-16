@@ -28,9 +28,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "layout/layout_selection.h"
 #include "styles/style_chat.h"
 #include "styles/style_basic.h"
-#include <QDebug>
 #include "core/enhanced_settings.h"
-#include <QtCore/QUrl>
 #include "data/data_photo.h"
 
 namespace HistoryView {
@@ -240,7 +238,13 @@ QSize GroupedMedia::countOptimalSize() {
 	}
 	auto index = 0;
 	for (const auto &part : _parts) {
-		const auto last = (++index == _parts.size());
+		++index;
+		// In Column mode the views/time/id overlay is drawn for the first row.
+		// Reserve caption skip-block only for that row to avoid extra space
+		// after the last item when the caption fits.
+		const auto last = (_mode == Mode::Column)
+			? (index == 1)
+			: (index == _parts.size());
 		sizes.push_back(
 			part.content->sizeForGroupingOptimal(maxWidth, last));
 	}
@@ -320,9 +324,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		return { newWidth, newHeight };
 	} else if (_mode == Mode::Column) {
 		auto top = 0;
-		for (int i = 0, count = _parts.size(); i != count; ++i) {
-			auto &part = _parts[i];
-			const auto size = part.content->sizeForGrouping(newWidth, (i == count - 1));
+		for (auto &part : _parts) {
+			const auto size = part.content->sizeForGrouping(newWidth);
 			part.geometry = QRect(0, top, newWidth, size.height());
 			top += size.height();
 		}
@@ -960,20 +963,15 @@ TextState GroupedMedia::getPartState(
 				&& part.captionRect.contains(point)) {
 				const auto originalText = part.item->originalText();
 				if (!originalText.empty()) {
-					qDebug() << "Click is inside caption rect";
-					Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
-					auto result = TextState(part.item, caption.getState(
-						point - part.captionRect.topLeft(),
-						part.captionRect.width(),
-						request.forText()));
-
+					auto result = TextState(part.item);
+					// Tooltip for ellipsized captions.
+					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
 					const auto padding = QMargins(8, 0, 8, 0);
 					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
-					if (caption.maxWidth() > textWidth) {
+					if (fullCaption.maxWidth() > textWidth) {
 						result.customTooltip = true;
 						result.customTooltipText = originalText.text;
 					}
-					qDebug() << "Returning textstate with link: " << result.link.get();
 					return result;
 				}
 			}
