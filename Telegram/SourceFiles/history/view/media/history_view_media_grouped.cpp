@@ -1238,7 +1238,10 @@ PointState GroupedMedia::pointState(QPoint point) const {
 	const auto groupPadding = groupedPadding();
 	point -= QPoint(0, groupPadding.top());
 	for (const auto &part : _parts) {
-		if (part.geometry.contains(point)) {
+		const auto inMedia = part.geometry.contains(point);
+		const auto inCaption = (!part.captionRect.isEmpty()
+			&& part.captionRect.contains(point));
+		if (inMedia || inCaption) {
 			return PointState::GroupPart;
 		}
 	}
@@ -1448,11 +1451,18 @@ uint16 GroupedMedia::fullSelectionLength() const {
 }
 
 bool GroupedMedia::hasTextForCopy() const {
-	if (_mode != Mode::Column) {
-		return {};
+	if (_mode == Mode::Column) {
+		for (const auto &part : _parts) {
+			if (part.content->hasTextForCopy()) {
+				return true;
+			}
+		}
+		return false;
 	}
+	// Grid mode: allow copying if any item has a caption (original text).
 	for (const auto &part : _parts) {
-		if (part.content->hasTextForCopy()) {
+		const auto original = part.item->originalText();
+		if (!original.empty()) {
 			return true;
 		}
 	}
@@ -1461,20 +1471,33 @@ bool GroupedMedia::hasTextForCopy() const {
 
 TextForMimeData GroupedMedia::selectedText(
 		TextSelection selection) const {
-	if (_mode != Mode::Column) {
-		return {};
-	}
 	auto result = TextForMimeData();
-	for (const auto &part : _parts) {
-		auto text = part.content->selectedText(selection);
-		if (!text.empty()) {
-			if (result.empty()) {
-				result = std::move(text);
-			} else {
-				result.append(u"\n\n"_q).append(std::move(text));
+	if (_mode == Mode::Column) {
+		for (const auto &part : _parts) {
+			auto text = part.content->selectedText(selection);
+			if (!text.empty()) {
+				if (result.empty()) {
+					result = std::move(text);
+				} else {
+					result.append(u"\n\n"_q).append(std::move(text));
+				}
 			}
+			selection = part.content->skipSelection(selection);
 		}
-		selection = part.content->skipSelection(selection);
+		return result;
+	}
+
+	// Grid mode: return only the clicked item's caption when selection targets a single part.
+	// If selection does not target a specific part, leave result empty to avoid copying all captions.
+	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
+		if (!IsGroupItemSelection(selection, i)) {
+			continue;
+		}
+		const auto original = _parts[i].item->originalText();
+		if (!original.empty()) {
+			result = TextForMimeData::Rich(base::duplicate(original));
+			break;
+		}
 	}
 	return result;
 }
