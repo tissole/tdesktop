@@ -29,6 +29,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item_components.h"
 #include "history/view/history_view_schedule_box.h"
 #include "history/view/media/history_view_media.h"
+#include "history/view/media/history_view_media_grouped.h"
 #include "history/view/media/history_view_web_page.h"
 #include "history/view/reactions/history_view_reactions_list.h"
 #include "info/info_memento.h"
@@ -1652,19 +1653,32 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		if (!link && (view->hasVisibleText() || mediaHasTextForCopy)) {
 			if (!list->hasCopyRestriction(view->data())) {
 				const auto asGroup = (request.pointState != PointState::GroupPart);
-				result->addAction(tr::lng_context_copy_text(tr::now), [=] {
-					if (const auto item = owner->message(itemId)) {
-						if (!list->showCopyRestriction(item)) {
-							if (asGroup) {
-								if (const auto group = owner->groups().find(item)) {
-									TextUtilities::SetClipboardText(HistoryGroupText(group));
-									return;
-								}
-							}
-							TextUtilities::SetClipboardText(HistoryItemText(item));
-						}
-					}
-				}, &st::menuIconCopy);
+        result->addAction(tr::lng_context_copy_text(tr::now), [=] {
+            if (const auto item = owner->message(itemId)) {
+                if (!list->showCopyRestriction(item)) {
+                    if (asGroup) {
+                        if (const auto group = owner->groups().find(item)) {
+                            TextUtilities::SetClipboardText(HistoryGroupText(group));
+                            return;
+                        }
+                    } else {
+                        // If clicking a specific part of a grouped media (Grid album),
+                        // prefer per-item caption over generic item text.
+                        if (view) {
+                            if (const auto grouped = dynamic_cast<HistoryView::GroupedMedia*>(view->media())) {
+                                const auto original = item->originalText();
+                                if (!original.text.isEmpty()) {
+                                    TextUtilities::SetClipboardText(
+                                        TextForMimeData::Rich(base::duplicate(original)));
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    TextUtilities::SetClipboardText(HistoryItemText(item));
+                }
+            }
+        }, &st::menuIconCopy);
 			}
 
 			const auto translate = mediaHasTextForCopy
