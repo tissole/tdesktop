@@ -59,7 +59,7 @@ public:
 		bool markFrameShown) const;
 
 	QSize sizeForGroupingOptimal(int maxWidth, bool last) const override;
-	QSize sizeForGrouping(int width) const override;
+	QSize sizeForGrouping(int width, bool last) const override;
 	void drawGrouped(
 		Painter &p,
 		const PaintContext &context,

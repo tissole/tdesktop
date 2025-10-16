@@ -718,7 +718,7 @@ QSize Photo::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	return { std::max(size.width(), 1), std::max(size.height(), 1)};
 }
 
-QSize Photo::sizeForGrouping(int width) const {
+QSize Photo::sizeForGrouping(int width, bool last) const {
 	return sizeForGroupingOptimal(width, false);
 }
 
