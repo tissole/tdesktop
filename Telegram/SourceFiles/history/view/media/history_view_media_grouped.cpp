@@ -962,18 +962,20 @@ TextState GroupedMedia::getPartState(
 				&& !part.captionRect.isEmpty()
 				&& part.captionRect.contains(point)) {
 				const auto originalText = part.item->originalText();
-				if (!originalText.empty()) {
-					auto result = TextState(part.item);
-					// Tooltip for ellipsized captions.
-					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
-					const auto padding = QMargins(8, 0, 8, 0);
-					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
-					if (fullCaption.maxWidth() > textWidth) {
-						result.customTooltip = true;
-						result.customTooltipText = originalText.text;
-					}
-					return result;
-				}
+                if (!originalText.empty()) {
+                    auto result = TextState(part.item);
+                    // Ensure context menu and list widget know which album item is targeted.
+                    result.itemId = part.item->fullId();
+                    // Tooltip for ellipsized captions.
+                    Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+                    const auto padding = QMargins(8, 0, 8, 0);
+                    const auto textWidth = part.geometry.width() - padding.left() - padding.right();
+                    if (fullCaption.maxWidth() > textWidth) {
+                        result.customTooltip = true;
+                        result.customTooltipText = originalText.text;
+                    }
+                    return result;
+                }
 			}
 			auto result = part.content->getStateGrouped(
 				part.geometry,
