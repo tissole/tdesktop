@@ -1445,9 +1445,10 @@ TextSelection GroupedMedia::adjustSelection(
 	auto checked = 0;
 	for (const auto &part : _parts) {
 		const auto original = part.item->originalText();
-		const auto length = original.empty() ? 0 : Ui::Text::String(original).length();
+		Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
+		const auto length = original.empty() ? 0 : caption.length();
 		const auto modified = ShiftItemSelection(
-				Ui::Text::String(original).adjustSelection(
+				caption.adjustSelection(
 						UnshiftItemSelection(selection, checked),
 						type),
 				checked);
@@ -1477,7 +1478,8 @@ uint16 GroupedMedia::fullSelectionLength() const {
 	for (const auto &part : _parts) {
 		const auto original = part.item->originalText();
 		if (!original.empty()) {
-			total += Ui::Text::String(original).length();
+			Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
+			total += caption.length();
 		}
 	}
 	return total;
@@ -1525,10 +1527,10 @@ TextForMimeData GroupedMedia::selectedText(
 		for (const auto &part : _parts) {
 			const auto original = part.item->originalText();
 			if (original.empty()) continue;
-			const auto length = Ui::Text::String(original).length();
+			Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
+			const auto length = caption.length();
 			const auto un = UnshiftItemSelection(selection, checked);
 			if (un.empty()) { checked += length; continue; }
-			Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
 			return caption.toTextForMimeData(un);
 		}
 		return {};
