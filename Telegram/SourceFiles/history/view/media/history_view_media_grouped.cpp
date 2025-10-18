@@ -958,28 +958,28 @@ TextState GroupedMedia::getPartState(
 		const auto isInside = part.geometry.contains(point)
 			|| (!part.captionRect.isEmpty() && part.captionRect.contains(point));
 		if (isInside) {
-        if (_mode == Mode::Grid
-                && !part.captionRect.isEmpty()
-                && part.captionRect.contains(point)) {
-                const auto originalText = part.item->originalText();
-                if (!originalText.empty()) {
-                    const auto padding = QMargins(8, 0, 8, 0);
-                    const auto textWidth = part.captionRect.width() - padding.left() - padding.right();
-                    const auto textPoint = point - part.captionRect.topLeft() - QPoint(padding.left(), padding.top());
-                    Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
-                    const auto state = fullCaption.getState(textPoint, textWidth, request.forText());
-                    auto result = TextState(part.item, state);
-                    result.itemId = part.item->fullId();
-                    // Height-aware tooltip: show full text tooltip only if clipped.
-                    const auto neededH = fullCaption.countHeight(textWidth);
-                    const auto textH = part.captionRect.height() - padding.top() - padding.bottom();
-                    if (neededH > textH) {
-                        result.customTooltip = true;
-                        result.customTooltipText = originalText.text;
-                    }
-                    return result;
-                }
-        }
+			if (_mode == Mode::Grid
+				&& !part.captionRect.isEmpty()
+				&& part.captionRect.contains(point)) {
+				const auto originalText = part.item->originalText();
+				if (!originalText.empty()) {
+					const auto padding = QMargins(8, 0, 8, 0);
+					const auto textWidth = part.captionRect.width() - padding.left() - padding.right();
+					const auto textPoint = point - part.captionRect.topLeft() - QPoint(padding.left(), padding.top());
+					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+					const auto state = fullCaption.getState(textPoint, textWidth, request.forText());
+					auto result = TextState(part.item, state);
+					result.itemId = part.item->fullId();
+					// Height-aware tooltip: show full text tooltip only if clipped.
+					const auto neededH = fullCaption.countHeight(textWidth);
+					const auto textH = part.captionRect.height() - padding.top() - padding.bottom();
+					if (neededH > textH) {
+						result.customTooltip = true;
+						result.customTooltipText = originalText.text;
+					}
+					return result;
+				}
+		}
 			auto result = part.content->getStateGrouped(
 				part.geometry,
 				part.sides,
@@ -1421,17 +1421,37 @@ bool GroupedMedia::dragItemByHandler(const ClickHandlerPtr &p) const {
 TextSelection GroupedMedia::adjustSelection(
 		TextSelection selection,
 		TextSelectType type) const {
-	if (_mode != Mode::Column) {
-		return {};
+	if (_mode == Mode::Column) {
+		auto checked = 0;
+		for (const auto &part : _parts) {
+			const auto modified = ShiftItemSelection(
+					part.content->adjustSelection(
+							UnshiftItemSelection(selection, checked),
+							type),
+					checked);
+			const auto till = checked + part.content->fullSelectionLength();
+			if (selection.from >= checked && selection.from < till) {
+				selection.from = modified.from;
+			}
+			if (selection.to <= till) {
+				selection.to = modified.to;
+				return selection;
+			}
+			checked = till;
+		}
+		return selection;
 	}
+	// Grid: compute selection within per-item caption strings.
 	auto checked = 0;
 	for (const auto &part : _parts) {
+		const auto original = part.item->originalText();
+		const auto length = original.empty() ? 0 : Ui::Text::String(original).length();
 		const auto modified = ShiftItemSelection(
-			part.content->adjustSelection(
-				UnshiftItemSelection(selection, checked),
-				type),
-			checked);
-		const auto till = checked + part.content->fullSelectionLength();
+				Ui::Text::String(original).adjustSelection(
+						UnshiftItemSelection(selection, checked),
+						type),
+				checked);
+		const auto till = checked + length;
 		if (selection.from >= checked && selection.from < till) {
 			selection.from = modified.from;
 		}
@@ -1445,14 +1465,22 @@ TextSelection GroupedMedia::adjustSelection(
 }
 
 uint16 GroupedMedia::fullSelectionLength() const {
-	if (_mode != Mode::Column) {
-		return {};
+	if (_mode == Mode::Column) {
+		auto result = 0;
+		for (const auto &part : _parts) {
+			result += part.content->fullSelectionLength();
+		}
+		return result;
 	}
-	auto result = 0;
+	// Grid: sum caption lengths to enable partial selection.
+	auto total = uint16(0);
 	for (const auto &part : _parts) {
-		result += part.content->fullSelectionLength();
+		const auto original = part.item->originalText();
+		if (!original.empty()) {
+			total += Ui::Text::String(original).length();
+		}
 	}
-	return result;
+	return total;
 }
 
 bool GroupedMedia::hasTextForCopy() const {
@@ -1491,20 +1519,29 @@ TextForMimeData GroupedMedia::selectedText(
 		}
 		return result;
 	}
-
-	// Grid mode: return only the clicked item's caption when selection targets a single part.
-	// If selection does not target a specific part, leave result empty to avoid copying all captions.
-	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
-		if (!IsGroupItemSelection(selection, i)) {
-			continue;
+	// Grid: if a normal selection exists, copy only that substring of the caption.
+	if (!IsSubGroupSelection(selection) && !selection.empty()) {
+		auto checked = 0;
+		for (const auto &part : _parts) {
+			const auto original = part.item->originalText();
+			if (original.empty()) continue;
+			const auto length = Ui::Text::String(original).length();
+			const auto un = UnshiftItemSelection(selection, checked);
+			if (un.empty()) { checked += length; continue; }
+			Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
+			return caption.toTextForMimeData(un);
 		}
+		return {};
+	}
+	// Otherwise if a group-item selection exists, copy full caption of that item.
+	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
+		if (!IsGroupItemSelection(selection, i)) continue;
 		const auto original = _parts[i].item->originalText();
 		if (!original.empty()) {
-			result = TextForMimeData::Rich(base::duplicate(original));
-			break;
+			return TextForMimeData::Rich(base::duplicate(original));
 		}
 	}
-	return result;
+	return {};
 }
 
 SelectedQuote GroupedMedia::selectedQuote(TextSelection selection) const {
