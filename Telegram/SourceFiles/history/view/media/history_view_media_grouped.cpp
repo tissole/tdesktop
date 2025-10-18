@@ -787,48 +787,40 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
 		}
 
-		// Grid captions: draw full Ui::Text::String into a fixed box; overlay '…' if clipped.
+		// FIX #8: Restore caption drawing for Grid mode.
 		if ((_mode == Mode::Grid) && part._captionHeight > 0) {
 			const auto originalText = part.item->originalText();
+			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
+
+			QString textToDraw;
 			if (!originalText.empty()) {
-				auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
-				Ui::Text::String fullCaption(st::captionCodeStyle, originalText, kDefaultTextOptions);
+				Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
 				const auto padding = QMargins(8, 0, 8, 0);
-				const auto captionRect = QRect(
+				const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
+				if (fullCaption.maxWidth() > textWidth) {
+					QFontMetrics metrics(st::messageTextStyle.font);
+					textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
+				} else {
+					textToDraw = originalText.text;
+				}
+			}
+
+			if (!textToDraw.isEmpty() && part._captionHeight > 0) {
+				Ui::Text::String caption(st::messageTextStyle, { textToDraw });
+				auto captionRect = QRect(
 					mediaGeometry.left(),
 					mediaGeometry.bottom() + 1,
 					mediaGeometry.width(),
-					part._captionHeight);
-				const auto textX = captionRect.left() + padding.left();
-				const auto textY = captionRect.top() + padding.top();
-				const auto textW = captionRect.width() - padding.left() - padding.right();
-				const auto textH = captionRect.height() - padding.top() - padding.bottom();
-
-				// Measure overflow using the same string and width.
-				const auto neededH = fullCaption.countHeight(textW);
-				const auto overflow = (neededH > textH);
-
-				// Draw with clipping to the caption rect area.
-				p.save();
-				p.setClipRect(captionRect);
+					part._captionHeight
+				);
+				// Use the standard message text color for captions.
 				p.setPen(stm->historyTextFg);
-				fullCaption.draw(p, textX, textY, textW, style::al_left);
-				p.restore();
-
-				// If clipped, draw an ellipsis at bottom-right as an affordance.
-				if (overflow) {
-					p.save();
-					p.setPen(stm->historyTextFg);
-					const auto ellipsis = QString::fromUtf8("…");
-					const auto font = st::messageTextStyle.font;
-					const auto ellW = font->width(ellipsis);
-					const auto ellH = font->height;
-					const auto ellX = captionRect.right() - padding.right() - ellW;
-					const auto ellBaseY = captionRect.bottom() - padding.bottom() - (ellH - font->ascent);
-					p.setFont(font);
-					p.drawText(ellX, ellBaseY, ellipsis);
-					p.restore();
-				}
+				const auto padding = QMargins(8, 0, 8, 0);
+				caption.draw(p,
+					captionRect.left() + padding.left(),
+					captionRect.top() + padding.top(),
+					captionRect.width() - padding.left() - padding.right(),
+					style::al_left);
 			}
 		}
 		
@@ -974,12 +966,11 @@ TextState GroupedMedia::getPartState(
                     const auto padding = QMargins(8, 0, 8, 0);
                     const auto textWidth = part.captionRect.width() - padding.left() - padding.right();
                     const auto textPoint = point - part.captionRect.topLeft() - QPoint(padding.left(), padding.top());
-                    Ui::Text::String fullCaption(st::captionCodeStyle, originalText, kDefaultTextOptions);
+                    Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
                     const auto state = fullCaption.getState(textPoint, textWidth, request.forText());
                     auto result = TextState(part.item, state);
-                    // Cursor + item targeting
                     result.itemId = part.item->fullId();
-                    // Tooltip for clipped captions (height-aware)
+                    // Height-aware tooltip: show full text tooltip only if clipped.
                     const auto neededH = fullCaption.countHeight(textWidth);
                     const auto textH = part.captionRect.height() - padding.top() - padding.bottom();
                     if (neededH > textH) {
@@ -1428,54 +1419,40 @@ bool GroupedMedia::dragItemByHandler(const ClickHandlerPtr &p) const {
 }
 
 TextSelection GroupedMedia::adjustSelection(
-        TextSelection selection,
-        TextSelectType type) const {
-    if (_mode == Mode::Column) {
-        auto checked = 0;
-        for (const auto &part : _parts) {
-            const auto modified = ShiftItemSelection(
-                    part.content->adjustSelection(
-                            UnshiftItemSelection(selection, checked),
-                            type),
-                    checked);
-            const auto till = checked + part.content->fullSelectionLength();
-            if (selection.from >= checked && selection.from < till) {
-                selection.from = modified.from;
-            }
-            if (selection.to <= till) {
-                selection.to = modified.to;
-                return selection;
-            }
-            checked = till;
-        }
-        return selection;
-    }
-    // Grid: convert cursor-targeted caption to group item selection.
-    for (auto i = 0; i != int(_parts.size()); ++i) {
-        const auto &part = _parts[i];
-        if (!part.captionRect.isEmpty() && !part.item->originalText().empty()) {
-            return AddGroupItemSelection({}, i);
-        }
-    }
-    return selection;
+		TextSelection selection,
+		TextSelectType type) const {
+	if (_mode != Mode::Column) {
+		return {};
+	}
+	auto checked = 0;
+	for (const auto &part : _parts) {
+		const auto modified = ShiftItemSelection(
+			part.content->adjustSelection(
+				UnshiftItemSelection(selection, checked),
+				type),
+			checked);
+		const auto till = checked + part.content->fullSelectionLength();
+		if (selection.from >= checked && selection.from < till) {
+			selection.from = modified.from;
+		}
+		if (selection.to <= till) {
+			selection.to = modified.to;
+			return selection;
+		}
+		checked = till;
+	}
+	return selection;
 }
 
 uint16 GroupedMedia::fullSelectionLength() const {
-	if (_mode == Mode::Column) {
-		auto result = 0;
-		for (const auto &part : _parts) {
-			result += part.content->fullSelectionLength();
-		}
-		return result;
+	if (_mode != Mode::Column) {
+		return {};
 	}
-	// Grid: provide a non-zero length so selection APIs activate over captions.
+	auto result = 0;
 	for (const auto &part : _parts) {
-		if (!part.captionRect.isEmpty() && !part.item->originalText().empty()) {
-			Ui::Text::String fullCaption(st::captionCodeStyle, part.item->originalText(), kDefaultTextOptions);
-			return std::max<uint16>(1, fullCaption.length());
-		}
+		result += part.content->fullSelectionLength();
 	}
-	return 0;
+	return result;
 }
 
 bool GroupedMedia::hasTextForCopy() const {
@@ -1572,57 +1549,44 @@ TextSelection GroupedMedia::selectionFromQuote(
 }
 
 auto GroupedMedia::getBubbleSelectionIntervals(
-        TextSelection selection) const
+		TextSelection selection) const
 -> std::vector<Ui::BubbleSelectionInterval> {
-    auto result = std::vector<Ui::BubbleSelectionInterval>();
-    if (_mode == Mode::Column) {
-        for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
-            const auto &part = _parts[i];
-            if (!IsGroupItemSelection(selection, i)) {
-                continue;
-            }
-            const auto &geometry = part.geometry;
-            if (result.empty()
-                    || (result.back().top + result.back().height
-                        < geometry.top())
-                    || (result.back().top > geometry.top() + geometry.height())) {
-                result.push_back({ geometry.top(), geometry.height() });
-            } else {
-                auto &last = result.back();
-                const auto newTop = std::min(last.top, geometry.top());
-                const auto newHeight = std::max(
-                        last.top + last.height - newTop,
-                        geometry.top() + geometry.height() - newTop);
-                last = Ui::BubbleSelectionInterval{ newTop, newHeight };
-            }
-        }
-        const auto groupPadding = groupedPadding();
-        for (auto &part : result) {
-            part.top += groupPadding.top();
-        }
-        if (IsGroupItemSelection(selection, 0)) {
-            result.front().top -= groupPadding.top();
-            result.front().height += groupPadding.top();
-        }
-        if (IsGroupItemSelection(selection, _parts.size() - 1)) {
-            result.back().height = height() - result.back().top;
-        }
-        return result;
-    }
-    // Grid: show highlight over caption rect for selected item.
-    for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
-        const auto &part = _parts[i];
-        if (!IsGroupItemSelection(selection, i)) {
-            continue;
-        }
-        if (part.captionRect.isEmpty()) {
-            continue;
-        }
-        auto rect = part.captionRect;
-        rect.translate(0, groupedPadding().top());
-        result.push_back({ rect.top(), rect.height() });
-    }
-    return result;
+	if (_mode != Mode::Column) {
+		return {};
+	}
+	auto result = std::vector<Ui::BubbleSelectionInterval>();
+	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
+		const auto &part = _parts[i];
+		if (!IsGroupItemSelection(selection, i)) {
+			continue;
+		}
+		const auto &geometry = part.geometry;
+		if (result.empty()
+			|| (result.back().top + result.back().height
+				< geometry.top())
+			|| (result.back().top > geometry.top() + geometry.height())) {
+			result.push_back({ geometry.top(), geometry.height() });
+		} else {
+			auto &last = result.back();
+			const auto newTop = std::min(last.top, geometry.top());
+			const auto newHeight = std::max(
+				last.top + last.height - newTop,
+				geometry.top() + geometry.height() - newTop);
+			last = Ui::BubbleSelectionInterval{ newTop, newHeight };
+		}
+	}
+	const auto groupPadding = groupedPadding();
+	for (auto &part : result) {
+		part.top += groupPadding.top();
+	}
+	if (IsGroupItemSelection(selection, 0)) {
+		result.front().top -= groupPadding.top();
+		result.front().height += groupPadding.top();
+	}
+	if (IsGroupItemSelection(selection, _parts.size() - 1)) {
+		result.back().height = height() - result.back().top;
+	}
+	return result;
 }
 
 void GroupedMedia::clickHandlerActiveChanged(
