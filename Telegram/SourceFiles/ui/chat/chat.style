@@ -60,8 +60,9 @@ msgDateImgPadding: point(8px, 2px);
 messageQuoteStyle: historyQuoteStyle;
 messageTextStyle: historyTextStyle;
 captionCodeStyle: TextStyle(historyTextStyle) {
-    // Use a narrow monospace at the same size as normal text.
-    font: font(fontSize(historyTextStyle.font));
+    // Use platform-appropriate monospace at the same size as normal text.
+    // Windows: Consolas; macOS: Menlo; Linux/other: DejaVu Sans Mono.
+    font: font(fontSize(historyTextStyle.font) monospace);
     // Inline code visuals in captions: no background/pill, no extra padding.
     code: CodeStyle(historyTextStyle.code) {
         bg: transparent;
