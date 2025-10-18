@@ -1588,40 +1588,54 @@ TextSelection GroupedMedia::selectionFromQuote(
 auto GroupedMedia::getBubbleSelectionIntervals(
 		TextSelection selection) const
 -> std::vector<Ui::BubbleSelectionInterval> {
-	if (_mode != Mode::Column) {
-		return {};
-	}
 	auto result = std::vector<Ui::BubbleSelectionInterval>();
+	if (_mode == Mode::Column) {
+		for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
+			const auto &part = _parts[i];
+			if (!IsGroupItemSelection(selection, i)) {
+				continue;
+			}
+			const auto &geometry = part.geometry;
+			if (result.empty()
+					|| (result.back().top + result.back().height
+						< geometry.top())
+					|| (result.back().top > geometry.top() + geometry.height())) {
+				result.push_back({ geometry.top(), geometry.height() });
+			} else {
+				auto &last = result.back();
+				const auto newTop = std::min(last.top, geometry.top());
+				const auto newHeight = std::max(
+						last.top + last.height - newTop,
+						geometry.top() + geometry.height() - newTop);
+				last = Ui::BubbleSelectionInterval{ newTop, newHeight };
+			}
+		}
+		const auto groupPadding = groupedPadding();
+		for (auto &part : result) {
+			part.top += groupPadding.top();
+		}
+		if (IsGroupItemSelection(selection, 0)) {
+			result.front().top -= groupPadding.top();
+			result.front().height += groupPadding.top();
+		}
+		if (IsGroupItemSelection(selection, _parts.size() - 1)) {
+			result.back().height = height() - result.back().top;
+		}
+		return result;
+	}
+	// Grid: highlight the caption rectangle for the selected item.
+	const auto groupPadding = groupedPadding();
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
 		if (!IsGroupItemSelection(selection, i)) {
 			continue;
 		}
-		const auto &geometry = part.geometry;
-		if (result.empty()
-			|| (result.back().top + result.back().height
-				< geometry.top())
-			|| (result.back().top > geometry.top() + geometry.height())) {
-			result.push_back({ geometry.top(), geometry.height() });
-		} else {
-			auto &last = result.back();
-			const auto newTop = std::min(last.top, geometry.top());
-			const auto newHeight = std::max(
-				last.top + last.height - newTop,
-				geometry.top() + geometry.height() - newTop);
-			last = Ui::BubbleSelectionInterval{ newTop, newHeight };
+		if (part.captionRect.isEmpty()) {
+			continue;
 		}
-	}
-	const auto groupPadding = groupedPadding();
-	for (auto &part : result) {
-		part.top += groupPadding.top();
-	}
-	if (IsGroupItemSelection(selection, 0)) {
-		result.front().top -= groupPadding.top();
-		result.front().height += groupPadding.top();
-	}
-	if (IsGroupItemSelection(selection, _parts.size() - 1)) {
-		result.back().height = height() - result.back().top;
+		auto rect = part.captionRect;
+		rect.translate(0, groupPadding.top());
+		result.push_back({ rect.top(), rect.height() });
 	}
 	return result;
 }
