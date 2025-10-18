@@ -59,6 +59,16 @@ msgDateImgPadding: point(8px, 2px);
 
 messageQuoteStyle: historyQuoteStyle;
 messageTextStyle: historyTextStyle;
+captionCodeStyle: TextStyle(historyTextStyle) {
+    // Use a narrow monospace at the same size as normal text.
+    font: font(fontSize(historyTextStyle.font));
+    // Inline code visuals in captions: no background/pill, no extra padding.
+    code: CodeStyle(historyTextStyle.code) {
+        bg: transparent;
+        padding: margins(0px, 0px, 0px, 0px);
+        radius: 0px;
+    }
+}
 historyPagePreview: QuoteStyle(messageQuoteStyle) {
 	padding: margins(10px, 5px, 7px, 7px);
 }

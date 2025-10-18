@@ -787,40 +787,48 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
 		}
 
-		// FIX #8: Restore caption drawing for Grid mode.
+		// Grid captions: draw full Ui::Text::String into a fixed box; overlay '…' if clipped.
 		if ((_mode == Mode::Grid) && part._captionHeight > 0) {
 			const auto originalText = part.item->originalText();
-			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
-
-			QString textToDraw;
 			if (!originalText.empty()) {
-				Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+				auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
+				Ui::Text::String fullCaption(st::captionCodeStyle, originalText, kDefaultTextOptions);
 				const auto padding = QMargins(8, 0, 8, 0);
-				const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
-				if (fullCaption.maxWidth() > textWidth) {
-					QFontMetrics metrics(st::messageTextStyle.font);
-					textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
-				} else {
-					textToDraw = originalText.text;
-				}
-			}
-
-			if (!textToDraw.isEmpty() && part._captionHeight > 0) {
-				Ui::Text::String caption(st::messageTextStyle, { textToDraw });
-				auto captionRect = QRect(
+				const auto captionRect = QRect(
 					mediaGeometry.left(),
 					mediaGeometry.bottom() + 1,
 					mediaGeometry.width(),
-					part._captionHeight
-				);
-				// Use the standard message text color for captions.
+					part._captionHeight);
+				const auto textX = captionRect.left() + padding.left();
+				const auto textY = captionRect.top() + padding.top();
+				const auto textW = captionRect.width() - padding.left() - padding.right();
+				const auto textH = captionRect.height() - padding.top() - padding.bottom();
+
+				// Measure overflow using the same string and width.
+				const auto neededH = fullCaption.countHeight(textW);
+				const auto overflow = (neededH > textH);
+
+				// Draw with clipping to the caption rect area.
+				p.save();
+				p.setClipRect(captionRect);
 				p.setPen(stm->historyTextFg);
-				const auto padding = QMargins(8, 0, 8, 0);
-				caption.draw(p,
-					captionRect.left() + padding.left(),
-					captionRect.top() + padding.top(),
-					captionRect.width() - padding.left() - padding.right(),
-					style::al_left);
+				fullCaption.draw(p, textX, textY, textW, style::al_left);
+				p.restore();
+
+				// If clipped, draw an ellipsis at bottom-right as an affordance.
+				if (overflow) {
+					p.save();
+					p.setPen(stm->historyTextFg);
+					const auto ellipsis = QString::fromUtf8("…");
+					const auto font = st::messageTextStyle.font;
+					const auto ellW = font->width(ellipsis);
+					const auto ellH = font->height;
+					const auto ellX = captionRect.right() - padding.right() - ellW;
+					const auto ellBaseY = captionRect.bottom() - padding.bottom() - (ellH - font->ascent);
+					p.setFont(font);
+					p.drawText(ellX, ellBaseY, ellipsis);
+					p.restore();
+				}
 			}
 		}
 		

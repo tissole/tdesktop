@@ -544,7 +544,7 @@ Ui::Text::String Media::createCaption(not_null<HistoryItem*> item) const {
 		.repaint = [=] { _parent->customEmojiRepaint(); },
 	});
 	result.setMarkedText(
-		st::messageTextStyle,
+		st::captionCodeStyle,
 		item->translatedTextWithLocalEntities(),
 		Ui::ItemTextOptions(item),
 		context);
