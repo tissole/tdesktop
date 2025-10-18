@@ -60,9 +60,10 @@ msgDateImgPadding: point(8px, 2px);
 messageQuoteStyle: historyQuoteStyle;
 messageTextStyle: historyTextStyle;
 captionCodeStyle: TextStyle(historyTextStyle) {
-    // Use platform-appropriate monospace at the same size as normal text.
-    // Windows: Consolas; macOS: Menlo; Linux/other: DejaVu Sans Mono.
-    font: font(fontSize(historyTextStyle.font) monospace);
+    // Keep the same base font metrics as historyTextStyle to satisfy style codegen.
+    // Monospace forcing per-platform is not supported directly in .style; we can
+    // discuss code-level overrides if you want a specific family like Consolas.
+    font: historyTextStyle.font;
     // Inline code visuals in captions: no background/pill, no extra padding.
     code: CodeStyle(historyTextStyle.code) {
         bg: transparent;
