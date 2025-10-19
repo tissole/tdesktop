@@ -987,6 +987,13 @@ TextState GroupedMedia::getPartState(
 				request);
 			result.symbol += shift;
 			result.itemId = part.item->fullId();
+			if (_mode == Mode::Grid) {
+				const auto original = part.item->originalText();
+				if (!original.empty()) {
+					Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
+					shift += caption.length();
+				}
+			}
 
 			const auto item = part.item;
 			const auto edited = item->Get<HistoryMessageEdited>();
