@@ -1630,21 +1630,39 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		}
 		return result;
 	}
-	// Grid: highlight the caption rectangle for the selected item.
-	const auto groupPadding = groupedPadding();
-	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
-		const auto &part = _parts[i];
-		if (!IsGroupItemSelection(selection, i)) {
-			continue;
-		}
-		if (part.captionRect.isEmpty()) {
-			continue;
-		}
-		auto rect = part.captionRect;
-		rect.translate(0, groupPadding.top());
-		result.push_back({ rect.top(), rect.height() });
-	}
-	return result;
+    // Grid: highlight caption rect for either group-item or normal selection.
+    const auto groupPadding = groupedPadding();
+    if (IsSubGroupSelection(selection)) {
+        for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
+            const auto &part = _parts[i];
+            if (!IsGroupItemSelection(selection, i) || part.captionRect.isEmpty()) {
+                continue;
+            }
+            auto rect = part.captionRect;
+            rect.translate(0, groupPadding.top());
+            result.push_back({ rect.top(), rect.height() });
+        }
+        return result;
+    }
+    if (!selection.empty()) {
+        int cumulative = 0;
+        for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
+            const auto &part = _parts[i];
+            const auto original = part.item->originalText();
+            if (original.empty() || part.captionRect.isEmpty()) { continue; }
+            Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
+            const auto len = caption.length();
+            const auto next = cumulative + len;
+            if (selection.from < next && selection.to > cumulative) {
+                auto rect = part.captionRect;
+                rect.translate(0, groupPadding.top());
+                result.push_back({ rect.top(), rect.height() });
+                break;
+            }
+            cumulative = next;
+        }
+    }
+    return result;
 }
 
 void GroupedMedia::clickHandlerActiveChanged(
