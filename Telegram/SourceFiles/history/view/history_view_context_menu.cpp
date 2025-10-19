@@ -1661,17 +1661,14 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
                             TextUtilities::SetClipboardText(HistoryGroupText(group));
                             return;
                         }
-                    } else {
-                        // If clicking a specific part of a grouped media (Grid album),
-                        // prefer per-item caption over generic item text.
-                        if (view) {
-                            if (const auto grouped = dynamic_cast<HistoryView::GroupedMedia*>(view->media())) {
-                                const auto original = item->originalText();
-                                if (!original.text.isEmpty()) {
-                                    TextUtilities::SetClipboardText(
-                                        TextForMimeData::Rich(base::duplicate(original)));
-                                    return;
-                                }
+                    } else if (view && request.pointState == PointState::GroupPart) {
+                        // Group album caption: copy the clicked item's full caption.
+                        if (dynamic_cast<HistoryView::GroupedMedia*>(view->media())) {
+                            const auto original = item->originalText();
+                            if (!original.text.isEmpty()) {
+                                TextUtilities::SetClipboardText(
+                                    TextForMimeData::Rich(base::duplicate(original)));
+                                return;
                             }
                         }
                     }

@@ -1521,20 +1521,25 @@ TextForMimeData GroupedMedia::selectedText(
 		}
 		return result;
 	}
-	// Grid: if a normal selection exists, copy only that substring of the caption.
-	if (!IsSubGroupSelection(selection) && !selection.empty()) {
-		auto checked = 0;
-		for (const auto &part : _parts) {
-			const auto original = part.item->originalText();
-			if (original.empty()) continue;
-			Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
-			const auto length = caption.length();
-			const auto un = UnshiftItemSelection(selection, checked);
-			if (un.empty()) { checked += length; continue; }
-			return caption.toTextForMimeData(un);
-		}
-		return {};
-	}
+    // Grid: if a normal selection exists, map absolute selection to the owning caption substring.
+    if (!IsSubGroupSelection(selection) && !selection.empty()) {
+        int cumulative = 0;
+        for (const auto &part : _parts) {
+            const auto original = part.item->originalText();
+            if (original.empty()) { continue; }
+            Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
+            const auto len = caption.length();
+            const auto next = cumulative + len;
+            if (selection.from < next) {
+                const auto localFrom = std::max(0, int(selection.from) - cumulative);
+                const auto localTo = std::min<int>(len, int(selection.to) - cumulative);
+                const auto localSel = TextSelection(uint16(localFrom), uint16(localTo));
+                return caption.toTextForMimeData(localSel);
+            }
+            cumulative = next;
+        }
+        return {};
+    }
 	// Otherwise if a group-item selection exists, copy full caption of that item.
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		if (!IsGroupItemSelection(selection, i)) continue;
@@ -1588,10 +1593,10 @@ TextSelection GroupedMedia::selectionFromQuote(
 }
 
 auto GroupedMedia::getBubbleSelectionIntervals(
-		TextSelection selection) const
+        TextSelection selection) const
 -> std::vector<Ui::BubbleSelectionInterval> {
-	auto result = std::vector<Ui::BubbleSelectionInterval>();
-	if (_mode == Mode::Column) {
+    auto result = std::vector<Ui::BubbleSelectionInterval>();
+    if (_mode == Mode::Column) {
 		for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 			const auto &part = _parts[i];
 			if (!IsGroupItemSelection(selection, i)) {
@@ -1623,23 +1628,23 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		if (IsGroupItemSelection(selection, _parts.size() - 1)) {
 			result.back().height = height() - result.back().top;
 		}
-		return result;
-	}
-	// Grid: highlight the caption rectangle for the selected item.
-	const auto groupPadding = groupedPadding();
-	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
-		const auto &part = _parts[i];
-		if (!IsGroupItemSelection(selection, i)) {
-			continue;
-		}
-		if (part.captionRect.isEmpty()) {
-			continue;
-		}
-		auto rect = part.captionRect;
-		rect.translate(0, groupPadding.top());
-		result.push_back({ rect.top(), rect.height() });
-	}
-	return result;
+        return result;
+    }
+    // Grid: highlight the caption rectangle for the selected item.
+    const auto groupPadding = groupedPadding();
+    for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
+        const auto &part = _parts[i];
+        if (!IsGroupItemSelection(selection, i)) {
+            continue;
+        }
+        if (part.captionRect.isEmpty()) {
+            continue;
+        }
+        auto rect = part.captionRect;
+        rect.translate(0, groupPadding.top());
+        result.push_back({ rect.top(), rect.height() });
+    }
+    return result;
 }
 
 void GroupedMedia::clickHandlerActiveChanged(
