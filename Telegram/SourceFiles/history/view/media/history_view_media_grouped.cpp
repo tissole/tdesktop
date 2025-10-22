@@ -1853,11 +1853,6 @@ bool GroupedMedia::enforceBubbleWidth() const {
 }
 
 bool GroupedMedia::computeNeedBubble() const {
-	// The assertion that was causing the crash is removed. It was based on a
-	// faulty assumption that _captionItem would always have a value for non-Column modes,
-	// which is not true for Grid albums with per-item captions.
-	// Expects(_mode == Mode::Column || _captionItem.has_value()); // <--- REMOVED
-
 	if (_mode == Mode::Column) {
 		return true;
 	}
