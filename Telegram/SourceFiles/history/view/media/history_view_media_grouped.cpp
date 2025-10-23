@@ -969,6 +969,7 @@ TextState GroupedMedia::getPartState(
 					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
 					const auto state = fullCaption.getState(textPoint, textWidth, request.forText());
 					auto result = TextState(part.item, state);
+					result.symbol += shift;
 					result.itemId = part.item->fullId();
 					// Height-aware tooltip: show full text tooltip only if clipped.
 					const auto neededH = fullCaption.countHeight(textWidth);
