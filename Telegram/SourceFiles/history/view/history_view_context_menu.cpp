@@ -1653,8 +1653,11 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		if (!link && (view->hasVisibleText() || mediaHasTextForCopy)) {
 			if (!list->hasCopyRestriction(view->data())) {
 				const auto asGroup = (request.pointState != PointState::GroupPart);
+        // Determine the item to use based on whether we're in a group part context
+        auto itemForCopy = (request.pointState == PointState::GroupPart) ? request.item : item;
+        auto itemIdForCopy = itemForCopy ? itemForCopy->fullId() : itemId;
         result->addAction(tr::lng_context_copy_text(tr::now), [=] {
-            if (const auto item = owner->message(itemId)) {
+            if (const auto item = owner->message(itemIdForCopy)) {
                 if (!list->showCopyRestriction(item)) {
                     if (asGroup) {
                         if (const auto group = owner->groups().find(item)) {
