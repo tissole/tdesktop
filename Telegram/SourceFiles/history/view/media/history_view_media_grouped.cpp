@@ -952,8 +952,31 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 TextState GroupedMedia::getPartState(
 		QPoint point,
 		StateRequest request) const {
-	auto shift = 0;
 	auto i = 0;
+	
+	// Pre-calculate the shift for grid mode caption clicks
+	auto shift = 0;
+	if (_mode == Mode::Grid) {
+		// Calculate the proper shift before processing the parts
+		// Find which part contains the click in its caption rect
+		for (const auto &checkPart : _parts) {
+			if (checkPart.captionRect.contains(point)) {
+				// We found the clicked caption, stop here
+				break;
+			}
+			// Add the length of this part's caption to the shift
+			const auto original = checkPart.item->originalText();
+			if (!original.empty()) {
+				Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
+				shift += caption.length();
+			}
+		}
+	} else {
+		shift = 0; // For non-grid mode, use the original behavior
+	}
+	
+	// Use a separate variable for running shift during the iteration for non-caption clicks
+	auto runningShift = shift;  // Start with initial shift value
 	for (const auto &part : _parts) {
 		const auto isInside = part.geometry.contains(point)
 			|| (!part.captionRect.isEmpty() && part.captionRect.contains(point));
@@ -981,20 +1004,20 @@ TextState GroupedMedia::getPartState(
 					return result;
 				}
 		}
-			if (_mode == Mode::Grid) {
-				const auto original = part.item->originalText();
-				if (!original.empty()) {
-					Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
-					shift += caption.length();
-				}
-			}
 			auto result = part.content->getStateGrouped(
 				part.geometry,
 				part.sides,
 				point,
 				request);
-			result.symbol += shift;
+			result.symbol += runningShift;
 			result.itemId = part.item->fullId();
+			if (_mode == Mode::Grid) {
+				const auto original = part.item->originalText();
+				if (!original.empty()) {
+					Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
+					runningShift += caption.length();
+				}
+			}
 
 			const auto item = part.item;
 			const auto edited = item->Get<HistoryMessageEdited>();
@@ -1143,8 +1166,8 @@ TextState GroupedMedia::getPartState(
 			}
 		}
 			// --- END: MODIFIED LOGIC FOR COLUMN MODE ---
-			// START: New tooltip logic for Grid album items (2..N).
-			} else if (_mode == Mode::Grid && (&part != &_parts.front())) {
+				// START: New tooltip logic for Grid album items (2..N).
+			else if (_mode == Mode::Grid && (&part != &_parts.front())) {
 				QString infoText;
 				if (edited && !item->hideEditedBadge()) {
 					infoText += QString::fromUtf8("✏️");
@@ -1201,17 +1224,12 @@ TextState GroupedMedia::getPartState(
 				}
 				// END: New tooltip logic for Grid album items (2..N).
 			}
+
+
+
 			return result;
 		}
-		if (_mode == Mode::Grid) {
-			const auto original = part.item->originalText();
-			if (!original.empty()) {
-				Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
-				shift += caption.length();
-			}
-		} else { // Mode::Column
-			shift += part.content->fullSelectionLength();
-		}
+		runningShift += part.content->fullSelectionLength();
 		++i;
 	}
 
