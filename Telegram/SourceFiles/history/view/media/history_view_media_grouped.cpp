@@ -1143,8 +1143,8 @@ TextState GroupedMedia::getPartState(
 			}
 		}
 			// --- END: MODIFIED LOGIC FOR COLUMN MODE ---
-				// START: New tooltip logic for Grid album items (2..N).
-			else if (_mode == Mode::Grid && (&part != &_parts.front())) {
+			// START: New tooltip logic for Grid album items (2..N).
+			} else if (_mode == Mode::Grid && (&part != &_parts.front())) {
 				QString infoText;
 				if (edited && !item->hideEditedBadge()) {
 					infoText += QString::fromUtf8("✏️");
@@ -1200,17 +1200,10 @@ TextState GroupedMedia::getPartState(
 					}
 				}
 				// END: New tooltip logic for Grid album items (2..N).
-						// ... (existing code) ...
-						return result;
-					}
-					if (_mode == Mode::Grid) {
-						const auto original = part.item->originalText();
-						if (!original.empty()) {
-							Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
-							shift += caption.length();
-						}
-					} else { // Mode::Column
-								if (_mode == Mode::Grid) {
+			}
+			return result;
+		}
+		if (_mode == Mode::Grid) {
 			const auto original = part.item->originalText();
 			if (!original.empty()) {
 				Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
@@ -1219,9 +1212,8 @@ TextState GroupedMedia::getPartState(
 		} else { // Mode::Column
 			shift += part.content->fullSelectionLength();
 		}
-					}
-					++i;
-				}
+		++i;
+	}
 
 	if (!_parts.empty() && needInfoDisplay()) {
 		const auto firstPart = &_parts.front();
