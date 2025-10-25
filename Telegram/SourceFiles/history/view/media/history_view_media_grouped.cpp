@@ -981,13 +981,6 @@ TextState GroupedMedia::getPartState(
 					return result;
 				}
 		}
-			auto result = part.content->getStateGrouped(
-				part.geometry,
-				part.sides,
-				point,
-				request);
-			result.symbol += shift;
-			result.itemId = part.item->fullId();
 			if (_mode == Mode::Grid) {
 				const auto original = part.item->originalText();
 				if (!original.empty()) {
@@ -995,6 +988,13 @@ TextState GroupedMedia::getPartState(
 					shift += caption.length();
 				}
 			}
+			auto result = part.content->getStateGrouped(
+				part.geometry,
+				part.sides,
+				point,
+				request);
+			result.symbol += shift;
+			result.itemId = part.item->fullId();
 
 			const auto item = part.item;
 			const auto edited = item->Get<HistoryMessageEdited>();
@@ -1200,15 +1200,28 @@ TextState GroupedMedia::getPartState(
 					}
 				}
 				// END: New tooltip logic for Grid album items (2..N).
+						// ... (existing code) ...
+						return result;
+					}
+					if (_mode == Mode::Grid) {
+						const auto original = part.item->originalText();
+						if (!original.empty()) {
+							Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
+							shift += caption.length();
+						}
+					} else { // Mode::Column
+								if (_mode == Mode::Grid) {
+			const auto original = part.item->originalText();
+			if (!original.empty()) {
+				Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
+				shift += caption.length();
 			}
-
-
-
-			return result;
+		} else { // Mode::Column
+			shift += part.content->fullSelectionLength();
 		}
-		shift += part.content->fullSelectionLength();
-		++i;
-	}
+					}
+					++i;
+				}
 
 	if (!_parts.empty() && needInfoDisplay()) {
 		const auto firstPart = &_parts.front();
