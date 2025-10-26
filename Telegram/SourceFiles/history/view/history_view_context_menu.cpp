@@ -1,4 +1,4 @@
-﻿﻿/*
+﻿/*
 This file is part of Telegram Desktop,
 the official desktop application for the Telegram messaging service.
 
@@ -1666,13 +1666,10 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
                         }
                     } else if (view && request.pointState == PointState::GroupPart) {
                         // Group album caption: copy the clicked item's full caption.
-                        if (dynamic_cast<HistoryView::GroupedMedia*>(view->media())) {
-                            const auto original = item->originalText();
-                            if (!original.text.isEmpty()) {
-                                TextUtilities::SetClipboardText(
-                                    TextForMimeData::Rich(base::duplicate(original)));
-                                return;
-                            }
+                        if (const auto grouped = dynamic_cast<HistoryView::GroupedMedia*>(view->media())) {
+							TextUtilities::SetClipboardText(grouped->selectedText(
+								view->data()->fullSelection()));
+                            return;
                         }
                     }
                     TextUtilities::SetClipboardText(HistoryItemText(item));
