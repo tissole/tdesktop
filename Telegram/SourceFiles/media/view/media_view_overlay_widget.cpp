@@ -5524,9 +5524,9 @@ void OverlayWidget::paintCaptionContent(
 			.spoiler = Ui::Text::DefaultSpoilerCache(),
 			.pausedEmoji = On(PowerSaving::kEmojiChat),
 			.pausedSpoiler = On(PowerSaving::kChatSpoiler),
+			.selection = _captionSelection,
 			.elisionHeight = inner.height(),
 			.elisionRemoveFromEnd = _captionSkipBlockWidth,
-			.selection = _captionSelection,
 		});
 
 		if (_captionShowMoreWidth > 0) {
