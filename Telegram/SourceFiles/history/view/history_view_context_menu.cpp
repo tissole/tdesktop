@@ -1,4 +1,4 @@
-﻿/*
+﻿﻿/*
 This file is part of Telegram Desktop,
 the official desktop application for the Telegram messaging service.
 
@@ -29,7 +29,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item_components.h"
 #include "history/view/history_view_schedule_box.h"
 #include "history/view/media/history_view_media.h"
-#include "history/view/media/history_view_media_grouped.h"
 #include "history/view/media/history_view_web_page.h"
 #include "history/view/reactions/history_view_reactions_list.h"
 #include "info/info_memento.h"
@@ -1653,29 +1652,19 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		if (!link && (view->hasVisibleText() || mediaHasTextForCopy)) {
 			if (!list->hasCopyRestriction(view->data())) {
 				const auto asGroup = (request.pointState != PointState::GroupPart);
-        // Determine the item to use based on whether we're in a group part context
-        auto itemForCopy = (request.pointState == PointState::GroupPart) ? request.item : item;
-        auto itemIdForCopy = itemForCopy ? itemForCopy->fullId() : itemId;
-        result->addAction(tr::lng_context_copy_text(tr::now), [=] {
-            if (const auto item = owner->message(itemIdForCopy)) {
-                if (!list->showCopyRestriction(item)) {
-                    if (asGroup) {
-                        if (const auto group = owner->groups().find(item)) {
-                            TextUtilities::SetClipboardText(HistoryGroupText(group));
-                            return;
-                        }
-                    } else if (view && request.pointState == PointState::GroupPart) {
-                        // Group album caption: copy the clicked item's full caption.
-                        if (const auto grouped = dynamic_cast<HistoryView::GroupedMedia*>(view->media())) {
-							TextUtilities::SetClipboardText(grouped->selectedText(
-								view->data()->fullSelection()));
-                            return;
-                        }
-                    }
-                    TextUtilities::SetClipboardText(HistoryItemText(item));
-                }
-            }
-        }, &st::menuIconCopy);
+				result->addAction(tr::lng_context_copy_text(tr::now), [=] {
+					if (const auto item = owner->message(itemId)) {
+						if (!list->showCopyRestriction(item)) {
+							if (asGroup) {
+								if (const auto group = owner->groups().find(item)) {
+									TextUtilities::SetClipboardText(HistoryGroupText(group));
+									return;
+								}
+							}
+							TextUtilities::SetClipboardText(HistoryItemText(item));
+						}
+					}
+				}, &st::menuIconCopy);
 			}
 
 			const auto translate = mediaHasTextForCopy

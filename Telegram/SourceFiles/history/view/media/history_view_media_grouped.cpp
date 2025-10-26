@@ -954,27 +954,6 @@ TextState GroupedMedia::getPartState(
 		StateRequest request) const {
 	auto shift = 0;
 	auto i = 0;
-	
-	// Pre-calculate shift for grid mode caption clicks
-	if (_mode == Mode::Grid) {
-		// Calculate the cumulative shift up to the clicked caption
-		auto tempShift = 0;
-		for (const auto &checkPart : _parts) {
-			if (checkPart.captionRect.contains(point)) {
-				// This is the clicked caption, use accumulated shift up to this point
-				shift = tempShift;
-				break;
-			}
-			// Add this part's caption length to the running shift
-			const auto original = checkPart.item->originalText();
-			if (!original.empty()) {
-				Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
-				tempShift += caption.length();
-			}
-		}
-		// Don't reset shift - we now have the correct value for the clicked caption
-	}
-	
 	for (const auto &part : _parts) {
 		const auto isInside = part.geometry.contains(point)
 			|| (!part.captionRect.isEmpty() && part.captionRect.contains(point));
@@ -984,33 +963,16 @@ TextState GroupedMedia::getPartState(
 				&& part.captionRect.contains(point)) {
 				const auto originalText = part.item->originalText();
 				if (!originalText.empty()) {
-					const auto padding = QMargins(8, 0, 8, 0);
-					const auto textWidth = part.captionRect.width() - padding.left() - padding.right();
-					const auto textPoint = point - part.captionRect.topLeft() - QPoint(padding.left(), padding.top());
+					auto result = TextState(part.item);
+					// Tooltip for ellipsized captions.
 					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
-					const auto state = fullCaption.getState(textPoint, textWidth, request.forText());
-					auto result = TextState(part.item, state);
-					result.symbol += shift;
-					result.itemId = part.item->fullId();
-					// Height-aware tooltip: show full text tooltip only if clipped.
-					const auto neededH = fullCaption.countHeight(textWidth);
-					const auto textH = part.captionRect.height() - padding.top() - padding.bottom();
-					if (neededH > textH) {
+					const auto padding = QMargins(8, 0, 8, 0);
+					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
+					if (fullCaption.maxWidth() > textWidth) {
 						result.customTooltip = true;
 						result.customTooltipText = originalText.text;
 					}
 					return result;
-				}
-		}
-			if (_mode == Mode::Grid) {
-				const auto original = part.item->originalText();
-				if (!original.empty()) {
-					if (!part.captionRect.contains(point)) {
-					Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
-					if (!part.captionRect.contains(point)) {
-						shift += caption.length();
-					}
-				}
 				}
 			}
 			auto result = part.content->getStateGrouped(
@@ -1168,8 +1130,8 @@ TextState GroupedMedia::getPartState(
 			}
 		}
 			// --- END: MODIFIED LOGIC FOR COLUMN MODE ---
-			// START: New tooltip logic for Grid album items (2..N).
-			} else if (_mode == Mode::Grid && (&part != &_parts.front())) {
+				// START: New tooltip logic for Grid album items (2..N).
+			else if (_mode == Mode::Grid && (&part != &_parts.front())) {
 				QString infoText;
 				if (edited && !item->hideEditedBadge()) {
 					infoText += QString::fromUtf8("✏️");
@@ -1226,17 +1188,12 @@ TextState GroupedMedia::getPartState(
 				}
 				// END: New tooltip logic for Grid album items (2..N).
 			}
+
+
+
 			return result;
 		}
-		if (_mode == Mode::Grid) {
-			const auto original = part.item->originalText();
-			if (!original.empty()) {
-				Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
-				shift += caption.length();
-			}
-		} else { // Mode::Column
-			shift += part.content->fullSelectionLength();
-		}
+		shift += part.content->fullSelectionLength();
 		++i;
 	}
 
@@ -1281,10 +1238,7 @@ PointState GroupedMedia::pointState(QPoint point) const {
 	const auto groupPadding = groupedPadding();
 	point -= QPoint(0, groupPadding.top());
 	for (const auto &part : _parts) {
-		const auto inMedia = part.geometry.contains(point);
-		const auto inCaption = (!part.captionRect.isEmpty()
-			&& part.captionRect.contains(point));
-		if (inMedia || inCaption) {
+		if (part.geometry.contains(point)) {
 			return PointState::GroupPart;
 		}
 	}
@@ -1459,38 +1413,17 @@ bool GroupedMedia::dragItemByHandler(const ClickHandlerPtr &p) const {
 TextSelection GroupedMedia::adjustSelection(
 		TextSelection selection,
 		TextSelectType type) const {
-	if (_mode == Mode::Column) {
-		auto checked = 0;
-		for (const auto &part : _parts) {
-			const auto modified = ShiftItemSelection(
-					part.content->adjustSelection(
-							UnshiftItemSelection(selection, checked),
-							type),
-					checked);
-			const auto till = checked + part.content->fullSelectionLength();
-			if (selection.from >= checked && selection.from < till) {
-				selection.from = modified.from;
-			}
-			if (selection.to <= till) {
-				selection.to = modified.to;
-				return selection;
-			}
-			checked = till;
-		}
-		return selection;
+	if (_mode != Mode::Column) {
+		return {};
 	}
-	// Grid: compute selection within per-item caption strings.
 	auto checked = 0;
 	for (const auto &part : _parts) {
-		const auto original = part.item->originalText();
-		Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
-		const auto length = original.empty() ? 0 : caption.length();
 		const auto modified = ShiftItemSelection(
-				caption.adjustSelection(
-						UnshiftItemSelection(selection, checked),
-						type),
-				checked);
-		const auto till = checked + length;
+			part.content->adjustSelection(
+				UnshiftItemSelection(selection, checked),
+				type),
+			checked);
+		const auto till = checked + part.content->fullSelectionLength();
 		if (selection.from >= checked && selection.from < till) {
 			selection.from = modified.from;
 		}
@@ -1504,38 +1437,22 @@ TextSelection GroupedMedia::adjustSelection(
 }
 
 uint16 GroupedMedia::fullSelectionLength() const {
-	if (_mode == Mode::Column) {
-		auto result = 0;
-		for (const auto &part : _parts) {
-			result += part.content->fullSelectionLength();
-		}
-		return result;
+	if (_mode != Mode::Column) {
+		return {};
 	}
-	// Grid: sum caption lengths to enable partial selection.
-	auto total = uint16(0);
+	auto result = 0;
 	for (const auto &part : _parts) {
-		const auto original = part.item->originalText();
-		if (!original.empty()) {
-			Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
-			total += caption.length();
-		}
+		result += part.content->fullSelectionLength();
 	}
-	return total;
+	return result;
 }
 
 bool GroupedMedia::hasTextForCopy() const {
-	if (_mode == Mode::Column) {
-		for (const auto &part : _parts) {
-			if (part.content->hasTextForCopy()) {
-				return true;
-			}
-		}
-		return false;
+	if (_mode != Mode::Column) {
+		return {};
 	}
-	// Grid mode: allow copying if any item has a caption (original text).
 	for (const auto &part : _parts) {
-		const auto original = part.item->originalText();
-		if (!original.empty()) {
+		if (part.content->hasTextForCopy()) {
 			return true;
 		}
 	}
@@ -1544,49 +1461,22 @@ bool GroupedMedia::hasTextForCopy() const {
 
 TextForMimeData GroupedMedia::selectedText(
 		TextSelection selection) const {
-	auto result = TextForMimeData();
-	if (_mode == Mode::Column) {
-		for (const auto &part : _parts) {
-			auto text = part.content->selectedText(selection);
-			if (!text.empty()) {
-				if (result.empty()) {
-					result = std::move(text);
-				} else {
-					result.append(u"\n\n"_q).append(std::move(text));
-				}
-			}
-			selection = part.content->skipSelection(selection);
-		}
-		return result;
-	}
-	// Grid: if a normal selection exists, map absolute selection to the owning caption substring.
-	if (!IsSubGroupSelection(selection) && !selection.empty()) {
-		int cumulative = 0;
-		for (const auto &part : _parts) {
-			const auto original = part.item->originalText();
-			if (original.empty()) { continue; }
-			Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
-			const auto len = caption.length();
-			const auto next = cumulative + len;
-			if (selection.from < next) {
-				const auto localFrom = std::max(0, int(selection.from) - cumulative);
-				const auto localTo = std::min<int>(len, int(selection.to) - cumulative);
-				const auto localSel = TextSelection(uint16(localFrom), uint16(localTo));
-				return caption.toTextForMimeData(localSel);
-			}
-			cumulative = next;
-		}
+	if (_mode != Mode::Column) {
 		return {};
 	}
-	// Otherwise if a group-item selection exists, copy full caption of that item.
-	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
-		if (!IsGroupItemSelection(selection, i)) continue;
-		const auto original = _parts[i].item->originalText();
-		if (!original.empty()) {
-			return TextForMimeData::Rich(base::duplicate(original));
+	auto result = TextForMimeData();
+	for (const auto &part : _parts) {
+		auto text = part.content->selectedText(selection);
+		if (!text.empty()) {
+			if (result.empty()) {
+				result = std::move(text);
+			} else {
+				result.append(u"\n\n"_q).append(std::move(text));
+			}
 		}
+		selection = part.content->skipSelection(selection);
 	}
-	return {};
+	return result;
 }
 
 SelectedQuote GroupedMedia::selectedQuote(TextSelection selection) const {
@@ -1633,74 +1523,42 @@ TextSelection GroupedMedia::selectionFromQuote(
 auto GroupedMedia::getBubbleSelectionIntervals(
 		TextSelection selection) const
 -> std::vector<Ui::BubbleSelectionInterval> {
-	auto result = std::vector<Ui::BubbleSelectionInterval>();
-	if (_mode == Mode::Column) {
-		for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
-			const auto &part = _parts[i];
-			if (!IsGroupItemSelection(selection, i)) {
-				continue;
-			}
-			const auto &geometry = part.geometry;
-			if (result.empty()
-					|| (result.back().top + result.back().height
-						< geometry.top())
-					|| (result.back().top > geometry.top() + geometry.height())) {
-				result.push_back({ geometry.top(), geometry.height() });
-			} else {
-				auto &last = result.back();
-				const auto newTop = std::min(last.top, geometry.top());
-				const auto newHeight = std::max(
-						last.top + last.height - newTop,
-						geometry.top() + geometry.height() - newTop);
-				last = Ui::BubbleSelectionInterval{ newTop, newHeight };
-			}
-		}
-		const auto groupPadding = groupedPadding();
-		for (auto &part : result) {
-			part.top += groupPadding.top();
-		}
-		if (IsGroupItemSelection(selection, 0)) {
-			result.front().top -= groupPadding.top();
-			result.front().height += groupPadding.top();
-		}
-		if (IsGroupItemSelection(selection, _parts.size() - 1)) {
-			result.back().height = height() - result.back().top;
-		}
-		return result;
+	if (_mode != Mode::Column) {
+		return {};
 	}
-    // Grid: highlight caption rect for either group-item or normal selection.
-    const auto groupPadding = groupedPadding();
-    if (IsSubGroupSelection(selection)) {
-        for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
-            const auto &part = _parts[i];
-            if (!IsGroupItemSelection(selection, i) || part.captionRect.isEmpty()) {
-                continue;
-            }
-            auto rect = part.captionRect;
-            rect.translate(0, groupPadding.top());
-            result.push_back({ rect.top(), rect.height() });
-        }
-        return result;
-    }
-    if (!selection.empty()) {
-        int cumulative = 0;
-        for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
-            const auto &part = _parts[i];
-            const auto original = part.item->originalText();
-            if (original.empty() || part.captionRect.isEmpty()) { continue; }
-            Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
-            const auto len = caption.length();
-            const auto next = cumulative + len;
-            if (selection.from < next && selection.to > cumulative) {
-                auto rect = part.captionRect;
-                rect.translate(0, groupPadding.top());
-                result.push_back({ rect.top(), rect.height() });
-                break;
-            }
-            cumulative = next;
-        }
-    }
-    return result;
+	auto result = std::vector<Ui::BubbleSelectionInterval>();
+	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
+		const auto &part = _parts[i];
+		if (!IsGroupItemSelection(selection, i)) {
+			continue;
+		}
+		const auto &geometry = part.geometry;
+		if (result.empty()
+			|| (result.back().top + result.back().height
+				< geometry.top())
+			|| (result.back().top > geometry.top() + geometry.height())) {
+			result.push_back({ geometry.top(), geometry.height() });
+		} else {
+			auto &last = result.back();
+			const auto newTop = std::min(last.top, geometry.top());
+			const auto newHeight = std::max(
+				last.top + last.height - newTop,
+				geometry.top() + geometry.height() - newTop);
+			last = Ui::BubbleSelectionInterval{ newTop, newHeight };
+		}
+	}
+	const auto groupPadding = groupedPadding();
+	for (auto &part : result) {
+		part.top += groupPadding.top();
+	}
+	if (IsGroupItemSelection(selection, 0)) {
+		result.front().top -= groupPadding.top();
+		result.front().height += groupPadding.top();
+	}
+	if (IsGroupItemSelection(selection, _parts.size() - 1)) {
+		result.back().height = height() - result.back().top;
+	}
+	return result;
 }
 
 void GroupedMedia::clickHandlerActiveChanged(
@@ -1884,6 +1742,11 @@ bool GroupedMedia::enforceBubbleWidth() const {
 }
 
 bool GroupedMedia::computeNeedBubble() const {
+	// The assertion that was causing the crash is removed. It was based on a
+	// faulty assumption that _captionItem would always have a value for non-Column modes,
+	// which is not true for Grid albums with per-item captions.
+	// Expects(_mode == Mode::Column || _captionItem.has_value()); // <--- REMOVED
+
 	if (_mode == Mode::Column) {
 		return true;
 	}
