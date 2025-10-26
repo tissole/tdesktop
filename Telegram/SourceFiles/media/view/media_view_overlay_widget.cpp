@@ -1611,6 +1611,26 @@ void OverlayWidget::refreshSponsoredButtonWidth() {
 
 void OverlayWidget::fillContextMenuActions(
 		const Ui::Menu::MenuCallback &addAction) {
+	// If context menu is on caption, add caption-specific options
+	if (_contextMenuOnCaption && !_caption.isEmpty()) {
+		if (!_captionSelection.empty()) {
+			// If text is selected, add "Copy Selected Text" option
+			addAction(
+				tr::lng_context_copy_selected(tr::now),
+				[=] { copySelectedCaptionText(); },
+				&st::mediaMenuIconCopy);
+		}
+		
+		// Add "Copy All" option for caption
+		addAction(
+			tr::lng_context_copy_text(tr::now),
+			[=] { copyCaption(); },
+			&st::mediaMenuIconCopy);
+		
+		// For caption context menu, we're done - no other options needed
+		return;
+	}
+	
 	if (_message && _message->isSponsored()) {
 		if (const auto window = findWindow()) {
 			const auto show = window->uiShow();
@@ -2983,6 +3003,22 @@ void OverlayWidget::copyMedia() {
 	}
 }
 
+void OverlayWidget::copyCaption() {
+	if (_caption.isEmpty()) {
+		return;
+	}
+	_dropdown->hideAnimated(Ui::DropdownMenu::HideOption::IgnoreShow);
+	QGuiApplication::clipboard()->setText(_caption.toString());
+}
+
+void OverlayWidget::copySelectedCaptionText() {
+	if (_caption.isEmpty() || _captionSelection.empty()) {
+		return;
+	}
+	_dropdown->hideAnimated(Ui::DropdownMenu::HideOption::IgnoreShow);
+	QGuiApplication::clipboard()->setText(_caption.toString(_captionSelection));
+}
+
 void OverlayWidget::showAttachedStickers() {
 	if (!_session) {
 		return;
@@ -3334,6 +3370,8 @@ void OverlayWidget::refreshFromLabel() {
 
 void OverlayWidget::refreshCaption() {
 	_caption = Ui::Text::String();
+	_captionSelection = { 0, 0 };
+	_captionSelecting = false;
 	const auto caption = [&] {
 		if (_stories) {
 			return _stories->captionText();
@@ -5488,6 +5526,7 @@ void OverlayWidget::paintCaptionContent(
 			.pausedSpoiler = On(PowerSaving::kChatSpoiler),
 			.elisionHeight = inner.height(),
 			.elisionRemoveFromEnd = _captionSkipBlockWidth,
+			.selection = _captionSelection,
 		});
 
 		if (_captionShowMoreWidth > 0) {
@@ -6015,6 +6054,26 @@ void OverlayWidget::handleMousePress(
 				if (_over == Over::Video && _stories) {
 					_stories->contentPressed(true);
 				}
+			} else if (_captionRect.contains(position) && !_fullScreenVideo && _caption.length() > 0) {
+				// Start text selection in caption area
+				_captionSelecting = true;
+				_captionSelectionStart = position;
+				_captionSelectionEnd = position;
+				_captionSelection = { 0, 0 };
+				
+				// Calculate the text position for selection
+				auto request = Ui::Text::StateRequestElided();
+				const auto lineHeight = st::mediaviewCaptionStyle.font->height;
+				request.lines = _captionRect.height() / lineHeight;
+				request.removeFromEnd = _captionSkipBlockWidth;
+				auto textState = _caption.getStateElided(
+					position - _captionRect.topLeft(), 
+					_captionRect.width(), 
+					request);
+				
+				// Set initial selection
+				uint16 positionInText = textState.symbol;
+				_captionSelection = { positionInText, positionInText };
 			} else if (!_saveMsg.contains(position) || !isSaveMsgShown()) {
 				_pressed = true;
 				_dragging = 0;
@@ -6071,6 +6130,34 @@ void OverlayWidget::handleMouseMove(QPoint position) {
 			>= st::mediaviewDeltaFromLastAction)) {
 		_lastAction = QPoint(-st::mediaviewDeltaFromLastAction, -st::mediaviewDeltaFromLastAction);
 	}
+	
+	// Handle caption text selection
+	if (_captionSelecting && _caption.length() > 0 && _captionRect.contains(position)) {
+		_captionSelectionEnd = position;
+		
+		// Calculate the start text position
+		auto request = Ui::Text::StateRequestElided();
+		const auto lineHeight = st::mediaviewCaptionStyle.font->height;
+		request.lines = _captionRect.height() / lineHeight;
+		request.removeFromEnd = _captionSkipBlockWidth;
+		auto textStateStart = _caption.getStateElided(
+			_captionSelectionStart - _captionRect.topLeft(), 
+			_captionRect.width(), 
+			request);
+		auto textStateEnd = _caption.getStateElided(
+			position - _captionRect.topLeft(), 
+			_captionRect.width(), 
+			request);
+		
+		uint16 start = std::min(textStateStart.symbol, textStateEnd.symbol);
+		uint16 end = std::max(textStateStart.symbol, textStateEnd.symbol);
+		_captionSelection = { start, end };
+		
+		// Update the display to show selection
+		update(_captionRect);
+		return;
+	}
+	
 	if (_pressed) {
 		if (!_dragging
 			&& ((position - _mStart).manhattanLength()
@@ -6378,6 +6465,12 @@ void OverlayWidget::handleMouseRelease(
 		}
 		_pressed = false;
 	}
+	else if (_captionSelecting) {
+		// End text selection in caption
+		_captionSelecting = false;
+		// Selection is already set by mouse move, we just need to maintain it
+		// Don't reset _pressed or other states for caption selection
+	}
 	_down = Over::None;
 	if (!isHidden()) {
 		activateControls();
@@ -6390,6 +6483,10 @@ bool OverlayWidget::handleContextMenu(std::optional<QPoint> position) {
 				|| position->y() <= st::mediaviewTitleButton.height) {
 			return false;
 		}
+		// Check if context menu is on caption area
+		_contextMenuOnCaption = _captionRect.contains(*position) && !_fullScreenVideo;
+	} else {
+		_contextMenuOnCaption = false;
 	}
 	_menu = base::make_unique_q<Ui::PopupMenu>(
 		_window,
