@@ -1007,7 +1007,9 @@ TextState GroupedMedia::getPartState(
 				if (!original.empty()) {
 					if (!part.captionRect.contains(point)) {
 					Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
-					shift += caption.length();
+					if (!part.captionRect.contains(point)) {
+						shift += caption.length();
+					}
 				}
 				}
 			}
