@@ -954,6 +954,27 @@ TextState GroupedMedia::getPartState(
 		StateRequest request) const {
 	auto shift = 0;
 	auto i = 0;
+	
+	// Pre-calculate shift for grid mode caption clicks
+	if (_mode == Mode::Grid) {
+		// Calculate the cumulative shift up to the clicked caption
+		auto tempShift = 0;
+		for (const auto &checkPart : _parts) {
+			if (checkPart.captionRect.contains(point)) {
+				// This is the clicked caption, use accumulated shift up to this point
+				shift = tempShift;
+				break;
+			}
+			// Add this part's caption length to the running shift
+			const auto original = checkPart.item->originalText();
+			if (!original.empty()) {
+				Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
+				tempShift += caption.length();
+			}
+		}
+		// Don't reset shift - we now have the correct value for the clicked caption
+	}
+	
 	for (const auto &part : _parts) {
 		const auto isInside = part.geometry.contains(point)
 			|| (!part.captionRect.isEmpty() && part.captionRect.contains(point));
@@ -984,8 +1005,10 @@ TextState GroupedMedia::getPartState(
 			if (_mode == Mode::Grid) {
 				const auto original = part.item->originalText();
 				if (!original.empty()) {
+					if (!part.captionRect.contains(point)) {
 					Ui::Text::String caption(st::messageTextStyle, original, kDefaultTextOptions);
 					shift += caption.length();
+				}
 				}
 			}
 			auto result = part.content->getStateGrouped(
