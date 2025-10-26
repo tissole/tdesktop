@@ -6063,6 +6063,7 @@ void OverlayWidget::handleMousePress(
 				
 				// Calculate the text position for selection
 				auto request = Ui::Text::StateRequestElided();
+				request.flags |= Ui::Text::StateRequest::Flag::LookupSymbol;
 				const auto lineHeight = st::mediaviewCaptionStyle.font->height;
 				request.lines = _captionRect.height() / lineHeight;
 				request.removeFromEnd = _captionSkipBlockWidth;
@@ -6137,6 +6138,7 @@ void OverlayWidget::handleMouseMove(QPoint position) {
 		
 		// Calculate the start text position
 		auto request = Ui::Text::StateRequestElided();
+		request.flags |= Ui::Text::StateRequest::Flag::LookupSymbol;
 		const auto lineHeight = st::mediaviewCaptionStyle.font->height;
 		request.lines = _captionRect.height() / lineHeight;
 		request.removeFromEnd = _captionSkipBlockWidth;
