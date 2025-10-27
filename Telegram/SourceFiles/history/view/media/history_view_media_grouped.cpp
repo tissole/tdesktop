@@ -1884,41 +1884,4 @@ bool GroupedMedia::hasTextForCopy() const {
 	return false;
 }
 
-bool GroupedMedia::hasVisibleText() const {
-	// For Grid mode, check if any part has a caption
-	if (_mode == Mode::Grid) {
-		for (const auto &part : _parts) {
-			if (part._captionHeight > 0 && !part.item->originalText().text.isEmpty()) {
-				return true;
-			}
-		}
-	}
-	
-	// For Column mode, delegate to base implementation or check parts
-	if (_mode == Mode::Column) {
-		// Check if any part has visible text
-		for (const auto &part : _parts) {
-			if (part.content->hasVisibleText()) {
-				return true;
-			}
-		}
-	}
-	
-	return false;
-}
-
-TextForMimeData GroupedMedia::clipboardText() const {
-	// For Grid mode, return the caption text of the first part that has one
-	if (_mode == Mode::Grid) {
-		for (const auto &part : _parts) {
-			if (part._captionHeight > 0 && !part._captionText.isEmpty()) {
-				return TextForMimeData::Simple(part._captionText.toString());
-			}
-		}
-	}
-	
-	// For Column mode, delegate to base implementation
-	return Media::clipboardText();
-}
-
 } // namespace HistoryView

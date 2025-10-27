@@ -54,8 +54,6 @@ public:
 		TextSelectType type) const override;
 	uint16 fullSelectionLength() const override;
 	bool hasTextForCopy() const override;
-	bool hasVisibleText() const override;
-	TextForMimeData clipboardText() const override;
 
 	PhotoData *getPhoto() const override;
 	DocumentData *getDocument() const override;
