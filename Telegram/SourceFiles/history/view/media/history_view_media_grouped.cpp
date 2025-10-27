@@ -31,6 +31,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/enhanced_settings.h"
 #include "data/data_photo.h"
 #include <QtGui/QClipboard.h>
+#include <QtGui/QGuiApplication.h>
 
 namespace HistoryView {
 namespace {
@@ -993,13 +994,8 @@ TextState GroupedMedia::getPartState(
 					);
 					
 					// For right-click context menu, enable text operations
-					// Make sure no link is set so !link check passes in context menu
 					result.link = nullptr;
 					result.cursor = CursorState::Text;
-					
-					// Support for copy context menu
-					result.customContextMenu = true;
-					result.customContextMenuType = ContextMenuType::Media;
 					
 					// Tooltip for ellipsized captions.
 					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
@@ -1481,29 +1477,6 @@ uint16 GroupedMedia::fullSelectionLength() const {
 		result += part.content->fullSelectionLength();
 	}
 	return result;
-}
-
-bool GroupedMedia::hasVisibleText() const {
-	// For Grid mode, check if any part has a caption
-	if (_mode == Mode::Grid) {
-		for (const auto &part : _parts) {
-			if (part._captionHeight > 0 && !part.item->originalText().text.isEmpty()) {
-				return true;
-			}
-		}
-	}
-	
-	// For Column mode, delegate to base implementation or check parts
-	if (_mode == Mode::Column) {
-		// Check if any part has visible text
-		for (const auto &part : _parts) {
-			if (part.content->hasVisibleText()) {
-				return true;
-			}
-		}
-	}
-	
-	return false;
 }
 
 TextForMimeData GroupedMedia::selectedText(
