@@ -1867,20 +1867,10 @@ TextForMimeData GroupedMedia::clipboardText() const {
 		}
 	}
 	
-	// For Column mode, delegate to parts
+	// For Column mode, get text from parts using existing methods
 	if (_mode == Mode::Column) {
-		auto result = TextForMimeData();
-		for (const auto &part : _parts) {
-			auto text = part.content->clipboardText();
-			if (!text.empty()) {
-				if (result.empty()) {
-					result = std::move(text);
-				} else {
-					result.append(u"\n\n"_q).append(std::move(text));
-				}
-			}
-		}
-		return result;
+		// Use selectedText with full selection to get all text
+		return selectedText(FullSelection);
 	}
 	
 	return TextForMimeData();
