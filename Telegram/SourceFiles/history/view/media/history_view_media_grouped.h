@@ -54,6 +54,7 @@ public:
 		TextSelectType type) const override;
 	uint16 fullSelectionLength() const override;
 	bool hasTextForCopy() const override;
+	TextForMimeData clipboardText() const;
 
 	PhotoData *getPhoto() const override;
 	DocumentData *getDocument() const override;
@@ -129,12 +130,12 @@ private:
         int _captionHeight = 0;
 		mutable QRect captionRect;
 		
-		// Text selection for captions
-		mutable Ui::Text::String _captionText;
-		mutable TextSelection _captionSelection = { 0, 0 };
-		mutable bool _captionSelecting = false;
-		mutable QPoint _captionSelectionStart;
-		mutable QPoint _captionSelectionEnd;
+	// Text selection for captions
+	mutable Ui::Text::String _captionText;
+	mutable TextSelection _captionSelection = { 0, 0 };
+	mutable bool _captionSelecting = false;
+	mutable QPoint _captionSelectionStart;
+	mutable QPoint _captionSelectionEnd;
 
 	};
 

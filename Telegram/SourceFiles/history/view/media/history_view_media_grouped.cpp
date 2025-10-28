@@ -365,21 +365,22 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				accumulate_max(maxMediaHeight, float64(part.geometry.height()));
 
 				const auto originalText = part.item->originalText();
-				if ((_mode == Mode::Grid) &&
-					!originalText.empty()) { // REMOVED GetEnhancedBool check
-					part._captionText = Ui::Text::String(st::msgMinWidth);
-					part._captionText.setMarkedText(st::messageTextStyle, originalText, kDefaultTextOptions);
-					const auto padding = QMargins(8, 0, 8, 0);
-					part._captionHeight = part._captionText.countHeight(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
-					// Reset selection when caption is updated
-					part._captionSelection = { 0, 0 };
-					part._captionSelecting = false;
-				} else {
-					part._captionHeight = 0;
-					part._captionText = Ui::Text::String();
-					part._captionSelection = { 0, 0 };
-					part._captionSelecting = false;
-				}
+					if ((_mode == Mode::Grid) &&
+						!originalText.empty()) { // REMOVED GetEnhancedBool check
+						part._captionText = Ui::Text::String(st::msgMinWidth);
+						part._captionText.setMarkedText(st::messageTextStyle, originalText, kDefaultTextOptions);
+						const auto padding = QMargins(8, 0, 8, 0);
+						// Calculate height without vertical padding since we don't use it in drawing
+						part._captionHeight = part._captionText.countHeight(part.geometry.width() - padding.left() - padding.right());
+						// Reset selection when caption is updated
+						part._captionSelection = { 0, 0 };
+						part._captionSelecting = false;
+					} else {
+						part._captionHeight = 0;
+						part._captionText = Ui::Text::String();
+						part._captionSelection = { 0, 0 };
+						part._captionSelecting = false;
+					}
 				accumulate_max(maxCaptionHeight, float64(part._captionHeight));
 			}
 
@@ -1855,6 +1856,35 @@ bool GroupedMedia::hasTextForCopy() const {
 		}
 	}
 	return false;
+}
+
+TextForMimeData GroupedMedia::clipboardText() const {
+	// For Grid mode, return the caption text of the first part that has one
+	if (_mode == Mode::Grid) {
+		for (const auto &part : _parts) {
+			if (part._captionHeight > 0 && !part._captionText.isEmpty()) {
+				return TextForMimeData::Simple(part._captionText.toString());
+			}
+		}
+	}
+	
+	// For Column mode, delegate to parts
+	if (_mode == Mode::Column) {
+		auto result = TextForMimeData();
+		for (const auto &part : _parts) {
+			auto text = part.content->clipboardText();
+			if (!text.empty()) {
+				if (result.empty()) {
+					result = std::move(text);
+				} else {
+					result.append(u"\n\n"_q).append(std::move(text));
+				}
+			}
+		}
+		return result;
+	}
+	
+	return TextForMimeData();
 }
 
 } // namespace HistoryView
