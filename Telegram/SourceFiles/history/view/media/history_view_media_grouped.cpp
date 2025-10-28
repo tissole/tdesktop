@@ -283,12 +283,11 @@ QSize GroupedMedia::countOptimalSize() {
 					part._captionText = Ui::Text::String(st::msgMinWidth);
 					part._captionText.setMarkedText(st::messageTextStyle, originalText, kDefaultTextOptions);
 					const auto padding = QMargins(8, 0, 8, 0);
+					// Calculate height without vertical padding since we don't use it in drawing
 					part._captionHeight = part._captionText.countHeight(
 						part.initialGeometry.width()
 							- padding.left()
-							- padding.right())
-						+ padding.top()
-						+ padding.bottom();
+							- padding.right());
 					// Reset selection when caption is updated
 					part._captionSelection = { 0, 0 };
 					part._captionSelecting = false;
