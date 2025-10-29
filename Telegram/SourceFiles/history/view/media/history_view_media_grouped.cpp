@@ -366,11 +366,13 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				const auto originalText = part.item->originalText();
 					if ((_mode == Mode::Grid) &&
 						!originalText.empty()) { // REMOVED GetEnhancedBool check
-						part._captionText = Ui::Text::String(st::msgMinWidth);
-						part._captionText.setMarkedText(st::messageTextStyle, originalText, kDefaultTextOptions);
-						const auto padding = QMargins(8, 0, 8, 0);
-						// Calculate height without vertical padding since we don't use it in drawing
-						part._captionHeight = part._captionText.countHeight(part.geometry.width() - padding.left() - padding.right());
+						// Initialize caption text if needed
+						if (part._captionText.isEmpty()) {
+							part._captionText = Ui::Text::String(st::msgMinWidth);
+							part._captionText.setMarkedText(st::messageTextStyle, originalText, kDefaultTextOptions);
+						}
+						// Calculate height without padding since we don't use it in drawing
+						part._captionHeight = part._captionText.countHeight(part.geometry.width());
 						// Reset selection when caption is updated
 						part._captionSelection = { 0, 0 };
 						part._captionSelecting = false;
@@ -1849,7 +1851,8 @@ bool GroupedMedia::hasTextForCopy() const {
 	} else if (_mode == Mode::Grid) {
 		// Check if any part has caption text for copying
 		for (const auto &part : _parts) {
-			if (part._captionHeight > 0 && !part.item->originalText().text.isEmpty()) {
+			const auto originalText = part.item->originalText();
+			if (!originalText.text.isEmpty()) {
 				return true;
 			}
 		}
@@ -1861,8 +1864,9 @@ TextForMimeData GroupedMedia::clipboardText() const {
 	// For Grid mode, return the caption text of the first part that has one
 	if (_mode == Mode::Grid) {
 		for (const auto &part : _parts) {
-			if (part._captionHeight > 0 && !part._captionText.isEmpty()) {
-				return TextForMimeData::Simple(part._captionText.toString());
+			const auto originalText = part.item->originalText();
+			if (!originalText.text.isEmpty()) {
+				return TextForMimeData::Simple(originalText.text);
 			}
 		}
 	}
