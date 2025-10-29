@@ -56,7 +56,13 @@ public:
 	bool hasTextForCopy() const override;
 	TextForMimeData clipboardText() const;
 
-	PhotoData *getPhoto() const override;
+	// Text selection methods for captions
+	void handleCaptionMousePress(QPoint point);
+	void handleCaptionMouseMove(QPoint point);
+	void handleCaptionMouseRelease(QPoint point);
+	bool isCaptionSelecting() const;
+	void copySelectedCaptionText();
+	void copyCaption();
 	DocumentData *getDocument() const override;
 
 	TextForMimeData selectedText(TextSelection selection) const override;

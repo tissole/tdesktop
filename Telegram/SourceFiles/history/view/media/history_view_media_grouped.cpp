@@ -30,6 +30,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_basic.h"
 #include "core/enhanced_settings.h"
 #include "data/data_photo.h"
+#include "ui/text/text_utilities.h"
 #include <QtGui/QClipboard.h>
 #include <QtGui/QGuiApplication.h>
 
@@ -371,8 +372,10 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 							part._captionText = Ui::Text::String(st::msgMinWidth);
 							part._captionText.setMarkedText(st::messageTextStyle, originalText, kDefaultTextOptions);
 						}
-						// Calculate height without padding since we don't use it in drawing
-						part._captionHeight = part._captionText.countHeight(part.geometry.width());
+						const auto padding = QMargins(8, 0, 8, 0);
+						// Calculate height with proper width accounting for padding
+						const auto textWidth = part.geometry.width() - padding.left() - padding.right();
+						part._captionHeight = part._captionText.countHeight(textWidth);
 						// Reset selection when caption is updated
 						part._captionSelection = { 0, 0 };
 						part._captionSelecting = false;
@@ -821,21 +824,24 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			}
 
 			if (!textToDraw.isEmpty() && part._captionHeight > 0) {
-				Ui::Text::String caption(st::messageTextStyle, { textToDraw });
+				// Use the standard message text color for captions.
+				p.setPen(stm->historyTextFg);
+				const auto padding = QMargins(8, 0, 8, 0);
 				auto captionRect = QRect(
 					mediaGeometry.left(),
 					mediaGeometry.bottom() + 1,
 					mediaGeometry.width(),
 					part._captionHeight
 				);
-				// Use the standard message text color for captions.
-				p.setPen(stm->historyTextFg);
-				const auto padding = QMargins(8, 0, 8, 0);
-				caption.draw(p,
+				part._captionText.draw(p,
 					captionRect.left() + padding.left(),
 					captionRect.top() + padding.top(),
 					captionRect.width() - padding.left() - padding.right(),
-					style::al_left);
+					style::al_left,
+					0, // yFrom
+					-1, // yTo
+					part._captionSelection // selection
+				);
 			}
 		}
 		
@@ -1830,7 +1836,8 @@ void GroupedMedia::copyPartCaption(not_null<const Part*> part) const {
 		return;
 	}
 	
-	QGuiApplication::clipboard()->setText(part->_captionText.toString());
+	TextUtilities::SetClipboardText(
+		TextForMimeData::Simple(part->_captionText.toString()));
 }
 
 void GroupedMedia::copySelectedPartCaptionText(not_null<const Part*> part) const {
@@ -1838,7 +1845,8 @@ void GroupedMedia::copySelectedPartCaptionText(not_null<const Part*> part) const
 		return;
 	}
 	
-	QGuiApplication::clipboard()->setText(part->_captionText.toString(part->_captionSelection));
+	TextUtilities::SetClipboardText(
+		TextForMimeData::Simple(part->_captionText.toString(part->_captionSelection)));
 }
 
 bool GroupedMedia::hasTextForCopy() const {
@@ -1878,6 +1886,126 @@ TextForMimeData GroupedMedia::clipboardText() const {
 	}
 	
 	return TextForMimeData();
+}
+
+// Text selection methods for captions
+void GroupedMedia::handleCaptionMousePress(QPoint point) {
+	// Find which part was clicked
+	for (const auto &part : _parts) {
+		if ((_mode == Mode::Grid) && 
+			!part.captionRect.isEmpty() && 
+			part.captionRect.contains(point)) {
+			
+			// Initialize caption text if needed
+			const auto originalText = part.item->originalText();
+			if (!originalText.text.isEmpty() && part._captionText.isEmpty()) {
+				part._captionText = Ui::Text::String(st::msgMinWidth);
+				part._captionText.setMarkedText(st::messageTextStyle, originalText, kDefaultTextOptions);
+			}
+			
+			// Start text selection
+			part._captionSelecting = true;
+			part._captionSelectionStart = point;
+			part._captionSelectionEnd = point;
+			part._captionSelection = { 0, 0 };
+			break;
+		}
+	}
+}
+
+void GroupedMedia::handleCaptionMouseMove(QPoint point) {
+	// Update text selection while dragging
+	for (const auto &part : _parts) {
+		if (part._captionSelecting && 
+			(_mode == Mode::Grid) && 
+			!part.captionRect.isEmpty() && 
+			part.captionRect.contains(point)) {
+			
+			// Update selection end point
+			part._captionSelectionEnd = point;
+			
+			// Calculate new selection range
+			auto request = Ui::Text::StateRequestElided();
+			const auto lineHeight = st::mediaviewCaptionStyle.font->height;
+			request.lines = part.captionRect.height() / lineHeight;
+			request.removeFromEnd = part._captionSkipBlockWidth;
+			
+			// Get start and end positions in text
+			auto textStateStart = part._captionText.getStateElided(
+				part._captionSelectionStart - part.captionRect.topLeft(), 
+				part.captionRect.width(), 
+				request);
+			auto textStateEnd = part._captionText.getStateElided(
+				point - part.captionRect.topLeft(), 
+				part.captionRect.width(), 
+				request);
+				
+			// Update selection range
+			if (textStateEnd.cursor != CursorState::None && textStateStart.cursor != CursorState::None) {
+				uint16 start = std::min(textStateStart.symbol, textStateEnd.symbol);
+				uint16 end = std::max(textStateStart.symbol, textStateEnd.symbol);
+				part._captionSelection = { start, end };
+			}
+			break;
+		}
+	}
+}
+
+void GroupedMedia::handleCaptionMouseRelease(QPoint point) {
+	// Finalize text selection
+	for (const auto &part : _parts) {
+		if (part._captionSelecting) {
+			part._captionSelecting = false;
+			break;
+		}
+	}
+}
+
+bool GroupedMedia::isCaptionSelecting() const {
+	// Check if any part is currently selecting text
+	for (const auto &part : _parts) {
+		if (part._captionSelecting) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void GroupedMedia::copySelectedCaptionText() {
+	// Copy selected text from any part that has selection
+	for (const auto &part : _parts) {
+		if ((_mode == Mode::Grid) && 
+			part._captionHeight > 0 && 
+			!part._captionSelection.empty() && 
+			!part._captionText.isEmpty()) {
+			
+			TextUtilities::SetClipboardText(
+				TextForMimeData::Simple(part._captionText.toString(part._captionSelection)));
+			return;
+		}
+	}
+	
+	// If no selection, copy full caption text
+	copyCaption();
+}
+
+void GroupedMedia::copyCaption() {
+	// For Grid mode, copy the caption text of the first part that has one
+	if (_mode == Mode::Grid) {
+		for (const auto &part : _parts) {
+			const auto originalText = part.item->originalText();
+			if (!originalText.text.isEmpty()) {
+				TextUtilities::SetClipboardText(
+					TextForMimeData::Simple(originalText.text));
+				return;
+			}
+		}
+	}
+	
+	// For Column mode, delegate to base implementation
+	if (_mode == Mode::Column) {
+		Media::copyMedia();
+	}
 }
 
 } // namespace HistoryView
