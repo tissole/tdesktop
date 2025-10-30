@@ -1922,9 +1922,8 @@ void GroupedMedia::handleCaptionMouseMove(QPoint point) {
 			
 			// Calculate new selection range
 			auto request = Ui::Text::StateRequestElided();
-			const auto lineHeight = st::mediaviewCaptionStyle.font->height;
+			const auto lineHeight = st::messageTextStyle.font->height;
 			request.lines = part.captionRect.height() / lineHeight;
-			request.removeFromEnd = part._captionSkipBlockWidth;
 			
 			// Get start and end positions in text
 			auto textStateStart = part._captionText.getStateElided(
@@ -1937,7 +1936,7 @@ void GroupedMedia::handleCaptionMouseMove(QPoint point) {
 				request);
 				
 			// Update selection range
-			if (textStateEnd.cursor != CursorState::None && textStateStart.cursor != CursorState::None) {
+			if (textStateEnd.symbol != 0 && textStateStart.symbol != 0) {
 				uint16 start = std::min(textStateStart.symbol, textStateEnd.symbol);
 				uint16 end = std::max(textStateStart.symbol, textStateEnd.symbol);
 				part._captionSelection = { start, end };
@@ -2000,7 +1999,6 @@ void GroupedMedia::copyCaption() {
 	
 	// For Column mode, delegate to base implementation
 	if (_mode == Mode::Column) {
-		Media::copyMedia();
 	}
 }
 
