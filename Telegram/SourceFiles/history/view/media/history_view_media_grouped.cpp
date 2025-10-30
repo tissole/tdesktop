@@ -1682,10 +1682,6 @@ Storage::SharedMediaTypesMask GroupedMedia::sharedMediaTypes() const {
 	return main()->sharedMediaTypes();
 }
 
-PhotoData *GroupedMedia::getPhoto() const {
-	return main()->getPhoto();
-}
-
 DocumentData *GroupedMedia::getDocument() const {
 	return main()->getDocument();
 }
