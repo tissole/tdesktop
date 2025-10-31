@@ -1848,16 +1848,18 @@ void GroupedMedia::copySelectedPartCaptionText(not_null<const Part*> part) const
 bool GroupedMedia::hasTextForCopy() const {
 	if (_mode == Mode::Column) {
 		for (const auto &part : _parts) {
-			if (part.content->hasTextForCopy()) {
+			if (part.content && part.content->hasTextForCopy()) {
 				return true;
 			}
 		}
 	} else if (_mode == Mode::Grid) {
 		// Check if any part has caption text for copying
 		for (const auto &part : _parts) {
-			const auto originalText = part.item->originalText();
-			if (!originalText.text.isEmpty()) {
-				return true;
+			if (part.item) {
+				const auto originalText = part.item->originalText();
+				if (!originalText.text.isEmpty()) {
+					return true;
+				}
 			}
 		}
 	}
@@ -1868,9 +1870,12 @@ TextForMimeData GroupedMedia::clipboardText() const {
 	// For Grid mode, return the caption text of the first part that has one
 	if (_mode == Mode::Grid) {
 		for (const auto &part : _parts) {
-			const auto originalText = part.item->originalText();
-			if (!originalText.text.isEmpty()) {
-				return TextForMimeData::Simple(originalText.text);
+			// Always use the original text directly to ensure consistency
+			if (part.item) {
+				const auto originalText = part.item->originalText();
+				if (!originalText.text.isEmpty()) {
+					return TextForMimeData::Simple(originalText.text);
+				}
 			}
 		}
 	}
@@ -1999,6 +2004,7 @@ void GroupedMedia::copyCaption() {
 	
 	// For Column mode, delegate to base implementation
 	if (_mode == Mode::Column) {
+		Media::copyCaption();
 	}
 }
 
