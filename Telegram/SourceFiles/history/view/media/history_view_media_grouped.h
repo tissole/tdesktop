@@ -54,15 +54,8 @@ public:
 		TextSelectType type) const override;
 	uint16 fullSelectionLength() const override;
 	bool hasTextForCopy() const override;
-	TextForMimeData clipboardText() const;
 
-	// Text selection methods for captions
-	void handleCaptionMousePress(QPoint point);
-	void handleCaptionMouseMove(QPoint point);
-	void handleCaptionMouseRelease(QPoint point);
-	bool isCaptionSelecting() const;
-	void copySelectedCaptionText();
-	void copyCaption();
+	PhotoData *getPhoto() const override;
 	DocumentData *getDocument() const override;
 
 	TextForMimeData selectedText(TextSelection selection) const override;
@@ -135,21 +128,10 @@ private:
 		mutable QPixmap cache;
         int _captionHeight = 0;
 		mutable QRect captionRect;
-		
-	// Text selection for captions
-	mutable Ui::Text::String _captionText;
-	mutable TextSelection _captionSelection = { 0, 0 };
-	mutable bool _captionSelecting = false;
-	mutable QPoint _captionSelectionStart;
-	mutable QPoint _captionSelectionEnd;
 
 	};
 
 	[[nodiscard]] static Mode DetectMode(not_null<Data::Media*> media);
-
-	// Caption text operations
-	void copyPartCaption(not_null<const Part*> part) const;
-	void copySelectedPartCaptionText(not_null<const Part*> part) const;
 
 	template <typename DataMediaRange>
 	bool applyGroup(const DataMediaRange &medias);
