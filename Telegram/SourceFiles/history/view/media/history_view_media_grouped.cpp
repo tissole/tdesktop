@@ -278,12 +278,12 @@ QSize GroupedMedia::countOptimalSize() {
 			if (_mode == Mode::Grid) {
 				const auto originalText = part.item->originalText();
 				if (!originalText.empty()) {
-					Ui::Text::String caption(
+					part.caption.setMarkedText(
 						st::messageTextStyle,
 						originalText,
 						kDefaultTextOptions);
 					const auto padding = QMargins(8, 0, 8, 0);
-					part._captionHeight = caption.countHeight(
+					part._captionHeight = part.caption.countHeight(
 						part.initialGeometry.width()
 							- padding.left()
 							- padding.right())
@@ -361,9 +361,12 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				const auto originalText = part.item->originalText();
 				if ((_mode == Mode::Grid) &&
 					!originalText.empty()) { // REMOVED GetEnhancedBool check
-					Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
+					part.caption.setMarkedText(
+						st::messageTextStyle,
+						originalText,
+						kDefaultTextOptions);
 					const auto padding = QMargins(8, 0, 8, 0);
-					part._captionHeight = caption.countHeight(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
+					part._captionHeight = part.caption.countHeight(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
 				} else {
 					part._captionHeight = 0;
 				}
@@ -789,24 +792,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 		// FIX #8: Restore caption drawing for Grid mode.
 		if ((_mode == Mode::Grid) && part._captionHeight > 0) {
-			const auto originalText = part.item->originalText();
 			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
 
-			QString textToDraw;
-			if (!originalText.empty()) {
-				Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
-				const auto padding = QMargins(8, 0, 8, 0);
-				const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
-				if (fullCaption.maxWidth() > textWidth) {
-					QFontMetrics metrics(st::messageTextStyle.font);
-					textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
-				} else {
-					textToDraw = originalText.text;
-				}
-			}
-
-			if (!textToDraw.isEmpty() && part._captionHeight > 0) {
-				Ui::Text::String caption(st::messageTextStyle, { textToDraw });
+			if (!part.caption.isEmpty() && part._captionHeight > 0) {
 				auto captionRect = QRect(
 					mediaGeometry.left(),
 					mediaGeometry.bottom() + 1,
@@ -816,11 +804,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				// Use the standard message text color for captions.
 				p.setPen(stm->historyTextFg);
 				const auto padding = QMargins(8, 0, 8, 0);
-				caption.draw(p,
-					captionRect.left() + padding.left(),
-					captionRect.top() + padding.top(),
-					captionRect.width() - padding.left() - padding.right(),
-					style::al_left);
+				part.caption.draw(p, {
+					.position = captionRect.topLeft() + QPoint(padding.left(), padding.top()),
+					.availableWidth = captionRect.width() - padding.left() - padding.right(),
+					.palette = &stm->textPalette,
+					.selection = context.selection,
+				});
 			}
 		}
 		
@@ -970,12 +959,18 @@ TextState GroupedMedia::getPartState(
 					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
 					if (fullCaption.maxWidth() > textWidth) {
 						result.customTooltip = true;
-						result.customTooltipText = originalText.text;
-					}
-					return result;
-				}
-			}
-			auto result = part.content->getStateGrouped(
+											result.customTooltipText = originalText.text;
+										}
+						
+										const auto link = parent()->data()->history()->session().specialLinks()->find(part.caption, result.symbol);
+										if (link) {
+											result.link = link;
+										} else if (request.menu) {
+											_captionActivePart = i;
+										}
+										return result;
+									}
+								}			auto result = part.content->getStateGrouped(
 				part.geometry,
 				part.sides,
 				point,
@@ -1246,6 +1241,7 @@ PointState GroupedMedia::pointState(QPoint point) const {
 }
 
 TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
+	_captionActivePart = -1;
 	const auto groupPadding = groupedPadding();
 	auto result = getPartState(point - QPoint(0, groupPadding.top()), request);
 	if (const auto tagged = lookupSpoilerTagMedia()) {
@@ -1388,6 +1384,16 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			}
 		}
 	}
+
+	if (request.menu && _captionActivePart != -1) {
+		const auto &_part = _parts[_captionActivePart];
+		const auto hasSelection = (result.selection.from != result.selection.to);
+		parent()->delegate()->elementShowMenu(nullptr, parent()->data(), FullMsgId(), {
+			.text = _part.caption,
+			.selection = result.selection,
+		});
+	}
+
 	return result;
 }
 

@@ -128,6 +128,7 @@ private:
 		mutable QPixmap cache;
         int _captionHeight = 0;
 		mutable QRect captionRect;
+		Ui::Text::String caption;
 
 	};
 
@@ -163,6 +164,8 @@ private:
 	Mode _mode = Mode::Grid;
 	bool _needBubble : 1 = false;
 	bool _purchasedPriceTag : 1 = false;
+
+	mutable int _captionActivePart = -1;
 
 	void drawMessageIdInfo(
 		Painter &p,
