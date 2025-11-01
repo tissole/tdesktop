@@ -2001,11 +2001,6 @@ void GroupedMedia::copyCaption() {
 			}
 		}
 	}
-	
-	// For Column mode, delegate to base implementation
-	if (_mode == Mode::Column) {
-		Media::copyCaption();
-	}
 }
 
 } // namespace HistoryView
