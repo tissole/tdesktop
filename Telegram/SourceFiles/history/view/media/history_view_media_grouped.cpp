@@ -966,6 +966,7 @@ TextState GroupedMedia::getPartState(
 				if (!originalText.empty()) {
 					const auto state = part.caption.getState(
 						point - part.captionRect.topLeft(),
+						part.captionRect.width(),
 						request.forText());
 					auto result = TextState(part.item, state);
 
@@ -1804,27 +1805,35 @@ bool GroupedMedia::needInfoDisplay() const {
 }
 
 void GroupedMedia::showCaptionMenu(int partIndex, QPoint point) {
-	const auto &part = _parts[partIndex];
-	const auto selection = parent()->delegate()->elementTextSelection(part.item->fullId());
+	auto *partPtr = &_parts[partIndex];
 
 	auto menu = base::make_unique_q<Ui::Menu>(
-		parent()->delegate()->elementWidget());
-	const auto hasSelection = !selection.empty();
-	if (hasSelection) {
-		menu->addAction(tr::lng_context_copy_selected(tr::now), [=] {
+		QApplication::activeWindow());
+
+	const auto state = partPtr->caption.getState(
+		point - partPtr->captionRect.topLeft(),
+		partPtr->captionRect.width(),
+		{});
+	const auto selection = state.selection;
+
+	menu->addAction(tr::lng_context_copy_text(tr::now), [partPtr] {
+		QApplication::clipboard()->setText(
+			partPtr->caption.toTextForMimeData(FullSelection).rich.toPlainText());
+	});
+
+	if (selection.from != selection.to) {
+		menu->addAction(tr::lng_context_copy_selected(tr::now), [partPtr, selection] {
 			QApplication::clipboard()->setText(
-				part.caption.toTextForMimeData(selection).text);
+				partPtr->caption.toTextForMimeData(selection).rich.toPlainText());
 		});
 	}
-	menu->addAction(tr::lng_context_copy_text(tr::now), [=] {
-			QApplication::clipboard()->setText(
-				part.caption.toTextForMimeData(FullSelection).text);
-		});
 
 	if (!menu->empty()) {
-		parent()->history()->session().context_menu().show(
-			std::move(menu),
-			{});
+		if (const auto controller = parent()->history()->session().tryResolveWindow()) {
+			if (const auto show = controller->uiShow()) {
+				show->showMenu(std::move(menu), QCursor::pos());
+			}
+		}
 	}
 }
 
