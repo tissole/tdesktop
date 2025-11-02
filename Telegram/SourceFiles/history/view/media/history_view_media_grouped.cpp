@@ -986,7 +986,7 @@ TextState GroupedMedia::getPartState(
 								return;
 							}
 							if (auto strong = weak.get()) {
-								strong->showCaptionMenu(i, context.point);
+								strong->showCaptionMenu(i);
 							}
 						});
 					}
@@ -1804,36 +1804,19 @@ bool GroupedMedia::needInfoDisplay() const {
 			|| _parent->isLastAndSelfMessage());
 }
 
-void GroupedMedia::showCaptionMenu(int partIndex, QPoint point) {
+void GroupedMedia::showCaptionMenu(int partIndex) {
 	auto *partPtr = &_parts[partIndex];
 
-	auto menu = base::make_unique_q<Ui::Menu>(
+	auto menu = base::make_unique_q<::Ui::Menu>(
 		QApplication::activeWindow());
-
-	const auto state = partPtr->caption.getState(
-		point - partPtr->captionRect.topLeft(),
-		partPtr->captionRect.width(),
-		{});
-	const auto selection = state.selection;
 
 	menu->addAction(tr::lng_context_copy_text(tr::now), [partPtr] {
 		QApplication::clipboard()->setText(
-			partPtr->caption.toTextForMimeData(FullSelection).rich.toPlainText());
+			partPtr->caption.toTextForMimeData(FullSelection).rich.text);
 	});
 
-	if (selection.from != selection.to) {
-		menu->addAction(tr::lng_context_copy_selected(tr::now), [partPtr, selection] {
-			QApplication::clipboard()->setText(
-				partPtr->caption.toTextForMimeData(selection).rich.toPlainText());
-		});
-	}
-
 	if (!menu->empty()) {
-		if (const auto controller = parent()->history()->session().tryResolveWindow()) {
-			if (const auto show = controller->uiShow()) {
-				show->showMenu(std::move(menu), QCursor::pos());
-			}
-		}
+		menu->popup(QCursor::pos());
 	}
 }
 

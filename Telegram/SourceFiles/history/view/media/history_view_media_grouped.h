@@ -20,7 +20,7 @@ namespace HistoryView {
 
 class GroupedMedia : public Media {
 public:
-	void showCaptionMenu(int partIndex, QPoint point);
+	void showCaptionMenu(int partIndex);
 public:
 	static constexpr auto kMaxSize = 10;
 
