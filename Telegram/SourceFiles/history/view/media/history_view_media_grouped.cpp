@@ -11,7 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "ui/text/text_utilities.h"
 #include "ui/text/text.h"
-#include "history/view/history_view_element_delegate.h"
+#include "history/view/history_view_element.h"
 #include <QApplication>
 #include <QClipboard>
 #include "ui/widgets/menu.h"
