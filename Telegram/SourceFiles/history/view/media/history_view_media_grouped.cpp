@@ -7,6 +7,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/media/history_view_media_grouped.h"
 
+#include "main/main_session.h"
+#include "data/data_session.h"
+#include "ui/text/text_utilities.h"
+#include "ui/text/text_state.h"
+#include "history/view/history_view_element_delegate.h"
+#include <QApplication>
+#include <QClipboard>
+#include "ui/widgets/menu.h"
+#include "base/make_unique.h"
+#include "lang/lang_keys.h"
+#include "window/window_session_controller.h"
+
 #include "history/history_item_components.h"
 #include "history/history_item.h"
 #include "history/history.h"
@@ -952,25 +964,27 @@ TextState GroupedMedia::getPartState(
 				&& part.captionRect.contains(point)) {
 				const auto originalText = part.item->originalText();
 				if (!originalText.empty()) {
-					auto result = TextState(part.item);
+					const auto state = part.caption.getState(
+						point - part.captionRect.topLeft(),
+						request.forText());
+					auto result = TextState(part.item, state);
+
 					// Tooltip for ellipsized captions.
 					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
 					const auto padding = QMargins(8, 0, 8, 0);
 					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
 					if (fullCaption.maxWidth() > textWidth) {
 						result.customTooltip = true;
-											result.customTooltipText = originalText.text;
-										}
-						
-										const auto link = parent()->data()->history()->session().specialLinks()->find(part.caption, result.symbol);
-										if (link) {
-											result.link = link;
-										} else if (request.menu) {
-											_captionActivePart = i;
-										}
-										return result;
-									}
-								}			auto result = part.content->getStateGrouped(
+						result.customTooltipText = originalText.text;
+					}
+
+					if (!result.link && (request.flags & Ui::Text::StateRequest::Flag::Menu)) {
+						_captionActivePart = i;
+					}
+					return result;
+				}
+			}
+			auto result = part.content->getStateGrouped(
 				part.geometry,
 				part.sides,
 				point,
@@ -1385,13 +1399,29 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 		}
 	}
 
-	if (request.menu && _captionActivePart != -1) {
+	if ((request.flags & Ui::Text::StateRequest::Flag::Menu) && _captionActivePart != -1) {
 		const auto &_part = _parts[_captionActivePart];
-		const auto hasSelection = (result.selection.from != result.selection.to);
-		parent()->delegate()->elementShowMenu(nullptr, parent()->data(), FullMsgId(), {
-			.text = _part.caption,
-			.selection = result.selection,
+		const auto selection = parent()->delegate()->elementTextSelection(result.itemId);
+
+		auto menu = base::make_unique_q<Ui::Menu>(
+			parent()->delegate()->elementWidget());
+		const auto hasSelection = !selection.empty();
+		if (hasSelection) {
+			menu->addAction(tr::lng_context_copy_selected(tr::now), [=] {
+				QApplication::clipboard()->setText(
+					_part.caption.toTextForMimeData(selection).text);
+			});
+		}
+		menu->addAction(tr::lng_context_copy_text(tr::now), [=] {
+			QApplication::clipboard()->setText(
+				_part.caption.toTextForMimeData(FullSelection).text);
 		});
+
+		if (!menu->empty()) {
+			parent()->history()->session().context_menu().show(
+				std::move(menu),
+				{});
+		}
 	}
 
 	return result;
