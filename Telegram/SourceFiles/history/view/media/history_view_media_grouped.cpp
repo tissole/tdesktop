@@ -10,7 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "data/data_session.h"
 #include "ui/text/text_utilities.h"
-#include "ui/text/text_state.h"
+#include "ui/text/text.h"
 #include "history/view/history_view_element_delegate.h"
 #include <QApplication>
 #include <QClipboard>
@@ -978,8 +978,16 @@ TextState GroupedMedia::getPartState(
 						result.customTooltipText = originalText.text;
 					}
 
-					if (!result.link && (request.flags & Ui::Text::StateRequest::Flag::Menu)) {
-						_captionActivePart = i;
+					if (!result.link) {
+						auto weak = base::make_weak(this);
+						result.link = std::make_shared<LambdaClickHandler>([weak, i](const ClickContext &context) {
+							if (context.button != Qt::RightButton) {
+								return;
+							}
+							if (auto strong = weak.get()) {
+								strong->showCaptionMenu(i, context.point);
+							}
+						});
 					}
 					return result;
 				}
@@ -1255,7 +1263,6 @@ PointState GroupedMedia::pointState(QPoint point) const {
 }
 
 TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
-	_captionActivePart = -1;
 	const auto groupPadding = groupedPadding();
 	auto result = getPartState(point - QPoint(0, groupPadding.top()), request);
 	if (const auto tagged = lookupSpoilerTagMedia()) {
@@ -1396,31 +1403,6 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 						- QPoint(fastShareLeft, fastShareTop));
 				}
 			}
-		}
-	}
-
-	if ((request.flags & Ui::Text::StateRequest::Flag::Menu) && _captionActivePart != -1) {
-		const auto &_part = _parts[_captionActivePart];
-		const auto selection = parent()->delegate()->elementTextSelection(result.itemId);
-
-		auto menu = base::make_unique_q<Ui::Menu>(
-			parent()->delegate()->elementWidget());
-		const auto hasSelection = !selection.empty();
-		if (hasSelection) {
-			menu->addAction(tr::lng_context_copy_selected(tr::now), [=] {
-				QApplication::clipboard()->setText(
-					_part.caption.toTextForMimeData(selection).text);
-			});
-		}
-		menu->addAction(tr::lng_context_copy_text(tr::now), [=] {
-			QApplication::clipboard()->setText(
-				_part.caption.toTextForMimeData(FullSelection).text);
-		});
-
-		if (!menu->empty()) {
-			parent()->history()->session().context_menu().show(
-				std::move(menu),
-				{});
 		}
 	}
 
@@ -1819,6 +1801,31 @@ bool GroupedMedia::needInfoDisplay() const {
 			|| _parent->isUnderCursor()
 			|| (_parent->delegate()->elementContext() == Context::ChatPreview)
 			|| _parent->isLastAndSelfMessage());
+}
+
+void GroupedMedia::showCaptionMenu(int partIndex, QPoint point) {
+	const auto &part = _parts[partIndex];
+	const auto selection = parent()->delegate()->elementTextSelection(part.item->fullId());
+
+	auto menu = base::make_unique_q<Ui::Menu>(
+		parent()->delegate()->elementWidget());
+	const auto hasSelection = !selection.empty();
+	if (hasSelection) {
+		menu->addAction(tr::lng_context_copy_selected(tr::now), [=] {
+			QApplication::clipboard()->setText(
+				part.caption.toTextForMimeData(selection).text);
+		});
+	}
+	menu->addAction(tr::lng_context_copy_text(tr::now), [=] {
+			QApplication::clipboard()->setText(
+				part.caption.toTextForMimeData(FullSelection).text);
+		});
+
+	if (!menu->empty()) {
+		parent()->history()->session().context_menu().show(
+			std::move(menu),
+			{});
+	}
 }
 
 } // namespace HistoryView
