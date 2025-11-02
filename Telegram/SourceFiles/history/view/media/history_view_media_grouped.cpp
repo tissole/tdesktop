@@ -14,8 +14,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_element.h"
 #include <QApplication>
 #include <QClipboard>
-#include "ui/widgets/menu.h"
-#include "base/make_unique.h"
+#include "ui/widgets/menu/menu.h"
+#include "base/unique_qptr.h"
 #include "lang/lang_keys.h"
 #include "window/window_session_controller.h"
 
