@@ -1804,15 +1804,15 @@ bool GroupedMedia::needInfoDisplay() const {
 			|| _parent->isLastAndSelfMessage());
 }
 
-void GroupedMedia::showCaptionMenu(int partIndex) {
-	auto *partPtr = &_parts[partIndex];
+void GroupedMedia::showCaptionMenu(int partIndex) const {
+	const auto &part = _parts[partIndex];
 
-	auto menu = base::make_unique_q<::Ui::Menu>(
+	auto menu = base::make_unique_q<Ui::Menu::Menu>(
 		QApplication::activeWindow());
 
-	menu->addAction(tr::lng_context_copy_text(tr::now), [partPtr] {
+	menu->addAction(tr::lng_context_copy_text(tr::now), [caption = part.caption] {
 		QApplication::clipboard()->setText(
-			partPtr->caption.toTextForMimeData(FullSelection).rich.text);
+			caption.toTextForMimeData(FullSelection).rich.text);
 	});
 
 	if (!menu->empty()) {
