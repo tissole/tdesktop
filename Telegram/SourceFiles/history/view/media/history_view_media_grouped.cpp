@@ -317,10 +317,14 @@ QSize GroupedMedia::countOptimalSize() {
 
 	auto minHeight = y > 0 ? (y - spacing) : 0;
 	maxWidth = 0;
+	_captionsCount = 0;
 	for (auto i = 0; i != _parts.size(); ++i) {
 		accumulate_max(
 			maxWidth,
 			_parts[i].initialGeometry.x() + _parts[i].initialGeometry.width());
+		if (_parts[i]._captionHeight > 0) {
+			_captionsCount++;
+		}
 	}
 
 	const auto groupPadding = groupedPadding();
@@ -816,11 +820,13 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				// Use the standard message text color for captions.
 				p.setPen(stm->historyTextFg);
 				const auto padding = QMargins(8, 0, 8, 0);
+				const auto elision = (_captionsCount > 1);
 				part.caption.draw(p, {
 					.position = captionRect.topLeft() + QPoint(padding.left(), padding.top()),
 					.availableWidth = captionRect.width() - padding.left() - padding.right(),
 					.palette = &stm->textPalette,
 					.selection = context.selection,
+					.elisionLines = elision ? 1 : 0,
 				});
 			}
 		}
@@ -979,17 +985,17 @@ TextState GroupedMedia::getPartState(
 						result.customTooltipText = originalText.text;
 					}
 
-					if (!result.link) {
-						auto weak = base::make_weak(this);
-						result.link = std::make_shared<LambdaClickHandler>([weak, i](const ClickContext &context) {
-							if (context.button != Qt::RightButton) {
-								return;
-							}
+					auto originalLink = result.link;
+					auto weak = base::make_weak(this);
+					result.link = std::make_shared<LambdaClickHandler>([weak, i, originalLink](const ClickContext &context) {
+						if (context.button == Qt::RightButton) {
 							if (auto strong = weak.get()) {
 								strong->showCaptionMenu(i);
 							}
-						});
-					}
+						} else if (originalLink) {
+							originalLink->onClick(context);
+						}
+					});
 					return result;
 				}
 			}

@@ -166,6 +166,7 @@ private:
 	Mode _mode = Mode::Grid;
 	bool _needBubble : 1 = false;
 	bool _purchasedPriceTag : 1 = false;
+	int _captionsCount = 0;
 
 	mutable int _captionActivePart = -1;
 
