@@ -1805,14 +1805,14 @@ bool GroupedMedia::needInfoDisplay() const {
 }
 
 void GroupedMedia::showCaptionMenu(int partIndex) const {
-	const auto &part = _parts[partIndex];
+	const auto *partPtr = &_parts[partIndex];
 
-	auto menu = base::make_unique_q<Ui::Menu::Menu>(
+	auto menu = base::make_unique_q<QMenu>(
 		QApplication::activeWindow());
 
-	menu->addAction(tr::lng_context_copy_text(tr::now), [caption = part.caption] {
+	menu->addAction(tr::lng_context_copy_text(tr::now), [partPtr] {
 		QApplication::clipboard()->setText(
-			caption.toTextForMimeData(FullSelection).rich.text);
+			partPtr->caption.toTextForMimeData(FullSelection).rich.text);
 	});
 
 	if (!menu->empty()) {
