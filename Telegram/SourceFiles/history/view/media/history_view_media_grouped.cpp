@@ -1815,7 +1815,7 @@ void GroupedMedia::showCaptionMenu(int partIndex) const {
 			partPtr->caption.toTextForMimeData(FullSelection).rich.text);
 	});
 
-	if (!menu->empty()) {
+	if (!menu->isEmpty()) {
 		menu->popup(QCursor::pos());
 	}
 }
