@@ -46,37 +46,30 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace HistoryView {
 namespace {
 
-class RightButtonClickHandler : public GenericClickHandler {
+class CaptionClickHandler : public ClickHandler {
 public:
-	using GenericClickHandler::GenericClickHandler;
-
-	void onClick(ClickContext context) const override final {
-		if (context.button == Qt::RightButton) {
-			GenericClickHandler::onClick(std::move(context));
-		}
-	}
-};
-
-class SplitClickHandler : public ClickHandler {
-public:
-    SplitClickHandler(ClickHandlerPtr left, ClickHandlerPtr right)
-    : _left(left), _right(right) {}
+    CaptionClickHandler(
+        base::weak_ptr<GroupedMedia> media,
+        int partIndex,
+        ClickHandlerPtr originalLink)
+    : _media(media)
+    , _partIndex(partIndex)
+    , _originalLink(originalLink) {}
 
     void onClick(ClickContext context) const override {
         if (context.button == Qt::RightButton) {
-            if (_right) {
-                _right->onClick(context);
+            if (auto strong = _media.get()) {
+                strong->showCaptionMenu(_partIndex);
             }
-        } else if (context.button == Qt::LeftButton) {
-            if (_left) {
-                _left->onClick(context);
-            }
+        } else if (_originalLink) {
+            _originalLink->onClick(context);
         }
     }
 
 private:
-    ClickHandlerPtr _left;
-    ClickHandlerPtr _right;
+    base::weak_ptr<GroupedMedia> _media;
+    int _partIndex;
+    ClickHandlerPtr _originalLink;
 };
 
 std::vector<Ui::GroupMediaLayout> LayoutPlaylist(
@@ -1018,15 +1011,10 @@ TextState GroupedMedia::getPartState(
 						result.customTooltipText = originalText.text;
 					}
 
-					auto weak = base::make_weak(this);
-					auto rightClickHandler = std::make_shared<RightButtonClickHandler>([weak, i](ClickContext context) {
-						if (auto strong = weak.get()) {
-							strong->showCaptionMenu(i);
-						}
-					});
-					result.link = std::make_shared<SplitClickHandler>(
-						result.link,
-						rightClickHandler);
+					result.link = std::make_shared<CaptionClickHandler>(
+						base::make_weak(this),
+						i,
+						result.link);
 					return result;
 				}
 			}
