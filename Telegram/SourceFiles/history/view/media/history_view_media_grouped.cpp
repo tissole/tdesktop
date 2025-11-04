@@ -46,6 +46,32 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace HistoryView {
 namespace {
 
+class CaptionClickHandler : public ClickHandler {
+public:
+    CaptionClickHandler(
+        base::weak_ptr<GroupedMedia> media,
+        int partIndex,
+        ClickHandlerPtr originalLink)
+    : _media(media)
+    , _partIndex(partIndex)
+    , _originalLink(originalLink) {}
+
+    void onClick(ClickContext context) const override {
+        if (context.button == Qt::RightButton) {
+            if (auto strong = _media.get()) {
+                strong->showCaptionMenu(_partIndex);
+            }
+        } else if (_originalLink) {
+            _originalLink->onClick(context);
+        }
+    }
+
+private:
+    base::weak_ptr<GroupedMedia> _media;
+    int _partIndex;
+    ClickHandlerPtr _originalLink;
+};
+
 std::vector<Ui::GroupMediaLayout> LayoutPlaylist(
 		const std::vector<QSize> &sizes) {
 	Expects(!sizes.empty());
@@ -985,17 +1011,10 @@ TextState GroupedMedia::getPartState(
 						result.customTooltipText = originalText.text;
 					}
 
-					auto originalLink = result.link;
-					auto weak = base::make_weak(this);
-					result.link = std::make_shared<LambdaClickHandler>([weak, i, originalLink](const ClickContext &context) {
-						if (context.button == Qt::RightButton) {
-							if (auto strong = weak.get()) {
-								strong->showCaptionMenu(i);
-							}
-						} else if (originalLink) {
-							originalLink->onClick(context);
-						}
-					});
+					result.link = std::make_shared<CaptionClickHandler>(
+						base::make_weak(this),
+						i,
+						result.link);
 					return result;
 				}
 			}
