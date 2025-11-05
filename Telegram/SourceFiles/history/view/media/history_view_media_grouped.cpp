@@ -985,16 +985,14 @@ TextState GroupedMedia::getPartState(
 						result.customTooltipText = originalText.text;
 					}
 
-					auto weak = base::make_weak(this);
-					result.link = std::make_shared<GenericClickHandler>([weak, i, originalLink = result.link](const ClickContext &context) {
-						if (context.button == Qt::RightButton) {
-							if (auto strong = weak.get()) {
-								strong->showCaptionMenu(i);
-							}
-						} else if (originalLink) {
+					auto handler = std::make_shared<GenericClickHandler>([originalLink = result.link](const ClickContext &context) {
+						if (context.button == Qt::LeftButton && originalLink) {
 							originalLink->onClick(context);
 						}
 					});
+					handler->setProperty(kCaptionPartIndexProperty, i);
+					result.link = handler;
+
 					return result;
 				}
 			}
@@ -1809,20 +1807,13 @@ bool GroupedMedia::needInfoDisplay() const {
 			|| _parent->isLastAndSelfMessage());
 }
 
-void GroupedMedia::showCaptionMenu(int partIndex) const {
-	const auto *partPtr = &_parts[partIndex];
 
-	auto menu = base::make_unique_q<QMenu>(
-		QApplication::activeWindow());
-
-	menu->addAction(tr::lng_context_copy_text(tr::now), [partPtr] {
-		QApplication::clipboard()->setText(
-			partPtr->caption.toTextForMimeData(FullSelection).rich.text);
-	});
-
-	if (!menu->isEmpty()) {
-		menu->popup(QCursor::pos());
-	}
-}
 
 } // namespace HistoryView
+
+QString GroupedMedia::getCaption(int partIndex) const {
+	if (partIndex < 0 || partIndex >= _parts.size()) {
+		return {};
+	}
+	return _parts[partIndex].caption.toString();
+}

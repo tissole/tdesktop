@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/history_view_context_menu.h"
+#include "history/view/media/history_view_media_grouped.h"
 
 #include "api/api_attached_stickers.h"
 #include "api/api_common.h"
@@ -1576,6 +1577,20 @@ ContextMenuRequest::ContextMenuRequest(
 base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		not_null<ListWidget*> list,
 		const ContextMenuRequest &request) {
+	if (request.link) {
+		if (const auto partIndex = request.link->property(kCaptionPartIndexProperty).toInt(); request.link->property(kCaptionPartIndexProperty).isValid()) {
+			if (const auto media = request.view->media()) {
+				if (const auto grouped = dynamic_cast<const GroupedMedia*>(media)) {
+					auto menu = base::make_unique_q<Ui::PopupMenu>(list, st::popupMenuWithIcons);
+					const auto caption = grouped->getCaption(partIndex);
+					menu->addAction(tr::lng_context_copy_text(tr::now), [=] {
+						QApplication::clipboard()->setText(caption);
+					});
+					return menu;
+				}
+			}
+		}
+	}
 	const auto link = request.link;
 	const auto view = request.view;
 	const auto item = request.item;

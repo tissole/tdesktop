@@ -20,7 +20,6 @@ namespace HistoryView {
 
 class GroupedMedia : public Media {
 public:
-	void showCaptionMenu(int partIndex) const;
 public:
 	static constexpr auto kMaxSize = 10;
 
@@ -102,6 +101,8 @@ public:
 		return true;
 	}
 	bool enforceBubbleWidth() const override;
+
+	QString getCaption(int partIndex) const;
 
 	void stopAnimation() override;
 	void checkAnimation() override;
