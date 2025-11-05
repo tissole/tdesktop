@@ -9,9 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 class HistoryItem;
 
-constexpr int kPhotoLinkMediaProperty = 1;
-constexpr int kDocumentLinkMediaProperty = 2;
-constexpr int kCaptionPartIndexProperty = 3;
+constexpr int kCaptionPartIndexProperty = 9;
 
 namespace HistoryView {
 
