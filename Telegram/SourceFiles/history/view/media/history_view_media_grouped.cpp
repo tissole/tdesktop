@@ -46,6 +46,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace HistoryView {
 namespace {
 
+class DebugClickHandler : public ClickHandler {
+public:
+    void onClick(ClickContext context) const override {
+        QApplication::clipboard()->setText("DebugClickHandler clicked!");
+    }
+};
+
 class CaptionClickHandler : public ClickHandler {
 public:
     CaptionClickHandler(
@@ -1011,10 +1018,7 @@ TextState GroupedMedia::getPartState(
 						result.customTooltipText = originalText.text;
 					}
 
-					result.link = std::make_shared<CaptionClickHandler>(
-						base::make_weak(this),
-						i,
-						result.link);
+					result.link = std::make_shared<DebugClickHandler>();
 					return result;
 				}
 			}
