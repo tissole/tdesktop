@@ -1797,23 +1797,39 @@ bool GroupedMedia::computeNeedBubble() const {
 }
 
 bool GroupedMedia::needInfoDisplay() const {
+
 	const auto item = _parent->data();
+
 	return (_mode != Mode::Column)
+
 		&& (item->isSending()
+
 			|| item->awaitingVideoProcessing()
+
 			|| item->hasFailed()
+
 			|| _parent->isUnderCursor()
+
 			|| (_parent->delegate()->elementContext() == Context::ChatPreview)
+
 			|| _parent->isLastAndSelfMessage());
+
+}
+
+
+
+QString GroupedMedia::getCaption(int partIndex) const {
+
+	if (partIndex < 0 || partIndex >= _parts.size()) {
+
+		return {};
+
+	}
+
+	return _parts[partIndex].caption.toString();
+
 }
 
 
 
 } // namespace HistoryView
-
-QString GroupedMedia::getCaption(int partIndex) const {
-	if (partIndex < 0 || partIndex >= _parts.size()) {
-		return {};
-	}
-	return _parts[partIndex].caption.toString();
-}
