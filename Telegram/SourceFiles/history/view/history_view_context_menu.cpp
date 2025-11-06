@@ -99,7 +99,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat_helpers.h"
 #include "styles/style_menu_icons.h"
 
-#include <QtGui/QGuiApplication>
+#include <QApplication>
 #include <QtGui/QClipboard>
 
 #include "data/data_saved_sublist.h"
