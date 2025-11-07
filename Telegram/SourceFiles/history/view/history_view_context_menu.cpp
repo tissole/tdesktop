@@ -1578,17 +1578,10 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		not_null<ListWidget*> list,
 		const ContextMenuRequest &request) {
 	if (request.link) {
-		if (const auto partIndex = request.link->property(kCaptionPartIndexProperty).toInt(); request.link->property(kCaptionPartIndexProperty).isValid()) {
-			if (const auto media = request.view->media()) {
-				if (const auto grouped = dynamic_cast<const GroupedMedia*>(media)) {
-					auto menu = base::make_unique_q<Ui::PopupMenu>(list, st::popupMenuWithIcons);
-					const auto caption = grouped->getCaption(partIndex);
-					menu->addAction(tr::lng_context_copy_text(tr::now), [=] {
-						QApplication::clipboard()->setText(caption);
-					});
-					return menu;
-				}
-			}
+		if (request.link->property(kCaptionPartIndexProperty).isValid()) {
+			auto menu = base::make_unique_q<Ui::PopupMenu>(list, st::popupMenuWithIcons);
+			menu->addAction("Caption Menu", [] {});
+			return menu;
 		}
 	}
 	const auto link = request.link;
