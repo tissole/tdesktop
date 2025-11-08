@@ -103,6 +103,7 @@ public:
 	bool enforceBubbleWidth() const override;
 
 	QString getCaption(int partIndex) const;
+	int captionPartIndexAt(QPoint point) const;
 
 	void stopAnimation() override;
 	void checkAnimation() override;

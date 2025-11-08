@@ -1577,22 +1577,19 @@ ContextMenuRequest::ContextMenuRequest(
 base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		not_null<ListWidget*> list,
 		const ContextMenuRequest &request) {
-	if (request.link) {
-		if (const auto partIndex = request.link->property(kCaptionPartIndexProperty).toInt(); request.link->property(kCaptionPartIndexProperty).isValid()) {
-			if (const auto media = request.view->media()) {
-				if (const auto grouped = dynamic_cast<const GroupedMedia*>(media)) {
+	if (request.view) {
+		if (const auto media = request.view->media()) {
+			if (const auto grouped = dynamic_cast<const GroupedMedia*>(media)) {
+				const auto point = list->mapFromGlobal(request.point)
+					- QPoint(0, request.view->y());
+				if (const auto partIndex = grouped->captionPartIndexAt(point); partIndex != -1) {
 					auto menu = base::make_unique_q<Ui::PopupMenu>(list, st::popupMenuWithIcons);
-					
-                    const auto selection = list->textSelection();
-                    if (!selection.empty()) {
-                        const auto selected = grouped->selectedText(selection);
-                        if (!selected.empty()) {
-                            menu->addAction(tr::lng_context_copy_selected(tr::now), [=] {
-                                TextUtilities::SetClipboardText(selected);
-                            });
-                        }
-                    }
-
+					const auto selected = list->getSelectedText();
+					if (!selected.empty()) {
+						menu->addAction(tr::lng_context_copy_selected(tr::now), [=] {
+							TextUtilities::SetClipboardText(selected);
+						});
+					}
 					const auto caption = grouped->getCaption(partIndex);
 					menu->addAction(tr::lng_context_copy_text(tr::now), [=] {
 						QApplication::clipboard()->setText(caption);

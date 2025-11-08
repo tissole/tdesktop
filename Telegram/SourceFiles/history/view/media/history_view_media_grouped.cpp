@@ -1886,10 +1886,34 @@ QString GroupedMedia::getCaption(int partIndex) const {
 
 	}
 
-	return _parts[partIndex].caption.toString();
+		return _parts[partIndex].caption.toString();
 
-}
+	}
 
+	
 
+	int GroupedMedia::captionPartIndexAt(QPoint point) const {
 
-} // namespace HistoryView
+		if (_mode == Mode::Grid) {
+
+			for (int i = 0, size = _parts.size(); i < size; ++i) {
+
+				if (!_parts[i].captionRect.isEmpty()
+
+					&& _parts[i].captionRect.contains(point)) {
+
+					return i;
+
+				}
+
+			}
+
+		}
+
+		return -1;
+
+	}
+
+	
+
+	} // namespace HistoryView
