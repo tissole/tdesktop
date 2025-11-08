@@ -1267,10 +1267,16 @@ PointState GroupedMedia::pointState(QPoint point) const {
 TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 	const auto groupPadding = groupedPadding();
 	auto result = getPartState(point - QPoint(0, groupPadding.top()), request);
+
+	const auto isCaptionLink = result.link
+		&& result.link->property(kCaptionPartIndexProperty).isValid();
+
 	if (const auto tagged = lookupSpoilerTagMedia()) {
 		if (QRect(0, 0, width(), height()).contains(point)) {
 			if (auto link = tagged->spoilerTagLink()) {
-				result.link = std::move(link);
+				if (!isCaptionLink) {
+					result.link = std::move(link);
+				}
 			}
 		}
 	}
