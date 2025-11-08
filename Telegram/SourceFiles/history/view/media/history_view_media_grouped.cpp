@@ -984,10 +984,10 @@ TextState GroupedMedia::getPartState(
 							originalLink->onClick(context);
 						}
 					});
-					handler->setProperty(kCaptionPartIndexProperty, i);
-					result.link = handler;
-
-					return result;
+										handler->setProperty(kCaptionPartIndexProperty, i);
+										result.link = handler;
+										QApplication::clipboard()->setText("Link created!");
+										return result;
 				}
 			}
 			auto result = part.content->getStateGrouped(

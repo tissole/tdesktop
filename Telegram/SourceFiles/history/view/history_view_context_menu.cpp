@@ -1577,6 +1577,12 @@ ContextMenuRequest::ContextMenuRequest(
 base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		not_null<ListWidget*> list,
 		const ContextMenuRequest &request) {
+	if (QApplication::clipboard()->text() == "Link created!") {
+		auto menu = base::make_unique_q<Ui::PopupMenu>(list, st::popupMenuWithIcons);
+		menu->addAction("Caption Menu", [] {});
+		return menu;
+	}
+
 	if (request.link) {
 		if (request.link->property(kCaptionPartIndexProperty).isValid()) {
 			auto menu = base::make_unique_q<Ui::PopupMenu>(list, st::popupMenuWithIcons);
