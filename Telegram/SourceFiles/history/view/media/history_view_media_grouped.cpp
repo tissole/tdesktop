@@ -821,11 +821,28 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				p.setPen(stm->historyTextFg);
 				const auto padding = QMargins(8, 0, 8, 0);
 				const auto elision = (_captionsCount > 1);
+
+				uint16 captionOffset = 0;
+				for (int j = 0; j < i; ++j) {
+					captionOffset += _parts[j].caption.length();
+				}
+				const auto captionLength = part.caption.length();
+				const auto intersection = TextSelection{
+					std::max(context.selection.from, captionOffset),
+					std::min(context.selection.to, uint16(captionOffset + captionLength))
+				};
+				const auto partSelection = (intersection.from < intersection.to)
+					? TextSelection{
+						uint16(intersection.from - captionOffset),
+						uint16(intersection.to - captionOffset)
+					}
+					: TextSelection{};
+
 				part.caption.draw(p, {
 					.position = captionRect.topLeft() + QPoint(padding.left(), padding.top()),
 					.availableWidth = captionRect.width() - padding.left() - padding.right(),
 					.palette = &stm->textPalette,
-					.selection = context.selection,
+					.selection = partSelection,
 					.elisionLines = elision ? 1 : 0,
 				});
 			}
@@ -970,29 +987,35 @@ TextState GroupedMedia::getPartState(
 				&& part.captionRect.contains(point)) {
 				const auto originalText = part.item->originalText();
 				if (!originalText.empty()) {
-					const auto state = part.caption.getState(
-						point - part.captionRect.topLeft(),
-						part.captionRect.width(),
-						request.forText());
-					auto result = TextState(part.item, state);
-
+										uint16 captionOffset = 0;
+										for (int j = 0; j < i; ++j) {
+											captionOffset += _parts[j].caption.length();
+										}
+										const auto state = part.caption.getState(
+											point - part.captionRect.topLeft(),
+											part.captionRect.width(),
+											request.forText());
+										auto result = TextState(part.item, state);
+										result.symbol += captionOffset;
+					
 										// Tooltip for ellipsized captions.
 										Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
 										const auto padding = QMargins(8, 0, 8, 0);
 										const auto textWidth = part.geometry.width() - padding.left() - padding.right();
-										if (fullCaption.maxWidth() > textWidth) {
-											result.customTooltip = true;
-											result.customTooltipText = originalText.text;
-										}
-					
-										auto handler = std::make_shared<GenericClickHandler>([originalLink = result.link](const ClickContext &context) {
-											if (context.button == Qt::LeftButton && originalLink) {
-												originalLink->onClick(context);
-											}
-										});
-										handler->setProperty(kCaptionPartIndexProperty, i);
-										result.link = handler;
-										return result;				}
+															if (fullCaption.maxWidth() > textWidth) {
+																result.customTooltip = true;
+																result.customTooltipText = originalText.text;
+															}
+										
+															auto handler = std::make_shared<GenericClickHandler>([originalLink = result.link](const ClickContext &context) {
+																if (context.button == Qt::LeftButton && originalLink) {
+																	originalLink->onClick(context);
+																}
+															});
+															handler->setProperty(kCaptionPartIndexProperty, i);
+															result.link = handler;
+										
+															return result;				}
 			}
 			auto result = part.content->getStateGrouped(
 				part.geometry,
@@ -1463,6 +1486,13 @@ TextSelection GroupedMedia::adjustSelection(
 }
 
 uint16 GroupedMedia::fullSelectionLength() const {
+	if (_mode == Mode::Grid) {
+		uint16 result = 0;
+		for (const auto &part : _parts) {
+			result += part.caption.length();
+		}
+		return result;
+	}
 	if (_mode != Mode::Column) {
 		return {};
 	}
@@ -1487,6 +1517,32 @@ bool GroupedMedia::hasTextForCopy() const {
 
 TextForMimeData GroupedMedia::selectedText(
 		TextSelection selection) const {
+	if (_mode == Mode::Grid) {
+		TextForMimeData result;
+		uint16 captionOffset = 0;
+		for (const auto &part : _parts) {
+			const auto captionLength = part.caption.length();
+			if (!captionLength) {
+				continue;
+			}
+			const auto intersection = TextSelection{
+				std::max(selection.from, captionOffset),
+				std::min(selection.to, uint16(captionOffset + captionLength))
+			};
+			if (intersection.from < intersection.to) {
+				const auto partSelection = TextSelection{
+					uint16(intersection.from - captionOffset),
+					uint16(intersection.to - captionOffset)
+				};
+				if (!result.empty()) {
+					result.append(u"\n\n"_q);
+				}
+				result.append(part.caption.toTextForMimeData(partSelection));
+			}
+			captionOffset += captionLength;
+		}
+		return result;
+	}
 	if (_mode != Mode::Column) {
 		return {};
 	}

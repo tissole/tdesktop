@@ -1578,11 +1578,28 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		not_null<ListWidget*> list,
 		const ContextMenuRequest &request) {
 	if (request.link) {
-		QApplication::clipboard()->setText("Link property: " + QString::number(request.link->property(kCaptionPartIndexProperty).toInt()));
-		if (request.link->property(kCaptionPartIndexProperty).isValid()) {
-			auto menu = base::make_unique_q<Ui::PopupMenu>(list, st::popupMenuWithIcons);
-			menu->addAction("Caption Menu", [] {});
-			return menu;
+		if (const auto partIndex = request.link->property(kCaptionPartIndexProperty).toInt(); request.link->property(kCaptionPartIndexProperty).isValid()) {
+			if (const auto media = request.view->media()) {
+				if (const auto grouped = dynamic_cast<const GroupedMedia*>(media)) {
+					auto menu = base::make_unique_q<Ui::PopupMenu>(list, st::popupMenuWithIcons);
+					
+                    const auto selection = list->textSelection();
+                    if (!selection.empty()) {
+                        const auto selected = grouped->selectedText(selection);
+                        if (!selected.empty()) {
+                            menu->addAction(tr::lng_context_copy_selected(tr::now), [=] {
+                                TextUtilities::SetClipboardText(selected);
+                            });
+                        }
+                    }
+
+					const auto caption = grouped->getCaption(partIndex);
+					menu->addAction(tr::lng_context_copy_text(tr::now), [=] {
+						QApplication::clipboard()->setText(caption);
+					});
+					return menu;
+				}
+			}
 		}
 	}
 
@@ -1609,7 +1626,117 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 	auto result = base::make_unique_q<Ui::PopupMenu>(
 		list,
 		st::popupMenuWithIcons);
-	result->addAction("Default Menu", [] {});
+
+	if (hasWhoReactedItem) {
+		AddWhoReactedAction(result, list, item, list->controller());
+	}
+
+	AddReplyToMessageAction(result, request, list);
+	AddTodoListAction(result, request, list);
+
+	if (request.overSelection
+		&& !list->hasCopyRestrictionForSelected()
+		&& !list->getSelectedText().empty()) {
+		const auto text = request.selectedItems.empty()
+			? tr::lng_context_copy_selected(tr::now)
+			: tr::lng_context_copy_selected_items(tr::now);
+		result->addAction(text, [=] {
+			if (!list->showCopyRestrictionForSelected()) {
+				TextUtilities::SetClipboardText(list->getSelectedText());
+			}
+		}, &st::menuIconCopy);
+	}
+	if (request.overSelection
+		&& !Ui::SkipTranslate(list->getSelectedText().rich)) {
+		const auto owner = &view->history()->owner();
+		result->addAction(tr::lng_context_translate_selected(tr::now), [=] {
+			if (const auto item = owner->message(itemId)) {
+				list->controller()->show(Box(
+					Ui::TranslateBox,
+					item->history()->peer,
+					MsgId(),
+					list->getSelectedText().rich,
+					list->hasCopyRestrictionForSelected()));
+			}
+		}, &st::menuIconTranslate);
+	}
+
+	AddTopMessageActions(result, request, list);
+	if (lnkPhoto && request.selectedItems.empty()) {
+		AddPhotoActions(result, lnkPhoto, item, list);
+	} else if (lnkDocument) {
+		AddDocumentActions(result, lnkDocument, item, list);
+	} else if (poll) {
+		const auto context = list->elementContext();
+		AddPollActions(result, poll, item, context, list->controller());
+	} else if (!request.overSelection && view && !hasSelection) {
+		const auto owner = &view->history()->owner();
+		const auto media = view->media();
+		const auto mediaHasTextForCopy = media && media->hasTextForCopy();
+		if (const auto document = media ? media->getDocument() : nullptr) {
+			AddDocumentActions(result, document, view->data(), list);
+		}
+		if (!link && (view->hasVisibleText() || mediaHasTextForCopy)) {
+			if (!list->hasCopyRestriction(view->data())) {
+				const auto asGroup = (request.pointState != PointState::GroupPart);
+				result->addAction(tr::lng_context_copy_text(tr::now), [=] {
+					if (const auto item = owner->message(itemId)) {
+						if (!list->showCopyRestriction(item)) {
+							if (asGroup) {
+								if (const auto group = owner->groups().find(item)) {
+									TextUtilities::SetClipboardText(HistoryGroupText(group));
+									return;
+								}
+							}
+							TextUtilities::SetClipboardText(HistoryItemText(item));
+						}
+					}
+				}, &st::menuIconCopy);
+			}
+
+			const auto translate = mediaHasTextForCopy
+				? (HistoryView::TransribedText(item)
+					.append('\n')
+					.append(item->originalText()))
+				: item->originalText();
+			if ((!item->translation() || !item->history()->translatedTo())
+				&& !translate.text.isEmpty()
+				&& !Ui::SkipTranslate(translate)) {
+				result->addAction(tr::lng_context_translate(tr::now), [=] {
+					if (const auto item = owner->message(itemId)) {
+						list->controller()->show(Box(
+							Ui::TranslateBox,
+							item->history()->peer,
+							mediaHasTextForCopy
+								? MsgId()
+								: item->fullId().msg,
+							translate,
+							list->hasCopyRestriction(view->data())));
+					}
+				}, &st::menuIconTranslate);
+			}
+		}
+	}
+
+	AddCopyLinkAction(result, link);
+	AddMessageActions(result, request, list);
+
+	const auto wasAmount = result->actions().size();
+	if (const auto textItem = view ? view->textItem() : item) {
+		AddEmojiPacksAction(
+			result,
+			textItem,
+			HistoryView::EmojiPacksSource::Message,
+			list->controller());
+	}
+	if (item) {
+		const auto added = (result->actions().size() > wasAmount);
+		AddSelectRestrictionAction(result, item, !added);
+	}
+	//if (lnkDocument){
+	//	AddStickerSetOwnerActions(result, lnkDocument, item);
+	//}
+
 	return result;
 }
 
