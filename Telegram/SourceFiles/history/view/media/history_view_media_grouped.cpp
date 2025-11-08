@@ -976,19 +976,23 @@ TextState GroupedMedia::getPartState(
 						request.forText());
 					auto result = TextState(part.item, state);
 
-					result.customTooltip = true;
-					result.customTooltipText = "Caption hover!";
-
-					auto handler = std::make_shared<GenericClickHandler>([originalLink = result.link](const ClickContext &context) {
-						if (context.button == Qt::LeftButton && originalLink) {
-							originalLink->onClick(context);
-						}
-					});
+										// Tooltip for ellipsized captions.
+										Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+										const auto padding = QMargins(8, 0, 8, 0);
+										const auto textWidth = part.geometry.width() - padding.left() - padding.right();
+										if (fullCaption.maxWidth() > textWidth) {
+											result.customTooltip = true;
+											result.customTooltipText = originalText.text;
+										}
+					
+										auto handler = std::make_shared<GenericClickHandler>([originalLink = result.link](const ClickContext &context) {
+											if (context.button == Qt::LeftButton && originalLink) {
+												originalLink->onClick(context);
+											}
+										});
 										handler->setProperty(kCaptionPartIndexProperty, i);
 										result.link = handler;
-										QApplication::clipboard()->setText("Link created!");
-										return result;
-				}
+										return result;				}
 			}
 			auto result = part.content->getStateGrouped(
 				part.geometry,
