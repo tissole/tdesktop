@@ -103,7 +103,6 @@ public:
 	bool enforceBubbleWidth() const override;
 
 	QString getCaption(int partIndex) const;
-	bool hasVisibleText() const override;
 	[[nodiscard]] bool hasSelectableText() const override;
 	int captionPartIndexAt(QPoint point) const;
 
