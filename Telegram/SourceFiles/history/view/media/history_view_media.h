@@ -114,6 +114,9 @@ public:
 	[[nodiscard]] virtual bool hasTextForCopy() const {
 		return false;
 	}
+	[[nodiscard]] virtual bool hasSelectableText() const {
+		return false;
+	}
 	[[nodiscard]] virtual bool aboveTextByDefault() const {
 		return true;
 	}

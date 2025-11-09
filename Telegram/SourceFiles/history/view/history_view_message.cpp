@@ -4815,17 +4815,15 @@ bool Message::invertMedia() const {
 }
 
 bool Message::hasVisibleText() const {
-	const auto textItem = this->textItem();
-	if (!textItem) {
-		return false;
-	} else if (textItem->emptyText()) {
-		if (const auto media = textItem->media()) {
-			return media->storyExpired();
+	if (const auto media = this->media()) {
+		if (media->hasSelectableText()) {
+			return true;
 		}
-		return false;
+		if (media->hideMessageText()) {
+			return false;
+		}
 	}
-	const auto media = this->media();
-	return !media || !media->hideMessageText();
+	return !_text.isEmpty();
 }
 
 int Message::visibleTextLength() const {
