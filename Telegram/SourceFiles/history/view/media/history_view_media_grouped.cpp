@@ -1910,10 +1910,34 @@ QString GroupedMedia::getCaption(int partIndex) const {
 
 		}
 
-		return -1;
+			return -1;
 
-	}
+		}
 
-	
+		
 
-	} // namespace HistoryView
+		bool GroupedMedia::hasVisibleText() const {
+
+			if (_mode == Mode::Grid) {
+
+				for (const auto &part : _parts) {
+
+					if (!part.caption.isEmpty()) {
+
+						return true;
+
+					}
+
+				}
+
+				return false;
+
+			}
+
+			return Media::hasVisibleText();
+
+		}
+
+		
+
+		} // namespace HistoryView
