@@ -1580,7 +1580,8 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 	if (request.view) {
 		if (const auto media = request.view->media()) {
 			if (const auto grouped = dynamic_cast<const GroupedMedia*>(media)) {
-				const auto point = list->mapFromGlobal(request.point)
+				const auto globalPoint = QCursor::pos();
+				const auto point = list->mapFromGlobal(globalPoint)
 					- QPoint(0, request.view->y());
 				if (const auto partIndex = grouped->captionPartIndexAt(point); partIndex != -1) {
 					auto menu = base::make_unique_q<Ui::PopupMenu>(list, st::popupMenuWithIcons);
