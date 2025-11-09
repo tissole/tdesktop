@@ -4823,7 +4823,7 @@ bool Message::hasVisibleText() const {
 			return false;
 		}
 	}
-	return !_text.isEmpty();
+	return !text().isEmpty();
 }
 
 int Message::visibleTextLength() const {
