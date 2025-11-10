@@ -193,6 +193,7 @@ private:
 	int _captionsCount = 0;
 
 	mutable int _captionActivePart = -1;
+	TextSelection _selectedTextRange;
 
 	void drawMessageIdInfo(
 		Painter &p,
