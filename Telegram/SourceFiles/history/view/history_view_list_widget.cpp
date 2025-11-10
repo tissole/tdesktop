@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/history_view_list_widget.h"
 
+#include "history/view/media/history_view_media_grouped.h"
 #include "base/unixtime.h"
 #include "base/qt/qt_key_modifiers.h"
 #include "base/qt/qt_common_adapters.h"
@@ -16,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item_helpers.h"
 #include "history/history_item_text.h"
 #include "history/view/media/history_view_media.h"
+#include "history/view/media/history_view_media_grouped.h"
 #include "history/view/media/history_view_sticker.h"
 #include "history/view/reactions/history_view_reactions.h"
 #include "history/view/reactions/history_view_reactions_button.h"
@@ -1550,7 +1552,7 @@ void ListWidget::setTextSelection(
 	clearSelected();
 	const auto item = view->data();
 	if (const auto media = view->media()) {
-		if (const auto grouped = dynamic_cast<GroupedMedia*>(media)) {
+		if (const auto grouped = dynamic_cast<HistoryView::GroupedMedia*>(media)) {
 			grouped->setTextSelection(selection);
 			_selectedTextItem = nullptr;
 			_selectedTextRange = TextSelection();
@@ -2191,7 +2193,7 @@ TextSelection ListWidget::computeRenderSelection(
 TextSelection ListWidget::itemRenderSelection(
 		not_null<const Element*> view) const {
 	if (const auto media = view->media()) {
-		if (const auto grouped = dynamic_cast<const GroupedMedia*>(media)) {
+		if (const auto grouped = dynamic_cast<const HistoryView::GroupedMedia*>(media)) {
 			return grouped->textSelection();
 		}
 	}
