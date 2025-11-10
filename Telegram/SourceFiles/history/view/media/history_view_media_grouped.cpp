@@ -1890,6 +1890,10 @@ QString GroupedMedia::getCaption(int partIndex) const {
 
 	}
 
+bool GroupedMedia::hasSelectableText() const {
+	return fullSelectionLength() > 0;
+}
+
 	
 
 	int GroupedMedia::captionPartIndexAt(QPoint point) const {
