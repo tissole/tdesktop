@@ -322,6 +322,7 @@ public:
 		Fn<void(bool found)> done = nullptr);
 	void refreshViewer();
 
+	[[nodiscard]] TextSelection textSelection() const;
 	[[nodiscard]] TextForMimeData getSelectedText() const;
 	[[nodiscard]] MessageIdsList getSelectedIds() const;
 	[[nodiscard]] SelectedItems getSelectedItems() const;

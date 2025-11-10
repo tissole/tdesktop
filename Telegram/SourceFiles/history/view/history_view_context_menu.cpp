@@ -1585,7 +1585,7 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 					- QPoint(0, request.view->y());
 				if (const auto partIndex = grouped->captionPartIndexAt(point); partIndex != -1) {
 					auto menu = base::make_unique_q<Ui::PopupMenu>(list, st::popupMenuWithIcons);
-					const auto selection = list->selection();
+					const auto selection = list->textSelection();
 					if (selection.empty()) {
 						const auto caption = grouped->getCaption(partIndex);
 						menu->addAction(tr::lng_context_copy_text(tr::now), [=] {

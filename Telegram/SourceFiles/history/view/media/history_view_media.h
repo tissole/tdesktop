@@ -106,6 +106,12 @@ public:
 		return {};
 	}
 
+	[[nodiscard]] virtual TextSelection textSelection() const {
+		return {};
+	}
+	virtual void setTextSelection(TextSelection selection) {
+	}
+
 	[[nodiscard]] virtual bool isDisplayed() const {
 		return true;
 	}

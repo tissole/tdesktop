@@ -120,6 +120,13 @@ public:
 	[[nodiscard]] bool hasSelectableText() const override;
 	int captionPartIndexAt(QPoint point) const;
 
+	TextSelection textSelection() const override {
+		return _selectedTextRange;
+	}
+	void setTextSelection(TextSelection selection) override {
+		_selectedTextRange = selection;
+	}
+
 	void stopAnimation() override;
 	void checkAnimation() override;
 	bool hasHeavyPart() const override;
@@ -186,6 +193,7 @@ private:
 	int _captionsCount = 0;
 
 	mutable int _captionActivePart = -1;
+	TextSelection _selectedTextRange;
 
 	void drawMessageIdInfo(
 		Painter &p,
