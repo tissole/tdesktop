@@ -76,6 +76,9 @@ CaptionClickHandler::CaptionClickHandler(int partIndex)
 : _partIndex(partIndex) {
 }
 
+void CaptionClickHandler::onClick(ClickContext context) const {
+}
+
 GroupedMedia::Part::Part(
 	not_null<Element*> parent,
 	not_null<Data::Media*> media)

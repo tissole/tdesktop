@@ -22,6 +22,8 @@ class CaptionClickHandler : public ClickHandler {
 public:
 	CaptionClickHandler(int partIndex);
 
+	void onClick(ClickContext context) const override;
+
 	int partIndex() const {
 		return _partIndex;
 	}
