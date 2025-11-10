@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/media/history_view_media_grouped.h"
 
+#include "core/click_handler_types.h"
 #include "main/main_session.h"
 #include "data/data_session.h"
 #include "ui/text/text_utilities.h"
@@ -70,6 +71,10 @@ std::vector<Ui::GroupMediaLayout> LayoutPlaylist(
 }
 
 } // namespace
+
+CaptionClickHandler::CaptionClickHandler(int partIndex)
+: _partIndex(partIndex) {
+}
 
 GroupedMedia::Part::Part(
 	not_null<Element*> parent,
@@ -987,35 +992,19 @@ TextState GroupedMedia::getPartState(
 				&& part.captionRect.contains(point)) {
 				const auto originalText = part.item->originalText();
 				if (!originalText.empty()) {
-										uint16 captionOffset = 0;
-										for (int j = 0; j < i; ++j) {
-											captionOffset += _parts[j].caption.length();
-										}
-										const auto state = part.caption.getState(
-											point - part.captionRect.topLeft(),
-											part.captionRect.width(),
-											request.forText());
-										auto result = TextState(part.item, state);
-										result.symbol += captionOffset;
-					
-										// Tooltip for ellipsized captions.
-										Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
-										const auto padding = QMargins(8, 0, 8, 0);
-										const auto textWidth = part.geometry.width() - padding.left() - padding.right();
-															if (fullCaption.maxWidth() > textWidth) {
-																result.customTooltip = true;
-																result.customTooltipText = originalText.text;
-															}
-										
-															auto handler = std::make_shared<GenericClickHandler>([originalLink = result.link](const ClickContext &context) {
-																if (context.button == Qt::LeftButton && originalLink) {
-																	originalLink->onClick(context);
-																}
-															});
-															handler->setProperty(kCaptionPartIndexProperty, i);
-															result.link = handler;
-										
-															return result;				}
+					uint16 captionOffset = 0;
+					for (int j = 0; j < i; ++j) {
+						captionOffset += _parts[j].caption.length();
+					}
+					const auto state = part.caption.getState(
+						point - part.captionRect.topLeft(),
+						part.captionRect.width(),
+						request.forText());
+					auto result = TextState(part.item, state);
+					result.symbol += captionOffset;
+					result.link = std::make_shared<CaptionClickHandler>(i);
+					return result;
+				}
 			}
 			auto result = part.content->getStateGrouped(
 				part.geometry,
@@ -1462,6 +1451,26 @@ bool GroupedMedia::dragItemByHandler(const ClickHandlerPtr &p) const {
 TextSelection GroupedMedia::adjustSelection(
 		TextSelection selection,
 		TextSelectType type) const {
+	if (_mode == Mode::Grid) {
+		auto checked = 0;
+		for (const auto &part : _parts) {
+			const auto &caption = part.caption;
+			const auto length = caption.length();
+			if (selection.from >= checked && selection.from < checked + length) {
+				const auto partSelection = TextSelection{
+					uint16(selection.from - checked),
+					uint16(selection.to - checked),
+				};
+				const auto adjusted = caption.adjustSelection(partSelection, type);
+				return {
+					uint16(adjusted.from + checked),
+					uint16(adjusted.to + checked),
+				};
+			}
+			checked += length;
+		}
+		return selection;
+	}
 	if (_mode != Mode::Column) {
 		return {};
 	}
@@ -1504,6 +1513,9 @@ uint16 GroupedMedia::fullSelectionLength() const {
 }
 
 bool GroupedMedia::hasTextForCopy() const {
+	if (_mode == Mode::Grid) {
+		return _captionsCount > 0;
+	}
 	if (_mode != Mode::Column) {
 		return {};
 	}

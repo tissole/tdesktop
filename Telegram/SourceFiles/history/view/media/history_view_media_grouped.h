@@ -18,6 +18,18 @@ class Media;
 
 namespace HistoryView {
 
+class CaptionClickHandler : public ClickHandler {
+public:
+	CaptionClickHandler(int partIndex);
+
+	int partIndex() const {
+		return _partIndex;
+	}
+
+private:
+	int _partIndex;
+};
+
 class GroupedMedia : public Media {
 public:
 public:
