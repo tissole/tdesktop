@@ -1584,36 +1584,37 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 				const auto point = list->mapFromGlobal(globalPoint)
 					- QPoint(0, request.view->y());
 				if (const auto partIndex = grouped->captionPartIndexAt(point); partIndex != -1) {
-					auto menu = base::make_unique_q<Ui::PopupMenu>(list, st::popupMenuWithIcons);
-					const auto selection = list->textSelection();
-					if (selection.empty()) {
-											const auto partItem = grouped->getItem(partIndex); // Get the specific HistoryItem
-											// Use TextWithEntities::text for QApplication::clipboard()->setText
+									auto menu = base::make_unique_q<Ui::PopupMenu>(list, st::popupMenuWithIcons);
+									const auto selection = list->textSelection();
+									if (selection.empty()) {
+										if (const auto partItem = grouped->getItem(partIndex)) {
 											const auto captionTextForCopy = partItem->actualTextForCopy().text;
 											menu->addAction(tr::lng_context_copy_text(tr::now), [=] {
 												QApplication::clipboard()->setText(captionTextForCopy);
-											});					} else {
-						menu->addAction(tr::lng_context_copy_selected(tr::now), [=] {
-							TextUtilities::SetClipboardText(grouped->selectedText(selection));
-						});
-					}
-					const auto caption = grouped->getCaption(partIndex);
-					const auto captionWithEntities = TextWithEntities{ caption };
-					if (!caption.isEmpty() && !Ui::SkipTranslate(captionWithEntities)) {
-						menu->addAction(tr::lng_context_translate(tr::now), [=, request] {
-							const auto item = request.item;
-							if (!item) return;
-							list->controller()->show(Box(
-								Ui::TranslateBox,
-								item->history()->peer,
-								MsgId(), // No specific message ID for part caption
-								captionWithEntities,
-								list->hasCopyRestriction(item)));
-						}, &st::menuIconTranslate);
-					}
-					return menu;
-				}
-			}
+											});
+										}
+									} else {
+										menu->addAction(tr::lng_context_copy_selected(tr::now), [=] {
+											TextUtilities::SetClipboardText(grouped->selectedText(selection));
+										});
+									}
+									if (const auto partItem = grouped->getItem(partIndex)) {
+										const auto captionWithEntities = partItem->actualTextForCopy();
+										if (!captionWithEntities.text.isEmpty() && !Ui::SkipTranslate(captionWithEntities)) {
+											menu->addAction(tr::lng_context_translate(tr::now), [=, &request] {
+												const auto item = request.item;
+												if (!item) return;
+												list->controller()->show(Box(
+													Ui::TranslateBox,
+													item->history()->peer,
+													MsgId(), // No specific message ID for part caption
+													captionWithEntities,
+													list->hasCopyRestriction(item)));
+											}, &st::menuIconTranslate);
+										}
+									}
+									return menu;
+								}			}
 		}
 	}
 

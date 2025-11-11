@@ -117,6 +117,7 @@ public:
 	bool enforceBubbleWidth() const override;
 
 	QString getCaption(int partIndex) const;
+	HistoryItem *getItem(int partIndex) const;
 	[[nodiscard]] bool hasSelectableText() const override;
 	int captionPartIndexAt(QPoint point) const;
 

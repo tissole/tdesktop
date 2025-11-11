@@ -1,9 +1,9 @@
 /*
 This file is part of Telegram Desktop,
-the official desktop application for the Telegram messaging service.
+ the official desktop application for the Telegram messaging service.
 
-For license and copyright information please follow this link:
-https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+ For license and copyright information please follow this link:
+ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/media/history_view_media_grouped.h"
 
@@ -80,8 +80,8 @@ void CaptionClickHandler::onClick(ClickContext context) const {
 }
 
 GroupedMedia::Part::Part(
-	not_null<Element*> parent,
-	not_null<Data::Media*> media)
+		not_null<Element*> parent,
+		not_null<Data::Media*> media)
 : item(media->parent())
 , content(media->createView(parent, item)) {
 	Assert(media->canBeGrouped());
@@ -148,27 +148,27 @@ void GroupedMedia::drawMessageIdInfo(
 
 	// Draw with uniform style brush to avoid edge transparency differences
 	p.save();
-p.setOpacity(0.95);
+	p.setOpacity(0.95);
 	Ui::FillRoundRect(
-		p,
-		bubbleX,
-		bubbleY,
-		dateW,
-		dateH,
-		sti->msgDateImgBg,
-		sti->msgDateImgBgCorners);
+			p,
+			bubbleX,
+			bubbleY,
+			dateW,
+			dateH,
+			sti->msgDateImgBg,
+			sti->msgDateImgBgCorners);
 	p.restore();
 
 	auto font = st::msgDateFont;
 	p.drawText(
-		bubbleX + horizontalPadding,
-		bubbleY + (dateH - textHeight) / 2 + font->ascent,
-		infoText);
+			bubbleX + horizontalPadding,
+			bubbleY + (dateH - textHeight) / 2 + font->ascent,
+			infoText);
 }
 
 GroupedMedia::GroupedMedia(
-	not_null<Element*> parent,
-	const std::vector<std::unique_ptr<Data::Media>> &medias) 
+		not_null<Element*> parent,
+		const std::vector<std::unique_ptr<Data::Media>> &medias) 
 : Media(parent) {
 	const auto truncated = ranges::views::all(
 			medias
@@ -181,8 +181,8 @@ GroupedMedia::GroupedMedia(
 }
 
 GroupedMedia::GroupedMedia(
-	not_null<Element*> parent,
-	const std::vector<not_null<HistoryItem*>> &items) 
+		not_null<Element*> parent,
+		const std::vector<not_null<HistoryItem*>> &items) 
 : Media(parent) {
 	const auto medias = ranges::views::all(
 			items
@@ -271,10 +271,10 @@ QSize GroupedMedia::countOptimalSize() {
 
 	const auto layout = (_mode == Mode::Grid)
 		? Ui::LayoutMediaGroup(
-			sizes,
-			st::historyGroupWidthMax,
-			st::historyGroupWidthMin,
-			st::historyGroupSkip)
+			 sizes,
+			 st::historyGroupWidthMax,
+			 st::historyGroupWidthMin,
+			 st::historyGroupSkip)
 		: LayoutPlaylist(sizes);
 	Assert(layout.size() == _parts.size());
 
@@ -380,10 +380,10 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 					- left
 					- (needRightSkip ? scale(spacing) : 0);
 				part.geometry = QRect(left, y, width, scale(initial.height()));
-				            accumulate_max(maxMediaHeight, float64(part.geometry.height()));
-				
-				                const auto originalText = part.item->actualTextForCopy();				if ((_mode == Mode::Grid) &&
-					!originalText.empty()) { // REMOVED GetEnhancedBool check
+				accumulate_max(maxMediaHeight, float64(part.geometry.height()));
+			
+				const auto originalText = part.item->actualTextForCopy();
+				if ((_mode == Mode::Grid) && !originalText.empty()) { // REMOVED GetEnhancedBool check
 					part.caption.setMarkedText(
 						st::messageTextStyle,
 						originalText,
@@ -679,12 +679,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					bubbleH,
 					sti->msgDateImgBg,
 					sti->msgDateImgBgCorners);
-				p.restore();
+			p.restore();
 
-				p.setPen(st->msgDateImgFg());
-				p.setFont(font->bold());
-				const auto baseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
-				p.drawText(bubbleX + hPadding, baseY, text);
+			p.setPen(st->msgDateImgFg());
+			p.setFont(font->bold());
+			const auto baseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
+			p.drawText(bubbleX + hPadding, baseY, text);
 			}
 		}
 
@@ -751,64 +751,64 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				int x = itemRect.x() + itemRect.width() - totalW - st::msgDateImgDelta;
 				// Prevent overlay from overlapping the document status text (e.g., "12.9 MB").
 				// Compute the left bound of the status text area for Column grouped layout.
-				int reservedLeft = 0;
-				{
-					const auto &docStyle = st::msgFileLayoutGrouped;
-					const int nameleft = docStyle.padding.left() + docStyle.thumbSize + docStyle.thumbSkip;
-					QString statusText;
-					if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
-						if (const auto document = fileMedia->document()) {
-							statusText = Ui::FormatSizeText(document->size);
-						}
-					}
-					if (!statusText.isEmpty()) {
-						reservedLeft = nameleft + st::normalFont->width(statusText) + st::normalFont->spacew;
-					}
-				}
-				// If the overlay would overlap the status text, push it right to leave a gap.
-				if (reservedLeft > 0) {
-					const auto minGap = st::normalFont->spacew;
-					const auto minX = reservedLeft + minGap;
-					if (x < minX) x = minX;
-				}
-				// Draw views icon + count
-				if (viewsW > 0) {
-					// Use non-inverted icon to match text color inside the bubble.
-					const auto &icon = stm->historyViewsIcon;
-					const int iconH = icon.height();
-					const int scaledH = (iconH * iconW) / std::max(1, icon.width());
-					const int iconTop = baseY - st::msgDateFont->ascent + (st::msgDateFont->height - scaledH) / 2;
-					icon.paint(p, x, iconTop, iconW);
-					p.drawText(x + iconW + iconGap, baseY, viewsText);
-					x += viewsW + textGap;
-				}
-				// Draw edited icon if any
-				if (editedW > 0) {
-					p.drawText(x, baseY, editText);
-					x += editedW + textGap;
-				}
-				// Draw time + id
-				p.drawText(x, baseY, timeText + idText);
-			} else if (!infoText.isEmpty()) {
-				const auto st = context.st;
-				const auto stm = context.messageStyle();
-				p.setFont(st::msgDateFont);
-				// Match single-document bubbles color
-				p.setPen(stm->msgDateFg);
-
-				const auto itemRect = part.geometry.translated(0, groupPadding.top());
-				const auto textWidth = st::msgDateFont->width(infoText);
-				// const auto textHeight = st::msgDateFont->height; // Unused.
+			int reservedLeft = 0;
+			{
 				const auto &docStyle = st::msgFileLayoutGrouped;
-				const auto topMinus = st::msgFileTopMinus;
-				const auto statustop = docStyle.statusTop - topMinus;
-
-				// Position on same row as file size (right aligned)
-				const auto textX = itemRect.x() + itemRect.width() - textWidth - st::msgDateImgDelta;
-				const auto textY = itemRect.y() + statustop + st::msgDateFont->ascent;
-
-				p.drawText(textX, textY, infoText);
+				const int nameleft = docStyle.padding.left() + docStyle.thumbSize + docStyle.thumbSkip;
+				QString statusText;
+				if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
+					if (const auto document = fileMedia->document()) {
+						statusText = Ui::FormatSizeText(document->size);
+					}
+				}
+				if (!statusText.isEmpty()) {
+					reservedLeft = nameleft + st::normalFont->width(statusText) + st::normalFont->spacew;
+				}
 			}
+			// If the overlay would overlap the status text, push it right to leave a gap.
+			if (reservedLeft > 0) {
+				const auto minGap = st::normalFont->spacew;
+				const auto minX = reservedLeft + minGap;
+				if (x < minX) x = minX;
+			}
+			// Draw views icon + count
+			if (viewsW > 0) {
+				// Use non-inverted icon to match text color inside the bubble.
+				const auto &icon = stm->historyViewsIcon;
+				const int iconH = icon.height();
+				const int scaledH = (iconH * iconW) / std::max(1, icon.width());
+				const int iconTop = baseY - st::msgDateFont->ascent + (st::msgDateFont->height - scaledH) / 2;
+				icon.paint(p, x, iconTop, iconW);
+				p.drawText(x + iconW + iconGap, baseY, viewsText);
+				x += viewsW + textGap;
+			}
+			// Draw edited icon if any
+			if (editedW > 0) {
+				p.drawText(x, baseY, editText);
+				x += editedW + textGap;
+			}
+			// Draw time + id
+			p.drawText(x, baseY, timeText + idText);
+		} else if (!infoText.isEmpty()) {
+			const auto st = context.st;
+			const auto stm = context.messageStyle();
+			p.setFont(st::msgDateFont);
+			// Match single-document bubbles color
+			p.setPen(stm->msgDateFg);
+
+			const auto itemRect = part.geometry.translated(0, groupPadding.top());
+			const auto textWidth = st::msgDateFont->width(infoText);
+			// const auto textHeight = st::msgDateFont->height; // Unused.
+			const auto &docStyle = st::msgFileLayoutGrouped;
+			const auto topMinus = st::msgFileTopMinus;
+			const auto statustop = docStyle.statusTop - topMinus;
+
+			// Position on same row as file size (right aligned)
+			const auto textX = itemRect.x() + itemRect.width() - textWidth - st::msgDateImgDelta;
+			const auto textY = itemRect.y() + statustop + st::msgDateFont->ascent;
+
+			p.drawText(textX, textY, infoText);
+		}
 		} else if (_mode == Mode::Grid && i > 0) {
 			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
 		}
@@ -1002,10 +1002,10 @@ TextState GroupedMedia::getPartState(
 						point - part.captionRect.topLeft(),
 						part.captionRect.width(),
 						request.forText());
-					auto result = TextState(part.item, state);
-					result.symbol += captionOffset;
-					result.link = std::make_shared<CaptionClickHandler>(i);
-					return result;
+				auto result = TextState(part.item, state);
+				result.symbol += captionOffset;
+				result.link = std::make_shared<CaptionClickHandler>(i);
+				return result;
 				}
 			}
 			auto result = part.content->getStateGrouped(
@@ -1058,10 +1058,10 @@ TextState GroupedMedia::getPartState(
 					int totalW = 0;
 					if (viewsW > 0) totalW += viewsW + textGap;
 					if (editedW > 0) totalW += editedW + textGap;
-					totalW += timeIdW;
+				totalW += timeIdW;
 
 					const int startX = currentRight - st::msgDateImgDelta - totalW;
-					int currentX = startX;
+				int currentX = startX;
 
 					QRect viewsRect;
 					if (viewsW > 0) {
@@ -1077,9 +1077,9 @@ TextState GroupedMedia::getPartState(
 					// Edited tooltip should cover both the edited icon and the time+id area when present.
 					const QRect editedRect = editedNow
 						? QRect(editedOnlyRect.isNull() ? timeIdRect.left() : editedOnlyRect.left(),
-							lineTop,
-							(editedOnlyRect.isNull() ? 0 : editedOnlyRect.width()) + timeIdRect.width(),
-							lineH)
+								lineTop,
+								(editedOnlyRect.isNull() ? 0 : editedOnlyRect.width()) + timeIdRect.width(),
+								lineH)
 						: QRect();
 
 					// Views tooltip
@@ -1109,7 +1109,8 @@ TextState GroupedMedia::getPartState(
 						result.customTooltip = true;
 						result.customTooltipText = tooltipText;
 					}
-				} else {
+				}
+			} else {
 				// Calculate hover rect for items 2..N.
 				QString infoText;
 				if (edited && !item->hideEditedBadge()) {
@@ -1161,9 +1162,8 @@ TextState GroupedMedia::getPartState(
 					}
 				}
 			}
-		}
 			// --- END: MODIFIED LOGIC FOR COLUMN MODE ---
-				// START: New tooltip logic for Grid album items (2..N).
+			// START: New tooltip logic for Grid album items (2..N).
 			else if (_mode == Mode::Grid && (&part != &_parts.front())) {
 				QString infoText;
 				if (edited && !item->hideEditedBadge()) {
@@ -1344,34 +1344,34 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			const auto bubbleY = bottom + st::msgDateImgDelta; // 'bottom' here is actually the top edge.
 
 			const QRect infoRect(bubbleX, bubbleY, bubbleW, bubbleH);
-				// Build three hover areas for Grid first bubble from the left edge:
-				// views (icon+count), edited+time+id (if edited), time+id.
-				const int iconGap = 1;
-				const int iconW = st::historyViewsWidth;
-				const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
-				const int editedW = edited ? font->width(QString::fromUtf8("✏️") + " ") : 0;
-				const int timeIdW = font->width(dateText + msgIdText);
-				int hoverLeft = bubbleX + hPadding;
-				QRect viewsRect, timeIdRect, editedRect;
-				if (viewsW > 0) {
-					viewsRect = QRect(hoverLeft, bubbleY, viewsW, bubbleH);
-					hoverLeft += viewsW + textPadding;
-				}
-				QRect editedOnlyRect;
-				if (edited) {
-					editedOnlyRect = QRect(hoverLeft, bubbleY, editedW, bubbleH);
-					hoverLeft += editedW + textPadding;
-				}
-				timeIdRect = QRect(hoverLeft, bubbleY, timeIdW, bubbleH);
-				// Edited tooltip covers both the edited icon and the time+id area when present.
-				if (edited) {
-					editedRect = QRect(editedOnlyRect.isNull() ? timeIdRect.left() : editedOnlyRect.left(),
-						bubbleY,
-						(editedOnlyRect.isNull() ? 0 : editedOnlyRect.width()) + timeIdRect.width(),
-						bubbleH);
-				}
-				// Views tooltip
-				if (viewsW > 0 && viewsRect.contains(point)) {
+			// Build three hover areas for Grid first bubble from the left edge:
+			// views (icon+count), edited+time+id (if edited), time+id.
+			const int iconGap = 1;
+			const int iconW = st::historyViewsWidth;
+			const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
+			const int editedW = edited ? font->width(QString::fromUtf8("✏️") + " ") : 0;
+			const int timeIdW = font->width(dateText + msgIdText);
+			int hoverLeft = bubbleX + hPadding;
+			QRect viewsRect, timeIdRect, editedRect;
+			if (viewsW > 0) {
+				viewsRect = QRect(hoverLeft, bubbleY, viewsW, bubbleH);
+				hoverLeft += viewsW + textPadding;
+			}
+			QRect editedOnlyRect;
+			if (edited) {
+				editedOnlyRect = QRect(hoverLeft, bubbleY, editedW, bubbleH);
+				hoverLeft += editedW + textPadding;
+			}
+			timeIdRect = QRect(hoverLeft, bubbleY, timeIdW, bubbleH);
+			// Edited tooltip covers both the edited icon and the time+id area when present.
+			if (edited) {
+				editedRect = QRect(editedOnlyRect.isNull() ? timeIdRect.left() : editedOnlyRect.left(),
+							bubbleY,
+							(editedOnlyRect.isNull() ? 0 : editedOnlyRect.width()) + timeIdRect.width(),
+							bubbleH);
+			}
+			// Views tooltip
+			if (viewsW > 0 && viewsRect.contains(point)) {
 				result.customTooltip = true;
 				result.customTooltipText = QString("Views: ") + viewsText;
 				return result;
@@ -1411,7 +1411,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 				return result;
 			}
 
-				// Remove conflicting right-anchored views hover area; views belong to the left.
+			// Remove conflicting right-anchored views hover area; views belong to the left.
 
 			if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 				auto fullRight = width();
@@ -1909,29 +1909,33 @@ bool GroupedMedia::hasSelectableText() const {
 }
 
 	
-
 	int GroupedMedia::captionPartIndexAt(QPoint point) const {
 
-		if (_mode == Mode::Grid) {
+	if (_mode == Mode::Grid) {
 
-			for (int i = 0, size = _parts.size(); i < size; ++i) {
+		for (int i = 0, size = _parts.size(); i < size; ++i) {
 
-				if (!_parts[i].captionRect.isEmpty()
+			if (!_parts[i].captionRect.isEmpty()
 
-					&& _parts[i].captionRect.contains(point)) {
+				&& _parts[i].captionRect.contains(point)) {
 
-					return i;
-
-				}
+				return i;
 
 			}
 
 		}
 
-			return -1;
+	}
 
-		}
+		return -1;
 
+	}
 		
+HistoryItem *GroupedMedia::getItem(int partIndex) const {
+	if (partIndex < 0 || partIndex >= _parts.size()) {
+		return nullptr;
+	}
+	return _parts[partIndex].item;
+}
 
 } // namespace HistoryView
