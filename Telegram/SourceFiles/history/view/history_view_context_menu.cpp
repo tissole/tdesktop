@@ -1593,7 +1593,7 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 						});
 					} else {
 						menu->addAction(tr::lng_context_copy_selected(tr::now), [=] {
-							TextUtilities::SetClipboardText(request.view->selectedText(selection));
+							TextUtilities::SetClipboardText(grouped->selectedText(selection));
 						});
 					}
 					return menu;
