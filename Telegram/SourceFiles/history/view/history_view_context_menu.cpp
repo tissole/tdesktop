@@ -1587,11 +1587,12 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 					auto menu = base::make_unique_q<Ui::PopupMenu>(list, st::popupMenuWithIcons);
 					const auto selection = list->textSelection();
 					if (selection.empty()) {
-						const auto caption = grouped->getCaption(partIndex);
-						menu->addAction(tr::lng_context_copy_text(tr::now), [=] {
-							QApplication::clipboard()->setText(caption);
-						});
-					} else {
+											const auto partItem = grouped->getItem(partIndex); // Get the specific HistoryItem
+											// Use TextWithEntities::text for QApplication::clipboard()->setText
+											const auto captionTextForCopy = partItem->actualTextForCopy().text;
+											menu->addAction(tr::lng_context_copy_text(tr::now), [=] {
+												QApplication::clipboard()->setText(captionTextForCopy);
+											});					} else {
 						menu->addAction(tr::lng_context_copy_selected(tr::now), [=] {
 							TextUtilities::SetClipboardText(grouped->selectedText(selection));
 						});
@@ -1599,7 +1600,9 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 					const auto caption = grouped->getCaption(partIndex);
 					const auto captionWithEntities = TextWithEntities{ caption };
 					if (!caption.isEmpty() && !Ui::SkipTranslate(captionWithEntities)) {
-						menu->addAction(tr::lng_context_translate(tr::now), [=, item] {
+						menu->addAction(tr::lng_context_translate(tr::now), [=, request] {
+							const auto item = request.item;
+							if (!item) return;
 							list->controller()->show(Box(
 								Ui::TranslateBox,
 								item->history()->peer,
