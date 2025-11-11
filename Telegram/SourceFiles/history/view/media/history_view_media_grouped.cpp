@@ -992,7 +992,7 @@ TextState GroupedMedia::getPartState(
 			if (_mode == Mode::Grid
 				&& !part.captionRect.isEmpty()
 				&& part.captionRect.contains(point)) {
-				const auto originalText = part.item->originalText();
+				const auto originalText = part.item->actualTextForCopy();
 				if (!originalText.empty()) {
 					uint16 captionOffset = 0;
 					for (int j = 0; j < i; ++j) {
