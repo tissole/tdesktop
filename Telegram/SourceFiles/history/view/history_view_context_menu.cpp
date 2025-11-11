@@ -1596,6 +1596,17 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 							TextUtilities::SetClipboardText(grouped->selectedText(selection));
 						});
 					}
+					const auto caption = grouped->getCaption(partIndex);
+					if (!caption.isEmpty() && !Ui::SkipTranslate(caption)) {
+						menu->addAction(tr::lng_context_translate(tr::now), [=] {
+							list->controller()->show(Box(
+								Ui::TranslateBox,
+								item->history()->peer,
+								MsgId(), // No specific message ID for part caption
+								caption,
+								list->hasCopyRestriction(item)));
+						}, &st::menuIconTranslate);
+					}
 					return menu;
 				}
 			}
