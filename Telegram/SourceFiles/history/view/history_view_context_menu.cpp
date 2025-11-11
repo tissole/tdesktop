@@ -1597,13 +1597,14 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 						});
 					}
 					const auto caption = grouped->getCaption(partIndex);
-					if (!caption.isEmpty() && !Ui::SkipTranslate(caption)) {
-						menu->addAction(tr::lng_context_translate(tr::now), [=] {
+					const auto captionWithEntities = TextWithEntities{ caption };
+					if (!caption.isEmpty() && !Ui::SkipTranslate(captionWithEntities)) {
+						menu->addAction(tr::lng_context_translate(tr::now), [=, item] {
 							list->controller()->show(Box(
 								Ui::TranslateBox,
 								item->history()->peer,
 								MsgId(), // No specific message ID for part caption
-								caption,
+								captionWithEntities,
 								list->hasCopyRestriction(item)));
 						}, &st::menuIconTranslate);
 					}
