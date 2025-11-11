@@ -153,6 +153,10 @@ template <typename T>
 	return { Ui::FillAmountAndCurrency(amount, currency) };
 }
 
+	const TextWithEntities &actualTextForCopy() const {
+		return _originalMsg;
+	}
+
 } // namespace
 
 void HistoryItem::HistoryItem::Destroyer::operator()(HistoryItem *value) {

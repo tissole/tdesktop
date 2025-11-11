@@ -296,7 +296,7 @@ QSize GroupedMedia::countOptimalSize() {
 
 			// Calculate caption height for this specific item in Grid mode
 			if (_mode == Mode::Grid) {
-				const auto originalText = part.item->originalText();
+				const auto originalText = part.item->actualTextForCopy();
 				if (!originalText.empty()) {
 					part.caption.setMarkedText(
 						st::messageTextStyle,
@@ -380,10 +380,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 					- left
 					- (needRightSkip ? scale(spacing) : 0);
 				part.geometry = QRect(left, y, width, scale(initial.height()));
-				accumulate_max(maxMediaHeight, float64(part.geometry.height()));
-
-				const auto originalText = part.item->originalText();
-				if ((_mode == Mode::Grid) &&
+				            accumulate_max(maxMediaHeight, float64(part.geometry.height()));
+				
+				                const auto originalText = part.item->actualTextForCopy();				if ((_mode == Mode::Grid) &&
 					!originalText.empty()) { // REMOVED GetEnhancedBool check
 					part.caption.setMarkedText(
 						st::messageTextStyle,
