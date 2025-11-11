@@ -153,10 +153,6 @@ template <typename T>
 	return { Ui::FillAmountAndCurrency(amount, currency) };
 }
 
-	const TextWithEntities &actualTextForCopy() const {
-		return _originalMsg;
-	}
-
 } // namespace
 
 void HistoryItem::HistoryItem::Destroyer::operator()(HistoryItem *value) {
@@ -3226,8 +3222,11 @@ MsgId HistoryItem::originalId() const {
 }
 
 const TextWithEntities &HistoryItem::originalText() const {
-	static const auto kEmpty = TextWithEntities();
-	return isService() ? kEmpty : _text;
+	return _text;
+}
+
+const TextWithEntities &HistoryItem::actualTextForCopy() const {
+	return _originalMsg;
 }
 
 const TextWithEntities &HistoryItem::translatedText() const {
