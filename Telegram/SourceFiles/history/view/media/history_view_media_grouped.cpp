@@ -813,14 +813,31 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					mediaGeometry.width(),
 					part._captionHeight
 				);
+				
 				// Use the standard message text color for captions.
 				p.setPen(stm->historyTextFg);
 				const auto padding = QMargins(8, 0, 8, 0);
+				
+				// Handle text selection highlighting for captions
+				auto selection = context.selection;
+				if (selection != FullSelection) {
+					// Check if this part is selected
+					const auto partIndex = &part - &_parts[0];
+					if (IsGroupItemSelection(selection, partIndex)) {
+						selection = FullSelection;
+					} else {
+						selection = TextSelection();
+					}
+				}
+				
+				// Draw caption with selection support
 				caption.draw(p,
 					captionRect.left() + padding.left(),
 					captionRect.top() + padding.top(),
 					captionRect.width() - padding.left() - padding.right(),
-					style::al_left);
+					style::al_left,
+					selection,
+					selection);
 			}
 		}
 		
@@ -964,14 +981,38 @@ TextState GroupedMedia::getPartState(
 				const auto originalText = part.item->originalText();
 				if (!originalText.empty()) {
 					auto result = TextState(part.item);
-					// Tooltip for ellipsized captions.
-					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+					// Enable text selection for captions
 					const auto padding = QMargins(8, 0, 8, 0);
-					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
-					if (fullCaption.maxWidth() > textWidth) {
+					const auto captionWidth = part.geometry.width() - padding.left() - padding.right();
+					Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
+					
+					// Calculate text position within caption
+					const auto clickX = point.x() - part.captionRect.left() - padding.left();
+					const auto clickY = point.y() - part.captionRect.top() - padding.top();
+					
+					// Get text state at click position
+					const auto textState = caption.getState(
+						clickX,
+						clickY,
+						captionWidth,
+						request
+					);
+					
+					result.symbol = textState.symbol;
+					result.afterSymbol = textState.afterSymbol;
+					result.cursor = textState.cursor;
+					result.over = textState.over;
+					result.link = textState.link;
+					
+					// Tooltip for ellipsized captions.
+					if (caption.maxWidth() > captionWidth) {
 						result.customTooltip = true;
 						result.customTooltipText = originalText.text;
 					}
+					
+					// Set flag to indicate this is a caption click
+					result.customTooltip = true;
+					result.customTooltipText = originalText.text;
 					return result;
 				}
 			}
@@ -1413,47 +1454,80 @@ bool GroupedMedia::dragItemByHandler(const ClickHandlerPtr &p) const {
 TextSelection GroupedMedia::adjustSelection(
 		TextSelection selection,
 		TextSelectType type) const {
-	if (_mode != Mode::Column) {
-		return {};
-	}
-	auto checked = 0;
-	for (const auto &part : _parts) {
-		const auto modified = ShiftItemSelection(
-			part.content->adjustSelection(
-				UnshiftItemSelection(selection, checked),
-				type),
-			checked);
-		const auto till = checked + part.content->fullSelectionLength();
-		if (selection.from >= checked && selection.from < till) {
-			selection.from = modified.from;
+	if (_mode == Mode::Column) {
+		auto checked = 0;
+		for (const auto &part : _parts) {
+			const auto modified = ShiftItemSelection(
+				part.content->adjustSelection(
+					UnshiftItemSelection(selection, checked),
+					type),
+				checked);
+			const auto till = checked + part.content->fullSelectionLength();
+			if (selection.from >= checked && selection.from < till) {
+				selection.from = modified.from;
+			}
+			if (selection.to <= till) {
+				selection.to = modified.to;
+				return selection;
+			}
+			checked = till;
 		}
-		if (selection.to <= till) {
-			selection.to = modified.to;
-			return selection;
+		return selection;
+	} else if (_mode == Mode::Grid) {
+		// Handle caption text selection for Grid mode
+		for (auto i = 0; i < _parts.size(); ++i) {
+			const auto &part = _parts[i];
+			const auto originalText = part.item->originalText();
+			if (!originalText.empty()) {
+				// For Grid mode, we need to handle caption selection differently
+				// Each caption is treated as a separate text block
+				const auto captionLength = originalText.text.size();
+				if (selection.from == 0 && selection.to == FullSelection) {
+					// Full selection of this caption
+					return AddGroupItemSelection(selection, i);
+				}
+			}
 		}
-		checked = till;
 	}
-	return selection;
+	return {};
 }
 
 uint16 GroupedMedia::fullSelectionLength() const {
-	if (_mode != Mode::Column) {
-		return {};
+	if (_mode == Mode::Column) {
+		auto result = 0;
+		for (const auto &part : _parts) {
+			result += part.content->fullSelectionLength();
+		}
+		return result;
+	} else if (_mode == Mode::Grid) {
+		// For Grid mode, return the total length of all captions
+		auto result = 0;
+		for (const auto &part : _parts) {
+			const auto originalText = part.item->originalText();
+			if (!originalText.empty()) {
+				result += originalText.text.size();
+			}
+		}
+		return result;
 	}
-	auto result = 0;
-	for (const auto &part : _parts) {
-		result += part.content->fullSelectionLength();
-	}
-	return result;
+	return 0;
 }
 
 bool GroupedMedia::hasTextForCopy() const {
-	if (_mode != Mode::Column) {
-		return {};
-	}
-	for (const auto &part : _parts) {
-		if (part.content->hasTextForCopy()) {
-			return true;
+	if (_mode == Mode::Column) {
+		for (const auto &part : _parts) {
+			if (part.content->hasTextForCopy()) {
+				return true;
+			}
+		}
+		return false;
+	} else if (_mode == Mode::Grid) {
+		// Check if any item has a caption
+		for (const auto &part : _parts) {
+			const auto originalText = part.item->originalText();
+			if (!originalText.empty()) {
+				return true;
+			}
 		}
 	}
 	return false;
@@ -1461,22 +1535,39 @@ bool GroupedMedia::hasTextForCopy() const {
 
 TextForMimeData GroupedMedia::selectedText(
 		TextSelection selection) const {
-	if (_mode != Mode::Column) {
-		return {};
-	}
-	auto result = TextForMimeData();
-	for (const auto &part : _parts) {
-		auto text = part.content->selectedText(selection);
-		if (!text.empty()) {
-			if (result.empty()) {
-				result = std::move(text);
-			} else {
-				result.append(u"\n\n"_q).append(std::move(text));
+	if (_mode == Mode::Column) {
+		auto result = TextForMimeData();
+		for (const auto &part : _parts) {
+			auto text = part.content->selectedText(selection);
+			if (!text.empty()) {
+				if (result.empty()) {
+					result = std::move(text);
+				} else {
+					result.append(u"\n\n"_q).append(std::move(text));
+				}
+			}
+			selection = part.content->skipSelection(selection);
+		}
+		return result;
+	} else if (_mode == Mode::Grid) {
+		// Handle caption text selection for Grid mode
+		auto result = TextForMimeData();
+		for (auto i = 0; i < _parts.size(); ++i) {
+			const auto &part = _parts[i];
+			if (IsGroupItemSelection(selection, i)) {
+				const auto originalText = part.item->originalText();
+				if (!originalText.empty()) {
+					if (result.empty()) {
+						result = TextForMimeData::Rich(originalText);
+					} else {
+						result.append(u"\n\n"_q).append(TextForMimeData::Rich(originalText));
+					}
+				}
 			}
 		}
-		selection = part.content->skipSelection(selection);
+		return result;
 	}
-	return result;
+	return TextForMimeData();
 }
 
 SelectedQuote GroupedMedia::selectedQuote(TextSelection selection) const {

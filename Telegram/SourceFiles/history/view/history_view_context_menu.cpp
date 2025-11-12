@@ -1649,19 +1649,44 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		if (const auto document = media ? media->getDocument() : nullptr) {
 			AddDocumentActions(result, document, view->data(), list);
 		}
-		if (!link && (view->hasVisibleText() || mediaHasTextForCopy)) {
+		
+		// Check if this is a Grid media with caption click
+		const auto isGridCaptionClick = [&]() -> bool {
+			if (media && request.pointState == PointState::GroupPart) {
+				// Check if the media is a GroupedMedia in Grid mode
+				if (const auto groupedMedia = dynamic_cast<HistoryView::GroupedMedia*>(media)) {
+					// For Grid mode, check if click is on a caption
+					const auto point = list->mapFromGlobal(QCursor::pos());
+					const auto textState = media->textState(point, StateRequest());
+					return textState.customTooltip && !textState.customTooltipText.isEmpty();
+				}
+			}
+			return false;
+		}();
+		
+		if (!link && (view->hasVisibleText() || mediaHasTextForCopy || isGridCaptionClick)) {
 			if (!list->hasCopyRestriction(view->data())) {
 				const auto asGroup = (request.pointState != PointState::GroupPart);
+				
+				// Add copy text action for captions
 				result->addAction(tr::lng_context_copy_text(tr::now), [=] {
 					if (const auto item = owner->message(itemId)) {
 						if (!list->showCopyRestriction(item)) {
-							if (asGroup) {
+							if (isGridCaptionClick) {
+								// Copy the caption text of the clicked item
+								const auto point = list->mapFromGlobal(QCursor::pos());
+								const auto textState = media->textState(point, StateRequest());
+								if (textState.customTooltip && !textState.customTooltipText.isEmpty()) {
+									TextUtilities::SetClipboardText(textState.customTooltipText);
+								}
+							} else if (asGroup) {
 								if (const auto group = owner->groups().find(item)) {
 									TextUtilities::SetClipboardText(HistoryGroupText(group));
 									return;
 								}
+							} else {
+								TextUtilities::SetClipboardText(HistoryItemText(item));
 							}
-							TextUtilities::SetClipboardText(HistoryItemText(item));
 						}
 					}
 				}, &st::menuIconCopy);
