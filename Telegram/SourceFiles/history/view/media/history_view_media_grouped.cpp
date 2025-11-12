@@ -1130,6 +1130,8 @@ TextState GroupedMedia::getPartState(
 					const auto vPadding = st::msgDateImgPadding.y();
 					const auto dateW = textWidth + (2 * hPadding);
 					const auto dateH = textHeight + 2 * vPadding;
+					const int currentRight = part.geometry.x() + part.geometry.width();
+					const auto y = part.geometry.y();
 					const auto bubbleX = currentRight - dateW - st::msgDateImgDelta;
 					const auto bubbleY = y;
 					const QRect infoRect(bubbleX, bubbleY, dateW, dateH);
@@ -1161,6 +1163,7 @@ TextState GroupedMedia::getPartState(
 						}
 					}
 				}
+			}
 			}
 			// --- END: MODIFIED LOGIC FOR COLUMN MODE ---
 			// START: New tooltip logic for Grid album items (2..N).
