@@ -106,21 +106,12 @@ public:
 		return {};
 	}
 
-	[[nodiscard]] virtual TextSelection textSelection() const {
-		return {};
-	}
-	virtual void setTextSelection(TextSelection selection) {
-	}
-
 	[[nodiscard]] virtual bool isDisplayed() const {
 		return true;
 	}
 	virtual void updateNeedBubbleState() {
 	}
 	[[nodiscard]] virtual bool hasTextForCopy() const {
-		return false;
-	}
-	[[nodiscard]] virtual bool hasSelectableText() const {
 		return false;
 	}
 	[[nodiscard]] virtual bool aboveTextByDefault() const {

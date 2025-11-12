@@ -1,4 +1,4 @@
-﻿/*
+﻿﻿/*
 This file is part of Telegram Desktop,
 the official desktop application for the Telegram messaging service.
 
@@ -7,7 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/history_view_list_widget.h"
 
-#include "history/view/media/history_view_media_grouped.h"
 #include "base/unixtime.h"
 #include "base/qt/qt_key_modifiers.h"
 #include "base/qt/qt_common_adapters.h"
@@ -17,7 +16,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item_helpers.h"
 #include "history/history_item_text.h"
 #include "history/view/media/history_view_media.h"
-#include "history/view/media/history_view_media_grouped.h"
 #include "history/view/media/history_view_sticker.h"
 #include "history/view/reactions/history_view_reactions.h"
 #include "history/view/reactions/history_view_reactions_button.h"
@@ -1551,25 +1549,11 @@ void ListWidget::setTextSelection(
 		TextSelection selection) {
 	clearSelected();
 	const auto item = view->data();
-	if (const auto media = view->media()) {
-		if (const auto grouped = dynamic_cast<HistoryView::GroupedMedia*>(media)) {
-			grouped->setTextSelection(selection);
-			_selectedTextItem = nullptr;
-			_selectedTextRange = TextSelection();
-		} else {
-			if (_selectedTextItem != item) {
-				clearTextSelection();
-				_selectedTextItem = view->data();
-			}
-			_selectedTextRange = selection;
-		}
-	} else {
-		if (_selectedTextItem != item) {
-			clearTextSelection();
-			_selectedTextItem = view->data();
-		}
-		_selectedTextRange = selection;
+	if (_selectedTextItem != item) {
+		clearTextSelection();
+		_selectedTextItem = view->data();
 	}
+	_selectedTextRange = selection;
 	_selectedText = (selection.from != selection.to)
 		? view->selectedText(selection)
 		: TextForMimeData();
@@ -2192,15 +2176,20 @@ TextSelection ListWidget::computeRenderSelection(
 
 TextSelection ListWidget::itemRenderSelection(
 		not_null<const Element*> view) const {
-	if (const auto media = view->media()) {
-		if (const auto grouped = dynamic_cast<const HistoryView::GroupedMedia*>(media)) {
-			return grouped->textSelection();
+	if (!_dragSelected.empty()) {
+		const auto i = _dragSelected.find(view->data()->fullId());
+		if (i != _dragSelected.end()) {
+			return (_dragSelectAction == DragSelectAction::Selecting)
+				? FullSelection
+				: TextSelection();
 		}
 	}
-	if (_selectedTextItem == view->data()) {
+	if (!_selected.empty() || !_dragSelected.empty()) {
+		return computeRenderSelection(&_selected, view);
+	} else if (view->data() == _selectedTextItem) {
 		return _selectedTextRange;
 	}
-	return {};
+	return TextSelection();
 }
 
 Ui::ChatPaintContext ListWidget::preparePaintContext(
@@ -2557,18 +2546,84 @@ void ListWidget::applyDragSelection(SelectedMap &applyTo) const {
 	}
 }
 
-TextSelection ListWidget::textSelection() const {
-	return _selectedTextRange;
-}
-
 TextForMimeData ListWidget::getSelectedText() const {
-	if (hasSelectedItems() || !_selectedTextItem) {
-		return {};
+	auto selected = _selected;
+
+	if (_mouseAction == MouseAction::Selecting && !_dragSelected.empty()) {
+		applyDragSelection(selected);
 	}
-	if (const auto view = viewForItem(_selectedTextItem)) {
-		return view->selectedText(_selectedTextRange);
+
+	if (selected.empty()) {
+		if (const auto view = viewForItem(_selectedTextItem)) {
+			return view->selectedText(_selectedTextRange);
+		}
+		return _selectedText;
 	}
-	return {};
+
+	auto groups = base::flat_set<not_null<const Data::Group*>>();
+	auto fullSize = 0;
+	auto texts = std::vector<std::pair<
+		not_null<HistoryItem*>,
+		TextForMimeData>>();
+	texts.reserve(selected.size());
+
+	const auto wrapItem = [&](
+			not_null<HistoryItem*> item,
+			TextForMimeData &&unwrapped) {
+		auto time = QString(", [%1]\n").arg(
+			QLocale().toString(ItemDateTime(item), GetEnhancedBool("show_seconds") ? QLocale::system().timeFormat(QLocale::LongFormat).remove("t") : QLocale::system().timeFormat(QLocale::ShortFormat)));
+		auto part = TextForMimeData();
+		auto size = item->author()->name().size()
+			+ time.size()
+			+ unwrapped.expanded.size();
+		part.reserve(size);
+		part.append(item->author()->name()).append(time);
+		part.append(std::move(unwrapped));
+		texts.emplace_back(std::move(item), std::move(part));
+		fullSize += size;
+	};
+	const auto addItem = [&](not_null<HistoryItem*> item) {
+		wrapItem(item, HistoryItemText(item));
+	};
+	const auto addGroup = [&](not_null<const Data::Group*> group) {
+		Expects(!group->items.empty());
+
+		wrapItem(group->items.back(), HistoryGroupText(group));
+	};
+
+	for (const auto &[itemId, data] : selected) {
+		if (const auto item = session().data().message(itemId)) {
+			if (const auto group = session().data().groups().find(item)) {
+				if (groups.contains(group)) {
+					continue;
+				}
+				if (isSelectedGroup(selected, group)) {
+					groups.emplace(group);
+					addGroup(group);
+				} else {
+					addItem(item);
+				}
+			} else {
+				addItem(item);
+			}
+		}
+	}
+	ranges::sort(texts, [&](
+			const std::pair<not_null<HistoryItem*>, TextForMimeData> &a,
+			const std::pair<not_null<HistoryItem*>, TextForMimeData> &b) {
+		return _delegate->listIsLessInOrder(a.first, b.first);
+	});
+
+	auto result = TextForMimeData();
+	auto sep = u"\n\n"_q;
+	result.reserve(fullSize + (texts.size() - 1) * sep.size());
+	for (auto i = begin(texts), e = end(texts); i != e;) {
+		result.append(std::move(i->second));
+		if (++i != e) {
+			result.append(sep);
+		}
+	}
+	return result;
 }
 
 MessageIdsList ListWidget::getSelectedIds() const {

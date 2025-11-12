@@ -1,24 +1,11 @@
 /*
 This file is part of Telegram Desktop,
- the official desktop application for the Telegram messaging service.
+the official desktop application for the Telegram messaging service.
 
- For license and copyright information please follow this link:
- https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
+For license and copyright information please follow this link:
+https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/media/history_view_media_grouped.h"
-
-#include "core/click_handler_types.h"
-#include "main/main_session.h"
-#include "data/data_session.h"
-#include "ui/text/text_utilities.h"
-#include "ui/text/text.h"
-#include "history/view/history_view_element.h"
-#include <QApplication>
-#include <QClipboard>
-#include "ui/widgets/menu/menu.h"
-#include "base/unique_qptr.h"
-#include "lang/lang_keys.h"
-#include "window/window_session_controller.h"
 
 #include "history/history_item_components.h"
 #include "history/history_item.h"
@@ -72,16 +59,9 @@ std::vector<Ui::GroupMediaLayout> LayoutPlaylist(
 
 } // namespace
 
-CaptionClickHandler::CaptionClickHandler(int partIndex)
-: _partIndex(partIndex) {
-}
-
-void CaptionClickHandler::onClick(ClickContext context) const {
-}
-
 GroupedMedia::Part::Part(
-		not_null<Element*> parent,
-		not_null<Data::Media*> media)
+	not_null<Element*> parent,
+	not_null<Data::Media*> media)
 : item(media->parent())
 , content(media->createView(parent, item)) {
 	Assert(media->canBeGrouped());
@@ -148,27 +128,27 @@ void GroupedMedia::drawMessageIdInfo(
 
 	// Draw with uniform style brush to avoid edge transparency differences
 	p.save();
-	p.setOpacity(0.95);
+p.setOpacity(0.95);
 	Ui::FillRoundRect(
-			p,
-			bubbleX,
-			bubbleY,
-			dateW,
-			dateH,
-			sti->msgDateImgBg,
-			sti->msgDateImgBgCorners);
+		p,
+		bubbleX,
+		bubbleY,
+		dateW,
+		dateH,
+		sti->msgDateImgBg,
+		sti->msgDateImgBgCorners);
 	p.restore();
 
 	auto font = st::msgDateFont;
 	p.drawText(
-			bubbleX + horizontalPadding,
-			bubbleY + (dateH - textHeight) / 2 + font->ascent,
-			infoText);
+		bubbleX + horizontalPadding,
+		bubbleY + (dateH - textHeight) / 2 + font->ascent,
+		infoText);
 }
 
 GroupedMedia::GroupedMedia(
-		not_null<Element*> parent,
-		const std::vector<std::unique_ptr<Data::Media>> &medias) 
+	not_null<Element*> parent,
+	const std::vector<std::unique_ptr<Data::Media>> &medias) 
 : Media(parent) {
 	const auto truncated = ranges::views::all(
 			medias
@@ -181,8 +161,8 @@ GroupedMedia::GroupedMedia(
 }
 
 GroupedMedia::GroupedMedia(
-		not_null<Element*> parent,
-		const std::vector<not_null<HistoryItem*>> &items) 
+	not_null<Element*> parent,
+	const std::vector<not_null<HistoryItem*>> &items) 
 : Media(parent) {
 	const auto medias = ranges::views::all(
 			items
@@ -271,10 +251,10 @@ QSize GroupedMedia::countOptimalSize() {
 
 	const auto layout = (_mode == Mode::Grid)
 		? Ui::LayoutMediaGroup(
-			 sizes,
-			 st::historyGroupWidthMax,
-			 st::historyGroupWidthMin,
-			 st::historyGroupSkip)
+			sizes,
+			st::historyGroupWidthMax,
+			st::historyGroupWidthMin,
+			st::historyGroupSkip)
 		: LayoutPlaylist(sizes);
 	Assert(layout.size() == _parts.size());
 
@@ -296,14 +276,14 @@ QSize GroupedMedia::countOptimalSize() {
 
 			// Calculate caption height for this specific item in Grid mode
 			if (_mode == Mode::Grid) {
-				const auto originalText = part.item->actualTextForCopy();
+				const auto originalText = part.item->originalText();
 				if (!originalText.empty()) {
-					part.caption.setMarkedText(
+					Ui::Text::String caption(
 						st::messageTextStyle,
 						originalText,
 						kDefaultTextOptions);
 					const auto padding = QMargins(8, 0, 8, 0);
-					part._captionHeight = part.caption.countHeight(
+					part._captionHeight = caption.countHeight(
 						part.initialGeometry.width()
 							- padding.left()
 							- padding.right())
@@ -325,14 +305,10 @@ QSize GroupedMedia::countOptimalSize() {
 
 	auto minHeight = y > 0 ? (y - spacing) : 0;
 	maxWidth = 0;
-	_captionsCount = 0;
 	for (auto i = 0; i != _parts.size(); ++i) {
 		accumulate_max(
 			maxWidth,
 			_parts[i].initialGeometry.x() + _parts[i].initialGeometry.width());
-		if (_parts[i]._captionHeight > 0) {
-			_captionsCount++;
-		}
 	}
 
 	const auto groupPadding = groupedPadding();
@@ -381,15 +357,13 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 					- (needRightSkip ? scale(spacing) : 0);
 				part.geometry = QRect(left, y, width, scale(initial.height()));
 				accumulate_max(maxMediaHeight, float64(part.geometry.height()));
-			
-				const auto originalText = part.item->actualTextForCopy();
-				if ((_mode == Mode::Grid) && !originalText.empty()) { // REMOVED GetEnhancedBool check
-					part.caption.setMarkedText(
-						st::messageTextStyle,
-						originalText,
-						kDefaultTextOptions);
+
+				const auto originalText = part.item->originalText();
+				if ((_mode == Mode::Grid) &&
+					!originalText.empty()) { // REMOVED GetEnhancedBool check
+					Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
 					const auto padding = QMargins(8, 0, 8, 0);
-					part._captionHeight = part.caption.countHeight(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
+					part._captionHeight = caption.countHeight(part.geometry.width() - padding.left() - padding.right()) + padding.top() + padding.bottom();
 				} else {
 					part._captionHeight = 0;
 				}
@@ -679,12 +653,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					bubbleH,
 					sti->msgDateImgBg,
 					sti->msgDateImgBgCorners);
-			p.restore();
+				p.restore();
 
-			p.setPen(st->msgDateImgFg());
-			p.setFont(font->bold());
-			const auto baseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
-			p.drawText(bubbleX + hPadding, baseY, text);
+				p.setPen(st->msgDateImgFg());
+				p.setFont(font->bold());
+				const auto baseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
+				p.drawText(bubbleX + hPadding, baseY, text);
 			}
 		}
 
@@ -751,73 +725,88 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				int x = itemRect.x() + itemRect.width() - totalW - st::msgDateImgDelta;
 				// Prevent overlay from overlapping the document status text (e.g., "12.9 MB").
 				// Compute the left bound of the status text area for Column grouped layout.
-			int reservedLeft = 0;
-			{
-				const auto &docStyle = st::msgFileLayoutGrouped;
-				const int nameleft = docStyle.padding.left() + docStyle.thumbSize + docStyle.thumbSkip;
-				QString statusText;
-				if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
-					if (const auto document = fileMedia->document()) {
-						statusText = Ui::FormatSizeText(document->size);
+				int reservedLeft = 0;
+				{
+					const auto &docStyle = st::msgFileLayoutGrouped;
+					const int nameleft = docStyle.padding.left() + docStyle.thumbSize + docStyle.thumbSkip;
+					QString statusText;
+					if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
+						if (const auto document = fileMedia->document()) {
+							statusText = Ui::FormatSizeText(document->size);
+						}
+					}
+					if (!statusText.isEmpty()) {
+						reservedLeft = nameleft + st::normalFont->width(statusText) + st::normalFont->spacew;
 					}
 				}
-				if (!statusText.isEmpty()) {
-					reservedLeft = nameleft + st::normalFont->width(statusText) + st::normalFont->spacew;
+				// If the overlay would overlap the status text, push it right to leave a gap.
+				if (reservedLeft > 0) {
+					const auto minGap = st::normalFont->spacew;
+					const auto minX = reservedLeft + minGap;
+					if (x < minX) x = minX;
 				}
-			}
-			// If the overlay would overlap the status text, push it right to leave a gap.
-			if (reservedLeft > 0) {
-				const auto minGap = st::normalFont->spacew;
-				const auto minX = reservedLeft + minGap;
-				if (x < minX) x = minX;
-			}
-			// Draw views icon + count
-			if (viewsW > 0) {
-				// Use non-inverted icon to match text color inside the bubble.
-				const auto &icon = stm->historyViewsIcon;
-				const int iconH = icon.height();
-				const int scaledH = (iconH * iconW) / std::max(1, icon.width());
-				const int iconTop = baseY - st::msgDateFont->ascent + (st::msgDateFont->height - scaledH) / 2;
-				icon.paint(p, x, iconTop, iconW);
-				p.drawText(x + iconW + iconGap, baseY, viewsText);
-				x += viewsW + textGap;
-			}
-			// Draw edited icon if any
-			if (editedW > 0) {
-				p.drawText(x, baseY, editText);
-				x += editedW + textGap;
-			}
-			// Draw time + id
-			p.drawText(x, baseY, timeText + idText);
-		} else if (!infoText.isEmpty()) {
-			const auto st = context.st;
-			const auto stm = context.messageStyle();
-			p.setFont(st::msgDateFont);
-			// Match single-document bubbles color
-			p.setPen(stm->msgDateFg);
+				// Draw views icon + count
+				if (viewsW > 0) {
+					// Use non-inverted icon to match text color inside the bubble.
+					const auto &icon = stm->historyViewsIcon;
+					const int iconH = icon.height();
+					const int scaledH = (iconH * iconW) / std::max(1, icon.width());
+					const int iconTop = baseY - st::msgDateFont->ascent + (st::msgDateFont->height - scaledH) / 2;
+					icon.paint(p, x, iconTop, iconW);
+					p.drawText(x + iconW + iconGap, baseY, viewsText);
+					x += viewsW + textGap;
+				}
+				// Draw edited icon if any
+				if (editedW > 0) {
+					p.drawText(x, baseY, editText);
+					x += editedW + textGap;
+				}
+				// Draw time + id
+				p.drawText(x, baseY, timeText + idText);
+			} else if (!infoText.isEmpty()) {
+				const auto st = context.st;
+				const auto stm = context.messageStyle();
+				p.setFont(st::msgDateFont);
+				// Match single-document bubbles color
+				p.setPen(stm->msgDateFg);
 
-			const auto itemRect = part.geometry.translated(0, groupPadding.top());
-			const auto textWidth = st::msgDateFont->width(infoText);
-			// const auto textHeight = st::msgDateFont->height; // Unused.
-			const auto &docStyle = st::msgFileLayoutGrouped;
-			const auto topMinus = st::msgFileTopMinus;
-			const auto statustop = docStyle.statusTop - topMinus;
+				const auto itemRect = part.geometry.translated(0, groupPadding.top());
+				const auto textWidth = st::msgDateFont->width(infoText);
+				// const auto textHeight = st::msgDateFont->height; // Unused.
+				const auto &docStyle = st::msgFileLayoutGrouped;
+				const auto topMinus = st::msgFileTopMinus;
+				const auto statustop = docStyle.statusTop - topMinus;
 
-			// Position on same row as file size (right aligned)
-			const auto textX = itemRect.x() + itemRect.width() - textWidth - st::msgDateImgDelta;
-			const auto textY = itemRect.y() + statustop + st::msgDateFont->ascent;
+				// Position on same row as file size (right aligned)
+				const auto textX = itemRect.x() + itemRect.width() - textWidth - st::msgDateImgDelta;
+				const auto textY = itemRect.y() + statustop + st::msgDateFont->ascent;
 
-			p.drawText(textX, textY, infoText);
-		}
+				p.drawText(textX, textY, infoText);
+			}
 		} else if (_mode == Mode::Grid && i > 0) {
 			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
 		}
 
 		// FIX #8: Restore caption drawing for Grid mode.
 		if ((_mode == Mode::Grid) && part._captionHeight > 0) {
+			const auto originalText = part.item->originalText();
 			auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
 
-			if (!part.caption.isEmpty() && part._captionHeight > 0) {
+			QString textToDraw;
+			if (!originalText.empty()) {
+				Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+				const auto padding = QMargins(8, 0, 8, 0);
+				const auto textWidth = mediaGeometry.width() - padding.left() - padding.right();
+				if (fullCaption.maxWidth() > textWidth) {
+					QFontMetrics metrics(st::messageTextStyle.font);
+					textToDraw = metrics.elidedText(originalText.text, Qt::ElideRight, textWidth);
+				} else {
+					textToDraw = originalText.text;
+				}
+			}
+
+			if (!textToDraw.isEmpty() && part._captionHeight > 0) {
+				Ui::Text::String caption(st::messageTextStyle, { textToDraw });
 				auto captionRect = QRect(
 					mediaGeometry.left(),
 					mediaGeometry.bottom() + 1,
@@ -827,31 +816,11 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				// Use the standard message text color for captions.
 				p.setPen(stm->historyTextFg);
 				const auto padding = QMargins(8, 0, 8, 0);
-				const auto elision = (_captionsCount > 1);
-
-				uint16 captionOffset = 0;
-				for (int j = 0; j < i; ++j) {
-					captionOffset += _parts[j].caption.length();
-				}
-				const auto captionLength = part.caption.length();
-				const auto intersection = TextSelection{
-					std::max(context.selection.from, captionOffset),
-					std::min(context.selection.to, uint16(captionOffset + captionLength))
-				};
-				const auto partSelection = (intersection.from < intersection.to)
-					? TextSelection{
-						uint16(intersection.from - captionOffset),
-						uint16(intersection.to - captionOffset)
-					}
-					: TextSelection{};
-
-				part.caption.draw(p, {
-					.position = captionRect.topLeft() + QPoint(padding.left(), padding.top()),
-					.availableWidth = captionRect.width() - padding.left() - padding.right(),
-					.palette = &stm->textPalette,
-					.selection = partSelection,
-					.elisionLines = elision ? 1 : 0,
-				});
+				caption.draw(p,
+					captionRect.left() + padding.left(),
+					captionRect.top() + padding.top(),
+					captionRect.width() - padding.left() - padding.right(),
+					style::al_left);
 			}
 		}
 		
@@ -992,20 +961,18 @@ TextState GroupedMedia::getPartState(
 			if (_mode == Mode::Grid
 				&& !part.captionRect.isEmpty()
 				&& part.captionRect.contains(point)) {
-				const auto originalText = part.item->actualTextForCopy();
+				const auto originalText = part.item->originalText();
 				if (!originalText.empty()) {
-					uint16 captionOffset = 0;
-					for (int j = 0; j < i; ++j) {
-						captionOffset += _parts[j].caption.length();
+					auto result = TextState(part.item);
+					// Tooltip for ellipsized captions.
+					Ui::Text::String fullCaption(st::messageTextStyle, originalText, kDefaultTextOptions);
+					const auto padding = QMargins(8, 0, 8, 0);
+					const auto textWidth = part.geometry.width() - padding.left() - padding.right();
+					if (fullCaption.maxWidth() > textWidth) {
+						result.customTooltip = true;
+						result.customTooltipText = originalText.text;
 					}
-					const auto state = part.caption.getState(
-						point - part.captionRect.topLeft(),
-						part.captionRect.width(),
-						request.forText());
-				auto result = TextState(part.item, state);
-				result.symbol += captionOffset;
-				result.link = std::make_shared<CaptionClickHandler>(i);
-				return result;
+					return result;
 				}
 			}
 			auto result = part.content->getStateGrouped(
@@ -1058,10 +1025,10 @@ TextState GroupedMedia::getPartState(
 					int totalW = 0;
 					if (viewsW > 0) totalW += viewsW + textGap;
 					if (editedW > 0) totalW += editedW + textGap;
-				totalW += timeIdW;
+					totalW += timeIdW;
 
 					const int startX = currentRight - st::msgDateImgDelta - totalW;
-				int currentX = startX;
+					int currentX = startX;
 
 					QRect viewsRect;
 					if (viewsW > 0) {
@@ -1077,9 +1044,9 @@ TextState GroupedMedia::getPartState(
 					// Edited tooltip should cover both the edited icon and the time+id area when present.
 					const QRect editedRect = editedNow
 						? QRect(editedOnlyRect.isNull() ? timeIdRect.left() : editedOnlyRect.left(),
-								lineTop,
-								(editedOnlyRect.isNull() ? 0 : editedOnlyRect.width()) + timeIdRect.width(),
-								lineH)
+							lineTop,
+							(editedOnlyRect.isNull() ? 0 : editedOnlyRect.width()) + timeIdRect.width(),
+							lineH)
 						: QRect();
 
 					// Views tooltip
@@ -1109,8 +1076,7 @@ TextState GroupedMedia::getPartState(
 						result.customTooltip = true;
 						result.customTooltipText = tooltipText;
 					}
-				}
-			} else {
+				} else {
 				// Calculate hover rect for items 2..N.
 				QString infoText;
 				if (edited && !item->hideEditedBadge()) {
@@ -1130,8 +1096,6 @@ TextState GroupedMedia::getPartState(
 					const auto vPadding = st::msgDateImgPadding.y();
 					const auto dateW = textWidth + (2 * hPadding);
 					const auto dateH = textHeight + 2 * vPadding;
-					const int currentRight = part.geometry.x() + part.geometry.width();
-					const auto y = part.geometry.y();
 					const auto bubbleX = currentRight - dateW - st::msgDateImgDelta;
 					const auto bubbleY = y;
 					const QRect infoRect(bubbleX, bubbleY, dateW, dateH);
@@ -1164,9 +1128,9 @@ TextState GroupedMedia::getPartState(
 					}
 				}
 			}
-			}
+		}
 			// --- END: MODIFIED LOGIC FOR COLUMN MODE ---
-			// START: New tooltip logic for Grid album items (2..N).
+				// START: New tooltip logic for Grid album items (2..N).
 			else if (_mode == Mode::Grid && (&part != &_parts.front())) {
 				QString infoText;
 				if (edited && !item->hideEditedBadge()) {
@@ -1284,16 +1248,10 @@ PointState GroupedMedia::pointState(QPoint point) const {
 TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 	const auto groupPadding = groupedPadding();
 	auto result = getPartState(point - QPoint(0, groupPadding.top()), request);
-
-	const auto isCaptionLink = result.link
-		&& result.link->property(kCaptionPartIndexProperty).isValid();
-
 	if (const auto tagged = lookupSpoilerTagMedia()) {
 		if (QRect(0, 0, width(), height()).contains(point)) {
 			if (auto link = tagged->spoilerTagLink()) {
-				if (!isCaptionLink) {
-					result.link = std::move(link);
-				}
+				result.link = std::move(link);
 			}
 		}
 	}
@@ -1347,34 +1305,34 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			const auto bubbleY = bottom + st::msgDateImgDelta; // 'bottom' here is actually the top edge.
 
 			const QRect infoRect(bubbleX, bubbleY, bubbleW, bubbleH);
-			// Build three hover areas for Grid first bubble from the left edge:
-			// views (icon+count), edited+time+id (if edited), time+id.
-			const int iconGap = 1;
-			const int iconW = st::historyViewsWidth;
-			const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
-			const int editedW = edited ? font->width(QString::fromUtf8("✏️") + " ") : 0;
-			const int timeIdW = font->width(dateText + msgIdText);
-			int hoverLeft = bubbleX + hPadding;
-			QRect viewsRect, timeIdRect, editedRect;
-			if (viewsW > 0) {
-				viewsRect = QRect(hoverLeft, bubbleY, viewsW, bubbleH);
-				hoverLeft += viewsW + textPadding;
-			}
-			QRect editedOnlyRect;
-			if (edited) {
-				editedOnlyRect = QRect(hoverLeft, bubbleY, editedW, bubbleH);
-				hoverLeft += editedW + textPadding;
-			}
-			timeIdRect = QRect(hoverLeft, bubbleY, timeIdW, bubbleH);
-			// Edited tooltip covers both the edited icon and the time+id area when present.
-			if (edited) {
-				editedRect = QRect(editedOnlyRect.isNull() ? timeIdRect.left() : editedOnlyRect.left(),
-							bubbleY,
-							(editedOnlyRect.isNull() ? 0 : editedOnlyRect.width()) + timeIdRect.width(),
-							bubbleH);
-			}
-			// Views tooltip
-			if (viewsW > 0 && viewsRect.contains(point)) {
+				// Build three hover areas for Grid first bubble from the left edge:
+				// views (icon+count), edited+time+id (if edited), time+id.
+				const int iconGap = 1;
+				const int iconW = st::historyViewsWidth;
+				const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
+				const int editedW = edited ? font->width(QString::fromUtf8("✏️") + " ") : 0;
+				const int timeIdW = font->width(dateText + msgIdText);
+				int hoverLeft = bubbleX + hPadding;
+				QRect viewsRect, timeIdRect, editedRect;
+				if (viewsW > 0) {
+					viewsRect = QRect(hoverLeft, bubbleY, viewsW, bubbleH);
+					hoverLeft += viewsW + textPadding;
+				}
+				QRect editedOnlyRect;
+				if (edited) {
+					editedOnlyRect = QRect(hoverLeft, bubbleY, editedW, bubbleH);
+					hoverLeft += editedW + textPadding;
+				}
+				timeIdRect = QRect(hoverLeft, bubbleY, timeIdW, bubbleH);
+				// Edited tooltip covers both the edited icon and the time+id area when present.
+				if (edited) {
+					editedRect = QRect(editedOnlyRect.isNull() ? timeIdRect.left() : editedOnlyRect.left(),
+						bubbleY,
+						(editedOnlyRect.isNull() ? 0 : editedOnlyRect.width()) + timeIdRect.width(),
+						bubbleH);
+				}
+				// Views tooltip
+				if (viewsW > 0 && viewsRect.contains(point)) {
 				result.customTooltip = true;
 				result.customTooltipText = QString("Views: ") + viewsText;
 				return result;
@@ -1414,7 +1372,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 				return result;
 			}
 
-			// Remove conflicting right-anchored views hover area; views belong to the left.
+				// Remove conflicting right-anchored views hover area; views belong to the left.
 
 			if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 				auto fullRight = width();
@@ -1430,7 +1388,6 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			}
 		}
 	}
-
 	return result;
 }
 
@@ -1456,26 +1413,6 @@ bool GroupedMedia::dragItemByHandler(const ClickHandlerPtr &p) const {
 TextSelection GroupedMedia::adjustSelection(
 		TextSelection selection,
 		TextSelectType type) const {
-	if (_mode == Mode::Grid) {
-		auto checked = 0;
-		for (const auto &part : _parts) {
-			const auto &caption = part.caption;
-			const auto length = caption.length();
-			if (selection.from >= checked && selection.from < checked + length) {
-				const auto partSelection = TextSelection{
-					uint16(selection.from - checked),
-					uint16(selection.to - checked),
-				};
-				const auto adjusted = caption.adjustSelection(partSelection, type);
-				return {
-					uint16(adjusted.from + checked),
-					uint16(adjusted.to + checked),
-				};
-			}
-			checked += length;
-		}
-		return selection;
-	}
 	if (_mode != Mode::Column) {
 		return {};
 	}
@@ -1500,13 +1437,6 @@ TextSelection GroupedMedia::adjustSelection(
 }
 
 uint16 GroupedMedia::fullSelectionLength() const {
-	if (_mode == Mode::Grid) {
-		uint16 result = 0;
-		for (const auto &part : _parts) {
-			result += part.caption.length();
-		}
-		return result;
-	}
 	if (_mode != Mode::Column) {
 		return {};
 	}
@@ -1518,9 +1448,6 @@ uint16 GroupedMedia::fullSelectionLength() const {
 }
 
 bool GroupedMedia::hasTextForCopy() const {
-	if (_mode == Mode::Grid) {
-		return _captionsCount > 0;
-	}
 	if (_mode != Mode::Column) {
 		return {};
 	}
@@ -1534,32 +1461,6 @@ bool GroupedMedia::hasTextForCopy() const {
 
 TextForMimeData GroupedMedia::selectedText(
 		TextSelection selection) const {
-	if (_mode == Mode::Grid) {
-		TextForMimeData result;
-		uint16 captionOffset = 0;
-		for (const auto &part : _parts) {
-			const auto captionLength = part.caption.length();
-			if (!captionLength) {
-				continue;
-			}
-			const auto intersection = TextSelection{
-				std::max(selection.from, captionOffset),
-				std::min(selection.to, uint16(captionOffset + captionLength))
-			};
-			if (intersection.from < intersection.to) {
-				const auto partSelection = TextSelection{
-					uint16(intersection.from - captionOffset),
-					uint16(intersection.to - captionOffset)
-				};
-				if (!result.empty()) {
-					result.append(u"\n\n"_q);
-				}
-				result.append(part.caption.toTextForMimeData(partSelection));
-			}
-			captionOffset += captionLength;
-		}
-		return result;
-	}
 	if (_mode != Mode::Column) {
 		return {};
 	}
@@ -1874,71 +1775,14 @@ bool GroupedMedia::computeNeedBubble() const {
 }
 
 bool GroupedMedia::needInfoDisplay() const {
-
 	const auto item = _parent->data();
-
 	return (_mode != Mode::Column)
-
 		&& (item->isSending()
-
 			|| item->awaitingVideoProcessing()
-
 			|| item->hasFailed()
-
 			|| _parent->isUnderCursor()
-
 			|| (_parent->delegate()->elementContext() == Context::ChatPreview)
-
 			|| _parent->isLastAndSelfMessage());
-
-}
-
-
-
-QString GroupedMedia::getCaption(int partIndex) const {
-
-	if (partIndex < 0 || partIndex >= _parts.size()) {
-
-		return {};
-
-	}
-
-		return _parts[partIndex].caption.toString();
-
-	}
-
-bool GroupedMedia::hasSelectableText() const {
-	return fullSelectionLength() > 0;
-}
-
-	
-	int GroupedMedia::captionPartIndexAt(QPoint point) const {
-
-	if (_mode == Mode::Grid) {
-
-		for (int i = 0, size = _parts.size(); i < size; ++i) {
-
-			if (!_parts[i].captionRect.isEmpty()
-
-				&& _parts[i].captionRect.contains(point)) {
-
-				return i;
-
-			}
-
-		}
-
-	}
-
-		return -1;
-
-	}
-		
-HistoryItem *GroupedMedia::getItem(int partIndex) const {
-	if (partIndex < 0 || partIndex >= _parts.size()) {
-		return nullptr;
-	}
-	return _parts[partIndex].item;
 }
 
 } // namespace HistoryView

@@ -3222,11 +3222,8 @@ MsgId HistoryItem::originalId() const {
 }
 
 const TextWithEntities &HistoryItem::originalText() const {
-	return _text;
-}
-
-const TextWithEntities &HistoryItem::actualTextForCopy() const {
-	return _originalMsg;
+	static const auto kEmpty = TextWithEntities();
+	return isService() ? kEmpty : _text;
 }
 
 const TextWithEntities &HistoryItem::translatedText() const {

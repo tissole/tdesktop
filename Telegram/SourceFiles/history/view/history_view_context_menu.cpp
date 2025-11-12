@@ -1,4 +1,4 @@
-﻿/*
+﻿﻿/*
 This file is part of Telegram Desktop,
 the official desktop application for the Telegram messaging service.
 
@@ -6,7 +6,6 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/history_view_context_menu.h"
-#include "history/view/media/history_view_media_grouped.h"
 
 #include "api/api_attached_stickers.h"
 #include "api/api_common.h"
@@ -99,7 +98,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat_helpers.h"
 #include "styles/style_menu_icons.h"
 
-#include <QApplication>
+#include <QtGui/QGuiApplication>
 #include <QtGui/QClipboard>
 
 #include "data/data_saved_sublist.h"
@@ -1577,47 +1576,6 @@ ContextMenuRequest::ContextMenuRequest(
 base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		not_null<ListWidget*> list,
 		const ContextMenuRequest &request) {
-	if (request.view) {
-		if (const auto media = request.view->media()) {
-			if (const auto grouped = dynamic_cast<const GroupedMedia*>(media)) {
-				const auto globalPoint = QCursor::pos();
-				const auto point = list->mapFromGlobal(globalPoint)
-					- QPoint(0, request.view->y());
-				                if (const auto partIndex = grouped->captionPartIndexAt(point); partIndex != -1) {
-				                    auto menu = base::make_unique_q<Ui::PopupMenu>(list, st::popupMenuWithIcons);
-				                    const auto selection = list->textSelection();
-				                    if (selection.empty()) {
-				                        if (const auto partItem = grouped->getItem(partIndex)) {
-				                            const auto captionTextForCopy = partItem->actualTextForCopy().text;
-				                            menu->addAction(tr::lng_context_copy_text(tr::now), [=] {
-				                                QApplication::clipboard()->setText(captionTextForCopy);
-				                            });
-				                        }
-				                    } else {
-				                        menu->addAction(tr::lng_context_copy_selected(tr::now), [=] {
-				                            TextUtilities::SetClipboardText(grouped->selectedText(selection));
-				                        });
-				                    }
-				                    if (const auto partItem = grouped->getItem(partIndex)) {
-				                        const auto captionWithEntities = partItem->actualTextForCopy();
-				                        if (!captionWithEntities.text.isEmpty() && !Ui::SkipTranslate(captionWithEntities)) {
-				                            menu->addAction(tr::lng_context_translate(tr::now), [=, &request] {
-				                                const auto item = request.item;
-				                                if (!item) return;
-				                                list->controller()->show(Box(
-				                                    Ui::TranslateBox,
-				                                    item->history()->peer,
-				                                    MsgId(), // No specific message ID for part caption
-				                                    captionWithEntities,
-				                                    list->hasCopyRestriction(item)));
-				                            }, &st::menuIconTranslate);
-				                        }
-				                    }
-				                    return menu;
-				                }			}
-		}
-	}
-
 	const auto link = request.link;
 	const auto view = request.view;
 	const auto item = request.item;

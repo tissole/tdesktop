@@ -403,7 +403,6 @@ public:
 	[[nodiscard]] TextWithEntities translatedTextWithLocalEntities() const;
 	[[nodiscard]] const std::vector<ClickHandlerPtr> &customTextLinks() const;
 	[[nodiscard]] TextForMimeData clipboardText() const;
-	[[nodiscard]] const TextWithEntities &actualTextForCopy() const;
 
 	bool changeViewsCount(int count);
 	void setForwardsCount(int count);

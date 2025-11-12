@@ -18,22 +18,7 @@ class Media;
 
 namespace HistoryView {
 
-class CaptionClickHandler : public ClickHandler {
-public:
-	CaptionClickHandler(int partIndex);
-
-	void onClick(ClickContext context) const override;
-
-	int partIndex() const {
-		return _partIndex;
-	}
-
-private:
-	int _partIndex;
-};
-
 class GroupedMedia : public Media {
-public:
 public:
 	static constexpr auto kMaxSize = 10;
 
@@ -116,18 +101,6 @@ public:
 	}
 	bool enforceBubbleWidth() const override;
 
-	QString getCaption(int partIndex) const;
-	HistoryItem *getItem(int partIndex) const;
-	[[nodiscard]] bool hasSelectableText() const override;
-	int captionPartIndexAt(QPoint point) const;
-
-	TextSelection textSelection() const override {
-		return _selectedTextRange;
-	}
-	void setTextSelection(TextSelection selection) override {
-		_selectedTextRange = selection;
-	}
-
 	void stopAnimation() override;
 	void checkAnimation() override;
 	bool hasHeavyPart() const override;
@@ -155,7 +128,6 @@ private:
 		mutable QPixmap cache;
         int _captionHeight = 0;
 		mutable QRect captionRect;
-		Ui::Text::String caption;
 
 	};
 
@@ -191,10 +163,6 @@ private:
 	Mode _mode = Mode::Grid;
 	bool _needBubble : 1 = false;
 	bool _purchasedPriceTag : 1 = false;
-	int _captionsCount = 0;
-
-	mutable int _captionActivePart = -1;
-	TextSelection _selectedTextRange;
 
 	void drawMessageIdInfo(
 		Painter &p,

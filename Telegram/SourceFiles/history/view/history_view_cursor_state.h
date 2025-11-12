@@ -9,8 +9,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 class HistoryItem;
 
-constexpr int kCaptionPartIndexProperty = 100;
-
 namespace HistoryView {
 
 class Element;
