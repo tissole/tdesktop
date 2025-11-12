@@ -1654,10 +1654,11 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 			if (media && request.pointState == PointState::GroupPart) {
 				// Check if media is a GroupedMedia in Grid mode
 				if (const auto groupedMedia = dynamic_cast<HistoryView::GroupedMedia*>(media)) {
-					// For Grid mode, check if click is on a caption
+					// For Grid mode, check if click is on a caption by checking position
 					const auto point = list->mapFromGlobal(QCursor::pos());
 					const auto textState = media->textState(point, StateRequest());
-					return textState.customTooltip && !textState.customTooltipText.isEmpty();
+					// If we have textState with symbol info, it's likely a caption click
+					return textState.symbol > 0 || textState.afterSymbol;
 				}
 			}
 			return false;
@@ -1672,17 +1673,10 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 					if (const auto item = owner->message(itemId)) {
 						if (!list->showCopyRestriction(item)) {
 							if (isGridCaptionClick) {
-								// Copy caption text of clicked item
-								const auto point = list->mapFromGlobal(QCursor::pos());
-								const auto textState = media->textState(point, StateRequest());
-								if (textState.customTooltip && !textState.customTooltipText.isEmpty()) {
-									TextUtilities::SetClipboardText(textState.customTooltipText);
-								} else {
-									// Fallback: try to get caption from item
-									const auto originalText = item->originalText();
-									if (!originalText.empty()) {
-										TextUtilities::SetClipboardText(originalText.text);
-									}
+								// Copy caption text - get it from the item directly
+								const auto originalText = item->originalText();
+								if (!originalText.empty()) {
+									TextUtilities::SetClipboardText(originalText.text);
 								}
 							} else if (asGroup) {
 								if (const auto group = owner->groups().find(item)) {

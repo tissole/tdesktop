@@ -1003,8 +1003,11 @@ TextState GroupedMedia::getPartState(
 					
 
 					
-					result.customTooltip = true;
-					result.customTooltipText = originalText.text;
+					// Tooltip for ellipsized captions only.
+					if (caption.maxWidth() > captionWidth) {
+						result.customTooltip = true;
+						result.customTooltipText = originalText.text;
+					}
 					return result;
 				}
 			}
