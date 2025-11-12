@@ -836,7 +836,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					captionRect.top() + padding.top(),
 					captionRect.width() - padding.left() - padding.right(),
 					style::al_left,
-					selection,
+					0, // yFrom
+					-1, // yTo (till end)
 					selection);
 			}
 		}
@@ -992,16 +993,12 @@ TextState GroupedMedia::getPartState(
 					
 					// Get text state at click position
 					const auto textState = caption.getState(
-						clickX,
-						clickY,
-						captionWidth,
-						request
+						QPoint(clickX, clickY),
+						captionWidth
 					);
 					
 					result.symbol = textState.symbol;
 					result.afterSymbol = textState.afterSymbol;
-					result.cursor = textState.cursor;
-					result.over = textState.over;
 					result.link = textState.link;
 					
 					// Tooltip for ellipsized captions.
@@ -1482,7 +1479,7 @@ TextSelection GroupedMedia::adjustSelection(
 				// For Grid mode, we need to handle caption selection differently
 				// Each caption is treated as a separate text block
 				const auto captionLength = originalText.text.size();
-				if (selection.from == 0 && selection.to == FullSelection) {
+				if (selection.from == 0xFFFF && selection.to == 0xFFFF) {
 					// Full selection of this caption
 					return AddGroupItemSelection(selection, i);
 				}
@@ -1557,10 +1554,11 @@ TextForMimeData GroupedMedia::selectedText(
 			if (IsGroupItemSelection(selection, i)) {
 				const auto originalText = part.item->originalText();
 				if (!originalText.empty()) {
+					auto textCopy = originalText;
 					if (result.empty()) {
-						result = TextForMimeData::Rich(originalText);
+						result = TextForMimeData::Rich(std::move(textCopy));
 					} else {
-						result.append(u"\n\n"_q).append(TextForMimeData::Rich(originalText));
+						result.append(u"\n\n"_q).append(TextForMimeData::Rich(std::move(textCopy)));
 					}
 				}
 			}
