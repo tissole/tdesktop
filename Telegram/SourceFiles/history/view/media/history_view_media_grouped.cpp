@@ -1001,13 +1001,8 @@ TextState GroupedMedia::getPartState(
 					result.afterSymbol = textState.afterSymbol;
 					result.link = textState.link;
 					
-					// Tooltip for ellipsized captions.
-					if (caption.maxWidth() > captionWidth) {
-						result.customTooltip = true;
-						result.customTooltipText = originalText.text;
-					}
+
 					
-					// Set flag to indicate this is a caption click
 					result.customTooltip = true;
 					result.customTooltipText = originalText.text;
 					return result;
