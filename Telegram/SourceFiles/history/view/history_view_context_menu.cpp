@@ -1665,7 +1665,25 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 			return false;
 		}();
 		
-		if (!link && (view->hasVisibleText() || mediaHasTextForCopy || isGridCaptionClick)) {
+		// Also check if this is Grid media with any caption (for broader detection)
+		const auto isGridMediaWithCaption = [&]() -> bool {
+			if (media && request.pointState == PointState::GroupPart) {
+				if (const auto groupedMedia = static_cast<GroupedMedia*>(media)) {
+					// Check if any item in this group has a caption
+					const auto owner = &view->history()->owner();
+					if (const auto group = owner->groups().find(view->data())) {
+						for (const auto &item : group->items) {
+							if (!item->originalText().empty()) {
+								return true;
+							}
+						}
+					}
+				}
+			}
+			return false;
+		}();
+		
+		if (!link && (view->hasVisibleText() || mediaHasTextForCopy || isGridCaptionClick || isGridMediaWithCaption)) {
 			if (!list->hasCopyRestriction(view->data())) {
 				const auto asGroup = (request.pointState != PointState::GroupPart);
 				
@@ -1673,12 +1691,20 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 				result->addAction(tr::lng_context_copy_text(tr::now), [=] {
 					if (const auto item = owner->message(itemId)) {
 						if (!list->showCopyRestriction(item)) {
-							if (isGridCaptionClick) {
-								// Copy caption text - get it from the item directly
-								const auto originalText = item->originalText();
-								if (!originalText.empty()) {
-									auto textCopy = originalText;
-									TextUtilities::SetClipboardText(TextForMimeData::Rich(std::move(textCopy)));
+							// For Grid media, try to copy caption first
+							if (media && request.pointState == PointState::GroupPart) {
+								if (const auto groupedMedia = static_cast<GroupedMedia*>(media)) {
+									const auto owner = &view->history()->owner();
+									if (const auto group = owner->groups().find(item)) {
+										for (const auto &groupItem : group->items) {
+											const auto originalText = groupItem->originalText();
+											if (!originalText.empty()) {
+												auto textCopy = originalText;
+												TextUtilities::SetClipboardText(TextForMimeData::Rich(std::move(textCopy)));
+												return;
+											}
+										}
+									}
 								}
 							} else if (asGroup) {
 								if (const auto group = owner->groups().find(item)) {
