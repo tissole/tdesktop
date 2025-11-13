@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/history_view_context_menu.h"
+#include "history/view/media/history_view_media_grouped.h"
 
 #include "api/api_attached_stickers.h"
 #include "api/api_common.h"
@@ -1653,7 +1654,7 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		const auto isGridCaptionClick = [&]() -> bool {
 			if (media && request.pointState == PointState::GroupPart) {
 				// Check if media is a GroupedMedia in Grid mode
-				if (const auto groupedMedia = dynamic_cast<HistoryView::GroupedMedia*>(media)) {
+				if (const auto groupedMedia = static_cast<GroupedMedia*>(media)) {
 					// For Grid mode, check if click is on a caption by checking position
 					const auto point = list->mapFromGlobal(QCursor::pos());
 					const auto textState = media->textState(point, StateRequest());
@@ -1676,7 +1677,7 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								// Copy caption text - get it from the item directly
 								const auto originalText = item->originalText();
 								if (!originalText.empty()) {
-									TextUtilities::SetClipboardText(originalText.text);
+									TextUtilities::SetClipboardText(TextForMimeData::Rich(originalText));
 								}
 							} else if (asGroup) {
 								if (const auto group = owner->groups().find(item)) {
