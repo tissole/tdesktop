@@ -1677,7 +1677,8 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								// Copy caption text - get it from the item directly
 								const auto originalText = item->originalText();
 								if (!originalText.empty()) {
-									TextUtilities::SetClipboardText(TextForMimeData::Rich(originalText));
+									auto textCopy = originalText;
+									TextUtilities::SetClipboardText(TextForMimeData::Rich(std::move(textCopy)));
 								}
 							} else if (asGroup) {
 								if (const auto group = owner->groups().find(item)) {
