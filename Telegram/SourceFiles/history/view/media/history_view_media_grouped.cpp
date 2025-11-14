@@ -991,10 +991,12 @@ TextState GroupedMedia::getPartState(
 					const auto clickX = point.x() - part.captionRect.left() - padding.left();
 					const auto clickY = point.y() - part.captionRect.top() - padding.top();
 					
-					// Get text state at click position
+					// Get text state using simple approach
+					const auto captionLayout = QSize(captionWidth, part._captionHeight);
 					const auto textState = caption.getState(
-						QPoint(clickX, clickY),
-						captionWidth
+						point - part.captionRect.topLeft(),
+						captionLayout,
+						request
 					);
 					
 					result.symbol = textState.symbol;
