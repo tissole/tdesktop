@@ -992,7 +992,10 @@ TextState GroupedMedia::getPartState(
 					const auto clickY = point.y() - part.captionRect.top() - padding.top();
 					
 					// Get text state using simple approach
-					const auto captionLayout = QSize(captionWidth, part._captionHeight);
+					const auto captionLayout = Ui::Text::GeometryDescriptor{
+						part.captionRect.width() - padding.left() - padding.right(),
+						part._captionHeight
+					};
 					const auto textState = caption.getState(
 						point - part.captionRect.topLeft(),
 						captionLayout,
