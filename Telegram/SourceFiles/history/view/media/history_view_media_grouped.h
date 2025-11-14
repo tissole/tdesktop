@@ -127,11 +127,15 @@ private:
 		mutable uint64 cacheKey = 0;
 		mutable QPixmap cache;
         int _captionHeight = 0;
+        int _rowCaptionHeight = 0;
 		mutable QRect captionRect;
+		mutable TextSelection _captionSelection = { 0, 0 };
 
 	};
 
 	[[nodiscard]] static Mode DetectMode(not_null<Data::Media*> media);
+
+	void setCaptionSelection(int partIndex, TextSelection selection);
 
 	template <typename DataMediaRange>
 	bool applyGroup(const DataMediaRange &medias);

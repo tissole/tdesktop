@@ -1652,16 +1652,27 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		if (!link && (view->hasVisibleText() || mediaHasTextForCopy)) {
 			if (!list->hasCopyRestriction(view->data())) {
 				const auto asGroup = (request.pointState != PointState::GroupPart);
-				result->addAction(tr::lng_context_copy_text(tr::now), [=] {
+
+				// Check if we have caption-specific text to copy
+				const auto hasCaptionText = !request.selectedText.empty()
+					&& (request.pointState == PointState::GroupPart);
+
+				result->addAction(hasCaptionText
+					? tr::lng_context_copy_selected(tr::now)
+					: tr::lng_context_copy_text(tr::now), [=] {
 					if (const auto item = owner->message(itemId)) {
 						if (!list->showCopyRestriction(item)) {
-							if (asGroup) {
+							if (hasCaptionText) {
+								// Copy selected caption text
+								TextUtilities::SetClipboardText(request.selectedText);
+							} else if (asGroup) {
 								if (const auto group = owner->groups().find(item)) {
 									TextUtilities::SetClipboardText(HistoryGroupText(group));
 									return;
 								}
+							} else {
+								TextUtilities::SetClipboardText(HistoryItemText(item));
 							}
-							TextUtilities::SetClipboardText(HistoryItemText(item));
 						}
 					}
 				}, &st::menuIconCopy);

@@ -255,85 +255,76 @@ QSize GroupedMedia::countOptimalSize() {
 		: LayoutPlaylist(sizes);
 	Assert(layout.size() == _parts.size());
 
-	// --- START MODIFICATION: Simplified layout and new caption logic ---
-
-	// 1. First, apply the media layout exactly as calculated.
-	// This prevents cropping and irregular spacing of media items.
-	std::map<int, std::vector<int>> rows;
-	for (auto i = 0; i != _parts.size(); ++i) {
-		_parts[i].initialGeometry = layout[i].geometry;
-		_parts[i].sides = layout[i].sides;
-		rows[layout[i].geometry.y()].push_back(i);
-		accumulate_max(
-			maxWidth,
-			_parts[i].initialGeometry.x() + _parts[i].initialGeometry.width());
+	auto minHeight = 0;
+	for (auto i = 0, count = int(layout.size()); i != count; ++i) {
+		const auto &item = layout[i];
+		accumulate_max(maxWidth, item.geometry.x() + item.geometry.width());
+		accumulate_max(minHeight, item.geometry.y() + item.geometry.height());
+		_parts[i].initialGeometry = item.geometry;
+		_parts[i].sides = item.sides;
 	}
 
-	// 2. Identify which items have captions.
-	std::vector<int> captionIndices;
-	for (auto i = 0; i != _parts.size(); ++i) {
-		if (!_parts[i].item->originalText().empty()) {
-			captionIndices.push_back(i);
-		}
-	}
-	const auto captionCount = captionIndices.size();
-	const bool fullCaptionOnFirst = (captionCount == 1 && captionIndices[0] == 0);
-
-	// 3. Calculate caption heights and adjust row positions.
-	auto y = 0.;
-	const auto spacing = (_mode == Mode::Grid) ? st::historyGroupSkip : 0.;
-	for (auto const& [rowY, indices] : rows) {
-		auto maxMediaHeight = 0.;
-		for (const auto i : indices) {
-			accumulate_max(maxMediaHeight, float64(_parts[i].initialGeometry.height()));
+	// Calculate caption heights for Grid mode without modifying the layout structure
+	if (_mode == Mode::Grid) {
+		// Group items by rows to calculate caption heights
+		std::map<int, std::vector<int>> rows;
+		for (auto i = 0; i != _parts.size(); ++i) {
+			rows[_parts[i].initialGeometry.y()].push_back(i);
 		}
 
-		// Apply the new Y position to all items in this row first.
-		for (const auto i : indices) {
-			_parts[i].initialGeometry.setY(y);
-			_parts[i].initialGeometry.setHeight(maxMediaHeight);
-		}
-
-		// Now, calculate the extra height needed for captions in this row.
-		auto maxCaptionHeight = 0.;
-		const auto padding = QMargins(8, 0, 8, 0);
-		for (const auto i : indices) {
-			auto &part = _parts[i];
-			const auto originalText = part.item->originalText();
-			if (!originalText.empty()) {
-				Ui::Text::String caption(
-					st::messageTextStyle,
-					originalText,
-					kDefaultTextOptions);
-				const auto captionWidth = part.initialGeometry.width()
-					- padding.left()
-					- padding.right();
-
-				if (fullCaptionOnFirst && i == 0) {
-					// Case 1: Only first item has a caption, show it in full.
-					part._captionHeight = caption.countHeight(captionWidth)
-						+ padding.top()
-						+ padding.bottom();
-				} else {
-					// Case 2: Multiple captions or single non-first caption. Elide to one line.
-					part._captionHeight = (captionWidth > 0)
-						? st::messageTextStyle.font->height
-						: 0;
-				}
-				accumulate_max(maxCaptionHeight, float64(part._captionHeight));
-			} else {
-				part._captionHeight = 0.;
+		// Identify which items have captions
+		std::vector<int> captionIndices;
+		for (auto i = 0; i != _parts.size(); ++i) {
+			if (!_parts[i].item->originalText().empty()) {
+				captionIndices.push_back(i);
 			}
 		}
+		const auto captionCount = captionIndices.size();
+		const bool fullCaptionOnFirst = (captionCount == 1 && captionIndices[0] == 0);
 
-		y += maxMediaHeight + maxCaptionHeight + spacing;
-	}
-	// --- END MODIFICATION ---
+		// Calculate caption heights for each row
+		const auto padding = QMargins(8, 4, 8, 4);
+		for (auto const& [rowY, indices] : rows) {
+			auto maxCaptionHeight = 0.;
 
-	auto minHeight = y > 0 ? (y - spacing) : 0;
-	if (minHeight > 0 && captionCount > 0) {
-		// Add a small gap between the last media row and its caption.
-		minHeight += 1;
+			for (const auto i : indices) {
+				auto &part = _parts[i];
+				const auto originalText = part.item->originalText();
+				if (!originalText.empty()) {
+					Ui::Text::String caption(
+						st::messageTextStyle,
+						originalText,
+						kDefaultTextOptions);
+					const auto captionWidth = part.initialGeometry.width()
+						- padding.left()
+						- padding.right();
+
+					if (fullCaptionOnFirst && i == 0) {
+						// Case 1: Only first item has a caption, show it in full
+						part._captionHeight = caption.countHeight(captionWidth)
+							+ padding.top()
+							+ padding.bottom();
+					} else {
+						// Case 2: Multiple captions or single non-first caption. Elide to one line
+						part._captionHeight = (captionWidth > 0)
+							? st::messageTextStyle.font->height + padding.top() + padding.bottom()
+							: 0;
+					}
+					accumulate_max(maxCaptionHeight, float64(part._captionHeight));
+				} else {
+					part._captionHeight = 0.;
+				}
+			}
+
+			// Store the max caption height for this row
+			if (maxCaptionHeight > 0) {
+				for (const auto i : indices) {
+					_parts[i]._rowCaptionHeight = maxCaptionHeight;
+				}
+				// Add caption height to total minHeight
+				minHeight += maxCaptionHeight;
+			}
+		}
 	}
 
 	const auto groupPadding = groupedPadding();
@@ -356,95 +347,112 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		}
 		newHeight = top;
 	} else {
-		// --- START MODIFICATION: Simplified scaling and new caption logic ---
+		// Original Grid scaling logic - preserve layout structure
+		const auto initialSpacing = st::historyGroupSkip;
 		const auto factor = newWidth / float64(maxWidth());
-		const auto scale = [&](float64 value) {
-			return value * factor;
+		const auto scale = [&](int value) {
+			return int(base::SafeRound(value * factor));
 		};
+		const auto spacing = scale(initialSpacing);
+		for (auto &part : _parts) {
+			const auto sides = part.sides;
+			const auto initialGeometry = part.initialGeometry;
+			const auto needRightSkip = !(sides & RectPart::Right);
+			const auto needBottomSkip = !(sides & RectPart::Bottom);
+			const auto initialLeft = initialGeometry.x();
+			const auto initialTop = initialGeometry.y();
+			const auto initialRight = initialLeft
+				+ initialGeometry.width()
+				+ (needRightSkip ? initialSpacing : 0);
+			const auto initialBottom = initialTop
+				+ initialGeometry.height()
+				+ (needBottomSkip ? initialSpacing : 0);
+			const auto left = scale(initialLeft);
+			const auto top = scale(initialTop);
+			const auto width = scale(initialRight)
+				- left
+				- (needRightSkip ? spacing : 0);
+			const auto height = scale(initialBottom)
+				- top
+				- (needBottomSkip ? spacing : 0);
+			part.geometry = QRect(left, top, width, height);
 
-		// 1. Get row structure from initial layout.
-		std::map<int, std::vector<int>> rows;
-		for (auto i = 0; i != _parts.size(); ++i) {
-			rows[_parts[i].initialGeometry.y()].push_back(i);
+			accumulate_max(newHeight, top + height);
 		}
 
-		// 2. Identify which items have captions.
-		std::vector<int> captionIndices;
-		for (auto i = 0; i != _parts.size(); ++i) {
-			if (!_parts[i].item->originalText().empty()) {
-				captionIndices.push_back(i);
-			}
-		}
-		const auto captionCount = captionIndices.size();
-		const bool fullCaptionOnFirst = (captionCount == 1 && captionIndices[0] == 0);
-
-		// 3. Scale layout and calculate caption heights row by row.
-		auto y = 0.;
-		const auto spacing = scale((_mode == Mode::Grid) ? st::historyGroupSkip : 0.);
-		for (auto const& [rowY, indices] : rows) {
-			// First, scale the media geometry for all items in this row.
-			for (const auto i : indices) {
-				auto &part = _parts[i];
-				const auto initial = part.initialGeometry;
-				const auto sides = part.sides;
-				const auto needRightSkip = !(sides & RectPart::Right);
-				const auto left = scale(initial.x());
-				const auto width = scale(initial.x() + initial.width() + (needRightSkip ? spacing : 0))
-					- left
-					- (needRightSkip ? scale(spacing) : 0);
-				part.geometry = QRect(left, y, width, scale(initial.height()));
+		// Calculate caption positions and add to total height
+		if (_mode == Mode::Grid) {
+			// Group items by rows to position captions
+			std::map<int, std::vector<int>> rows;
+			for (auto i = 0; i != _parts.size(); ++i) {
+				rows[_parts[i].initialGeometry.y()].push_back(i);
 			}
 
-			// Fix width of the last item in a row to fill the space.
-			auto &last_part_in_row = _parts[indices.back()];
-			last_part_in_row.geometry.setWidth(newWidth - last_part_in_row.geometry.x());
-
-			// Now, find the max media height and calculate caption heights for this row.
-			auto maxMediaHeight = 0.;
-			auto maxCaptionHeight = 0.;
-			const auto padding = QMargins(8, 0, 8, 0);
-			for (const auto i : indices) {
-				auto &part = _parts[i];
-				accumulate_max(maxMediaHeight, float64(part.geometry.height()));
-
-				const auto originalText = part.item->originalText();
-				if (!originalText.empty()) {
-					Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
-					const auto captionWidth = part.geometry.width() - padding.left() - padding.right();
-
-					if (fullCaptionOnFirst && i == 0) {
-						part._captionHeight = caption.countHeight(captionWidth)
-							+ padding.top()
-							+ padding.bottom();
-					} else {
-						part._captionHeight = (captionWidth > 0)
-							? st::messageTextStyle.font->height
-							: 0;
-					}
-					accumulate_max(maxCaptionHeight, float64(part._captionHeight));
-				} else {
-					part._captionHeight = 0.;
+			// Identify which items have captions
+			std::vector<int> captionIndices;
+			for (auto i = 0; i != _parts.size(); ++i) {
+				if (!_parts[i].item->originalText().empty()) {
+					captionIndices.push_back(i);
 				}
 			}
+			const auto captionCount = captionIndices.size();
+			const bool fullCaptionOnFirst = (captionCount == 1 && captionIndices[0] == 0);
 
-			// Finalize geometry for the row.
-			for (const auto i : indices) {
-				auto &part = _parts[i];
-				// Align all media items in the row to the bottom.
-				part.geometry.setY(y + (maxMediaHeight - part.geometry.height()));
-				const auto mediaGeometry = part.geometry;
-				part.captionRect = (part._captionHeight > 0)
-					? QRect(
-						mediaGeometry.left(),
-						mediaGeometry.bottom() + 1, // 1px gap
-						mediaGeometry.width(),
-						part._captionHeight)
-					: QRect();
+			const auto padding = QMargins(8, 4, 8, 4);
+			for (auto const& [rowY, indices] : rows) {
+				auto maxCaptionHeight = 0.;
+				auto rowBottom = 0;
+
+				// Find the bottom of this row and calculate caption heights
+				for (const auto i : indices) {
+					auto &part = _parts[i];
+					const auto originalText = part.item->originalText();
+					rowBottom = std::max(rowBottom, part.geometry.bottom());
+
+					if (!originalText.empty()) {
+						Ui::Text::String caption(
+							st::messageTextStyle,
+							originalText,
+							kDefaultTextOptions);
+						const auto captionWidth = part.geometry.width()
+							- padding.left()
+							- padding.right();
+
+						if (fullCaptionOnFirst && i == 0) {
+							// Case 1: Only first item has a caption, show it in full
+							part._captionHeight = caption.countHeight(captionWidth)
+								+ padding.top()
+								+ padding.bottom();
+						} else {
+							// Case 2: Multiple captions or single non-first caption. Elide to one line
+							part._captionHeight = (captionWidth > 0)
+								? st::messageTextStyle.font->height + padding.top() + padding.bottom()
+								: 0;
+						}
+						accumulate_max(maxCaptionHeight, float64(part._captionHeight));
+					} else {
+						part._captionHeight = 0.;
+					}
+				}
+
+				// Position captions for this row
+				if (maxCaptionHeight > 0) {
+					for (const auto i : indices) {
+						auto &part = _parts[i];
+						if (part._captionHeight > 0) {
+							part.captionRect = QRect(
+								part.geometry.left(),
+								rowBottom + 1, // 1px gap
+								part.geometry.width(),
+								part._captionHeight);
+						} else {
+							part.captionRect = QRect();
+						}
+					}
+					newHeight += maxCaptionHeight + 1; // Add caption height + gap
+				}
 			}
-			y += maxMediaHeight + maxCaptionHeight + spacing;
 		}
-		// --- END MODIFICATION ---
-		newHeight = (y > 0) ? (y - spacing) : 0;
 	}
 
 	const auto groupPadding = groupedPadding();
@@ -850,7 +858,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					captionRect.top() + padding.top(),
 					captionRect.width() - padding.left() - padding.right(),
 					style::al_left,
-					0, -1, currentSelection);
+					0, -1, part._captionSelection);
 			} else {
 				// Elide other captions to a single line.
 				const QFontMetrics metrics(st::messageTextStyle.font);
@@ -858,6 +866,17 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					originalText.text,
 					Qt::ElideRight,
 					captionRect.width() - padding.left() - padding.right());
+
+				// Draw selection background if needed
+				if (!part._captionSelection.empty()) {
+					auto selectionRect = captionRect;
+					selectionRect.setLeft(selectionRect.left() + padding.left());
+					selectionRect.setRight(selectionRect.right() - padding.right());
+					selectionRect.setTop(selectionRect.top() + padding.top());
+					selectionRect.setHeight(st::messageTextStyle.font->height);
+					p.fillRect(selectionRect, st::msgInBgSelected);
+				}
+
 				p.drawText(
 					captionRect.left() + padding.left(),
 					captionRect.top() + st::messageTextStyle.font->ascent,
@@ -1025,9 +1044,23 @@ TextState GroupedMedia::getPartState(
 						result.symbol = textStateResult.symbol;
 						result.afterSymbol = textStateResult.afterSymbol;
 						result.itemId = part.item->fullId(); // Ensure item ID is set.
+
+						// Store caption selection information
+						result._captionText = originalText.text;
+						result._captionItem = part.item;
+
+						// Apply current caption selection to the result
+						if (!part._captionSelection.empty()) {
+							result.from = part._captionSelection.from;
+							result.to = part._captionSelection.to;
+						}
 					} else {
 						// This caption is elided, just provide tooltip.
 						result.cursor = CursorState::Text;
+
+						// Store caption text for context menu
+						result._captionText = originalText.text;
+						result._captionItem = part.item;
 					}
 
 					// Tooltip logic: only show if text is wider than its container.
@@ -1424,30 +1457,47 @@ bool GroupedMedia::dragItemByHandler(const ClickHandlerPtr &p) const {
 	return false;
 }
 
+void GroupedMedia::setCaptionSelection(int partIndex, TextSelection selection) {
+	if (partIndex >= 0 && partIndex < _parts.size()) {
+		_parts[partIndex]._captionSelection = selection;
+	}
+}
+
 TextSelection GroupedMedia::adjustSelection(
 		TextSelection selection,
 		TextSelectType type) const {
-	if (_mode != Mode::Column) {
-		return {};
-	}
-	auto checked = 0;
-	for (const auto &part : _parts) {
-		const auto modified = ShiftItemSelection(
-			part.content->adjustSelection(
-				UnshiftItemSelection(selection, checked),
-				type),
-			checked);
-		const auto till = checked + part.content->fullSelectionLength();
-		if (selection.from >= checked && selection.from < till) {
-			selection.from = modified.from;
+	if (_mode == Mode::Column) {
+		auto checked = 0;
+		for (const auto &part : _parts) {
+			const auto modified = ShiftItemSelection(
+				part.content->adjustSelection(
+					UnshiftItemSelection(selection, checked),
+					type),
+				checked);
+			const auto till = checked + part.content->fullSelectionLength();
+			if (selection.from >= checked && selection.from < till) {
+				selection.from = modified.from;
+			}
+			if (selection.to <= till) {
+				selection.to = modified.to;
+				return selection;
+			}
+			checked = till;
 		}
-		if (selection.to <= till) {
-			selection.to = modified.to;
-			return selection;
+		return selection;
+	} else if (_mode == Mode::Grid) {
+		// For Grid mode, handle caption selection
+		// Find which part contains the selection and update its caption selection
+		for (auto i = 0; i < _parts.size(); ++i) {
+			const auto &part = _parts[i];
+			if (!part.item->originalText().empty()) {
+				// For now, just return the selection as-is
+				// In a full implementation, you'd need to track which part has focus
+				return selection;
+			}
 		}
-		checked = till;
 	}
-	return selection;
+	return {};
 }
 
 uint16 GroupedMedia::fullSelectionLength() const {
