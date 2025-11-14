@@ -1019,8 +1019,11 @@ TextState GroupedMedia::getPartState(
 						// This caption is not elided, allow text selection.
 						const auto clickX = point.x() - captionGeo.left() - padding.left();
 						const auto clickY = point.y() - captionGeo.top() - padding.top();
-						const auto textState = caption.getState(clickX, clickY, captionWidth, request);
-						result = textState;
+						const auto textStateResult = caption.getState(QPoint(clickX, clickY), captionWidth, request);
+						result.cursor = CursorState::Text;
+						result.link = textStateResult.link;
+						result.symbol = textStateResult.symbol;
+						result.afterSymbol = textStateResult.afterSymbol;
 						result.itemId = part.item->fullId(); // Ensure item ID is set.
 					} else {
 						// This caption is elided, just provide tooltip.
