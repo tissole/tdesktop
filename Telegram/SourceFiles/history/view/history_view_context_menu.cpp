@@ -1693,16 +1693,15 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 						if (!list->showCopyRestriction(item)) {
 							// For Grid media, try to copy caption first
 							if (media && request.pointState == PointState::GroupPart) {
-								if (const auto groupedMedia = static_cast<GroupedMedia*>(media)) {
-									const auto owner = &view->history()->owner();
-									if (const auto group = owner->groups().find(item)) {
-										for (const auto &groupItem : group->items) {
-											const auto originalText = groupItem->originalText();
-											if (!originalText.empty()) {
-												auto textCopy = originalText;
-												TextUtilities::SetClipboardText(TextForMimeData::Rich(std::move(textCopy)));
-												return;
-											}
+								const auto owner = &view->history()->owner();
+								if (const auto group = owner->groups().find(item)) {
+									// Find the first item with a caption
+									for (const auto &groupItem : group->items) {
+										const auto originalText = groupItem->originalText();
+										if (!originalText.empty()) {
+											auto textCopy = originalText;
+											TextUtilities::SetClipboardText(TextForMimeData::Rich(std::move(textCopy)));
+											return;
 										}
 									}
 								}
