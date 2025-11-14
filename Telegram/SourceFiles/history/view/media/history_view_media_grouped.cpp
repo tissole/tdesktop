@@ -1019,7 +1019,7 @@ TextState GroupedMedia::getPartState(
 						// This caption is not elided, allow text selection.
 						const auto clickX = point.x() - captionGeo.left() - padding.left();
 						const auto clickY = point.y() - captionGeo.top() - padding.top();
-						const auto textStateResult = caption.getState(QPoint(clickX, clickY), captionWidth, request);
+						const auto textStateResult = caption.getState(QPoint(clickX, clickY), captionWidth, request.forText());
 						result.cursor = CursorState::Text;
 						result.link = textStateResult.link;
 						result.symbol = textStateResult.symbol;
