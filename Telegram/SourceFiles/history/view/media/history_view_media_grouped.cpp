@@ -1469,25 +1469,9 @@ TextSelection GroupedMedia::adjustSelection(
 		}
 		return selection;
 	} else if (_mode == Mode::Grid) {
-		// Handle caption text selection for Grid mode
-		for (auto i = 0; i < _parts.size(); ++i) {
-			const auto &part = _parts[i];
-			const auto originalText = part.item->originalText();
-			if (!originalText.empty()) {
-				const auto captionLength = originalText.text.size();
-				const auto partStart = i * captionLength;
-				const auto partEnd = partStart + captionLength;
-				
-				// Check if selection intersects with this caption
-				if (selection.from < partEnd && selection.to > partStart) {
-					// Map selection to this caption's local coordinates
-					auto localSelection = TextSelection();
-					localSelection.from = (selection.from > partStart) ? (selection.from - partStart) : 0;
-					localSelection.to = (selection.to < partEnd) ? (selection.to - partStart) : captionLength;
-					return AddGroupItemSelection(localSelection, i);
-				}
-			}
-		}
+		// For Grid mode, selection is handled at the part level
+		// Just return the selection as-is since individual captions handle their own selection
+		return selection;
 	}
 	return {};
 }
@@ -1550,31 +1534,17 @@ TextForMimeData GroupedMedia::selectedText(
 		}
 		return result;
 	} else if (_mode == Mode::Grid) {
-		// Handle caption text selection for Grid mode
+		// For Grid mode, use IsGroupItemSelection to check which parts are selected
 		auto result = TextForMimeData();
 		for (auto i = 0; i < _parts.size(); ++i) {
-			const auto &part = _parts[i];
-			const auto originalText = part.item->originalText();
-			if (!originalText.empty()) {
-				const auto captionLength = originalText.text.size();
-				const auto partStart = i * captionLength;
-				const auto partEnd = partStart + captionLength;
-				
-				// Check if selection intersects with this caption
-				if (selection.from < partEnd && selection.to > partStart) {
-					// Map selection to this caption's local coordinates
-					auto localSelection = TextSelection();
-					localSelection.from = (selection.from > partStart) ? (selection.from - partStart) : 0;
-					localSelection.to = (selection.to < partEnd) ? (selection.to - partStart) : captionLength;
-					
-					// Extract the selected text
-					Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
-					auto selectedText = caption.toTextWithEntities(localSelection);
-					
+			if (IsGroupItemSelection(selection, i)) {
+				const auto originalText = _parts[i].item->originalText();
+				if (!originalText.empty()) {
+					auto textCopy = originalText;
 					if (result.empty()) {
-						result = TextForMimeData::Rich(std::move(selectedText));
+						result = TextForMimeData::Rich(std::move(textCopy));
 					} else {
-						result.append(u"\n\n"_q).append(TextForMimeData::Rich(std::move(selectedText)));
+						result.append(u"\n\n"_q).append(TextForMimeData::Rich(std::move(textCopy)));
 					}
 				}
 			}
