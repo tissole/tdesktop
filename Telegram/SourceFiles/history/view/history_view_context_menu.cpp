@@ -6,7 +6,6 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/history_view_context_menu.h"
-#include "history/view/media/history_view_media_grouped.h"
 
 #include "api/api_attached_stickers.h"
 #include "api/api_common.h"
@@ -1650,69 +1649,19 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		if (const auto document = media ? media->getDocument() : nullptr) {
 			AddDocumentActions(result, document, view->data(), list);
 		}
-		// Check if this is a Grid media with caption click
-		const auto isGridCaptionClick = [&]() -> bool {
-			if (media && request.pointState == PointState::GroupPart) {
-				// Check if media is a GroupedMedia in Grid mode
-				if (const auto groupedMedia = static_cast<GroupedMedia*>(media)) {
-					// For Grid mode, check if click is on a caption by checking position
-					const auto point = list->mapFromGlobal(QCursor::pos());
-					const auto textState = media->textState(point, StateRequest());
-					// If we have textState with symbol info, it's likely a caption click
-					return textState.symbol > 0 || textState.afterSymbol;
-				}
-			}
-			return false;
-		}();
-		
-		// Also check if this is Grid media with any caption (for broader detection)
-		const auto isGridMediaWithCaption = [&]() -> bool {
-			if (media && request.pointState == PointState::GroupPart) {
-				if (const auto groupedMedia = static_cast<GroupedMedia*>(media)) {
-					// Check if any item in this group has a caption
-					const auto owner = &view->history()->owner();
-					if (const auto group = owner->groups().find(view->data())) {
-						for (const auto &item : group->items) {
-							if (!item->originalText().empty()) {
-								return true;
-							}
-						}
-					}
-				}
-			}
-			return false;
-		}();
-		
-		if (!link && (view->hasVisibleText() || mediaHasTextForCopy || isGridCaptionClick || isGridMediaWithCaption)) {
+		if (!link && (view->hasVisibleText() || mediaHasTextForCopy)) {
 			if (!list->hasCopyRestriction(view->data())) {
 				const auto asGroup = (request.pointState != PointState::GroupPart);
-				
-				// Add copy text action for captions
 				result->addAction(tr::lng_context_copy_text(tr::now), [=] {
 					if (const auto item = owner->message(itemId)) {
 						if (!list->showCopyRestriction(item)) {
-							// For Grid media, try to copy caption first
-							if (media && request.pointState == PointState::GroupPart) {
-								const auto owner = &view->history()->owner();
-								if (const auto group = owner->groups().find(item)) {
-									// Find the first item with a caption
-									for (const auto &groupItem : group->items) {
-										const auto originalText = groupItem->originalText();
-										if (!originalText.empty()) {
-											auto textCopy = originalText;
-											TextUtilities::SetClipboardText(TextForMimeData::Rich(std::move(textCopy)));
-											return;
-										}
-									}
-								}
-							} else if (asGroup) {
+							if (asGroup) {
 								if (const auto group = owner->groups().find(item)) {
 									TextUtilities::SetClipboardText(HistoryGroupText(group));
 									return;
 								}
-							} else {
-								TextUtilities::SetClipboardText(HistoryItemText(item));
 							}
+							TextUtilities::SetClipboardText(HistoryItemText(item));
 						}
 					}
 				}, &st::menuIconCopy);
