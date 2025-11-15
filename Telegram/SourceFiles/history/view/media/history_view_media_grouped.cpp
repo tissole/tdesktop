@@ -479,14 +479,14 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 						if (part._captionHeight > 0) {
 							part.captionRect = QRect(
 								part.geometry.left(),
-								rowBottom + 1, // 1px gap
+								rowBottom,
 								part.geometry.width(),
 								part._captionHeight);
 						} else {
 							part.captionRect = QRect();
 						}
 					}
-					newHeight += maxCaptionHeight + 1; // Add caption height + gap
+					newHeight += maxCaptionHeight;
 				}
 			}
 
@@ -497,10 +497,10 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				if (captionPart._captionHeight > 0) {
 					captionPart.captionRect = QRect(
 						0, // Start from left edge
-						lastRowBottom + 1, // 1px gap below last row
+						lastRowBottom, // Directly after last row
 						newWidth, // Full album width
 						captionPart._captionHeight);
-					newHeight += captionPart._captionHeight + 1; // Add caption height + gap
+					newHeight += captionPart._captionHeight;
 				}
 			}
 		}
@@ -873,6 +873,26 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			}
 		} else if (_mode == Mode::Grid && i > 0) {
 			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
+		}
+
+		// Draw Grid mode caption in its designated caption rect (in last row)
+		if ((_mode == Mode::Grid) && part._captionHeight > 0 && !part.captionRect.isEmpty()) {
+			const auto originalText = part.item->originalText();
+			Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
+
+			const auto partIndex = &part - &_parts[0];
+			auto captionRect = part.captionRect.translated(0, groupPadding.top());
+
+			p.setPen(stm->historyTextFg);
+			const auto padding = QMargins(8, 2, 8, 2);
+
+			// Draw the caption
+			caption.draw(p,
+				captionRect.left() + padding.left(),
+				captionRect.top() + padding.top(),
+				captionRect.width() - padding.left() - padding.right(),
+				style::al_left,
+				0, -1, part._captionSelection);
 		}
 
 		if (!part.cache.isNull()) {
