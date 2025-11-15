@@ -1049,11 +1049,8 @@ TextState GroupedMedia::getPartState(
 						result._captionText = originalText.text;
 						result._captionItem = part.item;
 
-						// Apply current caption selection to the result
-						if (!part._captionSelection.empty()) {
-							result.from = part._captionSelection.from;
-							result.to = part._captionSelection.to;
-						}
+						// Note: Selection is handled at Element level, not TextState level
+						// The actual selection range is managed by the parent Element
 					} else {
 						// This caption is elided, just provide tooltip.
 						result.cursor = CursorState::Text;
