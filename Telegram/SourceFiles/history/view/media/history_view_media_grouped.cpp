@@ -284,7 +284,7 @@ QSize GroupedMedia::countOptimalSize() {
 		const bool singleCaptionAnywhere = (captionCount == 1); // Any single caption should span full width
 
 		// Calculate caption heights for each row
-		const auto padding = QMargins(8, 4, 8, 4);
+		const auto padding = QMargins(8, 2, 8, 2);
 		auto lastRowBottom = 0;
 
 		for (auto const& [rowY, indices] : rows) {
@@ -334,16 +334,18 @@ QSize GroupedMedia::countOptimalSize() {
 				for (const auto i : indices) {
 					_parts[i]._rowCaptionHeight = maxCaptionHeight;
 				}
-				// Only add caption height if this is the last row OR has single caption
-				if (singleCaptionAnywhere) {
-					// Single caption goes at very bottom, add to total height only once
-					if (rowY == rows.rbegin()->first) { // Last row
-						minHeight += maxCaptionHeight;
-					}
-				} else {
-					// Multiple captions, add height for each row that has captions
+				// For multiple captions, add height for each row that has captions
+				if (!singleCaptionAnywhere) {
 					minHeight += maxCaptionHeight;
 				}
+			}
+		}
+
+		// For single caption, add height once at the end (after all rows)
+		if (singleCaptionAnywhere && captionCount > 0) {
+			const auto captionIdx = captionIndices[0];
+			if (_parts[captionIdx]._captionHeight > 0) {
+				minHeight += _parts[captionIdx]._captionHeight;
 			}
 		}
 	}
@@ -420,7 +422,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			// const bool fullCaptionOnFirst = (captionCount == 1 && captionIndices[0] == 0);
 			const bool singleCaptionAnywhere = (captionCount == 1); // Any single caption should span full width
 
-			const auto padding = QMargins(8, 4, 8, 4);
+			const auto padding = QMargins(8, 2, 8, 2);
 			auto lastRowBottom = 0;
 			auto isLastRow = false;
 
@@ -469,39 +471,36 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 					}
 				}
 
-				// Position captions for this row
-				if (maxCaptionHeight > 0) {
-					if (singleCaptionAnywhere && isLastRow) {
-						// Single caption spans full width at bottom
-						for (const auto i : indices) {
-							auto &part = _parts[i];
-							if (part._captionHeight > 0) {
-								part.captionRect = QRect(
-									0, // Start from left edge
-									lastRowBottom + 1, // 1px gap
-									newWidth, // Full width
-									part._captionHeight);
-							} else {
-								part.captionRect = QRect();
-							}
+				// Position captions for this row (multiple captions only)
+				if (maxCaptionHeight > 0 && !singleCaptionAnywhere) {
+					// Multiple captions, position under each item
+					for (const auto i : indices) {
+						auto &part = _parts[i];
+						if (part._captionHeight > 0) {
+							part.captionRect = QRect(
+								part.geometry.left(),
+								rowBottom + 1, // 1px gap
+								part.geometry.width(),
+								part._captionHeight);
+						} else {
+							part.captionRect = QRect();
 						}
-						newHeight += maxCaptionHeight + 1; // Add caption height + gap
-					} else if (!singleCaptionAnywhere) {
-						// Multiple captions, position under each item
-						for (const auto i : indices) {
-							auto &part = _parts[i];
-							if (part._captionHeight > 0) {
-								part.captionRect = QRect(
-									part.geometry.left(),
-									rowBottom + 1, // 1px gap
-									part.geometry.width(),
-									part._captionHeight);
-							} else {
-								part.captionRect = QRect();
-							}
-						}
-						newHeight += maxCaptionHeight + 1; // Add caption height + gap
 					}
+					newHeight += maxCaptionHeight + 1; // Add caption height + gap
+				}
+			}
+
+			// Position single caption at the bottom of all rows
+			if (singleCaptionAnywhere && captionCount > 0) {
+				const auto captionIdx = captionIndices[0];
+				auto &captionPart = _parts[captionIdx];
+				if (captionPart._captionHeight > 0) {
+					captionPart.captionRect = QRect(
+						0, // Start from left edge
+						lastRowBottom + 1, // 1px gap below last row
+						newWidth, // Full album width
+						captionPart._captionHeight);
+					newHeight += captionPart._captionHeight + 1; // Add caption height + gap
 				}
 			}
 		}
@@ -876,68 +875,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
 		}
 
-		// --- START MODIFICATION: New caption drawing logic ---
-		if ((_mode == Mode::Grid) && part._captionHeight > 0) {
-			const auto originalText = part.item->originalText();
-			Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
-			
-			const auto partIndex = &part - &_parts[0];
-			auto captionRect = part.captionRect.translated(0, groupPadding.top());
-			
-			p.setPen(stm->historyTextFg);
-			const auto padding = QMargins(8, 0, 8, 0);
-
-			auto currentSelection = context.selection;
-			if (currentSelection != FullSelection) {
-				currentSelection = IsGroupItemSelection(currentSelection, partIndex)
-					? FullSelection
-					: TextSelection();
-			}
-
-			// Identify if this is the special case of a single, full caption.
-			std::vector<int> captionIndices;
-			for (auto j = 0; j != _parts.size(); ++j) {
-				if (!_parts[j].item->originalText().empty()) {
-					captionIndices.push_back(j);
-				}
-			}
-			// const bool fullCaptionOnFirst = (captionIndices.size() == 1 && captionIndices[0] == 0);
-			const bool singleCaptionAnywhere = (captionIndices.size() == 1); // Any single caption
-
-			if (singleCaptionAnywhere && partIndex == captionIndices[0]) {
-				// Draw single caption in full width
-				caption.draw(p,
-					captionRect.left() + padding.left(),
-					captionRect.top() + padding.top(),
-					captionRect.width() - padding.left() - padding.right(),
-					style::al_left,
-					0, -1, part._captionSelection);
-			} else if (!singleCaptionAnywhere) {
-				// Multiple captions - elide to single line per item
-				const QFontMetrics metrics(st::messageTextStyle.font);
-				const auto elidedText = metrics.elidedText(
-					originalText.text,
-					Qt::ElideRight,
-					captionRect.width() - padding.left() - padding.right());
-
-				// Draw selection background if needed
-				if (!part._captionSelection.empty()) {
-					auto selectionRect = captionRect;
-					selectionRect.setLeft(selectionRect.left() + padding.left());
-					selectionRect.setRight(selectionRect.right() - padding.right());
-					selectionRect.setTop(selectionRect.top() + padding.top());
-					selectionRect.setHeight(st::messageTextStyle.font->height);
-					p.fillRect(selectionRect, st::msgInBgSelected);
-				}
-
-				p.drawText(
-					captionRect.left() + padding.left(),
-					captionRect.top() + st::messageTextStyle.font->ascent,
-					elidedText);
-			}
-		}
-		// --- END MODIFICATION ---
-		
 		if (!part.cache.isNull()) {
 			nowCache = true;
 		}
