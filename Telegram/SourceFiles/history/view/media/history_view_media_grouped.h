@@ -130,6 +130,7 @@ private:
         int _rowCaptionHeight = 0;
 		mutable QRect captionRect;
 		mutable TextSelection _captionSelection = { 0, 0 };
+	mutable int _selectedCaptionIndex = -1;
 
 	};
 

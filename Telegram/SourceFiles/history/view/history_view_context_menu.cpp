@@ -1654,10 +1654,17 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 				const auto asGroup = (request.pointState != PointState::GroupPart);
 
 				// Check if we have caption-specific text to copy
+				// First check if overState has caption text (from Grid media captions)
 				const auto hasCaptionText = !request.selectedText.empty()
 					&& (request.pointState == PointState::GroupPart);
 
-				result->addAction(hasCaptionText
+				// Also check if the current element state has caption information
+				const auto overElement = list->elementByPoint(request.point);
+				const auto hasOverCaption = overElement && !overElement->textState(QPoint(), {})._captionText.isEmpty();
+
+				const auto shouldShowCopy = hasCaptionText || hasOverCaption;
+
+				result->addAction((hasCaptionText || hasOverCaption)
 					? tr::lng_context_copy_selected(tr::now)
 					: tr::lng_context_copy_text(tr::now), [=] {
 					if (const auto item = owner->message(itemId)) {
@@ -1665,6 +1672,12 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 							if (hasCaptionText) {
 								// Copy selected caption text
 								TextUtilities::SetClipboardText(request.selectedText);
+							} else if (hasOverCaption) {
+								// Copy full caption text from overState
+								const auto captionText = overElement->textState(QPoint(), {})._captionText;
+								if (!captionText.isEmpty()) {
+									TextUtilities::SetClipboardText(captionText);
+								}
 							} else if (asGroup) {
 								if (const auto group = owner->groups().find(item)) {
 									TextUtilities::SetClipboardText(HistoryGroupText(group));

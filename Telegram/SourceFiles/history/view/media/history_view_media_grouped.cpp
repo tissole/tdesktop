@@ -264,7 +264,7 @@ QSize GroupedMedia::countOptimalSize() {
 		_parts[i].sides = item.sides;
 	}
 
-	// Calculate caption heights for Grid mode without modifying the layout structure
+		// Calculate caption heights for Grid mode without modifying the layout structure
 	if (_mode == Mode::Grid) {
 		// Group items by rows to calculate caption heights
 		std::map<int, std::vector<int>> rows;
@@ -281,12 +281,23 @@ QSize GroupedMedia::countOptimalSize() {
 		}
 		const auto captionCount = captionIndices.size();
 		const bool fullCaptionOnFirst = (captionCount == 1 && captionIndices[0] == 0);
+		const bool singleCaptionAnywhere = (captionCount == 1); // Any single caption should span full width
 
 		// Calculate caption heights for each row
 		const auto padding = QMargins(8, 4, 8, 4);
+		auto lastRowBottom = 0;
+
 		for (auto const& [rowY, indices] : rows) {
 			auto maxCaptionHeight = 0.;
 
+			// Find the bottom of this row's media
+			auto rowBottom = 0;
+			for (const auto i : indices) {
+				rowBottom = std::max(rowBottom, _parts[i].initialGeometry.bottom());
+			}
+			lastRowBottom = rowBottom;
+
+			// Calculate caption heights for this row
 			for (const auto i : indices) {
 				auto &part = _parts[i];
 				const auto originalText = part.item->originalText();
@@ -295,17 +306,19 @@ QSize GroupedMedia::countOptimalSize() {
 						st::messageTextStyle,
 						originalText,
 						kDefaultTextOptions);
-					const auto captionWidth = part.initialGeometry.width()
-						- padding.left()
-						- padding.right();
 
-					if (fullCaptionOnFirst && i == 0) {
-						// Case 1: Only first item has a caption, show it in full
+					// For single caption, use full width, otherwise use item width
+					const auto captionWidth = singleCaptionAnywhere
+						? maxWidth  // Full album width
+						: part.initialGeometry.width() - padding.left() - padding.right();
+
+					if (singleCaptionAnywhere) {
+						// Case 1: Single caption anywhere, show it in full at bottom
 						part._captionHeight = caption.countHeight(captionWidth)
 							+ padding.top()
 							+ padding.bottom();
 					} else {
-						// Case 2: Multiple captions or single non-first caption. Elide to one line
+						// Case 2: Multiple captions, elide to one line per item
 						part._captionHeight = (captionWidth > 0)
 							? st::messageTextStyle.font->height + padding.top() + padding.bottom()
 							: 0;
@@ -321,8 +334,16 @@ QSize GroupedMedia::countOptimalSize() {
 				for (const auto i : indices) {
 					_parts[i]._rowCaptionHeight = maxCaptionHeight;
 				}
-				// Add caption height to total minHeight
-				minHeight += maxCaptionHeight;
+				// Only add caption height if this is the last row OR has single caption
+				if (singleCaptionAnywhere) {
+					// Single caption goes at very bottom, add to total height only once
+					if (rowY == rows.rbegin()->first) { // Last row
+						minHeight += maxCaptionHeight;
+					}
+				} else {
+					// Multiple captions, add height for each row that has captions
+					minHeight += maxCaptionHeight;
+				}
 			}
 		}
 	}
@@ -397,34 +418,47 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			}
 			const auto captionCount = captionIndices.size();
 			const bool fullCaptionOnFirst = (captionCount == 1 && captionIndices[0] == 0);
+			const bool singleCaptionAnywhere = (captionCount == 1); // Any single caption should span full width
 
 			const auto padding = QMargins(8, 4, 8, 4);
+			auto lastRowBottom = 0;
+			auto isLastRow = false;
+
 			for (auto const& [rowY, indices] : rows) {
 				auto maxCaptionHeight = 0.;
 				auto rowBottom = 0;
 
-				// Find the bottom of this row and calculate caption heights
+				// Find the bottom of this row's media
+				for (const auto i : indices) {
+					rowBottom = std::max(rowBottom, _parts[i].geometry.bottom());
+				}
+				lastRowBottom = rowBottom;
+
+				// Check if this is the last row
+				isLastRow = (rowY == rows.rbegin()->first);
+
+				// Calculate caption heights for this row
 				for (const auto i : indices) {
 					auto &part = _parts[i];
 					const auto originalText = part.item->originalText();
-					rowBottom = std::max(rowBottom, part.geometry.bottom());
-
 					if (!originalText.empty()) {
 						Ui::Text::String caption(
 							st::messageTextStyle,
 							originalText,
 							kDefaultTextOptions);
-						const auto captionWidth = part.geometry.width()
-							- padding.left()
-							- padding.right();
 
-						if (fullCaptionOnFirst && i == 0) {
-							// Case 1: Only first item has a caption, show it in full
+						// For single caption, use full width, otherwise use item width
+						const auto captionWidth = singleCaptionAnywhere
+							? newWidth  // Full album width
+							: part.geometry.width() - padding.left() - padding.right();
+
+						if (singleCaptionAnywhere) {
+							// Case 1: Single caption anywhere, show it in full at bottom
 							part._captionHeight = caption.countHeight(captionWidth)
 								+ padding.top()
 								+ padding.bottom();
 						} else {
-							// Case 2: Multiple captions or single non-first caption. Elide to one line
+							// Case 2: Multiple captions, elide to one line per item
 							part._captionHeight = (captionWidth > 0)
 								? st::messageTextStyle.font->height + padding.top() + padding.bottom()
 								: 0;
@@ -437,19 +471,37 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 				// Position captions for this row
 				if (maxCaptionHeight > 0) {
-					for (const auto i : indices) {
-						auto &part = _parts[i];
-						if (part._captionHeight > 0) {
-							part.captionRect = QRect(
-								part.geometry.left(),
-								rowBottom + 1, // 1px gap
-								part.geometry.width(),
-								part._captionHeight);
-						} else {
-							part.captionRect = QRect();
+					if (singleCaptionAnywhere && isLastRow) {
+						// Single caption spans full width at bottom
+						for (const auto i : indices) {
+							auto &part = _parts[i];
+							if (part._captionHeight > 0) {
+								part.captionRect = QRect(
+									0, // Start from left edge
+									lastRowBottom + 1, // 1px gap
+									newWidth, // Full width
+									part._captionHeight);
+							} else {
+								part.captionRect = QRect();
+							}
 						}
+						newHeight += maxCaptionHeight + 1; // Add caption height + gap
+					} else if (!singleCaptionAnywhere) {
+						// Multiple captions, position under each item
+						for (const auto i : indices) {
+							auto &part = _parts[i];
+							if (part._captionHeight > 0) {
+								part.captionRect = QRect(
+									part.geometry.left(),
+									rowBottom + 1, // 1px gap
+									part.geometry.width(),
+									part._captionHeight);
+							} else {
+								part.captionRect = QRect();
+							}
+						}
+						newHeight += maxCaptionHeight + 1; // Add caption height + gap
 					}
-					newHeight += maxCaptionHeight + 1; // Add caption height + gap
 				}
 			}
 		}
@@ -850,17 +902,18 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				}
 			}
 			const bool fullCaptionOnFirst = (captionIndices.size() == 1 && captionIndices[0] == 0);
+			const bool singleCaptionAnywhere = (captionIndices.size() == 1); // Any single caption
 
-			if (fullCaptionOnFirst && partIndex == 0) {
-				// Draw the full caption, no eliding.
+			if (singleCaptionAnywhere && partIndex == captionIndices[0]) {
+				// Draw single caption in full width
 				caption.draw(p,
 					captionRect.left() + padding.left(),
 					captionRect.top() + padding.top(),
 					captionRect.width() - padding.left() - padding.right(),
 					style::al_left,
 					0, -1, part._captionSelection);
-			} else {
-				// Elide other captions to a single line.
+			} else if (!singleCaptionAnywhere) {
+				// Multiple captions - elide to single line per item
 				const QFontMetrics metrics(st::messageTextStyle.font);
 				const auto elidedText = metrics.elidedText(
 					originalText.text,
@@ -1033,8 +1086,9 @@ TextState GroupedMedia::getPartState(
 						}
 					}
 					const bool fullCaptionOnFirst = (captionIndices.size() == 1 && captionIndices[0] == 0);
-					
-					if (fullCaptionOnFirst && i == 0) {
+					const bool singleCaptionAnywhere = (captionIndices.size() == 1); // Any single caption
+
+					if (singleCaptionAnywhere && i == captionIndices[0]) {
 						// This caption is not elided, allow text selection.
 						const auto clickX = point.x() - captionGeo.left() - padding.left();
 						const auto clickY = point.y() - captionGeo.top() - padding.top();
@@ -1049,8 +1103,14 @@ TextState GroupedMedia::getPartState(
 						result._captionText = originalText.text;
 						result._captionItem = part.item;
 
-						// Note: Selection is handled at Element level, not TextState level
-						// The actual selection range is managed by the parent Element
+						// Apply current caption selection to result for highlighting
+						if (!part._captionSelection.empty()) {
+							// This is a simplified approach - in reality you'd need proper
+							// symbol-based selection tracking for multi-line text
+							result.symbol = textStateResult.symbol;
+							result.afterSymbol = textStateResult.afterSymbol;
+						}
+						// Note: Full selection handling is done at Element level
 					} else {
 						// This caption is elided, just provide tooltip.
 						result.cursor = CursorState::Text;
@@ -1456,6 +1516,13 @@ bool GroupedMedia::dragItemByHandler(const ClickHandlerPtr &p) const {
 
 void GroupedMedia::setCaptionSelection(int partIndex, TextSelection selection) {
 	if (partIndex >= 0 && partIndex < _parts.size()) {
+		// Clear previous selection
+		if (_selectedCaptionIndex >= 0 && _selectedCaptionIndex < _parts.size()) {
+			_parts[_selectedCaptionIndex]._captionSelection = {};
+		}
+
+		// Set new selection
+		_selectedCaptionIndex = partIndex;
 		_parts[partIndex]._captionSelection = selection;
 	}
 }
@@ -1488,11 +1555,22 @@ TextSelection GroupedMedia::adjustSelection(
 		for (auto i = 0; i < _parts.size(); ++i) {
 			const auto &part = _parts[i];
 			if (!part.item->originalText().empty()) {
-				// For now, just return the selection as-is
-				// In a full implementation, you'd need to track which part has focus
-				return selection;
+				// Check if selection overlaps with this caption
+				if (!selection.empty()) {
+					// For simplicity, if there's any selection, select the first caption
+					// In a full implementation, you'd need to track which part has focus
+					_selectedCaptionIndex = i;
+					part._captionSelection = selection;
+				} else {
+					// Clear selection
+					if (_selectedCaptionIndex == i) {
+						part._captionSelection = {};
+					}
+				}
+				break; // Handle first caption found
 			}
 		}
+		return selection;
 	}
 	return {};
 }
@@ -1522,22 +1600,40 @@ bool GroupedMedia::hasTextForCopy() const {
 
 TextForMimeData GroupedMedia::selectedText(
 		TextSelection selection) const {
-	if (_mode != Mode::Column) {
-		return {};
-	}
-	auto result = TextForMimeData();
-	for (const auto &part : _parts) {
-		auto text = part.content->selectedText(selection);
-		if (!text.empty()) {
-			if (result.empty()) {
-				result = std::move(text);
-			} else {
-				result.append(u"\n\n"_q).append(std::move(text));
+	if (_mode == Mode::Column) {
+		auto result = TextForMimeData();
+		for (const auto &part : _parts) {
+			auto text = part.content->selectedText(selection);
+			if (!text.empty()) {
+				if (result.empty()) {
+					result = std::move(text);
+				} else {
+					result.append(u"\n\n"_q).append(std::move(text));
+				}
+			}
+			selection = part.content->skipSelection(selection);
+		}
+		return result;
+	} else if (_mode == Mode::Grid) {
+		// For Grid mode, handle caption selection
+		auto result = TextForMimeData();
+		for (const auto &part : _parts) {
+			const auto originalText = part.item->originalText();
+			if (!originalText.empty() && !part._captionSelection.empty()) {
+				// Add selected caption text
+				const auto captionText = part._captionSelection.from == part._captionSelection.to
+					? originalText.text.mid(part._captionSelection.from, part._captionSelection.to - part._captionSelection.from)
+					: originalText.text; // Full selection
+				if (result.empty()) {
+					result = TextForMimeData::Simple(captionText);
+				} else {
+					result.append(u"\n\n"_q + captionText);
+				}
 			}
 		}
-		selection = part.content->skipSelection(selection);
+		return result;
 	}
-	return result;
+	return {};
 }
 
 SelectedQuote GroupedMedia::selectedQuote(TextSelection selection) const {
