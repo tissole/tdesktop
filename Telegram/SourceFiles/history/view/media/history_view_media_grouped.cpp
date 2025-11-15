@@ -280,7 +280,7 @@ QSize GroupedMedia::countOptimalSize() {
 			}
 		}
 		const auto captionCount = captionIndices.size();
-		const bool fullCaptionOnFirst = (captionCount == 1 && captionIndices[0] == 0);
+		// const bool fullCaptionOnFirst = (captionCount == 1 && captionIndices[0] == 0);
 		const bool singleCaptionAnywhere = (captionCount == 1); // Any single caption should span full width
 
 		// Calculate caption heights for each row
@@ -417,7 +417,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				}
 			}
 			const auto captionCount = captionIndices.size();
-			const bool fullCaptionOnFirst = (captionCount == 1 && captionIndices[0] == 0);
+			// const bool fullCaptionOnFirst = (captionCount == 1 && captionIndices[0] == 0);
 			const bool singleCaptionAnywhere = (captionCount == 1); // Any single caption should span full width
 
 			const auto padding = QMargins(8, 4, 8, 4);
@@ -901,7 +901,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					captionIndices.push_back(j);
 				}
 			}
-			const bool fullCaptionOnFirst = (captionIndices.size() == 1 && captionIndices[0] == 0);
+			// const bool fullCaptionOnFirst = (captionIndices.size() == 1 && captionIndices[0] == 0);
 			const bool singleCaptionAnywhere = (captionIndices.size() == 1); // Any single caption
 
 			if (singleCaptionAnywhere && partIndex == captionIndices[0]) {
@@ -1085,7 +1085,7 @@ TextState GroupedMedia::getPartState(
 							captionIndices.push_back(j);
 						}
 					}
-					const bool fullCaptionOnFirst = (captionIndices.size() == 1 && captionIndices[0] == 0);
+					// const bool fullCaptionOnFirst = (captionIndices.size() == 1 && captionIndices[0] == 0);
 					const bool singleCaptionAnywhere = (captionIndices.size() == 1); // Any single caption
 
 					if (singleCaptionAnywhere && i == captionIndices[0]) {
@@ -1627,7 +1627,7 @@ TextForMimeData GroupedMedia::selectedText(
 				if (result.empty()) {
 					result = TextForMimeData::Simple(captionText);
 				} else {
-					result.append(u"\n\n"_q + captionText);
+					result.append(u"\n\n"_q).append(TextForMimeData::Simple(captionText));
 				}
 			}
 		}

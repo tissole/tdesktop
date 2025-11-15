@@ -126,12 +126,10 @@ private:
 		QRect geometry;
 		mutable uint64 cacheKey = 0;
 		mutable QPixmap cache;
-        int _captionHeight = 0;
-        int _rowCaptionHeight = 0;
+		int _captionHeight = 0;
+		int _rowCaptionHeight = 0;
 		mutable QRect captionRect;
 		mutable TextSelection _captionSelection = { 0, 0 };
-	mutable int _selectedCaptionIndex = -1;
-
 	};
 
 	[[nodiscard]] static Mode DetectMode(not_null<Data::Media*> media);
@@ -164,10 +162,11 @@ private:
 
 	mutable std::optional<HistoryItem*> _captionItem;
 	std::vector<Part> _parts;
-	
+
 	Mode _mode = Mode::Grid;
 	bool _needBubble : 1 = false;
 	bool _purchasedPriceTag : 1 = false;
+	mutable int _selectedCaptionIndex = -1;
 
 	void drawMessageIdInfo(
 		Painter &p,
