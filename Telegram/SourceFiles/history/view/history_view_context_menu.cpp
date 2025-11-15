@@ -1659,8 +1659,8 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 					&& (request.pointState == PointState::GroupPart);
 
 				// Also check if the current element state has caption information
-				const auto overElement = list->elementByPoint(request.point);
-				const auto hasOverCaption = overElement && !overElement->textState(QPoint(), {})._captionText.isEmpty();
+				// Use the view from request instead of trying to get elementByPoint
+				const auto hasOverCaption = view && !view->data()->originalText().text.isEmpty();
 
 				const auto shouldShowCopy = hasCaptionText || hasOverCaption;
 
@@ -1674,9 +1674,9 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								TextUtilities::SetClipboardText(request.selectedText);
 							} else if (hasOverCaption) {
 								// Copy full caption text from overState
-								const auto captionText = overElement->textState(QPoint(), {})._captionText;
+								const auto captionText = item->originalText().text;
 								if (!captionText.isEmpty()) {
-									TextUtilities::SetClipboardText(captionText);
+									TextUtilities::SetClipboardText(TextForMimeData::Simple(captionText));
 								}
 							} else if (asGroup) {
 								if (const auto group = owner->groups().find(item)) {
