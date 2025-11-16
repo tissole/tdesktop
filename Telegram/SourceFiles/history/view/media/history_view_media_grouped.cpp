@@ -315,7 +315,7 @@ QSize GroupedMedia::countOptimalSize() {
 
 					// For single caption, use full width, otherwise use item width
 					const auto captionWidth = singleCaptionAnywhere
-						? maxWidth  // Full album width
+						? maxWidth - padding.left() - padding.right()  // Full album width minus padding
 						: part.initialGeometry.width() - padding.left() - padding.right();
 
 					if (singleCaptionAnywhere) {
@@ -431,6 +431,11 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			auto isLastRow = false;
 			auto cumulativeCaptionOffset = 0; // Track how much we've shifted down
 
+			// For multiple captions, calculate a uniform caption height for ALL rows
+			const auto uniformCaptionHeight = (!singleCaptionAnywhere && captionCount > 0)
+				? st::messageTextStyle.font->height + padding.top() + padding.bottom()
+				: 0.;
+
 			for (auto const& [rowY, indices] : rows) {
 				auto maxCaptionHeight = 0.;
 				auto rowBottom = 0;
@@ -456,7 +461,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 						// For single caption, use full width, otherwise use item width
 						const auto captionWidth = singleCaptionAnywhere
-							? newWidth  // Full album width
+							? newWidth - padding.left() - padding.right()  // Full album width minus padding
 							: part.geometry.width() - padding.left() - padding.right();
 
 						if (singleCaptionAnywhere) {
@@ -465,10 +470,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 								+ padding.top()
 								+ padding.bottom();
 						} else {
-							// Case 2: Multiple captions, elide to one line per item
-							part._captionHeight = (captionWidth > 0)
-								? st::messageTextStyle.font->height + padding.top() + padding.bottom()
-								: 0;
+							// Case 2: Multiple captions, use uniform height for all items
+							part._captionHeight = uniformCaptionHeight;
 						}
 						accumulate_max(maxCaptionHeight, float64(part._captionHeight));
 					} else {
@@ -478,15 +481,16 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 				// Position captions for this row (multiple captions only)
 				if (maxCaptionHeight > 0 && !singleCaptionAnywhere) {
-					// Multiple captions, position under each item
+					// Multiple captions, position under each item using uniform height
 					for (const auto i : indices) {
 						auto &part = _parts[i];
 						if (part._captionHeight > 0) {
+							// Use uniformCaptionHeight for all captions to ensure equal heights
 							part.captionRect = QRect(
 								part.geometry.left(),
 								rowBottom,
 								part.geometry.width(),
-								part._captionHeight);
+								uniformCaptionHeight);
 						} else {
 							part.captionRect = QRect();
 						}
@@ -494,16 +498,16 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 					// Shift all subsequent rows down by caption height
 					if (!isLastRow) {
-						cumulativeCaptionOffset += maxCaptionHeight;
+						cumulativeCaptionOffset += uniformCaptionHeight;
 						for (auto &shiftPart : _parts) {
 							// Only shift items in rows AFTER this one
 							if (shiftPart.initialGeometry.y() > rowY) {
-								shiftPart.geometry.translate(0, maxCaptionHeight);
+								shiftPart.geometry.translate(0, uniformCaptionHeight);
 							}
 						}
 					}
 
-					newHeight += maxCaptionHeight;
+					newHeight += uniformCaptionHeight;
 				}
 			}
 
