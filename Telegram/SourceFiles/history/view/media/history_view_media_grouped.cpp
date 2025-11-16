@@ -94,12 +94,13 @@ void GroupedMedia::drawMessageIdInfo(
 
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
-	p.setFont(st::msgDateFont);
+	const auto font = st::msgDateFont;
+	p.setFont(font);
 	// Use proper white color for text on image bubbles
 	p.setPen(st->msgDateImgFg());
 
-	auto textWidth = st::msgDateFont->width(infoText);
-	const auto textHeight = st::msgDateFont->height;
+	auto textWidth = font->width(infoText);
+	const auto textHeight = font->height;
 	
 	const auto horizontalPadding = 2;
 	const auto verticalPadding = 2;
@@ -110,13 +111,13 @@ void GroupedMedia::drawMessageIdInfo(
 	if (dateW > itemGeometry.width()) {
 		const auto availableWidth = itemGeometry.width()
 			- (2 * horizontalPadding);
-		if (availableWidth > st::msgDateFont->width("...")) {
-			const QFontMetrics metrics(st::msgDateFont);
+		if (availableWidth > font->width("...")) {
+			const QFontMetrics metrics(font);
 			infoText = metrics.elidedText(
 				infoText,
 				Qt::ElideRight,
 				availableWidth);
-			textWidth = st::msgDateFont->width(infoText);
+			textWidth = font->width(infoText);
 			dateW = textWidth + (2 * horizontalPadding);
 		} else {
 			return;
@@ -139,7 +140,7 @@ p.setOpacity(0.95);
 		sti->msgDateImgBgCorners);
 	p.restore();
 
-	auto font = st::msgDateFont;
+	p.setFont(font->bold());
 	p.drawText(
 		bubbleX + horizontalPadding,
 		bubbleY + (dateH - textHeight) / 2 + font->ascent,
@@ -305,7 +306,7 @@ QSize GroupedMedia::countOptimalSize() {
 					Ui::Text::String caption(
 						st::messageTextStyle,
 						originalText,
-						kDefaultTextOptions);
+						Ui::ItemTextDefaultOptions());
 
 					// For single caption, use full width, otherwise use item width
 					const auto captionWidth = singleCaptionAnywhere
@@ -448,7 +449,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 						Ui::Text::String caption(
 							st::messageTextStyle,
 							originalText,
-							kDefaultTextOptions);
+							Ui::ItemTextDefaultOptions());
 
 						// For single caption, use full width, otherwise use item width
 						const auto captionWidth = singleCaptionAnywhere
@@ -891,12 +892,13 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		// Draw Grid mode caption in its designated caption rect (in last row)
 		if ((_mode == Mode::Grid) && part._captionHeight > 0 && !part.captionRect.isEmpty()) {
 			const auto originalText = part.item->originalText();
-			Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
+			Ui::Text::String caption(st::messageTextStyle, originalText, Ui::ItemTextDefaultOptions());
 
 			const auto partIndex = &part - &_parts[0];
 			auto captionRect = part.captionRect.translated(0, groupPadding.top());
 
 			p.setPen(stm->historyTextFg);
+			p.setFont(st::messageTextStyle.font); // Explicitly set normal font to prevent bold from persisting
 			const auto padding = QMargins(8, 2, 8, 2);
 
 			// Determine if this is single caption or multiple
@@ -924,9 +926,13 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					Qt::ElideRight,
 					captionRect.width() - padding.left() - padding.right());
 
+				// Center the text vertically within the caption rectangle
+				const auto textHeight = st::messageTextStyle.font->height;
+				const auto verticalOffset = (captionRect.height() - textHeight) / 2;
+
 				p.drawText(
 					captionRect.left() + padding.left(),
-					captionRect.top() + padding.top() + st::messageTextStyle.font->ascent,
+					captionRect.top() + verticalOffset + st::messageTextStyle.font->ascent,
 					elidedText);
 			}
 		}
@@ -1068,7 +1074,7 @@ TextState GroupedMedia::getPartState(
 					auto result = TextState(part.item);
 					const auto padding = QMargins(8, 0, 8, 0);
 					const auto captionWidth = captionGeo.width() - padding.left() - padding.right();
-					Ui::Text::String caption(st::messageTextStyle, originalText, kDefaultTextOptions);
+					Ui::Text::String caption(st::messageTextStyle, originalText, Ui::ItemTextDefaultOptions());
 
 					// For single full caption, we need to get state from the multi-line text object.
 					// For others, a simple check is enough for the tooltip.
