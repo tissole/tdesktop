@@ -425,6 +425,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			const auto padding = QMargins(8, 2, 8, 2);
 			auto lastRowBottom = 0;
 			auto isLastRow = false;
+			auto cumulativeCaptionOffset = 0; // Track how much we've shifted down
 
 			for (auto const& [rowY, indices] : rows) {
 				auto maxCaptionHeight = 0.;
@@ -486,6 +487,18 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 							part.captionRect = QRect();
 						}
 					}
+
+					// Shift all subsequent rows down by caption height
+					if (!isLastRow) {
+						cumulativeCaptionOffset += maxCaptionHeight;
+						for (auto &shiftPart : _parts) {
+							// Only shift items in rows AFTER this one
+							if (shiftPart.initialGeometry.y() > rowY) {
+								shiftPart.geometry.translate(0, maxCaptionHeight);
+							}
+						}
+					}
+
 					newHeight += maxCaptionHeight;
 				}
 			}
@@ -886,13 +899,36 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			p.setPen(stm->historyTextFg);
 			const auto padding = QMargins(8, 2, 8, 2);
 
-			// Draw the caption
-			caption.draw(p,
-				captionRect.left() + padding.left(),
-				captionRect.top() + padding.top(),
-				captionRect.width() - padding.left() - padding.right(),
-				style::al_left,
-				0, -1, part._captionSelection);
+			// Determine if this is single caption or multiple
+			std::vector<int> captionIndices;
+			for (auto j = 0; j != _parts.size(); ++j) {
+				if (!_parts[j].item->originalText().empty()) {
+					captionIndices.push_back(j);
+				}
+			}
+			const bool singleCaptionAnywhere = (captionIndices.size() == 1);
+
+			if (singleCaptionAnywhere) {
+				// Draw single caption in full (not elided)
+				caption.draw(p,
+					captionRect.left() + padding.left(),
+					captionRect.top() + padding.top(),
+					captionRect.width() - padding.left() - padding.right(),
+					style::al_left,
+					0, -1, part._captionSelection);
+			} else {
+				// Multiple captions - elide to single line
+				const QFontMetrics metrics(st::messageTextStyle.font);
+				const auto elidedText = metrics.elidedText(
+					originalText.text,
+					Qt::ElideRight,
+					captionRect.width() - padding.left() - padding.right());
+
+				p.drawText(
+					captionRect.left() + padding.left(),
+					captionRect.top() + padding.top() + st::messageTextStyle.font->ascent,
+					elidedText);
+			}
 		}
 
 		if (!part.cache.isNull()) {
