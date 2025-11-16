@@ -1111,12 +1111,25 @@ TextState GroupedMedia::getPartState(
 						}
 						// Note: Full selection handling is done at Element level
 					} else {
-						// This caption is elided, just provide tooltip.
+						// This caption is elided, allow text selection of visible portion.
+						const auto clickX = point.x() - captionGeo.left() - padding.left();
+						const auto clickY = point.y() - captionGeo.top() - padding.top();
+						const auto textStateResult = caption.getState(QPoint(clickX, clickY), captionWidth, request.forText());
 						result.cursor = CursorState::Text;
+						result.link = textStateResult.link;
+						result.symbol = textStateResult.symbol;
+						result.afterSymbol = textStateResult.afterSymbol;
+						result.itemId = part.item->fullId();
 
-						// Store caption text for context menu
+						// Store caption text for context menu (full text, including hidden parts)
 						result._captionText = originalText.text;
 						result._captionItem = part.item;
+
+						// Apply current caption selection to result for highlighting
+						if (!part._captionSelection.empty()) {
+							result.symbol = textStateResult.symbol;
+							result.afterSymbol = textStateResult.afterSymbol;
+						}
 					}
 
 					// Tooltip logic: only show if text is wider than its container.
@@ -1576,7 +1589,16 @@ TextSelection GroupedMedia::adjustSelection(
 
 uint16 GroupedMedia::fullSelectionLength() const {
 	if (_mode != Mode::Column) {
-		return {};
+		// For Grid mode, return the caption text length for the current item
+		// This enables text selection for Grid captions
+		auto result = 0;
+		for (const auto &part : _parts) {
+			const auto originalText = part.item->originalText();
+			if (!originalText.text.isEmpty()) {
+				result += originalText.text.size();
+			}
+		}
+		return result;
 	}
 	auto result = 0;
 	for (const auto &part : _parts) {

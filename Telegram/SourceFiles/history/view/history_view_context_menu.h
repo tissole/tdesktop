@@ -51,6 +51,7 @@ struct ContextMenuRequest {
 	SelectedQuote quote;
 	bool overSelection = false;
 	PointState pointState = PointState();
+	TextState overState; // Hover state for detecting Grid caption clicks
 };
 
 base::unique_qptr<Ui::PopupMenu> FillContextMenu(

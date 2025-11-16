@@ -1654,17 +1654,17 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 				const auto asGroup = (request.pointState != PointState::GroupPart);
 
 				// Check if we have caption-specific text to copy
-				// First check if overState has caption text (from Grid media captions)
+				// First check if we have selected text from caption
 				const auto hasCaptionText = !request.selectedText.empty()
 					&& (request.pointState == PointState::GroupPart);
 
-				// Also check if the current element state has caption information
-				// Use the view from request instead of trying to get elementByPoint
-				const auto hasOverCaption = view && !view->data()->originalText().text.isEmpty();
+				// Check if right-click happened on a Grid caption area
+				// overState.captionText() is populated when clicking on Grid caption placeholder
+				const auto hasOverCaption = !request.overState.captionText().isEmpty();
 
 				const auto shouldShowCopy = hasCaptionText || hasOverCaption;
 
-				result->addAction((hasCaptionText || hasOverCaption)
+				result->addAction(hasCaptionText
 					? tr::lng_context_copy_selected(tr::now)
 					: tr::lng_context_copy_text(tr::now), [=] {
 					if (const auto item = owner->message(itemId)) {
@@ -1673,10 +1673,13 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								// Copy selected caption text
 								TextUtilities::SetClipboardText(request.selectedText);
 							} else if (hasOverCaption) {
-								// Copy full caption text from overState
-								const auto captionText = item->originalText().text;
-								if (!captionText.isEmpty()) {
-									TextUtilities::SetClipboardText(TextForMimeData::Simple(captionText));
+								// Copy full caption text from the item that was right-clicked
+								// overState.captionItem() gives us the specific item in Grid
+								if (const auto captionItem = request.overState.captionItem()) {
+									const auto captionText = captionItem->originalText().text;
+									if (!captionText.isEmpty()) {
+										TextUtilities::SetClipboardText(TextForMimeData::Simple(captionText));
+									}
 								}
 							} else if (asGroup) {
 								if (const auto group = owner->groups().find(item)) {

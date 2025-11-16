@@ -2879,6 +2879,7 @@ void ListWidget::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 	request.view = _overElement;
 	request.item = overItem;
 	request.pointState = _overState.pointState;
+	request.overState = _overTextState;
 	request.quote = (_overElement
 		&& _selectedTextItem == _overElement->data())
 		? _overElement->selectedQuote(_selectedTextRange)
@@ -3791,6 +3792,7 @@ void ListWidget::mouseActionUpdate() {
 		});
 		if (!dragState.link) {
 			dragState = view->textState(itemPoint, request);
+			_overTextState = dragState;
 			_overItemExact = session().data().message(dragState.itemId);
 			lnkhost = view;
 			if (!dragState.link

@@ -808,6 +808,7 @@ private:
 	QPoint _mousePosition;
 	MouseState _overState;
 	MouseState _pressState;
+	TextState _overTextState;
 	Element *_overElement = nullptr;
 	HistoryItem *_overItemExact = nullptr;
 	HistoryItem *_pressItemExact = nullptr;
