@@ -1649,7 +1649,7 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		if (const auto document = media ? media->getDocument() : nullptr) {
 			AddDocumentActions(result, document, view->data(), list);
 		}
-		if (!link && (view->hasVisibleText() || mediaHasTextForCopy)) {
+		if (!link && (view->hasVisibleText() || mediaHasTextForCopy || !request.overState._captionText.isEmpty())) {
 			if (!list->hasCopyRestriction(view->data())) {
 				const auto asGroup = (request.pointState != PointState::GroupPart);
 
