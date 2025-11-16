@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/unique_qptr.h"
 #include "history/view/history_view_element.h"
+#include "history/view/history_view_cursor_state.h"
 
 namespace Data {
 struct ReactionId;
