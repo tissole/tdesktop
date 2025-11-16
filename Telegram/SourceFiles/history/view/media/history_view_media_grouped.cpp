@@ -288,6 +288,11 @@ QSize GroupedMedia::countOptimalSize() {
 		const auto padding = QMargins(8, 2, 8, 2);
 		auto lastRowBottom = 0;
 
+		// For multiple captions, calculate a uniform caption height for ALL rows
+		const auto uniformCaptionHeight = (!singleCaptionAnywhere && captionCount > 0)
+			? st::messageTextStyle.font->height + padding.top() + padding.bottom()
+			: 0.;
+
 		for (auto const& [rowY, indices] : rows) {
 			auto maxCaptionHeight = 0.;
 
@@ -319,10 +324,8 @@ QSize GroupedMedia::countOptimalSize() {
 							+ padding.top()
 							+ padding.bottom();
 					} else {
-						// Case 2: Multiple captions, elide to one line per item
-						part._captionHeight = (captionWidth > 0)
-							? st::messageTextStyle.font->height + padding.top() + padding.bottom()
-							: 0;
+						// Case 2: Multiple captions, use uniform height for all items
+						part._captionHeight = uniformCaptionHeight;
 					}
 					accumulate_max(maxCaptionHeight, float64(part._captionHeight));
 				} else {
@@ -919,21 +922,21 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					style::al_left,
 					0, -1, part._captionSelection);
 			} else {
-				// Multiple captions - elide to single line
-				const QFontMetrics metrics(st::messageTextStyle.font);
-				const auto elidedText = metrics.elidedText(
-					originalText.text,
-					Qt::ElideRight,
-					captionRect.width() - padding.left() - padding.right());
+				// Multiple captions - draw with formatting, elided to single line
+				const auto captionWidth = captionRect.width() - padding.left() - padding.right();
 
 				// Center the text vertically within the caption rectangle
 				const auto textHeight = st::messageTextStyle.font->height;
 				const auto verticalOffset = (captionRect.height() - textHeight) / 2;
 
-				p.drawText(
+				// Use caption.drawElided() to preserve formatting while eliding
+				caption.drawElided(p,
 					captionRect.left() + padding.left(),
-					captionRect.top() + verticalOffset + st::messageTextStyle.font->ascent,
-					elidedText);
+					captionRect.top() + verticalOffset,
+					captionWidth,
+					1, // maxLines = 1 for eliding to single line
+					style::al_left,
+					0, -1, 0, false, part._captionSelection);
 			}
 		}
 

@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/sender.h"
 #include "data/data_messages.h"
 #include "history/view/history_view_element.h"
+#include "history/view/history_view_cursor_state.h"
 #include "history/history_view_highlight_manager.h"
 #include "history/history_view_top_toast.h"
 
