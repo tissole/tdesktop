@@ -334,15 +334,15 @@ QSize GroupedMedia::countOptimalSize() {
 							Ui::ItemTextDefaultOptions());
 						const auto captionWidth = maxWidth - padding.left() - padding.right();  // Full album width minus padding
 						part._captionHeight = std::min(
-							caption.countHeight(captionWidth) + padding.top() + padding.bottom(),
+							int(caption.countHeight(captionWidth) + padding.top() + padding.bottom()),
 							std::max(0, maxWidth > st::historyGroupWidthMin ? (maxWidth / 3) : 80) // Reasonable max height
 						);
 					} else {
 						// Case 2: Multiple captions, use uniform height for all items with captions
-						part._captionHeight = uniformCaptionHeight;
+						part._captionHeight = int(uniformCaptionHeight);
 					}
 				} else {
-					part._captionHeight = 0.;
+					part._captionHeight = 0;
 				}
 			}
 
@@ -356,12 +356,12 @@ QSize GroupedMedia::countOptimalSize() {
 
 				// Apply the max height to all items in the row to ensure uniformity
 				for (const auto i : indices) {
-					_parts[i]._captionHeight = maxCaptionHeight;
+					_parts[i]._captionHeight = int(maxCaptionHeight);
 				}
 
 				// Add the uniform caption height to the total grid height
 				if (maxCaptionHeight > 0) {
-					minHeight += maxCaptionHeight;
+					minHeight += int(maxCaptionHeight);
 				}
 			}
 		}
@@ -476,18 +476,22 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 								Ui::ItemTextDefaultOptions());
 							const auto captionWidth = newWidth - padding.left() - padding.right();  // Full album width minus padding
 							part._captionHeight = std::min(
-								caption.countHeight(captionWidth) + padding.top() + padding.bottom(),
+								int(caption.countHeight(captionWidth) + padding.top() + padding.bottom()),
 								std::max(0, newWidth > st::historyGroupWidthMin ? (newWidth / 3) : 80) // Reasonable max height
 							);
 						} else {
 							// Case 2: Multiple captions, use uniform height for all items with captions
 							// Calculate needed height for this caption (elided to single line)
+							Ui::Text::String caption(
+								st::messageTextStyle,
+								originalText,
+								Ui::ItemTextDefaultOptions());
 							const auto captionWidth = part.geometry.width() - padding.left() - padding.right();
 							const auto requiredHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
-							part._captionHeight = requiredHeight;
+							part._captionHeight = int(requiredHeight);
 						}
 					} else {
-						part._captionHeight = 0.;
+						part._captionHeight = 0;
 					}
 				}
 
@@ -501,7 +505,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 					// Apply the max height to all items in the row to ensure uniformity
 					for (const auto i : indices) {
-						_parts[i]._captionHeight = maxCaptionHeight;
+						_parts[i]._captionHeight = int(maxCaptionHeight);
 					}
 
 					// Position captions for this row (multiple captions only)
@@ -515,7 +519,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 									part.geometry.left(),
 									rowBottom,
 									part.geometry.width(),
-									maxCaptionHeight);
+									int(maxCaptionHeight));
 							} else {
 								part.captionRect = QRect();
 							}
@@ -523,16 +527,16 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 						// Shift all subsequent rows down by caption height
 						if (!isLastRow) {
-							cumulativeCaptionOffset += maxCaptionHeight;
+							cumulativeCaptionOffset += int(maxCaptionHeight);
 							for (auto &shiftPart : _parts) {
 								// Only shift items in rows AFTER this one
 								if (shiftPart.initialGeometry.y() > rowY) {
-									shiftPart.geometry.translate(0, maxCaptionHeight);
+									shiftPart.geometry.translate(0, int(maxCaptionHeight));
 								}
 							}
 						}
 
-						newHeight += maxCaptionHeight;
+						newHeight += int(maxCaptionHeight);
 					}
 				}
 			}
