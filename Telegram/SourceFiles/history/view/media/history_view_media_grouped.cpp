@@ -929,10 +929,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				// Multiple captions - draw with formatting, elided to single line
 				const auto captionWidth = captionRect.width() - padding.left() - padding.right();
 
-				// Calculate text height and center it
+				// Center the text vertically within the caption rectangle
 				const auto textHeight = st::messageTextStyle.font->height;
-				const auto availableHeight = captionRect.height() - padding.top() - padding.bottom();
-				const auto verticalOffset = padding.top() + (availableHeight - textHeight) / 2;
+				const auto verticalOffset = (captionRect.height() - textHeight) / 2;
 
 				// Use caption.drawElided() to preserve formatting while eliding
 				caption.drawElided(p,
