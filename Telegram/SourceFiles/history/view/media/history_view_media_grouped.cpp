@@ -333,10 +333,7 @@ QSize GroupedMedia::countOptimalSize() {
 							originalText,
 							Ui::ItemTextDefaultOptions());
 						const auto captionWidth = maxWidth - padding.left() - padding.right();  // Full album width minus padding
-						part._captionHeight = std::min(
-							int(caption.countHeight(captionWidth) + padding.top() + padding.bottom()),
-							std::max(0, maxWidth > st::historyGroupWidthMin ? (maxWidth / 3) : 80) // Reasonable max height
-						);
+						part._captionHeight = int(caption.countHeight(captionWidth) + padding.top() + padding.bottom());
 					} else {
 						// Case 2: Multiple captions, use uniform height for all items with captions
 						part._captionHeight = int(uniformCaptionHeight);
@@ -501,12 +498,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 								originalText,
 								Ui::ItemTextDefaultOptions());
 							const auto captionWidth = newWidth - padding.left() - padding.right();  // Full album width minus padding
-							// Apply max height to prevent overflow
-							const auto requiredHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
-							part._captionHeight = std::min(
-								int(requiredHeight),
-								std::max(0, newWidth > st::historyGroupWidthMin ? (newWidth / 3) : 80) // Reasonable max height
-							);
+							part._captionHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
 						} else {
 							// Case 2: Multiple captions, use uniform height for all items with captions
 							part._captionHeight = uniformCaptionHeight;
@@ -961,7 +953,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				// Draw single caption in full (not elided)
 				// Calculate vertical centering with 2px padding at top and bottom
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
-				const auto textHeight = std::min(caption.countHeight(availableWidth), captionRect.height() - 4); // Max available height minus 4px for padding
+				const auto textHeight = caption.countHeight(availableWidth);
 				// Calculate vertical centering: (total_height - text_height) / 2 but ensure at least 2px padding
 				const auto verticalOffset = std::max(2, (captionRect.height() - textHeight) / 2);
 
@@ -976,7 +968,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 
 				// Center the text vertically within the caption rectangle with 2px padding at top and bottom
-				const auto textHeight = std::min(st::messageTextStyle.font->height, captionRect.height() - 4); // Max available height minus 4px for padding
+				const auto textHeight = st::messageTextStyle.font->height;
 				const auto verticalOffset = std::max(2, (captionRect.height() - textHeight) / 2);
 
 				// Use caption.drawElided() to preserve formatting while eliding
