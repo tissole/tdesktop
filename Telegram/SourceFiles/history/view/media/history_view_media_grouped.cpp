@@ -288,7 +288,7 @@ QSize GroupedMedia::countOptimalSize() {
 		auto lastRowBottom = 0;
 
 		// For multiple captions, calculate a uniform caption height for ALL items with captions
-		auto uniformCaptionHeight = 0.;
+		auto uniformCaptionHeight = 0;
 		if (!singleCaptionAnywhere && captionCount > 0) {
 			// Find the maximum height needed for any caption to ensure uniformity
 			for (const auto i : captionIndices) {
@@ -309,7 +309,7 @@ QSize GroupedMedia::countOptimalSize() {
 
 			// If no captions needed height beyond single line, use standard single-line height
 			if (uniformCaptionHeight == 0) {
-				uniformCaptionHeight = st::messageTextStyle.font->height + padding.top() + padding.bottom();
+				uniformCaptionHeight = int(st::messageTextStyle.font->height + padding.top() + padding.bottom());
 			}
 		}
 
