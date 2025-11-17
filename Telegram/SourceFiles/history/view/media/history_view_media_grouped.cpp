@@ -451,6 +451,32 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			auto isLastRow = false;
 			auto cumulativeCaptionOffset = 0; // Track how much we've shifted down
 
+			// For multiple captions, calculate a uniform caption height for ALL items with captions
+			auto uniformCaptionHeight = 0;
+			if (!singleCaptionAnywhere && captionCount > 0) {
+				// Find the maximum height needed for any caption to ensure uniformity across all captions in the album
+				for (const auto i : captionIndices) {
+					auto &part = _parts[i];
+					const auto originalText = part.item->originalText();
+					if (!originalText.empty()) {
+						Ui::Text::String caption(
+							st::messageTextStyle,
+							originalText,
+							Ui::ItemTextDefaultOptions());
+
+						// Calculate needed height for this caption (elided to single line)
+						const auto captionWidth = part.geometry.width() - padding.left() - padding.right();
+						const auto requiredHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
+						accumulate_max(uniformCaptionHeight, int(requiredHeight));
+					}
+				}
+
+				// If no captions needed height beyond single line, use standard single-line height
+				if (uniformCaptionHeight == 0) {
+					uniformCaptionHeight = int(st::messageTextStyle.font->height + padding.top() + padding.bottom());
+				}
+			}
+
 			for (auto const& [rowY, indices] : rows) {
 				auto rowBottom = 0;
 
@@ -475,20 +501,15 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 								originalText,
 								Ui::ItemTextDefaultOptions());
 							const auto captionWidth = newWidth - padding.left() - padding.right();  // Full album width minus padding
+							// Apply max height to prevent overflow
+							const auto requiredHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
 							part._captionHeight = std::min(
-								int(caption.countHeight(captionWidth) + padding.top() + padding.bottom()),
+								int(requiredHeight),
 								std::max(0, newWidth > st::historyGroupWidthMin ? (newWidth / 3) : 80) // Reasonable max height
 							);
 						} else {
 							// Case 2: Multiple captions, use uniform height for all items with captions
-							// Calculate needed height for this caption (elided to single line)
-							Ui::Text::String caption(
-								st::messageTextStyle,
-								originalText,
-								Ui::ItemTextDefaultOptions());
-							const auto captionWidth = part.geometry.width() - padding.left() - padding.right();
-							const auto requiredHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
-							part._captionHeight = int(requiredHeight);
+							part._captionHeight = uniformCaptionHeight;
 						}
 					} else {
 						part._captionHeight = 0;
@@ -497,29 +518,18 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 				// Position captions for this row (multiple captions only)
 				if (!singleCaptionAnywhere) {
-					// Calculate max caption height among items in this row to ensure uniformity
-					auto maxCaptionHeight = 0.;
-					for (const auto i : indices) {
-						accumulate_max(maxCaptionHeight, float64(_parts[i]._captionHeight));
-					}
-
-					// Apply the max height to all items in the row to ensure uniformity
-					for (const auto i : indices) {
-						_parts[i]._captionHeight = int(maxCaptionHeight);
-					}
-
-					// Position captions for this row (multiple captions only)
-					if (maxCaptionHeight > 0) {
+					// Use the uniform caption height for all rows to ensure consistency
+					if (uniformCaptionHeight > 0) {
 						// Multiple captions, position under each item using uniform height
 						for (const auto i : indices) {
 							auto &part = _parts[i];
 							if (part._captionHeight > 0) {
-								// Use maxCaptionHeight for all captions to ensure equal heights
+								// Use uniformCaptionHeight for all captions to ensure equal heights
 								part.captionRect = QRect(
 									part.geometry.left(),
 									rowBottom,
 									part.geometry.width(),
-									int(maxCaptionHeight));
+									uniformCaptionHeight);
 							} else {
 								part.captionRect = QRect();
 							}
@@ -527,16 +537,16 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 						// Shift all subsequent rows down by caption height
 						if (!isLastRow) {
-							cumulativeCaptionOffset += int(maxCaptionHeight);
+							cumulativeCaptionOffset += uniformCaptionHeight;
 							for (auto &shiftPart : _parts) {
 								// Only shift items in rows AFTER this one
 								if (shiftPart.initialGeometry.y() > rowY) {
-									shiftPart.geometry.translate(0, int(maxCaptionHeight));
+									shiftPart.geometry.translate(0, uniformCaptionHeight);
 								}
 							}
 						}
 
-						newHeight += int(maxCaptionHeight);
+						newHeight += uniformCaptionHeight;
 					}
 				}
 			}
@@ -951,8 +961,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				// Draw single caption in full (not elided)
 				// Calculate vertical centering with 2px padding at top and bottom
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
-				const auto textHeight = caption.countHeight(availableWidth);
-				// Ensure 2px padding at top and bottom: (total_height - text_height) / 2 but minimum 2px
+				const auto textHeight = std::min(caption.countHeight(availableWidth), captionRect.height() - 4); // Max available height minus 4px for padding
+				// Calculate vertical centering: (total_height - text_height) / 2 but ensure at least 2px padding
 				const auto verticalOffset = std::max(2, (captionRect.height() - textHeight) / 2);
 
 				caption.draw(p,
@@ -966,7 +976,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 
 				// Center the text vertically within the caption rectangle with 2px padding at top and bottom
-				const auto textHeight = st::messageTextStyle.font->height;
+				const auto textHeight = std::min(st::messageTextStyle.font->height, captionRect.height() - 4); // Max available height minus 4px for padding
 				const auto verticalOffset = std::max(2, (captionRect.height() - textHeight) / 2);
 
 				// Use caption.drawElided() to preserve formatting while eliding
