@@ -290,28 +290,9 @@ QSize GroupedMedia::countOptimalSize() {
 		// For multiple captions, calculate a uniform caption height for ALL items with captions
 		auto uniformCaptionHeight = 0;
 		if (!singleCaptionAnywhere && captionCount > 0) {
-			// Find the maximum height needed for any caption to ensure uniformity
-			for (const auto i : captionIndices) {
-				auto &part = _parts[i];
-				const auto originalText = part.item->originalText();
-				if (!originalText.empty()) {
-					Ui::Text::String caption(
-						st::messageTextStyle,
-						originalText,
-						Ui::ItemTextDefaultOptions());
-
-					// For multiple captions, each caption is elided to a single line
-					const auto captionWidth = part.initialGeometry.width() - padding.left() - padding.right();
-					const auto textHeight = st::messageTextStyle.font->height; // Single line height
-					const auto requiredHeight = textHeight + padding.top() + padding.bottom();
-					accumulate_max(uniformCaptionHeight, int(requiredHeight));
-				}
-			}
-
-			// If no captions needed height beyond single line, use standard single-line height
-			if (uniformCaptionHeight == 0) {
-				uniformCaptionHeight = int(st::messageTextStyle.font->height + padding.top() + padding.bottom());
-			}
+			// Calculate the height needed for a single line of text with padding
+			const auto textHeight = st::messageTextStyle.font->height;
+			uniformCaptionHeight = textHeight + padding.top() + padding.bottom();
 		}
 
 		for (auto const& [rowY, indices] : rows) {
@@ -452,28 +433,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			// For multiple captions, calculate a uniform caption height for ALL items with captions
 			auto uniformCaptionHeight = 0;
 			if (!singleCaptionAnywhere && captionCount > 0) {
-				// Find the maximum height needed for any caption to ensure uniformity across all captions in the album
-				for (const auto i : captionIndices) {
-					auto &part = _parts[i];
-					const auto originalText = part.item->originalText();
-					if (!originalText.empty()) {
-						Ui::Text::String caption(
-							st::messageTextStyle,
-							originalText,
-							Ui::ItemTextDefaultOptions());
-
-						// For multiple captions, each caption is elided to a single line
-						const auto captionWidth = part.geometry.width() - padding.left() - padding.right();
-						const auto textHeight = st::messageTextStyle.font->height; // Single line height
-						const auto requiredHeight = textHeight + padding.top() + padding.bottom();
-						accumulate_max(uniformCaptionHeight, int(requiredHeight));
-					}
-				}
-
-				// If no captions needed height beyond single line, use standard single-line height
-				if (uniformCaptionHeight == 0) {
-					uniformCaptionHeight = int(st::messageTextStyle.font->height + padding.top() + padding.bottom());
-				}
+				// Calculate the height needed for a single line of text with padding
+				const auto textHeight = st::messageTextStyle.font->height;
+				uniformCaptionHeight = textHeight + padding.top() + padding.bottom();
 			}
 
 			for (auto const& [rowY, indices] : rows) {
