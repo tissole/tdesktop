@@ -300,9 +300,10 @@ QSize GroupedMedia::countOptimalSize() {
 						originalText,
 						Ui::ItemTextDefaultOptions());
 
-					// Calculate needed height for this caption (elided to single line)
+					// For multiple captions, each caption is elided to a single line
 					const auto captionWidth = part.initialGeometry.width() - padding.left() - padding.right();
-					const auto requiredHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
+					const auto textHeight = st::messageTextStyle.font->height; // Single line height
+					const auto requiredHeight = textHeight + padding.top() + padding.bottom();
 					accumulate_max(uniformCaptionHeight, int(requiredHeight));
 				}
 			}
@@ -461,9 +462,10 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 							originalText,
 							Ui::ItemTextDefaultOptions());
 
-						// Calculate needed height for this caption (elided to single line)
+						// For multiple captions, each caption is elided to a single line
 						const auto captionWidth = part.geometry.width() - padding.left() - padding.right();
-						const auto requiredHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
+						const auto textHeight = st::messageTextStyle.font->height; // Single line height
+						const auto requiredHeight = textHeight + padding.top() + padding.bottom();
 						accumulate_max(uniformCaptionHeight, int(requiredHeight));
 					}
 				}
@@ -951,11 +953,23 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			if (singleCaptionAnywhere) {
 				// Draw single caption in full (not elided)
-				// Calculate vertical centering with 2px padding at top and bottom
+				// The caption rectangle is sized to fit the full text, so draw with proper padding
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto textHeight = caption.countHeight(availableWidth);
-				// Calculate vertical centering: (total_height - text_height) / 2 but ensure at least 2px padding
-				const auto verticalOffset = std::max(2, (captionRect.height() - textHeight) / 2);
+
+				// If text height is less than or equal to available height, center it
+				// Otherwise, display from the top with 2px padding
+				const auto availableHeight = captionRect.height();
+				const auto verticalPadding = 2; // 2px top padding as requested
+
+				int verticalOffset;
+				if (textHeight <= availableHeight - 2 * verticalPadding) {
+					// Text fits with room to center
+					verticalOffset = std::max(verticalPadding, (availableHeight - textHeight) / 2);
+				} else {
+					// Text is too tall, align to top with minimum padding
+					verticalOffset = verticalPadding;
+				}
 
 				caption.draw(p,
 					captionRect.left() + padding.left(),
