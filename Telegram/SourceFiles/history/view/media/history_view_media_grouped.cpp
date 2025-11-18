@@ -557,17 +557,10 @@ Ui::BubbleRounding GroupedMedia::applyRoundingSides(
 
 QMargins GroupedMedia::groupedPadding() const {
 	if (_mode != Mode::Column) {
-		if (isBubbleBottom() && GetEnhancedBool("caption_from_file_name")) {
-			// Add bottom padding only if any Grid item actually has a caption.
-			bool hasAnyCaption = false;
-			for (const auto &part : _parts) {
-				if (part._captionHeight > 0) { hasAnyCaption = true; break; }
-			}
-			if (hasAnyCaption) {
-				const auto padding = st::msgPadding;
-				return QMargins(0, 0, 0, padding.bottom());
-			}
-		}
+		// For Grid mode with per-item captions, do not add extra bottom padding
+		// since each item has its own caption area. The old logic added extra
+		// padding at the bottom when any Grid item has a caption, which makes
+		// the last row visually different from the others.
 		return QMargins();
 	}
 	const auto normal = st::msgFileLayout.padding;
@@ -933,12 +926,16 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					verticalOffset = verticalPadding;
 				}
 
+				// Enable clipping to ensure text doesn't overflow the caption rectangle
+				p.save();
+				p.setClipRect(captionRect);
 				caption.draw(p,
 					captionRect.left() + padding.left(),
 					captionRect.top() + verticalOffset,
 					availableWidth,
 					style::al_left,
 					0, -1, part._captionSelection);
+				p.restore();
 			} else {
 				// Multiple captions - draw with formatting, elided to single line
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
@@ -947,6 +944,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto textHeight = st::messageTextStyle.font->height;
 				const auto verticalOffset = std::max(2, (captionRect.height() - textHeight) / 2);
 
+				// Enable clipping to ensure text doesn't overflow the caption rectangle
+				p.save();
+				p.setClipRect(captionRect);
 				// Use caption.drawElided() to preserve formatting while eliding
 				caption.drawElided(p,
 					captionRect.left() + padding.left(),
@@ -955,6 +955,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					1, // maxLines = 1 for eliding to single line
 					style::al_left,
 					0, -1, 0, false, part._captionSelection);
+				p.restore();
 			}
 		}
 
