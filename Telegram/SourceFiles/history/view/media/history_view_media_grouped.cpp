@@ -317,7 +317,7 @@ QSize GroupedMedia::countOptimalSize() {
 			Ui::Text::String caption(
 				st::messageTextStyle,
 				part.item->originalText(),
-				ItemTextOptions(part.item)); // Removed Ui:: prefix
+				Ui::ItemTextDefaultOptions()); // Reverted to default options
 
 			const auto captionWidth = maxWidth - padding.left() - padding.right();
 			// Force calculation with width constraint
@@ -332,6 +332,7 @@ QSize GroupedMedia::countOptimalSize() {
 
 	return { maxWidth, int(base::SafeRound(minHeight)) };
 }
+
 
 QSize GroupedMedia::countCurrentSize(int newWidth) {
 	accumulate_min(newWidth, maxWidth());
@@ -408,7 +409,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				Ui::Text::String caption(
 					st::messageTextStyle,
 					part.item->originalText(),
-					ItemTextOptions(part.item)); // Removed Ui:: prefix
+					Ui::ItemTextDefaultOptions()); // Reverted to default options
 
 				// Use the full newWidth for the caption
 				const auto captionWidth = newWidth - padding.left() - padding.right();
@@ -857,8 +858,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		// --- Draw Grid Caption ---
 		if ((_mode == Mode::Grid) && part._captionHeight > 0 && !part.captionRect.isEmpty()) {
 			const auto originalText = part.item->originalText();
-			// Removed Ui:: prefix
-			Ui::Text::String caption(st::messageTextStyle, originalText, ItemTextOptions(part.item));
+			// Reverted to default options
+			Ui::Text::String caption(st::messageTextStyle, originalText, Ui::ItemTextDefaultOptions());
 
 			auto captionRect = part.captionRect.translated(0, groupPadding.top());
 
@@ -905,7 +906,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					captionRect.left() + padding.left(),
 					captionRect.top() + verticalOffset,
 					availableWidth,
-					1,
+					1, 
 					style::al_left,
 					0, -1, 0, false, part._captionSelection);
 				p.restore();
@@ -947,7 +948,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				GetEnhancedBool("show_seconds")
 					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
 					: QLocale::system().timeFormat(QLocale::ShortFormat));
-
+			
 			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
 				? QString(" %1").arg(item->fullId().msg.bare)
 				: QString();
