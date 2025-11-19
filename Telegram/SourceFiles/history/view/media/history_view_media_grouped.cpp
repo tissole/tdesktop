@@ -332,8 +332,8 @@ QSize GroupedMedia::countOptimalSize() {
 			if (!singleCaptionAnywhere) {
 				if (uniformCaptionHeight > 0) {
 					// FIX: Subtract the standard spacing for non-last rows.
-					// In countCurrentSize, we shift items up to cover the gap.
-					// We must reflect that here, or the container will be too tall.
+					// This ensures the placeholder height "eats" the gap instead of adding to it,
+					// preventing the last item from looking taller than the rest.
 					if (!isLastRow) {
 						minHeight += std::max(0, uniformCaptionHeight - st::historyGroupSkip);
 					} else {
@@ -428,11 +428,6 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			auto isLastRow = false;
 			auto cumulativeCaptionOffset = 0;
 
-			// Calculate the standard spacing used in this layout
-			// We need this to subtract it from the offset so captions 'eat' the gap
-			const auto factor = newWidth / float64(maxWidth());
-			const auto spacing = int(base::SafeRound(st::historyGroupSkip * factor));
-
 			// For multiple captions, calculate a uniform caption height
 			auto uniformCaptionHeight = 0;
 			if (!singleCaptionAnywhere && captionCount > 0) {
@@ -458,6 +453,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 					const auto originalText = part.item->originalText();
 					if (!originalText.empty()) {
 						if (singleCaptionAnywhere) {
+							// Rule 2: Single caption is ALWAYS shown in full.
+							// We must calculate the height based on the CURRENT width (newWidth).
+							// countHeight() will handle "Long Single Lines" by calculating wrapping.
 							Ui::Text::String caption(
 								st::messageTextStyle,
 								originalText,
@@ -465,6 +463,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 							const auto captionWidth = newWidth - padding.left() - padding.right();
 							part._captionHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
 						} else {
+							// Rule 1: Multiple captions are always one line height.
 							part._captionHeight = uniformCaptionHeight;
 						}
 					} else {
@@ -903,15 +902,21 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			p.setFont(st::messageTextStyle.font);
 			const auto padding = QMargins(8, 2, 8, 2);
 
-			// FIX: Determine if this is the Single Caption Layout (Full Width)
-			// If the caption rect is significantly wider than the part geometry, it spans the whole album.
-			const bool isSingleCaptionLayout = (captionRect.width() > part.geometry.width() + padding.left() + padding.right());
+			// Recalculate singleCaptionAnywhere for consistency using data source of truth
+			std::vector<int> captionIndices;
+			for (auto j = 0; j != _parts.size(); ++j) {
+				if (!_parts[j].item->originalText().empty()) {
+					captionIndices.push_back(j);
+				}
+			}
+			const bool singleCaptionAnywhere = (captionIndices.size() == 1);
 
-			if (isSingleCaptionLayout) {
-				// Draw single caption in full
+			if (singleCaptionAnywhere) {
+				// Rule 2: Draw single caption in full (wrapping enabled)
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				
-				// FIX: Force layout calculation so single-line wrapping works, and capture the result
+				// FIX: Use countHeight to calculate wrapped height for long lines
+				// This forces the text engine to calculate line breaks
 				const auto textHeight = caption.countHeight(availableWidth);
 
 				const auto availableHeight = captionRect.height();
@@ -926,6 +931,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				p.save();
 				p.setClipRect(captionRect);
+				// Use standard draw() which supports multi-line wrapping
 				caption.draw(p,
 					captionRect.left() + padding.left(),
 					captionRect.top() + verticalOffset,
@@ -934,13 +940,14 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					0, -1, part._captionSelection);
 				p.restore();
 			} else {
-				// Multiple captions - draw with formatting, elided to single line
+				// Rule 1: Multiple captions - draw elided (single line forced)
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto textHeight = st::messageTextStyle.font->height;
 				const auto verticalOffset = std::max(2, (captionRect.height() - textHeight) / 2);
 
 				p.save();
 				p.setClipRect(captionRect);
+				// Use drawElided() which forces single line with "..."
 				caption.drawElided(p,
 					captionRect.left() + padding.left(),
 					captionRect.top() + verticalOffset,
