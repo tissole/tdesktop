@@ -265,15 +265,8 @@ QSize GroupedMedia::countOptimalSize() {
 		_parts[i].sides = item.sides;
 	}
 
-	// Calculate caption heights for Grid mode without modifying the layout structure
+	// Calculate caption heights for Grid mode
 	if (_mode == Mode::Grid) {
-		// Group items by rows to calculate caption heights
-		std::map<int, std::vector<int>> rows;
-		for (auto i = 0; i != _parts.size(); ++i) {
-			rows[_parts[i].initialGeometry.y()].push_back(i);
-		}
-
-		// Identify which items have captions
 		std::vector<int> captionIndices;
 		for (auto i = 0; i != _parts.size(); ++i) {
 			if (!_parts[i].item->originalText().empty()) {
@@ -281,74 +274,56 @@ QSize GroupedMedia::countOptimalSize() {
 			}
 		}
 		const auto captionCount = captionIndices.size();
-		const bool singleCaptionAnywhere = (captionCount == 1); // Any single caption should span full width
+		const bool singleCaptionAnywhere = (captionCount == 1);
+		const auto padding = QMargins(8, 2, 8, 2);
 
-		// Calculate caption heights for each row
-		const auto padding = QMargins(8, 2, 8, 2);  // left, top, right, bottom (2px top/bottom)
-		auto lastRowBottom = 0;
-
-		// For multiple captions, calculate a uniform caption height for ALL items with captions
-		auto uniformCaptionHeight = 0;
+		// 1. Handle Multi-Caption Case (Elided to 1 line per row)
 		if (!singleCaptionAnywhere && captionCount > 0) {
-			// Calculate the height needed for a single line of elided text with padding
 			const auto textHeight = st::messageTextStyle.font->height;
-			uniformCaptionHeight = textHeight + padding.top() + padding.bottom();
-		}
+			const auto uniformCaptionHeight = textHeight + padding.top() + padding.bottom();
 
-		for (auto const& [rowY, indices] : rows) {
-			// Find the bottom of this row's media
-			auto rowBottom = 0;
-			for (const auto i : indices) {
-				rowBottom = std::max(rowBottom, _parts[i].initialGeometry.bottom());
+			std::map<int, std::vector<int>> rows;
+			for (auto i = 0; i != _parts.size(); ++i) {
+				rows[_parts[i].initialGeometry.y()].push_back(i);
 			}
-			lastRowBottom = rowBottom;
 
-			// Check if this is the last row
-			const bool isLastRow = (rowY == rows.rbegin()->first);
-
-			// Calculate caption heights for this row
-			for (const auto i : indices) {
-				auto &part = _parts[i];
-				const auto originalText = part.item->originalText();
-				if (!originalText.empty()) {
-					if (singleCaptionAnywhere) {
-						// Case 1: Single caption anywhere, show it in full at bottom
-						Ui::Text::String caption(
-							st::messageTextStyle,
-							originalText,
-							Ui::ItemTextDefaultOptions());
-						const auto captionWidth = maxWidth - padding.left() - padding.right();  // Full album width minus padding
-						part._captionHeight = int(caption.countHeight(captionWidth) + padding.top() + padding.bottom());
+			for (auto const& [rowY, indices] : rows) {
+				const bool isLastRow = (rowY == rows.rbegin()->first);
+				
+				for (const auto i : indices) {
+					if (!_parts[i].item->originalText().empty()) {
+						_parts[i]._captionHeight = uniformCaptionHeight;
 					} else {
-						// Case 2: Multiple captions, use uniform height for all items with captions
-						part._captionHeight = int(uniformCaptionHeight);
+						_parts[i]._captionHeight = 0;
 					}
+				}
+
+				// Add spacing for uniform captions
+				if (!isLastRow) {
+					minHeight += std::max(0, uniformCaptionHeight - st::historyGroupSkip);
 				} else {
-					part._captionHeight = 0;
+					minHeight += uniformCaptionHeight;
 				}
 			}
-
-			// For multiple captions, add height for each row that has captions
-			if (!singleCaptionAnywhere) {
-				if (uniformCaptionHeight > 0) {
-					// FIX: Subtract the standard spacing for non-last rows.
-					// This ensures the placeholder height "eats" the gap instead of adding to it,
-					// preventing the last item from looking taller than the rest.
-					if (!isLastRow) {
-						minHeight += std::max(0, uniformCaptionHeight - st::historyGroupSkip);
-					} else {
-						minHeight += uniformCaptionHeight;
-					}
-				}
-			}
-		}
-
-		// For single caption, add height once at the end (after all rows)
-		if (singleCaptionAnywhere && captionCount > 0) {
+		} 
+		// 2. Handle Single Caption Case (Full wrap at bottom)
+		else if (singleCaptionAnywhere) {
 			const auto captionIdx = captionIndices[0];
-			if (_parts[captionIdx]._captionHeight > 0) {
-				minHeight += _parts[captionIdx]._captionHeight;
-			}
+			auto &part = _parts[captionIdx];
+			
+			// Reset others
+			for(auto &p : _parts) p._captionHeight = 0;
+
+			Ui::Text::String caption(
+				st::messageTextStyle,
+				part.item->originalText(),
+				Ui::ItemTextOptions(part.item)); // Use proper options
+
+			const auto captionWidth = maxWidth - padding.left() - padding.right();
+			// Force calculation with width constraint
+			part._captionHeight = int(caption.countHeight(captionWidth) + padding.top() + padding.bottom());
+			
+			minHeight += part._captionHeight;
 		}
 	}
 
@@ -361,6 +336,7 @@ QSize GroupedMedia::countOptimalSize() {
 QSize GroupedMedia::countCurrentSize(int newWidth) {
 	accumulate_min(newWidth, maxWidth());
 	auto newHeight = 0;
+	
 	if (_mode == Mode::Grid && newWidth < st::historyGroupWidthMin) {
 		return { newWidth, newHeight };
 	} else if (_mode == Mode::Column) {
@@ -372,13 +348,14 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		}
 		newHeight = top;
 	} else {
-		// Original Grid scaling logic - preserve layout structure
 		const auto initialSpacing = st::historyGroupSkip;
 		const auto factor = newWidth / float64(maxWidth());
 		const auto scale = [&](int value) {
 			return int(base::SafeRound(value * factor));
 		};
 		const auto spacing = scale(initialSpacing);
+		
+		// 1. Position Media Items
 		for (auto &part : _parts) {
 			const auto sides = part.sides;
 			const auto initialGeometry = part.initialGeometry;
@@ -405,15 +382,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			accumulate_max(newHeight, top + height);
 		}
 
-		// Calculate caption positions and add to total height
+		// 2. Handle Captions
 		if (_mode == Mode::Grid) {
-			// Group items by rows to position captions
-			std::map<int, std::vector<int>> rows;
-			for (auto i = 0; i != _parts.size(); ++i) {
-				rows[_parts[i].initialGeometry.y()].push_back(i);
-			}
-
-			// Identify which items have captions
 			std::vector<int> captionIndices;
 			for (auto i = 0; i != _parts.size(); ++i) {
 				if (!_parts[i].item->originalText().empty()) {
@@ -422,107 +392,89 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			}
 			const auto captionCount = captionIndices.size();
 			const bool singleCaptionAnywhere = (captionCount == 1);
-
 			const auto padding = QMargins(8, 2, 8, 2);
-			auto lastRowBottom = 0;
-			auto isLastRow = false;
-			auto cumulativeCaptionOffset = 0;
 
-			// For multiple captions, calculate a uniform caption height
-			auto uniformCaptionHeight = 0;
-			if (!singleCaptionAnywhere && captionCount > 0) {
-				const auto textHeight = st::messageTextStyle.font->height;
-				uniformCaptionHeight = textHeight + padding.top() + padding.bottom();
-			}
-
-			for (auto const& [rowY, indices] : rows) {
-				auto rowBottom = 0;
-
-				// Find the bottom of this row's media
-				for (const auto i : indices) {
-					rowBottom = std::max(rowBottom, _parts[i].geometry.bottom());
-				}
-				lastRowBottom = rowBottom;
-
-				// Check if this is the last row
-				isLastRow = (rowY == rows.rbegin()->first);
-
-				// Calculate caption heights for this row
-				for (const auto i : indices) {
-					auto &part = _parts[i];
-					const auto originalText = part.item->originalText();
-					if (!originalText.empty()) {
-						if (singleCaptionAnywhere) {
-							// Rule 2: Single caption is ALWAYS shown in full.
-							// We must calculate the height based on the CURRENT width (newWidth).
-							// countHeight() will handle "Long Single Lines" by calculating wrapping.
-							Ui::Text::String caption(
-								st::messageTextStyle,
-								originalText,
-								Ui::ItemTextDefaultOptions());
-							const auto captionWidth = newWidth - padding.left() - padding.right();
-							part._captionHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
-						} else {
-							// Rule 1: Multiple captions are always one line height.
-							part._captionHeight = uniformCaptionHeight;
-						}
-					} else {
-						part._captionHeight = 0;
-					}
-				}
-
-				// Position captions for this row (multiple captions only)
-				if (!singleCaptionAnywhere) {
-					if (uniformCaptionHeight > 0) {
-						for (const auto i : indices) {
-							auto &part = _parts[i];
-							if (part._captionHeight > 0) {
-								part.captionRect = QRect(
-									part.geometry.left(),
-									rowBottom,
-									part.geometry.width(),
-									uniformCaptionHeight);
-							} else {
-								part.captionRect = QRect();
-							}
-						}
-
-						// Shift logic:
-						// If not last row, we want to consume the standard spacing.
-						// The visual gap becomes just 'uniformCaptionHeight'.
-						if (!isLastRow) {
-							// We shift down by caption height, but shift UP by spacing (removing the gap)
-							// Use max(0) to ensure we don't overlap if caption is thinner than spacing
-							const auto shiftAmount = std::max(0, uniformCaptionHeight - spacing);
-							
-							cumulativeCaptionOffset += shiftAmount;
-							
-							for (auto &shiftPart : _parts) {
-								if (shiftPart.initialGeometry.y() > rowY) {
-									shiftPart.geometry.translate(0, shiftAmount);
-								}
-							}
-							// Add the *added* visual height to the total
-							newHeight += shiftAmount;
-						} else {
-							// Last row: just add the caption height (no spacing to subtract here)
-							newHeight += uniformCaptionHeight;
-						}
-					}
-				}
-			}
-
-			// Position single caption at the bottom of all rows
-			if (singleCaptionAnywhere && captionCount > 0) {
+			if (singleCaptionAnywhere) {
+				// --- Single Caption Logic (Robust wrapping) ---
 				const auto captionIdx = captionIndices[0];
-				auto &captionPart = _parts[captionIdx];
-				if (captionPart._captionHeight > 0) {
-					captionPart.captionRect = QRect(
-						0, 
-						lastRowBottom, 
-						newWidth, 
-						captionPart._captionHeight);
-					newHeight += captionPart._captionHeight;
+				auto &part = _parts[captionIdx];
+
+				// Clear heights for all parts first
+				for(auto &p : _parts) {
+					p._captionHeight = 0;
+					p.captionRect = QRect();
+				}
+
+				Ui::Text::String caption(
+					st::messageTextStyle,
+					part.item->originalText(),
+					Ui::ItemTextOptions(part.item));
+
+				// Use the full newWidth for the caption
+				const auto captionWidth = newWidth - padding.left() - padding.right();
+				
+				// Calculate wrapped height explicitly
+				part._captionHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
+				
+				// Place at the bottom of the entire group
+				part.captionRect = QRect(
+					0, 
+					newHeight, // Current bottom of media
+					newWidth, 
+					part._captionHeight);
+				
+				newHeight += part._captionHeight;
+
+			} else if (captionCount > 0) {
+				// --- Multi Caption Logic (Uniform height, elided) ---
+				std::map<int, std::vector<int>> rows;
+				for (auto i = 0; i != _parts.size(); ++i) {
+					rows[_parts[i].initialGeometry.y()].push_back(i);
+				}
+
+				const auto textHeight = st::messageTextStyle.font->height;
+				const auto uniformCaptionHeight = textHeight + padding.top() + padding.bottom();
+				auto cumulativeCaptionOffset = 0;
+
+				for (auto const& [rowY, indices] : rows) {
+					auto rowBottom = 0;
+					for (const auto i : indices) {
+						rowBottom = std::max(rowBottom, _parts[i].geometry.bottom());
+					}
+					
+					const bool isLastRow = (rowY == rows.rbegin()->first);
+
+					// Set heights and rects for this row
+					for (const auto i : indices) {
+						auto &part = _parts[i];
+						if (!_parts[i].item->originalText().empty()) {
+							part._captionHeight = uniformCaptionHeight;
+							part.captionRect = QRect(
+								part.geometry.left(),
+								rowBottom,
+								part.geometry.width(),
+								uniformCaptionHeight);
+						} else {
+							part._captionHeight = 0;
+							part.captionRect = QRect();
+						}
+					}
+
+					// Apply shift to subsequent rows
+					if (!isLastRow) {
+						const auto shiftAmount = std::max(0, uniformCaptionHeight - spacing);
+						cumulativeCaptionOffset += shiftAmount;
+						
+						// Shift geometry of items in lower rows
+						for (auto &shiftPart : _parts) {
+							if (shiftPart.initialGeometry.y() > rowY) {
+								shiftPart.geometry.translate(0, shiftAmount);
+							}
+						}
+						newHeight += shiftAmount;
+					} else {
+						newHeight += uniformCaptionHeight;
+					}
 				}
 			}
 		}
@@ -686,6 +638,16 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	const auto st = context.st;
 	const auto stm = context.messageStyle();
 
+	// Pre-calculate single caption state for the draw loop
+	bool singleCaptionAnywhere = false;
+	if (_mode == Mode::Grid) {
+		int count = 0;
+		for (const auto &part : _parts) {
+			if (!part.item->originalText().empty()) count++;
+		}
+		singleCaptionAnywhere = (count == 1);
+	}
+
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
 		auto partContext = context.withSelection(fullSelection
@@ -723,7 +685,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 
-		if (_mode == Mode::Grid) { // Video duration/size bubble logic remains
+		// --- Draw Grid Mode Overlays (Video duration etc) ---
+		if (_mode == Mode::Grid) {
 			const auto dataMedia = part.item->media();
 			qint64 durSeconds = -1;
 			qint64 sizeBytes = -1;
@@ -779,7 +742,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			}
 		}
 
-		if (_mode == Mode::Column) { // All Column-mode drawing logic remains
+		// --- Draw Column Mode Info ---
+		if (_mode == Mode::Column) {
+			// (Existing Column Mode logic preserved...)
 			QString infoText;
 			const auto item = part.item;
 			const auto edited = item->Get<HistoryMessageEdited>();
@@ -890,39 +855,30 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
 		}
 
-		// Draw Grid mode caption in its designated caption rect (in last row)
+		// --- Draw Grid Caption ---
 		if ((_mode == Mode::Grid) && part._captionHeight > 0 && !part.captionRect.isEmpty()) {
 			const auto originalText = part.item->originalText();
-			Ui::Text::String caption(st::messageTextStyle, originalText, Ui::ItemTextDefaultOptions());
+			// Use ItemTextOptions to ensure correct wrapping behavior
+			Ui::Text::String caption(st::messageTextStyle, originalText, Ui::ItemTextOptions(part.item));
 
-			const auto partIndex = &part - &_parts[0];
 			auto captionRect = part.captionRect.translated(0, groupPadding.top());
 
 			p.setPen(stm->historyTextFg);
 			p.setFont(st::messageTextStyle.font);
 			const auto padding = QMargins(8, 2, 8, 2);
 
-			// Recalculate singleCaptionAnywhere for consistency using data source of truth
-			std::vector<int> captionIndices;
-			for (auto j = 0; j != _parts.size(); ++j) {
-				if (!_parts[j].item->originalText().empty()) {
-					captionIndices.push_back(j);
-				}
-			}
-			const bool singleCaptionAnywhere = (captionIndices.size() == 1);
-
 			if (singleCaptionAnywhere) {
-				// Rule 2: Draw single caption in full (wrapping enabled)
+				// Full caption drawing
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
+				const auto availableHeight = captionRect.height();
 				
-				// FIX: Use countHeight to calculate wrapped height for long lines
-				// This forces the text engine to calculate line breaks
+				// Force calculation of height based on available width
 				const auto textHeight = caption.countHeight(availableWidth);
 
-				const auto availableHeight = captionRect.height();
 				const auto verticalPadding = 2;
-
 				int verticalOffset;
+				
+				// Center vertically if space allows, otherwise stick to top
 				if (textHeight <= availableHeight - 2 * verticalPadding) {
 					verticalOffset = std::max(verticalPadding, (availableHeight - textHeight) / 2);
 				} else {
@@ -931,7 +887,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				p.save();
 				p.setClipRect(captionRect);
-				// Use standard draw() which supports multi-line wrapping
 				caption.draw(p,
 					captionRect.left() + padding.left(),
 					captionRect.top() + verticalOffset,
@@ -940,14 +895,13 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					0, -1, part._captionSelection);
 				p.restore();
 			} else {
-				// Rule 1: Multiple captions - draw elided (single line forced)
+				// Elided caption drawing
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto textHeight = st::messageTextStyle.font->height;
 				const auto verticalOffset = std::max(2, (captionRect.height() - textHeight) / 2);
 
 				p.save();
 				p.setClipRect(captionRect);
-				// Use drawElided() which forces single line with "..."
 				caption.drawElided(p,
 					captionRect.left() + padding.left(),
 					captionRect.top() + verticalOffset,
@@ -978,6 +932,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		drawPurchasedTag(p, fullRect, context);
 	}
 
+	// (Existing logic for first item date/views overlay...)
 	if ((_mode == Mode::Grid) && !_parts.empty() && _parent->media() == this) {
 		const auto firstPart = &_parts.front();
 		const auto firstItemGeometry = firstPart->geometry.translated(0, groupPadding.top());
