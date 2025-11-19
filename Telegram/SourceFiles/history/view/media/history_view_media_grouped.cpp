@@ -912,8 +912,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				
 				// FIX: Force layout calculation so single-line wrapping works
-				caption.countHeight(availableWidth);
-				const auto textHeight = caption.height(); 
+				const auto textHeight = caption.countHeight(availableWidth); 
 
 				const auto availableHeight = captionRect.height();
 				const auto verticalPadding = 2;
