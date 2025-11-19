@@ -314,14 +314,12 @@ QSize GroupedMedia::countOptimalSize() {
 			for(auto &p : _parts) p._captionHeight = 0;
 
 			auto &part = _parts[captionIdx];
-			Ui::Text::String caption(
-				st::messageTextStyle,
-				part.item->originalText(),
-				Ui::ItemTextDefaultOptions()); // Reverted to default options
-
+			
 			const auto captionWidth = maxWidth - padding.left() - padding.right();
-			// Force calculation with width constraint
-			part._captionHeight = int(caption.countHeight(captionWidth) + padding.top() + padding.bottom());
+			
+			// USE ITEM TEXT: Use the item's actual text object to calculate height
+			// This ensures consistent wrapping behavior with the official client
+			part._captionHeight = int(part.item->text().countHeight(captionWidth) + padding.top() + padding.bottom());
 
 			minHeight += part._captionHeight;
 		}
@@ -396,26 +394,22 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			const auto padding = QMargins(8, 2, 8, 2);
 
 			if (singleCaptionAnywhere) {
-				// --- Single Caption Logic (Robust wrapping) ---
+				// --- Single Caption Logic (Full Width, Wrapped) ---
 				const auto captionIdx = captionIndices[0];
 				auto &part = _parts[captionIdx];
 
-				// Clear heights for all parts first
+				// Clear heights for all parts first to be safe
 				for(auto &p : _parts) {
 					p._captionHeight = 0;
 					p.captionRect = QRect();
 				}
 
-				Ui::Text::String caption(
-					st::messageTextStyle,
-					part.item->originalText(),
-					Ui::ItemTextDefaultOptions()); // Reverted to default options
-
 				// Use the full newWidth for the caption
 				const auto captionWidth = newWidth - padding.left() - padding.right();
 
-				// Calculate wrapped height explicitly
-				part._captionHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
+				// USE ITEM TEXT: Use the item's existing text object
+				// This guarantees correct wrapping for long single lines
+				part._captionHeight = part.item->text().countHeight(captionWidth) + padding.top() + padding.bottom();
 
 				// Place at the bottom of the entire group
 				part.captionRect = QRect(
@@ -480,6 +474,12 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			}
 		}
 	}
+
+	const auto groupPadding = groupedPadding();
+	newHeight += groupPadding.top() + groupPadding.bottom();
+
+	return { newWidth, int(base::SafeRound(newHeight)) };
+}
 
 	const auto groupPadding = groupedPadding();
 	newHeight += groupPadding.top() + groupPadding.bottom();
@@ -857,22 +857,20 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 		// --- Draw Grid Caption ---
 		if ((_mode == Mode::Grid) && part._captionHeight > 0 && !part.captionRect.isEmpty()) {
-			const auto originalText = part.item->originalText();
-			// Reverted to default options
-			Ui::Text::String caption(st::messageTextStyle, originalText, Ui::ItemTextDefaultOptions());
-
 			auto captionRect = part.captionRect.translated(0, groupPadding.top());
+			const auto padding = QMargins(8, 2, 8, 2);
 
 			p.setPen(stm->historyTextFg);
 			p.setFont(st::messageTextStyle.font);
-			const auto padding = QMargins(8, 2, 8, 2);
 
 			if (singleCaptionAnywhere) {
-				// Full caption drawing
+				// --- Single Caption: Use Item Text Object ---
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto availableHeight = captionRect.height();
 
-				// Force calculation of height based on available width
+				// Use the item's actual text object. 
+				// This respects the wrapping calculated in countCurrentSize.
+				const auto &caption = part.item->text(); 
 				const auto textHeight = caption.countHeight(availableWidth);
 
 				const auto verticalPadding = 2;
@@ -895,7 +893,10 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					0, -1, part._captionSelection);
 				p.restore();
 			} else {
-				// Elided caption drawing
+				// --- Multi Caption: Use Temporary String (Elided) ---
+				const auto originalText = part.item->originalText();
+				Ui::Text::String caption(st::messageTextStyle, originalText, Ui::ItemTextDefaultOptions());
+				
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto textHeight = st::messageTextStyle.font->height;
 				const auto verticalOffset = std::max(2, (captionRect.height() - textHeight) / 2);
