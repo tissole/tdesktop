@@ -289,7 +289,7 @@ QSize GroupedMedia::countOptimalSize() {
 
 			for (auto const& [rowY, indices] : rows) {
 				const bool isLastRow = (rowY == rows.rbegin()->first);
-				
+
 				for (const auto i : indices) {
 					if (!_parts[i].item->originalText().empty()) {
 						_parts[i]._captionHeight = uniformCaptionHeight;
@@ -305,24 +305,24 @@ QSize GroupedMedia::countOptimalSize() {
 					minHeight += uniformCaptionHeight;
 				}
 			}
-		} 
+		}
 		// 2. Handle Single Caption Case (Full wrap at bottom)
 		else if (singleCaptionAnywhere) {
 			const auto captionIdx = captionIndices[0];
-			auto &part = _parts[captionIdx];
 			
-			// Reset others
+			// Reset others first
 			for(auto &p : _parts) p._captionHeight = 0;
 
+			auto &part = _parts[captionIdx];
 			Ui::Text::String caption(
 				st::messageTextStyle,
 				part.item->originalText(),
-				Ui::ItemTextOptions(part.item)); // Use proper options
+				ItemTextOptions(part.item)); // Removed Ui:: prefix
 
 			const auto captionWidth = maxWidth - padding.left() - padding.right();
 			// Force calculation with width constraint
 			part._captionHeight = int(caption.countHeight(captionWidth) + padding.top() + padding.bottom());
-			
+
 			minHeight += part._captionHeight;
 		}
 	}
@@ -336,7 +336,7 @@ QSize GroupedMedia::countOptimalSize() {
 QSize GroupedMedia::countCurrentSize(int newWidth) {
 	accumulate_min(newWidth, maxWidth());
 	auto newHeight = 0;
-	
+
 	if (_mode == Mode::Grid && newWidth < st::historyGroupWidthMin) {
 		return { newWidth, newHeight };
 	} else if (_mode == Mode::Column) {
@@ -354,7 +354,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			return int(base::SafeRound(value * factor));
 		};
 		const auto spacing = scale(initialSpacing);
-		
+
 		// 1. Position Media Items
 		for (auto &part : _parts) {
 			const auto sides = part.sides;
@@ -408,21 +408,21 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				Ui::Text::String caption(
 					st::messageTextStyle,
 					part.item->originalText(),
-					Ui::ItemTextOptions(part.item));
+					ItemTextOptions(part.item)); // Removed Ui:: prefix
 
 				// Use the full newWidth for the caption
 				const auto captionWidth = newWidth - padding.left() - padding.right();
-				
+
 				// Calculate wrapped height explicitly
 				part._captionHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
-				
+
 				// Place at the bottom of the entire group
 				part.captionRect = QRect(
-					0, 
+					0,
 					newHeight, // Current bottom of media
-					newWidth, 
+					newWidth,
 					part._captionHeight);
-				
+
 				newHeight += part._captionHeight;
 
 			} else if (captionCount > 0) {
@@ -441,7 +441,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 					for (const auto i : indices) {
 						rowBottom = std::max(rowBottom, _parts[i].geometry.bottom());
 					}
-					
+
 					const bool isLastRow = (rowY == rows.rbegin()->first);
 
 					// Set heights and rects for this row
@@ -464,7 +464,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 					if (!isLastRow) {
 						const auto shiftAmount = std::max(0, uniformCaptionHeight - spacing);
 						cumulativeCaptionOffset += shiftAmount;
-						
+
 						// Shift geometry of items in lower rows
 						for (auto &shiftPart : _parts) {
 							if (shiftPart.initialGeometry.y() > rowY) {
@@ -744,7 +744,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 		// --- Draw Column Mode Info ---
 		if (_mode == Mode::Column) {
-			// (Existing Column Mode logic preserved...)
 			QString infoText;
 			const auto item = part.item;
 			const auto edited = item->Get<HistoryMessageEdited>();
@@ -858,8 +857,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		// --- Draw Grid Caption ---
 		if ((_mode == Mode::Grid) && part._captionHeight > 0 && !part.captionRect.isEmpty()) {
 			const auto originalText = part.item->originalText();
-			// Use ItemTextOptions to ensure correct wrapping behavior
-			Ui::Text::String caption(st::messageTextStyle, originalText, Ui::ItemTextOptions(part.item));
+			// Removed Ui:: prefix
+			Ui::Text::String caption(st::messageTextStyle, originalText, ItemTextOptions(part.item));
 
 			auto captionRect = part.captionRect.translated(0, groupPadding.top());
 
@@ -871,13 +870,13 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				// Full caption drawing
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto availableHeight = captionRect.height();
-				
+
 				// Force calculation of height based on available width
 				const auto textHeight = caption.countHeight(availableWidth);
 
 				const auto verticalPadding = 2;
 				int verticalOffset;
-				
+
 				// Center vertically if space allows, otherwise stick to top
 				if (textHeight <= availableHeight - 2 * verticalPadding) {
 					verticalOffset = std::max(verticalPadding, (availableHeight - textHeight) / 2);
@@ -906,7 +905,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					captionRect.left() + padding.left(),
 					captionRect.top() + verticalOffset,
 					availableWidth,
-					1, 
+					1,
 					style::al_left,
 					0, -1, 0, false, part._captionSelection);
 				p.restore();
@@ -932,7 +931,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		drawPurchasedTag(p, fullRect, context);
 	}
 
-	// (Existing logic for first item date/views overlay...)
 	if ((_mode == Mode::Grid) && !_parts.empty() && _parent->media() == this) {
 		const auto firstPart = &_parts.front();
 		const auto firstItemGeometry = firstPart->geometry.translated(0, groupPadding.top());
@@ -949,7 +947,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				GetEnhancedBool("show_seconds")
 					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
 					: QLocale::system().timeFormat(QLocale::ShortFormat));
-			
+
 			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
 				? QString(" %1").arg(item->fullId().msg.bare)
 				: QString();
