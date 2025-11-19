@@ -1001,7 +1001,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const int baseIconW = std::max(1, icon.width());
 				const int baseIconH = icon.height();
 				const int scaledIconH = (baseIconH * st::historyViewsWidth) / baseIconW;
-				const int iconY = bubbleY + (bubbleH - scaledIconH) / 2;
+				const int iconY = bubbleY + (bubbleH - scaledIconH) / 2 + 1;
 				icon.paint(p, currentLeft, iconY, st::historyViewsWidth);
 				p.drawText(currentLeft + st::historyViewsWidth + viewsIconGap, textBaseY, viewsText);
 				currentLeft += viewsWidth + textPadding;
