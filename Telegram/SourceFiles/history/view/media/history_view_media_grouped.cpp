@@ -265,7 +265,7 @@ QSize GroupedMedia::countOptimalSize() {
 		_parts[i].sides = item.sides;
 	}
 
-		// Calculate caption heights for Grid mode without modifying the layout structure
+	// Calculate caption heights for Grid mode without modifying the layout structure
 	if (_mode == Mode::Grid) {
 		// Group items by rows to calculate caption heights
 		std::map<int, std::vector<int>> rows;
@@ -293,9 +293,6 @@ QSize GroupedMedia::countOptimalSize() {
 			// Calculate the height needed for a single line of elided text with padding
 			const auto textHeight = st::messageTextStyle.font->height;
 			uniformCaptionHeight = textHeight + padding.top() + padding.bottom();
-
-			// For consistency, we use a fixed height for all multi-captions to ensure uniformity
-			// regardless of actual text content or item width differences
 		}
 
 		for (auto const& [rowY, indices] : rows) {
@@ -305,6 +302,9 @@ QSize GroupedMedia::countOptimalSize() {
 				rowBottom = std::max(rowBottom, _parts[i].initialGeometry.bottom());
 			}
 			lastRowBottom = rowBottom;
+
+			// Check if this is the last row
+			const bool isLastRow = (rowY == rows.rbegin()->first);
 
 			// Calculate caption heights for this row
 			for (const auto i : indices) {
@@ -330,11 +330,15 @@ QSize GroupedMedia::countOptimalSize() {
 
 			// For multiple captions, add height for each row that has captions
 			if (!singleCaptionAnywhere) {
-				// All items in this row already have the same uniformCaptionHeight,
-				// so we can use it directly without recalculating
 				if (uniformCaptionHeight > 0) {
-					// Add the uniform caption height to the total grid height
-					minHeight += uniformCaptionHeight;
+					// FIX: Subtract the standard spacing for non-last rows.
+					// In countCurrentSize, we shift items up to cover the gap.
+					// We must reflect that here, or the container will be too tall.
+					if (!isLastRow) {
+						minHeight += std::max(0, uniformCaptionHeight - st::historyGroupSkip);
+					} else {
+						minHeight += uniformCaptionHeight;
+					}
 				}
 			}
 		}
@@ -899,20 +903,16 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			p.setFont(st::messageTextStyle.font);
 			const auto padding = QMargins(8, 2, 8, 2);
 
-			std::vector<int> captionIndices;
-			for (auto j = 0; j != _parts.size(); ++j) {
-				if (!_parts[j].item->originalText().empty()) {
-					captionIndices.push_back(j);
-				}
-			}
-			const bool singleCaptionAnywhere = (captionIndices.size() == 1);
+			// FIX: Determine if this is the Single Caption Layout (Full Width)
+			// If the caption rect is significantly wider than the part geometry, it spans the whole album.
+			const bool isSingleCaptionLayout = (captionRect.width() > part.geometry.width() + padding.left() + padding.right());
 
-			if (singleCaptionAnywhere) {
+			if (isSingleCaptionLayout) {
 				// Draw single caption in full
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				
-				// FIX: Force layout calculation so single-line wrapping works
-				const auto textHeight = caption.countHeight(availableWidth); 
+				// FIX: Force layout calculation so single-line wrapping works, and capture the result
+				const auto textHeight = caption.countHeight(availableWidth);
 
 				const auto availableHeight = captionRect.height();
 				const auto verticalPadding = 2;
@@ -934,7 +934,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					0, -1, part._captionSelection);
 				p.restore();
 			} else {
-                // ... (existing code for multiple captions / elided text) ...
 				// Multiple captions - draw with formatting, elided to single line
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto textHeight = st::messageTextStyle.font->height;
