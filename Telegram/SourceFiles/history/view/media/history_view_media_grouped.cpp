@@ -775,9 +775,13 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				const auto itemRect = part.geometry.translated(0, groupPadding.top());
 				const auto &docStyle = st::msgFileLayoutGrouped;
-				const auto statustop = docStyle.statusTop - st::msgFileTopMinus;
 				
-				// FIX: Use st::normalFont->ascent to align with File Size text
+				// FIX 1: Use statusTop directly. Do NOT subtract st::msgFileTopMinus.
+				// This aligns the Y position with the File Size text on the left.
+				const auto statustop = docStyle.statusTop;
+				
+				// FIX 2: Use st::normalFont->ascent.
+				// This aligns the baseline with the File Size text (which uses normalFont).
 				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent;
 
 				const auto views = item->Get<HistoryMessageViews>();
@@ -849,12 +853,13 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto itemRect = part.geometry.translated(0, groupPadding.top());
 				const auto textWidth = st::msgDateFont->width(infoText);
 				const auto &docStyle = st::msgFileLayoutGrouped;
-				const auto topMinus = st::msgFileTopMinus;
-				const auto statustop = docStyle.statusTop - topMinus;
+				
+				// FIX 1: Use statusTop directly. Do NOT subtract st::msgFileTopMinus.
+				const auto statustop = docStyle.statusTop;
 
 				const auto textX = itemRect.x() + itemRect.width() - textWidth - st::msgDateImgDelta;
 				
-				// FIX: Use st::normalFont->ascent here too
+				// FIX 2: Use st::normalFont->ascent.
 				const auto textY = itemRect.y() + statustop + st::normalFont->ascent;
 
 				p.drawText(textX, textY, infoText);
@@ -1009,7 +1014,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const int baseIconH = icon.height();
 				const int scaledIconH = (baseIconH * st::historyViewsWidth) / baseIconW;
 				
-				// FIX: + 1 pixel alignment for icon
 				const int iconY = bubbleY + (bubbleH - scaledIconH) / 2 + 1;
 				
 				icon.paint(p, currentLeft, iconY, st::historyViewsWidth);
