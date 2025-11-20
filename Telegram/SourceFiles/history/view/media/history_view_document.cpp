@@ -922,6 +922,11 @@ void Document::draw(
 
 	// --- CUSTOM INLINE INFO (For All Files except Round Videos) ---
 	if (!_data->isVideoMessage()) {
+		// Define helper locally to avoid "identifier not found"
+		auto ItemDateTime = [](not_null<HistoryItem*> item) {
+			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+		};
+
 		const auto item = _parent->data();
 		const auto font = context.st->msgDateFont;
 		p.setFont(font);
@@ -954,10 +959,11 @@ void Document::draw(
 		if (editedW > 0) totalW += editedW + textGap;
 		totalW += timeIdW;
 
-		// Calculate Position (Right Edge)
+		// Calculate Position (Right Edge of the bubble/available space)
+		// Using st::msgDateImgDelta ensures consistency with Column Albums
 		int infoX = width - nameright - totalW - st::msgDateImgDelta;
-
-		// Collision Check with Status Text
+		
+		// Collision Check with Status Text (on the left)
 		int statusW = st::normalFont->width(statusText);
 		int reservedLeft = nameleft + statusW + st::msgDateSpace;
 		if (infoX < reservedLeft) {
@@ -1289,6 +1295,11 @@ TextState Document::textState(
 	// --- CUSTOM TOOLTIP LOGIC (Inline) ---
 	const bool bubble = _parent->hasBubble();
 	if (!_data->isVideoMessage() && mode == LayoutMode::Full && (!bubble || isBubbleBottom())) {
+		// Define helper locally
+		auto ItemDateTime = [](not_null<HistoryItem*> item) {
+			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+		};
+
 		const auto item = _parent->data();
 		const auto font = st::msgDateFont;
 		
@@ -1353,7 +1364,7 @@ TextState Document::textState(
 			if (editedW > 0) {
 				int w = editedW;
 				if (point.x() >= currentX && point.x() < currentX + w) {
-					const auto uploadLocal = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+					const auto uploadLocal = ItemDateTime(item);
 					QString text = tr::lng_uploaded(tr::now) + ": "
 						+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
 						+ uploadLocal.time().toString("HH:mm:ss");
@@ -1375,7 +1386,7 @@ TextState Document::textState(
 
 			// 3. Date/ID
 			if (point.x() >= currentX && point.x() < currentX + timeIdW) {
-				const auto uploadLocal = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+				const auto uploadLocal = ItemDateTime(item);
 				QString text = tr::lng_uploaded(tr::now) + ": "
 					+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
 					+ uploadLocal.time().toString("HH:mm:ss");

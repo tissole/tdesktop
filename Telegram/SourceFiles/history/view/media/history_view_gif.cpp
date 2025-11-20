@@ -885,6 +885,11 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 
 	// --- CUSTOM TOP-RIGHT BUBBLE (For Standard Videos) ---
 	if (!isRound && !inWebPage && (!bubble || isBubbleBottom())) {
+		// Local definition to fix compilation error
+		auto ItemDateTime = [](not_null<HistoryItem*> item) {
+			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+		};
+
 		const auto font = st::msgDateFont;
 		p.setFont(font);
 
@@ -1294,6 +1299,11 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 	// --- CUSTOM TOOLTIP LOGIC (Top-Right Bubble for Standard Videos) ---
 	// We apply this ONLY for standard videos (!isRound) to match the draw() logic.
 	if (!isRound && !inWebPage && (!bubble || isBubbleBottom())) {
+		// Local definition to fix compilation error
+		auto ItemDateTime = [](not_null<HistoryItem*> item) {
+			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+		};
+
 		const auto font = st::msgDateFont;
 		
 		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
@@ -1355,7 +1365,7 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 			if (edited) {
 				int w = font->width(QString::fromUtf8("✏️"));
 				if (point.x() >= currentX && point.x() < currentX + w) {
-					const auto uploadLocal = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+					const auto uploadLocal = ItemDateTime(item);
 					QString text = tr::lng_uploaded(tr::now) + ": "
 						+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
 						+ uploadLocal.time().toString("HH:mm:ss");
@@ -1381,7 +1391,7 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 			// 3. Date/ID Zone
 			int dateW = font->width(dateText + msgIdText);
 			if (point.x() >= currentX && point.x() < currentX + dateW) {
-				const auto uploadLocal = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+				const auto uploadLocal = ItemDateTime(item);
 				QString text = tr::lng_uploaded(tr::now) + ": "
 					+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
 					+ uploadLocal.time().toString("HH:mm:ss");
@@ -1507,8 +1517,6 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 		}
 		
 		// --- MODIFIED: Only check standard bottom info if it's a Round Video ---
-		// For standard videos, we already handled the tooltip in the custom block above
-		// and we don't want the default logic to override or interfere.
 		if (isRound) {
 			const auto bottomInfoResult = _parent->bottomInfoTextState(
 				fullRight,

@@ -286,11 +286,14 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	ensureDataMediaCreated();
+
+	// Custom logic for blocked users/spoilers
 	auto peerId = _parent->data()->from() ? _parent->data()->from()->id : PeerId(0);
 	auto user = history()->session().data().peerLoaded(_parent->data()->from() ? _parent->data()->from()->id : PeerId(0));
 	if (!blockExist(peerId.value) || (!GetEnhancedBool("blocked_user_spoiler_mode") && user && !user->isBlocked())) {
 		_dataMedia->automaticLoad(_realParent->fullId(), _parent->data());
 	}
+
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
 	const auto preview = _data->extendedMediaPreview();
@@ -341,7 +344,9 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 		}
 	}
 
+	// Reverted to false to match official file
 	const auto showEnlarge = false;
+	
 	const auto paintInCenter = !_sensitiveSpoiler
 		&& (radial || (!loaded && !_data->loading()));
 	if (paintInCenter || showEnlarge) {
@@ -408,14 +413,20 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	if (!inWebPage && (!bubble || isBubbleBottom())) {
 		auto fullRight = paintx + paintw;
 		auto fullBottom = painty + painth;
+		
+		// We use needInfoDisplay() to guard the bubble, just like the official file guards drawInfo()
+		if (needInfoDisplay()) {
+			// Local helper to mimic Grid Album syntax
+			auto ItemDateTime = [](not_null<HistoryItem*> item) {
+				return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+			};
 
-		// 1. Draw Custom Top-Right Info Bubble
-		{
 			const auto item = _parent->data();
 			const auto font = st::msgDateFont;
 			p.setFont(font);
 
 			const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+			
 			const auto dateText = QLocale().toString(
 				ItemDateTime(item).time(),
 				GetEnhancedBool("show_seconds")
@@ -470,8 +481,10 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 				const int baseIconW = std::max(1, icon.width());
 				const int baseIconH = icon.height();
 				const int scaledIconH = (baseIconH * st::historyViewsWidth) / baseIconW;
+				
 				icon.paint(p, currentLeft, bubbleY + (bubbleH - scaledIconH) / 2 + 1, st::historyViewsWidth);
 				p.drawText(currentLeft + st::historyViewsWidth + 1, textBaseY, viewsText);
+				
 				currentLeft += viewsWidth + textPadding;
 			}
 			if (edited) {
@@ -484,7 +497,7 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 			p.drawText(currentLeft, textBaseY, dateText + msgIdText);
 		}
 
-		// 2. Draw Right Action (Fast Share) if available
+		// Draw Right Action (Fast Share)
 		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
 			auto fastShareLeft = _parent->hasRightLayout()
 				? (paintx - size->width() - st::historyFastShareLeft)
@@ -737,11 +750,17 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 	bool inWebPage = (_parent->media() != this);
 
 	// --- CUSTOM TOOLTIP LOGIC (Top-Right Bubble) ---
-	if (!inWebPage && (!bubble || isBubbleBottom())) {
+	// Guarded by needInfoDisplay() to ensure it doesn't trigger on fake views
+	if (!inWebPage && (!bubble || isBubbleBottom()) && needInfoDisplay()) {
+		auto ItemDateTime = [](not_null<HistoryItem*> item) {
+			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+		};
+
 		const auto item = _parent->data();
 		const auto font = st::msgDateFont;
 		
 		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+		
 		const auto dateText = QLocale().toString(
 			ItemDateTime(item).time(),
 			GetEnhancedBool("show_seconds")
@@ -758,7 +777,7 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 			: QString();
 
 		int totalWidth = 0;
-		const int textPadding = font->width(' '); // Space between elements
+		const int textPadding = font->width(' ');
 		totalWidth += font->width(dateText + msgIdText);
 
 		if (edited) {
@@ -800,7 +819,7 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 			if (edited) {
 				int w = font->width(QString::fromUtf8("✏️"));
 				if (point.x() >= currentX && point.x() < currentX + w) {
-					const auto uploadLocal = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+					const auto uploadLocal = ItemDateTime(item);
 					QString text = tr::lng_uploaded(tr::now) + ": "
 						+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
 						+ uploadLocal.time().toString("HH:mm:ss");
@@ -826,7 +845,7 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 			// 3. Date/ID Zone
 			int dateW = font->width(dateText + msgIdText);
 			if (point.x() >= currentX && point.x() < currentX + dateW) {
-				const auto uploadLocal = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+				const auto uploadLocal = ItemDateTime(item);
 				QString text = tr::lng_uploaded(tr::now) + ": "
 					+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
 					+ uploadLocal.time().toString("HH:mm:ss");
