@@ -25,6 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/format_values.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
+#include "ui/item_text_options.h"
 #include "layout/layout_selection.h"
 #include "styles/style_chat.h"
 #include "styles/style_basic.h"
@@ -321,7 +322,7 @@ QSize GroupedMedia::countOptimalSize() {
 			Ui::Text::String caption(
 				st::messageTextStyle,
 				part.item->originalText(),
-				part.item->textOptions());
+				Ui::ItemTextOptions(part.item));
 
 			part._captionHeight = int(caption.countHeight(captionWidth) + padding.top() + padding.bottom());
 
@@ -415,7 +416,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				Ui::Text::String caption(
 					st::messageTextStyle,
 					part.item->originalText(),
-					part.item->textOptions());
+					Ui::ItemTextOptions(part.item));
 
 				part._captionHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
 
@@ -874,7 +875,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				Ui::Text::String caption(
 					st::messageTextStyle,
 					originalText,
-					part.item->textOptions());
+					Ui::ItemTextOptions(part.item));
 
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto availableHeight = captionRect.height();
@@ -1065,7 +1066,7 @@ TextState GroupedMedia::getPartState(
 					Ui::Text::String caption(
 						st::messageTextStyle,
 						originalText,
-						part.item->textOptions());
+						Ui::ItemTextOptions(part.item));
 
 					std::vector<int> captionIndices;
 					for (auto j = 0; j != _parts.size(); ++j) {
