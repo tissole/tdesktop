@@ -404,19 +404,87 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 		drawPurchasedTag(p, geometry, context);
 	}
 
-	// date
+	// --- CUSTOM INFO BUBBLE (TOP-RIGHT) ---
 	if (!inWebPage && (!bubble || isBubbleBottom())) {
 		auto fullRight = paintx + paintw;
 		auto fullBottom = painty + painth;
-		if (needInfoDisplay()) {
-			_parent->drawInfo(
-				p,
-				context,
-				fullRight,
-				fullBottom,
-				2 * paintx + paintw,
-				InfoDisplayType::Image);
+
+		// 1. Draw Custom Top-Right Info Bubble
+		{
+			const auto item = _parent->data();
+			const auto font = st::msgDateFont;
+			p.setFont(font);
+
+			const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+			const auto dateText = QLocale().toString(
+				ItemDateTime(item).time(),
+				GetEnhancedBool("show_seconds")
+					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+					: QLocale::system().timeFormat(QLocale::ShortFormat));
+
+			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+				? QString(" %1").arg(item->fullId().msg.bare)
+				: QString();
+
+			const auto views = item->Get<HistoryMessageViews>();
+			const auto viewsText = (views && views->views.count >= 0)
+				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+				: QString();
+
+			int totalWidth = 0;
+			const int textPadding = font->width(' ');
+			totalWidth += font->width(dateText + msgIdText);
+
+			if (edited) {
+				totalWidth += textPadding + font->width(QString::fromUtf8("✏️"));
+			}
+
+			int viewsWidth = 0;
+			if (!viewsText.isEmpty()) {
+				viewsWidth = st::historyViewsWidth + 1 + font->width(viewsText);
+				totalWidth += (2 * textPadding) + viewsWidth;
+			}
+
+			const auto textHeight = font->height;
+			const auto hPadding = 2;
+			const auto vPadding = st::msgDateImgPadding.y();
+			const auto bubbleW = totalWidth + 2 * hPadding;
+			const auto bubbleH = textHeight + 2 * vPadding;
+
+			// Position: Top-Right
+			const auto bubbleX = width() - bubbleW - st::msgDateImgDelta;
+			const auto bubbleY = st::msgDateImgDelta;
+
+			p.save();
+			p.setOpacity(0.95);
+			Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, sti->msgDateImgBg, sti->msgDateImgBgCorners);
+			p.restore();
+
+			p.setPen(st->msgDateImgFg());
+			p.setFont(font->bold());
+			const int textBaseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
+			int currentLeft = bubbleX + hPadding;
+
+			if (!viewsText.isEmpty()) {
+				const auto &icon = st->historyViewsInvertedIcon();
+				const int baseIconW = std::max(1, icon.width());
+				const int baseIconH = icon.height();
+				const int scaledIconH = (baseIconH * st::historyViewsWidth) / baseIconW;
+				icon.paint(p, currentLeft, bubbleY + (bubbleH - scaledIconH) / 2 + 1, st::historyViewsWidth);
+				p.drawText(currentLeft + st::historyViewsWidth + 1, textBaseY, viewsText);
+				currentLeft += viewsWidth + textPadding;
+			}
+			if (edited) {
+				const auto editedText = QString::fromUtf8("✏️");
+				p.setFont(font);
+				p.drawText(currentLeft, textBaseY, editedText);
+				currentLeft += font->width(editedText) + textPadding;
+				p.setFont(font->bold());
+			}
+			p.drawText(currentLeft, textBaseY, dateText + msgIdText);
 		}
+
+		// 2. Draw Right Action (Fast Share) if available
 		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
 			auto fastShareLeft = _parent->hasRightLayout()
 				? (paintx - size->width() - st::historyFastShareLeft)
