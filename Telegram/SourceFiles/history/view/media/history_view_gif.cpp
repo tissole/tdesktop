@@ -1291,6 +1291,113 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 	}
 	if (rtl()) usex = width() - usex - usew;
 
+	// --- CUSTOM TOOLTIP LOGIC (Top-Right Bubble for Standard Videos) ---
+	// We apply this ONLY for standard videos (!isRound) to match the draw() logic.
+	if (!isRound && !inWebPage && (!bubble || isBubbleBottom())) {
+		const auto font = st::msgDateFont;
+		
+		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+		const auto dateText = QLocale().toString(
+			ItemDateTime(item).time(),
+			GetEnhancedBool("show_seconds")
+				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+				: QLocale::system().timeFormat(QLocale::ShortFormat));
+
+		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+			? QString(" %1").arg(item->fullId().msg.bare)
+			: QString();
+
+		const auto views = item->Get<HistoryMessageViews>();
+		const auto viewsText = (views && views->views.count >= 0)
+			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+			: QString();
+
+		int totalWidth = 0;
+		const int textPadding = font->width(' ');
+		totalWidth += font->width(dateText + msgIdText);
+
+		if (edited) {
+			totalWidth += textPadding + font->width(QString::fromUtf8("✏️"));
+		}
+
+		int viewsWidth = 0;
+		if (!viewsText.isEmpty()) {
+			viewsWidth = st::historyViewsWidth + 1 + font->width(viewsText);
+			totalWidth += (2 * textPadding) + viewsWidth;
+		}
+
+		const auto textHeight = font->height;
+		const auto hPadding = 2;
+		const auto vPadding = st::msgDateImgPadding.y();
+		const auto bubbleW = totalWidth + 2 * hPadding;
+		const auto bubbleH = textHeight + 2 * vPadding;
+
+		// Position: Top-Right
+		const auto bubbleX = width() - bubbleW - st::msgDateImgDelta;
+		const auto bubbleY = st::msgDateImgDelta;
+
+		// Hit Testing
+		if (QRect(bubbleX, bubbleY, bubbleW, bubbleH).contains(point)) {
+			int currentX = bubbleX + hPadding;
+
+			// 1. Views Zone
+			if (!viewsText.isEmpty()) {
+				int w = st::historyViewsWidth + 1 + font->width(viewsText);
+				if (point.x() >= currentX && point.x() < currentX + w) {
+					result.customTooltip = true;
+					result.customTooltipText = QString("Views: ") + viewsText;
+					return result;
+				}
+				currentX += w + textPadding;
+			}
+
+			// 2. Edited Zone (Icon)
+			if (edited) {
+				int w = font->width(QString::fromUtf8("✏️"));
+				if (point.x() >= currentX && point.x() < currentX + w) {
+					const auto uploadLocal = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+					QString text = tr::lng_uploaded(tr::now) + ": "
+						+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
+						+ uploadLocal.time().toString("HH:mm:ss");
+					
+					if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
+						text += "  ID: " + QString::number(item->fullId().msg.bare);
+					}
+
+					const auto editLocal = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
+					QString editedTrans = tr::lng_edited(tr::now);
+					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
+					text += "\n" + editedTrans + ": "
+						+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
+						+ editLocal.time().toString("HH:mm:ss");
+
+					result.customTooltip = true;
+					result.customTooltipText = text;
+					return result;
+				}
+				currentX += w + textPadding;
+			}
+
+			// 3. Date/ID Zone
+			int dateW = font->width(dateText + msgIdText);
+			if (point.x() >= currentX && point.x() < currentX + dateW) {
+				const auto uploadLocal = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+				QString text = tr::lng_uploaded(tr::now) + ": "
+					+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
+					+ uploadLocal.time().toString("HH:mm:ss");
+				
+				if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
+					text += "  ID: " + QString::number(item->fullId().msg.bare);
+				}
+				
+				result.customTooltip = true;
+				result.customTooltipText = text;
+				return result;
+			}
+		}
+	}
+	// ----------------------------------------------------------
+
 	if (via || reply || forwarded) {
 		auto rectw = paintw - usew - st::msgReplyPadding.left();
 		auto innerw = rectw - (st::msgReplyPadding.left() + st::msgReplyPadding.right());
@@ -1398,18 +1505,26 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 				fullRight = maxRight;
 			}
 		}
-		const auto bottomInfoResult = _parent->bottomInfoTextState(
-			fullRight,
-			fullBottom,
-			point,
-			(unwrapped
-				? InfoDisplayType::Background
-				: InfoDisplayType::Image));
-		if (bottomInfoResult.link
-			|| bottomInfoResult.cursor != CursorState::None
-			|| bottomInfoResult.customTooltip) {
-			return bottomInfoResult;
+		
+		// --- MODIFIED: Only check standard bottom info if it's a Round Video ---
+		// For standard videos, we already handled the tooltip in the custom block above
+		// and we don't want the default logic to override or interfere.
+		if (isRound) {
+			const auto bottomInfoResult = _parent->bottomInfoTextState(
+				fullRight,
+				fullBottom,
+				point,
+				(unwrapped
+					? InfoDisplayType::Background
+					: InfoDisplayType::Image));
+			if (bottomInfoResult.link
+				|| bottomInfoResult.cursor != CursorState::None
+				|| bottomInfoResult.customTooltip) {
+				return bottomInfoResult;
+			}
 		}
+		// -----------------------------------------------------------------------
+
 		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
 			const auto rightActionWidth = size->width();
 			auto fastShareLeft = _parent->hasRightLayout()

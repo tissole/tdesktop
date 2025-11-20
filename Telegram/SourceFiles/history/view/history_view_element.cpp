@@ -1679,17 +1679,27 @@ bool Element::countIsTopicRootReply() const {
 void Element::setDisplayDate(bool displayDate) {
 	const auto item = data();
 
-	// --- CUSTOM: Disable default date for ALL Media Types ---
-	// This allows:
-	// 1. Top-Right bubble for Photos/Videos.
-	// 2. Inline (same line as status) info for Documents/Audio.
+	// --- CUSTOM: Disable default date for Media ---
 	if (const auto media = item->media()) {
 		const auto type = media->type();
+		// Disable for Photo and Gif (Standard Video) -> We draw Top-Right
+		// Disable for File (Document/Audio) -> We draw Inline
 		if (type == MediaType::Photo || type == MediaType::Gif || type == MediaType::File) {
-			displayDate = false;
+			// Exception: Keep default date for Round Video Messages (Video Notes)
+			// They use a specific layout that we don't want to break.
+			bool isRound = false;
+			if (type == MediaType::File) {
+				if (const auto doc = media->document()) {
+					if (doc->isVideoMessage()) isRound = true;
+				}
+			}
+			
+			if (!isRound) {
+				displayDate = false;
+			}
 		}
 	}
-	// --------------------------------------------------------
+	// ----------------------------------------------
 
 	if (item->hideDisplayDate()) {
 		displayDate = false;

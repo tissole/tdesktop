@@ -916,77 +916,62 @@ void Document::draw(
 	}
 
 	auto statusText = voiceStatusOverride.isEmpty() ? _statusText : voiceStatusOverride;
-	
-	// --- CUSTOM STATUS DRAWING ---
 	p.setFont(st::normalFont);
 	p.setPen(stm->mediaFg);
 	p.drawTextLeft(nameleft, statustop, width, statusText);
 
-	// Calculate where the status text ends to append info
-	int statusTextWidth = st::normalFont->width(statusText);
-	int infoX = nameleft + statusTextWidth;
-
-	// --- CUSTOM INLINE INFO (For Non-Videos) ---
-	// If it's NOT a video file, we draw the info inline right after the status text.
-	if (!_data->isVideoFile()) {
+	// --- CUSTOM INLINE INFO (For Non-Videos: Files, Audio, Voice) ---
+	// This was missing in your last paste. It is required to see the info!
+	if (!_data->isVideoMessage() && !_data->isVideoFile()) {
 		const auto item = _parent->data();
-		const auto font = st::msgDateFont;
-		
+		const auto font = context.st->msgDateFont;
+		p.setFont(font);
+		p.setPen(stm->msgDateFg);
+
 		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
 		const auto dateText = QLocale().toString(
 			ItemDateTime(item).time(),
 			GetEnhancedBool("show_seconds")
 				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
 				: QLocale::system().timeFormat(QLocale::ShortFormat));
-
 		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
 			? QString(" %1").arg(item->fullId().msg.bare)
 			: QString();
-
 		const auto views = item->Get<HistoryMessageViews>();
 		const auto viewsText = (views && views->views.count >= 0)
 			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
 			: QString();
 
-		// Spacing between status and info
-		infoX += st::msgDateSpace;
+		// Calculate start position
+		int statusW = st::normalFont->width(statusText);
+		int infoX = nameleft + statusW + st::msgDateSpace;
 
-		p.setFont(font);
-		p.setPen(stm->msgDateFg); // Use date color for info
-
-		// Draw Views
+		// Views
 		if (!viewsText.isEmpty()) {
 			const auto &icon = stm->historyViewsIcon;
 			const int iconW = st::historyViewsWidth;
 			const int iconH = icon.height();
 			// Center icon vertically relative to text
 			const int iconTop = statustop + st::normalFont->ascent - font->ascent + (font->height - iconH) / 2;
-			
 			icon.paint(p, infoX, iconTop, iconW);
 			infoX += iconW + st::historyViewsSpace;
-			
 			p.drawText(infoX, statustop + st::normalFont->ascent, viewsText);
 			infoX += font->width(viewsText) + st::msgDateSpace;
 		}
 
-		// Draw Edited
+		// Edited
 		if (edited) {
 			const auto editedText = QString::fromUtf8("✏️");
 			p.drawText(infoX, statustop + st::normalFont->ascent, editedText);
 			infoX += font->width(editedText) + st::msgDateSpace;
 		}
 
-		// Draw Date + ID
+		// Date + ID
 		p.drawText(infoX, statustop + st::normalFont->ascent, dateText + msgIdText);
 	}
-	// -----------------------------
+	// ----------------------------------------------------------------
 
 	if (_realParent->hasUnreadMediaFlag()) {
-		// Adjust unread dot position if we added inline info
-		// The original code calculated 'w' based on statusText. 
-		// If we added info, we might want to push the dot further, 
-		// but usually the dot is for Voice messages and sits near the waveform or status.
-		// We will keep original behavior relative to statusText to avoid breaking layout.
 		auto w = st::normalFont->width(statusText);
 		if (w + st::mediaUnreadSkip + st::mediaUnreadSize <= statuswidth) {
 			p.setPen(Qt::NoPen);
@@ -1028,8 +1013,7 @@ void Document::draw(
 		});
 	}
 
-	// --- CUSTOM TOP-RIGHT BUBBLE (For Videos Only) ---
-	// We only apply this if it IS a Video File (Round or File).
+	// --- CUSTOM TOP-RIGHT BUBBLE (For Video Files Only) ---
 	if (_data->isVideoFile() && !thumbed && mode == LayoutMode::Full) {
 		const auto bubble = _parent->hasBubble();
 		if (!bubble || isBubbleBottom()) {
@@ -1116,13 +1100,48 @@ void Document::draw(
 				const auto paintx = 0;
 				const auto painty = 0;
 				const auto paintw = width;
-				const auto painth = height(); // Document::height() is available
+				const auto painth = height();
 				auto fastShareLeft = _parent->hasRightLayout()
 					? (paintx - size->width() - context.st->historyFastShareLeft)
 					: (paintx + paintw + context.st->historyFastShareLeft);
 				auto fastShareTop = (painty + painth - context.st->historyFastShareBottom - size->height());
 				_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, 2 * paintx + paintw);
 			}
+		}
+	}
+
+	// --- STANDARD BOTTOM INFO (Round Videos Only) ---
+	bool inWebPage = (_parent->media() != this);
+	const auto bubble = _parent->hasBubble();
+	if (_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
+		auto fullRight = width;
+		auto fullBottom = height();
+		_parent->drawInfo(
+			p,
+			context,
+			fullRight,
+			fullBottom,
+			width,
+			InfoDisplayType::Image);
+		
+		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
+			auto fastShareLeft = _parent->hasRightLayout()
+				? (-size->width() - st::historyFastShareLeft)
+				: (fullRight + st::historyFastShareLeft);
+			auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
+			_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, width);
+		}
+	} else if (!_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
+		// For non-round files (which now have inline info), we still need the Right Action (Fast Share) 
+		// button if it exists (e.g. Channel comments button), but NOT the standard date/info.
+		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
+			auto fullRight = width;
+			auto fullBottom = height();
+			auto fastShareLeft = _parent->hasRightLayout()
+				? (-size->width() - st::historyFastShareLeft)
+				: (fullRight + st::historyFastShareLeft);
+			auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
+			_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, width);
 		}
 	}
 }
@@ -1345,6 +1364,92 @@ TextState Document::textState(
 	const auto innerSize = st::msgFileLayout.thumbSize;
 	const auto inner = QRect(rthumb.x() + (rthumb.width() - innerSize) / 2, rthumb.y() + (rthumb.height() - innerSize) / 2, innerSize, innerSize);
 
+	// --- CUSTOM TOOLTIP LOGIC (Inline) ---
+	const bool bubble = _parent->hasBubble();
+	if (!_data->isVideoMessage() && mode == LayoutMode::Full && (!bubble || isBubbleBottom())) {
+		const auto item = _parent->data();
+		const auto font = st::msgDateFont;
+		
+		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+		const auto dateText = QLocale().toString(
+			ItemDateTime(item).time(),
+			GetEnhancedBool("show_seconds")
+				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+				: QLocale::system().timeFormat(QLocale::ShortFormat));
+		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+			? QString(" %1").arg(item->fullId().msg.bare)
+			: QString();
+		const auto views = item->Get<HistoryMessageViews>();
+		const auto viewsText = (views && views->views.count >= 0)
+			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+			: QString();
+
+		const auto statustop = st.statusTop - topMinus;
+		int statusW = st::normalFont->width(_statusText);
+		
+		// Bubble Area
+		int bubbleX = nameleft + statusW + st::msgDateSpace;
+		int bubbleY = statustop + st::normalFont->ascent - font->ascent;
+		int bubbleH = font->height;
+		
+		// Hit Test Area
+		if (point.y() >= bubbleY && point.y() <= bubbleY + bubbleH && point.x() >= bubbleX) {
+			int currentX = bubbleX;
+			int itemSpacing = st::msgDateSpace;
+
+			// 1. Views
+			if (!viewsText.isEmpty()) {
+				int w = st::historyViewsWidth + 1 + font->width(viewsText);
+				if (point.x() >= currentX && point.x() < currentX + w) {
+					result.customTooltip = true;
+					result.customTooltipText = QString("Views: ") + viewsText;
+					return result;
+				}
+				currentX += w + itemSpacing;
+			}
+
+			// 2. Edited
+			if (edited) {
+				int w = font->width(QString::fromUtf8("✏️"));
+				if (point.x() >= currentX && point.x() < currentX + w) {
+					const auto uploadLocal = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+					QString text = tr::lng_uploaded(tr::now) + ": "
+						+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
+						+ uploadLocal.time().toString("HH:mm:ss");
+					const auto editLocal = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
+					QString editedTrans = tr::lng_edited(tr::now);
+					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
+					text += "\n" + editedTrans + ": "
+						+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
+						+ editLocal.time().toString("HH:mm:ss");
+					if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
+						text += "\nMessage ID: " + QString::number(item->fullId().msg.bare);
+					}
+					result.customTooltip = true;
+					result.customTooltipText = text;
+					return result;
+				}
+				currentX += w + itemSpacing;
+			}
+
+			// 3. Date/ID
+			int dateW = font->width(dateText + msgIdText);
+			if (point.x() >= currentX && point.x() < currentX + dateW) {
+				const auto uploadLocal = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+				QString text = tr::lng_uploaded(tr::now) + ": "
+					+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
+					+ uploadLocal.time().toString("HH:mm:ss");
+				if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
+					text += "\nMessage ID: " + QString::number(item->fullId().msg.bare);
+				}
+				result.customTooltip = true;
+				result.customTooltipText = text;
+				return result;
+			}
+		}
+	}
+	// -------------------------------------
+
 	const auto filenameMoused = QRect(nameleft, nametop, namewidth, st::semiboldFont->height).contains(point);
 	_tooltipFilename.setMoused(filenameMoused);
 	if (const auto thumbed = Get<HistoryDocumentThumbed>()) {
@@ -1454,6 +1559,34 @@ TextState Document::textState(
 		return result;
 	}
 	_tooltipFilename.updateTooltipForState(result);
+
+	// --- STANDARD BOTTOM INFO (Round Videos Only) ---
+	bool inWebPage = (_parent->media() != this);
+	if (_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
+		auto fullRight = width;
+		auto fullBottom = height();
+		const auto bottomInfoResult = _parent->bottomInfoTextState(
+			fullRight,
+			fullBottom,
+			point,
+			InfoDisplayType::Image);
+		if (bottomInfoResult.link
+			|| bottomInfoResult.cursor != CursorState::None
+			|| bottomInfoResult.customTooltip) {
+			return bottomInfoResult;
+		}
+		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
+			auto fastShareLeft = _parent->hasRightLayout()
+				? (-size->width() - st::historyFastShareLeft)
+				: (fullRight + st::historyFastShareLeft);
+			auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
+			if (QRect(fastShareLeft, fastShareTop, size->width(), size->height()).contains(point)) {
+				result.link = _parent->rightActionLink(point
+					- QPoint(fastShareLeft, fastShareTop));
+			}
+		}
+	}
+	
 	return result;
 }
 
