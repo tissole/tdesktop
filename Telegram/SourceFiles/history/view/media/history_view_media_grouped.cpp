@@ -315,9 +315,10 @@ QSize GroupedMedia::countOptimalSize() {
 
 			auto &part = _parts[captionIdx];
 			
-			const auto captionWidth = maxWidth - padding.left() - padding.right();
+			// FIX: constrain the width to the maximum allowed group width.
+			// This ensures we calculate a wrapped height, not a single-line height.
+			const auto captionWidth = std::min(maxWidth, st::historyGroupWidthMax) - padding.left() - padding.right();
 			
-			// Create a temporary string to calculate height correctly
 			Ui::Text::String caption(
 				st::messageTextStyle,
 				part.item->originalText(),
@@ -411,7 +412,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				// Use the full newWidth for the caption
 				const auto captionWidth = newWidth - padding.left() - padding.right();
 
-				// Create string to calculate exact wrapped height
+				// Create string to calculate exact wrapped height based on CURRENT width
 				Ui::Text::String caption(
 					st::messageTextStyle,
 					part.item->originalText(),
@@ -776,15 +777,15 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto &docStyle = st::msgFileLayoutGrouped;
 				const auto statustop = docStyle.statusTop - st::msgFileTopMinus;
 				
-				// + 1 pixel alignment
-				const auto baseY = itemRect.y() + statustop + st::msgDateFont->ascent + 1;
+				// FIX: Use st::normalFont->ascent to align with File Size text
+				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent;
 
 				const auto views = item->Get<HistoryMessageViews>();
 				const auto viewsText = (views && views->views.count >= 0)
 					? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
 					: QString();
 				const bool editedNow = (item->Get<HistoryMessageEdited>() && !item->hideEditedBadge());
-				const auto editText = editedNow ? (QString::fromUtf8("✏️") + " ") : QString();
+				const auto editText = editedNow ? (QString::fromUtf8("✏️")) : QString();
 				const auto timeText = QLocale().toString(
 					ItemDateTime(item).time(),
 					GetEnhancedBool("show_seconds")
@@ -853,8 +854,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				const auto textX = itemRect.x() + itemRect.width() - textWidth - st::msgDateImgDelta;
 				
-				// + 1 pixel alignment
-				const auto textY = itemRect.y() + statustop + st::msgDateFont->ascent + 1;
+				// FIX: Use st::normalFont->ascent here too
+				const auto textY = itemRect.y() + statustop + st::normalFont->ascent;
 
 				p.drawText(textX, textY, infoText);
 			}
@@ -972,7 +973,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			totalWidth += dateWidth;
 
 			if (edited) {
-				const auto editedWidth = font->width(QString::fromUtf8("✏️") + " ");
+				const auto editedWidth = font->width(QString::fromUtf8("✏️"));
 				totalWidth += textPadding + editedWidth;
 			}
 
@@ -1008,7 +1009,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const int baseIconH = icon.height();
 				const int scaledIconH = (baseIconH * st::historyViewsWidth) / baseIconW;
 				
-				// + 1 pixel alignment
+				// FIX: + 1 pixel alignment for icon
 				const int iconY = bubbleY + (bubbleH - scaledIconH) / 2 + 1;
 				
 				icon.paint(p, currentLeft, iconY, st::historyViewsWidth);
@@ -1016,7 +1017,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				currentLeft += viewsWidth + textPadding;
 			}
 			if (edited) {
-				const auto editedText = QString::fromUtf8("✏️") + " ";
+				const auto editedText = QString::fromUtf8("✏️");
 				const auto editedWidth = font->width(editedText);
 				p.setFont(font);
 				p.drawText(currentLeft, textBaseY, editedText);
@@ -1157,7 +1158,7 @@ TextState GroupedMedia::getPartState(
 						? QString(" %1").arg(item->fullId().msg.bare)
 						: QString();
 					const bool editedNow = (edited && !item->hideEditedBadge());
-					const int editedW = editedNow ? font->width(QString::fromUtf8("✏️") + " ") : 0;
+					const int editedW = editedNow ? font->width(QString::fromUtf8("✏️")) : 0;
 					const int timeIdW = font->width(timeText + idText);
 					const auto views = item->Get<HistoryMessageViews>();
 					const auto viewsText = (views && views->views.count >= 0)
@@ -1390,7 +1391,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			const int dateWidth = font->width(dateText + msgIdText);
 			totalWidth += dateWidth;
 			if (edited) {
-				const auto editedWidth = font->width(QString::fromUtf8("✏️") + " ");
+				const auto editedWidth = font->width(QString::fromUtf8("✏️"));
 				totalWidth += editedWidth;
 			}
 			int viewsWidth = 0;
@@ -1412,7 +1413,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 				const int iconGap = 1;
 				const int iconW = st::historyViewsWidth;
 				const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
-				const int editedW = edited ? font->width(QString::fromUtf8("✏️") + " ") : 0;
+				const int editedW = edited ? font->width(QString::fromUtf8("✏️")) : 0;
 				const int timeIdW = font->width(dateText + msgIdText);
 				int hoverLeft = bubbleX + hPadding;
 				QRect viewsRect, timeIdRect, editedRect;
