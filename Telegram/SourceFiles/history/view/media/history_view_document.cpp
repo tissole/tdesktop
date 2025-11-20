@@ -916,11 +916,77 @@ void Document::draw(
 	}
 
 	auto statusText = voiceStatusOverride.isEmpty() ? _statusText : voiceStatusOverride;
+	
+	// --- CUSTOM STATUS DRAWING ---
 	p.setFont(st::normalFont);
 	p.setPen(stm->mediaFg);
 	p.drawTextLeft(nameleft, statustop, width, statusText);
 
+	// Calculate where the status text ends to append info
+	int statusTextWidth = st::normalFont->width(statusText);
+	int infoX = nameleft + statusTextWidth;
+
+	// --- CUSTOM INLINE INFO (For Non-Videos) ---
+	// If it's NOT a video file, we draw the info inline right after the status text.
+	if (!_data->isVideoFile()) {
+		const auto item = _parent->data();
+		const auto font = st::msgDateFont;
+		
+		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+		const auto dateText = QLocale().toString(
+			ItemDateTime(item).time(),
+			GetEnhancedBool("show_seconds")
+				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+				: QLocale::system().timeFormat(QLocale::ShortFormat));
+
+		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+			? QString(" %1").arg(item->fullId().msg.bare)
+			: QString();
+
+		const auto views = item->Get<HistoryMessageViews>();
+		const auto viewsText = (views && views->views.count >= 0)
+			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+			: QString();
+
+		// Spacing between status and info
+		infoX += st::msgDateSpace;
+
+		p.setFont(font);
+		p.setPen(stm->msgDateFg); // Use date color for info
+
+		// Draw Views
+		if (!viewsText.isEmpty()) {
+			const auto &icon = stm->historyViewsIcon;
+			const int iconW = st::historyViewsWidth;
+			const int iconH = icon.height();
+			// Center icon vertically relative to text
+			const int iconTop = statustop + st::normalFont->ascent - font->ascent + (font->height - iconH) / 2;
+			
+			icon.paint(p, infoX, iconTop, iconW);
+			infoX += iconW + st::historyViewsSpace;
+			
+			p.drawText(infoX, statustop + st::normalFont->ascent, viewsText);
+			infoX += font->width(viewsText) + st::msgDateSpace;
+		}
+
+		// Draw Edited
+		if (edited) {
+			const auto editedText = QString::fromUtf8("✏️");
+			p.drawText(infoX, statustop + st::normalFont->ascent, editedText);
+			infoX += font->width(editedText) + st::msgDateSpace;
+		}
+
+		// Draw Date + ID
+		p.drawText(infoX, statustop + st::normalFont->ascent, dateText + msgIdText);
+	}
+	// -----------------------------
+
 	if (_realParent->hasUnreadMediaFlag()) {
+		// Adjust unread dot position if we added inline info
+		// The original code calculated 'w' based on statusText. 
+		// If we added info, we might want to push the dot further, 
+		// but usually the dot is for Voice messages and sits near the waveform or status.
+		// We will keep original behavior relative to statusText to avoid breaking layout.
 		auto w = st::normalFont->width(statusText);
 		if (w + st::mediaUnreadSkip + st::mediaUnreadSize <= statuswidth) {
 			p.setPen(Qt::NoPen);
@@ -960,6 +1026,104 @@ void Document::draw(
 			.highlight = highlightRequest ? &*highlightRequest : nullptr,
 			.useFullWidth = true,
 		});
+	}
+
+	// --- CUSTOM TOP-RIGHT BUBBLE (For Videos Only) ---
+	// We only apply this if it IS a Video File (Round or File).
+	if (_data->isVideoFile() && !thumbed && mode == LayoutMode::Full) {
+		const auto bubble = _parent->hasBubble();
+		if (!bubble || isBubbleBottom()) {
+			const auto item = _parent->data();
+			const auto font = context.st->msgDateFont;
+			p.setFont(font);
+
+			const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+			const auto dateText = QLocale().toString(
+				ItemDateTime(item).time(),
+				GetEnhancedBool("show_seconds")
+					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+					: QLocale::system().timeFormat(QLocale::ShortFormat));
+
+			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+				? QString(" %1").arg(item->fullId().msg.bare)
+				: QString();
+
+			const auto views = item->Get<HistoryMessageViews>();
+			const auto viewsText = (views && views->views.count >= 0)
+				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+				: QString();
+
+			int totalWidth = 0;
+			const int textPadding = font->width(' ');
+			totalWidth += font->width(dateText + msgIdText);
+
+			if (edited) {
+				totalWidth += textPadding + font->width(QString::fromUtf8("✏️"));
+			}
+
+			int viewsWidth = 0;
+			if (!viewsText.isEmpty()) {
+				viewsWidth = context.st->historyViewsWidth + 1 + font->width(viewsText);
+				totalWidth += (2 * textPadding) + viewsWidth;
+			}
+
+			const auto textHeight = font->height;
+			const auto hPadding = 2;
+			const auto vPadding = context.st->msgDateImgPadding.y();
+			const auto bubbleW = totalWidth + 2 * hPadding;
+			const auto bubbleH = textHeight + 2 * vPadding;
+
+			// Position: Top-Right of the media view
+			const auto bubbleX = width - bubbleW - context.st->msgDateImgDelta;
+			const auto bubbleY = context.st->msgDateImgDelta;
+
+			p.save();
+			p.setOpacity(0.95);
+			Ui::FillRoundRect(
+				p,
+				bubbleX,
+				bubbleY,
+				bubbleW,
+				bubbleH,
+				sti->msgDateImgBg,
+				sti->msgDateImgBgCorners);
+			p.restore();
+
+			p.setPen(context.st->msgDateImgFg());
+			p.setFont(font->bold());
+			const int textBaseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
+			int currentLeft = bubbleX + hPadding;
+
+			if (!viewsText.isEmpty()) {
+				const auto &icon = context.st->historyViewsInvertedIcon();
+				const int baseIconW = std::max(1, icon.width());
+				const int baseIconH = icon.height();
+				const int scaledIconH = (baseIconH * context.st->historyViewsWidth) / baseIconW;
+				icon.paint(p, currentLeft, bubbleY + (bubbleH - scaledIconH) / 2 + 1, context.st->historyViewsWidth);
+				p.drawText(currentLeft + context.st->historyViewsWidth + 1, textBaseY, viewsText);
+				currentLeft += viewsWidth + textPadding;
+			}
+			if (edited) {
+				const auto editedText = QString::fromUtf8("✏️");
+				p.setFont(font);
+				p.drawText(currentLeft, textBaseY, editedText);
+				currentLeft += font->width(editedText) + textPadding;
+				p.setFont(font->bold());
+			}
+			p.drawText(currentLeft, textBaseY, dateText + msgIdText);
+			
+			if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
+				const auto paintx = 0;
+				const auto painty = 0;
+				const auto paintw = width;
+				const auto painth = height(); // Document::height() is available
+				auto fastShareLeft = _parent->hasRightLayout()
+					? (paintx - size->width() - context.st->historyFastShareLeft)
+					: (paintx + paintw + context.st->historyFastShareLeft);
+				auto fastShareTop = (painty + painth - context.st->historyFastShareBottom - size->height());
+				_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, 2 * paintx + paintw);
+			}
+		}
 	}
 }
 

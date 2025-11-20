@@ -1679,19 +1679,17 @@ bool Element::countIsTopicRootReply() const {
 void Element::setDisplayDate(bool displayDate) {
 	const auto item = data();
 
-	// --- CUSTOM: Disable default date for Photos and Videos ---
+	// --- CUSTOM: Disable default date for ALL Media Types ---
+	// This allows:
+	// 1. Top-Right bubble for Photos/Videos.
+	// 2. Inline (same line as status) info for Documents/Audio.
 	if (const auto media = item->media()) {
 		const auto type = media->type();
-		// MediaType::Gif handles standard Videos and GIFs in TDesktop
-		if (type == MediaType::Photo || type == MediaType::Gif) {
-			// We check if it is a Round Video inside Gif class, 
-			// but Element doesn't know that detail easily. 
-			// However, Round Videos usually force their own layout. 
-			// For standard videos/photos, we disable the text date.
+		if (type == MediaType::Photo || type == MediaType::Gif || type == MediaType::File) {
 			displayDate = false;
 		}
 	}
-	// ----------------------------------------------------------
+	// --------------------------------------------------------
 
 	if (item->hideDisplayDate()) {
 		displayDate = false;
