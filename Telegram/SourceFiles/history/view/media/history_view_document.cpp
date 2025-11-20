@@ -920,9 +920,8 @@ void Document::draw(
 	p.setPen(stm->mediaFg);
 	p.drawTextLeft(nameleft, statustop, width, statusText);
 
-	// --- CUSTOM INLINE INFO (For Non-Videos: Files, Audio, Voice) ---
-	// This was missing in your last paste. It is required to see the info!
-	if (!_data->isVideoMessage() && !_data->isVideoFile()) {
+	// --- CUSTOM INLINE INFO (For All Files except Round Videos) ---
+	if (!_data->isVideoMessage()) {
 		const auto item = _parent->data();
 		const auto font = context.st->msgDateFont;
 		p.setFont(font);
@@ -942,7 +941,7 @@ void Document::draw(
 			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
 			: QString();
 
-		// Calculate start position
+		// Calculate start position: after status text + spacing
 		int statusW = st::normalFont->width(statusText);
 		int infoX = nameleft + statusW + st::msgDateSpace;
 
@@ -1011,103 +1010,6 @@ void Document::draw(
 			.highlight = highlightRequest ? &*highlightRequest : nullptr,
 			.useFullWidth = true,
 		});
-	}
-
-	// --- CUSTOM TOP-RIGHT BUBBLE (For Video Files Only) ---
-	if (_data->isVideoFile() && !thumbed && mode == LayoutMode::Full) {
-		const auto bubble = _parent->hasBubble();
-		if (!bubble || isBubbleBottom()) {
-			const auto item = _parent->data();
-			const auto font = context.st->msgDateFont;
-			p.setFont(font);
-
-			const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
-			const auto dateText = QLocale().toString(
-				ItemDateTime(item).time(),
-				GetEnhancedBool("show_seconds")
-					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
-					: QLocale::system().timeFormat(QLocale::ShortFormat));
-
-			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-				? QString(" %1").arg(item->fullId().msg.bare)
-				: QString();
-
-			const auto views = item->Get<HistoryMessageViews>();
-			const auto viewsText = (views && views->views.count >= 0)
-				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
-				: QString();
-
-			int totalWidth = 0;
-			const int textPadding = font->width(' ');
-			totalWidth += font->width(dateText + msgIdText);
-
-			if (edited) {
-				totalWidth += textPadding + font->width(QString::fromUtf8("✏️"));
-			}
-
-			int viewsWidth = 0;
-			if (!viewsText.isEmpty()) {
-				viewsWidth = context.st->historyViewsWidth + 1 + font->width(viewsText);
-				totalWidth += (2 * textPadding) + viewsWidth;
-			}
-
-			const auto textHeight = font->height;
-			const auto hPadding = 2;
-			const auto vPadding = context.st->msgDateImgPadding.y();
-			const auto bubbleW = totalWidth + 2 * hPadding;
-			const auto bubbleH = textHeight + 2 * vPadding;
-
-			// Position: Top-Right of the media view
-			const auto bubbleX = width - bubbleW - context.st->msgDateImgDelta;
-			const auto bubbleY = context.st->msgDateImgDelta;
-
-			p.save();
-			p.setOpacity(0.95);
-			Ui::FillRoundRect(
-				p,
-				bubbleX,
-				bubbleY,
-				bubbleW,
-				bubbleH,
-				sti->msgDateImgBg,
-				sti->msgDateImgBgCorners);
-			p.restore();
-
-			p.setPen(context.st->msgDateImgFg());
-			p.setFont(font->bold());
-			const int textBaseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
-			int currentLeft = bubbleX + hPadding;
-
-			if (!viewsText.isEmpty()) {
-				const auto &icon = context.st->historyViewsInvertedIcon();
-				const int baseIconW = std::max(1, icon.width());
-				const int baseIconH = icon.height();
-				const int scaledIconH = (baseIconH * context.st->historyViewsWidth) / baseIconW;
-				icon.paint(p, currentLeft, bubbleY + (bubbleH - scaledIconH) / 2 + 1, context.st->historyViewsWidth);
-				p.drawText(currentLeft + context.st->historyViewsWidth + 1, textBaseY, viewsText);
-				currentLeft += viewsWidth + textPadding;
-			}
-			if (edited) {
-				const auto editedText = QString::fromUtf8("✏️");
-				p.setFont(font);
-				p.drawText(currentLeft, textBaseY, editedText);
-				currentLeft += font->width(editedText) + textPadding;
-				p.setFont(font->bold());
-			}
-			p.drawText(currentLeft, textBaseY, dateText + msgIdText);
-			
-			if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
-				const auto paintx = 0;
-				const auto painty = 0;
-				const auto paintw = width;
-				const auto painth = height();
-				auto fastShareLeft = _parent->hasRightLayout()
-					? (paintx - size->width() - context.st->historyFastShareLeft)
-					: (paintx + paintw + context.st->historyFastShareLeft);
-				auto fastShareTop = (painty + painth - context.st->historyFastShareBottom - size->height());
-				_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, 2 * paintx + paintw);
-			}
-		}
 	}
 
 	// --- STANDARD BOTTOM INFO (Round Videos Only) ---
@@ -1586,7 +1488,6 @@ TextState Document::textState(
 			}
 		}
 	}
-	
 	return result;
 }
 
