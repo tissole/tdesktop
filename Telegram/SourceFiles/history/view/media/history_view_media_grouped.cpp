@@ -317,9 +317,13 @@ QSize GroupedMedia::countOptimalSize() {
 			
 			const auto captionWidth = maxWidth - padding.left() - padding.right();
 			
-			// USE ITEM TEXT: Use the item's actual text object to calculate height
-			// This ensures consistent wrapping behavior with the official client
-			part._captionHeight = int(part.item->text().countHeight(captionWidth) + padding.top() + padding.bottom());
+			// Create a temporary string to calculate height correctly
+			Ui::Text::String caption(
+				st::messageTextStyle,
+				part.item->originalText(),
+				Ui::ItemTextDefaultOptions());
+
+			part._captionHeight = int(caption.countHeight(captionWidth) + padding.top() + padding.bottom());
 
 			minHeight += part._captionHeight;
 		}
@@ -407,9 +411,13 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				// Use the full newWidth for the caption
 				const auto captionWidth = newWidth - padding.left() - padding.right();
 
-				// USE ITEM TEXT: Use the item's existing text object
-				// This guarantees correct wrapping for long single lines
-				part._captionHeight = part.item->text().countHeight(captionWidth) + padding.top() + padding.bottom();
+				// Create string to calculate exact wrapped height
+				Ui::Text::String caption(
+					st::messageTextStyle,
+					part.item->originalText(),
+					Ui::ItemTextDefaultOptions());
+
+				part._captionHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
 
 				// Place at the bottom of the entire group
 				part.captionRect = QRect(
@@ -481,11 +489,6 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 	return { newWidth, int(base::SafeRound(newHeight)) };
 }
 
-	const auto groupPadding = groupedPadding();
-	newHeight += groupPadding.top() + groupPadding.bottom();
-
-	return { newWidth, int(base::SafeRound(newHeight)) };
-}
 
 void GroupedMedia::refreshParentId(
 		not_null<HistoryItem*> realParent) {
@@ -772,6 +775,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto itemRect = part.geometry.translated(0, groupPadding.top());
 				const auto &docStyle = st::msgFileLayoutGrouped;
 				const auto statustop = docStyle.statusTop - st::msgFileTopMinus;
+				
+				// + 1 pixel alignment
 				const auto baseY = itemRect.y() + statustop + st::msgDateFont->ascent + 1;
 
 				const auto views = item->Get<HistoryMessageViews>();
@@ -847,6 +852,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto statustop = docStyle.statusTop - topMinus;
 
 				const auto textX = itemRect.x() + itemRect.width() - textWidth - st::msgDateImgDelta;
+				
+				// + 1 pixel alignment
 				const auto textY = itemRect.y() + statustop + st::msgDateFont->ascent + 1;
 
 				p.drawText(textX, textY, infoText);
@@ -864,13 +871,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			p.setFont(st::messageTextStyle.font);
 
 			if (singleCaptionAnywhere) {
-				// --- Single Caption: Use Item Text Object ---
+				// --- Single Caption: Full Wrap ---
+				const auto &originalText = part.item->originalText();
+				Ui::Text::String caption(st::messageTextStyle, originalText, Ui::ItemTextDefaultOptions());
+
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto availableHeight = captionRect.height();
-
-				// Use the item's actual text object. 
-				// This respects the wrapping calculated in countCurrentSize.
-				const auto &caption = part.item->text(); 
 				const auto textHeight = caption.countHeight(availableWidth);
 
 				const auto verticalPadding = 2;
@@ -894,7 +900,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				p.restore();
 			} else {
 				// --- Multi Caption: Use Temporary String (Elided) ---
-				const auto originalText = part.item->originalText();
+				const auto &originalText = part.item->originalText();
 				Ui::Text::String caption(st::messageTextStyle, originalText, Ui::ItemTextDefaultOptions());
 				
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
@@ -1001,7 +1007,10 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const int baseIconW = std::max(1, icon.width());
 				const int baseIconH = icon.height();
 				const int scaledIconH = (baseIconH * st::historyViewsWidth) / baseIconW;
+				
+				// + 1 pixel alignment
 				const int iconY = bubbleY + (bubbleH - scaledIconH) / 2 + 1;
+				
 				icon.paint(p, currentLeft, iconY, st::historyViewsWidth);
 				p.drawText(currentLeft + st::historyViewsWidth + viewsIconGap, textBaseY, viewsText);
 				currentLeft += viewsWidth + textPadding;
