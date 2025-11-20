@@ -941,32 +941,51 @@ void Document::draw(
 			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
 			: QString();
 
-		// Calculate start position: after status text + spacing
+		// Calculate Widths
+		const int iconGap = 1;
+		const int textGap = font->width(' ');
+		const int iconW = st::historyViewsWidth;
+		const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
+		const int editedW = edited ? font->width(QString::fromUtf8("✏️")) : 0;
+		const int timeIdW = font->width(dateText + msgIdText);
+
+		int totalW = 0;
+		if (viewsW > 0) totalW += viewsW + textGap;
+		if (editedW > 0) totalW += editedW + textGap;
+		totalW += timeIdW;
+
+		// Calculate Position (Right Edge)
+		int infoX = width - nameright - totalW - st::msgDateImgDelta;
+
+		// Collision Check with Status Text
 		int statusW = st::normalFont->width(statusText);
-		int infoX = nameleft + statusW + st::msgDateSpace;
+		int reservedLeft = nameleft + statusW + st::msgDateSpace;
+		if (infoX < reservedLeft) {
+			infoX = reservedLeft;
+		}
 
-		// Views
-		if (!viewsText.isEmpty()) {
+		const auto baseY = statustop + st::normalFont->ascent;
+
+		// Draw Views
+		if (viewsW > 0) {
 			const auto &icon = stm->historyViewsIcon;
-			const int iconW = st::historyViewsWidth;
 			const int iconH = icon.height();
-			// Center icon vertically relative to text
-			const int iconTop = statustop + st::normalFont->ascent - font->ascent + (font->height - iconH) / 2;
+			const int scaledH = (iconH * iconW) / std::max(1, icon.width());
+			const int iconTop = baseY - font->ascent + (font->height - scaledH) / 2;
+			
 			icon.paint(p, infoX, iconTop, iconW);
-			infoX += iconW + st::historyViewsSpace;
-			p.drawText(infoX, statustop + st::normalFont->ascent, viewsText);
-			infoX += font->width(viewsText) + st::msgDateSpace;
+			p.drawText(infoX + iconW + iconGap, baseY, viewsText);
+			infoX += viewsW + textGap;
 		}
 
-		// Edited
-		if (edited) {
-			const auto editedText = QString::fromUtf8("✏️");
-			p.drawText(infoX, statustop + st::normalFont->ascent, editedText);
-			infoX += font->width(editedText) + st::msgDateSpace;
+		// Draw Edited
+		if (editedW > 0) {
+			p.drawText(infoX, baseY, QString::fromUtf8("✏️"));
+			infoX += editedW + textGap;
 		}
 
-		// Date + ID
-		p.drawText(infoX, statustop + st::normalFont->ascent, dateText + msgIdText);
+		// Draw Date + ID
+		p.drawText(infoX, baseY, dateText + msgIdText);
 	}
 	// ----------------------------------------------------------------
 
@@ -1047,6 +1066,7 @@ void Document::draw(
 		}
 	}
 }
+
 
 Ui::BubbleRounding Document::thumbRounding(
 		LayoutMode mode,
@@ -1287,32 +1307,51 @@ TextState Document::textState(
 			: QString();
 
 		const auto statustop = st.statusTop - topMinus;
-		int statusW = st::normalFont->width(_statusText);
 		
-		// Bubble Area
-		int bubbleX = nameleft + statusW + st::msgDateSpace;
+		// Calculate Widths (Same as draw)
+		const int iconGap = 1;
+		const int textGap = font->width(' ');
+		const int iconW = st::historyViewsWidth;
+		const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
+		const int editedW = edited ? font->width(QString::fromUtf8("✏️")) : 0;
+		const int timeIdW = font->width(dateText + msgIdText);
+
+		int totalW = 0;
+		if (viewsW > 0) totalW += viewsW + textGap;
+		if (editedW > 0) totalW += editedW + textGap;
+		totalW += timeIdW;
+
+		// Calculate Position (Right Edge)
+		int infoX = width - nameright - totalW - st::msgDateImgDelta;
+
+		// Collision Check with Status Text
+		int statusW = st::normalFont->width(_statusText);
+		int reservedLeft = nameleft + statusW + st::msgDateSpace;
+		if (infoX < reservedLeft) {
+			infoX = reservedLeft;
+		}
+
+		// Hit Test Area
 		int bubbleY = statustop + st::normalFont->ascent - font->ascent;
 		int bubbleH = font->height;
 		
-		// Hit Test Area
-		if (point.y() >= bubbleY && point.y() <= bubbleY + bubbleH && point.x() >= bubbleX) {
-			int currentX = bubbleX;
-			int itemSpacing = st::msgDateSpace;
+		if (point.y() >= bubbleY && point.y() <= bubbleY + bubbleH && point.x() >= infoX) {
+			int currentX = infoX;
 
 			// 1. Views
-			if (!viewsText.isEmpty()) {
-				int w = st::historyViewsWidth + 1 + font->width(viewsText);
+			if (viewsW > 0) {
+				int w = viewsW;
 				if (point.x() >= currentX && point.x() < currentX + w) {
 					result.customTooltip = true;
 					result.customTooltipText = QString("Views: ") + viewsText;
 					return result;
 				}
-				currentX += w + itemSpacing;
+				currentX += w + textGap;
 			}
 
 			// 2. Edited
-			if (edited) {
-				int w = font->width(QString::fromUtf8("✏️"));
+			if (editedW > 0) {
+				int w = editedW;
 				if (point.x() >= currentX && point.x() < currentX + w) {
 					const auto uploadLocal = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 					QString text = tr::lng_uploaded(tr::now) + ": "
@@ -1331,12 +1370,11 @@ TextState Document::textState(
 					result.customTooltipText = text;
 					return result;
 				}
-				currentX += w + itemSpacing;
+				currentX += w + textGap;
 			}
 
 			// 3. Date/ID
-			int dateW = font->width(dateText + msgIdText);
-			if (point.x() >= currentX && point.x() < currentX + dateW) {
+			if (point.x() >= currentX && point.x() < currentX + timeIdW) {
 				const auto uploadLocal = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 				QString text = tr::lng_uploaded(tr::now) + ": "
 					+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
