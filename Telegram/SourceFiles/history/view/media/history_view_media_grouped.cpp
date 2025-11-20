@@ -315,14 +315,13 @@ QSize GroupedMedia::countOptimalSize() {
 
 			auto &part = _parts[captionIdx];
 			
-			// FIX: constrain the width to the maximum allowed group width.
-			// This ensures we calculate a wrapped height, not a single-line height.
 			const auto captionWidth = std::min(maxWidth, st::historyGroupWidthMax) - padding.left() - padding.right();
 			
+			// FIX: Use textOptions() to enable word wrapping
 			Ui::Text::String caption(
 				st::messageTextStyle,
 				part.item->originalText(),
-				Ui::ItemTextDefaultOptions());
+				part.item->textOptions());
 
 			part._captionHeight = int(caption.countHeight(captionWidth) + padding.top() + padding.bottom());
 
@@ -412,11 +411,11 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				// Use the full newWidth for the caption
 				const auto captionWidth = newWidth - padding.left() - padding.right();
 
-				// Create string to calculate exact wrapped height based on CURRENT width
+				// FIX: Use textOptions() to enable word wrapping
 				Ui::Text::String caption(
 					st::messageTextStyle,
 					part.item->originalText(),
-					Ui::ItemTextDefaultOptions());
+					part.item->textOptions());
 
 				part._captionHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
 
@@ -776,12 +775,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto itemRect = part.geometry.translated(0, groupPadding.top());
 				const auto &docStyle = st::msgFileLayoutGrouped;
 				
-				// FIX 1: Use statusTop directly. Do NOT subtract st::msgFileTopMinus.
-				// This aligns the Y position with the File Size text on the left.
 				const auto statustop = docStyle.statusTop;
-				
-				// FIX 2: Use st::normalFont->ascent.
-				// This aligns the baseline with the File Size text (which uses normalFont).
 				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent;
 
 				const auto views = item->Get<HistoryMessageViews>();
@@ -854,12 +848,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto textWidth = st::msgDateFont->width(infoText);
 				const auto &docStyle = st::msgFileLayoutGrouped;
 				
-				// FIX 1: Use statusTop directly. Do NOT subtract st::msgFileTopMinus.
 				const auto statustop = docStyle.statusTop;
-
 				const auto textX = itemRect.x() + itemRect.width() - textWidth - st::msgDateImgDelta;
-				
-				// FIX 2: Use st::normalFont->ascent.
 				const auto textY = itemRect.y() + statustop + st::normalFont->ascent;
 
 				p.drawText(textX, textY, infoText);
@@ -879,7 +869,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			if (singleCaptionAnywhere) {
 				// --- Single Caption: Full Wrap ---
 				const auto &originalText = part.item->originalText();
-				Ui::Text::String caption(st::messageTextStyle, originalText, Ui::ItemTextDefaultOptions());
+				
+				// FIX: Use textOptions() to enable word wrapping
+				Ui::Text::String caption(
+					st::messageTextStyle,
+					originalText,
+					part.item->textOptions());
 
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto availableHeight = captionRect.height();
@@ -1065,18 +1060,20 @@ TextState GroupedMedia::getPartState(
 					auto result = TextState(part.item);
 					const auto padding = QMargins(8, 0, 8, 0);
 					const auto captionWidth = captionGeo.width() - padding.left() - padding.right();
-					Ui::Text::String caption(st::messageTextStyle, originalText, Ui::ItemTextDefaultOptions());
+					
+					// FIX: Use textOptions() to enable word wrapping
+					Ui::Text::String caption(
+						st::messageTextStyle,
+						originalText,
+						part.item->textOptions());
 
-					// For single full caption, we need to get state from the multi-line text object.
-					// For others, a simple check is enough for the tooltip.
 					std::vector<int> captionIndices;
 					for (auto j = 0; j != _parts.size(); ++j) {
 						if (!_parts[j].item->originalText().empty()) {
 							captionIndices.push_back(j);
 						}
 					}
-					// const bool fullCaptionOnFirst = (captionIndices.size() == 1 && captionIndices[0] == 0);
-					const bool singleCaptionAnywhere = (captionIndices.size() == 1); // Any single caption
+					const bool singleCaptionAnywhere = (captionIndices.size() == 1);
 
 					if (singleCaptionAnywhere && i == captionIndices[0]) {
 						// This caption is not elided, allow text selection.
@@ -1087,7 +1084,7 @@ TextState GroupedMedia::getPartState(
 						result.link = textStateResult.link;
 						result.symbol = textStateResult.symbol;
 						result.afterSymbol = textStateResult.afterSymbol;
-						result.itemId = part.item->fullId(); // Ensure item ID is set.
+						result.itemId = part.item->fullId();
 
 						// Store caption selection information
 						result._captionText = originalText.text;
@@ -1095,12 +1092,9 @@ TextState GroupedMedia::getPartState(
 
 						// Apply current caption selection to result for highlighting
 						if (!part._captionSelection.empty()) {
-							// This is a simplified approach - in reality you'd need proper
-							// symbol-based selection tracking for multi-line text
 							result.symbol = textStateResult.symbol;
 							result.afterSymbol = textStateResult.afterSymbol;
 						}
-						// Note: Full selection handling is done at Element level
 					} else {
 						// This caption is elided, allow text selection of visible portion.
 						const auto clickX = point.x() - captionGeo.left() - padding.left();
@@ -1116,7 +1110,6 @@ TextState GroupedMedia::getPartState(
 						result._captionText = originalText.text;
 						result._captionItem = part.item;
 
-						// Apply current caption selection to result for highlighting
 						if (!part._captionSelection.empty()) {
 							result.symbol = textStateResult.symbol;
 							result.afterSymbol = textStateResult.afterSymbol;
