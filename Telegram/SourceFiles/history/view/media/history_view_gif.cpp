@@ -690,7 +690,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			if (previous && radialOpacity > 0. && radialOpacity < 1.) {
 				PaintInterpolatedIcon(p, *icon, *previous, radialOpacity, inner);
 			} else {
-				icon.paintInCenter(p, inner);
+				icon->paintInCenter(p, inner);
 			}
 		}
 		p.setOpacity(radialRevealed);
