@@ -960,8 +960,8 @@ void Document::draw(
 		if (editedW > 0) totalW += editedW + textGap;
 		totalW += timeIdW;
 
-		// Calculate Position (Right Edge - 2px padding)
-		int infoX = width - st::msgPadding.right() - totalW;
+		// Calculate Position (Right Edge - same as Column Album)
+		int infoX = width - totalW - st::msgDateImgDelta;
 		
 		// Collision Check with Status Text (on the left)
 		int statusW = st::normalFont->width(statusText);
@@ -1300,7 +1300,6 @@ TextState Document::textState(
 		};
 
 		const auto item = _parent->data();
-		// FIX: Use global style namespace 'st::'
 		const auto font = st::msgDateFont;
 		
 		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
@@ -1333,7 +1332,7 @@ TextState Document::textState(
 		totalW += timeIdW;
 
 		// Calculate Position (Right Edge)
-		int infoX = width - nameright - totalW - st::msgDateImgDelta;
+		int infoX = width - totalW - st::msgDateImgDelta;
 
 		// Collision Check with Status Text
 		int statusW = st::normalFont->width(_statusText);

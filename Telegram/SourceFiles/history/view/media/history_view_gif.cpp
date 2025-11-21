@@ -683,8 +683,15 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			}
 			return &sti->historyFileThumbDownload;
 		}();
+		const auto previous = _data->waitingForAlbum()
+			? &sti->historyFileThumbCancel
+			: nullptr;
 		if (icon) {
-			icon->paintInCenter(p, inner);
+			if (previous && radialOpacity > 0. && radialOpacity < 1.) {
+				PaintInterpolatedIcon(p, *icon, *previous, radialOpacity, inner);
+			} else {
+				icon.paintInCenter(p, inner);
+			}
 		}
 		p.setOpacity(radialRevealed);
 		if (radial) {
@@ -887,16 +894,15 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	// --- CUSTOM TOP-RIGHT BUBBLE (For Standard Videos) ---
 	// Removed !bubble check so it draws even with captions
 	if (!isRound && !inWebPage && !_parent->data()->isFakeAboutView()) {
+		// Local definition to fix compilation error
+		auto ItemDateTime = [](not_null<HistoryItem*> item) {
+			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+		};
+
 		const auto font = st::msgDateFont;
 		p.setFont(font);
 
 		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
-		
-		// Local helper to mimic Grid Album syntax
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
-		
 		const auto dateText = QLocale().toString(
 			ItemDateTime(item).time(),
 			GetEnhancedBool("show_seconds")
