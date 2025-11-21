@@ -412,6 +412,10 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	// Removed !bubble check so it draws even with captions
 	if (!inWebPage && !_parent->data()->isFakeAboutView()) {
 		
+		// Restore definitions needed for Fast Share
+		auto fullRight = paintx + paintw;
+		auto fullBottom = painty + painth;
+
 		if (needInfoDisplay()) {
 			auto ItemDateTime = [](not_null<HistoryItem*> item) {
 				return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
@@ -494,12 +498,16 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 		}
 
 		// Draw Right Action (Fast Share)
-		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
-			auto fastShareLeft = _parent->hasRightLayout()
-				? (paintx - size->width() - st::historyFastShareLeft)
-				: (fullRight + st::historyFastShareLeft);
-			auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
-			_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, 2 * paintx + paintw);
+		// We check (!bubble || isBubbleBottom()) here because the Fast Share button
+		// usually sits outside the bubble or at the very bottom.
+		if ((!bubble || isBubbleBottom())) {
+			if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
+				auto fastShareLeft = _parent->hasRightLayout()
+					? (paintx - size->width() - st::historyFastShareLeft)
+					: (fullRight + st::historyFastShareLeft);
+				auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
+				_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, 2 * paintx + paintw);
+			}
 		}
 	}
 }
