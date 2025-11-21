@@ -1679,7 +1679,7 @@ bool Element::countIsTopicRootReply() const {
 void Element::setDisplayDate(bool displayDate) {
 	const auto item = data();
 
-	// --- CUSTOM: Disable default date for Media ---
+	// --- CUSTOM: Disable default date for Media (Photo, Video, Document) ---
 	if (const auto media = item->media()) {
 		// Check if it is a Photo
 		if (media->photo()) {
@@ -1691,7 +1691,7 @@ void Element::setDisplayDate(bool displayDate) {
 			// Check if it is a Round Video (Video Note)
 			if (doc->isVideoMessage()) {
 				// It IS a Round Video -> Keep default date (Bottom-Right)
-				// do nothing (keep displayDate as is)
+				// Round videos handle their own layout logic
 			} else {
 				// It is a standard File/Video/Audio/GIF -> Hide default date
 				displayDate = false;

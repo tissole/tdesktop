@@ -920,10 +920,11 @@ void Document::draw(
 	p.setPen(stm->mediaFg);
 	p.drawTextLeft(nameleft, statustop, width, statusText);
 
-	// --- CUSTOM INLINE INFO (For All Files except Round Videos) ---
-	// Only draw if NOT in a group (GroupedMedia handles its own info bubbles)
-	// and NOT a video message (Round videos use standard bottom-right info)
-	if (!_data->isVideoMessage() && mode != LayoutMode::Grouped) {
+	// --- CUSTOM INLINE INFO ---
+	// FIX Issue 6 & 7: Proper Right alignment and no overlaps
+	// FIX Issue 8: Only draw if not in Grouped mode (Column albums handle their own)
+	const bool bubble = _parent->hasBubble();
+	if (!_data->isVideoMessage() && mode != LayoutMode::Grouped && (!bubble || isBubbleBottom())) {
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 		};
@@ -960,12 +961,14 @@ void Document::draw(
 		if (editedW > 0) totalW += editedW + textGap;
 		totalW += timeIdW;
 
-		// Calculate Position (Right Edge - same as Column Album)
+		// FIX: Strictly anchor to the Right Edge of the bubble
 		int infoX = width - totalW - st::msgDateImgDelta;
 		
-		// Collision Check with Status Text (on the left)
+		// Prevent overlap with status text (filename/size) on the left
 		int statusW = st::normalFont->width(statusText);
 		int reservedLeft = nameleft + statusW + st::msgDateSpace;
+		
+		// Only push if we actually overlap
 		if (infoX < reservedLeft) {
 			infoX = reservedLeft;
 		}
@@ -1039,7 +1042,7 @@ void Document::draw(
 
 	// --- STANDARD BOTTOM INFO (Round Videos Only) ---
 	bool inWebPage = (_parent->media() != this);
-	const auto bubble = _parent->hasBubble();
+	// FIX: Only show right action for non-video if we handled info above
 	if (_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
 		auto fullRight = width;
 		auto fullBottom = height();

@@ -287,6 +287,9 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 
 	ensureDataMediaCreated();
 
+	// FIX: Calculate showInfo for hover effect (Mouse over or Selected)
+	const bool showInfo = _parent->isUnderCursor() || context.selected();
+
 	// Custom logic for blocked users/spoilers
 	auto peerId = _parent->data()->from() ? _parent->data()->from()->id : PeerId(0);
 	auto user = history()->session().data().peerLoaded(_parent->data()->from() ? _parent->data()->from()->id : PeerId(0));
@@ -409,8 +412,9 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	// --- CUSTOM INFO BUBBLE (TOP-RIGHT) ---
-	// Removed !bubble check so it draws even with captions
-	if (!inWebPage && !_parent->data()->isFakeAboutView()) {
+	// FIX: Only draw if showInfo (hover/select) is true
+	// FIX: Draw regardless of caption (!bubble check removed)
+	if (!inWebPage && !_parent->data()->isFakeAboutView() && showInfo) {
 		
 		// Restore definitions needed for Fast Share
 		auto fullRight = paintx + paintw;
@@ -754,7 +758,7 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 	bool inWebPage = (_parent->media() != this);
 
 	// --- CUSTOM TOOLTIP LOGIC (Top-Right Bubble) ---
-	// Removed !bubble check so it hits even with captions
+	// Explicitly check hit-test here even if caption exists (bubble is true)
 	if (!inWebPage && !_parent->data()->isFakeAboutView()) {
 		
 		if (needInfoDisplay()) {

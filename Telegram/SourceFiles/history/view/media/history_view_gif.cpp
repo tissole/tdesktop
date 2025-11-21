@@ -434,6 +434,9 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 
 	_smallGroupPart = false;
 
+	// FIX Issue 3: Calculate showInfo for hover effect
+	const bool showInfo = _parent->isUnderCursor() || context.selected();
+
 	ensureDataMediaCreated();
 	const auto item = _parent->data();
 	const auto loaded = dataLoaded();
@@ -843,7 +846,6 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			}
 		}
 		
-		// --- MODIFIED: Only draw standard info for Round Messages ---
 		if (isRound) {
 			_parent->drawInfo(
 				p,
@@ -855,7 +857,6 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 					? InfoDisplayType::Background
 					: InfoDisplayType::Image));
 		}
-		// ------------------------------------------------------------
 
 		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()
 			; size || (_transcribe && !rightAligned)) {
@@ -892,8 +893,9 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	// --- CUSTOM TOP-RIGHT BUBBLE (For Standard Videos) ---
-	// Removed !bubble check so it draws even with captions
-	if (!isRound && !inWebPage && !_parent->data()->isFakeAboutView()) {
+	// FIX Issue 2: Always draw top-right for videos even if caption exists.
+	// FIX Issue 3: Only draw on hover/select.
+	if (!isRound && !inWebPage && !_parent->data()->isFakeAboutView() && showInfo) {
 		// Local definition to fix compilation error
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
@@ -1813,6 +1815,7 @@ void Gif::drawGrouped(
 		}
 		p.setOpacity(1.);
 	}
+	// FIX Issue 5: Suppress duplicate Top-Left bubble in grid
 	if (!_smallGroupPart) {
 		drawCornerStatus(p, context, geometry.topLeft());
 	}
