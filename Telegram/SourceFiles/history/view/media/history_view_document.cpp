@@ -921,13 +921,14 @@ void Document::draw(
 	p.drawTextLeft(nameleft, statustop, width, statusText);
 
 	// --- CUSTOM INLINE INFO (For All Files except Round Videos) ---
-	if (!_data->isVideoMessage()) {
+	// Only draw if NOT in a group (GroupedMedia handles its own info bubbles)
+	// and NOT a video message (Round videos use standard bottom-right info)
+	if (!_data->isVideoMessage() && mode != LayoutMode::Grouped) {
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 		};
 
 		const auto item = _parent->data();
-		// FIX: Use global style namespace 'st::' instead of 'context.st->'
 		const auto font = st::msgDateFont;
 		p.setFont(font);
 		p.setPen(stm->msgDateFg);
@@ -959,10 +960,10 @@ void Document::draw(
 		if (editedW > 0) totalW += editedW + textGap;
 		totalW += timeIdW;
 
-		// Calculate Position (Right Edge)
-		int infoX = width - nameright - totalW - st::msgDateImgDelta;
-
-		// Collision Check with Status Text
+		// Calculate Position (Right Edge - 2px padding)
+		int infoX = width - st::msgPadding.right() - totalW;
+		
+		// Collision Check with Status Text (on the left)
 		int statusW = st::normalFont->width(statusText);
 		int reservedLeft = nameleft + statusW + st::msgDateSpace;
 		if (infoX < reservedLeft) {

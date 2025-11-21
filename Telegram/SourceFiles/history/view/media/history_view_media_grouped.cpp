@@ -290,20 +290,24 @@ QSize GroupedMedia::countOptimalSize() {
 
 			for (auto const& [rowY, indices] : rows) {
 				const bool isLastRow = (rowY == rows.rbegin()->first);
+				bool rowHasCaption = false;
 
 				for (const auto i : indices) {
 					if (!_parts[i].item->originalText().empty()) {
 						_parts[i]._captionHeight = uniformCaptionHeight;
+						rowHasCaption = true;
 					} else {
 						_parts[i]._captionHeight = 0;
 					}
 				}
 
-				// Add spacing for uniform captions
-				if (!isLastRow) {
-					minHeight += std::max(0, uniformCaptionHeight - st::historyGroupSkip);
-				} else {
-					minHeight += uniformCaptionHeight;
+				// Add height for uniform captions only if this row actually has one
+				if (rowHasCaption) {
+					if (!isLastRow) {
+						minHeight += std::max(0, uniformCaptionHeight - st::historyGroupSkip);
+					} else {
+						minHeight += uniformCaptionHeight;
+					}
 				}
 			}
 		}
@@ -447,6 +451,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 					}
 
 					const bool isLastRow = (rowY == rows.rbegin()->first);
+					bool rowHasCaption = false;
 
 					// Set heights and rects for this row
 					for (const auto i : indices) {
@@ -458,26 +463,29 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 								rowBottom,
 								part.geometry.width(),
 								uniformCaptionHeight);
+							rowHasCaption = true;
 						} else {
 							part._captionHeight = 0;
 							part.captionRect = QRect();
 						}
 					}
 
-					// Apply shift to subsequent rows
-					if (!isLastRow) {
-						const auto shiftAmount = std::max(0, uniformCaptionHeight - spacing);
-						cumulativeCaptionOffset += shiftAmount;
+					// Apply shift to subsequent rows ONLY if this row has a caption
+					if (rowHasCaption) {
+						if (!isLastRow) {
+							const auto shiftAmount = std::max(0, uniformCaptionHeight - spacing);
+							cumulativeCaptionOffset += shiftAmount;
 
-						// Shift geometry of items in lower rows
-						for (auto &shiftPart : _parts) {
-							if (shiftPart.initialGeometry.y() > rowY) {
-								shiftPart.geometry.translate(0, shiftAmount);
+							// Shift geometry of items in lower rows
+							for (auto &shiftPart : _parts) {
+								if (shiftPart.initialGeometry.y() > rowY) {
+									shiftPart.geometry.translate(0, shiftAmount);
+								}
 							}
+							newHeight += shiftAmount;
+						} else {
+							newHeight += uniformCaptionHeight;
 						}
-						newHeight += shiftAmount;
-					} else {
-						newHeight += uniformCaptionHeight;
 					}
 				}
 			}

@@ -688,7 +688,8 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 		}
 		p.setOpacity(radialRevealed);
 		if (radial) {
-			QRect rinner(inner.marginsRemoved(QMargins(st::msgFileRadialLine, st::msgFileRadialLine, st::msgFileRadialLine, st::msgFileRadialLine)));
+			const auto line = st::historyGroupRadialLine;
+			const auto rinner = inner.marginsRemoved({ line, line, line, line });
 			if (streamedForWaiting && !_data->uploading()) {
 				Ui::InfiniteRadialAnimation::Draw(
 					p,
@@ -884,16 +885,18 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	// --- CUSTOM TOP-RIGHT BUBBLE (For Standard Videos) ---
-	if (!isRound && !inWebPage && (!bubble || isBubbleBottom())) {
-		// Local definition to fix compilation error
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
-
+	// Removed !bubble check so it draws even with captions
+	if (!isRound && !inWebPage && !_parent->data()->isFakeAboutView()) {
 		const auto font = st::msgDateFont;
 		p.setFont(font);
 
 		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+		
+		// Local helper to mimic Grid Album syntax
+		auto ItemDateTime = [](not_null<HistoryItem*> item) {
+			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+		};
+		
 		const auto dateText = QLocale().toString(
 			ItemDateTime(item).time(),
 			GetEnhancedBool("show_seconds")
@@ -1298,7 +1301,8 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 
 	// --- CUSTOM TOOLTIP LOGIC (Top-Right Bubble for Standard Videos) ---
 	// We apply this ONLY for standard videos (!isRound) to match the draw() logic.
-	if (!isRound && !inWebPage && (!bubble || isBubbleBottom())) {
+	// Removed !bubble check so it hits even with captions
+	if (!isRound && !inWebPage && !_parent->data()->isFakeAboutView()) {
 		// Local definition to fix compilation error
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();

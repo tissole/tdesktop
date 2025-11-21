@@ -344,7 +344,6 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 		}
 	}
 
-	// Reverted to false to match official file
 	const auto showEnlarge = false;
 	
 	const auto paintInCenter = !_sensitiveSpoiler
@@ -410,13 +409,11 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	// --- CUSTOM INFO BUBBLE (TOP-RIGHT) ---
-	if (!inWebPage && (!bubble || isBubbleBottom())) {
-		auto fullRight = paintx + paintw;
-		auto fullBottom = painty + painth;
+	// Removed !bubble check so it draws even with captions
+	if (!inWebPage && !_parent->data()->isFakeAboutView()) {
 		
-		// We use needInfoDisplay() to guard the bubble, just like the official file guards drawInfo()
+		// Guard with needInfoDisplay() to mimic official behavior
 		if (needInfoDisplay()) {
-			// Local helper to mimic Grid Album syntax
 			auto ItemDateTime = [](not_null<HistoryItem*> item) {
 				return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 			};
