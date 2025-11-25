@@ -410,12 +410,14 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 			if (singleCaptionAnywhere) {
 				// --- Single Caption Logic (Full Width, Wrapped) ---
+				// FIX Issue 2: Ensure we calculate the full height for wrapped text
 				const auto captionIdx = captionIndices[0];
 				auto &part = _parts[captionIdx];
 
+				// Use full width minus padding
 				const auto captionWidth = newWidth - padding.left() - padding.right();
 
-				// FIX Issue 9: Use item options to allow wrapping
+				// Use ItemTextOptions to ensure wrapping flags are set
 				Ui::Text::String caption(
 					st::messageTextStyle,
 					part.item->originalText(),
@@ -423,6 +425,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 				part._captionHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
 
+				// Place at the bottom of the entire group
 				part.captionRect = QRect(
 					0,
 					newHeight, // Current bottom of media
@@ -440,7 +443,6 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 				const auto textHeight = st::messageTextStyle.font->height;
 				const auto uniformCaptionHeight = textHeight + padding.top() + padding.bottom();
-				auto cumulativeCaptionOffset = 0;
 
 				for (auto const& [rowY, indices] : rows) {
 					auto rowBottom = 0;
@@ -448,7 +450,6 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 						rowBottom = std::max(rowBottom, _parts[i].geometry.bottom());
 					}
 
-					// FIX Issue 1: Only add height if row actually has a caption
 					bool rowHasCaption = false;
 					for (const auto i : indices) {
 						if (!_parts[i].item->originalText().empty()) {
@@ -474,7 +475,6 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 						}
 						
 						if (!isLastRow) {
-							// Shift lower rows
 							for (auto &shiftPart : _parts) {
 								if (shiftPart.initialGeometry.y() > rowY) {
 									shiftPart.geometry.translate(0, shiftAmount);
@@ -647,10 +647,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	const auto st = context.st;
 	const auto stm = context.messageStyle();
 
-	// FIX Issue 4: Check hover/selection state for the entire album
 	const bool showInfo = _parent->isUnderCursor() || context.selected();
 
-	// Pre-calculate single caption state
 	bool singleCaptionAnywhere = false;
 	if (_mode == Mode::Grid) {
 		int count = 0;
@@ -697,7 +695,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 
-		// --- Draw Grid Mode Overlays (Video duration) - Only if showInfo is true ---
+		// --- Draw Grid Mode Overlays (Video duration) ---
 		if (_mode == Mode::Grid && showInfo) {
 			const auto dataMedia = part.item->media();
 			qint64 durSeconds = -1;
@@ -732,7 +730,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto bubbleH = textHeight + 2 * vPadding;
 
 				auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
-				// Draw at bottom right of the grid item
 				const auto bubbleX = mediaGeometry.x() + mediaGeometry.width() - bubbleW - st::msgDateImgDelta;
 				const auto bubbleY = mediaGeometry.y() + mediaGeometry.height() - bubbleH - st::msgDateImgDelta;
 
@@ -755,93 +752,88 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			}
 		}
 
-		// --- Draw Column Mode Info - Always show (standard behavior) or restrict if desired ---
-		// Usually column info is always visible, but you can wrap in 'if(showInfo)' if you want strict parity.
-		// The user request #8 was about removing duplication.
+		// --- Draw Column Mode Info (FIX Issue 3: Applied to ALL items) ---
 		if (_mode == Mode::Column) {
-			if (i == 0) {
-				// Only draw info on the first item to avoid duplication
-				QString infoText;
-				const auto item = part.item;
-				const auto edited = item->Get<HistoryMessageEdited>();
-				
-				// Calculate text content
-				const auto views = item->Get<HistoryMessageViews>();
-				const auto viewsText = (views && views->views.count >= 0)
-					? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
-					: QString();
-				const bool editedNow = (edited && !item->hideEditedBadge());
-				const auto editText = editedNow ? (QString::fromUtf8("✏️")) : QString();
-				const auto timeText = QLocale().toString(
-					ItemDateTime(item).time(),
-					GetEnhancedBool("show_seconds")
-						? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
-						: QLocale::system().timeFormat(QLocale::ShortFormat));
-				const auto idText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-					? (QString(" ") + QString::number(item->fullId().msg.bare))
-					: QString();
+			// Removed "if (i == 0)" so this runs for every item
+			QString infoText;
+			const auto item = part.item;
+			const auto edited = item->Get<HistoryMessageEdited>();
+			
+			// Calculate text content
+			const auto views = item->Get<HistoryMessageViews>();
+			const auto viewsText = (views && views->views.count >= 0)
+				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+				: QString();
+			const bool editedNow = (edited && !item->hideEditedBadge());
+			const auto editText = editedNow ? (QString::fromUtf8("✏️")) : QString();
+			const auto timeText = QLocale().toString(
+				ItemDateTime(item).time(),
+				GetEnhancedBool("show_seconds")
+					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+					: QLocale::system().timeFormat(QLocale::ShortFormat));
+			const auto idText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+				? (QString(" ") + QString::number(item->fullId().msg.bare))
+				: QString();
 
-				p.setFont(st::msgDateFont);
-				p.setPen(stm->msgDateFg);
+			p.setFont(st::msgDateFont);
+			p.setPen(stm->msgDateFg);
 
-				const auto itemRect = part.geometry.translated(0, groupPadding.top());
-				const auto &docStyle = st::msgFileLayoutGrouped;
-				const auto statustop = docStyle.statusTop;
-				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent;
+			const auto itemRect = part.geometry.translated(0, groupPadding.top());
+			const auto &docStyle = st::msgFileLayoutGrouped;
+			const auto statustop = docStyle.statusTop;
+			const auto baseY = itemRect.y() + statustop + st::normalFont->ascent;
 
-				// Width calculation
-				const int iconGap = 1;
-				const int textGap = st::msgDateFont->width(' ');
-				const int iconW = st::historyViewsWidth;
-				const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + st::msgDateFont->width(viewsText));
-				const int editedW = editedNow ? st::msgDateFont->width(editText) : 0;
-				const int timeIdW = st::msgDateFont->width(timeText + idText);
-				
-				int totalW = 0;
-				if (viewsW > 0) totalW += viewsW + textGap;
-				if (editedW > 0) totalW += editedW + textGap;
-				totalW += timeIdW;
+			// Width calculation
+			const int iconGap = 1;
+			const int textGap = st::msgDateFont->width(' ');
+			const int iconW = st::historyViewsWidth;
+			const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + st::msgDateFont->width(viewsText));
+			const int editedW = editedNow ? st::msgDateFont->width(editText) : 0;
+			const int timeIdW = st::msgDateFont->width(timeText + idText);
+			
+			int totalW = 0;
+			if (viewsW > 0) totalW += viewsW + textGap;
+			if (editedW > 0) totalW += editedW + textGap;
+			totalW += timeIdW;
 
-				// Position calculation (Right aligned on the item size row)
-				int x = itemRect.x() + itemRect.width() - totalW - st::msgDateImgDelta;
-				
-				// Prevent overlap with file status text
-				int reservedLeft = 0;
-				const int nameleft = docStyle.padding.left() + docStyle.thumbSize + docStyle.thumbSkip;
-				QString statusText;
-				if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
-					if (const auto document = fileMedia->document()) {
-						statusText = Ui::FormatSizeText(document->size);
-					}
+			// Position calculation (Right aligned on the item size row)
+			int x = itemRect.x() + itemRect.width() - totalW - st::msgDateImgDelta;
+			
+			// Prevent overlap with file status text (left side of the row)
+			int reservedLeft = 0;
+			const int nameleft = docStyle.padding.left() + docStyle.thumbSize + docStyle.thumbSkip;
+			QString statusText;
+			if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
+				if (const auto document = fileMedia->document()) {
+					statusText = Ui::FormatSizeText(document->size);
 				}
-				if (!statusText.isEmpty()) {
-					reservedLeft = nameleft + st::normalFont->width(statusText) + st::normalFont->spacew;
-				}
-				if (reservedLeft > 0) {
-					const auto minGap = st::normalFont->spacew;
-					const auto minX = reservedLeft + minGap;
-					if (x < minX) x = minX;
-				}
-
-				// Draw components
-				if (viewsW > 0) {
-					const auto &icon = stm->historyViewsIcon;
-					const int iconH = icon.height();
-					const int scaledH = (iconH * iconW) / std::max(1, icon.width());
-					const int iconTop = baseY - st::msgDateFont->ascent + (st::msgDateFont->height - scaledH) / 2;
-					icon.paint(p, x, iconTop, iconW);
-					p.drawText(x + iconW + iconGap, baseY, viewsText);
-					x += viewsW + textGap;
-				}
-				if (editedW > 0) {
-					p.drawText(x, baseY, editText);
-					x += editedW + textGap;
-				}
-				p.drawText(x, baseY, timeText + idText);
 			}
+			if (!statusText.isEmpty()) {
+				reservedLeft = nameleft + st::normalFont->width(statusText) + st::normalFont->spacew;
+			}
+			if (reservedLeft > 0) {
+				const auto minGap = st::normalFont->spacew;
+				const auto minX = reservedLeft + minGap;
+				if (x < minX) x = minX;
+			}
+
+			// Draw components
+			if (viewsW > 0) {
+				const auto &icon = stm->historyViewsIcon;
+				const int iconH = icon.height();
+				const int scaledH = (iconH * iconW) / std::max(1, icon.width());
+				const int iconTop = baseY - st::msgDateFont->ascent + (st::msgDateFont->height - scaledH) / 2;
+				icon.paint(p, x, iconTop, iconW);
+				p.drawText(x + iconW + iconGap, baseY, viewsText);
+				x += viewsW + textGap;
+			}
+			if (editedW > 0) {
+				p.drawText(x, baseY, editText);
+				x += editedW + textGap;
+			}
+			p.drawText(x, baseY, timeText + idText);
 		} 
-		// --- Grid Mode Info Bubble (Top Right of first item) ---
-		// Only draw if showInfo is true (Fix Issue 4)
+		// --- Grid Mode Info Bubble (Top Right of subsequent items) ---
 		else if (_mode == Mode::Grid && i > 0 && showInfo) {
 			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
 		}
@@ -855,7 +847,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			p.setFont(st::messageTextStyle.font);
 
 			if (singleCaptionAnywhere) {
-				// Single Caption: Full Wrap
+				// FIX Issue 2: Single Caption Full Wrap
 				const auto &originalText = part.item->originalText();
 				Ui::Text::String caption(
 					st::messageTextStyle,
@@ -925,7 +917,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	// --- Draw Main Grid Info Bubble on First Item ---
-	// Fix Issue 4: Only if showInfo is true
 	if ((_mode == Mode::Grid) && !_parts.empty() && _parent->media() == this && showInfo) {
 		const auto firstPart = &_parts.front();
 		const auto firstItemGeometry = firstPart->geometry.translated(0, groupPadding.top());
@@ -977,7 +968,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto bubbleW = totalWidth + 2 * hPadding;
 			const auto bubbleH = textHeight + 2 * vPadding;
 
-			// Top Right position relative to the first item
 			const auto bubbleX = firstItemGeometry.x() + firstItemGeometry.width() - bubbleW - st::msgDateImgDelta;
 			const auto bubbleY = firstItemGeometry.y() + st::msgDateImgDelta;
 
@@ -1012,7 +1002,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			}
 			p.drawText(currentLeft, textBaseY, dateText + msgIdText);
 
-			// Draw Right Action (Fast Share) only if not bubble
 			if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 				auto fullRight = width();
 				auto fullBottom = height();

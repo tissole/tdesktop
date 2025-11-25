@@ -2394,18 +2394,36 @@ bool Gif::dataLoaded() const {
 		&& _dataMedia->loaded();
 }
 
+//bool Gif::needInfoDisplay() const {
+//	const auto item = _parent->data();
+//	if (item->isFakeAboutView()) {
+//		return false;
+//	}
+//	return item->isSending()
+//		|| item->awaitingVideoProcessing()
+//		|| _data->uploading()
+//		|| _parent->isUnderCursor()
+//		|| (_parent->delegate()->elementContext() == Context::ChatPreview)
+//		// Don't show the GIF badge if this message has text.
+//		|| (!_parent->hasBubble() && _parent->isLastAndSelfMessage());
+//}
+
 bool Gif::needInfoDisplay() const {
 	const auto item = _parent->data();
 	if (item->isFakeAboutView()) {
 		return false;
 	}
-	return item->isSending()
-		|| item->awaitingVideoProcessing()
-		|| _data->uploading()
-		|| _parent->isUnderCursor()
-		|| (_parent->delegate()->elementContext() == Context::ChatPreview)
-		// Don't show the GIF badge if this message has text.
-		|| (!_parent->hasBubble() && _parent->isLastAndSelfMessage());
+	// FIX Issue 1: Return false for videos to prevent standard bottom-right bubble.
+	// Exception: Keep true for Round messages (Video Notes) as they use standard layout.
+	if (_data->isVideoMessage()) {
+		return item->isSending()
+			|| item->awaitingVideoProcessing()
+			|| _data->uploading()
+			|| _parent->isUnderCursor()
+			|| (_parent->delegate()->elementContext() == Context::ChatPreview)
+			|| (!_parent->hasBubble() && _parent->isLastAndSelfMessage());
+	}
+	return false;
 }
 
 bool Gif::needCornerStatusDisplay() const {

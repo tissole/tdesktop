@@ -1083,15 +1083,25 @@ bool Photo::dataLoaded() const {
 	return _dataMedia->loaded();
 }
 
+//bool Photo::needInfoDisplay() const {
+//	if (_parent->data()->isFakeAboutView()) {
+//		return false;
+//	}
+//	return _parent->data()->isSending()
+//		|| _parent->data()->hasFailed()
+//		|| _parent->isUnderCursor()
+//		|| (_parent->delegate()->elementContext() == Context::ChatPreview)
+//		|| _parent->isLastAndSelfMessage();
+//}
+
 bool Photo::needInfoDisplay() const {
 	if (_parent->data()->isFakeAboutView()) {
 		return false;
 	}
-	return _parent->data()->isSending()
-		|| _parent->data()->hasFailed()
-		|| _parent->isUnderCursor()
-		|| (_parent->delegate()->elementContext() == Context::ChatPreview)
-		|| _parent->isLastAndSelfMessage();
+	// FIX Issue 1: Always return false to prevent parent from drawing 
+	// the standard bottom-right bubble (timestamp/checkmarks).
+	// We handle our own custom Top-Right bubble in Photo::draw().
+	return false;
 }
 
 void Photo::validateGroupedCache(
