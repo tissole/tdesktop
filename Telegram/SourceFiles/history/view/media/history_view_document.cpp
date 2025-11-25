@@ -920,11 +920,8 @@ void Document::draw(
 	p.setPen(stm->mediaFg);
 	p.drawTextLeft(nameleft, statustop, width, statusText);
 
-	// --- CUSTOM INLINE INFO ---
-	// FIX Issue 6 & 7: Proper Right alignment and no overlaps
-	// FIX Issue 8: Only draw if not in Grouped mode (Column albums handle their own)
-	const bool bubble = _parent->hasBubble();
-	if (!_data->isVideoMessage() && mode != LayoutMode::Grouped && (!bubble || isBubbleBottom())) {
+	// --- CUSTOM INLINE INFO (For All Files except Round Videos) ---
+	if (!_data->isVideoMessage() && mode != LayoutMode::Grouped) {
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 		};
@@ -961,14 +958,12 @@ void Document::draw(
 		if (editedW > 0) totalW += editedW + textGap;
 		totalW += timeIdW;
 
-		// FIX: Strictly anchor to the Right Edge of the bubble
+		// Calculate Position (Right Edge - same as Column Album)
 		int infoX = width - totalW - st::msgDateImgDelta;
 		
-		// Prevent overlap with status text (filename/size) on the left
+		// Collision Check with Status Text (on the left)
 		int statusW = st::normalFont->width(statusText);
 		int reservedLeft = nameleft + statusW + st::msgDateSpace;
-		
-		// Only push if we actually overlap
 		if (infoX < reservedLeft) {
 			infoX = reservedLeft;
 		}
@@ -1044,11 +1039,9 @@ void Document::draw(
 	bool inWebPage = (_parent->media() != this);
 	const auto bubble = _parent->hasBubble();
 	
-	// FIX Issue 3: Only draw standard bottom info for Round Videos.
-	// Removed the "else if" block that was drawing it for regular documents.
 	if (_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
 		auto fullRight = width;
-		auto fullBottom = height();
+		auto fullBottom = height(); // FIX: Use height() function
 		_parent->drawInfo(
 			p,
 			context,
@@ -1069,7 +1062,7 @@ void Document::draw(
 		// NOT the info bubble (date/checks), because that is already drawn inline.
 		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
 			auto fullRight = width;
-			auto fullBottom = height;
+			auto fullBottom = height(); // FIX: Use height() function
 			auto fastShareLeft = _parent->hasRightLayout()
 				? (-size->width() - st::historyFastShareLeft)
 				: (fullRight + st::historyFastShareLeft);
@@ -1520,7 +1513,7 @@ TextState Document::textState(
 	bool inWebPage = (_parent->media() != this);
 	if (_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
 		auto fullRight = width;
-		auto fullBottom = height();
+		auto fullBottom = layout.height(); // FIX: Use layout.height()
 		const auto bottomInfoResult = _parent->bottomInfoTextState(
 			fullRight,
 			fullBottom,
@@ -1532,6 +1525,19 @@ TextState Document::textState(
 			return bottomInfoResult;
 		}
 		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
+			auto fastShareLeft = _parent->hasRightLayout()
+				? (-size->width() - st::historyFastShareLeft)
+				: (fullRight + st::historyFastShareLeft);
+			auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
+			if (QRect(fastShareLeft, fastShareTop, size->width(), size->height()).contains(point)) {
+				result.link = _parent->rightActionLink(point
+					- QPoint(fastShareLeft, fastShareTop));
+			}
+		}
+	} else if (!_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
+		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
+			auto fullRight = width;
+			auto fullBottom = layout.height(); // FIX: Use layout.height()
 			auto fastShareLeft = _parent->hasRightLayout()
 				? (-size->width() - st::historyFastShareLeft)
 				: (fullRight + st::historyFastShareLeft);
