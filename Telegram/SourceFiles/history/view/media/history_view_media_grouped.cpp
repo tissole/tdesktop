@@ -390,7 +390,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			accumulate_max(newHeight, top + height);
 		}
 
-		// 2. Handle Captions
+		// 2. Handle Captions (Grid Mode)
 		if (_mode == Mode::Grid) {
 			std::vector<int> captionIndices;
 			for (auto i = 0; i != _parts.size(); ++i) {
@@ -410,11 +410,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 			if (singleCaptionAnywhere) {
 				// --- Single Caption Logic (Full Width, Wrapped) ---
-				// FIX Issue 2: Ensure we calculate the full height for wrapped text
 				const auto captionIdx = captionIndices[0];
 				auto &part = _parts[captionIdx];
 
-				// Use full width minus padding
 				const auto captionWidth = newWidth - padding.left() - padding.right();
 
 				// Use ItemTextOptions to ensure wrapping flags are set
@@ -647,8 +645,10 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	const auto st = context.st;
 	const auto stm = context.messageStyle();
 
+	// Check if mouse is over the album or it is selected
 	const bool showInfo = _parent->isUnderCursor() || context.selected();
 
+	// Pre-calculate single caption state
 	bool singleCaptionAnywhere = false;
 	if (_mode == Mode::Grid) {
 		int count = 0;
@@ -695,7 +695,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 
-		// --- Draw Grid Mode Overlays (Video duration) ---
+		// --- Draw Grid Mode Overlays (Video duration) - Only on Hover ---
 		if (_mode == Mode::Grid && showInfo) {
 			const auto dataMedia = part.item->media();
 			qint64 durSeconds = -1;
@@ -752,93 +752,213 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			}
 		}
 
-		// --- Draw Column Mode Info (FIX Issue 3: Applied to ALL items) ---
+		// --- Draw Column Mode Info ---
 		if (_mode == Mode::Column) {
-			// Removed "if (i == 0)" so this runs for every item
-			QString infoText;
 			const auto item = part.item;
 			const auto edited = item->Get<HistoryMessageEdited>();
-			
-			// Calculate text content
-			const auto views = item->Get<HistoryMessageViews>();
-			const auto viewsText = (views && views->views.count >= 0)
-				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
-				: QString();
 			const bool editedNow = (edited && !item->hideEditedBadge());
-			const auto editText = editedNow ? (QString::fromUtf8("✏️")) : QString();
-			const auto timeText = QLocale().toString(
-				ItemDateTime(item).time(),
-				GetEnhancedBool("show_seconds")
-					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
-					: QLocale::system().timeFormat(QLocale::ShortFormat));
-			const auto idText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-				? (QString(" ") + QString::number(item->fullId().msg.bare))
-				: QString();
-
-			p.setFont(st::msgDateFont);
-			p.setPen(stm->msgDateFg);
-
-			const auto itemRect = part.geometry.translated(0, groupPadding.top());
-			const auto &docStyle = st::msgFileLayoutGrouped;
-			const auto statustop = docStyle.statusTop;
-			const auto baseY = itemRect.y() + statustop + st::normalFont->ascent;
-
-			// Width calculation
-			const int iconGap = 1;
-			const int textGap = st::msgDateFont->width(' ');
-			const int iconW = st::historyViewsWidth;
-			const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + st::msgDateFont->width(viewsText));
-			const int editedW = editedNow ? st::msgDateFont->width(editText) : 0;
-			const int timeIdW = st::msgDateFont->width(timeText + idText);
 			
-			int totalW = 0;
-			if (viewsW > 0) totalW += viewsW + textGap;
-			if (editedW > 0) totalW += editedW + textGap;
-			totalW += timeIdW;
+			if (i == 0) {
+				// --- First Item: Full Info (Views, Edited, Date, ID) ---
+				const auto views = item->Get<HistoryMessageViews>();
+				const auto viewsText = (views && views->views.count >= 0)
+					? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+					: QString();
+				const auto editText = editedNow ? (QString::fromUtf8("✏️")) : QString();
+				const auto timeText = QLocale().toString(
+					ItemDateTime(item).time(),
+					GetEnhancedBool("show_seconds")
+						? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+						: QLocale::system().timeFormat(QLocale::ShortFormat));
+				const auto idText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+					? (QString(" ") + QString::number(item->fullId().msg.bare))
+					: QString();
 
-			// Position calculation (Right aligned on the item size row)
-			int x = itemRect.x() + itemRect.width() - totalW - st::msgDateImgDelta;
-			
-			// Prevent overlap with file status text (left side of the row)
-			int reservedLeft = 0;
-			const int nameleft = docStyle.padding.left() + docStyle.thumbSize + docStyle.thumbSkip;
-			QString statusText;
-			if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
-				if (const auto document = fileMedia->document()) {
-					statusText = Ui::FormatSizeText(document->size);
+				p.setFont(st::msgDateFont);
+				p.setPen(stm->msgDateFg);
+
+				const auto itemRect = part.geometry.translated(0, groupPadding.top());
+				const auto &docStyle = st::msgFileLayoutGrouped;
+				const auto statustop = docStyle.statusTop;
+				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent;
+
+				const int iconGap = 1;
+				const int textGap = st::msgDateFont->width(' ');
+				const int iconW = st::historyViewsWidth;
+				const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + st::msgDateFont->width(viewsText));
+				const int editedW = editedNow ? st::msgDateFont->width(editText) : 0;
+				const int timeIdW = st::msgDateFont->width(timeText + idText);
+				
+				int totalW = 0;
+				if (viewsW > 0) totalW += viewsW + textGap;
+				if (editedW > 0) totalW += editedW + textGap;
+				totalW += timeIdW;
+
+				int x = itemRect.x() + itemRect.width() - totalW - st::msgDateImgDelta;
+				
+				// Prevent overlap with file status text
+				int reservedLeft = 0;
+				const int nameleft = docStyle.padding.left() + docStyle.thumbSize + docStyle.thumbSkip;
+				QString statusText;
+				if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
+					if (const auto document = fileMedia->document()) {
+						statusText = Ui::FormatSizeText(document->size);
+					}
+				}
+				if (!statusText.isEmpty()) {
+					reservedLeft = nameleft + st::normalFont->width(statusText) + st::normalFont->spacew;
+				}
+				if (reservedLeft > 0) {
+					const auto minGap = st::normalFont->spacew;
+					const auto minX = reservedLeft + minGap;
+					if (x < minX) x = minX;
+				}
+
+				if (viewsW > 0) {
+					const auto &icon = stm->historyViewsIcon;
+					const int iconH = icon.height();
+					const int scaledH = (iconH * iconW) / std::max(1, icon.width());
+					const int iconTop = baseY - st::msgDateFont->ascent + (st::msgDateFont->height - scaledH) / 2;
+					icon.paint(p, x, iconTop, iconW);
+					p.drawText(x + iconW + iconGap, baseY, viewsText);
+					x += viewsW + textGap;
+				}
+				if (editedW > 0) {
+					p.drawText(x, baseY, editText);
+					x += editedW + textGap;
+				}
+				p.drawText(x, baseY, timeText + idText);
+			} else {
+				// --- Subsequent Items: Only Edited & ID ---
+				QString infoText;
+				if (editedNow) {
+					infoText += QString::fromUtf8("✏️");
+				}
+				if (GetEnhancedBool("show_messages_id")) {
+					const auto msgId = item->fullId().msg;
+					if (msgId > 0) {
+						if (!infoText.isEmpty()) infoText += ' ';
+						infoText += QString::number(msgId.bare);
+					}
+				}
+
+				if (!infoText.isEmpty()) {
+					p.setFont(st::msgDateFont);
+					p.setPen(stm->msgDateFg);
+
+					const auto itemRect = part.geometry.translated(0, groupPadding.top());
+					const auto &docStyle = st::msgFileLayoutGrouped;
+					const auto statustop = docStyle.statusTop;
+					const auto textWidth = st::msgDateFont->width(infoText);
+					
+					const auto textX = itemRect.x() + itemRect.width() - textWidth - st::msgDateImgDelta;
+					const auto textY = itemRect.y() + statustop + st::normalFont->ascent;
+
+					p.drawText(textX, textY, infoText);
 				}
 			}
-			if (!statusText.isEmpty()) {
-				reservedLeft = nameleft + st::normalFont->width(statusText) + st::normalFont->spacew;
-			}
-			if (reservedLeft > 0) {
-				const auto minGap = st::normalFont->spacew;
-				const auto minX = reservedLeft + minGap;
-				if (x < minX) x = minX;
-			}
-
-			// Draw components
-			if (viewsW > 0) {
-				const auto &icon = stm->historyViewsIcon;
-				const int iconH = icon.height();
-				const int scaledH = (iconH * iconW) / std::max(1, icon.width());
-				const int iconTop = baseY - st::msgDateFont->ascent + (st::msgDateFont->height - scaledH) / 2;
-				icon.paint(p, x, iconTop, iconW);
-				p.drawText(x + iconW + iconGap, baseY, viewsText);
-				x += viewsW + textGap;
-			}
-			if (editedW > 0) {
-				p.drawText(x, baseY, editText);
-				x += editedW + textGap;
-			}
-			p.drawText(x, baseY, timeText + idText);
 		} 
-		// --- Grid Mode Info Bubble (Top Right of subsequent items) ---
-		else if (_mode == Mode::Grid && i > 0 && showInfo) {
-			drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
+		// --- Grid Mode Info Bubbles (Top Right) - Only on Hover ---
+		else if (_mode == Mode::Grid && showInfo) {
+			if (i == 0) {
+				// --- First Item: Full Info Bubble ---
+				const auto item = part.item;
+				const auto font = st::msgDateFont;
+				p.setFont(font);
+
+				const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+				const auto dateText = QLocale().toString(
+					ItemDateTime(item).time(),
+					GetEnhancedBool("show_seconds")
+						? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+						: QLocale::system().timeFormat(QLocale::ShortFormat));
+				
+				const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+					? QString(" %1").arg(item->fullId().msg.bare)
+					: QString();
+
+				const auto views = item->Get<HistoryMessageViews>();
+				const auto viewsText = (views && views->views.count >= 0)
+					? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+					: QString();
+
+				int totalWidth = 0;
+				const int textPadding = font->width(' ');
+
+				const int dateWidth = font->width(dateText + msgIdText);
+				totalWidth += dateWidth;
+
+				if (edited) {
+					const auto editedWidth = font->width(QString::fromUtf8("✏️"));
+					totalWidth += textPadding + editedWidth;
+				}
+
+				int viewsWidth = 0;
+				const int viewsIconGap = 1;
+				if (!viewsText.isEmpty()) {
+					viewsWidth = st::historyViewsWidth + viewsIconGap + font->width(viewsText);
+					totalWidth += (2 * textPadding) + viewsWidth;
+				}
+
+				const auto sti = context.imageStyle();
+				const auto textHeight = font->height;
+				const auto hPadding = 2;
+				const auto vPadding = st::msgDateImgPadding.y();
+				const auto bubbleW = totalWidth + 2 * hPadding;
+				const auto bubbleH = textHeight + 2 * vPadding;
+
+				const auto itemGeometry = part.geometry.translated(0, groupPadding.top());
+				const auto bubbleX = itemGeometry.x() + itemGeometry.width() - bubbleW - st::msgDateImgDelta;
+				const auto bubbleY = itemGeometry.y() + st::msgDateImgDelta;
+
+				p.save();
+				p.setOpacity(0.95);
+				Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, sti->msgDateImgBg, sti->msgDateImgBgCorners);
+				p.restore();
+
+				p.setPen(st->msgDateImgFg());
+				p.setFont(font->bold());
+				const int textBaseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
+				int currentLeft = bubbleX + hPadding;
+				if (!viewsText.isEmpty()) {
+					const auto &icon = st->historyViewsInvertedIcon();
+					const int baseIconW = std::max(1, icon.width());
+					const int baseIconH = icon.height();
+					const int scaledIconH = (baseIconH * st::historyViewsWidth) / baseIconW;
+					
+					const int iconY = bubbleY + (bubbleH - scaledIconH) / 2 + 1;
+					
+					icon.paint(p, currentLeft, iconY, st::historyViewsWidth);
+					p.drawText(currentLeft + st::historyViewsWidth + viewsIconGap, textBaseY, viewsText);
+					currentLeft += viewsWidth + textPadding;
+				}
+				if (edited) {
+					const auto editedText = QString::fromUtf8("✏️");
+					const auto editedWidth = font->width(editedText);
+					p.setFont(font);
+					p.drawText(currentLeft, textBaseY, editedText);
+					currentLeft += editedWidth + textPadding;
+					p.setFont(font->bold());
+				}
+				p.drawText(currentLeft, textBaseY, dateText + msgIdText);
+
+				// Draw Right Action (Fast Share) only if not bubble
+				if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
+					auto fullRight = width();
+					auto fullBottom = height();
+					auto fastShareLeft = _parent->hasRightLayout()
+						? (-size->width() - st::historyFastShareLeft)
+						: (fullRight + st::historyFastShareLeft);
+					auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
+					_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, width());
+				}
+			} else {
+				// --- Subsequent Items: Partial Info Bubble (Edited + ID) ---
+				drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
+			}
 		}
 
-		// --- Draw Grid Caption ---
+		// --- Draw Caption ---
 		if ((_mode == Mode::Grid) && part._captionHeight > 0 && !part.captionRect.isEmpty()) {
 			auto captionRect = part.captionRect.translated(0, groupPadding.top());
 			const auto padding = QMargins(8, 2, 8, 2);
@@ -914,104 +1034,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		});
 	} else if (_purchasedPriceTag) {
 		drawPurchasedTag(p, fullRect, context);
-	}
-
-	// --- Draw Main Grid Info Bubble on First Item ---
-	if ((_mode == Mode::Grid) && !_parts.empty() && _parent->media() == this && showInfo) {
-		const auto firstPart = &_parts.front();
-		const auto firstItemGeometry = firstPart->geometry.translated(0, groupPadding.top());
-
-		if (_mode == Mode::Grid && (!_parent->hasBubble() || isBubbleBottom())) {
-			const auto item = firstPart->item;
-			const auto st = context.st;
-			const auto font = st::msgDateFont;
-			p.setFont(font);
-
-			const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
-			const auto dateText = QLocale().toString(
-				ItemDateTime(item).time(),
-				GetEnhancedBool("show_seconds")
-					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
-					: QLocale::system().timeFormat(QLocale::ShortFormat));
-			
-			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-				? QString(" %1").arg(item->fullId().msg.bare)
-				: QString();
-
-			const auto views = item->Get<HistoryMessageViews>();
-			const auto viewsText = (views && views->views.count >= 0)
-				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
-				: QString();
-
-			int totalWidth = 0;
-			const int textPadding = font->width(' ');
-
-			const int dateWidth = font->width(dateText + msgIdText);
-			totalWidth += dateWidth;
-
-			if (edited) {
-				const auto editedWidth = font->width(QString::fromUtf8("✏️"));
-				totalWidth += textPadding + editedWidth;
-			}
-
-			int viewsWidth = 0;
-			const int viewsIconGap = 1;
-			if (!viewsText.isEmpty()) {
-				viewsWidth = st::historyViewsWidth + viewsIconGap + font->width(viewsText);
-				totalWidth += (2 * textPadding) + viewsWidth;
-			}
-
-			const auto sti = context.imageStyle();
-			const auto textHeight = font->height;
-			const auto hPadding = 2;
-			const auto vPadding = st::msgDateImgPadding.y();
-			const auto bubbleW = totalWidth + 2 * hPadding;
-			const auto bubbleH = textHeight + 2 * vPadding;
-
-			const auto bubbleX = firstItemGeometry.x() + firstItemGeometry.width() - bubbleW - st::msgDateImgDelta;
-			const auto bubbleY = firstItemGeometry.y() + st::msgDateImgDelta;
-
-			p.save();
-			p.setOpacity(0.95);
-			Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, sti->msgDateImgBg, sti->msgDateImgBgCorners);
-			p.restore();
-
-			p.setPen(st->msgDateImgFg());
-			p.setFont(font->bold());
-			const int textBaseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
-			int currentLeft = bubbleX + hPadding;
-			if (!viewsText.isEmpty()) {
-				const auto &icon = st->historyViewsInvertedIcon();
-				const int baseIconW = std::max(1, icon.width());
-				const int baseIconH = icon.height();
-				const int scaledIconH = (baseIconH * st::historyViewsWidth) / baseIconW;
-				
-				const int iconY = bubbleY + (bubbleH - scaledIconH) / 2 + 1;
-				
-				icon.paint(p, currentLeft, iconY, st::historyViewsWidth);
-				p.drawText(currentLeft + st::historyViewsWidth + viewsIconGap, textBaseY, viewsText);
-				currentLeft += viewsWidth + textPadding;
-			}
-			if (edited) {
-				const auto editedText = QString::fromUtf8("✏️");
-				const auto editedWidth = font->width(editedText);
-				p.setFont(font);
-				p.drawText(currentLeft, textBaseY, editedText);
-				currentLeft += editedWidth + textPadding;
-				p.setFont(font->bold());
-			}
-			p.drawText(currentLeft, textBaseY, dateText + msgIdText);
-
-			if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
-				auto fullRight = width();
-				auto fullBottom = height();
-				auto fastShareLeft = _parent->hasRightLayout()
-					? (-size->width() - st::historyFastShareLeft)
-					: (fullRight + st::historyFastShareLeft);
-				auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
-				_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, width());
-			}
-		}
 	}
 }
 

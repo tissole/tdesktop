@@ -1681,19 +1681,14 @@ void Element::setDisplayDate(bool displayDate) {
 
 	// --- CUSTOM: Disable default date for Media (Photo, Video, Document) ---
 	if (const auto media = item->media()) {
-		// Check if it is a Photo
 		if (media->photo()) {
-			// It's a Photo -> Hide default date (we draw it Top-Right)
+			// Single Photo -> Disable standard date (we use custom Top-Right)
 			displayDate = false;
-		}
-		// Check if it is a Document (File, Audio, Video, GIF, Round Video)
-		else if (const auto doc = media->document()) {
-			// Check if it is a Round Video (Video Note)
+		} else if (const auto doc = media->document()) {
 			if (doc->isVideoMessage()) {
-				// It IS a Round Video -> Keep default date (Bottom-Right)
-				// Round videos handle their own layout logic
+				// Round Video -> Keep standard date
 			} else {
-				// It is a standard File/Video/Audio/GIF -> Hide default date
+				// Video/File/Audio -> Disable standard date
 				displayDate = false;
 			}
 		}

@@ -287,7 +287,7 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 
 	ensureDataMediaCreated();
 
-	// FIX: Calculate showInfo for hover effect (Mouse over or Selected)
+	// FIX: Show custom bubble only on hover or selection
 	const bool showInfo = _parent->isUnderCursor() || context.selected();
 
 	// Custom logic for blocked users/spoilers
@@ -412,98 +412,87 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	// --- CUSTOM INFO BUBBLE (TOP-RIGHT) ---
-	// FIX: Only draw if showInfo (hover/select) is true
-	// FIX: Draw regardless of caption (!bubble check removed)
 	if (!inWebPage && !_parent->data()->isFakeAboutView() && showInfo) {
+		auto ItemDateTime = [](not_null<HistoryItem*> item) {
+			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+		};
+
+		const auto item = _parent->data();
+		const auto font = st::msgDateFont;
+		p.setFont(font);
+
+		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
 		
-		// Restore definitions needed for Fast Share
-		auto fullRight = paintx + paintw;
-		auto fullBottom = painty + painth;
+		const auto dateText = QLocale().toString(
+			ItemDateTime(item).time(),
+			GetEnhancedBool("show_seconds")
+				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+				: QLocale::system().timeFormat(QLocale::ShortFormat));
 
-		if (needInfoDisplay()) {
-			auto ItemDateTime = [](not_null<HistoryItem*> item) {
-				return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-			};
+		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+			? QString(" %1").arg(item->fullId().msg.bare)
+			: QString();
 
-			const auto item = _parent->data();
-			const auto font = st::msgDateFont;
-			p.setFont(font);
+		const auto views = item->Get<HistoryMessageViews>();
+		const auto viewsText = (views && views->views.count >= 0)
+			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+			: QString();
 
-			const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
-			
-			const auto dateText = QLocale().toString(
-				ItemDateTime(item).time(),
-				GetEnhancedBool("show_seconds")
-					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
-					: QLocale::system().timeFormat(QLocale::ShortFormat));
+		int totalWidth = 0;
+		const int textPadding = font->width(' ');
+		totalWidth += font->width(dateText + msgIdText);
 
-			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-				? QString(" %1").arg(item->fullId().msg.bare)
-				: QString();
-
-			const auto views = item->Get<HistoryMessageViews>();
-			const auto viewsText = (views && views->views.count >= 0)
-				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
-				: QString();
-
-			int totalWidth = 0;
-			const int textPadding = font->width(' ');
-			totalWidth += font->width(dateText + msgIdText);
-
-			if (edited) {
-				totalWidth += textPadding + font->width(QString::fromUtf8("✏️"));
-			}
-
-			int viewsWidth = 0;
-			if (!viewsText.isEmpty()) {
-				viewsWidth = st::historyViewsWidth + 1 + font->width(viewsText);
-				totalWidth += (2 * textPadding) + viewsWidth;
-			}
-
-			const auto textHeight = font->height;
-			const auto hPadding = 2;
-			const auto vPadding = st::msgDateImgPadding.y();
-			const auto bubbleW = totalWidth + 2 * hPadding;
-			const auto bubbleH = textHeight + 2 * vPadding;
-
-			// Position: Top-Right
-			const auto bubbleX = width() - bubbleW - st::msgDateImgDelta;
-			const auto bubbleY = st::msgDateImgDelta;
-
-			p.save();
-			p.setOpacity(0.95);
-			Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, sti->msgDateImgBg, sti->msgDateImgBgCorners);
-			p.restore();
-
-			p.setPen(st->msgDateImgFg());
-			p.setFont(font->bold());
-			const int textBaseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
-			int currentLeft = bubbleX + hPadding;
-
-			if (!viewsText.isEmpty()) {
-				const auto &icon = st->historyViewsInvertedIcon();
-				const int baseIconW = std::max(1, icon.width());
-				const int baseIconH = icon.height();
-				const int scaledIconH = (baseIconH * st::historyViewsWidth) / baseIconW;
-				
-				icon.paint(p, currentLeft, bubbleY + (bubbleH - scaledIconH) / 2 + 1, st::historyViewsWidth);
-				p.drawText(currentLeft + st::historyViewsWidth + 1, textBaseY, viewsText);
-				
-				currentLeft += viewsWidth + textPadding;
-			}
-			if (edited) {
-				const auto editedText = QString::fromUtf8("✏️");
-				p.setFont(font);
-				p.drawText(currentLeft, textBaseY, editedText);
-				currentLeft += font->width(editedText) + textPadding;
-				p.setFont(font->bold());
-			}
-			p.drawText(currentLeft, textBaseY, dateText + msgIdText);
+		if (edited) {
+			totalWidth += textPadding + font->width(QString::fromUtf8("✏️"));
 		}
 
-		// Draw Right Action (Fast Share)
-		// We check (!bubble || isBubbleBottom()) here because the Fast Share button
-		// usually sits outside the bubble or at the very bottom.
+		int viewsWidth = 0;
+		if (!viewsText.isEmpty()) {
+			viewsWidth = st::historyViewsWidth + 1 + font->width(viewsText);
+			totalWidth += (2 * textPadding) + viewsWidth;
+		}
+
+		const auto textHeight = font->height;
+		const auto hPadding = 2;
+		const auto vPadding = st::msgDateImgPadding.y();
+		const auto bubbleW = totalWidth + 2 * hPadding;
+		const auto bubbleH = textHeight + 2 * vPadding;
+
+		// Position: Top-Right
+		const auto bubbleX = width() - bubbleW - st::msgDateImgDelta;
+		const auto bubbleY = st::msgDateImgDelta;
+
+		p.save();
+		p.setOpacity(0.95);
+		Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, sti->msgDateImgBg, sti->msgDateImgBgCorners);
+		p.restore();
+
+		p.setPen(st->msgDateImgFg());
+		p.setFont(font->bold());
+		const int textBaseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
+		int currentLeft = bubbleX + hPadding;
+
+		if (!viewsText.isEmpty()) {
+			const auto &icon = st->historyViewsInvertedIcon();
+			const int baseIconW = std::max(1, icon.width());
+			const int baseIconH = icon.height();
+			const int scaledIconH = (baseIconH * st::historyViewsWidth) / baseIconW;
+			
+			icon.paint(p, currentLeft, bubbleY + (bubbleH - scaledIconH) / 2 + 1, st::historyViewsWidth);
+			p.drawText(currentLeft + st::historyViewsWidth + 1, textBaseY, viewsText);
+			
+			currentLeft += viewsWidth + textPadding;
+		}
+		if (edited) {
+			const auto editedText = QString::fromUtf8("✏️");
+			p.setFont(font);
+			p.drawText(currentLeft, textBaseY, editedText);
+			currentLeft += font->width(editedText) + textPadding;
+			p.setFont(font->bold());
+		}
+		p.drawText(currentLeft, textBaseY, dateText + msgIdText);
+
+		// Draw Right Action (Fast Share) if not bubble
 		if ((!bubble || isBubbleBottom())) {
 			if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
 				auto fastShareLeft = _parent->hasRightLayout()
@@ -1095,12 +1084,8 @@ bool Photo::dataLoaded() const {
 //}
 
 bool Photo::needInfoDisplay() const {
-	if (_parent->data()->isFakeAboutView()) {
-		return false;
-	}
-	// FIX Issue 1: Always return false to prevent parent from drawing 
-	// the standard bottom-right bubble (timestamp/checkmarks).
-	// We handle our own custom Top-Right bubble in Photo::draw().
+	// Always return false to prevent the parent Message view from 
+	// drawing the standard bottom-right info bubble.
 	return false;
 }
 

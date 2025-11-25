@@ -2409,13 +2409,11 @@ bool Gif::dataLoaded() const {
 //}
 
 bool Gif::needInfoDisplay() const {
-	const auto item = _parent->data();
-	if (item->isFakeAboutView()) {
-		return false;
-	}
-	// FIX Issue 1: Return false for videos to prevent standard bottom-right bubble.
-	// Exception: Keep true for Round messages (Video Notes) as they use standard layout.
+	// FIX Issue 2: Return false for standard videos to prevent standard bottom-right bubble.
+	// Exception: Keep true for Round messages (Video Notes) which use standard layout.
 	if (_data->isVideoMessage()) {
+		// Round video logic...
+		const auto item = _parent->data();
 		return item->isSending()
 			|| item->awaitingVideoProcessing()
 			|| _data->uploading()

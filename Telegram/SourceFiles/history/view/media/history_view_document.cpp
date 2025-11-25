@@ -1042,7 +1042,10 @@ void Document::draw(
 
 	// --- STANDARD BOTTOM INFO (Round Videos Only) ---
 	bool inWebPage = (_parent->media() != this);
-	// FIX: Only show right action for non-video if we handled info above
+	const auto bubble = _parent->hasBubble();
+	
+	// FIX Issue 3: Only draw standard bottom info for Round Videos.
+	// Removed the "else if" block that was drawing it for regular documents.
 	if (_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
 		auto fullRight = width;
 		auto fullBottom = height();
@@ -1062,11 +1065,11 @@ void Document::draw(
 			_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, width);
 		}
 	} else if (!_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
-		// For non-round files (which now have inline info), we still need the Right Action (Fast Share) 
-		// button if it exists (e.g. Channel comments button), but NOT the standard date/info.
+		// For standard documents, we only want the Right Action button (Fast Share),
+		// NOT the info bubble (date/checks), because that is already drawn inline.
 		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
 			auto fullRight = width;
-			auto fullBottom = height();
+			auto fullBottom = height;
 			auto fastShareLeft = _parent->hasRightLayout()
 				? (-size->width() - st::historyFastShareLeft)
 				: (fullRight + st::historyFastShareLeft);
