@@ -287,7 +287,7 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 
 	ensureDataMediaCreated();
 
-	// FIX: Show custom bubble only on hover or selection
+	// FIX: Calculate showInfo for hover effect (Mouse over or Selected)
 	const bool showInfo = _parent->isUnderCursor() || context.selected();
 
 	// Custom logic for blocked users/spoilers
@@ -412,7 +412,9 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	// --- CUSTOM INFO BUBBLE (TOP-RIGHT) ---
+	// Only draw if showInfo is true
 	if (!inWebPage && !_parent->data()->isFakeAboutView() && showInfo) {
+		
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 		};
@@ -495,6 +497,9 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 		// Draw Right Action (Fast Share) if not bubble
 		if ((!bubble || isBubbleBottom())) {
 			if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
+				// Declare positioning variables for Right Action
+				auto fullRight = paintx + paintw;
+				auto fullBottom = painty + painth;
 				auto fastShareLeft = _parent->hasRightLayout()
 					? (paintx - size->width() - st::historyFastShareLeft)
 					: (fullRight + st::historyFastShareLeft);
