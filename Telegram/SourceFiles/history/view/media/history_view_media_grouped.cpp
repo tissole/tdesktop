@@ -322,8 +322,9 @@ QSize GroupedMedia::countOptimalSize() {
 			
 			const auto captionWidth = std::min(maxWidth, st::historyGroupWidthMax) - padding.left() - padding.right();
 			
-			// FIX: Use textOptions() to enable word wrapping
-			Ui::Text::String caption(
+			// FIX: Use setMarkedText to ensure proper multi-line wrapping initialization
+			Ui::Text::String caption(st::msgMinWidth);
+			caption.setMarkedText(
 				st::messageTextStyle,
 				part.item->originalText(),
 				Ui::ItemTextOptions(part.item));
@@ -339,7 +340,6 @@ QSize GroupedMedia::countOptimalSize() {
 
 	return { maxWidth, int(base::SafeRound(minHeight)) };
 }
-
 
 QSize GroupedMedia::countCurrentSize(int newWidth) {
 	accumulate_min(newWidth, maxWidth());
@@ -415,8 +415,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 				const auto captionWidth = newWidth - padding.left() - padding.right();
 
-				// Use ItemTextOptions to ensure wrapping flags are set
-				Ui::Text::String caption(
+				// FIX: Use setMarkedText to ensure proper multi-line wrapping initialization
+				Ui::Text::String caption(st::msgMinWidth);
+				caption.setMarkedText(
 					st::messageTextStyle,
 					part.item->originalText(),
 					Ui::ItemTextOptions(part.item));
@@ -969,7 +970,10 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			if (singleCaptionAnywhere) {
 				// FIX Issue 2: Single Caption Full Wrap
 				const auto &originalText = part.item->originalText();
-				Ui::Text::String caption(
+				
+				// FIX: Use setMarkedText to ensure correct wrapping context
+				Ui::Text::String caption(st::msgMinWidth);
+				caption.setMarkedText(
 					st::messageTextStyle,
 					originalText,
 					Ui::ItemTextOptions(part.item));
@@ -1060,8 +1064,9 @@ TextState GroupedMedia::getPartState(
 					const auto padding = QMargins(8, 0, 8, 0);
 					const auto captionWidth = captionGeo.width() - padding.left() - padding.right();
 					
-					// FIX: Use textOptions() to enable word wrapping
-					Ui::Text::String caption(
+					// FIX: Use setMarkedText to ensure correct wrapping context for hit testing
+					Ui::Text::String caption(st::msgMinWidth);
+					caption.setMarkedText(
 						st::messageTextStyle,
 						originalText,
 						Ui::ItemTextOptions(part.item));

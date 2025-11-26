@@ -1166,6 +1166,12 @@ bool Document::downloadInCorner() const {
 		&& !_data->inappPlaybackFailed();
 }
 
+bool Document::needInfoDisplay() const {
+	// FIX: Only Round Videos (Video Notes) need the standard bottom-right info bubble.
+	// Standard Files/Music/Videos now use the custom Top-Right bubble drawn in Document::draw.
+	return _data->isVideoMessage();
+}
+
 void Document::drawCornerDownload(
 		Painter &p,
 		const PaintContext &context,

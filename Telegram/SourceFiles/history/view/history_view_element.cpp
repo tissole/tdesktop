@@ -992,6 +992,20 @@ bool Element::isTopicRootReply() const {
 }
 
 int Element::skipBlockWidth() const {
+	// FIX: Suppress the text skip block (timestamp space) for media
+	// that handles its own "Top-Right" custom bubble.
+	if (_media) {
+		if (const auto photo = _media->getPhoto()) {
+			return 0;
+		}
+		if (const auto doc = _media->getDocument()) {
+			// If it's a Document, Video, or GIF (but NOT a Round Video/Video Note)
+			// we suppress the standard timestamp block.
+			if (!doc->isVideoMessage()) {
+				return 0;
+			}
+		}
+	}
 	return st::msgDateSpace + infoWidth() - st::msgDateDelta.x();
 }
 

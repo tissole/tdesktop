@@ -67,6 +67,7 @@ public:
 	bool customInfoLayout() const override {
 		return false;
 	}
+	bool needInfoDisplay() const override;
 	QMargins bubbleMargins() const override;
 
 	QSize sizeForGroupingOptimal(int maxWidth, bool last) const override;
