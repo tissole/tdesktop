@@ -752,115 +752,110 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 	bool inWebPage = (_parent->media() != this);
 
 	// --- CUSTOM TOOLTIP LOGIC (Top-Right Bubble) ---
-	// Explicitly check hit-test here even if caption exists (bubble is true)
 	if (!inWebPage && !_parent->data()->isFakeAboutView()) {
 		
-		if (needInfoDisplay()) {
-			auto ItemDateTime = [](not_null<HistoryItem*> item) {
-				return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-			};
+		// We technically abuse needInfoDisplay() logic or just check conditions directly
+		// The draw() function uses "showInfo", here we check hit test.
+		
+		auto ItemDateTime = [](not_null<HistoryItem*> item) {
+			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+		};
 
-			const auto item = _parent->data();
-			const auto font = st::msgDateFont;
-			
-			const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
-			const auto dateText = QLocale().toString(
-				ItemDateTime(item).time(),
-				GetEnhancedBool("show_seconds")
-					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
-					: QLocale::system().timeFormat(QLocale::ShortFormat));
+		const auto item = _parent->data();
+		const auto font = st::msgDateFont;
+		
+		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+		const auto dateText = QLocale().toString(
+			ItemDateTime(item).time(),
+			GetEnhancedBool("show_seconds")
+				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+				: QLocale::system().timeFormat(QLocale::ShortFormat));
 
-			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-				? QString(" %1").arg(item->fullId().msg.bare)
-				: QString();
+		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+			? QString(" %1").arg(item->fullId().msg.bare)
+			: QString();
 
-			const auto views = item->Get<HistoryMessageViews>();
-			const auto viewsText = (views && views->views.count >= 0)
-				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
-				: QString();
+		const auto views = item->Get<HistoryMessageViews>();
+		const auto viewsText = (views && views->views.count >= 0)
+			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+			: QString();
 
-			int totalWidth = 0;
-			const int textPadding = font->width(' ');
-			totalWidth += font->width(dateText + msgIdText);
+		int totalWidth = 0;
+		const int textPadding = font->width(' ');
+		const int dateWidth = font->width(dateText + msgIdText);
+		totalWidth += dateWidth;
 
-			if (edited) {
-				totalWidth += textPadding + font->width(QString::fromUtf8("✏️"));
+		int editedWidth = 0;
+		if (edited) {
+			editedWidth = font->width(QString::fromUtf8("✏️"));
+			totalWidth += textPadding + editedWidth;
+		}
+
+		int viewsWidth = 0;
+		if (!viewsText.isEmpty()) {
+			viewsWidth = st::historyViewsWidth + 1 + font->width(viewsText);
+			totalWidth += (2 * textPadding) + viewsWidth;
+		}
+
+		const auto textHeight = font->height;
+		const auto hPadding = 2;
+		const auto vPadding = st::msgDateImgPadding.y();
+		const auto bubbleW = totalWidth + 2 * hPadding;
+		const auto bubbleH = textHeight + 2 * vPadding;
+
+		// Position: Top-Right
+		const auto bubbleX = width() - bubbleW - st::msgDateImgDelta;
+		const auto bubbleY = st::msgDateImgDelta;
+		const QRect bubbleRect(bubbleX, bubbleY, bubbleW, bubbleH);
+
+		// Hit Testing
+		if (bubbleRect.contains(point)) {
+			int currentX = bubbleX + hPadding;
+
+			// --- Zone 1: Views ---
+			QRect viewsRect;
+			if (viewsWidth > 0) {
+				viewsRect = QRect(currentX, bubbleY, viewsWidth, bubbleH);
+				currentX += viewsWidth + textPadding;
 			}
 
-			int viewsWidth = 0;
-			if (!viewsText.isEmpty()) {
-				viewsWidth = st::historyViewsWidth + 1 + font->width(viewsText);
-				totalWidth += (2 * textPadding) + viewsWidth;
-			}
+			// --- Zone 2: Edited + Date + ID ---
+			// Zone 2 starts where Views ends (or at start) and covers the rest of the bubble
+			int zone2Start = currentX;
+			int zone2Width = (bubbleX + bubbleW - hPadding) - zone2Start; 
+			// Refine width calculation to be precise based on components
+			int calculatedZone2W = dateWidth + (edited ? (editedWidth + textPadding) : 0);
+			QRect zone2Rect(zone2Start, bubbleY, calculatedZone2W, bubbleH);
 
-			const auto textHeight = font->height;
-			const auto hPadding = 2;
-			const auto vPadding = st::msgDateImgPadding.y();
-			const auto bubbleW = totalWidth + 2 * hPadding;
-			const auto bubbleH = textHeight + 2 * vPadding;
-
-			// Position: Top-Right
-			const auto bubbleX = width() - bubbleW - st::msgDateImgDelta;
-			const auto bubbleY = st::msgDateImgDelta;
-			
-			// Hit Testing
-			if (QRect(bubbleX, bubbleY, bubbleW, bubbleH).contains(point)) {
-				int currentX = bubbleX + hPadding;
-
-				// 1. Views Zone
-				if (!viewsText.isEmpty()) {
-					int w = st::historyViewsWidth + 1 + font->width(viewsText);
-					if (point.x() >= currentX && point.x() < currentX + w) {
-						result.customTooltip = true;
-						result.customTooltipText = QString("Views: ") + viewsText;
-						return result;
-					}
-					currentX += w + textPadding;
+			// Logic
+			if (viewsWidth > 0 && viewsRect.contains(point)) {
+				result.customTooltip = true;
+				result.customTooltipText = QString("Views: ") + viewsText;
+				return result;
+			} 
+			else if (zone2Rect.contains(point)) {
+				// Generate Combined Tooltip (Uploaded + Edited)
+				const auto uploadLocal = ItemDateTime(item);
+				QString text = tr::lng_uploaded(tr::now) + ": "
+					+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
+					+ uploadLocal.time().toString("HH:mm:ss");
+				
+				if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
+					text += "  ID: " + QString::number(item->fullId().msg.bare);
 				}
 
-				// 2. Edited Zone (Icon)
 				if (edited) {
-					int w = font->width(QString::fromUtf8("✏️"));
-					if (point.x() >= currentX && point.x() < currentX + w) {
-						const auto uploadLocal = ItemDateTime(item);
-						QString text = tr::lng_uploaded(tr::now) + ": "
-							+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
-							+ uploadLocal.time().toString("HH:mm:ss");
-						
-						if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
-							text += "  ID: " + QString::number(item->fullId().msg.bare);
-						}
-
-						const auto editLocal = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
-						QString editedTrans = tr::lng_edited(tr::now);
-						editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
-						text += "\n" + editedTrans + ": "
-							+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
-							+ editLocal.time().toString("HH:mm:ss");
-
-						result.customTooltip = true;
-						result.customTooltipText = text;
-						return result;
-					}
-					currentX += w + textPadding;
+					const auto editLocal = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
+					QString editedTrans = tr::lng_edited(tr::now);
+					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
+					text += "\n" + editedTrans + ": "
+						+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
+						+ editLocal.time().toString("HH:mm:ss");
 				}
-
-				// 3. Date/ID Zone
-				int dateW = font->width(dateText + msgIdText);
-				if (point.x() >= currentX && point.x() < currentX + dateW) {
-					const auto uploadLocal = ItemDateTime(item);
-					QString text = tr::lng_uploaded(tr::now) + ": "
-						+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
-						+ uploadLocal.time().toString("HH:mm:ss");
-					
-					if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
-						text += "  ID: " + QString::number(item->fullId().msg.bare);
-					}
-					
-					result.customTooltip = true;
-					result.customTooltipText = text;
-					return result;
-				}
+				
+				result.customTooltip = true;
+				result.customTooltipText = text;
+				return result;
 			}
 		}
 	}
@@ -885,19 +880,13 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 			result.cursor = CursorState::Enlarge;
 		}
 	}
+	
+	// FIX: Removed _parent->bottomInfoTextState() call to suppress the old bubble interaction.
+	// Only checking for Right Action (Fast Share) below.
 	if (_parent->media() == this && (!_parent->hasBubble() || isBubbleBottom())) {
 		auto fullRight = paintx + paintw;
 		auto fullBottom = painty + painth;
-		const auto bottomInfoResult = _parent->bottomInfoTextState(
-			fullRight,
-			fullBottom,
-			point,
-			InfoDisplayType::Image);
-		if (bottomInfoResult.link
-			|| bottomInfoResult.cursor != CursorState::None
-			|| bottomInfoResult.customTooltip) {
-			return bottomInfoResult;
-		}
+		
 		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
 			auto fastShareLeft = _parent->hasRightLayout()
 				? (paintx - size->width() - st::historyFastShareLeft)

@@ -1308,10 +1308,7 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 	if (rtl()) usex = width() - usex - usew;
 
 	// --- CUSTOM TOOLTIP LOGIC (Top-Right Bubble for Standard Videos) ---
-	// We apply this ONLY for standard videos (!isRound) to match the draw() logic.
-	// Removed !bubble check so it hits even with captions
 	if (!isRound && !inWebPage && !_parent->data()->isFakeAboutView()) {
-		// Local definition to fix compilation error
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 		};
@@ -1336,10 +1333,13 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 
 		int totalWidth = 0;
 		const int textPadding = font->width(' ');
-		totalWidth += font->width(dateText + msgIdText);
+		const int dateWidth = font->width(dateText + msgIdText);
+		totalWidth += dateWidth;
 
+		int editedWidth = 0;
 		if (edited) {
-			totalWidth += textPadding + font->width(QString::fromUtf8("✏️"));
+			editedWidth = font->width(QString::fromUtf8("✏️"));
+			totalWidth += textPadding + editedWidth;
 		}
 
 		int viewsWidth = 0;
@@ -1357,52 +1357,32 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 		// Position: Top-Right
 		const auto bubbleX = width() - bubbleW - st::msgDateImgDelta;
 		const auto bubbleY = st::msgDateImgDelta;
+		const QRect bubbleRect(bubbleX, bubbleY, bubbleW, bubbleH);
 
 		// Hit Testing
-		if (QRect(bubbleX, bubbleY, bubbleW, bubbleH).contains(point)) {
+		if (bubbleRect.contains(point)) {
 			int currentX = bubbleX + hPadding;
 
-			// 1. Views Zone
-			if (!viewsText.isEmpty()) {
-				int w = st::historyViewsWidth + 1 + font->width(viewsText);
-				if (point.x() >= currentX && point.x() < currentX + w) {
-					result.customTooltip = true;
-					result.customTooltipText = QString("Views: ") + viewsText;
-					return result;
-				}
-				currentX += w + textPadding;
+			// --- Zone 1: Views ---
+			QRect viewsRect;
+			if (viewsWidth > 0) {
+				viewsRect = QRect(currentX, bubbleY, viewsWidth, bubbleH);
+				currentX += viewsWidth + textPadding;
 			}
 
-			// 2. Edited Zone (Icon)
-			if (edited) {
-				int w = font->width(QString::fromUtf8("✏️"));
-				if (point.x() >= currentX && point.x() < currentX + w) {
-					const auto uploadLocal = ItemDateTime(item);
-					QString text = tr::lng_uploaded(tr::now) + ": "
-						+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
-						+ uploadLocal.time().toString("HH:mm:ss");
-					
-					if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
-						text += "  ID: " + QString::number(item->fullId().msg.bare);
-					}
+			// --- Zone 2: Edited + Date + ID ---
+			int zone2Start = currentX;
+			// Calculated width of remaining components
+			int calculatedZone2W = dateWidth + (edited ? (editedWidth + textPadding) : 0);
+			QRect zone2Rect(zone2Start, bubbleY, calculatedZone2W, bubbleH);
 
-					const auto editLocal = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
-					QString editedTrans = tr::lng_edited(tr::now);
-					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
-					text += "\n" + editedTrans + ": "
-						+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
-						+ editLocal.time().toString("HH:mm:ss");
-
-					result.customTooltip = true;
-					result.customTooltipText = text;
-					return result;
-				}
-				currentX += w + textPadding;
-			}
-
-			// 3. Date/ID Zone
-			int dateW = font->width(dateText + msgIdText);
-			if (point.x() >= currentX && point.x() < currentX + dateW) {
+			// Logic
+			if (viewsWidth > 0 && viewsRect.contains(point)) {
+				result.customTooltip = true;
+				result.customTooltipText = QString("Views: ") + viewsText;
+				return result;
+			} 
+			else if (zone2Rect.contains(point)) {
 				const auto uploadLocal = ItemDateTime(item);
 				QString text = tr::lng_uploaded(tr::now) + ": "
 					+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
@@ -1411,7 +1391,16 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 				if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
 					text += "  ID: " + QString::number(item->fullId().msg.bare);
 				}
-				
+
+				if (edited) {
+					const auto editLocal = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
+					QString editedTrans = tr::lng_edited(tr::now);
+					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
+					text += "\n" + editedTrans + ": "
+						+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
+						+ editLocal.time().toString("HH:mm:ss");
+				}
+
 				result.customTooltip = true;
 				result.customTooltipText = text;
 				return result;
@@ -1528,7 +1517,8 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 			}
 		}
 		
-		// --- MODIFIED: Only check standard bottom info if it's a Round Video ---
+		// --- MODIFIED: Only call standard bottom info if it's a Round Video ---
+		// This prevents standard videos from having the bottom bubble interactivity.
 		if (isRound) {
 			const auto bottomInfoResult = _parent->bottomInfoTextState(
 				fullRight,
