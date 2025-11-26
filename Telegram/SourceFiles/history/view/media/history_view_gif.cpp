@@ -434,7 +434,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 
 	_smallGroupPart = false;
 
-	// FIX Issue 3: Calculate showInfo for hover effect
+	// Calculate showInfo for hover effect
 	const bool showInfo = _parent->isUnderCursor() || context.selected();
 
 	ensureDataMediaCreated();
@@ -893,8 +893,8 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	// --- CUSTOM TOP-RIGHT BUBBLE (For Standard Videos) ---
-	// FIX Issue 2: Always draw top-right for videos even if caption exists.
-	// FIX Issue 3: Only draw on hover/select.
+	// Always draw top-right for videos even if caption exists.
+	// Only draw on hover/select.
 	if (!isRound && !inWebPage && !_parent->data()->isFakeAboutView() && showInfo) {
 		// Local definition to fix compilation error
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
@@ -1308,6 +1308,7 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 	if (rtl()) usex = width() - usex - usew;
 
 	// --- CUSTOM TOOLTIP LOGIC (Top-Right Bubble for Standard Videos) ---
+	// FIX Issue 3: Implemented 2-zone tooltip logic here for Top-Right bubble
 	if (!isRound && !inWebPage && !_parent->data()->isFakeAboutView()) {
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
@@ -1372,7 +1373,6 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 
 			// --- Zone 2: Edited + Date + ID ---
 			int zone2Start = currentX;
-			// Calculated width of remaining components
 			int calculatedZone2W = dateWidth + (edited ? (editedWidth + textPadding) : 0);
 			QRect zone2Rect(zone2Start, bubbleY, calculatedZone2W, bubbleH);
 
@@ -1517,7 +1517,7 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 			}
 		}
 		
-		// --- MODIFIED: Only call standard bottom info if it's a Round Video ---
+		// FIX Issue 3: Only call standard bottom info if it's a Round Video (Video Note).
 		// This prevents standard videos from having the bottom bubble interactivity.
 		if (isRound) {
 			const auto bottomInfoResult = _parent->bottomInfoTextState(
@@ -1805,7 +1805,7 @@ void Gif::drawGrouped(
 		}
 		p.setOpacity(1.);
 	}
-	// FIX Issue 5: Suppress duplicate Top-Left bubble in grid
+	// Suppress duplicate Top-Left bubble in grid
 	if (!_smallGroupPart) {
 		drawCornerStatus(p, context, geometry.topLeft());
 	}
@@ -2399,7 +2399,7 @@ bool Gif::dataLoaded() const {
 //}
 
 bool Gif::needInfoDisplay() const {
-	// FIX Issue 2: Return false for standard videos to prevent standard bottom-right bubble.
+	// Return false for standard videos to prevent standard bottom-right bubble.
 	// Exception: Keep true for Round messages (Video Notes) which use standard layout.
 	if (_data->isVideoMessage()) {
 		// Round video logic...

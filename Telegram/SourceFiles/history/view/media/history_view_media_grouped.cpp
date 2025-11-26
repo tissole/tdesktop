@@ -1099,6 +1099,11 @@ TextState GroupedMedia::getPartState(
 							result.symbol = textStateResult.symbol;
 							result.afterSymbol = textStateResult.afterSymbol;
 						}
+
+						// FIX Issue 1: Do NOT show tooltip for single caption in Grid mode
+						// because it wraps (is not elided) and is fully visible.
+						result.customTooltip = false;
+						
 					} else {
 						// This caption is elided, allow text selection of visible portion.
 						const auto clickX = point.x() - captionGeo.left() - padding.left();
@@ -1118,12 +1123,12 @@ TextState GroupedMedia::getPartState(
 							result.symbol = textStateResult.symbol;
 							result.afterSymbol = textStateResult.afterSymbol;
 						}
-					}
 
-					// Tooltip logic: only show if text is wider than its container.
-					if (caption.maxWidth() > captionWidth) {
-						result.customTooltip = true;
-						result.customTooltipText = originalText.text;
+						// Show tooltip only for elided captions (Multi-caption view)
+						if (caption.maxWidth() > captionWidth) {
+							result.customTooltip = true;
+							result.customTooltipText = originalText.text;
+						}
 					}
 					return result;
 				}

@@ -754,9 +754,6 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 	// --- CUSTOM TOOLTIP LOGIC (Top-Right Bubble) ---
 	if (!inWebPage && !_parent->data()->isFakeAboutView()) {
 		
-		// We technically abuse needInfoDisplay() logic or just check conditions directly
-		// The draw() function uses "showInfo", here we check hit test.
-		
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 		};
@@ -822,8 +819,6 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 			// --- Zone 2: Edited + Date + ID ---
 			// Zone 2 starts where Views ends (or at start) and covers the rest of the bubble
 			int zone2Start = currentX;
-			int zone2Width = (bubbleX + bubbleW - hPadding) - zone2Start; 
-			// Refine width calculation to be precise based on components
 			int calculatedZone2W = dateWidth + (edited ? (editedWidth + textPadding) : 0);
 			QRect zone2Rect(zone2Start, bubbleY, calculatedZone2W, bubbleH);
 
@@ -881,7 +876,7 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 		}
 	}
 	
-	// FIX: Removed _parent->bottomInfoTextState() call to suppress the old bubble interaction.
+	// Removed _parent->bottomInfoTextState() call to suppress the old bubble interaction.
 	// Only checking for Right Action (Fast Share) below.
 	if (_parent->media() == this && (!_parent->hasBubble() || isBubbleBottom())) {
 		auto fullRight = paintx + paintw;
@@ -1079,7 +1074,7 @@ bool Photo::dataLoaded() const {
 
 bool Photo::needInfoDisplay() const {
 	// Always return false to prevent the parent Message view from 
-	// drawing the standard bottom-right info bubble.
+	// drawing the standard bottom-right info bubble, as we draw a custom one.
 	return false;
 }
 

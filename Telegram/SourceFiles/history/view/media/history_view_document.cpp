@@ -492,17 +492,60 @@ QSize Document::countOptimalSize() {
 
 	const auto tleft = st.padding.left() + st.thumbSize + st.thumbSkip;
 	const auto tright = st.padding.right();
+	
+	// FIX Issue 6: Pre-calculate the custom info bubble width (Time, Views, etc.)
+	// and ensure maxWidth accommodates it so short filenames don't cause overflow.
+	int customInfoWidth = 0;
+	if (!_data->isVideoMessage()) {
+		const auto item = _parent->data();
+		const auto font = st::msgDateFont;
+		
+		auto ItemDateTime = [](not_null<HistoryItem*> item) {
+			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+		};
+
+		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+		const auto dateText = QLocale().toString(
+			ItemDateTime(item).time(),
+			GetEnhancedBool("show_seconds")
+				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+				: QLocale::system().timeFormat(QLocale::ShortFormat));
+		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+			? QString(" %1").arg(item->fullId().msg.bare)
+			: QString();
+		const auto views = item->Get<HistoryMessageViews>();
+		const auto viewsText = (views && views->views.count >= 0)
+			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+			: QString();
+
+		const int iconGap = 1;
+		const int textGap = font->width(' ');
+		const int iconW = st::historyViewsWidth;
+		
+		if (!viewsText.isEmpty()) {
+			customInfoWidth += iconW + iconGap + font->width(viewsText) + textGap;
+		}
+		if (edited) {
+			customInfoWidth += font->width(QString::fromUtf8("✏️")) + textGap;
+		}
+		customInfoWidth += font->width(dateText + msgIdText);
+		customInfoWidth += st::msgDateImgDelta; // Add extra margin for the right edge
+	}
+
 	if (thumbed) {
 		accumulate_max(maxWidth, tleft + MaxStatusWidth(_data) + tright);
 	} else {
 		auto unread = (_data->isVoiceMessage() || _transcribedRound)
 			? (st::mediaUnreadSkip + st::mediaUnreadSize)
 			: 0;
-		accumulate_max(maxWidth, tleft + MaxStatusWidth(_data) + unread + _parent->skipBlockWidth() + st::msgPadding.right());
+		// Add customInfoWidth to the calculation if no visible text block (skip block) is handling it
+		int rightSideWidth = std::max(_parent->skipBlockWidth(), customInfoWidth);
+		accumulate_max(maxWidth, tleft + MaxStatusWidth(_data) + unread + rightSideWidth + st::msgPadding.right());
 	}
 
 	if (const auto named = Get<HistoryDocumentNamed>()) {
-		accumulate_max(maxWidth, tleft + named->name.maxWidth() + tright);
+		// Ensure name area respects the custom info width on the right
+		accumulate_max(maxWidth, tleft + named->name.maxWidth() + std::max(tright, customInfoWidth + st::msgDateSpace));
 		accumulate_min(maxWidth, st::msgMaxWidth);
 	}
 	if (voice) {
@@ -1036,12 +1079,13 @@ void Document::draw(
 	}
 
 	// --- STANDARD BOTTOM INFO (Round Videos Only) ---
+	// FIX Issue 4: Only call _parent->drawInfo for Video Messages (Round Videos).
 	bool inWebPage = (_parent->media() != this);
 	const auto bubble = _parent->hasBubble();
 	
 	if (_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
 		auto fullRight = width;
-		auto fullBottom = height(); // FIX: Use height() function
+		auto fullBottom = height(); 
 		_parent->drawInfo(
 			p,
 			context,
@@ -1062,7 +1106,7 @@ void Document::draw(
 		// NOT the info bubble (date/checks), because that is already drawn inline.
 		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
 			auto fullRight = width;
-			auto fullBottom = height(); // FIX: Use height() function
+			auto fullBottom = height(); 
 			auto fastShareLeft = _parent->hasRightLayout()
 				? (-size->width() - st::historyFastShareLeft)
 				: (fullRight + st::historyFastShareLeft);
@@ -1298,6 +1342,7 @@ TextState Document::textState(
 	const auto inner = QRect(rthumb.x() + (rthumb.width() - innerSize) / 2, rthumb.y() + (rthumb.height() - innerSize) / 2, innerSize, innerSize);
 
 	// --- CUSTOM TOOLTIP LOGIC (Inline) ---
+	// FIX Issue 5: Implement 2-zone tooltip for inline info (Views vs Date/Edited)
 	const bool bubble = _parent->hasBubble();
 	if (!_data->isVideoMessage() && mode == LayoutMode::Full && (!bubble || isBubbleBottom())) {
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
@@ -1353,50 +1398,41 @@ TextState Document::textState(
 		if (point.y() >= bubbleY && point.y() <= bubbleY + bubbleH && point.x() >= infoX) {
 			int currentX = infoX;
 
-			// 1. Views
+			// 1. Views Zone
+			QRect viewsRect;
 			if (viewsW > 0) {
-				int w = viewsW;
-				if (point.x() >= currentX && point.x() < currentX + w) {
-					result.customTooltip = true;
-					result.customTooltipText = QString("Views: ") + viewsText;
-					return result;
-				}
-				currentX += w + textGap;
+				viewsRect = QRect(currentX, bubbleY, viewsW, bubbleH);
+				currentX += viewsW + textGap;
 			}
+			
+			// 2. Edited/Date Zone
+			int zone2Start = currentX;
+			int remainingW = (width - st::msgDateImgDelta) - zone2Start;
+			QRect zone2Rect(zone2Start, bubbleY, remainingW, bubbleH);
 
-			// 2. Edited
-			if (editedW > 0) {
-				int w = editedW;
-				if (point.x() >= currentX && point.x() < currentX + w) {
-					const auto uploadLocal = ItemDateTime(item);
-					QString text = tr::lng_uploaded(tr::now) + ": "
-						+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
-						+ uploadLocal.time().toString("HH:mm:ss");
+			if (viewsW > 0 && viewsRect.contains(point)) {
+				result.customTooltip = true;
+				result.customTooltipText = QString("Views: ") + viewsText;
+				return result;
+			} else if (zone2Rect.contains(point)) {
+				const auto uploadLocal = ItemDateTime(item);
+				QString text = tr::lng_uploaded(tr::now) + ": "
+					+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
+					+ uploadLocal.time().toString("HH:mm:ss");
+				
+				if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
+					text += "  ID: " + QString::number(item->fullId().msg.bare);
+				}
+
+				if (edited) {
 					const auto editLocal = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
 					QString editedTrans = tr::lng_edited(tr::now);
 					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
 					text += "\n" + editedTrans + ": "
 						+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
 						+ editLocal.time().toString("HH:mm:ss");
-					if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
-						text += "\nMessage ID: " + QString::number(item->fullId().msg.bare);
-					}
-					result.customTooltip = true;
-					result.customTooltipText = text;
-					return result;
 				}
-				currentX += w + textGap;
-			}
 
-			// 3. Date/ID
-			if (point.x() >= currentX && point.x() < currentX + timeIdW) {
-				const auto uploadLocal = ItemDateTime(item);
-				QString text = tr::lng_uploaded(tr::now) + ": "
-					+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
-					+ uploadLocal.time().toString("HH:mm:ss");
-				if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
-					text += "\nMessage ID: " + QString::number(item->fullId().msg.bare);
-				}
 				result.customTooltip = true;
 				result.customTooltipText = text;
 				return result;
@@ -1516,10 +1552,11 @@ TextState Document::textState(
 	_tooltipFilename.updateTooltipForState(result);
 
 	// --- STANDARD BOTTOM INFO (Round Videos Only) ---
+	// FIX Issue 4: Prevent standard files from triggering bottom info.
 	bool inWebPage = (_parent->media() != this);
 	if (_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
 		auto fullRight = width;
-		auto fullBottom = layout.height(); // FIX: Use layout.height()
+		auto fullBottom = layout.height(); 
 		const auto bottomInfoResult = _parent->bottomInfoTextState(
 			fullRight,
 			fullBottom,
@@ -1541,9 +1578,10 @@ TextState Document::textState(
 			}
 		}
 	} else if (!_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
+		// Standard files just check for Right Action (Fast Share)
 		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
 			auto fullRight = width;
-			auto fullBottom = layout.height(); // FIX: Use layout.height()
+			auto fullBottom = layout.height(); 
 			auto fastShareLeft = _parent->hasRightLayout()
 				? (-size->width() - st::historyFastShareLeft)
 				: (fullRight + st::historyFastShareLeft);
