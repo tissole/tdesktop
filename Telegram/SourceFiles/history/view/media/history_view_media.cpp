@@ -654,4 +654,18 @@ Images::CornersMaskRef MediaRoundingMask(
 
 }
 
+// --- INSERT YOUR NEW FUNCTION HERE ---
+bool Media::needInfoDisplay() const {
+	// Standard logic copied from history_view_message.cpp
+	if (_parent->data()->isFakeAboutView()) {
+		return false;
+	}
+	return _parent->data()->isSending()
+		|| _parent->data()->hasFailed()
+		|| _parent->isUnderCursor()
+		|| (_parent->delegate()->elementContext() == Context::ChatPreview)
+		|| _parent->isLastAndSelfMessage();
+}
+// -------------------------------------
+
 } // namespace HistoryView

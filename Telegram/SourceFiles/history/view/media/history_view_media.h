@@ -270,6 +270,7 @@ public:
 		return false;
 	}
 	[[nodiscard]] virtual bool customInfoLayout() const = 0;
+	[[nodiscard]] virtual bool needInfoDisplay() const;   // --- ADD THIS BLOCK HERE ---
 	[[nodiscard]] virtual QRect contentRectForReactions() const {
 		return QRect(0, 0, width(), height());
 	}
