@@ -2735,6 +2735,9 @@ TextState Message::textState(
 				&& (check || entry || media->customInfoLayout())) {
 				return;
 			}
+			if (!needInfoDisplay()) {
+				return;
+			}
 			const auto bottomInfoResult = bottomInfoTextState(
 				inner.left() + inner.width(),
 				inner.top() + inner.height(),
@@ -4801,6 +4804,9 @@ bool Message::needInfoDisplay() const {
 	const auto mediaDisplayed = media ? media->isDisplayed() : false;
 	const auto check = factcheckBlock();
 	const auto entry = logEntryOriginal();
+	if (mediaDisplayed && !media->needInfoDisplay()) {
+		return false;
+	}
 	return entry
 		? !entry->customInfoLayout()
 		: check

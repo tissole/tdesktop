@@ -1920,7 +1920,10 @@ bool Gif::needsBubble() const {
 		|| _parent->displayForwardedFrom()
 		|| _parent->displayFromName()
 		|| _parent->displayedTopicButton();
-	return false;
+}
+
+bool Gif::needInfoDisplay() const {
+	return _data->isVideoMessage();
 }
 
 bool Gif::unwrapped() const {
