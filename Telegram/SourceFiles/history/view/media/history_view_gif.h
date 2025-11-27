@@ -174,7 +174,6 @@ private:
 		QRect rthumb,
 		std::optional<Ui::BubbleRounding> rounding) const;
 
-	[[nodiscard]] bool needInfoDisplay() const;
 	[[nodiscard]] bool needCornerStatusDisplay() const;
 	[[nodiscard]] int additionalWidth(
 		const Reply *reply,
