@@ -628,7 +628,14 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	accumulate_min(newWidth, maxWidth());
-	auto newHeight = st.padding.top() + st.thumbSize + st.padding.bottom();
+	
+	// FIX Issue 3: Use Grouped padding for single files to match Column album look
+	const auto &stGrouped = thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
+	const auto bottomPadding = (!_data->isVideoMessage()) 
+		? stGrouped.padding.bottom() 
+		: st.padding.bottom();
+
+	auto newHeight = st.padding.top() + st.thumbSize + bottomPadding;
 	if (!isBubbleTop()) {
 		newHeight -= st::msgFileTopMinus;
 	}
@@ -699,7 +706,12 @@ void Document::draw(
 	const auto nameright = st.padding.right();
 	const auto statustop = st.statusTop - topMinus;
 	const auto linktop = st.linkTop - topMinus;
-	const auto bottom = st.padding.top() + st.thumbSize + st.padding.bottom() - topMinus;
+	// FIX Issue 3: Use Grouped padding for single files to match Column album look
+	const auto &stGrouped = thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
+	const auto bottomPadding = (!_data->isVideoMessage()) 
+		? stGrouped.padding.bottom() 
+		: st.padding.bottom();
+	const auto bottom = st.padding.top() + st.thumbSize + bottomPadding - topMinus;
 	const auto rthumb = style::rtlrect(st.padding.left(), st.padding.top() - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
 	const auto inner = QRect(rthumb.x() + (rthumb.width() - innerSize) / 2, rthumb.y() + (rthumb.height() - innerSize) / 2, innerSize, innerSize);
@@ -1344,7 +1356,7 @@ TextState Document::textState(
 	// --- CUSTOM TOOLTIP LOGIC (Inline) ---
 	// FIX Issue 5: Implement 2-zone tooltip for inline info (Views vs Date/Edited)
 	const bool bubble = _parent->hasBubble();
-	if (!_data->isVideoMessage() && mode == LayoutMode::Full && (!bubble || isBubbleBottom())) {
+	if (!_data->isVideoMessage() && mode == LayoutMode::Full) {
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 		};

@@ -1461,9 +1461,15 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				trect.setY(trect.y() + st::mediaInBubbleSkip);
 			}
 			paintMedia(trect.y());
+			// FIX Issue 2: Reduce caption spacing for Photo/Video
+			auto skip = st::mediaInBubbleSkip;
+			if (media->getPhoto()) skip = st::msgDateImgPadding.y();
+			else if (const auto doc = media->getDocument()) {
+				if (doc->isVideoFile()) skip = st::msgDateImgPadding.y();
+			}
 			trect.setY(trect.y()
 				+ mediaHeight
-				+ (mediaOnBottom ? 0 : st::mediaInBubbleSkip));
+				+ (mediaOnBottom ? 0 : skip));
 			textSelection = media->skipSelection(textSelection);
 			highlightRange = media->skipSelection(highlightRange);
 		}
@@ -4702,7 +4708,13 @@ int Message::resizeContentGetHeight(int newWidth) {
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 				newHeight += st::msgPadding.bottom();
 				if (mediaDisplayed) {
-					newHeight += st::mediaInBubbleSkip;
+					// FIX Issue 2: Reduce caption spacing for Photo/Video
+					auto skip = st::mediaInBubbleSkip;
+					if (media->getPhoto()) skip = st::msgDateImgPadding.y();
+					else if (const auto doc = media->getDocument()) {
+						if (doc->isVideoFile()) skip = st::msgDateImgPadding.y();
+					}
+					newHeight += skip;
 				}
 			}
 			if (!mediaOnTop) {
