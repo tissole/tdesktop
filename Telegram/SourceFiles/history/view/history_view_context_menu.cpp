@@ -1662,6 +1662,9 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 				// overState._captionText is populated when clicking on Grid caption placeholder
 				const auto hasOverCaption = !request.overState._captionText.isEmpty();
 
+				const auto shouldShowCopy = hasCaptionText || hasOverCaption;
+				(void)shouldShowCopy;
+
 				result->addAction(hasCaptionText
 					? tr::lng_context_copy_selected(tr::now)
 					: tr::lng_context_copy_text(tr::now), [=] {
