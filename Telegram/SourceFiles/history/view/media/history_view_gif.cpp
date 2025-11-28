@@ -2401,22 +2401,6 @@ bool Gif::dataLoaded() const {
 //		|| (!_parent->hasBubble() && _parent->isLastAndSelfMessage());
 //}
 
-bool Gif::needInfoDisplay() const {
-	// Return false for standard videos to prevent standard bottom-right bubble.
-	// Exception: Keep true for Round messages (Video Notes) which use standard layout.
-	if (_data->isVideoMessage()) {
-		// Round video logic...
-		const auto item = _parent->data();
-		return item->isSending()
-			|| item->awaitingVideoProcessing()
-			|| _data->uploading()
-			|| _parent->isUnderCursor()
-			|| (_parent->delegate()->elementContext() == Context::ChatPreview)
-			|| (!_parent->hasBubble() && _parent->isLastAndSelfMessage());
-	}
-	return false;
-}
-
 bool Gif::needCornerStatusDisplay() const {
 	return _data->isVideoFile()
 		|| needInfoDisplay();
