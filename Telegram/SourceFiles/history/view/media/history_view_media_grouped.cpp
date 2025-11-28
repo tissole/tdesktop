@@ -1130,6 +1130,7 @@ TextState GroupedMedia::getPartState(
 							result.customTooltipText = originalText.text;
 						}
 					}
+					result.symbol += shift;
 					return result;
 				}
 			}
@@ -1333,11 +1334,16 @@ TextState GroupedMedia::getPartState(
 			}
 			return result;
 		}
-		shift += part.content->fullSelectionLength();
+		if (_mode == Mode::Grid) {
+			const auto originalText = part.item->originalText();
+			if (!originalText.text.isEmpty()) {
+				shift += originalText.text.size();
+			}
+		} else {
+			shift += part.content->fullSelectionLength();
+		}
 		++i;
 	}
-
-	return TextState(_parent->data());
 }
 
 PointState GroupedMedia::pointState(QPoint point) const {
@@ -1556,23 +1562,32 @@ TextSelection GroupedMedia::adjustSelection(
 		return selection;
 	} else if (_mode == Mode::Grid) {
 		// For Grid mode, handle caption selection
-		// Find which part contains the selection and update its caption selection
+		// Map global selection to local caption selection for each part
+		auto offset = 0;
 		for (auto i = 0; i < _parts.size(); ++i) {
 			const auto &part = _parts[i];
-			if (!part.item->originalText().empty()) {
-				// Check if selection overlaps with this caption
+			const auto textLen = part.item->originalText().text.size();
+			
+			if (textLen > 0) {
 				if (!selection.empty()) {
-					// For simplicity, if there's any selection, select the first caption
-					// In a full implementation, you'd need to track which part has focus
-					_selectedCaptionIndex = i;
-					part._captionSelection = selection;
-				} else {
-					// Clear selection
-					if (_selectedCaptionIndex == i) {
+					// Intersection: max(from, offset) to min(to, offset+textLen)
+					auto partFrom = std::max((int)selection.from, offset);
+					auto partTo = std::min((int)selection.to, offset + (int)textLen);
+					
+					if (partFrom < partTo) {
+						part._captionSelection = TextSelection(
+							(uint16)(partFrom - offset), 
+							(uint16)(partTo - offset)
+						);
+					} else {
 						part._captionSelection = {};
 					}
+				} else {
+					part._captionSelection = {};
 				}
-				break; // Handle first caption found
+				offset += textLen;
+			} else {
+				part._captionSelection = {};
 			}
 		}
 		return selection;
