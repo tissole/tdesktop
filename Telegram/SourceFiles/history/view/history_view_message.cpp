@@ -1402,9 +1402,9 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			} else if (mediaDisplayed) {
 				// FIX Issue 2: Reduce caption spacing for Photo/Video
 				auto skip = st::mediaInBubbleSkip;
-				if (media->getPhoto()) skip = st::msgDateImgPadding.y();
+				if (media->getPhoto()) skip = 0;
 				else if (const auto doc = media->getDocument()) {
-					if (doc->isVideoFile()) skip = st::msgDateImgPadding.y();
+					if (doc->isVideoFile()) skip = 0;
 				}
 				trect.setHeight(trect.height() - skip);
 			}
@@ -2281,9 +2281,9 @@ PointState Message::pointState(QPoint point) const {
 				: (trect.y() + trect.height() - mediaHeight);
 			if (mediaDisplayed && _invertMedia) {
 				auto skip = st::mediaInBubbleSkip;
-				if (media->getPhoto()) skip = st::msgDateImgPadding.y();
+				if (media->getPhoto()) skip = 0;
 				else if (const auto doc = media->getDocument()) {
-					if (doc->isVideoFile()) skip = st::msgDateImgPadding.y();
+					if (doc->isVideoFile()) skip = 0;
 				}
 				trect.setY(mediaTop
 					+ mediaHeight
@@ -2703,9 +2703,9 @@ TextState Message::textState(
 			} else if (mediaDisplayed) {
 				// FIX Issue 2: Reduce caption spacing for Photo/Video
 				auto skip = st::mediaInBubbleSkip;
-				if (media->getPhoto()) skip = st::msgDateImgPadding.y();
+				if (media->getPhoto()) skip = 0;
 				else if (const auto doc = media->getDocument()) {
-					if (doc->isVideoFile()) skip = st::msgDateImgPadding.y();
+					if (doc->isVideoFile()) skip = 0;
 				}
 				trect.setHeight(trect.height() - skip);
 			}
@@ -2790,9 +2790,9 @@ TextState Message::textState(
 				: (trect.y() + trect.height() - mediaHeight);
 			if (mediaDisplayed && _invertMedia) {
 				auto skip = st::mediaInBubbleSkip;
-				if (media->getPhoto()) skip = st::msgDateImgPadding.y();
+				if (media->getPhoto()) skip = 0;
 				else if (const auto doc = media->getDocument()) {
-					if (doc->isVideoFile()) skip = st::msgDateImgPadding.y();
+					if (doc->isVideoFile()) skip = 0;
 				}
 				trect.setY(mediaTop
 					+ mediaHeight

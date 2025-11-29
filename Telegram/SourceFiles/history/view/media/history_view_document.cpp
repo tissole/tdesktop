@@ -632,7 +632,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	// FIX Issue 3: Use Grouped padding for single files to match Column album look
 	const auto &stGrouped = thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
 	const auto bottomPadding = (!_data->isVideoMessage()) 
-		? stGrouped.padding.bottom() 
+		? 0 
 		: st.padding.bottom();
 
 	auto newHeight = st.padding.top() + st.thumbSize + bottomPadding;
@@ -709,7 +709,7 @@ void Document::draw(
 	// FIX Issue 3: Use Grouped padding for single files to match Column album look
 	const auto &stGrouped = thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
 	const auto bottomPadding = (!_data->isVideoMessage()) 
-		? stGrouped.padding.bottom() 
+		? 0 
 		: st.padding.bottom();
 	const auto bottom = st.padding.top() + st.thumbSize + bottomPadding - topMinus;
 	const auto rthumb = style::rtlrect(st.padding.left(), st.padding.top() - topMinus, st.thumbSize, st.thumbSize, width);
