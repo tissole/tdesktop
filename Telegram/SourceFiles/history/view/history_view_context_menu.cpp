@@ -1659,8 +1659,9 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 					&& (request.pointState == PointState::GroupPart);
 
 				// Check if right-click happened on a Grid caption area
-				// overState._captionItem is populated when clicking on Grid caption placeholder
-				const auto hasOverCaption = (request.overState._captionItem != nullptr);
+				// Grid caption logic: GroupPart point + Text cursor
+				const auto hasOverCaption = (request.pointState == PointState::GroupPart)
+					&& (request.overState.cursor == CursorState::Text);
 
 				const auto shouldShowCopy = hasCaptionText || hasOverCaption;
 				(void)shouldShowCopy;
@@ -1675,8 +1676,8 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								TextUtilities::SetClipboardText(request.selectedText);
 							} else if (hasOverCaption) {
 								// Copy full caption text from the item that was right-clicked
-								// overState._captionItem gives us the specific item in Grid
-								if (const auto captionItem = request.overState._captionItem) {
+								const auto captionItemId = request.overState.itemId;
+								if (const auto captionItem = owner->message(captionItemId)) {
 									const auto captionText = captionItem->originalText().text;
 									if (!captionText.isEmpty()) {
 										TextUtilities::SetClipboardText(TextForMimeData::Simple(captionText));

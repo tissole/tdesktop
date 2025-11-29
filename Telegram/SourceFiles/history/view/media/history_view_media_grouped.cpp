@@ -1090,10 +1090,6 @@ TextState GroupedMedia::getPartState(
 						result.afterSymbol = textStateResult.afterSymbol;
 						result.itemId = part.item->fullId();
 
-						// Store caption selection information
-						// result._captionText = originalText.text;
-						result._captionItem = part.item;
-
 						// Apply current caption selection to result for highlighting
 						if (!part._captionSelection.empty()) {
 							result.symbol = textStateResult.symbol;
@@ -1114,10 +1110,6 @@ TextState GroupedMedia::getPartState(
 						result.symbol = textStateResult.symbol;
 						result.afterSymbol = textStateResult.afterSymbol;
 						result.itemId = part.item->fullId();
-
-						// Store caption text for context menu (full text, including hidden parts)
-						// result._captionText = originalText.text;
-						result._captionItem = part.item;
 
 						if (!part._captionSelection.empty()) {
 							result.symbol = textStateResult.symbol;

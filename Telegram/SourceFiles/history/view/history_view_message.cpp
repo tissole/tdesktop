@@ -1402,9 +1402,9 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			} else if (mediaDisplayed) {
 				// FIX Issue 2: Reduce caption spacing for Photo/Video
 				auto skip = st::mediaInBubbleSkip;
-				if (media->getPhoto()) skip = 0;
-				else if (const auto doc = media->getDocument()) {
-					if (doc->isVideoFile()) skip = 0;
+				if (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile())) {
+					skip = 2;
+					trect.setHeight(trect.height() + st::msgPadding.bottom() - 2);
 				}
 				trect.setHeight(trect.height() - skip);
 			}
@@ -1470,9 +1470,10 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			paintMedia(trect.y());
 			// FIX Issue 2: Reduce caption spacing for Photo/Video
 			auto skip = st::mediaInBubbleSkip;
-			if (media->getPhoto()) skip = st::msgDateImgPadding.y();
-			else if (const auto doc = media->getDocument()) {
-				if (doc->isVideoFile()) skip = st::msgDateImgPadding.y();
+			if (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile())) {
+				skip = 2;
+				// Expand trect to compensate for reduced padding in optimalSize
+				trect.setHeight(trect.height() + st::msgPadding.bottom() - 2);
 			}
 			trect.setY(trect.y()
 				+ mediaHeight
@@ -2281,9 +2282,9 @@ PointState Message::pointState(QPoint point) const {
 				: (trect.y() + trect.height() - mediaHeight);
 			if (mediaDisplayed && _invertMedia) {
 				auto skip = st::mediaInBubbleSkip;
-				if (media->getPhoto()) skip = 0;
-				else if (const auto doc = media->getDocument()) {
-					if (doc->isVideoFile()) skip = 0;
+				if (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile())) {
+					skip = 2;
+					trect.setHeight(trect.height() + st::msgPadding.bottom() - 2);
 				}
 				trect.setY(mediaTop
 					+ mediaHeight
@@ -2703,9 +2704,9 @@ TextState Message::textState(
 			} else if (mediaDisplayed) {
 				// FIX Issue 2: Reduce caption spacing for Photo/Video
 				auto skip = st::mediaInBubbleSkip;
-				if (media->getPhoto()) skip = 0;
-				else if (const auto doc = media->getDocument()) {
-					if (doc->isVideoFile()) skip = 0;
+				if (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile())) {
+					skip = 2;
+					trect.setHeight(trect.height() + st::msgPadding.bottom() - 2);
 				}
 				trect.setHeight(trect.height() - skip);
 			}
@@ -2790,9 +2791,9 @@ TextState Message::textState(
 				: (trect.y() + trect.height() - mediaHeight);
 			if (mediaDisplayed && _invertMedia) {
 				auto skip = st::mediaInBubbleSkip;
-				if (media->getPhoto()) skip = 0;
-				else if (const auto doc = media->getDocument()) {
-					if (doc->isVideoFile()) skip = 0;
+				if (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile())) {
+					skip = 2;
+					trect.setHeight(trect.height() + st::msgPadding.bottom() - 2);
 				}
 				trect.setY(mediaTop
 					+ mediaHeight
@@ -4734,15 +4735,15 @@ int Message::resizeContentGetHeight(int newWidth) {
 				newHeight += textHeightFor(textWidth);
 			}
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
-				newHeight += st::msgPadding.bottom();
-				if (mediaDisplayed) {
+				if (mediaDisplayed && (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile()))) {
 					// FIX Issue 2: Reduce caption spacing for Photo/Video
-					auto skip = st::mediaInBubbleSkip;
-					if (media->getPhoto()) skip = st::msgDateImgPadding.y();
-					else if (const auto doc = media->getDocument()) {
-						if (doc->isVideoFile()) skip = st::msgDateImgPadding.y();
+					newHeight += 2; // Minimal bottom padding
+					newHeight += 2; // Minimal skip
+				} else {
+					newHeight += st::msgPadding.bottom();
+					if (mediaDisplayed) {
+						newHeight += st::mediaInBubbleSkip;
 					}
-					newHeight += skip;
 				}
 			}
 			if (!mediaOnTop) {

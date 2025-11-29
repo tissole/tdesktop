@@ -57,10 +57,6 @@ struct TextState {
 	bool horizontalScroll = false;
 	QString customTooltipText;
 
-	// Caption-specific fields for Grid media
-	QString _captionText;
-	HistoryItem* _captionItem = nullptr;
-
 };
 
 struct StateRequest {
