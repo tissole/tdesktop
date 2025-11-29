@@ -1400,7 +1400,13 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			if (reactionsInBubble) {
 				trect.setHeight(trect.height() - st::mediaInBubbleSkip + st::msgPadding.bottom());
 			} else if (mediaDisplayed) {
-				trect.setHeight(trect.height() - st::mediaInBubbleSkip);
+				// FIX Issue 2: Reduce caption spacing for Photo/Video
+				auto skip = st::mediaInBubbleSkip;
+				if (media->getPhoto()) skip = st::msgDateImgPadding.y();
+				else if (const auto doc = media->getDocument()) {
+					if (doc->isVideoFile()) skip = st::msgDateImgPadding.y();
+				}
+				trect.setHeight(trect.height() - skip);
 			}
 		}
 
@@ -2239,7 +2245,12 @@ PointState Message::pointState(QPoint point) const {
 				if (reactionsInBubble) {
 					trect.setHeight(trect.height() + st::msgPadding.bottom());
 				} else if (mediaDisplayed) {
-					trect.setHeight(trect.height() - st::mediaInBubbleSkip);
+					auto skip = st::mediaInBubbleSkip;
+					if (media->getPhoto()) skip = st::msgDateImgPadding.y();
+					else if (const auto doc = media->getDocument()) {
+						if (doc->isVideoFile()) skip = st::msgDateImgPadding.y();
+					}
+					trect.setHeight(trect.height() - skip);
 				}
 			}
 			if (mediaOnBottom) {
@@ -2269,9 +2280,14 @@ PointState Message::pointState(QPoint point) const {
 				? (trect.y() + (mediaOnTop ? 0 : st::mediaInBubbleSkip))
 				: (trect.y() + trect.height() - mediaHeight);
 			if (mediaDisplayed && _invertMedia) {
+				auto skip = st::mediaInBubbleSkip;
+				if (media->getPhoto()) skip = st::msgDateImgPadding.y();
+				else if (const auto doc = media->getDocument()) {
+					if (doc->isVideoFile()) skip = st::msgDateImgPadding.y();
+				}
 				trect.setY(mediaTop
 					+ mediaHeight
-					+ (mediaOnBottom ? 0 : st::mediaInBubbleSkip));
+					+ (mediaOnBottom ? 0 : skip));
 			}
 			if (point.y() >= mediaTop
 				&& point.y() < mediaTop + mediaHeight) {
@@ -2685,7 +2701,13 @@ TextState Message::textState(
 			if (reactionsInBubble) {
 				trect.setHeight(trect.height() - st::mediaInBubbleSkip + st::msgPadding.bottom());
 			} else if (mediaDisplayed) {
-				trect.setHeight(trect.height() - st::mediaInBubbleSkip);
+				// FIX Issue 2: Reduce caption spacing for Photo/Video
+				auto skip = st::mediaInBubbleSkip;
+				if (media->getPhoto()) skip = st::msgDateImgPadding.y();
+				else if (const auto doc = media->getDocument()) {
+					if (doc->isVideoFile()) skip = st::msgDateImgPadding.y();
+				}
+				trect.setHeight(trect.height() - skip);
 			}
 		}
 		if (mediaOnBottom) {
@@ -2767,9 +2789,14 @@ TextState Message::textState(
 				? (trect.y() + (mediaOnTop ? 0 : st::mediaInBubbleSkip))
 				: (trect.y() + trect.height() - mediaHeight);
 			if (mediaDisplayed && _invertMedia) {
+				auto skip = st::mediaInBubbleSkip;
+				if (media->getPhoto()) skip = st::msgDateImgPadding.y();
+				else if (const auto doc = media->getDocument()) {
+					if (doc->isVideoFile()) skip = st::msgDateImgPadding.y();
+				}
 				trect.setY(mediaTop
 					+ mediaHeight
-					+ (mediaOnBottom ? 0 : st::mediaInBubbleSkip));
+					+ (mediaOnBottom ? 0 : skip));
 			}
 			if (point.y() >= mediaTop
 				&& point.y() < mediaTop + mediaHeight) {

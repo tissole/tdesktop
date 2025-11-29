@@ -1091,9 +1091,9 @@ TextState GroupedMedia::getPartState(
 						result.itemId = part.item->fullId();
 
 						// Store caption selection information
-						result._captionText = originalText.text;
-						result._captionItem = part.item;
-
+						            // Store caption selection information
+						            // result._captionText = originalText.text;
+						            result._captionItem = part.item;
 						// Apply current caption selection to result for highlighting
 						if (!part._captionSelection.empty()) {
 							result.symbol = textStateResult.symbol;
@@ -1116,9 +1116,9 @@ TextState GroupedMedia::getPartState(
 						result.itemId = part.item->fullId();
 
 						// Store caption text for context menu (full text, including hidden parts)
-						result._captionText = originalText.text;
-						result._captionItem = part.item;
-
+						            // Store caption selection information
+						            // result._captionText = originalText.text;
+						            result._captionItem = part.item;
 						if (!part._captionSelection.empty()) {
 							result.symbol = textStateResult.symbol;
 							result.afterSymbol = textStateResult.afterSymbol;
@@ -1226,6 +1226,10 @@ TextState GroupedMedia::getPartState(
 						QString tooltipText = tr::lng_uploaded(tr::now) + ": "
 							+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
 							+ uploadLocal.time().toString("HH:mm:ss");
+						const auto msgIdValue = item->fullId().msg;
+						if (msgIdValue > 0 && GetEnhancedBool("show_messages_id")) {
+							tooltipText += "  ID: " + QString::number(msgIdValue.bare);
+						}
 						result.customTooltip = true;
 						result.customTooltipText = tooltipText;
 					}

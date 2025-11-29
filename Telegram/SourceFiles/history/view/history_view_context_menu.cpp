@@ -1659,8 +1659,8 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 					&& (request.pointState == PointState::GroupPart);
 
 				// Check if right-click happened on a Grid caption area
-				// overState._captionText is populated when clicking on Grid caption placeholder
-				const auto hasOverCaption = !request.overState._captionText.isEmpty();
+				// overState._captionItem is populated when clicking on Grid caption placeholder
+				const auto hasOverCaption = (request.overState._captionItem != nullptr);
 
 				const auto shouldShowCopy = hasCaptionText || hasOverCaption;
 				(void)shouldShowCopy;
