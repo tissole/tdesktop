@@ -2247,9 +2247,9 @@ PointState Message::pointState(QPoint point) const {
 					trect.setHeight(trect.height() + st::msgPadding.bottom());
 				} else if (mediaDisplayed) {
 					auto skip = st::mediaInBubbleSkip;
-					if (media->getPhoto()) skip = st::msgDateImgPadding.y();
+					if (media->getPhoto()) skip = 0;
 					else if (const auto doc = media->getDocument()) {
-						if (doc->isVideoFile()) skip = st::msgDateImgPadding.y();
+						if (doc->isVideoFile()) skip = 0;
 					}
 					trect.setHeight(trect.height() - skip);
 				}
@@ -2281,10 +2281,11 @@ PointState Message::pointState(QPoint point) const {
 				? (trect.y() + (mediaOnTop ? 0 : st::mediaInBubbleSkip))
 				: (trect.y() + trect.height() - mediaHeight);
 			if (mediaDisplayed && _invertMedia) {
+				// FIX Issue 2: Reduce caption spacing for Photo/Video
 				auto skip = st::mediaInBubbleSkip;
 				if (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile())) {
-					skip = 2;
-					trect.setHeight(trect.height() + st::msgPadding.bottom() - 2);
+					skip = 0;
+					trect.setHeight(trect.height() + st::msgPadding.bottom());
 				}
 				trect.setY(mediaTop
 					+ mediaHeight
@@ -2790,10 +2791,11 @@ TextState Message::textState(
 				? (trect.y() + (mediaOnTop ? 0 : st::mediaInBubbleSkip))
 				: (trect.y() + trect.height() - mediaHeight);
 			if (mediaDisplayed && _invertMedia) {
+				// FIX Issue 2: Reduce caption spacing for Photo/Video
 				auto skip = st::mediaInBubbleSkip;
 				if (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile())) {
-					skip = 2;
-					trect.setHeight(trect.height() + st::msgPadding.bottom() - 2);
+					skip = 0;
+					trect.setHeight(trect.height() + st::msgPadding.bottom());
 				}
 				trect.setY(mediaTop
 					+ mediaHeight
@@ -4737,8 +4739,8 @@ int Message::resizeContentGetHeight(int newWidth) {
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 				if (mediaDisplayed && (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile()))) {
 					// FIX Issue 2: Reduce caption spacing for Photo/Video
-					newHeight += 2; // Minimal bottom padding
-					newHeight += 2; // Minimal skip
+					newHeight += 4; // Match Grid album (2 top + 2 bottom)
+					// newHeight += 0; // skip
 				} else {
 					newHeight += st::msgPadding.bottom();
 					if (mediaDisplayed) {
