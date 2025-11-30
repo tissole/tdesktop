@@ -1131,7 +1131,7 @@ TextState GroupedMedia::getPartState(
 				part.sides,
 				point - QPoint(0, groupPadding.top()), // Adjust point for content
 				request);
-			result.symbol += shift;
+			//result.symbol += shift;
 			//result.itemId = part.item->fullId();
 
 			// All the tooltip logic for message ID, views, date, etc. remains unchanged.
