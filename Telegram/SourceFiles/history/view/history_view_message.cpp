@@ -1474,8 +1474,6 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				skip = 2;
 				// Expand trect to compensate for reduced padding in optimalSize
 				trect.setHeight(trect.height() + st::msgPadding.bottom() - 2);
-				// Adjust top to match Grid album (2px) instead of standard padding (6px)
-				trect.moveTop(trect.top() - st::msgPadding.top() + 2);
 			}
 			trect.setY(trect.y()
 				+ mediaHeight
@@ -2284,16 +2282,13 @@ PointState Message::pointState(QPoint point) const {
 				: (trect.y() + trect.height() - mediaHeight);
 			if (mediaDisplayed && _invertMedia) {
 				auto skip = st::mediaInBubbleSkip;
-				int topAdjustment = 0;
 				if (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile())) {
 					skip = 2;
 					trect.setHeight(trect.height() + st::msgPadding.bottom() - 2);
-					topAdjustment = st::msgPadding.top() - 2;
 				}
 				trect.setY(mediaTop
 					+ mediaHeight
-					+ (mediaOnBottom ? 0 : skip)
-					- topAdjustment);
+					+ (mediaOnBottom ? 0 : skip));
 			}
 			if (point.y() >= mediaTop
 				&& point.y() < mediaTop + mediaHeight) {
@@ -2796,16 +2791,13 @@ TextState Message::textState(
 				: (trect.y() + trect.height() - mediaHeight);
 			if (mediaDisplayed && _invertMedia) {
 				auto skip = st::mediaInBubbleSkip;
-				int topAdjustment = 0;
 				if (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile())) {
 					skip = 2;
 					trect.setHeight(trect.height() + st::msgPadding.bottom() - 2);
-					topAdjustment = st::msgPadding.top() - 2;
 				}
 				trect.setY(mediaTop
 					+ mediaHeight
-					+ (mediaOnBottom ? 0 : skip)
-					- topAdjustment);
+					+ (mediaOnBottom ? 0 : skip));
 			}
 			if (point.y() >= mediaTop
 				&& point.y() < mediaTop + mediaHeight) {

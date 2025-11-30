@@ -651,7 +651,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	if (captioned) {
 		newHeight += captioned->caption.countHeight(captionw);
 		if (isBubbleBottom()) {
-			newHeight += st::msgPadding.bottom();
+			newHeight += 2;
 		}
 	}
 
