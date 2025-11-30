@@ -1122,7 +1122,7 @@ TextState GroupedMedia::getPartState(
 							result.customTooltipText = originalText.text;
 						}
 					}
-					result.symbol += shift;
+					//result.symbol += shift;
 					return result;
 				}
 			}
