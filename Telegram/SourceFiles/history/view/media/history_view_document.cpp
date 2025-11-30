@@ -632,7 +632,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	// FIX Issue 3: Use Grouped padding for single files to match Column album look
 	const auto &stGrouped = thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
 	const auto bottomPadding = (!_data->isVideoMessage()) 
-		? 0 
+		? 2 
 		: st.padding.bottom();
 
 	auto newHeight = st.padding.top() + st.thumbSize + bottomPadding;
@@ -709,7 +709,7 @@ void Document::draw(
 	// FIX Issue 3: Use Grouped padding for single files to match Column album look
 	const auto &stGrouped = thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
 	const auto bottomPadding = (!_data->isVideoMessage()) 
-		? 0 
+		? 2 
 		: st.padding.bottom();
 	const auto bottom = st.padding.top() + st.thumbSize + bottomPadding - topMinus;
 	const auto rthumb = style::rtlrect(st.padding.left(), st.padding.top() - topMinus, st.thumbSize, st.thumbSize, width);
@@ -1896,7 +1896,7 @@ void Document::refreshCaption(bool last) {
 QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-	auto height = st.padding.top() + st.thumbSize + st.padding.bottom();
+	auto height = st.padding.top() + st.thumbSize + 2;
 
 	const_cast<Document*>(this)->refreshCaption(last);
 
@@ -1912,7 +1912,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 QSize Document::sizeForGrouping(int width) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-	auto height = st.padding.top() + st.thumbSize + st.padding.bottom();
+	auto height = st.padding.top() + st.thumbSize + 2;
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
 			- st::msgPadding.left()

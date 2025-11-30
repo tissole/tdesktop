@@ -1088,7 +1088,7 @@ TextState GroupedMedia::getPartState(
 						result.link = textStateResult.link;
 						result.symbol = textStateResult.symbol;
 						result.afterSymbol = textStateResult.afterSymbol;
-						//result.itemId = part.item->fullId();
+						result.itemId = part.item->fullId();
 
 						// Apply current caption selection to result for highlighting
 						if (!part._captionSelection.empty()) {
@@ -1109,7 +1109,7 @@ TextState GroupedMedia::getPartState(
 						result.link = textStateResult.link;
 						result.symbol = textStateResult.symbol;
 						result.afterSymbol = textStateResult.afterSymbol;
-						//result.itemId = part.item->fullId();
+						result.itemId = part.item->fullId();
 
 						if (!part._captionSelection.empty()) {
 							result.symbol = textStateResult.symbol;
@@ -1122,7 +1122,7 @@ TextState GroupedMedia::getPartState(
 							result.customTooltipText = originalText.text;
 						}
 					}
-					//result.symbol += shift;
+					result.symbol += shift;
 					return result;
 				}
 			}
@@ -1131,8 +1131,8 @@ TextState GroupedMedia::getPartState(
 				part.sides,
 				point - QPoint(0, groupPadding.top()), // Adjust point for content
 				request);
-			//result.symbol += shift;
-			//result.itemId = part.item->fullId();
+			result.symbol += shift;
+			result.itemId = part.item->fullId();
 
 			// All the tooltip logic for message ID, views, date, etc. remains unchanged.
 			const auto item = part.item;
@@ -1344,6 +1344,8 @@ TextState GroupedMedia::getPartState(
 		}
 		++i;
 	}
+
+	return TextState(_parent->data());
 }
 
 PointState GroupedMedia::pointState(QPoint point) const {
