@@ -296,11 +296,11 @@ QSize GroupedMedia::countOptimalSize() {
 				for (const auto i : indices) {
 					if (!_parts[i].item->originalText().empty()) {
 						_parts[i]._captionHeight = uniformCaptionHeight;
-						_parts[i]._captionText = Ui::Text::String(
+						_parts[i]._captionText = Ui::Text::String(st::msgMinWidth);
+						_parts[i]._captionText.setMarkedText(
 							st::messageTextStyle,
 							_parts[i].item->originalText(),
 							Ui::ItemTextDefaultOptions(),
-							st::msgMinWidth,
 							Core::TextContext({
 								.session = &_parent->history()->session(),
 								.repaint = [=] { _parent->customEmojiRepaint(); },
@@ -483,11 +483,11 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 							auto &part = _parts[i];
 							if (!_parts[i].item->originalText().empty()) {
 								part._captionHeight = uniformCaptionHeight;
-								part._captionText = Ui::Text::String(
+								part._captionText = Ui::Text::String(st::msgMinWidth);
+								part._captionText.setMarkedText(
 									st::messageTextStyle,
 									part.item->originalText(),
 									Ui::ItemTextDefaultOptions(),
-									st::msgMinWidth,
 									Core::TextContext({
 										.session = &_parent->history()->session(),
 										.repaint = [=] { _parent->customEmojiRepaint(); },
