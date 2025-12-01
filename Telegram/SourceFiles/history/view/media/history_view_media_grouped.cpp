@@ -1014,12 +1014,18 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				p.save();
 				p.setClipRect(captionRect);
-				part._captionText.draw(p,
+
+				auto captionContext = context;
+				captionContext.position = QPoint(
 					captionRect.left() + padding.left(),
-					captionRect.top() + verticalOffset,
-					availableWidth,
-					style::al_left,
-					0, -1, part._captionSelection);
+					captionRect.top() + verticalOffset);
+				captionContext.availableWidth = availableWidth;
+				captionContext.align = style::al_left;
+				captionContext.elisionLines = 0;
+				captionContext.selection = part._captionSelection;
+				captionContext.geometry = Ui::GeometryDescriptor();
+
+				part._captionText.draw(p, captionContext);
 				p.restore();
 			} else {
 				// Multi Caption: Elided
@@ -1032,13 +1038,18 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				p.save();
 				p.setClipRect(captionRect);
-				part._captionText.drawElided(p,
+				
+				auto captionContext = context;
+				captionContext.position = QPoint(
 					captionRect.left() + padding.left(),
-					captionRect.top() + verticalOffset,
-					availableWidth,
-					1, 
-					style::al_left,
-					0, -1, 0, false, part._captionSelection);
+					captionRect.top() + verticalOffset);
+				captionContext.availableWidth = availableWidth;
+				captionContext.align = style::al_left;
+				captionContext.elisionLines = 1;
+				captionContext.selection = part._captionSelection;
+				captionContext.geometry = Ui::GeometryDescriptor(); // Reset geometry to use default SimpleGeometry
+
+				part._captionText.draw(p, captionContext);
 				p.restore();
 			}
 		}
