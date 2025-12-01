@@ -296,11 +296,11 @@ QSize GroupedMedia::countOptimalSize() {
 				for (const auto i : indices) {
 					if (!_parts[i].item->originalText().empty()) {
 						_parts[i]._captionHeight = uniformCaptionHeight;
-						_parts[i]._captionText = Ui::Text::String(st::msgMinWidth);
-						_parts[i]._captionText.setMarkedText(
+						_parts[i]._captionText = Ui::Text::String(
 							st::messageTextStyle,
 							_parts[i].item->originalText(),
 							Ui::ItemTextDefaultOptions(),
+							st::msgMinWidth,
 							Core::TextContext({
 								.session = &_parent->history()->session(),
 								.repaint = [=] { _parent->customEmojiRepaint(); },
@@ -483,11 +483,11 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 							auto &part = _parts[i];
 							if (!_parts[i].item->originalText().empty()) {
 								part._captionHeight = uniformCaptionHeight;
-								part._captionText = Ui::Text::String(st::msgMinWidth);
-								part._captionText.setMarkedText(
+								part._captionText = Ui::Text::String(
 									st::messageTextStyle,
 									part.item->originalText(),
 									Ui::ItemTextDefaultOptions(),
+									st::msgMinWidth,
 									Core::TextContext({
 										.session = &_parent->history()->session(),
 										.repaint = [=] { _parent->customEmojiRepaint(); },
@@ -1014,18 +1014,22 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				p.save();
 				p.setClipRect(captionRect);
-
-				auto captionContext = context;
-				captionContext.position = QPoint(
-					captionRect.left() + padding.left(),
-					captionRect.top() + verticalOffset);
-				captionContext.availableWidth = availableWidth;
-				captionContext.align = style::al_left;
-				captionContext.elisionLines = 0;
-				captionContext.selection = part._captionSelection;
-				captionContext.geometry = Ui::GeometryDescriptor();
-
-				part._captionText.draw(p, captionContext);
+				part._captionText.draw(p, {
+					.position = QPoint(captionRect.left() + padding.left(), captionRect.top() + verticalOffset),
+					.availableWidth = availableWidth,
+					.palette = &stm->textPalette,
+					.pre = nullptr,
+					.blockquote = nullptr,
+					.colors = context.st->highlightColors(),
+					.spoiler = Ui::Text::DefaultSpoilerCache(),
+					.now = context.now,
+					.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
+					.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
+					.selection = part._captionSelection,
+					.elisionLines = 0, // Don't elide - show full text
+					.elisionRemoveFromEnd = 0,
+					.align = style::al_left,
+				});
 				p.restore();
 			} else {
 				// Multi Caption: Elided
@@ -1038,18 +1042,22 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				p.save();
 				p.setClipRect(captionRect);
-				
-				auto captionContext = context;
-				captionContext.position = QPoint(
-					captionRect.left() + padding.left(),
-					captionRect.top() + verticalOffset);
-				captionContext.availableWidth = availableWidth;
-				captionContext.align = style::al_left;
-				captionContext.elisionLines = 1;
-				captionContext.selection = part._captionSelection;
-				captionContext.geometry = Ui::GeometryDescriptor(); // Reset geometry to use default SimpleGeometry
-
-				part._captionText.draw(p, captionContext);
+				part._captionText.draw(p, {
+					.position = QPoint(captionRect.left() + padding.left(), captionRect.top() + verticalOffset),
+					.availableWidth = availableWidth,
+					.palette = &stm->textPalette,
+					.pre = nullptr,
+					.blockquote = nullptr,
+					.colors = context.st->highlightColors(),
+					.spoiler = Ui::Text::DefaultSpoilerCache(),
+					.now = context.now,
+					.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
+					.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
+					.selection = part._captionSelection,
+					.elisionLines = 1, // Elide to 1 line for multi-caption
+					.elisionRemoveFromEnd = 0,
+					.align = style::al_left,
+				});
 				p.restore();
 			}
 		}
