@@ -324,8 +324,8 @@ QSize GroupedMedia::countOptimalSize() {
 			const auto captionWidth = std::min(maxWidth, st::historyGroupWidthMax) - padding.left() - padding.right();
 			
 			// FIX: Use setMarkedText to ensure proper multi-line wrapping initialization
-			Ui::Text::String caption(st::msgMinWidth);
-			caption.setMarkedText(
+			part._captionText = Ui::Text::String(st::msgMinWidth);
+			part._captionText.setMarkedText(
 				st::messageTextStyle,
 				part.item->originalText(),
 				Ui::ItemTextOptions(part.item),
@@ -334,7 +334,7 @@ QSize GroupedMedia::countOptimalSize() {
 					.repaint = [=] { _parent->customEmojiRepaint(); },
 				}));
 
-			part._captionHeight = int(caption.countHeight(captionWidth) + padding.top() + padding.bottom());
+			part._captionHeight = int(part._captionText.countHeight(captionWidth) + padding.top() + padding.bottom());
 
 			minHeight += part._captionHeight;
 		}
@@ -421,8 +421,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				const auto captionWidth = newWidth - padding.left() - padding.right();
 
 				// FIX: Use setMarkedText to ensure proper multi-line wrapping initialization
-				Ui::Text::String caption(st::msgMinWidth);
-				caption.setMarkedText(
+				part._captionText = Ui::Text::String(st::msgMinWidth);
+				part._captionText.setMarkedText(
 					st::messageTextStyle,
 					part.item->originalText(),
 					Ui::ItemTextOptions(part.item),
@@ -431,7 +431,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 						.repaint = [=] { _parent->customEmojiRepaint(); },
 					}));
 
-				part._captionHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
+				part._captionHeight = part._captionText.countHeight(captionWidth) + padding.top() + padding.bottom();
 
 				// Place at the bottom of the entire group
 				part.captionRect = QRect(
@@ -981,8 +981,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto &originalText = part.item->originalText();
 				
 				// FIX: Use setMarkedText to ensure correct wrapping context
-				Ui::Text::String caption(st::msgMinWidth);
-				caption.setMarkedText(
+				part._captionText = Ui::Text::String(st::msgMinWidth);
+				part._captionText.setMarkedText(
 					st::messageTextStyle,
 					originalText,
 					Ui::ItemTextOptions(part.item),
@@ -1005,7 +1005,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				p.save();
 				p.setClipRect(captionRect);
-				caption.draw(p,
+				part._captionText.draw(p,
 					captionRect.left() + padding.left(),
 					captionRect.top() + verticalOffset,
 					availableWidth,
@@ -1031,7 +1031,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				p.save();
 				p.setClipRect(captionRect);
-				caption.drawElided(p,
+				part._captionText.drawElided(p,
 					captionRect.left() + padding.left(),
 					captionRect.top() + verticalOffset,
 					availableWidth,
@@ -1086,8 +1086,8 @@ TextState GroupedMedia::getPartState(
 					const auto captionWidth = captionGeo.width() - padding.left() - padding.right();
 					
 					// FIX: Use setMarkedText to ensure correct wrapping context for hit testing
-					Ui::Text::String caption(st::msgMinWidth);
-					caption.setMarkedText(
+					part._captionText = Ui::Text::String(st::msgMinWidth);
+					part._captionText.setMarkedText(
 						st::messageTextStyle,
 						originalText,
 						Ui::ItemTextOptions(part.item),
@@ -1108,7 +1108,7 @@ TextState GroupedMedia::getPartState(
 						// This caption is not elided, allow text selection.
 						const auto clickX = point.x() - captionGeo.left() - padding.left();
 						const auto clickY = point.y() - captionGeo.top() - padding.top();
-						const auto textStateResult = caption.getState(QPoint(clickX, clickY), captionWidth, request.forText());
+						const auto textStateResult = part._captionText.getState(QPoint(clickX, clickY), captionWidth, request.forText());
 						result.cursor = CursorState::Text;
 						result.link = textStateResult.link;
 						result.symbol = textStateResult.symbol;
@@ -1129,7 +1129,7 @@ TextState GroupedMedia::getPartState(
 						// This caption is elided, allow text selection of visible portion.
 						const auto clickX = point.x() - captionGeo.left() - padding.left();
 						const auto clickY = point.y() - captionGeo.top() - padding.top();
-						const auto textStateResult = caption.getState(QPoint(clickX, clickY), captionWidth, request.forText());
+						const auto textStateResult = part._captionText.getState(QPoint(clickX, clickY), captionWidth, request.forText());
 						result.cursor = CursorState::Text;
 						result.link = textStateResult.link;
 						result.symbol = textStateResult.symbol;
@@ -1142,7 +1142,7 @@ TextState GroupedMedia::getPartState(
 						}
 
 						// Show tooltip only for elided captions (Multi-caption view)
-						if (caption.maxWidth() > captionWidth) {
+						if (part._captionText.maxWidth() > captionWidth) {
 							result.customTooltip = true;
 							result.customTooltipText = originalText.text;
 						}

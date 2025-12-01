@@ -130,6 +130,7 @@ private:
 		int _rowCaptionHeight = 0;
 		mutable QRect captionRect;
 		mutable TextSelection _captionSelection = { 0, 0 };
+		mutable Ui::Text::String _captionText;
 	};
 
 	[[nodiscard]] static Mode DetectMode(not_null<Data::Media*> media);
