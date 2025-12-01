@@ -30,6 +30,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat.h"
 #include "styles/style_basic.h"
 #include "core/enhanced_settings.h"
+#include "core/ui_integration.h"
 #include "data/data_photo.h"
 
 namespace HistoryView {
