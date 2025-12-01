@@ -1019,6 +1019,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					st::messageTextStyle,
 					originalText,
 					Ui::ItemTextDefaultOptions(),
+					st::msgMinWidth,
 					Core::TextContext({
 						.session = &_parent->history()->session(),
 						.repaint = [=] { _parent->customEmojiRepaint(); },
