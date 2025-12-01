@@ -327,7 +327,11 @@ QSize GroupedMedia::countOptimalSize() {
 			caption.setMarkedText(
 				st::messageTextStyle,
 				part.item->originalText(),
-				Ui::ItemTextOptions(part.item));
+				Ui::ItemTextOptions(part.item),
+				Core::TextContext({
+					.session = &_parent->history()->session(),
+					.repaint = [=] { _parent->customEmojiRepaint(); },
+				}));
 
 			part._captionHeight = int(caption.countHeight(captionWidth) + padding.top() + padding.bottom());
 
@@ -420,7 +424,11 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				caption.setMarkedText(
 					st::messageTextStyle,
 					part.item->originalText(),
-					Ui::ItemTextOptions(part.item));
+					Ui::ItemTextOptions(part.item),
+					Core::TextContext({
+						.session = &_parent->history()->session(),
+						.repaint = [=] { _parent->customEmojiRepaint(); },
+					}));
 
 				part._captionHeight = caption.countHeight(captionWidth) + padding.top() + padding.bottom();
 
@@ -976,7 +984,11 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				caption.setMarkedText(
 					st::messageTextStyle,
 					originalText,
-					Ui::ItemTextOptions(part.item));
+					Ui::ItemTextOptions(part.item),
+					Core::TextContext({
+						.session = &_parent->history()->session(),
+						.repaint = [=] { _parent->customEmojiRepaint(); },
+					}));
 
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto availableHeight = captionRect.height();
@@ -1002,7 +1014,14 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			} else {
 				// Multi Caption: Elided
 				const auto &originalText = part.item->originalText();
-				Ui::Text::String caption(st::messageTextStyle, originalText, Ui::ItemTextDefaultOptions());
+				Ui::Text::String caption(
+					st::messageTextStyle,
+					originalText,
+					Ui::ItemTextDefaultOptions(),
+					Core::TextContext({
+						.session = &_parent->history()->session(),
+						.repaint = [=] { _parent->customEmojiRepaint(); },
+					}));
 				
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto textHeight = st::messageTextStyle.font->height;
@@ -1069,7 +1088,11 @@ TextState GroupedMedia::getPartState(
 					caption.setMarkedText(
 						st::messageTextStyle,
 						originalText,
-						Ui::ItemTextOptions(part.item));
+						Ui::ItemTextOptions(part.item),
+						Core::TextContext({
+							.session = &_parent->history()->session(),
+							.repaint = [=] { _parent->customEmojiRepaint(); },
+						}));
 
 					std::vector<int> captionIndices;
 					for (auto j = 0; j != _parts.size(); ++j) {
