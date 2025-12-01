@@ -296,6 +296,15 @@ QSize GroupedMedia::countOptimalSize() {
 				for (const auto i : indices) {
 					if (!_parts[i].item->originalText().empty()) {
 						_parts[i]._captionHeight = uniformCaptionHeight;
+						_parts[i]._captionText = Ui::Text::String(
+							st::messageTextStyle,
+							_parts[i].item->originalText(),
+							Ui::ItemTextDefaultOptions(),
+							st::msgMinWidth,
+							Core::TextContext({
+								.session = &_parent->history()->session(),
+								.repaint = [=] { _parent->customEmojiRepaint(); },
+							}));
 						rowHasCaption = true;
 					} else {
 						_parts[i]._captionHeight = 0;
@@ -474,6 +483,15 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 							auto &part = _parts[i];
 							if (!_parts[i].item->originalText().empty()) {
 								part._captionHeight = uniformCaptionHeight;
+								part._captionText = Ui::Text::String(
+									st::messageTextStyle,
+									part.item->originalText(),
+									Ui::ItemTextDefaultOptions(),
+									st::msgMinWidth,
+									Core::TextContext({
+										.session = &_parent->history()->session(),
+										.repaint = [=] { _parent->customEmojiRepaint(); },
+									}));
 								part.captionRect = QRect(
 									part.geometry.left(),
 									rowBottom,
@@ -980,20 +998,11 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				// FIX Issue 2: Single Caption Full Wrap
 				const auto &originalText = part.item->originalText();
 				
-				// FIX: Use setMarkedText to ensure correct wrapping context
-				part._captionText = Ui::Text::String(st::msgMinWidth);
-				part._captionText.setMarkedText(
-					st::messageTextStyle,
-					originalText,
-					Ui::ItemTextOptions(part.item),
-					Core::TextContext({
-						.session = &_parent->history()->session(),
-						.repaint = [=] { _parent->customEmojiRepaint(); },
-					}));
+				// _captionText is initialized in countOptimalSize/countCurrentSize
 
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto availableHeight = captionRect.height();
-				const auto textHeight = caption.countHeight(availableWidth);
+				const auto textHeight = part._captionText.countHeight(availableWidth);
 				const auto verticalPadding = 2;
 				int verticalOffset;
 
@@ -1015,15 +1024,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			} else {
 				// Multi Caption: Elided
 				const auto &originalText = part.item->originalText();
-				Ui::Text::String caption(
-					st::messageTextStyle,
-					originalText,
-					Ui::ItemTextDefaultOptions(),
-					st::msgMinWidth,
-					Core::TextContext({
-						.session = &_parent->history()->session(),
-						.repaint = [=] { _parent->customEmojiRepaint(); },
-					}));
+
 				
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto textHeight = st::messageTextStyle.font->height;
@@ -1085,16 +1086,7 @@ TextState GroupedMedia::getPartState(
 					const auto padding = QMargins(8, 0, 8, 0);
 					const auto captionWidth = captionGeo.width() - padding.left() - padding.right();
 					
-					// FIX: Use setMarkedText to ensure correct wrapping context for hit testing
-					part._captionText = Ui::Text::String(st::msgMinWidth);
-					part._captionText.setMarkedText(
-						st::messageTextStyle,
-						originalText,
-						Ui::ItemTextOptions(part.item),
-						Core::TextContext({
-							.session = &_parent->history()->session(),
-							.repaint = [=] { _parent->customEmojiRepaint(); },
-						}));
+					// _captionText is initialized in countOptimalSize/countCurrentSize
 
 					std::vector<int> captionIndices;
 					for (auto j = 0; j != _parts.size(); ++j) {
@@ -1380,7 +1372,8 @@ PointState GroupedMedia::pointState(QPoint point) const {
 	const auto groupPadding = groupedPadding();
 	point -= QPoint(0, groupPadding.top());
 	for (const auto &part : _parts) {
-		if (part.geometry.contains(point)) {
+		if (part.geometry.contains(point)
+			|| (!part.captionRect.isEmpty() && part.captionRect.contains(point))) {
 			return PointState::GroupPart;
 		}
 	}
