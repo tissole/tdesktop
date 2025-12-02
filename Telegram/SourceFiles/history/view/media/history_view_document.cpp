@@ -643,16 +643,18 @@ QSize Document::countCurrentSize(int newWidth) {
 	if (hasTranscribe) {
 		newHeight += voice->transcribeText.countHeight(captionw);
 		if (captioned) {
-			newHeight += st::mediaCaptionSkip;
+			// Replace original st::mediaCaptionSkip with 2px for consistency
+			newHeight += 2; // 2px spacing between transcribe and caption
 		} else if (isBubbleBottom()) {
 			newHeight += st::msgPadding.bottom();
 		}
 	}
 	if (captioned) {
-		// Add 2px spacing above caption like grid albums
-		newHeight += 2; // 2px above caption
+		// Only add spacing if there's no transcribe (otherwise it was handled above)
+		if (!hasTranscribe) {
+			newHeight += 2; // 2px above caption (from file UI to caption)
+		}
 		newHeight += captioned->caption.countHeight(captionw);
-		// Add 2px below caption like grid albums (replacing bubble-specific padding for captioned files)
 		newHeight += 2; // 2px below caption
 	}
 
@@ -1067,12 +1069,14 @@ void Document::draw(
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
 		voice->transcribeText.draw(p, st::msgPadding.left(), bottom, captionw, style::al_left, 0, -1, selection);
-		captiontop += voice->transcribeText.countHeight(captionw) + st::mediaCaptionSkip;
+		captiontop += voice->transcribeText.countHeight(captionw) + 2; // Use 2px spacing like in height calc
 		selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
 	}
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
-		// Add 2px spacing above caption like grid albums
-		captiontop += 2;
+		// Add 2px spacing above caption like grid albums (unless handled via transcribe spacing)
+		if (!(voice && !voice->transcribeText.isEmpty())) {
+			captiontop += 2;
+		}
 
 		p.setPen(stm->historyTextFg);
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);

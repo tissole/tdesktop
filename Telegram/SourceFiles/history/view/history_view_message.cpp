@@ -1479,12 +1479,6 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				+ mediaHeight
 				+ (mediaOnBottom ? 0 : skip));
 
-			// For photo/video with caption, ensure 2px bottom padding like grid albums
-			if (hasVisibleText() && (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile()))) {
-				const auto textHeight = text().countHeight(trect.width());
-				trect.setHeight(textHeight + 2); // +2 for bottom padding to match grid album spacing
-			}
-
 			textSelection = media->skipSelection(textSelection);
 			highlightRange = media->skipSelection(highlightRange);
 		}
@@ -4743,9 +4737,8 @@ int Message::resizeContentGetHeight(int newWidth) {
 			}
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 				if (mediaDisplayed && (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile()))) {
-					// FIX Issue 2: Reduce caption spacing for Photo/Video
-					newHeight += 4; // Match Grid album (2 top + 2 bottom)
-					// newHeight += 0; // skip
+					// For photo/video with caption, ensure 2px bottom padding to match grid albums
+					newHeight += 2; // 2px bottom padding below caption
 				} else {
 					newHeight += st::msgPadding.bottom();
 					if (mediaDisplayed) {
