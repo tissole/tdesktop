@@ -655,7 +655,12 @@ QSize Document::countCurrentSize(int newWidth) {
 			newHeight += 2; // 2px above caption (from file UI to caption)
 		}
 		newHeight += captioned->caption.countHeight(captionw);
-		newHeight += 2; // 2px below caption
+		// Preserve original isBubbleBottom() behavior for bottom spacing consistency
+		if (isBubbleBottom()) {
+			newHeight += 2; // 2px below caption when at bubble bottom
+		} else {
+			newHeight += 2; // 2px below caption to match grid album spacing
+		}
 	}
 
 	return { newWidth, newHeight };
@@ -1073,11 +1078,6 @@ void Document::draw(
 		selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
 	}
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
-		// Add 2px spacing above caption like grid albums (unless handled via transcribe spacing)
-		if (!(voice && !voice->transcribeText.isEmpty())) {
-			captiontop += 2;
-		}
-
 		p.setPen(stm->historyTextFg);
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
@@ -1904,7 +1904,7 @@ void Document::refreshCaption(bool last) {
 QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-	auto height = st.padding.top() + st.thumbSize + 2;
+	auto height = st.padding.top() + st.thumbSize;
 
 	const_cast<Document*>(this)->refreshCaption(last);
 
@@ -1912,7 +1912,13 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
+		// Add consistent 2px spacing above caption + caption height + 2px spacing below caption
+		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
+		height += 2; // 2px below caption
+	} else {
+		// If no caption, keep original spacing
+		height += 2;
 	}
 	return { maxWidth, height };
 }
@@ -1920,14 +1926,20 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 QSize Document::sizeForGrouping(int width) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-	auto height = st.padding.top() + st.thumbSize + 2;
+	auto height = st.padding.top() + st.thumbSize;
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
 			- st::msgPadding.left()
 			- st::msgPadding.right();
+		// Add consistent 2px spacing above caption + caption height + 2px spacing below caption
+		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
+		height += 2; // 2px below caption
+	} else {
+		// If no caption, keep original spacing
+		height += 2;
 	}
-	return { maxWidth(), height };
+	return { width, height };
 }
 
 void Document::drawGrouped(

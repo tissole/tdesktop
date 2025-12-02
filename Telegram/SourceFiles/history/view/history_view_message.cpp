@@ -1479,6 +1479,12 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				+ mediaHeight
 				+ (mediaOnBottom ? 0 : skip));
 
+			// For photo/video with caption, ensure 2px bottom padding by setting exact text rectangle height
+			if (hasVisibleText() && (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile()))) {
+				const auto textHeight = text().countHeight(trect.width());
+				trect.setHeight(textHeight + 2); // +2 for bottom padding to match grid album spacing
+			}
+
 			textSelection = media->skipSelection(textSelection);
 			highlightRange = media->skipSelection(highlightRange);
 		}
@@ -4737,8 +4743,9 @@ int Message::resizeContentGetHeight(int newWidth) {
 			}
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 				if (mediaDisplayed && (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile()))) {
-					// For photo/video with caption, ensure 2px bottom padding to match grid albums
-					newHeight += 2; // 2px bottom padding below caption
+					// Space will be handled by drawing code with exact text height + 2px
+					// The 2px top spacing is handled by skip variable, 2px bottom by drawing rect height
+					newHeight += 0; // 0 extra since drawing handles exact height
 				} else {
 					newHeight += st::msgPadding.bottom();
 					if (mediaDisplayed) {
