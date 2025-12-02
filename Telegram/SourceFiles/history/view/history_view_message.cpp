@@ -37,7 +37,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "data/data_user.h"
 #include "data/data_channel.h"
-#include "data/data_document.h"
 #include "data/data_forum_topic.h"
 #include "data/data_message_reactions.h"
 #include "lang/lang_keys.h"
@@ -1400,13 +1399,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			if (reactionsInBubble) {
 				trect.setHeight(trect.height() - st::mediaInBubbleSkip + st::msgPadding.bottom());
 			} else if (mediaDisplayed) {
-				// FIX Issue 2: Reduce caption spacing for Photo/Video
-				auto skip = st::mediaInBubbleSkip;
-				if (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile())) {
-					skip = 2;
-					trect.setHeight(trect.height() + st::msgPadding.bottom() - 2);
-				}
-				trect.setHeight(trect.height() - skip);
+				trect.setHeight(trect.height() - st::mediaInBubbleSkip);
 			}
 		}
 
@@ -1468,23 +1461,9 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				trect.setY(trect.y() + st::mediaInBubbleSkip);
 			}
 			paintMedia(trect.y());
-			// FIX Issue 2: Reduce caption spacing for Photo/Video
-			auto skip = st::mediaInBubbleSkip;
-			if (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile())) {
-				skip = 2;
-				// Expand trect to compensate for reduced padding in optimalSize
-				trect.setHeight(trect.height() + st::msgPadding.bottom() - 2);
-			}
 			trect.setY(trect.y()
 				+ mediaHeight
-				+ (mediaOnBottom ? 0 : skip));
-
-			// For photo/video with caption, ensure 2px bottom padding by setting exact text rectangle height
-			if (hasVisibleText() && (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile()))) {
-				const auto textHeight = text().countHeight(trect.width());
-				trect.setHeight(textHeight + 2); // +2 for bottom padding to match grid album spacing
-			}
-
+				+ (mediaOnBottom ? 0 : st::mediaInBubbleSkip));
 			textSelection = media->skipSelection(textSelection);
 			highlightRange = media->skipSelection(highlightRange);
 		}
@@ -2253,12 +2232,7 @@ PointState Message::pointState(QPoint point) const {
 				if (reactionsInBubble) {
 					trect.setHeight(trect.height() + st::msgPadding.bottom());
 				} else if (mediaDisplayed) {
-					auto skip = st::mediaInBubbleSkip;
-					if (media->getPhoto()) skip = 0;
-					else if (const auto doc = media->getDocument()) {
-						if (doc->isVideoFile()) skip = 0;
-					}
-					trect.setHeight(trect.height() - skip);
+					trect.setHeight(trect.height() - st::mediaInBubbleSkip);
 				}
 			}
 			if (mediaOnBottom) {
@@ -2288,14 +2262,9 @@ PointState Message::pointState(QPoint point) const {
 				? (trect.y() + (mediaOnTop ? 0 : st::mediaInBubbleSkip))
 				: (trect.y() + trect.height() - mediaHeight);
 			if (mediaDisplayed && _invertMedia) {
-				auto skip = st::mediaInBubbleSkip;
-				if (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile())) {
-					skip = 2;
-					trect.setHeight(trect.height() + st::msgPadding.bottom() - 2);
-				}
 				trect.setY(mediaTop
 					+ mediaHeight
-					+ (mediaOnBottom ? 0 : skip));
+					+ (mediaOnBottom ? 0 : st::mediaInBubbleSkip));
 			}
 			if (point.y() >= mediaTop
 				&& point.y() < mediaTop + mediaHeight) {
@@ -2709,13 +2678,7 @@ TextState Message::textState(
 			if (reactionsInBubble) {
 				trect.setHeight(trect.height() - st::mediaInBubbleSkip + st::msgPadding.bottom());
 			} else if (mediaDisplayed) {
-				// FIX Issue 2: Reduce caption spacing for Photo/Video
-				auto skip = st::mediaInBubbleSkip;
-				if (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile())) {
-					skip = 2;
-					trect.setHeight(trect.height() + st::msgPadding.bottom() - 2);
-				}
-				trect.setHeight(trect.height() - skip);
+				trect.setHeight(trect.height() - st::mediaInBubbleSkip);
 			}
 		}
 		if (mediaOnBottom) {
@@ -2797,14 +2760,9 @@ TextState Message::textState(
 				? (trect.y() + (mediaOnTop ? 0 : st::mediaInBubbleSkip))
 				: (trect.y() + trect.height() - mediaHeight);
 			if (mediaDisplayed && _invertMedia) {
-				auto skip = st::mediaInBubbleSkip;
-				if (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile())) {
-					skip = 2;
-					trect.setHeight(trect.height() + st::msgPadding.bottom() - 2);
-				}
 				trect.setY(mediaTop
 					+ mediaHeight
-					+ (mediaOnBottom ? 0 : skip));
+					+ (mediaOnBottom ? 0 : st::mediaInBubbleSkip));
 			}
 			if (point.y() >= mediaTop
 				&& point.y() < mediaTop + mediaHeight) {
@@ -4742,15 +4700,9 @@ int Message::resizeContentGetHeight(int newWidth) {
 				newHeight += textHeightFor(textWidth);
 			}
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
-				if (mediaDisplayed && (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile()))) {
-					// Space will be handled by drawing code with exact text height + 2px
-					// The 2px top spacing is handled by skip variable, 2px bottom by drawing rect height
-					newHeight += 4; // 2px between media and caption + 2px below caption
-				} else {
-					newHeight += st::msgPadding.bottom();
-					if (mediaDisplayed) {
-						newHeight += st::mediaInBubbleSkip;
-					}
+				newHeight += st::msgPadding.bottom();
+				if (mediaDisplayed) {
+					newHeight += st::mediaInBubbleSkip;
 				}
 			}
 			if (!mediaOnTop) {
