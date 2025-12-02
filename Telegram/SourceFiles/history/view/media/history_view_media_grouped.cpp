@@ -1017,6 +1017,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				part._captionText.draw(p, {
 					.position = QPoint(captionRect.left() + padding.left(), captionRect.top() + verticalOffset),
 					.availableWidth = availableWidth,
+					.align = style::al_left,
+					.elisionLines = 0, // Don't elide - show full text
+					.elisionRemoveFromEnd = 0,
 					.palette = &stm->textPalette,
 					.pre = nullptr,
 					.blockquote = nullptr,
@@ -1026,9 +1029,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 					.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 					.selection = part._captionSelection,
-					.elisionLines = 0, // Don't elide - show full text
-					.elisionRemoveFromEnd = 0,
-					.align = style::al_left,
 				});
 				p.restore();
 			} else {
@@ -1045,6 +1045,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				part._captionText.draw(p, {
 					.position = QPoint(captionRect.left() + padding.left(), captionRect.top() + verticalOffset),
 					.availableWidth = availableWidth,
+					.align = style::al_left,
+					.elisionLines = 1, // Elide to 1 line for multi-caption
+					.elisionRemoveFromEnd = 0,
 					.palette = &stm->textPalette,
 					.pre = nullptr,
 					.blockquote = nullptr,
@@ -1054,9 +1057,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 					.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 					.selection = part._captionSelection,
-					.elisionLines = 1, // Elide to 1 line for multi-caption
-					.elisionRemoveFromEnd = 0,
-					.align = style::al_left,
 				});
 				p.restore();
 			}
