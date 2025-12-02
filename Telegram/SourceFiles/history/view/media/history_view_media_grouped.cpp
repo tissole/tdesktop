@@ -1014,21 +1014,30 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				p.save();
 				p.setClipRect(captionRect);
+				const auto captionLeft = captionRect.left() + padding.left();
+				const auto captionTop = captionRect.top() + verticalOffset;
+				_parent->prepareCustomEmojiPaint(p, context, part._captionText);
+				auto highlightRequest = context.computeHighlightCache();
 				part._captionText.draw(p, {
-					.position = QPoint(captionRect.left() + padding.left(), captionRect.top() + verticalOffset),
+					.position = QPoint(captionLeft, captionTop),
+					.outerWidth = _parent->width(),
 					.availableWidth = availableWidth,
+					.geometry = {},
 					.align = style::al_left,
-					.elisionLines = 0, // Don't elide - show full text
-					.elisionRemoveFromEnd = 0,
+					.clip = QRect(),
 					.palette = &stm->textPalette,
-					.pre = nullptr,
-					.blockquote = nullptr,
+					.pre = stm->preCache.get(),
+					.blockquote = context.quoteCache(_parent->contentColorIndex()),
 					.colors = context.st->highlightColors(),
 					.spoiler = Ui::Text::DefaultSpoilerCache(),
 					.now = context.now,
+					.paused = context.paused,
 					.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 					.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
+					.fullWidthSelection = context.fullWidthSelection,
 					.selection = part._captionSelection,
+					.highlight = highlightRequest ? &*highlightRequest : nullptr,
+					.elisionLines = 0, // Don't elide - show full text
 				});
 				p.restore();
 			} else {
@@ -1042,21 +1051,30 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				p.save();
 				p.setClipRect(captionRect);
+				const auto captionLeft = captionRect.left() + padding.left();
+				const auto captionTop = captionRect.top() + verticalOffset;
+				_parent->prepareCustomEmojiPaint(p, context, part._captionText);
+				auto highlightRequest = context.computeHighlightCache();
 				part._captionText.draw(p, {
-					.position = QPoint(captionRect.left() + padding.left(), captionRect.top() + verticalOffset),
+					.position = QPoint(captionLeft, captionTop),
+					.outerWidth = _parent->width(),
 					.availableWidth = availableWidth,
+					.geometry = {},
 					.align = style::al_left,
-					.elisionLines = 1, // Elide to 1 line for multi-caption
-					.elisionRemoveFromEnd = 0,
+					.clip = QRect(),
 					.palette = &stm->textPalette,
-					.pre = nullptr,
-					.blockquote = nullptr,
+					.pre = stm->preCache.get(),
+					.blockquote = context.quoteCache(_parent->contentColorIndex()),
 					.colors = context.st->highlightColors(),
 					.spoiler = Ui::Text::DefaultSpoilerCache(),
 					.now = context.now,
+					.paused = context.paused,
 					.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 					.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
+					.fullWidthSelection = context.fullWidthSelection,
 					.selection = part._captionSelection,
+					.highlight = highlightRequest ? &*highlightRequest : nullptr,
+					.elisionLines = 1, // Elide to 1 line for multi-caption
 				});
 				p.restore();
 			}
