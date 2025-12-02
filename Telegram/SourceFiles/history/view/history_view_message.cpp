@@ -4745,7 +4745,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 				if (mediaDisplayed && (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile()))) {
 					// Space will be handled by drawing code with exact text height + 2px
 					// The 2px top spacing is handled by skip variable, 2px bottom by drawing rect height
-					newHeight += 0; // 0 extra since drawing handles exact height
+					newHeight += 4; // 2px between media and caption + 2px below caption
 				} else {
 					newHeight += st::msgPadding.bottom();
 					if (mediaDisplayed) {

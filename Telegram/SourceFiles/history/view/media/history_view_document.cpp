@@ -652,7 +652,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	if (captioned) {
 		// Only add spacing if there's no transcribe (otherwise it was handled above)
 		if (!hasTranscribe) {
-			newHeight += 2; // 2px above caption (from file UI to caption)
+			// newHeight += 2; // 2px above caption (from file UI to caption)
 		}
 		newHeight += captioned->caption.countHeight(captionw);
 		// Preserve original isBubbleBottom() behavior for bottom spacing consistency
