@@ -1034,7 +1034,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					.paused = context.paused,
 					.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 					.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
-					.fullWidthSelection = context.fullWidthSelection,
+					.fullWidthSelection = false,
 					.selection = part._captionSelection,
 					.highlight = highlightRequest ? &*highlightRequest : nullptr,
 					.elisionLines = 0, // Don't elide - show full text
@@ -1071,7 +1071,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					.paused = context.paused,
 					.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 					.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
-					.fullWidthSelection = context.fullWidthSelection,
+					.fullWidthSelection = false,
 					.selection = part._captionSelection,
 					.highlight = highlightRequest ? &*highlightRequest : nullptr,
 					.elisionLines = 1, // Elide to 1 line for multi-caption
