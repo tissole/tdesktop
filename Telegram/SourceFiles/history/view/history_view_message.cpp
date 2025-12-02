@@ -1478,6 +1478,13 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			trect.setY(trect.y()
 				+ mediaHeight
 				+ (mediaOnBottom ? 0 : skip));
+
+			// For photo/video with caption, ensure 2px bottom padding like grid albums
+			if (hasVisibleText() && (media->getPhoto() || (media->getDocument() && media->getDocument()->isVideoFile()))) {
+				const auto textHeight = text().countHeight(trect.width());
+				trect.setHeight(textHeight + 2); // +2 for bottom padding to match grid album spacing
+			}
+
 			textSelection = media->skipSelection(textSelection);
 			highlightRange = media->skipSelection(highlightRange);
 		}

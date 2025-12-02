@@ -649,10 +649,11 @@ QSize Document::countCurrentSize(int newWidth) {
 		}
 	}
 	if (captioned) {
+		// Add 2px spacing above caption like grid albums
+		newHeight += 2; // 2px above caption
 		newHeight += captioned->caption.countHeight(captionw);
-		if (isBubbleBottom()) {
-			newHeight += 2;
-		}
+		// Add 2px below caption like grid albums (replacing bubble-specific padding for captioned files)
+		newHeight += 2; // 2px below caption
 	}
 
 	return { newWidth, newHeight };
@@ -1070,6 +1071,9 @@ void Document::draw(
 		selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
 	}
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
+		// Add 2px spacing above caption like grid albums
+		captiontop += 2;
+
 		p.setPen(stm->historyTextFg);
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
