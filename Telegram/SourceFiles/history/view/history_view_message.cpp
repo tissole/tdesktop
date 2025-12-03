@@ -4699,15 +4699,27 @@ int Message::resizeContentGetHeight(int newWidth) {
 				}
 				newHeight += textHeightFor(textWidth);
 			}
+			// Override spacing for single photos and streaming videos to match album spacing
+			auto mediaInBubbleSkip = st::mediaInBubbleSkip;
+			auto msgPaddingBottom = st::msgPadding.bottom();
+			if (mediaDisplayed && item->media()) {
+				const auto photo = item->media()->photo();
+				const auto document = item->media()->document();
+				const auto isStreamingVideo = document && document->isVideoFile();
+				if (photo || isStreamingVideo) {
+					mediaInBubbleSkip = 2;
+					msgPaddingBottom = 2;
+				}
+			}
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
-				newHeight += st::msgPadding.bottom();
+				newHeight += msgPaddingBottom;
 				if (mediaDisplayed) {
-					newHeight += st::mediaInBubbleSkip;
+					newHeight += mediaInBubbleSkip;
 				}
 			}
 			if (!mediaOnTop) {
 				newHeight += st::msgPadding.top();
-				if (mediaDisplayed) newHeight += st::mediaInBubbleSkip;
+				if (mediaDisplayed) newHeight += mediaInBubbleSkip;
 				if (entry) newHeight += st::mediaInBubbleSkip;
 			}
 			if (mediaDisplayed) {
