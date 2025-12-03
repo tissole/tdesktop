@@ -4845,7 +4845,7 @@ bool Message::needInfoDisplay() const {
 	const auto media = this->media();
 	const auto mediaDisplayed = media ? media->isDisplayed() : false;
 	if (mediaDisplayed) {
-		if (media->photo() || media->document()) {
+		if (media->getPhoto() || media->getDocument()) {
 			return false;
 		}
 	}
