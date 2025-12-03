@@ -4705,9 +4705,8 @@ int Message::resizeContentGetHeight(int newWidth) {
 			auto msgPaddingBottom = st::msgPadding.bottom();
 			if (mediaDisplayed && item->media()) {
 				const auto photo = item->media()->photo();
-				const auto document = item->media()->document();
-				const auto isStreamingVideo = document && document->isVideoFile();
-				if (photo || isStreamingVideo) {
+				const auto gif = item->media()->gif();
+				if (photo || gif) {
 					mediaInBubbleSkip = 2;
 					msgPaddingBottom = 2;
 				}
