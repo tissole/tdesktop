@@ -912,7 +912,7 @@ void Document::draw(
 	auto statuswidth = namewidth;
 
 	auto voiceStatusOverride = QString();
-	const auto voice = Get<HistoryDocumentVoice>();
+
 	if (voice) {
 		ensureDataMediaCreated();
 
