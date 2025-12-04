@@ -989,12 +989,24 @@ QSize Message::performCountOptimalSize() {
 		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 			minHeight += st::msgPadding.bottom();
 			if (mediaDisplayed) {
-				minHeight += st::mediaInBubbleSkip;
+				// Use 2px spacing for Photo and Video media types
+				const auto isPhotoOrVideo = media->getPhoto()
+					|| (media->getDocument() && (media->getDocument()->isVideoFile()
+						|| media->getDocument()->isAnimation()
+						|| media->getDocument()->isGifv()));
+				minHeight += isPhotoOrVideo ? 2 : st::mediaInBubbleSkip;
 			}
 		}
 		if (!mediaOnTop) {
 			minHeight += st::msgPadding.top();
-			if (mediaDisplayed) minHeight += st::mediaInBubbleSkip;
+			if (mediaDisplayed) {
+				// Use 2px spacing for Photo and Video media types
+				const auto isPhotoOrVideo = media->getPhoto()
+					|| (media->getDocument() && (media->getDocument()->isVideoFile()
+						|| media->getDocument()->isAnimation()
+						|| media->getDocument()->isGifv()));
+				minHeight += isPhotoOrVideo ? 2 : st::mediaInBubbleSkip;
+			}
 			if (entry) minHeight += st::mediaInBubbleSkip;
 		}
 		if (check) minHeight += st::mediaInBubbleSkip;

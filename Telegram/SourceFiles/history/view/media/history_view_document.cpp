@@ -629,10 +629,13 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	accumulate_min(newWidth, maxWidth());
 	
-	// FIX Issue 3: Use Grouped padding for single files to match Column album look
-	const auto &stGrouped = thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
-	const auto bottomPadding = (!_data->isVideoMessage()) 
-		? 2 
+	// FIX: For files with caption, don't add extra padding since it will be added via caption positioning
+	// Use 0 for bottomPadding and add 2px gap explicitly only once
+	const auto hasCaptionOrTranscribe = captioned || hasTranscribe;
+	const auto bottomPadding = (!_data->isVideoMessage() && hasCaptionOrTranscribe) 
+		? 0  // Will add 2px gap when drawing caption
+		: (!_data->isVideoMessage())
+		? 2  // Normal 2px padding when no caption
 		: st.padding.bottom();
 
 	auto newHeight = st.padding.top() + st.thumbSize + bottomPadding;
@@ -641,9 +644,9 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
+		newHeight += 2; // 2px gap between file row and transcribe
 		newHeight += voice->transcribeText.countHeight(captionw);
 		if (captioned) {
-			// Replace original st::mediaCaptionSkip with 2px for consistency
 			newHeight += 2; // 2px spacing between transcribe and caption
 		} else if (isBubbleBottom()) {
 			newHeight += st::msgPadding.bottom();
@@ -654,7 +657,7 @@ QSize Document::countCurrentSize(int newWidth) {
 			newHeight += 2; // 2px above caption (from media to caption)
 		}
 		newHeight += captioned->caption.countHeight(captionw);
-		newHeight += 2; // 2px below caption
+		newHeight += 0; // 0px below caption - bubble margin handles this
 	}
 
 	return { newWidth, newHeight };
@@ -708,10 +711,14 @@ void Document::draw(
 	const auto nameright = st.padding.right();
 	const auto statustop = st.statusTop - topMinus;
 	const auto linktop = st.linkTop - topMinus;
-	// FIX Issue 3: Use Grouped padding for single files to match Column album look
-	const auto &stGrouped = thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
-	const auto bottomPadding = (!_data->isVideoMessage()) 
-		? 2 
+	// FIX: Match bottomPadding logic from countCurrentSize
+	const auto captioned = Get<HistoryDocumentCaptioned>();
+	const auto voice = Get<HistoryDocumentVoice>();
+	const auto hasCaptionOrTranscribe = captioned || (voice && !voice->transcribeText.isEmpty());
+	const auto bottomPadding = (!_data->isVideoMessage() && hasCaptionOrTranscribe) 
+		? 0  // Will add 2px gap when drawing caption
+		: (!_data->isVideoMessage())
+		? 2  // Normal 2px padding when no caption
 		: st.padding.bottom();
 	const auto bottom = st.padding.top() + st.thumbSize + bottomPadding - topMinus;
 	const auto rthumb = style::rtlrect(st.padding.left(), st.padding.top() - topMinus, st.thumbSize, st.thumbSize, width);
@@ -1064,7 +1071,7 @@ void Document::draw(
 	}
 
 	auto selection = context.selection;
-	auto captiontop = bottom;
+	auto captiontop = bottom + 2; // Add 2px gap between file and caption/transcribe
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
 		voice->transcribeText.draw(p, st::msgPadding.left(), bottom, captionw, style::al_left, 0, -1, selection);
