@@ -596,7 +596,11 @@ QSize Document::countCurrentSize(int newWidth) {
 	const auto voice = Get<HistoryDocumentVoice>();
 	const auto hasTranscribe = voice && !voice->transcribeText.isEmpty();
 	const auto thumbed = Get<HistoryDocumentThumbed>();
-	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
+	// FIX: Use Grouped layout padding for captioned files to match column album spacing (5px vs 8px)
+	const auto useGroupedLayout = captioned || hasTranscribe;
+	const auto &st = useGroupedLayout
+		? (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped)
+		: (thumbed ? st::msgFileThumbLayout : st::msgFileLayout);
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
 		if (isBubbleBottom()) {
@@ -703,18 +707,21 @@ void Document::draw(
 
 	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 	const auto thumbed = Get<HistoryDocumentThumbed>();
-	const auto &st = (mode == LayoutMode::Full)
-		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
-		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
+	// FIX: Define captioned early to use Grouped layout for captioned files (5px vs 8px padding)
+	const auto captioned = Get<HistoryDocumentCaptioned>();
+	const auto voice = Get<HistoryDocumentVoice>();
+	const auto hasCaptionOrTranscribe = captioned || (voice && !voice->transcribeText.isEmpty());
+	// Use Grouped layout for captioned files to match column album spacing
+	const auto useGroupedLayout = (mode != LayoutMode::Full) || hasCaptionOrTranscribe;
+	const auto &st = useGroupedLayout
+		? (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped)
+		: (thumbed ? st::msgFileThumbLayout : st::msgFileLayout);
 	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
 	const auto nametop = st.nameTop - topMinus;
 	const auto nameright = st.padding.right();
 	const auto statustop = st.statusTop - topMinus;
 	const auto linktop = st.linkTop - topMinus;
 	// FIX: Match bottomPadding logic from countCurrentSize
-	const auto captioned = Get<HistoryDocumentCaptioned>();
-	const auto voice = Get<HistoryDocumentVoice>();
-	const auto hasCaptionOrTranscribe = captioned || (voice && !voice->transcribeText.isEmpty());
 	const auto bottomPadding = (!_data->isVideoMessage() && hasCaptionOrTranscribe) 
 		? 0  // Will add 2px gap when drawing caption
 		: (!_data->isVideoMessage())

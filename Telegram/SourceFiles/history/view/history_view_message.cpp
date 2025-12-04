@@ -987,7 +987,12 @@ QSize Message::performCountOptimalSize() {
 			}
 		}
 		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
-			minHeight += st::msgPadding.bottom();
+			// Use 2px bottom padding for Photo and Video media types
+			const auto isPhotoOrVideoForPadding = mediaDisplayed && (media->getPhoto()
+				|| (media->getDocument() && (media->getDocument()->isVideoFile()
+					|| media->getDocument()->isAnimation()
+					|| media->getDocument()->isGifv())));
+			minHeight += isPhotoOrVideoForPadding ? 0 : st::msgPadding.bottom();  // 0 for Photo/Video, mediaInBubbleSkip provides spacing
 			if (mediaDisplayed) {
 				// Use 2px spacing for Photo and Video media types
 				const auto isPhotoOrVideo = media->getPhoto()
@@ -4720,7 +4725,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 				const auto document = item->media()->document();
 				if (photo || document) {
 					mediaInBubbleSkip = 2;
-					msgPaddingBottom = 2;
+					msgPaddingBottom = 0;  // Set to 0, mediaInBubbleSkip provides the 2px spacing
 				}
 			}
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
