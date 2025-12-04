@@ -658,7 +658,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 	if (captioned) {
 		if (!hasTranscribe) {
-			newHeight += 2; // 2px above caption (from media to caption)
+			newHeight += 0; // 0px above caption (from media to caption)
 		}
 		newHeight += captioned->caption.countHeight(captionw);
 		newHeight += 2; // 2px below caption - match sizeForGrouping
@@ -1078,7 +1078,7 @@ void Document::draw(
 	}
 
 	auto selection = context.selection;
-	auto captiontop = bottom + 2; // Add 2px gap between file and caption/transcribe
+	auto captiontop = bottom; // 0px gap between file and caption/transcribe
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
 		voice->transcribeText.draw(p, st::msgPadding.left(), bottom, captionw, style::al_left, 0, -1, selection);
