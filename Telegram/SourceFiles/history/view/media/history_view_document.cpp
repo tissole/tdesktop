@@ -661,7 +661,7 @@ QSize Document::countCurrentSize(int newWidth) {
 			newHeight += 2; // 2px above caption (from media to caption)
 		}
 		newHeight += captioned->caption.countHeight(captionw);
-		newHeight += 0; // 0px below caption - bubble margin handles this
+		newHeight += 2; // 2px below caption - match sizeForGrouping
 	}
 
 	return { newWidth, newHeight };
