@@ -1357,24 +1357,14 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		auto inner = g;
 		paintCommentsButton(p, inner, context);
 
-		auto msgPadding = st::msgPadding;
-		auto mediaInBubbleSkip = st::mediaInBubbleSkip;
-		if (mediaDisplayed && item->media()) {
-			const auto photo = item->media()->photo();
-			const auto document = item->media()->document();
-			if (photo || document) {
-				mediaInBubbleSkip = 2;
-				msgPadding.setBottom(2);
-			}
-		}
-		auto trect = inner.marginsRemoved(msgPadding);
+		auto trect = inner.marginsRemoved(st::msgPadding);
 
 		const auto additionalInfoSkip = (mediaDisplayed
 			&& !media->additionalInfoString().isEmpty())
 			? st::msgDateFont->height
 			: 0;
 		const auto reactionsTop = (reactionsInBubble && !_viewButton)
-			? (additionalInfoSkip + mediaInBubbleSkip)
+			? (additionalInfoSkip + st::mediaInBubbleSkip)
 			: additionalInfoSkip;
 		const auto reactionsHeight = reactionsInBubble
 			? (reactionsTop + _reactions->height())
@@ -1394,7 +1384,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		if (_viewButton) {
 			const auto belowInfo = _viewButton->belowMessageInfo();
 			const auto infoHeight = reactionsInBubble
-				? (reactionsHeight + 2 * mediaInBubbleSkip)
+				? (reactionsHeight + 2 * st::mediaInBubbleSkip)
 				: _bottomInfo.height();
 			const auto heightMargins = QMargins(0, 0, 0, infoHeight);
 			_viewButton->draw(
@@ -1408,17 +1398,17 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			}
 			trect.setHeight(trect.height() - _viewButton->height());
 			if (reactionsInBubble) {
-				trect.setHeight(trect.height() - mediaInBubbleSkip + msgPadding.bottom());
+				trect.setHeight(trect.height() - st::mediaInBubbleSkip + st::msgPadding.bottom());
 			} else if (mediaDisplayed) {
-				trect.setHeight(trect.height() - mediaInBubbleSkip);
+				trect.setHeight(trect.height() - st::mediaInBubbleSkip);
 			}
 		}
 
 		if (mediaOnBottom) {
-			trect.setHeight(trect.height() + msgPadding.bottom());
+			trect.setHeight(trect.height() + st::msgPadding.bottom());
 		}
 		if (mediaOnTop) {
-			trect.setY(trect.y() - msgPadding.top());
+			trect.setY(trect.y() - st::msgPadding.top());
 		} else {
 			paintFromName(p, trect, context);
 			paintTopicButton(p, trect, context);
@@ -1431,7 +1421,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			trect.setHeight(trect.height() - entry->height());
 		}
 		if (check) {
-			trect.setHeight(trect.height() - check->height() - mediaInBubbleSkip);
+			trect.setHeight(trect.height() - check->height() - st::mediaInBubbleSkip);
 		}
 		if (displayInfo) {
 			trect.setHeight(trect.height()
@@ -1469,12 +1459,12 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		};
 		if (mediaDisplayed && _invertMedia) {
 			if (!mediaOnTop) {
-				trect.setY(trect.y() + mediaInBubbleSkip);
+				trect.setY(trect.y() + st::mediaInBubbleSkip);
 			}
 			paintMedia(trect.y());
 			trect.setY(trect.y()
 				+ mediaHeight
-				+ (mediaOnBottom ? 0 : mediaInBubbleSkip));
+				+ (mediaOnBottom ? 0 : st::mediaInBubbleSkip));
 			textSelection = media->skipSelection(textSelection);
 			highlightRange = media->skipSelection(highlightRange);
 		}
@@ -1494,7 +1484,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		}
 		if (check) {
 			auto checkLeft = inner.left();
-			auto checkTop = trect.y() + trect.height() + mediaInBubbleSkip;
+			auto checkTop = trect.y() + trect.height() + st::mediaInBubbleSkip;
 			p.translate(checkLeft, checkTop);
 			auto checkContext = context.translated(checkLeft, -checkTop);
 			checkContext.selection = skipTextSelection(context.selection);
@@ -2232,32 +2222,22 @@ PointState Message::pointState(QPoint point) const {
 				g.setHeight(g.height() - st::historyCommentsButtonHeight);
 			}
 
-			auto msgPadding = st::msgPadding;
-			auto mediaInBubbleSkip = st::mediaInBubbleSkip;
-			if (mediaDisplayed && item->media()) {
-				const auto photo = item->media()->photo();
-				const auto document = item->media()->document();
-				if (photo || document) {
-					mediaInBubbleSkip = 2;
-					msgPadding.setBottom(2);
-				}
-			}
-			auto trect = g.marginsRemoved(msgPadding);
+			auto trect = g.marginsRemoved(st::msgPadding);
 			if (reactionsInBubble) {
-				const auto reactionsHeight = (_viewButton ? 0 : mediaInBubbleSkip)
+				const auto reactionsHeight = (_viewButton ? 0 : st::mediaInBubbleSkip)
 					+ _reactions->height();
 				trect.setHeight(trect.height() - reactionsHeight);
 			}
 			if (_viewButton) {
 				trect.setHeight(trect.height() - _viewButton->height());
 				if (reactionsInBubble) {
-					trect.setHeight(trect.height() + msgPadding.bottom());
+					trect.setHeight(trect.height() + st::msgPadding.bottom());
 				} else if (mediaDisplayed) {
-					trect.setHeight(trect.height() - mediaInBubbleSkip);
+					trect.setHeight(trect.height() - st::mediaInBubbleSkip);
 				}
 			}
 			if (mediaOnBottom) {
-				trect.setHeight(trect.height() + msgPadding.bottom());
+				trect.setHeight(trect.height() + st::msgPadding.bottom());
 			}
 			//if (mediaOnTop) {
 			//	trect.setY(trect.y() - st::msgPadding.top());
@@ -2270,7 +2250,7 @@ PointState Message::pointState(QPoint point) const {
 			//}
 			if (check) {
 				auto checkHeight = check->height();
-				trect.setHeight(trect.height() - checkHeight - mediaInBubbleSkip);
+				trect.setHeight(trect.height() - checkHeight - st::mediaInBubbleSkip);
 			}
 			if (entry) {
 				auto entryHeight = entry->height();
@@ -2278,14 +2258,14 @@ PointState Message::pointState(QPoint point) const {
 			}
 
 			const auto mediaHeight = mediaDisplayed ? media->height() : 0;
-			const auto mediaLeft = trect.x() - msgPadding.left();
+			const auto mediaLeft = trect.x() - st::msgPadding.left();
 			const auto mediaTop = (!mediaDisplayed || _invertMedia)
-				? (trect.y() + (mediaOnTop ? 0 : mediaInBubbleSkip))
+				? (trect.y() + (mediaOnTop ? 0 : st::mediaInBubbleSkip))
 				: (trect.y() + trect.height() - mediaHeight);
 			if (mediaDisplayed && _invertMedia) {
 				trect.setY(mediaTop
 					+ mediaHeight
-					+ (mediaOnBottom ? 0 : mediaInBubbleSkip));
+					+ (mediaOnBottom ? 0 : st::mediaInBubbleSkip));
 			}
 			if (point.y() >= mediaTop
 				&& point.y() < mediaTop + mediaHeight) {
@@ -2658,23 +2638,13 @@ TextState Message::textState(
 			result.symbol += visibleMediaTextLen + visibleTextLen;
 			return result;
 		}
-		auto msgPadding = st::msgPadding;
-		auto mediaInBubbleSkip = st::mediaInBubbleSkip;
-		if (mediaDisplayed && item->media()) {
-			const auto photo = item->media()->photo();
-			const auto document = item->media()->document();
-			if (photo || document) {
-				mediaInBubbleSkip = 2;
-				msgPadding.setBottom(2);
-			}
-		}
-		auto trect = inner.marginsRemoved(msgPadding);
+		auto trect = inner.marginsRemoved(st::msgPadding);
 		const auto additionalInfoSkip = (mediaDisplayed
 			&& !media->additionalInfoString().isEmpty())
 			? st::msgDateFont->height
 			: 0;
 		const auto reactionsTop = (reactionsInBubble && !_viewButton)
-			? (additionalInfoSkip + mediaInBubbleSkip)
+			? (additionalInfoSkip + st::mediaInBubbleSkip)
 			: additionalInfoSkip;
 		const auto reactionsHeight = reactionsInBubble
 			? (reactionsTop + _reactions->height())
@@ -2690,7 +2660,7 @@ TextState Message::textState(
 		if (_viewButton) {
 			const auto belowInfo = _viewButton->belowMessageInfo();
 			const auto infoHeight = reactionsInBubble
-				? (reactionsHeight + 2 * mediaInBubbleSkip)
+				? (reactionsHeight + 2 * st::mediaInBubbleSkip)
 				: _bottomInfo.height();
 			const auto heightMargins = QMargins(0, 0, 0, infoHeight);
 			if (_viewButton->getState(
@@ -2707,16 +2677,16 @@ TextState Message::textState(
 			}
 			trect.setHeight(trect.height() - _viewButton->height());
 			if (reactionsInBubble) {
-				trect.setHeight(trect.height() - mediaInBubbleSkip + msgPadding.bottom());
+				trect.setHeight(trect.height() - st::mediaInBubbleSkip + st::msgPadding.bottom());
 			} else if (mediaDisplayed) {
-				trect.setHeight(trect.height() - mediaInBubbleSkip);
+				trect.setHeight(trect.height() - st::mediaInBubbleSkip);
 			}
 		}
 		if (mediaOnBottom) {
-			trect.setHeight(trect.height() + msgPadding.bottom());
+			trect.setHeight(trect.height() + st::msgPadding.bottom());
 		}
 		if (mediaOnTop) {
-			trect.setY(trect.y() - msgPadding.top());
+			trect.setY(trect.y() - st::msgPadding.top());
 		} else if (inBubble) {
 			if (getStateFromName(point, trect, &result)) {
 				return result;
@@ -2749,9 +2719,9 @@ TextState Message::textState(
 		}
 		if (check) {
 			auto checkHeight = check->height();
-			trect.setHeight(trect.height() - checkHeight - mediaInBubbleSkip);
+			trect.setHeight(trect.height() - checkHeight - st::mediaInBubbleSkip);
 			auto checkLeft = inner.left();
-			auto checkTop = trect.y() + trect.height() + mediaInBubbleSkip;
+			auto checkTop = trect.y() + trect.height() + st::mediaInBubbleSkip;
 			if (point.y() >= checkTop && point.y() < checkTop + checkHeight) {
 				result = check->textState(
 					point - QPoint(checkLeft, checkTop),
@@ -2786,14 +2756,14 @@ TextState Message::textState(
 			}
 		} else if (result.symbol <= minSymbol) {
 			const auto mediaHeight = mediaDisplayed ? media->height() : 0;
-			const auto mediaLeft = trect.x() - msgPadding.left();
+			const auto mediaLeft = trect.x() - st::msgPadding.left();
 			const auto mediaTop = (!mediaDisplayed || _invertMedia)
-				? (trect.y() + (mediaOnTop ? 0 : mediaInBubbleSkip))
+				? (trect.y() + (mediaOnTop ? 0 : st::mediaInBubbleSkip))
 				: (trect.y() + trect.height() - mediaHeight);
 			if (mediaDisplayed && _invertMedia) {
 				trect.setY(mediaTop
 					+ mediaHeight
-					+ (mediaOnBottom ? 0 : mediaInBubbleSkip));
+					+ (mediaOnBottom ? 0 : st::mediaInBubbleSkip));
 			}
 			if (point.y() >= mediaTop
 				&& point.y() < mediaTop + mediaHeight) {
