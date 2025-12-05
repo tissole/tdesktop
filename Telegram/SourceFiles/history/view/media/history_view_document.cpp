@@ -699,7 +699,9 @@ void Document::draw(
 	const auto nameright = st.padding.right();
 	const auto statustop = st.statusTop - topMinus;
 	const auto linktop = st.linkTop - topMinus;
-	const auto bottom = st.padding.top() + st.thumbSize + st.padding.bottom() - topMinus;
+	const auto captioned = Get<HistoryDocumentCaptioned>();
+	const auto bottomPadding = (mode == LayoutMode::Grouped && captioned) ? 2 : st.padding.bottom();
+	const auto bottom = st.padding.top() + st.thumbSize + bottomPadding - topMinus;
 	const auto rthumb = style::rtlrect(st.padding.left(), st.padding.top() - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
 	const auto inner = QRect(rthumb.x() + (rthumb.width() - innerSize) / 2, rthumb.y() + (rthumb.height() - innerSize) / 2, innerSize, innerSize);
@@ -1884,7 +1886,7 @@ void Document::refreshCaption(bool last) {
 QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-	auto height = st.padding.top() + st.thumbSize + st.padding.bottom();
+	auto height = st.padding.top() + st.thumbSize;
 
 	const_cast<Document*>(this)->refreshCaption(last);
 
@@ -1892,7 +1894,11 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
+		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
+		height += 2; // 2px below caption
+	} else {
+		height += st.padding.bottom();
 	}
 	return { maxWidth, height };
 }
@@ -1900,12 +1906,16 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 QSize Document::sizeForGrouping(int width) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-	auto height = st.padding.top() + st.thumbSize + st.padding.bottom();
+	auto height = st.padding.top() + st.thumbSize;
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
 			- st::msgPadding.left()
 			- st::msgPadding.right();
+		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
+		height += 2; // 2px below caption
+	} else {
+		height += st.padding.bottom();
 	}
 	return { maxWidth(), height };
 }

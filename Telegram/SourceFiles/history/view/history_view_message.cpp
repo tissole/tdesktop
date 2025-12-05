@@ -4765,13 +4765,13 @@ int Message::resizeContentGetHeight(int newWidth) {
 			if (!mediaOnTop) {
 				newHeight += st::msgPadding.top();
 				if (mediaDisplayed) newHeight += mediaInBubbleSkip;
-				if (entry) newHeight += st::mediaInBubbleSkip;
+				if (entry) newHeight += mediaInBubbleSkip;
 			}
 			if (mediaDisplayed) {
 				newHeight += media->height();
 			}
 			if (check) {
-				newHeight += check->resizeGetHeight(contentWidth) + st::mediaInBubbleSkip;
+				newHeight += check->resizeGetHeight(contentWidth) + mediaInBubbleSkip;
 			}
 			if (entry) {
 				newHeight += entry->resizeGetHeight(contentWidth);
@@ -4783,7 +4783,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 					// in the bottom left corner, reactions should be below.
 					newHeight += st::msgDateFont->height;
 				} else {
-					newHeight += st::mediaInBubbleSkip;
+					newHeight += mediaInBubbleSkip;
 				}
 				newHeight += _reactions->height();
 			}
