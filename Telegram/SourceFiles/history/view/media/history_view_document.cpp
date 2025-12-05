@@ -703,8 +703,8 @@ void Document::draw(
 	const auto statustop = st.statusTop - topMinus;
 	const auto linktop = st.linkTop - topMinus;
 	const auto captioned = Get<HistoryDocumentCaptioned>();
-	const auto voice = Get<HistoryDocumentVoice>();
-	const bool hasCaptionContent = captioned || (voice && !voice->transcribeText.isEmpty());
+	const auto voiceForCaption = Get<HistoryDocumentVoice>();
+	const bool hasCaptionContent = captioned || (voiceForCaption && !voiceForCaption->transcribeText.isEmpty());
 	// Use 2px spacing above caption for both Full and Grouped modes
 	const auto bottomPadding = hasCaptionContent ? 2 : st.padding.bottom();
 	const auto bottom = st.padding.top() + st.thumbSize + bottomPadding - topMinus;
