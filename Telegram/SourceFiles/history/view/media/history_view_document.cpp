@@ -596,11 +596,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	const auto voice = Get<HistoryDocumentVoice>();
 	const auto hasTranscribe = voice && !voice->transcribeText.isEmpty();
 	const auto thumbed = Get<HistoryDocumentThumbed>();
-	// FIX: Use Grouped layout padding for captioned files to match column album spacing (5px vs 8px)
-	const auto useGroupedLayout = captioned || hasTranscribe;
-	const auto &st = useGroupedLayout
-		? (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped)
-		: (thumbed ? st::msgFileThumbLayout : st::msgFileLayout);
+	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
 		if (isBubbleBottom()) {
@@ -632,36 +628,24 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	accumulate_min(newWidth, maxWidth());
-	
-	// FIX: For files with caption, don't add extra padding since it will be added via caption positioning
-	// Use 0 for bottomPadding and add 2px gap explicitly only once
-	const auto hasCaptionOrTranscribe = captioned || hasTranscribe;
-	const auto bottomPadding = (!_data->isVideoMessage() && hasCaptionOrTranscribe) 
-		? 0  // Will add 2px gap when drawing caption
-		: (!_data->isVideoMessage())
-		? 2  // Normal 2px padding when no caption
-		: st.padding.bottom();
-
-	auto newHeight = st.padding.top() + st.thumbSize + bottomPadding;
+	auto newHeight = st.padding.top() + st.thumbSize + st.padding.bottom();
 	if (!isBubbleTop()) {
 		newHeight -= st::msgFileTopMinus;
 	}
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
-		newHeight += 2; // 2px gap between file row and transcribe
 		newHeight += voice->transcribeText.countHeight(captionw);
 		if (captioned) {
-			newHeight += 2; // 2px spacing between transcribe and caption
+			newHeight += st::mediaCaptionSkip;
 		} else if (isBubbleBottom()) {
 			newHeight += st::msgPadding.bottom();
 		}
 	}
 	if (captioned) {
-		if (!hasTranscribe) {
-			newHeight += 0; // 0px above caption (from media to caption)
-		}
 		newHeight += captioned->caption.countHeight(captionw);
-		newHeight += 2; // 2px below caption - match sizeForGrouping
+		if (isBubbleBottom()) {
+			newHeight += st::msgPadding.bottom();
+		}
 	}
 
 	return { newWidth, newHeight };
@@ -707,27 +691,15 @@ void Document::draw(
 
 	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 	const auto thumbed = Get<HistoryDocumentThumbed>();
-	// FIX: Define captioned early to use Grouped layout for captioned files (5px vs 8px padding)
-	const auto captioned = Get<HistoryDocumentCaptioned>();
-	const auto voice = Get<HistoryDocumentVoice>();
-	const auto hasCaptionOrTranscribe = captioned || (voice && !voice->transcribeText.isEmpty());
-	// Use Grouped layout for captioned files to match column album spacing
-	const auto useGroupedLayout = (mode != LayoutMode::Full) || hasCaptionOrTranscribe;
-	const auto &st = useGroupedLayout
-		? (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped)
-		: (thumbed ? st::msgFileThumbLayout : st::msgFileLayout);
+	const auto &st = (mode == LayoutMode::Full)
+		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
+		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
 	const auto nametop = st.nameTop - topMinus;
 	const auto nameright = st.padding.right();
 	const auto statustop = st.statusTop - topMinus;
 	const auto linktop = st.linkTop - topMinus;
-	// FIX: Match bottomPadding logic from countCurrentSize
-	const auto bottomPadding = (!_data->isVideoMessage() && hasCaptionOrTranscribe) 
-		? 0  // Will add 2px gap when drawing caption
-		: (!_data->isVideoMessage())
-		? 2  // Normal 2px padding when no caption
-		: st.padding.bottom();
-	const auto bottom = st.padding.top() + st.thumbSize + bottomPadding - topMinus;
+	const auto bottom = st.padding.top() + st.thumbSize + st.padding.bottom() - topMinus;
 	const auto rthumb = style::rtlrect(st.padding.left(), st.padding.top() - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
 	const auto inner = QRect(rthumb.x() + (rthumb.width() - innerSize) / 2, rthumb.y() + (rthumb.height() - innerSize) / 2, innerSize, innerSize);
@@ -919,7 +891,7 @@ void Document::draw(
 	auto statuswidth = namewidth;
 
 	auto voiceStatusOverride = QString();
-
+	const auto voice = Get<HistoryDocumentVoice>();
 	if (voice) {
 		ensureDataMediaCreated();
 
@@ -1078,11 +1050,11 @@ void Document::draw(
 	}
 
 	auto selection = context.selection;
-	auto captiontop = bottom; // 0px gap between file and caption/transcribe
+	auto captiontop = bottom;
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
 		voice->transcribeText.draw(p, st::msgPadding.left(), bottom, captionw, style::al_left, 0, -1, selection);
-		captiontop += voice->transcribeText.countHeight(captionw) + 2; // Use 2px spacing like in height calc
+		captiontop += voice->transcribeText.countHeight(captionw) + st::mediaCaptionSkip;
 		selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
 	}
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
@@ -1372,7 +1344,7 @@ TextState Document::textState(
 	// --- CUSTOM TOOLTIP LOGIC (Inline) ---
 	// FIX Issue 5: Implement 2-zone tooltip for inline info (Views vs Date/Edited)
 	const bool bubble = _parent->hasBubble();
-	if (!_data->isVideoMessage() && mode == LayoutMode::Full) {
+	if (!_data->isVideoMessage() && mode == LayoutMode::Full && (!bubble || isBubbleBottom())) {
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 		};
@@ -1912,7 +1884,7 @@ void Document::refreshCaption(bool last) {
 QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-	auto height = st.padding.top() + st.thumbSize;
+	auto height = st.padding.top() + st.thumbSize + st.padding.bottom();
 
 	const_cast<Document*>(this)->refreshCaption(last);
 
@@ -1920,13 +1892,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
-		// Add consistent 2px spacing above caption + caption height + 2px spacing below caption
-		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
-		height += 2; // 2px below caption
-	} else {
-		// If no caption, keep original spacing
-		height += 2;
 	}
 	return { maxWidth, height };
 }
@@ -1934,20 +1900,14 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 QSize Document::sizeForGrouping(int width) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-	auto height = st.padding.top() + st.thumbSize;
+	auto height = st.padding.top() + st.thumbSize + st.padding.bottom();
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
 			- st::msgPadding.left()
 			- st::msgPadding.right();
-		// Add consistent 2px spacing above caption + caption height + 2px spacing below caption
-		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
-		height += 2; // 2px below caption
-	} else {
-		// If no caption, keep original spacing
-		height += 2;
 	}
-	return { width, height };
+	return { maxWidth(), height };
 }
 
 void Document::drawGrouped(
