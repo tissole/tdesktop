@@ -806,7 +806,14 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				p.setPen(stm->msgDateFg);
 
 				const auto itemRect = part.geometry.translated(0, groupPadding.top());
-				const auto &docStyle = st::msgFileLayoutGrouped;
+				// Determine if this item has a thumbnail to use correct style for statusTop
+				bool hasThumb = false;
+				if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
+					if (const auto document = fileMedia->document()) {
+						hasThumb = document->hasThumbnail() && !document->isSong();
+					}
+				}
+				const auto &docStyle = hasThumb ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
 				const auto statustop = docStyle.statusTop;
 				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent;
 
@@ -875,7 +882,14 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					p.setPen(stm->msgDateFg);
 
 					const auto itemRect = part.geometry.translated(0, groupPadding.top());
-					const auto &docStyle = st::msgFileLayoutGrouped;
+					// Determine if this item has a thumbnail to use correct style for statusTop
+					bool hasThumb = false;
+					if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
+						if (const auto document = fileMedia->document()) {
+							hasThumb = document->hasThumbnail() && !document->isSong();
+						}
+					}
+					const auto &docStyle = hasThumb ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
 					const auto statustop = docStyle.statusTop;
 					const auto textWidth = st::msgDateFont->width(infoText);
 					
@@ -1193,7 +1207,14 @@ TextState GroupedMedia::getPartState(
 			const auto edited = item->Get<HistoryMessageEdited>();
 
 			if (_mode == Mode::Column) {
-				const auto &docStyle = st::msgFileLayoutGrouped;
+				// Determine if this item has a thumbnail to use correct style for statusTop
+				bool hasThumb = false;
+				if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
+					if (const auto document = fileMedia->document()) {
+						hasThumb = document->hasThumbnail() && !document->isSong();
+					}
+				}
+				const auto &docStyle = hasThumb ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
 				const auto topMinus = st::msgFileTopMinus;
 				const auto statustop = docStyle.statusTop - topMinus;
 				const auto itemRect = part.geometry;
