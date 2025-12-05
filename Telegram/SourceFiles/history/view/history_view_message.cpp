@@ -1241,11 +1241,8 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	auto mediaDisplayed = media && media->isDisplayed();
 	auto mediaInBubbleSkip = st::mediaInBubbleSkip;
 	if (mediaDisplayed) {
-		const auto isPhotoOrVideo = media->getPhoto()
-			|| (media->getDocument() && (media->getDocument()->isVideoFile()
-				|| media->getDocument()->isAnimation()
-				|| media->getDocument()->isGifv()));
-		if (isPhotoOrVideo) {
+		const auto isPhotoOrDocument = media->getPhoto() || media->getDocument();
+		if (isPhotoOrDocument) {
 			mediaInBubbleSkip = 2;
 		}
 	}

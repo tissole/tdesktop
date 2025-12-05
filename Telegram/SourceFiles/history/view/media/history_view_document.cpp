@@ -628,10 +628,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	accumulate_min(newWidth, maxWidth());
-	// Use 2px spacing above caption for single files (instead of st.padding.bottom())
-	const bool hasCaptionContent = captioned || hasTranscribe;
-	const auto bottomPad = hasCaptionContent ? 2 : st.padding.bottom();
-	auto newHeight = st.padding.top() + st.thumbSize + bottomPad;
+	auto newHeight = st.padding.top() + st.thumbSize + st.padding.bottom();
 	if (!isBubbleTop()) {
 		newHeight -= st::msgFileTopMinus;
 	}
@@ -641,13 +638,13 @@ QSize Document::countCurrentSize(int newWidth) {
 		if (captioned) {
 			newHeight += st::mediaCaptionSkip;
 		} else if (isBubbleBottom()) {
-			newHeight += 2; // 2px below caption
+			newHeight += st::msgPadding.bottom();
 		}
 	}
 	if (captioned) {
 		newHeight += captioned->caption.countHeight(captionw);
 		if (isBubbleBottom()) {
-			newHeight += 2; // 2px below caption
+			newHeight += st::msgPadding.bottom();
 		}
 	}
 
@@ -703,10 +700,7 @@ void Document::draw(
 	const auto statustop = st.statusTop - topMinus;
 	const auto linktop = st.linkTop - topMinus;
 	const auto captioned = Get<HistoryDocumentCaptioned>();
-	const auto voiceForCaption = Get<HistoryDocumentVoice>();
-	const bool hasCaptionContent = captioned || (voiceForCaption && !voiceForCaption->transcribeText.isEmpty());
-	// Use 2px spacing above caption for both Full and Grouped modes
-	const auto bottomPadding = hasCaptionContent ? 2 : st.padding.bottom();
+	const auto bottomPadding = (mode == LayoutMode::Grouped && captioned) ? 2 : st.padding.bottom();
 	const auto bottom = st.padding.top() + st.thumbSize + bottomPadding - topMinus;
 	const auto rthumb = style::rtlrect(st.padding.left(), st.padding.top() - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
