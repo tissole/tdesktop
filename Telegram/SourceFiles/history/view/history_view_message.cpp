@@ -4751,7 +4751,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 			if (mediaDisplayed && item->media()) {
 				const auto photo = item->media()->photo();
 				const auto document = item->media()->document();
-				if (photo || (document && (document->isVideoFile() || document->isAnimation() || document->isGifv()))) {
+				if (photo || document) {
 					mediaInBubbleSkip = 2;
 					msgPaddingBottom = 2;  // 2px below caption
 				}
