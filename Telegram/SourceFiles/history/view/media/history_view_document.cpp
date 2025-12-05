@@ -628,7 +628,10 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	accumulate_min(newWidth, maxWidth());
-	auto newHeight = st.padding.top() + st.thumbSize + st.padding.bottom();
+	// Use 2px spacing above caption for single files (instead of st.padding.bottom())
+	const bool hasCaptionContent = captioned || hasTranscribe;
+	const auto bottomPad = hasCaptionContent ? 2 : st.padding.bottom();
+	auto newHeight = st.padding.top() + st.thumbSize + bottomPad;
 	if (!isBubbleTop()) {
 		newHeight -= st::msgFileTopMinus;
 	}
@@ -638,13 +641,13 @@ QSize Document::countCurrentSize(int newWidth) {
 		if (captioned) {
 			newHeight += st::mediaCaptionSkip;
 		} else if (isBubbleBottom()) {
-			newHeight += st::msgPadding.bottom();
+			newHeight += 2; // 2px below caption
 		}
 	}
 	if (captioned) {
 		newHeight += captioned->caption.countHeight(captionw);
 		if (isBubbleBottom()) {
-			newHeight += st::msgPadding.bottom();
+			newHeight += 2; // 2px below caption
 		}
 	}
 
@@ -700,7 +703,8 @@ void Document::draw(
 	const auto statustop = st.statusTop - topMinus;
 	const auto linktop = st.linkTop - topMinus;
 	const auto captioned = Get<HistoryDocumentCaptioned>();
-	const auto bottomPadding = (mode == LayoutMode::Grouped && captioned) ? 2 : st.padding.bottom();
+	// Apply 2px spacing above caption for both Full (single files) and Grouped modes
+	const auto bottomPadding = captioned ? 2 : st.padding.bottom();
 	const auto bottom = st.padding.top() + st.thumbSize + bottomPadding - topMinus;
 	const auto rthumb = style::rtlrect(st.padding.left(), st.padding.top() - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
