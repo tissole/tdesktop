@@ -987,15 +987,19 @@ QSize Message::performCountOptimalSize() {
 			}
 		}
 		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
-			// Use 2px bottom padding for Photo and Document media types (not stickers)
-			const auto isPhotoOrDocumentForPadding = mediaDisplayed && (media->getPhoto()
-				|| (media->getDocument() && !media->getDocument()->sticker()));
-			minHeight += isPhotoOrDocumentForPadding ? 2 : st::msgPadding.bottom();  // 2px for Photo/Document below caption
+			// Use 2px bottom padding for Photo and Video media types
+			const auto isPhotoOrVideoForPadding = mediaDisplayed && (media->getPhoto()
+				|| (media->getDocument() && (media->getDocument()->isVideoFile()
+					|| media->getDocument()->isAnimation()
+					|| media->getDocument()->isGifv())));
+			minHeight += isPhotoOrVideoForPadding ? 2 : st::msgPadding.bottom();  // 2px for Photo/Video below caption
 			if (mediaDisplayed) {
-				// Use 2px spacing for Photo and Document media types (not stickers)
-				const auto isPhotoOrDocument = media->getPhoto()
-					|| (media->getDocument() && !media->getDocument()->sticker());
-				minHeight += isPhotoOrDocument ? 2 : st::mediaInBubbleSkip;
+				// Use 2px spacing for Photo and Video media types
+				const auto isPhotoOrVideo = media->getPhoto()
+					|| (media->getDocument() && (media->getDocument()->isVideoFile()
+						|| media->getDocument()->isAnimation()
+						|| media->getDocument()->isGifv()));
+				minHeight += isPhotoOrVideo ? 2 : st::mediaInBubbleSkip;
 			}
 		}
 		if (!mediaOnTop) {
@@ -1237,9 +1241,11 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	auto mediaDisplayed = media && media->isDisplayed();
 	auto mediaInBubbleSkip = st::mediaInBubbleSkip;
 	if (mediaDisplayed) {
-		const auto isPhotoOrDocument = media->getPhoto()
-			|| (media->getDocument() && !media->getDocument()->sticker());
-		if (isPhotoOrDocument) {
+		const auto isPhotoOrVideo = media->getPhoto()
+			|| (media->getDocument() && (media->getDocument()->isVideoFile()
+				|| media->getDocument()->isAnimation()
+				|| media->getDocument()->isGifv()));
+		if (isPhotoOrVideo) {
 			mediaInBubbleSkip = 2;
 		}
 	}
@@ -2232,9 +2238,11 @@ PointState Message::pointState(QPoint point) const {
 		}
 		if (const auto mediaDisplayed = media && media->isDisplayed()) {
 			auto mediaInBubbleSkip = st::mediaInBubbleSkip;
-			const auto isPhotoOrDocument = media->getPhoto()
-				|| (media->getDocument() && !media->getDocument()->sticker());
-			if (isPhotoOrDocument) {
+			const auto isPhotoOrVideo = media->getPhoto()
+				|| (media->getDocument() && (media->getDocument()->isVideoFile()
+					|| media->getDocument()->isAnimation()
+					|| media->getDocument()->isGifv()));
+			if (isPhotoOrVideo) {
 				mediaInBubbleSkip = 2;
 			}
 			// Hack for grouped media point state.
@@ -2633,9 +2641,11 @@ TextState Message::textState(
 	const auto mediaDisplayed = media && media->isDisplayed();
 	auto mediaInBubbleSkip = st::mediaInBubbleSkip;
 	if (mediaDisplayed) {
-		const auto isPhotoOrDocument = media->getPhoto()
-			|| (media->getDocument() && !media->getDocument()->sticker());
-		if (isPhotoOrDocument) {
+		const auto isPhotoOrVideo = media->getPhoto()
+			|| (media->getDocument() && (media->getDocument()->isVideoFile()
+				|| media->getDocument()->isAnimation()
+				|| media->getDocument()->isGifv()));
+		if (isPhotoOrVideo) {
 			mediaInBubbleSkip = 2;
 		}
 	}
@@ -4741,7 +4751,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 			if (mediaDisplayed && item->media()) {
 				const auto photo = item->media()->photo();
 				const auto document = item->media()->document();
-				if (photo || (document && !document->sticker())) {
+				if (photo || (document && (document->isVideoFile() || document->isAnimation() || document->isGifv()))) {
 					mediaInBubbleSkip = 2;
 					msgPaddingBottom = 2;  // 2px below caption
 				}
