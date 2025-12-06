@@ -358,7 +358,7 @@ bool Document::hideMessageText() const {
 	if (_data->isVideoFile()) {
 		return false;
 	}
-	return _realParent->Has<HistoryDocumentCaptioned>();
+	return Has<HistoryDocumentCaptioned>();
 }
 
 float64 Document::dataProgress() const {
