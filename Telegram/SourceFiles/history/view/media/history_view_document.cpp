@@ -354,6 +354,13 @@ Document::~Document() {
 	}
 }
 
+bool Document::hideMessageText() const {
+	if (_data->isVideoFile()) {
+		return false;
+	}
+	return _realParent->Has<HistoryDocumentCaptioned>();
+}
+
 float64 Document::dataProgress() const {
 	ensureDataMediaCreated();
 	return _dataMedia->progress();
