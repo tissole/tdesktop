@@ -354,13 +354,6 @@ Document::~Document() {
 	}
 }
 
-bool Document::hideMessageText() const {
-	if (_data->isVideoFile()) {
-		return false;
-	}
-	return Has<HistoryDocumentCaptioned>();
-}
-
 float64 Document::dataProgress() const {
 	ensureDataMediaCreated();
 	return _dataMedia->progress();
@@ -637,7 +630,9 @@ QSize Document::countCurrentSize(int newWidth) {
 	accumulate_min(newWidth, maxWidth());
 	// Use 2px spacing above caption for single files (instead of st.padding.bottom())
 	const bool hasCaptionContent = captioned || hasTranscribe;
-	const auto bottomPad = hasCaptionContent ? 2 : st.padding.bottom();
+	const auto bottomPad = hasCaptionContent
+		? 2
+		: (_parent->hasVisibleText() ? 0 : st.padding.bottom());
 	auto newHeight = st.padding.top() + st.thumbSize + bottomPad;
 	if (!isBubbleTop()) {
 		newHeight -= st::msgFileTopMinus;
