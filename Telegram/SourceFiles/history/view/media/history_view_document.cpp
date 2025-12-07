@@ -559,9 +559,9 @@ QSize Document::countOptimalSize() {
 				+ transcribeWidth);
 	}
 
-	// FIX: Use 0 bottom padding here so Message can control the final 2px margin.
-	// Between components (if transcribed), use 2px.
-	auto minHeight = st.padding.top() + st.thumbSize; 
+	// FIX: Added +2 here. This ensures optimal height calculation includes the 2px breathing room.
+	auto minHeight = st.padding.top() + st.thumbSize + 2;
+
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
 			accumulate_max(
@@ -581,9 +581,11 @@ QSize Document::countOptimalSize() {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
-		minHeight += 2; // 2px above caption/transcribe
+		// The 2px is already in minHeight, so we just add the transcribe text height
 		minHeight += voice->transcribeText.countHeight(captionw);
-		// No bottom padding added here; Message handles the 2px at bottom.
+		if (isBubbleBottom()) {
+			minHeight += st::msgPadding.bottom();
+		}
 	}
 	return { maxWidth, minHeight };
 }
@@ -594,24 +596,24 @@ QSize Document::countCurrentSize(int newWidth) {
 	const auto hasTranscribe = voice && !voice->transcribeText.isEmpty();
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
+	
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
-		// Fix: Ensure single file height doesn't include excess padding.
-		// We want 0 padding at bottom because Message adds the 2px.
-		int correctHeight = st.padding.top() + st.thumbSize;
+		
+		// FIX: Added +2 here. Explicitly sets height to include the bottom spacing for single files.
+		int correctHeight = st.padding.top() + st.thumbSize + 2;
+		
 		if (!isBubbleTop()) correctHeight -= st::msgFileTopMinus;
 		result.setHeight(correctHeight);
+		
 		return result;
 	}
 
 	accumulate_min(newWidth, maxWidth());
 	
-	// FIX: Consistent spacing. 
-	// If there is caption/transcribe, add 2px separation between thumb and text.
-	// Do not add bottom padding here; Message::resizeContentGetHeight adds 2px.
 	const bool hasCaptionContent = captioned || hasTranscribe;
 	const auto bottomPad = hasCaptionContent ? 2 : 0;
-
+	
 	auto newHeight = st.padding.top() + st.thumbSize + bottomPad;
 	if (!isBubbleTop()) {
 		newHeight -= st::msgFileTopMinus;
@@ -621,10 +623,15 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight += voice->transcribeText.countHeight(captionw);
 		if (captioned) {
 			newHeight += st::mediaCaptionSkip;
+		} else if (isBubbleBottom()) {
+			newHeight += 2; 
 		}
 	}
 	if (captioned) {
 		newHeight += captioned->caption.countHeight(captionw);
+		if (isBubbleBottom()) {
+			newHeight += 2;
+		}
 	}
 
 	return { newWidth, newHeight };
@@ -1870,7 +1877,6 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 
 	const_cast<Document*>(this)->refreshCaption(last);
 
-	// FIX: Consistent 2px spacing for Column albums.
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
@@ -1879,6 +1885,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		height += captioned->caption.countHeight(captionw);
 		height += 2; // 2px below caption
 	} else {
+		// FIX: Consistent 2px spacing for Column albums.
 		height += 2; // 2px below thumb
 	}
 	return { maxWidth, height };
@@ -1889,7 +1896,6 @@ QSize Document::sizeForGrouping(int width) const {
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	auto height = st.padding.top() + st.thumbSize;
 	
-	// FIX: Consistent 2px spacing for Column albums.
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
 			- st::msgPadding.left()
@@ -1898,6 +1904,7 @@ QSize Document::sizeForGrouping(int width) const {
 		height += captioned->caption.countHeight(captionw);
 		height += 2; // 2px below caption
 	} else {
+		// FIX: Consistent 2px spacing for Column albums.
 		height += 2; // 2px below thumb
 	}
 	return { maxWidth(), height };
