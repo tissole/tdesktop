@@ -4745,15 +4745,16 @@ int Message::resizeContentGetHeight(int newWidth) {
 				}
 				newHeight += textHeightFor(textWidth);
 			}
-			// Override spacing for single photos and streaming videos to match album spacing
+			// Override spacing for single photos, streaming videos AND Documents to match 2px limit
 			auto mediaInBubbleSkip = st::mediaInBubbleSkip;
 			auto msgPaddingBottom = st::msgPadding.bottom();
 			if (mediaDisplayed && item->media()) {
 				const auto photo = item->media()->photo();
 				const auto document = item->media()->document();
-				if (photo || (document && (document->isVideoFile() || document->isAnimation() || document->isGifv()))) {
+				// FIX: Added 'document' (Audio/File) to this check.
+				if (photo || document) {
 					mediaInBubbleSkip = 2;
-					msgPaddingBottom = 2;  // 2px below caption
+					msgPaddingBottom = 2;  // 2px below caption/media
 				}
 			}
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {

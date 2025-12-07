@@ -259,12 +259,34 @@ QSize GroupedMedia::countOptimalSize() {
 	Assert(layout.size() == _parts.size());
 
 	auto minHeight = 0;
-	for (auto i = 0, count = int(layout.size()); i != count; ++i) {
-		const auto &item = layout[i];
-		accumulate_max(maxWidth, item.geometry.x() + item.geometry.width());
-		accumulate_max(minHeight, item.geometry.y() + item.geometry.height());
-		_parts[i].initialGeometry = item.geometry;
-		_parts[i].sides = item.sides;
+
+	if (_mode == Mode::Column) {
+		// FIX: Overlap logic for Column mode to ensure 2px spacing.
+		// Subtract the top padding of the standard style from the accumulated height
+		// so that the next item's top padding overlaps the previous item's bottom spacing.
+		auto top = 0;
+		const auto overlap = st::msgFileThumbLayoutGrouped.padding.top();
+		for (auto i = 0, count = int(layout.size()); i != count; ++i) {
+			const auto &item = layout[i];
+			accumulate_max(maxWidth, item.geometry.x() + item.geometry.width());
+			
+			// Re-calculate geometry top based on overlap
+			const auto h = item.geometry.height();
+			_parts[i].initialGeometry = QRect(0, top, item.geometry.width(), h);
+			_parts[i].sides = item.sides;
+			
+			top += h - overlap;
+		}
+		// Restore the last overlap for total height
+		minHeight = top + overlap;
+	} else {
+		for (auto i = 0, count = int(layout.size()); i != count; ++i) {
+			const auto &item = layout[i];
+			accumulate_max(maxWidth, item.geometry.x() + item.geometry.width());
+			accumulate_max(minHeight, item.geometry.y() + item.geometry.height());
+			_parts[i].initialGeometry = item.geometry;
+			_parts[i].sides = item.sides;
+		}
 	}
 
 	// Calculate caption heights for Grid mode
@@ -279,7 +301,6 @@ QSize GroupedMedia::countOptimalSize() {
 		const bool singleCaptionAnywhere = (captionCount == 1);
 		const auto padding = QMargins(8, 2, 8, 2);
 
-		// 1. Handle Multi-Caption Case (Elided to 1 line per row)
 		if (!singleCaptionAnywhere && captionCount > 0) {
 			const auto textHeight = st::messageTextStyle.font->height;
 			const auto uniformCaptionHeight = textHeight + padding.top() + padding.bottom();
@@ -311,7 +332,6 @@ QSize GroupedMedia::countOptimalSize() {
 					}
 				}
 
-				// Add height for uniform captions only if this row actually has one
 				if (rowHasCaption) {
 					if (!isLastRow) {
 						minHeight += std::max(0, uniformCaptionHeight - st::historyGroupSkip);
@@ -321,18 +341,13 @@ QSize GroupedMedia::countOptimalSize() {
 				}
 			}
 		}
-		// 2. Handle Single Caption Case (Full wrap at bottom)
 		else if (singleCaptionAnywhere) {
 			const auto captionIdx = captionIndices[0];
-			
-			// Reset others first
 			for(auto &p : _parts) p._captionHeight = 0;
 
 			auto &part = _parts[captionIdx];
-			
 			const auto captionWidth = std::min(maxWidth, st::historyGroupWidthMax) - padding.left() - padding.right();
 			
-			// FIX: Use setMarkedText to ensure proper multi-line wrapping initialization
 			part._captionText = Ui::Text::String(st::msgMinWidth);
 			part._captionText.setMarkedText(
 				st::messageTextStyle,
@@ -344,7 +359,6 @@ QSize GroupedMedia::countOptimalSize() {
 				}));
 
 			part._captionHeight = int(part._captionText.countHeight(captionWidth) + padding.top() + padding.bottom());
-
 			minHeight += part._captionHeight;
 		}
 	}
@@ -363,12 +377,16 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		return { newWidth, newHeight };
 	} else if (_mode == Mode::Column) {
 		auto top = 0;
+		// FIX: Subtract the top padding of the standard style from the accumulated height
+		// so that the next item's top padding overlaps the previous item's bottom spacing (2px).
+		const auto overlap = st::msgFileThumbLayoutGrouped.padding.top();
 		for (auto &part : _parts) {
 			const auto size = part.content->sizeForGrouping(newWidth);
 			part.geometry = QRect(0, top, newWidth, size.height());
-			top += size.height();
+			top += size.height() - overlap;
 		}
-		newHeight = top;
+		// Restore the last overlap so the container encompasses the full last item.
+		newHeight = top + overlap;
 	} else {
 		const auto initialSpacing = st::historyGroupSkip;
 		const auto factor = newWidth / float64(maxWidth());
@@ -377,7 +395,6 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		};
 		const auto spacing = scale(initialSpacing);
 
-		// 1. Position Media Items
 		for (auto &part : _parts) {
 			const auto sides = part.sides;
 			const auto initialGeometry = part.initialGeometry;
@@ -404,7 +421,6 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			accumulate_max(newHeight, top + height);
 		}
 
-		// 2. Handle Captions (Grid Mode)
 		if (_mode == Mode::Grid) {
 			std::vector<int> captionIndices;
 			for (auto i = 0; i != _parts.size(); ++i) {
@@ -416,20 +432,16 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			const bool singleCaptionAnywhere = (captionCount == 1);
 			const auto padding = QMargins(8, 2, 8, 2);
 
-			// Clear heights for all parts first
 			for(auto &p : _parts) {
 				p._captionHeight = 0;
 				p.captionRect = QRect();
 			}
 
 			if (singleCaptionAnywhere) {
-				// --- Single Caption Logic (Full Width, Wrapped) ---
 				const auto captionIdx = captionIndices[0];
 				auto &part = _parts[captionIdx];
-
 				const auto captionWidth = newWidth - padding.left() - padding.right();
 
-				// FIX: Use setMarkedText to ensure proper multi-line wrapping initialization
 				part._captionText = Ui::Text::String(st::msgMinWidth);
 				part._captionText.setMarkedText(
 					st::messageTextStyle,
@@ -441,18 +453,15 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 					}));
 
 				part._captionHeight = part._captionText.countHeight(captionWidth) + padding.top() + padding.bottom();
-
-				// Place at the bottom of the entire group
 				part.captionRect = QRect(
 					0,
-					newHeight, // Current bottom of media
+					newHeight, 
 					newWidth,
 					part._captionHeight);
 
 				newHeight += part._captionHeight;
 
 			} else if (captionCount > 0) {
-				// --- Multi Caption Logic (Uniform height, elided) ---
 				std::map<int, std::vector<int>> rows;
 				for (auto i = 0; i != _parts.size(); ++i) {
 					rows[_parts[i].initialGeometry.y()].push_back(i);

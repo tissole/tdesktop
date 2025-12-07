@@ -493,8 +493,6 @@ QSize Document::countOptimalSize() {
 	const auto tleft = st.padding.left() + st.thumbSize + st.thumbSkip;
 	const auto tright = st.padding.right();
 	
-	// FIX Issue 6: Pre-calculate the custom info bubble width (Time, Views, etc.)
-	// and ensure maxWidth accommodates it so short filenames don't cause overflow.
 	int customInfoWidth = 0;
 	if (!_data->isVideoMessage()) {
 		const auto item = _parent->data();
@@ -529,7 +527,7 @@ QSize Document::countOptimalSize() {
 			customInfoWidth += font->width(QString::fromUtf8("✏️")) + textGap;
 		}
 		customInfoWidth += font->width(dateText + msgIdText);
-		customInfoWidth += st::msgDateImgDelta; // Add extra margin for the right edge
+		customInfoWidth += st::msgDateImgDelta; 
 	}
 
 	if (thumbed) {
@@ -538,13 +536,11 @@ QSize Document::countOptimalSize() {
 		auto unread = (_data->isVoiceMessage() || _transcribedRound)
 			? (st::mediaUnreadSkip + st::mediaUnreadSize)
 			: 0;
-		// Add customInfoWidth to the calculation if no visible text block (skip block) is handling it
 		int rightSideWidth = std::max(_parent->skipBlockWidth(), customInfoWidth);
 		accumulate_max(maxWidth, tleft + MaxStatusWidth(_data) + unread + rightSideWidth + st::msgPadding.right());
 	}
 
 	if (const auto named = Get<HistoryDocumentNamed>()) {
-		// Ensure name area respects the custom info width on the right
 		accumulate_max(maxWidth, tleft + named->name.maxWidth() + std::max(tright, customInfoWidth + st::msgDateSpace));
 		accumulate_min(maxWidth, st::msgMaxWidth);
 	}
@@ -563,7 +559,9 @@ QSize Document::countOptimalSize() {
 				+ transcribeWidth);
 	}
 
-	auto minHeight = st.padding.top() + st.thumbSize + st.padding.bottom();
+	// FIX: Use 0 bottom padding here so Message can control the final 2px margin.
+	// Between components (if transcribed), use 2px.
+	auto minHeight = st.padding.top() + st.thumbSize; 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
 			accumulate_max(
@@ -583,10 +581,9 @@ QSize Document::countOptimalSize() {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
+		minHeight += 2; // 2px above caption/transcribe
 		minHeight += voice->transcribeText.countHeight(captionw);
-		if (isBubbleBottom()) {
-			minHeight += st::msgPadding.bottom();
-		}
+		// No bottom padding added here; Message handles the 2px at bottom.
 	}
 	return { maxWidth, minHeight };
 }
@@ -599,16 +596,22 @@ QSize Document::countCurrentSize(int newWidth) {
 	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
-
+		// Fix: Ensure single file height doesn't include excess padding.
+		// We want 0 padding at bottom because Message adds the 2px.
+		int correctHeight = st.padding.top() + st.thumbSize;
+		if (!isBubbleTop()) correctHeight -= st::msgFileTopMinus;
+		result.setHeight(correctHeight);
 		return result;
 	}
 
 	accumulate_min(newWidth, maxWidth());
-	// Use 2px spacing above caption for single files (instead of st.padding.bottom())
+	
+	// FIX: Consistent spacing. 
+	// If there is caption/transcribe, add 2px separation between thumb and text.
+	// Do not add bottom padding here; Message::resizeContentGetHeight adds 2px.
 	const bool hasCaptionContent = captioned || hasTranscribe;
-	const auto bottomPad = hasCaptionContent
-		? 2
-		: (_parent->hasVisibleText() ? 0 : st.padding.bottom());
+	const auto bottomPad = hasCaptionContent ? 2 : 0;
+
 	auto newHeight = st.padding.top() + st.thumbSize + bottomPad;
 	if (!isBubbleTop()) {
 		newHeight -= st::msgFileTopMinus;
@@ -618,15 +621,10 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight += voice->transcribeText.countHeight(captionw);
 		if (captioned) {
 			newHeight += st::mediaCaptionSkip;
-		} else if (isBubbleBottom()) {
-			newHeight += 2; // 2px below caption
 		}
 	}
 	if (captioned) {
 		newHeight += captioned->caption.countHeight(captionw);
-		if (isBubbleBottom()) {
-			newHeight += 2; // 2px below caption
-		}
 	}
 
 	return { newWidth, newHeight };
@@ -1872,6 +1870,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 
 	const_cast<Document*>(this)->refreshCaption(last);
 
+	// FIX: Consistent 2px spacing for Column albums.
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
@@ -1880,7 +1879,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		height += captioned->caption.countHeight(captionw);
 		height += 2; // 2px below caption
 	} else {
-		height += st.padding.bottom();
+		height += 2; // 2px below thumb
 	}
 	return { maxWidth, height };
 }
@@ -1889,6 +1888,8 @@ QSize Document::sizeForGrouping(int width) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	auto height = st.padding.top() + st.thumbSize;
+	
+	// FIX: Consistent 2px spacing for Column albums.
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
 			- st::msgPadding.left()
@@ -1897,7 +1898,7 @@ QSize Document::sizeForGrouping(int width) const {
 		height += captioned->caption.countHeight(captionw);
 		height += 2; // 2px below caption
 	} else {
-		height += st.padding.bottom();
+		height += 2; // 2px below thumb
 	}
 	return { maxWidth(), height };
 }
