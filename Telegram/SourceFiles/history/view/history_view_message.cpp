@@ -1271,21 +1271,50 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		: std::vector<Ui::BubbleSelectionInterval>();
 	auto localMediaTop = 0;
 	const auto customHighlight = mediaDisplayed && media->customHighlight();
+	
 	if (!mediaSelectionIntervals.empty() || customHighlight) {
 		auto localMediaBottom = g.top() + g.height();
 		if (data()->repliesAreComments() || data()->externalReply()) {
 			localMediaBottom -= st::historyCommentsButtonHeight;
 		}
 		if (_viewButton) {
-			localMediaBottom -= mediaInBubbleSkip + _viewButton->height();
+			// Determine correct skip for view button context
+			auto viewButtonSkip = mediaInBubbleSkip;
+			if (mediaDisplayed && item->media()) {
+				// FIX: Ensure 2px skip is used for Documents/Files here too
+				if (item->media()->photo() || item->media()->document()) {
+					viewButtonSkip = 2;
+				}
+			}
+			localMediaBottom -= viewButtonSkip + _viewButton->height();
 		}
 		if (reactionsInBubble) {
-			localMediaBottom -= mediaInBubbleSkip + _reactions->height();
+			// FIX: Calculate correct skip for Reactions spacing
+			auto reactionSkip = mediaInBubbleSkip;
+			if (mediaDisplayed && item->media()) {
+				// Use 2px for Photos AND Documents (fixing the offset mismatch)
+				if (item->media()->photo() || item->media()->document()) {
+					reactionSkip = 2;
+				}
+			}
+			localMediaBottom -= reactionSkip + _reactions->height();
 		}
 		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
-			localMediaBottom -= st::msgPadding.bottom();
+			// Determine correct bottom padding
+			auto paddingBottom = st::msgPadding.bottom();
+			auto bottomSkip = mediaInBubbleSkip;
+			
+			if (mediaDisplayed && item->media()) {
+				// FIX: Use 2px padding for Documents/Files
+				if (item->media()->photo() || item->media()->document()) {
+					paddingBottom = 2;
+					bottomSkip = 2;
+				}
+			}
+
+			localMediaBottom -= paddingBottom;
 			if (mediaDisplayed) {
-				localMediaBottom -= mediaInBubbleSkip;
+				localMediaBottom -= bottomSkip;
 			}
 		}
 		if (check) {

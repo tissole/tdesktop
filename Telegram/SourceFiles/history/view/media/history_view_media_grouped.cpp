@@ -1828,9 +1828,13 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		result.front().top -= groupPadding.top();
 		result.front().height += groupPadding.top();
 	}
-	if (IsGroupItemSelection(selection, _parts.size() - 1)) {
-		result.back().height = height() - result.back().top;
-	}
+	// FIX: Do NOT forcibly extend the last item to height().
+	// This prevents the selection from bleeding into the reactions area or creating extra visual height.
+	// The original code was:
+	// if (IsGroupItemSelection(selection, _parts.size() - 1)) {
+	//     result.back().height = height() - result.back().top;
+	// }
+	
 	return result;
 }
 
