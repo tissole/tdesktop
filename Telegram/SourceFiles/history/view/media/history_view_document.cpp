@@ -559,8 +559,26 @@ QSize Document::countOptimalSize() {
 				+ transcribeWidth);
 	}
 
-	// FIX: Added +2 here. This ensures optimal height calculation includes the 2px breathing room.
-	auto minHeight = st.padding.top() + st.thumbSize + 2;
+	// FIX: Check for corner download button height (Music/Audio issue)
+	// If downloadInCorner() is true, the button might extend below the standard thumbSize.
+	// st::historyAudioDownloadShift positions the top-left of the button relative to padding.top.
+	// Total height needed is Shift + Size.
+	int contentHeight = st.thumbSize;
+	if (downloadInCorner()) {
+		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
+	}
+
+	auto minHeight = st.padding.top() + contentHeight;
+
+	// FIX: Spacing logic.
+	// If there is ANY text content (Caption or Transcribe), add 2px gap now.
+	// If NOT, add 2px bottom margin now.
+	const auto captioned = Get<HistoryDocumentCaptioned>();
+	const bool hasCaptionContent = captioned || hasTranscribe;
+	
+	minHeight += 2; // Always add 2px here. 
+	// If hasCaptionContent -> this is the gap between thumb and text.
+	// If !hasCaptionContent -> this is the bottom margin.
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -581,13 +599,70 @@ QSize Document::countOptimalSize() {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
-		// The 2px is already in minHeight, so we just add the transcribe text height
 		minHeight += voice->transcribeText.countHeight(captionw);
-		if (isBubbleBottom()) {
-			minHeight += st::msgPadding.bottom();
+		
+		if (captioned) {
+			minHeight += st::mediaCaptionSkip;
+		} else if (isBubbleBottom()) {
+			minHeight += 2; // Bottom margin if last
 		}
 	}
+	// For optimal size calc, we generally approximate the caption impact or check maxWidth.
+	// The height returned here is primarily used for layout assumptions.
 	return { maxWidth, minHeight };
+}
+
+QSize Document::countCurrentSize(int newWidth) {
+	const auto captioned = Get<HistoryDocumentCaptioned>();
+	const auto voice = Get<HistoryDocumentVoice>();
+	const auto hasTranscribe = voice && !voice->transcribeText.isEmpty();
+	const auto thumbed = Get<HistoryDocumentThumbed>();
+	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
+	
+	// FIX: Check for corner download button height (Music/Audio issue)
+	int contentHeight = st.thumbSize;
+	if (downloadInCorner()) {
+		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
+	}
+
+	if (!captioned && !hasTranscribe) {
+		auto result = File::countCurrentSize(newWidth);
+		
+		// FIX: Set precise height for single file: Top + Content + 2px.
+		int correctHeight = st.padding.top() + contentHeight + 2;
+		
+		if (!isBubbleTop()) correctHeight -= st::msgFileTopMinus;
+		result.setHeight(correctHeight);
+		
+		return result;
+	}
+
+	accumulate_min(newWidth, maxWidth());
+	
+	// FIX: Spacing logic for captioned files.
+	// Top + Content + 2px Gap
+	auto newHeight = st.padding.top() + contentHeight + 2;
+
+	if (!isBubbleTop()) {
+		newHeight -= st::msgFileTopMinus;
+	}
+	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
+	if (hasTranscribe) {
+		newHeight += voice->transcribeText.countHeight(captionw);
+		if (captioned) {
+			newHeight += st::mediaCaptionSkip;
+		} else if (isBubbleBottom()) {
+			newHeight += 2; // Bottom margin
+		}
+	}
+	if (captioned) {
+		newHeight += captioned->caption.countHeight(captionw);
+		if (isBubbleBottom()) {
+			newHeight += 2; // Bottom margin
+		}
+	}
+
+	return { newWidth, newHeight };
 }
 
 QSize Document::countCurrentSize(int newWidth) {
@@ -1885,11 +1960,11 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		height += captioned->caption.countHeight(captionw);
 		height += 2; // 2px below caption
 	} else {
-		// FIX: Consistent 2px spacing for Column albums.
 		height += 2; // 2px below thumb
 	}
 	return { maxWidth, height };
 }
+
 
 QSize Document::sizeForGrouping(int width) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
@@ -1904,7 +1979,6 @@ QSize Document::sizeForGrouping(int width) const {
 		height += captioned->caption.countHeight(captionw);
 		height += 2; // 2px below caption
 	} else {
-		// FIX: Consistent 2px spacing for Column albums.
 		height += 2; // 2px below thumb
 	}
 	return { maxWidth(), height };

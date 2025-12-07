@@ -1239,13 +1239,12 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	const auto entry = logEntryOriginal();
 	const auto check = factcheckBlock();
 	auto mediaDisplayed = media && media->isDisplayed();
+	
+	// FIX: Apply 2px skip for any Document/File/Audio or Photo.
 	auto mediaInBubbleSkip = st::mediaInBubbleSkip;
 	if (mediaDisplayed) {
-		const auto isPhotoOrVideo = media->getPhoto()
-			|| (media->getDocument() && (media->getDocument()->isVideoFile()
-				|| media->getDocument()->isAnimation()
-				|| media->getDocument()->isGifv()));
-		if (isPhotoOrVideo) {
+		const auto isCompactMedia = media->getPhoto() || media->getDocument();
+		if (isCompactMedia) {
 			mediaInBubbleSkip = 2;
 		}
 	}
@@ -1260,8 +1259,6 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	const auto keyboard = item->inlineReplyKeyboard();
 	const auto fullGeometry = g;
 	if (keyboard) {
-		// We need to count geometry without keyboard for bubble selection
-		// intervals counting below.
 		const auto keyboardHeight = st::msgBotKbButton.margin + keyboard->naturalHeight();
 		g.setHeight(g.height() - keyboardHeight);
 	}
@@ -1278,10 +1275,9 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			localMediaBottom -= st::historyCommentsButtonHeight;
 		}
 		if (_viewButton) {
-			// Determine correct skip for view button context
+			// FIX: Use correct skip for ViewButton (2px for docs/photos)
 			auto viewButtonSkip = mediaInBubbleSkip;
 			if (mediaDisplayed && item->media()) {
-				// FIX: Ensure 2px skip is used for Documents/Files here too
 				if (item->media()->photo() || item->media()->document()) {
 					viewButtonSkip = 2;
 				}
@@ -1289,10 +1285,9 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			localMediaBottom -= viewButtonSkip + _viewButton->height();
 		}
 		if (reactionsInBubble) {
-			// FIX: Calculate correct skip for Reactions spacing
+			// FIX: Use correct skip for Reactions (2px for docs/photos)
 			auto reactionSkip = mediaInBubbleSkip;
 			if (mediaDisplayed && item->media()) {
-				// Use 2px for Photos AND Documents (fixing the offset mismatch)
 				if (item->media()->photo() || item->media()->document()) {
 					reactionSkip = 2;
 				}
@@ -1300,12 +1295,10 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			localMediaBottom -= reactionSkip + _reactions->height();
 		}
 		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
-			// Determine correct bottom padding
+			// FIX: Use correct bottom padding (2px for docs/photos)
 			auto paddingBottom = st::msgPadding.bottom();
 			auto bottomSkip = mediaInBubbleSkip;
-			
 			if (mediaDisplayed && item->media()) {
-				// FIX: Use 2px padding for Documents/Files
 				if (item->media()->photo() || item->media()->document()) {
 					paddingBottom = 2;
 					bottomSkip = 2;
