@@ -1133,6 +1133,7 @@ TextState GroupedMedia::getPartState(
 		const auto mediaGeo = part.geometry.translated(0, groupPadding.top());
 		const auto captionGeo = part.captionRect.translated(0, groupPadding.top());
 
+		// Check if point is inside media OR caption
 		const auto isInside = mediaGeo.contains(point)
 			|| (!captionGeo.isEmpty() && captionGeo.contains(point));
 
@@ -1140,14 +1141,39 @@ TextState GroupedMedia::getPartState(
 			if (_mode == Mode::Grid
 				&& !captionGeo.isEmpty()
 				&& captionGeo.contains(point)) {
+				
 				const auto originalText = part.item->originalText();
 				if (!originalText.empty()) {
 					auto result = TextState(part.item);
 					const auto padding = QMargins(8, 0, 8, 0);
 					const auto captionWidth = captionGeo.width() - padding.left() - padding.right();
 					
-					// _captionText is initialized in countOptimalSize/countCurrentSize
+					const auto clickX = point.x() - captionGeo.left() - padding.left();
+					const auto clickY = point.y() - captionGeo.top() - padding.top();
+					
+					// Pass the click to the text instance to find the cursor position/link
+					const auto textStateResult = part._captionText.getState(
+						QPoint(clickX, clickY), 
+						captionWidth, 
+						request.forText());
 
+					// FIX: Explicitly set CursorState::Text. 
+					// This tells the UI we are over text, enabling selection and the I-Beam cursor.
+					result.cursor = CursorState::Text;
+					
+					result.link = textStateResult.link;
+					result.symbol = textStateResult.symbol;
+					result.afterSymbol = textStateResult.afterSymbol;
+					result.itemId = part.item->fullId(); // Crucial: identify THIS item
+
+					// Apply current caption selection to result for highlighting
+					if (!part._captionSelection.empty()) {
+						// Adjust symbol logic if needed, usually TextState logic handles this
+						// providing the clicked position is enough for the controller 
+						// to start selection.
+					}
+
+					// Tooltip Logic
 					std::vector<int> captionIndices;
 					for (auto j = 0; j != _parts.size(); ++j) {
 						if (!_parts[j].item->originalText().empty()) {
@@ -1157,61 +1183,32 @@ TextState GroupedMedia::getPartState(
 					const bool singleCaptionAnywhere = (captionIndices.size() == 1);
 
 					if (singleCaptionAnywhere && i == captionIndices[0]) {
-						// This caption is not elided, allow text selection.
-						const auto clickX = point.x() - captionGeo.left() - padding.left();
-						const auto clickY = point.y() - captionGeo.top() - padding.top();
-						const auto textStateResult = part._captionText.getState(QPoint(clickX, clickY), captionWidth, request.forText());
-						result.cursor = CursorState::Text;
-						result.link = textStateResult.link;
-						result.symbol = textStateResult.symbol;
-						result.afterSymbol = textStateResult.afterSymbol;
-						result.itemId = part.item->fullId();
-
-						// Apply current caption selection to result for highlighting
-						if (!part._captionSelection.empty()) {
-							result.symbol = textStateResult.symbol;
-							result.afterSymbol = textStateResult.afterSymbol;
-						}
-
-						// FIX Issue 1: Do NOT show tooltip for single caption in Grid mode
-						// because it wraps (is not elided) and is fully visible.
-						result.customTooltip = false;
-						
+						result.customTooltip = false; // Fully wrapped, no tooltip
 					} else {
-						// This caption is elided, allow text selection of visible portion.
-						const auto clickX = point.x() - captionGeo.left() - padding.left();
-						const auto clickY = point.y() - captionGeo.top() - padding.top();
-						const auto textStateResult = part._captionText.getState(QPoint(clickX, clickY), captionWidth, request.forText());
-						result.cursor = CursorState::Text;
-						result.link = textStateResult.link;
-						result.symbol = textStateResult.symbol;
-						result.afterSymbol = textStateResult.afterSymbol;
-						result.itemId = part.item->fullId();
-
-						if (!part._captionSelection.empty()) {
-							result.symbol = textStateResult.symbol;
-							result.afterSymbol = textStateResult.afterSymbol;
-						}
-
-						// Show tooltip only for elided captions (Multi-caption view)
+						// Multi-caption view (elided)
 						if (part._captionText.maxWidth() > captionWidth) {
 							result.customTooltip = true;
 							result.customTooltipText = originalText.text;
 						}
 					}
+					
+					// Text selection offset logic would go here if we were merging all texts,
+					// but for Grid we treat them individually in the UI.
 					result.symbol += shift;
 					return result;
 				}
 			}
+			
+			// If not in caption rect, check standard content (Media) state
 			auto result = part.content->getStateGrouped(
-				part.geometry, // Use original geometry for content state
+				part.geometry, 
 				part.sides,
-				point - QPoint(0, groupPadding.top()), // Adjust point for content
+				point - QPoint(0, groupPadding.top()), 
 				request);
 			result.symbol += shift;
 			result.itemId = part.item->fullId();
 
-			// All the tooltip logic for message ID, views, date, etc. remains unchanged.
+			// --- Tooltip Logic for Date/Views/Edited (Preserved from your code) ---
 			const auto item = part.item;
 			const auto edited = item->Get<HistoryMessageEdited>();
 
@@ -1703,16 +1700,25 @@ uint16 GroupedMedia::fullSelectionLength() const {
 }
 
 bool GroupedMedia::hasTextForCopy() const {
-	if (_mode != Mode::Column) {
-		return {};
-	}
-	for (const auto &part : _parts) {
-		if (part.content->hasTextForCopy()) {
-			return true;
+	// FIX: Allow text copy if we are in Grid mode and ANY part has a caption.
+	// Previously this only worked for Column mode.
+	if (_mode == Mode::Column) {
+		for (const auto &part : _parts) {
+			if (part.content->hasTextForCopy()) {
+				return true;
+			}
+		}
+	} else {
+		// Grid Mode
+		for (const auto &part : _parts) {
+			if (!part.item->originalText().empty()) {
+				return true;
+			}
 		}
 	}
 	return false;
 }
+
 
 TextForMimeData GroupedMedia::selectedText(
 		TextSelection selection) const {

@@ -1645,26 +1645,40 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 	} else if (!request.overSelection && view && !hasSelection) {
 		const auto owner = &view->history()->owner();
 		const auto media = view->media();
+		
+		// FIX: media->hasTextForCopy() will now return true for Grid albums if parts have captions
 		const auto mediaHasTextForCopy = media && media->hasTextForCopy();
+		
 		if (const auto document = media ? media->getDocument() : nullptr) {
 			AddDocumentActions(result, document, view->data(), list);
 		}
-		if (!link && (view->hasVisibleText() || mediaHasTextForCopy || (request.pointState == PointState::GroupPart && request.overState.cursor == CursorState::Text))) {
+		
+		// Check conditions to show "Copy Text"
+		// 1. Standard text view
+		// 2. Media reports it has copyable text (now true for Grid captions)
+		// 3. We are hovering a group part (Grid item)
+		bool canCopy = view->hasVisibleText() 
+			|| mediaHasTextForCopy 
+			|| (request.pointState == PointState::GroupPart);
+
+		if (!link && canCopy) {
 			if (!list->hasCopyRestriction(view->data())) {
 				const auto asGroup = (request.pointState != PointState::GroupPart);
 
-				// Check if we have caption-specific text to copy
-				// First check if we have selected text from caption
-				const auto hasCaptionText = !request.selectedText.empty()
-					&& (request.pointState == PointState::GroupPart);
+				// 1. Partial selection (highlighted text)
+				const auto hasCaptionText = !request.selectedText.empty();
 
-				// Check if right-click happened on a Grid caption area
-				// Grid caption logic: GroupPart point + Text cursor
-				const auto hasOverCaption = (request.pointState == PointState::GroupPart)
-					&& (request.overState.cursor == CursorState::Text);
-
-				const auto shouldShowCopy = hasCaptionText || hasOverCaption;
-				(void)shouldShowCopy;
+				// 2. Full caption copy in Grid (Right click on item with caption)
+				bool hasOverCaption = false;
+				if (request.pointState == PointState::GroupPart && mediaHasTextForCopy) {
+					// Use the item ID under the mouse to check if THAT specific item has text
+					const auto captionItemId = request.overState.itemId;
+					if (const auto captionItem = owner->message(captionItemId)) {
+						if (!captionItem->originalText().empty()) {
+							hasOverCaption = true;
+						}
+					}
+				}
 
 				result->addAction(hasCaptionText
 					? tr::lng_context_copy_selected(tr::now)
@@ -1672,10 +1686,10 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 					if (const auto item = owner->message(itemId)) {
 						if (!list->showCopyRestriction(item)) {
 							if (hasCaptionText) {
-								// Copy selected caption text
+								// Copy partial selection
 								TextUtilities::SetClipboardText(request.selectedText);
 							} else if (hasOverCaption) {
-								// Copy full caption text from the item that was right-clicked
+								// FIX: Copy ONLY the caption of the specific Grid item clicked
 								const auto captionItemId = request.overState.itemId;
 								if (const auto captionItem = owner->message(captionItemId)) {
 									const auto captionText = captionItem->originalText().text;
@@ -1684,11 +1698,13 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 									}
 								}
 							} else if (asGroup) {
+								// Copy all captions (Column mode or default group behavior)
 								if (const auto group = owner->groups().find(item)) {
 									TextUtilities::SetClipboardText(HistoryGroupText(group));
 									return;
 								}
 							} else {
+								// Fallback
 								TextUtilities::SetClipboardText(HistoryItemText(item));
 							}
 						}
@@ -1735,9 +1751,6 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		const auto added = (result->actions().size() > wasAmount);
 		AddSelectRestrictionAction(result, item, !added);
 	}
-	//if (lnkDocument){
-	//	AddStickerSetOwnerActions(result, lnkDocument, item);
-	//}
 
 	return result;
 }
