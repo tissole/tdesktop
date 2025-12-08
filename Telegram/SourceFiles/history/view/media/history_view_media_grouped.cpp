@@ -665,16 +665,23 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	auto wasCache = false;
 	auto nowCache = false;
 	const auto groupPadding = groupedPadding();
-	auto selection = context.selection;
+	
+	// Global message selection
+	const auto selection = context.selection;
 	const auto fullSelection = (selection == FullSelection);
+	
+	// For Column mode, text flow is handled by parts.
+	// For Grid mode, we virtually concatenate caption texts for selection indices.
 	const auto textSelection = (_mode == Mode::Column)
 		&& !fullSelection
 		&& !IsSubGroupSelection(selection);
+
 	const auto inWebPage = (_parent->media() != this);
 	constexpr auto kSmall = Ui::BubbleCornerRounding::Small;
 	const auto rounding = inWebPage
 		? Ui::BubbleRounding{ kSmall, kSmall, kSmall, kSmall }
 		: adjustedBubbleRounding();
+	
 	auto highlight = context.highlight.range;
 	const auto tagged = lookupSpoilerTagMedia();
 	auto fullRect = QRect();
@@ -682,10 +689,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	const auto st = context.st;
 	const auto stm = context.messageStyle();
 
-	// Check if mouse is over the album or it is selected
 	const bool showInfo = _parent->isUnderCursor() || context.selected();
 
-	// Pre-calculate single caption state
+	// Calculate if we have a single caption for the whole grid
 	bool singleCaptionAnywhere = false;
 	if (_mode == Mode::Grid) {
 		int count = 0;
@@ -695,15 +701,60 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		singleCaptionAnywhere = (count == 1);
 	}
 
+	// For Grid mode text selection offset calculation
+	int textOffset = 0;
+
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
-		auto partContext = context.withSelection(fullSelection
-			? FullSelection
-			: textSelection
-			? selection
-			: IsGroupItemSelection(selection, i)
-			? FullSelection
-			: TextSelection());
+		
+		// Prepare selection for this specific part
+		auto partSelection = FullSelection;
+		
+		if (fullSelection) {
+			partSelection = FullSelection;
+		} else if (_mode == Mode::Column) {
+			if (textSelection) {
+				// Column mode handles skipping internally via media classes
+				// We update the main 'selection' variable at the end of the loop
+				partSelection = selection; 
+			} else if (IsGroupItemSelection(selection, i)) {
+				partSelection = FullSelection;
+			} else {
+				partSelection = TextSelection();
+			}
+		} else {
+			// Grid Mode Selection Logic
+			const auto textLen = part.item->originalText().text.size();
+			if (textLen > 0) {
+				if (selection == FullSelection) {
+					partSelection = FullSelection;
+				} else if (!selection.empty() && !IsGroupItemSelection(selection, i)) {
+					// Map global symbols to local range
+					// Global range: [selection.from, selection.to)
+					// Local range:  [textOffset, textOffset + textLen)
+					const int localFrom = std::max((int)selection.from, textOffset);
+					const int localTo = std::min((int)selection.to, textOffset + (int)textLen);
+
+					if (localFrom < localTo) {
+						partSelection = TextSelection(
+							(uint16)(localFrom - textOffset), 
+							(uint16)(localTo - textOffset)
+						);
+					} else {
+						partSelection = TextSelection();
+					}
+				} else if (IsGroupItemSelection(selection, i)) {
+					partSelection = FullSelection;
+				} else {
+					partSelection = TextSelection();
+				}
+			} else {
+				partSelection = IsGroupItemSelection(selection, i) ? FullSelection : TextSelection();
+			}
+		}
+
+		auto partContext = context.withSelection(partSelection);
+		
 		const auto highlighted = (highlight.empty() && !i)
 			|| IsGroupItemSelection(highlight, i);
 		const auto highlightOpacity = highlighted
@@ -712,12 +763,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		partContext.highlight.range = highlighted
 			? TextSelection()
 			: highlight;
-		if (textSelection) {
-			selection = part.content->skipSelection(selection);
-		}
-		if (!subpartHighlight) {
-			highlight = part.content->skipSelection(highlight);
-		}
+
+		// Draw Media Content
 		if (!part.cache.isNull()) {
 			wasCache = true;
 		}
@@ -732,7 +779,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cacheKey,
 			&part.cache);
 
-		// --- Draw Grid Mode Overlays (Video duration) - Only on Hover ---
+		// --- Draw Grid Mode Overlays (Video duration) ---
 		if (_mode == Mode::Grid && showInfo) {
 			const auto dataMedia = part.item->media();
 			qint64 durSeconds = -1;
@@ -796,7 +843,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const bool editedNow = (edited && !item->hideEditedBadge());
 			
 			if (i == 0) {
-				// --- First Item: Full Info (Views, Edited, Date, ID) ---
+				// First Item: Full Info
 				const auto views = item->Get<HistoryMessageViews>();
 				const auto viewsText = (views && views->views.count >= 0)
 					? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
@@ -815,7 +862,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				p.setPen(stm->msgDateFg);
 
 				const auto itemRect = part.geometry.translated(0, groupPadding.top());
-				// Determine if this item has a thumbnail to use correct style for statusTop
 				bool hasThumb = false;
 				if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
 					if (const auto document = fileMedia->document()) {
@@ -840,7 +886,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				int x = itemRect.x() + itemRect.width() - totalW - st::msgDateImgDelta;
 				
-				// Prevent overlap with file status text
+				// Prevent overlap
 				int reservedLeft = 0;
 				const int nameleft = docStyle.padding.left() + docStyle.thumbSize + docStyle.thumbSkip;
 				QString statusText;
@@ -873,11 +919,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				}
 				p.drawText(x, baseY, timeText + idText);
 			} else {
-				// --- Subsequent Items: Only Edited & ID ---
+				// Subsequent Items
 				QString infoText;
-				if (editedNow) {
-					infoText += QString::fromUtf8("✏️");
-				}
+				if (editedNow) infoText += QString::fromUtf8("✏️");
 				if (GetEnhancedBool("show_messages_id")) {
 					const auto msgId = item->fullId().msg;
 					if (msgId > 0) {
@@ -891,7 +935,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					p.setPen(stm->msgDateFg);
 
 					const auto itemRect = part.geometry.translated(0, groupPadding.top());
-					// Determine if this item has a thumbnail to use correct style for statusTop
 					bool hasThumb = false;
 					if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
 						if (const auto document = fileMedia->document()) {
@@ -909,10 +952,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				}
 			}
 		} 
-		// --- Grid Mode Info Bubbles (Top Right) - Only on Hover ---
+		// --- Grid Mode Info Bubbles ---
 		else if (_mode == Mode::Grid && showInfo) {
 			if (i == 0) {
-				// --- First Item: Full Info Bubble ---
 				const auto item = part.item;
 				const auto font = st::msgDateFont;
 				p.setFont(font);
@@ -935,13 +977,11 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				int totalWidth = 0;
 				const int textPadding = font->width(' ');
-
 				const int dateWidth = font->width(dateText + msgIdText);
 				totalWidth += dateWidth;
 
 				if (edited) {
-					const auto editedWidth = font->width(QString::fromUtf8("✏️"));
-					totalWidth += textPadding + editedWidth;
+					totalWidth += textPadding + font->width(QString::fromUtf8("✏️"));
 				}
 
 				int viewsWidth = 0;
@@ -976,9 +1016,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					const int baseIconW = std::max(1, icon.width());
 					const int baseIconH = icon.height();
 					const int scaledIconH = (baseIconH * st::historyViewsWidth) / baseIconW;
-					
 					const int iconY = bubbleY + (bubbleH - scaledIconH) / 2 + 1;
-					
 					icon.paint(p, currentLeft, iconY, st::historyViewsWidth);
 					p.drawText(currentLeft + st::historyViewsWidth + viewsIconGap, textBaseY, viewsText);
 					currentLeft += viewsWidth + textPadding;
@@ -993,7 +1031,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				}
 				p.drawText(currentLeft, textBaseY, dateText + msgIdText);
 
-				// Draw Right Action (Fast Share) only if not bubble
+				// Right Action
 				if (const auto size = _parent->hasBubble() ? std::nullopt : _parent->rightActionSize()) {
 					auto fullRight = width();
 					auto fullBottom = height();
@@ -1004,7 +1042,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, width());
 				}
 			} else {
-				// --- Subsequent Items: Partial Info Bubble (Edited + ID) ---
 				drawMessageIdInfo(p, context, part.geometry.translated(0, groupPadding.top()), part.item);
 			}
 		}
@@ -1017,12 +1054,16 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			p.setPen(stm->historyTextFg);
 			p.setFont(st::messageTextStyle.font);
 
+			p.save();
+			p.setClipRect(captionRect);
+			
+			// Highlight Paint Setup for Caption
+			auto highlightRequest = context.computeHighlightCache();
+			
+			// If we have a part-specific selection calculated above
+			TextSelection paintSelection = partSelection;
+			
 			if (singleCaptionAnywhere) {
-				// FIX Issue 2: Single Caption Full Wrap
-				const auto &originalText = part.item->originalText();
-				
-				// _captionText is initialized in countOptimalSize/countCurrentSize
-
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto availableHeight = captionRect.height();
 				const auto textHeight = part._captionText.countHeight(availableWidth);
@@ -1035,12 +1076,10 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					verticalOffset = verticalPadding;
 				}
 
-				p.save();
-				p.setClipRect(captionRect);
 				const auto captionLeft = captionRect.left() + padding.left();
 				const auto captionTop = captionRect.top() + verticalOffset;
 				_parent->prepareCustomEmojiPaint(p, context, part._captionText);
-				auto highlightRequest = context.computeHighlightCache();
+				
 				part._captionText.draw(p, {
 					.position = QPoint(captionLeft, captionTop),
 					.outerWidth = _parent->width(),
@@ -1058,26 +1097,19 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 					.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 					.fullWidthSelection = false,
-					.selection = part._captionSelection,
+					.selection = paintSelection,
 					.highlight = highlightRequest ? &*highlightRequest : nullptr,
-					.elisionLines = 0, // Don't elide - show full text
+					.elisionLines = 0,
 				});
-				p.restore();
 			} else {
-				// Multi Caption: Elided
-				const auto &originalText = part.item->originalText();
-
-				
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto textHeight = st::messageTextStyle.font->height;
 				const auto verticalOffset = std::max(2, (captionRect.height() - textHeight) / 2);
 
-				p.save();
-				p.setClipRect(captionRect);
 				const auto captionLeft = captionRect.left() + padding.left();
 				const auto captionTop = captionRect.top() + verticalOffset;
 				_parent->prepareCustomEmojiPaint(p, context, part._captionText);
-				auto highlightRequest = context.computeHighlightCache();
+				
 				part._captionText.draw(p, {
 					.position = QPoint(captionLeft, captionTop),
 					.outerWidth = _parent->width(),
@@ -1095,12 +1127,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 					.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 					.fullWidthSelection = false,
-					.selection = part._captionSelection,
+					.selection = paintSelection,
 					.highlight = highlightRequest ? &*highlightRequest : nullptr,
-					.elisionLines = 1, // Elide to 1 line for multi-caption
+					.elisionLines = 1,
 				});
-				p.restore();
 			}
+			p.restore();
 		}
 
 		if (!part.cache.isNull()) {
@@ -1109,7 +1141,23 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		if (tagged || _purchasedPriceTag) {
 			fullRect = fullRect.united(part.geometry);
 		}
+
+		// Update offset for next part in Grid mode
+		if (_mode == Mode::Grid) {
+			if (!part.item->originalText().empty()) {
+				textOffset += part.item->originalText().text.size();
+			}
+		} else {
+			// Column mode
+			if (textSelection) {
+				selection = part.content->skipSelection(selection);
+			}
+			if (!subpartHighlight) {
+				highlight = part.content->skipSelection(highlight);
+			}
+		}
 	}
+	
 	if (nowCache && !wasCache) {
 		history()->owner().registerHeavyViewPart(_parent);
 	}
@@ -1128,12 +1176,12 @@ TextState GroupedMedia::getPartState(
 		StateRequest request) const {
 	auto shift = 0;
 	auto i = 0;
+	
 	for (const auto &part : _parts) {
 		const auto groupPadding = groupedPadding();
 		const auto mediaGeo = part.geometry.translated(0, groupPadding.top());
 		const auto captionGeo = part.captionRect.translated(0, groupPadding.top());
 
-		// Check if point is inside media OR caption
 		const auto isInside = mediaGeo.contains(point)
 			|| (!captionGeo.isEmpty() && captionGeo.contains(point));
 
@@ -1151,29 +1199,22 @@ TextState GroupedMedia::getPartState(
 					const auto clickX = point.x() - captionGeo.left() - padding.left();
 					const auto clickY = point.y() - captionGeo.top() - padding.top();
 					
-					// Pass the click to the text instance to find the cursor position/link
 					const auto textStateResult = part._captionText.getState(
 						QPoint(clickX, clickY), 
 						captionWidth, 
 						request.forText());
 
-					// FIX: Explicitly set CursorState::Text. 
-					// This tells the UI we are over text, enabling selection and the I-Beam cursor.
+					// ENABLE TEXT SELECTION
 					result.cursor = CursorState::Text;
-					
 					result.link = textStateResult.link;
-					result.symbol = textStateResult.symbol;
+					
+					// Important: Accumulate 'shift' so the Message controller knows
+					// which part of the "virtual grouped text" is selected.
+					result.symbol = textStateResult.symbol + shift;
 					result.afterSymbol = textStateResult.afterSymbol;
-					result.itemId = part.item->fullId(); // Crucial: identify THIS item
+					result.itemId = part.item->fullId();
 
-					// Apply current caption selection to result for highlighting
-					if (!part._captionSelection.empty()) {
-						// Adjust symbol logic if needed, usually TextState logic handles this
-						// providing the clicked position is enough for the controller 
-						// to start selection.
-					}
-
-					// Tooltip Logic
+					// Tooltip Logic for Multi-Caption Elision
 					std::vector<int> captionIndices;
 					for (auto j = 0; j != _parts.size(); ++j) {
 						if (!_parts[j].item->originalText().empty()) {
@@ -1183,23 +1224,18 @@ TextState GroupedMedia::getPartState(
 					const bool singleCaptionAnywhere = (captionIndices.size() == 1);
 
 					if (singleCaptionAnywhere && i == captionIndices[0]) {
-						result.customTooltip = false; // Fully wrapped, no tooltip
+						result.customTooltip = false;
 					} else {
-						// Multi-caption view (elided)
 						if (part._captionText.maxWidth() > captionWidth) {
 							result.customTooltip = true;
 							result.customTooltipText = originalText.text;
 						}
 					}
 					
-					// Text selection offset logic would go here if we were merging all texts,
-					// but for Grid we treat them individually in the UI.
-					result.symbol += shift;
 					return result;
 				}
 			}
 			
-			// If not in caption rect, check standard content (Media) state
 			auto result = part.content->getStateGrouped(
 				part.geometry, 
 				part.sides,
@@ -1700,20 +1736,12 @@ uint16 GroupedMedia::fullSelectionLength() const {
 }
 
 bool GroupedMedia::hasTextForCopy() const {
-	// FIX: Allow text copy if we are in Grid mode and ANY part has a caption.
-	// Previously this only worked for Column mode.
-	if (_mode == Mode::Column) {
-		for (const auto &part : _parts) {
-			if (part.content->hasTextForCopy()) {
-				return true;
-			}
-		}
-	} else {
-		// Grid Mode
-		for (const auto &part : _parts) {
-			if (!part.item->originalText().empty()) {
-				return true;
-			}
+	// Support copy if any part has text, regardless of mode (Grid or Column)
+	for (const auto &part : _parts) {
+		if (_mode == Mode::Column) {
+			if (part.content->hasTextForCopy()) return true;
+		} else {
+			if (!part.item->originalText().empty()) return true;
 		}
 	}
 	return false;
@@ -1737,20 +1765,36 @@ TextForMimeData GroupedMedia::selectedText(
 		}
 		return result;
 	} else if (_mode == Mode::Grid) {
-		// For Grid mode, handle caption selection
+		// New Logic for Grid Selection Copy
 		auto result = TextForMimeData();
+		int offset = 0;
 		for (const auto &part : _parts) {
 			const auto originalText = part.item->originalText();
-			if (!originalText.empty() && !part._captionSelection.empty()) {
-				// Add selected caption text
-				const auto captionText = part._captionSelection.from == part._captionSelection.to
-					? originalText.text.mid(part._captionSelection.from, part._captionSelection.to - part._captionSelection.from)
-					: originalText.text; // Full selection
-				if (result.empty()) {
-					result = TextForMimeData::Simple(captionText);
-				} else {
-					result.append(u"\n\n"_q).append(TextForMimeData::Simple(captionText));
+			const int textLen = originalText.text.size();
+			
+			if (textLen > 0) {
+				if (!selection.empty()) {
+					// Map global selection to local part
+					const int localFrom = std::max((int)selection.from, offset);
+					const int localTo = std::min((int)selection.to, offset + textLen);
+					
+					if (localFrom < localTo) {
+						int start = localFrom - offset;
+						int length = localTo - localFrom;
+						
+						// Basic substring extraction. 
+						// Note: Rich text (entities) copying would require mapping entities,
+						// but TextForMimeData::Simple is sufficient for basic copy.
+						auto partText = originalText.text.mid(start, length);
+						
+						if (result.empty()) {
+							result = TextForMimeData::Simple(partText);
+						} else {
+							result.append(u"\n\n"_q).append(TextForMimeData::Simple(partText));
+						}
+					}
 				}
+				offset += textLen;
 			}
 		}
 		return result;
