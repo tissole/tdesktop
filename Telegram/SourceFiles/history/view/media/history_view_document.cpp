@@ -559,26 +559,13 @@ QSize Document::countOptimalSize() {
 				+ transcribeWidth);
 	}
 
-	// FIX: Check for corner download button height (Music/Audio issue)
-	// If downloadInCorner() is true, the button might extend below the standard thumbSize.
-	// st::historyAudioDownloadShift positions the top-left of the button relative to padding.top.
-	// Total height needed is Shift + Size.
+	// Calculate content height (Music/Audio support)
 	int contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
 	}
 
-	auto minHeight = st.padding.top() + contentHeight;
-
-	// FIX: Spacing logic.
-	// If there is ANY text content (Caption or Transcribe), add 2px gap now.
-	// If NOT, add 2px bottom margin now.
-	const auto captioned = Get<HistoryDocumentCaptioned>();
-	const bool hasCaptionContent = captioned || hasTranscribe;
-	
-	minHeight += 2; // Always add 2px here. 
-	// If hasCaptionContent -> this is the gap between thumb and text.
-	// If !hasCaptionContent -> this is the bottom margin.
+	auto minHeight = st.padding.top() + contentHeight + 2; // +2px base spacing
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -599,20 +586,16 @@ QSize Document::countOptimalSize() {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
+		// 2px is already in base minHeight (acting as gap)
 		minHeight += voice->transcribeText.countHeight(captionw);
-		
-		if (captioned) {
-			minHeight += st::mediaCaptionSkip;
-		} else if (isBubbleBottom()) {
-			minHeight += 2; // Bottom margin if last
+		if (isBubbleBottom()) {
+			minHeight += st::msgPadding.bottom();
 		}
 	}
-	// For optimal size calc, we generally approximate the caption impact or check maxWidth.
-	// The height returned here is primarily used for layout assumptions.
 	return { maxWidth, minHeight };
 }
 
-QSize Document::countCurrentSize(int newWidth) {
+Size Document::countCurrentSize(int newWidth) {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const auto voice = Get<HistoryDocumentVoice>();
 	const auto hasTranscribe = voice && !voice->transcribeText.isEmpty();
@@ -639,57 +622,12 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	accumulate_min(newWidth, maxWidth());
 	
-	// FIX: Spacing logic for captioned files.
-	// Top + Content + 2px Gap
-	auto newHeight = st.padding.top() + contentHeight + 2;
-
-	if (!isBubbleTop()) {
-		newHeight -= st::msgFileTopMinus;
-	}
-	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
-	if (hasTranscribe) {
-		newHeight += voice->transcribeText.countHeight(captionw);
-		if (captioned) {
-			newHeight += st::mediaCaptionSkip;
-		} else if (isBubbleBottom()) {
-			newHeight += 2; // Bottom margin
-		}
-	}
-	if (captioned) {
-		newHeight += captioned->caption.countHeight(captionw);
-		if (isBubbleBottom()) {
-			newHeight += 2; // Bottom margin
-		}
-	}
-
-	return { newWidth, newHeight };
-}
-
-QSize Document::countCurrentSize(int newWidth) {
-	const auto captioned = Get<HistoryDocumentCaptioned>();
-	const auto voice = Get<HistoryDocumentVoice>();
-	const auto hasTranscribe = voice && !voice->transcribeText.isEmpty();
-	const auto thumbed = Get<HistoryDocumentThumbed>();
-	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
-	
-	if (!captioned && !hasTranscribe) {
-		auto result = File::countCurrentSize(newWidth);
-		
-		// FIX: Added +2 here. Explicitly sets height to include the bottom spacing for single files.
-		int correctHeight = st.padding.top() + st.thumbSize + 2;
-		
-		if (!isBubbleTop()) correctHeight -= st::msgFileTopMinus;
-		result.setHeight(correctHeight);
-		
-		return result;
-	}
-
-	accumulate_min(newWidth, maxWidth());
-	
+	// If captioned, the 2px acts as the gap between content and text
 	const bool hasCaptionContent = captioned || hasTranscribe;
 	const auto bottomPad = hasCaptionContent ? 2 : 0;
-	
-	auto newHeight = st.padding.top() + st.thumbSize + bottomPad;
+
+	auto newHeight = st.padding.top() + contentHeight + bottomPad;
+
 	if (!isBubbleTop()) {
 		newHeight -= st::msgFileTopMinus;
 	}
@@ -699,13 +637,13 @@ QSize Document::countCurrentSize(int newWidth) {
 		if (captioned) {
 			newHeight += st::mediaCaptionSkip;
 		} else if (isBubbleBottom()) {
-			newHeight += 2; 
+			newHeight += 2; // Bottom margin
 		}
 	}
 	if (captioned) {
 		newHeight += captioned->caption.countHeight(captionw);
 		if (isBubbleBottom()) {
-			newHeight += 2;
+			newHeight += 2; // Bottom margin
 		}
 	}
 
