@@ -559,7 +559,7 @@ QSize Document::countOptimalSize() {
 				+ transcribeWidth);
 	}
 
-	// Calculate content height (Music/Audio support)
+	// FIX: Check for corner download button height (Music/Audio issue)
 	int contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
@@ -595,7 +595,7 @@ QSize Document::countOptimalSize() {
 	return { maxWidth, minHeight };
 }
 
-Size Document::countCurrentSize(int newWidth) {
+QSize Document::countCurrentSize(int newWidth) {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const auto voice = Get<HistoryDocumentVoice>();
 	const auto hasTranscribe = voice && !voice->transcribeText.isEmpty();
