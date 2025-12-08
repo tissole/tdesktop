@@ -666,8 +666,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	auto nowCache = false;
 	const auto groupPadding = groupedPadding();
 	
-	// Global message selection
-	const auto selection = context.selection;
+	// FIX: Use 'auto' instead of 'const auto' so 'selection' can be modified later in Column mode
+	auto selection = context.selection;
 	const auto fullSelection = (selection == FullSelection);
 	
 	// For Column mode, text flow is handled by parts.
