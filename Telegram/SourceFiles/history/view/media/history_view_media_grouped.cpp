@@ -1878,12 +1878,8 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		result.front().top -= groupPadding.top();
 		result.front().height += groupPadding.top();
 	}
-	// FIX: Do NOT forcibly extend the last item to height().
-	// This prevents the selection from bleeding into the reactions area or creating extra visual height.
-	// The original code was:
-	// if (IsGroupItemSelection(selection, _parts.size() - 1)) {
-	//     result.back().height = height() - result.back().top;
-	// }
+	// FIX: Removed the block that extended the last item height.
+	// This ensures the selection stays within the item's visual bounds.
 	
 	return result;
 }
@@ -1899,11 +1895,17 @@ void GroupedMedia::clickHandlerActiveChanged(
 void GroupedMedia::clickHandlerPressedChanged(
 		const ClickHandlerPtr &p,
 		bool pressed) {
-	for (const auto &part : _parts) {
+	for (auto i = 0; i < _parts.size(); ++i) {
+		auto &part = _parts[i];
 		part.content->clickHandlerPressedChanged(p, pressed);
 		if (pressed && part.content->dragItemByHandler(p)) {
 			// #TODO drag by item from album
 			// App::pressedLinkItem(part.view);
+		}
+
+		// FIX: Handle Spoiler Clicks in Grid Mode Captions
+		if (_mode == Mode::Grid && !part.item->originalText().empty()) {
+			part._captionText.clickHandlerPressedChanged(p, pressed);
 		}
 	}
 }

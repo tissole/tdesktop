@@ -559,13 +559,19 @@ QSize Document::countOptimalSize() {
 				+ transcribeWidth);
 	}
 
-	// FIX: Check for corner download button height (Music/Audio issue)
+	// Calculate content height (including corner download button for Audio)
 	int contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
 	}
 
-	auto minHeight = st.padding.top() + contentHeight + 2; // +2px base spacing
+	auto minHeight = st.padding.top() + contentHeight;
+
+	// FIX: Spacing logic.
+	// Always add 2px. 
+	// If no caption -> this is the bottom margin.
+	// If caption -> this is the gap between thumb and caption.
+	minHeight += 2; 
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -586,7 +592,6 @@ QSize Document::countOptimalSize() {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
-		// 2px is already in base minHeight (acting as gap)
 		minHeight += voice->transcribeText.countHeight(captionw);
 		if (isBubbleBottom()) {
 			minHeight += st::msgPadding.bottom();
@@ -611,7 +616,8 @@ QSize Document::countCurrentSize(int newWidth) {
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
 		
-		// FIX: Set precise height for single file: Top + Content + 2px.
+		// FIX: Single file NO caption.
+		// Height = Top + Content + 2px.
 		int correctHeight = st.padding.top() + contentHeight + 2;
 		
 		if (!isBubbleTop()) correctHeight -= st::msgFileTopMinus;
@@ -622,11 +628,10 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	accumulate_min(newWidth, maxWidth());
 	
-	// If captioned, the 2px acts as the gap between content and text
-	const bool hasCaptionContent = captioned || hasTranscribe;
-	const auto bottomPad = hasCaptionContent ? 2 : 0;
-
-	auto newHeight = st.padding.top() + contentHeight + bottomPad;
+	// FIX: Single file WITH caption.
+	// Height = Top + Content + 2px Gap.
+	// We DO NOT add extra bottom padding here, because Message will add standard padding.
+	auto newHeight = st.padding.top() + contentHeight + 2;
 
 	if (!isBubbleTop()) {
 		newHeight -= st::msgFileTopMinus;
@@ -636,16 +641,14 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight += voice->transcribeText.countHeight(captionw);
 		if (captioned) {
 			newHeight += st::mediaCaptionSkip;
-		} else if (isBubbleBottom()) {
-			newHeight += 2; // Bottom margin
 		}
 	}
 	if (captioned) {
 		newHeight += captioned->caption.countHeight(captionw);
-		if (isBubbleBottom()) {
-			newHeight += 2; // Bottom margin
-		}
 	}
+
+	// For caption cases, we do NOT add extra bottom space manually.
+	// The 2px added earlier acts as the separation gap.
 
 	return { newWidth, newHeight };
 }
@@ -1896,9 +1899,9 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 			- st::msgPadding.right();
 		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
-		height += 2; // 2px below caption
+		// NO extra bottom padding for captioned items in column
 	} else {
-		height += 2; // 2px below thumb
+		height += 2; // 2px below thumb for non-captioned items
 	}
 	return { maxWidth, height };
 }
@@ -1915,9 +1918,9 @@ QSize Document::sizeForGrouping(int width) const {
 			- st::msgPadding.right();
 		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
-		height += 2; // 2px below caption
+		// NO extra bottom padding for captioned items in column
 	} else {
-		height += 2; // 2px below thumb
+		height += 2; // 2px below thumb for non-captioned items
 	}
 	return { maxWidth(), height };
 }
