@@ -1885,7 +1885,15 @@ void Document::refreshCaption(bool last) {
 QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-	auto height = st.padding.top() + st.thumbSize;
+	
+	// FIX: Calculate content height considering Audio/Music download arrow
+	// The arrow sits lower than the standard thumbSize.
+	int contentHeight = st.thumbSize;
+	if (downloadInCorner()) {
+		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
+	}
+
+	auto height = st.padding.top() + contentHeight;
 
 	const_cast<Document*>(this)->refreshCaption(last);
 
@@ -1895,9 +1903,10 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 			- st::msgPadding.right();
 		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
-		// NO extra bottom padding for captioned items in column
+		// No extra bottom padding for captioned items in column
 	} else {
-		height += 2; // 2px below thumb for non-captioned items
+		// FIX: Add 2px spacing below the content (which now includes the arrow height)
+		height += 2; 
 	}
 	return { maxWidth, height };
 }
@@ -1906,7 +1915,14 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 QSize Document::sizeForGrouping(int width) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-	auto height = st.padding.top() + st.thumbSize;
+	
+	// FIX: Calculate content height considering Audio/Music download arrow
+	int contentHeight = st.thumbSize;
+	if (downloadInCorner()) {
+		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
+	}
+
+	auto height = st.padding.top() + contentHeight;
 	
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
@@ -1914,9 +1930,10 @@ QSize Document::sizeForGrouping(int width) const {
 			- st::msgPadding.right();
 		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
-		// NO extra bottom padding for captioned items in column
+		// No extra bottom padding for captioned items in column
 	} else {
-		height += 2; // 2px below thumb for non-captioned items
+		// FIX: Add 2px spacing below the content (which now includes the arrow height)
+		height += 2;
 	}
 	return { maxWidth(), height };
 }
