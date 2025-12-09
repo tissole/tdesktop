@@ -1649,7 +1649,8 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		if (const auto document = media ? media->getDocument() : nullptr) {
 			AddDocumentActions(result, document, view->data(), list);
 		}
-		
+
+		// FIX: Check if we are hovering a Grid part to allow copying its caption
 		bool canCopy = view->hasVisibleText() 
 			|| mediaHasTextForCopy 
 			|| (request.pointState == PointState::GroupPart);
@@ -1659,9 +1660,10 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 				const auto asGroup = (request.pointState != PointState::GroupPart);
 				const auto hasCaptionText = !request.selectedText.empty();
 
+				// FIX: Explicitly check for Grid Item Caption
 				bool hasOverCaption = false;
 				if (request.pointState == PointState::GroupPart) {
-					// FIX: Always lookup specific item data for Grid mode
+					// Use the specific item ID from the click state
 					const auto captionItemId = request.overState.itemId;
 					if (const auto captionItem = owner->message(captionItemId)) {
 						if (!captionItem->originalText().empty()) {
@@ -1679,6 +1681,7 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								if (hasCaptionText) {
 									TextUtilities::SetClipboardText(request.selectedText);
 								} else if (hasOverCaption) {
+									// FIX: Copy FULL caption text for the specific grid item
 									const auto captionItemId = request.overState.itemId;
 									if (const auto captionItem = owner->message(captionItemId)) {
 										const auto captionText = captionItem->originalText().text;

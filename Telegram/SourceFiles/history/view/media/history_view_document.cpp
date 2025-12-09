@@ -559,22 +559,13 @@ QSize Document::countOptimalSize() {
 				+ transcribeWidth);
 	}
 
-	// Calculate content height (including corner download button for Audio)
 	int contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
 	}
 
-	// Base height (Top + Content)
+	// Base Height: Top Padding + Content
 	auto minHeight = st.padding.top() + contentHeight;
-
-	const auto captioned = Get<HistoryDocumentCaptioned>();
-	const bool hasCaptionContent = captioned || hasTranscribe;
-	
-	// FIX: Only add Gap if caption exists. No bottom margin added here.
-	if (hasCaptionContent) {
-		minHeight += 2; // Gap between thumb and text
-	}
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -595,12 +586,22 @@ QSize Document::countOptimalSize() {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
+		
+		// If transcribed/captioned, add the 2px GAP
+		minHeight += 2; 
 		minHeight += voice->transcribeText.countHeight(captionw);
 		
-		if (captioned) {
+		if (Get<HistoryDocumentCaptioned>()) {
 			minHeight += st::mediaCaptionSkip;
 		} 
+	} else if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
+		// If only captioned (no transcribe), add the 2px GAP
+		minHeight += 2;
 	}
+
+	// NOTE: We do NOT add bottom padding here. 
+	// Message::resizeContentGetHeight will add the final 2px bottom padding.
+
 	return { maxWidth, minHeight };
 }
 
@@ -618,7 +619,9 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
-		// FIX: Just content height. Message adds 2px bottom padding.
+		
+		// Single File No Caption: Top + Content
+		// Message will add the bottom 2px.
 		int correctHeight = st.padding.top() + contentHeight;
 		
 		if (!isBubbleTop()) correctHeight -= st::msgFileTopMinus;
@@ -629,7 +632,7 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	accumulate_min(newWidth, maxWidth());
 	
-	// FIX: Gap of 2px between content and text.
+	// Single File WITH Caption: Top + Content + 2px (Gap)
 	auto newHeight = st.padding.top() + contentHeight + 2;
 
 	if (!isBubbleTop()) {
@@ -645,6 +648,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	if (captioned) {
 		newHeight += captioned->caption.countHeight(captionw);
 	}
+	// No extra bottom padding here.
 
 	return { newWidth, newHeight };
 }
@@ -1886,8 +1890,6 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	
-	// FIX: Calculate content height considering Audio/Music download arrow
-	// The arrow sits lower than the standard thumbSize.
 	int contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
@@ -1901,11 +1903,11 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
-		height += 2; // 2px above caption
+		height += 2; // 2px Gap above caption
 		height += captioned->caption.countHeight(captionw);
-		// No extra bottom padding for captioned items in column
+		// No bottom padding, layout handles it
 	} else {
-		// FIX: Add 2px spacing below the content (which now includes the arrow height)
+		// If no caption, add 2px space to separate from next item (or bottom)
 		height += 2; 
 	}
 	return { maxWidth, height };
@@ -1916,24 +1918,21 @@ QSize Document::sizeForGrouping(int width) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	
-	// FIX: Calculate content height considering Audio/Music download arrow
 	int contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
 	}
-
+	
 	auto height = st.padding.top() + contentHeight;
 	
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
 			- st::msgPadding.left()
 			- st::msgPadding.right();
-		height += 2; // 2px above caption
+		height += 2; // 2px Gap above caption
 		height += captioned->caption.countHeight(captionw);
-		// No extra bottom padding for captioned items in column
 	} else {
-		// FIX: Add 2px spacing below the content (which now includes the arrow height)
-		height += 2;
+		height += 2; // 2px space
 	}
 	return { maxWidth(), height };
 }
@@ -2016,6 +2015,10 @@ void Document::clickHandlerPressedChanged(const ClickHandlerPtr &p, bool pressed
 			}
 			voice->stopSeeking();
 		}
+	}
+	// FIX: Forward click events to caption (for Spoilers/Links)
+	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
+		captioned->caption.clickHandlerPressedChanged(p, pressed);
 	}
 	File::clickHandlerPressedChanged(p, pressed);
 }

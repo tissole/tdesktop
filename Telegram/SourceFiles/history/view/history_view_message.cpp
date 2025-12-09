@@ -955,7 +955,7 @@ QSize Message::performCountOptimalSize() {
 		// Entry page is always a bubble bottom.
 		const auto withVisibleText = hasVisibleText();
 		const auto textualWidth = textualMaxWidth();
-		auto mediaOnBottom = (mediaDisplayed && media->isBubbleBottom()) || check || (entry/* && entry->isBubbleBottom()*/);
+		auto mediaOnBottom = (mediaDisplayed && media->isBubbleBottom()) || check || (entry);
 		auto mediaOnTop = (mediaDisplayed && media->isBubbleTop()) || (entry && entry->isBubbleTop());
 		maxWidth = textualWidth;
 		if (context() == Context::Replies && item->isDiscussionPost()) {
@@ -986,31 +986,32 @@ QSize Message::performCountOptimalSize() {
 				minHeight += _reactions->resizeGetHeight(widthForReactions);
 			}
 		}
-		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
-			// Use 2px bottom padding for Photo and Video media types
-			const auto isPhotoOrVideoForPadding = mediaDisplayed && (media->getPhoto()
-				|| (media->getDocument() && (media->getDocument()->isVideoFile()
-					|| media->getDocument()->isAnimation()
-					|| media->getDocument()->isGifv())));
-			minHeight += isPhotoOrVideoForPadding ? 2 : st::msgPadding.bottom();  // 2px for Photo/Video below caption
-			if (mediaDisplayed) {
-				// Use 2px spacing for Photo and Video media types
-				const auto isPhotoOrVideo = media->getPhoto()
-					|| (media->getDocument() && (media->getDocument()->isVideoFile()
-						|| media->getDocument()->isAnimation()
-						|| media->getDocument()->isGifv()));
-				minHeight += isPhotoOrVideo ? 2 : st::mediaInBubbleSkip;
+
+		// FIX: Use 2px bottom padding for Compact Media (Photos, Documents)
+		bool isCompact = false;
+		if (mediaDisplayed && item->media()) {
+			if (item->media()->photo() || item->media()->document()) {
+				isCompact = true;
 			}
 		}
+
+		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
+			// Apply padding
+			minHeight += isCompact ? 2 : st::msgPadding.bottom();
+			
+			if (mediaDisplayed) {
+				minHeight += isCompact ? 2 : st::mediaInBubbleSkip;
+			}
+		} else if (mediaOnBottom && mediaDisplayed && isCompact) {
+			// Even if mediaOnBottom is true, ensure we have the 2px padding for docs
+			// because Document::countOptimalSize no longer includes it.
+			minHeight += 2;
+		}
+
 		if (!mediaOnTop) {
 			minHeight += st::msgPadding.top();
 			if (mediaDisplayed) {
-				// Use 2px spacing for Photo and Video media types
-				const auto isPhotoOrVideo = media->getPhoto()
-					|| (media->getDocument() && (media->getDocument()->isVideoFile()
-						|| media->getDocument()->isAnimation()
-						|| media->getDocument()->isGifv()));
-				minHeight += isPhotoOrVideo ? 2 : st::mediaInBubbleSkip;
+				minHeight += isCompact ? 2 : st::mediaInBubbleSkip;
 			}
 			if (entry) minHeight += st::mediaInBubbleSkip;
 		}
@@ -1240,6 +1241,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	const auto check = factcheckBlock();
 	auto mediaDisplayed = media && media->isDisplayed();
 	
+	// FIX: Apply 2px skip for any Document/File/Audio or Photo.
 	auto mediaInBubbleSkip = st::mediaInBubbleSkip;
 	if (mediaDisplayed) {
 		const auto isCompactMedia = media->getPhoto() || media->getDocument();
@@ -1290,11 +1292,16 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				}
 			}
 			localMediaBottom -= reactionSkip + _reactions->height();
-			// FIX: Subtract bubble padding to correctly align highlight above reactions
-			localMediaBottom -= st::msgPadding.bottom(); 
+
+			// FIX: Subtract bubble bottom padding so highlight aligns correctly
+			if (mediaDisplayed && (item->media()->photo() || item->media()->document())) {
+				localMediaBottom -= 2; // Subtract the 2px padding
+			} else {
+				localMediaBottom -= st::msgPadding.bottom();
+			}
 		}
 		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
-			// FIX: Use 2px bottom padding for docs/photos
+			// FIX: Use correct bottom padding (2px for docs/photos)
 			auto paddingBottom = st::msgPadding.bottom();
 			auto bottomSkip = mediaInBubbleSkip;
 			if (mediaDisplayed && item->media()) {
@@ -4766,18 +4773,20 @@ int Message::resizeContentGetHeight(int newWidth) {
 				}
 				newHeight += textHeightFor(textWidth);
 			}
-			// Override spacing for single photos, streaming videos AND Documents to match 2px limit
-			auto mediaInBubbleSkip = st::mediaInBubbleSkip;
-			auto msgPaddingBottom = st::msgPadding.bottom();
+			
+			// FIX: Apply 2px bottom padding for Compact Media (Photos, Documents)
+			bool isCompact = false;
 			if (mediaDisplayed && item->media()) {
 				const auto photo = item->media()->photo();
 				const auto document = item->media()->document();
-				// FIX: Added 'document' (Audio/File) to this check.
 				if (photo || document) {
-					mediaInBubbleSkip = 2;
-					msgPaddingBottom = 2;  // 2px below caption/media
+					isCompact = true;
 				}
 			}
+
+			auto mediaInBubbleSkip = isCompact ? 2 : st::mediaInBubbleSkip;
+			auto msgPaddingBottom = isCompact ? 2 : st::msgPadding.bottom();
+
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 				newHeight += msgPaddingBottom;
 				if (mediaDisplayed) {
@@ -4786,12 +4795,20 @@ int Message::resizeContentGetHeight(int newWidth) {
 			}
 			if (!mediaOnTop) {
 				newHeight += st::msgPadding.top();
-				if (mediaDisplayed) newHeight += mediaInBubbleSkip;
+				if (mediaDisplayed) {
+					newHeight += mediaInBubbleSkip;
+				}
 				if (entry) newHeight += mediaInBubbleSkip;
 			}
 			if (mediaDisplayed) {
 				newHeight += media->height();
 			}
+			
+			// FIX: If media is at bottom, ensure 2px padding is added for compact types
+			if (mediaOnBottom && isCompact) {
+				newHeight += 2;
+			}
+			
 			if (check) {
 				newHeight += check->resizeGetHeight(contentWidth) + mediaInBubbleSkip;
 			}
