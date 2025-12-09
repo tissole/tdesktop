@@ -1293,6 +1293,10 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				}
 			}
 			localMediaBottom -= reactionSkip + _reactions->height();
+
+			// FIX: CRITICAL - Subtract bubble bottom padding when reactions are present.
+			// Reactions sit above the bottom padding, so we must remove it to find the media bottom.
+			localMediaBottom -= st::msgPadding.bottom();
 		}
 		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 			// FIX: Use correct bottom padding (2px for docs/photos)
