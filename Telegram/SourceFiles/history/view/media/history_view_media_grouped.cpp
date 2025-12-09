@@ -1895,17 +1895,11 @@ void GroupedMedia::clickHandlerActiveChanged(
 void GroupedMedia::clickHandlerPressedChanged(
 		const ClickHandlerPtr &p,
 		bool pressed) {
-	for (auto i = 0; i < _parts.size(); ++i) {
-		auto &part = _parts[i];
+	for (const auto &part : _parts) {
 		part.content->clickHandlerPressedChanged(p, pressed);
 		if (pressed && part.content->dragItemByHandler(p)) {
 			// #TODO drag by item from album
 			// App::pressedLinkItem(part.view);
-		}
-
-		// FIX: Handle Spoiler Clicks in Grid Mode Captions
-		if (_mode == Mode::Grid && !part.item->originalText().empty()) {
-			part._captionText.clickHandlerPressedChanged(p, pressed);
 		}
 	}
 }
