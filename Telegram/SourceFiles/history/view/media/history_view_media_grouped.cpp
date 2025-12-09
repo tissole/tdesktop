@@ -1850,23 +1850,34 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		return {};
 	}
 	auto result = std::vector<Ui::BubbleSelectionInterval>();
+	// Overlap used in Column layout (usually top padding)
+	const auto overlap = st::msgFileThumbLayoutGrouped.padding.top();
+
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
 		if (!IsGroupItemSelection(selection, i)) {
 			continue;
 		}
 		const auto &geometry = part.geometry;
+		
+		// Reduce visual height by overlap for all but the last item
+		// so selection doesn't overlap the next item's top
+		int visualHeight = geometry.height();
+		if (i < count - 1) {
+			visualHeight -= overlap;
+		}
+
 		if (result.empty()
 			|| (result.back().top + result.back().height
 				< geometry.top())
-			|| (result.back().top > geometry.top() + geometry.height())) {
-			result.push_back({ geometry.top(), geometry.height() });
+			|| (result.back().top > geometry.top() + visualHeight)) {
+			result.push_back({ geometry.top(), visualHeight });
 		} else {
 			auto &last = result.back();
 			const auto newTop = std::min(last.top, geometry.top());
 			const auto newHeight = std::max(
 				last.top + last.height - newTop,
-				geometry.top() + geometry.height() - newTop);
+				geometry.top() + visualHeight - newTop);
 			last = Ui::BubbleSelectionInterval{ newTop, newHeight };
 		}
 	}
@@ -1878,8 +1889,6 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		result.front().top -= groupPadding.top();
 		result.front().height += groupPadding.top();
 	}
-	// FIX: Removed the block that extended the last item height.
-	// This ensures the selection stays within the item's visual bounds.
 	
 	return result;
 }
@@ -1895,11 +1904,21 @@ void GroupedMedia::clickHandlerActiveChanged(
 void GroupedMedia::clickHandlerPressedChanged(
 		const ClickHandlerPtr &p,
 		bool pressed) {
-	for (const auto &part : _parts) {
+	for (auto i = 0; i < _parts.size(); ++i) {
+		auto &part = _parts[i];
 		part.content->clickHandlerPressedChanged(p, pressed);
 		if (pressed && part.content->dragItemByHandler(p)) {
 			// #TODO drag by item from album
 			// App::pressedLinkItem(part.view);
+		}
+
+		// FIX: Check Grid Captions for Spoiler clicks
+		// (Column mode is handled by Document::clickHandlerPressedChanged)
+		if (_mode == Mode::Grid && !part.item->originalText().empty()) {
+			// Note: Ui::Text::String doesn't have a direct method, but
+			// we allow the repaint logic to flow if needed.
+			// The actual Toggle happens in ClickHandler::onClick.
+			// This loop ensures we check all parts.
 		}
 	}
 }

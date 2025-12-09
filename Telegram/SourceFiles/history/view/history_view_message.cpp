@@ -1240,7 +1240,6 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	const auto check = factcheckBlock();
 	auto mediaDisplayed = media && media->isDisplayed();
 	
-	// FIX: Apply 2px skip for any Document/File/Audio or Photo.
 	auto mediaInBubbleSkip = st::mediaInBubbleSkip;
 	if (mediaDisplayed) {
 		const auto isCompactMedia = media->getPhoto() || media->getDocument();
@@ -1275,7 +1274,6 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			localMediaBottom -= st::historyCommentsButtonHeight;
 		}
 		if (_viewButton) {
-			// FIX: Use correct skip for ViewButton (2px for docs/photos)
 			auto viewButtonSkip = mediaInBubbleSkip;
 			if (mediaDisplayed && item->media()) {
 				if (item->media()->photo() || item->media()->document()) {
@@ -1285,7 +1283,6 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			localMediaBottom -= viewButtonSkip + _viewButton->height();
 		}
 		if (reactionsInBubble) {
-			// FIX: Use correct skip for Reactions (2px for docs/photos)
 			auto reactionSkip = mediaInBubbleSkip;
 			if (mediaDisplayed && item->media()) {
 				if (item->media()->photo() || item->media()->document()) {
@@ -1293,13 +1290,11 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				}
 			}
 			localMediaBottom -= reactionSkip + _reactions->height();
-
-			// FIX: CRITICAL - Subtract bubble bottom padding when reactions are present.
-			// Reactions sit above the bottom padding, so we must remove it to find the media bottom.
-			localMediaBottom -= st::msgPadding.bottom();
+			// FIX: Subtract bubble padding to correctly align highlight above reactions
+			localMediaBottom -= st::msgPadding.bottom(); 
 		}
 		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
-			// FIX: Use correct bottom padding (2px for docs/photos)
+			// FIX: Use 2px bottom padding for docs/photos
 			auto paddingBottom = st::msgPadding.bottom();
 			auto bottomSkip = mediaInBubbleSkip;
 			if (mediaDisplayed && item->media()) {
