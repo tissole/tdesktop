@@ -2016,10 +2016,10 @@ void Document::clickHandlerPressedChanged(const ClickHandlerPtr &p, bool pressed
 			voice->stopSeeking();
 		}
 	}
-	// FIX: Forward click events to caption (for Spoilers/Links)
-	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
-		captioned->caption.clickHandlerPressedChanged(p, pressed);
-	}
+	// Note: Spoilers are toggled by the ClickHandler::onClick event, 
+	// which is triggered if textState returns the correct link.
+	// We don't need to manually call anything on the String here.
+	
 	File::clickHandlerPressedChanged(p, pressed);
 }
 
