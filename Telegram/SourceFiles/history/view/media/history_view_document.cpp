@@ -564,8 +564,14 @@ QSize Document::countOptimalSize() {
 		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
 	}
 
-	// Base Height: Top Padding + Content
 	auto minHeight = st.padding.top() + contentHeight;
+
+	const auto captioned = Get<HistoryDocumentCaptioned>();
+	const bool hasCaptionContent = captioned || hasTranscribe;
+	
+	if (hasCaptionContent) {
+		minHeight += 2;
+	}
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -586,22 +592,12 @@ QSize Document::countOptimalSize() {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
-		
-		// If transcribed/captioned, add the 2px GAP
-		minHeight += 2; 
 		minHeight += voice->transcribeText.countHeight(captionw);
 		
-		if (Get<HistoryDocumentCaptioned>()) {
+		if (captioned) {
 			minHeight += st::mediaCaptionSkip;
 		} 
-	} else if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
-		// If only captioned (no transcribe), add the 2px GAP
-		minHeight += 2;
 	}
-
-	// NOTE: We do NOT add bottom padding here. 
-	// Message::resizeContentGetHeight will add the final 2px bottom padding.
-
 	return { maxWidth, minHeight };
 }
 
@@ -620,8 +616,6 @@ QSize Document::countCurrentSize(int newWidth) {
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
 		
-		// Single File No Caption: Top + Content
-		// Message will add the bottom 2px.
 		int correctHeight = st.padding.top() + contentHeight;
 		
 		if (!isBubbleTop()) correctHeight -= st::msgFileTopMinus;
@@ -632,7 +626,6 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	accumulate_min(newWidth, maxWidth());
 	
-	// Single File WITH Caption: Top + Content + 2px (Gap)
 	auto newHeight = st.padding.top() + contentHeight + 2;
 
 	if (!isBubbleTop()) {
@@ -648,7 +641,6 @@ QSize Document::countCurrentSize(int newWidth) {
 	if (captioned) {
 		newHeight += captioned->caption.countHeight(captionw);
 	}
-	// No extra bottom padding here.
 
 	return { newWidth, newHeight };
 }
@@ -1889,13 +1881,7 @@ void Document::refreshCaption(bool last) {
 QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-	
-	int contentHeight = st.thumbSize;
-	if (downloadInCorner()) {
-		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
-	}
-
-	auto height = st.padding.top() + contentHeight;
+	auto height = st.padding.top() + st.thumbSize;
 
 	const_cast<Document*>(this)->refreshCaption(last);
 
@@ -1903,12 +1889,11 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
-		height += 2; // 2px Gap above caption
+		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
-		// No bottom padding, layout handles it
+		height += 2; // 2px below caption
 	} else {
-		// If no caption, add 2px space to separate from next item (or bottom)
-		height += 2; 
+		height += 2; // 2px below thumb
 	}
 	return { maxWidth, height };
 }
@@ -1917,22 +1902,17 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 QSize Document::sizeForGrouping(int width) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-	
-	int contentHeight = st.thumbSize;
-	if (downloadInCorner()) {
-		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
-	}
-	
-	auto height = st.padding.top() + contentHeight;
+	auto height = st.padding.top() + st.thumbSize;
 	
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
 			- st::msgPadding.left()
 			- st::msgPadding.right();
-		height += 2; // 2px Gap above caption
+		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
+		height += 2; // 2px below caption
 	} else {
-		height += 2; // 2px space
+		height += 2; // 2px below thumb
 	}
 	return { maxWidth(), height };
 }
@@ -2016,10 +1996,6 @@ void Document::clickHandlerPressedChanged(const ClickHandlerPtr &p, bool pressed
 			voice->stopSeeking();
 		}
 	}
-	// Note: Spoilers are toggled by the ClickHandler::onClick event, 
-	// which is triggered if textState returns the correct link.
-	// We don't need to manually call anything on the String here.
-	
 	File::clickHandlerPressedChanged(p, pressed);
 }
 

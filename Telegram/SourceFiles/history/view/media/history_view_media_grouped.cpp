@@ -377,15 +377,12 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		return { newWidth, newHeight };
 	} else if (_mode == Mode::Column) {
 		auto top = 0;
-		// FIX: Subtract the top padding of the standard style from the accumulated height
-		// so that the next item's top padding overlaps the previous item's bottom spacing (2px).
 		const auto overlap = st::msgFileThumbLayoutGrouped.padding.top();
 		for (auto &part : _parts) {
 			const auto size = part.content->sizeForGrouping(newWidth);
 			part.geometry = QRect(0, top, newWidth, size.height());
 			top += size.height() - overlap;
 		}
-		// Restore the last overlap so the container encompasses the full last item.
 		newHeight = top + overlap;
 	} else {
 		const auto initialSpacing = st::historyGroupSkip;
@@ -452,7 +449,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 						.repaint = [=] { _parent->customEmojiRepaint(); },
 					}));
 
-				part._captionHeight = part._captionText.countHeight(captionWidth) + padding.top() + padding.bottom();
+				part._captionHeight = 2 + part._captionText.countHeight(captionWidth) + 2;
 				part.captionRect = QRect(
 					0,
 					newHeight, 
@@ -468,7 +465,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				}
 
 				const auto textHeight = st::messageTextStyle.font->height;
-				const auto uniformCaptionHeight = textHeight + padding.top() + padding.bottom();
+				const auto uniformCaptionHeight = 2 + textHeight + 2;
 
 				for (auto const& [rowY, indices] : rows) {
 					auto rowBottom = 0;
@@ -1197,24 +1194,19 @@ TextState GroupedMedia::getPartState(
 					const auto captionWidth = captionGeo.width() - padding.left() - padding.right();
 					
 					const auto clickX = point.x() - captionGeo.left() - padding.left();
-					const auto clickY = point.y() - captionGeo.top() - padding.top();
+					const auto clickY = point.y() - captionGeo.top() - 2; 
 					
 					const auto textStateResult = part._captionText.getState(
 						QPoint(clickX, clickY), 
 						captionWidth, 
 						request.forText());
 
-					// ENABLE TEXT SELECTION
 					result.cursor = CursorState::Text;
 					result.link = textStateResult.link;
-					
-					// Important: Accumulate 'shift' so the Message controller knows
-					// which part of the "virtual grouped text" is selected.
 					result.symbol = textStateResult.symbol + shift;
 					result.afterSymbol = textStateResult.afterSymbol;
 					result.itemId = part.item->fullId();
 
-					// Tooltip Logic for Multi-Caption Elision
 					std::vector<int> captionIndices;
 					for (auto j = 0; j != _parts.size(); ++j) {
 						if (!_parts[j].item->originalText().empty()) {
@@ -1244,12 +1236,10 @@ TextState GroupedMedia::getPartState(
 			result.symbol += shift;
 			result.itemId = part.item->fullId();
 
-			// --- Tooltip Logic for Date/Views/Edited (Preserved from your code) ---
 			const auto item = part.item;
 			const auto edited = item->Get<HistoryMessageEdited>();
 
 			if (_mode == Mode::Column) {
-				// Determine if this item has a thumbnail to use correct style for statusTop
 				bool hasThumb = false;
 				if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
 					if (const auto document = fileMedia->document()) {
@@ -1850,7 +1840,6 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		return {};
 	}
 	auto result = std::vector<Ui::BubbleSelectionInterval>();
-	// Overlap used in Column layout (usually top padding)
 	const auto overlap = st::msgFileThumbLayoutGrouped.padding.top();
 
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
@@ -1860,8 +1849,6 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		}
 		const auto &geometry = part.geometry;
 		
-		// Reduce visual height by overlap for all but the last item
-		// so selection doesn't overlap the next item's top
 		int visualHeight = geometry.height();
 		if (i < count - 1) {
 			visualHeight -= overlap;
@@ -1912,13 +1899,8 @@ void GroupedMedia::clickHandlerPressedChanged(
 			// App::pressedLinkItem(part.view);
 		}
 
-		// FIX: Check Grid Captions for Spoiler clicks
-		// (Column mode is handled by Document::clickHandlerPressedChanged)
 		if (_mode == Mode::Grid && !part.item->originalText().empty()) {
-			// Note: Ui::Text::String doesn't have a direct method, but
-			// we allow the repaint logic to flow if needed.
-			// The actual Toggle happens in ClickHandler::onClick.
-			// This loop ensures we check all parts.
+			part._captionText.clickHandlerPressedChanged(p, pressed);
 		}
 	}
 }

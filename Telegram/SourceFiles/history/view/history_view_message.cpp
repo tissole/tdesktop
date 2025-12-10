@@ -1241,7 +1241,6 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	const auto check = factcheckBlock();
 	auto mediaDisplayed = media && media->isDisplayed();
 	
-	// FIX: Apply 2px skip for any Document/File/Audio or Photo.
 	auto mediaInBubbleSkip = st::mediaInBubbleSkip;
 	if (mediaDisplayed) {
 		const auto isCompactMedia = media->getPhoto() || media->getDocument();
@@ -1293,15 +1292,13 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			}
 			localMediaBottom -= reactionSkip + _reactions->height();
 
-			// FIX: Subtract bubble bottom padding so highlight aligns correctly
 			if (mediaDisplayed && (item->media()->photo() || item->media()->document())) {
-				localMediaBottom -= 2; // Subtract the 2px padding
+				localMediaBottom -= 2; 
 			} else {
 				localMediaBottom -= st::msgPadding.bottom();
 			}
 		}
 		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
-			// FIX: Use correct bottom padding (2px for docs/photos)
 			auto paddingBottom = st::msgPadding.bottom();
 			auto bottomSkip = mediaInBubbleSkip;
 			if (mediaDisplayed && item->media()) {
@@ -4774,7 +4771,6 @@ int Message::resizeContentGetHeight(int newWidth) {
 				newHeight += textHeightFor(textWidth);
 			}
 			
-			// FIX: Apply 2px bottom padding for Compact Media (Photos, Documents)
 			bool isCompact = false;
 			if (mediaDisplayed && item->media()) {
 				const auto photo = item->media()->photo();
@@ -4804,7 +4800,6 @@ int Message::resizeContentGetHeight(int newWidth) {
 				newHeight += media->height();
 			}
 			
-			// FIX: If media is at bottom, ensure 2px padding is added for compact types
 			if (mediaOnBottom && isCompact) {
 				newHeight += 2;
 			}
