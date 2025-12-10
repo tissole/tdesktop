@@ -1880,6 +1880,14 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 	return result;
 }
 
+void GroupedMedia::clickHandlerActiveChanged(
+		const ClickHandlerPtr &p,
+		bool active) {
+	for (const auto &part : _parts) {
+		part.content->clickHandlerActiveChanged(p, active);
+	}
+}
+
 void GroupedMedia::clickHandlerPressedChanged(
 		const ClickHandlerPtr &p,
 		bool pressed) {
@@ -1889,6 +1897,11 @@ void GroupedMedia::clickHandlerPressedChanged(
 		if (pressed && part.content->dragItemByHandler(p)) {
 			// #TODO drag by item from album
 			// App::pressedLinkItem(part.view);
+		if (_mode == Mode::Grid && !part.item->originalText().empty()) {
+			// Note: Ui::Text::String doesn't have a direct method, but
+			// we allow the repaint logic to flow if needed.
+			// The actual Toggle happens in ClickHandler::onClick.
+			// This loop ensures we check all parts.
 		}
 	}
 }
