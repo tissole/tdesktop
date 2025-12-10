@@ -1888,21 +1888,27 @@ void GroupedMedia::clickHandlerActiveChanged(
 	}
 }
 
-void GroupedMedia::clickHandlerPressedChanged(
-		const ClickHandlerPtr &p,
-		bool pressed) {
-	for (auto i = 0; i < _parts.size(); ++i) {
-		auto &part = _parts[i];
-		part.content->clickHandlerPressedChanged(p, pressed);
-		if (pressed && part.content->dragItemByHandler(p)) {
-			// #TODO drag by item from album
-			// App::pressedLinkItem(part.view);
-		}
+void Document::clickHandlerPressedChanged(const ClickHandlerPtr &p, bool pressed) {
+	if (auto voice = Get<HistoryDocumentVoice>()) {
+		if (pressed && p == voice->seekl && !voice->seeking()) {
+			voice->startSeeking();
+		} else if (!pressed && voice->seeking()) {
+			const auto type = AudioMsgId::Type::Voice;
+			const auto state = ::Media::Player::instance()->getState(type);
+			if (state.id == AudioMsgId(_data, _realParent->fullId(), state.id.externalPlayId()) && state.length) {
+				const auto currentProgress = voice->seekingCurrent();
+				::Media::Player::instance()->finishSeeking(
+					AudioMsgId::Type::Voice,
+					currentProgress);
 
-		if (_mode == Mode::Grid && !part.item->originalText().empty()) {
-			part._captionText.clickHandlerPressedChanged(p, pressed);
+				voice->ensurePlayback(this);
+				voice->playback->position = 0;
+				voice->playback->progress = anim::value(currentProgress, currentProgress);
+			}
+			voice->stopSeeking();
 		}
 	}
+	File::clickHandlerPressedChanged(p, pressed);
 }
 
 template <typename DataMediaRange>
