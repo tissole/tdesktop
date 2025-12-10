@@ -1897,11 +1897,6 @@ void GroupedMedia::clickHandlerPressedChanged(
 		if (pressed && part.content->dragItemByHandler(p)) {
 			// #TODO drag by item from album
 			// App::pressedLinkItem(part.view);
-		if (_mode == Mode::Grid && !part.item->originalText().empty()) {
-			// Note: Ui::Text::String doesn't have a direct method, but
-			// we allow the repaint logic to flow if needed.
-			// The actual Toggle happens in ClickHandler::onClick.
-			// This loop ensures we check all parts.
 		}
 	}
 }
