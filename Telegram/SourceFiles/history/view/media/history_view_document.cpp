@@ -413,9 +413,9 @@ void Document::fillNamedFromData(not_null<HistoryDocumentNamed*> named) {
 }
 
 QSize Document::countOptimalSize() {
-	auto hasTranscribe = false;
-	const auto voice = Get<HistoryDocumentVoice>();
-	if (voice) {
+    auto hasTranscribe = false;
+    const auto voice = Get<HistoryDocumentVoice>();
+    if (voice) {
 		const auto history = _realParent->history();
 		const auto session = &history->session();
 		const auto transcribes = &session->api().transcribes();
@@ -473,7 +473,7 @@ QSize Document::countOptimalSize() {
 				}
 			}
 		}
-	}
+    }
 
 	auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
@@ -610,7 +610,7 @@ QSize Document::countOptimalSize() {
 		// Issue 5: 2px below caption
 		minHeight += 2;
 	} else {
-		// Issue 4: 2px below content if no caption
+		// Issue 4: 2px below content if no caption (Single file logic)
 		minHeight += 2;
 	}
 	
@@ -660,7 +660,6 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight += 2;
 	}
 	
-	// Respect width
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
 		result.setHeight(newHeight);
@@ -1919,7 +1918,8 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		height += captioned->caption.countHeight(captionw);
 		height += 2; // 2px below caption
 	} else {
-		height += 2; // 2px below thumb
+		// Issue 1 & 3 Fix: Do NOT add 2px below thumb here for groups.
+		// GroupedMedia will add the 2px gap.
 	}
 	return { maxWidth, height };
 }
@@ -1938,7 +1938,7 @@ QSize Document::sizeForGrouping(int width) const {
 		height += captioned->caption.countHeight(captionw);
 		height += 2; // 2px below caption
 	} else {
-		height += 2; // 2px below thumb
+		// Issue 1 & 3 Fix: Do NOT add 2px below thumb here for groups.
 	}
 	return { maxWidth(), height };
 }

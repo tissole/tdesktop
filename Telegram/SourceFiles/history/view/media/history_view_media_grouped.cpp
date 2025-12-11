@@ -259,6 +259,7 @@ QSize GroupedMedia::countOptimalSize() {
 	Assert(layout.size() == _parts.size());
 
 	auto minHeight = 0;
+	bool lastRowHasCaption = false;
 	
 	if (_mode == Mode::Column) {
 		auto top = 0;
@@ -272,14 +273,10 @@ QSize GroupedMedia::countOptimalSize() {
 			_parts[i].sides = item.sides;
 			
 			top += partHeight;
-			
-			// Issue 6: 2px gap between items
-			if (i < count - 1) {
-				top += 2;
-			}
+			// Issue 1 & 3: Do NOT add explicit +2 here. 
+			// Document::sizeForGrouping already provides necessary spacing.
 		}
-		// 2px bottom padding after last item
-		minHeight = top + 2;
+		minHeight = top;
 	} else {
 		// Grid Mode
 		for (auto i = 0, count = int(layout.size()); i != count; ++i) {
@@ -290,7 +287,6 @@ QSize GroupedMedia::countOptimalSize() {
 			_parts[i].sides = item.sides;
 		}
 
-		// Issue 3: Grid Captions 2px spacing
 		std::map<int, std::vector<int>> rows;
 		for (auto i = 0; i != _parts.size(); ++i) {
 			rows[_parts[i].initialGeometry.y()].push_back(i);
@@ -328,9 +324,17 @@ QSize GroupedMedia::countOptimalSize() {
 				}
 				minHeight += uniformCaptionHeight;
 			}
+			
+			if (rowY == rows.rbegin()->first) {
+				lastRowHasCaption = rowHasCaption;
+			}
 		}
-		// Issue 2: Exactly 2px bottom padding for frame
-		minHeight += 2;
+		
+		// Issues 2 & 8: If last row has caption, it already has 2px bottom padding.
+		// If not, we need to add the 2px frame padding.
+		if (!lastRowHasCaption) {
+			minHeight += 2;
+		}
 	}
 
 	const auto groupPadding = groupedPadding();
@@ -342,6 +346,7 @@ QSize GroupedMedia::countOptimalSize() {
 QSize GroupedMedia::countCurrentSize(int newWidth) {
 	accumulate_min(newWidth, maxWidth());
 	auto newHeight = 0;
+	bool lastRowHasCaption = false;
 
 	if (_mode == Mode::Grid && newWidth < st::historyGroupWidthMin) {
 		return { newWidth, newHeight };
@@ -353,12 +358,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			part.geometry = QRect(0, top, newWidth, size.height());
 			
 			top += size.height();
-			// Issue 6: 2px gap
-			if (i < _parts.size() - 1) {
-				top += 2; 
-			}
+			// Issue 1 & 3: Do NOT add explicit +2 here.
 		}
-		newHeight = top + 2; 
+		newHeight = top;
 	} else {
 		// Grid Resize Logic
 		const auto initialSpacing = st::historyGroupSkip;
@@ -449,10 +451,18 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 					_parts[i].captionRect = QRect();
 				}
 			}
+			
+			if (rowY == rows.rbegin()->first) {
+				lastRowHasCaption = rowHasCaption;
+			}
 		}
 
 		newHeight += totalShift;
-		newHeight += 2; // Final bottom padding
+		
+		// Issues 2 & 8
+		if (!lastRowHasCaption) {
+			newHeight += 2;
+		}
 	}
 
 	const auto groupPadding = groupedPadding();
@@ -575,11 +585,19 @@ void GroupedMedia::drawHighlight(
 		if (full) {
 			auto copy = context;
 			copy.highlight.range = {};
+			
+			// Issue 6 Fix: Extend highlight by 1px down to cover the gap
+			// between items, making the selection continuous.
+			int highlightHeight = rect.height();
+			if (i < count - 1) {
+				highlightHeight += 1;
+			}
+			
 			_parent->paintCustomHighlight(
 				p,
 				copy,
 				rect.y(),
-				rect.height(),
+				highlightHeight,
 				part.item);
 		}
 	}

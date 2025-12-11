@@ -1660,7 +1660,6 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 			}
 		}
 		
-		// Use the group part item if valid, otherwise fallback to main item
 		HistoryItem *targetItem = groupPartItem ? groupPartItem : view->data().get();
 		const auto targetHasText = targetItem && !targetItem->originalText().empty();
 
@@ -1678,7 +1677,7 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 						? tr::lng_context_copy_selected(tr::now)
 						: tr::lng_context_copy_text(tr::now), [=] {
 						
-						// Re-resolve item in callback for safety using the ID
+						// ISSUE 9 FIX: Re-resolve using ID
 						const auto safeItem = groupPartId 
 							? owner->message(groupPartId) 
 							: owner->message(itemId);
@@ -1688,7 +1687,7 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								if (hasCaptionText) {
 									TextUtilities::SetClipboardText(request.selectedText);
 								} else if (groupPartId) {
-									// Specific grid item text (caption)
+									// Specific grid item text
 									TextUtilities::SetClipboardText(HistoryItemText(safeItem));
 								} else if (asGroup) {
 									// Full group text

@@ -1269,13 +1269,12 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	const auto customHighlight = mediaDisplayed && media->customHighlight();
 	
 	if (!mediaSelectionIntervals.empty() || customHighlight) {
-		// Calculate top of inner bubble content area (Fix for Issue 8)
+		// Issue 6 & 7 Fix: Top-Down calculation
 		auto topY = g.top();
 		
 		if (mediaDisplayed && media->isBubbleTop()) {
-			// No top padding if media is flush
+			// Flush
 		} else {
-			// Add top paddings
 			topY += st::msgPadding.top();
 			
 			if (displayFromName()) {
@@ -1286,7 +1285,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			}
 			if (displayForwardedFrom()) {
 				auto forwarded = item->Get<HistoryMessageForwarded>();
-				auto trect = g.marginsRemoved(st::msgPadding); // Temp rect for width check
+				auto trect = g.marginsRemoved(st::msgPadding);
 				auto fwdheight = ((forwarded->text.maxWidth() > trect.width()) ? 2 : 1) * st::semiboldFont->height;
 				topY += fwdheight;
 			}
@@ -1299,13 +1298,10 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		}
 
 		if (mediaDisplayed) {
-			// Calculate if we need to add spacing before media (e.g. if there is text above it)
+			// If text above media
 			if (!invertMedia() && hasVisibleText()) {
-				// This case is tricky because text height is variable. 
-				// However, the glitch usually happens when media is at the top/bottom stack.
-				// If text is present, highlight usually works fine.
-				// Let's stick to the reliable bottom-up calc but account for reactions padding.
-				
+				// Fallback to Bottom-Up if text is involved, as text height is dynamic
+				// But we must fix the bottom padding calculation
 				auto localMediaBottom = g.top() + g.height();
 				
 				if (data()->repliesAreComments() || data()->externalReply()) {
@@ -1331,7 +1327,6 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 					}
 					localMediaBottom -= reactionSkip + _reactions->height();
 
-					// Issue 8 Fix: Ensure we subtract the 2px padding below reactions if media is compact
 					if (mediaDisplayed && (item->media()->photo() || item->media()->document())) {
 						localMediaBottom -= 2; 
 					} else {
@@ -1360,7 +1355,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				
 				localMediaTop = localMediaBottom - media->height();
 			} else {
-				// If media is the first thing, use topY directly
+				// Direct top calculation for pure media stacks
 				localMediaTop = topY;
 			}
 		}
