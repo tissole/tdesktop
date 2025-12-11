@@ -1651,12 +1651,14 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		}
 
 		// Detect if we are over a specific part of a group
-		const auto groupPartItem = (request.pointState == PointState::GroupPart && request.overState.itemId)
-			? owner->message(request.overState.itemId)
-			: nullptr;
+		HistoryItem *groupPartItem = nullptr;
+		if (request.pointState == PointState::GroupPart && request.overState.itemId) {
+			groupPartItem = owner->message(request.overState.itemId);
+		}
 		
-		// Use the group part item if valid, otherwise fallback to main item
-		const auto targetItem = groupPartItem ? groupPartItem : view->data();
+		// Use the group part item if valid, otherwise fallback to main item.
+		// Added .get() to view->data() to match types.
+		HistoryItem *targetItem = groupPartItem ? groupPartItem : view->data().get();
 		const auto targetHasText = targetItem && !targetItem->originalText().empty();
 
 		bool canCopy = view->hasVisibleText() 
