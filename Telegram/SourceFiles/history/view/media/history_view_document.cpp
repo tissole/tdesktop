@@ -574,7 +574,7 @@ QSize Document::countOptimalSize() {
 	const bool hasCaptionContent = captioned || hasTranscribe;
 	
 	if (hasCaptionContent) {
-		// 2px above caption
+		// Issue 5: 2px above caption
 		minHeight += 2;
 	}
 
@@ -601,11 +601,16 @@ QSize Document::countOptimalSize() {
 		} 
 	}
 	
+	if (captioned) {
+		auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
+		minHeight += captioned->caption.countHeight(captionw);
+	}
+
 	if (hasCaptionContent) {
-		// 2px below caption
+		// Issue 5: 2px below caption
 		minHeight += 2;
 	} else {
-		// 2px below content if no caption
+		// Issue 4: 2px below content if no caption
 		minHeight += 2;
 	}
 	
@@ -632,7 +637,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
 	if (hasCaptionContent) {
-		// 2px above
+		// Issue 5: 2px above
 		newHeight += 2;
 	}
 
@@ -648,10 +653,10 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		// 2px below
+		// Issue 5: 2px below
 		newHeight += 2;
 	} else {
-		// 2px below content
+		// Issue 4: 2px below content
 		newHeight += 2;
 	}
 	

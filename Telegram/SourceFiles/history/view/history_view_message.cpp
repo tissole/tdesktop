@@ -1269,62 +1269,102 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	const auto customHighlight = mediaDisplayed && media->customHighlight();
 	
 	if (!mediaSelectionIntervals.empty() || customHighlight) {
-		auto localMediaBottom = g.top() + g.height();
+		// Calculate top of inner bubble content area (Fix for Issue 8)
+		auto topY = g.top();
 		
-		if (data()->repliesAreComments() || data()->externalReply()) {
-			localMediaBottom -= st::historyCommentsButtonHeight;
-		}
-		
-		if (_viewButton) {
-			auto viewButtonSkip = mediaInBubbleSkip;
-			if (mediaDisplayed && item->media()) {
-				if (item->media()->photo() || item->media()->document()) {
-					viewButtonSkip = 2;
-				}
+		if (mediaDisplayed && media->isBubbleTop()) {
+			// No top padding if media is flush
+		} else {
+			// Add top paddings
+			topY += st::msgPadding.top();
+			
+			if (displayFromName()) {
+				topY += st::msgNameFont->height;
 			}
-			localMediaBottom -= (viewButtonSkip + _viewButton->height());
-		}
-		
-		if (reactionsInBubble) {
-			auto reactionSkip = mediaInBubbleSkip;
-			if (mediaDisplayed && item->media()) {
-				if (item->media()->photo() || item->media()->document()) {
-					reactionSkip = 2;
-				}
+			if (displayedTopicButton()) {
+				topY += st::topicButtonSkip + st::topicButtonPadding.top() + st::msgNameFont->height + st::topicButtonPadding.bottom() + st::topicButtonSkip;
 			}
-			localMediaBottom -= reactionSkip + _reactions->height();
+			if (displayForwardedFrom()) {
+				auto forwarded = item->Get<HistoryMessageForwarded>();
+				auto trect = g.marginsRemoved(st::msgPadding); // Temp rect for width check
+				auto fwdheight = ((forwarded->text.maxWidth() > trect.width()) ? 2 : 1) * st::semiboldFont->height;
+				topY += fwdheight;
+			}
+			if (const auto reply = Get<Reply>()) {
+				topY += reply->height();
+			}
+			if (item->Has<HistoryMessageVia>() && !displayFromName() && !displayForwardedFrom()) {
+				topY += st::msgNameFont->height;
+			}
+		}
 
-			if (mediaDisplayed && (item->media()->photo() || item->media()->document())) {
-				localMediaBottom -= 2; 
+		if (mediaDisplayed) {
+			// Calculate if we need to add spacing before media (e.g. if there is text above it)
+			if (!invertMedia() && hasVisibleText()) {
+				// This case is tricky because text height is variable. 
+				// However, the glitch usually happens when media is at the top/bottom stack.
+				// If text is present, highlight usually works fine.
+				// Let's stick to the reliable bottom-up calc but account for reactions padding.
+				
+				auto localMediaBottom = g.top() + g.height();
+				
+				if (data()->repliesAreComments() || data()->externalReply()) {
+					localMediaBottom -= st::historyCommentsButtonHeight;
+				}
+				
+				if (_viewButton) {
+					auto viewButtonSkip = mediaInBubbleSkip;
+					if (mediaDisplayed && item->media()) {
+						if (item->media()->photo() || item->media()->document()) {
+							viewButtonSkip = 2;
+						}
+					}
+					localMediaBottom -= (viewButtonSkip + _viewButton->height());
+				}
+				
+				if (reactionsInBubble) {
+					auto reactionSkip = mediaInBubbleSkip;
+					if (mediaDisplayed && item->media()) {
+						if (item->media()->photo() || item->media()->document()) {
+							reactionSkip = 2;
+						}
+					}
+					localMediaBottom -= reactionSkip + _reactions->height();
+
+					// Issue 8 Fix: Ensure we subtract the 2px padding below reactions if media is compact
+					if (mediaDisplayed && (item->media()->photo() || item->media()->document())) {
+						localMediaBottom -= 2; 
+					} else {
+						localMediaBottom -= st::msgPadding.bottom();
+					}
+				}
+				
+				if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
+					auto paddingBottom = st::msgPadding.bottom();
+					auto bottomSkip = mediaInBubbleSkip;
+					if (mediaDisplayed && item->media()) {
+						if (item->media()->photo() || item->media()->document()) {
+							paddingBottom = 2;
+							bottomSkip = 2;
+						}
+					}
+
+					localMediaBottom -= paddingBottom;
+					if (mediaDisplayed) {
+						localMediaBottom -= bottomSkip;
+					}
+				}
+				
+				if (check) localMediaBottom -= check->height();
+				if (entry) localMediaBottom -= entry->height();
+				
+				localMediaTop = localMediaBottom - media->height();
 			} else {
-				localMediaBottom -= st::msgPadding.bottom();
+				// If media is the first thing, use topY directly
+				localMediaTop = topY;
 			}
 		}
 		
-		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
-			auto paddingBottom = st::msgPadding.bottom();
-			auto bottomSkip = mediaInBubbleSkip;
-			if (mediaDisplayed && item->media()) {
-				if (item->media()->photo() || item->media()->document()) {
-					paddingBottom = 2;
-					bottomSkip = 2;
-				}
-			}
-
-			localMediaBottom -= paddingBottom;
-			if (mediaDisplayed) {
-				localMediaBottom -= bottomSkip;
-			}
-		}
-		
-		if (check) {
-			localMediaBottom -= check->height();
-		}
-		if (entry) {
-			localMediaBottom -= entry->height();
-		}
-		
-		localMediaTop = localMediaBottom - media->height();
 		for (auto &[top, height] : mediaSelectionIntervals) {
 			top += localMediaTop;
 		}

@@ -1652,12 +1652,15 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 
 		// Detect if we are over a specific part of a group
 		HistoryItem *groupPartItem = nullptr;
+		FullMsgId groupPartId;
 		if (request.pointState == PointState::GroupPart && request.overState.itemId) {
 			groupPartItem = owner->message(request.overState.itemId);
+			if (groupPartItem) {
+				groupPartId = groupPartItem->fullId();
+			}
 		}
 		
-		// Use the group part item if valid, otherwise fallback to main item.
-		// Added .get() to view->data() to match types.
+		// Use the group part item if valid, otherwise fallback to main item
 		HistoryItem *targetItem = groupPartItem ? groupPartItem : view->data().get();
 		const auto targetHasText = targetItem && !targetItem->originalText().empty();
 
@@ -1674,15 +1677,18 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 					result->addAction(hasCaptionText
 						? tr::lng_context_copy_selected(tr::now)
 						: tr::lng_context_copy_text(tr::now), [=] {
-						// Re-resolve item in callback for safety
-						const auto safeItem = groupPartItem ? owner->message(groupPartItem->fullId()) : owner->message(itemId);
+						
+						// Re-resolve item in callback for safety using the ID
+						const auto safeItem = groupPartId 
+							? owner->message(groupPartId) 
+							: owner->message(itemId);
 
 						if (safeItem) {
 							if (!list->showCopyRestriction(safeItem)) {
 								if (hasCaptionText) {
 									TextUtilities::SetClipboardText(request.selectedText);
-								} else if (groupPartItem) {
-									// Specific grid item text
+								} else if (groupPartId) {
+									// Specific grid item text (caption)
 									TextUtilities::SetClipboardText(HistoryItemText(safeItem));
 								} else if (asGroup) {
 									// Full group text

@@ -273,14 +273,13 @@ QSize GroupedMedia::countOptimalSize() {
 			
 			top += partHeight;
 			
-			// Add 2px gap between items (but not after the last one)
+			// Issue 6: 2px gap between items
 			if (i < count - 1) {
 				top += 2;
 			}
 		}
-		// Padding after last item is handled by Message::draw (isCompact = true),
-		// so we do not add extra here to avoid double padding (2+2=4).
-		minHeight = top;
+		// 2px bottom padding after last item
+		minHeight = top + 2;
 	} else {
 		// Grid Mode
 		for (auto i = 0, count = int(layout.size()); i != count; ++i) {
@@ -291,14 +290,13 @@ QSize GroupedMedia::countOptimalSize() {
 			_parts[i].sides = item.sides;
 		}
 
-		// Grid Captions
+		// Issue 3: Grid Captions 2px spacing
 		std::map<int, std::vector<int>> rows;
 		for (auto i = 0; i != _parts.size(); ++i) {
 			rows[_parts[i].initialGeometry.y()].push_back(i);
 		}
 
 		const auto textHeight = st::messageTextStyle.font->height;
-		// 2px top + text + 2px bottom = uniform height for row
 		const auto uniformCaptionHeight = 2 + textHeight + 2; 
 
 		for (auto const& [rowY, indices] : rows) {
@@ -331,7 +329,8 @@ QSize GroupedMedia::countOptimalSize() {
 				minHeight += uniformCaptionHeight;
 			}
 		}
-		// Final bottom padding for Grid is handled by Message::draw (isCompact = true)
+		// Issue 2: Exactly 2px bottom padding for frame
+		minHeight += 2;
 	}
 
 	const auto groupPadding = groupedPadding();
@@ -354,11 +353,12 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			part.geometry = QRect(0, top, newWidth, size.height());
 			
 			top += size.height();
+			// Issue 6: 2px gap
 			if (i < _parts.size() - 1) {
-				top += 2; // Gap between items
+				top += 2; 
 			}
 		}
-		newHeight = top; 
+		newHeight = top + 2; 
 	} else {
 		// Grid Resize Logic
 		const auto initialSpacing = st::historyGroupSkip;
@@ -450,7 +450,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				}
 			}
 		}
+
 		newHeight += totalShift;
+		newHeight += 2; // Final bottom padding
 	}
 
 	const auto groupPadding = groupedPadding();
@@ -490,9 +492,7 @@ QMargins GroupedMedia::groupedPadding() const {
 	const auto normal = st::msgFileLayout.padding;
 	const auto grouped = st::msgFileLayoutGrouped.padding;
 	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-	
-	// Return 0 bottom padding here so we don't get double padding
-	// from the style defaults + our manual calculation.
+	// Return 0 bottom padding so we control it manually
 	return QMargins(
 		0,
 		(normal.top() - grouped.top()) - topMinus,
