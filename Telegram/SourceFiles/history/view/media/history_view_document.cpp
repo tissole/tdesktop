@@ -636,8 +636,8 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
+	// Issue 5: 2px above caption
 	if (hasCaptionContent) {
-		// Issue 5: 2px above
 		newHeight += 2;
 	}
 
@@ -653,10 +653,10 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		// Issue 5: 2px below
+		// Issue 5: 2px below caption
 		newHeight += 2;
 	} else {
-		// Issue 4: 2px below content
+		// Issue 4: 2px below content if no caption (Single file logic)
 		newHeight += 2;
 	}
 	

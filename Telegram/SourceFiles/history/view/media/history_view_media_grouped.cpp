@@ -273,8 +273,21 @@ QSize GroupedMedia::countOptimalSize() {
 			_parts[i].sides = item.sides;
 			
 			top += partHeight;
-			// Issue 1 & 3: Do NOT add explicit +2 here. 
-			// Document::sizeForGrouping already provides necessary spacing.
+			
+			// Issue 2 & 3: Check for thumb to determine overlap.
+			// Thumbs needs -1, others -2.
+			const auto hasThumb = [&] {
+				if (const auto file = dynamic_cast<Data::MediaFile*>(_parts[i].item->media())) {
+					if (const auto doc = file->document()) {
+						return doc->hasThumbnail() && !doc->isSong();
+					}
+				}
+				return false;
+			}();
+
+			if (i < count - 1) {
+				top -= (hasThumb ? 1 : 2);
+			}
 		}
 		minHeight = top;
 	} else {
@@ -354,11 +367,23 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		auto top = 0;
 		for (auto i = 0; i < _parts.size(); ++i) {
 			auto &part = _parts[i];
-			const auto size = part.content->sizeForGrouping(newWidth);
 			part.geometry = QRect(0, top, newWidth, size.height());
 			
 			top += size.height();
-			// Issue 1 & 3: Do NOT add explicit +2 here.
+			
+			// Issue 2 & 3: Check for thumb to determine overlap.
+			const auto hasThumb = [&] {
+				if (const auto file = dynamic_cast<Data::MediaFile*>(part.item->media())) {
+					if (const auto doc = file->document()) {
+						return doc->hasThumbnail() && !doc->isSong();
+					}
+				}
+				return false;
+			}();
+			
+			if (i < _parts.size() - 1) {
+				top -= (hasThumb ? 1 : 2);
+			}
 		}
 		newHeight = top;
 	} else {
@@ -586,17 +611,25 @@ void GroupedMedia::drawHighlight(
 			auto copy = context;
 			copy.highlight.range = {};
 			
-			// Issue 6 Fix: Extend highlight by 1px down to cover the gap
-			// between items, making the selection continuous.
+			// Issue 6 Fix: Split highlight in the middle of the 2px visual gap.
+			int highlightY = rect.y();
 			int highlightHeight = rect.height();
+			
+			if (i > 0) {
+				highlightY += 1;
+				highlightHeight -= 1;
+			}
 			if (i < count - 1) {
-				highlightHeight += 1;
+				highlightHeight -= 1;
+			} else {
+				// Last item: exclude the bottom 2px spacing.
+				highlightHeight -= 2;
 			}
 			
 			_parent->paintCustomHighlight(
 				p,
 				copy,
-				rect.y(),
+				highlightY,
 				highlightHeight,
 				part.item);
 		}
@@ -1046,7 +1079,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			} else {
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 				const auto textHeight = st::messageTextStyle.font->height;
-				const auto verticalOffset = std::max(2, (captionRect.height() - textHeight) / 2);
+				// Issue 7: Force 2px top padding.
+				const auto verticalOffset = 2;
 
 				const auto captionLeft = captionRect.left() + padding.left();
 				const auto captionTop = captionRect.top() + verticalOffset;
@@ -1163,7 +1197,7 @@ TextState GroupedMedia::getPartState(
 					if (singleCaptionAnywhere && i == captionIndices[0]) {
 						result.customTooltip = false;
 					} else {
-						if (part._captionText.maxWidth() > captionWidth) {
+						if (part._captionText.maxWidth() > captionWidth && !request.forText()) {
 							result.customTooltip = true;
 							result.customTooltipText = originalText.text;
 						}
