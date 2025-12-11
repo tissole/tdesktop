@@ -1650,52 +1650,47 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 			AddDocumentActions(result, document, view->data(), list);
 		}
 
-		// FIX: Check if we are hovering a Grid part to allow copying its caption
+		// Detect if we are over a specific part of a group
+		const auto groupPartItem = (request.pointState == PointState::GroupPart && request.overState.itemId)
+			? owner->message(request.overState.itemId)
+			: nullptr;
+		
+		// Use the group part item if valid, otherwise fallback to main item
+		const auto targetItem = groupPartItem ? groupPartItem : view->data();
+		const auto targetHasText = targetItem && !targetItem->originalText().empty();
+
 		bool canCopy = view->hasVisibleText() 
 			|| mediaHasTextForCopy 
-			|| (request.pointState == PointState::GroupPart);
+			|| targetHasText;
 
 		if (!link && canCopy) {
 			if (!list->hasCopyRestriction(view->data())) {
 				const auto asGroup = (request.pointState != PointState::GroupPart);
 				const auto hasCaptionText = !request.selectedText.empty();
 
-				// FIX: Explicitly check for Grid Item Caption
-				bool hasOverCaption = false;
-				if (request.pointState == PointState::GroupPart) {
-					// Use the specific item ID from the click state
-					const auto captionItemId = request.overState.itemId;
-					if (const auto captionItem = owner->message(captionItemId)) {
-						if (!captionItem->originalText().empty()) {
-							hasOverCaption = true;
-						}
-					}
-				}
-
-				if (hasCaptionText || hasOverCaption || view->hasVisibleText() || (asGroup && mediaHasTextForCopy)) {
+				if (hasCaptionText || targetHasText || view->hasVisibleText() || (asGroup && mediaHasTextForCopy)) {
 					result->addAction(hasCaptionText
 						? tr::lng_context_copy_selected(tr::now)
 						: tr::lng_context_copy_text(tr::now), [=] {
-						if (const auto item = owner->message(itemId)) {
-							if (!list->showCopyRestriction(item)) {
+						// Re-resolve item in callback for safety
+						const auto safeItem = groupPartItem ? owner->message(groupPartItem->fullId()) : owner->message(itemId);
+
+						if (safeItem) {
+							if (!list->showCopyRestriction(safeItem)) {
 								if (hasCaptionText) {
 									TextUtilities::SetClipboardText(request.selectedText);
-								} else if (hasOverCaption) {
-									// FIX: Copy FULL caption text for the specific grid item
-									const auto captionItemId = request.overState.itemId;
-									if (const auto captionItem = owner->message(captionItemId)) {
-										const auto captionText = captionItem->originalText().text;
-										if (!captionText.isEmpty()) {
-											TextUtilities::SetClipboardText(TextForMimeData::Simple(captionText));
-										}
-									}
+								} else if (groupPartItem) {
+									// Specific grid item text
+									TextUtilities::SetClipboardText(HistoryItemText(safeItem));
 								} else if (asGroup) {
-									if (const auto group = owner->groups().find(item)) {
+									// Full group text
+									if (const auto group = owner->groups().find(safeItem)) {
 										TextUtilities::SetClipboardText(HistoryGroupText(group));
 										return;
 									}
+									TextUtilities::SetClipboardText(HistoryItemText(safeItem));
 								} else {
-									TextUtilities::SetClipboardText(HistoryItemText(item));
+									TextUtilities::SetClipboardText(HistoryItemText(safeItem));
 								}
 							}
 						}

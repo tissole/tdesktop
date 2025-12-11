@@ -565,11 +565,16 @@ QSize Document::countOptimalSize() {
 	}
 
 	auto minHeight = st.padding.top() + contentHeight;
+	
+	if (!isBubbleTop()) {
+		minHeight -= st::msgFileTopMinus;
+	}
 
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 	
 	if (hasCaptionContent) {
+		// 2px above caption
 		minHeight += 2;
 	}
 
@@ -584,9 +589,6 @@ QSize Document::countOptimalSize() {
 					+ tright));
 		}
 	}
-	if (!isBubbleTop()) {
-		minHeight -= st::msgFileTopMinus;
-	}
 
 	if (hasTranscribe) {
 		auto captionw = maxWidth
@@ -598,6 +600,15 @@ QSize Document::countOptimalSize() {
 			minHeight += st::mediaCaptionSkip;
 		} 
 	}
+	
+	if (hasCaptionContent) {
+		// 2px below caption
+		minHeight += 2;
+	} else {
+		// 2px below content if no caption
+		minHeight += 2;
+	}
+	
 	return { maxWidth, minHeight };
 }
 
@@ -613,24 +624,18 @@ QSize Document::countCurrentSize(int newWidth) {
 		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
 	}
 
-	if (!captioned && !hasTranscribe) {
-		auto result = File::countCurrentSize(newWidth);
-		
-		int correctHeight = st.padding.top() + contentHeight;
-		
-		if (!isBubbleTop()) correctHeight -= st::msgFileTopMinus;
-		result.setHeight(correctHeight);
-		
-		return result;
-	}
-
-	accumulate_min(newWidth, maxWidth());
-	
-	auto newHeight = st.padding.top() + contentHeight + 2;
-
+	auto newHeight = st.padding.top() + contentHeight;
 	if (!isBubbleTop()) {
 		newHeight -= st::msgFileTopMinus;
 	}
+	
+	const bool hasCaptionContent = captioned || hasTranscribe;
+
+	if (hasCaptionContent) {
+		// 2px above
+		newHeight += 2;
+	}
+
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
 		newHeight += voice->transcribeText.countHeight(captionw);
@@ -642,6 +647,22 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight += captioned->caption.countHeight(captionw);
 	}
 
+	if (hasCaptionContent) {
+		// 2px below
+		newHeight += 2;
+	} else {
+		// 2px below content
+		newHeight += 2;
+	}
+	
+	// Respect width
+	if (!captioned && !hasTranscribe) {
+		auto result = File::countCurrentSize(newWidth);
+		result.setHeight(newHeight);
+		return result;
+	}
+
+	accumulate_min(newWidth, maxWidth());
 	return { newWidth, newHeight };
 }
 

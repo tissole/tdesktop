@@ -259,27 +259,30 @@ QSize GroupedMedia::countOptimalSize() {
 	Assert(layout.size() == _parts.size());
 
 	auto minHeight = 0;
-
+	
 	if (_mode == Mode::Column) {
-		// FIX: Overlap logic for Column mode to ensure 2px spacing.
-		// Subtract the top padding of the standard style from the accumulated height
-		// so that the next item's top padding overlaps the previous item's bottom spacing.
 		auto top = 0;
-		const auto overlap = st::msgFileThumbLayoutGrouped.padding.top();
 		for (auto i = 0, count = int(layout.size()); i != count; ++i) {
 			const auto &item = layout[i];
 			accumulate_max(maxWidth, item.geometry.x() + item.geometry.width());
 			
-			// Re-calculate geometry top based on overlap
-			const auto h = item.geometry.height();
-			_parts[i].initialGeometry = QRect(0, top, item.geometry.width(), h);
+			const auto partHeight = sizes[i].height();
+			
+			_parts[i].initialGeometry = QRect(0, top, item.geometry.width(), partHeight);
 			_parts[i].sides = item.sides;
 			
-			top += h - overlap;
+			top += partHeight;
+			
+			// Add 2px gap between items (but not after the last one)
+			if (i < count - 1) {
+				top += 2;
+			}
 		}
-		// Restore the last overlap for total height
-		minHeight = top + overlap;
+		// Padding after last item is handled by Message::draw (isCompact = true),
+		// so we do not add extra here to avoid double padding (2+2=4).
+		minHeight = top;
 	} else {
+		// Grid Mode
 		for (auto i = 0, count = int(layout.size()); i != count; ++i) {
 			const auto &item = layout[i];
 			accumulate_max(maxWidth, item.geometry.x() + item.geometry.width());
@@ -287,80 +290,48 @@ QSize GroupedMedia::countOptimalSize() {
 			_parts[i].initialGeometry = item.geometry;
 			_parts[i].sides = item.sides;
 		}
-	}
 
-	// Calculate caption heights for Grid mode
-	if (_mode == Mode::Grid) {
-		std::vector<int> captionIndices;
+		// Grid Captions
+		std::map<int, std::vector<int>> rows;
 		for (auto i = 0; i != _parts.size(); ++i) {
-			if (!_parts[i].item->originalText().empty()) {
-				captionIndices.push_back(i);
-			}
+			rows[_parts[i].initialGeometry.y()].push_back(i);
 		}
-		const auto captionCount = captionIndices.size();
-		const bool singleCaptionAnywhere = (captionCount == 1);
-		const auto padding = QMargins(8, 2, 8, 2);
 
-		if (!singleCaptionAnywhere && captionCount > 0) {
-			const auto textHeight = st::messageTextStyle.font->height;
-			const auto uniformCaptionHeight = textHeight + padding.top() + padding.bottom();
+		const auto textHeight = st::messageTextStyle.font->height;
+		// 2px top + text + 2px bottom = uniform height for row
+		const auto uniformCaptionHeight = 2 + textHeight + 2; 
 
-			std::map<int, std::vector<int>> rows;
-			for (auto i = 0; i != _parts.size(); ++i) {
-				rows[_parts[i].initialGeometry.y()].push_back(i);
+		for (auto const& [rowY, indices] : rows) {
+			bool rowHasCaption = false;
+			for (const auto i : indices) {
+				if (!_parts[i].item->originalText().empty()) {
+					rowHasCaption = true;
+					break;
+				}
 			}
 
-			for (auto const& [rowY, indices] : rows) {
-				const bool isLastRow = (rowY == rows.rbegin()->first);
-				bool rowHasCaption = false;
-
+			if (rowHasCaption) {
 				for (const auto i : indices) {
-					if (!_parts[i].item->originalText().empty()) {
-						_parts[i]._captionHeight = uniformCaptionHeight;
-						_parts[i]._captionText = Ui::Text::String(
+					auto &part = _parts[i];
+					if (!part.item->originalText().empty()) {
+						part._captionHeight = uniformCaptionHeight;
+						part._captionText = Ui::Text::String(
 							st::messageTextStyle,
-							_parts[i].item->originalText(),
+							part.item->originalText(),
 							Ui::ItemTextDefaultOptions(),
 							st::msgMinWidth,
 							Core::TextContext({
 								.session = &_parent->history()->session(),
 								.repaint = [=] { _parent->customEmojiRepaint(); },
 							}));
-						rowHasCaption = true;
 					} else {
-						_parts[i]._captionHeight = 0;
+						part._captionHeight = 0;
 					}
 				}
-
-				if (rowHasCaption) {
-					if (!isLastRow) {
-						minHeight += std::max(0, uniformCaptionHeight - st::historyGroupSkip);
-					} else {
-						minHeight += uniformCaptionHeight;
-					}
-				}
+				minHeight += uniformCaptionHeight;
 			}
 		}
-		else if (singleCaptionAnywhere) {
-			const auto captionIdx = captionIndices[0];
-			for(auto &p : _parts) p._captionHeight = 0;
-
-			auto &part = _parts[captionIdx];
-			const auto captionWidth = std::min(maxWidth, st::historyGroupWidthMax) - padding.left() - padding.right();
-			
-			part._captionText = Ui::Text::String(st::msgMinWidth);
-			part._captionText.setMarkedText(
-				st::messageTextStyle,
-				part.item->originalText(),
-				Ui::ItemTextOptions(part.item),
-				Core::TextContext({
-					.session = &_parent->history()->session(),
-					.repaint = [=] { _parent->customEmojiRepaint(); },
-				}));
-
-			part._captionHeight = int(part._captionText.countHeight(captionWidth) + padding.top() + padding.bottom());
-			minHeight += part._captionHeight;
-		}
+		// Final bottom padding for Grid is handled by Message::draw (isCompact = true)
 	}
 
 	const auto groupPadding = groupedPadding();
@@ -377,14 +348,19 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		return { newWidth, newHeight };
 	} else if (_mode == Mode::Column) {
 		auto top = 0;
-		const auto overlap = st::msgFileThumbLayoutGrouped.padding.top();
-		for (auto &part : _parts) {
+		for (auto i = 0; i < _parts.size(); ++i) {
+			auto &part = _parts[i];
 			const auto size = part.content->sizeForGrouping(newWidth);
 			part.geometry = QRect(0, top, newWidth, size.height());
-			top += size.height() - overlap;
+			
+			top += size.height();
+			if (i < _parts.size() - 1) {
+				top += 2; // Gap between items
+			}
 		}
-		newHeight = top + overlap;
+		newHeight = top; 
 	} else {
+		// Grid Resize Logic
 		const auto initialSpacing = st::historyGroupSkip;
 		const auto factor = newWidth / float64(maxWidth());
 		const auto scale = [&](int value) {
@@ -414,110 +390,67 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				- top
 				- (needBottomSkip ? spacing : 0);
 			part.geometry = QRect(left, top, width, height);
-
 			accumulate_max(newHeight, top + height);
 		}
+		
+		std::map<int, std::vector<int>> rows;
+		for (auto i = 0; i != _parts.size(); ++i) {
+			rows[_parts[i].initialGeometry.y()].push_back(i);
+		}
 
-		if (_mode == Mode::Grid) {
-			std::vector<int> captionIndices;
-			for (auto i = 0; i != _parts.size(); ++i) {
+		const auto textHeight = st::messageTextStyle.font->height;
+		const auto uniformCaptionHeight = 2 + textHeight + 2;
+
+		int totalShift = 0;
+
+		for (auto const& [rowY, indices] : rows) {
+			bool rowHasCaption = false;
+			int rowBottomMax = 0;
+
+			for (const auto i : indices) {
+				_parts[i].geometry.translate(0, totalShift);
+				rowBottomMax = std::max(rowBottomMax, _parts[i].geometry.bottom());
+			}
+
+			for (const auto i : indices) {
 				if (!_parts[i].item->originalText().empty()) {
-					captionIndices.push_back(i);
+					rowHasCaption = true;
+					break;
 				}
 			}
-			const auto captionCount = captionIndices.size();
-			const bool singleCaptionAnywhere = (captionCount == 1);
-			const auto padding = QMargins(8, 2, 8, 2);
 
-			for(auto &p : _parts) {
-				p._captionHeight = 0;
-				p.captionRect = QRect();
-			}
-
-			if (singleCaptionAnywhere) {
-				const auto captionIdx = captionIndices[0];
-				auto &part = _parts[captionIdx];
-				const auto captionWidth = newWidth - padding.left() - padding.right();
-
-				part._captionText = Ui::Text::String(st::msgMinWidth);
-				part._captionText.setMarkedText(
-					st::messageTextStyle,
-					part.item->originalText(),
-					Ui::ItemTextOptions(part.item),
-					Core::TextContext({
-						.session = &_parent->history()->session(),
-						.repaint = [=] { _parent->customEmojiRepaint(); },
-					}));
-
-				part._captionHeight = 2 + part._captionText.countHeight(captionWidth) + 2;
-				part.captionRect = QRect(
-					0,
-					newHeight, 
-					newWidth,
-					part._captionHeight);
-
-				newHeight += part._captionHeight;
-
-			} else if (captionCount > 0) {
-				std::map<int, std::vector<int>> rows;
-				for (auto i = 0; i != _parts.size(); ++i) {
-					rows[_parts[i].initialGeometry.y()].push_back(i);
-				}
-
-				const auto textHeight = st::messageTextStyle.font->height;
-				const auto uniformCaptionHeight = 2 + textHeight + 2;
-
-				for (auto const& [rowY, indices] : rows) {
-					auto rowBottom = 0;
-					for (const auto i : indices) {
-						rowBottom = std::max(rowBottom, _parts[i].geometry.bottom());
-					}
-
-					bool rowHasCaption = false;
-					for (const auto i : indices) {
-						if (!_parts[i].item->originalText().empty()) {
-							rowHasCaption = true;
-							break;
-						}
-					}
-
-					if (rowHasCaption) {
-						const bool isLastRow = (rowY == rows.rbegin()->first);
-						const auto shiftAmount = isLastRow ? uniformCaptionHeight : std::max(0, uniformCaptionHeight - spacing);
-
-						for (const auto i : indices) {
-							auto &part = _parts[i];
-							if (!_parts[i].item->originalText().empty()) {
-								part._captionHeight = uniformCaptionHeight;
-								part._captionText = Ui::Text::String(
-									st::messageTextStyle,
-									part.item->originalText(),
-									Ui::ItemTextDefaultOptions(),
-									st::msgMinWidth,
-									Core::TextContext({
-										.session = &_parent->history()->session(),
-										.repaint = [=] { _parent->customEmojiRepaint(); },
-									}));
-								part.captionRect = QRect(
-									part.geometry.left(),
-									rowBottom,
-									part.geometry.width(),
-									uniformCaptionHeight);
-							}
-						}
+			if (rowHasCaption) {
+				for (const auto i : indices) {
+					auto &part = _parts[i];
+					if (!part.item->originalText().empty()) {
+						part._captionHeight = uniformCaptionHeight;
+						part._captionText = Ui::Text::String(
+							st::messageTextStyle,
+							part.item->originalText(),
+							Ui::ItemTextDefaultOptions(),
+							st::msgMinWidth,
+							Core::TextContext({
+								.session = &_parent->history()->session(),
+								.repaint = [=] { _parent->customEmojiRepaint(); },
+							}));
 						
-						if (!isLastRow) {
-							for (auto &shiftPart : _parts) {
-								if (shiftPart.initialGeometry.y() > rowY) {
-									shiftPart.geometry.translate(0, shiftAmount);
-								}
-							}
-						}
-						newHeight += shiftAmount;
+						part.captionRect = QRect(
+							part.geometry.left(),
+							part.geometry.bottom(), 
+							part.geometry.width(),
+							uniformCaptionHeight);
+					} else {
+						part.captionRect = QRect();
 					}
+				}
+				totalShift += uniformCaptionHeight;
+			} else {
+				for (const auto i : indices) {
+					_parts[i].captionRect = QRect();
 				}
 			}
 		}
+		newHeight += totalShift;
 	}
 
 	const auto groupPadding = groupedPadding();
@@ -554,23 +487,17 @@ Ui::BubbleRounding GroupedMedia::applyRoundingSides(
 }
 
 QMargins GroupedMedia::groupedPadding() const {
-	if (_mode != Mode::Column) {
-		// For Grid mode with per-item captions, do not add extra bottom padding
-		// since each item has its own caption area. The old logic added extra
-		// padding at the bottom when any Grid item has a caption, which makes
-		// the last row visually different from the others.
-		return QMargins();
-	}
 	const auto normal = st::msgFileLayout.padding;
 	const auto grouped = st::msgFileLayoutGrouped.padding;
 	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-	// Do not add extra bottom padding in Column mode for captions.
-	// Extra padding created a visible empty row after the last caption.
+	
+	// Return 0 bottom padding here so we don't get double padding
+	// from the style defaults + our manual calculation.
 	return QMargins(
 		0,
 		(normal.top() - grouped.top()) - topMinus,
 		0,
-		(normal.bottom() - grouped.bottom()));
+		0); 
 }
 
 Media *GroupedMedia::lookupSpoilerTagMedia() const {

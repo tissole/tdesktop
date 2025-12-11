@@ -1249,8 +1249,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		}
 	}
 
-	// Entry page is always a bubble bottom.
-	auto mediaOnBottom = (mediaDisplayed && media->isBubbleBottom()) || check || (entry/* && entry->isBubbleBottom()*/);
+	auto mediaOnBottom = (mediaDisplayed && media->isBubbleBottom()) || check || (entry);
 	auto mediaOnTop = (mediaDisplayed && media->isBubbleTop()) || (entry && entry->isBubbleTop());
 
 	const auto displayInfo = needInfoDisplay();
@@ -1271,9 +1270,11 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	
 	if (!mediaSelectionIntervals.empty() || customHighlight) {
 		auto localMediaBottom = g.top() + g.height();
+		
 		if (data()->repliesAreComments() || data()->externalReply()) {
 			localMediaBottom -= st::historyCommentsButtonHeight;
 		}
+		
 		if (_viewButton) {
 			auto viewButtonSkip = mediaInBubbleSkip;
 			if (mediaDisplayed && item->media()) {
@@ -1281,8 +1282,9 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 					viewButtonSkip = 2;
 				}
 			}
-			localMediaBottom -= viewButtonSkip + _viewButton->height();
+			localMediaBottom -= (viewButtonSkip + _viewButton->height());
 		}
+		
 		if (reactionsInBubble) {
 			auto reactionSkip = mediaInBubbleSkip;
 			if (mediaDisplayed && item->media()) {
@@ -1298,6 +1300,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				localMediaBottom -= st::msgPadding.bottom();
 			}
 		}
+		
 		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 			auto paddingBottom = st::msgPadding.bottom();
 			auto bottomSkip = mediaInBubbleSkip;
@@ -1313,12 +1316,14 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				localMediaBottom -= bottomSkip;
 			}
 		}
+		
 		if (check) {
 			localMediaBottom -= check->height();
 		}
 		if (entry) {
 			localMediaBottom -= entry->height();
 		}
+		
 		localMediaTop = localMediaBottom - media->height();
 		for (auto &[top, height] : mediaSelectionIntervals) {
 			top += localMediaTop;
