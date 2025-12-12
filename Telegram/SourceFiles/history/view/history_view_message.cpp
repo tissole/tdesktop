@@ -4840,7 +4840,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 				newHeight += media->height();
 			}
 			
-			if (mediaOnBottom && isCompact) {
+			if (mediaOnBottom && isCompact && (check || entry || reactionsInBubble)) {
 				newHeight += 2;
 			}
 			

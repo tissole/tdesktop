@@ -720,7 +720,8 @@ void Document::draw(
 	const auto linktop = st.linkTop - topMinus;
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	// Apply 2px spacing above caption for both Full (single files) and Grouped modes
-	const auto bottomPadding = captioned ? 2 : st.padding.bottom();
+	// Issue 5: 2px spacing above caption is standard now.
+	const auto bottomPadding = 2;
 	const auto bottom = st.padding.top() + st.thumbSize + bottomPadding - topMinus;
 	const auto rthumb = style::rtlrect(st.padding.left(), st.padding.top() - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
@@ -1906,7 +1907,11 @@ void Document::refreshCaption(bool last) {
 QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-	auto height = st.padding.top() + st.thumbSize;
+	auto contentHeight = st.thumbSize;
+	if (downloadInCorner()) {
+		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
+	}
+	auto height = st.padding.top() + contentHeight;
 
 	const_cast<Document*>(this)->refreshCaption(last);
 
@@ -1916,7 +1921,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 			- st::msgPadding.right();
 		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
-		height += 2; // 2px below caption
+
 	} else {
 		// Issue 1 & 3 Fix: Do NOT add 2px below thumb here for groups.
 		// GroupedMedia will add the 2px gap.
@@ -1928,7 +1933,12 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 QSize Document::sizeForGrouping(int width) const {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-	auto height = st.padding.top() + st.thumbSize;
+
+	auto contentHeight = st.thumbSize;
+	if (downloadInCorner()) {
+		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
+	}
+	auto height = st.padding.top() + contentHeight;
 	
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
@@ -1936,7 +1946,7 @@ QSize Document::sizeForGrouping(int width) const {
 			- st::msgPadding.right();
 		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
-		height += 2; // 2px below caption
+
 	} else {
 		// Issue 1 & 3 Fix: Do NOT add 2px below thumb here for groups.
 	}

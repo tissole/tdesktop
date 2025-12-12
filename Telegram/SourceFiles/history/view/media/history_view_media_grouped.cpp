@@ -274,19 +274,34 @@ QSize GroupedMedia::countOptimalSize() {
 			
 			top += partHeight;
 			
-			// Issue 2 & 3: Check for thumb to determine overlap.
-			// Thumbs needs -1, others -2.
-			const auto hasThumb = [&] {
-				if (const auto file = dynamic_cast<Data::MediaFile*>(_parts[i].item->media())) {
-					if (const auto doc = file->document()) {
-						return doc->hasThumbnail() && !doc->isSong();
-					}
-				}
-				return false;
-			}();
-
 			if (i < count - 1) {
-				top -= (hasThumb ? 1 : 2);
+				// Issue 1 & 3: Ensure 2px visual gap between elements.
+				// top is currently at the Frame Bottom of item [i].
+				// Next item [i+1] starts at top + Adjustment.
+				// We want Item[i+1] Visual Top to be Item[i] Visual Bottom + 2.
+				// Item[i+1] Visual Top = Frame Top + Item[i+1] Top Padding.
+				// So Frame Top + NextPadding = Item[i] Visual Bottom + 2.
+				// We know 'top' = Item[i] Frame Bottom = Item[i] Visual Bottom - Item[i] Bottom Padding.
+				// But sizeForGrouping for non-captioned doesn't include Bottom Padding.
+				// So for non-captioned: top = Item[i] Visual Bottom.
+				// So Frame Top + NextPadding = top + 2.
+				// Frame Top = top + 2 - NextPadding.
+				// So Adjustment = 2 - NextPadding.
+				
+				// Determine NextPadding
+				// We need to check if next item has thumb to pick the right layout.
+				const auto nextHasThumb = [&] {
+					const auto &nextPart = _parts[i + 1];
+					if (const auto file = dynamic_cast<Data::MediaFile*>(nextPart.item->media())) {
+						if (const auto doc = file->document()) {
+							return doc->hasThumbnail() && !doc->isSong();
+						}
+					}
+					return false;
+				}();
+				
+				const auto &stNext = (nextHasThumb ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
+				top += (2 - stNext.padding.top());
 			}
 		}
 		minHeight = top;
@@ -345,7 +360,7 @@ QSize GroupedMedia::countOptimalSize() {
 		
 		// Issues 2 & 8: If last row has caption, it already has 2px bottom padding.
 		// If not, we need to add the 2px frame padding.
-		if (!lastRowHasCaption) {
+		if (!lastRowHasCaption && _mode == Mode::Column) {
 			minHeight += 2;
 		}
 	}
@@ -372,18 +387,20 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			
 			top += size.height();
 			
-			// Issue 2 & 3: Check for thumb to determine overlap.
-			const auto hasThumb = [&] {
-				if (const auto file = dynamic_cast<Data::MediaFile*>(part.item->media())) {
-					if (const auto doc = file->document()) {
-						return doc->hasThumbnail() && !doc->isSong();
-					}
-				}
-				return false;
-			}();
-			
 			if (i < _parts.size() - 1) {
-				top -= (hasThumb ? 1 : 2);
+				// Issue 1 & 3: Ensure 2px visual gap between elements (Same logic as optimal).
+				const auto nextHasThumb = [&] {
+					const auto &nextPart = _parts[i + 1];
+					if (const auto file = dynamic_cast<Data::MediaFile*>(nextPart.item->media())) {
+						if (const auto doc = file->document()) {
+							return doc->hasThumbnail() && !doc->isSong();
+						}
+					}
+					return false;
+				}();
+				
+				const auto &stNext = (nextHasThumb ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
+				top += (2 - stNext.padding.top());
 			}
 		}
 		newHeight = top;
@@ -486,7 +503,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		newHeight += totalShift;
 		
 		// Issues 2 & 8
-		if (!lastRowHasCaption) {
+		if ((!lastRowHasCaption && _mode == Mode::Column)) {
 			newHeight += 2;
 		}
 	}
@@ -1453,7 +1470,7 @@ PointState GroupedMedia::pointState(QPoint point) const {
 
 TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 	const auto groupPadding = groupedPadding();
-	auto result = getPartState(point - QPoint(0, groupPadding.top()), request);
+	auto result = getPartState(point, request);
 	if (const auto tagged = lookupSpoilerTagMedia()) {
 		if (QRect(0, 0, width(), height()).contains(point)) {
 			if (auto link = tagged->spoilerTagLink()) {
