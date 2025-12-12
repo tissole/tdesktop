@@ -367,6 +367,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		auto top = 0;
 		for (auto i = 0; i < _parts.size(); ++i) {
 			auto &part = _parts[i];
+			const auto size = part.content->sizeForGrouping(newWidth);
 			part.geometry = QRect(0, top, newWidth, size.height());
 			
 			top += size.height();
@@ -1197,7 +1198,8 @@ TextState GroupedMedia::getPartState(
 					if (singleCaptionAnywhere && i == captionIndices[0]) {
 						result.customTooltip = false;
 					} else {
-						if (part._captionText.maxWidth() > captionWidth && !request.forText()) {
+						// Only show tooltip if we are NOT looking for text selection/symbol (which is used for copying).
+						if (part._captionText.maxWidth() > captionWidth && !(request.flags & Ui::Text::StateRequest::Flag::LookupSymbol)) {
 							result.customTooltip = true;
 							result.customTooltipText = originalText.text;
 						}
