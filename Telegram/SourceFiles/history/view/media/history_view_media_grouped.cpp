@@ -301,42 +301,21 @@ QSize GroupedMedia::countOptimalSize() {
 				// Helper to get Visual Bottom offset relative to Frame Top
 				auto getVisualBottomOffset = [&](int index) {
 					const auto &part = _parts[index];
+					if (!part.item->emptyText()) {
+						return _parts[index].initialGeometry.height() - 2;
+					}
 					if (const auto file = dynamic_cast<Data::MediaFile*>(part.item->media())) {
 						const auto doc = file->document();
 						if (doc && doc->hasThumbnail() && !doc->isSong()) {
-							// Thumbnail: Padding Top + ThumbSize
 							return st::msgFileThumbLayoutGrouped.padding.top() + st::msgFileThumbLayoutGrouped.thumbSize;
 						} else if (doc && doc->isSong()) {
-							// Music: Download Arrow Bottom (shift + padding + size)
 							return st::msgFileLayoutGrouped.padding.top() + st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 						} else {
-							// Standard File: Circle Bottom (padding top + thumbSize)
 							return st::msgFileLayoutGrouped.padding.top() + st::msgFileLayoutGrouped.thumbSize;
 						}
 					}
-					return _parts[index].initialGeometry.height(); // Fallback
+					return _parts[index].initialGeometry.height();
 				};
-
-				// Current Item Frame Top is (top - partHeight).
-				// Current Item Visual Bottom (Global) = (Frame Top) + getVisualBottomOffset(i).
-				// We want Next Item Visual Top (Global) = Current Item Visual Bottom (Global) + 2.
-				// Next Item Visual Top (Global) = (top) + getVisualTopOffset(i+1).
-				// So: top + getVisualTopOffset(i+1) = (top - partHeight) + getVisualBottomOffset(i) + 2.
-				// Wait, 'top' variable is currently at Frame Bottom of Item[i] (which will be Frame Top of Item[i+1]).
-				// So: top + getVisualTopOffset(i+1) = top - partHeight + getVisualBottomOffset(i) + 2.
-				// Error in logic above: 'top' is tracked as accumulation.
-				// Let's redefine:
-				// 'top' is currently the candidate Frame Top for Item[i+1].
-				// Previous Item Frame Top was (top - partHeight).
-				
-				// Correct Logic:
-				// PrevFrameTop = top - partHeight;
-				// PrevVisualBottom = PrevFrameTop + getVisualBottomOffset(i);
-				// TargetNextVisualTop = PrevVisualBottom + 2;
-				// TargetNextFrameTop = TargetNextVisualTop - getVisualTopOffset(i+1);
-				// delta = TargetNextFrameTop - top;
-				// top += delta;
-				
 				const auto prevFrameTop = top - partHeight;
 				const auto prevVisualBottom = prevFrameTop + getVisualBottomOffset(i);
 				const auto targetNextVisualTop = prevVisualBottom + 2;
@@ -347,15 +326,12 @@ QSize GroupedMedia::countOptimalSize() {
 		}
 		// Fix Bottom Spacing for Last Item (Column Mode)
 		// Ensure 2px between Last Item Visual Bottom and Album Bottom.
-		// Current 'minHeight' (top) is Frame Bottom of last item.
-		// Last Item Visual Bottom = (Frame Top) + getVisualBottomOffset(last).
-		// Frame Top = top - sizes.back().height().
-		// LastVisualBottom = top - sizes.back().height() + getVisualBottomOffset(last).
-		// TargetAlbumBottom = LastVisualBottom + 2 + groupPadding.bottom() (added later).
-		// So we adjust 'top' (minHeight before padding) to be LastVisualBottom + 2.
 		if (!layout.empty()) {
 			auto getVisualBottomOffset = [&](int index) {
 				const auto &part = _parts[index];
+				if (!part.item->emptyText()) {
+					return _parts[index].initialGeometry.height() - 2;
+				}
 				if (const auto file = dynamic_cast<Data::MediaFile*>(part.item->media())) {
 					const auto doc = file->document();
 					if (doc && doc->hasThumbnail() && !doc->isSong()) {
@@ -428,9 +404,8 @@ QSize GroupedMedia::countOptimalSize() {
 			}
 		}
 		
-		// Issues 2 & 8: If last row has caption, it already has 2px bottom padding.
-		// If not, we need to add the 2px frame padding.
-		if (!lastRowHasCaption && _mode == Mode::Column) {
+		// Issues 2 & 8
+		if (!lastRowHasCaption) {
 			minHeight += 2;
 		}
 	}
@@ -478,6 +453,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				// Helper to get Visual Bottom offset relative to Frame Top
 				auto getVisualBottomOffset = [&](int index) {
 					const auto &part = _parts[index];
+					if (!part.item->emptyText()) {
+						return _parts[index].geometry.height() - 2;
+					}
 					if (const auto file = dynamic_cast<Data::MediaFile*>(part.item->media())) {
 						const auto doc = file->document();
 						if (doc && doc->hasThumbnail() && !doc->isSong()) {
@@ -503,6 +481,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		if (!_parts.empty()) {
 			auto getVisualBottomOffset = [&](int index) {
 				const auto &part = _parts[index];
+				if (!part.item->emptyText()) {
+					return _parts[index].geometry.height() - 2;
+				}
 				if (const auto file = dynamic_cast<Data::MediaFile*>(part.item->media())) {
 					const auto doc = file->document();
 					if (doc && doc->hasThumbnail() && !doc->isSong()) {
@@ -621,7 +602,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		newHeight += totalShift;
 		
 		// Issues 2 & 8
-		if ((!lastRowHasCaption && _mode == Mode::Column)) {
+		if (!lastRowHasCaption) {
 			newHeight += 2;
 		}
 	}

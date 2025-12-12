@@ -1678,25 +1678,20 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 						: tr::lng_context_copy_text(tr::now), [=] {
 						
 						// ISSUE 9 FIX: Re-resolve using ID
-						const auto safeItem = groupPartId 
+						auto safeItem = groupPartId 
 							? owner->message(groupPartId) 
 							: owner->message(itemId);
+
+						if (!safeItem && groupPartItem) {
+							safeItem = groupPartItem;
+						}
 
 						if (safeItem) {
 							if (!list->showCopyRestriction(safeItem)) {
 								if (hasCaptionText) {
 									TextUtilities::SetClipboardText(request.selectedText);
-								} else if (groupPartId) {
-									// Specific grid item text
-									TextUtilities::SetClipboardText(HistoryItemText(safeItem));
-								} else if (asGroup) {
-									// Full group text
-									if (const auto group = owner->groups().find(safeItem)) {
-										TextUtilities::SetClipboardText(HistoryGroupText(group));
-										return;
-									}
-									TextUtilities::SetClipboardText(HistoryItemText(safeItem));
 								} else {
+									// Specific grid item text or main item text
 									TextUtilities::SetClipboardText(HistoryItemText(safeItem));
 								}
 							}

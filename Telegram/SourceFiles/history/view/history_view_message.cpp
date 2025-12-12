@@ -989,15 +989,21 @@ QSize Message::performCountOptimalSize() {
 
 		// FIX: Use 2px bottom padding for Compact Media (Photos, Documents)
 		bool isCompact = false;
+		bool hasInternalPadding = false;
 		if (mediaDisplayed && item->media()) {
-			if (item->media()->photo() || item->media()->document()) {
+			if (item->media()->photo()) {
 				isCompact = true;
+			} else if (item->media()->document() || item->media()->group()) {
+				isCompact = true;
+				hasInternalPadding = true;
 			}
 		}
 
 		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 			// Apply padding
-			minHeight += isCompact ? 2 : st::msgPadding.bottom();
+			minHeight += isCompact
+				? (hasInternalPadding ? 0 : 2)
+				: st::msgPadding.bottom();
 			
 			if (mediaDisplayed) {
 				minHeight += isCompact ? 2 : st::mediaInBubbleSkip;
@@ -1005,7 +1011,9 @@ QSize Message::performCountOptimalSize() {
 		} else if (mediaOnBottom && mediaDisplayed && isCompact) {
 			// Even if mediaOnBottom is true, ensure we have the 2px padding for docs
 			// because Document::countOptimalSize no longer includes it.
-			minHeight += 2;
+			if (!hasInternalPadding) {
+				minHeight += 2;
+			}
 		}
 
 		if (!mediaOnTop) {
