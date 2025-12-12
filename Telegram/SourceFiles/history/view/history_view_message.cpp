@@ -4815,13 +4815,14 @@ int Message::resizeContentGetHeight(int newWidth) {
 			if (mediaDisplayed && item->media()) {
 				const auto photo = item->media()->photo();
 				const auto document = item->media()->document();
-				if (photo || document) {
+				if (photo || document || (item->groupId() != 0)) {
 					isCompact = true;
 				}
 			}
 
 			auto mediaInBubbleSkip = isCompact ? 2 : st::mediaInBubbleSkip;
-			auto msgPaddingBottom = isCompact ? 2 : st::msgPadding.bottom();
+			// FIX ISSUE: User wants flush bottom (0px) for compact media (Photos/Videos/Albums).
+			auto msgPaddingBottom = isCompact ? 0 : st::msgPadding.bottom();
 
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 				newHeight += msgPaddingBottom;

@@ -413,7 +413,7 @@ void Document::fillNamedFromData(not_null<HistoryDocumentNamed*> named) {
 }
 
 QSize Document::countOptimalSize() {
-    auto hasTranscribe = false;
+	auto hasTranscribe = false;
     const auto voice = Get<HistoryDocumentVoice>();
     if (voice) {
 		const auto history = _realParent->history();
@@ -561,7 +561,9 @@ QSize Document::countOptimalSize() {
 
 	int contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
-		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
+		// FIX Issue from user: For Music files, measure from 'download arrow' (shift + size),
+		// NOT from the 'circle with play button' (thumbSize), to ensure 2px spacing from the arrow.
+		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
 	auto minHeight = st.padding.top() + contentHeight;
@@ -626,7 +628,8 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	int contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
-		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
+		// FIX Issue from user: For Music files, measure from 'download arrow' (shift + size).
+		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
 	auto newHeight = st.padding.top() + contentHeight;
@@ -1909,7 +1912,8 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	auto contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
-		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
+		// FIX Issue from user: For Music files, measure from 'download arrow' (shift + size).
+		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 	auto height = st.padding.top() + contentHeight;
 
@@ -1936,7 +1940,8 @@ QSize Document::sizeForGrouping(int width) const {
 
 	auto contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
-		contentHeight = std::max(contentHeight, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
+		// FIX Issue from user: For Music files, measure from 'download arrow' (shift + size).
+		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 	auto height = st.padding.top() + contentHeight;
 	
