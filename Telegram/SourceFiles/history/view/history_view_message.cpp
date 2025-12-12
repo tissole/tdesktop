@@ -4815,7 +4815,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 			if (mediaDisplayed && item->media()) {
 				const auto photo = item->media()->photo();
 				const auto document = item->media()->document();
-				if (photo || document || (item->groupId() != 0)) {
+				if (photo || document || (item->groupId())) {
 					isCompact = true;
 				}
 			}
