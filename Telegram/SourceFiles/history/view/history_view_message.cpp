@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item_components.h"
 #include "history/history_item_helpers.h"
 #include "history/view/media/history_view_media_generic.h"
+#include "history/view/media/history_view_media_grouped.h"
 #include "history/view/media/history_view_web_page.h"
 #include "history/view/media/history_view_suggest_decision.h"
 #include "history/view/reactions/history_view_reactions.h"
@@ -993,7 +994,7 @@ QSize Message::performCountOptimalSize() {
 		if (mediaDisplayed && item->media()) {
 			if (item->media()->photo()) {
 				isCompact = true;
-			} else if (item->media()->document() || item->media()->group()) {
+			} else if (item->media()->document() || dynamic_cast<const GroupedMedia*>(this->media())) {
 				isCompact = true;
 				hasInternalPadding = true;
 			}
