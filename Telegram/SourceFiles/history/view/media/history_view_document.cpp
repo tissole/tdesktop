@@ -1925,10 +1925,10 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 			- st::msgPadding.right();
 		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
-
+		height += 2; // 2px below caption
 	} else {
-		// Issue 1 & 3 Fix: Do NOT add 2px below thumb here for groups.
-		// GroupedMedia will add the 2px gap.
+		// Issue 2 & 3 Fix: Add 2px below thumb for groups.
+		height += 2;
 	}
 	return { maxWidth, height };
 }
@@ -1951,9 +1951,10 @@ QSize Document::sizeForGrouping(int width) const {
 			- st::msgPadding.right();
 		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
-
+		height += 2; // 2px below caption
 	} else {
-		// Issue 1 & 3 Fix: Do NOT add 2px below thumb here for groups.
+		// Issue 2 & 3 Fix: Add 2px below thumb for groups.
+		height += 2;
 	}
 	return { maxWidth(), height };
 }

@@ -273,82 +273,6 @@ QSize GroupedMedia::countOptimalSize() {
 			_parts[i].sides = item.sides;
 			
 			top += partHeight;
-			
-			if (i < count - 1) {
-				// Issue 1 & 3: Ensure 2px visual gap between elements.
-				// We need to calculate the "Visual Bottom" of the current item and "Visual Top" of next.
-				
-				// Helper to get Visual Top offset relative to Frame Top
-				auto getVisualTopOffset = [&](int index) {
-					const auto &part = _parts[index];
-					if (const auto file = dynamic_cast<Data::MediaFile*>(part.item->media())) {
-						const auto doc = file->document();
-						if (doc && doc->hasThumbnail() && !doc->isSong()) {
-							// Thumbnail: Visual Top is at Padding Top.
-							return st::msgFileThumbLayoutGrouped.padding.top();
-						} else if (doc && doc->isSong()) {
-							// Music: Visual Top is Download Arrow Top (shift + padding).
-							// Note: We use st::msgFileLayoutGrouped for Music usually.
-							return st::msgFileLayoutGrouped.padding.top() + st::historyAudioDownloadShift;
-						} else {
-							// Standard File: Visual Top is Circle Top (padding top).
-							return st::msgFileLayoutGrouped.padding.top();
-						}
-					}
-					return 0; // Fallback
-				};
-				
-				// Helper to get Visual Bottom offset relative to Frame Top
-				auto getVisualBottomOffset = [&](int index) {
-					const auto &part = _parts[index];
-					if (!part.item->emptyText()) {
-						return _parts[index].initialGeometry.height() - 2;
-					}
-					if (const auto file = dynamic_cast<Data::MediaFile*>(part.item->media())) {
-						const auto doc = file->document();
-						if (doc && doc->hasThumbnail() && !doc->isSong()) {
-							return st::msgFileThumbLayoutGrouped.padding.top() + st::msgFileThumbLayoutGrouped.thumbSize;
-						} else if (doc && doc->isSong()) {
-							return st::msgFileLayoutGrouped.padding.top() + st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-						} else {
-							return st::msgFileLayoutGrouped.padding.top() + st::msgFileLayoutGrouped.thumbSize;
-						}
-					}
-					return _parts[index].initialGeometry.height();
-				};
-				const auto prevFrameTop = top - partHeight;
-				const auto prevVisualBottom = prevFrameTop + getVisualBottomOffset(i);
-				const auto targetNextVisualTop = prevVisualBottom + 2;
-				const auto targetNextFrameTop = targetNextVisualTop - getVisualTopOffset(i + 1);
-				
-				top = targetNextFrameTop;
-			}
-		}
-		// Fix Bottom Spacing for Last Item (Column Mode)
-		// Ensure 2px between Last Item Visual Bottom and Album Bottom.
-		if (!layout.empty()) {
-			auto getVisualBottomOffset = [&](int index) {
-				const auto &part = _parts[index];
-				if (!part.item->emptyText()) {
-					return _parts[index].initialGeometry.height() - 2;
-				}
-				if (const auto file = dynamic_cast<Data::MediaFile*>(part.item->media())) {
-					const auto doc = file->document();
-					if (doc && doc->hasThumbnail() && !doc->isSong()) {
-						return st::msgFileThumbLayoutGrouped.padding.top() + st::msgFileThumbLayoutGrouped.thumbSize;
-					} else if (doc && doc->isSong()) {
-						return st::msgFileLayoutGrouped.padding.top() + st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-					} else {
-						return st::msgFileLayoutGrouped.padding.top() + st::msgFileLayoutGrouped.thumbSize;
-					}
-				}
-				return _parts[index].initialGeometry.height();
-			};
-			const auto lastIndex = int(layout.size()) - 1;
-			const auto lastPartHeight = sizes[lastIndex].height();
-			const auto lastFrameTop = top - lastPartHeight;
-			const auto lastVisualBottom = lastFrameTop + getVisualBottomOffset(lastIndex);
-			top = lastVisualBottom + 2;
 		}
 		minHeight = top;
 	} else {
@@ -431,76 +355,6 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			part.geometry = QRect(0, top, newWidth, size.height());
 			
 			top += size.height();
-			
-			if (i < _parts.size() - 1) {
-				// Issue 1 & 3: Ensure 2px visual gap between elements.
-				// Helper to get Visual Top offset relative to Frame Top
-				auto getVisualTopOffset = [&](int index) {
-					const auto &part = _parts[index];
-					if (const auto file = dynamic_cast<Data::MediaFile*>(part.item->media())) {
-						const auto doc = file->document();
-						if (doc && doc->hasThumbnail() && !doc->isSong()) {
-							return st::msgFileThumbLayoutGrouped.padding.top();
-						} else if (doc && doc->isSong()) {
-							return st::msgFileLayoutGrouped.padding.top() + st::historyAudioDownloadShift;
-						} else {
-							return st::msgFileLayoutGrouped.padding.top();
-						}
-					}
-					return 0;
-				};
-				
-				// Helper to get Visual Bottom offset relative to Frame Top
-				auto getVisualBottomOffset = [&](int index) {
-					const auto &part = _parts[index];
-					if (!part.item->emptyText()) {
-						return _parts[index].geometry.height() - 2;
-					}
-					if (const auto file = dynamic_cast<Data::MediaFile*>(part.item->media())) {
-						const auto doc = file->document();
-						if (doc && doc->hasThumbnail() && !doc->isSong()) {
-							return st::msgFileThumbLayoutGrouped.padding.top() + st::msgFileThumbLayoutGrouped.thumbSize;
-						} else if (doc && doc->isSong()) {
-							return st::msgFileLayoutGrouped.padding.top() + st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-						} else {
-							return st::msgFileLayoutGrouped.padding.top() + st::msgFileLayoutGrouped.thumbSize;
-						}
-					}
-					return _parts[index].initialGeometry.height();
-				};
-
-				const auto prevFrameTop = top - size.height();
-				const auto prevVisualBottom = prevFrameTop + getVisualBottomOffset(i);
-				const auto targetNextVisualTop = prevVisualBottom + 2;
-				const auto targetNextFrameTop = targetNextVisualTop - getVisualTopOffset(i + 1);
-				
-				top = targetNextFrameTop;
-			}
-		}
-		// Fix Bottom Spacing for Last Item (Column Mode)
-		if (!_parts.empty()) {
-			auto getVisualBottomOffset = [&](int index) {
-				const auto &part = _parts[index];
-				if (!part.item->emptyText()) {
-					return _parts[index].geometry.height() - 2;
-				}
-				if (const auto file = dynamic_cast<Data::MediaFile*>(part.item->media())) {
-					const auto doc = file->document();
-					if (doc && doc->hasThumbnail() && !doc->isSong()) {
-						return st::msgFileThumbLayoutGrouped.padding.top() + st::msgFileThumbLayoutGrouped.thumbSize;
-					} else if (doc && doc->isSong()) {
-						return st::msgFileLayoutGrouped.padding.top() + st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-					} else {
-						return st::msgFileLayoutGrouped.padding.top() + st::msgFileLayoutGrouped.thumbSize;
-					}
-				}
-				return _parts[index].initialGeometry.height();
-			};
-			const auto lastIndex = int(_parts.size()) - 1;
-			const auto lastPartHeight = _parts[lastIndex].geometry.height(); // Already set in loop
-			const auto lastFrameTop = top - lastPartHeight;
-			const auto lastVisualBottom = lastFrameTop + getVisualBottomOffset(lastIndex);
-			top = lastVisualBottom + 2;
 		}
 		newHeight = top;
 	} else {
@@ -543,7 +397,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		}
 
 		const auto textHeight = st::messageTextStyle.font->height;
-		const auto uniformCaptionHeight = 2 + textHeight + 2;
+		const auto uniformCaptionHeight = textHeight + 4;
 
 		int totalShift = 0;
 
@@ -578,9 +432,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 								.repaint = [=] { _parent->customEmojiRepaint(); },
 							}));
 						
-						part.captionRect = QRect(
+							part.captionRect = QRect(
 							part.geometry.left(),
-							part.geometry.bottom(), 
+							part.geometry.y() + part.geometry.height(), 
 							part.geometry.width(),
 							uniformCaptionHeight);
 					} else {
@@ -1305,17 +1159,8 @@ TextState GroupedMedia::getPartState(
 					result.afterSymbol = textStateResult.afterSymbol;
 					result.itemId = part.item->fullId();
 
-					std::vector<int> captionIndices;
-					for (auto j = 0; j != _parts.size(); ++j) {
-						if (!_parts[j].item->originalText().empty()) {
-							captionIndices.push_back(j);
-						}
-					}
-					const bool singleCaptionAnywhere = (captionIndices.size() == 1);
-
-					if (singleCaptionAnywhere && i == captionIndices[0]) {
-						result.customTooltip = false;
-					} else {
+					// If we are over the text, return Text cursor so user can select/copy.
+					if (textStateResult.cursor == CursorState::Text) {
 						// Only show tooltip if we are NOT looking for text selection/symbol (which is used for copying).
 						if (part._captionText.maxWidth() > captionWidth && !(request.flags & Ui::Text::StateRequest::Flag::LookupSymbol)) {
 							result.customTooltip = true;

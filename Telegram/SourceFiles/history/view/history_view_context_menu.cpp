@@ -1691,8 +1691,16 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								if (hasCaptionText) {
 									TextUtilities::SetClipboardText(request.selectedText);
 								} else {
-									// Specific grid item text or main item text
-									TextUtilities::SetClipboardText(HistoryItemText(safeItem));
+									// Check if this is grouped media with captions
+									if (const auto media = view->media()) {
+										if (media->hasTextForCopy()) {
+											TextUtilities::SetClipboardText(media->selectedText(FullSelection));
+										} else {
+											TextUtilities::SetClipboardText(HistoryItemText(safeItem));
+										}
+									} else {
+										TextUtilities::SetClipboardText(HistoryItemText(safeItem));
+									}
 								}
 							}
 						}
