@@ -1051,7 +1051,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				});
 			} else {
 				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
-				const auto textHeight = st::messageTextStyle.font->height;
 				// Issue 7: Force 2px top padding.
 				const auto verticalOffset = 2;
 
@@ -1159,13 +1158,10 @@ TextState GroupedMedia::getPartState(
 					result.afterSymbol = textStateResult.afterSymbol;
 					result.itemId = part.item->fullId();
 
-					// If we are over the text, return Text cursor so user can select/copy.
-					if (textStateResult.cursor == CursorState::Text) {
-						// Only show tooltip if we are NOT looking for text selection/symbol (which is used for copying).
-						if (part._captionText.maxWidth() > captionWidth && !(request.flags & Ui::Text::StateRequest::Flag::LookupSymbol)) {
-							result.customTooltip = true;
-							result.customTooltipText = originalText.text;
-						}
+					// Only show tooltip if we are NOT looking for text selection/symbol (which is used for copying).
+					if (part._captionText.maxWidth() > captionWidth && !(request.flags & Ui::Text::StateRequest::Flag::LookupSymbol)) {
+						result.customTooltip = true;
+						result.customTooltipText = originalText.text;
 					}
 					
 					return result;
