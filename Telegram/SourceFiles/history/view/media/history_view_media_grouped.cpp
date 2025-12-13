@@ -582,20 +582,22 @@ void GroupedMedia::drawHighlight(
 			auto copy = context;
 			copy.highlight.range = {};
 			
-			// Issue 6 Fix: Split highlight in the middle of the 2px visual gap.
+			// Issues 19-22 Fix: Highlight covers full item geometry.
+			// Split highlight in middle of 2px gap between items,
+			// and cover to bottom edge for last item.
 			int highlightY = rect.y();
 			int highlightHeight = rect.height();
 			
 			if (i > 0) {
+				// Start 1px below to split the gap with previous item
 				highlightY += 1;
 				highlightHeight -= 1;
 			}
 			if (i < count - 1) {
+				// End 1px above to split the gap with next item
 				highlightHeight -= 1;
-			} else {
-				// Last item: exclude the bottom 2px spacing.
-				highlightHeight -= 2;
 			}
+			// Last item: no adjustment - highlight covers full height including bottom margin
 			
 			_parent->paintCustomHighlight(
 				p,
@@ -1789,10 +1791,9 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		}
 		const auto &geometry = part.geometry;
 		
+		// Issues 19-22 Fix: Selection covers full item height.
+		// Last item should include the full height (including bottom 2px margin).
 		int visualHeight = geometry.height();
-		if (i < count - 1) {
-			visualHeight -= overlap;
-		}
 
 		if (result.empty()
 			|| (result.back().top + result.back().height
