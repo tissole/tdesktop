@@ -1694,7 +1694,10 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								} else {
 									// Check if this is grouped media with captions
 									if (const auto media = view->media()) {
-										if (media->hasTextForCopy()) {
+										// Fix Issue 1: Prioritize the targeted item text
+										if (safeItem && !safeItem->originalText().empty()) {
+											TextUtilities::SetClipboardText(HistoryItemText(safeItem));
+										} else if (media->hasTextForCopy()) {
 											TextUtilities::SetClipboardText(media->selectedText(FullSelection));
 										} else {
 											TextUtilities::SetClipboardText(HistoryItemText(safeItem));

@@ -330,7 +330,7 @@ QSize GroupedMedia::countOptimalSize() {
 		
 		// Issues 2 & 8
 		if (!lastRowHasCaption) {
-			minHeight += 2;
+			// minHeight += 2; // Removed per user request (Issue 2)
 		}
 	}
 
@@ -457,7 +457,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		
 		// Issues 2 & 8
 		if (!lastRowHasCaption) {
-			newHeight += 2;
+			// newHeight += 2; // Removed per user request (Issue 2)
 		}
 	}
 
@@ -1706,23 +1706,30 @@ TextForMimeData GroupedMedia::selectedText(
 			
 			if (textLen > 0) {
 				if (!selection.empty()) {
-					// Map global selection to local part
-					const int localFrom = std::max((int)selection.from, offset);
-					const int localTo = std::min((int)selection.to, offset + textLen);
-					
-					if (localFrom < localTo) {
-						int start = localFrom - offset;
-						int length = localTo - localFrom;
-						
-						// Basic substring extraction. 
-						// Note: Rich text (entities) copying would require mapping entities,
-						// but TextForMimeData::Simple is sufficient for basic copy.
-						auto partText = originalText.text.mid(start, length);
-						
+					// Handle FullSelection specifically to ensure all text is copied
+					if (selection == FullSelection) {
+						auto partText = originalText.text;
 						if (result.empty()) {
 							result = TextForMimeData::Simple(partText);
 						} else {
 							result.append(u"\n\n"_q).append(TextForMimeData::Simple(partText));
+						}
+					} else {
+						// Map global selection to local part
+						const int localFrom = std::max((int)selection.from, offset);
+						const int localTo = std::min((int)selection.to, offset + textLen);
+						
+						if (localFrom < localTo) {
+							int start = localFrom - offset;
+							int length = localTo - localFrom;
+							
+							auto partText = originalText.text.mid(start, length);
+							
+							if (result.empty()) {
+								result = TextForMimeData::Simple(partText);
+							} else {
+								result.append(u"\n\n"_q).append(TextForMimeData::Simple(partText));
+							}
 						}
 					}
 				}

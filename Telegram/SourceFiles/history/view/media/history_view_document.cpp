@@ -566,7 +566,8 @@ QSize Document::countOptimalSize() {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
-	auto minHeight = st.padding.top() + contentHeight;
+	// Issue 6: 2px below chat name (force 2px top)
+	auto minHeight = 2 + contentHeight;
 	
 	if (!isBubbleTop()) {
 		minHeight -= st::msgFileTopMinus;
@@ -632,7 +633,8 @@ QSize Document::countCurrentSize(int newWidth) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
-	auto newHeight = st.padding.top() + contentHeight;
+	// Issue 6: 2px below chat name (force 2px top)
+	auto newHeight = 2 + contentHeight;
 	if (!isBubbleTop()) {
 		newHeight -= st::msgFileTopMinus;
 	}
@@ -716,17 +718,22 @@ void Document::draw(
 	const auto &st = (mode == LayoutMode::Full)
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
+
+	// Issue 6: Force 2px top padding
+	const auto forcedTop = 2;
+	const auto delta = forcedTop - st.padding.top();
+
 	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
-	const auto nametop = st.nameTop - topMinus;
+	const auto nametop = st.nameTop + delta - topMinus;
 	const auto nameright = st.padding.right();
-	const auto statustop = st.statusTop - topMinus;
-	const auto linktop = st.linkTop - topMinus;
+	const auto statustop = st.statusTop + delta - topMinus;
+	const auto linktop = st.linkTop + delta - topMinus;
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	// Apply 2px spacing above caption for both Full (single files) and Grouped modes
 	// Issue 5: 2px spacing above caption is standard now.
 	const auto bottomPadding = 2;
-	const auto bottom = st.padding.top() + st.thumbSize + bottomPadding - topMinus;
-	const auto rthumb = style::rtlrect(st.padding.left(), st.padding.top() - topMinus, st.thumbSize, st.thumbSize, width);
+	const auto bottom = forcedTop + st.thumbSize + bottomPadding - topMinus;
+	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
 	const auto inner = QRect(rthumb.x() + (rthumb.width() - innerSize) / 2, rthumb.y() + (rthumb.height() - innerSize) / 2, innerSize, innerSize);
 	const auto radialOpacity = radial ? _animation->radial.opacity() : 1.;
@@ -1357,13 +1364,18 @@ TextState Document::textState(
 	const auto &st = (mode == LayoutMode::Full)
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
+
+	// Issue 6: Force 2px top padding
+	const auto forcedTop = 2;
+	const auto delta = forcedTop - st.padding.top();
+
 	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
-	const auto nametop = st.nameTop - topMinus;
+	const auto nametop = st.nameTop + delta - topMinus;
 	const auto nameright = st.padding.right();
 	auto namewidth = width - nameleft - nameright;
-	const auto linktop = st.linkTop - topMinus;
-	auto bottom = st.padding.top() + st.thumbSize + st.padding.bottom() - topMinus;
-	const auto rthumb = style::rtlrect(st.padding.left(), st.padding.top() - topMinus, st.thumbSize, st.thumbSize, width);
+	const auto linktop = st.linkTop + delta - topMinus;
+	auto bottom = forcedTop + st.thumbSize + st.padding.bottom() - topMinus;
+	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
 	const auto inner = QRect(rthumb.x() + (rthumb.width() - innerSize) / 2, rthumb.y() + (rthumb.height() - innerSize) / 2, innerSize, innerSize);
 
@@ -1915,7 +1927,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		// FIX Issue from user: For Music files, measure from 'download arrow' (shift + size).
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
-	auto height = st.padding.top() + contentHeight;
+	auto height = 2 + contentHeight; // Issue 4 & 6: Force 2px top
 
 	const_cast<Document*>(this)->refreshCaption(last);
 
@@ -1943,7 +1955,7 @@ QSize Document::sizeForGrouping(int width) const {
 		// FIX Issue from user: For Music files, measure from 'download arrow' (shift + size).
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
-	auto height = st.padding.top() + contentHeight;
+	auto height = 2 + contentHeight; // Issue 4 & 6: Force 2px top
 	
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
