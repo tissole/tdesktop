@@ -243,10 +243,14 @@ QSize GroupedMedia::countOptimalSize() {
 	for (const auto &part : _parts) {
 		++index;
 		const auto last = (_mode == Mode::Column)
-			? (index == 1)
+			? (index == _parts.size())
 			: (index == _parts.size());
-		sizes.push_back(
-			part.content->sizeForGroupingOptimal(maxWidth, last));
+		
+		auto size = part.content->sizeForGroupingOptimal(maxWidth, last);
+		if (_mode == Mode::Column && last) {
+			size.setHeight(size.height() + 2); // Add 2px bottom padding for the last item
+		}
+		sizes.push_back(size);
 	}
 
 	const auto layout = (_mode == Mode::Grid)
@@ -351,7 +355,13 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		auto top = 0;
 		for (auto i = 0; i < _parts.size(); ++i) {
 			auto &part = _parts[i];
-			const auto size = part.content->sizeForGrouping(newWidth);
+			auto size = part.content->sizeForGrouping(newWidth);
+			
+			// Add 2px bottom padding for the last item in Column mode
+			if (i == _parts.size() - 1) {
+				size.setHeight(size.height() + 2);
+			}
+
 			part.geometry = QRect(0, top, newWidth, size.height());
 			
 			top += size.height();
@@ -1704,32 +1714,32 @@ TextForMimeData GroupedMedia::selectedText(
 			const auto originalText = part.item->originalText();
 			const int textLen = originalText.text.size();
 			
-			if (textLen > 0) {
-				if (!selection.empty()) {
-					// Handle FullSelection specifically to ensure all text is copied
-					if (selection == FullSelection) {
-						auto partText = originalText.text;
+			// Always process FullSelection if requested, even if textLen is 0 (though loop prevents that)
+			// But check originalText emptiness explicitly
+			if (!originalText.text.isEmpty()) {
+				if (selection == FullSelection) {
+					// Handle FullSelection: Accumulate all texts
+					auto partText = originalText.text;
+					if (result.empty()) {
+						result = TextForMimeData::Simple(partText);
+					} else {
+						result.append(u"\n\n"_q).append(TextForMimeData::Simple(partText));
+					}
+				} else if (!selection.empty()) {
+					// Map global selection to local part
+					const int localFrom = std::max((int)selection.from, offset);
+					const int localTo = std::min((int)selection.to, offset + textLen);
+					
+					if (localFrom < localTo) {
+						int start = localFrom - offset;
+						int length = localTo - localFrom;
+						
+						auto partText = originalText.text.mid(start, length);
+						
 						if (result.empty()) {
 							result = TextForMimeData::Simple(partText);
 						} else {
 							result.append(u"\n\n"_q).append(TextForMimeData::Simple(partText));
-						}
-					} else {
-						// Map global selection to local part
-						const int localFrom = std::max((int)selection.from, offset);
-						const int localTo = std::min((int)selection.to, offset + textLen);
-						
-						if (localFrom < localTo) {
-							int start = localFrom - offset;
-							int length = localTo - localFrom;
-							
-							auto partText = originalText.text.mid(start, length);
-							
-							if (result.empty()) {
-								result = TextForMimeData::Simple(partText);
-							} else {
-								result.append(u"\n\n"_q).append(TextForMimeData::Simple(partText));
-							}
 						}
 					}
 				}

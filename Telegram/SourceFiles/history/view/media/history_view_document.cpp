@@ -732,7 +732,13 @@ void Document::draw(
 	// Apply 2px spacing above caption for both Full (single files) and Grouped modes
 	// Issue 5: 2px spacing above caption is standard now.
 	const auto bottomPadding = 2;
-	const auto bottom = forcedTop + st.thumbSize + bottomPadding - topMinus;
+	
+	auto contentHeight = st.thumbSize;
+	if (downloadInCorner()) {
+		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+	}
+	const auto bottom = forcedTop + contentHeight + bottomPadding - topMinus;
+	
 	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
 	const auto inner = QRect(rthumb.x() + (rthumb.width() - innerSize) / 2, rthumb.y() + (rthumb.height() - innerSize) / 2, innerSize, innerSize);
@@ -1374,7 +1380,13 @@ TextState Document::textState(
 	const auto nameright = st.padding.right();
 	auto namewidth = width - nameleft - nameright;
 	const auto linktop = st.linkTop + delta - topMinus;
-	auto bottom = forcedTop + st.thumbSize + st.padding.bottom() - topMinus;
+	
+	auto contentHeight = st.thumbSize;
+	if (downloadInCorner()) {
+		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+	}
+	auto bottom = forcedTop + contentHeight + st.padding.bottom() - topMinus;
+
 	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
 	const auto inner = QRect(rthumb.x() + (rthumb.width() - innerSize) / 2, rthumb.y() + (rthumb.height() - innerSize) / 2, innerSize, innerSize);
@@ -1927,7 +1939,11 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		// FIX Issue from user: For Music files, measure from 'download arrow' (shift + size).
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
-	auto height = 2 + contentHeight; // Issue 4 & 6: Force 2px top
+	auto height = 2 + contentHeight; // Issue 4 & 6: Force 2px top (Verified for Thumbs)
+	if (thumbed && !downloadInCorner()) {
+		// Match the visual gap between standard file circles (layout size - inner size)
+		height += (st::msgFileLayoutGrouped.thumbSize - st::msgFileLayout.thumbSize);
+	}
 
 	const_cast<Document*>(this)->refreshCaption(last);
 
@@ -1937,10 +1953,10 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 			- st::msgPadding.right();
 		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
-		height += 2; // 2px below caption
+		// height += 2; // Removed bottom padding (handled by next item top or GroupedMedia for last)
 	} else {
 		// Issue 2 & 3 Fix: Add 2px below thumb for groups.
-		height += 2;
+		// height += 2; // Removed bottom padding
 	}
 	return { maxWidth, height };
 }
@@ -1955,7 +1971,11 @@ QSize Document::sizeForGrouping(int width) const {
 		// FIX Issue from user: For Music files, measure from 'download arrow' (shift + size).
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
-	auto height = 2 + contentHeight; // Issue 4 & 6: Force 2px top
+	auto height = 2 + contentHeight; // Issue 4 & 6: Force 2px top (Verified for Thumbs)
+	if (thumbed && !downloadInCorner()) {
+		// Match the visual gap between standard file circles (layout size - inner size)
+		height += (st::msgFileLayoutGrouped.thumbSize - st::msgFileLayout.thumbSize);
+	}
 	
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
@@ -1963,10 +1983,10 @@ QSize Document::sizeForGrouping(int width) const {
 			- st::msgPadding.right();
 		height += 2; // 2px above caption
 		height += captioned->caption.countHeight(captionw);
-		height += 2; // 2px below caption
+		// height += 2; // Removed bottom padding
 	} else {
 		// Issue 2 & 3 Fix: Add 2px below thumb for groups.
-		height += 2;
+		// height += 2; // Removed bottom padding
 	}
 	return { maxWidth(), height };
 }
