@@ -248,7 +248,7 @@ QSize GroupedMedia::countOptimalSize() {
 		
 		auto size = part.content->sizeForGroupingOptimal(maxWidth, last);
 		if (_mode == Mode::Column && last) {
-			size.setHeight(size.height() + 2); // Add 2px bottom padding for the last item
+			// No extra bottom padding here, handled by spacing logic below
 		}
 		sizes.push_back(size);
 	}
@@ -274,19 +274,15 @@ QSize GroupedMedia::countOptimalSize() {
 			auto partHeight = sizes[i].height();
 
 			// Add spacing for items in Column mode based on caption presence
-			if (!_parts[i].item->originalText().empty()) {
-				// Item has caption: 2px above caption + 2px below caption
-				partHeight += 2; // 2px above caption (from content to caption)
-				partHeight += 2; // 2px below caption (from caption to next element/bottom)
-			}
+			// The content (sizeForGrouping) already includes the caption height and its internal spacing
+			// We just need to ensure spacing between items
 
-			// Add spacing between items (same as caption spacing reference: 2px)
 			if (i < _parts.size() - 1) {
-				// Add 2px spacing between items (same as spacing above captions)
+				// Add 2px spacing between items (Task 3)
 				partHeight += 2;
-			} else if (_parts.size() == 1) {
-				// For single file: 2px above and 2px below (symmetrical)
-				partHeight += 2 + 2; // 2px above + 2px below
+			} else {
+				// Last item: ensure 2px bottom spacing (Task 4/5/6)
+				// sizeForGrouping should have added 2px below caption/content already.
 			}
 
 			_parts[i].initialGeometry = QRect(0, top, item.geometry.width(), partHeight);
@@ -348,10 +344,7 @@ QSize GroupedMedia::countOptimalSize() {
 			}
 		}
 
-		// Issue #2: Do not add extra empty space for Grid mode without captions
-		if (!lastRowHasCaption) {
-			// No additional space needed - just keep the current behavior
-		}
+		// Task 2: Remove empty space in grid albums.
 	}
 
 	const auto groupPadding = groupedPadding();
@@ -373,20 +366,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			auto &part = _parts[i];
 			auto size = part.content->sizeForGrouping(newWidth);
 
-			// Add spacing for items in Column mode based on caption presence
-			if (!_parts[i].item->originalText().empty()) {
-				// Item has caption: 2px above caption + 2px below caption
-				size.setHeight(size.height() + 2); // 2px above caption (from content to caption)
-				size.setHeight(size.height() + 2); // 2px below caption (from caption to next element/bottom)
-			}
-
-			// Add spacing between items (same as caption spacing reference: 2px)
+			// Task 3: Spacing between items = 2px
 			if (i < _parts.size() - 1) {
-				// Add 2px spacing between items (same as spacing above captions)
 				size.setHeight(size.height() + 2);
-			} else if (_parts.size() == 1) {
-				// For single file: 2px above and 2px below (symmetrical)
-				size.setHeight(size.height() + 2 + 2); // 2px above + 2px below
 			}
 
 			part.geometry = QRect(0, top, newWidth, size.height());
@@ -491,9 +473,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 		newHeight += totalShift;
 
-		// Issue #2: Do not add extra empty space for Grid mode without captions
-		if (!lastRowHasCaption) {
-		}
+		// Task 2: Remove empty space in grid albums.
 	}
 
 	const auto groupPadding = groupedPadding();

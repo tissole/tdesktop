@@ -1020,7 +1020,9 @@ QSize Message::performCountOptimalSize() {
 		if (!mediaOnTop) {
 			minHeight += st::msgPadding.top();
 			if (mediaDisplayed) {
-				minHeight += isCompact ? 2 : st::mediaInBubbleSkip;
+				// Task 7: Space below name (which is above media) should equal space above name (msgPadding.top)
+				// So we use st::msgPadding.top() instead of 2.
+				minHeight += isCompact ? st::msgPadding.top() : st::mediaInBubbleSkip;
 			}
 			if (entry) minHeight += st::mediaInBubbleSkip;
 		}
@@ -1250,11 +1252,15 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	const auto check = factcheckBlock();
 	auto mediaDisplayed = media && media->isDisplayed();
 	
-	auto mediaInBubbleSkip = st::mediaInBubbleSkip;
+	auto mediaInBubbleSkipTop = st::mediaInBubbleSkip;
+	auto mediaInBubbleSkipBottom = st::mediaInBubbleSkip;
 	if (mediaDisplayed) {
 		const auto isCompactMedia = media->getPhoto() || media->getDocument();
 		if (isCompactMedia) {
-			mediaInBubbleSkip = 2;
+			// Task 7: Space below name equals space above name
+			mediaInBubbleSkipTop = st::msgPadding.top();
+			// Task 6: Space below content (caption) equals 2px
+			mediaInBubbleSkipBottom = 2;
 		}
 	}
 
@@ -1318,22 +1324,12 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				}
 				
 				if (_viewButton) {
-					auto viewButtonSkip = mediaInBubbleSkip;
-					if (mediaDisplayed && item->media()) {
-						if (item->media()->photo() || item->media()->document()) {
-							viewButtonSkip = 2;
-						}
-					}
+					auto viewButtonSkip = mediaInBubbleSkipBottom;
 					localMediaBottom -= (viewButtonSkip + _viewButton->height());
 				}
 				
 				if (reactionsInBubble) {
-					auto reactionSkip = mediaInBubbleSkip;
-					if (mediaDisplayed && item->media()) {
-						if (item->media()->photo() || item->media()->document()) {
-							reactionSkip = 2;
-						}
-					}
+					auto reactionSkip = mediaInBubbleSkipBottom;
 					localMediaBottom -= reactionSkip + _reactions->height();
 
 					if (mediaDisplayed && (item->media()->photo() || item->media()->document())) {
@@ -1345,11 +1341,10 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				
 				if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 					auto paddingBottom = st::msgPadding.bottom();
-					auto bottomSkip = mediaInBubbleSkip;
+					auto bottomSkip = mediaInBubbleSkipBottom;
 					if (mediaDisplayed && item->media()) {
 						if (item->media()->photo() || item->media()->document()) {
 							paddingBottom = 2;
-							bottomSkip = 2;
 						}
 					}
 
@@ -1413,12 +1408,12 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	if (_reactions && !reactionsInBubble) {
-		const auto reactionsHeight = mediaInBubbleSkip + _reactions->height();
+		const auto reactionsHeight = st::mediaInBubbleSkip + _reactions->height();
 		const auto reactionsLeft = (!bubble && mediaDisplayed)
 			? media->contentRectForReactions().x()
 			: 0;
 		g.setHeight(g.height() - reactionsHeight);
-		const auto reactionsPosition = QPoint(reactionsLeft + g.left(), g.top() + g.height() + mediaInBubbleSkip);
+		const auto reactionsPosition = QPoint(reactionsLeft + g.left(), g.top() + g.height() + st::mediaInBubbleSkip);
 		p.translate(reactionsPosition);
 		prepareCustomEmojiPaint(p, context, *_reactions);
 		_reactions->paint(p, context, g.width(), context.clip.translated(-reactionsPosition));
@@ -1465,7 +1460,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			? st::msgDateFont->height
 			: 0;
 		const auto reactionsTop = (reactionsInBubble && !_viewButton)
-			? (additionalInfoSkip + mediaInBubbleSkip)
+			? (additionalInfoSkip + mediaInBubbleSkipBottom)
 			: additionalInfoSkip;
 		const auto reactionsHeight = reactionsInBubble
 			? (reactionsTop + _reactions->height())
@@ -1485,7 +1480,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		if (_viewButton) {
 			const auto belowInfo = _viewButton->belowMessageInfo();
 			const auto infoHeight = reactionsInBubble
-				? (reactionsHeight + 2 * mediaInBubbleSkip)
+				? (reactionsHeight + 2 * mediaInBubbleSkipBottom)
 				: _bottomInfo.height();
 			const auto heightMargins = QMargins(0, 0, 0, infoHeight);
 			_viewButton->draw(
@@ -1499,9 +1494,9 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			}
 			trect.setHeight(trect.height() - _viewButton->height());
 			if (reactionsInBubble) {
-				trect.setHeight(trect.height() - mediaInBubbleSkip + st::msgPadding.bottom());
+				trect.setHeight(trect.height() - mediaInBubbleSkipBottom + st::msgPadding.bottom());
 			} else if (mediaDisplayed) {
-				trect.setHeight(trect.height() - mediaInBubbleSkip);
+				trect.setHeight(trect.height() - mediaInBubbleSkipBottom);
 			}
 		}
 
@@ -1522,7 +1517,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			trect.setHeight(trect.height() - entry->height());
 		}
 		if (check) {
-			trect.setHeight(trect.height() - check->height() - mediaInBubbleSkip);
+			trect.setHeight(trect.height() - check->height() - mediaInBubbleSkipBottom);
 		}
 		if (displayInfo) {
 			trect.setHeight(trect.height()
@@ -1560,12 +1555,12 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		};
 		if (mediaDisplayed && _invertMedia) {
 			if (!mediaOnTop) {
-				trect.setY(trect.y() + mediaInBubbleSkip);
+				trect.setY(trect.y() + mediaInBubbleSkipTop);
 			}
 			paintMedia(trect.y());
 			trect.setY(trect.y()
 				+ mediaHeight
-				+ (mediaOnBottom ? 0 : mediaInBubbleSkip));
+				+ (mediaOnBottom ? 0 : mediaInBubbleSkipBottom));
 			textSelection = media->skipSelection(textSelection);
 			highlightRange = media->skipSelection(highlightRange);
 		}
@@ -1585,7 +1580,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		}
 		if (check) {
 			auto checkLeft = inner.left();
-			auto checkTop = trect.y() + trect.height() + mediaInBubbleSkip;
+			auto checkTop = trect.y() + trect.height() + mediaInBubbleSkipBottom;
 			p.translate(checkLeft, checkTop);
 			auto checkContext = context.translated(checkLeft, -checkTop);
 			checkContext.selection = skipTextSelection(context.selection);
@@ -2713,14 +2708,16 @@ TextState Message::textState(
 	const auto bubble = drawBubble();
 	const auto reactionsInBubble = _reactions && embedReactionsInBubble();
 	const auto mediaDisplayed = media && media->isDisplayed();
-	auto mediaInBubbleSkip = st::mediaInBubbleSkip;
+	auto mediaInBubbleSkipTop = st::mediaInBubbleSkip;
+	auto mediaInBubbleSkipBottom = st::mediaInBubbleSkip;
 	if (mediaDisplayed) {
 		const auto isPhotoOrVideo = media->getPhoto()
 			|| (media->getDocument() && (media->getDocument()->isVideoFile()
 				|| media->getDocument()->isAnimation()
 				|| media->getDocument()->isGifv()));
 		if (isPhotoOrVideo) {
-			mediaInBubbleSkip = 2;
+			mediaInBubbleSkipTop = st::msgPadding.top();
+			mediaInBubbleSkipBottom = 2;
 		}
 	}
 	auto keyboard = item->inlineReplyKeyboard();
@@ -2731,12 +2728,12 @@ TextState Message::textState(
 	}
 
 	if (_reactions && !reactionsInBubble) {
-		const auto reactionsHeight = mediaInBubbleSkip + _reactions->height();
+		const auto reactionsHeight = st::mediaInBubbleSkip + _reactions->height();
 		const auto reactionsLeft = (!bubble && mediaDisplayed)
 			? media->contentRectForReactions().x()
 			: 0;
 		g.setHeight(g.height() - reactionsHeight);
-		const auto reactionsPosition = QPoint(reactionsLeft + g.left(), g.top() + g.height() + mediaInBubbleSkip);
+		const auto reactionsPosition = QPoint(reactionsLeft + g.left(), g.top() + g.height() + st::mediaInBubbleSkip);
 		if (_reactions->getState(point - reactionsPosition, &result)) {
 			result.symbol += visibleMediaTextLen + visibleTextLen;
 			return result;
@@ -2763,7 +2760,7 @@ TextState Message::textState(
 			? st::msgDateFont->height
 			: 0;
 		const auto reactionsTop = (reactionsInBubble && !_viewButton)
-			? (additionalInfoSkip + mediaInBubbleSkip)
+			? (additionalInfoSkip + mediaInBubbleSkipBottom)
 			: additionalInfoSkip;
 		const auto reactionsHeight = reactionsInBubble
 			? (reactionsTop + _reactions->height())
@@ -2779,7 +2776,7 @@ TextState Message::textState(
 		if (_viewButton) {
 			const auto belowInfo = _viewButton->belowMessageInfo();
 			const auto infoHeight = reactionsInBubble
-				? (reactionsHeight + 2 * mediaInBubbleSkip)
+				? (reactionsHeight + 2 * mediaInBubbleSkipBottom)
 				: _bottomInfo.height();
 			const auto heightMargins = QMargins(0, 0, 0, infoHeight);
 			if (_viewButton->getState(
@@ -2796,9 +2793,9 @@ TextState Message::textState(
 			}
 			trect.setHeight(trect.height() - _viewButton->height());
 			if (reactionsInBubble) {
-				trect.setHeight(trect.height() - mediaInBubbleSkip + st::msgPadding.bottom());
+				trect.setHeight(trect.height() - mediaInBubbleSkipBottom + st::msgPadding.bottom());
 			} else if (mediaDisplayed) {
-				trect.setHeight(trect.height() - mediaInBubbleSkip);
+				trect.setHeight(trect.height() - mediaInBubbleSkipBottom);
 			}
 		}
 		if (mediaOnBottom) {
@@ -2838,9 +2835,9 @@ TextState Message::textState(
 		}
 		if (check) {
 			auto checkHeight = check->height();
-			trect.setHeight(trect.height() - checkHeight - mediaInBubbleSkip);
+			trect.setHeight(trect.height() - checkHeight - mediaInBubbleSkipBottom);
 			auto checkLeft = inner.left();
-			auto checkTop = trect.y() + trect.height() + mediaInBubbleSkip;
+			auto checkTop = trect.y() + trect.height() + mediaInBubbleSkipBottom;
 			if (point.y() >= checkTop && point.y() < checkTop + checkHeight) {
 				result = check->textState(
 					point - QPoint(checkLeft, checkTop),
@@ -2877,12 +2874,12 @@ TextState Message::textState(
 			const auto mediaHeight = mediaDisplayed ? media->height() : 0;
 			const auto mediaLeft = trect.x() - st::msgPadding.left();
 			const auto mediaTop = (!mediaDisplayed || _invertMedia)
-				? (trect.y() + (mediaOnTop ? 0 : mediaInBubbleSkip))
+				? (trect.y() + (mediaOnTop ? 0 : mediaInBubbleSkipTop))
 				: (trect.y() + trect.height() - mediaHeight);
 			if (mediaDisplayed && _invertMedia) {
 				trect.setY(mediaTop
 					+ mediaHeight
-					+ (mediaOnBottom ? 0 : mediaInBubbleSkip));
+					+ (mediaOnBottom ? 0 : mediaInBubbleSkipBottom));
 			}
 			if (point.y() >= mediaTop
 				&& point.y() < mediaTop + mediaHeight) {
@@ -2950,7 +2947,7 @@ TextState Message::textState(
 			+ g.height()
 			+ st::msgBotKbButton.margin
 			+ ((_reactions && !reactionsInBubble)
-				? (mediaInBubbleSkip + _reactions->height())
+				? (st::mediaInBubbleSkip + _reactions->height())
 				: 0);
 		if (QRect(g.left(), keyboardTop, g.width(), keyboardHeight).contains(point)) {
 			result.link = keyboard->getLink(point - QPoint(g.left(), keyboardTop));

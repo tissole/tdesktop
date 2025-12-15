@@ -577,7 +577,7 @@ QSize Document::countOptimalSize() {
 	const bool hasCaptionContent = captioned || hasTranscribe;
 	
 	if (hasCaptionContent) {
-		// Issue 5: 2px above caption
+		// Issue 5 & 6: 2px above caption
 		minHeight += 2;
 	}
 
@@ -610,7 +610,7 @@ QSize Document::countOptimalSize() {
 	}
 
 	if (hasCaptionContent) {
-		// Issue 5: 2px below caption
+		// Issue 5 & 6: 2px below caption
 		minHeight += 2;
 	} else {
 		// Issue 4: 2px below content if no caption (Single file logic)

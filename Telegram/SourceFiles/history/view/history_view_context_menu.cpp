@@ -1695,18 +1695,15 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								} else {
 									// For grid albums with multiple captions, copy the text from the specific clicked item
 									// rather than from the entire media collection
-									if (const auto media = view->media()) {
-										// If the specific safeItem has text, copy only that item's text
-										if (safeItem && !safeItem->originalText().empty()) {
-											TextUtilities::SetClipboardText(HistoryItemText(safeItem));
+									if (!safeItem->originalText().empty()) {
+										TextUtilities::SetClipboardText(HistoryItemText(safeItem));
+									} else if (const auto media = view->media()) {
+										// Fallback to the media's general text if individual item has none
+										auto mediaText = media->selectedText(TextSelection(0, std::numeric_limits<uint16>::max()));
+										if (!mediaText.empty()) {
+											TextUtilities::SetClipboardText(mediaText);
 										} else {
-											// Fallback to the media's general text if individual item has none
-											auto mediaText = media->selectedText(TextSelection(0, std::numeric_limits<uint16>::max()));
-											if (!mediaText.empty()) {
-												TextUtilities::SetClipboardText(mediaText);
-											} else {
-												TextUtilities::SetClipboardText(HistoryItemText(safeItem));
-											}
+											TextUtilities::SetClipboardText(HistoryItemText(safeItem));
 										}
 									} else {
 										TextUtilities::SetClipboardText(HistoryItemText(safeItem));
