@@ -1660,16 +1660,6 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 			if (groupPartItem) {
 				groupPartId = groupPartItem->fullId();
 			}
-		} else if (const auto grouped = view->media()->grouped()) {
-			// Fallback: Ask GroupedMedia directly what is under the cursor
-			// This handles cases where overState might be generic but geometry hits a specific part
-			auto partState = grouped->getPartState(request.point, { .point = request.point });
-			if (partState.itemId) {
-				groupPartItem = owner->message(partState.itemId);
-				if (groupPartItem) {
-					groupPartId = groupPartItem->fullId();
-				}
-			}
 		}
 		
 		HistoryItem *targetItem = groupPartItem ? groupPartItem : view->data().get();
