@@ -1695,15 +1695,22 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								} else {
 									// Check if this is grouped media with captions
 									if (const auto media = view->media()) {
-										// Fix Issue 1: Prioritize the targeted item text
-										if (safeItem && !safeItem->originalText().empty()) {
-											TextUtilities::SetClipboardText(HistoryItemText(safeItem));
+										// For grouped media, try to use the media's selectedText if available
+										// This handles multiple captions in grid albums properly
+										auto mediaText = media->selectedText(TextSelection(0, std::numeric_limits<uint16>::max()));
+										if (!mediaText.empty()) {
+											TextUtilities::SetClipboardText(mediaText);
 										} else {
-											// If the specific item has no text, do NOT fallback to group copy.
-											// User explicitly wants individual caption copy or nothing.
-											// If we fallback, we might copy all captions concatenated, which is unwanted.
-											if (safeItem) {
+											// Fallback: prioritize the targeted item text
+											if (safeItem && !safeItem->originalText().empty()) {
 												TextUtilities::SetClipboardText(HistoryItemText(safeItem));
+											} else {
+												// If the specific item has no text, do NOT fallback to group copy.
+												// User explicitly wants individual caption copy or nothing.
+												// If we fallback, we might copy all captions concatenated, which is unwanted.
+												if (safeItem) {
+													TextUtilities::SetClipboardText(HistoryItemText(safeItem));
+												}
 											}
 										}
 									} else {

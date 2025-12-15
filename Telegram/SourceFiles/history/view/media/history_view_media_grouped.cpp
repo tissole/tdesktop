@@ -264,18 +264,51 @@ QSize GroupedMedia::countOptimalSize() {
 
 	auto minHeight = 0;
 	bool lastRowHasCaption = false;
-	
+
 	if (_mode == Mode::Column) {
 		auto top = 0;
 		for (auto i = 0, count = int(layout.size()); i != count; ++i) {
 			const auto &item = layout[i];
 			accumulate_max(maxWidth, item.geometry.x() + item.geometry.width());
-			
-			const auto partHeight = sizes[i].height();
-			
+
+			auto partHeight = sizes[i].height();
+
+			// Add caption spacing for items with captions in Column mode
+			if (!_parts[i].item->originalText().empty()) {
+				if (_parts.size() == 1) {
+					// Single file with caption: caption has 2px below circle/thumb/arrow and 2px above bottom frame
+					partHeight += 2 + 2; // 2px below item + 2px below caption
+				} else {
+					// Multiple files in album with captions
+					if (i == 0) {
+						// First item: caption has 2px below (from chat name), and 2px above next item
+						partHeight += 2; // 2px below the item content
+					} else if (i < _parts.size() - 1) {
+						// Middle item: 2px above caption (from previous item) and 2px below caption
+						partHeight += 2; // 2px above caption
+						partHeight += 2; // 2px below caption (above next item)
+					} else {
+						// Last item: 2px above caption (from previous item) and 2px below caption to bottom
+						partHeight += 2; // 2px below caption
+					}
+				}
+			} else {
+				// Item without caption
+				if (_parts.size() == 1) {
+					// Single file without caption: 2px below chat name and 2px above bottom frame
+					partHeight += 2 + 2; // 2px above + 2px below
+				} else {
+					// Multiple files in album without captions - add 2px spacing between items
+					if (i > 0) {
+						// 2px spacing from previous item
+						partHeight += 2; // 2px from previous item
+					}
+				}
+			}
+
 			_parts[i].initialGeometry = QRect(0, top, item.geometry.width(), partHeight);
 			_parts[i].sides = item.sides;
-			
+
 			top += partHeight;
 		}
 		minHeight = top;
@@ -295,7 +328,7 @@ QSize GroupedMedia::countOptimalSize() {
 		}
 
 		const auto textHeight = st::messageTextStyle.font->height;
-		const auto uniformCaptionHeight = 2 + textHeight + 2; 
+		const auto uniformCaptionHeight = 2 + textHeight + 2; // 2px top + text height + 2px bottom
 
 		for (auto const& [rowY, indices] : rows) {
 			bool rowHasCaption = false;
@@ -326,14 +359,15 @@ QSize GroupedMedia::countOptimalSize() {
 				}
 				minHeight += uniformCaptionHeight;
 			}
-			
+
 			if (rowY == rows.rbegin()->first) {
 				lastRowHasCaption = rowHasCaption;
 			}
 		}
-		
-		// Issues 2 & 8: Do not add extra 2px padding for Grid mode without captions
+
+		// Issue #2: Do not add extra empty space for Grid mode without captions
 		if (!lastRowHasCaption) {
+			// No additional space needed - just keep the current behavior
 		}
 	}
 
@@ -355,14 +389,41 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		for (auto i = 0; i < _parts.size(); ++i) {
 			auto &part = _parts[i];
 			auto size = part.content->sizeForGrouping(newWidth);
-			
-			// Add 2px bottom padding for the last item in Column mode
-			if (i == _parts.size() - 1) {
-				size.setHeight(size.height() + 2);
+
+			// Add caption spacing for items with captions in Column mode
+			if (!_parts[i].item->originalText().empty()) {
+				if (_parts.size() == 1) {
+					// Single file with caption: caption has 2px below circle/thumb/arrow and 2px above bottom frame
+					size.setHeight(size.height() + 2 + 2); // 2px below item + 2px below caption
+				} else {
+					// Multiple files in album with captions
+					if (i == 0) {
+						// First item: caption has 2px below (from chat name), and 2px above next item
+						size.setHeight(size.height() + 2); // 2px below the item content
+					} else if (i < _parts.size() - 1) {
+						// Middle item: 2px above caption (from previous item) and 2px below caption
+						size.setHeight(size.height() + 2); // 2px above caption
+						size.setHeight(size.height() + 2); // 2px below caption (above next item)
+					} else {
+						// Last item: 2px above caption (from previous item) and 2px below caption to bottom
+						size.setHeight(size.height() + 2); // 2px below caption
+					}
+				}
+			} else {
+				// Item without caption
+				if (_parts.size() == 1) {
+					// Single file without caption: 2px below chat name and 2px above bottom frame
+					size.setHeight(size.height() + 2 + 2); // 2px above + 2px below
+				} else {
+					// Multiple files in album without captions - add 2px spacing between items
+					if (i > 0) {
+						// 2px spacing from previous item
+						size.setHeight(size.height() + 2); // 2px from previous item
+					}
+				}
 			}
 
 			part.geometry = QRect(0, top, newWidth, size.height());
-			
 			top += size.height();
 		}
 		newHeight = top;
@@ -399,14 +460,14 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			part.geometry = QRect(left, top, width, height);
 			accumulate_max(newHeight, top + height);
 		}
-		
+
 		std::map<int, std::vector<int>> rows;
 		for (auto i = 0; i != _parts.size(); ++i) {
 			rows[_parts[i].initialGeometry.y()].push_back(i);
 		}
 
 		const auto textHeight = st::messageTextStyle.font->height;
-		const auto uniformCaptionHeight = textHeight + 4;
+		const auto uniformCaptionHeight = 2 + textHeight + 2; // 2px top + text height + 2px bottom
 
 		int totalShift = 0;
 
@@ -440,10 +501,10 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 								.session = &_parent->history()->session(),
 								.repaint = [=] { _parent->customEmojiRepaint(); },
 							}));
-						
-							part.captionRect = QRect(
+
+						part.captionRect = QRect(
 							part.geometry.left(),
-							part.geometry.y() + part.geometry.height(), 
+							part.geometry.y() + part.geometry.height(),
 							part.geometry.width(),
 							uniformCaptionHeight);
 					} else {
@@ -456,15 +517,15 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 					_parts[i].captionRect = QRect();
 				}
 			}
-			
+
 			if (rowY == rows.rbegin()->first) {
 				lastRowHasCaption = rowHasCaption;
 			}
 		}
 
 		newHeight += totalShift;
-		
-		// Issues 2 & 8: Do not add extra 2px padding for Grid mode without captions
+
+		// Issue #2: Do not add extra empty space for Grid mode without captions
 		if (!lastRowHasCaption) {
 		}
 	}
@@ -1005,91 +1066,61 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		// --- Draw Caption ---
 		if ((_mode == Mode::Grid) && part._captionHeight > 0 && !part.captionRect.isEmpty()) {
 			auto captionRect = part.captionRect.translated(0, groupPadding.top());
-			const auto padding = QMargins(8, 2, 8, 2);
 
 			p.setPen(stm->historyTextFg);
 			p.setFont(st::messageTextStyle.font);
 
 			p.save();
 			p.setClipRect(captionRect);
-			
+
 			// Highlight Paint Setup for Caption
 			auto highlightRequest = context.computeHighlightCache();
-			
+
 			// If we have a part-specific selection calculated above
 			TextSelection paintSelection = partSelection;
-			
-			if (singleCaptionAnywhere) {
-				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
-				const auto availableHeight = captionRect.height();
-				const auto textHeight = part._captionText.countHeight(availableWidth);
-				// Issue 7: Force 2px top padding even for single caption to match user request.
-				const auto verticalPadding = 2;
-				int verticalOffset = 2; // Fixed to 2px
 
-				if (textHeight <= availableHeight - 2 * verticalPadding) {
-					// verticalOffset = std::max(verticalPadding, (availableHeight - textHeight) / 2);
-                    verticalOffset = 2; // Force 2px
-				} else {
-					verticalOffset = verticalPadding;
-				}
+			// Issue #3: Center caption with 2px top and 2px bottom spacing
+			const auto padding = QMargins(8, 0, 8, 0); // Only horizontal padding, vertical handled separately
+			const auto availableWidth = captionRect.width() - padding.left() - padding.right();
+			const auto availableHeight = captionRect.height();
+			const auto textHeight = part._captionText.countHeight(availableWidth);
 
-				const auto captionLeft = captionRect.left() + padding.left();
-				const auto captionTop = captionRect.top() + verticalOffset;
-				_parent->prepareCustomEmojiPaint(p, context, part._captionText);
-				
-				part._captionText.draw(p, {
-					.position = QPoint(captionLeft, captionTop),
-					.outerWidth = _parent->width(),
-					.availableWidth = availableWidth,
-					.geometry = {},
-					.align = style::al_left,
-					.clip = QRect(),
-					.palette = &stm->textPalette,
-					.pre = stm->preCache.get(),
-					.blockquote = context.quoteCache(_parent->contentColorIndex()),
-					.colors = context.st->highlightColors(),
-					.spoiler = Ui::Text::DefaultSpoilerCache(),
-					.now = context.now,
-					.paused = context.paused,
-					.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
-					.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
-					.fullWidthSelection = false,
-					.selection = paintSelection,
-					.highlight = highlightRequest ? &*highlightRequest : nullptr,
-					.elisionLines = 0,
-				});
+			// Calculate vertical offset to have 2px above and 2px below the text
+			const auto requiredSpace = textHeight + 2 + 2; // 2px top + text height + 2px bottom
+			int verticalOffset = 2; // Always start with 2px from top
+			if (requiredSpace <= availableHeight) {
+				// Center the content (text + 4px total padding) in the available height
+				verticalOffset = (availableHeight - requiredSpace) / 2 + 2;
 			} else {
-				const auto availableWidth = captionRect.width() - padding.left() - padding.right();
-				// Issue 7: Force 2px top padding.
-				const auto verticalOffset = 2;
-
-				const auto captionLeft = captionRect.left() + padding.left();
-				const auto captionTop = captionRect.top() + verticalOffset;
-				_parent->prepareCustomEmojiPaint(p, context, part._captionText);
-				
-				part._captionText.draw(p, {
-					.position = QPoint(captionLeft, captionTop),
-					.outerWidth = _parent->width(),
-					.availableWidth = availableWidth,
-					.geometry = {},
-					.align = style::al_left,
-					.clip = QRect(),
-					.palette = &stm->textPalette,
-					.pre = stm->preCache.get(),
-					.blockquote = context.quoteCache(_parent->contentColorIndex()),
-					.colors = context.st->highlightColors(),
-					.spoiler = Ui::Text::DefaultSpoilerCache(),
-					.now = context.now,
-					.paused = context.paused,
-					.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
-					.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
-					.fullWidthSelection = false,
-					.selection = paintSelection,
-					.highlight = highlightRequest ? &*highlightRequest : nullptr,
-					.elisionLines = 1,
-				});
+				// Not enough space, just use 2px top
+				verticalOffset = 2;
 			}
+
+			const auto captionLeft = captionRect.left() + padding.left();
+			const auto captionTop = captionRect.top() + verticalOffset;
+			_parent->prepareCustomEmojiPaint(p, context, part._captionText);
+
+			part._captionText.draw(p, {
+				.position = QPoint(captionLeft, captionTop),
+				.outerWidth = _parent->width(),
+				.availableWidth = availableWidth,
+				.geometry = {},
+				.align = style::al_left,
+				.clip = QRect(),
+				.palette = &stm->textPalette,
+				.pre = stm->preCache.get(),
+				.blockquote = context.quoteCache(_parent->contentColorIndex()),
+				.colors = context.st->highlightColors(),
+				.spoiler = Ui::Text::DefaultSpoilerCache(),
+				.now = context.now,
+				.paused = context.paused,
+				.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
+				.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
+				.fullWidthSelection = false,
+				.selection = paintSelection,
+				.highlight = highlightRequest ? &*highlightRequest : nullptr,
+				.elisionLines = 1,
+			});
 			p.restore();
 		}
 
