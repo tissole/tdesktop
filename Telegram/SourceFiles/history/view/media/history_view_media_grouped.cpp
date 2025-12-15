@@ -273,37 +273,20 @@ QSize GroupedMedia::countOptimalSize() {
 
 			auto partHeight = sizes[i].height();
 
-			// Add caption spacing for items with captions in Column mode
+			// Add spacing for items in Column mode based on caption presence
 			if (!_parts[i].item->originalText().empty()) {
-				if (_parts.size() == 1) {
-					// Single file with caption: caption has 2px below circle/thumb/arrow and 2px above bottom frame
-					partHeight += 2 + 2; // 2px below item + 2px below caption
-				} else {
-					// Multiple files in album with captions
-					if (i == 0) {
-						// First item: caption has 2px below (from chat name), and 2px above next item
-						partHeight += 2; // 2px below the item content
-					} else if (i < _parts.size() - 1) {
-						// Middle item: 2px above caption (from previous item) and 2px below caption
-						partHeight += 2; // 2px above caption
-						partHeight += 2; // 2px below caption (above next item)
-					} else {
-						// Last item: 2px above caption (from previous item) and 2px below caption to bottom
-						partHeight += 2; // 2px below caption
-					}
-				}
-			} else {
-				// Item without caption
-				if (_parts.size() == 1) {
-					// Single file without caption: 2px below chat name and 2px above bottom frame
-					partHeight += 2 + 2; // 2px above + 2px below
-				} else {
-					// Multiple files in album without captions - add 2px spacing between items
-					if (i > 0) {
-						// 2px spacing from previous item
-						partHeight += 2; // 2px from previous item
-					}
-				}
+				// Item has caption: 2px above caption + 2px below caption
+				partHeight += 2; // 2px above caption (from content to caption)
+				partHeight += 2; // 2px below caption (from caption to next element/bottom)
+			}
+
+			// Add spacing between items (same as caption spacing reference: 2px)
+			if (i < _parts.size() - 1) {
+				// Add 2px spacing between items (same as spacing above captions)
+				partHeight += 2;
+			} else if (_parts.size() == 1) {
+				// For single file: 2px above and 2px below (symmetrical)
+				partHeight += 2 + 2; // 2px above + 2px below
 			}
 
 			_parts[i].initialGeometry = QRect(0, top, item.geometry.width(), partHeight);
@@ -390,37 +373,20 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			auto &part = _parts[i];
 			auto size = part.content->sizeForGrouping(newWidth);
 
-			// Add caption spacing for items with captions in Column mode
+			// Add spacing for items in Column mode based on caption presence
 			if (!_parts[i].item->originalText().empty()) {
-				if (_parts.size() == 1) {
-					// Single file with caption: caption has 2px below circle/thumb/arrow and 2px above bottom frame
-					size.setHeight(size.height() + 2 + 2); // 2px below item + 2px below caption
-				} else {
-					// Multiple files in album with captions
-					if (i == 0) {
-						// First item: caption has 2px below (from chat name), and 2px above next item
-						size.setHeight(size.height() + 2); // 2px below the item content
-					} else if (i < _parts.size() - 1) {
-						// Middle item: 2px above caption (from previous item) and 2px below caption
-						size.setHeight(size.height() + 2); // 2px above caption
-						size.setHeight(size.height() + 2); // 2px below caption (above next item)
-					} else {
-						// Last item: 2px above caption (from previous item) and 2px below caption to bottom
-						size.setHeight(size.height() + 2); // 2px below caption
-					}
-				}
-			} else {
-				// Item without caption
-				if (_parts.size() == 1) {
-					// Single file without caption: 2px below chat name and 2px above bottom frame
-					size.setHeight(size.height() + 2 + 2); // 2px above + 2px below
-				} else {
-					// Multiple files in album without captions - add 2px spacing between items
-					if (i > 0) {
-						// 2px spacing from previous item
-						size.setHeight(size.height() + 2); // 2px from previous item
-					}
-				}
+				// Item has caption: 2px above caption + 2px below caption
+				size.setHeight(size.height() + 2); // 2px above caption (from content to caption)
+				size.setHeight(size.height() + 2); // 2px below caption (from caption to next element/bottom)
+			}
+
+			// Add spacing between items (same as caption spacing reference: 2px)
+			if (i < _parts.size() - 1) {
+				// Add 2px spacing between items (same as spacing above captions)
+				size.setHeight(size.height() + 2);
+			} else if (_parts.size() == 1) {
+				// For single file: 2px above and 2px below (symmetrical)
+				size.setHeight(size.height() + 2 + 2); // 2px above + 2px below
 			}
 
 			part.geometry = QRect(0, top, newWidth, size.height());

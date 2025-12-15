@@ -1693,24 +1693,19 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								if (hasCaptionText) {
 									TextUtilities::SetClipboardText(request.selectedText);
 								} else {
-									// Check if this is grouped media with captions
+									// For grid albums with multiple captions, copy the text from the specific clicked item
+									// rather than from the entire media collection
 									if (const auto media = view->media()) {
-										// For grouped media, try to use the media's selectedText if available
-										// This handles multiple captions in grid albums properly
-										auto mediaText = media->selectedText(TextSelection(0, std::numeric_limits<uint16>::max()));
-										if (!mediaText.empty()) {
-											TextUtilities::SetClipboardText(mediaText);
+										// If the specific safeItem has text, copy only that item's text
+										if (safeItem && !safeItem->originalText().empty()) {
+											TextUtilities::SetClipboardText(HistoryItemText(safeItem));
 										} else {
-											// Fallback: prioritize the targeted item text
-											if (safeItem && !safeItem->originalText().empty()) {
-												TextUtilities::SetClipboardText(HistoryItemText(safeItem));
+											// Fallback to the media's general text if individual item has none
+											auto mediaText = media->selectedText(TextSelection(0, std::numeric_limits<uint16>::max()));
+											if (!mediaText.empty()) {
+												TextUtilities::SetClipboardText(mediaText);
 											} else {
-												// If the specific item has no text, do NOT fallback to group copy.
-												// User explicitly wants individual caption copy or nothing.
-												// If we fallback, we might copy all captions concatenated, which is unwanted.
-												if (safeItem) {
-													TextUtilities::SetClipboardText(HistoryItemText(safeItem));
-												}
+												TextUtilities::SetClipboardText(HistoryItemText(safeItem));
 											}
 										}
 									} else {
