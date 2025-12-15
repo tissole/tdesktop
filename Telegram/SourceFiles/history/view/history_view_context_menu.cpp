@@ -1660,6 +1660,16 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 			if (groupPartItem) {
 				groupPartId = groupPartItem->fullId();
 			}
+		} else if (const auto grouped = view->media()->grouped()) {
+			// Fallback: Ask GroupedMedia directly what is under the cursor
+			// This handles cases where overState might be generic but geometry hits a specific part
+			auto partState = grouped->getPartState(request.point, { .point = request.point });
+			if (partState.itemId) {
+				groupPartItem = owner->message(partState.itemId);
+				if (groupPartItem) {
+					groupPartId = groupPartItem->fullId();
+				}
+			}
 		}
 		
 		HistoryItem *targetItem = groupPartItem ? groupPartItem : view->data().get();
@@ -1698,10 +1708,13 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 										// Fix Issue 1: Prioritize the targeted item text
 										if (safeItem && !safeItem->originalText().empty()) {
 											TextUtilities::SetClipboardText(HistoryItemText(safeItem));
-										} else if (media->hasTextForCopy()) {
-											TextUtilities::SetClipboardText(media->selectedText(FullSelection));
 										} else {
-											TextUtilities::SetClipboardText(HistoryItemText(safeItem));
+											// If the specific item has no text, do NOT fallback to group copy.
+											// User explicitly wants individual caption copy or nothing.
+											// If we fallback, we might copy all captions concatenated, which is unwanted.
+											if (safeItem) {
+												TextUtilities::SetClipboardText(HistoryItemText(safeItem));
+											}
 										}
 									} else {
 										TextUtilities::SetClipboardText(HistoryItemText(safeItem));

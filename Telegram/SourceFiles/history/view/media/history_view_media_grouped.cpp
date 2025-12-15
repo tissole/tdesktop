@@ -332,9 +332,8 @@ QSize GroupedMedia::countOptimalSize() {
 			}
 		}
 		
-		// Issues 2 & 8
+		// Issues 2 & 8: Do not add extra 2px padding for Grid mode without captions
 		if (!lastRowHasCaption) {
-			// minHeight += 2; // Removed per user request (Issue 2)
 		}
 	}
 
@@ -465,9 +464,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 		newHeight += totalShift;
 		
-		// Issues 2 & 8
+		// Issues 2 & 8: Do not add extra 2px padding for Grid mode without captions
 		if (!lastRowHasCaption) {
-			// newHeight += 2; // Removed per user request (Issue 2)
 		}
 	}
 
@@ -1717,15 +1715,7 @@ TextForMimeData GroupedMedia::selectedText(
 			// Always process FullSelection if requested, even if textLen is 0 (though loop prevents that)
 			// But check originalText emptiness explicitly
 			if (!originalText.text.isEmpty()) {
-				if (selection == FullSelection) {
-					// Handle FullSelection: Accumulate all texts
-					auto partText = originalText.text;
-					if (result.empty()) {
-						result = TextForMimeData::Simple(partText);
-					} else {
-						result.append(u"\n\n"_q).append(TextForMimeData::Simple(partText));
-					}
-				} else if (!selection.empty()) {
+				if (!selection.empty()) {
 					// Map global selection to local part
 					const int localFrom = std::max((int)selection.from, offset);
 					const int localTo = std::min((int)selection.to, offset + textLen);

@@ -152,6 +152,11 @@ private:
 		StateRequest request,
 		LayoutMode mode) const;
 
+	[[nodiscard]] int calculateVisualElementBottom(
+		int baseTop,
+		int contentBoundingHeight,
+		bool includeTopMinus) const;
+
 	not_null<DocumentData*> _data;
 	mutable std::shared_ptr<Data::DocumentMedia> _dataMedia;
 	mutable QImage _iconCache;
