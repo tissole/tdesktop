@@ -730,7 +730,7 @@ void Document::draw(
 	// Issue: Symmetry for Chat Title (Filename)
 	// User wants space below title to equal space above title.
 	// Space Above = nametop (distance from top 0).
-	const auto nameHeight = st.semiboldFont->height;
+	const auto nameHeight = st::semiboldFont->height;
 	const auto statustop = nametop + nameHeight + nametop; 
 	// Old: const auto statustop = st.statusTop + delta - topMinus;
 
@@ -1396,16 +1396,9 @@ TextState Document::textState(
 	
 	// Issue: Symmetry for Chat Title (Filename) in textState
 	// Match drawing logic: Space Below = Space Above (nametop)
-	const auto nameHeight = st.semiboldFont->height;
+	const auto nameHeight = st::semiboldFont->height;
 	const auto statustop = nametop + nameHeight + nametop;
 	
-	// Issue: Symmetry for Chat Title (Filename)
-	// User wants space below title to equal space above title.
-	// Space Above = nametop (distance from top 0).
-	const auto nameHeight = st.semiboldFont->height;
-	const auto statustop = nametop + nameHeight + nametop; 
-	// Old: const auto statustop = st.statusTop + delta - topMinus;
-
 	auto contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
@@ -1441,8 +1434,8 @@ TextState Document::textState(
 			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
 			: QString();
 
-		const auto statustop = st.statusTop - topMinus;
-		
+		const auto tooltipStatusTop = st.statusTop - topMinus;
+
 		// Calculate Widths (Same as draw)
 		const int iconGap = 1;
 		const int textGap = font->width(' ');
@@ -1467,7 +1460,7 @@ TextState Document::textState(
 		}
 
 		// Hit Test Area
-		int bubbleY = statustop + st::normalFont->ascent - font->ascent;
+		int bubbleY = tooltipStatusTop + st::normalFont->ascent - font->ascent;
 		int bubbleH = font->height;
 		
 		if (point.y() >= bubbleY && point.y() <= bubbleY + bubbleH && point.x() >= infoX) {
@@ -2038,16 +2031,6 @@ QSize Document::sizeForGrouping(int width) const {
 		}
 	}
 	height = finalHeight;
-		auto captionw = width
-			- st::msgPadding.left()
-			- st::msgPadding.right();
-		height += 2; // 2px above caption
-		height += captioned->caption.countHeight(captionw);
-		// height += 2; // Removed bottom padding
-	} else {
-		// Issue 2 & 3 Fix: Add 2px below thumb for groups.
-		// height += 2; // Removed bottom padding
-	}
 	return { maxWidth(), height };
 }
 
