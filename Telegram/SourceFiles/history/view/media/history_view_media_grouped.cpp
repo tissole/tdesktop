@@ -274,15 +274,19 @@ QSize GroupedMedia::countOptimalSize() {
 			auto partHeight = sizes[i].height();
 
 			// Add spacing for items in Column mode based on caption presence
-			// The content (sizeForGrouping) already includes the caption height and its internal spacing
-			// We just need to ensure spacing between items
+			if (!_parts[i].item->originalText().empty()) {
+				// Item has caption: 6px above caption + 6px below caption
+				partHeight += 6; // 6px above caption (from content to caption)
+				partHeight += 6; // 6px below caption (from caption to next element/bottom)
+			}
 
+			// Add spacing between items (same as caption spacing reference: 6px)
 			if (i < _parts.size() - 1) {
-				// Add 2px spacing between items (Task 3)
-				partHeight += 2;
+				// Add 6px spacing between items
+				partHeight += 6;
 			} else {
-				// Last item: ensure 2px bottom spacing (Task 4/5/6)
-				// sizeForGrouping should have added 2px below caption/content already.
+				// Last item: ensure 6px bottom spacing
+				partHeight += 6;
 			}
 
 			_parts[i].initialGeometry = QRect(0, top, item.geometry.width(), partHeight);
@@ -366,9 +370,12 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			auto &part = _parts[i];
 			auto size = part.content->sizeForGrouping(newWidth);
 
-			// Task 3: Spacing between items = 2px
+			// Task 3: Spacing between items = 6px
 			if (i < _parts.size() - 1) {
-				size.setHeight(size.height() + 2);
+				size.setHeight(size.height() + 6);
+			} else {
+				// Last item: ensure 6px bottom spacing
+				size.setHeight(size.height() + 6);
 			}
 
 			part.geometry = QRect(0, top, newWidth, size.height());
@@ -597,22 +604,15 @@ void GroupedMedia::drawHighlight(
 			auto copy = context;
 			copy.highlight.range = {};
 			
-			// Issues 19-22 Fix: Highlight covers full item geometry.
-			// Split highlight in middle of 2px gap between items,
-			// and cover to bottom edge for last item.
+			// Highlight covers full item geometry.
 			int highlightY = rect.y();
 			int highlightHeight = rect.height();
 			
-			if (i > 0) {
-				// Start 1px below to split the gap with previous item
-				highlightY += 1;
-				highlightHeight -= 1;
-			}
-			if (i < count - 1) {
-				// End 1px above to split the gap with next item
-				highlightHeight -= 1;
-			}
-			// Last item: no adjustment - highlight covers full height including bottom margin
+			// Use full height for continuous highlighting.
+			// No adjustment needed if we want to cover the spacing too, or just the item.
+			// User said "must select item from begining to end".
+			// Given that spacing is internal to the item's "geometry" in Column mode logic,
+			// covering the full geometry is correct.
 			
 			_parent->paintCustomHighlight(
 				p,
