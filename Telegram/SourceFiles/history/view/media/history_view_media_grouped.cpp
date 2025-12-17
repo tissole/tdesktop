@@ -273,10 +273,6 @@ QSize GroupedMedia::countOptimalSize() {
 
 			auto partHeight = sizes[i].height();
 
-			if (i == count - 1) {
-				partHeight += 2;
-			}
-
 			_parts[i].initialGeometry = QRect(0, top, item.geometry.width(), partHeight);
 			_parts[i].sides = item.sides;
 
@@ -336,7 +332,11 @@ QSize GroupedMedia::countOptimalSize() {
 			}
 		}
 
-		// Task 2: Remove empty space in grid albums.
+		// Task 2 Fix: If the last row did not have captions,
+		// remove the implicit historyGroupSkip that Ui::LayoutMediaGroup might add.
+		if (!lastRowHasCaption) {
+			minHeight -= st::historyGroupSkip;
+		}
 	}
 
 	const auto groupPadding = groupedPadding();
@@ -357,10 +357,6 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		for (auto i = 0; i < _parts.size(); ++i) {
 			auto &part = _parts[i];
 			auto size = part.content->sizeForGrouping(newWidth);
-
-			if (i == _parts.size() - 1) {
-				size.setHeight(size.height() + 2);
-			}
 
 			part.geometry = QRect(0, top, newWidth, size.height());
 			top += size.height();
@@ -467,8 +463,12 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			}
 		}
 
-		// Task 2: Remove empty space in grid albums.
-		// Logic updated above: newHeight tracks row bottoms + caption heights directly.
+		// Task 2 Fix: If the last row did not have captions,
+		// remove the implicit historyGroupSkip that Ui::LayoutMediaGroup might add.
+		if (!lastRowHasCaption) {
+			newHeight -= totalShift; // Remove any accumulated shift from previous rows if last row has no caption
+			newHeight -= st::historyGroupSkip;
+		}
 	}
 
 	const auto groupPadding = groupedPadding();
@@ -592,15 +592,20 @@ void GroupedMedia::drawHighlight(
 			auto copy = context;
 			copy.highlight.range = {};
 			
-			// Highlight covers full item geometry.
-			int highlightY = rect.y();
-			int highlightHeight = rect.height();
-			
-			// Use full height for continuous highlighting.
-			// No adjustment needed if we want to cover the spacing too, or just the item.
-			// User said "must select item from begining to end".
-			// Given that spacing is internal to the item's "geometry" in Column mode logic,
-			// covering the full geometry is correct.
+			// Highlight starts from the top of the visual media content (skipping the 2px baseTop padding)
+			int highlightY = rect.y() + 2;
+			// Highlight covers the content, caption, and its own 4px bottom padding.
+			// rect.height() already includes the 2px baseTop and 4px bottom padding.
+			int highlightHeight = rect.height() - 2; // Adjusted to remove the 2px baseTop.
+
+			// For intermediate items, the highlight should extend into half the inter-item gap.
+			// The total inter-item gap is 6px (4px from current item + 2px from next item). Half is 3px.
+			// The current highlightHeight covers the 4px bottom padding. To get 3px, subtract 1px.
+			if (i < count - 1) { // If it's not the last item
+				highlightHeight -= 1; 
+			}
+			// For the last item, highlightHeight remains as rect.height() - 2, covering its 4px bottom padding
+			// which extends to the album's bottom frame.
 			
 			_parent->paintCustomHighlight(
 				p,
@@ -1656,6 +1661,15 @@ bool GroupedMedia::hasTextForCopy() const {
 		}
 	}
 	return false;
+}
+
+TextWithEntities GroupedMedia::getPartText(FullMsgId partId) const {
+	for (const auto &part : _parts) {
+		if (part.item->fullId() == partId) {
+			return part.item->originalText();
+		}
+	}
+	return TextWithEntities();
 }
 
 

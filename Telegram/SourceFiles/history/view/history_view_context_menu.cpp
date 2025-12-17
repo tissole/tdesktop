@@ -1695,13 +1695,23 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 
 						if (safeItem) {
 							if (!list->showCopyRestriction(safeItem)) {
-								if (hasCaptionText) {
-									TextUtilities::SetClipboardText(request.selectedText);
-								} else if (!safeItem->originalText().empty()) {
-									auto originalText = safeItem->originalText();
-									TextUtilities::SetClipboardText(TextForMimeData::Rich(std::move(originalText)));
-								} else {
-									TextUtilities::SetClipboardText(HistoryItemText(safeItem));
+								TextWithEntities textToCopy;
+								if (hasCaptionText) { // User selected text with mouse
+									textToCopy = request.selectedText;
+								} else if (groupPartId && view && view->media()) { // Try to get specific part text
+									textToCopy = view->media()->getPartText(groupPartId);
+								}
+								
+								if (textToCopy.empty() && !safeItem->originalText().empty()) { // Fallback to safeItem's original text
+									textToCopy = safeItem->originalText();
+								}
+
+								if (textToCopy.empty()) { // Final fallback to generic item text representation
+									textToCopy = HistoryItemText(safeItem);
+								}
+								
+								if (!textToCopy.empty()) {
+									TextUtilities::SetClipboardText(TextForMimeData::Rich(std::move(textToCopy)));
 								}
 							}
 						}

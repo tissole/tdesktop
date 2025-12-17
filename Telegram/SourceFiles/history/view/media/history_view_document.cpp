@@ -568,7 +568,7 @@ QSize Document::countOptimalSize() {
 
 	// New Logic: Use calculateVisualElementBottom for consistency with Grouped/Column mode
 	const int baseTop = 2; // Issue 6: Force 2px top
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, true);
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); // Calculate layout ignoring topMinus contour
 	auto minHeight = visualBottomOfElement;
 	
 	const auto captioned = Get<HistoryDocumentCaptioned>();
@@ -608,6 +608,15 @@ QSize Document::countOptimalSize() {
 	if (hasCaptionContent) {
 		// Issue 5 & 6: 2px below caption
 		minHeight += 2;
+	} else {
+		// For items without caption, still ensure 2px bottom padding for single files.
+		// (Column album items without caption would have 0 bottom padding here, adjusted by GroupedMedia).
+		minHeight += 2;
+	}
+	
+	// Apply topMinus for bubble contour AFTER internal content layout is done.
+	if (!isBubbleTop()) {
+		minHeight -= st::msgFileTopMinus;
 	}
 	
 	return { maxWidth, minHeight };
@@ -628,7 +637,7 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	// New Logic: Use calculateVisualElementBottom for consistency
 	const int baseTop = 2; // Issue 6: Force 2px top
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, true);
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); // Calculate layout ignoring topMinus contour
 	auto newHeight = visualBottomOfElement;
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
@@ -650,12 +659,27 @@ QSize Document::countCurrentSize(int newWidth) {
 	if (hasCaptionContent) {
 		// Issue 5: 2px below caption
 		newHeight += 2;
+	} else {
+		// For items without caption, still ensure 2px bottom padding for single files.
+		// (Column album items without caption would have 0 bottom padding here, adjusted by GroupedMedia).
+		newHeight += 2;
 	}
 	
+	// Apply topMinus for bubble contour AFTER internal content layout is done.
 	if (!captioned && !hasTranscribe) {
+		// For consistency, if there is no caption, this needs to be applied,
+		// otherwise, the height will be off.
+		// Reapply base logic for File::countCurrentSize
 		auto result = File::countCurrentSize(newWidth);
-		result.setHeight(newHeight);
+		result.setHeight(newHeight); // Use our newHeight.
+		if (!isBubbleTop()) {
+			result.setHeight(result.height() - st::msgFileTopMinus);
+		}
 		return result;
+	}
+
+	if (!isBubbleTop()) {
+		newHeight -= st::msgFileTopMinus;
 	}
 
 	accumulate_min(newWidth, maxWidth());
@@ -700,7 +724,7 @@ void Document::draw(
 	const auto showPause = updateStatusText();
 	const auto radial = isRadialAnimation();
 
-	const auto topMinus = (isBubbleTop() || mode == LayoutMode::Grouped) ? 0 : st::msgFileTopMinus;
+	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus; // Revert to original: this function handles its own topMinus
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (mode == LayoutMode::Full)
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
@@ -1086,7 +1110,7 @@ void Document::draw(
 	
 	// Calculate visual bottom of the content element for precise caption positioning
 	// BaseTop is forcedTop (2) here, as this is for the item's drawing context
-	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, mode != LayoutMode::Grouped);
+	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
 	auto captiontop = visualElementBottom + 2; // Desired 2px visual gap from element to caption
 
@@ -1965,10 +1989,10 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		
 		// Use visualBottomOfElement to calculate caption starting point
 		const int captionStart = visualBottomOfElement + 2; // Visual bottom + 2px gap to caption
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 2; // Caption starts + Caption height + 2px below caption
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; // Caption starts + Caption height + 4px bottom padding
 	} else {
 		// No caption
-		finalHeight = visualBottomOfElement;
+		finalHeight = visualBottomOfElement + 4; // Visual bottom + 4px bottom padding
 	}
 	height = finalHeight;
 	return { maxWidth, height };
@@ -2002,10 +2026,10 @@ QSize Document::sizeForGrouping(int width) const {
 		
 		// Use visualBottomOfElement to calculate caption starting point
 		const int captionStart = visualBottomOfElement + 2; // Visual bottom + 2px gap to caption
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 2; // Caption starts + Caption height + 2px below caption
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; // Caption starts + Caption height + 4px bottom padding
 	} else {
 		// No caption
-		finalHeight = visualBottomOfElement;
+		finalHeight = visualBottomOfElement + 4; // Visual bottom + 4px bottom padding
 	}
 	height = finalHeight;
 	return { maxWidth(), height };

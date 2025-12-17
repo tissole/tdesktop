@@ -114,6 +114,9 @@ public:
 	[[nodiscard]] virtual bool hasTextForCopy() const {
 		return false;
 	}
+	[[nodiscard]] virtual TextWithEntities getPartText(FullMsgId partId) const {
+		return {};
+	}
 	[[nodiscard]] virtual bool aboveTextByDefault() const {
 		return true;
 	}

@@ -54,6 +54,7 @@ public:
 		TextSelectType type) const override;
 	uint16 fullSelectionLength() const override;
 	bool hasTextForCopy() const override;
+	TextWithEntities getPartText(FullMsgId partId) const override;
 
 	PhotoData *getPhoto() const override;
 	DocumentData *getDocument() const override;
