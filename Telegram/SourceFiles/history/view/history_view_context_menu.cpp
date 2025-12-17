@@ -1700,14 +1700,6 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								} else if (!safeItem->originalText().empty()) {
 									auto originalText = safeItem->originalText();
 									TextUtilities::SetClipboardText(TextForMimeData::Rich(std::move(originalText)));
-								} else if (const auto media = safeItem->media()) { // Use safeItem's media
-									// Fallback to the media's general text if individual item has none
-									auto mediaText = media->selectedText(TextSelection(0, std::numeric_limits<uint16>::max()));
-									if (!mediaText.empty()) {
-										TextUtilities::SetClipboardText(mediaText);
-									} else {
-										TextUtilities::SetClipboardText(HistoryItemText(safeItem));
-									}
 								} else {
 									TextUtilities::SetClipboardText(HistoryItemText(safeItem));
 								}
