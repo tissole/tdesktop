@@ -566,20 +566,16 @@ QSize Document::countOptimalSize() {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
-	// Issue 6: 2px below chat name (force 2px top)
-	auto minHeight = 2 + contentHeight;
+	// New Logic: Use calculateVisualElementBottom for consistency with Grouped/Column mode
+	const int baseTop = 2; // Issue 6: Force 2px top
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, true);
+	auto minHeight = visualBottomOfElement;
 	
-	if (!isBubbleTop()) {
-		minHeight -= st::msgFileTopMinus;
-	}
-
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 	
-	if (hasCaptionContent) {
-		// Issue 5 & 6: 2px above caption
-		minHeight += 2;
-	}
+	// Issue 5 & 6: 2px above caption (or bottom padding if no caption)
+	minHeight += 2;
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -612,9 +608,6 @@ QSize Document::countOptimalSize() {
 	if (hasCaptionContent) {
 		// Issue 5 & 6: 2px below caption
 		minHeight += 2;
-	} else {
-		// Issue 4: 2px below content if no caption (Single file logic)
-		minHeight += 2;
 	}
 	
 	return { maxWidth, minHeight };
@@ -633,18 +626,15 @@ QSize Document::countCurrentSize(int newWidth) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
-	// Issue 6: 2px below chat name (force 2px top)
-	auto newHeight = 2 + contentHeight;
-	if (!isBubbleTop()) {
-		newHeight -= st::msgFileTopMinus;
-	}
+	// New Logic: Use calculateVisualElementBottom for consistency
+	const int baseTop = 2; // Issue 6: Force 2px top
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, true);
+	auto newHeight = visualBottomOfElement;
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	// Issue 5: 2px above caption
-	if (hasCaptionContent) {
-		newHeight += 2;
-	}
+	// Issue 5: 2px above caption (or bottom padding if no caption)
+	newHeight += 2;
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
@@ -659,9 +649,6 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	if (hasCaptionContent) {
 		// Issue 5: 2px below caption
-		newHeight += 2;
-	} else {
-		// Issue 4: 2px below content if no caption (Single file logic)
 		newHeight += 2;
 	}
 	
@@ -713,7 +700,7 @@ void Document::draw(
 	const auto showPause = updateStatusText();
 	const auto radial = isRadialAnimation();
 
-	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+	const auto topMinus = (isBubbleTop() || mode == LayoutMode::Grouped) ? 0 : st::msgFileTopMinus;
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (mode == LayoutMode::Full)
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
@@ -1099,7 +1086,7 @@ void Document::draw(
 	
 	// Calculate visual bottom of the content element for precise caption positioning
 	// BaseTop is forcedTop (2) here, as this is for the item's drawing context
-	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, true);
+	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, mode != LayoutMode::Grouped);
 	
 	auto captiontop = visualElementBottom + 2; // Desired 2px visual gap from element to caption
 
@@ -1981,7 +1968,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 2; // Caption starts + Caption height + 2px below caption
 	} else {
 		// No caption
-		finalHeight = visualBottomOfElement + 2;
+		finalHeight = visualBottomOfElement;
 	}
 	height = finalHeight;
 	return { maxWidth, height };
@@ -1997,33 +1984,28 @@ QSize Document::sizeForGrouping(int width) const {
 		// FIX Issue from user: For Music files, measure from 'download arrow' (shift + size).
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
-	auto height = 2 + contentHeight; // Issue 4 & 6: Force 2px top (Verified for Thumbs)
-	const auto elementBaseHeight = contentHeight; // Use initial contentHeight for base height
+	// Issue 4 & 6: Force 2px top (Verified for Thumbs)
+	const int baseTop = 2;
+	auto height = baseTop + contentHeight;
+	const auto elementBaseHeight = contentHeight;
 
-	const auto extraGapReference = (st::msgFileLayoutGrouped.thumbSize - st::msgFileLayout.thumbSize) / 2;
 	int finalHeight = 0;
+
+	// Calculate visual bottom of the content element.
+	// We pass '2' as baseTop and 'false' for includeTopMinus, as these calculations are for internal item height.
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, elementBaseHeight, false);
 	
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		// Calculate visual bottom of the content element.
-		// We pass '2' as baseTop and 'false' for includeTopMinus, as these calculations are for internal item height.
-		const int visualBottomOfElement = calculateVisualElementBottom(2, elementBaseHeight, false);
-
 		// Use visualBottomOfElement to calculate caption starting point
 		const int captionStart = visualBottomOfElement + 2; // Visual bottom + 2px gap to caption
 		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 2; // Caption starts + Caption height + 2px below caption
 	} else {
 		// No caption
-		finalHeight = 2 + elementBaseHeight;
-		
-		// Only add extra visual gap for standard Column items (Files/Audio).
-		// Grid items (Video Files) should strictly adhere to content height.
-		if (!_data->isVideoFile()) {
-			finalHeight += extraGapReference;
-		}
+		finalHeight = visualBottomOfElement;
 	}
 	height = finalHeight;
 	return { maxWidth(), height };

@@ -273,6 +273,10 @@ QSize GroupedMedia::countOptimalSize() {
 
 			auto partHeight = sizes[i].height();
 
+			if (i == count - 1) {
+				partHeight += 2;
+			}
+
 			_parts[i].initialGeometry = QRect(0, top, item.geometry.width(), partHeight);
 			_parts[i].sides = item.sides;
 
@@ -353,6 +357,10 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		for (auto i = 0; i < _parts.size(); ++i) {
 			auto &part = _parts[i];
 			auto size = part.content->sizeForGrouping(newWidth);
+
+			if (i == _parts.size() - 1) {
+				size.setHeight(size.height() + 2);
+			}
 
 			part.geometry = QRect(0, top, newWidth, size.height());
 			top += size.height();
