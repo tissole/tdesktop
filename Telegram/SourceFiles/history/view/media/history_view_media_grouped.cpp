@@ -273,22 +273,6 @@ QSize GroupedMedia::countOptimalSize() {
 
 			auto partHeight = sizes[i].height();
 
-			// Add spacing for items in Column mode based on caption presence
-			if (!_parts[i].item->originalText().empty()) {
-				// Item has caption: 6px above caption + 6px below caption
-				partHeight += 6; // 6px above caption (from content to caption)
-				partHeight += 6; // 6px below caption (from caption to next element/bottom)
-			}
-
-			// Add spacing between items (same as caption spacing reference: 6px)
-			if (i < _parts.size() - 1) {
-				// Add 6px spacing between items
-				partHeight += 6;
-			} else {
-				// Last item: ensure 6px bottom spacing
-				partHeight += 6;
-			}
-
 			_parts[i].initialGeometry = QRect(0, top, item.geometry.width(), partHeight);
 			_parts[i].sides = item.sides;
 
@@ -313,6 +297,7 @@ QSize GroupedMedia::countOptimalSize() {
 		const auto textHeight = st::messageTextStyle.font->height;
 		const auto uniformCaptionHeight = 2 + textHeight + 2; // 2px top + text height + 2px bottom
 
+		int totalShift = 0;
 		for (auto const& [rowY, indices] : rows) {
 			bool rowHasCaption = false;
 			for (const auto i : indices) {
@@ -370,14 +355,6 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			auto &part = _parts[i];
 			auto size = part.content->sizeForGrouping(newWidth);
 
-			// Task 3: Spacing between items = 6px
-			if (i < _parts.size() - 1) {
-				size.setHeight(size.height() + 6);
-			} else {
-				// Last item: ensure 6px bottom spacing
-				size.setHeight(size.height() + 6);
-			}
-
 			part.geometry = QRect(0, top, newWidth, size.height());
 			top += size.height();
 		}
@@ -413,7 +390,6 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 				- top
 				- (needBottomSkip ? spacing : 0);
 			part.geometry = QRect(left, top, width, height);
-			accumulate_max(newHeight, top + height);
 		}
 
 		std::map<int, std::vector<int>> rows;
@@ -432,8 +408,12 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 			for (const auto i : indices) {
 				_parts[i].geometry.translate(0, totalShift);
-				rowBottomMax = std::max(rowBottomMax, _parts[i].geometry.bottom());
+				// Track the bottom of the parts *after* shift
+				rowBottomMax = std::max(rowBottomMax, _parts[i].geometry.y() + _parts[i].geometry.height());
 			}
+			
+			// Update newHeight to include at least this row's bottom
+			accumulate_max(newHeight, rowBottomMax);
 
 			for (const auto i : indices) {
 				if (!_parts[i].item->originalText().empty()) {
@@ -467,6 +447,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 					}
 				}
 				totalShift += uniformCaptionHeight;
+				// Add the caption height to newHeight as well, since it extends below the row
+				newHeight += uniformCaptionHeight;
 			} else {
 				for (const auto i : indices) {
 					_parts[i].captionRect = QRect();
@@ -478,9 +460,8 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			}
 		}
 
-		newHeight += totalShift;
-
 		// Task 2: Remove empty space in grid albums.
+		// Logic updated above: newHeight tracks row bottoms + caption heights directly.
 	}
 
 	const auto groupPadding = groupedPadding();
@@ -871,7 +852,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					const auto &icon = stm->historyViewsIcon;
 					const int iconH = icon.height();
 					const int scaledH = (iconH * iconW) / std::max(1, icon.width());
-					const int iconTop = baseY - st::msgDateFont->ascent + (st::msgDateFont->height - scaledH) / 2;
+					// Issue 5 Fix: Center icon relative to the line height, not baseline
+					const int iconTop = lineTop + (lineH - scaledH) / 2;
 					icon.paint(p, x, iconTop, iconW);
 					p.drawText(x + iconW + iconGap, baseY, viewsText);
 					x += viewsW + textGap;

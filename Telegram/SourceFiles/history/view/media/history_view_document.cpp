@@ -1957,18 +1957,19 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		// FIX Issue from user: For Music files, measure from 'download arrow' (shift + size).
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
-	auto height = 2 + contentHeight; // Issue 4 & 6: Force 2px top (Verified for Thumbs)
+	// Issue 4 & 6: Force 2px top (Verified for Thumbs)
+	const int baseTop = 2;
+	auto height = baseTop + contentHeight;
 	const auto elementBaseHeight = contentHeight; // Use initial contentHeight for base height
 
 	const_cast<Document*>(this)->refreshCaption(last);
 
-	const auto extraGapReference = (st::msgFileLayoutGrouped.thumbSize - st::msgFileLayout.thumbSize) / 2;
 	int finalHeight = 0;
 
 	// Calculate visual bottom of the content element.
 	// We pass '2' as baseTop and 'false' for includeTopMinus, as these calculations are for internal item height
 	// and topMinus is handled by GroupedMedia for overall item position.
-	const int visualBottomOfElement = calculateVisualElementBottom(2, elementBaseHeight, false);
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, elementBaseHeight, false);
 
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = maxWidth
@@ -1980,13 +1981,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 2; // Caption starts + Caption height + 2px below caption
 	} else {
 		// No caption
-		finalHeight = 2 + elementBaseHeight;
-		
-		// Only add extra visual gap for standard Column items (Files/Audio).
-		// Grid items (Video Files) should strictly adhere to content height.
-		if (!_data->isVideoFile()) {
-			finalHeight += extraGapReference;
-		}
+		finalHeight = visualBottomOfElement + 2;
 	}
 	height = finalHeight;
 	return { maxWidth, height };

@@ -1687,6 +1687,11 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 						if (!safeItem && groupPartItem) {
 							safeItem = groupPartItem;
 						}
+						
+						// Fallback: If group part resolution failed (e.g. stale ID), use the main item
+						if (!safeItem) {
+							safeItem = owner->message(itemId);
+						}
 
 						if (safeItem) {
 							if (!list->showCopyRestriction(safeItem)) {
@@ -1695,7 +1700,7 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								} else if (!safeItem->originalText().empty()) {
 									auto originalText = safeItem->originalText();
 									TextUtilities::SetClipboardText(TextForMimeData::Rich(std::move(originalText)));
-								} else if (const auto media = view->media()) {
+								} else if (const auto media = safeItem->media()) { // Use safeItem's media
 									// Fallback to the media's general text if individual item has none
 									auto mediaText = media->selectedText(TextSelection(0, std::numeric_limits<uint16>::max()));
 									if (!mediaText.empty()) {
