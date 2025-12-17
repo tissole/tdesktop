@@ -297,7 +297,6 @@ QSize GroupedMedia::countOptimalSize() {
 		const auto textHeight = st::messageTextStyle.font->height;
 		const auto uniformCaptionHeight = 2 + textHeight + 2; // 2px top + text height + 2px bottom
 
-		int totalShift = 0;
 		for (auto const& [rowY, indices] : rows) {
 			bool rowHasCaption = false;
 			for (const auto i : indices) {
@@ -852,6 +851,11 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					const auto &icon = stm->historyViewsIcon;
 					const int iconH = icon.height();
 					const int scaledH = (iconH * iconW) / std::max(1, icon.width());
+					
+					// Define missing variables for Issue 5 Fix
+					const int lineH = st::msgDateFont->height;
+					const int lineTop = baseY - st::msgDateFont->ascent;
+					
 					// Issue 5 Fix: Center icon relative to the line height, not baseline
 					const int iconTop = lineTop + (lineH - scaledH) / 2;
 					icon.paint(p, x, iconTop, iconW);
