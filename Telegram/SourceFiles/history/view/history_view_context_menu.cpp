@@ -1680,16 +1680,12 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 						: tr::lng_context_copy_text(tr::now), [=] {
 						
 						// ISSUE 9 FIX: Re-resolve using ID
-						auto safeItem = groupPartId 
-							? owner->message(groupPartId) 
-							: owner->message(itemId);
-
-						if (!safeItem && groupPartItem) {
-							safeItem = groupPartItem;
-						}
+						// Prioritize the specific part ID if detected, otherwise use main item ID
+						const auto targetId = groupPartId ? groupPartId : itemId;
+						auto safeItem = owner->message(targetId);
 						
-						// Fallback: If group part resolution failed (e.g. stale ID), use the main item
-						if (!safeItem) {
+						// Fallback: If resolution failed, try main item
+						if (!safeItem && groupPartId) {
 							safeItem = owner->message(itemId);
 						}
 
@@ -1698,16 +1694,26 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								TextWithEntities textToCopy;
 								if (hasCaptionText) { // User selected text with mouse
 									textToCopy = request.selectedText.rich;
-								} else if (groupPartId && view && view->media()) { // Try to get specific part text
-									textToCopy = view->media()->getPartText(groupPartId);
-								}
-								
-								if (textToCopy.empty() && !safeItem->originalText().empty()) { // Fallback to safeItem's original text
+								} else {
+									// Direct copy from the resolved item
 									textToCopy = safeItem->originalText();
 								}
+								
+								if (textToCopy.empty() && safeItem != owner->message(itemId)) { 
+									// If part has no text, maybe fallback to main item text? 
+									// But usually we want the part text. 
+									// If the user clicked a part without text, copying empty is correct 
+									// OR we could fallback to main text. 
+									// The original behavior for single-caption groups is to copy the single caption.
+									// If we are here, we likely have a part.
+								}
 
-								if (textToCopy.empty()) { // Final fallback to generic item text representation
-									textToCopy = HistoryItemText(safeItem).rich;
+								// Final fallback if still empty (e.g. main item clicked but it has no text?)
+								if (textToCopy.empty()) {
+									// Try to get text from the main item if we haven't already
+									if (auto mainItem = owner->message(itemId)) {
+										textToCopy = mainItem->originalText();
+									}
 								}
 								
 								if (!textToCopy.empty()) {

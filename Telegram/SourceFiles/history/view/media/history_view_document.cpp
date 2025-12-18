@@ -1289,6 +1289,7 @@ void Document::drawCornerDownload(
 		return;
 	}
 	auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+	const auto forcedTop = 2; // Issue 2 & 3 Fix: Force 2px top
 	const auto stm = context.messageStyle();
 	const auto thumbed = false;
 	const auto &st = (mode == LayoutMode::Full)
@@ -1296,7 +1297,7 @@ void Document::drawCornerDownload(
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	const auto shift = st::historyAudioDownloadShift;
 	const auto size = st::historyAudioDownloadSize;
-	const auto inner = style::rtlrect(st.padding.left() + shift, st.padding.top() - topMinus + shift, size, size, width());
+	const auto inner = style::rtlrect(st.padding.left() + shift, forcedTop - topMinus + shift, size, size, width());
 	const auto bubblePattern = usesBubblePattern(context);
 	if (bubblePattern) {
 		p.setPen(Qt::NoPen);
@@ -1354,13 +1355,14 @@ TextState Document::cornerDownloadTextState(
 		return result;
 	}
 	auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+	const auto forcedTop = 2; // Issue 2 & 3 Fix: Force 2px top
 	const auto thumbed = false;
 	const auto &st = (mode == LayoutMode::Full)
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	const auto shift = st::historyAudioDownloadShift;
 	const auto size = st::historyAudioDownloadSize;
-	const auto inner = style::rtlrect(st.padding.left() + shift, st.padding.top() - topMinus + shift, size, size, width());
+	const auto inner = style::rtlrect(st.padding.left() + shift, forcedTop - topMinus + shift, size, size, width());
 	if (inner.contains(point)) {
 		result.link = _data->loading() ? _cancell : _savel;
 	}
