@@ -295,7 +295,7 @@ QSize GroupedMedia::countOptimalSize() {
 		}
 
 		const auto textHeight = st::messageTextStyle.font->height;
-		const auto uniformCaptionHeight = 6 + textHeight + 6; // 6px top + text height + 6px bottom
+		const auto uniformCaptionHeight = 2 + textHeight + 2; // 2px top + text height + 2px bottom
 
 		for (auto const& [rowY, indices] : rows) {
 			bool rowHasCaption = false;
@@ -401,7 +401,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		}
 
 		const auto textHeight = st::messageTextStyle.font->height;
-		const auto uniformCaptionHeight = 6 + textHeight + 6; // 6px top + text height + 6px bottom
+		const auto uniformCaptionHeight = 2 + textHeight + 2; // 2px top + text height + 2px bottom
 
 		int totalShift = 0;
 
@@ -592,10 +592,21 @@ void GroupedMedia::drawHighlight(
 			auto copy = context;
 			copy.highlight.range = {};
 			
-			int highlightY = (i == 0) ? (rect.y() + 6) : (rect.y() + 3);
-			int highlightEnd = (i == count - 1) ? (rect.y() + rect.height()) : (rect.y() + rect.height() + 3);
-			int highlightHeight = std::max(0, highlightEnd - highlightY);
+			// Highlight starts from the top of the visual media content (skipping the 2px baseTop padding)
+			int highlightY = rect.y() + 2;
+			// Highlight covers the content, caption, and its own 4px bottom padding.
+			// rect.height() already includes the 2px baseTop and 4px bottom padding.
+			int highlightHeight = rect.height() - 2; // Adjusted to remove the 2px baseTop.
 
+			// For intermediate items, the highlight should extend into half the inter-item gap.
+			// The total inter-item gap is 6px (4px from current item + 2px from next item). Half is 3px.
+			// The current highlightHeight covers the 4px bottom padding. To get 3px, subtract 1px.
+			if (i < count - 1) { // If it's not the last item
+				highlightHeight -= 1; 
+			}
+			// For the last item, highlightHeight remains as rect.height() - 2, covering its 4px bottom padding
+			// which extends to the album's bottom frame.
+			
 			_parent->paintCustomHighlight(
 				p,
 				copy,
@@ -1019,15 +1030,15 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto availableHeight = captionRect.height();
 			const auto textHeight = part._captionText.countHeight(availableWidth);
 
-			// Calculate vertical offset to have 6px above and 6px below the text
-			const auto requiredSpace = textHeight + 6 + 6; // 6px top + text height + 6px bottom
-			int verticalOffset = 6; // Always start with 6px from top
+			// Calculate vertical offset to have 2px above and 2px below the text
+			const auto requiredSpace = textHeight + 2 + 2; // 2px top + text height + 2px bottom
+			int verticalOffset = 2; // Always start with 2px from top
 			if (requiredSpace <= availableHeight) {
-				// Center the content (text + 12px total padding) in the available height
-				verticalOffset = (availableHeight - requiredSpace) / 2 + 6;
+				// Center the content (text + 4px total padding) in the available height
+				verticalOffset = (availableHeight - requiredSpace) / 2 + 2;
 			} else {
-				// Not enough space, just use 6px top
-				verticalOffset = 6;
+				// Not enough space, just use 2px top
+				verticalOffset = 2;
 			}
 
 			const auto captionLeft = captionRect.left() + padding.left();
@@ -1120,15 +1131,7 @@ TextState GroupedMedia::getPartState(
 					const auto captionWidth = captionGeo.width() - padding.left() - padding.right();
 					
 					const auto clickX = point.x() - captionGeo.left() - padding.left();
-					
-					const auto textHeight = part._captionText.countHeight(captionWidth);
-					const auto availableHeight = captionGeo.height();
-					const auto requiredSpace = textHeight + 6 + 6;
-					int verticalOffset = 6;
-					if (requiredSpace <= availableHeight) {
-						verticalOffset = (availableHeight - requiredSpace) / 2 + 6;
-					}
-					const auto clickY = point.y() - captionGeo.top() - verticalOffset; 
+					const auto clickY = point.y() - captionGeo.top() - 2; 
 					
 					const auto textStateResult = part._captionText.getState(
 						QPoint(clickX, clickY), 

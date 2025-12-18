@@ -1653,7 +1653,7 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 
 		// Detect if we are over a specific part of a group
 		HistoryItem *groupPartItem = nullptr;
-		FullMsgId groupPartId = FullMsgId();
+		FullMsgId groupPartId;
 		// Fix: Trust overState.itemId if present, even if PointState is not GroupPart
 		if (request.overState.itemId) {
 			groupPartItem = owner->message(request.overState.itemId);
@@ -1698,10 +1698,14 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								TextWithEntities textToCopy;
 								if (hasCaptionText) { // User selected text with mouse
 									textToCopy = request.selectedText.rich;
-								} else {
-									textToCopy = safeItem->originalText();
+								} else if (groupPartId && view && view->media()) { // Try to get specific part text
+									textToCopy = view->media()->getPartText(groupPartId);
 								}
 								
+								if (textToCopy.empty() && !safeItem->originalText().empty()) { // Fallback to safeItem's original text
+									textToCopy = safeItem->originalText();
+								}
+
 								if (textToCopy.empty()) { // Final fallback to generic item text representation
 									textToCopy = HistoryItemText(safeItem).rich;
 								}
