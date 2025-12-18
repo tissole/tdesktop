@@ -463,7 +463,7 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 
 		const auto textHeight = font->height;
 		const auto hPadding = 2;
-		const auto vPadding = st::msgDateImgPadding.y();
+		const auto vPadding = 2; // Match grid album caption spacing (2px)
 		const auto bubbleW = totalWidth + 2 * hPadding;
 		const auto bubbleH = textHeight + 2 * vPadding;
 

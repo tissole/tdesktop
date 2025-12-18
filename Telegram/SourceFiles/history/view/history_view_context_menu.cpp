@@ -1681,17 +1681,17 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 						
 						// ISSUE 9 FIX: Re-resolve using ID
 						// Prioritize the specific part ID if detected, otherwise use main item ID
-						const auto targetId = groupPartId ? groupPartId : itemId;
+						const auto targetId = request.overState.itemId ? request.overState.itemId : itemId;
 						auto safeItem = owner->message(targetId);
 						
 						// Fallback: If resolution failed, try main item
-						if (!safeItem && groupPartId) {
+						if (!safeItem && request.overState.itemId) {
 							safeItem = owner->message(itemId);
 						}
 
 						if (safeItem) {
 							if (!list->showCopyRestriction(safeItem)) {
-								TextWithEntities textToCopy;
+								auto textToCopy = TextWithEntities();
 								if (hasCaptionText) { // User selected text with mouse
 									textToCopy = request.selectedText.rich;
 								} else {
@@ -1700,17 +1700,8 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								}
 								
 								if (textToCopy.empty() && safeItem != owner->message(itemId)) { 
-									// If part has no text, maybe fallback to main item text? 
-									// But usually we want the part text. 
-									// If the user clicked a part without text, copying empty is correct 
-									// OR we could fallback to main text. 
-									// The original behavior for single-caption groups is to copy the single caption.
-									// If we are here, we likely have a part.
-								}
-
-								// Final fallback if still empty (e.g. main item clicked but it has no text?)
-								if (textToCopy.empty()) {
-									// Try to get text from the main item if we haven't already
+									// If part has no text (e.g. only media), fallback to main item text
+									// ONLY if the user didn't explicitly select empty text (which isn't possible here)
 									if (auto mainItem = owner->message(itemId)) {
 										textToCopy = mainItem->originalText();
 									}
