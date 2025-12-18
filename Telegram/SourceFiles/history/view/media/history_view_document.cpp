@@ -754,8 +754,8 @@ void Document::draw(
 	}
 	const auto bottom = forcedTop + contentHeight + 6 - topMinus;
 	
-	auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
-	auto captiontop = visualElementBottom + 6; // Desired 6px visual gap from element to caption
+	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
+	const auto captiontop = visualElementBottom + 6; // Desired 6px visual gap from element to caption
 	
 	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
@@ -1109,9 +1109,10 @@ void Document::draw(
 	auto selection = context.selection;
 	
 	// Calculate visual bottom of the content element for precise caption positioning
-	// Use visualElementBottom and captiontop already declared at the top of draw()
-	visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
-	captiontop = visualElementBottom + 6;
+	// BaseTop is forcedTop (2) here, as this is for the item's drawing context
+	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
+	
+	auto captiontop = visualElementBottom + 6; // Desired 6px visual gap from element to caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
@@ -1297,7 +1298,6 @@ void Document::drawCornerDownload(
 	const auto circleInnerSize = st::msgFileLayout.thumbSize; 
 	const auto circleBottom = forcedTop + (st.thumbSize - circleInnerSize) / 2 + circleInnerSize;
 	const auto arrowTop = circleBottom + 6;
-	const auto size = st::historyAudioDownloadSize;
 	const auto inner = style::rtlrect(st.padding.left() + st::historyAudioDownloadShift, arrowTop - topMinus, size, size, width());
 	const auto bubblePattern = usesBubblePattern(context);
 	if (bubblePattern) {
@@ -1413,13 +1413,12 @@ TextState Document::textState(
 	const auto statustop = nametop + nameHeight + nametop;
 	
 	auto contentHeight = st.thumbSize;
-	const auto cornerDownload = downloadInCorner();
 	if (cornerDownload) {
 		const auto innerSize = st::msgFileLayout.thumbSize; 
 		const auto circleBottom = forcedTop + (st.thumbSize - innerSize) / 2 + innerSize;
-		contentHeight = (circleBottom - forcedTop) + 6 + st::historyAudioDownloadSize;
+		contentHeight = (circleBottom - forcedTop) + 5 + st::historyAudioDownloadSize;
 	}
-	auto bottom = forcedTop + contentHeight + 6 - topMinus;
+	auto bottom = forcedTop + contentHeight + st.padding.bottom() - topMinus;
 
 	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
