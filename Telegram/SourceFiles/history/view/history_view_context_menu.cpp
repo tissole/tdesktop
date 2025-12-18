@@ -1702,6 +1702,11 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 									textToCopy = safeItem->originalText();
 								}
 								
+								// Final fallback: if originalText is empty, use the resolved safeItem's text
+								if (textToCopy.empty() && safeItem) {
+									textToCopy = HistoryItemText(safeItem).rich;
+								}
+								
 								if (textToCopy.empty()) { // Final fallback to generic item text representation
 									textToCopy = HistoryItemText(safeItem).rich;
 								}
