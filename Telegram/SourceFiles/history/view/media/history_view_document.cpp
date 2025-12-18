@@ -566,16 +566,16 @@ QSize Document::countOptimalSize() {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
-	// New Logic: Use calculateVisualElementBottom for consistency
-	const int baseTop = 2; // Fixed 2px top
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false);
+	// New Logic: Use calculateVisualElementBottom for consistency with Grouped/Column mode
+	const int baseTop = 6; // Issue 6: Force 2px top
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); // Calculate layout ignoring topMinus contour
 	auto minHeight = visualBottomOfElement;
 	
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 	
-	// Use 2px gap above caption (or bottom padding if no caption)
-	minHeight += 2;
+	// Issue 5 & 6: 6px above caption (or bottom padding if no caption)
+	minHeight += 6;
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -606,11 +606,11 @@ QSize Document::countOptimalSize() {
 	}
 
 	if (hasCaptionContent) {
-		// Use 2px below caption
-		minHeight += 2;
+		// Issue 5 & 6: 6px below caption
+		minHeight += 6;
 	} else {
-		// For items without caption, still ensure 2px bottom padding
-		minHeight += 2;
+		// For items without caption, still ensure 6px bottom padding for single files.
+		minHeight += 6;
 	}
 	
 	// Apply topMinus for bubble contour AFTER internal content layout is done.
@@ -728,18 +728,20 @@ void Document::draw(
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 
-	// Issue 6: Force 2px top padding
-	const auto forcedTop = 2;
+	// Issue 6: Force 6px top padding
+	const auto forcedTop = 6;
 	const auto delta = forcedTop - st.padding.top();
 
 	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
 	const auto nametop = st.nameTop + delta - topMinus;
 	const auto nameright = st.padding.right();
 	
-	// User requested chat title area height to match Grid Album caption area height
-	const auto gridCaptionHeight = 2 + st::messageTextStyle.font->height + 2;
+	// Issue: Symmetry for Chat Title (Filename)
+	// User wants space below title to equal space above title.
+	// Space Above = nametop (distance from top 0).
 	const auto nameHeight = st::semiboldFont->height;
-	const auto statustop = nametop + (gridCaptionHeight - nameHeight) / 2;
+	const auto statustop = nametop + nameHeight + nametop; 
+	// Old: const auto statustop = st.statusTop + delta - topMinus;
 
 	const auto linktop = st.linkTop + delta - topMinus;
 	const auto captioned = Get<HistoryDocumentCaptioned>();
@@ -748,12 +750,12 @@ void Document::draw(
 	if (cornerDownload) {
 		const auto innerSize = st::msgFileLayout.thumbSize; 
 		const auto circleBottom = forcedTop + (st.thumbSize - innerSize) / 2 + innerSize;
-		contentHeight = (circleBottom - forcedTop) + 1 + st::historyAudioDownloadSize; // Measured from arrow
+		contentHeight = (circleBottom - forcedTop) + 6 + st::historyAudioDownloadSize;
 	}
-	const auto bottom = forcedTop + contentHeight + 2 - topMinus; // Use 2px bottom gap
+	const auto bottom = forcedTop + contentHeight + 6 - topMinus;
 	
 	auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
-	auto captiontop = visualElementBottom + 2; // Match column album caption spacing
+	auto captiontop = visualElementBottom + 6; // Desired 6px visual gap from element to caption
 	
 	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
@@ -1003,10 +1005,8 @@ void Document::draw(
 		p.restore();
 	} else if (const auto named = Get<HistoryDocumentNamed>()) {
 		p.setPen(stm->historyFileNameFg);
-		const auto nameDrawingMode = (mode == LayoutMode::GridGrouped);
-		const auto nameX = nameDrawingMode ? (width - named->name.maxWidth()) / 2 : nameleft;
 		named->name.draw(p, {
-			.position = QPoint(nameX, nametop),
+			.position = QPoint(nameleft, nametop),
 			.outerWidth = width,
 			.availableWidth = namewidth,
 			.elisionLines = 1,
@@ -1407,18 +1407,19 @@ TextState Document::textState(
 	auto namewidth = width - nameleft - nameright;
 	const auto linktop = st.linkTop + delta - topMinus;
 	
-	// User requested chat title area height to match Grid Album caption area height
-	const auto gridCaptionHeight = 2 + st::messageTextStyle.font->height + 2;
-	const auto statustop = nametop + (gridCaptionHeight - nameHeight) / 2;
+	// Issue: Symmetry for Chat Title (Filename) in textState
+	// Match drawing logic: Space Below = Space Above (nametop)
+	const auto nameHeight = st::semiboldFont->height;
+	const auto statustop = nametop + nameHeight + nametop;
 	
 	auto contentHeight = st.thumbSize;
 	const auto cornerDownload = downloadInCorner();
 	if (cornerDownload) {
 		const auto innerSize = st::msgFileLayout.thumbSize; 
 		const auto circleBottom = forcedTop + (st.thumbSize - innerSize) / 2 + innerSize;
-		contentHeight = (circleBottom - forcedTop) + 1 + st::historyAudioDownloadSize; // Revert move down
+		contentHeight = (circleBottom - forcedTop) + 6 + st::historyAudioDownloadSize;
 	}
-	auto bottom = forcedTop + contentHeight + 2 - topMinus; // Use 2px bottom gap
+	auto bottom = forcedTop + contentHeight + 6 - topMinus;
 
 	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
@@ -2047,18 +2048,17 @@ void Document::drawGrouped(
 		Ui::BubbleRounding rounding,
 		float64 highlightOpacity,
 		not_null<uint64*> cacheKey,
-		not_null<QPixmap*> cache,
-		LayoutMode mode) const {
-	const auto hlight = context.highlightPathCache
+		not_null<QPixmap*> cache) const {
+	const auto maybeMediaHighlight = context.highlightPathCache
 		&& context.highlightPathCache->isEmpty();
 	p.translate(geometry.topLeft());
 	draw(
 		p,
 		context.translated(-geometry.topLeft()),
 		geometry.width(),
-		mode,
+		LayoutMode::Grouped,
 		rounding);
-	if (hlight
+	if (maybeMediaHighlight
 		&& !context.highlightPathCache->isEmpty()) {
 		context.highlightPathCache->translate(geometry.topLeft());
 	}
@@ -2069,14 +2069,13 @@ TextState Document::getStateGrouped(
 		const QRect &geometry,
 		RectParts sides,
 		QPoint point,
-		StateRequest request,
-		LayoutMode mode) const {
+		StateRequest request) const {
 	point -= geometry.topLeft();
 	return textState(
 		point,
 		geometry.size(),
 		request,
-		mode);
+		LayoutMode::Grouped);
 }
 
 bool Document::voiceProgressAnimationCallback(crl::time now) {
@@ -2169,7 +2168,7 @@ int Document::calculateVisualElementBottom(int baseTop, int contentBoundingHeigh
         // Play button circle bottom is (currentThumbSize - innerSize) / 2 + innerSize
         const auto innerSize = st::msgFileLayout.thumbSize; 
         const auto circleBottom = (currentThumbSize - innerSize) / 2 + innerSize;
-        visualBottom = circleBottom + 1 + st::historyAudioDownloadSize;
+        visualBottom = circleBottom + 6 + st::historyAudioDownloadSize;
     } else { // Standard files (circles - might have internal padding)
         const auto innerSize = st::msgFileLayout.thumbSize; // The actual circle diameter
         // Circle is centered vertically within its bounding box (currentThumbSize)

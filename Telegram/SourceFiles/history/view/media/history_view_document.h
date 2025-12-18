@@ -80,14 +80,12 @@ public:
 		Ui::BubbleRounding rounding,
 		float64 highlightOpacity,
 		not_null<uint64*> cacheKey,
-		not_null<QPixmap*> cache,
-		LayoutMode mode) const override;
+		not_null<QPixmap*> cache) const override;
 	TextState getStateGrouped(
 		const QRect &geometry,
 		RectParts sides,
 		QPoint point,
-		StateRequest request,
-		LayoutMode mode) const override;
+		StateRequest request) const override;
 
 	bool voiceProgressAnimationCallback(crl::time now);
 
@@ -108,7 +106,6 @@ private:
 	enum class LayoutMode {
 		Full,
 		Grouped,
-		GridGrouped,
 	};
 
 	void draw(

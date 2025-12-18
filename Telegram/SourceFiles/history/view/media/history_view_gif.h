@@ -83,14 +83,12 @@ public:
 		Ui::BubbleRounding rounding,
 		float64 highlightOpacity,
 		not_null<uint64*> cacheKey,
-		not_null<QPixmap*> cache,
-		Document::LayoutMode mode) const override;
+		not_null<QPixmap*> cache) const override;
 	TextState getStateGrouped(
 		const QRect &geometry,
 		RectParts sides,
 		QPoint point,
-		StateRequest request,
-		Document::LayoutMode mode) const override;
+		StateRequest request) const override;
 
 	void stopAnimation() override;
 	void checkAnimation() override;

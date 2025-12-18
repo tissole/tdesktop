@@ -239,16 +239,14 @@ public:
 			Ui::BubbleRounding rounding,
 			float64 highlightOpacity,
 			not_null<uint64*> cacheKey,
-			not_null<QPixmap*> cache,
-			Document::LayoutMode mode) const {
+			not_null<QPixmap*> cache) const {
 		Unexpected("Grouping method call.");
 	}
 	[[nodiscard]] virtual TextState getStateGrouped(
 		const QRect &geometry,
 		RectParts sides,
 		QPoint point,
-		StateRequest request,
-		Document::LayoutMode mode) const;
+		StateRequest request) const;
 
 	virtual void drawSpoilerTag(
 			Painter &p,
