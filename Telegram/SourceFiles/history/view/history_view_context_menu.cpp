@@ -1697,7 +1697,7 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 							if (!list->showCopyRestriction(safeItem)) {
 								TextWithEntities textToCopy;
 								if (hasCaptionText) { // User selected text with mouse
-									textToCopy = request.selectedText;
+									textToCopy = request.selectedText.rich;
 								} else if (groupPartId && view && view->media()) { // Try to get specific part text
 									textToCopy = view->media()->getPartText(groupPartId);
 								}
@@ -1707,7 +1707,7 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								}
 
 								if (textToCopy.empty()) { // Final fallback to generic item text representation
-									textToCopy = HistoryItemText(safeItem);
+									textToCopy = HistoryItemText(safeItem).rich;
 								}
 								
 								if (!textToCopy.empty()) {
