@@ -567,15 +567,15 @@ QSize Document::countOptimalSize() {
 	}
 
 	// New Logic: Use calculateVisualElementBottom for consistency with Grouped/Column mode
-	const int baseTop = 2; // Issue 6: Force 2px top
+	const int baseTop = 6; // Issue 6: Force 2px top
 	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); // Calculate layout ignoring topMinus contour
 	auto minHeight = visualBottomOfElement;
 	
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 	
-	// Issue 5 & 6: 2px above caption (or bottom padding if no caption)
-	minHeight += 2;
+	// Issue 5 & 6: 6px above caption (or bottom padding if no caption)
+	minHeight += 6;
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -606,12 +606,11 @@ QSize Document::countOptimalSize() {
 	}
 
 	if (hasCaptionContent) {
-		// Issue 5 & 6: 2px below caption
-		minHeight += 2;
+		// Issue 5 & 6: 6px below caption
+		minHeight += 6;
 	} else {
-		// For items without caption, still ensure 2px bottom padding for single files.
-		// (Column album items without caption would have 0 bottom padding here, adjusted by GroupedMedia).
-		minHeight += 2;
+		// For items without caption, still ensure 6px bottom padding for single files.
+		minHeight += 6;
 	}
 	
 	// Apply topMinus for bubble contour AFTER internal content layout is done.
@@ -636,14 +635,14 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	// New Logic: Use calculateVisualElementBottom for consistency
-	const int baseTop = 2; // Issue 6: Force 2px top
+	const int baseTop = 6; // Issue 6: Force 2px top
 	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); // Calculate layout ignoring topMinus contour
 	auto newHeight = visualBottomOfElement;
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	// Issue 5: 2px above caption (or bottom padding if no caption)
-	newHeight += 2;
+	// Issue 5: 6px above caption (or bottom padding if no caption)
+	newHeight += 6;
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
@@ -657,12 +656,11 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		// Issue 5: 2px below caption
-		newHeight += 2;
+		// Issue 5: 6px below caption
+		newHeight += 6;
 	} else {
-		// For items without caption, still ensure 2px bottom padding for single files.
-		// (Column album items without caption would have 0 bottom padding here, adjusted by GroupedMedia).
-		newHeight += 2;
+		// For items without caption, still ensure 6px bottom padding for single files.
+		newHeight += 6;
 	}
 	
 	// Apply topMinus for bubble contour AFTER internal content layout is done.
@@ -730,8 +728,8 @@ void Document::draw(
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 
-	// Issue 6: Force 2px top padding
-	const auto forcedTop = 2;
+	// Issue 6: Force 6px top padding
+	const auto forcedTop = 6;
 	const auto delta = forcedTop - st.padding.top();
 
 	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
@@ -747,15 +745,17 @@ void Document::draw(
 
 	const auto linktop = st.linkTop + delta - topMinus;
 	const auto captioned = Get<HistoryDocumentCaptioned>();
-	// Apply 2px spacing above caption for both Full (single files) and Grouped modes
-	// Issue 5: 2px spacing above caption is standard now.
-	const auto bottomPadding = 2;
-	
+
 	auto contentHeight = st.thumbSize;
-	if (downloadInCorner()) {
-		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+	if (cornerDownload) {
+		const auto innerSize = st::msgFileLayout.thumbSize; 
+		const auto circleBottom = forcedTop + (st.thumbSize - innerSize) / 2 + innerSize;
+		contentHeight = (circleBottom - forcedTop) + 6 + st::historyAudioDownloadSize;
 	}
-	const auto bottom = forcedTop + contentHeight + bottomPadding - topMinus;
+	const auto bottom = forcedTop + contentHeight + 6 - topMinus;
+	
+	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
+	const auto captiontop = visualElementBottom + 6; // Desired 6px visual gap from element to caption
 	
 	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
@@ -1112,11 +1112,11 @@ void Document::draw(
 	// BaseTop is forcedTop (2) here, as this is for the item's drawing context
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
-	auto captiontop = visualElementBottom + 2; // Desired 2px visual gap from element to caption
+	auto captiontop = visualElementBottom + 6; // Desired 6px visual gap from element to caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
-		voice->transcribeText.draw(p, st::msgPadding.left(), bottom, captionw, style::al_left, 0, -1, selection);
+		voice->transcribeText.draw(p, st::msgPadding.left(), captiontop, captionw, style::al_left, 0, -1, selection);
 		captiontop += voice->transcribeText.countHeight(captionw) + st::mediaCaptionSkip;
 		selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
 	}
@@ -1294,9 +1294,11 @@ void Document::drawCornerDownload(
 	const auto &st = (mode == LayoutMode::Full)
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-	const auto shift = st::historyAudioDownloadShift;
-	const auto size = st::historyAudioDownloadSize;
-	const auto inner = style::rtlrect(st.padding.left() + shift, st.padding.top() - topMinus + shift, size, size, width());
+	const auto forcedTop = 6;
+	const auto circleInnerSize = st::msgFileLayout.thumbSize; 
+	const auto circleBottom = forcedTop + (st.thumbSize - circleInnerSize) / 2 + circleInnerSize;
+	const auto arrowTop = circleBottom + 6;
+	const auto inner = style::rtlrect(st.padding.left() + st::historyAudioDownloadShift, arrowTop - topMinus, size, size, width());
 	const auto bubblePattern = usesBubblePattern(context);
 	if (bubblePattern) {
 		p.setPen(Qt::NoPen);
@@ -1411,8 +1413,10 @@ TextState Document::textState(
 	const auto statustop = nametop + nameHeight + nametop;
 	
 	auto contentHeight = st.thumbSize;
-	if (downloadInCorner()) {
-		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+	if (cornerDownload) {
+		const auto innerSize = st::msgFileLayout.thumbSize; 
+		const auto circleBottom = forcedTop + (st.thumbSize - innerSize) / 2 + innerSize;
+		contentHeight = (circleBottom - forcedTop) + 5 + st::historyAudioDownloadSize;
 	}
 	auto bottom = forcedTop + contentHeight + st.padding.bottom() - topMinus;
 
@@ -1969,7 +1973,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 	// Issue 4 & 6: Force 2px top (Verified for Thumbs)
-	const int baseTop = 2;
+	const int baseTop = 6;
 	auto height = baseTop + contentHeight;
 	const auto elementBaseHeight = contentHeight; // Use initial contentHeight for base height
 
@@ -1988,11 +1992,11 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 			- st::msgPadding.right();
 		
 		// Use visualBottomOfElement to calculate caption starting point
-		const int captionStart = visualBottomOfElement + 2; // Visual bottom + 2px gap to caption
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; // Caption starts + Caption height + 4px bottom padding
+		const int captionStart = visualBottomOfElement + 6; // Visual bottom + 6px gap to caption
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + (last ? 6 : 0); 
 	} else {
 		// No caption
-		finalHeight = visualBottomOfElement + 4; // Visual bottom + 4px bottom padding
+		finalHeight = visualBottomOfElement + (last ? 6 : 0);
 	}
 	height = finalHeight;
 	return { maxWidth, height };
@@ -2009,7 +2013,7 @@ QSize Document::sizeForGrouping(int width) const {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 	// Issue 4 & 6: Force 2px top (Verified for Thumbs)
-	const int baseTop = 2;
+	const int baseTop = 6;
 	auto height = baseTop + contentHeight;
 	const auto elementBaseHeight = contentHeight;
 
@@ -2025,11 +2029,11 @@ QSize Document::sizeForGrouping(int width) const {
 			- st::msgPadding.right();
 		
 		// Use visualBottomOfElement to calculate caption starting point
-		const int captionStart = visualBottomOfElement + 2; // Visual bottom + 2px gap to caption
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; // Caption starts + Caption height + 4px bottom padding
+		const int captionStart = visualBottomOfElement + 6; // Visual bottom + 6px gap to caption
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 0; // 0px bottom padding for column items (except last)
 	} else {
 		// No caption
-		finalHeight = visualBottomOfElement + 4; // Visual bottom + 4px bottom padding
+		finalHeight = visualBottomOfElement + 0; 
 	}
 	height = finalHeight;
 	return { maxWidth(), height };
@@ -2159,8 +2163,11 @@ int Document::calculateVisualElementBottom(int baseTop, int contentBoundingHeigh
 
     if (thumbed) { // Thumbnails (fill the bounding box)
         visualBottom += currentThumbSize; // Bottom of the bounding box is the visual bottom
-    } else if (downloadInCorner()) { // Music files (arrow is the lowest point)
-        visualBottom += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+    } else if (downloadInCorner()) { // Music files (arrow is 6px below the play button circle)
+        // Play button circle bottom is (currentThumbSize - innerSize) / 2 + innerSize
+        const auto innerSize = st::msgFileLayout.thumbSize; 
+        const auto circleBottom = (currentThumbSize - innerSize) / 2 + innerSize;
+        visualBottom = circleBottom + 6 + st::historyAudioDownloadSize;
     } else { // Standard files (circles - might have internal padding)
         const auto innerSize = st::msgFileLayout.thumbSize; // The actual circle diameter
         // Circle is centered vertically within its bounding box (currentThumbSize)
