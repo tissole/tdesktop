@@ -286,6 +286,10 @@ void PaintWaveform(
 	return result;
 }
 
+[[nodiscard]] int calculateVisualElementBottom(int top, int height, bool includeTopMinus) {
+	return top + height;
+}
+
 } // namespace
 
 Document::Document(
@@ -611,7 +615,7 @@ QSize Document::countOptimalSize() {
 	} else {
 		// For items without caption, still ensure 2px bottom padding for single files.
 		// (Column album items without caption would have 0 bottom padding here, adjusted by GroupedMedia).
-		minHeight += 2;
+		// We already added 2px above, which serves as the bottom padding in this case.
 	}
 	
 	// Apply topMinus for bubble contour AFTER internal content layout is done.
@@ -661,8 +665,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight += 2;
 	} else {
 		// For items without caption, still ensure 2px bottom padding for single files.
-		// (Column album items without caption would have 0 bottom padding here, adjusted by GroupedMedia).
-		newHeight += 2;
+		// We already added 2px above, which serves as the bottom padding in this case.
 	}
 	
 	// Apply topMinus for bubble contour AFTER internal content layout is done.
@@ -1416,7 +1419,9 @@ TextState Document::textState(
 	if (downloadInCorner()) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
-	auto bottom = forcedTop + contentHeight + st.padding.bottom() - topMinus;
+	// Fixed: Use 2px spacing for caption top, instead of st.padding.bottom().
+	// This ensures consistency with draw() and countOptimalSize().
+	auto bottom = forcedTop + contentHeight + 2 - topMinus;
 
 	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
