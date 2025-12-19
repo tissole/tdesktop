@@ -592,67 +592,38 @@ void GroupedMedia::drawHighlight(
 			auto copy = context;
 			copy.highlight.range = {};
 			
-			// ISSUE 3 FIX: Precise Column Selection
-			// Logic:
-			// - Gap between items is `st::historyGroupSkip`.
-			// - Midpoint is `st::historyGroupSkip / 2`.
-			// - First Item: Start from visual top (padding), End at `bottom + gap/2`.
-			// - Middle Items: Start from `top - gap/2`, End at `bottom + gap/2`.
-			// - Last Item: Start from `top - gap/2`, End at `bottom + padding`.
-
-			const auto gap = st::historyGroupSkip;
-			const auto halfGap = gap / 2;
-			
+			// Highlight starts from the top of the visual media content (skipping the 2px baseTop padding)
 			int highlightY = rect.y();
 			int highlightHeight = rect.height();
 
 			if (i == 0) {
-				// First Item
-				// Start: Visual top of the file (skipping the top padding which acts as margin here)
-				// The user requested "start from item download round button", which typically aligns 
-				// after the top padding of the layout.
+				// First Item: Start from content top (skipping top padding/gap above)
 				const auto topPadding = st::msgFileThumbLayoutGrouped.padding.top();
 				highlightY += topPadding;
-				
-				// End: Extend into half of the gap below
-				// rect.height() includes the content. 
-				// The loop logic defines rect top based on layout. 
-				// We want strictly content height + half gap.
-				// rect.height() in this context often includes the 'gap' if layout puts it there, 
-				// but let's look at `rect` calculation: `part.geometry.translated(0, skip)`.
-				// `part.geometry` height is usually just the item height.
-				// We need to ensure we extend downwards.
-				
-				// Adjust height: Original height - start offset + half gap extension
-				highlightHeight = (rect.height() - topPadding) + halfGap;
-
-			} else if (i == count - 1) {
-				// Last Item
-				// Start: Midpoint of gap above
-				highlightY -= halfGap;
-				
-				// End: Extend to bottom of album
-				// The rect.height() is the item height.
-				// We want to recover the half gap we moved up, plus the item height, 
-				// plus potentially any bottom padding if `rect` didn't cover it.
-				// `GroupedMedia` has 0 bottom padding in `groupedPadding()` usually, 
-				// but let's ensure we cover the full visual area.
-				
-				highlightHeight += halfGap; // To cover the shift up
-				
-				// If there's extra bottom padding in the group, we might want to extend further,
-				// but `rect` usually bounds the item. The user said "extend until bottom album".
-				// Assuming `rect` goes to the visual bottom of the content.
-				
-			} else {
-				// Middle Items
-				// Start: Midpoint of gap above
-				highlightY -= halfGap;
-				
-				// End: Midpoint of gap below
-				// Height: half gap above + content + half gap below
-				highlightHeight += halfGap + halfGap;
+				highlightHeight -= topPadding;
 			}
+			
+			// Middle & Last items: "rect" is stacked, so rect.y() is the boundary (midpoint of gap).
+			// We want the selection to cover the visual item + half gap above + half gap below.
+			// Since rect includes (top + content + bottom),/ and top/bottom paddings create the gap,
+			// rect.y() IS the midpoint.
+			
+			// For the last item, we want to extend to the bottom of the album.
+			// "extend until bottom album"
+			// rect is the whole slot, so rect.y() + rect.height() is the bottom.
+			// Existing highlightHeight covers it.
+			
+			// Adjustments for visual "half distance" if needed.
+			// If standard flow:
+			// Items are: [ Gap/2 | Content | Gap/2 ] [ Gap/2 | Content | Gap/2 ]
+			// Geometry: [ -------- Item 1 -------- ] [ -------- Item 2 -------- ]
+			// So rect covers perfectly.
+			
+			// Ensure we don't bleed 2px offset like before.
+			// Previous code had +2 / -2. We removed it.
+			
+			// Additional check: The user mentioned "first item selection should start from item download round button".
+			// That roughly aligns with 'topPadding' added above.
 			
 			_parent->paintCustomHighlight(
 				p,

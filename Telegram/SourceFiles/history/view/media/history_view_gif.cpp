@@ -754,33 +754,22 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	} else if (!skipDrawingSurrounding) {
 		if (isRound) {
 			const auto mediaUnread = item->hasUnreadMediaFlag();
-			// ISSUE 2 FIX: Enforce 2px spacing for info bubble to match Grid Album Caption
-			const auto hPadding = 2; 
-			const auto vPadding = 2; // 2px vertical padding inside bubble
-			const auto bottomMargin = 2; // 2px margin from bottom of image
-			
-			auto statusW = st::normalFont->width(_statusText) + 2 * hPadding;
-			auto statusH = st::normalFont->height + 2 * vPadding;
-			
+			auto statusW = st::normalFont->width(_statusText) + 2 * st::msgDateImgPadding.x();
+			auto statusH = st::normalFont->height + 2 * st::msgDateImgPadding.y();
+			auto statusX = usex + paintx + st::msgDateImgDelta + st::msgDateImgPadding.x();
+			auto statusY = painty + painth - st::msgDateImgDelta - statusH + st::msgDateImgPadding.y();
 			if (mediaUnread) {
 				statusW += st::mediaUnreadSkip + st::mediaUnreadSize;
 			}
-			
-			// Rect position
-			const auto rectX = usex + paintx + st::msgDateImgDelta; 
-			const auto rectY = painty + painth - bottomMargin - statusH;
-			
-			Ui::FillRoundRect(p, style::rtlrect(rectX, rectY, statusW, statusH, width()), sti->msgServiceBg, sti->msgServiceBgCornersSmall);
+			Ui::FillRoundRect(p, style::rtlrect(statusX - st::msgDateImgPadding.x(), statusY - st::msgDateImgPadding.y(), statusW, statusH, width()), sti->msgServiceBg, sti->msgServiceBgCornersSmall);
 			p.setFont(st::normalFont);
-			
+			// Use consistent edited glyph and color for status; rely on this item's edited state
 			const auto editedGlyph = (item->Get<HistoryMessageEdited>() && !item->hideEditedBadge())
 				? (QString::fromUtf8("✏️") + " ")
 				: QString();
 			const auto statusText = editedGlyph + _statusText;
 			p.setPen(st->msgDateImgFg());
-			
-			// Draw text with same padding offset
-			p.drawTextLeft(rectX + hPadding, rectY + vPadding, width(), statusText, statusW - 2 * hPadding);
+			p.drawTextLeft(statusX, statusY, width(), statusText, statusW - 2 * st::msgDateImgPadding.x());
 			if (mediaUnread) {
 				p.setPen(Qt::NoPen);
 				p.setBrush(st->msgServiceFg());
