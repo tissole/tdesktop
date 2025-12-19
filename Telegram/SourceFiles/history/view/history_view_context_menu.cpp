@@ -1674,11 +1674,20 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 				const auto asGroup = (request.pointState != PointState::GroupPart);
 				const auto hasCaptionText = !request.selectedText.empty();
 
-				if (hasCaptionText || targetHasText || view->hasVisibleText() || (asGroup && mediaHasTextForCopy)) {
+				// Check if we're over a specific part's caption in grouped media
+				HistoryItem *groupPartItem = nullptr;
+				if (request.overState.itemId) {
+					groupPartItem = owner->message(request.overState.itemId);
+				}
+
+				// For multi-caption grid albums, check if the specific part we clicked on has text
+				const auto partHasText = groupPartItem && !groupPartItem->originalText().empty();
+
+				if (hasCaptionText || targetHasText || view->hasVisibleText() || (asGroup && mediaHasTextForCopy) || partHasText) {
 					result->addAction(hasCaptionText
 						? tr::lng_context_copy_selected(tr::now)
 						: tr::lng_context_copy_text(tr::now), [=] {
-						
+
 						// ISSUE 9 FIX: Re-resolve using ID
 						// Prioritize the specific part ID from the request state (populated by GroupedMedia::textState).
 						// We implicitly trust request.overState to contain the correct itemId for the clicked part.
@@ -1686,7 +1695,7 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 						if (!targetId) targetId = itemId;
 
 						auto safeItem = owner->message(targetId);
-						
+
 						// Fallback: If resolution failed, try main item
 						if (!safeItem) {
 							safeItem = owner->message(itemId);
@@ -1701,15 +1710,15 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 									// Direct copy from the resolved item
 									textToCopy = safeItem->originalText();
 								}
-								
-								if (textToCopy.empty() && safeItem != owner->message(itemId)) { 
+
+								if (textToCopy.empty() && safeItem != owner->message(itemId)) {
 									// If part has no text (e.g. only media), fallback to main item text
 									// ONLY if the user didn't explicitly select empty text (which isn't possible here)
 									if (auto mainItem = owner->message(itemId)) {
 										textToCopy = mainItem->originalText();
 									}
 								}
-								
+
 								if (!textToCopy.empty()) {
 									TextUtilities::SetClipboardText(TextForMimeData::Rich(std::move(textToCopy)));
 								}
