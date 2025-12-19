@@ -30,7 +30,6 @@ namespace HistoryView {
 class Photo final : public File {
 public:
 	bool aboveTextByDefault() const override { return true; }
-	bool isBubbleTop() const override { return true; }
 public:
 	Photo(
 		not_null<Element*> parent,
