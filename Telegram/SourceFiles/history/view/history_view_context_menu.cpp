@@ -1679,7 +1679,7 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 						? tr::lng_context_copy_selected(tr::now)
 						: tr::lng_context_copy_text(tr::now), [=] {
 						
-						// ISSUE 9 FIX: Re-resolve using ID
+						// ISSUE 9 FIX: Robust Item ID Resolution for Copy Text
 						// Prioritize the specific part ID from the request state (populated by GroupedMedia::textState).
 						// We implicitly trust request.overState to contain the correct itemId for the clicked part.
 						auto targetId = request.overState.itemId;
@@ -1687,7 +1687,7 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 
 						auto safeItem = owner->message(targetId);
 						
-						// Fallback: If resolution failed, try main item
+						// Additional Safety: If the resolved item is not found, fallback to main item.
 						if (!safeItem) {
 							safeItem = owner->message(itemId);
 						}
