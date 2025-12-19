@@ -1680,18 +1680,9 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 						: tr::lng_context_copy_text(tr::now), [=] {
 						
 						// ISSUE 9 FIX: Re-resolve using ID
-						// Prioritize the specific part ID if detected, otherwise use main item ID
+						// Prioritize the specific part ID from the request state (populated by GroupedMedia::textState).
+						// We implicitly trust request.overState to contain the correct itemId for the clicked part.
 						auto targetId = request.overState.itemId;
-						if (!targetId && view && view->media()) {
-							// Fallback: Query media state directly to find part ID
-							// This handles cases where request.overState was not fully populated
-							const auto state = view->media()->textState(
-								request.pointState != PointState::Outside 
-									? view->mapFromGlobal(QCursor::pos()) 
-									: QPoint(), 
-								StateRequest());
-							targetId = state.itemId;
-						}
 						if (!targetId) targetId = itemId;
 
 						auto safeItem = owner->message(targetId);
