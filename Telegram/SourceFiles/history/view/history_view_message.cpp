@@ -1020,9 +1020,9 @@ QSize Message::performCountOptimalSize() {
 		if (!mediaOnTop) {
 			minHeight += st::msgPadding.top();
 			if (mediaDisplayed) {
-				// Task 7: Space below name (which is above media) should equal space above name (msgPadding.top)
-				// So we use st::msgPadding.top() instead of 2.
-				minHeight += isCompact ? st::msgPadding.top() : st::mediaInBubbleSkip;
+				// Task 7: Space below name/top (which is above media) should be 2px for compact media
+				// to avoid excessive top gap.
+				minHeight += isCompact ? 2 : st::mediaInBubbleSkip;
 			}
 			if (entry) minHeight += st::mediaInBubbleSkip;
 		}
@@ -1257,8 +1257,9 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	if (mediaDisplayed) {
 		const auto isCompactMedia = media->getPhoto() || media->getDocument();
 		if (isCompactMedia) {
-			// Task 7: Space below name equals space above name
-			mediaInBubbleSkipTop = st::msgPadding.top();
+			// Task 7: Space below name/top (which is above media) should be 2px for compact media
+			// to avoid excessive top gap.
+			mediaInBubbleSkipTop = 2;
 			// Task 6: Space below content (caption) equals 2px
 			mediaInBubbleSkipBottom = 2;
 		}
@@ -2719,7 +2720,7 @@ TextState Message::textState(
 			&& !media->getDocument()->isVoiceMessage()
 			&& !media->getDocument()->sticker(); // Treat regular files like photos
 		if (isPhotoOrVideo || isFile) {
-			mediaInBubbleSkipTop = st::msgPadding.top();
+			mediaInBubbleSkipTop = 2;
 			mediaInBubbleSkipBottom = 2;
 		}
 	}

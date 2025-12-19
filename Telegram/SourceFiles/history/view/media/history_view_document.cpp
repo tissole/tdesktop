@@ -571,7 +571,7 @@ QSize Document::countOptimalSize() {
 	}
 
 	// New Logic: Use calculateVisualElementBottom for consistency with Grouped/Column mode
-	const int baseTop = 2; // Issue 6: Force 2px top
+	const int baseTop = 0; // Issue 6: Message already adds padding, so baseTop should be 0
 	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); // Calculate layout ignoring topMinus contour
 	auto minHeight = visualBottomOfElement;
 	
@@ -640,7 +640,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	// New Logic: Use calculateVisualElementBottom for consistency
-	const int baseTop = 2; // Issue 6: Force 2px top
+	const int baseTop = 0; // Issue 6: Message already adds padding
 	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); // Calculate layout ignoring topMinus contour
 	auto newHeight = visualBottomOfElement;
 	
@@ -733,20 +733,18 @@ void Document::draw(
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 
-	// Issue 6: Force 2px top padding
-	const auto forcedTop = 2;
+	// Issue 6: Message already adds padding
+	const auto forcedTop = 0;
 	const auto delta = forcedTop - st.padding.top();
 
 	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
-	const auto nametop = st.nameTop + delta - topMinus;
+	const auto nametop = 0; 
 	const auto nameright = st.padding.right();
 	
 	// Issue: Symmetry for Chat Title (Filename)
-	// User wants space below title to equal space above title.
-	// Space Above = nametop (distance from top 0).
+	// Use 2px offset for status text
 	const auto nameHeight = st::semiboldFont->height;
-	const auto statustop = nametop + nameHeight + nametop; 
-	// Old: const auto statustop = st.statusTop + delta - topMinus;
+	const auto statustop = nametop + nameHeight + 2; 
 
 	const auto linktop = st.linkTop + delta - topMinus;
 	const auto captioned = Get<HistoryDocumentCaptioned>();
@@ -1292,7 +1290,7 @@ void Document::drawCornerDownload(
 		return;
 	}
 	auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-	const auto forcedTop = 2; // Issue 2 & 3 Fix: Force 2px top
+	const auto forcedTop = 0; // Issue 2 & 3 Fix: Message adds padding
 	const auto stm = context.messageStyle();
 	const auto thumbed = false;
 	const auto &st = (mode == LayoutMode::Full)
@@ -1358,7 +1356,7 @@ TextState Document::cornerDownloadTextState(
 		return result;
 	}
 	auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-	const auto forcedTop = 2; // Issue 2 & 3 Fix: Force 2px top
+	const auto forcedTop = 0; // Issue 2 & 3 Fix: Message adds padding
 	const auto thumbed = false;
 	const auto &st = (mode == LayoutMode::Full)
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
@@ -1400,20 +1398,20 @@ TextState Document::textState(
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 
-	// Issue 6: Force 2px top padding
-	const auto forcedTop = 2;
+	// Issue 6: Message already adds padding
+	const auto forcedTop = 0;
 	const auto delta = forcedTop - st.padding.top();
 
 	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
-	const auto nametop = st.nameTop + delta - topMinus;
+	const auto nametop = 0; // Top of the document content
 	const auto nameright = st.padding.right();
 	auto namewidth = width - nameleft - nameright;
 	const auto linktop = st.linkTop + delta - topMinus;
 	
 	// Issue: Symmetry for Chat Title (Filename) in textState
-	// Match drawing logic: Space Below = Space Above (nametop)
+	// Use 2px offset for status text
 	const auto nameHeight = st::semiboldFont->height;
-	const auto statustop = nametop + nameHeight + nametop;
+	const auto statustop = nametop + nameHeight + 2;
 	
 	auto contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
