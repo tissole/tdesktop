@@ -747,6 +747,7 @@ void Document::draw(
 	const auto statustop = nametop + nameHeight + 2; 
 
 	const auto linktop = st.linkTop + delta - topMinus;
+	const auto captioned = Get<HistoryDocumentCaptioned>();
 	// Apply 2px spacing above caption for both Full (single files) and Grouped modes
 	// Issue 5: 2px spacing above caption is standard now.
 	const auto bottomPadding = 2;
@@ -1410,6 +1411,7 @@ TextState Document::textState(
 	// Issue: Symmetry for Chat Title (Filename) in textState
 	// Use 2px offset for status text
 	const auto nameHeight = st::semiboldFont->height;
+	const auto statustop = nametop + nameHeight + 2;
 	
 	auto contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
