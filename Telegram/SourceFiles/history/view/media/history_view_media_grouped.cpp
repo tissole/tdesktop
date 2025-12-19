@@ -1793,8 +1793,7 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		return {};
 	}
 	auto result = std::vector<Ui::BubbleSelectionInterval>();
-	const auto overlap = st::msgFileThumbLayoutGrouped.padding.top();
-
+	
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
 		if (!IsGroupItemSelection(selection, i)) {
@@ -1802,21 +1801,54 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		}
 		const auto &geometry = part.geometry;
 		
-		// Issues 19-22 Fix: Selection covers full item height.
-		// Last item should include the full height (including bottom 2px margin).
+		int top = geometry.top();
 		int visualHeight = geometry.height();
 
+		// Determine padding based on whether the item has a thumbnail (like in drawHighlight)
+		// We assume files with thumbnails use st::msgFileThumbLayoutGrouped, others st::msgFileLayoutGrouped
+		bool hasThumb = false;
+		if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
+			if (const auto document = fileMedia->document()) {
+				hasThumb = document->hasThumbnail() && !document->isSong();
+			}
+		}
+		const auto &layoutStyle = hasThumb 
+			? st::msgFileThumbLayoutGrouped 
+			: st::msgFileLayoutGrouped;
+		const auto paddingTop = layoutStyle.padding.top();
+		const auto paddingBottom = layoutStyle.padding.bottom();
+
+		if (i == 0) {
+			// First Item: Start from content top (skip top padding/gap)
+			top += paddingTop;
+			visualHeight -= paddingTop;
+			
+			// If not last, end at half gap below
+			if (i < count - 1) {
+				visualHeight -= (paddingBottom / 2);
+			}
+		} else if (i == count - 1) {
+			// Last Item: Start from half gap above, extend to bottom
+			top += (paddingTop / 2);
+			visualHeight -= (paddingTop / 2);
+			// Full height includes bottom padding, which we want
+		} else {
+			// Middle Items: Start from half gap above, end at half gap below
+			top += (paddingTop / 2);
+			visualHeight -= (paddingTop / 2);
+			visualHeight -= (paddingBottom / 2);
+		}
+
 		if (result.empty()
-			|| (result.back().top + result.back().height
-				< geometry.top())
-			|| (result.back().top > geometry.top() + visualHeight)) {
-			result.push_back({ geometry.top(), visualHeight });
+			|| (result.back().top + result.back().height < top)
+			|| (result.back().top > top + visualHeight)) {
+			result.push_back({ top, visualHeight });
 		} else {
 			auto &last = result.back();
-			const auto newTop = std::min(last.top, geometry.top());
+			const auto newTop = std::min(last.top, top);
 			const auto newHeight = std::max(
 				last.top + last.height - newTop,
-				geometry.top() + visualHeight - newTop);
+				top + visualHeight - newTop);
 			last = Ui::BubbleSelectionInterval{ newTop, newHeight };
 		}
 	}
@@ -1824,10 +1856,14 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 	for (auto &part : result) {
 		part.top += groupPadding.top();
 	}
-	if (IsGroupItemSelection(selection, 0)) {
-		result.front().top -= groupPadding.top();
-		result.front().height += groupPadding.top();
-	}
+	// Note: We handled the first item top trimming inside the loop logic relative to geometry.top()
+	// But getBubbleSelectionIntervals final adjustment subtracts groupPadding.top() ?
+	// No, the original code had a special check for i=0.
+	// "if (IsGroupItemSelection(selection, 0)) { result.front().top -= groupPadding.top(); ... }"
+	// That was likely to extend selection to the very top of the bubble.
+	// But our new requirement says "start from item download round button".
+	// So we DO NOT want to extend to the very top.
+	// So we remove that special adjustment for i=0.
 	
 	return result;
 }
