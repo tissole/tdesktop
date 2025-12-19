@@ -787,7 +787,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 
 				{
 					PainterHighQualityEnabler hq(p);
-					p.drawEllipse(style::rtlrect(statusX - st::msgDateImgPadding.x() + statusW - st::msgDateImgPadding.x() - st::mediaUnreadSize, statusY + st::mediaUnreadTop, st::mediaUnreadSize, st::mediaUnreadSize, width()));
+					p.drawEllipse(style::rtlrect(rectX + statusW - hPadding - st::mediaUnreadSize, rectY + vPadding + st::mediaUnreadTop, st::mediaUnreadSize, st::mediaUnreadSize, width()));
 				}
 			}
 			ensureTranscribeButton();
