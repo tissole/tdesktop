@@ -2715,7 +2715,10 @@ TextState Message::textState(
 			|| (media->getDocument() && (media->getDocument()->isVideoFile()
 				|| media->getDocument()->isAnimation()
 				|| media->getDocument()->isGifv()));
-		if (isPhotoOrVideo) {
+		const auto isFile = media->getDocument()
+			&& !media->getDocument()->isVoiceMessage()
+			&& !media->getDocument()->sticker(); // Treat regular files like photos
+		if (isPhotoOrVideo || isFile) {
 			mediaInBubbleSkipTop = st::msgPadding.top();
 			mediaInBubbleSkipBottom = 2;
 		}

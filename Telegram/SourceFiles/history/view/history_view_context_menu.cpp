@@ -1681,11 +1681,23 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 						
 						// ISSUE 9 FIX: Re-resolve using ID
 						// Prioritize the specific part ID if detected, otherwise use main item ID
-						const auto targetId = request.overState.itemId ? request.overState.itemId : itemId;
+						auto targetId = request.overState.itemId;
+						if (!targetId && view && view->media()) {
+							// Fallback: Query media state directly to find part ID
+							// This handles cases where request.overState was not fully populated
+							const auto state = view->media()->textState(
+								request.pointState != PointState::Outside 
+									? view->mapFromGlobal(QCursor::pos()) 
+									: QPoint(), 
+								StateRequest());
+							targetId = state.itemId;
+						}
+						if (!targetId) targetId = itemId;
+
 						auto safeItem = owner->message(targetId);
 						
 						// Fallback: If resolution failed, try main item
-						if (!safeItem && request.overState.itemId) {
+						if (!safeItem) {
 							safeItem = owner->message(itemId);
 						}
 

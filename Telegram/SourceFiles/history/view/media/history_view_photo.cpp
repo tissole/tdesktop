@@ -469,7 +469,7 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 
 		// Position: Top-Right
 		const auto bubbleX = width() - bubbleW - st::msgDateImgDelta;
-		const auto bubbleY = st::msgDateImgDelta;
+		const auto bubbleY = 2; // Match grid album caption spacing (2px)
 
 		p.save();
 		p.setOpacity(0.95);
