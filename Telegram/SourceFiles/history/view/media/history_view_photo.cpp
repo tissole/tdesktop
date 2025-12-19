@@ -272,12 +272,6 @@ QSize Photo::countCurrentSize(int newWidth) {
 		newHeight += 2;
 	}
 	
-	// Issue 3 Fix: Reduce height by topMinus if name is above (not bubble top)
-	// to match Grid Album visual spacing.
-	if (!isBubbleTop()) {
-		newHeight -= st::msgFileTopMinus;
-	}
-
 	return { newWidth, newHeight };
 }
 

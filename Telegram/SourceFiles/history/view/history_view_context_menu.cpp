@@ -29,7 +29,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item_components.h"
 #include "history/view/history_view_schedule_box.h"
 #include "history/view/media/history_view_media.h"
-#include "history/view/media/history_view_media_grouped.h"
 #include "layout/layout_selection.h" // FullSelection
 #include "history/view/media/history_view_web_page.h"
 #include "history/view/reactions/history_view_reactions_list.h"
@@ -1701,20 +1700,6 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 								} else {
 									// Direct copy from the resolved item
 									textToCopy = safeItem->originalText();
-
-									// 2024 Fix: If still empty and it's a GroupedMedia, try getting part text directly.
-									// This handles cases where safeItem might be the main item of the group but the user clicked a part
-									// or if the text is stored/accessed differently in the view.
-									if (textToCopy.empty() && view && view->media()) {
-										if (const auto grouped = dynamic_cast<const HistoryView::GroupedMedia*>(view->media())) {
-											if (targetId) {
-												auto partText = grouped->getPartText(targetId);
-												if (!partText.empty()) {
-													textToCopy = partText;
-												}
-											}
-										}
-									}
 								}
 								
 								if (textToCopy.empty() && safeItem != owner->message(itemId)) { 
