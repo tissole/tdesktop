@@ -1119,7 +1119,6 @@ void Document::draw(
 	const auto transcribeHeight = (voice && !voice->transcribeText.isEmpty())
 		? (voice->transcribeText.countHeight(captionw))
 		: 0;
-	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const auto captionHeight = captioned
 		? captioned->caption.countHeight(captionw)
 		: 0;
