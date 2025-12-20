@@ -1793,55 +1793,42 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		return {};
 	}
 	auto result = std::vector<Ui::BubbleSelectionInterval>();
-	const auto groupPadding = groupedPadding();
+	const auto overlap = st::msgFileThumbLayoutGrouped.padding.top();
 
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
+		const auto &part = _parts[i];
 		if (!IsGroupItemSelection(selection, i)) {
 			continue;
 		}
-
-		const auto &part = _parts[i];
 		const auto &geometry = part.geometry;
+		
+		// Issues 19-22 Fix: Selection covers full item height.
+		// Last item should include the full height (including bottom 2px margin).
+		int visualHeight = geometry.height();
 
-		// Calculate proper selection boundaries based on requirements
-		int top = geometry.top();
-		int height = geometry.height();
-
-		// For first item: start from download button or thumbnail/play button area
-		if (i == 0) {
-			// Start from the top of the visual content (download button area)
-			// Extend until halfway to the next item
-			if (count > 1) {
-				const auto nextTop = _parts[1].geometry.top();
-				const auto halfway = geometry.top() + (nextTop - geometry.top()) / 2;
-				height = halfway - geometry.top();
-			}
+		if (result.empty()
+			|| (result.back().top + result.back().height
+				< geometry.top())
+			|| (result.back().top > geometry.top() + visualHeight)) {
+			result.push_back({ geometry.top(), visualHeight });
+		} else {
+			auto &last = result.back();
+			const auto newTop = std::min(last.top, geometry.top());
+			const auto newHeight = std::max(
+				last.top + last.height - newTop,
+				geometry.top() + visualHeight - newTop);
+			last = Ui::BubbleSelectionInterval{ newTop, newHeight };
 		}
-		// For last item: start from halfway from the previous item and extend to bottom
-		else if (i == count - 1) {
-			const auto prevBottom = _parts[i-1].geometry.top() + _parts[i-1].geometry.height();
-			const auto halfway = prevBottom + (geometry.top() - prevBottom) / 2;
-			top = halfway;
-			height = (geometry.top() + geometry.height()) - top;
-		}
-		// For middle items: start from halfway from previous item and extend to halfway to next item
-		else {
-			const auto prevBottom = _parts[i-1].geometry.top() + _parts[i-1].geometry.height();
-			const auto nextTop = _parts[i+1].geometry.top();
-			const auto startHalfway = prevBottom + (geometry.top() - prevBottom) / 2;
-			const auto endHalfway = geometry.top() + (nextTop - geometry.top()) / 2;
-			top = startHalfway;
-			height = endHalfway - startHalfway;
-		}
-
-		// Ensure we don't go out of bounds
-		if (top < 0) top = 0;
-		if (top + height > Media::height()) height = Media::height() - top;
-		if (height <= 0) continue;
-
-		result.push_back({ top + groupPadding.top(), height });
 	}
-
+	const auto groupPadding = groupedPadding();
+	for (auto &part : result) {
+		part.top += groupPadding.top();
+	}
+	if (IsGroupItemSelection(selection, 0)) {
+		result.front().top -= groupPadding.top();
+		result.front().height += groupPadding.top();
+	}
+	
 	return result;
 }
 

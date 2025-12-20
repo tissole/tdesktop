@@ -271,7 +271,7 @@ QSize Photo::countCurrentSize(int newWidth) {
 	if (!_parent->hasBubble() || _parent->data()->emptyText()) {
 		newHeight += 2;
 	}
-
+	
 	return { newWidth, newHeight };
 }
 
