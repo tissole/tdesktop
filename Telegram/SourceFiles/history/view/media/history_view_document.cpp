@@ -1115,11 +1115,12 @@ void Document::draw(
 	// BaseTop is forcedTop (2) here, as this is for the item's drawing context
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
+	// Calculate caption positioning to center it between media element and bottom
 	auto captiontop = visualElementBottom + 2; // Desired 2px visual gap from element to caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
-		voice->transcribeText.draw(p, st::msgPadding.left(), bottom, captionw, style::al_left, 0, -1, selection);
+		voice->transcribeText.draw(p, st::msgPadding.left(), captiontop, captionw, style::al_left, 0, -1, selection);
 		captiontop += voice->transcribeText.countHeight(captionw) + st::mediaCaptionSkip;
 		selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
 	}
@@ -1127,21 +1128,53 @@ void Document::draw(
 		p.setPen(stm->historyTextFg);
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
-		captioned->caption.draw(p, {
-			.position = { st::msgPadding.left(), captiontop },
-			.availableWidth = captionw,
-			.palette = &stm->textPalette,
-			.pre = stm->preCache.get(),
-			.blockquote = context.quoteCache(parent()->contentColorIndex()),
-			.colors = context.st->highlightColors(),
-			.spoiler = Ui::Text::DefaultSpoilerCache(),
-			.now = context.now,
-			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
-			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
-			.selection = selection,
-			.highlight = highlightRequest ? &*highlightRequest : nullptr,
-			.useFullWidth = true,
-		});
+
+		// Calculate caption height for centering
+		const auto captionHeight = captioned->caption.countHeight(captionw);
+
+		// Calculate available space between the content and bottom of the item
+		// For proper centering, we need to know the total height of this document item
+		// and position the caption in the middle of the remaining space
+		const auto textTop = captiontop;
+		const auto textBottom = height - (isBubbleBottom() ? st::msgPadding.bottom() : 0);
+		const auto availableSpace = textBottom - textTop;
+
+		if (availableSpace > captionHeight) {
+			// Center the caption in the available space
+			const auto centeredTop = textTop + (availableSpace - captionHeight) / 2;
+			captioned->caption.draw(p, {
+				.position = { st::msgPadding.left(), centeredTop },
+				.availableWidth = captionw,
+				.palette = &stm->textPalette,
+				.pre = stm->preCache.get(),
+				.blockquote = context.quoteCache(parent()->contentColorIndex()),
+				.colors = context.st->highlightColors(),
+				.spoiler = Ui::Text::DefaultSpoilerCache(),
+				.now = context.now,
+				.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
+				.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
+				.selection = selection,
+				.highlight = highlightRequest ? &*highlightRequest : nullptr,
+				.useFullWidth = true,
+			});
+		} else {
+			// Not enough space to center, just draw at the calculated top
+			captioned->caption.draw(p, {
+				.position = { st::msgPadding.left(), textTop },
+				.availableWidth = captionw,
+				.palette = &stm->textPalette,
+				.pre = stm->preCache.get(),
+				.blockquote = context.quoteCache(parent()->contentColorIndex()),
+				.colors = context.st->highlightColors(),
+				.spoiler = Ui::Text::DefaultSpoilerCache(),
+				.now = context.now,
+				.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
+				.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
+				.selection = selection,
+				.highlight = highlightRequest ? &*highlightRequest : nullptr,
+				.useFullWidth = true,
+			});
+		}
 	}
 
 	// --- STANDARD BOTTOM INFO (Round Videos Only) ---

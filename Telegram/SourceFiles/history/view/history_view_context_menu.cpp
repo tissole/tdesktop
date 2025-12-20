@@ -1683,6 +1683,9 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 				// For multi-caption grid albums, check if the specific part we clicked on has text
 				const auto partHasText = groupPartItem && !groupPartItem->originalText().empty();
 
+				// The targetItem is already defined earlier in the function as targetItem
+				// We'll rely on request.overState.itemId to identify the specific part
+
 				if (hasCaptionText || targetHasText || view->hasVisibleText() || (asGroup && mediaHasTextForCopy) || partHasText) {
 					result->addAction(hasCaptionText
 						? tr::lng_context_copy_selected(tr::now)
