@@ -1136,7 +1136,7 @@ void Document::draw(
 		// For proper centering, we need to know the total height of this document item
 		// and position the caption in the middle of the remaining space
 		const auto textTop = captiontop;
-		const auto textBottom = _parent->height() - (isBubbleBottom() ? st::msgPadding.bottom() : 0);
+		const auto textBottom = height - (isBubbleBottom() ? st::msgPadding.bottom() : 0);
 		const auto availableSpace = textBottom - textTop;
 
 		if (availableSpace > captionHeight) {
