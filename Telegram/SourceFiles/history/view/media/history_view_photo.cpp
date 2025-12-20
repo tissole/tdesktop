@@ -1298,11 +1298,6 @@ QPoint Photo::resolveCustomInfoRightBottom() const {
 	return QPoint(width() - skipx, height() - skipy);
 }
 
-bool Photo::isBubbleTop() const {
-	// Make single photos behave like grouped media for consistent top spacing
-	return true;
-}
-
 bool Photo::isReadyForOpen() const {
 	ensureDataMediaCreated();
 	return _dataMedia->loaded();

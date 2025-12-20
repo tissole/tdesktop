@@ -1807,37 +1807,29 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		int top = geometry.top();
 		int height = geometry.height();
 
-		// For first item: selection should start from item download round button or thumbnail or play button for music files
-		// and extend until half distance between current item and next item
+		// For first item: start from download button or thumbnail/play button area
 		if (i == 0) {
-			// Start from the top of the item (download button area)
+			// Start from the top of the visual content (download button area)
+			// Extend until halfway to the next item
 			if (count > 1) {
-				// Extend until halfway to the next item
 				const auto nextTop = _parts[1].geometry.top();
 				const auto halfway = geometry.top() + (nextTop - geometry.top()) / 2;
 				height = halfway - geometry.top();
 			}
 		}
-		// For last item: should extend until bottom of album
+		// For last item: start from halfway from the previous item and extend to bottom
 		else if (i == count - 1) {
-			// Start from halfway between current and previous item
 			const auto prevBottom = _parts[i-1].geometry.top() + _parts[i-1].geometry.height();
 			const auto halfway = prevBottom + (geometry.top() - prevBottom) / 2;
 			top = halfway;
-			// Extend until bottom of album (end of this item)
 			height = (geometry.top() + geometry.height()) - top;
 		}
-		// For rest items (except last): should show selection beginning from half distance between
-		// current item and item above it and extend until half distance between current item and item below it
+		// For middle items: start from halfway from previous item and extend to halfway to next item
 		else {
-			// Start from halfway between current and previous item
 			const auto prevBottom = _parts[i-1].geometry.top() + _parts[i-1].geometry.height();
-			const auto startHalfway = prevBottom + (geometry.top() - prevBottom) / 2;
-
-			// End at halfway between current and next item
 			const auto nextTop = _parts[i+1].geometry.top();
+			const auto startHalfway = prevBottom + (geometry.top() - prevBottom) / 2;
 			const auto endHalfway = geometry.top() + (nextTop - geometry.top()) / 2;
-
 			top = startHalfway;
 			height = endHalfway - startHalfway;
 		}
