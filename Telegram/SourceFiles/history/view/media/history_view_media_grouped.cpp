@@ -592,38 +592,39 @@ void GroupedMedia::drawHighlight(
 			auto copy = context;
 			copy.highlight.range = {};
 			
-			// Highlight starts from the top of the visual media content (skipping the 2px baseTop padding)
+			// Fix selection highlighting for column albums
 			int highlightY = rect.y();
 			int highlightHeight = rect.height();
 
 			if (i == 0) {
-				// First Item: Start from content top (skipping top padding/gap above)
+				// First Item: Start from download button/thumbnail (skip top padding)
+				// and extend until half distance between current item and next item
 				const auto topPadding = st::msgFileThumbLayoutGrouped.padding.top();
 				highlightY += topPadding;
-				highlightHeight -= topPadding;
+				
+				// For first item, we want to extend until half distance to next item
+				// This means we keep the full height but adjust the bottom
+				if (count > 1) {
+					// Calculate half gap between items
+					const auto gap = groupedPadding().top();
+					highlightHeight = rect.height() - (gap / 2);
+				}
+			} else if (i == count - 1) {
+				// Last Item: Start from half distance between current item and item above
+				// and extend until bottom of album
+				if (count > 1) {
+					// Calculate half gap from previous item
+					const auto gap = groupedPadding().top();
+					highlightY += gap / 2;
+				}
+				// Keep full height to extend to bottom
+			} else {
+				// Middle Items: Start from half distance between current item and item above
+				// and extend until half distance between current item and item below
+				const auto gap = groupedPadding().top();
+				highlightY += gap / 2;
+				highlightHeight -= gap;
 			}
-			
-			// Middle & Last items: "rect" is stacked, so rect.y() is the boundary (midpoint of gap).
-			// We want the selection to cover the visual item + half gap above + half gap below.
-			// Since rect includes (top + content + bottom),/ and top/bottom paddings create the gap,
-			// rect.y() IS the midpoint.
-			
-			// For the last item, we want to extend to the bottom of the album.
-			// "extend until bottom album"
-			// rect is the whole slot, so rect.y() + rect.height() is the bottom.
-			// Existing highlightHeight covers it.
-			
-			// Adjustments for visual "half distance" if needed.
-			// If standard flow:
-			// Items are: [ Gap/2 | Content | Gap/2 ] [ Gap/2 | Content | Gap/2 ]
-			// Geometry: [ -------- Item 1 -------- ] [ -------- Item 2 -------- ]
-			// So rect covers perfectly.
-			
-			// Ensure we don't bleed 2px offset like before.
-			// Previous code had +2 / -2. We removed it.
-			
-			// Additional check: The user mentioned "first item selection should start from item download round button".
-			// That roughly aligns with 'topPadding' added above.
 			
 			_parent->paintCustomHighlight(
 				p,

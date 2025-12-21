@@ -1535,7 +1535,7 @@ void OverlayWidget::refreshCaptionGeometry() {
 		? (_streamed->controls->y() - st::mediaviewCaptionMargin.height())
 		: _groupThumbs
 		? _groupThumbsTop
-		: height() - st::mediaviewCaptionMargin.height();
+		: (_maxUsedHeight + height() - st::mediaviewCaptionMargin.height()) / 2;
 	const auto captionWidth = _stories
 		? storiesCaptionWidth
 		: std::min(
@@ -1629,6 +1629,19 @@ void OverlayWidget::fillContextMenuActions(
 		
 		// For caption context menu, we're done - no other options needed
 		return;
+	}
+	
+	// If context menu is on a group thumb item with a caption, add caption copy option
+	if (_contextMenuItemIndex >= 0 && !_itemCaptions.empty()) {
+		auto it = _itemCaptions.find(_contextMenuItemIndex);
+		if (it != _itemCaptions.end() && !it->second.isEmpty()) {
+			// Add "Copy Text" option for this item's caption
+			addAction(
+				tr::lng_context_copy_text(tr::now),
+				[=] { copyItemCaption(_contextMenuItemIndex); },
+				&st::mediaMenuIconCopy);
+			return;
+		}
 	}
 	
 	if (_message && _message->isSponsored()) {
@@ -2096,9 +2109,14 @@ void OverlayWidget::recountSkipTop() {
 			- 2 * st::mediaviewCaptionPadding.bottom())
 		: height();
 	const auto skipHeightBottom = (height() - bottom);
+	
+	// Fix: Ensure consistent top spacing between single and grid albums
+	// Use the same top spacing calculation regardless of album type
+	const auto baseTopSpacing = st::mediaviewTitleButton.height + st::mediaviewHeaderTop;
+	
 	_skipTop = _minUsedTop + std::min(
 		std::max(
-			st::mediaviewCaptionMargin.height(),
+			baseTopSpacing,  // Use consistent base spacing
 			height() - _height - skipHeightBottom),
 		skipHeightBottom);
 	_availableHeight = height() - skipHeightBottom - _skipTop;
@@ -3019,6 +3037,15 @@ void OverlayWidget::copySelectedCaptionText() {
 	QGuiApplication::clipboard()->setText(_caption.toString(_captionSelection));
 }
 
+void OverlayWidget::copyItemCaption(int itemIndex) {
+	auto it = _itemCaptions.find(itemIndex);
+	if (it == _itemCaptions.end() || it->second.isEmpty()) {
+		return;
+	}
+	_dropdown->hideAnimated(Ui::DropdownMenu::HideOption::IgnoreShow);
+	QGuiApplication::clipboard()->setText(it->second.toString());
+}
+
 void OverlayWidget::showAttachedStickers() {
 	if (!_session) {
 		return;
@@ -3372,6 +3399,10 @@ void OverlayWidget::refreshCaption() {
 	_caption = Ui::Text::String();
 	_captionSelection = { 0, 0 };
 	_captionSelecting = false;
+	
+	// Load captions for all items in the album
+	loadItemCaptions();
+	
 	const auto caption = [&] {
 		if (_stories) {
 			return _stories->captionText();
@@ -3432,6 +3463,32 @@ void OverlayWidget::refreshCaption() {
 	}
 }
 
+void OverlayWidget::loadItemCaptions() {
+	_itemCaptions.clear();
+	
+	// Only load item captions for grid albums (when group thumbs are visible)
+	if (!_groupThumbs || !_sharedMediaData) {
+		return;
+	}
+	
+	// Get the current slice and load captions for all items
+	const auto &slice = *_sharedMediaData;
+	for (int i = 0; i < slice.size(); i++) {
+		const auto &value = slice[i];
+		if (const auto msgId = std::get_if<FullMsgId>(&value)) {
+			if (const auto item = _session->data().message(*msgId)) {
+				if (!item->isService()) {
+					const auto caption = item->translatedText();
+					if (!caption.text.isEmpty()) {
+						_itemCaptions[i] = Ui::Text::String(st::msgMinWidth);
+						_itemCaptions[i].setText(st::mediaviewCaptionStyle, caption);
+					}
+				}
+			}
+		}
+	}
+}
+
 void OverlayWidget::refreshGroupThumbs() {
 	const auto existed = (_groupThumbs != nullptr);
 	if (_index && _sharedMediaData) {
@@ -3463,6 +3520,9 @@ void OverlayWidget::refreshGroupThumbs() {
 	if (_groupThumbs && !existed) {
 		initGroupThumbs();
 	}
+	
+	// Load item captions when group thumbs are refreshed
+	loadItemCaptions();
 }
 
 void OverlayWidget::initGroupThumbs() {
@@ -6487,8 +6547,23 @@ bool OverlayWidget::handleContextMenu(std::optional<QPoint> position) {
 		}
 		// Check if context menu is on caption area
 		_contextMenuOnCaption = _captionRect.contains(*position) && !_fullScreenVideo;
+		
+		// Check if context menu is on a group thumb item
+		_contextMenuItemIndex = -1;
+		if (_groupThumbs && _groupThumbsRect.contains(*position)) {
+			// Calculate which item was clicked based on position
+			const auto relativeX = position->x() - _groupThumbsRect.x();
+			const auto itemWidth = st::mediaviewGroupWidth + st::mediaviewGroupSkip;
+			_contextMenuItemIndex = relativeX / itemWidth;
+			
+			// Make sure the index is valid
+			if (_contextMenuItemIndex < 0 || _contextMenuItemIndex >= static_cast<int>(_groupThumbs->_items.size())) {
+				_contextMenuItemIndex = -1;
+			}
+		}
 	} else {
 		_contextMenuOnCaption = false;
+		_contextMenuItemIndex = -1;
 	}
 	_menu = base::make_unique_q<Ui::PopupMenu>(
 		_window,
