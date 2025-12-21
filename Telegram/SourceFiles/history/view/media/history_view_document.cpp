@@ -610,8 +610,8 @@ QSize Document::countOptimalSize() {
 	}
 
 	if (hasCaptionContent) {
-		// Issue 5 & 6: 2px below caption
-		minHeight += 2;
+		// Issue 5 & 6: 4px below caption (Match Column Album Last Item)
+		minHeight += 4;
 	} else {
 		// For items without caption, still ensure 2px bottom padding for single files.
 		// (Column album items without caption would have 0 bottom padding here, adjusted by GroupedMedia).
@@ -661,8 +661,8 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		// Issue 5: 2px below caption
-		newHeight += 2;
+		// Issue 5: 4px below caption (Match Column Album Last Item)
+		newHeight += 4;
 	} else {
 		// For items without caption, still ensure 2px bottom padding for single files.
 		// We already added 2px above, which serves as the bottom padding in this case.
