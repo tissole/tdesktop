@@ -1163,7 +1163,7 @@ TextState GroupedMedia::getPartState(
 					result.afterSymbol = textStateResult.afterSymbol;
 					
 					// FIX: Use parent ID for text interactions in Grid mode to support multi-caption selection
-					if (request.flags & Ui::Text::StateRequest::Flag::LookupSymbol) {
+					if (request.forText()) {
 						result.itemId = _parent->data()->fullId();
 					} else {
 						result.itemId = part.item->fullId();
