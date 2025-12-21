@@ -1667,15 +1667,14 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 
 		bool canCopy = view->hasVisibleText() 
 			|| mediaHasTextForCopy 
-			|| targetHasText
-			|| request.overState.overMessageText; // Issue 1 Fix: Detect Grid album captions
+			|| targetHasText;
 
 		if (!link && canCopy) {
 			if (!list->hasCopyRestriction(view->data())) {
 				const auto asGroup = (request.pointState != PointState::GroupPart);
 				const auto hasCaptionText = !request.selectedText.empty();
 
-				if (hasCaptionText || targetHasText || view->hasVisibleText() || request.overState.overMessageText || (asGroup && mediaHasTextForCopy)) {
+				if (hasCaptionText || targetHasText || view->hasVisibleText() || (asGroup && mediaHasTextForCopy)) {
 					result->addAction(hasCaptionText
 						? tr::lng_context_copy_selected(tr::now)
 						: tr::lng_context_copy_text(tr::now), [=] {
