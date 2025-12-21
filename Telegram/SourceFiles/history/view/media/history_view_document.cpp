@@ -578,8 +578,8 @@ QSize Document::countOptimalSize() {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 	
-	// Issue 5 & 6: 2px above caption (or bottom padding if no caption)
-	minHeight += 2;
+	// Issue 5 & 6: 4px above caption (or bottom padding if no caption)
+	minHeight += 4;
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -646,8 +646,8 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	// Issue 5: 2px above caption (or bottom padding if no caption)
-	newHeight += 2;
+	// Issue 5: 4px above caption (or bottom padding if no caption)
+	newHeight += 4;
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
@@ -1115,7 +1115,7 @@ void Document::draw(
 	// BaseTop is forcedTop (2) here, as this is for the item's drawing context
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
-	auto captiontop = visualElementBottom + 2; // Desired 2px visual gap from element to caption
+	auto captiontop = visualElementBottom + 4; // Desired 4px visual gap from element to caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
@@ -1995,7 +1995,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 			- st::msgPadding.right();
 		
 		// Use visualBottomOfElement to calculate caption starting point
-		const int captionStart = visualBottomOfElement + 2; // Visual bottom + 2px gap to caption
+		const int captionStart = visualBottomOfElement + 4; // Visual bottom + 4px gap to caption
 		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; // Caption starts + Caption height + 4px bottom padding
 	} else {
 		// No caption
@@ -2032,7 +2032,7 @@ QSize Document::sizeForGrouping(int width) const {
 			- st::msgPadding.right();
 		
 		// Use visualBottomOfElement to calculate caption starting point
-		const int captionStart = visualBottomOfElement + 2; // Visual bottom + 2px gap to caption
+		const int captionStart = visualBottomOfElement + 4; // Visual bottom + 4px gap to caption
 		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; // Caption starts + Caption height + 4px bottom padding
 	} else {
 		// No caption

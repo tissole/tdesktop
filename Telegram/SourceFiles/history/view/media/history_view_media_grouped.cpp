@@ -597,33 +597,21 @@ void GroupedMedia::drawHighlight(
 			int highlightHeight = rect.height();
 
 			if (i == 0) {
-				// First Item: Start from content top (skipping top padding/gap above)
 				const auto topPadding = st::msgFileThumbLayoutGrouped.padding.top();
 				highlightY += topPadding;
 				highlightHeight -= topPadding;
 			}
 			
-			// Middle & Last items: "rect" is stacked, so rect.y() is the boundary (midpoint of gap).
-			// We want the selection to cover the visual item + half gap above + half gap below.
-			// Since rect includes (top + content + bottom),/ and top/bottom paddings create the gap,
-			// rect.y() IS the midpoint.
-			
-			// For the last item, we want to extend to the bottom of the album.
-			// "extend until bottom album"
-			// rect is the whole slot, so rect.y() + rect.height() is the bottom.
-			// Existing highlightHeight covers it.
-			
-			// Adjustments for visual "half distance" if needed.
-			// If standard flow:
-			// Items are: [ Gap/2 | Content | Gap/2 ] [ Gap/2 | Content | Gap/2 ]
-			// Geometry: [ -------- Item 1 -------- ] [ -------- Item 2 -------- ]
-			// So rect covers perfectly.
-			
-			// Ensure we don't bleed 2px offset like before.
-			// Previous code had +2 / -2. We removed it.
-			
-			// Additional check: The user mentioned "first item selection should start from item download round button".
-			// That roughly aligns with 'topPadding' added above.
+			// Fix Issue 2: Visually center the gap selection (3px/3px split)
+			// Move boundary UP by 1px for items > 0.
+			if (i > 0) {
+				highlightY -= 1;
+				highlightHeight += 1;
+			}
+			// Reduce height by 1px for items < last (to make room for next item's shift)
+			if (i < count - 1) {
+				highlightHeight -= 1;
+			}
 			
 			_parent->paintCustomHighlight(
 				p,
@@ -1817,6 +1805,15 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 			const auto topPadding = st::msgFileThumbLayoutGrouped.padding.top();
 			visualTop += topPadding;
 			visualHeight -= topPadding;
+		}
+
+		// Fix Issue 2: Match drawHighlight logic (3px/3px split)
+		if (i > 0) {
+			visualTop -= 1;
+			visualHeight += 1;
+		}
+		if (i < count - 1) {
+			visualHeight -= 1;
 		}
 
 		if (result.empty()
