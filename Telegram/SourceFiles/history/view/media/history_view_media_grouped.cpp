@@ -600,17 +600,17 @@ void GroupedMedia::drawHighlight(
 			int highlightHeight = 0;
 			
 			if (i == 0) {
-				// First item: Start from visual content (at geometry.top())
-				highlightY = geometry.top() + top + groupPad.top();
+				// First item: Start from visual content (after top padding/content padding)
+				highlightY = geometry.top() + contentPadding + top + groupPad.top();
 				
 				if (count == 1) {
 					// Only one item
-					highlightHeight = geometry.height();
+					highlightHeight = geometry.height() - contentPadding;
 				} else {
 					// Multiple items: extend to midpoint with next item
 					const auto &nextGeometry = _parts[i + 1].geometry;
 					const auto midpoint = (geometry.top() + geometry.height() + nextGeometry.top()) / 2;
-					highlightHeight = midpoint - geometry.top();
+					highlightHeight = midpoint - (geometry.top() + contentPadding);
 				}
 			} else if (i == count - 1) {
 				// Last item: Start from midpoint with previous, extend to bottom
@@ -1165,10 +1165,6 @@ TextState GroupedMedia::getPartState(
 					result.symbol = textStateResult.symbol + shift;
 					result.afterSymbol = textStateResult.afterSymbol;
 					result.itemId = part.item->fullId();
-
-					// Issue 1 Fix: In Grid mode, signal that this part has copyable text
-					// so context menu can offer "Copy text" for the specific item.
-					result.overMessageText = true;
 
 					// Only show tooltip if we are NOT looking for text selection/symbol (which is used for copying).
 					if (part._captionText.maxWidth() > captionWidth && !(request.flags & Ui::Text::StateRequest::Flag::LookupSymbol)) {

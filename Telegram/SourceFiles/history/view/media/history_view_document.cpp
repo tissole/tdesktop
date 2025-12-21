@@ -1114,36 +1114,16 @@ void Document::draw(
 	// Calculate visual bottom of the content element for precise caption positioning
 	// BaseTop is forcedTop (2) here, as this is for the item's drawing context
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
+	
+	auto captiontop = visualElementBottom + 2; // Desired 2px visual gap from element to caption
 
-	// Issue 3: Center caption between content and bubble bottom
-	const auto transcribeHeight = (voice && !voice->transcribeText.isEmpty())
-		? (voice->transcribeText.countHeight(captionw))
-		: 0;
-	const auto captioned = Get<HistoryDocumentCaptioned>();
-	const auto captionHeight = captioned
-		? captioned->caption.countHeight(captionw)
-		: 0;
-	const auto totalTextHeight = transcribeHeight
-		+ ((transcribeHeight > 0 && captionHeight > 0) ? st::mediaCaptionSkip : 0)
-		+ captionHeight;
-
-	int verticalOffset = 2;
-	if (totalTextHeight > 0) {
-		const auto availableHeight = height() - (visualElementBottom - topMinus);
-		const auto requiredSpace = totalTextHeight + 4; // 2px top + 2px bottom
-		if (availableHeight > requiredSpace) {
-			verticalOffset = (availableHeight - requiredSpace) / 2 + 2;
-		}
-	}
-	auto captiontop = visualElementBottom - topMinus + verticalOffset;
-
-	if (transcribeHeight > 0) {
+	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
-		voice->transcribeText.draw(p, st::msgPadding.left(), captiontop, captionw, style::al_left, 0, -1, selection);
-		captiontop += transcribeHeight + st::mediaCaptionSkip;
+		voice->transcribeText.draw(p, st::msgPadding.left(), bottom, captionw, style::al_left, 0, -1, selection);
+		captiontop += voice->transcribeText.countHeight(captionw) + st::mediaCaptionSkip;
 		selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
 	}
-	if (captioned) {
+	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		p.setPen(stm->historyTextFg);
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
