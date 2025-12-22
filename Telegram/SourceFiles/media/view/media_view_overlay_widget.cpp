@@ -1632,14 +1632,13 @@ void OverlayWidget::fillContextMenuActions(
 	}
 	
 	// If context menu is on a group thumb item with a caption, add caption copy option
-	if (_contextMenuItemIndex >= 0 && !_itemCaptions.empty() && _index) {
-		// Check if the current item has a caption
-		auto it = _itemCaptions.find(*_index);
+	if (_contextMenuItemIndex >= 0 && !_itemCaptions.empty()) {
+		auto it = _itemCaptions.find(_contextMenuItemIndex);
 		if (it != _itemCaptions.end() && !it->second.isEmpty()) {
-			// Add "Copy Text" option for the current item's caption
+			// Add "Copy Text" option for this item's caption
 			addAction(
 				tr::lng_context_copy_text(tr::now),
-				[=] { copyItemCaption(*_index); },
+				[=] { copyItemCaption(_contextMenuItemIndex); },
 				&st::mediaMenuIconCopy);
 			return;
 		}
@@ -3468,41 +3467,21 @@ void OverlayWidget::loadItemCaptions() {
 	_itemCaptions.clear();
 	
 	// Only load item captions for grid albums (when group thumbs are visible)
-	if (!_groupThumbs || !_sharedMediaData || !_index) {
+	if (!_groupThumbs || !_sharedMediaData) {
 		return;
 	}
 	
-	// Load caption for the current item
+	// Get the current slice and load captions for all items
 	const auto &slice = *_sharedMediaData;
-	const auto currentIndex = *_index;
-	
-	if (currentIndex >= 0 && currentIndex < slice.size()) {
-		const auto &value = slice[currentIndex];
+	for (int i = 0; i < slice.size(); i++) {
+		const auto &value = slice[i];
 		if (const auto msgId = std::get_if<FullMsgId>(&value)) {
 			if (const auto item = _session->data().message(*msgId)) {
 				if (!item->isService()) {
 					const auto caption = item->translatedText();
 					if (!caption.text.isEmpty()) {
-						_itemCaptions[currentIndex] = Ui::Text::String(st::msgMinWidth);
-						_itemCaptions[currentIndex].setText(st::mediaviewCaptionStyle, caption);
-					}
-				}
-			}
-		}
-	}
-	
-	// Load captions for nearby items to support navigation
-	for (int i = currentIndex - 2; i <= currentIndex + 2; i++) {
-		if (i >= 0 && i < slice.size() && i != currentIndex) {
-			const auto &value = slice[i];
-			if (const auto msgId = std::get_if<FullMsgId>(&value)) {
-				if (const auto item = _session->data().message(*msgId)) {
-					if (!item->isService()) {
-						const auto caption = item->translatedText();
-						if (!caption.text.isEmpty()) {
-							_itemCaptions[i] = Ui::Text::String(st::msgMinWidth);
-							_itemCaptions[i].setText(st::mediaviewCaptionStyle, caption);
-						}
+						_itemCaptions[i] = Ui::Text::String(st::msgMinWidth);
+						_itemCaptions[i].setText(st::mediaviewCaptionStyle, caption);
 					}
 				}
 			}
@@ -6572,13 +6551,14 @@ bool OverlayWidget::handleContextMenu(std::optional<QPoint> position) {
 		// Check if context menu is on a group thumb item
 		_contextMenuItemIndex = -1;
 		if (_groupThumbs && _groupThumbsRect.contains(*position)) {
-			// Check if any group thumb item was clicked
-			const auto relativePos = *position - _groupThumbsRect.topLeft();
-			const auto handler = _groupThumbs->getState(relativePos);
-			if (handler) {
-				// If we get a valid handler, it means an item was clicked
-				// We'll show caption options for the current item if it has a caption
-				_contextMenuItemIndex = 1; // Flag to indicate group thumb was clicked
+			// Calculate which item was clicked based on position
+			const auto relativeX = position->x() - _groupThumbsRect.x();
+			const auto itemWidth = st::mediaviewGroupWidth + st::mediaviewGroupSkip;
+			_contextMenuItemIndex = relativeX / itemWidth;
+			
+			// Make sure the index is valid
+			if (_contextMenuItemIndex < 0 || _contextMenuItemIndex >= static_cast<int>(_groupThumbs->_items.size())) {
+				_contextMenuItemIndex = -1;
 			}
 		}
 	} else {
