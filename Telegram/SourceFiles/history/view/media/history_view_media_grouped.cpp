@@ -592,43 +592,38 @@ void GroupedMedia::drawHighlight(
 			auto copy = context;
 			copy.highlight.range = {};
 			
-			// Completely rewritten selection highlighting for column albums
+			// Fix selection highlighting for column albums
 			int highlightY = rect.y();
 			int highlightHeight = rect.height();
-			
-			// Get the actual content rectangle (excluding padding)
-			const auto contentRect = part.content->contentRect();
-			const auto itemHeight = contentRect.height();
-			
+
 			if (i == 0) {
-				// First Item: Start from download button/thumbnail/play button
-				// This is typically at the top of the content area
-				highlightY = contentRect.y();
+				// First Item: Start from download button/thumbnail (skip top padding)
+				// and extend until half distance between current item and next item
+				const auto topPadding = st::msgFileThumbLayoutGrouped.padding.top();
+				highlightY += topPadding;
 				
-				// Extend until half distance to next item
+				// For first item, we want to extend until half distance to next item
+				// This means we keep the full height but adjust the bottom
 				if (count > 1) {
-					const auto nextItemRect = _parts[i + 1].geometry;
-					const auto gap = nextItemRect.y() - rect.y() - rect.height();
-					highlightHeight = itemHeight + (gap / 2);
+					// Calculate half gap between items
+					const auto gap = groupedPadding().top();
+					highlightHeight = rect.height() - (gap / 2);
 				}
 			} else if (i == count - 1) {
 				// Last Item: Start from half distance between current item and item above
-				const auto prevItemRect = _parts[i - 1].geometry;
-				const auto gap = rect.y() - prevItemRect.y() - prevItemRect.height();
-				highlightY = contentRect.y() - (gap / 2);
-				
-				// Extend until bottom of album
-				highlightHeight = itemHeight + (gap / 2);
+				// and extend until bottom of album
+				if (count > 1) {
+					// Calculate half gap from previous item
+					const auto gap = groupedPadding().top();
+					highlightY += gap / 2;
+				}
+				// Keep full height to extend to bottom
 			} else {
 				// Middle Items: Start from half distance between current item and item above
-				const auto prevItemRect = _parts[i - 1].geometry;
-				const auto gapAbove = rect.y() - prevItemRect.y() - prevItemRect.height();
-				highlightY = contentRect.y() - (gapAbove / 2);
-				
-				// Extend until half distance between current item and item below
-				const auto nextItemRect = _parts[i + 1].geometry;
-				const auto gapBelow = nextItemRect.y() - rect.y() - rect.height();
-				highlightHeight = itemHeight + (gapAbove / 2) + (gapBelow / 2);
+				// and extend until half distance between current item and item below
+				const auto gap = groupedPadding().top();
+				highlightY += gap / 2;
+				highlightHeight -= gap;
 			}
 			
 			_parent->paintCustomHighlight(
