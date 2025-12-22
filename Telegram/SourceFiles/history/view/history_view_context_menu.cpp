@@ -1699,15 +1699,11 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 									textToCopy = request.selectedText.rich;
 								} else {
 									// Direct copy from the resolved item
-									textToCopy = safeItem->originalText();
-								}
-								
-								if (textToCopy.empty() && safeItem != owner->message(itemId)) { 
-									// If part has no text (e.g. only media), fallback to main item text
-									// ONLY if the user didn't explicitly select empty text (which isn't possible here)
-									if (auto mainItem = owner->message(itemId)) {
-										textToCopy = mainItem->originalText();
-									}
+									// Issue 10: Use getPartText to ensure grouped media captions are handled correctly
+									const auto media = view ? view->media() : nullptr;
+									textToCopy = (media && (targetId != itemId))
+										? media->getPartText(targetId)
+										: safeItem->originalText();
 								}
 								
 								if (!textToCopy.empty()) {
