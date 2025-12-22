@@ -593,34 +593,27 @@ void GroupedMedia::drawHighlight(
 			copy.highlight.range = {};
 			
 			// Completely rewritten selection highlighting for column albums
-			// Calculate content rectangle based on the part's geometry
-			const auto contentRect = QRect(
-				part.geometry.x(),
-				part.geometry.y(), 
-				part.geometry.width(),
-				part.geometry.height()
-			);
-			const auto itemHeight = contentRect.height();
-			
 			int highlightY = rect.y();
 			int highlightHeight = rect.height();
 			
+			// Get the actual content rectangle (excluding padding)
+			const auto contentRect = part.content->contentRect();
+			const auto itemHeight = contentRect.height();
+			
 			if (i == 0) {
 				// First Item: Start from download button/thumbnail/play button
-				// For most media types, this is at the top, but we need to account for any top padding
-				highlightY = rect.y(); // Start from the actual item position
+				// This is typically at the top of the content area
+				highlightY = contentRect.y();
 				
 				// Extend until half distance to next item
 				if (count > 1) {
-					const auto &nextPart = _parts[i + 1];
-					const auto nextItemRect = nextPart.geometry;
+					const auto nextItemRect = _parts[i + 1].geometry;
 					const auto gap = nextItemRect.y() - rect.y() - rect.height();
 					highlightHeight = itemHeight + (gap / 2);
 				}
 			} else if (i == count - 1) {
 				// Last Item: Start from half distance between current item and item above
-				const auto &prevPart = _parts[i - 1];
-				const auto prevItemRect = prevPart.geometry;
+				const auto prevItemRect = _parts[i - 1].geometry;
 				const auto gap = rect.y() - prevItemRect.y() - prevItemRect.height();
 				highlightY = contentRect.y() - (gap / 2);
 				
@@ -628,14 +621,12 @@ void GroupedMedia::drawHighlight(
 				highlightHeight = itemHeight + (gap / 2);
 			} else {
 				// Middle Items: Start from half distance between current item and item above
-				const auto &prevPart = _parts[i - 1];
-				const auto prevItemRect = prevPart.geometry;
+				const auto prevItemRect = _parts[i - 1].geometry;
 				const auto gapAbove = rect.y() - prevItemRect.y() - prevItemRect.height();
 				highlightY = contentRect.y() - (gapAbove / 2);
 				
 				// Extend until half distance between current item and item below
-				const auto &nextPart = _parts[i + 1];
-				const auto nextItemRect = nextPart.geometry;
+				const auto nextItemRect = _parts[i + 1].geometry;
 				const auto gapBelow = nextItemRect.y() - rect.y() - rect.height();
 				highlightHeight = itemHeight + (gapAbove / 2) + (gapBelow / 2);
 			}
