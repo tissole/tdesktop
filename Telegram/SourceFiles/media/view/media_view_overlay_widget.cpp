@@ -1535,7 +1535,18 @@ void OverlayWidget::refreshCaptionGeometry() {
 		? (_streamed->controls->y() - st::mediaviewCaptionMargin.height())
 		: _groupThumbs
 		? _groupThumbsTop
-		: (_maxUsedHeight + height() - st::mediaviewCaptionMargin.height()) / 2;
+		: [&]() {
+			// For single file view, center caption like in column album last item
+			// Calculate available space between content bottom and window bottom
+			const auto contentBottom = _minUsedTop + _maxUsedHeight;
+			const auto availableSpace = height() - contentBottom - st::mediaviewCaptionMargin.height();
+			
+			// Use same spacing as column album: half the available space above caption,
+			// half below (but ensure minimum spacing)
+			const auto spacing = std::max(availableSpace / 2, st::mediaviewCaptionMargin.height());
+			
+			return contentBottom + spacing;
+		}();
 	const auto captionWidth = _stories
 		? storiesCaptionWidth
 		: std::min(
@@ -1641,6 +1652,15 @@ void OverlayWidget::fillContextMenuActions(
 				tr::lng_context_copy_text(tr::now),
 				[=] { copyItemCaption(*_index); },
 				&st::mediaMenuIconCopy);
+			
+			// Also add "Copy Selected Text" if text is selected
+			if (!_captionSelection.empty()) {
+				addAction(
+					tr::lng_context_copy_selected(tr::now),
+					[=] { copySelectedCaptionText(); },
+					&st::mediaMenuIconCopy);
+			}
+			
 			return;
 		}
 	}
@@ -2112,8 +2132,17 @@ void OverlayWidget::recountSkipTop() {
 	const auto skipHeightBottom = (height() - bottom);
 	
 	// Fix: Ensure consistent top spacing between single and grid albums
-	// Use the same top spacing calculation regardless of album type
-	const auto baseTopSpacing = st::mediaviewTitleButton.height + st::mediaviewHeaderTop;
+	// Calculate top spacing to match grid album behavior
+	const auto baseTopSpacing = [&]() {
+		if (_groupThumbs) {
+			// For grid albums, use the same spacing as group thumbs top position
+			return _groupThumbsTop;
+		} else {
+			// For single items, calculate spacing to match grid album appearance
+			// This should be the same as the window title area height
+			return st::mediaviewTitleButton.height + st::mediaviewHeaderTop;
+		}
+	}();
 	
 	_skipTop = _minUsedTop + std::min(
 		std::max(
@@ -6579,6 +6608,11 @@ bool OverlayWidget::handleContextMenu(std::optional<QPoint> position) {
 				// If we get a valid handler, it means an item was clicked
 				// We'll show caption options for the current item if it has a caption
 				_contextMenuItemIndex = 1; // Flag to indicate group thumb was clicked
+				
+				// Also check if the caption area was clicked
+				if (_captionRect.contains(*position)) {
+					_contextMenuOnCaption = true;
+				}
 			}
 		}
 	} else {
