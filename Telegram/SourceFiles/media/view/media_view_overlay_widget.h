@@ -289,7 +289,6 @@ private:
 	void copyMedia();
 	void copyCaption();
 	void copySelectedCaptionText();
-	void copyItemCaption(int itemIndex);
 	void receiveMouse();
 	void showAttachedStickers();
 	void showDropdown();
@@ -373,7 +372,6 @@ private:
 
 	void refreshFromLabel();
 	void refreshCaption();
-	void loadItemCaptions();
 	void refreshMediaViewer();
 	void refreshNavVisibility();
 	void refreshGroupThumbs();
@@ -622,10 +620,6 @@ private:
 	bool _captionSelecting = false;
 	QPoint _captionSelectionStart;
 	QPoint _captionSelectionEnd;
-	
-	// Support for multiple captions in grid albums
-	std::map<int, Ui::Text::String> _itemCaptions;
-	int _contextMenuItemIndex = -1; // Index of item for which context menu is shown
 
 	int _topNotchSize = 0;
 	int _width = 0;
