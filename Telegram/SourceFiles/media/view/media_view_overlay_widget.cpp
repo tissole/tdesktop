@@ -3484,7 +3484,7 @@ void OverlayWidget::loadItemCaptions() {
 					const auto caption = item->translatedText();
 					if (!caption.text.isEmpty()) {
 						_itemCaptions[currentIndex] = Ui::Text::String(st::msgMinWidth);
-						_itemCaptions[currentIndex].setMarkedText(st::mediaviewCaptionStyle, caption, Ui::ItemTextDefaultOptions());
+						_itemCaptions[currentIndex].setText(st::mediaviewCaptionStyle, caption);
 					}
 				}
 			}
@@ -3501,7 +3501,7 @@ void OverlayWidget::loadItemCaptions() {
 						const auto caption = item->translatedText();
 						if (!caption.text.isEmpty()) {
 							_itemCaptions[i] = Ui::Text::String(st::msgMinWidth);
-							_itemCaptions[i].setMarkedText(st::mediaviewCaptionStyle, caption, Ui::ItemTextDefaultOptions());
+							_itemCaptions[i].setText(st::mediaviewCaptionStyle, caption);
 						}
 					}
 				}
