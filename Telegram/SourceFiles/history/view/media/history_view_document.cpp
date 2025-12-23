@@ -733,8 +733,8 @@ void Document::draw(
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 
-	// Issue 6: Force 2px top padding
-	const auto forcedTop = 2;
+	// Issue 6: Force 4px top padding
+	const auto forcedTop = 4;
 	const auto delta = forcedTop - st.padding.top();
 
 	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
@@ -750,9 +750,9 @@ void Document::draw(
 
 	const auto linktop = st.linkTop + delta - topMinus;
 	const auto captioned = Get<HistoryDocumentCaptioned>();
-	// Apply 2px spacing above caption for both Full (single files) and Grouped modes
-	// Issue 5: 2px spacing above caption is standard now.
-	const auto bottomPadding = 2;
+	// Apply 4px spacing above caption for both Full (single files) and Grouped modes
+	// Issue 5: 4px spacing above caption is standard now.
+	const auto bottomPadding = 4;
 	
 	auto contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
@@ -1112,10 +1112,10 @@ void Document::draw(
 	auto selection = context.selection;
 	
 	// Calculate visual bottom of the content element for precise caption positioning
-	// BaseTop is forcedTop (2) here, as this is for the item's drawing context
+	// BaseTop is forcedTop (4) here, as this is for the item's drawing context
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
-	auto captiontop = visualElementBottom + 2; // Desired 2px visual gap from element to caption
+	auto captiontop = visualElementBottom + 4; // Desired 4px visual gap from element to caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);

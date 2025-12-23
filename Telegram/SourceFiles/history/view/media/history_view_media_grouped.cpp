@@ -1802,24 +1802,27 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		}
 		const auto &geometry = part.geometry;
 		
-		// Issues 19-22 Fix: Selection covers full item height.
-		// Refined logic for Column Album selection bounds:
-		// 1. First item: Start at content top (skip top overlap).
-		// 2. Middle items: Start/End at half-gap.
+		// Issues 19-22 Fix: Refined Column Album selection bounds.
+		// 1. First item: Start at visual content top (statustop).
+		// 2. Middle/Gap: Split perfectly at geometry boundaries (no gaps).
 		// 3. Last item: End at bottom.
 		
-		const auto halfGap = overlap / 2;
 		auto rectTop = geometry.top();
 		auto rectBottom = geometry.top() + geometry.height();
 
 		if (i == 0) {
-			rectTop += overlap;
-		} else {
-			rectTop += halfGap;
-		}
-
-		if (i != count - 1) {
-			rectBottom -= halfGap;
+			// Calculate visual top offset (statustop) for the first item
+			bool hasThumb = false;
+			if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
+				if (const auto document = fileMedia->document()) {
+					hasThumb = document->hasThumbnail() && !document->isSong();
+				}
+			}
+			const auto &docStyle = hasThumb ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
+			const auto topMinus = st::msgFileTopMinus;
+			const auto statustop = docStyle.statusTop - topMinus;
+			
+			rectTop += statustop;
 		}
 
 		auto visualHeight = std::max(0, rectBottom - rectTop);

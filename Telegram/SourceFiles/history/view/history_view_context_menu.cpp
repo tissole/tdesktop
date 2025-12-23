@@ -1685,7 +1685,8 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 						auto resolvedId = targetId;
 						if (!resolvedId) resolvedId = itemId;
 
-						auto safeItem = owner->message(resolvedId);
+						// FIX: Use global session lookup to ensure we find the item even if 'owner' history context is limited
+						auto safeItem = owner->session().data().message(resolvedId);
 						
 						// Fallback: If resolution failed, try main item
 						if (!safeItem) {
