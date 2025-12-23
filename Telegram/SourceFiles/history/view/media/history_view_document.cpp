@@ -646,8 +646,8 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	// Issue 5: 6px above caption (or bottom padding if no caption)
-	newHeight += 6;
+	// Issue 5: 4px above caption (or bottom padding if no caption)
+	newHeight += 4;
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
@@ -661,8 +661,8 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		// Issue 5: 6px below caption
-		newHeight += 6;
+		// Issue 5: 4px below caption
+		newHeight += 4;
 	} else {
 		// For items without caption, still ensure 4px bottom padding for single files.
 		// We already added 4px above, which serves as the bottom padding in this case.
@@ -1112,10 +1112,10 @@ void Document::draw(
 	auto selection = context.selection;
 	
 	// Calculate visual bottom of the content element for precise caption positioning
-	// BaseTop is forcedTop (2) here, as this is for the item's drawing context
+	// BaseTop is forcedTop (4) here, as this is for the item's drawing context
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
-	auto captiontop = visualElementBottom + 6; // Desired 6px visual gap from element to caption
+	auto captiontop = visualElementBottom + 4; // Desired 4px visual gap from element to caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
