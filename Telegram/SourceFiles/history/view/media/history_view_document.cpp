@@ -640,7 +640,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	// New Logic: Use calculateVisualElementBottom for consistency
-	const int baseTop = 4; // Issue 6: Force 4px top
+	const int baseTop = 2; // Revert to 2px top (standard)
 	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); // Calculate layout ignoring topMinus contour
 	auto newHeight = visualBottomOfElement;
 	
@@ -733,8 +733,8 @@ void Document::draw(
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 
-	// Issue 6: Force 4px top padding
-	const auto forcedTop = 4;
+	// Issue 6: Force 2px top padding
+	const auto forcedTop = 2;
 	const auto delta = forcedTop - st.padding.top();
 
 	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;

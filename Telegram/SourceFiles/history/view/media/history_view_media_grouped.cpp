@@ -1823,6 +1823,10 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 			const auto statustop = docStyle.statusTop - topMinus;
 			
 			rectTop += statustop;
+		} else if (i == count - 1) {
+			// Issue Fix: Add bottom space for the last item equal to the inter-item padding.
+			// This prevents the selection from touching the album bottom.
+			rectBottom -= st::msgFileThumbLayoutGrouped.padding.bottom();
 		}
 
 		auto visualHeight = std::max(0, rectBottom - rectTop);
