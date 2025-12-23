@@ -1677,15 +1677,15 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 				if (hasCaptionText || targetHasText || view->hasVisibleText() || (asGroup && mediaHasTextForCopy)) {
 					result->addAction(hasCaptionText
 						? tr::lng_context_copy_selected(tr::now)
-						: tr::lng_context_copy_text(tr::now), [=] {
+						: tr::lng_context_copy_text(tr::now), [=, targetId = request.overState.itemId] {
 						
 						// ISSUE 9 FIX: Re-resolve using ID
 						// Prioritize the specific part ID from the request state (populated by GroupedMedia::textState).
 						// We implicitly trust request.overState to contain the correct itemId for the clicked part.
-						auto targetId = request.overState.itemId;
-						if (!targetId) targetId = itemId;
+						auto resolvedId = targetId;
+						if (!resolvedId) resolvedId = itemId;
 
-						auto safeItem = owner->message(targetId);
+						auto safeItem = owner->message(resolvedId);
 						
 						// Fallback: If resolution failed, try main item
 						if (!safeItem) {
