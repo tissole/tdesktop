@@ -1677,11 +1677,16 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 				if (hasCaptionText || targetHasText || view->hasVisibleText() || (asGroup && mediaHasTextForCopy)) {
 					result->addAction(hasCaptionText
 						? tr::lng_context_copy_selected(tr::now)
-						: tr::lng_context_copy_text(tr::now), [=, targetId = request.overState.itemId] {
+						: tr::lng_context_copy_text(tr::now), [=, point = request.point] {
 						
-						// ISSUE 9 FIX: Robustly resolve ID using captured state
-						// We rely on request.overState.itemId being populated correctly by the hover check.
-						auto resolvedId = targetId;
+						// ISSUE 9 FIX: Robustly resolve ID by re-querying media state
+						// We don't trust the captured overState.itemId as it might be stale or from a different context.
+						// We ask the media view directly: "What text part is at this point?"
+						StateRequest stateRequest;
+						stateRequest.flags = Ui::Text::StateRequest::Flag::ForText;
+						auto textState = view->media()->textState(point, stateRequest);
+						
+						auto resolvedId = textState.itemId;
 						if (!resolvedId) resolvedId = itemId;
 
 						// FIX: Use global session lookup to ensure we find the item even if 'owner' history context is limited
