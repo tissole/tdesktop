@@ -1804,9 +1804,10 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		
 		// Issues 19-22 Fix: Refined Column Album selection bounds.
 		// 1. First item: Start at visual content top (statustop).
-		// 2. Middle/Gap: Split perfectly at geometry boundaries (no gaps).
-		// 3. Last item: End at bottom.
+		// 2. Middle: Split overlap at half distance (halfGap).
+		// 3. Last item: End before bottom padding.
 		
+		const auto halfGap = overlap / 2;
 		auto rectTop = geometry.top();
 		auto rectBottom = geometry.top() + geometry.height();
 
@@ -1823,10 +1824,17 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 			const auto statustop = docStyle.statusTop - topMinus;
 			
 			rectTop += statustop;
-		} else if (i == count - 1) {
+		} else {
+			// Split overlap with previous item
+			rectTop += halfGap;
+		}
+
+		if (i == count - 1) {
 			// Issue Fix: Add bottom space for the last item equal to the inter-item padding.
-			// This prevents the selection from touching the album bottom.
 			rectBottom -= st::msgFileThumbLayoutGrouped.padding.bottom();
+		} else {
+			// Split overlap with next item
+			rectBottom -= halfGap;
 		}
 
 		auto visualHeight = std::max(0, rectBottom - rectTop);
