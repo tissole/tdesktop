@@ -578,8 +578,8 @@ QSize Document::countOptimalSize() {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 	
-	// Issue 5 & 6: 2px above caption (or bottom padding if no caption)
-	minHeight += 2;
+	// Issue 5 & 6 & 3: 4px above caption (or bottom padding if no caption) to match Column Album Last Item and be symmetric
+	minHeight += 4;
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -610,12 +610,11 @@ QSize Document::countOptimalSize() {
 	}
 
 	if (hasCaptionContent) {
-		// Issue 5 & 6: 2px below caption
-		minHeight += 2;
+		// Issue 5 & 6 & 3: 4px below caption
+		minHeight += 4;
 	} else {
-		// For items without caption, still ensure 2px bottom padding for single files.
-		// (Column album items without caption would have 0 bottom padding here, adjusted by GroupedMedia).
-		// We already added 2px above, which serves as the bottom padding in this case.
+		// For items without caption, still ensure 4px bottom padding for single files.
+		// We already added 4px above, which serves as the bottom padding in this case.
 	}
 	
 	// Apply topMinus for bubble contour AFTER internal content layout is done.
@@ -646,8 +645,8 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	// Issue 5: 2px above caption (or bottom padding if no caption)
-	newHeight += 2;
+	// Issue 5 & 3: 4px above caption (or bottom padding if no caption)
+	newHeight += 4;
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
@@ -661,11 +660,11 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		// Issue 5: 2px below caption
-		newHeight += 2;
+		// Issue 5 & 3: 4px below caption
+		newHeight += 4;
 	} else {
-		// For items without caption, still ensure 2px bottom padding for single files.
-		// We already added 2px above, which serves as the bottom padding in this case.
+		// For items without caption, still ensure 4px bottom padding for single files.
+		// We already added 4px above, which serves as the bottom padding in this case.
 	}
 	
 	// Apply topMinus for bubble contour AFTER internal content layout is done.
@@ -1115,7 +1114,7 @@ void Document::draw(
 	// BaseTop is forcedTop (2) here, as this is for the item's drawing context
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
-	auto captiontop = visualElementBottom + 2; // Desired 2px visual gap from element to caption
+	auto captiontop = visualElementBottom + 4; // Desired 4px visual gap from element to caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
@@ -1419,9 +1418,9 @@ TextState Document::textState(
 	if (downloadInCorner()) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
-	// Fixed: Use 2px spacing for caption top, instead of st.padding.bottom().
+	// Fixed: Use 4px spacing for caption top, instead of st.padding.bottom().
 	// This ensures consistency with draw() and countOptimalSize().
-	auto bottom = forcedTop + contentHeight + 2 - topMinus;
+	auto bottom = forcedTop + contentHeight + 4 - topMinus;
 
 	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
