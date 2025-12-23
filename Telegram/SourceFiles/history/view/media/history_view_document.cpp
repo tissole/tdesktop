@@ -640,14 +640,14 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	// New Logic: Use calculateVisualElementBottom for consistency
-	const int baseTop = 4; // Issue 6: Force 4px top
+	const int baseTop = 2; // Issue 6: Force 2px top
 	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); // Calculate layout ignoring topMinus contour
 	auto newHeight = visualBottomOfElement;
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	// Issue 5: 4px above caption (or bottom padding if no caption)
-	newHeight += 4;
+	// Issue 5: 2px above caption (or bottom padding if no caption)
+	newHeight += 2;
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
@@ -661,11 +661,11 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		// Issue 5: 4px below caption
-		newHeight += 4;
+		// Issue 5: 2px below caption
+		newHeight += 2;
 	} else {
-		// For items without caption, still ensure 4px bottom padding for single files.
-		// We already added 4px above, which serves as the bottom padding in this case.
+		// For items without caption, still ensure 2px bottom padding for single files.
+		// We already added 2px above, which serves as the bottom padding in this case.
 	}
 	
 	// Apply topMinus for bubble contour AFTER internal content layout is done.

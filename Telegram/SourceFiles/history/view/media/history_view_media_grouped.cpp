@@ -1803,44 +1803,30 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		const auto &geometry = part.geometry;
 		
 		// Issues 19-22 Fix: Selection covers full item height.
-		// Refined logic for Column Album selection bounds:
-		// 1. First item: Start at content top (skip top overlap).
-		// 2. Middle items: Start/End at half-gap.
-		// 3. Last item: End at bottom.
-		
-		const auto halfGap = overlap / 2;
-		auto rectTop = geometry.top();
-		auto rectBottom = geometry.top() + geometry.height();
-
-		if (i == 0) {
-			rectTop += overlap;
-		} else {
-			rectTop += halfGap;
-		}
-
-		if (i != count - 1) {
-			rectBottom -= halfGap;
-		}
-
-		auto visualHeight = std::max(0, rectBottom - rectTop);
+		// Last item should include the full height (including bottom 2px margin).
+		int visualHeight = geometry.height();
 
 		if (result.empty()
 			|| (result.back().top + result.back().height
-				< rectTop)
-			|| (result.back().top > rectTop + visualHeight)) {
-			result.push_back({ rectTop, visualHeight });
+				< geometry.top())
+			|| (result.back().top > geometry.top() + visualHeight)) {
+			result.push_back({ geometry.top(), visualHeight });
 		} else {
 			auto &last = result.back();
-			const auto newTop = std::min(last.top, rectTop);
+			const auto newTop = std::min(last.top, geometry.top());
 			const auto newHeight = std::max(
 				last.top + last.height - newTop,
-				rectTop + visualHeight - newTop);
+				geometry.top() + visualHeight - newTop);
 			last = Ui::BubbleSelectionInterval{ newTop, newHeight };
 		}
 	}
 	const auto groupPadding = groupedPadding();
 	for (auto &part : result) {
 		part.top += groupPadding.top();
+	}
+	if (IsGroupItemSelection(selection, 0)) {
+		result.front().top -= groupPadding.top();
+		result.front().height += groupPadding.top();
 	}
 	
 	return result;
