@@ -570,16 +570,16 @@ QSize Document::countOptimalSize() {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
-	// Centering: Use 4px top and bottom padding for single files to match Column Album logic
-	const int baseTop = 4; // Issue 6: Force 4px top
+	// New Logic: Use calculateVisualElementBottom for consistency with Grouped/Column mode
+	const int baseTop = 2; // Issue 6: Force 2px top
 	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); // Calculate layout ignoring topMinus contour
 	auto minHeight = visualBottomOfElement;
 	
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 	
-	// Issue 5 & 6: 4px above caption (or bottom padding if no caption)
-	minHeight += 4;
+	// Issue 5 & 6: 2px above caption (or bottom padding if no caption)
+	minHeight += 2;
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -639,15 +639,15 @@ QSize Document::countCurrentSize(int newWidth) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
-	// Centering: Use 4px top and bottom padding for single files to match Column Album logic
-	const int baseTop = 4; // Issue 6: Force 4px top
+	// New Logic: Use calculateVisualElementBottom for consistency
+	const int baseTop = 2; // Issue 6: Force 2px top
 	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); // Calculate layout ignoring topMinus contour
 	auto newHeight = visualBottomOfElement;
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	// Issue 5: 4px above caption (or bottom padding if no caption)
-	newHeight += 4;
+	// Issue 5: 2px above caption (or bottom padding if no caption)
+	newHeight += 2;
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
@@ -661,8 +661,8 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		// Issue 5: 4px below caption
-		newHeight += 4;
+		// Issue 5: 2px below caption
+		newHeight += 2;
 	} else {
 		// For items without caption, still ensure 2px bottom padding for single files.
 		// We already added 2px above, which serves as the bottom padding in this case.
@@ -733,8 +733,8 @@ void Document::draw(
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 
-	// Centering: Use 4px top and bottom padding for single files to match Column Album logic
-	const auto forcedTop = 4;
+	// Issue 6: Force 2px top padding
+	const auto forcedTop = 2;
 	const auto delta = forcedTop - st.padding.top();
 
 	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
@@ -750,9 +750,9 @@ void Document::draw(
 
 	const auto linktop = st.linkTop + delta - topMinus;
 	const auto captioned = Get<HistoryDocumentCaptioned>();
-	// Apply 4px spacing above caption for both Full (single files) and Grouped modes
-	// Issue 5: 4px spacing above caption is standard now.
-	const auto bottomPadding = 4;
+	// Apply 2px spacing above caption for both Full (single files) and Grouped modes
+	// Issue 5: 2px spacing above caption is standard now.
+	const auto bottomPadding = 2;
 	
 	auto contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
