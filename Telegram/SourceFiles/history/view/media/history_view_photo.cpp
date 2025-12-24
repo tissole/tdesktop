@@ -215,10 +215,6 @@ QSize Photo::countOptimalSize() {
 			dimensions,
 			{ maxWidth, minHeight });
 	}
-	
-	// Issue 4: Reduce height to match Grid Album top spacing
-	minHeight -= (st::msgFileThumbLayout.padding.top() - st::msgFileThumbLayoutGrouped.padding.top());
-	
 	return { maxWidth, minHeight };
 }
 
@@ -275,9 +271,6 @@ QSize Photo::countCurrentSize(int newWidth) {
 	if (!_parent->hasBubble() || _parent->data()->emptyText()) {
 		newHeight += 2;
 	}
-
-	// Issue 4: Reduce height to match Grid Album top spacing
-	newHeight -= (st::msgFileThumbLayout.padding.top() - st::msgFileThumbLayoutGrouped.padding.top());
 	
 	return { newWidth, newHeight };
 }
@@ -318,11 +311,7 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	const auto displayLoading = !preview && _data->displayLoading();
 
 	auto inWebPage = (_parent->media() != this);
-	auto paintx = 0;
-	// Issue 4: Shift drawing up to match Grid Album top spacing
-	auto painty = st::msgFileThumbLayoutGrouped.padding.top() - st::msgFileThumbLayout.padding.top();
-	
-	auto paintw = width(), painth = height();
+	auto paintx = 0, painty = 0, paintw = width(), painth = height();
 	auto bubble = _parent->hasBubble();
 
 	if (displayLoading) {

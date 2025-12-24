@@ -592,72 +592,38 @@ void GroupedMedia::drawHighlight(
 			auto copy = context;
 			copy.highlight.range = {};
 			
-			// Highlight Logic for Column Album
+			// Highlight starts from the top of the visual media content (skipping the 2px baseTop padding)
 			int highlightY = rect.y();
 			int highlightHeight = rect.height();
 
-			const auto topPadding = st::msgFileThumbLayoutGrouped.padding.top();
-
 			if (i == 0) {
-				// First Item: Start from content top
-				int visualTopOffset = topPadding;
-				
-				// Check for Music (Download in corner) to adjust visual top
-				if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
-					if (const auto document = fileMedia->document()) {
-						if (document->isAudioFile() && part.item->allowsForward() && document->canBeStreamed(part.item) && !document->inappPlaybackFailed()) {
-							// Music file with download arrow
-							visualTopOffset = st::historyAudioDownloadShift;
-						}
-					}
-				}
-
-				highlightY += visualTopOffset;
-				
-				// Extend to half distance to next item
-				// Gap to next is topPadding of next item. Assuming uniform padding.
-				int nextPadding = topPadding;
-				
-				// Height = (Total Slot Height) - (Top Offset) + (Half Gap to Next)
-				// rect.height() includes the full slot (including its own top padding).
-				// We want to reach the midpoint of the *next* gap.
-				// The next item starts at rect.y() + rect.height().
-				// Its visual top is at rect.y() + rect.height() + nextPadding.
-				// Midpoint is rect.y() + rect.height() + nextPadding/2.
-				// Current Y is rect.y() + visualTopOffset.
-				// So Height = (rect.height() + nextPadding/2) - visualTopOffset.
-				
-				if (i < count - 1) {
-					highlightHeight = rect.height() + (nextPadding / 2) - visualTopOffset;
-				} else {
-					// Single item album? Extend to bottom.
-					highlightHeight = rect.height() - visualTopOffset;
-				}
-			} else {
-				// Middle & Last Items
-				// Start from half distance of previous gap.
-				// Previous gap is *this* item's top padding.
-				// Midpoint is rect.y() + topPadding/2.
-				
-				highlightY += topPadding / 2;
-				
-				if (i < count - 1) {
-					// Middle Item: Extend to half distance of next gap.
-					// Next Gap is next item's top padding.
-					int nextPadding = topPadding;
-					
-					// Top is rect.y() + topPadding/2.
-					// Bottom is rect.y() + rect.height() + nextPadding/2.
-					// Height = rect.height() + nextPadding/2 - topPadding/2.
-					highlightHeight = rect.height() + (nextPadding / 2) - (topPadding / 2);
-				} else {
-					// Last Item: Extend to bottom of album.
-					// Top is rect.y() + topPadding/2.
-					// Bottom is rect.y() + rect.height().
-					// Height = rect.height() - topPadding/2.
-					highlightHeight = rect.height() - (topPadding / 2);
-				}
+				// First Item: Start from content top (skipping top padding/gap above)
+				const auto topPadding = st::msgFileThumbLayoutGrouped.padding.top();
+				highlightY += topPadding;
+				highlightHeight -= topPadding;
 			}
+			
+			// Middle & Last items: "rect" is stacked, so rect.y() is the boundary (midpoint of gap).
+			// We want the selection to cover the visual item + half gap above + half gap below.
+			// Since rect includes (top + content + bottom),/ and top/bottom paddings create the gap,
+			// rect.y() IS the midpoint.
+			
+			// For the last item, we want to extend to the bottom of the album.
+			// "extend until bottom album"
+			// rect is the whole slot, so rect.y() + rect.height() is the bottom.
+			// Existing highlightHeight covers it.
+			
+			// Adjustments for visual "half distance" if needed.
+			// If standard flow:
+			// Items are: [ Gap/2 | Content | Gap/2 ] [ Gap/2 | Content | Gap/2 ]
+			// Geometry: [ -------- Item 1 -------- ] [ -------- Item 2 -------- ]
+			// So rect covers perfectly.
+			
+			// Ensure we don't bleed 2px offset like before.
+			// Previous code had +2 / -2. We removed it.
+			
+			// Additional check: The user mentioned "first item selection should start from item download round button".
+			// That roughly aligns with 'topPadding' added above.
 			
 			_parent->paintCustomHighlight(
 				p,
@@ -1195,11 +1161,7 @@ TextState GroupedMedia::getPartState(
 					result.link = textStateResult.link;
 					result.symbol = textStateResult.symbol + shift;
 					result.afterSymbol = textStateResult.afterSymbol;
-					
-					// Fix for Copy Text vs Selection:
-					// If selecting text (drag), return Parent ID to ensure continuity across the group.
-					// If context menu (right click), return Part ID to allow copying specific caption.
-					result.itemId = request.forText() ? _parent->data()->fullId() : part.item->fullId();
+					result.itemId = part.item->fullId();
 
 					// Only show tooltip if we are NOT looking for text selection/symbol (which is used for copying).
 					if (part._captionText.maxWidth() > captionWidth && !(request.flags & Ui::Text::StateRequest::Flag::LookupSymbol)) {
@@ -1217,9 +1179,7 @@ TextState GroupedMedia::getPartState(
 				point - QPoint(0, groupPadding.top()), 
 				request);
 			result.symbol += shift;
-			
-			// Fix for Copy Text vs Selection (Same logic as Grid Caption):
-			result.itemId = request.forText() ? _parent->data()->fullId() : part.item->fullId();
+			result.itemId = part.item->fullId();
 
 			const auto item = part.item;
 			const auto edited = item->Get<HistoryMessageEdited>();
