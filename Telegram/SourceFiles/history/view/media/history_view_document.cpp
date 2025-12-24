@@ -575,7 +575,7 @@ QSize Document::countOptimalSize() {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	minHeight += 2;
+	minHeight += 4;
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -636,7 +636,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	newHeight += 2;
+	newHeight += 4;
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
@@ -650,7 +650,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		newHeight += 2;
+		newHeight += 4;
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -1087,7 +1087,7 @@ void Document::draw(
 	
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
-	auto captiontop = visualElementBottom + 2; // Desired 2px visual gap from element to caption
+	auto captiontop = visualElementBottom + 4; 
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
@@ -1117,7 +1117,6 @@ void Document::draw(
 	}
 
 	// --- STANDARD BOTTOM INFO (Round Videos Only) ---
-	// FIX Issue 4: Only call _parent->drawInfo for Video Messages (Round Videos).
 	bool inWebPage = (_parent->media() != this);
 	const auto bubble = _parent->hasBubble();
 	
@@ -1264,7 +1263,7 @@ void Document::drawCornerDownload(
 		return;
 	}
 	auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-	const auto forcedTop = 2; // Issue 2 & 3 Fix: Force 2px top
+	const auto forcedTop = 2; 
 	const auto stm = context.messageStyle();
 	const auto thumbed = false;
 	const auto &st = (mode == LayoutMode::Full)
@@ -1330,7 +1329,7 @@ TextState Document::cornerDownloadTextState(
 		return result;
 	}
 	auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-	const auto forcedTop = 2; // Issue 2 & 3 Fix: Force 2px top
+	const auto forcedTop = 2;
 	const auto thumbed = false;
 	const auto &st = (mode == LayoutMode::Full)
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)

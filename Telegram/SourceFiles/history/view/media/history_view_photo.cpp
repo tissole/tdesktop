@@ -215,6 +215,11 @@ QSize Photo::countOptimalSize() {
 			dimensions,
 			{ maxWidth, minHeight });
 	}
+
+	if (!isBubbleTop()) {
+		minHeight -= st::msgFileTopMinus;
+	}
+
 	return { maxWidth, minHeight };
 }
 
@@ -272,6 +277,10 @@ QSize Photo::countCurrentSize(int newWidth) {
 		newHeight += 2;
 	}
 	
+	if (!isBubbleTop()) {
+		newHeight -= st::msgFileTopMinus;
+	}
+
 	return { newWidth, newHeight };
 }
 
@@ -322,7 +331,8 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	}
 	const auto radial = isRadialAnimation();
 
-	auto rthumb = style::rtlrect(paintx, painty, paintw, painth, width());
+	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+	auto rthumb = style::rtlrect(paintx, painty - topMinus, paintw, painth, width());
 	if (_serviceWidth > 0) {
 		paintUserpicFrame(p, context, rthumb.topLeft());
 	} else {
