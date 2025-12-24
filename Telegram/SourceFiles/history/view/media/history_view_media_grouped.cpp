@@ -1199,7 +1199,7 @@ TextState GroupedMedia::getPartState(
 					// Fix for Copy Text vs Selection:
 					// If selecting text (drag), return Parent ID to ensure continuity across the group.
 					// If context menu (right click), return Part ID to allow copying specific caption.
-					result.itemId = request.forText() ? _parent->data()->fullId() : part.item->fullId();
+					result.itemId = (request.flags & Ui::Text::StateRequest::Flag::LookupSymbol) ? _parent->data()->fullId() : part.item->fullId();
 
 					// Only show tooltip if we are NOT looking for text selection/symbol (which is used for copying).
 					if (part._captionText.maxWidth() > captionWidth && !(request.flags & Ui::Text::StateRequest::Flag::LookupSymbol)) {
@@ -1219,7 +1219,7 @@ TextState GroupedMedia::getPartState(
 			result.symbol += shift;
 			
 			// Fix for Copy Text vs Selection (Same logic as Grid Caption):
-			result.itemId = request.forText() ? _parent->data()->fullId() : part.item->fullId();
+			result.itemId = (request.flags & Ui::Text::StateRequest::Flag::LookupSymbol) ? _parent->data()->fullId() : part.item->fullId();
 
 			const auto item = part.item;
 			const auto edited = item->Get<HistoryMessageEdited>();
