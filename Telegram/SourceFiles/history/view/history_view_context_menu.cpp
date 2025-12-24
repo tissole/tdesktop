@@ -1683,13 +1683,13 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 						// Prioritize the specific part ID from the request state (populated by GroupedMedia::textState).
 						// We implicitly trust request.overState to contain the correct itemId for the clicked part.
 						auto targetId = request.overState.itemId;
-						if (!targetId && item) targetId = item->fullId();
+						if (!targetId) targetId = itemId;
 
 						auto safeItem = owner->message(targetId);
 						
 						// Fallback: If resolution failed, try main item
-						if (!safeItem && item) {
-							safeItem = owner->message(item->fullId());
+						if (!safeItem) {
+							safeItem = owner->message(itemId);
 						}
 
 						if (safeItem) {
@@ -1702,11 +1702,13 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 									textToCopy = safeItem->originalText();
 								}
 								
-								// If the resolved item has no text (e.g. clicking on a photo in a group that has no caption),
-								// but the group *has* text elsewhere, we might want to be careful.
-								// But the user requested "individual caption". 
-								// So if this item has no text, we copy nothing (or empty string).
-								// However, if we clicked the *caption*, safeItem SHOULD be the item with text.
+								if (textToCopy.empty() && safeItem != owner->message(itemId)) { 
+									// If part has no text (e.g. only media), fallback to main item text
+									// ONLY if the user didn't explicitly select empty text (which isn't possible here)
+									if (auto mainItem = owner->message(itemId)) {
+										textToCopy = mainItem->originalText();
+									}
+								}
 								
 								if (!textToCopy.empty()) {
 									TextUtilities::SetClipboardText(TextForMimeData::Rich(std::move(textToCopy)));
