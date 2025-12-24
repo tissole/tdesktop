@@ -1801,32 +1801,14 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 			continue;
 		}
 		const auto &geometry = part.geometry;
-		const auto gap = st::msgFileThumbLayoutGrouped.padding.top();
 		
 		int top = geometry.top();
 		int height = geometry.height();
 
 		if (i == 0) {
-			// First item: Start from content (skip top gap)
-			top += gap;
-			height -= gap;
-			// Extend halfway into next gap (if not last)
-			if (i != count - 1) {
-				height += (gap / 2);
-			}
-		} else if (i == count - 1) {
-			// Last item: Start halfway through previous gap
-			top += (gap / 2);
-			height -= (gap / 2);
-			// Ends at bottom (no change to height for bottom edge)
-		} else {
-			// Middle items: Start halfway through previous gap, end halfway through next
-			top += (gap / 2);
-			// height is full (since it swallows half previous and spits half next?
-			// Original height includes one gap (top).
-			// We want [Top + Gap/2, Bottom + Gap/2].
-			// Length = (Bottom + Gap/2) - (Top + Gap/2) = Bottom - Top = Original Height.
-			// So height remains same.
+			const auto topPadding = st::msgFileThumbLayoutGrouped.padding.top();
+			top += topPadding;
+			height -= topPadding;
 		}
 
 		if (result.empty()
