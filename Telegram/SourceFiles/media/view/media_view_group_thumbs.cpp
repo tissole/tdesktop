@@ -192,8 +192,6 @@ public:
 
 	[[nodiscard]] int leftToUpdate() const;
 	[[nodiscard]] int rightToUpdate() const;
-	[[nodiscard]] int currentLeft() const;
-	[[nodiscard]] int currentWidth() const;
 
 	void animateToLeft(not_null<Thumb*> next);
 	void animateToRight(not_null<Thumb*> prev);
