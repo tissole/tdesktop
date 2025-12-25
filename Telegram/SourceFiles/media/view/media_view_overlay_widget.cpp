@@ -1566,64 +1566,13 @@ void OverlayWidget::refreshCaptionGeometry() {
 			- st::mediaviewCaptionPadding.bottom();
 		_caption.updateSkipBlock(_captionSkipBlockWidth, skiph);
 	}
-
-	// For single file view with potential overflow, ensure caption fits and is positioned correctly
-	// Calculate the original position first
-	int originalCaptionTop = captionBottom - captionHeight - st::mediaviewCaptionPadding.bottom();
-
-	// For single file view (no group thumbs, no controls in some cases),
-	// the "item" is the media content with its download button/thumb/arrow
-	// In the original code, if no _sponsoredButton, _streamed->controls, or _groupThumbs,
-	// the captionBottom is calculated as: height() - st::mediaviewCaptionMargin.height()
-	// So the item bottom would be at: height() - st::mediaviewCaptionMargin.height() - some space for the item
-
-	// The requirement is to split the space between the item (download button/thumb/arrow) and caption in half
-	// So if the original space between item and caption is X, we want:
-	// - Half of X above the caption (empty space)
-	// - Caption itself
-	// - Half of X below the caption (empty space until bottom)
-
-	// Calculate the bottom of the item (download button/thumb/arrow area)
-	// The original space between item and caption bottom was st::mediaviewCaptionMargin.height()
-	int itemBottom = height() - st::mediaviewCaptionMargin.height();
-
-	// Calculate the space between item and original caption position
-	int originalSpace = originalCaptionTop - itemBottom;
-
-	// If there's space, position the caption at the halfway point between item and bottom
-	// The total available space from item bottom to view bottom is st::mediaviewCaptionMargin.height()
-	// We want to split the space between the item and caption position in half
-	int totalAvailableSpace = height() - itemBottom; // This is st::mediaviewCaptionMargin.height()
-
-	// Calculate new position to split the space in half
-	int halfSpace = totalAvailableSpace / 2;
-
-	// Position the caption at half distance between the item and the bottom
-	int newCaptionTop = itemBottom + halfSpace - (captionHeight / 2);
-
-	// Ensure caption fits within available space and doesn't go beyond bounds
-	int finalCaptionHeight = captionHeight;
-	if (newCaptionTop < itemBottom) {
-		// If caption is positioned before the item, adjust
-		newCaptionTop = itemBottom;
-		finalCaptionHeight = std::min(captionHeight, height() - itemBottom);
-	} else if (newCaptionTop + captionHeight > height()) {
-		// If caption extends beyond bottom, adjust
-		newCaptionTop = height() - captionHeight;
-		finalCaptionHeight = std::min(captionHeight, height() - itemBottom);
-		if (newCaptionTop < itemBottom) {
-			newCaptionTop = itemBottom;
-		}
-	}
-
-	// Make sure caption height fits in the available space
-	finalCaptionHeight = std::min(finalCaptionHeight, height() - newCaptionTop);
-
 	_captionRect = QRect(
 		(width() - captionWidth) / 2,
-		newCaptionTop,
+		(captionBottom
+			- captionHeight
+			- st::mediaviewCaptionPadding.bottom()),
 		captionWidth,
-		finalCaptionHeight);
+		captionHeight);
 }
 
 void OverlayWidget::refreshSponsoredButtonGeometry() {

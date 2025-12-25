@@ -846,8 +846,6 @@ void GroupThumbs::paint(QPainter &p, int x, int y, int outerWidth) {
 		: _animation.value(1.);
 	x += (_width / 2);
 	y += st::mediaviewGroupPadding.top();
-
-	// Paint all thumbs first
 	auto initedCurrentIndex = int(_items.size());
 	for (auto i = _cache.begin(); i != _cache.end();) {
 		const auto thumb = not_null{ i->second.get() };
@@ -868,56 +866,6 @@ void GroupThumbs::paint(QPainter &p, int x, int y, int outerWidth) {
 	}
 	if (initedCurrentIndex < _items.size()) {
 		animateAliveItems(initedCurrentIndex);
-	}
-
-	// Paint selection highlights for thumbs
-	if (!_items.empty()) {
-		// Calculate positions for all thumbs to determine proper selection bounds
-		std::vector<int> thumbLefts, thumbRights;
-
-		for (int i = 0; i < _items.size(); i++) {
-			const auto thumb = _items[i];
-			const auto thumbLeft = x + thumb->currentLeft();
-			const auto thumbRight = thumbLeft + thumb->currentWidth();
-
-			thumbLefts.push_back(thumbLeft);
-			thumbRights.push_back(thumbRight);
-		}
-
-		for (int i = 0; i < _items.size(); i++) {
-			const auto thumb = _items[i];
-			if (thumb->state() == Thumb::State::Current) {
-				// Calculate selection rectangle based on the new logic
-				int left, right;
-
-				if (i == 0) {
-					// First item: selection starts from left of download button/thumb/play button
-					left = thumbLefts[i];
-				} else {
-					// Other items: selection starts from half distance between previous item and current item
-					const auto prevRight = thumbRights[i-1];
-					const auto currentLeft = thumbLefts[i];
-					left = prevRight + (currentLeft - prevRight) / 2;
-				}
-
-				if (i == _items.size() - 1) {
-					// Last item: selection extends to right edge of the album area
-					right = thumbRights[i];
-				} else {
-					// Other items: selection extends to half distance between current and next item
-					const auto currentRight = thumbRights[i];
-					const auto nextLeft = thumbLefts[i+1];
-					right = currentRight + (nextLeft - currentRight) / 2;
-				}
-
-				// Draw selection rectangle
-				p.setPen(Qt::NoPen);
-				p.setBrush(QColor(255, 255, 255, 100)); // semi-transparent white selection
-				p.setOpacity(0.3);
-				p.drawRect(left, y, right - left, st::mediaviewGroupHeight);
-				p.setOpacity(1.0);
-			}
-		}
 	}
 }
 
