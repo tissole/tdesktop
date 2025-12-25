@@ -1793,40 +1793,99 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		return {};
 	}
 	auto result = std::vector<Ui::BubbleSelectionInterval>();
-	const auto overlap = st::msgFileThumbLayoutGrouped.padding.top();
+	
+	const auto count = int(_parts.size());
+	if (count == 0) return {};
 
-	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
+	const auto groupPadding = groupedPadding();
+	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+	const auto forcedTop = 2; // From Document view
+
+	// Helper to get visual content height (button/thumb/arrow)
+	const auto getContentHeight = [&](const Part &part) -> int {
+		if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
+			if (const auto document = fileMedia->document()) {
+				if (document->hasThumbnail() && !document->isSong()) {
+					return st::msgFileThumbLayoutGrouped.thumbSize;
+				} else if (document->isAudioFile()) {
+					return st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+				}
+			}
+		}
+		return st::msgFileLayoutGrouped.thumbSize;
+	};
+
+	// Helper to check if part has caption
+	const auto hasCaption = [&](const Part &part) -> bool {
+		return !part.item->originalText().empty();
+	};
+
+	std::vector<int> visualTops(count);
+	std::vector<int> visualBottoms(count);
+	
+	for (int i = 0; i < count; ++i) {
 		const auto &part = _parts[i];
+		// Visual Top is relative to part geometry top + forcedTop (2px)
+		// Note: groupedPadding.top() is added later to final result, but part.geometry is relative to (0,0) of Media content
+		visualTops[i] = part.geometry.top() + forcedTop;
+		visualBottoms[i] = visualTops[i] + getContentHeight(part);
+	}
+
+	std::vector<int> splitPoints(count - 1);
+	for (int i = 0; i < count - 1; ++i) {
+		int split = visualBottoms[i] + (visualTops[i+1] - visualBottoms[i]) / 2;
+		
+		// If current item has caption, ensure split point doesn't cut it.
+		// Use part boundary as a safe fallback for "include caption".
+		// part.geometry.bottom() is effectively the start of next slot.
+		if (hasCaption(_parts[i])) {
+			// Ensure we cover the full slot height if there is a caption
+			split = std::max(split, _parts[i].geometry.top() + _parts[i].geometry.height());
+		} else {
+			// If no caption, ensure we don't bleed into next item's visual top
+			split = std::min(split, visualTops[i+1]);
+		}
+		splitPoints[i] = split;
+	}
+
+	for (auto i = 0; i != count; ++i) {
 		if (!IsGroupItemSelection(selection, i)) {
 			continue;
 		}
-		const auto &geometry = part.geometry;
-		
-		// Issues 19-22 Fix: Selection covers full item height.
-		// Last item should include the full height (including bottom 2px margin).
-		int visualHeight = geometry.height();
 
-		if (result.empty()
-			|| (result.back().top + result.back().height
-				< geometry.top())
-			|| (result.back().top > geometry.top() + visualHeight)) {
-			result.push_back({ geometry.top(), visualHeight });
+		int top = 0;
+		int bottom = 0;
+
+		if (i == 0) {
+			top = visualTops[0];
+		} else {
+			top = splitPoints[i - 1];
+		}
+
+		if (i == count - 1) {
+			// Last item: extend to bottom of album
+			bottom = height() - groupPadding.bottom() - groupPadding.top(); // Relative to content
+			// Actually height() is total height. Content height is height() - padding.
+			// But since we add groupPadding.top() later, we should work in "content coordinates".
+			// _parts back geometry bottom is the content bottom.
+			bottom = _parts.back().geometry.top() + _parts.back().geometry.height();
+		} else {
+			bottom = splitPoints[i];
+		}
+
+		if (result.empty() || result.back().top + result.back().height < top) {
+			result.push_back({ top, bottom - top });
 		} else {
 			auto &last = result.back();
-			const auto newTop = std::min(last.top, geometry.top());
-			const auto newHeight = std::max(
-				last.top + last.height - newTop,
-				geometry.top() + visualHeight - newTop);
+			// Merge intervals if they overlap or touch (which they should)
+			const auto newTop = std::min(last.top, top);
+			const auto newHeight = std::max(last.top + last.height, bottom) - newTop;
 			last = Ui::BubbleSelectionInterval{ newTop, newHeight };
 		}
 	}
-	const auto groupPadding = groupedPadding();
+
 	for (auto &part : result) {
 		part.top += groupPadding.top();
-	}
-	if (IsGroupItemSelection(selection, 0)) {
-		result.front().top -= groupPadding.top();
-		result.front().height += groupPadding.top();
 	}
 	
 	return result;
