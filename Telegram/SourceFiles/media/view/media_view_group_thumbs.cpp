@@ -209,6 +209,8 @@ public:
 private:
 	QSize wantedPixSize() const;
 	void validateImage();
+	int currentLeft() const;
+	int currentWidth() const;
 	int finalLeft() const;
 	int finalWidth() const;
 	void animateTo(int left, int width);
