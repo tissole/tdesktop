@@ -574,10 +574,58 @@ void GroupedMedia::drawHighlight(
 		}
 		return;
 	}
+
 	const auto empty = selection.empty();
 	const auto subpart = IsSubGroupSelection(selection);
 	const auto skip = top + groupedPadding().top();
-	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
+	
+	const auto forcedTop = 2; // From Document view
+	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+
+	// Helper to get visual content height (button/thumb/arrow)
+	const auto getContentHeight = [&](const Part &part) -> int {
+		if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
+			if (const auto document = fileMedia->document()) {
+				if (document->hasThumbnail() && !document->isSong()) {
+					return st::msgFileThumbLayoutGrouped.thumbSize;
+				} else if (document->isAudioFile()) {
+					return st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+				}
+			}
+		}
+		return st::msgFileLayoutGrouped.thumbSize;
+	};
+
+	// Helper to check if part has caption
+	const auto hasCaption = [&](const Part &part) -> bool {
+		return !part.item->originalText().empty();
+	};
+
+	const auto count = int(_parts.size());
+	if (count == 0) return;
+
+	std::vector<int> visualTops(count);
+	std::vector<int> visualBottoms(count);
+	
+	for (int i = 0; i < count; ++i) {
+		const auto &part = _parts[i];
+		// Visual Top is relative to part geometry top + forcedTop (2px)
+		visualTops[i] = part.geometry.top() + forcedTop;
+		visualBottoms[i] = visualTops[i] + getContentHeight(part);
+	}
+
+	std::vector<int> splitPoints(count - 1);
+	for (int i = 0; i < count - 1; ++i) {
+		int split = visualBottoms[i] + (visualTops[i+1] - visualBottoms[i]) / 2;
+		if (hasCaption(_parts[i])) {
+			split = std::max(split, _parts[i].geometry.top() + _parts[i].geometry.height());
+		} else {
+			split = std::min(split, visualTops[i+1]);
+		}
+		splitPoints[i] = split;
+	}
+
+	for (auto i = 0; i != count; ++i) {
 		const auto &part = _parts[i];
 		const auto rect = part.geometry.translated(0, skip);
 		const auto full = (!i && empty)
@@ -585,51 +633,51 @@ void GroupedMedia::drawHighlight(
 			|| (!subpart
 				&& !selection.empty()
 				&& (selection.from < part.content->fullSelectionLength()));
+		
 		if (!subpart) {
 			selection = part.content->skipSelection(selection);
 		}
+
 		if (full) {
 			auto copy = context;
 			copy.highlight.range = {};
 			
-			// Highlight starts from the top of the visual media content (skipping the 2px baseTop padding)
-			int highlightY = rect.y();
-			int highlightHeight = rect.height();
+			int highlightY = 0;
+			int highlightBottom = 0;
 
 			if (i == 0) {
-				// First Item: Start from content top (skipping top padding/gap above)
-				const auto topPadding = st::msgFileThumbLayoutGrouped.padding.top();
-				highlightY += topPadding;
-				highlightHeight -= topPadding;
+				highlightY = visualTops[0];
+			} else {
+				highlightY = splitPoints[i - 1];
+			}
+
+			if (i == count - 1) {
+				// Last item: extend to bottom of album (content bottom)
+				highlightBottom = _parts.back().geometry.top() + _parts.back().geometry.height();
+			} else {
+				highlightBottom = splitPoints[i];
 			}
 			
-			// Middle & Last items: "rect" is stacked, so rect.y() is the boundary (midpoint of gap).
-			// We want the selection to cover the visual item + half gap above + half gap below.
-			// Since rect includes (top + content + bottom),/ and top/bottom paddings create the gap,
-			// rect.y() IS the midpoint.
+			// Translate to global coordinates for painting
+			// 'top' is the top of the Media (offset by padding)
+			// 'groupedPadding().top()' is the offset from Media top to content top
+			// Our calculations (visualTops, splitPoints) are relative to content top (0,0 of parts).
+			// So we add 'skip' (top + groupedPadding.top) to them.
+
+			// Note: paintCustomHighlight takes Y relative to the message, not the media?
+			// Checking original code:
+			// const auto rect = part.geometry.translated(0, skip);
+			// highlightY = rect.y() ...
+			// So we need to add 'skip' to our calculated values.
 			
-			// For the last item, we want to extend to the bottom of the album.
-			// "extend until bottom album"
-			// rect is the whole slot, so rect.y() + rect.height() is the bottom.
-			// Existing highlightHeight covers it.
-			
-			// Adjustments for visual "half distance" if needed.
-			// If standard flow:
-			// Items are: [ Gap/2 | Content | Gap/2 ] [ Gap/2 | Content | Gap/2 ]
-			// Geometry: [ -------- Item 1 -------- ] [ -------- Item 2 -------- ]
-			// So rect covers perfectly.
-			
-			// Ensure we don't bleed 2px offset like before.
-			// Previous code had +2 / -2. We removed it.
-			
-			// Additional check: The user mentioned "first item selection should start from item download round button".
-			// That roughly aligns with 'topPadding' added above.
-			
+			int paintY = highlightY + skip;
+			int paintHeight = highlightBottom - highlightY;
+
 			_parent->paintCustomHighlight(
 				p,
 				copy,
-				highlightY,
-				highlightHeight,
+				paintY,
+				paintHeight,
 				part.item);
 		}
 	}
