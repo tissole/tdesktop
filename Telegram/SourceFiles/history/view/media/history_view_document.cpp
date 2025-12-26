@@ -602,8 +602,11 @@ QSize Document::countOptimalSize() {
 			minHeight -= 8; // Account for standard 8px Element padding
 		}
 	} else {
-		// No caption: space after item should match last item in column album (10px total)
-		minHeight += 2; // + 8 from bubble padding = 10px
+		// No caption: 10px total gap (2 in Media + 8 in Element)
+		minHeight += 2;
+		if (isBubbleBottom()) {
+			minHeight -= 0;
+		}
 	}
 	
 	if (!isBubbleTop()) {
@@ -646,7 +649,10 @@ QSize Document::countCurrentSize(int newWidth) {
 			newHeight -= 8;
 		}
 	} else {
-		newHeight += 2; // Match last item in column album (10px total)
+		newHeight += 2;
+		if (isBubbleBottom()) {
+			newHeight -= 0;
+		}
 	}
 
 	if (!hasCaptionContent) {
