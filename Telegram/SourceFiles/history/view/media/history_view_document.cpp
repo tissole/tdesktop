@@ -573,7 +573,7 @@ QSize Document::countOptimalSize() {
 	auto minHeight = visualBottomOfElement;
 	
 	const auto captioned = Get<HistoryDocumentCaptioned>();
-	const bool hasCaptionContent = hasTranscribe || captioned;
+	const auto hasCaptionContent = hasTranscribe || captioned;
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -590,7 +590,7 @@ QSize Document::countOptimalSize() {
 	if (hasCaptionContent) {
 		auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
 		minHeight += 10; // Top gap
-		if (voice && !voice->transcribeText.isEmpty()) {
+		if (hasTranscribe) {
 			minHeight += voice->transcribeText.countHeight(captionw);
 			if (captioned) minHeight += st::mediaCaptionSkip;
 		}
@@ -599,10 +599,11 @@ QSize Document::countOptimalSize() {
 		}
 		minHeight += 10; // Bottom gap
 		if (isBubbleBottom()) {
-			minHeight -= 8; // Account for standard Element padding
+			minHeight -= 8; // Account for standard 8px Element padding
 		}
 	} else {
-		minHeight += 4;
+		// No caption: space after item should match last item in column album (10px total)
+		minHeight += 2; // + 8 from bubble padding = 10px
 	}
 	
 	if (!isBubbleTop()) {
@@ -633,7 +634,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	if (hasCaptionContent) {
 		auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 		newHeight += 10; // Top gap
-		if (voice && !voice->transcribeText.isEmpty()) {
+		if (hasTranscribe) {
 			newHeight += voice->transcribeText.countHeight(captionw);
 			if (captioned) newHeight += st::mediaCaptionSkip;
 		}
@@ -645,7 +646,7 @@ QSize Document::countCurrentSize(int newWidth) {
 			newHeight -= 8;
 		}
 	} else {
-		newHeight += 4;
+		newHeight += 2; // Match last item in column album (10px total)
 	}
 
 	if (!hasCaptionContent) {

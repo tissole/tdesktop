@@ -604,20 +604,23 @@ void GroupedMedia::drawHighlight(
 	const auto count = int(_parts.size());
 	if (count == 0) return;
 
-	const auto getVisualTop = [&](int i) -> int {
+	const auto getUnitTop = [&](int i) -> int {
 		return _parts[i].geometry.top() + forcedTop - topMinus;
 	};
 	const auto getUnitBottom = [&](int i) -> int {
 		const auto &part = _parts[i];
 		if (hasCaption(part)) {
+			// Item Bottom = Slot Bottom - Gap
+			// In countOptimalSize we subtract 8 from slot height if isBubbleBottom.
+			// Slot Bottom is part.geometry.bottom().
 			return part.geometry.bottom() - ((i == count - 1 && isBubbleBottom()) ? 0 : 10);
 		}
-		return getVisualTop(i) + getContentHeight(part);
+		return getUnitTop(i) + getContentHeight(part);
 	};
 
 	std::vector<int> splitPoints(count - 1);
 	for (int i = 0; i < count - 1; ++i) {
-		splitPoints[i] = (getUnitBottom(i) + getVisualTop(i + 1)) / 2;
+		splitPoints[i] = (getUnitBottom(i) + getUnitTop(i + 1)) / 2;
 	}
 
 	for (auto i = 0; i != count; ++i) {
@@ -636,9 +639,9 @@ void GroupedMedia::drawHighlight(
 			auto copy = context;
 			copy.highlight.range = {};
 			
-			int hTop = (i == 0) ? getVisualTop(0) : splitPoints[i - 1];
+			int hTop = (i == 0) ? getUnitTop(0) : splitPoints[i - 1];
 			int hBottom = (i == count - 1) 
-				? (part.geometry.bottom() + groupPadding.bottom() + (isBubbleBottom() ? 8 : 0)) 
+				? (height() - groupPadding.top()) 
 				: splitPoints[i];
 			
 			_parent->paintCustomHighlight(
@@ -1836,7 +1839,7 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		return !part.item->originalText().empty();
 	};
 
-	const auto getVisualTop = [&](int i) -> int {
+	const auto getUnitTop = [&](int i) -> int {
 		return _parts[i].geometry.top() + forcedTop - topMinus;
 	};
 	const auto getUnitBottom = [&](int i) -> int {
@@ -1844,12 +1847,12 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		if (hasCaption(part)) {
 			return part.geometry.bottom() - ((i == count - 1 && isBubbleBottom()) ? 0 : 10);
 		}
-		return getVisualTop(i) + getContentHeight(part);
+		return getUnitTop(i) + getContentHeight(part);
 	};
 
 	std::vector<int> splitPoints(count - 1);
 	for (int i = 0; i < count - 1; ++i) {
-		splitPoints[i] = (getUnitBottom(i) + getVisualTop(i + 1)) / 2;
+		splitPoints[i] = (getUnitBottom(i) + getUnitTop(i + 1)) / 2;
 	}
 
 	for (auto i = 0; i != count; ++i) {
@@ -1857,9 +1860,9 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 			continue;
 		}
 
-		int hTop = (i == 0) ? getVisualTop(0) : splitPoints[i - 1];
+		int hTop = (i == 0) ? getUnitTop(0) : splitPoints[i - 1];
 		int hBottom = (i == count - 1) 
-			? (_parts.back().geometry.bottom() + groupPadding.bottom() + (isBubbleBottom() ? 8 : 0)) 
+			? (height() - groupPadding.top()) 
 			: splitPoints[i];
 
 		if (result.empty() || result.back().top + result.back().height < hTop) {
