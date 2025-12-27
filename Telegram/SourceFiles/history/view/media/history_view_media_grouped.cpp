@@ -508,13 +508,11 @@ QMargins GroupedMedia::groupedPadding() const {
 	const auto normal = st::msgFileLayout.padding;
 	const auto grouped = st::msgFileLayoutGrouped.padding;
 	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-	
-	int top = (normal.top() - grouped.top()) - topMinus;
-	if (isBubbleTop() && _parent->displayFromName()) {
-		top += st::msgPadding.top() + st::msgNameFont->height + 2;
-	}
-	
-	return QMargins(0, top, 0, 0); 
+	return QMargins(
+		0,
+		(normal.top() - grouped.top()) - topMinus,
+		0,
+		isBubbleBottom() ? st::msgPadding.bottom() : 0); 
 }
 
 Media *GroupedMedia::lookupSpoilerTagMedia() const {
@@ -585,16 +583,18 @@ void GroupedMedia::drawHighlight(
 	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 
 	const auto getContentHeight = [&](const Part &part) -> int {
+		auto result = st::msgFileLayoutGrouped.thumbSize;
 		if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
 			if (const auto document = fileMedia->document()) {
 				if (document->hasThumbnail() && !document->isSong()) {
-					return 72; // st::msgFileThumbLayoutGrouped.thumbSize
+					result = st::msgFileThumbLayoutGrouped.thumbSize;
 				} else if (document->isAudioFile()) {
-					return 48; // st::historyAudioDownloadShift + st::historyAudioDownloadSize
+					result = std::max(st::msgFileLayoutGrouped.thumbSize,
+						st::historyAudioDownloadShift + st::historyAudioDownloadSize);
 				}
 			}
 		}
-		return 44; // st::msgFileLayoutGrouped.thumbSize
+		return result;
 	};
 
 	const auto hasCaption = [&](const Part &part) -> bool {
@@ -611,9 +611,9 @@ void GroupedMedia::drawHighlight(
 		const auto &part = _parts[i];
 		if (hasCaption(part)) {
 			// Item Bottom = Slot Bottom - Gap
-			// Slot height = captionStart + height + 10.
-			// Return unit bottom at caption end.
-			return part.geometry.bottom() - 10;
+			// In countOptimalSize we subtract 8 from slot height if isBubbleBottom.
+			// Slot Bottom is part.geometry.bottom().
+			return part.geometry.bottom() - ((i == count - 1 && isBubbleBottom()) ? 0 : 10);
 		}
 		return getUnitTop(i) + getContentHeight(part);
 	};
@@ -640,7 +640,9 @@ void GroupedMedia::drawHighlight(
 			copy.highlight.range = {};
 			
 			int hTop = (i == 0) ? getUnitTop(0) : splitPoints[i - 1];
-			int hBottom = (i == count - 1) ? part.geometry.bottom() : splitPoints[i];
+			int hBottom = (i == count - 1) 
+				? (height() - groupPadding.top()) 
+				: splitPoints[i];
 			
 			_parent->paintCustomHighlight(
 				p,
@@ -650,7 +652,6 @@ void GroupedMedia::drawHighlight(
 				part.item);
 		}
 	}
-
 }
 
 
@@ -1820,16 +1821,18 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 	const auto forcedTop = 2;
 
 	const auto getContentHeight = [&](const Part &part) -> int {
+		auto result = st::msgFileLayoutGrouped.thumbSize;
 		if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
 			if (const auto document = fileMedia->document()) {
 				if (document->hasThumbnail() && !document->isSong()) {
-					return 72;
+					result = st::msgFileThumbLayoutGrouped.thumbSize;
 				} else if (document->isAudioFile()) {
-					return 48;
+					result = std::max(st::msgFileLayoutGrouped.thumbSize,
+						st::historyAudioDownloadShift + st::historyAudioDownloadSize);
 				}
 			}
 		}
-		return 44;
+		return result;
 	};
 
 	const auto hasCaption = [&](const Part &part) -> bool {
@@ -1842,7 +1845,7 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 	const auto getUnitBottom = [&](int i) -> int {
 		const auto &part = _parts[i];
 		if (hasCaption(part)) {
-			return part.geometry.bottom() - 10;
+			return part.geometry.bottom() - ((i == count - 1 && isBubbleBottom()) ? 0 : 10);
 		}
 		return getUnitTop(i) + getContentHeight(part);
 	};
@@ -1858,7 +1861,9 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		}
 
 		int hTop = (i == 0) ? getUnitTop(0) : splitPoints[i - 1];
-		int hBottom = (i == count - 1) ? _parts.back().geometry.bottom() : splitPoints[i];
+		int hBottom = (i == count - 1) 
+			? (height() - groupPadding.top()) 
+			: splitPoints[i];
 
 		if (result.empty() || result.back().top + result.back().height < hTop) {
 			result.push_back({ hTop, hBottom - hTop });
