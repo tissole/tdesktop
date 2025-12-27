@@ -418,8 +418,8 @@ void Document::fillNamedFromData(not_null<HistoryDocumentNamed*> named) {
 
 QSize Document::countOptimalSize() {
 	auto hasTranscribe = false;
-    const auto voice = Get<HistoryDocumentVoice>();
-    if (voice) {
+	const auto voice = Get<HistoryDocumentVoice>();
+	if (voice) {
 		const auto history = _realParent->history();
 		const auto session = &history->session();
 		const auto transcribes = &session->api().transcribes();
@@ -477,7 +477,7 @@ QSize Document::countOptimalSize() {
 				}
 			}
 		}
-    }
+	}
 
 	auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
@@ -599,11 +599,11 @@ QSize Document::countOptimalSize() {
 		}
 		minHeight += 10; // Bottom gap
 		if (isBubbleBottom()) {
-			minHeight -= 8; // Account for standard 8px Element padding
+			minHeight -= 2; // Account for 2px bubble bottom padding in Element for documents
 		}
 	} else {
-		// No caption: 10px total gap (2 in Media + 8 in Element)
-		minHeight += 2;
+		// No caption: 10px total gap (8 in Media + 2 in Element)
+		minHeight += 8;
 		if (isBubbleBottom()) {
 			minHeight -= 0;
 		}
@@ -646,10 +646,11 @@ QSize Document::countCurrentSize(int newWidth) {
 		}
 		newHeight += 10; // Bottom gap
 		if (isBubbleBottom()) {
-			newHeight -= 8;
+			newHeight -= 2;
 		}
 	} else {
-		newHeight += 2;
+		// No caption: 10px total gap
+		newHeight += 8;
 		if (isBubbleBottom()) {
 			newHeight -= 0;
 		}
@@ -671,7 +672,6 @@ QSize Document::countCurrentSize(int newWidth) {
 	accumulate_min(newWidth, maxWidth());
 	return { newWidth, newHeight };
 }
-
 void Document::draw(Painter &p, const PaintContext &context) const {
 	draw(p, context, width(), LayoutMode::Full, adjustedBubbleRounding());
 }
