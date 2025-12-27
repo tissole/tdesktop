@@ -605,15 +605,15 @@ void GroupedMedia::drawHighlight(
 	if (count == 0) return;
 
 	const auto getUnitTop = [&](int i) -> int {
-		const auto partTopMinus = (i == 0 && isBubbleTop()) ? 0 : st::msgFileTopMinus;
-		return _parts[i].geometry.top() + forcedTop - partTopMinus;
+		return _parts[i].geometry.top() + forcedTop - topMinus;
 	};
 	const auto getUnitBottom = [&](int i) -> int {
 		const auto &part = _parts[i];
 		if (hasCaption(part)) {
-			// CaptionEnd = SlotBottom - (isLast && isBubbleBottom ? 2 : 10)
-			const int bottomGap = (i == count - 1 && isBubbleBottom()) ? 2 : 10;
-			return part.geometry.bottom() - bottomGap;
+			// Item Bottom = Slot Bottom - Gap
+			// Slot height = captionStart + height + 10.
+			// Return unit bottom at caption end.
+			return part.geometry.bottom() - 10;
 		}
 		return getUnitTop(i) + getContentHeight(part);
 	};
@@ -640,7 +640,7 @@ void GroupedMedia::drawHighlight(
 			copy.highlight.range = {};
 			
 			int hTop = (i == 0) ? getUnitTop(0) : splitPoints[i - 1];
-			int hBottom = (i == count - 1) ? getUnitBottom(i) : splitPoints[i];
+			int hBottom = (i == count - 1) ? part.geometry.bottom() : splitPoints[i];
 			
 			_parent->paintCustomHighlight(
 				p,
@@ -1837,14 +1837,12 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 	};
 
 	const auto getUnitTop = [&](int i) -> int {
-		const auto partTopMinus = (i == 0 && isBubbleTop()) ? 0 : st::msgFileTopMinus;
-		return _parts[i].geometry.top() + forcedTop - partTopMinus;
+		return _parts[i].geometry.top() + forcedTop - topMinus;
 	};
 	const auto getUnitBottom = [&](int i) -> int {
 		const auto &part = _parts[i];
 		if (hasCaption(part)) {
-			const int bottomGap = (i == count - 1 && isBubbleBottom()) ? 2 : 10;
-			return part.geometry.bottom() - bottomGap;
+			return part.geometry.bottom() - 10;
 		}
 		return getUnitTop(i) + getContentHeight(part);
 	};
@@ -1860,7 +1858,7 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		}
 
 		int hTop = (i == 0) ? getUnitTop(0) : splitPoints[i - 1];
-		int hBottom = (i == count - 1) ? getUnitBottom(i) : splitPoints[i];
+		int hBottom = (i == count - 1) ? _parts.back().geometry.bottom() : splitPoints[i];
 
 		if (result.empty() || result.back().top + result.back().height < hTop) {
 			result.push_back({ hTop, hBottom - hTop });
