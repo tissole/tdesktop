@@ -575,6 +575,8 @@ QSize Document::countOptimalSize() {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
+	minHeight += 2;
+
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
 			accumulate_max(
@@ -591,27 +593,20 @@ QSize Document::countOptimalSize() {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
-		// Add top padding
-		minHeight += st::msgPadding.bottom();
 		minHeight += voice->transcribeText.countHeight(captionw);
 		
 		if (captioned) {
 			minHeight += st::mediaCaptionSkip;
-		} else {
-			// Add bottom padding
-			minHeight += st::msgPadding.bottom();
-		}
+		} 
 	}
 	
 	if (captioned) {
 		auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
-		if (!hasTranscribe) {
-			// Add top padding
-			minHeight += st::msgPadding.bottom();
-		}
 		minHeight += captioned->caption.countHeight(captionw);
-		// Add bottom padding
-		minHeight += st::msgPadding.bottom();
+	}
+
+	if (hasCaptionContent) {
+		minHeight += 2;
 	}
 	
 	if (!isBubbleTop()) {
@@ -641,22 +636,21 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
+	newHeight += 2;
+
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
-		newHeight += st::msgPadding.bottom(); // Top Padding
 		newHeight += voice->transcribeText.countHeight(captionw);
 		if (captioned) {
 			newHeight += st::mediaCaptionSkip;
-		} else {
-			newHeight += st::msgPadding.bottom(); // Bottom Padding
 		}
 	}
 	if (captioned) {
-		if (!hasTranscribe) {
-			newHeight += st::msgPadding.bottom(); // Top Padding
-		}
 		newHeight += captioned->caption.countHeight(captionw);
-		newHeight += st::msgPadding.bottom(); // Bottom Padding
+	}
+
+	if (hasCaptionContent) {
+		newHeight += 2;
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -1093,12 +1087,11 @@ void Document::draw(
 	
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
-	// Start caption after visual element bottom + padding
-	auto captiontop = visualElementBottom + st::msgPadding.bottom();
+	auto captiontop = visualElementBottom + 2; // Desired 2px visual gap from element to caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
-		voice->transcribeText.draw(p, st::msgPadding.left(), captiontop, captionw, style::al_left, 0, -1, selection);
+		voice->transcribeText.draw(p, st::msgPadding.left(), bottom, captionw, style::al_left, 0, -1, selection);
 		captiontop += voice->transcribeText.countHeight(captionw) + st::mediaCaptionSkip;
 		selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
 	}
@@ -1957,8 +1950,8 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		const int captionStart = visualBottomOfElement + st::msgPadding.bottom(); 
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + st::msgPadding.bottom(); 
+		const int captionStart = visualBottomOfElement + 2; 
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; 
 	} else {
 		finalHeight = visualBottomOfElement + 4; 
 	}
@@ -1987,8 +1980,8 @@ QSize Document::sizeForGrouping(int width) const {
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		const int captionStart = visualBottomOfElement + st::msgPadding.bottom();
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + st::msgPadding.bottom(); 
+		const int captionStart = visualBottomOfElement + 2;
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; 
 	} else {
 		finalHeight = visualBottomOfElement + 4; 
 	}
