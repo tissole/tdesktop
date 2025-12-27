@@ -508,11 +508,12 @@ QMargins GroupedMedia::groupedPadding() const {
 	const auto normal = st::msgFileLayout.padding;
 	const auto grouped = st::msgFileLayoutGrouped.padding;
 	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+	// Return 0 bottom padding so we control it manually
 	return QMargins(
 		0,
 		(normal.top() - grouped.top()) - topMinus,
 		0,
-		isBubbleBottom() ? st::msgPadding.bottom() : 0); 
+		0); 
 }
 
 Media *GroupedMedia::lookupSpoilerTagMedia() const {
@@ -576,27 +577,26 @@ void GroupedMedia::drawHighlight(
 
 	const auto empty = selection.empty();
 	const auto subpart = IsSubGroupSelection(selection);
-	const auto groupPadding = groupedPadding();
-	const auto skip = top + groupPadding.top();
+	const auto skip = top + groupedPadding().top();
 	
-	const auto forcedTop = 2;
+	const auto forcedTop = 2; // From Document view
 	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 
+	// Helper to get visual content height (button/thumb/arrow)
 	const auto getContentHeight = [&](const Part &part) -> int {
-		auto result = st::msgFileLayoutGrouped.thumbSize;
 		if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
 			if (const auto document = fileMedia->document()) {
 				if (document->hasThumbnail() && !document->isSong()) {
-					result = st::msgFileThumbLayoutGrouped.thumbSize;
+					return st::msgFileThumbLayoutGrouped.thumbSize;
 				} else if (document->isAudioFile()) {
-					result = std::max(st::msgFileLayoutGrouped.thumbSize,
-						st::historyAudioDownloadShift + st::historyAudioDownloadSize);
+					return st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 				}
 			}
 		}
-		return result;
+		return st::msgFileLayoutGrouped.thumbSize;
 	};
 
+	// Helper to check if part has caption
 	const auto hasCaption = [&](const Part &part) -> bool {
 		return !part.item->originalText().empty();
 	};
@@ -604,24 +604,30 @@ void GroupedMedia::drawHighlight(
 	const auto count = int(_parts.size());
 	if (count == 0) return;
 
-	const auto getVisualTop = [&](int i) -> int {
-		return _parts[i].geometry.top() + forcedTop - topMinus;
-	};
-	const auto getUnitBottom = [&](int i) -> int {
+	std::vector<int> visualTops(count);
+	std::vector<int> visualBottoms(count);
+	
+	for (int i = 0; i < count; ++i) {
 		const auto &part = _parts[i];
-		if (hasCaption(part)) {
-			return part.geometry.bottom() - ((i == count - 1 && isBubbleBottom()) ? 0 : 10);
-		}
-		return getVisualTop(i) + getContentHeight(part);
-	};
+		// Visual Top is relative to part geometry top + forcedTop (2px)
+		visualTops[i] = part.geometry.top() + forcedTop;
+		visualBottoms[i] = visualTops[i] + getContentHeight(part);
+	}
 
 	std::vector<int> splitPoints(count - 1);
 	for (int i = 0; i < count - 1; ++i) {
-		splitPoints[i] = (getUnitBottom(i) + getVisualTop(i + 1)) / 2;
+		int split = visualBottoms[i] + (visualTops[i+1] - visualBottoms[i]) / 2;
+		if (hasCaption(_parts[i])) {
+			split = std::max(split, _parts[i].geometry.top() + _parts[i].geometry.height());
+		} else {
+			split = std::min(split, visualTops[i+1]);
+		}
+		splitPoints[i] = split;
 	}
 
 	for (auto i = 0; i != count; ++i) {
 		const auto &part = _parts[i];
+		const auto rect = part.geometry.translated(0, skip);
 		const auto full = (!i && empty)
 			|| (subpart && IsGroupItemSelection(selection, i))
 			|| (!subpart
@@ -636,16 +642,42 @@ void GroupedMedia::drawHighlight(
 			auto copy = context;
 			copy.highlight.range = {};
 			
-			int hTop = (i == 0) ? getVisualTop(0) : splitPoints[i - 1];
-			int hBottom = (i == count - 1) 
-				? (part.geometry.bottom() + groupPadding.bottom() + (isBubbleBottom() ? 8 : 0)) 
-				: splitPoints[i];
+			int highlightY = 0;
+			int highlightBottom = 0;
+
+			if (i == 0) {
+				highlightY = visualTops[0];
+			} else {
+				highlightY = splitPoints[i - 1];
+			}
+
+			if (i == count - 1) {
+				// Last item: extend to bottom of album (content bottom)
+				highlightBottom = _parts.back().geometry.top() + _parts.back().geometry.height();
+			} else {
+				highlightBottom = splitPoints[i];
+			}
 			
+			// Translate to global coordinates for painting
+			// 'top' is the top of the Media (offset by padding)
+			// 'groupedPadding().top()' is the offset from Media top to content top
+			// Our calculations (visualTops, splitPoints) are relative to content top (0,0 of parts).
+			// So we add 'skip' (top + groupedPadding.top) to them.
+
+			// Note: paintCustomHighlight takes Y relative to the message, not the media?
+			// Checking original code:
+			// const auto rect = part.geometry.translated(0, skip);
+			// highlightY = rect.y() ...
+			// So we need to add 'skip' to our calculated values.
+			
+			int paintY = highlightY + skip;
+			int paintHeight = highlightBottom - highlightY;
+
 			_parent->paintCustomHighlight(
 				p,
 				copy,
-				hTop + skip,
-				hBottom - hTop,
+				paintY,
+				paintHeight,
 				part.item);
 		}
 	}
@@ -1815,41 +1847,53 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 
 	const auto groupPadding = groupedPadding();
 	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-	const auto forcedTop = 2;
+	const auto forcedTop = 2; // From Document view
 
+	// Helper to get visual content height (button/thumb/arrow)
 	const auto getContentHeight = [&](const Part &part) -> int {
-		auto result = st::msgFileLayoutGrouped.thumbSize;
 		if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
 			if (const auto document = fileMedia->document()) {
 				if (document->hasThumbnail() && !document->isSong()) {
-					result = st::msgFileThumbLayoutGrouped.thumbSize;
+					return st::msgFileThumbLayoutGrouped.thumbSize;
 				} else if (document->isAudioFile()) {
-					result = std::max(st::msgFileLayoutGrouped.thumbSize,
-						st::historyAudioDownloadShift + st::historyAudioDownloadSize);
+					return st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 				}
 			}
 		}
-		return result;
+		return st::msgFileLayoutGrouped.thumbSize;
 	};
 
+	// Helper to check if part has caption
 	const auto hasCaption = [&](const Part &part) -> bool {
 		return !part.item->originalText().empty();
 	};
 
-	const auto getVisualTop = [&](int i) -> int {
-		return _parts[i].geometry.top() + forcedTop - topMinus;
-	};
-	const auto getUnitBottom = [&](int i) -> int {
+	std::vector<int> visualTops(count);
+	std::vector<int> visualBottoms(count);
+	
+	for (int i = 0; i < count; ++i) {
 		const auto &part = _parts[i];
-		if (hasCaption(part)) {
-			return part.geometry.bottom() - ((i == count - 1 && isBubbleBottom()) ? 0 : 10);
-		}
-		return getVisualTop(i) + getContentHeight(part);
-	};
+		// Visual Top is relative to part geometry top + forcedTop (2px)
+		// Note: groupedPadding.top() is added later to final result, but part.geometry is relative to (0,0) of Media content
+		visualTops[i] = part.geometry.top() + forcedTop;
+		visualBottoms[i] = visualTops[i] + getContentHeight(part);
+	}
 
 	std::vector<int> splitPoints(count - 1);
 	for (int i = 0; i < count - 1; ++i) {
-		splitPoints[i] = (getUnitBottom(i) + getVisualTop(i + 1)) / 2;
+		int split = visualBottoms[i] + (visualTops[i+1] - visualBottoms[i]) / 2;
+		
+		// If current item has caption, ensure split point doesn't cut it.
+		// Use part boundary as a safe fallback for "include caption".
+		// part.geometry.bottom() is effectively the start of next slot.
+		if (hasCaption(_parts[i])) {
+			// Ensure we cover the full slot height if there is a caption
+			split = std::max(split, _parts[i].geometry.top() + _parts[i].geometry.height());
+		} else {
+			// If no caption, ensure we don't bleed into next item's visual top
+			split = std::min(split, visualTops[i+1]);
+		}
+		splitPoints[i] = split;
 	}
 
 	for (auto i = 0; i != count; ++i) {
@@ -1857,17 +1901,33 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 			continue;
 		}
 
-		int hTop = (i == 0) ? getVisualTop(0) : splitPoints[i - 1];
-		int hBottom = (i == count - 1) 
-			? (_parts.back().geometry.bottom() + groupPadding.bottom() + (isBubbleBottom() ? 8 : 0)) 
-			: splitPoints[i];
+		int top = 0;
+		int bottom = 0;
 
-		if (result.empty() || result.back().top + result.back().height < hTop) {
-			result.push_back({ hTop, hBottom - hTop });
+		if (i == 0) {
+			top = visualTops[0];
+		} else {
+			top = splitPoints[i - 1];
+		}
+
+		if (i == count - 1) {
+			// Last item: extend to bottom of album
+			bottom = height() - groupPadding.bottom() - groupPadding.top(); // Relative to content
+			// Actually height() is total height. Content height is height() - padding.
+			// But since we add groupPadding.top() later, we should work in "content coordinates".
+			// _parts back geometry bottom is the content bottom.
+			bottom = _parts.back().geometry.top() + _parts.back().geometry.height();
+		} else {
+			bottom = splitPoints[i];
+		}
+
+		if (result.empty() || result.back().top + result.back().height < top) {
+			result.push_back({ top, bottom - top });
 		} else {
 			auto &last = result.back();
-			const auto newTop = std::min(last.top, hTop);
-			const auto newHeight = std::max(last.top + last.height, hBottom) - newTop;
+			// Merge intervals if they overlap or touch (which they should)
+			const auto newTop = std::min(last.top, top);
+			const auto newHeight = std::max(last.top + last.height, bottom) - newTop;
 			last = Ui::BubbleSelectionInterval{ newTop, newHeight };
 		}
 	}
