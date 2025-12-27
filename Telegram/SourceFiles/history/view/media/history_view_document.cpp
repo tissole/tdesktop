@@ -2103,8 +2103,22 @@ Ui::Text::String Document::createCaption() const {
 }
 
 int Document::calculateVisualElementBottom(int baseTop, int contentBoundingHeight, bool includeTopMinus) const {
-	const auto currentTopMinus = includeTopMinus ? (isBubbleTop() ? 0 : st::msgFileTopMinus) : 0;
-	return baseTop - currentTopMinus + contentBoundingHeight;
+    const auto currentTopMinus = includeTopMinus ? (isBubbleTop() ? 0 : st::msgFileTopMinus) : 0;
+    int visualBottom = baseTop - currentTopMinus;
+
+    const auto thumbed = Has<HistoryDocumentThumbed>();
+    const auto &st_layout = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
+    const auto currentThumbSize = st_layout.thumbSize; // The current layout's bounding box size for the element
+
+    if (thumbed) { 
+        visualBottom += currentThumbSize; // Bottom of the bounding box is the visual bottom
+    } else if (downloadInCorner()) { 
+        visualBottom += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+    } else {
+        const auto innerSize = st::msgFileLayout.thumbSize; // The actual circle diameter
+        visualBottom += (currentThumbSize - innerSize) / 2 + innerSize;
+    }
+    return visualBottom;
 }
 
 void Document::TooltipFilename::setElided(bool value) {
