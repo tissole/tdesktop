@@ -573,6 +573,8 @@ QSize Document::countOptimalSize() {
 	auto minHeight = visualBottomOfElement;
 	
 	const auto captioned = Get<HistoryDocumentCaptioned>();
+	const auto voice = Get<HistoryDocumentVoice>();
+	const auto hasTranscribe = voice && !voice->transcribeText.isEmpty();
 	const bool hasCaptionContent = hasTranscribe || captioned;
 
 	if (isBubbleBottom() && !hasTranscribe) {
@@ -598,7 +600,7 @@ QSize Document::countOptimalSize() {
 			minHeight += captioned->caption.countHeight(captionw);
 		}
 		minHeight += 10; // Bottom gap
-		if (isBubbleBottom()) {
+		if (_parent->isBubbleBottom()) {
 			minHeight -= 8; // Account for standard Element padding
 		}
 	} else {
@@ -641,7 +643,7 @@ QSize Document::countCurrentSize(int newWidth) {
 			newHeight += captioned->caption.countHeight(captionw);
 		}
 		newHeight += 10; // Bottom gap
-		if (isBubbleBottom()) {
+		if (_parent->isBubbleBottom()) {
 			newHeight -= 8;
 		}
 	} else {
@@ -1945,7 +1947,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
 		const int captionStart = visualBottomOfElement + 10; 
 		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 10; 
-		if (last && isBubbleBottom()) {
+		if (last && _parent->isBubbleBottom()) {
 			finalHeight -= 8;
 		}
 	} else {
