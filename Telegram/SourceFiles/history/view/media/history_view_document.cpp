@@ -654,7 +654,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		newHeight += 2;
+		newHeight += 4;
 	}
 
 	if (!captioned && !hasTranscribe) {

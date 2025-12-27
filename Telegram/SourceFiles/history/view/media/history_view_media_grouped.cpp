@@ -596,8 +596,8 @@ void GroupedMedia::drawHighlight(
 		// Calculate Visual Boundaries (Content)
 		// VisualTop: geometry.y() + baseTop(2) - topMinus
 		int currentVisualTop = rect.y() + 2 - topMinus;
-		// VisualBottom: geometry.y() + height - bottomPadding(4) - topMinus
-		int currentVisualBottom = rect.y() + rect.height() - 4 - topMinus;
+		// VisualBottom: geometry.y() + height - bottomPadding(4)
+		int currentVisualBottom = rect.y() + rect.height() - 4;
 
 		// Calculate Selection Interval
 		int selectionTop;
@@ -1804,8 +1804,11 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		const auto &part = _parts[i];
 		
 		// Calculate Visual Boundaries (Content) relative to GroupedMedia
+		// Visual Top: Shifted up by topMinus (drawn higher)
 		int currentVisualTop = part.geometry.y() + 2 - topMinus;
-		int currentVisualBottom = part.geometry.y() + part.geometry.height() - 4 - topMinus;
+		// Visual Bottom: The slot height already includes caption + 4px padding.
+		// We just want to exclude that 4px padding to get the text bottom.
+		int currentVisualBottom = part.geometry.y() + part.geometry.height() - 4;
 
 		int selectionTop;
 		int selectionBottom;
