@@ -1087,10 +1087,9 @@ void Document::draw(
 	
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
-	// FIX: Shift caption up by topMinus and add half-gap.
-	// Gap = (2 + topMinus) / 2
-	const int gap = (2 + topMinus) / 2;
-	auto captiontop = visualElementBottom - topMinus + gap; 
+	// FIX: Shift caption up by topMinus to match the visual shift of the thumbnail/content.
+	// This maintains a 2px visual gap and prevents overflow.
+	auto captiontop = visualElementBottom + 2 - topMinus; 
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
@@ -1953,11 +1952,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-		// Split the original space (2 + topMinus) in half
-		const int gap = (2 + topMinus) / 2;
-		const int captionStart = visualBottomOfElement - topMinus + gap; 
-
+		const int captionStart = visualBottomOfElement + 2; 
 		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; 
 	} else {
 		finalHeight = visualBottomOfElement + 4; 
@@ -1987,11 +1982,7 @@ QSize Document::sizeForGrouping(int width) const {
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-		// Split the original space (2 + topMinus) in half
-		const int gap = (2 + topMinus) / 2;
-		const int captionStart = visualBottomOfElement - topMinus + gap;
-
+		const int captionStart = visualBottomOfElement + 2;
 		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; 
 	} else {
 		finalHeight = visualBottomOfElement + 4; 
