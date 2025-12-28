@@ -594,10 +594,14 @@ void GroupedMedia::drawHighlight(
 		}
 		
 		// Calculate Visual Boundaries (Content)
-		// VisualTop: Start from the slot top to cover potential overlap/gap from previous item.
-		int currentVisualTop = rect.y();
-		// VisualBottom: Slot height includes caption + 4px padding. Exclude padding.
-		int currentVisualBottom = rect.y() + rect.height() - 4;
+		// VisualTop: Start from visual content top (2px offset - topMinus).
+		int currentVisualTop = rect.y() + 2 - topMinus;
+		
+		const bool hasCaption = !part.item->originalText().empty();
+		// VisualBottom: 
+		// If caption: extend to full slot bottom (rect.height()) to ensure full caption coverage.
+		// If no caption: ends at content bottom (rect.height() - 4 - topMinus).
+		int currentVisualBottom = rect.y() + rect.height() - (hasCaption ? 0 : (4 + topMinus));
 
 		// Calculate Selection Interval
 		int selectionTop;
@@ -1804,10 +1808,14 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		const auto &part = _parts[i];
 		
 		// Calculate Visual Boundaries (Content) relative to GroupedMedia
-		// Visual Top: Start from slot top.
-		int currentVisualTop = part.geometry.y();
-		// Visual Bottom: Exclude 4px padding.
-		int currentVisualBottom = part.geometry.y() + part.geometry.height() - 4;
+		// Visual Top: Start from visual content top (2px offset - topMinus).
+		int currentVisualTop = part.geometry.y() + 2 - topMinus;
+		
+		const bool hasCaption = !part.item->originalText().empty();
+		// Visual Bottom: 
+		// If caption: extend to full slot bottom.
+		// If no caption: ends at content bottom.
+		int currentVisualBottom = part.geometry.y() + part.geometry.height() - (hasCaption ? 0 : (4 + topMinus));
 
 		int selectionTop;
 		int selectionBottom;
