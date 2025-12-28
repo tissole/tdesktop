@@ -575,7 +575,7 @@ QSize Document::countOptimalSize() {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	minHeight += 2;
+	minHeight += 6; // Gap between visual element and caption
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -606,7 +606,7 @@ QSize Document::countOptimalSize() {
 	}
 
 	if (hasCaptionContent) {
-		minHeight += 2;
+		minHeight += 6; // Bottom padding after caption
 	}
 	
 	if (!isBubbleTop()) {
@@ -636,7 +636,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	newHeight += 2;
+	newHeight += 6; // Gap between visual element and caption
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
@@ -650,7 +650,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		newHeight += 2;
+		newHeight += 6; // Bottom padding after caption
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -1087,7 +1087,7 @@ void Document::draw(
 	
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
-	auto captiontop = visualElementBottom + 2; // Desired 2px visual gap from element to caption
+	auto captiontop = visualElementBottom + 6; // Gap between visual element and caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);

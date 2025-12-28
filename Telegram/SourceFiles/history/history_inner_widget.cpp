@@ -3616,11 +3616,11 @@ void HistoryInner::saveContextGif(FullMsgId itemId) {
 void HistoryInner::copyContextText(FullMsgId itemId) {
 	if (const auto item = session().data().message(itemId)) {
 		if (!showCopyRestriction(item)) {
-			if (const auto group = session().data().groups().find(item)) {
-				TextUtilities::SetClipboardText(HistoryGroupText(group));
-			} else {
-				TextUtilities::SetClipboardText(HistoryItemText(item));
-			}
+			// Always use the specific item's text for copying.
+			// This allows copying individual captions in grid albums with multiple captions.
+			// Previously used HistoryGroupText for groups, but that returns empty
+			// when there are multiple captions in a grid album.
+			TextUtilities::SetClipboardText(HistoryItemText(item));
 		}
 	}
 }
