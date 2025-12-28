@@ -1087,9 +1087,7 @@ void Document::draw(
 	
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
-	// FIX: Shift caption up by topMinus to match the visual shift of the thumbnail/content.
-	// This maintains a 2px visual gap and prevents overflow.
-	auto captiontop = visualElementBottom + 2 - topMinus; 
+	auto captiontop = visualElementBottom + 2; // Desired 2px visual gap from element to caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);

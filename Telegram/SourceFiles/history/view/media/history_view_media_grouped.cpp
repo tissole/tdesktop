@@ -577,10 +577,6 @@ void GroupedMedia::drawHighlight(
 	const auto empty = selection.empty();
 	const auto subpart = IsSubGroupSelection(selection);
 	const auto skip = top + groupedPadding().top();
-	
-	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-	int previousVisualBottom = 0;
-
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
 		const auto rect = part.geometry.translated(0, skip);
@@ -592,47 +588,48 @@ void GroupedMedia::drawHighlight(
 		if (!subpart) {
 			selection = part.content->skipSelection(selection);
 		}
-		
-		// Calculate Visual Boundaries (Content)
-		// VisualTop: geometry.y() + baseTop(2) - topMinus
-		int currentVisualTop = rect.y() + 2 - topMinus;
-		// VisualBottom: geometry.y() + height - bottomPadding(4) - topMinus
-		int currentVisualBottom = rect.y() + rect.height() - 4 - topMinus;
-
-		// Calculate Selection Interval
-		int selectionTop;
-		int selectionBottom;
-
-		if (i == 0) {
-			selectionTop = currentVisualTop;
-		} else {
-			// Midpoint between previous bottom and current top
-			selectionTop = previousVisualBottom + (currentVisualTop - previousVisualBottom) / 2;
-		}
-
-		if (i == count - 1) {
-			// Last Item: Extend to bottom of album (full slot height)
-			selectionBottom = rect.y() + rect.height();
-		} else {
-			// Next item visual top
-			// Next rect starts at rect.y() + rect.height()
-			int nextVisualTop = (rect.y() + rect.height()) + 2 - topMinus;
-			
-			// Midpoint between current bottom and next top
-			selectionBottom = currentVisualBottom + (nextVisualTop - currentVisualBottom) / 2;
-		}
-
-		previousVisualBottom = currentVisualBottom;
-
 		if (full) {
 			auto copy = context;
 			copy.highlight.range = {};
 			
+			// Highlight starts from the top of the visual media content (skipping the 2px baseTop padding)
+			int highlightY = rect.y();
+			int highlightHeight = rect.height();
+
+			if (i == 0) {
+				// First Item: Start from content top (skipping top padding/gap above)
+				const auto topPadding = st::msgFileThumbLayoutGrouped.padding.top();
+				highlightY += topPadding;
+				highlightHeight -= topPadding;
+			}
+			
+			// Middle & Last items: "rect" is stacked, so rect.y() is the boundary (midpoint of gap).
+			// We want the selection to cover the visual item + half gap above + half gap below.
+			// Since rect includes (top + content + bottom),/ and top/bottom paddings create the gap,
+			// rect.y() IS the midpoint.
+			
+			// For the last item, we want to extend to the bottom of the album.
+			// "extend until bottom album"
+			// rect is the whole slot, so rect.y() + rect.height() is the bottom.
+			// Existing highlightHeight covers it.
+			
+			// Adjustments for visual "half distance" if needed.
+			// If standard flow:
+			// Items are: [ Gap/2 | Content | Gap/2 ] [ Gap/2 | Content | Gap/2 ]
+			// Geometry: [ -------- Item 1 -------- ] [ -------- Item 2 -------- ]
+			// So rect covers perfectly.
+			
+			// Ensure we don't bleed 2px offset like before.
+			// Previous code had +2 / -2. We removed it.
+			
+			// Additional check: The user mentioned "first item selection should start from item download round button".
+			// That roughly aligns with 'topPadding' added above.
+			
 			_parent->paintCustomHighlight(
 				p,
 				copy,
-				selectionTop,
-				selectionBottom - selectionTop,
+				highlightY,
+				highlightHeight,
 				part.item);
 		}
 	}
@@ -1796,42 +1793,40 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		return {};
 	}
 	auto result = std::vector<Ui::BubbleSelectionInterval>();
-	
-	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-	int previousVisualBottom = 0;
+	const auto overlap = st::msgFileThumbLayoutGrouped.padding.top();
 
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
+		if (!IsGroupItemSelection(selection, i)) {
+			continue;
+		}
+		const auto &geometry = part.geometry;
 		
-		// Calculate Visual Boundaries (Content) relative to GroupedMedia
-		int currentVisualTop = part.geometry.y() + 2 - topMinus;
-		int currentVisualBottom = part.geometry.y() + part.geometry.height() - 4 - topMinus;
+		// Issues 19-22 Fix: Selection covers full item height.
+		// Last item should include the full height (including bottom 2px margin).
+		int visualHeight = geometry.height();
 
-		int selectionTop;
-		int selectionBottom;
-
-		if (i == 0) {
-			selectionTop = currentVisualTop;
+		if (result.empty()
+			|| (result.back().top + result.back().height
+				< geometry.top())
+			|| (result.back().top > geometry.top() + visualHeight)) {
+			result.push_back({ geometry.top(), visualHeight });
 		} else {
-			selectionTop = previousVisualBottom + (currentVisualTop - previousVisualBottom) / 2;
-		}
-
-		if (i == count - 1) {
-			selectionBottom = part.geometry.y() + part.geometry.height();
-		} else {
-			int nextVisualTop = (part.geometry.y() + part.geometry.height()) + 2 - topMinus;
-			selectionBottom = currentVisualBottom + (nextVisualTop - currentVisualBottom) / 2;
-		}
-
-		previousVisualBottom = currentVisualBottom;
-
-		if (IsGroupItemSelection(selection, i)) {
-			result.push_back({ selectionTop, selectionBottom - selectionTop });
+			auto &last = result.back();
+			const auto newTop = std::min(last.top, geometry.top());
+			const auto newHeight = std::max(
+				last.top + last.height - newTop,
+				geometry.top() + visualHeight - newTop);
+			last = Ui::BubbleSelectionInterval{ newTop, newHeight };
 		}
 	}
 	const auto groupPadding = groupedPadding();
 	for (auto &part : result) {
 		part.top += groupPadding.top();
+	}
+	if (IsGroupItemSelection(selection, 0)) {
+		result.front().top -= groupPadding.top();
+		result.front().height += groupPadding.top();
 	}
 	
 	return result;
