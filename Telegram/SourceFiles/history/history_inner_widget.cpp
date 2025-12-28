@@ -3043,7 +3043,7 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 		const auto partItemOrLeader = (asGroup || !albumPartItem)
 			? item
 			: albumPartItem;
-		const auto itemId = item ? item->fullId() : FullMsgId();
+		const auto itemId = partItemOrLeader ? partItemOrLeader->fullId() : FullMsgId();
 		const auto canDelete = item
 			&& item->canDelete()
 			&& (item->isRegular() || !item->isService());

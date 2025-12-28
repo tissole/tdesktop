@@ -726,7 +726,7 @@ void Document::draw(
 
 	const auto linktop = st.linkTop + delta - topMinus;
 	const auto captioned = Get<HistoryDocumentCaptioned>();
-	const auto bottomPadding = 2;
+	const auto bottomPadding = 6;
 	
 	auto contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
@@ -1950,10 +1950,10 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		const int captionStart = visualBottomOfElement + 2; 
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; 
+		const int captionStart = visualBottomOfElement + 6; 
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 6; 
 	} else {
-		finalHeight = visualBottomOfElement + 4; 
+		finalHeight = visualBottomOfElement + 6; 
 	}
 	height = finalHeight;
 	return { maxWidth, height };
@@ -1980,10 +1980,10 @@ QSize Document::sizeForGrouping(int width) const {
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		const int captionStart = visualBottomOfElement + 2;
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; 
+		const int captionStart = visualBottomOfElement + 6;
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 6; 
 	} else {
-		finalHeight = visualBottomOfElement + 4; 
+		finalHeight = visualBottomOfElement + 6; 
 	}
 	height = finalHeight;
 	return { maxWidth(), height };
