@@ -635,12 +635,8 @@ QSize Document::countCurrentSize(int newWidth) {
 	auto newHeight = visualBottomOfElement;
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
-	
-	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-	const int gap = (2 + topMinus) / 2;
 
-	// Use half-gap instead of fixed 2px
-	newHeight += gap;
+	newHeight += 2;
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
