@@ -599,9 +599,12 @@ void GroupedMedia::drawHighlight(
 			int highlightHeight = rect.height();
 
 			if (i == 0) {
-				// First Item: Start from where the visual element actually begins
-				// User requested start "at exactly top", so we use rect.y() directly
-				// without the +2 offset.
+				// First Item: User reported rect.y() is "above" the button.
+				// Button logical pos is +2. Group padding is +3.
+				// We offset by 5px to align with visual start.
+				const int offset = 5;
+				highlightY += offset;
+				highlightHeight -= offset;
 			}
 			// For subsequent items (i > 0), rect.y() is already at the slot boundary,
 			// which is the correct start position for selection (at half-gap from previous item).

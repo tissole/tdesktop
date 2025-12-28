@@ -3158,7 +3158,7 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 						&& (view->hasVisibleText() || mediaHasTextForCopy)) {
 						_menu->addAction(
 							tr::lng_context_copy_text(tr::now),
-							[=] { copyContextText(itemId); },
+							[=] { copyContextText(albumPartItem ? albumPartItem->fullId() : itemId); },
 							&st::menuIconCopy);
 					}
 					if ((!item->translation() || !_history->translatedTo())

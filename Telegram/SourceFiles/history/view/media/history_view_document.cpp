@@ -575,7 +575,7 @@ QSize Document::countOptimalSize() {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	minHeight += 6; // Gap between visual element and caption
+	minHeight += 4; // Gap between visual element and caption
 
 
 	if (isBubbleBottom() && !hasTranscribe) {
@@ -601,13 +601,15 @@ QSize Document::countOptimalSize() {
 		} 
 	}
 	
+	int captionHeight = 0;
 	if (captioned) {
 		auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
-		minHeight += captioned->caption.countHeight(captionw);
+		captionHeight = captioned->caption.countHeight(captionw);
+		minHeight += captionHeight;
 	}
 
 	if (hasCaptionContent) {
-		minHeight += 10; // Bottom padding after caption
+		minHeight += 10 + (captionHeight / 25); // Dynamic padding
 	}
 	
 	if (!isBubbleTop()) {
@@ -637,7 +639,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	newHeight += 6; // Gap between visual element and caption
+	newHeight += 4; // Gap between visual element and caption
 
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
@@ -647,12 +649,14 @@ QSize Document::countCurrentSize(int newWidth) {
 			newHeight += st::mediaCaptionSkip;
 		}
 	}
+	int captionHeight = 0;
 	if (captioned) {
-		newHeight += captioned->caption.countHeight(captionw);
+		captionHeight = captioned->caption.countHeight(captionw);
+		newHeight += captionHeight;
 	}
 
 	if (hasCaptionContent) {
-		newHeight += 10; // Bottom padding after caption
+		newHeight += 10 + (captionHeight / 25); // Dynamic padding
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -1102,7 +1106,7 @@ void Document::draw(
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
 		captioned->caption.draw(p, {
-			.position = { st::msgPadding.left(), captiontop },
+			.position = { st::msgPadding.left(), visualElementBottom + 4 },
 			.availableWidth = captionw,
 			.palette = &stm->textPalette,
 			.pre = stm->preCache.get(),
@@ -1116,6 +1120,9 @@ void Document::draw(
 			.highlight = highlightRequest ? &*highlightRequest : nullptr,
 			.useFullWidth = true,
 		});
+		// Ensure dynamic padding matches countSize logic for consistent layout
+		// (Though draw doesn't use bottom val for this, it keeps variables sane)
+	}
 	}
 
 	// --- STANDARD BOTTOM INFO (Round Videos Only) ---
