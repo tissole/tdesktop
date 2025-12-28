@@ -577,6 +577,7 @@ QSize Document::countOptimalSize() {
 
 	minHeight += 6; // Gap between visual element and caption
 
+
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
 			accumulate_max(
@@ -606,7 +607,7 @@ QSize Document::countOptimalSize() {
 	}
 
 	if (hasCaptionContent) {
-		minHeight += 6; // Bottom padding after caption
+		minHeight += 10; // Bottom padding after caption
 	}
 	
 	if (!isBubbleTop()) {
@@ -638,6 +639,7 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	newHeight += 6; // Gap between visual element and caption
 
+
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
 		newHeight += voice->transcribeText.countHeight(captionw);
@@ -650,7 +652,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		newHeight += 6; // Bottom padding after caption
+		newHeight += 10; // Bottom padding after caption
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -726,7 +728,7 @@ void Document::draw(
 
 	const auto linktop = st.linkTop + delta - topMinus;
 	const auto captioned = Get<HistoryDocumentCaptioned>();
-	const auto bottomPadding = 6;
+	const auto bottomPadding = 10;
 	
 	auto contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
