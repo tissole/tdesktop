@@ -601,12 +601,14 @@ void GroupedMedia::drawHighlight(
 			if (i == 0) {
 				// First Item: User reported rect.y() is "above" the button.
 				// First Item: User reported rect.y() is "above" the button, extending to chat name.
-				// 12px was not enough. Name height is approx 20px. 
-				// Trying +24px to clear visual elements and padding.
-				const int offset = 24;
+				// Name(20) + Padding(6) + Base(2) = 28px.
+				// Trying +28px to start exactly at visual button top.
+				const int offset = 28;
 				highlightY += offset;
 				highlightHeight -= offset;
 			}
+			// Trim bottom padding to end selection exactly at content bottom (after caption or button)
+			highlightHeight -= st::msgFileLayout.padding.bottom();
 			// For subsequent items (i > 0), rect.y() is already at the slot boundary,
 			// which is the correct start position for selection (at half-gap from previous item).
 			
