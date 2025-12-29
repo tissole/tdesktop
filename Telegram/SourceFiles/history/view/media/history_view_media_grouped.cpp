@@ -601,9 +601,9 @@ void GroupedMedia::drawHighlight(
 			if (i == 0) {
 				// First Item: User reported rect.y() is "above" the button.
 				// First Item: User reported rect.y() is "above" the button, extending to chat name.
-				// We need to move the start DOWN significantly. 
-				// Trying +12px (2px base + 10px padding estimation) to start exactly at button top.
-				const int offset = 12;
+				// 12px was not enough. Name height is approx 20px. 
+				// Trying +24px to clear visual elements and padding.
+				const int offset = 24;
 				highlightY += offset;
 				highlightHeight -= offset;
 			}
