@@ -600,9 +600,10 @@ void GroupedMedia::drawHighlight(
 
 			if (i == 0) {
 				// First Item: User reported rect.y() is "above" the button.
-				// Button logical pos is +2. Group padding is +3.
-				// We offset by 5px to align with visual start.
-				const int offset = 5;
+				// First Item: User reported rect.y() is "above" the button, extending to chat name.
+				// We need to move the start DOWN significantly. 
+				// Trying +12px (2px base + 10px padding estimation) to start exactly at button top.
+				const int offset = 12;
 				highlightY += offset;
 				highlightHeight -= offset;
 			}
