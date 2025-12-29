@@ -1123,7 +1123,7 @@ void Document::draw(
 		// Ensure dynamic padding matches countSize logic for consistent layout
 		// (Though draw doesn't use bottom val for this, it keeps variables sane)
 	}
-	}
+
 
 	// --- STANDARD BOTTOM INFO (Round Videos Only) ---
 	// FIX Issue 4: Only call _parent->drawInfo for Video Messages (Round Videos).
