@@ -575,7 +575,7 @@ QSize Document::countOptimalSize() {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	minHeight += 2; // Gap between visual element and caption
+	minHeight += 4; // Gap between visual element and caption
 
 
 	if (isBubbleBottom() && !hasTranscribe) {
@@ -609,7 +609,7 @@ QSize Document::countOptimalSize() {
 	}
 
 	if (hasCaptionContent) {
-		minHeight += 20 + (captionHeight / 20); // Dynamic padding (Stronger buffer)
+		minHeight += 10 + (captionHeight / 25); // Dynamic padding
 	}
 	
 	if (!isBubbleTop()) {
@@ -639,7 +639,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	newHeight += 2; // Gap between visual element and caption
+	newHeight += 4; // Gap between visual element and caption
 
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
@@ -656,7 +656,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		newHeight += 20 + (captionHeight / 20); // Dynamic padding (Stronger buffer)
+		newHeight += 10 + (captionHeight / 25); // Dynamic padding
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -1106,7 +1106,7 @@ void Document::draw(
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
 		captioned->caption.draw(p, {
-			.position = { st::msgPadding.left(), visualElementBottom + 2 },
+			.position = { st::msgPadding.left(), visualElementBottom + 4 },
 			.availableWidth = captionw,
 			.palette = &stm->textPalette,
 			.pre = stm->preCache.get(),
@@ -1123,7 +1123,6 @@ void Document::draw(
 		// Ensure dynamic padding matches countSize logic for consistent layout
 		// (Though draw doesn't use bottom val for this, it keeps variables sane)
 	}
-	// Ensure brace balance
 
 
 	// --- STANDARD BOTTOM INFO (Round Videos Only) ---
