@@ -601,21 +601,20 @@ void GroupedMedia::drawHighlight(
 			if (i == 0) {
 				// First Item: User reported rect.y() is "above" the button.
 				// First Item: User reported rect.y() is "above" the button, extending to chat name.
-				// Tried 28px. User said "Still above". 
-				// Increasing to 35px.
+				// First Item: User reported "Begins above" (Name) and "Ends short" (Middle).
+				// Solution: Shift Y DOWN by 35px (Skip Name).
+				// DO NOT reduce Height. This pushes the Bottom DOWN by 35px, fixing "Ends short".
 				const int offset = 35;
 				highlightY += offset;
-				highlightHeight -= offset;
+				// highlightHeight -= offset; // Removed to extend bottom.
 			} else {
-				// Subsequent Items (i > 0): 
-				// User said "Begins with last part... instead of current item top".
-				// Add small offset to align with visual top (baseTop=2).
-				const int offset = 2;
+				// Subsequent Items: User reported "Begins with last part of previous".
+				// Shift Y DOWN by 5px (Skip overlap). Adjust H to maintain bottom.
+				const int offset = 5;
 				highlightY += offset;
 				highlightHeight -= offset;
 			}
-			// Removed Bottom Trim - User said "Ends before it... extends short". 
-			// Full highlightHeight (slot height) is needed.
+			// No Bottom Trim.
 			// For subsequent items (i > 0), rect.y() is already at the slot boundary,
 			// which is the correct start position for selection (at half-gap from previous item).
 			
