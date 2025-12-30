@@ -569,14 +569,14 @@ QSize Document::countOptimalSize() {
 	}
 
 	const int baseTop = 2; 
-	// Revert padding subtraction - it caused overlap ("lumped together").
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); 
+	// Subtract padding.bottom to align with visual image bottom, not layout box bottom
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false) - st.padding.bottom(); 
 	auto minHeight = visualBottomOfElement;
 	
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	minHeight += 4; // Gap between visual element and caption
+	minHeight += 2; // Gap between visual element and caption
 
 
 	if (isBubbleBottom() && !hasTranscribe) {
@@ -635,13 +635,13 @@ QSize Document::countCurrentSize(int newWidth) {
 
 
 	const int baseTop = 2; 
-	// Revert padding subtraction
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); 
+	// Subtract padding.bottom to align with visual image bottom
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false) - st.padding.bottom(); 
 	auto newHeight = visualBottomOfElement;
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	newHeight += 4; // Gap between visual element and caption
+	newHeight += 2; // Gap between visual element and caption
 
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
@@ -1094,10 +1094,9 @@ void Document::draw(
 	auto selection = context.selection;
 	
 
-	// Revert padding subtraction
-	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
+	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false) - st.padding.bottom();
 	
-	auto captiontop = visualElementBottom + 4; // Gap between visual element and caption
+	auto captiontop = visualElementBottom + 2; // Gap between visual element and caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
@@ -1959,18 +1958,18 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 
 
 	int finalHeight = 0;
-	// Revert padding subtraction
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, elementBaseHeight, false);
+	// Subtract padding.bottom
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, elementBaseHeight, false) - st.padding.bottom();
 
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		const int captionStart = visualBottomOfElement + 4; // Gap 4px
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; // Padding 4px
+		const int captionStart = visualBottomOfElement + 2; // Tight gap 2px
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 2;  // Tight padding 2px
 	} else {
-		finalHeight = visualBottomOfElement + 4; // Padding 4px
+		finalHeight = visualBottomOfElement + 2; // Tight padding 2px
 	}
 	height = finalHeight;
 	return { maxWidth, height };
@@ -1990,18 +1989,18 @@ QSize Document::sizeForGrouping(int width) const {
 	const auto elementBaseHeight = contentHeight;
 
 	int finalHeight = 0;
-	// Revert padding subtraction
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, elementBaseHeight, false);
+	// Subtract padding.bottom
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, elementBaseHeight, false) - st.padding.bottom();
 	
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		const int captionStart = visualBottomOfElement + 4; // Gap 4px
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; // Padding 4px
+		const int captionStart = visualBottomOfElement + 2; // Tight gap 2px
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 2; // Tight padding 2px
 	} else {
-		finalHeight = visualBottomOfElement + 4; // Padding 4px
+		finalHeight = visualBottomOfElement + 2; // Tight padding 2px
 	}
 	height = finalHeight;
 	return { maxWidth(), height };
