@@ -576,10 +576,7 @@ QSize Document::countOptimalSize() {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	// Symmetric Spacing to center caption ("half distance")
-	const int gap = 6; 
-	const int bottomPadding = 6;
-	minHeight += gap + bottomPadding; // Reserve symmetric space
+	minHeight += 4; // Gap between visual element and caption
 
 
 	if (isBubbleBottom() && !hasTranscribe) {
@@ -613,7 +610,7 @@ QSize Document::countOptimalSize() {
 	}
 
 	if (hasCaptionContent) {
-		minHeight += captionHeight; // Height is added. Spacing added above.
+		minHeight += 20 + (captionHeight / 20); // Dynamic padding (Stronger buffer)
 	}
 	
 	if (!isBubbleTop()) {
@@ -644,10 +641,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	// Symmetric Spacing
-	const int gap = 6;
-	const int bottomPadding = 6;
-	newHeight += gap + bottomPadding;
+	newHeight += 4; // Gap between visual element and caption
 
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
@@ -664,7 +658,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		newHeight += captionHeight;
+		newHeight += 20 + (captionHeight / 20); // Dynamic padding (Stronger buffer)
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -1100,10 +1094,10 @@ void Document::draw(
 	auto selection = context.selection;
 	
 
+	// Revert padding subtraction
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
-	// Draw at Gap = 6 to match sizing (Symmetric)
-	auto captiontop = visualElementBottom + 6;
+	auto captiontop = visualElementBottom + 4; // Gap between visual element and caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
