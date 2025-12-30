@@ -575,7 +575,10 @@ QSize Document::countOptimalSize() {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	minHeight += 4; // Gap between visual element and caption
+	// FIX: Center caption by spacing equally from top (icon) and bottom (bubble edge).
+	const auto verticalGap = st::msgPadding.bottom() + 4;
+
+	minHeight += verticalGap; // Top Gap
 
 
 	if (isBubbleBottom() && !hasTranscribe) {
@@ -609,7 +612,7 @@ QSize Document::countOptimalSize() {
 	}
 
 	if (hasCaptionContent) {
-		minHeight += 10 + (captionHeight / 25); // Dynamic padding
+		minHeight += verticalGap; // Bottom Gap
 	}
 	
 	if (!isBubbleTop()) {
@@ -639,8 +642,10 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	newHeight += 4; // Gap between visual element and caption
+	// FIX: Center caption by spacing equally from top (icon) and bottom (bubble edge).
+	const auto verticalGap = st::msgPadding.bottom() + 4;
 
+	newHeight += verticalGap; // Top Gap
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
@@ -656,8 +661,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		newHeight += 10 + (captionHeight / 25); // Dynamic padding
-		newHeight += st::msgPadding.bottom(); // FIX: Explicitly reserve bottom padding
+		newHeight += verticalGap; // Bottom Gap
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -1106,8 +1110,12 @@ void Document::draw(
 		p.setPen(stm->historyTextFg);
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
+		
+		// FIX: Use congruent top spacing (verticalGap)
+		const auto verticalGap = st::msgPadding.bottom() + 4;
+		
 		captioned->caption.draw(p, {
-			.position = { st::msgPadding.left(), visualElementBottom + 4 - topMinus },
+			.position = { st::msgPadding.left(), visualElementBottom + verticalGap - topMinus },
 			.availableWidth = captionw,
 			.palette = &stm->textPalette,
 			.pre = stm->preCache.get(),
