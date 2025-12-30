@@ -731,11 +731,10 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		const auto highlightOpacity = highlighted
 			? context.highlight.opacity
 			: 0.;
-		partContext.highlight.range = highlighted
-			? TextSelection()
-			: highlight;
+		// Suppress standard highlight (to override coordinates manually)
+		partContext.highlight.range = TextSelection();
 
-		// Draw Media Content
+		// Draw Media Content (Highlight suppressed)
 		if (!part.cache.isNull()) {
 			wasCache = true;
 		}
@@ -749,6 +748,25 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			highlightOpacity,
 			&part.cacheKey,
 			&part.cache);
+
+		// Manually Paint Highlight with Custom Offsets
+		if (highlightOpacity > 0.) {
+			auto hRect = part.geometry.translated(0, groupPadding.top());
+			
+			if (i == 0) {
+				// Shift Down 35px to clear Name/Date
+				// Keep height (shifts bottom down too, extending it)
+				hRect.setTop(hRect.top() + 35); 
+			} else {
+				// Shift Down 5px to avoid overlap
+				hRect.setTop(hRect.top() + 5);
+			}
+
+			// Paint Overlay
+			p.setOpacity(highlightOpacity);
+			p.fillRect(hRect, st->msgSelectOverlay);
+			p.setOpacity(1.);
+		}
 
 		// --- Draw Grid Mode Overlays (Video duration) ---
 		if (_mode == Mode::Grid && showInfo) {
