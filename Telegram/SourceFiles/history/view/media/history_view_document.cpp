@@ -576,10 +576,10 @@ QSize Document::countOptimalSize() {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	// Reduced Gap (3) and Extra Bottom (10) for "Decreased space" + "Space added after"
-	const int gap = 3; 
-	const int bottomPadding = 10;
-	minHeight += gap + bottomPadding;
+	// Symmetric Spacing to center caption ("half distance")
+	const int gap = 6; 
+	const int bottomPadding = 6;
+	minHeight += gap + bottomPadding; // Reserve symmetric space
 
 
 	if (isBubbleBottom() && !hasTranscribe) {
@@ -644,9 +644,9 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	// Gap 3, Padding 10
-	const int gap = 3;
-	const int bottomPadding = 10;
+	// Symmetric Spacing
+	const int gap = 6;
+	const int bottomPadding = 6;
 	newHeight += gap + bottomPadding;
 
 
@@ -1102,8 +1102,8 @@ void Document::draw(
 
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
-	// Draw at Gap = 3
-	auto captiontop = visualElementBottom + 3;
+	// Draw at Gap = 6 to match sizing (Symmetric)
+	auto captiontop = visualElementBottom + 6;
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
