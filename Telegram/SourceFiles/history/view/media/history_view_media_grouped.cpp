@@ -764,7 +764,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			// Paint Overlay
 			p.setOpacity(highlightOpacity);
-			p.fillRect(hRect, st->msgSelectOverlay);
+			p.fillRect(hRect, st->msgSelectOverlay());
 			p.setOpacity(1.);
 		}
 
