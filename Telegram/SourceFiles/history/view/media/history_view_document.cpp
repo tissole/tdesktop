@@ -569,8 +569,7 @@ QSize Document::countOptimalSize() {
 	}
 
 	const int baseTop = 2; 
-	// Subtract padding.bottom to align with visual image bottom, not layout box bottom
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false) - st.padding.bottom(); 
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); 
 	auto minHeight = visualBottomOfElement;
 	
 	const auto captioned = Get<HistoryDocumentCaptioned>();
@@ -635,8 +634,7 @@ QSize Document::countCurrentSize(int newWidth) {
 
 
 	const int baseTop = 2; 
-	// Subtract padding.bottom to align with visual image bottom
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false) - st.padding.bottom(); 
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); 
 	auto newHeight = visualBottomOfElement;
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
@@ -1093,10 +1091,9 @@ void Document::draw(
 
 	auto selection = context.selection;
 	
-	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
-	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false) - st.padding.bottom();
+	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
-	auto captiontop = visualElementBottom + 2; // Gap between visual element and caption
+	auto captiontop = visualElementBottom + 6; // Gap between visual element and caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
@@ -1955,25 +1952,18 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 
 	const_cast<Document*>(this)->refreshCaption(last);
 
-	const auto thumbed = Get<HistoryDocumentThumbed>();
-	// Use Grouped layout for sizing? Usually yes? 
-	// But countOptimal uses standard? sizeForGrouping uses grouped.
-	// We'll use grouped here to be checking padding.
-	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-
 	int finalHeight = 0;
-	// Subtract padding.bottom
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, elementBaseHeight, false) - st.padding.bottom();
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, elementBaseHeight, false);
 
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		const int captionStart = visualBottomOfElement + 2; // Tight gap 2px
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 2;  // Tight padding 2px
+		const int captionStart = visualBottomOfElement + 6; 
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 6; 
 	} else {
-		finalHeight = visualBottomOfElement + 2; // Tight padding 2px
+		finalHeight = visualBottomOfElement + 6; 
 	}
 	height = finalHeight;
 	return { maxWidth, height };
@@ -1993,18 +1983,17 @@ QSize Document::sizeForGrouping(int width) const {
 	const auto elementBaseHeight = contentHeight;
 
 	int finalHeight = 0;
-	// Subtract padding.bottom
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, elementBaseHeight, false) - st.padding.bottom();
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, elementBaseHeight, false);
 	
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		const int captionStart = visualBottomOfElement + 2; // Tight gap 2px
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 2; // Tight padding 2px
+		const int captionStart = visualBottomOfElement + 6;
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 6; 
 	} else {
-		finalHeight = visualBottomOfElement + 2; // Tight padding 2px
+		finalHeight = visualBottomOfElement + 6; 
 	}
 	height = finalHeight;
 	return { maxWidth(), height };
