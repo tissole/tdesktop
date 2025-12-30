@@ -1093,7 +1093,7 @@ void Document::draw(
 
 	auto selection = context.selection;
 	
-
+	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false) - st.padding.bottom();
 	
 	auto captiontop = visualElementBottom + 2; // Gap between visual element and caption
@@ -1955,7 +1955,11 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 
 	const_cast<Document*>(this)->refreshCaption(last);
 
-
+	const auto thumbed = Get<HistoryDocumentThumbed>();
+	// Use Grouped layout for sizing? Usually yes? 
+	// But countOptimal uses standard? sizeForGrouping uses grouped.
+	// We'll use grouped here to be checking padding.
+	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 
 	int finalHeight = 0;
 	// Subtract padding.bottom
