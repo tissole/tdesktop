@@ -142,6 +142,10 @@ private:
 	bool updateStatusText() const; // returns showPause
 	[[nodiscard]] int thumbedLinkMaxWidth() const;
 
+	// FIX: Expose visual bounds for GroupedMedia selection highlighting
+	[[nodiscard]] int visualContentTopOffset(LayoutMode mode = LayoutMode::Full) const;
+	[[nodiscard]] int visualContentBottomOffset(LayoutMode mode = LayoutMode::Full) const;
+
 	[[nodiscard]] bool downloadInCorner() const;
 	void drawCornerDownload(
 		Painter &p,
