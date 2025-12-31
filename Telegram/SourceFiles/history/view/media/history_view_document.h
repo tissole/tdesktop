@@ -35,6 +35,11 @@ public:
 		not_null<DocumentData*> document);
 	~Document();
 
+	enum class LayoutMode {
+		Full,
+		Grouped,
+	};
+
 	bool hideMessageText() const override {
 		return false;
 	}
@@ -69,9 +74,6 @@ public:
 	}
 	bool needInfoDisplay() const override;
 	QMargins bubbleMargins() const override;
-
-	[[nodiscard]] bool hasHeavyPart() const override;
-	[[nodiscard]] bool hasTwiceResizedthumb() const override;
 
 	// FIX: Expose visual bounds for GroupedMedia selection highlighting
 	[[nodiscard]] int visualContentTopOffset(LayoutMode mode = LayoutMode::Full) const;
@@ -110,11 +112,6 @@ protected:
 	bool dataLoaded() const override;
 
 private:
-	enum class LayoutMode {
-		Full,
-		Grouped,
-	};
-
 	void draw(
 		Painter &p,
 		const PaintContext &context,
