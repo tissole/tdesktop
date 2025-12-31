@@ -929,6 +929,8 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				
 				// FIX: Replicate Document::draw logic for visual alignment
 				const auto forcedTop = 2;
+				const auto itemRect = part.geometry.translated(0, groupPadding.top()); // Define itemRect EARLY
+				
 				const auto delta = forcedTop - docStyle.padding.top();
 				const auto topMinus = part.content->isBubbleTop() ? 0 : st::msgFileTopMinus;
 				const auto nametop = docStyle.nameTop + delta - topMinus;
