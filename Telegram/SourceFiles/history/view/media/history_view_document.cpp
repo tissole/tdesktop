@@ -608,9 +608,11 @@ QSize Document::countOptimalSize() {
 		const auto captionGap = 4;
 		const auto gapTop = captionGap;
 		const auto gapBottom = captionGap + st::msgPadding.bottom();
-		minHeight = visualElementBottom + gapTop + _caption.countHeight(newWidth) + gapBottom;
+		
+		const auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
+		minHeight = visualBottomOfElement + gapTop + captioned->caption.countHeight(captionw) + gapBottom;
 	} else {
-		minHeight = visualElementBottom + st::msgPadding.bottom();
+		minHeight = visualBottomOfElement + st::msgPadding.bottom();
 	}
 	
 	if (!isBubbleTop()) {
