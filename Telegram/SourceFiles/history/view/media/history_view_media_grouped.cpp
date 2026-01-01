@@ -602,8 +602,8 @@ void GroupedMedia::drawHighlight(
 
 			if (_mode == Mode::Column) {
 				if (const auto document = dynamic_cast<const Document*>(part.content.get())) {
-					const auto visualTop = document->visualContentTopOffset(Document::LayoutMode::Grouped);
-					const auto visualBottom = document->visualContentBottomOffset(Document::LayoutMode::Grouped);
+					const auto visualTop = document->visualContentTopOffset(Element::LayoutMode::Grouped);
+					const auto visualBottom = document->visualContentBottomOffset(Element::LayoutMode::Grouped);
 					
 					// Apply robust offsets
 					highlightY = rect.y() + visualTop;
