@@ -70,13 +70,6 @@ public:
 	bool needInfoDisplay() const override;
 	QMargins bubbleMargins() const override;
 
-	[[nodiscard]] bool hasHeavyPart() const override;
-	[[nodiscard]] bool hasTwiceResizedthumb() const override;
-
-	// FIX: Expose visual bounds for GroupedMedia selection highlighting
-	[[nodiscard]] int visualContentTopOffset(LayoutMode mode = LayoutMode::Full) const;
-	[[nodiscard]] int visualContentBottomOffset(LayoutMode mode = LayoutMode::Full) const;
-
 	QSize sizeForGroupingOptimal(int maxWidth, bool last) const override;
 	QSize sizeForGrouping(int width) const override;
 	void drawGrouped(
@@ -149,7 +142,9 @@ private:
 	bool updateStatusText() const; // returns showPause
 	[[nodiscard]] int thumbedLinkMaxWidth() const;
 
-
+	// FIX: Expose visual bounds for GroupedMedia selection highlighting
+	[[nodiscard]] int visualContentTopOffset(LayoutMode mode = LayoutMode::Full) const;
+	[[nodiscard]] int visualContentBottomOffset(LayoutMode mode = LayoutMode::Full) const;
 
 	[[nodiscard]] bool downloadInCorner() const;
 	void drawCornerDownload(
