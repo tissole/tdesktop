@@ -605,7 +605,7 @@ QSize Document::countOptimalSize() {
 	}
 	
 	if (captioned) {
-		const auto captionGap = 6;
+		const auto captionGap = 4;
 		const auto gapTop = captionGap;
 		const auto gapBottom = captionGap + st::msgPadding.bottom();
 		
@@ -642,9 +642,9 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	// FIX: Center caption: Balanced spacing (6px).
-	// Synced with sizeForGrouping (Column Album).
-	const auto captionGap = 6;
+	// FIX: Center caption: Equal spacing above and below (congruent).
+	// User requested space above and below.
+	const auto captionGap = 4;
 	const auto gapTop = captionGap;
 	const auto gapBottom = captionGap + st::msgPadding.bottom();
 
@@ -1114,8 +1114,8 @@ void Document::draw(
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
 		
-		// FIX: Use congruent top spacing (gapTop = 6)
-		const auto gapTop = 6;
+		// FIX: Use congruent top spacing (gapTop)
+		const auto gapTop = 4;
 		
 		captioned->caption.draw(p, {
 			.position = { st::msgPadding.left(), visualElementBottom + gapTop - topMinus },
@@ -2251,13 +2251,8 @@ int Document::visualContentTopOffset(LayoutMode mode) const {
 		const auto &st = (mode == LayoutMode::Full)
 			? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 			: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-		return (mode == LayoutMode::Grouped ? st.padding.top() : forcedTop) + st::historyAudioDownloadShift;
+		return forcedTop + st::historyAudioDownloadShift;
 	}
-
-	if (mode == LayoutMode::Grouped) {
-		return st::msgFileLayoutGrouped.padding.top();
-	}
-
 	return forcedTop;
 }
 
