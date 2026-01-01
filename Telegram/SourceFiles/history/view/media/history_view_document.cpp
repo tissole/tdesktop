@@ -576,6 +576,7 @@ QSize Document::countOptimalSize() {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
+	int minHeight = 0;
 	if (hasTranscribe) {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
@@ -632,32 +633,33 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
+	int newHeightValue = 0;
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
-		newHeight = visualBottomOfElement + captionGap + voice->transcribeText.countHeight(captionw);
+		newHeightValue = visualBottomOfElement + captionGap + voice->transcribeText.countHeight(captionw);
 		if (captioned) {
-			newHeight += st::mediaCaptionSkip;
+			newHeightValue += st::mediaCaptionSkip;
 		}
 	}
 	int captionHeight = 0;
 	if (captioned) {
 		captionHeight = captioned->caption.countHeight(captionw);
 		if (hasTranscribe) {
-			newHeight += captionHeight;
+			newHeightValue += captionHeight;
 		} else {
-			newHeight = visualBottomOfElement + captionGap + captionHeight;
+			newHeightValue = visualBottomOfElement + captionGap + captionHeight;
 		}
 	}
 
 	if (hasCaptionContent) {
-		newHeight += bottomMargin;
+		newHeightValue += bottomMargin;
 	} else {
-		newHeight = visualBottomOfElement + bottomMargin;
+		newHeightValue = visualBottomOfElement + bottomMargin;
 	}
 
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
-		result.setHeight(newHeight); // Use our newHeight.
+		result.setHeight(newHeightValue); // Use our newHeight.
 		if (!isBubbleTop()) {
 			result.setHeight(result.height() - st::msgFileTopMinus);
 		}
@@ -665,11 +667,11 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (!isBubbleTop()) {
-		newHeight -= st::msgFileTopMinus;
+		newHeightValue -= st::msgFileTopMinus;
 	}
 
 	accumulate_min(newWidth, maxWidth());
-	return { newWidth, newHeight };
+	return { newWidth, newHeightValue };
 }
 
 void Document::draw(Painter &p, const PaintContext &context) const {
@@ -1957,8 +1959,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	} else {
 		finalHeight = visualBottomOfElement + bottomMargin; 
 	}
-	height = finalHeight;
-	return { maxWidth, height };
+	return { maxWidth, finalHeight };
 }
 
 
@@ -1973,6 +1974,7 @@ QSize Document::sizeForGrouping(int width) const {
 	const int captionGap = 6;
 	const int bottomMargin = 6;
 
+	const int baseTop = 2;
 	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false);
 	int finalHeight = 0;
 	
@@ -1985,8 +1987,7 @@ QSize Document::sizeForGrouping(int width) const {
 	} else {
 		finalHeight = visualBottomOfElement + bottomMargin; 
 	}
-	height = finalHeight;
-	return { maxWidth(), height };
+	return { maxWidth(), finalHeight };
 }
 
 void Document::drawGrouped(
