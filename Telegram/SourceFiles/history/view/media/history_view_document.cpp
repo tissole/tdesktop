@@ -657,7 +657,6 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	if (hasCaptionContent) {
 		newHeight += 10 + (captionHeight / 25); // Dynamic padding
-		newHeight += st::msgPadding.bottom(); // FIX: Explicitly reserve bottom padding
 	}
 
 	if (!captioned && !hasTranscribe) {

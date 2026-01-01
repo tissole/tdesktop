@@ -596,12 +596,12 @@ void GroupedMedia::drawHighlight(
 			// We need to align with the actual visual element position.
 			// In Document::sizeForGrouping, baseTop = 2 is where the visual element starts.
 			
-			// FIX: Always skip the padding so selection starts at the visual top (Icon/Thumb).
-			// User reported +2 was still "above", so we increase to 5 to match typical padding/visual indentation.
-			const auto visualTopOffset = 5;
+			// FIX: Always skip the 2px "forcedTop" padding so selection starts at the visual top (Icon/Thumb).
+			const auto visualTopOffset = 2;
 			int highlightY = rect.y() + visualTopOffset;
 			
 			// FIX: Reduce height by the same offset so the bottom edge remains valid (matches rect.bottom()).
+			// This covers the caption (if present) or ends at the bottom of the item (if no caption).
 			int highlightHeight = rect.height() - visualTopOffset;
 
 			_parent->paintCustomHighlight(
