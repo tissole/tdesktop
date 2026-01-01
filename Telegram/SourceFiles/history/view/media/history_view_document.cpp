@@ -2241,23 +2241,16 @@ rpl::producer<> TTLVoiceStops(FullMsgId fullId) {
 }
 
 int Document::visualContentTopOffset(LayoutMode mode) const {
-	const auto thumbed = false;
-	const auto &st = (mode == LayoutMode::Full)
-		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
-		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-
-	// The visual content (icon/thumb) starts after the top padding.
-	// In draw(), forcedTop overrides this for Single Files, but for GroupedMedia
-	// we want to respect the layout structure if it includes gaps.
-	// However, user says "includes empty space".
-	// Let's rely on st.padding.top() which usually defines that space.
-	auto offset = st.padding.top();
-
+	const auto forcedTop = 2;
 	if (downloadInCorner()) {
-		// Corner download might shift things.
-		offset += st::historyAudioDownloadShift;
+		// See Document::drawCornerDownload
+		const auto thumbed = false;
+		const auto &st = (mode == LayoutMode::Full)
+			? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
+			: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
+		return forcedTop + st::historyAudioDownloadShift;
 	}
-	return offset;
+	return forcedTop;
 }
 
 int Document::visualContentBottomOffset(LayoutMode mode) const {
