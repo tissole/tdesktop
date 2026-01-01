@@ -1407,40 +1407,6 @@ TextState Document::textState(
 	// --- CUSTOM TOOLTIP LOGIC (Inline) ---
 	const bool bubble = _parent->hasBubble();
 	if (!_data->isVideoMessage() && mode == LayoutMode::Full && (!bubble || isBubbleBottom())) {
-		// ... existing tooltip logic ...
-	}
-}
-
-int Document::visualContentTopOffset(LayoutMode mode) const {
-	const auto forcedTop = 2;
-	if (downloadInCorner()) {
-		// See Document::drawCornerDownload
-		const auto thumbed = false;
-		const auto &st = (mode == LayoutMode::Full)
-			? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
-			: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-		return forcedTop + st::historyAudioDownloadShift;
-	}
-	return forcedTop;
-}
-
-int Document::visualContentBottomOffset(LayoutMode mode) const {
-	auto contentHeight = st::msgFileLayout.thumbSize;
-	if (downloadInCorner()) {
-		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-	} else if (Get<HistoryDocumentThumbed>()) {
-		// Check thumbed logic if needed, but standard file layout usually uses fixed sizes or ratios.
-		// For grouping, we usually use st::msgFileLayout.thumbSize or calculated from thumb.
-		// But here we want the "Visual Element" (Icon) bottom.
-		// In draw(): const auto innerSize = st::msgFileLayout.thumbSize;
-		// And inner rect is centered in rthumb.
-	}
-	// In countCurrentSize/draw: 
-	// bottom = forcedTop + contentHeight + ...
-	// visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
-	// calculateVisualElementBottom is: baseTop + contentBoundingHeight
-	return calculateVisualElementBottom(2, contentHeight, false);
-}
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 		};

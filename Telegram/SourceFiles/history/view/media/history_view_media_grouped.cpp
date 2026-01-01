@@ -12,7 +12,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history.h"
 #include "history/view/history_view_element.h"
 #include "history/view/history_view_cursor_state.h"
-#include "history/view/media/history_view_document.h"
 #include "data/data_document.h"
 #include "data/data_media_types.h"
 #include "data/data_session.h"
@@ -597,29 +596,13 @@ void GroupedMedia::drawHighlight(
 			// We need to align with the actual visual element position.
 			// In Document::sizeForGrouping, baseTop = 2 is where the visual element starts.
 			
-			int highlightY = rect.y();
-			int highlightHeight = rect.height();
-
-			if (_mode == Mode::Column) {
-				if (const auto document = dynamic_cast<const Document*>(part.content.get())) {
-					const auto visualTop = document->visualContentTopOffset();
-					const auto visualBottom = document->visualContentBottomOffset();
-					
-					// Apply robust offsets
-					highlightY = rect.y() + visualTop;
-					
-					// Determine bottom limit
-					if (part.item->emptyText()) {
-						// If no caption, end highlight at visual content bottom (icon/button)
-						highlightHeight = visualBottom - visualTop;
-					} else {
-						// If caption exists, encompass caption but respect visual top
-						// The 'rect.height()' includes everything (content + caption + padding).
-						// We just need to subtract the top offset we just added.
-						highlightHeight = rect.height() - visualTop;
-					}
-				}
-			}
+			// FIX: Always skip the padding so selection starts at the visual top (Icon/Thumb).
+			// User reported +2 was still "above", so we increase to 5 to match typical padding/visual indentation.
+			const auto visualTopOffset = 5;
+			int highlightY = rect.y() + visualTopOffset;
+			
+			// FIX: Reduce height by the same offset so the bottom edge remains valid (matches rect.bottom()).
+			int highlightHeight = rect.height() - visualTopOffset;
 
 			_parent->paintCustomHighlight(
 				p,
