@@ -5,6 +5,8 @@ the official desktop application for the Telegram messaging service.
 For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
+#include "history/view/media/history_view_document.h"
+#include "history/view/media/history_view_media_common.h"
 #include "history/view/media/history_view_media_grouped.h"
 
 #include "history/history_item_components.h"
@@ -1788,10 +1790,11 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 			continue;
 		}
 		const auto &geometry = part.geometry;
+		const auto document = static_cast<const Document*>(part.content.get());
+		const auto forcedTop = 2;
 		
-		const auto topMinus = (i == 0) ? 0 : st::msgFileTopMinus;
-		const int visualTop = geometry.top() + 2 - topMinus;
-		const int visualHeight = geometry.height() - (2 - topMinus) - 6;
+		const int visualTop = geometry.top() + document->calculateVisualElementTop(forcedTop, 0);
+		const int visualHeight = geometry.height() - (visualTop - geometry.top()) - 6;
 
 		if (result.empty()
 			|| (result.back().top + result.back().height

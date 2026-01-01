@@ -152,10 +152,13 @@ private:
 		StateRequest request,
 		LayoutMode mode) const;
 
+	[[nodiscard]] int calculateVisualElementTop(
+		int baseTop,
+		int topMinus) const;
 	[[nodiscard]] int calculateVisualElementBottom(
 		int baseTop,
 		int contentBoundingHeight,
-		bool includeTopMinus) const;
+		int topMinus) const;
 
 	not_null<DocumentData*> _data;
 	mutable std::shared_ptr<Data::DocumentMedia> _dataMedia;
