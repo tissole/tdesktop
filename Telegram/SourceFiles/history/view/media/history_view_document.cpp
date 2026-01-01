@@ -605,7 +605,7 @@ QSize Document::countOptimalSize() {
 	}
 	
 	if (captioned) {
-		const auto captionGap = 2;
+		const auto captionGap = 4;
 		const auto gapTop = captionGap;
 		const auto gapBottom = captionGap + st::msgPadding.bottom();
 		
@@ -642,9 +642,10 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	// FIX: Center caption: Balanced spacing (2px).
-	const auto gapTop = 2;
-	const auto gapBottom = gapTop + st::msgPadding.bottom();
+	// FIX: Center caption: Balanced spacing (4px).
+	const auto captionGap = 4;
+	const auto gapTop = captionGap;
+	const auto gapBottom = captionGap + st::msgPadding.bottom();
 
 	newHeight += gapTop; // Top Gap
 
@@ -655,8 +656,10 @@ QSize Document::countCurrentSize(int newWidth) {
 			newHeight += st::mediaCaptionSkip;
 		}
 	}
+	int captionHeight = 0;
 	if (captioned) {
-		newHeight += captioned->caption.countHeight(captionw);
+		captionHeight = captioned->caption.countHeight(captionw);
+		newHeight += captionHeight;
 	}
 
 	if (hasCaptionContent) {
@@ -1097,13 +1100,11 @@ void Document::draw(
 	
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
-	// FIX: Use 2px gap and ensure it respects transcribe height
-	const auto gapTop = 2;
-	auto captiontop = visualElementBottom + gapTop;
+	auto captiontop = visualElementBottom + 6; // Gap between visual element and caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
-		voice->transcribeText.draw(p, st::msgPadding.left(), captiontop - topMinus, captionw, style::al_left, 0, -1, selection);
+		voice->transcribeText.draw(p, st::msgPadding.left(), bottom, captionw, style::al_left, 0, -1, selection);
 		captiontop += voice->transcribeText.countHeight(captionw) + st::mediaCaptionSkip;
 		selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
 	}
@@ -1112,8 +1113,11 @@ void Document::draw(
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
 		
+		// FIX: Use congruent top spacing (gapTop = 4)
+		const auto gapTop = 4;
+		
 		captioned->caption.draw(p, {
-			.position = { st::msgPadding.left(), captiontop - topMinus },
+			.position = { st::msgPadding.left(), visualElementBottom + gapTop - topMinus },
 			.availableWidth = captionw,
 			.palette = &stm->textPalette,
 			.pre = stm->preCache.get(),
@@ -2240,8 +2244,10 @@ rpl::producer<> TTLVoiceStops(FullMsgId fullId) {
 
 int Document::visualContentTopOffset(LayoutMode mode) const {
 	if (mode == LayoutMode::Grouped) {
-		// FIX: Skip the name area (approx 10px) to start selection at icon
-		const auto forcedTop = 10; 
+		const auto &st = st::msgFileLayoutGrouped;
+		// Skip title (sender name area) to start selection at visual element
+		const auto titleHeight = st.nameTop + st::semiboldFont->height;
+		const auto forcedTop = titleHeight + 2; // match draw layout spacing
 		if (downloadInCorner()) {
 			return forcedTop + st::historyAudioDownloadShift;
 		}
