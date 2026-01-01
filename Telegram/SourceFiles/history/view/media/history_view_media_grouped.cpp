@@ -840,16 +840,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					}
 				}
 				const auto &docStyle = hasThumb ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
-				
-				// FIX: Replicate Document::draw logic for visual alignment
-				const auto forcedTop = 2;
-				const auto delta = forcedTop - docStyle.padding.top();
-				const auto topMinus = part.content->isBubbleTop() ? 0 : st::msgFileTopMinus;
-				const auto nametop = docStyle.nameTop + delta - topMinus;
-				const auto statustop = nametop + st::semiboldFont->height + nametop;
-
+				const auto statustop = docStyle.statusTop;
 				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent;
-				
+
 				const int iconGap = 1;
 				const int textGap = st::msgDateFont->width(' ');
 				const int iconW = st::historyViewsWidth;
@@ -913,50 +906,27 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 						infoText += QString::number(msgId.bare);
 					}
 				}
-				if (infoText.isEmpty()) continue;
 
-				p.setFont(st::msgDateFont);
-				p.setPen(stm->msgDateFg);
-				
-				// Re-check thumb logic for style
-				bool hasThumb = false;
-				if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
-					if (const auto document = fileMedia->document()) {
-						hasThumb = document->hasThumbnail() && !document->isSong();
+				if (!infoText.isEmpty()) {
+					p.setFont(st::msgDateFont);
+					p.setPen(stm->msgDateFg);
+
+					const auto itemRect = part.geometry.translated(0, groupPadding.top());
+					bool hasThumb = false;
+					if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
+						if (const auto document = fileMedia->document()) {
+							hasThumb = document->hasThumbnail() && !document->isSong();
+						}
 					}
-				}
-				const auto &docStyle = hasThumb ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
-				
-				// FIX: Replicate Document::draw logic for visual alignment
-				const auto forcedTop = 2;
-				const auto delta = forcedTop - docStyle.padding.top();
-				const auto topMinus = part.content->isBubbleTop() ? 0 : st::msgFileTopMinus;
-				const auto nametop = docStyle.nameTop + delta - topMinus;
-				const auto statustop = nametop + st::semiboldFont->height + nametop;
-				
-				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent;
+					const auto &docStyle = hasThumb ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
+					const auto statustop = docStyle.statusTop;
+					const auto textWidth = st::msgDateFont->width(infoText);
+					
+					const auto textX = itemRect.x() + itemRect.width() - textWidth - st::msgDateImgDelta;
+					const auto textY = itemRect.y() + statustop + st::normalFont->ascent;
 
-				const int textW = st::msgDateFont->width(infoText);
-				int x = itemRect.x() + itemRect.width() - textW - st::msgDateImgDelta;
-				
-				// Prevent overlap with Size Text
-				int reservedLeft = 0;
-				const int nameleft = docStyle.padding.left() + docStyle.thumbSize + docStyle.thumbSkip;
-				QString statusText;
-				if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
-					if (const auto document = fileMedia->document()) {
-						statusText = Ui::FormatSizeText(document->size);
-					}
+					p.drawText(textX, textY, infoText);
 				}
-				if (!statusText.isEmpty()) {
-					reservedLeft = nameleft + st::normalFont->width(statusText) + st::normalFont->spacew;
-				}
-				if (reservedLeft > 0) {
-					int minX = reservedLeft + st::normalFont->spacew;
-					if (x < minX) x = minX;
-				}
-
-				p.drawText(x, baseY, infoText);
 			}
 		} 
 		// --- Grid Mode Info Bubbles ---
