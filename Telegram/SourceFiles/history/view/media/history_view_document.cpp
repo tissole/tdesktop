@@ -605,7 +605,7 @@ QSize Document::countOptimalSize() {
 	}
 	
 	if (captioned) {
-		const auto captionGap = 4;
+		const auto captionGap = 6;
 		const auto gapTop = captionGap;
 		const auto gapBottom = captionGap + st::msgPadding.bottom();
 		
@@ -642,8 +642,9 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	// FIX: Center caption: Balanced spacing (4px).
-	const auto captionGap = 4;
+	// FIX: Center caption: Balanced spacing (6px).
+	// Synced with sizeForGrouping (Column Album).
+	const auto captionGap = 6;
 	const auto gapTop = captionGap;
 	const auto gapBottom = captionGap + st::msgPadding.bottom();
 
@@ -1113,8 +1114,8 @@ void Document::draw(
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
 		
-		// FIX: Use congruent top spacing (gapTop = 4)
-		const auto gapTop = 4;
+		// FIX: Use congruent top spacing (gapTop = 6)
+		const auto gapTop = 6;
 		
 		captioned->caption.draw(p, {
 			.position = { st::msgPadding.left(), visualElementBottom + gapTop - topMinus },
@@ -2243,17 +2244,6 @@ rpl::producer<> TTLVoiceStops(FullMsgId fullId) {
 }
 
 int Document::visualContentTopOffset(LayoutMode mode) const {
-	if (mode == LayoutMode::Grouped) {
-		const auto &st = st::msgFileLayoutGrouped;
-		// Skip title (sender name area) to start selection at visual element
-		const auto titleHeight = st.nameTop + st::semiboldFont->height;
-		const auto forcedTop = titleHeight + 2; // match draw layout spacing
-		if (downloadInCorner()) {
-			return forcedTop + st::historyAudioDownloadShift;
-		}
-		return forcedTop;
-	}
-	
 	const auto forcedTop = 2;
 	if (downloadInCorner()) {
 		// See Document::drawCornerDownload
@@ -2262,6 +2252,10 @@ int Document::visualContentTopOffset(LayoutMode mode) const {
 			? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 			: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 		return (mode == LayoutMode::Grouped ? st.padding.top() : forcedTop) + st::historyAudioDownloadShift;
+	}
+
+	if (mode == LayoutMode::Grouped) {
+		return st::msgFileLayoutGrouped.padding.top();
 	}
 
 	return forcedTop;
