@@ -604,13 +604,15 @@ QSize Document::countOptimalSize() {
 		} 
 	}
 	
+	int captionHeight = 0;
 	if (captioned) {
-		const auto captionGap = 4;
-		const auto gapTop = captionGap;
-		const auto gapBottom = captionGap + st::msgPadding.bottom();
-		minHeight = visualElementBottom + gapTop + _caption.countHeight(newWidth) + gapBottom;
-	} else {
-		minHeight = visualElementBottom + st::msgPadding.bottom();
+		auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
+		captionHeight = captioned->caption.countHeight(captionw);
+		minHeight += captionHeight;
+	}
+
+	if (hasCaptionContent) {
+		minHeight += verticalGap; // Bottom Gap
 	}
 	
 	if (!isBubbleTop()) {
@@ -640,13 +642,10 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	// FIX: Center caption: Equal spacing above and below (congruent).
-	// User requested space above and below.
-	const auto captionGap = 4;
-	const auto gapTop = captionGap;
-	const auto gapBottom = captionGap + st::msgPadding.bottom();
+	// FIX: Center caption by spacing equally from top (icon) and bottom (bubble edge).
+	const auto verticalGap = st::msgPadding.bottom() + 4;
 
-	newHeight += gapTop; // Top Gap
+	newHeight += verticalGap; // Top Gap
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
@@ -662,7 +661,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		newHeight += gapBottom; // Bottom Gap
+		newHeight += verticalGap; // Bottom Gap
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -1112,11 +1111,11 @@ void Document::draw(
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
 		
-		// FIX: Use congruent top spacing (gapTop)
-		const auto gapTop = 4;
+		// FIX: Use congruent top spacing (verticalGap)
+		const auto verticalGap = st::msgPadding.bottom() + 4;
 		
 		captioned->caption.draw(p, {
-			.position = { st::msgPadding.left(), visualElementBottom + gapTop - topMinus },
+			.position = { st::msgPadding.left(), visualElementBottom + verticalGap - topMinus },
 			.availableWidth = captionw,
 			.palette = &stm->textPalette,
 			.pre = stm->preCache.get(),
@@ -2242,16 +2241,23 @@ rpl::producer<> TTLVoiceStops(FullMsgId fullId) {
 }
 
 int Document::visualContentTopOffset(LayoutMode mode) const {
-	const auto forcedTop = 2;
+	const auto thumbed = false;
+	const auto &st = (mode == LayoutMode::Full)
+		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
+		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
+
+	// The visual content (icon/thumb) starts after the top padding.
+	// In draw(), forcedTop overrides this for Single Files, but for GroupedMedia
+	// we want to respect the layout structure if it includes gaps.
+	// However, user says "includes empty space".
+	// Let's rely on st.padding.top() which usually defines that space.
+	auto offset = st.padding.top();
+
 	if (downloadInCorner()) {
-		// See Document::drawCornerDownload
-		const auto thumbed = false;
-		const auto &st = (mode == LayoutMode::Full)
-			? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
-			: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-		return forcedTop + st::historyAudioDownloadShift;
+		// Corner download might shift things.
+		offset += st::historyAudioDownloadShift;
 	}
-	return forcedTop;
+	return offset;
 }
 
 int Document::visualContentBottomOffset(LayoutMode mode) const {
