@@ -575,8 +575,7 @@ QSize Document::countOptimalSize() {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	minHeight += 4; // Gap between visual element and caption
-
+	minHeight += 6; // Gap between visual element and caption
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -609,7 +608,7 @@ QSize Document::countOptimalSize() {
 	}
 
 	if (hasCaptionContent) {
-		minHeight += 10 + (captionHeight / 25); // Dynamic padding
+		minHeight += 6; // Bottom gap after caption
 	}
 	
 	if (!isBubbleTop()) {
@@ -639,8 +638,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	newHeight += 4; // Gap between visual element and caption
-
+	newHeight += 6; // Gap between visual element and caption
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
@@ -656,7 +654,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		newHeight += 10 + (captionHeight / 25); // Dynamic padding
+		newHeight += 6; // Bottom gap after caption
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -1106,7 +1104,7 @@ void Document::draw(
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
 		captioned->caption.draw(p, {
-			.position = { st::msgPadding.left(), visualElementBottom + 4 },
+			.position = { st::msgPadding.left(), visualElementBottom + 6 },
 			.availableWidth = captionw,
 			.palette = &stm->textPalette,
 			.pre = stm->preCache.get(),
@@ -1962,7 +1960,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		const int captionStart = visualBottomOfElement + 6; 
 		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 6; 
 	} else {
-		finalHeight = visualBottomOfElement + 6; 
+		finalHeight = visualBottomOfElement; 
 	}
 	height = finalHeight;
 	return { maxWidth, height };
@@ -1992,7 +1990,7 @@ QSize Document::sizeForGrouping(int width) const {
 		const int captionStart = visualBottomOfElement + 6;
 		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 6; 
 	} else {
-		finalHeight = visualBottomOfElement + 6; 
+		finalHeight = visualBottomOfElement; 
 	}
 	height = finalHeight;
 	return { maxWidth(), height };

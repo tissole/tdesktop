@@ -1789,9 +1789,17 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		}
 		const auto &geometry = part.geometry;
 		
-		// Issues 19-22 Fix: Selection covers full item height.
-		// Last item should include the full height (including bottom 2px margin).
 		int visualHeight = geometry.height();
+		if (const auto captioned = part.item->Get<HistoryDocumentCaptioned>()) {
+			// Selection already includes caption height in geometry.height() due to sizeForGrouping
+			// but we ensure it covers the full slot. 
+			// No change needed here if geometry.height() is correct, but let's be explicit
+			// about where the 'bottom element' is for no-caption cases.
+		} else {
+			// For no-caption items, geometry.height() includes the 6px gap (from sizeForGrouping/Optimal).
+			// We subtract it to end at the bottom item element.
+			visualHeight -= 6;
+		}
 
 		if (result.empty()
 			|| (result.back().top + result.back().height
@@ -1812,8 +1820,10 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		part.top += groupPadding.top();
 	}
 	if (IsGroupItemSelection(selection, 0)) {
-		result.front().top -= groupPadding.top();
-		result.front().height += groupPadding.top();
+		// Selection starts at the top element. 
+		// If we are at the very first item, we skip the bubble top padding
+		// to start exactly at the element.
+		// (The geometry already starts at 0 internally).
 	}
 	
 	return result;
