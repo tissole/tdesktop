@@ -635,12 +635,12 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	const int baseTop = 2; 
 	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); 
-	auto newHeight = visualBottomOfElement;
 	
+	accumulate_min(newWidth, maxWidth());
+
+	auto newHeight = visualBottomOfElement;
 	const bool hasCaptionContent = captioned || hasTranscribe;
-
 	newHeight += 6; // Gap between visual element and caption
-
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
@@ -672,7 +672,6 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight -= st::msgFileTopMinus;
 	}
 
-	accumulate_min(newWidth, maxWidth());
 	return { newWidth, newHeight };
 }
 
@@ -1530,6 +1529,10 @@ TextState Document::textState(
 		}
 	}
 
+	const auto visualElementBottomNoMinus = calculateVisualElementBottom(forcedTop, contentHeight, false);
+	const auto visualElementBottom = visualElementBottomNoMinus - topMinus;
+	auto currentCaptionTop = visualElementBottom + 6;
+
 	const auto voice = Get<HistoryDocumentVoice>();
 	auto transcribeLength = 0;
 	auto transcribeHeight = 0;
@@ -1562,28 +1565,28 @@ TextState Document::textState(
 			auto captionw = width - st::msgPadding.left() - st::msgPadding.right();
 			transcribeHeight = voice->transcribeText.countHeight(captionw);
 			painth -= transcribeHeight;
-			if (point.y() >= bottom && point.y() < bottom + transcribeHeight) {
+			if (point.y() >= currentCaptionTop && point.y() < currentCaptionTop + transcribeHeight) {
 				result = TextState(_parent, voice->transcribeText.getState(
-					point - QPoint(st::msgPadding.left(), bottom),
+					point - QPoint(st::msgPadding.left(), currentCaptionTop),
 					width - st::msgPadding.left() - st::msgPadding.right(),
 					request.forText()));
 				return result;
 			}
-			bottom += transcribeHeight;
+			currentCaptionTop += transcribeHeight;
 		}
 	}
 
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
-		if (point.y() >= bottom) {
+		if (point.y() >= currentCaptionTop) {
 			result.symbol += transcribeLength;
 		}
 		if (transcribeHeight) {
 			painth -= st::mediaCaptionSkip;
-			bottom += st::mediaCaptionSkip;
+			currentCaptionTop += st::mediaCaptionSkip;
 		}
-		if (point.y() >= bottom) {
+		if (point.y() >= currentCaptionTop) {
 			result = TextState(_parent, captioned->caption.getState(
-				point - QPoint(st::msgPadding.left(), bottom),
+				point - QPoint(st::msgPadding.left(), currentCaptionTop),
 				width - st::msgPadding.left() - st::msgPadding.right(),
 				request.forText()));
 			result.symbol += transcribeLength;
@@ -2117,16 +2120,13 @@ int Document::calculateVisualElementBottom(int baseTop, int contentBoundingHeigh
     int visualBottom = baseTop - currentTopMinus;
 
     const auto thumbed = Has<HistoryDocumentThumbed>();
-    const auto &st_layout = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-    const auto currentThumbSize = st_layout.thumbSize; // The current layout's bounding box size for the element
-
     if (thumbed) { 
-        visualBottom += currentThumbSize; // Bottom of the bounding box is the visual bottom
+        visualBottom += contentBoundingHeight;
     } else if (downloadInCorner()) { 
         visualBottom += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
     } else {
         const auto innerSize = st::msgFileLayout.thumbSize; // The actual circle diameter
-        visualBottom += (currentThumbSize - innerSize) / 2 + innerSize;
+        visualBottom += (contentBoundingHeight - innerSize) / 2 + innerSize;
     }
     return visualBottom;
 }
