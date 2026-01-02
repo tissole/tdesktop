@@ -1788,28 +1788,22 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 			continue;
 		}
 		const auto &geometry = part.geometry;
-		const auto &captionRect = part.captionRect;
-		const bool hasCaption = !captionRect.isEmpty();
 		
-		// Column Album Selection Fix:
-		// Selection starts at geometry top (visual top element).
-		// Selection ends after caption if present, otherwise at geometry bottom.
-		int visualTop = geometry.top();
-		int visualHeight = hasCaption 
-			? (captionRect.top() + captionRect.height() - visualTop)
-			: geometry.height();
+		// Issues 19-22 Fix: Selection covers full item height.
+		// Last item should include the full height (including bottom 2px margin).
+		int visualHeight = geometry.height();
 
 		if (result.empty()
 			|| (result.back().top + result.back().height
-				< visualTop)
-			|| (result.back().top > visualTop + visualHeight)) {
-			result.push_back({ visualTop, visualHeight });
+				< geometry.top())
+			|| (result.back().top > geometry.top() + visualHeight)) {
+			result.push_back({ geometry.top(), visualHeight });
 		} else {
 			auto &last = result.back();
-			const auto newTop = std::min(last.top, visualTop);
+			const auto newTop = std::min(last.top, geometry.top());
 			const auto newHeight = std::max(
 				last.top + last.height - newTop,
-				visualTop + visualHeight - newTop);
+				geometry.top() + visualHeight - newTop);
 			last = Ui::BubbleSelectionInterval{ newTop, newHeight };
 		}
 	}

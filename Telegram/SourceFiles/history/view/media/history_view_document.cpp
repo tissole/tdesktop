@@ -609,7 +609,7 @@ QSize Document::countOptimalSize() {
 	}
 
 	if (hasCaptionContent) {
-		minHeight += 12; // 6px top + 6px bottom
+		minHeight += 10 + (captionHeight / 25); // Dynamic padding
 	}
 	
 	if (!isBubbleTop()) {
@@ -656,7 +656,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		newHeight += 12; // 6px top + 6px bottom
+		newHeight += 10 + (captionHeight / 25); // Dynamic padding
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -1105,15 +1105,9 @@ void Document::draw(
 		p.setPen(stm->historyTextFg);
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
-		
-		// Issue 4 Fix: Center caption between visual element bottom and message margin.
-		// Total reserved is 12px (6 top + 6 bottom). Center text if there's enough room.
-		const int textHeight = captioned->caption.countHeight(captionw);
-		const int availableWidth = captionw;
-		
 		captioned->caption.draw(p, {
-			.position = { st::msgPadding.left(), visualElementBottom + 6 },
-			.availableWidth = availableWidth,
+			.position = { st::msgPadding.left(), visualElementBottom + 4 },
+			.availableWidth = captionw,
 			.palette = &stm->textPalette,
 			.pre = stm->preCache.get(),
 			.blockquote = context.quoteCache(parent()->contentColorIndex()),
@@ -1126,6 +1120,8 @@ void Document::draw(
 			.highlight = highlightRequest ? &*highlightRequest : nullptr,
 			.useFullWidth = true,
 		});
+		// Ensure dynamic padding matches countSize logic for consistent layout
+		// (Though draw doesn't use bottom val for this, it keeps variables sane)
 	}
 
 
