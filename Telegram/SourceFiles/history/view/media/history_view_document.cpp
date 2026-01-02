@@ -591,13 +591,12 @@ QSize Document::countOptimalSize() {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
-		minHeight += 8 + voice->transcribeText.countHeight(captionw);
+		minHeight += 6 + voice->transcribeText.countHeight(captionw);
 		
 		if (captioned) {
 			minHeight += st::mediaCaptionSkip;
 		} else {
-			const auto bottomGap = 10 - st::msgPadding.bottom();
-			minHeight += bottomGap; // Bottom padding
+			minHeight += 6; // Bottom padding
 		}
 	}
 	
@@ -605,10 +604,9 @@ QSize Document::countOptimalSize() {
 		auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
 		const auto captionHeight = captioned->caption.countHeight(captionw);
 		if (!hasTranscribe) {
-			minHeight += 8; // Top padding
+			minHeight += 6; // Top padding
 		}
-		const auto bottomGap = 10 - st::msgPadding.bottom();
-		minHeight += captionHeight + bottomGap; // text + bottom padding
+		minHeight += captionHeight + 6; // text + bottom padding
 	}
 	
 	if (!isBubbleTop()) {
@@ -637,25 +635,21 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	accumulate_min(newWidth, maxWidth());
-
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
-		newHeight += 8 + voice->transcribeText.countHeight(captionw);
+		newHeight += 6 + voice->transcribeText.countHeight(captionw);
 		if (captioned) {
 			newHeight += st::mediaCaptionSkip;
 		} else {
-			const auto bottomGap = 10 - st::msgPadding.bottom();
-			newHeight += bottomGap; // Bottom padding
+			newHeight += 6; // Bottom padding
 		}
 	}
 	if (captioned) {
 		const auto captionHeight = captioned->caption.countHeight(captionw);
 		if (!hasTranscribe) {
-			newHeight += 8; // Top padding
+			newHeight += 6; // Top padding
 		}
-		const auto bottomGap = 10 - st::msgPadding.bottom();
-		newHeight += captionHeight + bottomGap; // text + bottom padding
+		newHeight += captionHeight + 6; // text + bottom padding
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -671,6 +665,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight -= st::msgFileTopMinus;
 	}
 
+	accumulate_min(newWidth, maxWidth());
 	return { newWidth, newHeight };
 }
 
@@ -1091,7 +1086,7 @@ void Document::draw(
 	
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, true) - topMinus;
 	
-	auto curY = visualElementBottom + 8; // 8px top margin
+	auto curY = visualElementBottom + 6; // 6px top margin
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
