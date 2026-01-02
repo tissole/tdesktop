@@ -97,14 +97,6 @@ public:
 	bool hasHeavyPart() const override;
 	void unloadHeavyPart() override;
 
-	[[nodiscard]] int calculateVisualElementTop(
-		int baseTop,
-		int topMinus) const;
-	[[nodiscard]] int calculateVisualElementBottom(
-		int baseTop,
-		int contentBoundingHeight,
-		int topMinus) const;
-
 protected:
 	float64 dataProgress() const override;
 	bool dataFinished() const override;
@@ -160,6 +152,13 @@ private:
 		StateRequest request,
 		LayoutMode mode) const;
 
+	[[nodiscard]] int calculateVisualElementTop(
+		int baseTop,
+		int topMinus) const;
+	[[nodiscard]] int calculateVisualElementBottom(
+		int baseTop,
+		int contentBoundingHeight,
+		int topMinus) const;
 
 	not_null<DocumentData*> _data;
 	mutable std::shared_ptr<Data::DocumentMedia> _dataMedia;
