@@ -568,20 +568,23 @@ QSize Document::countOptimalSize() {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
-	const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+	const int baseTop = 2; 
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); 
 	const int captionGap = 6;
 	const int bottomMargin = 6;
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, 0);
 	
-	int minHeightValue = 0;
+	const auto captioned = Get<HistoryDocumentCaptioned>();
+	const bool hasCaptionContent = captioned || hasTranscribe;
+
+	int minHeight = 0;
 	if (hasTranscribe) {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
-		minHeightValue = visualBottomOfElement + captionGap + voice->transcribeText.countHeight(captionw);
+		minHeight = visualBottomOfElement + captionGap + voice->transcribeText.countHeight(captionw);
 		
 		if (captioned) {
-			minHeightValue += st::mediaCaptionSkip;
+			minHeight += st::mediaCaptionSkip;
 		} 
 	}
 	
@@ -590,21 +593,23 @@ QSize Document::countOptimalSize() {
 		auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
 		captionHeight = captioned->caption.countHeight(captionw);
 		if (hasTranscribe) {
-			minHeightValue += captionHeight;
+			minHeight += captionHeight;
 		} else {
-			minHeightValue = visualBottomOfElement + captionGap + captionHeight;
+			minHeight = visualBottomOfElement + captionGap + captionHeight;
 		}
 	}
 
 	if (hasCaptionContent) {
-		minHeightValue += bottomMargin;
+		minHeight += bottomMargin;
 	} else {
-		minHeightValue = visualBottomOfElement + bottomMargin;
+		minHeight = visualBottomOfElement + bottomMargin;
 	}
 	
-	minHeightValue -= topMinus;
+	if (!isBubbleTop()) {
+		minHeight -= st::msgFileTopMinus;
+	}
 	
-	return { maxWidth, minHeightValue };
+	return { maxWidth, minHeight };
 }
 
 QSize Document::countCurrentSize(int newWidth) {
@@ -621,11 +626,13 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 
-	const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+	const int baseTop = 2; 
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); 
 	const int captionGap = 6;
 	const int bottomMargin = 6;
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, 0);
 	
+	const bool hasCaptionContent = captioned || hasTranscribe;
+
 	int newHeightValue = 0;
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
@@ -652,11 +659,16 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
-		result.setHeight(newHeightValue - topMinus); // Use our newHeight.
+		result.setHeight(newHeightValue); // Use our newHeight.
+		if (!isBubbleTop()) {
+			result.setHeight(result.height() - st::msgFileTopMinus);
+		}
 		return result;
 	}
 
-	newHeightValue -= topMinus;
+	if (!isBubbleTop()) {
+		newHeightValue -= st::msgFileTopMinus;
+	}
 
 	accumulate_min(newWidth, maxWidth());
 	return { newWidth, newHeightValue };
@@ -700,28 +712,32 @@ void Document::draw(
 	const auto showPause = updateStatusText();
 	const auto radial = isRadialAnimation();
 
+	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus; // Revert to original: this function handles its own topMinus
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (mode == LayoutMode::Full)
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 
 	const auto forcedTop = 2;
-	const auto topMinus = (mode == LayoutMode::Full && !isBubbleTop()) ? st::msgFileTopMinus : 0;
+	const auto delta = forcedTop - st.padding.top();
+
+	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
+	const auto nametop = st.nameTop + delta - topMinus;
+	const auto nameright = st.padding.right();
+	
+	const auto nameHeight = st::semiboldFont->height;
+	const auto statustop = nametop + nameHeight + nametop; 
+
+	const auto linktop = st.linkTop + delta - topMinus;
+	const auto captioned = Get<HistoryDocumentCaptioned>();
+	const auto bottomPadding = 10;
 	
 	auto contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
-
-	const auto visualTop = calculateVisualElementTop(forcedTop, topMinus);
-	const auto visualBottom = calculateVisualElementBottom(forcedTop, contentHeight, topMinus);
-
-	const auto delta = forcedTop - st.padding.top();
-	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
-	const auto nametop = st.nameTop + delta - topMinus;
-	const auto statustop = st.statusTop + delta - topMinus;
-	const auto linktop = st.linkTop + delta - topMinus;
-
+	const auto bottom = forcedTop + contentHeight + bottomPadding - topMinus;
+	
 	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
 	const auto inner = QRect(rthumb.x() + (rthumb.width() - innerSize) / 2, rthumb.y() + (rthumb.height() - innerSize) / 2, innerSize, innerSize);
@@ -969,10 +985,9 @@ void Document::draw(
 			inTTLViewer);
 		p.restore();
 	} else if (const auto named = Get<HistoryDocumentNamed>()) {
-		const auto nametop_val = nametop;
 		p.setPen(stm->historyFileNameFg);
 		named->name.draw(p, {
-			.position = QPoint(nameleft, nametop_val),
+			.position = QPoint(nameleft, nametop),
 			.outerWidth = width,
 			.availableWidth = namewidth,
 			.elisionLines = 1,
@@ -1074,7 +1089,10 @@ void Document::draw(
 
 	auto selection = context.selection;
 	
-	auto captiontop = visualBottom + 6;
+	const int captionGap = 6;
+	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
+	
+	auto captiontop = visualElementBottom + captionGap;
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
@@ -1929,19 +1947,19 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	const int bottomMargin = 6;
 	const_cast<Document*>(this)->refreshCaption(last);
 
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, 0);
-	int finalHeightValue = 0;
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false);
+	int finalHeight = 0;
 
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		finalHeightValue = visualBottomOfElement + captionGap + captioned->caption.countHeight(captionw) + bottomMargin; 
+		finalHeight = visualBottomOfElement + captionGap + captioned->caption.countHeight(captionw) + bottomMargin; 
 	} else {
-		finalHeightValue = visualBottomOfElement + bottomMargin; 
+		finalHeight = visualBottomOfElement + bottomMargin; 
 	}
-	return { maxWidth, finalHeightValue };
+	return { maxWidth, finalHeight };
 }
 
 
@@ -1957,19 +1975,19 @@ QSize Document::sizeForGrouping(int width) const {
 	const int bottomMargin = 6;
 
 	const int baseTop = 2;
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, 0);
-	int finalHeightValue = 0;
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false);
+	int finalHeight = 0;
 	
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		auto captionw = width
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		finalHeightValue = visualBottomOfElement + captionGap + captioned->caption.countHeight(captionw) + bottomMargin; 
+		finalHeight = visualBottomOfElement + captionGap + captioned->caption.countHeight(captionw) + bottomMargin; 
 	} else {
-		finalHeightValue = visualBottomOfElement + bottomMargin; 
+		finalHeight = visualBottomOfElement + bottomMargin; 
 	}
-	return { maxWidth(), finalHeightValue };
+	return { maxWidth(), finalHeight };
 }
 
 void Document::drawGrouped(
@@ -2085,37 +2103,23 @@ Ui::Text::String Document::createCaption() const {
 	return File::createCaption(_realParent);
 }
 
-int Document::calculateVisualElementTop(int baseTop, int topMinus) const {
-	int visualTop = baseTop - topMinus;
+int Document::calculateVisualElementBottom(int baseTop, int contentBoundingHeight, bool includeTopMinus) const {
+    const auto currentTopMinus = includeTopMinus ? (isBubbleTop() ? 0 : st::msgFileTopMinus) : 0;
+    int visualBottom = baseTop - currentTopMinus;
 
-	if (Has<HistoryDocumentThumbed>()) {
-		// No extra offset for thumbnails.
-	} else if (downloadInCorner()) {
-		visualTop += st::historyAudioDownloadShift;
-	} else {
-		const auto thumbed = Has<HistoryDocumentThumbed>();
-		const auto &st_layout = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-		const auto innerSize = st::msgFileLayout.thumbSize; // The actual circle diameter
-		visualTop += (st_layout.thumbSize - innerSize) / 2;
-	}
-	return visualTop;
-}
+    const auto thumbed = Has<HistoryDocumentThumbed>();
+    const auto &st_layout = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
+    const auto currentThumbSize = st_layout.thumbSize; // The current layout's bounding box size for the element
 
-int Document::calculateVisualElementBottom(int baseTop, int contentBoundingHeight, int topMinus) const {
-	int visualBottom = baseTop - topMinus;
-
-	const auto thumbed = Has<HistoryDocumentThumbed>();
-	const auto &st_layout = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-
-	if (thumbed) { 
-		visualBottom += st_layout.thumbSize;
-	} else if (downloadInCorner()) { 
-		visualBottom += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-	} else {
-		const auto innerSize = st::msgFileLayout.thumbSize; // The actual circle diameter
-		visualBottom += (st_layout.thumbSize - innerSize) / 2 + innerSize;
-	}
-	return visualBottom;
+    if (thumbed) { 
+        visualBottom += currentThumbSize; // Bottom of the bounding box is the visual bottom
+    } else if (downloadInCorner()) { 
+        visualBottom += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+    } else {
+        const auto innerSize = st::msgFileLayout.thumbSize; // The actual circle diameter
+        visualBottom += (currentThumbSize - innerSize) / 2 + innerSize;
+    }
+    return visualBottom;
 }
 
 void Document::TooltipFilename::setElided(bool value) {
