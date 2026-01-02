@@ -575,7 +575,7 @@ QSize Document::countOptimalSize() {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	minHeight += 8; // Gap between visual element and caption
+	minHeight += 6; // Gap between visual element and caption
 
 
 	if (isBubbleBottom() && !hasTranscribe) {
@@ -609,7 +609,7 @@ QSize Document::countOptimalSize() {
 	}
 
 	if (hasCaptionContent) {
-		minHeight += 8; // Consistent bottom gap
+		minHeight += 6; // Consistent bottom gap
 	}
 	
 	if (!isBubbleTop()) {
@@ -640,7 +640,7 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	auto newHeight = visualBottomOfElement;
 	const bool hasCaptionContent = captioned || hasTranscribe;
-	newHeight += 8; // Gap between visual element and caption
+	newHeight += 6; // Gap between visual element and caption
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
@@ -656,7 +656,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		newHeight += 8; // Consistent bottom gap
+		newHeight += 6; // Consistent bottom gap
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -1093,7 +1093,7 @@ void Document::draw(
 	const auto visualElementBottomNoMinus = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	const auto visualElementBottom = visualElementBottomNoMinus - topMinus;
 	
-	auto captiontop = visualElementBottom + 8; // Gap between visual element and caption
+	auto captiontop = visualElementBottom + 6; // Gap between visual element and caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
@@ -1531,7 +1531,7 @@ TextState Document::textState(
 
 	const auto visualElementBottomNoMinus = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	const auto visualElementBottom = visualElementBottomNoMinus - topMinus;
-	auto currentCaptionTop = visualElementBottom + 8;
+	auto currentCaptionTop = visualElementBottom + 6;
 
 	const auto voice = Get<HistoryDocumentVoice>();
 	auto transcribeLength = 0;
@@ -1963,10 +1963,10 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		const int captionStart = visualBottomOfElement + 8; 
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 8; 
+		const int captionStart = visualBottomOfElement + 6; 
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 6; 
 	} else {
-		finalHeight = visualBottomOfElement + 8; 
+		finalHeight = visualBottomOfElement + 6; 
 	}
 	height = finalHeight;
 	return { maxWidth, height };
@@ -1993,13 +1993,13 @@ QSize Document::sizeForGrouping(int width) const {
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		const int captionStart = visualBottomOfElement + 8;
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 8; 
+		const int captionStart = visualBottomOfElement + 6;
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 6; 
 	} else {
-		finalHeight = visualBottomOfElement + 8; 
+		finalHeight = visualBottomOfElement + 6; 
 	}
 	height = finalHeight;
-	return { width, height };
+	return { maxWidth(), height };
 }
 
 void Document::drawGrouped(
