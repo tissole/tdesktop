@@ -1789,27 +1789,31 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		}
 		const auto &geometry = part.geometry;
 		
-		const auto topMinus = (i == 0) ? 0 : st::msgFileTopMinus;
-		const int visualTop = geometry.top() + 2 - topMinus;
-		const int visualHeight = geometry.height() - (2 - topMinus) - 6;
+		// Issues 19-22 Fix: Selection covers full item height.
+		// Last item should include the full height (including bottom 2px margin).
+		int visualHeight = geometry.height();
 
 		if (result.empty()
 			|| (result.back().top + result.back().height
-				< visualTop)
-			|| (result.back().top > visualTop + visualHeight)) {
-			result.push_back({ visualTop, visualHeight });
+				< geometry.top())
+			|| (result.back().top > geometry.top() + visualHeight)) {
+			result.push_back({ geometry.top(), visualHeight });
 		} else {
 			auto &last = result.back();
-			const auto newTop = std::min(last.top, visualTop);
+			const auto newTop = std::min(last.top, geometry.top());
 			const auto newHeight = std::max(
 				last.top + last.height - newTop,
-				visualTop + visualHeight - newTop);
+				geometry.top() + visualHeight - newTop);
 			last = Ui::BubbleSelectionInterval{ newTop, newHeight };
 		}
 	}
 	const auto groupPadding = groupedPadding();
 	for (auto &part : result) {
 		part.top += groupPadding.top();
+	}
+	if (IsGroupItemSelection(selection, 0)) {
+		result.front().top -= groupPadding.top();
+		result.front().height += groupPadding.top();
 	}
 	
 	return result;
