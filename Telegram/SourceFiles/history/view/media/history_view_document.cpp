@@ -417,14 +417,9 @@ void Document::fillNamedFromData(not_null<HistoryDocumentNamed*> named) {
 }
 
 QSize Document::countOptimalSize() {
-	const auto voice = Get<HistoryDocumentVoice>();
-	const auto captioned = Get<HistoryDocumentCaptioned>();
-	const auto thumbed = Get<HistoryDocumentThumbed>();
-	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
-	const int baseTop = 2;
 	auto hasTranscribe = false;
-
-	if (voice) {
+    const auto voice = Get<HistoryDocumentVoice>();
+    if (voice) {
 		const auto history = _realParent->history();
 		const auto session = &history->session();
 		const auto transcribes = &session->api().transcribes();
@@ -482,8 +477,10 @@ QSize Document::countOptimalSize() {
 				}
 			}
 		}
-	}
+    }
 
+	auto thumbed = Get<HistoryDocumentThumbed>();
+	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
 	if (thumbed) {
 		const auto &location = _data->thumbnailLocation();
 		auto tw = style::ConvertScale(location.width());
@@ -575,8 +572,7 @@ QSize Document::countOptimalSize() {
 	const int captionGap = 6;
 	const int bottomMargin = 6;
 	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, 0);
-	const bool hasCaptionContent = captioned || hasTranscribe;
-
+	
 	int minHeightValue = 0;
 	if (hasTranscribe) {
 		auto captionw = maxWidth
@@ -624,13 +620,12 @@ QSize Document::countCurrentSize(int newWidth) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
-	const int baseTop = 2;
+
 	const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 	const int captionGap = 6;
 	const int bottomMargin = 6;
 	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, 0);
-	const bool hasCaptionContent = captioned || hasTranscribe;
-
+	
 	int newHeightValue = 0;
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
@@ -710,23 +705,22 @@ void Document::draw(
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 
-	const int forcedTop = 2;
-	const int topMinus = (mode == LayoutMode::Full && !isBubbleTop()) ? st::msgFileTopMinus : 0;
+	const auto forcedTop = 2;
+	const auto topMinus = (mode == LayoutMode::Full && !isBubbleTop()) ? st::msgFileTopMinus : 0;
 	
-	int contentHeight = st.thumbSize;
+	auto contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
-	const int visualTop = calculateVisualElementTop(forcedTop, topMinus);
-	const int visualBottom = calculateVisualElementBottom(forcedTop, contentHeight, topMinus);
+	const auto visualTop = calculateVisualElementTop(forcedTop, topMinus);
+	const auto visualBottom = calculateVisualElementBottom(forcedTop, contentHeight, topMinus);
 
-	const int delta = forcedTop - st.padding.top();
-	const int nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
-	const int nameright = st.padding.right();
-	const int nametop = st.nameTop + delta - topMinus;
-	const int statustop = st.statusTop + delta - topMinus;
-	const int linktop = st.linkTop + delta - topMinus;
+	const auto delta = forcedTop - st.padding.top();
+	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
+	const auto nametop = st.nameTop + delta - topMinus;
+	const auto statustop = st.statusTop + delta - topMinus;
+	const auto linktop = st.linkTop + delta - topMinus;
 
 	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
