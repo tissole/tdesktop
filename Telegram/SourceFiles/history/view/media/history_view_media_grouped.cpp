@@ -595,11 +595,23 @@ void GroupedMedia::drawHighlight(
 			// The part geometry already includes the full height (baseTop=2 + content + caption if any).
 			// We need to align with the actual visual element position.
 			// In Document::sizeForGrouping, baseTop = 2 is where the visual element starts.
-			// And we have a 6px gap at the bottom after the caption or element.
-			const int offset = 2; // baseTop
-			int highlightY = rect.y() + offset;
-			int highlightHeight = rect.height() - (offset + 6); // offset + bottom gap
+			int highlightY = rect.y();
+			int highlightHeight = rect.height();
 
+			if (i == 0) {
+				// First Item: User reported rect.y() is "above" the button.
+				// Button logical pos is +2. Group padding is +3.
+				// We offset by 5px to align with visual start.
+				const int offset = 5;
+				highlightY += offset;
+				highlightHeight -= offset;
+			}
+			// For subsequent items (i > 0), rect.y() is already at the slot boundary,
+			// which is the correct start position for selection (at half-gap from previous item).
+			
+			// The geometry height already includes the caption area,
+			// so highlightHeight covers the full item including caption.
+			
 			_parent->paintCustomHighlight(
 				p,
 				copy,
