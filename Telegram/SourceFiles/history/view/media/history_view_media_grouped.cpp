@@ -594,11 +594,9 @@ void GroupedMedia::drawHighlight(
 			
 			// The part geometry already includes the full height (baseTop=2 + content + caption if any).
 			// We need to align with the actual visual element position.
-			// In Document::sizeForGrouping, baseTop = 2 is where the visual element starts.
-			// And we have a 6px gap at the bottom after the caption or element.
-			const int offset = 2; // baseTop
-			int highlightY = rect.y() + offset;
-			int highlightHeight = rect.height() - (offset + 6); // offset + bottom gap
+			// The element starts at visualTop.
+			int highlightY = rect.y();
+			int highlightHeight = rect.height() - 8; // Consistent 8px bottom gap
 
 			_parent->paintCustomHighlight(
 				p,
@@ -1777,9 +1775,8 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		}
 		const auto &geometry = part.geometry;
 		
-		const int offset = 2; // baseTop
-		int visualTop = geometry.top() + offset;
-		int visualHeight = geometry.height() - (offset + 6); // offset + bottom gap
+		int visualTop = geometry.top();
+		int visualHeight = geometry.height() - 8; // Consistent 8px bottom gap
 
 		if (result.empty()
 			|| (result.back().top + result.back().height
