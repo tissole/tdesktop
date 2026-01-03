@@ -1091,8 +1091,21 @@ void Document::draw(
 
 	auto selection = context.selection;
 	
-	// Fix: Account for topMinus in visual element bottom calculation to align caption correctly with shifted thumbnail
-	const auto visualElementBottom = calculateVisualElementBottom(forcedTop - topMinus, contentHeight, false);
+	// Explicitly calculate visual bottom to ensure alignment with countOptimalSize logic and avoid helper ambiguity
+	// Start at visual top (2px - topMinus)
+	int visualElementBottom = forcedTop - topMinus;
+	
+	if (thumbed) {
+		// File with Thumbnail
+		visualElementBottom += st.thumbSize;
+	} else if (downloadInCorner()) {
+		// Audio / Music
+		visualElementBottom += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+	} else {
+		// Simple File (No Thumb, No Audio)
+		// In Single Layout, the circle fills st.thumbSize (which comes from msgFileLayout)
+		visualElementBottom += st.thumbSize;
+	}
 	
 	auto captiontop = visualElementBottom + 6; // Gap between visual element and caption
 
