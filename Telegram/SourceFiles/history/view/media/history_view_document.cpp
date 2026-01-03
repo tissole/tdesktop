@@ -575,10 +575,12 @@ QSize Document::countOptimalSize() {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
+	const int bottomReserved = st::msgPadding.bottom();
+
 	if (hasCaptionContent) {
 		minHeight += 6; // Gap between visual element and caption
 	} else {
-		minHeight += 6; // Bottom gap for symmetry
+		minHeight += bottomReserved; 
 	}
 
 	if (isBubbleBottom() && !hasTranscribe) {
@@ -610,7 +612,7 @@ QSize Document::countOptimalSize() {
 	}
 
 	if (hasCaptionContent) {
-		minHeight += 6; // Bottom gap
+		minHeight += bottomReserved;
 	}
 	
 	return { maxWidth, minHeight };
@@ -635,11 +637,12 @@ QSize Document::countCurrentSize(int newWidth) {
 	auto newHeight = visualBottomOfElement;
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
+	const int bottomReserved = st::msgPadding.bottom();
 
 	if (hasCaptionContent) {
 		newHeight += 6; // Gap between visual element and caption
 	} else {
-		newHeight += 6; // Bottom gap
+		newHeight += bottomReserved;
 	}
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
@@ -654,7 +657,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	if (hasCaptionContent) {
-		newHeight += 6; // Bottom gap
+		newHeight += bottomReserved;
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -1082,9 +1085,25 @@ void Document::draw(
 
 	auto selection = context.selection;
 	
-	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, true);
+	const int baseTop = 2; 
+	const auto visualElementBottom = calculateVisualElementBottom(baseTop, contentHeight, true);
 	
-	auto captiontop = visualElementBottom + 6; // Gap between visual element and caption
+	const bool hasCaptionContent = (captioned || (voice && !voice->transcribeText.isEmpty()));
+	int captiontop = visualElementBottom + 6;
+	if (mode == LayoutMode::Full && hasCaptionContent) {
+		const int bottomReserved = st::msgPadding.bottom();
+		const int totalCaptionHeight = (height() - visualElementBottom - 6 - bottomReserved);
+		int contentHeight = 0;
+		if (voice && !voice->transcribeText.isEmpty()) {
+			contentHeight += voice->transcribeText.countHeight(captionw);
+			if (captioned) contentHeight += st::mediaCaptionSkip;
+		}
+		if (captioned) {
+			contentHeight += captioned->caption.countHeight(captionw);
+		}
+		// Center caption between visualElementBottom and the bottom padding start
+		captiontop = visualElementBottom + 6 + (totalCaptionHeight - contentHeight) / 2;
+	}
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
@@ -1984,26 +2003,37 @@ int Document::groupSelectionTop() const {
 	const auto thumbed = Has<HistoryDocumentThumbed>();
 	const auto &st_layout = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	const auto forcedTop = 2;
+    const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+
 	if (thumbed) {
-		return forcedTop;
+		return forcedTop - topMinus;
 	}
+    if (downloadInCorner()) {
+        return forcedTop - topMinus;
+    }
 	const auto innerSize = st::msgFileLayout.thumbSize;
-	return forcedTop + (st_layout.thumbSize - innerSize) / 2;
+	return forcedTop - topMinus + (st_layout.thumbSize - innerSize) / 2;
 }
 
 int Document::groupSelectionBottom() const {
 	const auto thumbed = Has<HistoryDocumentThumbed>();
 	const auto &st_layout = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	const auto forcedTop = 2;
-	// Calculate visual element bottom (circle/thumb/play button)
-	const int visualBottom = calculateVisualElementBottom(forcedTop, st_layout.thumbSize, false);
+    const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+	
+    int visualBottom = forcedTop - topMinus;
+    if (thumbed) {
+        visualBottom += st_layout.thumbSize;
+    } else if (downloadInCorner()) {
+        visualBottom += std::max(st_layout.thumbSize, st::historyAudioDownloadShift + st::historyAudioDownloadSize);
+    } else {
+        const auto innerSize = st::msgFileLayout.thumbSize;
+        visualBottom += (st_layout.thumbSize - innerSize) / 2 + innerSize;
+    }
 
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
-		const auto height = sizeForGrouping(width()).height();
-		// User wants it to end tight after caption.
-		// finalHeight = visualBottom + 6 + captionHeight + 6.
-		// height - 6 = visualBottom + 6 + captionHeight.
-		return height - 6;
+        const auto captionw = width() - st::msgPadding.left() - st::msgPadding.right();
+		return visualBottom + 6 + captioned->caption.countHeight(captionw);
 	}
 	return visualBottom;
 }
