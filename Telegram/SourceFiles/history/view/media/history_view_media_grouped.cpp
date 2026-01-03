@@ -6,7 +6,6 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/media/history_view_media_grouped.h"
-#include "history/view/media/history_view_document.h"
 
 #include "history/history_item_components.h"
 #include "history/history_item.h"
@@ -1788,63 +1787,23 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		if (!IsGroupItemSelection(selection, i)) {
 			continue;
 		}
-		const auto item = part.item;
-		const auto document = item->media() ? item->media()->document() : nullptr;
 		const auto &geometry = part.geometry;
-
-		// Calculate visual top and bottom for this item.
-		// forcedTop is 2px. topMinus is 2px for all but the very top bubble item.
-		const bool isBubbleTopItem = (i == 0 && isBubbleTop());
-		const int topMinus = isBubbleTopItem ? 0 : st::msgFileTopMinus;
-		const int forcedTop = 2;
-		const int tightTop = geometry.top() + forcedTop - topMinus;
-
-		int elementHeight = st::msgFileLayout.thumbSize;
-		if (document) {
-			bool hasThumb = document->hasThumbnail() && !document->isSong();
-			const auto &st = hasThumb ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
-			elementHeight = st.thumbSize;
-			if (document->isAudioFile() && item->allowsForward() && document->canBeStreamed(item) && !document->inappPlaybackFailed()) {
-				// Music files extension
-				elementHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-			}
-		}
-
-		int tightBottom = tightTop + elementHeight;
-
-		// Check for caption. Document handles transcribe text as well.
-		const auto captioned = item->Get<HistoryMessageCaptioned>();
-		// In Document view, we also consider voice transcribe as caption.
-		const auto docView = dynamic_cast<const Document*>(part.content.get());
-		const auto voice = docView ? docView->Get<HistoryDocumentVoice>() : nullptr;
-		const bool hasCaption = captioned || (voice && !voice->transcribeText.isEmpty());
-
-		if (hasCaption) {
-			const int captionw = geometry.width() - st::msgPadding.left() - st::msgPadding.right();
-			int textHeight = 0;
-			if (voice && !voice->transcribeText.isEmpty()) {
-				textHeight += voice->transcribeText.countHeight(captionw);
-				if (captioned) textHeight += st::mediaCaptionSkip;
-			}
-			if (captioned) {
-				textHeight += captioned->caption.countHeight(captionw);
-			}
-			tightBottom += 4 + textHeight; // 4px is gapBeforeCaption
-		}
-
-		const int intervalTop = tightTop;
-		const int intervalHeight = tightBottom - tightTop;
+		
+		// Issues 19-22 Fix: Selection covers full item height.
+		// Last item should include the full height (including bottom 2px margin).
+		int visualHeight = geometry.height();
 
 		if (result.empty()
-			|| (result.back().top + result.back().height < intervalTop)
-			|| (result.back().top > intervalTop + intervalHeight)) {
-			result.push_back({ intervalTop, intervalHeight });
+			|| (result.back().top + result.back().height
+				< geometry.top())
+			|| (result.back().top > geometry.top() + visualHeight)) {
+			result.push_back({ geometry.top(), visualHeight });
 		} else {
 			auto &last = result.back();
-			const auto newTop = std::min(last.top, intervalTop);
+			const auto newTop = std::min(last.top, geometry.top());
 			const auto newHeight = std::max(
 				last.top + last.height - newTop,
-				intervalTop + intervalHeight - newTop);
+				geometry.top() + visualHeight - newTop);
 			last = Ui::BubbleSelectionInterval{ newTop, newHeight };
 		}
 	}
@@ -1852,7 +1811,11 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 	for (auto &part : result) {
 		part.top += groupPadding.top();
 	}
-
+	if (IsGroupItemSelection(selection, 0)) {
+		result.front().top -= groupPadding.top();
+		result.front().height += groupPadding.top();
+	}
+	
 	return result;
 }
 

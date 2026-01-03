@@ -575,14 +575,22 @@ QSize Document::countOptimalSize() {
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	// In Column albums, the gap before caption is 4px.
-	// In single files, we want to center the caption in the remaining space.
-	// We'll use a fixed bottom padding to match.
-	const int bottomPadding = st::msgPadding.bottom();
-	const int gapBeforeCaption = 4;
+	minHeight += 4; // Gap between visual element and caption
+
+
+	if (isBubbleBottom() && !hasTranscribe) {
+		if (const auto link = thumbedLinkMaxWidth()) {
+			accumulate_max(
+				maxWidth,
+				(tleft
+					+ link
+					+ st.thumbSkip
+					+ _parent->bottomInfoFirstLineWidth()
+					+ tright));
+		}
+	}
 
 	if (hasTranscribe) {
-		minHeight += gapBeforeCaption;
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
@@ -591,8 +599,6 @@ QSize Document::countOptimalSize() {
 		if (captioned) {
 			minHeight += st::mediaCaptionSkip;
 		} 
-	} else if (captioned) {
-		minHeight += gapBeforeCaption;
 	}
 	
 	int captionHeight = 0;
@@ -602,8 +608,8 @@ QSize Document::countOptimalSize() {
 		minHeight += captionHeight;
 	}
 
-	if (hasCaptionContent && _parent->media() == this) {
-		minHeight += bottomPadding;
+	if (hasCaptionContent) {
+		minHeight += 10 + (captionHeight / 25); // Dynamic padding
 	}
 	
 	if (!isBubbleTop()) {
@@ -632,29 +638,25 @@ QSize Document::countCurrentSize(int newWidth) {
 	auto newHeight = visualBottomOfElement;
 	
 	const bool hasCaptionContent = captioned || hasTranscribe;
-	const int bottomPadding = st::msgPadding.bottom();
-	const int gapBeforeCaption = 4;
 
+	newHeight += 4; // Gap between visual element and caption
+
+
+	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	if (hasTranscribe) {
-		newHeight += gapBeforeCaption;
-		auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 		newHeight += voice->transcribeText.countHeight(captionw);
 		if (captioned) {
 			newHeight += st::mediaCaptionSkip;
 		}
-	} else if (captioned) {
-		newHeight += gapBeforeCaption;
 	}
-
 	int captionHeight = 0;
 	if (captioned) {
-		auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 		captionHeight = captioned->caption.countHeight(captionw);
 		newHeight += captionHeight;
 	}
 
-	if (hasCaptionContent && _parent->media() == this) {
-		newHeight += bottomPadding;
+	if (hasCaptionContent) {
+		newHeight += 10 + (captionHeight / 25); // Dynamic padding
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -1090,63 +1092,21 @@ void Document::draw(
 	auto selection = context.selection;
 	
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
-	const int gapBeforeCaption = 4;
-	const int bottomPadding = st::msgPadding.bottom();
 	
-	// Available space for caption content including margins:
-	// slotHeight - itemBottom + topMinus
-	// Subtracting topMinus is essential because the slot height was already reduced by it.
-	const int slotHeight = height();
-	const int totalCaptionAreaHeight = slotHeight - (visualElementBottom - topMinus);
-	
+	auto captiontop = visualElementBottom + 6; // Gap between visual element and caption
+
 	if (voice && !voice->transcribeText.isEmpty()) {
-		const int transcribeHeight = voice->transcribeText.countHeight(captionw);
-		const int captionHeight = captioned ? captioned->caption.countHeight(captionw) : 0;
-		const int fullTextHeight = transcribeHeight + (captioned ? st::mediaCaptionSkip + captionHeight : 0);
-		
-		// Center the full text block in totalCaptionAreaHeight
-		int verticalOffset = (totalCaptionAreaHeight - fullTextHeight) / 2;
-		if (verticalOffset < gapBeforeCaption) verticalOffset = gapBeforeCaption;
-
-		const int textTop = visualElementBottom - topMinus + verticalOffset;
-
 		p.setPen(stm->historyTextFg);
-		voice->transcribeText.draw(p, st::msgPadding.left(), textTop, captionw, style::al_left, 0, -1, selection);
-		
-		if (captioned) {
-			const int nextTop = textTop + transcribeHeight + st::mediaCaptionSkip;
-			_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
-			auto highlightRequest = context.computeHighlightCache();
-			captioned->caption.draw(p, {
-				.position = { st::msgPadding.left(), nextTop },
-				.availableWidth = captionw,
-				.palette = &stm->textPalette,
-				.pre = stm->preCache.get(),
-				.blockquote = context.quoteCache(parent()->contentColorIndex()),
-				.colors = context.st->highlightColors(),
-				.spoiler = Ui::Text::DefaultSpoilerCache(),
-				.now = context.now,
-				.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
-				.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
-				.selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText),
-				.highlight = highlightRequest ? &*highlightRequest : nullptr,
-				.useFullWidth = true,
-			});
-		}
-	} else if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
-		const int captionHeight = captioned->caption.countHeight(captionw);
-		
-		// Center caption in totalCaptionAreaHeight
-		int verticalOffset = (totalCaptionAreaHeight - captionHeight) / 2;
-		if (verticalOffset < gapBeforeCaption) verticalOffset = gapBeforeCaption;
-
-		const int captionTop = visualElementBottom - topMinus + verticalOffset;
-
+		voice->transcribeText.draw(p, st::msgPadding.left(), bottom, captionw, style::al_left, 0, -1, selection);
+		captiontop += voice->transcribeText.countHeight(captionw) + st::mediaCaptionSkip;
+		selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
+	}
+	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		p.setPen(stm->historyTextFg);
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
 		captioned->caption.draw(p, {
-			.position = { st::msgPadding.left(), captionTop },
+			.position = { st::msgPadding.left(), visualElementBottom + 4 },
 			.availableWidth = captionw,
 			.palette = &stm->textPalette,
 			.pre = stm->preCache.get(),
@@ -1160,6 +1120,8 @@ void Document::draw(
 			.highlight = highlightRequest ? &*highlightRequest : nullptr,
 			.useFullWidth = true,
 		});
+		// Ensure dynamic padding matches countSize logic for consistent layout
+		// (Though draw doesn't use bottom val for this, it keeps variables sane)
 	}
 
 
