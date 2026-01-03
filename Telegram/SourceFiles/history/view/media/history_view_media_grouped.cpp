@@ -600,51 +600,36 @@ void GroupedMedia::drawHighlight(
 
 			// Identify Content Type
 			bool isAudio = false;
-			bool hasThumb = false;
 			if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
 				if (const auto document = fileMedia->document()) {
 					isAudio = document->isAudioFile();
-					hasThumb = document->hasThumbnail() && !document->isSong();
 				}
 			}
 
-			// 1. Calculate Visual Dimensions
+			// 1. Calculate Visual Top Offset
+			// Base is 2px. Audio is shifted down.
 			const int baseTop = 2;
-			int visualTopOffset = baseTop;
-			int visualHeight = 0;
+			const int visualTopOffset = baseTop + (isAudio ? st::historyAudioDownloadShift : 0);
 
-			if (isAudio) {
-				visualTopOffset += st::historyAudioDownloadShift;
-				visualHeight = st::historyAudioDownloadSize;
-			} else if (hasThumb) {
-				// File with Thumbnail fills the slot
-				visualHeight = st::msgFileThumbLayoutGrouped.thumbSize;
-			} else {
-				// Simple File: Round download button is centered in the slot
-				const int slotSize = st::msgFileLayoutGrouped.thumbSize;
-				const int circleSize = st::msgFileLayout.thumbSize; // Actual circle size
-				const int offset = (slotSize - circleSize) / 2;
-				
-				visualTopOffset += offset;
-				visualHeight = circleSize;
-			}
+			// 2. Calculate Visual Height (Icon only)
+			const int visualContentHeight = isAudio 
+				? st::historyAudioDownloadSize 
+				: st::msgFileLayoutGrouped.thumbSize;
 
 			highlightY += visualTopOffset;
 
-			// 2. Calculate Highlight Height
+			// 3. Calculate Highlight Height
 			const bool hasCaption = !part.item->originalText().empty();
 
 			if (hasCaption) {
 				// "End tight after the caption"
-				// The slot height (rect.height()) is: visualTop + visualHeight + gap + caption + padding.
-				// We want to exclude the bottom padding (6px).
-				// rect.height() starts at rect.y().
-				// highlightY starts at rect.y() + visualTopOffset.
-				// So we take full height, subtract the top offset we skipped, and subtract the bottom padding.
+				// Slot height includes everything. 
+				// We start at 'visualTopOffset'.
+				// We want to end 6px from the bottom (margin).
 				highlightHeight = rect.height() - visualTopOffset - 6;
 			} else {
 				// "End at bottom item element"
-				highlightHeight = visualHeight;
+				highlightHeight = visualContentHeight;
 			}
 
 			_parent->paintCustomHighlight(
