@@ -1091,7 +1091,6 @@ void Document::draw(
 	
 	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	const int gapBeforeCaption = 4;
-	const int bottomPadding = st::msgPadding.bottom();
 	
 	// Available space for caption content including margins:
 	// slotHeight - itemBottom + topMinus
