@@ -594,19 +594,11 @@ void GroupedMedia::drawHighlight(
 			
 			// The part geometry already includes the full height (baseTop=2 + content + caption if any).
 			// We need to align with the actual visual element position.
-			// In Document::sizeForGrouping, baseTop = 2 is where the visual element starts.
 			
 			int highlightY = rect.y();
 			int highlightHeight = rect.height();
 
-			// 1. Adjust Start to Top Element
-			// Visual content always starts at baseTop = 2 in Document::sizeForGrouping.
-			// rect.y() is the slot top.
-			const int visualTopOffset = 2;
-			highlightY += visualTopOffset;
-			highlightHeight -= visualTopOffset;
-
-			// 2. Identify Content Type for Visual Bottom
+			// Identify Content Type
 			bool isAudio = false;
 			if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
 				if (const auto document = fileMedia->document()) {
@@ -614,24 +606,30 @@ void GroupedMedia::drawHighlight(
 				}
 			}
 
-			int contentHeight = st::msgFileLayoutGrouped.thumbSize;
-			if (isAudio) {
-				contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-			}
+			// 1. Calculate Visual Top Offset
+			// Base is 2px. Audio is shifted down.
+			const int baseTop = 2;
+			const int visualTopOffset = baseTop + (isAudio ? st::historyAudioDownloadShift : 0);
 
-			// 3. Adjust End based on Caption
+			// 2. Calculate Visual Height (Icon only)
+			const int visualContentHeight = isAudio 
+				? st::historyAudioDownloadSize 
+				: st::msgFileLayoutGrouped.thumbSize;
+
+			highlightY += visualTopOffset;
+
+			// 3. Calculate Highlight Height
 			const bool hasCaption = !part.item->originalText().empty();
 
 			if (hasCaption) {
 				// "End tight after the caption"
-				// The slot height (rect.height()) includes a 6px bottom margin after the caption
-				// (added in Document::sizeForGrouping).
-				// We want to exclude this margin.
-				highlightHeight -= 6;
+				// Slot height includes everything. 
+				// We start at 'visualTopOffset'.
+				// We want to end 6px from the bottom (margin).
+				highlightHeight = rect.height() - visualTopOffset - 6;
 			} else {
 				// "End at bottom item element"
-				// If no caption, we want the highlighting to cover only the visual content element.
-				highlightHeight = contentHeight;
+				highlightHeight = visualContentHeight;
 			}
 
 			_parent->paintCustomHighlight(
