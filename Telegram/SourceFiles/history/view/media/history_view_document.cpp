@@ -1091,8 +1091,7 @@ void Document::draw(
 
 	auto selection = context.selection;
 	
-	// Fix: Account for topMinus in visual element bottom calculation to align caption correctly with shifted thumbnail
-	const auto visualElementBottom = calculateVisualElementBottom(forcedTop - topMinus, contentHeight, false);
+	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
 	
 	auto captiontop = visualElementBottom + 6; // Gap between visual element and caption
 
@@ -1107,7 +1106,7 @@ void Document::draw(
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
 		captioned->caption.draw(p, {
-			.position = { st::msgPadding.left(), captiontop },
+			.position = { st::msgPadding.left(), visualElementBottom + 6 },
 			.availableWidth = captionw,
 			.palette = &stm->textPalette,
 			.pre = stm->preCache.get(),
