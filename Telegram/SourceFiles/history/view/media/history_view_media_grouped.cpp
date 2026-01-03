@@ -1789,31 +1789,31 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		}
 		const auto &geometry = part.geometry;
 		
-		// Issues 19-22 Fix: Selection covers full item height.
-		// Last item should include the full height (including bottom 2px margin).
-		int visualHeight = geometry.height();
+		const auto selectionTop = part.content->groupSelectionTop();
+		const auto selectionBottom = part.content->groupSelectionBottom();
+
+		const auto top = geometry.top() + selectionTop;
+		const auto height = (selectionBottom == -1)
+			? (geometry.height() - selectionTop)
+			: (selectionBottom - selectionTop);
 
 		if (result.empty()
 			|| (result.back().top + result.back().height
-				< geometry.top())
-			|| (result.back().top > geometry.top() + visualHeight)) {
-			result.push_back({ geometry.top(), visualHeight });
+				< top)
+			|| (result.back().top > top + height)) {
+			result.push_back({ top, height });
 		} else {
 			auto &last = result.back();
-			const auto newTop = std::min(last.top, geometry.top());
+			const auto newTop = std::min(last.top, top);
 			const auto newHeight = std::max(
 				last.top + last.height - newTop,
-				geometry.top() + visualHeight - newTop);
+				top + height - newTop);
 			last = Ui::BubbleSelectionInterval{ newTop, newHeight };
 		}
 	}
 	const auto groupPadding = groupedPadding();
 	for (auto &part : result) {
 		part.top += groupPadding.top();
-	}
-	if (IsGroupItemSelection(selection, 0)) {
-		result.front().top -= groupPadding.top();
-		result.front().height += groupPadding.top();
 	}
 	
 	return result;
