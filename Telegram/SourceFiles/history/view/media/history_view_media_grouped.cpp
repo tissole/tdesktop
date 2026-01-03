@@ -1813,9 +1813,9 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		int tightBottom = tightTop + elementHeight;
 
 		// Check for caption. Document handles transcribe text as well.
-		const auto captioned = item->Get<HistoryMessageCaptioned>();
-		// In Document view, we also consider voice transcribe as caption.
 		const auto docView = dynamic_cast<const Document*>(part.content.get());
+		const auto captioned = docView ? docView->Get<HistoryDocumentCaptioned>() : nullptr;
+		// In Document view, we also consider voice transcribe as caption.
 		const auto voice = docView ? docView->Get<HistoryDocumentVoice>() : nullptr;
 		const bool hasCaption = captioned || (voice && !voice->transcribeText.isEmpty());
 
