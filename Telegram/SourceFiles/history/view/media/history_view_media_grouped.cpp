@@ -595,45 +595,23 @@ void GroupedMedia::drawHighlight(
 			// The part geometry already includes the full height (baseTop=2 + content + caption if any).
 			// We need to align with the actual visual element position.
 			// In Document::sizeForGrouping, baseTop = 2 is where the visual element starts.
-			
 			int highlightY = rect.y();
 			int highlightHeight = rect.height();
 
-			// 1. Adjust Start to Top Element
-			// Visual content always starts at baseTop = 2 in Document::sizeForGrouping.
-			// rect.y() is the slot top.
-			const int visualTopOffset = 2;
-			highlightY += visualTopOffset;
-			highlightHeight -= visualTopOffset;
-
-			// 2. Identify Content Type for Visual Bottom
-			bool isAudio = false;
-			if (const auto fileMedia = dynamic_cast<Data::MediaFile*>(part.item->media())) {
-				if (const auto document = fileMedia->document()) {
-					isAudio = document->isAudioFile();
-				}
+			if (i == 0) {
+				// First Item: User reported rect.y() is "above" the button.
+				// Button logical pos is +2. Group padding is +3.
+				// We offset by 5px to align with visual start.
+				const int offset = 5;
+				highlightY += offset;
+				highlightHeight -= offset;
 			}
-
-			int contentHeight = st::msgFileLayoutGrouped.thumbSize;
-			if (isAudio) {
-				contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-			}
-
-			// 3. Adjust End based on Caption
-			const bool hasCaption = !part.item->originalText().empty();
-
-			if (hasCaption) {
-				// "End tight after the caption"
-				// The slot height (rect.height()) includes a 6px bottom margin after the caption
-				// (added in Document::sizeForGrouping).
-				// We want to exclude this margin.
-				highlightHeight -= 6;
-			} else {
-				// "End at bottom item element"
-				// If no caption, we want the highlighting to cover only the visual content element.
-				highlightHeight = contentHeight;
-			}
-
+			// For subsequent items (i > 0), rect.y() is already at the slot boundary,
+			// which is the correct start position for selection (at half-gap from previous item).
+			
+			// The geometry height already includes the caption area,
+			// so highlightHeight covers the full item including caption.
+			
 			_parent->paintCustomHighlight(
 				p,
 				copy,
