@@ -592,25 +592,19 @@ void GroupedMedia::drawHighlight(
 			auto copy = context;
 			copy.highlight.range = {};
 			
-			// The part geometry already includes the full height (baseTop=2 + content + caption if any).
-			// We need to align with the actual visual element position.
-			// In Document::sizeForGrouping, baseTop = 2 is where the visual element starts.
+			// Fix: Selection should start exactly at visual element top and exclude gaps.
+			// Visual element starts at baseTop=2 within the geometry slot.
+			// Geometry includes: top padding + visual element + caption.
+			// We need to offset to skip the gap above the visual element.
+			
 			int highlightY = rect.y();
 			int highlightHeight = rect.height();
 
-			if (i == 0) {
-				// First Item: User reported rect.y() is "above" the button.
-				// Button logical pos is +2. Group padding is +3.
-				// We offset by 5px to align with visual start.
-				const int offset = 5;
-				highlightY += offset;
-				highlightHeight -= offset;
-			}
-			// For subsequent items (i > 0), rect.y() is already at the slot boundary,
-			// which is the correct start position for selection (at half-gap from previous item).
-			
-			// The geometry height already includes the caption area,
-			// so highlightHeight covers the full item including caption.
+			// For first item: skip groupedPadding().top() to align with visual element
+			// For subsequent items: skip the 6px gap between items
+			const int visualOffset = (i == 0) ? groupedPadding().top() : 6;
+			highlightY += visualOffset;
+			highlightHeight -= visualOffset;
 			
 			_parent->paintCustomHighlight(
 				p,
@@ -1780,7 +1774,7 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		return {};
 	}
 	auto result = std::vector<Ui::BubbleSelectionInterval>();
-	const auto overlap = st::msgFileThumbLayoutGrouped.padding.top();
+	const auto groupPadding = groupedPadding();
 
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
@@ -1789,35 +1783,30 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		}
 		const auto &geometry = part.geometry;
 		
-		// Issues 19-22 Fix: Selection covers full item height.
-		// Last item should include the full height (including bottom 2px margin).
-		int visualHeight = geometry.height();
+		// Fix: Selection should start exactly at visual element and exclude gaps.
+		// For first item: skip groupedPadding().top() to align with visual element
+		// For subsequent items: skip the 6px gap between items
+		const int visualOffset = (i == 0) ? groupPadding.top() : 6;
+		int selectionTop = geometry.top() + groupPadding.top() + visualOffset;
+		int selectionHeight = geometry.height() - visualOffset;
 
 		if (result.empty()
-			|| (result.back().top + result.back().height
-				< geometry.top())
-			|| (result.back().top > geometry.top() + visualHeight)) {
-			result.push_back({ geometry.top(), visualHeight });
+			|| (result.back().top + result.back().height < selectionTop)
+			|| (result.back().top > selectionTop + selectionHeight)) {
+			result.push_back({ selectionTop, selectionHeight });
 		} else {
 			auto &last = result.back();
-			const auto newTop = std::min(last.top, geometry.top());
+			const auto newTop = std::min(last.top, selectionTop);
 			const auto newHeight = std::max(
 				last.top + last.height - newTop,
-				geometry.top() + visualHeight - newTop);
+				selectionTop + selectionHeight - newTop);
 			last = Ui::BubbleSelectionInterval{ newTop, newHeight };
 		}
-	}
-	const auto groupPadding = groupedPadding();
-	for (auto &part : result) {
-		part.top += groupPadding.top();
-	}
-	if (IsGroupItemSelection(selection, 0)) {
-		result.front().top -= groupPadding.top();
-		result.front().height += groupPadding.top();
 	}
 	
 	return result;
 }
+
 
 void GroupedMedia::clickHandlerActiveChanged(
 		const ClickHandlerPtr &p,

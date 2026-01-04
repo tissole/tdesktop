@@ -570,13 +570,12 @@ QSize Document::countOptimalSize() {
 
 	const int baseTop = 2; 
 	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); 
-	auto minHeight = visualBottomOfElement;
 	
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
 
-	minHeight += 4; // Gap between visual element and caption
-
+	// Use same gap calculation as sizeForGroupingOptimal for consistency
+	int minHeight = 0;
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -590,26 +589,27 @@ QSize Document::countOptimalSize() {
 		}
 	}
 
+	int captionHeight = 0;
+	auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
+
 	if (hasTranscribe) {
-		auto captionw = maxWidth
-			- st::msgPadding.left()
-			- st::msgPadding.right();
-		minHeight += voice->transcribeText.countHeight(captionw);
+		const int transcribeHeight = voice->transcribeText.countHeight(captionw);
+		const int captionStart = visualBottomOfElement + 6;
+		minHeight = captionStart + transcribeHeight;
 		
 		if (captioned) {
 			minHeight += st::mediaCaptionSkip;
-		} 
-	}
-	
-	int captionHeight = 0;
-	if (captioned) {
-		auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
+			captionHeight = captioned->caption.countHeight(captionw);
+			minHeight += captionHeight + 6;
+		} else {
+			minHeight += 6;
+		}
+	} else if (captioned) {
 		captionHeight = captioned->caption.countHeight(captionw);
-		minHeight += captionHeight;
-	}
-
-	if (hasCaptionContent) {
-		minHeight += 10 + (captionHeight / 25); // Dynamic padding
+		const int captionStart = visualBottomOfElement + 6;
+		minHeight = captionStart + captionHeight + 6;
+	} else {
+		minHeight = visualBottomOfElement + 6;
 	}
 	
 	if (!isBubbleTop()) {
@@ -632,36 +632,37 @@ QSize Document::countCurrentSize(int newWidth) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
-
 	const int baseTop = 2; 
 	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); 
-	auto newHeight = visualBottomOfElement;
 	
-	const bool hasCaptionContent = captioned || hasTranscribe;
-
-	newHeight += 4; // Gap between visual element and caption
-
-
+	// Use same gap calculation as sizeForGrouping for consistency
+	int newHeight = 0;
+	int captionHeight = 0;
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
+
 	if (hasTranscribe) {
-		newHeight += voice->transcribeText.countHeight(captionw);
+		const int transcribeHeight = voice->transcribeText.countHeight(captionw);
+		const int captionStart = visualBottomOfElement + 6;
+		newHeight = captionStart + transcribeHeight;
+		
 		if (captioned) {
 			newHeight += st::mediaCaptionSkip;
+			captionHeight = captioned->caption.countHeight(captionw);
+			newHeight += captionHeight + 6;
+		} else {
+			newHeight += 6;
 		}
-	}
-	int captionHeight = 0;
-	if (captioned) {
+	} else if (captioned) {
 		captionHeight = captioned->caption.countHeight(captionw);
-		newHeight += captionHeight;
-	}
-
-	if (hasCaptionContent) {
-		newHeight += 10 + (captionHeight / 25); // Dynamic padding
+		const int captionStart = visualBottomOfElement + 6;
+		newHeight = captionStart + captionHeight + 6;
+	} else {
+		newHeight = visualBottomOfElement + 6;
 	}
 
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
-		result.setHeight(newHeight); // Use our newHeight.
+		result.setHeight(newHeight);
 		if (!isBubbleTop()) {
 			result.setHeight(result.height() - st::msgFileTopMinus);
 		}
@@ -675,6 +676,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	accumulate_min(newWidth, maxWidth());
 	return { newWidth, newHeight };
 }
+
 
 void Document::draw(Painter &p, const PaintContext &context) const {
 	draw(p, context, width(), LayoutMode::Full, adjustedBubbleRounding());
@@ -1106,7 +1108,7 @@ void Document::draw(
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
 		captioned->caption.draw(p, {
-			.position = { st::msgPadding.left(), visualElementBottom + 4 },
+			.position = { st::msgPadding.left(), visualElementBottom + 6 },
 			.availableWidth = captionw,
 			.palette = &stm->textPalette,
 			.pre = stm->preCache.get(),
