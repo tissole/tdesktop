@@ -72,10 +72,6 @@ public:
 
 	QSize sizeForGroupingOptimal(int maxWidth, bool last) const override;
 	QSize sizeForGrouping(int width) const override;
-
-	[[nodiscard]] int groupSelectionTop() const override;
-	[[nodiscard]] int groupSelectionBottom() const override;
-
 	void drawGrouped(
 		Painter &p,
 		const PaintContext &context,

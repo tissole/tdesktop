@@ -231,14 +231,6 @@ public:
 	[[nodiscard]] virtual QSize sizeForGrouping(int width) const {
 		Unexpected("Grouping method call.");
 	}
-
-	[[nodiscard]] virtual int groupSelectionTop() const {
-		return 0;
-	}
-	[[nodiscard]] virtual int groupSelectionBottom() const {
-		return -1;
-	}
-
 	virtual void drawGrouped(
 			Painter &p,
 			const PaintContext &context,
