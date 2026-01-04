@@ -563,13 +563,14 @@ QSize Document::countOptimalSize() {
 				+ transcribeWidth);
 	}
 
-	int minHeight = st.thumbSize;
+	int contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
-		minHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
 	const int baseTop = 2; 
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, minHeight, true); 
+	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, true); 
+	auto minHeight = visualBottomOfElement;
 	
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
@@ -577,24 +578,26 @@ QSize Document::countOptimalSize() {
 	const int bottomReserved = st::msgPadding.bottom();
 
 	if (hasCaptionContent) {
-		minHeight = visualBottomOfElement + 6; // Gap between visual element and caption
+		minHeight += 6; // Gap between visual element and caption
 	} else {
-		minHeight = visualBottomOfElement + bottomReserved; 
+		minHeight += bottomReserved; 
 	}
 
 	const auto margins = bubbleMargins();
-	int resultHeight = margins.top() + st.thumbSize + margins.bottom();
-	const int visualBottomForMargins = calculateVisualElementBottom(margins.top(), st.thumbSize, false);
+	int minHeight = margins.top() + st_layout.thumbSize + margins.bottom();
+	const int visualElementBottom = calculateVisualElementBottom(margins.top(), st_layout.thumbSize, false);
 
-	if (voice && !voice->transcribeText.isEmpty()) {
-		const auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
-		resultHeight = visualBottomForMargins + 6 + voice->transcribeText.countHeight(captionw) + margins.bottom();
+	if (const auto voice = Get<HistoryDocumentVoice>()) {
+		if (!voice->transcribeText.isEmpty()) {
+			const auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
+			minHeight = visualElementBottom + 6 + voice->transcribeText.countHeight(captionw) + margins.bottom();
+		}
 	}
-	if (captioned) {
+	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		const auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
-		resultHeight = visualBottomForMargins + 6 + captioned->caption.countHeight(captionw) + margins.bottom();
+		minHeight = visualElementBottom + 6 + captioned->caption.countHeight(captionw) + margins.bottom();
 	}
-	return { maxWidth, resultHeight };
+	return { maxWidth, minHeight };
 }
 
 QSize Document::countCurrentSize(int newWidth) {
@@ -1039,8 +1042,8 @@ void Document::draw(
 	_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 
 	const auto margins = bubbleMargins();
-	const auto availableHeight = Media::height() - margins.top() - margins.bottom();
-	const auto contentWidth = width - st::msgPadding.left() - st::msgPadding.right();
+	const auto availableHeight = height() - margins.top() - margins.bottom();
+	const auto contentWidth = width() - st::msgPadding.left() - st::msgPadding.right();
 	
 	// Re-calculate visualElementBottom relative to margins.top()
 	const auto visualElementBottom = calculateVisualElementBottom(margins.top(), st_layout.thumbSize, false);
