@@ -576,8 +576,7 @@ void GroupedMedia::drawHighlight(
 	}
 	const auto empty = selection.empty();
 	const auto subpart = IsSubGroupSelection(selection);
-	const auto groupPaddingTop = groupedPadding().top();
-	const auto skip = top + groupPaddingTop;
+	const auto skip = top + groupedPadding().top();
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
 		const auto rect = part.geometry.translated(0, skip);
@@ -590,19 +589,35 @@ void GroupedMedia::drawHighlight(
 			selection = part.content->skipSelection(selection);
 		}
 		if (full) {
-			const int selTop = part.content->groupSelectionTop();
-			const int selBottom = part.content->groupSelectionBottom();
-			const int highlightY = rect.y() + selTop;
-			const int highlightHeight = (selBottom == -1)
-				? (rect.height() - selTop)
-				: (selBottom - selTop);
+			auto copy = context;
+			copy.highlight.range = {};
+			
+			// The part geometry already includes the full height (baseTop=2 + content + caption if any).
+			// We need to align with the actual visual element position.
+			// In Document::sizeForGrouping, baseTop = 2 is where the visual element starts.
+			int highlightY = rect.y();
+			int highlightHeight = rect.height();
 
-			p.fillRect(
-				rect.x(),
+			if (i == 0) {
+				// First Item: User reported rect.y() is "above" the button.
+				// Button logical pos is +2. Group padding is +3.
+				// We offset by 5px to align with visual start.
+				const int offset = 5;
+				highlightY += offset;
+				highlightHeight -= offset;
+			}
+			// For subsequent items (i > 0), rect.y() is already at the slot boundary,
+			// which is the correct start position for selection (at half-gap from previous item).
+			
+			// The geometry height already includes the caption area,
+			// so highlightHeight covers the full item including caption.
+			
+			_parent->paintCustomHighlight(
+				p,
+				copy,
 				highlightY,
-				rect.width(),
 				highlightHeight,
-				context.st->msgSelectOverlay());
+				part.item);
 		}
 	}
 }
@@ -1774,17 +1789,17 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		}
 		const auto &geometry = part.geometry;
 		
-		const int selectionTop = part.content->groupSelectionTop();
-		const int selectionBottom = part.content->groupSelectionBottom();
-		const int groupPaddingTop = groupedPadding().top();
+		const auto selectionTop = part.content->groupSelectionTop();
+		const auto selectionBottom = part.content->groupSelectionBottom();
 
-		const int top = geometry.top() + groupPaddingTop + selectionTop;
-		const int height = (selectionBottom == -1)
+		const auto top = geometry.top() + selectionTop;
+		const auto height = (selectionBottom == -1)
 			? (geometry.height() - selectionTop)
 			: (selectionBottom - selectionTop);
 
 		if (result.empty()
-			|| (result.back().top + result.back().height < top)
+			|| (result.back().top + result.back().height
+				< top)
 			|| (result.back().top > top + height)) {
 			result.push_back({ top, height });
 		} else {
@@ -1796,6 +1811,11 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 			last = Ui::BubbleSelectionInterval{ newTop, newHeight };
 		}
 	}
+	const auto groupPadding = groupedPadding();
+	for (auto &part : result) {
+		part.top += groupPadding.top();
+	}
+	
 	return result;
 }
 
