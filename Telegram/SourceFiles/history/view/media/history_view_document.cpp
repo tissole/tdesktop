@@ -480,13 +480,13 @@ QSize Document::countOptimalSize() {
     }
 
 	auto thumbed = Get<HistoryDocumentThumbed>();
-	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
+	const auto &layout = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
 	if (thumbed) {
 		const auto &location = _data->thumbnailLocation();
 		auto tw = style::ConvertScale(location.width());
 		auto th = style::ConvertScale(location.height());
 		if (tw > th) {
-			thumbed->thumbw = (tw * st.thumbSize) / th;
+			thumbed->thumbw = (tw * layout.thumbSize) / th;
 		} else {
 			thumbed->thumbw = st.thumbSize;
 		}
@@ -554,30 +554,29 @@ QSize Document::countOptimalSize() {
 		const auto transcribeWidth = voice->transcribe
 			? (voice->transcribe->size().width() + st::historyTranscribeSkip)
 			: 0;
-		accumulate_max(
 			maxWidth,
 			maxWaveformWidth
-				+ rect::m::sum::h(st.padding)
-				+ st.thumbSize
-				+ st.thumbSkip
+				+ rect::m::sum::h(layout.padding)
+				+ layout.thumbSize
+				+ layout.thumbSkip
 				+ transcribeWidth);
 	}
 
-	int contentHeight = st.thumbSize;
+	int contentHeight = layout.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
 	const int baseTop = 2; 
-	// Inline calculation using correct 'st' (Non-Grouped)
+	// Inline calculation using correct 'layout' (Non-Grouped)
 	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
 	if (thumbed) {
-		visualBottomOfElement += st.thumbSize;
+		visualBottomOfElement += layout.thumbSize;
 	} else if (downloadInCorner()) {
-		visualBottomOfElement += style::historyAudioDownloadShift + style::historyAudioDownloadSize;
+		visualBottomOfElement += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	} else {
 		const auto innerSize = st::msgFileLayout.thumbSize;
-		const auto currentThumbSize = st.thumbSize;
+		const auto currentThumbSize = layout.thumbSize;
 		visualBottomOfElement += (currentThumbSize - innerSize) / 2 + innerSize;
 	} 
 	
@@ -593,7 +592,7 @@ QSize Document::countOptimalSize() {
 				maxWidth,
 				(tleft
 					+ link
-					+ st.thumbSkip
+					+ layout.thumbSkip
 					+ _parent->bottomInfoFirstLineWidth()
 					+ tright));
 		}
@@ -636,24 +635,24 @@ QSize Document::countCurrentSize(int newWidth) {
 	const auto voice = Get<HistoryDocumentVoice>();
 	const auto hasTranscribe = voice && !voice->transcribeText.isEmpty();
 	const auto thumbed = Get<HistoryDocumentThumbed>();
-	const auto &st = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
+	const auto &layout = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
 	
-	int contentHeight = st.thumbSize;
+	int contentHeight = layout.thumbSize;
 	if (downloadInCorner()) {
 		// FIX Issue from user: For Music files, measure from 'download arrow' (shift + size).
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
 	const int baseTop = 2; 
-	// Inline calculation using correct 'st' (Non-Grouped)
+	// Inline calculation using correct 'layout' (Non-Grouped)
 	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
 	if (thumbed) {
-		visualBottomOfElement += st.thumbSize;
+		visualBottomOfElement += layout.thumbSize;
 	} else if (downloadInCorner()) {
-		visualBottomOfElement += style::historyAudioDownloadShift + style::historyAudioDownloadSize;
+		visualBottomOfElement += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	} else {
 		const auto innerSize = st::msgFileLayout.thumbSize;
-		const auto currentThumbSize = st.thumbSize;
+		const auto currentThumbSize = layout.thumbSize;
 		visualBottomOfElement += (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 	
@@ -1119,15 +1118,16 @@ void Document::draw(
 
 	auto selection = context.selection;
 	
-	// Inline calculation using correct 'st' (Non-Grouped)
+	// Inline calculation using correct 'layout' (Non-Grouped)
+	const auto &layout = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
 	int visualElementBottom = forcedTop;
 	if (thumbed) {
-		visualElementBottom += st.thumbSize;
+		visualElementBottom += layout.thumbSize;
 	} else if (cornerDownload) {
-		visualElementBottom += style::historyAudioDownloadShift + style::historyAudioDownloadSize;
+		visualElementBottom += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	} else {
 		const auto innerSize = st::msgFileLayout.thumbSize;
-		const auto currentThumbSize = st.thumbSize;
+		const auto currentThumbSize = layout.thumbSize;
 		visualElementBottom += (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 	
