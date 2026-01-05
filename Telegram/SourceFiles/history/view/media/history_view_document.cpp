@@ -574,7 +574,7 @@ QSize Document::countOptimalSize() {
 	if (thumbed) {
 		visualBottomOfElement += st.thumbSize;
 	} else if (downloadInCorner()) {
-		visualBottomOfElement += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+		visualBottomOfElement += style::historyAudioDownloadShift + style::historyAudioDownloadSize;
 	} else {
 		const auto innerSize = st::msgFileLayout.thumbSize;
 		const auto currentThumbSize = st.thumbSize;
@@ -582,7 +582,7 @@ QSize Document::countOptimalSize() {
 	} 
 	
 	const auto captioned = Get<HistoryDocumentCaptioned>();
-	const bool hasCaptionContent = captioned || hasTranscribe;
+	// Unused variable removed: const bool hasCaptionContent = captioned || hasTranscribe;
 
 	// Use same gap calculation as sizeForGroupingOptimal for consistency
 	int minHeight = 0;
@@ -650,7 +650,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	if (thumbed) {
 		visualBottomOfElement += st.thumbSize;
 	} else if (downloadInCorner()) {
-		visualBottomOfElement += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+		visualBottomOfElement += style::historyAudioDownloadShift + style::historyAudioDownloadSize;
 	} else {
 		const auto innerSize = st::msgFileLayout.thumbSize;
 		const auto currentThumbSize = st.thumbSize;
@@ -1124,7 +1124,7 @@ void Document::draw(
 	if (thumbed) {
 		visualElementBottom += st.thumbSize;
 	} else if (cornerDownload) {
-		visualElementBottom += st.historyAudioDownloadShift + st.historyAudioDownloadSize;
+		visualElementBottom += style::historyAudioDownloadShift + style::historyAudioDownloadSize;
 	} else {
 		const auto innerSize = st::msgFileLayout.thumbSize;
 		const auto currentThumbSize = st.thumbSize;
