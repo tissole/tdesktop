@@ -755,7 +755,7 @@ void Document::draw(
 	const auto nameright = st.padding.right();
 	
 	const auto nameHeight = st::semiboldFont->height;
-	const auto statustop = nametop + nameHeight + nametop; 
+	const auto statustop = st.statusTop + delta - topMinus; 
 
 	const auto linktop = st.linkTop + delta - topMinus;
 	const auto captioned = Get<HistoryDocumentCaptioned>();

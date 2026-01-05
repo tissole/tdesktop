@@ -834,8 +834,11 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto &docStyle = hasThumb ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
 				const auto statustop = docStyle.statusTop;
 				
-				// Fix alignment: Thumbs need +2px (baseTop). Simple items reported "lower", need move up (-1px?).
-				const int baseOffset = hasThumb ? 2 : -1;
+				// Fix alignment: Simple items need -1.
+				// Thumbs: First Item (i==0) uses forcedTop=2, topMinus=0 -> Draws at base. Offset 0.
+				// Subsequent (i>0) use forcedTop=2, topMinus=2 -> Draws 2px HIGHER. Offset -2.
+				const int thumbOffset = (i == 0) ? 0 : -2;
+				const int baseOffset = hasThumb ? thumbOffset : -1;
 				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent + baseOffset;
 
 				const int iconGap = 1;
