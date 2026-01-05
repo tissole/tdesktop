@@ -569,7 +569,17 @@ QSize Document::countOptimalSize() {
 	}
 
 	const int baseTop = 2; 
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); 
+	// Inline calculation using correct 'st' (Non-Grouped)
+	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
+	if (thumbed) {
+		visualBottomOfElement += st.thumbSize;
+	} else if (downloadInCorner()) {
+		visualBottomOfElement += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+	} else {
+		const auto innerSize = st::msgFileLayout.thumbSize;
+		const auto currentThumbSize = st.thumbSize;
+		visualBottomOfElement += (currentThumbSize - innerSize) / 2 + innerSize;
+	} 
 	
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const bool hasCaptionContent = captioned || hasTranscribe;
@@ -635,7 +645,17 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	const int baseTop = 2; 
-	const int visualBottomOfElement = calculateVisualElementBottom(baseTop, contentHeight, false); 
+	// Inline calculation using correct 'st' (Non-Grouped)
+	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
+	if (thumbed) {
+		visualBottomOfElement += st.thumbSize;
+	} else if (downloadInCorner()) {
+		visualBottomOfElement += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+	} else {
+		const auto innerSize = st::msgFileLayout.thumbSize;
+		const auto currentThumbSize = st.thumbSize;
+		visualBottomOfElement += (currentThumbSize - innerSize) / 2 + innerSize;
+	}
 	
 	// Use same gap calculation as sizeForGrouping for consistency
 	int newHeight = 0;
@@ -1099,7 +1119,17 @@ void Document::draw(
 
 	auto selection = context.selection;
 	
-	const auto visualElementBottom = calculateVisualElementBottom(forcedTop, contentHeight, false);
+	// Inline calculation using correct 'st' (Non-Grouped)
+	int visualElementBottom = forcedTop;
+	if (thumbed) {
+		visualElementBottom += st.thumbSize;
+	} else if (cornerDownload) {
+		visualElementBottom += st.historyAudioDownloadShift + st.historyAudioDownloadSize;
+	} else {
+		const auto innerSize = st::msgFileLayout.thumbSize;
+		const auto currentThumbSize = st.thumbSize;
+		visualElementBottom += (currentThumbSize - innerSize) / 2 + innerSize;
+	}
 	
 	auto captiontop = visualElementBottom + 6; // Gap between visual element and caption
 

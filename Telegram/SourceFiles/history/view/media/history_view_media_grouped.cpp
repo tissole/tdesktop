@@ -602,9 +602,10 @@ void GroupedMedia::drawHighlight(
 			int highlightHeight = rect.height();
 
 			// Offset top to skip gap and align with visual element.
-			// Increased constant to 6 to push start down (fixing "starts above").
+			// Increased constant to 10 for first item to exclude the large gap.
 			const int topGap = (i == 0) ? groupedPadding().top() : 0;
-			const int visualTopOffset = topGap + 6; 
+			const int extraOffset = (i == 0) ? 10 : 6;
+			const int visualTopOffset = topGap + extraOffset; 
 
 			highlightY += visualTopOffset;
 
@@ -1794,7 +1795,8 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		
 		// Fix: Selection should start exactly at visual element and exclude gaps.
 		const int topGap = (i == 0) ? groupPadding.top() : 0;
-		const int visualTopOffset = topGap + 6;
+		const int extraOffset = (i == 0) ? 10 : 6;
+		const int visualTopOffset = topGap + extraOffset;
 		
 		int selectionTop = geometry.top() + visualTopOffset;
 
