@@ -488,14 +488,14 @@ QSize Document::countOptimalSize() {
 		if (tw > th) {
 			thumbed->thumbw = (tw * layout.thumbSize) / th;
 		} else {
-			thumbed->thumbw = st.thumbSize;
+			thumbed->thumbw = layout.thumbSize;
 		}
 	}
 
 	auto maxWidth = st::msgFileMinWidth;
 
-	const auto tleft = st.padding.left() + st.thumbSize + st.thumbSkip;
-	const auto tright = st.padding.right();
+	const auto tleft = layout.padding.left() + layout.thumbSize + layout.thumbSkip;
+	const auto tright = layout.padding.right();
 	
 	int customInfoWidth = 0;
 	if (!_data->isVideoMessage()) {
@@ -554,6 +554,7 @@ QSize Document::countOptimalSize() {
 		const auto transcribeWidth = voice->transcribe
 			? (voice->transcribe->size().width() + st::historyTranscribeSkip)
 			: 0;
+		accumulate_max(
 			maxWidth,
 			maxWaveformWidth
 				+ rect::m::sum::h(layout.padding)
