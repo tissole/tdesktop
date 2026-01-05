@@ -595,18 +595,22 @@ void GroupedMedia::drawHighlight(
 			// Fix: Selection should start exactly at visual element top and exclude gaps.
 			// Visual element starts at baseTop=2 within the geometry slot.
 			
+			// Fix: Selection should start exactly at visual element top and exclude gaps.
+			// Visual element starts at baseTop=2 within the geometry slot.
+			
 			int highlightY = rect.y();
 			int highlightHeight = rect.height();
 
-			// Offset top to skip gap and align with baseTop=2
+			// Offset top to skip gap and align with visual element.
+			// Increased constant to 6 to push start down (fixing "starts above").
 			const int topGap = (i == 0) ? groupedPadding().top() : 0;
-			const int visualTopOffset = topGap + 2; 
+			const int visualTopOffset = topGap + 6; 
 
 			highlightY += visualTopOffset;
 
-			// Reduce height by the top offset AND the bottom gap (6px)
-			// This ensures selection ends exactly at visual element bottom
-			highlightHeight -= (visualTopOffset + 6);
+			// Reduce height by the top offset only.
+			// Removed reduction of bottom gap to push end down (fixing "ends before").
+			highlightHeight -= visualTopOffset;
 			
 			_parent->paintCustomHighlight(
 				p,
@@ -1790,12 +1794,12 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		
 		// Fix: Selection should start exactly at visual element and exclude gaps.
 		const int topGap = (i == 0) ? groupPadding.top() : 0;
-		const int visualTopOffset = topGap + 2;
+		const int visualTopOffset = topGap + 6;
 		
 		int selectionTop = geometry.top() + visualTopOffset;
 
-		// Reduce height by the top offset AND the bottom gap (6px)
-		int selectionHeight = geometry.height() - (visualTopOffset + 6);
+		// Reduce height by the top offset only.
+		int selectionHeight = geometry.height() - visualTopOffset;
 
 		if (result.empty()
 			|| (result.back().top + result.back().height < selectionTop)
