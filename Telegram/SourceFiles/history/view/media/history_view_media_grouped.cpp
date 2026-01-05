@@ -594,17 +594,19 @@ void GroupedMedia::drawHighlight(
 			
 			// Fix: Selection should start exactly at visual element top and exclude gaps.
 			// Visual element starts at baseTop=2 within the geometry slot.
-			// Geometry includes: top padding + visual element + caption.
-			// We need to offset to skip the gap above the visual element.
 			
 			int highlightY = rect.y();
 			int highlightHeight = rect.height();
 
-			// For first item: skip groupedPadding().top() to align with visual element
-			// For subsequent items: skip the 6px gap between items
-			const int visualOffset = (i == 0) ? groupedPadding().top() : 6;
-			highlightY += visualOffset;
-			highlightHeight -= visualOffset;
+			// Offset top to skip gap and align with baseTop=2
+			const int topGap = (i == 0) ? groupedPadding().top() : 0;
+			const int visualTopOffset = topGap + 2; 
+
+			highlightY += visualTopOffset;
+
+			// Reduce height by the top offset AND the bottom gap (6px)
+			// This ensures selection ends exactly at visual element bottom
+			highlightHeight -= (visualTopOffset + 6);
 			
 			_parent->paintCustomHighlight(
 				p,
@@ -826,7 +828,10 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				}
 				const auto &docStyle = hasThumb ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
 				const auto statustop = docStyle.statusTop;
-				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent;
+				
+				// Fix alignment: Thumbs need +2px (baseTop). Simple items reported "lower", need move up (-1px?).
+				const int baseOffset = hasThumb ? 2 : -1;
+				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent + baseOffset;
 
 				const int iconGap = 1;
 				const int textGap = st::msgDateFont->width(' ');
@@ -1784,11 +1789,13 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		const auto &geometry = part.geometry;
 		
 		// Fix: Selection should start exactly at visual element and exclude gaps.
-		// For first item: skip groupedPadding().top() to align with visual element
-		// For subsequent items: skip the 6px gap between items
-		const int visualOffset = (i == 0) ? groupPadding.top() : 6;
-		int selectionTop = geometry.top() + groupPadding.top() + visualOffset;
-		int selectionHeight = geometry.height() - visualOffset;
+		const int topGap = (i == 0) ? groupPadding.top() : 0;
+		const int visualTopOffset = topGap + 2;
+		
+		int selectionTop = geometry.top() + visualTopOffset;
+
+		// Reduce height by the top offset AND the bottom gap (6px)
+		int selectionHeight = geometry.height() - (visualTopOffset + 6);
 
 		if (result.empty()
 			|| (result.back().top + result.back().height < selectionTop)

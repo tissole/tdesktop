@@ -607,7 +607,9 @@ QSize Document::countOptimalSize() {
 	} else if (captioned) {
 		captionHeight = captioned->caption.countHeight(captionw);
 		const int captionStart = visualBottomOfElement + 6;
-		minHeight = captionStart + captionHeight + 6;
+		
+		const int bottomGap = std::max(6, st::msgPadding.bottom());
+		minHeight = captionStart + captionHeight + bottomGap;
 	} else {
 		minHeight = visualBottomOfElement + 6;
 	}
@@ -655,7 +657,11 @@ QSize Document::countCurrentSize(int newWidth) {
 	} else if (captioned) {
 		captionHeight = captioned->caption.countHeight(captionw);
 		const int captionStart = visualBottomOfElement + 6;
-		newHeight = captionStart + captionHeight + 6;
+		
+		// Fix: Ensure proper bottom spacing so long captions don't overflow. 
+		// Use max of 6 (column usage) or msgPadding.bottom() for single file safety.
+		const int bottomGap = std::max(6, st::msgPadding.bottom());
+		newHeight = captionStart + captionHeight + bottomGap;
 	} else {
 		newHeight = visualBottomOfElement + 6;
 	}
