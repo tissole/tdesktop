@@ -618,10 +618,12 @@ QSize Document::countOptimalSize() {
 		captionHeight = captioned->caption.countHeight(captionw);
 		const int captionStart = visualBottomOfElement + 6;
 		
+		// Fix: Ensure proper bottom spacing so long captions don't overflow. 
+		// Use 6 + msgPadding.bottom() to be safe.
 		const int bottomGap = 6 + st::msgPadding.bottom();
 		minHeight = captionStart + captionHeight + bottomGap;
 	} else {
-		minHeight = visualBottomOfElement + 6;
+		minHeight = visualBottomOfElement + 6 + st::msgPadding.bottom();
 	}
 	
 	if (!isBubbleTop()) {
@@ -683,7 +685,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		const int bottomGap = 6 + st::msgPadding.bottom();
 		newHeight = captionStart + captionHeight + bottomGap;
 	} else {
-		newHeight = visualBottomOfElement + 6;
+		newHeight = visualBottomOfElement + 6 + st::msgPadding.bottom();
 	}
 
 	if (!captioned && !hasTranscribe) {
