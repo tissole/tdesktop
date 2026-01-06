@@ -618,8 +618,8 @@ QSize Document::countOptimalSize() {
 		captionHeight = captioned->caption.countHeight(captionw);
 		const int captionStart = visualBottomOfElement + 6;
 		
-		// Reverted to standard 6px gap
-		const int bottomGap = 6 + st::msgPadding.bottom();
+		// Fix: Use layout.padding for consistency with Column Album logic
+		const int bottomGap = 6 + layout.padding.bottom();
 		minHeight = captionStart + captionHeight + bottomGap;
 	} else {
 		minHeight = visualBottomOfElement + 6;
@@ -665,7 +665,8 @@ QSize Document::countCurrentSize(int newWidth) {
 	// Use same gap calculation as sizeForGrouping for consistency
 	int newHeight = 0;
 	int captionHeight = 0;
-	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
+	// Fix: Use layout.padding instead of generic msgPadding
+	auto captionw = newWidth - layout.padding.left() - layout.padding.right();
 
 	if (hasTranscribe) {
 		const int transcribeHeight = voice->transcribeText.countHeight(captionw);
@@ -683,8 +684,8 @@ QSize Document::countCurrentSize(int newWidth) {
 		captionHeight = captioned->caption.countHeight(captionw);
 		const int captionStart = visualBottomOfElement + 6;
 		
-		// Reverted to standard 6px gap
-		const int bottomGap = 6 + st::msgPadding.bottom();
+		// Fix: Use layout.padding for consistency with Column Album logic
+		const int bottomGap = 6 + layout.padding.bottom();
 		newHeight = captionStart + captionHeight + bottomGap;
 	} else {
 		newHeight = visualBottomOfElement + 6;
@@ -737,7 +738,7 @@ void Document::draw(
 	const auto sti = context.imageStyle();
 	const auto stm = context.messageStyle();
 
-	int captionw = width - st::msgPadding.left() - st::msgPadding.right();
+	/* Moved captionw calculation to use correct layout padding below */
 
 	if (displayLoading) {
 		ensureAnimation();
@@ -753,6 +754,11 @@ void Document::draw(
 	const auto &st = (mode == LayoutMode::Full)
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
+	
+	// Fix: Calculate captionw using the correct layout padding
+	int captionw = width - st.padding.left() - st.padding.right();
+
+	// Fix alignment: Simple items need -1.
 
 	const auto forcedTop = 2;
 	const auto delta = forcedTop - st.padding.top();
