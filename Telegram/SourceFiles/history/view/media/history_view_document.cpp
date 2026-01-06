@@ -618,9 +618,8 @@ QSize Document::countOptimalSize() {
 		captionHeight = captioned->caption.countHeight(captionw);
 		const int captionStart = visualBottomOfElement + 6;
 		
-		// Issue 5 Fix: Use 10px gap ONLY for Single File to prevent spill. Grouped Media stays 6px.
-		const int baseGap = (_parent->media() == this) ? 10 : 6;
-		const int bottomGap = baseGap + st::msgPadding.bottom();
+		// Reverted to standard 6px gap
+		const int bottomGap = 6 + st::msgPadding.bottom();
 		minHeight = captionStart + captionHeight + bottomGap;
 	} else {
 		minHeight = visualBottomOfElement + 6;
@@ -635,6 +634,9 @@ QSize Document::countOptimalSize() {
 }
 
 QSize Document::countCurrentSize(int newWidth) {
+	// Fix: Cap width BEFORE calculating caption height to account for wrapping.
+	accumulate_min(newWidth, maxWidth());
+
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const auto voice = Get<HistoryDocumentVoice>();
 	const auto hasTranscribe = voice && !voice->transcribeText.isEmpty();
@@ -681,10 +683,8 @@ QSize Document::countCurrentSize(int newWidth) {
 		captionHeight = captioned->caption.countHeight(captionw);
 		const int captionStart = visualBottomOfElement + 6;
 		
-		// Fix: Ensure proper bottom spacing so long captions don't overflow. 
-		// Issue 5 Fix: Use 10px gap ONLY for Single File to prevent spill. Grouped Media stays 6px.
-		const int baseGap = (_parent->media() == this) ? 10 : 6;
-		const int bottomGap = baseGap + st::msgPadding.bottom();
+		// Reverted to standard 6px gap
+		const int bottomGap = 6 + st::msgPadding.bottom();
 		newHeight = captionStart + captionHeight + bottomGap;
 	} else {
 		newHeight = visualBottomOfElement + 6;
@@ -705,7 +705,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight -= st::msgFileTopMinus;
 	} */
 
-	accumulate_min(newWidth, maxWidth());
+
 	return { newWidth, newHeight };
 }
 
