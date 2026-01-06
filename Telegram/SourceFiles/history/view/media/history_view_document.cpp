@@ -624,10 +624,9 @@ QSize Document::countOptimalSize() {
 		minHeight = visualBottomOfElement + 6;
 	}
 	
-	/* Redundant subtraction removed
 	if (!isBubbleTop()) {
 		minHeight -= st::msgFileTopMinus;
-	} */
+	}
 	
 	return { maxWidth, minHeight };
 }
@@ -690,17 +689,15 @@ QSize Document::countCurrentSize(int newWidth) {
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
 		result.setHeight(newHeight);
-		/* Redundant subtraction removed
 		if (!isBubbleTop()) {
 			result.setHeight(result.height() - st::msgFileTopMinus);
-		} */
+		}
 		return result;
 	}
 
-	/* Redundant subtraction removed
 	if (!isBubbleTop()) {
 		newHeight -= st::msgFileTopMinus;
-	} */
+	}
 
 	accumulate_min(newWidth, maxWidth());
 	return { newWidth, newHeight };
