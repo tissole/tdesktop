@@ -684,9 +684,6 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight = captionStart + captionHeight + bottomGap;
 	} else {
 		newHeight = visualBottomOfElement + 6;
-		if (isBubbleBottom()) { // Fix: Add bottom padding for non-captioned items (Issue 2)
-			newHeight += st::msgPadding.bottom();
-		}
 	}
 
 	if (!captioned && !hasTranscribe) {
