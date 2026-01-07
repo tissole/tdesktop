@@ -571,7 +571,6 @@ QSize Document::countOptimalSize() {
 	const int baseTop = 2; 
 	// Inline calculation using correct 'layout' (Non-Grouped)
 	// FIX: Do not subtract topMinus here. It is subtracted from the total height at the end.
-	// This ensures visualBottomOfElement matches the 'draw' method logic (which uses forcedTop = 2).
 	int visualBottomOfElement = baseTop;
 	if (thumbed) {
 		visualBottomOfElement += layout.thumbSize;
@@ -603,7 +602,7 @@ QSize Document::countOptimalSize() {
 
 	int captionHeight = 0;
 	auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
-	const int captionGap = 10; // FIX: Symmetrical 10px gap above and below caption.
+	const int captionGap = 6; // FIX: Reverted to 6px to match Column Album.
 
 	if (hasTranscribe) {
 		const int transcribeHeight = voice->transcribeText.countHeight(captionw);
@@ -621,9 +620,8 @@ QSize Document::countOptimalSize() {
 		captionHeight = captioned->caption.countHeight(captionw);
 		const int captionStart = visualBottomOfElement + captionGap;
 		
-		// Fix: Ensure proper bottom spacing so long captions don't overflow. 
-		// Use symmetrical gap + padding.
-		const int bottomGap = captionGap + st::msgPadding.bottom();
+		// Fix: Match Column Album logic (6px bottom gap).
+		const int bottomGap = captionGap;
 		minHeight = captionStart + captionHeight + bottomGap;
 	} else {
 		minHeight = visualBottomOfElement + captionGap + st::msgPadding.bottom();
@@ -667,7 +665,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	int newHeight = 0;
 	int captionHeight = 0;
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
-	const int captionGap = 10; // FIX: Symmetrical 10px gap above and below caption.
+	const int captionGap = 6; // FIX: Reverted to 6px to match Column Album.
 
 	if (hasTranscribe) {
 		const int transcribeHeight = voice->transcribeText.countHeight(captionw);
@@ -685,9 +683,8 @@ QSize Document::countCurrentSize(int newWidth) {
 		captionHeight = captioned->caption.countHeight(captionw);
 		const int captionStart = visualBottomOfElement + captionGap;
 		
-		// Fix: Ensure proper bottom spacing so long captions don't overflow. 
-		// Use symmetrical gap + padding.
-		const int bottomGap = captionGap + st::msgPadding.bottom();
+		// Fix: Match Column Album logic (6px bottom gap).
+		const int bottomGap = captionGap;
 		newHeight = captionStart + captionHeight + bottomGap;
 	} else {
 		newHeight = visualBottomOfElement + captionGap + st::msgPadding.bottom();
@@ -1139,7 +1136,7 @@ void Document::draw(
 		visualElementBottom += (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 	
-	const int captionGap = (mode == LayoutMode::Grouped) ? 6 : 10; // FIX: 10px gap for single files
+	const int captionGap = 6; // FIX: Always 6px to match Column Album logic.
 	auto captiontop = visualElementBottom + captionGap; // Gap between visual element and caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
