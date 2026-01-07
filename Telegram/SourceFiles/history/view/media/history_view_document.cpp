@@ -568,7 +568,7 @@ QSize Document::countOptimalSize() {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
-	const int baseTop = 2; 
+	const int baseTop = layout.padding.top(); 
 	// Inline calculation using correct 'layout' (Non-Grouped)
 	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
 	if (thumbed) {
@@ -646,7 +646,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
-	const int baseTop = 2; 
+	const int baseTop = layout.padding.top(); 
 	// Inline calculation using correct 'layout' (Non-Grouped)
 	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
 	if (thumbed) {
@@ -750,7 +750,7 @@ void Document::draw(
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 
-	const auto forcedTop = 2;
+	const auto forcedTop = (mode == LayoutMode::Full) ? st.padding.top() : 2;
 	const auto delta = forcedTop - st.padding.top();
 
 	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
@@ -1123,7 +1123,7 @@ void Document::draw(
 	
 	// Inline calculation using correct 'layout' (Non-Grouped)
 	const auto &layout = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
-	int visualElementBottom = forcedTop;
+	int visualElementBottom = forcedTop - topMinus;
 	if (thumbed) {
 		visualElementBottom += layout.thumbSize;
 	} else if (cornerDownload) {
