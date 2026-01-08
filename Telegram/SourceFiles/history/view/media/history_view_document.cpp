@@ -570,8 +570,10 @@ QSize Document::countOptimalSize() {
 
 	const int baseTop = 2; 
 	// Inline calculation using correct 'layout' (Non-Grouped)
-	// FIX: Do not subtract topMinus here. It is subtracted from the total height at the end.
-	int visualBottomOfElement = baseTop;
+	// FIX: Account for topMinus shift at the start (1x subtraction).
+	// This matches the drawing logic where the element is shifted up in merged messages.
+	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
+	
 	if (thumbed) {
 		visualBottomOfElement += layout.thumbSize;
 	} else if (downloadInCorner()) {
@@ -628,10 +630,11 @@ QSize Document::countOptimalSize() {
 	}
 	
 	if (!isBubbleTop()) {
-		// FIX: Only subtract topMinus for non-captioned files to match original "tight" look (2x subtraction).
-		// For captioned files, subtract NOTHING (0x) to prevents overflow.
+		// FIX: We already subtracted topMinus once at 'visualBottomOfElement'.
+		// For non-captioned files, we want 2x subtraction (tight look), so subtract once more.
+		// For captioned files, we want 1x subtraction (correct fit), so do nothing more.
 		if (!captioned && !hasTranscribe) {
-			minHeight -= 2 * st::msgFileTopMinus;
+			minHeight -= st::msgFileTopMinus;
 		}
 	}
 	
@@ -653,8 +656,9 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	const int baseTop = 2; 
 	// Inline calculation using correct 'layout' (Non-Grouped)
-	// FIX: Do not subtract topMinus here. It is subtracted from the total height at the end.
-	int visualBottomOfElement = baseTop;
+	// FIX: Account for topMinus shift at the start (1x subtraction).
+	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
+	
 	if (thumbed) {
 		visualBottomOfElement += layout.thumbSize;
 	} else if (downloadInCorner()) {
@@ -698,19 +702,14 @@ QSize Document::countCurrentSize(int newWidth) {
 		auto result = File::countCurrentSize(newWidth);
 		result.setHeight(newHeight);
 		if (!isBubbleTop()) {
-			// FIX: Only subtract topMinus for non-captioned files (2x subtraction to restore tight look).
-			result.setHeight(result.height() - 2 * st::msgFileTopMinus);
+			// FIX: Subtract topMinus once more for non-captioned files (total 2x subtraction).
+			result.setHeight(result.height() - st::msgFileTopMinus);
 		}
 		return result;
 	}
 
 	if (!isBubbleTop()) {
-		// FIX: For captioned files (checked above to be true here?), DO NOT subtract topMinus.
-		// Wait, the block above handles !captioned && !hasTranscribe.
-		// So this block is reachable if (captioned || hasTranscribe).
-		// We want 0 subtraction here. So do nothing.
-		// However, original code subtracted 1x here. We must remove it.
-		// So we just Don't add anything here.
+		// FIX: Already subtracted once at start. Do nothing for captioned files (total 1x).
 	}
 
 	accumulate_min(newWidth, maxWidth());
@@ -1135,7 +1134,8 @@ void Document::draw(
 	
 	// Inline calculation using correct 'layout' (Non-Grouped)
 	const auto &layout = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
-	int visualElementBottom = forcedTop;
+	// FIX: Account for topMinus shift (drawing) to match element position.
+	int visualElementBottom = forcedTop - topMinus;
 	if (thumbed) {
 		visualElementBottom += layout.thumbSize;
 	} else if (cornerDownload) {
