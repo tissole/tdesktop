@@ -620,19 +620,15 @@ QSize Document::countOptimalSize() {
 		captionHeight = captioned->caption.countHeight(captionw);
 		const int captionStart = visualBottomOfElement + captionGap;
 		
-		// Fix: Add bottom padding so there is a gap below the caption.
-		const int bottomGap = captionGap + st::msgPadding.bottom();
+		// Fix: Match Column Album logic (6px bottom gap).
+		const int bottomGap = captionGap;
 		minHeight = captionStart + captionHeight + bottomGap;
 	} else {
 		minHeight = visualBottomOfElement + captionGap + st::msgPadding.bottom();
 	}
 	
 	if (!isBubbleTop()) {
-		// FIX: Only subtract topMinus for non-captioned files to match original "tight" look (2x subtraction).
-		// For captioned files, subtract NOTHING (0x) to prevents overflow.
-		if (!captioned && !hasTranscribe) {
-			minHeight -= 2 * st::msgFileTopMinus;
-		}
+		minHeight -= st::msgFileTopMinus;
 	}
 	
 	return { maxWidth, minHeight };
@@ -687,8 +683,8 @@ QSize Document::countCurrentSize(int newWidth) {
 		captionHeight = captioned->caption.countHeight(captionw);
 		const int captionStart = visualBottomOfElement + captionGap;
 		
-		// Fix: Add bottom padding so there is a gap below the caption.
-		const int bottomGap = captionGap + st::msgPadding.bottom();
+		// Fix: Match Column Album logic (6px bottom gap).
+		const int bottomGap = captionGap;
 		newHeight = captionStart + captionHeight + bottomGap;
 	} else {
 		newHeight = visualBottomOfElement + captionGap + st::msgPadding.bottom();
@@ -698,19 +694,13 @@ QSize Document::countCurrentSize(int newWidth) {
 		auto result = File::countCurrentSize(newWidth);
 		result.setHeight(newHeight);
 		if (!isBubbleTop()) {
-			// FIX: Only subtract topMinus for non-captioned files (2x subtraction to restore tight look).
-			result.setHeight(result.height() - 2 * st::msgFileTopMinus);
+			result.setHeight(result.height() - st::msgFileTopMinus);
 		}
 		return result;
 	}
 
 	if (!isBubbleTop()) {
-		// FIX: For captioned files (checked above to be true here?), DO NOT subtract topMinus.
-		// Wait, the block above handles !captioned && !hasTranscribe.
-		// So this block is reachable if (captioned || hasTranscribe).
-		// We want 0 subtraction here. So do nothing.
-		// However, original code subtracted 1x here. We must remove it.
-		// So we just Don't add anything here.
+		newHeight -= st::msgFileTopMinus;
 	}
 
 	accumulate_min(newWidth, maxWidth());
