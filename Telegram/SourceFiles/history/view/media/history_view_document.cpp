@@ -570,9 +570,7 @@ QSize Document::countOptimalSize() {
 
 	const int baseTop = 2; 
 	// Inline calculation using correct 'layout' (Non-Grouped)
-	// FIX: Do not subtract topMinus here. It is subtracted from the total height at the end.
-	// This ensures visualBottomOfElement matches the 'draw' method logic (which uses forcedTop = 2).
-	int visualBottomOfElement = baseTop;
+	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
 	if (thumbed) {
 		visualBottomOfElement += layout.thumbSize;
 	} else if (downloadInCorner()) {
@@ -603,30 +601,29 @@ QSize Document::countOptimalSize() {
 
 	int captionHeight = 0;
 	auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
-	const int captionGap = 10; // FIX: Symmetrical 10px gap above and below caption.
 
 	if (hasTranscribe) {
 		const int transcribeHeight = voice->transcribeText.countHeight(captionw);
-		const int captionStart = visualBottomOfElement + captionGap;
+		const int captionStart = visualBottomOfElement + 6;
 		minHeight = captionStart + transcribeHeight;
 		
 		if (captioned) {
 			minHeight += st::mediaCaptionSkip;
 			captionHeight = captioned->caption.countHeight(captionw);
-			minHeight += captionHeight + captionGap;
+			minHeight += captionHeight + 6;
 		} else {
-			minHeight += captionGap;
+			minHeight += 6;
 		}
 	} else if (captioned) {
 		captionHeight = captioned->caption.countHeight(captionw);
-		const int captionStart = visualBottomOfElement + captionGap;
+		const int captionStart = visualBottomOfElement + 6;
 		
 		// Fix: Ensure proper bottom spacing so long captions don't overflow. 
-		// Use symmetrical gap + padding.
-		const int bottomGap = captionGap + st::msgPadding.bottom();
+		// Use 6 + msgPadding.bottom() to be safe.
+		const int bottomGap = 6 + st::msgPadding.bottom();
 		minHeight = captionStart + captionHeight + bottomGap;
 	} else {
-		minHeight = visualBottomOfElement + captionGap + st::msgPadding.bottom();
+		minHeight = visualBottomOfElement + 6 + st::msgPadding.bottom();
 	}
 	
 	if (!isBubbleTop()) {
@@ -651,8 +648,7 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	const int baseTop = 2; 
 	// Inline calculation using correct 'layout' (Non-Grouped)
-	// FIX: Do not subtract topMinus here. It is subtracted from the total height at the end.
-	int visualBottomOfElement = baseTop;
+	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
 	if (thumbed) {
 		visualBottomOfElement += layout.thumbSize;
 	} else if (downloadInCorner()) {
@@ -667,30 +663,29 @@ QSize Document::countCurrentSize(int newWidth) {
 	int newHeight = 0;
 	int captionHeight = 0;
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
-	const int captionGap = 10; // FIX: Symmetrical 10px gap above and below caption.
 
 	if (hasTranscribe) {
 		const int transcribeHeight = voice->transcribeText.countHeight(captionw);
-		const int captionStart = visualBottomOfElement + captionGap;
+		const int captionStart = visualBottomOfElement + 6;
 		newHeight = captionStart + transcribeHeight;
 		
 		if (captioned) {
 			newHeight += st::mediaCaptionSkip;
 			captionHeight = captioned->caption.countHeight(captionw);
-			newHeight += captionHeight + captionGap;
+			newHeight += captionHeight + 6;
 		} else {
-			newHeight += captionGap;
+			newHeight += 6;
 		}
 	} else if (captioned) {
 		captionHeight = captioned->caption.countHeight(captionw);
-		const int captionStart = visualBottomOfElement + captionGap;
+		const int captionStart = visualBottomOfElement + 6;
 		
 		// Fix: Ensure proper bottom spacing so long captions don't overflow. 
-		// Use symmetrical gap + padding.
-		const int bottomGap = captionGap + st::msgPadding.bottom();
+		// Use 6 + msgPadding.bottom() to be safe.
+		const int bottomGap = 6 + st::msgPadding.bottom();
 		newHeight = captionStart + captionHeight + bottomGap;
 	} else {
-		newHeight = visualBottomOfElement + captionGap + st::msgPadding.bottom();
+		newHeight = visualBottomOfElement + 6 + st::msgPadding.bottom();
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -1139,8 +1134,7 @@ void Document::draw(
 		visualElementBottom += (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 	
-	const int captionGap = (mode == LayoutMode::Grouped) ? 6 : 10; // FIX: 10px gap for single files
-	auto captiontop = visualElementBottom + captionGap; // Gap between visual element and caption
+	auto captiontop = visualElementBottom + 6; // Gap between visual element and caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
@@ -1153,7 +1147,7 @@ void Document::draw(
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
 		captioned->caption.draw(p, {
-			.position = { st::msgPadding.left(), captiontop }, // FIX: Use captiontop
+			.position = { st::msgPadding.left(), visualElementBottom + 6 },
 			.availableWidth = captionw,
 			.palette = &stm->textPalette,
 			.pre = stm->preCache.get(),
