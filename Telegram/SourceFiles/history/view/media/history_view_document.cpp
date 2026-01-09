@@ -648,8 +648,7 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	const int baseTop = 2; 
 	// Inline calculation using correct 'layout' (Non-Grouped)
-	// FIX: Don't subtract topMinus here, handle it at the end for consistency with draw()
-	int visualBottomOfElement = baseTop;
+	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
 	if (thumbed) {
 		visualBottomOfElement += layout.thumbSize;
 	} else if (downloadInCorner()) {
@@ -682,7 +681,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		const int captionStart = visualBottomOfElement + 6;
 		
 		// Fix: Ensure proper bottom spacing so long captions don't overflow. 
-		// Match Column Album logic: Gap above (6) + Text + Gap below (6) + Bubble Padding
+		// Use 6 + msgPadding.bottom() to be safe.
 		const int bottomGap = 6 + st::msgPadding.bottom();
 		newHeight = captionStart + captionHeight + bottomGap;
 	} else {
@@ -1147,29 +1146,8 @@ void Document::draw(
 		p.setPen(stm->historyTextFg);
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
-
-		// FIX: Center caption in the available space below the visual element
-		// Similar to how Column Album handles it in GroupedMedia.
-		if (mode == LayoutMode::Full) {
-			const auto captionHeight = captioned->caption.countHeight(captionw);
-			const auto bottomLimit = height() - st::msgPadding.bottom(); // Reserve padding
-			
-			// Available space between the element and the reserved bottom padding
-			const auto availableSpace = bottomLimit - visualElementBottom;
-			
-			// We want at least 6px top gap.
-			if (availableSpace > captionHeight) {
-				// Center it
-				int centeredOffset = (availableSpace - captionHeight) / 2;
-				// Ensure min 6px top gap
-				if (centeredOffset < 6) centeredOffset = 6;
-				
-				captiontop = visualElementBottom + centeredOffset;
-			}
-		}
-
 		captioned->caption.draw(p, {
-			.position = { st::msgPadding.left(), captiontop },
+			.position = { st::msgPadding.left(), visualElementBottom + 6 },
 			.availableWidth = captionw,
 			.palette = &stm->textPalette,
 			.pre = stm->preCache.get(),
