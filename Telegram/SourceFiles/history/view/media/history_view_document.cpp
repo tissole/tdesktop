@@ -1127,28 +1127,58 @@ void Document::draw(
 		visualElementBottom += (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 
-	// FIX: Calculate centered caption position
-	if (voice && !voice->transcribeText.isEmpty()) {
-		// Calculate available space for caption
-		const int totalHeight = height();
-		const int availableForCaption = totalHeight - visualElementBottom;
-		const int transcribeHeight = voice->transcribeText.countHeight(captionw);
-		
-		// Center the caption vertically in available space
-		const int topGap = (availableForCaption - transcribeHeight) / 2;
-		const int captiontop = visualElementBottom + topGap;
-		
-		p.setPen(stm->historyTextFg);
-		voice->transcribeText.draw(p, st::msgPadding.left(), captiontop, captionw, style::al_left, 0, -1, selection);
-		
-		if (captioned) {
-			const int captionStartY = captiontop + transcribeHeight + st::mediaCaptionSkip;
+	// FIX: Only apply centered positioning for FULL mode (single files), not GROUPED mode (column albums)
+	if (mode == LayoutMode::Full) {
+		if (voice && !voice->transcribeText.isEmpty()) {
+			// Calculate available space for caption
+			const int totalHeight = height();
+			const int availableForCaption = totalHeight - visualElementBottom;
+			const int transcribeHeight = voice->transcribeText.countHeight(captionw);
+			
+			// Center the caption vertically in available space
+			const int topGap = (availableForCaption - transcribeHeight) / 2;
+			const int captiontop = visualElementBottom + topGap;
+			
+			p.setPen(stm->historyTextFg);
+			voice->transcribeText.draw(p, st::msgPadding.left(), captiontop, captionw, style::al_left, 0, -1, selection);
+			
+			if (captioned) {
+				const int captionStartY = captiontop + transcribeHeight + st::mediaCaptionSkip;
+				p.setPen(stm->historyTextFg);
+				_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
+				auto highlightRequest = context.computeHighlightCache();
+				selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
+				captioned->caption.draw(p, {
+					.position = { st::msgPadding.left(), captionStartY },
+					.availableWidth = captionw,
+					.palette = &stm->textPalette,
+					.pre = stm->preCache.get(),
+					.blockquote = context.quoteCache(parent()->contentColorIndex()),
+					.colors = context.st->highlightColors(),
+					.spoiler = Ui::Text::DefaultSpoilerCache(),
+					.now = context.now,
+					.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
+					.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
+					.selection = selection,
+					.highlight = highlightRequest ? &*highlightRequest : nullptr,
+					.useFullWidth = true,
+				});
+			}
+		} else if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
+			// FIX: Calculate centered caption position for caption-only
+			const int totalHeight = height();
+			const int availableForCaption = totalHeight - visualElementBottom;
+			const int captionHeight = captioned->caption.countHeight(captionw);
+			
+			// Center the caption vertically in available space
+			const int topGap = (availableForCaption - captionHeight) / 2;
+			const int captiontop = visualElementBottom + topGap;
+			
 			p.setPen(stm->historyTextFg);
 			_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 			auto highlightRequest = context.computeHighlightCache();
-			selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
 			captioned->caption.draw(p, {
-				.position = { st::msgPadding.left(), captionStartY },
+				.position = { st::msgPadding.left(), captiontop },
 				.availableWidth = captionw,
 				.palette = &stm->textPalette,
 				.pre = stm->preCache.get(),
@@ -1163,34 +1193,36 @@ void Document::draw(
 				.useFullWidth = true,
 			});
 		}
-	} else if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
-		// FIX: Calculate centered caption position for caption-only
-		const int totalHeight = height();
-		const int availableForCaption = totalHeight - visualElementBottom;
-		const int captionHeight = captioned->caption.countHeight(captionw);
-		
-		// Center the caption vertically in available space
-		const int topGap = (availableForCaption - captionHeight) / 2;
-		const int captiontop = visualElementBottom + topGap;
-		
-		p.setPen(stm->historyTextFg);
-		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
-		auto highlightRequest = context.computeHighlightCache();
-		captioned->caption.draw(p, {
-			.position = { st::msgPadding.left(), captiontop },
-			.availableWidth = captionw,
-			.palette = &stm->textPalette,
-			.pre = stm->preCache.get(),
-			.blockquote = context.quoteCache(parent()->contentColorIndex()),
-			.colors = context.st->highlightColors(),
-			.spoiler = Ui::Text::DefaultSpoilerCache(),
-			.now = context.now,
-			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
-			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
-			.selection = selection,
-			.highlight = highlightRequest ? &*highlightRequest : nullptr,
-			.useFullWidth = true,
-		});
+	} else {
+		// GROUPED mode (column albums) - use original positioning
+		auto captiontop = visualElementBottom + 6;
+
+		if (voice && !voice->transcribeText.isEmpty()) {
+			p.setPen(stm->historyTextFg);
+			voice->transcribeText.draw(p, st::msgPadding.left(), bottom, captionw, style::al_left, 0, -1, selection);
+			captiontop += voice->transcribeText.countHeight(captionw) + st::mediaCaptionSkip;
+			selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
+		}
+		if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
+			p.setPen(stm->historyTextFg);
+			_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
+			auto highlightRequest = context.computeHighlightCache();
+			captioned->caption.draw(p, {
+				.position = { st::msgPadding.left(), captiontop },
+				.availableWidth = captionw,
+				.palette = &stm->textPalette,
+				.pre = stm->preCache.get(),
+				.blockquote = context.quoteCache(parent()->contentColorIndex()),
+				.colors = context.st->highlightColors(),
+				.spoiler = Ui::Text::DefaultSpoilerCache(),
+				.now = context.now,
+				.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
+				.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
+				.selection = selection,
+				.highlight = highlightRequest ? &*highlightRequest : nullptr,
+				.useFullWidth = true,
+			});
+		}
 	}
 
 	// --- STANDARD BOTTOM INFO (Round Videos Only) ---
