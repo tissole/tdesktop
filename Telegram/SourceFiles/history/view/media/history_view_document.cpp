@@ -679,13 +679,14 @@ QSize Document::countCurrentSize(int newWidth) {
 		}
 	} else if (captioned) {
 		captionHeight = captioned->caption.countHeight(captionw);
-		const int captionStart = visualBottomOfElement + st::mediaCaptionSkip;
+		const int captionStart = visualBottomOfElement + 6;
 		
 		// Fix: Ensure proper bottom spacing so long captions don't overflow. 
-		const int bottomGap = st::mediaCaptionSkip + st::msgPadding.bottom();
+		// Match Column Album logic: Gap above (6) + Text + Gap below (6) + Bubble Padding
+		const int bottomGap = 6 + st::msgPadding.bottom();
 		newHeight = captionStart + captionHeight + bottomGap;
 	} else {
-		newHeight = visualBottomOfElement + st::mediaCaptionSkip + st::msgPadding.bottom();
+		newHeight = visualBottomOfElement + 6 + st::msgPadding.bottom();
 	}
 
 	if (!captioned && !hasTranscribe) {
@@ -697,10 +698,9 @@ QSize Document::countCurrentSize(int newWidth) {
 		return result;
 	}
 
-	// Removed topMinus subtraction to prevent caption overflow.
-	// if (!isBubbleTop()) {
-	// 	newHeight -= st::msgFileTopMinus;
-	// }
+	if (!isBubbleTop()) {
+		newHeight -= st::msgFileTopMinus;
+	}
 
 	accumulate_min(newWidth, maxWidth());
 	return { newWidth, newHeight };
@@ -1136,7 +1136,7 @@ void Document::draw(
 		visualElementBottom += (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 	
-	auto captiontop = visualElementBottom + st::mediaCaptionSkip; // Gap between visual element and caption
+	auto captiontop = visualElementBottom + 6; // Gap between visual element and caption
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
