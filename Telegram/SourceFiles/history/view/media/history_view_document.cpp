@@ -1124,8 +1124,7 @@ void Document::draw(
 	
 	// Inline calculation using correct 'layout' (Non-Grouped)
 	const auto &layout = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
-	// Fix: Ensure visualElementBottom respects topMinus, otherwise caption is pushed down.
-	int visualElementBottom = forcedTop - topMinus;
+	int visualElementBottom = forcedTop;
 	if (thumbed) {
 		visualElementBottom += layout.thumbSize;
 	} else if (cornerDownload) {
