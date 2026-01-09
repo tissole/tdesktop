@@ -1148,26 +1148,10 @@ void Document::draw(
 		p.setPen(stm->historyTextFg);
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
-
-		// FIX: Center caption in the available space below the visual element
-		// Similar to how Column Album handles it in GroupedMedia.
-		if (mode == LayoutMode::Full) {
-			const auto captionHeight = captioned->caption.countHeight(captionw);
-			const auto bottomLimit = height() - st::msgPadding.bottom(); // Reserve padding
-			
-			// Available space between the element and the reserved bottom padding
-			const auto availableSpace = bottomLimit - visualElementBottom;
-			
-			// We want at least 6px top gap.
-			if (availableSpace > captionHeight) {
-				// Center it
-				int centeredOffset = (availableSpace - captionHeight) / 2;
-				// Ensure min 6px top gap
-				if (centeredOffset < 6) centeredOffset = 6;
-				
-				captiontop = visualElementBottom + centeredOffset;
-			}
-		}
+		
+		// Reverted to fixed top gap to ensure consistency and prevent overflow.
+		// visualElementBottom already accounts for topMinus and thumb size.
+		captiontop = visualElementBottom + 6;
 
 		captioned->caption.draw(p, {
 			.position = { st::msgPadding.left(), captiontop },
