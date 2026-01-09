@@ -569,6 +569,7 @@ QSize Document::countOptimalSize() {
 	}
 
 	const int baseTop = 2; 
+	// Inline calculation using correct 'layout' (Non-Grouped)
 	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
 	if (thumbed) {
 		visualBottomOfElement += layout.thumbSize;
@@ -581,7 +582,9 @@ QSize Document::countOptimalSize() {
 	} 
 	
 	const auto captioned = Get<HistoryDocumentCaptioned>();
+	// Unused variable removed: const bool hasCaptionContent = captioned || hasTranscribe;
 
+	// Use same gap calculation as sizeForGroupingOptimal for consistency
 	int minHeight = 0;
 
 	if (isBubbleBottom() && !hasTranscribe) {
@@ -607,19 +610,16 @@ QSize Document::countOptimalSize() {
 		if (captioned) {
 			minHeight += st::mediaCaptionSkip;
 			captionHeight = captioned->caption.countHeight(captionw);
-			// FIX: Use same bottom gap formula as column albums
-			const int bottomGap = 6 + st::msgPadding.bottom();
-			minHeight += captionHeight + bottomGap;
+			minHeight += captionHeight + 6;
 		} else {
-			// FIX: Add proper bottom gap
-			const int bottomGap = 6 + st::msgPadding.bottom();
-			minHeight += bottomGap;
+			minHeight += 6;
 		}
 	} else if (captioned) {
 		captionHeight = captioned->caption.countHeight(captionw);
 		const int captionStart = visualBottomOfElement + 6;
 		
-		// FIX: Use same bottom gap formula as column albums
+		// Fix: Ensure proper bottom spacing so long captions don't overflow. 
+		// Use 6 + msgPadding.bottom() to be safe.
 		const int bottomGap = 6 + st::msgPadding.bottom();
 		minHeight = captionStart + captionHeight + bottomGap;
 	} else {
@@ -642,10 +642,12 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	int contentHeight = layout.thumbSize;
 	if (downloadInCorner()) {
+		// FIX Issue from user: For Music files, measure from 'download arrow' (shift + size).
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
 	const int baseTop = 2; 
+	// Inline calculation using correct 'layout' (Non-Grouped)
 	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
 	if (thumbed) {
 		visualBottomOfElement += layout.thumbSize;
@@ -657,6 +659,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		visualBottomOfElement += (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 	
+	// Use same gap calculation as sizeForGrouping for consistency
 	int newHeight = 0;
 	int captionHeight = 0;
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
@@ -669,19 +672,16 @@ QSize Document::countCurrentSize(int newWidth) {
 		if (captioned) {
 			newHeight += st::mediaCaptionSkip;
 			captionHeight = captioned->caption.countHeight(captionw);
-			// FIX: Use same bottom gap formula as column albums
-			const int bottomGap = 6 + st::msgPadding.bottom();
-			newHeight += captionHeight + bottomGap;
+			newHeight += captionHeight + 6;
 		} else {
-			// FIX: Add proper bottom gap
-			const int bottomGap = 6 + st::msgPadding.bottom();
-			newHeight += bottomGap;
+			newHeight += 6;
 		}
 	} else if (captioned) {
 		captionHeight = captioned->caption.countHeight(captionw);
 		const int captionStart = visualBottomOfElement + 6;
 		
-		// FIX: Use same bottom gap formula as column albums
+		// Fix: Ensure proper bottom spacing so long captions don't overflow. 
+		// Use 6 + msgPadding.bottom() to be safe.
 		const int bottomGap = 6 + st::msgPadding.bottom();
 		newHeight = captionStart + captionHeight + bottomGap;
 	} else {
