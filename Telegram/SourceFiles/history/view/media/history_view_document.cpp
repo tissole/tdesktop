@@ -425,12 +425,9 @@ QSize Document::countOptimalSize() {
 		const auto transcribes = &session->api().transcribes();
 		if (_parent->data()->media()->ttlSeconds()
 			|| _realParent->isScheduled()
-			|| _realParent->isAdminLogEntry()
 			|| (!session->premium()
 				&& !transcribes->freeFor(_realParent)
-				&& !transcribes->trialsSupport())
-			|| (!session->premium()
-				&& _data->duration() > transcribes->trialsMaxLengthMs())) {
+				&& !transcribes->trialsSupport())) {
 			voice->transcribe = nullptr;
 			voice->transcribeText = {};
 		} else {
@@ -496,92 +493,23 @@ QSize Document::countOptimalSize() {
 
 	const auto tleft = layout.padding.left() + layout.thumbSize + layout.thumbSkip;
 	const auto tright = layout.padding.right();
-
-	int customInfoWidth = 0;
-	if (!_data->isVideoMessage()) {
-		const auto item = _parent->data();
-		const auto font = st::msgDateFont;
-
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
-
-		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
-		const auto dateText = QLocale().toString(
-			ItemDateTime(item).time(),
-			GetEnhancedBool("show_seconds")
-				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
-				: QLocale::system().timeFormat(QLocale::ShortFormat));
-		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-			? QString(" %1").arg(item->fullId().msg.bare)
-			: QString();
-		const auto views = item->Get<HistoryMessageViews>();
-		const auto viewsText = (views && views->views.count >= 0)
-			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
-			: QString();
-
-		const int iconGap = 1;
-		const int textGap = font->width(' ');
-		const int iconW = st::historyViewsWidth;
-
-		if (!viewsText.isEmpty()) {
-			customInfoWidth += iconW + iconGap + font->width(viewsText) + textGap;
-		}
-		if (edited) {
-			customInfoWidth += font->width(QString::fromUtf8("✏️")) + textGap;
-		}
-		customInfoWidth += font->width(dateText + msgIdText);
-		customInfoWidth += st::msgDateImgDelta;
-	}
-
 	if (thumbed) {
 		accumulate_max(maxWidth, tleft + MaxStatusWidth(_data) + tright);
 	} else {
 		auto unread = (_data->isVoiceMessage() || _transcribedRound)
 			? (st::mediaUnreadSkip + st::mediaUnreadSize)
 			: 0;
-		int rightSideWidth = std::max(_parent->skipBlockWidth(), customInfoWidth);
-		accumulate_max(maxWidth, tleft + MaxStatusWidth(_data) + unread + rightSideWidth + st::msgPadding.right());
+		accumulate_max(maxWidth, tleft + MaxStatusWidth(_data) + unread + _parent->skipBlockWidth() + st::msgPadding.right());
 	}
 
 	if (const auto named = Get<HistoryDocumentNamed>()) {
-		accumulate_max(maxWidth, tleft + named->name.maxWidth() + std::max(tright, customInfoWidth + st::msgDateSpace));
+		accumulate_max(maxWidth, tleft + named->name.maxWidth() + tright);
 		accumulate_min(maxWidth, st::msgMaxWidth);
 	}
-	if (voice) {
-		const auto maxWaveformWidth = ::Media::Player::kWaveformSamplesCount *
-			(st::msgWaveformBar + st::msgWaveformSkip);
-		const auto transcribeWidth = voice->transcribe
-			? (voice->transcribe->size().width() + st::historyTranscribeSkip)
-			: 0;
-		accumulate_max(
-			maxWidth,
-			maxWaveformWidth
-				+ rect::m::sum::h(layout.padding)
-				+ layout.thumbSize
-				+ layout.thumbSkip
-				+ transcribeWidth);
+	if (voice && voice->transcribe) {
+		maxWidth += st::historyTranscribeSkip
+			+ voice->transcribe->size().width();
 	}
-
-	int contentHeight = layout.thumbSize;
-	if (downloadInCorner()) {
-		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-	}
-
-	const int baseTop = 2;
-	// Calculate visual bottom correctly using topMinus subtraction if needed
-	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
-	if (thumbed) {
-		visualBottomOfElement += layout.thumbSize;
-	} else if (downloadInCorner()) {
-		visualBottomOfElement += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-	} else {
-		const auto innerSize = st::msgFileLayout.thumbSize;
-		const auto currentThumbSize = layout.thumbSize;
-		visualBottomOfElement += (currentThumbSize - innerSize) / 2 + innerSize;
-	}
-
-	const auto captioned = Get<HistoryDocumentCaptioned>();
 
 	if (isBubbleBottom() && !hasTranscribe) {
 		if (const auto link = thumbedLinkMaxWidth()) {
@@ -595,34 +523,57 @@ QSize Document::countOptimalSize() {
 		}
 	}
 
-	int minHeight = 0;
-	int captionHeight = 0;
-	auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
-
-	// Symmetry Fix: Use 6px gap above and 6px gap below the caption
-	if (hasTranscribe) {
-		const int transcribeHeight = voice->transcribeText.countHeight(captionw);
-		const int captionStart = visualBottomOfElement + 6;
-		minHeight = captionStart + transcribeHeight;
-
-		if (captioned) {
-			minHeight += st::mediaCaptionSkip;
-			captionHeight = captioned->caption.countHeight(captionw);
-			minHeight += captionHeight + 6 + st::msgPadding.bottom();
-		} else {
-			minHeight += 6 + st::msgPadding.bottom();
-		}
-	} else if (captioned) {
-		captionHeight = captioned->caption.countHeight(captionw);
-		const int captionStart = visualBottomOfElement + 6;
-		
-		// Fix: Add 6px gap below the caption before adding the bubble padding
-		// This creates centering: Element -> 6px -> Caption -> 6px -> Bottom
-		minHeight = captionStart + captionHeight + 6 + st::msgPadding.bottom();
-	} else {
-		minHeight = visualBottomOfElement + 6 + st::msgPadding.bottom();
+	// --- Height Calculation Start ---
+	
+	// 1. Calculate visual height of the element (Thumb / Corner Download / Circle)
+	int contentHeight = layout.thumbSize;
+	if (downloadInCorner()) {
+		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+	} else if (!thumbed) {
+		// For simple files (not thumbed), the circle is smaller than layout.thumbSize
+		// We want the visual bottom of the circle itself.
+		const auto innerSize = st::msgFileLayout.thumbSize;
+		const auto currentThumbSize = layout.thumbSize;
+		contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 
+	// 2. Base top is fixed to 2px
+	int minHeight = 2 + contentHeight;
+
+	// 3. Add caption + symmetric gaps
+	const auto captioned = Get<HistoryDocumentCaptioned>();
+	if (hasTranscribe || captioned) {
+		auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
+		
+		// Gap Above Caption
+		minHeight += 6; 
+
+		if (hasTranscribe) {
+			minHeight += voice->transcribeText.countHeight(captionw);
+			if (captioned) {
+				minHeight += st::mediaCaptionSkip;
+			}
+		}
+		if (captioned) {
+			minHeight += captioned->caption.countHeight(captionw);
+		}
+		
+		// Gap Below Caption
+		minHeight += 6;
+
+		// Frame Bottom Margin
+		if (isBubbleBottom()) {
+			minHeight += st::msgPadding.bottom();
+		}
+	} else {
+		// No caption: Add symmetric gap to bottom and frame margin
+		minHeight += 6;
+		if (isBubbleBottom()) {
+			minHeight += st::msgPadding.bottom();
+		}
+	}
+
+	// 4. Adjust for topMinus (bubble overlap)
 	if (!isBubbleTop()) {
 		minHeight -= st::msgFileTopMinus;
 	}
@@ -637,65 +588,98 @@ QSize Document::countCurrentSize(int newWidth) {
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &layout = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
 
-	int contentHeight = layout.thumbSize;
-	if (downloadInCorner()) {
-		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-	}
-
-	const int baseTop = 2;
-	// Calculate visual bottom correctly using topMinus subtraction
-	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
-	if (thumbed) {
-		visualBottomOfElement += layout.thumbSize;
-	} else if (downloadInCorner()) {
-		visualBottomOfElement += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-	} else {
-		const auto innerSize = st::msgFileLayout.thumbSize;
-		const auto currentThumbSize = layout.thumbSize;
-		visualBottomOfElement += (currentThumbSize - innerSize) / 2 + innerSize;
-	}
-
-	int newHeight = 0;
-	int captionHeight = 0;
-	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
-
-	// Symmetry Fix: Match optimal size logic
-	if (hasTranscribe) {
-		const int transcribeHeight = voice->transcribeText.countHeight(captionw);
-		const int captionStart = visualBottomOfElement + 6;
-		newHeight = captionStart + transcribeHeight;
-
-		if (captioned) {
-			newHeight += st::mediaCaptionSkip;
-			captionHeight = captioned->caption.countHeight(captionw);
-			newHeight += captionHeight + 6 + st::msgPadding.bottom();
-		} else {
-			newHeight += 6 + st::msgPadding.bottom();
-		}
-	} else if (captioned) {
-		captionHeight = captioned->caption.countHeight(captionw);
-		const int captionStart = visualBottomOfElement + 6;
-
-		// Fix: Add 6px gap below the caption before adding the bubble padding
-		newHeight = captionStart + captionHeight + 6 + st::msgPadding.bottom();
-	} else {
-		newHeight = visualBottomOfElement + 6 + st::msgPadding.bottom();
-	}
-
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
-		result.setHeight(newHeight);
-		if (!isBubbleTop()) {
-			result.setHeight(result.height() - st::msgFileTopMinus);
+		// Apply our custom height logic even for no-caption to maintain element alignment
+		int contentHeight = layout.thumbSize;
+		if (downloadInCorner()) {
+			contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+		} else if (!thumbed) {
+			const auto innerSize = st::msgFileLayout.thumbSize;
+			const auto currentThumbSize = layout.thumbSize;
+			contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 		}
+
+		int newHeight = 2 + contentHeight + 6; // 6px gap below element
+		if (isBubbleBottom()) {
+			newHeight += st::msgPadding.bottom();
+		}
+		if (!isBubbleTop()) {
+			newHeight -= st::msgFileTopMinus;
+		}
+
+		// Ensure width doesn't break due to layout constraints
+		if (isBubbleBottom()) {
+			const auto thumbedWidth = thumbedLinkMaxWidth();
+			const auto statusWidth = thumbedWidth
+				? 0
+				: st::normalFont->width(_statusText);
+			if (thumbedWidth || statusWidth) {
+				const auto needed = layout.padding.left()
+					+ (thumbedWidth
+						? layout.thumbSize + layout.thumbSkip
+						: st::msgFileLayout.thumbSize
+							+ st::mediaUnreadSkip)
+					+ (thumbedWidth + statusWidth)
+					+ layout.thumbSkip
+					+ (_realParent->hasUnreadMediaFlag()
+						? st::mediaUnreadSkip + st::mediaUnreadSize
+						: 0)
+					+ _parent->bottomInfoFirstLineWidth()
+					+ layout.padding.right();
+				if (result.width() < needed) {
+					// Fallback to standard calculation if width is tight, 
+					// but override height
+				}
+			}
+		}
+		result.setHeight(newHeight);
 		return result;
 	}
 
+	accumulate_min(newWidth, maxWidth());
+	
+	// --- Height Calculation (Must match countOptimalSize) ---
+	
+	// 1. Visual Element Height
+	int contentHeight = layout.thumbSize;
+	if (downloadInCorner()) {
+		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+	} else if (!thumbed) {
+		const auto innerSize = st::msgFileLayout.thumbSize;
+		const auto currentThumbSize = layout.thumbSize;
+		contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
+	}
+
+	// 2. Base Height
+	int newHeight = 2 + contentHeight;
+
+	// 3. Caption + Gaps
+	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
+	
+	newHeight += 6; // Gap Above Caption
+
+	if (hasTranscribe) {
+		newHeight += voice->transcribeText.countHeight(captionw);
+		if (captioned) {
+			newHeight += st::mediaCaptionSkip;
+		}
+	}
+	if (captioned) {
+		newHeight += captioned->caption.countHeight(captionw);
+	}
+
+	newHeight += 6; // Gap Below Caption
+
+	if (isBubbleBottom()) {
+		newHeight += st::msgPadding.bottom();
+	}
+
+	// 4. Adjust for topMinus
 	if (!isBubbleTop()) {
 		newHeight -= st::msgFileTopMinus;
 	}
 
-	accumulate_min(newWidth, maxWidth());
 	return { newWidth, newHeight };
 }
 
@@ -738,35 +722,27 @@ void Document::draw(
 	const auto showPause = updateStatusText();
 	const auto radial = isRadialAnimation();
 
-	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus; 
+	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (mode == LayoutMode::Full)
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-
+	
+	// Use 2px forced top minus shift
 	const auto forcedTop = 2;
 	const auto delta = forcedTop - st.padding.top();
 
 	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
 	const auto nametop = st.nameTop + delta - topMinus;
 	const auto nameright = st.padding.right();
-
-	const auto nameHeight = st::semiboldFont->height;
 	const auto statustop = st.statusTop + delta - topMinus;
-
 	const auto linktop = st.linkTop + delta - topMinus;
-	const auto captioned = Get<HistoryDocumentCaptioned>();
-	const auto bottomPadding = 10;
-
-	auto contentHeight = st.thumbSize;
-	if (downloadInCorner()) {
-		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-	}
-	const auto bottom = forcedTop + contentHeight + bottomPadding - topMinus;
-
+	
+	// Visual geometry calculation for element
 	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
 	const auto inner = QRect(rthumb.x() + (rthumb.width() - innerSize) / 2, rthumb.y() + (rthumb.height() - innerSize) / 2, innerSize, innerSize);
+	
 	const auto radialOpacity = radial ? _animation->radial.opacity() : 1.;
 	if (thumbed) {
 		const auto rounding = thumbRounding(mode, outsideRounding);
@@ -920,7 +896,7 @@ void Document::draw(
 
 			if (radial && !cornerDownload) {
 				QRect rinner(inner.marginsRemoved(QMargins(st::msgFileRadialLine, st::msgFileRadialLine, st::msgFileRadialLine, st::msgFileRadialLine)));
-				_animation->radial.draw(q, rinner, st::msgFileRadialLine, stm->historyFileRadialFg);
+				_animation->radial.draw(q, rinner, st::msgFileRadialLine, sti->historyFileThumbRadialFg);
 			}
 			if (hasTtlBadge) {
 				{
@@ -1027,79 +1003,6 @@ void Document::draw(
 	p.setPen(stm->mediaFg);
 	p.drawTextLeft(nameleft, statustop, width, statusText);
 
-	// --- CUSTOM INLINE INFO (For All Files except Round Videos) ---
-	if (!_data->isVideoMessage() && mode != LayoutMode::Grouped) {
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
-
-		const auto item = _parent->data();
-		const auto font = st::msgDateFont;
-		p.setFont(font);
-		p.setPen(stm->msgDateFg);
-
-		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
-		const auto dateText = QLocale().toString(
-			ItemDateTime(item).time(),
-			GetEnhancedBool("show_seconds")
-				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
-				: QLocale::system().timeFormat(QLocale::ShortFormat));
-		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-			? QString(" %1").arg(item->fullId().msg.bare)
-			: QString();
-		const auto views = item->Get<HistoryMessageViews>();
-		const auto viewsText = (views && views->views.count >= 0)
-			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
-			: QString();
-
-		// Calculate Widths
-		const int iconGap = 1;
-		const int textGap = font->width(' ');
-		const int iconW = st::historyViewsWidth;
-		const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
-		const int editedW = edited ? font->width(QString::fromUtf8("✏️")) : 0;
-		const int timeIdW = font->width(dateText + msgIdText);
-
-		int totalW = 0;
-		if (viewsW > 0) totalW += viewsW + textGap;
-		if (editedW > 0) totalW += editedW + textGap;
-		totalW += timeIdW;
-
-		// Calculate Position (Right Edge - same as Column Album)
-		int infoX = width - totalW - st::msgDateImgDelta;
-
-		// Collision Check with Status Text (on the left)
-		int statusW = st::normalFont->width(statusText);
-		int reservedLeft = nameleft + statusW + st::msgDateSpace;
-		if (infoX < reservedLeft) {
-			infoX = reservedLeft;
-		}
-
-		const auto baseY = statustop + st::normalFont->ascent;
-
-		// Draw Views
-		if (viewsW > 0) {
-			const auto &icon = stm->historyViewsIcon;
-			const int iconH = icon.height();
-			const int scaledH = (iconH * iconW) / std::max(1, icon.width());
-			const int iconTop = baseY - font->ascent + (font->height - scaledH) / 2;
-
-			icon.paint(p, infoX, iconTop, iconW);
-			p.drawText(infoX + iconW + iconGap, baseY, viewsText);
-			infoX += viewsW + textGap;
-		}
-
-		// Draw Edited
-		if (editedW > 0) {
-			p.drawText(infoX, baseY, QString::fromUtf8("✏️"));
-			infoX += editedW + textGap;
-		}
-
-		// Draw Date + ID
-		p.drawText(infoX, baseY, dateText + msgIdText);
-	}
-	// ----------------------------------------------------------------
-
 	if (_realParent->hasUnreadMediaFlag()) {
 		auto w = st::normalFont->width(statusText);
 		if (w + st::mediaUnreadSkip + st::mediaUnreadSize <= statuswidth) {
@@ -1114,26 +1017,25 @@ void Document::draw(
 	}
 
 	auto selection = context.selection;
-
-	// Inline calculation using correct 'layout' (Non-Grouped)
-	// FIX for overflow: Subtract topMinus so the text anchors relative to the shifted element
-	const auto &layout = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
-	int visualElementBottom = forcedTop - topMinus;
-	if (thumbed) {
-		visualElementBottom += layout.thumbSize;
-	} else if (cornerDownload) {
-		visualElementBottom += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-	} else {
+	
+	// Determine visual bottom of element to align caption
+	int contentHeight = st.thumbSize;
+	if (downloadInCorner()) {
+		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+	} else if (!thumbed) {
 		const auto innerSize = st::msgFileLayout.thumbSize;
-		const auto currentThumbSize = layout.thumbSize;
-		visualElementBottom += (currentThumbSize - innerSize) / 2 + innerSize;
+		const auto currentThumbSize = st.thumbSize;
+		contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 	}
-
-	auto captiontop = visualElementBottom + 6; 
+	
+	// Start 6px below visual bottom, shifted by topMinus
+	auto captiontop = forcedTop + contentHeight - topMinus + 6;
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
-		voice->transcribeText.draw(p, st::msgPadding.left(), bottom, captionw, style::al_left, 0, -1, selection);
+		// Note: draw() uses top-relative coord, countCurrentSize uses height accumulation. 
+		// captiontop accounts for topMinus already.
+		voice->transcribeText.draw(p, st::msgPadding.left(), captiontop, captionw, style::al_left, 0, -1, selection);
 		captiontop += voice->transcribeText.countHeight(captionw) + st::mediaCaptionSkip;
 		selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
 	}
@@ -1156,42 +1058,6 @@ void Document::draw(
 			.highlight = highlightRequest ? &*highlightRequest : nullptr,
 			.useFullWidth = true,
 		});
-	}
-
-	// --- STANDARD BOTTOM INFO (Round Videos Only) ---
-	bool inWebPage = (_parent->media() != this);
-	const auto bubble = _parent->hasBubble();
-
-	if (_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
-		auto fullRight = width;
-		auto fullBottom = height();
-		_parent->drawInfo(
-			p,
-			context,
-			fullRight,
-			fullBottom,
-			width,
-			InfoDisplayType::Image);
-
-		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
-			auto fastShareLeft = _parent->hasRightLayout()
-				? (-size->width() - st::historyFastShareLeft)
-				: (fullRight + st::historyFastShareLeft);
-			auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
-			_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, width);
-		}
-	} else if (!_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
-		// For standard documents, we only want the Right Action button (Fast Share),
-		// NOT the info bubble (date/checks), because that is already drawn inline.
-		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
-			auto fullRight = width;
-			auto fullBottom = height();
-			auto fastShareLeft = _parent->hasRightLayout()
-				? (-size->width() - st::historyFastShareLeft)
-				: (fullRight + st::historyFastShareLeft);
-			auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
-			_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, width);
-		}
 	}
 }
 
@@ -1413,7 +1279,8 @@ TextState Document::textState(
 	const auto &st = (mode == LayoutMode::Full)
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
-
+	
+	// Use 2px forced top
 	const auto forcedTop = 2;
 	const auto delta = forcedTop - st.padding.top();
 
@@ -1422,131 +1289,23 @@ TextState Document::textState(
 	const auto nameright = st.padding.right();
 	auto namewidth = width - nameleft - nameright;
 	const auto linktop = st.linkTop + delta - topMinus;
-
-	const auto nameHeight = st::semiboldFont->height;
-	const auto statustop = nametop + nameHeight + nametop;
-
-	auto contentHeight = st.thumbSize;
+	
+	// Calculate bottom similar to draw()
+	int contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-	}
-	
-	// Fix: Align geometry calculation with draw() by applying topMinus
-	const auto &layoutConfig = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
-	int visualElementBottom = forcedTop - topMinus;
-	if (thumbed) {
-		visualElementBottom += layoutConfig.thumbSize;
-	} else if (downloadInCorner()) {
-		visualElementBottom += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
-	} else {
+	} else if (!thumbed) {
 		const auto innerSize = st::msgFileLayout.thumbSize;
-		const auto currentThumbSize = layoutConfig.thumbSize;
-		visualElementBottom += (currentThumbSize - innerSize) / 2 + innerSize;
+		const auto currentThumbSize = st.thumbSize;
+		contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 	
-	auto bottom = visualElementBottom + 6;
+	// Start checks 6px below visual bottom
+	auto bottom = forcedTop + contentHeight - topMinus + 6;
 
 	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
 	const auto inner = QRect(rthumb.x() + (rthumb.width() - innerSize) / 2, rthumb.y() + (rthumb.height() - innerSize) / 2, innerSize, innerSize);
-
-	// --- CUSTOM TOOLTIP LOGIC (Inline) ---
-	const bool bubble = _parent->hasBubble();
-	if (!_data->isVideoMessage() && mode == LayoutMode::Full && (!bubble || isBubbleBottom())) {
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
-
-		const auto item = _parent->data();
-		const auto font = st::msgDateFont;
-
-		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
-		const auto dateText = QLocale().toString(
-			ItemDateTime(item).time(),
-			GetEnhancedBool("show_seconds")
-				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
-				: QLocale::system().timeFormat(QLocale::ShortFormat));
-		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-			? QString(" %1").arg(item->fullId().msg.bare)
-			: QString();
-		const auto views = item->Get<HistoryMessageViews>();
-		const auto viewsText = (views && views->views.count >= 0)
-			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
-			: QString();
-
-		const auto tooltipStatusTop = st.statusTop - topMinus;
-
-		// Calculate Widths (Same as draw)
-		const int iconGap = 1;
-		const int textGap = font->width(' ');
-		const int iconW = st::historyViewsWidth;
-		const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
-		const int editedW = edited ? font->width(QString::fromUtf8("✏️")) : 0;
-		const int timeIdW = font->width(dateText + msgIdText);
-
-		int totalW = 0;
-		if (viewsW > 0) totalW += viewsW + textGap;
-		if (editedW > 0) totalW += editedW + textGap;
-		totalW += timeIdW;
-
-		// Calculate Position (Right Edge)
-		int infoX = width - totalW - st::msgDateImgDelta;
-
-		// Collision Check with Status Text
-		int statusW = st::normalFont->width(_statusText);
-		int reservedLeft = nameleft + statusW + st::msgDateSpace;
-		if (infoX < reservedLeft) {
-			infoX = reservedLeft;
-		}
-
-		// Hit Test Area
-		int bubbleY = tooltipStatusTop + st::normalFont->ascent - font->ascent;
-		int bubbleH = font->height;
-
-		if (point.y() >= bubbleY && point.y() <= bubbleY + bubbleH && point.x() >= infoX) {
-			int currentX = infoX;
-
-			// 1. Views Zone
-			QRect viewsRect;
-			if (viewsW > 0) {
-				viewsRect = QRect(currentX, bubbleY, viewsW, bubbleH);
-				currentX += viewsW + textGap;
-			}
-
-			// 2. Edited/Date Zone
-			int zone2Start = currentX;
-			int remainingW = (width - st::msgDateImgDelta) - zone2Start;
-			QRect zone2Rect(zone2Start, bubbleY, remainingW, bubbleH);
-
-			if (viewsW > 0 && viewsRect.contains(point)) {
-				result.customTooltip = true;
-				result.customTooltipText = QString("Views: ") + viewsText;
-				return result;
-			} else if (zone2Rect.contains(point)) {
-				const auto uploadLocal = ItemDateTime(item);
-				QString text = tr::lng_uploaded(tr::now) + ": "
-					+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
-					+ uploadLocal.time().toString("HH:mm:ss");
-
-				if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
-					text += "  ID: " + QString::number(item->fullId().msg.bare);
-				}
-
-				if (edited) {
-					const auto editLocal = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
-					QString editedTrans = tr::lng_edited(tr::now);
-					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
-					text += "\n" + editedTrans + ": "
-						+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
-						+ editLocal.time().toString("HH:mm:ss");
-				}
-
-				result.customTooltip = true;
-				result.customTooltipText = text;
-				return result;
-			}
-		}
-	}
 
 	const auto filenameMoused = QRect(nameleft, nametop, namewidth, st::semiboldFont->height).contains(point);
 	_tooltipFilename.setMoused(filenameMoused);
@@ -1657,46 +1416,6 @@ TextState Document::textState(
 		return result;
 	}
 	_tooltipFilename.updateTooltipForState(result);
-
-	bool inWebPage = (_parent->media() != this);
-	if (_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
-		auto fullRight = width;
-		auto fullBottom = layout.height();
-		const auto bottomInfoResult = _parent->bottomInfoTextState(
-			fullRight,
-			fullBottom,
-			point,
-			InfoDisplayType::Image);
-		if (bottomInfoResult.link
-			|| bottomInfoResult.cursor != CursorState::None
-			|| bottomInfoResult.customTooltip) {
-			return bottomInfoResult;
-		}
-		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
-			auto fastShareLeft = _parent->hasRightLayout()
-				? (-size->width() - st::historyFastShareLeft)
-				: (fullRight + st::historyFastShareLeft);
-			auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
-			if (QRect(fastShareLeft, fastShareTop, size->width(), size->height()).contains(point)) {
-				result.link = _parent->rightActionLink(point
-					- QPoint(fastShareLeft, fastShareTop));
-			}
-		}
-	} else if (!_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
-		// Standard files just check for Right Action (Fast Share)
-		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
-			auto fullRight = width;
-			auto fullBottom = layout.height();
-			auto fastShareLeft = _parent->hasRightLayout()
-				? (-size->width() - st::historyFastShareLeft)
-				: (fullRight + st::historyFastShareLeft);
-			auto fastShareTop = (fullBottom - st::historyFastShareBottom - size->height());
-			if (QRect(fastShareLeft, fastShareTop, size->width(), size->height()).contains(point)) {
-				result.link = _parent->rightActionLink(point
-					- QPoint(fastShareLeft, fastShareTop));
-			}
-		}
-	}
 	return result;
 }
 
