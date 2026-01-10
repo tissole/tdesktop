@@ -1140,12 +1140,12 @@ void Document::draw(
 	// We must account for topMinus here because draw() coordinates are shifted by topMinus.
 	int visualElementBottom = forcedTop - topMinus;
 	if (thumbed) {
-		visualElementBottom += layout.thumbSize;
+		visualElementBottom += st.thumbSize;
 	} else if (cornerDownload) {
 		visualElementBottom += st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	} else {
 		const auto innerSize = st::msgFileLayout.thumbSize;
-		const auto currentThumbSize = layout.thumbSize;
+		const auto currentThumbSize = st.thumbSize;
 		visualElementBottom += (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 	
@@ -1178,6 +1178,9 @@ void Document::draw(
 			.useFullWidth = true,
 		});
 	}
+
+	bool inWebPage = (_parent->media() != this);
+	const auto bubble = _parent->hasBubble();
 
 	// --- STANDARD BOTTOM INFO (Round Videos Only) ---
 	// FIX Issue 4: Only call _parent->drawInfo for Video Messages (Round Videos).
@@ -1213,7 +1216,6 @@ void Document::draw(
 		}
 	}
 }
-
 
 
 Ui::BubbleRounding Document::thumbRounding(
