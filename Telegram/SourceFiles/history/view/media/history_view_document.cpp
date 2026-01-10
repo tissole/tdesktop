@@ -599,7 +599,7 @@ QSize Document::countOptimalSize() {
 	int captionHeight = 0;
 	auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
 
-	// FIX: Don't add bottom padding here - the bubble system adds it via bubbleMargins()!
+	// FIX: Calculate proper spacing - mimicking column album formula
 	const int topCaptionGap = 6;
 	const int bottomCaptionGap = 6;
 
@@ -610,14 +610,14 @@ QSize Document::countOptimalSize() {
 		if (captioned) {
 			minHeight += st::mediaCaptionSkip;
 			captionHeight = captioned->caption.countHeight(captionw);
-			minHeight += captionHeight + bottomCaptionGap;
+			minHeight += captionHeight + bottomCaptionGap + st::msgPadding.bottom();
 		} else {
-			minHeight += bottomCaptionGap;
+			minHeight += bottomCaptionGap + st::msgPadding.bottom();
 		}
 	} else if (captioned) {
 		captionHeight = captioned->caption.countHeight(captionw);
-		// FIX: Just add gaps around caption, bubble adds bottom padding
-		minHeight = visualBottomOfElement + topCaptionGap + captionHeight + bottomCaptionGap;
+		// FIX: Add top gap + caption + bottom gap + bottom padding
+		minHeight = visualBottomOfElement + topCaptionGap + captionHeight + bottomCaptionGap + st::msgPadding.bottom();
 	} else {
 		minHeight = visualBottomOfElement + 6 + st::msgPadding.bottom();
 	}
@@ -657,7 +657,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	int captionHeight = 0;
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 
-	// FIX: Don't add bottom padding here - the bubble system adds it via bubbleMargins()!
+	// FIX: Use same spacing as countOptimalSize
 	const int topCaptionGap = 6;
 	const int bottomCaptionGap = 6;
 
@@ -668,14 +668,14 @@ QSize Document::countCurrentSize(int newWidth) {
 		if (captioned) {
 			newHeight += st::mediaCaptionSkip;
 			captionHeight = captioned->caption.countHeight(captionw);
-			newHeight += captionHeight + bottomCaptionGap;
+			newHeight += captionHeight + bottomCaptionGap + st::msgPadding.bottom();
 		} else {
-			newHeight += bottomCaptionGap;
+			newHeight += bottomCaptionGap + st::msgPadding.bottom();
 		}
 	} else if (captioned) {
 		captionHeight = captioned->caption.countHeight(captionw);
-		// FIX: Just add gaps around caption, bubble adds bottom padding
-		newHeight = visualBottomOfElement + topCaptionGap + captionHeight + bottomCaptionGap;
+		// FIX: Add top gap + caption + bottom gap + bottom padding
+		newHeight = visualBottomOfElement + topCaptionGap + captionHeight + bottomCaptionGap + st::msgPadding.bottom();
 	} else {
 		newHeight = visualBottomOfElement + 6 + st::msgPadding.bottom();
 	}
