@@ -575,26 +575,29 @@ QSize Document::countOptimalSize() {
 		}
 	}
 
-	// --- Height Calculation Start ---
-
-	// 1. Calculate height of the visual element (Thumb / Corner Download / Circle)
+	// --- Height Calculation Corrected ---
+	// We calculate height linearly based on visual components.
+	
+	// 1. Calculate visual height of the element (Thumb / Corner Download / Circle)
 	int contentHeight = layout.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	} else if (!thumbed) {
-		// For simple files (not thumbed), the circle is smaller than layout.thumbSize
-		// We use the full layout size to ensure consistent spacing, or calculate exact visual height
-		// But usually alignment is based on the layout slot.
-		// Let's stick to consistent layout slot + 2px base.
 		const auto innerSize = st::msgFileLayout.thumbSize;
 		const auto currentThumbSize = layout.thumbSize;
 		contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 
-	// 2. Base Height (2px top + element)
-	int minHeight = 2 + contentHeight;
+	// 2. Base top starts at 2px.
+	// We must account for topMinus here to get the correct Y coordinate relative to the row.
+	const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+	
+	// 'visualBottom' is the Y-coordinate where the file element ends.
+	int visualBottom = 2 - topMinus + contentHeight;
 
 	// 3. Add caption + symmetric gaps
+	int minHeight = visualBottom; 
+	
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	
 	if (hasTranscribe || captioned) {
@@ -621,18 +624,16 @@ QSize Document::countOptimalSize() {
 			minHeight += st::msgPadding.bottom();
 		}
 	} else {
-		// No caption: Add symmetric gap to bottom and frame margin to center element vertically
-		// Element -> 6px -> Bottom
+		// No caption: Add symmetric gap to bottom and frame margin
 		minHeight += 6;
 		if (isBubbleBottom()) {
 			minHeight += st::msgPadding.bottom();
 		}
 	}
 
-	// 4. Adjust for topMinus (bubble overlap)
-	if (!isBubbleTop()) {
-		minHeight -= st::msgFileTopMinus;
-	}
+	// Important: We do NOT subtract topMinus again here because visualBottom 
+	// already included (-topMinus) in its calculation. 
+	// The result 'minHeight' is the final visual height relative to the row top (0).
 
 	return { maxWidth, minHeight };
 }
@@ -656,21 +657,16 @@ QSize Document::countCurrentSize(int newWidth) {
 			const auto currentThumbSize = layout.thumbSize;
 			contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 		}
+		
+		const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+		int visualBottom = 2 - topMinus + contentHeight;
 
-		int newHeight = 2 + contentHeight + 6; // Element + 6px gap
+		int newHeight = visualBottom + 6; // Element + 6px gap
 		if (isBubbleBottom()) {
 			newHeight += st::msgPadding.bottom();
 		}
-		if (!isBubbleTop()) {
-			newHeight -= st::msgFileTopMinus;
-		}
 		
 		result.setHeight(newHeight);
-		if (!isBubbleTop()) {
-			// File::countCurrentSize might have already subtracted it, so be careful.
-			// Actually File::countCurrentSize calls countCurrentSize which calls maxWidth().
-			// Safest to just return result with modified height if we trust File:: logic for width.
-		}
 		return result;
 	}
 
@@ -688,8 +684,10 @@ QSize Document::countCurrentSize(int newWidth) {
 		contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 
-	// 2. Base Height
-	int newHeight = 2 + contentHeight;
+	// 2. Base Height (Visual Bottom)
+	const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+	int visualBottom = 2 - topMinus + contentHeight;
+	int newHeight = visualBottom;
 
 	// 3. Caption + Gaps
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
@@ -710,11 +708,6 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	if (isBubbleBottom()) {
 		newHeight += st::msgPadding.bottom();
-	}
-
-	// 4. Adjust for topMinus
-	if (!isBubbleTop()) {
-		newHeight -= st::msgFileTopMinus;
 	}
 
 	return { newWidth, newHeight };
@@ -1178,7 +1171,7 @@ void Document::draw(
 			.useFullWidth = true,
 		});
 	}
-
+	
 	bool inWebPage = (_parent->media() != this);
 	const auto bubble = _parent->hasBubble();
 
@@ -1444,7 +1437,7 @@ TextState Document::textState(
 	auto namewidth = width - nameleft - nameright;
 	const auto linktop = st.linkTop + delta - topMinus;
 	
-	// FIX: Visual bottom alignment for hit testing
+	// Visual bottom for hit testing must match draw() logic
 	int contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
@@ -1453,7 +1446,8 @@ TextState Document::textState(
 		const auto currentThumbSize = st.thumbSize;
 		contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 	}
-	auto bottom = forcedTop + contentHeight - topMinus + 6;
+	
+	auto bottom = forcedTop - topMinus + contentHeight + 6;
 
 	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
