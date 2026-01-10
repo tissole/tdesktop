@@ -569,6 +569,7 @@ QSize Document::countOptimalSize() {
 	}
 
 	const int baseTop = 2; 
+	// Inline calculation using correct 'layout' (Non-Grouped)
 	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
 	if (thumbed) {
 		visualBottomOfElement += layout.thumbSize;
@@ -581,7 +582,9 @@ QSize Document::countOptimalSize() {
 	} 
 	
 	const auto captioned = Get<HistoryDocumentCaptioned>();
+	// Unused variable removed: const bool hasCaptionContent = captioned || hasTranscribe;
 
+	// Use same gap calculation as sizeForGroupingOptimal for consistency
 	int minHeight = 0;
 
 	if (isBubbleBottom() && !hasTranscribe) {
@@ -599,25 +602,26 @@ QSize Document::countOptimalSize() {
 	int captionHeight = 0;
 	auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
 
-	// FIX: Calculate proper spacing - mimicking column album formula
-	const int topCaptionGap = 6;
-	const int bottomCaptionGap = 6;
-
 	if (hasTranscribe) {
 		const int transcribeHeight = voice->transcribeText.countHeight(captionw);
-		minHeight = visualBottomOfElement + topCaptionGap + transcribeHeight;
+		const int captionStart = visualBottomOfElement + 6;
+		minHeight = captionStart + transcribeHeight;
 		
 		if (captioned) {
 			minHeight += st::mediaCaptionSkip;
 			captionHeight = captioned->caption.countHeight(captionw);
-			minHeight += captionHeight + bottomCaptionGap + st::msgPadding.bottom();
+			minHeight += captionHeight + 6;
 		} else {
-			minHeight += bottomCaptionGap + st::msgPadding.bottom();
+			minHeight += 6;
 		}
 	} else if (captioned) {
 		captionHeight = captioned->caption.countHeight(captionw);
-		// FIX: Add top gap + caption + bottom gap + bottom padding
-		minHeight = visualBottomOfElement + topCaptionGap + captionHeight + bottomCaptionGap + st::msgPadding.bottom();
+		const int captionStart = visualBottomOfElement + 6;
+		
+		// Fix: Ensure proper bottom spacing so long captions don't overflow. 
+		// Use 6 + msgPadding.bottom() to be safe.
+		const int bottomGap = 6 + st::msgPadding.bottom();
+		minHeight = captionStart + captionHeight + bottomGap;
 	} else {
 		minHeight = visualBottomOfElement + 6 + st::msgPadding.bottom();
 	}
@@ -638,10 +642,12 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	int contentHeight = layout.thumbSize;
 	if (downloadInCorner()) {
+		// FIX Issue from user: For Music files, measure from 'download arrow' (shift + size).
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
 
 	const int baseTop = 2; 
+	// Inline calculation using correct 'layout' (Non-Grouped)
 	int visualBottomOfElement = baseTop - (isBubbleTop() ? 0 : st::msgFileTopMinus);
 	if (thumbed) {
 		visualBottomOfElement += layout.thumbSize;
@@ -653,29 +659,31 @@ QSize Document::countCurrentSize(int newWidth) {
 		visualBottomOfElement += (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 	
+	// Use same gap calculation as sizeForGrouping for consistency
 	int newHeight = 0;
 	int captionHeight = 0;
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 
-	// FIX: Use same spacing as countOptimalSize
-	const int topCaptionGap = 6;
-	const int bottomCaptionGap = 6;
-
 	if (hasTranscribe) {
 		const int transcribeHeight = voice->transcribeText.countHeight(captionw);
-		newHeight = visualBottomOfElement + topCaptionGap + transcribeHeight;
+		const int captionStart = visualBottomOfElement + 6;
+		newHeight = captionStart + transcribeHeight;
 		
 		if (captioned) {
 			newHeight += st::mediaCaptionSkip;
 			captionHeight = captioned->caption.countHeight(captionw);
-			newHeight += captionHeight + bottomCaptionGap + st::msgPadding.bottom();
+			newHeight += captionHeight + 6;
 		} else {
-			newHeight += bottomCaptionGap + st::msgPadding.bottom();
+			newHeight += 6;
 		}
 	} else if (captioned) {
 		captionHeight = captioned->caption.countHeight(captionw);
-		// FIX: Add top gap + caption + bottom gap + bottom padding
-		newHeight = visualBottomOfElement + topCaptionGap + captionHeight + bottomCaptionGap + st::msgPadding.bottom();
+		const int captionStart = visualBottomOfElement + 6;
+		
+		// Fix: Ensure proper bottom spacing so long captions don't overflow. 
+		// Use 6 + msgPadding.bottom() to be safe.
+		const int bottomGap = 6 + st::msgPadding.bottom();
+		newHeight = captionStart + captionHeight + bottomGap;
 	} else {
 		newHeight = visualBottomOfElement + 6 + st::msgPadding.bottom();
 	}
@@ -1119,20 +1127,16 @@ void Document::draw(
 		visualElementBottom += (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 
-	// FIX: Only apply centered positioning for FULL mode (single files)
+	// FIX: Only apply centered positioning for FULL mode (single files), not GROUPED mode (column albums)
 	if (mode == LayoutMode::Full) {
 		if (voice && !voice->transcribeText.isEmpty()) {
-			const int transcribeHeight = voice->transcribeText.countHeight(captionw);
-			int captionTotalHeight = transcribeHeight;
-			
-			if (captioned) {
-				captionTotalHeight += st::mediaCaptionSkip + captioned->caption.countHeight(captionw);
-			}
-			
-			// Calculate available space and center
+			// Calculate available space for caption
 			const int totalHeight = height();
-			const int availableForCaption = totalHeight - visualElementBottom - st::msgPadding.bottom();
-			const int topGap = (availableForCaption - captionTotalHeight) / 2;
+			const int availableForCaption = totalHeight - visualElementBottom;
+			const int transcribeHeight = voice->transcribeText.countHeight(captionw);
+			
+			// Center the caption vertically in available space
+			const int topGap = (availableForCaption - transcribeHeight) / 2;
 			const int captiontop = visualElementBottom + topGap;
 			
 			p.setPen(stm->historyTextFg);
@@ -1161,11 +1165,12 @@ void Document::draw(
 				});
 			}
 		} else if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
+			// FIX: Calculate centered caption position for caption-only
+			const int totalHeight = height();
+			const int availableForCaption = totalHeight - visualElementBottom;
 			const int captionHeight = captioned->caption.countHeight(captionw);
 			
-			// Calculate available space and center
-			const int totalHeight = height();
-			const int availableForCaption = totalHeight - visualElementBottom - st::msgPadding.bottom();
+			// Center the caption vertically in available space
 			const int topGap = (availableForCaption - captionHeight) / 2;
 			const int captiontop = visualElementBottom + topGap;
 			
