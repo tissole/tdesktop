@@ -1106,7 +1106,7 @@ void Document::draw(
 
 	auto selection = context.selection;
 	
-	// Calculate visual element bottom
+	// Calculate visual element bottom (not used for caption positioning in grouped mode)
 	const auto &layout = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
 	int visualElementBottom = forcedTop;
 	if (thumbed) {
@@ -1119,12 +1119,13 @@ void Document::draw(
 		visualElementBottom += (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 
-	// FIX: Use simple fixed positioning like column albums, no centering
+	// FIX: Use 'bottom' variable for caption positioning (includes the 10px bottomPadding)
+	// This matches what grouped mode does and gives the gap below caption
 	auto captiontop = visualElementBottom + 6;
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
-		voice->transcribeText.draw(p, st::msgPadding.left(), captiontop, captionw, style::al_left, 0, -1, selection);
+		voice->transcribeText.draw(p, st::msgPadding.left(), bottom, captionw, style::al_left, 0, -1, selection);
 		captiontop += voice->transcribeText.countHeight(captionw) + st::mediaCaptionSkip;
 		selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
 	}
