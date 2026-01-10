@@ -744,7 +744,7 @@ void Document::draw(
 	const auto showPause = updateStatusText();
 	const auto radial = isRadialAnimation();
 
-	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus; // Revert to original: this function handles its own topMinus
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (mode == LayoutMode::Full)
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
@@ -758,7 +758,7 @@ void Document::draw(
 	const auto nameright = st.padding.right();
 	
 	const auto nameHeight = st::semiboldFont->height;
-	const auto statustop = st.statusTop + delta - topMinus;
+	const auto statustop = st.statusTop + delta - topMinus; 
 
 	const auto linktop = st.linkTop + delta - topMinus;
 	const auto captioned = Get<HistoryDocumentCaptioned>();
@@ -1058,6 +1058,7 @@ void Document::draw(
 			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
 			: QString();
 
+		// Calculate Widths
 		const int iconGap = 1;
 		const int textGap = font->width(' ');
 		const int iconW = st::historyViewsWidth;
@@ -1070,8 +1071,10 @@ void Document::draw(
 		if (editedW > 0) totalW += editedW + textGap;
 		totalW += timeIdW;
 
+		// Calculate Position (Right Edge - same as Column Album)
 		int infoX = width - totalW - st::msgDateImgDelta;
 		
+		// Collision Check with Status Text (on the left)
 		int statusW = st::normalFont->width(statusText);
 		int reservedLeft = nameleft + statusW + st::msgDateSpace;
 		if (infoX < reservedLeft) {
@@ -1080,6 +1083,7 @@ void Document::draw(
 
 		const auto baseY = statustop + st::normalFont->ascent;
 
+		// Draw Views
 		if (viewsW > 0) {
 			const auto &icon = stm->historyViewsIcon;
 			const int iconH = icon.height();
@@ -1091,13 +1095,16 @@ void Document::draw(
 			infoX += viewsW + textGap;
 		}
 
+		// Draw Edited
 		if (editedW > 0) {
 			p.drawText(infoX, baseY, QString::fromUtf8("✏️"));
 			infoX += editedW + textGap;
 		}
 
+		// Draw Date + ID
 		p.drawText(infoX, baseY, dateText + msgIdText);
 	}
+	// ----------------------------------------------------------------
 
 	if (_realParent->hasUnreadMediaFlag()) {
 		auto w = st::normalFont->width(statusText);
@@ -1114,7 +1121,7 @@ void Document::draw(
 
 	auto selection = context.selection;
 	
-	// Calculate visual element bottom
+	// Inline calculation using correct 'layout' (Non-Grouped)
 	const auto &layout = thumbed ? st::msgFileThumbLayout : st::msgFileLayout;
 	int visualElementBottom = forcedTop;
 	if (thumbed) {
@@ -1126,58 +1133,21 @@ void Document::draw(
 		const auto currentThumbSize = layout.thumbSize;
 		visualElementBottom += (currentThumbSize - innerSize) / 2 + innerSize;
 	}
+	
+	auto captiontop = visualElementBottom + 6; // Gap between visual element and caption
 
-	// FIX: Calculate centered caption position
 	if (voice && !voice->transcribeText.isEmpty()) {
-		// Calculate available space for caption
-		const int totalHeight = height();
-		const int availableForCaption = totalHeight - visualElementBottom;
-		const int transcribeHeight = voice->transcribeText.countHeight(captionw);
-		
-		// Center the caption vertically in available space
-		const int topGap = (availableForCaption - transcribeHeight) / 2;
-		const int captiontop = visualElementBottom + topGap;
-		
 		p.setPen(stm->historyTextFg);
-		voice->transcribeText.draw(p, st::msgPadding.left(), captiontop, captionw, style::al_left, 0, -1, selection);
-		
-		if (captioned) {
-			const int captionStartY = captiontop + transcribeHeight + st::mediaCaptionSkip;
-			p.setPen(stm->historyTextFg);
-			_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
-			auto highlightRequest = context.computeHighlightCache();
-			selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
-			captioned->caption.draw(p, {
-				.position = { st::msgPadding.left(), captionStartY },
-				.availableWidth = captionw,
-				.palette = &stm->textPalette,
-				.pre = stm->preCache.get(),
-				.blockquote = context.quoteCache(parent()->contentColorIndex()),
-				.colors = context.st->highlightColors(),
-				.spoiler = Ui::Text::DefaultSpoilerCache(),
-				.now = context.now,
-				.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
-				.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
-				.selection = selection,
-				.highlight = highlightRequest ? &*highlightRequest : nullptr,
-				.useFullWidth = true,
-			});
-		}
-	} else if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
-		// FIX: Calculate centered caption position for caption-only
-		const int totalHeight = height();
-		const int availableForCaption = totalHeight - visualElementBottom;
-		const int captionHeight = captioned->caption.countHeight(captionw);
-		
-		// Center the caption vertically in available space
-		const int topGap = (availableForCaption - captionHeight) / 2;
-		const int captiontop = visualElementBottom + topGap;
-		
+		voice->transcribeText.draw(p, st::msgPadding.left(), bottom, captionw, style::al_left, 0, -1, selection);
+		captiontop += voice->transcribeText.countHeight(captionw) + st::mediaCaptionSkip;
+		selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
+	}
+	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		p.setPen(stm->historyTextFg);
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 		auto highlightRequest = context.computeHighlightCache();
 		captioned->caption.draw(p, {
-			.position = { st::msgPadding.left(), captiontop },
+			.position = { st::msgPadding.left(), visualElementBottom + 6 },
 			.availableWidth = captionw,
 			.palette = &stm->textPalette,
 			.pre = stm->preCache.get(),
@@ -1191,9 +1161,13 @@ void Document::draw(
 			.highlight = highlightRequest ? &*highlightRequest : nullptr,
 			.useFullWidth = true,
 		});
+		// Ensure dynamic padding matches countSize logic for consistent layout
+		// (Though draw doesn't use bottom val for this, it keeps variables sane)
 	}
 
+
 	// --- STANDARD BOTTOM INFO (Round Videos Only) ---
+	// FIX Issue 4: Only call _parent->drawInfo for Video Messages (Round Videos).
 	bool inWebPage = (_parent->media() != this);
 	const auto bubble = _parent->hasBubble();
 	
@@ -1216,6 +1190,8 @@ void Document::draw(
 			_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, width);
 		}
 	} else if (!_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
+		// For standard documents, we only want the Right Action button (Fast Share),
+		// NOT the info bubble (date/checks), because that is already drawn inline.
 		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
 			auto fullRight = width;
 			auto fullBottom = height(); 
