@@ -1022,15 +1022,7 @@ QSize Message::performCountOptimalSize() {
 			if (mediaDisplayed) {
 				// Task 7: Space below name (which is above media) should equal space above name (msgPadding.top)
 				// So we use st::msgPadding.top() instead of 2.
-				
-				// FIX: Use mediaInBubbleSkip (5px) for single Photo/Video to match Grid Album (32px).
-				// Grid Album (Grouped) shifts content up by 3px due to layout style differences.
-				// Single Photo/Video (35px) needs 3px less padding to match.
-				bool isSingleMedia = false;
-				if (item->media()) {
-					isSingleMedia = item->media()->photo() || item->media()->document();
-				}
-				minHeight += (isCompact && !isSingleMedia) ? st::msgPadding.top() : st::mediaInBubbleSkip;
+				minHeight += isCompact ? st::msgPadding.top() : st::mediaInBubbleSkip;
 			}
 			if (entry) minHeight += st::mediaInBubbleSkip;
 		}
