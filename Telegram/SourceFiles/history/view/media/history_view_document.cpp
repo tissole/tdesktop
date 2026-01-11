@@ -616,8 +616,8 @@ QSize Document::countOptimalSize() {
 			minHeight += captioned->caption.countHeight(captionw);
 		}
 		
-		// Gap Below Caption: Use 0 because Message now adds 10px padding
-		minHeight += 0;
+		// Gap Below Caption
+		minHeight += 2;
 	} else {
 		// No caption: Add symmetric gap to bottom and frame margin
 		minHeight += 2;
@@ -636,7 +636,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
 		
-		// Recalculate height to enforce our logic
+		// Recalculate height to enforce our 2px gap logic even without caption
 		int contentHeight = layout.thumbSize;
 		if (downloadInCorner()) {
 			contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
@@ -691,8 +691,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight += captioned->caption.countHeight(captionw);
 	}
 
-	// Gap Below Caption: Use 0 because Message now adds 10px padding
-	newHeight += 0; 
+	newHeight += 2; // Gap Below Caption
 
 	return { newWidth, newHeight };
 }
@@ -1993,7 +1992,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 			- st::msgPadding.right();
 		
 		const int captionStart = visualBottomOfElement + 2; 
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 0; 
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 2; 
 	} else {
 		finalHeight = visualBottomOfElement + 2; 
 	}
@@ -2023,7 +2022,7 @@ QSize Document::sizeForGrouping(int width) const {
 			- st::msgPadding.right();
 		
 		const int captionStart = visualBottomOfElement + 2;
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 0; 
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 2; 
 	} else {
 		finalHeight = visualBottomOfElement + 2; 
 	}

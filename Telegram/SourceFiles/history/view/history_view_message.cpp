@@ -988,30 +988,33 @@ QSize Message::performCountOptimalSize() {
 			}
 		}
 
-		// FIX: Use st::msgPadding.bottom() (10px) for Compact Media to ensure proper spacing
-		// when no caption is present or after the caption.
+		// FIX: Use 2px bottom padding for Compact Media (Photos, Documents)
 		bool isCompact = false;
+		bool hasInternalPadding = false;
 		if (mediaDisplayed && item->media()) {
 			if (item->media()->photo()) {
 				isCompact = true;
 			} else if (item->media()->document() || dynamic_cast<const GroupedMedia*>(this->media())) {
 				isCompact = true;
+				hasInternalPadding = true;
 			}
 		}
 
 		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
-			// Always apply standard bottom padding for files/grouped media
-			// to ensure the 10px gap between file/caption and bottom of bubble.
+			// Apply padding
 			minHeight += isCompact
-				? st::msgPadding.bottom()
+				? (hasInternalPadding ? 0 : 2)
 				: st::msgPadding.bottom();
 			
 			if (mediaDisplayed) {
 				minHeight += isCompact ? 2 : st::mediaInBubbleSkip;
 			}
 		} else if (mediaOnBottom && mediaDisplayed && isCompact) {
-			// Even if mediaOnBottom is true, ensure we have padding
-			minHeight += 2;
+			// Even if mediaOnBottom is true, ensure we have the 2px padding for docs
+			// because Document::countOptimalSize no longer includes it.
+			if (!hasInternalPadding) {
+				minHeight += 2;
+			}
 		}
 
 		if (!mediaOnTop) {
@@ -4827,10 +4830,8 @@ int Message::resizeContentGetHeight(int newWidth) {
 			}
 
 			auto mediaInBubbleSkip = isCompact ? 2 : st::mediaInBubbleSkip;
-			
-			// FIX: Use standard bottom padding (10px) instead of 0/2 for compact media 
-			// to ensure correct gaps for files and albums.
-			auto msgPaddingBottom = isCompact ? st::msgPadding.bottom() : st::msgPadding.bottom();
+			// FIX ISSUE: User wants flush bottom (0px) for compact media (Photos/Videos/Albums).
+			auto msgPaddingBottom = isCompact ? 0 : st::msgPadding.bottom();
 
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 				newHeight += msgPaddingBottom;
