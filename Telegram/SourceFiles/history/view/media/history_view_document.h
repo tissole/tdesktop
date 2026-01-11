@@ -35,9 +35,7 @@ public:
 		not_null<DocumentData*> document);
 	~Document();
 
-	bool hideMessageText() const override {
-		return false;
-	}
+	bool hideMessageText() const override;
 
 	void draw(Painter &p, const PaintContext &context) const override;
 	TextState textState(QPoint point, StateRequest request) const override;

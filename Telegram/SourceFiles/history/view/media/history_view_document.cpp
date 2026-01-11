@@ -2278,4 +2278,8 @@ rpl::producer<> TTLVoiceStops(FullMsgId fullId) {
 	);
 }
 
+bool Document::hideMessageText() const {
+	return Has<HistoryDocumentCaptioned>();
+}
+
 } // namespace HistoryView
