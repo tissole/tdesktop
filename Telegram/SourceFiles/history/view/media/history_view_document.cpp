@@ -589,11 +589,11 @@ QSize Document::countOptimalSize() {
 		contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 
-	// 2. Base top starts at 2px.
+	// 2. Base top starts at 0px.
 	const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 	
 	// 'visualBottom' is the Y-coordinate where the file element ends.
-	int visualBottom = 2 - topMinus + contentHeight;
+	int visualBottom = 0 - topMinus + contentHeight;
 
 	// 3. Add caption + symmetric gaps
 	int minHeight = visualBottom; 
@@ -617,10 +617,10 @@ QSize Document::countOptimalSize() {
 		}
 		
 		// Gap Below Caption
-		minHeight += 2;
+		minHeight += 6;
 	} else {
-		// No caption: Add symmetric gap to bottom and frame margin
-		minHeight += 2;
+		// No caption: Add 10px gap to bottom
+		minHeight += 10;
 	}
 
 	return { maxWidth, minHeight };
@@ -647,9 +647,9 @@ QSize Document::countCurrentSize(int newWidth) {
 		}
 		
 		const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-		int visualBottom = 2 - topMinus + contentHeight;
+		int visualBottom = 0 - topMinus + contentHeight;
 
-		int newHeight = visualBottom + 2; // Element + 2px gap
+		int newHeight = visualBottom + 10; // Element + 10px gap
 		
 		result.setHeight(newHeight);
 		return result;
@@ -673,7 +673,7 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	// 2. Base Height (Visual Bottom)
 	const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-	int visualBottom = 2 - topMinus + contentHeight;
+	int visualBottom = 0 - topMinus + contentHeight;
 	int newHeight = visualBottom;
 
 	// 3. Caption + Gaps
@@ -691,7 +691,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight += captioned->caption.countHeight(captionw);
 	}
 
-	newHeight += 2; // Gap Below Caption
+	newHeight += 6; // Gap Below Caption
 
 	return { newWidth, newHeight };
 }
@@ -741,7 +741,7 @@ void Document::draw(
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 
-	const auto forcedTop = 2;
+	const auto forcedTop = 0;
 	const auto delta = forcedTop - st.padding.top();
 
 	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
