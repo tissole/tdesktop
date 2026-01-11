@@ -618,17 +618,9 @@ QSize Document::countOptimalSize() {
 		
 		// Gap Below Caption
 		minHeight += 6;
-
-		// Frame Bottom Margin
-		if (isBubbleBottom()) {
-			minHeight += st::msgPadding.bottom();
-		}
 	} else {
 		// No caption: Add symmetric gap to bottom and frame margin
 		minHeight += 6;
-		if (isBubbleBottom()) {
-			minHeight += st::msgPadding.bottom();
-		}
 	}
 
 	return { maxWidth, minHeight };
@@ -658,9 +650,6 @@ QSize Document::countCurrentSize(int newWidth) {
 		int visualBottom = 2 - topMinus + contentHeight;
 
 		int newHeight = visualBottom + 6; // Element + 6px gap
-		if (isBubbleBottom()) {
-			newHeight += st::msgPadding.bottom();
-		}
 		
 		result.setHeight(newHeight);
 		return result;
@@ -703,10 +692,6 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	newHeight += 6; // Gap Below Caption
-
-	if (isBubbleBottom()) {
-		newHeight += st::msgPadding.bottom();
-	}
 
 	return { newWidth, newHeight };
 }
