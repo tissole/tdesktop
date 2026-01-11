@@ -920,8 +920,14 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					const auto statustop = docStyle.statusTop;
 					const auto textWidth = st::msgDateFont->width(infoText);
 					
+					// Fix alignment: Simple items need -1.
+					// Thumbs: First Item (i==0) uses forcedTop=2, topMinus=0 -> Draws at base. Offset 0.
+					// Subsequent (i>0) use forcedTop=2, topMinus=2 -> Draws 2px HIGHER. Offset -2.
+					const int thumbOffset = -2;
+					const int baseOffset = hasThumb ? thumbOffset : -1;
+
 					const auto textX = itemRect.x() + itemRect.width() - textWidth - st::msgDateImgDelta;
-					const auto textY = itemRect.y() + statustop + st::normalFont->ascent;
+					const auto textY = itemRect.y() + statustop + st::normalFont->ascent + baseOffset;
 
 					p.drawText(textX, textY, infoText);
 				}
