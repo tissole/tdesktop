@@ -604,7 +604,7 @@ QSize Document::countOptimalSize() {
 		auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
 		
 		// Gap Above Caption
-		minHeight += 6; 
+		minHeight += 2; 
 
 		if (hasTranscribe) {
 			minHeight += voice->transcribeText.countHeight(captionw);
@@ -617,10 +617,10 @@ QSize Document::countOptimalSize() {
 		}
 		
 		// Gap Below Caption
-		minHeight += 6;
+		minHeight += 2;
 	} else {
 		// No caption: Add symmetric gap to bottom and frame margin
-		minHeight += 6;
+		minHeight += 2;
 	}
 
 	return { maxWidth, minHeight };
@@ -636,7 +636,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
 		
-		// Recalculate height to enforce our 6px gap logic even without caption
+		// Recalculate height to enforce our 2px gap logic even without caption
 		int contentHeight = layout.thumbSize;
 		if (downloadInCorner()) {
 			contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
@@ -649,7 +649,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 		int visualBottom = 2 - topMinus + contentHeight;
 
-		int newHeight = visualBottom + 6; // Element + 6px gap
+		int newHeight = visualBottom + 2; // Element + 2px gap
 		
 		result.setHeight(newHeight);
 		return result;
@@ -679,7 +679,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	// 3. Caption + Gaps
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	
-	newHeight += 6; // Gap Above Caption
+	newHeight += 2; // Gap Above Caption
 
 	if (hasTranscribe) {
 		newHeight += voice->transcribeText.countHeight(captionw);
@@ -691,7 +691,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight += captioned->caption.countHeight(captionw);
 	}
 
-	newHeight += 6; // Gap Below Caption
+	newHeight += 2; // Gap Below Caption
 
 	return { newWidth, newHeight };
 }
@@ -1118,14 +1118,14 @@ void Document::draw(
 
 	auto selection = context.selection;
 	
-	// FIX: Visual bottom calculation for caption alignment (6px Gap)
+	// FIX: Visual bottom calculation for caption alignment (2px Gap)
 	// We calculated contentHeight correctly at the top, now use it to set captiontop.
 	// contentHeight = height of visual element (thumb, circle, etc)
 	// forcedTop = 2
 	// topMinus = shift up
 	// element bottom = forcedTop - topMinus + contentHeight
-	// caption start = element bottom + 6
-	auto captiontop = forcedTop - topMinus + contentHeight + 6;
+	// caption start = element bottom + 2
+	auto captiontop = forcedTop - topMinus + contentHeight + 2;
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
@@ -1428,8 +1428,8 @@ TextState Document::textState(
 		contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 	
-	// Start hit testing 6px below element
-	auto bottom = forcedTop - topMinus + contentHeight + 6;
+	// Start hit testing 2px below element
+	auto bottom = forcedTop - topMinus + contentHeight + 2;
 
 	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
@@ -1991,10 +1991,10 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		const int captionStart = visualBottomOfElement + 6; 
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 6; 
+		const int captionStart = visualBottomOfElement + 2; 
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 2; 
 	} else {
-		finalHeight = visualBottomOfElement + 6; 
+		finalHeight = visualBottomOfElement + 2; 
 	}
 	height = finalHeight;
 	return { maxWidth, height };
@@ -2021,10 +2021,10 @@ QSize Document::sizeForGrouping(int width) const {
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		const int captionStart = visualBottomOfElement + 6;
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 6; 
+		const int captionStart = visualBottomOfElement + 2;
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 2; 
 	} else {
-		finalHeight = visualBottomOfElement + 6; 
+		finalHeight = visualBottomOfElement + 2; 
 	}
 	height = finalHeight;
 	return { maxWidth(), height };
