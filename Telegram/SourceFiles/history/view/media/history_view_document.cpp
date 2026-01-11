@@ -575,6 +575,8 @@ QSize Document::countOptimalSize() {
 		}
 	}
 
+	const_cast<Document*>(this)->refreshCaption(isBubbleBottom());
+
 	// --- Height Calculation Corrected ---
 	
 	// 1. Calculate visual height of the element (Thumb / Corner Download / Circle)
@@ -666,6 +668,8 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	accumulate_min(newWidth, maxWidth());
 	
+	const_cast<Document*>(this)->refreshCaption(isBubbleBottom());
+
 	// --- Height Calculation (Must match countOptimalSize) ---
 	
 	// 1. Visual Element Height
