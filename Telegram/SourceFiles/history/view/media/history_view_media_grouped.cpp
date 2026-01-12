@@ -509,11 +509,7 @@ QMargins GroupedMedia::groupedPadding() const {
 	const auto grouped = st::msgFileLayoutGrouped.padding;
 	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 	// Return 0 bottom padding so we control it manually
-	return QMargins(
-		0,
-		(normal.top() - grouped.top()) - topMinus,
-		0,
-		0); 
+	return QMargins(0, 0, 0, 0); 
 }
 
 Media *GroupedMedia::lookupSpoilerTagMedia() const {

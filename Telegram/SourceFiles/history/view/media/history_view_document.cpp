@@ -589,8 +589,8 @@ QSize Document::countOptimalSize() {
 		contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 
-	// 2. Base top starts at 3px for single files (fixes top gap).
-	const int baseTop = 3;
+	// 2. Base top is 0 (Unified by chat.style change from 8px->11px).
+	const int baseTop = 0;
 	const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 	
 	// 'visualBottom' is the Y-coordinate where the file element ends.
@@ -604,8 +604,7 @@ QSize Document::countOptimalSize() {
 	if (hasTranscribe || captioned) {
 		auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
 		
-		// Gap Above Caption
-		minHeight += 2; 
+		minHeight += 3; // Gap Above Caption
 
 		if (hasTranscribe) {
 			minHeight += voice->transcribeText.countHeight(captionw);
@@ -617,8 +616,7 @@ QSize Document::countOptimalSize() {
 			minHeight += captioned->caption.countHeight(captionw);
 		}
 		
-		// Gap Below Caption
-		minHeight += 4;
+		minHeight += 3; // Gap Below Caption
 	} else {
 		// No caption: Add 10px gap to bottom
 		minHeight += 10;
@@ -700,7 +698,7 @@ QSize Document::countCurrentSize(int newWidth) {
 
 
 void Document::draw(Painter &p, const PaintContext &context) const {
-	draw(p, context, width(), LayoutMode::Full, adjustedBubbleRounding());
+	draw(p, context, width(), LayoutMode::Full, adjustedBubbleRounding(), RectPart::None);
 }
 
 void Document::draw(
@@ -708,7 +706,8 @@ void Document::draw(
 		const PaintContext &context,
 		int width,
 		LayoutMode mode,
-		Ui::BubbleRounding outsideRounding) const {
+		Ui::BubbleRounding outsideRounding,
+		RectParts sides) const {
 	if (width < st::msgPadding.left() + st::msgPadding.right() + 1) return;
 
 	ensureDataMediaCreated();
@@ -743,7 +742,8 @@ void Document::draw(
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 
-	const auto forcedTop = (mode == LayoutMode::Full) ? 3 : 0;
+	// Unified: forcedTop is always 0. Top gap is handled by chat.style.
+	const auto forcedTop = 0;
 	const auto delta = forcedTop - st.padding.top();
 
 	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
@@ -1033,7 +1033,15 @@ void Document::draw(
 	p.drawTextLeft(nameleft, statustop, width, statusText);
 
 	// --- CUSTOM INLINE INFO (For All Files except Round Videos) ---
-	if (!_data->isVideoMessage() && mode != LayoutMode::Grouped) {
+	// REQUIREMENT: Show full info for Single Files OR First Item in Column Album.
+	// Rest of Album items show "Minimal Info" (Edited + MsgID) aligned identically.
+	// VISIBILITY: Only show when hovered or selected.
+	const bool isGrouped = (mode == LayoutMode::Grouped);
+	const bool isFirstGroupedItem = isGrouped && (sides & RectPart::Top);
+	const bool isFullInfo = !isGrouped || isFirstGroupedItem;
+	const bool showInfo = (_parent->isUnderCursor() || context.selected());
+
+	if (showInfo && !_data->isVideoMessage()) {
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 		};
@@ -1044,16 +1052,21 @@ void Document::draw(
 		p.setPen(stm->msgDateFg);
 
 		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
-		const auto dateText = QLocale().toString(
+		
+		// Date/Time: Only for Full Info
+		const auto dateText = isFullInfo ? QLocale().toString(
 			ItemDateTime(item).time(),
 			GetEnhancedBool("show_seconds")
 				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
-				: QLocale::system().timeFormat(QLocale::ShortFormat));
+				: QLocale::system().timeFormat(QLocale::ShortFormat)) : QString();
+
 		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
 			? QString(" %1").arg(item->fullId().msg.bare)
 			: QString();
+		
+		// Views: Only for Full Info
 		const auto views = item->Get<HistoryMessageViews>();
-		const auto viewsText = (views && views->views.count >= 0)
+		const auto viewsText = (isFullInfo && views && views->views.count >= 0)
 			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
 			: QString();
 
@@ -1070,38 +1083,45 @@ void Document::draw(
 		if (editedW > 0) totalW += editedW + textGap;
 		totalW += timeIdW;
 
-		// Calculate Position (Right Edge - same as Column Album)
-		int infoX = width - totalW - st::msgDateImgDelta;
-		
-		// Collision Check with Status Text (on the left)
-		int statusW = st::normalFont->width(statusText);
-		int reservedLeft = nameleft + statusW + st::msgDateSpace;
-		if (infoX < reservedLeft) {
-			infoX = reservedLeft;
-		}
-
-		const auto baseY = statustop + st::normalFont->ascent;
-
-		// Draw Views
-		if (viewsW > 0) {
-			const auto &icon = stm->historyViewsIcon;
-			const int iconH = icon.height();
-			const int scaledH = (iconH * iconW) / std::max(1, icon.width());
-			const int iconTop = baseY - font->ascent + (font->height - scaledH) / 2;
+		// We only draw if there's something to show (totalW > 0)
+		if (totalW > 0) {
+			// Calculate Position (Right Edge - same as Column Album)
+			int infoX = width - totalW - st::msgDateImgDelta;
 			
-			icon.paint(p, infoX, iconTop, iconW);
-			p.drawText(infoX + iconW + iconGap, baseY, viewsText);
-			infoX += viewsW + textGap;
-		}
+			// Collision Check with Status Text (on the left)
+			int statusW = st::normalFont->width(statusText);
+			int reservedLeft = nameleft + statusW + st::msgDateSpace;
+			if (infoX < reservedLeft) {
+				infoX = reservedLeft;
+			}
 
-		// Draw Edited
-		if (editedW > 0) {
-			p.drawText(infoX, baseY, QString::fromUtf8("✏️"));
-			infoX += editedW + textGap;
-		}
+			// ALIGNMENT FIX: Use 'statustop' to align row-wise with the File Size/Status text on the left.
+			// 'st.normalFont->ascent' aligns the baseline of the info text with the status text.
+			const auto baseY = statustop + st::normalFont->ascent;
 
-		// Draw Date + ID
-		p.drawText(infoX, baseY, dateText + msgIdText);
+			// Draw Views
+			if (viewsW > 0) {
+				const auto &icon = stm->historyViewsIcon;
+				const int iconH = icon.height();
+				const int scaledH = (iconH * iconW) / std::max(1, icon.width());
+				const int iconTop = baseY - font->ascent + (font->height - scaledH) / 2;
+				
+				icon.paint(p, infoX, iconTop, iconW);
+				p.drawText(infoX + iconW + iconGap, baseY, viewsText);
+				infoX += viewsW + textGap;
+			}
+
+			// Draw Edited
+			if (editedW > 0) {
+				p.drawText(infoX, baseY, QString::fromUtf8("✏️"));
+				infoX += editedW + textGap;
+			}
+
+			// Draw Date + ID
+			if (!dateText.isEmpty() || !msgIdText.isEmpty()) {
+				p.drawText(infoX, baseY, dateText + msgIdText);
+			}
+		}
 	}
 	// ----------------------------------------------------------------
 
@@ -2049,7 +2069,8 @@ void Document::drawGrouped(
 		context.translated(-geometry.topLeft()),
 		geometry.width(),
 		LayoutMode::Grouped,
-		rounding);
+		rounding,
+		sides);
 	if (maybeMediaHighlight
 		&& !context.highlightPathCache->isEmpty()) {
 		context.highlightPathCache->translate(geometry.topLeft());
