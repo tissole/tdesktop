@@ -580,7 +580,8 @@ void GroupedMedia::drawHighlight(
 			auto copy = context;
 			copy.highlight.range = {};
 
-			int highlightY = rect.y();
+			const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+			int highlightY = rect.y() - topMinus;
 			int highlightHeight = rect.height();
 
 			// highlightY starts at visual top (rect.y matches top argument now)
