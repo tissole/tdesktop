@@ -1972,15 +1972,17 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		auto captionw = maxWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
-		
+
 		int gapAbove = 2;
+		int gapBelow = 6;
 		if (const auto document = _data) {
 			if (document->isSong()) {
-				gapAbove = 5;
+				gapAbove = 7;
+				gapBelow = 3;
 			}
 		}
-		const int captionStart = visualBottomOfElement + gapAbove; 
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 6; 
+		const int captionStart = visualBottomOfElement + gapAbove;
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + gapBelow;
 	} else {
 		if (const auto document = _data) {
 			if (document->isSong()) {
@@ -2016,15 +2018,17 @@ QSize Document::sizeForGrouping(int width) const {
 		auto captionw = width
 			- st::msgPadding.left()
 			- st::msgPadding.right();
-		
+
 		int gapAbove = 2;
+		int gapBelow = 6;
 		if (const auto document = _data) {
 			if (document->isSong()) {
-				gapAbove = 5;
+				gapAbove = 7;
+				gapBelow = 3;
 			}
 		}
 		const int captionStart = visualBottomOfElement + gapAbove;
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 6; 
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + gapBelow;
 	} else {
 		if (const auto document = _data) {
 			if (document->isSong()) {

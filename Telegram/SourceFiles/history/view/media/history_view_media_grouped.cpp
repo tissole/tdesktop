@@ -590,12 +590,10 @@ void GroupedMedia::drawHighlight(
 			
 			bool hasCaption = !part.item->originalText().empty();
 			int bottomGap = hasCaption ? 6 : 10;
-			if (!hasCaption) {
-				if (const auto media = part.item->media()) {
-					if (const auto document = media->document()) {
-						if (document->isSong()) {
-							bottomGap = 11;
-						}
+			if (const auto media = part.item->media()) {
+				if (const auto document = media->document()) {
+					if (document->isSong()) {
+						bottomGap = hasCaption ? 3 : 11;
 					}
 				}
 			}
