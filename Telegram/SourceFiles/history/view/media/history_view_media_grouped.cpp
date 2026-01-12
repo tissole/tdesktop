@@ -598,7 +598,7 @@ void GroupedMedia::drawHighlight(
 				}
 			}
 			
-			highlightHeight -= (bottomGap + 3);
+			highlightHeight -= bottomGap;
 			
 			if (i == count - 1) {
 				// For the last item, allow the highlight to extend slightly more if needed
