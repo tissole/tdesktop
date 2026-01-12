@@ -605,7 +605,7 @@ QSize Document::countOptimalSize() {
 		auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
 		
 		// Gap Above Caption
-		minHeight += 2; 
+		minHeight += 5; // Fixed: 5px + 5px(skip) = 10px total 
 
 		if (hasTranscribe) {
 			minHeight += voice->transcribeText.countHeight(captionw);
@@ -617,11 +617,18 @@ QSize Document::countOptimalSize() {
 			minHeight += captioned->caption.countHeight(captionw);
 		}
 		
+
 		// Gap Below Caption
-		minHeight += 4;
+		minHeight += 6; // Fix: 8->10px gap for Album/Single with caption
 	} else {
-		// No caption: Add 10px gap to bottom
-		minHeight += 10;
+		// No caption
+		if (!thumbed) {
+			// Music File: Fix 12->10px gap
+			minHeight += 8;
+		} else {
+			// Standard File: 10px gap
+			minHeight += 10;
+		}
 	}
 
 	return { maxWidth, minHeight };
@@ -650,7 +657,13 @@ QSize Document::countCurrentSize(int newWidth) {
 		const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 		int visualBottom = 0 - topMinus + contentHeight;
 
-		int newHeight = visualBottom + 10; // Element + 10px gap
+
+		int newHeight = visualBottom;
+		if (!thumbed) {
+             newHeight += 8; // Music File: Fix 12->10px
+        } else {
+             newHeight += 10;
+        }
 		
 		result.setHeight(newHeight);
 		return result;
@@ -681,7 +694,7 @@ QSize Document::countCurrentSize(int newWidth) {
 	// 3. Caption + Gaps
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	
-	newHeight += 2; // Gap Above Caption
+	newHeight += 5; // Gap Above Caption (5 + 5 = 10px)
 
 	if (hasTranscribe) {
 		newHeight += voice->transcribeText.countHeight(captionw);
@@ -693,7 +706,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight += captioned->caption.countHeight(captionw);
 	}
 
-	newHeight += 4; // Gap Below Caption
+	newHeight += 6; // Gap Below Caption (Fix 8->10px)
 
 	return { newWidth, newHeight };
 }
@@ -1030,10 +1043,12 @@ void Document::draw(
 	auto statusText = voiceStatusOverride.isEmpty() ? _statusText : voiceStatusOverride;
 	p.setFont(st::normalFont);
 	p.setPen(stm->mediaFg);
-	p.drawTextLeft(nameleft, statustop, width, statusText);
-
 	// --- CUSTOM INLINE INFO (For All Files except Round Videos) ---
-	if (!_data->isVideoMessage() && mode != LayoutMode::Grouped) {
+	// REQUIREMENT: Aligned with Item Size. Show on Hover/Select.
+	// Logic: 'statustop' + 'ascent' ensures perfect row alignment with left-side text.
+	const bool showInfo = (_parent->isUnderCursor() || context.selected());
+
+	if (showInfo && !_data->isVideoMessage()) {
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 		};
