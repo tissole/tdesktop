@@ -583,11 +583,10 @@ void GroupedMedia::drawHighlight(
 			int highlightY = rect.y();
 			int highlightHeight = rect.height();
 
-			const int topGap = groupedPadding().top();
-
-			highlightY += topGap;
-			highlightHeight -= topGap;
-
+			// highlightY already starts at the correct visual top (rect includes skip)
+			// highlightHeight includes the full slot height, which has phantom baseTop=3 and bottomGap.
+			// We remove both to align with visual bottom.
+			
 			bool hasCaption = !part.item->originalText().empty();
 			int bottomGap = hasCaption ? 4 : 10;
 			if (!hasCaption) {
@@ -600,7 +599,7 @@ void GroupedMedia::drawHighlight(
 				}
 			}
 			
-			highlightHeight -= bottomGap;
+			highlightHeight -= (bottomGap + 3);
 			
 			_parent->paintCustomHighlight(
 				p,
