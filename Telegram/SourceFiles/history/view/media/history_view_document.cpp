@@ -597,7 +597,7 @@ QSize Document::countOptimalSize() {
 	
 	if (hasTranscribe || captioned) {
 		auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
-		minHeight += 2; 
+		minHeight += 3; // Gap Above Caption
 
 		if (hasTranscribe) {
 			minHeight += voice->transcribeText.countHeight(captionw);
@@ -608,9 +608,9 @@ QSize Document::countOptimalSize() {
 		if (captioned) {
 			minHeight += captioned->caption.countHeight(captionw);
 		}
-		minHeight += 2;
+		minHeight += 4; // Gap Below Caption
 	} else if (downloadInCorner()) {
-		minHeight += 8;
+		minHeight += 10;
 	} else {
 		minHeight += 10;
 	}
@@ -642,7 +642,7 @@ QSize Document::countCurrentSize(int newWidth) {
 
 		int newHeight = visualBottom;
 		if (downloadInCorner()) {
-			newHeight += 8;
+			newHeight += 10;
 		} else {
 			newHeight += 10;
 		}
@@ -671,7 +671,7 @@ QSize Document::countCurrentSize(int newWidth) {
 
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	
-	newHeight += 2; // Gap Above Caption
+	newHeight += 3; // Gap Above Caption
 
 	if (hasTranscribe) {
 		newHeight += voice->transcribeText.countHeight(captionw);
@@ -683,7 +683,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight += captioned->caption.countHeight(captionw);
 	}
 
-	newHeight += 2; // Gap Below Caption
+	newHeight += 4; // Gap Below Caption
 
 	return { newWidth, newHeight };
 }

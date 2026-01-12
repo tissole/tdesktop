@@ -589,12 +589,12 @@ void GroupedMedia::drawHighlight(
 			highlightHeight -= topGap;
 
 			bool hasCaption = !part.item->originalText().empty();
-			int bottomGap = hasCaption ? 2 : 10;
+			int bottomGap = hasCaption ? 4 : 10;
 			if (!hasCaption) {
 				if (const auto media = part.item->media()) {
 					if (const auto document = media->document()) {
 						if (document->isSong()) {
-							bottomGap = 8;
+							bottomGap = 10;
 						}
 					}
 				}
@@ -825,7 +825,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				// statustop = st.statusTop - st.padding.top() - topMinus
 				const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 				const auto statustop = docStyle.statusTop - docStyle.padding.top() - topMinus;
-				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent;
+				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent + 1;
 
 				const int iconGap = 1;
 				const int textGap = st::msgDateFont->width(' ');
