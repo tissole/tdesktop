@@ -599,17 +599,6 @@ void GroupedMedia::drawHighlight(
 			}
 			
 			highlightHeight -= bottomGap;
-			
-			if (i == count - 1) {
-				// For the last item, allow the highlight to extend slightly more if needed
-				// or validly end at visual bottom.
-				// If we subtracted baseTop(3) + gap, we might be too short if the gap is minimal.
-				// User said last item ends correctly.
-				// If I shifted start UP by groupedPadding().top(), I moved everything up.
-				// So last item end moved UP. It is now too short.
-				// I need to add groupedPadding().top() back to the height?
-				highlightHeight += groupedPadding().top();
-			}
 
 			_parent->paintCustomHighlight(
 				p,
