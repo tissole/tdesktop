@@ -834,7 +834,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				// statustop = st.statusTop - st.padding.top() - topMinus
 				const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 				const auto statustop = docStyle.statusTop - docStyle.padding.top() - topMinus;
-				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent + 3;
+				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent + 5;
 
 				const int iconGap = 1;
 				const int textGap = st::msgDateFont->width(' ');
@@ -914,7 +914,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					// Fix alignment: Matches Document::draw LayoutMode::Grouped logic
 					const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 					const auto statustop = docStyle.statusTop - docStyle.padding.top() - topMinus;
-					const auto baseY = itemRect.y() + statustop + st::normalFont->ascent;
+					const auto baseY = itemRect.y() + statustop + st::normalFont->ascent + 5;
 					
 					const auto textWidth = st::msgDateFont->width(infoText);
 					
