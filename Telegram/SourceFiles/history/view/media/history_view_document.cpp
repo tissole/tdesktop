@@ -618,9 +618,12 @@ QSize Document::countOptimalSize() {
 		}
 		
 		// Gap Below Caption
-		minHeight += 4;
+		minHeight += 2;
+	} else if (downloadInCorner()) {
+		// Music file (corner download): 8px gap (User requested 10px visual, currently was 12px visual with +10)
+		minHeight += 8;
 	} else {
-		// No caption: Add 10px gap to bottom
+		// No caption, standard file: 10px gap
 		minHeight += 10;
 	}
 
@@ -650,7 +653,14 @@ QSize Document::countCurrentSize(int newWidth) {
 		const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 		int visualBottom = 0 - topMinus + contentHeight;
 
-		int newHeight = visualBottom + 10; // Element + 10px gap
+		// No caption: Add gap to bottom
+		// Music files (downloadInCorner) need 8px to result in 10px visual gap
+		int newHeight = visualBottom;
+		if (downloadInCorner()) {
+			newHeight += 8;
+		} else {
+			newHeight += 10;
+		}
 		
 		result.setHeight(newHeight);
 		return result;
@@ -693,7 +703,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight += captioned->caption.countHeight(captionw);
 	}
 
-	newHeight += 4; // Gap Below Caption
+	newHeight += 2; // Gap Below Caption
 
 	return { newWidth, newHeight };
 }

@@ -593,25 +593,55 @@ void GroupedMedia::drawHighlight(
 			copy.highlight.range = {};
 			
 			// Fix: Selection should start exactly at visual element top and exclude gaps.
-			// Visual element starts at baseTop=2 within the geometry slot.
+			// Visual element starts at baseTop=2 within the geometry slot. // matches forcedTop=2 in drawCornerDownload? 
+			// Wait, Document::draw uses 0 for Grouped mode? 
+			// Actually, Document::draw uses 0 for Grouped, but user said "gap is 12px" which implies Music/Single?
+			// But here we are in GroupedMedia.
+			// Let's assume visual top is roughly 2px from top of slot.
 			
-			// Fix: Selection should start exactly at visual element top and exclude gaps.
+			const int visualTop = 2; // Matches forcedTop=2 often used for corrections
+			const int topGap = (i == 0) ? groupedPadding().top() : 0;
+			const int visualTopOffset = topGap + visualTop; 
+
+			int highlightY = rect.y() + visualTopOffset;
+
+			// Determine bottom gap to exclude
+			// Check if part item has caption (originalText not empty)
+			bool hasCaption = !part.item->originalText().empty(); 
 			// Visual element starts at baseTop=2 within the geometry slot.
 			
 			int highlightY = rect.y();
 			int highlightHeight = rect.height();
 
-			// Offset top to skip gap and align with visual element.
-			// Increased constant to 10 for first item to exclude the large gap.
-			const int topGap = (i == 0) ? groupedPadding().top() : 0;
-			const int extraOffset = (i == 0) ? 10 : 6;
-			const int visualTopOffset = topGap + extraOffset; 
+			const int topGap = groupedPadding().top();
+			
+			// Start from the visual top (excluding the structural top padding)
+			// Document baseTop = 3 (Full) or 0 (Grouped)? 
+			// In Column mode, Document uses forcedTop=0.
+			// BUT visually there is often a transparent gap.
+			// User says "begins from top of the item".
+			// We'll align with the itemRect top (including topGap) but exclude the extra visual padding if any.
+			// Actually, just using topGap is safer.
+			
+			// Align highlight start
+			highlightY += topGap;
+			highlightHeight -= topGap;
 
-			highlightY += visualTopOffset;
-
-			// Reduce height by the top offset only.
-			// Removed reduction of bottom gap to push end down (fixing "ends before").
-			highlightHeight -= visualTopOffset;
+			// Align highlight end (Exclude Bottom Gap)
+			// Deduce gap based on item properties (matching Document::countOptimalSize)
+			bool hasCaption = !part.item->originalText().empty();
+			int bottomGap = hasCaption ? 2 : 10;
+			if (!hasCaption) {
+				if (const auto media = part.item->media()) {
+					if (const auto document = media->document()) {
+						if (document->downloadInCorner()) { // Music
+							bottomGap = 8;
+						}
+					}
+				}
+			}
+			
+			highlightHeight -= bottomGap;
 			
 			_parent->paintCustomHighlight(
 				p,
@@ -832,14 +862,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					}
 				}
 				const auto &docStyle = hasThumb ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
-				const auto statustop = docStyle.statusTop;
 				
-				// Fix alignment: Simple items need -1.
-				// Thumbs: First Item (i==0) uses forcedTop=2, topMinus=0 -> Draws at base. Offset 0.
-				// Subsequent (i>0) use forcedTop=2, topMinus=2 -> Draws 2px HIGHER. Offset -2.
-				const int thumbOffset = (i == 0) ? 0 : -2;
-				const int baseOffset = hasThumb ? thumbOffset : -1;
-				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent + baseOffset;
+				// Fix alignment: Matches Document::draw LayoutMode::Grouped logic
+				// statustop = st.statusTop - st.padding.top() - topMinus
+				const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+				const auto statustop = docStyle.statusTop - docStyle.padding.top() - topMinus;
+				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent;
 
 				const int iconGap = 1;
 				const int textGap = st::msgDateFont->width(' ');
@@ -917,19 +945,18 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 						}
 					}
 					const auto &docStyle = hasThumb ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped;
-					const auto statustop = docStyle.statusTop;
+
+					
+					// Fix alignment: Matches Document::draw LayoutMode::Grouped logic
+					const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+					const auto statustop = docStyle.statusTop - docStyle.padding.top() - topMinus;
+					const auto baseY = itemRect.y() + statustop + st::normalFont->ascent;
+					
 					const auto textWidth = st::msgDateFont->width(infoText);
 					
-					// Fix alignment: Simple items need -1.
-					// Thumbs: First Item (i==0) uses forcedTop=2, topMinus=0 -> Draws at base. Offset 0.
-					// Subsequent (i>0) use forcedTop=2, topMinus=2 -> Draws 2px HIGHER. Offset -2.
-					const int thumbOffset = -2;
-					const int baseOffset = hasThumb ? thumbOffset : -1;
-
 					const auto textX = itemRect.x() + itemRect.width() - textWidth - st::msgDateImgDelta;
-					const auto textY = itemRect.y() + statustop + st::normalFont->ascent + baseOffset;
-
-					p.drawText(textX, textY, infoText);
+					
+					p.drawText(textX, baseY, infoText);
 				}
 			}
 		} 
