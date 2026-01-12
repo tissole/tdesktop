@@ -589,11 +589,12 @@ QSize Document::countOptimalSize() {
 		contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 
-	// 2. Base top starts at 0px.
+	// 2. Base top starts at 3px for single files (fixes top gap).
+	const int baseTop = 3;
 	const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 	
 	// 'visualBottom' is the Y-coordinate where the file element ends.
-	int visualBottom = 0 - topMinus + contentHeight;
+	int visualBottom = baseTop - topMinus + contentHeight;
 
 	// 3. Add caption + symmetric gaps
 	int minHeight = visualBottom; 
@@ -672,8 +673,9 @@ QSize Document::countCurrentSize(int newWidth) {
 	}
 
 	// 2. Base Height (Visual Bottom)
+	const int baseTop = 3;
 	const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-	int visualBottom = 0 - topMinus + contentHeight;
+	int visualBottom = baseTop - topMinus + contentHeight;
 	int newHeight = visualBottom;
 
 	// 3. Caption + Gaps
@@ -741,7 +743,7 @@ void Document::draw(
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 
-	const auto forcedTop = 0;
+	const auto forcedTop = (mode == LayoutMode::Full) ? 3 : 0;
 	const auto delta = forcedTop - st.padding.top();
 
 	const auto nameleft = st.padding.left() + st.thumbSize + st.thumbSkip;
