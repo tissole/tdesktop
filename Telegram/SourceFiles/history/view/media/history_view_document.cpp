@@ -577,9 +577,6 @@ QSize Document::countOptimalSize() {
 
 	const_cast<Document*>(this)->refreshCaption(isBubbleBottom());
 
-	// --- Height Calculation Corrected ---
-	
-	// 1. Calculate visual height of the element (Thumb / Corner Download / Circle)
 	int contentHeight = layout.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
@@ -589,22 +586,17 @@ QSize Document::countOptimalSize() {
 		contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 
-	// 2. Base top starts at 3px for single files (fixes top gap).
 	const int baseTop = 3;
 	const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-	
-	// 'visualBottom' is the Y-coordinate where the file element ends.
+
 	int visualBottom = baseTop - topMinus + contentHeight;
 
-	// 3. Add caption + symmetric gaps
 	int minHeight = visualBottom; 
 	
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	
 	if (hasTranscribe || captioned) {
 		auto captionw = maxWidth - st::msgPadding.left() - st::msgPadding.right();
-		
-		// Gap Above Caption
 		minHeight += 2; 
 
 		if (hasTranscribe) {
@@ -616,14 +608,10 @@ QSize Document::countOptimalSize() {
 		if (captioned) {
 			minHeight += captioned->caption.countHeight(captionw);
 		}
-		
-		// Gap Below Caption
 		minHeight += 2;
 	} else if (downloadInCorner()) {
-		// Music file (corner download): 8px gap (User requested 10px visual, currently was 12px visual with +10)
 		minHeight += 8;
 	} else {
-		// No caption, standard file: 10px gap
 		minHeight += 10;
 	}
 
@@ -640,7 +628,6 @@ QSize Document::countCurrentSize(int newWidth) {
 	if (!captioned && !hasTranscribe) {
 		auto result = File::countCurrentSize(newWidth);
 		
-		// Recalculate height to enforce our 2px gap logic even without caption
 		int contentHeight = layout.thumbSize;
 		if (downloadInCorner()) {
 			contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
@@ -653,8 +640,6 @@ QSize Document::countCurrentSize(int newWidth) {
 		const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 		int visualBottom = 0 - topMinus + contentHeight;
 
-		// No caption: Add gap to bottom
-		// Music files (downloadInCorner) need 8px to result in 10px visual gap
 		int newHeight = visualBottom;
 		if (downloadInCorner()) {
 			newHeight += 8;
@@ -670,9 +655,6 @@ QSize Document::countCurrentSize(int newWidth) {
 	
 	const_cast<Document*>(this)->refreshCaption(isBubbleBottom());
 
-	// --- Height Calculation (Must match countOptimalSize) ---
-	
-	// 1. Visual Element Height
 	int contentHeight = layout.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
@@ -682,13 +664,11 @@ QSize Document::countCurrentSize(int newWidth) {
 		contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 
-	// 2. Base Height (Visual Bottom)
 	const int baseTop = 3;
 	const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 	int visualBottom = baseTop - topMinus + contentHeight;
 	int newHeight = visualBottom;
 
-	// 3. Caption + Gaps
 	auto captionw = newWidth - st::msgPadding.left() - st::msgPadding.right();
 	
 	newHeight += 2; // Gap Above Caption
@@ -767,7 +747,6 @@ void Document::draw(
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const auto bottomPadding = 10;
 
-	// FIX: Calculate contentHeight once correctly for both layout use and visual alignment
 	auto contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
@@ -1129,14 +1108,6 @@ void Document::draw(
 	}
 
 	auto selection = context.selection;
-	
-	// FIX: Visual bottom calculation for caption alignment (2px Gap)
-	// We calculated contentHeight correctly at the top, now use it to set captiontop.
-	// contentHeight = height of visual element (thumb, circle, etc)
-	// forcedTop = 2
-	// topMinus = shift up
-	// element bottom = forcedTop - topMinus + contentHeight
-	// caption start = element bottom + 2
 	auto captiontop = forcedTop - topMinus + contentHeight + 2;
 
 	if (voice && !voice->transcribeText.isEmpty()) {
@@ -1170,7 +1141,6 @@ void Document::draw(
 	const auto bubble = _parent->hasBubble();
 
 	// --- STANDARD BOTTOM INFO (Round Videos Only) ---
-	// FIX Issue 4: Only call _parent->drawInfo for Video Messages (Round Videos).
 	if (_data->isVideoMessage() && !inWebPage && (!bubble || isBubbleBottom())) {
 		auto fullRight = width;
 		auto fullBottom = height(); 

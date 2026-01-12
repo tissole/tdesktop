@@ -184,9 +184,6 @@ GroupedMedia::~GroupedMedia() {
 
 HistoryItem *GroupedMedia::itemForText() const {
 	if (_mode == Mode::Grid) {
-		// This album uses per-item captions. Never allow the official
-		// single bottom caption to be created for Grid albums. This prevents
-		// duplicate/leftover borders when editing captions.
 		return nullptr;
 	}
 	if (_mode == Mode::Column) {
@@ -197,8 +194,6 @@ HistoryItem *GroupedMedia::itemForText() const {
 			for (const auto &part : _parts) {
 				if (!part.item->emptyText()) {
 					if (result == part.item) {
-						// All parts are from the same message, that means
-						// this is an album with a single item, single text.
 						return result;
 					} else if (result) {
 						return nullptr;
@@ -332,8 +327,6 @@ QSize GroupedMedia::countOptimalSize() {
 			}
 		}
 
-		// Task 2 Fix: If the last row did not have captions,
-		// remove the implicit historyGroupSkip that Ui::LayoutMediaGroup might add.
 		if (!lastRowHasCaption) {
 			minHeight -= st::historyGroupSkip;
 		}
@@ -411,11 +404,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 			for (const auto i : indices) {
 				_parts[i].geometry.translate(0, totalShift);
-				// Track the bottom of the parts *after* shift
 				rowBottomMax = std::max(rowBottomMax, _parts[i].geometry.y() + _parts[i].geometry.height());
 			}
 			
-			// Update newHeight to include at least this row's bottom
 			accumulate_max(newHeight, rowBottomMax);
 
 			for (const auto i : indices) {
@@ -450,7 +441,6 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 					}
 				}
 				totalShift += uniformCaptionHeight;
-				// Add the caption height to newHeight as well, since it extends below the row
 				newHeight += uniformCaptionHeight;
 			} else {
 				for (const auto i : indices) {
@@ -463,8 +453,6 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			}
 		}
 
-		// Task 2 Fix: If the last row did not have captions,
-		// remove the implicit historyGroupSkip that Ui::LayoutMediaGroup might add.
 		if (!lastRowHasCaption) {
 			newHeight -= totalShift; // Remove any accumulated shift from previous rows if last row has no caption
 			newHeight -= st::historyGroupSkip;
@@ -591,50 +579,21 @@ void GroupedMedia::drawHighlight(
 		if (full) {
 			auto copy = context;
 			copy.highlight.range = {};
-			
-			// Fix: Selection should start exactly at visual element top and exclude gaps.
-			// Visual element starts at baseTop=2 within the geometry slot. // matches forcedTop=2 in drawCornerDownload? 
-			// Wait, Document::draw uses 0 for Grouped mode? 
-			// Actually, Document::draw uses 0 for Grouped, but user said "gap is 12px" which implies Music/Single?
-			// But here we are in GroupedMedia.
-			// Let's assume visual top is roughly 2px from top of slot.
-			
-			const int visualTop = 2; // Matches forcedTop=2 often used for corrections
-			const int topGap = (i == 0) ? groupedPadding().top() : 0;
-			const int visualTopOffset = topGap + visualTop; 
 
-			int highlightY = rect.y() + visualTopOffset;
-
-			// Determine bottom gap to exclude
-			// Check if part item has caption (originalText not empty)
-			bool hasCaption = !part.item->originalText().empty(); 
-			// Visual element starts at baseTop=2 within the geometry slot.
-			
 			int highlightY = rect.y();
 			int highlightHeight = rect.height();
 
 			const int topGap = groupedPadding().top();
-			
-			// Start from the visual top (excluding the structural top padding)
-			// Document baseTop = 3 (Full) or 0 (Grouped)? 
-			// In Column mode, Document uses forcedTop=0.
-			// BUT visually there is often a transparent gap.
-			// User says "begins from top of the item".
-			// We'll align with the itemRect top (including topGap) but exclude the extra visual padding if any.
-			// Actually, just using topGap is safer.
-			
-			// Align highlight start
+
 			highlightY += topGap;
 			highlightHeight -= topGap;
 
-			// Align highlight end (Exclude Bottom Gap)
-			// Deduce gap based on item properties (matching Document::countOptimalSize)
 			bool hasCaption = !part.item->originalText().empty();
 			int bottomGap = hasCaption ? 2 : 10;
 			if (!hasCaption) {
 				if (const auto media = part.item->media()) {
 					if (const auto document = media->document()) {
-						if (document->downloadInCorner()) { // Music
+						if (document->isSong()) {
 							bottomGap = 8;
 						}
 					}
@@ -659,7 +618,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 	auto nowCache = false;
 	const auto groupPadding = groupedPadding();
 	
-	// FIX: Use 'auto' instead of 'const auto' so 'selection' can be modified later in Column mode
 	auto selection = context.selection;
 	const auto fullSelection = (selection == FullSelection);
 	
@@ -906,11 +864,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					const int iconH = icon.height();
 					const int scaledH = (iconH * iconW) / std::max(1, icon.width());
 					
-					// Define missing variables for Issue 5 Fix
 					const int lineH = st::msgDateFont->height;
 					const int lineTop = baseY - st::msgDateFont->ascent;
 					
-					// Issue 5 Fix: Center icon relative to the line height, not baseline
 					const int iconTop = lineTop + (lineH - scaledH) / 2;
 					icon.paint(p, x, iconTop, iconW);
 					p.drawText(x + iconW + iconGap, baseY, viewsText);
@@ -922,7 +878,6 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				}
 				p.drawText(x, baseY, timeText + idText);
 			} else {
-				// Subsequent Items
 				QString infoText;
 				if (editedNow) infoText += QString::fromUtf8("✏️");
 				if (GetEnhancedBool("show_messages_id")) {
@@ -1064,26 +1019,19 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			p.save();
 			p.setClipRect(captionRect);
 
-			// Highlight Paint Setup for Caption
 			auto highlightRequest = context.computeHighlightCache();
-
-			// If we have a part-specific selection calculated above
 			TextSelection paintSelection = partSelection;
 
-			// Issue #3: Center caption with 2px top and 2px bottom spacing
 			const auto padding = QMargins(8, 0, 8, 0); // Only horizontal padding, vertical handled separately
 			const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 			const auto availableHeight = captionRect.height();
 			const auto textHeight = part._captionText.countHeight(availableWidth);
 
-			// Calculate vertical offset to have 2px above and 2px below the text
 			const auto requiredSpace = textHeight + 2 + 2; // 2px top + text height + 2px bottom
 			int verticalOffset = 2; // Always start with 2px from top
 			if (requiredSpace <= availableHeight) {
-				// Center the content (text + 4px total padding) in the available height
 				verticalOffset = (availableHeight - requiredSpace) / 2 + 2;
 			} else {
-				// Not enough space, just use 2px top
 				verticalOffset = 2;
 			}
 
@@ -2039,17 +1987,9 @@ bool GroupedMedia::enforceBubbleWidth() const {
 }
 
 bool GroupedMedia::computeNeedBubble() const {
-	// The assertion that was causing the crash is removed. It was based on a
-	// faulty assumption that _captionItem would always have a value for non-Column modes,
-	// which is not true for Grid albums with per-item captions.
-	// Expects(_mode == Mode::Column || _captionItem.has_value()); // <--- REMOVED
-
 	if (_mode == Mode::Column) {
 		return true;
 	}
-
-	// For Grid mode, we lazily evaluate the caption item.
-	// If a single caption item exists for the whole album, we need a bubble.
 	if (itemForText()) {
 		return true;
 	}
