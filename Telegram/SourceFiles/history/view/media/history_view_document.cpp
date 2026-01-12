@@ -617,7 +617,7 @@ QSize Document::countOptimalSize() {
 		}
 		
 		// Gap Below Caption
-		minHeight += 6;
+		minHeight += 4;
 	} else {
 		// No caption: Add 10px gap to bottom
 		minHeight += 10;
@@ -691,7 +691,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight += captioned->caption.countHeight(captionw);
 	}
 
-	newHeight += 6; // Gap Below Caption
+	newHeight += 4; // Gap Below Caption
 
 	return { newWidth, newHeight };
 }
@@ -1977,7 +1977,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	if (downloadInCorner()) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
-	const int baseTop = 2;
+	const int baseTop = 0;
 	auto height = baseTop + contentHeight;
 	const auto elementBaseHeight = contentHeight; 
 
@@ -1992,9 +1992,9 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 			- st::msgPadding.right();
 		
 		const int captionStart = visualBottomOfElement + 2; 
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 2; 
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; 
 	} else {
-		finalHeight = visualBottomOfElement + 2; 
+		finalHeight = visualBottomOfElement + 10; 
 	}
 	height = finalHeight;
 	return { maxWidth, height };
@@ -2009,7 +2009,7 @@ QSize Document::sizeForGrouping(int width) const {
 	if (downloadInCorner()) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
 	}
-	const int baseTop = 2;
+	const int baseTop = 0;
 	auto height = baseTop + contentHeight;
 	const auto elementBaseHeight = contentHeight;
 
@@ -2022,9 +2022,9 @@ QSize Document::sizeForGrouping(int width) const {
 			- st::msgPadding.right();
 		
 		const int captionStart = visualBottomOfElement + 2;
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 2; 
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; 
 	} else {
-		finalHeight = visualBottomOfElement + 2; 
+		finalHeight = visualBottomOfElement + 10; 
 	}
 	height = finalHeight;
 	return { maxWidth(), height };
