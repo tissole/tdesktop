@@ -608,9 +608,9 @@ QSize Document::countOptimalSize() {
 		if (captioned) {
 			minHeight += captioned->caption.countHeight(captionw);
 		}
-		minHeight += 4; // Gap Below Caption
+		minHeight += 3; // Gap Below Caption
 	} else if (downloadInCorner()) {
-		minHeight += 10;
+		minHeight += 8;
 	} else {
 		minHeight += 10;
 	}
@@ -642,7 +642,7 @@ QSize Document::countCurrentSize(int newWidth) {
 
 		int newHeight = visualBottom;
 		if (downloadInCorner()) {
-			newHeight += 10;
+			newHeight += 8;
 		} else {
 			newHeight += 10;
 		}
@@ -683,7 +683,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight += captioned->caption.countHeight(captionw);
 	}
 
-	newHeight += 4; // Gap Below Caption
+	newHeight += 3; // Gap Below Caption
 
 	return { newWidth, newHeight };
 }
@@ -1973,10 +1973,24 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		const int captionStart = visualBottomOfElement + 2; 
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; 
+		int gapAbove = 2;
+		if (const auto document = _data) {
+			if (document->isSong()) {
+				gapAbove = 5;
+			}
+		}
+		const int captionStart = visualBottomOfElement + gapAbove; 
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 6; 
 	} else {
-		finalHeight = visualBottomOfElement + 10; 
+		if (const auto document = _data) {
+			if (document->isSong()) {
+				finalHeight = visualBottomOfElement + 11;
+			} else {
+				finalHeight = visualBottomOfElement + 10;
+			}
+		} else {
+			finalHeight = visualBottomOfElement + 10; 
+		}
 	}
 	height = finalHeight;
 	return { maxWidth, height };
@@ -2003,10 +2017,24 @@ QSize Document::sizeForGrouping(int width) const {
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		
-		const int captionStart = visualBottomOfElement + 2;
-		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 4; 
+		int gapAbove = 2;
+		if (const auto document = _data) {
+			if (document->isSong()) {
+				gapAbove = 5;
+			}
+		}
+		const int captionStart = visualBottomOfElement + gapAbove;
+		finalHeight = captionStart + captioned->caption.countHeight(captionw) + 6; 
 	} else {
-		finalHeight = visualBottomOfElement + 10; 
+		if (const auto document = _data) {
+			if (document->isSong()) {
+				finalHeight = visualBottomOfElement + 11;
+			} else {
+				finalHeight = visualBottomOfElement + 10;
+			}
+		} else {
+			finalHeight = visualBottomOfElement + 10; 
+		}
 	}
 	height = finalHeight;
 	return { maxWidth(), height };

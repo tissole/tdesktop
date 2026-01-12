@@ -583,17 +583,18 @@ void GroupedMedia::drawHighlight(
 			int highlightY = rect.y();
 			int highlightHeight = rect.height();
 
-			// highlightY already starts at the correct visual top (rect includes skip)
-			// highlightHeight includes the full slot height, which has phantom baseTop=3 and bottomGap.
-			// We remove both to align with visual bottom.
+			// highlightY starts at visual top (rect.y matches top argument now)
+			// highlightHeight includes: content height + bottom gap + phantom baseTop(3).
+			// We remove bottomGap + baseTop to align with visual bottom.
+			// UNLESS it's the last item, where we might need to preserve height to reach the very bottom.
 			
 			bool hasCaption = !part.item->originalText().empty();
-			int bottomGap = hasCaption ? 4 : 10;
+			int bottomGap = hasCaption ? 6 : 10;
 			if (!hasCaption) {
 				if (const auto media = part.item->media()) {
 					if (const auto document = media->document()) {
 						if (document->isSong()) {
-							bottomGap = 10;
+							bottomGap = 11;
 						}
 					}
 				}
@@ -601,6 +602,17 @@ void GroupedMedia::drawHighlight(
 			
 			highlightHeight -= (bottomGap + 3);
 			
+			if (i == count - 1) {
+				// For the last item, allow the highlight to extend slightly more if needed
+				// or validly end at visual bottom.
+				// If we subtracted baseTop(3) + gap, we might be too short if the gap is minimal.
+				// User said last item ends correctly.
+				// If I shifted start UP by groupedPadding().top(), I moved everything up.
+				// So last item end moved UP. It is now too short.
+				// I need to add groupedPadding().top() back to the height?
+				highlightHeight += groupedPadding().top();
+			}
+
 			_parent->paintCustomHighlight(
 				p,
 				copy,
@@ -824,7 +836,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				// statustop = st.statusTop - st.padding.top() - topMinus
 				const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
 				const auto statustop = docStyle.statusTop - docStyle.padding.top() - topMinus;
-				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent + 1;
+				const auto baseY = itemRect.y() + statustop + st::normalFont->ascent + 3;
 
 				const int iconGap = 1;
 				const int textGap = st::msgDateFont->width(' ');
