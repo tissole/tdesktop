@@ -1978,7 +1978,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 		if (const auto document = _data) {
 			if (document->isSong()) {
 				gapAbove = 7;
-				gapBelow = 3;
+				gapBelow = 1;
 			}
 		}
 		const int captionStart = visualBottomOfElement + gapAbove;
@@ -2024,7 +2024,7 @@ QSize Document::sizeForGrouping(int width) const {
 		if (const auto document = _data) {
 			if (document->isSong()) {
 				gapAbove = 7;
-				gapBelow = 3;
+				gapBelow = 1;
 			}
 		}
 		const int captionStart = visualBottomOfElement + gapAbove;

@@ -581,7 +581,7 @@ void GroupedMedia::drawHighlight(
 			copy.highlight.range = {};
 
 			const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-			int highlightY = rect.y() - topMinus;
+			int highlightY = rect.y() - topMinus - 2;
 			int highlightHeight = rect.height();
 
 			// highlightY starts at visual top (rect.y matches top argument now)
@@ -594,7 +594,7 @@ void GroupedMedia::drawHighlight(
 			if (const auto media = part.item->media()) {
 				if (const auto document = media->document()) {
 					if (document->isSong()) {
-						bottomGap = hasCaption ? 3 : 11;
+						bottomGap = hasCaption ? 1 : 11;
 					}
 				}
 			}
