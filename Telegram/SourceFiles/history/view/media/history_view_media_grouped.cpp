@@ -580,13 +580,12 @@ void GroupedMedia::drawHighlight(
 			auto copy = context;
 			copy.highlight.range = {};
 
-			const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-			int highlightY = rect.y() - topMinus + 2;
+			int highlightY = rect.y();
 			int highlightHeight = rect.height();
 
 			// highlightY starts at visual top (rect.y matches top argument now)
-			// highlightHeight includes: content height + bottom gap + phantom baseTop(3).
-			// We remove bottomGap + baseTop to align with visual bottom.
+			// highlightHeight includes: content height + bottom gap.
+			// We remove bottomGap to align with visual bottom.
 			// UNLESS it's the last item, where we might need to preserve height to reach the very bottom.
 			
 			bool hasCaption = !part.item->originalText().empty();
