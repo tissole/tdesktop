@@ -1775,15 +1775,23 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		}
 		const auto &geometry = part.geometry;
 		
-		// Fix: Selection should start exactly at visual element and exclude gaps.
-		const int topGap = (i == 0) ? groupPadding.top() : 0;
-		const int extraOffset = (i == 0) ? 10 : 6;
-		const int visualTopOffset = topGap + extraOffset;
+		const int topGap = groupPadding.top();
+		const int visualTopOffset = topGap;
 		
 		int selectionTop = geometry.top() + visualTopOffset;
 
-		// Reduce height by the top offset only.
-		int selectionHeight = geometry.height() - visualTopOffset;
+		// Calculate bottom gap to exclude it from selection.
+		bool hasCaption = !part.item->originalText().empty();
+		int bottomGap = hasCaption ? 6 : 10;
+		if (const auto media = part.item->media()) {
+			if (const auto document = media->document()) {
+				if (document->isSong()) {
+					bottomGap = hasCaption ? 1 : 11;
+				}
+			}
+		}
+
+		int selectionHeight = geometry.height() - bottomGap;
 
 		if (result.empty()
 			|| (result.back().top + result.back().height < selectionTop)
