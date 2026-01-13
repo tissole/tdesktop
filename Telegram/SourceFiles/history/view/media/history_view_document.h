@@ -37,6 +37,10 @@ public:
 
 	bool hideMessageText() const override;
 
+	void drawHighlight(
+		Painter &p,
+		const PaintContext &context,
+		int top) const override;
 	void draw(Painter &p, const PaintContext &context) const override;
 	TextState textState(QPoint point, StateRequest request) const override;
 	void updatePressed(QPoint point) override;
@@ -67,6 +71,10 @@ public:
 	}
 	bool needInfoDisplay() const override;
 	QMargins bubbleMargins() const override;
+
+	bool customHighlight() const override {
+		return true;
+	}
 
 	QSize sizeForGroupingOptimal(int maxWidth, bool last) const override;
 	QSize sizeForGrouping(int width) const override;

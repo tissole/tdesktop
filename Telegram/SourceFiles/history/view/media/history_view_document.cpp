@@ -637,8 +637,9 @@ QSize Document::countCurrentSize(int newWidth) {
 			contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 		}
 		
+		const int baseTop = 3;
 		const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
-		int visualBottom = 0 - topMinus + contentHeight;
+		int visualBottom = baseTop - topMinus + contentHeight;
 
 		int newHeight = visualBottom;
 		if (downloadInCorner()) {
@@ -688,6 +689,36 @@ QSize Document::countCurrentSize(int newWidth) {
 	return { newWidth, newHeight };
 }
 
+
+void Document::drawHighlight(
+		Painter &p,
+		const PaintContext &context,
+		int top) const {
+	const int topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+	const int forcedTop = 3;
+	const int highlightY = top + forcedTop - topMinus;
+
+	int highlightHeight = height() - (forcedTop - topMinus);
+
+	const bool hasCaption = Get<HistoryDocumentCaptioned>() || (Get<HistoryDocumentVoice>() && !Get<HistoryDocumentVoice>()->transcribeText.isEmpty());
+
+	// Use same logic as GroupedMedia to be consistent.
+	int bottomGap = hasCaption ? 6 : 10;
+	if (const auto document = getDocument()) {
+		if (document->isSong()) {
+			bottomGap = hasCaption ? 1 : 11;
+		}
+	}
+
+	highlightHeight -= bottomGap;
+
+	_parent->paintCustomHighlight(
+		p,
+		context,
+		highlightY,
+		highlightHeight,
+		_realParent);
+}
 
 void Document::draw(Painter &p, const PaintContext &context) const {
 	draw(p, context, width(), LayoutMode::Full, adjustedBubbleRounding());
