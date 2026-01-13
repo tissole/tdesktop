@@ -580,7 +580,7 @@ void GroupedMedia::drawHighlight(
 			auto copy = context;
 			copy.highlight.range = {};
 
-			int highlightY = rect.y() - groupedPadding().top();
+			int highlightY = rect.y() - st::msgFileTopMinus;
 			int highlightHeight = rect.height();
 
 			// highlightY starts at visual top (rect.y matches top argument now)
