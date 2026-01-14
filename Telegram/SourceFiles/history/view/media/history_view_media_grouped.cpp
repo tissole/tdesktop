@@ -589,12 +589,10 @@ void GroupedMedia::drawHighlight(
 			// UNLESS it's the last item, where we might need to preserve height to reach the very bottom.
 			
 			bool hasCaption = !part.item->originalText().empty();
-			int bottomGap = hasCaption ? 6 : 10;
-			if (const auto media = part.item->media()) {
-				if (const auto document = media->document()) {
-					if (document->isSong()) {
-						bottomGap = hasCaption ? 1 : 11;
-					}
+			int bottomGap = hasCaption ? 7 : 10;
+			if (const auto document = part.content->getDocument()) {
+				if (document->isSong()) {
+					bottomGap = hasCaption ? 2 : 11;
 				}
 			}
 			
