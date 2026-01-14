@@ -590,15 +590,17 @@ void GroupedMedia::drawHighlight(
 			
 			bool hasCaption = !part.item->originalText().empty();
 			bool isSong = false;
+			bool isThumbed = false;
 			if (const auto document = part.content->getDocument()) {
 				isSong = document->isSong();
+				isThumbed = document->hasThumbnail();
 			}
 
 			int bottomGap = 10;
-			if (hasCaption) {
-				bottomGap = isSong ? 16 : 11;
-			} else if (isSong) {
+			if (isSong) {
 				bottomGap = 11;
+			} else if (hasCaption) {
+				bottomGap = isThumbed ? 7 : 12;
 			}
 			
 			highlightHeight -= bottomGap;
@@ -1786,15 +1788,17 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		// Calculate bottom gap to exclude it from selection.
 		bool hasCaption = !part.item->originalText().empty();
 		bool isSong = false;
+		bool isThumbed = false;
 		if (const auto document = part.content->getDocument()) {
 			isSong = document->isSong();
+			isThumbed = document->hasThumbnail();
 		}
 
 		int bottomGap = 10;
-		if (hasCaption) {
-			bottomGap = isSong ? 16 : 11;
-		} else if (isSong) {
+		if (isSong) {
 			bottomGap = 11;
+		} else if (hasCaption) {
+			bottomGap = isThumbed ? 7 : 12;
 		}
 		int selectionHeight = geometry.height() - bottomGap;
 
