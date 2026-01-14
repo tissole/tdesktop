@@ -1108,7 +1108,13 @@ void Document::draw(
 	}
 
 	auto selection = context.selection;
-	auto captiontop = forcedTop - topMinus + contentHeight + 2;
+	int gapAbove = 2;
+	if (const auto document = _data) {
+		if (document->isSong()) {
+			gapAbove = 7;
+		}
+	}
+	auto captiontop = forcedTop - topMinus + contentHeight + gapAbove;
 
 	if (voice && !voice->transcribeText.isEmpty()) {
 		p.setPen(stm->historyTextFg);
@@ -1411,7 +1417,14 @@ TextState Document::textState(
 	}
 	
 	// Start hit testing 2px below element
-	auto bottom = forcedTop - topMinus + contentHeight + 2;
+	int gapAbove = 2;
+	if (const auto document = _data) {
+		if (document->isSong()) {
+			gapAbove = 7;
+		}
+	}
+	int captionHeight = contentHeight + gapAbove;
+	auto bottom = forcedTop - topMinus + captionHeight;
 
 	const auto rthumb = style::rtlrect(st.padding.left(), forcedTop - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
@@ -1958,10 +1971,14 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	auto contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+	} else if (!thumbed) {
+		const auto innerSize = st::msgFileLayout.thumbSize;
+		const auto currentThumbSize = st.thumbSize;
+		contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 	const int baseTop = 0;
 	auto height = baseTop + contentHeight;
-	const auto elementBaseHeight = contentHeight; 
+	const auto elementBaseHeight = contentHeight;
 
 	const_cast<Document*>(this)->refreshCaption(last);
 
@@ -2006,6 +2023,10 @@ QSize Document::sizeForGrouping(int width) const {
 	auto contentHeight = st.thumbSize;
 	if (downloadInCorner()) {
 		contentHeight = st::historyAudioDownloadShift + st::historyAudioDownloadSize;
+	} else if (!thumbed) {
+		const auto innerSize = st::msgFileLayout.thumbSize;
+		const auto currentThumbSize = st.thumbSize;
+		contentHeight = (currentThumbSize - innerSize) / 2 + innerSize;
 	}
 	const int baseTop = 0;
 	auto height = baseTop + contentHeight;
