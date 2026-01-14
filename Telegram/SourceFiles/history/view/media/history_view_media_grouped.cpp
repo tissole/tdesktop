@@ -597,10 +597,12 @@ void GroupedMedia::drawHighlight(
 			}
 
 			int bottomGap = 10;
-			if (isSong) {
-				bottomGap = 11;
-			} else if (hasCaption) {
-				bottomGap = isThumbed ? 7 : 12;
+			if (hasCaption) {
+				if (isSong) {
+					bottomGap = 15;
+				} else if (isThumbed) {
+					bottomGap = 12;
+				}
 			}
 			
 			highlightHeight -= bottomGap;
@@ -1795,10 +1797,12 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		}
 
 		int bottomGap = 10;
-		if (isSong) {
-			bottomGap = 11;
-		} else if (hasCaption) {
-			bottomGap = isThumbed ? 7 : 12;
+		if (hasCaption) {
+			if (isSong) {
+				bottomGap = 15;
+			} else if (isThumbed) {
+				bottomGap = 12;
+			}
 		}
 		int selectionHeight = geometry.height() - bottomGap;
 
