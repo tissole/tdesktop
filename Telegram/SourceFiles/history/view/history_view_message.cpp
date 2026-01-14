@@ -1310,6 +1310,10 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			if (item->Has<HistoryMessageVia>() && !displayFromName() && !displayForwardedFrom()) {
 				topY += st::msgNameFont->height;
 			}
+			
+			if (!mediaOnTop) {
+				topY += mediaInBubbleSkipTop;
+			}
 		}
 
 		if (mediaDisplayed) {

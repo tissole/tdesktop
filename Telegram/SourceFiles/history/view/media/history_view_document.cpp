@@ -727,7 +727,7 @@ void Document::draw(
 	const auto showPause = updateStatusText();
 	const auto radial = isRadialAnimation();
 
-	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+	const auto topMinus = (isBubbleTop() || mode == LayoutMode::Grouped) ? 0 : st::msgFileTopMinus;
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (mode == LayoutMode::Full)
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
@@ -1386,7 +1386,7 @@ TextState Document::textState(
 
 	updateStatusText();
 
-	const auto topMinus = isBubbleTop() ? 0 : st::msgFileTopMinus;
+	const auto topMinus = (isBubbleTop() || mode == LayoutMode::Grouped) ? 0 : st::msgFileTopMinus;
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (mode == LayoutMode::Full)
 		? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
