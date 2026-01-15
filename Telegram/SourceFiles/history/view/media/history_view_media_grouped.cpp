@@ -560,26 +560,36 @@ void GroupedMedia::drawHighlight(
 	std::set<int> highlightedRows;
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
-		const auto length = (_mode == Mode::Column)
-			? part.content->fullSelectionLength()
-			: part.item->originalText().text.size();
 
-		const auto full = (!i && empty)
-			|| (subpart && IsGroupItemSelection(selection, i))
-			|| (!subpart
-				&& !selection.empty()
-				&& (selection.from < length));
+		bool full = false;
+
+		if (_mode == Mode::Grid) {
+			// In Grid mode, with per-item captions, the highlight range is local to the specific item
+			// that this Element represents.
+			if (part.item == _parent->data()) {
+				const auto length = part.item->originalText().text.size();
+				full = (!i && empty)
+					|| (subpart && IsGroupItemSelection(selection, i))
+					|| (!subpart
+						&& !selection.empty()
+						&& (selection.from < length)); // Check if range is valid for this item
+			}
+		} else {
+			// Column mode (concatenated text behavior)
+			const auto length = part.content->fullSelectionLength();
+			full = (!i && empty)
+				|| (subpart && IsGroupItemSelection(selection, i))
+				|| (!subpart
+					&& !selection.empty()
+					&& (selection.from < length));
+			
+			if (!subpart) {
+				selection = part.content->skipSelection(selection);
+			}
+		}
 
 		if (full) {
 			highlightedRows.emplace(part.geometry.y());
-		}
-
-		if (!subpart) {
-			if (_mode == Mode::Column) {
-				selection = part.content->skipSelection(selection);
-			} else if (length > 0) {
-				selection = UnshiftItemSelection(selection, length);
-			}
 		}
 	}
 
@@ -587,7 +597,8 @@ void GroupedMedia::drawHighlight(
 		auto rowTop = rowY;
 		auto rowBottom = rowY;
 		auto initialized = false;
-
+		
+		// Find the row boundaries
 		for (const auto &part : _parts) {
 			if (part.geometry.y() == rowY) {
 				auto r = part.geometry;
@@ -615,13 +626,29 @@ void GroupedMedia::drawHighlight(
 			if (_mode == Mode::Column) {
 				highlightHeight -= 10;
 			}
+			
+			// Determine which item to use for the highlight context.
+			// In Grid mode, we prefer the item that triggered the highlight (the parent data).
+			// If not found in the row (unlikely given logic), fallback to the first part of the row.
+			const HistoryItem* highlightItem = _parts.front().item;
+			if (_mode == Mode::Grid) {
+				highlightItem = _parent->data();
+			} else {
+                 // For column mode, try to find the first item in this row
+                 for (const auto &part : _parts) {
+                     if (part.geometry.y() == rowY) {
+                         highlightItem = part.item;
+                         break;
+                     }
+                 }
+            }
 
 			_parent->paintCustomHighlight(
 				p,
 				copy,
 				highlightY,
 				highlightHeight,
-				_parts.front().item);
+				highlightItem);
 		}
 	}
 }
