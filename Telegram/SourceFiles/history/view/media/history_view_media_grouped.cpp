@@ -588,23 +588,7 @@ void GroupedMedia::drawHighlight(
 			// We remove bottomGap to align with visual bottom.
 			// UNLESS it's the last item, where we might need to preserve height to reach the very bottom.
 			
-			bool hasCaption = !part.item->originalText().empty();
-			bool isSong = false;
-			bool isThumbed = false;
-			if (const auto document = part.content->getDocument()) {
-				isSong = document->isSong();
-				isThumbed = document->hasThumbnail();
-			}
-
-			int bottomGap = 10;
-			if (hasCaption) {
-				if (!isSong && !isThumbed) {
-					bottomGap = 12;
-				}
-			} else if (isSong) {
-				bottomGap = 11;
-			}
-			
+			const int bottomGap = 10;
 			highlightHeight -= bottomGap;
 
 			_parent->paintCustomHighlight(
@@ -1788,22 +1772,7 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		int selectionTop = geometry.top() + visualTopOffset;
 
 		// Calculate bottom gap to exclude it from selection.
-		bool hasCaption = !part.item->originalText().empty();
-		bool isSong = false;
-		bool isThumbed = false;
-		if (const auto document = part.content->getDocument()) {
-			isSong = document->isSong();
-			isThumbed = document->hasThumbnail();
-		}
-
-		int bottomGap = 10;
-		if (hasCaption) {
-			if (!isSong && !isThumbed) {
-				bottomGap = 12;
-			}
-		} else if (isSong) {
-			bottomGap = 11;
-		}
+		const int bottomGap = 10;
 		int selectionHeight = geometry.height() - bottomGap;
 
 		if (result.empty()
