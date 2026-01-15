@@ -572,7 +572,8 @@ void GroupedMedia::drawHighlight(
 					|| (subpart && IsGroupItemSelection(selection, i))
 					|| (!subpart
 						&& !selection.empty()
-						&& (selection.from < length)); // Check if range is valid for this item
+						&& (selection.from < length)
+						&& (selection.to <= length)); // Check if range fits in this item
 			}
 		} else {
 			// Column mode (concatenated text behavior)
