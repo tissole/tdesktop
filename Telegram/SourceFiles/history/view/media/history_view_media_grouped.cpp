@@ -561,36 +561,29 @@ void GroupedMedia::drawHighlight(
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
 
-		bool full = false;
+		// Calculate length based on mode
+		const auto length = (_mode == Mode::Grid)
+			? part.item->originalText().text.size()
+			: part.content->fullSelectionLength();
 
-		if (_mode == Mode::Grid) {
-			// In Grid mode, with per-item captions, the highlight range is local to the specific item
-			// that this Element represents.
-			if (part.item == _parent->data()) {
-				const auto length = part.item->originalText().text.size();
-				full = (!i && empty)
-					|| (subpart && IsGroupItemSelection(selection, i))
-					|| (!subpart
-						&& !selection.empty()
-						&& (selection.from < length)
-						&& (selection.to <= length)); // Check if range fits in this item
-			}
-		} else {
-			// Column mode (concatenated text behavior)
-			const auto length = part.content->fullSelectionLength();
-			full = (!i && empty)
-				|| (subpart && IsGroupItemSelection(selection, i))
-				|| (!subpart
-					&& !selection.empty()
-					&& (selection.from < length));
-			
-			if (!subpart) {
-				selection = part.content->skipSelection(selection);
-			}
-		}
+		// Check if the global selection intersects with this part's local range [0, length)
+		bool full = (!i && empty)
+			|| (subpart && IsGroupItemSelection(selection, i))
+			|| (!subpart
+				&& !selection.empty()
+				&& (selection.from < length)); // Standard check: if start is before end of this part
 
 		if (full) {
 			highlightedRows.emplace(part.geometry.y());
+		}
+
+		if (!subpart) {
+			if (_mode == Mode::Column) {
+				selection = part.content->skipSelection(selection);
+			} else if (length > 0) {
+				// Shift selection for Grid mode (subtract length)
+				selection = ShiftItemSelection(selection, length);
+			}
 		}
 	}
 
@@ -628,21 +621,18 @@ void GroupedMedia::drawHighlight(
 				highlightHeight -= 10;
 			}
 			
-			// Determine which item to use for the highlight context.
-			// In Grid mode, we prefer the item that triggered the highlight (the parent data).
-			// If not found in the row (unlikely given logic), fallback to the first part of the row.
-			const HistoryItem* highlightItem = _parts.front().item;
-			if (_mode == Mode::Grid) {
-				highlightItem = _parent->data();
-			} else {
-                 // For column mode, try to find the first item in this row
-                 for (const auto &part : _parts) {
-                     if (part.geometry.y() == rowY) {
-                         highlightItem = part.item;
-                         break;
-                     }
+			// For highlighting context, we try to find the item corresponding to the row.
+			// In Grid mode, since we determined which row to highlight based on global selection,
+			// any item in that row is a valid anchor for paintCustomHighlight.
+			// Using the first item of the row is standard behavior.
+			const HistoryItem* highlightItem = nullptr;
+             for (const auto &part : _parts) {
+                 if (part.geometry.y() == rowY) {
+                     highlightItem = part.item;
+                     break;
                  }
-            }
+             }
+             if (!highlightItem) highlightItem = _parts.front().item;
 
 			_parent->paintCustomHighlight(
 				p,
@@ -1785,22 +1775,50 @@ TextSelection GroupedMedia::selectionFromQuote(
 		const SelectedQuote &quote) const {
 	Expects(quote.item != nullptr);
 
-	if (_mode != Mode::Column) {
-		return {};
+	if (_mode == Mode::Column) {
+		const auto i = ranges::find(_parts, not_null(quote.item), &Part::item);
+		if (i == end(_parts)) {
+			return {};
+		}
+		const auto index = int(i - begin(_parts));
+		auto result = i->content->selectionFromQuote(quote);
+		if (result.empty()) {
+			return AddGroupItemSelection({}, index);
+		}
+		for (auto j = i; j != begin(_parts);) {
+			--j;
+			result = UnshiftItemSelection(
+				result,
+				j->content->fullSelectionLength());
+		}
+		return result;
+	} else {
+		// Mode::Grid
+		const auto i = ranges::find(_parts, not_null(quote.item), &Part::item);
+		if (i == end(_parts)) {
+			return {};
+		}
+		
+		// Find the selection within the item's original text
+		auto localResult = Element::FindSelectionFromQuote(
+			i->item->originalText().text,
+			quote);
+			
+		if (localResult.empty()) {
+			return {};
+		}
+		
+		// Shift the selection by the accumulated length of previous parts
+		auto result = localResult;
+		for (auto j = i; j != begin(_parts);) {
+			--j;
+			const auto len = j->item->originalText().text.size();
+			if (len > 0) {
+				result = UnshiftItemSelection(result, len);
+			}
+		}
+		return result;
 	}
-	const auto i = ranges::find(_parts, not_null(quote.item), &Part::item);
-	if (i == end(_parts)) {
-		return {};
-	}
-	const auto index = int(i - begin(_parts));
-	auto result = i->content->selectionFromQuote(quote);
-	if (result.empty()) {
-		return AddGroupItemSelection({}, index);
-	}
-	for (auto j = i; j != begin(_parts);) {
-		result = (--j)->content->unskipSelection(result);
-	}
-	return result;
 }
 
 auto GroupedMedia::getBubbleSelectionIntervals(
