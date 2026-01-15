@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/media/history_view_media_grouped.h"
 
+#include <set>
 #include "history/history_item_components.h"
 #include "history/history_item.h"
 #include "history/history.h"
@@ -551,52 +552,76 @@ void GroupedMedia::drawHighlight(
 		return;
 	}
 	auto selection = context.highlight.range;
-	if (_mode != Mode::Column) {
-		if (!selection.empty() && !IsSubGroupSelection(selection)) {
-			_parent->paintCustomHighlight(
-				p,
-				context,
-				top,
-				height(),
-				_parent->data().get());
-		}
-		return;
-	}
+	
 	const auto empty = selection.empty();
 	const auto subpart = IsSubGroupSelection(selection);
 	const auto skip = top + groupedPadding().top();
+
+	std::set<int> highlightedRows;
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
-		const auto rect = part.geometry.translated(0, skip);
+		const auto length = (_mode == Mode::Column)
+			? part.content->fullSelectionLength()
+			: part.item->originalText().text.size();
+
 		const auto full = (!i && empty)
 			|| (subpart && IsGroupItemSelection(selection, i))
 			|| (!subpart
 				&& !selection.empty()
-				&& (selection.from < part.content->fullSelectionLength()));
-		if (!subpart) {
-			selection = part.content->skipSelection(selection);
-		}
+				&& (selection.from < length));
+
 		if (full) {
+			highlightedRows.emplace(part.geometry.y());
+		}
+
+		if (!subpart) {
+			if (_mode == Mode::Column) {
+				selection = part.content->skipSelection(selection);
+			} else if (length > 0) {
+				selection = UnshiftItemSelection(selection, length);
+			}
+		}
+	}
+
+	for (const auto rowY : highlightedRows) {
+		auto rowTop = rowY;
+		auto rowBottom = rowY;
+		auto initialized = false;
+
+		for (const auto &part : _parts) {
+			if (part.geometry.y() == rowY) {
+				auto r = part.geometry;
+				if (_mode == Mode::Grid && !part.captionRect.isEmpty()) {
+					r = r.united(part.captionRect);
+				}
+				if (!initialized) {
+					rowTop = r.top();
+					rowBottom = r.top() + r.height();
+					initialized = true;
+				} else {
+					rowTop = std::min(rowTop, r.top());
+					rowBottom = std::max(rowBottom, r.top() + r.height());
+				}
+			}
+		}
+
+		if (initialized) {
 			auto copy = context;
 			copy.highlight.range = {};
 
-			int highlightY = rect.y();
-			int highlightHeight = rect.height();
+			auto highlightY = rowTop + skip;
+			auto highlightHeight = rowBottom - rowTop;
 
-			// highlightY starts at visual top (rect.y matches top argument now)
-			// highlightHeight includes: content height + bottom gap.
-			// We remove bottomGap to align with visual bottom.
-			// UNLESS it's the last item, where we might need to preserve height to reach the very bottom.
-			
-			const int bottomGap = 10;
-			highlightHeight -= bottomGap;
+			if (_mode == Mode::Column) {
+				highlightHeight -= 10;
+			}
 
 			_parent->paintCustomHighlight(
 				p,
 				copy,
 				highlightY,
 				highlightHeight,
-				part.item);
+				_parts.front().item);
 		}
 	}
 }
