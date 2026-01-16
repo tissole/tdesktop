@@ -1051,11 +1051,19 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			p.save();
 			p.setClipRect(captionRect);
 
-			auto highlightRequest = context.computeHighlightCache();
-			TextSelection paintSelection = partSelection;
-
 			const auto padding = QMargins(8, 0, 8, 0); // Only horizontal padding, vertical handled separately
 			const auto availableWidth = captionRect.width() - padding.left() - padding.right();
+
+			auto highlightRequest = (part.item == _parent->data())
+				? context.computeHighlightCache()
+				: std::nullopt;
+
+			if (highlightRequest && part._captionText.maxWidth() > availableWidth) {
+				highlightRequest->range = { 0, 0xFFFF };
+			}
+
+			TextSelection paintSelection = partSelection;
+
 			const auto availableHeight = captionRect.height();
 			const auto textHeight = part._captionText.countHeight(availableWidth);
 
