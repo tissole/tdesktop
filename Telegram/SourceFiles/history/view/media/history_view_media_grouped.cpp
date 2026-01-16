@@ -1054,12 +1054,31 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto padding = QMargins(8, 0, 8, 0); // Only horizontal padding, vertical handled separately
 			const auto availableWidth = captionRect.width() - padding.left() - padding.right();
 
-			auto highlightRequest = (part.item == _parent->data())
-				? context.computeHighlightCache()
-				: std::nullopt;
-
-			if (highlightRequest && part._captionText.maxWidth() > availableWidth) {
-				highlightRequest->range = { 0, 0xFFFF };
+			auto highlightRequest = context.computeHighlightCache();
+			if (highlightRequest) {
+				const auto len = part.item->originalText().text.size();
+				const auto range = highlightRequest->range;
+				
+				// Map Global Range to Local Part Range
+				// Global Part Interval: [textOffset, textOffset + len)
+				// Highlight Range: [range.from, range.to)
+				
+				// Intersection
+				const int from = std::max((int)range.from, textOffset);
+				const int to = std::min((int)range.to, textOffset + len);
+				
+				if (from < to) {
+					// Valid intersection, map to local
+					highlightRequest->range = TextSelection(
+						(uint16)(from - textOffset),
+						(uint16)(to - textOffset)
+					);
+				} else if (part.item == _parent->data() && part._captionText.maxWidth() > availableWidth) {
+					// Fallback for truncated caption on the focused item
+					highlightRequest->range = { 0, 0xFFFF };
+				} else {
+					highlightRequest = std::nullopt;
+				}
 			}
 
 			TextSelection paintSelection = partSelection;
