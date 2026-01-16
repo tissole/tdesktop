@@ -1073,9 +1073,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 						(uint16)(from - textOffset),
 						(uint16)(to - textOffset)
 					);
-				} else if (part.item == _parent->data() && part._captionText.maxWidth() > availableWidth) {
-					// Fallback for truncated caption on the focused item
-					highlightRequest->range = { 0, 0xFFFF };
+					
+					// If the caption matches the search result but is truncated, 
+					// force full highlight to ensure visibility.
+					if (part._captionText.maxWidth() > availableWidth) {
+						highlightRequest->range = { 0, 0xFFFF };
+					}
 				} else {
 					highlightRequest = std::nullopt;
 				}
