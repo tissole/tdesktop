@@ -1801,7 +1801,7 @@ TextSelection GroupedMedia::selectionFromQuote(
 		
 		// Find the selection within the item's original text
 		auto localResult = Element::FindSelectionFromQuote(
-			i->item->originalText().text,
+			i->_captionText,
 			quote);
 			
 		if (localResult.empty()) {
