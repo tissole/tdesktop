@@ -1804,17 +1804,24 @@ TextSelection GroupedMedia::selectionFromQuote(
 			i->_captionText,
 			quote);
 			
+		const auto len = i->item->originalText().text.size();
 		if (localResult.empty()) {
-			return {};
+			// Fallback: If exact text match fails but we know the item,
+			// select the entire item to ensure the row is highlighted.
+			if (len > 0) {
+				localResult = TextSelection(0, len);
+			} else {
+				return {};
+			}
 		}
 		
 		// Shift the selection by the accumulated length of previous parts
 		auto result = localResult;
 		for (auto j = i; j != begin(_parts);) {
 			--j;
-			const auto len = j->item->originalText().text.size();
-			if (len > 0) {
-				result = UnshiftItemSelection(result, len);
+			const auto prevLen = j->item->originalText().text.size();
+			if (prevLen > 0) {
+				result = UnshiftItemSelection(result, prevLen);
 			}
 		}
 		return result;
