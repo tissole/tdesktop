@@ -582,7 +582,7 @@ void GroupedMedia::drawHighlight(
 				selection = part.content->skipSelection(selection);
 			} else if (length > 0) {
 				// Shift selection for Grid mode (subtract length)
-				selection = ShiftItemSelection(selection, length);
+				selection = UnshiftItemSelection(selection, length);
 			}
 		}
 	}
@@ -1821,7 +1821,7 @@ TextSelection GroupedMedia::selectionFromQuote(
 			--j;
 			const auto prevLen = j->item->originalText().text.size();
 			if (prevLen > 0) {
-				result = UnshiftItemSelection(result, prevLen);
+				result = ShiftItemSelection(result, prevLen);
 			}
 		}
 		return result;
