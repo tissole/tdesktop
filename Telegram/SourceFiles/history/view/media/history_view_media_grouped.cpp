@@ -1831,18 +1831,37 @@ TextSelection GroupedMedia::selectionFromQuote(
 auto GroupedMedia::getBubbleSelectionIntervals(
 		TextSelection selection) const
 -> std::vector<Ui::BubbleSelectionInterval> {
-	if (_mode != Mode::Column) {
-		return {};
-	}
 	auto result = std::vector<Ui::BubbleSelectionInterval>();
 	const auto groupPadding = groupedPadding();
 
 	for (auto i = 0, count = int(_parts.size()); i != count; ++i) {
 		const auto &part = _parts[i];
-		if (!IsGroupItemSelection(selection, i)) {
+		// For Grid mode, check if the global selection intersects this part
+		bool selected = false;
+		if (_mode == Mode::Column) {
+			selected = IsGroupItemSelection(selection, i);
+		} else {
+			// Grid mode: Check intersection with global selection
+			// We need to reconstruct the global offset for this part to check intersection accurately
+			// But IsGroupItemSelection checks for 'SubGroupSelection' flags.
+			// If it's a Text Selection, we should check offsets.
+			// However, getBubbleSelectionIntervals is typically used for "Group Item Selection" (checkboxes).
+			// If we want text selection background, that's usually handled by the text paint itself?
+			// Let's rely on IsGroupItemSelection for now which handles the "Select Message" case.
+			selected = IsGroupItemSelection(selection, i);
+			
+			// If it's a generic text selection (not sub-group), we might want to include it?
+			// But usually bubbles don't highlight for text selection.
+		}
+
+		if (!selected) {
 			continue;
 		}
-		const auto &geometry = part.geometry;
+		
+		auto geometry = part.geometry;
+		if (_mode == Mode::Grid && !part.captionRect.isEmpty()) {
+			geometry = geometry.united(part.captionRect);
+		}
 		
 		const int topGap = groupPadding.top();
 		const int visualTopOffset = topGap;
@@ -1850,7 +1869,8 @@ auto GroupedMedia::getBubbleSelectionIntervals(
 		int selectionTop = geometry.top() + visualTopOffset;
 
 		// Calculate bottom gap to exclude it from selection.
-		const int bottomGap = 10;
+		// For Grid mode, we might want to encompass the caption fully.
+		const int bottomGap = (_mode == Mode::Column) ? 10 : 0;
 		int selectionHeight = geometry.height() - bottomGap;
 
 		if (result.empty()
