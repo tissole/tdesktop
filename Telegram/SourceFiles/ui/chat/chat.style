@@ -462,9 +462,9 @@ HistoryFileLayout {
 msgFileThumbRadiusSmall: 4px;
 msgFileThumbRadiusLarge: 4px;
 msgFileLayout: HistoryFileLayout {
-	padding: margins(12px, 8px, 10px, 8px);
-	nameTop: 12px;
-	statusTop: 34px;
+	padding: margins(12px, 5px, 10px, 8px);
+	nameTop: 8px;
+	statusTop: 31px;
 	thumbSize: 44px;
 	thumbSkip: 11px;
 }
@@ -478,7 +478,7 @@ msgFileThumbLayout: HistoryFileLayout {
 }
 msgFileLayoutGrouped: HistoryFileLayout(msgFileLayout) {
 	padding: margins(12px, 5px, 10px, 5px);
-	nameTop: 9px;
+	nameTop: 8px;
 	statusTop: 31px;
 }
 msgFileThumbLayoutGrouped: HistoryFileLayout(msgFileThumbLayout) {
