@@ -1829,7 +1829,7 @@ SelectedQuote GroupedMedia::selectedQuote(TextSelection selection) const {
 						(uint16)(localFrom - offset),
 						(uint16)(localTo - offset));
 					return Element::FindSelectedQuote(
-						text,
+						part._captionText,
 						localSelection,
 						part.item);
 				}
