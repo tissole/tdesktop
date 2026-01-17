@@ -1668,24 +1668,29 @@ TextSelection GroupedMedia::adjustSelection(
 		}
 		return selection;
 	} else if (_mode == Mode::Grid) {
-		// For Grid mode, handle caption selection
-		// Map global selection to local caption selection for each part
 		auto offset = 0;
+		auto result = selection;
 		for (auto i = 0; i < _parts.size(); ++i) {
 			const auto &part = _parts[i];
 			const auto textLen = part.item->originalText().text.size();
 			
 			if (textLen > 0) {
 				if (!selection.empty()) {
-					// Intersection: max(from, offset) to min(to, offset+textLen)
 					auto partFrom = std::max((int)selection.from, offset);
 					auto partTo = std::min((int)selection.to, offset + (int)textLen);
 					
 					if (partFrom < partTo) {
-						part._captionSelection = TextSelection(
+						auto localSelection = TextSelection(
 							(uint16)(partFrom - offset), 
 							(uint16)(partTo - offset)
 						);
+						auto adjusted = part._captionText.adjustSelection(localSelection, type);
+						result = TextSelection(
+							(uint16)(adjusted.from + offset),
+							(uint16)(adjusted.to + offset)
+						);
+
+						part._captionSelection = adjusted;
 					} else {
 						part._captionSelection = {};
 					}
@@ -1697,7 +1702,7 @@ TextSelection GroupedMedia::adjustSelection(
 				part._captionSelection = {};
 			}
 		}
-		return selection;
+		return result;
 	}
 	return {};
 }
