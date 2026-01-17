@@ -214,7 +214,7 @@ jobs:
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF ^
           -D CMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /Oi /Ot /DNDEBUG"
           -D CMAKE_EXE_LINKER_FLAGS_RELEASE="/OPT:REF /OPT:ICF"
-          -D DESKTOP_APP_NO_PDB=OFF ^
+          -D DESKTOP_APP_NO_PDB=ON ^
           %TDESKTOP_BUILD_DEFINE%
           
           cmake --build ..\out --config Release --parallel
@@ -236,18 +236,3 @@ jobs:
         with:
           name: ${{ env.ARTIFACT_NAME }}_Release
           path: artifact/Release/
-
-      - name: Prepare Symbols Archive
-        if: env.UPLOAD_ARTIFACT == 'true'
-        run: |
-          set OUT=%TBUILD%\\%REPO_NAME%\\out
-          mkdir symbols
-          if exist %OUT%\\Telegram.pdb copy %OUT%\\Telegram.pdb symbols\\
-          if exist %OUT%\\Updater.pdb copy %OUT%\\Updater.pdb symbols\\
-
-      - uses: actions/upload-artifact@v4
-        name: Upload Symbols
-        if: env.UPLOAD_ARTIFACT == 'true'
-        with:
-          name: ${{ env.ARTIFACT_NAME }}_Symbols
-          path: symbols/
