@@ -737,9 +737,24 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		}
 
 		auto partContext = context.withSelection(partSelection);
-		
+
+		bool textHighlighted = false;
+		if (_mode == Mode::Grid
+			&& !highlight.empty()
+			&& !IsGroupItemSelection(highlight, i)) {
+			const auto len = part.item->originalText().text.size();
+			if (len > 0) {
+				const int localFrom = std::max((int)highlight.from, textOffset);
+				const int localTo = std::min((int)highlight.to, textOffset + (int)len);
+				if (localFrom < localTo) {
+					textHighlighted = true;
+				}
+			}
+		}
+
 		const auto highlighted = (highlight.empty() && !i)
-			|| IsGroupItemSelection(highlight, i);
+			|| IsGroupItemSelection(highlight, i)
+			|| textHighlighted;
 		const auto highlightOpacity = highlighted
 			? context.highlight.opacity
 			: 0.;
@@ -1783,20 +1798,39 @@ TextForMimeData GroupedMedia::selectedText(
 }
 
 SelectedQuote GroupedMedia::selectedQuote(TextSelection selection) const {
-	if (_mode != Mode::Column) {
-		return {};
-	}
-	for (const auto &part : _parts) {
-		const auto next = part.content->skipSelection(selection);
-		if (next.to - next.from != selection.to - selection.from) {
-			if (!next.empty()) {
-				return SelectedQuote();
+	if (_mode == Mode::Column) {
+		for (const auto &part : _parts) {
+			const auto next = part.content->skipSelection(selection);
+			if (next.to - next.from != selection.to - selection.from) {
+				if (!next.empty()) {
+					return SelectedQuote();
+				}
+				auto result = part.content->selectedQuote(selection);
+				result.item = part.item;
+				return result;
 			}
-			auto result = part.content->selectedQuote(selection);
-			result.item = part.item;
-			return result;
+			selection = next;
 		}
-		selection = next;
+	} else if (_mode == Mode::Grid) {
+		auto offset = 0;
+		for (const auto &part : _parts) {
+			const auto &text = part.item->originalText();
+			const auto length = text.text.size();
+			if (length > 0) {
+				const auto localFrom = std::max((int)selection.from, offset);
+				const auto localTo = std::min((int)selection.to, offset + length);
+				if (localFrom < localTo) {
+					auto localSelection = TextSelection(
+						(uint16)(localFrom - offset),
+						(uint16)(localTo - offset));
+					return Element::FindSelectedQuote(
+						text,
+						localSelection,
+						part.item);
+				}
+				offset += length;
+			}
+		}
 	}
 	return {};
 }
