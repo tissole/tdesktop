@@ -1817,7 +1817,7 @@ TextSelection GroupedMedia::selectionFromQuote(
 		}
 		for (auto j = i; j != begin(_parts);) {
 			--j;
-			result = UnshiftItemSelection(
+			result = ShiftItemSelection(
 				result,
 				j->content->fullSelectionLength());
 		}
