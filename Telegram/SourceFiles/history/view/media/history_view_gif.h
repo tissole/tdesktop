@@ -58,6 +58,9 @@ public:
 	~Gif();
 
 	bool hideMessageText() const override;
+	HistoryItem *itemForText() const override {
+		return nullptr;
+	}
 
 	void draw(Painter &p, const PaintContext &context) const override;
 	TextState textState(QPoint point, StateRequest request) const override;
@@ -240,6 +243,9 @@ private:
 	mutable bool _smallGroupPart : 1 = false;
 	const bool _sensitiveSpoiler : 1 = false;
 	const bool _hasVideoCover : 1 = false;
+
+	mutable Ui::Text::String _captionText;
+	mutable int _captionHeight = 0;
 
 };
 

@@ -216,7 +216,7 @@ QSize Photo::countOptimalSize() {
 			{ maxWidth, minHeight });
 	}
 	if (!_parent->data()->emptyText()) {
-		minHeight += 4;
+		minHeight += 27;
 	}
 	return { maxWidth, minHeight };
 }
@@ -269,10 +269,19 @@ QSize Photo::countCurrentSize(int newWidth) {
 		&& (newHeight >= enlargeOuter);
 	_showEnlarge = showEnlarge ? 1 : 0;
 	
-	// Issues 1 & 5: Add 2px bottom margin for single photos without caption
-	// This ensures proper spacing from bottom frame and chat name
+	_captionHeight = 0;
 	if (!_parent->data()->emptyText()) {
-		newHeight += 4;
+		_captionHeight = 27;
+		_captionText = Ui::Text::String(
+			st::messageTextStyle,
+			_parent->data()->originalText(),
+			Ui::ItemTextDefaultOptions(),
+			st::msgMinWidth,
+			Core::TextContext({
+				.session = &_parent->history()->session(),
+				.repaint = [=] { _parent->customEmojiRepaint(); },
+			}));
+		newHeight += _captionHeight;
 	}
 	
 	return { newWidth, newHeight };
@@ -317,15 +326,7 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	auto paintx = 0, painty = 0, paintw = width(), painth = height();
 	auto bubble = _parent->hasBubble();
 
-	if (displayLoading) {
-		ensureAnimation();
-		if (!_animation->radial.animating()) {
-			_animation->radial.start(_dataMedia->progress());
-		}
-	}
-	const auto radial = isRadialAnimation();
-
-	auto rthumb = style::rtlrect(paintx, painty, paintw, painth, width());
+	auto rthumb = style::rtlrect(paintx, painty, paintw, painth - _captionHeight, width());
 	if (_serviceWidth > 0) {
 		paintUserpicFrame(p, context, rthumb.topLeft());
 	} else {
@@ -355,6 +356,38 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 		if (context.selected()) {
 			fillImageOverlay(p, rthumb, rounding, context);
 		}
+	}
+
+	if (_captionHeight > 0) {
+		auto captionRect = QRect(paintx, painty + painth - _captionHeight, width(), _captionHeight);
+		const auto padding = QMargins(8, 0, 8, 0);
+		const auto availableWidth = captionRect.width() - padding.left() - padding.right();
+		const auto textHeight = _captionText.countHeight(availableWidth);
+		const auto verticalOffset = (captionRect.height() - textHeight) / 2;
+		const auto captionLeft = captionRect.left() + padding.left();
+		const auto captionTop = captionRect.top() + verticalOffset;
+
+		p.setPen(context.messageStyle()->historyTextFg);
+		p.setFont(st::messageTextStyle.font);
+		_parent->prepareCustomEmojiPaint(p, context, _captionText);
+		_captionText.draw(p, {
+			.position = QPoint(captionLeft, captionTop),
+			.outerWidth = width(),
+			.availableWidth = availableWidth,
+			.geometry = {},
+			.align = style::al_left,
+			.clip = QRect(),
+			.palette = &context.messageStyle()->textPalette,
+			.pre = context.messageStyle()->preCache.get(),
+			.blockquote = context.quoteCache(_parent->contentColorIndex()),
+			.colors = context.st->highlightColors(),
+			.spoiler = Ui::Text::DefaultSpoilerCache(),
+			.now = context.now,
+			.paused = context.paused,
+			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
+			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
+			.elisionLines = 1,
+		});
 	}
 
 	const auto showEnlarge = false;

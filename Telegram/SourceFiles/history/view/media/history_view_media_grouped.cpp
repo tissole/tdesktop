@@ -291,7 +291,7 @@ QSize GroupedMedia::countOptimalSize() {
 		}
 
 		const auto textHeight = st::messageTextStyle.font->height;
-		const auto uniformCaptionHeight = 2 + textHeight + 2; // 2px top + text height + 2px bottom
+		const auto uniformCaptionHeight = 27;
 
 		for (auto const& [rowY, indices] : rows) {
 			bool rowHasCaption = false;
@@ -303,11 +303,10 @@ QSize GroupedMedia::countOptimalSize() {
 			}
 
 			if (rowHasCaption) {
-				const auto captionHeight = (rowY == rows.rbegin()->first) ? 27 : uniformCaptionHeight;
 				for (const auto i : indices) {
 					auto &part = _parts[i];
 					if (!part.item->originalText().empty()) {
-						part._captionHeight = captionHeight;
+						part._captionHeight = uniformCaptionHeight;
 						part._captionText = Ui::Text::String(
 							st::messageTextStyle,
 							part.item->originalText(),
@@ -321,7 +320,7 @@ QSize GroupedMedia::countOptimalSize() {
 						part._captionHeight = 0;
 					}
 				}
-				minHeight += captionHeight;
+				minHeight += uniformCaptionHeight;
 			}
 
 			if (rowY == rows.rbegin()->first) {
@@ -396,7 +395,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		}
 
 		const auto textHeight = st::messageTextStyle.font->height;
-		const auto uniformCaptionHeight = 2 + textHeight + 2; // 2px top + text height + 2px bottom
+		const auto uniformCaptionHeight = 27;
 
 		int totalShift = 0;
 
@@ -419,11 +418,10 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			}
 
 			if (rowHasCaption) {
-				const auto captionHeight = (rowY == rows.rbegin()->first) ? 27 : uniformCaptionHeight;
 				for (const auto i : indices) {
 					auto &part = _parts[i];
 					if (!part.item->originalText().empty()) {
-						part._captionHeight = captionHeight;
+						part._captionHeight = uniformCaptionHeight;
 						part._captionText = Ui::Text::String(
 							st::messageTextStyle,
 							part.item->originalText(),
@@ -438,13 +436,13 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 							part.geometry.left(),
 							part.geometry.y() + part.geometry.height(),
 							part.geometry.width(),
-							captionHeight);
+							uniformCaptionHeight);
 					} else {
 						part.captionRect = QRect();
 					}
 				}
-				totalShift += captionHeight;
-				newHeight += captionHeight;
+				totalShift += uniformCaptionHeight;
+				newHeight += uniformCaptionHeight;
 			} else {
 				for (const auto i : indices) {
 					_parts[i].captionRect = QRect();
@@ -1106,13 +1104,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto availableHeight = captionRect.height();
 			const auto textHeight = part._captionText.countHeight(availableWidth);
 
-			const auto requiredSpace = textHeight + 2 + 2; // 2px top + text height + 2px bottom
-			int verticalOffset = 2; // Always start with 2px from top
-			if (requiredSpace <= availableHeight) {
-				verticalOffset = (availableHeight - requiredSpace) / 2 + 2;
-			} else {
-				verticalOffset = 2;
-			}
+			int verticalOffset = (availableHeight - textHeight) / 2;
 
 			const auto captionLeft = captionRect.left() + padding.left();
 			const auto captionTop = captionRect.top() + verticalOffset;

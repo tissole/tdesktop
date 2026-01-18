@@ -44,6 +44,9 @@ public:
 	bool hideMessageText() const override {
 		return false;
 	}
+	HistoryItem *itemForText() const override {
+		return nullptr;
+	}
 
 	void draw(Painter &p, const PaintContext &context) const override;
 	TextState textState(QPoint point, StateRequest request) const override;
@@ -172,6 +175,9 @@ private:
 	mutable uint32 _imageCacheBlurred : 1 = 0;
 	mutable uint32 _pollingStory : 1 = 0;
 	mutable uint32 _showEnlarge : 1 = 0;
+
+	mutable Ui::Text::String _captionText;
+	mutable int _captionHeight = 0;
 
 };
 
