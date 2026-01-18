@@ -266,12 +266,6 @@ QSize Photo::countCurrentSize(int newWidth) {
 		&& (newHeight >= enlargeOuter);
 	_showEnlarge = showEnlarge ? 1 : 0;
 	
-	// Issues 1 & 5: Add 2px bottom margin for single photos without caption
-	// This ensures proper spacing from bottom frame and chat name
-	if (!_parent->hasBubble() || _parent->data()->emptyText()) {
-		newHeight += 2;
-	}
-	
 	return { newWidth, newHeight };
 }
 

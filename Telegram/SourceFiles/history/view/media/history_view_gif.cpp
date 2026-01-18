@@ -361,12 +361,6 @@ QSize Gif::countCurrentSize(int newWidth) {
 		}
 	}
 
-	// Issues 1 & 5: Add 2px bottom margin for single videos without caption
-	// This ensures proper spacing from bottom frame and chat name
-	if (!_data->isVideoMessage() && (!_parent->hasBubble() || _parent->data()->emptyText())) {
-		newHeight += 2;
-	}
-
 	return { newWidth, newHeight };
 }
 
