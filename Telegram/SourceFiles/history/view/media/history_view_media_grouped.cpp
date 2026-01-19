@@ -1670,29 +1670,42 @@ TextSelection GroupedMedia::adjustSelection(
 	} else if (_mode == Mode::Grid) {
 		auto offset = 0;
 		auto result = selection;
+		auto found = false;
 		for (auto i = 0; i < _parts.size(); ++i) {
 			const auto &part = _parts[i];
 			const auto textLen = part.item->originalText().text.size();
 			
 			if (textLen > 0) {
-				if (!selection.empty()) {
-					auto partFrom = std::max((int)selection.from, offset);
-					auto partTo = std::min((int)selection.to, offset + (int)textLen);
-					
-					if (partFrom < partTo) {
-						auto localSelection = TextSelection(
-							(uint16)(partFrom - offset), 
-							(uint16)(partTo - offset)
-						);
-						auto adjusted = part._captionText.adjustSelection(localSelection, type);
-						result = TextSelection(
-							(uint16)(adjusted.from + offset),
-							(uint16)(adjusted.to + offset)
-						);
+				const auto partFrom = std::clamp(
+					(int)selection.from,
+					offset,
+					offset + (int)textLen);
+				const auto partTo = std::clamp(
+					(int)selection.to,
+					offset,
+					offset + (int)textLen);
+				if (partFrom < partTo
+					|| (selection.empty()
+						&& partFrom >= offset
+						&& partFrom <= offset + textLen)) {
+					auto localSelection = TextSelection(
+						(uint16)(partFrom - offset), 
+						(uint16)(partTo - offset));
+					auto adjusted = part._captionText.adjustSelection(
+						localSelection,
+						type);
+					part._captionSelection = adjusted;
 
-						part._captionSelection = adjusted;
-					} else {
-						part._captionSelection = {};
+					if (!adjusted.empty()) {
+						const auto globalFrom = (uint16)(adjusted.from + offset);
+						const auto globalTo = (uint16)(adjusted.to + offset);
+						if (found) {
+							result.from = std::min(result.from, globalFrom);
+							result.to = std::max(result.to, globalTo);
+						} else {
+							result = TextSelection(globalFrom, globalTo);
+							found = true;
+						}
 					}
 				} else {
 					part._captionSelection = {};
