@@ -4797,24 +4797,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 			_reactions->resizeGetHeight(textWidth);
 		}
 
-		if (contentWidth == maxWidth()) {
-			if (mediaDisplayed) {
-				if (check) {
-					newHeight += check->resizeGetHeight(contentWidth) + st::mediaInBubbleSkip;
-				}
-				if (entry) {
-					newHeight += entry->resizeGetHeight(contentWidth);
-				}
-			} else {
-				if (check) {
-					check->resizeGetHeight(contentWidth);
-				}
-				if (entry) {
-					// In case of text-only message it is counted in minHeight already.
-					entry->resizeGetHeight(contentWidth);
-				}
-			}
-		} else {
+		{
 			const auto withVisibleText = hasVisibleText();
 			newHeight = 0;
 			if (withVisibleText) {
@@ -4833,7 +4816,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 				}
 			}
 
-			auto mediaInBubbleSkip = st::msgPadding.bottom();
+			auto mediaInBubbleSkip = st::mediaInBubbleSkip;
 			auto msgPaddingBottom = st::msgPadding.bottom();
 
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
