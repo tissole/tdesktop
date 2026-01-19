@@ -307,7 +307,7 @@ QSize Gif::countOptimalSize() {
 		accumulate_max(maxWidth, _parent->reactionsOptimalWidth());
 	}
 	if (!_parent->data()->emptyText()) {
-		minHeight += 27;
+		minHeight += 6;
 	}
 	return { maxWidth, minHeight };
 }
@@ -342,7 +342,7 @@ QSize Gif::countCurrentSize(int newWidth) {
 		newHeight = adjustHeightForLessCrop(
 			scaled,
 			{ newWidth, newHeight });
-		if (isUnwrapped()) {
+	} else if (isUnwrapped()) {
 		accumulate_max(newWidth, _parent->reactionsOptimalWidth());
 
 		const auto item = _parent->data();
@@ -364,19 +364,10 @@ QSize Gif::countCurrentSize(int newWidth) {
 		}
 	}
 
-	_captionHeight = 0;
+	// Issues 1 & 5: Add 2px bottom margin for single videos without caption
+	// This ensures proper spacing from bottom frame and chat name
 	if (!_parent->data()->emptyText()) {
-		_captionHeight = 27;
-		_captionText = Ui::Text::String(
-			st::messageTextStyle,
-			_parent->data()->originalText(),
-			Ui::ItemTextDefaultOptions(),
-			st::msgMinWidth,
-			Core::TextContext({
-				.session = &_parent->history()->session(),
-				.repaint = [=] { _parent->customEmojiRepaint(); },
-			}));
-		newHeight += _captionHeight;
+		newHeight += 6;
 	}
 
 	return { newWidth, newHeight };
@@ -495,39 +486,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	}
 	if (rtl()) usex = width() - usex - usew;
 
-	QRect rthumb(style::rtlrect(usex + paintx, painty, usew, painth - _captionHeight, width()));
-
-	if (_captionHeight > 0) {
-		auto captionRect = QRect(usex + paintx, painty + painth - _captionHeight, usew, _captionHeight);
-		const auto padding = QMargins(8, 0, 8, 0);
-		const auto availableWidth = captionRect.width() - padding.left() - padding.right();
-		const auto textHeight = _captionText.countHeight(availableWidth);
-		const auto verticalOffset = (captionRect.height() - textHeight) / 2;
-		const auto captionLeft = captionRect.left() + padding.left();
-		const auto captionTop = captionRect.top() + verticalOffset;
-
-		p.setPen(context.messageStyle()->historyTextFg);
-		p.setFont(st::messageTextStyle.font);
-		_parent->prepareCustomEmojiPaint(p, context, _captionText);
-		_captionText.draw(p, {
-			.position = QPoint(captionLeft, captionTop),
-			.outerWidth = width(),
-			.availableWidth = availableWidth,
-			.geometry = {},
-			.align = style::al_left,
-			.clip = QRect(),
-			.palette = &context.messageStyle()->textPalette,
-			.pre = context.messageStyle()->preCache.get(),
-			.blockquote = context.quoteCache(_parent->contentColorIndex()),
-			.colors = context.st->highlightColors(),
-			.spoiler = Ui::Text::DefaultSpoilerCache(),
-			.now = context.now,
-			.paused = context.paused,
-			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
-			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
-			.elisionLines = 1,
-		});
-	}
+	QRect rthumb(style::rtlrect(usex + paintx, painty, usew, painth, width()));
 
 	const auto inTTLViewer = _parent->delegate()->elementContext()
 		== Context::TTLViewer;
