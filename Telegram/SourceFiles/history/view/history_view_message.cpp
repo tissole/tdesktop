@@ -1260,7 +1260,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			// Task 7: Space below name equals space above name
 			mediaInBubbleSkipTop = st::msgPadding.top();
 			// Task 6: Space below content (caption) equals 2px
-			mediaInBubbleSkipBottom = 2;
+			mediaInBubbleSkipBottom = st::msgPadding.bottom();
 		}
 	}
 
@@ -1337,7 +1337,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 					localMediaBottom -= reactionSkip + _reactions->height();
 
 					if (mediaDisplayed && (item->media()->photo() || item->media()->document())) {
-						localMediaBottom -= 2; 
+						localMediaBottom -= st::msgPadding.bottom(); 
 					} else {
 						localMediaBottom -= st::msgPadding.bottom();
 					}
@@ -1348,7 +1348,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 					auto bottomSkip = mediaInBubbleSkipBottom;
 					if (mediaDisplayed && item->media()) {
 						if (item->media()->photo() || item->media()->document()) {
-							paddingBottom = 2;
+							paddingBottom = st::msgPadding.bottom();
 						}
 					}
 
