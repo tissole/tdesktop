@@ -26,7 +26,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/spoiler_mess.h"
 #include "ui/chat/chat_style.h"
 #include "ui/text/text_utilities.h"
-#include "ui/item_text_options.h"
 #include "ui/grouped_layout.h"
 #include "ui/cached_round_corners.h"
 #include "ui/painter.h"

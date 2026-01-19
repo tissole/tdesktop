@@ -41,7 +41,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_style.h"
 #include "ui/image/image.h"
 #include "ui/text/format_values.h"
-#include "ui/item_text_options.h"
 #include "ui/grouped_layout.h"
 #include "ui/cached_round_corners.h"
 #include "ui/power_saving.h"
@@ -343,7 +342,7 @@ QSize Gif::countCurrentSize(int newWidth) {
 		newHeight = adjustHeightForLessCrop(
 			scaled,
 			{ newWidth, newHeight });
-	} else if (isUnwrapped()) {
+		if (isUnwrapped()) {
 		accumulate_max(newWidth, _parent->reactionsOptimalWidth());
 
 		const auto item = _parent->data();
