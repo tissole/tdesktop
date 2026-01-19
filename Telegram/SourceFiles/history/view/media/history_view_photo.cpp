@@ -217,9 +217,9 @@ QSize Photo::countOptimalSize() {
 			{ maxWidth, minHeight });
 	}
 	if (!_parent->data()->emptyText()) {
-		minHeight += 23;
+		minHeight += 25;
 	} else {
-		minHeight += 10;
+		minHeight += 6;
 	}
 	return { maxWidth, minHeight };
 }
@@ -274,7 +274,7 @@ QSize Photo::countCurrentSize(int newWidth) {
 	
 	_captionHeight = 0;
 	if (!_parent->data()->emptyText()) {
-		_captionHeight = 23;
+		_captionHeight = 25;
 		_captionText = Ui::Text::String(
 			st::messageTextStyle,
 			_parent->data()->originalText(),
@@ -286,7 +286,7 @@ QSize Photo::countCurrentSize(int newWidth) {
 			}));
 		newHeight += _captionHeight;
 	} else {
-		newHeight += 10;
+		newHeight += 6;
 	}
 	
 	return { newWidth, newHeight };
@@ -300,32 +300,6 @@ int Photo::adjustHeightForLessCrop(QSize dimensions, QSize current) const {
 	return qMax(
 		current.height(),
 		current.width() * dimensions.height() / dimensions.width());
-}
-
-TextSelection Photo::adjustSelection(
-		TextSelection selection,
-		TextSelectType type) const {
-	return _captionText.adjustSelection(selection, type);
-}
-
-uint16 Photo::fullSelectionLength() const {
-	return _captionText.toString().size();
-}
-
-bool Photo::hasTextForCopy() const {
-	return !_captionText.isEmpty();
-}
-
-TextForMimeData Photo::selectedText(TextSelection selection) const {
-	return TextForMimeData::Simple(_captionText.toText(selection));
-}
-
-SelectedQuote Photo::selectedQuote(TextSelection selection) const {
-	return Element::FindSelectedQuote(_captionText, selection, _parent->data());
-}
-
-TextSelection Photo::selectionFromQuote(const SelectedQuote &quote) const {
-	return Element::FindSelectionFromQuote(_captionText, quote);
 }
 
 void Photo::draw(Painter &p, const PaintContext &context) const {

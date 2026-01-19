@@ -311,7 +311,7 @@ QSize Gif::countOptimalSize() {
 	if (!_parent->data()->emptyText()) {
 		minHeight += 27;
 	} else {
-		minHeight += 10;
+		minHeight += 6;
 	}
 	return { maxWidth, minHeight };
 }
@@ -382,7 +382,7 @@ QSize Gif::countCurrentSize(int newWidth) {
 			}));
 		newHeight += _captionHeight;
 	} else {
-		newHeight += 10;
+		newHeight += 6;
 	}
 
 	return { newWidth, newHeight };
@@ -451,32 +451,6 @@ bool Gif::autoplayEnabled() const {
 
 bool Gif::hideMessageText() const {
 	return _data->isVideoMessage();
-}
-
-TextSelection Gif::adjustSelection(
-		TextSelection selection,
-		TextSelectType type) const {
-	return _captionText.adjustSelection(selection, type);
-}
-
-uint16 Gif::fullSelectionLength() const {
-	return _captionText.toString().size();
-}
-
-bool Gif::hasTextForCopy() const {
-	return !_captionText.isEmpty();
-}
-
-TextForMimeData Gif::selectedText(TextSelection selection) const {
-	return TextForMimeData::Simple(_captionText.toText(selection));
-}
-
-SelectedQuote Gif::selectedQuote(TextSelection selection) const {
-	return Element::FindSelectedQuote(_captionText, selection, _parent->data());
-}
-
-TextSelection Gif::selectionFromQuote(const SelectedQuote &quote) const {
-	return Element::FindSelectionFromQuote(_captionText, quote);
 }
 
 void Gif::draw(Painter &p, const PaintContext &context) const {
@@ -627,7 +601,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	if (drawStreamed && !skipDrawingContent && !fullHiddenBySpoiler) {
 		auto paused = context.paused || !shouldBePlaying;
 		auto request = ::Media::Streaming::FrameRequest{
-			.outer = QSize(usew, painth - _captionHeight) * style::DevicePixelRatio(),
+			.outer = QSize(usew, painth) * style::DevicePixelRatio(),
 			.blurredBackground = true,
 		};
 		if (isRound) {
