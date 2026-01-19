@@ -317,7 +317,7 @@ bool Photo::hasTextForCopy() const {
 }
 
 TextForMimeData Photo::selectedText(TextSelection selection) const {
-	return _captionText.toTextForMimeData(selection);
+	return TextForMimeData::Simple(_captionText.toText(selection));
 }
 
 SelectedQuote Photo::selectedQuote(TextSelection selection) const {
