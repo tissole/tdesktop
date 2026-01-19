@@ -468,7 +468,7 @@ bool Gif::hasTextForCopy() const {
 }
 
 TextForMimeData Gif::selectedText(TextSelection selection) const {
-	return TextForMimeData::Simple(_captionText.toText(selection));
+	return _captionText.toTextForMimeData(selection);
 }
 
 SelectedQuote Gif::selectedQuote(TextSelection selection) const {
