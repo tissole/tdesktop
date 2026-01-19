@@ -4833,9 +4833,8 @@ int Message::resizeContentGetHeight(int newWidth) {
 				}
 			}
 
-			auto mediaInBubbleSkip = isCompact ? 2 : st::mediaInBubbleSkip;
-			// FIX ISSUE: User wants flush bottom (0px) for compact media (Photos/Videos/Albums).
-			auto msgPaddingBottom = isCompact ? 0 : st::msgPadding.bottom();
+			auto mediaInBubbleSkip = st::msgPadding.bottom();
+			auto msgPaddingBottom = st::msgPadding.bottom();
 
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 				newHeight += msgPaddingBottom;
@@ -4852,10 +4851,6 @@ int Message::resizeContentGetHeight(int newWidth) {
 			}
 			if (mediaDisplayed) {
 				newHeight += media->height();
-			}
-			
-			if (mediaOnBottom && isCompact && (check || entry || reactionsInBubble)) {
-				newHeight += 2;
 			}
 			
 			if (check) {
