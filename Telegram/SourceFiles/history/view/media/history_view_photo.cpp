@@ -215,9 +215,6 @@ QSize Photo::countOptimalSize() {
 			dimensions,
 			{ maxWidth, minHeight });
 	}
-	if (!_parent->data()->emptyText()) {
-		minHeight += 4;
-	}
 	return { maxWidth, minHeight };
 }
 
@@ -271,8 +268,8 @@ QSize Photo::countCurrentSize(int newWidth) {
 	
 	// Issues 1 & 5: Add 2px bottom margin for single photos without caption
 	// This ensures proper spacing from bottom frame and chat name
-	if (!_parent->data()->emptyText()) {
-		newHeight += 4;
+	if (!_parent->hasBubble() || _parent->data()->emptyText()) {
+		newHeight += 2;
 	}
 	
 	return { newWidth, newHeight };

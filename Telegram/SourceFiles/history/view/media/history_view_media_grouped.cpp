@@ -303,11 +303,10 @@ QSize GroupedMedia::countOptimalSize() {
 			}
 
 			if (rowHasCaption) {
-				const auto captionHeight = (rowY == rows.rbegin()->first) ? 27 : uniformCaptionHeight;
 				for (const auto i : indices) {
 					auto &part = _parts[i];
 					if (!part.item->originalText().empty()) {
-						part._captionHeight = captionHeight;
+						part._captionHeight = uniformCaptionHeight;
 						part._captionText = Ui::Text::String(
 							st::messageTextStyle,
 							part.item->originalText(),
@@ -321,7 +320,7 @@ QSize GroupedMedia::countOptimalSize() {
 						part._captionHeight = 0;
 					}
 				}
-				minHeight += captionHeight;
+				minHeight += uniformCaptionHeight;
 			}
 
 			if (rowY == rows.rbegin()->first) {
@@ -419,11 +418,10 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			}
 
 			if (rowHasCaption) {
-				const auto captionHeight = (rowY == rows.rbegin()->first) ? 27 : uniformCaptionHeight;
 				for (const auto i : indices) {
 					auto &part = _parts[i];
 					if (!part.item->originalText().empty()) {
-						part._captionHeight = captionHeight;
+						part._captionHeight = uniformCaptionHeight;
 						part._captionText = Ui::Text::String(
 							st::messageTextStyle,
 							part.item->originalText(),
@@ -438,13 +436,13 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 							part.geometry.left(),
 							part.geometry.y() + part.geometry.height(),
 							part.geometry.width(),
-							captionHeight);
+							uniformCaptionHeight);
 					} else {
 						part.captionRect = QRect();
 					}
 				}
-				totalShift += captionHeight;
-				newHeight += captionHeight;
+				totalShift += uniformCaptionHeight;
+				newHeight += uniformCaptionHeight;
 			} else {
 				for (const auto i : indices) {
 					_parts[i].captionRect = QRect();
