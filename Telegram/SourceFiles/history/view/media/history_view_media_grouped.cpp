@@ -290,7 +290,7 @@ QSize GroupedMedia::countOptimalSize() {
 			rows[_parts[i].initialGeometry.y()].push_back(i);
 		}
 
-		const auto textHeight = st::messageTextStyle.font->height;
+		const auto uniformCaptionHeight = 27;
 
 		for (auto const& [rowY, indices] : rows) {
 			bool rowHasCaption = false;
@@ -302,11 +302,10 @@ QSize GroupedMedia::countOptimalSize() {
 			}
 
 			if (rowHasCaption) {
-				const auto captionHeight = (rowY == rows.rbegin()->first) ? 27 : 23;
 				for (const auto i : indices) {
 					auto &part = _parts[i];
 					if (!part.item->originalText().empty()) {
-						part._captionHeight = captionHeight;
+						part._captionHeight = uniformCaptionHeight;
 						part._captionText = Ui::Text::String(
 							st::messageTextStyle,
 							part.item->originalText(),
@@ -320,7 +319,7 @@ QSize GroupedMedia::countOptimalSize() {
 						part._captionHeight = 0;
 					}
 				}
-				minHeight += captionHeight;
+				minHeight += uniformCaptionHeight;
 			}
 
 			if (rowY == rows.rbegin()->first) {
@@ -394,54 +393,56 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			rows[_parts[i].initialGeometry.y()].push_back(i);
 		}
 
-		        int totalShift = 0;
-		
-		        for (auto const& [rowY, indices] : rows) {
-		            bool rowHasCaption = false;
-		            int rowBottomMax = 0;
-		
-		            for (const auto i : indices) {
-		                _parts[i].geometry.translate(0, totalShift);
-		                rowBottomMax = std::max(rowBottomMax, _parts[i].geometry.y() + _parts[i].geometry.height());
-		            }
-		            
-		            accumulate_max(newHeight, rowBottomMax);
-		
-		            for (const auto i : indices) {
-		                if (!_parts[i].item->originalText().empty()) {
-		                    rowHasCaption = true;
-		                    break;
-		                }
-		            }
-		
-		            if (rowHasCaption) {
-		                const auto captionHeight = (rowY == rows.rbegin()->first) ? 27 : 23;
-		                for (const auto i : indices) {
-		                    auto &part = _parts[i];
-		                    if (!part.item->originalText().empty()) {
-		                        part._captionHeight = captionHeight;
-		                        part._captionText = Ui::Text::String(
-		                            st::messageTextStyle,
-		                            part.item->originalText(),
-		                            Ui::ItemTextDefaultOptions(),
-		                            st::msgMinWidth,
-		                            Core::TextContext({
-		                                .session = &_parent->history()->session(),
-		                                .repaint = [=] { _parent->customEmojiRepaint(); },
-		                            }));
-		
-		                        part.captionRect = QRect(
-		                            part.geometry.left(),
-		                            part.geometry.y() + part.geometry.height(),
-		                            part.geometry.width(),
-		                            captionHeight);
-		                    } else {
-		                        part.captionRect = QRect();
-		                    }
-		                }
-		                totalShift += captionHeight;
-		                newHeight += captionHeight;
-		            } else {				for (const auto i : indices) {
+		const auto uniformCaptionHeight = 27;
+
+		int totalShift = 0;
+
+		for (auto const& [rowY, indices] : rows) {
+			bool rowHasCaption = false;
+			int rowBottomMax = 0;
+
+			for (const auto i : indices) {
+				_parts[i].geometry.translate(0, totalShift);
+				rowBottomMax = std::max(rowBottomMax, _parts[i].geometry.y() + _parts[i].geometry.height());
+			}
+			
+			accumulate_max(newHeight, rowBottomMax);
+
+			for (const auto i : indices) {
+				if (!_parts[i].item->originalText().empty()) {
+					rowHasCaption = true;
+					break;
+				}
+			}
+
+			if (rowHasCaption) {
+				for (const auto i : indices) {
+					auto &part = _parts[i];
+					if (!part.item->originalText().empty()) {
+						part._captionHeight = uniformCaptionHeight;
+						part._captionText = Ui::Text::String(
+							st::messageTextStyle,
+							part.item->originalText(),
+							Ui::ItemTextDefaultOptions(),
+							st::msgMinWidth,
+							Core::TextContext({
+								.session = &_parent->history()->session(),
+								.repaint = [=] { _parent->customEmojiRepaint(); },
+							}));
+
+						part.captionRect = QRect(
+							part.geometry.left(),
+							part.geometry.y() + part.geometry.height(),
+							part.geometry.width(),
+							uniformCaptionHeight);
+					} else {
+						part.captionRect = QRect();
+					}
+				}
+				totalShift += uniformCaptionHeight;
+				newHeight += uniformCaptionHeight;
+			} else {
+				for (const auto i : indices) {
 					_parts[i].captionRect = QRect();
 				}
 			}

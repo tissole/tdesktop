@@ -217,9 +217,7 @@ QSize Photo::countOptimalSize() {
 			{ maxWidth, minHeight });
 	}
 	if (!_parent->data()->emptyText()) {
-		minHeight += 25;
-	} else {
-		minHeight += 6;
+		minHeight += 27;
 	}
 	return { maxWidth, minHeight };
 }
@@ -274,7 +272,7 @@ QSize Photo::countCurrentSize(int newWidth) {
 	
 	_captionHeight = 0;
 	if (!_parent->data()->emptyText()) {
-		_captionHeight = 25;
+		_captionHeight = 27;
 		_captionText = Ui::Text::String(
 			st::messageTextStyle,
 			_parent->data()->originalText(),
@@ -285,8 +283,6 @@ QSize Photo::countCurrentSize(int newWidth) {
 				.repaint = [=] { _parent->customEmojiRepaint(); },
 			}));
 		newHeight += _captionHeight;
-	} else {
-		newHeight += 6;
 	}
 	
 	return { newWidth, newHeight };
@@ -802,26 +798,6 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 		return result;
 	} else if (_storyId && _data->isNull()) {
 		return result;
-	}
-
-	if (_captionHeight > 0) {
-		auto paintx = 0, painty = 0, paintw = width(), painth = height();
-		QRect captionRect(paintx, painty + painth - _captionHeight, width(), _captionHeight);
-		if (captionRect.contains(point)) {
-			const auto padding = QMargins(8, 0, 8, 0);
-			const auto availableWidth = captionRect.width() - padding.left() - padding.right();
-			
-			const auto textHeight = _captionText.countHeight(availableWidth);
-			const auto verticalOffset = (captionRect.height() - textHeight) / 2;
-			
-			auto textPoint = point - captionRect.topLeft() - QPoint(padding.left(), verticalOffset);
-			
-			auto textState = _captionText.getState(textPoint, availableWidth, request.forText());
-			
-			result.cursor = CursorState::Text;
-			result.link = textState.link;
-			return result;
-		}
 	}
 	auto paintx = 0, painty = 0, paintw = width(), painth = height();
 	auto bubble = _parent->hasBubble();
