@@ -62,6 +62,16 @@ public:
 		return nullptr;
 	}
 
+	TextSelection adjustSelection(
+		TextSelection selection,
+		TextSelectType type) const override;
+	uint16 fullSelectionLength() const override;
+	bool hasTextForCopy() const override;
+	TextForMimeData selectedText(TextSelection selection) const override;
+	SelectedQuote selectedQuote(TextSelection selection) const override;
+	TextSelection selectionFromQuote(
+		const SelectedQuote &quote) const override;
+
 	void draw(Painter &p, const PaintContext &context) const override;
 	TextState textState(QPoint point, StateRequest request) const override;
 
