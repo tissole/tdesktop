@@ -1676,21 +1676,25 @@ TextSelection GroupedMedia::adjustSelection(
 			const auto textLen = part.item->originalText().text.size();
 			
 			if (textLen > 0) {
-				const auto partFrom = std::clamp(
-					(int)selection.from,
-					offset,
-					offset + (int)textLen);
-				const auto partTo = std::clamp(
+				const auto partFrom = std::max((int)selection.from, offset);
+				const auto partTo = std::min(
 					(int)selection.to,
-					offset,
 					offset + (int)textLen);
 				if (partFrom < partTo
 					|| (selection.empty()
-						&& partFrom >= offset
-						&& partFrom <= offset + textLen)) {
+						&& selection.from >= offset
+						&& selection.from <= offset + textLen)) {
+					const auto localFrom = std::clamp(
+						(int)selection.from,
+						offset,
+						offset + (int)textLen);
+					const auto localTo = std::clamp(
+						(int)selection.to,
+						offset,
+						offset + (int)textLen);
 					auto localSelection = TextSelection(
-						(uint16)(partFrom - offset), 
-						(uint16)(partTo - offset));
+						(uint16)(localFrom - offset), 
+						(uint16)(localTo - offset));
 					auto adjusted = part._captionText.adjustSelection(
 						localSelection,
 						type);
