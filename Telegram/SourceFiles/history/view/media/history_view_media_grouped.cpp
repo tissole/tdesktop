@@ -290,6 +290,7 @@ QSize GroupedMedia::countOptimalSize() {
 			rows[_parts[i].initialGeometry.y()].push_back(i);
 		}
 
+		const auto textHeight = st::messageTextStyle.font->height;
 		const auto uniformCaptionHeight = 27;
 
 		for (auto const& [rowY, indices] : rows) {
@@ -393,6 +394,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			rows[_parts[i].initialGeometry.y()].push_back(i);
 		}
 
+		const auto textHeight = st::messageTextStyle.font->height;
 		const auto uniformCaptionHeight = 27;
 
 		int totalShift = 0;

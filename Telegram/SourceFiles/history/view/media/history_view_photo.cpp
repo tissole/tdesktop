@@ -327,14 +327,6 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	auto paintx = 0, painty = 0, paintw = width(), painth = height();
 	auto bubble = _parent->hasBubble();
 
-	if (displayLoading) {
-		ensureAnimation();
-		if (!_animation->radial.animating()) {
-			_animation->radial.start(_dataMedia->progress());
-		}
-	}
-	const auto radial = isRadialAnimation();
-
 	auto rthumb = style::rtlrect(paintx, painty, paintw, painth - _captionHeight, width());
 	if (_serviceWidth > 0) {
 		paintUserpicFrame(p, context, rthumb.topLeft());
