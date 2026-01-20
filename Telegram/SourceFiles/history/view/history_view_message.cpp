@@ -1260,7 +1260,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			// Task 7: Space below name equals space above name
 			mediaInBubbleSkipTop = st::msgPadding.top();
 			// Task 6: Space below content (caption) equals 2px
-			mediaInBubbleSkipBottom = st::msgPadding.bottom();
+			mediaInBubbleSkipBottom = st::mediaInBubbleSkip;
 		}
 	}
 
