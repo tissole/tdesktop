@@ -4816,15 +4816,6 @@ int Message::resizeContentGetHeight(int newWidth) {
 				newHeight += textHeightFor(textWidth);
 			}
 			
-			bool isCompact = false;
-			if (mediaDisplayed && item->media()) {
-				const auto photo = item->media()->photo();
-				const auto document = item->media()->document();
-				if (photo || document || (item->groupId())) {
-					isCompact = true;
-				}
-			}
-
 			auto mediaInBubbleSkip = st::mediaInBubbleSkip;
 			auto msgPaddingBottom = st::msgPadding.bottom();
 
