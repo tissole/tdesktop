@@ -1337,7 +1337,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 					localMediaBottom -= reactionSkip + _reactions->height();
 
 					if (mediaDisplayed && (item->media()->photo() || item->media()->document())) {
-						localMediaBottom -= st::msgPadding.bottom(); 
+						localMediaBottom -= st::mediaInBubbleSkip; 
 					} else {
 						localMediaBottom -= st::msgPadding.bottom();
 					}
@@ -1348,7 +1348,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 					auto bottomSkip = mediaInBubbleSkipBottom;
 					if (mediaDisplayed && item->media()) {
 						if (item->media()->photo() || item->media()->document()) {
-							paddingBottom = st::msgPadding.bottom();
+							paddingBottom = st::mediaInBubbleSkip;
 						}
 					}
 
