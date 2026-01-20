@@ -988,7 +988,7 @@ QSize Message::performCountOptimalSize() {
 			}
 		}
 
-		// FIX: Use 2px bottom padding for Compact Media (Photos, Documents)
+		// FIX: Use 4px bottom padding for Compact Media (Photos, Documents) to achieve 27px caption frame
 		bool isCompact = false;
 		bool hasInternalPadding = false;
 		if (mediaDisplayed && item->media()) {
@@ -1003,17 +1003,17 @@ QSize Message::performCountOptimalSize() {
 		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 			// Apply padding
 			minHeight += isCompact
-				? (hasInternalPadding ? 0 : 2)
+				? (hasInternalPadding ? 0 : 4)
 				: st::msgPadding.bottom();
 			
 			if (mediaDisplayed) {
-				minHeight += isCompact ? 2 : st::mediaInBubbleSkip;
+				minHeight += isCompact ? 4 : st::mediaInBubbleSkip;
 			}
 		} else if (mediaOnBottom && mediaDisplayed && isCompact) {
-			// Even if mediaOnBottom is true, ensure we have the 2px padding for docs
+			// Even if mediaOnBottom is true, ensure we have the 4px padding for docs
 			// because Document::countOptimalSize no longer includes it.
 			if (!hasInternalPadding) {
-				minHeight += 2;
+				minHeight += 4;
 			}
 		}
 
@@ -1021,7 +1021,7 @@ QSize Message::performCountOptimalSize() {
 			minHeight += st::msgPadding.top();
 			if (mediaDisplayed) {
 				// Task 7: Space below name (which is above media) should equal space above name (msgPadding.top)
-				// So we use st::msgPadding.top() instead of 2.
+				// So we use st::msgPadding.top() instead of 4.
 				minHeight += isCompact ? st::msgPadding.top() : st::mediaInBubbleSkip;
 			}
 			if (entry) minHeight += st::mediaInBubbleSkip;
@@ -1191,7 +1191,16 @@ int Message::marginTop() const {
 }
 
 int Message::marginBottom() const {
-	return isHidden() ? 0 : st::msgMargin.bottom();
+	if (isHidden()) {
+		return 0;
+	}
+	// FIX: Force 8px gap for single media without bubble (No Caption)
+	if (const auto m = media()) {
+		if ((m->getPhoto() || m->getDocument()) && !hasBubble()) {
+			return 8;
+		}
+	}
+	return st::msgMargin.bottom();
 }
 
 void Message::draw(Painter &p, const PaintContext &context) const {
@@ -1259,8 +1268,8 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		if (isCompactMedia) {
 			// Task 7: Space below name equals space above name
 			mediaInBubbleSkipTop = st::msgPadding.top();
-			// Task 6: Space below content (caption) equals 2px
-			mediaInBubbleSkipBottom = st::mediaInBubbleSkip;
+			// Task 6: Space below content (caption) equals 4px
+			mediaInBubbleSkipBottom = 4;
 		}
 	}
 
@@ -4819,16 +4828,36 @@ int Message::resizeContentGetHeight(int newWidth) {
 			auto mediaInBubbleSkip = st::mediaInBubbleSkip;
 			auto msgPaddingBottom = st::msgPadding.bottom();
 
-			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
-				newHeight += msgPaddingBottom;
-				if (mediaDisplayed) {
-					newHeight += mediaInBubbleSkip;
+			// FIX: Sync with performCountOptimalSize for Compact Media
+			// Use 4px bottom padding and 4px gap for compact media.
+			bool isCompact = false;
+			bool hasInternalPadding = false;
+			if (mediaDisplayed && item->media()) {
+				if (item->media()->photo()) {
+					isCompact = true;
+				} else if (item->media()->document() || dynamic_cast<const GroupedMedia*>(this->media())) {
+					isCompact = true;
+					hasInternalPadding = true;
 				}
 			}
+
+			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
+				newHeight += isCompact
+					? (hasInternalPadding ? 0 : 4)
+					: msgPaddingBottom;
+				if (mediaDisplayed) {
+					newHeight += isCompact ? 4 : mediaInBubbleSkip;
+				}
+			} else if (mediaOnBottom && mediaDisplayed && isCompact) {
+				if (!hasInternalPadding) {
+					newHeight += 4;
+				}
+			}
+
 			if (!mediaOnTop) {
 				newHeight += st::msgPadding.top();
 				if (mediaDisplayed) {
-					newHeight += mediaInBubbleSkip;
+					newHeight += isCompact ? st::msgPadding.top() : mediaInBubbleSkip;
 				}
 				if (entry) newHeight += mediaInBubbleSkip;
 			}
