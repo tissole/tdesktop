@@ -1008,7 +1008,6 @@ QSize Message::performCountOptimalSize() {
 			}
 		}
 
-		const auto withVisibleText = hasVisibleText();
 		const auto compactPadding = (isCompact && withVisibleText) ? 4 : 0;
 		const auto compactGap = (isCompact && withVisibleText) ? 4 : 0;
 
