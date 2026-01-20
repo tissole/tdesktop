@@ -994,26 +994,38 @@ QSize Message::performCountOptimalSize() {
 		if (mediaDisplayed && item->media()) {
 			if (item->media()->photo()) {
 				isCompact = true;
-			} else if (item->media()->document() || dynamic_cast<const GroupedMedia*>(this->media())) {
+			} else if (item->media()->document()) {
+				isCompact = true;
+				// Videos should be treated like Photos (no internal padding -> full caption frame)
+				if (item->media()->document()->isVideoFile()) {
+					hasInternalPadding = false;
+				} else {
+					hasInternalPadding = true;
+				}
+			} else if (dynamic_cast<const GroupedMedia*>(this->media())) {
 				isCompact = true;
 				hasInternalPadding = true;
 			}
 		}
 
+		const auto withVisibleText = hasVisibleText();
+		const auto compactPadding = (isCompact && withVisibleText) ? 4 : 0;
+		const auto compactGap = (isCompact && withVisibleText) ? 4 : 0;
+
 		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 			// Apply padding
 			minHeight += isCompact
-				? (hasInternalPadding ? 0 : 4)
+				? (hasInternalPadding ? 0 : compactPadding)
 				: st::msgPadding.bottom();
 			
 			if (mediaDisplayed) {
-				minHeight += isCompact ? 4 : st::mediaInBubbleSkip;
+				minHeight += isCompact ? compactGap : st::mediaInBubbleSkip;
 			}
 		} else if (mediaOnBottom && mediaDisplayed && isCompact) {
 			// Even if mediaOnBottom is true, ensure we have the 4px padding for docs
 			// because Document::countOptimalSize no longer includes it.
 			if (!hasInternalPadding) {
-				minHeight += 4;
+				minHeight += compactPadding;
 			}
 		}
 
@@ -4826,22 +4838,33 @@ int Message::resizeContentGetHeight(int newWidth) {
 			if (mediaDisplayed && item->media()) {
 				if (item->media()->photo()) {
 					isCompact = true;
-				} else if (item->media()->document() || dynamic_cast<const GroupedMedia*>(this->media())) {
+				} else if (item->media()->document()) {
+					isCompact = true;
+					// Videos should be treated like Photos (no internal padding -> full caption frame)
+					if (item->media()->document()->isVideoFile()) {
+						hasInternalPadding = false;
+					} else {
+						hasInternalPadding = true;
+					}
+				} else if (dynamic_cast<const GroupedMedia*>(this->media())) {
 					isCompact = true;
 					hasInternalPadding = true;
 				}
 			}
 
+			const auto compactPadding = (isCompact && withVisibleText) ? 4 : 0;
+			const auto compactGap = (isCompact && withVisibleText) ? 4 : 0;
+
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 				newHeight += isCompact
-					? (hasInternalPadding ? 0 : 4)
+					? (hasInternalPadding ? 0 : compactPadding)
 					: msgPaddingBottom;
 				if (mediaDisplayed) {
-					newHeight += isCompact ? 4 : mediaInBubbleSkip;
+					newHeight += isCompact ? compactGap : mediaInBubbleSkip;
 				}
 			} else if (mediaOnBottom && mediaDisplayed && isCompact) {
 				if (!hasInternalPadding) {
-					newHeight += 4;
+					newHeight += compactPadding;
 				}
 			}
 
