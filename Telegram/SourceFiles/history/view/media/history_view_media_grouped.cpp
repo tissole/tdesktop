@@ -99,21 +99,19 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto sti = context.imageStyle();
 	const auto font = st::msgDateFont;
 	p.setFont(font);
-	// Use proper white color for text on image bubbles
-	p.setPen(st->msgDateImgFg());
 
 	auto textWidth = font->width(infoText);
 	const auto textHeight = font->height;
 	
-	const auto horizontalPadding = 2;
-	const auto verticalPadding = 2;
+	const auto hPadding = 2;
+	const auto vPadding = st::msgDateImgPadding.y();
 
-	auto dateW = textWidth + (2 * horizontalPadding);
-	const auto dateH = textHeight + verticalPadding;
+	auto dateW = textWidth + (2 * hPadding);
+	const auto dateH = textHeight + (2 * vPadding);
 
 	if (dateW > itemGeometry.width()) {
 		const auto availableWidth = itemGeometry.width()
-			- (2 * horizontalPadding);
+			- (2 * hPadding);
 		if (availableWidth > font->width("...")) {
 			const QFontMetrics metrics(font);
 			infoText = metrics.elidedText(
@@ -121,7 +119,7 @@ void GroupedMedia::drawMessageIdInfo(
 				Qt::ElideRight,
 				availableWidth);
 			textWidth = font->width(infoText);
-			dateW = textWidth + (2 * horizontalPadding);
+			dateW = textWidth + (2 * hPadding);
 		} else {
 			return;
 		}
@@ -132,7 +130,7 @@ void GroupedMedia::drawMessageIdInfo(
 
 	// Draw with uniform style brush to avoid edge transparency differences
 	p.save();
-p.setOpacity(0.95);
+	p.setOpacity(0.95);
 	Ui::FillRoundRect(
 		p,
 		bubbleX,
@@ -143,10 +141,12 @@ p.setOpacity(0.95);
 		sti->msgDateImgBgCorners);
 	p.restore();
 
+	// Use proper white color for text on image bubbles
+	p.setPen(st->msgDateImgFg());
 	p.setFont(font->bold());
 	p.drawText(
-		bubbleX + horizontalPadding,
-		bubbleY + (dateH - textHeight) / 2 + font->ascent,
+		bubbleX + hPadding,
+		bubbleY + vPadding + font->ascent,
 		infoText);
 }
 
