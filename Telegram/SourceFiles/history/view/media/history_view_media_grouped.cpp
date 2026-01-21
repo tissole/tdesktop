@@ -291,7 +291,7 @@ QSize GroupedMedia::countOptimalSize() {
 		}
 
 		const auto textHeight = st::messageTextStyle.font->height;
-		const auto uniformCaptionHeight = 2 + textHeight + 2; // 2px top + text height + 2px bottom
+		const auto uniformCaptionHeight = 4 + textHeight + 5; // 4px top + text height + 5px bottom
 
 		for (auto const& [rowY, indices] : rows) {
 			bool rowHasCaption = false;
@@ -395,7 +395,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		}
 
 		const auto textHeight = st::messageTextStyle.font->height;
-		const auto uniformCaptionHeight = 2 + textHeight + 2; // 2px top + text height + 2px bottom
+		const auto uniformCaptionHeight = 4 + textHeight + 5; // 4px top + text height + 5px bottom
 
 		int totalShift = 0;
 
@@ -1104,12 +1104,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			const auto availableHeight = captionRect.height();
 			const auto textHeight = part._captionText.countHeight(availableWidth);
 
-			const auto requiredSpace = textHeight + 2 + 2; // 2px top + text height + 2px bottom
-			int verticalOffset = 2; // Always start with 2px from top
+			const auto requiredSpace = textHeight + 4 + 5; // 4px top + text height + 5px bottom
+			int verticalOffset = 4; // Always start with 4px from top
 			if (requiredSpace <= availableHeight) {
-				verticalOffset = (availableHeight - requiredSpace) / 2 + 2;
+				verticalOffset = (availableHeight - requiredSpace) / 2 + 4;
 			} else {
-				verticalOffset = 2;
+				verticalOffset = 4;
 			}
 
 			const auto captionLeft = captionRect.left() + padding.left();
