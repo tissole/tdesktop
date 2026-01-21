@@ -1535,15 +1535,15 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		if (mediaOnTop) {
 			trect.setY(trect.y() - st::msgPadding.top());
 		} else {
-			// FIX: Center sender name in 32px frame (7px Top / 6px Bottom)
-			// Shift trect up by 1px for compact media to offset the 8px top padding.
+			// FIX: Center sender name in 32px frame (12px Top / 12px Bottom visual)
+			// Shift trect up by 2px for compact media to balance the offsets.
 			const auto isCompactMedia = media && (media->getPhoto() || media->getDocument());
 			if (isCompactMedia) {
-				trect.setY(trect.y() - 1);
+				trect.setY(trect.y() - 2);
 			}
 			paintFromName(p, trect, context);
 			if (isCompactMedia) {
-				trect.setY(trect.y() + 1);
+				trect.setY(trect.y() + 2);
 			}
 			paintTopicButton(p, trect, context);
 			validateForwardedNameText(item);
