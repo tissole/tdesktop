@@ -856,7 +856,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			if (showInfo && isVideo && durSeconds >= 0 && sizeBytes > 0) {
 				const auto font = st::msgDateFont;
 				const auto sti = context.imageStyle();
-				const auto text = Ui::FormatDurationText(durSeconds) + QChar(' ') + Ui::FormatSizeText(sizeBytes);
+				const auto text = Ui::FormatDurationText(durSeconds) + " " + Ui::FormatSizeText(sizeBytes);
 				const auto textWidth = font->width(text);
 				const auto textHeight = font->height;
 				
