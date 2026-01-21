@@ -353,27 +353,21 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	const auto paintInCenter = !_sensitiveSpoiler
 		&& (radial || (!loaded && !_data->loading()));
 	
-	// FIX: New Download Arrow Logic (Top-Left)
-	// Only draw arrow if not loaded. Remove old radial background/text.
-	if (paintInCenter && !loaded && !_data->loading()) {
-		// Draw simple download arrow in top-left
+	// FIX: New Download Arrow Logic (Top-Left) - ONLY FOR VIDEOS
+	// For Photos, we keep the standard center icon behavior.
+	const auto isVideo = _data->videoCanBePlayed();
+	const auto showTopLeftArrow = isVideo && paintInCenter && !loaded && !_data->loading();
+
+	if (showTopLeftArrow) {
+		// Draw simple download arrow in top-left for Videos
 		const auto iconSize = st::historyFileThumbDownload.width();
-		const auto padding = st::msgDateImgPadding.x(); // Use standard small padding
+		const auto padding = st::msgDateImgPadding.x();
 		const auto x = rthumb.x() + padding;
 		const auto y = rthumb.y() + padding;
 		
 		sti->historyFileThumbDownload.paint(p, x, y, width());
 	} else if (paintInCenter) {
-		// Keep radial animation logic for loading state if needed, or simplify?
-		// User said: "arrow will function as a download button... disappear if video is downloaded"
-		// If loading (radial), keep original centered radial? 
-		// "arrow should reappear if video is removed". 
-		// For now, let's keep the radial animation centered as is standard for progress,
-		// but ONLY for the actual progress state.
-		// The requirement was specifically about the "upper left bubble" info.
-		// If it's *loading* (progressing), we usually want the radial in center.
-		// If it's *not loaded* (waiting to download), user wants Top-Left Arrow.
-		
+		// Standard Center Radial/Icon (For Photos OR Loading Videos)
 		const auto radialOpacity = (radial && loaded && !_data->uploading())
 			? _animation->radial.opacity() :
 			1.;
@@ -382,19 +376,33 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 
 		p.setOpacity(radialOpacity * p.opacity());
 
-		// Only draw radial background if actively loading/animating
-		if (radial || _data->loading()) {
+		// Draw radial background
+		// For Photos: Always draw if paintInCenter (standard behavior)
+		// For Videos: Only draw if loading (radial) or if we reverted to center style for some reason
+		if (!isVideo || radial || _data->loading()) {
 			PainterHighQualityEnabler hq(p);
 			p.drawEllipse(inner);
-			const auto &icon = sti->historyFileThumbCancel; // Cancel button while loading
-			icon.paintInCenter(p, inner);
-			
-			if (radial) {
-				QRect rinner(inner.marginsRemoved(QMargins(st::msgFileRadialLine, st::msgFileRadialLine, st::msgFileRadialLine, st::msgFileRadialLine)));
-				_animation->radial.draw(p, rinner, st::msgFileRadialLine, sti->historyFileThumbRadialFg);
-			}
 		}
+
+		p.setOpacity(radialOpacity);
+		
+		// Icon Selection
+		const auto &icon = (radial || _data->loading())
+			? sti->historyFileThumbCancel
+			: sti->historyFileThumbDownload;
+		
+		// For Videos, we only show Center Icon if loading (Cancel). 
+		// If not loading and not loaded, we showed Top-Left Arrow above.
+		// For Photos, we show Download or Cancel in center.
+		if (!isVideo || radial || _data->loading()) {
+			icon.paintInCenter(p, inner);
+		}
+		
 		p.setOpacity(1);
+		if (radial) {
+			QRect rinner(inner.marginsRemoved(QMargins(st::msgFileRadialLine, st::msgFileRadialLine, st::msgFileRadialLine, st::msgFileRadialLine)));
+			_animation->radial.draw(p, rinner, st::msgFileRadialLine, sti->historyFileThumbRadialFg);
+		}
 	} else if (_sensitiveSpoiler || preview) {
 		drawSpoilerTag(p, rthumb, context, [&] {
 			return spoilerTagBackground();

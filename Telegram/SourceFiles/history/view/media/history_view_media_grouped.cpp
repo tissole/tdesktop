@@ -853,7 +853,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			}
 
 			// Draw Duration/Size Bubble (Bottom-Right) on Hover
-			if (showInfo && durSeconds >= 0 && sizeBytes > 0) {
+			if (showInfo && isVideo && durSeconds >= 0 && sizeBytes > 0) {
 				const auto font = st::msgDateFont;
 				const auto sti = context.imageStyle();
 				const auto text = Ui::FormatDurationText(durSeconds) + QChar(' ') + Ui::FormatSizeText(sizeBytes);
