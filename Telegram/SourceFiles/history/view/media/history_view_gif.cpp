@@ -892,6 +892,47 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 		_drawTtl(p, rthumb, context);
 	}
 
+	// FIX: Draw Duration/Size Bubble on Hover (Bottom-Right)
+	// This replaces the old top-left duration text.
+	if (!isRound && !inWebPage && showInfo) {
+		const auto duration = _data->duration() / 1000;
+		const auto sizeBytes = _data->size;
+
+		if (duration >= 0 && sizeBytes > 0) {
+			const auto font = st::msgDateFont;
+			const auto text = Ui::FormatDurationText(duration) + QChar(' ') + Ui::FormatSizeText(sizeBytes);
+			const auto textWidth = font->width(text);
+			const auto textHeight = font->height;
+			
+			const auto hPadding = 2;
+			const auto vPadding = st::msgDateImgPadding.y(); 
+
+			const auto bubbleW = textWidth + 2 * hPadding;
+			const auto bubbleH = textHeight + 2 * vPadding;
+
+			// Position: Bottom-Right of the media rect (rthumb)
+			const auto bubbleX = rthumb.x() + rthumb.width() - bubbleW - st::msgDateImgDelta;
+			const auto bubbleY = rthumb.y() + rthumb.height() - bubbleH - st::msgDateImgDelta;
+
+			p.save();
+			p.setOpacity(0.95);
+			Ui::FillRoundRect(
+				p,
+				bubbleX,
+				bubbleY,
+				bubbleW,
+				bubbleH,
+				sti->msgDateImgBg,
+				sti->msgDateImgBgCorners);
+			p.restore();
+
+			p.setPen(st->msgDateImgFg());
+			p.setFont(font->bold());
+			const auto baseY = bubbleY + vPadding + font->ascent;
+			p.drawText(bubbleX + hPadding, baseY, text);
+		}
+	}
+
 	// --- CUSTOM TOP-RIGHT BUBBLE (For Standard Videos) ---
 	// Always draw top-right for videos even if caption exists.
 	// Only draw on hover/select.
@@ -1216,46 +1257,28 @@ void Gif::drawCornerStatus(
 		Painter &p,
 		const PaintContext &context,
 		QPoint position) const {
-	if (!needCornerStatusDisplay()) {
+	if (dataLoaded() || _data->loadedInMediaCache()) {
 		return;
 	}
-	const auto own = activeOwnStreamed();
+	
+	// FIX: Only draw download arrow (no text, no bubble background)
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
-	const auto text = (own && !own->frozenStatusText.isEmpty())
-		? own->frozenStatusText
-		: _statusText;
 	const auto padding = st::msgDateImgPadding;
-	const auto radial = _animation && _animation->radial.animating();
-	const auto cornerDownload = downloadInCorner() && !dataLoaded() && !_data->loadedInMediaCache();
-	const auto cornerMute = _streamed && _data->isVideoFile() && !cornerDownload;
-	const auto addLeft = cornerDownload ? (st::historyVideoDownloadSize + 2 * padding.y()) : 0;
-	const auto addRight = cornerMute ? st::historyVideoMuteSize : 0;
-	const auto downloadWidth = cornerDownload ? st::normalFont->width(_downloadSize) : 0;
-	const auto statusW = std::max(downloadWidth, st::normalFont->width(text)) + 2 * padding.x() + addLeft + addRight;
-	const auto statusH = cornerDownload ? (st::historyVideoDownloadSize + 2 * padding.y()) : (st::normalFont->height + 2 * padding.y());
+	
 	const auto statusX = position.x() + st::msgDateImgDelta + padding.x();
 	const auto statusY = position.y() + st::msgDateImgDelta + padding.y();
-	const auto around = style::rtlrect(statusX - padding.x(), statusY - padding.y(), statusW, statusH, width());
-	const auto statusTextTop = statusY + (cornerDownload ? (((statusH - 2 * st::normalFont->height) / 3) - padding.y()) : 0);
-	Ui::FillRoundRect(p, around, sti->msgDateImgBg, sti->msgDateImgBgCorners);
-	p.setFont(st::normalFont);
-	p.setPen(st->msgDateImgFg());
-	p.drawTextLeft(statusX + addLeft, statusTextTop, width(), text, statusW - 2 * padding.x());
-	if (cornerDownload) {
-		const auto downloadTextTop = statusY + st::normalFont->height + (2 * (statusH - 2 * st::normalFont->height) / 3) - padding.y();
-		p.drawTextLeft(statusX + addLeft, downloadTextTop, width(), _downloadSize, statusW - 2 * padding.x());
-		const auto inner = QRect(statusX + padding.y() - padding.x(), statusY, st::historyVideoDownloadSize, st::historyVideoDownloadSize);
-		const auto &icon = _data->loading()
-			? sti->historyVideoCancel
-			: sti->historyVideoDownload;
-		icon.paintInCenter(p, inner);
-		if (radial) {
-			QRect rinner(inner.marginsRemoved(QMargins(st::historyVideoRadialLine, st::historyVideoRadialLine, st::historyVideoRadialLine, st::historyVideoRadialLine)));
-			_animation->radial.draw(p, rinner, st::historyVideoRadialLine, sti->historyFileThumbRadialFg);
-		}
-	} else if (cornerMute) {
-		sti->historyVideoMessageMute.paint(p, statusX - padding.x() - padding.y() + statusW - addRight, statusY - padding.y() + (statusH - st::historyVideoMessageMute.height()) / 2, width());
+	
+	const auto inner = QRect(statusX, statusY, st::historyVideoDownloadSize, st::historyVideoDownloadSize);
+	const auto &icon = _data->loading()
+		? sti->historyVideoCancel
+		: sti->historyVideoDownload;
+	
+	icon.paintInCenter(p, inner);
+	
+	if (_animation && _animation->radial.animating()) {
+		const auto rinner = inner.marginsRemoved(QMargins(st::historyVideoRadialLine, st::historyVideoRadialLine, st::historyVideoRadialLine, st::historyVideoRadialLine));
+		_animation->radial.draw(p, rinner, st::historyVideoRadialLine, sti->historyFileThumbRadialFg);
 	}
 }
 
