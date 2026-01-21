@@ -1033,7 +1033,10 @@ QSize Message::performCountOptimalSize() {
 			if (mediaDisplayed) {
 				// Task 7: Space below name (which is above media) should equal space above name (msgPadding.top)
 				// So we use st::msgPadding.top() instead of 4.
-				minHeight += isCompact ? st::msgPadding.top() : st::mediaInBubbleSkip;
+				// FIX: Achieve 32px Name Frame (8px Top + 19px Text + Gap)
+				// Single items need 5px gap. Grid Albums need 8px gap (due to -3px offset).
+				const bool isGrouped = (dynamic_cast<const GroupedMedia*>(this->media()) != nullptr);
+				minHeight += isCompact ? (isGrouped ? st::msgPadding.top() : 5) : st::mediaInBubbleSkip;
 			}
 			if (entry) minHeight += st::mediaInBubbleSkip;
 		}
@@ -1277,8 +1280,10 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	if (mediaDisplayed) {
 		const auto isCompactMedia = media->getPhoto() || media->getDocument();
 		if (isCompactMedia) {
-			// Task 7: Space below name equals space above name
-			mediaInBubbleSkipTop = st::msgPadding.top();
+			// FIX: Achieve 32px Name Frame (8px Top + 19px Text + Gap)
+			// Single items need 5px gap. Grid Albums need 8px gap (due to -3px offset).
+			const bool isGrouped = (dynamic_cast<const GroupedMedia*>(media) != nullptr);
+			mediaInBubbleSkipTop = isGrouped ? st::msgPadding.top() : 5;
 			// Task 6: Space below content (caption) equals 4px
 			mediaInBubbleSkipBottom = 4;
 		}
@@ -4870,7 +4875,8 @@ int Message::resizeContentGetHeight(int newWidth) {
 			if (!mediaOnTop) {
 				newHeight += st::msgPadding.top();
 				if (mediaDisplayed) {
-					newHeight += isCompact ? st::msgPadding.top() : mediaInBubbleSkip;
+					const bool isGrouped = (dynamic_cast<const GroupedMedia*>(this->media()) != nullptr);
+					newHeight += isCompact ? (isGrouped ? st::msgPadding.top() : 5) : mediaInBubbleSkip;
 				}
 				if (entry) newHeight += mediaInBubbleSkip;
 			}
