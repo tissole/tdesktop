@@ -368,6 +368,19 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 		sti->historyFileThumbDownload.paint(p, x, y, width());
 	} else if (paintInCenter) {
 		// Standard Center Radial/Icon (For Photos OR Loading Videos)
+		
+		// Restore Brush Logic
+		p.setPen(Qt::NoPen);
+		if (context.selected()) {
+			p.setBrush(st->msgDateImgBgSelected());
+		} else if (isThumbAnimation()) {
+			const auto over = _animation->a_thumbOver.value(1.);
+			p.setBrush(anim::brush(st->msgDateImgBg(), st->msgDateImgBgOver(), over));
+		} else {
+			const auto over = ClickHandler::showAsActive(_data->loading() ? _cancell : _savel);
+			p.setBrush(over ? st->msgDateImgBgOver() : st->msgDateImgBg());
+		}
+
 		const auto radialOpacity = (radial && loaded && !_data->uploading())
 			? _animation->radial.opacity() :
 			1.;
