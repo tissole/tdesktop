@@ -303,6 +303,8 @@ QSize GroupedMedia::countOptimalSize() {
 			}
 
 			if (rowHasCaption) {
+				const auto spacing = st::historyGroupSkip;
+				const auto isLastRow = (rowY == rows.rbegin()->first);
 				for (const auto i : indices) {
 					auto &part = _parts[i];
 					if (!part.item->originalText().empty()) {
@@ -320,7 +322,7 @@ QSize GroupedMedia::countOptimalSize() {
 						part._captionHeight = 0;
 					}
 				}
-				minHeight += uniformCaptionHeight;
+				minHeight += isLastRow ? uniformCaptionHeight : (uniformCaptionHeight - spacing);
 			}
 
 			if (rowY == rows.rbegin()->first) {
@@ -441,8 +443,10 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 						part.captionRect = QRect();
 					}
 				}
-				totalShift += uniformCaptionHeight;
-				newHeight += uniformCaptionHeight;
+				const auto isLastRow = (rowY == rows.rbegin()->first);
+				const auto shift = isLastRow ? uniformCaptionHeight : (uniformCaptionHeight - spacing);
+				totalShift += shift;
+				newHeight += shift;
 			} else {
 				for (const auto i : indices) {
 					_parts[i].captionRect = QRect();
