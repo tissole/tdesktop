@@ -838,6 +838,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				}
 				
 				if (!isLoaded && !part.item->isUploading()) {
+					const auto sti = context.imageStyle();
 					const auto &icon = sti->historyFileThumbDownload; // Bold Icon
 					const auto padding = st::msgDateImgPadding.x();
 					auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
