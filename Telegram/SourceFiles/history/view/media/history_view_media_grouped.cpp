@@ -871,6 +871,23 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					// Draw Icon
 					p.scale(scale, scale);
 					icon.paintInCenter(p, QRectF(-size/2.0, -size/2.0, size, size));
+					
+					// Draw Radial Progress (Simulated)
+					if (isLoading) {
+						const auto progress = doc ? doc->progress() : 0.;
+						if (progress > 0) {
+							p.setPen(QPen(sti->historyFileThumbRadialFg, st::msgFileRadialLine, Qt::SolidLine, Qt::RoundCap));
+							p.setBrush(Qt::NoBrush);
+							const auto line = st::msgFileRadialLine;
+							const auto rinner = QRectF(-size/2.0, -size/2.0, size, size).marginsRemoved(QMarginsF(line, line, line, line));
+							
+							// Arc parameters (1/16th of degree)
+							// Start at 90 degrees (Top) -> 90 * 16
+							const int startAngle = 90 * 16; 
+							const int spanAngle = int(-progress * 360 * 16);
+							p.drawArc(rinner, startAngle, spanAngle);
+						}
+					}
 					p.restore();
 				}
 			}
