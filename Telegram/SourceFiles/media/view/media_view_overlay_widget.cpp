@@ -1518,9 +1518,6 @@ void OverlayWidget::refreshCaptionGeometry() {
 	if (_caption.isEmpty() && (!_stories || !_stories->repost())) {
 		_captionRect = QRect();
 		return;
-	} else if (_fullScreenVideo) {
-		_captionRect = QRect();
-		return;
 	}
 
 	if (_groupThumbs && _groupThumbs->hiding()) {
