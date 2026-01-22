@@ -360,22 +360,30 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	const auto showTopLeftArrow = isVideo && paintInCenter && !loaded && !_data->loading();
 
 	if (showTopLeftArrow) {
-		// Draw simple download arrow in top-left for Videos
-		const auto iconSize = st::historyFileThumbDownload.width();
-		const auto padding = st::msgDateImgPadding.x();
-		const auto x = rthumb.x() + padding;
-		const auto y = rthumb.y() + padding;
+		// Match Grid View Scale
+		const auto scale = 0.7;
+		const auto iconSize = sti->historyFileThumbDownload.width();
+		const auto paddingVal = st::msgDateImgPadding.x();
 		
-		// Draw Background Circle
-		const auto inner = QRect(x, y, iconSize, iconSize);
+		const auto bgSize = iconSize * scale + (paddingVal * 2 * scale);
+		const auto radius = bgSize / 2.0;
+
+		const auto x = rthumb.x() + paddingVal;
+		const auto y = rthumb.y() + paddingVal;
+		
+		p.save();
+		p.translate(x + radius - (paddingVal * scale), y + radius - (paddingVal * scale));
+
 		{
 			PainterHighQualityEnabler hq(p);
 			p.setPen(Qt::NoPen);
 			p.setBrush(sti->msgDateImgBg);
-			p.drawEllipse(inner.marginsAdded({ 2, 2, 2, 2 }));
+			p.drawEllipse(QRectF(-radius, -radius, bgSize, bgSize));
 		}
 		
-		sti->historyFileThumbDownload.paint(p, x, y, width());
+		p.scale(scale, scale);
+		sti->historyFileThumbDownload.paintInCenter(p, QRectF(-iconSize/2.0, -iconSize/2.0, iconSize, iconSize));
+		p.restore();
 	} else if (paintInCenter) {
 		// Standard Center Radial/Icon (For Photos OR Loading Videos)
 		
