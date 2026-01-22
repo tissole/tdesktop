@@ -383,18 +383,6 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 		
 		p.scale(scale, scale);
 		sti->historyFileThumbDownload.paintInCenter(p, QRectF(-iconSize/2.0, -iconSize/2.0, iconSize, iconSize));
-		
-		if (radial) {
-			const auto line = st::msgFileRadialLine;
-			const auto rinner = QRect(
-				-iconSize / 2, 
-				-iconSize / 2, 
-				iconSize, 
-				iconSize
-			).marginsRemoved({ line, line, line, line });
-			
-			_animation->radial.draw(p, rinner, line, sti->historyFileThumbRadialFg);
-		}
 		p.restore();
 	} else if (paintInCenter) {
 		// Standard Center Radial/Icon (For Photos OR Loading Videos)
