@@ -894,7 +894,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 
 	// FIX: Draw Duration/Size Bubble on Hover (Bottom-Right)
 	// This replaces the old top-left duration text.
-	if (!isRound && !inWebPage && showInfo && _data->isVideoFile()) {
+	if (!isRound && !inWebPage && showInfo) {
 		const auto duration = _data->duration() / 1000;
 		const auto sizeBytes = _data->size;
 
