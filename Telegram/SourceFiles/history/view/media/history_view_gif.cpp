@@ -1718,10 +1718,18 @@ void Gif::drawGrouped(
 		p.setOpacity(1.);
 	}
 
+	// Force show standard icon for streamable videos that aren't playing/fully loaded,
+	// even if the thumbnail is loaded (which sets loaded=true).
+	// This ensures grid videos always show the download/play arrow.
+	const auto forceShowForVideo = !_sensitiveSpoiler 
+		&& _data->isVideoFile() 
+		&& !_dataMedia->loaded(); // loaded() is true only if full file is loaded
+
 	const auto paintInCenter = !_sensitiveSpoiler
 		&& (radial
 			|| (!streamingMode
-				&& ((!loaded && !_data->loading()) || !autoplay)));
+				&& ((!loaded && !_data->loading()) || !autoplay))
+			|| forceShowForVideo);
 	if (paintInCenter) {
 		const auto radialRevealed = 1.;
 		const auto opacity = (item->isSending() || _data->uploading())
@@ -1805,10 +1813,8 @@ void Gif::drawGrouped(
 		}
 		p.setOpacity(1.);
 	}
-	// Suppress duplicate Top-Left bubble in grid
-	if (!_smallGroupPart) {
-		drawCornerStatus(p, context, geometry.topLeft());
-	}
+	// Differentiation removed. All items (Single Row or Side-by-Side)
+	// now use the unified paintInCenter logic above to draw the icon.
 }
 
 TextState Gif::getStateGrouped(
