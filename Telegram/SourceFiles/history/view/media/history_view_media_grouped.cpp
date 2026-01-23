@@ -795,7 +795,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					durSeconds = std::max<qint64>(0, document->duration() / 1000);
 					sizeBytes = document->size;
 					isVideo = true;
-					isLoaded = part.content->dataLoaded();
+					isLoaded = document->loaded();
 				}
 			} else if (const auto photoMedia = dynamic_cast<Data::MediaPhoto*>(dataMedia)) {
 				const auto photo = photoMedia->photo();
@@ -828,7 +828,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			// Focusing on Documents (Files) which are standard videos.
 			// Re-evaluating isLoaded for Document:
 			if (const auto file = dynamic_cast<Data::MediaFile*>(dataMedia)) {
-				isLoaded = part.content->dataLoaded(); 
+				isLoaded = file->document()->loaded(); 
 				if (!isLoaded && !part.item->isUploading()) {
 					const auto &icon = st::historyFileThumbDownload;
 					const auto padding = st::msgDateImgPadding.x();
