@@ -762,8 +762,8 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			//	? (QString::fromUtf8("✏️") + " ")
 			//	: QString();
 			//const auto statusText = editedGlyph + _statusText;
-			p.setPen(st->msgDateImgFg());
-			p.drawTextLeft(statusX, statusY, width(), statusText, statusW - 2 * st::msgDateImgPadding.x());
+			p.setPen(st->msgServiceFg());
+			p.drawTextLeft(statusX, statusY, width(), _statusText, statusW - 2 * st::msgDateImgPadding.x());
 			if (mediaUnread) {
 				p.setPen(Qt::NoPen);
 				p.setBrush(st->msgServiceFg());
