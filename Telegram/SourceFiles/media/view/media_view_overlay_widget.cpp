@@ -6486,7 +6486,7 @@ bool OverlayWidget::handleContextMenu(std::optional<QPoint> position) {
 			return false;
 		}
 		// Check if context menu is on caption area
-		_contextMenuOnCaption = _captionRect.contains(*position);
+		_contextMenuOnCaption = _captionRect.contains(*position) && !_fullScreenVideo;
 	} else {
 		_contextMenuOnCaption = false;
 	}
