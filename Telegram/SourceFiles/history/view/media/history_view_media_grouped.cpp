@@ -826,29 +826,29 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				}
 			}
 
-			// Draw Download/Cancel Arrow (Top-Left)
+			// Draw Download Arrow (Top-Left) if not loaded
+			// Note: isLoaded logic above is imperfect for Photos.
+			// Focusing on Documents (Files) which are standard videos.
+			// Re-evaluating isLoaded for Document:
 			if (const auto file = dynamic_cast<Data::MediaFile*>(dataMedia)) {
-				const auto doc = file->document();
-				bool isLoading = doc && doc->loading();
-				
-				if (const auto view = doc->activeMediaView()) {
+				if (const auto view = file->document()->activeMediaView()) {
 					isLoaded = view->loaded();
 				} else {
 					isLoaded = false;
 				}
 				
-				if ((!isLoaded || isLoading) && !part.item->isUploading()) {
+				if (!isLoaded && !part.item->isUploading()) {
 					const auto sti = context.imageStyle();
-					// Toggle icon based on state
-					const auto &icon = isLoading 
-						? sti->historyFileThumbCancel 
-						: sti->historyFileThumbDownload;
-
+					const auto &icon = sti->historyFileThumbDownload; // Bold Icon
 					const auto padding = st::msgDateImgPadding.x();
 					auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
 					
-					// Force standard small scale for Grid View (User Request)
-					float64 scale = 0.7;
+					// Scale icon if item is small
+					const auto threshold = 150; // Increased threshold for better scaling detection
+					float64 scale = 1.0;
+					if (mediaGeometry.width() < threshold) {
+						scale = 0.7; // Scale down
+					}
 
 					const auto x = mediaGeometry.x() + padding;
 					const auto y = mediaGeometry.y() + padding;
@@ -1264,44 +1264,6 @@ TextState GroupedMedia::getPartState(
 			|| (!captionGeo.isEmpty() && captionGeo.contains(point));
 
 		if (isInside) {
-			// Check Download Arrow Click (Grid Mode)
-			if (_mode == Mode::Grid) {
-				if (const auto file = dynamic_cast<Data::MediaFile*>(part.item->media())) {
-					const auto doc = file->document();
-					bool isLoaded = false;
-					if (const auto view = doc->activeMediaView()) {
-						isLoaded = view->loaded();
-					}
-					bool isLoading = doc->loading();
-
-					if ((!isLoaded || isLoading) && !part.item->isUploading()) {
-						// Reconstruct Arrow Geometry (Match Draw Logic)
-						const auto padding = st::msgDateImgPadding.x();
-						const auto scale = 0.7;
-						const auto iconSize = st::historyFileThumbDownload.width();
-						const auto bgSize = iconSize * scale + (padding * 2 * scale);
-						
-						const auto x = mediaGeo.x() + padding;
-						const auto y = mediaGeo.y() + padding;
-						
-						// Hit Rect
-						QRectF arrowRect(x, y, bgSize, bgSize);
-						
-						if (arrowRect.contains(point)) {
-							auto result = TextState(part.item);
-							if (isLoading) {
-								result.link = std::make_shared<DocumentCancelClickHandler>(
-									doc, part.item->fullId());
-							} else {
-								result.link = std::make_shared<DocumentSaveClickHandler>(
-									doc, part.item->fullId());
-							}
-							return result;
-						}
-					}
-				}
-			}
-
 			if (_mode == Mode::Grid
 				&& !captionGeo.isEmpty()
 				&& captionGeo.contains(point)) {
