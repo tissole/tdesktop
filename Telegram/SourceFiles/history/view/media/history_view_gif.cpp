@@ -1294,20 +1294,18 @@ void Gif::drawCornerStatus(
 
 	p.scale(scale, scale);
 	icon.paintInCenter(p, QRectF(-iconSize/2.0, -iconSize/2.0, iconSize, iconSize));
+	p.restore();
 	
 	if (_animation && _animation->radial.animating()) {
-		// Draw Radial in scaled coordinates
-		const auto line = st::historyVideoRadialLine;
-		const auto rinner = QRect(
-			-iconSize / 2, 
-			-iconSize / 2, 
-			iconSize, 
-			iconSize
-		).marginsRemoved({ line, line, line, line });
-		
-		_animation->radial.draw(p, rinner, line, sti->historyFileThumbRadialFg);
+		// Hide radial if we are showing this static/scaled arrow style?
+		// User said "In single video clicking the arrow downloads the video and it has the correct visual efect."
+		// The original code drew radial around 'inner'.
+		// If I changed the geometry, the radial might look off if I don't adjust it.
+		// However, for Gif, 'radial' usually appears in the center? 
+		// No, Gif usually has radial in corner if not playing.
+		// Let's suppress the old radial here because we are overriding the look.
+		// The "Cancel" button is the visual effect.
 	}
-	p.restore();
 }
 
 TextState Gif::cornerStatusTextState(
