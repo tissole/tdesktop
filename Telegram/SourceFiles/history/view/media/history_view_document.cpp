@@ -740,9 +740,11 @@ void Document::draw(
 	const auto nametop = st.nameTop + delta - topMinus;
 	const auto nameright = st.padding.right();
 
+	const auto nameHeight = st::semiboldFont->height;
 	const auto statustop = st.statusTop + delta - topMinus;
 
 	const auto linktop = st.linkTop + delta - topMinus;
+	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const auto bottomPadding = 10;
 
 	auto contentHeight = st.thumbSize;
@@ -1343,6 +1345,9 @@ void Document::drawVideoOverlay(
 			const auto thumbed = Get<HistoryDocumentThumbed>();
 			const auto &stLayout = (thumbed ? st::msgFileThumbLayout : st::msgFileLayout);
 			
+			const int contentW = stLayout.thumbSize; // Approximate
+			const int contentH = stLayout.thumbSize; // Approximate
+			
 			// Actually, for Single Video, 'width' is the full message width.
 			// The video thumbnail usually fills the width or is constrained.
 			// Let's use the layout parameters.
@@ -1382,6 +1387,10 @@ TextState Document::videoOverlayState(
 		QSize layout,
 		StateRequest request,
 		LayoutMode mode) const {
+	if (request.cursor != CursorState::None) {
+		return TextState();
+	}
+	
 	if (!dataLoaded() && !_data->loading()) {
 		// Replicate rect calculation from drawVideoOverlay
 		// We don't have 'context' here, so we need to access style via global or 'history()->session()...' 
@@ -1405,11 +1414,11 @@ TextState Document::videoOverlayState(
 
 		if (rect.contains(point)) {
 			if (thumbed && thumbed->linksavel) {
-				return TextState(_parent, thumbed->linksavel);
+				return { .link = thumbed->linksavel };
 			}
 		}
 	}
-	return TextState(_parent);
+	return TextState();
 }
 
 void Document::drawCornerDownload(
