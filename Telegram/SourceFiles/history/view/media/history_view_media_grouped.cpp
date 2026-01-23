@@ -782,20 +782,15 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			&part.cache);
 
 		// --- Draw Grid Mode Overlays (Video duration) ---
-		if (_mode == Mode::Grid) {
+		if (_mode == Mode::Grid && showInfo) {
 			const auto dataMedia = part.item->media();
 			qint64 durSeconds = -1;
 			qint64 sizeBytes = -1;
-			bool isVideo = false;
-			bool isLoaded = false;
-
 			if (const auto file = dynamic_cast<Data::MediaFile*>(dataMedia)) {
 				const auto document = file->document();
 				if (document && document->isVideoFile()) {
 					durSeconds = std::max<qint64>(0, document->duration() / 1000);
 					sizeBytes = document->size;
-					isVideo = true;
-					isLoaded = document->loaded();
 				}
 			} else if (const auto photoMedia = dynamic_cast<Data::MediaPhoto*>(dataMedia)) {
 				const auto photo = photoMedia->photo();
@@ -806,64 +801,17 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 						durSeconds = 0;
 					}
 					sizeBytes = photo->videoByteSize(Data::PhotoSize::Large);
-					isVideo = true;
-					// For photo media, check if video data is loaded? 
-					// Data::Photo doesn't have simple 'loaded()'. It has 'loading()' or check if file exists.
-					// Assuming 'displayLoading' logic from Photo view: !preview && !loaded && !loading
-					// Simplify: check if we can stream/play. If not downloaded, show arrow.
-					// Data::Photo::videoByteSize returns > 0 usually.
-					// Use owner().streaming().isLocallyAvailable(photo) or similar?
-					// Simplest proxy: if !photo->videoCanBePlayed() it wouldn't be here.
-					// Let's assume for now we check if file exists or is loading.
-					// Actually, arrow should show if NOT loading and NOT loaded.
-					isLoaded = !photo->loading() && !photo->uploading() && photo->videoCanBePlayed(); // This is loose.
-					// Better: check if the video file path is available?
-					// For now, let's use a simpler heuristic or skip arrow for photo-videos if unsure.
-					// Requirement said "video in grid albums".
 				}
 			}
 
-			// Draw Download Arrow (Top-Left) if not loaded
-			// Note: isLoaded logic above is imperfect for Photos.
-			// Focusing on Documents (Files) which are standard videos.
-			// Re-evaluating isLoaded for Document:
-			if (const auto file = dynamic_cast<Data::MediaFile*>(dataMedia)) {
-				isLoaded = file->document()->loaded(); 
-				if (!isLoaded && !part.item->isUploading()) {
-					const auto &icon = st::historyFileThumbDownload;
-					const auto padding = st::msgDateImgPadding.x();
-					auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
-					
-					// Scale icon if item is small
-					const auto threshold = 100; // px
-					float64 scale = 1.0;
-					if (mediaGeometry.width() < threshold) {
-						scale = 0.6; // Scale down for small items
-					}
-
-					const auto x = mediaGeometry.x() + padding;
-					const auto y = mediaGeometry.y() + padding;
-
-					p.save();
-					p.translate(x, y);
-					p.scale(scale, scale);
-					icon.paint(p, 0, 0, width());
-					p.restore();
-				}
-			}
-
-			// Draw Duration/Size Bubble (Bottom-Right) on Hover
-			if (showInfo && durSeconds >= 0 && sizeBytes > 0) {
+			if (durSeconds >= 0 && sizeBytes > 0) {
 				const auto font = st::msgDateFont;
 				const auto sti = context.imageStyle();
 				const auto text = Ui::FormatDurationText(durSeconds) + QChar(' ') + Ui::FormatSizeText(sizeBytes);
 				const auto textWidth = font->width(text);
 				const auto textHeight = font->height;
-				
-				// Fix: Match padding logic from Single Photo/Video and Top-Right bubble
 				const auto hPadding = 2;
 				const auto vPadding = st::msgDateImgPadding.y();
-
 				const auto bubbleW = textWidth + 2 * hPadding;
 				const auto bubbleH = textHeight + 2 * vPadding;
 
@@ -885,7 +833,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 				p.setPen(st->msgDateImgFg());
 				p.setFont(font->bold());
-				const auto baseY = bubbleY + vPadding + font->ascent;
+				const auto baseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
 				p.drawText(bubbleX + hPadding, baseY, text);
 			}
 		}

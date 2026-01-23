@@ -352,28 +352,22 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	
 	const auto paintInCenter = !_sensitiveSpoiler
 		&& (radial || (!loaded && !_data->loading()));
-	
-	// FIX: New Download Arrow Logic (Top-Left)
-	// Only draw arrow if not loaded. Remove old radial background/text.
-	if (paintInCenter && !loaded && !_data->loading()) {
-		// Draw simple download arrow in top-left
-		const auto iconSize = st::historyFileThumbDownload.width();
-		const auto padding = st::msgDateImgPadding.x(); // Use standard small padding
-		const auto x = rthumb.x() + padding;
-		const auto y = rthumb.y() + padding;
-		
-		sti->historyFileThumbDownload.paint(p, x, y, width());
-	} else if (paintInCenter) {
-		// Keep radial animation logic for loading state if needed, or simplify?
-		// User said: "arrow will function as a download button... disappear if video is downloaded"
-		// If loading (radial), keep original centered radial? 
-		// "arrow should reappear if video is removed". 
-		// For now, let's keep the radial animation centered as is standard for progress,
-		// but ONLY for the actual progress state.
-		// The requirement was specifically about the "upper left bubble" info.
-		// If it's *loading* (progressing), we usually want the radial in center.
-		// If it's *not loaded* (waiting to download), user wants Top-Left Arrow.
-		
+	if (paintInCenter || showEnlarge) {
+		p.setPen(Qt::NoPen);
+		if (context.selected()) {
+			p.setBrush(st->msgDateImgBgSelected());
+		} else if (showEnlarge) {
+			const auto over = ClickHandler::showAsActive(_openl);
+			p.setBrush(over ? st->msgDateImgBgOver() : st->msgDateImgBg());
+		} else if (isThumbAnimation()) {
+			const auto over = _animation->a_thumbOver.value(1.);
+			p.setBrush(anim::brush(st->msgDateImgBg(), st->msgDateImgBgOver(), over));
+		} else {
+			const auto over = ClickHandler::showAsActive(_data->loading() ? _cancell : _savel);
+			p.setBrush(over ? st->msgDateImgBgOver() : st->msgDateImgBg());
+		}
+	}
+	if (paintInCenter) {
 		const auto radialOpacity = (radial && loaded && !_data->uploading())
 			? _animation->radial.opacity() :
 			1.;
@@ -382,19 +376,21 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 
 		p.setOpacity(radialOpacity * p.opacity());
 
-		// Only draw radial background if actively loading/animating
-		if (radial || _data->loading()) {
+		{
 			PainterHighQualityEnabler hq(p);
 			p.drawEllipse(inner);
-			const auto &icon = sti->historyFileThumbCancel; // Cancel button while loading
-			icon.paintInCenter(p, inner);
-			
-			if (radial) {
-				QRect rinner(inner.marginsRemoved(QMargins(st::msgFileRadialLine, st::msgFileRadialLine, st::msgFileRadialLine, st::msgFileRadialLine)));
-				_animation->radial.draw(p, rinner, st::msgFileRadialLine, sti->historyFileThumbRadialFg);
-			}
 		}
+
+		p.setOpacity(radialOpacity);
+		const auto &icon = (radial || _data->loading())
+			? sti->historyFileThumbCancel
+			: sti->historyFileThumbDownload;
+		icon.paintInCenter(p, inner);
 		p.setOpacity(1);
+		if (radial) {
+			QRect rinner(inner.marginsRemoved(QMargins(st::msgFileRadialLine, st::msgFileRadialLine, st::msgFileRadialLine, st::msgFileRadialLine)));
+			_animation->radial.draw(p, rinner, st::msgFileRadialLine, sti->historyFileThumbRadialFg);
+		}
 	} else if (_sensitiveSpoiler || preview) {
 		drawSpoilerTag(p, rthumb, context, [&] {
 			return spoilerTagBackground();
@@ -414,52 +410,6 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 			geometry.setY(rect.y() + rect.height());
 		}
 		drawPurchasedTag(p, geometry, context);
-	}
-
-	// FIX: Draw Duration/Size Bubble on Hover (Bottom-Right)
-	if (showInfo && _data->videoCanBePlayed()) {
-		qint64 durSeconds = 0;
-		if (const auto d = _data->extendedMediaVideoDuration()) {
-			durSeconds = std::max<qint64>(0, *d);
-		}
-		const auto sizeBytes = _data->videoByteSize(Data::PhotoSize::Large);
-
-		if (durSeconds >= 0 && sizeBytes > 0) {
-			const auto font = st::msgDateFont;
-			// Reuse style from context
-			const auto text = Ui::FormatDurationText(durSeconds) + QChar(' ') + Ui::FormatSizeText(sizeBytes);
-			const auto textWidth = font->width(text);
-			const auto textHeight = font->height;
-			
-			// Match Grid Album padding: 2px horizontal, 4px vertical total (2*msgDateImgPadding.y)
-			const auto hPadding = 2;
-			const auto vPadding = st::msgDateImgPadding.y(); 
-
-			const auto bubbleW = textWidth + 2 * hPadding;
-			const auto bubbleH = textHeight + 2 * vPadding;
-
-			// Position: Bottom-Right of the media rect
-			const auto bubbleX = rthumb.x() + rthumb.width() - bubbleW - st::msgDateImgDelta;
-			const auto bubbleY = rthumb.y() + rthumb.height() - bubbleH - st::msgDateImgDelta;
-
-			p.save();
-			p.setOpacity(0.95);
-			Ui::FillRoundRect(
-				p,
-				bubbleX,
-				bubbleY,
-				bubbleW,
-				bubbleH,
-				sti->msgDateImgBg,
-				sti->msgDateImgBgCorners);
-			p.restore();
-
-			p.setPen(st->msgDateImgFg());
-			p.setFont(font->bold());
-			// Center text vertically
-			const auto baseY = bubbleY + vPadding + font->ascent;
-			p.drawText(bubbleX + hPadding, baseY, text);
-		}
 	}
 
 	// --- CUSTOM INFO BUBBLE (TOP-RIGHT) ---
