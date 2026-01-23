@@ -26,7 +26,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/spoiler_mess.h"
 #include "ui/chat/chat_style.h"
 #include "ui/text/text_utilities.h"
-#include "ui/text/format_values.h"
 #include "ui/grouped_layout.h"
 #include "ui/cached_round_corners.h"
 #include "ui/painter.h"
@@ -449,7 +448,7 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 		if (durSeconds >= 0 && sizeBytes > 0) {
 			const auto font = st::msgDateFont;
 			// Reuse style from context
-			const auto text = Ui::FormatDurationText(durSeconds) + " " + Ui::FormatSizeText(sizeBytes);
+			const auto text = Ui::FormatDurationText(durSeconds) + QChar(' ') + Ui::FormatSizeText(sizeBytes);
 			const auto textWidth = font->width(text);
 			const auto textHeight = font->height;
 			

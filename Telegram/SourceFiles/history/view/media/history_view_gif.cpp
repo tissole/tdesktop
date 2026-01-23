@@ -900,7 +900,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 
 		if (duration >= 0 && sizeBytes > 0) {
 			const auto font = st::msgDateFont;
-			const auto text = Ui::FormatDurationText(duration) + " " + Ui::FormatSizeText(sizeBytes);
+			const auto text = Ui::FormatDurationText(duration) + QChar(' ') + Ui::FormatSizeText(sizeBytes);
 			const auto textWidth = font->width(text);
 			const auto textHeight = font->height;
 			
