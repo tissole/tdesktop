@@ -1269,20 +1269,11 @@ void Gif::drawCornerStatus(
 	const auto statusX = position.x() + st::msgDateImgDelta + padding.x();
 	const auto statusY = position.y() + st::msgDateImgDelta + padding.y();
 	
-	// Draw Background Circle
 	const auto inner = QRect(statusX, statusY, st::historyVideoDownloadSize, st::historyVideoDownloadSize);
 	const auto &icon = _data->loading()
-		? sti->historyFileThumbCancel // Bold Cancel
-		: sti->historyFileThumbDownload; // Bold Download
+		? sti->historyVideoCancel
+		: sti->historyVideoDownload;
 	
-	{
-		PainterHighQualityEnabler hq(p);
-		p.setPen(Qt::NoPen);
-		p.setBrush(sti->msgDateImgBg);
-		// Draw slightly larger circle for background
-		p.drawEllipse(inner.marginsAdded({ 2, 2, 2, 2 }));
-	}
-
 	icon.paintInCenter(p, inner);
 	
 	if (_animation && _animation->radial.animating()) {
@@ -1838,9 +1829,7 @@ void Gif::drawGrouped(
 		p.setOpacity(1.);
 	}
 	// Suppress duplicate Top-Left bubble in grid
-	// FIX: Disable internal corner status for grouped items to avoid duplicates.
-	// GroupedMedia now handles the download arrow for all parts.
-	if (!_smallGroupPart && false) {
+	if (!_smallGroupPart) {
 		drawCornerStatus(p, context, geometry.topLeft());
 	}
 }

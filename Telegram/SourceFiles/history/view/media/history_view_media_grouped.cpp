@@ -838,38 +838,24 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				}
 				
 				if (!isLoaded && !part.item->isUploading()) {
-					const auto &icon = sti->historyFileThumbDownload; // Bold Icon
+					const auto &icon = st::historyFileThumbDownload;
 					const auto padding = st::msgDateImgPadding.x();
 					auto mediaGeometry = part.geometry.translated(0, groupPadding.top());
 					
 					// Scale icon if item is small
-					const auto threshold = 150; // Increased threshold for better scaling detection
+					const auto threshold = 100; // px
 					float64 scale = 1.0;
 					if (mediaGeometry.width() < threshold) {
-						scale = 0.7; // Scale down
+						scale = 0.6; // Scale down for small items
 					}
 
 					const auto x = mediaGeometry.x() + padding;
 					const auto y = mediaGeometry.y() + padding;
-					
-					// Draw Background Circle for Visibility
-					const auto size = icon.width(); // Base size
-					const auto bgSize = size * scale + (padding * 2 * scale); // Scaled background
-					const auto radius = bgSize / 2.0;
-					
+
 					p.save();
-					p.translate(x + radius - (padding * scale), y + radius - (padding * scale));
-					
-					p.setPen(Qt::NoPen);
-					p.setBrush(sti->msgDateImgBg);
-					{
-						PainterHighQualityEnabler hq(p);
-						p.drawEllipse(QRectF(-radius, -radius, bgSize, bgSize));
-					}
-					
-					// Draw Icon
+					p.translate(x, y);
 					p.scale(scale, scale);
-					icon.paintInCenter(p, QRectF(-size/2.0, -size/2.0, size, size));
+					icon.paint(p, 0, 0, width());
 					p.restore();
 				}
 			}

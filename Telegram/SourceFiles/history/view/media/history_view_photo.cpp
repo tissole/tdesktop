@@ -366,15 +366,6 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 		const auto x = rthumb.x() + padding;
 		const auto y = rthumb.y() + padding;
 		
-		// Draw Background Circle
-		const auto inner = QRect(x, y, iconSize, iconSize);
-		{
-			PainterHighQualityEnabler hq(p);
-			p.setPen(Qt::NoPen);
-			p.setBrush(sti->msgDateImgBg);
-			p.drawEllipse(inner.marginsAdded({ 2, 2, 2, 2 }));
-		}
-		
 		sti->historyFileThumbDownload.paint(p, x, y, width());
 	} else if (paintInCenter) {
 		// Standard Center Radial/Icon (For Photos OR Loading Videos)
