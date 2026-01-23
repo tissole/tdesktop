@@ -744,6 +744,46 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			&& _realParent->isSponsored();
 		if ((!isRound || !inWebPage) && !sponsoredSkip) {
 			drawCornerStatus(p, context, QPoint());
+
+			// --- NEW: Bottom-Right Info Bubble for Single Video ---
+			// Only show if media is loaded (cover/thumbnail/video) and it's not a round message
+			if (!isRound && !sponsoredSkip && (loaded || _data->hasThumbnail())) {
+				qint64 durSeconds = std::max<qint64>(0, _data->duration() / 1000);
+				qint64 sizeBytes = _data->size;
+
+				if (durSeconds >= 0 && sizeBytes > 0) {
+					const auto font = st::msgDateFont;
+					const auto sti = context.imageStyle();
+					const auto text = Ui::FormatDurationText(durSeconds) + QChar(' ') + Ui::FormatSizeText(sizeBytes);
+					const auto textWidth = font->width(text);
+					const auto textHeight = font->height;
+					const auto hPadding = 2;
+					const auto vPadding = st::msgDateImgPadding.y();
+					const auto bubbleW = textWidth + 2 * hPadding;
+					const auto bubbleH = textHeight + 2 * vPadding;
+
+					const auto bubbleX = width() - bubbleW - st::msgDateImgDelta;
+					const auto bubbleY = height() - bubbleH - st::msgDateImgDelta;
+
+					p.save();
+					p.setOpacity(0.95);
+					Ui::FillRoundRect(
+						p,
+						bubbleX,
+						bubbleY,
+						bubbleW,
+						bubbleH,
+						sti->msgDateImgBg,
+						sti->msgDateImgBgCorners);
+					p.restore();
+
+					p.setPen(st::msgDateImgFg());
+					p.setFont(font->bold());
+					const auto baseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
+					p.drawText(bubbleX + hPadding, baseY, text);
+				}
+			}
+			// -----------------------------------------------------
 		}
 	} else if (!skipDrawingSurrounding) {
 		if (isRound) {
@@ -1216,46 +1256,43 @@ void Gif::drawCornerStatus(
 		Painter &p,
 		const PaintContext &context,
 		QPoint position) const {
-	if (!needCornerStatusDisplay()) {
+	// Only draw if NOT loaded (i.e. if we need to show download/cancel)
+	// and if we are downloading in corner (isVideoFile).
+	if (!downloadInCorner() || dataLoaded() || _data->loadedInMediaCache()) {
 		return;
 	}
-	const auto own = activeOwnStreamed();
+
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
-	const auto text = (own && !own->frozenStatusText.isEmpty())
-		? own->frozenStatusText
-		: _statusText;
 	const auto padding = st::msgDateImgPadding;
-	const auto radial = _animation && _animation->radial.animating();
-	const auto cornerDownload = downloadInCorner() && !dataLoaded() && !_data->loadedInMediaCache();
-	const auto cornerMute = _streamed && _data->isVideoFile() && !cornerDownload;
-	const auto addLeft = cornerDownload ? (st::historyVideoDownloadSize + 2 * padding.y()) : 0;
-	const auto addRight = cornerMute ? st::historyVideoMuteSize : 0;
-	const auto downloadWidth = cornerDownload ? st::normalFont->width(_downloadSize) : 0;
-	const auto statusW = std::max(downloadWidth, st::normalFont->width(text)) + 2 * padding.x() + addLeft + addRight;
-	const auto statusH = cornerDownload ? (st::historyVideoDownloadSize + 2 * padding.y()) : (st::normalFont->height + 2 * padding.y());
+	const auto radial = _animation && _animation->radial.animating(); // Check animation state
+
+	// Position for Top-Left
 	const auto statusX = position.x() + st::msgDateImgDelta + padding.x();
 	const auto statusY = position.y() + st::msgDateImgDelta + padding.y();
-	const auto around = style::rtlrect(statusX - padding.x(), statusY - padding.y(), statusW, statusH, width());
-	const auto statusTextTop = statusY + (cornerDownload ? (((statusH - 2 * st::normalFont->height) / 3) - padding.y()) : 0);
-	Ui::FillRoundRect(p, around, sti->msgDateImgBg, sti->msgDateImgBgCorners);
-	p.setFont(st::normalFont);
-	p.setPen(st->msgDateImgFg());
-	p.drawTextLeft(statusX + addLeft, statusTextTop, width(), text, statusW - 2 * padding.x());
-	if (cornerDownload) {
-		const auto downloadTextTop = statusY + st::normalFont->height + (2 * (statusH - 2 * st::normalFont->height) / 3) - padding.y();
-		p.drawTextLeft(statusX + addLeft, downloadTextTop, width(), _downloadSize, statusW - 2 * padding.x());
-		const auto inner = QRect(statusX + padding.y() - padding.x(), statusY, st::historyVideoDownloadSize, st::historyVideoDownloadSize);
-		const auto &icon = _data->loading()
-			? sti->historyVideoCancel
-			: sti->historyVideoDownload;
-		icon.paintInCenter(p, inner);
-		if (radial) {
-			QRect rinner(inner.marginsRemoved(QMargins(st::historyVideoRadialLine, st::historyVideoRadialLine, st::historyVideoRadialLine, st::historyVideoRadialLine)));
-			_animation->radial.draw(p, rinner, st::historyVideoRadialLine, sti->historyFileThumbRadialFg);
-		}
-	} else if (cornerMute) {
-		sti->historyVideoMessageMute.paint(p, statusX - padding.x() - padding.y() + statusW - addRight, statusY - padding.y() + (statusH - st::historyVideoMessageMute.height()) / 2, width());
+	
+	// Create a square rect for the button
+	const auto buttonSize = st::historyVideoDownloadSize; 
+	const auto inner = QRect(statusX, statusY, buttonSize, buttonSize);
+
+	// Draw Circular Background (Semi-transparent black)
+	{
+		PainterHighQualityEnabler hq(p);
+		p.setPen(Qt::NoPen);
+		p.setBrush(sti->msgDateImgBg);
+		p.drawEllipse(inner);
+	}
+
+	// Draw Icon (Download or Cancel)
+	const auto &icon = _data->loading()
+		? sti->historyVideoCancel
+		: sti->historyVideoDownload;
+	icon.paintInCenter(p, inner);
+
+	// Draw Radial Progress if animating
+	if (radial) {
+		QRect rinner(inner.marginsRemoved(QMargins(st::historyVideoRadialLine, st::historyVideoRadialLine, st::historyVideoRadialLine, st::historyVideoRadialLine)));
+		_animation->radial.draw(p, rinner, st::historyVideoRadialLine, sti->historyFileThumbRadialFg);
 	}
 }
 
