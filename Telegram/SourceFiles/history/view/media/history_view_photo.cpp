@@ -1073,11 +1073,11 @@ bool Photo::dataLoaded() const {
 //		|| _parent->isLastAndSelfMessage();
 //}
 
-bool Photo::needInfoDisplay() const {
-	// Always return false to prevent the parent Message view from 
-	// drawing the standard bottom-right info bubble, as we draw a custom one.
-	return false;
-}
+//bool Photo::needInfoDisplay() const {
+//	// Always return false to prevent the parent Message view from 
+//	// drawing the standard bottom-right info bubble, as we draw a custom one.
+//	return false;
+//}
 
 void Photo::validateGroupedCache(
 		const QRect &geometry,

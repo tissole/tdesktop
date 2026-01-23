@@ -1965,9 +1965,9 @@ bool Gif::needsBubble() const {
 		|| _parent->displayedTopicButton();
 }
 
-bool Gif::needInfoDisplay() const {
-	return _data->isVideoMessage();
-}
+//bool Gif::needInfoDisplay() const {
+//	return _data->isVideoMessage();
+//}
 
 bool Gif::unwrapped() const {
 	return isUnwrapped();
@@ -2444,9 +2444,13 @@ bool Gif::dataLoaded() const {
 //		|| (!_parent->hasBubble() && _parent->isLastAndSelfMessage());
 //}
 
+//bool Gif::needCornerStatusDisplay() const {
+//	return _data->isVideoFile()
+//		|| needInfoDisplay();
+//}
+
 bool Gif::needCornerStatusDisplay() const {
-	return _data->isVideoFile()
-		|| needInfoDisplay();
+	return _data->isVideoFile();
 }
 
 void Gif::ensureTranscribeButton() const {

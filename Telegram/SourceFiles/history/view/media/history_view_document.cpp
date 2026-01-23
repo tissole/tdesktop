@@ -740,11 +740,11 @@ void Document::draw(
 	const auto nametop = st.nameTop + delta - topMinus;
 	const auto nameright = st.padding.right();
 
-	const auto nameHeight = st::semiboldFont->height;
+	//const auto nameHeight = st::semiboldFont->height;
 	const auto statustop = st.statusTop + delta - topMinus;
 
 	const auto linktop = st.linkTop + delta - topMinus;
-	const auto captioned = Get<HistoryDocumentCaptioned>();
+	//const auto captioned = Get<HistoryDocumentCaptioned>();
 	const auto bottomPadding = 10;
 
 	auto contentHeight = st.thumbSize;
@@ -1268,11 +1268,11 @@ bool Document::downloadInCorner() const {
 		&& !_data->inappPlaybackFailed();
 }
 
-bool Document::needInfoDisplay() const {
-	// FIX: Only Round Videos (Video Notes) need the standard bottom-right info bubble.
-	// Standard Files/Music/Videos now use the custom Top-Right bubble drawn in Document::draw.
-	return _data->isVideoMessage();
-}
+//bool Document::needInfoDisplay() const {
+//	// FIX: Only Round Videos (Video Notes) need the standard bottom-right info bubble.
+//	// Standard Files/Music/Videos now use the custom Top-Right bubble drawn in Document::draw.
+//	return _data->isVideoMessage();
+//}
 
 void Document::drawCornerDownload(
 		Painter &p,
