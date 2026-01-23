@@ -1309,11 +1309,7 @@ TextState GroupedMedia::getPartState(
 							auto result = TextState(part.item);
 							if (isLoading) {
 								result.link = std::make_shared<DocumentCancelClickHandler>(
-									doc,
-									crl::guard(this, [=](FullMsgId id) {
-										_parent->delegate()->elementCancelUpload(id);
-									}),
-									part.item->fullId());
+									doc, part.item->fullId());
 							} else {
 								result.link = std::make_shared<DocumentSaveClickHandler>(
 									doc, part.item->fullId());
