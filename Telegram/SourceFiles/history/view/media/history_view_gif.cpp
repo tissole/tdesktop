@@ -168,7 +168,7 @@ Gif::Gif(
 		_parent->data()->removeFromSharedMediaIndex();
 		setDocumentLinks(_data, realParent, [=] {
 			auto lifetime = std::make_shared<rpl::lifetime>();
-			TTLVoiceStops(fullId) | rpl::start_with_next([=]() mutable {
+			TTLVoiceStops(fullId) | rpl::on_next([=]() mutable {
 				if (lifetime) {
 					base::take(lifetime)->destroy();
 				}
@@ -268,8 +268,7 @@ QSize Gif::countOptimalSize() {
 		const auto &entry = _data->session().api().transcribes().entry(
 			_realParent);
 		_transcribe->setLoading(
-			entry.shown && (entry.requestId || entry.pending),
-			[=] { repaint(); });
+			entry.shown && (entry.requestId || entry.pending));
 	}
 
 	const auto minWidth = std::clamp(
@@ -433,9 +432,6 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) return;
 
 	_smallGroupPart = false;
-
-	// Calculate showInfo for hover effect
-	const bool showInfo = _parent->isUnderCursor() || context.selected();
 
 	ensureDataMediaCreated();
 	const auto item = _parent->data();
@@ -686,20 +682,12 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			}
 			return &sti->historyFileThumbDownload;
 		}();
-		const auto previous = _data->waitingForAlbum()
-			? &sti->historyFileThumbCancel
-			: nullptr;
 		if (icon) {
-			if (previous && radialOpacity > 0. && radialOpacity < 1.) {
-				PaintInterpolatedIcon(p, *icon, *previous, radialOpacity, inner);
-			} else {
-				icon->paintInCenter(p, inner);
-			}
+			icon->paintInCenter(p, inner);
 		}
 		p.setOpacity(radialRevealed);
 		if (radial) {
-			const auto line = st::historyGroupRadialLine;
-			const auto rinner = inner.marginsRemoved({ line, line, line, line });
+			QRect rinner(inner.marginsRemoved(QMargins(st::msgFileRadialLine, st::msgFileRadialLine, st::msgFileRadialLine, st::msgFileRadialLine)));
 			if (streamedForWaiting && !_data->uploading()) {
 				Ui::InfiniteRadialAnimation::Draw(
 					p,
@@ -757,13 +745,8 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			}
 			Ui::FillRoundRect(p, style::rtlrect(statusX - st::msgDateImgPadding.x(), statusY - st::msgDateImgPadding.y(), statusW, statusH, width()), sti->msgServiceBg, sti->msgServiceBgCornersSmall);
 			p.setFont(st::normalFont);
-			// Use consistent edited glyph and color for status; rely on this item's edited state
-			const auto editedGlyph = (item->Get<HistoryMessageEdited>() && !item->hideEditedBadge())
-				? (QString::fromUtf8("✏️") + " ")
-				: QString();
-			const auto statusText = editedGlyph + _statusText;
-			p.setPen(st->msgDateImgFg());
-			p.drawTextLeft(statusX, statusY, width(), statusText, statusW - 2 * st::msgDateImgPadding.x());
+			p.setPen(st->msgServiceFg());
+			p.drawTextLeft(statusX, statusY, width(), _statusText, statusW - 2 * st::msgDateImgPadding.x());
 			if (mediaUnread) {
 				p.setPen(Qt::NoPen);
 				p.setBrush(st->msgServiceFg());
@@ -840,13 +823,16 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 		}
 		if (unwrapped && !rightAligned) {
 			auto infoWidth = _parent->infoWidth();
+
+			// This is just some arbitrary point,
+			// the main idea is to make info left aligned here.
 			fullRight += infoWidth - st::normalFont->height;
 			if (fullRight > maxRight) {
 				fullRight = maxRight;
 			}
 		}
-		
-		if (isRound) {
+		if (isRound
+			|| ((!bubble || isBubbleBottom()) && needInfoDisplay())) {
 			_parent->drawInfo(
 				p,
 				context,
@@ -857,7 +843,6 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 					? InfoDisplayType::Background
 					: InfoDisplayType::Image));
 		}
-
 		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()
 			; size || (_transcribe && !rightAligned)) {
 			const auto rightActionWidth = size
@@ -890,87 +875,6 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	}
 	if (_drawTtl) {
 		_drawTtl(p, rthumb, context);
-	}
-
-	// --- CUSTOM TOP-RIGHT BUBBLE (For Standard Videos) ---
-	// Always draw top-right for videos even if caption exists.
-	// Only draw on hover/select.
-	if (!isRound && !inWebPage && !_parent->data()->isFakeAboutView() && showInfo) {
-		// Local definition to fix compilation error
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
-
-		const auto font = st::msgDateFont;
-		p.setFont(font);
-
-		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
-		const auto dateText = QLocale().toString(
-			ItemDateTime(item).time(),
-			GetEnhancedBool("show_seconds")
-				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
-				: QLocale::system().timeFormat(QLocale::ShortFormat));
-
-		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-			? QString(" %1").arg(item->fullId().msg.bare)
-			: QString();
-
-		const auto views = item->Get<HistoryMessageViews>();
-		const auto viewsText = (views && views->views.count >= 0)
-			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
-			: QString();
-
-		int totalWidth = 0;
-		const int textPadding = font->width(' ');
-		totalWidth += font->width(dateText + msgIdText);
-
-		if (edited) {
-			totalWidth += textPadding + font->width(QString::fromUtf8("✏️"));
-		}
-
-		int viewsWidth = 0;
-		if (!viewsText.isEmpty()) {
-			viewsWidth = st::historyViewsWidth + 1 + font->width(viewsText);
-			totalWidth += (2 * textPadding) + viewsWidth;
-		}
-
-		const auto textHeight = font->height;
-		const auto hPadding = 2;
-		const auto vPadding = st::msgDateImgPadding.y();
-		const auto bubbleW = totalWidth + 2 * hPadding;
-		const auto bubbleH = textHeight + 2 * vPadding;
-
-		// Position: Top-Right
-		const auto bubbleX = width() - bubbleW - st::msgDateImgDelta;
-		const auto bubbleY = st::msgDateImgDelta;
-
-		p.save();
-		p.setOpacity(0.95);
-		Ui::FillRoundRect(p, bubbleX, bubbleY, bubbleW, bubbleH, sti->msgDateImgBg, sti->msgDateImgBgCorners);
-		p.restore();
-
-		p.setPen(st->msgDateImgFg());
-		p.setFont(font->bold());
-		const int textBaseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
-		int currentLeft = bubbleX + hPadding;
-
-		if (!viewsText.isEmpty()) {
-			const auto &icon = st->historyViewsInvertedIcon();
-			const int baseIconW = std::max(1, icon.width());
-			const int baseIconH = icon.height();
-			const int scaledIconH = (baseIconH * st::historyViewsWidth) / baseIconW;
-			icon.paint(p, currentLeft, bubbleY + (bubbleH - scaledIconH) / 2 + 1, st::historyViewsWidth);
-			p.drawText(currentLeft + st::historyViewsWidth + 1, textBaseY, viewsText);
-			currentLeft += viewsWidth + textPadding;
-		}
-		if (edited) {
-			const auto editedText = QString::fromUtf8("✏️");
-			p.setFont(font);
-			p.drawText(currentLeft, textBaseY, editedText);
-			currentLeft += font->width(editedText) + textPadding;
-			p.setFont(font->bold());
-		}
-		p.drawText(currentLeft, textBaseY, dateText + msgIdText);
 	}
 }
 
@@ -1307,108 +1211,6 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 	}
 	if (rtl()) usex = width() - usex - usew;
 
-	// --- CUSTOM TOOLTIP LOGIC (Top-Right Bubble for Standard Videos) ---
-	// FIX Issue 3: Implemented 2-zone tooltip logic here for Top-Right bubble
-	if (!isRound && !inWebPage && !_parent->data()->isFakeAboutView()) {
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
-
-		const auto font = st::msgDateFont;
-		
-		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
-		const auto dateText = QLocale().toString(
-			ItemDateTime(item).time(),
-			GetEnhancedBool("show_seconds")
-				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
-				: QLocale::system().timeFormat(QLocale::ShortFormat));
-
-		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-			? QString(" %1").arg(item->fullId().msg.bare)
-			: QString();
-
-		const auto views = item->Get<HistoryMessageViews>();
-		const auto viewsText = (views && views->views.count >= 0)
-			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
-			: QString();
-
-		int totalWidth = 0;
-		const int textPadding = font->width(' ');
-		const int dateWidth = font->width(dateText + msgIdText);
-		totalWidth += dateWidth;
-
-		int editedWidth = 0;
-		if (edited) {
-			editedWidth = font->width(QString::fromUtf8("✏️"));
-			totalWidth += textPadding + editedWidth;
-		}
-
-		int viewsWidth = 0;
-		if (!viewsText.isEmpty()) {
-			viewsWidth = st::historyViewsWidth + 1 + font->width(viewsText);
-			totalWidth += (2 * textPadding) + viewsWidth;
-		}
-
-		const auto textHeight = font->height;
-		const auto hPadding = 2;
-		const auto vPadding = st::msgDateImgPadding.y();
-		const auto bubbleW = totalWidth + 2 * hPadding;
-		const auto bubbleH = textHeight + 2 * vPadding;
-
-		// Position: Top-Right
-		const auto bubbleX = width() - bubbleW - st::msgDateImgDelta;
-		const auto bubbleY = st::msgDateImgDelta;
-		const QRect bubbleRect(bubbleX, bubbleY, bubbleW, bubbleH);
-
-		// Hit Testing
-		if (bubbleRect.contains(point)) {
-			int currentX = bubbleX + hPadding;
-
-			// --- Zone 1: Views ---
-			QRect viewsRect;
-			if (viewsWidth > 0) {
-				viewsRect = QRect(currentX, bubbleY, viewsWidth, bubbleH);
-				currentX += viewsWidth + textPadding;
-			}
-
-			// --- Zone 2: Edited + Date + ID ---
-			int zone2Start = currentX;
-			int calculatedZone2W = dateWidth + (edited ? (editedWidth + textPadding) : 0);
-			QRect zone2Rect(zone2Start, bubbleY, calculatedZone2W, bubbleH);
-
-			// Logic
-			if (viewsWidth > 0 && viewsRect.contains(point)) {
-				result.customTooltip = true;
-				result.customTooltipText = QString("Views: ") + viewsText;
-				return result;
-			} 
-			else if (zone2Rect.contains(point)) {
-				const auto uploadLocal = ItemDateTime(item);
-				QString text = tr::lng_uploaded(tr::now) + ": "
-					+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
-					+ uploadLocal.time().toString("HH:mm:ss");
-				
-				if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
-					text += "  ID: " + QString::number(item->fullId().msg.bare);
-				}
-
-				if (edited) {
-					const auto editLocal = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
-					QString editedTrans = tr::lng_edited(tr::now);
-					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
-					text += "\n" + editedTrans + ": "
-						+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
-						+ editLocal.time().toString("HH:mm:ss");
-				}
-
-				result.customTooltip = true;
-				result.customTooltipText = text;
-				return result;
-			}
-		}
-	}
-	// ----------------------------------------------------------
-
 	if (via || reply || forwarded) {
 		auto rectw = paintw - usew - st::msgReplyPadding.left();
 		auto innerw = rectw - (st::msgReplyPadding.left() + st::msgReplyPadding.right());
@@ -1516,25 +1318,18 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 				fullRight = maxRight;
 			}
 		}
-		
-		// FIX Issue 3: Only call standard bottom info if it's a Round Video (Video Note).
-		// This prevents standard videos from having the bottom bubble interactivity.
-		if (isRound) {
-			const auto bottomInfoResult = _parent->bottomInfoTextState(
-				fullRight,
-				fullBottom,
-				point,
-				(unwrapped
-					? InfoDisplayType::Background
-					: InfoDisplayType::Image));
-			if (bottomInfoResult.link
-				|| bottomInfoResult.cursor != CursorState::None
-				|| bottomInfoResult.customTooltip) {
-				return bottomInfoResult;
-			}
+		const auto bottomInfoResult = _parent->bottomInfoTextState(
+			fullRight,
+			fullBottom,
+			point,
+			(unwrapped
+				? InfoDisplayType::Background
+				: InfoDisplayType::Image));
+		if (bottomInfoResult.link
+			|| bottomInfoResult.cursor != CursorState::None
+			|| bottomInfoResult.customTooltip) {
+			return bottomInfoResult;
 		}
-		// -----------------------------------------------------------------------
-
 		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()) {
 			const auto rightActionWidth = size->width();
 			auto fastShareLeft = _parent->hasRightLayout()
@@ -1805,7 +1600,6 @@ void Gif::drawGrouped(
 		}
 		p.setOpacity(1.);
 	}
-	// Suppress duplicate Top-Left bubble in grid
 	if (!_smallGroupPart) {
 		drawCornerStatus(p, context, geometry.topLeft());
 	}
@@ -1920,10 +1714,7 @@ bool Gif::needsBubble() const {
 		|| _parent->displayForwardedFrom()
 		|| _parent->displayFromName()
 		|| _parent->displayedTopicButton();
-}
-
-bool Gif::needInfoDisplay() const {
-	return _data->isVideoMessage();
+	return false;
 }
 
 bool Gif::unwrapped() const {
@@ -2243,14 +2034,14 @@ void Gif::createStreamedPlayer() {
 		[=] { repaintStreamedContent(); }));
 
 	_streamed->instance.player().updates(
-	) | rpl::start_with_next_error([=](::Media::Streaming::Update &&update) {
+	) | rpl::on_next_error([=](::Media::Streaming::Update &&update) {
 		handleStreamingUpdate(std::move(update));
 	}, [=](::Media::Streaming::Error &&error) {
 		handleStreamingError(std::move(error));
 	}, _streamed->instance.lifetime());
 
 	_streamed->instance.switchQualityRequests(
-	) | rpl::start_with_next([=](int quality) {
+	) | rpl::on_next([=](int quality) {
 		auto now = Core::App().settings().videoQuality();
 		if (now.manual || now.height == quality) {
 			return;
@@ -2387,19 +2178,19 @@ bool Gif::dataLoaded() const {
 		&& _dataMedia->loaded();
 }
 
-//bool Gif::needInfoDisplay() const {
-//	const auto item = _parent->data();
-//	if (item->isFakeAboutView()) {
-//		return false;
-//	}
-//	return item->isSending()
-//		|| item->awaitingVideoProcessing()
-//		|| _data->uploading()
-//		|| _parent->isUnderCursor()
-//		|| (_parent->delegate()->elementContext() == Context::ChatPreview)
-//		// Don't show the GIF badge if this message has text.
-//		|| (!_parent->hasBubble() && _parent->isLastAndSelfMessage());
-//}
+bool Gif::needInfoDisplay() const {
+	const auto item = _parent->data();
+	if (item->isFakeAboutView()) {
+		return false;
+	}
+	return item->isSending()
+		|| item->awaitingVideoProcessing()
+		|| _data->uploading()
+		|| _parent->isUnderCursor()
+		|| (_parent->delegate()->elementContext() == Context::ChatPreview)
+		// Don't show the GIF badge if this message has text.
+		|| (!_parent->hasBubble() && _parent->isLastAndSelfMessage());
+}
 
 bool Gif::needCornerStatusDisplay() const {
 	return _data->isVideoFile()
