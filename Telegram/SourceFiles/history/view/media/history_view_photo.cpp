@@ -1062,22 +1062,22 @@ bool Photo::dataLoaded() const {
 	return _dataMedia->loaded();
 }
 
-bool Photo::needInfoDisplay() const {
-	if (_parent->data()->isFakeAboutView()) {
-		return false;
-	}
-	return _parent->data()->isSending()
-		|| _parent->data()->hasFailed()
-		|| _parent->isUnderCursor()
-		|| (_parent->delegate()->elementContext() == Context::ChatPreview)
-		|| _parent->isLastAndSelfMessage();
-}
-
 //bool Photo::needInfoDisplay() const {
-//	// Always return false to prevent the parent Message view from 
-//	// drawing the standard bottom-right info bubble, as we draw a custom one.
-//	return false;
+//	if (_parent->data()->isFakeAboutView()) {
+//		return false;
+//	}
+//	return _parent->data()->isSending()
+//		|| _parent->data()->hasFailed()
+//		|| _parent->isUnderCursor()
+//		|| (_parent->delegate()->elementContext() == Context::ChatPreview)
+//		|| _parent->isLastAndSelfMessage();
 //}
+
+bool Photo::needInfoDisplay() const {
+	// Always return false to prevent the parent Message view from 
+	// drawing the standard bottom-right info bubble, as we draw a custom one.
+	return false;
+}
 
 void Photo::validateGroupedCache(
 		const QRect &geometry,
