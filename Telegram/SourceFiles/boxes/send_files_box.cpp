@@ -2262,10 +2262,10 @@ void SendFilesBox::send(
 			return false;
 		}();
 		
-		const auto currentSendWay = _sendWay.current();
-		const auto canAddCaption = _list.canAddCaption(
-			currentSendWay.groupFiles() && currentSendWay.sendImagesAsPhotos(),
-			currentSendWay.sendImagesAsPhotos());
+		//const auto currentSendWay = _sendWay.current();
+		//const auto canAddCaption = _list.canAddCaption(
+		//	currentSendWay.groupFiles() && currentSendWay.sendImagesAsPhotos(),
+		//	currentSendWay.sendImagesAsPhotos());
 		
 		if (GetEnhancedBool("caption_from_file_name") && isGroupedMedia && hasGroupableMedia && !caption.text.isEmpty()) {
 			TextWithTags commentText = std::move(caption);

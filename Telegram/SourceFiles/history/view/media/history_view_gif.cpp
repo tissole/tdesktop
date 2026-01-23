@@ -777,7 +777,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 						sti->msgDateImgBgCorners);
 					p.restore();
 
-					p.setPen(st::msgDateImgFg());
+					p.setPen(st->msgDateImgFg());
 					p.setFont(font->bold());
 					const auto baseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
 					p.drawText(bubbleX + hPadding, baseY, text);
