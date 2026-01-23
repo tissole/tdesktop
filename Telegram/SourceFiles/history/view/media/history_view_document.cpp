@@ -1017,9 +1017,13 @@ void Document::draw(
 	}
 
 	auto statusText = voiceStatusOverride.isEmpty() ? _statusText : voiceStatusOverride;
-	p.setFont(st::normalFont);
-	p.setPen(stm->mediaFg);
-	p.drawTextLeft(nameleft, statustop, width, statusText);
+	if (!_data->isVideoFile()) {
+		p.setFont(st::normalFont);
+		p.setPen(stm->mediaFg);
+		p.drawTextLeft(nameleft, statustop, width, statusText);
+	} else {
+		drawVideoOverlay(p, context, width, mode);
+	}
 
 	// --- CUSTOM INLINE INFO (For All Files except Round Videos) ---
 	if (!_data->isVideoMessage() && mode != LayoutMode::Grouped) {
@@ -1274,6 +1278,149 @@ bool Document::needInfoDisplay() const {
 	return _data->isVideoMessage();
 }
 
+void Document::drawVideoOverlay(
+		Painter &p,
+		const PaintContext &context,
+		int width,
+		LayoutMode mode) const {
+	// 1. Arrow Button (Top Left)
+	// Show only if not loaded and not loading.
+	if (!dataLoaded() && !_data->loading()) {
+		const auto st = context.st;
+		const auto sti = context.imageStyle();
+		const auto &icon = sti->historyFileThumbDownload;
+
+		const auto thumbed = Get<HistoryDocumentThumbed>();
+		const auto &stLayout = (mode == LayoutMode::Full)
+			? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
+			: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
+		
+		const int circleSize = st::historyAudioDownloadSize; 
+		const int gap = st::msgDateImgDelta;
+		
+		// "upper left corner with small gaps"
+		// Adjust for bubble padding if needed, but stLayout.padding handles that usually.
+		const int x = stLayout.padding.left() + gap;
+		// For Grouped mode, padding.top() might be small, so add gap.
+		const int y = stLayout.padding.top() + gap;
+		
+		const QRect rect(x, y, circleSize, circleSize);
+		
+		p.setPen(Qt::NoPen);
+		p.setBrush(sti->msgDateImgBg);
+		{
+			PainterHighQualityEnabler hq(p);
+			p.drawEllipse(rect);
+		}
+		
+		icon.paintInCenter(p, rect);
+	}
+
+	// 2. Bottom Right Bubble (Duration + Size)
+	// Only for Single Video (mode != Grouped). GroupedMedia handles it for Grid.
+	if (mode != LayoutMode::Grouped) {
+		qint64 durSeconds = std::max<qint64>(0, _data->duration() / 1000);
+		qint64 sizeBytes = _data->size;
+
+		if (durSeconds >= 0 && sizeBytes > 0) {
+			const auto st = context.st;
+			const auto sti = context.imageStyle();
+			const auto font = st::msgDateFont;
+			const auto text = Ui::FormatDurationText(durSeconds) + QChar(' ') + Ui::FormatSizeText(sizeBytes);
+			
+			const auto textWidth = font->width(text);
+			const auto textHeight = font->height;
+			const auto hPadding = 2;
+			const auto vPadding = st::msgDateImgPadding.y();
+			const auto bubbleW = textWidth + 2 * hPadding;
+			const auto bubbleH = textHeight + 2 * vPadding;
+
+			// Position relative to content
+			// We need content height/width.
+			// width passed to function is available width.
+			// Height: Document doesn't pass height to drawOverlay, but we can infer or use bottom alignment?
+			// Document::draw calculates 'bottom' but doesn't pass it.
+			// However, for single file, the content usually fills the 'thumbSize' if thumbed.
+			
+			const auto thumbed = Get<HistoryDocumentThumbed>();
+			const auto &stLayout = (thumbed ? st::msgFileThumbLayout : st::msgFileLayout);
+			
+			const int contentW = stLayout.thumbSize; // Approximate
+			const int contentH = stLayout.thumbSize; // Approximate
+			
+			// Actually, for Single Video, 'width' is the full message width.
+			// The video thumbnail usually fills the width or is constrained.
+			// Let's use the layout parameters.
+			
+			const int bubbleX = width - stLayout.padding.right() - bubbleW - st::msgDateImgDelta;
+			
+			// For Y, we need the bottom of the thumbnail.
+			// 'bottom' in draw() was: forcedTop + contentHeight + bottomPadding - topMinus
+			// But we don't have access to those vars easily.
+			// However, stLayout.thumbSize is the main content height.
+			// top is stLayout.padding.top() (approx).
+			const int thumbBottom = stLayout.padding.top() + stLayout.thumbSize;
+			const int bubbleY = thumbBottom - bubbleH - st::msgDateImgDelta;
+
+			p.save();
+			p.setOpacity(0.95);
+			Ui::FillRoundRect(
+				p,
+				bubbleX,
+				bubbleY,
+				bubbleW,
+				bubbleH,
+				sti->msgDateImgBg,
+				sti->msgDateImgBgCorners);
+			p.restore();
+
+			p.setPen(st->msgDateImgFg());
+			p.setFont(font->bold());
+			const auto baseY = bubbleY + (bubbleH - textHeight) / 2 + font->ascent;
+			p.drawText(bubbleX + hPadding, baseY, text);
+		}
+	}
+}
+
+TextState Document::videoOverlayState(
+		QPoint point,
+		QSize layout,
+		StateRequest request,
+		LayoutMode mode) const {
+	if (request.cursor != CursorState::None) {
+		return TextState();
+	}
+	
+	if (!dataLoaded() && !_data->loading()) {
+		// Replicate rect calculation from drawVideoOverlay
+		// We don't have 'context' here, so we need to access style via global or 'history()->session()...' 
+		// But TextState generation usually has access to style via 'st::' globals if needed, 
+		// OR we assume standard layout.
+		
+		// We need 'thumbed' status.
+		const auto thumbed = Get<HistoryDocumentThumbed>();
+		// We need 'st' which depends on context. 
+		// Actually, Document::textState uses 'st::msgFileThumbLayout' etc directly.
+		
+		const auto &stLayout = (mode == LayoutMode::Full)
+			? (thumbed ? st::msgFileThumbLayout : st::msgFileLayout)
+			: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
+
+		const int circleSize = st::historyAudioDownloadSize;
+		const int gap = st::msgDateImgDelta;
+		const int x = stLayout.padding.left() + gap;
+		const int y = stLayout.padding.top() + gap;
+		const QRect rect(x, y, circleSize, circleSize);
+
+		if (rect.contains(point)) {
+			if (thumbed && thumbed->linksavel) {
+				return { .link = thumbed->linksavel };
+			}
+		}
+	}
+	return TextState();
+}
+
 void Document::drawCornerDownload(
 		Painter &p,
 		const PaintContext &context,
@@ -1376,6 +1523,13 @@ TextState Document::textState(
 	const auto width = layout.width();
 
 	auto result = TextState(_parent);
+
+	if (_data->isVideoFile()) {
+		auto videoState = videoOverlayState(point, layout, request, mode);
+		if (videoState.link) {
+			return videoState;
+		}
+	}
 
 	if (width < st::msgPadding.left() + st::msgPadding.right() + 1) {
 		return result;

@@ -112,7 +112,17 @@ private:
 		int width,
 		LayoutMode mode,
 		Ui::BubbleRounding outsideRounding) const;
+	void drawVideoOverlay(
+		Painter &p,
+		const PaintContext &context,
+		int width,
+		LayoutMode mode) const;
 	[[nodiscard]] TextState textState(
+		QPoint point,
+		QSize layout,
+		StateRequest request,
+		LayoutMode mode) const;
+	[[nodiscard]] TextState videoOverlayState(
 		QPoint point,
 		QSize layout,
 		StateRequest request,
