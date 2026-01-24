@@ -399,6 +399,8 @@ void Gif::validateRoundingMask(QSize size) const {
 
 bool Gif::downloadInCorner() const {
 	return _data->isVideoFile()
+		&& (_data->loading() || !autoplayEnabled())
+		&& _realParent->allowsForward()
 		&& _data->canBeStreamed(_realParent)
 		&& !_data->inappPlaybackFailed();
 }
@@ -1253,9 +1255,11 @@ void Gif::validateSpoilerImageCache(
 
 void Gif::drawCornerStatus(
 		Painter &p,
-		// Only draw if NOT loaded (i.e. if we need to show download/cancel)
+		const PaintContext &context,
+		QPoint position) const {
+	// Only draw if NOT loaded (i.e. if we need to show download/cancel)
 	// and if we are downloading in corner (isVideoFile).
-	if (!downloadInCorner() || dataLoaded()) {
+	if (!downloadInCorner() || dataLoaded() || _data->loadedInMediaCache()) {
 		return;
 	}
 
@@ -1654,7 +1658,7 @@ void Gif::drawGrouped(
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
 	_smallGroupPart = !fullFeaturedGrouped(sides);
-	const auto cornerDownload = downloadInCorner();
+	const auto cornerDownload = !_smallGroupPart && downloadInCorner();
 	const auto canBePlayed = _dataMedia->canBePlayed(_realParent);
 
 	const auto revealed = _spoiler
