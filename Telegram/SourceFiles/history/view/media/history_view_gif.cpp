@@ -886,15 +886,76 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 		}
 		
 		if (isRound) {
-			_parent->drawInfo(
+			// Helper to get formatted local date/time
+			auto ItemDateTime = [](not_null<HistoryItem*> item) {
+				return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+			};
+
+			const auto font = st::msgDateFont;
+			const auto sti = context.imageStyle();
+			const auto views = item->Get<HistoryMessageViews>();
+			const auto viewsText = (views && views->views.count >= 0)
+				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+				: QString();
+			
+			const auto sender = item->from();
+			const auto senderName = sender ? sender->name() : QString();
+			const auto timeText = QLocale().toString(
+				ItemDateTime(item).time(),
+				GetEnhancedBool("show_seconds")
+					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+					: QLocale::system().timeFormat(QLocale::ShortFormat));
+			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+				? QString(" %1").arg(item->fullId().msg.bare)
+				: QString();
+
+			// Construct display string: "[ViewsIcon] [Count] [SenderName] [Time] [ID]"
+			// Note: We'll draw the icon manually on the far left.
+			QString displayText = viewsText;
+			if (!senderName.isEmpty()) displayText += " " + senderName;
+			displayText += " " + timeText + msgIdText;
+
+			const int textWidth = font->width(displayText);
+			const int textHeight = font->height;
+			const int iconGap = 3;
+			const int iconW = st::historyViewsWidth;
+			const int hPadding = st::msgDateImgPadding.x();
+			const int vPadding = st::msgDateImgPadding.y();
+			
+			int totalW = hPadding + (viewsText.isEmpty() ? 0 : (iconW + iconGap)) + textWidth + hPadding;
+			int totalH = textHeight + 2 * vPadding;
+
+			int bubbleX = fullRight - totalW;
+			int bubbleY = fullBottom - st::msgDateImgDelta - totalH;
+
+			// Draw Bubble Background
+			p.save();
+			p.setOpacity(0.95);
+			Ui::FillRoundRect(
 				p,
-				context,
-				fullRight,
-				fullBottom - st::msgDateImgDelta,
-				2 * paintx + paintw,
-				(unwrapped
-					? InfoDisplayType::Background
-					: InfoDisplayType::Image));
+				bubbleX,
+				bubbleY,
+				totalW,
+				totalH,
+				(unwrapped ? sti->msgServiceBg : sti->msgDateImgBg),
+				(unwrapped ? sti->msgServiceBgCornersSmall : sti->msgDateImgBgCorners));
+			p.restore();
+
+			// Draw Content
+			p.setPen(unwrapped ? st->msgServiceFg() : st->msgDateImgFg());
+			p.setFont(font->bold());
+			int currentX = bubbleX + hPadding;
+			const int textBaseY = bubbleY + vPadding + font->ascent;
+
+			if (!viewsText.isEmpty()) {
+				const auto &icon = st->historyViewsInvertedIcon();
+				const int baseIconW = std::max(1, icon.width());
+				const int baseIconH = icon.height();
+				const int scaledIconH = (baseIconH * iconW) / baseIconW;
+				icon.paint(p, currentX, bubbleY + (totalH - scaledIconH) / 2 + 1, iconW);
+				currentX += iconW + iconGap;
+			}
+			p.drawText(currentX, textBaseY, displayText);
 		}
 
 		if (const auto size = bubble ? std::nullopt : _parent->rightActionSize()
@@ -1565,19 +1626,81 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 		}
 		
 		// FIX Issue 3: Only call standard bottom info if it's a Round Video (Video Note).
-		// This prevents standard videos from having the bottom bubble interactivity.
+		// AND implement custom tooltip for round videos.
 		if (isRound) {
-			const auto bottomInfoResult = _parent->bottomInfoTextState(
-				fullRight,
-				fullBottom,
-				point,
-				(unwrapped
-					? InfoDisplayType::Background
-					: InfoDisplayType::Image));
-			if (bottomInfoResult.link
-				|| bottomInfoResult.cursor != CursorState::None
-				|| bottomInfoResult.customTooltip) {
-				return bottomInfoResult;
+			const auto size = _bottomInfo.currentSize(); // Use same size calc
+			// But for hit testing we use our custom bubble rect from draw()
+			// Need to replicate calculation:
+			auto ItemDateTime = [](not_null<HistoryItem*> item) {
+				return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+			};
+			const auto font = st::msgDateFont;
+			const auto views = item->Get<HistoryMessageViews>();
+			const auto viewsText = (views && views->views.count >= 0)
+				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+				: QString();
+			const auto sender = item->from();
+			const auto senderName = sender ? sender->name() : QString();
+			const auto timeText = QLocale().toString(
+				ItemDateTime(item).time(),
+				GetEnhancedBool("show_seconds")
+					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+					: QLocale::system().timeFormat(QLocale::ShortFormat));
+			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+				? QString(" %1").arg(item->fullId().msg.bare)
+				: QString();
+
+			QString displayText = viewsText;
+			if (!senderName.isEmpty()) displayText += " " + senderName;
+			displayText += " " + timeText + msgIdText;
+
+			const int iconW = st::historyViewsWidth;
+			const int iconGap = 3;
+			const int hPadding = st::msgDateImgPadding.x();
+			const int vPadding = st::msgDateImgPadding.y();
+			int totalW = hPadding + (viewsText.isEmpty() ? 0 : (iconW + iconGap)) + font->width(displayText) + hPadding;
+			int totalH = font->height + 2 * vPadding;
+
+			int bubbleX = fullRight - totalW;
+			int bubbleY = fullBottom - st::msgDateImgDelta - totalH;
+			QRect bubbleRect(bubbleX, bubbleY, totalW, totalH);
+
+			if (bubbleRect.contains(point)) {
+				QString tooltip;
+				// Row 1: Sender, Views, Shares
+				QString row1;
+				if (sender) {
+					row1 += tr::lng_info_about_author(tr::now) + ": " + sender->name();
+				}
+				if (views && views->views.count >= 0) {
+					if (!row1.isEmpty()) row1 += ", ";
+					row1 += tr::lng_views_tooltip(tr::now, lt_count_decimal, views->views.count);
+				}
+				if (views && views->forwardsCount > 0) {
+					if (!row1.isEmpty()) row1 += ", ";
+					row1 += tr::lng_forwards_tooltip(tr::now, lt_count_decimal, views->forwardsCount);
+				}
+				tooltip = row1;
+
+				// Row 2: Uploaded (Localized) + ID
+				const auto uploadLocal = ItemDateTime(item);
+				// Use system locale for Romanian day/month names
+				QString uploadedLabel = tr::lng_uploaded(tr::now);
+				uploadedLabel = uploadedLabel.toUpper().left(1) + uploadedLabel.mid(1);
+				
+				QString row2 = uploadedLabel + ": "
+					+ QLocale::system().toString(uploadLocal, "dddd, d MMMM yyyy HH:mm:ss");
+				
+				if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
+					row2 += " ID: " + QString::number(item->fullId().msg.bare);
+				}
+				
+				if (!tooltip.isEmpty()) tooltip += "\n";
+				tooltip += row2;
+
+				result.customTooltip = true;
+				result.customTooltipText = tooltip;
+				return result;
 			}
 		}
 		// -----------------------------------------------------------------------
