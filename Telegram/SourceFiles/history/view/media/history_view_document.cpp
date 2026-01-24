@@ -1263,7 +1263,6 @@ void Document::ensureDataMediaCreated() const {
 
 bool Document::downloadInCorner() const {
 	return _data->isAudioFile()
-		&& _realParent->allowsForward()
 		&& _data->canBeStreamed(_realParent)
 		&& !_data->inappPlaybackFailed();
 }
@@ -1279,7 +1278,6 @@ void Document::drawCornerDownload(
 		const PaintContext &context,
 		LayoutMode mode) const {
 	if (dataLoaded()
-		|| _data->loadedInMediaCache()
 		|| !downloadInCorner()) {
 		return;
 	}
@@ -1345,7 +1343,6 @@ TextState Document::cornerDownloadTextState(
 		LayoutMode mode) const {
 	auto result = TextState(_parent);
 	if (dataLoaded()
-		|| _data->loadedInMediaCache()
 		|| !downloadInCorner()) {
 		return result;
 	}
