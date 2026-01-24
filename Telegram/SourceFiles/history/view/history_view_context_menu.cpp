@@ -1647,22 +1647,23 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		const auto owner = &view->history()->owner();
 		const auto media = view->media();
 		const auto mediaHasTextForCopy = media && media->hasTextForCopy();
-		if (const auto document = media ? media->getDocument() : nullptr) {
-			AddDocumentActions(result, document, view->data(), list);
-		}
 
-		// Detect if we are over a specific part of a group
+		// Identify the specific item under the cursor (for grid albums / collages)
 		HistoryItem *groupPartItem = nullptr;
-		FullMsgId groupPartId;
-		// Fix: Trust overState.itemId if present, even if PointState is not GroupPart
 		if (request.overState.itemId) {
 			groupPartItem = owner->message(request.overState.itemId);
-			if (groupPartItem) {
-				groupPartId = groupPartItem->fullId();
-			}
 		}
 		
 		HistoryItem *targetItem = groupPartItem ? groupPartItem : view->data().get();
+		
+		const auto document = (groupPartItem && groupPartItem->media())
+			? groupPartItem->media()->getDocument()
+			: (media ? media->getDocument() : nullptr);
+
+		if (document) {
+			AddDocumentActions(result, document, targetItem, list);
+		}
+
 		const auto targetHasText = targetItem && !targetItem->originalText().empty();
 
 		bool canCopy = view->hasVisibleText() 
@@ -2163,9 +2164,7 @@ void AddCopyFilename(
 			return TextForMimeData().append(
 				Ui::Text::FormatSongNameFor(document).string());
 		} else if (document->sticker()
-			|| document->isAnimation()
 			|| document->isVideoMessage()
-			|| document->isVideoFile()
 			|| document->isVoiceMessage()) {
 			return TextForMimeData();
 		} else {
