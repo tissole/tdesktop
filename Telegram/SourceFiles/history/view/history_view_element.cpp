@@ -351,10 +351,15 @@ TextSelection ShiftItemSelection(
 }
 
 QString DateTooltipText(not_null<Element*> view) {
-	const auto locale = QLocale();
+	const auto locale = QLocale::system();
 	const auto format = QLocale::LongFormat;
 	const auto item = view->data();
-	auto dateText = locale.toString(view->dateTime(), format);
+	
+	QString uploadedLabel = tr::lng_uploaded(tr::now);
+	uploadedLabel = uploadedLabel.toUpper().left(1) + uploadedLabel.mid(1);
+
+	auto dateText = uploadedLabel + ": " + locale.toString(view->dateTime(), format);
+	
 	if (item->awaitingVideoProcessing()) {
 		dateText += '\n' + tr::lng_approximate_about(tr::now);
 	}
@@ -396,10 +401,8 @@ QString DateTooltipText(not_null<Element*> view) {
 		const auto media = view->media();
 		const auto isGrouped = media
 			&& (dynamic_cast<const GroupedMedia*>(media) != nullptr);
-		if (!isGrouped) {
-			dateText += '\n'
-				+ tr::lng_message_id(tr::now)
-				+ QString::number(msgId.bare);
+		if (!isGrouped && GetEnhancedBool("show_messages_id")) {
+			dateText += " ID: " + QString::number(msgId.bare);
 		}
 	}
 	return dateText;
