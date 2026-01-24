@@ -121,7 +121,7 @@ private:
 		QSize dimensions,
 		QSize current) const;
 
-	bool needInfoDisplay() const;
+	//bool needInfoDisplay() const;
 	void validateGroupedCache(
 		const QRect &geometry,
 		Ui::BubbleRounding rounding,

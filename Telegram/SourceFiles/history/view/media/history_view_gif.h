@@ -107,7 +107,7 @@ public:
 	bool customInfoLayout() const override {
 		return true;
 	}
-	bool needInfoDisplay() const override;
+	//bool needInfoDisplay() const override;
 	QRect contentRectForReactions() const override;
 	std::optional<int> reactionButtonCenterOverride() const override;
 	QPoint resolveCustomInfoRightBottom() const override;
