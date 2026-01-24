@@ -586,7 +586,9 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 			QString tooltip;
 			QString row1;
 			if (sender) {
-				row1 += tr::lng_info_about_author(tr::now) + ": " + sender->name();
+				QString senderLabel = tr::lng_info_about_label();
+				senderLabel = senderLabel.toUpper().left(1) + senderLabel.mid(1);
+				row1 += senderLabel + ": " + sender->name();
 			}
 			if (views && views->views.count >= 0) {
 				if (!row1.isEmpty()) row1 += ", ";

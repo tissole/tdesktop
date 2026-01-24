@@ -1628,7 +1628,6 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 		// FIX Issue 3: Only call standard bottom info if it's a Round Video (Video Note).
 		// AND implement custom tooltip for round videos.
 		if (isRound) {
-			const auto size = _bottomInfo.currentSize(); // Use same size calc
 			// But for hit testing we use our custom bubble rect from draw()
 			// Need to replicate calculation:
 			auto ItemDateTime = [](not_null<HistoryItem*> item) {
@@ -1670,7 +1669,9 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 				// Row 1: Sender, Views, Shares
 				QString row1;
 				if (sender) {
-					row1 += tr::lng_info_about_author(tr::now) + ": " + sender->name();
+					QString senderLabel = tr::lng_info_about_label();
+					senderLabel = senderLabel.toUpper().left(1) + senderLabel.mid(1);
+					row1 += senderLabel + ": " + sender->name();
 				}
 				if (views && views->views.count >= 0) {
 					if (!row1.isEmpty()) row1 += ", ";

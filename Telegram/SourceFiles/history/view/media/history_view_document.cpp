@@ -1488,12 +1488,15 @@ TextState Document::textState(
 				return result;
 			} else if (zone2Rect.contains(point)) {
 				const auto uploadLocal = ItemDateTime(item);
-				QString text = tr::lng_uploaded(tr::now) + ": "
-					+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
-					+ uploadLocal.time().toString("HH:mm:ss");
+				// Use system locale for Romanian day/month names
+				QString uploadedLabel = tr::lng_uploaded(tr::now);
+				uploadedLabel = uploadedLabel.toUpper().left(1) + uploadedLabel.mid(1);
+				
+				QString text = uploadedLabel + ": "
+					+ QLocale::system().toString(uploadLocal, "dddd, d MMMM yyyy HH:mm:ss");
 				
 				if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
-					text += "  ID: " + QString::number(item->fullId().msg.bare);
+					text += " ID: " + QString::number(item->fullId().msg.bare);
 				}
 
 				if (edited) {
@@ -1501,8 +1504,7 @@ TextState Document::textState(
 					QString editedTrans = tr::lng_edited(tr::now);
 					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
 					text += "\n" + editedTrans + ": "
-						+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
-						+ editLocal.time().toString("HH:mm:ss");
+						+ QLocale::system().toString(editLocal, "dddd, d MMMM yyyy HH:mm:ss");
 				}
 
 				result.customTooltip = true;
