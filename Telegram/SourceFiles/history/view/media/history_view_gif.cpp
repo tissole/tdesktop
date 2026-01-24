@@ -1669,7 +1669,7 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 				// Row 1: Sender, Views, Shares
 				QString row1;
 				if (sender) {
-					QString senderLabel = tr::lng_info_about_label();
+					QString senderLabel = tr::lng_info_about_label(tr::now);
 					senderLabel = senderLabel.toUpper().left(1) + senderLabel.mid(1);
 					row1 += senderLabel + ": " + sender->name();
 				}
