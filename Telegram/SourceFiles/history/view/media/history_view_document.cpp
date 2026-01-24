@@ -1416,7 +1416,7 @@ TextState Document::textState(
 
 	// --- CUSTOM TOOLTIP LOGIC (Inline) ---
 	const bool bubble = _parent->hasBubble();
-	if (!_data->isVideoMessage() && mode == LayoutMode::Full && (!bubble || isBubbleBottom())) {
+	if (!_data->isVideoMessage() && mode == LayoutMode::Full) {
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 		};
