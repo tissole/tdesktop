@@ -747,7 +747,8 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 
 			// --- NEW: Bottom-Right Info Bubble for Single Video ---
 			// Only show if media is loaded (cover/thumbnail/video) and it's not a round message
-			if (!isRound && !sponsoredSkip && (loaded || _data->hasThumbnail())) {
+			// and ONLY if we should show info (hover/selected).
+			if (!isRound && !sponsoredSkip && context.showInfo() && (loaded || _data->hasThumbnail())) {
 				qint64 durSeconds = std::max<qint64>(0, _data->duration() / 1000);
 				qint64 sizeBytes = _data->size;
 
@@ -1268,11 +1269,12 @@ void Gif::drawCornerStatus(
 	const auto radial = _animation && _animation->radial.animating(); // Check animation state
 
 	// Position for Top-Left
-	const auto statusX = position.x() + st::msgDateImgDelta + padding.x();
+	// Use padding.y() for both to have equal gaps.
+	const auto statusX = position.x() + st::msgDateImgDelta + padding.y();
 	const auto statusY = position.y() + st::msgDateImgDelta + padding.y();
 	
 	// Create a square rect for the button
-	const auto buttonSize = st::historyVideoDownloadSize; 
+	const auto buttonSize = 31; // 70% of 44px
 	const auto inner = QRect(statusX, statusY, buttonSize, buttonSize);
 
 	// Draw Circular Background (Semi-transparent black)
@@ -1287,12 +1289,21 @@ void Gif::drawCornerStatus(
 	const auto &icon = _data->loading()
 		? sti->historyVideoCancel
 		: sti->historyVideoDownload;
-	icon.paintInCenter(p, inner);
+	
+	{
+		p.save();
+		const auto ratio = float64(buttonSize) / st::historyVideoDownloadSize;
+		p.translate(inner.center());
+		p.scale(ratio, ratio);
+		icon.paintInCenter(p, QRect(-st::historyVideoDownloadSize / 2, -st::historyVideoDownloadSize / 2, st::historyVideoDownloadSize, st::historyVideoDownloadSize));
+		p.restore();
+	}
 
 	// Draw Radial Progress if animating
 	if (radial) {
-		QRect rinner(inner.marginsRemoved(QMargins(st::historyVideoRadialLine, st::historyVideoRadialLine, st::historyVideoRadialLine, st::historyVideoRadialLine)));
-		_animation->radial.draw(p, rinner, st::historyVideoRadialLine, sti->historyFileThumbRadialFg);
+		const auto radialLine = int(st::historyVideoRadialLine * (float64(buttonSize) / st::historyVideoDownloadSize));
+		QRect rinner(inner.marginsRemoved(QMargins(radialLine, radialLine, radialLine, radialLine)));
+		_animation->radial.draw(p, rinner, radialLine, sti->historyFileThumbRadialFg);
 	}
 }
 
@@ -1305,9 +1316,10 @@ TextState Gif::cornerStatusTextState(
 		return result;
 	}
 	const auto padding = st::msgDateImgPadding;
-	const auto statusX = position.x() + st::msgDateImgDelta + padding.x();
+	const auto statusX = position.x() + st::msgDateImgDelta + padding.y();
 	const auto statusY = position.y() + st::msgDateImgDelta + padding.y();
-	const auto inner = QRect(statusX + padding.y() - padding.x(), statusY, st::historyVideoDownloadSize, st::historyVideoDownloadSize);
+	const auto buttonSize = 31;
+	const auto inner = QRect(statusX, statusY, buttonSize, buttonSize);
 	if (inner.contains(point)) {
 		result.link = _data->loading() ? _cancell : _savel;
 	}
@@ -1852,6 +1864,9 @@ void Gif::drawGrouped(
 	}
 	// Differentiation removed. All items (Single Row or Side-by-Side)
 	// now use the unified paintInCenter logic above to draw the icon.
+	if (cornerDownload) {
+		drawCornerStatus(p, context, geometry.topLeft());
+	}
 }
 
 TextState Gif::getStateGrouped(
@@ -1862,7 +1877,7 @@ TextState Gif::getStateGrouped(
 	if (!geometry.contains(point)) {
 		return {};
 	}
-	if (!_smallGroupPart) {
+	if (downloadInCorner()) {
 		const auto state = cornerStatusTextState(
 			point,
 			request,
