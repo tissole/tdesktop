@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/media/history_view_media_unwrapped.h"
 
+#include "data/data_document.h"
 #include "data/data_session.h"
 #include "history/history.h"
 #include "history/view/media/history_view_media_common.h"
