@@ -1470,6 +1470,19 @@ TextState Poll::textState(QPoint point, StateRequest request) const {
 			}
 		}
 	}
+
+	// Check if the parent can handle the info bubble tooltip
+	const auto infoResult = _parent->bottomInfoTextState(
+		width(),
+		height(),
+		point,
+		InfoDisplayType::Default);
+	if (infoResult.link
+		|| infoResult.cursor != CursorState::None
+		|| infoResult.customTooltip) {
+		return infoResult;
+	}
+
 	return result;
 }
 
