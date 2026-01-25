@@ -3836,6 +3836,10 @@ TextState Message::bottomInfoTextState(
 	}
 
 	const auto size = _bottomInfo.currentSize();
+	const auto dateX = infoRight - size.width();
+	const auto dateY = infoBottom - size.height();
+	return _bottomInfo.textState(this, point - QPoint(dateX, dateY));
+}
 
 int Message::infoWidth() const {
 	return _bottomInfo.optimalSize().width();
