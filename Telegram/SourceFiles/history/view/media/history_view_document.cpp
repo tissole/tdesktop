@@ -528,7 +528,7 @@ QSize Document::countOptimalSize() {
 			customInfoWidth += iconW + iconGap + font->width(viewsText) + textGap;
 		}
 		if (edited) {
-			customInfoWidth += st::historyEditIconSmall.width() + textGap;
+			customInfoWidth += font->width(QString::fromUtf8("✏️")) + textGap;
 		}
 		customInfoWidth += font->width(dateText + msgIdText);
 		customInfoWidth += st::msgDateImgDelta;
@@ -1051,7 +1051,7 @@ void Document::draw(
 		const int textGap = font->width(' ');
 		const int iconW = st::historyViewsWidth;
 		const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
-		const int editedW = edited ? st::historyEditIconSmall.width() : 0;
+		const int editedW = edited ? font->width(QString::fromUtf8("✏️")) : 0;
 		const int timeIdW = font->width(dateText + msgIdText);
 
 		int totalW = 0;
@@ -1085,11 +1085,7 @@ void Document::draw(
 
 		// Draw Edited
 		if (editedW > 0) {
-			const auto &icon = st::historyEditIconSmall;
-			const int iconH = icon.height();
-			const int iconW = icon.width();
-			const int iconTop = baseY - font->ascent + (font->height - iconH) / 2;
-			icon.paint(p, infoX, iconTop, width);
+			p.drawText(infoX, baseY, QString::fromUtf8("✏️"));
 			infoX += editedW + textGap;
 		}
 
@@ -1449,7 +1445,7 @@ TextState Document::textState(
 		const int textGap = font->width(' ');
 		const int iconW = st::historyViewsWidth;
 		const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
-		const int editedW = edited ? st::historyEditIconSmall.width() : 0;
+		const int editedW = edited ? font->width(QString::fromUtf8("✏️")) : 0;
 		const int timeIdW = font->width(dateText + msgIdText);
 
 		int totalW = 0;

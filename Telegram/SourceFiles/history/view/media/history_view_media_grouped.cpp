@@ -75,16 +75,23 @@ void GroupedMedia::drawMessageIdInfo(
 		const PaintContext &context,
 		const QRect &itemGeometry,
 		not_null<HistoryItem*> item) const {
-	const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
-	QString msgIdText;
+	QString infoText;
+	const auto edited = item->Get<HistoryMessageEdited>();
+	if (edited && !item->hideEditedBadge()) {
+		infoText += QString::fromUtf8("✏️");
+	}
+
 	if (GetEnhancedBool("show_messages_id")) {
 		const auto msgId = item->fullId().msg;
 		if (msgId > 0) {
-			msgIdText = QString::number(msgId.bare);
+			if (!infoText.isEmpty()) {
+				infoText += ' ';
+			}
+			infoText += QString::number(msgId.bare);
 		}
 	}
 
-	if (!edited && msgIdText.isEmpty()) {
+	if (infoText.isEmpty()) {
 		return;
 	}
 
@@ -93,31 +100,25 @@ void GroupedMedia::drawMessageIdInfo(
 	const auto font = st::msgDateFont;
 	p.setFont(font);
 
-	const auto textPadding = font->width(' ');
-	int textWidth = font->width(msgIdText);
-	if (edited) {
-		textWidth += st::historyEditIconSmall.width() + (msgIdText.isEmpty() ? 0 : textPadding);
-	}
+	auto textWidth = font->width(infoText);
+	const auto textHeight = font->height;
 	
 	const auto hPadding = 2;
 	const auto vPadding = st::msgDateImgPadding.y();
 
 	auto dateW = textWidth + (2 * hPadding);
-	const auto dateH = font->height + (2 * vPadding);
+	const auto dateH = textHeight + (2 * vPadding);
 
 	if (dateW > itemGeometry.width()) {
 		const auto availableWidth = itemGeometry.width()
 			- (2 * hPadding);
 		if (availableWidth > font->width("...")) {
 			const QFontMetrics metrics(font);
-			msgIdText = metrics.elidedText(
-				msgIdText,
+			infoText = metrics.elidedText(
+				infoText,
 				Qt::ElideRight,
 				availableWidth);
-			textWidth = font->width(msgIdText);
-			if (edited) {
-				textWidth += st::historyEditIconSmall.width() + (msgIdText.isEmpty() ? 0 : textPadding);
-			}
+			textWidth = font->width(infoText);
 			dateW = textWidth + (2 * hPadding);
 		} else {
 			return;
@@ -143,19 +144,10 @@ void GroupedMedia::drawMessageIdInfo(
 	// Use proper white color for text on image bubbles
 	p.setPen(st->msgDateImgFg());
 	p.setFont(font->bold());
-	int currentX = bubbleX + hPadding;
-	const int textBaseY = bubbleY + vPadding + font->ascent;
-
-	if (edited) {
-		const auto &icon = st::historyEditIconSmall;
-		const int iconH = icon.height();
-		const int iconTop = bubbleY + (dateH - iconH) / 2 + 1;
-		icon.paint(p, currentX, iconTop, itemGeometry.width());
-		currentX += icon.width() + (msgIdText.isEmpty() ? 0 : textPadding);
-	}
-	if (!msgIdText.isEmpty()) {
-		p.drawText(currentX, textBaseY, msgIdText);
-	}
+	p.drawText(
+		bubbleX + hPadding,
+		bubbleY + vPadding + font->ascent,
+		infoText);
 }
 
 GroupedMedia::GroupedMedia(
@@ -858,6 +850,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const auto viewsText = (views && views->views.count >= 0)
 					? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
 					: QString();
+				const auto editText = editedNow ? (QString::fromUtf8("✏️")) : QString();
 				const auto timeText = QLocale().toString(
 					ItemDateTime(item).time(),
 					GetEnhancedBool("show_seconds")
@@ -889,7 +882,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const int textGap = st::msgDateFont->width(' ');
 				const int iconW = st::historyViewsWidth;
 				const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + st::msgDateFont->width(viewsText));
-				const int editedW = editedNow ? st::historyEditIconSmall.width() : 0;
+				const int editedW = editedNow ? st::msgDateFont->width(editText) : 0;
 				const int timeIdW = st::msgDateFont->width(timeText + idText);
 				
 				int totalW = 0;
@@ -930,25 +923,14 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					p.drawText(x + iconW + iconGap, baseY, viewsText);
 					x += viewsW + textGap;
 				}
-				if (editedNow) {
-					const auto &icon = st::historyEditIconSmall;
-					const int iconH = icon.height();
-					const int iconTop = baseY - st::msgDateFont->ascent + (st::msgDateFont->height - iconH) / 2;
-					icon.paint(p, x, iconTop, width());
-					x += icon.width() + st::msgDateFont->spacew;
+				if (editedW > 0) {
+					p.drawText(x, baseY, editText);
+					x += editedW + textGap;
 				}
-				p.drawText(x, baseY, timeText + idText);
-				}
-		if (editedNow) {
-			const auto &icon = st::historyEditIconSmall;
-			const int iconH = icon.height();
-			const int iconTop = baseY - font->ascent + (font->height - iconH) / 2;
-			icon.paint(p, x, iconTop, width);
-			x += editedW + textGap;
-		}
 				p.drawText(x, baseY, timeText + idText);
 			} else {
 				QString infoText;
+				if (editedNow) infoText += QString::fromUtf8("✏️");
 				if (GetEnhancedBool("show_messages_id")) {
 					const auto msgId = item->fullId().msg;
 					if (msgId > 0) {
@@ -1013,8 +995,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				totalWidth += dateWidth;
 
 				if (edited) {
-					const auto &icon = st::historyEditIconSmall;
-					totalWidth += textPadding + icon.width();
+					totalWidth += textPadding + font->width(QString::fromUtf8("✏️"));
 				}
 
 				int viewsWidth = 0;
@@ -1055,11 +1036,12 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 					currentLeft += viewsWidth + textPadding;
 				}
 				if (edited) {
-					const auto &icon = st::historyEditIconSmall;
-					const int iconH = icon.height();
-					const int iconTop = bubbleY + (bubbleH - iconH) / 2 + 1;
-					icon.paint(p, currentLeft, iconTop, width());
-					currentLeft += icon.width() + textPadding;
+					const auto editedText = QString::fromUtf8("✏️");
+					const auto editedWidth = font->width(editedText);
+					p.setFont(font);
+					p.drawText(currentLeft, textBaseY, editedText);
+					currentLeft += editedWidth + textPadding;
+					p.setFont(font->bold());
 				}
 				p.drawText(currentLeft, textBaseY, dateText + msgIdText);
 
@@ -1277,7 +1259,7 @@ TextState GroupedMedia::getPartState(
 						? QString(" %1").arg(item->fullId().msg.bare)
 						: QString();
 					const bool editedNow = (edited && !item->hideEditedBadge());
-					const int editedW = editedNow ? st::historyEditIconSmall.width() : 0;
+					const int editedW = editedNow ? font->width(QString::fromUtf8("✏️")) : 0;
 					const int timeIdW = font->width(timeText + idText);
 					const auto views = item->Get<HistoryMessageViews>();
 					const auto viewsText = (views && views->views.count >= 0)
@@ -1351,16 +1333,19 @@ TextState GroupedMedia::getPartState(
 					}
 				} else {
 					QString infoText;
+					if (edited && !item->hideEditedBadge()) {
+						infoText += QString::fromUtf8("✏️");
+					}
 					if (GetEnhancedBool("show_messages_id")) {
 						const auto msgId = item->fullId().msg;
 						if (msgId > 0) {
+							if (!infoText.isEmpty()) infoText += ' ';
 							infoText += QString::number(msgId.bare);
 						}
 					}
-					if (edited && !item->hideEditedBadge()) {
-						const auto &icon = st::historyEditIconSmall;
-						const auto textWidth = icon.width();
-						const auto textHeight = icon.height();
+					if (!infoText.isEmpty()) {
+						const auto textWidth = st::msgDateFont->width(infoText);
+						const auto textHeight = st::msgDateFont->height;
 						const auto hPadding = 2;
 						const auto vPadding = st::msgDateImgPadding.y();
 						const auto dateW = textWidth + (2 * hPadding);
@@ -1377,14 +1362,16 @@ TextState GroupedMedia::getPartState(
 									tooltipText = QString("Message ID: ") + QString::number(msgId.bare);
 								}
 							}
-							const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
-							const auto editLocalTime = editUTCTime.toLocalTime();
-							QString editedTranslation = tr::lng_edited(tr::now);
-							editedTranslation = editedTranslation.toUpper().left(1) + editedTranslation.mid(1);
-							if (!tooltipText.isEmpty()) tooltipText += "\n";
-							tooltipText += editedTranslation + ": "
-								+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
-								+ editLocalTime.time().toString("HH:mm:ss");
+							if (edited && !item->hideEditedBadge()) {
+								const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
+								const auto editLocalTime = editUTCTime.toLocalTime();
+								QString editedTranslation = tr::lng_edited(tr::now);
+								editedTranslation = editedTranslation.toUpper().left(1) + editedTranslation.mid(1);
+								if (!tooltipText.isEmpty()) tooltipText += "\n";
+								tooltipText += editedTranslation + ": "
+									+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
+									+ editLocalTime.time().toString("HH:mm:ss");
+							}
 							if (!tooltipText.isEmpty()) {
 								result.customTooltip = true;
 								result.customTooltipText = tooltipText;
@@ -1394,17 +1381,19 @@ TextState GroupedMedia::getPartState(
 				}
 			} else if (_mode == Mode::Grid && (&part != &_parts.front())) {
 				QString infoText;
+				if (edited && !item->hideEditedBadge()) {
+					infoText += QString::fromUtf8("✏️");
+				}
 				if (GetEnhancedBool("show_messages_id")) {
 					const auto msgId = item->fullId().msg;
 					if (msgId > 0) {
+						if (!infoText.isEmpty()) infoText += ' ';
 						infoText += QString::number(msgId.bare);
 					}
 				}
 
-				if (!infoText.isEmpty() || (edited && !item->hideEditedBadge())) {
-					const auto &icon = st::historyEditIconSmall;
-					const auto textPadding = st::msgDateFont->width(' ');
-					const auto textWidth = st::msgDateFont->width(infoText) + (edited ? (icon.width() + textPadding) : 0);
+				if (!infoText.isEmpty()) {
+					const auto textWidth = st::msgDateFont->width(infoText);
 					const auto textHeight = st::msgDateFont->height;
 					const auto hPadding = 2;
 					const auto vPadding = st::msgDateImgPadding.y();
@@ -1516,8 +1505,8 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			const int dateWidth = font->width(dateText + msgIdText);
 			totalWidth += dateWidth;
 			if (edited) {
-				const auto editedW = st::historyEditIconSmall.width();
-				totalWidth += editedW;
+				const auto editedWidth = font->width(QString::fromUtf8("✏️"));
+				totalWidth += editedWidth;
 			}
 			int viewsWidth = 0;
 			if (!viewsText.isEmpty()) {
@@ -1538,7 +1527,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 				const int iconGap = 1;
 				const int iconW = st::historyViewsWidth;
 				const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
-				const int editedW = edited ? st::historyEditIconSmall.width() : 0;
+				const int editedW = edited ? font->width(QString::fromUtf8("✏️")) : 0;
 				const int timeIdW = font->width(dateText + msgIdText);
 				int hoverLeft = bubbleX + hPadding;
 				QRect viewsRect, timeIdRect, editedRect;
@@ -1572,7 +1561,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 					+ uploadLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
 					+ uploadLocalTime.time().toString("HH:mm:ss");
 				const auto msgIdValue = item->fullId().msg;
-				if (msgIdValue > 0 && GetEnhancedBool("show_messages_id")) {
+				if (msgIdValue > 0) {
 					tooltipText += "  ID: " + QString::number(msgIdValue.bare);
 				}
 				const auto editLocalTime = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
@@ -1592,7 +1581,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 					+ uploadLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
 					+ uploadLocalTime.time().toString("HH:mm:ss");
 				const auto msgIdValue = item->fullId().msg;
-				if (msgIdValue > 0 && GetEnhancedBool("show_messages_id")) {
+				if (msgIdValue > 0) {
 					tooltipText += "  ID: " + QString::number(msgIdValue.bare);
 				}
 				result.customTooltip = true;

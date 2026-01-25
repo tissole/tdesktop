@@ -260,18 +260,14 @@ void ThemeDocument::draw(Painter &p, const PaintContext &context) const {
 			auto statusH = st::normalFont->height + 2 * st::msgDateImgPadding.y();
 			Ui::FillRoundRect(p, style::rtlrect(statusX - st::msgDateImgPadding.x(), statusY - st::msgDateImgPadding.y(), statusW, statusH, width()), sti->msgDateImgBg, sti->msgDateImgBgCorners);
 			p.setFont(st::normalFont);
-			const auto edited = (parent()->data()->Get<HistoryMessageEdited>()
-				&& !parent()->data()->hideEditedBadge());
-			auto currentX = statusX;
-			if (edited) {
-				const auto &icon = st::historyEditIconSmall;
-				const int iconH = icon.height();
-				const int iconTop = statusY + (st::normalFont->height - iconH) / 2;
-				icon.paint(p, currentX, iconTop, width());
-				currentX += icon.width() + st::normalFont->spacew;
-			}
+			// Prepend edited glyph for consistency; use the message item from parent()
+			const auto editedGlyph = (parent()->data()->Get<HistoryMessageEdited>()
+				&& !parent()->data()->hideEditedBadge())
+				? (QString::fromUtf8("✏️") + " ")
+				: QString();
+			const auto statusText = editedGlyph + _statusText;
 			p.setPen(st->msgDateImgFg());
-			p.drawTextLeft(currentX, statusY, width(), _statusText, statusW - (currentX - statusX) - 2 * st::msgDateImgPadding.x());
+			p.drawTextLeft(statusX, statusY, width(), statusText, statusW - 2 * st::msgDateImgPadding.x());
 		}
 		if (radial || (!loaded && !_data->loading())) {
 			const auto radialOpacity = (radial && loaded && !_data->uploading())

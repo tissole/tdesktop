@@ -329,12 +329,6 @@ topicButtonArrowSkip: 8px;
 topicButtonArrowPosition: point(3px, 3px);
 topicButtonArrow: icon{{ "dialogs/dialogs_topic_arrow", historyReplyIconFg }};
 
-historyEditIconSmall: icon {{ "menu/edited_status-flip_horizontal", msgInDateFg }};
-historyEditIconEmoji: IconEmoji {
-	icon: historyEditIconSmall;
-	padding: margins(1px, 0px, 1px, 0px);
-}
-
 textMoreIconEmoji: IconEmoji {
 	icon: topicButtonArrow;
 	padding: margins(-2px, 5px, 0px, 0px);

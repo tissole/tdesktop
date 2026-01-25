@@ -446,8 +446,7 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 		totalWidth += font->width(dateText + msgIdText);
 
 		if (edited) {
-			const auto &icon = st::historyEditIconSmall;
-			totalWidth += textPadding + icon.width();
+			totalWidth += textPadding + font->width(QString::fromUtf8("✏️"));
 		}
 
 		int viewsWidth = 0;
@@ -488,11 +487,11 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 			currentLeft += viewsWidth + textPadding;
 		}
 		if (edited) {
-			const auto &icon = st::historyEditIconSmall;
-			const int iconH = icon.height();
-			const int iconTop = bubbleY + (bubbleH - iconH) / 2 + 1;
-			icon.paint(p, currentLeft, iconTop, width());
-			currentLeft += icon.width() + textPadding;
+			const auto editedText = QString::fromUtf8("✏️");
+			p.setFont(font);
+			p.drawText(currentLeft, textBaseY, editedText);
+			currentLeft += font->width(editedText) + textPadding;
+			p.setFont(font->bold());
 		}
 		p.drawText(currentLeft, textBaseY, dateText + msgIdText);
 
@@ -786,7 +785,7 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 
 		int editedWidth = 0;
 		if (edited) {
-			editedWidth = st::historyEditIconSmall.width();
+			editedWidth = font->width(QString::fromUtf8("✏️"));
 			totalWidth += textPadding + editedWidth;
 		}
 
