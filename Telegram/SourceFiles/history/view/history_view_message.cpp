@@ -3674,6 +3674,62 @@ void Message::drawInfo(
 	break;
 	}
 
+	if (type == InfoDisplayType::Default) {
+		auto ItemDateTime = [](not_null<HistoryItem*> item) {
+			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+		};
+
+		const auto item = data();
+		const auto font = st::msgDateFont;
+		p.setFont(font);
+		p.setPen(stm->msgDateFg);
+
+		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+		const auto dateText = QLocale().toString(
+			ItemDateTime(item).time(),
+			GetEnhancedBool("show_seconds")
+				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+				: QLocale::system().timeFormat(QLocale::ShortFormat));
+		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+			? QString(" %1").arg(item->fullId().msg.bare)
+			: QString();
+		const auto views = item->Get<HistoryMessageViews>();
+		const auto viewsText = (views && views->views.count >= 0)
+			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+			: QString();
+
+		const int iconGap = 1;
+		const int textGap = font->width(' ');
+		const int iconW = st::historyViewsWidth;
+		const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
+		const int editedW = edited ? font->width(QString::fromUtf8("✏️")) : 0;
+		const int timeIdW = font->width(dateText + msgIdText);
+
+		int totalW = 0;
+		if (viewsW > 0) totalW += viewsW + textGap;
+		if (editedW > 0) totalW += editedW + textGap;
+		totalW += timeIdW;
+
+		int infoX = infoRight - totalW;
+		const auto baseY = infoBottom - font->height + font->ascent;
+
+		if (viewsW > 0) {
+			const auto &icon = stm->historyViewsIcon;
+			const int iconH = icon.height();
+			const int scaledH = (iconH * iconW) / std::max(1, icon.width());
+			const int iconTop = baseY - font->ascent + (font->height - scaledH) / 2;
+			icon.paint(p, infoX, iconTop, iconW);
+			p.drawText(infoX + iconW + iconGap, baseY, viewsText);
+			infoX += viewsW + textGap;
+		}
+		if (editedW > 0) {
+			p.drawText(infoX, baseY, QString::fromUtf8("✏️"));
+			infoX += editedW + textGap;
+		}
+		p.drawText(infoX, baseY, dateText + msgIdText);
+		return;
+	}
+
 	const auto size = _bottomInfo.currentSize();
 	const auto dateX = infoRight - size.width();
 	const auto dateY = infoBottom - size.height();
@@ -3716,13 +3772,70 @@ TextState Message::bottomInfoTextState(
 		infoBottom -= st::msgDateImgPadding.y();
 		break;
 	}
+
+	if (type == InfoDisplayType::Default) {
+		auto ItemDateTime = [](not_null<HistoryItem*> item) {
+			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+		};
+
+		const auto item = data();
+		const auto font = st::msgDateFont;
+
+		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+		const auto dateText = QLocale().toString(
+			ItemDateTime(item).time(),
+			GetEnhancedBool("show_seconds")
+				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+				: QLocale::system().timeFormat(QLocale::ShortFormat));
+		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+			? QString(" %1").arg(item->fullId().msg.bare)
+			: QString();
+		const auto views = item->Get<HistoryMessageViews>();
+		const auto viewsText = (views && views->views.count >= 0)
+			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+			: QString();
+
+		const int iconGap = 1;
+		const int textGap = font->width(' ');
+		const int iconW = st::historyViewsWidth;
+		const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
+		const int editedW = edited ? font->width(QString::fromUtf8("✏️")) : 0;
+		const int timeIdW = font->width(dateText + msgIdText);
+
+		int totalW = 0;
+		if (viewsW > 0) totalW += viewsW + textGap;
+		if (editedW > 0) totalW += editedW + textGap;
+		totalW += timeIdW;
+
+		int infoX = infoRight - totalW;
+		int bubbleY = infoBottom - font->height;
+		int bubbleH = font->height;
+
+		if (point.y() >= bubbleY && point.y() <= bubbleY + bubbleH && point.x() >= infoX && point.x() <= infoRight) {
+			auto result = TextState(item);
+			int currentX = infoX;
+
+			if (viewsW > 0 && point.x() >= currentX && point.x() < currentX + viewsW) {
+				result.customTooltip = true;
+				result.customTooltipText = tr::lng_views_tooltip(tr::now, lt_count_decimal, views->views.count);
+				if (views->forwardsCount > 0) {
+					result.customTooltipText += "\n" + tr::lng_forwards_tooltip(tr::now, lt_count_decimal, views->forwardsCount);
+				}
+				return result;
+			}
+			if (viewsW > 0) currentX += viewsW + textGap;
+
+			if (point.x() >= currentX && point.x() <= infoRight) {
+				result.customTooltip = true;
+				result.customTooltipText = DateTooltipText(const_cast<Message*>(this));
+				result.cursor = CursorState::Date;
+				return result;
+			}
+		}
+		return TextState(item);
+	}
+
 	const auto size = _bottomInfo.currentSize();
-	const auto infoLeft = infoRight - size.width();
-	const auto infoTop = infoBottom - size.height();
-	return _bottomInfo.textState(
-		this,
-		point - QPoint{ infoLeft, infoTop });
-}
 
 int Message::infoWidth() const {
 	return _bottomInfo.optimalSize().width();
@@ -4943,7 +5056,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 				- st::msgPadding.right());
 		}
 		if (needInfoDisplay()) {
-			newHeight += (bottomInfoHeight - st::msgDateFont->height);
+			newHeight += _bottomInfo.height() + 5;
 		}
 
 		if (item->repliesAreComments() || item->externalReply()) {
@@ -5052,7 +5165,7 @@ void Message::refreshInfoSkipBlock(HistoryItem *textItem) {
 		} else if (_reactions) {
 			return false;
 		}
-		return true;
+		return false;
 	}();
 	const auto skipWidth = skipBlockWidth();
 	const auto skipHeight = skipBlockHeight();

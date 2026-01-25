@@ -933,8 +933,8 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			int totalW = hPadding + (viewsText.isEmpty() ? 0 : (iconW + iconGap)) + textWidth + hPadding;
 			int totalH = textHeight + 2 * vPadding;
 
-			int bubbleX = fullRight - totalW;
-			int bubbleY = fullBottom - totalH;
+			int bubbleX = fullRight - totalW - st::msgDateImgDelta;
+			int bubbleY = fullBottom - totalH - st::msgDateImgDelta;
 
 			// Draw Bubble Background
 			p.save();
@@ -1601,7 +1601,21 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 			return state;
 		}
 	}
-	if (QRect(usex + paintx, painty, usew, painth).contains(point)) {
+	if (isRound) {
+		const auto center = QPoint(usex + paintx + usew / 2, painty + usew / 2);
+		const auto radius = usew / 2;
+		const auto diff = point - center;
+		if (diff.x() * diff.x() + diff.y() * diff.y() <= radius * radius) {
+			ensureDataMediaCreated();
+			result.link = (_spoiler && !_spoiler->revealed)
+				? (_sensitiveSpoiler
+					? spoilerTagLink()
+					: (isRound && _parent->data()->media()->ttlSeconds())
+					? _openl // Overriden.
+					: _spoiler->link)
+				: currentVideoLink();
+		}
+	} else if (QRect(usex + paintx, painty, usew, painth).contains(point)) {
 		ensureDataMediaCreated();
 		result.link = (_spoiler && !_spoiler->revealed)
 			? (_sensitiveSpoiler
@@ -1672,8 +1686,8 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 			int totalW = hPadding + (viewsText.isEmpty() ? 0 : (iconW + iconGap)) + font->width(displayText) + hPadding;
 			int totalH = font->height + 2 * vPadding;
 
-			int bubbleX = fullRight - totalW;
-			int bubbleY = fullBottom - totalH;
+			int bubbleX = fullRight - totalW - st::msgDateImgDelta;
+			int bubbleY = fullBottom - totalH - st::msgDateImgDelta;
 			QRect bubbleRect(bubbleX, bubbleY, totalW, totalH);
 
 			if (bubbleRect.contains(point)) {

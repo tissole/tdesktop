@@ -76,10 +76,16 @@ QSize UnwrappedMedia::countOptimalSize() {
 
 QSize UnwrappedMedia::countCurrentSize(int newWidth) {
 	const auto item = _parent->data();
+	const auto isSticker = _content->document() && _content->document()->sticker();
 	accumulate_min(newWidth, maxWidth());
-	_contentSize = _content->countCurrentSize(newWidth);
+	
+	int stickerWidth = newWidth;
+	if (isSticker && needInfoDisplay()) {
+		stickerWidth -= ((isSticker ? 5 : st::msgReplyPadding.left()) + _parent->infoWidth() + 2 * st::msgDateImgPadding.x());
+	}
+	_contentSize = _content->countCurrentSize(stickerWidth);
 	auto newHeight = std::max(minHeight(), _contentSize.height());
-	if (needInfoDisplay()) {
+	if (needInfoDisplay() && !isSticker) {
 		newHeight += st::msgDateFont->height + 2 * st::msgDateImgPadding.y() + 2;
 	}
 	_additionalOnTop = false;
@@ -141,17 +147,31 @@ void UnwrappedMedia::draw(Painter &p, const PaintContext &context) const {
 	const auto rightAligned = _parent->hasRightLayout();
 	const auto inWebPage = (_parent->media() != this);
 	const auto item = _parent->data();
+	const auto isSticker = _content->document() && _content->document()->sticker();
 	auto usex = 0;
 	auto usew = _contentSize.width();
 	if (!inWebPage && rightAligned) {
-		usex = width() - usew;
+		if (isSticker) {
+			const auto infoWidth = _parent->infoWidth()
+				+ st::msgDateImgPadding.x() * 2
+				+ 5;
+			const auto rightSkip = st::msgPadding.left()
+				+ (_parent->hasFromPhoto()
+					? st::msgMargin.right()
+					: st::msgPadding.right());
+			usex = width() - usew - infoWidth - rightSkip;
+		} else {
+			usex = width() - usew;
+		}
 	}
 	if (rtl()) {
 		usex = width() - usex - usew;
 	}
 
 	const auto usey = _topAdded;
-	const auto useh = std::max(
+	const auto useh = isSticker
+		? std::max(_contentSize.height(), height() - _topAdded)
+		: std::max(
 			_contentSize.height(),
 			(height()
 				- _topAdded
@@ -291,8 +311,8 @@ void UnwrappedMedia::drawSurrounding(
 		int totalW = hPadding + (viewsText.isEmpty() ? 0 : (iconW + iconGap)) + textWidth + hPadding;
 		int totalH = textHeight + 2 * vPadding;
 
-		int bubbleX = fullRight - totalW;
-		int bubbleY = fullBottom - totalH;
+		int bubbleX = inner.x() + inner.width() + 5;
+		int bubbleY = inner.y() + inner.height() - totalH;
 
 		p.save();
 		p.setOpacity(0.95);
@@ -419,19 +439,34 @@ PointState UnwrappedMedia::pointState(QPoint point) const {
 
 	const auto rightAligned = _parent->hasRightLayout();
 	const auto inWebPage = (_parent->media() != this);
+	const auto isSticker = _content->document() && _content->document()->sticker();
 	auto usex = 0;
 	auto usew = _contentSize.width();
 	if (!inWebPage && rightAligned) {
-		usex = width() - usew;
+		if (isSticker) {
+			const auto infoWidth = _parent->infoWidth()
+				+ st::msgDateImgPadding.x() * 2
+				+ 5;
+			const auto rightSkip = st::msgPadding.left()
+				+ (_parent->hasFromPhoto()
+					? st::msgMargin.right()
+					: st::msgPadding.right());
+			usex = width() - usew - infoWidth - rightSkip;
+		} else {
+			usex = width() - usew;
+		}
 	}
 	if (rtl()) {
 		usex = width() - usex - usew;
 	}
 
-	const auto datey = height() - st::msgDateImgPadding.y() * 2
-		- st::msgDateFont->height;
+	const auto datey = isSticker
+		? height()
+		: (height() - st::msgDateImgPadding.y() * 2 - st::msgDateFont->height);
 	const auto usey = _topAdded;
-	const auto useh = std::max(_contentSize.height(), datey);
+	const auto useh = isSticker
+		? std::max(_contentSize.height(), height() - _topAdded)
+		: std::max(_contentSize.height(), datey);
 	const auto inner = QRect(usex, usey, usew, useh);
 
 	// Rectangle of date bubble.
@@ -451,17 +486,31 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 	const auto rightAligned = _parent->hasRightLayout();
 	const auto inWebPage = (_parent->media() != this);
 	const auto item = _parent->data();
+	const auto isSticker = _content->document() && _content->document()->sticker();
 	auto usex = 0;
 	auto usew = _contentSize.width();
 	if (!inWebPage && rightAligned) {
-		usex = width() - usew;
+		if (isSticker) {
+			const auto infoWidth = _parent->infoWidth()
+				+ st::msgDateImgPadding.x() * 2
+				+ 5;
+			const auto rightSkip = st::msgPadding.left()
+				+ (_parent->hasFromPhoto()
+					? st::msgMargin.right()
+					: st::msgPadding.right());
+			usex = width() - usew - infoWidth - rightSkip;
+		} else {
+			usex = width() - usew;
+		}
 	}
 	if (rtl()) {
 		usex = width() - usex - usew;
 	}
 
 	const auto usey = _topAdded;
-	const auto useh = std::max(
+	const auto useh = isSticker
+		? std::max(_contentSize.height(), height() - _topAdded)
+		: std::max(
 			_contentSize.height(),
 			height() - st::msgDateImgPadding.y() * 2 - st::msgDateFont->height);
 	const auto inner = QRect(usex, usey, usew, useh);
@@ -721,9 +770,52 @@ std::unique_ptr<StickerPlayer> UnwrappedMedia::stickerTakePlayer(
 
 int UnwrappedMedia::calculateFullRight(const QRect &inner) const {
 	const auto rightAligned = _parent->hasRightLayout();
-	const auto infoWidth = _parent->infoWidth()
-		+ st::msgDateImgPadding.x() * 2
-		+ st::msgReplyPadding.left();
+	const auto isSticker = _content->document() && _content->document()->sticker();
+	
+	int totalInfoWidth = 0;
+	if (isSticker && needInfoDisplay()) {
+		const auto item = _parent->data();
+		const auto font = st::msgDateFont;
+		const auto views = item->Get<HistoryMessageViews>();
+		const auto viewsText = (views && views->views.count >= 0)
+			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+			: QString();
+		
+		const auto authorName = [&] {
+			if (const auto msgsigned = item->Get<HistoryMessageSigned>()) {
+				return msgsigned->author;
+			}
+			return item->from()->name();
+		}();
+		
+		auto ItemDateTime = [](not_null<HistoryItem*> item) {
+			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+		};
+		
+		const auto timeText = QLocale().toString(
+			ItemDateTime(item).time(),
+			GetEnhancedBool("show_seconds")
+				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+				: QLocale::system().timeFormat(QLocale::ShortFormat));
+		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+			? QString(" %1").arg(item->fullId().msg.bare)
+			: QString();
+
+		QString displayText = viewsText;
+		if (!authorName.isEmpty()) displayText += " " + authorName;
+		displayText += " " + timeText + msgIdText;
+
+		const int textWidth = font->width(displayText);
+		const int iconGap = 3;
+		const int iconW = st::historyViewsWidth;
+		const int hPadding = st::msgDateImgPadding.x();
+		
+		totalInfoWidth = hPadding + (viewsText.isEmpty() ? 0 : (iconW + iconGap)) + textWidth + hPadding;
+	}
+
+	const auto infoWidth = (isSticker && needInfoDisplay())
+		? (totalInfoWidth + 5)
+		: (_parent->infoWidth() + st::msgDateImgPadding.x() * 2 + st::msgReplyPadding.left());
 	const auto rightActionSize = _parent->rightActionSize();
 	const auto rightSkip = st::msgPadding.left()
 		+ (_parent->hasFromPhoto()
@@ -735,7 +827,7 @@ int UnwrappedMedia::calculateFullRight(const QRect &inner) const {
 		: 0;
 	auto fullRight = inner.x()
 		+ inner.width()
-		+ (rightAligned ? 0 : infoWidth);
+		+ ((rightAligned && !isSticker) ? 0 : infoWidth);
 	const auto rightActionSkip = rightAligned ? 0 : rightActionWidth;
 	if (fullRight + rightActionSkip + rightSkip > _parent->width()) {
 		fullRight = _parent->width()
@@ -769,14 +861,7 @@ QPoint UnwrappedMedia::calculateFastActionPosition(
 }
 
 bool UnwrappedMedia::needInfoDisplay() const {
-	return _parent->data()->isSending()
-		|| _parent->data()->hasFailed()
-		|| _parent->isUnderCursor()
-		|| _parent->rightActionSize()
-		|| _parent->isLastAndSelfMessage()
-		|| (_parent->delegate()->elementContext() == Context::ChatPreview)
-		|| (_parent->hasRightLayout()
-			&& _content->alwaysShowOutTimestamp());
+	return true;
 }
 
 int UnwrappedMedia::additionalWidth(
@@ -784,7 +869,52 @@ int UnwrappedMedia::additionalWidth(
 		const Reply *reply,
 		const HistoryMessageVia *via,
 		const HistoryMessageForwarded *forwarded) const {
-	auto result = st::msgReplyPadding.left() + _parent->infoWidth() + 2 * st::msgDateImgPadding.x();
+	const auto isSticker = _content->document() && _content->document()->sticker();
+	
+	int totalInfoWidth = 0;
+	if (isSticker && needInfoDisplay()) {
+		const auto item = _parent->data();
+		const auto font = st::msgDateFont;
+		const auto views = item->Get<HistoryMessageViews>();
+		const auto viewsText = (views && views->views.count >= 0)
+			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+			: QString();
+		
+		const auto authorName = [&] {
+			if (const auto msgsigned = item->Get<HistoryMessageSigned>()) {
+				return msgsigned->author;
+			}
+			return item->from()->name();
+		}();
+		
+		auto ItemDateTime = [](not_null<HistoryItem*> item) {
+			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+		};
+		
+		const auto timeText = QLocale().toString(
+			ItemDateTime(item).time(),
+			GetEnhancedBool("show_seconds")
+				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+				: QLocale::system().timeFormat(QLocale::ShortFormat));
+		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+			? QString(" %1").arg(item->fullId().msg.bare)
+			: QString();
+
+		QString displayText = viewsText;
+		if (!authorName.isEmpty()) displayText += " " + authorName;
+		displayText += " " + timeText + msgIdText;
+
+		const int textWidth = font->width(displayText);
+		const int iconGap = 3;
+		const int iconW = st::historyViewsWidth;
+		const int hPadding = st::msgDateImgPadding.x();
+		
+		totalInfoWidth = hPadding + (viewsText.isEmpty() ? 0 : (iconW + iconGap)) + textWidth + hPadding;
+	}
+
+	auto result = (isSticker && needInfoDisplay())
+		? (totalInfoWidth + 5)
+		: (st::msgReplyPadding.left() + _parent->infoWidth() + 2 * st::msgDateImgPadding.x());
 	if (topic) {
 		accumulate_max(result, 2 * st::msgReplyPadding.left() + topic->name.maxWidth() + st::topicButtonArrowSkip + st::topicButtonPadding.right());
 	}

@@ -88,7 +88,7 @@ public:
 		return true;
 	}
 	bool customInfoLayout() const override {
-		return false;
+		return true;
 	}
 	bool allowsFastShare() const override {
 		return true;

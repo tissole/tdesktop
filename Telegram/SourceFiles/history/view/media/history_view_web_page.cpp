@@ -1247,6 +1247,61 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 		}
 	}
 
+	if (_attach || _data->type == WebPageType::Message) {
+		auto ItemDateTime = [](not_null<HistoryItem*> item) {
+			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+		};
+
+		const auto item = _parent->data();
+		const auto font = st::msgDateFont;
+		p.setFont(font);
+		p.setPen(stm->msgDateFg);
+
+		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+		const auto dateText = QLocale().toString(
+			ItemDateTime(item).time(),
+			GetEnhancedBool("show_seconds")
+				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+				: QLocale::system().timeFormat(QLocale::ShortFormat));
+		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+			? QString(" %1").arg(item->fullId().msg.bare)
+			: QString();
+		const auto views = item->Get<HistoryMessageViews>();
+		const auto viewsText = (views && views->views.count >= 0)
+			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+			: QString();
+
+		const int iconGap = 1;
+		const int textGap = font->width(' ');
+		const int iconW = st::historyViewsWidth;
+		const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
+		const int editedW = edited ? font->width(QString::fromUtf8("✏️")) : 0;
+		const int timeIdW = font->width(dateText + msgIdText);
+
+		int totalW = 0;
+		if (viewsW > 0) totalW += viewsW + textGap;
+		if (editedW > 0) totalW += editedW + textGap;
+		totalW += timeIdW;
+
+		int infoX = width() - totalW - st::msgPadding.right() + st::msgDateDelta.x();
+		const auto baseY = height() - st::msgPadding.bottom() + st::msgDateDelta.y() - font->height + font->ascent;
+
+		if (viewsW > 0) {
+			const auto &icon = stm->historyViewsIcon;
+			const int iconH = icon.height();
+			const int scaledH = (iconH * iconW) / std::max(1, icon.width());
+			const int iconTop = baseY - font->ascent + (font->height - scaledH) / 2;
+			icon.paint(p, infoX, iconTop, iconW);
+			p.drawText(infoX + iconW + iconGap, baseY, viewsText);
+			infoX += viewsW + textGap;
+		}
+		if (editedW > 0) {
+			p.drawText(infoX, baseY, QString::fromUtf8("✏️"));
+			infoX += editedW + textGap;
+		}
+		p.drawText(infoX, baseY, dateText + msgIdText);
+	}
+
 	if (!_openButton.isEmpty()) {
 		p.setFont(st::semiboldFont);
 		p.setPen(cache->icon);
@@ -1435,6 +1490,66 @@ TextState WebPage::textState(QPoint point, StateRequest request) const {
 		}
 		if (hasSponsoredMedia) {
 			tshift += _attach->height();
+		}
+
+		if (_attach || _data->type == WebPageType::Message) {
+			auto ItemDateTime = [](not_null<HistoryItem*> item) {
+				return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+			};
+
+			const auto item = _parent->data();
+			const auto font = st::msgDateFont;
+
+			const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
+			const auto dateText = QLocale().toString(
+				ItemDateTime(item).time(),
+				GetEnhancedBool("show_seconds")
+					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
+					: QLocale::system().timeFormat(QLocale::ShortFormat));
+			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
+				? QString(" %1").arg(item->fullId().msg.bare)
+				: QString();
+			const auto views = item->Get<HistoryMessageViews>();
+			const auto viewsText = (views && views->views.count >= 0)
+				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
+				: QString();
+
+			const int iconGap = 1;
+			const int textGap = font->width(' ');
+			const int iconW = st::historyViewsWidth;
+			const int viewsW = viewsText.isEmpty() ? 0 : (iconW + iconGap + font->width(viewsText));
+			const int editedW = edited ? font->width(QString::fromUtf8("✏️")) : 0;
+			const int timeIdW = font->width(dateText + msgIdText);
+
+			int totalW = 0;
+			if (viewsW > 0) totalW += viewsW + textGap;
+			if (editedW > 0) totalW += editedW + textGap;
+			totalW += timeIdW;
+
+			int infoX = width() - totalW - st::msgPadding.right() + st::msgDateDelta.x();
+			int bubbleY = height() - st::msgPadding.bottom() + st::msgDateDelta.y() - font->height;
+			int bubbleH = font->height;
+
+			if (point.y() >= bubbleY && point.y() <= bubbleY + bubbleH && point.x() >= infoX && point.x() <= width()) {
+				int currentX = infoX;
+
+				if (viewsW > 0 && point.x() >= currentX && point.x() < currentX + viewsW) {
+					result.customTooltip = true;
+					result.customTooltipText = tr::lng_views_tooltip(tr::now, lt_count_decimal, views->views.count);
+					if (views->forwardsCount > 0) {
+						result.customTooltipText += "\n" + tr::lng_forwards_tooltip(tr::now, lt_count_decimal, views->forwardsCount);
+					}
+					return result;
+				}
+				if (viewsW > 0) currentX += viewsW + textGap;
+
+				if (point.x() >= currentX && point.x() <= inner.left() + inner.width()) {
+					result.customTooltip = true;
+					result.customTooltipText = DateTooltipText(_parent);
+					result.cursor = CursorState::Date;
+					return result;
+				}
+			}
 		}
 	}
 	if (isWithinSponsoredMedia) {
