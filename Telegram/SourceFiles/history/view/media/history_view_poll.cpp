@@ -360,7 +360,7 @@ QSize Poll::countCurrentSize(int newWidth) {
 	}), 0);
 
 	const auto bottomButtonHeight = inlineFooter()
-		? 0
+		? 12 // 12px gap as requested instead of the original skip
 		: st::historyPollBottomButtonSkip;
 	auto newHeight = st::historyPollQuestionTop
 		+ _question.countHeight(innerWidth)
@@ -805,17 +805,19 @@ void Poll::draw(Painter &p, const PaintContext &context) const {
 	if (!inlineFooter()) {
 		paintBottom(p, padding.left(), tshift, paintw, context);
 	} else if (!_totalVotesLabel.isEmpty()) {
-		tshift += st::msgPadding.bottom();
+		// Position the vote count text with 12px gap from the last poll content
+		tshift += 12; // 12px gap as requested
 		paintInlineFooter(p, padding.left(), tshift, paintw, context);
 	}
 
+	// Draw info bubble at the bottom with proper alignment
 	_parent->drawInfo(
 		p,
 		context,
 		width(),
 		height(),
 		width(),
-		InfoDisplayType::Image);
+		InfoDisplayType::Default);
 }
 
 void Poll::paintInlineFooter(
@@ -826,15 +828,13 @@ void Poll::paintInlineFooter(
 		const PaintContext &context) const {
 	const auto stm = context.messageStyle();
 	p.setPen(stm->msgDateFg);
+	// Align the vote count text with the same baseline as the info bubble
 	_totalVotesLabel.drawLeftElided(
 		p,
 		left,
 		top,
-		_parent->data()->reactions().empty()
-			? std::min(
-				_totalVotesLabel.maxWidth(),
-				paintw - _parent->bottomInfoFirstLineWidth())
-			: _totalVotesLabel.maxWidth(),
+		// Leave space for the info bubble on the right
+		paintw - (_parent->infoWidth() > 0 ? _parent->infoWidth() + 2 : 0), // 2px buffer
 		width());
 }
 
