@@ -801,12 +801,17 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			Ui::FillRoundRect(p, style::rtlrect(statusX - st::msgDateImgPadding.x(), statusY - st::msgDateImgPadding.y(), statusW, statusH, width()), sti->msgServiceBg, sti->msgServiceBgCornersSmall);
 			p.setFont(st::normalFont);
 			// Use consistent edited glyph and color for status; rely on this item's edited state
-			const auto editedGlyph = (item->Get<HistoryMessageEdited>() && !item->hideEditedBadge())
-				? (QString::fromUtf8("✏️") + " ")
-				: QString();
-			const auto statusText = editedGlyph + _statusText;
+			const auto edited = (item->Get<HistoryMessageEdited>() && !item->hideEditedBadge());
+			auto currentX = statusX;
+			if (edited) {
+				const auto &icon = st::historyEditIconSmall;
+				const int iconH = icon.height();
+				const int iconTop = statusY + (st::normalFont->height - iconH) / 2;
+				icon.paint(p, currentX, iconTop, width());
+				currentX += icon.width() + st::normalFont->spacew;
+			}
 			p.setPen(st->msgDateImgFg());
-			p.drawTextLeft(statusX, statusY, width(), statusText, statusW - 2 * st::msgDateImgPadding.x());
+			p.drawTextLeft(currentX, statusY, width(), _statusText, statusW - (currentX - statusX) - 2 * st::msgDateImgPadding.x());
 			if (mediaUnread) {
 				p.setPen(Qt::NoPen);
 				p.setBrush(st->msgServiceFg());
@@ -1033,7 +1038,8 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 		totalWidth += font->width(dateText + msgIdText);
 
 		if (edited) {
-			totalWidth += textPadding + font->width(QString::fromUtf8("✏️"));
+			const auto &icon = st::historyEditIconSmall;
+			totalWidth += textPadding + icon.width();
 		}
 
 		int viewsWidth = 0;
@@ -1072,11 +1078,11 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			currentLeft += viewsWidth + textPadding;
 		}
 		if (edited) {
-			const auto editedText = QString::fromUtf8("✏️");
-			p.setFont(font);
-			p.drawText(currentLeft, textBaseY, editedText);
-			currentLeft += font->width(editedText) + textPadding;
-			p.setFont(font->bold());
+			const auto &icon = st::whenEdited;
+			const int iconH = icon.height();
+			const int iconTop = bubbleY + (bubbleH - iconH) / 2 + 1;
+			icon.paint(p, currentLeft, iconTop, width());
+			currentLeft += icon.width() + textPadding;
 		}
 		p.drawText(currentLeft, textBaseY, dateText + msgIdText);
 	}
@@ -1455,7 +1461,7 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 
 		int editedWidth = 0;
 		if (edited) {
-			editedWidth = font->width(QString::fromUtf8("✏️"));
+			editedWidth = st::historyEditIconSmall.width();
 			totalWidth += textPadding + editedWidth;
 		}
 

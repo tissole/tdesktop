@@ -268,6 +268,7 @@ void UnwrappedMedia::drawSurrounding(
 			}
 			return item->from()->name();
 		}();
+		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
 		const auto timeText = QLocale().toString(
 			ItemDateTime(item).time(),
 			GetEnhancedBool("show_seconds")
@@ -279,16 +280,12 @@ void UnwrappedMedia::drawSurrounding(
 
 		QString displayText = viewsText;
 		if (!authorName.isEmpty()) displayText += " " + authorName;
-		displayText += " " + timeText + msgIdText;
-
-		const int textWidth = font->width(displayText);
-		const int textHeight = font->height;
-		const int iconGap = 3;
-		const int iconW = st::historyViewsWidth;
-		const int hPadding = st::msgDateImgPadding.x();
-		const int vPadding = st::msgDateImgPadding.y();
 		
-		int totalW = hPadding + (viewsText.isEmpty() ? 0 : (iconW + iconGap)) + textWidth + hPadding;
+		int totalW = hPadding + (viewsText.isEmpty() ? 0 : (iconW + iconGap));
+		if (edited) {
+			totalW += st::historyEditIconSmall.width() + 3;
+		}
+		totalW += font->width(displayText + " " + timeText + msgIdText) + hPadding;
 		int totalH = textHeight + 2 * vPadding;
 
 		int bubbleX = fullRight - totalW;
@@ -312,7 +309,14 @@ void UnwrappedMedia::drawSurrounding(
 			icon.paint(p, currentX, bubbleY + (totalH - scaledIconH) / 2 + 1, iconW);
 			currentX += iconW + iconGap;
 		}
-		p.drawText(currentX, textBaseY, displayText);
+		if (edited) {
+			const auto &icon = st::historyEditIconSmall;
+			const int iconH = icon.height();
+			const int iconTop = bubbleY + (totalH - iconH) / 2 + 1;
+			icon.paint(p, currentX, iconTop, width());
+			currentX += icon.width() + 3;
+		}
+		p.drawText(currentX, textBaseY, displayText + " " + timeText + msgIdText);
 	}
 	auto replyLeft = 0;
 	auto replyRight = 0;
@@ -565,6 +569,7 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 			}
 			return item->from()->name();
 		}();
+		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
 		const auto timeText = QLocale().toString(
 			ItemDateTime(item).time(),
 			GetEnhancedBool("show_seconds")
@@ -576,13 +581,17 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 
 		QString displayText = viewsText;
 		if (!authorName.isEmpty()) displayText += " " + authorName;
-		displayText += " " + timeText + msgIdText;
 
 		const int iconW = st::historyViewsWidth;
 		const int iconGap = 3;
 		const int hPadding = st::msgDateImgPadding.x();
 		const int vPadding = st::msgDateImgPadding.y();
-		int totalW = hPadding + (viewsText.isEmpty() ? 0 : (iconW + iconGap)) + font->width(displayText) + hPadding;
+		
+		int totalW = hPadding + (viewsText.isEmpty() ? 0 : (iconW + iconGap));
+		if (edited) {
+			totalW += st::historyEditIconSmall.width() + 3;
+		}
+		totalW += font->width(displayText + " " + timeText + msgIdText) + hPadding;
 		int totalH = font->height + 2 * vPadding;
 
 		int bubbleX = fullRight - totalW;

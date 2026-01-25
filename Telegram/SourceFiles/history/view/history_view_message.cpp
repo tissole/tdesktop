@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/unixtime.h"
 #include "core/click_handler_types.h" // ClickHandlerContext
 #include "core/ui_integration.h"
+#include "history/view/media/history_view_web_page.h"
+#include "history/view/media/history_view_poll.h"
 #include "history/view/history_view_cursor_state.h"
 #include "history/history_item_components.h"
 #include "history/history_item_helpers.h"
@@ -1648,14 +1650,23 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 					&& (mediaSelectionIntervals.back().top
 						+ mediaSelectionIntervals.back().height
 						>= inner.y() + inner.height()));
+			
+			const auto isPoll = media && (dynamic_cast<const Poll*>(media) != nullptr);
+			const auto isWebPage = media && (dynamic_cast<const WebPage*>(media) != nullptr);
+			const auto useBackgroundInfo = !media || isPoll || isWebPage;
+			
+			const auto infoY = (useBackgroundInfo && !mediaOnBottom)
+				? (inner.top() + inner.height() + 5)
+				: (inner.top() + inner.height());
+
 			drawInfo(
 				p,
 				context.withSelection(
 					bottomSelected ? FullSelection : TextSelection()),
 				inner.left() + inner.width(),
-				inner.top() + inner.height(),
+				infoY,
 				2 * inner.left() + inner.width(),
-				InfoDisplayType::Default);
+				useBackgroundInfo ? InfoDisplayType::Background : InfoDisplayType::Default);
 			if (context.reactionInfo && !_reactions) {
 				const auto add = QPoint(0, inner.top() + inner.height());
 				context.reactionInfo->position = add;
@@ -2896,11 +2907,19 @@ TextState Message::textState(
 			if (!needInfoDisplay()) {
 				return;
 			}
+			const auto isPoll = media && (dynamic_cast<const Poll*>(media) != nullptr);
+			const auto isWebPage = media && (dynamic_cast<const WebPage*>(media) != nullptr);
+			const auto useBackgroundInfo = !media || isPoll || isWebPage;
+			
+			const auto infoY = (useBackgroundInfo && !mediaOnBottom)
+				? (inner.top() + inner.height() + 5)
+				: (inner.top() + inner.height());
+
 			const auto bottomInfoResult = bottomInfoTextState(
 				inner.left() + inner.width(),
-				inner.top() + inner.height(),
+				infoY,
 				point,
-				InfoDisplayType::Default);
+				useBackgroundInfo ? InfoDisplayType::Background : InfoDisplayType::Default);
 			if (bottomInfoResult.link
 				|| bottomInfoResult.cursor != CursorState::None
 				|| bottomInfoResult.customTooltip) {
@@ -4841,6 +4860,12 @@ int Message::resizeContentGetHeight(int newWidth) {
 				newHeight += textHeightFor(textWidth);
 			}
 			
+			const auto isPoll = media && (dynamic_cast<const Poll*>(media) != nullptr);
+			const auto isWebPage = media && (dynamic_cast<const WebPage*>(media) != nullptr);
+			if (!media || isPoll || isWebPage) {
+				newHeight += 5 + _bottomInfo.height();
+			}
+			
 			auto mediaInBubbleSkip = st::mediaInBubbleSkip;
 			auto msgPaddingBottom = st::msgPadding.bottom();
 
@@ -4982,14 +5007,16 @@ int Message::resizeContentGetHeight(int newWidth) {
 bool Message::needInfoDisplay() const {
 	const auto media = this->media();
 	const auto mediaDisplayed = media ? media->isDisplayed() : false;
+	const auto isPoll = media && (dynamic_cast<const Poll*>(media) != nullptr);
+	const auto isWebPage = media && (dynamic_cast<const WebPage*>(media) != nullptr);
 	if (mediaDisplayed) {
-		if (media->getPhoto() || media->getDocument()) {
+		if (!isWebPage && !isPoll && (media->getPhoto() || media->getDocument())) {
 			return false;
 		}
 	}
 	const auto check = factcheckBlock();
 	const auto entry = logEntryOriginal();
-	if (mediaDisplayed && !media->needInfoDisplay()) {
+	if (mediaDisplayed && !media->needInfoDisplay() && !isWebPage && !isPoll) {
 		return false;
 	}
 	return entry
@@ -5050,6 +5077,11 @@ void Message::refreshInfoSkipBlock(HistoryItem *textItem) {
 		} else if (media && media->isDisplayed() && !_invertMedia) {
 			return false;
 		} else if (_reactions) {
+			return false;
+		}
+		const auto isPoll = media && (dynamic_cast<const Poll*>(media) != nullptr);
+		const auto isWebPage = media && (dynamic_cast<const WebPage*>(media) != nullptr);
+		if (!media || isPoll || isWebPage) {
 			return false;
 		}
 		return true;

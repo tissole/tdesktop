@@ -359,6 +359,15 @@ QString DateTooltipText(not_null<Element*> view) {
 		+ view->dateTime().date().toString("dddd, dd MMMM yyyy") + " "
 		+ view->dateTime().time().toString("HH:mm:ss");
 	
+	if (const auto msgId = item->fullId().msg) {
+		const auto media = view->media();
+		const auto isGrouped = media
+			&& (dynamic_cast<const GroupedMedia*>(media) != nullptr);
+		if (!isGrouped && GetEnhancedBool("show_messages_id")) {
+			dateText += " ID: " + QString::number(msgId.bare);
+		}
+	}
+
 	if (item->awaitingVideoProcessing()) {
 		dateText += '\n' + tr::lng_approximate_about(tr::now);
 	}
@@ -395,14 +404,6 @@ QString DateTooltipText(not_null<Element*> view) {
 	}
 	if (const auto stars = item->out() ? item->starsPaid() : 0) {
 		dateText += '\n' + tr::lng_you_paid_stars(tr::now, lt_count, stars);
-	}
-	if (const auto msgId = view->data()->fullId().msg) {
-		const auto media = view->media();
-		const auto isGrouped = media
-			&& (dynamic_cast<const GroupedMedia*>(media) != nullptr);
-		if (!isGrouped && GetEnhancedBool("show_messages_id")) {
-			dateText += " ID: " + QString::number(msgId.bare);
-		}
 	}
 	return dateText;
 }

@@ -408,14 +408,16 @@ void BottomInfo::layout() {
 }
 
 void BottomInfo::layoutDateText() {
-	const auto edited = (_data.flags & Data::Flag::Edited)
-		? (QString::fromUtf8("✏️") + ' ')
-		: (_data.flags & Data::Flag::EstimateDate)
-		? (tr::lng_approximate(tr::now) + ' ')
-		: QString();
+	auto marked = TextWithEntities();
+	if (_data.flags & Data::Flag::Edited) {
+		marked.append(Ui::Text::IconEmoji(&st::historyEditIconEmoji));
+		marked.append(u" "_q);
+	} else if (_data.flags & Data::Flag::EstimateDate) {
+		marked.append(tr::lng_approximate(tr::now) + ' ');
+	}
 	const auto author = _data.author;
 	const auto prefix = !author.isEmpty() ? u", "_q : QString();
-	const auto date = edited + QLocale().toString(
+	const auto date = QLocale().toString(
 		_data.date.time(),
 		GetEnhancedBool("show_seconds") ? QLocale::system().timeFormat(QLocale::LongFormat).remove("t") : QLocale::system().timeFormat(QLocale::ShortFormat)) + _data.msgId;
 	const auto afterAuthor = prefix + date;
@@ -434,7 +436,15 @@ void BottomInfo::layoutDateText() {
 		: name.isEmpty()
 		? date
 		: (name + afterAuthor);
+	
 	auto marked = TextWithEntities();
+	if (_data.flags & Data::Flag::Edited) {
+		marked.append(Ui::Text::IconEmoji(&st::historyEditIconEmoji));
+		marked.append(u" "_q);
+	} else if (_data.flags & Data::Flag::EstimateDate) {
+		marked.append(tr::lng_approximate(tr::now) + ' ');
+	}
+
 	if (const auto count = _data.stars) {
 		marked.append(
 			Ui::Text::IconEmoji(&st::starIconEmojiSmall)
