@@ -1561,7 +1561,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 					+ uploadLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
 					+ uploadLocalTime.time().toString("HH:mm:ss");
 				const auto msgIdValue = item->fullId().msg;
-				if (msgIdValue > 0) {
+				if (msgIdValue > 0 && GetEnhancedBool("show_messages_id")) {
 					tooltipText += "  ID: " + QString::number(msgIdValue.bare);
 				}
 				const auto editLocalTime = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
@@ -1581,7 +1581,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 					+ uploadLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
 					+ uploadLocalTime.time().toString("HH:mm:ss");
 				const auto msgIdValue = item->fullId().msg;
-				if (msgIdValue > 0) {
+				if (msgIdValue > 0 && GetEnhancedBool("show_messages_id")) {
 					tooltipText += "  ID: " + QString::number(msgIdValue.bare);
 				}
 				result.customTooltip = true;
