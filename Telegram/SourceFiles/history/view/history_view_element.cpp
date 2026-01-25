@@ -355,10 +355,9 @@ QString DateTooltipText(not_null<Element*> view) {
 	const auto format = QLocale::LongFormat;
 	const auto item = view->data();
 	
-	QString uploadedLabel = tr::lng_uploaded(tr::now);
-	uploadedLabel = uploadedLabel.toUpper().left(1) + uploadedLabel.mid(1);
-
-	auto dateText = uploadedLabel + ": " + locale.toString(view->dateTime(), format);
+	QString dateText = tr::lng_uploaded(tr::now) + ": "
+		+ view->dateTime().date().toString("dddd, dd MMMM yyyy") + " "
+		+ view->dateTime().time().toString("HH:mm:ss");
 	
 	if (item->awaitingVideoProcessing()) {
 		dateText += '\n' + tr::lng_approximate_about(tr::now);

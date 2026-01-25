@@ -16,6 +16,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_reply.h"
 #include "history/history_item.h"
 #include "history/history_item_components.h"
+#include "lang/lang_keys.h"
+#include "lang/lang_tag.h"
 #include "lottie/lottie_single_player.h"
 #include "ui/cached_round_corners.h"
 #include "ui/chat/chat_style.h"
@@ -260,7 +262,6 @@ void UnwrappedMedia::drawSurrounding(
 			: QString();
 		
 		const auto sender = item->from();
-		const auto senderName = sender ? sender->name() : QString();
 		const auto timeText = QLocale().toString(
 			ItemDateTime(item).time(),
 			GetEnhancedBool("show_seconds")
@@ -271,7 +272,7 @@ void UnwrappedMedia::drawSurrounding(
 			: QString();
 
 		QString displayText = viewsText;
-		if (!senderName.isEmpty()) displayText += " " + senderName;
+		if (sender) displayText += " " + sender->name();
 		displayText += " " + timeText + msgIdText;
 
 		const int textWidth = font->width(displayText);
@@ -557,7 +558,6 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
 			: QString();
 		const auto sender = item->from();
-		const auto senderName = sender ? sender->name() : QString();
 		const auto timeText = QLocale().toString(
 			ItemDateTime(item).time(),
 			GetEnhancedBool("show_seconds")
@@ -568,7 +568,7 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 			: QString();
 
 		QString displayText = viewsText;
-		if (!senderName.isEmpty()) displayText += " " + senderName;
+		if (sender) displayText += " " + sender->name();
 		displayText += " " + timeText + msgIdText;
 
 		const int iconW = st::historyViewsWidth;
@@ -587,7 +587,6 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 			QString row1;
 			if (sender) {
 				QString senderLabel = tr::lng_info_about_label(tr::now);
-				senderLabel = senderLabel.toUpper().left(1) + senderLabel.mid(1);
 				row1 += senderLabel + ": " + sender->name();
 			}
 			if (views && views->views.count >= 0) {
@@ -601,11 +600,9 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 			tooltip = row1;
 
 			const auto uploadLocal = ItemDateTime(item);
-			QString uploadedLabel = tr::lng_uploaded(tr::now);
-			uploadedLabel = uploadedLabel.toUpper().left(1) + uploadedLabel.mid(1);
-			
-			QString row2 = uploadedLabel + ": "
-				+ QLocale::system().toString(uploadLocal, "dddd, d MMMM yyyy HH:mm:ss");
+			QString row2 = tr::lng_uploaded(tr::now) + ": "
+				+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
+				+ uploadLocal.time().toString("HH:mm:ss");
 			
 			if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
 				row2 += " ID: " + QString::number(item->fullId().msg.bare);

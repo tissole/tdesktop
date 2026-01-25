@@ -1313,7 +1313,6 @@ TextState GroupedMedia::getPartState(
 						}
 						const auto editLocal = QDateTime::fromSecsSinceEpoch(edited->date).toLocalTime();
 						QString editedTranslation = tr::lng_edited(tr::now);
-						editedTranslation = editedTranslation.toUpper().left(1) + editedTranslation.mid(1);
 						tooltipText += "\n" + editedTranslation + ": "
 							+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
 							+ editLocal.time().toString("HH:mm:ss");
@@ -1366,8 +1365,6 @@ TextState GroupedMedia::getPartState(
 								const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
 								const auto editLocalTime = editUTCTime.toLocalTime();
 								QString editedTranslation = tr::lng_edited(tr::now);
-								editedTranslation = editedTranslation.toUpper().left(1)
-									+ editedTranslation.mid(1);
 								if (!tooltipText.isEmpty()) tooltipText += "\n";
 								tooltipText += editedTranslation + ": "
 									+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
@@ -1420,8 +1417,6 @@ TextState GroupedMedia::getPartState(
 							const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
 							const auto editLocalTime = editUTCTime.toLocalTime();
 							QString editedTranslation = tr::lng_edited(tr::now);
-							editedTranslation = editedTranslation.toUpper().left(1)
-								+ editedTranslation.mid(1);
 							if (!tooltipText.isEmpty()) tooltipText += "\n";
 							tooltipText += editedTranslation + ": "
 								+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
@@ -1569,7 +1564,6 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 				}
 				const auto editLocalTime = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
 				QString editedTranslation = tr::lng_edited(tr::now);
-				editedTranslation = editedTranslation.toUpper().left(1) + editedTranslation.mid(1);
 				tooltipText += "\n" + editedTranslation + ": "
 					+ editLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
 					+ editLocalTime.time().toString("HH:mm:ss");

@@ -899,7 +899,6 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 				: QString();
 			
 			const auto sender = item->from();
-			const auto senderName = sender ? sender->name() : QString();
 			const auto timeText = QLocale().toString(
 				ItemDateTime(item).time(),
 				GetEnhancedBool("show_seconds")
@@ -912,7 +911,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			// Construct display string: "[ViewsIcon] [Count] [SenderName] [Time] [ID]"
 			// Note: We'll draw the icon manually on the far left.
 			QString displayText = viewsText;
-			if (!senderName.isEmpty()) displayText += " " + senderName;
+			if (sender) displayText += " " + sender->name();
 			displayText += " " + timeText + msgIdText;
 
 			const int textWidth = font->width(displayText);
@@ -1639,7 +1638,6 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
 				: QString();
 			const auto sender = item->from();
-			const auto senderName = sender ? sender->name() : QString();
 			const auto timeText = QLocale().toString(
 				ItemDateTime(item).time(),
 				GetEnhancedBool("show_seconds")
@@ -1650,7 +1648,7 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 				: QString();
 
 			QString displayText = viewsText;
-			if (!senderName.isEmpty()) displayText += " " + senderName;
+			if (sender) displayText += " " + sender->name();
 			displayText += " " + timeText + msgIdText;
 
 			const int iconW = st::historyViewsWidth;
@@ -1670,7 +1668,6 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 				QString row1;
 				if (sender) {
 					QString senderLabel = tr::lng_info_about_label(tr::now);
-					senderLabel = senderLabel.toUpper().left(1) + senderLabel.mid(1);
 					row1 += senderLabel + ": " + sender->name();
 				}
 				if (views && views->views.count >= 0) {
@@ -1685,12 +1682,10 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 
 				// Row 2: Uploaded (Localized) + ID
 				const auto uploadLocal = ItemDateTime(item);
-				// Use system locale for Romanian day/month names
-				QString uploadedLabel = tr::lng_uploaded(tr::now);
-				uploadedLabel = uploadedLabel.toUpper().left(1) + uploadedLabel.mid(1);
 				
-				QString row2 = uploadedLabel + ": "
-					+ QLocale::system().toString(uploadLocal, "dddd, d MMMM yyyy HH:mm:ss");
+				QString row2 = tr::lng_uploaded(tr::now) + ": "
+					+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
+					+ uploadLocal.time().toString("HH:mm:ss");
 				
 				if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
 					row2 += " ID: " + QString::number(item->fullId().msg.bare);
