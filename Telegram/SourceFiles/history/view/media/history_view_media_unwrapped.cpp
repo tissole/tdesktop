@@ -79,6 +79,9 @@ QSize UnwrappedMedia::countCurrentSize(int newWidth) {
 	accumulate_min(newWidth, maxWidth());
 	_contentSize = _content->countCurrentSize(newWidth);
 	auto newHeight = std::max(minHeight(), _contentSize.height());
+	if (needInfoDisplay()) {
+		newHeight += st::msgDateFont->height + 2 * st::msgDateImgPadding.y() + 2;
+	}
 	_additionalOnTop = false;
 	if (_parent->media() != this) {
 		return { newWidth, newHeight };
@@ -147,15 +150,13 @@ void UnwrappedMedia::draw(Painter &p, const PaintContext &context) const {
 		usex = width() - usex - usew;
 	}
 
-	const auto usey = rightAligned ? _topAdded : (height() - _contentSize.height());
-	const auto useh = rightAligned
-		? std::max(
+	const auto usey = _topAdded;
+	const auto useh = std::max(
 			_contentSize.height(),
 			(height()
 				- _topAdded
 				- st::msgDateImgPadding.y() * 2
-				- st::msgDateFont->height))
-		: _contentSize.height();
+				- st::msgDateFont->height));
 	const auto inner = QRect(usex, usey, usew, useh);
 	if (context.skipDrawingParts != PaintContext::SkipDrawingParts::Content) {
 		_content->draw(p, context, inner);
@@ -261,7 +262,12 @@ void UnwrappedMedia::drawSurrounding(
 			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
 			: QString();
 		
-		const auto sender = item->from();
+		const auto authorName = [&] {
+			if (const auto msgsigned = item->Get<HistoryMessageSigned>()) {
+				return msgsigned->author;
+			}
+			return item->from()->name();
+		}();
 		const auto timeText = QLocale().toString(
 			ItemDateTime(item).time(),
 			GetEnhancedBool("show_seconds")
@@ -272,7 +278,7 @@ void UnwrappedMedia::drawSurrounding(
 			: QString();
 
 		QString displayText = viewsText;
-		if (sender) displayText += " " + sender->name();
+		if (!authorName.isEmpty()) displayText += " " + authorName;
 		displayText += " " + timeText + msgIdText;
 
 		const int textWidth = font->width(displayText);
@@ -424,10 +430,8 @@ PointState UnwrappedMedia::pointState(QPoint point) const {
 
 	const auto datey = height() - st::msgDateImgPadding.y() * 2
 		- st::msgDateFont->height;
-	const auto usey = rightAligned ? _topAdded : (height() - _contentSize.height());
-	const auto useh = rightAligned
-		? std::max(_contentSize.height(), datey)
-		: _contentSize.height();
+	const auto usey = _topAdded;
+	const auto useh = std::max(_contentSize.height(), datey);
 	const auto inner = QRect(usex, usey, usew, useh);
 
 	// Rectangle of date bubble.
@@ -456,12 +460,10 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 		usex = width() - usex - usew;
 	}
 
-	const auto usey = rightAligned ? _topAdded : (height() - _contentSize.height());
-	const auto useh = rightAligned
-		? std::max(
+	const auto usey = _topAdded;
+	const auto useh = std::max(
 			_contentSize.height(),
-			height() - st::msgDateImgPadding.y() * 2 - st::msgDateFont->height)
-		: _contentSize.height();
+			height() - st::msgDateImgPadding.y() * 2 - st::msgDateFont->height);
 	const auto inner = QRect(usex, usey, usew, useh);
 
 	if (_parent->media() == this) {
@@ -557,7 +559,12 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 		const auto viewsText = (views && views->views.count >= 0)
 			? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
 			: QString();
-		const auto sender = item->from();
+		const auto authorName = [&] {
+			if (const auto msgsigned = item->Get<HistoryMessageSigned>()) {
+				return msgsigned->author;
+			}
+			return item->from()->name();
+		}();
 		const auto timeText = QLocale().toString(
 			ItemDateTime(item).time(),
 			GetEnhancedBool("show_seconds")
@@ -568,7 +575,7 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 			: QString();
 
 		QString displayText = viewsText;
-		if (sender) displayText += " " + sender->name();
+		if (!authorName.isEmpty()) displayText += " " + authorName;
 		displayText += " " + timeText + msgIdText;
 
 		const int iconW = st::historyViewsWidth;
@@ -585,9 +592,14 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 		if (bubbleRect.contains(point)) {
 			QString tooltip;
 			QString row1;
-			if (sender) {
-				QString senderLabel = tr::lng_info_about_label(tr::now);
-				row1 += senderLabel + ": " + sender->name();
+			const auto authorName = [&] {
+				if (const auto msgsigned = item->Get<HistoryMessageSigned>()) {
+					return msgsigned->author;
+				}
+				return item->from()->name();
+			}();
+			if (!authorName.isEmpty()) {
+				row1 += tr::lng_signed_author(tr::now, lt_user, authorName);
 			}
 			if (views && views->views.count >= 0) {
 				if (!row1.isEmpty()) row1 += ", ";
@@ -606,6 +618,15 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 			
 			if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
 				row2 += " ID: " + QString::number(item->fullId().msg.bare);
+			}
+
+			if (const auto edited = item->Get<HistoryMessageEdited>()) {
+				const auto editLocal = QDateTime::fromSecsSinceEpoch(edited->date).toLocalTime();
+				QString editedTrans = tr::lng_edited(tr::now);
+				editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
+				row2 += "\n" + editedTrans + ": "
+					+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
+					+ editLocal.time().toString("HH:mm:ss");
 			}
 			
 			if (!tooltip.isEmpty()) tooltip += "\n";

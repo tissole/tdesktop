@@ -363,10 +363,10 @@ QString DateTooltipText(not_null<Element*> view) {
 		dateText += '\n' + tr::lng_approximate_about(tr::now);
 	}
 	if (const auto editedDate = view->displayedEditDate()) {
-		dateText += '\n' + tr::lng_edited_date(
-			tr::now,
-			lt_date,
-			locale.toString(base::unixtime::parse(editedDate), format));
+		QString editedTrans = tr::lng_edited(tr::now);
+		editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
+		dateText += '\n' + editedTrans + ": "
+			+ locale.toString(base::unixtime::parse(editedDate), format);
 	}
 	if (const auto forwarded = item->Get<HistoryMessageForwarded>()) {
 		if (!forwarded->story && forwarded->psaType.isEmpty()) {

@@ -260,7 +260,11 @@ QSize Gif::countThumbSize(int &inOutWidthMax) const {
 		: st::maxGifSize;
 	const auto size = style::ConvertScale(videoSize());
 	accumulate_min(inOutWidthMax, maxSize);
-	return DownscaledSize(size, { inOutWidthMax, maxSize });
+	auto result = DownscaledSize(size, { inOutWidthMax, maxSize });
+	if (_data->isVideoMessage()) {
+		result.setHeight(result.height() + st::msgDateFont->height + 2 * st::msgDateImgPadding.y() + 2);
+	}
+	return result;
 }
 
 QSize Gif::countOptimalSize() {
@@ -475,7 +479,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	}
 	if (rtl()) usex = width() - usex - usew;
 
-	QRect rthumb(style::rtlrect(usex + paintx, painty, usew, painth, width()));
+	QRect rthumb(style::rtlrect(usex + paintx, painty, usew, isRound ? usew : painth, width()));
 
 	const auto inTTLViewer = _parent->delegate()->elementContext()
 		== Context::TTLViewer;
@@ -898,7 +902,12 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
 				: QString();
 			
-			const auto sender = item->from();
+			const auto authorName = [&] {
+				if (const auto msgsigned = item->Get<HistoryMessageSigned>()) {
+					return msgsigned->author;
+				}
+				return item->from()->name();
+			}();
 			const auto timeText = QLocale().toString(
 				ItemDateTime(item).time(),
 				GetEnhancedBool("show_seconds")
@@ -908,10 +917,10 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 				? QString(" %1").arg(item->fullId().msg.bare)
 				: QString();
 
-			// Construct display string: "[ViewsIcon] [Count] [SenderName] [Time] [ID]"
+			// Construct display string: "[ViewsIcon] [Count] [AuthorName] [Time] [ID]"
 			// Note: We'll draw the icon manually on the far left.
 			QString displayText = viewsText;
-			if (sender) displayText += " " + sender->name();
+			if (!authorName.isEmpty()) displayText += " " + authorName;
 			displayText += " " + timeText + msgIdText;
 
 			const int textWidth = font->width(displayText);
@@ -925,7 +934,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			int totalH = textHeight + 2 * vPadding;
 
 			int bubbleX = fullRight - totalW;
-			int bubbleY = fullBottom - st::msgDateImgDelta - totalH;
+			int bubbleY = fullBottom - totalH;
 
 			// Draw Bubble Background
 			p.save();
@@ -1637,7 +1646,12 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 			const auto viewsText = (views && views->views.count >= 0)
 				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
 				: QString();
-			const auto sender = item->from();
+			const auto authorName = [&] {
+				if (const auto msgsigned = item->Get<HistoryMessageSigned>()) {
+					return msgsigned->author;
+				}
+				return item->from()->name();
+			}();
 			const auto timeText = QLocale().toString(
 				ItemDateTime(item).time(),
 				GetEnhancedBool("show_seconds")
@@ -1648,7 +1662,7 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 				: QString();
 
 			QString displayText = viewsText;
-			if (sender) displayText += " " + sender->name();
+			if (!authorName.isEmpty()) displayText += " " + authorName;
 			displayText += " " + timeText + msgIdText;
 
 			const int iconW = st::historyViewsWidth;
@@ -1659,16 +1673,20 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 			int totalH = font->height + 2 * vPadding;
 
 			int bubbleX = fullRight - totalW;
-			int bubbleY = fullBottom - st::msgDateImgDelta - totalH;
+			int bubbleY = fullBottom - totalH;
 			QRect bubbleRect(bubbleX, bubbleY, totalW, totalH);
 
 			if (bubbleRect.contains(point)) {
 				QString tooltip;
-				// Row 1: Sender, Views, Shares
+				// Row 1: Author, Views, Shares
 				QString row1;
-				if (sender) {
-					QString senderLabel = tr::lng_info_about_label(tr::now);
-					row1 += senderLabel + ": " + sender->name();
+				if (const auto authorName = [&] {
+					if (const auto msgsigned = item->Get<HistoryMessageSigned>()) {
+						return msgsigned->author;
+					}
+					return item->from()->name();
+				}(); !authorName.isEmpty()) {
+					row1 += tr::lng_signed_author(tr::now, lt_user, authorName);
 				}
 				if (views && views->views.count >= 0) {
 					if (!row1.isEmpty()) row1 += ", ";
@@ -1689,6 +1707,15 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 				
 				if (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0) {
 					row2 += " ID: " + QString::number(item->fullId().msg.bare);
+				}
+
+				if (const auto edited = item->Get<HistoryMessageEdited>()) {
+					const auto editLocal = QDateTime::fromSecsSinceEpoch(edited->date).toLocalTime();
+					QString editedTrans = tr::lng_edited(tr::now);
+					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
+					row2 += "\n" + editedTrans + ": "
+						+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
+						+ editLocal.time().toString("HH:mm:ss");
 				}
 				
 				if (!tooltip.isEmpty()) tooltip += "\n";

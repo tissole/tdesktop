@@ -1488,7 +1488,6 @@ TextState Document::textState(
 				return result;
 			} else if (zone2Rect.contains(point)) {
 				const auto uploadLocal = ItemDateTime(item);
-				
 				QString text = tr::lng_uploaded(tr::now) + ": "
 					+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
 					+ uploadLocal.time().toString("HH:mm:ss");
@@ -1500,6 +1499,7 @@ TextState Document::textState(
 				if (edited) {
 					const auto editLocal = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
 					QString editedTrans = tr::lng_edited(tr::now);
+					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
 					text += "\n" + editedTrans + ": "
 						+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
 						+ editLocal.time().toString("HH:mm:ss");
