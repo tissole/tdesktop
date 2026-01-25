@@ -671,12 +671,14 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 			}
 
 			if (const auto edited = item->Get<HistoryMessageEdited>()) {
-				const auto editLocal = QDateTime::fromSecsSinceEpoch(edited->date).toLocalTime();
-				QString editedTrans = tr::lng_edited(tr::now);
-				editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
-				row2 += "\n" + editedTrans + ": "
-					+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
-					+ editLocal.time().toString("HH:mm:ss");
+				if (!isSticker) {
+					const auto editLocal = QDateTime::fromSecsSinceEpoch(edited->date).toLocalTime();
+					QString editedTrans = tr::lng_edited(tr::now);
+					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
+					row2 += "\n" + editedTrans + ": "
+						+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
+						+ editLocal.time().toString("HH:mm:ss");
+				}
 			}
 			
 			if (!tooltip.isEmpty()) tooltip += "\n";

@@ -1022,7 +1022,7 @@ void Document::draw(
 	p.drawTextLeft(nameleft, statustop, width, statusText);
 
 	// --- CUSTOM INLINE INFO (For All Files except Round Videos) ---
-	if (!_data->isVideoMessage() && mode != LayoutMode::Grouped) {
+	if (!_data->isVideoMessage() && mode != LayoutMode::Grouped && _parent->media() == this) {
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 		};
@@ -1416,7 +1416,7 @@ TextState Document::textState(
 
 	// --- CUSTOM TOOLTIP LOGIC (Inline) ---
 	const bool bubble = _parent->hasBubble();
-	if (!_data->isVideoMessage() && mode == LayoutMode::Full) {
+	if (!_data->isVideoMessage() && mode == LayoutMode::Full && _parent->media() == this) {
 		auto ItemDateTime = [](not_null<HistoryItem*> item) {
 			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
 		};

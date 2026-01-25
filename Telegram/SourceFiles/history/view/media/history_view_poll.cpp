@@ -308,8 +308,7 @@ bool Poll::showVotersCount() const {
 }
 
 bool Poll::inlineFooter() const {
-	return !(_flags
-		& (PollData::Flag::PublicVotes | PollData::Flag::MultiChoice));
+	return showVotersCount() || showVotes();
 }
 
 int Poll::countAnswerTop(
@@ -377,6 +376,10 @@ QSize Poll::countCurrentSize(int newWidth) {
 		newHeight -= st::msgFileTopMinus;
 	}
 	return { newWidth, newHeight };
+}
+
+QPoint Poll::resolveCustomInfoRightBottom() const {
+	return { width(), height() };
 }
 
 void Poll::updateTexts() {
@@ -805,6 +808,14 @@ void Poll::draw(Painter &p, const PaintContext &context) const {
 		tshift += st::msgPadding.bottom();
 		paintInlineFooter(p, padding.left(), tshift, paintw, context);
 	}
+
+	_parent->drawInfo(
+		p,
+		context,
+		width(),
+		height(),
+		width(),
+		InfoDisplayType::Image);
 }
 
 void Poll::paintInlineFooter(

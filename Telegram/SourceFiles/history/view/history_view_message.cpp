@@ -5060,7 +5060,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 				- st::msgPadding.right());
 		}
 		if (needInfoDisplay()) {
-			newHeight += _bottomInfo.height() + 5;
+			newHeight += _bottomInfo.height();
 		}
 
 		if (item->repliesAreComments() || item->externalReply()) {
