@@ -1657,7 +1657,7 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 		HistoryItem *targetItem = groupPartItem ? groupPartItem : view->data().get();
 		
 		const auto document = (groupPartItem && groupPartItem->media())
-			? groupPartItem->media()->getDocument()
+			? groupPartItem->media()->document()
 			: (media ? media->getDocument() : nullptr);
 
 		if (document) {
