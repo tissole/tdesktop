@@ -5059,7 +5059,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 				- st::msgPadding.left()
 				- st::msgPadding.right());
 		}
-		if (needInfoDisplay()) {
+		if (needInfoDisplay() && !hasVisibleText()) {
 			newHeight += _bottomInfo.height();
 		}
 
@@ -5165,11 +5165,11 @@ void Message::refreshInfoSkipBlock(HistoryItem *textItem) {
 			|| data()->Has<HistoryMessageLogEntryOriginal>()) {
 			return false;
 		} else if (media && media->isDisplayed() && !_invertMedia) {
-			return false;
+			return true;
 		} else if (_reactions) {
 			return false;
 		}
-		return false;
+		return true;
 	}();
 	const auto skipWidth = skipBlockWidth();
 	const auto skipHeight = skipBlockHeight();

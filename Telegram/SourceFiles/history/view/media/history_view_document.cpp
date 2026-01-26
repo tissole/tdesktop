@@ -608,7 +608,6 @@ QSize Document::countOptimalSize() {
 		if (captioned) {
 			minHeight += captioned->caption.countHeight(captionw);
 		}
-		minHeight += 3; // Gap Below Caption
 	} else if (downloadInCorner()) {
 		minHeight += 8;
 	} else {
@@ -682,8 +681,6 @@ QSize Document::countCurrentSize(int newWidth) {
 	if (captioned) {
 		newHeight += captioned->caption.countHeight(captionw);
 	}
-
-	newHeight += 3; // Gap Below Caption
 
 	return { newWidth, newHeight };
 }
