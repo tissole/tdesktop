@@ -1008,14 +1008,32 @@ QSize Message::performCountOptimalSize() {
 			}
 		}
 
-		const auto compactPadding = (isCompact && withVisibleText) ? 5 : 0;
+		const auto quoteBottomSkip = [&] {
+			if (!withVisibleText) {
+				return 0;
+			}
+			const auto &textWithEntities = item->originalText();
+			if (textWithEntities.entities.empty()) {
+				return 0;
+			}
+			const auto &last = textWithEntities.entities.back();
+			if (last.offset() + last.length() < textWithEntities.text.length()) {
+				return 0;
+			}
+			if (last.type() == EntityType::Pre || last.type() == EntityType::Blockquote) {
+				return 4; // st::historyQuoteStyle.verticalSkip
+			}
+			return 0;
+		}();
+
+		const auto compactPadding = (isCompact && withVisibleText) ? std::max(0, 5 - quoteBottomSkip) : 0;
 		const auto compactGap = (isCompact && withVisibleText) ? 4 : 0;
 
 		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 			// Apply padding
 			minHeight += isCompact
 				? (hasInternalPadding ? 0 : compactPadding)
-				: st::msgPadding.bottom();
+				: std::max(0, int(st::msgPadding.bottom()) - quoteBottomSkip);
 			
 			if (mediaDisplayed) {
 				minHeight += isCompact ? compactGap : st::mediaInBubbleSkip;
@@ -4955,7 +4973,11 @@ int Message::resizeContentGetHeight(int newWidth) {
 				if (botTop) {
 					newHeight += botTop->height;
 				}
-				newHeight += textHeightFor(textWidth);
+				const auto textHeight = textHeightFor(textWidth);
+				const auto textCorrectedHeight = (textWidth >= text().maxWidth() && text().maxWidth() > 0)
+					? text().countHeight(text().maxWidth() - 1)
+					: textHeight;
+				newHeight += textCorrectedHeight;
 			}
 			
 			auto mediaInBubbleSkip = st::mediaInBubbleSkip;
@@ -4982,13 +5004,31 @@ int Message::resizeContentGetHeight(int newWidth) {
 				}
 			}
 
-			const auto compactPadding = (isCompact && withVisibleText) ? 5 : 0;
+			const auto quoteBottomSkip = [&] {
+				if (!withVisibleText) {
+					return 0;
+				}
+				const auto &textWithEntities = item->originalText();
+				if (textWithEntities.entities.empty()) {
+					return 0;
+				}
+				const auto &last = textWithEntities.entities.back();
+				if (last.offset() + last.length() < textWithEntities.text.length()) {
+					return 0;
+				}
+				if (last.type() == EntityType::Pre || last.type() == EntityType::Blockquote) {
+					return 4; // st::historyQuoteStyle.verticalSkip
+				}
+				return 0;
+			}();
+
+			const auto compactPadding = (isCompact && withVisibleText) ? std::max(0, 5 - quoteBottomSkip) : 0;
 			const auto compactGap = (isCompact && withVisibleText) ? 4 : 0;
 
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 				newHeight += isCompact
 					? (hasInternalPadding ? 0 : compactPadding)
-					: msgPaddingBottom;
+					: std::max(0, int(msgPaddingBottom) - quoteBottomSkip);
 				if (mediaDisplayed) {
 					newHeight += isCompact ? compactGap : mediaInBubbleSkip;
 				}
