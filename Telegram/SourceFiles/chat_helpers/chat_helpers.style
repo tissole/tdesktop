@@ -1026,15 +1026,15 @@ historyUnreadReactions: TwoIconButton(historyToDown) {
 historyUnreadThingsSkip: 4px;
 
 historyQuoteStyle: QuoteStyle(defaultQuoteStyle) {
-	padding: margins(10px, 6px, 4px, 0px);
-	verticalSkip: 0px;
+	padding: margins(10px, 2px, 4px, 2px);
+	verticalSkip: 4px;
 	outline: 3px;
 	outlineShift: 2px;
 	radius: 5px;
 }
 historyTextStyle: TextStyle(defaultTextStyle) {
 	blockquote: QuoteStyle(historyQuoteStyle) {
-		padding: margins(10px, 6px, 20px, 0px);
+		padding: margins(10px, 2px, 20px, 2px);
 		icon: icon{{ "chat/mini_quote", windowFg }};
 		iconPosition: point(4px, 4px);
 		expand: icon{{ "intro_country_dropdown", windowFg }};
