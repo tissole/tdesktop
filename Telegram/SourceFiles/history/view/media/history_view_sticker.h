@@ -71,7 +71,7 @@ public:
 	void setCustomCachingTag(ChatHelpers::StickerLottieSize tag);
 	void setCustomEmojiPart();
 	void setEmojiSticker();
-	void setWebpagePart();
+	void setWebpagePart() override;
 	[[nodiscard]] bool atTheEnd() const {
 		return 	(_frameIndex >= 0) && (_frameIndex + 1 == _framesCount);
 	}

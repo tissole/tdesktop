@@ -58,12 +58,19 @@ public:
 		virtual bool hasTextForCopy() const {
 			return false;
 		}
+		virtual void setWebpagePart() {
+		}
 		virtual ~Content() = default;
 	};
 
 	UnwrappedMedia(
 		not_null<Element*> parent,
 		std::unique_ptr<Content> content);
+
+	void setWebpagePart() override {
+		Media::setWebpagePart();
+		_content->setWebpagePart();
+	}
 
 	void draw(Painter &p, const PaintContext &context) const override;
 	PointState pointState(QPoint point) const override;

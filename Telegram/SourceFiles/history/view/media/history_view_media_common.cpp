@@ -144,42 +144,48 @@ std::unique_ptr<Media> CreateAttach(
 		PhotoData *photo,
 		const std::vector<std::unique_ptr<Data::Media>> &collage,
 		const QString &webpageUrl) {
-	if (!collage.empty()) {
-		return std::make_unique<GroupedMedia>(parent, collage);
-	} else if (document) {
-		const auto spoiler = false;
-		if (document->sticker()) {
-			const auto skipPremiumEffect = true;
-			return std::make_unique<UnwrappedMedia>(
-				parent,
-				std::make_unique<Sticker>(
+	auto result = [&]() -> std::unique_ptr<Media> {
+		if (!collage.empty()) {
+			return std::make_unique<GroupedMedia>(parent, collage);
+		} else if (document) {
+			const auto spoiler = false;
+			if (document->sticker()) {
+				const auto skipPremiumEffect = true;
+				return std::make_unique<UnwrappedMedia>(
+					parent,
+					std::make_unique<Sticker>(
+						parent,
+						document,
+						skipPremiumEffect));
+			} else if (document->isAnimation() || document->isVideoFile()) {
+				return std::make_unique<Gif>(
+					parent,
+					parent->data(),
+					document,
+					spoiler);
+			} else if (document->isWallPaper() || document->isTheme()) {
+				return std::make_unique<ThemeDocument>(
 					parent,
 					document,
-					skipPremiumEffect));
-		} else if (document->isAnimation() || document->isVideoFile()) {
-			return std::make_unique<Gif>(
+					ThemeDocument::ParamsFromUrl(webpageUrl));
+			}
+			return std::make_unique<Document>(parent, parent->data(), document);
+		} else if (photo) {
+			const auto spoiler = false;
+			return std::make_unique<Photo>(
 				parent,
 				parent->data(),
-				document,
+				photo,
 				spoiler);
-		} else if (document->isWallPaper() || document->isTheme()) {
-			return std::make_unique<ThemeDocument>(
-				parent,
-				document,
-				ThemeDocument::ParamsFromUrl(webpageUrl));
+		} else if (const auto params = ThemeDocument::ParamsFromUrl(webpageUrl)) {
+			return std::make_unique<ThemeDocument>(parent, nullptr, params);
 		}
-		return std::make_unique<Document>(parent, parent->data(), document);
-	} else if (photo) {
-		const auto spoiler = false;
-		return std::make_unique<Photo>(
-			parent,
-			parent->data(),
-			photo,
-			spoiler);
-	} else if (const auto params = ThemeDocument::ParamsFromUrl(webpageUrl)) {
-		return std::make_unique<ThemeDocument>(parent, nullptr, params);
+		return nullptr;
+	}();
+	if (result) {
+		result->setWebpagePart();
 	}
-	return nullptr;
+	return result;
 }
 
 int UnitedLineHeight() {

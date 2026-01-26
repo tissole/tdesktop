@@ -532,7 +532,7 @@ void Media::repaint() const {
 }
 
 Ui::Text::String Media::createCaption(not_null<HistoryItem*> item) const {
-	if (item->emptyText()) {
+	if (item->emptyText() || _isWebpagePart) {
 		return {};
 	}
 	const auto minResizeWidth = st::minPhotoSize

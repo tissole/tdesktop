@@ -344,6 +344,13 @@ public:
 		return true;
 	}
 
+	virtual void setWebpagePart() {
+		_isWebpagePart = true;
+	}
+	[[nodiscard]] bool isWebpagePart() const {
+		return _isWebpagePart;
+	}
+
 	struct BubbleRoll {
 		float64 rotate = 0.;
 		float64 scale = 1.;
@@ -434,6 +441,7 @@ protected:
 	const not_null<Element*> _parent;
 	MediaInBubbleState _inBubbleState = MediaInBubbleState::None;
 	Ui::BubbleRounding _bubbleRounding;
+	bool _isWebpagePart = false;
 
 };
 
