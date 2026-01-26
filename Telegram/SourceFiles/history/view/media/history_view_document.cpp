@@ -608,7 +608,7 @@ QSize Document::countOptimalSize() {
 		if (captioned) {
 			minHeight += captioned->caption.countHeight(captionw);
 		}
-		minHeight += 10; // Gap Below Caption
+		minHeight += 3; // Gap Below Caption
 	} else if (downloadInCorner()) {
 		minHeight += 8;
 	} else {
@@ -683,7 +683,7 @@ QSize Document::countCurrentSize(int newWidth) {
 		newHeight += captioned->caption.countHeight(captionw);
 	}
 
-	newHeight += 10; // Gap Below Caption
+	newHeight += 3; // Gap Below Caption
 
 	return { newWidth, newHeight };
 }
@@ -1971,7 +1971,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 			- st::msgPadding.right();
 
 		int gapAbove = 2;
-		int gapBelow = 10;
+		int gapBelow = 6;
 		if (const auto document = _data) {
 			if (document->isSong()) {
 				gapAbove = 7;
@@ -2017,7 +2017,7 @@ QSize Document::sizeForGrouping(int width) const {
 			- st::msgPadding.right();
 
 		int gapAbove = 2;
-		int gapBelow = 10;
+		int gapBelow = 6;
 		if (const auto document = _data) {
 			if (document->isSong()) {
 				gapAbove = 7;
