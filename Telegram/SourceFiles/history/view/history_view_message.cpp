@@ -1008,8 +1008,8 @@ QSize Message::performCountOptimalSize() {
 			}
 		}
 
-		const auto compactPadding = (isCompact && withVisibleText) ? 5 : 0;
-		const auto compactGap = (isCompact && withVisibleText) ? 4 : 0;
+		const auto compactPadding = (isCompact && withVisibleText) ? 10 : 0;
+		const auto compactGap = (isCompact && withVisibleText) ? 10 : 0;
 
 		if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 			// Apply padding
@@ -4982,8 +4982,8 @@ int Message::resizeContentGetHeight(int newWidth) {
 				}
 			}
 
-			const auto compactPadding = (isCompact && withVisibleText) ? 5 : 0;
-			const auto compactGap = (isCompact && withVisibleText) ? 4 : 0;
+			const auto compactPadding = (isCompact && withVisibleText) ? 10 : 0;
+			const auto compactGap = (isCompact && withVisibleText) ? 10 : 0;
 
 			if (!mediaOnBottom && (!_viewButton || !reactionsInBubble)) {
 				newHeight += isCompact
