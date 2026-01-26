@@ -358,19 +358,19 @@ void Preview::updateToScale(int scale) {
 	_scale = scale;
 	_nameStyle = scaled(st::fwdTextStyle, 13);
 	_textStyle = scaled(st::messageTextStyle, 13);
-	_textStyle.blockquote.verticalSkip = 0;
+	_textStyle.blockquote.verticalSkip = scaled(4);
 	_textStyle.blockquote.outline = scaled(3);
 	_textStyle.blockquote.outlineShift = scaled(2);
 	_textStyle.blockquote.radius = scaled(5);
-	_textStyle.blockquote.padding = scaled(QMargins{ 10, 6, 20, 6 });
+	_textStyle.blockquote.padding = scaled(QMargins{ 10, 2, 20, 2 });
 	_textStyle.blockquote.iconPosition = scaled(QPoint{ 4, 4 });
-	_textStyle.pre.verticalSkip = 0;
+	_textStyle.pre.verticalSkip = scaled(4);
 	_textStyle.pre.outline = scaled(3);
 	_textStyle.pre.outlineShift = scaled(2);
 	_textStyle.pre.radius = scaled(5);
 	_textStyle.pre.header = scaled(20);
 	_textStyle.pre.headerPosition = scaled(QPoint{ 10, 2 });
-	_textStyle.pre.padding = scaled(QMargins{ 10, 6, 4, 6 });
+	_textStyle.pre.padding = scaled(QMargins{ 10, 2, 4, 2 });
 	_textStyle.pre.iconPosition = scaled(QPoint{ 4, 2 });
 	_nameText.setText(
 		_nameStyle,
