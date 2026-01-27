@@ -259,6 +259,7 @@ struct ApiWrap::FileProcess {
 	std::map<mtpRequestId, int64> activeRequestOffsets;
     std::deque<int64> pendingRetryOffsets;                 // offsets that need retry
     std::unordered_map<int64, int> retryCounts;            // per-offset retry counter
+	int scheduledOffsets = 0;                              // chunks queued in throttler but not yet sent
 	bool active = false;
 };
 
@@ -2379,7 +2380,9 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 
 	const auto scheduleRequest = [&](int64 offset) {
 		const auto randomId = process.randomId;
+		++process.scheduledOffsets;  // Track that we're queuing a request
 		_throttler.schedule([=, &process] {
+			--process.scheduledOffsets;  // Request is now being sent
 			const auto requestId = fileRequest(
 				process.location,
 				offset,
@@ -2467,8 +2470,11 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 	};
 
 	// First, retry failed offsets (if any).
+	const auto totalPending = [&]() {
+		return int(process.activeRequestOffsets.size()) + process.scheduledOffsets;
+	};
 	while (!process.pendingRetryOffsets.empty()
-		&& process.activeRequestOffsets.size() < requestsCount) {
+		&& totalPending() < requestsCount) {
 		const auto retryOffset = process.pendingRetryOffsets.front();
 		process.pendingRetryOffsets.pop_front();
 
@@ -2492,7 +2498,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 	}
 
 	// Then fill remaining slots with fresh offsets.
-	while (process.activeRequestOffsets.size() < requestsCount) {
+	while (totalPending() < requestsCount) {
 		if (process.size > 0 && process.offset >= process.size) {
 			break;
 		}
