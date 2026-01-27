@@ -1805,6 +1805,12 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 	for (int i = 0; i < int(s.list.size()); ++i) {
 		const auto &message = s.list[i];
 
+		// Skip counting files for messages that will be filtered by date
+		// This matches the skip logic in loadNextMessageFile()
+		if (Data::SkipMessageByDate(message, *_settings)) {
+			continue;
+		}
+
 		int required = 0;
 		if (message.file().location) {
 			++required;
