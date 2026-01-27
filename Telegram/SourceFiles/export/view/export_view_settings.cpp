@@ -528,12 +528,6 @@ void SettingsWidget::addLimitsLabel(
 		object_ptr<Ui::VerticalLayout>(container),
 		st::exportSettingPadding);
 
-	[[maybe_unused]] const auto fromIdLabel = idContainer->add(
-		object_ptr<Ui::FlatLabel>(
-			idContainer,
-			tr::lng_export_id_from_label(tr::now),
-			st::defaultFlatLabel),
-		st::exportSettingPadding);
 
 	const auto fromIdInput = idContainer->add(
 		object_ptr<Ui::InputField>(
@@ -542,12 +536,6 @@ void SettingsWidget::addLimitsLabel(
 			rpl::single(tr::lng_export_id_from_placeholder(tr::now))),
 		st::exportSettingPadding);
 
-	[[maybe_unused]] const auto tillIdLabel = idContainer->add(
-		object_ptr<Ui::FlatLabel>(
-			idContainer,
-			tr::lng_export_id_till_label(tr::now),
-			st::defaultFlatLabel),
-		st::exportSettingPadding);
 
 	const auto tillIdInput = idContainer->add(
 		object_ptr<Ui::InputField>(

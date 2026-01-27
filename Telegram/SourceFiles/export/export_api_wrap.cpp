@@ -31,11 +31,13 @@ namespace {
 
 
 
-constexpr auto kMaxParallelFiles = 10;
+constexpr auto kMaxParallelFiles = 4;
 constexpr auto kMegabyte = 1024 * 1024;
 
-// Rate limiting: Target 28 requests/sec for safety margin (one every ~35ms)
-constexpr auto kMinRequestIntervalMs = 1000 / 28;
+// Rate limiting: Target 20 requests/sec for safety margin (one every 50ms)
+// With 4 parallel files × 2-4 chunks each, this provides good throughput
+// while staying well under Telegram's rate limits to avoid FLOOD_WAIT.
+constexpr auto kMinRequestIntervalMs = 1000 / 20;
 
 // Transient retry settings (per-chunk).
 constexpr auto kMaxChunkRetries = 3;
@@ -131,7 +133,7 @@ ApiWrap::RequestThrottler::RequestThrottler(Fn<void(FnMut<void()>)> runner)
 , _tokenRefreshTimer(std::make_unique<base::Timer>()) {
 	_tokenRefreshTimer->setCallback([this] {
 		// Add one token back to the bucket, up to the maximum burst capacity.
-		if (_tokens < 28) {
+		if (_tokens < 20) {
 			_tokens++;
 		}
 		// After adding a token, try to process any waiting tasks.
@@ -1238,6 +1240,7 @@ void ApiWrap::requestMessages(
 	Expects(_selfId.has_value());
 
 	_chatProcess = std::make_unique<ChatProcess>();
+	_chatProcess->context.selfPeerId = peerFromUser(*_selfId);
 	_chatProcess->info = info;
 	_chatProcess->fromId = fromId;
 	_chatProcess->tillId = tillId;

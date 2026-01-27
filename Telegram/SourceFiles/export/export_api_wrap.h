@@ -282,7 +282,7 @@ private:
     
     		Fn<void(FnMut<void()>)> _runner;
     		std::deque<FnMut<void()>> _taskQueue;
-    		int _tokens = 28; // Start with a full burst capacity.
+    		int _tokens = 20; // Start with a full burst capacity.
     		std::unique_ptr<base::Timer> _tokenRefreshTimer;
     	};
     
