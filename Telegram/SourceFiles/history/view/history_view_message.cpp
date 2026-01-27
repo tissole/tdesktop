@@ -958,34 +958,26 @@ QSize Message::performCountOptimalSize() {
 		const auto textualWidth = textualMaxWidth();
 
 		const auto quoteTopSkip = [&] {
-			if (!withVisibleText) {
-				return 0;
-			}
+			if (!withVisibleText) return 0;
 			const auto &textWithEntities = item->originalText();
-			if (textWithEntities.entities.empty()) {
-				return 0;
-			}
+			if (textWithEntities.entities.empty()) return 0;
 			const auto &first = textWithEntities.entities.front();
-			if (first.offset() == 0 && (first.type() == EntityType::Pre || first.type() == EntityType::Blockquote)) {
-				return 6; // st::historyQuoteStyle.verticalSkip (4) + padding.top (2)
+			if (first.offset() == 0) {
+				if (first.type() == EntityType::Pre) return 26; // 20 header + 4 skip + 2 padding
+				if (first.type() == EntityType::Blockquote) return 6; // 4 skip + 2 padding
 			}
 			return 0;
 		}();
 
 		const auto quoteBottomSkip = [&] {
-			if (!withVisibleText) {
-				return 0;
-			}
+			if (!withVisibleText) return 0;
 			const auto &textWithEntities = item->originalText();
-			if (textWithEntities.entities.empty()) {
-				return 0;
-			}
+			if (textWithEntities.entities.empty()) return 0;
 			const auto &last = textWithEntities.entities.back();
-			if (last.offset() + last.length() < textWithEntities.text.length()) {
-				return 0;
-			}
-			if (last.type() == EntityType::Pre || last.type() == EntityType::Blockquote) {
-				return 4; // st::historyQuoteStyle.verticalSkip
+			if (last.offset() + last.length() >= textWithEntities.text.length()) {
+				if (last.type() == EntityType::Pre || last.type() == EntityType::Blockquote) {
+					return 4; // st::historyQuoteStyle.verticalSkip
+				}
 			}
 			return 0;
 		}();
@@ -996,7 +988,13 @@ QSize Message::performCountOptimalSize() {
 		if (context() == Context::Replies && item->isDiscussionPost()) {
 			maxWidth = std::max(maxWidth, st::msgMaxWidth);
 		}
-		minHeight = withVisibleText ? std::max(0, textHeightFor(textualWidth) - quoteTopSkip) : 0;
+
+		// Fix library double-padding bug for short messages
+		const auto rawTextHeight = textHeightFor(textualWidth);
+		const auto textCorrectedHeight = (textualWidth >= text().maxWidth().toInt())
+			? std::max(0, rawTextHeight - quoteTopSkip)
+			: rawTextHeight;
+		minHeight = withVisibleText ? textCorrectedHeight : 0;
 		if (reactionsInBubble) {
 			const auto reactionsMaxWidth = st::msgPadding.left()
 				+ _reactions->maxWidth()
@@ -4991,16 +4989,19 @@ int Message::resizeContentGetHeight(int newWidth) {
 				}
 				const auto quoteTopSkip = [&] {
 					const auto &textWithEntities = item->originalText();
-					if (textWithEntities.entities.empty()) {
-						return 0;
-					}
+					if (textWithEntities.entities.empty()) return 0;
 					const auto &first = textWithEntities.entities.front();
-					if (first.offset() == 0 && (first.type() == EntityType::Pre || first.type() == EntityType::Blockquote)) {
-						return 6;
+					if (first.offset() == 0) {
+						if (first.type() == EntityType::Pre) return 26;
+						if (first.type() == EntityType::Blockquote) return 6;
 					}
 					return 0;
 				}();
-				newHeight += std::max(0, textHeightFor(textWidth) - quoteTopSkip);
+				const auto rawTextHeight = textHeightFor(textWidth);
+				const auto textCorrectedHeight = (textWidth >= text().maxWidth().toInt())
+					? std::max(0, rawTextHeight - quoteTopSkip)
+					: rawTextHeight;
+				newHeight += textCorrectedHeight;
 			}
 			
 			auto mediaInBubbleSkip = st::mediaInBubbleSkip;
@@ -5028,19 +5029,14 @@ int Message::resizeContentGetHeight(int newWidth) {
 			}
 
 			const auto quoteBottomSkip = [&] {
-				if (!withVisibleText) {
-					return 0;
-				}
+				if (!withVisibleText) return 0;
 				const auto &textWithEntities = item->originalText();
-				if (textWithEntities.entities.empty()) {
-					return 0;
-				}
+				if (textWithEntities.entities.empty()) return 0;
 				const auto &last = textWithEntities.entities.back();
-				if (last.offset() + last.length() < textWithEntities.text.length()) {
-					return 0;
-				}
-				if (last.type() == EntityType::Pre || last.type() == EntityType::Blockquote) {
-					return 4; // st::historyQuoteStyle.verticalSkip
+				if (last.offset() + last.length() >= textWithEntities.text.length()) {
+					if (last.type() == EntityType::Pre || last.type() == EntityType::Blockquote) {
+						return 4;
+					}
 				}
 				return 0;
 			}();
