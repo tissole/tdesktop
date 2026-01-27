@@ -956,6 +956,40 @@ QSize Message::performCountOptimalSize() {
 		// Entry page is always a bubble bottom.
 		const auto withVisibleText = hasVisibleText();
 		const auto textualWidth = textualMaxWidth();
+
+		const auto quoteTopSkip = [&] {
+			if (!withVisibleText) {
+				return 0;
+			}
+			const auto &textWithEntities = item->originalText();
+			if (textWithEntities.entities.empty()) {
+				return 0;
+			}
+			const auto &first = textWithEntities.entities.front();
+			if (first.offset() == 0 && (first.type() == EntityType::Pre || first.type() == EntityType::Blockquote)) {
+				return 6; // st::historyQuoteStyle.verticalSkip (4) + padding.top (2)
+			}
+			return 0;
+		}();
+
+		const auto quoteBottomSkip = [&] {
+			if (!withVisibleText) {
+				return 0;
+			}
+			const auto &textWithEntities = item->originalText();
+			if (textWithEntities.entities.empty()) {
+				return 0;
+			}
+			const auto &last = textWithEntities.entities.back();
+			if (last.offset() + last.length() < textWithEntities.text.length()) {
+				return 0;
+			}
+			if (last.type() == EntityType::Pre || last.type() == EntityType::Blockquote) {
+				return 4; // st::historyQuoteStyle.verticalSkip
+			}
+			return 0;
+		}();
+
 		auto mediaOnBottom = (mediaDisplayed && media->isBubbleBottom()) || check || (entry);
 		auto mediaOnTop = (mediaDisplayed && media->isBubbleTop()) || (entry && entry->isBubbleTop());
 		maxWidth = textualWidth;
@@ -1007,39 +1041,6 @@ QSize Message::performCountOptimalSize() {
 				hasInternalPadding = true;
 			}
 		}
-
-		const auto quoteTopSkip = [&] {
-			if (!withVisibleText) {
-				return 0;
-			}
-			const auto &textWithEntities = item->originalText();
-			if (textWithEntities.entities.empty()) {
-				return 0;
-			}
-			const auto &first = textWithEntities.entities.front();
-			if (first.offset() == 0 && (first.type() == EntityType::Pre || first.type() == EntityType::Blockquote)) {
-				return 6; // st::historyQuoteStyle.verticalSkip (4) + padding.top (2)
-			}
-			return 0;
-		}();
-
-		const auto quoteBottomSkip = [&] {
-			if (!withVisibleText) {
-				return 0;
-			}
-			const auto &textWithEntities = item->originalText();
-			if (textWithEntities.entities.empty()) {
-				return 0;
-			}
-			const auto &last = textWithEntities.entities.back();
-			if (last.offset() + last.length() < textWithEntities.text.length()) {
-				return 0;
-			}
-			if (last.type() == EntityType::Pre || last.type() == EntityType::Blockquote) {
-				return 4; // st::historyQuoteStyle.verticalSkip
-			}
-			return 0;
-		}();
 
 		const auto compactPadding = (isCompact && withVisibleText) ? std::max(0, 5 - quoteBottomSkip) : 0;
 		const auto compactGap = (isCompact && withVisibleText) ? 4 : 0;
