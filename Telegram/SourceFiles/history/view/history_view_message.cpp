@@ -962,7 +962,7 @@ QSize Message::performCountOptimalSize() {
 		if (context() == Context::Replies && item->isDiscussionPost()) {
 			maxWidth = std::max(maxWidth, st::msgMaxWidth);
 		}
-		minHeight = withVisibleText ? textHeightFor(textualWidth) : 0;
+		minHeight = withVisibleText ? std::max(0, textHeightFor(textualWidth) - quoteTopSkip) : 0;
 		if (reactionsInBubble) {
 			const auto reactionsMaxWidth = st::msgPadding.left()
 				+ _reactions->maxWidth()
@@ -1007,6 +1007,21 @@ QSize Message::performCountOptimalSize() {
 				hasInternalPadding = true;
 			}
 		}
+
+		const auto quoteTopSkip = [&] {
+			if (!withVisibleText) {
+				return 0;
+			}
+			const auto &textWithEntities = item->originalText();
+			if (textWithEntities.entities.empty()) {
+				return 0;
+			}
+			const auto &first = textWithEntities.entities.front();
+			if (first.offset() == 0 && (first.type() == EntityType::Pre || first.type() == EntityType::Blockquote)) {
+				return 6; // st::historyQuoteStyle.verticalSkip (4) + padding.top (2)
+			}
+			return 0;
+		}();
 
 		const auto quoteBottomSkip = [&] {
 			if (!withVisibleText) {
@@ -4973,11 +4988,18 @@ int Message::resizeContentGetHeight(int newWidth) {
 				if (botTop) {
 					newHeight += botTop->height;
 				}
-				const auto textHeight = textHeightFor(textWidth);
-				const auto textCorrectedHeight = (textWidth >= text().maxWidth() && text().maxWidth() > 0)
-					? text().countHeight(text().maxWidth() - 1)
-					: textHeight;
-				newHeight += textCorrectedHeight;
+				const auto quoteTopSkip = [&] {
+					const auto &textWithEntities = item->originalText();
+					if (textWithEntities.entities.empty()) {
+						return 0;
+					}
+					const auto &first = textWithEntities.entities.front();
+					if (first.offset() == 0 && (first.type() == EntityType::Pre || first.type() == EntityType::Blockquote)) {
+						return 6;
+					}
+					return 0;
+				}();
+				newHeight += std::max(0, textHeightFor(textWidth) - quoteTopSkip);
 			}
 			
 			auto mediaInBubbleSkip = st::mediaInBubbleSkip;
