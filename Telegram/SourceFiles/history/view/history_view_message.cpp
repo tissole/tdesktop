@@ -963,8 +963,14 @@ QSize Message::performCountOptimalSize() {
 			if (textWithEntities.entities.empty()) return 0;
 			const auto &first = textWithEntities.entities.front();
 			if (first.offset() == 0) {
-				if (first.type() == EntityType::Pre) return 26; // 20 header + 4 skip + 2 padding
-				if (first.type() == EntityType::Blockquote) return 6; // 4 skip + 2 padding
+				if (first.type() == EntityType::Pre) {
+					return st::messageTextStyle.pre.header
+						+ st::messageTextStyle.pre.verticalSkip
+						+ st::messageTextStyle.pre.padding.top();
+				} else if (first.type() == EntityType::Blockquote) {
+					return st::messageTextStyle.blockquote.verticalSkip
+						+ st::messageTextStyle.blockquote.padding.top();
+				}
 			}
 			return 0;
 		}();
@@ -976,7 +982,7 @@ QSize Message::performCountOptimalSize() {
 			const auto &last = textWithEntities.entities.back();
 			if (last.offset() + last.length() >= textWithEntities.text.length()) {
 				if (last.type() == EntityType::Pre || last.type() == EntityType::Blockquote) {
-					return 4; // st::historyQuoteStyle.verticalSkip
+					return st::messageTextStyle.blockquote.verticalSkip;
 				}
 			}
 			return 0;
@@ -4992,8 +4998,14 @@ int Message::resizeContentGetHeight(int newWidth) {
 					if (textWithEntities.entities.empty()) return 0;
 					const auto &first = textWithEntities.entities.front();
 					if (first.offset() == 0) {
-						if (first.type() == EntityType::Pre) return 26;
-						if (first.type() == EntityType::Blockquote) return 6;
+						if (first.type() == EntityType::Pre) {
+							return st::messageTextStyle.pre.header
+								+ st::messageTextStyle.pre.verticalSkip
+								+ st::messageTextStyle.pre.padding.top();
+						} else if (first.type() == EntityType::Blockquote) {
+							return st::messageTextStyle.blockquote.verticalSkip
+								+ st::messageTextStyle.blockquote.padding.top();
+						}
 					}
 					return 0;
 				}();
@@ -5035,7 +5047,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 				const auto &last = textWithEntities.entities.back();
 				if (last.offset() + last.length() >= textWithEntities.text.length()) {
 					if (last.type() == EntityType::Pre || last.type() == EntityType::Blockquote) {
-						return 4;
+						return st::messageTextStyle.blockquote.verticalSkip;
 					}
 				}
 				return 0;
