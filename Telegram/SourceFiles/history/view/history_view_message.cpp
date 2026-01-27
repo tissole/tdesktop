@@ -997,7 +997,7 @@ QSize Message::performCountOptimalSize() {
 
 		// Fix library double-padding bug for short messages
 		const auto rawTextHeight = textHeightFor(textualWidth);
-		const auto textCorrectedHeight = (textualWidth >= text().maxWidth().toInt())
+		const auto textCorrectedHeight = (textualWidth >= text().maxWidth())
 			? std::max(0, rawTextHeight - quoteTopSkip)
 			: rawTextHeight;
 		minHeight = withVisibleText ? textCorrectedHeight : 0;
@@ -5010,7 +5010,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 					return 0;
 				}();
 				const auto rawTextHeight = textHeightFor(textWidth);
-				const auto textCorrectedHeight = (textWidth >= text().maxWidth().toInt())
+				const auto textCorrectedHeight = (textWidth >= text().maxWidth())
 					? std::max(0, rawTextHeight - quoteTopSkip)
 					: rawTextHeight;
 				newHeight += textCorrectedHeight;
