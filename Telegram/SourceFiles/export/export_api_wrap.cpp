@@ -259,7 +259,6 @@ struct ApiWrap::FileProcess {
 	std::map<mtpRequestId, int64> activeRequestOffsets;
     std::deque<int64> pendingRetryOffsets;                 // offsets that need retry
     std::unordered_map<int64, int> retryCounts;            // per-offset retry counter
-	int scheduledOffsets = 0;                              // chunks queued in throttler but not yet sent
 	bool active = false;
 };
 
@@ -2375,106 +2374,22 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 		return;
 	}
 
+	const auto randomId = process.randomId;
 	const auto requestsCount = GetConcurrentChunksForFile(process.size);
 	const auto chunkSize = GetChunkSizeForFile(process.size);
 
-	const auto scheduleRequest = [&](int64 offset) {
-		const auto randomId = process.randomId;
-		++process.scheduledOffsets;  // Track that we're queuing a request
-		_throttler.schedule([=, &process] {
-			--process.scheduledOffsets;  // Request is now being sent
-			const auto requestId = fileRequest(
-				process.location,
-				offset,
-				chunkSize
-			).done([=](const MTPupload_File &result) {
-				filePartDone(randomId, offset, result);
-			}).fail([=](const MTP::Error &error) {
-				// Free this slot for this offset.
-				if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
-					auto &proc = *itp->second;
-					for (auto it = proc.activeRequestOffsets.begin(); it != proc.activeRequestOffsets.end();) {
-						if (it->second == offset) it = proc.activeRequestOffsets.erase(it);
-						else ++it;
-					}
-				}
+	// Count how many requests are already in flight for this file
+	const auto currentActive = int(process.activeRequestOffsets.size());
+	if (currentActive >= requestsCount) {
+		// Already at max concurrent chunks for this file
+		return;
+	}
 
-				// Special cases.
-				if (error.type() == u"TAKEOUT_FILE_EMPTY"_q && _otherDataProcess != nullptr) {
-					filePartDone(
-						randomId,
-						0,
-						MTP_upload_file(
-							MTP_storage_filePartial(),
-							MTP_int(0),
-							MTP_bytes()));
-					return true;
-				} else if (error.type() == u"LOCATION_INVALID"_q
-					|| error.type() == u"VERSION_INVALID"_q
-					|| error.type() == u"LOCATION_NOT_AVAILABLE"_q) {
-					filePartUnavailable(randomId);
-					return true;
-				} else if (error.code() == 400
-					&& error.type().startsWith(u"FILE_REFERENCE_"_q)) {
-					filePartRefreshReference(randomId, offset);
-					return true;
-				}
+	// How many more chunks can we schedule?
+	int slotsAvailable = requestsCount - currentActive;
 
-				// FLOOD_WAIT_*: respect exact server wait time (using proper regex parsing)
-				if (error.code() == 420 || error.type().startsWith(u"FLOOD_WAIT"_q)) {
-					static const auto FloodWaitRegExp = QRegularExpression("^FLOOD_WAIT_(\\d+)$");
-					const auto match = FloodWaitRegExp.match(error.type());
-					const int seconds = match.hasMatch() ? match.captured(1).toInt() : 2;
-					const int ms = seconds * 1000;
-					if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
-						auto &proc = *itp->second;
-						if (std::find(proc.pendingRetryOffsets.begin(), proc.pendingRetryOffsets.end(), offset)
-							== proc.pendingRetryOffsets.end()) {
-							proc.pendingRetryOffsets.push_back(offset);
-						}
-					}
-					_batchDelayTimer->callOnce(ms);
-					return true;
-				}
-
-				// Transient errors: retry with backoff up to 3 tries.
-				if (error.code() >= 500
-					|| error.type() == u"TIMEOUT"_q
-					|| error.type() == u"RPC_CALL_FAIL"_q
-					|| error.type() == u"INTERNAL"_q) {
-					if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
-						auto &proc = *itp->second;
-						const int tries = ++proc.retryCounts[offset];
-						if (tries <= kMaxChunkRetries) {
-							if (std::find(proc.pendingRetryOffsets.begin(), proc.pendingRetryOffsets.end(), offset)
-								== proc.pendingRetryOffsets.end()) {
-								proc.pendingRetryOffsets.push_back(offset);
-							}
-							const int delay = std::min(kRetryBaseDelayMs << (tries - 1), kRetryMaxDelayMs);
-							_batchDelayTimer->callOnce(delay);
-							return true;
-						} else {
-							filePartUnavailable(randomId);
-							return true;
-						}
-					}
-				}
-
-				return false;
-			}).send();
-
-			if (requestId) {
-				process.activeRequestOffsets.emplace(requestId, offset);
-			}
-		});
-	};
-
-	// First, retry failed offsets (if any).
-	const auto totalPending = [&]() {
-		return int(process.activeRequestOffsets.size()) + process.scheduledOffsets;
-	};
-	while (!process.pendingRetryOffsets.empty()
-		&& totalPending() < requestsCount) {
+	// First, retry failed offsets (if any)
+	while (slotsAvailable > 0 && !process.pendingRetryOffsets.empty()) {
 		const auto retryOffset = process.pendingRetryOffsets.front();
 		process.pendingRetryOffsets.pop_front();
 
@@ -2494,11 +2409,84 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 		if (rIt == end(requests)) {
 			requests.push_back({ retryOffset });
 		}
-		scheduleRequest(retryOffset);
+
+		// Schedule via throttler - look up process by ID inside lambda
+		_throttler.schedule([=] {
+			const auto it = _fileProcesses.find(randomId);
+			if (it == end(_fileProcesses) || !it->second->active) {
+				return; // Process was removed or deactivated
+			}
+			auto &proc = *it->second;
+
+			const auto requestId = fileRequest(
+				proc.location,
+				retryOffset,
+				chunkSize
+			).done([=](const MTPupload_File &result) {
+				filePartDone(randomId, retryOffset, result);
+			}).fail([=](const MTP::Error &error) {
+				// Handle errors - same as before but look up by ID
+				if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
+					auto &p = *itp->second;
+					for (auto it = p.activeRequestOffsets.begin(); it != p.activeRequestOffsets.end();) {
+						if (it->second == retryOffset) it = p.activeRequestOffsets.erase(it);
+						else ++it;
+					}
+				}
+
+				if (error.type() == u"LOCATION_INVALID"_q
+					|| error.type() == u"VERSION_INVALID"_q
+					|| error.type() == u"LOCATION_NOT_AVAILABLE"_q) {
+					filePartUnavailable(randomId);
+					return true;
+				} else if (error.code() == 400
+					&& error.type().startsWith(u"FILE_REFERENCE_"_q)) {
+					filePartRefreshReference(randomId, retryOffset);
+					return true;
+				}
+
+				if (error.code() == 420 || error.type().startsWith(u"FLOOD_WAIT"_q)) {
+					static const auto FloodWaitRegExp = QRegularExpression("^FLOOD_WAIT_(\\d+)$");
+					const auto match = FloodWaitRegExp.match(error.type());
+					const int seconds = match.hasMatch() ? match.captured(1).toInt() : 2;
+					if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
+						auto &p = *itp->second;
+						if (std::find(p.pendingRetryOffsets.begin(), p.pendingRetryOffsets.end(), retryOffset)
+							== p.pendingRetryOffsets.end()) {
+							p.pendingRetryOffsets.push_back(retryOffset);
+						}
+					}
+					_batchDelayTimer->callOnce(seconds * 1000);
+					return true;
+				}
+
+				if (error.code() >= 500 || error.type() == u"TIMEOUT"_q) {
+					if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
+						auto &p = *itp->second;
+						const int tries = ++p.retryCounts[retryOffset];
+						if (tries <= kMaxChunkRetries) {
+							p.pendingRetryOffsets.push_back(retryOffset);
+							_batchDelayTimer->callOnce(std::min(kRetryBaseDelayMs << (tries - 1), kRetryMaxDelayMs));
+							return true;
+						}
+					}
+					filePartUnavailable(randomId);
+					return true;
+				}
+
+				return false;
+			}).send();
+
+			if (requestId) {
+				proc.activeRequestOffsets.emplace(requestId, retryOffset);
+			}
+		});
+
+		--slotsAvailable;
 	}
 
-	// Then fill remaining slots with fresh offsets.
-	while (totalPending() < requestsCount) {
+	// Then fill remaining slots with fresh offsets
+	while (slotsAvailable > 0) {
 		if (process.size > 0 && process.offset >= process.size) {
 			break;
 		}
@@ -2507,10 +2495,87 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 		process.requests.push_back({ offset });
 		process.offset += chunkSize;
 
-		scheduleRequest(offset);
+		// Schedule via throttler - look up process by ID inside lambda
+		_throttler.schedule([=] {
+			const auto it = _fileProcesses.find(randomId);
+			if (it == end(_fileProcesses) || !it->second->active) {
+				return; // Process was removed or deactivated
+			}
+			auto &proc = *it->second;
+
+			const auto requestId = fileRequest(
+				proc.location,
+				offset,
+				chunkSize
+			).done([=](const MTPupload_File &result) {
+				filePartDone(randomId, offset, result);
+			}).fail([=](const MTP::Error &error) {
+				// Handle errors
+				if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
+					auto &p = *itp->second;
+					for (auto it = p.activeRequestOffsets.begin(); it != p.activeRequestOffsets.end();) {
+						if (it->second == offset) it = p.activeRequestOffsets.erase(it);
+						else ++it;
+					}
+				}
+
+				if (error.type() == u"TAKEOUT_FILE_EMPTY"_q && _otherDataProcess != nullptr) {
+					filePartDone(randomId, 0, MTP_upload_file(
+						MTP_storage_filePartial(), MTP_int(0), MTP_bytes()));
+					return true;
+				} else if (error.type() == u"LOCATION_INVALID"_q
+					|| error.type() == u"VERSION_INVALID"_q
+					|| error.type() == u"LOCATION_NOT_AVAILABLE"_q) {
+					filePartUnavailable(randomId);
+					return true;
+				} else if (error.code() == 400
+					&& error.type().startsWith(u"FILE_REFERENCE_"_q)) {
+					filePartRefreshReference(randomId, offset);
+					return true;
+				}
+
+				if (error.code() == 420 || error.type().startsWith(u"FLOOD_WAIT"_q)) {
+					static const auto FloodWaitRegExp = QRegularExpression("^FLOOD_WAIT_(\\d+)$");
+					const auto match = FloodWaitRegExp.match(error.type());
+					const int seconds = match.hasMatch() ? match.captured(1).toInt() : 2;
+					if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
+						auto &p = *itp->second;
+						if (std::find(p.pendingRetryOffsets.begin(), p.pendingRetryOffsets.end(), offset)
+							== p.pendingRetryOffsets.end()) {
+							p.pendingRetryOffsets.push_back(offset);
+						}
+					}
+					_batchDelayTimer->callOnce(seconds * 1000);
+					return true;
+				}
+
+				if (error.code() >= 500 || error.type() == u"TIMEOUT"_q
+					|| error.type() == u"RPC_CALL_FAIL"_q || error.type() == u"INTERNAL"_q) {
+					if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
+						auto &p = *itp->second;
+						const int tries = ++p.retryCounts[offset];
+						if (tries <= kMaxChunkRetries) {
+							p.pendingRetryOffsets.push_back(offset);
+							_batchDelayTimer->callOnce(std::min(kRetryBaseDelayMs << (tries - 1), kRetryMaxDelayMs));
+							return true;
+						}
+					}
+					filePartUnavailable(randomId);
+					return true;
+				}
+
+				return false;
+			}).send();
+
+			if (requestId) {
+				proc.activeRequestOffsets.emplace(requestId, offset);
+			}
+		});
+
+		--slotsAvailable;
 
 		if (process.size == 0) {
-			break;
+			break; // Unknown size, only request one chunk at a time
 		}
 	}
 
