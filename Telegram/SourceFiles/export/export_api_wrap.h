@@ -11,7 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_peer_id.h"
 
 namespace base {
-class ConcurrentTimer;
+class Timer;
 } // namespace base
 
 namespace Export {
@@ -231,6 +231,7 @@ private:
 	void loadFilePart(FileProcess &process);
 	void finishFile(uint64 randomId, const QString &relativePath);
 	void filePartDone(uint64 randomId, int64 offset, const MTPupload_File &result);
+	void scheduleBatchDelay(crl::time delay);
 	void filePartUnavailable(uint64 randomId);
 	void filePartRefreshReference(uint64 randomId, int64 offset);
 	void filePartExtractReference(uint64 randomId, int64 offset, const MTPmessages_Messages &result);
@@ -271,26 +272,27 @@ private:
 	
 	std::map<uint64, std::unique_ptr<FileProcess>> _fileProcesses;
 	std::deque<uint64> _fileDownloadQueue;
-    class RequestThrottler {
-    	public:
-    		RequestThrottler(Fn<void(FnMut<void()>)> runner);
-    		void schedule(FnMut<void()> task);
-    		~RequestThrottler();
-    
-    	private:
-    		void tryProcessQueue();
-    		void processQueueNow();
-    
-    		Fn<void(FnMut<void()>)> _runner;
-    		std::deque<FnMut<void()>> _taskQueue;
-    		int _tokens = 20; // Start with a full burst capacity.
-    		std::unique_ptr<base::ConcurrentTimer> _tokenRefreshTimer;
-    	};
-    
-    	int _filesDownloading = 0;
-    
-    	RequestThrottler _throttler;
-    	std::unique_ptr<base::ConcurrentTimer> _batchDelayTimer;
+	class RequestThrottler {
+		public:
+			RequestThrottler(Fn<void(FnMut<void()>)> runner);
+			void schedule(FnMut<void()> task);
+			~RequestThrottler();
+	
+		private:
+			void tryProcessQueue();
+			void processQueueNow();
+			void refreshTokens();
+	
+			Fn<void(FnMut<void()>)> _runner;
+			std::deque<FnMut<void()>> _taskQueue;
+			int _tokens = 20; // Start with a full burst capacity.
+			crl::time _lastRefresh = 0;
+			bool _retryScheduled = false;
+		};
+	
+		int _filesDownloading = 0;
+	
+		RequestThrottler _throttler;
 	
 	std::unique_ptr<LeftChannelsProcess> _leftChannelsProcess;
 	std::unique_ptr<DialogsProcess> _dialogsProcess;

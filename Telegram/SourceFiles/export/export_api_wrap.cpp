@@ -16,7 +16,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/bytes.h"
 #include "base/options.h"
 #include "base/random.h"
-#include "base/concurrent_timer.h"
 #include <set>
 #include <deque>
 #include <atomic>
@@ -129,16 +128,7 @@ Settings::Type SettingsFromDialogsType(Data::DialogInfo::Type type) {
 } // namespace
 
 ApiWrap::RequestThrottler::RequestThrottler(Fn<void(FnMut<void()>)> runner)
-: _runner(runner)
-, _tokenRefreshTimer(std::make_unique<base::ConcurrentTimer>(_runner, [this] {
-	// Add tokens back to the bucket, up to the maximum burst capacity.
-	if (_tokens < 20) {
-		_tokens++;
-	}
-	// Process any waiting tasks directly.
-	processQueueNow();
-})) {
-	_tokenRefreshTimer->callEach(kMinRequestIntervalMs);
+: _runner(runner) {
 }
 
 ApiWrap::RequestThrottler::~RequestThrottler() = default;
@@ -156,13 +146,39 @@ void ApiWrap::RequestThrottler::tryProcessQueue() {
 	processQueueNow();
 }
 
+void ApiWrap::RequestThrottler::refreshTokens() {
+	const auto now = crl::now();
+	if (_lastRefresh == 0) {
+		_lastRefresh = now;
+		return;
+	}
+	const auto elapsed = now - _lastRefresh;
+	if (elapsed >= kMinRequestIntervalMs) {
+		const auto add = int(elapsed / kMinRequestIntervalMs);
+		_tokens = std::min(20, _tokens + add);
+		_lastRefresh += add * kMinRequestIntervalMs;
+	}
+}
+
 void ApiWrap::RequestThrottler::processQueueNow() {
+	refreshTokens();
 	// Process as many tasks as we have tokens for - runs synchronously
 	while (!_taskQueue.empty() && _tokens > 0) {
 		--_tokens;
 		auto task = std::move(_taskQueue.front());
 		_taskQueue.pop_front();
 		task();
+	}
+	if (!_taskQueue.empty() && !_retryScheduled) {
+		_retryScheduled = true;
+		crl::on_main([this] {
+			base::call_delayed(kMinRequestIntervalMs, [this] {
+				_runner([this] {
+					_retryScheduled = false;
+					processQueueNow();
+				});
+			});
+		});
 	}
 }
 
@@ -477,10 +493,17 @@ ApiWrap::ApiWrap(base::weak_qptr<MTP::Instance> weak, Fn<void(FnMut<void()>)> ru
 : _mtp(weak, runner)
 , _fileCache(std::make_unique<LoadedFileCache>(kLocationCacheSize))
 , _throttler(runner)
-, _batchDelayTimer(std::make_unique<base::ConcurrentTimer>(runner, [this] {
-	scheduleMoreFiles();
-}))
 {
+}
+
+void ApiWrap::scheduleBatchDelay(crl::time delay) {
+	crl::on_main([=, runner = _throttler._runner] {
+		base::call_delayed(delay, [=] {
+			runner([=] {
+				scheduleMoreFiles();
+			});
+		});
+	});
 }
 
 
@@ -2461,7 +2484,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 							p.pendingRetryOffsets.push_back(retryOffset);
 						}
 					}
-					_batchDelayTimer->callOnce(seconds * 1000);
+					scheduleBatchDelay(seconds * 1000);
 					return true;
 				}
 
@@ -2472,7 +2495,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 						const int tries = ++p.retryCounts[retryOffset];
 						if (tries <= kMaxChunkRetries) {
 							p.pendingRetryOffsets.push_back(retryOffset);
-							_batchDelayTimer->callOnce(std::min(kRetryBaseDelayMs << (tries - 1), kRetryMaxDelayMs));
+							scheduleBatchDelay(std::min(kRetryBaseDelayMs << (tries - 1), kRetryMaxDelayMs));
 							return true;
 						}
 					}
@@ -2560,7 +2583,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 							p.pendingRetryOffsets.push_back(offset);
 						}
 					}
-					_batchDelayTimer->callOnce(seconds * 1000);
+					scheduleBatchDelay(seconds * 1000);
 					return true;
 				}
 
@@ -2571,7 +2594,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 						const int tries = ++p.retryCounts[offset];
 						if (tries <= kMaxChunkRetries) {
 							p.pendingRetryOffsets.push_back(offset);
-							_batchDelayTimer->callOnce(std::min(kRetryBaseDelayMs << (tries - 1), kRetryMaxDelayMs));
+							scheduleBatchDelay(std::min(kRetryBaseDelayMs << (tries - 1), kRetryMaxDelayMs));
 							return true;
 						}
 					}
@@ -2602,7 +2625,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 	}
 
 	if (!process.pendingRetryOffsets.empty()) {
-		_batchDelayTimer->callOnce(100);
+		scheduleBatchDelay(100);
 	}
 }
 
@@ -2711,6 +2734,7 @@ void ApiWrap::filePartDone(
 		// Try to immediately fill it with the next chunk for the same file.
 		// No timers or delays here.
 		loadFilePart(process);
+		_throttler.tryProcessQueue();
 	}
 }
 
