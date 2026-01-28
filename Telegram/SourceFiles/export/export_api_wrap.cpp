@@ -34,10 +34,9 @@ namespace {
 constexpr auto kMaxParallelFiles = 4;
 constexpr auto kMegabyte = 1024 * 1024;
 
-// Rate limiting: Target 20 requests/sec for safety margin (one every 50ms)
-// With 4 parallel files × 2-4 chunks each, this provides good throughput
-// while staying well under Telegram's rate limits to avoid FLOOD_WAIT.
-constexpr auto kMinRequestIntervalMs = 1000 / 20;
+// Rate limiting: Target 15 requests/sec for safety margin (one every 66ms)
+// This provides a more stable flow and avoids triggering 2s FLOOD_WAITs.
+constexpr auto kMinRequestIntervalMs = 1000 / 15;
 
 // Transient retry settings (per-chunk).
 constexpr auto kMaxChunkRetries = 3;
@@ -156,7 +155,7 @@ void ApiWrap::RequestThrottler::refreshTokens() {
 	const auto elapsed = now - _lastRefresh;
 	if (elapsed >= kMinRequestIntervalMs) {
 		const auto add = int(elapsed / kMinRequestIntervalMs);
-		_tokens = std::min(20, _tokens + add);
+		_tokens = std::min(10, _tokens + add); // Burst capacity reduced to 10
 		_lastRefresh += add * kMinRequestIntervalMs;
 	}
 }
@@ -172,8 +171,12 @@ void ApiWrap::RequestThrottler::processQueueNow() {
 	}
 	if (!_taskQueue.empty() && !_retryScheduled) {
 		_retryScheduled = true;
-		crl::on_main([this] {
-			base::call_delayed(kMinRequestIntervalMs, [this] {
+		const auto nextRefresh = _lastRefresh + kMinRequestIntervalMs;
+		const auto now = crl::now();
+		const auto delay = std::max(crl::time(1), nextRefresh - now);
+
+		crl::on_main([this, delay] {
+			base::call_delayed(delay, [this] {
 				_runner([this] {
 					_retryScheduled = false;
 					processQueueNow();

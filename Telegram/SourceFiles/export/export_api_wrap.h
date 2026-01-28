@@ -273,28 +273,29 @@ private:
 	std::map<uint64, std::unique_ptr<FileProcess>> _fileProcesses;
 	std::deque<uint64> _fileDownloadQueue;
 	class RequestThrottler {
-				public:
-					RequestThrottler(Fn<void(FnMut<void()>)> runner);
-					void schedule(FnMut<void()> task);
-					void tryProcessQueue();
-					[[nodiscard]] Fn<void(FnMut<void()>)> runner() const {
-						return _runner;
-					}
-					~RequestThrottler();
-			
-				private:
-					void processQueueNow();
-					void refreshTokens();	
-			Fn<void(FnMut<void()>)> _runner;
-			std::deque<FnMut<void()>> _taskQueue;
-			int _tokens = 20; // Start with a full burst capacity.
-			crl::time _lastRefresh = 0;
-			bool _retryScheduled = false;
-		};
-	
-		int _filesDownloading = 0;
-	
-		RequestThrottler _throttler;
+	public:
+		RequestThrottler(Fn<void(FnMut<void()>)> runner);
+		void schedule(FnMut<void()> task);
+		void tryProcessQueue();
+		[[nodiscard]] Fn<void(FnMut<void()>)> runner() const {
+			return _runner;
+		}
+		~RequestThrottler();
+
+	private:
+		void processQueueNow();
+		void refreshTokens();
+
+		Fn<void(FnMut<void()>)> _runner;
+		std::deque<FnMut<void()>> _taskQueue;
+		int _tokens = 10; // Start with a smaller burst capacity.
+		crl::time _lastRefresh = 0;
+		bool _retryScheduled = false;
+	};
+
+	int _filesDownloading = 0;
+
+	RequestThrottler _throttler;
 	
 	std::unique_ptr<LeftChannelsProcess> _leftChannelsProcess;
 	std::unique_ptr<DialogsProcess> _dialogsProcess;
