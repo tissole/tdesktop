@@ -288,7 +288,7 @@ private:
 
 		Fn<void(FnMut<void()>)> _runner;
 		std::deque<FnMut<void()>> _taskQueue;
-		int _tokens = 15; // Version 2: Burst capacity 15.
+		int _tokens = 20; // Version 3: Burst capacity 20.
 		crl::time _lastRefresh = 0;
 		bool _retryScheduled = false;
 	};
