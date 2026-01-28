@@ -32,10 +32,19 @@ QString NormalizePath(const Settings &settings) {
 		return result;
 	}
 	const auto date = QDate::currentDate();
-	const auto base = QString(settings.onlySinglePeer()
-		? "ChatExport_%1"
-		: "DataExport_%1"
-	).arg(date.toString(Qt::ISODate));
+	const auto clean = [](QString value) {
+		const auto invalid = { '/', '\\', ':', '*', '?', '"', '<', '>', '|' };
+		for (const auto c : invalid) {
+			value.replace(c, '_');
+		}
+		return value;
+	};
+	const auto base = (settings.onlySinglePeer() && !settings.singlePeerName.isEmpty())
+		? QString("ChatExport_%1(%2, %3)").arg(date.toString(Qt::ISODate)).arg(settings.singlePeerId).arg(clean(settings.singlePeerName))
+		: QString(settings.onlySinglePeer()
+			? "ChatExport_%1"
+			: "DataExport_%1"
+		).arg(date.toString(Qt::ISODate));
 	const auto add = [&](int i) {
 		return base + (i ? " (" + QString::number(i) + ')' : QString());
 	};

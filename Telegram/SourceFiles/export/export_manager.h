@@ -35,7 +35,9 @@ public:
 	void start(not_null<PeerData*> peer);
 	void start(
 		not_null<Main::Session*> session,
-		const MTPInputPeer &singlePeer = MTP_inputPeerEmpty());
+		const MTPInputPeer &singlePeer = MTP_inputPeerEmpty(),
+		const QString &name = QString(),
+		int64 id = 0);
 
 	[[nodiscard]] rpl::producer<View::PanelController*> currentView() const;
 	[[nodiscard]] bool inProgress() const;

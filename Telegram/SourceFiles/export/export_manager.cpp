@@ -22,19 +22,31 @@ Manager::Manager() = default;
 Manager::~Manager() = default;
 
 void Manager::start(not_null<PeerData*> peer) {
-	start(&peer->session(), peer->input);
+	auto persistentId = int64(0);
+	if (const auto user = peer->asUser()) {
+		persistentId = int64(user->id.to<UserId>().bare);
+	} else if (const auto chat = peer->asChat()) {
+		persistentId = -int64(chat->id.to<ChatId>().bare);
+	} else if (const auto channel = peer->asChannel()) {
+		persistentId = -1000000000000LL - int64(channel->id.to<ChannelId>().bare);
+	}
+	start(&peer->session(), peer->input, peer->name(), persistentId);
 }
 
 void Manager::start(
 		not_null<Main::Session*> session,
-		const MTPInputPeer &singlePeer) {
+		const MTPInputPeer &singlePeer,
+		const QString &name,
+		int64 id) {
 	if (_panel) {
 		_panel->activatePanel();
 		return;
 	}
 	_controller = std::make_unique<Controller>(
 		&session->mtp(),
-		singlePeer);
+		singlePeer,
+		name,
+		id);
 	_panel = std::make_unique<View::PanelController>(
 		session,
 		_controller.get());

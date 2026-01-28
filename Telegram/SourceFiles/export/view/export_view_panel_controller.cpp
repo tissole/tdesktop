@@ -388,6 +388,8 @@ rpl::producer<> PanelController::stopRequests() const {
 
 void PanelController::fillParams(const PasswordCheckState &state) {
 	_settings->singlePeer = state.singlePeer;
+	_settings->singlePeerName = state.singlePeerName;
+	_settings->singlePeerId = state.singlePeerId;
 }
 
 void PanelController::updateState(State &&state) {

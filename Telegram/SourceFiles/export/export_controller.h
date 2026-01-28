@@ -47,6 +47,8 @@ struct PasswordCheckState {
 	bool hasPassword = false;
 	bool checked = false;
 	MTPInputPeer singlePeer = MTP_inputPeerEmpty();
+	QString singlePeerName;
+	int64 singlePeerId = 0;
 };
 
 struct ProcessingState {
@@ -132,7 +134,9 @@ class Controller {
 public:
 	Controller(
 		QPointer<MTP::Instance> mtproto,
-		const MTPInputPeer &peer);
+		const MTPInputPeer &peer,
+		const QString &name = QString(),
+		int64 id = 0);
 
 	rpl::producer<State> state() const;
 
