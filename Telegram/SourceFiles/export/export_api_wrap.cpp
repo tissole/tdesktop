@@ -261,6 +261,7 @@ struct ApiWrap::FileProcess {
 	};
 	std::deque<Request> requests;
 	std::map<mtpRequestId, int64> activeRequestOffsets;
+	std::set<int64> scheduledOffsets;                      // offsets currently scheduled or in-flight
     std::deque<int64> pendingRetryOffsets;                 // offsets that need retry
     std::unordered_map<int64, int> retryCounts;            // per-offset retry counter
 	bool active = false;
@@ -2323,10 +2324,6 @@ std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 }
 
 void ApiWrap::scheduleMoreFiles() {
-	if (_batchDelayTimer->isActive()) {
-		return;
-	}
-
 	while (!_fileDownloadQueue.empty()) {
 		if (_filesDownloading >= kMaxParallelFiles) {
 			break;
@@ -2345,6 +2342,13 @@ void ApiWrap::scheduleMoreFiles() {
 		++_filesDownloading;
 
 		loadFilePart(process);
+	}
+
+	for (auto &pair : _fileProcesses) {
+		auto &process = *pair.second;
+		if (process.active) {
+			loadFilePart(process);
+		}
 	}
 }
 
@@ -2382,26 +2386,22 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 	const auto requestsCount = GetConcurrentChunksForFile(process.size);
 	const auto chunkSize = GetChunkSizeForFile(process.size);
 
-	// Count how many requests are already in flight for this file
-	const auto currentActive = int(process.activeRequestOffsets.size());
-	if (currentActive >= requestsCount) {
-		// Already at max concurrent chunks for this file
+	// Count how many requests are already in flight or scheduled in the throttler
+	const auto currentScheduled = int(process.scheduledOffsets.size());
+	if (currentScheduled >= requestsCount) {
 		return;
 	}
 
 	// How many more chunks can we schedule?
-	int slotsAvailable = requestsCount - currentActive;
+	int slotsAvailable = requestsCount - currentScheduled;
 
 	// First, retry failed offsets (if any)
 	while (slotsAvailable > 0 && !process.pendingRetryOffsets.empty()) {
 		const auto retryOffset = process.pendingRetryOffsets.front();
 		process.pendingRetryOffsets.pop_front();
 
-		const auto alreadyActive = std::any_of(
-			process.activeRequestOffsets.begin(),
-			process.activeRequestOffsets.end(),
-			[&](const auto &p) { return p.second == retryOffset; });
-		if (alreadyActive) {
+		// If this offset is already scheduled, skip it
+		if (process.scheduledOffsets.contains(retryOffset)) {
 			continue;
 		}
 
@@ -2413,6 +2413,8 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 		if (rIt == end(requests)) {
 			requests.push_back({ retryOffset });
 		}
+
+		process.scheduledOffsets.insert(retryOffset);
 
 		// Schedule via throttler - look up process by ID inside lambda
 		_throttler.schedule([=] {
@@ -2432,6 +2434,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 				// Handle errors - same as before but look up by ID
 				if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
 					auto &p = *itp->second;
+					p.scheduledOffsets.erase(retryOffset);
 					for (auto it = p.activeRequestOffsets.begin(); it != p.activeRequestOffsets.end();) {
 						if (it->second == retryOffset) it = p.activeRequestOffsets.erase(it);
 						else ++it;
@@ -2464,7 +2467,8 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 					return true;
 				}
 
-				if (error.code() >= 500 || error.type() == u"TIMEOUT"_q) {
+				if (error.code() >= 500 || error.type() == u"TIMEOUT"_q
+					|| error.type() == u"RPC_CALL_FAIL"_q || error.type() == u"INTERNAL"_q) {
 					if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
 						auto &p = *itp->second;
 						const int tries = ++p.retryCounts[retryOffset];
@@ -2483,6 +2487,13 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 
 			if (requestId) {
 				proc.activeRequestOffsets.emplace(requestId, retryOffset);
+			} else {
+				// Failed to send request immediately
+				if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
+					auto &p = *itp->second;
+					p.scheduledOffsets.erase(retryOffset);
+					p.pendingRetryOffsets.push_back(retryOffset);
+				}
 			}
 		});
 
@@ -2498,6 +2509,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 		const auto offset = process.offset;
 		process.requests.push_back({ offset });
 		process.offset += chunkSize;
+		process.scheduledOffsets.insert(offset);
 
 		// Schedule via throttler - look up process by ID inside lambda
 		_throttler.schedule([=] {
@@ -2517,6 +2529,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 				// Handle errors
 				if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
 					auto &p = *itp->second;
+					p.scheduledOffsets.erase(offset);
 					for (auto it = p.activeRequestOffsets.begin(); it != p.activeRequestOffsets.end();) {
 						if (it->second == offset) it = p.activeRequestOffsets.erase(it);
 						else ++it;
@@ -2573,6 +2586,13 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 
 			if (requestId) {
 				proc.activeRequestOffsets.emplace(requestId, offset);
+			} else {
+				// Failed to send request immediately
+				if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
+					auto &p = *itp->second;
+					p.scheduledOffsets.erase(offset);
+					p.pendingRetryOffsets.push_back(offset);
+				}
 			}
 		});
 
@@ -2599,6 +2619,7 @@ void ApiWrap::filePartDone(
 	auto &process = *it->second;
 
 	auto removed = false;
+	process.scheduledOffsets.erase(offset);
 	for (auto i = begin(process.activeRequestOffsets); i != end(process.activeRequestOffsets); ++i) {
 		if (i->second == offset) {
 			process.activeRequestOffsets.erase(i);
@@ -2630,7 +2651,8 @@ void ApiWrap::filePartDone(
 
 	if (receivedEmpty) {
 		if (process.size > 0) {
-			error("Empty bytes received in file part.");
+			LOG(("Export Error: Empty bytes received in file part for offset %1 (size %2)").arg(offset).arg(process.size));
+			filePartUnavailable(randomId);
 			return;
 		}
 	} else {
@@ -2669,7 +2691,7 @@ void ApiWrap::filePartDone(
 
 	const auto allPartsRequested = (process.size > 0)
 		&& (process.offset >= process.size);
-	if (process.activeRequestOffsets.empty() && (allPartsRequested || receivedEmpty)) {
+	if (process.activeRequestOffsets.empty() && process.pendingRetryOffsets.empty() && (allPartsRequested || receivedEmpty)) {
 		// Mark message as fully processed if all its parts are done.
 		if (_chatProcess && _chatProcess->slice) {
 			const auto mIt = _chatProcess->fileToMessageIndex.find(randomId);
@@ -2708,6 +2730,7 @@ void ApiWrap::filePartRefreshReference(uint64 randomId, int64 offset) {
 
 	for (const auto &[requestId, reqOffset] : process.activeRequestOffsets) {
 		_mtp.request(requestId).cancel();
+		process.scheduledOffsets.erase(reqOffset);
 	}
 	process.activeRequestOffsets.clear();
 
