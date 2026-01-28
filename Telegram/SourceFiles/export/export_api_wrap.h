@@ -11,7 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_peer_id.h"
 
 namespace base {
-class Timer;
+class ConcurrentTimer;
 } // namespace base
 
 namespace Export {
@@ -284,13 +284,13 @@ private:
     		Fn<void(FnMut<void()>)> _runner;
     		std::deque<FnMut<void()>> _taskQueue;
     		int _tokens = 20; // Start with a full burst capacity.
-    		std::unique_ptr<base::Timer> _tokenRefreshTimer;
+    		std::unique_ptr<base::ConcurrentTimer> _tokenRefreshTimer;
     	};
     
     	int _filesDownloading = 0;
     
     	RequestThrottler _throttler;
-    	std::unique_ptr<base::Timer> _batchDelayTimer;
+    	std::unique_ptr<base::ConcurrentTimer> _batchDelayTimer;
 	
 	std::unique_ptr<LeftChannelsProcess> _leftChannelsProcess;
 	std::unique_ptr<DialogsProcess> _dialogsProcess;

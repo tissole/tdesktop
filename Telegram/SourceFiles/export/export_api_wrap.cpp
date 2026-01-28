@@ -16,7 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/bytes.h"
 #include "base/options.h"
 #include "base/random.h"
-#include "base/timer.h"
+#include "base/concurrent_timer.h"
 #include <set>
 #include <deque>
 #include <atomic>
@@ -129,16 +129,15 @@ Settings::Type SettingsFromDialogsType(Data::DialogInfo::Type type) {
 } // namespace
 
 ApiWrap::RequestThrottler::RequestThrottler(Fn<void(FnMut<void()>)> runner)
-: _runner(std::move(runner))
-, _tokenRefreshTimer(std::make_unique<base::Timer>()) {
-	_tokenRefreshTimer->setCallback([this] {
-		// Add tokens back to the bucket, up to the maximum burst capacity.
-		if (_tokens < 20) {
-			_tokens++;
-		}
-		// Process any waiting tasks directly.
-		processQueueNow();
-	});
+: _runner(runner)
+, _tokenRefreshTimer(std::make_unique<base::ConcurrentTimer>(_runner, [this] {
+	// Add tokens back to the bucket, up to the maximum burst capacity.
+	if (_tokens < 20) {
+		_tokens++;
+	}
+	// Process any waiting tasks directly.
+	processQueueNow();
+})) {
 	_tokenRefreshTimer->callEach(kMinRequestIntervalMs);
 }
 
@@ -477,12 +476,11 @@ auto ApiWrap::fileRequest(const Data::FileLocation &location, int64 offset, int 
 ApiWrap::ApiWrap(base::weak_qptr<MTP::Instance> weak, Fn<void(FnMut<void()>)> runner)
 : _mtp(weak, runner)
 , _fileCache(std::make_unique<LoadedFileCache>(kLocationCacheSize))
-, _throttler(std::move(runner))
-, _batchDelayTimer(std::make_unique<base::Timer>())
+, _throttler(runner)
+, _batchDelayTimer(std::make_unique<base::ConcurrentTimer>(runner, [this] {
+	scheduleMoreFiles();
+}))
 {
-	_batchDelayTimer->setCallback([this] {
-		scheduleMoreFiles();
-	});
 }
 
 
@@ -2879,6 +2877,7 @@ void ApiWrap::filePartExtractReference(
 }
 
 void ApiWrap::error(const MTP::Error &error) {
+	LOG(("Export Error: API Error %1: %2 (%3)").arg(error.code()).arg(error.type()).arg(error.description()));
 	_errors.fire_copy(error);
 }
 
