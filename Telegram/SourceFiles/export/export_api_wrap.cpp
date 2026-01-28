@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/bytes.h"
 #include "base/options.h"
 #include "base/random.h"
+#include "base/call_delayed.h"
 #include <set>
 #include <deque>
 #include <atomic>
@@ -497,7 +498,7 @@ ApiWrap::ApiWrap(base::weak_qptr<MTP::Instance> weak, Fn<void(FnMut<void()>)> ru
 }
 
 void ApiWrap::scheduleBatchDelay(crl::time delay) {
-	crl::on_main([=, runner = _throttler._runner] {
+	crl::on_main([=, runner = _throttler.runner()] {
 		base::call_delayed(delay, [=] {
 			runner([=] {
 				scheduleMoreFiles();
