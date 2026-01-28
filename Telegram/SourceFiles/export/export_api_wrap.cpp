@@ -132,12 +132,12 @@ ApiWrap::RequestThrottler::RequestThrottler(Fn<void(FnMut<void()>)> runner)
 : _runner(std::move(runner))
 , _tokenRefreshTimer(std::make_unique<base::Timer>()) {
 	_tokenRefreshTimer->setCallback([this] {
-		// Add one token back to the bucket, up to the maximum burst capacity.
+		// Add tokens back to the bucket, up to the maximum burst capacity.
 		if (_tokens < 20) {
 			_tokens++;
 		}
-		// After adding a token, try to process any waiting tasks.
-		tryProcessQueue();
+		// Process any waiting tasks directly.
+		processQueueNow();
 	});
 	_tokenRefreshTimer->callEach(kMinRequestIntervalMs);
 }
@@ -147,20 +147,24 @@ ApiWrap::RequestThrottler::~RequestThrottler() = default;
 void ApiWrap::RequestThrottler::schedule(FnMut<void()> task) {
 	_runner([this, task = std::move(task)]() mutable {
 		_taskQueue.push_back(std::move(task));
-		tryProcessQueue();
+		// Try to process immediately if we have tokens
+		processQueueNow();
 	});
 }
 
 void ApiWrap::RequestThrottler::tryProcessQueue() {
-	_runner([this] {
-		// Process as many tasks as we have tokens for.
-		while (!_taskQueue.empty() && _tokens > 0) {
-			--_tokens;
-			auto task = std::move(_taskQueue.front());
-			_taskQueue.pop_front();
-			task();
-		}
-	});
+	// Just delegate to processQueueNow - this is for external calls
+	processQueueNow();
+}
+
+void ApiWrap::RequestThrottler::processQueueNow() {
+	// Process as many tasks as we have tokens for - runs synchronously
+	while (!_taskQueue.empty() && _tokens > 0) {
+		--_tokens;
+		auto task = std::move(_taskQueue.front());
+		_taskQueue.pop_front();
+		task();
+	}
 }
 
 class ApiWrap::LoadedFileCache {

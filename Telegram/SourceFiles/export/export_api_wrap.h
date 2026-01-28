@@ -279,6 +279,7 @@ private:
     
     	private:
     		void tryProcessQueue();
+    		void processQueueNow();
     
     		Fn<void(FnMut<void()>)> _runner;
     		std::deque<FnMut<void()>> _taskQueue;
