@@ -31,12 +31,12 @@ namespace {
 
 
 
-constexpr auto kMaxParallelFiles = 5;
+constexpr auto kMaxParallelFiles = 6;
 constexpr auto kMegabyte = 1024 * 1024;
 
-// Rate limiting: Target 20 requests/sec for safety margin (one every 50ms)
-// Version 1: Balanced increase for higher throughput.
-constexpr auto kMinRequestIntervalMs = 1000 / 20;
+// Rate limiting: Target 30 requests/sec for safety margin (one every 33ms)
+// Version 2: More aggressive throughput.
+constexpr auto kMinRequestIntervalMs = 1000 / 30;
 
 // Transient retry settings (per-chunk).
 constexpr auto kMaxChunkRetries = 3;
@@ -155,7 +155,7 @@ void ApiWrap::RequestThrottler::refreshTokens() {
 	const auto elapsed = now - _lastRefresh;
 	if (elapsed >= kMinRequestIntervalMs) {
 		const auto add = int(elapsed / kMinRequestIntervalMs);
-		_tokens = std::min(12, _tokens + add); // Version 1: Burst capacity 12
+		_tokens = std::min(15, _tokens + add); // Version 2: Burst capacity 15
 		_lastRefresh += add * kMinRequestIntervalMs;
 	}
 }
