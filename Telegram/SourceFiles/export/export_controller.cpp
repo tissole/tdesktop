@@ -733,7 +733,7 @@ Controller::Controller(
 	const MTPInputPeer &peer,
 	const QString &name,
 	int64 id)
-: _wrapped(std::move(mtproto), peer, name, id) {
+: _wrapped(std::move(mtproto), peer, std::move(name), std::move(id)) {
 }
 
 rpl::producer<State> Controller::state() const {
