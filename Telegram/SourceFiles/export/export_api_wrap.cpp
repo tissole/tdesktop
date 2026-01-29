@@ -161,7 +161,7 @@ void ApiWrap::RequestThrottler::refreshTokens() {
 	const auto elapsed = now - _lastRefresh;
 	if (elapsed >= kMinRequestIntervalMs) {
 		const auto add = int(elapsed / kMinRequestIntervalMs);
-		_tokens = std::min(15, _tokens + add); // Version 4: Burst capacity 10
+		_tokens = std::min(20, _tokens + add); // Version 4: Burst capacity 10
 		_lastRefresh += add * kMinRequestIntervalMs;
 	}
 }
