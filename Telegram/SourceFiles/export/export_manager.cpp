@@ -9,6 +9,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "export/export_controller.h"
 #include "export/view/export_view_panel_controller.h"
+#include "data/data_user.h"
+#include "data/data_chat.h"
+#include "data/data_channel.h"
 #include "data/data_peer.h"
 #include "main/main_session.h"
 #include "main/main_account.h"
