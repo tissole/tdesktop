@@ -274,7 +274,9 @@ private:
 	std::deque<uint64> _fileDownloadQueue;
 	class RequestThrottler {
 	public:
-		RequestThrottler(Fn<void(FnMut<void()>)> runner);
+		RequestThrottler(
+			Fn<void(FnMut<void()>)> runner,
+			std::shared_ptr<bool> guard);
 		void schedule(FnMut<void()> task);
 		void tryProcessQueue();
 		[[nodiscard]] Fn<void(FnMut<void()>)> runner() const {
@@ -287,14 +289,16 @@ private:
 		void refreshTokens();
 
 		Fn<void(FnMut<void()>)> _runner;
+		std::shared_ptr<bool> _guard;
 		std::deque<FnMut<void()>> _taskQueue;
-		int _tokens = 10; // Version 4: Burst capacity 10.
+		int _tokens = 10; // Version 3: Burst capacity 10.
 		crl::time _lastRefresh = 0;
 		bool _retryScheduled = false;
 	};
 
 	int _filesDownloading = 0;
 
+	std::shared_ptr<bool> _lifetimeGuard;
 	RequestThrottler _throttler;
 	
 	std::unique_ptr<LeftChannelsProcess> _leftChannelsProcess;

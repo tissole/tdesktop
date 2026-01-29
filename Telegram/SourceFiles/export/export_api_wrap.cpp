@@ -31,12 +31,12 @@ namespace {
 
 
 
-constexpr auto kMaxParallelFiles = 5;
+constexpr auto kMaxParallelFiles = 4;
 constexpr auto kMegabyte = 1024 * 1024;
 
 // Rate limiting: Target 40 requests/sec for safety margin (one every 25ms)
 // Version 3: Maximal throughput.
-constexpr auto kMinRequestIntervalMs = 1000 / 18;
+constexpr auto kMinRequestIntervalMs = 1000 / 20;
 
 // Transient retry settings (per-chunk).
 constexpr auto kMaxChunkRetries = 3;
@@ -47,14 +47,14 @@ int GetChunkSizeForFile(int64 fileSize) {
 	if (fileSize > 300 * kMegabyte) {
 		return 1 * kMegabyte; // 1MB for large files
 	} else if (fileSize > 10 * kMegabyte) {
-		return 512 * 1024; // 512KB for medium files
+		return 1 * kMegabyte; // 512KB for medium files
 	}
-	return 256 * 1024; // 256KB for small files
+	return 1 * kMegabyte; // 256KB for small files
 }
 
 int GetConcurrentChunksForFile(int64 fileSize) {
 	if (fileSize > 300 * kMegabyte) {
-		return 4; // More concurrency for large files
+		return 8; // More concurrency for large files
 	}
 	return 4; // Less concurrency for smaller files
 }
@@ -127,14 +127,20 @@ Settings::Type SettingsFromDialogsType(Data::DialogInfo::Type type) {
 
 } // namespace
 
-ApiWrap::RequestThrottler::RequestThrottler(Fn<void(FnMut<void()>)> runner)
-: _runner(runner) {
+ApiWrap::RequestThrottler::RequestThrottler(
+	Fn<void(FnMut<void()>)> runner,
+	std::shared_ptr<bool> guard)
+: _runner(runner)
+, _guard(std::move(guard)) {
 }
 
 ApiWrap::RequestThrottler::~RequestThrottler() = default;
 
 void ApiWrap::RequestThrottler::schedule(FnMut<void()> task) {
-	_runner([this, task = std::move(task)]() mutable {
+	_runner([this, guard = _guard, task = std::move(task)]() mutable {
+		if (!*guard) {
+			return;
+		}
 		_taskQueue.push_back(std::move(task));
 		// Try to process immediately if we have tokens
 		processQueueNow();
@@ -175,9 +181,12 @@ void ApiWrap::RequestThrottler::processQueueNow() {
 		const auto now = crl::now();
 		const auto delay = std::max(crl::time(1), nextRefresh - now);
 
-		crl::on_main([this, delay] {
-			base::call_delayed(delay, [this] {
-				_runner([this] {
+		crl::on_main([this, guard = _guard, delay] {
+			base::call_delayed(delay, [this, guard] {
+				_runner([this, guard] {
+					if (!*guard) {
+						return;
+					}
 					_retryScheduled = false;
 					processQueueNow();
 				});
@@ -496,15 +505,18 @@ auto ApiWrap::fileRequest(const Data::FileLocation &location, int64 offset, int 
 ApiWrap::ApiWrap(base::weak_qptr<MTP::Instance> weak, Fn<void(FnMut<void()>)> runner)
 : _mtp(weak, runner)
 , _fileCache(std::make_unique<LoadedFileCache>(kLocationCacheSize))
-, _throttler(runner)
+, _lifetimeGuard(std::make_shared<bool>(true))
+, _throttler(runner, _lifetimeGuard)
 {
 }
 
 void ApiWrap::scheduleBatchDelay(crl::time delay) {
-	crl::on_main([=, runner = _throttler.runner()] {
+	crl::on_main([=, guard = _lifetimeGuard, runner = _throttler.runner()] {
 		base::call_delayed(delay, [=] {
 			runner([=] {
-				scheduleMoreFiles();
+				if (*guard) {
+					scheduleMoreFiles();
+				}
 			});
 		});
 	});
@@ -2918,6 +2930,10 @@ void ApiWrap::ioError(const Output::Result &result) {
 	_ioErrors.fire_copy(result);
 }
 
-ApiWrap::~ApiWrap() = default;
+ApiWrap::~ApiWrap() {
+	if (_lifetimeGuard) {
+		*_lifetimeGuard = false;
+	}
+}
 
 } // namespace Export
