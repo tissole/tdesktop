@@ -31,12 +31,12 @@ namespace {
 
 
 
-constexpr auto kMaxParallelFiles = 8;
+constexpr auto kMaxParallelFiles = 4;
 constexpr auto kMegabyte = 1024 * 1024;
 
 // Rate limiting: Target 40 requests/sec for safety margin (one every 25ms)
 // Version 3: Maximal throughput.
-constexpr auto kMinRequestIntervalMs = 1000 / 40;
+constexpr auto kMinRequestIntervalMs = 1000 / 20;
 
 // Transient retry settings (per-chunk).
 constexpr auto kMaxChunkRetries = 3;
@@ -44,7 +44,7 @@ constexpr auto kRetryBaseDelayMs = 200;   // 200, 400, 800 ms
 constexpr auto kRetryMaxDelayMs = 2000;   // clamp upper bound
 
 int GetChunkSizeForFile(int64 fileSize) {
-	if (fileSize > 100 * kMegabyte) {
+	if (fileSize > 300 * kMegabyte) {
 		return 1 * kMegabyte; // 1MB for large files
 	} else if (fileSize > 10 * kMegabyte) {
 		return 512 * 1024; // 512KB for medium files
@@ -53,10 +53,10 @@ int GetChunkSizeForFile(int64 fileSize) {
 }
 
 int GetConcurrentChunksForFile(int64 fileSize) {
-	if (fileSize > 50 * kMegabyte) {
+	if (fileSize > 300 * kMegabyte) {
 		return 4; // More concurrency for large files
 	}
-	return 2; // Less concurrency for smaller files
+	return 4; // Less concurrency for smaller files
 }
 
 
@@ -155,7 +155,7 @@ void ApiWrap::RequestThrottler::refreshTokens() {
 	const auto elapsed = now - _lastRefresh;
 	if (elapsed >= kMinRequestIntervalMs) {
 		const auto add = int(elapsed / kMinRequestIntervalMs);
-		_tokens = std::min(20, _tokens + add); // Version 3: Burst capacity 20
+		_tokens = std::min(10, _tokens + add); // Version 4: Burst capacity 10
 		_lastRefresh += add * kMinRequestIntervalMs;
 	}
 }
