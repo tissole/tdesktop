@@ -2529,10 +2529,10 @@ bool SingleMessageAfter(
 bool SkipMessageByDate(const Message &message, const Settings &settings) {
 	// Handle ID range filtering
 	if (settings.useIdRange) {
-		const auto goodFromId = (settings.singlePeerFromId <= 0) 
-			|| (settings.singlePeerFromId <= message.id);
-		const auto goodTillId = (settings.singlePeerTillId <= 0) 
-			|| (message.id <= settings.singlePeerTillId);
+		const auto goodFromId = (settings.singlePeerFromId <= 0)
+			|| (int64(settings.singlePeerFromId) <= int64(message.id));
+		const auto goodTillId = (settings.singlePeerTillId <= 0)
+			|| (int64(message.id) <= int64(settings.singlePeerTillId));
 		return !goodFromId || !goodTillId;
 	}
 	
