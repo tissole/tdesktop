@@ -49,9 +49,9 @@ int GetChunkSizeForFile(int64 fileSize) {
 
 int GetConcurrentChunksForFile(int64 fileSize) {
 	if (fileSize > 300 * kMegabyte) {
-		return 5; // More concurrency for large files
+		return 6; // More concurrency for large files
 	}
-	return 5; // Less concurrency for smaller files
+	return 6; // Less concurrency for smaller files
 }
 
 
