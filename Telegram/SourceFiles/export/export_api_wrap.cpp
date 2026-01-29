@@ -31,12 +31,12 @@ namespace {
 
 
 
-constexpr auto kMaxParallelFiles = 3;
+constexpr auto kMaxParallelFiles = 4;
 constexpr auto kMegabyte = 1024 * 1024;
 
 // Rate limiting: Target 20 requests/sec for safety margin (one every 50ms)
 // Version 1: Balanced increase for higher throughput.
-constexpr auto kMinRequestIntervalMs = 1000 / 22;
+constexpr auto kMinRequestIntervalMs = 1000 / 16;
 
 // Transient retry settings (per-chunk).
 constexpr auto kMaxChunkRetries = 3;
@@ -49,9 +49,9 @@ int GetChunkSizeForFile(int64 fileSize) {
 
 int GetConcurrentChunksForFile(int64 fileSize) {
 	if (fileSize > 300 * kMegabyte) {
-		return 3; // More concurrency for large files
+		return 4; // More concurrency for large files
 	}
-	return 3; // Less concurrency for smaller files
+	return 4; // Less concurrency for smaller files
 }
 
 
@@ -1320,7 +1320,7 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 			error("Unexpected messagesNotModified received.");
 			return;
 		}
-		const auto skipSplit = !_settings->useIdRange && !Data::SingleMessageAfter(
+		const auto skipSplit = !Data::SingleMessageAfter(
 			result,
 			_settings->singlePeerFrom);
 		if (skipSplit) {
@@ -1336,7 +1336,7 @@ void ApiWrap::checkFirstMessageDate(int localSplitIndex, int count) {
 	Expects(_chatProcess != nullptr);
 	Expects(localSplitIndex < _chatProcess->info.splits.size());
 
-	if (_settings->useIdRange || _settings->singlePeerTill <= 0) {
+	if (_settings->singlePeerTill <= 0) {
 		messagesCountLoaded(localSplitIndex, count);
 		return;
 	}
@@ -1769,8 +1769,8 @@ void ApiWrap::requestChatMessages(
 		? splitIndex
 		: (splitsCount + splitIndex);
 
-	const auto minId = _settings->useIdRange ? std::max(0, _chatProcess->fromId - 1) : 0;
-	const auto maxId = _settings->useIdRange ? (_chatProcess->tillId + 1) : 0;
+	const auto minId = _settings->useIdRange ? _chatProcess->fromId : 0;
+	const auto maxId = _settings->useIdRange ? _chatProcess->tillId : 0;
 
 	if (_chatProcess->info.onlyMyMessages) {
 		splitRequest(realSplitIndex, MTPmessages_Search(
