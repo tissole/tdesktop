@@ -31,12 +31,12 @@ namespace {
 
 
 
-constexpr auto kMaxParallelFiles = 4;
+constexpr auto kMaxParallelFiles = 5;
 constexpr auto kMegabyte = 1024 * 1024;
 
 // Rate limiting: Target 40 requests/sec for safety margin (one every 25ms)
 // Version 3: Maximal throughput.
-constexpr auto kMinRequestIntervalMs = 1000 / 19;
+constexpr auto kMinRequestIntervalMs = 1000 / 18;
 
 // Transient retry settings (per-chunk).
 constexpr auto kMaxChunkRetries = 3;
