@@ -31,7 +31,7 @@ namespace {
 
 
 
-constexpr auto kMaxParallelFiles = 2;
+constexpr auto kMaxParallelFiles = 4;
 constexpr auto kMegabyte = 1024 * 1024;
 
 // Rate limiting: Target 20 requests/sec for safety margin (one every 50ms)
@@ -51,7 +51,7 @@ int GetConcurrentChunksForFile(int64 fileSize) {
 	if (fileSize > 300 * kMegabyte) {
 		return 4; // More concurrency for large files
 	}
-	return 4; // Less concurrency for smaller files
+	return 2; // Less concurrency for smaller files
 }
 
 
