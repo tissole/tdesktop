@@ -31,7 +31,7 @@ namespace {
 
 
 
-constexpr auto kMaxParallelFiles = 8;
+constexpr auto kMaxParallelFiles = 6;
 constexpr auto kMegabyte = 1024 * 1024;
 
 // Rate limiting: Target 20 requests/sec for safety margin (one every 50ms)
