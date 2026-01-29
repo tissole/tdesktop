@@ -31,12 +31,12 @@ namespace {
 
 
 
-constexpr auto kMaxParallelFiles = 4;
+constexpr auto kMaxParallelFiles = 5;
 constexpr auto kMegabyte = 1024 * 1024;
 
-// Rate limiting: Target 40 requests/sec for safety margin (one every 25ms)
-// Version 3: Maximal throughput.
-constexpr auto kMinRequestIntervalMs = 1000 / 18;
+// Rate limiting: Target 20 requests/sec for safety margin (one every 50ms)
+// Version 1: Balanced increase for higher throughput.
+constexpr auto kMinRequestIntervalMs = 1000 / 20;
 
 // Transient retry settings (per-chunk).
 constexpr auto kMaxChunkRetries = 3;
@@ -44,12 +44,7 @@ constexpr auto kRetryBaseDelayMs = 200;   // 200, 400, 800 ms
 constexpr auto kRetryMaxDelayMs = 2000;   // clamp upper bound
 
 int GetChunkSizeForFile(int64 fileSize) {
-	if (fileSize > 300 * kMegabyte) {
-		return 1 * kMegabyte // 1MB for large files
-	} else if (fileSize > 10 * kMegabyte) {
-		return 1 * kMegabyte// 512KB for medium files
-	}
-	return 1 * kMegabyte // 256KB for small files
+	return 1 * kMegabyte;
 }
 
 int GetConcurrentChunksForFile(int64 fileSize) {
@@ -161,7 +156,7 @@ void ApiWrap::RequestThrottler::refreshTokens() {
 	const auto elapsed = now - _lastRefresh;
 	if (elapsed >= kMinRequestIntervalMs) {
 		const auto add = int(elapsed / kMinRequestIntervalMs);
-		_tokens = std::min(20, _tokens + add); // Version 4: Burst capacity 10
+		_tokens = std::min(12, _tokens + add); // Version 1: Burst capacity 12
 		_lastRefresh += add * kMinRequestIntervalMs;
 	}
 }
@@ -180,10 +175,14 @@ void ApiWrap::RequestThrottler::processQueueNow() {
 		const auto nextRefresh = _lastRefresh + kMinRequestIntervalMs;
 		const auto now = crl::now();
 		const auto delay = std::max(crl::time(1), nextRefresh - now);
+		const auto runner = _runner;
 
-		crl::on_main([this, guard = _guard, delay] {
-			base::call_delayed(delay, [this, guard] {
-				_runner([this, guard] {
+		crl::on_main([=, guard = _guard] {
+			base::call_delayed(delay, [=] {
+				if (!*guard) {
+					return;
+				}
+				runner([=] {
 					if (!*guard) {
 						return;
 					}
@@ -511,7 +510,8 @@ ApiWrap::ApiWrap(base::weak_qptr<MTP::Instance> weak, Fn<void(FnMut<void()>)> ru
 }
 
 void ApiWrap::scheduleBatchDelay(crl::time delay) {
-	crl::on_main([=, guard = _lifetimeGuard, runner = _throttler.runner()] {
+	const auto runner = _throttler.runner();
+	crl::on_main([=, guard = _lifetimeGuard] {
 		base::call_delayed(delay, [=] {
 			runner([=] {
 				if (*guard) {
@@ -2750,7 +2750,9 @@ void ApiWrap::filePartDone(
 		// Try to immediately fill it with the next chunk for the same file.
 		// No timers or delays here.
 		loadFilePart(process);
-		_throttler.tryProcessQueue();
+		if (*_lifetimeGuard) {
+			_throttler.tryProcessQueue();
+		}
 	}
 }
 
