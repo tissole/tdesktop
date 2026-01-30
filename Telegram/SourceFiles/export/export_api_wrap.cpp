@@ -1299,6 +1299,10 @@ void ApiWrap::requestMessages(
 	_chatProcess->handleSlice = std::move(slice);
 	_chatProcess->done = std::move(done);
 
+	if (_settings->useIdRange && fromId > 0) {
+		_chatProcess->largestIdPlusOne = fromId;
+	}
+
 	requestMessagesCount(0);
 }
 
@@ -1328,7 +1332,7 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 			error("Unexpected messagesNotModified received.");
 			return;
 		}
-		const auto skipSplit = !Data::SingleMessageAfter(
+		const auto skipSplit = !_settings->useIdRange && !Data::SingleMessageAfter(
 			result,
 			_settings->singlePeerFrom);
 		if (skipSplit) {
@@ -1336,7 +1340,10 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 			messagesCountLoaded(localSplitIndex, 0);
 			return;
 		}
-		checkFirstMessageDate(localSplitIndex, count);
+		const auto realCount = (_settings->useIdRange && _settings->singlePeerTillId > 0)
+			? std::min(count, int(std::max(0LL, int64(_settings->singlePeerTillId) - _settings->singlePeerFromId + 1)))
+			: count;
+		checkFirstMessageDate(localSplitIndex, realCount);
 	});
 }
 
@@ -1344,7 +1351,7 @@ void ApiWrap::checkFirstMessageDate(int localSplitIndex, int count) {
 	Expects(_chatProcess != nullptr);
 	Expects(localSplitIndex < _chatProcess->info.splits.size());
 
-	if (_settings->singlePeerTill <= 0) {
+	if (_settings->useIdRange || _settings->singlePeerTill <= 0) {
 		messagesCountLoaded(localSplitIndex, count);
 		return;
 	}
@@ -1777,8 +1784,8 @@ void ApiWrap::requestChatMessages(
 		? splitIndex
 		: (splitsCount + splitIndex);
 
-	const auto minId = _settings->useIdRange ? _chatProcess->fromId : 0;
-	const auto maxId = _settings->useIdRange ? _chatProcess->tillId : 0;
+	const auto minId = _settings->useIdRange ? std::max(0, _chatProcess->fromId - 1) : 0;
+	const auto maxId = (_settings->useIdRange && _chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : 0;
 
 	if (_chatProcess->info.onlyMyMessages) {
 		splitRequest(realSplitIndex, MTPmessages_Search(
@@ -2099,6 +2106,12 @@ void ApiWrap::finishMessagesSlice() {
 	auto slice = *base::take(_chatProcess->slice);
 	if (!slice.list.empty()) {
 		_chatProcess->largestIdPlusOne = slice.list.back().id + 1;
+
+		if (_settings->useIdRange
+			&& _settings->singlePeerTillId > 0
+			&& _chatProcess->largestIdPlusOne > _settings->singlePeerTillId) {
+			_chatProcess->lastSlice = true;
+		}
 
 		const auto splitIndex = _chatProcess->info.splits[_chatProcess->localSplitIndex];
 		if (splitIndex < 0) {
