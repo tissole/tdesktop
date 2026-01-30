@@ -1299,11 +1299,14 @@ void ApiWrap::requestMessages(
 	_chatProcess->handleSlice = std::move(slice);
 	_chatProcess->done = std::move(done);
 
-	if (_settings->useIdRange && fromId > 0) {
-		_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
+	if (_settings->useIdRange) {
+		if (fromId > 0) {
+			_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
+		}
+		requestMessagesCount(0);
+	} else {
+		resolveDates();
 	}
-
-	requestMessagesCount(0);
 }
 
 void ApiWrap::requestMessagesCount(int localSplitIndex) {
@@ -1381,6 +1384,76 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 		requestMessagesCount(localSplitIndex + 1);
 	} else if (_chatProcess->start(_chatProcess->info)) {
 		requestMessagesSlice();
+	}
+}
+
+void ApiWrap::resolveDates() {
+	const auto fromDate = _settings->singlePeerFrom;
+	const auto tillDate = _settings->singlePeerTill;
+
+	if (fromDate <= 0 && tillDate <= 0) {
+		requestMessagesCount(0);
+		return;
+	}
+
+	const auto peer = _chatProcess->info.input;
+	
+	const auto resolveTill = [=] {
+		if (tillDate <= 0) {
+			requestMessagesCount(0);
+			return;
+		}
+		mainRequest(MTPmessages_GetHistory(
+			peer,
+			MTP_int(0), // offset_id
+			MTP_int(tillDate),
+			MTP_int(0), // add_offset
+			MTP_int(1), // limit
+			MTP_int(0), // max_id
+			MTP_int(0), // min_id
+			MTP_long(0) // hash
+		)).done([=](const MTPmessages_Messages &result) {
+			result.match([&](const MTPDmessages_messagesNotModified &) {
+			}, [&](const auto &data) {
+				if (!data.vmessages().v.isEmpty()) {
+					_chatProcess->tillId = data.vmessages().v[0].match([](const auto &m) { return int64(m.vid().v); });
+				}
+			});
+			requestMessagesCount(0);
+		}).fail([=](const MTP::Error &) {
+			requestMessagesCount(0);
+			return true;
+		}).send();
+	};
+
+	if (fromDate > 0) {
+		mainRequest(MTPmessages_GetHistory(
+			peer,
+			MTP_int(0), // offset_id
+			MTP_int(fromDate),
+			MTP_int(0), // add_offset
+			MTP_int(1), // limit
+			MTP_int(0), // max_id
+			MTP_int(0), // min_id
+			MTP_long(0) // hash
+		)).done([=](const MTPmessages_Messages &result) {
+			result.match([&](const MTPDmessages_messagesNotModified &) {
+			}, [&](const auto &data) {
+				if (!data.vmessages().v.isEmpty()) {
+					const auto msg = data.vmessages().v[0];
+					const auto id = msg.match([](const auto &m) { return int64(m.vid().v); });
+					const auto date = msg.match([](const auto &m) { return TimeId(m.vdate().v); });
+					_chatProcess->fromId = (date < fromDate) ? (id + 1) : id;
+					_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId));
+				}
+			});
+			resolveTill();
+		}).fail([=](const MTP::Error &) {
+			resolveTill();
+			return true;
+		}).send();
+	} else {
+		resolveTill();
 	}
 }
 
@@ -1784,8 +1857,8 @@ void ApiWrap::requestChatMessages(
 		? splitIndex
 		: (splitsCount + splitIndex);
 
-	const auto minId = _settings->useIdRange ? std::max(int64(0), _chatProcess->fromId - 1) : int64(0);
-	const auto maxId = (_settings->useIdRange && _chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
+	const auto minId = (_chatProcess->fromId > 0) ? std::max(int64(0), _chatProcess->fromId - 1) : int64(0);
+	const auto maxId = (_chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
 
 	if (_chatProcess->info.onlyMyMessages) {
 		splitRequest(realSplitIndex, MTPmessages_Search(
@@ -2107,9 +2180,8 @@ void ApiWrap::finishMessagesSlice() {
 	if (!slice.list.empty()) {
 		_chatProcess->largestIdPlusOne = slice.list.back().id + 1;
 
-		if (_settings->useIdRange
-			&& _settings->singlePeerTillId > 0
-			&& _chatProcess->largestIdPlusOne > _settings->singlePeerTillId) {
+		if (_chatProcess->tillId > 0
+			&& _chatProcess->largestIdPlusOne > _chatProcess->tillId) {
 			_chatProcess->lastSlice = true;
 		}
 
@@ -2127,7 +2199,7 @@ void ApiWrap::finishMessagesSlice() {
 	if (_chatProcess->lastSlice) {
 		if (++_chatProcess->localSplitIndex < _chatProcess->info.splits.size()) {
 			_chatProcess->lastSlice = false;
-			_chatProcess->largestIdPlusOne = (_settings->useIdRange && _chatProcess->fromId > 0)
+			_chatProcess->largestIdPlusOne = (_chatProcess->fromId > 0)
 				? int32(std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId))
 				: 1;
 			requestMessagesSlice();
