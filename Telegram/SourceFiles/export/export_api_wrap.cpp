@@ -1784,7 +1784,7 @@ void ApiWrap::requestChatMessages(
 		? splitIndex
 		: (splitsCount + splitIndex);
 
-	const auto minId = _settings->useIdRange ? std::max(0, _chatProcess->fromId - 1) : 0;
+	const auto minId = _settings->useIdRange ? std::max(int64(0), _chatProcess->fromId - 1) : 0;
 	const auto maxId = (_settings->useIdRange && _chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : 0;
 
 	if (_chatProcess->info.onlyMyMessages) {
@@ -1793,9 +1793,9 @@ void ApiWrap::requestChatMessages(
 			realPeerInput,
 			MTP_string(), // query
 			MTP_inputPeerSelf(),
-			MTPInputPeer(), // saved_peer_id
-			MTPVector<MTPReaction>(), // saved_reaction
-			MTPint(), // top_msg_id
+			MTP_inputPeerEmpty(), // saved_peer_id
+			MTP_vector<MTPReaction>(), // saved_reaction
+			MTP_int(0), // top_msg_id
 			MTP_inputMessagesFilterEmpty(),
 			MTP_int(0), // min_date
 			MTP_int(0), // max_date
