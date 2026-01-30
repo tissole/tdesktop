@@ -36,7 +36,7 @@ constexpr auto kMegabyte = 1024 * 1024;
 
 // Rate limiting: Target 20 requests/sec for safety margin (one every 50ms)
 // Version 1: Balanced increase for higher throughput.
-constexpr auto kMinRequestIntervalMs = 1000 / 17;
+constexpr auto kMinRequestIntervalMs = 1000 / 15;
 
 // Transient retry settings (per-chunk).
 constexpr auto kMaxChunkRetries = 3;
@@ -44,14 +44,22 @@ constexpr auto kRetryBaseDelayMs = 200;   // 200, 400, 800 ms
 constexpr auto kRetryMaxDelayMs = 2000;   // clamp upper bound
 
 int GetChunkSizeForFile(int64 fileSize) {
-	return 1 * kMegabyte;
+	if (fileSize > 300 * kMegabyte) {
+		return 256 * 1024; // 1MB for large files
+		//return 1 * kMegabyte; // 1MB for large files
+	} else if (fileSize > 10 * kMegabyte) {
+		return 256 * 1024; // 512KB for medium files
+		//return 1 * kMegabyte; // 512KB for medium files
+	}
+	return 128 * 1024; // 128KB for small files
+	//return 1 * kMegabyte; // 256KB for small files
 }
 
 int GetConcurrentChunksForFile(int64 fileSize) {
 	if (fileSize > 300 * kMegabyte) {
-		return 4; // More concurrency for large files
+		return 2; // More concurrency for large files
 	}
-	return 4; // Less concurrency for smaller files
+	return 2; // Less concurrency for smaller files
 }
 
 
