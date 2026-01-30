@@ -39,7 +39,7 @@ constexpr auto kMegabyte = 1024 * 1024;
 constexpr auto kMinRequestIntervalMs = 1000 / 20;
 
 // Transient retry settings (per-chunk).
-constexpr auto kMaxChunkRetries = 3;
+constexpr auto kMaxChunkRetries = 4;
 constexpr auto kRetryBaseDelayMs = 200;   // 200, 400, 800 ms
 constexpr auto kRetryMaxDelayMs = 2000;   // clamp upper bound
 
