@@ -39,7 +39,7 @@ constexpr auto kMegabyte = 1024 * 1024;
 constexpr auto kMinRequestIntervalMs = 1000 / 20;
 
 // Transient retry settings (per-chunk).
-constexpr auto kMaxChunkRetries = 4;
+constexpr auto kMaxChunkRetries = 1;
 constexpr auto kRetryBaseDelayMs = 200;   // 200, 400, 800 ms
 constexpr auto kRetryMaxDelayMs = 2000;   // clamp upper bound
 
@@ -57,9 +57,9 @@ int GetChunkSizeForFile(int64 fileSize) {
 
 int GetConcurrentChunksForFile(int64 fileSize) {
 	if (fileSize > 300 * kMegabyte) {
-		return 3; // More concurrency for large files
+		return 2; // More concurrency for large files
 	}
-	return 3; // Less concurrency for smaller files
+	return 2; // Less concurrency for smaller files
 }
 
 
@@ -164,7 +164,7 @@ void ApiWrap::RequestThrottler::refreshTokens() {
 	const auto elapsed = now - _lastRefresh;
 	if (elapsed >= kMinRequestIntervalMs) {
 		const auto add = int(elapsed / kMinRequestIntervalMs);
-		_tokens = std::min(5, _tokens + add); // Version 1: Burst capacity 12
+		_tokens = std::min(10, _tokens + add); // Version 1: Burst capacity 12
 		_lastRefresh += add * kMinRequestIntervalMs;
 	}
 }
@@ -1784,7 +1784,7 @@ void ApiWrap::requestChatMessages(
 		? splitIndex
 		: (splitsCount + splitIndex);
 
-	const auto minId = _settings->useIdRange ? std::max(int64(0), _chatProcess->fromId - 1) : 0;
+	const auto minId = _settings->useIdRange ? std::max(0, _chatProcess->fromId - 1) : 0;
 	const auto maxId = (_settings->useIdRange && _chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : 0;
 
 	if (_chatProcess->info.onlyMyMessages) {
@@ -1793,9 +1793,9 @@ void ApiWrap::requestChatMessages(
 			realPeerInput,
 			MTP_string(), // query
 			MTP_inputPeerSelf(),
-			MTP_inputPeerEmpty(), // saved_peer_id
-			MTP_vector<MTPReaction>(), // saved_reaction
-			MTP_int(0), // top_msg_id
+			MTPInputPeer(), // saved_peer_id
+			MTPVector<MTPReaction>(), // saved_reaction
+			MTPint(), // top_msg_id
 			MTP_inputMessagesFilterEmpty(),
 			MTP_int(0), // min_date
 			MTP_int(0), // max_date
