@@ -57,6 +57,8 @@ jobs:
       PREPARE_PATH: "Telegram/build/prepare/prepare.py"
       GOOGLE_TRANSLATE_API_KEY: ${{ secrets.GOOGLE_TRANSLATE_API_KEY }}
       GOOGLE_TRANSLATE_ANDROID_CERT: ${{ secrets.GOOGLE_TRANSLATE_ANDROID_CERT }}
+      TG_API_ID: ${{ secrets.TG_API_ID }}
+      TG_API_HASH: ${{ secrets.TG_API_HASH }}      
 
     defaults:
       run:
@@ -187,8 +189,13 @@ jobs:
 
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> $GITHUB_ENV
 
-          API="-D TDESKTOP_API_ID=611335 -D TDESKTOP_API_HASH=d524b414d21f4d37f08684c1df41ac9c"
-          echo "TDESKTOP_BUILD_API=$API" >> $GITHUB_ENV
+          if [ -n "$TG_API_ID" ] && [ -n "$TG_API_HASH" ]; then
+            echo "Using SECURE secrets from GitHub Settings."
+            API="-D TDESKTOP_API_ID=$TG_API_ID -D TDESKTOP_API_HASH=$TG_API_HASH"
+          else
+            echo "Secrets not found. Using PUBLIC Open Source keys."
+            API="-D TDESKTOP_API_ID=611335 -D TDESKTOP_API_HASH=d524b414d21f4d37f08684c1df41ac9c"
+          fi
 
       - name: Free up some disk space.
         shell: bash
