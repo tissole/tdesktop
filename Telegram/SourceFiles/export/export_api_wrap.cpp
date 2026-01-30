@@ -31,12 +31,12 @@ namespace {
 
 
 
-constexpr auto kMaxParallelFiles = 3;
+constexpr auto kMaxParallelFiles = 4;
 constexpr auto kMegabyte = 1024 * 1024;
 
 // Rate limiting: Target 20 requests/sec for safety margin (one every 50ms)
 // Version 1: Balanced increase for higher throughput.
-constexpr auto kMinRequestIntervalMs = 1000 / 15;
+constexpr auto kMinRequestIntervalMs = 1000 / 20;
 
 // Transient retry settings (per-chunk).
 constexpr auto kMaxChunkRetries = 3;
@@ -45,10 +45,10 @@ constexpr auto kRetryMaxDelayMs = 2000;   // clamp upper bound
 
 int GetChunkSizeForFile(int64 fileSize) {
 	if (fileSize > 300 * kMegabyte) {
-		return 256 * 1024; // 1MB for large files
+		return 512 * 1024; // 1MB for large files
 		//return 1 * kMegabyte; // 1MB for large files
 	} else if (fileSize > 10 * kMegabyte) {
-		return 256 * 1024; // 512KB for medium files
+		return 512 * 1024; // 512KB for medium files
 		//return 1 * kMegabyte; // 512KB for medium files
 	}
 	return 128 * 1024; // 128KB for small files
@@ -326,8 +326,8 @@ struct ApiWrap::DialogsProcess : ChatsProcess {
 
 struct ApiWrap::ChatProcess {
 	Data::DialogInfo info;
-	int32 fromId = 0;
-	int32 tillId = 0;
+	int64 fromId = 0;
+	int64 tillId = 0;
 
 	FnMut<bool(const Data::DialogInfo &)> start;
 	Fn<bool(DownloadProgress)> fileProgress;
@@ -1280,8 +1280,8 @@ void ApiWrap::requestSessions(FnMut<void(Data::SessionsList&&)> done) {
 
 void ApiWrap::requestMessages(
 		const Data::DialogInfo &info,
-		int32 fromId,
-		int32 tillId,
+		int64 fromId,
+		int64 tillId,
 		FnMut<bool(const Data::DialogInfo &)> start,
 		Fn<bool(DownloadProgress)> progress,
 		Fn<bool(Data::MessagesSlice&&)> slice,
@@ -1300,7 +1300,7 @@ void ApiWrap::requestMessages(
 	_chatProcess->done = std::move(done);
 
 	if (_settings->useIdRange && fromId > 0) {
-		_chatProcess->largestIdPlusOne = fromId;
+		_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
 	}
 
 	requestMessagesCount(0);
@@ -2127,7 +2127,9 @@ void ApiWrap::finishMessagesSlice() {
 	if (_chatProcess->lastSlice) {
 		if (++_chatProcess->localSplitIndex < _chatProcess->info.splits.size()) {
 			_chatProcess->lastSlice = false;
-			_chatProcess->largestIdPlusOne = 1;
+			_chatProcess->largestIdPlusOne = (_settings->useIdRange && _chatProcess->fromId > 0)
+				? int32(std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId))
+				: 1;
 			requestMessagesSlice();
 		} else {
 			finishMessages();

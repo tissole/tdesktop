@@ -96,8 +96,8 @@ public:
 
 	void requestMessages(
 		const Data::DialogInfo &info,
-		int32 fromId,
-		int32 tillId,
+		int64 fromId,
+		int64 tillId,
 		FnMut<bool(const Data::DialogInfo &)> start,
 		Fn<bool(DownloadProgress)> progress,
 		Fn<bool(Data::MessagesSlice&&)> slice,
