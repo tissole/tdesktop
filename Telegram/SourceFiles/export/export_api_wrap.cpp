@@ -40,8 +40,8 @@ constexpr auto kMinRequestIntervalMs = 1000 / 15;
 
 // Transient retry settings (per-chunk).
 constexpr auto kMaxChunkRetries = 1;
-constexpr auto kRetryBaseDelayMs = 200;   // 200, 400, 800 ms
-constexpr auto kRetryMaxDelayMs = 2000;   // clamp upper bound
+constexpr auto kRetryBaseDelayMs = 200;	  // 200, 400, 800 ms
+constexpr auto kRetryMaxDelayMs = 2000;	  // clamp upper bound
 
 int GetChunkSizeForFile(int64 fileSize) {
 	if (fileSize > 300 * kMegabyte) {
@@ -57,9 +57,9 @@ int GetChunkSizeForFile(int64 fileSize) {
 
 int GetConcurrentChunksForFile(int64 fileSize) {
 	if (fileSize > 300 * kMegabyte) {
-		return 2; // More concurrency for large files
+		return 3; // More concurrency for large files
 	}
-	return 2; // Less concurrency for smaller files
+	return 3; // Less concurrency for smaller files
 }
 
 
@@ -296,9 +296,9 @@ struct ApiWrap::FileProcess {
 	};
 	std::deque<Request> requests;
 	std::map<mtpRequestId, int64> activeRequestOffsets;
-	std::set<int64> scheduledOffsets;                      // offsets currently scheduled or in-flight
-    std::deque<int64> pendingRetryOffsets;                 // offsets that need retry
-    std::unordered_map<int64, int> retryCounts;            // per-offset retry counter
+	std::set<int64> scheduledOffsets;					   // offsets currently scheduled or in-flight
+	std::deque<int64> pendingRetryOffsets;				   // offsets that need retry
+	std::unordered_map<int64, int> retryCounts;			   // per-offset retry counter
 	bool active = false;
 };
 
@@ -603,9 +603,9 @@ void ApiWrap::requestUserpicsCount() {
 
 	mainRequest(MTPphotos_GetUserPhotos(
 		_user,
-		MTP_int(0),  // offset
+		MTP_int(0),	 // offset
 		MTP_long(0), // max_id
-		MTP_int(0)   // limit
+		MTP_int(0)	 // limit
 	)).done([=](const MTPphotos_Photos &result) {
 		Expects(_settings != nullptr);
 		Expects(_startProcess != nullptr);
@@ -1444,19 +1444,12 @@ void ApiWrap::resolveDates() {
 				});
 
 				// Start from the message found at or just before the date.
-
 				// The engine's filters will handle the exact second.
-
 				_chatProcess->fromId = id;
-
-				//_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId));
-
+				_chatProcess->largestIdPlusOne = int32(std::max(int64(1), std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId)));
 			}
-
 		});
-
 		requestMessagesCount(0);
-
 	}).fail([=](const MTP::Error &) {
 
 		requestMessagesCount(0);
@@ -2390,11 +2383,11 @@ void ApiWrap::processFileLoad(
 		done(QString());
 		return;
 	}
-    if (_stats
-        && origin.messageId != 0
-        && !file.suggestedPath.endsWith(u"_thumb.jpg"_q)) {
-        _stats->incrementUserMediaFiles();
-    }
+	if (_stats
+		&& origin.messageId != 0
+		&& !file.suggestedPath.endsWith(u"_thumb.jpg"_q)) {
+		_stats->incrementUserMediaFiles();
+	}
 	loadFile(file, origin, std::move(progress), std::move(done));
 }
 
