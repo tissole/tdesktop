@@ -36,7 +36,7 @@ constexpr auto kMegabyte = 1024 * 1024;
 
 // Rate limiting: Target 20 requests/sec for safety margin (one every 50ms)
 // Version 1: Balanced increase for higher throughput.
-constexpr auto kMinRequestIntervalMs = 1000 / 15;
+constexpr auto kMinRequestIntervalMs = 1000 / 11;
 
 // Transient retry settings (per-chunk).
 constexpr auto kMaxChunkRetries = 1;
@@ -57,9 +57,9 @@ int GetChunkSizeForFile(int64 fileSize) {
 
 int GetConcurrentChunksForFile(int64 fileSize) {
 	if (fileSize > 300 * kMegabyte) {
-		return 1; // More concurrency for large files
+		return 2; // More concurrency for large files
 	}
-	return 1; // Less concurrency for smaller files
+	return 2; // Less concurrency for smaller files
 }
 
 
@@ -164,7 +164,7 @@ void ApiWrap::RequestThrottler::refreshTokens() {
 	const auto elapsed = now - _lastRefresh;
 	if (elapsed >= kMinRequestIntervalMs) {
 		const auto add = int(elapsed / kMinRequestIntervalMs);
-		_tokens = std::min(15, _tokens + add); // Version 1: Burst capacity 12
+		_tokens = std::min(11, _tokens + add); // Version 1: Burst capacity 12
 		_lastRefresh += add * kMinRequestIntervalMs;
 	}
 }
