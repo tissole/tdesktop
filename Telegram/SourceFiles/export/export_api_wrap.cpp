@@ -1335,9 +1335,11 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 			error("Unexpected messagesNotModified received.");
 			return;
 		}
-		const auto skipSplit = !_settings->useIdRange && !Data::SingleMessageAfter(
-			result,
-			_settings->singlePeerFrom);
+		const auto skipSplit = !_settings->useIdRange
+			&& (_chatProcess->fromId <= 0)
+			&& !Data::SingleMessageAfter(
+				result,
+				_settings->singlePeerFrom);
 		if (skipSplit) {
 			// No messages from the requested range, skip this split.
 			messagesCountLoaded(localSplitIndex, 0);
@@ -1354,7 +1356,9 @@ void ApiWrap::checkFirstMessageDate(int localSplitIndex, int count) {
 	Expects(_chatProcess != nullptr);
 	Expects(localSplitIndex < _chatProcess->info.splits.size());
 
-	if (_settings->useIdRange || _settings->singlePeerTill <= 0) {
+	if (_settings->useIdRange
+		|| (_chatProcess->fromId > 0)
+		|| _settings->singlePeerTill <= 0) {
 		messagesCountLoaded(localSplitIndex, count);
 		return;
 	}
