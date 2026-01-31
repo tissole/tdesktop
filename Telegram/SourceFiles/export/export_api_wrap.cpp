@@ -36,7 +36,7 @@ constexpr auto kMegabyte = 1024 * 1024;
 
 // Rate limiting: Target 20 requests/sec for safety margin (one every 50ms)
 // Version 1: Balanced increase for higher throughput.
-constexpr auto kMinRequestIntervalMs = 1000 / 20;
+constexpr auto kMinRequestIntervalMs = 1000 / 10;
 
 // Transient retry settings (per-chunk).
 constexpr auto kMaxChunkRetries = 1;
@@ -164,7 +164,7 @@ void ApiWrap::RequestThrottler::refreshTokens() {
 	const auto elapsed = now - _lastRefresh;
 	if (elapsed >= kMinRequestIntervalMs) {
 		const auto add = int(elapsed / kMinRequestIntervalMs);
-		_tokens = std::min(20, _tokens + add); // Version 1: Burst capacity 12
+		_tokens = std::min(10, _tokens + add); // Version 1: Burst capacity 12
 		_lastRefresh += add * kMinRequestIntervalMs;
 	}
 }
@@ -1449,15 +1449,14 @@ void ApiWrap::resolveDates() {
 				_chatProcess->largestIdPlusOne = int32(std::max(int64(1), std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId)));
 			}
 		});
-		requestMessagesCount(0);
+		resolveTill();
 	}).fail([=](const MTP::Error &) {
-
-		requestMessagesCount(0);
-
+		resolveTill();
 		return true;
-
 	}).send();
-
+} else {
+	resolveTill();
+}
 }
 
 void ApiWrap::finishExport(FnMut<void()> done) {
