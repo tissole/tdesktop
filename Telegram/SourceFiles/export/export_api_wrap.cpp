@@ -1454,9 +1454,9 @@ void ApiWrap::resolveDates() {
 		resolveTill();
 		return true;
 	}).send();
-} else {
-	resolveTill();
-}
+	} else {
+		resolveTill();
+	}
 }
 
 void ApiWrap::finishExport(FnMut<void()> done) {
