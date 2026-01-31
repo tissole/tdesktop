@@ -36,7 +36,7 @@ constexpr auto kMegabyte = 1024 * 1024;
 
 // Rate limiting: Target 20 requests/sec for safety margin (one every 50ms)
 // Version 1: Balanced increase for higher throughput.
-constexpr auto kMinRequestIntervalMs = 1000 / 20;
+constexpr auto kMinRequestIntervalMs = 1000 / 15;
 
 // Transient retry settings (per-chunk).
 constexpr auto kMaxChunkRetries = 1;
@@ -1454,9 +1454,9 @@ void ApiWrap::resolveDates() {
 		resolveTill();
 		return true;
 	}).send();
-	} else {
-		resolveTill();
-	}
+} else {
+	resolveTill();
+}
 }
 
 void ApiWrap::finishExport(FnMut<void()> done) {
