@@ -292,7 +292,7 @@ private:
 		Fn<void(FnMut<void()>)> _runner;
 		std::shared_ptr<bool> _guard;
 		std::deque<FnMut<void()>> _taskQueue;
-		int _tokens = 14; // Version 1: Burst capacity 12.
+		int _tokens = 15; // Version 1: Burst capacity 12.
 		crl::time _lastRefresh = 0;
 		bool _retryScheduled = false;
 	};
