@@ -164,7 +164,7 @@ void ApiWrap::RequestThrottler::refreshTokens() {
 	const auto elapsed = now - _lastRefresh;
 	if (elapsed >= kMinRequestIntervalMs) {
 		const auto add = int(elapsed / kMinRequestIntervalMs);
-		_tokens = std::min(1, _tokens + add); // Version 1: Burst capacity 12
+		_tokens = std::min(20, _tokens + add); // Version 1: Burst capacity 12
 		_lastRefresh += add * kMinRequestIntervalMs;
 	}
 }
@@ -1449,7 +1449,7 @@ void ApiWrap::resolveDates() {
 
 				_chatProcess->fromId = id;
 
-				_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId));
+				//_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId));
 
 			}
 
