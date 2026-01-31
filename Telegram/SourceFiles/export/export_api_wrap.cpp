@@ -1416,7 +1416,9 @@ void ApiWrap::resolveDates() {
 			result.match([&](const MTPDmessages_messagesNotModified &) {
 			}, [&](const auto &data) {
 				if (!data.vmessages().v.isEmpty()) {
-					_chatProcess->tillId = data.vmessages().v[0].match([](const auto &m) { return int64(m.vid().v); });
+					_chatProcess->tillId = data.vmessages().v[0].match([](const auto &m) {
+						return int64(m.vid().v);
+					});
 				}
 			});
 			requestMessagesCount(0);
@@ -1441,9 +1443,15 @@ void ApiWrap::resolveDates() {
 			}, [&](const auto &data) {
 				if (!data.vmessages().v.isEmpty()) {
 					const auto msg = data.vmessages().v[0];
-					const auto id = msg.match([](const auto &m) { return int64(m.vid().v); });
-					const auto date = msg.match([](const auto &m) { return TimeId(m.vdate().v); });
-					_chatProcess->fromId = (date < fromDate) ? (id + 1) : id;
+					const auto id = msg.match([](const auto &m) {
+						return int64(m.vid().v);
+					});
+					const auto date = msg.match([](const MTPDmessageEmpty &) {
+						return TimeId(0);
+					}, [](const auto &m) {
+						return TimeId(m.vdate().v);
+					});
+					_chatProcess->fromId = (date > 0 && date < fromDate) ? (id + 1) : id;
 					_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId));
 				}
 			});
