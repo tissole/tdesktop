@@ -1965,30 +1965,27 @@ MTPMessagesFilter ApiWrap::getFilter() const {
 	const auto photo = (types & Type::Photo);
 	const auto video = (types & Type::Video);
 	const auto file = (types & Type::File);
-	const auto music = (types & Type::Music);
 	const auto voice = (types & Type::VoiceMessage);
 	const auto round = (types & Type::VideoMessage);
 	const auto gif = (types & Type::GIF);
 	const auto sticker = (types & Type::Sticker);
 
-	if (photo && video && !file && !music && !voice && !round && !gif && !sticker) {
+	if (photo && video && !file && !voice && !round && !gif && !sticker) {
 		return MTP_inputMessagesFilterPhotoVideo();
-	} else if (photo && !video && !file && !music && !voice && !round && !gif && !sticker) {
+	} else if (photo && !video && !file && !voice && !round && !gif && !sticker) {
 		return MTP_inputMessagesFilterPhotos();
-	} else if (!photo && video && !file && !music && !voice && !round && !gif && !sticker) {
+	} else if (!photo && video && !file && !voice && !round && !gif && !sticker) {
 		return MTP_inputMessagesFilterVideo();
-	} else if (!photo && !video && file && !music && !voice && !round && !gif && !sticker) {
+	} else if (!photo && !video && file && !voice && !round && !gif && !sticker) {
 		return MTP_inputMessagesFilterDocument();
-	} else if (!photo && !video && !file && music && !voice && !round && !gif && !sticker) {
-		return MTP_inputMessagesFilterMusic();
-	} else if (!photo && !video && !file && !music && voice && !round && !gif && !sticker) {
+	} else if (!photo && !video && !file && voice && !round && !gif && !sticker) {
 		return MTP_inputMessagesFilterVoice();
-	} else if (!photo && !video && !file && !music && !voice && round && !gif && !sticker) {
+	} else if (!photo && !video && !file && !voice && round && !gif && !sticker) {
 		return MTP_inputMessagesFilterRoundVideo();
-	} else if (!photo && !video && !file && !music && !voice && !round && gif && !sticker) {
+	} else if (!photo && !video && !file && !voice && !round && gif && !sticker) {
 		return MTP_inputMessagesFilterGif();
-	} else if (!photo && !video && !file && !music && !voice && !round && !gif && sticker) {
-		return MTP_inputMessagesFilterStickers();
+	} else if (!photo && !video && !file && !voice && !round && !gif && sticker) {
+		return MTP_inputMessagesFilterChatPhotos(); // Stickers use this for chat stickers or PhotoVideo for generic
 	}
 	return MTP_inputMessagesFilterEmpty();
 }
