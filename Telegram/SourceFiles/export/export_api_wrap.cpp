@@ -36,7 +36,7 @@ constexpr auto kMegabyte = 1024 * 1024;
 
 // Rate limiting: Target 20 requests/sec for safety margin (one every 50ms)
 // Version 1: Balanced increase for higher throughput.
-constexpr auto kMinRequestIntervalMs = 1000 / 18;
+constexpr auto kMinRequestIntervalMs = 1000 / 10;
 
 // Transient retry settings (per-chunk).
 constexpr auto kMaxChunkRetries = 1;
@@ -57,9 +57,9 @@ int GetChunkSizeForFile(int64 fileSize) {
 
 int GetConcurrentChunksForFile(int64 fileSize) {
 	if (fileSize > 300 * kMegabyte) {
-		return 1; // More concurrency for large files
+		return 2; // More concurrency for large files
 	}
-	return 1; // Less concurrency for smaller files
+	return 2; // Less concurrency for smaller files
 }
 
 
@@ -164,7 +164,7 @@ void ApiWrap::RequestThrottler::refreshTokens() {
 	const auto elapsed = now - _lastRefresh;
 	if (elapsed >= kMinRequestIntervalMs) {
 		const auto add = int(elapsed / kMinRequestIntervalMs);
-		_tokens = std::min(5, _tokens + add); // Version 1: Burst capacity 12
+		_tokens = std::min(1, _tokens + add); // Version 1: Burst capacity 12
 		_lastRefresh += add * kMinRequestIntervalMs;
 	}
 }
@@ -1300,9 +1300,6 @@ void ApiWrap::requestMessages(
 	_chatProcess->done = std::move(done);
 
 	if (_settings->useIdRange) {
-		if (fromId > 0) {
-			_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
-		}
 		requestMessagesCount(0);
 	} else {
 		resolveDates();
@@ -1413,8 +1410,6 @@ void ApiWrap::resolveDates() {
 
 	const auto peer = _chatProcess->info.input;
 
-
-
 	const auto resolveTill = [=] {
 
 		if (tillDate <= 0) {
@@ -1522,8 +1517,6 @@ void ApiWrap::resolveDates() {
 					});
 
 					_chatProcess->fromId = (date > 0 && date < fromDate) ? (id + 1) : id;
-
-					_chatProcess->largestIdPlusOne = int32(std::max(int64(1), std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId)));
 
 				}
 
@@ -2254,13 +2247,7 @@ void ApiWrap::finishMessagesSlice() {
 			} else {
 				_chatProcess->lastSlice = false;
 				_chatProcess->largestIdPlusOne = 1;
-				const auto minId = _chatProcess->fromId;
-				const auto maxId = _chatProcess->tillId;
-				if (minId > maxId) {
-					requestMessagesSlice();
-				} else {
-					requestMessagesSlice();
-				}
+				requestMessagesSlice();
 			}
 		}
 		return;
@@ -2289,9 +2276,7 @@ void ApiWrap::finishMessagesSlice() {
 	if (_chatProcess->lastSlice) {
 		if (++_chatProcess->localSplitIndex < _chatProcess->info.splits.size()) {
 			_chatProcess->lastSlice = false;
-			_chatProcess->largestIdPlusOne = (_chatProcess->fromId > 0)
-				? int32(std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId))
-				: 1;
+			_chatProcess->largestIdPlusOne = 1;
 			requestMessagesSlice();
 		} else {
 			finishMessages();
