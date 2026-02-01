@@ -1395,9 +1395,11 @@ void ApiWrap::resolveDates() {
 
 	const auto fromDate = _settings->singlePeerFrom;
 
+	const auto tillDate = _settings->singlePeerTill;
 
 
-	if (fromDate <= 0) {
+
+	if (fromDate <= 0 && tillDate <= 0) {
 
 		requestMessagesCount(0);
 
@@ -1409,54 +1411,138 @@ void ApiWrap::resolveDates() {
 
 	const auto peer = _chatProcess->info.input;
 
-	mainRequest(MTPmessages_GetHistory(
 
-		peer,
 
-		MTP_int(0), // offset_id
+	const auto resolveTill = [=] {
 
-		MTP_int(fromDate),
+		if (tillDate <= 0) {
 
-		MTP_int(0), // add_offset
+			requestMessagesCount(0);
 
-		MTP_int(1), // limit
+			return;
 
-		MTP_int(0), // max_id
+		}
 
-		MTP_int(0), // min_id
+		mainRequest(MTPmessages_GetHistory(
 
-		MTP_long(0) // hash
+			peer,
 
-	)).done([=](const MTPmessages_Messages &result) {
+			MTP_int(0), // offset_id
 
-		result.match([&](const MTPDmessages_messagesNotModified &) {
+			MTP_int(tillDate),
 
-		}, [&](const auto &data) {
+			MTP_int(0), // add_offset
 
-			if (!data.vmessages().v.isEmpty()) {
+			MTP_int(1), // limit
 
-				const auto msg = data.vmessages().v[0];
+			MTP_int(0), // max_id
 
-				const auto id = msg.match([](const auto &m) {
+			MTP_int(0), // min_id
 
-					return int64(m.vid().v);
+			MTP_long(0) // hash
 
-				});
+		)).done([=](const MTPmessages_Messages &result) {
 
-				// Start from the message found at or just before the date.
-				// The engine's filters will handle the exact second.
-				_chatProcess->fromId = id;
-				_chatProcess->largestIdPlusOne = int32(std::max(int64(1), std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId)));
-			}
-		});
+			result.match([&](const MTPDmessages_messagesNotModified &) {
+
+			}, [&](const auto &data) {
+
+				if (!data.vmessages().v.isEmpty()) {
+
+					_chatProcess->tillId = data.vmessages().v[0].match([](const auto &m) {
+
+						return int64(m.vid().v);
+
+					});
+
+				}
+
+			});
+
+			requestMessagesCount(0);
+
+		}).fail([=](const MTP::Error &) {
+
+			requestMessagesCount(0);
+
+			return true;
+
+		}).send();
+
+	};
+
+
+
+	if (fromDate > 0) {
+
+		mainRequest(MTPmessages_GetHistory(
+
+			peer,
+
+			MTP_int(0), // offset_id
+
+			MTP_int(fromDate),
+
+			MTP_int(0), // add_offset
+
+			MTP_int(1), // limit
+
+			MTP_int(0), // max_id
+
+			MTP_int(0), // min_id
+
+			MTP_long(0) // hash
+
+		)).done([=](const MTPmessages_Messages &result) {
+
+			result.match([&](const MTPDmessages_messagesNotModified &) {
+
+			}, [&](const auto &data) {
+
+				if (!data.vmessages().v.isEmpty()) {
+
+					const auto msg = data.vmessages().v[0];
+
+					const auto id = msg.match([](const auto &m) {
+
+						return int64(m.vid().v);
+
+					});
+
+					const auto date = msg.match([](const MTPDmessageEmpty &) {
+
+						return TimeId(0);
+
+					}, [](const auto &m) {
+
+						return TimeId(m.vdate().v);
+
+					});
+
+					_chatProcess->fromId = (date > 0 && date < fromDate) ? (id + 1) : id;
+
+					_chatProcess->largestIdPlusOne = int32(std::max(int64(1), std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId)));
+
+				}
+
+			});
+
+			resolveTill();
+
+		}).fail([=](const MTP::Error &) {
+
+			resolveTill();
+
+			return true;
+
+		}).send();
+
+	} else {
+
 		resolveTill();
-	}).fail([=](const MTP::Error &) {
-		resolveTill();
-		return true;
-	}).send();
-} else {
-	resolveTill();
-}
+
+	}
+
 }
 
 void ApiWrap::finishExport(FnMut<void()> done) {
