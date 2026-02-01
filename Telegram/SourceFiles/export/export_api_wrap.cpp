@@ -36,7 +36,7 @@ constexpr auto kMegabyte = 1024 * 1024;
 
 // Rate limiting: Target 20 requests/sec for safety margin (one every 50ms)
 // Version 1: Balanced increase for higher throughput.
-constexpr auto kMinRequestIntervalMs = 1000 / 20;
+constexpr auto kMinRequestIntervalMs = 1000 / 18;
 
 // Transient retry settings (per-chunk).
 constexpr auto kMaxChunkRetries = 1;
@@ -164,7 +164,7 @@ void ApiWrap::RequestThrottler::refreshTokens() {
 	const auto elapsed = now - _lastRefresh;
 	if (elapsed >= kMinRequestIntervalMs) {
 		const auto add = int(elapsed / kMinRequestIntervalMs);
-		_tokens = std::min(2, _tokens + add); // Version 1: Burst capacity 12
+		_tokens = std::min(5, _tokens + add); // Version 1: Burst capacity 12
 		_lastRefresh += add * kMinRequestIntervalMs;
 	}
 }
@@ -1345,8 +1345,10 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 			messagesCountLoaded(localSplitIndex, 0);
 			return;
 		}
-		const auto realCount = (_settings->useIdRange && _settings->singlePeerTillId > 0)
-			? std::min(count, int(std::max(0LL, int64(_settings->singlePeerTillId) - _settings->singlePeerFromId + 1)))
+		const auto fromId = (_chatProcess->fromId > 0) ? _chatProcess->fromId : (_settings->useIdRange ? _settings->singlePeerFromId : int64(1));
+		const auto tillId = (_chatProcess->tillId > 0) ? _chatProcess->tillId : (_settings->useIdRange ? _settings->singlePeerTillId : int64(0));
+		const auto realCount = (tillId > 0)
+			? std::min(count, int(std::max(0LL, tillId - fromId + 1)))
 			: count;
 		checkFirstMessageDate(localSplitIndex, realCount);
 	});
@@ -1946,7 +1948,7 @@ void ApiWrap::requestChatMessages(
 		: (splitsCount + splitIndex);
 
 	const auto minId = (_chatProcess->fromId > 0) ? std::max(int64(0), _chatProcess->fromId - 1) : int64(0);
-	const auto maxId = (_settings->useIdRange && _chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
+	const auto maxId = (_chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
 
 	if (_chatProcess->info.onlyMyMessages) {
 		splitRequest(realSplitIndex, MTPmessages_Search(
@@ -2268,8 +2270,7 @@ void ApiWrap::finishMessagesSlice() {
 	if (!slice.list.empty()) {
 		_chatProcess->largestIdPlusOne = slice.list.back().id + 1;
 
-		if (_settings->useIdRange
-			&& _chatProcess->tillId > 0
+		if (_chatProcess->tillId > 0
 			&& _chatProcess->largestIdPlusOne > _chatProcess->tillId) {
 			_chatProcess->lastSlice = true;
 		}
