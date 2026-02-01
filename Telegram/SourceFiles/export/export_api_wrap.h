@@ -77,6 +77,7 @@ public:
 		int itemIndex = 0;
 		int64 ready = 0;
 		int64 total = 0;
+		bool isAuxiliary = false;
 	};
 	void requestUserpics(
 		FnMut<bool(Data::UserpicsInfo&&)> start,
@@ -150,6 +151,7 @@ private:
 	void loadStoriesFiles(Data::StoriesSlice &&slice);
 	void loadNextStory();
 	bool loadStoryProgress(FileProgress value);
+	bool loadStoryProgress(FileProgress value, bool auxiliary);
 	void loadStoryDone(const QString &relativePath);
 	bool loadStoryThumbProgress(FileProgress value);
 	void loadStoryThumbDone(const QString &relativePath);
@@ -199,6 +201,7 @@ private:
 	[[nodiscard]] std::optional<QByteArray> getCustomEmoji(QByteArray &data);
 	bool messageCustomEmojiReady(Data::Message &message);
 	bool loadMessageFileProgress(FileProgress value);
+	bool loadMessageFileProgress(FileProgress value, bool auxiliary);
 	void loadMessageFileDone(const QString &relativePath);
 	bool loadMessageThumbProgress(FileProgress value);
 	void loadMessageThumbDone(const QString &relativePath);
@@ -209,6 +212,8 @@ private:
 
 	[[nodiscard]] Data::Message *currentFileMessage() const;
 	[[nodiscard]] Data::FileOrigin currentFileMessageOrigin() const;
+
+	[[nodiscard]] MTPMessagesFilter getFilter() const;
 
 	void processFileLoad(
 		Data::File &file,
@@ -292,7 +297,7 @@ private:
 		Fn<void(FnMut<void()>)> _runner;
 		std::shared_ptr<bool> _guard;
 		std::deque<FnMut<void()>> _taskQueue;
-		int _tokens = 1; // Version 1: Burst capacity 12.
+		int _tokens = 1; // 
 		crl::time _lastRefresh = 0;
 		bool _retryScheduled = false;
 	};

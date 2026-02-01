@@ -437,7 +437,9 @@ void ControllerObject::exportUserpics() {
 	}, [=](DownloadProgress progress) {
 		if (progress.total > 0 && progress.ready >= progress.total) {
 			_activeDownloads.remove(progress.randomId);
-			_contentFilesCount++;
+			if (!progress.isAuxiliary) {
+				_contentFilesCount++;
+			}
 		} else if (progress.total > 0) {
 			_activeDownloads[progress.randomId] = {
 				progress.randomId,
@@ -474,7 +476,9 @@ void ControllerObject::exportStories() {
 	}, [=](DownloadProgress progress) {
 		if (progress.total > 0 && progress.ready >= progress.total) {
 			_activeDownloads.remove(progress.randomId);
-			_contentFilesCount++;
+			if (!progress.isAuxiliary) {
+				_contentFilesCount++;
+			}
 		} else if (progress.total > 0) {
 			_activeDownloads[progress.randomId] = {
 				progress.randomId,
@@ -579,7 +583,9 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 	}, [=](DownloadProgress progress) {
 		if (progress.total > 0 && progress.ready >= progress.total) {
 			_activeDownloads.remove(progress.randomId);
-			_contentFilesCount++;
+			if (!progress.isAuxiliary) {
+				_contentFilesCount++;
+			}
 		} else if (progress.total > 0) {
 			_activeDownloads[progress.randomId] = {
 				progress.randomId,

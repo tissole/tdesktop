@@ -671,7 +671,7 @@ void SettingsWidget::addLimitsLabel(
 		}));
 	};
 
-	constexpr auto kOffset = 600;
+	constexpr auto kOffset = 1;
 
 	dateLabel->overrideLinkClickHandler([=](const QString &url) {
 		if (url == u"internal:edit_from"_q) {
