@@ -144,7 +144,7 @@ Content ContentFromState(const FinishedState &state) {
 		Content::kDoneId,
 		tr::lng_export_total_text_messages(
 			tr::now,
-			lt_count,
+			lt_amount,
 			QString::number(state.messagesTextCount)),
 		QString(),
 		1. });
