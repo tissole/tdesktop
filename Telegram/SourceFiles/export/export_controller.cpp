@@ -129,6 +129,7 @@ private:
 	int _messagesWritten = 0;
 	int _messagesCount = 0;
 	int _messagesTextCount = 0;
+	int _userpicsWritten = 0;
 	int _userpicsCount = 0;
 
 	int _storiesWritten = 0;
