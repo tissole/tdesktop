@@ -27,9 +27,11 @@ struct MediaSettings {
 		GIF          = 0x20,
 		File         = 0x40,
 		Text         = 0x80,
+		Audio        = 0x100,
+		FullHistory  = 0x200,
 
-		MediaMask    = Photo | Video | VoiceMessage | VideoMessage,
-		AllMask      = MediaMask | Sticker | GIF | File | Text,
+		MediaMask    = Photo | Video | VoiceMessage | VideoMessage | Audio,
+		AllMask      = MediaMask | Sticker | GIF | File | Text | FullHistory,
 	};
 	using Types = base::flags<Type>;
 	friend inline constexpr auto is_flag_type(Type) { return true; };

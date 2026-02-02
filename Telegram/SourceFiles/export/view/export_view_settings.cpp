@@ -698,10 +698,9 @@ void SettingsWidget::addLimitsLabel(
 				changeData([&](Settings &settings) {
 					const auto result = time
 						+ removeTime(settings.singlePeerFrom);
-					if (result >= settings.singlePeerTill
+					if (result > settings.singlePeerTill
 							&& settings.singlePeerTill) {
-						settings.singlePeerFrom = settings.singlePeerTill
-							- kOffset;
+						settings.singlePeerFrom = settings.singlePeerTill;
 					} else {
 						settings.singlePeerFrom = result;
 					}
@@ -711,10 +710,9 @@ void SettingsWidget::addLimitsLabel(
 		} else if (url == u"internal:edit_till"_q) {
 			const auto done = [=](TimeId limit) {
 				changeData([&](Settings &settings) {
-					if (limit <= settings.singlePeerFrom
+					if (limit < settings.singlePeerFrom
 							&& settings.singlePeerFrom) {
-						settings.singlePeerTill = settings.singlePeerFrom
-							+ kOffset;
+						settings.singlePeerTill = settings.singlePeerFrom;
 					} else {
 						settings.singlePeerTill = limit;
 					}
@@ -737,11 +735,11 @@ void SettingsWidget::addLimitsLabel(
 			const auto done = [=](TimeId time) {
 				changeData([&](Settings &settings) {
 					const auto result = time
-						+ removeTime(settings.singlePeerTill);
-					if (result <= settings.singlePeerFrom
+						+ removeTime(settings.singlePeerTill)
+						+ 59; // Make the selected minute INCLUSIVE (covers :00 to :59)
+					if (result < settings.singlePeerFrom
 							&& settings.singlePeerFrom) {
-						settings.singlePeerTill = settings.singlePeerFrom
-							+ kOffset;
+						settings.singlePeerTill = settings.singlePeerFrom;
 					} else {
 						settings.singlePeerTill = result;
 					}
@@ -829,9 +827,11 @@ not_null<Ui::RpWidget*> SettingsWidget::setupButtons(
 
 	value()
 		| rpl::map([](const Settings &data) {
+			if (data.onlySinglePeer()) {
+				return (data.media.types != MediaSettings::Types(0));
+			}
 			return (data.types != Types(0))
-				|| (data.media.types != MediaSettings::Types(0))
-				|| data.onlySinglePeer();
+				|| (data.media.types != MediaSettings::Types(0));
 		})
 		| rpl::distinct_until_changed()
 		| rpl::start_with_next([=](bool canStart) {
@@ -957,6 +957,10 @@ void SettingsWidget::addMediaOptions(
 		MediaType::VideoMessage);
 	addMediaOption(
 		container,
+		tr::lng_export_option_audios(tr::now),
+		MediaType::Audio);
+	addMediaOption(
+		container,
 		tr::lng_export_option_stickers(tr::now),
 		MediaType::Sticker);
 	addMediaOption(
@@ -971,6 +975,10 @@ void SettingsWidget::addMediaOptions(
 		container,
 		tr::lng_export_option_text_messages(tr::now),
 		MediaType::Text);
+	addMediaOption(
+		container,
+		tr::lng_export_option_full_history(tr::now),
+		MediaType::FullHistory);
 	addSizeSlider(container);
 }
 

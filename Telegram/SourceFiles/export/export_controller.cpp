@@ -129,6 +129,7 @@ private:
 	int _messagesWritten = 0;
 	int _messagesCount = 0;
 	int _messagesTextCount = 0;
+	int _messagesTextTotal = 0;
 	int _userpicsWritten = 0;
 	int _userpicsCount = 0;
 
@@ -595,6 +596,7 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 			};
 		}
 		_messagesTextCount = progress.messagesTextCount;
+		_messagesTextTotal = progress.messagesTextTotal;
 		setState(stateDialogs(progress));
 		return true;
 	}, [=](Data::MessagesSlice &&result) {

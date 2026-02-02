@@ -349,8 +349,10 @@ struct ApiWrap::ChatProcess {
 
 	// Track messages processed (only when a whole message is completed)
 	int messagesProcessed = 0;
+	int sliceOffset = 0; // Snapshot of messagesProcessed at start of slice
 	int messagesTextProcessed = 0;
 	int totalMessagesText = 0;
+	int messagesTextTotal = 0;
 
 	// Map file randomId -> message index in current slice
 	std::unordered_map<uint64, int> fileToMessageIndex;
@@ -1014,6 +1016,7 @@ bool ApiWrap::loadUserpicProgress(FileProgress progress) {
 		.total = progress.total,
 		.isAuxiliary = false,
 		.messagesTextCount = _chatProcess->messagesTextProcessed,
+		.messagesTextTotal = _chatProcess->messagesTextTotal,
 	});
 }
 
@@ -1187,7 +1190,8 @@ bool ApiWrap::loadStoryProgress(FileProgress progress, bool auxiliary) {
 		.ready = progress.ready,
 		.total = progress.total,
 		.isAuxiliary = auxiliary,
-		.messagesTextCount = _chatProcess->messagesTextProcessed });
+		.messagesTextCount = _chatProcess->messagesTextProcessed,
+		.messagesTextTotal = _chatProcess->messagesTextTotal });
 }
 
 void ApiWrap::loadStoryDone(const QString &relativePath) {
@@ -1436,6 +1440,12 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 	Expects(localSplitIndex < _chatProcess->info.splits.size());
 
 	_chatProcess->info.messagesCountPerSplit[localSplitIndex] = count;
+	
+	const auto types = _settings->media.types;
+	if ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory)) {
+		_chatProcess->messagesTextTotal += count;
+	}
+
 	if (localSplitIndex + 1 < _chatProcess->info.splits.size()) {
 		requestMessagesCount(localSplitIndex + 1);
 	} else if (_chatProcess->start(_chatProcess->info)) {
@@ -1954,8 +1964,8 @@ void ApiWrap::requestChatMessages(
 			MTP_vector<MTPReaction>(), // saved_reaction
 			MTP_int(0), // top_msg_id
 			filter,
-			MTP_int(0), // min_date
-			MTP_int(0), // max_date
+			MTP_int(_settings->singlePeerFrom), // min_date
+			MTP_int(_settings->singlePeerTill), // max_date
 			MTP_int(offsetId),
 			MTP_int(addOffset),
 			MTP_int(limit),
@@ -2001,9 +2011,17 @@ void ApiWrap::requestChatMessages(
 MTPMessagesFilter ApiWrap::getFilter() const {
 	using Type = MediaSettings::Type;
 	const auto types = _settings->media.types;
+	
+	// If Text or FullHistory is selected, we need to request the full stream
+	// to ensure we get all messages (then we filter them locally).
+	if ((types & Type::Text) || (types & Type::FullHistory)) {
+		return MTP_inputMessagesFilterEmpty();
+	}
+
 	if (types == MediaSettings::Types(0)) {
 		return MTP_inputMessagesFilterEmpty();
 	}
+
 	const auto photo = (types & Type::Photo);
 	const auto video = (types & Type::Video);
 	const auto file = (types & Type::File);
@@ -2011,24 +2029,31 @@ MTPMessagesFilter ApiWrap::getFilter() const {
 	const auto round = (types & Type::VideoMessage);
 	const auto gif = (types & Type::GIF);
 	const auto sticker = (types & Type::Sticker);
+	const auto audio = (types & Type::Audio);
 
-	if (photo && video && !file && !voice && !round && !gif && !sticker) {
-		return MTP_inputMessagesFilterPhotoVideo();
-	} else if (photo && !video && !file && !voice && !round && !gif && !sticker) {
-		return MTP_inputMessagesFilterPhotos();
-	} else if (!photo && video && !file && !voice && !round && !gif && !sticker) {
-		return MTP_inputMessagesFilterVideo();
-	} else if (!photo && !video && file && !voice && !round && !gif && !sticker) {
-		return MTP_inputMessagesFilterDocument();
-	} else if (!photo && !video && !file && voice && !round && !gif && !sticker) {
-		return MTP_inputMessagesFilterVoice();
-	} else if (!photo && !video && !file && !voice && round && !gif && !sticker) {
-		return MTP_inputMessagesFilterRoundVideo();
-	} else if (!photo && !video && !file && !voice && !round && gif && !sticker) {
-		return MTP_inputMessagesFilterGif();
-	} else if (!photo && !video && !file && !voice && !round && !gif && sticker) {
-		return MTP_inputMessagesFilterChatPhotos(); // Stickers use this for chat stickers or PhotoVideo for generic
+	// Count how many media flags are set
+	int selectedCount = (photo ? 1 : 0) + (video ? 1 : 0) + (file ? 1 : 0) 
+		+ (voice ? 1 : 0) + (round ? 1 : 0) + (gif ? 1 : 0) 
+		+ (sticker ? 1 : 0) + (audio ? 1 : 0);
+
+	// Only return a specific filter if exactly one or specific combo is selected.
+	// Otherwise return empty to get the full stream for local filtering.
+	if (selectedCount > 1) {
+		if (photo && video && selectedCount == 2) {
+			return MTP_inputMessagesFilterPhotoVideo();
+		}
+		return MTP_inputMessagesFilterEmpty();
 	}
+
+	if (photo) return MTP_inputMessagesFilterPhotos();
+	if (video) return MTP_inputMessagesFilterVideo();
+	if (file) return MTP_inputMessagesFilterDocument();
+	if (voice) return MTP_inputMessagesFilterVoice();
+	if (round) return MTP_inputMessagesFilterRoundVideo();
+	if (gif) return MTP_inputMessagesFilterGif();
+	if (sticker) return MTP_inputMessagesFilterChatPhotos();
+	if (audio) return MTP_inputMessagesFilterMusic();
+
 	return MTP_inputMessagesFilterEmpty();
 }
 
@@ -2045,6 +2070,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 	auto &s = *_chatProcess->slice;
 
 	_chatProcess->pendingFiles = 0;
+	_chatProcess->sliceOffset = _chatProcess->messagesProcessed; // Snapshot offset for this slice
 	_chatProcess->fileToMessageIndex.clear();
 	_chatProcess->messageFilesRequired.assign(s.list.size(), 0);
 	_chatProcess->messageFilesDone.assign(s.list.size(), 0);
@@ -2245,7 +2271,8 @@ void ApiWrap::loadNextMessageFile() {
 				.ready = 1,
 				.total = 1,
 				.isAuxiliary = true, 
-				.messagesTextCount = _chatProcess->messagesTextProcessed
+				.messagesTextCount = _chatProcess->messagesTextProcessed,
+				.messagesTextTotal = _chatProcess->messagesTextTotal
 			});
 		}
 
@@ -2387,7 +2414,7 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 		}
 	}
 
-	const int itemIndex = _chatProcess->messagesProcessed + messageIndexInSlice;
+	const int itemIndex = _chatProcess->sliceOffset + messageIndexInSlice;
 
 	return _chatProcess->fileProgress({
 		.randomId = process.randomId,
@@ -2396,7 +2423,8 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 		.ready = progress.ready,
 		.total = progress.total,
 		.isAuxiliary = auxiliary,
-		.messagesTextCount = _chatProcess->messagesTextProcessed });
+		.messagesTextCount = _chatProcess->messagesTextProcessed,
+		.messagesTextTotal = _chatProcess->messagesTextTotal });
 }
 
 
@@ -2510,6 +2538,8 @@ void ApiWrap::processFileLoad(
 			return Type::GIF;
 		} else if (data.isVideoFile) {
 			return Type::Video;
+		} else if (data.isSong) {
+			return Type::Audio;
 		} else {
 			return Type::File;
 		}
@@ -2522,7 +2552,18 @@ void ApiWrap::processFileLoad(
 		: story
 		? story->file().size
 		: file.size;
-	if (!story && (_settings->media.types & type) != type) {
+
+	// Check if we should skip the download of this file.
+	// 1. If 'FullHistory' is selected, we want the text but NO files.
+	// 2. If the specific type is NOT selected, we skip the file.
+	// 3. If NO filters are selected at all, we skip everything.
+	const auto types = _settings->media.types;
+	const auto typeIsSelected = (types & type);
+	const auto skipDownload = (types & Type::FullHistory)
+		|| (types == MediaSettings::Types(0))
+		|| !typeIsSelected;
+
+	if (!story && skipDownload) {
 		file.skipReason = SkipReason::FileType;
 		done(QString());
 		return;

@@ -2549,6 +2549,11 @@ bool SkipMessageByDate(const Message &message, const Settings &settings) {
 	using Type = MediaSettings::Type;
 	const auto types = settings.media.types;
 
+	// 'Chat history without files' overrides all exclusion logic
+	if (types & Type::FullHistory) {
+		return false;
+	}
+
 	// Correctly check if the message has NO media content
 	const auto hasMedia = !std::holds_alternative<v::null_t>(message.media.content);
 
@@ -2561,6 +2566,7 @@ bool SkipMessageByDate(const Message &message, const Settings &settings) {
 			if (data.isVoiceMessage) return Type::VoiceMessage;
 			if (data.isAnimated) return Type::GIF;
 			if (data.isVideoFile) return Type::Video;
+			if (data.isAudioFile) return Type::Audio;
 			return Type::File;
 		}, [](const auto &data) {
 			return Type::Photo;

@@ -5968,10 +5968,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_export_option_video_files" = "Videos";
 "lng_export_option_voice_messages" = "Voice messages";
 "lng_export_option_video_messages" = "Video messages";
+"lng_export_option_audios" = "Audios";
 "lng_export_option_stickers" = "Stickers";
 "lng_export_option_gifs" = "GIFs";
 "lng_export_option_files" = "Files";
 "lng_export_option_text_messages" = "Text messages";
+"lng_export_option_full_history" = "Chat history without files";
 "lng_export_option_size_limit" = "Size limit: {size}";
 "lng_export_header_format" = "Location and format";
 "lng_export_option_location" = "Download path: {path}";
