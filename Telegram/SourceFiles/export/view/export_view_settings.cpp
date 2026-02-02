@@ -671,7 +671,7 @@ void SettingsWidget::addLimitsLabel(
 		}));
 	};
 
-	constexpr auto kOffset = 1;
+	constexpr auto kOffset = 60;
 
 	dateLabel->overrideLinkClickHandler([=](const QString &url) {
 		if (url == u"internal:edit_from"_q) {
@@ -829,7 +829,9 @@ not_null<Ui::RpWidget*> SettingsWidget::setupButtons(
 
 	value()
 		| rpl::map([](const Settings &data) {
-			return (data.types != Types(0)) || data.onlySinglePeer();
+			return (data.types != Types(0))
+				|| (data.media.types != MediaSettings::Types(0))
+				|| data.onlySinglePeer();
 		})
 		| rpl::distinct_until_changed()
 		| rpl::start_with_next([=](bool canStart) {
@@ -965,6 +967,10 @@ void SettingsWidget::addMediaOptions(
 		container,
 		tr::lng_export_option_files(tr::now),
 		MediaType::File);
+	addMediaOption(
+		container,
+		tr::lng_export_option_text_messages(tr::now),
+		MediaType::Text);
 	addSizeSlider(container);
 }
 

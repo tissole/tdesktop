@@ -78,6 +78,7 @@ public:
 		int64 ready = 0;
 		int64 total = 0;
 		bool isAuxiliary = false;
+		int messagesTextCount = 0;
 	};
 	void requestUserpics(
 		FnMut<bool(Data::UserpicsInfo&&)> start,

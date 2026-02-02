@@ -2527,21 +2527,58 @@ bool SingleMessageAfter(
 }
 
 bool SkipMessageByDate(const Message &message, const Settings &settings) {
-	// Handle ID range filtering
+	// 1. Hard filters (ID and Date range)
 	if (settings.useIdRange) {
-		const auto goodFromId = (settings.singlePeerFromId <= 0)
-			|| (int64(settings.singlePeerFromId) <= int64(message.id));
-		const auto goodTillId = (settings.singlePeerTillId <= 0)
-			|| (int64(message.id) <= int64(settings.singlePeerTillId));
-		return !goodFromId || !goodTillId;
+		const auto fromId = int64(settings.singlePeerFromId);
+		const auto tillId = int64(settings.singlePeerTillId);
+		if ((fromId > 0 && message.id < fromId)
+			|| (tillId > 0 && message.id > tillId)) {
+			return true;
+		}
+	} else {
+		const auto goodFrom = (settings.singlePeerFrom <= 0)
+			|| (settings.singlePeerFrom <= message.date);
+		const auto goodTill = (settings.singlePeerTill <= 0)
+			|| (message.date < settings.singlePeerTill);
+		if (!goodFrom || !goodTill) {
+			return true;
+		}
 	}
-	
-	// Handle date range filtering (existing logic)
-	const auto goodFrom = (settings.singlePeerFrom <= 0)
-		|| (settings.singlePeerFrom <= message.date);
-	const auto goodTill = (settings.singlePeerTill <= 0)
-		|| (message.date < settings.singlePeerTill);
-	return !goodFrom || !goodTill;
+
+	// 2. Content Filters (Strictly Exclusive)
+	using Type = MediaSettings::Type;
+	const auto types = settings.media.types;
+
+	// Correctly check if the message has NO media content
+	const auto hasMedia = !std::holds_alternative<v::null_t>(message.media.content);
+
+	if (hasMedia) {
+		// Identify the type of media
+		const auto type = v::match(message.media.content, [&](
+			const Data::Document &data) {
+			if (data.isSticker) return Type::Sticker;
+			if (data.isVideoMessage) return Type::VideoMessage;
+			if (data.isVoiceMessage) return Type::VoiceMessage;
+			if (data.isAnimated) return Type::GIF;
+			if (data.isVideoFile) return Type::Video;
+			return Type::File;
+		}, [](const auto &data) {
+			return Type::Photo;
+		});
+
+		// Skip if this media type is NOT selected
+		if (!(types & type)) {
+			return true;
+		}
+	} else {
+		// It is a Text message (no media)
+		// Skip if 'Text messages' is NOT selected
+		if (!(types & Type::Text)) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 Utf8String FormatPhoneNumber(const Utf8String &phoneNumber) {

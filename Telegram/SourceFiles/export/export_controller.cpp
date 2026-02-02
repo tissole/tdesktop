@@ -128,8 +128,7 @@ private:
 
 	int _messagesWritten = 0;
 	int _messagesCount = 0;
-
-	int _userpicsWritten = 0;
+	int _messagesTextCount = 0;
 	int _userpicsCount = 0;
 
 	int _storiesWritten = 0;
@@ -594,6 +593,7 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 				progress.total
 			};
 		}
+		_messagesTextCount = progress.messagesTextCount;
 		setState(stateDialogs(progress));
 		return true;
 	}, [=](Data::MessagesSlice &&result) {
@@ -665,6 +665,7 @@ void ControllerObject::setFinishedState() {
 	setState(FinishedState{
 		.path = _writer->mainFilePath(),
 		.filesCount = _contentFilesCount,
+		.messagesTextCount = _messagesTextCount,
 		.bytesCount = _stats.bytesCount(),
 	});
 }

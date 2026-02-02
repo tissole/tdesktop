@@ -106,6 +106,7 @@ struct CancelledState {
 struct FinishedState {
 	QString path;
 	int filesCount = 0;
+	int messagesTextCount = 0;
 	int64 bytesCount = 0;
 };
 

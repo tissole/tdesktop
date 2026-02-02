@@ -252,6 +252,7 @@ struct ApiWrap::UserpicsProcess {
 	uint64 maxId = 0;
 	bool lastSlice = false;
 	int pendingFiles = 0;
+	bool processing = false;
 };
 
 struct ApiWrap::StoriesProcess {
@@ -265,6 +266,7 @@ struct ApiWrap::StoriesProcess {
 	int offsetId = 0;
 	bool lastSlice = false;
 	int pendingFiles = 0;
+	bool processing = false;
 };
 
 struct ApiWrap::OtherDataProcess {
@@ -343,9 +345,12 @@ struct ApiWrap::ChatProcess {
 	std::optional<Data::MessagesSlice> slice;
 	bool lastSlice = false;
 	int pendingFiles = 0;
+	bool processing = false;
 
 	// Track messages processed (only when a whole message is completed)
 	int messagesProcessed = 0;
+	int messagesTextProcessed = 0;
+	int totalMessagesText = 0;
 
 	// Map file randomId -> message index in current slice
 	std::unordered_map<uint64, int> fileToMessageIndex;
@@ -945,12 +950,23 @@ void ApiWrap::loadNextUserpic() {
 	Expects(_userpicsProcess != nullptr);
 	Expects(_userpicsProcess->slice.has_value());
 
+	_userpicsProcess->processing = true;
+	const auto guard = gsl::finally([&] {
+		_userpicsProcess->processing = false;
+		if (_userpicsProcess && _userpicsProcess->pendingFiles == 0) {
+			finishUserpicsSlice();
+		}
+	});
+
 	for (auto &photo : _userpicsProcess->slice->list) {
 		processFileLoad(
 			photo.image.file,
 			Data::FileOrigin(),
 			[=](FileProgress value) { return loadUserpicProgress(value); },
 			[=](const QString &path) { loadUserpicDone(path); });
+		if (!_userpicsProcess || !_userpicsProcess->slice) {
+			return;
+		}
 	}
 }
 
@@ -997,18 +1013,26 @@ bool ApiWrap::loadUserpicProgress(FileProgress progress) {
 		.ready = progress.ready,
 		.total = progress.total,
 		.isAuxiliary = false,
+		.messagesTextCount = _chatProcess->messagesTextProcessed,
 	});
 }
 
 void ApiWrap::loadUserpicDone(const QString &relativePath) {
+
 	Expects(_userpicsProcess != nullptr);
 
+
+
 	--_userpicsProcess->pendingFiles;
+
 	Assert(_userpicsProcess->pendingFiles >= 0);
 
-	if (_userpicsProcess->pendingFiles == 0) {
+	if (_userpicsProcess->pendingFiles == 0 && !_userpicsProcess->processing) {
+
 		finishUserpicsSlice();
+
 	}
+
 }
 
 void ApiWrap::finishUserpics() {
@@ -1083,6 +1107,14 @@ void ApiWrap::loadNextStory() {
 	Expects(_storiesProcess != nullptr);
 	Expects(_storiesProcess->slice.has_value());
 
+	_storiesProcess->processing = true;
+	const auto guard = gsl::finally([&] {
+		_storiesProcess->processing = false;
+		if (_storiesProcess && _storiesProcess->pendingFiles == 0) {
+			finishStoriesSlice();
+		}
+	});
+
 	for (auto &story : _storiesProcess->slice->list) {
 		const auto origin = Data::FileOrigin{ .storyId = story.id };
 		processFileLoad(
@@ -1092,6 +1124,9 @@ void ApiWrap::loadNextStory() {
 			[=](const QString &path) { loadStoryDone(path); },
 			nullptr,
 			&story);
+		if (!_storiesProcess || !_storiesProcess->slice) {
+			return;
+		}
 
 		processFileLoad(
 			story.thumb().file,
@@ -1100,6 +1135,9 @@ void ApiWrap::loadNextStory() {
 			[=](const QString &path) { loadStoryThumbDone(path); },
 			nullptr,
 			&story);
+		if (!_storiesProcess || !_storiesProcess->slice) {
+			return;
+		}
 	}
 }
 
@@ -1148,14 +1186,15 @@ bool ApiWrap::loadStoryProgress(FileProgress progress, bool auxiliary) {
 		.itemIndex = _storiesProcess->processed,
 		.ready = progress.ready,
 		.total = progress.total,
-		.isAuxiliary = auxiliary });
+		.isAuxiliary = auxiliary,
+		.messagesTextCount = _chatProcess->messagesTextProcessed });
 }
 
 void ApiWrap::loadStoryDone(const QString &relativePath) {
 	Expects(_storiesProcess != nullptr);
 	--_storiesProcess->pendingFiles;
 	Assert(_storiesProcess->pendingFiles >= 0);
-	if (_storiesProcess->pendingFiles == 0) {
+	if (_storiesProcess->pendingFiles == 0 && !_storiesProcess->processing) {
 		finishStoriesSlice();
 	}
 }
@@ -1168,7 +1207,7 @@ void ApiWrap::loadStoryThumbDone(const QString &relativePath) {
 	Expects(_storiesProcess != nullptr);
 	--_storiesProcess->pendingFiles;
 	Assert(_storiesProcess->pendingFiles >= 0);
-	if (_storiesProcess->pendingFiles == 0) {
+	if (_storiesProcess->pendingFiles == 0 && !_storiesProcess->processing) {
 		finishStoriesSlice();
 	}
 }
@@ -1352,7 +1391,10 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 			return;
 		}
 		const auto filter = getFilter();
-		const auto exactCountFromFilter = (filter.type() != mtpc_inputMessagesFilterEmpty);
+		const auto mediaFilterActive = (filter.type() != mtpc_inputMessagesFilterEmpty);
+		const auto textFilterActive = (_settings->media.types & MediaSettings::Type::Text);
+		const auto exactCountFromFilter = mediaFilterActive || (textFilterActive && (_settings->media.types == MediaSettings::Type::Text));
+		
 		const auto fromId = (_chatProcess->fromId > 0) ? _chatProcess->fromId : (_settings->useIdRange ? _settings->singlePeerFromId : int64(1));
 		const auto tillId = (_chatProcess->tillId > 0) ? _chatProcess->tillId : (_settings->useIdRange ? _settings->singlePeerTillId : int64(0));
 		const auto realCount = (tillId > 0 && !exactCountFromFilter)
@@ -2172,6 +2214,14 @@ void ApiWrap::loadNextMessageFile() {
 	Expects(_chatProcess != nullptr);
 	Expects(_chatProcess->slice.has_value());
 
+	_chatProcess->processing = true;
+	const auto guard = gsl::finally([&] {
+		_chatProcess->processing = false;
+		if (_chatProcess && _chatProcess->pendingFiles == 0) {
+			finishMessagesSlice();
+		}
+	});
+
 	for (int i = 0; i < int(_chatProcess->slice->list.size()); ++i) {
 		auto &message = _chatProcess->slice->list[i];
 		if (Data::SkipMessageByDate(message, *_settings)) {
@@ -2181,7 +2231,26 @@ void ApiWrap::loadNextMessageFile() {
 			return;
 		}
 
+		// Check if message is a pure text message (no media)
+		const auto hasMedia = !std::holds_alternative<v::null_t>(message.media.content);
+		const auto textFilterSelected = (_settings->media.types & MediaSettings::Type::Text);
+
+		if (!hasMedia && textFilterSelected) {
+			_chatProcess->messagesTextProcessed++;
+			// Trigger progress for text-only messages
+			_chatProcess->fileProgress({
+				.randomId = 0,
+				.path = QString(),
+				.itemIndex = _chatProcess->messagesProcessed + i,
+				.ready = 1,
+				.total = 1,
+				.isAuxiliary = true, 
+				.messagesTextCount = _chatProcess->messagesTextProcessed
+			});
+		}
+
 		const auto splitIndex = _chatProcess->info.splits[
+			_chatProcess->localSplitIndex];
 			_chatProcess->localSplitIndex];
 		auto origin = Data::FileOrigin();
 		origin.messageId = message.id;
@@ -2206,6 +2275,9 @@ void ApiWrap::loadNextMessageFile() {
 				},
 				[=](const QString &path) { loadMessageFileDone(path); },
 				&message);
+			if (!_chatProcess || !_chatProcess->slice) {
+				return;
+			}
 		}
 
 		if (message.thumb().file.location) {
@@ -2222,11 +2294,10 @@ void ApiWrap::loadNextMessageFile() {
 				},
 				[=](const QString &path) { loadMessageThumbDone(path); },
 				&message);
+			if (!_chatProcess || !_chatProcess->slice) {
+				return;
+			}
 		}
-	}
-
-	if (_chatProcess->pendingFiles == 0) {
-		finishMessagesSlice();
 	}
 }
 
@@ -2325,7 +2396,8 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 		.itemIndex = itemIndex,
 		.ready = progress.ready,
 		.total = progress.total,
-		.isAuxiliary = auxiliary });
+		.isAuxiliary = auxiliary,
+		.messagesTextCount = _chatProcess->messagesTextProcessed });
 }
 
 
@@ -2333,7 +2405,7 @@ void ApiWrap::loadMessageFileDone(const QString &relativePath) {
 	Expects(_chatProcess != nullptr);
 	--_chatProcess->pendingFiles;
 	Assert(_chatProcess->pendingFiles >= 0);
-	if (_chatProcess->pendingFiles == 0) {
+	if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
 		finishMessagesSlice();
 	}
 }
@@ -2346,7 +2418,7 @@ void ApiWrap::loadMessageThumbDone(const QString &relativePath) {
 	Expects(_chatProcess != nullptr);
 	--_chatProcess->pendingFiles;
 	Assert(_chatProcess->pendingFiles >= 0);
-	if (_chatProcess->pendingFiles == 0) {
+	if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
 		finishMessagesSlice();
 	}
 }
@@ -2379,7 +2451,7 @@ void ApiWrap::loadMessageEmojiDone(uint64 id, const QString &relativePath) {
 				--_chatProcess->pendingFiles;
 			}
 			_chatProcess->emojiToMessageIndices.erase(j);
-			if (_chatProcess->pendingFiles == 0) {
+			if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
 				finishMessagesSlice();
 				return;
 			}

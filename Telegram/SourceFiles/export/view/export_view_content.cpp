@@ -142,6 +142,14 @@ Content ContentFromState(const FinishedState &state) {
 		1. });
 	result.rows.push_back({
 		Content::kDoneId,
+		tr::lng_export_total_text_messages(
+			tr::now,
+			lt_count,
+			QString::number(state.messagesTextCount)),
+		QString(),
+		1. });
+	result.rows.push_back({
+		Content::kDoneId,
 		tr::lng_export_total_size(
 			tr::now,
 			lt_size,
