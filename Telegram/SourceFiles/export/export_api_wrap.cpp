@@ -2251,7 +2251,6 @@ void ApiWrap::loadNextMessageFile() {
 
 		const auto splitIndex = _chatProcess->info.splits[
 			_chatProcess->localSplitIndex];
-			_chatProcess->localSplitIndex];
 		auto origin = Data::FileOrigin();
 		origin.messageId = message.id;
 		origin.split = (splitIndex >= 0)
