@@ -18,6 +18,7 @@ class VerticalLayout;
 class Checkbox;
 class ScrollArea;
 class BoxContent;
+class FlatLabel;
 } // namespace Ui
 
 namespace Main {

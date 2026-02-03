@@ -190,35 +190,36 @@ void PanelController::showSettings() {
 		_panel,
 		_session,
 		*_settings);
-	settings->setShowBoxCallback([=](object_ptr<Ui::BoxContent> box) {
+	const auto settingsRaw = settings.get();
+	settingsRaw->setShowBoxCallback([=](object_ptr<Ui::BoxContent> box) {
 		_panel->showBox(
 			std::move(box),
 			Ui::LayerOption::KeepOther,
 			anim::type::normal);
 	});
 
-	settings->calculateClicks(
+	settingsRaw->calculateClicks(
 	) | rpl::start_with_next([=] {
-		settings->setScanning(true);
+		settingsRaw->setScanning(true);
 		_process->runScan(*_settings, PrepareEnvironment(_session));
-	}, settings->lifetime());
+	}, settingsRaw->lifetime());
 
-	settings->startClicks(
+	settingsRaw->startClicks(
 	) | rpl::start_with_next([=]() {
 		showProgress();
 		_process->startExport(*_settings, PrepareEnvironment(_session));
-	}, settings->lifetime());
+	}, settingsRaw->lifetime());
 
-	settings->cancelClicks(
+	settingsRaw->cancelClicks(
 	) | rpl::start_with_next([=] {
 		LOG(("Export Info: Panel Hide By Cancel."));
 		_panel->hideGetDuration();
-	}, settings->lifetime());
+	}, settingsRaw->lifetime());
 
-	settings->changes(
+	settingsRaw->changes(
 	) | rpl::start_with_next([=](Settings &&settings) {
 		*_settings = std::move(settings);
-	}, settings->lifetime());
+	}, settingsRaw->lifetime());
 
 	_panel->showInner(std::move(settings));
 }
