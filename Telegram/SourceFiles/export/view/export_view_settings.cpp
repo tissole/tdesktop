@@ -1090,7 +1090,7 @@ void SettingsWidget::refreshButtons(
 	const auto start = canStart
 		? Ui::CreateChild<Ui::RoundButton>(
 			container.get(),
-			buttonText,
+			rpl::single(buttonText),
 			st::defaultBoxButton)
 		: nullptr;
 	if (start) {
