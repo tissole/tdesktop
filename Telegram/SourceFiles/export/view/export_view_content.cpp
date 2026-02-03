@@ -133,15 +133,6 @@ Content ContentFromState(const FinishedState &state) {
 		QString(),
 		1. });
 
-	const auto push = [&](const QString &label, int count, int64 size = -1) {
-		if (count <= 0) return;
-		auto text = label + ": " + QString::number(count);
-		if (size >= 0) {
-			text += " (" + Ui::FormatSizeText(size) + ")";
-		}
-		result.rows.push_back({ Content::kDoneId, text, QString(), 1. });
-	};
-
 	using Type = MediaSettings::Type;
 	for (const auto &[type, item] : state.breakdown) {
 		if (item.count <= 0) continue;
@@ -172,9 +163,30 @@ Content ContentFromState(const FinishedState &state) {
 		}
 	}
 
-	push(tr::lng_export_total_text_messages(tr::now, lt_amount, QString::number(state.messagesTextCount)));
-	push(tr::lng_export_total_media_messages(tr::now, lt_amount, QString::number(state.messagesMediaCount)));
-	push(tr::lng_export_total_messages(tr::now, lt_amount, QString::number(state.messagesTotalCount)));
+	result.rows.push_back({
+		Content::kDoneId,
+		tr::lng_export_total_text_messages(
+			tr::now,
+			lt_amount,
+			QString::number(state.messagesTextCount)),
+		QString(),
+		1. });
+	result.rows.push_back({
+		Content::kDoneId,
+		tr::lng_export_total_media_messages(
+			tr::now,
+			lt_amount,
+			QString::number(state.messagesMediaCount)),
+		QString(),
+		1. });
+	result.rows.push_back({
+		Content::kDoneId,
+		tr::lng_export_total_messages(
+			tr::now,
+			lt_amount,
+			QString::number(state.messagesTotalCount)),
+		QString(),
+		1. });
 
 	result.rows.push_back({
 		Content::kDoneId,
