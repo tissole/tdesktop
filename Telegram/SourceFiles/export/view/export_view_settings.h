@@ -8,8 +8,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "export/export_settings.h"
+#include "export/output/export_output_stats.h"
 #include "ui/rp_widget.h"
 #include "base/object_ptr.h"
+#include <map>
 
 namespace Ui {
 class VerticalLayout;

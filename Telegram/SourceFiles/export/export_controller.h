@@ -8,10 +8,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include <memory>
+#include <map>
 
 #include "base/variant.h"
 #include "mtproto/mtproto_response.h"
 #include "export/data/export_data_types.h"
+#include "export/export_settings.h"
+#include "export/output/export_output_stats.h"
 
 #include <QtCore/QPointer>
 #include <crl/crl_object_on_queue.h>
@@ -102,6 +105,21 @@ struct ProcessingState {
 
 struct ScanDoneState {
 	std::map<MediaSettings::Type, Output::StatItem> stats;
+};
+
+struct ApiErrorState {
+	MTP::Error data;
+};
+
+struct ValueErrorState {
+	QString message;
+};
+
+struct OutputErrorState {
+	QString path;
+};
+
+struct CancelledState {
 };
 
 using State = std::variant<
