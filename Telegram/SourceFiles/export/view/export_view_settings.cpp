@@ -24,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_utilities.h"
 #include "ui/boxes/calendar_box.h"
 #include "ui/boxes/choose_time.h"
+#include "ui/text/format_values.h"
 #include "platform/platform_specific.h"
 #include "core/application.h"
 #include "core/file_utilities.h"
@@ -679,8 +680,6 @@ void SettingsWidget::addLimitsLabel(
 		}));
 	};
 
-	constexpr auto kOffset = 60;
-
 	dateLabel->overrideLinkClickHandler([=](const QString &url) {
 		if (url == u"internal:edit_from"_q) {
 			const auto done = [=](TimeId limit) {
@@ -1069,6 +1068,8 @@ void SettingsWidget::addSizeSlider(
 void SettingsWidget::refreshButtons(
 		not_null<Ui::RpWidget*> container,
 		bool canStart) {
+	using namespace rpl::mappers;
+
 	container->hideChildren();
 	const auto children = container->children();
 	for (const auto child : children) {
@@ -1084,7 +1085,7 @@ void SettingsWidget::refreshButtons(
 		? tr::lng_export_analyzing(tr::now)
 		: showAnalyze
 		? tr::lng_export_analyze(tr::now)
-		: tr::lng_export_start();
+		: tr::lng_export_start(tr::now);
 
 	const auto start = canStart
 		? Ui::CreateChild<Ui::RoundButton>(
@@ -1104,12 +1105,12 @@ void SettingsWidget::refreshButtons(
 			_startClicks = start->clicks() | rpl::to_empty;
 		}
 
-		container->sizeValue()
-			| rpl::start_with_next([=](QSize size) {
-				const auto right = st::defaultBox.buttonPadding.right();
-				const auto top = st::defaultBox.buttonPadding.top();
-				start->moveToRight(right, top);
-			}, start->lifetime());
+		container->sizeValue(
+		).start_with_next([=](QSize size) {
+			const auto right = st::defaultBox.buttonPadding.right();
+			const auto top = st::defaultBox.buttonPadding.top();
+			start->moveToRight(right, top);
+		}, start->lifetime());
 	}
 
 	const auto cancel = Ui::CreateChild<Ui::RoundButton>(
@@ -1122,8 +1123,9 @@ void SettingsWidget::refreshButtons(
 
 	rpl::combine(
 		container->sizeValue(),
-		start ? start->widthValue() : rpl::single(0)
-	) | rpl::start_with_next([=](QSize size, int width) {
+		start ? start->widthValue() : rpl::single(0),
+		_2
+	).start_with_next([=](int width) {
 		const auto right = st::defaultBox.buttonPadding.right()
 			+ (width ? width + st::defaultBox.buttonPadding.left() : 0);
 		const auto top = st::defaultBox.buttonPadding.top();
