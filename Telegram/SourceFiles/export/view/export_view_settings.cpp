@@ -1106,7 +1106,7 @@ void SettingsWidget::refreshButtons(
 		}
 
 		container->sizeValue(
-		).start_with_next([=](QSize size) {
+		) | rpl::start_with_next([=](QSize size) {
 			const auto right = st::defaultBox.buttonPadding.right();
 			const auto top = st::defaultBox.buttonPadding.top();
 			start->moveToRight(right, top);
@@ -1125,7 +1125,7 @@ void SettingsWidget::refreshButtons(
 		container->sizeValue(),
 		start ? start->widthValue() : rpl::single(0),
 		_2
-	).start_with_next([=](int width) {
+	) | rpl::start_with_next([=](int width) {
 		const auto right = st::defaultBox.buttonPadding.right()
 			+ (width ? width + st::defaultBox.buttonPadding.left() : 0);
 		const auto top = st::defaultBox.buttonPadding.top();
