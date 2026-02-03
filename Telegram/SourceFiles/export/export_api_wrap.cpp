@@ -2538,7 +2538,7 @@ void ApiWrap::processFileLoad(
 			return Type::GIF;
 		} else if (data.isVideoFile) {
 			return Type::Video;
-		} else if (data.isSong) {
+		} else if (data.isAudioFile) {
 			return Type::Audio;
 		} else {
 			return Type::File;
