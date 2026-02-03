@@ -1465,26 +1465,15 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 }
 
 void ApiWrap::resolveDates() {
-
 	const auto fromDate = _settings->singlePeerFrom;
-
 	const auto tillDate = _settings->singlePeerTill;
 
-
-
 	if (fromDate <= 0 && tillDate <= 0) {
-
 		requestMessagesCount(0);
-
 		return;
-
 	}
 
-
-
 	const auto peer = _chatProcess->info.input;
-
-
 
 	const auto resolveTill = [=] {
 		if (tillDate <= 0) {
@@ -1516,8 +1505,6 @@ void ApiWrap::resolveDates() {
 			return true;
 		}).send();
 	};
-
-
 
 	if (fromDate > 0) {
 		mainRequest(MTPmessages_GetHistory(
@@ -1555,7 +1542,6 @@ void ApiWrap::resolveDates() {
 	} else {
 		resolveTill();
 	}
-
 }
 
 void ApiWrap::finishExport(FnMut<void()> done) {
@@ -2473,20 +2459,20 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 		}
 	}
 
-	    const int itemIndex = _chatProcess->sliceOffset + messageIndexInSlice;
-	
-	    return _chatProcess->fileProgress({
-	        .randomId = process.randomId,
-	        .path = process.relativePath,
-	        .itemIndex = itemIndex,
-	        .ready = progress.ready,
-	        .total = progress.total,
-	        .isAuxiliary = auxiliary,
-	        .messagesTextCount = _chatProcess->messagesTextProcessed,
-	        .messagesMediaCount = _chatProcess->messagesMediaProcessed,
-	        .messagesTotalCount = _chatProcess->messagesTotalProcessed,
-	        .messagesTextTotal = _chatProcess->messagesTextTotal });
-	}
+	const int itemIndex = _chatProcess->sliceOffset + messageIndexInSlice;
+
+	return _chatProcess->fileProgress({
+		.randomId = process.randomId,
+		.path = process.relativePath,
+		.itemIndex = itemIndex,
+		.ready = progress.ready,
+		.total = progress.total,
+		.isAuxiliary = auxiliary,
+		.messagesTextCount = _chatProcess->messagesTextProcessed,
+		.messagesMediaCount = _chatProcess->messagesMediaProcessed,
+		.messagesTotalCount = _chatProcess->messagesTotalProcessed,
+		.messagesTextTotal = _chatProcess->messagesTextTotal });
+}
 
 void ApiWrap::loadMessageFileDone(const QString &relativePath) {
 	Expects(_chatProcess != nullptr);
