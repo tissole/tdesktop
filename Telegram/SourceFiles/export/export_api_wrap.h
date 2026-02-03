@@ -270,6 +270,8 @@ private:
 	MTP::ConcurrentSender _mtp;
 	std::optional<uint64> _takeoutId;
 	std::optional<UserId> _selfId;
+	MTPInputUser _user = MTP_inputUserSelf();
+	std::unique_ptr<Settings> _settings;
 	Output::Stats *_stats = nullptr;
 	bool _isScanning = false;
 	Output::Stats *_scanStats = nullptr;

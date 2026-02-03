@@ -786,7 +786,7 @@ void ApiWrap::requestDialogsList(
 void ApiWrap::startMainSession(FnMut<void()> done) {
 	using Type = Settings::Type;
 	const auto sizeLimit = _settings->media.sizeLimit;
-	const auto hasFiles = ((_settings->media.types != 0) && (sizeLimit > 0))
+	const auto hasFiles = (_settings->media.types && (sizeLimit > 0))
 		|| (_settings->types & Type::Userpics)
 		|| (_settings->types & Type::Stories);
 
@@ -827,8 +827,9 @@ void ApiWrap::startMainSession(FnMut<void()> done) {
 			return;
 		}
 		_mtp.request(MTPaccount_InitTakeoutSession(
-			MTP_flags(flags),
-			MTP_long(sizeLimit)
+			MTPaccount_initTakeoutSession(
+				MTP_flags(flags),
+				MTP_long(sizeLimit))
 		)).done([=, done = std::move(done)](
 				const MTPaccount_Takeout &result) mutable {
 			_takeoutId = result.match([](const MTPDaccount_takeout &data) {
@@ -1412,7 +1413,7 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 		const auto fromId = (_chatProcess->fromId > 0) ? _chatProcess->fromId : (_settings->useIdRange ? _settings->singlePeerFromId : int64(1));
 		const auto tillId = (_chatProcess->tillId > 0) ? _chatProcess->tillId : (_settings->useIdRange ? _settings->singlePeerTillId : int64(0));
 		const auto realCount = (tillId > 0 && !exactCountFromFilter)
-			? std::min(count, int(std::max(0LL, tillId - fromId + 1)))
+			? std::min(count, int(std::max(int64(0), tillId - fromId + 1)))
 			: count;
 		checkFirstMessageDate(localSplitIndex, realCount);
 	});
@@ -1452,7 +1453,7 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 	_chatProcess->info.messagesCountPerSplit[localSplitIndex] = count;
 	
 	const auto types = _settings->media.types;
-	if ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory)) {
+	if (types & (MediaSettings::Type::Text | MediaSettings::Type::FullHistory)) {
 		_chatProcess->messagesTextTotal += count;
 	}
 
@@ -1491,14 +1492,15 @@ void ApiWrap::resolveDates() {
 			return;
 		}
 		mainRequest(MTPmessages_GetHistory(
-			peer,
-			MTP_int(0), // offset_id
-			MTP_int(tillDate),
-			MTP_int(0), // add_offset
-			MTP_int(1), // limit
-			MTP_int(0), // max_id
-			MTP_int(0), // min_id
-			MTP_long(0) // hash
+			MTPmessages_getHistory(
+				peer,
+				MTP_int(0), // offset_id
+				MTP_int(tillDate),
+				MTP_int(0), // add_offset
+				MTP_int(1), // limit
+				MTP_int(0), // max_id
+				MTP_int(0), // min_id
+				MTP_long(0)) // hash
 		)).done([=](const MTPmessages_Messages &result) {
 			result.match([&](const MTPDmessages_messagesNotModified &) {
 			}, [&](const auto &data) {
@@ -1519,14 +1521,15 @@ void ApiWrap::resolveDates() {
 
 	if (fromDate > 0) {
 		mainRequest(MTPmessages_GetHistory(
-			peer,
-			MTP_int(0), // offset_id
-			MTP_int(fromDate),
-			MTP_int(0), // add_offset
-			MTP_int(1), // limit
-			MTP_int(0), // max_id
-			MTP_int(0), // min_id
-			MTP_long(0) // hash
+			MTPmessages_getHistory(
+				peer,
+				MTP_int(0), // offset_id
+				MTP_int(fromDate),
+				MTP_int(0), // add_offset
+				MTP_int(1), // limit
+				MTP_int(0), // max_id
+				MTP_int(0), // min_id
+				MTP_long(0)) // hash
 		)).done([=](const MTPmessages_Messages &result) {
 			result.match([&](const MTPDmessages_messagesNotModified &) {
 			}, [&](const auto &data) {
@@ -1855,7 +1858,7 @@ void ApiWrap::appendChatsSlice(
 
 	const auto types = _settings->types;
 	const auto goodByTypes = [&](const Data::DialogInfo &info) {
-		return ((types & SettingsFromDialogsType(info.type)) != 0);
+		return !!(types & SettingsFromDialogsType(info.type));
 	};
 	auto filtered = ranges::views::all(
 		from
@@ -1863,8 +1866,8 @@ void ApiWrap::appendChatsSlice(
 		if (goodByTypes(info)) {
 			return true;
 		} else if (info.migratedToChannelId
-			&& (((types & Settings::Type::PublicGroups) != 0)
-				|| ((types & Settings::Type::PrivateGroups) != 0))) {
+			&& ((types & Settings::Type::PublicGroups)
+				|| (types & Settings::Type::PrivateGroups))) {
 			return true;
 		}
 		return false;
@@ -1987,16 +1990,18 @@ void ApiWrap::requestChatMessages(
 			MTP_long(0) // hash
 		)).done(doneHandler).send();
 	} else {
-		splitRequest(realSplitIndex, MTPmessages_GetHistory(
-			realPeerInput,
-			MTP_int(offsetId),
-			MTP_int(0), // offset_date
-			MTP_int(addOffset),
-			MTP_int(limit),
-			MTP_int(int32(maxId)), // max_id
-			MTP_int(int32(minId)), // min_id
-			MTP_long(0)	 // hash
-		)).fail([=](const MTP::Error &error) {
+				splitRequest(realSplitIndex, MTPmessages_GetHistory(
+					MTPmessages_getHistory(
+						realPeerInput,
+						MTP_int(offsetId),
+						MTP_int(0), // offset_date
+						MTP_int(addOffset),
+						MTP_int(limit),
+						MTP_int(int32(maxId)), // max_id
+						MTP_int(int32(minId)), // min_id
+						MTP_long(0)) // hash
+				))
+		.fail([=](const MTP::Error &error) {
 			Expects(_chatProcess != nullptr);
 
 			if (error.type() == u"CHANNEL_PRIVATE"_q) {
