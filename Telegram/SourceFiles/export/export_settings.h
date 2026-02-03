@@ -40,7 +40,7 @@ struct MediaSettings {
 	int64 sizeLimit = 8 * 1024 * 1024;
 
 	static inline Types DefaultTypes() {
-		return Type::Photo;
+		return Types(0);
 	}
 
 };

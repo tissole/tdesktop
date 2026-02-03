@@ -132,22 +132,50 @@ Content ContentFromState(const FinishedState &state) {
 		tr::lng_export_finished(tr::now),
 		QString(),
 		1. });
-	result.rows.push_back({
-		Content::kDoneId,
-		tr::lng_export_total_amount(
-			tr::now,
-			lt_amount,
-			QString::number(state.filesCount)),
-		QString(),
-		1. });
-	result.rows.push_back({
-		Content::kDoneId,
-		tr::lng_export_total_text_messages(
-			tr::now,
-			lt_amount,
-			QString::number(state.messagesTextCount)),
-		QString(),
-		1. });
+
+	const auto push = [&](const QString &label, int count, int64 size = -1) {
+		if (count <= 0) return;
+		auto text = label + ": " + QString::number(count);
+		if (size >= 0) {
+			text += " (" + Ui::FormatSizeText(size) + ")";
+		}
+		result.rows.push_back({ Content::kDoneId, text, QString(), 1. });
+	};
+
+	using Type = MediaSettings::Type;
+	for (const auto &[type, item] : state.breakdown) {
+		if (item.count <= 0) continue;
+		QString label;
+		switch (type) {
+		case Type::Photo: label = tr::lng_export_option_photos(tr::now); break;
+		case Type::Video: label = tr::lng_export_option_video_files(tr::now); break;
+		case Type::VoiceMessage: label = tr::lng_export_option_voice_messages(tr::now); break;
+		case Type::VideoMessage: label = tr::lng_export_option_video_messages(tr::now); break;
+		case Type::Audio: label = tr::lng_export_option_audios(tr::now); break;
+		case Type::Sticker: label = tr::lng_export_option_stickers(tr::now); break;
+		case Type::GIF: label = tr::lng_export_option_gifs(tr::now); break;
+		case Type::File: label = tr::lng_export_option_files(tr::now); break;
+		}
+		if (!label.isEmpty()) {
+			result.rows.push_back({
+				Content::kDoneId,
+				tr::lng_export_downloaded_count(
+					tr::now,
+					lt_label,
+					label,
+					lt_amount,
+					QString::number(item.count),
+					lt_size,
+					Ui::FormatSizeText(item.size)),
+				QString(),
+				1. });
+		}
+	}
+
+	push(tr::lng_export_total_text_messages(tr::now, lt_amount, QString::number(state.messagesTextCount)));
+	push(tr::lng_export_total_media_messages(tr::now, lt_amount, QString::number(state.messagesMediaCount)));
+	push(tr::lng_export_total_messages(tr::now, lt_amount, QString::number(state.messagesTotalCount)));
+
 	result.rows.push_back({
 		Content::kDoneId,
 		tr::lng_export_total_size(

@@ -59,7 +59,9 @@ public:
 	void startExport(
 		const Settings &settings,
 		Output::Stats *stats,
-		FnMut<void(StartInfo)> done);
+		FnMut<void(StartInfo)> done,
+		bool isScanning = false,
+		Output::Stats *scanStats = nullptr);
 
 	void requestDialogsList(
 		Fn<bool(int count)> progress,
@@ -79,6 +81,8 @@ public:
 		int64 total = 0;
 		bool isAuxiliary = false;
 		int messagesTextCount = 0;
+		int messagesMediaCount = 0;
+		int messagesTotalCount = 0;
 		int messagesTextTotal = 0;
 	};
 	void requestUserpics(
@@ -267,9 +271,8 @@ private:
 	std::optional<uint64> _takeoutId;
 	std::optional<UserId> _selfId;
 	Output::Stats *_stats = nullptr;
-
-	std::unique_ptr<Settings> _settings;
-	MTPInputUser _user = MTP_inputUserSelf();
+	bool _isScanning = false;
+	Output::Stats *_scanStats = nullptr;
 
 	std::unique_ptr<StartProcess> _startProcess;
 	std::unique_ptr<LoadedFileCache> _fileCache;

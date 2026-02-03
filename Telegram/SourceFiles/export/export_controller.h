@@ -51,9 +51,20 @@ struct PasswordCheckState {
 	int64 singlePeerId = 0;
 };
 
+struct FinishedState {
+	QString path;
+	int filesCount = 0;
+	int messagesTextCount = 0;
+	int messagesMediaCount = 0;
+	int messagesTotalCount = 0;
+	int64 bytesCount = 0;
+	std::map<MediaSettings::Type, Output::StatItem> breakdown;
+};
+
 struct ProcessingState {
 	enum class Step {
 		Initializing,
+		Scanning,
 		DialogsList,
 		PersonalInfo,
 		Userpics,
@@ -86,28 +97,11 @@ struct ProcessingState {
 	int itemCount = 0;
 
 	base::flat_map<uint64, FileDownloadProgress> activeDownloads;
+	std::map<MediaSettings::Type, Output::StatItem> selectedStats;
 };
 
-struct ApiErrorState {
-	MTP::Error data;
-};
-
-struct ValueErrorState {
-	QString message;
-};
-
-struct OutputErrorState {
-	QString path;
-};
-
-struct CancelledState {
-};
-
-struct FinishedState {
-	QString path;
-	int filesCount = 0;
-	int messagesTextCount = 0;
-	int64 bytesCount = 0;
+struct ScanDoneState {
+	std::map<MediaSettings::Type, Output::StatItem> stats;
 };
 
 using State = std::variant<
@@ -118,6 +112,7 @@ using State = std::variant<
 	ValueErrorState,
 	OutputErrorState,
 	CancelledState,
+	ScanDoneState,
 	FinishedState>;
 
 //struct PasswordUpdate {
@@ -149,6 +144,9 @@ public:
 	//void cancelUnconfirmedPassword();
 
 	// Processing step.
+	void runScan(
+		const Settings &settings,
+		const Environment &environment);
 	void startExport(
 		const Settings &settings,
 		const Environment &environment);

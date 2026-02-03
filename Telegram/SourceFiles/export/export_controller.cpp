@@ -59,6 +59,9 @@ public:
 	//void cancelUnconfirmedPassword();
 
 	// Processing step.
+	void runScan(
+		const Settings &settings,
+		const Environment &environment);
 	void startExport(
 		const Settings &settings,
 		const Environment &environment);
@@ -110,6 +113,7 @@ private:
 	ProcessingState stateContacts() const;
 	ProcessingState stateSessions() const;
 	ProcessingState stateOtherData() const;
+	ProcessingState stateScanning(int itemIndex, int itemCount) const;
 	ProcessingState stateDialogs(const DownloadProgress &progress) const;
 	void fillMessagesState(
 		ProcessingState &result,
@@ -123,12 +127,17 @@ private:
 	Settings _settings;
 	Environment _environment;
 
+	bool _isScanning = false;
+	Output::Stats _scanStats;
+
 	Data::DialogsInfo _dialogsInfo;
 	int _dialogIndex = -1;
 
 	int _messagesWritten = 0;
 	int _messagesCount = 0;
 	int _messagesTextCount = 0;
+	int _messagesMediaCount = 0;
+	int _messagesTotalCount = 0;
 	int _messagesTextTotal = 0;
 	int _userpicsWritten = 0;
 	int _userpicsCount = 0;
@@ -268,12 +277,59 @@ bool ControllerObject::ioCatchError(Output::Result result) {
 //
 //}
 
+void ControllerObject::runScan(
+		const Settings &settings,
+		const Environment &environment) {
+	if (!_settings.path.isEmpty() || _isScanning) {
+		return;
+	}
+	_isScanning = true;
+	_settings = NormalizeSettings(settings);
+	_environment = environment;
+
+	// Use a temporary path for scan, though we won't write files.
+	_settings.path = Output::NormalizePath(_settings);
+	_writer = Output::CreateWriter(_settings.format);
+	
+	_steps.clear();
+	_steps.push_back(Step::Initializing);
+	if (_settings.types & Settings::Type::AnyChatsMask) {
+		_steps.push_back(Step::DialogsList);
+		_steps.push_back(Step::Dialogs);
+	}
+	
+	exportNext();
+}
+
 void ControllerObject::startExport(
 		const Settings &settings,
 		const Environment &environment) {
-	if (!_settings.path.isEmpty()) {
+	if (!_settings.path.isEmpty() && !_isScanning) {
 		return;
 	}
+
+	int expectedFiles = 0;
+	using MediaType = MediaSettings::Type;
+	for (const auto &[type, item] : _scanStats.byType()) {
+		if (type != MediaType::Text && type != MediaType::FullHistory) {
+			expectedFiles += item.count;
+		}
+	}
+	_stats.setExpectedFilesCount(expectedFiles);
+
+	_isScanning = false;
+	_messagesWritten = 0;
+	_messagesCount = 0;
+	_messagesTextCount = 0;
+	_messagesMediaCount = 0;
+	_messagesTotalCount = 0;
+	_messagesTextTotal = 0;
+	_userpicsWritten = 0;
+	_userpicsCount = 0;
+	_storiesWritten = 0;
+	_storiesCount = 0;
+	_contentFilesCount = 0;
+
 	_settings = NormalizeSettings(settings);
 	_environment = environment;
 
@@ -330,6 +386,9 @@ void ControllerObject::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
 		result[index] = count;
 	};
 	push(Step::Initializing, 1);
+	if (_isScanning) {
+		push(Step::Scanning, info.dialogsCount);
+	}
 	if (_settings.types & Settings::Type::AnyChatsMask) {
 		push(Step::DialogsList, 1);
 	}
@@ -365,6 +424,14 @@ void ControllerObject::cancelExportFast() {
 
 void ControllerObject::exportNext() {
 	if (++_stepIndex >= _steps.size()) {
+		if (_isScanning) {
+			auto stats = _scanStats.byType();
+			_isScanning = false;
+			_stepIndex = -1;
+			_settings = Settings();
+			setState(ScanDoneState{ std::move(stats) });
+			return;
+		}
 		if (ioCatchError(_writer->finish())) {
 			return;
 		}
@@ -393,7 +460,7 @@ void ControllerObject::initialize() {
 	setState(stateInitializing());
 	_api.startExport(_settings, &_stats, [=](ApiWrap::StartInfo info) {
 		initialized(info);
-	});
+	}, _isScanning, &_scanStats);
 }
 
 void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
@@ -596,8 +663,14 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 			};
 		}
 		_messagesTextCount = progress.messagesTextCount;
+		_messagesMediaCount = progress.messagesMediaCount;
+		_messagesTotalCount = progress.messagesTotalCount;
 		_messagesTextTotal = progress.messagesTextTotal;
-		setState(stateDialogs(progress));
+		if (_isScanning) {
+			setState(stateScanning(progress.itemIndex, _messagesCount));
+		} else {
+			setState(stateDialogs(progress));
+		}
 		return true;
 	}, [=](Data::MessagesSlice &&result) {
 		if (ioCatchError(_writer->writeDialogSlice(result))) {
@@ -654,6 +727,13 @@ ProcessingState ControllerObject::stateOtherData() const {
 	return prepareState(Step::OtherData);
 }
 
+ProcessingState ControllerObject::stateScanning(int itemIndex, int itemCount) const {
+	return prepareState(Step::Scanning, [=](ProcessingState &result) {
+		result.itemIndex = itemIndex;
+		result.itemCount = itemCount;
+	});
+}
+
 ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress) const {
 	return prepareState(Step::Dialogs, [=](ProcessingState &result) {
 		fillMessagesState(
@@ -669,7 +749,10 @@ void ControllerObject::setFinishedState() {
 		.path = _writer->mainFilePath(),
 		.filesCount = _contentFilesCount,
 		.messagesTextCount = _messagesTextCount,
+		.messagesMediaCount = _messagesMediaCount,
+		.messagesTotalCount = _messagesTotalCount,
 		.bytesCount = _stats.bytesCount(),
+		.breakdown = _stats.byType(),
 	});
 }
 
@@ -732,8 +815,20 @@ void ControllerObject::fillMessagesState(
 	result.entityName = i->name;
 	result.entityIndex = index + 1;
 	result.entityCount = info.chats.size() + info.left.size();
-	result.itemIndex = _messagesWritten + progress.itemIndex;
-	result.itemCount = _messagesCount;
+	if (_isScanning) {
+		result.itemIndex = progress.itemIndex;
+		result.itemCount = _messagesCount;
+	} else {
+		using Type = MediaSettings::Type;
+		const auto types = _settings.media.types;
+		if (types == Type::Text) {
+			result.itemIndex = progress.messagesTextCount;
+			result.itemCount = progress.messagesTextTotal;
+		} else {
+			result.itemIndex = _stats.userMediaFilesCount();
+			result.itemCount = _stats.expectedFilesCount();
+		}
+	}
 	result.activeDownloads = _activeDownloads;
 }
 
@@ -781,6 +876,14 @@ rpl::producer<State> Controller::state() const {
 //		unwrapped.cancelUnconfirmedPassword();
 //	});
 //}
+
+void Controller::runScan(
+		const Settings &settings,
+		const Environment &environment) {
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.runScan(settings, environment);
+	});
+}
 
 void Controller::startExport(
 		const Settings &settings,

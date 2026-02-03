@@ -123,6 +123,13 @@ SettingsWidget::SettingsWidget(
 , _internal_data(std::move(data)) {
 	ResolveSettings(session, _internal_data);
 	setupContent();
+
+	_changes.events() | rpl::start_with_next([=] {
+		if (!_isScanning) {
+			_scanResults.clear();
+			if (_scanResultsLabel) _scanResultsLabel->setText(QString());
+		}
+	}, lifetime());
 }
 
 const Settings &SettingsWidget::readData() const {
@@ -144,6 +151,7 @@ void SettingsWidget::setupContent() {
 			scroll,
 			object_ptr<Ui::VerticalLayout>(scroll)));
 	const auto content = static_cast<Ui::VerticalLayout*>(wrap->entity());
+	_container = content;
 
 	const auto buttons = setupButtons(scroll, wrap);
 	setupOptions(content);
@@ -980,6 +988,13 @@ void SettingsWidget::addMediaOptions(
 		tr::lng_export_option_full_history(tr::now),
 		MediaType::FullHistory);
 	addSizeSlider(container);
+
+	_scanResultsLabel = container->add(
+		object_ptr<Ui::FlatLabel>(
+			container,
+			QString(),
+			st::exportAboutOptionLabel),
+		st::exportAboutOptionPadding);
 }
 
 void SettingsWidget::addMediaOption(
@@ -1061,16 +1076,33 @@ void SettingsWidget::refreshButtons(
 			child->deleteLater();
 		}
 	}
+	_calculateClicks = rpl::never<>() | rpl::type_erased();
+	_startClicks = rpl::never<>() | rpl::type_erased();
+
+	const bool showAnalyze = canStart && _scanResults.empty() && _singlePeerId;
+	const auto buttonText = _isScanning
+		? tr::lng_export_analyzing(tr::now)
+		: showAnalyze
+		? tr::lng_export_analyze(tr::now)
+		: tr::lng_export_start();
+
 	const auto start = canStart
 		? Ui::CreateChild<Ui::RoundButton>(
 			container.get(),
-			tr::lng_export_start(),
+			buttonText,
 			st::defaultBoxButton)
 		: nullptr;
 	if (start) {
+		if (_isScanning) {
+			start->setDisabled(true);
+		}
 		start->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 		start->show();
-		_startClicks = start->clicks() | rpl::to_empty;
+		if (showAnalyze) {
+			_calculateClicks = start->clicks() | rpl::to_empty;
+		} else {
+			_startClicks = start->clicks() | rpl::to_empty;
+		}
 
 		container->sizeValue()
 			| rpl::start_with_next([=](QSize size) {
@@ -1121,12 +1153,80 @@ rpl::producer<Settings> SettingsWidget::value() const {
 	return rpl::single(readData()) | rpl::then(changes());
 }
 
+rpl::producer<> SettingsWidget::calculateClicks() const {
+	return _calculateClicks.value() | rpl::flatten_latest();
+}
+
 rpl::producer<> SettingsWidget::startClicks() const {
 	return _startClicks.value() | rpl::flatten_latest();
 }
 
 rpl::producer<> SettingsWidget::cancelClicks() const {
 	return _cancelClicks.value() | rpl::flatten_latest();
+}
+
+void SettingsWidget::setScanProgress(int itemIndex, int itemCount) {
+	if (!_scanResultsLabel) return;
+	_scanResultsLabel->setText(tr::lng_export_analyzing_progress(
+		tr::now,
+		lt_index,
+		QString::number(itemIndex),
+		lt_amount,
+		QString::number(itemCount)));
+	_container->resizeToWidth(_container->width());
+}
+
+void SettingsWidget::setScanning(bool scanning) {
+	_isScanning = scanning;
+	_changes.fire_copy(readData());
+}
+
+void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats) {
+	_scanResults = std::move(stats);
+	if (!_scanResultsLabel) return;
+
+	QString text;
+	int totalCount = 0;
+	int64 totalSize = 0;
+
+	for (const auto &[type, item] : _scanResults) {
+		if (item.count <= 0) continue;
+		QString label;
+		switch (type) {
+		case MediaType::Photo: label = tr::lng_export_option_photos(tr::now); break;
+		case MediaType::Video: label = tr::lng_export_option_video_files(tr::now); break;
+		case MediaType::VoiceMessage: label = tr::lng_export_option_voice_messages(tr::now); break;
+		case MediaType::VideoMessage: label = tr::lng_export_option_video_messages(tr::now); break;
+		case MediaType::Audio: label = tr::lng_export_option_audios(tr::now); break;
+		case MediaType::Sticker: label = tr::lng_export_option_stickers(tr::now); break;
+		case MediaType::GIF: label = tr::lng_export_option_gifs(tr::now); break;
+		case MediaType::File: label = tr::lng_export_option_files(tr::now); break;
+		}
+		if (!label.isEmpty()) {
+			text += tr::lng_export_selected_count(
+				tr::now,
+				lt_label,
+				label,
+				lt_amount,
+				QString::number(item.count),
+				lt_size,
+				Ui::FormatSizeText(item.size)) + "\n";
+			totalCount += item.count;
+			totalSize += item.size;
+		}
+	}
+	if (totalCount > 0) {
+		text += "\n" + tr::lng_export_total_selected(
+			tr::now,
+			lt_amount,
+			QString::number(totalCount),
+			lt_size,
+			Ui::FormatSizeText(totalSize));
+	} else {
+		text = tr::lng_export_none_found(tr::now);
+	}
+	_scanResultsLabel->setText(text);
+	_container->resizeToWidth(_container->width());
 }
 
 } // namespace View

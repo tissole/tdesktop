@@ -351,6 +351,8 @@ struct ApiWrap::ChatProcess {
 	int messagesProcessed = 0;
 	int sliceOffset = 0; // Snapshot of messagesProcessed at start of slice
 	int messagesTextProcessed = 0;
+	int messagesMediaProcessed = 0;
+	int messagesTotalProcessed = 0;
 	int totalMessagesText = 0;
 	int messagesTextTotal = 0;
 
@@ -549,12 +551,16 @@ rpl::producer<Output::Result> ApiWrap::ioErrors() const {
 void ApiWrap::startExport(
 		const Settings &settings,
 		Output::Stats *stats,
-		FnMut<void(StartInfo)> done) {
+		FnMut<void(StartInfo)> done,
+		bool isScanning,
+		Output::Stats *scanStats) {
 	Expects(_settings == nullptr);
 	Expects(_startProcess == nullptr);
 
 	_settings = std::make_unique<Settings>(settings);
 	_stats = stats;
+	_isScanning = isScanning;
+	_scanStats = scanStats;
 	_startProcess = std::make_unique<StartProcess>();
 	_startProcess->done = std::move(done);
 
@@ -1015,8 +1021,10 @@ bool ApiWrap::loadUserpicProgress(FileProgress progress) {
 		.ready = progress.ready,
 		.total = progress.total,
 		.isAuxiliary = false,
-		.messagesTextCount = _chatProcess->messagesTextProcessed,
-		.messagesTextTotal = _chatProcess->messagesTextTotal,
+		.messagesTextCount = _chatProcess ? _chatProcess->messagesTextProcessed : 0,
+		.messagesMediaCount = _chatProcess ? _chatProcess->messagesMediaProcessed : 0,
+		.messagesTotalCount = _chatProcess ? _chatProcess->messagesTotalProcessed : 0,
+		.messagesTextTotal = _chatProcess ? _chatProcess->messagesTextTotal : 0,
 	});
 }
 
@@ -1190,8 +1198,10 @@ bool ApiWrap::loadStoryProgress(FileProgress progress, bool auxiliary) {
 		.ready = progress.ready,
 		.total = progress.total,
 		.isAuxiliary = auxiliary,
-		.messagesTextCount = _chatProcess->messagesTextProcessed,
-		.messagesTextTotal = _chatProcess->messagesTextTotal });
+		.messagesTextCount = _chatProcess ? _chatProcess->messagesTextProcessed : 0,
+		.messagesMediaCount = _chatProcess ? _chatProcess->messagesMediaProcessed : 0,
+		.messagesTotalCount = _chatProcess ? _chatProcess->messagesTotalProcessed : 0,
+		.messagesTextTotal = _chatProcess ? _chatProcess->messagesTextTotal : 0 });
 }
 
 void ApiWrap::loadStoryDone(const QString &relativePath) {
@@ -1949,7 +1959,10 @@ void ApiWrap::requestChatMessages(
 	const auto maxId = (_chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
 	const auto filter = getFilter();
 	const auto useSearch = _chatProcess->info.onlyMyMessages
-		|| (filter.type() != mtpc_inputMessagesFilterEmpty);
+		|| (filter.type() != mtpc_inputMessagesFilterEmpty)
+		|| (_settings->singlePeerFrom > 0)
+		|| (_settings->singlePeerTill > 0)
+		|| (_settings->useIdRange);
 
 	if (useSearch) {
 		const auto searchFlags = _chatProcess->info.onlyMyMessages
@@ -2257,23 +2270,64 @@ void ApiWrap::loadNextMessageFile() {
 			return;
 		}
 
-		// Check if message is a pure text message (no media)
-		const auto hasMedia = !std::holds_alternative<v::null_t>(message.media.content);
-		const auto textFilterSelected = (_settings->media.types & MediaSettings::Type::Text);
-
-		if (!hasMedia && textFilterSelected) {
-			_chatProcess->messagesTextProcessed++;
-			// Trigger progress for text-only messages
+		if (_isScanning) {
 			_chatProcess->fileProgress({
 				.randomId = 0,
 				.path = QString(),
-				.itemIndex = _chatProcess->messagesProcessed + i,
-				.ready = 1,
-				.total = 1,
-				.isAuxiliary = true, 
+				.itemIndex = _chatProcess->sliceOffset + i,
+				.ready = 0,
+				.total = 0,
+				.isAuxiliary = true,
 				.messagesTextCount = _chatProcess->messagesTextProcessed,
 				.messagesTextTotal = _chatProcess->messagesTextTotal
 			});
+		}
+
+		// Check if message is a pure text message (no media)
+		const auto hasMedia = !std::holds_alternative<v::null_t>(message.media.content);
+		const auto textFilterSelected = (_settings->media.types & MediaSettings::Type::Text);
+		const auto fullHistorySelected = (_settings->media.types & MediaSettings::Type::FullHistory);
+
+		if (!hasMedia && (textFilterSelected || fullHistorySelected)) {
+			_chatProcess->messagesTextProcessed++;
+			_chatProcess->messagesTotalProcessed++;
+			// Trigger progress for text-only messages
+			if (!_isScanning) {
+				_chatProcess->fileProgress({
+					.randomId = 0,
+					.path = QString(),
+					.itemIndex = _chatProcess->sliceOffset + i,
+					.ready = 1,
+					.total = 1,
+					.isAuxiliary = true, 
+					.messagesTextCount = _chatProcess->messagesTextProcessed,
+					.messagesMediaCount = _chatProcess->messagesMediaProcessed,
+					.messagesTotalCount = _chatProcess->messagesTotalProcessed,
+					.messagesTextTotal = _chatProcess->messagesTextTotal
+				});
+			}
+		} else if (hasMedia) {
+			_chatProcess->messagesMediaProcessed++;
+			_chatProcess->messagesTotalProcessed++;
+
+			// If we are skipping file downloads (like in FullHistory mode),
+			// we need to trigger progress to update the counters.
+			if (_settings->media.types & MediaSettings::Type::FullHistory) {
+				if (!_isScanning) {
+					_chatProcess->fileProgress({
+						.randomId = 0,
+						.path = QString(),
+						.itemIndex = _chatProcess->sliceOffset + i,
+						.ready = 1,
+						.total = 1,
+						.isAuxiliary = true,
+						.messagesTextCount = _chatProcess->messagesTextProcessed,
+						.messagesMediaCount = _chatProcess->messagesMediaProcessed,
+						.messagesTotalCount = _chatProcess->messagesTotalProcessed,
+						.messagesTextTotal = _chatProcess->messagesTextTotal
+					});
+				}
+			}
 		}
 
 		const auto splitIndex = _chatProcess->info.splits[
@@ -2414,19 +2468,20 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 		}
 	}
 
-	const int itemIndex = _chatProcess->sliceOffset + messageIndexInSlice;
-
-	return _chatProcess->fileProgress({
-		.randomId = process.randomId,
-		.path = process.relativePath,
-		.itemIndex = itemIndex,
-		.ready = progress.ready,
-		.total = progress.total,
-		.isAuxiliary = auxiliary,
-		.messagesTextCount = _chatProcess->messagesTextProcessed,
-		.messagesTextTotal = _chatProcess->messagesTextTotal });
-}
-
+	    const int itemIndex = _chatProcess->sliceOffset + messageIndexInSlice;
+	
+	    return _chatProcess->fileProgress({
+	        .randomId = process.randomId,
+	        .path = process.relativePath,
+	        .itemIndex = itemIndex,
+	        .ready = progress.ready,
+	        .total = progress.total,
+	        .isAuxiliary = auxiliary,
+	        .messagesTextCount = _chatProcess->messagesTextProcessed,
+	        .messagesMediaCount = _chatProcess->messagesMediaProcessed,
+	        .messagesTotalCount = _chatProcess->messagesTotalProcessed,
+	        .messagesTextTotal = _chatProcess->messagesTextTotal });
+	}
 
 void ApiWrap::loadMessageFileDone(const QString &relativePath) {
 	Expects(_chatProcess != nullptr);
@@ -2553,6 +2608,14 @@ void ApiWrap::processFileLoad(
 		? story->file().size
 		: file.size;
 
+	if (_isScanning) {
+		if (type != Type(0) && !file.suggestedPath.endsWith(u"_thumb.jpg"_q)) {
+			_scanStats->increment(type, fullSize);
+		}
+		done(QString());
+		return;
+	}
+
 	// Check if we should skip the download of this file.
 	// 1. If 'FullHistory' is selected, we want the text but NO files.
 	// 2. If the specific type is NOT selected, we skip the file.
@@ -2576,6 +2639,9 @@ void ApiWrap::processFileLoad(
 		&& origin.messageId != 0
 		&& !file.suggestedPath.endsWith(u"_thumb.jpg"_q)) {
 		_stats->incrementUserMediaFiles();
+		if (type != Type(0)) {
+			_stats->increment(type, fullSize);
+		}
 	}
 	loadFile(file, origin, std::move(progress), std::move(done));
 }

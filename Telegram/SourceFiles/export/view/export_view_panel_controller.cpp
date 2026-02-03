@@ -197,6 +197,12 @@ void PanelController::showSettings() {
 			anim::type::normal);
 	});
 
+	settings->calculateClicks(
+	) | rpl::start_with_next([=] {
+		settings->setScanning(true);
+		_process->runScan(*_settings, PrepareEnvironment(_session));
+	}, settings->lifetime());
+
 	settings->startClicks(
 	) | rpl::start_with_next([=]() {
 		showProgress();
@@ -404,6 +410,21 @@ void PanelController::updateState(State &&state) {
 		showError(*apiError);
 	} else if (const auto error = std::get_if<OutputErrorState>(&_state)) {
 		showError(*error);
+	} else if (const auto scanDone = std::get_if<ScanDoneState>(&_state)) {
+		if (_panel) {
+			if (auto settings = dynamic_cast<SettingsWidget*>(_panel->inner())) {
+				settings->setScanning(false);
+				settings->setScanResults(scanDone->stats);
+			}
+		}
+	} else if (const auto processing = std::get_if<ProcessingState>(&_state)) {
+		if (_panel) {
+			if (auto settings = dynamic_cast<SettingsWidget*>(_panel->inner())) {
+				if (processing->step == ProcessingState::Step::Scanning) {
+					settings->setScanProgress(processing->itemIndex, processing->itemCount);
+				}
+			}
+		}
 	} else if (v::is<FinishedState>(_state)) {
 		_panel->setTitle(tr::lng_export_title());
 		_panel->setHideOnDeactivate(false);
