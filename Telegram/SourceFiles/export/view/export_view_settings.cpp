@@ -1024,10 +1024,10 @@ void SettingsWidget::addSizeSlider(
 	using namespace rpl::mappers;
 
 	const auto label = container->add(
-		object_ptr<Ui::FlatLabel>(
+		object_ptr<Ui::LabelSimple>(
 			container,
-			QString(),
-			st::exportFileSizeLabel),
+			st::exportFileSizeLabel,
+			QString()),
 		st::exportFileSizePadding + style::margins(0, 10, 0, 0));
 
 	const auto slider = container->add(
