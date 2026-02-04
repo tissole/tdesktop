@@ -429,7 +429,9 @@ void ControllerObject::exportNext() {
 			_isScanning = false;
 			_stepIndex = -1;
 			_settings = Settings();
-			setState(ScanDoneState{ std::move(stats) });
+			_api.finishExport([=, stats = std::move(stats)]() mutable {
+				setState(ScanDoneState{ std::move(stats) });
+			});
 			return;
 		}
 		if (ioCatchError(_writer->finish())) {

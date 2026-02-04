@@ -1545,7 +1545,9 @@ void ApiWrap::resolveDates() {
 }
 
 void ApiWrap::finishExport(FnMut<void()> done) {
-	const auto guard = gsl::finally([&] { _takeoutId = std::nullopt; });
+	const auto guard = gsl::finally([&] {
+		clearState();
+	});
 
 	mainRequest(MTPaccount_FinishTakeoutSession(
 		MTP_flags(MTPaccount_FinishTakeoutSession::Flag::f_success)
@@ -1581,6 +1583,7 @@ void ApiWrap::cancelExportFast() {
 		)).send();
 		_mtp.request(requestId).detach();
 	}
+	clearState();
 }
 
 void ApiWrap::requestSinglePeerDialog() {
@@ -3265,6 +3268,7 @@ void ApiWrap::filePartExtractReference(
 
 void ApiWrap::error(const MTP::Error &error) {
 	LOG(("Export Error: API Error %1: %2 (%3)").arg(error.code()).arg(error.type()).arg(error.description()));
+	clearState();
 	_errors.fire_copy(error);
 }
 
@@ -3275,6 +3279,26 @@ void ApiWrap::error(const QString &text) {
 
 void ApiWrap::ioError(const Output::Result &result) {
 	_ioErrors.fire_copy(result);
+}
+
+void ApiWrap::clearState() {
+	_takeoutId = std::nullopt;
+	_settings = nullptr;
+	_stats = nullptr;
+	_scanStats = nullptr;
+	_startProcess = nullptr;
+	_contactsProcess = nullptr;
+	_userpicsProcess = nullptr;
+	_storiesProcess = nullptr;
+	_otherDataProcess = nullptr;
+	_leftChannelsProcess = nullptr;
+	_dialogsProcess = nullptr;
+	_chatProcess = nullptr;
+	_fileProcesses.clear();
+	_fileDownloadQueue.clear();
+	_filesDownloading = 0;
+	_unresolvedCustomEmoji.clear();
+	_resolvedCustomEmoji.clear();
 }
 
 ApiWrap::~ApiWrap() {

@@ -267,6 +267,8 @@ private:
 	void error(const QString &text);
 	void ioError(const Output::Result &result);
 
+	void clearState();
+
 	MTP::ConcurrentSender _mtp;
 	std::optional<uint64> _takeoutId;
 	std::optional<UserId> _selfId;
