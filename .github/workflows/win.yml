@@ -228,8 +228,8 @@ jobs:
           mkdir artifact
           mkdir artifact\Release
           
-          move %OUT%\Telegram.exe artifact\Release\
-          move %OUT%\Updater.exe artifact\Release\
+          if exist %OUT%\Telegram.exe move %OUT%\Telegram.exe artifact\Release\
+          if exist %OUT%\Updater.exe move %OUT%\Updater.exe artifact\Release\
 
       - uses: actions/upload-artifact@v6
         name: Upload Release Build
