@@ -60,6 +60,9 @@ Content ContentFromState(
 	case Step::Initializing:
 		pushMain(tr::lng_export_state_initializing(tr::now));
 		break;
+	case Step::Scanning:
+		pushMain(tr::lng_export_analyzing(tr::now));
+		break;
 	case Step::DialogsList:
 		pushMain(tr::lng_export_state_chats_list(tr::now));
 		break;
