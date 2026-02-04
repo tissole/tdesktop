@@ -418,6 +418,7 @@ void ControllerObject::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
 }
 
 void ControllerObject::cancelExportFast() {
+	_isScanning = false;
 	_api.cancelExportFast();
 	setState(CancelledState());
 }
@@ -823,9 +824,9 @@ void ControllerObject::fillMessagesState(
 	} else {
 		using Type = MediaSettings::Type;
 		const auto types = _settings.media.types;
-		if (types == Type::Text) {
-			result.itemIndex = progress.messagesTextCount;
-			result.itemCount = progress.messagesTextTotal;
+		if ((types & Type::Text) || (types & Type::FullHistory)) {
+			result.itemIndex = progress.itemIndex;
+			result.itemCount = _messagesCount;
 		} else {
 			result.itemIndex = _stats.userMediaFilesCount();
 			result.itemCount = _stats.expectedFilesCount();

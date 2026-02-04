@@ -1951,10 +1951,7 @@ void ApiWrap::requestChatMessages(
 	const auto maxId = (_chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
 	const auto filter = getFilter();
 	const auto useSearch = _chatProcess->info.onlyMyMessages
-		|| (filter.type() != mtpc_inputMessagesFilterEmpty)
-		|| (_settings->singlePeerFrom > 0)
-		|| (_settings->singlePeerTill > 0)
-		|| (_settings->useIdRange);
+		|| (filter.type() != mtpc_inputMessagesFilterEmpty);
 
 	if (useSearch) {
 		const auto searchFlags = _chatProcess->info.onlyMyMessages
@@ -2285,6 +2282,9 @@ void ApiWrap::loadNextMessageFile() {
 		if (!hasMedia && (textFilterSelected || fullHistorySelected)) {
 			_chatProcess->messagesTextProcessed++;
 			_chatProcess->messagesTotalProcessed++;
+			if (_isScanning) {
+				_scanStats->increment(MediaSettings::Type::Text, 1);
+			}
 			// Trigger progress for text-only messages
 			if (!_isScanning) {
 				_chatProcess->fileProgress({
@@ -2621,6 +2621,14 @@ void ApiWrap::processFileLoad(
 		|| !typeIsSelected;
 
 	if (!story && skipDownload) {
+		if (types & Type::FullHistory) {
+			if (_stats && origin.messageId != 0 && !file.suggestedPath.endsWith(u"_thumb.jpg"_q)) {
+				_stats->incrementUserMediaFiles();
+				if (type != Type(0)) {
+					_stats->increment(type, fullSize);
+				}
+			}
+		}
 		file.skipReason = SkipReason::FileType;
 		done(QString());
 		return;

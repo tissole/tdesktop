@@ -30,7 +30,12 @@ Content ContentFromState(
 		result.rows.push_back({ id, label, info, progress, randomId });
 	};
 	const auto pushMain = [&](const QString &label) {
-		const auto info = (state.entityCount > 0)
+		const auto isScanning = (state.step == Step::Scanning);
+		const auto info = (isScanning && state.itemCount > 0)
+			? (QString::number(state.itemIndex)
+				+ " / "
+				+ QString::number(state.itemCount))
+			: (state.entityCount > 0)
 			? (QString::number(state.entityIndex + 1)
 				+ " / "
 				+ QString::number(state.entityCount))
@@ -49,8 +54,9 @@ Content ContentFromState(
 					/ (float64(substepsTotal) * count))
 				: 0.;
 		};
-		const auto addProgress = (state.entityCount == 1
-			&& !state.entityIndex)
+		const auto addProgress = isScanning
+			? addPart(state.itemIndex, state.itemCount)
+			: (state.entityCount == 1 && !state.entityIndex)
 			? addPart(state.itemIndex, state.itemCount)
 			: addPart(state.entityIndex, state.entityCount);
 		push("main", label, info, doneProgress + addProgress);
@@ -168,7 +174,7 @@ Content ContentFromState(const FinishedState &state) {
 
 	result.rows.push_back({
 		Content::kDoneId,
-		tr::lng_export_total_text_messages(
+		tr::lng_export_total_text_exported(
 			tr::now,
 			lt_amount,
 			QString::number(state.messagesTextCount)),
@@ -176,7 +182,7 @@ Content ContentFromState(const FinishedState &state) {
 		1. });
 	result.rows.push_back({
 		Content::kDoneId,
-		tr::lng_export_total_media_messages(
+		tr::lng_export_total_media_exported(
 			tr::now,
 			lt_amount,
 			QString::number(state.messagesMediaCount)),
@@ -184,12 +190,28 @@ Content ContentFromState(const FinishedState &state) {
 		1. });
 	result.rows.push_back({
 		Content::kDoneId,
-		tr::lng_export_total_messages(
+		tr::lng_export_total_messages_exported(
 			tr::now,
 			lt_amount,
 			QString::number(state.messagesTotalCount)),
 		QString(),
 		1. });
+
+	int categoriesCount = 0;
+	for (const auto &[type, item] : state.breakdown) {
+		if (item.count > 0) categoriesCount++;
+	}
+
+	if (categoriesCount > 1) {
+		result.rows.push_back({
+			Content::kDoneId,
+			tr::lng_export_total_amount(
+				tr::now,
+				lt_amount,
+				QString::number(state.filesCount)),
+			QString(),
+			1. });
+	}
 
 	result.rows.push_back({
 		Content::kDoneId,

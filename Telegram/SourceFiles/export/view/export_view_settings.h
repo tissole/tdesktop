@@ -40,13 +40,21 @@ public:
 
 	rpl::producer<Settings> value() const;
 	rpl::producer<Settings> changes() const;
-	rpl::producer<> calculateClicks() const;
-	rpl::producer<> startClicks() const;
+	rpl::producer<> scanClicks() const;
+	rpl::producer<> exportClicks() const;
 	rpl::producer<> cancelClicks() const;
 
 	void setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats);
+	void clearScanResults();
 	void setScanProgress(int itemIndex, int itemCount);
 	void setScanning(bool scanning);
+
+	[[nodiscard]] bool isScanning() const {
+		return _isScanning;
+	}
+	[[nodiscard]] bool hasScanResults() const {
+		return !_scanResults.empty();
+	}
 
 	void setShowBoxCallback(Fn<void(object_ptr<Ui::BoxContent>)> callback) {
 		_showBoxCallback = std::move(callback);
@@ -121,8 +129,8 @@ private:
 	Settings _internal_data;
 
 	rpl::event_stream<Settings> _changes;
-	rpl::variable<rpl::producer<>> _calculateClicks;
-	rpl::variable<rpl::producer<>> _startClicks;
+	rpl::variable<rpl::producer<>> _scanClicks;
+	rpl::variable<rpl::producer<>> _exportClicks;
 	rpl::variable<rpl::producer<>> _cancelClicks;
 
 	Ui::VerticalLayout *_container = nullptr;

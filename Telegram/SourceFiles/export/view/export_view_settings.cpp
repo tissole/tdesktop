@@ -1023,6 +1023,13 @@ void SettingsWidget::addSizeSlider(
 		not_null<Ui::VerticalLayout*> container) {
 	using namespace rpl::mappers;
 
+	const auto label = container->add(
+		object_ptr<Ui::FlatLabel>(
+			container,
+			QString(),
+			st::exportFileSizeLabel),
+		st::exportFileSizePadding + style::margins(0, 10, 0, 0));
+
 	const auto slider = container->add(
 		object_ptr<Ui::MediaSlider>(container, st::exportFileSizeSlider),
 		st::exportFileSizePadding);
@@ -1037,9 +1044,6 @@ void SettingsWidget::addSizeSlider(
 			});
 		});
 
-	const auto label = Ui::CreateChild<Ui::LabelSimple>(
-		container.get(),
-		st::exportFileSizeLabel);
 	value()
 		| rpl::map([](const Settings &data) {
 			return data.media.sizeLimit;
@@ -1053,16 +1057,6 @@ void SettingsWidget::addSizeSlider(
 				size);
 			label->setText(text);
 		}, slider->lifetime());
-
-	rpl::combine(
-		label->widthValue(),
-		slider->geometryValue(),
-		_2
-	) | rpl::start_with_next([=](QRect geometry) {
-		label->moveToRight(
-			st::exportFileSizePadding.right(),
-			geometry.y() - label->height() - st::exportFileSizeLabelBottom);
-	}, label->lifetime());
 }
 
 void SettingsWidget::refreshButtons(
@@ -1077,60 +1071,58 @@ void SettingsWidget::refreshButtons(
 			child->deleteLater();
 		}
 	}
-	_calculateClicks = rpl::never<>() | rpl::type_erased();
-	_startClicks = rpl::never<>() | rpl::type_erased();
+	_scanClicks = rpl::never<>() | rpl::type_erased();
+	_exportClicks = rpl::never<>() | rpl::type_erased();
 
-	const bool showAnalyze = canStart && _scanResults.empty() && _singlePeerId;
-	const auto buttonText = _isScanning
-		? tr::lng_export_analyzing(tr::now)
-		: showAnalyze
-		? tr::lng_export_analyze(tr::now)
-		: tr::lng_export_start(tr::now);
+	const auto exportBtn = Ui::CreateChild<Ui::RoundButton>(
+		container.get(),
+		tr::lng_export_start(),
+		st::defaultBoxButton);
+	exportBtn->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
+	exportBtn->show();
+	_exportClicks = exportBtn->clicks() | rpl::to_empty;
 
-	const auto start = canStart
-		? Ui::CreateChild<Ui::RoundButton>(
-			container.get(),
-			rpl::single(buttonText),
-			st::defaultBoxButton)
-		: nullptr;
-	if (start) {
-		if (_isScanning) {
-			start->setDisabled(true);
-		}
-		start->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
-		start->show();
-		if (showAnalyze) {
-			_calculateClicks = start->clicks() | rpl::to_empty;
-		} else {
-			_startClicks = start->clicks() | rpl::to_empty;
-		}
+	const auto scanBtn = Ui::CreateChild<Ui::RoundButton>(
+		container.get(),
+		rpl::single(_isScanning ? tr::lng_export_analyzing(tr::now) : tr::lng_export_analyze(tr::now)),
+		st::defaultBoxButton);
+	scanBtn->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
+	scanBtn->show();
+	_scanClicks = scanBtn->clicks() | rpl::to_empty;
 
-		container->sizeValue(
-		) | rpl::start_with_next([=](QSize size) {
-			const auto right = st::defaultBox.buttonPadding.right();
-			const auto top = st::defaultBox.buttonPadding.top();
-			start->moveToRight(right, top);
-		}, start->lifetime());
-	}
-
-	const auto cancel = Ui::CreateChild<Ui::RoundButton>(
+	const auto cancelBtn = Ui::CreateChild<Ui::RoundButton>(
 		container.get(),
 		tr::lng_cancel(),
 		st::defaultBoxButton);
-	cancel->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
-	cancel->show();
-	_cancelClicks = cancel->clicks() | rpl::to_empty;
+	cancelBtn->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
+	cancelBtn->show();
+	_cancelClicks = cancelBtn->clicks() | rpl::to_empty;
 
-	rpl::combine(
-		container->sizeValue(),
-		start ? start->widthValue() : rpl::single(0),
-		_2
-	) | rpl::start_with_next([=](int width) {
-		const auto right = st::defaultBox.buttonPadding.right()
-			+ (width ? width + st::defaultBox.buttonPadding.left() : 0);
-		const auto top = st::defaultBox.buttonPadding.top();
-		cancel->moveToRight(right, top);
-	}, cancel->lifetime());
+	// State management
+	if (!canStart) {
+		exportBtn->setDisabled(true);
+		scanBtn->setDisabled(true);
+	} else if (_isScanning) {
+		exportBtn->setDisabled(true);
+		scanBtn->setDisabled(true);
+	} else if (!_scanResults.empty()) {
+		exportBtn->setDisabled(false);
+		scanBtn->setDisabled(true);
+	} else {
+		exportBtn->setDisabled(false);
+		scanBtn->setDisabled(false);
+	}
+
+	container->sizeValue(
+	) | rpl::start_with_next([=](QSize size) {
+		const auto padding = st::defaultBox.buttonPadding;
+		const auto right = padding.right();
+		const auto top = padding.top();
+
+		exportBtn->moveToRight(right, top);
+		scanBtn->moveToRight(right + exportBtn->width() + padding.left(), top);
+		cancelBtn->moveToRight(right + exportBtn->width() + padding.left() + scanBtn->width() + padding.left(), top);
+	}, exportBtn->lifetime());
 }
 
 void SettingsWidget::chooseFolder() {
@@ -1155,12 +1147,12 @@ rpl::producer<Settings> SettingsWidget::value() const {
 	return rpl::single(readData()) | rpl::then(changes());
 }
 
-rpl::producer<> SettingsWidget::calculateClicks() const {
-	return _calculateClicks.value() | rpl::flatten_latest();
+rpl::producer<> SettingsWidget::scanClicks() const {
+	return _scanClicks.value() | rpl::flatten_latest();
 }
 
-rpl::producer<> SettingsWidget::startClicks() const {
-	return _startClicks.value() | rpl::flatten_latest();
+rpl::producer<> SettingsWidget::exportClicks() const {
+	return _exportClicks.value() | rpl::flatten_latest();
 }
 
 rpl::producer<> SettingsWidget::cancelClicks() const {
@@ -1190,6 +1182,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	QString text;
 	int totalCount = 0;
 	int64 totalSize = 0;
+	const auto fullHistory = (readData().media.types & MediaSettings::Type::FullHistory);
 
 	for (const auto &[type, item] : _scanResults) {
 		if (item.count <= 0) continue;
@@ -1203,32 +1196,56 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 		case MediaType::Sticker: label = tr::lng_export_option_stickers(tr::now); break;
 		case MediaType::GIF: label = tr::lng_export_option_gifs(tr::now); break;
 		case MediaType::File: label = tr::lng_export_option_files(tr::now); break;
+		case MediaType::Text: label = tr::lng_export_option_text_messages(tr::now); break;
 		}
 		if (!label.isEmpty()) {
-			text += tr::lng_export_selected_count(
-				tr::now,
-				lt_label,
-				label,
-				lt_amount,
-				QString::number(item.count),
-				lt_size,
-				Ui::FormatSizeText(item.size)) + "\n";
+			if (fullHistory) {
+				text += tr::lng_export_selected_label(
+					tr::now,
+					lt_label,
+					label,
+					lt_amount,
+					QString::number(item.count),
+					lt_size,
+					Ui::FormatSizeText(item.size)) + "\n";
+			} else {
+				text += tr::lng_export_selected_count(
+					tr::now,
+					lt_label,
+					label,
+					lt_amount,
+					QString::number(item.count),
+					lt_size,
+					Ui::FormatSizeText(item.size)) + "\n";
+			}
 			totalCount += item.count;
 			totalSize += item.size;
 		}
 	}
 	if (totalCount > 0) {
-		text += "\n" + tr::lng_export_total_selected(
-			tr::now,
-			lt_amount,
-			QString::number(totalCount),
-			lt_size,
-			Ui::FormatSizeText(totalSize));
+		if (fullHistory) {
+			text += "\n" + tr::lng_export_total_messages_exported(
+				tr::now,
+				lt_amount,
+				QString::number(totalCount));
+		} else {
+			text += "\n" + tr::lng_export_total_selected(
+				tr::now,
+				lt_amount,
+				QString::number(totalCount),
+				lt_size,
+				Ui::FormatSizeText(totalSize));
+		}
 	} else {
 		text = tr::lng_export_none_found(tr::now);
 	}
 	_scanResultsLabel->setText(text);
 	_container->resizeToWidth(_container->width());
+}
+
+void SettingsWidget::clearScanResults() {
+	_scanResults.clear();
+	if (_scanResultsLabel) _scanResultsLabel->setText(QString());
 }
 
 } // namespace View

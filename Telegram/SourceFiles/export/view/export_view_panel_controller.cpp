@@ -198,13 +198,13 @@ void PanelController::showSettings() {
 			anim::type::normal);
 	});
 
-	settingsRaw->calculateClicks(
+	settingsRaw->scanClicks(
 	) | rpl::start_with_next([=] {
 		settingsRaw->setScanning(true);
 		_process->runScan(*_settings, PrepareEnvironment(_session));
 	}, settingsRaw->lifetime());
 
-	settingsRaw->startClicks(
+	settingsRaw->exportClicks(
 	) | rpl::start_with_next([=]() {
 		showProgress();
 		_process->startExport(*_settings, PrepareEnvironment(_session));
@@ -212,8 +212,14 @@ void PanelController::showSettings() {
 
 	settingsRaw->cancelClicks(
 	) | rpl::start_with_next([=] {
-		LOG(("Export Info: Panel Hide By Cancel."));
-		_panel->hideGetDuration();
+		if (settingsRaw->isScanning() || settingsRaw->hasScanResults()) {
+			_process->cancelExportFast();
+			settingsRaw->clearScanResults();
+			settingsRaw->setScanning(false);
+		} else {
+			LOG(("Export Info: Panel Hide By Cancel."));
+			_panel->hideGetDuration();
+		}
 	}, settingsRaw->lifetime());
 
 	settingsRaw->changes(
