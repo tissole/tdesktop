@@ -783,7 +783,7 @@ void ControllerObject::setFinishedState() {
 		.totalUniqueSize = totalUniqueMediaSize,
 		.totalTotalCount = _messagesTotalCount,
 		.totalTotalSize = totalTotalMediaSize,
-		.fullHistory = (_settings.media.types & Type::FullHistory),
+		.fullHistory = !!(_settings.media.types & Type::FullHistory),
 		.breakdown = breakdown,
 	});
 }
