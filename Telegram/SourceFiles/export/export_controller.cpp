@@ -322,8 +322,13 @@ void ControllerObject::startExport(
 			totalSelected += item.count;
 		}
 	}
-	_stats.setExpectedFilesCount(totalSelected);
-	_messagesCount = totalSelected;
+	if (totalSelected > 0) {
+		_stats.setExpectedFilesCount(totalSelected);
+		_messagesCount = totalSelected;
+	} else {
+		// Fallback: If no scan was performed, use the raw message count from the server
+		_stats.setExpectedFilesCount(_messagesCount);
+	}
 
 	_isScanning = false;
 	_messagesWritten = 0;
