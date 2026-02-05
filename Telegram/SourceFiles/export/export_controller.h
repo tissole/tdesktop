@@ -61,6 +61,10 @@ struct FinishedState {
 	int messagesMediaCount = 0;
 	int messagesTotalCount = 0;
 	int64 bytesCount = 0;
+	int totalUniqueCount = 0;
+	int64 totalUniqueSize = 0;
+	int totalTotalCount = 0;
+	int64 totalTotalSize = 0;
 	std::map<MediaSettings::Type, Output::StatItem> breakdown;
 };
 

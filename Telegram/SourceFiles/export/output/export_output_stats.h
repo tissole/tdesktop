@@ -15,8 +15,10 @@ namespace Export {
 namespace Output {
 
 struct StatItem {
-	int count = 0;
-	int64 size = 0;
+	int uniqueCount = 0;
+	int64 uniqueSize = 0;
+	int totalCount = 0;
+	int64 totalSize = 0;
 };
 
 class Stats {
@@ -28,8 +30,9 @@ public:
 	void incrementBytes(int count);
 	void incrementUserMediaFiles(); 
 
-	void increment(MediaSettings::Type type, int64 size = 0);
+	void increment(MediaSettings::Type type, int64 size, bool unique);
 	void setExpectedFilesCount(int count);
+	void clear();
 
 	int filesCount() const;
 	int64 bytesCount() const;
@@ -45,8 +48,10 @@ private:
 	std::atomic<int> _expectedFiles = 0;
 
 	struct TypeStat {
-		std::atomic<int> count = 0;
-		std::atomic<int64> size = 0;
+		std::atomic<int> uniqueCount = 0;
+		std::atomic<int64> uniqueSize = 0;
+		std::atomic<int> totalCount = 0;
+		std::atomic<int64> totalSize = 0;
 	};
 	mutable std::map<MediaSettings::Type, std::unique_ptr<TypeStat>> _stats;
 

@@ -283,6 +283,8 @@ void ControllerObject::runScan(
 	if (!_settings.path.isEmpty() || _isScanning) {
 		return;
 	}
+	_api.clearResults();
+	_scanStats.clear();
 	_isScanning = true;
 	_settings = NormalizeSettings(settings);
 	_environment = environment;
@@ -308,18 +310,23 @@ void ControllerObject::startExport(
 		return;
 	}
 
-	int expectedFiles = 0;
+	if (_isScanning) {
+		_api.cancelExportFast();
+	}
+
+	_stats.clear();
+	int totalSelected = 0;
 	using MediaType = MediaSettings::Type;
 	for (const auto &[type, item] : _scanStats.byType()) {
-		if (type != MediaType::Text && type != MediaType::FullHistory) {
-			expectedFiles += item.count;
+		if ((_settings.media.types & type) || (_settings.media.types & MediaType::FullHistory)) {
+			totalSelected += item.count;
 		}
 	}
-	_stats.setExpectedFilesCount(expectedFiles);
+	_stats.setExpectedFilesCount(totalSelected);
+	_messagesCount = totalSelected;
 
 	_isScanning = false;
 	_messagesWritten = 0;
-	_messagesCount = 0;
 	_messagesTextCount = 0;
 	_messagesMediaCount = 0;
 	_messagesTotalCount = 0;
@@ -430,9 +437,7 @@ void ControllerObject::exportNext() {
 			_isScanning = false;
 			_stepIndex = -1;
 			_settings = Settings();
-			_api.finishExport([=, stats = std::move(stats)]() mutable {
-				setState(ScanDoneState{ std::move(stats) });
-			});
+			setState(ScanDoneState{ std::move(stats) });
 			return;
 		}
 		if (ioCatchError(_writer->finish())) {
@@ -645,9 +650,10 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 			return false;
 		}
 		_messagesWritten = 0;
-		_messagesCount = 0;
-		for (int count : info.messagesCountPerSplit) {
-			_messagesCount += count;
+		if (!_messagesCount) {
+			for (int count : info.messagesCountPerSplit) {
+				_messagesCount += count;
+			}
 		}
 		setState(stateDialogs(DownloadProgress()));
 		return true;
@@ -748,6 +754,18 @@ ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress)
 }
 
 void ControllerObject::setFinishedState() {
+	auto totalUniqueCount = 0;
+	auto totalUniqueSize = int64(0);
+	auto totalTotalCount = 0;
+	auto totalTotalSize = int64(0);
+	const auto breakdown = _stats.byType();
+	for (const auto &[type, item] : breakdown) {
+		totalUniqueCount += item.uniqueCount;
+		totalUniqueSize += item.uniqueSize;
+		totalTotalCount += item.totalCount;
+		totalTotalSize += item.totalSize;
+	}
+
 	setState(FinishedState{
 		.path = _writer->mainFilePath(),
 		.filesCount = _contentFilesCount,
@@ -755,7 +773,11 @@ void ControllerObject::setFinishedState() {
 		.messagesMediaCount = _messagesMediaCount,
 		.messagesTotalCount = _messagesTotalCount,
 		.bytesCount = _stats.bytesCount(),
-		.breakdown = _stats.byType(),
+		.totalUniqueCount = totalUniqueCount,
+		.totalUniqueSize = totalUniqueSize,
+		.totalTotalCount = totalTotalCount,
+		.totalTotalSize = totalTotalSize,
+		.breakdown = breakdown,
 	});
 }
 
@@ -822,15 +844,8 @@ void ControllerObject::fillMessagesState(
 		result.itemIndex = progress.itemIndex;
 		result.itemCount = _messagesCount;
 	} else {
-		using Type = MediaSettings::Type;
-		const auto types = _settings.media.types;
-		if ((types & Type::Text) || (types & Type::FullHistory)) {
-			result.itemIndex = progress.itemIndex;
-			result.itemCount = _messagesCount;
-		} else {
-			result.itemIndex = _stats.userMediaFilesCount();
-			result.itemCount = _stats.expectedFilesCount();
-		}
+		result.itemIndex = _stats.userMediaFilesCount();
+		result.itemCount = _stats.expectedFilesCount();
 	}
 	result.activeDownloads = _activeDownloads;
 }

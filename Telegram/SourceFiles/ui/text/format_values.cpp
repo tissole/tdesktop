@@ -22,45 +22,44 @@ namespace {
 		tr::phrase<lngtag_ready, lngtag_total, lngtag_mb> phrase,
 		qint64 ready,
 		qint64 total) {
+	const auto KB = 1024.0;
+	const auto MB = KB * 1024.0;
+	const auto GB = MB * 1024.0;
+
+	auto formatValue = [](double val, int precision) {
+		auto result = QLocale().toString(val, 'f', precision);
+		const auto zero = QLocale().zeroDigit();
+		const auto sep = QLocale().decimalPoint();
+		if (result.contains(sep)) {
+			while (result.endsWith(zero)) result.chop(1);
+			if (result.endsWith(sep)) result.chop(1);
+		}
+		return result;
+	};
+
 	QString readyStr, totalStr, mb;
-	if (total >= 1024LL * 1024 * 1024 * 1024) { // more than 1 tb
-		const qint64 readyTenthTb = (ready * 10 / (1024LL * 1024 * 1024 * 1024));
-		const qint64 totalTenthTb = (total * 10 / (1024LL * 1024 * 1024 * 1024));
-		readyStr = QString::number(readyTenthTb / 10)
-			+ '.'
-			+ QString::number(readyTenthTb % 10);
-		totalStr = QString::number(totalTenthTb / 10)
-			+ '.'
-			+ QString::number(totalTenthTb % 10);
+	const double totalGB = double(total) / GB;
+	const double readyGB = double(ready) / GB;
+
+	if (totalGB >= 1000.0) {
+		readyStr = formatValue(readyGB / 1000.0, 3);
+		totalStr = formatValue(totalGB / 1000.0, 3);
 		mb = u"TB"_q;
-	} else if (total >= 1024LL * 1024 * 1024) { // more than 1 gb
-		const qint64 readyTenthGb = (ready * 10 / (1024LL * 1024 * 1024));
-		const qint64 totalTenthGb = (total * 10 / (1024LL * 1024 * 1024));
-		readyStr = QString::number(readyTenthGb / 10)
-			+ '.'
-			+ QString::number(readyTenthGb % 10);
-		totalStr = QString::number(totalTenthGb / 10)
-			+ '.'
-			+ QString::number(totalTenthGb % 10);
+	} else if (total >= GB) {
+		readyStr = formatValue(readyGB, 3);
+		totalStr = formatValue(totalGB, 3);
 		mb = u"GB"_q;
-	} else if (total >= 1024 * 1024) { // more than 1 mb
-		const qint64 readyTenthMb = (ready * 10 / (1024 * 1024));
-		const qint64 totalTenthMb = (total * 10 / (1024 * 1024));
-		readyStr = QString::number(readyTenthMb / 10)
-			+ '.'
-			+ QString::number(readyTenthMb % 10);
-		totalStr = QString::number(totalTenthMb / 10)
-			+ '.'
-			+ QString::number(totalTenthMb % 10);
+	} else if (total >= (MB * 1000.0 / 1024.0 * 1.024)) { // 1000 MB
+		readyStr = formatValue(double(ready) / MB, 3);
+		totalStr = formatValue(double(total) / MB, 3);
 		mb = u"MB"_q;
-	} else if (total >= 1024) {
-		qint64 readyKb = (ready / 1024), totalKb = (total / 1024);
-		readyStr = QString::number(readyKb);
-		totalStr = QString::number(totalKb);
+	} else if (total >= KB) {
+		readyStr = formatValue(double(ready) / KB, 1);
+		totalStr = formatValue(double(total) / KB, 1);
 		mb = u"KB"_q;
 	} else {
-		readyStr = QString::number(ready);
-		totalStr = QString::number(total);
+		readyStr = QLocale().toString(ready);
+		totalStr = QLocale().toString(total);
 		mb = u"B"_q;
 	}
 	return phrase(tr::now, lt_ready, readyStr, lt_total, totalStr, lt_mb, mb);
@@ -69,31 +68,36 @@ namespace {
 } // namespace
 
 QString FormatSizeText(qint64 size) {
-	if (size >= 1024LL * 1024 * 1024 * 1024) { // more than 1 tb
-		const qint64 sizeTenthTb = (size * 10 / (1024LL * 1024 * 1024 * 1024));
-		return QString::number(sizeTenthTb / 10)
-			+ '.'
-			+ QString::number(sizeTenthTb % 10) + u" TB"_q;
+	const auto KB = 1024.0;
+	const auto MB = KB * 1024.0;
+	const auto GB = MB * 1024.0;
+
+	auto formatValue = [](double val, int precision) {
+		auto result = QLocale().toString(val, 'f', precision);
+		const auto zero = QLocale().zeroDigit();
+		const auto sep = QLocale().decimalPoint();
+		if (result.contains(sep)) {
+			while (result.endsWith(zero)) result.chop(1);
+			if (result.endsWith(sep)) result.chop(1);
+		}
+		return result;
+	};
+
+	const double sizeGB = double(size) / GB;
+
+	if (sizeGB >= 1000.0) {
+		return formatValue(sizeGB / 1000.0, 3) + u" TB"_q;
 	}
-	if (size >= 1024LL * 1024 * 1024) { // more than 1 gb
-		const qint64 sizeTenthGb = (size * 10 / (1024LL * 1024 * 1024));
-		return QString::number(sizeTenthGb / 10)
-			+ '.'
-			+ QString::number(sizeTenthGb % 10) + u" GB"_q;
+	if (size >= GB) {
+		return formatValue(sizeGB, 3) + u" GB"_q;
 	}
-	if (size >= 1024 * 1024) { // more than 1 mb
-		const qint64 sizeTenthMb = (size * 10 / (1024 * 1024));
-		return QString::number(sizeTenthMb / 10)
-			+ '.'
-			+ QString::number(sizeTenthMb % 10) + u" MB"_q;
+	if (size >= MB) {
+		return formatValue(double(size) / MB, 3) + u" MB"_q;
 	}
-	if (size >= 1024) {
-		const qint64 sizeTenthKb = (size * 10 / 1024);
-		return QString::number(sizeTenthKb / 10)
-			+ '.'
-			+ QString::number(sizeTenthKb % 10) + u" KB"_q;
+	if (size >= KB) {
+		return formatValue(double(size) / KB, 1) + u" KB"_q;
 	}
-	return QString::number(size) + u" B"_q;
+	return QLocale().toString(size) + u" B"_q;
 }
 
 QString FormatDownloadText(qint64 ready, qint64 total) {

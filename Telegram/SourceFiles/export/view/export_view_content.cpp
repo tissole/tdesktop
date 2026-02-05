@@ -32,13 +32,13 @@ Content ContentFromState(
 	const auto pushMain = [&](const QString &label) {
 		const auto isScanning = (state.step == Step::Scanning);
 		const auto info = (isScanning && state.itemCount > 0)
-			? (QString::number(state.itemIndex)
+			? (Lang::FormatCountDecimal(state.itemIndex)
 				+ " / "
-				+ QString::number(state.itemCount))
+				+ Lang::FormatCountDecimal(state.itemCount))
 			: (state.entityCount > 0)
-			? (QString::number(state.entityIndex + 1)
+			? (Lang::FormatCountDecimal(state.entityIndex + 1)
 				+ " / "
-				+ QString::number(state.entityCount))
+				+ Lang::FormatCountDecimal(state.entityCount))
 			: QString();
 		if (!state.substepsTotal) {
 			push("main", label, info, 0.);
@@ -104,9 +104,9 @@ Content ContentFromState(
 				? tr::lng_saved_messages(tr::now)
 				: tr::lng_replies_messages(tr::now)),
 			(state.itemCount > 0
-				? (QString::number(state.itemIndex)
+				? (Lang::FormatCountDecimal(state.itemIndex)
 					+ " / "
-					+ QString::number(state.itemCount))
+					+ Lang::FormatCountDecimal(state.itemCount))
 				: QString()),
 			(state.itemCount > 0
 				? (state.itemIndex / float64(state.itemCount))
@@ -143,8 +143,9 @@ Content ContentFromState(const FinishedState &state) {
 		1. });
 
 	using Type = MediaSettings::Type;
+	int categoriesCount = 0;
 	for (const auto &[type, item] : state.breakdown) {
-		if (item.count <= 0) continue;
+		if (item.totalCount <= 0) continue;
 		QString label;
 		switch (type) {
 		case Type::Photo: label = tr::lng_export_option_photos(tr::now); break;
@@ -155,8 +156,10 @@ Content ContentFromState(const FinishedState &state) {
 		case Type::Sticker: label = tr::lng_export_option_stickers(tr::now); break;
 		case Type::GIF: label = tr::lng_export_option_gifs(tr::now); break;
 		case Type::File: label = tr::lng_export_option_files(tr::now); break;
+		case Type::Link: label = tr::lng_export_option_links(tr::now); break;
 		}
 		if (!label.isEmpty()) {
+			categoriesCount++;
 			result.rows.push_back({
 				Content::kDoneId,
 				tr::lng_export_downloaded_count(
@@ -164,9 +167,13 @@ Content ContentFromState(const FinishedState &state) {
 					lt_label,
 					label,
 					lt_amount,
-					QString::number(item.count),
+					Lang::FormatCountDecimal(item.uniqueCount),
 					lt_size,
-					Ui::FormatSizeText(item.size)),
+					Ui::FormatSizeText(item.uniqueSize),
+					lt_total_amount,
+					Lang::FormatCountDecimal(item.totalCount),
+					lt_total_size,
+					Ui::FormatSizeText(item.totalSize)),
 				QString(),
 				1. });
 		}
@@ -177,7 +184,7 @@ Content ContentFromState(const FinishedState &state) {
 		tr::lng_export_total_text_exported(
 			tr::now,
 			lt_amount,
-			QString::number(state.messagesTextCount)),
+			Lang::FormatCountDecimal(state.messagesTextCount)),
 		QString(),
 		1. });
 	result.rows.push_back({
@@ -185,7 +192,7 @@ Content ContentFromState(const FinishedState &state) {
 		tr::lng_export_total_media_exported(
 			tr::now,
 			lt_amount,
-			QString::number(state.messagesMediaCount)),
+			Lang::FormatCountDecimal(state.messagesMediaCount)),
 		QString(),
 		1. });
 	result.rows.push_back({
@@ -193,22 +200,23 @@ Content ContentFromState(const FinishedState &state) {
 		tr::lng_export_total_messages_exported(
 			tr::now,
 			lt_amount,
-			QString::number(state.messagesTotalCount)),
+			Lang::FormatCountDecimal(state.messagesTotalCount)),
 		QString(),
 		1. });
-
-	int categoriesCount = 0;
-	for (const auto &[type, item] : state.breakdown) {
-		if (item.count > 0) categoriesCount++;
-	}
 
 	if (categoriesCount > 1) {
 		result.rows.push_back({
 			Content::kDoneId,
-			tr::lng_export_total_amount(
+			tr::lng_export_total_selected(
 				tr::now,
 				lt_amount,
-				QString::number(state.filesCount)),
+				Lang::FormatCountDecimal(state.totalUniqueCount),
+				lt_size,
+				Ui::FormatSizeText(state.totalUniqueSize),
+				lt_total_amount,
+				Lang::FormatCountDecimal(state.totalTotalCount),
+				lt_total_size,
+				Ui::FormatSizeText(state.totalTotalSize)),
 			QString(),
 			1. });
 	}

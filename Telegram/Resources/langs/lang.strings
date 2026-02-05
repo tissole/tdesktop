@@ -5973,7 +5973,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_export_option_gifs" = "GIFs";
 "lng_export_option_files" = "Files";
 "lng_export_option_text_messages" = "Text messages";
-"lng_export_option_full_history" = "Chat history without files";
+"lng_export_option_links" = "Links";
+"lng_export_option_full_history" = "Full history (no media export)";
 "lng_export_option_size_limit" = "Size limit: {size}";
 "lng_export_header_format" = "Location and format";
 "lng_export_option_location" = "Download path: {path}";
@@ -6008,9 +6009,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_export_analyzing" = "Scanning...";
 "lng_export_analyzing_progress" = "Scanning messages... {index} / {amount}";
 "lng_export_none_found" = "No files found in this range.";
-"lng_export_selected_count" = "{label} selected: {amount} ({size})";
-"lng_export_total_selected" = "Total files selected: {amount} ({size})";
-"lng_export_downloaded_count" = "{label} exported: {amount} ({size})";
+"lng_export_selected_count" = "{label}: unique {amount} ({size}), total {total_amount} ({total_size})";
+"lng_export_total_selected" = "Total files: unique {amount} ({size}), total {total_amount} ({total_size})";
+"lng_export_downloaded_count" = "{label}: unique {amount} ({size}), total {total_amount} ({total_size})";
+"lng_export_total_amount_exported" = "Total files exported: {amount} ({size})";
 "lng_export_total_text_exported" = "Text messages exported: {amount}";
 "lng_export_total_media_exported" = "Media messages exported: {amount}";
 "lng_export_total_messages_exported" = "Total messages exported: {amount}";

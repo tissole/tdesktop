@@ -208,13 +208,15 @@ private:
 	bool messageCustomEmojiReady(Data::Message &message);
 	bool loadMessageFileProgress(FileProgress value);
 	bool loadMessageFileProgress(FileProgress value, bool auxiliary);
-	void loadMessageFileDone(const QString &relativePath);
+	void loadMessageFileDone(int index, const QString &relativePath);
 	bool loadMessageThumbProgress(FileProgress value);
-	void loadMessageThumbDone(const QString &relativePath);
+	void loadMessageThumbDone(int index, const QString &relativePath);
 	bool loadMessageEmojiProgress(FileProgress progress);
 	void loadMessageEmojiDone(uint64 id, const QString &relativePath);
 	void finishMessagesSlice();
 	void finishMessages();
+
+	void onMessagePartDone(int index);
 
 	[[nodiscard]] Data::Message *currentFileMessage() const;
 	[[nodiscard]] Data::FileOrigin currentFileMessageOrigin() const;
@@ -268,6 +270,7 @@ private:
 	void ioError(const Output::Result &result);
 
 	void clearState();
+	void clearResults();
 
 	MTP::ConcurrentSender _mtp;
 	std::optional<uint64> _takeoutId;
@@ -325,6 +328,8 @@ private:
 
 	rpl::event_stream<MTP::Error> _errors;
 	rpl::event_stream<Output::Result> _ioErrors;
+
+	base::flat_set<LocationKey> _scanVisited;
 
 };
 

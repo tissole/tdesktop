@@ -2549,7 +2549,7 @@ bool SkipMessageByDate(const Message &message, const Settings &settings) {
 	using Type = MediaSettings::Type;
 	const auto types = settings.media.types;
 
-	// 'Chat history without files' overrides all exclusion logic
+	// 'Full history (no media export)' overrides all exclusion logic
 	if (types & Type::FullHistory) {
 		return false;
 	}
@@ -2573,13 +2573,42 @@ bool SkipMessageByDate(const Message &message, const Settings &settings) {
 		});
 
 		// Skip if this media type is NOT selected
+		// Special case: if Link is selected, we also check media captions for links
 		if (!(types & type)) {
-			return true;
+			if (types & Type::Link) {
+				const auto hasLink = [&] {
+					for (const auto &part : message.text) {
+						if (part.type == Data::TextPart::Type::Url
+							|| part.type == Data::TextPart::Type::TextUrl) {
+							return true;
+						}
+					}
+					return false;
+				}();
+				if (!hasLink) {
+					return true;
+				}
+			} else {
+				return true;
+			}
 		}
 	} else {
 		// It is a Text message (no media)
-		// Skip if 'Text messages' is NOT selected
-		if (!(types & Type::Text)) {
+		// Skip if 'Text messages' is NOT selected AND 'Links' is NOT selected (or no link found)
+		const auto hasTextLink = [&] {
+			for (const auto &part : message.text) {
+				if (part.type == Data::TextPart::Type::Url
+					|| part.type == Data::TextPart::Type::TextUrl) {
+					return true;
+				}
+			}
+			return false;
+		}();
+
+		const auto textSelected = (types & Type::Text);
+		const auto linkSelected = (types & Type::Link) && hasTextLink;
+
+		if (!textSelected && !linkSelected) {
 			return true;
 		}
 	}

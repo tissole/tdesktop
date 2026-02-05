@@ -125,8 +125,17 @@ SettingsWidget::SettingsWidget(
 	ResolveSettings(session, _internal_data);
 	setupContent();
 
-	_changes.events() | rpl::start_with_next([=] {
-		if (!_isScanning) {
+	_changes.events() | rpl::start_with_next([=](const Settings &data) {
+		const auto old = _internal_data;
+		const bool filtersChanged = (data.media.types != old.media.types)
+			|| (data.types != old.types);
+		const bool rangeChanged = (data.singlePeerFrom != old.singlePeerFrom)
+			|| (data.singlePeerTill != old.singlePeerTill)
+			|| (data.singlePeerFromId != old.singlePeerFromId)
+			|| (data.singlePeerTillId != old.singlePeerTillId)
+			|| (data.useIdRange != old.useIdRange);
+
+		if (!_isScanning && (filtersChanged || rangeChanged)) {
 			_scanResults.clear();
 			if (_scanResultsLabel) _scanResultsLabel->setText(QString());
 		}
@@ -717,11 +726,12 @@ void SettingsWidget::addLimitsLabel(
 		} else if (url == u"internal:edit_till"_q) {
 			const auto done = [=](TimeId limit) {
 				changeData([&](Settings &settings) {
-					if (limit < settings.singlePeerFrom
+					const auto endOfDay = limit + 86399;
+					if (endOfDay < settings.singlePeerFrom
 							&& settings.singlePeerFrom) {
 						settings.singlePeerTill = settings.singlePeerFrom;
 					} else {
-						settings.singlePeerTill = limit;
+						settings.singlePeerTill = endOfDay;
 					}
 				});
 			};
@@ -743,10 +753,10 @@ void SettingsWidget::addLimitsLabel(
 				changeData([&](Settings &settings) {
 					const auto result = time
 						+ removeTime(settings.singlePeerTill)
-						+ 59; // Make the selected minute INCLUSIVE (covers :00 to :59)
+						+ 60; // Make the selected minute INCLUSIVE (covers :00 to :59)
 					if (result < settings.singlePeerFrom
 							&& settings.singlePeerFrom) {
-						settings.singlePeerTill = settings.singlePeerFrom;
+						settings.singlePeerTill = settings.singlePeerFrom + 60;
 					} else {
 						settings.singlePeerTill = result;
 					}
@@ -956,16 +966,20 @@ void SettingsWidget::addMediaOptions(
 		MediaType::Video);
 	addMediaOption(
 		container,
-		tr::lng_export_option_voice_messages(tr::now),
-		MediaType::VoiceMessage);
-	addMediaOption(
-		container,
 		tr::lng_export_option_video_messages(tr::now),
 		MediaType::VideoMessage);
 	addMediaOption(
 		container,
 		tr::lng_export_option_audios(tr::now),
 		MediaType::Audio);
+	addMediaOption(
+		container,
+		tr::lng_export_option_voice_messages(tr::now),
+		MediaType::VoiceMessage);
+	addMediaOption(
+		container,
+		tr::lng_export_option_files(tr::now),
+		MediaType::File);
 	addMediaOption(
 		container,
 		tr::lng_export_option_stickers(tr::now),
@@ -976,12 +990,12 @@ void SettingsWidget::addMediaOptions(
 		MediaType::GIF);
 	addMediaOption(
 		container,
-		tr::lng_export_option_files(tr::now),
-		MediaType::File);
-	addMediaOption(
-		container,
 		tr::lng_export_option_text_messages(tr::now),
 		MediaType::Text);
+	addMediaOption(
+		container,
+		tr::lng_export_option_links(tr::now),
+		MediaType::Link);
 	addMediaOption(
 		container,
 		tr::lng_export_option_full_history(tr::now),
@@ -1074,6 +1088,8 @@ void SettingsWidget::refreshButtons(
 	_scanClicks = rpl::never<>() | rpl::type_erased();
 	_exportClicks = rpl::never<>() | rpl::type_erased();
 
+	const auto mediaTypesSelected = (readData().media.types != MediaSettings::Types(0));
+
 	const auto exportBtn = Ui::CreateChild<Ui::RoundButton>(
 		container.get(),
 		tr::lng_export_start(),
@@ -1110,7 +1126,7 @@ void SettingsWidget::refreshButtons(
 		scanBtn->setDisabled(true);
 	} else {
 		exportBtn->setDisabled(false);
-		scanBtn->setDisabled(false);
+		scanBtn->setDisabled(!mediaTypesSelected);
 	}
 
 	container->sizeValue(
@@ -1164,9 +1180,9 @@ void SettingsWidget::setScanProgress(int itemIndex, int itemCount) {
 	_scanResultsLabel->setText(tr::lng_export_analyzing_progress(
 		tr::now,
 		lt_index,
-		QString::number(itemIndex),
+		Lang::FormatCountDecimal(itemIndex),
 		lt_amount,
-		QString::number(itemCount)));
+		Lang::FormatCountDecimal(itemCount)));
 	_container->resizeToWidth(_container->width());
 }
 
@@ -1180,12 +1196,15 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	if (!_scanResultsLabel) return;
 
 	QString text;
-	int totalCount = 0;
-	int64 totalSize = 0;
+	int totalUniqueCount = 0;
+	int64 totalUniqueSize = 0;
+	int totalTotalCount = 0;
+	int64 totalTotalSize = 0;
 	const auto fullHistory = (readData().media.types & MediaSettings::Type::FullHistory);
 
+	int categoriesCount = 0;
 	for (const auto &[type, item] : _scanResults) {
-		if (item.count <= 0) continue;
+		if (item.totalCount <= 0) continue;
 		QString label;
 		switch (type) {
 		case MediaType::Photo: label = tr::lng_export_option_photos(tr::now); break;
@@ -1197,44 +1216,45 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 		case MediaType::GIF: label = tr::lng_export_option_gifs(tr::now); break;
 		case MediaType::File: label = tr::lng_export_option_files(tr::now); break;
 		case MediaType::Text: label = tr::lng_export_option_text_messages(tr::now); break;
+		case MediaType::Link: label = tr::lng_export_option_links(tr::now); break;
 		}
 		if (!label.isEmpty()) {
-			if (fullHistory) {
-				text += tr::lng_export_selected_label(
-					tr::now,
-					lt_label,
-					label,
-					lt_amount,
-					QString::number(item.count),
-					lt_size,
-					Ui::FormatSizeText(item.size)) + "\n";
-			} else {
-				text += tr::lng_export_selected_count(
-					tr::now,
-					lt_label,
-					label,
-					lt_amount,
-					QString::number(item.count),
-					lt_size,
-					Ui::FormatSizeText(item.size)) + "\n";
-			}
-			totalCount += item.count;
-			totalSize += item.size;
+			categoriesCount++;
+			text += tr::lng_export_selected_count(
+				tr::now,
+				lt_label,
+				label,
+				lt_amount,
+				Lang::FormatCountDecimal(item.uniqueCount),
+				lt_size,
+				Ui::FormatSizeText(item.uniqueSize),
+				lt_total_amount,
+				Lang::FormatCountDecimal(item.totalCount),
+				lt_total_size,
+				Ui::FormatSizeText(item.totalSize)) + "\n";
+			totalUniqueCount += item.uniqueCount;
+			totalUniqueSize += item.uniqueSize;
+			totalTotalCount += item.totalCount;
+			totalTotalSize += item.totalSize;
 		}
 	}
-	if (totalCount > 0) {
+	if (totalTotalCount > 0) {
 		if (fullHistory) {
-			text += "\n" + tr::lng_export_total_messages_exported(
+			text += "\n" + tr::lng_export_total_messages(
 				tr::now,
 				lt_amount,
-				QString::number(totalCount));
-		} else {
+				Lang::FormatCountDecimal(totalTotalCount));
+		} else if (categoriesCount > 1) {
 			text += "\n" + tr::lng_export_total_selected(
 				tr::now,
 				lt_amount,
-				QString::number(totalCount),
+				Lang::FormatCountDecimal(totalUniqueCount),
 				lt_size,
-				Ui::FormatSizeText(totalSize));
+				Ui::FormatSizeText(totalUniqueSize),
+				lt_total_amount,
+				Lang::FormatCountDecimal(totalTotalCount),
+				lt_total_size,
+				Ui::FormatSizeText(totalTotalSize));
 		}
 	} else {
 		text = tr::lng_export_none_found(tr::now);

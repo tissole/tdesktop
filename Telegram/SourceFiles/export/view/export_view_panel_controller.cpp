@@ -214,8 +214,6 @@ void PanelController::showSettings() {
 	) | rpl::start_with_next([=] {
 		if (settingsRaw->isScanning() || settingsRaw->hasScanResults()) {
 			_process->cancelExportFast();
-			settingsRaw->clearScanResults();
-			settingsRaw->setScanning(false);
 		} else {
 			LOG(("Export Info: Panel Hide By Cancel."));
 			_panel->hideGetDuration();
@@ -346,7 +344,7 @@ void PanelController::showProgress() {
 }
 
 void PanelController::stopWithConfirmation(Fn<void()> callback) {
-	if (!v::is<ProcessingState>(_state)) {
+	if (v::is<FinishedState>(_state) || v::is<PasswordCheckState>(_state)) {
 		LOG(("Export Info: Stop Panel Without Confirmation."));
 		stopExport();
 		if (callback) {
@@ -436,8 +434,8 @@ void PanelController::updateState(State &&state) {
 		_panel->setTitle(tr::lng_export_title());
 		_panel->setHideOnDeactivate(false);
 	} else if (v::is<CancelledState>(_state)) {
-		LOG(("Export Info: Stop Panel After Cancel."));
-		stopExport();
+		LOG(("Export Info: Reset Panel After Cancel."));
+		showSettings();
 	}
 }
 

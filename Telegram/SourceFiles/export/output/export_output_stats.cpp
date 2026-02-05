@@ -14,11 +14,13 @@ Stats::Stats(const Stats &other)
 : _files(other._files.load())
 , _bytes(other._bytes.load())
 , _userMediaFiles(other._userMediaFiles.load())
-, _expectedFiles(other._expectedFiles.load()) { 
-	for (const auto &[type, stat] : other._stats) {
-		auto item = std::make_unique<TypeStat>();
-		item->count = stat->count.load();
-		item->size = stat->size.load();
+, _expectedFiles(other._expectedFiles.load()) {
+for (const auto &[type, stat] : other._stats) {
+auto item = std::make_unique<TypeStat>();
+item->uniqueCount = stat->uniqueCount.load();
+item->uniqueSize = stat->uniqueSize.load();
+item->totalCount = stat->totalCount.load();
+ item->totalSize = stat->totalSize.load();
 		_stats.emplace(type, std::move(item));
 	}
 }
@@ -35,14 +37,26 @@ void Stats::incrementUserMediaFiles() {
 	++_userMediaFiles;
 }
 
-void Stats::increment(MediaSettings::Type type, int64 size) {
+void Stats::increment(MediaSettings::Type type, int64 size, bool unique) {
 	auto &stat = typeStat(type);
-	++stat.count;
-	stat.size += size;
+	if (unique) {
+		++stat.uniqueCount;
+		stat.uniqueSize += size;
+	}
+	++stat.totalCount;
+	stat.totalSize += size;
 }
 
 void Stats::setExpectedFilesCount(int count) {
 	_expectedFiles = count;
+}
+
+void Stats::clear() {
+	_files = 0;
+	_bytes = 0;
+	_userMediaFiles = 0;
+	_expectedFiles = 0;
+	_stats.clear();
 }
 
 int Stats::filesCount() const {
@@ -61,10 +75,23 @@ int Stats::expectedFilesCount() const {
 	return _expectedFiles;
 }
 
+int Stats::totalCount() const {
+	auto result = 0;
+	for (const auto &[type, stat] : _stats) {
+		result += stat->count.load();
+	}
+	return result;
+}
+
 std::map<MediaSettings::Type, StatItem> Stats::byType() const {
 	auto result = std::map<MediaSettings::Type, StatItem>();
 	for (const auto &[type, stat] : _stats) {
-		result.emplace(type, StatItem{ stat->count.load(), stat->size.load() });
+		result.emplace(type, StatItem{ 
+			stat->uniqueCount.load(),
+			stat->uniqueSize.load(),
+			stat->totalCount.load(),
+			stat->totalSize.load()
+		});
 	}
 	return result;
 }
