@@ -1402,7 +1402,6 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 		const auto filter = getFilter();
 		const auto mediaFilterActive = (filter.type() != mtpc_inputMessagesFilterEmpty);
 		const auto textFilterActive = (_settings->media.types & MediaSettings::Type::Text);
-		const auto exactCountFromFilter = mediaFilterActive || (textFilterActive && (_settings->media.types == MediaSettings::Type::Text));
 		
 		checkFirstMessageDate(localSplitIndex, count);
 	});

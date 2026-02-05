@@ -78,7 +78,7 @@ int Stats::expectedFilesCount() const {
 int Stats::totalCount() const {
 	auto result = 0;
 	for (const auto &[type, stat] : _stats) {
-		result += stat->count.load();
+		result += stat->totalCount.load();
 	}
 	return result;
 }

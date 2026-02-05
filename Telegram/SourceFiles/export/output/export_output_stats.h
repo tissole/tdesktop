@@ -38,6 +38,7 @@ public:
 	int64 bytesCount() const;
 	int userMediaFilesCount() const;
 	int expectedFilesCount() const;
+	int totalCount() const;
 
 	std::map<MediaSettings::Type, StatItem> byType() const;
 
