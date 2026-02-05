@@ -44,6 +44,15 @@ struct Settings;
 
 class ApiWrap {
 public:
+	struct LocationKey {
+		uint64 type;
+		uint64 id;
+
+		inline bool operator<(const LocationKey &other) const {
+			return std::tie(type, id) < std::tie(other.type, other.id);
+		}
+	};
+
 	ApiWrap(
 		base::weak_qptr<MTP::Instance> weak,
 		Fn<void(FnMut<void()>)> runner);
@@ -119,14 +128,6 @@ public:
 	~ApiWrap();
 
 private:
-	struct LocationKey {
-		uint64 type;
-		uint64 id;
-
-		inline bool operator<(const LocationKey &other) const {
-			return std::tie(type, id) < std::tie(other.type, other.id);
-		}
-	};
 	class LoadedFileCache;
 	struct StartProcess;
 	struct ContactsProcess;

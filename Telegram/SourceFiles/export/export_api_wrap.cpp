@@ -73,8 +73,8 @@ constexpr auto kLocationCacheSize = 1'000'000;
 constexpr auto kMaxEmojiPerRequest = 100;
 constexpr auto kStoriesSliceLimit = 100;
 
-LocationKey ComputeLocationKey(const Data::FileLocation &value) {
-	auto result = LocationKey();
+ApiWrap::LocationKey ComputeLocationKey(const Data::FileLocation &value) {
+	auto result = ApiWrap::LocationKey();
 	result.type = value.dcId;
 	value.data.match([&](const MTPDinputDocumentFileLocation &data) {
 		const auto letter = data.vthumb_size().v.isEmpty()
@@ -2612,7 +2612,7 @@ void ApiWrap::processFileLoad(
 		? story->file().size
 		: file.size;
 
-	const auto locationKey = file.location ? ComputeLocationKey(file.location) : LocationKey{ 0, 0 };
+	const auto locationKey = file.location ? ComputeLocationKey(file.location) : ApiWrap::LocationKey{ 0, 0 };
 
 	if (_isScanning) {
 		if (type != Type(0) && !file.suggestedPath.endsWith(u"_thumb.jpg"_q)) {
