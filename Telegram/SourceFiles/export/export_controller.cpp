@@ -319,7 +319,7 @@ void ControllerObject::startExport(
 	using MediaType = MediaSettings::Type;
 	for (const auto &[type, item] : _scanStats.byType()) {
 		if ((_settings.media.types & type) || (_settings.media.types & MediaType::FullHistory)) {
-			totalSelected += item.count;
+			totalSelected += item.totalCount;
 		}
 	}
 	if (totalSelected > 0) {

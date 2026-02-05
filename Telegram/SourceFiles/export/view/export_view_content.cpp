@@ -160,22 +160,37 @@ Content ContentFromState(const FinishedState &state) {
 		}
 		if (!label.isEmpty()) {
 			categoriesCount++;
-			result.rows.push_back({
-				Content::kDoneId,
-				tr::lng_export_downloaded_count(
-					tr::now,
-					lt_label,
-					label,
-					lt_amount,
-					Lang::FormatCountDecimal(item.uniqueCount),
-					lt_size,
-					Ui::FormatSizeText(item.uniqueSize),
-					lt_total_amount,
-					Lang::FormatCountDecimal(item.totalCount),
-					lt_total_size,
-					Ui::FormatSizeText(item.totalSize)),
-				QString(),
-				1. });
+			if (type == Type::Text || type == Type::Link) {
+				result.rows.push_back({
+					Content::kDoneId,
+					tr::lng_export_downloaded_count_only(
+						tr::now,
+						lt_label,
+						label,
+						lt_amount,
+						Lang::FormatCountDecimal(item.uniqueCount),
+						lt_total_amount,
+						Lang::FormatCountDecimal(item.totalCount)),
+					QString(),
+					1. });
+			} else {
+				result.rows.push_back({
+					Content::kDoneId,
+					tr::lng_export_downloaded_count(
+						tr::now,
+						lt_label,
+						label,
+						lt_amount,
+						Lang::FormatCountDecimal(item.uniqueCount),
+						lt_size,
+						Ui::FormatSizeText(item.uniqueSize),
+						lt_total_amount,
+						Lang::FormatCountDecimal(item.totalCount),
+						lt_total_size,
+						Ui::FormatSizeText(item.totalSize)),
+					QString(),
+					1. });
+			}
 		}
 	}
 

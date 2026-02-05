@@ -1220,18 +1220,29 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 		}
 		if (!label.isEmpty()) {
 			categoriesCount++;
-			text += tr::lng_export_selected_count(
-				tr::now,
-				lt_label,
-				label,
-				lt_amount,
-				Lang::FormatCountDecimal(item.uniqueCount),
-				lt_size,
-				Ui::FormatSizeText(item.uniqueSize),
-				lt_total_amount,
-				Lang::FormatCountDecimal(item.totalCount),
-				lt_total_size,
-				Ui::FormatSizeText(item.totalSize)) + "\n";
+			if (type == MediaType::Text || type == MediaType::Link) {
+				text += tr::lng_export_selected_count_only(
+					tr::now,
+					lt_label,
+					label,
+					lt_amount,
+					Lang::FormatCountDecimal(item.uniqueCount),
+					lt_total_amount,
+					Lang::FormatCountDecimal(item.totalCount)) + "\n";
+			} else {
+				text += tr::lng_export_selected_count(
+					tr::now,
+					lt_label,
+					label,
+					lt_amount,
+					Lang::FormatCountDecimal(item.uniqueCount),
+					lt_size,
+					Ui::FormatSizeText(item.uniqueSize),
+					lt_total_amount,
+					Lang::FormatCountDecimal(item.totalCount),
+					lt_total_size,
+					Ui::FormatSizeText(item.totalSize)) + "\n";
+			}
 			totalUniqueCount += item.uniqueCount;
 			totalUniqueSize += item.uniqueSize;
 			totalTotalCount += item.totalCount;

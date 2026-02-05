@@ -47,7 +47,8 @@ namespace {
 		|| (type == Type::File)
 		|| (type == Type::MusicFile)
 		|| (type == Type::Link)
-		|| (type == Type::RoundVoiceFile)
+		|| (type == Type::VoiceFile)
+		|| (type == Type::RoundFile)
 		|| (type == Type::GIF);
 }
 
@@ -107,7 +108,8 @@ tr::phrase<lngtag_count> MediaTextPhrase(Type type) {
 	case Type::File: return tr::lng_profile_files;
 	case Type::MusicFile: return tr::lng_profile_songs;
 	case Type::Link: return tr::lng_profile_shared_links;
-	case Type::RoundVoiceFile: return tr::lng_profile_audios;
+	case Type::VoiceFile: return tr::lng_profile_audios;
+	case Type::RoundFile: return tr::lng_profile_video_messages;
 	}
 	Unexpected("Type in MediaTextPhrase()");
 };

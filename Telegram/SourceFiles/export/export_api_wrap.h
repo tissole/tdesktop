@@ -114,9 +114,19 @@ public:
 	void skipFile(uint64 randomId);
 	void cancelExportFast();
 
+	void clearResults();
+
 	~ApiWrap();
 
 private:
+	struct LocationKey {
+		uint64 type;
+		uint64 id;
+
+		inline bool operator<(const LocationKey &other) const {
+			return std::tie(type, id) < std::tie(other.type, other.id);
+		}
+	};
 	class LoadedFileCache;
 	struct StartProcess;
 	struct ContactsProcess;
@@ -270,7 +280,6 @@ private:
 	void ioError(const Output::Result &result);
 
 	void clearState();
-	void clearResults();
 
 	MTP::ConcurrentSender _mtp;
 	std::optional<uint64> _takeoutId;
@@ -330,6 +339,7 @@ private:
 	rpl::event_stream<Output::Result> _ioErrors;
 
 	base::flat_set<LocationKey> _scanVisited;
+	base::flat_set<QString> _visitedLinks;
 
 };
 

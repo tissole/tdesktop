@@ -73,15 +73,6 @@ constexpr auto kLocationCacheSize = 1'000'000;
 constexpr auto kMaxEmojiPerRequest = 100;
 constexpr auto kStoriesSliceLimit = 100;
 
-struct LocationKey {
-	uint64 type;
-	uint64 id;
-
-	inline bool operator<(const LocationKey &other) const {
-		return std::tie(type, id) < std::tie(other.type, other.id);
-	}
-};
-
 LocationKey ComputeLocationKey(const Data::FileLocation &value) {
 	auto result = LocationKey();
 	result.type = value.dcId;
@@ -2293,7 +2284,7 @@ void ApiWrap::loadNextMessageFile() {
 			_chatProcess->messagesTextProcessed++;
 			_chatProcess->messagesTotalProcessed++;
 			if (_isScanning) {
-				_scanStats->increment(MediaSettings::Type::Text, 1);
+				_scanStats->increment(MediaSettings::Type::Text, 0, true);
 			}
 			// Trigger progress for text-only messages
 			if (!_isScanning) {
@@ -2332,23 +2323,27 @@ void ApiWrap::loadNextMessageFile() {
 			}
 		}
 
-		// Handle Link scan stats
-		if (_isScanning && (_settings->media.types & MediaSettings::Type::Link)) {
-			bool hasLink = false;
+		// Handle Link stats
+		if (_settings->media.types & MediaSettings::Type::Link) {
+			bool hasNewUniqueLink = false;
+			bool hasAnyLink = false;
 			for (const auto &part : message.text) {
 				if (part.type == Data::TextPart::Type::Url
 					|| part.type == Data::TextPart::Type::TextUrl) {
-					hasLink = true;
-					break;
+					hasAnyLink = true;
+					const auto url = QString::fromUtf8(part.text);
+					if (_visitedLinks.find(url) == _visitedLinks.end()) {
+						_visitedLinks.insert(url);
+						hasNewUniqueLink = true;
+					}
 				}
 			}
-			if (hasLink) {
-				// Use a dummy LocationKey for links since they don't have a file ID,
-				// but for now we'll treat every message with a link as unique content 
-				// unless we want to deduplicate based on the URL strings themselves.
-				// For the requested format "unique X, total Y", we'll just treat links
-				// as always unique for the count if they exist in a new message.
-				_scanStats->increment(MediaSettings::Type::Link, 0, true);
+			if (hasAnyLink) {
+				if (_isScanning) {
+					_scanStats->increment(MediaSettings::Type::Link, 0, hasNewUniqueLink);
+				} else if (_stats) {
+					_stats->increment(MediaSettings::Type::Link, 0, hasNewUniqueLink);
+				}
 			}
 		}
 
@@ -3313,6 +3308,7 @@ void ApiWrap::clearResults() {
 	_stats = nullptr;
 	_scanStats = nullptr;
 	_scanVisited.clear();
+	_visitedLinks.clear();
 }
 
 void ApiWrap::clearState() {
