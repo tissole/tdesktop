@@ -2248,6 +2248,9 @@ void ApiWrap::loadNextMessageFile() {
 	});
 
 	for (int i = 0; i < int(_chatProcess->slice->list.size()); ++i) {
+		if (_chatProcess->messageItemIndices[i] != 0) {
+			continue;
+		}
 		auto &message = _chatProcess->slice->list[i];
 		const auto skippedByDate = Data::SkipMessageByDate(message, *_settings);
 		if (skippedByDate) {
@@ -2261,6 +2264,26 @@ void ApiWrap::loadNextMessageFile() {
 		// Assign sequential index to every selected message in range
 		_chatProcess->messageItemIndices[i] = ++_chatProcess->totalMessagesCounter;
 
+		const auto hasMedia = !std::holds_alternative<v::null_t>(message.media.content);
+		const auto textFilterSelected = (_settings->media.types & MediaSettings::Type::Text);
+		const auto fullHistorySelected = (_settings->media.types & MediaSettings::Type::FullHistory);
+		const auto linkFilterSelected = (_settings->media.types & MediaSettings::Type::Link);
+
+		// Identify media type for stats
+		using Type = MediaSettings::Type;
+		const auto messageType = hasMedia ? v::match(message.media.content, [&](
+			const Data::Document &data) {
+			if (data.isSticker) return Type::Sticker;
+			if (data.isVideoMessage) return Type::VideoMessage;
+			if (data.isVoiceMessage) return Type::VoiceMessage;
+			if (data.isAnimated) return Type::GIF;
+			if (data.isVideoFile) return Type::Video;
+			if (data.isAudioFile) return Type::Audio;
+			return Type::File;
+		}, [](const auto &data) {
+			return Type::Photo;
+		}) : Type::Text;
+
 		if (_isScanning) {
 			_chatProcess->fileProgress({
 				.randomId = 0,
@@ -2272,19 +2295,18 @@ void ApiWrap::loadNextMessageFile() {
 				.messagesTextCount = _chatProcess->messagesTextProcessed,
 				.messagesTextTotal = _chatProcess->messagesTextTotal
 			});
-		}
 
-		// Check if message is a pure text message (no media)
-		const auto hasMedia = !std::holds_alternative<v::null_t>(message.media.content);
-		const auto textFilterSelected = (_settings->media.types & MediaSettings::Type::Text);
-		const auto fullHistorySelected = (_settings->media.types & MediaSettings::Type::FullHistory);
+			// If it's a message without a file (Text, Link, or non-file Media), increment scan stats here.
+			// File-based media will be incremented in processFileLoad to capture size.
+			const bool hasFile = message.file().location || message.thumb().file.location;
+			if (!hasFile) {
+				_scanStats->increment(messageType, 0, true);
+			}
+		}
 
 		if (!hasMedia && (textFilterSelected || fullHistorySelected)) {
 			_chatProcess->messagesTextProcessed++;
 			_chatProcess->messagesTotalProcessed++;
-			if (_isScanning) {
-				_scanStats->increment(MediaSettings::Type::Text, 0, true);
-			}
 			// Trigger progress for text-only messages
 			if (!_isScanning) {
 				_chatProcess->fileProgress({
@@ -2323,7 +2345,7 @@ void ApiWrap::loadNextMessageFile() {
 		}
 
 		// Handle Link stats
-		if (_settings->media.types & MediaSettings::Type::Link) {
+		if (linkFilterSelected || fullHistorySelected) {
 			bool hasNewUniqueLink = false;
 			bool hasAnyLink = false;
 			for (const auto &part : message.text) {

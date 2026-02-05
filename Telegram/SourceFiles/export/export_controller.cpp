@@ -759,29 +759,31 @@ ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress)
 }
 
 void ControllerObject::setFinishedState() {
-	auto totalUniqueCount = 0;
-	auto totalUniqueSize = int64(0);
-	auto totalTotalCount = 0;
-	auto totalTotalSize = int64(0);
+	auto totalUniqueMediaCount = 0;
+	auto totalUniqueMediaSize = int64(0);
+	auto totalTotalMediaSize = int64(0);
 	const auto breakdown = _stats.byType();
+	using Type = MediaSettings::Type;
 	for (const auto &[type, item] : breakdown) {
-		totalUniqueCount += item.uniqueCount;
-		totalUniqueSize += item.uniqueSize;
-		totalTotalCount += item.totalCount;
-		totalTotalSize += item.totalSize;
+		if (type != Type::Text && type != Type::Link) {
+			totalUniqueMediaCount += item.uniqueCount;
+			totalUniqueMediaSize += item.uniqueSize;
+			totalTotalMediaSize += item.totalSize;
+		}
 	}
 
 	setState(FinishedState{
 		.path = _writer->mainFilePath(),
-		.filesCount = _contentFilesCount,
+		.filesCount = totalUniqueMediaCount,
 		.messagesTextCount = _messagesTextCount,
 		.messagesMediaCount = _messagesMediaCount,
 		.messagesTotalCount = _messagesTotalCount,
 		.bytesCount = _stats.bytesCount(),
-		.totalUniqueCount = totalUniqueCount,
-		.totalUniqueSize = totalUniqueSize,
-		.totalTotalCount = totalTotalCount,
-		.totalTotalSize = totalTotalSize,
+		.totalUniqueCount = totalUniqueMediaCount,
+		.totalUniqueSize = totalUniqueMediaSize,
+		.totalTotalCount = _messagesTotalCount,
+		.totalTotalSize = totalTotalMediaSize,
+		.fullHistory = (_settings.media.types & Type::FullHistory),
 		.breakdown = breakdown,
 	});
 }

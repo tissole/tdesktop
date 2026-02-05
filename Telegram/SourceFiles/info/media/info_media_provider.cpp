@@ -126,6 +126,7 @@ bool Provider::sectionHasFloatingHeader() {
 	case Type::GIF:
 	case Type::Video:
 	case Type::RoundFile:
+	case Type::VoiceFile:
 	case Type::RoundVoiceFile:
 	case Type::MusicFile:
 		return false;
@@ -142,6 +143,7 @@ QString Provider::sectionTitle(not_null<const BaseLayout*> item) {
 	case Type::GIF:
 	case Type::Video:
 	case Type::RoundFile:
+	case Type::VoiceFile:
 	case Type::RoundVoiceFile:
 	case Type::File:
 		return langMonthFull(item->dateTime().date());
@@ -166,6 +168,7 @@ bool Provider::sectionItemBelongsHere(
 	case Type::GIF:
 	case Type::Video:
 	case Type::RoundFile:
+	case Type::VoiceFile:
 	case Type::RoundVoiceFile:
 	case Type::File:
 		return date.year() == sectionDate.year()
@@ -468,6 +471,7 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 				songSt);
 		}
 		return nullptr;
+	case Type::VoiceFile:
 	case Type::RoundVoiceFile:
 		if (const auto file = getFile()) {
 			return std::make_unique<Voice>(delegate, item, file, songSt);
@@ -476,6 +480,9 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 	case Type::Link:
 		return std::make_unique<Link>(delegate, item, item->media());
 	case Type::RoundFile:
+		if (const auto file = getFile()) {
+			return std::make_unique<Video>(delegate, item, file, options());
+		}
 		return nullptr;
 	}
 	Unexpected("Type in ListWidget::createLayout()");

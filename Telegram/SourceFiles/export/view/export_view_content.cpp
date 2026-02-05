@@ -143,9 +143,28 @@ Content ContentFromState(const FinishedState &state) {
 		1. });
 
 	using Type = MediaSettings::Type;
+	const std::vector<Type> order = {
+		Type::Photo,
+		Type::Video,
+		Type::VideoMessage,
+		Type::Audio,
+		Type::VoiceMessage,
+		Type::File,
+		Type::Sticker,
+		Type::GIF,
+		Type::Text,
+		Type::Link
+	};
+
+	const auto fullHistory = state.fullHistory;
+
 	int categoriesCount = 0;
-	for (const auto &[type, item] : state.breakdown) {
-		if (item.totalCount <= 0) continue;
+	for (const auto type : order) {
+		const auto it = state.breakdown.find(type);
+		if (it == state.breakdown.end() || it->second.totalCount <= 0) {
+			continue;
+		}
+		const auto &item = it->second;
 		QString label;
 		switch (type) {
 		case Type::Photo: label = tr::lng_export_option_photos(tr::now); break;
@@ -156,94 +175,55 @@ Content ContentFromState(const FinishedState &state) {
 		case Type::Sticker: label = tr::lng_export_option_stickers(tr::now); break;
 		case Type::GIF: label = tr::lng_export_option_gifs(tr::now); break;
 		case Type::File: label = tr::lng_export_option_files(tr::now); break;
+		case Type::Text: label = tr::lng_export_option_text_messages(tr::now); break;
 		case Type::Link: label = tr::lng_export_option_links(tr::now); break;
 		}
 		if (!label.isEmpty()) {
 			categoriesCount++;
+			QString text;
+			const bool hasDuplicates = (item.uniqueCount != item.totalCount)
+				|| (item.uniqueSize != item.totalSize);
+
 			if (type == Type::Text || type == Type::Link) {
-				result.rows.push_back({
-					Content::kDoneId,
-					tr::lng_export_downloaded_count_only(
-						tr::now,
-						lt_label,
-						label,
-						lt_amount,
-						Lang::FormatCountDecimal(item.uniqueCount),
-						lt_total_amount,
-						Lang::FormatCountDecimal(item.totalCount)),
-					QString(),
-					1. });
+				if (hasDuplicates) {
+					text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
+						+ ", " + Lang::FormatCountDecimal(item.totalCount);
+				} else {
+					text = label + ": " + Lang::FormatCountDecimal(item.totalCount);
+				}
 			} else {
-				result.rows.push_back({
-					Content::kDoneId,
-					tr::lng_export_downloaded_count(
-						tr::now,
-						lt_label,
-						label,
-						lt_amount,
-						Lang::FormatCountDecimal(item.uniqueCount),
-						lt_size,
-						Ui::FormatSizeText(item.uniqueSize),
-						lt_total_amount,
-						Lang::FormatCountDecimal(item.totalCount),
-						lt_total_size,
-						Ui::FormatSizeText(item.totalSize)),
-					QString(),
-					1. });
+				if (hasDuplicates) {
+					text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
+						+ " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
+						+ Lang::FormatCountDecimal(item.totalCount)
+						+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
+				} else {
+					text = label + ": " + Lang::FormatCountDecimal(item.totalCount)
+						+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
+				}
 			}
+			result.rows.push_back({ Content::kDoneId, text, QString(), 1. });
 		}
 	}
 
-	result.rows.push_back({
-		Content::kDoneId,
-		tr::lng_export_total_text_exported(
-			tr::now,
-			lt_amount,
-			Lang::FormatCountDecimal(state.messagesTextCount)),
-		QString(),
-		1. });
-	result.rows.push_back({
-		Content::kDoneId,
-		tr::lng_export_total_media_exported(
-			tr::now,
-			lt_amount,
-			Lang::FormatCountDecimal(state.messagesMediaCount)),
-		QString(),
-		1. });
-	result.rows.push_back({
-		Content::kDoneId,
-		tr::lng_export_total_messages_exported(
-			tr::now,
-			lt_amount,
-			Lang::FormatCountDecimal(state.messagesTotalCount)),
-		QString(),
-		1. });
+	if ((categoriesCount > 1 || fullHistory) && state.totalTotalCount > 0) {
+		QString totalText;
+		const auto label = "Total messages: ";
+		const bool hasDuplicates = (state.totalUniqueCount != state.totalTotalCount)
+			|| (state.totalUniqueSize != state.totalTotalSize);
 
-	if (categoriesCount > 1) {
-		result.rows.push_back({
-			Content::kDoneId,
-			tr::lng_export_total_selected(
-				tr::now,
-				lt_amount,
-				Lang::FormatCountDecimal(state.totalUniqueCount),
-				lt_size,
-				Ui::FormatSizeText(state.totalUniqueSize),
-				lt_total_amount,
-				Lang::FormatCountDecimal(state.totalTotalCount),
-				lt_total_size,
-				Ui::FormatSizeText(state.totalTotalSize)),
-			QString(),
-			1. });
+		if (hasDuplicates) {
+			totalText = label + Lang::FormatCountDecimal(state.totalUniqueCount)
+				+ " (" + Ui::FormatSizeText(state.totalUniqueSize) + "), "
+				+ Lang::FormatCountDecimal(state.totalTotalCount)
+				+ " (" + Ui::FormatSizeText(state.totalTotalSize) + ")";
+		} else {
+			totalText = label + Lang::FormatCountDecimal(state.totalTotalCount)
+				+ " (" + Ui::FormatSizeText(state.totalTotalSize) + ")";
+		}
+		result.rows.push_back({ Content::kDoneId, totalText, QString(), 1. });
 	}
 
-	result.rows.push_back({
-		Content::kDoneId,
-		tr::lng_export_total_size(
-			tr::now,
-			lt_size,
-			Ui::FormatSizeText(state.bytesCount)),
-		QString(),
-		1. });
 	return result;
 }
 

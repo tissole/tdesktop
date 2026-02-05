@@ -1042,9 +1042,10 @@ void MainWidget::setCurrentExportView(Export::View::PanelController *view) {
 	if (_currentExportView) {
 		_currentExportView->progressState(
 		) | rpl::start_with_next([=](Export::View::Content &&data) {
-			if (!data.rows.empty()
-				&& data.rows[0].id == Export::View::Content::kDoneId) {
-				LOG(("Export Info: Destroy top bar by Done."));
+			const auto isScanning = !data.rows.empty() && data.rows[0].label == tr::lng_export_analyzing(tr::now);
+			if ((!data.rows.empty()
+				&& data.rows[0].id == Export::View::Content::kDoneId) || isScanning) {
+				LOG(("Export Info: Destroy top bar by Done or Scan."));
 				destroyExportTopBar();
 			} else if (!_exportTopBar) {
 				LOG(("Export Info: Create top bar by State."));

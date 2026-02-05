@@ -1121,6 +1121,9 @@ void SettingsWidget::refreshButtons(
 	} else if (_isScanning) {
 		exportBtn->setDisabled(true);
 		scanBtn->setDisabled(true);
+	} else if (!mediaTypesSelected) {
+		exportBtn->setDisabled(true);
+		scanBtn->setDisabled(true);
 	} else if (!_scanResults.empty()) {
 		exportBtn->setDisabled(false);
 		scanBtn->setDisabled(true);
@@ -1202,9 +1205,27 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	int64 totalTotalSize = 0;
 	const auto fullHistory = (readData().media.types & MediaSettings::Type::FullHistory);
 
+	using MediaType = MediaSettings::Type;
+	const std::vector<MediaType> order = {
+		MediaType::Photo,
+		MediaType::Video,
+		MediaType::VideoMessage,
+		MediaType::Audio,
+		MediaType::VoiceMessage,
+		MediaType::File,
+		MediaType::Sticker,
+		MediaType::GIF,
+		MediaType::Text,
+		MediaType::Link
+	};
+
 	int categoriesCount = 0;
-	for (const auto &[type, item] : _scanResults) {
-		if (item.totalCount <= 0) continue;
+	for (const auto type : order) {
+		const auto it = _scanResults.find(type);
+		if (it == _scanResults.end() || it->second.totalCount <= 0) {
+			continue;
+		}
+		const auto &item = it->second;
 		QString label;
 		switch (type) {
 		case MediaType::Photo: label = tr::lng_export_option_photos(tr::now); break;
@@ -1221,27 +1242,13 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 		if (!label.isEmpty()) {
 			categoriesCount++;
 			if (type == MediaType::Text || type == MediaType::Link) {
-				text += tr::lng_export_selected_count_only(
-					tr::now,
-					lt_label,
-					label,
-					lt_amount,
-					Lang::FormatCountDecimal(item.uniqueCount),
-					lt_total_amount,
-					Lang::FormatCountDecimal(item.totalCount)) + "\n";
+				text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
+					+ ", " + Lang::FormatCountDecimal(item.totalCount) + "\n";
 			} else {
-				text += tr::lng_export_selected_count(
-					tr::now,
-					lt_label,
-					label,
-					lt_amount,
-					Lang::FormatCountDecimal(item.uniqueCount),
-					lt_size,
-					Ui::FormatSizeText(item.uniqueSize),
-					lt_total_amount,
-					Lang::FormatCountDecimal(item.totalCount),
-					lt_total_size,
-					Ui::FormatSizeText(item.totalSize)) + "\n";
+				text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
+					+ " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
+					+ Lang::FormatCountDecimal(item.totalCount)
+					+ " (" + Ui::FormatSizeText(item.totalSize) + ")\n";
 			}
 			totalUniqueCount += item.uniqueCount;
 			totalUniqueSize += item.uniqueSize;
@@ -1250,23 +1257,11 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 		}
 	}
 	if (totalTotalCount > 0) {
-		if (fullHistory) {
-			text += "\n" + tr::lng_export_total_messages(
-				tr::now,
-				lt_amount,
-				Lang::FormatCountDecimal(totalTotalCount));
-		} else if (categoriesCount > 1) {
-			text += "\n" + tr::lng_export_total_selected(
-				tr::now,
-				lt_amount,
-				Lang::FormatCountDecimal(totalUniqueCount),
-				lt_size,
-				Ui::FormatSizeText(totalUniqueSize),
-				lt_total_amount,
-				Lang::FormatCountDecimal(totalTotalCount),
-				lt_total_size,
-				Ui::FormatSizeText(totalTotalSize));
-		}
+		const auto label = "Total messages: ";
+		text += "\n" + QString(label) + Lang::FormatCountDecimal(totalUniqueCount)
+			+ " (" + Ui::FormatSizeText(totalUniqueSize) + "), "
+			+ Lang::FormatCountDecimal(totalTotalCount)
+			+ " (" + Ui::FormatSizeText(totalTotalSize) + ")";
 	} else {
 		text = tr::lng_export_none_found(tr::now);
 	}

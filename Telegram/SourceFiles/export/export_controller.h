@@ -65,6 +65,7 @@ struct FinishedState {
 	int64 totalUniqueSize = 0;
 	int totalTotalCount = 0;
 	int64 totalTotalSize = 0;
+	bool fullHistory = false;
 	std::map<MediaSettings::Type, Output::StatItem> breakdown;
 };
 

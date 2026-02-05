@@ -22,9 +22,10 @@ namespace {
 		tr::phrase<lngtag_ready, lngtag_total, lngtag_mb> phrase,
 		qint64 ready,
 		qint64 total) {
-	const auto KB = 1024.0;
-	const auto MB = KB * 1024.0;
-	const auto GB = MB * 1024.0;
+	const auto KB = 1000.0;
+	const auto MB = KB * 1000.0;
+	const auto GB = MB * 1000.0;
+	const auto TB = GB * 1000.0;
 
 	auto formatValue = [](double val, int precision) {
 		auto result = QLocale().toString(val, 'f', precision);
@@ -38,20 +39,17 @@ namespace {
 	};
 
 	QString readyStr, totalStr, mb;
-	const double totalGB = double(total) / GB;
-	const double readyGB = double(ready) / GB;
-
-	if (totalGB >= 1000.0) {
-		readyStr = formatValue(readyGB / 1000.0, 3);
-		totalStr = formatValue(totalGB / 1000.0, 3);
+	if (total >= TB) {
+		readyStr = formatValue(double(ready) / TB, 3);
+		totalStr = formatValue(double(total) / TB, 3);
 		mb = u"TB"_q;
 	} else if (total >= GB) {
-		readyStr = formatValue(readyGB, 3);
-		totalStr = formatValue(totalGB, 3);
+		readyStr = formatValue(double(ready) / GB, 2);
+		totalStr = formatValue(double(total) / GB, 2);
 		mb = u"GB"_q;
-	} else if (total >= (MB * 1000.0 / 1024.0 * 1.024)) { // 1000 MB
-		readyStr = formatValue(double(ready) / MB, 3);
-		totalStr = formatValue(double(total) / MB, 3);
+	} else if (total >= MB) {
+		readyStr = formatValue(double(ready) / MB, 1);
+		totalStr = formatValue(double(total) / MB, 1);
 		mb = u"MB"_q;
 	} else if (total >= KB) {
 		readyStr = formatValue(double(ready) / KB, 1);
@@ -68,9 +66,10 @@ namespace {
 } // namespace
 
 QString FormatSizeText(qint64 size) {
-	const auto KB = 1024.0;
-	const auto MB = KB * 1024.0;
-	const auto GB = MB * 1024.0;
+	const auto KB = 1000.0;
+	const auto MB = KB * 1000.0;
+	const auto GB = MB * 1000.0;
+	const auto TB = GB * 1000.0;
 
 	auto formatValue = [](double val, int precision) {
 		auto result = QLocale().toString(val, 'f', precision);
@@ -83,16 +82,14 @@ QString FormatSizeText(qint64 size) {
 		return result;
 	};
 
-	const double sizeGB = double(size) / GB;
-
-	if (sizeGB >= 1000.0) {
-		return formatValue(sizeGB / 1000.0, 3) + u" TB"_q;
+	if (size >= TB) {
+		return formatValue(double(size) / TB, 3) + u" TB"_q;
 	}
 	if (size >= GB) {
-		return formatValue(sizeGB, 3) + u" GB"_q;
+		return formatValue(double(size) / GB, 2) + u" GB"_q;
 	}
 	if (size >= MB) {
-		return formatValue(double(size) / MB, 3) + u" MB"_q;
+		return formatValue(double(size) / MB, 1) + u" MB"_q;
 	}
 	if (size >= KB) {
 		return formatValue(double(size) / KB, 1) + u" KB"_q;
