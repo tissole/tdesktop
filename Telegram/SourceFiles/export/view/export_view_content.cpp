@@ -181,25 +181,25 @@ Content ContentFromState(const FinishedState &state) {
 		if (!label.isEmpty()) {
 			categoriesCount++;
 			QString text;
-			const bool hasDuplicates = (item.uniqueCount != item.totalCount)
-				|| (item.uniqueSize != item.totalSize);
-
+			
 			if (type == Type::Text || type == Type::Link) {
-				if (hasDuplicates) {
-					text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
-						+ ", " + Lang::FormatCountDecimal(item.totalCount);
+				const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount);
+				const auto totalStr = Lang::FormatCountDecimal(item.totalCount);
+				if (uniqueStr != totalStr) {
+					text = label + ": " + uniqueStr + ", " + totalStr;
 				} else {
-					text = label + ": " + Lang::FormatCountDecimal(item.totalCount);
+					text = label + ": " + totalStr;
 				}
 			} else {
-				if (hasDuplicates) {
-					text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
-						+ " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
-						+ Lang::FormatCountDecimal(item.totalCount)
-						+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
+				const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount)
+					+ " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
+				const auto totalStr = Lang::FormatCountDecimal(item.totalCount)
+					+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
+
+				if (uniqueStr != totalStr) {
+					text = label + ": " + uniqueStr + ", " + totalStr;
 				} else {
-					text = label + ": " + Lang::FormatCountDecimal(item.totalCount)
-						+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
+					text = label + ": " + totalStr;
 				}
 			}
 			result.rows.push_back({ Content::kDoneId, text, QString(), 1. });
@@ -209,17 +209,16 @@ Content ContentFromState(const FinishedState &state) {
 	if ((categoriesCount > 1 || fullHistory) && state.totalTotalCount > 0) {
 		QString totalText;
 		const auto label = "Total messages: ";
-		const bool hasDuplicates = (state.totalUniqueCount != state.totalTotalCount)
-			|| (state.totalUniqueSize != state.totalTotalSize);
+		
+		const auto uniqueStr = Lang::FormatCountDecimal(state.totalUniqueCount)
+			+ " (" + Ui::FormatSizeText(state.totalUniqueSize) + ")";
+		const auto totalStr = Lang::FormatCountDecimal(state.totalTotalCount)
+			+ " (" + Ui::FormatSizeText(state.totalTotalSize) + ")";
 
-		if (hasDuplicates) {
-			totalText = label + Lang::FormatCountDecimal(state.totalUniqueCount)
-				+ " (" + Ui::FormatSizeText(state.totalUniqueSize) + "), "
-				+ Lang::FormatCountDecimal(state.totalTotalCount)
-				+ " (" + Ui::FormatSizeText(state.totalTotalSize) + ")";
+		if (uniqueStr != totalStr) {
+			totalText = label + uniqueStr + ", " + totalStr;
 		} else {
-			totalText = label + Lang::FormatCountDecimal(state.totalTotalCount)
-				+ " (" + Ui::FormatSizeText(state.totalTotalSize) + ")";
+			totalText = label + totalStr;
 		}
 		result.rows.push_back({ Content::kDoneId, totalText, QString(), 1. });
 	}

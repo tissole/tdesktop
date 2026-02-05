@@ -56,6 +56,8 @@ tr::phrase<> SharedMediaTitle(Type type) {
 		return tr::lng_media_type_files;
 	case Type::RoundVoiceFile:
 		return tr::lng_media_type_audios;
+	case Type::VoiceFile:
+		return tr::lng_media_type_audios;
 	case Type::Link:
 		return tr::lng_media_type_links;
 	case Type::RoundFile:

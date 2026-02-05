@@ -177,8 +177,12 @@ void PanelController::createPanel() {
 	_panel->setInnerSize(st::exportPanelSize);
 	_panel->closeRequests(
 	) | rpl::start_with_next([=] {
-		LOG(("Export Info: Panel Hide By Close."));
-		_panel->hideGetDuration();
+		if (v::is<ProcessingState>(_state)) {
+			stopWithConfirmation();
+		} else {
+			LOG(("Export Info: Panel Hide By Close."));
+			_panel->hideGetDuration();
+		}
 	}, _panel->lifetime());
 	_panelCloseEvents.fire(_panel->closeEvents());
 
@@ -212,7 +216,9 @@ void PanelController::showSettings() {
 
 	settingsRaw->cancelClicks(
 	) | rpl::start_with_next([=] {
-		if (settingsRaw->isScanning() || settingsRaw->hasScanResults()) {
+		const auto scanning = settingsRaw->isScanning();
+		const auto hasResults = settingsRaw->hasScanResults();
+		if (scanning || hasResults) {
 			_process->cancelExportFast();
 		} else {
 			LOG(("Export Info: Panel Hide By Cancel."));
@@ -435,7 +441,9 @@ void PanelController::updateState(State &&state) {
 		_panel->setHideOnDeactivate(false);
 	} else if (v::is<CancelledState>(_state)) {
 		LOG(("Export Info: Reset Panel After Cancel."));
+		_stopRequested = false;
 		showSettings();
+		_panel->showAndActivate();
 	}
 }
 

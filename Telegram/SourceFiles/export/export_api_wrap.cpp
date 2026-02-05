@@ -1402,8 +1402,17 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 		const auto filter = getFilter();
 		const auto mediaFilterActive = (filter.type() != mtpc_inputMessagesFilterEmpty);
 		const auto textFilterActive = (_settings->media.types & MediaSettings::Type::Text);
+		const auto useSearch = _chatProcess->info.onlyMyMessages || mediaFilterActive;
+
+		// If scanning text/history in a specific range, use the ID difference as a better estimate
+		// than the total chat count returned by the server.
+		const auto fromId = (_chatProcess->fromId > 0) ? _chatProcess->fromId : (_settings->useIdRange ? _settings->singlePeerFromId : int64(1));
+		const auto tillId = (_chatProcess->tillId > 0) ? _chatProcess->tillId : (_settings->useIdRange ? _settings->singlePeerTillId : int64(0));
+		const auto realCount = (tillId > 0 && !mediaFilterActive)
+			? std::min(count, int(std::max(int64(0), tillId - fromId + 1)))
+			: count;
 		
-		checkFirstMessageDate(localSplitIndex, count);
+		checkFirstMessageDate(localSplitIndex, realCount);
 	});
 }
 
@@ -1440,10 +1449,7 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 
 	_chatProcess->info.messagesCountPerSplit[localSplitIndex] = count;
 	
-	const auto types = _settings->media.types;
-	if (types & (MediaSettings::Type::Text | MediaSettings::Type::FullHistory)) {
-		_chatProcess->messagesTextTotal += count;
-	}
+	_chatProcess->messagesTextTotal += count;
 
 	if (localSplitIndex + 1 < _chatProcess->info.splits.size()) {
 		requestMessagesCount(localSplitIndex + 1);
@@ -3311,6 +3317,7 @@ void ApiWrap::error(const QString &text) {
 }
 
 void ApiWrap::ioError(const Output::Result &result) {
+	clearState();
 	_ioErrors.fire_copy(result);
 }
 

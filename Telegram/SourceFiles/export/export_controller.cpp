@@ -283,9 +283,9 @@ void ControllerObject::runScan(
 	if (!_settings.path.isEmpty() || _isScanning) {
 		return;
 	}
-	_api.clearResults();
-	_scanStats.clear();
+	_api.cancelExportFast();
 	_isScanning = true;
+	_stepIndex = -1;
 	_settings = NormalizeSettings(settings);
 	_environment = environment;
 
@@ -310,9 +310,8 @@ void ControllerObject::startExport(
 		return;
 	}
 
-	if (_isScanning) {
-		_api.cancelExportFast();
-	}
+	_api.cancelExportFast();
+	_stepIndex = -1;
 
 	_stats.clear();
 	int totalSelected = 0;
@@ -681,7 +680,7 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 		_messagesTotalCount = progress.messagesTotalCount;
 		_messagesTextTotal = progress.messagesTextTotal;
 		if (_isScanning) {
-			setState(stateScanning(progress.itemIndex, _messagesCount));
+			setState(stateScanning(progress.itemIndex, _messagesTextTotal));
 		} else {
 			setState(stateDialogs(progress));
 		}

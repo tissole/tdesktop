@@ -1128,7 +1128,7 @@ void SettingsWidget::refreshButtons(
 		exportBtn->setDisabled(false);
 		scanBtn->setDisabled(true);
 	} else {
-		exportBtn->setDisabled(false);
+		exportBtn->setDisabled(!mediaTypesSelected);
 		scanBtn->setDisabled(!mediaTypesSelected);
 	}
 
@@ -1220,6 +1220,11 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	};
 
 	int categoriesCount = 0;
+	int totalUniqueMediaCount = 0;
+	int64 totalUniqueMediaSize = 0;
+	int totalMessagesCount = 0;
+	int64 totalMediaSize = 0;
+
 	for (const auto type : order) {
 		const auto it = _scanResults.find(type);
 		if (it == _scanResults.end() || it->second.totalCount <= 0) {
@@ -1242,26 +1247,44 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 		if (!label.isEmpty()) {
 			categoriesCount++;
 			if (type == MediaType::Text || type == MediaType::Link) {
-				text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
-					+ ", " + Lang::FormatCountDecimal(item.totalCount) + "\n";
+				const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount);
+				const auto totalStr = Lang::FormatCountDecimal(item.totalCount);
+				if (uniqueStr != totalStr) {
+					text += label + ": " + uniqueStr + ", " + totalStr + "\n";
+				} else {
+					text += label + ": " + totalStr + "\n";
+				}
 			} else {
-				text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
-					+ " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
-					+ Lang::FormatCountDecimal(item.totalCount)
-					+ " (" + Ui::FormatSizeText(item.totalSize) + ")\n";
+				const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount)
+					+ " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
+				const auto totalStr = Lang::FormatCountDecimal(item.totalCount)
+					+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
+
+				if (uniqueStr != totalStr) {
+					text += label + ": " + uniqueStr + ", " + totalStr + "\n";
+				} else {
+					text += label + ": " + totalStr + "\n";
+				}
+
+				totalUniqueMediaCount += item.uniqueCount;
+				totalUniqueMediaSize += item.uniqueSize;
+				totalMediaSize += item.totalSize;
 			}
-			totalUniqueCount += item.uniqueCount;
-			totalUniqueSize += item.uniqueSize;
-			totalTotalCount += item.totalCount;
-			totalTotalSize += item.totalSize;
+			totalMessagesCount += item.totalCount;
 		}
 	}
-	if (totalTotalCount > 0) {
+	if ((categoriesCount > 1 || fullHistory) && totalMessagesCount > 0) {
 		const auto label = "Total messages: ";
-		text += "\n" + QString(label) + Lang::FormatCountDecimal(totalUniqueCount)
-			+ " (" + Ui::FormatSizeText(totalUniqueSize) + "), "
-			+ Lang::FormatCountDecimal(totalTotalCount)
-			+ " (" + Ui::FormatSizeText(totalTotalSize) + ")";
+		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMediaCount)
+			+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
+		const auto totalStr = Lang::FormatCountDecimal(totalMessagesCount)
+			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
+
+		if (uniqueStr != totalStr) {
+			text += "\n" + QString(label) + uniqueStr + ", " + totalStr;
+		} else {
+			text += "\n" + QString(label) + totalStr;
+		}
 	} else {
 		text = tr::lng_export_none_found(tr::now);
 	}
@@ -1272,6 +1295,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 void SettingsWidget::clearScanResults() {
 	_scanResults.clear();
 	if (_scanResultsLabel) _scanResultsLabel->setText(QString());
+	_changes.fire_copy(readData());
 }
 
 } // namespace View
