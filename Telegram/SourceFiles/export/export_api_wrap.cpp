@@ -472,11 +472,12 @@ std::optional<QString> ApiWrap::LoadedFileCache::find(
 }
 
 template <typename Request>
-auto ApiWrap::mainRequest(Request &&request) {
-	Expects(_takeoutId.has_value());
+auto ApiWrap::mainRequest(Request &&request, std::optional<uint64> takeoutId) {
+	const auto id = takeoutId ? takeoutId : _takeoutId;
+	Expects(id.has_value());
 
 	auto original = std::move(_mtp.request(MTPInvokeWithTakeout<Request>(
-		MTP_long(*_takeoutId),
+		MTP_long(*id),
 		std::forward<Request>(request)
 	)).toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)));
 
@@ -612,8 +613,7 @@ void ApiWrap::requestUserpicsCount() {
 		MTP_long(0), // max_id
 		MTP_int(0)	 // limit
 	)).done([=](const MTPphotos_Photos &result) {
-		Expects(_settings != nullptr);
-		Expects(_startProcess != nullptr);
+		if (!_settings || !_startProcess) return;
 
 		_startProcess->info.userpicsCount = result.match(
 		[](const MTPDphotos_photos &data) {
@@ -634,8 +634,7 @@ void ApiWrap::requestStoriesCount() {
 		MTP_int(0), // offset_id
 		MTP_int(0) // limit
 	)).done([=](const MTPstories_Stories &result) {
-		Expects(_settings != nullptr);
-		Expects(_startProcess != nullptr);
+		if (!_settings || !_startProcess) return;
 
 		_startProcess->info.storiesCount = result.data().vcount().v;
 
@@ -648,6 +647,7 @@ void ApiWrap::requestSplitRanges() {
 
 	mainRequest(MTPmessages_GetSplitRanges(
 	)).done([=](const MTPVector<MTPMessageRange> &result) {
+		if (!_settings || !_startProcess) return;
 		_splits = result.v;
 		if (_splits.empty()) {
 			_splits.push_back(MTP_messageRange(
@@ -688,8 +688,7 @@ void ApiWrap::requestDialogsCount() {
 		MTP_int(limit),
 		MTP_long(hash)
 	)).done([=](const MTPmessages_Dialogs &result) {
-		Expects(_settings != nullptr);
-		Expects(_startProcess != nullptr);
+		if (!_settings || !_startProcess) return;
 
 		const auto count = result.match(
 		[](const MTPDmessages_dialogs &data) {
@@ -840,6 +839,7 @@ void ApiWrap::requestPersonalInfo(FnMut<void(Data::PersonalInfo&&)> done) {
 	mainRequest(MTPusers_GetFullUser(
 		_user
 	)).done([=, done = std::move(done)](const MTPusers_UserFull &result) mutable {
+		if (!_settings) return;
 		result.match([&](const MTPDusers_userFull &data) {
 			if (!data.vusers().v.empty()) {
 				done(Data::ParsePersonalInfo(data));
@@ -896,7 +896,7 @@ void ApiWrap::requestUserpics(
 		MTP_long(_userpicsProcess->maxId),
 		MTP_int(kUserpicsSliceLimit)
 	)).done([=](const MTPphotos_Photos &result) mutable {
-		Expects(_userpicsProcess != nullptr);
+		if (!_userpicsProcess) return;
 
 		auto startInfo = result.match(
 		[](const MTPDphotos_photos &data) {
@@ -1063,7 +1063,7 @@ void ApiWrap::requestStories(
 		MTP_int(_storiesProcess->offsetId),
 		MTP_int(kStoriesSliceLimit)
 	)).done([=](const MTPstories_Stories &result) mutable {
-		Expects(_storiesProcess != nullptr);
+		if (!_storiesProcess) return;
 
 		auto startInfo = Data::StoriesInfo{ result.data().vcount().v };
 		if (!_storiesProcess->start(std::move(startInfo))) {
@@ -1232,6 +1232,7 @@ void ApiWrap::requestContacts(FnMut<void(Data::ContactsList&&)> done) {
 	_contactsProcess->done = std::move(done);
 	mainRequest(MTPcontacts_GetSaved(
 	)).done([=](const MTPVector<MTPSavedContact> &result) {
+		if (!_contactsProcess) return;
 		_contactsProcess->result = Data::ParseContactsList(result);
 
 		const auto resolve = [=](int index, const auto &resolveNext) -> void {
@@ -1242,6 +1243,7 @@ void ApiWrap::requestContacts(FnMut<void(Data::ContactsList&&)> done) {
 			mainRequest(MTPcontacts_ResolvePhone(
 				MTP_string(qs(contact.phoneNumber))
 			)).done([=](const MTPcontacts_ResolvedPeer &result) {
+				if (!_contactsProcess) return;
 				auto &contact = _contactsProcess->result.list[index];
 				contact.userId = result.data().vpeer().match([&](
 						const MTPDpeerUser &user) {
@@ -1277,7 +1279,7 @@ void ApiWrap::requestTopPeersSlice() {
 		MTP_int(kTopPeerSliceLimit),
 		MTP_long(0) // hash
 	)).done([=](const MTPcontacts_TopPeers &result) {
-		Expects(_contactsProcess != nullptr);
+		if (!_contactsProcess) return;
 
 		if (!Data::AppendTopPeers(_contactsProcess->result, result)) {
 			error("Unexpected data in ApiWrap::requestTopPeersSlice.");
@@ -1320,10 +1322,12 @@ void ApiWrap::requestSessions(FnMut<void(Data::SessionsList&&)> done) {
 	mainRequest(MTPaccount_GetAuthorizations(
 	)).done([=, done = std::move(done)](
 			const MTPaccount_Authorizations &result) mutable {
+		if (!_takeoutId) return;
 		auto list = Data::ParseSessionsList(result);
 		mainRequest(MTPaccount_GetWebAuthorizations(
 		)).done([=, done = std::move(done), list = std::move(list)](
 				const MTPaccount_WebAuthorizations &result) mutable {
+			if (!_takeoutId) return;
 			list.webList = Data::ParseWebSessionsList(result).webList;
 			done(std::move(list));
 		}).send();
@@ -1391,7 +1395,7 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 		MTP_int(int32(minId)), // min_id
 		MTP_long(0) // hash
 	)).done([=](const MTPmessages_Messages &result) {
-		if (!_chatProcess) return;
+		if (!_chatProcess || !_settings) return;
 
 		const auto count = result.match(
 			[](const MTPDmessages_messages &data) {
@@ -1501,7 +1505,7 @@ void ApiWrap::resolveDates() {
 				MTP_int(0), // min_id
 				MTP_long(0)) // hash
 		)).done([=](const MTPmessages_Messages &result) {
-			if (!_chatProcess) return;
+			if (!_chatProcess || !_settings) return;
 			result.match([&](const MTPDmessages_messagesNotModified &) {
 			}, [&](const auto &data) {
 				if (!data.vmessages().v.isEmpty()) {
@@ -1529,7 +1533,7 @@ void ApiWrap::resolveDates() {
 				MTP_int(0), // min_id
 				MTP_long(0)) // hash
 		)).done([=](const MTPmessages_Messages &result) {
-			if (!_chatProcess) return;
+			if (!_chatProcess || !_settings) return;
 			result.match([&](const MTPDmessages_messagesNotModified &) {
 			}, [&](const auto &data) {
 				if (!data.vmessages().v.isEmpty()) {
@@ -1589,17 +1593,19 @@ void ApiWrap::skipFile(uint64 randomId) {
 }
 
 void ApiWrap::cancelExportFast(bool keepCache) {
-if (_takeoutId.has_value()) {
-const auto requestId = mainRequest(MTPaccount_FinishTakeoutSession(
-MTP_flags(0)
-)).send();
-_mtp.request(requestId).detach();
-}
-clearState(keepCache);
+	const auto takeoutId = base::take(_takeoutId);
+	if (takeoutId.has_value()) {
+		const auto requestId = mainRequest(MTPaccount_FinishTakeoutSession(
+			MTP_flags(0)
+		), takeoutId).send();
+		_mtp.request(requestId).detach();
+	}
+	clearState(keepCache);
 }
 
 void ApiWrap::requestSinglePeerDialog() {
 	auto doneSinglePeer = [=](const auto &result) {
+		if (!_settings || !_dialogsProcess) return;
 		appendSinglePeerDialogs(
 			Data::ParseDialogsInfo(_settings->singlePeer, result));
 	};
@@ -1644,6 +1650,7 @@ mtpRequestId ApiWrap::requestSinglePeerMigrated(
 	return mainRequest(MTPchannels_GetFullChannel(
 		input
 	)).done([=](const MTPmessages_ChatFull &result) {
+		if (!_settings || !_dialogsProcess) return;
 		auto info = result.match([&](
 				const MTPDmessages_chatFull &data) {
 			const auto migratedChatId = data.vfull_chat().match([&](
@@ -1720,6 +1727,8 @@ void ApiWrap::requestDialogsSlice() {
 		MTP_int(kChatsSliceLimit),
 		MTP_long(hash)
 	)).done([=](const MTPmessages_Dialogs &result) {
+		if (!_settings || !_dialogsProcess) return;
+
 		if (result.type() == mtpc_messages_dialogsNotModified) {
 			error("Unexpected dialogsNotModified received.");
 			return;
@@ -1805,7 +1814,7 @@ void ApiWrap::requestLeftChannelsSliceGeneric(FnMut<void()> done) {
 		MTP_int(_leftChannelsProcess->offset)
 	)).done([=, done = std::move(done)](
 			const MTPmessages_Chats &result) mutable {
-		Expects(_leftChannelsProcess != nullptr);
+		if (!_leftChannelsProcess) return;
 
 		appendLeftChannelsSlice(Data::ParseLeftChannelsInfo(result));
 
@@ -2000,7 +2009,7 @@ void ApiWrap::requestChatMessages(
 						MTP_long(0)) // hash
 				))
 		.fail([=](const MTP::Error &error) {
-			if (!_chatProcess) return false;
+			if (!_chatProcess || !_settings) return false;
 
 			if (error.type() == u"CHANNEL_PRIVATE"_q) {
 				if (realPeerInput.type() == mtpc_inputPeerChannel
@@ -2197,12 +2206,12 @@ void ApiWrap::resolveCustomEmoji() {
 	mainRequest(MTPmessages_GetCustomEmojiDocuments(
 		MTP_vector<MTPlong>(v)
 	)).fail([=](const MTP::Error &error) {
-		if (!_chatProcess) return false;
+		if (!_chatProcess || !_settings) return false;
 		LOG(("Export Error: Failed to get documents for emoji."));
 		finalize();
 		return true;
 	}).done([=](const MTPVector<MTPDocument> &result) {
-		if (!_chatProcess) return;
+		if (!_chatProcess || !_settings) return;
 		for (const auto &entry : result.v) {
 			auto document = Data::ParseDocument(
 				_chatProcess->context,
@@ -3335,8 +3344,10 @@ void ApiWrap::filePartExtractReference(
 
 void ApiWrap::error(const MTP::Error &error) {
 	LOG(("Export Error: API Error %1: %2 (%3)").arg(error.code()).arg(error.type()).arg(error.description()));
-	clearState();
-	_errors.fire_copy(error);
+	if (_settings) {
+		clearState();
+		_errors.fire_copy(error);
+	}
 }
 
 void ApiWrap::error(const QString &text) {

@@ -17,7 +17,6 @@ namespace Storage {
 enum class SharedMediaType : signed char {
 	Photo,
 	Video,
-	PhotoVideo,
 	MusicFile,
 	File,
 	VoiceFile,
@@ -25,6 +24,7 @@ enum class SharedMediaType : signed char {
 	ChatPhoto,
 	RoundVoiceFile,
 	GIF,
+	PhotoVideo,
 	RoundFile,
 	Pinned,
 

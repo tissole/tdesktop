@@ -81,7 +81,9 @@ const style::InfoTopBar &TopBarStyle(Wrap wrap) {
 			case Type::File: return tr::lng_media_selected_file;
 			case Type::MusicFile: return tr::lng_media_selected_song;
 			case Type::Link: return tr::lng_media_selected_link;
-			case Type::RoundVoiceFile: return tr::lng_media_selected_audio;
+			case Type::RoundVoiceFile:
+			case Type::VoiceFile: return tr::lng_media_selected_audio;
+			case Type::RoundFile: return tr::lng_media_selected_round;
 			case Type::PhotoVideo: return tr::lng_stories_row_count;
 			}
 			Unexpected("Type in TopBar::generateSelectedText()");

@@ -141,6 +141,7 @@ bool Provider::sectionHasFloatingHeader() {
 	case Type::GIF:
 	case Type::Video:
 	case Type::RoundFile:
+	case Type::VoiceFile:
 	case Type::RoundVoiceFile:
 	case Type::MusicFile:
 		return false;
@@ -518,6 +519,7 @@ std::unique_ptr<Media::BaseLayout> Provider::createLayout(
 				songSt);
 		}
 		return nullptr;
+	case Type::VoiceFile:
 	case Type::RoundVoiceFile:
 		if (const auto file = getFile()) {
 			return std::make_unique<Voice>(delegate, item, file, songSt);
@@ -526,6 +528,9 @@ std::unique_ptr<Media::BaseLayout> Provider::createLayout(
 	case Type::Link:
 		return std::make_unique<Link>(delegate, item, item->media());
 	case Type::RoundFile:
+		if (const auto file = getFile()) {
+			return std::make_unique<Video>(delegate, item, file, options());
+		}
 		return nullptr;
 	}
 	Unexpected("Type in ListWidget::createLayout()");

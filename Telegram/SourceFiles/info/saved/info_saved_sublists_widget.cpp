@@ -125,11 +125,12 @@ void SublistsWidget::setupOtherTypes() {
 
 	addMediaButton(Type::Photo, st::infoIconMediaPhoto);
 	addMediaButton(Type::Video, st::infoIconMediaVideo);
-	addMediaButton(Type::File, st::infoIconMediaFile);
+	addMediaButton(Type::RoundFile, st::infoIconMediaRoundVideo);
 	addMediaButton(Type::MusicFile, st::infoIconMediaAudio);
-	addMediaButton(Type::Link, st::infoIconMediaLink);
-	addMediaButton(Type::RoundVoiceFile, st::infoIconMediaVoice);
+	addMediaButton(Type::VoiceFile, st::infoIconMediaVoice);
+	addMediaButton(Type::File, st::infoIconMediaFile);
 	addMediaButton(Type::GIF, st::infoIconMediaGif);
+	addMediaButton(Type::Link, st::infoIconMediaLink);
 
 	content->add(object_ptr<Ui::FixedHeightWidget>(
 		content,

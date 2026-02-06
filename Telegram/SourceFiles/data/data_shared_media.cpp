@@ -58,9 +58,13 @@ bool IsItemGoodForType(const not_null<HistoryItem*> item, Type type) {
 	const auto voiceRoundType = (type == Type::RoundVoiceFile);
 	const auto fileType = (type == Type::File);
 
+	if (voiceType) {
+		return voiceDoc;
+	} else if (roundType) {
+		return roundDoc;
+	}
+
 	return (audioType && audioDoc)
-		|| (voiceType && voiceDoc)
-		|| (roundType && roundDoc)
 		|| (voiceRoundType && (roundDoc || voiceDoc))
 		|| (gifType && gifDoc)
 		|| ((videoType || photoVideoType) && videoDoc)
@@ -78,6 +82,8 @@ std::optional<Storage::SharedMediaType> SharedMediaOverviewType(
 	case Type::Video:
 	case Type::MusicFile:
 	case Type::File:
+	case Type::VoiceFile:
+	case Type::RoundFile:
 	case Type::RoundVoiceFile:
 	case Type::Link: return type;
 	}

@@ -271,7 +271,9 @@ private:
 	class RequestBuilder;
 
 	template <typename Request>
-	[[nodiscard]] auto mainRequest(Request &&request);
+	[[nodiscard]] auto mainRequest(
+		Request &&request,
+		std::optional<uint64> takeoutId = std::nullopt);
 
 	template <typename Request>
 	[[nodiscard]] auto splitRequest(int index, Request &&request);

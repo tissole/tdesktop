@@ -359,6 +359,7 @@ void ListSection::resizeToWidth(int newWidth) {
 		_mosaic.setFullWidth(newWidth - st::infoMediaSkip);
 	} break;
 
+	case Type::VoiceFile:
 	case Type::RoundVoiceFile:
 	case Type::MusicFile:
 		resizeOneColumn(0, newWidth);
@@ -404,6 +405,7 @@ int ListSection::recountHeight() {
 		return _mosaic.countDesiredHeight(0);
 	} break;
 
+	case Type::VoiceFile:
 	case Type::RoundVoiceFile:
 	case Type::File:
 	case Type::MusicFile:

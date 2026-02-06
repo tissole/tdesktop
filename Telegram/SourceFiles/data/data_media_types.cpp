@@ -1097,9 +1097,7 @@ Storage::SharedMediaTypesMask MediaFile::sharedMediaTypes() const {
 	if (_document->sticker() || ttlSeconds()) {
 		return {};
 	} else if (_document->isVideoMessage()) {
-		return Storage::SharedMediaTypesMask{}
-			.added(Type::RoundFile)
-			.added(Type::RoundVoiceFile);
+		return Type::RoundFile;
 	} else if (_document->isGifv()) {
 		return Type::GIF;
 	} else if (_document->isVideoFile()) {
@@ -1107,10 +1105,8 @@ Storage::SharedMediaTypesMask MediaFile::sharedMediaTypes() const {
 			.added(Type::Video)
 			.added(Type::PhotoVideo);
 	} else if (_document->isVoiceMessage()) {
-		return Storage::SharedMediaTypesMask{}
-			.added(Type::VoiceFile)
-			.added(Type::RoundVoiceFile);
-	} else if (_document->isSharedMediaMusic()) {
+		return Type::VoiceFile;
+	} else if (_document->isAudioFile()) {
 		return Type::MusicFile;
 	}
 	return Type::File;
