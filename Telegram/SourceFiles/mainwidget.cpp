@@ -1042,11 +1042,12 @@ void MainWidget::setCurrentExportView(Export::View::PanelController *view) {
 	if (_currentExportView) {
 		_currentExportView->progressState(
 		) | rpl::start_with_next([=](Export::View::Content &&data) {
-			const auto isScanning = !data.rows.empty() && data.rows[0].label == tr::lng_export_analyzing(tr::now);
-			if ((!data.rows.empty()
-				&& data.rows[0].id == Export::View::Content::kDoneId) || isScanning) {
-				LOG(("Export Info: Destroy top bar by Done or Scan."));
-				destroyExportTopBar();
+			const bool isDone = !data.rows.empty() && data.rows[0].id == Export::View::Content::kDoneId;
+			const bool isScanning = data.isScanning;
+			if (isDone || isScanning) {
+				if (_exportTopBar) {
+					destroyExportTopBar();
+				}
 			} else if (!_exportTopBar) {
 				LOG(("Export Info: Create top bar by State."));
 				createExportTopBar(std::move(data));
@@ -1093,7 +1094,10 @@ void MainWidget::createExportTopBar(Export::View::Content &&data) {
 
 void MainWidget::destroyExportTopBar() {
 	if (_exportTopBar) {
-		_exportTopBar->hide(anim::type::normal);
+		const auto type = (_currentExportView && _currentExportView->isScanning())
+			? anim::type::instant
+			: anim::type::normal;
+		_exportTopBar->hide(type);
 	}
 }
 

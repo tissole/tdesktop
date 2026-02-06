@@ -45,8 +45,12 @@ struct Settings;
 class ApiWrap {
 public:
 	struct LocationKey {
-		uint64 type;
-		uint64 id;
+		uint64 type = 0;
+		uint64 id = 0;
+
+		LocationKey() = default;
+		LocationKey(uint64 type, uint64 id) : type(type), id(id) {
+		}
 
 		inline bool operator<(const LocationKey &other) const {
 			return std::tie(type, id) < std::tie(other.type, other.id);

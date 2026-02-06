@@ -133,9 +133,11 @@ private:
 	rpl::variable<rpl::producer<>> _exportClicks;
 	rpl::variable<rpl::producer<>> _cancelClicks;
 
+	Ui::RpWidget *_buttonsContainer = nullptr;
 	Ui::VerticalLayout *_container = nullptr;
 	Ui::FlatLabel *_scanResultsLabel = nullptr;
 	bool _isScanning = false;
+	bool _hasScanResults = false;
 	std::map<MediaSettings::Type, Output::StatItem> _scanResults;
 
 };

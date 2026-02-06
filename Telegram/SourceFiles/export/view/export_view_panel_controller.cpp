@@ -395,6 +395,13 @@ void PanelController::stopExport() {
 	_panel->hideGetDuration();
 }
 
+bool PanelController::isScanning() const {
+	if (const auto state = std::get_if<ProcessingState>(&_state)) {
+		return state->isScanning;
+	}
+	return false;
+}
+
 rpl::producer<> PanelController::stopRequests() const {
 	return _panelCloseEvents.events(
 	) | rpl::flatten_latest(

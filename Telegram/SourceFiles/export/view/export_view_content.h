@@ -26,6 +26,7 @@ struct Content {
 	};
 
 	std::vector<Row> rows;
+	bool isScanning = false;
 
 	static const QString kDoneId;
 

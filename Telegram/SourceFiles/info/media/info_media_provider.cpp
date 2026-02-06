@@ -129,12 +129,16 @@ bool Provider::sectionHasFloatingHeader() {
 	case Type::VoiceFile:
 	case Type::RoundVoiceFile:
 	case Type::MusicFile:
+	case Type::PhotoVideo:
+	case Type::ChatPhoto:
+	case Type::Pinned:
 		return false;
 	case Type::File:
 	case Type::Link:
 		return true;
+	default:
+		return false;
 	}
-	Unexpected("Type in HasFloatingHeader()");
 }
 
 QString Provider::sectionTitle(not_null<const BaseLayout*> item) {
@@ -146,6 +150,9 @@ QString Provider::sectionTitle(not_null<const BaseLayout*> item) {
 	case Type::VoiceFile:
 	case Type::RoundVoiceFile:
 	case Type::File:
+	case Type::PhotoVideo:
+	case Type::ChatPhoto:
+	case Type::Pinned:
 		return langMonthFull(item->dateTime().date());
 
 	case Type::Link:
@@ -153,8 +160,9 @@ QString Provider::sectionTitle(not_null<const BaseLayout*> item) {
 
 	case Type::MusicFile:
 		return QString();
+	default:
+		return QString();
 	}
-	Unexpected("Type in ListSection::setHeader()");
 }
 
 bool Provider::sectionItemBelongsHere(
@@ -171,6 +179,9 @@ bool Provider::sectionItemBelongsHere(
 	case Type::VoiceFile:
 	case Type::RoundVoiceFile:
 	case Type::File:
+	case Type::PhotoVideo:
+	case Type::ChatPhoto:
+	case Type::Pinned:
 		return date.year() == sectionDate.year()
 			&& date.month() == sectionDate.month();
 
@@ -179,8 +190,9 @@ bool Provider::sectionItemBelongsHere(
 
 	case Type::MusicFile:
 		return true;
+	default:
+		return true;
 	}
-	Unexpected("Type in ListSection::belongsHere()");
 }
 
 bool Provider::isPossiblyMyItem(not_null<const HistoryItem*> item) {
@@ -434,6 +446,17 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 		return MediaOptions{ .spoiler = media && media->hasSpoiler() };
 	};
 	switch (type) {
+	case Type::PhotoVideo:
+		if (const auto photo = getPhoto()) {
+			return std::make_unique<Photo>(
+				delegate,
+				item,
+				photo,
+				options());
+		} else if (const auto file = getFile()) {
+			return std::make_unique<Video>(delegate, item, file, options());
+		}
+		return nullptr;
 	case Type::Photo:
 		if (const auto photo = getPhoto()) {
 			return std::make_unique<Photo>(
@@ -484,8 +507,30 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 			return std::make_unique<Video>(delegate, item, file, options());
 		}
 		return nullptr;
+	case Type::ChatPhoto:
+		if (const auto photo = getPhoto()) {
+			return std::make_unique<Photo>(
+				delegate,
+				item,
+				photo,
+				options());
+		}
+		return nullptr;
+	case Type::PhotoVideo:
+		if (const auto photo = getPhoto()) {
+			return std::make_unique<Photo>(
+				delegate,
+				item,
+				photo,
+				options());
+		} else if (const auto file = getFile()) {
+			return std::make_unique<Video>(delegate, item, file, options());
+		}
+		return nullptr;
+	case Type::Pinned:
+		return nullptr;
 	}
-	Unexpected("Type in ListWidget::createLayout()");
+	return nullptr;
 }
 
 ListItemSelectionData Provider::computeSelectionData(

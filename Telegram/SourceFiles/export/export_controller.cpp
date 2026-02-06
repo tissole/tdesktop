@@ -758,30 +758,32 @@ ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress)
 }
 
 void ControllerObject::setFinishedState() {
-	auto totalUniqueMediaCount = 0;
-	auto totalUniqueMediaSize = int64(0);
-	auto totalTotalMediaSize = int64(0);
+	auto totalUniqueCount = 0;
+	auto totalUniqueSize = int64(0);
+	auto totalTotalCount = 0;
+	auto totalTotalSize = int64(0);
 	const auto breakdown = _stats.byType();
 	using Type = MediaSettings::Type;
 	for (const auto &[type, item] : breakdown) {
-		if (type != Type::Text && type != Type::Link) {
-			totalUniqueMediaCount += item.uniqueCount;
-			totalUniqueMediaSize += item.uniqueSize;
-			totalTotalMediaSize += item.totalSize;
+		if (type != Type::Link) {
+			totalUniqueCount += item.uniqueCount;
+			totalUniqueSize += item.uniqueSize;
+			totalTotalCount += item.totalCount;
+			totalTotalSize += item.totalSize;
 		}
 	}
 
 	setState(FinishedState{
 		.path = _writer->mainFilePath(),
-		.filesCount = totalUniqueMediaCount,
+		.filesCount = totalUniqueCount,
 		.messagesTextCount = _messagesTextCount,
 		.messagesMediaCount = _messagesMediaCount,
 		.messagesTotalCount = _messagesTotalCount,
 		.bytesCount = _stats.bytesCount(),
-		.totalUniqueCount = totalUniqueMediaCount,
-		.totalUniqueSize = totalUniqueMediaSize,
-		.totalTotalCount = _messagesTotalCount,
-		.totalTotalSize = totalTotalMediaSize,
+		.totalUniqueCount = totalUniqueCount,
+		.totalUniqueSize = totalUniqueSize,
+		.totalTotalCount = totalTotalCount,
+		.totalTotalSize = totalTotalSize,
 		.fullHistory = !!(_settings.media.types & Type::FullHistory),
 		.breakdown = breakdown,
 	});
@@ -793,6 +795,7 @@ ProcessingState ControllerObject::prepareState(
 		Callback &&callback) const {
 	auto result = ProcessingState();
 	result.step = step;
+	result.isScanning = _isScanning;
 
 	if (_lastProcessingStep != step) {
 		_substepsPassed += substepsInStep(_lastProcessingStep);

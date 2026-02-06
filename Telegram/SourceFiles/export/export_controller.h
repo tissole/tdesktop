@@ -103,6 +103,7 @@ struct ProcessingState {
 
 	int itemIndex = 0;
 	int itemCount = 0;
+	bool isScanning = false;
 
 	base::flat_map<uint64, FileDownloadProgress> activeDownloads;
 	std::map<MediaSettings::Type, Output::StatItem> selectedStats;

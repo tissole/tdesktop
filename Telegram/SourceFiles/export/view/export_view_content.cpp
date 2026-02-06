@@ -21,6 +21,7 @@ Content ContentFromState(
 	using Step = ProcessingState::Step;
 
 	auto result = Content();
+	result.isScanning = state.isScanning;
 	const auto push = [&](
 			const QString &id,
 			const QString &label,
@@ -159,6 +160,11 @@ Content ContentFromState(const FinishedState &state) {
 	const auto fullHistory = state.fullHistory;
 
 	int categoriesCount = 0;
+	int totalUniqueCount = 0;
+	int64 totalUniqueSize = 0;
+	int totalTotalCount = 0;
+	int64 totalTotalSize = 0;
+
 	for (const auto type : order) {
 		const auto it = state.breakdown.find(type);
 		if (it == state.breakdown.end() || it->second.totalCount <= 0) {
@@ -181,11 +187,13 @@ Content ContentFromState(const FinishedState &state) {
 		if (!label.isEmpty()) {
 			categoriesCount++;
 			QString text;
-			
+			const bool hasDuplicates = (item.uniqueCount != item.totalCount)
+				|| (item.uniqueSize != item.totalSize);
+
 			if (type == Type::Text || type == Type::Link) {
 				const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount);
 				const auto totalStr = Lang::FormatCountDecimal(item.totalCount);
-				if (uniqueStr != totalStr) {
+				if (hasDuplicates && type != Type::Link) {
 					text = label + ": " + uniqueStr + ", " + totalStr;
 				} else {
 					text = label + ": " + totalStr;
@@ -196,25 +204,31 @@ Content ContentFromState(const FinishedState &state) {
 				const auto totalStr = Lang::FormatCountDecimal(item.totalCount)
 					+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
 
-				if (uniqueStr != totalStr) {
+				if (hasDuplicates) {
 					text = label + ": " + uniqueStr + ", " + totalStr;
 				} else {
 					text = label + ": " + totalStr;
 				}
 			}
 			result.rows.push_back({ Content::kDoneId, text, QString(), 1. });
+
+			if (type != Type::Link) {
+				totalUniqueCount += item.uniqueCount;
+				totalUniqueSize += item.uniqueSize;
+				totalTotalCount += item.totalCount;
+				totalTotalSize += item.totalSize;
+			}
 		}
 	}
 
-	if ((categoriesCount > 1 || fullHistory) && state.totalTotalCount > 0) {
-		QString totalText;
+	if ((categoriesCount > 1 || fullHistory) && totalTotalCount > 0) {
 		const auto label = "Total messages: ";
-		
-		const auto uniqueStr = Lang::FormatCountDecimal(state.totalUniqueCount)
-			+ " (" + Ui::FormatSizeText(state.totalUniqueSize) + ")";
-		const auto totalStr = Lang::FormatCountDecimal(state.totalTotalCount)
-			+ " (" + Ui::FormatSizeText(state.totalTotalSize) + ")";
+		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueCount)
+			+ " (" + Ui::FormatSizeText(totalUniqueSize) + ")";
+		const auto totalStr = Lang::FormatCountDecimal(totalTotalCount)
+			+ " (" + Ui::FormatSizeText(totalTotalSize) + ")";
 
+		QString totalText;
 		if (uniqueStr != totalStr) {
 			totalText = label + uniqueStr + ", " + totalStr;
 		} else {

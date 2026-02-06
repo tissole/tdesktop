@@ -45,6 +45,7 @@ public:
 	void activatePanel();
 	void stopWithConfirmation(Fn<void()> callback = nullptr);
 
+	[[nodiscard]] bool isScanning() const;
 	[[nodiscard]] rpl::producer<> stopRequests() const;
 
 	[[nodiscard]] rpl::lifetime &lifetime() {

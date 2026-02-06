@@ -39,7 +39,7 @@ Type TabIndexToType(int index) {
 	case 1: return Type::Video;
 	case 2: return Type::File;
 	}
-	Unexpected("Index in Info::Media::TabIndexToType()");
+	return Type::Photo; // Default or unexpected
 }
 
 tr::phrase<> SharedMediaTitle(Type type) {
@@ -62,8 +62,15 @@ tr::phrase<> SharedMediaTitle(Type type) {
 		return tr::lng_media_type_links;
 	case Type::RoundFile:
 		return tr::lng_media_type_rounds;
+	case Type::PhotoVideo:
+		return tr::lng_profile_photos;
+	case Type::ChatPhoto:
+		return tr::lng_media_type_photos;
+	case Type::Pinned:
+		return tr::lng_profile_pinned;
+	default:
+		return tr::lng_profile_shared_media;
 	}
-	Unexpected("Bad media type in Info::TitleValue()");
 }
 
 Memento::Memento(not_null<Controller*> controller)

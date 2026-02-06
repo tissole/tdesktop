@@ -62,13 +62,15 @@ int MinItemHeight(Type type, int width) {
 	case Type::Photo:
 	case Type::GIF:
 	case Type::Video:
-	case Type::RoundFile: {
+	case Type::RoundFile:
+	case Type::PhotoVideo: {
 		auto itemsLeft = st::infoMediaSkip;
 		auto itemsInRow = (width - itemsLeft)
 			/ (st::infoMediaMinGridSize + st::infoMediaSkip);
 		return (st::infoMediaMinGridSize + st::infoMediaSkip) / itemsInRow;
 	} break;
 
+	case Type::VoiceFile:
 	case Type::RoundVoiceFile:
 		return songSt.songPadding.top()
 			+ songSt.songThumbSize
@@ -88,7 +90,12 @@ int MinItemHeight(Type type, int width) {
 			+ st::linksMargin.top()
 			+ st::linksMargin.bottom()
 			+ st::linksBorder;
+	case Type::ChatPhoto:
+		return width; // One per row
+	case Type::Pinned:
+		return st::infoMediaMinGridSize; // Approximation
+	default:
+		return st::infoMediaMinGridSize;
 	}
-	Unexpected("Type in MinItemHeight()");
 }
 } // namespace Info::Media

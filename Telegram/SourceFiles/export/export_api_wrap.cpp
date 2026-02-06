@@ -548,9 +548,7 @@ void ApiWrap::startExport(
 		FnMut<void(StartInfo)> done,
 		bool isScanning,
 		Output::Stats *scanStats) {
-	Expects(_settings == nullptr);
-	Expects(_startProcess == nullptr);
-
+	clearState();
 	_settings = std::make_unique<Settings>(settings);
 	_stats = stats;
 	_isScanning = isScanning;
@@ -1367,12 +1365,32 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 	Expects(_chatProcess != nullptr);
 	Expects(localSplitIndex < _chatProcess->info.splits.size());
 
-	requestChatMessages(
-		_chatProcess->info.splits[localSplitIndex],
-		0, // offset_id
-		0, // add_offset
-		1, // limit
-		[=](const MTPmessages_Messages &result) {
+	const auto filter = getFilter();
+	const auto peer = _chatProcess->info.splits[localSplitIndex] >= 0
+		? _chatProcess->info.input
+		: _chatProcess->info.migratedFromInput;
+
+	const auto minId = (_chatProcess->fromId > 0) ? std::max(int64(0), _chatProcess->fromId - 1) : int64(0);
+	const auto maxId = (_chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
+
+	mainRequest(MTPmessages_Search(
+		MTP_flags(0),
+		peer,
+		MTP_string(""), // q
+		MTP_inputPeerEmpty(), // from_id
+		MTP_inputPeerEmpty(), // saved_peer_id
+		MTP_vector<MTPReaction>(), // saved_reaction
+		MTP_int(0), // top_msg_id
+		filter,
+		MTP_int(_settings->singlePeerFrom), // min_date
+		MTP_int(_settings->singlePeerTill), // max_date
+		MTP_int(0), // offset_id
+		MTP_int(0), // add_offset
+		MTP_int(1), // limit
+		MTP_int(int32(maxId)), // max_id
+		MTP_int(int32(minId)), // min_id
+		MTP_long(0) // hash
+	)).done([=](const MTPmessages_Messages &result) {
 		if (!_chatProcess) return;
 
 		const auto count = result.match(
@@ -1399,11 +1417,9 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 			messagesCountLoaded(localSplitIndex, 0);
 			return;
 		}
-		const auto filter = getFilter();
+		
 		const auto mediaFilterActive = (filter.type() != mtpc_inputMessagesFilterEmpty);
-		const auto textFilterActive = (_settings->media.types & MediaSettings::Type::Text);
-		const auto useSearch = _chatProcess->info.onlyMyMessages || mediaFilterActive;
-
+		
 		// If scanning text/history in a specific range, use the ID difference as a better estimate
 		// than the total chat count returned by the server.
 		const auto fromId = (_chatProcess->fromId > 0) ? _chatProcess->fromId : (_settings->useIdRange ? _settings->singlePeerFromId : int64(1));
@@ -1413,7 +1429,7 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 			: count;
 		
 		checkFirstMessageDate(localSplitIndex, realCount);
-	});
+	}).send();
 }
 
 void ApiWrap::checkFirstMessageDate(int localSplitIndex, int count) {
@@ -1962,8 +1978,8 @@ void ApiWrap::requestChatMessages(
 			MTP_vector<MTPReaction>(), // saved_reaction
 			MTP_int(0), // top_msg_id
 			filter,
-			MTP_int(_settings->singlePeerFrom), // min_date
-			MTP_int(_settings->singlePeerTill), // max_date
+			MTP_int(0), // min_date
+			MTP_int(0), // max_date
 			MTP_int(offsetId),
 			MTP_int(addOffset),
 			MTP_int(limit),
@@ -2052,7 +2068,6 @@ MTPMessagesFilter ApiWrap::getFilter() const {
 	if (voice) return MTP_inputMessagesFilterVoice();
 	if (round) return MTP_inputMessagesFilterRoundVideo();
 	if (gif) return MTP_inputMessagesFilterGif();
-	if (sticker) return MTP_inputMessagesFilterChatPhotos();
 	if (audio) return MTP_inputMessagesFilterMusic();
 	if (link) return MTP_inputMessagesFilterUrl();
 
@@ -2277,7 +2292,7 @@ void ApiWrap::loadNextMessageFile() {
 
 		// Identify media type for stats
 		using Type = MediaSettings::Type;
-		const auto messageType = hasMedia ? v::match(message.media.content, [&](
+		const auto messageType = v::match(message.media.content, [&](
 			const Data::Document &data) {
 			if (data.isSticker) return Type::Sticker;
 			if (data.isVideoMessage) return Type::VideoMessage;
@@ -2286,9 +2301,11 @@ void ApiWrap::loadNextMessageFile() {
 			if (data.isVideoFile) return Type::Video;
 			if (data.isAudioFile) return Type::Audio;
 			return Type::File;
-		}, [](const auto &data) {
+		}, [](const Data::Photo &data) {
 			return Type::Photo;
-		}) : Type::Text;
+		}, [](const auto &data) {
+			return Type::Text;
+		});
 
 		if (_isScanning) {
 			_chatProcess->fileProgress({
@@ -2302,10 +2319,11 @@ void ApiWrap::loadNextMessageFile() {
 				.messagesTextTotal = _chatProcess->messagesTextTotal
 			});
 
-			// If it's a message without a file (Text, Link, or non-file Media), increment scan stats here.
+			// If it's a message without a file (Text or non-file Media), increment scan stats here.
 			// File-based media will be incremented in processFileLoad to capture size.
+			// Links are handled separately below.
 			const bool hasFile = message.file().location || message.thumb().file.location;
-			if (!hasFile) {
+			if (!hasFile && messageType != MediaSettings::Type::Link) {
 				_scanStats->increment(messageType, 0, true);
 			}
 		}

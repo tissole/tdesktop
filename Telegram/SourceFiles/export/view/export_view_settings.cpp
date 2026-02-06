@@ -753,10 +753,10 @@ void SettingsWidget::addLimitsLabel(
 				changeData([&](Settings &settings) {
 					const auto result = time
 						+ removeTime(settings.singlePeerTill)
-						+ 60; // Make the selected minute INCLUSIVE (covers :00 to :59)
+						+ 59; // Make the selected minute INCLUSIVE (covers :00 to :59)
 					if (result < settings.singlePeerFrom
 							&& settings.singlePeerFrom) {
-						settings.singlePeerTill = settings.singlePeerFrom + 60;
+						settings.singlePeerTill = settings.singlePeerFrom + 59;
 					} else {
 						settings.singlePeerTill = result;
 					}
@@ -842,15 +842,16 @@ not_null<Ui::RpWidget*> SettingsWidget::setupButtons(
 		})
 	);
 
+	_buttonsContainer = buttons;
+
 	value()
-		| rpl::map([](const Settings &data) {
+		| rpl::map([=](const Settings &data) {
 			if (data.onlySinglePeer()) {
 				return (data.media.types != MediaSettings::Types(0));
 			}
 			return (data.types != Types(0))
 				|| (data.media.types != MediaSettings::Types(0));
 		})
-		| rpl::distinct_until_changed()
 		| rpl::start_with_next([=](bool canStart) {
 			refreshButtons(buttons, canStart);
 			topShadow->raise();
@@ -1078,10 +1079,9 @@ void SettingsWidget::refreshButtons(
 		bool canStart) {
 	using namespace rpl::mappers;
 
-	container->hideChildren();
-	const auto children = container->children();
-	for (const auto child : children) {
+	for (const auto child : container->children()) {
 		if (child->isWidgetType()) {
+			static_cast<QWidget*>(child)->setParent(nullptr);
 			child->deleteLater();
 		}
 	}
@@ -1115,21 +1115,15 @@ void SettingsWidget::refreshButtons(
 	_cancelClicks = cancelBtn->clicks() | rpl::to_empty;
 
 	// State management
-	if (!canStart) {
+	if (_isScanning) {
 		exportBtn->setDisabled(true);
 		scanBtn->setDisabled(true);
-	} else if (_isScanning) {
-		exportBtn->setDisabled(true);
-		scanBtn->setDisabled(true);
-	} else if (!mediaTypesSelected) {
-		exportBtn->setDisabled(true);
-		scanBtn->setDisabled(true);
-	} else if (!_scanResults.empty()) {
-		exportBtn->setDisabled(false);
+	} else if (_hasScanResults) {
+		exportBtn->setDisabled(!canStart);
 		scanBtn->setDisabled(true);
 	} else {
-		exportBtn->setDisabled(!mediaTypesSelected);
-		scanBtn->setDisabled(!mediaTypesSelected);
+		exportBtn->setDisabled(!canStart);
+		scanBtn->setDisabled(!canStart);
 	}
 
 	container->sizeValue(
@@ -1196,6 +1190,8 @@ void SettingsWidget::setScanning(bool scanning) {
 
 void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats) {
 	_scanResults = std::move(stats);
+	_hasScanResults = true;
+	_changes.fire_copy(readData());
 	if (!_scanResultsLabel) return;
 
 	QString text;
@@ -1220,10 +1216,10 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	};
 
 	int categoriesCount = 0;
-	int totalUniqueMediaCount = 0;
-	int64 totalUniqueMediaSize = 0;
-	int totalMessagesCount = 0;
-	int64 totalMediaSize = 0;
+	int totalUniqueCount = 0;
+	int64 totalUniqueSize = 0;
+	int totalTotalCount = 0;
+	int64 totalTotalSize = 0;
 
 	for (const auto type : order) {
 		const auto it = _scanResults.find(type);
@@ -1246,10 +1242,13 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 		}
 		if (!label.isEmpty()) {
 			categoriesCount++;
+			const bool hasDuplicates = (item.uniqueCount != item.totalCount)
+				|| (item.uniqueSize != item.totalSize);
+
 			if (type == MediaType::Text || type == MediaType::Link) {
 				const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount);
 				const auto totalStr = Lang::FormatCountDecimal(item.totalCount);
-				if (uniqueStr != totalStr) {
+				if (hasDuplicates && type != MediaType::Link) {
 					text += label + ": " + uniqueStr + ", " + totalStr + "\n";
 				} else {
 					text += label + ": " + totalStr + "\n";
@@ -1260,40 +1259,51 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 				const auto totalStr = Lang::FormatCountDecimal(item.totalCount)
 					+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
 
-				if (uniqueStr != totalStr) {
+				if (hasDuplicates) {
 					text += label + ": " + uniqueStr + ", " + totalStr + "\n";
 				} else {
 					text += label + ": " + totalStr + "\n";
 				}
-
-				totalUniqueMediaCount += item.uniqueCount;
-				totalUniqueMediaSize += item.uniqueSize;
-				totalMediaSize += item.totalSize;
 			}
-			totalMessagesCount += item.totalCount;
+
+			if (type != MediaType::Link) {
+				totalUniqueCount += item.uniqueCount;
+				totalUniqueSize += item.uniqueSize;
+				totalTotalCount += item.totalCount;
+				totalTotalSize += item.totalSize;
+			}
 		}
 	}
-	if ((categoriesCount > 1 || fullHistory) && totalMessagesCount > 0) {
-		const auto label = "Total messages: ";
-		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMediaCount)
-			+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
-		const auto totalStr = Lang::FormatCountDecimal(totalMessagesCount)
-			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
+	if (totalTotalCount > 0) {
+		if (categoriesCount > 1 || fullHistory) {
+			const auto label = "Total messages: ";
+			const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueCount)
+				+ " (" + Ui::FormatSizeText(totalUniqueSize) + ")";
+			const auto totalStr = Lang::FormatCountDecimal(totalTotalCount)
+				+ " (" + Ui::FormatSizeText(totalTotalSize) + ")";
 
-		if (uniqueStr != totalStr) {
-			text += "\n" + QString(label) + uniqueStr + ", " + totalStr;
-		} else {
-			text += "\n" + QString(label) + totalStr;
+			if (uniqueStr != totalStr) {
+				text += "\n" + QString(label) + uniqueStr + ", " + totalStr;
+			} else {
+				text += "\n" + QString(label) + totalStr;
+			}
 		}
 	} else {
-		text = tr::lng_export_none_found(tr::now);
+		const auto onlyTextOrLinks = (readData().media.types == MediaType::Text)
+			|| (readData().media.types == MediaType::Link)
+			|| (readData().media.types == (MediaType::Text | MediaType::Link));
+		text = onlyTextOrLinks
+			? "No messages found in this range."
+			: tr::lng_export_none_found(tr::now);
 	}
-	_scanResultsLabel->setText(text);
+	_scanResultsLabel->setText(text.trimmed());
 	_container->resizeToWidth(_container->width());
+	_changes.fire_copy(readData());
 }
 
 void SettingsWidget::clearScanResults() {
 	_scanResults.clear();
+	_hasScanResults = false;
 	if (_scanResultsLabel) _scanResultsLabel->setText(QString());
 	_changes.fire_copy(readData());
 }

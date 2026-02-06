@@ -2539,7 +2539,7 @@ bool SkipMessageByDate(const Message &message, const Settings &settings) {
 		const auto goodFrom = (settings.singlePeerFrom <= 0)
 			|| (settings.singlePeerFrom <= message.date);
 		const auto goodTill = (settings.singlePeerTill <= 0)
-			|| (message.date < settings.singlePeerTill);
+			|| (message.date <= settings.singlePeerTill);
 		if (!goodFrom || !goodTill) {
 			return true;
 		}
@@ -2568,8 +2568,10 @@ bool SkipMessageByDate(const Message &message, const Settings &settings) {
 			if (data.isVideoFile) return Type::Video;
 			if (data.isAudioFile) return Type::Audio;
 			return Type::File;
-		}, [](const auto &data) {
+		}, [](const Data::Photo &data) {
 			return Type::Photo;
+		}, [](const auto &data) {
+			return Type::Text;
 		});
 
 		// Skip if this media type is NOT selected
