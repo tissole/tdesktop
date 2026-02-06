@@ -204,8 +204,10 @@ void PanelController::showSettings() {
 
 	settingsRaw->scanClicks(
 	) | rpl::start_with_next([=] {
-		settingsRaw->setScanning(true);
 		_process->runScan(*_settings, PrepareEnvironment(_session));
+		crl::on_main([=] {
+			settingsRaw->setScanning(true);
+		});
 	}, settingsRaw->lifetime());
 
 	settingsRaw->exportClicks(
@@ -358,7 +360,11 @@ void PanelController::stopWithConfirmation(Fn<void()> callback) {
 		}
 		return;
 	}
+	const auto weak = std::make_shared<base::weak_qptr<Ui::GenericBox>>();
 	auto stop = [=, callback = std::move(callback)]() mutable {
+		if (const auto strong = weak->get()) {
+			strong->closeBox();
+		}
 		if (auto saved = std::move(callback)) {
 			LOG(("Export Info: Stop Panel With Confirmation."));
 			stopExport();
@@ -376,6 +382,7 @@ void PanelController::stopWithConfirmation(Fn<void()> callback) {
 		.confirmStyle = &st::attentionBoxButton,
 	});
 	_confirmStopBox = box.data();
+	*weak = base::make_weak(_confirmStopBox);
 	_panel->showBox(
 		std::move(box),
 		Ui::LayerOption::CloseOther,

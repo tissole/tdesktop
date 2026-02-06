@@ -549,7 +549,6 @@ void ApiWrap::startExport(
 		FnMut<void(StartInfo)> done,
 		bool isScanning,
 		Output::Stats *scanStats) {
-	clearState();
 	_settings = std::make_unique<Settings>(settings);
 	_stats = stats;
 	_isScanning = isScanning;
@@ -573,9 +572,14 @@ void ApiWrap::startExport(
 			_startProcess->steps.push_back(Step::LeftChannelsCount);
 		}
 	}
-	startMainSession([=] {
+
+	if (_takeoutId.has_value()) {
 		sendNextStartRequest();
-	});
+	} else {
+		startMainSession([=] {
+			sendNextStartRequest();
+		});
+	}
 }
 
 void ApiWrap::sendNextStartRequest() {
@@ -1987,8 +1991,8 @@ void ApiWrap::requestChatMessages(
 			MTP_vector<MTPReaction>(), // saved_reaction
 			MTP_int(0), // top_msg_id
 			filter,
-			MTP_int(0), // min_date
-			MTP_int(0), // max_date
+			MTP_int(_settings->singlePeerFrom), // min_date
+			MTP_int(_settings->singlePeerTill), // max_date
 			MTP_int(offsetId),
 			MTP_int(addOffset),
 			MTP_int(limit),
@@ -2292,7 +2296,9 @@ void ApiWrap::loadNextMessageFile() {
 		}
 
 		// Assign sequential index to every selected message in range
-		_chatProcess->messageItemIndices[i] = ++_chatProcess->totalMessagesCounter;
+		if (_chatProcess->messageItemIndices[i] == 0) {
+			_chatProcess->messageItemIndices[i] = ++_chatProcess->totalMessagesCounter;
+		}
 
 		const auto hasMedia = !std::holds_alternative<v::null_t>(message.media.content);
 		const auto textFilterSelected = (_settings->media.types & MediaSettings::Type::Text);
@@ -3344,10 +3350,8 @@ void ApiWrap::filePartExtractReference(
 
 void ApiWrap::error(const MTP::Error &error) {
 	LOG(("Export Error: API Error %1: %2 (%3)").arg(error.code()).arg(error.type()).arg(error.description()));
-	if (_settings) {
-		clearState();
-		_errors.fire_copy(error);
-	}
+	clearState();
+	_errors.fire_copy(error);
 }
 
 void ApiWrap::error(const QString &text) {

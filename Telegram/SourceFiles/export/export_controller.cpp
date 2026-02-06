@@ -284,7 +284,8 @@ void ControllerObject::runScan(
 	if (_isScanning) {
 		return;
 	}
-	cancelExportFast(false);
+	_api.clearResults();
+	_scanStats.clear();
 	_isScanning = true;
 	_stepIndex = -1;
 	_settings = NormalizeSettings(settings);
@@ -305,7 +306,7 @@ void ControllerObject::runScan(
 void ControllerObject::startExport(
 		const Settings &settings,
 		const Environment &environment) {
-	cancelExportFast(true);
+	_api.clearResults();
 	_stepIndex = -1;
 
 	_stats.clear();
@@ -322,7 +323,8 @@ void ControllerObject::startExport(
 		_scanStatsFound = true;
 	} else {
 		// Fallback: If no scan was performed, use the raw message count from the server
-		_stats.setExpectedFilesCount(_messagesCount);
+		_messagesCount = 0;
+		_stats.setExpectedFilesCount(0);
 		_scanStatsFound = false;
 	}
 

@@ -1085,8 +1085,8 @@ void SettingsWidget::refreshButtons(
 			child->deleteLater();
 		}
 	}
-	_scanClicks = rpl::never<>() | rpl::type_erased();
-	_exportClicks = rpl::never<>() | rpl::type_erased();
+
+	const auto mediaTypesSelected = (readData().media.types != MediaSettings::Types(0));
 
 	const auto exportBtn = Ui::CreateChild<Ui::RoundButton>(
 		container.get(),
@@ -1094,7 +1094,7 @@ void SettingsWidget::refreshButtons(
 		st::defaultBoxButton);
 	exportBtn->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 	exportBtn->show();
-	_exportClicks = exportBtn->clicks() | rpl::to_empty;
+	exportBtn->clicks() | rpl::to_empty | rpl::start_to_stream(_exportClicks, exportBtn->lifetime());
 
 	const auto scanBtn = Ui::CreateChild<Ui::RoundButton>(
 		container.get(),
@@ -1102,7 +1102,7 @@ void SettingsWidget::refreshButtons(
 		st::defaultBoxButton);
 	scanBtn->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 	scanBtn->show();
-	_scanClicks = scanBtn->clicks() | rpl::to_empty;
+	scanBtn->clicks() | rpl::to_empty | rpl::start_to_stream(_scanClicks, scanBtn->lifetime());
 
 	const auto cancelBtn = Ui::CreateChild<Ui::RoundButton>(
 		container.get(),
@@ -1110,7 +1110,7 @@ void SettingsWidget::refreshButtons(
 		st::defaultBoxButton);
 	cancelBtn->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 	cancelBtn->show();
-	_cancelClicks = cancelBtn->clicks() | rpl::to_empty;
+	cancelBtn->clicks() | rpl::to_empty | rpl::start_to_stream(_cancelClicks, cancelBtn->lifetime());
 
 	// State management
 	if (_isScanning) {
@@ -1121,7 +1121,7 @@ void SettingsWidget::refreshButtons(
 		scanBtn->setDisabled(true);
 	} else {
 		exportBtn->setDisabled(!canStart);
-		scanBtn->setDisabled(!canStart);
+		scanBtn->setDisabled(!canStart || !mediaTypesSelected);
 	}
 
 	container->sizeValue(
@@ -1159,15 +1159,15 @@ rpl::producer<Settings> SettingsWidget::value() const {
 }
 
 rpl::producer<> SettingsWidget::scanClicks() const {
-	return _scanClicks.value() | rpl::flatten_latest();
+	return _scanClicks.events();
 }
 
 rpl::producer<> SettingsWidget::exportClicks() const {
-	return _exportClicks.value() | rpl::flatten_latest();
+	return _exportClicks.events();
 }
 
 rpl::producer<> SettingsWidget::cancelClicks() const {
-	return _cancelClicks.value() | rpl::flatten_latest();
+	return _cancelClicks.events();
 }
 
 void SettingsWidget::setScanProgress(int itemIndex, int itemCount) {

@@ -129,9 +129,9 @@ private:
 	Settings _internal_data;
 
 	rpl::event_stream<Settings> _changes;
-	rpl::variable<rpl::producer<>> _scanClicks;
-	rpl::variable<rpl::producer<>> _exportClicks;
-	rpl::variable<rpl::producer<>> _cancelClicks;
+	rpl::event_stream<> _scanClicks;
+	rpl::event_stream<> _exportClicks;
+	rpl::event_stream<> _cancelClicks;
 
 	Ui::RpWidget *_buttonsContainer = nullptr;
 	Ui::VerticalLayout *_container = nullptr;
