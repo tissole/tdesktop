@@ -125,7 +125,7 @@ public:
 
 	void finishExport(FnMut<void()> done);
 	void skipFile(uint64 randomId);
-	void cancelExportFast();
+	void cancelExportFast(bool keepCache = false);
 
 	void clearResults();
 
@@ -284,7 +284,8 @@ private:
 	void error(const QString &text);
 	void ioError(const Output::Result &result);
 
-	void clearState();
+	void clearState(bool keepCache = false);
+	void clearResults();
 
 	MTP::ConcurrentSender _mtp;
 	std::optional<uint64> _takeoutId;

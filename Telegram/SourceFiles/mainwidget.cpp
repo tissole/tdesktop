@@ -1044,10 +1044,13 @@ void MainWidget::setCurrentExportView(Export::View::PanelController *view) {
 		) | rpl::start_with_next([=](Export::View::Content &&data) {
 			const bool isDone = !data.rows.empty() && data.rows[0].id == Export::View::Content::kDoneId;
 			const bool isScanning = data.isScanning;
-			if (isDone || isScanning) {
-				if (_exportTopBar) {
-					destroyExportTopBar();
-				}
+		if (isDone || isScanning) {
+			if (_exportTopBar) {
+				_exportTopBar->hide(anim::type::instant);
+				_exportTopBar.destroy();
+				_exportTopBarHeight = _contentScrollAddToY = 0;
+				updateControlsGeometry();
+			}
 			} else if (!_exportTopBar) {
 				LOG(("Export Info: Create top bar by State."));
 				createExportTopBar(std::move(data));

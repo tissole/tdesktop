@@ -18,6 +18,84 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Export {
 namespace Output {
+namespace {
+
+class NullWriter : public AbstractWriter {
+public:
+	Format format() override {
+		return Format::Html;
+	}
+
+	Result start(
+			const Settings &settings,
+			const Environment &environment,
+			Stats *stats) override {
+		return Result::Success();
+	}
+
+	Result writePersonal(const Data::PersonalInfo &data) override {
+		return Result::Success();
+	}
+
+	Result writeUserpicsStart(const Data::UserpicsInfo &data) override {
+		return Result::Success();
+	}
+	Result writeUserpicsSlice(const Data::UserpicsSlice &data) override {
+		return Result::Success();
+	}
+	Result writeUserpicsEnd() override {
+		return Result::Success();
+	}
+
+	Result writeStoriesStart(const Data::StoriesInfo &data) override {
+		return Result::Success();
+	}
+	Result writeStoriesSlice(const Data::StoriesSlice &data) override {
+		return Result::Success();
+	}
+	Result writeStoriesEnd() override {
+		return Result::Success();
+	}
+
+	Result writeContactsList(const Data::ContactsList &data) override {
+		return Result::Success();
+	}
+
+	Result writeSessionsList(const Data::SessionsList &data) override {
+		return Result::Success();
+	}
+
+	Result writeOtherData(const Data::File &data) override {
+		return Result::Success();
+	}
+
+	Result writeDialogsStart(const Data::DialogsInfo &data) override {
+		return Result::Success();
+	}
+	Result writeDialogStart(const Data::DialogInfo &data) override {
+		return Result::Success();
+	}
+	Result writeDialogSlice(const Data::MessagesSlice &data) override {
+		return Result::Success();
+	}
+	Result writeDialogEnd() override {
+		return Result::Success();
+	}
+	Result writeDialogsEnd() override {
+		return Result::Success();
+	}
+
+	Result finish() override {
+		return Result::Success();
+	}
+
+	QString mainFilePath() override {
+		return QString();
+	}
+
+};
+
+} // namespace
 
 QString NormalizePath(const Settings &settings) {
 	QDir folder(settings.path);
@@ -63,6 +141,10 @@ std::unique_ptr<AbstractWriter> CreateWriter(Format format) {
 	case Format::HtmlAndJson: return std::make_unique<HtmlAndJsonWriter>();
 	}
 	Unexpected("Format in Export::Output::CreateWriter.");
+}
+
+std::unique_ptr<AbstractWriter> CreateNullWriter() {
+	return std::make_unique<NullWriter>();
 }
 
 Stats AbstractWriter::produceTestExample(

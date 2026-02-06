@@ -95,6 +95,7 @@ public:
 };
 
 std::unique_ptr<AbstractWriter> CreateWriter(Format format);
+std::unique_ptr<AbstractWriter> CreateNullWriter();
 
 } // namespace Output
 } // namespace Export

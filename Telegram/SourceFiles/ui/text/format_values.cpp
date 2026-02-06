@@ -22,10 +22,10 @@ namespace {
 		tr::phrase<lngtag_ready, lngtag_total, lngtag_mb> phrase,
 		qint64 ready,
 		qint64 total) {
-	const auto KB = 1000.0;
-	const auto MB = KB * 1000.0;
-	const auto GB = MB * 1000.0;
-	const auto TB = GB * 1000.0;
+	const auto KB = 1024.0;
+	const auto MB = KB * 1024.0;
+	const auto GB = MB * 1024.0;
+	const auto TB = GB * 1024.0;
 
 	auto formatValue = [](double val, int precision) {
 		auto result = QLocale().toString(val, 'f', precision);
@@ -66,10 +66,10 @@ namespace {
 } // namespace
 
 QString FormatSizeText(qint64 size) {
-	const auto KB = 1000.0;
-	const auto MB = KB * 1000.0;
-	const auto GB = MB * 1000.0;
-	const auto TB = GB * 1000.0;
+	const auto KB = 1024.0;
+	const auto MB = KB * 1024.0;
+	const auto GB = MB * 1024.0;
+	const auto TB = GB * 1024.0;
 
 	auto formatValue = [](double val, int precision) {
 		auto result = QLocale().toString(val, 'f', precision);

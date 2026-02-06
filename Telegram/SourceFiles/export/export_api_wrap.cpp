@@ -1588,14 +1588,14 @@ void ApiWrap::skipFile(uint64 randomId) {
 	finishFile(randomId, QString());
 }
 
-void ApiWrap::cancelExportFast() {
-	if (_takeoutId.has_value()) {
-		const auto requestId = mainRequest(MTPaccount_FinishTakeoutSession(
-			MTP_flags(0)
-		)).send();
-		_mtp.request(requestId).detach();
-	}
-	clearState();
+void ApiWrap::cancelExportFast(bool keepCache) {
+if (_takeoutId.has_value()) {
+const auto requestId = mainRequest(MTPaccount_FinishTakeoutSession(
+MTP_flags(0)
+)).send();
+_mtp.request(requestId).detach();
+}
+clearState(keepCache);
 }
 
 void ApiWrap::requestSinglePeerDialog() {
@@ -2323,8 +2323,18 @@ void ApiWrap::loadNextMessageFile() {
 			// File-based media will be incremented in processFileLoad to capture size.
 			// Links are handled separately below.
 			const bool hasFile = message.file().location || message.thumb().file.location;
-			if (!hasFile && messageType != MediaSettings::Type::Link) {
+			const auto types = _settings->media.types;
+			const bool selected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
+			if (selected && !hasFile && messageType != MediaSettings::Type::Link) {
 				_scanStats->increment(messageType, 0, true);
+			}
+		} else if (_stats) {
+			// During export, increment stats for non-file messages too.
+			const bool hasFile = message.file().location || message.thumb().file.location;
+			const auto types = _settings->media.types;
+			const bool selected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
+			if (selected && !hasFile && messageType != MediaSettings::Type::Link) {
+				_stats->increment(messageType, 0, true);
 			}
 		}
 
@@ -3357,10 +3367,15 @@ void ApiWrap::clearResults() {
 	_visitedLinks.clear();
 }
 
-void ApiWrap::clearState() {
+void ApiWrap::clearState(bool keepCache) {
 	_takeoutId = std::nullopt;
 	_settings = nullptr;
-	clearResults();
+	if (!keepCache) {
+		clearResults();
+	} else {
+		_stats = nullptr;
+		_scanStats = nullptr;
+	}
 	_startProcess = nullptr;
 	_contactsProcess = nullptr;
 	_userpicsProcess = nullptr;

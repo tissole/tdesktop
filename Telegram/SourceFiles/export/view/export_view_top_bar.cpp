@@ -79,7 +79,7 @@ void TopBar::updateData(Content &&content) {
 	_infoLeft->setMarkedText(
 		tr::lng_export_progress_title(tr::now, Ui::Text::Bold));
 	_infoMiddle->setText(row.label);
-	_infoRight->setText(QString());
+	_infoRight->setMarkedText(Ui::Text::Colorized(row.info));
 	resizeToWidthInfo(width());
 	_progress->setValue(row.progress);
 }

@@ -66,7 +66,7 @@ public:
 		const Settings &settings,
 		const Environment &environment);
 	void skipFile(uint64 randomId);
-	void cancelExportFast();
+	void cancelExportFast(bool keepCache = false);
 
 	// Message export functions
 	void exportNextDialog();
@@ -128,6 +128,7 @@ private:
 	Environment _environment;
 
 	bool _isScanning = false;
+	bool _scanStatsFound = false;
 	Output::Stats _scanStats;
 
 	Data::DialogsInfo _dialogsInfo;
@@ -280,37 +281,31 @@ bool ControllerObject::ioCatchError(Output::Result result) {
 void ControllerObject::runScan(
 		const Settings &settings,
 		const Environment &environment) {
-	if (!_settings.path.isEmpty() || _isScanning) {
+	if (_isScanning) {
 		return;
 	}
-	_api.cancelExportFast();
+	cancelExportFast(false);
 	_isScanning = true;
 	_stepIndex = -1;
 	_settings = NormalizeSettings(settings);
 	_environment = environment;
 
-	// Use a temporary path for scan, though we won't write files.
-	_settings.path = Output::NormalizePath(_settings);
-	_writer = Output::CreateWriter(_settings.format);
-	
+	_writer = Output::CreateNullWriter();
+
 	_steps.clear();
 	_steps.push_back(Step::Initializing);
 	if (_settings.types & Settings::Type::AnyChatsMask) {
 		_steps.push_back(Step::DialogsList);
 		_steps.push_back(Step::Dialogs);
 	}
-	
+
 	exportNext();
 }
 
 void ControllerObject::startExport(
 		const Settings &settings,
 		const Environment &environment) {
-	if (!_settings.path.isEmpty() && !_isScanning) {
-		return;
-	}
-
-	_api.cancelExportFast();
+	cancelExportFast(true);
 	_stepIndex = -1;
 
 	_stats.clear();
@@ -324,9 +319,11 @@ void ControllerObject::startExport(
 	if (totalSelected > 0) {
 		_stats.setExpectedFilesCount(totalSelected);
 		_messagesCount = totalSelected;
+		_scanStatsFound = true;
 	} else {
 		// Fallback: If no scan was performed, use the raw message count from the server
 		_stats.setExpectedFilesCount(_messagesCount);
+		_scanStatsFound = false;
 	}
 
 	_isScanning = false;
@@ -428,9 +425,9 @@ void ControllerObject::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
 	_substepsTotal = ranges::accumulate(_substepsInStep, 0);
 }
 
-void ControllerObject::cancelExportFast() {
+void ControllerObject::cancelExportFast(bool keepCache) {
 	_isScanning = false;
-	_api.cancelExportFast();
+	_api.clearState(keepCache);
 	setState(CancelledState());
 }
 
@@ -659,6 +656,9 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 				_messagesCount += count;
 			}
 		}
+		if (!_stats.expectedFilesCount()) {
+			_stats.setExpectedFilesCount(_messagesCount);
+		}
 		setState(stateDialogs(DownloadProgress()));
 		return true;
 	}, [=](DownloadProgress progress) {
@@ -758,32 +758,29 @@ ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress)
 }
 
 void ControllerObject::setFinishedState() {
-	auto totalUniqueCount = 0;
-	auto totalUniqueSize = int64(0);
-	auto totalTotalCount = 0;
-	auto totalTotalSize = int64(0);
+	auto totalUniqueMediaCount = 0;
+	auto totalUniqueMediaSize = int64(0);
+	auto totalTotalMessagesCount = 0;
+	auto totalTotalMediaSize = int64(0);
 	const auto breakdown = _stats.byType();
 	using Type = MediaSettings::Type;
 	for (const auto &[type, item] : breakdown) {
 		if (type != Type::Link) {
-			totalUniqueCount += item.uniqueCount;
-			totalUniqueSize += item.uniqueSize;
-			totalTotalCount += item.totalCount;
-			totalTotalSize += item.totalSize;
+			if (type != Type::Text) {
+				totalUniqueMediaCount += item.uniqueCount;
+				totalUniqueMediaSize += item.uniqueSize;
+				totalTotalMediaSize += item.totalSize;
+			}
+			totalTotalMessagesCount += item.totalCount;
 		}
 	}
 
 	setState(FinishedState{
 		.path = _writer->mainFilePath(),
-		.filesCount = totalUniqueCount,
-		.messagesTextCount = _messagesTextCount,
-		.messagesMediaCount = _messagesMediaCount,
-		.messagesTotalCount = _messagesTotalCount,
-		.bytesCount = _stats.bytesCount(),
-		.totalUniqueCount = totalUniqueCount,
-		.totalUniqueSize = totalUniqueSize,
-		.totalTotalCount = totalTotalCount,
-		.totalTotalSize = totalTotalSize,
+		.totalUniqueCount = totalUniqueMediaCount,
+		.totalUniqueSize = totalUniqueMediaSize,
+		.totalTotalCount = totalTotalMessagesCount,
+		.totalTotalSize = totalTotalMediaSize,
 		.fullHistory = !!(_settings.media.types & Type::FullHistory),
 		.breakdown = breakdown,
 	});
@@ -852,9 +849,12 @@ void ControllerObject::fillMessagesState(
 	if (_isScanning) {
 		result.itemIndex = progress.itemIndex;
 		result.itemCount = _messagesCount;
-	} else {
+	} else if (_scanStatsFound) {
 		result.itemIndex = _stats.userMediaFilesCount();
 		result.itemCount = _stats.expectedFilesCount();
+	} else {
+		result.itemIndex = progress.messagesTotalCount;
+		result.itemCount = _messagesCount;
 	}
 	result.activeDownloads = _activeDownloads;
 }
@@ -928,11 +928,11 @@ void Controller::skipFile(uint64 randomId) {
 	});
 }
 
-void Controller::cancelExportFast() {
+void Controller::cancelExportFast(bool keepCache) {
 	LOG(("Export Info: Cancelled export."));
 
 	_wrapped.with([=](Implementation &unwrapped) {
-		unwrapped.cancelExportFast();
+		unwrapped.cancelExportFast(keepCache);
 	});
 }
 

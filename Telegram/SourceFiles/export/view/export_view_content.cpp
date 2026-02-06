@@ -32,7 +32,8 @@ Content ContentFromState(
 	};
 	const auto pushMain = [&](const QString &label) {
 		const auto isScanning = (state.step == Step::Scanning);
-		const auto info = (isScanning && state.itemCount > 0)
+		const auto isDialogs = (state.step == Step::Dialogs);
+		const auto info = ((isScanning || isDialogs) && state.itemCount > 0)
 			? (Lang::FormatCountDecimal(state.itemIndex)
 				+ " / "
 				+ Lang::FormatCountDecimal(state.itemCount))
@@ -160,10 +161,6 @@ Content ContentFromState(const FinishedState &state) {
 	const auto fullHistory = state.fullHistory;
 
 	int categoriesCount = 0;
-	int totalUniqueCount = 0;
-	int64 totalUniqueSize = 0;
-	int totalTotalCount = 0;
-	int64 totalTotalSize = 0;
 
 	for (const auto type : order) {
 		const auto it = state.breakdown.find(type);
@@ -211,25 +208,18 @@ Content ContentFromState(const FinishedState &state) {
 				}
 			}
 			result.rows.push_back({ Content::kDoneId, text, QString(), 1. });
-
-			if (type != Type::Link) {
-				totalUniqueCount += item.uniqueCount;
-				totalUniqueSize += item.uniqueSize;
-				totalTotalCount += item.totalCount;
-				totalTotalSize += item.totalSize;
-			}
 		}
 	}
 
-	if ((categoriesCount > 1 || fullHistory) && totalTotalCount > 0) {
+	if ((categoriesCount > 1 || fullHistory) && state.totalTotalCount > 0) {
 		const auto label = "Total messages: ";
-		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueCount)
-			+ " (" + Ui::FormatSizeText(totalUniqueSize) + ")";
-		const auto totalStr = Lang::FormatCountDecimal(totalTotalCount)
-			+ " (" + Ui::FormatSizeText(totalTotalSize) + ")";
+		const auto uniqueStr = Lang::FormatCountDecimal(state.totalUniqueCount)
+			+ " (" + Ui::FormatSizeText(state.totalUniqueSize) + ")";
+		const auto totalStr = Lang::FormatCountDecimal(state.totalTotalCount)
+			+ " (" + Ui::FormatSizeText(state.totalTotalSize) + ")";
 
 		QString totalText;
-		if (uniqueStr != totalStr) {
+		if (state.totalUniqueCount != state.totalTotalCount || state.totalUniqueSize != state.totalTotalSize) {
 			totalText = label + uniqueStr + ", " + totalStr;
 		} else {
 			totalText = label + totalStr;

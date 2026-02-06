@@ -56,11 +56,6 @@ struct PasswordCheckState {
 
 struct FinishedState {
 	QString path;
-	int filesCount = 0;
-	int messagesTextCount = 0;
-	int messagesMediaCount = 0;
-	int messagesTotalCount = 0;
-	int64 bytesCount = 0;
 	int totalUniqueCount = 0;
 	int64 totalUniqueSize = 0;
 	int totalTotalCount = 0;
@@ -175,7 +170,7 @@ public:
 		const Settings &settings,
 		const Environment &environment);
 	void skipFile(uint64 randomId);
-	void cancelExportFast();
+	void cancelExportFast(bool keepCache = false);
 
 	rpl::lifetime &lifetime();
 

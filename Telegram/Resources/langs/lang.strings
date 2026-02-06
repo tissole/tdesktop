@@ -6011,14 +6011,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_export_analyzing" = "Scanning...";
 "lng_export_analyzing_progress" = "Scanning messages... {index} / {amount}";
 "lng_export_none_found" = "No files found in this range.";
-"lng_export_selected_count" = "{label}: unique {amount} ({size}), total {total_amount} ({total_size})";
-"lng_export_selected_count_only" = "{label}: unique {amount}, total {total_amount}";
-"lng_export_total_selected" = "Total files: unique {amount} ({size}), total {total_amount} ({total_size})";
-"lng_export_downloaded_count" = "{label}: unique {amount} ({size}), total {total_amount} ({total_size})";
-"lng_export_downloaded_count_only" = "{label}: unique {amount}, total {total_amount}";
-"lng_export_total_amount_exported" = "Total files exported: {amount} ({size})";
 "lng_export_total_text_exported" = "Text messages exported: {amount}";
-"lng_export_total_media_exported" = "Media messages exported: {amount}";
 "lng_export_total_messages_exported" = "Total messages exported: {amount}";
 "lng_export_selected_label" = "{label}: {amount} ({size})";
 "lng_export_folder" = "Choose export folder";

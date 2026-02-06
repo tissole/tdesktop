@@ -182,7 +182,7 @@ void ProgressWidget::Row::removeOldInstance(
 
 int ProgressWidget::Row::resizeGetHeight(int newWidth) {
 	updateControlsGeometry(newWidth);
-	return st::exportProgressRowHeight;
+	return _data.id.isEmpty() ? 0 : st::exportProgressRowHeight;
 }
 
 void ProgressWidget::Row::paintEvent(QPaintEvent *e) {
@@ -252,6 +252,7 @@ ProgressWidget::ProgressWidget(
 	auto skipFileWrap = _body->add(object_ptr<Ui::FixedHeightWidget>(
 		_body.data(),
 		st::defaultLinkButton.font->height + st::exportProgressRowSkip));
+	_skipFileWrap = skipFileWrap;
 	_skipFile = base::make_unique_q<Ui::FadeWrap<Ui::LinkButton>>(
 		skipFileWrap,
 		object_ptr<Ui::LinkButton>(
@@ -355,9 +356,22 @@ void ProgressWidget::updateState(Content &&content) {
 
 void ProgressWidget::showDone() {
 	_cancel = nullptr;
+	if (_skipFileWrap) {
+		_skipFileWrap->hide();
+	}
 	_skipFile->hide(anim::type::instant);
 	_fileShowSkipTimer.cancel();
 	_about->setText(tr::lng_export_about_done(tr::now));
+
+	_body->resizeToWidth(width());
+	const auto contentHeight = _body->height();
+	const auto buttonTop = height() - st::exportCancelBottom - st::exportDoneButton.height;
+	const auto gap = buttonTop - contentHeight;
+	if (gap > 40) {
+		const auto spacerHeight = gap / 2;
+		_body->insert(_body->count() - 1, object_ptr<Ui::FixedHeightWidget>(this, spacerHeight));
+	}
+
 	_done = base::make_unique_q<Ui::RoundButton>(
 		this,
 		tr::lng_export_done(),

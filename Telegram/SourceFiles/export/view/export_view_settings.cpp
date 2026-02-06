@@ -1088,8 +1088,6 @@ void SettingsWidget::refreshButtons(
 	_scanClicks = rpl::never<>() | rpl::type_erased();
 	_exportClicks = rpl::never<>() | rpl::type_erased();
 
-	const auto mediaTypesSelected = (readData().media.types != MediaSettings::Types(0));
-
 	const auto exportBtn = Ui::CreateChild<Ui::RoundButton>(
 		container.get(),
 		tr::lng_export_start(),
@@ -1216,10 +1214,6 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	};
 
 	int categoriesCount = 0;
-	int totalUniqueCount = 0;
-	int64 totalUniqueSize = 0;
-	int totalTotalCount = 0;
-	int64 totalTotalSize = 0;
 
 	for (const auto type : order) {
 		const auto it = _scanResults.find(type);
@@ -1267,10 +1261,12 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 			}
 
 			if (type != MediaType::Link) {
-				totalUniqueCount += item.uniqueCount;
-				totalUniqueSize += item.uniqueSize;
+				if (type != MediaType::Text) {
+					totalUniqueCount += item.uniqueCount;
+					totalUniqueSize += item.uniqueSize;
+					totalTotalSize += item.totalSize;
+				}
 				totalTotalCount += item.totalCount;
-				totalTotalSize += item.totalSize;
 			}
 		}
 	}

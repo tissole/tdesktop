@@ -48,6 +48,7 @@ private:
 	std::vector<not_null<Row*>> _rows;
 
 	base::unique_qptr<Ui::FadeWrap<Ui::LinkButton>> _skipFile;
+	Ui::FixedHeightWidget *_skipFileWrap = nullptr;
 	QPointer<Ui::FlatLabel> _about;
 	base::unique_qptr<Ui::RoundButton> _cancel;
 	base::unique_qptr<Ui::RoundButton> _done;
