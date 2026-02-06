@@ -17,6 +17,7 @@ class VerticalLayout;
 class RoundButton;
 class FlatLabel;
 class LinkButton;
+class FixedHeightWidget;
 template <typename Widget>
 class FadeWrap;
 } // namespace Ui
