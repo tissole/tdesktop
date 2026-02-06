@@ -63,11 +63,11 @@ tr::phrase<> SharedMediaTitle(Type type) {
 	case Type::RoundFile:
 		return tr::lng_media_type_rounds;
 	case Type::PhotoVideo:
-		return tr::lng_profile_photos;
+		return tr::lng_media_type_photos;
 	case Type::ChatPhoto:
 		return tr::lng_media_type_photos;
 	case Type::Pinned:
-		return tr::lng_profile_pinned;
+		return tr::lng_settings_events_pinned;
 	default:
 		return tr::lng_profile_shared_media;
 	}

@@ -4967,7 +4967,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 	}
 	const auto textWidth = qMax(contentWidth - st::msgPadding.left() - st::msgPadding.right(), 1);
 	const auto reactionsInBubble = _reactions && embedReactionsInBubble();
-	const auto bottomInfoHeight = _bottomInfo.resizeGetHeight(
+	_bottomInfo.resizeGetHeight(
 		std::min(
 			_bottomInfo.optimalSize().width(),
 			textWidth - 2 * st::msgDateDelta.x()));

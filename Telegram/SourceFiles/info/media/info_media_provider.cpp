@@ -516,17 +516,6 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 				options());
 		}
 		return nullptr;
-	case Type::PhotoVideo:
-		if (const auto photo = getPhoto()) {
-			return std::make_unique<Photo>(
-				delegate,
-				item,
-				photo,
-				options());
-		} else if (const auto file = getFile()) {
-			return std::make_unique<Video>(delegate, item, file, options());
-		}
-		return nullptr;
 	case Type::Pinned:
 		return nullptr;
 	}
