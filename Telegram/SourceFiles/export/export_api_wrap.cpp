@@ -1442,7 +1442,6 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 		checkFirstMessageDate(localSplitIndex, realCount);
 	}).send();
 }
-}
 
 void ApiWrap::checkFirstMessageDate(int localSplitIndex, int count) {
 	Expects(_chatProcess != nullptr);

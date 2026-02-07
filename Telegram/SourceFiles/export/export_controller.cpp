@@ -21,9 +21,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "ui/boxes/confirm_box.h"
 #include "ui/layers/show.h"
+#include "ui/text/format_values.h"
 #include "lang/lang_keys.h"
 #include "base/weak_ptr.h"
 
+#include <QtCore/QFile>
 #include <QtCore/QTextStream>
 
 namespace Export {

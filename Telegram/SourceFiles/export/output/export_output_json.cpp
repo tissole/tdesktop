@@ -1728,10 +1728,10 @@ Result JsonWriter::finish() {
 			}
 			if (!key.isEmpty()) {
 				statsValues.push_back({ key, SerializeObject(_context, {
-					{ "unique_count", Data::NumberToString(item.uniqueCount) },
-					{ "unique_size", Data::NumberToString(item.uniqueSize) },
-					{ "total_count", Data::NumberToString(item.totalCount) },
-					{ "total_size", Data::NumberToString(item.totalSize) },
+					{ "unique_count", QByteArray::number(item.uniqueCount) },
+					{ "unique_size", QByteArray::number(item.uniqueSize) },
+					{ "total_count", QByteArray::number(item.totalCount) },
+					{ "total_size", QByteArray::number(item.totalSize) },
 				}) });
 			}
 		}
@@ -1749,10 +1749,10 @@ Result JsonWriter::finish() {
 			}
 		}
 		statsValues.push_back({ "total", SerializeObject(_context, {
-			{ "unique_count", Data::NumberToString(totalUniqueCount) },
-			{ "unique_size", Data::NumberToString(totalUniqueSize) },
-			{ "total_count", Data::NumberToString(totalTotalCount) },
-			{ "total_size", Data::NumberToString(totalTotalSize) },
+			{ "unique_count", QByteArray::number(totalUniqueCount) },
+			{ "unique_size", QByteArray::number(totalUniqueSize) },
+			{ "total_count", QByteArray::number(totalTotalCount) },
+			{ "total_size", QByteArray::number(totalTotalSize) },
 		}) });
 
 		writeBlock(prepareObjectItemStart("export_statistics") + SerializeObject(_context, statsValues));
