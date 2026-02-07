@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "export/output/export_output_html.h"
 
+#include "export/output/export_output_stats.h"
 #include "countries/countries_instance.h"
 #include "export/output/export_output_result.h"
 #include "export/data/export_data_types.h"
@@ -3383,11 +3384,10 @@ Result HtmlWriter::writeDialogEnd() {
 	if (const auto closed = base::take(_chat)->close(); !closed) {
 		return closed;
 	}
-
-	prependStats(_dialog.relativePath + messagesFile(0));
+	(void)prependStats(_dialog.relativePath + messagesFile(0));
 	const auto count = int(_lastMessageIdsPerFile.size());
 	if (count > 0) {
-		prependStats(_dialog.relativePath + messagesFile(count));
+		(void)prependStats(_dialog.relativePath + messagesFile(count));
 	}
 
 	if (_settings.onlySinglePeer()) {
@@ -3724,10 +3724,10 @@ Result HtmlWriter::finish() {
 	Expects(_settings.onlySinglePeer() || _summary != nullptr);
 
 	if (_settings.onlySinglePeer()) {
-		prependStats(messagesFile(0));
+		(void)prependStats(messagesFile(0));
 		const auto count = int(_lastMessageIdsPerFile.size());
 		if (count > 0) {
-			prependStats(messagesFile(count));
+			(void)prependStats(messagesFile(count));
 		}
 		return Result::Success();
 	}
@@ -3752,7 +3752,7 @@ Result HtmlWriter::finish() {
 	}
 	_summary = nullptr;
 
-	prependStats(mainFileRelativePath());
+	(void)prependStats(mainFileRelativePath());
 	return Result::Success();
 }
 
