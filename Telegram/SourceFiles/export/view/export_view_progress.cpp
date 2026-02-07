@@ -242,14 +242,12 @@ ProgressWidget::ProgressWidget(
 	QWidget *parent,
 	rpl::producer<Content> content)
 : RpWidget(parent)
+, _scroll(Ui::CreateChild<Ui::ScrollArea>(this, st::defaultScrollArea))
+, _body(static_cast<Ui::VerticalLayout*>(_scroll->setOwnedWidget(
+	object_ptr<Ui::OverrideMargins>(
+		_scroll,
+		object_ptr<Ui::VerticalLayout>(_scroll)))->entity()))
 , _fileShowSkipTimer([=] { _skipFile->show(anim::type::normal); }) {
-	_scroll = Ui::CreateChild<Ui::ScrollArea>(this, st::boxScroll);
-	const auto wrap = _scroll->setOwnedWidget(
-		object_ptr<Ui::OverrideMargins>(
-			_scroll,
-			object_ptr<Ui::VerticalLayout>(_scroll)));
-	_body = static_cast<Ui::VerticalLayout*>(wrap->entity());
-
 	_about = _body->add(
 		object_ptr<Ui::FlatLabel>(
 			this,
@@ -258,7 +256,7 @@ ProgressWidget::ProgressWidget(
 		st::exportAboutPadding);
 
 	auto skipFileWrap = _body->add(object_ptr<Ui::FixedHeightWidget>(
-		_body.data(),
+		_body,
 		st::defaultLinkButton.font->height + st::exportProgressRowSkip));
 	_skipFileWrap = skipFileWrap;
 	_skipFile = base::make_unique_q<Ui::FadeWrap<Ui::LinkButton>>(
@@ -272,9 +270,9 @@ ProgressWidget::ProgressWidget(
 
 	widthValue(
 	) | rpl::start_with_next([=](int width) {
-		wrap->resizeToWidth(width);
+		_scroll->widget()->resizeToWidth(width);
 		_body->resizeToWidth(width);
-	}, wrap->lifetime());
+	}, lifetime());
 
 	std::move(
 		content
