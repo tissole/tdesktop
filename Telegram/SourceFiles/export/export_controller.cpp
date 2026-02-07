@@ -24,10 +24,97 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "base/weak_ptr.h"
 
+#include <QtCore/QTextStream>
+
 namespace Export {
 namespace {
 
 const auto kNullStateCallback = [](ProcessingState&) {};
+
+void WriteScanStatsFile(
+		const QString &path,
+		const std::map<MediaSettings::Type, Output::StatItem> &stats,
+		int messagesCount) {
+	QFile file(path + "scan_results.txt");
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+		return;
+	}
+
+	QTextStream out(&file);
+	out << "Export Scan Results\n";
+	out << "-------------------\n";
+
+	using Type = MediaSettings::Type;
+	const std::vector<Type> order = {
+		Type::Photo, Type::Video, Type::VideoMessage, Type::Audio,
+		Type::VoiceMessage, Type::File, Type::Sticker, Type::GIF,
+		Type::Text, Type::Link
+	};
+
+	int categoriesCount = 0;
+	int totalUniqueMessagesCount = 0;
+	int64 totalUniqueMediaSize = 0;
+	int64 totalMediaSize = 0;
+
+	for (const auto type : order) {
+		const auto it = stats.find(type);
+		if (it == stats.end() || it->second.totalCount <= 0) {
+			continue;
+		}
+		const auto &item = it->second;
+		QString label;
+		switch (type) {
+		case Type::Photo: label = "Photos"; break;
+		case Type::Video: label = "Videos"; break;
+		case Type::VideoMessage: label = "Video messages"; break;
+		case Type::Audio: label = "Audio files"; break;
+		case Type::VoiceMessage: label = "Voice messages"; break;
+		case Type::File: label = "Files"; break;
+		case Type::Sticker: label = "Stickers"; break;
+		case Type::GIF: label = "Animations"; break;
+		case Type::Text: label = "Text messages"; break;
+		case Type::Link: label = "Links"; break;
+		}
+		if (label.isEmpty()) continue;
+
+		categoriesCount++;
+		const bool hasDuplicates = (item.uniqueCount != item.totalCount)
+			|| (item.uniqueSize != item.totalSize);
+
+		out << label << ": ";
+		if (type == Type::Text || type == Type::Link) {
+			if (hasDuplicates) {
+				out << item.uniqueCount << ", ";
+			}
+			out << item.totalCount << "\n";
+		} else {
+			const auto uniqueStr = QString::number(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
+			const auto totalStr = QString::number(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
+			if (hasDuplicates) {
+				out << uniqueStr << ", ";
+			}
+			out << totalStr << "\n";
+			totalUniqueMediaSize += item.uniqueSize;
+			totalMediaSize += item.totalSize;
+		}
+
+		if (type != Type::Link) {
+			totalUniqueMessagesCount += item.uniqueCount;
+		}
+	}
+
+	if (categoriesCount > 1 && messagesCount > 0) {
+		const auto uniqueStr = QString::number(totalUniqueMessagesCount) + " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
+		const auto totalStr = QString::number(messagesCount) + " (" + Ui::FormatSizeText(totalMediaSize) + ")";
+		out << "\nTotal messages: ";
+		if (totalUniqueMessagesCount != messagesCount || totalUniqueMediaSize != totalMediaSize) {
+			out << uniqueStr << ", ";
+		}
+		out << totalStr << "\n";
+	} else if (messagesCount <= 0) {
+		out << "\nNo messages found in this range.\n";
+	}
+}
 
 Settings NormalizeSettings(const Settings &settings) {
 	if (!settings.onlySinglePeer()) {
@@ -441,6 +528,7 @@ void ControllerObject::exportNext() {
 	if (++_stepIndex >= _steps.size()) {
 		if (_isScanning) {
 			auto stats = _scanStats.byType();
+			WriteScanStatsFile(_settings.path, stats, _messagesInRangeCount);
 			_isScanning = false;
 			_stepIndex = -1;
 			_settings = Settings();
