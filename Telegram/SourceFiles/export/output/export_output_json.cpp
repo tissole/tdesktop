@@ -1118,6 +1118,15 @@ QByteArray SerializeMessage(
 
 } // namespace
 
+Result JsonWriter::writeBlock(const QByteArray &block) {
+	Expects(_output != nullptr);
+
+	if (_stats && !block.isEmpty()) {
+		_stats->incrementSize(MediaSettings::Type::Text, block.size());
+	}
+	return _output->writeBlock(block);
+}
+
 Result JsonWriter::start(
 		const Settings &settings,
 		const Environment &environment,
@@ -1135,7 +1144,7 @@ Result JsonWriter::start(
 	auto block = pushNesting(Context::kObject);
 	block.append(prepareObjectItemStart("about"));
 	block.append(SerializeString(_environment.aboutTelegram));
-	return _output->writeBlock(block);
+	return writeBlock(block);
 }
 
 QByteArray JsonWriter::pushNesting(Context::Type type) {
@@ -1176,7 +1185,7 @@ Result JsonWriter::writePersonal(const Data::PersonalInfo &data) {
 	Expects(_output != nullptr);
 
 	const auto &info = data.user.info;
-	return _output->writeBlock(
+	return writeBlock(
 		prepareObjectItemStart("personal_information")
 		+ SerializeObject(_context, {
 		{ "user_id", Data::NumberToString(data.user.bareId) },
@@ -1205,7 +1214,7 @@ Result JsonWriter::writeUserpicsStart(const Data::UserpicsInfo &data) {
 	Expects(_output != nullptr);
 
 	auto block = prepareObjectItemStart("profile_pictures");
-	return _output->writeBlock(block + pushNesting(Context::kArray));
+	return writeBlock(block + pushNesting(Context::kArray));
 }
 
 Result JsonWriter::writeUserpicsSlice(const Data::UserpicsSlice &data) {
@@ -1248,20 +1257,20 @@ Result JsonWriter::writeUserpicsSlice(const Data::UserpicsSlice &data) {
 			},
 		}));
 	}
-	return _output->writeBlock(block);
+	return writeBlock(block);
 }
 
 Result JsonWriter::writeUserpicsEnd() {
 	Expects(_output != nullptr);
 
-	return _output->writeBlock(popNesting());
+	return writeBlock(popNesting());
 }
 
 Result JsonWriter::writeStoriesStart(const Data::StoriesInfo &data) {
 	Expects(_output != nullptr);
 
 	auto block = prepareObjectItemStart("stories");
-	return _output->writeBlock(block + pushNesting(Context::kArray));
+	return writeBlock(block + pushNesting(Context::kArray));
 }
 
 Result JsonWriter::writeStoriesSlice(const Data::StoriesSlice &data) {
@@ -1319,13 +1328,13 @@ Result JsonWriter::writeStoriesSlice(const Data::StoriesSlice &data) {
 			},
 		}));
 	}
-	return _output->writeBlock(block);
+	return writeBlock(block);
 }
 
 Result JsonWriter::writeStoriesEnd() {
 	Expects(_output != nullptr);
 
-	return _output->writeBlock(popNesting());
+	return writeBlock(popNesting());
 }
 
 Result JsonWriter::writeContactsList(const Data::ContactsList &data) {
@@ -1380,7 +1389,7 @@ Result JsonWriter::writeSavedContacts(const Data::ContactsList &data) {
 		}
 	}
 	block.append(popNesting());
-	return _output->writeBlock(block + popNesting());
+	return writeBlock(block + popNesting());
 }
 
 Result JsonWriter::writeFrequentContacts(const Data::ContactsList &data) {
@@ -1424,7 +1433,7 @@ Result JsonWriter::writeFrequentContacts(const Data::ContactsList &data) {
 	writeList(data.inlineBots, "inline_bots");
 	writeList(data.phoneCalls, "calls");
 	block.append(popNesting());
-	return _output->writeBlock(block + popNesting());
+	return writeBlock(block + popNesting());
 }
 
 Result JsonWriter::writeSessionsList(const Data::SessionsList &data) {
@@ -1506,7 +1515,7 @@ Result JsonWriter::writeOtherData(const Data::File &data) {
 	} else {
 		pushArray(document.array());
 	}
-	return _output->writeBlock(block);
+	return writeBlock(block);
 }
 
 Result JsonWriter::writeSessions(const Data::SessionsList &data) {
@@ -1542,7 +1551,7 @@ Result JsonWriter::writeSessions(const Data::SessionsList &data) {
 		}));
 	}
 	block.append(popNesting());
-	return _output->writeBlock(block + popNesting());
+	return writeBlock(block + popNesting());
 }
 
 Result JsonWriter::writeWebSessions(const Data::SessionsList &data) {
@@ -1570,7 +1579,7 @@ Result JsonWriter::writeWebSessions(const Data::SessionsList &data) {
 		}));
 	}
 	block.append(popNesting());
-	return _output->writeBlock(block + popNesting());
+	return writeBlock(block + popNesting());
 }
 
 Result JsonWriter::writeDialogsStart(const Data::DialogsInfo &data) {
@@ -1621,7 +1630,7 @@ Result JsonWriter::writeDialogStart(const Data::DialogInfo &data) {
 		+ Data::NumberToString(Data::PeerToBareId(data.peerId)));
 	block.append(prepareObjectItemStart("messages"));
 	block.append(pushNesting(Context::kArray));
-	return _output->writeBlock(block);
+	return writeBlock(block);
 }
 
 Result JsonWriter::validateDialogsMode(bool isLeftChannel) {
@@ -1657,14 +1666,14 @@ Result JsonWriter::writeDialogSlice(const Data::MessagesSlice &data) {
 			data.peers,
 			_environment.internalLinksDomain));
 	}
-	return block.isEmpty() ? Result::Success() : _output->writeBlock(block);
+	return block.isEmpty() ? Result::Success() : writeBlock(block);
 }
 
 Result JsonWriter::writeDialogEnd() {
 	Expects(_output != nullptr);
 
 	auto block = popNesting();
-	return _output->writeBlock(block + popNesting());
+	return writeBlock(block + popNesting());
 }
 
 Result JsonWriter::writeDialogsEnd() {
@@ -1684,14 +1693,14 @@ Result JsonWriter::writeChatsStart(
 	block.append(prepareObjectItemStart("about"));
 	block.append(SerializeString(about));
 	block.append(prepareObjectItemStart("list"));
-	return _output->writeBlock(block + pushNesting(Context::kArray));
+	return writeBlock(block + pushNesting(Context::kArray));
 }
 
 Result JsonWriter::writeChatsEnd() {
 	Expects(_output != nullptr);
 
 	auto block = popNesting();
-	return _output->writeBlock(block + popNesting());
+	return writeBlock(block + popNesting());
 }
 
 Result JsonWriter::finish() {
@@ -1703,7 +1712,7 @@ Result JsonWriter::finish() {
 	}
 	auto block = popNesting();
 	Assert(_context.nesting.empty());
-	return _output->writeBlock(block);
+	return writeBlock(block);
 }
 
 QString JsonWriter::mainFilePath() {

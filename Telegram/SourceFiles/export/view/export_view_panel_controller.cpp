@@ -204,10 +204,8 @@ void PanelController::showSettings() {
 
 	settingsRaw->scanClicks(
 	) | rpl::start_with_next([=] {
+		settingsRaw->setScanning(true);
 		_process->runScan(*_settings, PrepareEnvironment(_session));
-		crl::on_main([=] {
-			settingsRaw->setScanning(true);
-		});
 	}, settingsRaw->lifetime());
 
 	settingsRaw->exportClicks(

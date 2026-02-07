@@ -638,6 +638,7 @@ private:
 		Fn<QByteArray(int messageId, QByteArray text)> wrapMessageLink);
 
 	File _file;
+	Stats *_stats = nullptr;
 	QByteArray _composedStart;
 	bool _closed = false;
 	QByteArray _base;
@@ -699,7 +700,8 @@ HtmlWriter::Wrap::Wrap(
 	const QString &path,
 	const QString &base,
 	Stats *stats)
-: _file(path, stats) {
+: _file(path, stats)
+, _stats(stats) {
 	Expects(base.endsWith('/'));
 	Expects(path.startsWith(base));
 
@@ -942,6 +944,10 @@ QByteArray HtmlWriter::Wrap::pushGenericListEntry(
 
 Result HtmlWriter::Wrap::writeBlock(const QByteArray &block) {
 	Expects(!_closed);
+
+	if (_stats && !block.isEmpty()) {
+		_stats->incrementSize(MediaSettings::Type::Text, block.size());
+	}
 
 	const auto result = [&] {
 		if (block.isEmpty()) {

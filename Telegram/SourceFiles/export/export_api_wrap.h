@@ -97,6 +97,7 @@ public:
 		int messagesMediaCount = 0;
 		int messagesTotalCount = 0;
 		int messagesTextTotal = 0;
+		int messagesInRangeCount = 0;
 	};
 	void requestUserpics(
 		FnMut<bool(Data::UserpicsInfo&&)> start,

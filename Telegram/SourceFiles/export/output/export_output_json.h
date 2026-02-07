@@ -82,6 +82,7 @@ private:
 	[[nodiscard]] std::unique_ptr<File> fileWithRelativePath(
 		const QString &path) const;
 
+	[[nodiscard]] Result writeBlock(const QByteArray &block);
 	[[nodiscard]] Result writeSavedContacts(const Data::ContactsList &data);
 	[[nodiscard]] Result writeFrequentContacts(const Data::ContactsList &data);
 

@@ -31,6 +31,7 @@ public:
 	void incrementUserMediaFiles();
 
 	void increment(MediaSettings::Type type, int64 size, bool unique);
+	void incrementSize(MediaSettings::Type type, int64 size);
 	void setExpectedFilesCount(int count);
 	void clear();
 

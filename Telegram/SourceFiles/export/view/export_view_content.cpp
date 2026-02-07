@@ -117,6 +117,56 @@ Content ContentFromState(
 	default: Unexpected("Step in ContentFromState.");
 	}
 
+	if (!state.selectedStats.empty()) {
+		using MediaType = MediaSettings::Type;
+		const std::vector<MediaType> order = {
+			MediaType::Photo,
+			MediaType::Video,
+			MediaType::VideoMessage,
+			MediaType::Audio,
+			MediaType::VoiceMessage,
+			MediaType::File,
+			MediaType::Sticker,
+			MediaType::GIF,
+			MediaType::Text,
+			MediaType::Link
+		};
+
+		for (const auto type : order) {
+			const auto it = state.selectedStats.find(type);
+			if (it == state.selectedStats.end() || it->second.totalCount <= 0) {
+				continue;
+			}
+			const auto &item = it->second;
+			QString label;
+			switch (type) {
+			case MediaType::Photo: label = tr::lng_export_option_photos(tr::now); break;
+			case MediaType::Video: label = tr::lng_export_option_video_files(tr::now); break;
+			case MediaType::VoiceMessage: label = tr::lng_export_option_voice_messages(tr::now); break;
+			case MediaType::VideoMessage: label = tr::lng_export_option_video_messages(tr::now); break;
+			case MediaType::Audio: label = tr::lng_export_option_audios(tr::now); break;
+			case MediaType::Sticker: label = tr::lng_export_option_stickers(tr::now); break;
+			case MediaType::GIF: label = tr::lng_export_option_gifs(tr::now); break;
+			case MediaType::File: label = tr::lng_export_option_files(tr::now); break;
+			case MediaType::Text: label = tr::lng_export_option_text_messages(tr::now); break;
+			case MediaType::Link: label = tr::lng_export_option_links(tr::now); break;
+			}
+			if (!label.isEmpty()) {
+				const bool hasDuplicates = (item.uniqueCount != item.totalCount)
+					|| (item.uniqueSize != item.totalSize);
+				QString text;
+				if (type == MediaType::Text || type == MediaType::Link) {
+					text = label + ": " + (hasDuplicates ? (Lang::FormatCountDecimal(item.uniqueCount) + ", ") : QString())
+						+ Lang::FormatCountDecimal(item.totalCount);
+				} else {
+					text = label + ": " + (hasDuplicates ? (Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + "), ") : QString())
+						+ Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
+				}
+				result.rows.push_back({ Content::kDoneId, text, QString(), 1. });
+			}
+		}
+	}
+
 	for (const auto &[id, download] : state.activeDownloads) {
 		const auto progress = (download.total > 0)
 			? (download.ready / float64(download.total))
@@ -161,6 +211,9 @@ Content ContentFromState(const FinishedState &state) {
 	const auto fullHistory = state.fullHistory;
 
 	int categoriesCount = 0;
+	int totalUniqueMessagesCount = 0;
+	int64 totalUniqueMediaSize = 0;
+	int64 totalMediaSize = 0;
 
 	for (const auto type : order) {
 		const auto it = state.breakdown.find(type);
@@ -206,20 +259,28 @@ Content ContentFromState(const FinishedState &state) {
 				} else {
 					text = label + ": " + totalStr;
 				}
+
+				totalUniqueMediaSize += item.uniqueSize;
+				totalMediaSize += item.totalSize;
 			}
+
+			if (type != Type::Link) {
+				totalUniqueMessagesCount += item.uniqueCount;
+			}
+
 			result.rows.push_back({ Content::kDoneId, text, QString(), 1. });
 		}
 	}
 
-	if ((categoriesCount > 1 || fullHistory) && state.totalTotalCount > 0) {
+	if (categoriesCount > 1 && state.totalTotalCount > 0) {
 		const auto label = "Total messages: ";
-		const auto uniqueStr = Lang::FormatCountDecimal(state.totalUniqueCount)
-			+ " (" + Ui::FormatSizeText(state.totalUniqueSize) + ")";
+		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
+			+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 		const auto totalStr = Lang::FormatCountDecimal(state.totalTotalCount)
-			+ " (" + Ui::FormatSizeText(state.totalTotalSize) + ")";
+			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
 		QString totalText;
-		if (state.totalUniqueCount != state.totalTotalCount || state.totalUniqueSize != state.totalTotalSize) {
+		if (totalUniqueMessagesCount != state.totalTotalCount || totalUniqueMediaSize != totalMediaSize) {
 			totalText = label + uniqueStr + ", " + totalStr;
 		} else {
 			totalText = label + totalStr;
