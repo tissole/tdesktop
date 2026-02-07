@@ -76,6 +76,8 @@ public:
 	Result writeDialogEnd() override;
 	Result writeDialogsEnd() override;
 
+	Result writeUniqueLinks(const base::flat_set<QString> &links) override;
+
 	Result finish() override;
 
 	QString mainFilePath() override;

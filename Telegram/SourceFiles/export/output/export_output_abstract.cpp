@@ -85,6 +85,10 @@ public:
 		return Result::Success();
 	}
 
+	Result writeUniqueLinks(const base::flat_set<QString> &links) override {
+		return Result::Success();
+	}
+
 	Result finish() override {
 		return Result::Success();
 	}

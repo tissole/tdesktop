@@ -560,6 +560,7 @@ void ControllerObject::exportNext() {
 		if (ioCatchError(_writer->finish())) {
 			return;
 		}
+		_writer->writeUniqueLinks(_api.visitedLinks());
 		_api.finishExport([=] {
 			setFinishedState();
 		});

@@ -82,6 +82,9 @@ public:
 	[[nodiscard]] virtual Result writeDialogEnd() = 0;
 	[[nodiscard]] virtual Result writeDialogsEnd() = 0;
 
+	[[nodiscard]] virtual Result writeUniqueLinks(
+		const base::flat_set<QString> &links) = 0;
+
 	[[nodiscard]] virtual Result finish() = 0;
 
 	[[nodiscard]] virtual QString mainFilePath() = 0;

@@ -121,6 +121,12 @@ Result HtmlAndJsonWriter::writeDialogsEnd() {
 	});
 }
 
+Result HtmlAndJsonWriter::writeUniqueLinks(const base::flat_set<QString> &links) {
+	return invoke([&](WriterPtr w) {
+		return w->writeUniqueLinks(links);
+	});
+}
+
 Result HtmlAndJsonWriter::finish() {
 	return invoke([&](WriterPtr w) {
 		return w->finish();

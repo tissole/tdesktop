@@ -131,6 +131,8 @@ public:
 
 	void clearResults();
 
+	[[nodiscard]] base::flat_set<QString> visitedLinks() const;
+
 	~ApiWrap();
 
 private:

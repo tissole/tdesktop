@@ -3508,6 +3508,22 @@ Result HtmlWriter::writeDialogsEnd() {
 	return Result::Success();
 }
 
+Result HtmlWriter::writeUniqueLinks(const base::flat_set<QString> &links) {
+	if (links.empty()) {
+		return Result::Success();
+	}
+	const auto path = pathWithRelativePath("unique_links.txt");
+	QFile file(path);
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+		return Result(Result::Type::Error, path);
+	}
+	QTextStream out(&file);
+	for (const auto &link : links) {
+		out << link << "\n";
+	}
+	return Result::Success();
+}
+
 Result HtmlWriter::writeDialogOpening(int index) {
 	const auto name = (_dialog.name.isEmpty()
 		&& _dialog.lastName.isEmpty())

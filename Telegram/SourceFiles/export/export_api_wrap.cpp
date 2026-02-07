@@ -3356,7 +3356,12 @@ void ApiWrap::clearResults() {
 	_stats = nullptr;
 	_scanStats = nullptr;
 	_scanVisited.clear();
+	_exportVisited.clear();
 	_visitedLinks.clear();
+}
+
+base::flat_set<QString> ApiWrap::visitedLinks() const {
+	return _visitedLinks;
 }
 
 void ApiWrap::clearState(bool keepCache) {
