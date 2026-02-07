@@ -1706,6 +1706,58 @@ Result JsonWriter::writeChatsEnd() {
 Result JsonWriter::finish() {
 	Expects(_output != nullptr);
 
+	if (_stats) {
+		const auto breakdown = _stats->byType();
+		auto statsValues = std::vector<std::pair<QByteArray, QByteArray>>();
+		using Type = MediaSettings::Type;
+
+		for (const auto &[type, item] : breakdown) {
+			if (item.totalCount <= 0) continue;
+			QByteArray key;
+			switch (type) {
+			case Type::Photo: key = "photos"; break;
+			case Type::Video: key = "videos"; break;
+			case Type::VideoMessage: key = "video_messages"; break;
+			case Type::Audio: key = "audio_files"; break;
+			case Type::VoiceMessage: key = "voice_messages"; break;
+			case Type::File: key = "files"; break;
+			case Type::Sticker: key = "stickers"; break;
+			case Type::GIF: key = "animations"; break;
+			case Type::Text: key = "text_messages"; break;
+			case Type::Link: key = "links"; break;
+			}
+			if (!key.isEmpty()) {
+				statsValues.push_back({ key, SerializeObject(_context, {
+					{ "unique_count", Data::NumberToString(item.uniqueCount) },
+					{ "unique_size", Data::NumberToString(item.uniqueSize) },
+					{ "total_count", Data::NumberToString(item.totalCount) },
+					{ "total_size", Data::NumberToString(item.totalSize) },
+				}) });
+			}
+		}
+
+		auto totalUniqueCount = 0;
+		int64 totalUniqueSize = 0;
+		auto totalTotalCount = 0;
+		int64 totalTotalSize = 0;
+		for (const auto &[type, item] : breakdown) {
+			if (type != Type::Link) {
+				totalUniqueCount += item.uniqueCount;
+				totalUniqueSize += item.uniqueSize;
+				totalTotalCount += item.totalCount;
+				totalTotalSize += item.totalSize;
+			}
+		}
+		statsValues.push_back({ "total", SerializeObject(_context, {
+			{ "unique_count", Data::NumberToString(totalUniqueCount) },
+			{ "unique_size", Data::NumberToString(totalUniqueSize) },
+			{ "total_count", Data::NumberToString(totalTotalCount) },
+			{ "total_size", Data::NumberToString(totalTotalSize) },
+		}) });
+
+		writeBlock(prepareObjectItemStart("export_statistics") + SerializeObject(_context, statsValues));
+	}
+
 	if (_settings.onlySinglePeer()) {
 		Assert(_context.nesting.empty());
 		return Result::Success();

@@ -1029,6 +1029,7 @@ void SettingsWidget::addMediaOption(
 				if (checked) {
 					if (type == MediaType::FullHistory) {
 						data.media.types = MediaType::FullHistory;
+						data.types = Settings::Types(0);
 					} else {
 						data.media.types &= ~MediaType::FullHistory;
 						data.media.types |= type;

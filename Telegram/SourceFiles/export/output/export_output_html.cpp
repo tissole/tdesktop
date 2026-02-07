@@ -3382,7 +3382,15 @@ Result HtmlWriter::writeDialogEnd() {
 
 	if (const auto closed = base::take(_chat)->close(); !closed) {
 		return closed;
-	} else if (_settings.onlySinglePeer()) {
+	}
+
+	prependStats(_dialog.relativePath + messagesFile(0));
+	const auto count = int(_lastMessageIdsPerFile.size());
+	if (count > 0) {
+		prependStats(_dialog.relativePath + messagesFile(count));
+	}
+
+	if (_settings.onlySinglePeer()) {
 		return Result::Success();
 	}
 
@@ -3587,6 +3595,111 @@ QByteArray HtmlWriter::wrapMessageLink(int messageId, QByteArray text) {
 	}
 }
 
+QByteArray HtmlWriter::statsBlock() const {
+	if (!_stats) return {};
+
+	const auto breakdown = _stats->byType();
+	using Type = MediaSettings::Type;
+	const std::vector<Type> order = {
+		Type::Photo, Type::Video, Type::VideoMessage, Type::Audio,
+		Type::VoiceMessage, Type::File, Type::Sticker, Type::GIF,
+		Type::Text, Type::Link
+	};
+
+	auto result = QByteArray("<div class=\"export_stats\">\n"
+		"<div class=\"name bold\">Export Statistics</div>\n");
+
+	int categoriesCount = 0;
+	int totalUniqueMessagesCount = 0;
+	int64 totalUniqueMediaSize = 0;
+	int64 totalMediaSize = 0;
+
+	for (const auto type : order) {
+		const auto it = breakdown.find(type);
+		if (it == breakdown.end() || it->second.totalCount <= 0) continue;
+		const auto &item = it->second;
+
+		QByteArray label;
+		switch (type) {
+		case Type::Photo: label = "Photos"; break;
+		case Type::Video: label = "Videos"; break;
+		case Type::VideoMessage: label = "Video messages"; break;
+		case Type::Audio: label = "Audio files"; break;
+		case Type::VoiceMessage: label = "Voice messages"; break;
+		case Type::File: label = "Files"; break;
+		case Type::Sticker: label = "Stickers"; break;
+		case Type::GIF: label = "Animations"; break;
+		case Type::Text: label = "Text messages"; break;
+		case Type::Link: label = "Links"; break;
+		}
+		if (label.isEmpty()) continue;
+
+		categoriesCount++;
+		const bool hasDuplicates = (item.uniqueCount != item.totalCount)
+			|| (item.uniqueSize != item.totalSize);
+
+		result.append("<div class=\"details_entry details\">").append(label).append(": ");
+		if (type == Type::Text || type == Type::Link) {
+			if (hasDuplicates) {
+				result.append(Data::NumberToString(item.uniqueCount)).append(", ");
+			}
+			result.append(Data::NumberToString(item.totalCount));
+		} else {
+			const auto uniqueStr = Data::NumberToString(item.uniqueCount) + " (" + Data::FormatFileSize(item.uniqueSize) + ")";
+			const auto totalStr = Data::NumberToString(item.totalCount) + " (" + Data::FormatFileSize(item.totalSize) + ")";
+			if (hasDuplicates) {
+				result.append(uniqueStr).append(", ");
+			}
+			result.append(totalStr);
+			totalUniqueMediaSize += item.uniqueSize;
+			totalMediaSize += item.totalSize;
+		}
+		result.append("</div>\n");
+
+		if (type != Type::Link) {
+			totalUniqueMessagesCount += item.uniqueCount;
+		}
+	}
+
+	if (categoriesCount > 1 && totalUniqueMessagesCount > 0) {
+		const auto uniqueStr = Data::NumberToString(totalUniqueMessagesCount) + " (" + Data::FormatFileSize(totalUniqueMediaSize) + ")";
+		const auto totalStr = Data::NumberToString(_stats->totalCount()) + " (" + Data::FormatFileSize(totalMediaSize) + ")";
+		result.append("<div class=\"details_entry details bold\">Total messages: ");
+		if (totalUniqueMessagesCount != _stats->totalCount() || totalUniqueMediaSize != totalMediaSize) {
+			result.append(uniqueStr).append(", ");
+		}
+		result.append(totalStr).append("</div>\n");
+	}
+
+	result.append("</div>\n");
+	return result;
+}
+
+Result HtmlWriter::prependStats(const QString &relativePath) {
+	const auto path = pathWithRelativePath(relativePath);
+	QFile file(path);
+	if (!file.open(QIODevice::ReadOnly)) return Result::Success();
+	const auto content = file.readAll();
+	file.close();
+
+	if (!file.open(QIODevice::WriteOnly)) return Result(Result::Type::Error, path);
+
+	const auto stats = statsBlock();
+	// Insert after the history opening tag or the page header
+	auto index = content.indexOf("<div class=\"history\">");
+	if (index == -1) index = content.indexOf("<div class=\"page_body");
+	if (index == -1) index = 0;
+	else {
+		// Find the end of the opening tag
+		index = content.indexOf('>', index) + 1;
+	}
+
+	file.write(content.mid(0, index));
+	file.write(stats);
+	file.write(content.mid(index));
+	return Result::Success();
+}
+
 Result HtmlWriter::switchToNextChatFile(int index) {
 	Expects(_chat != nullptr);
 
@@ -3611,6 +3724,11 @@ Result HtmlWriter::finish() {
 	Expects(_settings.onlySinglePeer() || _summary != nullptr);
 
 	if (_settings.onlySinglePeer()) {
+		prependStats(messagesFile(0));
+		const auto count = int(_lastMessageIdsPerFile.size());
+		if (count > 0) {
+			prependStats(messagesFile(count));
+		}
 		return Result::Success();
 	}
 
@@ -3629,7 +3747,13 @@ Result HtmlWriter::finish() {
 	if (const auto result = _summary->writeBlock(block); !result) {
 		return result;
 	}
-	return _summary->close();
+	if (const auto closed = _summary->close(); !closed) {
+		return closed;
+	}
+	_summary = nullptr;
+
+	prependStats(mainFileRelativePath());
+	return Result::Success();
 }
 
 Result HtmlWriter::copyFile(

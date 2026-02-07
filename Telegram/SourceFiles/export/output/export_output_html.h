@@ -139,6 +139,9 @@ private:
 		int messageId,
 		QByteArray text);
 
+	[[nodiscard]] QByteArray statsBlock() const;
+	[[nodiscard]] Result prependStats(const QString &relativePath);
+
 	Settings _settings;
 	Environment _environment;
 	Stats *_stats = nullptr;
