@@ -172,6 +172,7 @@ private:
 	std::unique_ptr<Wrap> _chats;
 	std::unique_ptr<Wrap> _chat;
 	std::vector<int> _lastMessageIdsPerFile;
+	std::vector<QString> _chatMessageFiles;
 	bool _chatFileEmpty = false;
 
 };

@@ -1659,6 +1659,9 @@ Result JsonWriter::writeDialogSlice(const Data::MessagesSlice &data) {
 	auto block = QByteArray();
 	for (const auto &message : data.list) {
 		if (Data::SkipMessageByDate(message, _settings)) {
+			if (_stats) {
+				_stats->incrementUserMediaFiles();
+			}
 			continue;
 		}
 		block.append(prepareArrayItemStart() + SerializeMessage(
@@ -1725,7 +1728,7 @@ Result JsonWriter::finish() {
 			case MediaType::VoiceMessage: key = "voice_messages"; break;
 			case MediaType::File: key = "files"; break;
 			case MediaType::Sticker: key = "stickers"; break;
-			case MediaType::GIF: key = "animations"; break;
+			case MediaType::GIF: key = "gifs"; break;
 			case MediaType::Text: key = "text_messages"; break;
 			case MediaType::Link: key = "links"; break;
 			}

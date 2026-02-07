@@ -55,6 +55,7 @@ void WriteScanStatsFile(
 
 	int categoriesCount = 0;
 	int totalUniqueMessagesCount = 0;
+	int totalTotalMessagesCount = 0;
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
 
@@ -73,7 +74,7 @@ void WriteScanStatsFile(
 		case Type::VoiceMessage: label = "Voice messages"; break;
 		case Type::File: label = "Files"; break;
 		case Type::Sticker: label = "Stickers"; break;
-		case Type::GIF: label = "Animations"; break;
+		case Type::GIF: label = "GIFs"; break;
 		case Type::Text: label = "Text messages"; break;
 		case Type::Link: label = "Links"; break;
 		}
@@ -102,14 +103,15 @@ void WriteScanStatsFile(
 
 		if (type != Type::Link) {
 			totalUniqueMessagesCount += item.uniqueCount;
+			totalTotalMessagesCount += item.totalCount;
 		}
 	}
 
-	if (categoriesCount > 1 && messagesCount > 0) {
+	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
 		const auto uniqueStr = QString::number(totalUniqueMessagesCount) + " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
-		const auto totalStr = QString::number(messagesCount) + " (" + Ui::FormatSizeText(totalMediaSize) + ")";
+		const auto totalStr = QString::number(totalTotalMessagesCount) + " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 		out << "\nTotal messages: ";
-		if (totalUniqueMessagesCount != messagesCount || totalUniqueMediaSize != totalMediaSize) {
+		if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
 			out << uniqueStr << ", ";
 		}
 		out << totalStr << "\n";
@@ -172,6 +174,7 @@ private:
 	void ioError(const QString &path);
 	bool ioCatchError(Output::Result result);
 	void setFinishedState();
+	void clearResults();
 
 	//void requestPasswordState();
 	//void passwordStateDone(const MTPaccount_Password &password);
@@ -368,6 +371,14 @@ bool ControllerObject::ioCatchError(Output::Result result) {
 //
 //}
 
+void ControllerObject::clearResults() {
+	_scanStats.clear();
+	_scanStatsFound = false;
+	_messagesInRangeCount = 0;
+	_messagesCount = 0;
+	_stats.clear();
+}
+
 void ControllerObject::runScan(
 		const Settings &settings,
 		const Environment &environment) {
@@ -375,7 +386,7 @@ void ControllerObject::runScan(
 		return;
 	}
 	_api.clearResults();
-	_scanStats.clear();
+	clearResults();
 	_isScanning = true;
 	_stepIndex = -1;
 	_settings = NormalizeSettings(settings);
@@ -418,6 +429,10 @@ void ControllerObject::startExport(
 		_messagesCount = 0;
 		_stats.setExpectedFilesCount(0);
 		_scanStatsFound = false;
+		if (_isScanning) {
+			_isScanning = false;
+			clearResults();
+		}
 	}
 
 	_isScanning = false;
@@ -523,6 +538,7 @@ void ControllerObject::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
 void ControllerObject::cancelExportFast(bool keepCache) {
 	_isScanning = false;
 	_api.clearState(keepCache);
+	clearResults();
 	setState(CancelledState());
 }
 
@@ -531,10 +547,14 @@ void ControllerObject::exportNext() {
 		if (_isScanning) {
 			auto stats = _scanStats.byType();
 			WriteScanStatsFile(_settings.path, stats, _messagesInRangeCount);
+			const auto count = _messagesInRangeCount;
 			_isScanning = false;
 			_stepIndex = -1;
 			_settings = Settings();
-			setState(ScanDoneState{ std::move(stats), _messagesInRangeCount });
+			if (count <= 0) {
+				clearResults();
+			}
+			setState(ScanDoneState{ std::move(stats), count });
 			return;
 		}
 		if (ioCatchError(_writer->finish())) {
@@ -747,15 +767,20 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 			return false;
 		}
 		_messagesWritten = 0;
-		if (!_messagesCount) {
-			for (int count : info.messagesCountPerSplit) {
-				_messagesCount += count;
+		if (!_messagesCount || !_scanStatsFound) {
+			int count = 0;
+			for (int splitCount : info.messagesCountPerSplit) {
+				count += splitCount;
 			}
+			_messagesCount = count;
 		}
 		if (!_stats.expectedFilesCount()) {
 			_stats.setExpectedFilesCount(_messagesCount);
 		}
-		setState(stateDialogs(DownloadProgress()));
+		setState(stateDialogs(DownloadProgress{
+			.messagesTotalCount = 0,
+			.messagesInRangeCount = _messagesCount
+		}));
 		return true;
 	}, [=](DownloadProgress progress) {
 		if (progress.total > 0 && progress.ready >= progress.total) {
@@ -859,27 +884,27 @@ ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress)
 }
 
 void ControllerObject::setFinishedState() {
-	auto totalUniqueMediaCount = 0;
-	auto totalUniqueMediaSize = int64(0);
-	auto totalTotalMessagesCount = 0;
-	auto totalTotalMediaSize = int64(0);
+	auto totalUniqueCount = 0;
+	auto totalUniqueSize = int64(0);
+	auto totalTotalCount = 0;
+	auto totalTotalSize = int64(0);
 	const auto breakdown = _stats.byType();
 	using Type = MediaSettings::Type;
 	for (const auto &[type, item] : breakdown) {
 		if (type != Type::Link) {
-			totalUniqueMediaCount += item.uniqueCount;
-			totalUniqueMediaSize += item.uniqueSize;
-			totalTotalMessagesCount += item.totalCount;
-			totalTotalMediaSize += item.totalSize;
+			totalUniqueCount += item.uniqueCount;
+			totalUniqueSize += item.uniqueSize;
+			totalTotalCount += item.totalCount;
+			totalTotalSize += item.totalSize;
 		}
 	}
 
 	setState(FinishedState{
 		.path = _writer->mainFilePath(),
-		.totalUniqueCount = totalUniqueMediaCount,
-		.totalUniqueSize = totalUniqueMediaSize,
-		.totalTotalCount = totalTotalMessagesCount,
-		.totalTotalSize = totalTotalMediaSize,
+		.totalUniqueCount = totalUniqueCount,
+		.totalUniqueSize = totalUniqueSize,
+		.totalTotalCount = totalTotalCount,
+		.totalTotalSize = totalTotalSize,
 		.fullHistory = !!(_settings.media.types & Type::FullHistory),
 		.breakdown = breakdown,
 	});
@@ -945,16 +970,18 @@ void ControllerObject::fillMessagesState(
 	result.entityName = i->name;
 	result.entityIndex = index + 1;
 	result.entityCount = info.chats.size() + info.left.size();
+	
 	if (_isScanning) {
 		result.itemIndex = progress.itemIndex;
 		result.itemCount = _messagesCount;
 	} else if (_scanStatsFound) {
-		result.itemIndex = _stats.userMediaFilesCount();
+		result.itemIndex = progress.messagesTotalCount;
 		result.itemCount = _stats.expectedFilesCount();
 	} else {
 		result.itemIndex = progress.messagesTotalCount;
 		result.itemCount = _messagesCount;
 	}
+
 	result.activeDownloads = _activeDownloads;
 }
 

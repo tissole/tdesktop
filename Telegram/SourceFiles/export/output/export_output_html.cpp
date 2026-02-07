@@ -3278,6 +3278,7 @@ Result HtmlWriter::writeDialogStart(const Data::DialogInfo &data) {
 	Expects(_chat == nullptr);
 
 	_chat = fileWithRelativePath(data.relativePath + messagesFile(0));
+	_chatMessageFiles.push_back(data.relativePath + messagesFile(0));
 	_chatFileEmpty = true;
 	_messagesCount = 0;
 	_dateMessageId = 0;
@@ -3302,6 +3303,11 @@ Result HtmlWriter::writeDialogSlice(const Data::MessagesSlice &data) {
 	auto block = QByteArray();
 	for (const auto &message : data.list) {
 		if (Data::SkipMessageByDate(message, _settings)) {
+			// Count processed messages even if they are skipped by date/filter
+			// to keep progress bar consistent
+			if (_stats) {
+				_stats->incrementUserMediaFiles();
+			}
 			continue;
 		}
 		const auto newIndex = (_messagesCount / kMessagesInFile);
@@ -3383,11 +3389,6 @@ Result HtmlWriter::writeDialogEnd() {
 
 	if (const auto closed = base::take(_chat)->close(); !closed) {
 		return closed;
-	}
-	(void)prependStats(_dialog.relativePath + messagesFile(0));
-	const auto count = int(_lastMessageIdsPerFile.size());
-	if (count > 0) {
-		(void)prependStats(_dialog.relativePath + messagesFile(count));
 	}
 
 	if (_settings.onlySinglePeer()) {
@@ -3611,6 +3612,7 @@ QByteArray HtmlWriter::statsBlock() const {
 
 	int categoriesCount = 0;
 	int totalUniqueMessagesCount = 0;
+	int totalTotalMessagesCount = 0;
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
 
@@ -3628,7 +3630,7 @@ QByteArray HtmlWriter::statsBlock() const {
 		case Type::VoiceMessage: label = "Voice messages"; break;
 		case Type::File: label = "Files"; break;
 		case Type::Sticker: label = "Stickers"; break;
-		case Type::GIF: label = "Animations"; break;
+		case Type::GIF: label = "GIFs"; break;
 		case Type::Text: label = "Text messages"; break;
 		case Type::Link: label = "Links"; break;
 		}
@@ -3658,14 +3660,15 @@ QByteArray HtmlWriter::statsBlock() const {
 
 		if (type != Type::Link) {
 			totalUniqueMessagesCount += item.uniqueCount;
+			totalTotalMessagesCount += item.totalCount;
 		}
 	}
 
-	if (categoriesCount > 1 && totalUniqueMessagesCount > 0) {
+	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
 		const auto uniqueStr = QByteArray::number(totalUniqueMessagesCount) + " (" + Data::FormatFileSize(totalUniqueMediaSize) + ")";
-		const auto totalStr = QByteArray::number(_stats->totalCount()) + " (" + Data::FormatFileSize(totalMediaSize) + ")";
+		const auto totalStr = QByteArray::number(totalTotalMessagesCount) + " (" + Data::FormatFileSize(totalMediaSize) + ")";
 		result.append("<div class=\"details_entry details bold\">Total messages: ");
-		if (totalUniqueMessagesCount != _stats->totalCount() || totalUniqueMediaSize != totalMediaSize) {
+		if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
 			result.append(uniqueStr).append(", ");
 		}
 		result.append(totalStr).append("</div>\n");
@@ -3681,6 +3684,10 @@ Result HtmlWriter::prependStats(const QString &relativePath) {
 	if (!file.open(QIODevice::ReadOnly)) return Result::Success();
 	const auto content = file.readAll();
 	file.close();
+
+	if (content.contains("Export Statistics")) {
+		return Result::Success();
+	}
 
 	if (!file.open(QIODevice::WriteOnly)) return Result(Result::Type::Error, path);
 
@@ -3704,6 +3711,7 @@ Result HtmlWriter::switchToNextChatFile(int index) {
 	Expects(_chat != nullptr);
 
 	const auto nextPath = messagesFile(index);
+	_chatMessageFiles.push_back(_dialog.relativePath + nextPath);
 	auto next = _chat->pushTag("a", {
 		{ "class", "pagination block_link" },
 		{ "href", nextPath.toUtf8() }
@@ -3723,36 +3731,34 @@ Result HtmlWriter::switchToNextChatFile(int index) {
 Result HtmlWriter::finish() {
 	Expects(_settings.onlySinglePeer() || _summary != nullptr);
 
-	if (_settings.onlySinglePeer()) {
-		(void)prependStats(messagesFile(0));
-		const auto count = int(_lastMessageIdsPerFile.size());
-		if (count > 0) {
-			(void)prependStats(messagesFile(count));
+	if (!_settings.onlySinglePeer()) {
+		if (const auto result = writeSections(); !result) {
+			return result;
 		}
-		return Result::Success();
+		auto block = QByteArray();
+		if (_haveSections) {
+			block.append(_summary->popTag());
+			_summaryNeedDivider = true;
+			_haveSections = false;
+		}
+		block.append(_summary->pushAbout(
+			_environment.aboutTelegram,
+			_summaryNeedDivider));
+		if (const auto result = _summary->writeBlock(block); !result) {
+			return result;
+		}
+		if (const auto closed = _summary->close(); !closed) {
+			return closed;
+		}
+		_summary = nullptr;
+
+		(void)prependStats(mainFileRelativePath());
 	}
 
-	if (const auto result = writeSections(); !result) {
-		return result;
+	for (const auto &path : _chatMessageFiles) {
+		(void)prependStats(path);
 	}
-	auto block = QByteArray();
-	if (_haveSections) {
-		block.append(_summary->popTag());
-		_summaryNeedDivider = true;
-		_haveSections = false;
-	}
-	block.append(_summary->pushAbout(
-		_environment.aboutTelegram,
-		_summaryNeedDivider));
-	if (const auto result = _summary->writeBlock(block); !result) {
-		return result;
-	}
-	if (const auto closed = _summary->close(); !closed) {
-		return closed;
-	}
-	_summary = nullptr;
 
-	(void)prependStats(mainFileRelativePath());
 	return Result::Success();
 }
 

@@ -897,13 +897,23 @@ not_null<Ui::Checkbox*> SettingsWidget::addOption(
 		| rpl::start_with_next([=](bool checked) {
 			changeData([&](Settings &data) {
 				if (checked) {
-					data.media.types &= ~MediaType::FullHistory;
+					data.media.types &= ~MediaSettings::Type::FullHistory;
 					data.types |= types;
 				} else {
 					data.types &= ~types;
 				}
 			});
 		}, checkbox->lifetime());
+
+	value()
+		| rpl::map([=](const Settings &data) {
+			return (data.types & types) == types;
+		})
+		| rpl::distinct_until_changed()
+		| rpl::start_with_next([=](bool checked) {
+			checkbox->setChecked(checked);
+		}, checkbox->lifetime());
+
 	return checkbox;
 }
 
@@ -940,12 +950,22 @@ void SettingsWidget::addChatOption(
 	onlyMy->entity()->checkedChanges()
 		| rpl::start_with_next([=](bool checked) {
 			changeData([&](Settings &data) {
+				data.media.types &= ~MediaSettings::Type::FullHistory;
 				if (checked) {
 					data.fullChats &= ~types;
 				} else {
 					data.fullChats |= types;
 				}
 			});
+		}, onlyMy->lifetime());
+
+	value()
+		| rpl::map([=](const Settings &data) {
+			return (data.fullChats & types) != types;
+		})
+		| rpl::distinct_until_changed()
+		| rpl::start_with_next([=](bool checked) {
+			onlyMy->entity()->setChecked(checked);
 		}, onlyMy->lifetime());
 
 	onlyMy->toggleOn(checkbox->checkedValue());
@@ -1198,20 +1218,35 @@ void SettingsWidget::setScanProgress(int itemIndex, int itemCount) {
 }
 
 void SettingsWidget::setScanning(bool scanning) {
-	_isScanning = scanning;
-	_changes.fire_copy(readData());
+	if (_isScanning != scanning) {
+		_isScanning = scanning;
+		if (scanning) {
+			_hasScanResults = false;
+			_scanResults.clear();
+		}
+		_changes.fire_copy(readData());
+	}
 }
 
 void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats, int messagesCount) {
 	if (messagesCount <= 0) {
+		setScanning(false);
 		clearScanResults();
 		using MediaType = MediaSettings::Type;
-		const auto onlyTextOrLinks = (readData().media.types == MediaType::Text)
-			|| (readData().media.types == MediaType::Link)
-			|| (readData().media.types == (MediaType::Text | MediaType::Link));
-		const auto text = onlyTextOrLinks
-			? "No messages found in this range."
-			: tr::lng_export_none_found(tr::now);
+		const auto types = readData().media.types;
+		const auto hasMedia = (types & MediaType::MediaMask) || (types & MediaType::Sticker) || (types & MediaType::GIF) || (types & MediaType::File);
+		const auto textOnly = (types == MediaType::Text);
+		const auto linksOnly = (types == MediaType::Link);
+		const auto textAndLinks = (types == (MediaType::Text | MediaType::Link));
+
+		QString text;
+		if (hasMedia) {
+			text = tr::lng_export_none_found(tr::now);
+		} else if (textOnly || linksOnly || textAndLinks) {
+			text = "No messages found in this range.";
+		} else {
+			text = "No items found matching selected filters.";
+		}
 		_scanResultsLabel->setText(text);
 		_container->resizeToWidth(_container->width());
 		return;
@@ -1224,6 +1259,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 
 	QString text;
 	int totalUniqueMessagesCount = 0;
+	int totalTotalMessagesCount = 0;
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
 	const auto fullHistory = (readData().media.types & MediaSettings::Type::FullHistory);
@@ -1293,30 +1329,24 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 
 			if (type != MediaType::Link) {
 				totalUniqueMessagesCount += item.uniqueCount;
+				totalTotalMessagesCount += item.totalCount;
 			}
 		}
 	}
-	if (messagesCount > 0) {
+	if (totalTotalMessagesCount > 0) {
 		if (categoriesCount > 1) {
 			const auto label = "Total messages: ";
 			const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
 				+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
-			const auto totalStr = Lang::FormatCountDecimal(messagesCount)
+			const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
 				+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
-			if (totalUniqueMessagesCount != messagesCount || totalUniqueMediaSize != totalMediaSize) {
+			if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
 				text += "\n" + QString(label) + uniqueStr + ", " + totalStr;
 			} else {
 				text += "\n" + QString(label) + totalStr;
 			}
 		}
-	} else {
-		const auto onlyTextOrLinks = (readData().media.types == MediaType::Text)
-			|| (readData().media.types == MediaType::Link)
-			|| (readData().media.types == (MediaType::Text | MediaType::Link));
-		text = onlyTextOrLinks
-			? "No messages found in this range."
-			: tr::lng_export_none_found(tr::now);
 	}
 	_scanResultsLabel->setText(text.trimmed());
 	_container->resizeToWidth(_container->width());

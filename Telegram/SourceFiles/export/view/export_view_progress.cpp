@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/animations.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/buttons.h"
+#include "ui/widgets/scroll_area.h"
 #include "ui/wrap/fade_wrap.h"
 #include "ui/wrap/vertical_layout.h"
 #include "lang/lang_keys.h"
@@ -241,13 +242,20 @@ ProgressWidget::ProgressWidget(
 	QWidget *parent,
 	rpl::producer<Content> content)
 : RpWidget(parent)
-, _body(this)
 , _fileShowSkipTimer([=] { _skipFile->show(anim::type::normal); }) {
-	widthValue(
-	) | rpl::start_with_next([=](int width) {
-		_body->resizeToWidth(width);
-		_body->moveToLeft(0, 0);
-	}, _body->lifetime());
+	_scroll = Ui::CreateChild<Ui::ScrollArea>(this, st::boxScroll);
+	const auto wrap = _scroll->setOwnedWidget(
+		object_ptr<Ui::OverrideMargins>(
+			_scroll,
+			object_ptr<Ui::VerticalLayout>(_scroll)));
+	_body = static_cast<Ui::VerticalLayout*>(wrap->entity());
+
+	_about = _body->add(
+		object_ptr<Ui::FlatLabel>(
+			this,
+			tr::lng_export_progress(tr::now),
+			st::exportAboutLabel),
+		st::exportAboutPadding);
 
 	auto skipFileWrap = _body->add(object_ptr<Ui::FixedHeightWidget>(
 		_body.data(),
@@ -262,12 +270,11 @@ ProgressWidget::ProgressWidget(
 	_skipFile->hide(anim::type::instant);
 	_skipFile->moveToLeft(st::exportProgressRowPadding.left(), 0);
 
-	_about = _body->add(
-		object_ptr<Ui::FlatLabel>(
-			this,
-			tr::lng_export_progress(tr::now),
-			st::exportAboutLabel),
-		st::exportAboutPadding);
+	widthValue(
+	) | rpl::start_with_next([=](int width) {
+		wrap->resizeToWidth(width);
+		_body->resizeToWidth(width);
+	}, wrap->lifetime());
 
 	std::move(
 		content
@@ -280,6 +287,14 @@ ProgressWidget::ProgressWidget(
 		tr::lng_export_stop(),
 		st::exportCancelButton);
 	setupBottomButton(_cancel.get());
+
+	sizeValue()
+		| rpl::start_with_next([=](QSize size) {
+			const auto buttonHeight = _cancel ? _cancel->height() : (_done ? _done->height() : 0);
+			const auto bottomGap = buttonHeight + st::exportCancelBottom + 10;
+			_scroll->resize(size.width(), size.height() - bottomGap);
+			_scroll->moveToLeft(0, 0);
+		}, lifetime());
 }
 
 rpl::producer<uint64> ProgressWidget::skipFileClicks() const {
@@ -315,6 +330,7 @@ void ProgressWidget::updateState(Content &&content) {
 	}
 
 	const auto wasCount = _rows.size();
+	const auto headerCount = 2; // _about and _skipFileWrap
 	auto index = 0;
 	for (auto &row : content.rows) {
 		if (index < _rows.size()) {
@@ -322,13 +338,13 @@ void ProgressWidget::updateState(Content &&content) {
 		} else {
 			if (index > 0) {
 				_body->insert(
-					index * 2 - 1,
+					headerCount + index * 2 - 1,
 					object_ptr<Ui::FixedHeightWidget>(
 						this,
 						st::exportProgressRowSkip));
 			}
 			_rows.push_back(_body->insert(
-				index * 2,
+				headerCount + index * 2,
 				object_ptr<Row>(this, std::move(row)),
 				st::exportProgressRowPadding));
 			_rows.back()->show();
@@ -361,16 +377,10 @@ void ProgressWidget::showDone() {
 	}
 	_skipFile->hide(anim::type::instant);
 	_fileShowSkipTimer.cancel();
+
 	_about->setText(tr::lng_export_about_done(tr::now));
 
 	_body->resizeToWidth(width());
-	const auto contentHeight = _body->height();
-	const auto buttonTop = height() - st::exportCancelBottom - st::exportDoneButton.height;
-	const auto gap = buttonTop - contentHeight;
-	if (gap > 40) {
-		const auto spacerHeight = gap / 2;
-		_body->insert(_body->count() - 1, object_ptr<Ui::FixedHeightWidget>(this, spacerHeight));
-	}
 
 	_done = base::make_unique_q<Ui::RoundButton>(
 		this,

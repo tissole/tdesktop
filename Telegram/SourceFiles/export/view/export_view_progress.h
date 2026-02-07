@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Ui {
 class VerticalLayout;
+class ScrollArea;
 class RoundButton;
 class FlatLabel;
 class LinkButton;
@@ -45,7 +46,8 @@ private:
 	Content _content;
 
 	class Row;
-	object_ptr<Ui::VerticalLayout> _body;
+	Ui::ScrollArea *_scroll = nullptr;
+	not_null<Ui::VerticalLayout*> _body;
 	std::vector<not_null<Row*>> _rows;
 
 	base::unique_qptr<Ui::FadeWrap<Ui::LinkButton>> _skipFile;

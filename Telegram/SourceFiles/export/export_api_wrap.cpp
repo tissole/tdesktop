@@ -554,6 +554,10 @@ void ApiWrap::startExport(
 	_stats = stats;
 	_isScanning = isScanning;
 	_scanStats = scanStats;
+	_scanVisited.clear();
+	_exportVisited.clear();
+	_visitedLinks.clear();
+	_chatProcess = nullptr;
 	_startProcess = std::make_unique<StartProcess>();
 	_startProcess->done = std::move(done);
 
@@ -2669,8 +2673,9 @@ void ApiWrap::processFileLoad(
 	if (_stats
 		&& origin.messageId != 0
 		&& !file.suggestedPath.endsWith(u"_thumb.jpg"_q)) {
-		const bool unique = locationKey.id && _fileCache->find(file.location) == std::nullopt;
+		const bool unique = locationKey.id && _exportVisited.find(locationKey) == _exportVisited.end();
 		if (unique) {
+			_exportVisited.insert(locationKey);
 			_stats->incrementUserMediaFiles();
 		}
 		if (type != Type(0)) {
