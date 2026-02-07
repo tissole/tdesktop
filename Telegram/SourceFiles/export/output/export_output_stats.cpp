@@ -15,12 +15,12 @@ Stats::Stats(const Stats &other)
 , _bytes(other._bytes.load())
 , _userMediaFiles(other._userMediaFiles.load())
 , _expectedFiles(other._expectedFiles.load()) {
-for (const auto &[type, stat] : other._stats) {
-auto item = std::make_unique<TypeStat>();
-item->uniqueCount = stat->uniqueCount.load();
-item->uniqueSize = stat->uniqueSize.load();
-item->totalCount = stat->totalCount.load();
- item->totalSize = stat->totalSize.load();
+	for (const auto &[type, stat] : other._stats) {
+		auto item = std::make_unique<TypeStat>();
+		item->uniqueCount = stat->uniqueCount.load();
+		item->uniqueSize = stat->uniqueSize.load();
+		item->totalCount = stat->totalCount.load();
+		item->totalSize = stat->totalSize.load();
 		_stats.emplace(type, std::move(item));
 	}
 }
@@ -86,7 +86,7 @@ int Stats::totalCount() const {
 std::map<MediaSettings::Type, StatItem> Stats::byType() const {
 	auto result = std::map<MediaSettings::Type, StatItem>();
 	for (const auto &[type, stat] : _stats) {
-		result.emplace(type, StatItem{ 
+		result.emplace(type, StatItem{
 			stat->uniqueCount.load(),
 			stat->uniqueSize.load(),
 			stat->totalCount.load(),

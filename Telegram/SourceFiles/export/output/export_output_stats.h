@@ -28,7 +28,7 @@ public:
 
 	void incrementFiles();
 	void incrementBytes(int count);
-	void incrementUserMediaFiles(); 
+	void incrementUserMediaFiles();
 
 	void increment(MediaSettings::Type type, int64 size, bool unique);
 	void setExpectedFilesCount(int count);
@@ -45,7 +45,7 @@ public:
 private:
 	std::atomic<int> _files = 0;
 	std::atomic<int64> _bytes = 0;
-	std::atomic<int> _userMediaFiles = 0; 
+	std::atomic<int> _userMediaFiles = 0;
 	std::atomic<int> _expectedFiles = 0;
 
 	struct TypeStat {

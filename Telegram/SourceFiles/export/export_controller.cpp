@@ -440,7 +440,7 @@ void ControllerObject::exportNext() {
 			_isScanning = false;
 			_stepIndex = -1;
 			_settings = Settings();
-			setState(ScanDoneState{ std::move(stats) });
+			setState(ScanDoneState{ std::move(stats), _messagesTotalCount });
 			return;
 		}
 		if (ioCatchError(_writer->finish())) {

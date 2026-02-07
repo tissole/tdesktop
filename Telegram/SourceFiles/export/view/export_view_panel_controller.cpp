@@ -382,7 +382,7 @@ void PanelController::stopWithConfirmation(Fn<void()> callback) {
 		.confirmStyle = &st::attentionBoxButton,
 	});
 	_confirmStopBox = box.data();
-	*weak = base::make_weak(_confirmStopBox);
+	*weak = box.data();
 	_panel->showBox(
 		std::move(box),
 		Ui::LayerOption::CloseOther,
@@ -439,7 +439,7 @@ void PanelController::updateState(State &&state) {
 		if (_panel) {
 			if (auto settings = dynamic_cast<SettingsWidget*>(_panel->inner())) {
 				settings->setScanning(false);
-				settings->setScanResults(scanDone->stats);
+				settings->setScanResults(scanDone->stats, scanDone->messagesCount);
 			}
 		}
 	} else if (const auto processing = std::get_if<ProcessingState>(&_state)) {

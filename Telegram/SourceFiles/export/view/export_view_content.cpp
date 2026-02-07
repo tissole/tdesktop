@@ -190,7 +190,7 @@ Content ContentFromState(const FinishedState &state) {
 			if (type == Type::Text || type == Type::Link) {
 				const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount);
 				const auto totalStr = Lang::FormatCountDecimal(item.totalCount);
-				if (hasDuplicates && type != Type::Link) {
+				if (hasDuplicates) {
 					text = label + ": " + uniqueStr + ", " + totalStr;
 				} else {
 					text = label + ": " + totalStr;

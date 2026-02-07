@@ -1186,17 +1186,16 @@ void SettingsWidget::setScanning(bool scanning) {
 	_changes.fire_copy(readData());
 }
 
-void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats) {
+void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats, int messagesCount) {
 	_scanResults = std::move(stats);
 	_hasScanResults = true;
 	_changes.fire_copy(readData());
 	if (!_scanResultsLabel) return;
 
 	QString text;
-	int totalUniqueCount = 0;
-	int64 totalUniqueSize = 0;
-	int totalTotalCount = 0;
-	int64 totalTotalSize = 0;
+	int totalUniqueMediaCount = 0;
+	int64 totalUniqueMediaSize = 0;
+	int64 totalMediaSize = 0;
 	const auto fullHistory = (readData().media.types & MediaSettings::Type::FullHistory);
 
 	using MediaType = MediaSettings::Type;
@@ -1240,12 +1239,11 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 				|| (item.uniqueSize != item.totalSize);
 
 			if (type == MediaType::Text || type == MediaType::Link) {
-				const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount);
-				const auto totalStr = Lang::FormatCountDecimal(item.totalCount);
-				if (hasDuplicates && type != MediaType::Link) {
-					text += label + ": " + uniqueStr + ", " + totalStr + "\n";
+				if (hasDuplicates) {
+					text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
+						+ ", " + Lang::FormatCountDecimal(item.totalCount) + "\n";
 				} else {
-					text += label + ": " + totalStr + "\n";
+					text += label + ": " + Lang::FormatCountDecimal(item.totalCount) + "\n";
 				}
 			} else {
 				const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount)
@@ -1258,27 +1256,22 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 				} else {
 					text += label + ": " + totalStr + "\n";
 				}
-			}
 
-			if (type != MediaType::Link) {
-				if (type != MediaType::Text) {
-					totalUniqueCount += item.uniqueCount;
-					totalUniqueSize += item.uniqueSize;
-					totalTotalSize += item.totalSize;
-				}
-				totalTotalCount += item.totalCount;
+				totalUniqueMediaCount += item.uniqueCount;
+				totalUniqueMediaSize += item.uniqueSize;
+				totalMediaSize += item.totalSize;
 			}
 		}
 	}
-	if (totalTotalCount > 0) {
+	if (messagesCount > 0) {
 		if (categoriesCount > 1 || fullHistory) {
 			const auto label = "Total messages: ";
-			const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueCount)
-				+ " (" + Ui::FormatSizeText(totalUniqueSize) + ")";
-			const auto totalStr = Lang::FormatCountDecimal(totalTotalCount)
-				+ " (" + Ui::FormatSizeText(totalTotalSize) + ")";
+			const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMediaCount)
+				+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
+			const auto totalStr = Lang::FormatCountDecimal(messagesCount)
+				+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
-			if (uniqueStr != totalStr) {
+			if (totalUniqueMediaCount != messagesCount || totalUniqueMediaSize != totalMediaSize) {
 				text += "\n" + QString(label) + uniqueStr + ", " + totalStr;
 			} else {
 				text += "\n" + QString(label) + totalStr;

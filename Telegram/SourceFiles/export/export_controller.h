@@ -106,6 +106,7 @@ struct ProcessingState {
 
 struct ScanDoneState {
 	std::map<MediaSettings::Type, Output::StatItem> stats;
+	int messagesCount = 0;
 };
 
 struct ApiErrorState {
