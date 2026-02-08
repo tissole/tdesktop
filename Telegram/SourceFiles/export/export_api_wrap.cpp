@@ -2157,51 +2157,55 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
 
 		// Handle Link stats (without skipping the message bubble)
-		int linksInMessage = 0;
-		int newUniqueLinksInMessage = 0;
-		bool hasAnyLink = false;
+		base::flat_set<QString> linksInThisMessage;
 		for (const auto &part : message.text) {
 			if (part.type == Data::TextPart::Type::Url
 				|| part.type == Data::TextPart::Type::TextUrl) {
-				hasAnyLink = true;
-				linksInMessage++;
 				const auto url = (part.type == Data::TextPart::Type::TextUrl)
 					? QString::fromUtf8(part.additional)
 					: QString::fromUtf8(part.text);
+				if (!url.isEmpty()) {
+					linksInThisMessage.insert(url);
+				}
+			}
+		}
+		const auto hasAnyLink = !linksInThisMessage.empty();
+		const bool linkSelectedForStats = (types & MediaSettings::Type::Link) || (types & MediaSettings::Type::FullHistory);
+		if (hasAnyLink && linkSelectedForStats) {
+			int newUniqueLinksInMessage = 0;
+			for (const auto &url : linksInThisMessage) {
 				if (_visitedLinks.find(url) == _visitedLinks.end()) {
 					_visitedLinks.insert(url);
 					newUniqueLinksInMessage++;
 				}
 			}
-		}
-		const bool linkSelectedForStats = (types & MediaSettings::Type::Link) || (types & MediaSettings::Type::FullHistory);
-		if (hasAnyLink && linkSelectedForStats) {
 			if (_isScanning) {
-				for (int j = 0; j < newUniqueLinksInMessage; ++j) {
-					_scanStats->increment(MediaSettings::Type::Link, 0, true);
-				}
-				for (int j = 0; j < (linksInMessage - newUniqueLinksInMessage); ++j) {
-					_scanStats->increment(MediaSettings::Type::Link, 0, false);
-				}
+				// totalCount increments by 1 (for the message)
+				// uniqueCount increments by newUniqueLinksInMessage (for the URLs)
+				auto &stat = _scanStats->typeStat(MediaSettings::Type::Link);
+				stat.uniqueCount += newUniqueLinksInMessage;
+				stat.totalCount += 1;
 			} else if (_stats) {
-				for (int j = 0; j < newUniqueLinksInMessage; ++j) {
-					_stats->increment(MediaSettings::Type::Link, 0, true);
-				}
-				for (int j = 0; j < (linksInMessage - newUniqueLinksInMessage); ++j) {
-					_stats->increment(MediaSettings::Type::Link, 0, false);
-				}
+				auto &stat = _stats->typeStat(MediaSettings::Type::Link);
+				stat.uniqueCount += newUniqueLinksInMessage;
+				stat.totalCount += 1;
 			}
 		}
 
-		const bool linksOnly = (types == MediaSettings::Type::Link);
-		int itemsCount = 0;
-		if (mediaSelected && !overSize) {
-			itemsCount = 1;
-		} else if (linksOnly && hasAnyLink) {
-			itemsCount = linksInMessage;
+		bool selected = false;
+		if (hasMedia) {
+			if (hasFile) {
+				selected = (mediaSelected && !overSize);
+			} else {
+				selected = mediaSelected;
+			}
+		} else {
+			selected = (types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory);
+		}
+		if (hasAnyLink && linkSelectedForStats) {
+			selected = true;
 		}
 
-		const bool selected = (itemsCount > 0) || (mediaSelected && !overSize) || (hasAnyLink && (types & MediaSettings::Type::Link));
 		_chatProcess->messageItemIndices[i] = ++_chatProcess->totalMessagesCounter;
 
 		// Bubble counting (Total and Unique messages, excluding Links from sum)
@@ -2212,7 +2216,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					countThis = true;
 				}
 			} else {
-				if (textFilterSelected || fullHistorySelected) {
+				if ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory)) {
 					countThis = true;
 				}
 			}
@@ -2252,13 +2256,13 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		if (_isScanning) {
 			// Increment stats for messages without files (Text, non-file Media)
-			// File-based media stats are incremented in processFileLoad during scan.
-			if (!hasFile && messageType != MediaSettings::Type::Link) {
+			// Only if the type itself is selected.
+			if (!hasFile && (types & messageType) && messageType != MediaSettings::Type::Link) {
 				_scanStats->increment(messageType, 0, true);
 			}
 		} else {
 			// During export, increment stats for non-file messages too.
-			if (!hasFile && messageType != MediaSettings::Type::Link) {
+			if (!hasFile && (types & messageType) && messageType != MediaSettings::Type::Link) {
 				if (_stats) {
 					_stats->increment(messageType, 0, true);
 					_stats->incrementUserMediaFiles();
@@ -2285,8 +2289,8 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			.messagesTextCount = _chatProcess->messagesTextProcessed,
 			.messagesMediaCount = _chatProcess->messagesMediaProcessed,
 			.messagesTotalCount = _chatProcess->messagesProcessed, // Finished count
-			.messagesTextTotal = _chatProcess->messagesUniqueCount, // Part 1
-			.messagesInRangeCount = _chatProcess->messagesInRangeCount, // Part 2
+			.messagesTextTotal = _chatProcess->messagesTextTotal,
+			.messagesInRangeCount = _chatProcess->messagesInRangeCount,
 			.messagesUniqueCount = _chatProcess->messagesUniqueCount
 		});
 
@@ -2739,16 +2743,20 @@ void ApiWrap::processFileLoad(
 		? story->file().size
 		: file.size;
 
+	const auto types = _settings->media.types;
 	const auto locationKey = file.location ? ComputeLocationKey(file.location) : ApiWrap::LocationKey{ 0, 0 };
 	const auto overSize = !story && _settings->media.sizeLimit > 0 && fullSize >= _settings->media.sizeLimit;
 
 	if (_isScanning) {
 		if (type != Type(0) && !isThumb && !overSize && origin.messageId != 0) {
-			const bool unique = locationKey.id && _scanVisited.find(locationKey) == _scanVisited.end();
-			if (unique) {
-				_scanVisited.insert(locationKey);
+			const bool typeSelected = (types & type) || (types & MediaSettings::Type::FullHistory);
+			if (typeSelected) {
+				const bool unique = locationKey.id && _scanVisited.find(locationKey) == _scanVisited.end();
+				if (unique) {
+					_scanVisited.insert(locationKey);
+				}
+				_scanStats->increment(type, fullSize, unique);
 			}
-			_scanStats->increment(type, fullSize, unique);
 		}
 		done(QString());
 		return;
@@ -3434,7 +3442,10 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 		auto &done = _chatProcess->messageFilesDone[index];
 		const auto need = _chatProcess->messageFilesRequired[index];
 		if (++done == std::max(need, 1)) {
-			_chatProcess->messagesProcessed += _chatProcess->messageItemsCount[index];
+			// Every message bubble processed in the range increments this
+			// to keep the X / Y progress bar moving correctly.
+			_chatProcess->messagesProcessed++;
+			
 			// Trigger progress update for finished message
 			_chatProcess->fileProgress({
 				.randomId = 0,
