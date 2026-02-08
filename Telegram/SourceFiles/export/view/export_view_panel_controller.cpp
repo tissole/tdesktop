@@ -221,9 +221,8 @@ void PanelController::showSettings() {
 		if (scanning) {
 			_process->cancelExportFast();
 		} else if (hasResults) {
-			settingsRaw->setScanning(false);
-			settingsRaw->clearScanResults();
-			_process->cancelExportFast(); // Clear results in controller too
+			settingsRaw->resetToDefault();
+			_process->clearResults();
 		} else {
 			LOG(("Export Info: Panel Hide By Cancel."));
 			_panel->hideGetDuration();

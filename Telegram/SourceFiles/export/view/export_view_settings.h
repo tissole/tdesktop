@@ -48,6 +48,7 @@ public:
 	void clearScanResults();
 	void setScanProgress(int itemIndex, int itemCount);
 	void setScanning(bool scanning);
+	void resetToDefault();
 
 	[[nodiscard]] bool isScanning() const {
 		return _isScanning;

@@ -1107,6 +1107,7 @@ void SettingsWidget::addSizeSlider(
 				lt_size,
 				size);
 			label->setText(text);
+			slider->setValue(sizeLimit);
 		}, slider->lifetime());
 }
 
@@ -1241,7 +1242,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	}
 
 	if (totalTotalMessagesCount <= 0) {
-		clearScanResults();
+		resetToDefault();
 		using MediaType = MediaSettings::Type;
 		const auto types = readData().media.types;
 		const auto hasMedia = (types & MediaType::MediaMask) || (types & MediaType::Sticker) || (types & MediaType::GIF) || (types & MediaType::File);
@@ -1268,8 +1269,8 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	if (!_scanResultsLabel) return;
 
 	QString text;
-	totalUniqueMessagesCount = 0;
-	totalTotalMessagesCount = 0;
+	int totalUniqueMessagesCount = 0;
+	int totalTotalMessagesCount = 0;
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
 	const auto fullHistory = (readData().media.types & MediaSettings::Type::FullHistory);
@@ -1369,6 +1370,30 @@ void SettingsWidget::clearScanResults() {
 	_hasScanResults = false;
 	if (_scanResultsLabel) _scanResultsLabel->setText(QString());
 	_changes.fire_copy(readData());
+}
+
+void SettingsWidget::resetToDefault() {
+	changeData([&](Settings &data) {
+		const auto oldSinglePeer = data.singlePeer;
+		const auto oldName = data.singlePeerName;
+		const auto oldId = data.singlePeerId;
+		const auto oldPath = data.path;
+		const auto oldFormat = data.format;
+		const auto oldForce = data.forceSubPath;
+		data = Settings();
+		data.singlePeer = oldSinglePeer;
+		data.singlePeerName = oldName;
+		data.singlePeerId = oldId;
+		data.path = oldPath;
+		data.format = oldFormat;
+		data.forceSubPath = oldForce;
+		data.singlePeerFrom = 0;
+		data.singlePeerTill = 0;
+		data.singlePeerFromId = 0;
+		data.singlePeerTillId = 0;
+		data.useIdRange = false;
+	});
+	clearScanResults();
 }
 
 } // namespace View

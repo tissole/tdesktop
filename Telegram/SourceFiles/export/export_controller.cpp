@@ -120,7 +120,7 @@ void WriteScanStatsFile(
 			out << uniqueStr << ", ";
 		}
 		out << totalStr << "\n";
-	} else if (messagesCount <= 0) {
+	} else if (totalTotalMessagesCount <= 0) {
 		out << "\nNo messages found in this range.\n";
 	}
 }
@@ -772,7 +772,7 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 			count += splitCount;
 		}
 		_messagesCount = count;
-	} else {
+	} else if (_messagesInRangeCount > 0) {
 		_messagesCount = _messagesInRangeCount;
 	}
 
@@ -987,13 +987,8 @@ void ControllerObject::fillMessagesState(
 	result.entityIndex = index + 1;
 	result.entityCount = info.chats.size() + info.left.size();
 	
-	if (_isScanning) {
-		result.itemIndex = progress.itemIndex;
-		result.itemCount = progress.messagesInRangeCount ? progress.messagesInRangeCount : _messagesCount;
-	} else {
-		result.itemIndex = progress.messagesTotalCount;
-		result.itemCount = progress.messagesInRangeCount ? progress.messagesInRangeCount : _messagesCount;
-	}
+	result.itemIndex = progress.messagesTotalCount;
+	result.itemCount = progress.messagesTextTotal;
 
 	result.activeDownloads = _activeDownloads;
 }

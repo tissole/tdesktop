@@ -339,6 +339,8 @@ struct ApiWrap::ChatProcess {
 	int messagesTextTotal = 0;
 
 	int messagesInRangeCount = 0;
+	bool messagesInRangeCountFixed = false;
+	int messagesUniqueCount = 0;
 	int totalMessagesCounter = 0;
 	std::vector<int> messageItemIndices;
 	std::vector<int> messageItemsCount;
@@ -1364,6 +1366,7 @@ void ApiWrap::requestMessages(
 	_chatProcess->handleSlice = std::move(slice);
 	_chatProcess->done = std::move(done);
 	_chatProcess->messagesInRangeCount = messagesInRangeCount;
+	_chatProcess->messagesInRangeCountFixed = (messagesInRangeCount > 0);
 
 	if (_settings->useIdRange) {
 		if (fromId > 0) {
@@ -2147,6 +2150,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		}) : MediaType::Text;
 
 		const bool hasFile = message.file().location || message.thumb().file.location;
+		const auto fullSize = message.file().size;
+		const auto overSize = (hasFile && _settings->media.sizeLimit > 0 && fullSize >= _settings->media.sizeLimit);
+
 		const auto types = _settings->media.types;
 		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
 
@@ -2189,31 +2195,70 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		const bool linksOnly = (types == MediaSettings::Type::Link);
 		int itemsCount = 0;
-		if (mediaSelected) {
+		if (mediaSelected && !overSize) {
 			itemsCount = 1;
 		} else if (linksOnly && hasAnyLink) {
 			itemsCount = linksInMessage;
 		}
 
-		const bool selected = (itemsCount > 0) || mediaSelected || (hasAnyLink && (types & MediaSettings::Type::Link));
+		const bool selected = (itemsCount > 0) || (mediaSelected && !overSize) || (hasAnyLink && (types & MediaSettings::Type::Link));
 		_chatProcess->messageItemIndices[i] = ++_chatProcess->totalMessagesCounter;
-		_chatProcess->messageItemsCount[i] = itemsCount;
+
+		// Bubble counting (Total and Unique messages, excluding Links from sum)
+		bool countThis = false;
+		if (messageType != MediaSettings::Type::Link) {
+			if (hasMedia) {
+				if (mediaSelected && !overSize) {
+					countThis = true;
+				}
+			} else {
+				if (textFilterSelected || fullHistorySelected) {
+					countThis = true;
+				}
+			}
+		}
+		_chatProcess->messageItemsCount[i] = countThis ? 1 : 0;
 
 		if (!selected) {
 			onMessagePartDone(i, false);
 			continue;
 		}
 
-		_chatProcess->messagesInRangeCount += itemsCount;
+		if (countThis) {
+			if (!_chatProcess->messagesInRangeCountFixed) {
+				_chatProcess->messagesInRangeCount++; // Total bubbles matching (Part 2)
+			}
+
+			bool uniqueContent = false;
+			if (hasMedia) {
+				if (hasFile) {
+					const auto locationKey = message.file().location ? ComputeLocationKey(message.file().location) : ApiWrap::LocationKey{ 0, 0 };
+					auto &visited = _isScanning ? _scanVisited : _exportVisited;
+					if (locationKey.id && visited.find(locationKey) == visited.end()) {
+						uniqueContent = true;
+					} else if (!locationKey.id) {
+						uniqueContent = true;
+					}
+				} else {
+					uniqueContent = true;
+				}
+			} else {
+				uniqueContent = true; // Text is unique bubble content
+			}
+			if (uniqueContent) {
+				_chatProcess->messagesUniqueCount++; // Unique content bubbles (Part 1)
+			}
+		}
 
 		if (_isScanning) {
 			// Increment stats for messages without files (Text, non-file Media)
-			if (selected && !hasFile && messageType != MediaSettings::Type::Link) {
+			// File-based media stats are incremented in processFileLoad during scan.
+			if (!hasFile && messageType != MediaSettings::Type::Link) {
 				_scanStats->increment(messageType, 0, true);
 			}
 		} else {
 			// During export, increment stats for non-file messages too.
-			if (selected && !hasFile && messageType != MediaSettings::Type::Link) {
+			if (!hasFile && messageType != MediaSettings::Type::Link) {
 				if (_stats) {
 					_stats->increment(messageType, 0, true);
 					_stats->incrementUserMediaFiles();
@@ -2239,9 +2284,10 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			.isAuxiliary = true,
 			.messagesTextCount = _chatProcess->messagesTextProcessed,
 			.messagesMediaCount = _chatProcess->messagesMediaProcessed,
-			.messagesTotalCount = _chatProcess->messagesProcessed, // Use finished count
-			.messagesTextTotal = _chatProcess->messagesInRangeCount,
-			.messagesInRangeCount = _chatProcess->messagesInRangeCount
+			.messagesTotalCount = _chatProcess->messagesProcessed, // Finished count
+			.messagesTextTotal = _chatProcess->messagesUniqueCount, // Part 1
+			.messagesInRangeCount = _chatProcess->messagesInRangeCount, // Part 2
+			.messagesUniqueCount = _chatProcess->messagesUniqueCount
 		});
 
 		int required = 0;
@@ -2694,9 +2740,10 @@ void ApiWrap::processFileLoad(
 		: file.size;
 
 	const auto locationKey = file.location ? ComputeLocationKey(file.location) : ApiWrap::LocationKey{ 0, 0 };
+	const auto overSize = !story && _settings->media.sizeLimit > 0 && fullSize >= _settings->media.sizeLimit;
 
 	if (_isScanning) {
-		if (type != Type(0) && !isThumb) {
+		if (type != Type(0) && !isThumb && !overSize && origin.messageId != 0) {
 			const bool unique = locationKey.id && _scanVisited.find(locationKey) == _scanVisited.end();
 			if (unique) {
 				_scanVisited.insert(locationKey);
@@ -2709,7 +2756,8 @@ void ApiWrap::processFileLoad(
 
 	if (_stats
 		&& origin.messageId != 0
-		&& !isThumb) {
+		&& !isThumb
+		&& !overSize) {
 		const bool sessionUnique = locationKey.id && _exportVisited.find(locationKey) == _exportVisited.end();
 		if (sessionUnique) {
 			_exportVisited.insert(locationKey);
@@ -3386,9 +3434,7 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 		auto &done = _chatProcess->messageFilesDone[index];
 		const auto need = _chatProcess->messageFilesRequired[index];
 		if (++done == std::max(need, 1)) {
-			if (isSelected) {
-				_chatProcess->messagesProcessed += _chatProcess->messageItemsCount[index];
-			}
+			_chatProcess->messagesProcessed += _chatProcess->messageItemsCount[index];
 			// Trigger progress update for finished message
 			_chatProcess->fileProgress({
 				.randomId = 0,
@@ -3399,9 +3445,10 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 				.isAuxiliary = true,
 				.messagesTextCount = _chatProcess->messagesTextProcessed,
 				.messagesMediaCount = _chatProcess->messagesMediaProcessed,
-				.messagesTotalCount = _chatProcess->messagesProcessed, // Current finished count
+				.messagesTotalCount = _chatProcess->messagesProcessed, // Current finished count 
 				.messagesTextTotal = _chatProcess->messagesInRangeCount,
-				.messagesInRangeCount = _chatProcess->messagesInRangeCount
+				.messagesInRangeCount = _chatProcess->messagesInRangeCount,
+				.messagesUniqueCount = _chatProcess->messagesUniqueCount
 			});
 		}
 	}
