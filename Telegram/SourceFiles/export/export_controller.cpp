@@ -774,10 +774,18 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 				count += splitCount;
 			}
 			_messagesCount = count;
+		} else {
+			_messagesCount = _messagesInRangeCount;
 		}
 		if (!_stats.expectedFilesCount()) {
 			_stats.setExpectedFilesCount(_messagesCount);
 		}
+		// Reset counters for new dialog
+		_messagesTextCount = 0;
+		_messagesMediaCount = 0;
+		_messagesTotalCount = 0;
+		_messagesInRangeCount = 0;
+
 		setState(stateDialogs(DownloadProgress{
 			.messagesTotalCount = 0,
 			.messagesInRangeCount = _messagesCount
