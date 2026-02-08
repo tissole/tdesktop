@@ -184,24 +184,25 @@ GroupedMedia::~GroupedMedia() {
 }
 
 HistoryItem *GroupedMedia::itemForText() const {
-	if (_mode == Mode::Grid) {
-		return nullptr;
-	}
 	if (_mode == Mode::Column) {
 		return Media::itemForText();
 	} else if (!_captionItem) {
 		_captionItem = [&]() -> HistoryItem* {
 			auto result = (HistoryItem*)nullptr;
+			auto count = 0;
 			for (const auto &part : _parts) {
-				if (!part.item->emptyText()) {
-					if (result == part.item) {
-						return result;
-					} else if (result) {
-						return nullptr;
-					} else {
-						result = part.item;
+				if (!part.item->originalText().empty()) {
+					if (result && result != part.item) {
+						// Multiple items have text
+						count = 2; 
+						break;
 					}
+					result = part.item;
+					count = 1;
 				}
+			}
+			if (_mode == Mode::Grid) {
+				return (count == 1) ? result : nullptr;
 			}
 			return result;
 		}();
@@ -293,12 +294,23 @@ QSize GroupedMedia::countOptimalSize() {
 		const auto textHeight = st::messageTextStyle.font->height;
 		const auto uniformCaptionHeight = 4 + textHeight + 5; // 4px top + text height + 5px bottom
 
+		int captionsCount = 0;
+		for (const auto &part : _parts) {
+			if (!part.item->originalText().empty()) {
+				captionsCount++;
+			}
+		}
+		const bool usePerItemCaptions = (captionsCount > 1);
+
+		int totalShift = 0;
 		for (auto const& [rowY, indices] : rows) {
 			bool rowHasCaption = false;
-			for (const auto i : indices) {
-				if (!_parts[i].item->originalText().empty()) {
-					rowHasCaption = true;
-					break;
+			if (usePerItemCaptions) {
+				for (const auto i : indices) {
+					if (!_parts[i].item->originalText().empty()) {
+						rowHasCaption = true;
+						break;
+					}
 				}
 			}
 
@@ -322,21 +334,18 @@ QSize GroupedMedia::countOptimalSize() {
 						part._captionHeight = 0;
 					}
 				}
-				minHeight += isLastRow ? uniformCaptionHeight : (uniformCaptionHeight - spacing);
-			}
-
-			if (rowY == rows.rbegin()->first) {
-				lastRowHasCaption = rowHasCaption;
+				totalShift += isLastRow ? uniformCaptionHeight : (uniformCaptionHeight - spacing);
+			} else {
+				for (const auto i : indices) {
+					_parts[i]._captionHeight = 0;
+				}
 			}
 		}
-
-		if (!lastRowHasCaption) {
-			minHeight -= st::historyGroupSkip;
-		}
+		minHeight += totalShift;
 	}
 
 	const auto groupPadding = groupedPadding();
-	minHeight += groupPadding.top() + (_mode == Mode::Grid ? 0 : groupPadding.bottom());
+	minHeight += groupPadding.top() + (_mode == Mode::Grid ? st::historyGroupSkip : groupPadding.bottom());
 
 	return { maxWidth, int(base::SafeRound(minHeight)) };
 }
@@ -399,7 +408,16 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 		const auto textHeight = st::messageTextStyle.font->height;
 		const auto uniformCaptionHeight = 4 + textHeight + 5; // 4px top + text height + 5px bottom
 
+		int captionsCount = 0;
+		for (const auto &part : _parts) {
+			if (!part.item->originalText().empty()) {
+				captionsCount++;
+			}
+		}
+		const bool usePerItemCaptions = (captionsCount > 1);
+
 		int totalShift = 0;
+		newHeight = 0;
 
 		for (auto const& [rowY, indices] : rows) {
 			bool rowHasCaption = false;
@@ -412,10 +430,12 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			
 			accumulate_max(newHeight, rowBottomMax);
 
-			for (const auto i : indices) {
-				if (!_parts[i].item->originalText().empty()) {
-					rowHasCaption = true;
-					break;
+			if (usePerItemCaptions) {
+				for (const auto i : indices) {
+					if (!_parts[i].item->originalText().empty()) {
+						rowHasCaption = true;
+						break;
+					}
 				}
 			}
 
@@ -452,20 +472,11 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 					_parts[i].captionRect = QRect();
 				}
 			}
-
-			if (rowY == rows.rbegin()->first) {
-				lastRowHasCaption = rowHasCaption;
-			}
-		}
-
-		if (!lastRowHasCaption) {
-			newHeight -= totalShift; // Remove any accumulated shift from previous rows if last row has no caption
-			newHeight -= st::historyGroupSkip;
 		}
 	}
 
 	const auto groupPadding = groupedPadding();
-	newHeight += groupPadding.top() + (_mode == Mode::Grid ? 0 : groupPadding.bottom());
+	newHeight += groupPadding.top() + (_mode == Mode::Grid ? st::historyGroupSkip : groupPadding.bottom());
 
 	return { newWidth, int(base::SafeRound(newHeight)) };
 }
