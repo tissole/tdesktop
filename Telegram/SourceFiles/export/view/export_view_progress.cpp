@@ -270,7 +270,9 @@ ProgressWidget::ProgressWidget(
 
 	widthValue(
 	) | rpl::start_with_next([=](int width) {
-		_scroll->widget()->resizeToWidth(width);
+		if (const auto widget = static_cast<Ui::RpWidget*>(_scroll->widget())) {
+			widget->resizeToWidth(width);
+		}
 		_body->resizeToWidth(width);
 	}, lifetime());
 
