@@ -122,7 +122,8 @@ public:
 		FnMut<bool(const Data::DialogInfo &)> start,
 		Fn<bool(DownloadProgress)> progress,
 		Fn<bool(Data::MessagesSlice&&)> slice,
-		FnMut<void()> done);
+		FnMut<void()> done,
+		int messagesInRangeCount = 0);
 
 	void finishExport(FnMut<void()> done);
 	void skipFile(uint64 randomId);
@@ -235,7 +236,7 @@ private:
 	void finishMessagesSlice();
 	void finishMessages();
 
-	void onMessagePartDone(int index);
+	void onMessagePartDone(int index, bool isSelected = true);
 
 	[[nodiscard]] Data::Message *currentFileMessage() const;
 	[[nodiscard]] Data::FileOrigin currentFileMessageOrigin() const;
@@ -248,7 +249,8 @@ private:
 		Fn<bool(FileProgress)> progress,
 		FnMut<void(QString)> done,
 		Data::Message *message = nullptr,
-		Data::Story *story = nullptr);
+		Data::Story *story = nullptr,
+		bool isThumb = false);
 	std::unique_ptr<FileProcess> prepareFileProcess(
 		Data::File &file,
 		const Data::FileOrigin &origin) const;

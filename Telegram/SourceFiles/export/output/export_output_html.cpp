@@ -3512,7 +3512,10 @@ Result HtmlWriter::writeUniqueLinks(const base::flat_set<QString> &links) {
 	if (links.empty()) {
 		return Result::Success();
 	}
-	const auto path = pathWithRelativePath("unique_links.txt");
+	auto sanitizedName = _settings.singlePeerName;
+	sanitizedName.replace(QRegularExpression("[^a-zA-Z0-9_-]"), "_");
+	const auto fileName = "unique_links_" + QString::number(_settings.singlePeerId) + "_" + sanitizedName + ".txt";
+	const auto path = pathWithRelativePath(fileName);
 	QFile file(path);
 	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
 		return Result(Result::Type::Error, path);
@@ -3631,6 +3634,7 @@ QByteArray HtmlWriter::statsBlock() const {
 	int totalTotalMessagesCount = 0;
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
+	const bool linksOnly = (breakdown.size() == 1 && breakdown.begin()->first == Type::Link);
 
 	for (const auto type : order) {
 		const auto it = breakdown.find(type);
@@ -3639,16 +3643,16 @@ QByteArray HtmlWriter::statsBlock() const {
 
 		QByteArray label;
 		switch (type) {
-		case Type::Photo: label = "Photos"; break;
-		case Type::Video: label = "Videos"; break;
-		case Type::VideoMessage: label = "Video messages"; break;
-		case Type::Audio: label = "Audio files"; break;
-		case Type::VoiceMessage: label = "Voice messages"; break;
-		case Type::File: label = "Files"; break;
-		case Type::Sticker: label = "Stickers"; break;
-		case Type::GIF: label = "GIFs"; break;
-		case Type::Text: label = "Text messages"; break;
-		case Type::Link: label = "Links"; break;
+		case Type::Photo: label = tr::lng_export_option_photos(tr::now).toUtf8(); break;
+		case Type::Video: label = tr::lng_export_option_video_files(tr::now).toUtf8(); break;
+		case Type::VideoMessage: label = tr::lng_export_option_video_messages(tr::now).toUtf8(); break;
+		case Type::Audio: label = tr::lng_export_option_audios(tr::now).toUtf8(); break;
+		case Type::VoiceMessage: label = tr::lng_export_option_voice_messages(tr::now).toUtf8(); break;
+		case Type::File: label = tr::lng_export_option_files(tr::now).toUtf8(); break;
+		case Type::Sticker: label = tr::lng_export_option_stickers(tr::now).toUtf8(); break;
+		case Type::GIF: label = tr::lng_export_option_gifs(tr::now).toUtf8(); break;
+		case Type::Text: label = tr::lng_export_option_text_messages(tr::now).toUtf8(); break;
+		case Type::Link: label = tr::lng_export_option_links(tr::now).toUtf8(); break;
 		}
 		if (label.isEmpty()) continue;
 
@@ -3674,7 +3678,7 @@ QByteArray HtmlWriter::statsBlock() const {
 		}
 		result.append("</div>\n");
 
-		if (type != Type::Link) {
+		if (type != Type::Link || linksOnly) {
 			totalUniqueMessagesCount += item.uniqueCount;
 			totalTotalMessagesCount += item.totalCount;
 		}

@@ -1691,7 +1691,10 @@ Result JsonWriter::writeUniqueLinks(const base::flat_set<QString> &links) {
 	if (links.empty()) {
 		return Result::Success();
 	}
-	const auto path = pathWithRelativePath("unique_links.txt");
+	auto sanitizedName = _settings.singlePeerName;
+	sanitizedName.replace(QRegularExpression("[^a-zA-Z0-9_-]"), "_");
+	const auto fileName = "unique_links_" + QString::number(_settings.singlePeerId) + "_" + sanitizedName + ".txt";
+	const auto path = pathWithRelativePath(fileName);
 	QFile file(path);
 	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
 		return Result(Result::Type::Error, path);

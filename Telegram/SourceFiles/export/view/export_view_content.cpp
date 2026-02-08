@@ -212,8 +212,10 @@ Content ContentFromState(const FinishedState &state) {
 
 	int categoriesCount = 0;
 	int totalUniqueMessagesCount = 0;
+	int totalTotalMessagesCount = 0;
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
+	const bool linksOnly = (state.breakdown.size() == 1 && state.breakdown.begin()->first == Type::Link);
 
 	for (const auto type : order) {
 		const auto it = state.breakdown.find(type);
@@ -264,23 +266,24 @@ Content ContentFromState(const FinishedState &state) {
 				totalMediaSize += item.totalSize;
 			}
 
-			if (type != Type::Link) {
+			if (type != Type::Link || linksOnly) {
 				totalUniqueMessagesCount += item.uniqueCount;
+				totalTotalMessagesCount += item.totalCount;
 			}
 
 			result.rows.push_back({ Content::kDoneId, text, QString(), 1. });
 		}
 	}
 
-	if (categoriesCount > 1 && state.totalTotalCount > 0) {
+	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
 		const auto label = "Total messages: ";
 		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
-		const auto totalStr = Lang::FormatCountDecimal(state.totalTotalCount)
+		const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
 		QString totalText;
-		if (totalUniqueMessagesCount != state.totalTotalCount || totalUniqueMediaSize != totalMediaSize) {
+		if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
 			totalText = label + uniqueStr + ", " + totalStr;
 		} else {
 			totalText = label + totalStr;

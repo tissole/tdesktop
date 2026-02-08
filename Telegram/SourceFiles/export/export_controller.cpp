@@ -36,8 +36,13 @@ const auto kNullStateCallback = [](ProcessingState&) {};
 void WriteScanStatsFile(
 		const QString &path,
 		const std::map<MediaSettings::Type, Output::StatItem> &stats,
-		int messagesCount) {
-	QFile file(path + "scan_results.txt");
+		int messagesCount,
+		int64 chatId,
+		const QString &chatName) {
+	auto sanitizedName = chatName;
+	sanitizedName.replace(QRegularExpression("[^a-zA-Z0-9_-]"), "_");
+	const auto fileName = "scan_results_" + QString::number(chatId) + "_" + sanitizedName + ".txt";
+	QFile file(path + fileName);
 	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
 		return;
 	}
@@ -67,16 +72,16 @@ void WriteScanStatsFile(
 		const auto &item = it->second;
 		QString label;
 		switch (type) {
-		case Type::Photo: label = "Photos"; break;
-		case Type::Video: label = "Videos"; break;
-		case Type::VideoMessage: label = "Video messages"; break;
-		case Type::Audio: label = "Audio files"; break;
-		case Type::VoiceMessage: label = "Voice messages"; break;
-		case Type::File: label = "Files"; break;
-		case Type::Sticker: label = "Stickers"; break;
-		case Type::GIF: label = "GIFs"; break;
-		case Type::Text: label = "Text messages"; break;
-		case Type::Link: label = "Links"; break;
+		case Type::Photo: label = tr::lng_export_option_photos(tr::now); break;
+		case Type::Video: label = tr::lng_export_option_video_files(tr::now); break;
+		case Type::VideoMessage: label = tr::lng_export_option_video_messages(tr::now); break;
+		case Type::Audio: label = tr::lng_export_option_audios(tr::now); break;
+		case Type::VoiceMessage: label = tr::lng_export_option_voice_messages(tr::now); break;
+		case Type::File: label = tr::lng_export_option_files(tr::now); break;
+		case Type::Sticker: label = tr::lng_export_option_stickers(tr::now); break;
+		case Type::GIF: label = tr::lng_export_option_gifs(tr::now); break;
+		case Type::Text: label = tr::lng_export_option_text_messages(tr::now); break;
+		case Type::Link: label = tr::lng_export_option_links(tr::now); break;
 		}
 		if (label.isEmpty()) continue;
 
@@ -411,18 +416,20 @@ void ControllerObject::startExport(
 	_stepIndex = -1;
 
 	_stats.clear();
-	int totalUniqueMessagesCount = 0;
+	int totalTotalMessagesCount = 0;
 	using MediaType = MediaSettings::Type;
-	for (const auto &[type, item] : _scanStats.byType()) {
+	for (const auto &pair : _scanStats.byType()) {
+		const auto type = pair.first;
+		const auto &item = pair.second;
 		if ((_settings.media.types & type) || (_settings.media.types & MediaType::FullHistory)) {
 			if (type != MediaType::Link) {
-				totalUniqueMessagesCount += item.uniqueCount;
+				totalTotalMessagesCount += item.totalCount;
 			}
 		}
 	}
-	if (totalUniqueMessagesCount > 0) {
-		_stats.setExpectedFilesCount(totalUniqueMessagesCount);
-		_messagesCount = totalUniqueMessagesCount;
+	if (totalTotalMessagesCount > 0) {
+		_stats.setExpectedFilesCount(totalTotalMessagesCount);
+		_messagesCount = totalTotalMessagesCount;
 		_scanStatsFound = true;
 	} else {
 		// Fallback: If no scan was performed, use 0 and let it be set in startExportMessages
@@ -441,7 +448,6 @@ void ControllerObject::startExport(
 	_messagesMediaCount = 0;
 	_messagesTotalCount = 0;
 	_messagesTextTotal = 0;
-	_messagesInRangeCount = 0;
 	_userpicsWritten = 0;
 	_userpicsCount = 0;
 	_storiesWritten = 0;
@@ -546,11 +552,10 @@ void ControllerObject::exportNext() {
 	if (++_stepIndex >= _steps.size()) {
 		if (_isScanning) {
 			auto stats = _scanStats.byType();
-			WriteScanStatsFile(_settings.path, stats, _messagesInRangeCount);
+			WriteScanStatsFile(_settings.path, stats, _messagesInRangeCount, _settings.singlePeerId, _settings.singlePeerName);
 			const auto count = _messagesInRangeCount;
 			_isScanning = false;
 			_stepIndex = -1;
-			_settings = Settings();
 			if (count <= 0) {
 				clearResults();
 			}
@@ -649,7 +654,6 @@ void ControllerObject::exportUserpics() {
 			return false;
 		}
 		_userpicsWritten += slice.list.size();
-		setState(stateUserpics(DownloadProgress()));
 		return true;
 	}, [=] {
 		if (ioCatchError(_writer->writeUserpicsEnd())) {
@@ -688,7 +692,6 @@ void ControllerObject::exportStories() {
 			return false;
 		}
 		_storiesWritten += slice.list.size();
-		setState(stateStories(DownloadProgress()));
 		return true;
 	}, [=] {
 		if (ioCatchError(_writer->writeStoriesEnd())) {
@@ -763,20 +766,21 @@ void ControllerObject::exportNextDialog() {
 }
 
 void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 fromId, uint64 tillId) {
+	if (!_messagesCount || !_scanStatsFound) {
+		int count = 0;
+		for (int splitCount : info->messagesCountPerSplit) {
+			count += splitCount;
+		}
+		_messagesCount = count;
+	} else {
+		_messagesCount = _messagesInRangeCount;
+	}
+
 	_api.requestMessages(*info, fromId, tillId, [=](const Data::DialogInfo &info) {
 		if (ioCatchError(_writer->writeDialogStart(info))) {
 			return false;
 		}
 		_messagesWritten = 0;
-		if (!_messagesCount || !_scanStatsFound) {
-			int count = 0;
-			for (int splitCount : info.messagesCountPerSplit) {
-				count += splitCount;
-			}
-			_messagesCount = count;
-		} else {
-			_messagesCount = _messagesInRangeCount;
-		}
 		if (!_stats.expectedFilesCount()) {
 			_stats.setExpectedFilesCount(_messagesCount);
 		}
@@ -784,7 +788,12 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 		_messagesTextCount = 0;
 		_messagesMediaCount = 0;
 		_messagesTotalCount = 0;
-		_messagesInRangeCount = 0;
+		// _messagesInRangeCount must not be reset here if it came from scan results!
+		// But during export we increment it bubble by bubble.
+		// If _scanStatsFound is false, we should reset it to 0.
+		if (!_scanStatsFound) {
+			_messagesInRangeCount = 0;
+		}
 
 		setState(stateDialogs(DownloadProgress{
 			.messagesTotalCount = 0,
@@ -821,17 +830,13 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 			return false;
 		}
 		_messagesWritten += result.list.size();
-		// Do not overwrite counters with empty DownloadProgress
-		if (!_isScanning) {
-			setState(stateDialogs(DownloadProgress()));
-		}
 		return true;
 	}, [=] {
 		if (ioCatchError(_writer->writeDialogEnd())) {
 			return;
 		}
 		exportNextDialog();
-	});
+	}, _messagesCount);
 }
 
 ProcessingState ControllerObject::stateInitializing() const {
@@ -899,8 +904,10 @@ void ControllerObject::setFinishedState() {
 	auto totalTotalSize = int64(0);
 	const auto breakdown = _stats.byType();
 	using Type = MediaSettings::Type;
+	const bool linksOnly = (_settings.media.types == Type::Link);
+
 	for (const auto &[type, item] : breakdown) {
-		if (type != Type::Link) {
+		if (type != Type::Link || linksOnly) {
 			totalUniqueCount += item.uniqueCount;
 			totalUniqueSize += item.uniqueSize;
 			totalTotalCount += item.totalCount;
@@ -982,13 +989,10 @@ void ControllerObject::fillMessagesState(
 	
 	if (_isScanning) {
 		result.itemIndex = progress.itemIndex;
-		result.itemCount = _messagesCount;
-	} else if (_scanStatsFound) {
-		result.itemIndex = progress.messagesTotalCount;
-		result.itemCount = _stats.expectedFilesCount();
+		result.itemCount = progress.messagesInRangeCount ? progress.messagesInRangeCount : _messagesCount;
 	} else {
 		result.itemIndex = progress.messagesTotalCount;
-		result.itemCount = _messagesCount;
+		result.itemCount = progress.messagesInRangeCount ? progress.messagesInRangeCount : _messagesCount;
 	}
 
 	result.activeDownloads = _activeDownloads;

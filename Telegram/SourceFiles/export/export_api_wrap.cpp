@@ -329,9 +329,9 @@ struct ApiWrap::ChatProcess {
 	int pendingFiles = 0;
 	bool processing = false;
 
-	// Track messages processed (only when a whole message is completed)
+	// Track items processed (media + links)
 	int messagesProcessed = 0;
-	int sliceOffset = 0; // Snapshot of messagesProcessed at start of slice
+	int sliceOffset = 0;
 	int messagesTextProcessed = 0;
 	int messagesMediaProcessed = 0;
 	int messagesTotalProcessed = 0;
@@ -341,6 +341,7 @@ struct ApiWrap::ChatProcess {
 	int messagesInRangeCount = 0;
 	int totalMessagesCounter = 0;
 	std::vector<int> messageItemIndices;
+	std::vector<int> messageItemsCount;
 
 	// Map file randomId -> message index in current slice
 	std::unordered_map<uint64, int> fileToMessageIndex;
@@ -964,7 +965,10 @@ void ApiWrap::loadNextUserpic() {
 			photo.image.file,
 			Data::FileOrigin(),
 			[=](FileProgress value) { return loadUserpicProgress(value); },
-			[=](const QString &path) { loadUserpicDone(path); });
+			[=](const QString &path) { loadUserpicDone(path); },
+			nullptr,
+			nullptr,
+			false);
 		if (!_userpicsProcess || !_userpicsProcess->slice) {
 			return;
 		}
@@ -1128,7 +1132,8 @@ void ApiWrap::loadNextStory() {
 			[=](FileProgress value) { return loadStoryProgress(value); },
 			[=](const QString &path) { loadStoryDone(path); },
 			nullptr,
-			&story);
+			&story,
+			false);
 		if (!_storiesProcess || !_storiesProcess->slice) {
 			return;
 		}
@@ -1139,7 +1144,8 @@ void ApiWrap::loadNextStory() {
 			[=](FileProgress value) { return loadStoryThumbProgress(value); },
 			[=](const QString &path) { loadStoryThumbDone(path); },
 			nullptr,
-			&story);
+			&story,
+			true);
 		if (!_storiesProcess || !_storiesProcess->slice) {
 			return;
 		}
@@ -1343,7 +1349,8 @@ void ApiWrap::requestMessages(
 		FnMut<bool(const Data::DialogInfo &)> start,
 		Fn<bool(DownloadProgress)> progress,
 		Fn<bool(Data::MessagesSlice&&)> slice,
-		FnMut<void()> done) {
+		FnMut<void()> done,
+		int messagesInRangeCount) {
 	Expects(_chatProcess == nullptr);
 	Expects(_selfId.has_value());
 
@@ -1356,6 +1363,7 @@ void ApiWrap::requestMessages(
 	_chatProcess->fileProgress = std::move(progress);
 	_chatProcess->handleSlice = std::move(slice);
 	_chatProcess->done = std::move(done);
+	_chatProcess->messagesInRangeCount = messagesInRangeCount;
 
 	if (_settings->useIdRange) {
 		if (fromId > 0) {
@@ -2139,42 +2147,67 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		const bool hasFile = message.file().location || message.thumb().file.location;
 		const auto types = _settings->media.types;
-		const bool selected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
+		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
 
-		// Handle Link deduplication for main files
-		bool messageHasNewUniqueLink = false;
-		if (linkFilterSelected || fullHistorySelected) {
-			bool hasAnyLink = false;
-			for (const auto &part : message.text) {
-				if (part.type == Data::TextPart::Type::Url
-					|| part.type == Data::TextPart::Type::TextUrl) {
-					hasAnyLink = true;
-					const auto url = QString::fromUtf8(part.text);
-					if (_visitedLinks.find(url) == _visitedLinks.end()) {
-						_visitedLinks.insert(url);
-						messageHasNewUniqueLink = true;
-					}
+		// Handle Link stats (without skipping the message bubble)
+		int linksInMessage = 0;
+		int newUniqueLinksInMessage = 0;
+		bool hasAnyLink = false;
+		for (const auto &part : message.text) {
+			if (part.type == Data::TextPart::Type::Url
+				|| part.type == Data::TextPart::Type::TextUrl) {
+				hasAnyLink = true;
+				linksInMessage++;
+				const auto url = (part.type == Data::TextPart::Type::TextUrl)
+					? QString::fromUtf8(part.additional)
+					: QString::fromUtf8(part.text);
+				if (_visitedLinks.find(url) == _visitedLinks.end()) {
+					_visitedLinks.insert(url);
+					newUniqueLinksInMessage++;
 				}
 			}
-			if (hasAnyLink) {
-				if (_isScanning) {
-					_scanStats->increment(MediaSettings::Type::Link, 0, messageHasNewUniqueLink);
-				} else if (_stats) {
-					_stats->increment(MediaSettings::Type::Link, 0, messageHasNewUniqueLink);
+		}
+		const bool linkFilterSelected = (types & MediaSettings::Type::Link);
+		const bool linkSelectedForStats = linkFilterSelected || (types & MediaSettings::Type::FullHistory);
+		if (hasAnyLink && linkSelectedForStats) {
+			if (_isScanning) {
+				for (int j = 0; j < newUniqueLinksInMessage; ++j) {
+					_scanStats->increment(MediaSettings::Type::Link, 0, true);
+				}
+				for (int j = 0; j < (linksInMessage - newUniqueLinksInMessage); ++j) {
+					_scanStats->increment(MediaSettings::Type::Link, 0, false);
+				}
+			} else if (_stats) {
+				for (int j = 0; j < newUniqueLinksInMessage; ++j) {
+					_stats->increment(MediaSettings::Type::Link, 0, true);
+				}
+				for (int j = 0; j < (linksInMessage - newUniqueLinksInMessage); ++j) {
+					_stats->increment(MediaSettings::Type::Link, 0, false);
 				}
 			}
 		}
 
-		if (messageType != MediaSettings::Type::Link) {
-			_chatProcess->messagesInRangeCount++;
+		const bool linksOnly = (types == MediaSettings::Type::Link);
+		int itemsCount = 0;
+		if (mediaSelected) {
+			itemsCount = 1;
+		} else if (linksOnly && hasAnyLink) {
+			itemsCount = linksInMessage;
 		}
 
-		// Assign sequential index to every selected message in range
+		const bool selected = (itemsCount > 0) || mediaSelected || (linkFilterSelected && hasAnyLink);
 		_chatProcess->messageItemIndices[i] = ++_chatProcess->totalMessagesCounter;
+		_chatProcess->messageItemsCount[i] = itemsCount;
+
+		if (!selected) {
+			onMessagePartDone(i, false);
+			continue;
+		}
+
+		_chatProcess->messagesInRangeCount += itemsCount;
 
 		if (_isScanning) {
 			// Increment stats for messages without files (Text, non-file Media)
-			// File-based media will be incremented in processFileLoad during scan.
 			if (selected && !hasFile && messageType != MediaSettings::Type::Link) {
 				_scanStats->increment(messageType, 0, true);
 			}
@@ -2196,7 +2229,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			_chatProcess->messagesTotalProcessed++;
 		}
 
-		// Send progress for processed messages
+		// Initial progress update for processed bubble
 		_chatProcess->fileProgress({
 			.randomId = 0,
 			.path = QString(),
@@ -2206,7 +2239,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			.isAuxiliary = true,
 			.messagesTextCount = _chatProcess->messagesTextProcessed,
 			.messagesMediaCount = _chatProcess->messagesMediaProcessed,
-			.messagesTotalCount = _chatProcess->messagesProcessed, // Show finished count
+			.messagesTotalCount = _chatProcess->messagesProcessed, // Use finished count
 			.messagesTextTotal = _chatProcess->messagesInRangeCount,
 			.messagesInRangeCount = _chatProcess->messagesInRangeCount
 		});
@@ -2240,7 +2273,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		}
 		_chatProcess->messageFilesRequired[i] = required;
 		if (required == 0) {
-			onMessagePartDone(i);
+			onMessagePartDone(i, true);
 		}
 	}
 
@@ -2337,7 +2370,10 @@ std::optional<QByteArray> ApiWrap::getCustomEmoji(QByteArray &data) {
 			file,
 			{ .customEmojiId = id },
 			[=](FileProgress value) { return loadMessageEmojiProgress(value); },
-			[=](const QString &path) { loadMessageEmojiDone(id, path); });
+			[=](const QString &path) { loadMessageEmojiDone(id, path); },
+			nullptr,
+			nullptr,
+			false);
 		return std::nullopt;
 	}
 	return data;
@@ -2398,7 +2434,7 @@ void ApiWrap::loadNextMessageFile() {
 			? _chatProcess->info.input
 			: _chatProcess->info.migratedFromInput;
 
-		if (message.file().location) {		
+		if (message.file().location) {
 			processFileLoad(
 				message.file(),
 				origin,
@@ -2411,7 +2447,9 @@ void ApiWrap::loadNextMessageFile() {
 					return loadMessageFileProgress(value);
 				},
 				[=](const QString &path) { loadMessageFileDone(i, path); },
-				&message);
+				&message,
+				nullptr,
+				false);
 			if (!_chatProcess || !_chatProcess->slice) {
 				return;
 			}
@@ -2430,7 +2468,9 @@ void ApiWrap::loadNextMessageFile() {
 					return loadMessageThumbProgress(value);
 				},
 				[=](const QString &path) { loadMessageThumbDone(i, path); },
-				&message);
+				&message,
+				nullptr,
+				true);
 			if (!_chatProcess || !_chatProcess->slice) {
 				return;
 			}
@@ -2539,10 +2579,11 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 		.ready = progress.ready,
 		.total = progress.total,
 		.isAuxiliary = auxiliary,
-		.messagesTextCount = _chatProcess ? _chatProcess->messagesTextProcessed : 0,
-		.messagesMediaCount = _chatProcess ? _chatProcess->messagesMediaProcessed : 0,
-		.messagesTotalCount = _chatProcess ? _chatProcess->messagesTotalProcessed : 0,
-		.messagesTextTotal = _chatProcess ? _chatProcess->messagesTextTotal : 0 });
+		.messagesTextCount = _chatProcess->messagesTextProcessed,
+		.messagesMediaCount = _chatProcess->messagesMediaProcessed,
+		.messagesTotalCount = _chatProcess->messagesProcessed, // Use finished count
+		.messagesTextTotal = _chatProcess->messagesInRangeCount,
+		.messagesInRangeCount = _chatProcess->messagesInRangeCount });
 }
 
 void ApiWrap::loadMessageFileDone(int index, const QString &relativePath) {
@@ -2615,7 +2656,8 @@ void ApiWrap::processFileLoad(
 		Fn<bool(FileProgress)> progress,
 		FnMut<void(QString)> done,
 		Data::Message *message,
-		Data::Story *story) {
+		Data::Story *story,
+		bool isThumb) {
 	using SkipReason = Data::File::SkipReason;
 
 	using Type = MediaSettings::Type;
@@ -2654,7 +2696,7 @@ void ApiWrap::processFileLoad(
 	const auto locationKey = file.location ? ComputeLocationKey(file.location) : ApiWrap::LocationKey{ 0, 0 };
 
 	if (_isScanning) {
-		if (type != Type(0) && !file.suggestedPath.endsWith(u"_thumb.jpg"_q)) {
+		if (type != Type(0) && !isThumb) {
 			const bool unique = locationKey.id && _scanVisited.find(locationKey) == _scanVisited.end();
 			if (unique) {
 				_scanVisited.insert(locationKey);
@@ -2667,7 +2709,7 @@ void ApiWrap::processFileLoad(
 
 	if (_stats
 		&& origin.messageId != 0
-		&& !file.suggestedPath.endsWith(u"_thumb.jpg"_q)) {
+		&& !isThumb) {
 		const bool sessionUnique = locationKey.id && _exportVisited.find(locationKey) == _exportVisited.end();
 		if (sessionUnique) {
 			_exportVisited.insert(locationKey);
@@ -3338,13 +3380,15 @@ void ApiWrap::ioError(const Output::Result &result) {
 	_ioErrors.fire_copy(result);
 }
 
-void ApiWrap::onMessagePartDone(int index) {
+void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 	if (!_chatProcess) return;
 	if (index >= 0 && index < int(_chatProcess->messageFilesDone.size())) {
 		auto &done = _chatProcess->messageFilesDone[index];
 		const auto need = _chatProcess->messageFilesRequired[index];
-		if (++done == need) {
-			++_chatProcess->messagesProcessed;
+		if (++done == std::max(need, 1)) {
+			if (isSelected) {
+				_chatProcess->messagesProcessed += _chatProcess->messageItemsCount[index];
+			}
 			// Trigger progress update for finished message
 			_chatProcess->fileProgress({
 				.randomId = 0,

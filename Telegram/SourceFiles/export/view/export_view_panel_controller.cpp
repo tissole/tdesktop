@@ -218,8 +218,12 @@ void PanelController::showSettings() {
 	) | rpl::start_with_next([=] {
 		const auto scanning = settingsRaw->isScanning();
 		const auto hasResults = settingsRaw->hasScanResults();
-		if (scanning || hasResults) {
+		if (scanning) {
 			_process->cancelExportFast();
+		} else if (hasResults) {
+			settingsRaw->setScanning(false);
+			settingsRaw->clearScanResults();
+			_process->cancelExportFast(); // Clear results in controller too
 		} else {
 			LOG(("Export Info: Panel Hide By Cancel."));
 			_panel->hideGetDuration();

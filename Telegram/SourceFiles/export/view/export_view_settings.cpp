@@ -795,7 +795,7 @@ void SettingsWidget::editDateLimit(
 		}));
 	};
 	const auto callback = crl::guard(this, [=](const QDate &date) {
-		done(base::unixtime::serialize(date.startOfDay()));
+		done(QDateTime(date, QTime(), Qt::UTC).toSecsSinceEpoch());
 		if (const auto weak = shared->get()) {
 			weak->closeBox();
 		}
@@ -1049,7 +1049,7 @@ void SettingsWidget::addMediaOption(
 				if (checked) {
 					if (type == MediaType::FullHistory) {
 						data.media.types = MediaType::FullHistory;
-						data.types = Settings::Types(0);
+						data.types &= Settings::Type::AnyChatsMask;
 					} else {
 						data.media.types &= ~MediaType::FullHistory;
 						data.media.types |= type;
@@ -1229,8 +1229,18 @@ void SettingsWidget::setScanning(bool scanning) {
 }
 
 void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats, int messagesCount) {
-	if (messagesCount <= 0) {
-		setScanning(false);
+	setScanning(false);	// We use our own calculated totals instead of the raw messagesCount
+	int totalUniqueMessagesCount = 0;
+	int totalTotalMessagesCount = 0;
+	for (const auto &pair : stats) {
+		const auto type = pair.first;
+		const auto &item = pair.second;
+		if (type != MediaSettings::Type::Link) {
+			totalTotalMessagesCount += item.totalCount;
+		}
+	}
+
+	if (totalTotalMessagesCount <= 0) {
 		clearScanResults();
 		using MediaType = MediaSettings::Type;
 		const auto types = readData().media.types;
@@ -1258,8 +1268,8 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	if (!_scanResultsLabel) return;
 
 	QString text;
-	int totalUniqueMessagesCount = 0;
-	int totalTotalMessagesCount = 0;
+	totalUniqueMessagesCount = 0;
+	totalTotalMessagesCount = 0;
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
 	const auto fullHistory = (readData().media.types & MediaSettings::Type::FullHistory);
@@ -1279,6 +1289,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	};
 
 	int categoriesCount = 0;
+	const bool linksOnly = (readData().media.types == MediaType::Link);
 
 	for (const auto type : order) {
 		const auto it = _scanResults.find(type);
@@ -1327,7 +1338,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 				totalMediaSize += item.totalSize;
 			}
 
-			if (type != MediaType::Link) {
+			if (type != MediaType::Link || linksOnly) {
 				totalUniqueMessagesCount += item.uniqueCount;
 				totalTotalMessagesCount += item.totalCount;
 			}
