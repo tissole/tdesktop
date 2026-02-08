@@ -2111,6 +2111,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 	_chatProcess->messageFilesRequired.assign(s.list.size(), 0);
 	_chatProcess->messageFilesDone.assign(s.list.size(), 0);
 	_chatProcess->messageItemIndices.assign(s.list.size(), 0);
+	_chatProcess->messageItemsCount.assign(s.list.size(), 0);
 	_chatProcess->emojiToMessageIndices.clear();
 
 	for (int i = 0; i < int(s.list.size()); ++i) {
