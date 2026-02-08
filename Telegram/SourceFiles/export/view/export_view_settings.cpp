@@ -1269,8 +1269,8 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	if (!_scanResultsLabel) return;
 
 	QString text;
-	int totalUniqueMessagesCount = 0;
-	int totalTotalMessagesCount = 0;
+	totalUniqueMessagesCount = 0;
+	totalTotalMessagesCount = 0;
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
 	const auto fullHistory = (readData().media.types & MediaSettings::Type::FullHistory);

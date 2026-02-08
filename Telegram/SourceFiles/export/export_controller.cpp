@@ -1070,6 +1070,12 @@ void Controller::cancelExportFast(bool keepCache) {
 	});
 }
 
+void Controller::clearResults() {
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.clearResults();
+	});
+}
+
 rpl::lifetime &Controller::lifetime() {
 	return _lifetime;
 }

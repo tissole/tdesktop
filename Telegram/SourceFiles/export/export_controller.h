@@ -172,6 +172,7 @@ public:
 		const Environment &environment);
 	void skipFile(uint64 randomId);
 	void cancelExportFast(bool keepCache = false);
+	void clearResults();
 
 	rpl::lifetime &lifetime();
 

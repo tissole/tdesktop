@@ -2180,15 +2180,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				}
 			}
 			if (_isScanning) {
-				// totalCount increments by 1 (for the message)
-				// uniqueCount increments by newUniqueLinksInMessage (for the URLs)
-				auto &stat = _scanStats->typeStat(MediaSettings::Type::Link);
-				stat.uniqueCount += newUniqueLinksInMessage;
-				stat.totalCount += 1;
+				_scanStats->increment(MediaSettings::Type::Link, 0, 1, newUniqueLinksInMessage);
 			} else if (_stats) {
-				auto &stat = _stats->typeStat(MediaSettings::Type::Link);
-				stat.uniqueCount += newUniqueLinksInMessage;
-				stat.totalCount += 1;
+				_stats->increment(MediaSettings::Type::Link, 0, 1, newUniqueLinksInMessage);
 			}
 		}
 
@@ -2791,7 +2785,6 @@ void ApiWrap::processFileLoad(
 		return;
 	}
 
-	const auto types = _settings->media.types;
 	const auto typeIsSelected = (types & type);
 	const auto skipDownload = (types & Type::FullHistory)
 		|| (types == MediaSettings::Types(0))
