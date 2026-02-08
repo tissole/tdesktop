@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "export/output/export_output_html.h"
 
+#include "lang/lang_keys.h"
 #include "export/output/export_output_stats.h"
 #include "countries/countries_instance.h"
 #include "export/output/export_output_result.h"

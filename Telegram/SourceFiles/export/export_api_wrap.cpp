@@ -2167,8 +2167,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				}
 			}
 		}
-		const bool linkFilterSelected = (types & MediaSettings::Type::Link);
-		const bool linkSelectedForStats = linkFilterSelected || (types & MediaSettings::Type::FullHistory);
+		const bool linkSelectedForStats = (types & MediaSettings::Type::Link) || (types & MediaSettings::Type::FullHistory);
 		if (hasAnyLink && linkSelectedForStats) {
 			if (_isScanning) {
 				for (int j = 0; j < newUniqueLinksInMessage; ++j) {
@@ -2195,7 +2194,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			itemsCount = linksInMessage;
 		}
 
-		const bool selected = (itemsCount > 0) || mediaSelected || (linkFilterSelected && hasAnyLink);
+		const bool selected = (itemsCount > 0) || mediaSelected || (hasAnyLink && (types & MediaSettings::Type::Link));
 		_chatProcess->messageItemIndices[i] = ++_chatProcess->totalMessagesCounter;
 		_chatProcess->messageItemsCount[i] = itemsCount;
 
