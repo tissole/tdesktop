@@ -1092,9 +1092,9 @@ void SettingsWidget::addMediaOption(
 			return std::make_pair(checked, enabled);
 		})
 		| rpl::distinct_until_changed()
-		| rpl::start_with_next([=](bool checked, bool enabled) {
-			checkbox->setChecked(checked);
-			checkbox->setEnabled(enabled);
+		| rpl::start_with_next([=](std::pair<bool, bool> state) {
+			checkbox->setChecked(state.first);
+			checkbox->setEnabled(state.second);
 		}, checkbox->lifetime());
 }
 
@@ -1139,13 +1139,15 @@ void SettingsWidget::addSizeSlider(
 			return std::make_pair(data.media.sizeLimit, data.media.types);
 		})
 		| rpl::distinct_until_changed()
-		| rpl::start_with_next([=](int64 sizeLimit, MediaSettings::Types types) {
+		| rpl::start_with_next([=](std::pair<int64, MediaSettings::Types> state) {
+			const auto sizeLimit = state.first;
+			const auto types = state.second;
 			const auto disabled = (types & MediaSettings::Type::Link) != 0;
 			slider->setDisabled(disabled);
 
 			const auto limit = sizeLimit / kMegabyte;
 			const auto size = (sizeLimit >= SizeLimitByIndex(kSizeValueCount - 1))
-				? tr::lng_export_option_size_none(tr::now)
+				? "Unlimited"
 				: (QString::number(limit) + " MB");
 			const auto text = tr::lng_export_option_size_limit(
 				tr::now,
