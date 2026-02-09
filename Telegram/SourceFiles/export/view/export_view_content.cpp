@@ -209,6 +209,8 @@ Content ContentFromState(const FinishedState &state) {
 	};
 
 	const auto fullHistory = state.fullHistory;
+	const auto fullRange = state.fullRange;
+	const auto showAllCategories = fullHistory && fullRange;
 
 	int categoriesCount = 0;
 	int totalUniqueMessagesCount = 0;
@@ -219,10 +221,10 @@ Content ContentFromState(const FinishedState &state) {
 
 	for (const auto type : order) {
 		const auto it = state.breakdown.find(type);
-		if (it == state.breakdown.end() || it->second.totalCount <= 0) {
+		if (!showAllCategories && (it == state.breakdown.end() || it->second.totalCount <= 0)) {
 			continue;
 		}
-		const auto &item = it->second;
+		const auto &item = (it != state.breakdown.end()) ? it->second : Output::StatItem();
 		QString label;
 		switch (type) {
 		case Type::Photo: label = tr::lng_export_option_photos(tr::now); break;
@@ -283,8 +285,8 @@ Content ContentFromState(const FinishedState &state) {
 			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
 		QString totalText;
-		if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
-			totalText = label + uniqueStr + ", " + totalStr;
+		if (totalUniqueMessagesCount != totalTotalMessagesCount) {
+			totalText = label + uniqueStr + ", " + totalText;
 		} else {
 			totalText = label + totalStr;
 		}

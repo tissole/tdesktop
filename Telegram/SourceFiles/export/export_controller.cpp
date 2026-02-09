@@ -245,6 +245,7 @@ private:
 	int _storiesCount = 0;
 
 	int _contentFilesCount = 0;
+	bool _messagesInRangeCountFixed = false;
 
 	// rpl::variable<State> fails to compile in MSVC :(
 	State _state;
@@ -436,6 +437,17 @@ void ControllerObject::startExport(
 		_messagesCount = totalTotalMessagesCount;
 		_messagesInRangeCount = totalTotalMessagesCount;
 		_scanStatsFound = true;
+	} else if (!_scanStats.empty()) {
+		const auto it = _scanStats.find(MediaType::Link);
+		if (it != _scanStats.end() && it->second.totalCount > 0) {
+			_messagesCount = _messagesInRangeCount;
+			_stats.setExpectedFilesCount(_messagesCount);
+			_scanStatsFound = true;
+		} else {
+			_messagesCount = 0;
+			_stats.setExpectedFilesCount(0);
+			_scanStatsFound = false;
+		}
 	} else {
 		// Fallback: If no scan was performed, use 0 and let it be set in startExportMessages
 		_messagesCount = 0;
@@ -926,6 +938,7 @@ void ControllerObject::setFinishedState() {
 		.totalTotalCount = totalTotalCount,
 		.totalTotalSize = totalTotalSize,
 		.fullHistory = !!(_settings.media.types & Type::FullHistory),
+		.fullRange = (_settings.singlePeerFrom == 0 && _settings.singlePeerTill == 0) && !_settings.useIdRange,
 		.breakdown = breakdown,
 	});
 }

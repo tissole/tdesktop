@@ -898,6 +898,7 @@ not_null<Ui::Checkbox*> SettingsWidget::addOption(
 			changeData([&](Settings &data) {
 				if (checked) {
 					data.media.types &= ~MediaSettings::Type::FullHistory;
+					data.media.types &= ~MediaSettings::Type::Link;
 					data.types |= types;
 				} else {
 					data.types &= ~types;
@@ -912,6 +913,17 @@ not_null<Ui::Checkbox*> SettingsWidget::addOption(
 		| rpl::distinct_until_changed()
 		| rpl::start_with_next([=](bool checked) {
 			checkbox->setChecked(checked);
+		}, checkbox->lifetime());
+
+	value()
+		| rpl::map([=](const Settings &data) {
+			const bool linksOnly = (data.media.types == MediaSettings::Type::Link);
+			const bool fullHistory = (data.media.types & MediaSettings::Type::FullHistory);
+			return !linksOnly && !fullHistory;
+		})
+		| rpl::distinct_until_changed()
+		| rpl::start_with_next([=](bool enabled) {
+			checkbox->setEnabled(enabled);
 		}, checkbox->lifetime());
 
 	return checkbox;
@@ -951,6 +963,7 @@ void SettingsWidget::addChatOption(
 		| rpl::start_with_next([=](bool checked) {
 			changeData([&](Settings &data) {
 				data.media.types &= ~MediaSettings::Type::FullHistory;
+				data.media.types &= ~MediaSettings::Type::Link;
 				if (checked) {
 					data.fullChats &= ~types;
 				} else {
@@ -1050,8 +1063,12 @@ void SettingsWidget::addMediaOption(
 					if (type == MediaType::FullHistory) {
 						data.media.types = MediaType::FullHistory;
 						data.types &= Settings::Type::AnyChatsMask;
+					} else if (type == MediaType::Link) {
+						data.media.types = MediaType::Link;
+						data.types = Settings::Types(0); // Uncheck all chat types too
 					} else {
 						data.media.types &= ~MediaType::FullHistory;
+						data.media.types &= ~MediaType::Link;
 						data.media.types |= type;
 					}
 				} else {
@@ -1062,11 +1079,22 @@ void SettingsWidget::addMediaOption(
 
 	value()
 		| rpl::map([=](const Settings &data) {
-			return (data.media.types & type) == type;
+			const bool checked = (data.media.types & type) == type;
+			const bool linksOnly = (data.media.types == MediaSettings::Type::Link);
+			bool enabled = true;
+			if (type == MediaSettings::Type::Link) {
+				const bool otherSelected = (data.media.types & ~MediaSettings::Type::Link)
+					|| (data.types != Settings::Types(0));
+				enabled = !otherSelected;
+			} else {
+				enabled = !linksOnly;
+			}
+			return std::make_pair(checked, enabled);
 		})
 		| rpl::distinct_until_changed()
-		| rpl::start_with_next([=](bool checked) {
+		| rpl::start_with_next([=](bool checked, bool enabled) {
 			checkbox->setChecked(checked);
+			checkbox->setEnabled(enabled);
 		}, checkbox->lifetime());
 }
 
@@ -1108,10 +1136,13 @@ void SettingsWidget::addSizeSlider(
 
 	value()
 		| rpl::map([](const Settings &data) {
-			return data.media.sizeLimit;
+			return std::make_pair(data.media.sizeLimit, data.media.types);
 		})
 		| rpl::distinct_until_changed()
-		| rpl::start_with_next([=](int64 sizeLimit) {
+		| rpl::start_with_next([=](int64 sizeLimit, MediaSettings::Types types) {
+			const auto disabled = (types & MediaSettings::Type::Link) != 0;
+			slider->setDisabled(disabled);
+
 			const auto limit = sizeLimit / kMegabyte;
 			const auto size = (sizeLimit >= SizeLimitByIndex(kSizeValueCount - 1))
 				? tr::lng_export_option_size_none(tr::now)
@@ -1295,6 +1326,9 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
 	const auto fullHistory = (readData().media.types & MediaSettings::Type::FullHistory);
+	const auto fullRange = (readData().singlePeerFrom == 0 && readData().singlePeerTill == 0)
+		&& !readData().useIdRange;
+	const auto showAllCategories = fullHistory && fullRange;
 
 	using MediaType = MediaSettings::Type;
 	const std::vector<MediaType> order = {
@@ -1314,10 +1348,10 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 
 	for (const auto type : order) {
 		const auto it = _scanResults.find(type);
-		if (it == _scanResults.end() || it->second.totalCount <= 0) {
+		if (!showAllCategories && (it == _scanResults.end() || it->second.totalCount <= 0)) {
 			continue;
 		}
-		const auto &item = it->second;
+		const auto &item = (it != _scanResults.end()) ? it->second : Output::StatItem();
 		QString label;
 		switch (type) {
 		case MediaType::Photo: label = tr::lng_export_option_photos(tr::now); break;
@@ -1371,12 +1405,12 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 			const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
 				+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 			const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
-				+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
+			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
-			if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
-				text += "\n" + QString(label) + uniqueStr + ", " + totalStr;
+			if (totalUniqueMessagesCount != totalTotalMessagesCount) {
+			text += "\n" + QString(label) + uniqueStr + ", " + totalStr;
 			} else {
-				text += "\n" + QString(label) + totalStr;
+			text += "\n" + QString(label) + totalStr;
 			}
 		}
 	}

@@ -344,6 +344,7 @@ struct ApiWrap::ChatProcess {
 	int totalMessagesCounter = 0;
 	std::vector<int> messageItemIndices;
 	std::vector<int> messageItemsCount;
+	std::vector<bool> messageIsUnique;
 
 	// Map file randomId -> message index in current slice
 	std::unordered_map<uint64, int> fileToMessageIndex;
@@ -1968,7 +1969,25 @@ void ApiWrap::requestChatMessages(
 	const auto doneHandler = [=](MTPmessages_Messages &&result) {
 		if (!_chatProcess) return;
 
-		base::take(_chatProcess->requestDone)(std::move(result));
+		const auto count = result.match(
+			[](const MTPDmessages_messages &data) {
+			return int(data.vmessages().v.size());
+		}, [](const MTPDmessages_messagesSlice &data) {
+			return data.vcount().v;
+		}, [](const MTPDmessages_channelMessages &data) {
+			return data.vcount().v;
+		}, [](const MTPDmessages_messagesNotModified &data) {
+			return -1;
+		});
+
+		if (count >= 0 && !_chatProcess->messagesInRangeCountFixed) {
+			// If we only have Links selected, the server's count is exactly Y.
+			_chatProcess->messagesInRangeCount = count;
+		}
+
+		if (auto requestDone = base::take(_chatProcess->requestDone)) {
+			requestDone(std::move(result));
+		}
 	};
 	const auto splitsCount = int(_splits.size());
 	const auto realPeerInput = (splitIndex >= 0)
@@ -2115,6 +2134,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 	_chatProcess->messageFilesDone.assign(s.list.size(), 0);
 	_chatProcess->messageItemIndices.assign(s.list.size(), 0);
 	_chatProcess->messageItemsCount.assign(s.list.size(), 0);
+	_chatProcess->messageIsUnique.assign(s.list.size(), false);
 	_chatProcess->emojiToMessageIndices.clear();
 
 	for (int i = 0; i < int(s.list.size()); ++i) {
@@ -2151,10 +2171,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		const bool hasFile = message.file().location || message.thumb().file.location;
 		const auto fullSize = message.file().size;
-		const auto overSize = (hasFile && _settings->media.sizeLimit > 0 && fullSize >= _settings->media.sizeLimit);
-
 		const auto types = _settings->media.types;
-		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
 
 		// Handle Link stats (without skipping the message bubble)
 		base::flat_set<QString> linksInThisMessage;
@@ -2171,6 +2188,12 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		}
 		const auto hasAnyLink = !linksInThisMessage.empty();
 		const bool linkSelectedForStats = (types & MediaSettings::Type::Link) || (types & MediaSettings::Type::FullHistory);
+
+		// Requirement: Links bypass size limits
+		const auto oversized = (hasFile && _settings->media.sizeLimit > 0 && fullSize >= _settings->media.sizeLimit)
+			&& !hasAnyLink;
+
+		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
 		if (hasAnyLink && linkSelectedForStats) {
 			int newUniqueLinksInMessage = 0;
 			for (const auto &url : linksInThisMessage) {
@@ -2180,9 +2203,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				}
 			}
 			if (_isScanning) {
-				_scanStats->increment(MediaSettings::Type::Link, 0, 1, newUniqueLinksInMessage);
+				_scanStats->increment(MediaSettings::Type::Link, 0, linksInThisMessage.size(), newUniqueLinksInMessage);
 			} else if (_stats) {
-				_stats->increment(MediaSettings::Type::Link, 0, 1, newUniqueLinksInMessage);
+				_stats->increment(MediaSettings::Type::Link, 0, linksInThisMessage.size(), newUniqueLinksInMessage);
 			}
 		}
 
@@ -2221,23 +2244,29 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		}
 
 		if (countThis) {
-			bool uniqueContent = false;
+			bool uniqueBubble = false;
 			if (hasMedia) {
 				if (hasFile) {
-					const auto locationKey = message.file().location ? ComputeLocationKey(message.file().location) : ApiWrap::LocationKey{ 0, 0 };
-					auto &visited = _isScanning ? _scanVisited : _exportVisited;
-					if (locationKey.id && visited.find(locationKey) == visited.end()) {
-						uniqueContent = true;
-					} else if (!locationKey.id) {
-						uniqueContent = true;
+					// Statistics for unique media MUST reflect actual downloaded media.
+					// If oversized, it won't be downloaded, so it's not "Unique content" for Part 1.
+					if (!oversized) {
+						const auto locationKey = message.file().location ? ComputeLocationKey(message.file().location) : ApiWrap::LocationKey{ 0, 0 };
+						auto &visited = _isScanning ? _scanVisited : _exportVisited;
+						if (locationKey.id && visited.find(locationKey) == visited.end()) {
+							visited[locationKey] = QString(); // Mark as seen
+							uniqueBubble = true;
+						} else if (!locationKey.id) {
+							uniqueBubble = true;
+						}
 					}
 				} else {
-					uniqueContent = true;
+					uniqueBubble = true; // Non-file media like service messages
 				}
 			} else {
-				uniqueContent = true; // Text is unique bubble content
+				uniqueBubble = true; // Text is always unique bubble content
 			}
-			if (uniqueContent) {
+			if (uniqueBubble) {
+				_chatProcess->messageIsUnique[i] = true;
 				_chatProcess->messagesUniqueCount++; // Unique content bubbles (Part 1)
 			}
 		}
@@ -2764,8 +2793,9 @@ void ApiWrap::processFileLoad(
 	if (_stats
 		&& origin.messageId != 0
 		&& !isThumb) {
-		const auto it = (locationKey.id != 0) ? _exportVisited.find(locationKey) : _exportVisited.end();
-		const bool alreadyVisited = (it != _exportVisited.end());
+		auto &visited = _isScanning ? _scanVisited : _exportVisited;
+		const auto it = (locationKey.id != 0) ? visited.find(locationKey) : visited.end();
+		const bool alreadyVisited = (it != visited.end() && !it->second.isEmpty());
 		const bool willBeUniqueOnDisk = !alreadyVisited && !skipDownload && !oversized;
 
 		if (hasMedia && type != Type(0)) {
@@ -2773,8 +2803,8 @@ void ApiWrap::processFileLoad(
 		}
 		if (willBeUniqueOnDisk) {
 			_stats->incrementUserMediaFiles();
-			if (locationKey.id != 0) {
-				_exportVisited[locationKey] = QString(); // Mark as pending/visited
+			if (locationKey.id != 0 && it == visited.end()) {
+				visited[locationKey] = QString(); // Mark as pending
 			}
 		}
 	}
