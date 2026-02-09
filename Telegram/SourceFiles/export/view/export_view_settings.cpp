@@ -1146,9 +1146,7 @@ void SettingsWidget::addSizeSlider(
 			slider->setDisabled(disabled);
 
 			const auto limit = sizeLimit / kMegabyte;
-			const auto size = (sizeLimit >= SizeLimitByIndex(kSizeValueCount - 1))
-				? "Unlimited"
-				: (QString::number(limit) + " MB");
+			const auto size = QString::number(limit) + " MB";
 			const auto text = tr::lng_export_option_size_limit(
 				tr::now,
 				lt_size,
