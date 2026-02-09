@@ -163,6 +163,7 @@ public:
 		const Environment &environment);
 	void skipFile(uint64 randomId);
 	void cancelExportFast(bool keepCache = false);
+	void clearResults();
 
 	// Message export functions
 	void exportNextDialog();
@@ -179,7 +180,6 @@ private:
 	void ioError(const QString &path);
 	bool ioCatchError(Output::Result result);
 	void setFinishedState();
-	void clearResults();
 
 	//void requestPasswordState();
 	//void passwordStateDone(const MTPaccount_Password &password);
