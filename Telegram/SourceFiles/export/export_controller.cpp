@@ -437,9 +437,10 @@ void ControllerObject::startExport(
 		_messagesCount = totalTotalMessagesCount;
 		_messagesInRangeCount = totalTotalMessagesCount;
 		_scanStatsFound = true;
-	} else if (!_scanStats.empty()) {
-		const auto it = _scanStats.find(MediaType::Link);
-		if (it != _scanStats.end() && it->second.totalCount > 0) {
+	} else if (!_scanStats.byType().empty()) {
+		const auto breakdown = _scanStats.byType();
+		const auto it = breakdown.find(MediaType::Link);
+		if (it != breakdown.end() && it->second.totalCount > 0) {
 			_messagesCount = _messagesInRangeCount;
 			_stats.setExpectedFilesCount(_messagesCount);
 			_scanStatsFound = true;

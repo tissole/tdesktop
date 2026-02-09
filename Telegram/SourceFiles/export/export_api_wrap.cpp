@@ -2773,14 +2773,14 @@ void ApiWrap::processFileLoad(
 		|| !typeIsSelected;
 
 	if (_isScanning) {
-		if (hasMedia) {
+		if (message || story) {
 			if (type != Type(0) && !isThumb && origin.messageId != 0) {
 				const bool typeSelected = (types & type) || (types & MediaSettings::Type::FullHistory);
 				if (typeSelected) {
 					const bool alreadyVisited = locationKey.id && _scanVisited.find(locationKey) != _scanVisited.end();
 					const bool willBeUniqueOnDisk = !alreadyVisited && !oversized;
 					if (!alreadyVisited && willBeUniqueOnDisk) {
-						_scanVisited.insert(locationKey);
+						_scanVisited.emplace(locationKey, QString());
 					}
 					_scanStats->increment(type, fullSize, willBeUniqueOnDisk);
 				}
@@ -2798,7 +2798,7 @@ void ApiWrap::processFileLoad(
 		const bool alreadyVisited = (it != visited.end() && !it->second.isEmpty());
 		const bool willBeUniqueOnDisk = !alreadyVisited && !skipDownload && !oversized;
 
-		if (hasMedia && type != Type(0)) {
+		if ((message || story) && type != Type(0)) {
 			_stats->increment(type, fullSize, willBeUniqueOnDisk);
 		}
 		if (willBeUniqueOnDisk) {
@@ -2822,7 +2822,7 @@ void ApiWrap::processFileLoad(
 		}
 	}
 
-	const auto wrapDone = [=, &file](QString path) mutable {
+	auto wrapDone = [=, done = std::move(done)](QString path) mutable {
 		if (!path.isEmpty() && locationKey.id != 0 && !isThumb) {
 			_exportVisited[locationKey] = path;
 		}
