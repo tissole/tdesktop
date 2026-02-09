@@ -396,6 +396,7 @@ void ControllerObject::runScan(
 	_isScanning = true;
 	_stepIndex = -1;
 	_settings = NormalizeSettings(settings);
+	_settings.path = Output::NormalizePath(_settings);
 	_environment = environment;
 
 	_writer = Output::CreateNullWriter();

@@ -1579,6 +1579,13 @@ void ApiWrap::finishExport(FnMut<void()> done) {
 		clearState();
 	});
 
+	if (!_takeoutId) {
+		if (done) {
+			done();
+		}
+		return;
+	}
+
 	mainRequest(MTPaccount_FinishTakeoutSession(
 		MTP_flags(MTPaccount_FinishTakeoutSession::Flag::f_success)
 	)).done(std::move(done)).send();
@@ -2251,12 +2258,18 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					// If oversized, it won't be downloaded, so it's not "Unique content" for Part 1.
 					if (!oversized) {
 						const auto locationKey = message.file().location ? ComputeLocationKey(message.file().location) : ApiWrap::LocationKey{ 0, 0 };
-						auto &visited = _isScanning ? _scanVisited : _exportVisited;
-						if (locationKey.id && visited.find(locationKey) == visited.end()) {
-							visited[locationKey] = QString(); // Mark as seen
+						if (_isScanning) {
+							// For scanning, we don't mark as visited here,
+							// because processFileLoad will handle scan stats.
 							uniqueBubble = true;
-						} else if (!locationKey.id) {
-							uniqueBubble = true;
+						} else {
+							auto &visited = _exportVisited;
+							if (locationKey.id && visited.find(locationKey) == visited.end()) {
+								visited[locationKey] = QString(); // Mark as seen
+								uniqueBubble = true;
+							} else if (!locationKey.id) {
+								uniqueBubble = true;
+							}
 						}
 					}
 				} else {
@@ -2776,13 +2789,14 @@ void ApiWrap::processFileLoad(
 		if (message || story) {
 			if (type != Type(0) && !isThumb && origin.messageId != 0) {
 				const bool typeSelected = (types & type) || (types & MediaSettings::Type::FullHistory);
-				if (typeSelected) {
+				const bool ignoreSize = (types & MediaSettings::Type::FullHistory);
+				if (typeSelected && (!oversized || ignoreSize)) {
 					const bool alreadyVisited = locationKey.id && _scanVisited.find(locationKey) != _scanVisited.end();
-					const bool willBeUniqueOnDisk = !alreadyVisited && !oversized;
-					if (!alreadyVisited && willBeUniqueOnDisk) {
+					const bool willBeUniqueInChat = !alreadyVisited;
+					if (!alreadyVisited) {
 						_scanVisited.emplace(locationKey, QString());
 					}
-					_scanStats->increment(type, fullSize, willBeUniqueOnDisk);
+					_scanStats->increment(type, fullSize, willBeUniqueInChat);
 				}
 			}
 		}
@@ -2793,18 +2807,23 @@ void ApiWrap::processFileLoad(
 	if (_stats
 		&& origin.messageId != 0
 		&& !isThumb) {
-		auto &visited = _isScanning ? _scanVisited : _exportVisited;
-		const auto it = (locationKey.id != 0) ? visited.find(locationKey) : visited.end();
-		const bool alreadyVisited = (it != visited.end() && !it->second.isEmpty());
-		const bool willBeUniqueOnDisk = !alreadyVisited && !skipDownload && !oversized;
+		const bool typeSelected = (types & type) || (types & MediaSettings::Type::FullHistory);
+		const bool ignoreSize = (types & MediaSettings::Type::FullHistory);
 
-		if ((message || story) && type != Type(0)) {
-			_stats->increment(type, fullSize, willBeUniqueOnDisk);
-		}
-		if (willBeUniqueOnDisk) {
-			_stats->incrementUserMediaFiles();
-			if (locationKey.id != 0 && it == visited.end()) {
-				visited[locationKey] = QString(); // Mark as pending
+		if (typeSelected && (!oversized || ignoreSize)) {
+			auto &visited = _exportVisited;
+			const auto it = (locationKey.id != 0) ? visited.find(locationKey) : visited.end();
+			const bool alreadyVisited = (it != visited.end() && !it->second.isEmpty());
+			const bool willBeUniqueInChat = !alreadyVisited;
+
+			if ((message || story) && type != Type(0)) {
+				_stats->increment(type, fullSize, willBeUniqueInChat);
+			}
+			if (willBeUniqueInChat && !skipDownload) {
+				_stats->incrementUserMediaFiles();
+				if (locationKey.id != 0 && it == visited.end()) {
+					visited[locationKey] = QString(); // Mark as pending
+				}
 			}
 		}
 	}

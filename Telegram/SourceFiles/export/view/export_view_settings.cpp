@@ -1197,7 +1197,10 @@ void SettingsWidget::refreshButtons(
 		st::defaultBoxButton);
 	cancelBtn->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 	cancelBtn->show();
-	cancelBtn->clicks() | rpl::to_empty | rpl::start_to_stream(_cancelClicks, cancelBtn->lifetime());
+	cancelBtn->clicks() | rpl::to_empty | rpl::start_with_next([=] {
+		clearScanResults();
+		_cancelClicks.fire({});
+	}, cancelBtn->lifetime());
 
 	// State management
 	if (_isScanning) {
@@ -1448,9 +1451,7 @@ void SettingsWidget::resetToDefault() {
 		data.useIdRange = false;
 		data.media.sizeLimit = 8 * 1024 * 1024; // Explicitly reset size limit
 	});
-	_scanResults.clear();
-	_hasScanResults = false;
-	_changes.fire_copy(readData());
+	clearScanResults();
 }
 
 } // namespace View
