@@ -351,7 +351,7 @@ private:
 	rpl::event_stream<Output::Result> _ioErrors;
 
 	base::flat_set<LocationKey> _scanVisited;
-	base::flat_set<LocationKey> _exportVisited;
+	base::flat_map<LocationKey, QString> _exportVisited;
 	base::flat_set<QString> _visitedLinks;
 
 };

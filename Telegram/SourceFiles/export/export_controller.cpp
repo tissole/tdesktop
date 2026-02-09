@@ -415,6 +415,10 @@ void ControllerObject::startExport(
 	_api.clearResults();
 	_stepIndex = -1;
 
+	_messagesInRangeCountFixed = (_messagesInRangeCount > 0);
+	_settings = NormalizeSettings(settings);
+	_environment = environment;
+
 	_stats.clear();
 	int totalTotalMessagesCount = 0;
 	using MediaType = MediaSettings::Type;
@@ -430,6 +434,7 @@ void ControllerObject::startExport(
 	if (totalTotalMessagesCount > 0) {
 		_stats.setExpectedFilesCount(totalTotalMessagesCount);
 		_messagesCount = totalTotalMessagesCount;
+		_messagesInRangeCount = totalTotalMessagesCount;
 		_scanStatsFound = true;
 	} else {
 		// Fallback: If no scan was performed, use 0 and let it be set in startExportMessages
@@ -453,9 +458,6 @@ void ControllerObject::startExport(
 	_storiesWritten = 0;
 	_storiesCount = 0;
 	_contentFilesCount = 0;
-
-	_settings = NormalizeSettings(settings);
-	_environment = environment;
 
 	_settings.path = Output::NormalizePath(_settings);
 	_writer = Output::CreateWriter(_settings.format);
@@ -906,8 +908,10 @@ void ControllerObject::setFinishedState() {
 	using Type = MediaSettings::Type;
 	const bool linksOnly = (_settings.media.types == Type::Link);
 
-	for (const auto &[type, item] : breakdown) {
-		if (type != Type::Link || linksOnly) {
+	for (const auto &pair : breakdown) {
+		const auto type = pair.first;
+		const auto &item = pair.second;
+		if (type != Type::Link) {
 			totalUniqueCount += item.uniqueCount;
 			totalUniqueSize += item.uniqueSize;
 			totalTotalCount += item.totalCount;
@@ -988,7 +992,7 @@ void ControllerObject::fillMessagesState(
 	result.entityCount = info.chats.size() + info.left.size();
 	
 	result.itemIndex = progress.messagesTotalCount;
-	result.itemCount = progress.messagesTextTotal;
+	result.itemCount = (_messagesCount > 0) ? _messagesCount : progress.messagesInRangeCount;
 
 	result.activeDownloads = _activeDownloads;
 }

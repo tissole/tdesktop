@@ -3679,7 +3679,7 @@ QByteArray HtmlWriter::statsBlock() const {
 		}
 		result.append("</div>\n");
 
-		if (type != Type::Link || linksOnly) {
+		if (type != Type::Link) {
 			totalUniqueMessagesCount += item.uniqueCount;
 			totalTotalMessagesCount += item.totalCount;
 		}
@@ -3706,7 +3706,7 @@ Result HtmlWriter::prependStats(const QString &relativePath) {
 	const auto content = file.readAll();
 	file.close();
 
-	if (content.contains("Export Statistics")) {
+	if (content.contains("<div class=\"export_stats\">")) {
 		return Result::Success();
 	}
 

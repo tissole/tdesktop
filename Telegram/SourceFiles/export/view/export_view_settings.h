@@ -54,7 +54,7 @@ public:
 		return _isScanning;
 	}
 	[[nodiscard]] bool hasScanResults() const {
-		return !_scanResults.empty();
+		return _hasScanResults;
 	}
 
 	void setShowBoxCallback(Fn<void(object_ptr<Ui::BoxContent>)> callback) {

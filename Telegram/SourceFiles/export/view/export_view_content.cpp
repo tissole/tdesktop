@@ -266,7 +266,7 @@ Content ContentFromState(const FinishedState &state) {
 				totalMediaSize += item.totalSize;
 			}
 
-			if (type != Type::Link || linksOnly) {
+			if (type != Type::Link) {
 				totalUniqueMessagesCount += item.uniqueCount;
 				totalTotalMessagesCount += item.totalCount;
 			}

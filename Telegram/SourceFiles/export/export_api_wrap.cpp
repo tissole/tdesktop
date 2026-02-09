@@ -2186,19 +2186,11 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			}
 		}
 
-		bool selected = false;
-		if (hasMedia) {
-			if (hasFile) {
-				selected = (mediaSelected && !overSize);
-			} else {
-				selected = mediaSelected;
-			}
-		} else {
-			selected = (types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory);
-		}
-		if (hasAnyLink && linkSelectedForStats) {
-			selected = true;
-		}
+		// selected means "should be in HTML/JSON"
+		// We include everything that matches the type filter, regardless of size.
+		bool selected = mediaSelected 
+			|| (hasAnyLink && linkSelectedForStats) 
+			|| (!hasMedia && ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory)));
 
 		_chatProcess->messageItemIndices[i] = ++_chatProcess->totalMessagesCounter;
 
@@ -2206,7 +2198,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		bool countThis = false;
 		if (messageType != MediaSettings::Type::Link) {
 			if (hasMedia) {
-				if (mediaSelected && !overSize) {
+				if (mediaSelected) {
 					countThis = true;
 				}
 			} else {
@@ -2215,18 +2207,20 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				}
 			}
 		}
-		_chatProcess->messageItemsCount[i] = countThis ? 1 : 0;
 
 		if (!selected) {
-			onMessagePartDone(i, false);
+			_chatProcess->messageItemsCount[i] = 0;
+			onMessagePartDone(i, false); // Marks the bubble as done, but not selected
 			continue;
 		}
 
-		if (countThis) {
-			if (!_chatProcess->messagesInRangeCountFixed) {
-				_chatProcess->messagesInRangeCount++; // Total bubbles matching (Part 2)
-			}
+		_chatProcess->messageItemsCount[i] = 1; // Mark as selected for progress bar (Y)
 
+		if (!_chatProcess->messagesInRangeCountFixed) {
+			_chatProcess->messagesInRangeCount++; // Every selected bubble increments total for Y
+		}
+
+		if (countThis) {
 			bool uniqueContent = false;
 			if (hasMedia) {
 				if (hasFile) {
@@ -2264,7 +2258,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			}
 		}
 
-		if (!hasMedia && (textFilterSelected || fullHistorySelected)) {
+		if (!hasMedia && ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory))) {
 			_chatProcess->messagesTextProcessed++;
 			_chatProcess->messagesTotalProcessed++;
 		} else if (hasMedia) {
@@ -2282,8 +2276,8 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			.isAuxiliary = true,
 			.messagesTextCount = _chatProcess->messagesTextProcessed,
 			.messagesMediaCount = _chatProcess->messagesMediaProcessed,
-			.messagesTotalCount = _chatProcess->messagesProcessed, // Finished count
-			.messagesTextTotal = _chatProcess->messagesTextTotal,
+			.messagesTotalCount = _chatProcess->messagesProcessed, // Real-time finished count
+			.messagesTextTotal = _chatProcess->messagesInRangeCount,
 			.messagesInRangeCount = _chatProcess->messagesInRangeCount,
 			.messagesUniqueCount = _chatProcess->messagesUniqueCount
 		});
@@ -2300,18 +2294,22 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		for (const auto &part : message.text) {
 			if (part.type == Data::TextPart::Type::CustomEmoji) {
 				if (const auto id = part.additional.toULongLong()) {
-					++required;
-					++_chatProcess->pendingFiles;
-					_chatProcess->emojiToMessageIndices[id].push_back(i);
+					if (!_resolvedCustomEmoji.contains(id)) {
+						++required;
+						++_chatProcess->pendingFiles;
+						_chatProcess->emojiToMessageIndices[id].push_back(i);
+					}
 				}
 			}
 		}
 		for (const auto &reaction : message.reactions) {
 			if (reaction.type == Data::Reaction::Type::CustomEmoji) {
 				if (const auto id = reaction.documentId.toULongLong()) {
-					++required;
-					++_chatProcess->pendingFiles;
-					_chatProcess->emojiToMessageIndices[id].push_back(i);
+					if (!_resolvedCustomEmoji.contains(id)) {
+						++required;
+						++_chatProcess->pendingFiles;
+						_chatProcess->emojiToMessageIndices[id].push_back(i);
+					}
 				}
 			}
 		}
@@ -2739,17 +2737,24 @@ void ApiWrap::processFileLoad(
 
 	const auto types = _settings->media.types;
 	const auto locationKey = file.location ? ComputeLocationKey(file.location) : ApiWrap::LocationKey{ 0, 0 };
-	const auto overSize = !story && _settings->media.sizeLimit > 0 && fullSize >= _settings->media.sizeLimit;
+	const auto oversized = !story && _settings->media.sizeLimit > 0 && fullSize >= _settings->media.sizeLimit;
+	const auto typeIsSelected = (types & type);
+	const auto skipDownload = (types & Type::FullHistory)
+		|| (types == MediaSettings::Types(0))
+		|| !typeIsSelected;
 
 	if (_isScanning) {
-		if (type != Type(0) && !isThumb && !overSize && origin.messageId != 0) {
-			const bool typeSelected = (types & type) || (types & MediaSettings::Type::FullHistory);
-			if (typeSelected) {
-				const bool unique = locationKey.id && _scanVisited.find(locationKey) == _scanVisited.end();
-				if (unique) {
-					_scanVisited.insert(locationKey);
+		if (hasMedia) {
+			if (type != Type(0) && !isThumb && origin.messageId != 0) {
+				const bool typeSelected = (types & type) || (types & MediaSettings::Type::FullHistory);
+				if (typeSelected) {
+					const bool alreadyVisited = locationKey.id && _scanVisited.find(locationKey) != _scanVisited.end();
+					const bool willBeUniqueOnDisk = !alreadyVisited && !oversized;
+					if (!alreadyVisited && willBeUniqueOnDisk) {
+						_scanVisited.insert(locationKey);
+					}
+					_scanStats->increment(type, fullSize, willBeUniqueOnDisk);
 				}
-				_scanStats->increment(type, fullSize, unique);
 			}
 		}
 		done(QString());
@@ -2758,17 +2763,19 @@ void ApiWrap::processFileLoad(
 
 	if (_stats
 		&& origin.messageId != 0
-		&& !isThumb
-		&& !overSize) {
-		const bool sessionUnique = locationKey.id && _exportVisited.find(locationKey) == _exportVisited.end();
-		if (sessionUnique) {
-			_exportVisited.insert(locationKey);
+		&& !isThumb) {
+		const auto it = (locationKey.id != 0) ? _exportVisited.find(locationKey) : _exportVisited.end();
+		const bool alreadyVisited = (it != _exportVisited.end());
+		const bool willBeUniqueOnDisk = !alreadyVisited && !skipDownload && !oversized;
+
+		if (hasMedia && type != Type(0)) {
+			_stats->increment(type, fullSize, willBeUniqueOnDisk);
 		}
-		if (type != Type(0)) {
-			_stats->increment(type, fullSize, sessionUnique);
-		}
-		if (sessionUnique) {
+		if (willBeUniqueOnDisk) {
 			_stats->incrementUserMediaFiles();
+			if (locationKey.id != 0) {
+				_exportVisited[locationKey] = QString(); // Mark as pending/visited
+			}
 		}
 	}
 
@@ -2776,30 +2783,41 @@ void ApiWrap::processFileLoad(
 		|| file.skipReason != SkipReason::None) {
 		done(file.relativePath);
 		return;
-	} else if (!file.location && file.content.isEmpty()) {
-		file.skipReason = SkipReason::Unavailable;
-		done(QString());
-		return;
-	} else if (writePreloadedFile(file, origin)) {
-		done(file.relativePath);
-		return;
+	} else if (locationKey.id != 0 && !isThumb) {
+		const auto it = _exportVisited.find(locationKey);
+		if (it != _exportVisited.end() && !it->second.isEmpty()) {
+			file.relativePath = it->second;
+			done(file.relativePath);
+			return;
+		}
 	}
 
-	const auto typeIsSelected = (types & type);
-	const auto skipDownload = (types & Type::FullHistory)
-		|| (types == MediaSettings::Types(0))
-		|| !typeIsSelected;
+	const auto wrapDone = [=, &file](QString path) mutable {
+		if (!path.isEmpty() && locationKey.id != 0 && !isThumb) {
+			_exportVisited[locationKey] = path;
+		}
+		done(path);
+	};
+
+	if (!file.location && file.content.isEmpty()) {
+		file.skipReason = SkipReason::Unavailable;
+		wrapDone(QString());
+		return;
+	} else if (writePreloadedFile(file, origin)) {
+		wrapDone(file.relativePath);
+		return;
+	}
 
 	if (!story && skipDownload) {
 		file.skipReason = SkipReason::FileType;
-		done(QString());
+		wrapDone(QString());
 		return;
-	} else if (!story && fullSize >= _settings->media.sizeLimit) {
+	} else if (oversized) {
 		file.skipReason = SkipReason::FileSize;
-		done(QString());
+		wrapDone(QString());
 		return;
 	}
-	loadFile(file, origin, std::move(progress), std::move(done));
+	loadFile(file, origin, std::move(progress), std::move(wrapDone));
 }
 
 bool ApiWrap::writePreloadedFile(
@@ -3436,9 +3454,11 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 		const auto need = _chatProcess->messageFilesRequired[index];
 		if (++done == std::max(need, 1)) {
 			// Every message bubble processed in the range increments this
-			// to keep the X / Y progress bar moving correctly.
-			_chatProcess->messagesProcessed++;
-			
+			// if it was selected for the progress bar (Y count).
+			if (_chatProcess->messageItemsCount[index] > 0) {
+				_chatProcess->messagesProcessed++;
+			}
+
 			// Trigger progress update for finished message
 			_chatProcess->fileProgress({
 				.randomId = 0,
@@ -3449,7 +3469,7 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 				.isAuxiliary = true,
 				.messagesTextCount = _chatProcess->messagesTextProcessed,
 				.messagesMediaCount = _chatProcess->messagesMediaProcessed,
-				.messagesTotalCount = _chatProcess->messagesProcessed, // Current finished count 
+				.messagesTotalCount = _chatProcess->messagesProcessed, // Real-time finished count
 				.messagesTextTotal = _chatProcess->messagesInRangeCount,
 				.messagesInRangeCount = _chatProcess->messagesInRangeCount,
 				.messagesUniqueCount = _chatProcess->messagesUniqueCount
@@ -3459,6 +3479,9 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 }
 
 void ApiWrap::clearResults() {
+	if (_chatProcess) {
+		base::take(_chatProcess)->done();
+	}
 	_stats = nullptr;
 	_scanStats = nullptr;
 	_scanVisited.clear();

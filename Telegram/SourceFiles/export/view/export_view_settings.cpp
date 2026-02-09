@@ -1085,6 +1085,17 @@ void SettingsWidget::addSizeSlider(
 		object_ptr<Ui::MediaSlider>(container, st::exportFileSizeSlider),
 		st::exportFileSizePadding);
 	slider->resize(st::exportFileSizeSlider.seekSize);
+
+	const auto sectionsCount = (kSizeValueCount - 1);
+	const auto getIndexByLimit = [](int64 sizeLimit) {
+		for (auto index = 0; index != kSizeValueCount; ++index) {
+			if (sizeLimit <= SizeLimitByIndex(index)) {
+				return index;
+			}
+		}
+		return kSizeValueCount - 1;
+	};
+
 	slider->setPseudoDiscrete(
 		kSizeValueCount,
 		SizeLimitByIndex,
@@ -1099,15 +1110,23 @@ void SettingsWidget::addSizeSlider(
 		| rpl::map([](const Settings &data) {
 			return data.media.sizeLimit;
 		})
+		| rpl::distinct_until_changed()
 		| rpl::start_with_next([=](int64 sizeLimit) {
 			const auto limit = sizeLimit / kMegabyte;
-			const auto size = QString::number(limit) + " MB";
+			const auto size = (sizeLimit >= SizeLimitByIndex(kSizeValueCount - 1))
+				? tr::lng_export_option_size_none(tr::now)
+				: (QString::number(limit) + " MB");
 			const auto text = tr::lng_export_option_size_limit(
 				tr::now,
 				lt_size,
 				size);
 			label->setText(text);
-			slider->setValue(sizeLimit);
+
+			const auto index = getIndexByLimit(sizeLimit);
+			const auto pos = index / float64(sectionsCount);
+			if (std::abs(slider->value() - pos) > 0.001) {
+				slider->setValue(pos);
+			}
 		}, slider->lifetime());
 }
 
@@ -1230,7 +1249,9 @@ void SettingsWidget::setScanning(bool scanning) {
 }
 
 void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats, int messagesCount) {
-	setScanning(false);	// We use our own calculated totals instead of the raw messagesCount
+	setScanning(false);
+	
+	// We use our own calculated totals instead of the raw messagesCount
 	int totalUniqueMessagesCount = 0;
 	int totalTotalMessagesCount = 0;
 	for (const auto &pair : stats) {
@@ -1242,7 +1263,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	}
 
 	if (totalTotalMessagesCount <= 0) {
-		resetToDefault();
+		clearScanResults();
 		using MediaType = MediaSettings::Type;
 		const auto types = readData().media.types;
 		const auto hasMedia = (types & MediaType::MediaMask) || (types & MediaType::Sticker) || (types & MediaType::GIF) || (types & MediaType::File);
@@ -1290,7 +1311,6 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	};
 
 	int categoriesCount = 0;
-	const bool linksOnly = (readData().media.types == MediaType::Link);
 
 	for (const auto type : order) {
 		const auto it = _scanResults.find(type);
@@ -1339,7 +1359,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 				totalMediaSize += item.totalSize;
 			}
 
-			if (type != MediaType::Link || linksOnly) {
+			if (type != MediaType::Link) {
 				totalUniqueMessagesCount += item.uniqueCount;
 				totalTotalMessagesCount += item.totalCount;
 			}
@@ -1392,8 +1412,11 @@ void SettingsWidget::resetToDefault() {
 		data.singlePeerFromId = 0;
 		data.singlePeerTillId = 0;
 		data.useIdRange = false;
+		data.media.sizeLimit = 8 * 1024 * 1024; // Explicitly reset size limit
 	});
-	clearScanResults();
+	_scanResults.clear();
+	_hasScanResults = false;
+	_changes.fire_copy(readData());
 }
 
 } // namespace View
