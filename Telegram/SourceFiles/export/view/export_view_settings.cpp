@@ -1081,13 +1081,18 @@ void SettingsWidget::addMediaOption(
 		| rpl::map([=](const Settings &data) {
 			const bool checked = (data.media.types & type) == type;
 			const bool linksOnly = (data.media.types == MediaSettings::Type::Link);
+			const bool fullHistory = (data.media.types & MediaSettings::Type::FullHistory);
 			bool enabled = true;
 			if (type == MediaSettings::Type::Link) {
 				const bool otherSelected = (data.media.types & ~MediaSettings::Type::Link)
 					|| (data.types != Settings::Types(0));
 				enabled = !otherSelected;
+			} else if (type == MediaSettings::Type::FullHistory) {
+				const bool otherSelected = (data.media.types & ~MediaSettings::Type::FullHistory)
+					|| (data.types != Settings::Types(0));
+				enabled = !otherSelected;
 			} else {
-				enabled = !linksOnly;
+				enabled = !linksOnly && !fullHistory;
 			}
 			return std::make_pair(checked, enabled);
 		})
@@ -1198,7 +1203,6 @@ void SettingsWidget::refreshButtons(
 	cancelBtn->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 	cancelBtn->show();
 	cancelBtn->clicks() | rpl::to_empty | rpl::start_with_next([=] {
-		clearScanResults();
 		_cancelClicks.fire({});
 	}, cancelBtn->lifetime());
 

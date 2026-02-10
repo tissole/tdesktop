@@ -238,43 +238,40 @@ Content ContentFromState(const FinishedState &state) {
 		case Type::Text: label = tr::lng_export_option_text_messages(tr::now); break;
 		case Type::Link: label = tr::lng_export_option_links(tr::now); break;
 		}
-		if (!label.isEmpty()) {
-			categoriesCount++;
-			QString text;
-			const bool hasDuplicates = (item.uniqueCount != item.totalCount)
-				|| (item.uniqueSize != item.totalSize);
+		QString text;
+		const bool hasDuplicates = (item.uniqueCount != item.totalCount)
+			|| (item.uniqueSize != item.totalSize);
 
-			if (type == Type::Text || type == Type::Link) {
-				const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount);
-				const auto totalStr = Lang::FormatCountDecimal(item.totalCount);
-				if (hasDuplicates) {
-					text = label + ": " + uniqueStr + ", " + totalStr;
-				} else {
-					text = label + ": " + totalStr;
-				}
+		if (type == Type::Text || type == Type::Link) {
+			const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount);
+			const auto totalStr = Lang::FormatCountDecimal(item.totalCount);
+			if (hasDuplicates) {
+				text = label + ": " + uniqueStr + ", " + totalStr;
 			} else {
-				const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount)
-					+ " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
-				const auto totalStr = Lang::FormatCountDecimal(item.totalCount)
-					+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
+				text = label + ": " + totalStr;
+			}
+		} else {
+			const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount)
+				+ " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
+			const auto totalStr = Lang::FormatCountDecimal(item.totalCount)
+				+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
 
-				if (hasDuplicates) {
-					text = label + ": " + uniqueStr + ", " + totalStr;
-				} else {
-					text = label + ": " + totalStr;
-				}
-
-				totalUniqueMediaSize += item.uniqueSize;
-				totalMediaSize += item.totalSize;
+			if (hasDuplicates) {
+				text = label + ": " + uniqueStr + ", " + totalStr;
+			} else {
+				text = label + ": " + totalStr;
 			}
 
-			if (type != Type::Link) {
-				totalUniqueMessagesCount += item.uniqueCount;
-				totalTotalMessagesCount += item.totalCount;
-			}
-
-			result.rows.push_back({ Content::kDoneId, text, QString(), 1. });
+			totalUniqueMediaSize += item.uniqueSize;
+			totalMediaSize += item.totalSize;
 		}
+
+		if (type != Type::Link) {
+			totalUniqueMessagesCount += item.uniqueCount;
+			totalTotalMessagesCount += item.totalCount;
+		}
+
+		result.rows.push_back({ Content::kDoneId, text, QString(), 1. });
 	}
 
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
@@ -285,8 +282,8 @@ Content ContentFromState(const FinishedState &state) {
 			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
 		QString totalText;
-		if (totalUniqueMessagesCount != totalTotalMessagesCount) {
-			totalText = label + uniqueStr + ", " + totalText;
+		if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
+			totalText = label + uniqueStr + ", " + totalStr;
 		} else {
 			totalText = label + totalStr;
 		}

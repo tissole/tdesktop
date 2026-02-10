@@ -1575,11 +1575,12 @@ void ApiWrap::resolveDates() {
 }
 
 void ApiWrap::finishExport(FnMut<void()> done) {
+	const auto takeoutId = base::take(_takeoutId);
 	const auto guard = gsl::finally([&] {
 		clearState();
 	});
 
-	if (!_takeoutId) {
+	if (!takeoutId) {
 		if (done) {
 			done();
 		}
@@ -1588,7 +1589,7 @@ void ApiWrap::finishExport(FnMut<void()> done) {
 
 	mainRequest(MTPaccount_FinishTakeoutSession(
 		MTP_flags(MTPaccount_FinishTakeoutSession::Flag::f_success)
-	)).done(std::move(done)).send();
+	), takeoutId).done(std::move(done)).send();
 }
 
 void ApiWrap::skipFile(uint64 randomId) {
@@ -2195,10 +2196,13 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		}
 		const auto hasAnyLink = !linksInThisMessage.empty();
 		const bool linkSelectedForStats = (types & MediaSettings::Type::Link) || (types & MediaSettings::Type::FullHistory);
+		const bool textSelectedForStats = (types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory);
 
-		// Requirement: Links bypass size limits
+		// Requirement: Links and Text bypass size limits for statistics/counting.
+		// Plain text messages (messageType == Text && !hasFile) already have oversized == false.
+		// Text messages with web previews (messageType == Text && hasFile) should also ignore size for stats.
 		const auto oversized = (hasFile && _settings->media.sizeLimit > 0 && fullSize >= _settings->media.sizeLimit)
-			&& !hasAnyLink;
+			&& !hasAnyLink && !(messageType == MediaSettings::Type::Text && (types & MediaSettings::Type::Text));
 
 		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
 		if (hasAnyLink && linkSelectedForStats) {
@@ -2217,8 +2221,8 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		}
 
 		// selected means "should be in HTML/JSON"
-		// We include everything that matches the type filter, regardless of size.
-		bool selected = mediaSelected 
+		// Requirement: Total scan should respect size selected for media filters.
+		bool selected = (mediaSelected && (!oversized || fullHistorySelected))
 			|| (hasAnyLink && linkSelectedForStats) 
 			|| (!hasMedia && ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory)));
 
@@ -2254,9 +2258,8 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			bool uniqueBubble = false;
 			if (hasMedia) {
 				if (hasFile) {
-					// Statistics for unique media MUST reflect actual downloaded media.
-					// If oversized, it won't be downloaded, so it's not "Unique content" for Part 1.
-					if (!oversized) {
+					// Statistics MUST strictly respect size selected, UNLESS Full History/Text is selected.
+					if (!oversized || fullHistorySelected || (messageType == MediaType::Text && (types & MediaType::Text))) {
 						const auto locationKey = message.file().location ? ComputeLocationKey(message.file().location) : ApiWrap::LocationKey{ 0, 0 };
 						if (_isScanning) {
 							// For scanning, we don't mark as visited here,
@@ -2264,8 +2267,10 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 							uniqueBubble = true;
 						} else {
 							auto &visited = _exportVisited;
-							if (locationKey.id && visited.find(locationKey) == visited.end()) {
-								visited[locationKey] = QString(); // Mark as seen
+							const auto it = (locationKey.id != 0) ? visited.find(locationKey) : visited.end();
+							const bool alreadyVisited = (it != visited.end());
+							if (locationKey.id && !alreadyVisited) {
+								visited[locationKey] = QString(); // Mark as seen (pending)
 								uniqueBubble = true;
 							} else if (!locationKey.id) {
 								uniqueBubble = true;
@@ -2777,20 +2782,17 @@ void ApiWrap::processFileLoad(
 		? story->file().size
 		: file.size;
 
-	const auto types = _settings->media.types;
-	const auto locationKey = file.location ? ComputeLocationKey(file.location) : ApiWrap::LocationKey{ 0, 0 };
-	const auto oversized = !story && _settings->media.sizeLimit > 0 && fullSize >= _settings->media.sizeLimit;
-	const auto typeIsSelected = (types & type);
-	const auto skipDownload = (types & Type::FullHistory)
+	const bool typeSelected = (types & type);
+	const bool fullHistorySelected = (types & MediaSettings::Type::FullHistory);
+	const auto skipDownload = fullHistorySelected
 		|| (types == MediaSettings::Types(0))
-		|| !typeIsSelected;
+		|| !typeSelected;
 
 	if (_isScanning) {
 		if (message || story) {
 			if (type != Type(0) && !isThumb && origin.messageId != 0) {
-				const bool typeSelected = (types & type) || (types & MediaSettings::Type::FullHistory);
-				const bool ignoreSize = (types & MediaSettings::Type::FullHistory);
-				if (typeSelected && (!oversized || ignoreSize)) {
+				// Total scan MUST strictly respect size selected, UNLESS Full History is selected.
+				if (typeSelected && (!oversized || fullHistorySelected)) {
 					const bool alreadyVisited = locationKey.id && _scanVisited.find(locationKey) != _scanVisited.end();
 					const bool willBeUniqueInChat = !alreadyVisited;
 					if (!alreadyVisited) {
@@ -2807,21 +2809,18 @@ void ApiWrap::processFileLoad(
 	if (_stats
 		&& origin.messageId != 0
 		&& !isThumb) {
-		const bool typeSelected = (types & type) || (types & MediaSettings::Type::FullHistory);
-		const bool ignoreSize = (types & MediaSettings::Type::FullHistory);
-
-		if (typeSelected && (!oversized || ignoreSize)) {
+		if (typeSelected && (!oversized || fullHistorySelected)) {
 			auto &visited = _exportVisited;
 			const auto it = (locationKey.id != 0) ? visited.find(locationKey) : visited.end();
-			const bool alreadyVisited = (it != visited.end() && !it->second.isEmpty());
+			const bool alreadyVisited = (it != visited.end());
 			const bool willBeUniqueInChat = !alreadyVisited;
 
 			if ((message || story) && type != Type(0)) {
 				_stats->increment(type, fullSize, willBeUniqueInChat);
 			}
-			if (willBeUniqueInChat && !skipDownload) {
+			if (!alreadyVisited && !skipDownload) {
 				_stats->incrementUserMediaFiles();
-				if (locationKey.id != 0 && it == visited.end()) {
+				if (locationKey.id != 0) {
 					visited[locationKey] = QString(); // Mark as pending
 				}
 			}
