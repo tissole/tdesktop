@@ -353,6 +353,8 @@ struct ApiWrap::ChatProcess {
 	std::vector<int> messageFilesRequired;
 	std::vector<int> messageFilesDone;
 
+	base::flat_set<LocationKey> seenLocations;
+
 	// Emoji id -> list of message indices depending on that emoji in current slice
 	std::unordered_map<uint64, std::vector<int>> emojiToMessageIndices;
 };
@@ -1391,8 +1393,15 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 	const auto minId = (_chatProcess->fromId > 0) ? std::max(int64(0), _chatProcess->fromId - 1) : int64(0);
 	const auto maxId = (_chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
 
+	using Flag = MTPmessages_Search::Flag;
+	auto searchFlags = Flag::f_filter
+		| (_settings->singlePeerFrom > 0 ? Flag::f_min_date : Flag(0))
+		| (_settings->singlePeerTill > 0 ? Flag::f_max_date : Flag(0))
+		| (minId > 0 ? Flag::f_min_id : Flag(0))
+		| (maxId > 0 ? Flag::f_max_id : Flag(0));
+
 	mainRequest(MTPmessages_Search(
-		MTP_flags(0),
+		MTP_flags(searchFlags),
 		peer,
 		MTP_string(""), // q
 		MTP_inputPeerEmpty(), // from_id
@@ -1442,9 +1451,7 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 		// than the total chat count returned by the server.
 		const auto fromId = (_chatProcess->fromId > 0) ? _chatProcess->fromId : (_settings->useIdRange ? _settings->singlePeerFromId : int64(1));
 		const auto tillId = (_chatProcess->tillId > 0) ? _chatProcess->tillId : (_settings->useIdRange ? _settings->singlePeerTillId : int64(0));
-		const auto realCount = (tillId > 0 && !mediaFilterActive)
-			? std::min(count, int(std::max(int64(0), tillId - fromId + 1)))
-			: count;
+		const auto realCount = count;
 		
 		checkFirstMessageDate(localSplitIndex, realCount);
 	}).send();
@@ -1989,8 +1996,12 @@ void ApiWrap::requestChatMessages(
 		});
 
 		if (count >= 0 && !_chatProcess->messagesInRangeCountFixed) {
-			// If we only have Links selected, the server's count is exactly Y.
-			_chatProcess->messagesInRangeCount = count;
+			const auto mediaFilterActive = (filter.type() != mtpc_inputMessagesFilterEmpty);
+			const auto sizeFilterActive = (_settings->media.sizeLimit > 0);
+			if (mediaFilterActive && !sizeFilterActive) {
+				// If we only have specific media selected AND no size limit, the server's count is exactly Y.
+				_chatProcess->messagesInRangeCount = count;
+			}
 		}
 
 		if (auto requestDone = base::take(_chatProcess->requestDone)) {
@@ -2015,9 +2026,17 @@ void ApiWrap::requestChatMessages(
 		|| (filter.type() != mtpc_inputMessagesFilterEmpty);
 
 	if (useSearch) {
-		const auto searchFlags = _chatProcess->info.onlyMyMessages
-			? MTPmessages_Search::Flag::f_from_id
-			: MTPmessages_Search::Flag(0);
+		using Flag = MTPmessages_Search::Flag;
+		auto searchFlags = (_chatProcess->info.onlyMyMessages ? Flag::f_from_id : Flag(0))
+			| (filter.type() != mtpc_inputMessagesFilterEmpty ? Flag::f_filter : Flag(0))
+			| (_settings->singlePeerFrom > 0 ? Flag::f_min_date : Flag(0))
+			| (_settings->singlePeerTill > 0 ? Flag::f_max_date : Flag(0))
+			| (offsetId != 0 ? Flag::f_offset_id : Flag(0))
+			| (addOffset != 0 ? Flag::f_add_offset : Flag(0))
+			| (limit != 0 ? Flag::f_limit : Flag(0))
+			| (maxId > 0 ? Flag::f_max_id : Flag(0))
+			| (minId > 0 ? Flag::f_min_id : Flag(0));
+
 		splitRequest(realSplitIndex, MTPmessages_Search(
 			MTP_flags(searchFlags),
 			realPeerInput,
@@ -2198,11 +2217,12 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		const bool linkSelectedForStats = (types & MediaSettings::Type::Link) || (types & MediaSettings::Type::FullHistory);
 		[[maybe_unused]] const bool textSelectedForStats = (types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory);
 
-		// Requirement: Links and Text bypass size limits for statistics/counting.
+		// Requirement: Links, Text, and Full History bypass size limits for statistics/counting.
 		// Plain text messages (messageType == Text && !hasFile) already have oversized == false.
 		// Text messages with web previews (messageType == Text && hasFile) should also ignore size for stats.
-		const auto oversized = (hasFile && _settings->media.sizeLimit > 0 && fullSize >= _settings->media.sizeLimit)
-			&& !hasAnyLink && !(messageType == MediaSettings::Type::Text && (types & MediaSettings::Type::Text));
+		const auto oversized = (hasFile && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit)
+			&& !hasAnyLink && !(messageType == MediaSettings::Type::Text && (types & MediaSettings::Type::Text))
+			&& !fullHistorySelected;
 
 		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
 		if (hasAnyLink && linkSelectedForStats) {
@@ -2256,32 +2276,18 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		if (countThis) {
 			bool uniqueBubble = false;
-			if (hasMedia) {
-				if (hasFile) {
-					// Statistics MUST strictly respect size selected, UNLESS Full History/Text is selected.
-					if (!oversized || fullHistorySelected || (messageType == MediaType::Text && (types & MediaType::Text))) {
-						const auto locationKey = message.file().location ? ComputeLocationKey(message.file().location) : ApiWrap::LocationKey{ 0, 0 };
-						if (_isScanning) {
-							// For scanning, we don't mark as visited here,
-							// because processFileLoad will handle scan stats.
-							uniqueBubble = true;
-						} else {
-							auto &visited = _exportVisited;
-							const auto it = (locationKey.id != 0) ? visited.find(locationKey) : visited.end();
-							const bool alreadyVisited = (it != visited.end());
-							if (locationKey.id && !alreadyVisited) {
-								visited[locationKey] = QString(); // Mark as seen (pending)
-								uniqueBubble = true;
-							} else if (!locationKey.id) {
-								uniqueBubble = true;
-							}
-						}
+			if (!hasFile) {
+				uniqueBubble = true;
+			} else {
+				const auto locationKey = message.file().location ? ComputeLocationKey(message.file().location) : ApiWrap::LocationKey{ 0, 0 };
+				if (locationKey.id || locationKey.type) {
+					if (!_chatProcess->seenLocations.contains(locationKey)) {
+						_chatProcess->seenLocations.insert(locationKey);
+						uniqueBubble = true;
 					}
 				} else {
-					uniqueBubble = true; // Non-file media like service messages
+					uniqueBubble = true;
 				}
-			} else {
-				uniqueBubble = true; // Text is always unique bubble content
 			}
 			if (uniqueBubble) {
 				_chatProcess->messageIsUnique[i] = true;
@@ -2783,7 +2789,8 @@ void ApiWrap::processFileLoad(
 		: file.size;
 
 	const auto types = _settings->media.types;
-	const auto oversized = (file.location && _settings->media.sizeLimit > 0 && fullSize >= _settings->media.sizeLimit);
+	const auto fullHistorySelected = (types & MediaSettings::Type::FullHistory);
+	const auto oversized = (file.location && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit && !fullHistorySelected);
 	const auto locationKey = file.location ? ComputeLocationKey(file.location) : ApiWrap::LocationKey{ 0, 0 };
 
 	const bool typeSelected = (types & type);
@@ -2797,9 +2804,9 @@ void ApiWrap::processFileLoad(
 			if (type != Type(0) && !isThumb && origin.messageId != 0) {
 				// Total scan MUST strictly respect size selected, UNLESS Full History is selected.
 				if (typeSelected && (!oversized || fullHistorySelected)) {
-					const bool alreadyVisited = locationKey.id && _scanVisited.find(locationKey) != _scanVisited.end();
+					const bool alreadyVisited = (locationKey.id || locationKey.type) && _scanVisited.find(locationKey) != _scanVisited.end();
 					const bool willBeUniqueInChat = !alreadyVisited;
-					if (!alreadyVisited) {
+					if (!alreadyVisited && (locationKey.id || locationKey.type)) {
 						_scanVisited.emplace(locationKey, QString());
 					}
 					_scanStats->increment(type, fullSize, willBeUniqueInChat);
@@ -2815,7 +2822,7 @@ void ApiWrap::processFileLoad(
 		&& !isThumb) {
 		if (typeSelected && (!oversized || fullHistorySelected)) {
 			auto &visited = _exportVisited;
-			const auto it = (locationKey.id != 0) ? visited.find(locationKey) : visited.end();
+			const auto it = (locationKey.id != 0 || locationKey.type != 0) ? visited.find(locationKey) : visited.end();
 			const bool alreadyVisited = (it != visited.end());
 			const bool willBeUniqueInChat = !alreadyVisited;
 
@@ -2824,7 +2831,7 @@ void ApiWrap::processFileLoad(
 			}
 			if (!alreadyVisited && !skipDownload) {
 				_stats->incrementUserMediaFiles();
-				if (locationKey.id != 0) {
+				if (locationKey.id != 0 || locationKey.type != 0) {
 					visited[locationKey] = QString(); // Mark as pending
 				}
 			}

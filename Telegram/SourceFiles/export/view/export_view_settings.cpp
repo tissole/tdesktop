@@ -128,7 +128,8 @@ SettingsWidget::SettingsWidget(
 	_changes.events() | rpl::start_with_next([=](const Settings &data) {
 		const auto old = _internal_data;
 		const bool filtersChanged = (data.media.types != old.media.types)
-			|| (data.types != old.types);
+			|| (data.types != old.types)
+			|| (data.media.sizeLimit != old.media.sizeLimit);
 		const bool rangeChanged = (data.singlePeerFrom != old.singlePeerFrom)
 			|| (data.singlePeerTill != old.singlePeerTill)
 			|| (data.singlePeerFromId != old.singlePeerFromId)
@@ -897,8 +898,6 @@ not_null<Ui::Checkbox*> SettingsWidget::addOption(
 		| rpl::start_with_next([=](bool checked) {
 			changeData([&](Settings &data) {
 				if (checked) {
-					data.media.types &= ~MediaSettings::Type::FullHistory;
-					data.media.types &= ~MediaSettings::Type::Link;
 					data.types |= types;
 				} else {
 					data.types &= ~types;
@@ -908,22 +907,16 @@ not_null<Ui::Checkbox*> SettingsWidget::addOption(
 
 	value()
 		| rpl::map([=](const Settings &data) {
-			return (data.types & types) == types;
+			const bool checked = (data.types & types) == types;
+			const bool linkSelected = (data.media.types & MediaType::Link);
+			const bool historySelected = (data.media.types & MediaType::FullHistory);
+			const bool enabled = !linkSelected && !historySelected;
+			return std::make_pair(checked, enabled);
 		})
 		| rpl::distinct_until_changed()
-		| rpl::start_with_next([=](bool checked) {
-			checkbox->setChecked(checked);
-		}, checkbox->lifetime());
-
-	value()
-		| rpl::map([=](const Settings &data) {
-			const bool linksOnly = (data.media.types == MediaSettings::Type::Link);
-			const bool fullHistory = (data.media.types & MediaSettings::Type::FullHistory);
-			return !linksOnly && !fullHistory;
-		})
-		| rpl::distinct_until_changed()
-		| rpl::start_with_next([=](bool enabled) {
-			checkbox->setEnabled(enabled);
+		| rpl::start_with_next([=](std::pair<bool, bool> state) {
+			checkbox->setChecked(state.first);
+			checkbox->setEnabled(state.second);
 		}, checkbox->lifetime());
 
 	return checkbox;
@@ -962,8 +955,6 @@ void SettingsWidget::addChatOption(
 	onlyMy->entity()->checkedChanges()
 		| rpl::start_with_next([=](bool checked) {
 			changeData([&](Settings &data) {
-				data.media.types &= ~MediaSettings::Type::FullHistory;
-				data.media.types &= ~MediaSettings::Type::Link;
 				if (checked) {
 					data.fullChats &= ~types;
 				} else {
@@ -974,11 +965,16 @@ void SettingsWidget::addChatOption(
 
 	value()
 		| rpl::map([=](const Settings &data) {
-			return (data.fullChats & types) != types;
+			const bool checked = (data.fullChats & types) != types;
+			const bool linkSelected = (data.media.types & MediaType::Link);
+			const bool historySelected = (data.media.types & MediaType::FullHistory);
+			const bool enabled = !linkSelected && !historySelected;
+			return std::make_pair(checked, enabled);
 		})
 		| rpl::distinct_until_changed()
-		| rpl::start_with_next([=](bool checked) {
-			onlyMy->entity()->setChecked(checked);
+		| rpl::start_with_next([=](std::pair<bool, bool> state) {
+			onlyMy->entity()->setChecked(state.first);
+			onlyMy->entity()->setEnabled(state.second);
 		}, onlyMy->lifetime());
 
 	onlyMy->toggleOn(checkbox->checkedValue());
@@ -1062,10 +1058,10 @@ void SettingsWidget::addMediaOption(
 				if (checked) {
 					if (type == MediaType::FullHistory) {
 						data.media.types = MediaType::FullHistory;
-						data.types &= Settings::Type::AnyChatsMask;
+						data.types = Settings::Types(0);
 					} else if (type == MediaType::Link) {
 						data.media.types = MediaType::Link;
-						data.types = Settings::Types(0); // Uncheck all chat types too
+						data.types = Settings::Types(0);
 					} else {
 						data.media.types &= ~MediaType::FullHistory;
 						data.media.types &= ~MediaType::Link;
@@ -1080,19 +1076,18 @@ void SettingsWidget::addMediaOption(
 	value()
 		| rpl::map([=](const Settings &data) {
 			const bool checked = (data.media.types & type) == type;
-			const bool linksOnly = (data.media.types == MediaSettings::Type::Link);
-			const bool fullHistory = (data.media.types & MediaSettings::Type::FullHistory);
+			const bool linkSelected = (data.media.types & MediaType::Link);
+			const bool historySelected = (data.media.types & MediaType::FullHistory);
+			const bool otherMediaSelected = (data.media.types & ~(MediaType::Link | MediaType::FullHistory));
+			const bool chatSelected = (data.types != Settings::Types(0));
+
 			bool enabled = true;
-			if (type == MediaSettings::Type::Link) {
-				const bool otherSelected = (data.media.types & ~MediaSettings::Type::Link)
-					|| (data.types != Settings::Types(0));
-				enabled = !otherSelected;
-			} else if (type == MediaSettings::Type::FullHistory) {
-				const bool otherSelected = (data.media.types & ~MediaSettings::Type::FullHistory)
-					|| (data.types != Settings::Types(0));
-				enabled = !otherSelected;
+			if (type == MediaType::Link) {
+				enabled = !historySelected && !otherMediaSelected && !chatSelected;
+			} else if (type == MediaType::FullHistory) {
+				enabled = !linkSelected && !otherMediaSelected && !chatSelected;
 			} else {
-				enabled = !linksOnly && !fullHistory;
+				enabled = !linkSelected && !historySelected;
 			}
 			return std::make_pair(checked, enabled);
 		})
