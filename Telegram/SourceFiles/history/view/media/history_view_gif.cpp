@@ -28,6 +28,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item.h"
 #include "history/history.h"
 #include "history/view/history_view_element.h"
+#include "history/history_item_helpers.h"
+#include "base/unixtime.h"
 #include "history/view/history_view_cursor_state.h"
 #include "history/view/history_view_reply.h"
 #include "history/view/history_view_transcribe_button.h"

@@ -921,6 +921,7 @@ void ControllerObject::setFinishedState() {
 	const auto breakdown = _stats.byType();
 	using Type = MediaSettings::Type;
 	const bool linksOnly = (_settings.media.types == Type::Link);
+	(void)linksOnly;
 
 	for (const auto &pair : breakdown) {
 		const auto type = pair.first;

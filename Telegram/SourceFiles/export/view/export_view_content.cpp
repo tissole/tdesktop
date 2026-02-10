@@ -218,6 +218,7 @@ Content ContentFromState(const FinishedState &state) {
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
 	const bool linksOnly = (state.breakdown.size() == 1 && state.breakdown.begin()->first == Type::Link);
+	(void)linksOnly;
 
 	for (const auto type : order) {
 		const auto it = state.breakdown.find(type);

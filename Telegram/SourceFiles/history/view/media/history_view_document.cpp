@@ -27,6 +27,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/format_values.h"
 #include "ui/text/format_song_document_name.h"
 #include "ui/text/text_utilities.h"
+#include "history/history_item_helpers.h"
+#include "base/unixtime.h"
 #include "ui/chat/chat_style.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"

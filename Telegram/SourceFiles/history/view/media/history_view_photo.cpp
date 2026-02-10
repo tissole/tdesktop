@@ -27,6 +27,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_style.h"
 #include "ui/text/text_utilities.h"
 #include "ui/grouped_layout.h"
+#include "history/history_item_helpers.h"
+#include "base/unixtime.h"
 #include "ui/cached_round_corners.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"

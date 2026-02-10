@@ -23,6 +23,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/cached_round_corners.h"
 #include "ui/chat/chat_style.h"
 #include "ui/painter.h"
+#include "history/history_item_helpers.h"
+#include "base/unixtime.h"
 #include "styles/style_chat.h"
 
 namespace HistoryView {
