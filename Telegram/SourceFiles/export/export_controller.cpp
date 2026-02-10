@@ -422,43 +422,42 @@ void ControllerObject::startExport(
 	_environment = environment;
 
 	_stats.clear();
-	int totalTotalMessagesCount = 0;
+	int totalTotalFilesCount = 0;
 	using MediaType = MediaSettings::Type;
 	for (const auto &pair : _scanStats.byType()) {
 		const auto type = pair.first;
 		const auto &item = pair.second;
-		if ((_settings.media.types & type) || (_settings.media.types & MediaType::FullHistory)) {
+		
+		// If Full History is selected, add up all media/text items (excluding links from message sum)
+		if (_settings.media.types & MediaType::FullHistory) {
 			if (type != MediaType::Link) {
-				totalTotalMessagesCount += item.totalCount;
+				totalTotalFilesCount += item.totalCount;
+			}
+		} else if (_settings.media.types & type) {
+			// If specific filter selected, add those counts
+			if (type != MediaType::Link) {
+				totalTotalFilesCount += item.totalCount;
 			}
 		}
 	}
-	if (totalTotalMessagesCount > 0) {
-		_stats.setExpectedFilesCount(totalTotalMessagesCount);
-		_messagesCount = totalTotalMessagesCount;
-		_messagesInRangeCount = totalTotalMessagesCount;
+	
+	if (totalTotalFilesCount > 0) {
+		_stats.setExpectedFilesCount(totalTotalFilesCount);
+		_messagesCount = totalTotalFilesCount;
+		_messagesInRangeCount = totalTotalFilesCount;
 		_scanStatsFound = true;
 	} else if (!_scanStats.byType().empty()) {
 		const auto breakdown = _scanStats.byType();
 		const auto it = breakdown.find(MediaType::Link);
 		if (it != breakdown.end() && it->second.totalCount > 0) {
-			_messagesCount = _messagesInRangeCount;
+			_messagesCount = it->second.totalCount; // Use link count as denominator if only links
 			_stats.setExpectedFilesCount(_messagesCount);
 			_scanStatsFound = true;
-		} else {
-			_messagesCount = 0;
-			_stats.setExpectedFilesCount(0);
-			_scanStatsFound = false;
 		}
 	} else {
-		// Fallback: If no scan was performed, use 0 and let it be set in startExportMessages
 		_messagesCount = 0;
 		_stats.setExpectedFilesCount(0);
 		_scanStatsFound = false;
-		if (_isScanning) {
-			_isScanning = false;
-			clearResults();
-		}
 	}
 
 	_isScanning = false;

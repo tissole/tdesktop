@@ -898,6 +898,8 @@ not_null<Ui::Checkbox*> SettingsWidget::addOption(
 		| rpl::start_with_next([=](bool checked) {
 			changeData([&](Settings &data) {
 				if (checked) {
+					data.media.types &= ~MediaType::FullHistory;
+					data.media.types &= ~MediaType::Link;
 					data.types |= types;
 				} else {
 					data.types &= ~types;
@@ -1142,7 +1144,9 @@ void SettingsWidget::addSizeSlider(
 		| rpl::start_with_next([=](std::pair<int64, MediaSettings::Types> state) {
 			const auto sizeLimit = state.first;
 			const auto types = state.second;
-			const auto disabled = (types & MediaSettings::Type::Link) != 0;
+			const auto disabled = (types & MediaSettings::Type::Link)
+				|| (types & MediaSettings::Type::FullHistory)
+				|| (types & MediaSettings::Type::Text);
 			slider->setDisabled(disabled);
 
 			const auto limit = sizeLimit / kMegabyte;

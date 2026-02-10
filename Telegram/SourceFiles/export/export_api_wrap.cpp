@@ -2217,11 +2217,11 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		const bool linkSelectedForStats = (types & MediaSettings::Type::Link) || (types & MediaSettings::Type::FullHistory);
 		[[maybe_unused]] const bool textSelectedForStats = (types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory);
 
-		// Requirement: Links, Text, and Full History bypass size limits for statistics/counting.
+	// Requirement: Links, Text, and Full History bypass size limits for statistics/counting.
 		// Plain text messages (messageType == Text && !hasFile) already have oversized == false.
 		// Text messages with web previews (messageType == Text && hasFile) should also ignore size for stats.
 		const auto oversized = (hasFile && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit)
-			&& !hasAnyLink && !(messageType == MediaSettings::Type::Text && (types & MediaSettings::Type::Text))
+			&& !hasAnyLink && (messageType != MediaSettings::Type::Text)
 			&& !fullHistorySelected;
 
 		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
@@ -2284,6 +2284,11 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					if (!_chatProcess->seenLocations.contains(locationKey)) {
 						_chatProcess->seenLocations.insert(locationKey);
 						uniqueBubble = true;
+						
+						// During export, also mark in the global visited map to sync with processFileLoad
+						if (!_isScanning) {
+							_exportVisited[locationKey] = QString();
+						}
 					}
 				} else {
 					uniqueBubble = true;
