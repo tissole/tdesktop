@@ -1441,12 +1441,12 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 			return;
 		}
 		
-		const auto mediaFilterActive = (filter.type() != mtpc_inputMessagesFilterEmpty);
+		// const auto mediaFilterActive = (filter.type() != mtpc_inputMessagesFilterEmpty);
 		
 		// If scanning text/history in a specific range, use the ID difference as a better estimate
 		// than the total chat count returned by the server.
-		const auto fromId = (_chatProcess->fromId > 0) ? _chatProcess->fromId : (_settings->useIdRange ? _settings->singlePeerFromId : int64(1));
-		const auto tillId = (_chatProcess->tillId > 0) ? _chatProcess->tillId : (_settings->useIdRange ? _settings->singlePeerTillId : int64(0));
+		// const auto fromId = (_chatProcess->fromId > 0) ? _chatProcess->fromId : (_settings->useIdRange ? _settings->singlePeerFromId : int64(1));
+		// const auto tillId = (_chatProcess->tillId > 0) ? _chatProcess->tillId : (_settings->useIdRange ? _settings->singlePeerTillId : int64(0));
 		const auto realCount = count;
 		
 		checkFirstMessageDate(localSplitIndex, realCount);
@@ -1992,9 +1992,9 @@ void ApiWrap::requestChatMessages(
 		});
 
 		if (count >= 0 && !_chatProcess->messagesInRangeCountFixed) {
-			const auto mediaFilterActive = (filter.type() != mtpc_inputMessagesFilterEmpty);
+			// const auto mediaFilterActive = (filter.type() != mtpc_inputMessagesFilterEmpty);
 			const auto sizeFilterActive = (_settings->media.sizeLimit > 0);
-			if (mediaFilterActive && !sizeFilterActive) {
+			if (/*mediaFilterActive &&*/ !sizeFilterActive) {
 				// If we only have specific media selected AND no size limit, the server's count is exactly Y.
 				_chatProcess->messagesInRangeCount = count;
 			}
