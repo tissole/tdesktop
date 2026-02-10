@@ -1415,8 +1415,8 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 		MTP_int(0), // add_offset
 		MTP_int(1), // limit
 		MTP_int(int32(maxId)), // max_id
-		MTP_int(int32(minId)), // min_id
-		MTP_long(0) // hash
+		MTP_int(int32(minId))  // min_id
+		// Removed hash parameter as it's not part of the current API
 	)).done([=](const MTPmessages_Messages &result) {
 		if (!_chatProcess || !_settings) return;
 
@@ -2052,8 +2052,8 @@ void ApiWrap::requestChatMessages(
 			MTP_int(addOffset),
 			MTP_int(limit),
 			MTP_int(int32(maxId)), // max_id
-			MTP_int(int32(minId)), // min_id
-			MTP_long(0) // hash
+			MTP_int(int32(minId))  // min_id
+			// Removed hash parameter as it's not part of the current API
 		)).done(doneHandler).send();
 	} else {
 				splitRequest(realSplitIndex, MTPmessages_GetHistory(
@@ -2799,8 +2799,8 @@ void ApiWrap::processFileLoad(
 	const auto locationKey = file.location ? ComputeLocationKey(file.location) : ApiWrap::LocationKey{ 0, 0 };
 
 	const bool typeSelected = (types & type);
-	const bool fullHistorySelected = (types & MediaSettings::Type::FullHistory);
-	const auto skipDownload = fullHistorySelected
+	const bool fullHistorySelectedLocal = (types & MediaSettings::Type::FullHistory);
+	const auto skipDownload = fullHistorySelectedLocal
 		|| (types == MediaSettings::Types(0))
 		|| !typeSelected;
 
@@ -2808,7 +2808,7 @@ void ApiWrap::processFileLoad(
 		if (message || story) {
 			if (type != Type(0) && !isThumb && origin.messageId != 0) {
 				// Total scan MUST strictly respect size selected, UNLESS Full History is selected.
-				if (typeSelected && (!oversized || fullHistorySelected)) {
+				if (typeSelected && (!oversized || fullHistorySelectedLocal)) {
 					const bool alreadyVisited = (locationKey.id || locationKey.type) && _scanVisited.find(locationKey) != _scanVisited.end();
 					const bool willBeUniqueInChat = !alreadyVisited;
 					if (!alreadyVisited && (locationKey.id || locationKey.type)) {
@@ -2825,7 +2825,7 @@ void ApiWrap::processFileLoad(
 	if (_stats
 		&& origin.messageId != 0
 		&& !isThumb) {
-		if (typeSelected && (!oversized || fullHistorySelected)) {
+		if (typeSelected && (!oversized || fullHistorySelectedLocal)) {
 			auto &visited = _exportVisited;
 			const auto it = (locationKey.id != 0 || locationKey.type != 0) ? visited.find(locationKey) : visited.end();
 			const bool alreadyVisited = (it != visited.end());
