@@ -2794,13 +2794,18 @@ void ApiWrap::processFileLoad(
 	if (_isScanning) {
 		if (message || story) {
 			if (type != Type(0) && !isThumb && origin.messageId != 0) {
-				// Total scan MUST strictly respect size selected, UNLESS Full History is selected.
-				if (typeSelected && (!oversized || fullHistorySelected)) {
+				// Links and Text should be counted regardless of size settings (unless they are specifically excluded, which is handled by typeSelected)
+				const bool isLinkOrText = (type == Type::Link || type == Type::Text);
+				
+				// Total scan MUST strictly respect size selected, UNLESS Full History is selected or it is a Link/Text.
+				if (typeSelected && ((!oversized && !fullHistorySelected) || fullHistorySelected || isLinkOrText)) {
 					const bool alreadyVisited = (locationKey.id || locationKey.type) && _scanVisited.find(locationKey) != _scanVisited.end();
 					const bool willBeUniqueInChat = !alreadyVisited;
+					
 					if (!alreadyVisited && (locationKey.id || locationKey.type)) {
 						_scanVisited.emplace(locationKey, QString());
 					}
+					
 					_scanStats->increment(type, fullSize, willBeUniqueInChat);
 				}
 			}
@@ -2812,7 +2817,8 @@ void ApiWrap::processFileLoad(
 	if (_stats
 		&& origin.messageId != 0
 		&& !isThumb) {
-		if (typeSelected && (!oversized || fullHistorySelected)) {
+		const bool isLinkOrText = (type == Type::Link || type == Type::Text);
+		if (typeSelected && (!oversized || fullHistorySelected || isLinkOrText)) {
 			auto &visited = _exportVisited;
 			const auto it = (locationKey.id != 0 || locationKey.type != 0) ? visited.find(locationKey) : visited.end();
 			const bool alreadyVisited = (it != visited.end());
@@ -2821,9 +2827,17 @@ void ApiWrap::processFileLoad(
 			if ((message || story) && type != Type(0)) {
 				_stats->increment(type, fullSize, willBeUniqueInChat);
 			}
+			
+			// For links, we track them to write unique_links.txt later, even if we don't "download" a file.
+			if (type == Type::Link && !alreadyVisited) {
+				if (locationKey.id != 0 || locationKey.type != 0) {
+					visited[locationKey] = file.content.isEmpty() ? QString("link") : QString::fromUtf8(file.content); 
+				}
+			}
+
 			if (!alreadyVisited && !skipDownload) {
 				_stats->incrementUserMediaFiles();
-				if (locationKey.id != 0 || locationKey.type != 0) {
+				if ((locationKey.id != 0 || locationKey.type != 0) && type != Type::Link) {
 					visited[locationKey] = QString(); // Mark as pending
 				}
 			}
