@@ -891,9 +891,6 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 		
 		if (isRound) {
 			// Helper to get formatted local date/time
-			auto ItemDateTime = [](not_null<HistoryItem*> item) {
-				return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-			};
 
 			const auto font = st::msgDateFont;
 			const auto sti = context.imageStyle();
@@ -1005,9 +1002,6 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	// Only draw on hover/select.
 	if (!isRound && !inWebPage && !_parent->data()->isFakeAboutView() && showInfo) {
 		// Local definition to fix compilation error
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
 
 		const auto font = st::msgDateFont;
 		p.setFont(font);
@@ -1426,9 +1420,6 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 	// --- CUSTOM TOOLTIP LOGIC (Top-Right Bubble for Standard Videos) ---
 	// FIX Issue 3: Implemented 2-zone tooltip logic here for Top-Right bubble
 	if (!isRound && !inWebPage && !_parent->data()->isFakeAboutView()) {
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
 
 		const auto font = st::msgDateFont;
 		
@@ -1509,7 +1500,7 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 				}
 
 				if (edited) {
-					const auto editLocal = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
+					const auto editLocal = base::unixtime::parse(item->Get<HistoryMessageEdited>()->date).toLocalTime();
 					QString editedTrans = tr::lng_edited(tr::now);
 					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
 					text += "\n" + editedTrans + ": "
@@ -1652,9 +1643,6 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 		if (isRound) {
 			// But for hit testing we use our custom bubble rect from draw()
 			// Need to replicate calculation:
-			auto ItemDateTime = [](not_null<HistoryItem*> item) {
-				return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-			};
 			const auto font = st::msgDateFont;
 			const auto views = item->Get<HistoryMessageViews>();
 			const auto viewsText = (views && views->views.count >= 0)
@@ -1724,7 +1712,7 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 				}
 
 				if (const auto edited = item->Get<HistoryMessageEdited>()) {
-					const auto editLocal = QDateTime::fromSecsSinceEpoch(edited->date).toLocalTime();
+					const auto editLocal = base::unixtime::parse(edited->date).toLocalTime();
 					QString editedTrans = tr::lng_edited(tr::now);
 					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
 					row2 += "\n" + editedTrans + ": "

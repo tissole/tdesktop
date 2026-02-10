@@ -572,12 +572,21 @@ MessageFlags NewMessageFlags(not_null<PeerData*> peer) {
 		| (peer->isSelf() ? MessageFlag() : MessageFlag::Outgoing);
 }
 
-TimeId NewMessageDate(TimeId scheduled) {
-	return scheduled ? scheduled : base::unixtime::now();
+TimeId NewMessageDate(History *history, TimeId scheduled) {
+	if (scheduled) {
+		return scheduled;
+	}
+	const auto now = base::unixtime::now();
+	if (history) {
+		if (const auto last = history->lastMessage()) {
+			return std::max(now, last->date() + 1);
+		}
+	}
+	return now;
 }
 
-TimeId NewMessageDate(const Api::SendOptions &options) {
-	return options.shortcutId ? 1 : NewMessageDate(options.scheduled);
+TimeId NewMessageDate(not_null<History*> history, const Api::SendOptions &options) {
+	return options.shortcutId ? 1 : NewMessageDate(history, options.scheduled);
 }
 
 PeerId NewMessageFromId(const Api::SendAction &action) {
@@ -693,7 +702,7 @@ HistoryItem *MessageByGlobalId(GlobalMsgId globalId) {
 }
 
 QDateTime ItemDateTime(not_null<const HistoryItem*> item) {
-	return base::unixtime::parse(item->date());
+	return base::unixtime::parse(item->date()).toLocalTime();
 }
 
 QString ItemDateText(not_null<const HistoryItem*> item, bool isUntilOnline) {

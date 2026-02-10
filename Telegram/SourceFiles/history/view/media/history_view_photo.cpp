@@ -415,11 +415,6 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	// --- CUSTOM INFO BUBBLE (TOP-RIGHT) ---
 	// Only draw if showInfo is true
 	if (!inWebPage && !_parent->data()->isFakeAboutView() && showInfo) {
-		
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
-
 		const auto item = _parent->data();
 		const auto font = st::msgDateFont;
 		p.setFont(font);
@@ -754,11 +749,6 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 
 	// --- CUSTOM TOOLTIP LOGIC (Top-Right Bubble) ---
 	if (!inWebPage && !_parent->data()->isFakeAboutView()) {
-		
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
-
 		const auto item = _parent->data();
 		const auto font = st::msgDateFont;
 		
@@ -841,7 +831,7 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 				}
 
 				if (edited) {
-					const auto editLocal = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
+					const auto editLocal = base::unixtime::parse(item->Get<HistoryMessageEdited>()->date).toLocalTime();
 					QString editedTrans = tr::lng_edited(tr::now);
 					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
 					text += "\n" + editedTrans + ": "

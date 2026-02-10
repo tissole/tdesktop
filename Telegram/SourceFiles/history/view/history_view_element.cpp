@@ -1462,10 +1462,17 @@ bool Element::markSponsoredViewed(int shownFromTop) const {
 }
 
 void Element::refreshDataId() {
+	updateDateTime();
 	if (const auto media = this->media()) {
 		media->refreshParentId(data());
 	}
 	refreshDataIdHook();
+}
+
+void Element::updateDateTime() {
+	_dateTime = (IsItemScheduledUntilOnline(_data) || _data->shortcutId())
+		? QDateTime()
+		: ItemDateTime(_data);
 }
 
 bool Element::computeIsAttachToPrevious(not_null<Element*> previous) {
@@ -2021,6 +2028,7 @@ bool Element::updateReactions() {
 }
 
 void Element::itemDataChanged() {
+	updateDateTime();
 	if (updateReactions()) {
 		history()->owner().requestViewResize(this);
 	} else {

@@ -408,6 +408,7 @@ public:
 	[[nodiscard]] uint8 colorIndex() const;
 	[[nodiscard]] uint8 contentColorIndex() const;
 	[[nodiscard]] QDateTime dateTime() const;
+	void updateDateTime();
 
 	[[nodiscard]] int y() const;
 	void setY(int y);
@@ -727,7 +728,7 @@ private:
 	HistoryBlock *_block = nullptr;
 	std::unique_ptr<Media> _media;
 	mutable ClickHandlerPtr _fromLink;
-	const QDateTime _dateTime;
+	QDateTime _dateTime;
 
 	HistoryItem *_textItem = nullptr;
 	mutable Ui::Text::String _text;

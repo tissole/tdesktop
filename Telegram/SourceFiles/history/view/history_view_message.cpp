@@ -3713,10 +3713,6 @@ void Message::drawInfo(
 	}
 
 	if (type == InfoDisplayType::Default) {
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
-
 		const auto item = data();
 		const auto font = st::msgDateFont;
 		p.setFont(font);
@@ -3812,10 +3808,6 @@ TextState Message::bottomInfoTextState(
 	}
 
 	if (type == InfoDisplayType::Default) {
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
-
 		const auto item = data();
 		const auto font = st::msgDateFont;
 

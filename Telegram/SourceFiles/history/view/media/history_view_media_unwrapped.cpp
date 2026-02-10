@@ -273,9 +273,6 @@ void UnwrappedMedia::drawSurrounding(
 	auto fullBottom = height();
 	if (needInfoDisplay()) {
 		const auto item = _parent->data();
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
 
 		const auto font = st::msgDateFont;
 		const auto views = item->Get<HistoryMessageViews>();
@@ -601,9 +598,6 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 		const auto rightActionSize = _parent->rightActionSize();
 		auto fullBottom = height();
 		const auto item = _parent->data();
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
 		const auto font = st::msgDateFont;
 		const auto views = item->Get<HistoryMessageViews>();
 		const auto viewsText = (views && views->views.count >= 0)
@@ -672,7 +666,7 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 
 			if (const auto edited = item->Get<HistoryMessageEdited>()) {
 				if (!isSticker) {
-					const auto editLocal = QDateTime::fromSecsSinceEpoch(edited->date).toLocalTime();
+					const auto editLocal = base::unixtime::parse(edited->date).toLocalTime();
 					QString editedTrans = tr::lng_edited(tr::now);
 					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
 					row2 += "\n" + editedTrans + ": "
@@ -791,9 +785,6 @@ int UnwrappedMedia::calculateFullRight(const QRect &inner) const {
 			return item->from()->name();
 		}();
 		
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
 		
 		const auto timeText = QLocale().toString(
 			ItemDateTime(item).time(),
@@ -890,9 +881,6 @@ int UnwrappedMedia::additionalWidth(
 			return item->from()->name();
 		}();
 		
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
 		
 		const auto timeText = QLocale().toString(
 			ItemDateTime(item).time(),

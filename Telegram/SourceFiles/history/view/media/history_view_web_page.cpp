@@ -1248,10 +1248,6 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	if (_attach || _data->type == WebPageType::Message) {
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
-
 		const auto item = _parent->data();
 		const auto font = st::msgDateFont;
 		p.setFont(font);
@@ -1494,10 +1490,6 @@ TextState WebPage::textState(QPoint point, StateRequest request) const {
 	}
 
 	if (_attach || _data->type == WebPageType::Message) {
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
-
 		const auto item = _parent->data();
 		const auto font = st::msgDateFont;
 

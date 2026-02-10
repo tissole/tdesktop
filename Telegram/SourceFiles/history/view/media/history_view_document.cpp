@@ -502,9 +502,6 @@ QSize Document::countOptimalSize() {
 		const auto item = _parent->data();
 		const auto font = st::msgDateFont;
 
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
 
 		const auto edited = item->Get<HistoryMessageEdited>() && !item->hideEditedBadge();
 		const auto dateText = QLocale().toString(
@@ -1023,9 +1020,6 @@ void Document::draw(
 
 	// --- CUSTOM INLINE INFO (For All Files except Round Videos) ---
 	if (!_data->isVideoMessage() && mode != LayoutMode::Grouped && _parent->media() == this) {
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
 
 		const auto item = _parent->data();
 		const auto font = st::msgDateFont;
@@ -1417,9 +1411,6 @@ TextState Document::textState(
 	// --- CUSTOM TOOLTIP LOGIC (Inline) ---
 	const bool bubble = _parent->hasBubble();
 	if (!_data->isVideoMessage() && mode == LayoutMode::Full && _parent->media() == this) {
-		auto ItemDateTime = [](not_null<HistoryItem*> item) {
-			return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
-		};
 
 		const auto item = _parent->data();
 		const auto font = st::msgDateFont;
@@ -1497,7 +1488,7 @@ TextState Document::textState(
 				}
 
 				if (edited) {
-					const auto editLocal = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
+					const auto editLocal = base::unixtime::parse(item->Get<HistoryMessageEdited>()->date).toLocalTime();
 					QString editedTrans = tr::lng_edited(tr::now);
 					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
 					text += "\n" + editedTrans + ": "

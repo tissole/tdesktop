@@ -1013,7 +1013,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				const int viewsIconGap = 1;
 				if (!viewsText.isEmpty()) {
 					viewsWidth = st::historyViewsWidth + viewsIconGap + font->width(viewsText);
-					totalWidth += (2 * textPadding) + viewsWidth;
+					totalWidth += textPadding + viewsWidth;
 				}
 
 				const auto sti = context.imageStyle();
@@ -1314,7 +1314,7 @@ TextState GroupedMedia::getPartState(
 						result.customTooltip = true;
 						result.customTooltipText = QString("Views: ") + viewsText;
 					} else if (editedNow && editedRect.contains(point - QPoint(0, groupPadding.top()))) {
-						const auto uploadLocal = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+						const auto uploadLocal = ItemDateTime(item);
 						QString tooltipText = tr::lng_uploaded(tr::now) + ": "
 							+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
 							+ uploadLocal.time().toString("HH:mm:ss");
@@ -1322,7 +1322,7 @@ TextState GroupedMedia::getPartState(
 						if (msgIdValue > 0 && GetEnhancedBool("show_messages_id")) {
 							tooltipText += "  ID: " + QString::number(msgIdValue.bare);
 						}
-						const auto editLocal = QDateTime::fromSecsSinceEpoch(edited->date).toLocalTime();
+						const auto editLocal = base::unixtime::parse(edited->date).toLocalTime();
 						QString editedTranslation = tr::lng_edited(tr::now);
 						editedTranslation = editedTranslation.toUpper().left(1) + editedTranslation.mid(1);
 						tooltipText += "\n" + editedTranslation + ": "
@@ -1331,7 +1331,7 @@ TextState GroupedMedia::getPartState(
 						result.customTooltip = true;
 						result.customTooltipText = tooltipText;
 					} else if (timeIdRect.contains(point - QPoint(0, groupPadding.top()))) {
-						const auto uploadLocal = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+						const auto uploadLocal = ItemDateTime(item);
 						QString tooltipText = tr::lng_uploaded(tr::now) + ": "
 							+ uploadLocal.date().toString("dddd, dd MMMM yyyy") + " "
 							+ uploadLocal.time().toString("HH:mm:ss");
@@ -1374,8 +1374,7 @@ TextState GroupedMedia::getPartState(
 								}
 							}
 							if (edited && !item->hideEditedBadge()) {
-								const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
-								const auto editLocalTime = editUTCTime.toLocalTime();
+								const auto editLocalTime = base::unixtime::parse(edited->date).toLocalTime();
 								QString editedTranslation = tr::lng_edited(tr::now);
 								editedTranslation = editedTranslation.toUpper().left(1) + editedTranslation.mid(1);
 								if (!tooltipText.isEmpty()) tooltipText += "\n";
@@ -1427,8 +1426,7 @@ TextState GroupedMedia::getPartState(
 							}
 						}
 						if (edited && !item->hideEditedBadge()) {
-							const auto editUTCTime = QDateTime::fromSecsSinceEpoch(edited->date);
-							const auto editLocalTime = editUTCTime.toLocalTime();
+							const auto editLocalTime = base::unixtime::parse(edited->date).toLocalTime();
 							QString editedTranslation = tr::lng_edited(tr::now);
 							editedTranslation = editedTranslation.toUpper().left(1) + editedTranslation.mid(1);
 							if (!tooltipText.isEmpty()) tooltipText += "\n";
@@ -1489,7 +1487,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 		const auto firstPart = &_parts.front();
 		const auto firstItemGeometry = firstPart->geometry.translated(0, groupPadding.top());
 
-		if (_mode == Mode::Grid && (!_parent->hasBubble() || isBubbleBottom())) {
+		if (_mode == Mode::Grid) {
 			const auto right = firstItemGeometry.x() + firstItemGeometry.width();
 			const auto bottom = firstItemGeometry.y(); // Match top-right alignment.
 
@@ -1511,18 +1509,16 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 				? Lang::FormatCountToShort(std::max(views->views.count, 1)).string
 				: QString();
 
-			int totalWidth = 0;
-			const int iconPadding = st::historyViewsSpace;
+			int totalWidth = font->width(dateText + msgIdText);
+			const int viewsIconGap = 1;
 			const int textPadding = font->spacew;
-			const int dateWidth = font->width(dateText + msgIdText);
-			totalWidth += dateWidth;
 			if (edited) {
 				const auto editedWidth = font->width(QString::fromUtf8("✏️"));
-				totalWidth += editedWidth;
+				totalWidth += textPadding + editedWidth;
 			}
 			int viewsWidth = 0;
 			if (!viewsText.isEmpty()) {
-				viewsWidth = st::historyViewsWidth + iconPadding + font->width(viewsText);
+				viewsWidth = st::historyViewsWidth + viewsIconGap + font->width(viewsText);
 				totalWidth += textPadding + viewsWidth;
 			}
 
@@ -1568,7 +1564,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			}
 			// Edited tooltip includes Uploaded + Edited lines
 			if (edited && editedRect.contains(point)) {
-				const auto uploadLocalTime = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+				const auto uploadLocalTime = ItemDateTime(item);
 				QString tooltipText = tr::lng_uploaded(tr::now) + ": "
 					+ uploadLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
 					+ uploadLocalTime.time().toString("HH:mm:ss");
@@ -1576,7 +1572,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 				if (msgIdValue > 0 && GetEnhancedBool("show_messages_id")) {
 					tooltipText += "  ID: " + QString::number(msgIdValue.bare);
 				}
-				const auto editLocalTime = QDateTime::fromSecsSinceEpoch(item->Get<HistoryMessageEdited>()->date).toLocalTime();
+				const auto editLocalTime = base::unixtime::parse(item->Get<HistoryMessageEdited>()->date).toLocalTime();
 				QString editedTranslation = tr::lng_edited(tr::now);
 				editedTranslation = editedTranslation.toUpper().left(1) + editedTranslation.mid(1);
 				tooltipText += "\n" + editedTranslation + ": "
@@ -1588,7 +1584,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 			}
 			// Uploaded tooltip for time+id area
 			if (timeIdRect.contains(point)) {
-				const auto uploadLocalTime = QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+				const auto uploadLocalTime = ItemDateTime(item);
 				QString tooltipText = tr::lng_uploaded(tr::now) + ": "
 					+ uploadLocalTime.date().toString("dddd, dd MMMM yyyy") + " "
 					+ uploadLocalTime.time().toString("HH:mm:ss");

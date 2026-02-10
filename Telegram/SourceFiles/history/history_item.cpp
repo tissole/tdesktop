@@ -759,7 +759,7 @@ HistoryItem::HistoryItem(
 	.flags = (MessageFlag::Local
 		| MessageFlag::Sponsored
 		| (history->peer->isChannel() ? MessageFlag::Post : MessageFlag(0))),
-	.date = NewMessageDate(injectedAfter ? injectedAfter->date() : 0),
+	.date = NewMessageDate(history, injectedAfter ? injectedAfter->date() : 0),
 }) {
 	const auto webpage = history->peer->owner().webpage(
 		history->peer->owner().nextLocalMessageId().bare,
