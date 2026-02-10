@@ -1394,11 +1394,7 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 	const auto maxId = (_chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
 
 	using Flag = MTPmessages_Search::Flag;
-	auto searchFlags = Flag::f_filter
-		| (_settings->singlePeerFrom > 0 ? Flag::f_min_date : Flag(0))
-		| (_settings->singlePeerTill > 0 ? Flag::f_max_date : Flag(0))
-		| (minId > 0 ? Flag::f_min_id : Flag(0))
-		| (maxId > 0 ? Flag::f_max_id : Flag(0));
+	auto searchFlags = Flag(0);
 
 	mainRequest(MTPmessages_Search(
 		MTP_flags(searchFlags),
@@ -2027,15 +2023,7 @@ void ApiWrap::requestChatMessages(
 
 	if (useSearch) {
 		using Flag = MTPmessages_Search::Flag;
-		auto searchFlags = (_chatProcess->info.onlyMyMessages ? Flag::f_from_id : Flag(0))
-			| (filter.type() != mtpc_inputMessagesFilterEmpty ? Flag::f_filter : Flag(0))
-			| (_settings->singlePeerFrom > 0 ? Flag::f_min_date : Flag(0))
-			| (_settings->singlePeerTill > 0 ? Flag::f_max_date : Flag(0))
-			| (offsetId != 0 ? Flag::f_offset_id : Flag(0))
-			| (addOffset != 0 ? Flag::f_add_offset : Flag(0))
-			| (limit != 0 ? Flag::f_limit : Flag(0))
-			| (maxId > 0 ? Flag::f_max_id : Flag(0))
-			| (minId > 0 ? Flag::f_min_id : Flag(0));
+		auto searchFlags = (_chatProcess->info.onlyMyMessages ? Flag::f_from_id : Flag(0));
 
 		splitRequest(realSplitIndex, MTPmessages_Search(
 			MTP_flags(searchFlags),
@@ -2794,12 +2782,11 @@ void ApiWrap::processFileLoad(
 		: file.size;
 
 	const auto types = _settings->media.types;
-	const auto fullHistorySelected = (types & MediaSettings::Type::FullHistory);
+	const bool fullHistorySelected = (types & MediaSettings::Type::FullHistory);
 	const auto oversized = (file.location && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit && !fullHistorySelected);
 	const auto locationKey = file.location ? ComputeLocationKey(file.location) : ApiWrap::LocationKey{ 0, 0 };
 
 	const bool typeSelected = (types & type);
-	const bool fullHistorySelected = (types & MediaSettings::Type::FullHistory);
 	const auto skipDownload = fullHistorySelected
 		|| (types == MediaSettings::Types(0))
 		|| !typeSelected;
