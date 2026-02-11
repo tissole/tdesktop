@@ -272,11 +272,12 @@ Content ContentFromState(const FinishedState &state) {
 			totalTotalMessagesCount += item.totalCount;
 		}
 
+		categoriesCount++;
 		result.rows.push_back({ Content::kDoneId, text, QString(), 1. });
 	}
 
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
-		const auto label = "Total messages: ";
+		const auto label = "Total messages and media files: ";
 		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 		const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)

@@ -2264,13 +2264,16 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		if (countThis) {
 			bool uniqueBubble = false;
-			if (!hasFile) {
+			if (!message.file().location) {
 				uniqueBubble = true;
 			} else {
-				const auto locationKey = message.file().location ? ComputeLocationKey(message.file().location) : ApiWrap::LocationKey{ 0, 0 };
+				const auto locationKey = ComputeLocationKey(message.file().location);
 				if (locationKey.id || locationKey.type) {
-					if (!_chatProcess->seenLocations.contains(locationKey)) {
-						_chatProcess->seenLocations.insert(locationKey);
+					auto &visited = _isScanning ? _scanVisited : _exportVisited;
+					if (visited.find(locationKey) == visited.end()) {
+						if (_isScanning) {
+							visited.emplace(locationKey, QString());
+						}
 						uniqueBubble = true;
 					}
 				} else {
