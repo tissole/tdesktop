@@ -2802,7 +2802,7 @@ void ApiWrap::processFileLoad(
 					const bool alreadyVisited = (locationKey.id || locationKey.type) && _scanVisited.find(locationKey) != _scanVisited.end();
 					const bool willBeUniqueInChat = !alreadyVisited;
 					
-					if (!alreadyVisited && (locationKey.id || locationKey.type)) {
+					if (willBeUniqueInChat && (locationKey.id || locationKey.type)) {
 						_scanVisited.emplace(locationKey, QString());
 					}
 					

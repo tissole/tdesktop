@@ -1060,10 +1060,10 @@ void SettingsWidget::addMediaOption(
 				if (checked) {
 					if (type == MediaType::FullHistory) {
 						data.media.types = MediaType::FullHistory;
-						data.types = Settings::Types(0);
+						data.types &= ~Settings::Type::NonChatsMask;
 					} else if (type == MediaType::Link) {
 						data.media.types = MediaType::Link;
-						data.types = Settings::Types(0);
+						data.types &= ~Settings::Type::NonChatsMask;
 					} else {
 						data.media.types &= ~MediaType::FullHistory;
 						data.media.types &= ~MediaType::Link;
@@ -1081,13 +1081,13 @@ void SettingsWidget::addMediaOption(
 			const bool linkSelected = (data.media.types & MediaType::Link);
 			const bool historySelected = (data.media.types & MediaType::FullHistory);
 			const bool otherMediaSelected = (data.media.types & ~(MediaType::Link | MediaType::FullHistory));
-			const bool chatSelected = (data.types != Settings::Types(0));
+			const bool otherDataSelected = (data.types & Settings::Type::NonChatsMask) != Settings::Types(0);
 
 			bool enabled = true;
 			if (type == MediaType::Link) {
-				enabled = !historySelected && !otherMediaSelected && !chatSelected;
+				enabled = !historySelected && !otherMediaSelected && !otherDataSelected;
 			} else if (type == MediaType::FullHistory) {
-				enabled = !linkSelected && !otherMediaSelected && !chatSelected;
+				enabled = !linkSelected && !otherMediaSelected && !otherDataSelected;
 			} else {
 				enabled = !linkSelected && !historySelected;
 			}
