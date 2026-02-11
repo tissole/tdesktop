@@ -668,7 +668,7 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 
 			if (const auto edited = item->Get<HistoryMessageEdited>()) {
 				if (!isSticker) {
-					const auto editLocal = base::unixtime::parse(edited->date).toLocalTime();
+					const auto editLocal = base::unixtime::parse(edited->date);
 					QString editedTrans = tr::lng_edited(tr::now);
 					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
 					row2 += "\n" + editedTrans + ": "

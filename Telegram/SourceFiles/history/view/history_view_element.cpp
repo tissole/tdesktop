@@ -372,19 +372,21 @@ QString DateTooltipText(not_null<Element*> view) {
 		dateText += '\n' + tr::lng_approximate_about(tr::now);
 	}
 	if (const auto editedDate = view->displayedEditDate()) {
+		const auto editLocal = base::unixtime::parse(editedDate);
 		QString editedTrans = tr::lng_edited(tr::now);
 		editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
 		dateText += '\n' + editedTrans + ": "
-			+ locale.toString(QDateTime::fromSecsSinceEpoch(editedDate), format);
+			+ editLocal.date().toString("dddd, dd MMMM yyyy") + " "
+			+ editLocal.time().toString("HH:mm:ss");
 	}
 	if (const auto forwarded = item->Get<HistoryMessageForwarded>()) {
 		if (!forwarded->story && forwarded->psaType.isEmpty()) {
+			const auto forwardedLocal = base::unixtime::parse(forwarded->originalDate);
 			dateText += '\n' + tr::lng_forwarded_date(
 				tr::now,
 				lt_date,
-				locale.toString(
-					QDateTime::fromSecsSinceEpoch(forwarded->originalDate),
-					format));
+				forwardedLocal.date().toString("dddd, dd MMMM yyyy") + " "
+				+ forwardedLocal.time().toString("HH:mm:ss"));
 			if (forwarded->imported) {
 				dateText = tr::lng_forwarded_imported(tr::now)
 					+ "\n\n" + dateText;

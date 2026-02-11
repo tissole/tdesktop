@@ -1324,7 +1324,7 @@ TextState GroupedMedia::getPartState(
 						if (msgIdValue > 0 && GetEnhancedBool("show_messages_id")) {
 							tooltipText += "  ID: " + QString::number(msgIdValue.bare);
 						}
-						const auto editLocal = base::unixtime::parse(edited->date).toLocalTime();
+						const auto editLocal = base::unixtime::parse(edited->date);
 						QString editedTranslation = tr::lng_edited(tr::now);
 						editedTranslation = editedTranslation.toUpper().left(1) + editedTranslation.mid(1);
 						tooltipText += "\n" + editedTranslation + ": "
@@ -1376,7 +1376,7 @@ TextState GroupedMedia::getPartState(
 								}
 							}
 							if (edited && !item->hideEditedBadge()) {
-								const auto editLocalTime = base::unixtime::parse(edited->date).toLocalTime();
+								const auto editLocalTime = base::unixtime::parse(edited->date);
 								QString editedTranslation = tr::lng_edited(tr::now);
 								editedTranslation = editedTranslation.toUpper().left(1) + editedTranslation.mid(1);
 								if (!tooltipText.isEmpty()) tooltipText += "\n";
@@ -1428,7 +1428,7 @@ TextState GroupedMedia::getPartState(
 							}
 						}
 						if (edited && !item->hideEditedBadge()) {
-							const auto editLocalTime = base::unixtime::parse(edited->date).toLocalTime();
+							const auto editLocalTime = base::unixtime::parse(edited->date);
 							QString editedTranslation = tr::lng_edited(tr::now);
 							editedTranslation = editedTranslation.toUpper().left(1) + editedTranslation.mid(1);
 							if (!tooltipText.isEmpty()) tooltipText += "\n";
@@ -1574,7 +1574,7 @@ TextState GroupedMedia::textState(QPoint point, StateRequest request) const {
 				if (msgIdValue > 0 && GetEnhancedBool("show_messages_id")) {
 					tooltipText += "  ID: " + QString::number(msgIdValue.bare);
 				}
-				const auto editLocalTime = base::unixtime::parse(item->Get<HistoryMessageEdited>()->date).toLocalTime();
+				const auto editLocalTime = base::unixtime::parse(item->Get<HistoryMessageEdited>()->date);
 				QString editedTranslation = tr::lng_edited(tr::now);
 				editedTranslation = editedTranslation.toUpper().left(1) + editedTranslation.mid(1);
 				tooltipText += "\n" + editedTranslation + ": "

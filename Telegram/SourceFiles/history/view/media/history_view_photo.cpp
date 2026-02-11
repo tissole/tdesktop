@@ -833,7 +833,7 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 				}
 
 				if (edited) {
-					const auto editLocal = base::unixtime::parse(item->Get<HistoryMessageEdited>()->date).toLocalTime();
+					const auto editLocal = base::unixtime::parse(item->Get<HistoryMessageEdited>()->date);
 					QString editedTrans = tr::lng_edited(tr::now);
 					editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
 					text += "\n" + editedTrans + ": "
