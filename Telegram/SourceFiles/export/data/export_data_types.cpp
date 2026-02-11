@@ -1395,13 +1395,7 @@ Media ParseMedia(
 		content.spoilered = data.is_spoiler();
 		result.content = content;
 	}, [&](const MTPDmessageMediaWebPage &data) {
-		data.vwebpage().match([&](const MTPDwebPage &data) {
-			if (const auto photo = data.vphoto()) {
-				result.content = ParsePhoto(*photo, folder + "photos/" + PreparePhotoFileName(++context.photos, date));
-			} else if (const auto document = data.vdocument()) {
-				result.content = ParseDocument(context, *document, folder, date);
-			}
-		}, [](const auto &) {});
+		// Ignore web pages.
 	}, [&](const MTPDmessageMediaVenue &data) {
 		result.content = ParseVenue(data);
 	}, [&](const MTPDmessageMediaGame &data) {
