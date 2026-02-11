@@ -702,7 +702,7 @@ HistoryItem *MessageByGlobalId(GlobalMsgId globalId) {
 }
 
 QDateTime ItemDateTime(not_null<const HistoryItem*> item) {
-	return QDateTime::fromSecsSinceEpoch(item->date()).toLocalTime();
+	return QDateTime::fromSecsSinceEpoch(item->date());
 }
 
 QString ItemDateText(not_null<const HistoryItem*> item, bool isUntilOnline) {

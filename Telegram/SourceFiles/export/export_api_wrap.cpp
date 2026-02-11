@@ -2272,11 +2272,6 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					if (!_chatProcess->seenLocations.contains(locationKey)) {
 						_chatProcess->seenLocations.insert(locationKey);
 						uniqueBubble = true;
-						
-						// During export, also mark in the global visited map to sync with processFileLoad
-						if (!_isScanning) {
-							_exportVisited[locationKey] = QString();
-						}
 					}
 				} else {
 					uniqueBubble = true;
@@ -2289,14 +2284,14 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		}
 
 		if (_isScanning) {
-			// Increment stats for messages without files (Text, non-file Media)
-			// Only if the type itself is selected.
-			if (!hasFile && (types & messageType) && messageType != MediaSettings::Type::Link) {
+			// Increment stats for messages without main files (Text, non-file Media)
+			// Only if the type itself is selected or Full History is selected.
+			if (!message.file().location && mediaSelected && messageType != MediaSettings::Type::Link) {
 				_scanStats->increment(messageType, 0, true);
 			}
 		} else {
 			// During export, increment stats for non-file messages too.
-			if (!hasFile && (types & messageType) && messageType != MediaSettings::Type::Link) {
+			if (!message.file().location && mediaSelected && messageType != MediaSettings::Type::Link) {
 				if (_stats) {
 					_stats->increment(messageType, 0, true);
 					_stats->incrementUserMediaFiles();
@@ -2771,8 +2766,10 @@ void ApiWrap::processFileLoad(
 		} else {
 			return Type::File;
 		}
-	}, [](const auto &data) {
+	}, [](const Data::Photo &data) {
 		return Type::Photo;
+	}, [](const auto &data) {
+		return Type(0);
 	}) : Type(0);
 
 	const auto fullSize = message
@@ -2786,10 +2783,10 @@ void ApiWrap::processFileLoad(
 	const auto oversized = (file.location && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit && !fullHistorySelected);
 	const auto locationKey = file.location ? ComputeLocationKey(file.location) : ApiWrap::LocationKey{ 0, 0 };
 
-	const bool typeSelected = (types & type);
-	const auto skipDownload = fullHistorySelected
+	const bool typeSelected = (types & type) || fullHistorySelected;
+	const auto skipDownload = fullHistorySelected // Override download if Full History is active
 		|| (types == MediaSettings::Types(0))
-		|| !typeSelected;
+		|| !(types & type); // Only download if the specific type is chosen
 
 	if (_isScanning) {
 		if (message || story) {
@@ -3561,6 +3558,7 @@ base::flat_set<QString> ApiWrap::visitedLinks() const {
 void ApiWrap::clearState(bool keepCache) {
 	_takeoutId = std::nullopt;
 	_settings = nullptr;
+	_isScanning = false;
 	if (!keepCache) {
 		clearResults();
 	} else {

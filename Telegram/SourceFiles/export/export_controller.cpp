@@ -115,12 +115,14 @@ void WriteScanStatsFile(
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
 		const auto uniqueStr = QString::number(totalUniqueMessagesCount) + " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 		const auto totalStr = QString::number(totalTotalMessagesCount) + " (" + Ui::FormatSizeText(totalMediaSize) + ")";
-		out << "\nTotal messages: ";
+		out << "\nTotal messages and media files: ";
 		if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
 			out << uniqueStr << ", ";
 		}
 		out << totalStr << "\n";
-	} else if (totalTotalMessagesCount <= 0) {
+	} else if (totalTotalMessagesCount <= 0 && categoriesCount > 0) {
+		out << "\nNo items found in this range.\n";
+	} else if (categoriesCount <= 0) {
 		out << "\nNo messages found in this range.\n";
 	}
 }
@@ -383,6 +385,8 @@ void ControllerObject::clearResults() {
 	_messagesInRangeCount = 0;
 	_messagesCount = 0;
 	_stats.clear();
+	_api.clearState(false);
+	_dialogIndex = -1;
 }
 
 void ControllerObject::runScan(
@@ -416,6 +420,7 @@ void ControllerObject::startExport(
 		const Environment &environment) {
 	_api.clearResults();
 	_stepIndex = -1;
+	_dialogIndex = -1;
 
 	_messagesInRangeCountFixed = (_messagesInRangeCount > 0);
 	_settings = NormalizeSettings(settings);

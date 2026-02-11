@@ -375,7 +375,7 @@ QString DateTooltipText(not_null<Element*> view) {
 		QString editedTrans = tr::lng_edited(tr::now);
 		editedTrans = editedTrans.toUpper().left(1) + editedTrans.mid(1);
 		dateText += '\n' + editedTrans + ": "
-			+ locale.toString(base::unixtime::parse(editedDate), format);
+			+ locale.toString(QDateTime::fromSecsSinceEpoch(editedDate), format);
 	}
 	if (const auto forwarded = item->Get<HistoryMessageForwarded>()) {
 		if (!forwarded->story && forwarded->psaType.isEmpty()) {
@@ -383,7 +383,7 @@ QString DateTooltipText(not_null<Element*> view) {
 				tr::now,
 				lt_date,
 				locale.toString(
-					base::unixtime::parse(forwarded->originalDate),
+					QDateTime::fromSecsSinceEpoch(forwarded->originalDate),
 					format));
 			if (forwarded->imported) {
 				dateText = tr::lng_forwarded_imported(tr::now)

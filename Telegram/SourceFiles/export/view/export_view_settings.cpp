@@ -1407,7 +1407,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	}
 	if (totalTotalMessagesCount > 0) {
 		if (categoriesCount > 1) {
-			const auto label = "Total messages: ";
+			const auto label = "Total messages and media files: ";
 			const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
 				+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 			const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
