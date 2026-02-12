@@ -2192,7 +2192,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		const bool linkSelectedForStats = (types & MediaSettings::Type::Link) || (types & MediaSettings::Type::FullHistory);
 
 		const auto oversized = (hasFile && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit)
-			&& !fullHistorySelected && (messageType != MediaSettings::Type::Text);
+			&& !fullHistorySelected && (messageType != MediaSettings::Type::Text) && (messageType != MediaSettings::Type::Link);
 
 		const bool mediaSelected = (types & messageType) || fullHistorySelected;
 		

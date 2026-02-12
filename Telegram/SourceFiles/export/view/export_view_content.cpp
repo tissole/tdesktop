@@ -267,9 +267,11 @@ Content ContentFromState(const FinishedState &state) {
 			totalMediaSize += item.totalSize;
 		}
 
-		if (type != Type::Link && type != Type::Text) {
+		if (type != Type::Link) {
 			totalUniqueMessagesCount += item.uniqueCount;
 			totalTotalMessagesCount += item.totalCount;
+			totalUniqueSize += item.uniqueSize;
+			totalTotalSize += item.totalSize;
 		} else if (type == Type::Text) {
 			totalTotalMessagesCount += item.totalCount;
 		}
@@ -299,3 +301,4 @@ Content ContentFromState(const FinishedState &state) {
 
 } // namespace View
 } // namespace Export
+
