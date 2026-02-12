@@ -1390,144 +1390,9 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 				totalMediaSize += item.totalSize;
 			}
 
-			// Corrected Requirement: Total sum = all media + all text. Unique sum = unique media + all text.
+			// Total sum = all media + all text. Unique sum = unique media + all text.
 			// Links are always excluded from sums to avoid double counting.
 			if (type != MediaType::Link) {
-				totalUniqueMessagesCount += item.uniqueCount;
-				totalTotalMessagesCount += item.totalCount;
-			}
-		}
-	}
-	if (totalTotalMessagesCount > 0) {
-		if (categoriesCount > 1) {
-			const auto label = "Total messages and media files: ";
-			const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
-				+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
-			const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
-			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
-
-			if (totalUniqueMessagesCount != totalTotalMessagesCount) {
-				text += "\n" + QString(label) + uniqueStr + ", " + totalStr;
-			} else {
-				text += "\n" + QString(label) + totalStr;
-			}
-		}
-	}
-	_scanResultsLabel->setText(text.trimmed());
-	_container->resizeToWidth(_container->width());
-	_changes.fire_copy(readData());
-}
-	}
-
-	if (totalTotalMessagesCount <= 0) {
-		clearScanResults();
-		using MediaType = MediaSettings::Type;
-		const auto types = readData().media.types;
-		const auto hasMedia = (types & MediaType::MediaMask) || (types & MediaType::Sticker) || (types & MediaType::GIF) || (types & MediaType::File);
-		const auto textOnly = (types == MediaType::Text);
-		const auto linksOnly = (types == MediaType::Link);
-		const auto textAndLinks = (types == (MediaType::Text | MediaType::Link));
-
-		QString text;
-		if (hasMedia) {
-			text = tr::lng_export_none_found(tr::now);
-		} else if (textOnly || linksOnly || textAndLinks) {
-			text = "No messages found in this range.";
-		} else {
-			text = "No items found matching selected filters.";
-		}
-		_scanResultsLabel->setText(text);
-		_container->resizeToWidth(_container->width());
-		return;
-	}
-
-	_scanResults = std::move(stats);
-	_hasScanResults = true;
-	_changes.fire_copy(readData());
-	if (!_scanResultsLabel) return;
-
-	QString text;
-	totalUniqueMessagesCount = 0;
-	totalTotalMessagesCount = 0;
-	int64 totalUniqueMediaSize = 0;
-	int64 totalMediaSize = 0;
-	const auto fullHistory = (readData().media.types & MediaSettings::Type::FullHistory);
-	const auto fullRange = (readData().singlePeerFrom == 0 && readData().singlePeerTill == 0)
-		&& !readData().useIdRange;
-	const auto showAllCategories = fullHistory && fullRange;
-
-	using MediaType = MediaSettings::Type;
-	const std::vector<MediaType> order = {
-		MediaType::Photo,
-		MediaType::Video,
-		MediaType::VideoMessage,
-		MediaType::Audio,
-		MediaType::VoiceMessage,
-		MediaType::File,
-		MediaType::Sticker,
-		MediaType::GIF,
-		MediaType::Text,
-		MediaType::Link
-	};
-
-	int categoriesCount = 0;
-
-	for (const auto type : order) {
-		const auto it = _scanResults.find(type);
-		if (!showAllCategories && (it == _scanResults.end() || it->second.totalCount <= 0)) {
-			continue;
-		}
-		const auto &item = (it != _scanResults.end()) ? it->second : Output::StatItem();
-		QString label;
-		switch (type) {
-		case MediaType::Photo: label = tr::lng_export_option_photos(tr::now); break;
-		case MediaType::Video: label = tr::lng_export_option_video_files(tr::now); break;
-		case MediaType::VoiceMessage: label = tr::lng_export_option_voice_messages(tr::now); break;
-		case MediaType::VideoMessage: label = tr::lng_export_option_video_messages(tr::now); break;
-		case MediaType::Audio: label = tr::lng_export_option_audios(tr::now); break;
-		case MediaType::Sticker: label = tr::lng_export_option_stickers(tr::now); break;
-		case MediaType::GIF: label = tr::lng_export_option_gifs(tr::now); break;
-		case MediaType::File: label = tr::lng_export_option_files(tr::now); break;
-		case MediaType::Text: label = tr::lng_export_option_text_messages(tr::now); break;
-		case MediaType::Link: label = tr::lng_export_option_links(tr::now); break;
-		}
-		if (!label.isEmpty()) {
-			categoriesCount++;
-			const bool hasDuplicates = (item.uniqueCount != item.totalCount)
-				|| (item.uniqueSize != item.totalSize);
-
-			if (type == MediaType::Text || type == MediaType::Link) {
-				if (hasDuplicates) {
-					text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
-						+ ", " + Lang::FormatCountDecimal(item.totalCount) + "\n";
-				} else {
-					text += label + ": " + Lang::FormatCountDecimal(item.totalCount) + "\n";
-				}
-			} else {
-				const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount)
-					+ " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
-				const auto totalStr = Lang::FormatCountDecimal(item.totalCount)
-					+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
-
-				if (hasDuplicates) {
-					text += label + ": " + uniqueStr + ", " + totalStr + "\n";
-				} else {
-					text += label + ": " + totalStr + "\n";
-				}
-
-				totalUniqueMediaSize += item.uniqueSize;
-				totalMediaSize += item.totalSize;
-			}
-
-			// Requirement: Total sum = all media (incl duplicates) + all text. Unique sum = only unique media files.
-			// Links are always excluded from sums to avoid double counting.
-			if (type != MediaType::Link && type != MediaType::Text) {
-				totalUniqueMessagesCount += item.uniqueCount;
-				totalTotalMessagesCount += item.totalCount;
-			} else if (type == MediaType::Text) {
-				totalTotalMessagesCount += item.totalCount;
-			} else if (type == MediaType::Link && categoriesCount == 1) {
-				// If ONLY Links are selected, count them.
 				totalUniqueMessagesCount += item.uniqueCount;
 				totalTotalMessagesCount += item.totalCount;
 			}
@@ -1586,6 +1451,7 @@ void SettingsWidget::resetToDefault() {
 }
 
 } // namespace View
-} // namespace Export
+} // namespace Export // namespace Export
+
 
 
