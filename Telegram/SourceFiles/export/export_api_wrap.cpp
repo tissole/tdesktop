@@ -2087,52 +2087,39 @@ MTPMessagesFilter ApiWrap::getFilter() const {
 	using Type = MediaSettings::Type;
 	const auto types = _settings->media.types;
 	
-	// If Text or FullHistory is selected, we need to request the full stream
-	// to ensure we get all messages (then we filter them locally).
 	if ((types & Type::Text) || (types & Type::FullHistory)) {
 		return MTP_inputMessagesFilterEmpty();
 	}
 
-	if (types == MediaSettings::Types(0)) {
-		return MTP_inputMessagesFilterEmpty();
+	const auto photo = !!(types & Type::Photo);
+	const auto video = !!(types & Type::Video);
+	const auto file = !!(types & Type::File);
+	const auto voice = !!(types & Type::VoiceMessage);
+	const auto round = !!(types & Type::VideoMessage);
+	const auto gif = !!(types & Type::GIF);
+	const auto sticker = !!(types & Type::Sticker);
+	const auto audio = !!(types & Type::Audio);
+	const auto link = !!(types & Type::Link);
+
+	int selectedCount = photo + video + file + voice + round + gif + sticker + audio + link;
+
+	if (selectedCount == 0) return MTP_inputMessagesFilterEmpty();
+
+	if (selectedCount == 1) {
+		if (photo) return MTP_inputMessagesFilterPhotos();
+		if (video) return MTP_inputMessagesFilterVideo();
+		if (audio) return MTP_inputMessagesFilterMusic();
+		if (voice) return MTP_inputMessagesFilterVoice();
+		if (round) return MTP_inputMessagesFilterRoundVideo();
+		if (gif) return MTP_inputMessagesFilterGif();
+		if (link) return MTP_inputMessagesFilterUrl();
+		if (file || sticker) return MTP_inputMessagesFilterDocument();
 	}
 
-	const auto photo = (types & Type::Photo);
-	const auto video = (types & Type::Video);
-	const auto file = (types & Type::File);
-	const auto voice = (types & Type::VoiceMessage);
-	const auto round = (types & Type::VideoMessage);
-	const auto gif = (types & Type::GIF);
-	const auto sticker = (types & Type::Sticker);
-	const auto audio = (types & Type::Audio);
-	const auto link = (types & Type::Link);
-
-	// Count how many media flags are set
-	int selectedCount = (photo ? 1 : 0) + (video ? 1 : 0) + (file ? 1 : 0)
-	+ (voice ? 1 : 0) + (round ? 1 : 0) + (gif ? 1 : 0)
-		+ (sticker ? 1 : 0) + (audio ? 1 : 0) + (link ? 1 : 0);
-
-	// Only return a specific filter if exactly one or specific combo is selected.
-	// Otherwise return empty to get the full stream for local filtering.
-	if (selectedCount > 1) {
-		if (photo && video && selectedCount == 2) {
-			return MTP_inputMessagesFilterPhotoVideo();
-		}
-		if (file && sticker && selectedCount == 2) {
-			return MTP_inputMessagesFilterDocument();
-		}
-		return MTP_inputMessagesFilterEmpty();
+	if (selectedCount == 2) {
+		if (photo && video) return MTP_inputMessagesFilterPhotoVideo();
+		if (file && sticker) return MTP_inputMessagesFilterDocument();
 	}
-
-	if (photo) return MTP_inputMessagesFilterPhotos();
-	if (video) return MTP_inputMessagesFilterVideo();
-	if (file) return MTP_inputMessagesFilterDocument();
-	if (voice) return MTP_inputMessagesFilterVoice();
-	if (round) return MTP_inputMessagesFilterRoundVideo();
-	if (gif) return MTP_inputMessagesFilterGif();
-	if (audio) return MTP_inputMessagesFilterMusic();
-	if (link) return MTP_inputMessagesFilterUrl();
-	if (sticker) return MTP_inputMessagesFilterDocument();
 
 	return MTP_inputMessagesFilterEmpty();
 }
@@ -2177,16 +2164,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			continue;
 		}
 
-		// Identification and stat increments for non-file items
 		const auto hasMedia = !std::holds_alternative<v::null_t>(message.media.content);
-		const auto textFilterSelected = (_settings->media.types & MediaSettings::Type::Text);
-		const auto fullHistorySelected = (_settings->media.types & MediaSettings::Type::FullHistory);
-		const auto linkFilterSelected = (_settings->media.types & MediaSettings::Type::Link);
-
-		// Identify media type for stats
 		using MediaType = MediaSettings::Type;
-		const auto messageType = hasMedia ? v::match(message.media.content, [&](
-			const Data::Document &data) {
+		const auto messageType = hasMedia ? v::match(message.media.content, [&](const Data::Document &data) {
 			if (data.isSticker) return MediaType::Sticker;
 			if (data.isVideoMessage) return MediaType::VideoMessage;
 			if (data.isVoiceMessage) return MediaType::VoiceMessage;
@@ -2194,41 +2174,28 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			if (data.isVideoFile) return MediaType::Video;
 			if (data.isAudioFile) return MediaType::Audio;
 			return MediaType::File;
-		}, [](const Data::Photo &data) {
-			return MediaType::Photo;
-		}, [](const auto &data) {
-			return MediaType::Text;
-		}) : MediaType::Text;
+		}, [](const Data::Photo &data) { return MediaType::Photo; }, [](const auto &data) { return MediaType::Text; }) : MediaType::Text;
 
 		const bool hasFile = message.file().location || message.thumb().file.location;
 		const auto fullSize = message.file().size;
 		const auto types = _settings->media.types;
+		const bool fullHistorySelected = (types & MediaSettings::Type::FullHistory);
 
-		// Handle Link stats (without skipping the message bubble)
 		base::flat_set<QString> linksInThisMessage;
 		for (const auto &part : message.text) {
-			if (part.type == Data::TextPart::Type::Url
-				|| part.type == Data::TextPart::Type::TextUrl) {
-				const auto url = (part.type == Data::TextPart::Type::TextUrl)
-					? QString::fromUtf8(part.additional)
-					: QString::fromUtf8(part.text);
-				if (!url.isEmpty()) {
-					linksInThisMessage.insert(url);
-				}
+			if (part.type == Data::TextPart::Type::Url || part.type == Data::TextPart::Type::TextUrl) {
+				const auto url = (part.type == Data::TextPart::Type::TextUrl) ? QString::fromUtf8(part.additional) : QString::fromUtf8(part.text);
+				if (!url.isEmpty()) linksInThisMessage.insert(url);
 			}
 		}
 		const auto hasAnyLink = !linksInThisMessage.empty();
 		const bool linkSelectedForStats = (types & MediaSettings::Type::Link) || (types & MediaSettings::Type::FullHistory);
-		[[maybe_unused]] const bool textSelectedForStats = (types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory);
 
-	// Requirement: Links, Text, and Full History bypass size limits for statistics/counting.
-		// Plain text messages (messageType == Text && !hasFile) already have oversized == false.
-		// Text messages with web previews (messageType == Text && hasFile) should also ignore size for stats.
 		const auto oversized = (hasFile && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit)
-			&& !hasAnyLink && (messageType != MediaSettings::Type::Text)
-			&& !fullHistorySelected;
+			&& !fullHistorySelected && (messageType != MediaSettings::Type::Text);
 
-		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
+		const bool mediaSelected = (types & messageType) || fullHistorySelected;
+		
 		if (hasAnyLink && linkSelectedForStats) {
 			int newUniqueLinksInMessage = 0;
 			for (const auto &url : linksInThisMessage) {
@@ -2244,70 +2211,26 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			}
 		}
 
-		// selected means "should be in HTML/JSON"
-		// Requirement: Links, Text, and Full History bypass size limits for selection.
-		// Media items are selected if they match the type filter, size is handled during stats/download.
-		bool selected = (mediaSelected)
+		bool selected = (mediaSelected && !oversized)
 			|| (hasAnyLink && linkSelectedForStats) 
-			|| (!hasMedia && ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory)));
+			|| (!hasMedia && ((types & MediaSettings::Type::Text) || fullHistorySelected));
 
 		_chatProcess->messageItemIndices[i] = ++_chatProcess->totalMessagesCounter;
 
-		// Bubble counting (Total and Unique messages, excluding Links from sum)
-		bool countThis = false;
-		if (messageType != MediaSettings::Type::Link) {
-			if (hasMedia) {
-				if (mediaSelected) {
-					countThis = true;
-				}
-			} else {
-				if ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory)) {
-					countThis = true;
-				}
-			}
-		}
-
 		if (!selected) {
 			_chatProcess->messageItemsCount[i] = 0;
-			onMessagePartDone(i, false); // Marks the bubble as done, but not selected
+			onMessagePartDone(i, false);
 			continue;
 		}
 
-		_chatProcess->messageItemsCount[i] = 1; // Mark as selected for progress bar (Y)
-
-		if (!_chatProcess->messagesInRangeCountFixed) {
-			_chatProcess->messagesInRangeCount++; // Every selected bubble increments total for Y
-		}
-
-		if (countThis) {
-			bool uniqueBubble = false;
-			if (!message.file().location) {
-				uniqueBubble = true;
-			} else {
-				const auto locationKey = ComputeLocationKey(message.file().location);
-				if (locationKey.id || locationKey.type) {
-					auto &visited = _isScanning ? _scanVisited : _exportVisited;
-					if (visited.find(locationKey) == visited.end()) {
-						uniqueBubble = true;
-					}
-				} else {
-					uniqueBubble = true;
-				}
-			}
-			if (uniqueBubble) {
-				_chatProcess->messageIsUnique[i] = true;
-				_chatProcess->messagesUniqueCount++; // Unique content bubbles (Part 1)
-			}
-		}
+		_chatProcess->messageItemsCount[i] = 1;
+		if (!_chatProcess->messagesInRangeCountFixed) _chatProcess->messagesInRangeCount++;
 
 		if (_isScanning) {
-			// Increment stats for messages without main files (Text, non-file Media)
-			// Only if the type itself is selected or Full History is selected.
 			if (!message.file().location && mediaSelected && messageType != MediaSettings::Type::Link) {
 				_scanStats->increment(messageType, 0, true);
 			}
 		} else {
-			// During export, increment stats for non-file messages too.
 			if (!message.file().location && mediaSelected && messageType != MediaSettings::Type::Link) {
 				if (_stats) {
 					_stats->increment(messageType, 0, true);
@@ -2316,7 +2239,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			}
 		}
 
-		if (!hasMedia && ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory))) {
+		if (!hasMedia && ((types & MediaSettings::Type::Text) || fullHistorySelected)) {
 			_chatProcess->messagesTextProcessed++;
 			_chatProcess->messagesTotalProcessed++;
 		} else if (hasMedia) {
@@ -2324,64 +2247,36 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			_chatProcess->messagesTotalProcessed++;
 		}
 
-		// Initial progress update for processed bubble
 		_chatProcess->fileProgress({
 			.randomId = 0,
 			.path = QString(),
 			.itemIndex = _chatProcess->messageItemIndices[i],
-			.ready = 1,
-			.total = 1,
-			.isAuxiliary = true,
+			.ready = 1, .total = 1, .isAuxiliary = true,
 			.messagesTextCount = _chatProcess->messagesTextProcessed,
 			.messagesMediaCount = _chatProcess->messagesMediaProcessed,
-			.messagesTotalCount = _chatProcess->messagesProcessed, // Real-time finished count
+			.messagesTotalCount = _chatProcess->messagesProcessed,
 			.messagesTextTotal = _chatProcess->messagesInRangeCount,
-			.messagesInRangeCount = _chatProcess->messagesInRangeCount,
-			.messagesUniqueCount = _chatProcess->messagesUniqueCount
+			.messagesInRangeCount = _chatProcess->messagesInRangeCount
 		});
 
 		int required = 0;
-		if (message.file().location) {
-			++required;
-			++_chatProcess->pendingFiles;
-		}
-		if (message.thumb().file.location) {
-			++required;
-			++_chatProcess->pendingFiles;
-		}
+		if (message.file().location) { ++required; ++_chatProcess->pendingFiles; }
+		if (message.thumb().file.location) { ++required; ++_chatProcess->pendingFiles; }
 		for (const auto &part : message.text) {
 			if (part.type == Data::TextPart::Type::CustomEmoji) {
 				if (const auto id = part.additional.toULongLong()) {
 					if (!_resolvedCustomEmoji.contains(id)) {
-						++required;
-						++_chatProcess->pendingFiles;
-						_chatProcess->emojiToMessageIndices[id].push_back(i);
-					}
-				}
-			}
-		}
-		for (const auto &reaction : message.reactions) {
-			if (reaction.type == Data::Reaction::Type::CustomEmoji) {
-				if (const auto id = reaction.documentId.toULongLong()) {
-					if (!_resolvedCustomEmoji.contains(id)) {
-						++required;
-						++_chatProcess->pendingFiles;
+						++required; ++_chatProcess->pendingFiles;
 						_chatProcess->emojiToMessageIndices[id].push_back(i);
 					}
 				}
 			}
 		}
 		_chatProcess->messageFilesRequired[i] = required;
-		if (required == 0) {
-			onMessagePartDone(i, true);
-		}
+		if (required == 0) onMessagePartDone(i, true);
 	}
 
-	if (_chatProcess->pendingFiles > 0) {
-		resolveCustomEmoji();
-	} else {
-		finishMessagesSlice();
-	}
+	if (_chatProcess->pendingFiles > 0) resolveCustomEmoji(); else finishMessagesSlice();
 }
 
 void ApiWrap::collectMessagesCustomEmoji(const Data::MessagesSlice &slice) {
@@ -2808,10 +2703,7 @@ void ApiWrap::processFileLoad(
 	if (_isScanning) {
 		if (message || story) {
 			if (type != Type(0) && !isThumb && origin.messageId != 0) {
-				// Links and Text should be counted regardless of size settings (unless they are specifically excluded, which is handled by typeSelected)
 				const bool isLinkOrText = (type == Type::Link || type == Type::Text);
-				
-				// Requirement: Total scan should respect size selected for media filters.
 				const bool ignoreSize = fullHistorySelected || isLinkOrText;
 				if (typeSelected && (ignoreSize || !oversized)) {
 					const bool locationValid = (locationKey.id != 0 || locationKey.type != 0);
@@ -2835,14 +2727,12 @@ void ApiWrap::processFileLoad(
 		&& !isThumb) {
 		const bool isLinkOrText = (type == Type::Link || type == Type::Text);
 		const bool ignoreSize = fullHistorySelected || isLinkOrText;
-		if (typeSelected) {
+		if (typeSelected && (ignoreSize || !oversized)) {
 			auto &visited = _exportVisited;
 			const bool locationValid = (locationKey.id != 0 || locationKey.type != 0);
 			const auto it = locationValid ? visited.find(locationKey) : visited.end();
 			const bool alreadyVisited = (it != visited.end());
-			
-			const bool passSize = ignoreSize || !oversized;
-			const bool willBeUniqueInChat = !alreadyVisited && passSize;
+			const bool willBeUniqueInChat = !alreadyVisited;
 
 			if ((message || story) && type != Type(0)) {
 				_stats->increment(type, fullSize, willBeUniqueInChat);
@@ -2855,13 +2745,11 @@ void ApiWrap::processFileLoad(
 				}
 			}
 
-			if (passSize && !skipDownload) {
+			if (!alreadyVisited && !skipDownload && !oversized) {
 				_stats->incrementUserMediaFiles();
-				if (!alreadyVisited && locationValid && type != Type::Link) {
+				if (locationValid && type != Type::Link) {
 					visited[locationKey] = QString(); // Mark as pending
 				}
-			} else if (alreadyVisited && !skipDownload) {
-				_stats->incrementUserMediaFiles();
 			}
 		}
 	}
