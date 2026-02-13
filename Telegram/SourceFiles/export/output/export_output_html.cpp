@@ -1876,7 +1876,7 @@ QByteArray HtmlWriter::Wrap::pushStickerMedia(
 		const QString &basePath) {
 	using namespace Data;
 
-	const auto &[thumb, size] = WriteImageThumb(
+	const auto thumbResult = WriteImageThumb(
 		basePath,
 		data.file.relativePath,
 		CalculateThumbSize(
@@ -1886,6 +1886,8 @@ QByteArray HtmlWriter::Wrap::pushStickerMedia(
 			kStickerMinHeight),
 		"PNG",
 		-1);
+	const auto &thumb = thumbResult.first;
+	const auto &size = thumbResult.second;
 	if (thumb.isEmpty()) {
 		auto generic = MediaData();
 		generic.title = "Sticker";
@@ -2050,12 +2052,13 @@ QByteArray HtmlWriter::Wrap::pushPhotoMedia(
 		kPhotoMinWidth,
 		kPhotoMinHeight,
 		true)(size);
-	const auto thumbPath = WriteImageThumb(
+	const auto thumbResult = WriteImageThumb(
 		basePath,
 		data.image.file.relativePath,
 		[=](QSize) { return thumbSize; },
 		"JPG",
 		-1);
+	const auto &thumbPath = thumbResult.first;
 	if (thumbPath.isEmpty()
 		|| data.image.file.relativePath.isEmpty()
 		|| !thumbSize.width()
@@ -2099,17 +2102,17 @@ QByteArray HtmlWriter::Wrap::pushPoll(
 	auto result = pushDiv("media_wrap clearfix");
 	result.append(pushDiv("poll pull_left"));
 	result.append(pushDiv("question bold"));
-	result.append(SerializeString(data.question));
+	result.append(FormatText(data.question, internalLinksDomain, relativeLinkBase));
 	result.append(popTag());
 	result.append(pushDiv("description details"));
-	result.append(data.quiz ? "Quiz" : "Poll");
+	result.append("Poll");
 	result.append(popTag());
 	for (const auto &answer : data.answers) {
 		result.append(pushDiv("answer"));
 		result.append(pushDiv("bullet pull_left"));
 		result.append(popTag());
 		result.append(pushDiv("text"));
-		result.append(SerializeString(answer.text));
+		result.append(FormatText(answer.text, internalLinksDomain, relativeLinkBase));
 		result.append(popTag());
 		result.append(popTag());
 	}
@@ -2124,9 +2127,12 @@ QByteArray HtmlWriter::Wrap::pushTodoList(
 		const QString &relativeLinkBase) {
 	auto result = pushDiv("media_wrap clearfix");
 	result.append(pushDiv("todo_list pull_left"));
+	result.append(pushDiv("title bold"));
+	result.append(FormatText(data.title, internalLinksDomain, relativeLinkBase));
+	result.append(popTag());
 	for (const auto &item : data.items) {
 		result.append(pushDiv("item"));
-		result.append(pushDiv("bullet pull_left" + QByteArray(item.completed ? " completed" : "")));
+		result.append(pushDiv("bullet pull_left"));
 		result.append(popTag());
 		result.append(pushDiv("text"));
 		result.append(FormatText(item.text, internalLinksDomain, relativeLinkBase));
@@ -2242,16 +2248,9 @@ Result HtmlWriter::writePersonal(const Data::PersonalInfo &info) {
 
 	auto userpic = UserpicData();
 	userpic.colorIndex = 0;
-	userpic.firstName = info.firstName;
-	userpic.lastName = info.lastName;
+	userpic.firstName = info.user.info.firstName;
+	userpic.lastName = info.user.info.lastName;
 	userpic.pixelSize = kPersonalUserpicSize;
-	if (info.userpic.location) {
-		userpic.largeLink = info.userpic.relativePath;
-		userpic.imageLink = WriteUserpicThumb(
-			_settings.path,
-			userpic.largeLink,
-			userpic);
-	}
 
 	auto block = _summary->pushDiv("page_header");
 	block.append(_summary->pushDiv("content"));
@@ -2269,14 +2268,14 @@ Result HtmlWriter::writePersonal(const Data::PersonalInfo &info) {
 	block.append(_summary->pushDiv("name bold"));
 	block.append(SerializeString(ComposeName(userpic, "No Name")));
 	block.append(_summary->popTag());
-	if (!info.phoneNumber.isEmpty()) {
+	if (!info.user.info.phoneNumber.isEmpty()) {
 		block.append(_summary->pushDiv("details_entry details"));
-		block.append(SerializeString(info.phoneNumber));
+		block.append(SerializeString(info.user.info.phoneNumber));
 		block.append(_summary->popTag());
 	}
-	if (!info.username.isEmpty()) {
+	if (!info.user.username.isEmpty()) {
 		block.append(_summary->pushDiv("details_entry details"));
-		block.append(SerializeString('@' + info.username));
+		block.append(SerializeString('@' + info.user.username));
 		block.append(_summary->popTag());
 	}
 	block.append(_summary->popTag());
@@ -2436,13 +2435,13 @@ Result HtmlWriter::writeSessionsList(const Data::SessionsList &list) {
 		block.append(_sessions->pushDiv("entry_list"));
 		for (const auto &session : list.list) {
 			block.append(_sessions->pushSessionListEntry(
-				session.apiId,
-				SerializeString(session.deviceModel.toUtf8()),
-				SerializeString(session.platform.toUtf8() + ' ' + session.systemVersion.toUtf8()),
+				session.applicationId,
+				SerializeString(session.deviceModel),
+				SerializeString(session.platform + ' ' + session.systemVersion),
 				{
-					SerializeString(session.appName.toUtf8() + ' ' + session.appVersion.toUtf8()),
-					SerializeString(session.ip.toUtf8() + " (" + session.location.toUtf8() + ")"),
-					SerializeString(FormatDateTime(session.dateActive).toUtf8()),
+					SerializeString(session.applicationName + ' ' + session.applicationVersion),
+					SerializeString(session.ip + " (" + session.region + ")"),
+					SerializeString(Data::FormatDateTime(session.lastActive)),
 				}));
 		}
 		block.append(_sessions->popTag());
@@ -2452,12 +2451,12 @@ Result HtmlWriter::writeSessionsList(const Data::SessionsList &list) {
 		block.append(_sessions->pushDiv("entry_list"));
 		for (const auto &session : list.webList) {
 			block.append(_sessions->pushSessionListEntry(
-				session.apiId,
-				SerializeString(session.domain.toUtf8()),
-				SerializeString(session.browser.toUtf8() + ' ' + session.platform.toUtf8()),
+				0,
+				SerializeString(session.domain),
+				SerializeString(session.browser + ' ' + session.platform),
 				{
-					SerializeString(session.ip.toUtf8() + " (" + session.location.toUtf8() + ")"),
-					SerializeString(FormatDateTime(session.dateActive).toUtf8()),
+					SerializeString(session.ip + " (" + session.region + ")"),
+					SerializeString(Data::FormatDateTime(session.lastActive)),
 				}));
 		}
 		block.append(_sessions->popTag());
@@ -2509,9 +2508,6 @@ Result HtmlWriter::writeDialogStart(const Data::DialogInfo &info) {
 		userpic.firstName = info.name;
 		userpic.lastName = info.lastName;
 		userpic.pixelSize = kEntryUserpicSize;
-		if (info.userpic.location) {
-			userpic.imageLink = "../" + info.userpic.relativePath;
-		}
 		block.append(_chats->pushListEntry(
 			userpic,
 			SerializeString(info.name + ' ' + info.lastName),

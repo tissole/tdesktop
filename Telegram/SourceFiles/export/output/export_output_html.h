@@ -164,6 +164,9 @@ private:
 	int _storiesCount = 0;
 	std::unique_ptr<Wrap> _stories;
 
+	std::unique_ptr<Wrap> _contacts;
+	std::unique_ptr<Wrap> _sessions;
+
 	QString _dialogsRelativePath;
 	Data::DialogInfo _dialog;
 	DialogsMode _dialogsMode = DialogsMode::None;
