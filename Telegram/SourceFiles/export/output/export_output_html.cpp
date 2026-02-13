@@ -390,6 +390,7 @@ public:
 	QByteArray wrapPeerName(PeerId peerId) const;
 	QByteArray wrapUserName(UserId userId) const;
 	QByteArray wrapUserNames(const std::vector<UserId> &data) const;
+	QByteArray wrapChannelNames(const std::vector<ChannelId> &data) const;
 
 private:
 	const std::map<PeerId, Data::Peer> &_data;
@@ -442,6 +443,14 @@ QByteArray PeersMap::wrapUserNames(const std::vector<UserId> &data) const {
 	auto list = std::vector<QByteArray>();
 	for (const auto &userId : data) {
 		list.push_back(wrapUserName(userId));
+	}
+	return SerializeList(list);
+}
+
+QByteArray PeersMap::wrapChannelNames(const std::vector<ChannelId> &data) const {
+	auto list = std::vector<QByteArray>();
+	for (const auto &channelId : data) {
+		list.push_back(wrapPeerName(peerFromChannel(channelId)));
 	}
 	return SerializeList(list);
 }
@@ -2153,7 +2162,7 @@ QByteArray HtmlWriter::Wrap::pushGiveaway(
 	result.append("Giveaway");
 	result.append(popTag());
 	result.append(pushDiv("description details"));
-	result.append(peers.wrapUserNames(data.channels));
+	result.append(peers.wrapChannelNames(data.channels));
 	result.append(popTag());
 	result.append(popTag());
 	result.append(popTag());
@@ -2225,10 +2234,6 @@ Result HtmlWriter::start(
 	_settings = settings;
 	_environment = environment;
 	_stats = stats;
-
-	if (const auto result = Output::PreparePath(_settings.path)) {
-		return result;
-	}
 
 	_dialogsRelativePath = _settings.onlySinglePeer()
 		? QString()
@@ -2315,15 +2320,15 @@ Result HtmlWriter::writeUserpicsSlice(const Data::UserpicsSlice &slice) {
 		block.append(_userpics->pushListEntry(
 			data,
 			QByteArray(),
-			FormatDateTime(photo.date).toUtf8(),
-			QByteArray()));
+			QByteArray(),
+			Data::FormatDateTime(photo.date)));
 	}
 	return _userpics->writeBlock(block);
 }
 
 Result HtmlWriter::writeUserpicsEnd() {
 	if (_userpics) {
-		const auto count = _userpics->empty() ? 0 : _stats->count(MediaSettings::Type::Photo);
+		const auto count = _userpics->empty() ? 0 : _stats->byType().at(MediaSettings::Type::Photo).totalCount;
 		pushSection(
 			kUserpicsPriority,
 			"Profile Photos",
@@ -2357,7 +2362,7 @@ Result HtmlWriter::writeStoriesSlice(const Data::StoriesSlice &slice) {
 		block.append(_stories->pushStoriesListEntry(
 			data,
 			QByteArray(),
-			{ FormatDateTime(story.date).toUtf8() },
+			{ Data::FormatDateTime(story.date) },
 			QByteArray(),
 			story.caption,
 			_environment.internalLinksDomain));
@@ -2367,7 +2372,7 @@ Result HtmlWriter::writeStoriesSlice(const Data::StoriesSlice &slice) {
 
 Result HtmlWriter::writeStoriesEnd() {
 	if (_stories) {
-		const auto count = _stories->empty() ? 0 : _stats->count(MediaSettings::Type::Video);
+		const auto count = _stories->empty() ? 0 : _stats->byType().at(MediaSettings::Type::Video).totalCount;
 		pushSection(
 			kStoriesPriority,
 			"My Stories",
@@ -2393,22 +2398,22 @@ Result HtmlWriter::writeContactsList(const Data::ContactsList &list) {
 		block.append(_contacts->pushListEntry(
 			userpic,
 			SerializeString(userpic.firstName + ' ' + userpic.lastName),
-			SerializeString(contact.phoneNumber.toUtf8()),
+			SerializeString(contact.phoneNumber),
 			QByteArray()));
 	}
 	block.append(_contacts->popTag());
 	if (!list.correspondents.empty()) {
 		block.append(_contacts->pushAbout("Frequent Contacts", true));
 		block.append(_contacts->pushDiv("entry_list"));
-		for (const auto &contact : list.correspondents) {
+		for (const auto &topPeer : list.correspondents) {
+			const auto &peer = topPeer.peer;
 			auto userpic = UserpicData();
-			userpic.colorIndex = Data::PeerColorIndex(contact.userId);
-			userpic.firstName = contact.firstName.toUtf8();
-			userpic.lastName = contact.lastName.toUtf8();
+			userpic.colorIndex = peer.colorIndex();
+			userpic.firstName = peer.name();
 			userpic.pixelSize = kEntryUserpicSize;
 			block.append(_contacts->pushListEntry(
 				userpic,
-				SerializeString(userpic.firstName + ' ' + userpic.lastName),
+				SerializeString(userpic.firstName),
 				QByteArray(),
 				QByteArray()));
 		}

@@ -498,7 +498,7 @@ void ControllerObject::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
 	if (_settings.types & Settings::Type::Contacts) {
 		push(Step::Contacts, 1);
 	}
-	if (_settings.sessionsCount) {
+	if (_settings.types & Settings::Type::Sessions) {
 		push(Step::Sessions, 1);
 	}
 	if (_settings.types & Settings::Type::OtherData) {

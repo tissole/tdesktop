@@ -12,6 +12,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 
 class ApiWrap;
+class UserData;
+class PeerData;
 
 namespace Api {
 class Updates;

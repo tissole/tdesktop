@@ -159,9 +159,11 @@ private:
 	std::unique_ptr<Data::PersonalInfo> _delayedPersonalInfo;
 
 	int _userpicsCount = 0;
+	QString _userpicsPath;
 	std::unique_ptr<Wrap> _userpics;
 
 	int _storiesCount = 0;
+	QString _storiesPath;
 	std::unique_ptr<Wrap> _stories;
 
 	std::unique_ptr<Wrap> _contacts;
