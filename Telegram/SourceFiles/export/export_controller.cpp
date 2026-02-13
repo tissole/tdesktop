@@ -26,7 +26,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/weak_ptr.h"
 #include "core/file_utilities.h"
 #include "main/main_session.h"
-#include "core/application.h"
 
 #include <QtCore/QFile>
 #include <QtCore/QTextStream>
@@ -155,7 +154,7 @@ class ControllerObject {
 public:
 	ControllerObject(
 		crl::weak_on_queue<ControllerObject> weak,
-		QPointer<MTP::Instance> mtproto,
+		not_null<Main::Session*> session,
 		const MTPInputPeer &peer,
 		const QString &name,
 		int64 id);
@@ -226,6 +225,7 @@ private:
 	int substepsInStep(Step step) const;
 
 	ApiWrap _api;
+	not_null<Main::Session*> _session;
 	Settings _settings;
 	Environment _environment;
 
@@ -272,11 +272,12 @@ private:
 
 ControllerObject::ControllerObject(
 	crl::weak_on_queue<ControllerObject> weak,
-	QPointer<MTP::Instance> mtproto,
+	not_null<Main::Session*> session,
 	const MTPInputPeer &peer,
 	const QString &name,
 	int64 id)
-: _api(mtproto, weak.runner())
+: _api(&session->mtp(), weak.runner())
+, _session(session)
 , _state(PasswordCheckState{}) {
 	_api.errors(
 	) | rpl::start_with_next([=](const MTP::Error &error) {
@@ -503,7 +504,7 @@ void ControllerObject::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
 	if (_settings.types & Settings::Type::Contacts) {
 		push(Step::Contacts, 1);
 	}
-	if (_settings.types & Settings::Type::Sessions) {
+	if (_settings.sessionsCount) {
 		push(Step::Sessions, 1);
 	}
 	if (_settings.types & Settings::Type::OtherData) {
@@ -527,10 +528,7 @@ void ControllerObject::exportNext() {
 	if (++_stepIndex >= _steps.size()) {
 		if (_isScanning) {
 			auto stats = _scanStats.byType();
-			QString downloadPath = _settings.path;
-			if (auto session = Core::App().maybePrimarySession()) {
-				downloadPath = File::DefaultDownloadPath(session);
-			}
+			QString downloadPath = File::DefaultDownloadPath(_session);
 			WriteScanStatsFile(downloadPath, stats, _messagesInRangeCount, _settings.singlePeerId, _settings.singlePeerName);
 			const auto count = _messagesInRangeCount;
 			_isScanning = false;
@@ -974,11 +972,11 @@ void ControllerObject::fillMessagesState(
 
 
 Controller::Controller(
-	QPointer<MTP::Instance> mtproto,
+	not_null<Main::Session*> session,
 	const MTPInputPeer &peer,
 	const QString &name,
 	int64 id)
-: _wrapped(std::move(mtproto), peer, std::move(name), std::move(id)) {
+: _wrapped(session, peer, std::move(name), std::move(id)) {
 }
 
 rpl::producer<State> Controller::state() const {

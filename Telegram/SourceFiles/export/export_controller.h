@@ -26,6 +26,10 @@ namespace Ui {
 class Show;
 }
 
+namespace Main {
+class Session;
+} // namespace Main
+
 namespace MTP {
 class Instance;
 } // namespace MTP
@@ -136,33 +140,15 @@ using State = std::variant<
 	ScanDoneState,
 	FinishedState>;
 
-//struct PasswordUpdate {
-//	enum class Type {
-//		CheckSucceed,
-//		WrongPassword,
-//		FloodLimit,
-//		RecoverUnavailable,
-//	};
-//	Type type = Type::WrongPassword;
-//
-//};
-
 class Controller {
 public:
 	Controller(
-		QPointer<MTP::Instance> mtproto,
+		not_null<Main::Session*> session,
 		const MTPInputPeer &peer,
 		const QString &name = QString(),
 		int64 id = 0);
 
 	rpl::producer<State> state() const;
-
-	// Password step.
-	//void submitPassword(const QString &password);
-	//void requestPasswordRecover();
-	//rpl::producer<PasswordUpdate> passwordUpdate() const;
-	//void reloadPasswordState();
-	//void cancelUnconfirmedPassword();
 
 	// Processing step.
 	void runScan(

@@ -46,7 +46,7 @@ void Manager::start(
 		return;
 	}
 	_controller = std::make_unique<Controller>(
-		&session->mtp(),
+		session,
 		singlePeer,
 		name,
 		id);
