@@ -1374,7 +1374,7 @@ void ApiWrap::requestMessages(
 
 	if (_settings->useIdRange) {
 		_chatProcess->largestIdPlusOne = (tillId > 0)
-			? int32(std::min(int64(std::numeric_limits<int32>::max()), tillId + 1))
+			? int32(std::min(int64(std::numeric_limits<int32>::max()), tillId))
 			: 0;
 		requestMessagesCount(0);
 	} else {
@@ -1524,6 +1524,7 @@ void ApiWrap::resolveDates() {
 					_chatProcess->tillId = data.vmessages().v[0].match([](const auto &m) {
 						return int64(m.vid().v);
 					});
+					_chatProcess->largestIdPlusOne = int32(_chatProcess->tillId);
 				}
 			});
 			requestMessagesCount(0);
@@ -1559,7 +1560,6 @@ void ApiWrap::resolveDates() {
 						return TimeId(m.vdate().v);
 					});
 					_chatProcess->fromId = (date > 0 && date < fromDate) ? (id + 1) : id;
-					_chatProcess->largestIdPlusOne = int32(std::max(int64(1), std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId)));
 				}
 			});
 			resolveTill();
@@ -1942,7 +1942,7 @@ void ApiWrap::requestMessagesSlice() {
 	requestChatMessages(
 		_chatProcess->info.splits[_chatProcess->localSplitIndex],
 		_chatProcess->largestIdPlusOne,
-		-kMessagesSliceLimit,
+		(_chatProcess->largestIdPlusOne > 0 ? 1 : 0),
 		kMessagesSliceLimit,
 		[=](const MTPmessages_Messages &result) {
 		if (!_chatProcess) return;
@@ -1990,10 +1990,7 @@ void ApiWrap::requestChatMessages(
 		});
 
 		if (count >= 0 && !_chatProcess->messagesInRangeCountFixed) {
-			const auto sizeFilterActive = (_settings->media.sizeLimit > 0);
-			if (!sizeFilterActive) {
-				_chatProcess->messagesInRangeCount = count;
-			}
+			// Don't set messagesInRangeCount here, it will be incremented in loadMessagesFiles
 		}
 
 		if (auto requestDone = base::take(_chatProcess->requestDone)) {
@@ -2199,9 +2196,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				}
 			}
 			if (_isScanning) {
-				_scanStats->increment(MediaSettings::Type::Link, 0, linksInThisMessage.size(), newUniqueLinksInMessage);
+				_scanStats->increment(MediaSettings::Type::Link, 0, 1, newUniqueLinksInMessage);
 			} else if (_stats) {
-				_stats->increment(MediaSettings::Type::Link, 0, linksInThisMessage.size(), newUniqueLinksInMessage);
+				_stats->increment(MediaSettings::Type::Link, 0, 1, newUniqueLinksInMessage);
 			}
 		}
 
@@ -2210,6 +2207,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			|| (!hasMedia && ((types & MediaSettings::Type::Text) || fullHistorySelected));
 
 		_chatProcess->messageItemIndices[i] = ++_chatProcess->totalMessagesCounter;
+		_chatProcess->messagesUniqueCount++;
 
 		if (!selected) {
 			_chatProcess->messageItemsCount[i] = 0;
@@ -2217,8 +2215,15 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			continue;
 		}
 
-		_chatProcess->messageItemsCount[i] = 1;
-		if (!_chatProcess->messagesInRangeCountFixed) _chatProcess->messagesInRangeCount++;
+		int itemsInThisMessage = 0;
+		if ((mediaSelected && !oversized) || (!hasMedia && ((types & MediaSettings::Type::Text) || fullHistorySelected))) {
+			itemsInThisMessage++;
+		}
+		if (hasAnyLink && linkSelectedForStats) {
+			itemsInThisMessage++;
+		}
+		_chatProcess->messageItemsCount[i] = itemsInThisMessage;
+		if (!_chatProcess->messagesInRangeCountFixed) _chatProcess->messagesInRangeCount += itemsInThisMessage;
 
 		if (_isScanning) {
 			if (!message.file().location && mediaSelected && messageType != MediaSettings::Type::Link) {
@@ -2270,7 +2275,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		if (required == 0) onMessagePartDone(i, true);
 	}
 
-	if (_chatProcess && _chatProcess->pendingFiles > 0) resolveCustomEmoji(); else if (_chatProcess) finishMessagesSlice();
+	if (_chatProcess && _chatProcess->pendingFiles > 0) resolveCustomEmoji();
 }
 
 void ApiWrap::collectMessagesCustomEmoji(const Data::MessagesSlice &slice) {
@@ -2476,7 +2481,7 @@ void ApiWrap::finishMessagesSlice() {
 				finishMessages();
 			} else {
 				_chatProcess->lastSlice = false;
-				_chatProcess->largestIdPlusOne = 1;
+				_chatProcess->largestIdPlusOne = 0;
 				requestMessagesSlice();
 			}
 		}
@@ -2485,7 +2490,7 @@ void ApiWrap::finishMessagesSlice() {
 
 	auto slice = *base::take(_chatProcess->slice);
 	if (!slice.list.empty()) {
-		_chatProcess->largestIdPlusOne = slice.list.back().id + 1;
+		_chatProcess->largestIdPlusOne = slice.list.front().id;
 
 		if (_chatProcess->fromId > 0
 			&& _chatProcess->largestIdPlusOne <= _chatProcess->fromId) {

@@ -117,7 +117,7 @@ void WriteScanStatsFile(
 			totalMediaSize += item.totalSize;
 		}
 
-		if (type != Type::Link) {
+		if (type != Type::Link && type != Type::Text) {
 			totalUniqueMessagesCount += item.uniqueCount;
 			totalTotalMessagesCount += item.totalCount;
 		}
@@ -126,7 +126,7 @@ void WriteScanStatsFile(
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
 		const auto uniqueStr = QString::number(totalUniqueMessagesCount) + " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 		const auto totalStr = QString::number(totalTotalMessagesCount) + " (" + Ui::FormatSizeText(totalMediaSize) + ")";
-		out << "\nTotal messages and media files: ";
+		out << "\nUnique and total media files: ";
 		if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
 			out << uniqueStr << ", " << totalStr << "\n";
 		} else {
@@ -391,14 +391,8 @@ void ControllerObject::startExport(
 		const auto type = pair.first;
 		const auto &item = pair.second;
 		
-		if (_settings.media.types & MediaType::FullHistory) {
-			if (type != MediaType::Link) {
-				totalTotalFilesCount += item.totalCount;
-			}
-		} else if (_settings.media.types & type) {
-			if (type != MediaType::Link) {
-				totalTotalFilesCount += item.totalCount;
-			}
+		if (_settings.media.types & (type | MediaType::FullHistory)) {
+			totalTotalFilesCount += item.totalCount;
 		}
 	}
 	
