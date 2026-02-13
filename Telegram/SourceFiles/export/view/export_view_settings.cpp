@@ -417,7 +417,6 @@ void SettingsWidget::addFormatAndLocationLabel(
 
 void SettingsWidget::addLimitsLabel(
 		not_null<Ui::VerticalLayout*> container) {
-	// Add export mode selection (date range or ID range)
 	const auto modeGroup = std::make_shared<Ui::RadioenumGroup<bool>>(
 		readData().useIdRange ? true : false);
 
@@ -445,7 +444,6 @@ void SettingsWidget::addLimitsLabel(
 		});
 	});
 
-	// Date range UI (visible when date mode is selected)
 	auto fromDateLink = value()
 		| rpl::map([](const Settings &data) {
 			return data.singlePeerFrom;
@@ -542,7 +540,6 @@ void SettingsWidget::addLimitsLabel(
 			st::boxLabel),
 		st::exportLimitsPadding);
 
-	// ID range UI (visible when ID mode is selected)
 	const auto idContainer = container->add(
 		object_ptr<Ui::VerticalLayout>(container),
 		st::exportSettingPadding);
@@ -563,7 +560,6 @@ void SettingsWidget::addLimitsLabel(
 			rpl::single(tr::lng_export_id_till_placeholder(tr::now))),
 		st::exportSettingPadding);
 
-	// Bind inputs to data
 	value()
 		| rpl::map([](const Settings &data) {
 			return data.singlePeerFromId;
@@ -587,7 +583,6 @@ void SettingsWidget::addLimitsLabel(
 			st::exportErrorLabel),
 		st::exportSettingPadding);
 
-	// Handle input changes with validation
 	fromIdInput->changes() | rpl::start_with_next([=] {
 		errorLabel->setText(QString());
 		const auto text = fromIdInput->getLastText();
@@ -640,7 +635,6 @@ void SettingsWidget::addLimitsLabel(
 		});
 	}, tillIdInput->lifetime());
 
-	// Toggle visibility based on mode
 	value()
 		| rpl::map([](const Settings &data) {
 			return data.useIdRange;
@@ -651,7 +645,6 @@ void SettingsWidget::addLimitsLabel(
 			container->resizeToWidth(container->width());
 		}, container->lifetime());
 
-	// Initially set visibility
 	dateLabel->setVisible(!readData().useIdRange);
 	idContainer->setVisible(readData().useIdRange);
 
@@ -754,7 +747,7 @@ void SettingsWidget::addLimitsLabel(
 				changeData([&](Settings &settings) {
 					const auto result = time
 						+ removeTime(settings.singlePeerTill)
-						+ 59; // Make the selected minute INCLUSIVE (covers :00 to :59)
+						+ 59;
 					if (result < settings.singlePeerFrom
 							&& settings.singlePeerFrom) {
 						settings.singlePeerTill = settings.singlePeerFrom + 59;
@@ -809,7 +802,7 @@ void SettingsWidget::editDateLimit(
 		.st = st::exportCalendarSizes,
 		.minDate = (min
 			? base::unixtime::parse(min).date()
-			: QDate(2013, 8, 1)), // Telegram was launched in August 2013 :)
+			: QDate(2013, 8, 1)),
 		.maxDate = (max
 			? base::unixtime::parse(max).date()
 			: QDate::currentDate()),
@@ -1087,7 +1080,7 @@ void SettingsWidget::addMediaOption(
 			} else {
 				enabled = !linkSelected && !historySelected;
 			}
-			return std::make_pair(checked, enabled);
+			return std::pair{ checked, enabled };
 		})
 		| rpl::distinct_until_changed()
 		| rpl::start_with_next([=](std::pair<bool, bool> state) {
@@ -1134,7 +1127,7 @@ void SettingsWidget::addSizeSlider(
 
 	value()
 		| rpl::map([](const Settings &data) {
-			return std::make_pair(data.media.sizeLimit, data.media.types);
+			return std::pair{ data.media.sizeLimit, data.media.types };
 		})
 		| rpl::distinct_until_changed()
 		| rpl::start_with_next([=](std::pair<int64, MediaSettings::Types> state) {
@@ -1201,7 +1194,6 @@ void SettingsWidget::refreshButtons(
 		_cancelClicks.fire({});
 	}, cancelBtn->lifetime());
 
-	// State management
 	if (_isScanning) {
 		exportBtn->setDisabled(true);
 		scanBtn->setDisabled(true);
@@ -1285,33 +1277,6 @@ void SettingsWidget::setScanning(bool scanning) {
 void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats, int messagesCount) {
 	setScanning(false);
 
-	// We use our own calculated totals instead of the raw messagesCount
-	int totalTotalMessagesCount = 0;
-	for (const auto &pair : stats) {
-		const auto type = pair.first;
-		const auto &item = pair.second;
-		if (type != MediaSettings::Type::Link) {
-			totalTotalMessagesCount += item.totalCount;
-		}
-	}
-
-	if (totalTotalMessagesCount <= 0 && stats.find(MediaSettings::Type::Link) == stats.end()) {
-		resetToDefault();
-		using MediaType = MediaSettings::Type;
-		const auto types = readData().media.types;
-		const auto hasMedia = (types & MediaType::MediaMask) || (types & MediaType::Sticker) || (types & MediaType::GIF) || (types & MediaType::File);
-
-		QString text;
-		if (hasMedia) {
-			text = tr::lng_export_none_found(tr::now);
-		} else {
-			text = "No items found matching selected filters.";
-		}
-		_scanResultsLabel->setText(text);
-		_container->resizeToWidth(_container->width());
-		return;
-	}
-
 	_scanResults = std::move(stats);
 	_hasScanResults = true;
 	_changes.fire_copy(readData());
@@ -1319,7 +1284,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 
 	QString text;
 	int totalUniqueMessagesCount = 0;
-	totalTotalMessagesCount = 0;
+	int totalTotalMessagesCount = 0;
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
 	const auto fullHistory = (readData().media.types & MediaSettings::Type::FullHistory);
@@ -1390,14 +1355,29 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 				totalMediaSize += item.totalSize;
 			}
 
-			// Total sum = all media + all text. Unique sum = unique media + all text.
-			// Links are always excluded from sums to avoid double counting.
 			if (type != MediaType::Link) {
 				totalUniqueMessagesCount += item.uniqueCount;
 				totalTotalMessagesCount += item.totalCount;
 			}
 		}
 	}
+
+	if (totalTotalMessagesCount <= 0 && _scanResults.find(MediaSettings::Type::Link) == _scanResults.end()) {
+		resetToDefault();
+		const auto types = readData().media.types;
+		const auto hasMedia = (types & MediaType::MediaMask) || (types & MediaType::Sticker) || (types & MediaType::GIF) || (types & MediaType::File);
+
+		QString emptyText;
+		if (hasMedia) {
+			emptyText = tr::lng_export_none_found(tr::now);
+		} else {
+			emptyText = "No items found matching selected filters.";
+		}
+		_scanResultsLabel->setText(emptyText);
+		_container->resizeToWidth(_container->width());
+		return;
+	}
+
 	if (totalTotalMessagesCount > 0) {
 		if (categoriesCount > 1) {
 			const auto label = "Total messages and media files: ";
@@ -1445,13 +1425,10 @@ void SettingsWidget::resetToDefault() {
 		data.singlePeerFromId = 0;
 		data.singlePeerTillId = 0;
 		data.useIdRange = false;
-		data.media.sizeLimit = 8 * 1024 * 1024; // Explicitly reset size limit
+		data.media.sizeLimit = 8 * 1024 * 1024;
 	});
 	clearScanResults();
 }
 
 } // namespace View
 } // namespace Export
-
-
-
