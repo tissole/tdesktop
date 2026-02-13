@@ -1191,6 +1191,7 @@ void SettingsWidget::refreshButtons(
 	cancelBtn->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 	cancelBtn->show();
 	cancelBtn->clicks() | rpl::to_empty | rpl::start_with_next([=] {
+		resetToDefault();
 		_cancelClicks.fire({});
 	}, cancelBtn->lifetime());
 
@@ -1332,12 +1333,14 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 			const bool hasDuplicates = (item.uniqueCount != item.totalCount)
 				|| (item.uniqueSize != item.totalSize);
 
-			if (type == MediaType::Text || type == MediaType::Link) {
+			if (type == MediaType::Text) {
+				text += label + ": " + Lang::FormatCountDecimal(item.totalCount) + "\n"; 
+			} else if (type == MediaType::Link) {
 				if (hasDuplicates) {
 					text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount)	
 						+ ", " + Lang::FormatCountDecimal(item.totalCount) + "\n";	
 				} else {
-					text += label + ": " + Lang::FormatCountDecimal(item.totalCount) + "\n"; 
+					text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount) + "\n"; 
 				}
 			} else {
 				const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount)
@@ -1348,7 +1351,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 				if (hasDuplicates) {
 					text += label + ": " + uniqueStr + ", " + totalStr + "\n";
 				} else {
-					text += label + ": " + totalStr + "\n";
+					text += label + ": " + uniqueStr + "\n";
 				}
 
 				totalUniqueMediaSize += item.uniqueSize;
@@ -1386,10 +1389,10 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 			const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
-			if (totalUniqueMessagesCount != totalTotalMessagesCount) {
+			if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
 				text += "\n" + QString(label) + uniqueStr + ", " + totalStr;
 			} else {
-				text += "\n" + QString(label) + totalStr;
+				text += "\n" + QString(label) + uniqueStr;
 			}
 		}
 	}
@@ -1406,6 +1409,7 @@ void SettingsWidget::clearScanResults() {
 }
 
 void SettingsWidget::resetToDefault() {
+	_isScanning = false;
 	changeData([&](Settings &data) {
 		const auto oldSinglePeer = data.singlePeer;
 		const auto oldName = data.singlePeerName;
