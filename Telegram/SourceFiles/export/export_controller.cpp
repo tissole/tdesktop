@@ -154,7 +154,7 @@ class ControllerObject {
 public:
 	ControllerObject(
 		crl::weak_on_queue<ControllerObject> weak,
-		not_null<Main::Session*> session,
+		Main::Session *session,
 		const MTPInputPeer &peer,
 		const QString &name,
 		int64 id);
@@ -272,7 +272,7 @@ private:
 
 ControllerObject::ControllerObject(
 	crl::weak_on_queue<ControllerObject> weak,
-	not_null<Main::Session*> session,
+	Main::Session *session,
 	const MTPInputPeer &peer,
 	const QString &name,
 	int64 id)
@@ -966,7 +966,7 @@ void ControllerObject::fillMessagesState(
 
 
 Controller::Controller(
-	not_null<Main::Session*> session,
+	Main::Session *session,
 	const MTPInputPeer &peer,
 	const QString &name,
 	int64 id)

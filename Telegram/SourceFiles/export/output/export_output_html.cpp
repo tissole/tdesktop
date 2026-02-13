@@ -2392,8 +2392,8 @@ Result HtmlWriter::writeContactsList(const Data::ContactsList &list) {
 	for (const auto &contact : list.list) {
 		auto userpic = UserpicData();
 		userpic.colorIndex = Data::PeerColorIndex(contact.userId);
-		userpic.firstName = contact.firstName.toUtf8();
-		userpic.lastName = contact.lastName.toUtf8();
+		userpic.firstName = contact.firstName;
+		userpic.lastName = contact.lastName;
 		userpic.pixelSize = kEntryUserpicSize;
 		block.append(_contacts->pushListEntry(
 			userpic,
