@@ -24,9 +24,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/format_values.h"
 #include "lang/lang_keys.h"
 #include "base/weak_ptr.h"
-#include "core/file_utilities.h"
-#include "main/main_session.h"
-#include "core/application.h"
 
 #include <QtCore/QFile>
 #include <QtCore/QTextStream>
@@ -44,13 +41,8 @@ void WriteScanStatsFile(
 		const QString &chatName) {
 	auto sanitizedName = chatName;
 	sanitizedName.replace(QRegularExpression("[^a-zA-Z0-9_-]"), "_");
-	const auto fileName = "scan_result_" + QString::number(chatId) + "_" + sanitizedName + ".txt";
-	
-	auto fullPath = path;
-	if (!fullPath.endsWith('/') && !fullPath.endsWith('\\')) {
-		fullPath += '/';
-	}
-	QFile file(fullPath + fileName);
+	const auto fileName = "scan_results_" + QString::number(chatId) + "_" + sanitizedName + ".txt";
+	QFile file(path + fileName);
 	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
 		return;
 	}
@@ -98,22 +90,18 @@ void WriteScanStatsFile(
 			|| (item.uniqueSize != item.totalSize);
 
 		out << label << ": ";
-		if (type == Type::Text) {
-			out << item.totalCount << "\n";
-		} else if (type == Type::Link) {
+		if (type == Type::Text || type == Type::Link) {
 			if (hasDuplicates) {
-				out << item.uniqueCount << ", " << item.totalCount << "\n";
-			} else {
-				out << item.uniqueCount << "\n";
+				out << item.uniqueCount << ", ";
 			}
+			out << item.totalCount << "\n";
 		} else {
 			const auto uniqueStr = QString::number(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
 			const auto totalStr = QString::number(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
 			if (hasDuplicates) {
-				out << uniqueStr << ", " << totalStr << "\n";
-			} else {
-				out << uniqueStr << "\n";
+				out << uniqueStr << ", ";
 			}
+			out << totalStr << "\n";
 			totalUniqueMediaSize += item.uniqueSize;
 			totalMediaSize += item.totalSize;
 		}
@@ -129,10 +117,9 @@ void WriteScanStatsFile(
 		const auto totalStr = QString::number(totalTotalMessagesCount) + " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 		out << "\nTotal messages and media files: ";
 		if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
-			out << uniqueStr << ", " << totalStr << "\n";
-		} else {
-			out << uniqueStr << "\n";
+			out << uniqueStr << ", ";
 		}
+		out << totalStr << "\n";
 	} else if (totalTotalMessagesCount <= 0 && categoriesCount > 0) {
 		out << "\nNo items found in this range.\n";
 	} else if (categoriesCount <= 0) {
@@ -162,6 +149,13 @@ public:
 
 	rpl::producer<State> state() const;
 
+	// Password step.
+	//void submitPassword(const QString &password);
+	//void requestPasswordRecover();
+	//rpl::producer<PasswordUpdate> passwordUpdate() const;
+	//void reloadPasswordState();
+	//void cancelUnconfirmedPassword();
+
 	// Processing step.
 	void runScan(
 		const Settings &settings,
@@ -188,6 +182,9 @@ private:
 	void ioError(const QString &path);
 	bool ioCatchError(Output::Result result);
 	void setFinishedState();
+
+	//void requestPasswordState();
+	//void passwordStateDone(const MTPaccount_Password &password);
 
 	void fillExportSteps();
 	void fillSubstepsInSteps(const ApiWrap::StartInfo &info);
@@ -252,6 +249,7 @@ private:
 	int _contentFilesCount = 0;
 	bool _messagesInRangeCountFixed = false;
 
+	// rpl::variable<State> fails to compile in MSVC :(
 	State _state;
 	rpl::event_stream<State> _stateChanges;
 
@@ -288,6 +286,7 @@ ControllerObject::ControllerObject(
 		ioCatchError(result);
 	}, _lifetime);
 
+	//requestPasswordState();
 	auto state = PasswordCheckState();
 	state.checked = false;
 	state.requesting = false;
@@ -335,6 +334,50 @@ bool ControllerObject::ioCatchError(Output::Result result) {
 	}
 	return false;
 }
+
+//void ControllerObject::submitPassword(const QString &password) {
+//
+//}
+//
+//void ControllerObject::requestPasswordRecover() {
+//
+//}
+//
+//rpl::producer<PasswordUpdate> ControllerObject::passwordUpdate() const {
+//	return nullptr;
+//}
+//
+//void ControllerObject::reloadPasswordState() {
+//	//_mtp.request(base::take(_passwordRequestId)).cancel();
+//	requestPasswordState();
+//}
+//
+//void ControllerObject::requestPasswordState() {
+//	if (_passwordRequestId) {
+//		return;
+//	}
+//	//_passwordRequestId = _mtp.request(MTPaccount_GetPassword(
+//	//)).done([=](const MTPaccount_Password &result) {
+//	//	_passwordRequestId = 0;
+//	//	passwordStateDone(result);
+//	//}).fail([=](const MTP::Error &error) {
+//	//	apiError(error);
+//	//}).send();
+//}
+//
+//void ControllerObject::passwordStateDone(const MTPaccount_Password &result) {
+//	auto state = PasswordCheckState();
+//	state.checked = false;
+//	state.requesting = false;
+//	state.hasPassword;
+//	state.hint;
+//	state.unconfirmedPattern;
+//	setState(std::move(state));
+//}
+//
+//void ControllerObject::cancelUnconfirmedPassword() {
+//
+//}
 
 void ControllerObject::clearResults() {
 	_scanStats.clear();
@@ -390,11 +433,13 @@ void ControllerObject::startExport(
 		const auto type = pair.first;
 		const auto &item = pair.second;
 		
+		// If Full History is selected, add up all media/text items (excluding links from message sum)
 		if (_settings.media.types & MediaType::FullHistory) {
 			if (type != MediaType::Link) {
 				totalTotalFilesCount += item.totalCount;
 			}
 		} else if (_settings.media.types & type) {
+			// If specific filter selected, add those counts
 			if (type != MediaType::Link) {
 				totalTotalFilesCount += item.totalCount;
 			}
@@ -410,7 +455,7 @@ void ControllerObject::startExport(
 		const auto breakdown = _scanStats.byType();
 		const auto it = breakdown.find(MediaType::Link);
 		if (it != breakdown.end() && it->second.totalCount > 0) {
-			_messagesCount = it->second.totalCount;
+			_messagesCount = it->second.totalCount; // Use link count as denominator if only links
 			_stats.setExpectedFilesCount(_messagesCount);
 			_scanStatsFound = true;
 		}
@@ -527,11 +572,7 @@ void ControllerObject::exportNext() {
 	if (++_stepIndex >= _steps.size()) {
 		if (_isScanning) {
 			auto stats = _scanStats.byType();
-			QString downloadPath = _settings.path;
-			if (auto session = Core::App().maybePrimarySession()) {
-				downloadPath = File::DefaultDownloadPath(session);
-			}
-			WriteScanStatsFile(downloadPath, stats, _messagesInRangeCount, _settings.singlePeerId, _settings.singlePeerName);
+			WriteScanStatsFile(_settings.path, stats, _messagesInRangeCount, _settings.singlePeerId, _settings.singlePeerName);
 			const auto count = _messagesInRangeCount;
 			_isScanning = false;
 			_stepIndex = -1;
@@ -738,6 +779,7 @@ void ControllerObject::exportNextDialog() {
 		: 0;
 
 	if (tillId > 0 && tillId > info->topMessageId) {
+		// Automatically correct tillId to the last message ID instead of showing an error
 		tillId = info->topMessageId;
 	}
 	startExportMessages(info, fromId, tillId);
@@ -762,9 +804,13 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 		if (!_stats.expectedFilesCount()) {
 			_stats.setExpectedFilesCount(_messagesCount);
 		}
+		// Reset counters for new dialog
 		_messagesTextCount = 0;
 		_messagesMediaCount = 0;
 		_messagesTotalCount = 0;
+		// _messagesInRangeCount must not be reset here if it came from scan results!
+		// But during export we increment it bubble by bubble.
+		// If _scanStatsFound is false, we should reset it to 0.
 		if (!_scanStatsFound) {
 			_messagesInRangeCount = 0;
 		}
@@ -878,6 +924,8 @@ void ControllerObject::setFinishedState() {
 	auto totalTotalSize = int64(0);
 	const auto breakdown = _stats.byType();
 	using Type = MediaSettings::Type;
+	const bool linksOnly = (_settings.media.types == Type::Link);
+	(void)linksOnly;
 
 	for (const auto &pair : breakdown) {
 		const auto type = pair.first;
@@ -888,7 +936,9 @@ void ControllerObject::setFinishedState() {
 			totalUniqueSize += item.uniqueSize;
 			totalTotalSize += item.totalSize;
 		} else if (type == Type::Text) {
-			totalUniqueCount += item.uniqueCount; // Text is always unique per message
+			totalTotalCount += item.totalCount;
+		} else if (type == Type::Link && breakdown.size() == 1) {
+			totalUniqueCount += item.uniqueCount;
 			totalTotalCount += item.totalCount;
 		}
 	}
@@ -986,6 +1036,36 @@ rpl::producer<State> Controller::state() const {
 		return unwrapped.state();
 	});
 }
+
+//void Controller::submitPassword(const QString &password) {
+//	_wrapped.with([=](Implementation &unwrapped) {
+//		unwrapped.submitPassword(password);
+//	});
+//}
+//
+//void Controller::requestPasswordRecover() {
+//	_wrapped.with([=](Implementation &unwrapped) {
+//		unwrapped.requestPasswordRecover();
+//	});
+//}
+//
+//rpl::producer<PasswordUpdate> Controller::passwordUpdate() const {
+//	return _wrapped.producer_on_main([=](const Implementation &unwrapped) {
+//		return unwrapped.passwordUpdate();
+//	});
+//}
+//
+//void Controller::reloadPasswordState() {
+//	_wrapped.with([=](Implementation &unwrapped) {
+//		unwrapped.reloadPasswordState();
+//	});
+//}
+//
+//void Controller::cancelUnconfirmedPassword() {
+//	_wrapped.with([=](Implementation &unwrapped) {
+//		unwrapped.cancelUnconfirmedPassword();
+//	});
+//}
 
 void Controller::runScan(
 		const Settings &settings,

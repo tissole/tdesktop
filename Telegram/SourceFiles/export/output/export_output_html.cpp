@@ -1998,11 +1998,11 @@ QByteArray HtmlWriter::Wrap::pushVideoFileMedia(
 		auto generic = MediaData();
 		generic.title = "Video file";
 		generic.status = FormatDuration(data.duration);
-		if (!generic.status.isEmpty()) {
-			generic.status += ", ";
+		if (data.file.relativePath.isEmpty()) {
+			generic.status += ", " + FormatFileSize(data.file.size);
+		} else {
+			generic.link = data.file.relativePath;
 		}
-		generic.status += FormatFileSize(data.file.size);
-		generic.link = data.file.relativePath;
 		generic.description = NoFileDescription(data.file.skipReason);
 		generic.classes = "media_video";
 		return pushGenericMedia(generic);
@@ -2018,9 +2018,9 @@ QByteArray HtmlWriter::Wrap::pushVideoFileMedia(
 	result.append(pushDiv("video_play_bg"));
 	result.append(pushDiv("video_play"));
 	result.append(popTag());
+	result.append(popTag());
 	result.append(pushDiv("video_duration"));
 	result.append(FormatDuration(data.duration));
-	result.append(popTag());
 	result.append(popTag());
 	const auto sizeStyle = "width: "
 		+ NumberToString(thumbSize.width() / 2)
@@ -2043,27 +2043,24 @@ QByteArray HtmlWriter::Wrap::pushPhotoMedia(
 		const QString &basePath) {
 	using namespace Data;
 
-	auto size = QSize(data.image.width, data.image.height);
-	auto thumbSize = CalculateThumbSize(
-		kPhotoMaxWidth,
-		kPhotoMaxHeight,
-		kPhotoMinWidth,
-		kPhotoMinHeight,
-		true)(size);
-	const auto thumbPath = WriteImageThumb(
+	const auto &[thumb, size] = WriteImageThumb(
 		basePath,
 		data.image.file.relativePath,
-		[=](QSize) { return thumbSize; },
-		"JPG",
-		-1);
-	if (thumbPath.isEmpty()
-		|| data.image.file.relativePath.isEmpty()
-		|| !thumbSize.width()
-		|| !thumbSize.height()) {
+		CalculateThumbSize(
+			kPhotoMaxWidth,
+			kPhotoMaxHeight,
+			kPhotoMinWidth,
+			kPhotoMinHeight));
+	if (thumb.isEmpty()) {
 		auto generic = MediaData();
 		generic.title = "Photo";
-		generic.status = FormatFileSize(data.image.file.size);
-		generic.link = data.image.file.relativePath;
+		generic.status = Ui::FormatImageSizeText(
+			QSize(data.image.width, data.image.height)).toUtf8();
+		if (data.image.file.relativePath.isEmpty()) {
+			generic.status += ", " + FormatFileSize(data.image.file.size);
+		} else {
+			generic.link = data.image.file.relativePath;
+		}
 		generic.description = NoFileDescription(data.image.file.skipReason);
 		generic.classes = "media_photo";
 		return pushGenericMedia(generic);
@@ -2077,14 +2074,14 @@ QByteArray HtmlWriter::Wrap::pushPhotoMedia(
 		}
 	}));
 	const auto sizeStyle = "width: "
-		+ NumberToString(thumbSize.width() / 2)
+		+ NumberToString(size.width() / 2)
 		+ "px; height: "
-		+ NumberToString(thumbSize.height() / 2)
+		+ NumberToString(size.height() / 2)
 		+ "px";
 	result.append(pushTag("img", {
 		{ "class", "photo" },
 		{ "style", sizeStyle },
-		{ "src", relativePath(thumbPath).toUtf8() },
+		{ "src", relativePath(thumb).toUtf8() },
 		{ "empty", "" }
 	}));
 	result.append(popTag());
@@ -2096,23 +2093,53 @@ QByteArray HtmlWriter::Wrap::pushPoll(
 		const Data::Poll &data,
 		const QString &internalLinksDomain,
 		const QString &relativeLinkBase) {
+	using namespace Data;
+
 	auto result = pushDiv("media_wrap clearfix");
-	result.append(pushDiv("poll pull_left"));
+	result.append(pushDiv("media_poll"));
 	result.append(pushDiv("question bold"));
-	result.append(SerializeString(data.question));
+	result.append(FormatText(
+		data.question,
+		internalLinksDomain,
+		relativeLinkBase));
 	result.append(popTag());
-	result.append(pushDiv("description details"));
-	result.append(data.quiz ? "Quiz" : "Poll");
+	result.append(pushDiv("details"));
+	if (data.closed) {
+		result.append(SerializeString("Final results"));
+	} else {
+		result.append(SerializeString("Anonymous poll"));
+	}
 	result.append(popTag());
+	const auto votes = [](int count) {
+		if (count > 1) {
+			return NumberToString(count) + " votes";
+		} else if (count > 0) {
+			return NumberToString(count) + " vote";
+		}
+		return QByteArray("No votes");
+	};
+	const auto details = [&](const Poll::Answer &answer) {
+		if (!answer.votes) {
+			return QByteArray("");
+		} else if (!answer.my) {
+			return " <span class=\"details\">"
+				+ votes(answer.votes)
+				+ "</span>";
+		}
+		return " <span class=\"details\">"
+			+ votes(answer.votes)
+			+ ", chosen vote</span>";
+	};
 	for (const auto &answer : data.answers) {
 		result.append(pushDiv("answer"));
-		result.append(pushDiv("bullet pull_left"));
-		result.append(popTag());
-		result.append(pushDiv("text"));
-		result.append(SerializeString(answer.text));
-		result.append(popTag());
+		result.append("- "
+			+ FormatText(answer.text, internalLinksDomain, relativeLinkBase)
+			+ details(answer));
 		result.append(popTag());
 	}
+	result.append(pushDiv("total details	"));
+	result.append(votes(data.totalVotes));
+	result.append(popTag());
 	result.append(popTag());
 	result.append(popTag());
 	return result;
@@ -2122,15 +2149,27 @@ QByteArray HtmlWriter::Wrap::pushTodoList(
 		const Data::TodoList &data,
 		const QString &internalLinksDomain,
 		const QString &relativeLinkBase) {
+	using namespace Data;
+
 	auto result = pushDiv("media_wrap clearfix");
-	result.append(pushDiv("todo_list pull_left"));
+	result.append(pushDiv("media_poll"));
+	result.append(pushDiv("question bold"));
+	result.append(FormatText(
+		data.title,
+		internalLinksDomain,
+		relativeLinkBase));
+	result.append(popTag());
+	result.append(pushDiv("details"));
+	result.append(SerializeString("To-do List"));
+	result.append(popTag());
+	const auto details = [&](const TodoListItem &item) {
+		return QByteArray(""); // #TODO todo
+	};
 	for (const auto &item : data.items) {
-		result.append(pushDiv("item"));
-		result.append(pushDiv("bullet pull_left" + QByteArray(item.completed ? " completed" : "")));
-		result.append(popTag());
-		result.append(pushDiv("text"));
-		result.append(FormatText(item.text, internalLinksDomain, relativeLinkBase));
-		result.append(popTag());
+		result.append(pushDiv("answer"));
+		result.append("- "
+			+ FormatText(item.text, internalLinksDomain, relativeLinkBase)
+			+ details(item));
 		result.append(popTag());
 	}
 	result.append(popTag());
@@ -2142,13 +2181,143 @@ QByteArray HtmlWriter::Wrap::pushGiveaway(
 		const PeersMap &peers,
 		const Data::GiveawayStart &data) {
 	auto result = pushDiv("media_wrap clearfix");
-	result.append(pushDiv("giveaway pull_left"));
-	result.append(pushDiv("title bold"));
-	result.append("Giveaway");
+	result.append(pushDiv("media_giveaway"));
+
+	result.append(pushDiv("section_title bold"));
+	result.append((data.quantity > 1)
+		? SerializeString("Giveaway Prizes")
+		: SerializeString("Giveaway Prize"));
 	result.append(popTag());
-	result.append(pushDiv("description details"));
-	result.append(peers.wrapUserNames(data.channels));
+
+	{
+		result.append(pushDiv("section_body"));
+		result.append("<b>"
+			+ Data::NumberToString(data.quantity)
+			+ "</b> "
+			+ SerializeString(data.additionalPrize.toUtf8()));
+		result.append(popTag());
+		result.append(pushDiv("section_title bold"));
+		result.append(SerializeString("with"));
+		result.append(popTag());
+	};
+	result.append(pushDiv("section_body"));
+	if (data.credits > 0) {
+		result.append("<b>"
+			+ Data::NumberToString(data.credits)
+			+ (SerializeString(data.credits == 1 ? (" Star") : (" Stars")))
+			+ "</b> " + SerializeString("will be distributed ")
+			+ ((data.quantity == 1)
+				? SerializeString("to ")
+					+ "<b>"
+					+ Data::NumberToString(data.quantity)
+					+ "</b> " + SerializeString("winner.")
+				: SerializeString("among ")
+					+ "<b>"
+					+ Data::NumberToString(data.quantity)
+					+ "</b> " + SerializeString("winners.")));
+	} else {
+		result.append("<b>"
+			+ Data::NumberToString(data.quantity)
+			+ "</b> "
+			+ SerializeString((data.quantity > 1)
+				? "Telegram Premium Subscriptions"
+				: "Telegram Premium Subscription")
+			+ " for <b>" + Data::NumberToString(data.months) + "</b> "
+			+ (data.months > 1 ? "months." : "month."));
+	}
 	result.append(popTag());
+
+	result.append(pushDiv("section_title bold"));
+	result.append(SerializeString("Participants"));
+	result.append(popTag());
+	result.append(pushDiv("section_body"));
+	auto channels = QByteArrayList();
+	auto anyChannel = false;
+	auto anyGroup = false;
+	for (const auto &channel : data.channels) {
+		if (const auto chat = peers.peer(channel).chat()) {
+			if (chat->isBroadcast) {
+				anyChannel = true;
+			} else if (chat->isSupergroup) {
+				anyGroup = true;
+			}
+		}
+		channels.append("<b>" + peers.wrapPeerName(channel) + "</b>");
+	}
+
+	const auto participants = [&] {
+		if (data.all && !anyGroup && anyChannel && channels.size() == 1) {
+			return "All subscribers of the channel:";
+		}
+		if (data.all && !anyGroup && anyChannel && channels.size() > 1) {
+			return "All subscribers of the channels:";
+		}
+		if (data.all && anyGroup && !anyChannel && channels.size() == 1) {
+			return "All members of the group:";
+		}
+		if (data.all && anyGroup && !anyChannel && channels.size() > 1) {
+			return "All members of the groups:";
+		}
+		if (data.all && anyGroup && anyChannel && channels.size() == 1) {
+			return "All members of the group:";
+		}
+		if (data.all && anyGroup && anyChannel && channels.size() > 1) {
+			return "All members of the groups and channels:";
+		}
+		if (!data.all && !anyGroup && anyChannel && channels.size() == 1) {
+			return "All users who joined the channel below after this date:";
+		}
+		if (!data.all && !anyGroup && anyChannel && channels.size() > 1) {
+			return "All users who joined the channels below after this date:";
+		}
+		if (!data.all && anyGroup && !anyChannel && channels.size() == 1) {
+			return "All users who joined the group below after this date:";
+		}
+		if (!data.all && anyGroup && !anyChannel && channels.size() > 1) {
+			return "All users who joined the groups below after this date:";
+		}
+		if (!data.all && anyGroup && anyChannel && channels.size() == 1) {
+			return "All users who joined the group below after this date:";
+		}
+		if (!data.all && anyGroup && anyChannel && channels.size() > 1) {
+			return "All users who joined the groups and channels below "
+				"after this date:";
+		}
+		return "";
+	}();
+
+	result.append(SerializeString(participants)) + channels.join(", ");
+	result.append(popTag());
+
+	{
+		const auto &instance = Countries::Instance();
+		auto countries = QStringList();
+		for (const auto &country : data.countries) {
+			const auto name = instance.countryNameByISO2(country);
+			const auto flag = instance.flagEmojiByISO2(country);
+			countries.push_back(flag + QChar(0xA0) + name);
+		}
+
+		if (const auto count = countries.size()) {
+			auto united = countries.front();
+			for (auto i = 1; i != count; ++i) {
+				united = ((i + 1 == count)
+					? u"%1 and %2"_q
+					: u"%1, %2"_q).arg(united, countries[i]);
+			}
+			result.append(pushDiv("section_body"));
+			result.append(
+				SerializeString((u"from %1"_q).arg(united).toUtf8()));
+			result.append(popTag());
+		}
+	}
+	result.append(pushDiv("section_title bold"));
+	result.append(SerializeString("Winners Selection Date"));
+	result.append(popTag());
+	result.append(pushDiv("section_body"));
+	result.append(Data::FormatDateTime(data.untilDate));
+	result.append(popTag());
+
 	result.append(popTag());
 	result.append(popTag());
 	return result;
@@ -2159,29 +2328,284 @@ QByteArray HtmlWriter::Wrap::pushGiveaway(
 		const Data::GiveawayResults &data,
 		Fn<QByteArray(int messageId, QByteArray text)> wrapMessageLink) {
 	auto result = pushDiv("media_wrap clearfix");
-	result.append(pushDiv("giveaway pull_left"));
-	result.append(pushDiv("title bold"));
-	result.append("Giveaway Results");
+	result.append(pushDiv("media_giveaway"));
+
+	result.append(pushDiv("section_title bold"));
+	result.append((data.winnersCount > 1)
+		? SerializeString("Winners Selected!")
+		: SerializeString("Winner Selected!"));
 	result.append(popTag());
-	result.append(pushDiv("description details"));
-	result.append(wrapMessageLink(data.launchId, "Original giveaway message"));
+
+	result.append(pushDiv("section_body"));
+	result.append(
+		"<b>" + Data::NumberToString(data.winnersCount) + "</b> "
+		+ SerializeString((data.winnersCount > 1) ? "winners" : "winner")
+		+ " of the "
+		+ wrapMessageLink(data.launchId, "Giveaway")
+		+ " was randomly selected by Telegram.");
 	result.append(popTag());
+
+	result.append(pushDiv("section_title bold"));
+	result.append((data.winnersCount > 1)
+		? SerializeString("Winners")
+		: SerializeString("Winner"));
+	result.append(popTag());
+
+	result.append(pushDiv("section_body"));
+	auto winners = QByteArrayList();
+	for (const auto &winner : data.winners) {
+		winners.append("<b>" + peers.wrapPeerName(winner) + "</b>");
+	}
+	const auto andMore = [&, size = data.winners.size()] {
+		if (data.winnersCount > size) {
+			return SerializeString(" and ")
+				+ Data::NumberToString(data.winnersCount - size)
+				+ SerializeString(" more!");
+		}
+		return QByteArray();
+	}();
+	result.append(winners.join(", ") + andMore);
+	result.append(popTag());
+
+	result.append(pushDiv("section_body"));
+	const auto prize = [&, singleStar = (data.credits == 1)] {
+		if (data.credits && data.winnersCount == 1) {
+			return SerializeString("The winner received ")
+				+ "<b>"
+				+ Data::NumberToString(data.credits)
+				+ "</b>"
+				+ SerializeString(singleStar ? " Star." : " Stars.");
+		} else if (data.credits && data.winnersCount > 1) {
+			return SerializeString("All winners received ")
+				+ "<b>"
+				+ Data::NumberToString(data.credits)
+				+ "</b>"
+				+ SerializeString(singleStar
+					? " Star in total."
+					: " Stars in total.");
+		} else if (data.unclaimedCount) {
+			return SerializeString("Some winners couldn't be selected.");
+		} else if (data.winnersCount == 1) {
+			return SerializeString(
+				"The winner received their gift link in a private message.");
+		} else if (data.winnersCount > 1) {
+			return SerializeString(
+				"All winners received gift links in private messages.");
+		}
+		return QByteArray();
+	}();
+	result.append(prize);
+	result.append(popTag());
+
 	result.append(popTag());
 	result.append(popTag());
 	return result;
 }
 
-Result HtmlWriter::Wrap::close() {
-	if (_closed) {
-		return Result::Success();
+MediaData HtmlWriter::Wrap::prepareMediaData(
+		const Data::Message &message,
+		const QString &basePath,
+		const PeersMap &peers,
+		const QString &internalLinksDomain) const {
+	using namespace Data;
+
+	auto result = MediaData();
+	const auto &action = message.action;
+	if (const auto call = std::get_if<ActionPhoneCall>(&action.content)) {
+		result.classes = "media_call";
+		result.title = peers.peer(message.out
+			? message.peerId
+			: message.selfId).name();
+		result.status = [&] {
+			using State = ActionPhoneCall::State;
+			const auto state = call->state;
+			if (state == State::Invitation) {
+				return "Invitation";
+			} else if (state == State::Active) {
+				return "Ongoing";
+			} else if (message.out) {
+				return (state == State::Missed) ? "Cancelled" : "Outgoing";
+			} else if (state == State::Missed) {
+				return "Missed";
+			} else if (state == State::Busy) {
+				return "Declined";
+			}
+			return "Incoming";
+		}();
+		if (call->duration > 0) {
+			result.classes += " success";
+			result.status += " ("
+				+ NumberToString(call->duration)
+				+ " seconds)";
+		}
+		return result;
 	}
-	auto block = QByteArray();
-	while (!_context.empty()) {
-		block.append(_context.popTag());
-	}
-	const auto result = writeBlock(block + "\n</body>\n</html>");
-	_closed = true;
+
+	v::match(message.media.content, [&](const Photo &data) {
+		if (message.media.ttl) {
+			result.title = "Self-destructing photo";
+			result.status = data.id
+				? "Please view it on your mobile"
+				: "Expired";
+			result.classes = "media_photo";
+			return;
+		}
+		// At least try to pushPhotoMedia.
+	}, [&](const Document &data) {
+		if (message.media.ttl) {
+			result.title = "Self-destructing video";
+			result.status = data.id
+				? "Please view it on your mobile"
+				: "Expired";
+			result.classes = "media_video";
+			return;
+		}
+		const auto hasFile = !data.file.relativePath.isEmpty();
+		result.link = data.file.relativePath;
+		result.description = NoFileDescription(data.file.skipReason);
+		if (data.isSticker) {
+			// At least try to pushStickerMedia.
+		} else if (data.isVideoMessage) {
+			result.title = "Video message";
+			result.status = FormatDuration(data.duration);
+			if (!hasFile) {
+				result.status += ", " + FormatFileSize(data.file.size);
+			}
+			result.thumb = data.thumb.file.relativePath;
+			result.classes = "media_video";
+		} else if (data.isVoiceMessage) {
+			result.title = "Voice message";
+			result.status = FormatDuration(data.duration);
+			if (!hasFile) {
+				result.status += ", " + FormatFileSize(data.file.size);
+			}
+			result.classes = "media_voice_message";
+		} else if (data.isAnimated) {
+			// At least try to pushAnimatedMedia.
+		} else if (data.isVideoFile) {
+			// At least try to pushVideoFileMedia.
+		} else if (data.isAudioFile) {
+			result.title = (!data.songPerformer.isEmpty()
+				&& !data.songTitle.isEmpty())
+				? (data.songPerformer + " \xe2\x80\x93 " + data.songTitle)
+				: !data.name.isEmpty()
+				? data.name
+				: QByteArray("Audio file");
+			result.status = FormatDuration(data.duration);
+			if (!hasFile) {
+				result.status += ", " + FormatFileSize(data.file.size);
+			}
+			result.classes = "media_audio_file";
+		} else {
+			result.title = data.name.isEmpty()
+				? QByteArray("File")
+				: data.name;
+			result.status = FormatFileSize(data.file.size);
+			result.classes = "media_file";
+		}
+	}, [&](const SharedContact &data) {
+		result.title = data.info.firstName + ' ' + data.info.lastName;
+		result.classes = "media_contact";
+		result.status = FormatPhoneNumber(data.info.phoneNumber);
+		if (!data.vcard.content.isEmpty()) {
+			result.status += " - vCard";
+			result.link = data.vcard.relativePath;
+		}
+	}, [&](const GeoPoint &data) {
+		if (message.media.ttl) {
+			result.classes = "media_live_location";
+			result.title = "Live location";
+			result.status = "";
+		} else {
+			result.classes = "media_location";
+			result.title = "Location";
+		}
+		if (data.valid) {
+			const auto latitude = NumberToString(data.latitude);
+			const auto longitude = NumberToString(data.longitude);
+			const auto coords = latitude + ',' + longitude;
+			result.status = latitude + ", " + longitude;
+			result.link = "https://maps.google.com/maps?q="
+				+ coords
+				+ "&ll="
+				+ coords
+				+ "&z=16";
+		}
+	}, [&](const Venue &data) {
+		result.classes = "media_venue";
+		result.title = data.title;
+		result.description = data.address;
+		if (data.point.valid) {
+			const auto latitude = NumberToString(data.point.latitude);
+			const auto longitude = NumberToString(data.point.longitude);
+			const auto coords = latitude + ',' + longitude;
+			result.link = "https://maps.google.com/maps?q="
+				+ coords
+				+ "&ll="
+				+ coords
+				+ "&z=16";
+		}
+	}, [&](const Game &data) {
+		result.classes = "media_game";
+		result.title = data.title;
+		result.description = data.description;
+		if (data.botId != 0 && !data.shortName.isEmpty()) {
+			const auto bot = peers.user(data.botId);
+			if (bot.isBot && !bot.username.isEmpty()) {
+				const auto link = internalLinksDomain.toUtf8()
+					+ bot.username
+					+ "?game="
+					+ data.shortName;
+				result.link = link;
+				result.status = link;
+			}
+		}
+	}, [&](const Invoice &data) {
+		result.classes = "media_invoice";
+		result.title = data.title;
+		result.description = data.description;
+		result.status = Data::FormatMoneyAmount(data.amount, data.currency);
+	}, [](const Poll &data) {
+	}, [](const TodoList &data) {
+	}, [](const GiveawayStart &data) {
+	}, [](const GiveawayResults &data) {
+	}, [&](const PaidMedia &data) {
+		result.classes = "media_invoice";
+		result.status = Data::FormatMoneyAmount(data.stars, "XTR");
+	}, [](const UnsupportedMedia &data) {
+		Unexpected("Unsupported message.");
+	}, [](v::null_t) {});
 	return result;
+}
+
+bool HtmlWriter::Wrap::forwardedNeedsWrap(
+		const Data::Message &message,
+		const MessageInfo *previous) const {
+	Expects(message.forwarded);
+
+	if (messageNeedsWrap(message, previous)) {
+		return true;
+	} else if (!message.forwardedFromId
+		|| message.forwardedFromId != previous->forwardedFromId) {
+		return true;
+	} else if (!peerIsUser(message.forwardedFromId)) {
+		return true;
+	} else if (abs(message.forwardedDate - previous->forwardedDate)
+		> kJoinWithinSeconds) {
+		return true;
+	}
+	return false;
+}
+
+Result HtmlWriter::Wrap::close() {
+	if (!std::exchange(_closed, true) && !_file.empty()) {
+		auto block = QByteArray();
+		while (!_context.empty()) {
+			block.append(_context.popTag());
+		}
+		return _file.writeBlock(block);
+	}
+	return Result::Success();
 }
 
 QString HtmlWriter::Wrap::relativePath(const QString &path) const {
@@ -2192,22 +2616,41 @@ QString HtmlWriter::Wrap::relativePath(const Data::File &file) const {
 	return relativePath(file.relativePath);
 }
 
-HtmlWriter::Wrap::~Wrap() {
-	(void)close();
+QByteArray HtmlWriter::Wrap::composeStart() {
+	auto result = "<!DOCTYPE html>" + _context.pushTag("html");
+	result.append(pushTag("head"));
+	result.append(pushTag("meta", {
+		{ "charset", "utf-8" },
+		{ "empty", "" }
+	}));
+	result.append(pushTag("title", { { "inline", "" } }));
+	result.append("Exported Data");
+	result.append(popTag());
+	result.append(_context.pushTag("meta", {
+		{ "name", "viewport" },
+		{ "content", "width=device-width, initial-scale=1.0" },
+		{ "empty", "" }
+	}));
+	result.append(_context.pushTag("link", {
+		{ "href", _base + "css/style.css" },
+		{ "rel", "stylesheet" },
+		{ "empty", "" }
+	}));
+	result.append(_context.pushTag("script", {
+		{ "src", _base + "js/script.js" },
+		{ "type", "text/javascript" },
+	}));
+	result.append(_context.popTag());
+	result.append(popTag());
+	result.append(pushTag("body", {
+		{ "onload", "CheckLocation();" }
+	}));
+	result.append(pushDiv("page_wrap"));
+	return result;
 }
 
-QByteArray HtmlWriter::Wrap::composeStart() {
-	return "<!DOCTYPE html>\n"
-		"<html>\n"
-		" <head>\n"
-		"  <meta charset=\"utf-8\">\n"
-		"  <title>Exported Data</title>\n"
-		"  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
-		"  <link rel=\"stylesheet\" href=\"" + _base + "css/style.css\">\n"
-		"  <script type=\"text/javascript\" src=\"" + _base + "js/script.js\"></script>\n"
-		" </head>\n"
-		" <body onload=\"CheckQueries()\">\n"
-		"  <div class=\"page_wrap\">\n";
+HtmlWriter::Wrap::~Wrap() {
+	(void)close();
 }
 
 HtmlWriter::HtmlWriter() = default;
@@ -2216,358 +2659,850 @@ Result HtmlWriter::start(
 		const Settings &settings,
 		const Environment &environment,
 		Stats *stats) {
-	_settings = settings;
+	Expects(settings.path.endsWith('/'));
+
+	_settings = base::duplicate(settings);
 	_environment = environment;
 	_stats = stats;
 
-	if (const auto result = Output::PreparePath(_settings.path)) {
-		return result;
+	//const auto result = copyFile(
+	//	":/export/css/bootstrap.min.css",
+	//	"css/bootstrap.min.css");
+	//if (!result) {
+	//	return result;
+	//}
+	const auto copy = [&](const QString &filename) {
+		return copyFile(":/export/" + filename, filename);
+	};
+	const auto files = {
+		"css/style.css",
+		"images/back.png",
+		"images/media_call.png",
+		"images/media_contact.png",
+		"images/media_file.png",
+		"images/media_game.png",
+		"images/media_location.png",
+		"images/media_music.png",
+		"images/media_photo.png",
+		"images/media_shop.png",
+		"images/media_video.png",
+		"images/media_voice.png",
+		"images/section_calls.png",
+		"images/section_chats.png",
+		"images/section_contacts.png",
+		"images/section_frequent.png",
+		"images/section_other.png",
+		"images/section_photos.png",
+		"images/section_sessions.png",
+		"images/section_stories.png",
+		"images/section_web.png",
+		"js/script.js",
+	};
+	for (const auto path : files) {
+		const auto name = QString(path);
+		if (const auto result = copy(name); !result) {
+			return result;
+		} else if (const auto png = name.indexOf(".png"); png > 0) {
+			const auto x2 = name.mid(0, png) + "@2x.png";
+			if (const auto result = copy(x2); !result) {
+				return result;
+			}
+		}
 	}
 
-	_dialogsRelativePath = _settings.onlySinglePeer()
-		? QString()
-		: "lists/chats.html";
-
-	if (!_settings.onlySinglePeer()) {
-		_summary = fileWithRelativePath("export_results.html");
-		_summary->pushTag("div", { { "class", "page_body" } });
-		_summaryNeedDivider = false;
+	if (_settings.onlySinglePeer()) {
+		return Result::Success();
 	}
-
-	return Result::Success();
-}
-
-Result HtmlWriter::writePersonal(const Data::PersonalInfo &info) {
-	Expects(_summary != nullptr);
-
-	auto userpic = UserpicData();
-	userpic.colorIndex = 0;
-	userpic.firstName = info.firstName;
-	userpic.lastName = info.lastName;
-	userpic.pixelSize = kPersonalUserpicSize;
-	if (info.userpic.location) {
-		userpic.largeLink = info.userpic.relativePath;
-		userpic.imageLink = WriteUserpicThumb(
-			_settings.path,
-			userpic.largeLink,
-			userpic);
-	}
-
-	auto block = _summary->pushDiv("page_header");
-	block.append(_summary->pushDiv("content"));
-	block.append(_summary->pushDiv("text bold"));
-	block.append("User Info");
-	block.append(_summary->popTag());
-	block.append(_summary->popTag());
-	block.append(_summary->popTag());
-
-	block.append(_summary->pushDiv("entry clearfix"));
-	block.append(_summary->pushDiv("pull_left userpic_wrap"));
-	block.append(_summary->pushUserpic(userpic));
-	block.append(_summary->popTag());
-	block.append(_summary->pushDiv("body"));
-	block.append(_summary->pushDiv("name bold"));
-	block.append(SerializeString(ComposeName(userpic, "No Name")));
-	block.append(_summary->popTag());
-	if (!info.phoneNumber.isEmpty()) {
-		block.append(_summary->pushDiv("details_entry details"));
-		block.append(SerializeString(info.phoneNumber));
-		block.append(_summary->popTag());
-	}
-	if (!info.username.isEmpty()) {
-		block.append(_summary->pushDiv("details_entry details"));
-		block.append(SerializeString('@' + info.username));
-		block.append(_summary->popTag());
-	}
-	block.append(_summary->popTag());
-	block.append(_summary->popTag());
-
-	if (!info.bio.isEmpty()) {
-		block.append(_summary->pushAbout(info.bio, true));
-	}
-
+	_summary = fileWithRelativePath(mainFileRelativePath());
+	auto block = _summary->pushHeader("Exported Data");
+	block.append(_summary->pushDiv("page_body"));
 	return _summary->writeBlock(block);
 }
 
-Result HtmlWriter::writeUserpicsStart(const Data::UserpicsInfo &info) {
-	_userpics = fileWithRelativePath("lists/userpics.html");
-	_userpicsPath = "lists/userpics.html";
-	auto block = _userpics->pushHeader("Profile Photos", "export_results.html");
-	block.append(_userpics->pushDiv("page_body"));
-	block.append(_userpics->pushDiv("entry_list"));
-	return _userpics->writeBlock(block);
+Result HtmlWriter::writePersonal(const Data::PersonalInfo &data) {
+	Expects(_summary != nullptr);
+
+	_selfColorIndex = data.user.info.colorIndex;
+	if (_settings.types & Settings::Type::Userpics) {
+		_delayedPersonalInfo = std::make_unique<Data::PersonalInfo>(data);
+		return Result::Success();
+	}
+	return writeDefaultPersonal(data);
 }
 
-Result HtmlWriter::writeUserpicsSlice(const Data::UserpicsSlice &slice) {
+Result HtmlWriter::writeDefaultPersonal(const Data::PersonalInfo &data) {
+	return writePreparedPersonal(data, QString());
+}
+
+Result HtmlWriter::writeDelayedPersonal(const QString &userpicPath) {
+	if (!_delayedPersonalInfo) {
+		return Result::Success();
+	}
+	const auto result = writePreparedPersonal(
+		*base::take(_delayedPersonalInfo),
+		userpicPath);
+	if (!result) {
+		return result;
+	}
+	if (_userpicsCount) {
+		pushUserpicsSection();
+	}
+	return Result::Success();
+}
+
+Result HtmlWriter::writePreparedPersonal(
+		const Data::PersonalInfo &data,
+		const QString &userpicPath) {
+	Expects(_summary != nullptr);
+
+	const auto &info = data.user.info;
+
+	auto userpic = UserpicData{ _selfColorIndex, kPersonalUserpicSize };
+	userpic.largeLink = userpicPath.isEmpty()
+		? QString()
+		: userpicsFilePath();
+	userpic.imageLink = WriteUserpicThumb(
+		_settings.path,
+		userpicPath,
+		userpic,
+		"_info");
+	userpic.firstName = info.firstName;
+	userpic.lastName = info.lastName;
+
+	auto block = _summary->pushDiv("personal_info clearfix");
+	block.append(_summary->pushDiv("pull_right userpic_wrap"));
+	block.append(_summary->pushUserpic(userpic));
+	block.append(_summary->popTag());
+	const auto pushRows = [&](
+			QByteArray name,
+			std::vector<std::pair<QByteArray, QByteArray>> &&values) {
+		block.append(_summary->pushDiv("rows " + name));
+		for (const auto &[key, value] : values) {
+			if (value.isEmpty()) {
+				continue;
+			}
+			block.append(_summary->pushDiv("row"));
+			block.append(_summary->pushDiv("label details"));
+			block.append(SerializeString(key));
+			block.append(_summary->popTag());
+			block.append(_summary->pushDiv("value bold"));
+			block.append(SerializeString(value));
+			block.append(_summary->popTag());
+			block.append(_summary->popTag());
+		}
+		block.append(_summary->popTag());
+	};
+	pushRows("names", {
+		{ "First name", info.firstName },
+		{ "Last name", info.lastName },
+	});
+	pushRows("info", {
+		{ "Phone number", Data::FormatPhoneNumber(info.phoneNumber) },
+		{ "Username", FormatUsername(data.user.username) },
+	});
+	pushRows("bio", { { "Bio", data.bio } });
+	block.append(_summary->popTag());
+
+	_summaryNeedDivider = true;
+	return _summary->writeBlock(block);
+}
+
+Result HtmlWriter::writeUserpicsStart(const Data::UserpicsInfo &data) {
+	Expects(_summary != nullptr);
+	Expects(_userpics == nullptr);
+
+	_userpicsCount = data.count;
+	if (!_userpicsCount) {
+		return Result::Success();
+	}
+	_userpics = fileWithRelativePath(userpicsFilePath());
+
+	auto block = _userpics->pushHeader(
+		"Profile pictures",
+		mainFileRelativePath());
+	block.append(_userpics->pushDiv("page_body list_page"));
+	block.append(_userpics->pushDiv("entry_list"));
+	if (const auto result = _userpics->writeBlock(block); !result) {
+		return result;
+	}
+	if (!_delayedPersonalInfo) {
+		pushUserpicsSection();
+	}
+	return Result::Success();
+}
+
+Result HtmlWriter::writeUserpicsSlice(const Data::UserpicsSlice &data) {
 	Expects(_userpics != nullptr);
+	Expects(!data.list.empty());
+
+	const auto firstPath = data.list.front().image.file.relativePath;
+	if (const auto result = writeDelayedPersonal(firstPath); !result) {
+		return result;
+	}
 
 	auto block = QByteArray();
-	for (const auto &photo : slice.list) {
-		auto data = UserpicData();
-		data.colorIndex = 0;
-		data.pixelSize = kEntryUserpicSize;
-		if (photo.image.file.location) {
-			data.largeLink = photo.image.file.relativePath;
-			data.imageLink = WriteUserpicThumb(
-				_settings.path,
-				data.largeLink,
-				data);
-		}
+	for (const auto &userpic : data.list) {
+		auto data = UserpicData{ _selfColorIndex, kEntryUserpicSize };
+		using SkipReason = Data::File::SkipReason;
+		const auto &file = userpic.image.file;
+		Assert(!file.relativePath.isEmpty()
+			|| file.skipReason != SkipReason::None);
+		const auto status = [&]() -> Data::Utf8String {
+			switch (file.skipReason) {
+			case SkipReason::Unavailable:
+				return "(Photo unavailable, please try again later)";
+			case SkipReason::FileSize:
+				return "(Photo exceeds maximum size. "
+					"Change data exporting settings to download.)";
+			case SkipReason::FileType:
+				return "(Photo not included. "
+					"Change data exporting settings to download.)";
+			case SkipReason::None: return Data::FormatFileSize(file.size);
+			}
+			Unexpected("Skip reason while writing photo path.");
+		}();
+		const auto &path = userpic.image.file.relativePath;
+		data.imageLink = WriteUserpicThumb(_settings.path, path, data);
+		data.firstName = path.toUtf8();
 		block.append(_userpics->pushListEntry(
 			data,
-			QByteArray(),
-			FormatDateTime(photo.date).toUtf8(),
-			QByteArray()));
+			(path.isEmpty() ? QString("Photo unavailable") : path).toUtf8(),
+			status,
+			(userpic.date > 0
+				? Data::FormatDateTime(userpic.date)
+				: QByteArray()),
+			path));
 	}
 	return _userpics->writeBlock(block);
 }
 
 Result HtmlWriter::writeUserpicsEnd() {
-	if (_userpics) {
-		const auto count = _userpics->empty() ? 0 : _stats->count(MediaSettings::Type::Photo);
-		pushSection(
-			kUserpicsPriority,
-			"Profile Photos",
-			"userpics",
-			count,
-			_userpicsPath);
+	if (const auto result = writeDelayedPersonal(QString()); !result) {
+		return result;
+	} else if (_userpics) {
 		return base::take(_userpics)->close();
 	}
 	return Result::Success();
 }
 
-Result HtmlWriter::writeStoriesStart(const Data::StoriesInfo &info) {
-	_stories = fileWithRelativePath("lists/stories.html");
-	_storiesPath = "lists/stories.html";
-	auto block = _stories->pushHeader("My Stories", "export_results.html");
-	block.append(_stories->pushDiv("page_body"));
-	block.append(_stories->pushDiv("entry_list"));
-	return _stories->writeBlock(block);
+QString HtmlWriter::userpicsFilePath() const {
+	return "lists/profile_pictures.html";
 }
 
-Result HtmlWriter::writeStoriesSlice(const Data::StoriesSlice &slice) {
+void HtmlWriter::pushUserpicsSection() {
+	pushSection(
+		kUserpicsPriority,
+		"Profile pictures",
+		"photos",
+		_userpicsCount,
+		userpicsFilePath());
+}
+
+Result HtmlWriter::writeStoriesStart(const Data::StoriesInfo &data) {
+	Expects(_summary != nullptr);
+	Expects(_stories == nullptr);
+
+	_storiesCount = data.count;
+	if (!_storiesCount) {
+		return Result::Success();
+	}
+	_stories = fileWithRelativePath(storiesFilePath());
+
+	auto block = _stories->pushHeader(
+		"Stories archive",
+		mainFileRelativePath());
+	block.append(_stories->pushDiv("page_body list_page"));
+	block.append(_stories->pushDiv("entry_list"));
+	if (const auto result = _stories->writeBlock(block); !result) {
+		return result;
+	}
+	return Result::Success();
+}
+
+Result HtmlWriter::writeStoriesSlice(const Data::StoriesSlice &data) {
 	Expects(_stories != nullptr);
 
+	_storiesCount -= data.skipped;
+	if (data.list.empty()) {
+		return Result::Success();
+	}
 	auto block = QByteArray();
-	for (const auto &story : slice.list) {
-		auto data = StoryData();
-		if (story.thumb().file.location) {
-			data.largeLink = story.file().relativePath;
-			data.imageLink = story.thumb().file.relativePath;
+	for (const auto &story : data.list) {
+		auto data = StoryData{};
+		using SkipReason = Data::File::SkipReason;
+		const auto &file = story.file();
+		Assert(!file.relativePath.isEmpty()
+			|| file.skipReason != SkipReason::None);
+		auto status = QByteArrayList();
+		if (story.pinned) {
+			status.append("Saved to Profile");
 		}
+		if (story.expires > 0) {
+			status.append("Expiring: " + Data::FormatDateTime(story.expires));
+		}
+		status.append([&]() -> Data::Utf8String {
+			switch (file.skipReason) {
+			case SkipReason::Unavailable:
+				return "(Story unavailable, please try again later)";
+			case SkipReason::FileSize:
+				return "(Story exceeds maximum size. "
+					"Change data exporting settings to download.)";
+			case SkipReason::FileType:
+				return "(Story not included. "
+					"Change data exporting settings to download.)";
+			case SkipReason::None: return Data::FormatFileSize(file.size);
+			}
+			Unexpected("Skip reason while writing story path.");
+		}());
+		const auto &path = story.file().relativePath;
+		const auto &image = story.thumb().file.relativePath.isEmpty()
+			? story.file().relativePath
+			: story.thumb().file.relativePath;
+		data.imageLink = Data::WriteImageThumb(
+			_settings.path,
+			image,
+			kStoryThumbWidth * 2,
+			kStoryThumbHeight * 2);
+		const auto info = (story.date > 0)
+			? Data::FormatDateTime(story.date)
+			: QByteArray();
 		block.append(_stories->pushStoriesListEntry(
 			data,
-			QByteArray(),
-			{ FormatDateTime(story.date).toUtf8() },
-			QByteArray(),
+			(path.isEmpty() ? QString("Story unavailable") : path).toUtf8(),
+			status,
+			info,
 			story.caption,
-			_environment.internalLinksDomain));
+			_environment.internalLinksDomain,
+			path));
 	}
 	return _stories->writeBlock(block);
 }
 
 Result HtmlWriter::writeStoriesEnd() {
+	pushStoriesSection();
 	if (_stories) {
-		const auto count = _stories->empty() ? 0 : _stats->count(MediaSettings::Type::Video);
-		pushSection(
-			kStoriesPriority,
-			"My Stories",
-			"stories",
-			count,
-			_storiesPath);
 		return base::take(_stories)->close();
 	}
 	return Result::Success();
 }
 
-Result HtmlWriter::writeContactsList(const Data::ContactsList &list) {
-	_contacts = fileWithRelativePath("lists/contacts.html");
-	auto block = _contacts->pushHeader("Contacts", "export_results.html");
-	block.append(_contacts->pushDiv("page_body"));
-	block.append(_contacts->pushDiv("entry_list"));
-	for (const auto &contact : list.list) {
-		auto userpic = UserpicData();
-		userpic.colorIndex = Data::PeerColorIndex(contact.userId);
-		userpic.firstName = contact.firstName.toUtf8();
-		userpic.lastName = contact.lastName.toUtf8();
-		userpic.pixelSize = kEntryUserpicSize;
-		block.append(_contacts->pushListEntry(
-			userpic,
-			SerializeString(userpic.firstName + ' ' + userpic.lastName),
-			SerializeString(contact.phoneNumber.toUtf8()),
-			QByteArray()));
-	}
-	block.append(_contacts->popTag());
-	if (!list.correspondents.empty()) {
-		block.append(_contacts->pushAbout("Frequent Contacts", true));
-		block.append(_contacts->pushDiv("entry_list"));
-		for (const auto &contact : list.correspondents) {
-			auto userpic = UserpicData();
-			userpic.colorIndex = Data::PeerColorIndex(contact.userId);
-			userpic.firstName = contact.firstName.toUtf8();
-			userpic.lastName = contact.lastName.toUtf8();
-			userpic.pixelSize = kEntryUserpicSize;
-			block.append(_contacts->pushListEntry(
-				userpic,
-				SerializeString(userpic.firstName + ' ' + userpic.lastName),
-				QByteArray(),
-				QByteArray()));
-		}
-		block.append(_contacts->popTag());
-	}
-	if (const auto result = _contacts->writeBlock(block); !result) {
+QString HtmlWriter::storiesFilePath() const {
+	return "lists/stories.html";
+}
+
+void HtmlWriter::pushStoriesSection() {
+	pushSection(
+		kStoriesPriority,
+		"Stories archive",
+		"stories",
+		_storiesCount,
+		storiesFilePath());
+}
+
+Result HtmlWriter::writeContactsList(const Data::ContactsList &data) {
+	Expects(_summary != nullptr);
+
+	if (const auto result = writeSavedContacts(data); !result) {
+		return result;
+	} else if (const auto result = writeFrequentContacts(data); !result) {
 		return result;
 	}
+	return Result::Success();
+}
+
+Result HtmlWriter::writeSavedContacts(const Data::ContactsList &data) {
+	if (data.list.empty()) {
+		return Result::Success();
+	}
+
+	const auto filename = "lists/contacts.html";
+	const auto file = fileWithRelativePath(filename);
+	auto block = file->pushHeader(
+		"Contacts",
+		mainFileRelativePath());
+	block.append(file->pushDiv("page_body list_page"));
+	block.append(file->pushAbout(_environment.aboutContacts));
+	block.append(file->pushDiv("entry_list"));
+	for (const auto index : Data::SortedContactsIndices(data)) {
+		const auto &contact = data.list[index];
+		auto userpic = UserpicData{
+			Data::ContactColorIndex(contact),
+			kEntryUserpicSize
+		};
+		userpic.firstName = contact.firstName;
+		userpic.lastName = contact.lastName;
+		if (contact.userId) {
+			const auto raw = contact.userId.bare & PeerId::kChatTypeMask;
+			userpic.tooltip = (u"ID: "_q + QString::number(raw)).toUtf8();
+		}
+		block.append(file->pushListEntry(
+			userpic,
+			ComposeName(userpic, "Deleted Account"),
+			Data::FormatPhoneNumber(contact.phoneNumber),
+			Data::FormatDateTime(contact.date)));
+	}
+	if (const auto result = file->writeBlock(block); !result) {
+		return result;
+	} else if (const auto closed = file->close(); !closed) {
+		return closed;
+	}
+
 	pushSection(
 		kContactsPriority,
 		"Contacts",
 		"contacts",
-		list.list.size(),
-		"lists/contacts.html");
-	return base::take(_contacts)->close();
+		data.list.size(),
+		filename);
+	return Result::Success();
 }
 
-Result HtmlWriter::writeSessionsList(const Data::SessionsList &list) {
-	_sessions = fileWithRelativePath("lists/sessions.html");
-	auto block = _sessions->pushHeader("Sessions", "export_results.html");
-	block.append(_sessions->pushDiv("page_body"));
-	if (!list.list.empty()) {
-		block.append(_sessions->pushAbout("Active Sessions"));
-		block.append(_sessions->pushDiv("entry_list"));
-		for (const auto &session : list.list) {
-			block.append(_sessions->pushSessionListEntry(
-				session.apiId,
-				SerializeString(session.deviceModel.toUtf8()),
-				SerializeString(session.platform.toUtf8() + ' ' + session.systemVersion.toUtf8()),
-				{
-					SerializeString(session.appName.toUtf8() + ' ' + session.appVersion.toUtf8()),
-					SerializeString(session.ip.toUtf8() + " (" + session.location.toUtf8() + ")"),
-					SerializeString(FormatDateTime(session.dateActive).toUtf8()),
-				}));
-		}
-		block.append(_sessions->popTag());
+Result HtmlWriter::writeFrequentContacts(const Data::ContactsList &data) {
+	const auto size = data.correspondents.size()
+		+ data.inlineBots.size()
+		+ data.phoneCalls.size();
+	if (!size) {
+		return Result::Success();
 	}
-	if (!list.webList.empty()) {
-		block.append(_sessions->pushAbout("Web Sessions", !list.list.empty()));
-		block.append(_sessions->pushDiv("entry_list"));
-		for (const auto &session : list.webList) {
-			block.append(_sessions->pushSessionListEntry(
-				session.apiId,
-				SerializeString(session.domain.toUtf8()),
-				SerializeString(session.browser.toUtf8() + ' ' + session.platform.toUtf8()),
-				{
-					SerializeString(session.ip.toUtf8() + " (" + session.location.toUtf8() + ")"),
-					SerializeString(FormatDateTime(session.dateActive).toUtf8()),
-				}));
+
+	const auto filename = "lists/frequent.html";
+	const auto file = fileWithRelativePath(filename);
+	auto block = file->pushHeader(
+		"Frequent contacts",
+		mainFileRelativePath());
+	block.append(file->pushDiv("page_body list_page"));
+	block.append(file->pushAbout(_environment.aboutFrequent));
+	block.append(file->pushDiv("entry_list"));
+	const auto writeList = [&](
+			const std::vector<Data::TopPeer> &peers,
+			Data::Utf8String category) {
+		for (const auto &top : peers) {
+			const auto name = [&]() -> Data::Utf8String {
+				if (top.peer.chat()) {
+					return top.peer.name();
+				} else if (top.peer.user()->isSelf) {
+					return "Saved messages";
+				} else {
+					return top.peer.user()->info.firstName;
+				}
+			}();
+			const auto lastName = [&]() -> Data::Utf8String {
+				if (top.peer.user() && !top.peer.user()->isSelf) {
+					return top.peer.user()->info.lastName;
+				}
+				return {};
+			}();
+			auto userpic = UserpicData{
+				Data::PeerColorIndex(top.peer.id()),
+				kEntryUserpicSize
+			};
+			userpic.firstName = name;
+			userpic.lastName = lastName;
+			block.append(file->pushListEntry(
+				userpic,
+				ComposeName(userpic, "Deleted Account"),
+				"Rating: " + Data::NumberToString(top.rating),
+				category));
 		}
-		block.append(_sessions->popTag());
+	};
+	writeList(data.correspondents, "people");
+	writeList(data.inlineBots, "inline bots");
+	writeList(data.phoneCalls, "calls");
+	if (const auto result = file->writeBlock(block); !result) {
+		return result;
+	} else if (const auto closed = file->close(); !closed) {
+		return closed;
 	}
-	if (const auto result = _sessions->writeBlock(block); !result) {
+
+	pushSection(
+		kFrequentContactsPriority,
+		"Frequent contacts",
+		"frequent",
+		size,
+		filename);
+	return Result::Success();
+}
+
+Result HtmlWriter::writeSessionsList(const Data::SessionsList &data) {
+	Expects(_summary != nullptr);
+
+	if (const auto result = writeSessions(data); !result) {
+		return result;
+	} else if (const auto result = writeWebSessions(data); !result) {
 		return result;
 	}
+	return Result::Success();
+}
+
+Result HtmlWriter::writeSessions(const Data::SessionsList &data) {
+	Expects(_summary != nullptr);
+
+	if (data.list.empty()) {
+		return Result::Success();
+	}
+
+	const auto filename = "lists/sessions.html";
+	const auto file = fileWithRelativePath(filename);
+	auto block = file->pushHeader(
+		"Sessions",
+		mainFileRelativePath());
+	block.append(file->pushDiv("page_body list_page"));
+	block.append(file->pushAbout(_environment.aboutSessions));
+	block.append(file->pushDiv("entry_list"));
+	for (const auto &session : data.list) {
+		block.append(file->pushSessionListEntry(
+			session.applicationId,
+			((session.applicationName.isEmpty()
+				? Data::Utf8String("Unknown")
+				: session.applicationName)
+				+ ' '
+				+ session.applicationVersion),
+			(session.deviceModel
+				+ ", "
+				+ session.platform
+				+ ' '
+				+ session.systemVersion),
+			{
+				(session.ip
+					+ " \xE2\x80\x93 "
+					+ session.region
+					+ ((session.region.isEmpty() || session.country.isEmpty())
+						? QByteArray()
+						: QByteArray(", "))
+					+ session.country),
+				"Last active: " + Data::FormatDateTime(session.lastActive),
+				"Created: " + Data::FormatDateTime(session.created)
+			}));
+	}
+	if (const auto result = file->writeBlock(block); !result) {
+		return result;
+	} else if (const auto closed = file->close(); !closed) {
+		return closed;
+	}
+
 	pushSection(
 		kSessionsPriority,
 		"Sessions",
 		"sessions",
-		list.list.size() + list.webList.size(),
-		"lists/sessions.html");
-	return base::take(_sessions)->close();
-}
-
-Result HtmlWriter::writeOtherData(const Data::File &file) {
-	if (file.relativePath.isEmpty()) {
-		return Result::Success();
-	}
-	pushSection(
-		kOtherPriority,
-		"Other Data",
-		"other",
-		1,
-		file.relativePath);
+		data.list.size(),
+		filename);
 	return Result::Success();
 }
 
-Result HtmlWriter::writeDialogsStart(const Data::DialogsInfo &info) {
-	_chats = fileWithRelativePath("lists/chats.html");
-	auto block = _chats->pushHeader("Chats", "../export_results.html");
-	block.append(_chats->pushDiv("page_body"));
-	block.append(_chats->pushDiv("entry_list"));
-	return _chats->writeBlock(block);
+Result HtmlWriter::writeWebSessions(const Data::SessionsList &data) {
+	Expects(_summary != nullptr);
+
+	if (data.webList.empty()) {
+		return Result::Success();
+	}
+
+	const auto filename = "lists/web_sessions.html";
+	const auto file = fileWithRelativePath(filename);
+	auto block = file->pushHeader(
+		"Web sessions",
+		mainFileRelativePath());
+	block.append(file->pushDiv("page_body list_page"));
+	block.append(file->pushAbout(_environment.aboutWebSessions));
+	block.append(file->pushDiv("entry_list"));
+	for (const auto &session : data.webList) {
+		block.append(file->pushSessionListEntry(
+			Data::DomainApplicationId(session.domain),
+			(session.domain.isEmpty()
+				? Data::Utf8String("Unknown")
+				: session.domain),
+			session.platform + ", " + session.browser,
+			{
+				session.ip + " \xE2\x80\x93 " + session.region,
+				"Last active: " + Data::FormatDateTime(session.lastActive),
+				"Created: " + Data::FormatDateTime(session.created)
+			},
+			(session.botUsername.isEmpty()
+				? QByteArray()
+				: ('@' + session.botUsername))));
+	}
+	if (const auto result = file->writeBlock(block); !result) {
+		return result;
+	} else if (const auto closed = file->close(); !closed) {
+		return closed;
+	}
+
+	pushSection(
+		kWebSessionsPriority,
+		"Web sessions",
+		"web",
+		data.webList.size(),
+		filename);
+	return Result::Success();
 }
 
-Result HtmlWriter::writeDialogStart(const Data::DialogInfo &info) {
-	_dialog = info;
-	_chat = fileWithRelativePath(info.relativePath + messagesFile(0));
-	_chatFileEmpty = true;
-	_lastMessageIdsPerFile.clear();
-	_chatMessageFiles.push_back(info.relativePath + messagesFile(0));
+Result HtmlWriter::writeOtherData(const Data::File &data) {
+	Expects(_summary != nullptr);
 
-	auto block = QByteArray();
-	if (!_settings.onlySinglePeer()) {
-		auto userpic = UserpicData();
-		userpic.colorIndex = info.colorIndex;
-		userpic.firstName = info.name;
-		userpic.lastName = info.lastName;
-		userpic.pixelSize = kEntryUserpicSize;
-		if (info.userpic.location) {
-			userpic.imageLink = "../" + info.userpic.relativePath;
-		}
-		block.append(_chats->pushListEntry(
-			userpic,
-			SerializeString(info.name + ' ' + info.lastName),
-			QByteArray(),
-			QByteArray(),
-			"../" + info.relativePath + messagesFile(0)));
+	pushSection(
+		kOtherPriority,
+		"Other data",
+		"other",
+		1,
+		data.relativePath);
+	return Result::Success();
+}
+
+Result HtmlWriter::writeDialogsStart(const Data::DialogsInfo &data) {
+	Expects(_chats == nullptr);
+
+	if (data.chats.empty() && data.left.empty()) {
+		return Result::Success();
+	} else if (_settings.onlySinglePeer()) {
+		return Result::Success();
 	}
+
+	_dialogsRelativePath = "lists/chats.html";
+	_chats = fileWithRelativePath(_dialogsRelativePath);
+
+	auto block = _chats->pushHeader(
+		"Chats",
+		mainFileRelativePath());
+	block.append(_chats->pushDiv("page_body list_page"));
 	if (const auto result = _chats->writeBlock(block); !result) {
 		return result;
 	}
-	return writeDialogOpening(0);
+
+	pushSection(
+		kChatsPriority,
+		"Chats",
+		"chats",
+		data.chats.size() + data.left.size(),
+		"lists/chats.html");
+	return writeSections();
 }
 
-Result HtmlWriter::writeDialogSlice(const Data::MessagesSlice &slice) {
-	Expects(_chat != nullptr);
+Result HtmlWriter::writeDialogStart(const Data::DialogInfo &data) {
+	Expects(_chat == nullptr);
 
+	_chat = fileWithRelativePath(data.relativePath + messagesFile(0));
+	_chatMessageFiles.push_back(data.relativePath + messagesFile(0));
+	_chatFileEmpty = true;
+	_messagesCount = 0;
+	_dateMessageId = 0;
+	_lastMessageInfo = nullptr;
+	_lastMessageIdsPerFile.clear();
+	_dialog = data;
+	return Result::Success();
+}
+
+Result HtmlWriter::writeDialogSlice(const Data::MessagesSlice &data) {
+	Expects(_chat != nullptr);
+	Expects(!data.list.empty());
+
+	const auto messageLinkWrapper = [&](int messageId, QByteArray text) {
+		return wrapMessageLink(messageId, text);
+	};
+	auto oldIndex = (_messagesCount > 0)
+		? ((_messagesCount - 1) / kMessagesInFile)
+		: 0;
+	auto previous = _lastMessageInfo.get();
+	auto saved = std::optional<MessageInfo>();
 	auto block = QByteArray();
-	const auto peers = PeersMap(slice.peers);
-	const MessageInfo *previous = nullptr;
-	auto info = MessageInfo();
-	for (const auto &message : slice.list) {
-		if (DisplayDate(message.date, info.date)) {
-			block.append(_chat->pushDiv("message service"));
-			block.append(_chat->pushDiv("body details"));
-			block.append(FormatDateText(message.date));
-			block.append(_chat->popTag());
-			block.append(_chat->popTag());
+	for (const auto &message : data.list) {
+		if (Data::SkipMessageByDate(message, _settings)) {
+			// Count processed messages even if they are skipped by date/filter
+			// to keep progress bar consistent
+			if (_stats) {
+				_stats->incrementUserMediaFiles();
+			}
+			continue;
 		}
-		std::tie(info, block) = _chat->pushMessage(
+		const auto newIndex = (_messagesCount / kMessagesInFile);
+		if (oldIndex != newIndex) {
+			if (const auto result = _chat->writeBlock(block); !result) {
+				return result;
+			} else if (const auto next = switchToNextChatFile(newIndex)) {
+				Assert(saved.has_value() || _lastMessageInfo != nullptr);
+				_lastMessageIdsPerFile.push_back(saved
+					? saved->id
+					: _lastMessageInfo->id);
+				block = QByteArray();
+				_lastMessageInfo = nullptr;
+				previous = nullptr;
+				saved = std::nullopt;
+				oldIndex = newIndex;
+			} else {
+				return next;
+			}
+		}
+		if (_chatFileEmpty) {
+			if (const auto result = writeDialogOpening(oldIndex); !result) {
+				return result;
+			}
+			_chatFileEmpty = false;
+		}
+		const auto date = message.date;
+		if (DisplayDate(date, previous ? previous->date : 0)) {
+			block.append(_chat->pushServiceMessage(
+				--_dateMessageId,
+				_dialog,
+				_settings.path,
+				FormatDateText(date)));
+		}
+		const auto &[info, content] = _chat->pushMessage(
 			message,
 			previous,
 			_dialog,
 			_settings.path,
-			peers,
+			data.peers,
 			_environment.internalLinksDomain,
-			[&](int messageId, QByteArray text) {
-				return wrapMessageLink(messageId, text);
-			});
-		previous = &info;
+			messageLinkWrapper);
+		block.append(content);
 
-		if (block.size() > kMessagesInFile * 1024 && &message != &slice.list.back()) {
-			if (const auto result = _chat->writeBlock(block); !result) {
-				return result;
-			}
-			block = QByteArray();
-			_lastMessageIdsPerFile.push_back(message.id);
-			if (const auto result = switchToNextChatFile(_lastMessageIdsPerFile.size()); !result) {
-				return result;
-			}
-			previous = nullptr;
-		}
+		++_messagesCount;
+		saved = info;
+		previous = &*saved;
 	}
-	return _chat->writeBlock(block);
+	if (saved) {
+		_lastMessageInfo = std::make_unique<MessageInfo>(*saved);
+	}
+	return block.isEmpty() ? Result::Success() : _chat->writeBlock(block);
+}
+
+Result HtmlWriter::writeEmptySinglePeer() {
+	Expects(_chat != nullptr);
+
+	if (!_settings.onlySinglePeer() || _messagesCount != 0) {
+		return Result::Success();
+	}
+	Assert(_chatFileEmpty);
+	if (const auto result = writeDialogOpening(0); !result) {
+		return result;
+	}
+	return _chat->writeBlock(_chat->pushServiceMessage(
+		--_dateMessageId,
+		_dialog,
+		_settings.path,
+		"No exported messages"));
 }
 
 Result HtmlWriter::writeDialogEnd() {
+	Expects(_settings.onlySinglePeer() || _chats != nullptr);
+	Expects(_chat != nullptr);
+
+	if (const auto result = writeEmptySinglePeer(); !result) {
+		return result;
+	}
+
+	if (const auto closed = base::take(_chat)->close(); !closed) {
+		return closed;
+	}
+
+	if (_settings.onlySinglePeer()) {
+		return Result::Success();
+	}
+
+	using Type = Data::DialogInfo::Type;
+	const auto TypeString = [](Type type) {
+		switch (type) {
+		case Type::Unknown: return "unknown";
+		case Type::Self:
+		case Type::Replies:
+		case Type::VerifyCodes:
+		case Type::Personal: return "private";
+		case Type::Bot: return "bot";
+		case Type::PrivateGroup:
+		case Type::PrivateSupergroup:
+		case Type::PublicSupergroup: return "group";
+		case Type::PrivateChannel:
+		case Type::PublicChannel: return "channel";
+		}
+		Unexpected("Dialog type in TypeString.");
+	};
+	const auto DeletedString = [](Type type) {
+		switch (type) {
+		case Type::Unknown:
+		case Type::Self:
+		case Type::Replies:
+		case Type::VerifyCodes:
+		case Type::Personal:
+		case Type::Bot: return "Deleted Account";
+		case Type::PrivateGroup:
+		case Type::PrivateSupergroup:
+		case Type::PublicSupergroup: return "Deleted Group";
+		case Type::PrivateChannel:
+		case Type::PublicChannel: return "Deleted Channel";
+		}
+		Unexpected("Dialog type in TypeString.");
+	};
+	const auto NameString = [](
+			const Data::DialogInfo &dialog) -> QByteArray {
+		if (dialog.type == Type::Self) {
+			return "Saved messages";
+		} else if (dialog.type == Type::Replies) {
+			return "Replies";
+		} else if (dialog.type == Type::VerifyCodes) {
+			return "Verification Codes";
+		}
+		return dialog.name;
+	};
+	const auto LastNameString = [](
+			const Data::DialogInfo &dialog) -> QByteArray {
+		if (dialog.type != Type::Personal && dialog.type != Type::Bot) {
+			return {};
+		}
+		return dialog.lastName;
+	};
+	const auto CountString = [](int count, bool outgoing) -> QByteArray {
+		if (count == 1) {
+			return outgoing ? "1 outgoing message" : "1 message";
+		} else if (!count) {
+			return outgoing ? "No outgoing messages" : "No messages";
+		}
+		return Data::NumberToString(count)
+			+ (outgoing ? " outgoing messages" : " messages");
+	};
+	auto userpic = UserpicData{
+		((_dialog.type == Type::Self
+			|| _dialog.type == Type::Replies
+			|| _dialog.type == Type::VerifyCodes)
+			? kSavedMessagesColorIndex
+			: Data::PeerColorIndex(_dialog.peerId)),
+		kEntryUserpicSize
+	};
+	userpic.firstName = NameString(_dialog);
+	userpic.lastName = LastNameString(_dialog);
+
+	const auto result = validateDialogsMode(_dialog.isLeftChannel);
+	if (!result) {
+		return result;
+	}
+
+	return _chats->writeBlock(_chats->pushListEntry(
+		userpic,
+		ComposeName(userpic, DeletedString(_dialog.type)),
+		CountString(_messagesCount, _dialog.onlyMyMessages),
+		TypeString(_dialog.type),
+		(_messagesCount > 0
+			? (_dialog.relativePath + "messages.html")
+			: QString())));
+}
+
+Result HtmlWriter::validateDialogsMode(bool isLeftChannel) {
+	const auto mode = isLeftChannel
+		? DialogsMode::Left
+		: DialogsMode::Chats;
+	if (_dialogsMode == mode) {
+		return Result::Success();
+	} else if (_dialogsMode != DialogsMode::None) {
+		const auto result = _chats->writeBlock(_chats->popTag());
+		if (!result) {
+			return result;
+		}
+	}
+	_dialogsMode = mode;
+	auto block = _chats->pushAbout(isLeftChannel
+		? _environment.aboutLeftChats
+		: _environment.aboutChats);
+	block.append(_chats->pushDiv("entry_list"));
+	return _chats->writeBlock(block);
+}
+
+Result HtmlWriter::writeDialogsEnd() {
 	if (_chats) {
 		return base::take(_chats)->close();
 	}
@@ -2700,6 +3635,8 @@ QByteArray HtmlWriter::statsBlock() const {
 	int totalTotalMessagesCount = 0;
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
+	const bool linksOnly = (breakdown.size() == 1 && breakdown.begin()->first == Type::Link);
+	(void)linksOnly;
 
 	for (const auto type : order) {
 		const auto it = breakdown.find(type);
@@ -2726,22 +3663,18 @@ QByteArray HtmlWriter::statsBlock() const {
 			|| (item.uniqueSize != item.totalSize);
 
 		result.append("<div class=\"details_entry details\">").append(label).append(": ");
-		if (type == Type::Text) {
-			result.append(QByteArray::number(item.totalCount));
-		} else if (type == Type::Link) {
+		if (type == Type::Text || type == Type::Link) {
 			if (hasDuplicates) {
-				result.append(QByteArray::number(item.uniqueCount)).append(", ").append(QByteArray::number(item.totalCount));
-			} else {
-				result.append(QByteArray::number(item.uniqueCount));
+				result.append(QByteArray::number(item.uniqueCount)).append(", ");
 			}
+			result.append(QByteArray::number(item.totalCount));
 		} else {
 			const auto uniqueStr = QByteArray::number(item.uniqueCount) + " (" + Data::FormatFileSize(item.uniqueSize) + ")";
 			const auto totalStr = QByteArray::number(item.totalCount) + " (" + Data::FormatFileSize(item.totalSize) + ")";
 			if (hasDuplicates) {
-				result.append(uniqueStr).append(", ").append(totalStr);
-			} else {
-				result.append(uniqueStr);
+				result.append(uniqueStr).append(", ");
 			}
+			result.append(totalStr);
 			totalUniqueMediaSize += item.uniqueSize;
 			totalMediaSize += item.totalSize;
 		}
@@ -2756,13 +3689,11 @@ QByteArray HtmlWriter::statsBlock() const {
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
 		const auto uniqueStr = QByteArray::number(totalUniqueMessagesCount) + " (" + Data::FormatFileSize(totalUniqueMediaSize) + ")";
 		const auto totalStr = QByteArray::number(totalTotalMessagesCount) + " (" + Data::FormatFileSize(totalMediaSize) + ")";
-		result.append("<div class=\"details_entry details bold\">Total messages and media files: ");
+		result.append("<div class=\"details_entry details bold\">Total messages: ");
 		if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
-			result.append(uniqueStr).append(", ").append(totalStr);
-		} else {
-			result.append(uniqueStr);
+			result.append(uniqueStr).append(", ");
 		}
-		result.append("</div>\n");
+		result.append(totalStr).append("</div>\n");
 	}
 
 	result.append("</div>\n");
@@ -2783,10 +3714,12 @@ Result HtmlWriter::prependStats(const QString &relativePath) {
 	if (!file.open(QIODevice::WriteOnly)) return Result(Result::Type::Error, path);
 
 	const auto stats = statsBlock();
+	// Insert after the history opening tag or the page header
 	auto index = content.indexOf("<div class=\"history\">");
 	if (index == -1) index = content.indexOf("<div class=\"page_body");
 	if (index == -1) index = 0;
 	else {
+		// Find the end of the opening tag
 		index = content.indexOf('>', index) + 1;
 	}
 
@@ -2820,8 +3753,6 @@ Result HtmlWriter::switchToNextChatFile(int index) {
 Result HtmlWriter::finish() {
 	Expects(_settings.onlySinglePeer() || _summary != nullptr);
 
-	std::vector<QString> targetFiles;
-
 	if (!_settings.onlySinglePeer()) {
 		if (const auto result = writeSections(); !result) {
 			return result;
@@ -2843,18 +3774,11 @@ Result HtmlWriter::finish() {
 		}
 		_summary = nullptr;
 
-		targetFiles.push_back(mainFileRelativePath());
+		(void)prependStats(mainFileRelativePath());
 	}
 
 	for (const auto &path : _chatMessageFiles) {
-		targetFiles.push_back(path);
-	}
-
-	if (!targetFiles.empty()) {
-		(void)prependStats(targetFiles.front());
-		if (targetFiles.size() > 1) {
-			(void)prependStats(targetFiles.back());
-		}
+		(void)prependStats(path);
 	}
 
 	return Result::Success();
