@@ -64,4 +64,3 @@ settings.local.json
 # Cursor IDE local settings (but keep .cursor/rules/)
 .cursor/*
 !.cursor/rules/
-conductor

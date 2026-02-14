@@ -219,7 +219,6 @@ void PanelController::showSettings() {
 		const auto scanning = settingsRaw->isScanning();
 		const auto hasResults = settingsRaw->hasScanResults();
 		if (scanning) {
-			settingsRaw->resetToDefault();
 			_process->cancelExportFast();
 		} else if (hasResults) {
 			settingsRaw->resetToDefault();

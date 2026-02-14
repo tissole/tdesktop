@@ -1058,10 +1058,15 @@ void SettingsWidget::addMediaOption(
 		| rpl::start_with_next([=](bool checked) {
 			changeData([&](Settings &data) {
 				if (checked) {
-					if (type == MediaType::FullHistory || type == MediaType::Link) {
-						data.media.types = type;
-						data.types &= ~Settings::Type::AnyChatsMask;
+					if (type == MediaType::FullHistory) {
+						data.media.types = MediaType::FullHistory;
+						data.types = Settings::Types(0);
+					} else if (type == MediaType::Link) {
+						data.media.types = MediaType::Link;
+						data.types = Settings::Types(0);
 					} else {
+						data.media.types &= ~MediaType::FullHistory;
+						data.media.types &= ~MediaType::Link;
 						data.media.types |= type;
 					}
 				} else {
@@ -1076,15 +1081,15 @@ void SettingsWidget::addMediaOption(
 			const bool linkSelected = (data.media.types & MediaType::Link);
 			const bool historySelected = (data.media.types & MediaType::FullHistory);
 			const bool otherMediaSelected = (data.media.types & ~(MediaType::Link | MediaType::FullHistory));
-			const bool chatSelected = (data.types & Settings::Type::AnyChatsMask);
+			const bool chatSelected = (data.types != Settings::Types(0));
 
 			bool enabled = true;
 			if (type == MediaType::Link) {
-				enabled = checked || (!historySelected && !otherMediaSelected && !chatSelected);
+				enabled = !historySelected && !otherMediaSelected && !chatSelected;
 			} else if (type == MediaType::FullHistory) {
-				enabled = checked || (!linkSelected && !otherMediaSelected && !chatSelected);
+				enabled = !linkSelected && !otherMediaSelected && !chatSelected;
 			} else {
-				enabled = checked || (!linkSelected && !historySelected);
+				enabled = !linkSelected && !historySelected;
 			}
 			return std::make_pair(checked, enabled);
 		})
