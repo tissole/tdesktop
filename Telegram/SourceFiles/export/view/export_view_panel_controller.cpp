@@ -177,12 +177,8 @@ void PanelController::createPanel() {
 	_panel->setInnerSize(st::exportPanelSize);
 	_panel->closeRequests(
 	) | rpl::start_with_next([=] {
-		if (v::is<ProcessingState>(_state)) {
-			stopWithConfirmation();
-		} else {
-			LOG(("Export Info: Panel Hide By Close."));
-			_panel->hideGetDuration();
-		}
+		LOG(("Export Info: Panel Hide By Close."));
+		_panel->hideGetDuration();
 	}, _panel->lifetime());
 	_panelCloseEvents.fire(_panel->closeEvents());
 
@@ -205,6 +201,7 @@ void PanelController::showSettings() {
 	settingsRaw->scanClicks(
 	) | rpl::start_with_next([=] {
 		settingsRaw->setScanning(true);
+		_panel->setHideOnDeactivate(true);
 		_process->runScan(*_settings, PrepareEnvironment(_session));
 	}, settingsRaw->lifetime());
 
@@ -219,6 +216,7 @@ void PanelController::showSettings() {
 		const auto scanning = settingsRaw->isScanning();
 		const auto hasResults = settingsRaw->hasScanResults();
 		if (scanning) {
+			settingsRaw->resetToDefault();
 			_process->cancelExportFast();
 		} else if (hasResults) {
 			settingsRaw->resetToDefault();
@@ -440,6 +438,7 @@ void PanelController::updateState(State &&state) {
 		if (_panel) {
 			if (auto settings = dynamic_cast<SettingsWidget*>(_panel->inner())) {
 				settings->setScanning(false);
+				_panel->setHideOnDeactivate(false);
 				settings->setScanResults(scanDone->stats, scanDone->messagesCount);
 			}
 		}
@@ -457,6 +456,7 @@ void PanelController::updateState(State &&state) {
 	} else if (v::is<CancelledState>(_state)) {
 		LOG(("Export Info: Reset Panel After Cancel."));
 		_stopRequested = false;
+		_panel->setHideOnDeactivate(false);
 		showSettings();
 		_panel->showAndActivate();
 	}

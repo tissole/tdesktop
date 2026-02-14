@@ -3689,11 +3689,8 @@ QByteArray HtmlWriter::statsBlock() const {
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
 		const auto uniqueStr = QByteArray::number(totalUniqueMessagesCount) + " (" + Data::FormatFileSize(totalUniqueMediaSize) + ")";
 		const auto totalStr = QByteArray::number(totalTotalMessagesCount) + " (" + Data::FormatFileSize(totalMediaSize) + ")";
-		result.append("<div class=\"details_entry details bold\">Total messages: ");
-		if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
-			result.append(uniqueStr).append(", ");
-		}
-		result.append(totalStr).append("</div>\n");
+		result.append("<div class=\"details_entry details bold\">Total unique/Total messages: ");
+		result.append(uniqueStr).append("/").append(totalStr).append("</div>\n");
 	}
 
 	result.append("</div>\n");
@@ -3778,7 +3775,9 @@ Result HtmlWriter::finish() {
 	}
 
 	for (const auto &path : _chatMessageFiles) {
-		(void)prependStats(path);
+		if (path == _chatMessageFiles.front() || path == _chatMessageFiles.back()) {
+			(void)prependStats(path);
+		}
 	}
 
 	return Result::Success();

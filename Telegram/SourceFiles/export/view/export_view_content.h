@@ -37,18 +37,21 @@ struct Content {
 [[nodiscard]] Content ContentFromState(const FinishedState &state);
 
 [[nodiscard]] inline auto ContentFromState(
-		rpl::producer<State> state) { // <-- REMOVE 'settings' argument
+		rpl::producer<State> state) {
 	return std::move(
 		state
 	) | rpl::filter([](const State &state) {
-		return v::is<ProcessingState>(state) || v::is<FinishedState>(state);
-	}) | rpl::map([=](const State &state) { // <-- REMOVE 'settings' from capture
+		return v::is<ProcessingState>(state) || v::is<FinishedState>(state) || v::is<ScanDoneState>(state) || v::is<CancelledState>(state);
+	}) | rpl::map([=](const State &state) {
 		if (const auto process = std::get_if<ProcessingState>(&state)) {
-			return ContentFromState(*process); // <-- REMOVE 'settings' argument
-		} else if (const auto done = std::get_if<FinishedState>(&state)) {
-			return ContentFromState(*done);
+			return ContentFromState(*process);
+		} else if (v::is<FinishedState>(state)) {
+			return ContentFromState(std::get<FinishedState>(state));
+		} else {
+			auto result = Content();
+			result.rows.push_back({ Content::kDoneId });
+			return result;
 		}
-		Unexpected("State type in ContentFromState.");
 	});
 }
 

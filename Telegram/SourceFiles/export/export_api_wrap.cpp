@@ -1457,6 +1457,9 @@ void ApiWrap::checkFirstMessageDate(int localSplitIndex, int count) {
 	Expects(_chatProcess != nullptr);
 	Expects(localSplitIndex < _chatProcess->info.splits.size());
 
+	messagesCountLoaded(localSplitIndex, count);
+	return;
+
 	if (_settings->useIdRange
 		|| (_chatProcess->fromId > 0)
 		|| _settings->singlePeerTill <= 0) {
@@ -2125,6 +2128,7 @@ MTPMessagesFilter ApiWrap::getFilter() const {
 	if (round) return MTP_inputMessagesFilterRoundVideo();
 	if (gif) return MTP_inputMessagesFilterGif();
 	if (audio) return MTP_inputMessagesFilterMusic();
+	if (sticker) return MTP_inputMessagesFilterDocument(); // Stickers are documents, faster than Empty
 	if (link) return MTP_inputMessagesFilterUrl();
 
 	return MTP_inputMessagesFilterEmpty();
@@ -2251,6 +2255,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		}
 
 		if (!selected) {
+			_chatProcess->messageItemIndices[i] = 0;
 			_chatProcess->messageItemsCount[i] = 0;
 			onMessagePartDone(i, false); // Marks the bubble as done, but not selected
 			continue;
@@ -2271,9 +2276,6 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				if (locationKey.id || locationKey.type) {
 					auto &visited = _isScanning ? _scanVisited : _exportVisited;
 					if (visited.find(locationKey) == visited.end()) {
-						if (_isScanning) {
-							visited.emplace(locationKey, QString());
-						}
 						uniqueBubble = true;
 					}
 				} else {
@@ -2576,15 +2578,13 @@ void ApiWrap::finishMessagesSlice() {
 				finishMessages();
 			} else {
 				_chatProcess->lastSlice = false;
-				_chatProcess->largestIdPlusOne = 1;
-				const auto minId = _chatProcess->fromId;
-				const auto maxId = _chatProcess->tillId;
-				if (minId > maxId) {
-					requestMessagesSlice();
-				} else {
-					requestMessagesSlice();
-				}
+				_chatProcess->largestIdPlusOne = (_chatProcess->fromId > 0)
+					? int32(std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId))
+					: 1;
+				requestMessagesSlice();
 			}
+		} else {
+			requestMessagesSlice();
 		}
 		return;
 	}

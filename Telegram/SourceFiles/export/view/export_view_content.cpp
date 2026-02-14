@@ -69,7 +69,7 @@ Content ContentFromState(
 		pushMain(tr::lng_export_state_initializing(tr::now));
 		break;
 	case Step::Scanning:
-		pushMain(tr::lng_export_analyzing(tr::now));
+		pushMain(tr::lng_export_scanning(tr::now));
 		break;
 	case Step::DialogsList:
 		pushMain(tr::lng_export_state_chats_list(tr::now));
@@ -152,14 +152,16 @@ Content ContentFromState(
 			case MediaType::Link: label = tr::lng_export_option_links(tr::now); break;
 			}
 			if (!label.isEmpty()) {
-				const bool hasDuplicates = (item.uniqueCount != item.totalCount)
-					|| (item.uniqueSize != item.totalSize);
 				QString text;
-				if (type == MediaType::Text || type == MediaType::Link) {
-					text = label + ": " + (hasDuplicates ? (Lang::FormatCountDecimal(item.uniqueCount) + ", ") : QString())
+				if (type == MediaType::Text) {
+					text = label + ": " + Lang::FormatCountDecimal(item.totalCount);
+				} else if (type == MediaType::Link) {
+					text = "Unique " + label + "/Total " + label + ": " 
+						+ Lang::FormatCountDecimal(item.uniqueCount) + "/" 
 						+ Lang::FormatCountDecimal(item.totalCount);
 				} else {
-					text = label + ": " + (hasDuplicates ? (Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + "), ") : QString())
+					text = "Unique " + label + "/Total " + label + ": " 
+						+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + ")/"
 						+ Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
 				}
 				result.rows.push_back({ Content::kDoneId, text, QString(), 1. });
@@ -240,28 +242,17 @@ Content ContentFromState(const FinishedState &state) {
 		case Type::Link: label = tr::lng_export_option_links(tr::now); break;
 		}
 		QString text;
-		const bool hasDuplicates = (item.uniqueCount != item.totalCount)
-			|| (item.uniqueSize != item.totalSize);
-
-		if (type == Type::Text || type == Type::Link) {
-			const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount);
-			const auto totalStr = Lang::FormatCountDecimal(item.totalCount);
-			if (hasDuplicates) {
-				text = label + ": " + uniqueStr + ", " + totalStr;
-			} else {
-				text = label + ": " + totalStr;
-			}
+		
+		if (type == Type::Text) {
+			text = label + ": " + Lang::FormatCountDecimal(item.totalCount);
+		} else if (type == Type::Link) {
+			text = "Unique " + label + "/Total " + label + ": " 
+				+ Lang::FormatCountDecimal(item.uniqueCount) + "/" 
+				+ Lang::FormatCountDecimal(item.totalCount);
 		} else {
-			const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount)
-				+ " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
-			const auto totalStr = Lang::FormatCountDecimal(item.totalCount)
-				+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
-
-			if (hasDuplicates) {
-				text = label + ": " + uniqueStr + ", " + totalStr;
-			} else {
-				text = label + ": " + totalStr;
-			}
+			text = "Unique " + label + "/Total " + label + ": " 
+				+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + ")/"
+				+ Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
 
 			totalUniqueMediaSize += item.uniqueSize;
 			totalMediaSize += item.totalSize;
@@ -273,23 +264,18 @@ Content ContentFromState(const FinishedState &state) {
 		}
 
 		categoriesCount++;
-		result.rows.push_back({ Content::kDoneId, text, QString(), 1. });
+		result.rows.push_back({ "stat_" + QString::number((int)type), text, QString(), 1. });
 	}
 
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
-		const auto label = "Total messages and media files: ";
+		const auto label = "Total unique/Total messages: ";
 		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 		const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
-		QString totalText;
-		if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
-			totalText = label + uniqueStr + ", " + totalStr;
-		} else {
-			totalText = label + totalStr;
-		}
-		result.rows.push_back({ Content::kDoneId, totalText, QString(), 1. });
+		QString totalText = label + uniqueStr + "/" + totalStr;
+		result.rows.push_back({ "stat_summary", totalText, QString(), 1. });
 	}
 
 	return result;

@@ -1189,7 +1189,7 @@ void SettingsWidget::refreshButtons(
 
 	const auto scanBtn = Ui::CreateChild<Ui::RoundButton>(
 		container.get(),
-		rpl::single(_isScanning ? tr::lng_export_analyzing(tr::now) : tr::lng_export_analyze(tr::now)),
+		rpl::single(_isScanning ? tr::lng_export_scanning(tr::now) : tr::lng_export_scan(tr::now)),
 		st::defaultBoxButton);
 	scanBtn->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 	scanBtn->show();
@@ -1265,7 +1265,7 @@ rpl::producer<> SettingsWidget::cancelClicks() const {
 
 void SettingsWidget::setScanProgress(int itemIndex, int itemCount) {
 	if (!_scanResultsLabel) return;
-	_scanResultsLabel->setText(tr::lng_export_analyzing_progress(
+	_scanResultsLabel->setText(tr::lng_export_scanning_progress(
 		tr::now,
 		lt_index,
 		Lang::FormatCountDecimal(itemIndex),
@@ -1452,6 +1452,7 @@ void SettingsWidget::resetToDefault() {
 		data.singlePeerFromId = 0;
 		data.singlePeerTillId = 0;
 		data.useIdRange = false;
+		data.media.types = MediaSettings::Types(0); // Reset all media type checkboxes
 		data.media.sizeLimit = 8 * 1024 * 1024; // Explicitly reset size limit
 	});
 	clearScanResults();

@@ -6009,9 +6009,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_export_total_media_messages" = "Total media messages: {amount}";
 "lng_export_total_messages" = "Total messages: {amount}";
 "lng_export_total_size" = "Total size: {size}";
-"lng_export_analyze" = "Scan";
-"lng_export_analyzing" = "Scanning...";
-"lng_export_analyzing_progress" = "Scanning messages... {index} / {amount}";
+"lng_export_scan" = "Scan";
+"lng_export_scanning" = "Scanning...";
+"lng_export_scanning_progress" = "Scanning messages... {index} / {amount}";
 "lng_export_none_found" = "No files found in this range.";
 "lng_export_total_text_exported" = "Text messages exported: {amount}";
 "lng_export_total_messages_exported" = "Total messages exported: {amount}";

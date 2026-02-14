@@ -1043,9 +1043,8 @@ void MainWidget::setCurrentExportView(Export::View::PanelController *view) {
 		_currentExportView->progressState(
 		) | rpl::start_with_next([=](Export::View::Content &&data) {
 			const bool isDone = !data.rows.empty() && data.rows[0].id == Export::View::Content::kDoneId;
-			const bool isScanning = data.isScanning;
-		if (isDone || isScanning) {
-			if (_exportTopBar) {
+			if (isDone) {
+				if (_exportTopBar) {
 				_exportTopBar->hide(anim::type::instant);
 				_exportTopBar.destroy();
 				_exportTopBarHeight = _contentScrollAddToY = 0;
