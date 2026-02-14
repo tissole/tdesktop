@@ -172,30 +172,8 @@ Content ContentFromState(
 						text = label + ": " + uniqueStr;
 					}
 				}
-				if (type != MediaType::Link && type != MediaType::Text) {
-					totalUniqueMessagesCount += item.uniqueCount;
-					totalTotalMessagesCount += item.totalCount;
-					totalUniqueMediaSize += item.uniqueSize;
-					totalMediaSize += item.totalSize;
-				}
 				result.rows.push_back({ Content::kDoneId, text, QString(), 1. });
 			}
-		}
-
-		if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
-			const auto label = "Unique and total media files: ";
-			const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
-				+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
-			const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
-				+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
-
-			QString totalText;
-			if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
-				totalText = label + uniqueStr + ", " + totalStr;
-			} else {
-				totalText = label + uniqueStr;
-			}
-			result.rows.push_back({ Content::kDoneId, totalText, QString(), 1. });
 		}
 	}
 
@@ -298,11 +276,9 @@ Content ContentFromState(const FinishedState &state) {
 			totalMediaSize += item.totalSize;
 		}
 
-		if (type != Type::Link && type != Type::Text) {
+		if (type != Type::Link) {
 			totalUniqueMessagesCount += item.uniqueCount;
 			totalTotalMessagesCount += item.totalCount;
-			totalUniqueMediaSize += item.uniqueSize;
-			totalMediaSize += item.totalSize;
 		}
 
 		categoriesCount++;
@@ -310,7 +286,7 @@ Content ContentFromState(const FinishedState &state) {
 	}
 
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
-		const auto label = "Unique and total media files: ";
+		const auto label = "Total messages and media files: ";
 		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 		const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
