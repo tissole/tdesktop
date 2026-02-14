@@ -2173,8 +2173,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				}
 				break;
 			}
-			onMessagePartDone(i);
-			continue;
+			const auto tooOld = (_settings->useIdRange && message.id < _settings->singlePeerFromId) || (!_settings->useIdRange && _settings->singlePeerFrom > 0 && message.date < _settings->singlePeerFrom); if (tooOld) { _chatProcess->lastSlice = true; break; } onMessagePartDone(i); continue;
 		}
 
 		// Identification and stat increments for non-file items

@@ -1083,7 +1083,7 @@ void SettingsWidget::addMediaOption(
 			} else if (type == MediaType::FullHistory) {
 				enabled = checked || (!linkSelected && !otherMediaSelected);
 			} else {
-				enabled = !linkSelected && !historySelected;
+				enabled = checked || (!linkSelected && !historySelected);
 			}
 			return std::make_pair(checked, enabled);
 		})
