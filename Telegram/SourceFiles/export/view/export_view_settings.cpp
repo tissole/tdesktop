@@ -1369,12 +1369,17 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 				text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
 					+ ", " + Lang::FormatCountDecimal(item.totalCount) + "\n";
 			} else {
-				const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount)
-					+ " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
-				const auto totalStr = Lang::FormatCountDecimal(item.totalCount)
-					+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
+				const bool noDuplicates = (item.uniqueCount == item.totalCount) && (item.uniqueSize == item.totalSize);
+				if (noDuplicates) {
+					text += label + ": " + Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")\n";
+				} else {
+					const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount)
+						+ " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
+					const auto totalStr = Lang::FormatCountDecimal(item.totalCount)
+						+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
 
-				text += label + ": " + uniqueStr + ", " + totalStr + "\n";
+					text += label + ": " + uniqueStr + ", " + totalStr + "\n";
+				}
 
 				totalUniqueMediaSize += item.uniqueSize;
 				totalMediaSize += item.totalSize;

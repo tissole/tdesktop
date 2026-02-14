@@ -201,12 +201,14 @@ void PanelController::showSettings() {
 	settingsRaw->scanClicks(
 	) | rpl::start_with_next([=] {
 		settingsRaw->setScanning(true);
+		_panel->setTitle(tr::lng_export_scanning(tr::now));
 		_panel->setHideOnDeactivate(true);
 		_process->runScan(*_settings, PrepareEnvironment(_session));
 	}, settingsRaw->lifetime());
 
 	settingsRaw->exportClicks(
 	) | rpl::start_with_next([=]() {
+		_panel->setTitle(tr::lng_export_progress_title(tr::now));
 		showProgress();
 		_process->startExport(*_settings, PrepareEnvironment(_session));
 	}, settingsRaw->lifetime());
@@ -225,6 +227,7 @@ void PanelController::showSettings() {
 			LOG(("Export Info: Panel Hide By Cancel."));
 			_panel->hideGetDuration();
 		}
+		_panel->setTitle(tr::lng_export_title());
 	}, settingsRaw->lifetime());
 
 	settingsRaw->changes(

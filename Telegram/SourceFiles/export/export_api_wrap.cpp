@@ -2328,11 +2328,6 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			.messagesUniqueCount = _chatProcess->messagesUniqueCount
 		});
 
-		if (_isScanning) {
-			onMessagePartDone(i, true);
-			continue;
-		}
-
 		int required = 0;
 		if (message.file().location) {
 			++required;
@@ -2791,6 +2786,15 @@ void ApiWrap::processFileLoad(
 	const auto oversized = (file.location && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit && !fullHistorySelected);
 	const auto locationKey = file.location ? ComputeLocationKey(file.location) : ApiWrap::LocationKey{ 0, 0 };
 
+	if (!_isScanning && locationKey.id != 0 && !isThumb) {
+		const auto it = _exportVisited.find(locationKey);
+		if (it != _exportVisited.end() && !it->second.isEmpty()) {
+			file.relativePath = it->second;
+			done(file.relativePath);
+			return;
+		}
+	}
+
 	const bool typeSelected = (types & type) || fullHistorySelected;
 	const auto skipDownload = fullHistorySelected // Override download if Full History is active
 		|| (types == MediaSettings::Types(0))
@@ -2798,12 +2802,9 @@ void ApiWrap::processFileLoad(
 
 	if (_isScanning) {
 		if (message || story) {
-			if (type != Type(0) && !isThumb && origin.messageId != 0) {
-				// Links and Text should be counted regardless of size settings (unless they are specifically excluded, which is handled by typeSelected)
-				const bool isLinkOrText = (type == Type::Link || type == Type::Text);
-				
+			if (type != Type(0) && !isThumb && (origin.messageId != 0 || origin.storyId != 0)) {
 				// Total scan MUST strictly respect size selected, UNLESS Full History is selected or it is a Link/Text.
-				if (typeSelected && ((!oversized && !fullHistorySelected) || fullHistorySelected || isLinkOrText)) {
+				if (typeSelected && ((!oversized && !fullHistorySelected) || fullHistorySelected)) {
 					const bool alreadyVisited = (locationKey.id || locationKey.type) && _scanVisited.find(locationKey) != _scanVisited.end();
 					const bool willBeUniqueInChat = !alreadyVisited;
 					
