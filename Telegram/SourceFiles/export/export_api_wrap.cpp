@@ -2096,12 +2096,12 @@ MTPMessagesFilter ApiWrap::getFilter() const {
 	if (selectedCount == 1) {
 		if (photo) return MTP_inputMessagesFilterPhotos();
 		if (video) return MTP_inputMessagesFilterVideo();
-		if (audio) return MTP_inputMessagesFilterEmpty(); // slow but accurate
-		if (file) return MTP_inputMessagesFilterEmpty(); // slow but accurate
+		if (audio) return MTP_inputMessagesFilterMusic();
 		if (voice) return MTP_inputMessagesFilterVoice();
 		if (round) return MTP_inputMessagesFilterRoundVideo();
 		if (gif) return MTP_inputMessagesFilterGif();
-		if (link) return MTP_inputMessagesFilterEmpty(); // slow but accurate
+		if (link) return MTP_inputMessagesFilterUrl();
+		if (file) return MTP_inputMessagesFilterDocument();
 		if (sticker) return MTP_inputMessagesFilterEmpty();
 	}
 
@@ -2270,7 +2270,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		if (required == 0) onMessagePartDone(i, true);
 	}
 
-	if (_chatProcess && _chatProcess->pendingFiles > 0) resolveCustomEmoji(); else if (_chatProcess) finishMessagesSlice();
+	if (_chatProcess && _chatProcess->pendingFiles > 0) resolveCustomEmoji(); else finishMessagesSlice();
 }
 
 void ApiWrap::collectMessagesCustomEmoji(const Data::MessagesSlice &slice) {
@@ -2699,7 +2699,7 @@ void ApiWrap::processFileLoad(
 				const bool isLinkOrText = (type == Type::Link || type == Type::Text);
 				const bool ignoreSize = fullHistorySelected || isLinkOrText;
 				
-				if (typeSelected) {
+				if (typeSelected && (ignoreSize || !oversized)) {
 					const bool locationValid = (locationKey.id != 0 || locationKey.type != 0);
 					const auto it = locationValid ? _scanVisited.find(locationKey) : _scanVisited.end();
 					const bool alreadyVisited = (it != _scanVisited.end());
@@ -2709,7 +2709,6 @@ void ApiWrap::processFileLoad(
 						_scanVisited.emplace(locationKey, QString());
 					}
 					
-					// Count even if oversized, matching full history behavior for total count
 					_scanStats->increment(type, fullSize, willBeUniqueInChat);
 				}
 			}
@@ -2723,7 +2722,7 @@ void ApiWrap::processFileLoad(
 		&& !isThumb) {
 		const bool isLinkOrText = (type == Type::Link || type == Type::Text);
 		const bool ignoreSize = fullHistorySelected || isLinkOrText;
-		if (typeSelected) {
+		if (typeSelected && (ignoreSize || !oversized)) {
 			auto &visited = _exportVisited;
 			const bool locationValid = (locationKey.id != 0 || locationKey.type != 0);
 			const auto it = locationValid ? visited.find(locationKey) : visited.end();
@@ -3297,7 +3296,9 @@ void ApiWrap::filePartRefreshReference(uint64 randomId, int64 offset) {
 }
 
 void ApiWrap::filePartExtractReference(
-		uint64 randomId, int64 offset, const MTPmessages_Messages &result) {
+		uint64 randomId,
+		int64 offset,
+		const MTPmessages_Messages &result) {
 	const auto it = _fileProcesses.find(randomId);
 	if (it == end(_fileProcesses)) {
 		return;
@@ -3350,7 +3351,9 @@ void ApiWrap::filePartExtractReference(
 }
 
 void ApiWrap::filePartExtractReference(
-		uint64 randomId, int64 offset, const MTPstories_Stories &result) {
+		uint64 randomId,
+		int64 offset,
+		const MTPstories_Stories &result) {
 	const auto it = _fileProcesses.find(randomId);
 	if (it == end(_fileProcesses)) {
 		return;
