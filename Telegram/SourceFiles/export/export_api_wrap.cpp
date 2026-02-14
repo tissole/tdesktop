@@ -2697,6 +2697,7 @@ void ApiWrap::processFileLoad(
 		if (message || story) {
 			if (type != Type(0) && !isThumb && origin.messageId != 0) {
 				const bool isLinkOrText = (type == Type::Link || type == Type::Text);
+				const bool ignoreSize = fullHistorySelected || isLinkOrText;
 				
 				if (typeSelected) {
 					const bool locationValid = (locationKey.id != 0 || locationKey.type != 0);
@@ -2721,6 +2722,7 @@ void ApiWrap::processFileLoad(
 		&& origin.messageId != 0
 		&& !isThumb) {
 		const bool isLinkOrText = (type == Type::Link || type == Type::Text);
+		const bool ignoreSize = fullHistorySelected || isLinkOrText;
 		if (typeSelected) {
 			auto &visited = _exportVisited;
 			const bool locationValid = (locationKey.id != 0 || locationKey.type != 0);
