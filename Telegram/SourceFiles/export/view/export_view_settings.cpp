@@ -1296,7 +1296,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	}
 
 	if (totalTotalMessagesCount <= 0 && stats.find(MediaSettings::Type::Link) == stats.end()) {
-		resetToDefault();
+		clearScanResults();
 		using MediaType = MediaSettings::Type;
 		const auto types = readData().media.types;
 		const auto hasMedia = (types & MediaType::MediaMask) || (types & MediaType::Sticker) || (types & MediaType::GIF) || (types & MediaType::File);
@@ -1390,9 +1390,15 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 				totalMediaSize += item.totalSize;
 			}
 
-			// Corrected Requirement: Total sum = all media + all text. Unique sum = unique media + all text.
-			// Links are always excluded from sums to avoid double counting.
-			if (type != MediaType::Link) {
+			// Unique files sum should EXCLUDE text and links
+			if (type != MediaType::Link && type != MediaType::Text) {
+				totalUniqueMessagesCount += item.uniqueCount;
+				totalTotalMessagesCount += item.totalCount;
+			} else if (type == MediaType::Text) {
+				// Text messages count towards the total messages count, but not unique files	
+				totalTotalMessagesCount += item.totalCount;
+			} else if (type == MediaType::Link && categoriesCount == 1) {
+				// If ONLY Links are selected, count them in the total sum
 				totalUniqueMessagesCount += item.uniqueCount;
 				totalTotalMessagesCount += item.totalCount;
 			}
