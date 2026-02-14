@@ -1451,7 +1451,7 @@ void SettingsWidget::resetToDefault() {
 }
 
 } // namespace View
-} // namespace Export
+} // namespace Export // namespace Export
 
 
 

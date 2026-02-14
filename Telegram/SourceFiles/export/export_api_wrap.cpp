@@ -783,8 +783,7 @@ void ApiWrap::requestDialogsList(
 void ApiWrap::startMainSession(FnMut<void()> done) {
 	using Type = Settings::Type;
 	const auto sizeLimit = _settings->media.sizeLimit;
-	// Ensure we request file access for scanning too, or if files are selected regardless of size limit quirk.
-	const auto hasFiles = ((_settings->media.types != 0) && (sizeLimit > 0 || _isScanning))
+	const auto hasFiles = (_settings->media.types && (sizeLimit > 0))
 		|| (_settings->types & Type::Userpics)
 		|| (_settings->types & Type::Stories);
 
@@ -1033,15 +1032,21 @@ bool ApiWrap::loadUserpicProgress(FileProgress progress) {
 }
 
 void ApiWrap::loadUserpicDone(const QString &relativePath) {
-	if (!_userpicsProcess) return;
-	
-	if (_userpicsProcess->pendingFiles > 0) {
-		--_userpicsProcess->pendingFiles;
-	}
+
+	Expects(_userpicsProcess != nullptr);
+
+
+
+	--_userpicsProcess->pendingFiles;
+
+	Assert(_userpicsProcess->pendingFiles >= 0);
 
 	if (_userpicsProcess->pendingFiles == 0 && !_userpicsProcess->processing) {
+
 		finishUserpicsSlice();
+
 	}
+
 }
 
 void ApiWrap::finishUserpics() {
@@ -1206,10 +1211,9 @@ bool ApiWrap::loadStoryProgress(FileProgress progress, bool auxiliary) {
 }
 
 void ApiWrap::loadStoryDone(const QString &relativePath) {
-	if (!_storiesProcess) return;
-	if (_storiesProcess->pendingFiles > 0) {
-		--_storiesProcess->pendingFiles;
-	}
+	Expects(_storiesProcess != nullptr);
+	--_storiesProcess->pendingFiles;
+	Assert(_storiesProcess->pendingFiles >= 0);
 	if (_storiesProcess->pendingFiles == 0 && !_storiesProcess->processing) {
 		finishStoriesSlice();
 	}
@@ -1220,10 +1224,9 @@ bool ApiWrap::loadStoryThumbProgress(FileProgress progress) {
 }
 
 void ApiWrap::loadStoryThumbDone(const QString &relativePath) {
-	if (!_storiesProcess) return;
-	if (_storiesProcess->pendingFiles > 0) {
-		--_storiesProcess->pendingFiles;
-	}
+	Expects(_storiesProcess != nullptr);
+	--_storiesProcess->pendingFiles;
+	Assert(_storiesProcess->pendingFiles >= 0);
 	if (_storiesProcess->pendingFiles == 0 && !_storiesProcess->processing) {
 		finishStoriesSlice();
 	}
@@ -2100,14 +2103,9 @@ MTPMessagesFilter ApiWrap::getFilter() const {
 
 	int selectedCount = photo + video + file + voice + round + gif + sticker + audio + link;
 
-	// Conservative filtering to avoid "broken scan" issues reported by users.
-	// Prefer Empty (Full History scan) when combinations are complex or buggy filters are suspected.
-
 	if (selectedCount == 0) return MTP_inputMessagesFilterEmpty();
 
 	if (selectedCount == 1) {
-		// Single types are generally safe if the server supports them.
-		// Photos and Videos individually usually work.
 		if (photo) return MTP_inputMessagesFilterPhotos();
 		if (video) return MTP_inputMessagesFilterVideo();
 		if (audio) return MTP_inputMessagesFilterMusic();
@@ -2115,16 +2113,14 @@ MTPMessagesFilter ApiWrap::getFilter() const {
 		if (round) return MTP_inputMessagesFilterRoundVideo();
 		if (gif) return MTP_inputMessagesFilterGif();
 		if (link) return MTP_inputMessagesFilterUrl();
-		if (file) return MTP_inputMessagesFilterDocument();
-		
-		// Stickers MUST use Empty because there is no reliable Sticker filter that covers all sticker types
-		// without missing some or being identical to Document.
-		if (sticker) return MTP_inputMessagesFilterEmpty();
+		if (file || sticker) return MTP_inputMessagesFilterDocument();
 	}
 
-	// For any combination (2 or more), default to Empty to prevent "hangs" or missed messages.
-	// The user reported specific issues with Photo+Video and File+Sticker.
-	// Reverting to full scan ensures accuracy at the cost of speed, which is acceptable for correctness.
+	if (selectedCount == 2) {
+		if (photo && video) return MTP_inputMessagesFilterPhotoVideo();
+		if (file && sticker) return MTP_inputMessagesFilterDocument();
+	}
+
 	return MTP_inputMessagesFilterEmpty();
 }
 
@@ -2141,7 +2137,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 	auto &s = *_chatProcess->slice;
 
 	_chatProcess->pendingFiles = 0;
-	_chatProcess->sliceOffset = _chatProcess->messagesProcessed;
+	_chatProcess->sliceOffset = _chatProcess->messagesProcessed; // Snapshot offset for this slice
 	_chatProcess->fileToMessageIndex.clear();
 	_chatProcess->messageFilesRequired.assign(s.list.size(), 0);
 	_chatProcess->messageFilesDone.assign(s.list.size(), 0);
@@ -2149,14 +2145,6 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 	_chatProcess->messageItemsCount.assign(s.list.size(), 0);
 	_chatProcess->messageIsUnique.assign(s.list.size(), false);
 	_chatProcess->emojiToMessageIndices.clear();
-
-	_chatProcess->processing = true; // Guard against premature finish
-	const auto guard = gsl::finally([&] {
-		_chatProcess->processing = false;
-		if (_chatProcess && _chatProcess->pendingFiles == 0) {
-			finishMessagesSlice();
-		}
-	});
 
 	for (int i = 0; i < int(s.list.size()); ++i) {
 		const auto &message = s.list[i];
@@ -2596,11 +2584,8 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 void ApiWrap::loadMessageFileDone(int index, const QString &relativePath) {
 	if (!_chatProcess) return;
 	onMessagePartDone(index);
-	
-	if (_chatProcess->pendingFiles > 0) {
-		--_chatProcess->pendingFiles;
-	}
-
+	--_chatProcess->pendingFiles;
+	Assert(_chatProcess->pendingFiles >= 0);
 	if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
 		finishMessagesSlice();
 	}
@@ -2613,11 +2598,8 @@ bool ApiWrap::loadMessageThumbProgress(FileProgress progress) {
 void ApiWrap::loadMessageThumbDone(int index, const QString &relativePath) {
 	if (!_chatProcess) return;
 	onMessagePartDone(index);
-	
-	if (_chatProcess->pendingFiles > 0) {
-		--_chatProcess->pendingFiles;
-	}
-
+	--_chatProcess->pendingFiles;
+	Assert(_chatProcess->pendingFiles >= 0);
 	if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
 		finishMessagesSlice();
 	}
@@ -2640,9 +2622,7 @@ void ApiWrap::loadMessageEmojiDone(uint64 id, const QString &relativePath) {
 		if (j != end(_chatProcess->emojiToMessageIndices)) {
 			for (const auto messageIndex : j->second) {
 				onMessagePartDone(messageIndex);
-				if (_chatProcess->pendingFiles > 0) {
-					--_chatProcess->pendingFiles;
-				}
+				--_chatProcess->pendingFiles;
 			}
 			_chatProcess->emojiToMessageIndices.erase(j);
 			if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
@@ -2722,18 +2702,14 @@ void ApiWrap::processFileLoad(
 
 	if (_isScanning) {
 		if (message || story) {
-			// Align stats logic with export (below)
 			if (type != Type(0) && !isThumb && origin.messageId != 0) {
 				const bool isLinkOrText = (type == Type::Link || type == Type::Text);
 				const bool ignoreSize = fullHistorySelected || isLinkOrText;
-				
-				// Deduplicate logic identical to export
 				if (typeSelected && (ignoreSize || !oversized)) {
 					const bool locationValid = (locationKey.id != 0 || locationKey.type != 0);
-					const auto it = locationValid ? _scanVisited.find(locationKey) : _scanVisited.end();
-					const bool alreadyVisited = (it != _scanVisited.end());
+					const bool alreadyVisited = locationValid && _scanVisited.find(locationKey) != _scanVisited.end();
 					const bool willBeUniqueInChat = !alreadyVisited;
-
+					
 					if (!alreadyVisited && locationValid) {
 						_scanVisited.emplace(locationKey, QString());
 					}
@@ -3524,3 +3500,4 @@ ApiWrap::~ApiWrap() {
 }
 
 } // namespace Export
+
