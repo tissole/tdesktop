@@ -690,7 +690,7 @@ void ApiWrap::requestDialogsCount() {
 		MTPint(), // folder_id
 		MTP_int(offsetDate),
 		MTP_int(offsetId),
-		_dialogsProcess ? _dialogsProcess->offsetPeer : offsetPeer,
+		offsetPeer,
 		MTP_int(limit),
 		MTP_long(hash)
 	)).done([=](const MTPmessages_Dialogs &result) {
@@ -960,11 +960,9 @@ void ApiWrap::loadNextUserpic() {
 
 	_userpicsProcess->processing = true;
 	const auto guard = gsl::finally([&] {
-		if (_userpicsProcess) {
-			_userpicsProcess->processing = false;
-			if (_userpicsProcess->pendingFiles == 0) {
-				finishUserpicsSlice();
-			}
+		_userpicsProcess->processing = false;
+		if (_userpicsProcess && _userpicsProcess->pendingFiles == 0) {
+			finishUserpicsSlice();
 		}
 	});
 
@@ -1120,11 +1118,9 @@ void ApiWrap::loadNextStory() {
 
 	_storiesProcess->processing = true;
 	const auto guard = gsl::finally([&] {
-		if (_storiesProcess) {
-			_storiesProcess->processing = false;
-			if (_storiesProcess->pendingFiles == 0) {
-				finishStoriesSlice();
-			}
+		_storiesProcess->processing = false;
+		if (_storiesProcess && _storiesProcess->pendingFiles == 0) {
+			finishStoriesSlice();
 		}
 	});
 
@@ -1442,6 +1438,12 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 			return;
 		}
 		
+		// const auto mediaFilterActive = (filter.type() != mtpc_inputMessagesFilterEmpty);
+		
+		// If scanning text/history in a specific range, use the ID difference as a better estimate
+		// than the total chat count returned by the server.
+		// const auto fromId = (_chatProcess->fromId > 0) ? _chatProcess->fromId : (_settings->useIdRange ? _settings->singlePeerFromId : int64(1));
+		// const auto tillId = (_chatProcess->tillId > 0) ? _chatProcess->tillId : (_settings->useIdRange ? _settings->singlePeerTillId : int64(0));
 		const auto realCount = count;
 		
 		checkFirstMessageDate(localSplitIndex, realCount);
@@ -1990,8 +1992,10 @@ void ApiWrap::requestChatMessages(
 		});
 
 		if (count >= 0 && !_chatProcess->messagesInRangeCountFixed) {
+			// const auto mediaFilterActive = (filter.type() != mtpc_inputMessagesFilterEmpty);
 			const auto sizeFilterActive = (_settings->media.sizeLimit > 0);
-			if (!sizeFilterActive) {
+			if (/*mediaFilterActive &&*/ !sizeFilterActive) {
+				// If we only have specific media selected AND no size limit, the server's count is exactly Y.
 				_chatProcess->messagesInRangeCount = count;
 			}
 		}
@@ -2004,6 +2008,9 @@ void ApiWrap::requestChatMessages(
 	const auto realPeerInput = (splitIndex >= 0)
 		? _chatProcess->info.input
 		: _chatProcess->info.migratedFromInput;
+	const auto outgoingInput = _chatProcess->info.isMonoforum
+		? _chatProcess->info.monoforumBroadcastInput
+		: MTP_inputPeerSelf();
 	const auto realSplitIndex = (splitIndex >= 0)
 		? splitIndex
 		: (splitsCount + splitIndex);
@@ -2055,6 +2062,8 @@ void ApiWrap::requestChatMessages(
 				if (realPeerInput.type() == mtpc_inputPeerChannel
 					&& !_chatProcess->info.onlyMyMessages) {
 
+					// Perhaps we just left / were kicked from channel.
+					// Just switch to only my messages.
 					_chatProcess->info.onlyMyMessages = true;
 					requestChatMessages(
 						splitIndex,
@@ -2091,9 +2100,14 @@ MTPMessagesFilter ApiWrap::getFilter() const {
 
 	int selectedCount = photo + video + file + voice + round + gif + sticker + audio + link;
 
+	// Conservative filtering to avoid "broken scan" issues reported by users.
+	// Prefer Empty (Full History scan) when combinations are complex or buggy filters are suspected.
+
 	if (selectedCount == 0) return MTP_inputMessagesFilterEmpty();
 
 	if (selectedCount == 1) {
+		// Single types are generally safe if the server supports them.
+		// Photos and Videos individually usually work.
 		if (photo) return MTP_inputMessagesFilterPhotos();
 		if (video) return MTP_inputMessagesFilterVideo();
 		if (audio) return MTP_inputMessagesFilterMusic();
@@ -2102,9 +2116,15 @@ MTPMessagesFilter ApiWrap::getFilter() const {
 		if (gif) return MTP_inputMessagesFilterGif();
 		if (link) return MTP_inputMessagesFilterUrl();
 		if (file) return MTP_inputMessagesFilterDocument();
+		
+		// Stickers MUST use Empty because there is no reliable Sticker filter that covers all sticker types
+		// without missing some or being identical to Document.
 		if (sticker) return MTP_inputMessagesFilterEmpty();
 	}
 
+	// For any combination (2 or more), default to Empty to prevent "hangs" or missed messages.
+	// The user reported specific issues with Photo+Video and File+Sticker.
+	// Reverting to full scan ensures accuracy at the cost of speed, which is acceptable for correctness.
 	return MTP_inputMessagesFilterEmpty();
 }
 
@@ -2132,11 +2152,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 	_chatProcess->processing = true; // Guard against premature finish
 	const auto guard = gsl::finally([&] {
-		if (_chatProcess) {
-			_chatProcess->processing = false;
-			if (_chatProcess->pendingFiles == 0) {
-				finishMessagesSlice();
-			}
+		_chatProcess->processing = false;
+		if (_chatProcess && _chatProcess->pendingFiles == 0) {
+			finishMessagesSlice();
 		}
 	});
 
@@ -2270,7 +2288,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		if (required == 0) onMessagePartDone(i, true);
 	}
 
-	if (_chatProcess && _chatProcess->pendingFiles > 0) resolveCustomEmoji(); else finishMessagesSlice();
+	if (_chatProcess->pendingFiles > 0) resolveCustomEmoji(); else finishMessagesSlice();
 }
 
 void ApiWrap::collectMessagesCustomEmoji(const Data::MessagesSlice &slice) {
@@ -2398,11 +2416,9 @@ void ApiWrap::loadNextMessageFile() {
 
 	_chatProcess->processing = true;
 	const auto guard = gsl::finally([&] {
-		if (_chatProcess) {
-			_chatProcess->processing = false;
-			if (_chatProcess->pendingFiles == 0) {
-				finishMessagesSlice();
-			}
+		_chatProcess->processing = false;
+		if (_chatProcess && _chatProcess->pendingFiles == 0) {
+			finishMessagesSlice();
 		}
 	});
 
@@ -2411,6 +2427,8 @@ void ApiWrap::loadNextMessageFile() {
 			continue;
 		}
 		auto &message = _chatProcess->slice->list[i];
+		// Identification and stat increments for non-file items moved to loadMessagesFiles.
+		// Identification for files still happens here or in processFileLoad.
 
 		const auto splitIndex = _chatProcess->info.splits[
 			_chatProcess->localSplitIndex];
@@ -2464,6 +2482,9 @@ void ApiWrap::loadNextMessageFile() {
 				return;
 			}
 		}
+
+		// Progress for all items is now sent in loadMessagesFiles.
+		// Files will send additional updates as they download.
 	}
 }
 
@@ -2477,7 +2498,13 @@ void ApiWrap::finishMessagesSlice() {
 			} else {
 				_chatProcess->lastSlice = false;
 				_chatProcess->largestIdPlusOne = 1;
-				requestMessagesSlice();
+				const auto minId = _chatProcess->fromId;
+				const auto maxId = _chatProcess->tillId;
+				if (minId > maxId) {
+					requestMessagesSlice();
+				} else {
+					requestMessagesSlice();
+				}
 			}
 		}
 		return;
@@ -2529,7 +2556,7 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 	}
 	const auto &process = *it->second;
 
-	if (!_chatProcess) return false;
+	Expects(_chatProcess != nullptr);
 
 	auto mIt = _chatProcess->fileToMessageIndex.find(progress.randomId);
 	int messageIndexInSlice = 0;
@@ -2695,10 +2722,12 @@ void ApiWrap::processFileLoad(
 
 	if (_isScanning) {
 		if (message || story) {
+			// Align stats logic with export (below)
 			if (type != Type(0) && !isThumb && origin.messageId != 0) {
 				const bool isLinkOrText = (type == Type::Link || type == Type::Text);
 				const bool ignoreSize = fullHistorySelected || isLinkOrText;
 				
+				// Deduplicate logic identical to export
 				if (typeSelected && (ignoreSize || !oversized)) {
 					const bool locationValid = (locationKey.id != 0 || locationKey.type != 0);
 					const auto it = locationValid ? _scanVisited.find(locationKey) : _scanVisited.end();
@@ -2733,6 +2762,7 @@ void ApiWrap::processFileLoad(
 				_stats->increment(type, fullSize, willBeUniqueInChat);
 			}
 			
+			// For links, we track them to write unique_links.txt later, even if we don't "download" a file.
 			if (type == Type::Link && !alreadyVisited) {
 				if (locationValid) {
 					visited[locationKey] = file.content.isEmpty() ? QString("link") : QString::fromUtf8(file.content); 
@@ -2920,17 +2950,21 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 	const auto requestsCount = GetConcurrentChunksForFile(process.size);
 	const auto chunkSize = GetChunkSizeForFile(process.size);
 
+	// Count how many requests are already in flight or scheduled in the throttler
 	const auto currentScheduled = int(process.scheduledOffsets.size());
 	if (currentScheduled >= requestsCount) {
 		return;
 	}
 
+	// How many more chunks can we schedule?
 	int slotsAvailable = requestsCount - currentScheduled;
 
+	// First, retry failed offsets (if any)
 	while (slotsAvailable > 0 && !process.pendingRetryOffsets.empty()) {
 		const auto retryOffset = process.pendingRetryOffsets.front();
 		process.pendingRetryOffsets.pop_front();
 
+		// If this offset is already scheduled, skip it
 		if (process.scheduledOffsets.contains(retryOffset)) {
 			continue;
 		}
@@ -2946,10 +2980,11 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 
 		process.scheduledOffsets.insert(retryOffset);
 
+		// Schedule via throttler - look up process by ID inside lambda
 		_throttler.schedule([=] {
 			const auto it = _fileProcesses.find(randomId);
 			if (it == end(_fileProcesses) || !it->second->active) {
-				return;
+				return; // Process was removed or deactivated
 			}
 			auto &proc = *it->second;
 
@@ -2960,6 +2995,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 			).done([=](const MTPupload_File &result) {
 				filePartDone(randomId, retryOffset, result);
 			}).fail([=](const MTP::Error &error) {
+				// Handle errors - same as before but look up by ID
 				if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
 					auto &p = *itp->second;
 					p.scheduledOffsets.erase(retryOffset);
@@ -3016,6 +3052,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 			if (requestId) {
 				proc.activeRequestOffsets.emplace(requestId, retryOffset);
 			} else {
+				// Failed to send request immediately
 				if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
 					auto &p = *itp->second;
 					p.scheduledOffsets.erase(retryOffset);
@@ -3027,6 +3064,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 		--slotsAvailable;
 	}
 
+	// Then fill remaining slots with fresh offsets
 	while (slotsAvailable > 0) {
 		if (process.size > 0 && process.offset >= process.size) {
 			break;
@@ -3037,10 +3075,11 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 		process.offset += chunkSize;
 		process.scheduledOffsets.insert(offset);
 
+		// Schedule via throttler - look up process by ID inside lambda
 		_throttler.schedule([=] {
 			const auto it = _fileProcesses.find(randomId);
 			if (it == end(_fileProcesses) || !it->second->active) {
-				return;
+				return; // Process was removed or deactivated
 			}
 			auto &proc = *it->second;
 
@@ -3051,6 +3090,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 			).done([=](const MTPupload_File &result) {
 				filePartDone(randomId, offset, result);
 			}).fail([=](const MTP::Error &error) {
+				// Handle errors
 				if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
 					auto &p = *itp->second;
 					p.scheduledOffsets.erase(offset);
@@ -3111,6 +3151,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 			if (requestId) {
 				proc.activeRequestOffsets.emplace(requestId, offset);
 			} else {
+				// Failed to send request immediately
 				if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
 					auto &p = *itp->second;
 					p.scheduledOffsets.erase(offset);
@@ -3122,7 +3163,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 		--slotsAvailable;
 
 		if (process.size == 0) {
-			break;
+			break; // Unknown size, only request one chunk at a time
 		}
 	}
 
@@ -3154,6 +3195,7 @@ void ApiWrap::filePartDone(
 		return;
 	}
 
+	// Clear retry bookkeeping for this offset on success.
 	if (const auto itc = process.retryCounts.find(offset); itc != process.retryCounts.end()) {
 		process.retryCounts.erase(itc);
 	}
@@ -3216,6 +3258,9 @@ void ApiWrap::filePartDone(
 	if (process.activeRequestOffsets.empty() && process.pendingRetryOffsets.empty() && (allPartsRequested || receivedEmpty)) {
 		finishFile(randomId, process.relativePath);
 	} else if (process.active) {
+		// CORRECTED: A chunk slot for this file just opened up.
+		// Try to immediately fill it with the next chunk for the same file.
+		// No timers or delays here.
 		loadFilePart(process);
 		if (*_lifetimeGuard) {
 			_throttler.tryProcessQueue();
@@ -3328,6 +3373,7 @@ void ApiWrap::filePartExtractReference(
 					process.location,
 					message.thumb().file.location);
 				if (refresh1 || refresh2) {
+					// Also update the original reference in the message.
 					Data::RefreshFileReference(
 						process.fileRef.location,
 						process.location);
@@ -3371,6 +3417,7 @@ void ApiWrap::filePartExtractReference(
 					process.location,
 					story.thumb().file.location);
 				if (refresh1 || refresh2) {
+					// Also update the original reference in the story.
 					Data::RefreshFileReference(
 						process.fileRef.location,
 						process.location);
@@ -3405,10 +3452,13 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 		auto &done = _chatProcess->messageFilesDone[index];
 		const auto need = _chatProcess->messageFilesRequired[index];
 		if (++done == std::max(need, 1)) {
+			// Every message bubble processed in the range increments this
+			// if it was selected for the progress bar (Y count).
 			if (_chatProcess->messageItemsCount[index] > 0) {
 				_chatProcess->messagesProcessed++;
 			}
 
+			// Trigger progress update for finished message
 			_chatProcess->fileProgress({
 				.randomId = 0,
 				.path = QString(),
@@ -3418,7 +3468,7 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 				.isAuxiliary = true,
 				.messagesTextCount = _chatProcess->messagesTextProcessed,
 				.messagesMediaCount = _chatProcess->messagesMediaProcessed,
-				.messagesTotalCount = _chatProcess->messagesProcessed,
+				.messagesTotalCount = _chatProcess->messagesProcessed, // Real-time finished count
 				.messagesTextTotal = _chatProcess->messagesInRangeCount,
 				.messagesInRangeCount = _chatProcess->messagesInRangeCount,
 				.messagesUniqueCount = _chatProcess->messagesUniqueCount

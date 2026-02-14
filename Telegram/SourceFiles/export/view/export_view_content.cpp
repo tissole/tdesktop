@@ -217,6 +217,8 @@ Content ContentFromState(const FinishedState &state) {
 	int totalTotalMessagesCount = 0;
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
+	const bool linksOnly = (state.breakdown.size() == 1 && state.breakdown.begin()->first == Type::Link);
+	(void)linksOnly;
 
 	for (const auto type : order) {
 		const auto it = state.breakdown.find(type);
@@ -237,7 +239,6 @@ Content ContentFromState(const FinishedState &state) {
 		case Type::Text: label = tr::lng_export_option_text_messages(tr::now); break;
 		case Type::Link: label = tr::lng_export_option_links(tr::now); break;
 		}
-		
 		QString text;
 		const bool hasDuplicates = (item.uniqueCount != item.totalCount)
 			|| (item.uniqueSize != item.totalSize);
@@ -269,6 +270,10 @@ Content ContentFromState(const FinishedState &state) {
 		if (type != Type::Link) {
 			totalUniqueMessagesCount += item.uniqueCount;
 			totalTotalMessagesCount += item.totalCount;
+			totalUniqueMediaSize += item.uniqueSize;
+			totalMediaSize += item.totalSize;
+		} else if (type == Type::Text) {
+			totalTotalMessagesCount += item.totalCount;
 		}
 
 		categoriesCount++;
@@ -296,3 +301,5 @@ Content ContentFromState(const FinishedState &state) {
 
 } // namespace View
 } // namespace Export
+
+
