@@ -1076,12 +1076,13 @@ void SettingsWidget::addMediaOption(
 			const bool linkSelected = (data.media.types & MediaType::Link);
 			const bool historySelected = (data.media.types & MediaType::FullHistory);
 			const bool otherMediaSelected = (data.media.types & ~(MediaType::Link | MediaType::FullHistory));
+			const bool chatSelected = (data.types & Settings::Type::AnyChatsMask);
 
 			bool enabled = true;
 			if (type == MediaType::Link) {
-				enabled = checked || (!historySelected && !otherMediaSelected);
+				enabled = checked || (!historySelected && !otherMediaSelected && !chatSelected);
 			} else if (type == MediaType::FullHistory) {
-				enabled = checked || (!linkSelected && !otherMediaSelected);
+				enabled = checked || (!linkSelected && !otherMediaSelected && !chatSelected);
 			} else {
 				enabled = checked || (!linkSelected && !historySelected);
 			}
@@ -1274,7 +1275,6 @@ void SettingsWidget::setScanning(bool scanning) {
 		if (scanning) {
 			_hasScanResults = false;
 			_scanResults.clear();
-			if (_scanResultsLabel) _scanResultsLabel->setText(QString());
 		}
 		_changes.fire_copy(readData());
 	}
@@ -1394,7 +1394,10 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 				totalMediaSize += item.totalSize;
 			}
 
-			totalUniqueMessagesCount += item.uniqueCount; totalTotalMessagesCount += item.totalCount;
+			if (type != MediaType::Link) {
+				totalUniqueMessagesCount += item.uniqueCount;
+				totalTotalMessagesCount += item.totalCount;
+			}
 		}
 	}
 	if (totalTotalMessagesCount > 0) {
@@ -1451,4 +1454,3 @@ void SettingsWidget::resetToDefault() {
 
 } // namespace View
 } // namespace Export
-

@@ -1958,9 +1958,6 @@ void ApiWrap::requestMessagesSlice() {
 			if constexpr (MTPDmessages_messages::Is<decltype(data)>()) {
 				_chatProcess->lastSlice = true;
 			}
-			if (data.vmessages().v.isEmpty()) {
-				_chatProcess->lastSlice = true;
-			}
 			loadMessagesFiles(Data::ParseMessagesSlice(
 				_chatProcess->context,
 				data.vmessages(),
@@ -2164,16 +2161,8 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		const auto skippedByDate = Data::SkipMessageByDate(message, *_settings);
 		if (skippedByDate) {
-			const auto tooOld = (_settings->useIdRange && message.id < _settings->singlePeerFromId)
-				|| (!_settings->useIdRange && _settings->singlePeerFrom > 0 && message.date < _settings->singlePeerFrom);
-			if (tooOld) {
-				_chatProcess->lastSlice = true;
-				for (int j = i; j < int(s.list.size()); ++j) {
-					onMessagePartDone(j, false);
-				}
-				break;
-			}
-			const auto tooOld = (_settings->useIdRange && message.id < _settings->singlePeerFromId) || (!_settings->useIdRange && _settings->singlePeerFrom > 0 && message.date < _settings->singlePeerFrom); if (tooOld) { _chatProcess->lastSlice = true; break; } onMessagePartDone(i); continue;
+			onMessagePartDone(i);
+			continue;
 		}
 
 		// Identification and stat increments for non-file items
@@ -2244,9 +2233,8 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		}
 
 		// selected means "should be in HTML/JSON"
-		// Requirement: Links, Text, and Full History bypass size limits for selection.
-		// Media items are selected if they match the type filter, size is handled during stats/download.
-		bool selected = (mediaSelected)
+		// Requirement: Total scan should respect size selected for media filters.
+		bool selected = (mediaSelected && (!oversized || fullHistorySelected))
 			|| (hasAnyLink && linkSelectedForStats) 
 			|| (!hasMedia && ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory)));
 
@@ -2810,9 +2798,8 @@ void ApiWrap::processFileLoad(
 				// Links and Text should be counted regardless of size settings (unless they are specifically excluded, which is handled by typeSelected)
 				const bool isLinkOrText = (type == Type::Link || type == Type::Text);
 				
-				// Requirement: Total scan should respect size selected for media filters.
-				const bool ignoreSize = fullHistorySelected || isLinkOrText;
-				if (typeSelected && (ignoreSize || !oversized)) {
+				// Total scan MUST strictly respect size selected, UNLESS Full History is selected or it is a Link/Text.
+				if (typeSelected && ((!oversized && !fullHistorySelected) || fullHistorySelected || isLinkOrText)) {
 					const bool locationValid = (locationKey.id != 0 || locationKey.type != 0);
 					const bool alreadyVisited = locationValid && _scanVisited.find(locationKey) != _scanVisited.end();
 					const bool willBeUniqueInChat = !alreadyVisited;
@@ -2833,15 +2820,12 @@ void ApiWrap::processFileLoad(
 		&& origin.messageId != 0
 		&& !isThumb) {
 		const bool isLinkOrText = (type == Type::Link || type == Type::Text);
-		const bool ignoreSize = fullHistorySelected || isLinkOrText;
-		if (typeSelected) {
+		if (typeSelected && (!oversized || fullHistorySelected || isLinkOrText)) {
 			auto &visited = _exportVisited;
 			const bool locationValid = (locationKey.id != 0 || locationKey.type != 0);
 			const auto it = locationValid ? visited.find(locationKey) : visited.end();
 			const bool alreadyVisited = (it != visited.end());
-			
-			const bool passSize = ignoreSize || !oversized;
-			const bool willBeUniqueInChat = !alreadyVisited && passSize;
+			const bool willBeUniqueInChat = !alreadyVisited;
 
 			if ((message || story) && type != Type(0)) {
 				_stats->increment(type, fullSize, willBeUniqueInChat);
@@ -2854,13 +2838,11 @@ void ApiWrap::processFileLoad(
 				}
 			}
 
-			if (passSize && !skipDownload) {
+			if (!alreadyVisited && !skipDownload) {
 				_stats->incrementUserMediaFiles();
-				if (!alreadyVisited && locationValid && type != Type::Link) {
+				if (locationValid && type != Type::Link) {
 					visited[locationKey] = QString(); // Mark as pending
 				}
-			} else if (alreadyVisited && !skipDownload) {
-				_stats->incrementUserMediaFiles();
 			}
 		}
 	}
@@ -3611,4 +3593,3 @@ ApiWrap::~ApiWrap() {
 }
 
 } // namespace Export
-

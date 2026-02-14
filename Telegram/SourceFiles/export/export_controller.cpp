@@ -930,13 +930,11 @@ void ControllerObject::setFinishedState() {
 	for (const auto &pair : breakdown) {
 		const auto type = pair.first;
 		const auto &item = pair.second;
-		if (type != Type::Link && type != Type::Text) {
+		if (type != Type::Link) {
 			totalUniqueCount += item.uniqueCount;
-			totalTotalCount += item.totalCount;
 			totalUniqueSize += item.uniqueSize;
-			totalTotalSize += item.totalSize;
-		} else if (type == Type::Text) {
 			totalTotalCount += item.totalCount;
+			totalTotalSize += item.totalSize;
 		}
 	}
 

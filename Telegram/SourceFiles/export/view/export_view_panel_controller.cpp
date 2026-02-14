@@ -132,8 +132,6 @@ void ResolveSettings(not_null<Main::Session*> session, Settings &settings) {
 	}
 	if (!settings.onlySinglePeer()) {
 		settings.singlePeerFrom = settings.singlePeerTill = 0;
-	} else {
-		settings.types = Settings::Types(0);
 	}
 }
 
@@ -221,7 +219,6 @@ void PanelController::showSettings() {
 		const auto scanning = settingsRaw->isScanning();
 		const auto hasResults = settingsRaw->hasScanResults();
 		if (scanning) {
-			settingsRaw->setScanning(false);
 			settingsRaw->resetToDefault();
 			_process->cancelExportFast();
 		} else if (hasResults) {
