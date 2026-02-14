@@ -937,9 +937,6 @@ void ControllerObject::setFinishedState() {
 			totalTotalSize += item.totalSize;
 		} else if (type == Type::Text) {
 			totalTotalCount += item.totalCount;
-		} else if (type == Type::Link && breakdown.size() == 1) {
-			totalUniqueCount += item.uniqueCount;
-			totalTotalCount += item.totalCount;
 		}
 	}
 
