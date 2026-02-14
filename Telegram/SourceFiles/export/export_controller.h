@@ -143,7 +143,7 @@ using State = std::variant<
 class Controller {
 public:
 	Controller(
-		Main::Session *session,
+		not_null<Main::Session*> session,
 		const MTPInputPeer &peer,
 		const QString &name = QString(),
 		int64 id = 0);
