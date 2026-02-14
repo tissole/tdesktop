@@ -3663,18 +3663,14 @@ QByteArray HtmlWriter::statsBlock() const {
 			|| (item.uniqueSize != item.totalSize);
 
 		result.append("<div class=\"details_entry details\">").append(label).append(": ");
-		if (type == Type::Text || type == Type::Link) {
-			if (hasDuplicates) {
-				result.append(QByteArray::number(item.uniqueCount)).append(", ");
-			}
+		if (type == Type::Text) {
 			result.append(QByteArray::number(item.totalCount));
+		} else if (type == Type::Link) {
+			result.append(QByteArray::number(item.uniqueCount)).append(", ").append(QByteArray::number(item.totalCount));
 		} else {
 			const auto uniqueStr = QByteArray::number(item.uniqueCount) + " (" + Data::FormatFileSize(item.uniqueSize) + ")";
 			const auto totalStr = QByteArray::number(item.totalCount) + " (" + Data::FormatFileSize(item.totalSize) + ")";
-			if (hasDuplicates) {
-				result.append(uniqueStr).append(", ");
-			}
-			result.append(totalStr);
+			result.append(uniqueStr).append(", ").append(totalStr);
 			totalUniqueMediaSize += item.uniqueSize;
 			totalMediaSize += item.totalSize;
 		}
@@ -3689,8 +3685,8 @@ QByteArray HtmlWriter::statsBlock() const {
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
 		const auto uniqueStr = QByteArray::number(totalUniqueMessagesCount) + " (" + Data::FormatFileSize(totalUniqueMediaSize) + ")";
 		const auto totalStr = QByteArray::number(totalTotalMessagesCount) + " (" + Data::FormatFileSize(totalMediaSize) + ")";
-		result.append("<div class=\"details_entry details bold\">Total unique/Total messages: ");
-		result.append(uniqueStr).append("/").append(totalStr).append("</div>\n");
+		result.append("<div class=\"details_entry details bold\">Total media files: ");
+		result.append(uniqueStr).append(", ").append(totalStr).append("</div>\n");
 	}
 
 	result.append("</div>\n");

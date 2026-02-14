@@ -1405,8 +1405,8 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 		MTP_vector<MTPReaction>(), // saved_reaction
 		MTP_int(0), // top_msg_id
 		filter,
-		MTP_int(_settings->singlePeerFrom), // min_date
-		MTP_int(_settings->singlePeerTill), // max_date
+		MTP_int(0), // min_date
+		MTP_int(0), // max_date
 		MTP_int(0), // offset_id
 		MTP_int(0), // add_offset
 		MTP_int(1), // limit
@@ -2037,8 +2037,8 @@ void ApiWrap::requestChatMessages(
 			MTP_vector<MTPReaction>(), // saved_reaction
 			MTP_int(0), // top_msg_id
 			filter,
-			MTP_int(_settings->singlePeerFrom), // min_date
-			MTP_int(_settings->singlePeerTill), // max_date
+			MTP_int(0), // min_date
+			MTP_int(0), // max_date
 			MTP_int(offsetId),
 			MTP_int(addOffset),
 			MTP_int(limit),
@@ -2128,7 +2128,7 @@ MTPMessagesFilter ApiWrap::getFilter() const {
 	if (round) return MTP_inputMessagesFilterRoundVideo();
 	if (gif) return MTP_inputMessagesFilterGif();
 	if (audio) return MTP_inputMessagesFilterMusic();
-	if (sticker) return MTP_inputMessagesFilterDocument(); // Stickers are documents, faster than Empty
+	if (sticker) return MTP_inputMessagesFilterEmpty(); // Stickers need full scan for 100% reliability
 	if (link) return MTP_inputMessagesFilterUrl();
 
 	return MTP_inputMessagesFilterEmpty();
@@ -2327,6 +2327,11 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			.messagesInRangeCount = _chatProcess->messagesInRangeCount,
 			.messagesUniqueCount = _chatProcess->messagesUniqueCount
 		});
+
+		if (_isScanning) {
+			onMessagePartDone(i, true);
+			continue;
+		}
 
 		int required = 0;
 		if (message.file().location) {

@@ -77,7 +77,7 @@ void TopBar::updateData(Content &&content) {
 	}
 	const auto &row = content.rows[0];
 	_infoLeft->setMarkedText(
-		tr::lng_export_progress_title(tr::now, Ui::Text::Bold));
+		(content.isScanning ? tr::lng_export_scanning : tr::lng_export_progress_title)(tr::now, Ui::Text::Bold));
 	_infoMiddle->setText(row.label);
 	_infoRight->setMarkedText(Ui::Text::Colorized(row.info));
 	resizeToWidthInfo(width());

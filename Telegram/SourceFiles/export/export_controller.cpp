@@ -39,6 +39,9 @@ void WriteScanStatsFile(
 		int messagesCount,
 		int64 chatId,
 		const QString &chatName) {
+	if (!QDir().mkpath(path)) {
+		return;
+	}
 	auto sanitizedName = chatName;
 	sanitizedName.replace(QRegularExpression("[^a-zA-Z0-9_-]"), "_");
 	const auto fileName = "scan_results_" + QString::number(chatId) + "_" + sanitizedName + ".txt";
@@ -74,12 +77,12 @@ void WriteScanStatsFile(
 		switch (type) {
 		case Type::Photo: label = tr::lng_export_option_photos(tr::now); break;
 		case Type::Video: label = tr::lng_export_option_video_files(tr::now); break;
+		case Type::VoiceMessage: label = tr::lng_export_option_voice_messages(tr::now); break;
 		case Type::VideoMessage: label = tr::lng_export_option_video_messages(tr::now); break;
 		case Type::Audio: label = tr::lng_export_option_audios(tr::now); break;
-		case Type::VoiceMessage: label = tr::lng_export_option_voice_messages(tr::now); break;
-		case Type::File: label = tr::lng_export_option_files(tr::now); break;
 		case Type::Sticker: label = tr::lng_export_option_stickers(tr::now); break;
 		case Type::GIF: label = tr::lng_export_option_gifs(tr::now); break;
+		case Type::File: label = tr::lng_export_option_files(tr::now); break;
 		case Type::Text: label = tr::lng_export_option_text_messages(tr::now); break;
 		case Type::Link: label = tr::lng_export_option_links(tr::now); break;
 		}
@@ -92,12 +95,11 @@ void WriteScanStatsFile(
 		if (type == Type::Text) {
 			out << label << ": " << item.totalCount << "\n";
 		} else if (type == Type::Link) {
-			out << "Unique " << label << "/Total " << label << ": " << item.uniqueCount << "/" << item.totalCount << "\n";
+			out << label << ": " << item.uniqueCount << ", " << item.totalCount << "\n";
 		} else {
-			out << "Unique " << label << "/Total " << label << ": ";
 			const auto uniqueStr = QString::number(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
 			const auto totalStr = QString::number(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
-			out << uniqueStr << "/" << totalStr << "\n";
+			out << label << ": " << uniqueStr << ", " << totalStr << "\n";
 			totalUniqueMediaSize += item.uniqueSize;
 			totalMediaSize += item.totalSize;
 		}
@@ -111,8 +113,7 @@ void WriteScanStatsFile(
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
 		const auto uniqueStr = QString::number(totalUniqueMessagesCount) + " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 		const auto totalStr = QString::number(totalTotalMessagesCount) + " (" + Ui::FormatSizeText(totalMediaSize) + ")";
-		out << "\nTotal unique/Total messages: ";
-		out << uniqueStr << "/" << totalStr << "\n";
+		out << "\nTotal media files: " << uniqueStr << ", " << totalStr << "\n";
 	} else if (totalTotalMessagesCount <= 0 && categoriesCount > 0) {
 		out << "\nNo items found in this range.\n";
 	} else if (categoriesCount <= 0) {

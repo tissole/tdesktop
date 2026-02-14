@@ -1078,20 +1078,7 @@ void SettingsWidget::addMediaOption(
 	value()
 		| rpl::map([=](const Settings &data) {
 			const bool checked = (data.media.types & type) == type;
-			const bool linkSelected = (data.media.types & MediaType::Link);
-			const bool historySelected = (data.media.types & MediaType::FullHistory);
-			const bool otherMediaSelected = (data.media.types & ~(MediaType::Link | MediaType::FullHistory));
-			const bool chatSelected = (data.types != Settings::Types(0));
-
-			bool enabled = true;
-			if (type == MediaType::Link) {
-				enabled = !historySelected && !otherMediaSelected && !chatSelected;
-			} else if (type == MediaType::FullHistory) {
-				enabled = !linkSelected && !otherMediaSelected && !chatSelected;
-			} else {
-				enabled = !linkSelected && !historySelected;
-			}
-			return std::make_pair(checked, enabled);
+			return std::make_pair(checked, true);
 		})
 		| rpl::distinct_until_changed()
 		| rpl::start_with_next([=](std::pair<bool, bool> state) {
@@ -1300,7 +1287,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	}
 
 	if (totalTotalMessagesCount <= 0) {
-		clearScanResults();
+		resetToDefault();
 		using MediaType = MediaSettings::Type;
 		const auto types = readData().media.types;
 		const auto hasMedia = (types & MediaType::MediaMask) || (types & MediaType::Sticker) || (types & MediaType::GIF) || (types & MediaType::File);
@@ -1376,24 +1363,18 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 			const bool hasDuplicates = (item.uniqueCount != item.totalCount)
 				|| (item.uniqueSize != item.totalSize);
 
-			if (type == MediaType::Text || type == MediaType::Link) {
-				if (hasDuplicates) {
-					text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
-						+ ", " + Lang::FormatCountDecimal(item.totalCount) + "\n";
-				} else {
-					text += label + ": " + Lang::FormatCountDecimal(item.totalCount) + "\n";
-				}
+			if (type == MediaType::Text) {
+				text += label + ": " + Lang::FormatCountDecimal(item.totalCount) + "\n";
+			} else if (type == MediaType::Link) {
+				text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
+					+ ", " + Lang::FormatCountDecimal(item.totalCount) + "\n";
 			} else {
 				const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount)
 					+ " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
 				const auto totalStr = Lang::FormatCountDecimal(item.totalCount)
 					+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
 
-				if (hasDuplicates) {
-					text += label + ": " + uniqueStr + ", " + totalStr + "\n";
-				} else {
-					text += label + ": " + totalStr + "\n";
-				}
+				text += label + ": " + uniqueStr + ", " + totalStr + "\n";
 
 				totalUniqueMediaSize += item.uniqueSize;
 				totalMediaSize += item.totalSize;
@@ -1407,17 +1388,13 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	}
 	if (totalTotalMessagesCount > 0) {
 		if (categoriesCount > 1) {
-			const auto label = "Total messages and media files: ";
+			const auto label = "Total media files: ";
 			const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
 				+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 			const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
-			if (totalUniqueMessagesCount != totalTotalMessagesCount) {
 			text += "\n" + QString(label) + uniqueStr + ", " + totalStr;
-			} else {
-			text += "\n" + QString(label) + totalStr;
-			}
 		}
 	}
 	_scanResultsLabel->setText(text.trimmed());
@@ -1433,6 +1410,7 @@ void SettingsWidget::clearScanResults() {
 }
 
 void SettingsWidget::resetToDefault() {
+	setScanning(false);
 	changeData([&](Settings &data) {
 		const auto oldSinglePeer = data.singlePeer;
 		const auto oldName = data.singlePeerName;

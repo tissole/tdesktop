@@ -156,15 +156,14 @@ Content ContentFromState(
 				if (type == MediaType::Text) {
 					text = label + ": " + Lang::FormatCountDecimal(item.totalCount);
 				} else if (type == MediaType::Link) {
-					text = "Unique " + label + "/Total " + label + ": " 
-						+ Lang::FormatCountDecimal(item.uniqueCount) + "/" 
-						+ Lang::FormatCountDecimal(item.totalCount);
+					text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) 
+						+ ", " + Lang::FormatCountDecimal(item.totalCount);
 				} else {
-					text = "Unique " + label + "/Total " + label + ": " 
-						+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + ")/"
+					text = label + ": " 
+						+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
 						+ Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
 				}
-				result.rows.push_back({ Content::kDoneId, text, QString(), 1. });
+				result.rows.push_back({ "stat_" + QString::number((int)type), text, QString(), 1. });
 			}
 		}
 	}
@@ -224,8 +223,10 @@ Content ContentFromState(const FinishedState &state) {
 
 	for (const auto type : order) {
 		const auto it = state.breakdown.find(type);
-		if (!showAllCategories && (it == state.breakdown.end() || it->second.totalCount <= 0)) {
-			continue;
+		if (it == state.breakdown.end() || it->second.totalCount <= 0) {
+			if (!showAllCategories) {
+				continue;
+			}
 		}
 		const auto &item = (it != state.breakdown.end()) ? it->second : Output::StatItem();
 		QString label;
@@ -246,12 +247,11 @@ Content ContentFromState(const FinishedState &state) {
 		if (type == Type::Text) {
 			text = label + ": " + Lang::FormatCountDecimal(item.totalCount);
 		} else if (type == Type::Link) {
-			text = "Unique " + label + "/Total " + label + ": " 
-				+ Lang::FormatCountDecimal(item.uniqueCount) + "/" 
-				+ Lang::FormatCountDecimal(item.totalCount);
+			text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) 
+				+ ", " + Lang::FormatCountDecimal(item.totalCount);
 		} else {
-			text = "Unique " + label + "/Total " + label + ": " 
-				+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + ")/"
+			text = label + ": " 
+				+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
 				+ Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
 
 			totalUniqueMediaSize += item.uniqueSize;
@@ -268,13 +268,13 @@ Content ContentFromState(const FinishedState &state) {
 	}
 
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
-		const auto label = "Total unique/Total messages: ";
+		const auto label = "Total media files: ";
 		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 		const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
-		QString totalText = label + uniqueStr + "/" + totalStr;
+		QString totalText = label + uniqueStr + ", " + totalStr;
 		result.rows.push_back({ "stat_summary", totalText, QString(), 1. });
 	}
 
