@@ -41,7 +41,7 @@ struct Content {
 	return std::move(
 		state
 	) | rpl::filter([](const State &state) {
-		return v::is<ProcessingState>(state) || v::is<FinishedState>(state) || v::is<ScanDoneState>(state) || v::is<CancelledState>(state);
+		return v::is<ProcessingState>(state) || v::is<FinishedState>(state);
 	}) | rpl::map([=](const State &state) {
 		if (const auto process = std::get_if<ProcessingState>(&state)) {
 			return ContentFromState(*process);

@@ -2786,10 +2786,11 @@ void ApiWrap::processFileLoad(
 			if (type != Type(0) && !isThumb && (origin.messageId != 0 || origin.storyId != 0)) {
 				// Total scan MUST strictly respect size selected, UNLESS Full History is selected or it is a Link/Text.
 				if (typeSelected && ((!oversized && !fullHistorySelected) || fullHistorySelected)) {
-					const bool alreadyVisited = (locationKey.id || locationKey.type) && _scanVisited.find(locationKey) != _scanVisited.end();
-					const bool willBeUniqueInChat = !alreadyVisited;
+					const bool validLocation = (locationKey.id != 0 || locationKey.type != 0);
+					const bool alreadyVisited = validLocation && _scanVisited.find(locationKey) != _scanVisited.end();
+					const bool willBeUniqueInChat = validLocation && !alreadyVisited;
 					
-					if (!alreadyVisited && (locationKey.id || locationKey.type)) {
+					if (willBeUniqueInChat) {
 						_scanVisited.emplace(locationKey, QString());
 					}
 					
@@ -2807,9 +2808,10 @@ void ApiWrap::processFileLoad(
 		const bool isLinkOrText = (type == Type::Link || type == Type::Text);
 		if (typeSelected && (!oversized || fullHistorySelected || isLinkOrText)) {
 			auto &visited = _exportVisited;
-			const auto it = (locationKey.id != 0 || locationKey.type != 0) ? visited.find(locationKey) : visited.end();
+			const bool validLocation = (locationKey.id != 0 || locationKey.type != 0);
+			const auto it = validLocation ? visited.find(locationKey) : visited.end();
 			const bool alreadyVisited = (it != visited.end());
-			const bool willBeUniqueInChat = !alreadyVisited;
+			const bool willBeUniqueInChat = validLocation && !alreadyVisited;
 
 			if ((message || story) && type != Type(0)) {
 				_stats->increment(type, fullSize, willBeUniqueInChat);
@@ -2817,14 +2819,14 @@ void ApiWrap::processFileLoad(
 			
 			// For links, we track them to write unique_links.txt later, even if we don't "download" a file.
 			if (type == Type::Link && !alreadyVisited) {
-				if (locationKey.id != 0 || locationKey.type != 0) {
+				if (validLocation) {
 					visited[locationKey] = file.content.isEmpty() ? QString("link") : QString::fromUtf8(file.content); 
 				}
 			}
 
 			if (!alreadyVisited && !skipDownload) {
 				_stats->incrementUserMediaFiles();
-				if ((locationKey.id != 0 || locationKey.type != 0) && type != Type::Link) {
+				if (validLocation && type != Type::Link) {
 					visited[locationKey] = QString(); // Mark as pending
 				}
 			}
@@ -2844,8 +2846,8 @@ void ApiWrap::processFileLoad(
 				return;
 			} else {
 				// File is pending download from another message.
-				// For now, we allow the duplicate call to proceed, 
-				// but stats are already handled correctly above.
+				_pendingFileCallbacks[locationKey].push_back(std::move(done));
+				return;
 			}
 		}
 	}
@@ -2993,6 +2995,17 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 		process->fileRef.skipReason = Data::File::SkipReason::Unavailable;
 	} else {
 		_fileCache->save(process->location, relativePath);
+	}
+
+	const auto locationKey = ComputeLocationKey(process->location);
+	if (locationKey.id != 0 || locationKey.type != 0) {
+		auto it = _pendingFileCallbacks.find(locationKey);
+		if (it != _pendingFileCallbacks.end()) {
+			for (auto &callback : it->second) {
+				callback(relativePath);
+			}
+			_pendingFileCallbacks.erase(it);
+		}
 	}
 
 	process->done(relativePath);
@@ -3545,6 +3558,7 @@ void ApiWrap::clearResults() {
 	_scanVisited.clear();
 	_exportVisited.clear();
 	_visitedLinks.clear();
+	_pendingFileCallbacks.clear();
 }
 
 base::flat_set<QString> ApiWrap::visitedLinks() const {

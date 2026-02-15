@@ -183,7 +183,9 @@ void ProgressWidget::Row::removeOldInstance(
 
 int ProgressWidget::Row::resizeGetHeight(int newWidth) {
 	updateControlsGeometry(newWidth);
-	return _data.id.isEmpty() ? 0 : st::exportProgressRowHeight;
+	return (_data.id.isEmpty() || _data.id == Content::kDoneId)
+		? 0
+		: st::exportProgressRowHeight;
 }
 
 void ProgressWidget::Row::paintEvent(QPaintEvent *e) {
@@ -325,7 +327,11 @@ void ProgressWidget::setupBottomButton(not_null<Ui::RoundButton*> button) {
 }
 
 void ProgressWidget::updateState(Content &&content) {
-	if (!content.rows.empty() && content.rows[0].id == Content::kDoneId) {
+	const auto doneId = Content::kDoneId;
+	const auto done = ranges::any_of(content.rows, [&](const auto &row) {
+		return row.id == doneId;
+	});
+	if (done) {
 		showDone();
 	}
 
