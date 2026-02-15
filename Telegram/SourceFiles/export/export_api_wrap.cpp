@@ -2218,41 +2218,26 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
 		if (hasAnyLink && linkSelectedForStats) {
-			int newUniqueLinksInMessage = 0;
+			int uniqueInMsg = 0;
 			for (const auto &url : linksInThisMessage) {
 				if (_visitedLinks.find(url) == _visitedLinks.end()) {
 					_visitedLinks.insert(url);
-					newUniqueLinksInMessage++;
+					uniqueInMsg++;
 				}
 			}
 			if (_isScanning) {
-				_scanStats->increment(MediaSettings::Type::Link, 0, linksInThisMessage.size(), newUniqueLinksInMessage);
+				_scanStats->increment(MediaSettings::Type::Link, 0, linksInThisMessage.size(), uniqueInMsg);
 			} else if (_stats) {
-				_stats->increment(MediaSettings::Type::Link, 0, linksInThisMessage.size(), newUniqueLinksInMessage);
+				_stats->increment(MediaSettings::Type::Link, 0, linksInThisMessage.size(), uniqueInMsg);
 			}
 		}
 
 		// selected means "should be in HTML/JSON"
-		// Requirement: Total scan should respect size selected for media filters.
 		bool selected = (mediaSelected && (!oversized || fullHistorySelected))
 			|| (hasAnyLink && linkSelectedForStats) 
 			|| (!hasMedia && ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory)));
 
 		_chatProcess->messageItemIndices[i] = ++_chatProcess->totalMessagesCounter;
-
-		// Bubble counting (Total and Unique messages, excluding Links from sum)
-		bool countThis = false;
-		if (messageType != MediaSettings::Type::Link) {
-			if (hasMedia) {
-				if (mediaSelected) {
-					countThis = true;
-				}
-			} else {
-				if ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory)) {
-					countThis = true;
-				}
-			}
-		}
 
 		if (!selected) {
 			_chatProcess->messageItemIndices[i] = 0;
@@ -2266,6 +2251,10 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		if (!_chatProcess->messagesInRangeCountFixed) {
 			_chatProcess->messagesInRangeCount++; // Every selected bubble increments total for Y
 		}
+
+		// Bubble counting (Total and Unique messages, excluding Links from sum)
+		bool isMediaForSum = (messageType != MediaSettings::Type::Link && messageType != MediaSettings::Type::Text);
+		bool countThis = isMediaForSum || ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory));
 
 		if (countThis) {
 			bool uniqueBubble = false;
@@ -2284,7 +2273,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			}
 			if (uniqueBubble) {
 				_chatProcess->messageIsUnique[i] = true;
-				_chatProcess->messagesUniqueCount++; // Unique content bubbles (Part 1)
+				_chatProcess->messagesUniqueCount++; // Unique content bubbles
 			}
 		}
 
@@ -2306,10 +2295,11 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		if (!hasMedia && ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory))) {
 			_chatProcess->messagesTextProcessed++;
-			_chatProcess->messagesTotalProcessed++;
 		} else if (hasMedia) {
 			_chatProcess->messagesMediaProcessed++;
-			_chatProcess->messagesTotalProcessed++;
+			if (isMediaForSum) {
+				_chatProcess->messagesTotalProcessed++;
+			}
 		}
 
 		// Initial progress update for processed bubble
@@ -2762,9 +2752,9 @@ void ApiWrap::processFileLoad(
 			return Type::VoiceMessage;
 		} else if (data.isAnimated) {
 			return Type::GIF;
-		} else if (data.isVideoFile) {
+		} else if (data.isVideoFile || data.mime.startsWith("video/")) {
 			return Type::Video;
-		} else if (data.isAudioFile) {
+		} else if (data.isAudioFile || data.mime.startsWith("audio/")) {
 			return Type::Audio;
 		} else {
 			return Type::File;
@@ -2785,15 +2775,6 @@ void ApiWrap::processFileLoad(
 	const bool fullHistorySelected = (types & MediaSettings::Type::FullHistory);
 	const auto oversized = (file.location && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit && !fullHistorySelected);
 	const auto locationKey = file.location ? ComputeLocationKey(file.location) : ApiWrap::LocationKey{ 0, 0 };
-
-	if (!_isScanning && locationKey.id != 0 && !isThumb) {
-		const auto it = _exportVisited.find(locationKey);
-		if (it != _exportVisited.end() && !it->second.isEmpty()) {
-			file.relativePath = it->second;
-			done(file.relativePath);
-			return;
-		}
-	}
 
 	const bool typeSelected = (types & type) || fullHistorySelected;
 	const auto skipDownload = fullHistorySelected // Override download if Full History is active
@@ -2821,7 +2802,7 @@ void ApiWrap::processFileLoad(
 	}
 
 	if (_stats
-		&& origin.messageId != 0
+		&& (origin.messageId != 0 || origin.storyId != 0)
 		&& !isThumb) {
 		const bool isLinkOrText = (type == Type::Link || type == Type::Text);
 		if (typeSelected && (!oversized || fullHistorySelected || isLinkOrText)) {

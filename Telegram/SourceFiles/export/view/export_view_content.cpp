@@ -195,7 +195,7 @@ Content ContentFromState(
 Content ContentFromState(const FinishedState &state) {
 	auto result = Content();
 	result.rows.push_back({
-		Content::kDoneId,
+		"header_finished",
 		tr::lng_export_finished(tr::now),
 		QString(),
 		1. });
@@ -223,8 +223,6 @@ Content ContentFromState(const FinishedState &state) {
 	int totalTotalMessagesCount = 0;
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
-	const bool linksOnly = (state.breakdown.size() == 1 && state.breakdown.begin()->first == Type::Link);
-	(void)linksOnly;
 
 	for (const auto type : order) {
 		const auto it = state.breakdown.find(type);
@@ -255,8 +253,8 @@ Content ContentFromState(const FinishedState &state) {
 			text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) 
 				+ ", " + Lang::FormatCountDecimal(item.totalCount);
 		} else {
-			const bool noDuplicates = (item.uniqueCount == item.totalCount) && (item.uniqueSize == item.totalSize);
-			if (noDuplicates) {
+			const bool hasDuplicates = (item.uniqueCount != item.totalCount) || (item.uniqueSize != item.totalSize);
+			if (!hasDuplicates) {
 				text = label + ": " + Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
 			} else {
 				text = label + ": " 
@@ -268,7 +266,7 @@ Content ContentFromState(const FinishedState &state) {
 			totalMediaSize += item.totalSize;
 		}
 
-		if (type != Type::Link) {
+		if (type != Type::Link && type != Type::Text) {
 			totalUniqueMessagesCount += item.uniqueCount;
 			totalTotalMessagesCount += item.totalCount;
 		}
@@ -284,9 +282,16 @@ Content ContentFromState(const FinishedState &state) {
 		const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
-		QString totalText = label + uniqueStr + ", " + totalStr;
+		QString totalText;
+		if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
+			totalText = label + uniqueStr + ", " + totalStr;
+		} else {
+			totalText = label + totalStr;
+		}
 		result.rows.push_back({ "stat_summary", totalText, QString(), 1. });
 	}
+
+	result.rows.push_back({ Content::kDoneId });
 
 	return result;
 }

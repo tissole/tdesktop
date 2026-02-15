@@ -454,6 +454,7 @@ void PanelController::updateState(State &&state) {
 			}
 		}
 	} else if (v::is<FinishedState>(_state)) {
+		_stopRequested = false;
 		_panel->setTitle(tr::lng_export_title());
 		_panel->setHideOnDeactivate(false);
 	} else if (v::is<CancelledState>(_state)) {
