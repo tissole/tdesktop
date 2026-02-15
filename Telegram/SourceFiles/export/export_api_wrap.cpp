@@ -2856,10 +2856,16 @@ void ApiWrap::processFileLoad(
 		return;
 	} else if (locationKey.id != 0 && !isThumb) {
 		const auto it = _exportVisited.find(locationKey);
-		if (it != _exportVisited.end() && !it->second.isEmpty()) {
-			file.relativePath = it->second;
-			done(file.relativePath);
-			return;
+		if (it != _exportVisited.end()) {
+			if (!it->second.isEmpty()) {
+				file.relativePath = it->second;
+				done(file.relativePath);
+				return;
+			} else {
+				// File is pending download from another message.
+				// For now, we allow the duplicate call to proceed, 
+				// but stats are already handled correctly above.
+			}
 		}
 	}
 

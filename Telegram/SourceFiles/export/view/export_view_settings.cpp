@@ -445,6 +445,15 @@ void SettingsWidget::addLimitsLabel(
 		});
 	});
 
+	value()
+		| rpl::map([](const Settings &data) {
+			return data.useIdRange;
+		})
+		| rpl::distinct_until_changed()
+		| rpl::start_with_next([=](bool useIdRange) {
+			modeGroup->setValue(useIdRange);
+		}, container->lifetime());
+
 	// Date range UI (visible when date mode is selected)
 	auto fromDateLink = value()
 		| rpl::map([](const Settings &data) {
@@ -1360,8 +1369,6 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 		}
 		if (!label.isEmpty()) {
 			categoriesCount++;
-			const bool hasDuplicates = (item.uniqueCount != item.totalCount)
-				|| (item.uniqueSize != item.totalSize);
 
 			if (type == MediaType::Text) {
 				text += label + ": " + Lang::FormatCountDecimal(item.totalCount) + "\n";

@@ -201,14 +201,14 @@ void PanelController::showSettings() {
 	settingsRaw->scanClicks(
 	) | rpl::start_with_next([=] {
 		settingsRaw->setScanning(true);
-		_panel->setTitle(tr::lng_export_scanning(tr::now));
+		_panel->setTitle(tr::lng_export_scanning());
 		_panel->setHideOnDeactivate(true);
 		_process->runScan(*_settings, PrepareEnvironment(_session));
 	}, settingsRaw->lifetime());
 
 	settingsRaw->exportClicks(
 	) | rpl::start_with_next([=]() {
-		_panel->setTitle(tr::lng_export_progress_title(tr::now));
+		_panel->setTitle(tr::lng_export_progress_title());
 		showProgress();
 		_process->startExport(*_settings, PrepareEnvironment(_session));
 	}, settingsRaw->lifetime());
@@ -460,7 +460,11 @@ void PanelController::updateState(State &&state) {
 		LOG(("Export Info: Reset Panel After Cancel."));
 		_stopRequested = false;
 		_panel->setHideOnDeactivate(false);
+		_panel->setTitle(tr::lng_export_title());
 		showSettings();
+		if (auto settings = dynamic_cast<SettingsWidget*>(_panel->inner())) {
+			settings->clearScanResults();
+		}
 		_panel->showAndActivate();
 	}
 }

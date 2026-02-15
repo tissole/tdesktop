@@ -159,9 +159,14 @@ Content ContentFromState(
 					text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) 
 						+ ", " + Lang::FormatCountDecimal(item.totalCount);
 				} else {
-					text = label + ": " 
-						+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
-						+ Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
+					const bool noDuplicates = (item.uniqueCount == item.totalCount) && (item.uniqueSize == item.totalSize);
+					if (noDuplicates) {
+						text = label + ": " + Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
+					} else {
+						text = label + ": " 
+							+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
+							+ Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
+					}
 				}
 				result.rows.push_back({ "stat_" + QString::number((int)type), text, QString(), 1. });
 			}
