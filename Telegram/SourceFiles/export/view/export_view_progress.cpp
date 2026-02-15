@@ -325,8 +325,11 @@ void ProgressWidget::setupBottomButton(not_null<Ui::RoundButton*> button) {
 }
 
 void ProgressWidget::updateState(Content &&content) {
-	if (!content.rows.empty() && content.rows[0].id == Content::kDoneId) {
+	const bool finished = !content.rows.empty() && content.rows[0].id == Content::kDoneId;
+	if (finished) {
 		showDone();
+	} else if (!content.isScanning) {
+		_about->setText(tr::lng_export_progress(tr::now));
 	}
 
 	const auto wasCount = _rows.size();
@@ -336,7 +339,9 @@ void ProgressWidget::updateState(Content &&content) {
 		if (index < _rows.size()) {
 			_rows[index]->updateData(std::move(row));
 		} else {
-			if (index > 0) {
+			const bool firstRealRow = (index == 0)
+				|| (index == 1 && content.rows[0].id == Content::kDoneId);
+			if (!firstRealRow) {
 				_body->insert(
 					headerCount + index * 2 - 1,
 					object_ptr<Ui::FixedHeightWidget>(

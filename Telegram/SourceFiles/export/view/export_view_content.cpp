@@ -194,11 +194,7 @@ Content ContentFromState(
 
 Content ContentFromState(const FinishedState &state) {
 	auto result = Content();
-	result.rows.push_back({
-		"header_finished",
-		tr::lng_export_finished(tr::now),
-		QString(),
-		1. });
+	result.rows.push_back({ Content::kDoneId });
 
 	using Type = MediaSettings::Type;
 	const std::vector<Type> order = {
@@ -290,8 +286,6 @@ Content ContentFromState(const FinishedState &state) {
 		}
 		result.rows.push_back({ "stat_summary", totalText, QString(), 1. });
 	}
-
-	result.rows.push_back({ Content::kDoneId });
 
 	return result;
 }
