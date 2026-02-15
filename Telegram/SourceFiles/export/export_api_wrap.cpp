@@ -2225,11 +2225,10 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					uniqueInMsg++;
 				}
 			}
-			// Total shared links count in Telegram is the number of MESSAGES containing links.
 			if (_isScanning) {
-				_scanStats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
+				_scanStats->increment(MediaSettings::Type::Link, 0, linksInThisMessage.size(), uniqueInMsg);
 			} else if (_stats) {
-				_stats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
+				_stats->increment(MediaSettings::Type::Link, 0, linksInThisMessage.size(), uniqueInMsg);
 			}
 		}
 
@@ -2253,10 +2252,11 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			_chatProcess->messagesInRangeCount++; // Every selected bubble increments total for Y
 		}
 
-		// Bubble counting (Total and Unique messages, excluding Links/Text from sum)
+		// Bubble counting (Total and Unique messages, excluding Links from sum)
 		bool isMediaForSum = (messageType != MediaSettings::Type::Link && messageType != MediaSettings::Type::Text);
+		bool countThis = isMediaForSum || ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory));
 
-		if (isMediaForSum) {
+		if (countThis) {
 			bool uniqueBubble = false;
 			if (!message.file().location) {
 				uniqueBubble = true;
@@ -2265,9 +2265,6 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				if (locationKey.id || locationKey.type) {
 					auto &visited = _isScanning ? _scanVisited : _exportVisited;
 					if (visited.find(locationKey) == visited.end()) {
-						if (_isScanning) {
-							visited.emplace(locationKey, QString());
-						}
 						uniqueBubble = true;
 					}
 				} else {
@@ -2839,11 +2836,6 @@ void ApiWrap::processFileLoad(
 		done(file.relativePath);
 		return;
 	} else if (locationKey.id != 0 && !isThumb) {
-		if (const auto path = _fileCache->find(file.location)) {
-			file.relativePath = *path;
-			done(file.relativePath);
-			return;
-		}
 		const auto it = _exportVisited.find(locationKey);
 		if (it != _exportVisited.end()) {
 			if (!it->second.isEmpty()) {
