@@ -466,6 +466,7 @@ void PanelController::updateState(State &&state) {
 		_panel->setTitle(tr::lng_export_title());
 		showSettings();
 		if (auto settings = dynamic_cast<SettingsWidget*>(_panel->inner())) {
+			settings->setScanning(false);
 			settings->clearScanResults();
 		}
 		_panel->showAndActivate();

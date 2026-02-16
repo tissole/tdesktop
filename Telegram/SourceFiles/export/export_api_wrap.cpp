@@ -2091,9 +2091,9 @@ MTPMessagesFilter ApiWrap::getFilter() const {
 	using Type = MediaSettings::Type;
 	const auto types = _settings->media.types;
 	
-	// If Text or FullHistory is selected, we need to request the full stream
+	// If Text, FullHistory or Link is selected, we need to request the full stream
 	// to ensure we get all messages (then we filter them locally).
-	if ((types & Type::Text) || (types & Type::FullHistory)) {
+	if ((types & Type::Text) || (types & Type::FullHistory) || (types & Type::Link)) {
 		return MTP_inputMessagesFilterEmpty();
 	}
 
@@ -2291,9 +2291,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					auto &visited = _isScanning ? _scanVisited : _exportVisited;
 					if (visited.find(checkKey) == visited.end()) {
 						uniqueBubble = true;
-						if (_isScanning) {
-							visited.emplace(checkKey, QString());
-						}
+						visited.emplace(checkKey, QString());
 					}
 				} else {
 					uniqueBubble = true;
@@ -2780,9 +2778,9 @@ void ApiWrap::processFileLoad(
 			return Type::VoiceMessage;
 		} else if (data.isAnimated) {
 			return Type::GIF;
-		} else if (data.isVideoFile || data.mime.startsWith("video/")) {
+		} else if (data.isVideoFile) {
 			return Type::Video;
-		} else if (data.isAudioFile || data.mime.startsWith("audio/")) {
+		} else if (data.isAudioFile) {
 			return Type::Audio;
 		} else {
 			return Type::File;
@@ -3115,107 +3113,17 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 		_fileCache->save(process->location, relativePath);
 	}
 
-	// Resolve persistent key for callbacks
-	auto checkKey = ComputeLocationKey(process->location);
-	const auto *msg = currentFileMessage(); 
-	// Note: currentFileMessage() might be null or not the one we want if async.
-	// But we need the persistent ID to unlock pending callbacks.
-	// Actually, we don't have easy access to the message that triggered this file load here directly
-	// without storing it in FileProcess.
-	// However, process->origin has messageId.
-	// But we'd need to look up the message or store the persistentId in FileProcess.
-	// Let's assume we used LocationKey if persistentId wasn't available, or we need to try both?
-	// Better: Store the 'dedupKey' in FileProcess when creating it.
-	
-	// Since we didn't add dedupKey to FileProcess yet, let's iterate pending callbacks and see if any match location?
-	// No, that's slow.
-	// Let's rely on LocationKey for now OR check if we can reconstruct it.
-	// If we used persistent ID for _pendingFileCallbacks key, we MUST use it here.
-	// The LocationKey computed from process->location is the 'network' key.
-	// The 'logical' key might be different (Type=10...).
-	
-	// Ideally we should have stored the key used for deduplication in FileProcess.
-	// But as a fallback, we can try to find the key in _pendingFileCallbacks
-	// by checking if any key in _pendingFileCallbacks corresponds to this file? No.
-	
-	// Let's try to find it by LocationKey first (legacy behavior).
-	if (checkKey.id != 0 || checkKey.type != 0) {
-		auto it = _pendingFileCallbacks.find(checkKey);
+	const auto key = (process->dedupKey.id != 0 || process->dedupKey.type != 0)
+		? process->dedupKey
+		: ComputeLocationKey(process->location);
+
+	if (key.id != 0 || key.type != 0) {
+		auto it = _pendingFileCallbacks.find(key);
 		if (it != _pendingFileCallbacks.end()) {
 			for (auto &callback : it->second) {
 				callback(relativePath);
 			}
 			_pendingFileCallbacks.erase(it);
-		}
-	}
-	
-	// Also try to find by Persistent ID if we can look it up.
-	// Since we don't have the message here easily, we might miss unlocking if we keyed by Persistent ID.
-	// CRITICAL FIX: We must check if _pendingFileCallbacks has entries for the Persistent ID.
-	// But we don't know the persistent ID here.
-	// Wait, we can iterate _pendingFileCallbacks? No.
-	
-	// Real fix: We need to store the 'dedupKey' in FileProcess.
-	// Since I cannot change header easily in this step without recompiling everything affecting header,
-	// I will use a workaround:
-	// If we can't find by LocationKey, we are stuck?
-	// But wait, finishFile is called when download is done.
-	// The `done` callback of the process was:
-	// auto wrapDone = [=](QString path) { ... _exportVisited[checkKey] = path; done(path); }
-	// This `wrapDone` is called by `process->done(relativePath)`.
-	// Inside `wrapDone`, we have access to `message` and `checkKey`.
-	// But `finishFile` is what calls `process->done`.
-	// AND `finishFile` is responsible for `_pendingFileCallbacks`.
-	// This separation is problematic if keys differ.
-	
-	// However, `_pendingFileCallbacks` are callbacks waiting for *this specific file content*.
-	// If I keyed them by PersistentID, I must unlock them by PersistentID.
-	// If `finishFile` doesn't know PersistentID, it can't unlock.
-	
-	// REVERT STRATEGY for `_pendingFileCallbacks`:
-	// Only use `LocationKey` for `_pendingFileCallbacks`?
-	// If 5 messages have same file (same PersistentID) but different `LocationKey` (diff access hash/id),
-	// they are technically different downloads for the `ApiWrap`.
-	// If we dedupe by PersistentID, we only download ONE of them.
-	// The others are skipped in `processFileLoad` because `_exportVisited` has the PersistentID key.
-	// If `_exportVisited` has it, we return immediately with path (if done) or add to `_pendingFileCallbacks` (if pending).
-	// If we add to `_pendingFileCallbacks` using PersistentID key, we MUST unlock using PersistentID key.
-	// The ONLY download running is the one that inserted the entry.
-	// That download instance knows its `LocationKey`. It does NOT know its PersistentID (unless stored).
-	
-	// BUT `ApiWrap::filePartDone` calls `finishFile`.
-	// `finishFile` calls `process->done()`.
-	// `process->done` is `wrapDone`.
-	// `wrapDone` updates `_exportVisited` with the path.
-	
-	// The `_pendingFileCallbacks` must be fired.
-	// If I cannot modify `FileProcess` to store the key, I am in trouble.
-	// Actually, `ApiWrap` is PIMPL-like or just a class. I can modify `FileProcess` struct in cpp?
-	// `FileProcess` is defined in `export_api_wrap.cpp`. YES!
-	// I can add `LocationKey dedupKey` to `FileProcess` struct in .cpp file!
-	
-	// I will update `FileProcess` struct first, then update `prepareFileProcess` to populate it, then `finishFile` to use it.
-	
-	// This replacement is for `finishFile`. I will assume I added `dedupKey` to `FileProcess`.
-	
-	if (process->dedupKey.id != 0 || process->dedupKey.type != 0) {
-		auto it = _pendingFileCallbacks.find(process->dedupKey);
-		if (it != _pendingFileCallbacks.end()) {
-			for (auto &callback : it->second) {
-				callback(relativePath);
-			}
-			_pendingFileCallbacks.erase(it);
-		}
-	} else {
-		const auto locationKey = ComputeLocationKey(process->location);
-		if (locationKey.id != 0 || locationKey.type != 0) {
-			auto it = _pendingFileCallbacks.find(locationKey);
-			if (it != _pendingFileCallbacks.end()) {
-				for (auto &callback : it->second) {
-					callback(relativePath);
-				}
-				_pendingFileCallbacks.erase(it);
-			}
 		}
 	}
 
