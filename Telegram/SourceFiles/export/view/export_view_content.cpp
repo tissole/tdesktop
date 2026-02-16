@@ -296,5 +296,11 @@ Content ContentFromState(const FinishedState &state) {
 	return result;
 }
 
+Content ContentFromState(const ScanDoneState &state) {
+	auto result = Content();
+	result.rows.push_back({ Content::kDoneId });
+	return result;
+}
+
 } // namespace View
 } // namespace Export

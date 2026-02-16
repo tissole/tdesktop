@@ -439,6 +439,8 @@ void PanelController::updateState(State &&state) {
 		showError(*error);
 	} else if (const auto scanDone = std::get_if<ScanDoneState>(&_state)) {
 		if (_panel) {
+			_panel->setTitle(tr::lng_export_title());
+			showSettings();
 			if (auto settings = dynamic_cast<SettingsWidget*>(_panel->inner())) {
 				settings->setScanning(false);
 				_panel->setHideOnDeactivate(false);
