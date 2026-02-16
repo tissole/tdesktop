@@ -284,6 +284,7 @@ struct ApiWrap::FileProcess {
 	std::deque<int64> pendingRetryOffsets;				   // offsets that need retry
 	std::unordered_map<int64, int> retryCounts;			   // per-offset retry counter
 	bool active = false;
+	LocationKey dedupKey;
 };
 
 struct ApiWrap::ChatsProcess {
@@ -579,7 +580,9 @@ void ApiWrap::startExport(
 		sendNextStartRequest();
 	} else {
 		startMainSession([=] {
-			sendNextStartRequest();
+			if (_startProcess) {
+				sendNextStartRequest();
+			}
 		});
 	}
 }
@@ -868,6 +871,7 @@ void ApiWrap::requestOtherData(
 	loadFile(
 		_otherDataProcess->file,
 		Data::FileOrigin(),
+		LocationKey(),
 		[](FileProgress progress) { return true; },
 		[=](const QString &result) { otherDataDone(result); });
 }
@@ -2226,9 +2230,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				}
 			}
 			if (_isScanning) {
-				_scanStats->increment(MediaSettings::Type::Link, 0, linksInThisMessage.size(), uniqueInMsg);
+				_scanStats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
 			} else if (_stats) {
-				_stats->increment(MediaSettings::Type::Link, 0, linksInThisMessage.size(), uniqueInMsg);
+				_stats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
 			}
 		}
 
@@ -2261,11 +2265,35 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			if (!message.file().location) {
 				uniqueBubble = true;
 			} else {
-				const auto locationKey = ComputeLocationKey(message.file().location);
-				if (locationKey.id || locationKey.type) {
+				// Use persistent ID for unique check if available (Document/Photo ID)
+				// otherwise fallback to location key.
+				uint64 persistentId = 0;
+				v::match(message.media.content, [&](const Data::Document &data) {
+					persistentId = data.id;
+				}, [&](const Data::Photo &data) {
+					persistentId = data.id;
+				}, [](const auto &) {});
+
+				ApiWrap::LocationKey checkKey;
+				if (persistentId != 0) {
+					// Encode persistent ID into key: Type=1 for Doc, Type=2 for Photo (arbitrary high bits)
+					// Actually LocationKey has arbitrary meaning. Let's use high bit markers.
+					// We can reuse the same map but with special Type markers.
+					// Existing markers in ComputeLocationKey are (2<<24) and (6<<24).
+					// Let's use (10<<24) for Persistent IDs.
+					checkKey.type = (10ULL << 24);
+					checkKey.id = persistentId;
+				} else {
+					checkKey = ComputeLocationKey(message.file().location);
+				}
+
+				if (checkKey.id || checkKey.type) {
 					auto &visited = _isScanning ? _scanVisited : _exportVisited;
-					if (visited.find(locationKey) == visited.end()) {
+					if (visited.find(checkKey) == visited.end()) {
 						uniqueBubble = true;
+						if (_isScanning) {
+							visited.emplace(checkKey, QString());
+						}
 					}
 				} else {
 					uniqueBubble = true;
@@ -2786,12 +2814,32 @@ void ApiWrap::processFileLoad(
 			if (type != Type(0) && !isThumb && (origin.messageId != 0 || origin.storyId != 0)) {
 				// Total scan MUST strictly respect size selected, UNLESS Full History is selected or it is a Link/Text.
 				if (typeSelected && ((!oversized && !fullHistorySelected) || fullHistorySelected)) {
-					const bool validLocation = (locationKey.id != 0 || locationKey.type != 0);
-					const bool alreadyVisited = validLocation && _scanVisited.find(locationKey) != _scanVisited.end();
-					const bool willBeUniqueInChat = validLocation && !alreadyVisited;
+					// Use persistent ID if available for deduplication
+					uint64 persistentId = 0;
+					if (message) {
+						v::match(message->media.content, [&](const Data::Document &data) {
+							persistentId = data.id;
+						}, [&](const Data::Photo &data) {
+							persistentId = data.id;
+						}, [](const auto &) {});
+					} else if (story) {
+						// Story media ID logic would go here if stories had persistent ID access similarly
+					}
+
+					ApiWrap::LocationKey checkKey;
+					if (persistentId != 0) {
+						checkKey.type = (10ULL << 24);
+						checkKey.id = persistentId;
+					} else {
+						checkKey = locationKey;
+					}
+
+					const bool validKey = (checkKey.id != 0 || checkKey.type != 0);
+					const bool alreadyVisited = validKey && _scanVisited.find(checkKey) != _scanVisited.end();
+					const bool willBeUniqueInChat = validKey && !alreadyVisited;
 					
 					if (willBeUniqueInChat) {
-						_scanVisited.emplace(locationKey, QString());
+						_scanVisited.emplace(checkKey, QString());
 					}
 					
 					_scanStats->increment(type, fullSize, willBeUniqueInChat);
@@ -2807,11 +2855,28 @@ void ApiWrap::processFileLoad(
 		&& !isThumb) {
 		const bool isLinkOrText = (type == Type::Link || type == Type::Text);
 		if (typeSelected && (!oversized || fullHistorySelected || isLinkOrText)) {
+			// Persistent ID logic
+			uint64 persistentId = 0;
+			if (message) {
+				v::match(message->media.content, [&](const Data::Document &data) {
+					persistentId = data.id;
+				}, [&](const Data::Photo &data) {
+					persistentId = data.id;
+				}, [](const auto &) {});
+			}
+			ApiWrap::LocationKey checkKey;
+			if (persistentId != 0) {
+				checkKey.type = (10ULL << 24);
+				checkKey.id = persistentId;
+			} else {
+				checkKey = locationKey;
+			}
+
 			auto &visited = _exportVisited;
-			const bool validLocation = (locationKey.id != 0 || locationKey.type != 0);
-			const auto it = validLocation ? visited.find(locationKey) : visited.end();
+			const bool validKey = (checkKey.id != 0 || checkKey.type != 0);
+			const auto it = validKey ? visited.find(checkKey) : visited.end();
 			const bool alreadyVisited = (it != visited.end());
-			const bool willBeUniqueInChat = validLocation && !alreadyVisited;
+			const bool willBeUniqueInChat = validKey && !alreadyVisited;
 
 			if ((message || story) && type != Type(0)) {
 				_stats->increment(type, fullSize, willBeUniqueInChat);
@@ -2819,15 +2884,15 @@ void ApiWrap::processFileLoad(
 			
 			// For links, we track them to write unique_links.txt later, even if we don't "download" a file.
 			if (type == Type::Link && !alreadyVisited) {
-				if (validLocation) {
-					visited[locationKey] = file.content.isEmpty() ? QString("link") : QString::fromUtf8(file.content); 
+				if (validKey) {
+					visited[checkKey] = file.content.isEmpty() ? QString("link") : QString::fromUtf8(file.content); 
 				}
 			}
 
 			if (!alreadyVisited && !skipDownload) {
 				_stats->incrementUserMediaFiles();
-				if (validLocation && type != Type::Link) {
-					visited[locationKey] = QString(); // Mark as pending
+				if (validKey && type != Type::Link) {
+					visited[checkKey] = QString(); // Mark as pending
 				}
 			}
 		}
@@ -2837,8 +2902,25 @@ void ApiWrap::processFileLoad(
 		|| file.skipReason != SkipReason::None) {
 		done(file.relativePath);
 		return;
-	} else if (locationKey.id != 0 && !isThumb) {
-		const auto it = _exportVisited.find(locationKey);
+	} else if ((locationKey.id != 0 || locationKey.type != 0) && !isThumb) {
+		// Recompute persistent ID check key
+		uint64 persistentId = 0;
+		if (message) {
+			v::match(message->media.content, [&](const Data::Document &data) {
+				persistentId = data.id;
+			}, [&](const Data::Photo &data) {
+				persistentId = data.id;
+			}, [](const auto &) {});
+		}
+		ApiWrap::LocationKey checkKey;
+		if (persistentId != 0) {
+			checkKey.type = (10ULL << 24);
+			checkKey.id = persistentId;
+		} else {
+			checkKey = locationKey;
+		}
+
+		const auto it = _exportVisited.find(checkKey);
 		if (it != _exportVisited.end()) {
 			if (!it->second.isEmpty()) {
 				file.relativePath = it->second;
@@ -2846,15 +2928,31 @@ void ApiWrap::processFileLoad(
 				return;
 			} else {
 				// File is pending download from another message.
-				_pendingFileCallbacks[locationKey].push_back(std::move(done));
+				_pendingFileCallbacks[checkKey].push_back(std::move(done));
 				return;
 			}
 		}
 	}
 
 	auto wrapDone = [=, done = std::move(done)](QString path) mutable {
-		if (!path.isEmpty() && locationKey.id != 0 && !isThumb) {
-			_exportVisited[locationKey] = path;
+		if (!path.isEmpty() && (locationKey.id != 0 || locationKey.type != 0) && !isThumb) {
+			// Recompute persistent ID check key for consistency
+			uint64 persistentId = 0;
+			if (message) {
+				v::match(message->media.content, [&](const Data::Document &data) {
+					persistentId = data.id;
+				}, [&](const Data::Photo &data) {
+					persistentId = data.id;
+				}, [](const auto &) {});
+			}
+			ApiWrap::LocationKey checkKey;
+			if (persistentId != 0) {
+				checkKey.type = (10ULL << 24);
+				checkKey.id = persistentId;
+			} else {
+				checkKey = locationKey;
+			}
+			_exportVisited[checkKey] = path;
 		}
 		done(path);
 	};
@@ -2877,7 +2975,23 @@ void ApiWrap::processFileLoad(
 		wrapDone(QString());
 		return;
 	}
-	loadFile(file, origin, std::move(progress), std::move(wrapDone));
+	// Recompute checkKey one last time to be safe
+	uint64 persistentId = 0;
+	if (message) {
+		v::match(message->media.content, [&](const Data::Document &data) {
+			persistentId = data.id;
+		}, [&](const Data::Photo &data) {
+			persistentId = data.id;
+		}, [](const auto &) {});
+	}
+	ApiWrap::LocationKey checkKey;
+	if (persistentId != 0) {
+		checkKey.type = (10ULL << 24);
+		checkKey.id = persistentId;
+	} else {
+		checkKey = locationKey;
+	}
+	loadFile(file, origin, checkKey, std::move(progress), std::move(wrapDone));
 }
 
 bool ApiWrap::writePreloadedFile(
@@ -2891,7 +3005,7 @@ bool ApiWrap::writePreloadedFile(
 		file.relativePath = *path;
 		return true;
 	} else if (!file.content.isEmpty()) {
-		auto process = prepareFileProcess(file, origin);
+		auto process = prepareFileProcess(file, origin, LocationKey());
 		if (const auto result = process->outputFile.writeBlock(file.content)) {
 			file.relativePath = process->relativePath;
 			_fileCache->save(file.location, file.relativePath);
@@ -2906,13 +3020,15 @@ bool ApiWrap::writePreloadedFile(
 void ApiWrap::loadFile(
 		Data::File &file,
 		const Data::FileOrigin &origin,
+		const LocationKey &dedupKey,
 		Fn<bool(FileProgress)> progress,
 		FnMut<void(QString)> done) {
 	Expects(file.location);
 
-	auto process = prepareFileProcess(file, origin);
+	auto process = prepareFileProcess(file, origin, dedupKey);
 	process->progress = std::move(progress);
 	process->done = std::move(done);
+	process->dedupKey = dedupKey;
 
 	const auto randomId = process->randomId;
 	file.randomId = randomId;
@@ -2926,7 +3042,8 @@ void ApiWrap::loadFile(
 
 std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 	Data::File &file,
-	const Data::FileOrigin &origin) const
+	const Data::FileOrigin &origin,
+	const LocationKey &dedupKey) const
 {
 	Expects(_settings != nullptr);
 
@@ -2945,6 +3062,7 @@ std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 	result->size = file.size;
 	result->origin = origin;
 	result->randomId = base::RandomValue<uint64>();
+	result->dedupKey = dedupKey;
 	return result;
 }
 
@@ -2997,14 +3115,107 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 		_fileCache->save(process->location, relativePath);
 	}
 
-	const auto locationKey = ComputeLocationKey(process->location);
-	if (locationKey.id != 0 || locationKey.type != 0) {
-		auto it = _pendingFileCallbacks.find(locationKey);
+	// Resolve persistent key for callbacks
+	auto checkKey = ComputeLocationKey(process->location);
+	const auto *msg = currentFileMessage(); 
+	// Note: currentFileMessage() might be null or not the one we want if async.
+	// But we need the persistent ID to unlock pending callbacks.
+	// Actually, we don't have easy access to the message that triggered this file load here directly
+	// without storing it in FileProcess.
+	// However, process->origin has messageId.
+	// But we'd need to look up the message or store the persistentId in FileProcess.
+	// Let's assume we used LocationKey if persistentId wasn't available, or we need to try both?
+	// Better: Store the 'dedupKey' in FileProcess when creating it.
+	
+	// Since we didn't add dedupKey to FileProcess yet, let's iterate pending callbacks and see if any match location?
+	// No, that's slow.
+	// Let's rely on LocationKey for now OR check if we can reconstruct it.
+	// If we used persistent ID for _pendingFileCallbacks key, we MUST use it here.
+	// The LocationKey computed from process->location is the 'network' key.
+	// The 'logical' key might be different (Type=10...).
+	
+	// Ideally we should have stored the key used for deduplication in FileProcess.
+	// But as a fallback, we can try to find the key in _pendingFileCallbacks
+	// by checking if any key in _pendingFileCallbacks corresponds to this file? No.
+	
+	// Let's try to find it by LocationKey first (legacy behavior).
+	if (checkKey.id != 0 || checkKey.type != 0) {
+		auto it = _pendingFileCallbacks.find(checkKey);
 		if (it != _pendingFileCallbacks.end()) {
 			for (auto &callback : it->second) {
 				callback(relativePath);
 			}
 			_pendingFileCallbacks.erase(it);
+		}
+	}
+	
+	// Also try to find by Persistent ID if we can look it up.
+	// Since we don't have the message here easily, we might miss unlocking if we keyed by Persistent ID.
+	// CRITICAL FIX: We must check if _pendingFileCallbacks has entries for the Persistent ID.
+	// But we don't know the persistent ID here.
+	// Wait, we can iterate _pendingFileCallbacks? No.
+	
+	// Real fix: We need to store the 'dedupKey' in FileProcess.
+	// Since I cannot change header easily in this step without recompiling everything affecting header,
+	// I will use a workaround:
+	// If we can't find by LocationKey, we are stuck?
+	// But wait, finishFile is called when download is done.
+	// The `done` callback of the process was:
+	// auto wrapDone = [=](QString path) { ... _exportVisited[checkKey] = path; done(path); }
+	// This `wrapDone` is called by `process->done(relativePath)`.
+	// Inside `wrapDone`, we have access to `message` and `checkKey`.
+	// But `finishFile` is what calls `process->done`.
+	// AND `finishFile` is responsible for `_pendingFileCallbacks`.
+	// This separation is problematic if keys differ.
+	
+	// However, `_pendingFileCallbacks` are callbacks waiting for *this specific file content*.
+	// If I keyed them by PersistentID, I must unlock them by PersistentID.
+	// If `finishFile` doesn't know PersistentID, it can't unlock.
+	
+	// REVERT STRATEGY for `_pendingFileCallbacks`:
+	// Only use `LocationKey` for `_pendingFileCallbacks`?
+	// If 5 messages have same file (same PersistentID) but different `LocationKey` (diff access hash/id),
+	// they are technically different downloads for the `ApiWrap`.
+	// If we dedupe by PersistentID, we only download ONE of them.
+	// The others are skipped in `processFileLoad` because `_exportVisited` has the PersistentID key.
+	// If `_exportVisited` has it, we return immediately with path (if done) or add to `_pendingFileCallbacks` (if pending).
+	// If we add to `_pendingFileCallbacks` using PersistentID key, we MUST unlock using PersistentID key.
+	// The ONLY download running is the one that inserted the entry.
+	// That download instance knows its `LocationKey`. It does NOT know its PersistentID (unless stored).
+	
+	// BUT `ApiWrap::filePartDone` calls `finishFile`.
+	// `finishFile` calls `process->done()`.
+	// `process->done` is `wrapDone`.
+	// `wrapDone` updates `_exportVisited` with the path.
+	
+	// The `_pendingFileCallbacks` must be fired.
+	// If I cannot modify `FileProcess` to store the key, I am in trouble.
+	// Actually, `ApiWrap` is PIMPL-like or just a class. I can modify `FileProcess` struct in cpp?
+	// `FileProcess` is defined in `export_api_wrap.cpp`. YES!
+	// I can add `LocationKey dedupKey` to `FileProcess` struct in .cpp file!
+	
+	// I will update `FileProcess` struct first, then update `prepareFileProcess` to populate it, then `finishFile` to use it.
+	
+	// This replacement is for `finishFile`. I will assume I added `dedupKey` to `FileProcess`.
+	
+	if (process->dedupKey.id != 0 || process->dedupKey.type != 0) {
+		auto it = _pendingFileCallbacks.find(process->dedupKey);
+		if (it != _pendingFileCallbacks.end()) {
+			for (auto &callback : it->second) {
+				callback(relativePath);
+			}
+			_pendingFileCallbacks.erase(it);
+		}
+	} else {
+		const auto locationKey = ComputeLocationKey(process->location);
+		if (locationKey.id != 0 || locationKey.type != 0) {
+			auto it = _pendingFileCallbacks.find(locationKey);
+			if (it != _pendingFileCallbacks.end()) {
+				for (auto &callback : it->second) {
+					callback(relativePath);
+				}
+				_pendingFileCallbacks.erase(it);
+			}
 		}
 	}
 

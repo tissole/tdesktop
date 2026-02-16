@@ -159,14 +159,9 @@ Content ContentFromState(
 					text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) 
 						+ ", " + Lang::FormatCountDecimal(item.totalCount);
 				} else {
-					const bool noDuplicates = (item.uniqueCount == item.totalCount) && (item.uniqueSize == item.totalSize);
-					if (noDuplicates) {
-						text = label + ": " + Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
-					} else {
-						text = label + ": " 
-							+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
-							+ Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
-					}
+					text = label + ": " 
+						+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
+						+ Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
 				}
 				result.rows.push_back({ "stat_" + QString::number((int)type), text, QString(), 1. });
 			}
@@ -253,14 +248,9 @@ Content ContentFromState(const FinishedState &state) {
 			text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) 
 				+ ", " + Lang::FormatCountDecimal(item.totalCount);
 		} else {
-			const bool hasDuplicates = (item.uniqueCount != item.totalCount) || (item.uniqueSize != item.totalSize);
-			if (!hasDuplicates) {
-				text = label + ": " + Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
-			} else {
-				text = label + ": " 
-					+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
-					+ Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
-			}
+			text = label + ": " 
+				+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
+				+ Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
 
 			totalUniqueMediaSize += item.uniqueSize;
 			totalMediaSize += item.totalSize;
@@ -276,18 +266,13 @@ Content ContentFromState(const FinishedState &state) {
 	}
 
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
-		const auto label = "Total media files: ";
+		const auto label = "Total unique, Total messages: ";
 		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 		const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
-		QString totalText;
-		if (totalUniqueMessagesCount != totalTotalMessagesCount || totalUniqueMediaSize != totalMediaSize) {
-			totalText = label + uniqueStr + ", " + totalStr;
-		} else {
-			totalText = label + totalStr;
-		}
+		const QString totalText = label + uniqueStr + ", " + totalStr;
 		result.rows.push_back({ "stat_summary", totalText, QString(), 1. });
 	}
 

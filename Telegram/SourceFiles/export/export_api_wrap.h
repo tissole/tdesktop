@@ -254,13 +254,15 @@ private:
 		bool isThumb = false);
 	std::unique_ptr<FileProcess> prepareFileProcess(
 		Data::File &file,
-		const Data::FileOrigin &origin) const;
+		const Data::FileOrigin &origin,
+		const LocationKey &dedupKey) const;
 	bool writePreloadedFile(
 		Data::File &file,
 		const Data::FileOrigin &origin);
 	void loadFile(
 		Data::File &file,
 		const Data::FileOrigin &origin,
+		const LocationKey &dedupKey,
 		Fn<bool(FileProgress)> progress,
 		FnMut<void(QString)> done);
 	void scheduleMoreFiles();	

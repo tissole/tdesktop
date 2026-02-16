@@ -2596,8 +2596,7 @@ bool SkipMessageByDate(const Message &message, const Settings &settings) {
 		}
 	} else {
 		// It is a Text message (no media)
-		// Skip if 'Text messages' is NOT selected AND 'Links' is NOT selected (or no link found)
-		const auto hasTextLink = [&] {
+		const bool hasTextLink = [&] {
 			for (const auto &part : message.text) {
 				if (part.type == Data::TextPart::Type::Url
 					|| part.type == Data::TextPart::Type::TextUrl) {
@@ -2607,8 +2606,8 @@ bool SkipMessageByDate(const Message &message, const Settings &settings) {
 			return false;
 		}();
 
-		const auto textSelected = (types & Type::Text);
-		const auto linkSelected = (types & Type::Link) && hasTextLink;
+		const bool textSelected = (types & Type::Text);
+		const bool linkSelected = (types & Type::Link) && hasTextLink;
 
 		if (!textSelected && !linkSelected) {
 			return true;
