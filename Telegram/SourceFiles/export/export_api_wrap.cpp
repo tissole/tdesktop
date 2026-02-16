@@ -341,6 +341,7 @@ struct ApiWrap::ChatProcess {
 
 	int messagesInRangeCount = 0;
 	bool messagesInRangeCountFixed = false;
+	bool messagesInRangeCountFromHistory = false;
 	int messagesUniqueCount = 0;
 	int totalMessagesCounter = 0;
 	std::vector<int> messageItemIndices;
@@ -1999,11 +2000,12 @@ void ApiWrap::requestChatMessages(
 		});
 
 		if (count >= 0 && !_chatProcess->messagesInRangeCountFixed) {
-			// const auto mediaFilterActive = (filter.type() != mtpc_inputMessagesFilterEmpty);
+			const auto filter = getFilter();
+			const auto filterEmpty = (filter.type() == mtpc_inputMessagesFilterEmpty);
 			const auto sizeFilterActive = (_settings->media.sizeLimit > 0);
-			if (/*mediaFilterActive &&*/ !sizeFilterActive) {
-				// If we only have specific media selected AND no size limit, the server's count is exactly Y.
+			if (!sizeFilterActive && !filterEmpty) {
 				_chatProcess->messagesInRangeCount = count;
+				_chatProcess->messagesInRangeCountFromHistory = true;
 			}
 		}
 
@@ -2241,6 +2243,14 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			|| (hasAnyLink && linkSelectedForStats) 
 			|| (!hasMedia && ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory)));
 
+		if (selected) {
+			_chatProcess->messageItemsCount[i] = 1; // Mark as selected for progress bar (Y)
+
+			if (!_chatProcess->messagesInRangeCountFixed && !_chatProcess->messagesInRangeCountFromHistory) {
+				_chatProcess->messagesInRangeCount++; // Every selected bubble increments total for Y
+			}
+		}
+
 		_chatProcess->messageItemIndices[i] = ++_chatProcess->totalMessagesCounter;
 
 		if (!selected) {
@@ -2248,12 +2258,6 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			_chatProcess->messageItemsCount[i] = 0;
 			onMessagePartDone(i, false); // Marks the bubble as done, but not selected
 			continue;
-		}
-
-		_chatProcess->messageItemsCount[i] = 1; // Mark as selected for progress bar (Y)
-
-		if (!_chatProcess->messagesInRangeCountFixed) {
-			_chatProcess->messagesInRangeCount++; // Every selected bubble increments total for Y
 		}
 
 		// Bubble counting (Total and Unique messages, excluding Links from sum)
@@ -2276,11 +2280,6 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 				ApiWrap::LocationKey checkKey;
 				if (persistentId != 0) {
-					// Encode persistent ID into key: Type=1 for Doc, Type=2 for Photo (arbitrary high bits)
-					// Actually LocationKey has arbitrary meaning. Let's use high bit markers.
-					// We can reuse the same map but with special Type markers.
-					// Existing markers in ComputeLocationKey are (2<<24) and (6<<24).
-					// Let's use (10<<24) for Persistent IDs.
 					checkKey.type = (10ULL << 24);
 					checkKey.id = persistentId;
 				} else {
@@ -2291,7 +2290,12 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					auto &visited = _isScanning ? _scanVisited : _exportVisited;
 					if (visited.find(checkKey) == visited.end()) {
 						uniqueBubble = true;
-						visited.emplace(checkKey, QString());
+						// ALWAYS mark as visited if it's NOT a file that processFileLoad handles.
+						// If it IS a file, processFileLoad will mark it.
+						// This avoids double-deduplication that results in 0 unique stats.
+						if (!message.file().location) {
+							visited.emplace(checkKey, QString());
+						}
 					}
 				} else {
 					uniqueBubble = true;
@@ -2332,15 +2336,15 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		_chatProcess->fileProgress({
 			.randomId = 0,
 			.path = QString(),
-			.itemIndex = _chatProcess->messageItemIndices[i],
+			.itemIndex = _isScanning ? _chatProcess->totalMessagesCounter : _chatProcess->messageItemIndices[i],
 			.ready = 1,
 			.total = 1,
 			.isAuxiliary = true,
 			.messagesTextCount = _chatProcess->messagesTextProcessed,
 			.messagesMediaCount = _chatProcess->messagesMediaProcessed,
 			.messagesTotalCount = _chatProcess->messagesProcessed, // Real-time finished count
-			.messagesTextTotal = _chatProcess->messagesInRangeCount,
-			.messagesInRangeCount = _chatProcess->messagesInRangeCount,
+			.messagesTextTotal = _isScanning ? _chatProcess->messagesTextTotal : _chatProcess->messagesInRangeCount,
+			.messagesInRangeCount = _isScanning ? _chatProcess->messagesTextTotal : _chatProcess->messagesInRangeCount,
 			.messagesUniqueCount = _chatProcess->messagesUniqueCount
 		});
 
@@ -3623,7 +3627,6 @@ void ApiWrap::filePartExtractReference(
 
 void ApiWrap::error(const MTP::Error &error) {
 	LOG(("Export Error: API Error %1: %2 (%3)").arg(error.code()).arg(error.type()).arg(error.description()));
-	clearState();
 	_errors.fire_copy(error);
 }
 
