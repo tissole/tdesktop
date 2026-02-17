@@ -2185,11 +2185,13 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			if (data.isVideoMessage) return MediaType::VideoMessage;
 			if (data.isVoiceMessage) return MediaType::VoiceMessage;
 			if (data.isAnimated) return MediaType::GIF;
-			if (data.isVideoFile) return MediaType::Video;
-			if (data.isAudioFile) return MediaType::Audio;
+			if (data.isVideoFile || data.mime.startsWith("video/")) return MediaType::Video;
+			if (data.isAudioFile || data.mime.startsWith("audio/")) return MediaType::Audio;
 			return MediaType::File;
 		}, [](const Data::Photo &data) {
 			return MediaType::Photo;
+		}, [](const Data::WebPage &data) {
+			return MediaType::Link;
 		}, [](const auto &data) {
 			return MediaType::Text;
 		}) : MediaType::Text;
@@ -2209,6 +2211,12 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				if (!url.isEmpty()) {
 					linksInThisMessage.insert(url);
 				}
+			}
+		}
+		if (const auto webpage = std::get_if<Data::WebPage>(&message.media.content)) {
+			const auto url = QString::fromUtf8(webpage->url);
+			if (!url.isEmpty()) {
+				linksInThisMessage.insert(url);
 			}
 		}
 		const auto hasAnyLink = !linksInThisMessage.empty();
@@ -2262,7 +2270,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		// Bubble counting (Total and Unique messages, excluding Links from sum)
 		bool isMediaForSum = (messageType != MediaSettings::Type::Link && messageType != MediaSettings::Type::Text);
-		bool countThis = isMediaForSum || ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory));
+		bool countThis = isMediaForSum 
+			|| ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory))
+			|| (hasAnyLink && linkSelectedForStats);
 
 		if (countThis) {
 			bool uniqueBubble = false;
@@ -2292,7 +2302,6 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 						uniqueBubble = true;
 						// ALWAYS mark as visited if it's NOT a file that processFileLoad handles.
 						// If it IS a file, processFileLoad will mark it.
-						// This avoids double-deduplication that results in 0 unique stats.
 						if (!message.file().location) {
 							visited.emplace(checkKey, QString());
 						}
@@ -2782,15 +2791,17 @@ void ApiWrap::processFileLoad(
 			return Type::VoiceMessage;
 		} else if (data.isAnimated) {
 			return Type::GIF;
-		} else if (data.isVideoFile) {
+		} else if (data.isVideoFile || data.mime.startsWith("video/")) {
 			return Type::Video;
-		} else if (data.isAudioFile) {
+		} else if (data.isAudioFile || data.mime.startsWith("audio/")) {
 			return Type::Audio;
 		} else {
 			return Type::File;
 		}
 	}, [](const Data::Photo &data) {
 		return Type::Photo;
+	}, [](const Data::WebPage &data) {
+		return Type::Link;
 	}, [](const auto &data) {
 		return Type(0);
 	}) : Type(0);

@@ -1395,7 +1395,14 @@ Media ParseMedia(
 		content.spoilered = data.is_spoiler();
 		result.content = content;
 	}, [&](const MTPDmessageMediaWebPage &data) {
-		// Ignore web pages.
+		const auto url = data.vwebpage().match([](const MTPDwebPage &data) {
+			return data.vurl();
+		}, [](const auto &) {
+			return MTPstring();
+		});
+		if (!url.v.isEmpty()) {
+			result.content = WebPage{ ParseString(url) };
+		}
 	}, [&](const MTPDmessageMediaVenue &data) {
 		result.content = ParseVenue(data);
 	}, [&](const MTPDmessageMediaGame &data) {
@@ -2562,14 +2569,16 @@ bool SkipMessageByDate(const Message &message, const Settings &settings) {
 		const auto type = v::match(message.media.content, [&](
 			const Data::Document &data) {
 			if (data.isSticker) return Type::Sticker;
-			if (data.isVideoMessage) return Type::VideoMessage;
-			if (data.isVoiceMessage) return Type::VoiceMessage;
+			if (data.isVideoMessage) return MediaType::VideoMessage;
+			if (data.isVoiceMessage) return MediaType::VoiceMessage;
 			if (data.isAnimated) return Type::GIF;
 			if (data.isVideoFile) return Type::Video;
 			if (data.isAudioFile) return Type::Audio;
 			return Type::File;
 		}, [](const Data::Photo &data) {
 			return Type::Photo;
+		}, [](const Data::WebPage &data) {
+			return Type::Link;
 		}, [](const auto &data) {
 			return Type::Text;
 		});
@@ -2578,7 +2587,7 @@ bool SkipMessageByDate(const Message &message, const Settings &settings) {
 		// Special case: if Link is selected, we also check media captions for links
 		if (!(types & type)) {
 			if (types & Type::Link) {
-				const auto hasLink = [&] {
+				const auto hasLink = std::holds_alternative<Data::WebPage>(message.media.content) || [&] {
 					for (const auto &part : message.text) {
 						if (part.type == Data::TextPart::Type::Url
 							|| part.type == Data::TextPart::Type::TextUrl) {

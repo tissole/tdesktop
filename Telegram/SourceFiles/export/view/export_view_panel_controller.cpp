@@ -323,6 +323,7 @@ void PanelController::showProgress() {
 
 	_panel->setTitle(tr::lng_export_progress_title());
 
+	_state = ProcessingState();
 	auto progress = base::make_unique_q<ProgressWidget>(
 		_panel.get(),
 		rpl::single(

@@ -427,32 +427,22 @@ void ControllerObject::startExport(
 		const auto type = pair.first;
 		const auto &item = pair.second;
 		
-		// If Full History is selected, add up all media/text items (excluding links from message sum)
+		// If Full History is selected, add up all media/text items
 		if (_settings.media.types & MediaType::FullHistory) {
-			if (type != MediaType::Link) {
-				totalTotalFilesCount += item.totalCount;
-			}
+			totalTotalFilesCount += item.totalCount;
 		} else if (_settings.media.types & type) {
 			// If specific filter selected, add those counts
-			if (type != MediaType::Link) {
-				totalTotalFilesCount += item.totalCount;
-			}
+			totalTotalFilesCount += item.totalCount;
 		}
 	}
 	
 	if (totalTotalFilesCount > 0) {
+		// totalTotalFilesCount is the sum of category matches.
+		// _messagesInRangeCount is the actual number of bubbles found during scan.
+		// We use bubble count for the main progress denominator.
 		_stats.setExpectedFilesCount(totalTotalFilesCount);
-		_messagesCount = totalTotalFilesCount;
-		_messagesInRangeCount = totalTotalFilesCount;
+		_messagesCount = _messagesInRangeCount;
 		_scanStatsFound = true;
-	} else if (!_scanStats.byType().empty()) {
-		const auto breakdown = _scanStats.byType();
-		const auto it = breakdown.find(MediaType::Link);
-		if (it != breakdown.end() && it->second.totalCount > 0) {
-			_messagesCount = it->second.totalCount; // Use link count as denominator if only links
-			_stats.setExpectedFilesCount(_messagesCount);
-			_scanStatsFound = true;
-		}
 	} else {
 		_messagesCount = 0;
 		_stats.setExpectedFilesCount(0);

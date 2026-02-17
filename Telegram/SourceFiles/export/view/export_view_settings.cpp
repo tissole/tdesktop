@@ -1290,9 +1290,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	for (const auto &pair : stats) {
 		const auto type = pair.first;
 		const auto &item = pair.second;
-		if (type != MediaSettings::Type::Link) {
-			totalTotalMessagesCount += item.totalCount;
-		}
+		totalTotalMessagesCount += item.totalCount;
 	}
 
 	if (totalTotalMessagesCount <= 0) {
