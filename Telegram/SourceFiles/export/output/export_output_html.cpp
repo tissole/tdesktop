@@ -2565,6 +2565,11 @@ MediaData HtmlWriter::Wrap::prepareMediaData(
 		result.title = data.title;
 		result.description = data.description;
 		result.status = Data::FormatMoneyAmount(data.amount, data.currency);
+	}, [&](const WebPage &data) {
+		result.classes = "media_link";
+		result.title = "Link";
+		result.status = data.url;
+		result.link = data.url;
 	}, [](const Poll &data) {
 	}, [](const TodoList &data) {
 	}, [](const GiveawayStart &data) {

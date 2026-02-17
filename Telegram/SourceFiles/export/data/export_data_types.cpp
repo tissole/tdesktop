@@ -2569,8 +2569,8 @@ bool SkipMessageByDate(const Message &message, const Settings &settings) {
 		const auto type = v::match(message.media.content, [&](
 			const Data::Document &data) {
 			if (data.isSticker) return Type::Sticker;
-			if (data.isVideoMessage) return MediaType::VideoMessage;
-			if (data.isVoiceMessage) return MediaType::VoiceMessage;
+			if (data.isVideoMessage) return Type::VideoMessage;
+			if (data.isVoiceMessage) return Type::VoiceMessage;
 			if (data.isAnimated) return Type::GIF;
 			if (data.isVideoFile) return Type::Video;
 			if (data.isAudioFile) return Type::Audio;
