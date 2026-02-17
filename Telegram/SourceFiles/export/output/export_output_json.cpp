@@ -1785,7 +1785,7 @@ Result JsonWriter::finish() {
 		totalValues.push_back({ "total_size", QByteArray::number(totalTotalSize) });
 		statsValues.push_back({ "total", SerializeObject(_context, totalValues) });
 
-		if (const auto result = writeBlock(prepareObjectItemStart("export_statistics") + SerializeObject(_context, statsValues)); result != Result::Success()) {
+		if (const auto result = writeBlock(prepareObjectItemStart("export_statistics") + SerializeObject(_context, statsValues)); !result) {
 			return result;
 		}
 	}
