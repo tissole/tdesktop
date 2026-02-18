@@ -358,7 +358,7 @@ private:
 	base::flat_map<LocationKey, QString> _exportVisited;
 	base::flat_set<QString> _visitedLinks;
 	base::flat_map<LocationKey, std::vector<FnMut<void(QString)>>> _pendingFileCallbacks;
-	FnMut<void()> _finishDone;
+	FnMut<void()> _delayedFinishCallback;
 };
 
 } // namespace Export
