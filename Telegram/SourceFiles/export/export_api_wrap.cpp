@@ -563,11 +563,12 @@ void ApiWrap::startExport(
 	_startProcess = std::make_unique<StartProcess>();
 	_startProcess->done = std::move(done);
 
+	const bool fullHistoryMode = (_settings->media.types & MediaSettings::Type::FullHistory);
 	if (_isScanning
 		&& _settings->singlePeerFrom == 0
 		&& _settings->singlePeerTill == 0
 		&& !_settings->useIdRange
-		&& (_settings->media.sizeLimit >= kFileMaxSize || _settings->media.sizeLimit <= 0)
+		&& (fullHistoryMode || _settings->media.sizeLimit >= kFileMaxSize || _settings->media.sizeLimit <= 0)
 		&& _settings->onlySinglePeer()) {
 		_usingServerCounts = true;
 	}
@@ -691,6 +692,7 @@ void ApiWrap::requestMediaCounts() {
 	add(Type::VideoMessage, MTP_inputMessagesFilterRoundVideo());
 	add(Type::Link, MTP_inputMessagesFilterUrl());
 	add(Type::GIF, MTP_inputMessagesFilterGif());
+	add(Type::Sticker, MTP_inputMessagesFilterStickers());
 
 	if (filters.empty()) {
 		sendNextStartRequest();
@@ -730,7 +732,10 @@ void ApiWrap::requestMediaCounts() {
 				[](const MTPDmessages_messagesNotModified &) { return 0; }
 			);
 
-			_scanStats->setTotalCount(type, count);
+			using Type = MediaSettings::Type;
+			if (type != Type::Link) {
+				_scanStats->setTotalCount(type, count);
+			}
 
 			if (--_startProcess->pendingCounts == 0) {
 				sendNextStartRequest();
@@ -1592,6 +1597,9 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 	if (localSplitIndex + 1 < _chatProcess->info.splits.size()) {
 		requestMessagesCount(localSplitIndex + 1);
 	} else if (_chatProcess->start(_chatProcess->info)) {
+		if (!_chatProcess->messagesInRangeCountFixed) {
+			_chatProcess->messagesInRangeCount = _chatProcess->messagesTextTotal;
+		}
 		requestMessagesSlice();
 	}
 }
@@ -1679,6 +1687,16 @@ void ApiWrap::resolveDates() {
 }
 
 void ApiWrap::finishExport(FnMut<void()> done) {
+	if (_filesDownloading > 0 || !_fileDownloadQueue.empty() || !_pendingFileCallbacks.empty()) {
+		if (_chatProcess) {
+			_chatProcess->finish = std::move(done);
+		} else {
+			// This shouldn't happen during a normal export flow.
+			if (done) done();
+		}
+		return;
+	}
+
 	const auto takeoutId = base::take(_takeoutId);
 	const auto guard = gsl::finally([&] {
 		clearState();
@@ -2278,8 +2296,8 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			if (data.isVideoMessage) return MediaType::VideoMessage;
 			if (data.isVoiceMessage) return MediaType::VoiceMessage;
 			if (data.isAnimated) return MediaType::GIF;
-			if (data.isVideoFile || data.mime.startsWith("video/")) return MediaType::Video;
-			if (data.isAudioFile || data.mime.startsWith("audio/")) return MediaType::Audio;
+			if (data.isVideoFile) return MediaType::Video;
+			if (data.isAudioFile) return MediaType::Audio;
 			return MediaType::File;
 		}, [](const Data::Photo &data) {
 			return MediaType::Photo;
@@ -2333,30 +2351,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				}
 			}
 			if (_isScanning) {
-				if (_usingServerCounts) {
-					// Server counts total, we only add unique (if any logic supports it for links)
-					// Links are tricky because server counts messages with links.
-					// We count links.
-					// If we use server count, we use messages-with-links count.
-					// But here we increment unique per URL.
-					// For links, let's keep iteration count because "Unique Links" concept is client-side.
-					// BUT "Total Links" from server is "messages with links".
-					// Our "Total Links" from iteration is "total link occurrences".
-					// The user complained about scan (20827) vs server (21857).
-					// If we use server count for Total, we should be consistent.
-					// However, increment(Link, ...) adds to totalCount.
-					// If we setTotalCount(Link), then increment() ruins it.
-					// So for links, if usingServerCounts, we should NOT increment total.
-					_scanStats->incrementSizeAndUnique(MediaSettings::Type::Link, 0, uniqueInMsg > 0);
-					// Wait, uniqueInMsg is count of unique links in this message.
-					// incrementSizeAndUnique takes bool 'unique'.
-					// We need to add uniqueInMsg to uniqueCount.
-					// The existing increment overload: increment(Type, size, total, unique)
-					// We need: increment(Type, size, total=0, unique=uniqueInMsg)
-					_scanStats->increment(MediaSettings::Type::Link, 0, 0, uniqueInMsg);
-				} else {
-					_scanStats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
-				}
+				// Links are ALWAYS counted locally to match "Chat Info" logic (entities)
+				// because server filter (Url) is too restrictive (only WebPages).
+				_scanStats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
 			} else if (_stats) {
 				_stats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
 			}
@@ -2911,9 +2908,9 @@ void ApiWrap::processFileLoad(
 			return Type::VoiceMessage;
 		} else if (data.isAnimated) {
 			return Type::GIF;
-		} else if (data.isVideoFile || data.mime.startsWith("video/")) {
+		} else if (data.isVideoFile) {
 			return Type::Video;
-		} else if (data.isAudioFile || data.mime.startsWith("audio/")) {
+		} else if (data.isAudioFile) {
 			return Type::Audio;
 		} else {
 			return Type::File;
