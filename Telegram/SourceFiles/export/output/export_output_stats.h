@@ -32,7 +32,9 @@ public:
 
 	void increment(MediaSettings::Type type, int64 size, bool unique);
 	void increment(MediaSettings::Type type, int64 size, int totalCount, int uniqueCount);
+	void incrementSizeAndUnique(MediaSettings::Type type, int64 size, bool unique);
 	void incrementSize(MediaSettings::Type type, int64 size);
+	void setTotalCount(MediaSettings::Type type, int count);
 	void setExpectedFilesCount(int count);
 	void clear();
 

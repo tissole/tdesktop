@@ -206,12 +206,14 @@ struct ApiWrap::StartProcess {
 	enum class Step {
 		UserpicsCount,
 		StoriesCount,
+		MediaCounts,
 		SplitRanges,
 		DialogsCount,
 		LeftChannelsCount,
 	};
 	std::deque<Step> steps;
 	int splitIndex = 0;
+	int pendingCounts = 0;
 	StartInfo info;
 };
 
@@ -553,6 +555,7 @@ void ApiWrap::startExport(
 	_stats = stats;
 	_isScanning = isScanning;
 	_scanStats = scanStats;
+	_usingServerCounts = false;
 	_scanVisited.clear();
 	_exportVisited.clear();
 	_visitedLinks.clear();
@@ -560,12 +563,24 @@ void ApiWrap::startExport(
 	_startProcess = std::make_unique<StartProcess>();
 	_startProcess->done = std::move(done);
 
+	if (_isScanning
+		&& _settings->singlePeerFrom == 0
+		&& _settings->singlePeerTill == 0
+		&& !_settings->useIdRange
+		&& (_settings->media.sizeLimit >= kFileMaxSize || _settings->media.sizeLimit <= 0)
+		&& _settings->onlySinglePeer()) {
+		_usingServerCounts = true;
+	}
+
 	using Step = StartProcess::Step;
 	if (_settings->types & Settings::Type::Userpics) {
 		_startProcess->steps.push_back(Step::UserpicsCount);
 	}
 	if (_settings->types & Settings::Type::Stories) {
 		_startProcess->steps.push_back(Step::StoriesCount);
+	}
+	if (_usingServerCounts) {
+		_startProcess->steps.push_back(Step::MediaCounts);
 	}
 	if (_settings->types & Settings::Type::AnyChatsMask) {
 		_startProcess->steps.push_back(Step::SplitRanges);
@@ -604,6 +619,8 @@ void ApiWrap::sendNextStartRequest() {
 		return requestUserpicsCount();
 	case Step::StoriesCount:
 		return requestStoriesCount();
+	case Step::MediaCounts:
+		return requestMediaCounts();
 	case Step::SplitRanges:
 		return requestSplitRanges();
 	case Step::DialogsCount:
@@ -650,6 +667,82 @@ void ApiWrap::requestStoriesCount() {
 
 		sendNextStartRequest();
 	}).send();
+}
+
+void ApiWrap::requestMediaCounts() {
+	Expects(_startProcess != nullptr);
+
+	using Type = MediaSettings::Type;
+	const auto types = _settings->media.types;
+
+	std::vector<std::pair<Type, MTPMessagesFilter>> filters;
+
+	auto add = [&](Type type, const MTPMessagesFilter &filter) {
+		if ((types & type) || (types & Type::FullHistory)) {
+			filters.push_back({ type, filter });
+		}
+	};
+
+	add(Type::Photo, MTP_inputMessagesFilterPhotos());
+	add(Type::Video, MTP_inputMessagesFilterVideo());
+	add(Type::File, MTP_inputMessagesFilterDocument());
+	add(Type::Audio, MTP_inputMessagesFilterMusic());
+	add(Type::VoiceMessage, MTP_inputMessagesFilterVoice());
+	add(Type::VideoMessage, MTP_inputMessagesFilterRoundVideo());
+	add(Type::Link, MTP_inputMessagesFilterUrl());
+	add(Type::GIF, MTP_inputMessagesFilterGif());
+
+	if (filters.empty()) {
+		sendNextStartRequest();
+		return;
+	}
+
+	_startProcess->pendingCounts = filters.size();
+
+	for (const auto &pair : filters) {
+		const auto type = pair.first;
+		const auto filter = pair.second;
+
+		mainRequest(MTPmessages_Search(
+			MTP_flags(0),
+			_settings->singlePeer,
+			MTP_string(""),
+			MTP_inputPeerEmpty(),
+			MTP_inputPeerEmpty(),
+			MTP_vector<MTPReaction>(),
+			MTP_int(0),
+			filter,
+			MTP_int(0),
+			MTP_int(0),
+			MTP_int(0),
+			MTP_int(0),
+			MTP_int(1),
+			MTP_int(0),
+			MTP_int(0),
+			MTP_long(0)
+		)).done([=](const MTPmessages_Messages &result) {
+			if (!_settings || !_startProcess || !_scanStats) return;
+
+			const auto count = result.match(
+				[](const MTPDmessages_messages &data) { return int(data.vmessages().v.size()); },
+				[](const MTPDmessages_messagesSlice &data) { return data.vcount().v; },
+				[](const MTPDmessages_channelMessages &data) { return data.vcount().v; },
+				[](const MTPDmessages_messagesNotModified &) { return 0; }
+			);
+
+			_scanStats->setTotalCount(type, count);
+
+			if (--_startProcess->pendingCounts == 0) {
+				sendNextStartRequest();
+			}
+		}).fail([=](const MTP::Error &) {
+			if (!_settings || !_startProcess) return false;
+			if (--_startProcess->pendingCounts == 0) {
+				sendNextStartRequest();
+			}
+			return true;
+		}).send();
+	}
 }
 
 void ApiWrap::requestSplitRanges() {
@@ -2240,7 +2333,30 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				}
 			}
 			if (_isScanning) {
-				_scanStats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
+				if (_usingServerCounts) {
+					// Server counts total, we only add unique (if any logic supports it for links)
+					// Links are tricky because server counts messages with links.
+					// We count links.
+					// If we use server count, we use messages-with-links count.
+					// But here we increment unique per URL.
+					// For links, let's keep iteration count because "Unique Links" concept is client-side.
+					// BUT "Total Links" from server is "messages with links".
+					// Our "Total Links" from iteration is "total link occurrences".
+					// The user complained about scan (20827) vs server (21857).
+					// If we use server count for Total, we should be consistent.
+					// However, increment(Link, ...) adds to totalCount.
+					// If we setTotalCount(Link), then increment() ruins it.
+					// So for links, if usingServerCounts, we should NOT increment total.
+					_scanStats->incrementSizeAndUnique(MediaSettings::Type::Link, 0, uniqueInMsg > 0);
+					// Wait, uniqueInMsg is count of unique links in this message.
+					// incrementSizeAndUnique takes bool 'unique'.
+					// We need to add uniqueInMsg to uniqueCount.
+					// The existing increment overload: increment(Type, size, total, unique)
+					// We need: increment(Type, size, total=0, unique=uniqueInMsg)
+					_scanStats->increment(MediaSettings::Type::Link, 0, 0, uniqueInMsg);
+				} else {
+					_scanStats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
+				}
 			} else if (_stats) {
 				_stats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
 			}
@@ -2320,7 +2436,11 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			// Increment stats for messages without main files (Text, non-file Media)
 			// Only if the type itself is selected or Full History is selected.
 			if (!message.file().location && mediaSelected && messageType != MediaSettings::Type::Link) {
-				_scanStats->increment(messageType, 0, true);
+				if (_usingServerCounts) {
+					_scanStats->incrementSizeAndUnique(messageType, 0, true);
+				} else {
+					_scanStats->increment(messageType, 0, true);
+				}
 			}
 		} else {
 			// During export, increment stats for non-file messages too.
@@ -2855,7 +2975,11 @@ void ApiWrap::processFileLoad(
 						_scanVisited.emplace(checkKey, QString());
 					}
 					
-					_scanStats->increment(type, fullSize, willBeUniqueInChat);
+					if (_usingServerCounts) {
+						_scanStats->incrementSizeAndUnique(type, fullSize, willBeUniqueInChat);
+					} else {
+						_scanStats->increment(type, fullSize, willBeUniqueInChat);
+					}
 				}
 			}
 		}

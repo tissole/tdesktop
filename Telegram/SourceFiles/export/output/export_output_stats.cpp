@@ -55,10 +55,24 @@ void Stats::increment(MediaSettings::Type type, int64 size, int totalCount, int 
 	stat.totalSize += size;
 }
 
+void Stats::incrementSizeAndUnique(MediaSettings::Type type, int64 size, bool unique) {
+	auto &stat = typeStat(type);
+	if (unique) {
+		++stat.uniqueCount;
+		stat.uniqueSize += size;
+	}
+	stat.totalSize += size;
+}
+
 void Stats::incrementSize(MediaSettings::Type type, int64 size) {
 	auto &stat = typeStat(type);
 	stat.uniqueSize += size;
 	stat.totalSize += size;
+}
+
+void Stats::setTotalCount(MediaSettings::Type type, int count) {
+	auto &stat = typeStat(type);
+	stat.totalCount = count;
 }
 
 void Stats::setExpectedFilesCount(int count) {

@@ -214,6 +214,7 @@ private:
 	void checkFirstMessageDate(int localSplitIndex, int count);
 	void messagesCountLoaded(int localSplitIndex, int count);
 	void resolveDates();
+	void requestMediaCounts();
 	void requestMessagesSlice();
 	void requestChatMessages(
 		int splitIndex,
@@ -302,6 +303,7 @@ private:
 	std::unique_ptr<Settings> _settings;
 	Output::Stats *_stats = nullptr;
 	bool _isScanning = false;
+	bool _usingServerCounts = false;
 	Output::Stats *_scanStats = nullptr;
 
 	std::unique_ptr<StartProcess> _startProcess;
