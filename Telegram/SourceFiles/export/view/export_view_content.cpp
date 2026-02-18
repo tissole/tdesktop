@@ -157,10 +157,10 @@ Content ContentFromState(
 					text = label + ": " + Lang::FormatCountDecimal(item.totalCount);
 				} else if (type == MediaType::Link) {
 					text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) 
-						+ " / " + Lang::FormatCountDecimal(item.totalCount);
+						+ ", " + Lang::FormatCountDecimal(item.totalCount);
 				} else {
 					text = label + ": " 
-						+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + ") / "
+						+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
 						+ Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
 				}
 				result.rows.push_back({ "stat_" + QString::number((int)type), text, QString(), 1. });
@@ -246,10 +246,10 @@ Content ContentFromState(const FinishedState &state) {
 			text = label + ": " + Lang::FormatCountDecimal(item.totalCount);
 		} else if (type == Type::Link) {
 			text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) 
-				+ " / " + Lang::FormatCountDecimal(item.totalCount);
+				+ ", " + Lang::FormatCountDecimal(item.totalCount);
 		} else {
 			text = label + ": " 
-				+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + ") / "
+				+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
 				+ Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
 
 			totalUniqueMediaSize += item.uniqueSize;
@@ -266,13 +266,13 @@ Content ContentFromState(const FinishedState &state) {
 	}
 
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
-		const auto label = "Total unique / Total messages: ";
+		const auto label = "Total unique, Total messages: ";
 		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 		const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
-		const QString totalText = label + uniqueStr + " / " + totalStr;
+		const QString totalText = label + uniqueStr + ", " + totalStr;
 		result.rows.push_back({ "stat_summary", totalText, QString(), 1. });
 	}
 

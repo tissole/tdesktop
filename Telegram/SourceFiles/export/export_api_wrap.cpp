@@ -3072,7 +3072,7 @@ void ApiWrap::processFileLoad(
 	}
 
 	auto wrapDone = [=, done = std::move(done)](QString path) mutable {
-		if (!path.isEmpty() && (locationKey.id != 0 || locationKey.type != 0) && !isThumb) {
+		if ((locationKey.id != 0 || locationKey.type != 0) && !isThumb) {
 			// Recompute persistent ID check key for consistency
 			uint64 persistentId = 0;
 			if (message) {
@@ -3089,7 +3089,14 @@ void ApiWrap::processFileLoad(
 			} else {
 				checkKey = locationKey;
 			}
-			_exportVisited[checkKey] = path;
+			
+			if (path.isEmpty()) {
+				// Download failed, remove from visited so it can be retried or doesn't block pending callbacks forever
+				// Note: pending callbacks have already been fired with empty path in finishFile
+				_exportVisited.erase(checkKey);
+			} else {
+				_exportVisited[checkKey] = path;
+			}
 		}
 		done(path);
 	};
