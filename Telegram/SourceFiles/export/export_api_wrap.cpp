@@ -1685,7 +1685,7 @@ void ApiWrap::resolveDates() {
 void ApiWrap::finishExport(FnMut<void()> done) {
 	if (_filesDownloading > 0 || !_fileDownloadQueue.empty() || !_pendingFileCallbacks.empty()) {
 		if (_chatProcess) {
-			_chatProcess->finish = std::move(done);
+			_chatProcess->done = std::move(done);
 		} else {
 			// This shouldn't happen during a normal export flow.
 			if (done) done();
@@ -3274,8 +3274,8 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 	scheduleMoreFiles();
 
 	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
-		if (_chatProcess && _chatProcess->finish) {
-			finishExport(base::take(_chatProcess->finish));
+		if (_chatProcess && _chatProcess->done) {
+			finishExport(base::take(_chatProcess->done));
 		}
 	}
 }
