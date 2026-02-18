@@ -692,7 +692,6 @@ void ApiWrap::requestMediaCounts() {
 	add(Type::VideoMessage, MTP_inputMessagesFilterRoundVideo());
 	add(Type::Link, MTP_inputMessagesFilterUrl());
 	add(Type::GIF, MTP_inputMessagesFilterGif());
-	add(Type::Sticker, MTP_inputMessagesFilterStickers());
 
 	if (filters.empty()) {
 		sendNextStartRequest();
@@ -732,10 +731,7 @@ void ApiWrap::requestMediaCounts() {
 				[](const MTPDmessages_messagesNotModified &) { return 0; }
 			);
 
-			using Type = MediaSettings::Type;
-			if (type != Type::Link) {
-				_scanStats->setTotalCount(type, count);
-			}
+			_scanStats->setTotalCount(type, count);
 
 			if (--_startProcess->pendingCounts == 0) {
 				sendNextStartRequest();
@@ -2351,9 +2347,12 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				}
 			}
 			if (_isScanning) {
-				// Links are ALWAYS counted locally to match "Chat Info" logic (entities)
-				// because server filter (Url) is too restrictive (only WebPages).
-				_scanStats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
+				if (_usingServerCounts) {
+					// Add to unique count, keep server's total.
+					_scanStats->increment(MediaSettings::Type::Link, 0, 0, uniqueInMsg);
+				} else {
+					_scanStats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
+				}
 			} else if (_stats) {
 				_stats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
 			}
@@ -3273,6 +3272,12 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 	process->done(relativePath);
 
 	scheduleMoreFiles();
+
+	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
+		if (_chatProcess && _chatProcess->finish) {
+			finishExport(base::take(_chatProcess->finish));
+		}
+	}
 }
 
 void ApiWrap::loadFilePart(FileProcess &process) {
