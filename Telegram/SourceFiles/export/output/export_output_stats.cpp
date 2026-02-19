@@ -50,7 +50,7 @@ void Stats::increment(MediaSettings::Type type, int64 size, bool unique) {
 void Stats::increment(MediaSettings::Type type, int64 size, int totalCount, int uniqueCount) {
 	auto &stat = typeStat(type);
 	stat.uniqueCount += uniqueCount;
-	stat.uniqueSize += size;
+	stat.uniqueSize += (uniqueCount > 0) ? size : 0;
 	stat.totalCount += totalCount;
 	stat.totalSize += size;
 }
@@ -61,6 +61,7 @@ void Stats::incrementSizeAndUnique(MediaSettings::Type type, int64 size, bool un
 		++stat.uniqueCount;
 		stat.uniqueSize += size;
 	}
+	++stat.totalCount;
 	stat.totalSize += size;
 }
 
