@@ -3664,8 +3664,6 @@ QByteArray HtmlWriter::statsBlock() const {
 		if (label.isEmpty()) continue;
 
 		categoriesCount++;
-		const bool hasDuplicates = (item.uniqueCount != item.totalCount)
-			|| (item.uniqueSize != item.totalSize);
 
 		result.append("<div class=\"details_entry details\">").append(label).append(": ");
 		if (type == Type::Text) {

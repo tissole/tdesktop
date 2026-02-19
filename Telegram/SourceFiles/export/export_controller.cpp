@@ -89,8 +89,6 @@ void WriteScanStatsFile(
 		if (label.isEmpty()) continue;
 
 		categoriesCount++;
-		const bool hasDuplicates = (item.uniqueCount != item.totalCount)
-			|| (item.uniqueSize != item.totalSize);
 
 		if (type == Type::Text) {
 			out << label << ": " << item.totalCount << "\n";
