@@ -303,7 +303,6 @@ private:
 	std::unique_ptr<Settings> _settings;
 	Output::Stats *_stats = nullptr;
 	bool _isScanning = false;
-	bool _usingServerCounts = false;
 	Output::Stats *_scanStats = nullptr;
 
 	std::unique_ptr<StartProcess> _startProcess;
