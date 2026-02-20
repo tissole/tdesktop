@@ -563,7 +563,7 @@ void ApiWrap::startExport(
 	_fileDownloadQueue.clear();
 	_fileProcesses.clear();
 	_filesDownloading = 0;
-	_delayedFinishCallback = nullptr;
+	_finishDone = nullptr;
 	_chatProcess = nullptr;
 	_startProcess = std::make_unique<StartProcess>();
 	_startProcess->done = std::move(done);
@@ -695,7 +695,6 @@ void ApiWrap::requestMediaCounts() {
 	add(Type::Audio, MTP_inputMessagesFilterMusic());
 	add(Type::VoiceMessage, MTP_inputMessagesFilterVoice());
 	add(Type::VideoMessage, MTP_inputMessagesFilterRoundVideo());
-	add(Type::Link, MTP_inputMessagesFilterUrl());
 	add(Type::GIF, MTP_inputMessagesFilterGif());
 
 	if (filters.empty()) {
@@ -1690,7 +1689,7 @@ void ApiWrap::resolveDates() {
 
 void ApiWrap::finishExport(FnMut<void()> done) {
 	if (_filesDownloading > 0 || !_fileDownloadQueue.empty() || !_pendingFileCallbacks.empty()) {
-		_delayedFinishCallback = std::move(done);
+		_finishDone = std::move(done);
 		return;
 	}
 
@@ -2214,9 +2213,9 @@ MTPMessagesFilter ApiWrap::getFilter() const {
 	using Type = MediaSettings::Type;
 	const auto types = _settings->media.types;
 	
-	// If Text or FullHistory is selected, we need to request the full stream
+	// If Text, FullHistory or Link is selected, we need to request the full stream
 	// to ensure we get all messages (then we filter them locally).
-	if ((types & Type::Text) || (types & Type::FullHistory)) {
+	if ((types & Type::Text) || (types & Type::FullHistory) || (types & Type::Link)) {
 		return MTP_inputMessagesFilterEmpty();
 	}
 
@@ -2255,8 +2254,8 @@ MTPMessagesFilter ApiWrap::getFilter() const {
 	if (round) return MTP_inputMessagesFilterRoundVideo();
 	if (gif) return MTP_inputMessagesFilterGif();
 	if (audio) return MTP_inputMessagesFilterMusic();
-	if (sticker) return MTP_inputMessagesFilterEmpty();
-	if (link) return MTP_inputMessagesFilterUrl();
+	if (sticker) return MTP_inputMessagesFilterEmpty(); // No server-side filter for stickers
+	if (link) return MTP_inputMessagesFilterEmpty(); // Server filter is incomplete for links
 
 	return MTP_inputMessagesFilterEmpty();
 }
@@ -2441,8 +2440,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					messageType == MediaType::Audio ||
 					messageType == MediaType::VoiceMessage ||
 					messageType == MediaType::VideoMessage ||
-					messageType == MediaType::GIF ||
-					messageType == MediaType::Link
+					messageType == MediaType::GIF
 				);
 
 				if (seeded) {
@@ -2467,12 +2465,10 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			? _chatProcess->messagesTextTotal
 			: _chatProcess->messagesInRangeCount;
 
-		const auto itemIndex = _chatProcess->totalMessagesCounter;
-
 		_chatProcess->fileProgress({
 			.randomId = 0,
 			.path = QString(),
-			.itemIndex = itemIndex,
+			.itemIndex = _isScanning ? _chatProcess->totalMessagesCounter : _chatProcess->messageItemIndices[i],
 			.ready = 1,
 			.total = 1,
 			.isAuxiliary = true,
@@ -3308,8 +3304,8 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 	scheduleMoreFiles();
 
 	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
-		if (_delayedFinishCallback) {
-			finishExport(base::take(_delayedFinishCallback));
+		if (_finishDone) {
+			finishExport(base::take(_finishDone));
 		}
 	}
 }
@@ -3832,12 +3828,10 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 				? _chatProcess->messagesTextTotal
 				: _chatProcess->messagesInRangeCount;
 
-			const auto itemIndex = _chatProcess->totalMessagesCounter;
-
 			_chatProcess->fileProgress({
 				.randomId = 0,
 				.path = QString(),
-				.itemIndex = itemIndex,
+				.itemIndex = _chatProcess->messageItemIndices[index],
 				.ready = 1,
 				.total = 1,
 				.isAuxiliary = true,
@@ -3890,7 +3884,7 @@ void ApiWrap::clearState(bool keepCache) {
 	_fileDownloadQueue.clear();
 	_filesDownloading = 0;
 	_pendingFileCallbacks.clear();
-	_delayedFinishCallback = nullptr;
+	_finishDone = nullptr;
 	_unresolvedCustomEmoji.clear();
 	_resolvedCustomEmoji.clear();
 }
