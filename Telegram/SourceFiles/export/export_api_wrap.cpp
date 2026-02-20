@@ -568,6 +568,8 @@ void ApiWrap::startExport(
 	_startProcess = std::make_unique<StartProcess>();
 	_startProcess->done = std::move(done);
 
+	const bool fullHistoryMode = (_settings->media.types & MediaSettings::Type::FullHistory);
+
 	using Step = StartProcess::Step;
 	if (_settings->types & Settings::Type::Userpics) {
 		_startProcess->steps.push_back(Step::UserpicsCount);
@@ -2109,7 +2111,6 @@ void ApiWrap::requestChatMessages(
 			const auto filterEmpty = (filter.type() == mtpc_inputMessagesFilterEmpty);
 			const auto sizeFilterActive = (_settings->media.sizeLimit > 0);
 			const auto types = _settings->media.types;
-			using Type = MediaSettings::Type;
 			// Use server count as baseline for messagesInRangeCount when:
 			// - Specific media filter is active (server has indexed count for that type)
 			// This provides progress bar baseline for all indexed types
@@ -2125,8 +2126,9 @@ void ApiWrap::requestChatMessages(
 				// Full History and Text use empty filter, so they count locally for all types
 				const auto useServerCountForStats = (types & Type::Link)
 					|| !sizeFilterActive;
-
+					
 				if (_isScanning && _scanStats && useServerCountForStats) {
+					using Type = MediaSettings::Type;
 					for (const auto type : { Type::Photo, Type::Video, Type::VoiceMessage, Type::VideoMessage, Type::Audio, Type::File, Type::Sticker, Type::GIF, Type::Link }) {
 						if (types == type) {
 							_scanStats->setTotalCount(type, count);
