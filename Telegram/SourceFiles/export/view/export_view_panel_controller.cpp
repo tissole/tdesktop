@@ -347,8 +347,6 @@ void PanelController::showProgress() {
 			LOG(("Export Info: Panel Hide By Done: %1."
 				).arg(finished->path));
 			_panel->hideGetDuration();
-		} else if (v::is<ScanDoneState>(_state)) {
-			_panel->hideGetDuration();
 		}
 	}, progress->lifetime());
 

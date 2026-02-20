@@ -41,7 +41,7 @@ public:
 private:
 	void setupBottomButton(not_null<Ui::RoundButton*> button);
 	void updateState(Content &&content);
-	void showDone(bool isScanning);
+	void showDone();
 
 	Content _content;
 

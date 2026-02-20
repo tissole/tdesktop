@@ -332,7 +332,7 @@ void ProgressWidget::updateState(Content &&content) {
 		return row.id == doneId;
 	});
 	if (done) {
-		showDone(content.isScanning);
+		showDone();
 	}
 
 	const auto wasCount = _rows.size();
@@ -376,7 +376,7 @@ void ProgressWidget::updateState(Content &&content) {
 	}
 }
 
-void ProgressWidget::showDone(bool isScanning) {
+void ProgressWidget::showDone() {
 	_cancel = nullptr;
 	if (_skipFileWrap) {
 		_skipFileWrap->hide();
@@ -384,9 +384,7 @@ void ProgressWidget::showDone(bool isScanning) {
 	_skipFile->hide(anim::type::instant);
 	_fileShowSkipTimer.cancel();
 
-	_about->setText(isScanning
-		? "Data scanning is completed."
-		: tr::lng_export_about_done(tr::now));
+	_about->setText(tr::lng_export_about_done(tr::now));
 
 	_body->resizeToWidth(width());
 
