@@ -102,7 +102,7 @@ void WriteScanStatsFile(
 			totalMediaSize += item.totalSize;
 		}
 
-		if (type != Type::Link && type != Type::Text) {
+		if (type != Type::Link) {
 			totalUniqueMessagesCount += item.uniqueCount;
 			totalTotalMessagesCount += item.totalCount;
 		}

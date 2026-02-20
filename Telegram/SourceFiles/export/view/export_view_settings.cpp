@@ -1390,7 +1390,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 				totalMediaSize += item.totalSize;
 			}
 
-			if (type != MediaType::Link && type != MediaType::Text) {
+			if (type != MediaType::Link) {
 				totalUniqueMessagesCount += item.uniqueCount;
 				totalTotalMessagesCount += item.totalCount;
 			}
