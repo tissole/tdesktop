@@ -573,18 +573,12 @@ void ApiWrap::startExport(
 		&& _settings->singlePeerFrom == 0
 		&& _settings->singlePeerTill == 0
 		&& !_settings->useIdRange
-		&& (!(_settings->media.types) || (fullHistoryMode || _settings->media.sizeLimit >= kFileMaxSize || _settings->media.sizeLimit <= 0))
+		&& (fullHistoryMode || _settings->media.sizeLimit >= kFileMaxSize || _settings->media.sizeLimit <= 0)
 		&& _settings->onlySinglePeer()) {
 		_usingServerCounts = true;
 	}
 
 	using Step = StartProcess::Step;
-	if (_takeoutId) {
-		_startProcess->steps.push_back(Step::MainSession);
-	} else if (_isScanning) {
-		// Even for scan, we prefer to start a session to avoid FloodWait.
-		_startProcess->steps.push_back(Step::MainSession);
-	}
 	if (_settings->types & Settings::Type::Userpics) {
 		_startProcess->steps.push_back(Step::UserpicsCount);
 	}
@@ -914,9 +908,6 @@ void ApiWrap::startMainSession(FnMut<void()> done) {
 			: Flag(0))
 		| (_settings->types & (Type::PrivateChannels | Type::PublicChannels)
 			? Flag::f_message_channels
-			: Flag(0))
-		| (_settings->media.types
-			? (Flag::f_message_users | Flag::f_message_chats | Flag::f_message_megagroups | Flag::f_message_channels)
 			: Flag(0));
 
 	_mtp.request(MTPusers_GetUsers(
@@ -1503,32 +1494,31 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 		? _chatProcess->info.input
 		: _chatProcess->info.migratedFromInput;
 
-		const auto minId = (_chatProcess->fromId > 0) ? std::max(int64(0), _chatProcess->fromId - 1) : int64(0); 
-		const auto maxId = (_chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
-		const auto minDate = _settings->singlePeerFrom;
-		const auto maxDate = _settings->singlePeerTill;
-	
-		using Flag = MTPmessages_Search::Flag;
-		auto searchFlags = Flag(0);
-	
-		mainRequest(MTPmessages_Search(
-			MTP_flags(searchFlags),
-			peer,
-			MTP_string(""), // q
-			MTP_inputPeerEmpty(), // from_id
-			MTP_inputPeerEmpty(), // saved_peer_id
-			MTP_vector<MTPReaction>(), // saved_reaction
-			MTP_int(0), // top_msg_id
-			filter,
-			MTP_int(minDate), // min_date
-			MTP_int(maxDate), // max_date
-			MTP_int(0), // offset_id
-			MTP_int(0), // add_offset
-			MTP_int(1), // limit
-			MTP_int(int32(maxId)), // max_id
-			MTP_int(int32(minId)), // min_id
-			MTP_long(0) // hash
-		)).done([=](const MTPmessages_Messages &result) {		if (!_chatProcess || !_settings) return;
+	const auto minId = (_chatProcess->fromId > 0) ? std::max(int64(0), _chatProcess->fromId - 1) : int64(0);
+	const auto maxId = (_chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
+
+	using Flag = MTPmessages_Search::Flag;
+	auto searchFlags = Flag(0);
+
+	mainRequest(MTPmessages_Search(
+		MTP_flags(searchFlags),
+		peer,
+		MTP_string(""), // q
+		MTP_inputPeerEmpty(), // from_id
+		MTP_inputPeerEmpty(), // saved_peer_id
+		MTP_vector<MTPReaction>(), // saved_reaction
+		MTP_int(0), // top_msg_id
+		filter,
+		MTP_int(0), // min_date
+		MTP_int(0), // max_date
+		MTP_int(0), // offset_id
+		MTP_int(0), // add_offset
+		MTP_int(1), // limit
+		MTP_int(int32(maxId)), // max_id
+		MTP_int(int32(minId)), // min_id
+		MTP_long(0) // hash
+	)).done([=](const MTPmessages_Messages &result) {
+		if (!_chatProcess || !_settings) return;
 
 		const auto count = result.match(
 			[](const MTPDmessages_messages &data) {
@@ -2157,8 +2147,6 @@ void ApiWrap::requestChatMessages(
 
 	const auto minId = (_chatProcess->fromId > 0) ? std::max(int64(0), _chatProcess->fromId - 1) : int64(0);
 	const auto maxId = (_chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
-	const auto minDate = _settings->singlePeerFrom;
-	const auto maxDate = _settings->singlePeerTill;
 	const auto filter = getFilter();
 	const auto useSearch = _chatProcess->info.onlyMyMessages
 		|| (filter.type() != mtpc_inputMessagesFilterEmpty);
@@ -2176,8 +2164,8 @@ void ApiWrap::requestChatMessages(
 			MTP_vector<MTPReaction>(), // saved_reaction
 			MTP_int(0), // top_msg_id
 			filter,
-			MTP_int(minDate), // min_date
-			MTP_int(maxDate), // max_date
+			MTP_int(0), // min_date
+			MTP_int(0), // max_date
 			MTP_int(offsetId),
 			MTP_int(addOffset),
 			MTP_int(limit),
@@ -2190,7 +2178,7 @@ void ApiWrap::requestChatMessages(
 					MTPmessages_getHistory(
 						realPeerInput,
 						MTP_int(offsetId),
-						MTP_int(minDate), // offset_date
+						MTP_int(0), // offset_date
 						MTP_int(addOffset),
 						MTP_int(limit),
 						MTP_int(int32(maxId)), // max_id
@@ -2362,7 +2350,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			&& !fullHistorySelected;
 
 		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
-		const auto countThisTotal = ((_usingServerCounts || _chatProcess->messagesInRangeCountFixed) && messageType != MediaSettings::Type::Link && messageType != MediaSettings::Type::Sticker && messageType != MediaSettings::Type::Text && _settings->media.sizeLimit <= 0)
+		const auto countThisTotal = ((_usingServerCounts || _chatProcess->messagesInRangeCountFixed) && messageType != MediaSettings::Type::Link && messageType != MediaSettings::Type::Sticker)
 			? 0
 			: 1;
 
@@ -2397,7 +2385,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		}
 
 		// Bubble counting (Total and Unique messages, excluding Links from sum)
-		bool isMediaForSum = (messageType != MediaSettings::Type::Link);
+		bool isMediaForSum = (messageType != MediaSettings::Type::Link && messageType != MediaSettings::Type::Text);
 		bool countThis = isMediaForSum 
 			|| ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory))
 			|| (hasAnyLink && linkSelectedForStats);
@@ -2453,15 +2441,13 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					messageType == MediaType::VoiceMessage ||
 					messageType == MediaType::VideoMessage ||
 					messageType == MediaType::GIF ||
-					messageType == MediaType::Link ||
-					messageType == MediaType::Sticker ||
-					messageType == MediaType::Text
+					messageType == MediaType::Link
 				);
 
 				if (seeded) {
 					_scanStats->incrementSizeAndUnique(messageType, fullSize, uniqueBubble);
 				} else {
-					_scanStats->increment(messageType, fullSize, 1, uniqueBubble ? 1 : 0);
+					_scanStats->increment(messageType, fullSize, uniqueBubble);
 				}
 			}
 		}
