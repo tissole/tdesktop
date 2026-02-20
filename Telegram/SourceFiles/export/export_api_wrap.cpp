@@ -2121,7 +2121,7 @@ void ApiWrap::requestChatMessages(
 					const auto types = _settings->media.types;
 					using Type = MediaSettings::Type;
 					for (const auto type : { Type::Photo, Type::Video, Type::VoiceMessage, Type::VideoMessage, Type::Audio, Type::File, Type::Sticker, Type::GIF, Type::Link }) {
-						if (types == type) {
+						if (types == types.from_raw(static_cast<Types::raw_type>(type))) {
 							_scanStats->setTotalCount(type, count);
 							break;
 						}
@@ -2430,6 +2430,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				_chatProcess->messageIsUnique[i] = true;
 				_chatProcess->messagesUniqueCount++; // Unique content bubbles
 			}
+		}
 
 			if (_isScanning && _scanStats) {
 				using MediaType = MediaSettings::Type;
@@ -2512,16 +2513,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		}
 		_chatProcess->messageFilesRequired[i] = required;
 
-		const auto splitIndex = _chatProcess->info.splits[_chatProcess->localSplitIndex];
-		auto origin = Data::FileOrigin();
-		origin.messageId = message.id;
-		origin.split = (splitIndex >= 0)
-			? splitIndex
-			: (int(_splits.size()) + splitIndex);
-		origin.peer = (splitIndex >= 0)
-			? _chatProcess->info.input
-			: _chatProcess->info.migratedFromInput;
-
+		// Process actual file loads AFTER setting required count
 		if (message.file().location) {
 			_chatProcess->pendingFiles++;
 			processFileLoad(
@@ -2599,9 +2591,13 @@ void ApiWrap::resolveCustomEmoji() {
 			if (_resolvedCustomEmoji.contains(id.v)) {
 				continue;
 			}
-			auto document = Data::Document();
-			document.file.skipReason = Data::File::SkipReason::Unavailable;
-			_resolvedCustomEmoji.emplace(id.v, std::move(document));
+			_resolvedCustomEmoji.emplace(
+				id.v,
+				Data::Document{
+					.file = {
+						.skipReason = Data::File::SkipReason::Unavailable,
+					},
+				});
 		}
 		resolveCustomEmoji();
 	};
@@ -2633,11 +2629,9 @@ std::optional<QByteArray> ApiWrap::getCustomEmoji(QByteArray &data) {
 			return Data::TextPart::UnavailableEmoji();
 		}
 		auto &file = i->second.file;
-		auto origin = Data::FileOrigin();
-		origin.customEmojiId = id;
 		processFileLoad(
 			file,
-			origin,
+			{ .customEmojiId = id },
 			[=](FileProgress value) { return loadMessageEmojiProgress(value); },
 			[=](const QString &path) { loadMessageEmojiDone(id, path); },
 			nullptr,
