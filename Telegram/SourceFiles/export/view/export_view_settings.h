@@ -43,6 +43,7 @@ public:
 	rpl::producer<> scanClicks() const;
 	rpl::producer<> exportClicks() const;
 	rpl::producer<> cancelClicks() const;
+	rpl::producer<> scanInvalidated() const;
 
 	void setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats, int messagesCount);
 	void clearScanResults();
@@ -133,6 +134,7 @@ private:
 	rpl::event_stream<> _scanClicks;
 	rpl::event_stream<> _exportClicks;
 	rpl::event_stream<> _cancelClicks;
+	rpl::event_stream<> _scanInvalidated;
 
 	Ui::RpWidget *_buttonsContainer = nullptr;
 	Ui::VerticalLayout *_container = nullptr;

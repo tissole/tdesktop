@@ -104,7 +104,7 @@ void WriteScanStatsFile(
 			totalMediaSize += item.totalSize;
 		}
 
-		if (type != Type::Link) {
+		if (type != Type::Link && type != Type::Text) {
 			totalUniqueMessagesCount += item.uniqueCount;
 			totalTotalMessagesCount += item.totalCount;
 		}
@@ -914,7 +914,7 @@ void ControllerObject::setFinishedState() {
 	for (const auto &pair : breakdown) {
 		const auto type = pair.first;
 		const auto &item = pair.second;
-		if (type != Type::Link) {
+		if (type != Type::Link && type != Type::Text) {
 			totalUniqueCount += item.uniqueCount;
 			totalUniqueSize += item.uniqueSize;
 			totalTotalCount += item.totalCount;

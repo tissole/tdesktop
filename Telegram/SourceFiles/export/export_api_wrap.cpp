@@ -564,11 +564,17 @@ void ApiWrap::startExport(
 	_startProcess->done = std::move(done);
 
 	const bool fullHistoryMode = (_settings->media.types & MediaSettings::Type::FullHistory);
+	const bool unsafeForServerCounts = (fullHistoryMode)
+		|| (_settings->media.types & MediaSettings::Type::Sticker)
+		|| (_settings->media.types & MediaSettings::Type::Text)
+		|| (_settings->media.types & MediaSettings::Type::Link);
+
 	if (_isScanning
 		&& _settings->singlePeerFrom == 0
 		&& _settings->singlePeerTill == 0
 		&& !_settings->useIdRange
-		&& (fullHistoryMode || _settings->media.sizeLimit >= kFileMaxSize || _settings->media.sizeLimit <= 0)
+		&& !unsafeForServerCounts
+		&& (_settings->media.sizeLimit >= kFileMaxSize || _settings->media.sizeLimit <= 0)
 		&& _settings->onlySinglePeer()) {
 		_usingServerCounts = true;
 	}
@@ -1595,6 +1601,7 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 	} else if (_chatProcess->start(_chatProcess->info)) {
 		if (!_chatProcess->messagesInRangeCountFixed) {
 			_chatProcess->messagesInRangeCount = _chatProcess->messagesTextTotal;
+			_chatProcess->messagesInRangeCountFixed = true;
 		}
 		requestMessagesSlice();
 	}
@@ -2351,10 +2358,10 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					// Add to unique count, keep server's total.
 					_scanStats->increment(MediaSettings::Type::Link, 0, 0, uniqueInMsg);
 				} else {
-					_scanStats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
+					_scanStats->increment(MediaSettings::Type::Link, 0, int(linksInThisMessage.size()), uniqueInMsg);
 				}
 			} else if (_stats) {
-				_stats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
+				_stats->increment(MediaSettings::Type::Link, 0, int(linksInThisMessage.size()), uniqueInMsg);
 			}
 		}
 

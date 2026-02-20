@@ -230,6 +230,11 @@ void PanelController::showSettings() {
 		_panel->setTitle(tr::lng_export_title());
 	}, settingsRaw->lifetime());
 
+	settingsRaw->scanInvalidated(
+	) | rpl::start_with_next([=] {
+		_process->clearResults();
+	}, settingsRaw->lifetime());
+
 	settingsRaw->changes(
 	) | rpl::start_with_next([=](Settings &&settings) {
 		*_settings = std::move(settings);

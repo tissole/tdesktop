@@ -139,8 +139,13 @@ SettingsWidget::SettingsWidget(
 		if (!_isScanning && (filtersChanged || rangeChanged)) {
 			_scanResults.clear();
 			if (_scanResultsLabel) _scanResultsLabel->setText(QString());
+			_scanInvalidated.fire({});
 		}
 	}, lifetime());
+}
+
+rpl::producer<> SettingsWidget::scanInvalidated() const {
+	return _scanInvalidated.events();
 }
 
 const Settings &SettingsWidget::readData() const {
@@ -1390,7 +1395,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 				totalMediaSize += item.totalSize;
 			}
 
-			if (type != MediaType::Link) {
+			if (type != MediaType::Link && type != MediaType::Text) {
 				totalUniqueMessagesCount += item.uniqueCount;
 				totalTotalMessagesCount += item.totalCount;
 			}
