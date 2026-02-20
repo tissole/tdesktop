@@ -2110,14 +2110,24 @@ void ApiWrap::requestChatMessages(
 			const auto filter = getFilter();
 			const auto filterEmpty = (filter.type() == mtpc_inputMessagesFilterEmpty);
 			const auto sizeFilterActive = (_settings->media.sizeLimit > 0);
-			if (!sizeFilterActive && !filterEmpty) {
+			const auto types = _settings->media.types;
+			// Use server count as baseline for messagesInRangeCount when:
+			// - Specific media filter is active (server has indexed count for that type)
+			// This provides progress bar baseline for all indexed types
+			if (!filterEmpty) {
 				_chatProcess->messagesInRangeCount = count;
 				_chatProcess->messagesInRangeCountFixed = true;
 				_chatProcess->messagesInRangeCountFromHistory = true;
 
-				// Authoritative total for this specific category in scan stats.
-				if (_isScanning && _scanStats) {
-					const auto types = _settings->media.types;
+				// Use server count for stats total when:
+				// - Links (no size, server indexes by URL)
+				// - Media types WITHOUT size limit (counts all regardless of size)
+				// For media types WITH size limit, local counting filters oversized files
+				// Full History and Text use empty filter, so they count locally for all types
+				const auto useServerCountForStats = (types & Type::Link)
+					|| !sizeFilterActive;
+					
+				if (_isScanning && _scanStats && useServerCountForStats) {
 					using Type = MediaSettings::Type;
 					for (const auto type : { Type::Photo, Type::Video, Type::VoiceMessage, Type::VideoMessage, Type::Audio, Type::File, Type::Sticker, Type::GIF, Type::Link }) {
 						if (types == type) {
@@ -2350,9 +2360,15 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			&& !fullHistorySelected;
 
 		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
-		const auto countThisTotal = (_chatProcess->messagesInRangeCountFixed && messageType != MediaSettings::Type::Link && messageType != MediaSettings::Type::Sticker && messageType != MediaSettings::Type::Text && _settings->media.sizeLimit <= 0)
-			? 0
-			: 1;
+		// Count toward total only if:
+		// - Text or Links (no size limit applies)
+		// - Media types but within size limit (not oversized)
+		// Stickers are media and must respect size limit like other media
+		const auto countThisTotal = (messageType == MediaSettings::Type::Link 
+			|| messageType == MediaSettings::Type::Text
+			|| !oversized)
+			? 1
+			: 0;
 
 		if (hasAnyLink && linkSelectedForStats) {
 			int uniqueInMsg = 0;
@@ -2373,7 +2389,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		// selected means "should be in HTML/JSON"
 		bool selected = (mediaSelected && (!oversized || fullHistorySelected))
-			|| (hasAnyLink && linkSelectedForStats) 
+			|| (hasAnyLink && linkSelectedForStats)
 			|| (!hasMedia && ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory)));
 
 		_chatProcess->messageItemIndices[i] = ++_chatProcess->totalMessagesCounter;

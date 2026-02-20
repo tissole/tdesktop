@@ -3679,7 +3679,7 @@ QByteArray HtmlWriter::statsBlock() const {
 		}
 		result.append("</div>\n");
 
-		if (type != Type::Link) {
+		if (type != Type::Link && type != Type::Text) {
 			totalUniqueMessagesCount += item.uniqueCount;
 			totalTotalMessagesCount += item.totalCount;
 		}
