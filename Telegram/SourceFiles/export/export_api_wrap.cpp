@@ -555,7 +555,6 @@ void ApiWrap::startExport(
 	_stats = stats;
 	_isScanning = isScanning;
 	_scanStats = scanStats;
-	_takeoutId = std::nullopt;
 	_usingServerCounts = false;
 	_scanVisited.clear();
 	_exportVisited.clear();
@@ -580,6 +579,12 @@ void ApiWrap::startExport(
 	}
 
 	using Step = StartProcess::Step;
+	if (_takeoutId) {
+		_startProcess->steps.push_back(Step::MainSession);
+	} else if (_isScanning) {
+		// Even for scan, we prefer to start a session to avoid FloodWait.
+		_startProcess->steps.push_back(Step::MainSession);
+	}
 	if (_settings->types & Settings::Type::Userpics) {
 		_startProcess->steps.push_back(Step::UserpicsCount);
 	}
@@ -696,6 +701,7 @@ void ApiWrap::requestMediaCounts() {
 	add(Type::Audio, MTP_inputMessagesFilterMusic());
 	add(Type::VoiceMessage, MTP_inputMessagesFilterVoice());
 	add(Type::VideoMessage, MTP_inputMessagesFilterRoundVideo());
+	add(Type::Link, MTP_inputMessagesFilterUrl());
 	add(Type::GIF, MTP_inputMessagesFilterGif());
 
 	if (filters.empty()) {
@@ -704,11 +710,6 @@ void ApiWrap::requestMediaCounts() {
 	}
 
 	_startProcess->pendingCounts = filters.size();
-
-	const auto minDate = _settings->singlePeerFrom;
-	const auto maxDate = _settings->singlePeerTill;
-	const auto minId = _settings->singlePeerFromId;
-	const auto maxId = _settings->singlePeerTillId;
 
 	for (const auto &pair : filters) {
 		const auto type = pair.first;
@@ -723,13 +724,13 @@ void ApiWrap::requestMediaCounts() {
 			MTP_vector<MTPReaction>(),
 			MTP_int(0),
 			filter,
-			MTP_int(minDate),
-			MTP_int(maxDate),
+			MTP_int(0),
+			MTP_int(0),
 			MTP_int(0),
 			MTP_int(0),
 			MTP_int(1),
-			MTP_int(int32(maxId)),
-			MTP_int(int32(minId)),
+			MTP_int(0),
+			MTP_int(0),
 			MTP_long(0)
 		)).done([=](const MTPmessages_Messages &result) {
 			if (!_settings || !_startProcess || !_scanStats) return;
@@ -2160,9 +2161,7 @@ void ApiWrap::requestChatMessages(
 	const auto maxDate = _settings->singlePeerTill;
 	const auto filter = getFilter();
 	const auto useSearch = _chatProcess->info.onlyMyMessages
-		|| (filter.type() != mtpc_inputMessagesFilterEmpty)
-		|| (minDate > 0)
-		|| (maxDate > 0);
+		|| (filter.type() != mtpc_inputMessagesFilterEmpty);
 
 	if (useSearch) {
 		using Flag = MTPmessages_Search::Flag;
@@ -2172,7 +2171,7 @@ void ApiWrap::requestChatMessages(
 			MTP_flags(searchFlags),
 			realPeerInput,
 			MTP_string(), // query
-			outgoingInput,
+			MTP_inputPeerSelf(),
 			MTP_inputPeerEmpty(), // saved_peer_id
 			MTP_vector<MTPReaction>(), // saved_reaction
 			MTP_int(0), // top_msg_id
@@ -2454,7 +2453,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					messageType == MediaType::VoiceMessage ||
 					messageType == MediaType::VideoMessage ||
 					messageType == MediaType::GIF ||
-					messageType == MediaType::Link
+					messageType == MediaType::Link ||
+					messageType == MediaType::Sticker ||
+					messageType == MediaType::Text
 				);
 
 				if (seeded) {
