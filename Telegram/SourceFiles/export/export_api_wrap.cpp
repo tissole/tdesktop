@@ -2453,7 +2453,8 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					messageType == MediaType::Audio ||
 					messageType == MediaType::VoiceMessage ||
 					messageType == MediaType::VideoMessage ||
-					messageType == MediaType::GIF
+					messageType == MediaType::GIF ||
+					messageType == MediaType::Link
 				);
 
 				if (seeded) {
@@ -2987,6 +2988,50 @@ void ApiWrap::processFileLoad(
 		|| !(types & type); // Only download if the specific type is chosen
 
 	if (_isScanning) {
+		if (message || story) {
+			if (type != Type(0) && !isThumb && (origin.messageId != 0 || origin.storyId != 0)) {
+				// Total scan MUST strictly respect size selected, UNLESS Full History is selected or it is a Link/Text.
+				if (typeSelected && ((!oversized && !fullHistorySelected) || fullHistorySelected)) {
+					// Use persistent ID if available for deduplication
+					uint64 persistentId = 0;
+					if (message) {
+						v::match(message->media.content, [&](const Data::Document &data) {
+							persistentId = data.id;
+						}, [&](const Data::Photo &data) {
+							persistentId = data.id;
+						}, [](const auto &) {});
+					} else if (story) {
+						// Story media ID logic would go here if stories had persistent ID access similarly
+					}
+
+					ApiWrap::LocationKey checkKey;
+					if (persistentId != 0) {
+						checkKey.type = (10ULL << 24);
+						checkKey.id = persistentId;
+					} else {
+						checkKey = locationKey;
+					}
+
+					const bool validKey = (checkKey.id != 0 || checkKey.type != 0);
+					const bool alreadyVisited = validKey && _scanVisited.find(checkKey) != _scanVisited.end();
+					const bool willBeUniqueInChat = validKey && !alreadyVisited;
+					
+					if (willBeUniqueInChat) {
+						_scanVisited.emplace(checkKey, QString());
+					}
+					
+					const auto countThisTotal = (_usingServerCounts || (_chatProcess && _chatProcess->messagesInRangeCountFixed && type != Type::Link && type != Type::Sticker))
+						? 0
+						: 1;
+
+					if (countThisTotal == 0) {
+						_scanStats->incrementSizeAndUnique(type, fullSize, willBeUniqueInChat);
+					} else {
+						_scanStats->increment(type, fullSize, willBeUniqueInChat);
+					}
+				}
+			}
+		}
 		done(QString());
 		return;
 	}
