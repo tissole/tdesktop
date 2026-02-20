@@ -1490,36 +1490,32 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 		? _chatProcess->info.input
 		: _chatProcess->info.migratedFromInput;
 
-	const auto minId = (_chatProcess->fromId > 0) ? std::max(int64(0), _chatProcess->fromId - 1) : int64(0);
-	const auto maxId = (_chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
-	const auto minDate = _settings->singlePeerFrom;
-	const auto maxDate = _settings->singlePeerTill;
-
-	using Flag = MTPmessages_Search::Flag;
-	const auto onlyMy = _chatProcess->info.onlyMyMessages;
-	const auto searchFlags = onlyMy ? Flag::f_from_id : Flag(0);
-	const auto outgoingInput = _chatProcess->info.isMonoforum
-		? _chatProcess->info.monoforumBroadcastInput
-		: MTP_inputPeerSelf();
-
-	mainRequest(MTPmessages_Search(
-		MTP_flags(searchFlags),
-		peer,
-		MTP_string(""), // q
-		onlyMy ? outgoingInput : MTP_inputPeerEmpty(), // from_id
-		MTP_inputPeerEmpty(), // saved_peer_id
-		MTP_vector<MTPReaction>(), // saved_reaction
-		MTP_int(0), // top_msg_id
-		filter,
-		MTP_int(minDate), // min_date
-		MTP_int(maxDate), // max_date
-		MTP_int(0), // offset_id
-		MTP_int(0), // add_offset
-		MTP_int(1), // limit
-		MTP_int(int32(maxId)), // max_id
-		MTP_int(int32(minId)), // min_id
-		MTP_long(0) // hash
-	)).done([=](const MTPmessages_Messages &result) {		if (!_chatProcess || !_settings) return;
+		const auto minId = (_chatProcess->fromId > 0) ? std::max(int64(0), _chatProcess->fromId - 1) : int64(0); 
+		const auto maxId = (_chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
+		const auto minDate = _settings->singlePeerFrom;
+		const auto maxDate = _settings->singlePeerTill;
+	
+		using Flag = MTPmessages_Search::Flag;
+		auto searchFlags = Flag(0);
+	
+		mainRequest(MTPmessages_Search(
+			MTP_flags(searchFlags),
+			peer,
+			MTP_string(""), // q
+			MTP_inputPeerEmpty(), // from_id
+			MTP_inputPeerEmpty(), // saved_peer_id
+			MTP_vector<MTPReaction>(), // saved_reaction
+			MTP_int(0), // top_msg_id
+			filter,
+			MTP_int(minDate), // min_date
+			MTP_int(maxDate), // max_date
+			MTP_int(0), // offset_id
+			MTP_int(0), // add_offset
+			MTP_int(1), // limit
+			MTP_int(int32(maxId)), // max_id
+			MTP_int(int32(minId)), // min_id
+			MTP_long(0) // hash
+		)).done([=](const MTPmessages_Messages &result) {		if (!_chatProcess || !_settings) return;
 
 		const auto count = result.match(
 			[](const MTPDmessages_messages &data) {
@@ -2175,17 +2171,18 @@ void ApiWrap::requestChatMessages(
 			MTP_long(0) // hash
 		)).done(doneHandler).send();
 	} else {
-		splitRequest(realSplitIndex, MTPmessages_GetHistory(
-			MTPmessages_getHistory(
-				realPeerInput,
-				MTP_int(offsetId),
-				MTP_int(minDate), // offset_date
-				MTP_int(addOffset),
-				MTP_int(limit),
-				MTP_int(int32(maxId)), // max_id
-				MTP_int(int32(minId)), // min_id
-				MTP_long(0)) // hash
-		)).fail([=](const MTP::Error &error) {
+				splitRequest(realSplitIndex, MTPmessages_GetHistory(
+					MTPmessages_getHistory(
+						realPeerInput,
+						MTP_int(offsetId),
+						MTP_int(minDate), // offset_date
+						MTP_int(addOffset),
+						MTP_int(limit),
+						MTP_int(int32(maxId)), // max_id
+						MTP_int(int32(minId)), // min_id
+						MTP_long(0)) // hash
+				))
+		.fail([=](const MTP::Error &error) {
 			if (!_chatProcess || !_settings) return false;
 
 			if (error.type() == u"CHANNEL_PRIVATE"_q) {
