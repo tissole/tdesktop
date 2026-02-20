@@ -556,6 +556,7 @@ void ApiWrap::startExport(
 	_isScanning = isScanning;
 	_scanStats = scanStats;
 	_takeoutId = std::nullopt;
+	_usingServerCounts = false;
 	_scanVisited.clear();
 	_exportVisited.clear();
 	_visitedLinks.clear();
@@ -569,6 +570,14 @@ void ApiWrap::startExport(
 	_startProcess->done = std::move(done);
 
 	const bool fullHistoryMode = (_settings->media.types & MediaSettings::Type::FullHistory);
+	if (_isScanning
+		&& _settings->singlePeerFrom == 0
+		&& _settings->singlePeerTill == 0
+		&& !_settings->useIdRange
+		&& (!(_settings->media.types) || (fullHistoryMode || _settings->media.sizeLimit >= kFileMaxSize || _settings->media.sizeLimit <= 0))
+		&& _settings->onlySinglePeer()) {
+		_usingServerCounts = true;
+	}
 
 	using Step = StartProcess::Step;
 	if (_settings->types & Settings::Type::Userpics) {
@@ -576,6 +585,9 @@ void ApiWrap::startExport(
 	}
 	if (_settings->types & Settings::Type::Stories) {
 		_startProcess->steps.push_back(Step::StoriesCount);
+	}
+	if (_usingServerCounts) {
+		_startProcess->steps.push_back(Step::MediaCounts);
 	}
 	if (_settings->types & Settings::Type::AnyChatsMask) {
 		_startProcess->steps.push_back(Step::SplitRanges);
@@ -1542,11 +1554,13 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 			return;
 		}
 		
-		auto realCount = count;
-		const auto filterEmpty = (filter.type() == mtpc_inputMessagesFilterEmpty);
-		if (count == 0 && filterEmpty) {
-			realCount = 1; // bypass zero check since empty filter + ID range on search returns 0
-		}
+		// const auto mediaFilterActive = (filter.type() != mtpc_inputMessagesFilterEmpty);
+		
+		// If scanning text/history in a specific range, use the ID difference as a better estimate
+		// than the total chat count returned by the server.
+		// const auto fromId = (_chatProcess->fromId > 0) ? _chatProcess->fromId : (_settings->useIdRange ? _settings->singlePeerFromId : int64(1));
+		// const auto tillId = (_chatProcess->tillId > 0) ? _chatProcess->tillId : (_settings->useIdRange ? _settings->singlePeerTillId : int64(0));
+		const auto realCount = count;
 		
 		checkFirstMessageDate(localSplitIndex, realCount);
 	}).send();
@@ -2146,7 +2160,9 @@ void ApiWrap::requestChatMessages(
 	const auto maxDate = _settings->singlePeerTill;
 	const auto filter = getFilter();
 	const auto useSearch = _chatProcess->info.onlyMyMessages
-		|| (filter.type() != mtpc_inputMessagesFilterEmpty);
+		|| (filter.type() != mtpc_inputMessagesFilterEmpty)
+		|| (minDate > 0)
+		|| (maxDate > 0);
 
 	if (useSearch) {
 		using Flag = MTPmessages_Search::Flag;
@@ -2347,7 +2363,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			&& !fullHistorySelected;
 
 		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
-		const auto countThisTotal = (_chatProcess->messagesInRangeCountFixed && messageType != MediaSettings::Type::Link && messageType != MediaSettings::Type::Sticker && messageType != MediaSettings::Type::Text && _settings->media.sizeLimit <= 0)
+		const auto countThisTotal = ((_usingServerCounts || _chatProcess->messagesInRangeCountFixed) && messageType != MediaSettings::Type::Link && messageType != MediaSettings::Type::Sticker && messageType != MediaSettings::Type::Text && _settings->media.sizeLimit <= 0)
 			? 0
 			: 1;
 
@@ -2413,7 +2429,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					auto &visited = _isScanning ? _scanVisited : _exportVisited;
 					if (visited.find(checkKey) == visited.end()) {
 						uniqueBubble = true;
-						if (_isScanning || !message.file().location) {
+						// ALWAYS mark as visited if it's NOT a file that processFileLoad handles.
+						// If it IS a file, processFileLoad will mark it.
+						if (!message.file().location) {
 							visited.emplace(checkKey, QString());
 						}
 					}
@@ -2428,8 +2446,21 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 			if (_isScanning && _scanStats) {
 				using MediaType = MediaSettings::Type;
+				const bool seeded = _usingServerCounts && (
+					messageType == MediaType::Photo ||
+					messageType == MediaType::Video ||
+					messageType == MediaType::File ||
+					messageType == MediaType::Audio ||
+					messageType == MediaType::VoiceMessage ||
+					messageType == MediaType::VideoMessage ||
+					messageType == MediaType::GIF
+				);
 
-				_scanStats->increment(messageType, fullSize, 1, uniqueBubble ? 1 : 0);
+				if (seeded) {
+					_scanStats->incrementSizeAndUnique(messageType, fullSize, uniqueBubble);
+				} else {
+					_scanStats->increment(messageType, fullSize, 1, uniqueBubble ? 1 : 0);
+				}
 			}
 		}
 
