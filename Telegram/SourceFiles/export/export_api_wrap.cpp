@@ -2284,7 +2284,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 	_chatProcess->emojiToMessageIndices.clear();
 
 	for (int i = 0; i < int(s.list.size()); ++i) {
-		auto &message = s.list[i];
+		const auto &message = s.list[i];
 
 		const auto skippedByDate = Data::SkipMessageByDate(message, *_settings);
 		if (skippedByDate) {
