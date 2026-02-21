@@ -2676,7 +2676,7 @@ void ApiWrap::loadNextMessageFile() {
 	});
 
 	for (int i = 0; i < int(_chatProcess->slice->list.size()); ++i) {
-		if (_chatProcess->messageItemIndices[i] == 0) {
+		if (_chatProcess->messageFilesRequired[i] == 0) {
 			continue;
 		}
 		auto &message = _chatProcess->slice->list[i];
@@ -2899,9 +2899,6 @@ void ApiWrap::loadMessageEmojiDone(uint64 id, const QString &relativePath) {
 				return;
 			}
 		}
-	}
-	if (_chatProcess && _chatProcess->slice) {
-		loadNextMessageFile();
 	}
 }
 

@@ -1058,29 +1058,29 @@ void DocumentData::setFileName(const QString &remoteFileName) {
 	// Apply renaming for video formats to ensure proper server processing
 	QString lowerName = _filename.toLower();
 	
-	if (lowerName.endsWith(".webm")) {
-		_filename = _filename.replace(_filename.length()-5, 5, "[webm].mp4");
-	} else if (lowerName.endsWith(".ts")) {
-		_filename = _filename.replace(_filename.length()-3, 3, "[ts].mp4");
-	} else if (lowerName.endsWith(".mts")) {
-		_filename = _filename.replace(_filename.length()-4, 4, "[mts].mp4");
-	} else if (lowerName.endsWith(".m2ts")) {
-		_filename = _filename.replace(_filename.length()-5, 5, "[m2ts].mp4");
-	} else if (lowerName.endsWith(".m2v")) {
-		_filename = _filename.replace(_filename.length()-4, 4, "[m2v].mp4");		
-	} else if (lowerName.endsWith(".avi")) {
-		_filename = _filename.replace(_filename.length()-4, 4, "[avi].mp4");
-	} else if (lowerName.endsWith(".asf")) {
-		_filename = _filename.replace(_filename.length()-4, 4, "[asf].mp4");
-	} else if (lowerName.endsWith(".asx")) {
-		_filename = _filename.replace(_filename.length()-4, 4, "[asx].mp4");
-	} else if (lowerName.endsWith(".wmv")) {
-		_filename = _filename.replace(_filename.length()-4, 4, "[wmv].mp4");
-	} else if (lowerName.endsWith(".flv")) {
-		_filename = _filename.replace(_filename.length()-4, 4, "[flv].mp4");
-	} else if (lowerName.endsWith(".vob")) {
-		_filename = _filename.replace(_filename.length()-4, 4, "[vob].mp4");
-	}
+//	if (lowerName.endsWith(".webm")) {
+//		_filename = _filename.replace(_filename.length()-5, 5, "[webm].mp4");
+//	} else if (lowerName.endsWith(".ts")) {
+//		_filename = _filename.replace(_filename.length()-3, 3, "[ts].mp4");
+//	} else if (lowerName.endsWith(".mts")) {
+//		_filename = _filename.replace(_filename.length()-4, 4, "[mts].mp4");
+//	} else if (lowerName.endsWith(".m2ts")) {
+//		_filename = _filename.replace(_filename.length()-5, 5, "[m2ts].mp4");
+//	} else if (lowerName.endsWith(".m2v")) {
+//		_filename = _filename.replace(_filename.length()-4, 4, "[m2v].mp4");		
+//	} else if (lowerName.endsWith(".avi")) {
+//		_filename = _filename.replace(_filename.length()-4, 4, "[avi].mp4");
+//	} else if (lowerName.endsWith(".asf")) {
+//		_filename = _filename.replace(_filename.length()-4, 4, "[asf].mp4");
+//	} else if (lowerName.endsWith(".asx")) {
+//		_filename = _filename.replace(_filename.length()-4, 4, "[asx].mp4");
+//	} else if (lowerName.endsWith(".wmv")) {
+//		_filename = _filename.replace(_filename.length()-4, 4, "[wmv].mp4");
+//	} else if (lowerName.endsWith(".flv")) {
+//		_filename = _filename.replace(_filename.length()-4, 4, "[flv].mp4");
+//	} else if (lowerName.endsWith(".vob")) {
+//		_filename = _filename.replace(_filename.length()-4, 4, "[vob].mp4");
+//	}
 	
 	// We don't want LTR/RTL mark/embedding/override/isolate chars
 	// in filenames, because they introduce a security issue, when
