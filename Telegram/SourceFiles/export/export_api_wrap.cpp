@@ -564,6 +564,8 @@ void ApiWrap::startExport(
 	_startProcess = std::make_unique<StartProcess>();
 	_startProcess->done = std::move(done);
 
+	const bool fullHistoryMode = (_settings->media.types & MediaSettings::Type::FullHistory);
+
 	using Step = StartProcess::Step;
 	if (_settings->types & Settings::Type::Userpics) {
 		_startProcess->steps.push_back(Step::UserpicsCount);

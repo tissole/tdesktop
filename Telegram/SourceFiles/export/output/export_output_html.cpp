@@ -3664,14 +3664,16 @@ QByteArray HtmlWriter::statsBlock() const {
 		if (label.isEmpty()) continue;
 
 		categoriesCount++;
-		const bool hasDuplicates = (item.uniqueCount != item.totalCount)
-			|| (item.uniqueSize != item.totalSize);
 
 		result.append("<div class=\"details_entry details\">").append(label).append(": ");
 		if (type == Type::Text) {
 			result.append(QByteArray::number(item.totalCount));
 		} else if (type == Type::Link) {
-			result.append(QByteArray::number(item.uniqueCount)).append(", ").append(QByteArray::number(item.totalCount));
+			if (item.uniqueCount == item.totalCount) {
+				result.append(QByteArray::number(item.uniqueCount));
+			} else {
+				result.append(QByteArray::number(item.uniqueCount)).append(", ").append(QByteArray::number(item.totalCount));
+			}
 		} else {
 			const auto uniqueStr = QByteArray::number(item.uniqueCount) + " (" + Data::FormatFileSize(item.uniqueSize) + ")";
 			const auto totalStr = QByteArray::number(item.totalCount) + " (" + Data::FormatFileSize(item.totalSize) + ")";
@@ -3692,6 +3694,12 @@ QByteArray HtmlWriter::statsBlock() const {
 		const auto totalStr = QByteArray::number(totalTotalMessagesCount) + " (" + Data::FormatFileSize(totalMediaSize) + ")";
 		result.append("<div class=\"details_entry details bold\">Total media files: ");
 		result.append(uniqueStr).append(", ").append(totalStr).append("</div>\n");
+	}
+
+	if (_stats->totalMessagesCount() > 0) {
+		result.append("<div class=\"details_entry details\">Total messages in range: ")
+			.append(QByteArray::number(_stats->totalMessagesCount()))
+			.append("</div>\n");
 	}
 
 	result.append("</div>\n");

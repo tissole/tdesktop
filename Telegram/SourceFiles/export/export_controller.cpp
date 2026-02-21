@@ -89,13 +89,15 @@ void WriteScanStatsFile(
 		if (label.isEmpty()) continue;
 
 		categoriesCount++;
-		const bool hasDuplicates = (item.uniqueCount != item.totalCount)
-			|| (item.uniqueSize != item.totalSize);
 
 		if (type == Type::Text) {
 			out << label << ": " << item.totalCount << "\n";
 		} else if (type == Type::Link) {
-			out << label << ": " << item.uniqueCount << ", " << item.totalCount << "\n";
+			if (item.uniqueCount == item.totalCount) {
+				out << label << ": " << item.uniqueCount << "\n";
+			} else {
+				out << label << ": " << item.uniqueCount << ", " << item.totalCount << "\n";
+			}
 		} else {
 			const auto uniqueStr = QString::number(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
 			const auto totalStr = QString::number(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
