@@ -68,6 +68,7 @@ public:
 		int userpicsCount = 0;
 		int storiesCount = 0;
 		int dialogsCount = 0;
+		int serverTotalCount = 0;
 	};
 	void startExport(
 		const Settings &settings,
@@ -305,6 +306,7 @@ private:
 	bool _isScanning = false;
 	bool _usingServerCounts = false;
 	Output::Stats *_scanStats = nullptr;
+	int _serverTotalCount = 0;
 
 	std::unique_ptr<StartProcess> _startProcess;
 	std::unique_ptr<LoadedFileCache> _fileCache;

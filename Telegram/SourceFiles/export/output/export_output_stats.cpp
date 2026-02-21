@@ -14,7 +14,8 @@ Stats::Stats(const Stats &other)
 : _files(other._files.load())
 , _bytes(other._bytes.load())
 , _userMediaFiles(other._userMediaFiles.load())
-, _expectedFiles(other._expectedFiles.load()) {
+, _expectedFiles(other._expectedFiles.load())
+, _totalMessages(other._totalMessages.load()) {
 	for (const auto &[type, stat] : other._stats) {
 		auto item = std::make_unique<TypeStat>();
 		item->uniqueCount = stat->uniqueCount.load();
@@ -79,11 +80,16 @@ void Stats::setExpectedFilesCount(int count) {
 	_expectedFiles = count;
 }
 
+void Stats::incrementTotalMessages() {
+	++_totalMessages;
+}
+
 void Stats::clear() {
 	_files = 0;
 	_bytes = 0;
 	_userMediaFiles = 0;
 	_expectedFiles = 0;
+	_totalMessages = 0;
 	_stats.clear();
 }
 
@@ -101,6 +107,10 @@ int Stats::userMediaFilesCount() const {
 
 int Stats::expectedFilesCount() const {
 	return _expectedFiles;
+}
+
+int Stats::totalMessagesCount() const {
+	return _totalMessages;
 }
 
 int Stats::totalCount() const {

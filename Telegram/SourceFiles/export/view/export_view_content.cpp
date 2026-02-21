@@ -57,11 +57,11 @@ Content ContentFromState(
 				: 0.;
 		};
 		const auto addProgress = isScanning
-			? addPart(state.itemIndex, state.itemCount)
+			? (state.itemCount > 0 ? (state.itemIndex / float64(state.itemCount)) : 0.)
 			: (state.entityCount == 1 && !state.entityIndex)
 			? addPart(state.itemIndex, state.itemCount)
 			: addPart(state.entityIndex, state.entityCount);
-		push("main", label, info, doneProgress + addProgress);
+		push("main", label, info, isScanning ? addProgress : (doneProgress + addProgress));
 	};
 
 	switch (state.step) {
@@ -274,6 +274,11 @@ Content ContentFromState(const FinishedState &state) {
 
 		const QString totalText = label + uniqueStr + ", " + totalStr;
 		result.rows.push_back({ "stat_summary", totalText, QString(), 1. });
+	}
+
+	if (state.totalMessagesCount > 0) {
+		const QString text = "Total messages in range: " + Lang::FormatCountDecimal(state.totalMessagesCount);
+		result.rows.push_back({ "stat_total_messages", text, QString(), 1. });
 	}
 
 	result.rows.push_back({ Content::kDoneId });

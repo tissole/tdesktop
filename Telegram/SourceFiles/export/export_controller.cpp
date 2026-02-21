@@ -403,7 +403,7 @@ void ControllerObject::runScan(
 	_steps.push_back(Step::Initializing);
 	if (_settings.types & Settings::Type::AnyChatsMask) {
 		_steps.push_back(Step::DialogsList);
-		_steps.push_back(Step::Dialogs);
+		_steps.push_back(Step::Scanning);
 	}
 
 	exportNext();
@@ -563,7 +563,7 @@ void ControllerObject::exportNext() {
 			if (count <= 0) {
 				clearResults();
 			}
-			setState(ScanDoneState{ std::move(stats), count });
+			setState(ScanDoneState{ std::move(stats), count, _scanStats.totalMessagesCount() });
 			return;
 		}
 		if (ioCatchError(_writer->finish())) {
@@ -586,6 +586,7 @@ void ControllerObject::exportNext() {
 	case Step::Contacts: return exportContacts();
 	case Step::Sessions: return exportSessions();
 	case Step::OtherData: return exportOtherData();
+	case Step::Scanning:
 	case Step::Dialogs: return exportDialogs();
 	}
 	Unexpected("Step in ControllerObject::exportNext.");
@@ -603,6 +604,10 @@ void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
 		return;
 	}
 	fillSubstepsInSteps(info);
+	if (_isScanning) {
+		_messagesCount = info.serverTotalCount;
+		_messagesInRangeCountFixed = true;
+	}
 	exportNext();
 }
 
@@ -928,6 +933,7 @@ void ControllerObject::setFinishedState() {
 		.totalUniqueSize = totalUniqueSize,
 		.totalTotalCount = totalTotalCount,
 		.totalTotalSize = totalTotalSize,
+		.totalMessagesCount = _stats.totalMessagesCount(),
 		.fullHistory = !!(_settings.media.types & Type::FullHistory),
 		.fullRange = (_settings.singlePeerFrom == 0 && _settings.singlePeerTill == 0) && !_settings.useIdRange,
 		.breakdown = breakdown,
@@ -949,6 +955,7 @@ ProcessingState ControllerObject::prepareState(
 	result.substepsPassed = _substepsPassed;
 	result.substepsNow = substepsInStep(step);
 	result.substepsTotal = _substepsTotal;
+	result.totalMessagesCount = _isScanning ? _scanStats.totalMessagesCount() : _stats.totalMessagesCount();
 
 	callback(result);
 	return result;
@@ -995,7 +1002,7 @@ void ControllerObject::fillMessagesState(
 	result.entityIndex = index + 1;
 	result.entityCount = info.chats.size() + info.left.size();
 	
-	result.itemIndex = progress.messagesTotalCount;
+	result.itemIndex = _isScanning ? progress.itemIndex : progress.messagesTotalCount;
 	result.itemCount = (_messagesCount > 0) ? _messagesCount : progress.messagesInRangeCount;
 
 	result.activeDownloads = _activeDownloads;

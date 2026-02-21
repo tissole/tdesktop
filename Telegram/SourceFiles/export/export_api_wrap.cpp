@@ -559,25 +559,10 @@ void ApiWrap::startExport(
 	_scanVisited.clear();
 	_exportVisited.clear();
 	_visitedLinks.clear();
+	_serverTotalCount = 0;
 	_chatProcess = nullptr;
 	_startProcess = std::make_unique<StartProcess>();
 	_startProcess->done = std::move(done);
-
-	const bool fullHistoryMode = (_settings->media.types & MediaSettings::Type::FullHistory);
-	const bool unsafeForServerCounts = (fullHistoryMode)
-		|| (_settings->media.types & MediaSettings::Type::Sticker)
-		|| (_settings->media.types & MediaSettings::Type::Text)
-		|| (_settings->media.types & MediaSettings::Type::Link);
-
-	if (_isScanning
-		&& _settings->singlePeerFrom == 0
-		&& _settings->singlePeerTill == 0
-		&& !_settings->useIdRange
-		&& !unsafeForServerCounts
-		&& (_settings->media.sizeLimit >= kFileMaxSize || _settings->media.sizeLimit <= 0)
-		&& _settings->onlySinglePeer()) {
-		_usingServerCounts = true;
-	}
 
 	using Step = StartProcess::Step;
 	if (_settings->types & Settings::Type::Userpics) {
@@ -586,7 +571,7 @@ void ApiWrap::startExport(
 	if (_settings->types & Settings::Type::Stories) {
 		_startProcess->steps.push_back(Step::StoriesCount);
 	}
-	if (_usingServerCounts) {
+	if (_isScanning) {
 		_startProcess->steps.push_back(Step::MediaCounts);
 	}
 	if (_settings->types & Settings::Type::AnyChatsMask) {
@@ -698,10 +683,27 @@ void ApiWrap::requestMediaCounts() {
 	add(Type::VideoMessage, MTP_inputMessagesFilterRoundVideo());
 	add(Type::Link, MTP_inputMessagesFilterUrl());
 	add(Type::GIF, MTP_inputMessagesFilterGif());
+	add(Type::Sticker, MTP_inputMessagesFilterEmpty());
+	add(Type::Text, MTP_inputMessagesFilterEmpty());
 
 	if (filters.empty()) {
 		sendNextStartRequest();
 		return;
+	}
+
+	// If any filter is Empty, we only need to run ONE Search with Empty filter
+	// because it will return the total number of messages in the range.
+	bool hasEmptyFilter = false;
+	for (const auto &pair : filters) {
+		if (pair.second.type() == mtpc_inputMessagesFilterEmpty) {
+			hasEmptyFilter = true;
+			break;
+		}
+	}
+
+	if (hasEmptyFilter) {
+		filters.clear();
+		filters.push_back({ Type::FullHistory, MTP_inputMessagesFilterEmpty() });
 	}
 
 	_startProcess->pendingCounts = filters.size();
@@ -709,6 +711,9 @@ void ApiWrap::requestMediaCounts() {
 	for (const auto &pair : filters) {
 		const auto type = pair.first;
 		const auto filter = pair.second;
+
+		const auto minId = (_settings->useIdRange && _settings->singlePeerFromId > 0) ? std::max(int64(0), int64(_settings->singlePeerFromId) - 1) : int64(0);
+		const auto maxId = (_settings->useIdRange && _settings->singlePeerTillId > 0) ? (int64(_settings->singlePeerTillId) + 1) : int64(0);
 
 		mainRequest(MTPmessages_Search(
 			MTP_flags(0),
@@ -719,16 +724,16 @@ void ApiWrap::requestMediaCounts() {
 			MTP_vector<MTPReaction>(),
 			MTP_int(0),
 			filter,
-			MTP_int(0),
-			MTP_int(0),
+			MTP_int(_settings->singlePeerFrom),
+			MTP_int(_settings->singlePeerTill),
 			MTP_int(0),
 			MTP_int(0),
 			MTP_int(1),
-			MTP_int(0),
-			MTP_int(0),
+			MTP_int(int32(maxId)),
+			MTP_int(int32(minId)),
 			MTP_long(0)
 		)).done([=](const MTPmessages_Messages &result) {
-			if (!_settings || !_startProcess || !_scanStats) return;
+			if (!_settings || !_startProcess) return;
 
 			const auto count = result.match(
 				[](const MTPDmessages_messages &data) { return int(data.vmessages().v.size()); },
@@ -737,7 +742,11 @@ void ApiWrap::requestMediaCounts() {
 				[](const MTPDmessages_messagesNotModified &) { return 0; }
 			);
 
-			_scanStats->setTotalCount(type, count);
+			if (_usingServerCounts) {
+				if (_scanStats) _scanStats->setTotalCount(type, count);
+			} else {
+				_serverTotalCount += count;
+			}
 
 			if (--_startProcess->pendingCounts == 0) {
 				sendNextStartRequest();
@@ -841,6 +850,7 @@ void ApiWrap::finishStartProcess() {
 	Expects(_startProcess != nullptr);
 
 	const auto process = base::take(_startProcess);
+	process->info.serverTotalCount = _serverTotalCount;
 	process->done(process->info);
 }
 
@@ -1510,8 +1520,8 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 		MTP_vector<MTPReaction>(), // saved_reaction
 		MTP_int(0), // top_msg_id
 		filter,
-		MTP_int(0), // min_date
-		MTP_int(0), // max_date
+		MTP_int(_settings->singlePeerFrom),
+		MTP_int(_settings->singlePeerTill),
 		MTP_int(0), // offset_id
 		MTP_int(0), // add_offset
 		MTP_int(1), // limit
@@ -2278,11 +2288,19 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 	for (int i = 0; i < int(s.list.size()); ++i) {
 		const auto &message = s.list[i];
+		const int currentTotalIndex = ++_chatProcess->totalMessagesCounter;
 
 		const auto skippedByDate = Data::SkipMessageByDate(message, *_settings);
 		if (skippedByDate) {
+			_chatProcess->messageItemIndices[i] = _isScanning ? currentTotalIndex : 0;
 			onMessagePartDone(i);
 			continue;
+		}
+
+		if (_isScanning && _scanStats) {
+			_scanStats->incrementTotalMessages();
+		} else if (_stats) {
+			_stats->incrementTotalMessages();
 		}
 
 		// Identification and stat increments for non-file items
@@ -2358,10 +2376,10 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					// Add to unique count, keep server's total.
 					_scanStats->increment(MediaSettings::Type::Link, 0, 0, uniqueInMsg);
 				} else {
-					_scanStats->increment(MediaSettings::Type::Link, 0, int(linksInThisMessage.size()), uniqueInMsg);
+					_scanStats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
 				}
 			} else if (_stats) {
-				_stats->increment(MediaSettings::Type::Link, 0, int(linksInThisMessage.size()), uniqueInMsg);
+				_stats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
 			}
 		}
 
@@ -2378,10 +2396,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			}
 		}
 
-		_chatProcess->messageItemIndices[i] = ++_chatProcess->totalMessagesCounter;
+		_chatProcess->messageItemIndices[i] = _isScanning ? currentTotalIndex : (selected ? _chatProcess->messagesInRangeCount : 0);
 
 		if (!selected) {
-			_chatProcess->messageItemIndices[i] = 0;
 			_chatProcess->messageItemsCount[i] = 0;
 			onMessagePartDone(i, false); // Marks the bubble as done, but not selected
 			continue;
@@ -2830,7 +2847,9 @@ void ApiWrap::loadMessageFileDone(int index, const QString &relativePath) {
 	--_chatProcess->pendingFiles;
 	Assert(_chatProcess->pendingFiles >= 0);
 	if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
-		finishMessagesSlice();
+		crl::on_main([=] {
+			finishMessagesSlice();
+		});
 	}
 }
 
@@ -2844,7 +2863,9 @@ void ApiWrap::loadMessageThumbDone(int index, const QString &relativePath) {
 	--_chatProcess->pendingFiles;
 	Assert(_chatProcess->pendingFiles >= 0);
 	if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
-		finishMessagesSlice();
+		crl::on_main([=] {
+			finishMessagesSlice();
+		});
 	}
 }
 
@@ -2869,7 +2890,9 @@ void ApiWrap::loadMessageEmojiDone(uint64 id, const QString &relativePath) {
 			}
 			_chatProcess->emojiToMessageIndices.erase(j);
 			if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
-				finishMessagesSlice();
+				crl::on_main([=] {
+					finishMessagesSlice();
+				});
 				return;
 			}
 		}
@@ -3282,7 +3305,9 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 
 	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
 		if (_chatProcess && _chatProcess->done) {
-			finishExport(base::take(_chatProcess->done));
+			crl::on_main([=] {
+				finishExport(base::take(_chatProcess->done));
+			});
 		}
 	}
 }

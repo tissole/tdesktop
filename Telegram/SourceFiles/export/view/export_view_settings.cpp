@@ -1286,7 +1286,7 @@ void SettingsWidget::setScanning(bool scanning) {
 	}
 }
 
-void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats, int messagesCount) {
+void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats, int messagesCount, int totalMessagesCount) {
 	setScanning(false);
 	
 	// We use our own calculated totals instead of the raw messagesCount
@@ -1298,7 +1298,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 		totalTotalMessagesCount += item.totalCount;
 	}
 
-	if (totalTotalMessagesCount <= 0) {
+	if (totalTotalMessagesCount <= 0 && totalMessagesCount <= 0) {
 		resetToDefault();
 		using MediaType = MediaSettings::Type;
 		const auto types = readData().media.types;
@@ -1411,6 +1411,9 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 
 			text += "\n" + QString(label) + uniqueStr + ", " + totalStr;
 		}
+	}
+	if (totalMessagesCount > 0) {
+		text += "\nTotal messages in range: " + Lang::FormatCountDecimal(totalMessagesCount);
 	}
 	_scanResultsLabel->setText(text.trimmed());
 	_container->resizeToWidth(_container->width());

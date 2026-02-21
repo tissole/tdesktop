@@ -60,6 +60,7 @@ struct FinishedState {
 	int64 totalUniqueSize = 0;
 	int totalTotalCount = 0;
 	int64 totalTotalSize = 0;
+	int totalMessagesCount = 0;
 	bool fullHistory = false;
 	bool fullRange = false;
 	std::map<MediaSettings::Type, Output::StatItem> breakdown;
@@ -99,6 +100,7 @@ struct ProcessingState {
 
 	int itemIndex = 0;
 	int itemCount = 0;
+	int totalMessagesCount = 0;
 	bool isScanning = false;
 
 	base::flat_map<uint64, FileDownloadProgress> activeDownloads;
@@ -108,6 +110,7 @@ struct ProcessingState {
 struct ScanDoneState {
 	std::map<MediaSettings::Type, Output::StatItem> stats;
 	int messagesCount = 0;
+	int totalMessagesCount = 0;
 };
 
 struct ApiErrorState {

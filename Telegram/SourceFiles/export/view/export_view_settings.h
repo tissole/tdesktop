@@ -45,7 +45,7 @@ public:
 	rpl::producer<> cancelClicks() const;
 	rpl::producer<> scanInvalidated() const;
 
-	void setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats, int messagesCount);
+	void setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats, int messagesCount, int totalMessagesCount);
 	void clearScanResults();
 	void setScanProgress(int itemIndex, int itemCount);
 	void setScanning(bool scanning);
