@@ -1376,8 +1376,12 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 			if (type == MediaType::Text) {
 				text += label + ": " + Lang::FormatCountDecimal(item.totalCount) + "\n";
 			} else if (type == MediaType::Link) {
-				text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
-					+ ", " + Lang::FormatCountDecimal(item.totalCount) + "\n";
+				if (item.uniqueCount == item.totalCount) {
+					text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount) + "\n";
+				} else {
+					text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
+						+ ", " + Lang::FormatCountDecimal(item.totalCount) + "\n";
+				}
 			} else {
 				const bool noDuplicates = (item.uniqueCount == item.totalCount) && (item.uniqueSize == item.totalSize);
 				if (noDuplicates) {

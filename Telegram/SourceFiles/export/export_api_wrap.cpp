@@ -571,7 +571,7 @@ void ApiWrap::startExport(
 	if (_settings->types & Settings::Type::Stories) {
 		_startProcess->steps.push_back(Step::StoriesCount);
 	}
-	if (_isScanning) {
+	if (_isScanning || (fullHistoryMode && _settings->onlySinglePeer())) {
 		_startProcess->steps.push_back(Step::MediaCounts);
 	}
 	if (_settings->types & Settings::Type::AnyChatsMask) {
@@ -742,9 +742,10 @@ void ApiWrap::requestMediaCounts() {
 				[](const MTPDmessages_messagesNotModified &) { return 0; }
 			);
 
-			if (_usingServerCounts) {
-				if (_scanStats) _scanStats->setTotalCount(type, count);
-			} else {
+			if (_scanStats) {
+				_scanStats->setTotalCount(type, count);
+			}
+			if (!_usingServerCounts) {
 				_serverTotalCount += count;
 			}
 
@@ -2167,8 +2168,8 @@ void ApiWrap::requestChatMessages(
 			MTP_vector<MTPReaction>(), // saved_reaction
 			MTP_int(0), // top_msg_id
 			filter,
-			MTP_int(0), // min_date
-			MTP_int(0), // max_date
+			MTP_int(_settings->singlePeerFrom), // min_date
+			MTP_int(_settings->singlePeerTill), // max_date
 			MTP_int(offsetId),
 			MTP_int(addOffset),
 			MTP_int(limit),

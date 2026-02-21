@@ -156,8 +156,12 @@ Content ContentFromState(
 				if (type == MediaType::Text) {
 					text = label + ": " + Lang::FormatCountDecimal(item.totalCount);
 				} else if (type == MediaType::Link) {
-					text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) 
-						+ ", " + Lang::FormatCountDecimal(item.totalCount);
+					if (item.uniqueCount == item.totalCount) {
+						text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount);
+					} else {
+						text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) 
+							+ ", " + Lang::FormatCountDecimal(item.totalCount);
+					}
 				} else {
 					text = label + ": " 
 						+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
@@ -245,8 +249,12 @@ Content ContentFromState(const FinishedState &state) {
 		if (type == Type::Text) {
 			text = label + ": " + Lang::FormatCountDecimal(item.totalCount);
 		} else if (type == Type::Link) {
-			text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) 
-				+ ", " + Lang::FormatCountDecimal(item.totalCount);
+			if (item.uniqueCount == item.totalCount) {
+				text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount);
+			} else {
+				text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) 
+					+ ", " + Lang::FormatCountDecimal(item.totalCount);
+			}
 		} else {
 			text = label + ": " 
 				+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
