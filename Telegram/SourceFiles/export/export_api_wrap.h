@@ -156,7 +156,7 @@ private:
 	struct DialogsProcess;
 	struct ChatProcess;
 
-	void startMainSession(FnMut<void()> done);
+	void startMainSession(uint32 flags, FnMut<void()> done);
 	void sendNextStartRequest();
 	void requestUserpicsCount();
 	void requestStoriesCount();
@@ -299,6 +299,8 @@ private:
 
 	MTP::ConcurrentSender _mtp;
 	std::optional<uint64> _takeoutId;
+	uint32 _takeoutFlags = 0;
+	int64 _takeoutSizeLimit = 0;
 	std::optional<UserId> _selfId;
 	MTPInputUser _user = MTP_inputUserSelf();
 	std::unique_ptr<Settings> _settings;

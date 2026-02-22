@@ -110,6 +110,34 @@ Settings::Type SettingsFromDialogsType(Data::DialogInfo::Type type) {
 	return Settings::Type(0);
 }
 
+uint32 CalculateTakeoutFlags(const Settings &settings) {
+	using Type = Settings::Type;
+	const auto sizeLimit = settings.media.sizeLimit;
+	const auto hasFiles = (settings.media.types && (sizeLimit > 0))
+		|| (settings.types & Type::Userpics)
+		|| (settings.types & Type::Stories);
+
+	using Flag = MTPaccount_InitTakeoutSession::Flag;
+	return Flag(0)
+		| (settings.types & Type::Contacts ? Flag::f_contacts : Flag(0))
+		| (hasFiles ? Flag::f_files : Flag(0))
+		| ((hasFiles && sizeLimit < kFileMaxSize)
+			? Flag::f_file_max_size
+			: Flag(0))
+		| (settings.types & (Type::PersonalChats | Type::BotChats)
+			? Flag::f_message_users
+			: Flag(0))
+		| (settings.types & Type::PrivateGroups
+			? (Flag::f_message_chats | Flag::f_message_megagroups)
+			: Flag(0))
+		| (settings.types & Type::PublicGroups
+			? Flag::f_message_megagroups
+			: Flag(0))
+		| (settings.types & (Type::PrivateChannels | Type::PublicChannels)
+			? Flag::f_message_channels
+			: Flag(0));
+}
+
 } // namespace
 
 ApiWrap::RequestThrottler::RequestThrottler(
@@ -586,14 +614,27 @@ void ApiWrap::startExport(
 		}
 	}
 
-	if (_takeoutId.has_value()) {
+	const auto flags = CalculateTakeoutFlags(*_settings);
+	const auto sizeLimit = _settings->media.sizeLimit;
+
+	auto start = [=] {
+		if (_startProcess) sendNextStartRequest();
+	};
+
+	if (_takeoutId.has_value() && (_takeoutFlags != flags || _takeoutSizeLimit != sizeLimit)) {
+		mainRequest(MTPaccount_FinishTakeoutSession(
+			MTP_flags(0)
+		), *_takeoutId).done([=] {
+			_takeoutId = std::nullopt;
+			startMainSession(flags, start);
+		}).fail([=](const MTP::Error &) {
+			_takeoutId = std::nullopt;
+			startMainSession(flags, start);
+		}).send();
+	} else if (_takeoutId.has_value()) {
 		sendNextStartRequest();
 	} else {
-		startMainSession([=] {
-			if (_startProcess) {
-				sendNextStartRequest();
-			}
-		});
+		startMainSession(flags, start);
 	}
 }
 
@@ -744,7 +785,7 @@ void ApiWrap::requestMediaCounts() {
 				[](const MTPDmessages_messagesNotModified &) { return 0; }
 			);
 
-			if (_scanStats) {
+			if (_usingServerCounts && _scanStats) {
 				_scanStats->setTotalCount(type, count);
 			}
 			if (!_usingServerCounts) {
@@ -897,32 +938,8 @@ void ApiWrap::requestDialogsList(
 	requestDialogsSlice();
 }
 
-void ApiWrap::startMainSession(FnMut<void()> done) {
-	using Type = Settings::Type;
+void ApiWrap::startMainSession(uint32 flags, FnMut<void()> done) {
 	const auto sizeLimit = _settings->media.sizeLimit;
-	const auto hasFiles = (_settings->media.types && (sizeLimit > 0))
-		|| (_settings->types & Type::Userpics)
-		|| (_settings->types & Type::Stories);
-
-	using Flag = MTPaccount_InitTakeoutSession::Flag;
-	const auto flags = Flag(0)
-		| (_settings->types & Type::Contacts ? Flag::f_contacts : Flag(0))
-		| (hasFiles ? Flag::f_files : Flag(0))
-		| ((hasFiles && sizeLimit < kFileMaxSize)
-			? Flag::f_file_max_size
-			: Flag(0))
-		| (_settings->types & (Type::PersonalChats | Type::BotChats)
-			? Flag::f_message_users
-			: Flag(0))
-		| (_settings->types & Type::PrivateGroups
-			? (Flag::f_message_chats | Flag::f_message_megagroups)
-			: Flag(0))
-		| (_settings->types & Type::PublicGroups
-			? Flag::f_message_megagroups
-			: Flag(0))
-		| (_settings->types & (Type::PrivateChannels | Type::PublicChannels)
-			? Flag::f_message_channels
-			: Flag(0));
 
 	_mtp.request(MTPusers_GetUsers(
 		MTP_vector<MTPInputUser>(1, MTP_inputUserSelf())
@@ -940,15 +957,18 @@ void ApiWrap::startMainSession(FnMut<void()> done) {
 			error("Could not retrieve selfId.");
 			return;
 		}
+		using Flag = MTPaccount_InitTakeoutSession::Flag;
 		_mtp.request(MTPaccount_InitTakeoutSession(
 			MTPaccount_initTakeoutSession(
-				MTP_flags(flags),
+				MTP_flags(Flag::from_raw(flags)),
 				MTP_long(sizeLimit))
 		)).done([=, done = std::move(done)](
 				const MTPaccount_Takeout &result) mutable {
 			_takeoutId = result.match([](const MTPDaccount_takeout &data) {
 				return data.vid().v;
 			});
+			_takeoutFlags = flags;
+			_takeoutSizeLimit = sizeLimit;
 			done();
 		}).fail([=](const MTP::Error &result) {
 			error(result);
@@ -2076,7 +2096,9 @@ void ApiWrap::requestMessagesSlice() {
 	const auto count = _chatProcess->info.messagesCountPerSplit[
 		_chatProcess->localSplitIndex];
 	if (!count) {
-		loadMessagesFiles({});
+		crl::on_main([=] {
+			loadMessagesFiles({});
+		});
 		return;
 	}
 	requestChatMessages(
@@ -2540,7 +2562,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 	if (_chatProcess->pendingFiles > 0) {
 		resolveCustomEmoji();
 	} else {
-		finishMessagesSlice();
+		crl::on_main([=] {
+			finishMessagesSlice();
+		});
 	}
 }
 
@@ -2671,7 +2695,9 @@ void ApiWrap::loadNextMessageFile() {
 	const auto guard = gsl::finally([&] {
 		_chatProcess->processing = false;
 		if (_chatProcess && _chatProcess->pendingFiles == 0) {
-			finishMessagesSlice();
+			crl::on_main([=] {
+				finishMessagesSlice();
+			});
 		}
 	});
 
@@ -2733,6 +2759,45 @@ void ApiWrap::loadNextMessageFile() {
 				true);
 			if (!_chatProcess || !_chatProcess->slice) {
 				return;
+			}
+		}
+
+		for (const auto &part : message.text) {
+			if (part.type == Data::TextPart::Type::CustomEmoji) {
+				if (const auto id = part.additional.toULongLong()) {
+					if (const auto it = _resolvedCustomEmoji.find(id); it != _resolvedCustomEmoji.end()) {
+						processFileLoad(
+							it->second.file,
+							{ .customEmojiId = id },
+							[=](FileProgress value) { return loadMessageEmojiProgress(value); },
+							[=](const QString &path) { loadMessageEmojiDone(id, path); },
+							nullptr,
+							nullptr,
+							false);
+						if (!_chatProcess || !_chatProcess->slice) {
+							return;
+						}
+					}
+				}
+			}
+		}
+		for (const auto &reaction : message.reactions) {
+			if (reaction.type == Data::Reaction::Type::CustomEmoji) {
+				if (const auto id = reaction.documentId.toULongLong()) {
+					if (const auto it = _resolvedCustomEmoji.find(id); it != _resolvedCustomEmoji.end()) {
+						processFileLoad(
+							it->second.file,
+							{ .customEmojiId = id },
+							[=](FileProgress value) { return loadMessageEmojiProgress(value); },
+							[=](const QString &path) { loadMessageEmojiDone(id, path); },
+							nullptr,
+							nullptr,
+							false);
+						if (!_chatProcess || !_chatProcess->slice) {
+							return;
+						}
+					}
+				}
 			}
 		}
 
@@ -3035,11 +3100,18 @@ void ApiWrap::processFileLoad(
 				checkKey = locationKey;
 			}
 
+			// For Text/Links without files, create a unique dummy key if needed
+			bool hasKey = (checkKey.id != 0 || checkKey.type != 0);
+			if (!hasKey && isLinkOrText && origin.messageId != 0) {
+				checkKey.type = (11ULL << 24); // Dummy type for text/link
+				checkKey.id = origin.messageId;
+				hasKey = true;
+			}
+			
 			auto &visited = _exportVisited;
-			const bool validKey = (checkKey.id != 0 || checkKey.type != 0);
-			const auto it = validKey ? visited.find(checkKey) : visited.end();
+			const auto it = hasKey ? visited.find(checkKey) : visited.end();
 			const bool alreadyVisited = (it != visited.end());
-			const bool willBeUniqueInChat = validKey && !alreadyVisited;
+			const bool willBeUniqueInChat = hasKey && !alreadyVisited;
 
 			if ((message || story) && type != Type(0)) {
 				_stats->increment(type, fullSize, willBeUniqueInChat);
@@ -3047,15 +3119,19 @@ void ApiWrap::processFileLoad(
 			
 			// For links, we track them to write unique_links.txt later, even if we don't "download" a file.
 			if (type == Type::Link && !alreadyVisited) {
-				if (validKey) {
+				if (hasKey) {
 					visited[checkKey] = file.content.isEmpty() ? QString("link") : QString::fromUtf8(file.content); 
 				}
 			}
 
 			if (!alreadyVisited && !skipDownload) {
-				_stats->incrementUserMediaFiles();
-				if (validKey && type != Type::Link) {
+				if (type != Type::Link && type != Type::Text) {
+					_stats->incrementUserMediaFiles();
+				}
+				if (hasKey && type != Type::Link && type != Type::Text) {
 					visited[checkKey] = QString(); // Mark as pending
+				} else if (hasKey && (type == Type::Link || type == Type::Text)) {
+					visited[checkKey] = "processed"; // Mark as visited immediately for non-files
 				}
 			}
 		}
@@ -3865,6 +3941,8 @@ base::flat_set<QString> ApiWrap::visitedLinks() const {
 
 void ApiWrap::clearState(bool keepCache) {
 	_takeoutId = std::nullopt;
+	_takeoutFlags = 0;
+	_takeoutSizeLimit = 0;
 	_settings = nullptr;
 	_isScanning = false;
 	if (!keepCache) {
