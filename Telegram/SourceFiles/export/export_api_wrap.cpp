@@ -2523,39 +2523,41 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		});
 
 		int required = 0;
-		if (message.file().location) {
-			++required;
-			++_chatProcess->pendingFiles;
-		}
-		if (message.thumb().file.location) {
-			++required;
-			++_chatProcess->pendingFiles;
-		}
-		for (const auto &part : message.text) {
-			if (part.type == Data::TextPart::Type::CustomEmoji) {
-				if (const auto id = part.additional.toULongLong()) {
-					if (!_resolvedCustomEmoji.contains(id)) {
-						++required;
-						++_chatProcess->pendingFiles;
-						_chatProcess->emojiToMessageIndices[id].push_back(i);
+		if (selected) {
+			if (message.file().location) {
+				++required;
+				++_chatProcess->pendingFiles;
+			}
+			if (message.thumb().file.location) {
+				++required;
+				++_chatProcess->pendingFiles;
+			}
+			for (const auto &part : message.text) {
+				if (part.type == Data::TextPart::Type::CustomEmoji) {
+					if (const auto id = part.additional.toULongLong()) {
+						if (!_resolvedCustomEmoji.contains(id)) {
+							++required;
+							++_chatProcess->pendingFiles;
+							_chatProcess->emojiToMessageIndices[id].push_back(i);
+						}
 					}
 				}
 			}
-		}
-		for (const auto &reaction : message.reactions) {
-			if (reaction.type == Data::Reaction::Type::CustomEmoji) {
-				if (const auto id = reaction.documentId.toULongLong()) {
-					if (!_resolvedCustomEmoji.contains(id)) {
-						++required;
-						++_chatProcess->pendingFiles;
-						_chatProcess->emojiToMessageIndices[id].push_back(i);
+			for (const auto &reaction : message.reactions) {
+				if (reaction.type == Data::Reaction::Type::CustomEmoji) {
+					if (const auto id = reaction.documentId.toULongLong()) {
+						if (!_resolvedCustomEmoji.contains(id)) {
+							++required;
+							++_chatProcess->pendingFiles;
+							_chatProcess->emojiToMessageIndices[id].push_back(i);
+						}
 					}
 				}
 			}
 		}
 		_chatProcess->messageFilesRequired[i] = required;
 		if (required == 0) {
-			onMessagePartDone(i, true);
+			onMessagePartDone(i, selected);
 		}
 	}
 
@@ -3102,7 +3104,7 @@ void ApiWrap::processFileLoad(
 
 			// For Text/Links without files, create a unique dummy key if needed
 			bool hasKey = (checkKey.id != 0 || checkKey.type != 0);
-			if (!hasKey && isLinkOrText && origin.messageId != 0) {
+			if (!hasKey && isLinkOrText && origin.messageId != 0 && !file.location) {
 				checkKey.type = (11ULL << 24); // Dummy type for text/link
 				checkKey.id = origin.messageId;
 				hasKey = true;
