@@ -117,7 +117,7 @@ uint32 CalculateTakeoutFlags(const Settings &settings) {
 		|| (settings.types & Type::Userpics)
 		|| (settings.types & Type::Stories);
 
-	using Flag = MTPaccount_InitTakeoutSession::Flag;
+	using Flag = MTPaccount_initTakeoutSession::Flag;
 	return static_cast<uint32>(Flag(0)
 		| (settings.types & Type::Contacts ? Flag::f_contacts : Flag(0))
 		| (hasFiles ? Flag::f_files : Flag(0))
@@ -960,7 +960,7 @@ void ApiWrap::startMainSession(uint32 flags, FnMut<void()> done) {
 		}
 		_mtp.request(MTPaccount_InitTakeoutSession(
 			MTPaccount_initTakeoutSession(
-				MTP_flags(flags),
+				MTP_flags(MTPaccount_initTakeoutSession::Flags::from_raw(flags)),
 				MTP_long(sizeLimit))
 		)).done([=, done = std::move(done)](
 				const MTPaccount_Takeout &result) mutable {
