@@ -3696,11 +3696,7 @@ QByteArray HtmlWriter::statsBlock() const {
 		result.append(uniqueStr).append(", ").append(totalStr).append("</div>\n");
 	}
 
-	if (_stats->totalMessagesCount() > 0) {
-		result.append("<div class=\"details_entry details\">Total messages in range: ")
-			.append(QByteArray::number(_stats->totalMessagesCount()))
-			.append("</div>\n");
-	}
+
 
 	result.append("</div>\n");
 	return result;

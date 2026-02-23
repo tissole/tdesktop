@@ -283,12 +283,7 @@ Content ContentFromState(const FinishedState &state) {
 		const QString totalText = label + uniqueStr + ", " + totalStr;
 		result.rows.push_back({ "stat_summary", totalText, QString(), 1. });
 	}
-
-	if (state.totalMessagesCount > 0) {
-		const QString text = "Total messages in range: " + Lang::FormatCountDecimal(state.totalMessagesCount);
-		result.rows.push_back({ "stat_total_messages", text, QString(), 1. });
-	}
-
+	
 	result.rows.push_back({ Content::kDoneId });
 
 	return result;

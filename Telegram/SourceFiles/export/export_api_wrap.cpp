@@ -736,8 +736,6 @@ void ApiWrap::requestMediaCounts() {
 	add(Type::VideoMessage, MTP_inputMessagesFilterRoundVideo());
 	add(Type::Link, MTP_inputMessagesFilterUrl());
 	add(Type::GIF, MTP_inputMessagesFilterGif());
-	add(Type::Sticker, MTP_inputMessagesFilterEmpty());
-	add(Type::Text, MTP_inputMessagesFilterEmpty());
 
 	if (filters.empty()) {
 		sendNextStartRequest();
@@ -889,7 +887,6 @@ void ApiWrap::finishStartProcess() {
 	Expects(_startProcess != nullptr);
 
 	const auto process = base::take(_startProcess);
-	process->info.serverTotalCount = _serverTotalCount;
 	process->done(process->info);
 }
 
@@ -934,7 +931,7 @@ void ApiWrap::requestDialogsList(
 }
 
 void ApiWrap::startMainSession(uint32 flags, FnMut<void()> done) {
-	const auto sizeLimit = _settings->media.sizeLimit;
+	const auto sizeLimit = _isScanning ? kFileMaxSize : _settings->media.sizeLimit;
 
 	_mtp.request(MTPusers_GetUsers(
 		MTP_vector<MTPInputUser>(1, MTP_inputUserSelf())
@@ -1626,7 +1623,8 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 	if (localSplitIndex + 1 < _chatProcess->info.splits.size()) {
 		requestMessagesCount(localSplitIndex + 1);
 	} else if (_chatProcess->start(_chatProcess->info)) {
-		if (!_chatProcess->messagesInRangeCountFixed) {
+		const bool fullHistorySelected = (_settings->media.types & MediaSettings::Type::FullHistory);
+		if (!_chatProcess->messagesInRangeCountFixed && fullHistorySelected) {
 			_chatProcess->messagesInRangeCount = _chatProcess->messagesTextTotal;
 			_chatProcess->messagesInRangeCountFixed = true;
 		}
@@ -2080,9 +2078,7 @@ void ApiWrap::requestMessagesSlice() {
 	const auto count = _chatProcess->info.messagesCountPerSplit[
 		_chatProcess->localSplitIndex];
 	if (!count) {
-		crl::on_main([=] {
-			loadMessagesFiles({});
-		});
+		loadMessagesFiles({});
 		return;
 	}
 	requestChatMessages(
@@ -2228,9 +2224,9 @@ MTPMessagesFilter ApiWrap::getFilter() const {
 	using Type = MediaSettings::Type;
 	const auto types = _settings->media.types;
 	
-	// If Text, FullHistory or Link is selected, we need to request the full stream
+	// If Text or FullHistory is selected, we need to request the full stream
 	// to ensure we get all messages (then we filter them locally).
-	if ((types & Type::Text) || (types & Type::FullHistory) || (types & Type::Link)) {
+	if ((types & Type::Text) || (types & Type::FullHistory)) {
 		return MTP_inputMessagesFilterEmpty();
 	}
 
@@ -2255,22 +2251,19 @@ MTPMessagesFilter ApiWrap::getFilter() const {
 
 	// Only return a specific filter if exactly one or specific combo is selected.
 	// Otherwise return empty to get the full stream for local filtering.
-	if (selectedCount > 1) {
-		if (photo && video && selectedCount == 2) {
-			return MTP_inputMessagesFilterPhotoVideo();
-		}
-		return MTP_inputMessagesFilterEmpty();
+	if (selectedCount == 1) {
+		if (photo) return MTP_inputMessagesFilterPhotos();
+		if (video) return MTP_inputMessagesFilterVideo();
+		if (file) return MTP_inputMessagesFilterDocument();
+		if (voice) return MTP_inputMessagesFilterVoice();
+		if (round) return MTP_inputMessagesFilterRoundVideo();
+		if (gif) return MTP_inputMessagesFilterGif();
+		if (audio) return MTP_inputMessagesFilterMusic();
+		if (sticker) return MTP_inputMessagesFilterEmpty(); // Stickers need full scan for 100% reliability
+		if (link) return MTP_inputMessagesFilterUrl();
+	} else if (selectedCount == 2 && photo && video) {
+		return MTP_inputMessagesFilterPhotoVideo();
 	}
-
-	if (photo) return MTP_inputMessagesFilterPhotos();
-	if (video) return MTP_inputMessagesFilterVideo();
-	if (file) return MTP_inputMessagesFilterDocument();
-	if (voice) return MTP_inputMessagesFilterVoice();
-	if (round) return MTP_inputMessagesFilterRoundVideo();
-	if (gif) return MTP_inputMessagesFilterGif();
-	if (audio) return MTP_inputMessagesFilterMusic();
-	if (sticker) return MTP_inputMessagesFilterEmpty(); // Stickers need full scan for 100% reliability
-	if (link) return MTP_inputMessagesFilterUrl();
 
 	return MTP_inputMessagesFilterEmpty();
 }
@@ -2306,12 +2299,6 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			_chatProcess->messageItemIndices[i] = _isScanning ? currentTotalIndex : 0;
 			onMessagePartDone(i);
 			continue;
-		}
-
-		if (_isScanning && _scanStats) {
-			_scanStats->incrementTotalMessages();
-		} else if (_stats) {
-			_stats->incrementTotalMessages();
 		}
 
 		// Identification and stat increments for non-file items
@@ -2371,7 +2358,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		// Text messages with web previews (messageType == Text && hasFile) should also ignore size for stats.
 		const auto oversized = (hasFile && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit)
 			&& !hasAnyLink && (messageType != MediaSettings::Type::Text && messageType != MediaSettings::Type::Link)
-			&& !fullHistorySelected;
+			&& !fullHistorySelected && !_isScanning;
 
 		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
 		if (hasAnyLink && linkSelectedForStats) {
@@ -2550,9 +2537,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 	if (_chatProcess->pendingFiles > 0) {
 		resolveCustomEmoji();
 	} else {
-		crl::on_main([=] {
-			finishMessagesSlice();
-		});
+		finishMessagesSlice();
 	}
 }
 
@@ -2947,6 +2932,9 @@ void ApiWrap::loadMessageEmojiDone(uint64 id, const QString &relativePath) {
 			}
 		}
 	}
+	if (_chatProcess && _chatProcess->slice) {
+		loadNextMessageFile();
+	}
 }
 
 void ApiWrap::finishMessages() {
@@ -3019,7 +3007,7 @@ void ApiWrap::processFileLoad(
 		if (message || story) {
 			if (type != Type(0) && !isThumb && (origin.messageId != 0 || origin.storyId != 0)) {
 				// Total scan MUST strictly respect size selected, UNLESS Full History is selected or it is a Link/Text.
-				if (typeSelected && ((!oversized && !fullHistorySelected) || fullHistorySelected)) {
+				if (typeSelected) {
 					// Use persistent ID if available for deduplication
 					uint64 persistentId = 0;
 					if (message) {

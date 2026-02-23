@@ -35,16 +35,12 @@ public:
 	void incrementSizeAndUnique(MediaSettings::Type type, int64 size, bool unique);
 	void incrementSize(MediaSettings::Type type, int64 size);
 	void setTotalCount(MediaSettings::Type type, int count);
-	void setExpectedFilesCount(int count);
-	void incrementTotalMessages();
 	void clear();
 
 	int filesCount() const;
 	int64 bytesCount() const;
 	int userMediaFilesCount() const;
-	int expectedFilesCount() const;
 	int totalCount() const;
-	int totalMessagesCount() const;
 
 	std::map<MediaSettings::Type, StatItem> byType() const;
 
@@ -52,8 +48,6 @@ private:
 	std::atomic<int> _files = 0;
 	std::atomic<int64> _bytes = 0;
 	std::atomic<int> _userMediaFiles = 0;
-	std::atomic<int> _expectedFiles = 0;
-	std::atomic<int> _totalMessages = 0;
 
 	struct TypeStat {
 		std::atomic<int> uniqueCount = 0;

@@ -1416,9 +1416,6 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 			text += "\n" + QString(label) + uniqueStr + ", " + totalStr;
 		}
 	}
-	if (totalMessagesCount > 0) {
-		text += "\nTotal messages in range: " + Lang::FormatCountDecimal(totalMessagesCount);
-	}
 	_scanResultsLabel->setText(text.trimmed());
 	_container->resizeToWidth(_container->width());
 	_changes.fire_copy(readData());
