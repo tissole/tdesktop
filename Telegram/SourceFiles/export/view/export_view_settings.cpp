@@ -1286,7 +1286,7 @@ void SettingsWidget::setScanning(bool scanning) {
 	}
 }
 
-void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats, int totalMessagesCount) {
+void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats) {
 	setScanning(false);
 	
 	// We use our own calculated totals
@@ -1298,7 +1298,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 		totalTotalMessagesCount += item.totalCount;
 	}
 
-	if (totalTotalMessagesCount <= 0 && totalMessagesCount <= 0) {
+	if (totalTotalMessagesCount <= 0) {
 		resetToDefault();
 		using MediaType = MediaSettings::Type;
 		const auto types = readData().media.types;

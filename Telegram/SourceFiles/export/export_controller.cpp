@@ -562,7 +562,7 @@ void ControllerObject::exportNext() {
 			WriteScanStatsFile(_settings.path, stats, _settings.singlePeerId, _settings.singlePeerName);
 			_isScanning = false;
 			_stepIndex = -1;
-			setState(ScanDoneState{ std::move(stats), _scanStats.totalMessagesCount() });
+			setState(ScanDoneState{ std::move(stats) });
 			return;
 		}
 		if (ioCatchError(_writer->finish())) {
@@ -922,7 +922,6 @@ void ControllerObject::setFinishedState() {
 		.totalUniqueSize = totalUniqueSize,
 		.totalTotalCount = totalTotalCount,
 		.totalTotalSize = totalTotalSize,
-		.totalMessagesCount = _stats.totalMessagesCount(),
 		.fullHistory = !!(_settings.media.types & Type::FullHistory),
 		.fullRange = (_settings.singlePeerFrom == 0 && _settings.singlePeerTill == 0) && !_settings.useIdRange,
 		.breakdown = breakdown,
@@ -944,7 +943,6 @@ ProcessingState ControllerObject::prepareState(
 	result.substepsPassed = _substepsPassed;
 	result.substepsNow = substepsInStep(step);
 	result.substepsTotal = _substepsTotal;
-	result.totalMessagesCount = _isScanning ? _scanStats.totalMessagesCount() : _stats.totalMessagesCount();
 
 	callback(result);
 	return result;

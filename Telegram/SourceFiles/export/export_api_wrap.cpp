@@ -2114,7 +2114,7 @@ void ApiWrap::requestChatMessages(
 	const auto doneHandler = [=](MTPmessages_Messages &&result) {
 		if (!_chatProcess) return;
 
-		const auto count = result.match(
+		result.match(
 			[](const MTPDmessages_messages &data) {
 			return int(data.vmessages().v.size());
 		}, [](const MTPDmessages_messagesSlice &data) {
@@ -2284,6 +2284,11 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		const auto skippedByDate = Data::SkipMessageByDate(message, *_settings);
 		if (skippedByDate) {
 			_chatProcess->messageItemIndices[i] = _isScanning ? currentTotalIndex : 0;
+			if (_isScanning) {
+				_scanStats->incrementTotalMessages();
+			} else if (_stats) {
+				_stats->incrementTotalMessages();
+			}
 			onMessagePartDone(i);
 			continue;
 		}
@@ -2375,6 +2380,11 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		if (selected) {
 			_chatProcess->messageItemsCount[i] = 1; // Mark as selected for progress bar (Y)
+			if (_isScanning) {
+				_scanStats->incrementTotalMessages();
+			} else if (_stats) {
+				_stats->incrementTotalMessages();
+			}
 		}
 
 		_chatProcess->messageItemIndices[i] = _isScanning ? currentTotalIndex : (selected ? _chatProcess->messagesTotalProcessed + 1 : 0);
