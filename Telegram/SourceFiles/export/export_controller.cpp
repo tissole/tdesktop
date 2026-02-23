@@ -36,7 +36,6 @@ const auto kNullStateCallback = [](ProcessingState&) {};
 void WriteScanStatsFile(
 		const QString &path,
 		const std::map<MediaSettings::Type, Output::StatItem> &stats,
-		int messagesCount,
 		int64 chatId,
 		const QString &chatName) {
 	if (!QDir().mkpath(path)) {
@@ -235,7 +234,6 @@ private:
 	int _messagesMediaCount = 0;
 	int _messagesTotalCount = 0;
 	int _messagesTextTotal = 0;
-	int _messagesInRangeCount = 0;
 	int _userpicsWritten = 0;
 	int _userpicsCount = 0;
 
@@ -378,7 +376,6 @@ bool ControllerObject::ioCatchError(Output::Result result) {
 void ControllerObject::clearResults() {
 	_scanStats.clear();
 	_scanStatsFound = false;
-	_messagesInRangeCount = 0;
 	_messagesCount = 0;
 	_stats.clear();
 	_api.clearState(false);
@@ -418,12 +415,13 @@ void ControllerObject::startExport(
 	_stepIndex = -1;
 	_dialogIndex = -1;
 
-	_messagesInRangeCountFixed = (_messagesInRangeCount > 0);
+	_messagesInRangeCountFixed = true;
 	_settings = NormalizeSettings(settings);
 	_environment = environment;
 
 	_stats.clear();
 	int totalTotalFilesCount = 0;
+	int totalMessagesFound = 0;
 	using MediaType = MediaSettings::Type;
 	for (const auto &pair : _scanStats.byType()) {
 		const auto type = pair.first;
@@ -436,14 +434,17 @@ void ControllerObject::startExport(
 			// If specific filter selected, add those counts
 			totalTotalFilesCount += item.totalCount;
 		}
+		
+		if (type != MediaType::Link) {
+			totalMessagesFound += item.totalCount;
+		}
 	}
 	
 	if (totalTotalFilesCount > 0) {
 		// totalTotalFilesCount is the sum of category matches.
-		// _messagesInRangeCount is the actual number of bubbles found during scan.
 		// We use bubble count for the main progress denominator.
 		_stats.setExpectedFilesCount(totalTotalFilesCount);
-		_messagesCount = _messagesInRangeCount;
+		_messagesCount = totalMessagesFound;
 		_scanStatsFound = true;
 	} else {
 		_messagesCount = 0;
@@ -558,14 +559,10 @@ void ControllerObject::exportNext() {
 	if (++_stepIndex >= _steps.size()) {
 		if (_isScanning) {
 			auto stats = _scanStats.byType();
-			WriteScanStatsFile(_settings.path, stats, _messagesInRangeCount, _settings.singlePeerId, _settings.singlePeerName);
-			const auto count = _messagesInRangeCount;
+			WriteScanStatsFile(_settings.path, stats, _settings.singlePeerId, _settings.singlePeerName);
 			_isScanning = false;
 			_stepIndex = -1;
-			if (count <= 0) {
-				clearResults();
-			}
-			setState(ScanDoneState{ std::move(stats), count, _scanStats.totalMessagesCount() });
+			setState(ScanDoneState{ std::move(stats), _scanStats.totalMessagesCount() });
 			return;
 		}
 		if (ioCatchError(_writer->finish())) {
@@ -783,8 +780,6 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 			count += splitCount;
 		}
 		_messagesCount = count;
-	} else if (_messagesInRangeCount > 0) {
-		_messagesCount = _messagesInRangeCount;
 	}
 
 	_api.requestMessages(*info, fromId, tillId, [=](const Data::DialogInfo &info) {
@@ -799,16 +794,9 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 		_messagesTextCount = 0;
 		_messagesMediaCount = 0;
 		_messagesTotalCount = 0;
-		// _messagesInRangeCount must not be reset here if it came from scan results!
-		// But during export we increment it bubble by bubble.
-		// If _scanStatsFound is false, we should reset it to 0.
-		if (!_scanStatsFound) {
-			_messagesInRangeCount = 0;
-		}
 
 		setState(stateDialogs(DownloadProgress{
 			.messagesTotalCount = 0,
-			.messagesInRangeCount = _messagesCount
 		}));
 		return true;
 	}, [=](DownloadProgress progress) {
@@ -829,7 +817,6 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 		_messagesMediaCount = progress.messagesMediaCount;
 		_messagesTotalCount = progress.messagesTotalCount;
 		_messagesTextTotal = progress.messagesTextTotal;
-		_messagesInRangeCount = progress.messagesInRangeCount;
 		if (_isScanning) {
 			setState(stateScanning(progress.itemIndex, _messagesTextTotal));
 		} else {
@@ -847,7 +834,7 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 			return;
 		}
 		exportNextDialog();
-	}, _messagesCount);
+	});
 }
 
 ProcessingState ControllerObject::stateInitializing() const {
@@ -1005,7 +992,7 @@ void ControllerObject::fillMessagesState(
 	result.entityCount = info.chats.size() + info.left.size();
 	
 	result.itemIndex = _isScanning ? progress.itemIndex : progress.messagesTotalCount;
-	result.itemCount = (_messagesCount > 0) ? _messagesCount : progress.messagesInRangeCount;
+	result.itemCount = (_messagesCount > 0) ? _messagesCount : progress.messagesTextTotal;
 
 	result.activeDownloads = _activeDownloads;
 }

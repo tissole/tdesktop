@@ -450,7 +450,7 @@ void PanelController::updateState(State &&state) {
 			if (auto settings = dynamic_cast<SettingsWidget*>(_panel->inner())) {
 				settings->setScanning(false);
 				_panel->setHideOnDeactivate(false);
-				settings->setScanResults(scanDone->stats, scanDone->messagesCount, scanDone->totalMessagesCount);
+				settings->setScanResults(scanDone->stats, scanDone->totalMessagesCount);
 			}
 		}
 	} else if (const auto processing = std::get_if<ProcessingState>(&_state)) {

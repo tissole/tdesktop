@@ -98,7 +98,6 @@ public:
 		int messagesMediaCount = 0;
 		int messagesTotalCount = 0;
 		int messagesTextTotal = 0;
-		int messagesInRangeCount = 0;
 		int messagesUniqueCount = 0;
 	};
 	void requestUserpics(
@@ -124,8 +123,7 @@ public:
 		FnMut<bool(const Data::DialogInfo &)> start,
 		Fn<bool(DownloadProgress)> progress,
 		Fn<bool(Data::MessagesSlice&&)> slice,
-		FnMut<void()> done,
-		int messagesInRangeCount = 0);
+		FnMut<void()> done);
 
 	void finishExport(FnMut<void()> done);
 	void skipFile(uint64 randomId);
@@ -357,6 +355,8 @@ private:
 
 	rpl::event_stream<MTP::Error> _errors;
 	rpl::event_stream<Output::Result> _ioErrors;
+
+	FnMut<void()> _finishExportCallback;
 
 	base::flat_map<LocationKey, QString> _scanVisited;
 	base::flat_map<LocationKey, QString> _exportVisited;

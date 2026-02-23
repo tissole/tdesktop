@@ -111,9 +111,9 @@ Settings::Type SettingsFromDialogsType(Data::DialogInfo::Type type) {
 	return Settings::Type(0);
 }
 
-uint32 CalculateTakeoutFlags(const Settings &settings) {
+uint32 CalculateTakeoutFlags(const Settings &settings, bool isScanning) {
 	using Type = Settings::Type;
-	const auto sizeLimit = settings.media.sizeLimit;
+	const auto sizeLimit = isScanning ? kFileMaxSize : settings.media.sizeLimit;
 	const auto hasFiles = settings.media.types
 		|| (settings.types & Type::Userpics)
 		|| (settings.types & Type::Stories);
@@ -340,25 +340,29 @@ struct ApiWrap::DialogsProcess : ChatsProcess {
 	MTPInputPeer offsetPeer = MTP_inputPeerEmpty();
 };
 
-struct ApiWrap::ChatProcess {
-	Data::DialogInfo info;
-	int64 fromId = 0;
-	int64 tillId = 0;
-
-	FnMut<bool(const Data::DialogInfo &)> start;
+struct ApiWrap::AbstractMessagesProcess {
 	Fn<bool(DownloadProgress)> fileProgress;
 	Fn<bool(Data::MessagesSlice&&)> handleSlice;
 	FnMut<void()> done;
 
 	FnMut<void(MTPmessages_Messages&&)> requestDone;
 
-	int localSplitIndex = 0;
-	int32 largestIdPlusOne = 1;
-
 	Data::ParseMediaContext context;
 	std::optional<Data::MessagesSlice> slice;
 	bool lastSlice = false;
-	int pendingFiles = 0;
+	int fileIndex = 0;
+};
+
+struct ApiWrap::ChatProcess : AbstractMessagesProcess {
+	Data::DialogInfo info;
+	int64 fromId = 0;
+	int64 tillId = 0;
+
+	FnMut<bool(const Data::DialogInfo &)> start;
+
+	int localSplitIndex = 0;
+	int32 largestIdPlusOne = 1;
+
 	bool processing = false;
 
 	// Track items processed (media + links)
@@ -370,9 +374,6 @@ struct ApiWrap::ChatProcess {
 	int totalMessagesText = 0;
 	int messagesTextTotal = 0;
 
-	int messagesInRangeCount = 0;
-	bool messagesInRangeCountFixed = false;
-	bool messagesInRangeCountFromHistory = false;
 	int messagesUniqueCount = 0;
 	int totalMessagesCounter = 0;
 	std::vector<int> messageItemIndices;
@@ -623,8 +624,8 @@ void ApiWrap::startExport(
 		}
 	}
 
-	const auto flags = CalculateTakeoutFlags(*_settings);
-	const auto sizeLimit = _settings->media.sizeLimit;
+	const auto flags = CalculateTakeoutFlags(*_settings, _isScanning);
+	const auto sizeLimit = _isScanning ? kFileMaxSize : _settings->media.sizeLimit;
 
 	auto start = [=] {
 		if (_startProcess) sendNextStartRequest();
@@ -778,7 +779,7 @@ void ApiWrap::requestMediaCounts() {
 				[](const MTPDmessages_messagesNotModified &) { return 0; }
 			);
 
-			if (_usingServerCounts && _scanStats) {
+			if (_usingServerCounts && _scanStats && type != Type::Sticker) {
 				_scanStats->setTotalCount(type, count);
 			}
 			if (!_usingServerCounts) {
@@ -1156,7 +1157,6 @@ bool ApiWrap::loadUserpicProgress(FileProgress progress) {
 		.messagesMediaCount = _chatProcess ? _chatProcess->messagesMediaProcessed : 0,
 		.messagesTotalCount = _chatProcess ? _chatProcess->messagesTotalProcessed : 0,
 		.messagesTextTotal = _chatProcess ? _chatProcess->messagesTextTotal : 0,
-		.messagesInRangeCount = _chatProcess ? _chatProcess->messagesInRangeCount : 0,
 	});
 }
 
@@ -1335,8 +1335,7 @@ bool ApiWrap::loadStoryProgress(FileProgress progress, bool auxiliary) {
 		.messagesTextCount = _chatProcess ? _chatProcess->messagesTextProcessed : 0,
 		.messagesMediaCount = _chatProcess ? _chatProcess->messagesMediaProcessed : 0,
 		.messagesTotalCount = _chatProcess ? _chatProcess->messagesTotalProcessed : 0,
-		.messagesTextTotal = _chatProcess ? _chatProcess->messagesTextTotal : 0,
-		.messagesInRangeCount = _chatProcess ? _chatProcess->messagesInRangeCount : 0 });
+		.messagesTextTotal = _chatProcess ? _chatProcess->messagesTextTotal : 0 });
 }
 
 void ApiWrap::loadStoryDone(const QString &relativePath) {
@@ -1483,8 +1482,7 @@ void ApiWrap::requestMessages(
 		FnMut<bool(const Data::DialogInfo &)> start,
 		Fn<bool(DownloadProgress)> progress,
 		Fn<bool(Data::MessagesSlice&&)> slice,
-		FnMut<void()> done,
-		int messagesInRangeCount) {
+		FnMut<void()> done) {
 	Expects(_chatProcess == nullptr);
 	Expects(_selfId.has_value());
 
@@ -1497,8 +1495,6 @@ void ApiWrap::requestMessages(
 	_chatProcess->fileProgress = std::move(progress);
 	_chatProcess->handleSlice = std::move(slice);
 	_chatProcess->done = std::move(done);
-	_chatProcess->messagesInRangeCount = messagesInRangeCount;
-	_chatProcess->messagesInRangeCountFixed = (messagesInRangeCount > 0);
 
 	if (_settings->useIdRange) {
 		if (fromId > 0) {
@@ -1623,11 +1619,6 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 	if (localSplitIndex + 1 < _chatProcess->info.splits.size()) {
 		requestMessagesCount(localSplitIndex + 1);
 	} else if (_chatProcess->start(_chatProcess->info)) {
-		const bool fullHistorySelected = (_settings->media.types & MediaSettings::Type::FullHistory);
-		if (!_chatProcess->messagesInRangeCountFixed && fullHistorySelected) {
-			_chatProcess->messagesInRangeCount = _chatProcess->messagesTextTotal;
-			_chatProcess->messagesInRangeCountFixed = true;
-		}
 		requestMessagesSlice();
 	}
 }
@@ -1715,6 +1706,11 @@ void ApiWrap::resolveDates() {
 }
 
 void ApiWrap::finishExport(FnMut<void()> done) {
+	if (_filesDownloading > 0 || !_fileDownloadQueue.empty() || !_pendingFileCallbacks.empty()) {
+		_finishExportCallback = std::move(done);
+		return;
+	}
+
 	const auto takeoutId = base::take(_takeoutId);
 	const auto guard = gsl::finally([&] {
 		clearState();
@@ -2128,16 +2124,6 @@ void ApiWrap::requestChatMessages(
 			return -1;
 		});
 
-		if (count >= 0 && !_chatProcess->messagesInRangeCountFixed) {
-			const auto filter = getFilter();
-			const auto filterEmpty = (filter.type() == mtpc_inputMessagesFilterEmpty);
-			const auto sizeFilterActive = (_settings->media.sizeLimit > 0);
-			if (!sizeFilterActive && !filterEmpty) {
-				_chatProcess->messagesInRangeCount = count;
-				_chatProcess->messagesInRangeCountFromHistory = true;
-			}
-		}
-
 		if (auto requestDone = base::take(_chatProcess->requestDone)) {
 			requestDone(std::move(result));
 		}
@@ -2358,7 +2344,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		// Text messages with web previews (messageType == Text && hasFile) should also ignore size for stats.
 		const auto oversized = (hasFile && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit)
 			&& !hasAnyLink && (messageType != MediaSettings::Type::Text && messageType != MediaSettings::Type::Link)
-			&& !fullHistorySelected && !_isScanning;
+			&& !fullHistorySelected;
 
 		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
 		if (hasAnyLink && linkSelectedForStats) {
@@ -2388,13 +2374,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		if (selected) {
 			_chatProcess->messageItemsCount[i] = 1; // Mark as selected for progress bar (Y)
-
-			if (!_chatProcess->messagesInRangeCountFixed && !_chatProcess->messagesInRangeCountFromHistory) {
-				_chatProcess->messagesInRangeCount++; // Every selected bubble increments total for Y
-			}
 		}
 
-		_chatProcess->messageItemIndices[i] = _isScanning ? currentTotalIndex : (selected ? _chatProcess->messagesInRangeCount : 0);
+		_chatProcess->messageItemIndices[i] = _isScanning ? currentTotalIndex : (selected ? _chatProcess->messagesTotalProcessed + 1 : 0);
 
 		if (!selected) {
 			_chatProcess->messageItemsCount[i] = 0;
@@ -2490,8 +2472,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			.messagesTextCount = _chatProcess->messagesTextProcessed,
 			.messagesMediaCount = _chatProcess->messagesMediaProcessed,
 			.messagesTotalCount = _chatProcess->messagesProcessed, // Real-time finished count
-			.messagesTextTotal = _isScanning ? _chatProcess->messagesTextTotal : _chatProcess->messagesInRangeCount,
-			.messagesInRangeCount = _isScanning ? _chatProcess->messagesTextTotal : _chatProcess->messagesInRangeCount,
+			.messagesTextTotal = _chatProcess->messagesTextTotal,
 			.messagesUniqueCount = _chatProcess->messagesUniqueCount
 		});
 
@@ -2878,8 +2859,7 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 		.messagesTextCount = _chatProcess->messagesTextProcessed,
 		.messagesMediaCount = _chatProcess->messagesMediaProcessed,
 		.messagesTotalCount = _chatProcess->messagesProcessed, // Use finished count
-		.messagesTextTotal = _chatProcess->messagesInRangeCount,
-		.messagesInRangeCount = _chatProcess->messagesInRangeCount });
+		.messagesTextTotal = _chatProcess->messagesTextTotal });
 }
 
 void ApiWrap::loadMessageFileDone(int index, const QString &relativePath) {
@@ -3348,6 +3328,12 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 	process->done(relativePath);
 
 	scheduleMoreFiles();
+
+	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
+		if (_finishExportCallback) {
+			finishExport(base::take(_finishExportCallback));
+		}
+	}
 }
 
 void ApiWrap::loadFilePart(FileProcess &process) {
@@ -3877,8 +3863,7 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 				.messagesTextCount = _chatProcess->messagesTextProcessed,
 				.messagesMediaCount = _chatProcess->messagesMediaProcessed,
 				.messagesTotalCount = _chatProcess->messagesProcessed, // Real-time finished count
-				.messagesTextTotal = _chatProcess->messagesInRangeCount,
-				.messagesInRangeCount = _chatProcess->messagesInRangeCount,
+				.messagesTextTotal = _chatProcess->messagesTextTotal,
 				.messagesUniqueCount = _chatProcess->messagesUniqueCount
 			});
 		}
@@ -3905,6 +3890,7 @@ void ApiWrap::clearState(bool keepCache) {
 	_takeoutId = std::nullopt;
 	_takeoutFlags = 0;
 	_takeoutSizeLimit = 0;
+	_finishExportCallback = nullptr;
 	_settings = nullptr;
 	_isScanning = false;
 	if (!keepCache) {
