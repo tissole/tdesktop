@@ -256,7 +256,7 @@ struct ApiWrap::ContactsProcess {
 
 struct ApiWrap::UserpicsProcess {
 	FnMut<bool(Data::UserpicsInfo&&)> start;
-	Fn<bool(DownloadProgress)> fileProgress;
+	Fn<bool(ApiWrap::DownloadProgress)> fileProgress;
 	Fn<bool(Data::UserpicsSlice&&)> handleSlice;
 	FnMut<void()> finish;
 
@@ -270,7 +270,7 @@ struct ApiWrap::UserpicsProcess {
 
 struct ApiWrap::StoriesProcess {
 	FnMut<bool(Data::StoriesInfo&&)> start;
-	Fn<bool(DownloadProgress)> fileProgress;
+	Fn<bool(ApiWrap::DownloadProgress)> fileProgress;
 	Fn<bool(Data::StoriesSlice&&)> handleSlice;
 	FnMut<void()> finish;
 
@@ -341,7 +341,7 @@ struct ApiWrap::DialogsProcess : ChatsProcess {
 };
 
 struct ApiWrap::AbstractMessagesProcess {
-	Fn<bool(DownloadProgress)> fileProgress;
+	Fn<bool(ApiWrap::DownloadProgress)> fileProgress;
 	Fn<bool(Data::MessagesSlice&&)> handleSlice;
 	FnMut<void()> done;
 
@@ -363,6 +363,7 @@ struct ApiWrap::ChatProcess : AbstractMessagesProcess {
 	int localSplitIndex = 0;
 	int32 largestIdPlusOne = 1;
 
+	int pendingFiles = 0;
 	bool processing = false;
 
 	// Track items processed (media + links)
@@ -1146,7 +1147,7 @@ bool ApiWrap::loadUserpicProgress(FileProgress progress) {
 
 	Expects(_userpicsProcess != nullptr);
 
-	return _userpicsProcess->fileProgress({
+	return _userpicsProcess->fileProgress(ApiWrap::DownloadProgress{
 		.randomId = process.randomId,
 		.path = process.relativePath,
 		.itemIndex = _userpicsProcess->processed, // This is an approximation now.
@@ -1325,7 +1326,7 @@ bool ApiWrap::loadStoryProgress(FileProgress progress, bool auxiliary) {
 
 	Expects(_storiesProcess != nullptr);
 
-	return _storiesProcess->fileProgress({
+	return _storiesProcess->fileProgress(ApiWrap::DownloadProgress{
 		.randomId = process.randomId,
 		.path = process.relativePath,
 		.itemIndex = _storiesProcess->processed,
@@ -2462,7 +2463,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		}
 
 		// Initial progress update for processed bubble
-		_chatProcess->fileProgress({
+		_chatProcess->fileProgress(ApiWrap::DownloadProgress{
 			.randomId = 0,
 			.path = QString(),
 			.itemIndex = _isScanning ? _chatProcess->totalMessagesCounter : _chatProcess->messageItemIndices[i],
@@ -2849,7 +2850,7 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 		? _chatProcess->messageItemIndices[messageIndexInSlice]
 		: (_chatProcess->sliceOffset + messageIndexInSlice);
 
-	return _chatProcess->fileProgress({
+	return _chatProcess->fileProgress(ApiWrap::DownloadProgress{
 		.randomId = process.randomId,
 		.path = process.relativePath,
 		.itemIndex = itemIndex,
@@ -3853,7 +3854,7 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 			}
 
 			// Trigger progress update for finished message
-			_chatProcess->fileProgress({
+			_chatProcess->fileProgress(ApiWrap::DownloadProgress{
 				.randomId = 0,
 				.path = QString(),
 				.itemIndex = _chatProcess->messageItemIndices[index],

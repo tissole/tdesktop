@@ -152,6 +152,7 @@ private:
 	struct ChatsProcess;
 	struct LeftChannelsProcess;
 	struct DialogsProcess;
+	struct AbstractMessagesProcess;
 	struct ChatProcess;
 
 	void startMainSession(uint32 flags, FnMut<void()> done);
