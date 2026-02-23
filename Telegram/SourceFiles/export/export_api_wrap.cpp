@@ -2348,8 +2348,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			}
 		}
 		const auto hasAnyLink = !linksInThisMessage.empty();
-		const bool linkSelectedForStats = (types & MediaSettings::Type::Link) || (types & MediaSettings::Type::FullHistory);
-		[[maybe_unused]] const bool textSelectedForStats = (types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory);
+		const bool fullHistorySelected = (types & MediaSettings::Type::FullHistory);
+		const bool linkSelectedForStats = (types & MediaSettings::Type::Link) || fullHistorySelected;
+		[[maybe_unused]] const bool textSelectedForStats = (types & MediaSettings::Type::Text) || fullHistorySelected;
 
 	// Requirement: Links, Text, and Full History bypass size limits for statistics/counting.
 		// Plain text messages (messageType == Text && !hasFile) already have oversized == false.
