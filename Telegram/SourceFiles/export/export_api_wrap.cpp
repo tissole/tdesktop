@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/options.h"
 #include "base/random.h"
 #include "base/call_delayed.h"
+#include "core/mime_type.h"
 #include <set>
 #include <deque>
 #include <atomic>
@@ -113,7 +114,7 @@ Settings::Type SettingsFromDialogsType(Data::DialogInfo::Type type) {
 uint32 CalculateTakeoutFlags(const Settings &settings) {
 	using Type = Settings::Type;
 	const auto sizeLimit = settings.media.sizeLimit;
-	const auto hasFiles = (settings.media.types && (sizeLimit > 0))
+	const auto hasFiles = settings.media.types
 		|| (settings.types & Type::Userpics)
 		|| (settings.types & Type::Stories);
 
@@ -2177,7 +2178,9 @@ void ApiWrap::requestChatMessages(
 	const auto maxId = (_chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
 	const auto filter = getFilter();
 	const auto useSearch = _chatProcess->info.onlyMyMessages
-		|| (filter.type() != mtpc_inputMessagesFilterEmpty);
+		|| (filter.type() != mtpc_inputMessagesFilterEmpty)
+		|| (_settings->singlePeerFrom > 0)
+		|| (_settings->singlePeerTill > 0);
 
 	if (useSearch) {
 		using Flag = MTPmessages_Search::Flag;
@@ -2344,6 +2347,14 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			if (data.isAnimated) return MediaType::GIF;
 			if (data.isVideoFile) return MediaType::Video;
 			if (data.isAudioFile) return MediaType::Audio;
+			if (!data.name.isEmpty()) {
+				const auto type = Core::DetectNameType(QString::fromUtf8(data.name));
+				if (type == Core::NameType::Video) {
+					return MediaType::Video;
+				} else if (type == Core::NameType::Audio) {
+					return MediaType::Audio;
+				}
+			}
 			return MediaType::File;
 		}, [](const Data::Photo &data) {
 			return MediaType::Photo;
