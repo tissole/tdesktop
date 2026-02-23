@@ -594,6 +594,14 @@ void ApiWrap::startExport(
 	_startProcess->done = std::move(done);
 
 	const bool fullHistoryMode = (_settings->media.types & MediaSettings::Type::FullHistory);
+	if (_isScanning
+		&& _settings->singlePeerFrom == 0
+		&& _settings->singlePeerTill == 0
+		&& !_settings->useIdRange
+		&& (fullHistoryMode || _settings->media.sizeLimit >= kFileMaxSize || _settings->media.sizeLimit <= 0)
+		&& _settings->onlySinglePeer()) {
+		_usingServerCounts = true;
+	}
 
 	using Step = StartProcess::Step;
 	if (_settings->types & Settings::Type::Userpics) {
@@ -734,21 +742,6 @@ void ApiWrap::requestMediaCounts() {
 	if (filters.empty()) {
 		sendNextStartRequest();
 		return;
-	}
-
-	// If any filter is Empty, we only need to run ONE Search with Empty filter
-	// because it will return the total number of messages in the range.
-	bool hasEmptyFilter = false;
-	for (const auto &pair : filters) {
-		if (pair.second.type() == mtpc_inputMessagesFilterEmpty) {
-			hasEmptyFilter = true;
-			break;
-		}
-	}
-
-	if (hasEmptyFilter) {
-		filters.clear();
-		filters.push_back({ Type::FullHistory, MTP_inputMessagesFilterEmpty() });
 	}
 
 	_startProcess->pendingCounts = filters.size();
@@ -1724,16 +1717,6 @@ void ApiWrap::resolveDates() {
 }
 
 void ApiWrap::finishExport(FnMut<void()> done) {
-	if (_filesDownloading > 0 || !_fileDownloadQueue.empty() || !_pendingFileCallbacks.empty()) {
-		if (_chatProcess) {
-			_chatProcess->done = std::move(done);
-		} else {
-			// This shouldn't happen during a normal export flow.
-			if (done) done();
-		}
-		return;
-	}
-
 	const auto takeoutId = base::take(_takeoutId);
 	const auto guard = gsl::finally([&] {
 		clearState();
@@ -2347,14 +2330,6 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			if (data.isAnimated) return MediaType::GIF;
 			if (data.isVideoFile) return MediaType::Video;
 			if (data.isAudioFile) return MediaType::Audio;
-			if (!data.name.isEmpty()) {
-				const auto type = Core::DetectNameType(QString::fromUtf8(data.name));
-				if (type == Core::NameType::Video) {
-					return MediaType::Video;
-				} else if (type == Core::NameType::Audio) {
-					return MediaType::Audio;
-				}
-			}
 			return MediaType::File;
 		}, [](const Data::Photo &data) {
 			return MediaType::Photo;
@@ -2362,7 +2337,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			return MediaType::Link;
 		}, [](const auto &data) {
 			return MediaType::Text;
-		}) : MediaType::Text;
+		}) : (message.file().location ? MediaType::Photo : MediaType::Text);
 
 		const bool hasFile = message.file().location || message.thumb().file.location;
 		const auto fullSize = message.file().size;
@@ -2395,7 +2370,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		// Plain text messages (messageType == Text && !hasFile) already have oversized == false.
 		// Text messages with web previews (messageType == Text && hasFile) should also ignore size for stats.
 		const auto oversized = (hasFile && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit)
-			&& !hasAnyLink && (messageType != MediaSettings::Type::Text)
+			&& !hasAnyLink && (messageType != MediaSettings::Type::Text && messageType != MediaSettings::Type::Link)
 			&& !fullHistorySelected;
 
 		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
@@ -2928,9 +2903,7 @@ void ApiWrap::loadMessageFileDone(int index, const QString &relativePath) {
 	--_chatProcess->pendingFiles;
 	Assert(_chatProcess->pendingFiles >= 0);
 	if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
-		crl::on_main([=] {
-			finishMessagesSlice();
-		});
+		finishMessagesSlice();
 	}
 }
 
@@ -2944,9 +2917,7 @@ void ApiWrap::loadMessageThumbDone(int index, const QString &relativePath) {
 	--_chatProcess->pendingFiles;
 	Assert(_chatProcess->pendingFiles >= 0);
 	if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
-		crl::on_main([=] {
-			finishMessagesSlice();
-		});
+		finishMessagesSlice();
 	}
 }
 
@@ -2971,9 +2942,7 @@ void ApiWrap::loadMessageEmojiDone(uint64 id, const QString &relativePath) {
 			}
 			_chatProcess->emojiToMessageIndices.erase(j);
 			if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
-				crl::on_main([=] {
-					finishMessagesSlice();
-				});
+				finishMessagesSlice();
 				return;
 			}
 		}
@@ -3028,7 +2997,7 @@ void ApiWrap::processFileLoad(
 		return Type::Link;
 	}, [](const auto &data) {
 		return Type(0);
-	}) : Type(0);
+	}) : (message && message->file().location) ? Type::Photo : Type(0);
 
 	const auto fullSize = message
 		? message->file().size
@@ -3038,7 +3007,7 @@ void ApiWrap::processFileLoad(
 
 	const auto types = _settings->media.types;
 	const bool fullHistorySelected = (types & MediaSettings::Type::FullHistory);
-	const auto oversized = (file.location && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit && !fullHistorySelected);
+	const auto oversized = (file.location && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit && !fullHistorySelected && type != Type::Link);
 	const auto locationKey = file.location ? ComputeLocationKey(file.location) : ApiWrap::LocationKey{ 0, 0 };
 
 	const bool typeSelected = (types & type) || fullHistorySelected;
@@ -3391,14 +3360,6 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 	process->done(relativePath);
 
 	scheduleMoreFiles();
-
-	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
-		if (_chatProcess && _chatProcess->done) {
-			crl::on_main([=] {
-				finishExport(base::take(_chatProcess->done));
-			});
-		}
-	}
 }
 
 void ApiWrap::loadFilePart(FileProcess &process) {
