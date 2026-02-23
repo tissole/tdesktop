@@ -2295,28 +2295,34 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		// Identification and stat increments for non-file items
 		const auto hasMedia = !std::holds_alternative<v::null_t>(message.media.content);
-		const auto textFilterSelected = (_settings->media.types & MediaSettings::Type::Text);
-		const auto fullHistorySelected = (_settings->media.types & MediaSettings::Type::FullHistory);
-		const auto linkFilterSelected = (_settings->media.types & MediaSettings::Type::Link);
-
-		// Identify media type for stats
+		
+		// Identify media type for stats using a more robust check
 		using MediaType = MediaSettings::Type;
-		const auto messageType = hasMedia ? v::match(message.media.content, [&](
-			const Data::Document &data) {
-			if (data.isSticker) return MediaType::Sticker;
-			if (data.isVideoMessage) return MediaType::VideoMessage;
-			if (data.isVoiceMessage) return MediaType::VoiceMessage;
-			if (data.isAnimated) return MediaType::GIF;
-			if (data.isVideoFile) return MediaType::Video;
-			if (data.isAudioFile) return MediaType::Audio;
-			return MediaType::File;
-		}, [](const Data::Photo &data) {
-			return MediaType::Photo;
-		}, [](const Data::WebPage &data) {
-			return MediaType::Link;
-		}, [](const auto &data) {
-			return MediaType::Text;
-		}) : (message.file().location ? MediaType::Photo : MediaType::Text);
+		auto messageType = MediaType::Text;
+		if (hasMedia) {
+			messageType = v::match(message.media.content, [&](const Data::Document &data) {
+				if (data.isSticker) return MediaType::Sticker;
+				if (data.isVideoMessage) return MediaType::VideoMessage;
+				if (data.isVoiceMessage) return MediaType::VoiceMessage;
+				if (data.isAnimated) return MediaType::GIF;
+				if (data.isVideoFile) return MediaType::Video;
+				if (data.isAudioFile) return MediaType::Audio;
+				return MediaType::File;
+			}, [](const Data::Photo &data) {
+				return MediaType::Photo;
+			}, [](const Data::WebPage &data) {
+				return MediaType::Link;
+			}, [](const auto &data) {
+				return MediaType::Text;
+			});
+		} else if (message.file().location) {
+			messageType = MediaType::Photo;
+		}
+
+		// Fix: If it's a document but type was detected as Text, force it to File
+		if (messageType == MediaType::Text && hasMedia && std::holds_alternative<Data::Document>(message.media.content)) {
+			messageType = MediaType::File;
+		}
 
 		const bool hasFile = message.file().location || message.thumb().file.location;
 		const auto fullSize = message.file().size;
@@ -2448,19 +2454,17 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		if (_isScanning) {
 			// Increment stats for messages without main files (Text, non-file Media)
 			// Only if the type itself is selected or Full History is selected.
-			if (!message.file().location && mediaSelected && messageType != MediaSettings::Type::Link) {
-				if (_usingServerCounts 
-					&& messageType != MediaSettings::Type::Sticker 
-					&& messageType != MediaSettings::Type::Text) {
-					_scanStats->incrementSizeAndUnique(messageType, 0, true);
-				} else {
+			if (mediaSelected && messageType != MediaSettings::Type::Link) {
+				const bool hasFilePart = message.file().location || message.thumb().file.location;
+				if (!hasFilePart) {
 					_scanStats->increment(messageType, 0, true);
 				}
 			}
 		} else {
 			// During export, increment stats for non-file messages too.
-			if (!message.file().location && mediaSelected && messageType != MediaSettings::Type::Link) {
-				if (_stats) {
+			if (mediaSelected && messageType != MediaSettings::Type::Link) {
+				const bool hasFilePart = message.file().location || message.thumb().file.location;
+				if (!hasFilePart && _stats) {
 					_stats->increment(messageType, 0, true);
 					_stats->incrementUserMediaFiles();
 				}
@@ -2480,7 +2484,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		_chatProcess->fileProgress(ApiWrap::DownloadProgress{
 			.randomId = 0,
 			.path = QString(),
-			.itemIndex = currentTotalIndex,
+			.itemIndex = _isScanning ? currentTotalIndex : _chatProcess->messagesProcessed,
 			.ready = 1,
 			.total = 1,
 			.isAuxiliary = true,
@@ -2736,7 +2740,14 @@ void ApiWrap::loadNextMessageFile() {
 						processFileLoad(
 							it->second.file,
 							{ .customEmojiId = id },
-							[=](FileProgress value) { return loadMessageEmojiProgress(value); },
+							[=](FileProgress value) {
+								if (_chatProcess
+								 && _chatProcess->fileToMessageIndex.find(value.randomId)
+									 == end(_chatProcess->fileToMessageIndex)) {
+									_chatProcess->fileToMessageIndex.emplace(value.randomId, i);
+								}
+								return loadMessageEmojiProgress(value);
+							},
 							[=](const QString &path) { loadMessageEmojiDone(id, path); },
 							nullptr,
 							nullptr,
@@ -2755,7 +2766,14 @@ void ApiWrap::loadNextMessageFile() {
 						processFileLoad(
 							it->second.file,
 							{ .customEmojiId = id },
-							[=](FileProgress value) { return loadMessageEmojiProgress(value); },
+							[=](FileProgress value) {
+								if (_chatProcess
+								 && _chatProcess->fileToMessageIndex.find(value.randomId)
+									 == end(_chatProcess->fileToMessageIndex)) {
+									_chatProcess->fileToMessageIndex.emplace(value.randomId, i);
+								}
+								return loadMessageEmojiProgress(value);
+							},
 							[=](const QString &path) { loadMessageEmojiDone(id, path); },
 							nullptr,
 							nullptr,
@@ -2858,9 +2876,11 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 		}
 	}
 
-	const int itemIndex = (messageIndexInSlice >= 0 && messageIndexInSlice < int(_chatProcess->messageItemIndices.size()))
-		? _chatProcess->messageItemIndices[messageIndexInSlice]
-		: (currentFileMessage() ? _chatProcess->totalMessagesCounter : 0);
+	const int itemIndex = _isScanning 
+		? ((messageIndexInSlice >= 0 && messageIndexInSlice < int(_chatProcess->messageItemIndices.size()))
+			? _chatProcess->messageItemIndices[messageIndexInSlice]
+			: (currentFileMessage() ? _chatProcess->totalMessagesCounter : 0))
+		: _chatProcess->messagesProcessed;
 
 	return _chatProcess->fileProgress(ApiWrap::DownloadProgress{
 		.randomId = process.randomId,
@@ -2938,6 +2958,30 @@ void ApiWrap::finishMessages() {
 	process->done();
 }
 
+Data::Message *ApiWrap::currentFileMessage() const {
+	Expects(_chatProcess != nullptr);
+	Expects(_chatProcess->slice.has_value());
+
+	return &_chatProcess->slice->list[_chatProcess->fileIndex];
+}
+
+Data::FileOrigin ApiWrap::currentFileMessageOrigin() const {
+	Expects(_chatProcess != nullptr);
+	Expects(_chatProcess->slice.has_value());
+
+	const auto splitIndex = _chatProcess->info.splits[
+		_chatProcess->localSplitIndex];
+	auto result = Data::FileOrigin();
+	result.messageId = currentFileMessage()->id;
+	result.split = (splitIndex >= 0)
+		? splitIndex
+		: (int(_splits.size()) + splitIndex);
+	result.peer = (splitIndex >= 0)
+		? _chatProcess->info.input
+		: _chatProcess->info.migratedFromInput;
+	return result;
+}
+
 
 void ApiWrap::processFileLoad(
 		Data::File &file,
@@ -2955,30 +2999,31 @@ void ApiWrap::processFileLoad(
 		: story
 		? &story->media
 		: nullptr;
-	const auto type = media ? v::match(media->content, [&](
-			const Data::Document &data) {
-		if (data.isSticker) {
-			return Type::Sticker;
-		} else if (data.isVideoMessage) {
-			return Type::VideoMessage;
-		} else if (data.isVoiceMessage) {
-			return Type::VoiceMessage;
-		} else if (data.isAnimated) {
-			return Type::GIF;
-		} else if (data.isVideoFile) {
-			return Type::Video;
-		} else if (data.isAudioFile) {
-			return Type::Audio;
-		} else {
+	auto type = Type(0);
+	if (media) {
+		type = v::match(media->content, [&](const Data::Document &data) {
+			if (data.isSticker) return Type::Sticker;
+			if (data.isVideoMessage) return Type::VideoMessage;
+			if (data.isVoiceMessage) return Type::VoiceMessage;
+			if (data.isAnimated) return Type::GIF;
+			if (data.isVideoFile) return Type::Video;
+			if (data.isAudioFile) return Type::Audio;
 			return Type::File;
-		}
-	}, [](const Data::Photo &data) {
-		return Type::Photo;
-	}, [](const Data::WebPage &data) {
-		return Type::Link;
-	}, [](const auto &data) {
-		return Type(0);
-	}) : (message && message->file().location) ? Type::Photo : Type(0);
+		}, [](const Data::Photo &data) {
+			return Type::Photo;
+		}, [](const Data::WebPage &data) {
+			return Type::Link;
+		}, [](const auto &data) {
+			return Type(0);
+		});
+	} else if (message && message->file().location) {
+		type = Type::Photo;
+	}
+
+	// Fix: If it's a document but type was detected as 0, force it to File
+	if (type == Type(0) && media && std::holds_alternative<Data::Document>(media->content)) {
+		type = Type::File;
+	}
 
 	const auto fullSize = message
 		? message->file().size
@@ -3869,7 +3914,7 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 			_chatProcess->fileProgress(ApiWrap::DownloadProgress{
 				.randomId = 0,
 				.path = QString(),
-				.itemIndex = _chatProcess->messageItemIndices[index],
+				.itemIndex = _isScanning ? _chatProcess->messageItemIndices[index] : _chatProcess->messagesProcessed,
 				.ready = 1,
 				.total = 1,
 				.isAuxiliary = true,

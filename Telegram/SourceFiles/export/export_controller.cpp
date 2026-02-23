@@ -442,9 +442,9 @@ void ControllerObject::startExport(
 	
 	if (totalTotalFilesCount > 0) {
 		// totalTotalFilesCount is the sum of category matches.
-		// We use bubble count for the main progress denominator.
+		// We use this as the main progress denominator.
 		_stats.setExpectedFilesCount(totalTotalFilesCount);
-		_messagesCount = totalMessagesFound;
+		_messagesCount = totalTotalFilesCount;
 		_scanStatsFound = true;
 	} else {
 		_messagesCount = 0;
@@ -989,7 +989,7 @@ void ControllerObject::fillMessagesState(
 	result.entityIndex = index + 1;
 	result.entityCount = info.chats.size() + info.left.size();
 	
-	result.itemIndex = _isScanning ? progress.itemIndex : progress.messagesTotalCount;
+	result.itemIndex = progress.itemIndex;
 	result.itemCount = (_messagesCount > 0) ? _messagesCount : progress.messagesTextTotal;
 
 	result.activeDownloads = _activeDownloads;
