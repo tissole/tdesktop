@@ -766,7 +766,7 @@ void ApiWrap::requestMediaCounts() {
 			MTP_int(_settings->singlePeerTill),
 			MTP_int(0),
 			MTP_int(0),
-			MTP_int(1),
+			MTP_int(100),
 			MTP_int(int32(maxId)),
 			MTP_int(int32(minId)),
 			MTP_long(0)
@@ -780,7 +780,7 @@ void ApiWrap::requestMediaCounts() {
 				[](const MTPDmessages_messagesNotModified &) { return 0; }
 			);
 
-			if (_usingServerCounts && _scanStats && type != Type::Sticker) {
+			if (_usingServerCounts && _scanStats && type != Type::Sticker && type != Type::Link) {
 				_scanStats->setTotalCount(type, count);
 			}
 			if (!_usingServerCounts) {
@@ -2361,15 +2361,17 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					uniqueInMsg++;
 				}
 			}
+			const int linksCount = int(linksInThisMessage.size());
 			if (_isScanning) {
 				if (_usingServerCounts) {
-					// Add to unique count, keep server's total.
-					_scanStats->increment(MediaSettings::Type::Link, 0, 0, uniqueInMsg);
+					// Use local link count for total even with server counts,
+					// because server only counts messages with links.
+					_scanStats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
 				} else {
-					_scanStats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
+					_scanStats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
 				}
 			} else if (_stats) {
-				_stats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
+				_stats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
 			}
 		}
 
@@ -2387,7 +2389,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			}
 		}
 
-		_chatProcess->messageItemIndices[i] = _isScanning ? currentTotalIndex : (selected ? _chatProcess->messagesTotalProcessed + 1 : 0);
+		_chatProcess->messageItemIndices[i] = currentTotalIndex;
 
 		if (!selected) {
 			_chatProcess->messageItemsCount[i] = 0;
@@ -2447,7 +2449,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			// Increment stats for messages without main files (Text, non-file Media)
 			// Only if the type itself is selected or Full History is selected.
 			if (!message.file().location && mediaSelected && messageType != MediaSettings::Type::Link) {
-				if (_usingServerCounts) {
+				if (_usingServerCounts 
+					&& messageType != MediaSettings::Type::Sticker 
+					&& messageType != MediaSettings::Type::Text) {
 					_scanStats->incrementSizeAndUnique(messageType, 0, true);
 				} else {
 					_scanStats->increment(messageType, 0, true);
@@ -2476,7 +2480,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		_chatProcess->fileProgress(ApiWrap::DownloadProgress{
 			.randomId = 0,
 			.path = QString(),
-			.itemIndex = _isScanning ? _chatProcess->totalMessagesCounter : _chatProcess->messageItemIndices[i],
+			.itemIndex = currentTotalIndex,
 			.ready = 1,
 			.total = 1,
 			.isAuxiliary = true,
@@ -2660,9 +2664,7 @@ void ApiWrap::loadNextMessageFile() {
 	const auto guard = gsl::finally([&] {
 		_chatProcess->processing = false;
 		if (_chatProcess && _chatProcess->pendingFiles == 0) {
-			crl::on_main([=] {
-				finishMessagesSlice();
-			});
+			finishMessagesSlice();
 		}
 	});
 
@@ -2858,7 +2860,7 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 
 	const int itemIndex = (messageIndexInSlice >= 0 && messageIndexInSlice < int(_chatProcess->messageItemIndices.size()))
 		? _chatProcess->messageItemIndices[messageIndexInSlice]
-		: (_chatProcess->sliceOffset + messageIndexInSlice);
+		: (currentFileMessage() ? _chatProcess->totalMessagesCounter : 0);
 
 	return _chatProcess->fileProgress(ApiWrap::DownloadProgress{
 		.randomId = process.randomId,
@@ -3027,7 +3029,7 @@ void ApiWrap::processFileLoad(
 						_scanVisited.emplace(checkKey, QString());
 					}
 					
-					if (_usingServerCounts) {
+					if (_usingServerCounts && type != Type::Sticker && type != Type::Text) {
 						_scanStats->incrementSizeAndUnique(type, fullSize, willBeUniqueInChat);
 					} else {
 						_scanStats->increment(type, fullSize, willBeUniqueInChat);
