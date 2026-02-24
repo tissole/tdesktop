@@ -2497,7 +2497,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		_chatProcess->fileProgress(ApiWrap::DownloadProgress{
 			.randomId = 0,
 			.path = QString(),
-			.itemIndex = _isScanning ? currentTotalIndex : _chatProcess->messagesProcessed,
+			.itemIndex = _isScanning ? currentTotalIndex : (_chatProcess->messagesProcessed + 1),
 			.ready = 1,
 			.total = 1,
 			.isAuxiliary = true,
@@ -2893,7 +2893,7 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 		? ((messageIndexInSlice >= 0 && messageIndexInSlice < int(_chatProcess->messageItemIndices.size()))
 			? _chatProcess->messageItemIndices[messageIndexInSlice]
 			: (currentFileMessage() ? _chatProcess->totalMessagesCounter : 0))
-		: _chatProcess->messagesProcessed;
+		: (_chatProcess->messagesProcessed + 1);
 
 	return _chatProcess->fileProgress(ApiWrap::DownloadProgress{
 		.randomId = process.randomId,
@@ -3415,6 +3415,8 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 
 	scheduleMoreFiles();
 
+	// Check if all files are done AND chat history processing is complete.
+	// Only then should we finish the export session.
 	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
 		if (_finishExportCallback) {
 			finishExport(base::take(_finishExportCallback));
