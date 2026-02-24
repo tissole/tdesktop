@@ -780,7 +780,8 @@ void ApiWrap::requestMediaCounts() {
 				[](const MTPDmessages_messagesNotModified &) { return 0; }
 			);
 
-			if (_usingServerCounts && _scanStats && type != Type::Sticker && type != Type::Link) {
+			// Links are always counted locally for accuracy
+			if (_usingServerCounts && _scanStats && type != Type::Sticker && type != Type::Link && type != Type::Text) {
 				_scanStats->setTotalCount(type, count);
 			}
 			if (!_usingServerCounts) {
@@ -2352,14 +2353,30 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		const bool linkSelectedForStats = (types & MediaSettings::Type::Link) || fullHistorySelected;
 		[[maybe_unused]] const bool textSelectedForStats = (types & MediaSettings::Type::Text) || fullHistorySelected;
 
-	// Requirement: Links, Text, and Full History bypass size limits for statistics/counting.
+		// Requirement: Links, Text, and Full History bypass size limits for statistics/counting.
 		// Plain text messages (messageType == Text && !hasFile) already have oversized == false.
 		// Text messages with web previews (messageType == Text && hasFile) should also ignore size for stats.
+		// For videos, images etc, we only increment stats if it's NOT oversized OR if it's full history.
 		const auto oversized = (hasFile && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit)
 			&& !hasAnyLink && (messageType != MediaSettings::Type::Text && messageType != MediaSettings::Type::Link)
 			&& !fullHistorySelected;
 
-		const bool mediaSelected = (types & messageType) || (types & MediaSettings::Type::FullHistory);
+		const bool mediaSelected = (types & messageType) || fullHistorySelected;
+		
+		// Fix for doubled stats: 
+		// If we are in Scanning mode, we should ONLY increment if we are NOT using server counts for this type.
+		// Exception: Text and Stickers are always counted locally.
+		// Exception: Links are always counted locally because server doesn't give link counts in messages.
+		bool shouldCountLocally = true;
+		if (_isScanning && _usingServerCounts) {
+			if (messageType != MediaSettings::Type::Text 
+				&& messageType != MediaSettings::Type::Sticker 
+				&& messageType != MediaSettings::Type::Link
+				&& !hasAnyLink) {
+				shouldCountLocally = false;
+			}
+		}
+
 		if (hasAnyLink && linkSelectedForStats) {
 			int uniqueInMsg = 0;
 			for (const auto &url : linksInThisMessage) {
@@ -2370,13 +2387,8 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			}
 			const int linksCount = int(linksInThisMessage.size());
 			if (_isScanning) {
-				if (_usingServerCounts) {
-					// Use local link count for total even with server counts,
-					// because server only counts messages with links.
-					_scanStats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
-				} else {
-					_scanStats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
-				}
+				// Always count links locally
+				_scanStats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
 			} else if (_stats) {
 				_stats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
 			}
@@ -2385,7 +2397,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		// selected means "should be in HTML/JSON"
 		bool selected = (mediaSelected && (!oversized || fullHistorySelected))
 			|| (hasAnyLink && linkSelectedForStats) 
-			|| (!hasMedia && ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory)));
+			|| (!hasMedia && ((types & MediaSettings::Type::Text) || fullHistorySelected));
 
 		if (selected) {
 			_chatProcess->messageItemsCount[i] = 1; // Mark as selected for progress bar (Y)
@@ -2407,10 +2419,10 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		// Bubble counting (Total and Unique messages, excluding Links from sum)
 		bool isMediaForSum = (messageType != MediaSettings::Type::Link && messageType != MediaSettings::Type::Text);
 		bool countThis = isMediaForSum 
-			|| ((types & MediaSettings::Type::Text) || (types & MediaSettings::Type::FullHistory))
+			|| ((types & MediaSettings::Type::Text) || fullHistorySelected)
 			|| (hasAnyLink && linkSelectedForStats);
 
-		if (countThis) {
+		if (countThis && shouldCountLocally) {
 			bool uniqueBubble = false;
 			if (!message.file().location) {
 				uniqueBubble = true;
@@ -2455,7 +2467,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		if (_isScanning) {
 			// Increment stats for messages without main files (Text, non-file Media)
 			// Only if the type itself is selected or Full History is selected.
-			if (mediaSelected && messageType != MediaSettings::Type::Link) {
+			if (shouldCountLocally && mediaSelected && messageType != MediaSettings::Type::Link) {
 				const bool hasFilePart = message.file().location || message.thumb().file.location;
 				if (!hasFilePart) {
 					_scanStats->increment(messageType, 0, true);
@@ -3075,8 +3087,10 @@ void ApiWrap::processFileLoad(
 						_scanVisited.emplace(checkKey, QString());
 					}
 					
-					if (_usingServerCounts && type != Type::Sticker && type != Type::Text) {
-						_scanStats->incrementSizeAndUnique(type, fullSize, willBeUniqueInChat);
+					if (_usingServerCounts) {
+						if (type == Type::Sticker) {
+							_scanStats->incrementSizeAndUnique(type, fullSize, willBeUniqueInChat);
+						}
 					} else {
 						_scanStats->increment(type, fullSize, willBeUniqueInChat);
 					}
