@@ -1600,7 +1600,7 @@ void ApiWrap::checkFirstMessageDate(int localSplitIndex, int count) {
 		1, // offset_id
 		-1, // add_offset
 		1, // limit
-		[=](const MTPmessages_Messages &result) {
+		[=](MTPmessages_Messages &&result) {
 		if (!_chatProcess) return;
 
 		const auto skipSplit = !Data::SingleMessageBefore(
@@ -3088,11 +3088,20 @@ void ApiWrap::processFileLoad(
 					}
 					
 					if (_usingServerCounts) {
-						if (type == Type::Sticker) {
+						// For Stickers and Text, we ALWAYS count locally because server doesn't provide specific counts.
+						// For Links, we count in loadMessagesFiles (see above), so we skip here.
+						// For other Media (Photo, Video, etc), server provides Total, we provide Unique+Size.
+						if (type == Type::Sticker || type == Type::Text) {
+							_scanStats->increment(type, fullSize, willBeUniqueInChat);
+						} else if (type != Type::Link) {
 							_scanStats->incrementSizeAndUnique(type, fullSize, willBeUniqueInChat);
 						}
 					} else {
-						_scanStats->increment(type, fullSize, willBeUniqueInChat);
+						// Local scan: Count everything locally.
+						// Exception: Links are handled in loadMessagesFiles to support multiple links per message.
+						if (type != Type::Link) {
+							_scanStats->increment(type, fullSize, willBeUniqueInChat);
+						}
 					}
 				}
 			}
@@ -3137,7 +3146,11 @@ void ApiWrap::processFileLoad(
 			const bool willBeUniqueInChat = hasKey && !alreadyVisited;
 
 			if ((message || story) && type != Type(0)) {
-				_stats->increment(type, fullSize, willBeUniqueInChat);
+				// During export, we count everything locally to ensure consistency with what is actually written.
+				// Exception: Links are handled in loadMessagesFiles.
+				if (type != Type::Link) {
+					_stats->increment(type, fullSize, willBeUniqueInChat);
+				}
 			}
 			
 			// For links, we track them to write unique_links.txt later, even if we don't "download" a file.

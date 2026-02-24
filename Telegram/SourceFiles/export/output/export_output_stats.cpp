@@ -62,7 +62,6 @@ void Stats::incrementSizeAndUnique(MediaSettings::Type type, int64 size, bool un
 		++stat.uniqueCount;
 		stat.uniqueSize += size;
 	}
-	++stat.totalCount;
 	stat.totalSize += size;
 }
 
