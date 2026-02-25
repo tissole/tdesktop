@@ -780,14 +780,6 @@ void ApiWrap::requestMediaCounts() {
 				[](const MTPDmessages_messagesNotModified &) { return 0; }
 			);
 
-			// Links are always counted locally for accuracy
-			if (_usingServerCounts && _scanStats && type != Type::Sticker && type != Type::Link && type != Type::Text) {
-				_scanStats->setTotalCount(type, count);
-			}
-			if (!_usingServerCounts) {
-				_serverTotalCount += count;
-			}
-
 			if (--_startProcess->pendingCounts == 0) {
 				sendNextStartRequest();
 			}
@@ -2387,8 +2379,11 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			}
 			const int linksCount = int(linksInThisMessage.size());
 			if (_isScanning) {
-				// Always count links locally
-				_scanStats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
+				// Only increment if we are strictly in local counting mode for links
+				// to avoid potential conflicts if server counts were somehow used (though blocked elsewhere).
+				if (!_usingServerCounts || !fullHistorySelected) {
+					_scanStats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
+				}
 			} else if (_stats) {
 				_stats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
 			}
@@ -2969,6 +2964,12 @@ void ApiWrap::finishMessages() {
 
 	const auto process = base::take(_chatProcess);
 	process->done();
+
+	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
+		if (_finishExportCallback) {
+			finishExport(base::take(_finishExportCallback));
+		}
+	}
 }
 
 Data::Message *ApiWrap::currentFileMessage() const {
@@ -3417,7 +3418,7 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 
 	// Check if all files are done AND chat history processing is complete.
 	// Only then should we finish the export session.
-	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
+	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty() && !_chatProcess) {
 		if (_finishExportCallback) {
 			finishExport(base::take(_finishExportCallback));
 		}
