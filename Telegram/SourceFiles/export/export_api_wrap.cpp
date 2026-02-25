@@ -781,8 +781,11 @@ void ApiWrap::requestMediaCounts() {
 			);
 
 			// We are using purely local counting for everything now to ensure consistency.
-			// Server counts are ignored for the "Total" stats.
+			// Server counts are ignored for the "Total" stats to prevent "Double Counting" and "Zero Size" issues.
 			// _serverTotalCount is still used for progress estimation if needed.
+			if (_usingServerCounts && _scanStats && type != Type::Sticker && type != Type::Link && type != Type::Text) {
+				_scanStats->setTotalCount(type, count);
+			}
 			if (!_usingServerCounts) {
 				_serverTotalCount += count;
 			}
@@ -2368,21 +2371,12 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		// Exception: Links are always counted locally because server doesn't give link counts in messages.
 		bool shouldCountLocally = true;
 		if (_isScanning && _usingServerCounts) {
-			// When max size is selected (_usingServerCounts is true), the server provides the total count.
-			// So we should NOT increment locally for types that the server handles (Photo, Video, File, Audio).
-			// We MUST increment locally for types the server doesn't handle well or at all (Text, Sticker, Link).
-			// AND we must increment locally if the message has NO file (e.g. text only), because server "media" counts might skip it?
-			// Actually, if _usingServerCounts is true, we rely on requestMediaCounts for the TOTAL. 
-			// But we still need to process them here for UNIQUE counts (visited set).
-			// So we always process, but we might skip the _scanStats->increment call if it adds to TOTAL.
-			// Wait, the issue "No items found" means we are SKIPPING the increment entirely.
-			
-			// If we are using server counts, we STILL need to count locally if we want to track unique/size?
-			// The issue is likely that we blocked counting here, but didn't set the server total either (removed in previous step).
-			// If we removed server total setting, we MUST count locally.
-			
-			// Since we removed the server total setting in requestMediaCounts, we must ALWAYS count locally now.
-			shouldCountLocally = true;
+			if (messageType != MediaSettings::Type::Text 
+				&& messageType != MediaSettings::Type::Sticker 
+				&& messageType != MediaSettings::Type::Link
+				&& !hasAnyLink) {
+				shouldCountLocally = false;
+			}
 		}
 
 		if (hasAnyLink && linkSelectedForStats) {
@@ -2478,10 +2472,14 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		if (_isScanning) {
 			// Increment stats for messages without main files (Text, non-file Media)
 			// Only if the type itself is selected or Full History is selected.
-			if (shouldCountLocally && mediaSelected && messageType != MediaSettings::Type::Link) {
+			if (mediaSelected && messageType != MediaSettings::Type::Link) {
 				const bool hasFilePart = message.file().location || message.thumb().file.location;
 				if (!hasFilePart) {
-					_scanStats->increment(messageType, 0, true);
+					if (shouldCountLocally) {
+						_scanStats->increment(messageType, 0, true);
+					} else if (_usingServerCounts && messageType != MediaSettings::Type::Link) {
+						_scanStats->incrementSizeAndUnique(messageType, 0, true);
+					}
 				}
 			}
 		} else {
@@ -3105,9 +3103,6 @@ void ApiWrap::processFileLoad(
 					}
 					
 					if (_usingServerCounts) {
-						// For Stickers and Text, we ALWAYS count locally because server doesn't provide specific counts.
-						// For Links, we count in loadMessagesFiles (see above), so we skip here.
-						// For other Media (Photo, Video, etc), server provides Total, we provide Unique+Size.
 						if (type == Type::Sticker || type == Type::Text) {
 							_scanStats->increment(type, fullSize, willBeUniqueInChat);
 						} else if (type != Type::Link) {
