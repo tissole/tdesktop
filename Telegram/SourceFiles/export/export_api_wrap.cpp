@@ -780,6 +780,13 @@ void ApiWrap::requestMediaCounts() {
 				[](const MTPDmessages_messagesNotModified &) { return 0; }
 			);
 
+			// We are using purely local counting for everything now to ensure consistency.
+			// Server counts are ignored for the "Total" stats.
+			// _serverTotalCount is still used for progress estimation if needed.
+			if (!_usingServerCounts) {
+				_serverTotalCount += count;
+			}
+
 			if (--_startProcess->pendingCounts == 0) {
 				sendNextStartRequest();
 			}
@@ -2361,12 +2368,21 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		// Exception: Links are always counted locally because server doesn't give link counts in messages.
 		bool shouldCountLocally = true;
 		if (_isScanning && _usingServerCounts) {
-			if (messageType != MediaSettings::Type::Text 
-				&& messageType != MediaSettings::Type::Sticker 
-				&& messageType != MediaSettings::Type::Link
-				&& !hasAnyLink) {
-				shouldCountLocally = false;
-			}
+			// When max size is selected (_usingServerCounts is true), the server provides the total count.
+			// So we should NOT increment locally for types that the server handles (Photo, Video, File, Audio).
+			// We MUST increment locally for types the server doesn't handle well or at all (Text, Sticker, Link).
+			// AND we must increment locally if the message has NO file (e.g. text only), because server "media" counts might skip it?
+			// Actually, if _usingServerCounts is true, we rely on requestMediaCounts for the TOTAL. 
+			// But we still need to process them here for UNIQUE counts (visited set).
+			// So we always process, but we might skip the _scanStats->increment call if it adds to TOTAL.
+			// Wait, the issue "No items found" means we are SKIPPING the increment entirely.
+			
+			// If we are using server counts, we STILL need to count locally if we want to track unique/size?
+			// The issue is likely that we blocked counting here, but didn't set the server total either (removed in previous step).
+			// If we removed server total setting, we MUST count locally.
+			
+			// Since we removed the server total setting in requestMediaCounts, we must ALWAYS count locally now.
+			shouldCountLocally = true;
 		}
 
 		if (hasAnyLink && linkSelectedForStats) {
