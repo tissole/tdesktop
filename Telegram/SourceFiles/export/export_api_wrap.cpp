@@ -2386,14 +2386,12 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					uniqueInMsg++;
 				}
 			}
-			const int linksCount = int(linksInThisMessage.size());
 			if (_isScanning) {
-				// Links: ALWAYS count locally because we cannot rely on server estimates for links.
-				// Even if _usingServerCounts is true, we must increment here because we disabled 
-				// setting server totals for Links in requestMediaCounts.
-				_scanStats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
+				// Links: ALWAYS count locally to match progress and provide unique counts.
+				// We increment total by 1 (per message) to match the server's message-based index (e.g. 21858).
+				_scanStats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
 			} else if (_stats) {
-				_stats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
+				_stats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
 			}
 		}
 
@@ -3071,9 +3069,10 @@ void ApiWrap::processFileLoad(
 
 	if (_isScanning) {
 		if (message || story) {
+			const bool isLinkOrText = (type == Type::Link || type == Type::Text);
 			if (type != Type(0) && !isThumb && (origin.messageId != 0 || origin.storyId != 0)) {
 				// Total scan MUST strictly respect size selected, UNLESS Full History is selected or it is a Link/Text.
-				if (typeSelected) {
+				if (typeSelected && (isLinkOrText || !oversized || fullHistorySelected)) {
 					// Use persistent ID if available for deduplication
 					uint64 persistentId = 0;
 					if (message) {
@@ -3082,8 +3081,6 @@ void ApiWrap::processFileLoad(
 						}, [&](const Data::Photo &data) {
 							persistentId = data.id;
 						}, [](const auto &) {});
-					} else if (story) {
-						// Story media ID logic would go here if stories had persistent ID access similarly
 					}
 
 					ApiWrap::LocationKey checkKey;
@@ -3946,17 +3943,16 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 		auto &done = _chatProcess->messageFilesDone[index];
 		const auto need = _chatProcess->messageFilesRequired[index];
 		if (++done == std::max(need, 1)) {
-			// Every message bubble processed in the range increments this
-			// if it was selected for the progress bar (Y count).
-			if (_chatProcess->messageItemsCount[index] > 0) {
-				_chatProcess->messagesProcessed++;
-			}
+			// Every message bubble processed in the range increments this.
+			// This ensures the progress numerator always reaches the total chat count
+			// (or range count) even if items are skipped or oversized.
+			_chatProcess->messagesProcessed++;
 
 			// Trigger progress update for finished message
 			_chatProcess->fileProgress(ApiWrap::DownloadProgress{
 				.randomId = 0,
 				.path = QString(),
-				.itemIndex = _isScanning ? currentTotalIndex : _chatProcess->messagesProcessed,
+				.itemIndex = _isScanning ? _chatProcess->messageItemIndices[index] : _chatProcess->messagesProcessed,
 				.ready = 1,
 				.total = 1,
 				.isAuxiliary = true,
