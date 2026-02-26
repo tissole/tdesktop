@@ -782,8 +782,9 @@ void ApiWrap::requestMediaCounts() {
 
 			// We are using purely local counting for everything now to ensure consistency.
 			// Server counts are ignored for the "Total" stats to prevent "Double Counting" and "Zero Size" issues.
-			// _serverTotalCount is still used for progress estimation if needed.
-			if (_usingServerCounts && _scanStats && type != Type::Sticker && type != Type::Link && type != Type::Text) {
+			// Exception: For Links, Photos, Videos, Files, and Audio, if _usingServerCounts is true, we trust the server's Total.
+			// deduplication and size will still be handled locally.
+			if (_usingServerCounts && _scanStats && type != Type::Sticker && type != Type::Text) {
 				_scanStats->setTotalCount(type, count);
 			}
 			if (!_usingServerCounts) {
@@ -1710,7 +1711,7 @@ void ApiWrap::resolveDates() {
 }
 
 void ApiWrap::finishExport(FnMut<void()> done) {
-	if (_filesDownloading > 0 || !_fileDownloadQueue.empty() || !_pendingFileCallbacks.empty()) {
+	if (_filesDownloading > 0 || !_fileDownloadQueue.empty() || !_pendingFileCallbacks.empty() || _chatProcess) {
 		_finishExportCallback = std::move(done);
 		return;
 	}
@@ -2387,10 +2388,13 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				}
 			}
 			if (_isScanning) {
-				// Links: Count all links in the message. 
-				// Inflation check: ensure processFileLoad doesn't double count webpage previews as Links.
-				_scanStats->increment(MediaSettings::Type::Link, 0, int(linksInThisMessage.size()), uniqueInMsg);
+				// Links: If _usingServerCounts is true, the Total (message count) comes from the server.
+				// We only increment the Unique count locally.
+				// If false, we count messages with links locally.
+				const int totalInc = _usingServerCounts ? 0 : 1;
+				_scanStats->increment(MediaSettings::Type::Link, 0, totalInc, uniqueInMsg);
 			} else if (_stats) {
+				// During export, count individual links for accuracy in the files.
 				_stats->increment(MediaSettings::Type::Link, 0, int(linksInThisMessage.size()), uniqueInMsg);
 			}
 		}
