@@ -2373,8 +2373,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		if (_isScanning && _usingServerCounts) {
 			if (messageType != MediaSettings::Type::Text 
 				&& messageType != MediaSettings::Type::Sticker 
-				&& messageType != MediaSettings::Type::Link
-				&& !hasAnyLink) {
+				&& messageType != MediaSettings::Type::Link) {
 				shouldCountLocally = false;
 			}
 		}
@@ -2389,11 +2388,10 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			}
 			const int linksCount = int(linksInThisMessage.size());
 			if (_isScanning) {
-				// Only increment if we are strictly in local counting mode for links
-				// to avoid potential conflicts if server counts were somehow used (though blocked elsewhere).
-				if (!_usingServerCounts || !fullHistorySelected) {
-					_scanStats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
-				}
+				// Links: ALWAYS count locally because we cannot rely on server estimates for links.
+				// Even if _usingServerCounts is true, we must increment here because we disabled 
+				// setting server totals for Links in requestMediaCounts.
+				_scanStats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
 			} else if (_stats) {
 				_stats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
 			}
@@ -2478,6 +2476,8 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					if (shouldCountLocally) {
 						_scanStats->increment(messageType, 0, true);
 					} else if (_usingServerCounts && messageType != MediaSettings::Type::Link) {
+						// For non-local counts (Photos/Videos etc without files, if any), 
+						// we still need to track unique count if possible, but total is from server.
 						_scanStats->incrementSizeAndUnique(messageType, 0, true);
 					}
 				}
@@ -2506,7 +2506,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		_chatProcess->fileProgress(ApiWrap::DownloadProgress{
 			.randomId = 0,
 			.path = QString(),
-			.itemIndex = _isScanning ? currentTotalIndex : (_chatProcess->messagesProcessed + 1),
+			.itemIndex = _isScanning ? currentTotalIndex : _chatProcess->messagesProcessed,
 			.ready = 1,
 			.total = 1,
 			.isAuxiliary = true,
@@ -2902,7 +2902,7 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 		? ((messageIndexInSlice >= 0 && messageIndexInSlice < int(_chatProcess->messageItemIndices.size()))
 			? _chatProcess->messageItemIndices[messageIndexInSlice]
 			: (currentFileMessage() ? _chatProcess->totalMessagesCounter : 0))
-		: (_chatProcess->messagesProcessed + 1);
+		: _chatProcess->messagesProcessed;
 
 	return _chatProcess->fileProgress(ApiWrap::DownloadProgress{
 		.randomId = process.randomId,
@@ -3429,7 +3429,7 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 
 	// Check if all files are done AND chat history processing is complete.
 	// Only then should we finish the export session.
-	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty() && !_chatProcess) {
+	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
 		if (_finishExportCallback) {
 			finishExport(base::take(_finishExportCallback));
 		}
@@ -3956,7 +3956,7 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 			_chatProcess->fileProgress(ApiWrap::DownloadProgress{
 				.randomId = 0,
 				.path = QString(),
-				.itemIndex = _isScanning ? _chatProcess->messageItemIndices[index] : _chatProcess->messagesProcessed,
+				.itemIndex = _isScanning ? currentTotalIndex : _chatProcess->messagesProcessed,
 				.ready = 1,
 				.total = 1,
 				.isAuxiliary = true,
