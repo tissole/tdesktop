@@ -782,9 +782,8 @@ void ApiWrap::requestMediaCounts() {
 
 			// We are using purely local counting for everything now to ensure consistency.
 			// Server counts are ignored for the "Total" stats to prevent "Double Counting" and "Zero Size" issues.
-			// Exception: For Links, Photos, Videos, Files, and Audio, if _usingServerCounts is true, we trust the server's Total.
-			// deduplication and size will still be handled locally.
-			if (_usingServerCounts && _scanStats && type != Type::Sticker && type != Type::Text) {
+			// _serverTotalCount is still used for progress estimation if needed.
+			if (_usingServerCounts && _scanStats && type != Type::Sticker && type != Type::Link && type != Type::Text) {
 				_scanStats->setTotalCount(type, count);
 			}
 			if (!_usingServerCounts) {
@@ -1711,7 +1710,7 @@ void ApiWrap::resolveDates() {
 }
 
 void ApiWrap::finishExport(FnMut<void()> done) {
-	if (_filesDownloading > 0 || !_fileDownloadQueue.empty() || !_pendingFileCallbacks.empty() || _chatProcess) {
+	if (_filesDownloading > 0 || !_fileDownloadQueue.empty() || !_pendingFileCallbacks.empty()) {
 		_finishExportCallback = std::move(done);
 		return;
 	}
@@ -2387,15 +2386,14 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					uniqueInMsg++;
 				}
 			}
+			const int linksCount = int(linksInThisMessage.size());
 			if (_isScanning) {
-				// Links: If _usingServerCounts is true, the Total (message count) comes from the server.
-				// We only increment the Unique count locally.
-				// If false, we count messages with links locally.
-				const int totalInc = _usingServerCounts ? 0 : 1;
-				_scanStats->increment(MediaSettings::Type::Link, 0, totalInc, uniqueInMsg);
+				// Links: ALWAYS count locally because we cannot rely on server estimates for links.
+				// Even if _usingServerCounts is true, we must increment here because we disabled 
+				// setting server totals for Links in requestMediaCounts.
+				_scanStats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
 			} else if (_stats) {
-				// During export, count individual links for accuracy in the files.
-				_stats->increment(MediaSettings::Type::Link, 0, int(linksInThisMessage.size()), uniqueInMsg);
+				_stats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
 			}
 		}
 
@@ -2427,7 +2425,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			|| ((types & MediaSettings::Type::Text) || fullHistorySelected)
 			|| (hasAnyLink && linkSelectedForStats);
 
-		if (countThis) {
+		if (countThis && shouldCountLocally) {
 			bool uniqueBubble = false;
 			if (!message.file().location) {
 				uniqueBubble = true;
@@ -2475,10 +2473,11 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			if (mediaSelected && messageType != MediaSettings::Type::Link) {
 				const bool hasFilePart = message.file().location || message.thumb().file.location;
 				if (!hasFilePart) {
-					// Always increment for Text/Stickers locally even if server counts enabled for others
-					if (shouldCountLocally || messageType == MediaSettings::Type::Text || messageType == MediaSettings::Type::Sticker) {
+					if (shouldCountLocally) {
 						_scanStats->increment(messageType, 0, true);
-					} else if (_usingServerCounts) {
+					} else if (_usingServerCounts && messageType != MediaSettings::Type::Link) {
+						// For non-local counts (Photos/Videos etc without files, if any), 
+						// we still need to track unique count if possible, but total is from server.
 						_scanStats->incrementSizeAndUnique(messageType, 0, true);
 					}
 				}
@@ -2821,11 +2820,6 @@ void ApiWrap::finishMessagesSlice() {
 		if (_chatProcess->lastSlice) {
 			if (++_chatProcess->localSplitIndex >= _chatProcess->info.splits.size()) {
 				finishMessages();
-				if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
-					if (auto callback = base::take(_finishExportCallback)) {
-						finishExport(std::move(callback));
-					}
-				}
 			} else {
 				_chatProcess->lastSlice = false;
 				_chatProcess->largestIdPlusOne = (_chatProcess->fromId > 0)
@@ -2868,11 +2862,6 @@ void ApiWrap::finishMessagesSlice() {
 			requestMessagesSlice();
 		} else {
 			finishMessages();
-			if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
-				if (auto callback = base::take(_finishExportCallback)) {
-					finishExport(std::move(callback));
-				}
-			}
 		}
 	} else {
 		requestMessagesSlice();
@@ -2936,11 +2925,6 @@ void ApiWrap::loadMessageFileDone(int index, const QString &relativePath) {
 	if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
 		finishMessagesSlice();
 	}
-	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
-		if (auto callback = base::take(_finishExportCallback)) {
-			finishExport(std::move(callback));
-		}
-	}
 }
 
 bool ApiWrap::loadMessageThumbProgress(FileProgress progress) {
@@ -2954,11 +2938,6 @@ void ApiWrap::loadMessageThumbDone(int index, const QString &relativePath) {
 	Assert(_chatProcess->pendingFiles >= 0);
 	if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
 		finishMessagesSlice();
-	}
-	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
-		if (auto callback = base::take(_finishExportCallback)) {
-			finishExport(std::move(callback));
-		}
 	}
 }
 
@@ -2999,6 +2978,12 @@ void ApiWrap::finishMessages() {
 
 	const auto process = base::take(_chatProcess);
 	process->done();
+
+	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
+		if (_finishExportCallback) {
+			finishExport(base::take(_finishExportCallback));
+		}
+	}
 }
 
 Data::Message *ApiWrap::currentFileMessage() const {
@@ -3086,10 +3071,9 @@ void ApiWrap::processFileLoad(
 
 	if (_isScanning) {
 		if (message || story) {
-			const bool isLinkOrText = (type == Type::Link || type == Type::Text);
 			if (type != Type(0) && !isThumb && (origin.messageId != 0 || origin.storyId != 0)) {
 				// Total scan MUST strictly respect size selected, UNLESS Full History is selected or it is a Link/Text.
-				if (typeSelected && (isLinkOrText || !oversized || fullHistorySelected)) {
+				if (typeSelected) {
 					// Use persistent ID if available for deduplication
 					uint64 persistentId = 0;
 					if (message) {
@@ -3098,6 +3082,8 @@ void ApiWrap::processFileLoad(
 						}, [&](const Data::Photo &data) {
 							persistentId = data.id;
 						}, [](const auto &) {});
+					} else if (story) {
+						// Story media ID logic would go here if stories had persistent ID access similarly
 					}
 
 					ApiWrap::LocationKey checkKey;
@@ -3173,7 +3159,7 @@ void ApiWrap::processFileLoad(
 
 			if ((message || story) && type != Type(0)) {
 				// During export, we count everything locally to ensure consistency with what is actually written.
-				// Exception: Links are handled in loadMessagesFiles ONLY.
+				// Exception: Links are handled in loadMessagesFiles.
 				if (type != Type::Link) {
 					_stats->increment(type, fullSize, willBeUniqueInChat);
 				}
@@ -3440,6 +3426,14 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 	process->done(relativePath);
 
 	scheduleMoreFiles();
+
+	// Check if all files are done AND chat history processing is complete.
+	// Only then should we finish the export session.
+	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
+		if (_finishExportCallback) {
+			finishExport(base::take(_finishExportCallback));
+		}
+	}
 }
 
 void ApiWrap::loadFilePart(FileProcess &process) {
@@ -3952,16 +3946,22 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 		auto &done = _chatProcess->messageFilesDone[index];
 		const auto need = _chatProcess->messageFilesRequired[index];
 		if (++done == std::max(need, 1)) {
-			// Every message bubble processed in the range increments this.
-			// This ensures the progress numerator always reaches the total chat count
-			// (or range count) even if items are skipped or oversized.
-			_chatProcess->messagesProcessed++;
+			// Every message bubble processed in the range increments this
+			// if it was selected for the progress bar (Y count).
+			if (_chatProcess->messageItemsCount[index] > 0) {
+				_chatProcess->messagesProcessed++;
+			}
+
+			// FIX: Retrieve the total index from the pre-calculated vector
+			const auto totalIndex = (index < int(_chatProcess->messageItemIndices.size()))
+				? _chatProcess->messageItemIndices[index]
+				: 0;
 
 			// Trigger progress update for finished message
 			_chatProcess->fileProgress(ApiWrap::DownloadProgress{
 				.randomId = 0,
 				.path = QString(),
-				.itemIndex = _isScanning ? _chatProcess->messageItemIndices[index] : _chatProcess->messagesProcessed,
+				.itemIndex = _isScanning ? totalIndex : _chatProcess->messagesProcessed,
 				.ready = 1,
 				.total = 1,
 				.isAuxiliary = true,

@@ -291,6 +291,7 @@ Content ContentFromState(const FinishedState &state) {
 
 Content ContentFromState(const ScanDoneState &state) {
 	auto result = Content();
+	result.rows.push_back({ Content::kDoneId });
 	return result;
 }
 
