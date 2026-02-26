@@ -2387,11 +2387,11 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				}
 			}
 			if (_isScanning) {
-				// Links: ALWAYS count locally to match progress and provide unique counts.
-				// We increment total by 1 (per message) to match the server's message-based index (e.g. 21858).
-				_scanStats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
+				// Links: Count all links in the message. 
+				// Inflation check: ensure processFileLoad doesn't double count webpage previews as Links.
+				_scanStats->increment(MediaSettings::Type::Link, 0, int(linksInThisMessage.size()), uniqueInMsg);
 			} else if (_stats) {
-				_stats->increment(MediaSettings::Type::Link, 0, 1, uniqueInMsg);
+				_stats->increment(MediaSettings::Type::Link, 0, int(linksInThisMessage.size()), uniqueInMsg);
 			}
 		}
 
@@ -2423,7 +2423,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			|| ((types & MediaSettings::Type::Text) || fullHistorySelected)
 			|| (hasAnyLink && linkSelectedForStats);
 
-		if (countThis && shouldCountLocally) {
+		if (countThis) {
 			bool uniqueBubble = false;
 			if (!message.file().location) {
 				uniqueBubble = true;
@@ -2471,11 +2471,10 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			if (mediaSelected && messageType != MediaSettings::Type::Link) {
 				const bool hasFilePart = message.file().location || message.thumb().file.location;
 				if (!hasFilePart) {
-					if (shouldCountLocally) {
+					// Always increment for Text/Stickers locally even if server counts enabled for others
+					if (shouldCountLocally || messageType == MediaSettings::Type::Text || messageType == MediaSettings::Type::Sticker) {
 						_scanStats->increment(messageType, 0, true);
-					} else if (_usingServerCounts && messageType != MediaSettings::Type::Link) {
-						// For non-local counts (Photos/Videos etc without files, if any), 
-						// we still need to track unique count if possible, but total is from server.
+					} else if (_usingServerCounts) {
 						_scanStats->incrementSizeAndUnique(messageType, 0, true);
 					}
 				}
@@ -2818,6 +2817,11 @@ void ApiWrap::finishMessagesSlice() {
 		if (_chatProcess->lastSlice) {
 			if (++_chatProcess->localSplitIndex >= _chatProcess->info.splits.size()) {
 				finishMessages();
+				if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
+					if (auto callback = base::take(_finishExportCallback)) {
+						finishExport(std::move(callback));
+					}
+				}
 			} else {
 				_chatProcess->lastSlice = false;
 				_chatProcess->largestIdPlusOne = (_chatProcess->fromId > 0)
@@ -2860,6 +2864,11 @@ void ApiWrap::finishMessagesSlice() {
 			requestMessagesSlice();
 		} else {
 			finishMessages();
+			if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
+				if (auto callback = base::take(_finishExportCallback)) {
+					finishExport(std::move(callback));
+				}
+			}
 		}
 	} else {
 		requestMessagesSlice();
@@ -2923,6 +2932,11 @@ void ApiWrap::loadMessageFileDone(int index, const QString &relativePath) {
 	if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
 		finishMessagesSlice();
 	}
+	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
+		if (auto callback = base::take(_finishExportCallback)) {
+			finishExport(std::move(callback));
+		}
+	}
 }
 
 bool ApiWrap::loadMessageThumbProgress(FileProgress progress) {
@@ -2936,6 +2950,11 @@ void ApiWrap::loadMessageThumbDone(int index, const QString &relativePath) {
 	Assert(_chatProcess->pendingFiles >= 0);
 	if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
 		finishMessagesSlice();
+	}
+	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
+		if (auto callback = base::take(_finishExportCallback)) {
+			finishExport(std::move(callback));
+		}
 	}
 }
 
@@ -2976,12 +2995,6 @@ void ApiWrap::finishMessages() {
 
 	const auto process = base::take(_chatProcess);
 	process->done();
-
-	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
-		if (_finishExportCallback) {
-			finishExport(base::take(_finishExportCallback));
-		}
-	}
 }
 
 Data::Message *ApiWrap::currentFileMessage() const {
@@ -3156,7 +3169,7 @@ void ApiWrap::processFileLoad(
 
 			if ((message || story) && type != Type(0)) {
 				// During export, we count everything locally to ensure consistency with what is actually written.
-				// Exception: Links are handled in loadMessagesFiles.
+				// Exception: Links are handled in loadMessagesFiles ONLY.
 				if (type != Type::Link) {
 					_stats->increment(type, fullSize, willBeUniqueInChat);
 				}
@@ -3423,14 +3436,6 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 	process->done(relativePath);
 
 	scheduleMoreFiles();
-
-	// Check if all files are done AND chat history processing is complete.
-	// Only then should we finish the export session.
-	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
-		if (_finishExportCallback) {
-			finishExport(base::take(_finishExportCallback));
-		}
-	}
 }
 
 void ApiWrap::loadFilePart(FileProcess &process) {
