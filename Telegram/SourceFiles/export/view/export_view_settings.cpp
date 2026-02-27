@@ -1376,11 +1376,14 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 			if (type == MediaType::Text) {
 				text += label + ": " + Lang::FormatCountDecimal(item.totalCount) + "\n";
 			} else if (type == MediaType::Link) {
+				const auto messagesStr = item.messagesWithLinks > 0
+					? " (" + Lang::FormatCountDecimal(item.messagesWithLinks) + " Messages)"
+					: QString();
 				if (item.uniqueCount == item.totalCount) {
-					text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount) + "\n";
+					text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount) + messagesStr + "\n";
 				} else {
 					text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
-						+ ", " + Lang::FormatCountDecimal(item.totalCount) + "\n";
+						+ ", " + Lang::FormatCountDecimal(item.totalCount) + messagesStr + "\n";
 				}
 			} else {
 				const bool noDuplicates = (item.uniqueCount == item.totalCount) && (item.uniqueSize == item.totalSize);
@@ -1407,7 +1410,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	}
 	if (totalTotalMessagesCount > 0) {
 		if (categoriesCount > 1) {
-			const auto label = "Total media files: ";
+			const auto label = "Total Files: ";
 			const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
 				+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 			const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)

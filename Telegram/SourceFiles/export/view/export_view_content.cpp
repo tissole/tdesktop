@@ -156,18 +156,32 @@ Content ContentFromState(
 				if (type == MediaType::Text) {
 					text = label + ": " + Lang::FormatCountDecimal(item.totalCount);
 				} else if (type == MediaType::Link) {
+					const auto messagesStr = item.messagesWithLinks > 0
+						? " (" + Lang::FormatCountDecimal(item.messagesWithLinks) + " Messages)"
+						: QString();
 					if (item.uniqueCount == item.totalCount) {
-						text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount);
+						text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) + messagesStr;
 					} else {
-						text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) 
-							+ ", " + Lang::FormatCountDecimal(item.totalCount);
+						text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
+							+ ", " + Lang::FormatCountDecimal(item.totalCount) + messagesStr;
 					}
 				} else {
-					text = label + ": " 
+					text = label + ": "
 						+ Lang::FormatCountDecimal(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
 						+ Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
 				}
-				result.rows.push_back({ "stat_" + QString::number((int)type), text, QString(), 1. });
+				// Progress: current processed count / scan-expected total.
+				// Text and Link rows have no files to download — show full bar.
+				float64 typeProgress = 1.;
+				if (type != MediaType::Text && type != MediaType::Link) {
+					const auto expIt = state.expectedStats.find(type);
+					const int expected = (expIt != state.expectedStats.end())
+						? expIt->second.totalCount : 0;
+					typeProgress = (expected > 0)
+						? std::clamp(item.totalCount / float64(expected), 0., 1.)
+						: (item.totalCount > 0 ? 1. : 0.);
+				}
+				result.rows.push_back({ "stat_" + QString::number((int)type), text, QString(), typeProgress });
 			}
 		}
 	}
@@ -277,7 +291,7 @@ Content ContentFromState(const FinishedState &state) {
 	}
 
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
-		const auto label = "Total unique, Total messages: ";
+		const auto label = "Total Files: ";
 		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 		const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)

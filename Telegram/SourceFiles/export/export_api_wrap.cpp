@@ -368,6 +368,9 @@ struct ApiWrap::ChatProcess : AbstractMessagesProcess {
 	std::vector<int> messageItemsCount;
 	std::vector<bool> messageIsUnique;
 
+	// Track which message indices had their main file deduplicated so we can skip their thumbs.
+	base::flat_set<int> messageFileDeduplicated;
+
 	// Map file randomId -> message index in current slice
 	std::unordered_map<uint64, int> fileToMessageIndex;
 
@@ -2253,6 +2256,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 	_chatProcess->messageItemsCount.assign(s.list.size(), 0);
 	_chatProcess->messageIsUnique.assign(s.list.size(), false);
 	_chatProcess->emojiToMessageIndices.clear();
+	_chatProcess->messageFileDeduplicated.clear();
 
 	for (int i = 0; i < int(s.list.size()); ++i) {
 		const auto &message = s.list[i];
@@ -2361,13 +2365,14 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				}
 			}
 			const int linksCount = int(linksInThisMessage.size());
+			// messagesWithLinks (the parenthetical count) comes from the server seed in
+			// requestMediaCounts->setMessagesWithLinks. Do NOT increment it locally — the
+			// server already counts exactly the messages containing links for this range.
+			// Local counting gives us totalCount (all links) and uniqueCount (deduped links).
 			if (_isScanning) {
-				// Links: ALWAYS count locally because we cannot rely on server estimates for links.
-				// Even if _usingServerCounts is true, we must increment here because we disabled 
-				// setting server totals for Links in requestMediaCounts.
-				_scanStats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg, 1);
+				_scanStats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg, 0);
 			} else if (_stats) {
-				_stats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg, 1);
+				_stats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg, 0);
 			}
 		}
 
@@ -2695,7 +2700,16 @@ void ApiWrap::loadNextMessageFile() {
 					}
 					return loadMessageFileProgress(value);
 				},
-				[=](const QString &path) { loadMessageFileDone(i, path); },
+				[=](const QString &path) {
+					// Mark message as deduplicated if the main file came from
+					// the dedup cache (path reused, not freshly downloaded) or
+					// was skipped. A freshly downloaded file has randomId set.
+					const bool wasFreshDownload = (message.file().randomId != 0);
+					if (_chatProcess && !wasFreshDownload) {
+						_chatProcess->messageFileDeduplicated.emplace(i);
+					}
+					loadMessageFileDone(i, path);
+				},
 				&message,
 				nullptr,
 				false);
@@ -2705,23 +2719,54 @@ void ApiWrap::loadNextMessageFile() {
 		}
 
 		if (message.thumb().file.location) {
-			processFileLoad(
-				message.thumb().file,
-				origin,
-				[=](FileProgress value) {
-					if (_chatProcess
-					 && _chatProcess->fileToMessageIndex.find(value.randomId)
-						 == end(_chatProcess->fileToMessageIndex)) {
-						_chatProcess->fileToMessageIndex.emplace(value.randomId, i);
-					}
-					return loadMessageThumbProgress(value);
-				},
-				[=](const QString &path) { loadMessageThumbDone(i, path); },
-				&message,
-				nullptr,
-				true);
-			if (!_chatProcess || !_chatProcess->slice) {
-				return;
+			// Skip thumb if the main file for this message was a dedup hit.
+			// Check now (synchronous dedup) and also via the dedicated set
+			// (async dedup — main file callback fires later).
+			const bool mainFileDeduped = _chatProcess
+				&& _chatProcess->messageFileDeduplicated.contains(i);
+			const bool mainFileAlreadyResolved =
+				!message.file().location          // no main file
+				|| !message.file().relativePath.isEmpty() // main file already has path
+				|| (message.file().skipReason != Data::File::SkipReason::None);
+			// Use parent file dedup keys to check if main file is a dedup hit.
+			uint64 parentDocId = 0;
+			QString parentName;
+			v::match(message.media.content, [&](const Data::Document &data) {
+				parentDocId = data.id;
+				parentName = QString::fromUtf8(data.name);
+			}, [&](const Data::Photo &data) {
+				parentDocId = data.id;
+			}, [](const auto &) {});
+			const int64 parentSize = message.file().size;
+			const auto parentDedup = dedupLookup(parentDocId, parentSize, parentName);
+			// Skip thumb if: (a) main file done callback already marked it as deduped,
+			// or (b) dedup lookup shows the parent file was already seen (found = true).
+			// Case (b) catches async dedup: primary is in-progress but thumb was already
+			// downloaded by the first message that owned this file.
+			const bool skipThumb = mainFileDeduped || parentDedup.found;
+			if (!skipThumb) {
+				processFileLoad(
+					message.thumb().file,
+					origin,
+					[=](FileProgress value) {
+						if (_chatProcess
+						 && _chatProcess->fileToMessageIndex.find(value.randomId)
+							 == end(_chatProcess->fileToMessageIndex)) {
+							_chatProcess->fileToMessageIndex.emplace(value.randomId, i);
+						}
+						return loadMessageThumbProgress(value);
+					},
+					[=](const QString &path) { loadMessageThumbDone(i, path); },
+					&message,
+					nullptr,
+					true);
+				if (!_chatProcess || !_chatProcess->slice) {
+					return;
+				}
+			} else {
+				// Thumb skipped — call done immediately with empty path so
+				// message file count accounting stays correct.
+				loadMessageThumbDone(i, QString());
 			}
 		}
 
@@ -3925,17 +3970,19 @@ ApiWrap::DedupResult ApiWrap::dedupLookup(
 		uint64 docId,
 		int64 size,
 		const QString &name) const {
-	// Check doc ID first — if matched, return immediately (most reliable).
+	// Filter 1: doc ID. If the same doc ID was seen before, it's the same
+	// file (moved across chats by different users). Skip immediately.
 	if (docId != 0) {
 		const auto it = _dedupById.find(docId);
 		if (it != _dedupById.end()) {
 			return { true, it->second };
 		}
 	}
-	// Always check size+name regardless of whether doc ID matched or not.
-	// Different users uploading the same file get different doc IDs from
-	// Telegram, so two identical files can have different doc IDs. Size+name
-	// catches those cases.
+	// Filter 2: size + name combined key. Only skips if BOTH match.
+	// Same name but different size = different file = NOT a duplicate,
+	// will be downloaded and renamed to avoid filesystem collision.
+	// Same file re-uploaded by a different user gets a new doc ID from
+	// Telegram but keeps the same name and size, so this catches it.
 	if (size > 0 && !name.isEmpty()) {
 		const auto it = _dedupBySizeName.find({ size, name });
 		if (it != _dedupBySizeName.end()) {

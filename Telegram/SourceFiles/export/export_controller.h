@@ -102,7 +102,8 @@ struct ProcessingState {
 	bool isScanning = false;
 
 	base::flat_map<uint64, FileDownloadProgress> activeDownloads;
-	std::map<MediaSettings::Type, Output::StatItem> selectedStats;
+	std::map<MediaSettings::Type, Output::StatItem> selectedStats;   // current live counts
+	std::map<MediaSettings::Type, Output::StatItem> expectedStats;   // scan totals (denominator)
 };
 
 struct ScanDoneState {

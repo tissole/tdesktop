@@ -114,7 +114,7 @@ void WriteScanStatsFile(
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
 		const auto uniqueStr = QString::number(totalUniqueMessagesCount) + " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 		const auto totalStr = QString::number(totalTotalMessagesCount) + " (" + Ui::FormatSizeText(totalMediaSize) + ")";
-		out << "\nTotal media files: " << uniqueStr << ", " << totalStr << "\n";
+		out << "\nTotal Files: " << uniqueStr << ", " << totalStr << "\n";
 	} else if (totalTotalMessagesCount <= 0 && categoriesCount > 0) {
 		out << "\nNo items found in this range.\n";
 	} else if (categoriesCount <= 0) {
@@ -378,7 +378,10 @@ void ControllerObject::clearResults() {
 	_scanStatsFound = false;
 	_messagesCount = 0;
 	_stats.clear();
-	_api.clearState(false);
+	// Use cancelExportFast to properly send FinishTakeoutSession before clearing state.
+	// clearState() just nulls _takeoutId without closing the session on Telegram's server,
+	// which prevents a new takeout from starting until the old one times out.
+	_api.cancelExportFast(false);
 	_dialogIndex = -1;
 }
 
@@ -420,31 +423,26 @@ void ControllerObject::startExport(
 	_environment = environment;
 
 	_stats.clear();
-	int totalTotalFilesCount = 0;
-	int totalMessagesFound = 0;
 	using MediaType = MediaSettings::Type;
+	const bool fullHistoryMode = (_settings.media.types & MediaType::FullHistory);
+	int totalMediaFilesCount = 0; // media-only count for file download progress
+
 	for (const auto &pair : _scanStats.byType()) {
 		const auto type = pair.first;
 		const auto &item = pair.second;
-		
-		// If Full History is selected, add up all media/text items
-		if (_settings.media.types & MediaType::FullHistory) {
-			totalTotalFilesCount += item.totalCount;
-		} else if (_settings.media.types & type) {
-			// If specific filter selected, add those counts
-			totalTotalFilesCount += item.totalCount;
-		}
-		
-		if (type != MediaType::Link) {
-			totalMessagesFound += item.totalCount;
+		// Only count downloadable media types. Text and Links are never
+		// downloaded as files — including them inflates the progress counter.
+		const bool isDownloadable = (type != MediaType::Text && type != MediaType::Link);
+		const bool selected = fullHistoryMode || (_settings.media.types & type);
+		if (selected && isDownloadable) {
+			totalMediaFilesCount += item.totalCount;
 		}
 	}
-	
-	if (totalTotalFilesCount > 0) {
-		// totalTotalFilesCount is the sum of category matches.
-		// We use this as the main progress denominator.
-		_stats.setExpectedFilesCount(totalTotalFilesCount);
-		_messagesCount = totalTotalFilesCount;
+
+	if (totalMediaFilesCount > 0 || _scanStats.totalCount() > 0) {
+		// _messagesCount will be set correctly in initialized() from info.serverTotalCount
+		// (the real total messages in chat). Don't set it here to avoid inflating it.
+		_stats.setExpectedFilesCount(totalMediaFilesCount);
 		_scanStatsFound = true;
 	} else {
 		_messagesCount = 0;
@@ -550,7 +548,10 @@ void ControllerObject::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
 
 void ControllerObject::cancelExportFast(bool keepCache) {
 	_isScanning = false;
-	_api.clearState(keepCache);
+	// cancelExportFast sends FinishTakeoutSession to Telegram before clearing.
+	// Using clearState() directly would abandon the takeout without closing it,
+	// leaving it open on the server and stalling the next scan/export attempt.
+	_api.cancelExportFast(keepCache);
 	clearResults();
 	setState(CancelledState());
 }
@@ -892,6 +893,7 @@ ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress)
 			_dialogIndex,
 			progress);
 		result.selectedStats = _stats.byType();
+		result.expectedStats = _scanStats.byType();
 	});
 }
 
