@@ -752,6 +752,12 @@ void ApiWrap::requestMediaCounts() {
 
 		const auto minId = (_settings->useIdRange && _settings->singlePeerFromId > 0) ? std::max(int64(0), int64(_settings->singlePeerFromId) - 1) : int64(0);
 		const auto maxId = (_settings->useIdRange && _settings->singlePeerTillId > 0) ? (int64(_settings->singlePeerTillId) + 1) : int64(0);
+		// For date-range queries, dates are resolved to IDs (fromId/tillId) before
+		// requestChatMessages. Here we don't have resolved IDs yet, so we pass
+		// min_date/max_date for date-mode only (these are pre-scan estimates, not
+		// paginated retrieval, so date params don't break pagination here).
+		const auto minDate = _settings->useIdRange ? 0 : _settings->singlePeerFrom;
+		const auto maxDate = _settings->useIdRange ? 0 : _settings->singlePeerTill;
 
 		mainRequest(MTPmessages_Search(
 			MTP_flags(0),
@@ -762,8 +768,8 @@ void ApiWrap::requestMediaCounts() {
 			MTP_vector<MTPReaction>(),
 			MTP_int(0),
 			filter,
-			MTP_int(_settings->singlePeerFrom),
-			MTP_int(_settings->singlePeerTill),
+			MTP_int(minDate),
+			MTP_int(maxDate),
 			MTP_int(0),
 			MTP_int(0),
 			MTP_int(100),
