@@ -301,6 +301,8 @@ struct ApiWrap::FileProcess {
 	std::unordered_map<int64, int> retryCounts;			   // per-offset retry counter
 	bool active = false;
 	LocationKey dedupKey;
+	// Callbacks from duplicate files waiting for this download to finish.
+	std::vector<FnMut<void(QString)>> pendingDone;
 };
 
 struct ApiWrap::ChatsProcess {
@@ -541,6 +543,8 @@ void ApiWrap::startExport(
 	_usingServerCounts = false;
 	_dedupById.clear();
 	_dedupBySizeName.clear();
+	_dedupByIdInProgress.clear();
+	_dedupBySizeNameInProgress.clear();
 	_visitedLinks.clear();
 	_reservedPaths.clear();
 	_serverTotalCount = 0;
@@ -3121,14 +3125,41 @@ void ApiWrap::processFileLoad(
 	} else if (!isThumb) {
 		// Dedup download-skip check: if already saved, reuse the path.
 		const auto dedup = dedupLookup(dedupDocId, dedupSize, dedupName);
-		if (dedup.found && !dedup.path.isEmpty()
-				&& dedup.path != "processed") {
-			file.relativePath = dedup.path;
-			done(file.relativePath);
-			return;
+		if (dedup.found) {
+			if (!dedup.path.isEmpty() && dedup.path != "processed") {
+				// Already downloaded — reuse saved path, no download needed.
+				file.relativePath = dedup.path;
+				done(file.relativePath);
+				return;
+			} else if (dedup.path.isEmpty()) {
+				// Currently downloading — attach our done callback to the active
+				// FileProcess so it fires when that download completes.
+				uint64 activeRandomId = 0;
+				if (dedupDocId != 0) {
+					const auto it = _dedupByIdInProgress.find(dedupDocId);
+					if (it != _dedupByIdInProgress.end()) {
+						activeRandomId = it->second;
+					}
+				}
+				if (!activeRandomId && dedupSize > 0 && !dedupName.isEmpty()) {
+					const auto it = _dedupBySizeNameInProgress.find({ dedupSize, dedupName });
+					if (it != _dedupBySizeNameInProgress.end()) {
+						activeRandomId = it->second;
+					}
+				}
+				if (activeRandomId) {
+					const auto pit = _fileProcesses.find(activeRandomId);
+					if (pit != _fileProcesses.end()) {
+						pit->second->pendingDone.push_back(
+							[doneMove = std::move(done)](QString path) mutable {
+								doneMove(path);
+							});
+						return;
+					}
+				}
+				// Active process not found (race) — fall through and download.
+			}
 		}
-		// If found but path is empty, file is in-progress — fall through
-		// and start another download (avoids stall, same as reference).
 	}
 
 	auto wrapDone = [=, done = std::move(done)](QString path) mutable {
@@ -3163,6 +3194,15 @@ void ApiWrap::processFileLoad(
 		return;
 	}
 	loadFile(file, origin, LocationKey(), std::move(progress), std::move(wrapDone));
+	// Register this download as in-progress so duplicates can attach to it.
+	if (file.randomId) {
+		if (dedupDocId != 0) {
+			_dedupByIdInProgress[dedupDocId] = file.randomId;
+		}
+		if (dedupSize > 0 && !dedupName.isEmpty()) {
+			_dedupBySizeNameInProgress[SizeNameKey{ dedupSize, dedupName }] = file.randomId;
+		}
+	}
 }
 
 bool ApiWrap::writePreloadedFile(
@@ -3297,10 +3337,33 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 	if (relativePath.isEmpty()) {
 		process->fileRef.skipReason = Data::File::SkipReason::Unavailable;
 	}
-	// Note: dedup map is updated via wrapDone in processFileLoad when the
-	// download completes, so no extra update needed here.
 
+	// Fire the primary done callback (updates dedup map via wrapDone).
 	process->done(relativePath);
+
+	// Fire any duplicate callbacks that were waiting for this download.
+	// The dedup map now has the real path, so duplicates get the same path.
+	for (auto &cb : process->pendingDone) {
+		cb(relativePath);
+	}
+
+	// Clean up in-progress tracking entries for this process.
+	for (auto it2 = _dedupByIdInProgress.begin();
+			it2 != _dedupByIdInProgress.end(); ) {
+		if (it2->second == randomId) {
+			it2 = _dedupByIdInProgress.erase(it2);
+		} else {
+			++it2;
+		}
+	}
+	for (auto it2 = _dedupBySizeNameInProgress.begin();
+			it2 != _dedupBySizeNameInProgress.end(); ) {
+		if (it2->second == randomId) {
+			it2 = _dedupBySizeNameInProgress.erase(it2);
+		} else {
+			++it2;
+		}
+	}
 
 	scheduleMoreFiles();
 }
@@ -3852,23 +3915,27 @@ void ApiWrap::clearResults() {
 	_scanStats = nullptr;
 	_dedupById.clear();
 	_dedupBySizeName.clear();
+	_dedupByIdInProgress.clear();
+	_dedupBySizeNameInProgress.clear();
 	_visitedLinks.clear();
 	_reservedPaths.clear();
-	_pendingFileCallbacks.clear();
 }
 
 ApiWrap::DedupResult ApiWrap::dedupLookup(
 		uint64 docId,
 		int64 size,
 		const QString &name) const {
-	// Primary: doc ID
+	// Check doc ID first — if matched, return immediately (most reliable).
 	if (docId != 0) {
 		const auto it = _dedupById.find(docId);
 		if (it != _dedupById.end()) {
 			return { true, it->second };
 		}
 	}
-	// Secondary: size + name (only when both are meaningful)
+	// Always check size+name regardless of whether doc ID matched or not.
+	// Different users uploading the same file get different doc IDs from
+	// Telegram, so two identical files can have different doc IDs. Size+name
+	// catches those cases.
 	if (size > 0 && !name.isEmpty()) {
 		const auto it = _dedupBySizeName.find({ size, name });
 		if (it != _dedupBySizeName.end()) {

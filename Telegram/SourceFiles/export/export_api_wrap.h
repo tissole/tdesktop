@@ -381,10 +381,13 @@ private:
 	// Both store the saved path; empty string means download in progress.
 	std::map<uint64, QString> _dedupById;            // docId -> path
 	std::map<SizeNameKey, QString> _dedupBySizeName; // {size,name} -> path
+	// Maps dedup keys to the randomId of the active FileProcess downloading
+	// that file, so duplicates can attach their done callback to it.
+	std::map<uint64, uint64> _dedupByIdInProgress;            // docId -> randomId
+	std::map<SizeNameKey, uint64> _dedupBySizeNameInProgress; // {size,name} -> randomId
 
 	base::flat_set<QString> _visitedLinks;
 	base::flat_set<QString> _reservedPaths; // paths reserved but not yet written to disk
-	base::flat_map<LocationKey, std::vector<FnMut<void(QString)>>> _pendingFileCallbacks;
 
 };
 
