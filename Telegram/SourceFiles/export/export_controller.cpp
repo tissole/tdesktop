@@ -900,10 +900,19 @@ void ControllerObject::setFinishedState() {
 	auto totalUniqueSize = int64(0);
 	auto totalTotalCount = 0;
 	auto totalTotalSize = int64(0);
-	const auto breakdown = _stats.byType();
 	using Type = MediaSettings::Type;
-	const bool linksOnly = (_settings.media.types == Type::Link);
-	(void)linksOnly;
+
+	// Use export stats (_stats) if they were populated during the export run.
+	// If exporting after a prior scan, _stats may be empty because the export
+	// skipped re-counting (scan stats are already known). In that case fall back
+	// to _scanStats which always has accurate counts for the exported range.
+	const auto exportBreakdown = _stats.byType();
+	const bool exportStatsPopulated = std::any_of(
+		exportBreakdown.begin(), exportBreakdown.end(),
+		[](const auto &p) { return p.second.totalCount > 0; });
+	const auto breakdown = exportStatsPopulated
+		? exportBreakdown
+		: _scanStats.byType();
 
 	for (const auto &pair : breakdown) {
 		const auto type = pair.first;

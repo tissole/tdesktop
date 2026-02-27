@@ -249,11 +249,14 @@ Content ContentFromState(const FinishedState &state) {
 		if (type == Type::Text) {
 			text = label + ": " + Lang::FormatCountDecimal(item.totalCount);
 		} else if (type == Type::Link) {
+			const auto messagesStr = item.messagesWithLinks > 0
+				? " (" + Lang::FormatCountDecimal(item.messagesWithLinks) + " Messages)"
+				: QString();
 			if (item.uniqueCount == item.totalCount) {
-				text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount);
+				text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) + messagesStr;
 			} else {
-				text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) 
-					+ ", " + Lang::FormatCountDecimal(item.totalCount);
+				text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
+					+ ", " + Lang::FormatCountDecimal(item.totalCount) + messagesStr;
 			}
 		} else {
 			text = label + ": " 
