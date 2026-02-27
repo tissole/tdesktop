@@ -256,7 +256,7 @@ private:
 	std::unique_ptr<FileProcess> prepareFileProcess(
 		Data::File &file,
 		const Data::FileOrigin &origin,
-		const LocationKey &dedupKey) const;
+		const LocationKey &dedupKey);
 	bool writePreloadedFile(
 		Data::File &file,
 		const Data::FileOrigin &origin);
@@ -360,6 +360,7 @@ private:
 	base::flat_map<LocationKey, QString> _scanVisited;
 	base::flat_map<LocationKey, QString> _exportVisited;
 	base::flat_set<QString> _visitedLinks;
+	base::flat_set<QString> _reservedPaths; // paths reserved but not yet written to disk
 	base::flat_map<LocationKey, std::vector<FnMut<void(QString)>>> _pendingFileCallbacks;
 
 };

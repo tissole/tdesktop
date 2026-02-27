@@ -590,6 +590,8 @@ void ApiWrap::startExport(
 	_scanVisited.clear();
 	_exportVisited.clear();
 	_visitedLinks.clear();
+	_reservedPaths.clear();
+	_fileCache = std::make_unique<LoadedFileCache>(kLocationCacheSize);
 	_serverTotalCount = 0;
 	_chatProcess = nullptr;
 	_startProcess = std::make_unique<StartProcess>();
@@ -3350,14 +3352,31 @@ void ApiWrap::loadFile(
 std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 	Data::File &file,
 	const Data::FileOrigin &origin,
-	const LocationKey &dedupKey) const
+	const LocationKey &dedupKey)
 {
 	Expects(_settings != nullptr);
 
-	const auto relativePath = Output::File::PrepareRelativePath(
-		_settings->path,
-		file.suggestedPath);
-	
+	// PrepareRelativePath checks the disk to avoid overwriting existing files,
+	// but multiple files in the same slice are all queued before any is written
+	// to disk. Two files with the same suggested name both pass the disk check
+	// and get assigned the same path. _reservedPaths tracks paths claimed
+	// in-memory so we skip them even before they appear on disk.
+	const auto &folder = _settings->path;
+	const auto &suggested = file.suggestedPath;
+	const auto position = suggested.indexOf(QLatin1Char('.'));
+	const auto base = (position >= 0) ? suggested.mid(0, position) : suggested;
+	const auto ext  = (position >= 0) ? suggested.mid(position) : QString();
+	auto relativePath = Output::File::PrepareRelativePath(folder, suggested);
+	if (_reservedPaths.contains(relativePath)) {
+		int attempt = 0;
+		do {
+			++attempt;
+			relativePath = base + QString(" (%1)").arg(attempt) + ext;
+		} while (QFile::exists(folder + relativePath)
+			|| _reservedPaths.contains(relativePath));
+	}
+	_reservedPaths.emplace(relativePath);
+
 	const auto fullPath = _settings->path + relativePath;
 	auto result = std::make_unique<FileProcess>(
 		file,
@@ -3975,6 +3994,7 @@ void ApiWrap::clearResults() {
 	_scanVisited.clear();
 	_exportVisited.clear();
 	_visitedLinks.clear();
+	_reservedPaths.clear();
 	_pendingFileCallbacks.clear();
 }
 
