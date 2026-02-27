@@ -64,6 +64,18 @@ public:
 	rpl::producer<MTP::Error> errors() const;
 	rpl::producer<Output::Result> ioErrors() const;
 
+	struct SizeNameKey {
+		int64 size = 0;
+		QString name;
+		bool operator<(const SizeNameKey &other) const {
+			if (size != other.size) return size < other.size;
+			return name < other.name;
+		}
+		bool operator==(const SizeNameKey &other) const {
+			return size == other.size && name == other.name;
+		}
+	};
+
 	struct StartInfo {
 		int userpicsCount = 0;
 		int storiesCount = 0;
@@ -137,7 +149,6 @@ public:
 	~ApiWrap();
 
 private:
-	class LoadedFileCache;
 	struct StartProcess;
 	struct ContactsProcess;
 	struct UserpicsProcess;
@@ -253,6 +264,14 @@ private:
 		Data::Message *message = nullptr,
 		Data::Story *story = nullptr,
 		bool isThumb = false);
+	struct DedupResult {
+		bool found = false;
+		QString path; // empty = in progress, non-empty = already saved
+	};
+	DedupResult dedupLookup(uint64 docId, int64 size, const QString &name) const;
+	void dedupRegister(uint64 docId, int64 size, const QString &name, const QString &path);
+	void dedupUpdate(uint64 docId, int64 size, const QString &name, const QString &path);
+
 	std::unique_ptr<FileProcess> prepareFileProcess(
 		Data::File &file,
 		const Data::FileOrigin &origin,
@@ -310,7 +329,6 @@ private:
 	int _serverTotalCount = 0;
 
 	std::unique_ptr<StartProcess> _startProcess;
-	std::unique_ptr<LoadedFileCache> _fileCache;
 	std::unique_ptr<ContactsProcess> _contactsProcess;
 	std::unique_ptr<UserpicsProcess> _userpicsProcess;
 	std::unique_ptr<StoriesProcess> _storiesProcess;
@@ -357,8 +375,13 @@ private:
 	rpl::event_stream<MTP::Error> _errors;
 	rpl::event_stream<Output::Result> _ioErrors;
 
-	base::flat_map<LocationKey, QString> _scanVisited;
-	base::flat_map<LocationKey, QString> _exportVisited;
+	// Unified dedup maps — replaces _scanVisited, _exportVisited, _fileCache.
+	// Primary lookup: by doc/photo ID (most reliable).
+	// Secondary lookup: by {size, name} when no doc ID available.
+	// Both store the saved path; empty string means download in progress.
+	std::map<uint64, QString> _dedupById;            // docId -> path
+	std::map<SizeNameKey, QString> _dedupBySizeName; // {size,name} -> path
+
 	base::flat_set<QString> _visitedLinks;
 	base::flat_set<QString> _reservedPaths; // paths reserved but not yet written to disk
 	base::flat_map<LocationKey, std::vector<FnMut<void(QString)>>> _pendingFileCallbacks;

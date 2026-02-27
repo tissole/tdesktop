@@ -70,7 +70,8 @@ constexpr auto kChatsSliceLimit = 100;
 constexpr auto kMessagesSliceLimit = 100;
 constexpr auto kTopPeerSliceLimit = 100;
 constexpr auto kFileMaxSize = 4000 * int64(1024 * 1024);
-constexpr auto kLocationCacheSize = 1'000'000;
+constexpr auto kLocationCacheSize = 1'000'000; // kept for LoadedFileCache ctor
+constexpr auto kDedupMapLimit = 1'000'000;
 constexpr auto kMaxEmojiPerRequest = 100;
 constexpr auto kStoriesSliceLimit = 100;
 
@@ -212,22 +213,6 @@ void ApiWrap::RequestThrottler::processQueueNow() {
 		});
 	}
 }
-
-class ApiWrap::LoadedFileCache {
-public:
-	using Location = Data::FileLocation;
-
-	LoadedFileCache(int limit);
-
-	void save(const Location &location, const QString &relativePath);
-	std::optional<QString> find(const Location &location) const;
-
-private:
-	int _limit = 0;
-	std::map<LocationKey, QString> _map;
-	std::deque<LocationKey> _list;
-
-};
 
 struct ApiWrap::StartProcess {
 	FnMut<void(StartInfo)> done;
@@ -472,38 +457,6 @@ mtpRequestId ApiWrap::RequestBuilder<Request>::send() {
 		: _builder.send();
 }
 
-ApiWrap::LoadedFileCache::LoadedFileCache(int limit) : _limit(limit) {
-	Expects(limit >= 0);
-}
-
-void ApiWrap::LoadedFileCache::save(
-		const Location &location,
-		const QString &relativePath) {
-	if (!location) {
-		return;
-	}
-	const auto key = ComputeLocationKey(location);
-	_map[key] = relativePath;
-	_list.push_back(key);
-	if (_list.size() > _limit) {
-		const auto key = _list.front();
-		_list.pop_front();
-		_map.erase(key);
-	}
-}
-
-std::optional<QString> ApiWrap::LoadedFileCache::find(
-		const Location &location) const {
-	if (!location) {
-		return std::nullopt;
-	}
-	const auto key = ComputeLocationKey(location);
-	if (const auto i = _map.find(key); i != end(_map)) {
-		return i->second;
-	}
-	return std::nullopt;
-}
-
 template <typename Request>
 auto ApiWrap::mainRequest(Request &&request, std::optional<uint64> takeoutId) {
 	const auto id = takeoutId ? takeoutId : _takeoutId;
@@ -548,7 +501,6 @@ auto ApiWrap::fileRequest(const Data::FileLocation &location, int64 offset, int 
 
 ApiWrap::ApiWrap(base::weak_qptr<MTP::Instance> weak, Fn<void(FnMut<void()>)> runner)
 : _mtp(weak, runner)
-, _fileCache(std::make_unique<LoadedFileCache>(kLocationCacheSize))
 , _lifetimeGuard(std::make_shared<bool>(true))
 , _throttler(runner, _lifetimeGuard)
 {
@@ -587,11 +539,10 @@ void ApiWrap::startExport(
 	_isScanning = isScanning;
 	_scanStats = scanStats;
 	_usingServerCounts = false;
-	_scanVisited.clear();
-	_exportVisited.clear();
+	_dedupById.clear();
+	_dedupBySizeName.clear();
 	_visitedLinks.clear();
 	_reservedPaths.clear();
-	_fileCache = std::make_unique<LoadedFileCache>(kLocationCacheSize);
 	_serverTotalCount = 0;
 	_chatProcess = nullptr;
 	_startProcess = std::make_unique<StartProcess>();
@@ -2449,31 +2400,27 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			if (!message.file().location) {
 				uniqueBubble = true;
 			} else {
-				// Use persistent ID for unique check if available (Document/Photo ID)
-				// otherwise fallback to location key.
-				uint64 persistentId = 0;
+				// Use unified dedup map for unique check.
+				uint64 bubbleDocId = 0;
+				QString bubbleName;
 				v::match(message.media.content, [&](const Data::Document &data) {
-					persistentId = data.id;
+					bubbleDocId = data.id;
+					bubbleName = QString::fromUtf8(data.name);
 				}, [&](const Data::Photo &data) {
-					persistentId = data.id;
+					bubbleDocId = data.id;
 				}, [](const auto &) {});
+				const int64 bubbleSize = message.file().size;
 
-				ApiWrap::LocationKey checkKey;
-				if (persistentId != 0) {
-					checkKey.type = (10ULL << 24);
-					checkKey.id = persistentId;
-				} else {
-					checkKey = ComputeLocationKey(message.file().location);
-				}
-
-				if (checkKey.id || checkKey.type) {
-					auto &visited = _isScanning ? _scanVisited : _exportVisited;
-					if (visited.find(checkKey) == visited.end()) {
+				const bool hasId = (bubbleDocId != 0)
+					|| (bubbleSize > 0 && !bubbleName.isEmpty());
+				if (hasId) {
+					const auto dedup = dedupLookup(bubbleDocId, bubbleSize, bubbleName);
+					if (!dedup.found) {
 						uniqueBubble = true;
-						// ALWAYS mark as visited if it's NOT a file that processFileLoad handles.
-						// If it IS a file, processFileLoad will mark it.
+						// Mark as visited. processFileLoad will overwrite with real
+						// path once download completes.
 						if (!message.file().location) {
-							visited.emplace(checkKey, QString());
+							dedupRegister(bubbleDocId, bubbleSize, bubbleName, QString());
 						}
 					}
 				} else {
@@ -3077,6 +3024,19 @@ void ApiWrap::processFileLoad(
 	const auto oversized = (file.location && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit && !fullHistorySelected && type != Type::Link);
 	const auto locationKey = file.location ? ComputeLocationKey(file.location) : ApiWrap::LocationKey{ 0, 0 };
 
+	// Extract doc ID and filename for new unified dedup map.
+	uint64 dedupDocId = 0;
+	QString dedupName;
+	if (message) {
+		v::match(message->media.content, [&](const Data::Document &data) {
+			dedupDocId = data.id;
+			dedupName = QString::fromUtf8(data.name);
+		}, [&](const Data::Photo &data) {
+			dedupDocId = data.id;
+		}, [](const auto &) {});
+	}
+	const int64 dedupSize = fullSize;
+
 	const bool typeSelected = (types & type) || fullHistorySelected;
 	const auto skipDownload = fullHistorySelected // Override download if Full History is active
 		|| (types == MediaSettings::Types(0))
@@ -3087,32 +3047,13 @@ void ApiWrap::processFileLoad(
 			if (type != Type(0) && !isThumb && (origin.messageId != 0 || origin.storyId != 0)) {
 				// Total scan MUST strictly respect size selected, UNLESS Full History is selected or it is a Link/Text.
 				if (typeSelected) {
-					// Use persistent ID if available for deduplication
-					uint64 persistentId = 0;
-					if (message) {
-						v::match(message->media.content, [&](const Data::Document &data) {
-							persistentId = data.id;
-						}, [&](const Data::Photo &data) {
-							persistentId = data.id;
-						}, [](const auto &) {});
-					} else if (story) {
-						// Story media ID logic would go here if stories had persistent ID access similarly
-					}
+					// dedupDocId/dedupSize/dedupName already extracted above.
+					const auto scanDedup = dedupLookup(dedupDocId, dedupSize, dedupName);
+					const bool alreadyVisited = scanDedup.found;
+					const bool willBeUniqueInChat = !alreadyVisited;
 
-					ApiWrap::LocationKey checkKey;
-					if (persistentId != 0) {
-						checkKey.type = (10ULL << 24);
-						checkKey.id = persistentId;
-					} else {
-						checkKey = locationKey;
-					}
-
-					const bool validKey = (checkKey.id != 0 || checkKey.type != 0);
-					const bool alreadyVisited = validKey && _scanVisited.find(checkKey) != _scanVisited.end();
-					const bool willBeUniqueInChat = validKey && !alreadyVisited;
-					
 					if (willBeUniqueInChat) {
-						_scanVisited.emplace(checkKey, QString());
+						dedupRegister(dedupDocId, dedupSize, dedupName, QString());
 					}
 					
 					if (_usingServerCounts) {
@@ -3140,59 +3081,34 @@ void ApiWrap::processFileLoad(
 		&& !isThumb) {
 		const bool isLinkOrText = (type == Type::Link || type == Type::Text);
 		if (typeSelected && (!oversized || fullHistorySelected || isLinkOrText)) {
-			// Persistent ID logic
-			uint64 persistentId = 0;
-			if (message) {
-				v::match(message->media.content, [&](const Data::Document &data) {
-					persistentId = data.id;
-				}, [&](const Data::Photo &data) {
-					persistentId = data.id;
-				}, [](const auto &) {});
-			}
-			ApiWrap::LocationKey checkKey;
-			if (persistentId != 0) {
-				checkKey.type = (10ULL << 24);
-				checkKey.id = persistentId;
-			} else {
-				checkKey = locationKey;
-			}
-
-			// For Text/Links without files, create a unique dummy key if needed
-			bool hasKey = (checkKey.id != 0 || checkKey.type != 0);
-			if (!hasKey && isLinkOrText && origin.messageId != 0 && !file.location) {
-				checkKey.type = (11ULL << 24); // Dummy type for text/link
-				checkKey.id = origin.messageId;
-				hasKey = true;
-			}
-			
-			auto &visited = _exportVisited;
-			const auto it = hasKey ? visited.find(checkKey) : visited.end();
-			const bool alreadyVisited = (it != visited.end());
-			const bool willBeUniqueInChat = hasKey && !alreadyVisited;
+			// Unified dedup lookup: by doc ID first, then by size+name.
+			const auto dedup = dedupLookup(dedupDocId, dedupSize, dedupName);
+			const bool alreadyVisited = dedup.found;
+			const bool willBeUniqueInChat = !alreadyVisited;
 
 			if ((message || story) && type != Type(0)) {
-				// During export, we count everything locally to ensure consistency with what is actually written.
-				// Exception: Links are handled in loadMessagesFiles.
 				if (type != Type::Link) {
 					_stats->increment(type, fullSize, willBeUniqueInChat);
 				}
 			}
-			
-			// For links, we track them to write unique_links.txt later, even if we don't "download" a file.
+
+			// For links track URL for unique_links.txt.
 			if (type == Type::Link && !alreadyVisited) {
-				if (hasKey) {
-					visited[checkKey] = file.content.isEmpty() ? QString("link") : QString::fromUtf8(file.content); 
-				}
+				_visitedLinks.emplace(
+					file.content.isEmpty()
+						? QString("link")
+						: QString::fromUtf8(file.content));
 			}
 
 			if (!alreadyVisited && !skipDownload) {
 				if (type != Type::Link && type != Type::Text) {
 					_stats->incrementUserMediaFiles();
 				}
-				if (hasKey && type != Type::Link && type != Type::Text) {
-					visited[checkKey] = QString(); // Mark as pending
-				} else if (hasKey && (type == Type::Link || type == Type::Text)) {
-					visited[checkKey] = "processed"; // Mark as visited immediately for non-files
+				// Register as pending (empty path = in progress).
+				if (type != Type::Link && type != Type::Text) {
+					dedupRegister(dedupDocId, dedupSize, dedupName, QString());
+				} else {
+					dedupRegister(dedupDocId, dedupSize, dedupName, "processed");
 				}
 			}
 		}
@@ -3202,65 +3118,27 @@ void ApiWrap::processFileLoad(
 		|| file.skipReason != SkipReason::None) {
 		done(file.relativePath);
 		return;
-	} else if ((locationKey.id != 0 || locationKey.type != 0) && !isThumb) {
-		// Recompute persistent ID check key
-		uint64 persistentId = 0;
-		if (message) {
-			v::match(message->media.content, [&](const Data::Document &data) {
-				persistentId = data.id;
-			}, [&](const Data::Photo &data) {
-				persistentId = data.id;
-			}, [](const auto &) {});
+	} else if (!isThumb) {
+		// Dedup download-skip check: if already saved, reuse the path.
+		const auto dedup = dedupLookup(dedupDocId, dedupSize, dedupName);
+		if (dedup.found && !dedup.path.isEmpty()
+				&& dedup.path != "processed") {
+			file.relativePath = dedup.path;
+			done(file.relativePath);
+			return;
 		}
-		ApiWrap::LocationKey checkKey;
-		if (persistentId != 0) {
-			checkKey.type = (10ULL << 24);
-			checkKey.id = persistentId;
-		} else {
-			checkKey = locationKey;
-		}
-
-		const auto it = _exportVisited.find(checkKey);
-		if (it != _exportVisited.end()) {
-			if (!it->second.isEmpty()) {
-				file.relativePath = it->second;
-				done(file.relativePath);
-				return;
-			}
-			// File is pending download from another message.
-			// Do NOT defer via _pendingFileCallbacks — _chatProcess may be
-			// replaced by a new dialog before the primary finishes, causing
-			// loadMessageFileDone to corrupt the new chatProcess's pendingFiles
-			// counter and stall the export forever. Instead fall through and
-			// let this duplicate start its own download (same as reference).
-		}
+		// If found but path is empty, file is in-progress — fall through
+		// and start another download (avoids stall, same as reference).
 	}
 
 	auto wrapDone = [=, done = std::move(done)](QString path) mutable {
-		if ((locationKey.id != 0 || locationKey.type != 0) && !isThumb) {
-			// Recompute persistent ID check key for consistency
-			uint64 persistentId = 0;
-			if (message) {
-				v::match(message->media.content, [&](const Data::Document &data) {
-					persistentId = data.id;
-				}, [&](const Data::Photo &data) {
-					persistentId = data.id;
-				}, [](const auto &) {});
-			}
-			ApiWrap::LocationKey checkKey;
-			if (persistentId != 0) {
-				checkKey.type = (10ULL << 24);
-				checkKey.id = persistentId;
-			} else {
-				checkKey = locationKey;
-			}
-			
+		if (!isThumb) {
 			if (path.isEmpty()) {
-				// Download failed, remove from visited so it can be retried or doesn't block pending callbacks forever
-				// Note: pending callbacks have already been fired with empty path in finishFile
-				_exportVisited.erase(checkKey);
+				// Download failed — remove so next attempt isn't blocked.
+				// (dedupUpdate with empty would leave a bad entry; just leave as-is
+				//  since next lookup will find empty and fall through anyway.)
 			} else {
-				_exportVisited[checkKey] = path;
+				dedupUpdate(dedupDocId, dedupSize, dedupName, path);
 			}
 		}
 		done(path);
@@ -3284,23 +3162,7 @@ void ApiWrap::processFileLoad(
 		wrapDone(QString());
 		return;
 	}
-	// Recompute checkKey one last time to be safe
-	uint64 persistentId = 0;
-	if (message) {
-		v::match(message->media.content, [&](const Data::Document &data) {
-			persistentId = data.id;
-		}, [&](const Data::Photo &data) {
-			persistentId = data.id;
-		}, [](const auto &) {});
-	}
-	ApiWrap::LocationKey checkKey;
-	if (persistentId != 0) {
-		checkKey.type = (10ULL << 24);
-		checkKey.id = persistentId;
-	} else {
-		checkKey = locationKey;
-	}
-	loadFile(file, origin, checkKey, std::move(progress), std::move(wrapDone));
+	loadFile(file, origin, LocationKey(), std::move(progress), std::move(wrapDone));
 }
 
 bool ApiWrap::writePreloadedFile(
@@ -3310,14 +3172,11 @@ bool ApiWrap::writePreloadedFile(
 
 	using namespace Output;
 
-	if (const auto path = _fileCache->find(file.location)) {
-		file.relativePath = *path;
-		return true;
-	} else if (!file.content.isEmpty()) {
+	// Inline content (small files sent as raw bytes, not downloaded).
+	if (!file.content.isEmpty()) {
 		auto process = prepareFileProcess(file, origin, LocationKey());
 		if (const auto result = process->outputFile.writeBlock(file.content)) {
 			file.relativePath = process->relativePath;
-			_fileCache->save(file.location, file.relativePath);
 		} else {
 			ioError(result);
 		}
@@ -3437,9 +3296,9 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 	process->fileRef.relativePath = relativePath;
 	if (relativePath.isEmpty()) {
 		process->fileRef.skipReason = Data::File::SkipReason::Unavailable;
-	} else {
-		_fileCache->save(process->location, relativePath);
 	}
+	// Note: dedup map is updated via wrapDone in processFileLoad when the
+	// download completes, so no extra update needed here.
 
 	process->done(relativePath);
 
@@ -3991,11 +3850,65 @@ void ApiWrap::clearResults() {
 	}
 	_stats = nullptr;
 	_scanStats = nullptr;
-	_scanVisited.clear();
-	_exportVisited.clear();
+	_dedupById.clear();
+	_dedupBySizeName.clear();
 	_visitedLinks.clear();
 	_reservedPaths.clear();
 	_pendingFileCallbacks.clear();
+}
+
+ApiWrap::DedupResult ApiWrap::dedupLookup(
+		uint64 docId,
+		int64 size,
+		const QString &name) const {
+	// Primary: doc ID
+	if (docId != 0) {
+		const auto it = _dedupById.find(docId);
+		if (it != _dedupById.end()) {
+			return { true, it->second };
+		}
+	}
+	// Secondary: size + name (only when both are meaningful)
+	if (size > 0 && !name.isEmpty()) {
+		const auto it = _dedupBySizeName.find({ size, name });
+		if (it != _dedupBySizeName.end()) {
+			return { true, it->second };
+		}
+	}
+	return { false, {} };
+}
+
+void ApiWrap::dedupRegister(
+		uint64 docId,
+		int64 size,
+		const QString &name,
+		const QString &path) {
+	// Evict oldest entries if over limit (simple: just cap total size)
+	if (_dedupById.size() >= kDedupMapLimit) {
+		_dedupById.erase(_dedupById.begin());
+	}
+	if (_dedupBySizeName.size() >= kDedupMapLimit) {
+		_dedupBySizeName.erase(_dedupBySizeName.begin());
+	}
+	if (docId != 0) {
+		_dedupById.emplace(docId, path);
+	}
+	if (size > 0 && !name.isEmpty()) {
+		_dedupBySizeName.emplace(SizeNameKey{ size, name }, path);
+	}
+}
+
+void ApiWrap::dedupUpdate(
+		uint64 docId,
+		int64 size,
+		const QString &name,
+		const QString &path) {
+	if (docId != 0) {
+		_dedupById[docId] = path;
+	}
+	if (size > 0 && !name.isEmpty()) {
+		_dedupBySizeName[SizeNameKey{ size, name }] = path;
+	}
 }
 
 base::flat_set<QString> ApiWrap::visitedLinks() const {
