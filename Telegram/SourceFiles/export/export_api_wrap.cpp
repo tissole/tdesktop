@@ -1534,8 +1534,8 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 		MTP_vector<MTPReaction>(), // saved_reaction
 		MTP_int(0), // top_msg_id
 		filter,
-		MTP_int(_settings->singlePeerFrom),
-		MTP_int(_settings->singlePeerTill),
+		MTP_int(0), // min_date — use min_id/max_id instead; date range already resolved to IDs
+		MTP_int(0), // max_date — use min_id/max_id instead; date range already resolved to IDs
 		MTP_int(0), // offset_id
 		MTP_int(0), // add_offset
 		MTP_int(1), // limit
@@ -1710,11 +1710,10 @@ void ApiWrap::resolveDates() {
 }
 
 void ApiWrap::finishExport(FnMut<void()> done) {
-	if (_filesDownloading > 0 || !_fileDownloadQueue.empty() || !_pendingFileCallbacks.empty()) {
-		_finishExportCallback = std::move(done);
-		return;
-	}
-
+	// Simple direct finish — same as reference implementation.
+	// The export controller ensures this is called only after all message slices
+	// are processed. File downloads complete before finishMessages() fires done(),
+	// so there is no need to defer here.
 	const auto takeoutId = base::take(_takeoutId);
 	const auto guard = gsl::finally([&] {
 		clearState();
@@ -2146,10 +2145,14 @@ void ApiWrap::requestChatMessages(
 	const auto minId = (_chatProcess->fromId > 0) ? std::max(int64(0), _chatProcess->fromId - 1) : int64(0);
 	const auto maxId = (_chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
 	const auto filter = getFilter();
+	// Date ranges are resolved to message IDs by resolveDates() before we get here,
+	// so fromId/tillId already encode the date boundary. We must NOT pass
+	// singlePeerFrom/Till as min_date/max_date to the search request: doing so causes
+	// the server to anchor the result window to those dates and prevents proper
+	// pagination for media filters (e.g. links), making the scan stop after the first
+	// matching message. Use min_id/max_id only (same as reference implementation).
 	const auto useSearch = _chatProcess->info.onlyMyMessages
-		|| (filter.type() != mtpc_inputMessagesFilterEmpty)
-		|| (_settings->singlePeerFrom > 0)
-		|| (_settings->singlePeerTill > 0);
+		|| (filter.type() != mtpc_inputMessagesFilterEmpty);
 
 	if (useSearch) {
 		using Flag = MTPmessages_Search::Flag;
@@ -2164,8 +2167,8 @@ void ApiWrap::requestChatMessages(
 			MTP_vector<MTPReaction>(), // saved_reaction
 			MTP_int(0), // top_msg_id
 			filter,
-			MTP_int(_settings->singlePeerFrom), // min_date
-			MTP_int(_settings->singlePeerTill), // max_date
+			MTP_int(0), // min_date — do NOT pass date params; use min_id/max_id instead
+			MTP_int(0), // max_date — do NOT pass date params; use min_id/max_id instead
 			MTP_int(offsetId),
 			MTP_int(addOffset),
 			MTP_int(limit),
@@ -2391,9 +2394,9 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				// Links: ALWAYS count locally because we cannot rely on server estimates for links.
 				// Even if _usingServerCounts is true, we must increment here because we disabled 
 				// setting server totals for Links in requestMediaCounts.
-				_scanStats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
+				_scanStats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg, 1);
 			} else if (_stats) {
-				_stats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg);
+				_stats->increment(MediaSettings::Type::Link, 0, linksCount, uniqueInMsg, 1);
 			}
 		}
 
@@ -2978,12 +2981,6 @@ void ApiWrap::finishMessages() {
 
 	const auto process = base::take(_chatProcess);
 	process->done();
-
-	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
-		if (_finishExportCallback) {
-			finishExport(base::take(_finishExportCallback));
-		}
-	}
 }
 
 Data::Message *ApiWrap::currentFileMessage() const {
@@ -3426,14 +3423,6 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 	process->done(relativePath);
 
 	scheduleMoreFiles();
-
-	// Check if all files are done AND chat history processing is complete.
-	// Only then should we finish the export session.
-	if (_filesDownloading == 0 && _fileDownloadQueue.empty() && _pendingFileCallbacks.empty()) {
-		if (_finishExportCallback) {
-			finishExport(base::take(_finishExportCallback));
-		}
-	}
 }
 
 void ApiWrap::loadFilePart(FileProcess &process) {
@@ -3995,7 +3984,6 @@ void ApiWrap::clearState(bool keepCache) {
 	_takeoutId = std::nullopt;
 	_takeoutFlags = 0;
 	_takeoutSizeLimit = 0;
-	_finishExportCallback = nullptr;
 	_settings = nullptr;
 	_isScanning = false;
 	if (!keepCache) {
