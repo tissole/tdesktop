@@ -36,6 +36,7 @@ public:
 	void incrementSizeAndUnique(MediaSettings::Type type, int64 size, bool unique);
 	void incrementSize(MediaSettings::Type type, int64 size);
 	void setTotalCount(MediaSettings::Type type, int count);
+	void setMessagesWithLinks(int count);
 	void setExpectedFilesCount(int count);
 	int expectedFilesCount() const;
 	void incrementTotalMessages();

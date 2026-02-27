@@ -788,9 +788,17 @@ void ApiWrap::requestMediaCounts() {
 
 			// We are using purely local counting for everything now to ensure consistency.
 			// Server counts are ignored for the "Total" stats to prevent "Double Counting" and "Zero Size" issues.
-			// _serverTotalCount is still used for progress estimation if needed.
+			// Exception: For Links, the server count = messages-containing-links (21858 style).
+			// We seed this as messagesWithLinks so it's available immediately (before/during scan).
+			// The local scan will also accumulate messagesWithLinks by +1 per message, which will
+			// eventually match this server value after a full scan.
 			if (_usingServerCounts && _scanStats && type != Type::Sticker && type != Type::Link && type != Type::Text) {
 				_scanStats->setTotalCount(type, count);
+			}
+			if (_scanStats && type == Type::Link) {
+				// Server count for URL filter = number of messages that contain links.
+				// Store as messagesWithLinks so the "(21858 Messages)" part shows immediately.
+				_scanStats->setMessagesWithLinks(count);
 			}
 			if (!_usingServerCounts) {
 				_serverTotalCount += count;
@@ -3216,11 +3224,13 @@ void ApiWrap::processFileLoad(
 				file.relativePath = it->second;
 				done(file.relativePath);
 				return;
-			} else {
-				// File is pending download from another message.
-				_pendingFileCallbacks[checkKey].push_back(std::move(done));
-				return;
 			}
+			// File is pending download from another message.
+			// Do NOT defer via _pendingFileCallbacks — _chatProcess may be
+			// replaced by a new dialog before the primary finishes, causing
+			// loadMessageFileDone to corrupt the new chatProcess's pendingFiles
+			// counter and stall the export forever. Instead fall through and
+			// let this duplicate start its own download (same as reference).
 		}
 	}
 
@@ -3410,20 +3420,6 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 		process->fileRef.skipReason = Data::File::SkipReason::Unavailable;
 	} else {
 		_fileCache->save(process->location, relativePath);
-	}
-
-	const auto key = (process->dedupKey.id != 0 || process->dedupKey.type != 0)
-		? process->dedupKey
-		: ComputeLocationKey(process->location);
-
-	if (key.id != 0 || key.type != 0) {
-		auto it = _pendingFileCallbacks.find(key);
-		if (it != _pendingFileCallbacks.end()) {
-			for (auto &callback : it->second) {
-				callback(relativePath);
-			}
-			_pendingFileCallbacks.erase(it);
-		}
 	}
 
 	process->done(relativePath);

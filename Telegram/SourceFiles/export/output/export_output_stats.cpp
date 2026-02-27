@@ -78,6 +78,11 @@ void Stats::setTotalCount(MediaSettings::Type type, int count) {
 	stat.totalCount = count;
 }
 
+void Stats::setMessagesWithLinks(int count) {
+	auto &stat = typeStat(MediaSettings::Type::Link);
+	stat.messagesWithLinks = count;
+}
+
 void Stats::setExpectedFilesCount(int count) {
 	_expectedFiles.store(count);
 }
