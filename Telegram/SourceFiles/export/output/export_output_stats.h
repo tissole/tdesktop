@@ -19,6 +19,7 @@ struct StatItem {
 	int64 uniqueSize = 0;
 	int totalCount = 0;
 	int64 totalSize = 0;
+	int messagesWithLinks = 0; // only meaningful for Link type
 };
 
 class Stats {
@@ -31,7 +32,7 @@ public:
 	void incrementUserMediaFiles();
 
 	void increment(MediaSettings::Type type, int64 size, bool unique);
-	void increment(MediaSettings::Type type, int64 size, int totalCount, int uniqueCount);
+	void increment(MediaSettings::Type type, int64 size, int totalCount, int uniqueCount, int messagesWithLinks = 0);
 	void incrementSizeAndUnique(MediaSettings::Type type, int64 size, bool unique);
 	void incrementSize(MediaSettings::Type type, int64 size);
 	void setTotalCount(MediaSettings::Type type, int count);
@@ -60,6 +61,7 @@ private:
 		std::atomic<int64> uniqueSize = 0;
 		std::atomic<int> totalCount = 0;
 		std::atomic<int64> totalSize = 0;
+		std::atomic<int> messagesWithLinks = 0;
 	};
 	mutable std::map<MediaSettings::Type, std::unique_ptr<TypeStat>> _stats;
 
