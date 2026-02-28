@@ -3171,6 +3171,11 @@ void ApiWrap::processFileLoad(
 				file.relativePath = dedup.path;
 				done(file.relativePath);
 				return;
+			} else if (dedup.path == "processed") {
+				// Primary was seen but not downloaded (Full History / skipDownload).
+				// Duplicate also needs no download — call done with empty path.
+				done(QString());
+				return;
 			} else if (dedup.path.isEmpty()) {
 				// Currently downloading — attach our done callback to the active
 				// FileProcess so it fires when that download completes.
