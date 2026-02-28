@@ -904,18 +904,28 @@ void ControllerObject::setFinishedState() {
 	auto totalTotalSize = int64(0);
 	using Type = MediaSettings::Type;
 
-	// Use export stats (_stats) if they were populated during the export run.
-	// If exporting after a prior scan, _stats may be empty because the export
-	// skipped re-counting (scan stats are already known). In that case fall back
-	// to _scanStats which always has accurate counts for the exported range.
-	const auto exportBreakdown = _stats.byType();
-	const bool exportStatsPopulated = std::any_of(
-		exportBreakdown.begin(), exportBreakdown.end(),
-		[](const auto &p) { return p.second.totalCount > 0; });
-	const auto breakdown = exportStatsPopulated
-		? exportBreakdown
-		: _scanStats.byType();
-
+	// messagesWithLinks is seeded into _scanStats and _stats from requestMediaCounts.
+	// Copy into the breakdown so the finished state always shows the message count.
+	// Check _stats first (export), then _scanStats (prior scan), take whichever is > 0.
+	{
+		int mwl = 0;
+		const auto exportBreakdownForLinks = _stats.byType();
+		const auto exportLinkIt = exportBreakdownForLinks.find(Type::Link);
+		if (exportLinkIt != exportBreakdownForLinks.end()) {
+			mwl = exportLinkIt->second.messagesWithLinks;
+		}
+		if (mwl <= 0) {
+			const auto scanBreakdown = _scanStats.byType();
+			const auto scanLinkIt = scanBreakdown.find(Type::Link);
+			if (scanLinkIt != scanBreakdown.end()) {
+				mwl = scanLinkIt->second.messagesWithLinks;
+			}
+		}
+		if (mwl > 0) {
+			breakdown[Type::Link].messagesWithLinks = mwl;
+		}
+	}
++
 	for (const auto &pair : breakdown) {
 		const auto type = pair.first;
 		const auto &item = pair.second;

@@ -752,10 +752,11 @@ void ApiWrap::requestMediaCounts() {
 			if (_usingServerCounts && _scanStats && type != Type::Sticker && type != Type::Link && type != Type::Text) {
 				_scanStats->setTotalCount(type, count);
 			}
-			if (_scanStats && type == Type::Link) {
+			if (type == Type::Link) {
 				// Server count for URL filter = number of messages that contain links.
-				// Store as messagesWithLinks so the "(21858 Messages)" part shows immediately.
-				_scanStats->setMessagesWithLinks(count);
+				// Store as messagesWithLinks so the "(21858 Messages)" part shows correctly.
+				if (_scanStats) _scanStats->setMessagesWithLinks(count);
+				if (_stats) _stats->setMessagesWithLinks(count);
 			}
 			if (!_usingServerCounts) {
 				_serverTotalCount += count;
@@ -2449,6 +2450,8 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					} else if (_usingServerCounts && messageType != MediaSettings::Type::Link) {
 						// For non-local counts (Photos/Videos etc without files, if any), 
 						// we still need to track unique count if possible, but total is from server.
+						// GIF is special: server totalCount is set via filterGif, but unique/size
+						// must always be tracked locally so they're not stuck at zero.
 						_scanStats->incrementSizeAndUnique(messageType, 0, true);
 					}
 				}
