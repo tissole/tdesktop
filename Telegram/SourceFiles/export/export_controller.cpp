@@ -904,28 +904,30 @@ void ControllerObject::setFinishedState() {
 	auto totalTotalSize = int64(0);
 	using Type = MediaSettings::Type;
 
-	// messagesWithLinks is seeded into _scanStats and _stats from requestMediaCounts.
-	// Copy into the breakdown so the finished state always shows the message count.
-	// Check _stats first (export), then _scanStats (prior scan), take whichever is > 0.
-	{
-		int mwl = 0;
-		const auto exportBreakdownForLinks = _stats.byType();
-		const auto exportLinkIt = exportBreakdownForLinks.find(Type::Link);
-		if (exportLinkIt != exportBreakdownForLinks.end()) {
-			mwl = exportLinkIt->second.messagesWithLinks;
-		}
-		if (mwl <= 0) {
-			const auto scanBreakdown = _scanStats.byType();
-			const auto scanLinkIt = scanBreakdown.find(Type::Link);
-			if (scanLinkIt != scanBreakdown.end()) {
-				mwl = scanLinkIt->second.messagesWithLinks;
-			}
-		}
-		if (mwl > 0) {
-			breakdown[Type::Link].messagesWithLinks = mwl;
-		}
+	// Use export stats if populated, else fall back to scan stats.
+	auto exportBreakdown = _stats.byType();
+	const bool exportStatsPopulated = std::any_of(
+		exportBreakdown.begin(), exportBreakdown.end(),
+		[](const auto &p) { return p.second.totalCount > 0; });
+	auto breakdown = exportStatsPopulated
+		? exportBreakdown
+		: _scanStats.byType();
+
+	// messagesWithLinks: copy from whichever stats have it (export first, then scan).
+	int mwlForBreakdown = 0;
+	const auto exportBreakdownForLinks = _stats.byType();
+	const auto exportLinkIt = exportBreakdownForLinks.find(Type::Link);
+	if (exportLinkIt != exportBreakdownForLinks.end())
+		mwlForBreakdown = exportLinkIt->second.messagesWithLinks;
+	if (mwlForBreakdown <= 0) {
+		const auto scanBreakdown = _scanStats.byType();
+		const auto scanLinkIt = scanBreakdown.find(Type::Link);
+		if (scanLinkIt != scanBreakdown.end())
+			mwlForBreakdown = scanLinkIt->second.messagesWithLinks;
 	}
-+
+	if (mwlForBreakdown > 0)
+		breakdown[Type::Link].messagesWithLinks = mwlForBreakdown;
+
 	for (const auto &pair : breakdown) {
 		const auto type = pair.first;
 		const auto &item = pair.second;
