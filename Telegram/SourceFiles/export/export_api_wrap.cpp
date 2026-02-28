@@ -2281,8 +2281,8 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				if (data.isSticker) return MediaType::Sticker;
 				if (data.isVideoMessage) return MediaType::VideoMessage;
 				if (data.isVoiceMessage) return MediaType::VoiceMessage;
-				if (data.isAnimated) return MediaType::GIF;
 				if (data.isVideoFile) return MediaType::Video;
+				if (data.isAnimated) return MediaType::GIF;
 				if (data.isAudioFile) return MediaType::Audio;
 				return MediaType::File;
 			}, [](const Data::Photo &data) {
@@ -2684,6 +2684,22 @@ void ApiWrap::loadNextMessageFile() {
 			? _chatProcess->info.input
 			: _chatProcess->info.migratedFromInput;
 
+		// Check dedup state for the main file BEFORE processFileLoad registers
+		// it as in-progress. This snapshot tells us whether this message is
+		// the first owner of the file (not yet seen) or a duplicate (already
+		// registered). Used below to decide whether to download the thumb.
+		uint64 parentDocId = 0;
+		QString parentName;
+		v::match(message.media.content, [&](const Data::Document &data) {
+			parentDocId = data.id;
+			parentName = QString::fromUtf8(data.name);
+		}, [&](const Data::Photo &data) {
+			parentDocId = data.id;
+		}, [](const auto &) {});
+		const int64 parentSize = message.file().size;
+		const bool mainFileAlreadySeen = message.file().location
+			&& dedupLookup(parentDocId, parentSize, parentName).found;
+
 		if (message.file().location) {
 			processFileLoad(
 				message.file(),
@@ -2706,20 +2722,12 @@ void ApiWrap::loadNextMessageFile() {
 		}
 
 		if (message.thumb().file.location) {
-			// Skip thumb if the parent file is a dedup hit — the thumb was already
-			// downloaded with the first occurrence of this file, or is in-progress.
-			// Use the same doc ID / size+name keys as the main file.
-			uint64 parentDocId = 0;
-			QString parentName;
-			v::match(message.media.content, [&](const Data::Document &data) {
-				parentDocId = data.id;
-				parentName = QString::fromUtf8(data.name);
-			}, [&](const Data::Photo &data) {
-				parentDocId = data.id;
-			}, [](const auto &) {});
-			const int64 parentSize = message.file().size;
-			const auto parentDedup = dedupLookup(parentDocId, parentSize, parentName);
-			if (!parentDedup.found) {
+			// Skip thumb only if the main file was already seen before this
+			// message — meaning a previous message already downloaded both the
+			// file and its thumb. mainFileAlreadySeen was captured before
+			// processFileLoad registered the file, so it reflects pre-registration
+			// state: false for the first owner, true for all duplicates.
+			if (!mainFileAlreadySeen) {
 				processFileLoad(
 					message.thumb().file,
 					origin,
@@ -2740,7 +2748,7 @@ void ApiWrap::loadNextMessageFile() {
 				}
 			} else {
 				// Thumb skipped — call done immediately with empty path so
-				// message file count accounting stays correct.
+				// message file-count accounting stays correct.
 				loadMessageThumbDone(i, QString());
 			}
 		}
@@ -3017,8 +3025,8 @@ void ApiWrap::processFileLoad(
 			if (data.isSticker) return Type::Sticker;
 			if (data.isVideoMessage) return Type::VideoMessage;
 			if (data.isVoiceMessage) return Type::VoiceMessage;
-			if (data.isAnimated) return Type::GIF;
 			if (data.isVideoFile) return Type::Video;
+			if (data.isAnimated) return Type::GIF;
 			if (data.isAudioFile) return Type::Audio;
 			return Type::File;
 		}, [](const Data::Photo &data) {
@@ -3124,15 +3132,27 @@ void ApiWrap::processFileLoad(
 						: QString::fromUtf8(file.content));
 			}
 
+			// Register in the dedup map whenever a file is seen for the first
+			// time, regardless of whether it will actually be downloaded.
+			// skipDownload only gates the download; the dedup map tracks what
+			// has been SEEN so that duplicate occurrences get willBeUniqueInChat=false
+			// and uniqueCount stays correct (not equal to totalCount).
+			if (!alreadyVisited) {
+				if (type != Type::Link && type != Type::Text) {
+					dedupRegister(dedupDocId, dedupSize, dedupName,
+						skipDownload ? QString("processed") : QString());
+				} else {
+					dedupRegister(dedupDocId, dedupSize, dedupName, "processed");
+				}
+			}
 			if (!alreadyVisited && !skipDownload) {
 				if (type != Type::Link && type != Type::Text) {
 					_stats->incrementUserMediaFiles();
 				}
-				// Register as pending (empty path = in progress).
+				// Re-register with empty path (in-progress) now that we know
+				// we will actually download this file.
 				if (type != Type::Link && type != Type::Text) {
 					dedupRegister(dedupDocId, dedupSize, dedupName, QString());
-				} else {
-					dedupRegister(dedupDocId, dedupSize, dedupName, "processed");
 				}
 			}
 		}
@@ -3170,8 +3190,13 @@ void ApiWrap::processFileLoad(
 				if (activeRandomId) {
 					const auto pit = _fileProcesses.find(activeRandomId);
 					if (pit != _fileProcesses.end()) {
+						// Capture file by pointer so the duplicate message's
+						// relativePath is set when the primary download finishes.
+						// Without this the HTML writer sees an empty path for
+						// duplicate files and generates a broken link.
 						pit->second->pendingDone.push_back(
-							[doneMove = std::move(done)](QString path) mutable {
+							[filePtr = &file, doneMove = std::move(done)](QString path) mutable {
+								filePtr->relativePath = path;
 								doneMove(path);
 							});
 						return;
