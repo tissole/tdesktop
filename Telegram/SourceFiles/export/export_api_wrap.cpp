@@ -368,9 +368,6 @@ struct ApiWrap::ChatProcess : AbstractMessagesProcess {
 	std::vector<int> messageItemsCount;
 	std::vector<bool> messageIsUnique;
 
-	// Track which message indices had their main file deduplicated so we can skip their thumbs.
-	base::flat_set<int> messageFileDeduplicated;
-
 	// Map file randomId -> message index in current slice
 	std::unordered_map<uint64, int> fileToMessageIndex;
 
@@ -2256,7 +2253,6 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 	_chatProcess->messageItemsCount.assign(s.list.size(), 0);
 	_chatProcess->messageIsUnique.assign(s.list.size(), false);
 	_chatProcess->emojiToMessageIndices.clear();
-	_chatProcess->messageFileDeduplicated.clear();
 
 	for (int i = 0; i < int(s.list.size()); ++i) {
 		const auto &message = s.list[i];
@@ -2700,16 +2696,7 @@ void ApiWrap::loadNextMessageFile() {
 					}
 					return loadMessageFileProgress(value);
 				},
-				[=](const QString &path) {
-					// Mark message as deduplicated if the main file came from
-					// the dedup cache (path reused, not freshly downloaded) or
-					// was skipped. A freshly downloaded file has randomId set.
-					const bool wasFreshDownload = (message.file().randomId != 0);
-					if (_chatProcess && !wasFreshDownload) {
-						_chatProcess->messageFileDeduplicated.emplace(i);
-					}
-					loadMessageFileDone(i, path);
-				},
+				[=](const QString &path) { loadMessageFileDone(i, path); },
 				&message,
 				nullptr,
 				false);
@@ -2719,16 +2706,9 @@ void ApiWrap::loadNextMessageFile() {
 		}
 
 		if (message.thumb().file.location) {
-			// Skip thumb if the main file for this message was a dedup hit.
-			// Check now (synchronous dedup) and also via the dedicated set
-			// (async dedup — main file callback fires later).
-			const bool mainFileDeduped = _chatProcess
-				&& _chatProcess->messageFileDeduplicated.contains(i);
-			const bool mainFileAlreadyResolved =
-				!message.file().location          // no main file
-				|| !message.file().relativePath.isEmpty() // main file already has path
-				|| (message.file().skipReason != Data::File::SkipReason::None);
-			// Use parent file dedup keys to check if main file is a dedup hit.
+			// Skip thumb if the parent file is a dedup hit — the thumb was already
+			// downloaded with the first occurrence of this file, or is in-progress.
+			// Use the same doc ID / size+name keys as the main file.
 			uint64 parentDocId = 0;
 			QString parentName;
 			v::match(message.media.content, [&](const Data::Document &data) {
@@ -2739,12 +2719,7 @@ void ApiWrap::loadNextMessageFile() {
 			}, [](const auto &) {});
 			const int64 parentSize = message.file().size;
 			const auto parentDedup = dedupLookup(parentDocId, parentSize, parentName);
-			// Skip thumb if: (a) main file done callback already marked it as deduped,
-			// or (b) dedup lookup shows the parent file was already seen (found = true).
-			// Case (b) catches async dedup: primary is in-progress but thumb was already
-			// downloaded by the first message that owned this file.
-			const bool skipThumb = mainFileDeduped || parentDedup.found;
-			if (!skipThumb) {
+			if (!parentDedup.found) {
 				processFileLoad(
 					message.thumb().file,
 					origin,
@@ -3970,26 +3945,32 @@ ApiWrap::DedupResult ApiWrap::dedupLookup(
 		uint64 docId,
 		int64 size,
 		const QString &name) const {
-	// Filter 1: doc ID. If the same doc ID was seen before, it's the same
-	// file (moved across chats by different users). Skip immediately.
+	// Two sequential filters. Only filter 2 decides whether to download.
+	//
+	// Filter 1 — doc ID:
+	//   Same doc ID as a previously seen file → definite duplicate, skip now.
+	//   Different doc ID (or absent) → pass to filter 2.
+	//   (Doc ID is reliable for files moved across chats; a re-upload by the
+	//    same or different user gets a new doc ID even for identical content.)
 	if (docId != 0) {
 		const auto it = _dedupById.find(docId);
 		if (it != _dedupById.end()) {
-			return { true, it->second };
+			return { true, it->second };  // filter 1 skip
 		}
 	}
-	// Filter 2: size + name combined key. Only skips if BOTH match.
-	// Same name but different size = different file = NOT a duplicate,
-	// will be downloaded and renamed to avoid filesystem collision.
-	// Same file re-uploaded by a different user gets a new doc ID from
-	// Telegram but keeps the same name and size, so this catches it.
+	// Filter 2 — size + name (combined key, both must match):
+	//   Same name AND same size → duplicate (same file re-uploaded), skip.
+	//   Same name but different size → different file, NOT a duplicate;
+	//     will be downloaded and renamed (e.g. "file (1).pdf") to avoid
+	//     filesystem collision with the previously saved file of the same name.
+	//   This is the only filter that can permit a download.
 	if (size > 0 && !name.isEmpty()) {
 		const auto it = _dedupBySizeName.find({ size, name });
 		if (it != _dedupBySizeName.end()) {
-			return { true, it->second };
+			return { true, it->second };  // filter 2 skip
 		}
 	}
-	return { false, {} };
+	return { false, {} };  // passes both filters → download
 }
 
 void ApiWrap::dedupRegister(
