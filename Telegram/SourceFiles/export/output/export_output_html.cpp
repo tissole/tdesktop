@@ -154,6 +154,30 @@ QByteArray SerializeString(const QByteArray &value) {
 	return result;
 }
 
+QByteArray PercentEncodeUrl(const QByteArray &url) {
+	// Percent-encode non-ASCII bytes in local file hrefs so browsers
+	// can resolve filenames with Unicode/special chars as file:// URLs.
+	static const char kSafe[] =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+		"abcdefghijklmnopqrstuvwxyz"
+		"0123456789"
+		"-._~:@!$&'()*+,;=/";
+	auto result = QByteArray();
+	result.reserve(url.size() * 3);
+	for (const auto ch : url) {
+		if (ch > 0 && strchr(kSafe, ch)) {
+			result.append(ch);
+		} else {
+			const auto byte = static_cast<unsigned char>(ch);
+			const char hex[] = "0123456789ABCDEF";
+			result.append('%');
+			result.append(hex[byte >> 4]);
+			result.append(hex[byte & 0xF]);
+		}
+	}
+	return result;
+}
+
 QByteArray SerializeList(const std::vector<QByteArray> &values) {
 	const auto count = values.size();
 	if (count == 1) {
@@ -1835,7 +1859,7 @@ QByteArray HtmlWriter::Wrap::pushGenericMedia(const MediaData &data) {
 				"href",
 				(IsGlobalLink(data.link)
 					? data.link.toUtf8()
-					: relativePath(data.link).toUtf8())
+					: PercentEncodeUrl(relativePath(data.link).toUtf8()))
 			}
 		}));
 	}

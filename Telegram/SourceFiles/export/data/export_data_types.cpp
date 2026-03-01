@@ -524,11 +524,6 @@ void ParseAttributes(
 		}, [&](const MTPDdocumentAttributeVideo &data) {
 			if (data.is_round_message()) {
 				result.isVideoMessage = true;
-			} else if (data.is_nosound()) {
-				// Telegram GIF (modern format): looping no-sound mp4 without
-				// documentAttributeAnimated. Server indexes under filterGif.
-				// Mark isAnimated so classification matches the server.
-				result.isAnimated = true;
 			} else {
 				result.isVideoFile = true;
 			}
