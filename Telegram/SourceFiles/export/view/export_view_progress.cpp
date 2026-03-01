@@ -258,8 +258,8 @@ void ProgressWidget::Row::updateInstanceGeometry(
 		instance.info->moveToRight(0, 0, newWidth);
 		instance.label->moveToLeft(0, 0, newWidth);
 	}
-	instance.info->moveToRight(0, 0, newWidth);
-	instance.label->moveToLeft(0, 0, newWidth);
+	//instance.info->moveToRight(0, 0, newWidth);
+	//instance.label->moveToLeft(0, 0, newWidth);
 }
 
 ProgressWidget::ProgressWidget(
