@@ -191,9 +191,16 @@ int ProgressWidget::Row::resizeGetHeight(int newWidth) {
 void ProgressWidget::Row::paintEvent(QPaintEvent *e) {
 	auto p = QPainter(this);
 
-	const auto thickness = st::exportProgressWidth;
-	const auto top = height() - thickness;
-	p.fillRect(0, top, width(), thickness, st::shadowFg);
+	// Draw the separator line only for active-download rows (main, chat, file_).
+	// Stat summary rows ("stat_*", "header_*") are visually separated by the
+	// FixedHeightWidget spacers inserted between them, so no extra line needed.
+	const bool isStat = _data.id.startsWith(QStringLiteral("stat_"))
+		|| _data.id.startsWith(QStringLiteral("header_"));
+	if (!isStat) {
+		const auto thickness = st::exportProgressWidth;
+		const auto top = height() - thickness;
+		p.fillRect(0, top, width(), thickness, st::shadowFg);
+	}
 
 	for (const auto &instance : _old) {
 		paintInstance(p, instance);

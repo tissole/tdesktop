@@ -427,13 +427,16 @@ void ControllerObject::startExport(
 	const bool fullHistoryMode = (_settings.media.types & MediaType::FullHistory);
 	int totalMediaFilesCount = 0; // media-only count for file download progress
 
+	// Only sum scan stats into expectedFilesCount for types the export selects.
+	// Prevents a prior full-history scan from inflating the counter for a
+	// scoped export (e.g. "Files last 2 days" showing 21038 instead of 10).
 	for (const auto &pair : _scanStats.byType()) {
 		const auto type = pair.first;
 		const auto &item = pair.second;
-		// Only count downloadable media types. Text and Links are never
-		// downloaded as files — including them inflates the progress counter.
 		const bool isDownloadable = (type != MediaType::Text && type != MediaType::Link);
-		const bool selected = fullHistoryMode || (_settings.media.types & type);
+		const bool selected = fullHistoryMode
+			? isDownloadable
+			: (bool)(_settings.media.types & type);
 		if (selected && isDownloadable) {
 			totalMediaFilesCount += item.totalCount;
 		}

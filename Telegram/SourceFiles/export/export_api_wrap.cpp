@@ -3248,7 +3248,11 @@ void ApiWrap::processFileLoad(
 	}
 	loadFile(file, origin, LocationKey(), std::move(progress), std::move(wrapDone));
 	// Register this download as in-progress so duplicates can attach to it.
-	if (file.randomId) {
+	// Only register main file downloads — thumb downloads share the same docId
+	// but must NOT overwrite the main file's randomId, or duplicate messages
+	// would attach their pendingDone to the thumb's FileProcess and receive
+	// the thumb path instead of the main file path.
+	if (file.randomId && !isThumb) {
 		if (dedupDocId != 0) {
 			_dedupByIdInProgress[dedupDocId] = file.randomId;
 		}

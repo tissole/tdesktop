@@ -524,7 +524,10 @@ void ParseAttributes(
 		}, [&](const MTPDdocumentAttributeVideo &data) {
 			if (data.is_round_message()) {
 				result.isVideoMessage = true;
-			} else {
+			} else if (!result.isAnimated) {
+				// Only set isVideoFile if not already flagged as animated GIF.
+				// GIFs have both documentAttributeAnimated and documentAttributeVideo;
+				// isAnimated takes priority so they are not miscounted as Video.
 				result.isVideoFile = true;
 			}
 			result.width = data.vw().v;
