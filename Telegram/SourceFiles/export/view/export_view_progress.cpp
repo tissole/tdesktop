@@ -183,9 +183,14 @@ void ProgressWidget::Row::removeOldInstance(
 
 int ProgressWidget::Row::resizeGetHeight(int newWidth) {
 	updateControlsGeometry(newWidth);
-	return (_data.id.isEmpty() || _data.id == Content::kDoneId)
-		? 0
-		: st::exportProgressRowHeight;
+	if (_data.id.isEmpty() || _data.id == Content::kDoneId) {
+		return 0;
+	}
+	// If info was placed below label (two-line mode), return combined height.
+	if (_current.label && _current.info && _current.info->y() > 0) {
+		return _current.label->height() + _current.info->height() + st::exportProgressWidth;
+	}
+	return st::exportProgressRowHeight;
 }
 
 void ProgressWidget::Row::paintEvent(QPaintEvent *e) {

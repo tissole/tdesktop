@@ -1015,14 +1015,9 @@ void ControllerObject::fillMessagesState(
 	result.entityCount = info.chats.size() + info.left.size();
 	
 	result.itemIndex = progress.itemIndex;
-	// When scan stats exist, use the filtered count from stats to avoid showing
-	// full-chat total in the "X / Y" counter.
-	const auto filteredTotal = _scanStatsFound
-		? _stats.expectedFilesCount()
-		: 0;
-	result.itemCount = (filteredTotal > 0)
-		? filteredTotal
-		: ((_messagesCount > 0) ? _messagesCount : progress.messagesTextTotal);
+	// Always use total message count for the "X / Y" progress counter.
+	// Using media file count from scan stats was wrong: it excluded Text and Link messages.
+	result.itemCount = (_messagesCount > 0) ? _messagesCount : progress.messagesTextTotal;
 	result.activeDownloads = _activeDownloads;
 }
 

@@ -117,7 +117,7 @@ Content ContentFromState(
 	default: Unexpected("Step in ContentFromState.");
 	}
 
-	if (!state.selectedStats.empty()) {
+	if (!state.selectedStats.empty() || !state.expectedStats.empty()) {
 		using MediaType = MediaSettings::Type;
 		const std::vector<MediaType> order = {
 			MediaType::Photo,
@@ -134,10 +134,16 @@ Content ContentFromState(
 
 		for (const auto type : order) {
 			const auto it = state.selectedStats.find(type);
-			if (it == state.selectedStats.end() || it->second.totalCount <= 0) {
+			const auto expIt = state.expectedStats.find(type);
+			// Show a row if we have current data OR if we have expected (scan) data for this type
+			const bool hasSelected = (it != state.selectedStats.end() && it->second.totalCount > 0);
+			const bool hasExpected = (expIt != state.expectedStats.end() && expIt->second.totalCount > 0);
+			if (!hasSelected && !hasExpected) {
 				continue;
 			}
-			const auto &item = it->second;
+			// Use selected stats if available, otherwise zero-initialise to show a "0 / N" row
+			static const Output::StatItem kEmpty{};
+			const auto &item = hasSelected ? it->second : kEmpty;
 			QString label;
 			switch (type) {
 			case MediaType::Photo: label = tr::lng_export_option_photos(tr::now); break;
@@ -176,9 +182,7 @@ Content ContentFromState(
 				rowInfo = Lang::FormatCountDecimal(item.totalCount)
 					+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
 				// Progress: fraction of expected total already processed.
-				const auto expIt = state.expectedStats.find(type);
-				const int expected = (expIt != state.expectedStats.end())
-					? expIt->second.totalCount : 0;
+				const int expected = hasExpected ? expIt->second.totalCount : 0;
 				if (expected > 0) {
 					typeProgress = std::clamp(item.totalCount / float64(expected), 0., 1.);
 				} else if (state.itemCount > 0) {

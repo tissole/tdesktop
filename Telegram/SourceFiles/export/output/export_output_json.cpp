@@ -379,8 +379,11 @@ QByteArray SerializeMessage(
 			const Data::File &file,
 			const QByteArray &label,
 			const QByteArray &name = QByteArray()) {
-		Expects(!file.relativePath.isEmpty()
-			|| file.skipReason != SkipReason::None);
+		if (file.relativePath.isEmpty() && file.skipReason == SkipReason::None) {
+			const auto pre = name.isEmpty() ? QByteArray() : name + ' ';
+			push(label, pre + "(File unavailable, please try again later)");
+			return;
+		}
 
 		push(label, [&]() -> QByteArray {
 			const auto pre = name.isEmpty() ? QByteArray() : name + ' ';

@@ -2334,9 +2334,13 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		// Plain text messages (messageType == Text && !hasFile) already have oversized == false.
 		// Text messages with web previews (messageType == Text && hasFile) should also ignore size for stats.
 		// For videos, images etc, we only increment stats if it's NOT oversized OR if it's full history.
+		// GIFs using server counts must bypass the oversized check: the server already applied any size
+		// filter when it returned the total count, so we must track unique/size locally for all GIFs.
+		const bool gifUsingServerCounts = (_isScanning && _usingServerCounts
+			&& messageType == MediaSettings::Type::GIF);
 		const auto oversized = (hasFile && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit)
 			&& !hasAnyLink && (messageType != MediaSettings::Type::Text && messageType != MediaSettings::Type::Link)
-			&& !fullHistorySelected;
+			&& !fullHistorySelected && !gifUsingServerCounts;
 
 		const bool mediaSelected = (types & messageType) || fullHistorySelected;
 		
@@ -2453,7 +2457,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 						// we still need to track unique count if possible, but total is from server.
 						// GIF is special: server totalCount is set via filterGif, but unique/size
 						// must always be tracked locally so they're not stuck at zero.
-						_scanStats->incrementSizeAndUnique(messageType, 0, true);
+						_scanStats->incrementSizeAndUnique(messageType, fullSize, true);
 					}
 				} else if (!shouldCountLocally) {
 					// Has file but using server counts — still need to track
@@ -3034,8 +3038,8 @@ void ApiWrap::processFileLoad(
 			if (data.isSticker) return Type::Sticker;
 			if (data.isVideoMessage) return Type::VideoMessage;
 			if (data.isVoiceMessage) return Type::VoiceMessage;
-			if (data.isVideoFile) return Type::Video;
 			if (data.isAnimated) return Type::GIF;
+			if (data.isVideoFile) return Type::Video;
 			if (data.isAudioFile) return Type::Audio;
 			return Type::File;
 		}, [](const Data::Photo &data) {
