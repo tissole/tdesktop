@@ -2574,8 +2574,8 @@ bool SkipMessageByDate(const Message &message, const Settings &settings) {
 			if (data.isSticker) return Type::Sticker;
 			if (data.isVideoMessage) return Type::VideoMessage;
 			if (data.isVoiceMessage) return Type::VoiceMessage;
-			if (data.isVideoFile) return Type::Video;
 			if (data.isAnimated) return Type::GIF;
+			if (data.isVideoFile) return Type::Video;
 			if (data.isAudioFile) return Type::Audio;
 			return Type::File;
 		}, [](const Data::Photo &data) {

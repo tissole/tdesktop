@@ -179,9 +179,14 @@ Content ContentFromState(
 				const auto expIt = state.expectedStats.find(type);
 				const int expected = (expIt != state.expectedStats.end())
 					? expIt->second.totalCount : 0;
-				typeProgress = (expected > 0)
-					? std::clamp(item.totalCount / float64(expected), 0., 1.)
-					: (item.totalCount > 0 ? 1. : 0.);
+				if (expected > 0) {
+					typeProgress = std::clamp(item.totalCount / float64(expected), 0., 1.);
+				} else if (state.itemCount > 0) {
+					// No prior scan: use overall message progress as proxy
+					typeProgress = std::clamp(state.itemIndex / float64(state.itemCount), 0., 1.);
+				} else {
+					typeProgress = 0.;
+				}
 			}
 			result.rows.push_back({ "stat_" + QString::number((int)type), rowLabel, rowInfo, typeProgress });
 		}

@@ -241,8 +241,23 @@ void ProgressWidget::Row::updateInstanceGeometry(
 	if (!instance.label) {
 		return;
 	}
+	// Let the info label resize first, then give remaining width to label.
+	// If overall text is too wide, allow the label to take full width
+	// and place info on a second line below.
 	instance.info->resizeToNaturalWidth(newWidth);
-	instance.label->resizeToWidth(newWidth - instance.info->width());
+	const auto infoWidth = instance.info->width();
+	const auto labelAvailable = newWidth - infoWidth;
+	if (labelAvailable < newWidth / 3) {
+		// Info too wide: give label full width, move info below 
+		instance.label->resizeToWidth(newWidth);
+		instance.info->resizeToWidth(newWidth);
+		instance.label->moveToLeft(0, 0, newWidth);
+		instance.info->moveToLeft(0, instance.label->height(), newWidth);
+	} else {
+		instance.label->resizeToWidth(labelAvailable);
+		instance.info->moveToRight(0, 0, newWidth);
+		instance.label->moveToLeft(0, 0, newWidth);
+	}
 	instance.info->moveToRight(0, 0, newWidth);
 	instance.label->moveToLeft(0, 0, newWidth);
 }

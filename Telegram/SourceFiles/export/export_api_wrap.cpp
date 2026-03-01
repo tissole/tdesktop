@@ -2282,8 +2282,8 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				if (data.isSticker) return MediaType::Sticker;
 				if (data.isVideoMessage) return MediaType::VideoMessage;
 				if (data.isVoiceMessage) return MediaType::VoiceMessage;
-				if (data.isVideoFile) return MediaType::Video;
 				if (data.isAnimated) return MediaType::GIF;
+				if (data.isVideoFile) return MediaType::Video;
 				if (data.isAudioFile) return MediaType::Audio;
 				return MediaType::File;
 			}, [](const Data::Photo &data) {
@@ -2444,16 +2444,22 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			// Only if the type itself is selected or Full History is selected.
 			if (mediaSelected && messageType != MediaSettings::Type::Link) {
 				const bool hasFilePart = message.file().location || message.thumb().file.location;
-				if (!hasFilePart) {
+				if (!hasFilePart || (messageType == MediaType::GIF && !shouldCountLocally)) {
+					// GIF with files: server gives totalCount but unique/size must be local
 					if (shouldCountLocally) {
 						_scanStats->increment(messageType, 0, true);
-					} else if (_usingServerCounts && messageType != MediaSettings::Type::Link) {
+					} else {
 						// For non-local counts (Photos/Videos etc without files, if any), 
 						// we still need to track unique count if possible, but total is from server.
 						// GIF is special: server totalCount is set via filterGif, but unique/size
 						// must always be tracked locally so they're not stuck at zero.
 						_scanStats->incrementSizeAndUnique(messageType, 0, true);
 					}
+				} else if (!shouldCountLocally) {
+					// Has file but using server counts — still need to track
+					// unique count and size locally (server only gives totalCount).
+					// This is critical for GIFs where unique/size were stuck at zero.
+					_scanStats->incrementSizeAndUnique(messageType, fullSize, true);
 				}
 			}
 		} else {
@@ -3176,7 +3182,9 @@ void ApiWrap::processFileLoad(
 				return;
 			} else if (dedup.path == "processed") {
 				// Primary was seen but not downloaded (Full History / skipDownload).
-				// Duplicate also needs no download — call done with empty path.
+				// Duplicate also needs no download — set skipReason so the JSON
+				// serializer's Expects() doesn't fire on empty relativePath.
+				file.skipReason = SkipReason::FileType;
 				done(QString());
 				return;
 			} else if (dedup.path.isEmpty()) {
@@ -3220,7 +3228,7 @@ void ApiWrap::processFileLoad(
 			if (path.isEmpty()) {
 				// Download failed — remove so next attempt isn't blocked.
 				// (dedupUpdate with empty would leave a bad entry; just leave as-is
-				//  since next lookup will find empty and fall through anyway.)
+				//	since next lookup will find empty and fall through anyway.)
 			} else {
 				dedupUpdate(dedupDocId, dedupSize, dedupName, path);
 			}
@@ -3321,7 +3329,7 @@ std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 	const auto &suggested = file.suggestedPath;
 	const auto position = suggested.indexOf(QLatin1Char('.'));
 	const auto base = (position >= 0) ? suggested.mid(0, position) : suggested;
-	const auto ext  = (position >= 0) ? suggested.mid(position) : QString();
+	const auto ext	= (position >= 0) ? suggested.mid(position) : QString();
 	auto relativePath = Output::File::PrepareRelativePath(folder, suggested);
 	if (_reservedPaths.contains(relativePath)) {
 		int attempt = 0;
@@ -3985,10 +3993,10 @@ ApiWrap::DedupResult ApiWrap::dedupLookup(
 	// Two sequential filters. Only filter 2 decides whether to download.
 	//
 	// Filter 1 — doc ID:
-	//   Same doc ID as a previously seen file → definite duplicate, skip now.
-	//   Different doc ID (or absent) → pass to filter 2.
-	//   (Doc ID is reliable for files moved across chats; a re-upload by the
-	//    same or different user gets a new doc ID even for identical content.)
+	//	 Same doc ID as a previously seen file → definite duplicate, skip now.
+	//	 Different doc ID (or absent) → pass to filter 2.
+	//	 (Doc ID is reliable for files moved across chats; a re-upload by the
+	//	  same or different user gets a new doc ID even for identical content.)
 	if (docId != 0) {
 		const auto it = _dedupById.find(docId);
 		if (it != _dedupById.end()) {
@@ -3996,11 +4004,11 @@ ApiWrap::DedupResult ApiWrap::dedupLookup(
 		}
 	}
 	// Filter 2 — size + name (combined key, both must match):
-	//   Same name AND same size → duplicate (same file re-uploaded), skip.
-	//   Same name but different size → different file, NOT a duplicate;
-	//     will be downloaded and renamed (e.g. "file (1).pdf") to avoid
-	//     filesystem collision with the previously saved file of the same name.
-	//   This is the only filter that can permit a download.
+	//	 Same name AND same size → duplicate (same file re-uploaded), skip.
+	//	 Same name but different size → different file, NOT a duplicate;
+	//	   will be downloaded and renamed (e.g. "file (1).pdf") to avoid
+	//	   filesystem collision with the previously saved file of the same name.
+	//	 This is the only filter that can permit a download.
 	if (size > 0 && !name.isEmpty()) {
 		const auto it = _dedupBySizeName.find({ size, name });
 		if (it != _dedupBySizeName.end()) {

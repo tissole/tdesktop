@@ -427,9 +427,6 @@ void ControllerObject::startExport(
 	const bool fullHistoryMode = (_settings.media.types & MediaType::FullHistory);
 	int totalMediaFilesCount = 0; // media-only count for file download progress
 
-	// Only sum scan stats into expectedFilesCount for types the export selects.
-	// Prevents a prior full-history scan from inflating the counter for a
-	// scoped export (e.g. "Files last 2 days" showing 21038 instead of 10).
 	for (const auto &pair : _scanStats.byType()) {
 		const auto type = pair.first;
 		const auto &item = pair.second;
@@ -443,8 +440,6 @@ void ControllerObject::startExport(
 	}
 
 	if (totalMediaFilesCount > 0 || _scanStats.totalCount() > 0) {
-		// _messagesCount will be set correctly in initialized() from info.serverTotalCount
-		// (the real total messages in chat). Don't set it here to avoid inflating it.
 		_stats.setExpectedFilesCount(totalMediaFilesCount);
 		_scanStatsFound = true;
 	} else {
@@ -912,9 +907,13 @@ void ControllerObject::setFinishedState() {
 	const bool exportStatsPopulated = std::any_of(
 		exportBreakdown.begin(), exportBreakdown.end(),
 		[](const auto &p) { return p.second.totalCount > 0; });
+	auto scanBreakdownFull = _scanStats.byType();
+	const bool scanStatsPopulated = std::any_of(
+		scanBreakdownFull.begin(), scanBreakdownFull.end(),
+		[](const auto &p) { return p.second.totalCount > 0; });
 	auto breakdown = exportStatsPopulated
 		? exportBreakdown
-		: _scanStats.byType();
+		: (scanStatsPopulated ? scanBreakdownFull : exportBreakdown);
 
 	// messagesWithLinks: copy from whichever stats have it (export first, then scan).
 	int mwlForBreakdown = 0;
@@ -1016,8 +1015,14 @@ void ControllerObject::fillMessagesState(
 	result.entityCount = info.chats.size() + info.left.size();
 	
 	result.itemIndex = progress.itemIndex;
-	result.itemCount = (_messagesCount > 0) ? _messagesCount : progress.messagesTextTotal;
-
+	// When scan stats exist, use the filtered count from stats to avoid showing
+	// full-chat total in the "X / Y" counter.
+	const auto filteredTotal = _scanStatsFound
+		? _stats.expectedFilesCount()
+		: 0;
+	result.itemCount = (filteredTotal > 0)
+		? filteredTotal
+		: ((_messagesCount > 0) ? _messagesCount : progress.messagesTextTotal);
 	result.activeDownloads = _activeDownloads;
 }
 

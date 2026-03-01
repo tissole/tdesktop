@@ -3716,7 +3716,7 @@ QByteArray HtmlWriter::statsBlock() const {
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
 		const auto uniqueStr = QByteArray::number(totalUniqueMessagesCount) + " (" + Data::FormatFileSize(totalUniqueMediaSize) + ")";
 		const auto totalStr = QByteArray::number(totalTotalMessagesCount) + " (" + Data::FormatFileSize(totalMediaSize) + ")";
-		result.append("<div class=\"details_entry details bold\">Total media files: ");
+		result.append("<div class=\"details_entry details bold\">Total Files: ");
 		result.append(uniqueStr).append(", ").append(totalStr).append("</div>\n");
 	}
 
