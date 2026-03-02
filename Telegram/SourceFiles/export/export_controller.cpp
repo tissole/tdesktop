@@ -391,6 +391,10 @@ void ControllerObject::runScan(
 	if (_isScanning) {
 		return;
 	}
+	// Reset any terminal state so setState() calls during scan are not blocked.
+	if (stopped()) {
+		_state = v::null;
+	}
 	_api.clearResults();
 	clearResults();
 	_isScanning = true;
@@ -414,6 +418,11 @@ void ControllerObject::runScan(
 void ControllerObject::startExport(
 		const Settings &settings,
 		const Environment &environment) {
+	// Reset any terminal state (CancelledState, FinishedState, error states) so that
+	// setState() calls during the export are not blocked by stopped() returning true.
+	if (stopped()) {
+		_state = v::null;
+	}
 	_api.clearResults();
 	_stepIndex = -1;
 	_dialogIndex = -1;
@@ -774,11 +783,18 @@ void ControllerObject::exportNextDialog() {
 
 void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 fromId, uint64 tillId) {
 	if (!_messagesCount || !_scanStatsFound) {
-		int count = 0;
-		for (int splitCount : info->messagesCountPerSplit) {
-			count += splitCount;
+		// If scan was done, use the count of messages that were actually selected during scan.
+		// This matches the date/size filter, unlike messagesCountPerSplit which is the full chat count.
+		const int scanTotal = _scanStats.totalMessagesCount();
+		if (_scanStatsFound && scanTotal > 0) {
+			_messagesCount = scanTotal;
+		} else {
+			int count = 0;
+			for (int splitCount : info->messagesCountPerSplit) {
+				count += splitCount;
+			}
+			_messagesCount = count;
 		}
-		_messagesCount = count;
 	}
 
 	_api.requestMessages(*info, fromId, tillId, [=](const Data::DialogInfo &info) {

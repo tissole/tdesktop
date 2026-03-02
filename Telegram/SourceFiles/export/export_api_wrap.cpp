@@ -2444,26 +2444,15 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		}
 
 		if (_isScanning) {
-			// Increment stats for messages without main files (Text, non-file Media)
-			// Only if the type itself is selected or Full History is selected.
+			// Increment stats only for messages WITHOUT file parts (Text, fileless media).
+			// Messages WITH files are counted in processFileLoad with proper deduplication.
+			// Do NOT call incrementSizeAndUnique here for server-count types — processFileLoad
+			// already handles unique+size tracking, and calling it here too causes unique > total.
 			if (mediaSelected && messageType != MediaSettings::Type::Link) {
 				const bool hasFilePart = message.file().location || message.thumb().file.location;
-				if (!hasFilePart || (messageType == MediaType::GIF && !shouldCountLocally)) {
-					// GIF with files: server gives totalCount but unique/size must be local
-					if (shouldCountLocally) {
-						_scanStats->increment(messageType, 0, true);
-					} else {
-						// For non-local counts (Photos/Videos etc without files, if any), 
-						// we still need to track unique count if possible, but total is from server.
-						// GIF is special: server totalCount is set via filterGif, but unique/size
-						// must always be tracked locally so they're not stuck at zero.
-						_scanStats->incrementSizeAndUnique(messageType, fullSize, true);
-					}
-				} else if (!shouldCountLocally) {
-					// Has file but using server counts — still need to track
-					// unique count and size locally (server only gives totalCount).
-					// This is critical for GIFs where unique/size were stuck at zero.
-					_scanStats->incrementSizeAndUnique(messageType, fullSize, true);
+				if (!hasFilePart && shouldCountLocally) {
+					// No file: processFileLoad won't fire, so count it here.
+					_scanStats->increment(messageType, 0, true);
 				}
 			}
 		} else {

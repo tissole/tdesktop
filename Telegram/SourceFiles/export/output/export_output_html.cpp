@@ -3693,10 +3693,13 @@ QByteArray HtmlWriter::statsBlock() const {
 		if (type == Type::Text) {
 			result.append(QByteArray::number(item.totalCount));
 		} else if (type == Type::Link) {
+			const auto messagesStr = (item.messagesWithLinks > 0)
+				? QByteArray(" (") + QByteArray::number(item.messagesWithLinks) + " Messages)"
+				: QByteArray();
 			if (item.uniqueCount == item.totalCount) {
-				result.append(QByteArray::number(item.uniqueCount));
+				result.append(QByteArray::number(item.uniqueCount)).append(messagesStr);
 			} else {
-				result.append(QByteArray::number(item.uniqueCount)).append(", ").append(QByteArray::number(item.totalCount));
+				result.append(QByteArray::number(item.uniqueCount)).append(", ").append(QByteArray::number(item.totalCount)).append(messagesStr);
 			}
 		} else {
 			const auto uniqueStr = QByteArray::number(item.uniqueCount) + " (" + Data::FormatFileSize(item.uniqueSize) + ")";
@@ -3707,7 +3710,7 @@ QByteArray HtmlWriter::statsBlock() const {
 		}
 		result.append("</div>\n");
 
-		if (type != Type::Link) {
+		if (type != Type::Link && type != Type::Text) {
 			totalUniqueMessagesCount += item.uniqueCount;
 			totalTotalMessagesCount += item.totalCount;
 		}
