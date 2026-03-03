@@ -620,6 +620,8 @@ void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
 			_messagesCount = info.serverTotalCount;
 			_messagesInRangeCountFixed = true;
 		}
+		// When range is active (!serverCountIsAccurate), leave _messagesCount=0 so it
+		// will be updated dynamically from messagesTextTotal in the progress callback.
 	} else if (!_scanStatsFound && info.serverCountIsAccurate && info.serverTotalCount > 0) {
 		// No prior scan, and server count is range-accurate: use it as denominator.
 		_messagesCount = info.serverTotalCount;
@@ -842,6 +844,12 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 		_messagesMediaCount = progress.messagesMediaCount;
 		_messagesTotalCount = progress.messagesTotalCount;
 		_messagesTextTotal = progress.messagesTextTotal;
+		// If the server count was inaccurate (range active), update _messagesCount
+		// from the actual range count as it accumulates from requestMessagesCount.
+		// This replaces the full-chat count with the range-specific count.
+		if (!_messagesInRangeCountFixed && _messagesTextTotal > 0) {
+			_messagesCount = _messagesTextTotal;
+		}
 		if (_isScanning) {
 			setState(stateScanning(progress.itemIndex, _messagesTextTotal));
 		} else {
@@ -951,6 +959,11 @@ void ControllerObject::setFinishedState() {
 			auto it = breakdown.find(type);
 			if (it == breakdown.end() || it->second.totalCount == 0) {
 				breakdown[type] = scanItem;
+			} else if (it->second.uniqueCount == 0 && scanItem.uniqueCount > 0) {
+				// Export stats have totalCount (from server seed) but no uniqueCount/uniqueSize.
+				// Use scan stats for the unique side so the finished view shows correct data.
+				it->second.uniqueCount = scanItem.uniqueCount;
+				it->second.uniqueSize = scanItem.uniqueSize;
 			}
 		}
 	}

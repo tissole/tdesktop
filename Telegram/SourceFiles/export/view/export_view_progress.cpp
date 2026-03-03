@@ -222,6 +222,11 @@ void ProgressWidget::Row::paintInstance(QPainter &p, const Instance &data) {
 	if (!opacity) {
 		return;
 	}
+	// Don't paint progress bars for invisible/sentinel rows (empty id or kDoneId).
+	// These have height=0 and painting at height()-thickness bleeds into surrounding widgets.
+	if (_data.id.isEmpty() || _data.id == Content::kDoneId) {
+		return;
+	}
 	p.setOpacity(opacity);
 
 	const auto thickness = st::exportProgressWidth;

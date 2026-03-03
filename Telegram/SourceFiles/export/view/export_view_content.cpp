@@ -182,9 +182,12 @@ Content ContentFromState(
 				rowInfo = Lang::FormatCountDecimal(item.totalCount)
 					+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
 				// Progress: fraction of expected total already processed.
+				// Use uniqueCount (locally counted) not totalCount (may be server-seeded)
+				// to ensure bars animate as files are actually processed.
 				const int expected = hasExpected ? expIt->second.totalCount : 0;
-				if (expected > 0) {
-					typeProgress = std::clamp(item.totalCount / float64(expected), 0., 1.);
+				const int locallyProcessed = item.uniqueCount; // locally deduped, grows as we process
+				if (expected > 0 && locallyProcessed > 0) {
+					typeProgress = std::clamp(locallyProcessed / float64(expected), 0., 1.);
 				} else if (state.itemCount > 0) {
 					// No prior scan: use overall message progress as proxy
 					typeProgress = std::clamp(state.itemIndex / float64(state.itemCount), 0., 1.);
