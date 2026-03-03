@@ -44,14 +44,19 @@ struct Content {
 	) | rpl::filter([](const State &state) {
 		return v::is<ProcessingState>(state)
 			|| v::is<FinishedState>(state)
-			|| v::is<ScanDoneState>(state);
+			|| v::is<ScanDoneState>(state)
+			|| v::is<CancelledState>(state);
 	}) | rpl::map([=](const State &state) {
 		if (const auto process = std::get_if<ProcessingState>(&state)) {
 			return ContentFromState(*process);
 		} else if (v::is<FinishedState>(state)) {
 			return ContentFromState(std::get<FinishedState>(state));
-		} else { // ScanDoneState: non-scanning, non-done sentinel to clear top bar
+		} else if (v::is<ScanDoneState>(state)) {
+			// ScanDoneState: clear top bar after scan completes
 			return ContentFromState(std::get<ScanDoneState>(state));
+		} else {
+			// CancelledState: emit scan_complete sentinel to clear top bar
+			return ContentFromState(ScanDoneState{});
 		}
 	});
 }

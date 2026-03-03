@@ -75,13 +75,14 @@ void TopBar::updateData(Content &&content) {
 	if (content.rows.empty()) {
 		return;
 	}
-	// "scan_complete" is a sentinel emitted after scanning finishes.
+	// "scan_complete" is a sentinel emitted after scanning finishes or is cancelled.
 	// Clear the top bar so "Scanning..." / "Exporting your data" disappears.
 	if (content.rows[0].id == QStringLiteral("scan_complete")) {
 		_infoLeft->setText(QString());
 		_infoMiddle->setText(QString());
 		_infoRight->setText(QString());
 		_progress->setValue(0.);
+		hideShadow();
 		return;
 	}
 	const auto &row = content.rows[0];

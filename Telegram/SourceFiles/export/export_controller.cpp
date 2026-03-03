@@ -471,6 +471,7 @@ void ControllerObject::startExport(
 
 	_settings.path = Output::NormalizePath(_settings);
 	_writer = Output::CreateWriter(_settings.format);
+	_steps.clear();
 	fillExportSteps();
 	exportNext();
 }

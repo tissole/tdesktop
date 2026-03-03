@@ -184,12 +184,16 @@ Content ContentFromState(
 				// Progress: fraction of expected total already processed.
 				// Use uniqueCount (locally counted) not totalCount (may be server-seeded)
 				// to ensure bars animate as files are actually processed.
+				// Only use scan-based progress when we have prior scan data (hasExpected).
+				// Without scan data, always use overall message progress as a proxy so
+				// bars start at 0 and grow, never appearing pre-filled.
 				const int expected = hasExpected ? expIt->second.totalCount : 0;
 				const int locallyProcessed = item.uniqueCount; // locally deduped, grows as we process
-				if (expected > 0 && locallyProcessed > 0) {
+				if (hasExpected && expected > 0 && locallyProcessed >= 0) {
+					// Prior scan available: show per-type progress based on local count vs scan total
 					typeProgress = std::clamp(locallyProcessed / float64(expected), 0., 1.);
 				} else if (state.itemCount > 0) {
-					// No prior scan: use overall message progress as proxy
+					// No prior scan: use overall message progress as proxy so bar starts at 0
 					typeProgress = std::clamp(state.itemIndex / float64(state.itemCount), 0., 1.);
 				} else {
 					typeProgress = 0.;
