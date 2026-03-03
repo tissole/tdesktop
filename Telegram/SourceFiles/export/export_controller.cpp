@@ -955,6 +955,25 @@ void ControllerObject::setFinishedState() {
 		}
 	}
 
+	// Last-resort fallback: if breakdown is still empty after the above but
+	// scan stats exist, use scan stats filtered to the selected export types.
+	// This covers edge cases where _stats failed to accumulate counts (e.g. all
+	// files went through the skipDownload path without incrementing _stats).
+	const bool breakdownEmpty = breakdown.empty() || !std::any_of(
+		breakdown.begin(), breakdown.end(),
+		[](const auto &p) { return p.second.totalCount > 0; });
+	if (breakdownEmpty && _scanStatsFound && scanStatsPopulated) {
+		const bool fullHistoryMode = !!(_settings.media.types & Type::FullHistory);
+		for (const auto &[type, scanItem] : scanBreakdownFull) {
+			const bool selected = fullHistoryMode
+				? (type != Type::Text && type != Type::Link)
+				: (bool)(_settings.media.types & type);
+			if (selected && scanItem.totalCount > 0) {
+				breakdown[type] = scanItem;
+			}
+		}
+ 	}
+	
 	// messagesWithLinks: copy from whichever stats have it (export first, then scan).
 	int mwlForBreakdown = 0;
 	const auto exportBreakdownForLinks = _stats.byType();
