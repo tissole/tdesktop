@@ -197,10 +197,13 @@ void ProgressWidget::Row::paintEvent(QPaintEvent *e) {
 	auto p = QPainter(this);
 
 	// Draw the separator line only for active-download rows (main, chat, file_).
-	// Stat summary rows ("stat_*", "header_*") are visually separated by the
-	// FixedHeightWidget spacers inserted between them, so no extra line needed.
+	// Stat summary rows ("stat_*", "header_*") and the invisible sentinel done
+	// row ("done") do not need a separator — they are visually separated by the
+	// FixedHeightWidget spacers inserted between them.
 	const bool isStat = _data.id.startsWith(QStringLiteral("stat_"))
-		|| _data.id.startsWith(QStringLiteral("header_"));
+		|| _data.id.startsWith(QStringLiteral("header_"))
+		|| _data.id == Content::kDoneId
+		|| _data.id.isEmpty();
 	if (!isStat) {
 		const auto thickness = st::exportProgressWidth;
 		const auto top = height() - thickness;

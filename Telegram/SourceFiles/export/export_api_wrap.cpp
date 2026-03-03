@@ -553,8 +553,11 @@ void ApiWrap::startExport(
 	_startProcess->done = std::move(done);
 
 	const bool fullHistoryMode = (_settings->media.types & MediaSettings::Type::FullHistory);
-	if (_isScanning
-		&& _settings->singlePeerFrom == 0
+	// Enable server-based counts when: single peer, no date/id range, no size limit.
+	// This applies to BOTH scan sessions and full-history export sessions so that
+	// Video vs File classification is consistent (server uses inputMessagesFilterVideo
+	// which correctly identifies videos even when local attribute parsing differs).
+	if (_settings->singlePeerFrom == 0
 		&& _settings->singlePeerTill == 0
 		&& !_settings->useIdRange
 		&& (fullHistoryMode || _settings->media.sizeLimit >= kFileMaxSize || _settings->media.sizeLimit <= 0)
@@ -752,6 +755,11 @@ void ApiWrap::requestMediaCounts() {
 			if (_usingServerCounts && _scanStats && type != Type::Sticker && type != Type::Link && type != Type::Text) {
 				_scanStats->setTotalCount(type, count);
 			}
+			// For export sessions with server counts, also seed _stats so that
+			// VideoMessage and VoiceMessage progress bars appear during export.
+			if (_usingServerCounts && !_isScanning && _stats && type != Type::Sticker && type != Type::Link && type != Type::Text) {
+				_stats->setTotalCount(type, count);
+			}
 			if (type == Type::Link) {
 				// Server count for URL filter = number of messages that contain links.
 				// Store as messagesWithLinks so the "(21858 Messages)" part shows correctly.
@@ -865,6 +873,13 @@ void ApiWrap::finishStartProcess() {
 
 	const auto process = base::take(_startProcess);
 	process->info.serverTotalCount = _serverTotalCount;
+	// Server count is only accurate (range-filtered) when no date or ID range
+	// is active. When a range is set, Telegram ignores min_date/max_date for
+	// the count field and returns full-chat totals — unreliable as denominator.
+	const auto hasRange = (_settings->singlePeerFrom != 0)
+		|| (_settings->singlePeerTill != 0)
+		|| _settings->useIdRange;
+	process->info.serverCountIsAccurate = !hasRange;
 	process->done(process->info);
 }
 
@@ -3132,7 +3147,13 @@ void ApiWrap::processFileLoad(
 
 			if ((message || story) && type != Type(0)) {
 				if (type != Type::Link) {
-					_stats->increment(type, fullSize, willBeUniqueInChat);
+					// When server counts were used to seed totalCount (usingServerCounts),
+					// only update size and unique count locally to avoid double-counting.
+					if (_usingServerCounts && type != Type::Sticker && type != Type::Text) {
+						_stats->incrementSizeAndUnique(type, fullSize, willBeUniqueInChat);
+					} else {
+						_stats->increment(type, fullSize, willBeUniqueInChat);
+					}
 				}
 			}
 

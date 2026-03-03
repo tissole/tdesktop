@@ -81,6 +81,10 @@ public:
 		int storiesCount = 0;
 		int dialogsCount = 0;
 		int serverTotalCount = 0;
+		// True when serverTotalCount accurately reflects the selected range
+		// (no date/id range applied, or server range-filtering is reliable).
+		// False when server counts are for full-chat scope (ignore for denominator).
+		bool serverCountIsAccurate = false;
 	};
 	void startExport(
 		const Settings &settings,

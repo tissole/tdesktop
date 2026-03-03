@@ -612,12 +612,16 @@ void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
 	}
 	fillSubstepsInSteps(info);
 	if (_isScanning) {
-		_messagesCount = info.serverTotalCount;
-		_messagesInRangeCountFixed = true;
-	} else if (!_scanStatsFound && info.serverTotalCount > 0) {
-		// No prior scan: use server media-type counts (from requestMediaCounts) as the
-		// correct in-range denominator for the progress bar. This avoids showing the
-		// full chat message count when only a date/id range was selected.
+		// Only use serverTotalCount as initial denominator when it is accurate
+		// (no date/id range). When a range is active, Telegram returns full-chat
+		// counts ignoring the range — we'll update denominator from messagesTextTotal
+		// once the actual message count per split comes back from requestMessagesCount.
+		if (info.serverCountIsAccurate && info.serverTotalCount > 0) {
+			_messagesCount = info.serverTotalCount;
+			_messagesInRangeCountFixed = true;
+		}
+	} else if (!_scanStatsFound && info.serverCountIsAccurate && info.serverTotalCount > 0) {
+		// No prior scan, and server count is range-accurate: use it as denominator.
 		_messagesCount = info.serverTotalCount;
 		_messagesInRangeCountFixed = true;
 	}
@@ -930,7 +934,11 @@ void ControllerObject::setFinishedState() {
 		exportBreakdown.begin(), exportBreakdown.end(),
 		[](const auto &p) { return p.second.totalCount > 0; });
 	auto scanBreakdownFull = _scanStats.byType();
-	const bool scanStatsPopulated = std::any_of(
+	// Only use scan stats as fallback if they were gathered with the same settings
+	// (same media types). If scan was full-history but export is selective, scan stats
+	// have all types but we only want what the export actually processed.
+	// Check: if export has non-empty stats but scan has MORE types, prefer export stats.
+	const bool scanStatsPopulated = _scanStatsFound && std::any_of(
 		scanBreakdownFull.begin(), scanBreakdownFull.end(),
 		[](const auto &p) { return p.second.totalCount > 0; });
 	auto breakdown = exportStatsPopulated
