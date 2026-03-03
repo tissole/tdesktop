@@ -569,7 +569,7 @@ void ApiWrap::startExport(
 	if (_settings->types & Settings::Type::Stories) {
 		_startProcess->steps.push_back(Step::StoriesCount);
 	}
-	if (_isScanning || (fullHistoryMode && _settings->onlySinglePeer())) {
+	if (_isScanning || _settings->onlySinglePeer()) {
 		_startProcess->steps.push_back(Step::MediaCounts);
 	}
 	if (_settings->types & Settings::Type::AnyChatsMask) {
@@ -864,6 +864,7 @@ void ApiWrap::finishStartProcess() {
 	Expects(_startProcess != nullptr);
 
 	const auto process = base::take(_startProcess);
+	process->info.serverTotalCount = _serverTotalCount;
 	process->done(process->info);
 }
 
@@ -2297,9 +2298,18 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			messageType = MediaType::Photo;
 		}
 
-		// Fix: If it's a document but type was detected as Text, force it to File
-		if (messageType == MediaType::Text && hasMedia && std::holds_alternative<Data::Document>(message.media.content)) {
-			messageType = MediaType::File;
+		// Fix: If type is still Text but has a Document, re-check all document flags
+		// to ensure videos/audio/etc are classified correctly (matching processFileLoad).
+		if (messageType == MediaType::Text && hasMedia) {
+			if (const auto doc = std::get_if<Data::Document>(&message.media.content)) {
+				if (doc->isSticker) messageType = MediaType::Sticker;
+				else if (doc->isVideoMessage) messageType = MediaType::VideoMessage;
+				else if (doc->isVoiceMessage) messageType = MediaType::VoiceMessage;
+				else if (doc->isAnimated) messageType = MediaType::GIF;
+				else if (doc->isVideoFile) messageType = MediaType::Video;
+				else if (doc->isAudioFile) messageType = MediaType::Audio;
+				else messageType = MediaType::File;
+			}
 		}
 
 		const bool hasFile = message.file().location || message.thumb().file.location;

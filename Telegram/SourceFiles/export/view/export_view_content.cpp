@@ -323,8 +323,11 @@ Content ContentFromState(const FinishedState &state) {
 }
 
 Content ContentFromState(const ScanDoneState &state) {
+	// Return a non-scanning, non-done row so the top bar clears "Scanning..."
+	// without triggering showDone() in the ProgressWidget.
 	auto result = Content();
-	result.rows.push_back({ Content::kDoneId });
+	result.isScanning = false;
+	result.rows.push_back({ "scan_complete", QString(), QString(), 1.0 });
 	return result;
 }
 

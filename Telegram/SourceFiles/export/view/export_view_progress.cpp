@@ -251,8 +251,9 @@ void ProgressWidget::Row::updateInstanceGeometry(
 	// and place info on a second line below.
 	instance.info->resizeToNaturalWidth(newWidth);
 	const auto infoWidth = instance.info->width();
+	const auto labelNatural = instance.label->naturalWidth();
 	const auto labelAvailable = newWidth - infoWidth;
-	if (labelAvailable < newWidth / 3) {
+	if (labelAvailable < newWidth / 3 || (infoWidth > 0 && labelNatural + infoWidth + 4 > newWidth)) {
 		// Info too wide: give label full width, move info below 
 		instance.label->resizeToWidth(newWidth);
 		instance.info->resizeToWidth(newWidth);
@@ -355,6 +356,12 @@ void ProgressWidget::setupBottomButton(not_null<Ui::RoundButton*> button) {
 
 void ProgressWidget::updateState(Content &&content) {
 	const auto doneId = Content::kDoneId;
+	// Ignore scan_complete sentinel (clears top bar scanning label only).
+	if (ranges::any_of(content.rows, [](const auto &r) {
+		return r.id == QStringLiteral("scan_complete");
+	})) {
+		return;
+	}
 	const auto done = ranges::any_of(content.rows, [&](const auto &row) {
 		return row.id == doneId;
 	});

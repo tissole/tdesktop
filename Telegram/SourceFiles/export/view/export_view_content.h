@@ -42,20 +42,16 @@ struct Content {
 	return std::move(
 		state
 	) | rpl::filter([](const State &state) {
-		// ScanDoneState is excluded: it must not trigger showDone() in the
-		// progress widget when the user exports immediately after a scan,
-		// because the process controller still holds ScanDoneState as its
-		// last emitted value and rpl::single fires it immediately.
-		return v::is<ProcessingState>(state) || v::is<FinishedState>(state);
+		return v::is<ProcessingState>(state)
+			|| v::is<FinishedState>(state)
+			|| v::is<ScanDoneState>(state);
 	}) | rpl::map([=](const State &state) {
 		if (const auto process = std::get_if<ProcessingState>(&state)) {
 			return ContentFromState(*process);
 		} else if (v::is<FinishedState>(state)) {
 			return ContentFromState(std::get<FinishedState>(state));
-		} else {
-			auto result = Content();
-			result.rows.push_back({ Content::kDoneId });
-			return result;
+		} else { // ScanDoneState: non-scanning, non-done sentinel to clear top bar
+			return ContentFromState(std::get<ScanDoneState>(state));
 		}
 	});
 }

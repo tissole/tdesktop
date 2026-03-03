@@ -614,6 +614,12 @@ void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
 	if (_isScanning) {
 		_messagesCount = info.serverTotalCount;
 		_messagesInRangeCountFixed = true;
+	} else if (!_scanStatsFound && info.serverTotalCount > 0) {
+		// No prior scan: use server media-type counts (from requestMediaCounts) as the
+		// correct in-range denominator for the progress bar. This avoids showing the
+		// full chat message count when only a date/id range was selected.
+		_messagesCount = info.serverTotalCount;
+		_messagesInRangeCountFixed = true;
 	}
 	exportNext();
 }
@@ -895,7 +901,7 @@ ProcessingState ControllerObject::stateOtherData() const {
 ProcessingState ControllerObject::stateScanning(int itemIndex, int itemCount) const {
 	return prepareState(Step::Scanning, [=](ProcessingState &result) {
 		result.itemIndex = itemIndex;
-		result.itemCount = itemCount;
+		result.itemCount = (_messagesCount > 0) ? _messagesCount : itemCount;
 	});
 }
 
@@ -930,6 +936,16 @@ void ControllerObject::setFinishedState() {
 	auto breakdown = exportStatsPopulated
 		? exportBreakdown
 		: (scanStatsPopulated ? scanBreakdownFull : exportBreakdown);
+	// Supplement export stats with scan data for any type that wasn't counted
+	// during export (e.g. files skipped due to size limit).
+	if (exportStatsPopulated && scanStatsPopulated) {
+		for (const auto &[type, scanItem] : scanBreakdownFull) {
+			auto it = breakdown.find(type);
+			if (it == breakdown.end() || it->second.totalCount == 0) {
+				breakdown[type] = scanItem;
+			}
+		}
+	}
 
 	// messagesWithLinks: copy from whichever stats have it (export first, then scan).
 	int mwlForBreakdown = 0;
