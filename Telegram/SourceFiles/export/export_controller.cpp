@@ -802,11 +802,23 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 		if (_scanStatsFound && scanTotal > 0) {
 			_messagesCount = scanTotal;
 		} else {
-			int count = 0;
-			for (int splitCount : info->messagesCountPerSplit) {
-				count += splitCount;
+			// Bug fix: messagesCountPerSplit is the full-chat count, ignoring any date/id range.
+			// When a range is active, requestMediaCounts already asked the server for
+			// per-type counts filtered by the range (e.g. "files in May" = 847, not 21038).
+			// Use the sum of those range-filtered server counts as the immediate denominator.
+			// This is still an overestimate (ignores size limit) but far better than full-chat.
+			// Final stats will show the accurate size-filtered count after export completes.
+			const bool hasRange = (fromId > 0 || tillId > 0);
+			const int serverRangeTotal = _stats.totalCount();
+			if (hasRange && serverRangeTotal > 0) {
+				_messagesCount = serverRangeTotal;
+			} else {
+				int count = 0;
+				for (int splitCount : info->messagesCountPerSplit) {
+					count += splitCount;
+				}
+				_messagesCount = count;
 			}
-			_messagesCount = count;
 		}
 	}
 

@@ -85,6 +85,9 @@ void TopBar::updateData(Content &&content) {
 		hideShadow();
 		return;
 	}
+	// Bug fix: showShadow not called during export, only during scan.
+	// Call it here so the progress bar is always visible for both phases.
+	showShadow();
 	const auto &row = content.rows[0];
 	_infoLeft->setMarkedText(
 		(content.isScanning ? tr::lng_export_scanning : tr::lng_export_progress_title)(tr::now, Ui::Text::Bold));

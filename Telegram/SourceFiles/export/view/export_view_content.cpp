@@ -160,9 +160,13 @@ Content ContentFromState(
 			if (label.isEmpty()) continue;
 
 			QString rowLabel, rowInfo;
-			float64 typeProgress = 1.;
+			float64 typeProgress = 0.;
 			if (type == MediaType::Text) {
 				rowLabel = label + ": " + Lang::FormatCountDecimal(item.totalCount);
+				// Bug fix: Text had no progress calculation, leaving bar at 1.0 (full) always.
+				typeProgress = (state.itemCount > 0)
+					? std::clamp(state.itemIndex / float64(state.itemCount), 0., 1.)
+					: 0.;
 			} else if (type == MediaType::Link) {
 				const auto messagesStr = item.messagesWithLinks > 0
 					? " (" + Lang::FormatCountDecimal(item.messagesWithLinks) + " Messages)"
@@ -173,6 +177,10 @@ Content ContentFromState(
 					rowLabel = label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
 						+ ", " + Lang::FormatCountDecimal(item.totalCount) + messagesStr;
 				}
+				// Bug fix: Link had no progress calculation, leaving bar at 1.0 (full) always.
+				typeProgress = (state.itemCount > 0)
+					? std::clamp(state.itemIndex / float64(state.itemCount), 0., 1.)
+					: 0.;
 			} else {
 				// Split: label (left) = "Type: unique (size)", info (right) = "total (size)".
 				// This prevents overflow on the narrow export panel.
@@ -189,8 +197,9 @@ Content ContentFromState(
 				// bars start at 0 and grow, never appearing pre-filled.
 				const int expected = hasExpected ? expIt->second.totalCount : 0;
 				const int locallyProcessed = item.uniqueCount; // locally deduped, grows as we process
-				if (hasExpected && expected > 0 && locallyProcessed >= 0) {
-					// Prior scan available: show per-type progress based on local count vs scan total
+				if (hasExpected && expected > 0 && locallyProcessed >= 0 && !state.fullHistory) {
+					// Prior scan available: show per-type progress based on local count vs scan total.
+					// Guard: skip for FullHistory — uniqueCount stays 0 until flush, bars would fill instantly.
 					typeProgress = std::clamp(locallyProcessed / float64(expected), 0., 1.);
 				} else if (state.itemCount > 0) {
 					// No prior scan: use overall message progress as proxy so bar starts at 0
