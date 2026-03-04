@@ -38,6 +38,10 @@ rpl::producer<Qt::MouseButton> TopBar::clicks() const {
 	return _button->clicks();
 }
 
+rpl::producer<> TopBar::hideRequests() const {
+	return _hideRequests.events();
+}
+
 void TopBar::resizeToWidthInfo(int w) {
 	if (w <= 0) {
 		return;
@@ -83,6 +87,7 @@ void TopBar::updateData(Content &&content) {
 		_infoRight->setText(QString());
 		_progress->setValue(0.);
 		hideShadow();
+		_hideRequests.fire({});
 		return;
 	}
 	// Bug fix: showShadow not called during export, only during scan.

@@ -27,6 +27,8 @@ public:
 	TopBar(QWidget *parent, Content &&content);
 
 	rpl::producer<Qt::MouseButton> clicks() const;
+	// Fired when scan completes and the top bar should be hidden entirely.
+	rpl::producer<> hideRequests() const;
 
 	void updateData(Content &&content);
 
@@ -49,6 +51,7 @@ private:
 	object_ptr<Ui::PlainShadow> _shadow = { nullptr };
 	object_ptr<Ui::FilledSlider> _progress;
 	object_ptr<Ui::AbstractButton> _button;
+	rpl::event_stream<> _hideRequests;
 
 };
 

@@ -802,16 +802,21 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 		if (_scanStatsFound && scanTotal > 0) {
 			_messagesCount = scanTotal;
 		} else {
-			// Bug fix: messagesCountPerSplit is the full-chat count, ignoring any date/id range.
-			// When a range is active, requestMediaCounts already asked the server for
-			// per-type counts filtered by the range (e.g. "files in May" = 847, not 21038).
-			// Use the sum of those range-filtered server counts as the immediate denominator.
-			// This is still an overestimate (ignores size limit) but far better than full-chat.
-			// Final stats will show the accurate size-filtered count after export completes.
 			const bool hasRange = (fromId > 0 || tillId > 0);
+			const bool fullHistoryMode = (_settings.media.types & MediaSettings::Type::FullHistory);
 			const int serverRangeTotal = _stats.totalCount();
-			if (hasRange && serverRangeTotal > 0) {
+			if (hasRange && serverRangeTotal > 0 && !fullHistoryMode) {
+				// Bug 2 fix: use range-filtered server count (e.g. "files in May" = 847)
+				// instead of full-chat messagesCountPerSplit (e.g. 21038).
+				// Not used for FullHistory: _stats has no per-type counts for that mode.
 				_messagesCount = serverRangeTotal;
+			} else if (hasRange && fullHistoryMode) {
+				// Bug 1 fix: for FullHistory + range, leave _messagesCount = 0 so
+				// stateDialogs uses messagesTextTotal (actual range message count)
+				// as the denominator once requestMessagesCount returns.
+				// messagesCountPerSplit is the full-chat count and would make progress
+				// appear stuck (e.g. 3000 range msgs / 45187 full chat = 6%).
+				_messagesCount = 0;
 			} else {
 				int count = 0;
 				for (int splitCount : info->messagesCountPerSplit) {

@@ -755,9 +755,18 @@ void ApiWrap::requestMediaCounts() {
 			if (_usingServerCounts && _scanStats && type != Type::Sticker && type != Type::Link && type != Type::Text) {
 				_scanStats->setTotalCount(type, count);
 			}
-			// For export sessions with server counts, also seed _stats so that
-			// VideoMessage and VoiceMessage progress bars appear during export.
-			if (_usingServerCounts && !_isScanning && _stats && type != Type::Sticker && type != Type::Link && type != Type::Text) {
+			// Seed _stats.totalCount for the progress denominator during export.
+			// When _usingServerCounts: used for per-type bar totals (no-range exports).
+			// When !_usingServerCounts but range is active: these counts ARE range-filtered
+			// (requestMediaCounts sends min_date/max_date), so we use them as the
+			// immediate denominator for the "X / Y" display (e.g. "1 / 847" for May files).
+			const bool hasRange = (_settings->singlePeerFrom != 0)
+				|| (_settings->singlePeerTill != 0)
+				|| _settings->useIdRange;
+			const bool shouldSeedStats = _stats && !_isScanning
+				&& type != Type::Sticker && type != Type::Link && type != Type::Text
+				&& (_usingServerCounts || hasRange);
+			if (shouldSeedStats) {
 				_stats->setTotalCount(type, count);
 			}
 			if (type == Type::Link) {
