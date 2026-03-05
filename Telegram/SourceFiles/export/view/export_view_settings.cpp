@@ -1346,6 +1346,11 @@ void SettingsWidget::refreshButtons(
 		bool canStart) {
 	using namespace rpl::mappers;
 
+	// Cancel the old sizeValue subscription BEFORE reparenting old buttons.
+	// If we cancel after setParent(nullptr), a pending resize event can fire
+	// the old lambda and call moveToRight on a widget with no parent → crash.
+	_buttonsLayout.destroy();
+
 	for (const auto child : container->children()) {
 		if (child->isWidgetType()) {
 			static_cast<QWidget*>(child)->setParent(nullptr);
@@ -1402,7 +1407,7 @@ void SettingsWidget::refreshButtons(
 		exportBtn->moveToRight(right, top);
 		scanBtn->moveToRight(right + exportBtn->width() + padding.left(), top);
 		cancelBtn->moveToRight(right + exportBtn->width() + padding.left() + scanBtn->width() + padding.left(), top);
-	}, exportBtn->lifetime());
+	}, _buttonsLayout);
 }
 
 void SettingsWidget::chooseFolder() {
