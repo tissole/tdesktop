@@ -1172,7 +1172,7 @@ void SettingsWidget::addExtensionFilter(
 				container,
 				st::exportExtInput,
 				rpl::single(QString(u"pdf docx mp4 ..."_q)))),
-		st::exportSubSettingPadding));
+		st::exportSubSettingPadding);
 	const auto input = inputWrap->entity();
 
 	// Set initial text
