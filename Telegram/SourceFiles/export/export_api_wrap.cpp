@@ -752,7 +752,7 @@ void ApiWrap::requestMediaCounts() {
 			// We seed this as messagesWithLinks so it's available immediately (before/during scan).
 			// The local scan will also accumulate messagesWithLinks by +1 per message, which will
 			// eventually match this server value after a full scan.
-			if (_scanStats && type != Type::Sticker && type != Type::Link && type != Type::Text) {
+			if (_usingServerCounts && _scanStats && type != Type::Sticker && type != Type::Link && type != Type::Text) {
 				_scanStats->setTotalCount(type, count);
 			}
 			// Seed _stats.totalCount for the progress denominator during export.
@@ -760,7 +760,7 @@ void ApiWrap::requestMediaCounts() {
 			// When !_usingServerCounts but range is active: these counts ARE range-filtered
 			// (requestMediaCounts sends min_date/max_date), so we use them as the
 			// immediate denominator for the "X / Y" display (e.g. "1 / 847" for May files).
-			/*const bool hasRange = (_settings->singlePeerFrom != 0)
+			const bool hasRange = (_settings->singlePeerFrom != 0)
 				|| (_settings->singlePeerTill != 0)
 				|| _settings->useIdRange;
 			const bool shouldSeedStats = _stats && !_isScanning
@@ -768,7 +768,7 @@ void ApiWrap::requestMediaCounts() {
 				&& (_usingServerCounts || hasRange);
 			if (shouldSeedStats) {
 				_stats->setTotalCount(type, count);
-			}*/
+			}
 			if (type == Type::Link) {
 				// Server count for URL filter = number of messages that contain links.
 				// Store as messagesWithLinks so the "(21858 Messages)" part shows correctly.
@@ -2932,9 +2932,11 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 		}
 	}
 
-	const int itemIndex = (messageIndexInSlice >= 0 && messageIndexInSlice < int(_chatProcess->messageItemIndices.size()))
-		? _chatProcess->messageItemIndices[messageIndexInSlice]
-		: (currentFileMessage() ? _chatProcess->totalMessagesCounter : 0);
+	const int itemIndex = _isScanning 
+		? ((messageIndexInSlice >= 0 && messageIndexInSlice < int(_chatProcess->messageItemIndices.size()))
+			? _chatProcess->messageItemIndices[messageIndexInSlice]
+			: (currentFileMessage() ? _chatProcess->totalMessagesCounter : 0))
+		: _chatProcess->messagesProcessed;
 
 	return _chatProcess->fileProgress(ApiWrap::DownloadProgress{
 		.randomId = process.randomId,
@@ -4011,7 +4013,7 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 			_chatProcess->fileProgress(ApiWrap::DownloadProgress{
 				.randomId = 0,
 				.path = QString(),
-				.itemIndex = totalIndex,
+				.itemIndex = _isScanning ? totalIndex : _chatProcess->messagesProcessed,
 				.ready = 1,
 				.total = 1,
 				.isAuxiliary = true,

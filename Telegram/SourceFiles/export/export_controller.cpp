@@ -802,13 +802,9 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 		if (_scanStatsFound && scanTotal > 0) {
 			_messagesCount = scanTotal;
 		} else {
-			const bool hasRange = (fromId > 0 || tillId > 0)
-				|| (_settings.singlePeerFrom > 0 || _settings.singlePeerTill > 0);
+			const bool hasRange = (fromId > 0 || tillId > 0);
 			const bool fullHistoryMode = (_settings.media.types & MediaSettings::Type::FullHistory);
-			// Use _scanStats because _stats is no longer seeded with server counts (to prevent double counting).
-			// _scanStats now reliably holds the server range counts from requestMediaCounts.
-			const int serverRangeTotal = _scanStats.totalCount();
-
+			const int serverRangeTotal = _stats.totalCount();
 			if (hasRange && serverRangeTotal > 0 && !fullHistoryMode) {
 				// Bug 2 fix: use range-filtered server count (e.g. "files in May" = 847)
 				// instead of full-chat messagesCountPerSplit (e.g. 21038).
