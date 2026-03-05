@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/continuous_sliders.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/wrap/vertical_layout.h"
+#include "ui/wrap/wrap.h"
 #include "ui/wrap/padding_wrap.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/fade_wrap.h"
@@ -556,26 +557,52 @@ void SettingsWidget::addLimitsLabel(
 			st::boxLabel),
 		st::exportLimitsPadding);
 
-	// ID range UI (visible when ID mode is selected)
+	// ID range UI — two inputs on a single row (visible when ID mode is selected)
 	const auto idContainer = container->add(
-		object_ptr<Ui::VerticalLayout>(container),
-		st::exportSettingPadding);
+		object_ptr<Ui::RpWidget>(container),
+		st::exportLimitsPadding);
 
+	// Fixed-height row: [22px pad] [from label+input] [16px gap] [till label+input] [22px pad]
+	const int idRowH   = 48;
+	const int idPadL   = 22;
+	const int idGap    = 16;
+	idContainer->resize(idContainer->width(), idRowH);
 
-	const auto fromIdInput = idContainer->add(
-		object_ptr<Ui::InputField>(
-			idContainer,
-			st::defaultInputField,
-			rpl::single(tr::lng_export_id_from_placeholder(tr::now))),
-		st::exportSettingPadding);
+	const auto fromIdLabel = Ui::CreateChild<Ui::FlatLabel>(
+		idContainer,
+		tr::lng_export_id_from_placeholder(tr::now),
+		st::exportIdFieldLabel);
 
+	const auto fromIdInput = Ui::CreateChild<Ui::InputField>(
+		idContainer,
+		st::defaultInputField,
+		rpl::single(u"0"_q));
 
-	const auto tillIdInput = idContainer->add(
-		object_ptr<Ui::InputField>(
-			idContainer,
-			st::defaultInputField,
-			rpl::single(tr::lng_export_id_till_placeholder(tr::now))),
-		st::exportSettingPadding);
+	const auto tillIdLabel = Ui::CreateChild<Ui::FlatLabel>(
+		idContainer,
+		tr::lng_export_id_till_placeholder(tr::now),
+		st::exportIdFieldLabel);
+
+	const auto tillIdInput = Ui::CreateChild<Ui::InputField>(
+		idContainer,
+		st::defaultInputField,
+		rpl::single(u"0"_q));
+
+	// Layout the two label+input pairs side by side
+	const auto layoutIdRow = [=](int w) {
+		const int half = (w - idPadL * 2 - idGap) / 2;
+		if (half < 20) return;
+		fromIdLabel->resizeToWidth(half);
+		fromIdLabel->move(idPadL, 2);
+		fromIdInput->setGeometry(idPadL, fromIdLabel->height() + 4, half, fromIdInput->height());
+		const int x2 = idPadL + half + idGap;
+		tillIdLabel->resizeToWidth(half);
+		tillIdLabel->move(x2, 2);
+		tillIdInput->setGeometry(x2, tillIdLabel->height() + 4, half, tillIdInput->height());
+		idContainer->resize(w, idRowH);
+	};
+	idContainer->widthValue()
+		| rpl::start_with_next([=](int w) { layoutIdRow(w); }, idContainer->lifetime());
 
 	// Bind inputs to data
 	value()
@@ -1047,6 +1074,7 @@ void SettingsWidget::addMediaOptions(
 		container,
 		tr::lng_export_option_full_history(tr::now),
 		MediaType::FullHistory);
+	addExtensionFilter(container);
 	addSizeSlider(container);
 
 	_scanResultsLabel = container->add(
@@ -1099,6 +1127,199 @@ void SettingsWidget::addMediaOption(
 			checkbox->setChecked(state.first);
 			checkbox->setEnabled(state.second);
 		}, checkbox->lifetime());
+}
+
+void SettingsWidget::addExtensionFilter(
+		not_null<Ui::VerticalLayout*> container) {
+	using ExtMode = MediaSettings::ExtFilterMode;
+	using Type    = MediaSettings::Type;
+
+	// Determine whether any eligible type (Video/Audio/File) is currently checked.
+	// The row is active only when at least one of them is on.
+	const auto isEligible = [](const Settings &data) {
+		const auto eligible = Type::Video | Type::Audio | Type::File;
+		return bool(data.media.types & eligible);
+	};
+
+	// Container for the entire filter row.
+	const auto row = container->add(
+		object_ptr<Ui::RpWidget>(container),
+		style::margins(0, 0, 0, 0));
+
+	// We lay out manually inside the row:
+	//   [22px] [wlCb 20x20] [4px] [wlSign 14px] [8px] [blCb 20x20] [4px] [blSign 14px] [8px] [input flex]
+	const int padL    = 22;
+	const int cbSize  = 20;  // same as defaultBoxCheckbox
+	const int signW   = 14;
+	const int innerGap = 4;
+	const int betweenGap = 8;
+	const int rowH    = 36;
+	const int inputH  = 24;
+
+	row->resize(row->width(), rowH);
+
+	// Whitelist checkbox
+	const auto wlCb = Ui::CreateChild<Ui::Checkbox>(
+		row,
+		QString(),
+		(readData().media.extensionFilterMode == ExtMode::Whitelist),
+		st::defaultBoxCheckbox);
+
+	// Blacklist checkbox
+	const auto blCb = Ui::CreateChild<Ui::Checkbox>(
+		row,
+		QString(),
+		(readData().media.extensionFilterMode == ExtMode::Blacklist),
+		st::defaultBoxCheckbox);
+
+	// Whitelist sign label (✓ in green)
+	const auto wlSign = Ui::CreateChild<Ui::FlatLabel>(
+		row,
+		QString(u"\u2713"_q),
+		st::exportExtSignLabel);
+
+	// Blacklist sign label (✕ in red)
+	const auto blSign = Ui::CreateChild<Ui::FlatLabel>(
+		row,
+		QString(u"\u2715"_q),
+		st::exportExtSignLabelRed);
+
+	// Extension input field
+	const auto input = Ui::CreateChild<Ui::InputField>(
+		row,
+		st::exportExtInput,
+		rpl::single(QString(u"pdf docx mp4 ..."_q)));
+
+	// Set initial input text from data
+	input->setText(readData().media.extensionFilter.join(u" "_q));
+
+	// Layout helper — called on resize and initial show
+	const auto doLayout = [=](int w) {
+		const int y       = (rowH - cbSize) / 2;
+		const int signY   = (rowH - wlSign->height()) / 2;
+		const int inputY  = (rowH - inputH) / 2;
+
+		int x = padL;
+		wlCb->move(x, y);
+		x += cbSize + innerGap;
+		wlSign->move(x, signY);
+		x += signW + betweenGap;
+		blCb->move(x, y);
+		x += cbSize + innerGap;
+		blSign->move(x, signY);
+		x += signW + betweenGap;
+		const int inputW = w - x - padL;
+		if (inputW > 10) {
+			input->setGeometry(x, inputY, inputW, inputH);
+		}
+	};
+
+	row->widthValue()
+		| rpl::start_with_next([=](int w) {
+			doLayout(w);
+		}, row->lifetime());
+
+	// Keep row height fixed
+	row->resize(row->width(), rowH);
+	row->heightValue()
+		| rpl::filter([=](int h) { return h != rowH; })
+		| rpl::start_with_next([=](int) {
+			row->resize(row->width(), rowH);
+		}, row->lifetime());
+
+	// Mutual exclusion: selecting one deselects the other
+	wlCb->checkedChanges()
+		| rpl::filter([](bool v) { return v; })
+		| rpl::start_with_next([=] {
+			blCb->setChecked(false);
+			changeData([&](Settings &data) {
+				data.media.extensionFilterMode = ExtMode::Whitelist;
+			});
+			input->setDisabled(false);
+			input->setFocus();
+		}, row->lifetime());
+
+	wlCb->checkedChanges()
+		| rpl::filter([](bool v) { return !v; })
+		| rpl::start_with_next([=] {
+			// Only clear mode if blacklist is also off
+			if (!blCb->checked()) {
+				changeData([&](Settings &data) {
+					data.media.extensionFilterMode = ExtMode::None;
+				});
+				input->setDisabled(true);
+			}
+		}, row->lifetime());
+
+	blCb->checkedChanges()
+		| rpl::filter([](bool v) { return v; })
+		| rpl::start_with_next([=] {
+			wlCb->setChecked(false);
+			changeData([&](Settings &data) {
+				data.media.extensionFilterMode = ExtMode::Blacklist;
+			});
+			input->setDisabled(false);
+			input->setFocus();
+		}, row->lifetime());
+
+	blCb->checkedChanges()
+		| rpl::filter([](bool v) { return !v; })
+		| rpl::start_with_next([=] {
+			if (!wlCb->checked()) {
+				changeData([&](Settings &data) {
+					data.media.extensionFilterMode = ExtMode::None;
+				});
+				input->setDisabled(true);
+			}
+		}, row->lifetime());
+
+	// Parse and save extensions when input changes
+	input->changes()
+		| rpl::start_with_next([=] {
+			const auto text = input->getLastText().toLower().trimmed();
+			const auto parts = text.split(
+				QRegularExpression(u"[\\s,;]+"_q),
+				Qt::SkipEmptyParts);
+			QStringList exts;
+			for (const auto &p : parts) {
+				// Strip leading dots if user typed them
+				exts.append(p.startsWith('.') ? p.mid(1) : p);
+			}
+			changeData([&](Settings &data) {
+				data.media.extensionFilter = exts;
+			});
+		}, row->lifetime());
+
+	// Enable/disable entire row based on eligible types
+	value()
+		| rpl::map(isEligible)
+		| rpl::distinct_until_changed()
+		| rpl::start_with_next([=](bool eligible) {
+			wlCb->setEnabled(eligible);
+			blCb->setEnabled(eligible);
+			const auto mode = readData().media.extensionFilterMode;
+			const auto inputOn = eligible && (mode != ExtMode::None);
+			input->setDisabled(!inputOn);
+			row->setEnabled(eligible);
+			row->update();
+		}, row->lifetime());
+
+	// Sync checkbox/input state back when data changes externally
+	value()
+		| rpl::map([](const Settings &data) {
+			return data.media.extensionFilterMode;
+		})
+		| rpl::distinct_until_changed()
+		| rpl::start_with_next([=](ExtMode mode) {
+			wlCb->setChecked(mode == ExtMode::Whitelist);
+			blCb->setChecked(mode == ExtMode::Blacklist);
+			const auto eligible = isEligible(readData());
+			input->setDisabled(!eligible || mode == ExtMode::None);
+		}, row->lifetime());
+
+	// Initial state
+	const auto initMode = readData().media.extensionFilterMode;
+	input->setDisabled(!isEligible(readData()) || initMode == ExtMode::None);
 }
 
 void SettingsWidget::addSizeSlider(

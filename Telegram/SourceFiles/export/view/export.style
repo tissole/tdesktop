@@ -10,8 +10,8 @@ using "ui/basic.style";
 using "ui/widgets/widgets.style";
 using "boxes/boxes.style";
 
-exportPanelSize: size(364px, 900px);
-exportSettingPadding: margins(22px, 8px, 22px, 8px);
+exportPanelSize: size(364px, 780px);
+exportSettingPadding: margins(22px, 6px, 22px, 6px);
 exportSubSettingPadding: margins(56px, 4px, 22px, 12px);
 exportHeaderLabel: FlatLabel(boxTitle) {
 	style: TextStyle(defaultTextStyle) {
@@ -101,4 +101,31 @@ exportCalendarSizes: CalendarSizes(defaultCalendarSizes) {
 	cellSize: size(42px, 38px);
 	cellInner: 32px;
 	padding: margins(14px, 0px, 14px, 0px);
+}
+
+// Extension filter row styles
+exportExtSignLabel: FlatLabel(defaultFlatLabel) {
+	textFg: #3a9e5f;
+	style: TextStyle(defaultTextStyle) {
+		font: font(13px bold);
+	}
+	maxHeight: 20px;
+}
+exportExtSignLabelRed: FlatLabel(defaultFlatLabel) {
+	textFg: #c0392b;
+	style: TextStyle(defaultTextStyle) {
+		font: font(13px bold);
+	}
+	maxHeight: 20px;
+}
+exportExtInput: InputField(defaultInputField) {
+	textMargins: margins(7px, 3px, 7px, 3px);
+	heightMin: 24px;
+}
+exportIdFieldLabel: FlatLabel(defaultFlatLabel) {
+	textFg: windowSubTextFg;
+	style: TextStyle(defaultTextStyle) {
+		font: font(11px);
+	}
+	maxHeight: 16px;
 }

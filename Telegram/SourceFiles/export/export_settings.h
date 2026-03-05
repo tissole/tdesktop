@@ -18,6 +18,12 @@ enum class Format;
 struct MediaSettings {
 	bool validate() const;
 
+	enum class ExtFilterMode {
+		None      = 0,
+		Whitelist = 1,
+		Blacklist = 2,
+	};
+
 	enum class Type {
 		Photo        = 0x01,
 		Video        = 0x02,
@@ -39,6 +45,10 @@ struct MediaSettings {
 
 	Types types = DefaultTypes();
 	int64 sizeLimit = 8 * 1024 * 1024;
+
+	// Extension filter (applies to Video, Audio, File types)
+	ExtFilterMode extensionFilterMode = ExtFilterMode::None;
+	QStringList extensionFilter; // lowercase, no dots, e.g. {"pdf","docx"}
 
 	static inline Types DefaultTypes() {
 		return Types(0);

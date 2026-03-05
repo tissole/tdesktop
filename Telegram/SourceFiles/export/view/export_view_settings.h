@@ -100,6 +100,7 @@ private:
 		const QString &text,
 		MediaType type);
 	void addSizeSlider(not_null<Ui::VerticalLayout*> container);
+	void addExtensionFilter(not_null<Ui::VerticalLayout*> container);
 	void addLocationLabel(
 		not_null<Ui::VerticalLayout*> container);
 	void addFormatAndLocationLabel(

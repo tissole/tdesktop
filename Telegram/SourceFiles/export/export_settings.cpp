@@ -22,6 +22,13 @@ bool MediaSettings::validate() const {
 	} else if (sizeLimit < 0 || sizeLimit > kMaxFileSize) {
 		return false;
 	}
+	// Extension filter only valid when eligible types are selected
+	if (extensionFilterMode != ExtFilterMode::None) {
+		const auto eligible = Type::Video | Type::Audio | Type::File;
+		if (!(types & eligible)) {
+			return false;
+		}
+	}
 	return true;
 }
 

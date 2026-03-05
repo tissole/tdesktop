@@ -3110,6 +3110,28 @@ void ApiWrap::processFileLoad(
 		|| (types == MediaSettings::Types(0))
 		|| !(types & type); // Only download if the specific type is chosen
 
+	// Extension filter: applies to Video, Audio, File types when a filter is active.
+	// Extract extension from dedupName (populated from Document.name above).
+	if (!fullHistorySelected
+			&& (type == Type::Video || type == Type::Audio || type == Type::File)
+			&& _settings->media.extensionFilterMode != MediaSettings::ExtFilterMode::None
+			&& !_settings->media.extensionFilter.isEmpty()) {
+		const auto dotPos = dedupName.lastIndexOf(u'.');
+		const auto ext = (dotPos >= 0)
+			? dedupName.mid(dotPos + 1).toLower()
+			: QString();
+		const auto &filterList = _settings->media.extensionFilter;
+		const bool inList = filterList.contains(ext, Qt::CaseInsensitive);
+		const bool blocked =
+			(_settings->media.extensionFilterMode == MediaSettings::ExtFilterMode::Whitelist && !inList)
+			|| (_settings->media.extensionFilterMode == MediaSettings::ExtFilterMode::Blacklist && inList);
+		if (blocked) {
+			file.skipReason = Data::File::SkipReason::FileType;
+			done(QString());
+			return;
+		}
+	}
+
 	if (_isScanning) {
 		if (message || story) {
 			if (type != Type(0) && !isThumb && (origin.messageId != 0 || origin.storyId != 0)) {
