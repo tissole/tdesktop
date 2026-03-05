@@ -1042,7 +1042,10 @@ void MainWidget::setCurrentExportView(Export::View::PanelController *view) {
 	if (_currentExportView) {
 		_currentExportView->progressState(
 		) | rpl::start_with_next([=](Export::View::Content &&data) {
-			const bool isDone = !data.rows.empty() && (data.rows[0].id == Export::View::Content::kDoneId || data.rows[0].id == "header_finished");
+			const bool isDone = !data.rows.empty() && (
+				data.rows[0].id == Export::View::Content::kDoneId
+				|| data.rows[0].id == "header_finished"
+				|| data.rows[0].id == "scan_complete");
 			if (isDone) {
 				if (_exportTopBar) {
 				_exportTopBar->hide(anim::type::instant);

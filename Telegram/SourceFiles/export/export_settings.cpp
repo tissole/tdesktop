@@ -60,6 +60,16 @@ bool Settings::validate() const {
 		return false;
 	}
 
+	if (onlySinglePeer()) {
+		if (media.types == MediaSettings::Types(0)) {
+			return false;
+		}
+	} else {
+		if (types == Types(0) && media.types == MediaSettings::Types(0)) {
+			return false;
+		}
+	}
+
 	if (!media.validate()) {
 		return false;
 	}
