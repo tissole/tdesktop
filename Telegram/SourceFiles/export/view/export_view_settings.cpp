@@ -621,9 +621,11 @@ void SettingsWidget::addLimitsLabel(
 			tillIdInput->setText(QString::number(tillId));
 		}, tillIdInput->lifetime());
 
-	const auto errorLabel = idContainer->add(
+	// errorLabel lives in the outer container (VerticalLayout) because
+	// idContainer is an RpWidget and does not support .add().
+	const auto errorLabel = container->add(
 		object_ptr<Ui::FlatLabel>(
-			idContainer,
+			container,
 			rpl::single(QString()),
 			st::exportErrorLabel),
 		st::exportSettingPadding);
@@ -689,12 +691,14 @@ void SettingsWidget::addLimitsLabel(
 		| rpl::start_with_next([=](bool useIdRange) {
 			dateLabel->setVisible(!useIdRange);
 			idContainer->setVisible(useIdRange);
+			errorLabel->setVisible(useIdRange);
 			container->resizeToWidth(container->width());
 		}, container->lifetime());
 
 	// Initially set visibility
 	dateLabel->setVisible(!readData().useIdRange);
 	idContainer->setVisible(readData().useIdRange);
+	errorLabel->setVisible(readData().useIdRange);
 
 	const auto removeTime = [](TimeId dateTime) {
 		return base::unixtime::serialize(

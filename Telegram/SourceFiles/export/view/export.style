@@ -105,14 +105,14 @@ exportCalendarSizes: CalendarSizes(defaultCalendarSizes) {
 
 // Extension filter row styles
 exportExtSignLabel: FlatLabel(defaultFlatLabel) {
-	textFg: #3a9e5f;
+	textFg: boxTextFgGood;
 	style: TextStyle(defaultTextStyle) {
 		font: font(13px bold);
 	}
 	maxHeight: 20px;
 }
 exportExtSignLabelRed: FlatLabel(defaultFlatLabel) {
-	textFg: #c0392b;
+	textFg: boxTextFgError;
 	style: TextStyle(defaultTextStyle) {
 		font: font(13px bold);
 	}
