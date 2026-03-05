@@ -140,7 +140,7 @@ private:
 	Ui::RpWidget *_buttonsContainer = nullptr;
 	Ui::VerticalLayout *_container = nullptr;
 	rpl::lifetime _buttonsLayout; // cancelled & rebuilt each refreshButtons call
-	Ui::FlatLabel *_scanResultsLabel = nullptr;
+	Ui::SlideWrap<Ui::FlatLabel> *_scanResultsLabel = nullptr;
 	bool _isScanning = false;
 	bool _hasScanResults = false;
 	std::map<MediaSettings::Type, Output::StatItem> _scanResults;

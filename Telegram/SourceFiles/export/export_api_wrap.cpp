@@ -557,11 +557,20 @@ void ApiWrap::startExport(
 	// This applies to BOTH scan sessions and full-history export sessions so that
 	// Video vs File classification is consistent (server uses inputMessagesFilterVideo
 	// which correctly identifies videos even when local attribute parsing differs).
-	if (_settings->singlePeerFrom == 0
-		&& _settings->singlePeerTill == 0
-		&& !_settings->useIdRange
-		&& (fullHistoryMode || _settings->media.sizeLimit >= kFileMaxSize || _settings->media.sizeLimit <= 0)
-		&& _settings->onlySinglePeer()) {
+	// Extension filter is client-side only; server counts reflect ALL files of that
+	// type regardless of extension. When active, server counts are wrong for both
+	// scan stats (total shows unfiltered number) and scan progress display.
+	const bool hasExtFilter =
+		_settings->media.extensionFilterMode != MediaSettings::ExtFilterMode::None
+		&& !_settings->media.extensionFilter.isEmpty();
+
+	// Enable server-based counts only when there is no extension filter.
+	if (!hasExtFilter
+			&& _settings->singlePeerFrom == 0
+			&& _settings->singlePeerTill == 0
+			&& !_settings->useIdRange
+			&& (fullHistoryMode || _settings->media.sizeLimit >= kFileMaxSize || _settings->media.sizeLimit <= 0)
+			&& _settings->onlySinglePeer()) {
 		_usingServerCounts = true;
 	}
 
@@ -572,7 +581,12 @@ void ApiWrap::startExport(
 	if (_settings->types & Settings::Type::Stories) {
 		_startProcess->steps.push_back(Step::StoriesCount);
 	}
-	if (_isScanning || _settings->onlySinglePeer()) {
+	// When scanning with an extension filter, skip the MediaCounts server round-trips.
+	// Server counts are unfiltered so they are wrong for stats, and since
+	// _usingServerCounts is already false in this case, they serve no purpose.
+	// Skipping them means scan starts immediately instead of waiting for N responses.
+	const bool skipMediaCountsForFilteredScan = _isScanning && hasExtFilter;
+	if ((_isScanning || _settings->onlySinglePeer()) && !skipMediaCountsForFilteredScan) {
 		_startProcess->steps.push_back(Step::MediaCounts);
 	}
 	if (_settings->types & Settings::Type::AnyChatsMask) {

@@ -139,7 +139,11 @@ SettingsWidget::SettingsWidget(
 
 		if (!_isScanning && (filtersChanged || rangeChanged)) {
 			_scanResults.clear();
-			if (_scanResultsLabel) _scanResultsLabel->setText(QString());
+			if (_scanResultsLabel) {
+				_scanResultsLabel->entity()->setText(QString());
+				_scanResultsLabel->hide(anim::type::instant);
+				_container->resizeToWidth(_container->width());
+			}
 			_scanInvalidated.fire({});
 		}
 	}, lifetime());
@@ -562,11 +566,13 @@ void SettingsWidget::addLimitsLabel(
 		object_ptr<Ui::RpWidget>(container),
 		st::exportLimitsPadding);
 
-	// Fixed-height row: [22px pad] [from label+input] [16px gap] [till label+input] [22px pad]
-	const int idRowH   = 48;
-	const int idPadL   = 22;
-	const int idGap    = 16;
-	idContainer->resize(idContainer->width(), idRowH);
+	// Use st::defaultInputField.heightMin instead of widget->height() because
+	// Ui::InputField::height() returns 0 until first show(). idContainer starts
+	// hidden, so the input is never shown before layoutIdRow runs -- using
+	// ->height() would give 0px, making the inputs invisible and unclickable.
+	const int inputH = st::defaultInputField.heightMin;
+	const int idPadL = 22;
+	const int idGap  = 16;
 
 	const auto fromIdLabel = Ui::CreateChild<Ui::FlatLabel>(
 		idContainer,
@@ -588,18 +594,18 @@ void SettingsWidget::addLimitsLabel(
 		st::defaultInputField,
 		rpl::single(u"0"_q));
 
-	// Layout the two label+input pairs side by side
 	const auto layoutIdRow = [=](int w) {
 		const int half = (w - idPadL * 2 - idGap) / 2;
 		if (half < 20) return;
 		fromIdLabel->resizeToWidth(half);
 		fromIdLabel->move(idPadL, 2);
-		fromIdInput->setGeometry(idPadL, fromIdLabel->height() + 4, half, fromIdInput->height());
+		const int labelH = fromIdLabel->height();
+		fromIdInput->setGeometry(idPadL, labelH + 4, half, inputH);
 		const int x2 = idPadL + half + idGap;
 		tillIdLabel->resizeToWidth(half);
 		tillIdLabel->move(x2, 2);
-		tillIdInput->setGeometry(x2, tillIdLabel->height() + 4, half, tillIdInput->height());
-		idContainer->resize(w, idRowH);
+		tillIdInput->setGeometry(x2, labelH + 4, half, inputH);
+		idContainer->resize(w, labelH + 4 + inputH + 4);
 	};
 	idContainer->widthValue()
 		| rpl::start_with_next([=](int w) { layoutIdRow(w); }, idContainer->lifetime());
@@ -610,8 +616,9 @@ void SettingsWidget::addLimitsLabel(
 			return data.singlePeerFromId;
 		})
 		| rpl::start_with_next([=](int32 fromId) {
-			if (!fromIdInput->hasFocus()) {
-				fromIdInput->setText(QString::number(fromId));
+			const auto s = QString::number(fromId);
+			if (fromIdInput->getLastText() != s) {
+				fromIdInput->setText(s);
 			}
 		}, fromIdInput->lifetime());
 
@@ -620,8 +627,9 @@ void SettingsWidget::addLimitsLabel(
 			return data.singlePeerTillId;
 		})
 		| rpl::start_with_next([=](int32 tillId) {
-			if (!tillIdInput->hasFocus()) {
-				tillIdInput->setText(QString::number(tillId));
+			const auto s = QString::number(tillId);
+			if (tillIdInput->getLastText() != s) {
+				tillIdInput->setText(s);
 			}
 		}, tillIdInput->lifetime());
 
@@ -1446,12 +1454,13 @@ rpl::producer<> SettingsWidget::cancelClicks() const {
 
 void SettingsWidget::setScanProgress(int itemIndex, int itemCount) {
 	if (!_scanResultsLabel) return;
-	_scanResultsLabel->setText(tr::lng_export_scanning_progress(
+	_scanResultsLabel->entity()->setText(tr::lng_export_scanning_progress(
 		tr::now,
 		lt_index,
 		Lang::FormatCountDecimal(itemIndex),
 		lt_amount,
 		Lang::FormatCountDecimal(itemCount)));
+	_scanResultsLabel->toggle(true, anim::type::instant);
 	_container->resizeToWidth(_container->width());
 }
 
@@ -1495,7 +1504,8 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 		} else {
 			text = "No items found matching selected filters.";
 		}
-		_scanResultsLabel->setText(text);
+		_scanResultsLabel->entity()->setText(text);
+		_scanResultsLabel->toggle(true, anim::type::instant);
 		_container->resizeToWidth(_container->width());
 		return;
 	}
@@ -1599,7 +1609,8 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 			text += "\n" + QString(label) + uniqueStr + ", " + totalStr;
 		}
 	}
-	_scanResultsLabel->setText(text.trimmed());
+	_scanResultsLabel->entity()->setText(text.trimmed());
+	_scanResultsLabel->toggle(true, anim::type::instant);
 	_container->resizeToWidth(_container->width());
 	_changes.fire_copy(readData());
 }
@@ -1607,7 +1618,11 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 void SettingsWidget::clearScanResults() {
 	_scanResults.clear();
 	_hasScanResults = false;
-	if (_scanResultsLabel) _scanResultsLabel->setText(QString());
+	if (_scanResultsLabel) {
+		_scanResultsLabel->entity()->setText(QString());
+		_scanResultsLabel->hide(anim::type::instant);
+		_container->resizeToWidth(_container->width());
+	}
 	_changes.fire_copy(readData());
 }
 
