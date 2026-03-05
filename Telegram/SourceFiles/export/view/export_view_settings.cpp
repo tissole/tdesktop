@@ -610,7 +610,9 @@ void SettingsWidget::addLimitsLabel(
 			return data.singlePeerFromId;
 		})
 		| rpl::start_with_next([=](int32 fromId) {
-			fromIdInput->setText(QString::number(fromId));
+			if (!fromIdInput->hasFocus()) {
+				fromIdInput->setText(QString::number(fromId));
+			}
 		}, fromIdInput->lifetime());
 
 	value()
@@ -618,7 +620,9 @@ void SettingsWidget::addLimitsLabel(
 			return data.singlePeerTillId;
 		})
 		| rpl::start_with_next([=](int32 tillId) {
-			tillIdInput->setText(QString::number(tillId));
+			if (!tillIdInput->hasFocus()) {
+				tillIdInput->setText(QString::number(tillId));
+			}
 		}, tillIdInput->lifetime());
 
 	// errorLabel lives in the outer container (VerticalLayout) because
@@ -1138,100 +1142,46 @@ void SettingsWidget::addExtensionFilter(
 	using ExtMode = MediaSettings::ExtFilterMode;
 	using Type    = MediaSettings::Type;
 
-	// Determine whether any eligible type (Video/Audio/File) is currently checked.
-	// The row is active only when at least one of them is on.
 	const auto isEligible = [](const Settings &data) {
-		const auto eligible = Type::Video | Type::Audio | Type::File;
-		return bool(data.media.types & eligible);
+		return bool(data.media.types & (Type::Video | Type::Audio | Type::File));
 	};
 
-	// Container for the entire filter row.
-	const auto row = container->add(
-		object_ptr<Ui::RpWidget>(container),
-		style::margins(0, 0, 0, 0));
+	// ── Whitelist checkbox — label IS the ✓ sign, coloured green ──
+	const auto wlCb = container->add(
+		object_ptr<Ui::Checkbox>(
+			container,
+			QString(u"\u2713  whitelist"_q),
+			(readData().media.extensionFilterMode == ExtMode::Whitelist),
+			st::exportExtCheckboxGreen),
+		st::exportSettingPadding);
 
-	// We lay out manually inside the row:
-	//   [22px] [wlCb 20x20] [4px] [wlSign 14px] [8px] [blCb 20x20] [4px] [blSign 14px] [8px] [input flex]
-	const int padL    = 22;
-	const int cbSize  = 20;  // same as defaultBoxCheckbox
-	const int signW   = 14;
-	const int innerGap = 4;
-	const int betweenGap = 8;
-	const int rowH    = 36;
-	const int inputH  = 24;
+	// ── Blacklist checkbox — label IS the ✕ sign, coloured red ──
+	const auto blCb = container->add(
+		object_ptr<Ui::Checkbox>(
+			container,
+			QString(u"\u2715  blacklist"_q),
+			(readData().media.extensionFilterMode == ExtMode::Blacklist),
+			st::exportExtCheckboxRed),
+		st::exportSettingPadding);
 
-	row->resize(row->width(), rowH);
+	// ── Extension input — shown only when a filter mode is active ──
+	const auto inputWrap = container->add(
+		object_ptr<Ui::SlideWrap<Ui::InputField>>(
+			container,
+			object_ptr<Ui::InputField>(
+				container,
+				st::exportExtInput,
+				rpl::single(QString(u"pdf docx mp4 ..."_q)))),
+		st::exportSubSettingPadding));
+	const auto input = inputWrap->entity();
 
-	// Whitelist checkbox
-	const auto wlCb = Ui::CreateChild<Ui::Checkbox>(
-		row,
-		QString(),
-		(readData().media.extensionFilterMode == ExtMode::Whitelist),
-		st::defaultBoxCheckbox);
-
-	// Blacklist checkbox
-	const auto blCb = Ui::CreateChild<Ui::Checkbox>(
-		row,
-		QString(),
-		(readData().media.extensionFilterMode == ExtMode::Blacklist),
-		st::defaultBoxCheckbox);
-
-	// Whitelist sign label (✓ in green)
-	const auto wlSign = Ui::CreateChild<Ui::FlatLabel>(
-		row,
-		QString(u"\u2713"_q),
-		st::exportExtSignLabel);
-
-	// Blacklist sign label (✕ in red)
-	const auto blSign = Ui::CreateChild<Ui::FlatLabel>(
-		row,
-		QString(u"\u2715"_q),
-		st::exportExtSignLabelRed);
-
-	// Extension input field
-	const auto input = Ui::CreateChild<Ui::InputField>(
-		row,
-		st::exportExtInput,
-		rpl::single(QString(u"pdf docx mp4 ..."_q)));
-
-	// Set initial input text from data
+	// Set initial text
 	input->setText(readData().media.extensionFilter.join(u" "_q));
+	inputWrap->toggle(
+		readData().media.extensionFilterMode != ExtMode::None,
+		anim::type::instant);
 
-	// Layout helper — called on resize and initial show
-	const auto doLayout = [=](int w) {
-		const int y       = (rowH - cbSize) / 2;
-		const int signY   = (rowH - wlSign->height()) / 2;
-		const int inputY  = (rowH - inputH) / 2;
-
-		int x = padL;
-		wlCb->move(x, y);
-		x += cbSize + innerGap;
-		wlSign->move(x, signY);
-		x += signW + betweenGap;
-		blCb->move(x, y);
-		x += cbSize + innerGap;
-		blSign->move(x, signY);
-		x += signW + betweenGap;
-		const int inputW = w - x - padL;
-		if (inputW > 10) {
-			input->setGeometry(x, inputY, inputW, inputH);
-		}
-	};
-
-	row->widthValue()
-		| rpl::start_with_next([=](int w) {
-			doLayout(w);
-		}, row->lifetime());
-
-	// Keep row height fixed
-	row->resize(row->width(), rowH);
-	row->heightValue()
-		| rpl::filter([=](int h) { return h != rowH; })
-		| rpl::start_with_next([=](int) {
-			row->resize(row->width(), rowH);
-		}, row->lifetime());
-
-	// Mutual exclusion: selecting one deselects the other
+	// ── Mutual exclusion + mode update ──
 	wlCb->checkedChanges()
 		| rpl::filter([](bool v) { return v; })
 		| rpl::start_with_next([=] {
@@ -1239,21 +1189,17 @@ void SettingsWidget::addExtensionFilter(
 			changeData([&](Settings &data) {
 				data.media.extensionFilterMode = ExtMode::Whitelist;
 			});
-			input->setDisabled(false);
-			input->setFocus();
-		}, row->lifetime());
+		}, wlCb->lifetime());
 
 	wlCb->checkedChanges()
 		| rpl::filter([](bool v) { return !v; })
 		| rpl::start_with_next([=] {
-			// Only clear mode if blacklist is also off
 			if (!blCb->checked()) {
 				changeData([&](Settings &data) {
 					data.media.extensionFilterMode = ExtMode::None;
 				});
-				input->setDisabled(true);
 			}
-		}, row->lifetime());
+		}, wlCb->lifetime());
 
 	blCb->checkedChanges()
 		| rpl::filter([](bool v) { return v; })
@@ -1262,9 +1208,7 @@ void SettingsWidget::addExtensionFilter(
 			changeData([&](Settings &data) {
 				data.media.extensionFilterMode = ExtMode::Blacklist;
 			});
-			input->setDisabled(false);
-			input->setFocus();
-		}, row->lifetime());
+		}, blCb->lifetime());
 
 	blCb->checkedChanges()
 		| rpl::filter([](bool v) { return !v; })
@@ -1273,11 +1217,20 @@ void SettingsWidget::addExtensionFilter(
 				changeData([&](Settings &data) {
 					data.media.extensionFilterMode = ExtMode::None;
 				});
-				input->setDisabled(true);
 			}
-		}, row->lifetime());
+		}, blCb->lifetime());
 
-	// Parse and save extensions when input changes
+	// ── Show/hide input when mode changes ──
+	value()
+		| rpl::map([](const Settings &data) {
+			return data.media.extensionFilterMode != ExtMode::None;
+		})
+		| rpl::distinct_until_changed()
+		| rpl::start_with_next([=](bool on) {
+			inputWrap->toggle(on, anim::type::normal);
+		}, inputWrap->lifetime());
+
+	// ── Parse and save extensions on input change ──
 	input->changes()
 		| rpl::start_with_next([=] {
 			const auto text = input->getLastText().toLower().trimmed();
@@ -1286,29 +1239,31 @@ void SettingsWidget::addExtensionFilter(
 				Qt::SkipEmptyParts);
 			QStringList exts;
 			for (const auto &p : parts) {
-				// Strip leading dots if user typed them
 				exts.append(p.startsWith('.') ? p.mid(1) : p);
 			}
 			changeData([&](Settings &data) {
 				data.media.extensionFilter = exts;
 			});
-		}, row->lifetime());
+		}, input->lifetime());
 
-	// Enable/disable entire row based on eligible types
+	// ── Enable/disable based on eligible types ──
 	value()
 		| rpl::map(isEligible)
 		| rpl::distinct_until_changed()
 		| rpl::start_with_next([=](bool eligible) {
 			wlCb->setEnabled(eligible);
 			blCb->setEnabled(eligible);
-			const auto mode = readData().media.extensionFilterMode;
-			const auto inputOn = eligible && (mode != ExtMode::None);
-			input->setDisabled(!inputOn);
-			row->setEnabled(eligible);
-			row->update();
-		}, row->lifetime());
+			if (!eligible) {
+				// Clear filter when no eligible type is selected
+				wlCb->setChecked(false);
+				blCb->setChecked(false);
+				changeData([&](Settings &data) {
+					data.media.extensionFilterMode = ExtMode::None;
+				});
+			}
+		}, wlCb->lifetime());
 
-	// Sync checkbox/input state back when data changes externally
+	// ── Sync checkboxes when data changes externally ──
 	value()
 		| rpl::map([](const Settings &data) {
 			return data.media.extensionFilterMode;
@@ -1317,13 +1272,8 @@ void SettingsWidget::addExtensionFilter(
 		| rpl::start_with_next([=](ExtMode mode) {
 			wlCb->setChecked(mode == ExtMode::Whitelist);
 			blCb->setChecked(mode == ExtMode::Blacklist);
-			const auto eligible = isEligible(readData());
-			input->setDisabled(!eligible || mode == ExtMode::None);
-		}, row->lifetime());
+		}, wlCb->lifetime());
 
-	// Initial state
-	const auto initMode = readData().media.extensionFilterMode;
-	input->setDisabled(!isEligible(readData()) || initMode == ExtMode::None);
 }
 
 void SettingsWidget::addSizeSlider(

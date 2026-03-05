@@ -104,19 +104,14 @@ exportCalendarSizes: CalendarSizes(defaultCalendarSizes) {
 }
 
 // Extension filter row styles
-exportExtSignLabel: FlatLabel(defaultFlatLabel) {
+// Checkbox styles with coloured label text for the ✓ / ✕ signs
+exportExtCheckboxGreen: Checkbox(defaultBoxCheckbox) {
 	textFg: boxTextFgGood;
-	style: TextStyle(defaultTextStyle) {
-		font: font(13px bold);
-	}
-	maxHeight: 20px;
+	textFgActive: boxTextFgGood;
 }
-exportExtSignLabelRed: FlatLabel(defaultFlatLabel) {
+exportExtCheckboxRed: Checkbox(defaultBoxCheckbox) {
 	textFg: boxTextFgError;
-	style: TextStyle(defaultTextStyle) {
-		font: font(13px bold);
-	}
-	maxHeight: 20px;
+	textFgActive: boxTextFgError;
 }
 exportExtInput: InputField(defaultInputField) {
 	textMargins: margins(7px, 3px, 7px, 3px);
