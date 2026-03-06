@@ -19,8 +19,6 @@ class Checkbox;
 class ScrollArea;
 class BoxContent;
 class FlatLabel;
-template <typename Widget>
-class SlideWrap;
 } // namespace Ui
 
 namespace Main {
