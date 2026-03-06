@@ -1093,12 +1093,18 @@ void SettingsWidget::addMediaOptions(
 	addExtensionFilter(container);
 	addSizeSlider(container);
 
-	_scanResultsLabel = container->add(
-		object_ptr<Ui::FlatLabel>(
+	{
+		auto wrap = object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
 			container,
-			QString(),
-			st::exportAboutOptionLabel),
-		st::exportAboutOptionPadding);
+			object_ptr<Ui::FlatLabel>(
+				container,
+				QString(),
+				st::exportAboutOptionLabel),
+			st::exportAboutOptionPadding);
+		_scanResultsLabel = wrap.data();
+		container->add(std::move(wrap));
+	}
+	_scanResultsLabel->hide(anim::type::instant);
 }
 
 void SettingsWidget::addMediaOption(
