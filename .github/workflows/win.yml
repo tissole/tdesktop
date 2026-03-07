@@ -110,6 +110,10 @@ jobs:
           echo "SDK=$SDK" >> $GITHUB_ENV
           
           sed -i '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/${_Zi}//' "$PROGRAMFILES"/CMake/share/cmake*/Modules/Platform/Windows-MSVC.cmake
+
+          # This will find the hidden /Zi flags across all of Telegram's submodules and replace them with /Z7
+          find $TBUILD/$REPO_NAME -type f -name "CMakeLists.txt" -exec sed -i 's|/Zi|/Z7|g' {} +
+          find $TBUILD/$REPO_NAME -type f -name "*.cmake" -exec sed -i 's|/Zi|/Z7|g' {} +
           
           echo "$(sha256sum $TBUILD/$REPO_NAME/$PREPARE_PATH | awk '{ print $1 }')" >> CACHE_KEY.txt
           echo "$SDK" >> CACHE_KEY.txt
