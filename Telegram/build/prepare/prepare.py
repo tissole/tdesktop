@@ -454,7 +454,7 @@ if customRunCommand:
     finish(0)
 
 stage('patches', """
-    git clone https://github.com/tissole/patches.git
+    git clone https://github.com/terego/patches.git
     cd patches
     #git checkout 1ffcb17817a2cab167061d530703842395291e69
 """)
