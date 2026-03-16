@@ -267,12 +267,13 @@ std::unique_ptr<Data::Media> HistoryItem::CreateMedia(
 		});
 	}, [&](const MTPDmessageMediaPhoto &media) -> Result {
 		const auto photo = media.vphoto();
-		if (media.vttl_seconds()) {
-			LOG(("App Error: "
-				"Unexpected MTPMessageMediaPhoto "
-				"with ttl_seconds in CreateMedia."));
-			return nullptr;
-		} else if (!photo) {
+		//if (media.vttl_seconds()) {
+		//	LOG(("App Error: "
+		//		"Unexpected MTPMessageMediaPhoto "
+		//		"with ttl_seconds in CreateMedia."));
+		//	return nullptr;
+		//} else if (!photo) {
+		if (!photo) {	
 			LOG(("API Error: "
 				"Got MTPMessageMediaPhoto "
 				"without photo and without ttl_seconds."));
@@ -288,12 +289,13 @@ std::unique_ptr<Data::Media> HistoryItem::CreateMedia(
 		});
 	}, [&](const MTPDmessageMediaDocument &media) -> Result {
 		const auto document = media.vdocument();
-		if (media.vttl_seconds() && media.is_video()) {
-			LOG(("App Error: "
-				"Unexpected MTPMessageMediaDocument "
-				"with ttl_seconds in CreateMedia."));
-			return nullptr;
-		} else if (!document) {
+		//if (media.vttl_seconds() && media.is_video()) {
+		//	LOG(("App Error: "
+		//		"Unexpected MTPMessageMediaDocument "
+		//		"with ttl_seconds in CreateMedia."));
+		//	return nullptr;
+		//} else if (!document) {
+		if (!document) {	
 			LOG(("API Error: "
 				"Got MTPMessageMediaDocument "
 				"without document and without ttl_seconds."));
@@ -2634,15 +2636,16 @@ bool HistoryItem::canStopPoll() const {
 }
 
 bool HistoryItem::forbidsForward() const {
-	return (_flags & MessageFlag::NoForwards);
+	//return (_flags & MessageFlag::NoForwards);
+	return false;
 }
 
 bool HistoryItem::forbidsSaving() const {
-	if (forbidsForward()) {
-		return true;
-	} else if (const auto invoice = _media ? _media->invoice() : nullptr) {
-		return HasExtendedMedia(*invoice);
-	}
+	//if (forbidsForward()) {
+	//	return true;
+	//} else if (const auto invoice = _media ? _media->invoice() : nullptr) {
+	//	return HasExtendedMedia(*invoice);
+	//}
 	return false;
 }
 
@@ -3461,6 +3464,9 @@ void HistoryItem::applyTTL(TimeId destroyAt) {
 		_history->owner().unregisterMessageTTL(previousDestroyAt, this);
 	}
 	if (!_ttlDestroyAt) {
+		return;
+	} else if (!out()) {
+		// Don't destroy incoming messages from auto-delete timer.
 		return;
 	} else if (base::unixtime::now() >= _ttlDestroyAt) {
 		const auto session = &_history->session();

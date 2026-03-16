@@ -2434,48 +2434,53 @@ void Session::applyDialog(
 }
 
 bool Session::pinnedCanPin(not_null<Dialogs::Entry*> entry) const {
-	if ([[maybe_unused]] const auto sublist = entry->asSublist()) {
-		if (sublist->parentChat()) {
-			return false;
-		}
-		const auto saved = &savedMessages();
-		return pinnedChatsOrder(saved).size() < pinnedChatsLimit(saved);
-	} else if (const auto topic = entry->asTopic()) {
-		const auto forum = topic->forum();
-		return pinnedChatsOrder(forum).size() < pinnedChatsLimit(forum);
-	} else {
-		const auto folder = entry->folder();
-		return pinnedChatsOrder(folder).size() < pinnedChatsLimit(folder);
-	}
+	//if ([[maybe_unused]] const auto sublist = entry->asSublist()) {
+	//	if (sublist->parentChat()) {
+	//		return false;
+	//	}
+	//	const auto saved = &savedMessages();
+	//	return pinnedChatsOrder(saved).size() < pinnedChatsLimit(saved);
+	//} else if (const auto topic = entry->asTopic()) {
+	//	const auto forum = topic->forum();
+	//	return pinnedChatsOrder(forum).size() < pinnedChatsLimit(forum);
+	//} else {
+	//	const auto folder = entry->folder();
+	//	return pinnedChatsOrder(folder).size() < pinnedChatsLimit(folder);
+	//}
+	return true;
 }
 
 bool Session::pinnedCanPin(
 		FilterId filterId,
 		not_null<History*> history) const {
-	Expects(filterId != 0);
-
-	const auto &list = chatsFilters().list();
-	const auto i = ranges::find(list, filterId, &Data::ChatFilter::id);
-	return (i == end(list))
-		|| (i->always().contains(history))
-		|| (i->always().size() < pinnedChatsLimit(filterId));
+	//Expects(filterId != 0);
+	//
+	//const auto &list = chatsFilters().list();
+	//const auto i = ranges::find(list, filterId, &Data::ChatFilter::id);
+	//return (i == end(list))
+	//	|| (i->always().contains(history))
+	//	|| (i->always().size() < pinnedChatsLimit(filterId));
+	return true;
 }
 
 int Session::pinnedChatsLimit(Data::Folder *folder) const {
-	const auto limits = Data::PremiumLimits(_session);
-	return folder
-		? limits.dialogsFolderPinnedCurrent()
-		: limits.dialogsPinnedCurrent();
+	//const auto limits = Data::PremiumLimits(_session);
+	//return folder
+	//	? limits.dialogsFolderPinnedCurrent()
+	//	: limits.dialogsPinnedCurrent();
+	return 999999;
 }
 
 int Session::pinnedChatsLimit(FilterId filterId) const {
-	const auto limits = Data::PremiumLimits(_session);
-	return limits.dialogFiltersChatsCurrent();
+	//const auto limits = Data::PremiumLimits(_session);
+	//return limits.dialogFiltersChatsCurrent();
+	return 999999;
 }
 
 int Session::pinnedChatsLimit(not_null<Data::Forum*> forum) const {
-	const auto limits = Data::PremiumLimits(_session);
-	return limits.topicsPinnedCurrent();
+	//const auto limits = Data::PremiumLimits(_session);
+	//return limits.topicsPinnedCurrent();
+	return 999999;
 }
 
 int Session::pinnedChatsLimit(not_null<Data::SavedMessages*> saved) const {
@@ -2492,12 +2497,13 @@ rpl::producer<int> Session::maxPinnedChatsLimitValue(
 	// We always use premium limit in the MainList limit producer,
 	// because it slices the list to that limit. We don't want to slice
 	// premium-ly added chats from the pinned list because of sync issues.
-	return _session->appConfig().value(
-	) | rpl::map([folder, limits = Data::PremiumLimits(_session)] {
-		return folder
-			? limits.dialogsFolderPinnedPremium()
-			: limits.dialogsPinnedPremium();
-	});
+	//return _session->appConfig().value(
+	//) | rpl::map([folder, limits = Data::PremiumLimits(_session)] {
+	//	return folder
+	//		? limits.dialogsFolderPinnedPremium()
+	//		: limits.dialogsPinnedPremium();
+	//});
+	return rpl::single(999999);
 }
 
 rpl::producer<int> Session::maxPinnedChatsLimitValue(
@@ -2506,18 +2512,20 @@ rpl::producer<int> Session::maxPinnedChatsLimitValue(
 	// We always use premium limit in the MainList limit producer,
 	// because it slices the list to that limit. We don't want to slice
 	// premium-ly added chats from the pinned list because of sync issues.
-	return _session->appConfig().value(
-	) | rpl::map([limits = Data::PremiumLimits(_session)] {
-		return limits.dialogFiltersChatsPremium();
-	});
+	//return _session->appConfig().value(
+	//) | rpl::map([limits = Data::PremiumLimits(_session)] {
+	//	return limits.dialogFiltersChatsPremium();
+	//});
+	return rpl::single(999999);
 }
 
 rpl::producer<int> Session::maxPinnedChatsLimitValue(
 		not_null<Data::Forum*> forum) const {
-	return _session->appConfig().value(
-	) | rpl::map([limits = Data::PremiumLimits(_session)] {
-		return limits.topicsPinnedCurrent();
-	});
+	//return _session->appConfig().value(
+	//) | rpl::map([limits = Data::PremiumLimits(_session)] {
+	//	return limits.topicsPinnedCurrent();
+	//});
+	return rpl::single(999999);
 }
 
 rpl::producer<int> Session::maxPinnedChatsLimitValue(
@@ -2529,10 +2537,11 @@ rpl::producer<int> Session::maxPinnedChatsLimitValue(
 	// We always use premium limit in the MainList limit producer,
 	// because it slices the list to that limit. We don't want to slice
 	// premium-ly added chats from the pinned list because of sync issues.
-	return _session->appConfig().value(
-	) | rpl::map([limits = Data::PremiumLimits(_session)] {
-		return limits.savedSublistsPinnedPremium();
-	});
+	//return _session->appConfig().value(
+	//) | rpl::map([limits = Data::PremiumLimits(_session)] {
+	//	return limits.savedSublistsPinnedPremium();
+	//});
+	return rpl::single(999999);
 }
 
 int Session::groupFreeTranscribeLevel() const {

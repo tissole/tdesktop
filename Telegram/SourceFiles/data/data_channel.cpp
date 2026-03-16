@@ -724,7 +724,8 @@ bool ChannelData::canAddAdmins() const {
 }
 
 bool ChannelData::allowsForwarding() const {
-	return !(flags() & Flag::NoForwards);
+	//return !(flags() & Flag::NoForwards);
+	return true;
 }
 
 bool ChannelData::canViewMembers() const {
@@ -1064,7 +1065,8 @@ void ChannelData::clearInvitePeek() {
 }
 
 TimeId ChannelData::invitePeekExpires() const {
-	return _invitePeek ? _invitePeek->expires : 0;
+	//return _invitePeek ? _invitePeek->expires : 0;
+	return 0;
 }
 
 QString ChannelData::invitePeekHash() const {

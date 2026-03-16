@@ -1387,15 +1387,17 @@ void TopBarWidget::updateMembersShowArea() {
 }
 
 bool TopBarWidget::showSelectedState() const {
-	return (_selectedCount > 0)
-		&& (_canDelete || _canForward || _canSendNow);
+	//return (_selectedCount > 0)
+	//	&& (_canDelete || _canForward || _canSendNow);
+	return _selectedCount > 0;
 }
 
 void TopBarWidget::showSelected(SelectedState state) {
 	auto canDelete = (state.count > 0 && state.count == state.canDeleteCount);
 	auto canForward = (state.count > 0 && state.count == state.canForwardCount);
 	auto canSendNow = (state.count > 0 && state.count == state.canSendNowCount);
-	auto count = (!canDelete && !canForward && !canSendNow) ? 0 : state.count;
+	//auto count = (!canDelete && !canForward && !canSendNow) ? 0 : state.count;
+	auto count = state.count;
 	if (_selectedCount == count
 		&& _canDelete == canDelete
 		&& _canForward == canForward
