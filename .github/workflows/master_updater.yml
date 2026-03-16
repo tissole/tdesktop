@@ -1,5 +1,8 @@
 name: Master branch updater.
-
+permissions:
+  contents: read
+  pull-requests: write
+  
 on:
   release:
     types: released
