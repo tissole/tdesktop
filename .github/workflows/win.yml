@@ -228,7 +228,9 @@ jobs:
 
       - name: Free up some disk space.
         shell: bash
-        run: find $LibrariesPath '(' '(' ! '(' -name '*.lib' -o -name '*.a' -o -name '*.exe' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -path '*/Qt-*' ')' -type f ')' -o -empty ')' -delete
+        run: |
+          LIBS_PATH=$(echo "$LibrariesPath" | sed 's|\\|/|g')
+          find "$LIBS_PATH" '(' '(' ! '(' -name '*.lib' -o -name '*.a' -o -name '*.exe' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -path '*/Qt-*' ')' -type f ')' -o -empty ')' -delete
                 
       - name: Telegram Desktop build.
         if: env.ONLY_CACHE == 'false'
