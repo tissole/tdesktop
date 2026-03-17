@@ -1,7 +1,4 @@
-name: Windows
-permissions:
-  contents: read
-  pull-requests: write
+name: Windows.
 
 on:
   workflow_dispatch:
@@ -52,7 +49,6 @@ jobs:
     strategy:
       matrix:
         arch: [x64]
-        qt: [qt6]
         generator: ["Ninja"]
 
     env:
@@ -63,7 +59,6 @@ jobs:
       GOOGLE_TRANSLATE_ANDROID_CERT: ${{ secrets.GOOGLE_TRANSLATE_ANDROID_CERT }}
       TG_API_ID: ${{ secrets.TG_API_ID }}
       TG_API_HASH: ${{ secrets.TG_API_HASH }}
-      QT: "6.11.0"
 
     defaults:
       run:
@@ -93,12 +88,10 @@ jobs:
           mkdir %userprofile%\TBuild\Libraries
           mklink /d %GITHUB_WORKSPACE%\TBuild %userprofile%\TBuild
           echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
-          echo LibrariesPath=%GITHUB_WORKSPACE%\TBuild\Libraries${{ matrix.arch == 'x64' && '\win64'}}>>%GITHUB_ENV%
 
       - name: Get repository name.
         shell: bash
-        #run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
-        run: echo "REPO_NAME=tdesktop" >> $GITHUB_ENV
+        run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
 
       - name: Clone.
         uses: actions/checkout@v6
@@ -115,10 +108,6 @@ jobs:
           echo "SDK=$SDK" >> $GITHUB_ENV
           
           sed -i '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/${_Zi}//' "$PROGRAMFILES"/CMake/share/cmake*/Modules/Platform/Windows-MSVC.cmake
-
-          ## This will find the hidden /Zi flags across all of Telegram's submodules and replace them with /Z7
-          #find $TBUILD/$REPO_NAME -type f -name "CMakeLists.txt" -exec sed -i 's|/Zi|/Z7|g' {} +
-          #find $TBUILD/$REPO_NAME -type f -name "*.cmake" -exec sed -i 's|/Zi|/Z7|g' {} +
           
           echo "$(sha256sum $TBUILD/$REPO_NAME/$PREPARE_PATH | awk '{ print $1 }')" >> CACHE_KEY.txt
           echo "$SDK" >> CACHE_KEY.txt
@@ -144,39 +133,24 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ env.TBUILD }}\ThirdParty
-          key: ${{ runner.OS }}-${{ runner.arch }}-third-party-${{ env.CACHE_KEY }}
-          restore-keys: ${{ runner.OS }}-${{ runner.arch }}-third-party-
+          key: ${{ runner.OS }}-${{ matrix.arch }}-third-party-${{ env.CACHE_KEY }}
+          restore-keys: ${{ runner.OS }}-${{ matrix.arch }}-third-party-
 
       - name: Libraries cache.
         id: cache-libs
         uses: actions/cache@v5
         with:
-          path: |
-            ${{ env.LibrariesPath }}\*
-            !${{ env.LibrariesPath }}\cache_keys
-            !${{ env.LibrariesPath }}\[qQ]t[_-]*
-            ${{ env.LibrariesPath }}\cache_keys\*
-            !${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          path: ${{ env.TBUILD }}\Libraries
           key: ${{ runner.OS }}-${{ matrix.arch }}-libs-${{ env.CACHE_KEY }}
           restore-keys: ${{ runner.OS }}-${{ matrix.arch }}-libs-
-          
-      - name: Qt cache.
-        id: cache-qt
-        uses: actions/cache@v5
-        with:
-          path: |
-            ${{ env.LibrariesPath }}\[qQ]t[_-]*
-            ${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
-          key: ${{ runner.OS }}-${{ matrix.arch }}-${{ matrix.qt || 'qt' }}-${{ env.CACHE_KEY }}
-          restore-keys: ${{ runner.OS }}-${{ matrix.arch }}-${{ matrix.qt || 'qt' }}-
-          
+
       - name: Libraries.
         env:
           GYP_MSVS_OVERRIDE_PATH: 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\'
           GYP_MSVS_VERSION: 2022
         run: |
           cd %TBUILD%
-          %REPO_NAME%\Telegram\build\prepare\win.bat silent ${{ matrix.qt }}
+          %REPO_NAME%\Telegram\build\prepare\win.bat silent
 
       - name: Read configuration matrix.
         shell: bash
@@ -186,15 +160,11 @@ jobs:
           ARCH=""
           if [ -n "${{ matrix.arch }}" ]; then
             case "${{ matrix.arch }}" in
-              x64_x86) ARCH="x86";;
+              Win32) ARCH="x86";;
               *) ARCH="${{ matrix.arch }}";;
             esac
             echo "Architecture from matrix: $ARCH"
             ARTIFACT_NAME="${ARTIFACT_NAME}_${{ matrix.arch }}"
-          fi
-
-          if [ -n "${{ matrix.qt }}" ]; then
-            ARTIFACT_NAME="${ARTIFACT_NAME} ${{ matrix.qt }}"
           fi
       
           GENERATOR=""
@@ -227,9 +197,11 @@ jobs:
             API="-D TDESKTOP_API_ID=611335 -D TDESKTOP_API_HASH=d524b414d21f4d37f08684c1df41ac9c"
           fi
           echo "TDESKTOP_BUILD_API=$API" >> $GITHUB_ENV
-          
 
-        
+      - name: Free up some disk space.
+        shell: bash
+        run: find $LibrariesPath '(' '(' ! '(' -name '*.lib' -o -name '*.a' -o -name '*.exe' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' ')' -type f ')' -o -empty ')' -delete
+                
       - name: Telegram Desktop build.
         if: env.ONLY_CACHE == 'false'
         run: |
@@ -241,9 +213,7 @@ jobs:
           %TDESKTOP_BUILD_API% ^
           -D CMAKE_CONFIGURATION_TYPES=Release ^
           -D CMAKE_COMPILE_WARNING_AS_ERROR=OFF ^
-          -DCMAKE_C_COMPILER=clang-cl ^
-          -DCMAKE_CXX_COMPILER=clang-cl ^
-          -DCMAKE_LINKER_TYPE=LLD ^
+          -D CMAKE_LINKER_TYPE=LLD ^
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF ^
           -D DESKTOP_APP_NO_PDB=OFF ^
@@ -262,7 +232,7 @@ jobs:
           if exist %OUT%\Telegram.exe move %OUT%\Telegram.exe artifact\Release\
           if exist %OUT%\Updater.exe move %OUT%\Updater.exe artifact\Release\
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v6
         name: Upload Release Build
         if: env.UPLOAD_ARTIFACT == 'true'
         with:
@@ -278,7 +248,7 @@ jobs:
           if exist %OUT%\\Telegram.pdb copy %OUT%\\Telegram.pdb symbols\\
           if exist %OUT%\\Updater.pdb copy %OUT%\\Updater.pdb symbols\\
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v6
         name: Upload Symbols
         if: env.UPLOAD_ARTIFACT == 'true'
         with:
