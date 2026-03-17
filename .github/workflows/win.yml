@@ -63,6 +63,7 @@ jobs:
       GOOGLE_TRANSLATE_ANDROID_CERT: ${{ secrets.GOOGLE_TRANSLATE_ANDROID_CERT }}
       TG_API_ID: ${{ secrets.TG_API_ID }}
       TG_API_HASH: ${{ secrets.TG_API_HASH }}
+      QT: "6.11.0"
 
     defaults:
       run:
