@@ -3398,65 +3398,6 @@ void ApiWrap::forwardMessages(
 
 	auto &histories = _session->data().histories();
 
-	for (auto i = begin(draft.items); i != end(draft.items);) {
-		const auto item = *i;
-		if ([&] {
-			const auto sourcePeer = item->history()->peer;
-			if (const auto channel = sourcePeer->asChannel()) {
-				if (channel->flags() & ChannelData::Flag::NoForwards) return true;
-			} else if (const auto chat = sourcePeer->asChat()) {
-				if (chat->flags() & ChatData::Flag::NoForwards) return true;
-			} 
-			return false;
-		}()) {
-			const auto media = item->media();
-			const auto caption = TextWithTags{ item->originalText().text };
-			const auto to = FileLoadTaskOptions(action);
-			if (media && media->document()) {
-				const auto document = media->document();
-				const auto path = document->filepath(true);
-				if (!path.isEmpty()) {
-					_fileLoader->addTask(
-						std::make_unique<FileLoadTask>(FileLoadTask::Args{
-							.session = &session(),
-							.filepath = path,
-							.content = QByteArray(),
-							.information = nullptr,
-							.videoCover = nullptr,
-							.type = SendMediaType::File,
-							.to = to,
-							.caption = caption,
-							.spoiler = false,
-							.album = nullptr,
-							.forceFile = false,
-							.idOverride = 0,
-						}));
-				} else {
-					auto msg = MessageToSend(action);
-					msg.textWithTags = caption;
-					SendExistingDocument(std::move(msg), document);
-				}
-			} else if (media && media->photo()) {
-				auto msg = MessageToSend(action);
-				msg.textWithTags = caption;
-				SendExistingPhoto(std::move(msg), media->photo());
-			} else {
-				auto msg = MessageToSend(action);
-				msg.textWithTags = caption;
-				sendMessage(std::move(msg));
-			}
-			i = draft.items.erase(i);
-		} else {
-			++i;
-		}
-	}
-	if (draft.items.empty()) {
-		if (successCallback) {
-			successCallback();
-		}
-		return;
-	}
-
 	struct SharedCallback {
 		int requestsLeft = 0;
 		FnMut<void()> callback;
