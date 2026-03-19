@@ -3717,7 +3717,7 @@ void ApiWrap::forwardMessages(
 					.topicRootId = topMsgId,
 					.monoforumPeerId = monoforumPeerId,
 				},
-				.date = NewMessageDate(history, action.options),
+				.date = NewMessageDate(action.options),
 				.shortcutId = action.options.shortcutId,
 				.starsPaid = action.options.starsApproved,
 				.postAuthor = NewMessagePostAuthor(action),
@@ -3811,7 +3811,7 @@ void ApiWrap::sendSharedContact(
 		.flags = flags,
 		.from = NewMessageFromId(action),
 		.replyTo = action.replyTo,
-		.date = NewMessageDate(history, action.options),
+		.date = NewMessageDate(action.options),
 		.shortcutId = action.options.shortcutId,
 		.starsPaid = action.options.starsApproved,
 		.postAuthor = NewMessagePostAuthor(action),
@@ -3979,16 +3979,17 @@ void ApiWrap::sendFiles(
 					.idOverride = 0,
 				})
 				: nullptr),
-			uploadWithType,
-			to,
-			(GetEnhancedBool("caption_from_file_name"))
+			.type = uploadWithType,
+			.to = to,
+			.caption = (GetEnhancedBool("caption_from_file_name"))
 				? file.fileNameCaption
 				: caption,
-			file.spoiler,
-			album,
-            forceFile,
-            idOverride = 0,
-            displayName));
+			.spoiler = file.spoiler,
+			.album = album,
+			.forceFile = forceFile,
+			.idOverride = 0,
+			.displayName = file.displayName,
+		}));
 			
 		if (!GetEnhancedBool("caption_from_file_name")) {
 			caption = TextWithTags();
@@ -4451,7 +4452,7 @@ void ApiWrap::sendInlineResult(
 		.flags = flags,
 		.from = NewMessageFromId(action),
 		.replyTo = action.replyTo,
-		.date = NewMessageDate(history, action.options),
+		.date = NewMessageDate(action.options),
 		.shortcutId = action.options.shortcutId,
 		.starsPaid = starsPaid,
 		.viaBotId = ((bot && !action.options.hideViaBot)
