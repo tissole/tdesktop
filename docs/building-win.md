@@ -9,7 +9,7 @@
 
 ## Prepare folder
 
-The build is done in **Visual Studio 2022** with **10.0.26100.0** SDK version.
+The build is done in **Visual Studio 2026** with **10.0.26100.0** SDK version.
 
 Choose an empty folder for the future build, for example **D:\\TBuild**. It will be named ***BuildPath*** in the rest of this document. Create two folders there, ***BuildPath*\\ThirdParty** and ***BuildPath*\\Libraries**.
 
@@ -58,7 +58,7 @@ For `win64` (64-bit):
 
     configure.bat x64 -D TDESKTOP_API_ID=YOUR_API_ID -D TDESKTOP_API_HASH=YOUR_API_HASH
 
-* Open ***BuildPath*\\tdesktop\\out\\Telegram.sln** in Visual Studio 2026
+* Open ***BuildPath*\\tdesktop\\out\\Telegram.slnx** in Visual Studio 2026
 * Select Telegram project and press Build > Build Telegram (Debug and Release configurations)
 * The result Telegram.exe will be located in **D:\TBuild\tdesktop\out\Debug** (and **Release**)
 
