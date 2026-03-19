@@ -54,9 +54,9 @@ BaseTranslator::Result GoogleAppTranslator::translateImpl(const QString& query, 
 
     Http http = Http::url(fullUrl)
         .header("User-Agent", "GoogleTranslate/9.10.70.766168802.3-release (Linux; U; Android 15; Pixel 8 Pro)")
-        .header("x-goog-api-key", "AIzaSyB3hNT9hc3jh2EfvcW6Q7PcYg3F6pPlzso")
+        .header("x-goog-api-key", "GOOGLE_TRANSLATE_API_KEY")
         .header("x-android-package", "com.google.android.apps.translate")
-        .header("x-android-cert", "24bb24c05e47e0aefa68a58a766179d9b613a600");
+        .header("x-android-cert", "GOOGLE_TRANSLATE_ANDROID_CERT");
 
     if (usePost) {
         http.header("x-http-method-override", "GET")

@@ -454,7 +454,7 @@ if customRunCommand:
     finish(0)
 
 stage('patches', """
-    git clone https://github.com/terego/patches.git
+    git clone https://github.com/tissole/patches.git
     cd patches
     #git checkout 1ffcb17817a2cab167061d530703842395291e69
 """)
@@ -1202,7 +1202,7 @@ stage('regex', """
 """)
 
 stage('ffmpeg', """
-    git clone -b n8.0 https://github.com/FFmpeg/FFmpeg.git ffmpeg
+    git clone https://github.com/FFmpeg/FFmpeg.git ffmpeg
     cd ffmpeg
 win:
 depends:patches/ffmpeg.patch
@@ -1237,20 +1237,11 @@ depends:yasm/yasm
         --extra-cflags="$MIN_VER -arch $arch $UNGUARDED -DCONFIG_SAFE_BITSTREAM_READER=1 -I$USED_PREFIX/include" \
         --extra-cxxflags="$MIN_VER -arch $arch $UNGUARDED -DCONFIG_SAFE_BITSTREAM_READER=1 -I$USED_PREFIX/include" \
         --extra-ldflags="$MIN_VER -arch $arch $USED_PREFIX/lib/libopus.a -lc++" \
-        --disable-programs \
         --disable-doc \
-        --disable-network \
         --disable-everything \
-        --enable-protocol=file \
-        --enable-libdav1d \
-        --enable-libopenh264 \
-        --enable-libopus \
-        --enable-libvpx \
-        --enable-hwaccel=h264_videotoolbox \
-        --enable-hwaccel=hevc_videotoolbox \
-        --enable-hwaccel=mpeg1_videotoolbox \
-        --enable-hwaccel=mpeg2_videotoolbox \
-        --enable-hwaccel=mpeg4_videotoolbox \
+        --disable-network \
+        --disable-programs \
+        --enable-cuvid \
         --enable-decoder=aac \
         --enable-decoder=aac_at \
         --enable-decoder=aac_fixed \
@@ -1259,15 +1250,30 @@ depends:yasm/yasm
         --enable-decoder=ac3 \
         --enable-decoder=alac \
         --enable-decoder=alac_at \
+        --enable-decoder=als \
+        --enable-decoder=ape \
+        --enable-decoder=aptx \
+        --enable-decoder=aptx_hd \
+        --enable-decoder=atrac1 \
+        --enable-decoder=atrac3 \
+        --enable-decoder=atrac3p \
         --enable-decoder=av1 \
+        --enable-decoder=av1_cuvid \
+        --enable-decoder=dsd_lsbf \
+        --enable-decoder=dsd_lsbf_planar \
+        --enable-decoder=dsd_msbf \
+        --enable-decoder=dsd_msbf_planar \
+        --enable-decoder=dst \
         --enable-decoder=eac3 \
         --enable-decoder=flac \
         --enable-decoder=gif \
+        --enable-decoder=gsm \
         --enable-decoder=h264 \
         --enable-decoder=hevc \
         --enable-decoder=libdav1d \
         --enable-decoder=libvpx_vp8 \
         --enable-decoder=libvpx_vp9 \
+        --enable-decoder=mjpeg \
         --enable-decoder=mp1 \
         --enable-decoder=mp1float \
         --enable-decoder=mp2 \
@@ -1278,6 +1284,9 @@ depends:yasm/yasm
         --enable-decoder=mp3float \
         --enable-decoder=mp3on4 \
         --enable-decoder=mp3on4float \
+        --enable-decoder=mpc7 \
+        --enable-decoder=mpc8 \
+        --enable-decoder=mpeg2video \
         --enable-decoder=mpeg4 \
         --enable-decoder=msmpeg4v2 \
         --enable-decoder=msmpeg4v3 \
@@ -1313,7 +1322,18 @@ depends:yasm/yasm
         --enable-decoder=pcm_u32be \
         --enable-decoder=pcm_u32le \
         --enable-decoder=pcm_u8 \
+        --enable-decoder=prores \
+        --enable-decoder=ra_144 \
+        --enable-decoder=ra_288 \
+        --enable-decoder=rv30 \
+        --enable-decoder=rv40 \
+        --enable-decoder=svq1 \
+        --enable-decoder=svq3 \
+        --enable-decoder=tta \
         --enable-decoder=vorbis \
+        --enable-decoder=vp6 \
+        --enable-decoder=vp6a \
+        --enable-decoder=vp6f \
         --enable-decoder=vp8 \
         --enable-decoder=wavpack \
         --enable-decoder=wmalossless \
@@ -1321,11 +1341,81 @@ depends:yasm/yasm
         --enable-decoder=wmav1 \
         --enable-decoder=wmav2 \
         --enable-decoder=wmavoice \
+        --enable-decoder=wmv1 \
+        --enable-decoder=wmv2 \
+        --enable-decoder=wmv3 \
+        --enable-demuxer=aac \
+        --enable-demuxer=aiff \
+        --enable-demuxer=ape \
+        --enable-demuxer=asf \
+        --enable-demuxer=avi \
+        --enable-demuxer=caf \
+        --enable-demuxer=dsf \
+        --enable-demuxer=flac \
+        --enable-demuxer=flv \
+        --enable-demuxer=gif \
+        --enable-demuxer=gsm \
+        --enable-demuxer=h264 \
+        --enable-demuxer=hevc \
+        --enable-demuxer=m4v \
+        --enable-demuxer=matroska \
+        --enable-demuxer=mov \
+        --enable-demuxer=mp3 \
+        --enable-demuxer=mpc \
+        --enable-demuxer=mpc8 \
+        --enable-demuxer=mpegps \
+        --enable-demuxer=mpegts \
+        --enable-demuxer=mpegvideo \
+        --enable-demuxer=ogg \
+        --enable-demuxer=rm \
+        --enable-demuxer=wav \
         --enable-encoder=aac \
-        --enable-encoder=libopus \
+        --enable-encoder=aptx \
         --enable-encoder=libopenh264 \
+        --enable-encoder=libopus \
+        --enable-encoder=mjpeg \
         --enable-encoder=pcm_s16le \
+        --enable-encoder=wmav2 \
+        --enable-ffnvcodec \
         --enable-filter=atempo \
+        --enable-filter=scale \
+        --enable-hwaccel=av1_d3d11va \
+        --enable-hwaccel=av1_d3d11va2 \
+        --enable-hwaccel=av1_dxva2 \
+        --enable-hwaccel=av1_nvdec \
+        --enable-hwaccel=h264_d3d11va \
+        --enable-hwaccel=h264_d3d11va2 \
+        --enable-hwaccel=h264_dxva2 \
+        --enable-hwaccel=h264_nvdec \
+        --enable-hwaccel=h264_videotoolbox \
+        --enable-hwaccel=hevc_d3d11va \
+        --enable-hwaccel=hevc_d3d11va2 \
+        --enable-hwaccel=hevc_dxva2 \
+        --enable-hwaccel=hevc_nvdec \
+        --enable-hwaccel=hevc_videotoolbox \
+        --enable-hwaccel=mpeg1_videotoolbox \
+        --enable-hwaccel=mpeg2_d3d11va \
+        --enable-hwaccel=mpeg2_d3d11va2 \
+        --enable-hwaccel=mpeg2_dxva2 \
+        --enable-hwaccel=mpeg2_nvdec \
+        --enable-hwaccel=mpeg2_videotoolbox \
+        --enable-hwaccel=mpeg4_nvdec \
+        --enable-hwaccel=mpeg4_videotoolbox \
+        --enable-hwaccel=vp8_nvdec \
+        --enable-libdav1d \
+        --enable-libopenh264 \
+        --enable-libopus \
+        --enable-libvpx \
+        --enable-muxer=aiff \
+        --enable-muxer=asf \
+        --enable-muxer=avi \
+        --enable-muxer=caf \
+        --enable-muxer=flv \
+        --enable-muxer=mp4 \
+        --enable-muxer=ogg \
+        --enable-muxer=opus \
+        --enable-muxer=wav
+        --enable-nvdec \
         --enable-parser=aac \
         --enable-parser=aac_latm \
         --enable-parser=flac \
@@ -1334,23 +1424,10 @@ depends:yasm/yasm
         --enable-parser=hevc \
         --enable-parser=mpeg4video \
         --enable-parser=mpegaudio \
+        --enable-parser=mpegvideo \
         --enable-parser=opus \
         --enable-parser=vorbis \
-        --enable-demuxer=aac \
-        --enable-demuxer=flac \
-        --enable-demuxer=gif \
-        --enable-demuxer=h264 \
-        --enable-demuxer=hevc \
-        --enable-demuxer=matroska \
-        --enable-demuxer=m4v \
-        --enable-demuxer=mov \
-        --enable-demuxer=mp3 \
-        --enable-demuxer=ogg \
-        --enable-demuxer=wav \
-        --enable-muxer=mp4 \
-        --enable-muxer=ogg \
-        --enable-muxer=opus \
-        --enable-muxer=wav
+        --enable-protocol=file
     }
 
     configureFFmpeg arm64
