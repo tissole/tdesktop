@@ -21,6 +21,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/empty_userpic.h"
 #include "ui/dynamic_image.h"
 #include "ui/painter.h"
+#include "ui/text/text_custom_emoji.h"
 #include "ui/userpic_view.h"
 
 namespace Ui {
@@ -127,6 +128,20 @@ private:
 
 };
 
+class CallThumbnail final : public DynamicImage {
+public:
+	CallThumbnail();
+
+	std::shared_ptr<DynamicImage> clone() override;
+
+	QImage image(int size) override;
+	void subscribeToUpdates(Fn<void()> callback) override;
+
+private:
+	QImage _prepared;
+
+};
+
 class EmptyThumbnail final : public DynamicImage {
 public:
 	std::shared_ptr<DynamicImage> clone() override;
@@ -199,6 +214,7 @@ public:
 	EmojiThumbnail(
 		not_null<Data::Session*> owner,
 		const QString &data,
+		int loopLimit,
 		Fn<bool()> paused,
 		Fn<QColor()> textColor);
 
@@ -210,6 +226,7 @@ public:
 private:
 	const not_null<Data::Session*> _owner;
 	const QString _data;
+	const int _loopLimit = 0;
 	std::unique_ptr<Ui::Text::CustomEmoji> _emoji;
 	Fn<bool()> _paused;
 	Fn<QColor()> _textColor;
@@ -277,7 +294,7 @@ void PeerUserpic::subscribeToUpdates(Fn<void()> callback) {
 	_peer->session().changes().peerUpdates(
 		_peer,
 		Data::PeerUpdate::Flag::Photo
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		_subscribed->callback();
 		processNewPhoto();
 	}, _subscribed->photoLifetime);
@@ -295,7 +312,7 @@ void PeerUserpic::processNewPhoto() {
 	_peer->session().downloaderTaskFinished(
 	) | rpl::filter([=] {
 		return !waitingUserpicLoad();
-	}) | rpl::start_with_next([=] {
+	}) | rpl::on_next([=] {
 		_subscribed->callback();
 		_subscribed->downloadLifetime.destroy();
 	}, _subscribed->downloadLifetime);
@@ -356,7 +373,7 @@ void MediaThumbnail::subscribeToUpdates(Fn<void()> callback) {
 				return true;
 			}
 			return false;
-		}) | rpl::take(1) | rpl::start_with_next(callback);
+		}) | rpl::take(1) | rpl::on_next(callback);
 	}
 }
 
@@ -428,6 +445,28 @@ MediaThumbnail::Thumb VideoThumbnail::loaded(Data::FileOrigin origin) {
 
 void VideoThumbnail::clear() {
 	_media = nullptr;
+}
+
+CallThumbnail::CallThumbnail() = default;
+
+std::shared_ptr<DynamicImage> CallThumbnail::clone() {
+	return std::make_shared<CallThumbnail>();
+}
+
+QImage CallThumbnail::image(int size) {
+	const auto ratio = style::DevicePixelRatio();
+	const auto full = QSize(size, size) * ratio;
+	if (_prepared.size() != full) {
+		_prepared = QImage(full, QImage::Format_ARGB32_Premultiplied);
+		_prepared.fill(Qt::black);
+		_prepared.setDevicePixelRatio(ratio);
+
+		_prepared = Images::Circle(std::move(_prepared));
+	}
+	return _prepared;
+}
+
+void CallThumbnail::subscribeToUpdates(Fn<void()> callback) {
 }
 
 std::shared_ptr<DynamicImage> EmptyThumbnail::clone() {
@@ -579,10 +618,12 @@ void IconThumbnail::subscribeToUpdates(Fn<void()> callback) {
 EmojiThumbnail::EmojiThumbnail(
 	not_null<Data::Session*> owner,
 	const QString &data,
+	int loopLimit,
 	Fn<bool()> paused,
 	Fn<QColor()> textColor)
 : _owner(owner)
 , _data(data)
+, _loopLimit(loopLimit)
 , _paused(std::move(paused))
 , _textColor(std::move(textColor)) {
 }
@@ -592,16 +633,24 @@ void EmojiThumbnail::subscribeToUpdates(Fn<void()> callback) {
 		_emoji = nullptr;
 		return;
 	}
-	_emoji = _owner->customEmojiManager().create(
+	auto emoji = _owner->customEmojiManager().create(
 		_data,
 		std::move(callback),
 		Data::CustomEmojiSizeTag::Large);
+	_emoji = (_loopLimit > 0)
+		? std::make_unique<Ui::Text::LimitedLoopsEmoji>(
+			std::move(emoji),
+			_loopLimit)
+		: std::move(emoji);
+
+	Ensures(_emoji != nullptr);
 }
 
 std::shared_ptr<DynamicImage> EmojiThumbnail::clone() {
 	return std::make_shared<EmojiThumbnail>(
 		_owner,
 		_data,
+		_loopLimit,
 		_paused,
 		_textColor);
 }
@@ -661,6 +710,8 @@ std::shared_ptr<DynamicImage> MakeStoryThumbnail(
 	const auto id = story->fullId();
 	return v::match(story->media().data, [](v::null_t) -> Result {
 		return std::make_shared<EmptyThumbnail>();
+	}, [](const std::shared_ptr<Data::GroupCall> &call) -> Result {
+		return std::make_shared<CallThumbnail>();
 	}, [&](not_null<PhotoData*> photo) -> Result {
 		return std::make_shared<PhotoThumbnail>(photo, id, true);
 	}, [&](not_null<DocumentData*> video) -> Result {
@@ -676,10 +727,12 @@ std::shared_ptr<DynamicImage> MakeEmojiThumbnail(
 		not_null<Data::Session*> owner,
 		const QString &data,
 		Fn<bool()> paused,
-		Fn<QColor()> textColor) {
+		Fn<QColor()> textColor,
+		int loopLimit) {
 	return std::make_shared<EmojiThumbnail>(
 		owner,
 		data,
+		loopLimit,
 		std::move(paused),
 		std::move(textColor));
 }

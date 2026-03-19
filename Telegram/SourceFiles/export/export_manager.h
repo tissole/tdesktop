@@ -39,6 +39,11 @@ public:
 		const QString &name = QString(),
 		int64 id = 0);
 
+	void startTopic(
+		not_null<PeerData*> peer,
+		MsgId topicRootId,
+		const QString &topicTitle);
+
 	[[nodiscard]] rpl::producer<View::PanelController*> currentView() const;
 	[[nodiscard]] bool inProgress() const;
 	[[nodiscard]] bool inProgress(not_null<Main::Session*> session) const;
@@ -47,6 +52,7 @@ public:
 
 private:
 	std::shared_ptr<ChatHelpers::Show> _show;
+	void setupPanel(not_null<Main::Session*> session);
 	std::unique_ptr<Controller> _controller;
 	std::unique_ptr<View::PanelController> _panel;
 	rpl::event_stream<View::PanelController*> _viewChanges;

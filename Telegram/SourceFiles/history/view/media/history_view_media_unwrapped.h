@@ -59,6 +59,8 @@ public:
 			return false;
 		}
 		virtual void setWebpagePart() {
+		virtual bool updateItemData() {
+			return false;
 		}
 		virtual ~Content() = default;
 	};
@@ -99,6 +101,10 @@ public:
 	QRect contentRectForReactions() const override;
 	std::optional<int> reactionButtonCenterOverride() const override;
 	QPoint resolveCustomInfoRightBottom() const override;
+
+	bool updateItemData() override {
+		return _content->updateItemData();
+	}
 
 	void stickerClearLoopPlayed() override {
 		_content->stickerClearLoopPlayed();

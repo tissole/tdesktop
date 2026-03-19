@@ -8,11 +8,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/media/info_media_buttons.h"
 
 #include "base/call_delayed.h"
+#include "base/platform/base_platform_info.h"
 #include "base/qt/qt_key_modifiers.h"
 #include "core/application.h"
 #include "core/ui_integration.h"
 #include "data/components/recent_shared_media_gifts.h"
 #include "data/data_channel.h"
+#include "data/data_document.h"
 #include "data/data_saved_messages.h"
 #include "data/data_saved_sublist.h"
 #include "data/data_session.h"
@@ -25,6 +27,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/info_memento.h"
 #include "info/peer_gifts/info_peer_gifts_widget.h"
 #include "info/profile/info_profile_values.h"
+#include "info/saved/info_saved_music_widget.h"
 #include "info/stories/info_stories_widget.h"
 #include "main/main_session.h"
 #include "ui/text/text_utilities.h"
@@ -173,6 +176,11 @@ not_null<Ui::SettingsButton*> AddButton(
 	const auto openInWindow = separateId
 		? [=] { navigation->parentController()->showInNewWindow(separateId); }
 		: Fn<void()>(nullptr);
+	Ui::InstallTooltip(result, [=] {
+		return Platform::IsMac()
+			? tr::lng_new_window_tooltip_cmd(tr::now)
+			: tr::lng_new_window_tooltip_ctrl(tr::now);
+	});
 	AddContextMenuToButton(result, openInWindow);
 	result->addClickHandler([=](Qt::MouseButton mouse) {
 		if (mouse == Qt::RightButton) {
@@ -324,6 +332,7 @@ not_null<Ui::SettingsButton*> AddPeerGiftsButton(
 		rpl::event_stream<> textRefreshed;
 		QPointer<Ui::SettingsButton> button;
 		rpl::lifetime appearedLifetime;
+		bool giftsLoaded = false;
 	};
 	const auto state = parent->lifetime().make_state<State>();
 
@@ -364,20 +373,29 @@ not_null<Ui::SettingsButton*> AddPeerGiftsButton(
 					.customEmojiLoopLimit = 1,
 				}))));
 	wrap->setDuration(st::infoSlideDuration);
-	wrap->toggleOn(rpl::duplicate(forked) | rpl::map(rpl::mappers::_1 > 0));
+	wrap->toggleOn(
+		rpl::combine(
+			rpl::duplicate(forked),
+			state->textRefreshed.events_starting_with({})
+		) | rpl::map([=](int count, auto) {
+			return count > 0 && state->giftsLoaded;
+		}));
 	tracker.track(wrap);
 
 	rpl::duplicate(forked) | rpl::filter(
 		rpl::mappers::_1 > 0
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		state->appearedLifetime.destroy();
 		const auto requestDone = crl::guard(wrap, [=](
-				std::vector<DocumentId> ids) {
+				std::vector<Data::SavedStarGift> gifts) {
 			state->emojiList.clear();
-			for (const auto &id : ids) {
+			for (const auto &gift : gifts) {
 				state->emojiList.push_back(
-					peer->owner().customEmojiManager().create(id, refresh));
+					peer->owner().customEmojiManager().create(
+						gift.info.document->id,
+						refresh));
 			}
+			state->giftsLoaded = true;
 			state->textRefreshed.fire({});
 		});
 		navigation->session().recentSharedGifts().request(peer, requestDone);

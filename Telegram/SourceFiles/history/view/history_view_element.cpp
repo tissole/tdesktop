@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/history_view_element.h"
 
+#include "apiwrap.h"
+#include "api/api_transcribes.h"
 #include "history/view/history_view_service_message.h"
 #include "history/view/history_view_message.h"
 #include "history/view/media/history_view_media_generic.h"
@@ -15,8 +17,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/media/history_view_sticker.h"
 #include "history/view/media/history_view_large_emoji.h"
 #include "history/view/media/history_view_custom_emoji.h"
+#include "history/view/media/history_view_no_forwards_request.h"
 #include "history/view/media/history_view_suggest_decision.h"
 #include "history/view/reactions/history_view_reactions_button.h"
+#include "history/view/history_view_reply_button.h"
 #include "history/view/reactions/history_view_reactions.h"
 #include "history/view/history_view_cursor_state.h"
 #include "history/view/history_view_reply.h"
@@ -35,6 +39,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "chat_helpers/stickers_emoji_pack.h"
 #include "payments/payments_reaction_process.h" // TryAddingPaidReaction.
 #include "window/window_session_controller.h"
+#include "ui/effects/glare.h"
 #include "ui/effects/path_shift_gradient.h"
 #include "ui/effects/reaction_fly_animation.h"
 #include "ui/toast/toast.h"
@@ -42,6 +47,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/item_text_options.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
+#include "ui/round_rect.h"
 #include "data/components/sponsored_messages.h"
 #include "data/data_channel.h"
 #include "data/data_saved_sublist.h"
@@ -53,6 +59,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_user.h"
 #include "lang/lang_keys.h"
 #include "styles/style_chat.h"
+#include "styles/style_dialogs.h"
 
 namespace HistoryView {
 namespace {
@@ -65,6 +72,331 @@ Element *PressedElement/* = nullptr*/;
 Element *HoveredLinkElement/* = nullptr*/;
 Element *PressedLinkElement/* = nullptr*/;
 Element *MousedElement/* = nullptr*/;
+
+class KeyboardStyle : public ReplyKeyboard::Style {
+public:
+	KeyboardStyle(const style::BotKeyboardButton &st, Fn<void()> repaint);
+
+	Images::CornersMaskRef buttonRounding(
+		Ui::BubbleRounding outer,
+		RectParts sides) const override;
+
+	const style::TextStyle &textStyle() const override;
+	void repaint(not_null<const HistoryItem*> item) const override;
+
+protected:
+	void paintButtonBg(
+		QPainter &p,
+		const Ui::ChatStyle *st,
+		const QRect &rect,
+		HistoryMessageMarkupButton::Color color,
+		Ui::BubbleRounding rounding,
+		float64 howMuchOver) const override;
+	void paintButtonStart(
+		QPainter &p,
+		const Ui::ChatStyle *st,
+		HistoryMessageMarkupButton::Color color) const override;
+	void paintButtonIcon(
+		QPainter &p,
+		const Ui::ChatStyle *st,
+		const QRect &rect,
+		int outerWidth,
+		HistoryMessageMarkupButton::Type type) const override;
+	void paintButtonLoading(
+		QPainter &p,
+		const Ui::ChatStyle *st,
+		const QRect &rect,
+		HistoryMessageMarkupButton::Color color,
+		int outerWidth,
+		Ui::BubbleRounding rounding) const override;
+	int minButtonWidth(HistoryMessageMarkupButton::Type type) const override;
+
+private:
+	struct CachedBg {
+		QImage image;
+		QColor color;
+	};
+	using BubbleRoundingKey = uchar;
+	struct CacheKey {
+		BubbleRoundingKey rounding;
+		HistoryMessageMarkupButton::Color color;
+
+		friend inline constexpr auto operator<=>(
+			CacheKey,
+			CacheKey) = default;
+		friend inline constexpr bool operator==(
+			CacheKey,
+			CacheKey) = default;
+	};
+	mutable base::flat_map<CacheKey, CachedBg> _cachedBg;
+	mutable base::flat_map<CacheKey, QPainterPath> _cachedOutline;
+	mutable std::unique_ptr<Ui::GlareEffect> _glare;
+	Fn<void()> _repaint;
+
+};
+
+KeyboardStyle::KeyboardStyle(
+	const style::BotKeyboardButton &st,
+	Fn<void()> repaint)
+: ReplyKeyboard::Style(st)
+, _repaint(std::move(repaint)) {
+}
+
+void KeyboardStyle::paintButtonStart(
+		QPainter &p,
+		const Ui::ChatStyle *st,
+		HistoryMessageMarkupButton::Color color) const {
+	using Color = HistoryMessageMarkupButton::Color;
+	Expects(st != nullptr);
+
+	p.setPen((color == Color::Normal) ? st->msgServiceFg() : st::white);
+}
+
+const style::TextStyle &KeyboardStyle::textStyle() const {
+	return st::serviceTextStyle;
+}
+
+void KeyboardStyle::repaint(not_null<const HistoryItem*> item) const {
+	item->history()->owner().requestItemRepaint(item);
+}
+
+Images::CornersMaskRef KeyboardStyle::buttonRounding(
+		Ui::BubbleRounding outer,
+		RectParts sides) const {
+	using namespace Images;
+	using namespace Ui;
+	using Radius = CachedCornerRadius;
+	using Corner = BubbleCornerRounding;
+	auto result = CornersMaskRef(CachedCornersMasks(Radius::BubbleSmall));
+	if (sides & RectPart::Bottom) {
+		const auto &large = CachedCornersMasks(Radius::BubbleLarge);
+		auto round = [&](RectPart side, int index) {
+			if ((sides & side) && (outer[index] == Corner::Large)) {
+				result.p[index] = &large[index];
+			}
+		};
+		round(RectPart::Left, kBottomLeft);
+		round(RectPart::Right, kBottomRight);
+	}
+	return result;
+}
+
+void KeyboardStyle::paintButtonBg(
+		QPainter &p,
+		const Ui::ChatStyle *st,
+		const QRect &rect,
+		HistoryMessageMarkupButton::Color color,
+		Ui::BubbleRounding rounding,
+		float64 howMuchOver) const {
+	Expects(st != nullptr);
+
+	using Corner = Ui::BubbleCornerRounding;
+	const auto key = CacheKey{ rounding.key(), color };
+	auto &cachedBg = _cachedBg[key];
+
+	const auto sti = &st->imageStyle(false);
+	const auto ratio = style::DevicePixelRatio();
+	if (cachedBg.image.isNull()
+		|| cachedBg.image.width() != (rect.width() * ratio)
+		|| cachedBg.color != sti->msgServiceBg->c) {
+		cachedBg.color = sti->msgServiceBg->c;
+		cachedBg.image = QImage(
+			rect.size() * ratio,
+			QImage::Format_ARGB32_Premultiplied);
+		cachedBg.image.setDevicePixelRatio(ratio);
+		cachedBg.image.fill(Qt::transparent);
+		{
+			auto painter = QPainter(&cachedBg.image);
+
+			using Color = HistoryMessageMarkupButton::Color;
+			const auto normal = (color == Color::Normal);
+			const auto colored = style::owned_color((color == Color::Primary)
+				? st::botKbInlinePrimaryBg->c
+				: (color == Color::Danger)
+				? st::botKbInlineDangerBg->c
+				: st::botKbInlineSuccessBg->c);
+			const auto smallColored = normal
+				? Ui::CornersPixmaps()
+				: Ui::PrepareCornerPixmaps(
+					Ui::BubbleRadiusSmall(),
+					colored.color());
+			const auto largeColored = normal
+				? Ui::CornersPixmaps()
+				: Ui::PrepareCornerPixmaps(
+					Ui::BubbleRadiusLarge(),
+					colored.color());
+			const auto small = normal
+				? &sti->msgServiceBgCornersSmall
+				: &smallColored;
+			const auto large = normal
+				? &sti->msgServiceBgCornersLarge
+				: &largeColored;
+			auto corners = Ui::CornersPixmaps();
+			int radiuses[4];
+			for (auto i = 0; i != 4; ++i) {
+				const auto isLarge = (rounding[i] == Corner::Large);
+				corners.p[i] = (isLarge ? large : small)->p[i];
+				radiuses[i] = Ui::CachedCornerRadiusValue(isLarge
+					? Ui::CachedCornerRadius::BubbleLarge
+					: Ui::CachedCornerRadius::BubbleSmall);
+			}
+			const auto r = Rect(rect.size());
+			_cachedOutline[key] = Ui::ComplexRoundedRectPath(
+				r - Margins(st::lineWidth),
+				radiuses[0],
+				radiuses[1],
+				radiuses[2],
+				radiuses[3]);
+			Ui::FillRoundRect(
+				painter,
+				r,
+				normal ? sti->msgServiceBg : colored.color(),
+				corners);
+		}
+	}
+	p.drawImage(rect.topLeft(), cachedBg.image);
+	if (howMuchOver > 0) {
+		auto o = p.opacity();
+		p.setOpacity(o * howMuchOver);
+		const auto &small = st->msgBotKbOverBgAddCornersSmall();
+		const auto &large = st->msgBotKbOverBgAddCornersLarge();
+		auto over = Ui::CornersPixmaps();
+		for (auto i = 0; i != 4; ++i) {
+			over.p[i] = (rounding[i] == Corner::Large ? large : small).p[i];
+		}
+		Ui::FillRoundRect(p, rect, st->msgBotKbOverBgAdd(), over);
+		p.setOpacity(o);
+	}
+}
+
+void KeyboardStyle::paintButtonIcon(
+		QPainter &p,
+		const Ui::ChatStyle *st,
+		const QRect &rect,
+		int outerWidth,
+		HistoryMessageMarkupButton::Type type) const {
+	Expects(st != nullptr);
+
+	using Type = HistoryMessageMarkupButton::Type;
+	const auto icon = [&]() -> const style::icon* {
+		switch (type) {
+		case Type::Url:
+		case Type::Auth: return &st->msgBotKbUrlIcon();
+		case Type::Buy: return &st->msgBotKbPaymentIcon();
+		case Type::SwitchInlineSame:
+		case Type::SwitchInline: return &st->msgBotKbSwitchPmIcon();
+		case Type::WebView:
+		case Type::SimpleWebView: return &st->msgBotKbWebviewIcon();
+		case Type::CopyText: return &st->msgBotKbCopyIcon();
+		}
+		return nullptr;
+	}();
+	if (icon) {
+		icon->paint(p, rect.x() + rect.width() - icon->width() - st::msgBotKbIconPadding, rect.y() + st::msgBotKbIconPadding, outerWidth);
+	}
+}
+
+void KeyboardStyle::paintButtonLoading(
+		QPainter &p,
+		const Ui::ChatStyle *st,
+		const QRect &rect,
+		HistoryMessageMarkupButton::Color color,
+		int outerWidth,
+		Ui::BubbleRounding rounding) const {
+	Expects(st != nullptr);
+
+	if (anim::Disabled()) {
+		const auto &icon = st->historySendingInvertedIcon();
+		icon.paint(
+			p,
+			rect::right(rect) - icon.width() - st::msgBotKbIconPadding,
+			rect::bottom(rect) - icon.height() - st::msgBotKbIconPadding,
+			rect.x() * 2 + rect.width());
+		return;
+	}
+
+	const auto key = CacheKey{ rounding.key(), color };
+	auto &cachedBg = _cachedBg[key];
+	if (!cachedBg.image.isNull()) {
+		if (_glare && _glare->glare.birthTime) {
+			const auto progress = _glare->progress(crl::now());
+			const auto w = _glare->width;
+			const auto h = rect.height();
+			const auto x = (-w) + (w * 2) * progress;
+
+			auto frame = cachedBg.image;
+			frame.fill(Qt::transparent);
+			{
+				auto painter = QPainter(&frame);
+				auto hq = PainterHighQualityEnabler(painter);
+				painter.setPen(Qt::NoPen);
+				painter.drawTiledPixmap(x, 0, w, h, _glare->pixmap, 0, 0);
+
+				auto path = QPainterPath();
+				path.addRect(Rect(rect.size()));
+				path -= _cachedOutline[key];
+
+				constexpr auto kBgOutlineAlpha = 0.5;
+				constexpr auto kFgOutlineAlpha = 0.8;
+				const auto &c = st::premiumButtonFg->c;
+				painter.setPen(Qt::NoPen);
+				painter.setBrush(c);
+				painter.setOpacity(kBgOutlineAlpha);
+				painter.drawPath(path);
+				auto gradient = QLinearGradient(-w, 0, w * 2, 0);
+				{
+					constexpr auto kShiftLeft = 0.01;
+					constexpr auto kShiftRight = 0.99;
+					auto stops = _glare->computeGradient(c).stops();
+					stops[1] = {
+						std::clamp(progress, kShiftLeft, kShiftRight),
+						QColor(c.red(), c.green(), c.blue(), kFgOutlineAlpha),
+					};
+					gradient.setStops(std::move(stops));
+				}
+				painter.setBrush(QBrush(gradient));
+				painter.setOpacity(1);
+				painter.drawPath(path);
+
+				painter.setCompositionMode(
+					QPainter::CompositionMode_DestinationIn);
+				painter.drawImage(0, 0, cachedBg.image);
+			}
+			p.drawImage(rect.x(), rect.y(), frame);
+		} else {
+			_glare = std::make_unique<Ui::GlareEffect>();
+			_glare->width = outerWidth;
+
+			constexpr auto kTimeout = crl::time(0);
+			constexpr auto kDuration = crl::time(1100);
+			const auto color = st::premiumButtonFg->c;
+			_glare->validate(color, _repaint, kTimeout, kDuration);
+		}
+	}
+}
+
+int KeyboardStyle::minButtonWidth(
+		HistoryMessageMarkupButton::Type type) const {
+	using Type = HistoryMessageMarkupButton::Type;
+	int result = 2 * buttonPadding(), iconWidth = 0;
+	switch (type) {
+	case Type::Url:
+	case Type::Auth: iconWidth = st::msgBotKbUrlIcon.width(); break;
+	case Type::Buy: iconWidth = st::msgBotKbPaymentIcon.width(); break;
+	case Type::SwitchInlineSame:
+	case Type::SwitchInline: iconWidth = st::msgBotKbSwitchPmIcon.width(); break;
+	case Type::Callback:
+	case Type::CallbackWithPassword:
+	case Type::Game: iconWidth = st::historySendingInvertedIcon.width(); break;
+	case Type::WebView:
+	case Type::SimpleWebView: iconWidth = st::msgBotKbWebviewIcon.width(); break;
+	case Type::CopyText: return st::msgBotKbCopyIcon.width(); break;
+	}
+	if (iconWidth > 0) {
+		result = std::max(result, 2 * iconWidth + 4 * int(st::msgBotKbIconPadding));
+	}
+	return result;
+}
 
 [[nodiscard]] bool IsAttachedToPreviousInSavedMessages(
 		not_null<HistoryItem*> previous,
@@ -101,59 +433,6 @@ Element *MousedElement/* = nullptr*/;
 	return session->tryResolveWindow();
 }
 
-[[nodiscard]] TextSelection FindSearchQueryHighlight(
-		const QString &text,
-		const QString &query) {
-	const auto lower = query.toLower();
-	const auto inside = text.toLower();
-	const auto find = [&](QStringView part) {
-		auto skip = 0;
-		if (const auto from = inside.indexOf(part, skip); from >= 0) {
-			if (!from || !inside[from - 1].isLetterOrNumber()) {
-				return int(from);
-			}
-			skip = from + 1;
-		}
-		return -1;
-	};
-	if (const auto from = find(lower); from >= 0) {
-		const auto till = from + query.size();
-		if (till >= inside.size() || !inside[till].isLetterOrNumber()) {
-			return { uint16(from), uint16(till) };
-		}
-	}
-	const auto tillEndOfWord = [&](int from) {
-		for (auto till = from + 1; till != inside.size(); ++till) {
-			if (!inside[till].isLetterOrNumber()) {
-				return TextSelection{ uint16(from), uint16(till) };
-			}
-		}
-		return TextSelection{ uint16(from), uint16(inside.size()) };
-	};
-	const auto words = QStringView(lower).split(
-		QRegularExpression(
-			u"[\\W]"_q,
-			QRegularExpression::UseUnicodePropertiesOption),
-		Qt::SkipEmptyParts);
-	for (const auto &word : words) {
-		const auto length = int(word.size());
-		const auto cut = length / 2;
-		const auto part = word.mid(0, length - cut);
-		const auto offset = find(part);
-		if (offset < 0) {
-			continue;
-		}
-		for (auto i = 0; i != cut; ++i) {
-			const auto part = word.mid(0, length - i);
-			if (const auto from = find(part); from >= 0) {
-				return tillEndOfWord(from);
-			}
-		}
-		return tillEndOfWord(offset);
-	}
-	return {};
-}
-
 [[nodiscard]] TextSelection ApplyModificationsFrom(
 		TextSelection result,
 		const Ui::Text::String &text) {
@@ -165,20 +444,24 @@ Element *MousedElement/* = nullptr*/;
 			break;
 		}
 		if (modification.added) {
-			++result.to;
+			result.to += modification.added;
 		}
 		const auto shiftTo = std::min(
 			int(modification.skipped),
 			result.to - modification.position);
 		result.to -= shiftTo;
-		if (modification.position <= result.from) {
+		if (modification.position < result.from) {
 			if (modification.added) {
-				++result.from;
+				result.from += modification.added;
 			}
 			const auto shiftFrom = std::min(
 				int(modification.skipped),
 				result.from - modification.position);
 			result.from -= shiftFrom;
+		} else if (modification.position == result.from) {
+			if (!modification.skipped) {
+				result.from += modification.added;
+			}
 		}
 	}
 	return result;
@@ -391,6 +674,17 @@ QString DateTooltipText(not_null<Element*> view) {
 				dateText = tr::lng_forwarded_imported(tr::now)
 					+ "\n\n" + dateText;
 			}
+			if (forwarded->savedFromDate
+				&& forwarded->savedFromDate != forwarded->originalDate) {
+				const auto parsed = base::unixtime::parse(
+					forwarded->savedFromDate);
+				if (parsed != view->dateTime()) {
+					dateText += '\n' + tr::lng_forwarded_forwarded_date(
+						tr::now,
+						lt_date,
+						locale.toString(parsed, format));
+				}
+			}
 		}
 	}
 	if (view->isSignedAuthorElided()) {
@@ -495,20 +789,40 @@ void DateBadge::paint(
 	ServiceMessagePainter::PaintDate(p, st, text, width, y, w, chatWide);
 }
 
-void MonoforumSenderBar::init(
+void ForumThreadBar::init(
 		not_null<PeerData*> parentChat,
-		not_null<PeerData*> peer) {
-	sender = peer;
-	text.setText(st::semiboldTextStyle, peer->name());
+		not_null<Data::Thread*> thread) {
+	this->thread = thread;
+	const auto sublist = thread->asSublist();
+	if (sublist) {
+		text.setText(st::semiboldTextStyle, sublist->sublistPeer()->name());
+	} else if (const auto topic = thread->asTopic()) {
+		text.setMarkedText(
+			st::semiboldTextStyle,
+			topic->titleWithIconOrLogo(),
+			kMarkupTextOptions,
+			Core::TextContext({
+				.session = &topic->session(),
+				.customEmojiLoopLimit = -1, // First frame only
+			}));
+	}
 	const auto skip = st::monoforumBarUserpicSkip;
-	const auto userpic = st::msgServicePadding.top()
-		+ st::msgServiceFont->height
-		+ st::msgServicePadding.bottom()
-		- 2 * skip;
-	width = skip + userpic + skip * 2 + text.maxWidth() + st::msgServicePadding.right();
+	const auto userpic = sublist
+		? (st::msgServicePadding.top()
+			+ st::msgServiceFont->height
+			+ st::msgServicePadding.bottom()
+			- 2 * skip)
+		: (st::msgServicePadding.left() - 3 * skip);
+
+	width = skip
+		+ userpic
+		+ skip * 2
+		+ text.maxWidth()
+		+ st::topicButtonArrowSkip
+		+ st::msgServicePadding.right();
 }
 
-int MonoforumSenderBar::height() const {
+int ForumThreadBar::height() const {
 	return st::msgServiceMargin.top()
 		+ st::msgServicePadding.top()
 		+ st::msgServiceFont->height
@@ -516,17 +830,29 @@ int MonoforumSenderBar::height() const {
 		+ st::msgServiceMargin.bottom();
 }
 
-void MonoforumSenderBar::paint(
+void ForumThreadBar::paint(
 		Painter &p,
 		not_null<const Ui::ChatStyle*> st,
 		int y,
 		int w,
 		bool chatWide,
 		bool skipPatternLine) const {
-	Paint(p, st, sender, text, width, view, y, w, chatWide, skipPatternLine);
+	if (const auto strong = thread.get()) {
+		Paint(
+			p,
+			st,
+			strong,
+			text,
+			width,
+			view,
+			y,
+			w,
+			chatWide,
+			skipPatternLine);
+	}
 }
 
-void MonoforumSenderBar::PaintFor(
+int ForumThreadBar::PaintForGetWidth(
 		Painter &p,
 		not_null<const Ui::ChatStyle*> st,
 		not_null<Element*> itemView,
@@ -534,31 +860,52 @@ void MonoforumSenderBar::PaintFor(
 		int y,
 		int w,
 		bool chatWide) {
-	const auto sublist = itemView->data()->savedSublist();
-	const auto sender = (sublist && sublist->parentChat())
-		? sublist->sublistPeer().get()
+	const auto item = itemView->data();
+	const auto topic = item->topic();
+	const auto sublist = item->savedSublist();
+	const auto sender = topic
+		? (Data::Thread*)topic
+		: (sublist && sublist->parentChat())
+		? (Data::Thread*)sublist
 		: nullptr;
-	if (!sender || sender->isMonoforum()) {
-		return;
+	auto text = Ui::Text::String();
+	if (!sender
+		|| !topic
+		|| (sublist && sublist->sublistPeer()->isMonoforum())) {
+		return 0;
+	} else if (topic) {
+		text.setMarkedText(
+			st::semiboldTextStyle,
+			topic->titleWithIconOrLogo(),
+			kMarkupTextOptions,
+			Core::TextContext({
+				.session = &topic->session(),
+				.customEmojiLoopLimit = -1, // First frame only
+			}));
+	} else {
+		text.setText(st::semiboldTextStyle, sublist->sublistPeer()->name());
 	}
-	auto text = Ui::Text::String(st::semiboldTextStyle, sender->name());
 	const auto skip = st::monoforumBarUserpicSkip;
-	const auto userpic = st::msgServicePadding.top()
-		+ st::msgServiceFont->height
-		+ st::msgServicePadding.bottom()
-		- 2 * skip;
+	const auto userpic = sublist
+		? (st::msgServicePadding.top()
+			+ st::msgServiceFont->height
+			+ st::msgServicePadding.bottom()
+			- 2 * skip)
+		: (st::msgServicePadding.left() - 3 * skip);
 	const auto width = skip
 		+ userpic
 		+ skip * 2
 		+ text.maxWidth()
+		+ st::topicButtonArrowSkip
 		+ st::msgServicePadding.right();
 	Paint(p, st, sender, text, width, userpicView, y, w, chatWide, true);
+	return width;
 }
 
-void MonoforumSenderBar::Paint(
+void ForumThreadBar::Paint(
 		Painter &p,
 		not_null<const Ui::ChatStyle*> st,
-		not_null<PeerData*> sender,
+		not_null<Data::Thread*> thread,
 		const Ui::Text::String &text,
 		int width,
 		Ui::PeerUserpicView &view,
@@ -566,8 +913,6 @@ void MonoforumSenderBar::Paint(
 		int w,
 		bool chatWide,
 		bool skipPatternLine) {
-	Expects(sender != nullptr);
-
 	int left = st::msgServiceMargin.left();
 	const auto maxwidth = chatWide
 		? std::min(w, WideChatWidth())
@@ -596,31 +941,57 @@ void MonoforumSenderBar::Paint(
 		p.drawLine(left + use, top, 2 * w, top);
 	}
 
-	const auto userpic = st::msgServicePadding.top()
-		+ st::msgServiceFont->height
-		+ st::msgServicePadding.bottom()
-		- 2 * skip;
-	const auto available = use - (skip + userpic + skip * 2 + st::msgServicePadding.right());
+	const auto sublist = thread->asSublist();
+	const auto userpic = sublist
+		? (st::msgServicePadding.top()
+			+ st::msgServiceFont->height
+			+ st::msgServicePadding.bottom()
+			- 2 * skip)
+		: (st::msgServicePadding.left() - 3 * skip);
+	const auto available = use
+		- (skip
+			+ userpic
+			+ skip * 2
+			+ st::topicButtonArrowSkip
+			+ st::msgServicePadding.right());
 
-	sender->paintUserpic(p, view, left + skip, y + st::msgServiceMargin.top() + skip, userpic);
+	if (sublist) {
+		sublist->sublistPeer()->paintUserpic(
+			p,
+			view,
+			left + skip,
+			y + st::msgServiceMargin.top() + skip,
+			userpic);
+	}
 
+	const auto textLeft = left + skip + userpic + skip * 2;
+	const auto textTop = y
+		+ st::msgServiceMargin.top()
+		+ st::msgServicePadding.top();
 	p.setFont(st::msgServiceFont);
 	p.setPen(st->msgServiceFg());
 	text.draw(p, {
-		.position = {
-			left + skip + userpic + skip * 2,
-			y + st::msgServiceMargin.top() + st::msgServicePadding.top(),
-		},
+		.position = { textLeft, textTop },
 		.availableWidth = available,
+		.paused = true,
 		.elisionLines = 1,
 	});
+
+	st::topicButtonArrow.paint(
+		p,
+		textLeft + available + st::topicButtonArrowPosition.x(),
+		textTop + st::topicButtonArrowPosition.y(),
+		w,
+		st->msgServiceFg()->c);
 }
 
 void ServicePreMessage::init(
 		not_null<Element*> view,
 		PreparedServiceText string,
 		ClickHandlerPtr fullClickHandler,
-		std::unique_ptr<Media> media) {
+		std::unique_ptr<Media> media,
+		bool below) {
+	this->below = below;
 	text = Ui::Text::String(
 		st::serviceTextStyle,
 		string.text,
@@ -686,7 +1057,9 @@ void ServicePreMessage::paint(
 		ElementChatMode mode) const {
 	if (media && media->hideServiceText()) {
 		const auto left = (width - media->width()) / 2;
-		const auto top = g.top() - height - st::msgMargin.bottom();
+		const auto top = below
+			? (g.top() + g.height() - st::msgServiceMargin.top() + st::msgServiceMargin.bottom())
+			: (g.top() - height - st::msgMargin.bottom());
 		const auto position = QPoint(left, top);
 		p.translate(position);
 		media->draw(p, context.selected()
@@ -694,7 +1067,9 @@ void ServicePreMessage::paint(
 			: context.translated(-position).withSelection({}));
 		p.translate(-position);
 	} else {
-		const auto top = g.top() - height - st::msgMargin.top();
+		const auto top = below
+			? (g.top() + g.height() - st::msgServiceMargin.top() + st::msgServiceMargin.bottom())
+			: (g.top() - height - st::msgMargin.top());
 		p.translate(0, top);
 
 		const auto rect = QRect(0, 0, width, height)
@@ -732,11 +1107,15 @@ ClickHandlerPtr ServicePreMessage::textState(
 		QRect g) const {
 	if (media && media->hideServiceText()) {
 		const auto left = (width - media->width()) / 2;
-		const auto top = g.top() - height - st::msgMargin.bottom();
+		const auto top = below
+			? (g.top() + g.height() - st::msgServiceMargin.top() + st::msgServiceMargin.bottom())
+			: (g.top() - height - st::msgMargin.bottom());
 		const auto position = QPoint(left, top);
 		return media->textState(point - position, request).link;
 	}
-	const auto top = g.top() - height - st::msgMargin.top();
+	const auto top = below
+		? (g.top() + g.height() - st::msgServiceMargin.top() + st::msgServiceMargin.bottom())
+		: (g.top() - height - st::msgMargin.top());
 	const auto rect = QRect(0, top, width, height)
 		- st::msgServiceMargin;
 	const auto trect = rect - st::msgServicePadding;
@@ -827,8 +1206,22 @@ uint8 Element::colorIndex() const {
 	return data()->colorIndex();
 }
 
+auto Element::colorCollectible() const
+-> const std::shared_ptr<Ui::ColorCollectible> & {
+	return data()->colorCollectible();
+}
+
 uint8 Element::contentColorIndex() const {
 	return data()->contentColorIndex();
+}
+
+DocumentId Element::contentBackgroundEmojiId() const {
+	return data()->contentBackgroundEmojiId();
+}
+
+auto Element::contentColorCollectible() const
+-> const std::shared_ptr<Ui::ColorCollectible> & {
+	return data()->contentColorCollectible();
 }
 
 QDateTime Element::dateTime() const {
@@ -919,8 +1312,8 @@ void Element::prepareCustomEmojiPaint(
 	}
 }
 
-void Element::repaint() const {
-	history()->owner().requestViewRepaint(this);
+void Element::repaint(QRect r) const {
+	history()->owner().requestViewRepaint(this, r);
 }
 
 void Element::paintHighlight(
@@ -963,6 +1356,17 @@ bool Element::isLastAndSelfMessage() const {
 		return last == data();
 	}
 	return false;
+}
+
+void Element::addVerticalMargins(int top, int bottom) {
+	if (top || bottom) {
+		AddComponents(ViewAddedMargins::Bit());
+		const auto margins = Get<ViewAddedMargins>();
+		margins->top = top;
+		margins->bottom = bottom;
+	} else {
+		RemoveComponents(ViewAddedMargins::Bit());
+	}
 }
 
 void Element::setPendingResize() {
@@ -1048,6 +1452,40 @@ void Element::overrideMedia(std::unique_ptr<Media> media) {
 		history()->owner().requestViewResize(this);
 	}
 	_flags |= Flag::MediaOverriden;
+}
+
+void Element::overrideRightBadge(const QString &text, BadgeRole role) {
+	if (text.isEmpty()) {
+		if (Has<RightBadge>()) {
+			Get<RightBadge>()->overridden = false;
+			RemoveComponents(RightBadge::Bit());
+		}
+		return;
+	}
+	if (!Has<RightBadge>()) {
+		AddComponents(RightBadge::Bit());
+	}
+	const auto badge = Get<RightBadge>();
+	badge->overridden = true;
+	badge->role = role;
+	badge->tag.setMarkedText(
+		st::defaultTextStyle,
+		{ text },
+		Ui::NameTextOptions());
+	badge->boosts.clear();
+	if (role == BadgeRole::User) {
+		badge->width = badge->tag.maxWidth();
+	} else {
+		const auto &padding = st::msgTagBadgePadding;
+		const auto tagTextWidth = badge->tag.maxWidth();
+		const auto contentWidth = padding.left()
+			+ tagTextWidth
+			+ padding.right();
+		const auto pillHeight = padding.top()
+			+ st::msgFont->height
+			+ padding.bottom();
+		badge->width = std::max(contentWidth, pillHeight);
+	}
 }
 
 not_null<PurchasedTag*> Element::enforcePurchasedTag() {
@@ -1137,6 +1575,16 @@ void Element::refreshMedia(Element *replacing) {
 				this,
 				std::make_unique<LargeEmoji>(this, emoji));
 		}
+	} else if (const auto nfr = item->Get<HistoryServiceNoForwardsRequest>()
+		; nfr && (!nfr->expired || nfr->actionTaken)) {
+		_media = std::make_unique<MediaGeneric>(
+			this,
+			GenerateNoForwardsRequestMedia(this, nfr),
+			MediaGenericDescriptor{
+				.maxWidth = st::chatSuggestInfoWidth,
+				.service = true,
+				.hideServiceText = true,
+			});
 	} else if (const auto decision = item->Get<HistoryServiceSuggestDecision>()) {
 		_media = std::make_unique<MediaGeneric>(
 			this,
@@ -1215,17 +1663,18 @@ auto Element::contextDependentServiceText() -> TextWithLinks {
 		.arg(peerToChannel(peerId).bare)
 		.arg(topicRootId.bare);
 	const auto fromLink = [&](int index) {
-		return Ui::Text::Link(from->name(), index);
+		return tr::link(from->name(), index);
 	};
 	const auto placeholderLink = [&] {
-		return Ui::Text::Link(
-			tr::lng_action_topic_placeholder(tr::now),
-			topicUrl);
+		const auto linkText = history()->peer->isBot()
+			? tr::lng_action_topic_bot_thread(tr::now)
+			: tr::lng_action_topic_placeholder(tr::now);
+		return tr::link(linkText, topicUrl);
 	};
 	const auto wrapTopic = [&](
 			const QString &title,
 			std::optional<DocumentId> iconId) {
-		return Ui::Text::Link(
+		return tr::link(
 			Data::ForumTopicIconWithTitle(
 				topicRootId,
 				iconId.value_or(0),
@@ -1257,7 +1706,7 @@ auto Element::contextDependentServiceText() -> TextWithLinks {
 				tr::now,
 				lt_topic,
 				wrapParentTopic(),
-				Ui::Text::WithEntities),
+				tr::marked),
 		};
 	} else if (info->reopened) {
 		return {
@@ -1265,7 +1714,7 @@ auto Element::contextDependentServiceText() -> TextWithLinks {
 				tr::now,
 				lt_topic,
 				wrapParentTopic(),
-				Ui::Text::WithEntities),
+				tr::marked),
 		};
 	} else if (info->hidden) {
 		return {
@@ -1273,7 +1722,7 @@ auto Element::contextDependentServiceText() -> TextWithLinks {
 				tr::now,
 				lt_topic,
 				wrapParentTopic(),
-				Ui::Text::WithEntities),
+				tr::marked),
 		};
 	} else if (info->unhidden) {
 		return {
@@ -1281,7 +1730,7 @@ auto Element::contextDependentServiceText() -> TextWithLinks {
 				tr::now,
 				lt_topic,
 				wrapParentTopic(),
-				Ui::Text::WithEntities),
+				tr::marked),
 		};
 	} else if (info->renamed) {
 		return {
@@ -1297,7 +1746,7 @@ auto Element::contextDependentServiceText() -> TextWithLinks {
 					(info->reiconed
 						? info->iconId
 						: std::optional<DocumentId>())),
-				Ui::Text::WithEntities),
+				tr::marked),
 			{ from->createOpenLink() },
 		};
 	} else if (info->reiconed) {
@@ -1311,7 +1760,7 @@ auto Element::contextDependentServiceText() -> TextWithLinks {
 					placeholderLink(),
 					lt_emoji,
 					Data::SingleCustomEmoji(iconId),
-					Ui::Text::WithEntities),
+					tr::marked),
 				{ from->createOpenLink() },
 			};
 		} else {
@@ -1322,7 +1771,7 @@ auto Element::contextDependentServiceText() -> TextWithLinks {
 					fromLink(1),
 					lt_link,
 					placeholderLink(),
-					Ui::Text::WithEntities),
+					tr::marked),
 				{ from->createOpenLink() },
 			};
 		}
@@ -1335,20 +1784,39 @@ void Element::validateText() {
 	const auto item = data();
 	const auto media = item->media();
 	const auto storyMention = media && media->storyMention();
-	if (media && media->storyExpired()) {
+	const auto storyExpired = media && media->storyExpired();
+	const auto storyUnsupported = media && media->storyUnsupported();
+	if (storyExpired || storyUnsupported) {
 		_media = nullptr;
 		_textItem = item;
 		if (!storyMention) {
 			if (_text.isEmpty()) {
-				setTextWithLinks(Ui::Text::Italic(
-					tr::lng_forwarded_story_expired(tr::now)));
+				setTextWithLinks(tr::italic(storyUnsupported
+					? tr::lng_stories_unsupported(tr::now)
+					: tr::lng_forwarded_story_expired(tr::now)));
 			}
 			return;
 		}
 	}
 
 	// Albums may show text of a different item than the parent one.
+	// Media::itemForText may initialize data within the object.
 	_textItem = _media ? _media->itemForText() : item.get();
+
+	const auto &summary = item->summaryEntry();
+	const auto summaryShownWas = (_flags & Flag::SummaryShown) != 0;
+	const auto summaryShownNow = !summary.result.empty() && summary.shown;
+	const auto summaryShownChanged = (summaryShownWas != summaryShownNow);
+	if (summaryShownNow) {
+		_flags |= Flag::SummaryShown;
+		if (summaryShownChanged) {
+			setTextWithLinks(summary.result);
+		}
+		return;
+	} else {
+		_flags &= ~Flag::SummaryShown;
+	}
+
 	if (!_textItem) {
 		if (!_text.isEmpty()) {
 			setTextWithLinks({});
@@ -1356,7 +1824,7 @@ void Element::validateText() {
 		return;
 	}
 	const auto &text = _textItem->_text;
-	if (_text.isEmpty() == text.empty()) {
+	if (!summaryShownChanged && _text.isEmpty() == text.empty()) {
 	} else if (_flags & Flag::ServiceMessage) {
 		const auto contextDependentText = contextDependentServiceText();
 		const auto &markedText = contextDependentText.text.empty()
@@ -1388,7 +1856,7 @@ void Element::validateText() {
 	} else {
 		const auto unavailable = item->computeUnavailableReason();
 		if (!unavailable.isEmpty()) {
-			setTextWithLinks(Ui::Text::Italic(unavailable));
+			setTextWithLinks(tr::italic(unavailable));
 		} else {
 			setTextWithLinks(_textItem->translatedTextWithLocalEntities());
 		}
@@ -1429,6 +1897,9 @@ void Element::setTextWithLinks(
 		}
 	}
 	InitElementTextPart(this, _text);
+	if (const auto next = _text.nextFormattedDateUpdate()) {
+		history()->session().data().registerFormattedDateUpdate(next, this);
+	}
 	_textWidth = -1;
 	_textHeight = 0;
 }
@@ -1446,8 +1917,26 @@ void Element::validateTextSkipBlock(bool has, int width, int height) {
 	}
 }
 
+void Element::validateInlineKeyboard(HistoryMessageReplyMarkup *markup) {
+	if (!markup
+		|| markup->inlineKeyboard
+		|| markup->hiddenBy(data()->media())) {
+		return;
+	}
+	const auto item = data();
+	//if (item->hideLinks()) {
+	//	item->setHasHiddenLinks(true);
+	//	return;
+	//}
+	markup->inlineKeyboard = std::make_unique<ReplyKeyboard>(
+		item,
+		std::make_unique<KeyboardStyle>(
+			st::msgBotKbButton,
+			[=] { item->history()->owner().requestItemRepaint(item); }));
+}
+
 void Element::previousInBlocksChanged() {
-	recountMonoforumSenderBarInBlocks();
+	recountThreadBarInBlocks();
 	recountDisplayDateInBlocks();
 	recountAttachToPreviousInBlocks();
 }
@@ -1491,7 +1980,7 @@ bool Element::computeIsAttachToPrevious(not_null<Element*> previous) {
 	if (!Has<DateBadge>()
 		&& !Has<UnreadBar>()
 		&& !Has<ServicePreMessage>()
-		&& !Has<MonoforumSenderBar>()) {
+		&& !Has<ForumThreadBar>()) {
 		const auto prev = previous->data();
 		const auto previousMarkup = prev->inlineReplyMarkup();
 		const auto possible = (std::abs(prev->date() - item->date())
@@ -1566,7 +2055,7 @@ void Element::createUnreadBar(rpl::producer<QString> text) {
 	const auto bar = Get<UnreadBar>();
 	std::move(
 		text
-	) | rpl::start_with_next([=](const QString &text) {
+	) | rpl::on_next([=](const QString &text) {
 		if (const auto bar = Get<UnreadBar>()) {
 			bar->init(text);
 		}
@@ -1603,12 +2092,12 @@ bool Element::isInOneDayWithPrevious() const {
 	return !data()->isEmpty() && !displayDate();
 }
 
-bool Element::displayMonoforumSender() const {
-	return Has<MonoforumSenderBar>();
+bool Element::displayForumThreadBar() const {
+	return Has<ForumThreadBar>();
 }
 
 bool Element::isInOneBunchWithPrevious() const {
-	return !data()->isEmpty() && !displayMonoforumSender();
+	return !data()->isEmpty() && !displayForumThreadBar();
 }
 
 void Element::recountAttachToPreviousInBlocks() {
@@ -1629,34 +2118,49 @@ void Element::recountAttachToPreviousInBlocks() {
 	setAttachToPrevious(attachToPrevious, previous);
 }
 
-void Element::recountMonoforumSenderBarInBlocks() {
+void Element::recountThreadBarInBlocks() {
 	const auto item = data();
+	const auto topic = item->topic();
 	const auto sublist = item->savedSublist();
-	const auto parentChat = sublist ? sublist->parentChat() : nullptr;
-	const auto barPeer = [&]() -> PeerData* {
+	const auto parentChat = (topic && topic->peer()->useSubsectionTabs())
+		? topic->peer().get()
+		: sublist
+		? sublist->parentChat()
+		: nullptr;
+	const auto barThread = [&]() -> Data::Thread* {
 		if (!parentChat
 			|| isHidden()
 			|| item->isEmpty()
 			|| item->isSponsored()) {
 			return nullptr;
 		}
-		const auto sublistPeer = sublist->sublistPeer();
 		if (const auto previous = previousDisplayedInBlocks()) {
 			const auto prev = previous->data();
-			if (const auto prevSublist = prev->savedSublist()) {
+			if (const auto prevTopic = prev->topic()) {
+				Assert(prevTopic->peer() == parentChat);
+				const auto topicRootId = topic->rootId();
+				if (prevTopic->rootId() == topicRootId) {
+					return nullptr;
+				}
+			} else if (const auto prevSublist = prev->savedSublist()) {
 				Assert(prevSublist->parentChat() == parentChat);
+				const auto sublistPeer = sublist->sublistPeer();
 				if (prevSublist->sublistPeer() == sublistPeer) {
 					return nullptr;
 				}
 			}
 		}
-		return (sublistPeer == parentChat) ? nullptr : sublistPeer.get();
+		return topic
+			? (Data::Thread*)topic
+			: (sublist && sublist->sublistPeer() != parentChat)
+			? (Data::Thread*)sublist
+			: nullptr;
 	}();
-	if (barPeer && !Has<MonoforumSenderBar>()) {
-		AddComponents(MonoforumSenderBar::Bit());
-		Get<MonoforumSenderBar>()->init(parentChat, barPeer);
-	} else if (!barPeer && Has<MonoforumSenderBar>()) {
-		RemoveComponents(MonoforumSenderBar::Bit());
+	if (barThread && !Has<ForumThreadBar>()) {
+		AddComponents(ForumThreadBar::Bit());
+		Get<ForumThreadBar>()->init(parentChat, barThread);
+	} else if (!barThread && Has<ForumThreadBar>()) {
+		RemoveComponents(ForumThreadBar::Bit());
 	}
 }
 
@@ -1744,7 +2248,28 @@ void Element::setServicePreMessage(
 			this,
 			std::move(text),
 			std::move(fullClickHandler),
-			std::move(media));
+			std::move(media),
+			false);
+		setPendingResize();
+	} else if (Has<ServicePreMessage>()) {
+		RemoveComponents(ServicePreMessage::Bit());
+		setPendingResize();
+	}
+}
+
+void Element::setServicePostMessage(
+		PreparedServiceText text,
+		ClickHandlerPtr fullClickHandler,
+		std::unique_ptr<Media> media) {
+	if (!text.text.empty() || media) {
+		AddComponents(ServicePreMessage::Bit());
+		const auto service = Get<ServicePreMessage>();
+		service->init(
+			this,
+			std::move(text),
+			std::move(fullClickHandler),
+			std::move(media),
+			true);
 		setPendingResize();
 	} else if (Has<ServicePreMessage>()) {
 		RemoveComponents(ServicePreMessage::Bit());
@@ -1906,11 +2431,12 @@ auto Element::verticalRepaintRange() const -> VerticalRepaintRange {
 }
 
 bool Element::hasHeavyPart() const {
-	return (_flags & Flag::HeavyCustomEmoji);
+	return (_flags & Flag::HeavyCustomEmoji)
+		|| (_media && _media->hasHeavyPart());
 }
 
 void Element::checkHeavyPart() {
-	if (!hasHeavyPart() && (!_media || !_media->hasHeavyPart())) {
+	if (!hasHeavyPart()) {
 		history()->owner().unregisterHeavyViewPart(this);
 	}
 }
@@ -2042,6 +2568,7 @@ void Element::itemTextUpdated() {
 	if (const auto media = _media.get()) {
 		media->parentTextUpdated();
 	}
+	_flags &= ~Flag::SummaryShown;
 	clearSpecialOnlyEmoji();
 	_text = Ui::Text::String(st::msgMinWidth);
 	_textWidth = -1;
@@ -2196,16 +2723,23 @@ SelectedQuote Element::FindSelectedQuote(
 	for (const auto &modification : text.modifications()) {
 		if (modification.position >= selection.to) {
 			break;
-		} else if (modification.position <= selection.from) {
+		} else if (modification.position < selection.from) {
 			modified.from += modification.skipped;
-			if (modification.added
-				&& modification.position < selection.from) {
-				--modified.from;
+			if (modification.added) {
+				modified.from = uint16(std::max(
+					0,
+					int(modified.from) - int(modification.added)));
+			}
+		} else if (modification.position == selection.from) {
+			if (!modification.added) {
+				modified.from += modification.skipped;
 			}
 		}
 		modified.to += modification.skipped;
 		if (modification.added && modified.to > modified.from) {
-			--modified.to;
+			modified.to = uint16(std::max(
+				int(modified.from),
+				int(modified.to) - int(modification.added)));
 		}
 	}
 	auto result = item->originalText();
@@ -2228,6 +2762,7 @@ SelectedQuote Element::FindSelectedQuote(
 		EntityType::StrikeOut,
 		EntityType::Spoiler,
 		EntityType::CustomEmoji,
+		EntityType::FormattedDate,
 	};
 	for (auto i = result.entities.begin(); i != result.entities.end();) {
 		const auto offset = i->offset();
@@ -2334,6 +2869,12 @@ Reactions::ButtonParameters Element::reactionButtonParameters(
 	return {};
 }
 
+ReplyButton::ButtonParameters Element::replyButtonParameters(
+		QPoint position,
+		const TextState &replyState) const {
+	return {};
+}
+
 int Element::reactionsOptimalWidth() const {
 	return 0;
 }
@@ -2380,9 +2921,6 @@ auto Element::takeReactionAnimations()
 		return _reactions->takeAnimations();
 	}
 	return {};
-}
-
-void Element::animateEffect(Ui::ReactionFlyAnimationArgs &&args) {
 }
 
 void Element::animateUnreadEffect() {
@@ -2578,6 +3116,62 @@ Window::SessionController *ExtractController(const ClickContext &context) {
 		return controller;
 	}
 	return nullptr;
+}
+
+TextSelection FindSearchQueryHighlight(
+		const QString &text,
+		const QString &query) {
+	const auto lower = query.toLower();
+	return FindSearchQueryHighlight(text, QStringView(lower));
+}
+
+TextSelection FindSearchQueryHighlight(
+		const QString &text,
+		QStringView lower) {
+	const auto inside = text.toLower();
+	const auto find = [&](QStringView part) {
+		auto skip = 0;
+		if (const auto from = inside.indexOf(part, skip); from >= 0) {
+			if (!from || !inside[from - 1].isLetterOrNumber()) {
+				return int(from);
+			}
+			skip = from + 1;
+		}
+		return -1;
+	};
+	if (const auto from = find(lower); from >= 0) {
+		const auto till = from + lower.size();
+		if (till >= inside.size()
+			|| !(inside.begin() + till)->isLetterOrNumber()) {
+			return { uint16(from), uint16(till) };
+		}
+	}
+	const auto tillEndOfWord = [&](int from) {
+		for (auto till = from + 1; till != inside.size(); ++till) {
+			if (!inside[till].isLetterOrNumber()) {
+				return TextSelection{ uint16(from), uint16(till) };
+			}
+		}
+		return TextSelection{ uint16(from), uint16(inside.size()) };
+	};
+	const auto words = Ui::Text::Words(lower);
+	for (const auto &word : words) {
+		const auto length = int(word.size());
+		const auto cut = length / 2;
+		const auto part = word.mid(0, length - cut);
+		const auto offset = find(part);
+		if (offset < 0) {
+			continue;
+		}
+		for (auto i = 0; i != cut; ++i) {
+			const auto part = word.mid(0, length - i);
+			if (const auto from = find(part); from >= 0) {
+				return tillEndOfWord(from);
+			}
+		}
+		return tillEndOfWord(offset);
+	}
+	return {};
 }
 
 } // namespace HistoryView

@@ -292,6 +292,11 @@ ProgressWidget::ProgressWidget(
 			tr::lng_export_progress(tr::now),
 			st::exportAboutLabel),
 		st::exportAboutPadding);
+	widthValue(
+	) | rpl::on_next([=](int width) {
+		_body->resizeToWidth(width);
+		_body->moveToLeft(0, 0);
+	}, _body->lifetime());
 
 	auto skipFileWrap = _body->add(object_ptr<Ui::FixedHeightWidget>(
 		_body,
@@ -316,7 +321,7 @@ ProgressWidget::ProgressWidget(
 
 	std::move(
 		content
-	) | rpl::start_with_next([=](Content &&content) {
+	) | rpl::on_next([=](Content &&content) {
 		updateState(std::move(content));
 	}, lifetime());
 
@@ -343,7 +348,7 @@ rpl::producer<uint64> ProgressWidget::skipFileClicks() const {
 rpl::producer<> ProgressWidget::cancelClicks() const {
 	return _cancel
 		? (_cancel->clicks() | rpl::to_empty)
-		: (rpl::never<>() | rpl::type_erased());
+		: (rpl::never<>() | rpl::type_erased);
 }
 
 rpl::producer<> ProgressWidget::doneClicks() const {
@@ -355,7 +360,7 @@ void ProgressWidget::setupBottomButton(not_null<Ui::RoundButton*> button) {
 	button->show();
 
 	sizeValue(
-	) | rpl::start_with_next([=](QSize size) {
+	) | rpl::on_next([=](QSize size) {
 		button->move(
 			(size.width() - button->width()) / 2,
 			(size.height() - st::exportCancelBottom - button->height()));

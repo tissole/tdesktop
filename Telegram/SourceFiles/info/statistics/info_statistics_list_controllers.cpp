@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "api/api_credits.h"
 #include "api/api_statistics.h"
+#include "boxes/peers/replace_boost_box.h" // GenerateGiftUniqueUserpicCallback
 #include "boxes/peer_list_controllers.h"
 #include "boxes/peer_list_widgets.h"
 #include "info/channel_statistics/earn/earn_icons.h"
@@ -882,13 +883,13 @@ void CreditsRow::init() {
 	const auto name = !isSpecial
 		? PeerListRow::generateName()
 		: Ui::GenerateEntryName(_entry).text;
-	_name = _entry.paidMessagesCount
-		? tr::lng_credits_paid_messages_fee(
-			tr::now,
-			lt_count,
-			_entry.paidMessagesCount)
+	_name = (_entry.isLiveStoryReaction() || _entry.paidMessagesCount)
+		? name
+		: _entry.postsSearch
+		? tr::lng_credits_box_history_entry_posts_search(tr::now)
+		: (_entry.giftUpgraded && _entry.uniqueGift && !isSpecial)
+		? u"%1 #%2"_q.arg(_entry.uniqueGift->title).arg(Lang::FormatCountDecimal(_entry.uniqueGift->number))
 		: ((!_entry.subscriptionUntil.isNull() && !isSpecial)
-			|| (_entry.giftUpgraded && !isSpecial)
 			|| (_entry.giftResale && !isSpecial)
 			|| _entry.title.isEmpty())
 		? name
@@ -899,8 +900,13 @@ void CreditsRow::init() {
 			tr::now,
 			lt_count_decimal,
 			_entry.floodSkip)
+		: _entry.isLiveStoryReaction()
+		? tr::lng_credits_paid_messages_fee_live_reaction(tr::now)
 		: _entry.paidMessagesCount
-		? name
+		? tr::lng_credits_paid_messages_fee(
+			tr::now,
+			lt_count,
+			_entry.paidMessagesCount)
 		: (!_entry.subscriptionUntil.isNull() && !_entry.title.isEmpty())
 		? _entry.title
 		: _entry.refunded
@@ -918,6 +924,8 @@ void CreditsRow::init() {
 		? tr::lng_credits_box_history_entry_fragment(tr::now)
 		: (_entry.gift && isSpecial)
 		? tr::lng_credits_box_history_entry_anonymous(tr::now)
+		: _entry.giftUpgraded
+		? tr::lng_credits_box_history_entry_gift_upgrade(tr::now)
 		: (_name == name)
 		? Ui::GenerateEntryName(_entry).text
 		: name;
@@ -934,7 +942,7 @@ void CreditsRow::init() {
 				langDayOfMonthFull(_subscription.until.date())));
 		_description.setText(st::defaultTextStyle, _subscription.title);
 	}
-	if (_entry.bareGiftStickerId) {
+	if (_entry.bareGiftStickerId && !_entry.giftUpgraded) {
 		_description.setMarkedText(
 			st::defaultTextStyle,
 			Ui::Text::SingleCustomEmoji(
@@ -974,7 +982,7 @@ void CreditsRow::init() {
 			TextWithEntities()
 				.append(_entry.in ? QChar('+') : kMinus)
 				.append(isCurrency
-					? Info::ChannelEarn::MajorPart(_entry.credits)
+					? Info::ChannelEarn::MajorPart(_entry.credits.abs())
 					: Lang::FormatCreditsAmountDecimal(_entry.credits.abs()))
 				.append(QChar(' '))
 				.append(isCurrency
@@ -997,14 +1005,14 @@ void CreditsRow::init() {
 		}
 	}
 	if (!_paintUserpicCallback) {
-		_paintUserpicCallback = /*_entry.stargift
-			? Ui::GenerateGiftStickerUserpicCallback(
+		_paintUserpicCallback = _entry.giftUpgraded
+			? GenerateGiftUniqueUserpicCallback(
 				_session,
-				_entry.bareGiftStickerId,
+				_entry.uniqueGift,
 				_context.repaint)
-			: */!isSpecial
-			? PeerListRow::generatePaintUserpicCallback(false)
-			: Ui::GenerateCreditsPaintUserpicCallback(_entry);
+			: (isSpecial || _entry.postsSearch)
+			? Ui::GenerateCreditsPaintUserpicCallback(_entry)
+			: PeerListRow::generatePaintUserpicCallback(false);
 	}
 }
 
@@ -1215,13 +1223,13 @@ CreditsController::CreditsController(CreditsDescriptor d)
 		if (data.startsWith(u"ton"_q)) {
 			const auto in = data.split(u":"_q)[1].startsWith(u"in"_q);
 			return std::make_unique<Ui::Text::ShiftedEmoji>(
-				std::make_unique<Ui::Text::StaticCustomEmoji>(
+				std::make_unique<Ui::CustomEmoji::Internal>(
+					data.toString(),
 					Ui::Earn::IconCurrencyColored(
 						st::tonFieldIconSize,
 						in
 							? st::boxTextFgGood->c
-							: st::menuIconAttentionColor->c),
-					data.toString()),
+							: st::menuIconAttentionColor->c)),
 				QPoint(0, st::lineWidth));
 		}
 		const auto desc = DeserializeCreditsRowDescriptionData(

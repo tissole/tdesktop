@@ -81,6 +81,17 @@ public:
 	, _storiesContext(context) {
 	}
 
+	OpenRequest(
+		Window::SessionController *controller,
+		std::shared_ptr<Data::GroupCall> call,
+		QString linkSlug,
+		MsgId joinMessageId)
+	: _controller(controller)
+	, _call(std::move(call))
+	, _callLinkSlug(std::move(linkSlug))
+	, _callJoinMessageId(joinMessageId) {
+	}
+
 	[[nodiscard]] PeerData *peer() const {
 		return _peer;
 	}
@@ -109,6 +120,16 @@ public:
 	}
 	[[nodiscard]] Data::StoriesContext storiesContext() const {
 		return _storiesContext;
+	}
+
+	[[nodiscard]] const std::shared_ptr<Data::GroupCall> &call() const {
+		return _call;
+	}
+	[[nodiscard]] const QString &callLinkSlug() const {
+		return _callLinkSlug;
+	}
+	[[nodiscard]] MsgId callJoinMessageId() const {
+		return _callJoinMessageId;
 	}
 
 	[[nodiscard]] std::optional<Data::CloudTheme> cloudTheme() const {
@@ -141,8 +162,14 @@ private:
 	bool _continueStreaming = false;
 	crl::time _startTime = 0;
 
+	std::shared_ptr<Data::GroupCall> _call;
+	QString _callLinkSlug;
+	MsgId _callJoinMessageId = 0;
+
 };
 
 [[nodiscard]] TimeId ExtractVideoTimestamp(not_null<HistoryItem*> item);
+
+[[nodiscard]] TextWithEntities StripQuoteEntities(TextWithEntities text);
 
 } // namespace Media::View

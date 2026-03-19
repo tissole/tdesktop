@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/controls/swipe_handler_data.h"
 #include "ui/effects/animations.h"
 #include "ui/dragging_scroll_manager.h"
+#include "ui/widgets/middle_click_autoscroll.h"
 #include "ui/widgets/tooltip.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/userpic_view.h"
@@ -50,6 +51,11 @@ class Manager;
 struct ChosenReaction;
 struct ButtonParameters;
 } // namespace HistoryView::Reactions
+
+namespace HistoryView::ReplyButton {
+class Manager;
+struct ButtonParameters;
+} // namespace HistoryView::ReplyButton
 
 namespace Window {
 class SessionController;
@@ -132,6 +138,7 @@ public:
 
 	void repaintItem(const HistoryItem *item);
 	void repaintItem(const Element *view);
+	void repaintItem(const Element *view, QRect rect);
 
 	[[nodiscard]] bool canCopySelected() const;
 	[[nodiscard]] bool canDeleteSelected() const;
@@ -318,13 +325,13 @@ private:
 	template <typename Method>
 	void enumerateDates(Method method);
 
-	// This function finds all monoforum sender elements that are displayed and calls template method
+	// This function finds all forum thread bar elements that are displayed and calls template method
 	// for each found date element (from the bottom to the top) using enumerateItems() method.
 	//
 	// Method has "bool (*Method)(not_null<Element*> view, int itemtop, int dateTop)" signature
 	// if it returns false the enumeration stops immediately.
 	template <typename Method>
-	void enumerateMonoforumSenders(Method method);
+	void enumerateForumThreadBars(Method method);
 
 	void scrollDateCheck();
 	void scrollDateHideByTimer();
@@ -445,6 +452,11 @@ private:
 		QPoint position,
 		const HistoryView::TextState &reactionState) const
 	-> HistoryView::Reactions::ButtonParameters;
+	[[nodiscard]] auto replyButtonParameters(
+		not_null<const Element*> view,
+		QPoint position,
+		const HistoryView::TextState &replyState) const
+	-> HistoryView::ReplyButton::ButtonParameters;
 	void toggleFavoriteReaction(not_null<Element*> view) const;
 	void reactionChosen(const ChosenReaction &reaction);
 
@@ -476,9 +488,11 @@ private:
 	History *_migrated = nullptr;
 	HistoryView::ElementDelegate *_migratedElementDelegate = nullptr;
 	int _contentWidth = 0;
-	int _historyPaddingTop = 0;
+	int _historyMarginTop = 0;
+	int _historyMarginBottom = 0;
 	int _revealHeight = 0;
-	Ui::PeerUserpicView _monoforumSenderUserpicView;
+	int _forumThreadBarWidth = 0;
+	Ui::PeerUserpicView _forumThreadBarUserpicView;
 
 	// Save visible area coords for painting / pressing userpics.
 	int _visibleAreaTop = 0;
@@ -516,6 +530,7 @@ private:
 
 	std::unique_ptr<HistoryView::Reactions::Manager> _reactionsManager;
 	rpl::variable<HistoryItem*> _reactionsItem;
+	std::unique_ptr<HistoryView::ReplyButton::Manager> _replyButtonManager;
 	HistoryItem *_pinnedItem = nullptr;
 
 	MouseAction _mouseAction = MouseAction::None;
@@ -530,6 +545,7 @@ private:
 	bool _dragStateUserpic = false;
 	bool _pressWasInactive = false;
 	bool _recountedAfterPendingResizedItems = false;
+	bool _useCornerReply = false;
 	bool _useCornerReaction = false;
 	bool _acceptsHorizontalScroll = false;
 	bool _horizontalScrollLocked = false;
@@ -565,6 +581,7 @@ private:
 	crl::time _touchAccelerationTime = 0;
 	crl::time _touchTime = 0;
 	base::Timer _touchScrollTimer;
+	Ui::MiddleClickAutoscroll _middleClickAutoscroll;
 
 	Ui::Controls::SwipeContextData _gestureHorizontal;
 	Ui::Controls::SwipeBackResult _swipeBackData;
@@ -580,6 +597,7 @@ private:
 	Element *_scrollDateLastItem = nullptr;
 	int _scrollDateLastItemTop = 0;
 	ClickHandlerPtr _scrollDateLink;
+	ClickHandlerPtr _forumThreadBarLink;
 
 };
 

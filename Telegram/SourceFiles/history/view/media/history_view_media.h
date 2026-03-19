@@ -365,6 +365,9 @@ public:
 	[[nodiscard]] virtual QMargins bubbleRollRepaintMargins() const {
 		return QMargins();
 	}
+	virtual bool updateItemData() {
+		return false;
+	}
 	virtual void paintBubbleFireworks(
 		Painter &p,
 		const QRect &bubble,

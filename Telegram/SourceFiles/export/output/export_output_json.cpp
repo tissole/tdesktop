@@ -600,8 +600,8 @@ QByteArray SerializeMessage(
 		if (!data.cost.isEmpty()) {
 			push("cost", data.cost);
 		}
-		if (data.months) {
-			push("months", data.months);
+		if (data.days) {
+			push("days", data.days);
 		}
 	}, [&](const ActionTopicCreate &data) {
 		pushActor();
@@ -636,7 +636,7 @@ QByteArray SerializeMessage(
 		if (data.boostPeerId) {
 			push("boost_peer_id", data.boostPeerId);
 		}
-		push("months", data.months);
+		push("days", data.days);
 		push("unclaimed", data.unclaimed);
 		push("via_giveaway", data.viaGiveaway);
 	}, [&](const ActionGiveawayLaunch &data) {
@@ -754,6 +754,31 @@ QByteArray SerializeMessage(
 		pushActor();
 		pushAction("suggested_post_refund");
 		push("user_initiated", data.payerInitiated);
+	}, [&](const ActionSuggestBirthday &data) {
+		pushActor();
+		pushAction("suggest_birthday");
+		push("day", data.birthday.day());
+		push("month", data.birthday.month());
+		if (const auto year = data.birthday.year()) {
+			push("year", year);
+		}
+	}, [&](const ActionNoForwardsToggle &data) {
+		pushActor();
+		pushAction("no_forwards_toggle");
+		push("new_value", data.newValue);
+	}, [&](const ActionNoForwardsRequest &data) {
+		pushActor();
+		pushAction("no_forwards_request");
+		push("expired", data.expired);
+		push("new_value", data.newValue);
+	}, [&](const ActionNewCreatorPending &data) {
+		pushActor();
+		pushAction("new_creator_pending");
+		pushBare("new_creator", wrapUserName(data.newCreatorId));
+	}, [&](const ActionChangeCreator &data) {
+		pushActor();
+		pushAction("change_creator");
+		pushBare("new_creator", wrapUserName(data.newCreatorId));
 	}, [](v::null_t) {});
 
 	if (v::is_null(message.action.content)) {
@@ -763,6 +788,7 @@ QByteArray SerializeMessage(
 			pushBare(
 				"forwarded_from",
 				wrapPeerName(message.forwardedFromId));
+			push("forwarded_from_id", message.forwardedFromId);
 		} else if (!message.forwardedFromName.isEmpty()) {
 			pushBare(
 				"forwarded_from",
@@ -1342,6 +1368,34 @@ Result JsonWriter::writeStoriesEnd() {
 	Expects(_output != nullptr);
 
 	return writeBlock(popNesting());
+}
+
+Result JsonWriter::writeProfileMusicStart(const Data::ProfileMusicInfo &data) {
+	Expects(_output != nullptr);
+
+	auto block = prepareObjectItemStart("profile_music");
+	return _output->writeBlock(block + pushNesting(Context::kArray));
+}
+
+Result JsonWriter::writeProfileMusicSlice(const Data::ProfileMusicSlice &data) {
+	Expects(_output != nullptr);
+
+	if (data.list.empty()) {
+		return Result::Success();
+	}
+
+	auto block = QByteArray();
+	for (const auto &message : data.list) {
+		block.append(prepareArrayItemStart());
+		block.append(SerializeMessage(_context, message, {}, QString()));
+	}
+	return _output->writeBlock(block);
+}
+
+Result JsonWriter::writeProfileMusicEnd() {
+	Expects(_output != nullptr);
+
+	return _output->writeBlock(popNesting());
 }
 
 Result JsonWriter::writeContactsList(const Data::ContactsList &data) {

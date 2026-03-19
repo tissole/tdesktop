@@ -72,6 +72,7 @@ struct Settings {
 		PrivateChannels     = 0x200,
 		PublicChannels      = 0x400,
 		Stories             = 0x800,
+		ProfileMusic        = 0x1000,
 
 		GroupsMask          = PrivateGroups | PublicGroups,
 		ChannelsMask        = PrivateChannels | PublicChannels,
@@ -82,6 +83,7 @@ struct Settings {
 			| Userpics
 			| Contacts
 			| Stories
+			| ProfileMusic
 			| Sessions),
 		AllMask             = NonChatsMask | OtherData | AnyChatsMask,
 	};
@@ -107,10 +109,18 @@ struct Settings {
 	int32 singlePeerTillId = 0;  // 0 means no limit
 	bool useIdRange = false;     // Flag to indicate ID range export
 
+	int32 singleTopicRootId = 0;
+	uint64 singleTopicPeerId = 0;
+	QString singleTopicTitle;
+
 	TimeId availableAt = 0;
 
 	bool onlySinglePeer() const {
 		return singlePeer.type() != mtpc_inputPeerEmpty;
+	}
+
+	bool onlySingleTopic() const {
+		return onlySinglePeer() && singleTopicRootId != 0;
 	}
 
 	static inline Types DefaultTypes() {
@@ -118,6 +128,7 @@ struct Settings {
 			| Type::Userpics
 			| Type::Contacts
 			| Type::Stories
+			| Type::ProfileMusic
 			| Type::PersonalChats
 			| Type::PrivateGroups;
 	}

@@ -28,7 +28,7 @@ namespace Data {
 struct UpdatedFileReferences;
 class WallPaper;
 struct ResolvedForwardDraft;
-enum class DefaultNotify;
+enum class DefaultNotify : uint8_t;
 enum class StickersType : uchar;
 class Forum;
 class ForumTopic;
@@ -128,6 +128,8 @@ QString RequestKey(Types &&...values) {
 	}
 	return result;
 }
+
+[[nodiscard]] TimeId UnixtimeFromMsgId(mtpMsgId msgId);
 
 } // namespace Api
 
@@ -365,7 +367,9 @@ public:
 	void sendShortcutMessages(
 		not_null<PeerData*> peer,
 		BusinessShortcutId id);
-	void sendMessage(MessageToSend &&message);
+	void sendMessage(
+		MessageToSend &&message,
+		std::optional<MsgId> localMessageId = std::nullopt);
 	void sendBotStart(
 		std::shared_ptr<Ui::Show> show,
 		not_null<UserData*> bot,
@@ -429,6 +433,12 @@ public:
 	void updatePrivacyLastSeens();
 
 	static constexpr auto kJoinErrorDuration = 5 * crl::time(1000);
+
+	static void ProcessRecentSelfForwards(
+		not_null<Main::Session*> session,
+		const MTPUpdates &updates,
+		PeerId targetPeerId,
+		PeerId fromPeerId);
 
 private:
 	struct MessageDataRequest {

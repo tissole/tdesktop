@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/menu/menu_add_action_callback.h"
 
 class History;
+class HistoryItem;
 
 namespace Api {
 struct SendOptions;
@@ -54,6 +55,10 @@ enum class PeerType : uint8;
 using PeerTypes = base::flags<PeerType>;
 } // namespace InlineBots
 
+namespace Main {
+class SessionShow;
+} // namespace Main
+
 namespace Window {
 
 class Controller;
@@ -76,8 +81,14 @@ bool FillVideoChatMenu(
 void FillSenderUserpicMenu(
 	not_null<SessionController*> controller,
 	not_null<PeerData*> peer,
+	PeerData *groupPeer,
 	Ui::InputField *fieldForMention,
 	Dialogs::Key searchInEntry,
+	const PeerMenuCallback &addAction);
+
+void AddSenderUserpicModerateAction(
+	not_null<SessionController*> controller,
+	HistoryItem *moderateItem,
 	const PeerMenuCallback &addAction);
 
 void MenuAddMarkAsReadAllChatsAction(
@@ -96,6 +107,10 @@ void PeerMenuUnhidePinnedMessage(not_null<PeerData*> peer);
 void PeerMenuExportChat(
 	not_null<Window::SessionController*> controller,
 	not_null<PeerData*> peer);
+void PeerMenuExportTopic(
+	not_null<Window::SessionNavigation*> navigation,
+	not_null<PeerData*> peer,
+	MsgId topicRootId);
 void PeerMenuDeleteContact(
 	not_null<Window::SessionController*> controller,
 	not_null<UserData*> user);
@@ -109,7 +124,7 @@ void PeerMenuCreatePoll(
 	not_null<Window::SessionController*> controller,
 	not_null<PeerData*> peer,
 	FullReplyTo replyTo = FullReplyTo(),
-	SuggestPostOptions suggest = SuggestPostOptions(),
+	SuggestOptions suggest = SuggestOptions(),
 	PollData::Flags chosen = PollData::Flags(),
 	PollData::Flags disabled = PollData::Flags(),
 	Api::SendType sendType = Api::SendType::Normal,
@@ -124,7 +139,7 @@ void PeerMenuCreateTodoList(
 	not_null<Window::SessionController*> controller,
 	not_null<PeerData*> peer,
 	FullReplyTo replyTo = FullReplyTo(),
-	SuggestPostOptions suggest = SuggestPostOptions(),
+	SuggestOptions suggest = SuggestOptions(),
 	Api::SendType sendType = Api::SendType::Normal,
 	SendMenu::Details sendMenuDetails = SendMenu::Details());
 void PeerMenuEditTodoList(
@@ -270,5 +285,9 @@ void PeerMenuConfirmToggleFee(
 	not_null<PeerData*> peer,
 	not_null<UserData*> user,
 	bool removeFee);
+
+void ForwardToSelf(
+	std::shared_ptr<Main::SessionShow> show,
+	const Data::ForwardDraft &draft);
 
 } // namespace Window

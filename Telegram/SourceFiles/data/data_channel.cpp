@@ -33,6 +33,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/unixtime.h"
 #include "core/application.h"
 #include "history/history.h"
+#include "history/history_item.h"
 #include "lang/lang_keys.h"
 #include "api/api_chat_invite.h"
 #include "api/api_invite_links.h"
@@ -117,8 +118,6 @@ std::unique_ptr<Data::SavedMessages> MegagroupInfo::takeMonoforumData() {
 
 ChannelData::ChannelData(not_null<Data::Session*> owner, PeerId id)
 : PeerData(owner, id)
-, inputChannel(
-	MTP_inputChannel(MTP_long(peerToChannel(id).bare), MTP_long(0)))
 , _ptsWaiter(&owner->session().updates()) {
 }
 
@@ -177,13 +176,7 @@ bool ChannelData::isUsernameEditable(QString username) const {
 }
 
 void ChannelData::setAccessHash(uint64 accessHash) {
-	access = accessHash;
-	input = MTP_inputPeerChannel(
-		MTP_long(peerToChannel(id).bare),
-		MTP_long(accessHash));
-	inputChannel = MTP_inputChannel(
-		MTP_long(peerToChannel(id).bare),
-		MTP_long(accessHash));
+	_accessHash = accessHash;
 }
 
 void ChannelData::setFlags(ChannelDataFlags which) {
@@ -237,7 +230,8 @@ void ChannelData::setFlags(ChannelDataFlags which) {
 		| Flag::CallNotEmpty
 		| Flag::SimilarExpanded
 		| Flag::Signatures
-		| Flag::SignatureProfiles)) {
+		| Flag::SignatureProfiles
+		| Flag::ForumTabs)) {
 		if (const auto history = this->owner().historyLoaded(this)) {
 			if (diff & Flag::CallNotEmpty) {
 				history->updateChatListEntry();
@@ -263,6 +257,9 @@ void ChannelData::setFlags(ChannelDataFlags which) {
 			}
 			if (diff & (Flag::Signatures | Flag::SignatureProfiles)) {
 				session().changes().peerUpdated(this, UpdateFlag::Rights);
+			}
+			if (diff & Flag::ForumTabs) {
+				history->forumTabsChanged(which & Flag::ForumTabs);
 			}
 		}
 	}
@@ -515,6 +512,17 @@ void ChannelData::applyEditAdmin(
 	session().changes().peerUpdated(this, UpdateFlag::Admins);
 }
 
+void ChannelData::applyEditMemberRank(
+		not_null<UserData*> user,
+		const QString &rank) {
+	if (!mgInfo) {
+		return;
+	}
+	const auto userId = peerToUser(user->id);
+	Data::ChannelMemberRankChanges changes(this);
+	changes.feed(userId, rank);
+}
+
 void ChannelData::applyEditBanned(
 		not_null<PeerData*> participant,
 		ChatRestrictionsInfo oldRights,
@@ -601,7 +609,7 @@ void ChannelData::markForbidden() {
 			? MTPDchannelForbidden::Flag::f_megagroup
 			: MTPDchannelForbidden::Flag::f_broadcast),
 		MTP_long(peerToChannel(id).bare),
-		MTP_long(access),
+		MTP_long(_accessHash),
 		MTP_string(name()),
 		MTPint()));
 }
@@ -625,27 +633,6 @@ bool ChannelData::lastParticipantsRequestNeeded() const {
 			& MegagroupInfo::LastParticipantsOnceReceived)
 		|| (mgInfo->lastParticipantsStatus
 			& MegagroupInfo::LastParticipantsCountOutdated);
-}
-
-// Source from kotatogram
-QString ChannelData::adminTitle(not_null<UserData*> user) const {
-	if (!isGroupAdmin(user)) {
-		return QString();
-	}
-	const auto info = mgInfo.get();
-	const auto i = mgInfo->admins.find(peerToUser(user->id));
-	const auto custom = (i != mgInfo->admins.end())
-		? i->second
-		: (info->creator == user)
-		? info->creatorRank
-		: QString();
-	return !custom.isEmpty()
-		? custom
-		: (info->creator == user)
-		? tr::lng_owner_badge(tr::now)
-		: (i != mgInfo->admins.end())
-		? tr::lng_admin_badge(tr::now)
-		: QString();
 }
 
 auto ChannelData::unavailableReasons() const
@@ -783,9 +770,7 @@ bool ChannelData::canEditEmoji() const {
 }
 
 bool ChannelData::canDelete() const {
-	constexpr auto kDeleteChannelMembersLimit = 1000;
-	return amCreator()
-		&& (membersCount() <= kDeleteChannelMembersLimit);
+	return amCreator();
 }
 
 bool ChannelData::canEditLastAdmin(not_null<UserData*> user) const {
@@ -1030,7 +1015,7 @@ rpl::producer<bool> ChannelData::unrestrictedByBoostsValue() const {
 	return mgInfo
 		? mgInfo->unrestrictedByBoostsChanges.events_starting_with(
 			unrestrictedByBoosts())
-		: (rpl::single(false) | rpl::type_erased());
+		: (rpl::single(false) | rpl::type_erased);
 }
 
 void ChannelData::setBoostsUnrestrict(int applied, int unrestrict) {
@@ -1120,7 +1105,7 @@ void ChannelData::setGroupCall(
 			data.vaccess_hash().v,
 			scheduleDate,
 			rtmp,
-			false); // conference
+			Data::GroupCallOrigin::Group);
 		owner().registerGroupCall(_call.get());
 		session().changes().peerUpdated(this, UpdateFlag::GroupCall);
 		addFlags(Flag::CallActive);
@@ -1179,20 +1164,34 @@ bool ChannelData::hasUnreadStories() const {
 	return flags() & Flag::HasUnreadStories;
 }
 
+bool ChannelData::hasActiveVideoStream() const {
+	return flags() & Flag::HasActiveVideoStream;
+}
+
 void ChannelData::setStoriesState(StoriesState state) {
 	Expects(state != StoriesState::Unknown);
 
 	const auto was = flags();
 	switch (state) {
 	case StoriesState::None:
-		_flags.remove(Flag::HasActiveStories | Flag::HasUnreadStories);
+		_flags.remove(Flag::HasActiveStories
+			| Flag::HasUnreadStories
+			| Flag::HasActiveVideoStream);
 		break;
 	case StoriesState::HasRead:
-		_flags.set(
-			(flags() & ~Flag::HasUnreadStories) | Flag::HasActiveStories);
+		_flags.set(Flag::HasActiveStories
+			| (was
+				& ~(Flag::HasUnreadStories | Flag::HasActiveVideoStream)));
 		break;
 	case StoriesState::HasUnread:
-		_flags.add(Flag::HasActiveStories | Flag::HasUnreadStories);
+		_flags.set((was & ~Flag::HasActiveVideoStream)
+			| Flag::HasActiveStories
+			| Flag::HasUnreadStories);
+		break;
+	case StoriesState::HasVideoStream:
+		_flags.set((was & ~Flag::HasUnreadStories)
+			| Flag::HasActiveStories
+			| Flag::HasActiveVideoStream);
 		break;
 	}
 	if (flags() != was) {
@@ -1200,12 +1199,6 @@ void ChannelData::setStoriesState(StoriesState state) {
 			history->updateChatListEntryPostponed();
 		}
 		session().changes().peerUpdated(this, UpdateFlag::StoriesState);
-	}
-}
-
-void ChannelData::processTopics(const MTPVector<MTPForumTopic> &topics) {
-	if (const auto forum = this->forum()) {
-		forum->applyReceivedTopics(topics);
 	}
 }
 
@@ -1223,6 +1216,19 @@ TimeId ChannelData::subscriptionUntilDate() const {
 
 void ChannelData::updateSubscriptionUntilDate(TimeId subscriptionUntilDate) {
 	_subscriptionUntilDate = subscriptionUntilDate;
+}
+
+MTPInputChannel ChannelData::inputChannel() const {
+	const auto item = isLoaded() ? nullptr : owner().messageWithPeer(id);
+	if (item) {
+		return MTP_inputChannelFromMessage(
+			item->history()->peer->input(),
+			MTP_int(item->id.bare),
+			MTP_long(peerToChannel(id).bare));
+	}
+	return MTP_inputChannel(
+		MTP_long(peerToChannel(id).bare),
+		MTP_long(_accessHash));
 }
 
 namespace Data {
@@ -1427,7 +1433,7 @@ void ApplyChannelUpdate(
 			update.vboosts_applied().value_or_empty(),
 			update.vboosts_unrestrict().value_or_empty());
 	}
-	channel->setThemeEmoji(qs(update.vtheme_emoticon().value_or_empty()));
+	channel->setThemeToken(qs(update.vtheme_emoticon().value_or_empty()));
 	channel->setTranslationDisabled(update.is_translations_disabled());
 
 	const auto reactionsLimit = update.vreactions_limit().value_or_empty();
@@ -1491,7 +1497,7 @@ void ApplyChannelUpdate(
 			}
 			creditsLoadLifetime->destroy();
 		});
-		base::timer_once(kTimeout) | rpl::start_with_next([=] {
+		base::timer_once(kTimeout) | rpl::on_next([=] {
 			creditsLoadLifetime->destroy();
 		}, *creditsLoadLifetime);
 		const auto currencyLoadLifetime = std::make_shared<rpl::lifetime>();
@@ -1503,13 +1509,13 @@ void ApplyChannelUpdate(
 			}
 			currencyLoadLifetime->destroy();
 		};
-		currencyLoad->request() | rpl::start_with_error_done(
+		currencyLoad->request() | rpl::on_error_done(
 			[=](const QString &error) {
 				apply(CreditsAmount(0, CreditsType::Ton));
 			},
 			[=] { apply(currencyLoad->data().currentBalance); },
 			*currencyLoadLifetime);
-		base::timer_once(kTimeout) | rpl::start_with_next([=] {
+		base::timer_once(kTimeout) | rpl::on_next([=] {
 			currencyLoadLifetime->destroy();
 		}, *currencyLoadLifetime);
 	}

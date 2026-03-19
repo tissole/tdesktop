@@ -378,10 +378,8 @@ connectionPortInputField: InputField(defaultInputField) {
 	width: 55px;
 }
 connectionUserInputField: InputField(defaultInputField) {
-	width: 95px;
 }
 connectionPasswordInputField: InputField(defaultInputField) {
-	width: 120px;
 }
 connectionIPv6Skip: 11px;
 
@@ -537,7 +535,6 @@ changePhoneDescription: FlatLabel(defaultFlatLabel) {
 }
 changePhoneDescriptionPadding: margins(0px, 1px, 0px, 8px);
 changePhoneIconPadding: margins(0px, 39px, 0px, 5px);
-changePhoneIconSize: 120px;
 changePhoneLabel: FlatLabel(defaultFlatLabel) {
 	minWidth: 275px;
 	textFg: windowSubTextFg;
@@ -545,6 +542,8 @@ changePhoneLabel: FlatLabel(defaultFlatLabel) {
 changePhoneError: FlatLabel(changePhoneLabel) {
 	textFg: boxTextFgError;
 }
+
+normalBoxLottieSize: size(120px, 120px);
 
 adminLogFilterUserpicLeft: 15px;
 adminLogFilterLittleSkip: 16px;
@@ -656,8 +655,8 @@ proxyCheckingAnimation: InfiniteRadialAnimation(defaultInfiniteRadialAnimation) 
 	thickness: 1px;
 	size: size(8px, 8px);
 }
-proxyDropdownDownPosition: point(-2px, 35px);
-proxyDropdownUpPosition: point(-2px, 20px);
+proxyDropdownDownPosition: point(2px, 35px);
+proxyDropdownUpPosition: point(2px, 20px);
 
 proxyAboutPadding: margins(22px, 7px, 22px, 14px);
 proxyAboutSponsorPadding: margins(22px, 7px, 22px, 0px);
@@ -687,7 +686,7 @@ themesMenuToggle: IconButton(defaultIconButton) {
 	rippleAreaSize: 36px;
 	ripple: defaultRippleAnimationBgOver;
 }
-themesMenuPosition: point(-2px, 25px);
+themesMenuPosition: point(2px, 25px);
 
 createPollField: InputField(defaultInputField) {
 	textMargins: margins(0px, 4px, 0px, 4px);
@@ -754,11 +753,17 @@ createPollFieldTitlePadding: margins(22px, 7px, 10px, 6px);
 
 sendGifWithCaptionEmojiPosition: point(-30px, 23px);
 
+notesFieldWithEmoji: InputField(defaultInputField) {
+	textMargins: margins(0px, 28px, 30px, 4px);
+//	border: 0px;
+//	borderActive: 0px;
+}
+
 backgroundCheckbox: Checkbox(defaultCheckbox) {
 	textFg: msgServiceFg;
 	textFgActive: msgServiceFg;
 
-	width: -50px;
+	width: -10px;
 	margin: margins(0px, 0px, 0px, 0px);
 
 	textPosition: point(0px, 6px);
@@ -801,12 +806,42 @@ backgroundConfirmCancel: RoundButton(backgroundConfirm) {
 		color: shadowFg;
 	}
 }
+urlAuthBox: Box(defaultBox) {
+	buttonPadding: margins(0px, 0px, 0px, 12px);
+	buttonHeight: 0px;
+}
 urlAuthCheckbox: Checkbox(defaultBoxCheckbox) {
 	width: 240px;
+}
+urlAuthCodesTitle: FlatLabel(defaultPeerListAbout) {
+	textFg: boxTitleFg;
+	style: TextStyle(defaultTextStyle) {
+		font: boxTitleFont;
+	}
+}
+urlAuthCheckboxAbout: FlatLabel(defaultPeerListAbout) {
+	style: TextStyle(boxTextStyle) {
+		font: font(12px);
+	}
+}
+urlAuthCodesButton: RoundButton(defaultLightButton) {
+	height: 58px;
+	textTop: 19px;
+	style: TextStyle(semiboldTextStyle) {
+		font: font(20px semibold);
+	}
+}
+urlAuthBoxRowTopLabel: FlatLabel(boxLabel) {
+	maxHeight: 30px;
+}
+urlAuthBoxRowBottomLabel: FlatLabel(defaultFlatLabel) {
+	textFg: windowSubTextFg;
+	maxHeight: 30px;
 }
 
 addContactFieldMargin: margins(19px, 0px, 19px, 10px);
 addContactWarningMargin: margins(19px, 10px, 19px, 5px);
+editContactSuggestBirthday: icon{{ "settings/birthday_add-22x22", lightButtonFg }};
 blockUserConfirmation: FlatLabel(boxLabel) {
 	minWidth: 240px;
 }
@@ -834,6 +869,10 @@ customBadgeField: InputField(defaultInputField) {
 	heightMin: 32px;
 }
 
+tagPreviewLineHeight: 8px;
+tagPreviewLineSpacing: 4px;
+tagPreviewInputSkip: 16px;
+
 pollResultsQuestion: FlatLabel(defaultFlatLabel) {
 	minWidth: 320px;
 	textFg: windowBoldFg;
@@ -858,6 +897,11 @@ pollResultsShowMore: SettingsButton(defaultSettingsButton) {
 
 	ripple: defaultRippleAnimation;
 }
+pollResultsVoteTimeFont: font(fsize);
+pollResultsVoteTimeDateFont: font(fsize);
+pollResultsVoteTimeRightSkip: 16px;
+pollResultsVoteTimeLeftSkip: 8px;
+pollResultsVoteTimeGap: 2px;
 
 inviteViaLinkButton: SettingsButton(defaultSettingsButton) {
 	textFg: lightButtonFg;
@@ -921,6 +965,14 @@ scheduleTimeSeparator: FlatLabel(defaultFlatLabel) {
 	}
 }
 scheduleTimeSeparatorPadding: margins(2px, 0px, 2px, 0px);
+scheduleRepeatDropdownLock: IconEmoji {
+	icon: icon {{ "emoji/premium_lock", windowActiveTextFg }};
+	padding: margins(-2px, 1px, 0px, 0px);
+}
+scheduleRepeatDropdownArrow: IconEmoji {
+	icon: icon {{ "intro_country_dropdown", windowActiveTextFg }};
+	padding: margins(3px, 6px, 3px, 0px);
+}
 
 muteBoxTimeField: InputField(scheduleDateField) {
 	textMargins: margins(0px, 0px, 0px, 0px);
@@ -990,9 +1042,8 @@ contactsWithStories: PeerList(peerListBox) {
 		statusPosition: point(70px, 27px);
 
 		checkbox: RoundImageCheckbox(defaultPeerListCheckbox) {
-			selectExtendTwice: 1px;
 			imageRadius: 21px;
-			imageSmallRadius: 19px;
+			imageSmallRadius: 18px;
 			check: RoundCheckbox(defaultPeerListCheck) {
 				size: 0px;
 			}
@@ -1121,8 +1172,16 @@ moderateBoxExpandInnerSkip: 2px;
 moderateBoxExpandFont: font(11px);
 moderateBoxExpandToggleSize: 4px;
 moderateBoxExpandToggleFourStrokes: 3px;
-moderateBoxExpandIcon: icon{{ "info/edit/expand_arrow_small-flip_vertical", windowActiveTextFg }};
-moderateBoxExpandIconDown: icon{{ "info/edit/expand_arrow_small", windowActiveTextFg }};
+moderateBoxExpandIcon: IconEmoji{
+	icon: icon{{ "info/edit/expand_arrow_small-flip_vertical", windowActiveTextFg }};
+	padding: margins(-2px, -1px, 0px, 0px);
+	useIconColor: true;
+}
+moderateBoxExpandIconDown: IconEmoji{
+	icon: icon{{ "info/edit/expand_arrow_small", windowActiveTextFg }};
+	padding: margins(-2px, -1px, 0px, 0px);
+	useIconColor: true;
+}
 moderateBoxDividerLabel: FlatLabel(boxDividerLabel) {
 	palette: TextPalette(defaultTextPalette) {
 		selectLinkFg: windowActiveTextFg;
@@ -1148,4 +1207,33 @@ fakeUserpicButton: UserpicButton(defaultUserpicButton) {
 	photoSize: 1px;
 	changeIcon: icon {{ "settings/photo", transparent }};
 	uploadBg: transparent;
+}
+
+moderateCommonGroupsCheckbox: RoundImageCheckbox(defaultPeerListCheckbox) {
+	imageRadius: 12px;
+	imageSmallRadius: 11px;
+	selectWidth: 2px;
+	check: RoundCheckbox(defaultPeerListCheck) {
+		size: 16px;
+		sizeSmall: 0.3;
+		bgInactive: overviewCheckBg;
+		bgActive: overviewCheckBgActive;
+		check: icon {{
+			"default_checkbox_check",
+			overviewCheckFgActive,
+			point(1px, 4px)
+		}};
+	}
+}
+
+futureOwnerBox: Box(defaultBox) {
+	buttonPadding: margins(0px, 0px, 0px, 14px);
+	buttonHeight: 0px;
+}
+futureOwnerBoxSelect: collectibleBox;
+
+disableSharingIconPadding: margins(12px, 12px, 12px, 8px);
+disableSharingButtonLock: IconEmoji {
+	icon: icon {{ "emoji/premium_lock", activeButtonFg }};
+	padding: margins(-2px, 1px, 0px, 0px);
 }

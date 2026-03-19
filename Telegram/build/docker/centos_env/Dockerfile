@@ -12,7 +12,7 @@ RUN dnf -y install epel-release \
 	&& dnf config-manager --set-enabled powertools \
 	&& dnf -y install cmake autoconf automake libtool pkgconfig make patch git \
 		python3.11-pip python3.11-devel gperf flex bison clang clang-tools-extra \
-		lld nasm yasm file which wget perl-open perl-XML-Parser perl-IPC-Cmd \
+		lld nasm file which wget perl-open perl-XML-Parser perl-IPC-Cmd \
 		xorg-x11-util-macros $TOOLSET-gcc $TOOLSET-gcc-c++ $TOOLSET-binutils \
 		$TOOLSET-gdb $TOOLSET-libasan-devel libffi-devel fontconfig-devel \
 		freetype-devel libX11-devel wayland-devel alsa-lib-devel \
@@ -33,8 +33,8 @@ exec /usr/bin/pkg-config --static "\$@"
 EOF
 RUN sed -i '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/")/ -O0 {% if LTO %}-fno-lto -fno-use-linker-plugin{% endif %} -fuse-ld=lld")/' /usr/share/cmake/Modules/Compiler/GNU.cmake
 RUN sed -i 's/NO_DEFAULT_PATH//g; s/PKG_CONFIG_ALLOW_SYSTEM_LIBS/PKG_CONFIG_IS_DUMB/g' /usr/share/cmake/Modules/FindPkgConfig.cmake
-RUN sed -i 's/set(OpenGL_GL_PREFERENCE "")/set(OpenGL_GL_PREFERENCE "LEGACY")/' /usr/share/cmake/Modules/FindOpenGL.cmake
 RUN sed -i '/Requires.private: valgrind/d' /usr/lib64/pkgconfig/libdrm.pc
+RUN sed -i '/Requires.private: gl/s/gl/opengl glx/' /usr/lib64/pkgconfig/epoxy.pc
 RUN sed -i 's/-lharfbuzz//' /usr/lib64/pkgconfig/harfbuzz.pc
 RUN sed -i 's/-lpng16//' /usr/lib64/pkgconfig/libpng16.pc
 RUN echo set debuginfod enabled on > /opt/rh/$TOOLSET/root/etc/gdbinit.d/00-debuginfod.gdb
@@ -44,7 +44,7 @@ WORKDIR /usr/src
 ENV AR=gcc-ar
 ENV RANLIB=gcc-ranlib
 ENV NM=gcc-nm
-ENV CFLAGS='{% if DEBUG %}-g{% endif %} -O3 {% if LTO %}-flto=auto -ffat-lto-objects{% endif %} -pipe -fPIC -fno-strict-aliasing -fexceptions -fasynchronous-unwind-tables -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -fhardened -Wno-hardened'
+ENV CFLAGS='{% if DEBUG %}-g{% endif %} {% if MINSIZE %}-Os{% else %}-O3{% endif %} {% if LTO %}-flto=auto -ffat-lto-objects{% endif %} -pipe -fPIC -fno-strict-aliasing -fexceptions -fasynchronous-unwind-tables -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -fhardened -Wno-hardened'
 ENV CXXFLAGS=$CFLAGS
 ENV LDFLAGS='-static-libstdc++ -static-libgcc -static-libasan -pthread -Wl,--push-state,--no-as-needed,-ldl,--pop-state -Wl,--as-needed -Wl,-z,muldefs'
 
@@ -76,6 +76,8 @@ RUN git init Implib.so \
 	&& implib /usr/lib64/libva-drm.so \
 	&& implib /usr/lib64/libva.so \
 	&& implib /usr/lib64/libEGL.so \
+	&& implib /usr/lib64/libGLX.so \
+	&& implib /usr/lib64/libOpenGL.so \
 	&& implib /usr/lib64/libGL.so \
 	&& implib /usr/lib64/libdrm.so \
 	&& implib /usr/lib64/libwayland-egl.so \
@@ -91,7 +93,7 @@ FROM builder AS patches
 RUN git init patches \
 	&& cd patches \
 	&& git remote add origin https://github.com/desktop-app/patches.git \
-	&& git fetch --depth=1 origin e15b5d87c565e516aad5bcafdfe40315f84e5459 \
+	&& git fetch --depth=1 origin bfbc264ea8a9b39405f2f0ec549481bbd39d1b91 \
 	&& git reset --hard FETCH_HEAD \
 	&& rm -rf .git
 
@@ -267,6 +269,7 @@ RUN git clone -b v1.19.8 --depth=1 https://github.com/strukturag/libheif.git \
 	&& cd libheif \
 	&& cmake -B build . \
 		-DBUILD_SHARED_LIBS=OFF \
+		-DCMAKE_DISABLE_FIND_PACKAGE_Doxygen=ON \
 		-DBUILD_TESTING=OFF \
 		-DENABLE_PLUGIN_LOADING=OFF \
 		-DWITH_X265=OFF \
@@ -293,6 +296,7 @@ COPY --link --from=highway /usr/src/highway-cache /
 RUN git clone -b v0.11.1 --depth=1 https://github.com/libjxl/libjxl.git \
 	&& cd libjxl \
 	&& git submodule update --init --recursive --depth=1 third_party/libjpeg-turbo \
+	&& curl -sSL https://github.com/libjxl/libjxl/commit/ee3955b1553bcc10304d45b85dfef9afa9349d72.patch | sed 's/offset + t/offset + i/' | git apply \
 	&& cmake -B build . \
 		-DBUILD_SHARED_LIBS=OFF \
 		-DBUILD_TESTING=OFF \
@@ -497,23 +501,6 @@ RUN git clone -b libXcomposite-0.4.6 --depth=1 https://github.com/gitlab-freedes
 	&& cd .. \
 	&& rm -rf libxcomposite
 
-FROM builder AS wayland
-RUN git clone -b 1.19.0 --depth=1 https://github.com/gitlab-freedesktop-mirrors/wayland.git \
-	&& cd wayland \
-	&& sed -i "/subdir('tests')/d" meson.build \
-	&& meson build \
-		--buildtype=plain \
-		--default-library=static \
-		-Ddocumentation=false \
-		-Ddtd_validation=false \
-		-Dicon_directory=/usr/share/icons \
-	&& meson compile -C build src/wayland-scanner \
-	&& mkdir -p "/usr/src/wayland-cache/usr/local/bin" "/usr/src/wayland-cache/usr/local/lib64/pkgconfig" \
-	&& cp build/src/wayland-scanner "/usr/src/wayland-cache/usr/local/bin" \
-	&& sed 's@bindir=${prefix}/bin@bindir=${prefix}/local/bin@;s/1.21.0/1.19.0/' /usr/lib64/pkgconfig/wayland-scanner.pc > "/usr/src/wayland-cache/usr/local/lib64/pkgconfig/wayland-scanner.pc" \
-	&& cd .. \
-	&& rm -rf wayland
-
 FROM builder AS nv-codec-headers
 RUN git clone -b n12.1.14.0 --depth=1 https://github.com/FFmpeg/nv-codec-headers.git \
 	&& DESTDIR=/usr/src/nv-codec-headers-cache make -C nv-codec-headers install \
@@ -540,6 +527,9 @@ RUN git clone -b n6.1.1 --depth=1 https://github.com/FFmpeg/FFmpeg.git \
 		--disable-network \
 		--disable-autodetect \
 		--disable-everything \
+{%- if MINSIZE %}
+		--enable-small \
+{%- endif %}
 		--enable-libdav1d \
 		--enable-libopenh264 \
 		--enable-libopus \
@@ -678,8 +668,8 @@ RUN git clone -b 0.3.62 --depth=1 https://github.com/PipeWire/pipewire.git \
 		--buildtype=plain \
 		-Dtests=disabled \
 		-Dexamples=disabled \
-		-Dsession-managers=media-session \
 		-Dspa-plugins=disabled \
+		-Dsession-managers= \
 	&& meson compile -C build \
 	&& DESTDIR=/usr/src/pipewire-cache meson install -C build \
 	&& cd .. \
@@ -744,11 +734,10 @@ COPY --link --from=xcb-image /usr/src/xcb-image-cache /
 COPY --link --from=xcb-keysyms /usr/src/xcb-keysyms-cache /
 COPY --link --from=xcb-render-util /usr/src/xcb-render-util-cache /
 COPY --link --from=xcb-cursor /usr/src/xcb-cursor-cache /
-COPY --link --from=wayland /usr/src/wayland-cache /
 COPY --link --from=openssl /usr/src/openssl-cache /
 COPY --link --from=xkbcommon /usr/src/xkbcommon-cache /
 
-ENV QT=6.9.1
+ENV QT=6.10.2
 RUN git clone -b v$QT --depth=1 https://github.com/qt/qt5.git \
 	&& cd qt5 \
 	&& git submodule update --init --recursive --depth=1 qtbase qtdeclarative qtwayland qtimageformats qtsvg qtshadertools \
@@ -760,6 +749,9 @@ RUN git clone -b v$QT --depth=1 https://github.com/qt/qt5.git \
 	&& cmake -B build . \
 		-DCMAKE_INSTALL_PREFIX=/usr/local \
 		-DBUILD_SHARED_LIBS=OFF \
+{%- if ASAN %}
+		-DFEATURE_sanitize_address=ON \
+{%- endif %}
 		-DQT_QPA_PLATFORMS="wayland;xcb" \
 		-DINPUT_libpng=qt \
 		-DINPUT_harfbuzz=qt \
@@ -806,7 +798,7 @@ COPY --link --from=pipewire /usr/src/pipewire-cache /
 RUN git init tg_owt \
 	&& cd tg_owt \
 	&& git remote add origin https://github.com/desktop-app/tg_owt.git \
-	&& git fetch --depth=1 origin 62321fd7128ab2650b459d4195781af8185e46b5 \
+	&& git fetch --depth=1 origin 5c5c71258777d0196dbb3a09cc37d2f56ead28ab \
 	&& git reset --hard FETCH_HEAD \
 	&& git submodule update --init --recursive --depth=1 \
 	&& cmake -B build . -DTG_OWT_DLOPEN_PIPEWIRE=ON \
@@ -875,7 +867,6 @@ COPY --link --from=xrandr /usr/src/xrandr-cache /
 COPY --link --from=xrender /usr/src/xrender-cache /
 COPY --link --from=xdamage /usr/src/xdamage-cache /
 COPY --link --from=xcomposite /usr/src/xcomposite-cache /
-COPY --link --from=wayland /usr/src/wayland-cache /
 COPY --link --from=ffmpeg /usr/src/ffmpeg-cache /
 COPY --link --from=openal /usr/src/openal-cache /
 COPY --link --from=openssl /usr/src/openssl-cache /

@@ -241,6 +241,12 @@ public:
 	void setNotificationsCorner(ScreenCorner corner) {
 		_notificationsCorner = corner;
 	}
+	[[nodiscard]] int32 notificationsDisplayChecksum() const {
+		return _notificationsDisplayChecksum;
+	}
+	void setNotificationsDisplayChecksum(int32 checksum) {
+		_notificationsDisplayChecksum = checksum;
+	}
 	[[nodiscard]] bool includeMutedCounter() const {
 		return _includeMutedCounter;
 	}
@@ -487,8 +493,14 @@ public:
 	[[nodiscard]] rpl::producer<bool> cornerReactionValue() const {
 		return _cornerReaction.value();
 	}
-	[[nodiscard]] rpl::producer<bool> cornerReactionChanges() const {
-		return _cornerReaction.changes();
+	void setCornerReply(bool value) {
+		_cornerReply = value;
+	}
+	[[nodiscard]] bool cornerReply() const {
+		return _cornerReply.current();
+	}
+	[[nodiscard]] rpl::producer<bool> cornerReplyValue() const {
+		return _cornerReply.value();
 	}
 
 	void setSpellcheckerEnabled(bool value) {
@@ -897,6 +909,13 @@ public:
 		_ivPosition = position;
 	}
 
+	[[nodiscard]] const WindowPosition &callPanelPosition() const {
+		return _callPanelPosition;
+	}
+	void setCallPanelPosition(const WindowPosition &position) {
+		_callPanelPosition = position;
+	}
+
 	[[nodiscard]] QString customFontFamily() const {
 		return _customFontFamily;
 	}
@@ -950,6 +969,13 @@ public:
 	[[nodiscard]] Dialogs::Ui::QuickDialogAction quickDialogAction() const;
 	void setQuickDialogAction(Dialogs::Ui::QuickDialogAction);
 
+	[[nodiscard]] ushort notificationsVolume() const {
+		return _notificationsVolume;
+	}
+	void setNotificationsVolume(ushort value) {
+		_notificationsVolume = value;
+	}
+
 	void resetOnLastLogout();
 
 private:
@@ -981,6 +1007,7 @@ private:
 	bool _skipToastsInFocus = false;
 	int _notificationsCount = 3;
 	ScreenCorner _notificationsCorner = ScreenCorner::BottomRight;
+	int32 _notificationsDisplayChecksum = 0;
 	bool _includeMutedCounter = true;
 	bool _includeMutedCounterFolders = true;
 	bool _countUnreadMessages = true;
@@ -1013,6 +1040,7 @@ private:
 	bool _suggestEmoji = true;
 	bool _suggestStickersByEmoji = true;
 	bool _suggestAnimatedEmoji = true;
+	rpl::variable<bool> _cornerReply = true;
 	rpl::variable<bool> _cornerReaction = true;
 	rpl::variable<bool> _spellcheckerEnabled = true;
 	PlaybackSpeed _videoPlaybackSpeed;
@@ -1071,6 +1099,7 @@ private:
 	rpl::variable<bool> _storiesClickTooltipHidden = false;
 	rpl::variable<bool> _ttlVoiceClickTooltipHidden = false;
 	WindowPosition _ivPosition;
+	WindowPosition _callPanelPosition;
 	QString _customFontFamily;
 	bool _systemUnlockEnabled = false;
 	std::optional<bool> _weatherInCelsius;
@@ -1092,6 +1121,8 @@ private:
 
 	Dialogs::Ui::QuickDialogAction _quickDialogAction
 		= Dialogs::Ui::QuickDialogAction::Disabled;
+
+	ushort _notificationsVolume = 100;
 
 	QByteArray _photoEditorBrush;
 

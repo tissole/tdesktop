@@ -141,6 +141,13 @@ public:
 		const MTPInputPeer &peer,
 		const QString &name,
 		int64 id);
+	ControllerObject(
+		crl::weak_on_queue<ControllerObject> weak,
+		QPointer<MTP::Instance> mtproto,
+		const MTPInputPeer &peer,
+		int32 topicRootId,
+		uint64 peerId,
+		const QString &topicTitle);
 
 	rpl::producer<State> state() const;
 
@@ -190,10 +197,13 @@ private:
 	void exportPersonalInfo();
 	void exportUserpics();
 	void exportStories();
+	void exportProfileMusic();
 	void exportContacts();
 	void exportSessions();
 	void exportOtherData();
 	void exportDialogs();
+	void exportNextDialog();
+	void exportTopic();
 
 	template <typename Callback = const decltype(kNullStateCallback) &>
 	ProcessingState prepareState(
@@ -204,11 +214,13 @@ private:
 	ProcessingState statePersonalInfo() const;
 	ProcessingState stateUserpics(const DownloadProgress &progress) const;
 	ProcessingState stateStories(const DownloadProgress &progress) const;
+	ProcessingState stateProfileMusic(const DownloadProgress &progress) const;
 	ProcessingState stateContacts() const;
 	ProcessingState stateSessions() const;
 	ProcessingState stateOtherData() const;
 	ProcessingState stateScanning(int itemIndex, int itemCount) const;
 	ProcessingState stateDialogs(const DownloadProgress &progress) const;
+	ProcessingState stateTopic(const DownloadProgress &progress) const;
 	void fillMessagesState(
 		ProcessingState &result,
 		const Data::DialogsInfo &info,
@@ -236,12 +248,12 @@ private:
 	int _messagesTextTotal = 0;
 	int _userpicsWritten = 0;
 	int _userpicsCount = 0;
-
 	int _storiesWritten = 0;
 	int _storiesCount = 0;
-
 	int _contentFilesCount = 0;
 	bool _messagesInRangeCountFixed = false;
+	int _profileMusicWritten = 0;
+	int _profileMusicCount = 0;
 
 	// rpl::variable<State> fails to compile in MSVC :(
 	State _state;
@@ -258,6 +270,10 @@ private:
 	std::vector<Step> _steps;
 	int _stepIndex = -1;
 
+	int32 _topicRootId = 0;
+	uint64 _topicPeerId = 0;
+	QString _topicTitle;
+
 	rpl::lifetime _lifetime;
 
 };
@@ -271,12 +287,12 @@ ControllerObject::ControllerObject(
 : _api(mtproto, weak.runner())
 , _state(PasswordCheckState{}) {
 	_api.errors(
-	) | rpl::start_with_next([=](const MTP::Error &error) {
+	) | rpl::on_next([=](const MTP::Error &error) {
 		setState(ApiErrorState{ error });
 	}, _lifetime);
 
 	_api.ioErrors(
-	) | rpl::start_with_next([=](const Output::Result &result) {
+	) | rpl::on_next([=](const Output::Result &result) {
 		ioCatchError(result);
 	}, _lifetime);
 
@@ -285,8 +301,36 @@ ControllerObject::ControllerObject(
 	state.checked = false;
 	state.requesting = false;
 	state.singlePeer = peer;
-	state.singlePeerName = name;
-	state.singlePeerId = id;
+	setState(std::move(state));
+}
+
+ControllerObject::ControllerObject(
+	crl::weak_on_queue<ControllerObject> weak,
+	QPointer<MTP::Instance> mtproto,
+	const MTPInputPeer &peer,
+	int32 topicRootId,
+	uint64 peerId,
+	const QString &topicTitle)
+: _api(mtproto, weak.runner())
+, _state(PasswordCheckState{})
+, _topicRootId(topicRootId)
+, _topicPeerId(peerId)
+, _topicTitle(topicTitle) {
+	_api.errors(
+	) | rpl::on_next([=](const MTP::Error &error) {
+		setState(ApiErrorState{ error });
+	}, _lifetime);
+
+	_api.ioErrors(
+	) | rpl::on_next([=](const Output::Result &result) {
+		ioCatchError(result);
+	}, _lifetime);
+
+	//requestPasswordState();
+	auto state = PasswordCheckState();
+	state.checked = false;
+	state.requesting = false;
+	state.singlePeer = peer;
 	setState(std::move(state));
 }
 
@@ -430,6 +474,8 @@ void ControllerObject::startExport(
 	_messagesInRangeCountFixed = true;
 	_settings = NormalizeSettings(settings);
 	_environment = environment;
+	_settings.singleTopicRootId = _topicRootId;
+	_settings.singleTopicPeerId = _topicPeerId;
 
 	_stats.clear();
 	using MediaType = MediaSettings::Type;
@@ -487,6 +533,10 @@ void ControllerObject::skipFile(uint64 randomId) {
 void ControllerObject::fillExportSteps() {
 	using Type = Settings::Type;
 	_steps.push_back(Step::Initializing);
+	if (_settings.onlySingleTopic()) {
+		_steps.push_back(Step::Topic);
+		return;
+	}
 	if (_settings.types & Type::AnyChatsMask) {
 		_steps.push_back(Step::DialogsList);
 	}
@@ -498,6 +548,9 @@ void ControllerObject::fillExportSteps() {
 	}
 	if (_settings.types & Type::Stories) {
 		_steps.push_back(Step::Stories);
+	}
+	if (_settings.types & Type::ProfileMusic) {
+		_steps.push_back(Step::ProfileMusic);
 	}
 	if (_settings.types & Type::Contacts) {
 		_steps.push_back(Step::Contacts);
@@ -538,6 +591,9 @@ void ControllerObject::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
 	if (_settings.types & Settings::Type::Stories) {
 		push(Step::Stories, 1);
 	}
+	if (_settings.types & Settings::Type::ProfileMusic) {
+		push(Step::ProfileMusic, 1);
+	}
 	if (_settings.types & Settings::Type::Contacts) {
 		push(Step::Contacts, 1);
 	}
@@ -549,6 +605,9 @@ void ControllerObject::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
 	}
 	if (_settings.types & Settings::Type::AnyChatsMask) {
 		push(Step::Dialogs, info.dialogsCount);
+	}
+	if (_settings.onlySingleTopic()) {
+		push(Step::Topic, 1);
 	}
 	_substepsInStep = std::move(result);
 	_substepsTotal = ranges::accumulate(_substepsInStep, 0);
@@ -591,11 +650,13 @@ void ControllerObject::exportNext() {
 	case Step::PersonalInfo: return exportPersonalInfo();
 	case Step::Userpics: return exportUserpics();
 	case Step::Stories: return exportStories();
+	case Step::ProfileMusic: return exportProfileMusic();
 	case Step::Contacts: return exportContacts();
 	case Step::Sessions: return exportSessions();
 	case Step::OtherData: return exportOtherData();
 	case Step::Scanning:
 	case Step::Dialogs: return exportDialogs();
+	case Step::Topic: return exportTopic();
 	}
 	Unexpected("Step in ControllerObject::exportNext.");
 }
@@ -724,6 +785,32 @@ void ControllerObject::exportStories() {
 		return true;
 	}, [=] {
 		if (ioCatchError(_writer->writeStoriesEnd())) {
+			return;
+		}
+		exportNext();
+	});
+}
+
+void ControllerObject::exportProfileMusic() {
+	_api.requestProfileMusic([=](Data::ProfileMusicInfo &&start) {
+		if (ioCatchError(_writer->writeProfileMusicStart(start))) {
+			return false;
+		}
+		_profileMusicWritten = 0;
+		_profileMusicCount = start.count;
+		return true;
+	}, [=](DownloadProgress progress) {
+		setState(stateProfileMusic(progress));
+		return true;
+	}, [=](Data::ProfileMusicSlice &&slice) {
+		if (ioCatchError(_writer->writeProfileMusicSlice(slice))) {
+			return false;
+		}
+		_profileMusicWritten += slice.list.size();
+		setState(stateProfileMusic(DownloadProgress()));
+		return true;
+	}, [=] {
+		if (ioCatchError(_writer->writeProfileMusicEnd())) {
 			return;
 		}
 		exportNext();
@@ -916,6 +1003,21 @@ ProcessingState ControllerObject::stateStories(const DownloadProgress &progress)
 	});
 }
 
+ProcessingState ControllerObject::stateProfileMusic(
+		const DownloadProgress &progress) const {
+	return prepareState(Step::ProfileMusic, [&](ProcessingState &result) {
+		result.entityIndex = _profileMusicWritten + progress.itemIndex;
+		result.entityCount = std::max(_profileMusicCount, result.entityIndex);
+		result.bytesRandomId = progress.randomId;
+		if (!progress.path.isEmpty()) {
+			const auto last = progress.path.lastIndexOf('/');
+			result.bytesName = progress.path.mid(last + 1);
+		}
+		result.bytesLoaded = progress.ready;
+		result.bytesCount = progress.total;
+	});
+}
+
 ProcessingState ControllerObject::stateContacts() const {
 	return prepareState(Step::Contacts);
 }
@@ -1092,6 +1194,70 @@ void ControllerObject::fillMessagesState(
 	result.activeDownloads = _activeDownloads;
 }
 
+void ControllerObject::exportTopic() {
+	auto topicInfo = Data::DialogInfo();
+	topicInfo.type = Data::DialogInfo::Type::PublicSupergroup;
+	topicInfo.name = _topicTitle.toUtf8();
+	topicInfo.peerId = PeerId(_topicPeerId);
+	topicInfo.relativePath = QString();
+
+	if (ioCatchError(_writer->writeDialogStart(topicInfo))) {
+		return;
+	}
+
+	_api.requestTopicMessages(
+		PeerId(_topicPeerId),
+		_settings.singlePeer,
+		_topicRootId,
+		[=](int count) {
+			_messagesWritten = 0;
+			_messagesCount = count;
+			setState(stateTopic(DownloadProgress()));
+			return true;
+		},
+		[=](DownloadProgress progress) {
+			setState(stateTopic(progress));
+			return true;
+		},
+		[=](Data::MessagesSlice &&slice) {
+			if (ioCatchError(_writer->writeDialogSlice(slice))) {
+				return false;
+			}
+			_messagesWritten += slice.list.size();
+			setState(stateTopic(DownloadProgress()));
+			return true;
+		},
+		[=] {
+			if (ioCatchError(_writer->writeDialogEnd())) {
+				return;
+			}
+			if (ioCatchError(_writer->finish())) {
+				return;
+			}
+			_api.finishExport([=] {
+				setFinishedState();
+			});
+		});
+}
+
+ProcessingState ControllerObject::stateTopic(
+		const DownloadProgress &progress) const {
+	return prepareState(Step::Topic, [&](ProcessingState &result) {
+		result.entityType = ProcessingState::EntityType::Topic;
+		result.entityName = _topicTitle;
+		result.entityIndex = 0;
+		result.entityCount = 1;
+		result.itemIndex = _messagesWritten + progress.itemIndex;
+		result.itemCount = std::max(_messagesCount, result.itemIndex);
+		result.bytesRandomId = progress.randomId;
+		if (!progress.path.isEmpty()) {
+			const auto last = progress.path.lastIndexOf('/');
+			result.bytesName = progress.path.mid(last + 1);
+		}
+		result.bytesLoaded = progress.ready;
+		result.bytesCount = progress.total;
+	});
+}
 
 Controller::Controller(
 	QPointer<MTP::Instance> mtproto,
@@ -1099,6 +1265,20 @@ Controller::Controller(
 	const QString &name,
 	int64 id)
 : _wrapped(std::move(mtproto), peer, std::move(name), std::move(id)) {
+}
+
+Controller::Controller(
+	QPointer<MTP::Instance> mtproto,
+	const MTPInputPeer &peer,
+	int32 topicRootId,
+	uint64 peerId,
+	const QString &topicTitle)
+: _wrapped(
+	std::move(mtproto),
+	peer,
+	static_cast<int32>(topicRootId),
+	static_cast<uint64>(peerId),
+	topicTitle) {
 }
 
 rpl::producer<State> Controller::state() const {

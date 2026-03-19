@@ -70,7 +70,7 @@ struct RequestPeerQuery {
 static_assert(std::is_trivially_copy_assignable_v<RequestPeerQuery>);
 
 struct HistoryMessageMarkupButton {
-	enum class Type {
+	enum class Type : uchar {
 		Default,
 		Url,
 		Callback,
@@ -94,9 +94,22 @@ struct HistoryMessageMarkupButton {
 		SuggestChange,
 	};
 
+	enum class Color : uchar {
+		Normal,
+		Primary,
+		Danger,
+		Success,
+	};
+
+	struct Visual {
+		DocumentId iconId = 0;
+		Color color = Color::Normal;
+	};
+
 	HistoryMessageMarkupButton(
 		Type type,
 		const QString &text,
+		Visual visual,
 		const QByteArray &data = QByteArray(),
 		const QString &forwardText = QString(),
 		int64 buttonId = 0);
@@ -108,6 +121,7 @@ struct HistoryMessageMarkupButton {
 		int column);
 
 	Type type;
+	Visual visual;
 	QString text, forwardText;
 	QByteArray data;
 	int64 buttonId = 0;
@@ -152,7 +166,7 @@ struct HistoryMessageSuggestInfo {
 	HistoryMessageSuggestInfo() = default;
 	explicit HistoryMessageSuggestInfo(const MTPSuggestedPost *data);
 	explicit HistoryMessageSuggestInfo(const Api::SendOptions &options);
-	explicit HistoryMessageSuggestInfo(SuggestPostOptions options);
+	explicit HistoryMessageSuggestInfo(SuggestOptions options);
 
 	CreditsAmount price;
 	TimeId date = 0;

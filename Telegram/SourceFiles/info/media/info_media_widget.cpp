@@ -10,7 +10,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history.h"
 #include "info/media/info_media_inner_widget.h"
 #include "info/info_controller.h"
+#include "data/data_session.h"
 #include "main/main_session.h"
+#include "ui/widgets/menu/menu_add_action_callback.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/search_field_controller.h"
 #include "ui/ui_utility.h"
@@ -20,7 +22,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_forum_topic.h"
 #include "data/data_saved_sublist.h"
 #include "lang/lang_keys.h"
+#include "window/window_session_controller.h"
 #include "styles/style_info.h"
+#include "styles/style_menu_icons.h"
 
 namespace Info::Media {
 
@@ -79,6 +83,8 @@ Memento::Memento(not_null<Controller*> controller)
 		? controller->peer()
 		: controller->storiesPeer()
 		? controller->storiesPeer()
+		: controller->musicPeer()
+		? controller->musicPeer()
 		: controller->parentController()->session().user()),
 	controller->topic(),
 	controller->sublist(),
@@ -87,6 +93,8 @@ Memento::Memento(not_null<Controller*> controller)
 		? Type::File
 		: controller->section().type() == Section::Type::Stories
 		? Type::PhotoVideo
+		: controller->section().type() == Section::Type::SavedMusic
+		? Type::MusicFile
 		: controller->section().mediaType())) {
 }
 
@@ -95,7 +103,7 @@ Memento::Memento(not_null<PeerData*> peer, PeerId migratedPeerId, Type type)
 }
 
 Memento::Memento(not_null<Data::ForumTopic*> topic, Type type)
-: Memento(topic->channel(), topic, nullptr, PeerId(), type) {
+: Memento(topic->peer(), topic, nullptr, PeerId(), type) {
 }
 
 Memento::Memento(not_null<Data::SavedSublist*> sublist, Type type)
@@ -144,7 +152,7 @@ Widget::Widget(QWidget *parent, not_null<Controller*> controller)
 		controller));
 	_inner->setScrollHeightValue(scrollHeightValue());
 	_inner->scrollToRequests(
-	) | rpl::start_with_next([this](Ui::ScrollToRequest request) {
+	) | rpl::on_next([this](Ui::ScrollToRequest request) {
 		scrollTo(request);
 	}, _inner->lifetime());
 }
@@ -155,6 +163,27 @@ rpl::producer<SelectedItems> Widget::selectedListValue() const {
 
 void Widget::selectionAction(SelectionAction action) {
 	_inner->selectionAction(action);
+}
+
+void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
+	const auto type = controller()->section().mediaType();
+	if (type != Type::Photo && type != Type::Video) {
+		return;
+	}
+	addAction(tr::lng_calendar(tr::now), [=] {
+		controller()->parentController()->showCalendar({
+			.chat = Dialogs::Key(
+				controller()->session().data().history(
+					controller()->key().peer())),
+			.date = QDate::currentDate(),
+			.mediaPhoto = (type == Type::Photo),
+			.mediaVideo = (type == Type::Video),
+			.customJump = [=](MsgId msgId, Fn<void()> close) {
+				_inner->jumpToMessage(msgId);
+				close();
+			},
+		});
+	}, &st::menuIconSchedule);
 }
 
 rpl::producer<QString> Widget::title() {

@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/local_url_handlers.h"
 #include "lang/lang_keys.h"
 #include "main/main_account.h"
+#include "main/main_session.h"
 #include "mtproto/facade.h"
 #include "settings/settings_common.h"
 #include "storage/localstorage.h"
@@ -121,6 +122,7 @@ void AddProxyFromClipboard(
 		Success,
 		Failed,
 		Unsupported,
+		IncorrectSecret,
 		Invalid,
 	};
 
@@ -160,8 +162,11 @@ void AddProxyFromClipboard(
 					qthelp::UrlParamNameTransform::ToLower);
 				const auto proxy = ProxyDataFromFields(type, fields);
 				if (!proxy) {
-					return (proxy.status() == ProxyData::Status::Unsupported)
+					const auto status = proxy.status();
+					return (status == ProxyData::Status::Unsupported)
 						? Result::Unsupported
+						: (status == ProxyData::Status::IncorrectSecret)
+						? Result::IncorrectSecret
 						: Result::Invalid;
 				}
 				const auto contains = controller->contains(proxy);
@@ -195,9 +200,11 @@ void AddProxyFromClipboard(
 				tr::lng_proxy_add_from_clipboard_failed_toast(tr::now));
 		} else {
 			show->showBox(Ui::MakeInformBox(
-				(success == Result::Unsupported
-					? tr::lng_proxy_unsupported(tr::now)
-					: tr::lng_proxy_invalid(tr::now))));
+				((success == Result::IncorrectSecret)
+					? tr::lng_proxy_incorrect_secret(tr::now, tr::rich)
+					: (success == Result::Unsupported)
+					? tr::lng_proxy_unsupported(tr::now, tr::rich)
+					: tr::lng_proxy_invalid(tr::now, tr::rich))));
 		}
 	}
 }
@@ -352,10 +359,12 @@ public:
 	ProxiesBox(
 		QWidget*,
 		not_null<ProxiesBoxController*> controller,
-		Core::SettingsProxy &settings);
+		Core::SettingsProxy &settings,
+		const QString &highlightId = QString());
 
 protected:
 	void prepare() override;
+	void showFinished() override;
 	void keyPressEvent(QKeyEvent *e) override;
 
 private:
@@ -380,6 +389,10 @@ private:
 	int _currentProxySupportsCallsId = 0;
 
 	base::flat_map<int, base::unique_qptr<ProxyRow>> _rows;
+
+	QPointer<Ui::RpWidget> _addProxyButton;
+	QPointer<Ui::RpWidget> _shareListButton;
+	QString _highlightId;
 
 };
 
@@ -485,7 +498,7 @@ void ProxyRow::updateFields(View &&view) {
 		TextWithEntities()
 			.append(_view.type)
 			.append(' ')
-			.append(Ui::Text::Link(endpoint, QString())),
+			.append(tr::link(endpoint, QString())),
 		Ui::ItemTextDefaultOptions());
 
 	const auto state = _view.state;
@@ -749,12 +762,14 @@ void ProxyRow::showMenu() {
 ProxiesBox::ProxiesBox(
 	QWidget*,
 	not_null<ProxiesBoxController*> controller,
-	Core::SettingsProxy &settings)
+	Core::SettingsProxy &settings,
+	const QString &highlightId)
 : _controller(controller)
 , _settings(settings)
-, _initialWrap(this) {
+, _initialWrap(this)
+, _highlightId(highlightId) {
 	_controller->views(
-	) | rpl::start_with_next([=](View &&view) {
+	) | rpl::on_next([=](View &&view) {
 		applyView(std::move(view));
 	}, lifetime());
 }
@@ -774,11 +789,27 @@ void ProxiesBox::keyPressEvent(QKeyEvent *e) {
 void ProxiesBox::prepare() {
 	setTitle(tr::lng_proxy_settings());
 
-	addButton(tr::lng_proxy_add(), [=] { addNewProxy(); });
+	_addProxyButton = addButton(tr::lng_proxy_add(), [=] { addNewProxy(); });
 	addButton(tr::lng_close(), [=] { closeBox(); });
 
 	setupTopButton();
 	setupContent();
+}
+
+void ProxiesBox::showFinished() {
+	if (_highlightId == u"proxy/add-proxy"_q) {
+		if (_addProxyButton) {
+			_highlightId = QString();
+			Settings::HighlightWidget(
+				_addProxyButton,
+				{ .rippleShape = true });
+		}
+	} else if (_highlightId == u"proxy/share-list"_q) {
+		if (_shareListButton) {
+			_highlightId = QString();
+			Settings::HighlightWidget(_shareListButton);
+		}
+	}
 }
 
 void ProxiesBox::setupTopButton() {
@@ -790,48 +821,37 @@ void ProxiesBox::setupTopButton() {
 		*menu = base::make_unique_q<Ui::PopupMenu>(
 			top,
 			st::popupMenuWithIcons);
-		const auto addAction = Ui::Menu::CreateAddActionCallback(*menu);
+		const auto raw = menu->get();
+		const auto addAction = Ui::Menu::CreateAddActionCallback(raw);
 		addAction({
 			.text = tr::lng_proxy_add_from_clipboard(tr::now),
 			.handler = [=] { AddProxyFromClipboard(_controller, uiShow()); },
 			.icon = &st::menuIconImportTheme,
 		});
-		addAction({
-			.text = tr::lng_group_invite_context_delete_all(tr::now),
-			.handler = [=] { _controller->deleteItems(); },
-			.icon = &st::menuIconDeleteAttention,
-			.isAttention = true,
+		if (!_rows.empty()) {
+			addAction({
+				.text = tr::lng_group_invite_context_delete_all(tr::now),
+				.handler = [=] { _controller->deleteItems(); },
+				.icon = &st::menuIconDeleteAttention,
+				.isAttention = true,
+			});
+		}
+		raw->setForcedOrigin(Ui::PanelAnimation::Origin::TopRight);
+		top->setForceRippled(true);
+		raw->setDestroyedCallback([=] {
+			if (const auto strong = top.data()) {
+				strong->setForceRippled(false);
+			}
 		});
-		(*menu)->popup(QCursor::pos());
+		raw->popup(
+			top->mapToGlobal(
+				QPoint(top->width(), top->height() - st::lineWidth * 3)));
 		return true;
 	});
 }
 
 void ProxiesBox::setupContent() {
 	const auto inner = setInnerWidget(object_ptr<Ui::VerticalLayout>(this));
-
-	const auto top = addTopButton(st::infoTopBarMenu);
-	const auto share = [=] {
-		_settings.removeProxyList();
-		_settings.setSelected(MTP::ProxyData());
-		_settings.setSettings(MTP::ProxyData::Settings::Disabled);
-		Core::App().refreshGlobalProxy();
-		_settings.connectionTypeChangesNotify();
-		Local::writeSettings();
-
-		closeBox();
-		//Ui::show(ProxiesBoxController::CreateOwningBox(&App::wnd()->account()));
-	};
-	const auto menu =
-			std::make_shared<base::unique_qptr<Ui::PopupMenu>>();
-	top->setClickedCallback([=] {
-		*menu = base::make_unique_q<Ui::PopupMenu>(top);
-		(*menu)->addAction(
-				tr::lng_proxy_remove_all(tr::now),
-				share);
-		(*menu)->popup(QCursor::pos());
-		return true;
-	});
 
 	_tryIPv6 = inner->add(
 		object_ptr<Ui::Checkbox>(
@@ -904,17 +924,17 @@ void ProxiesBox::setupContent() {
 		refreshProxyForCalls();
 	});
 	_tryIPv6->checkedChanges(
-	) | rpl::start_with_next([=](bool checked) {
+	) | rpl::on_next([=](bool checked) {
 		_controller->setTryIPv6(checked);
 	}, _tryIPv6->lifetime());
 
 	_controller->proxySettingsValue(
-	) | rpl::start_with_next([=](ProxyData::Settings value) {
+	) | rpl::on_next([=](ProxyData::Settings value) {
 		_proxySettings->setValue(value);
 	}, inner->lifetime());
 
 	_proxyForCalls->entity()->checkedChanges(
-	) | rpl::start_with_next([=](bool checked) {
+	) | rpl::on_next([=](bool checked) {
 		_controller->setProxyForCalls(checked);
 	}, _proxyForCalls->lifetime());
 
@@ -934,6 +954,7 @@ void ProxiesBox::setupContent() {
 			tr::lng_proxy_edit_share_list_button(),
 			st::settingsButton,
 			{ &st::menuIconCopy });
+		_shareListButton = shareList;
 		shareList->setClickedCallback([=] {
 			_controller->shareItems();
 		});
@@ -951,7 +972,7 @@ void ProxiesBox::setupContent() {
 				+ 3 * rowHeight()),
 			st::boxMaxListHeight);
 	}) | rpl::distinct_until_changed(
-	) | rpl::start_with_next([=](int height) {
+	) | rpl::on_next([=](int height) {
 		setDimensions(st::boxWideWidth, height);
 	}, inner->lifetime());
 }
@@ -1026,7 +1047,7 @@ void ProxiesBox::createNoRowsLabel() {
 		tr::lng_proxy_description(tr::now),
 		st::proxyEmptyListLabel);
 	_noRows->widthValue(
-	) | rpl::start_with_next([=](int width) {
+	) | rpl::on_next([=](int width) {
 		label->resizeToWidth(width);
 		label->moveToLeft(0, 0);
 	}, label->lifetime());
@@ -1034,29 +1055,29 @@ void ProxiesBox::createNoRowsLabel() {
 
 void ProxiesBox::setupButtons(int id, not_null<ProxyRow*> button) {
 	button->deleteClicks(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		_controller->deleteItem(id);
 	}, button->lifetime());
 
 	button->restoreClicks(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		_controller->restoreItem(id);
 	}, button->lifetime());
 
 	button->editClicks(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		getDelegate()->show(_controller->editItemBox(id));
 	}, button->lifetime());
 
 	rpl::merge(
 		button->shareClicks() | rpl::map_to(false),
 		button->showQrClicks() | rpl::map_to(true)
-	) | rpl::start_with_next([=](bool qr) {
+	) | rpl::on_next([=](bool qr) {
 		_controller->shareItem(id, qr);
 	}, button->lifetime());
 
 	button->clicks(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		_controller->applyItem(id);
 	}, button->lifetime());
 }
@@ -1092,7 +1113,7 @@ void ProxyBox::prepare() {
 		});
 	});
 	_port.data()->events(
-	) | rpl::start_with_next([=](not_null<QEvent*> e) {
+	) | rpl::on_next([=](not_null<QEvent*> e) {
 		if (e->type() == QEvent::KeyPress
 			&& (static_cast<QKeyEvent*>(e.get())->key() == Qt::Key_Backspace)
 			&& _port->cursorPosition() == 0) {
@@ -1100,6 +1121,30 @@ void ProxyBox::prepare() {
 			_host->setFocus();
 		}
 	}, _port->lifetime());
+
+	const auto submit = [=] {
+		if (_host->hasFocus()
+			&& !_host->getLastText().trimmed().isEmpty()) {
+			_port->setFocus();
+		} else if (_port->hasFocus()
+			&& !_port->getLastText().trimmed().isEmpty()) {
+			if (_type->current() == Type::Mtproto) {
+				_secret->setFocus();
+			} else {
+				_user->setFocus();
+			}
+		} else if (_user->hasFocus()) {
+			_password->setFocus();
+		} else {
+			save();
+		}
+	};
+	connect(_host.data(), &Ui::MaskedInputField::submitted, submit);
+	connect(_port.data(), &Ui::MaskedInputField::submitted, submit);
+	_user->submits(
+	) | rpl::on_next(submit, _user->lifetime());
+	connect(_password.data(), &Ui::MaskedInputField::submitted, submit);
+	connect(_secret.data(), &Ui::MaskedInputField::submitted, submit);
 
 	refreshButtons();
 	setDimensionsToContent(st::boxWideWidth, _content);
@@ -1202,7 +1247,7 @@ void ProxyBox::setupSocketAddress(const ProxyData &data) {
 		data.port ? QString::number(data.port) : QString(),
 		65535);
 	address->widthValue(
-	) | rpl::start_with_next([=](int width) {
+	) | rpl::on_next([=](int width) {
 		_port->moveToRight(0, 0);
 		_host->resize(
 			width - _port->width() - st::proxyEditSkip,
@@ -1212,7 +1257,7 @@ void ProxyBox::setupSocketAddress(const ProxyData &data) {
 }
 
 void ProxyBox::setupCredentials(const ProxyData &data) {
-		_credentials = _content->add(
+	_credentials = _content->add(
 		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
 			_content,
 			object_ptr<Ui::VerticalLayout>(_content)));
@@ -1234,11 +1279,11 @@ void ProxyBox::setupCredentials(const ProxyData &data) {
 		(data.type == Type::Mtproto) ? QString() : data.password);
 	_password->move(0, 0);
 	_password->heightValue(
-	) | rpl::start_with_next([=, wrap = passwordWrap.data()](int height) {
+	) | rpl::on_next([=, wrap = passwordWrap.data()](int height) {
 		wrap->resize(wrap->width(), height);
 	}, _password->lifetime());
 	passwordWrap->widthValue(
-	) | rpl::start_with_next([=](int width) {
+	) | rpl::on_next([=](int width) {
 		_password->resize(width, _password->height());
 	}, _password->lifetime());
 	credentials->add(std::move(passwordWrap), st::proxyEditInputPadding);
@@ -1260,11 +1305,11 @@ void ProxyBox::setupMtprotoCredentials(const ProxyData &data) {
 		(data.type == Type::Mtproto) ? data.password : QString());
 	_secret->move(0, 0);
 	_secret->heightValue(
-	) | rpl::start_with_next([=, wrap = secretWrap.data()](int height) {
+	) | rpl::on_next([=, wrap = secretWrap.data()](int height) {
 		wrap->resize(wrap->width(), height);
 	}, _secret->lifetime());
 	secretWrap->widthValue(
-	) | rpl::start_with_next([=](int width) {
+	) | rpl::on_next([=](int width) {
 		_secret->resize(width, _secret->height());
 	}, _secret->lifetime());
 	mtproto->add(std::move(secretWrap), st::proxyEditInputPadding);
@@ -1326,7 +1371,7 @@ ProxiesBoxController::ProxiesBoxController(not_null<Main::Account*> account)
 	}) | ranges::to_vector;
 
 	_settings.connectionTypeChanges(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		_proxySettingsChanges.fire_copy(_settings.settings());
 		const auto i = findByProxy(_settings.selected());
 		if (i != end(_list)) {
@@ -1345,10 +1390,13 @@ void ProxiesBoxController::ShowApplyConfirmation(
 		const QMap<QString, QString> &fields) {
 	const auto proxy = ProxyDataFromFields(type, fields);
 	if (!proxy) {
+		const auto status = proxy.status();
 		auto box = Ui::MakeInformBox(
-			(proxy.status() == ProxyData::Status::Unsupported
-				? tr::lng_proxy_unsupported(tr::now)
-				: tr::lng_proxy_invalid(tr::now)));
+			((status == ProxyData::Status::Unsupported)
+				? tr::lng_proxy_unsupported(tr::now, tr::rich)
+				: (status == ProxyData::Status::IncorrectSecret)
+				? tr::lng_proxy_incorrect_secret(tr::now, tr::rich)
+				: tr::lng_proxy_invalid(tr::now, tr::rich)));
 		if (controller) {
 			controller->uiShow()->showBox(std::move(box));
 		} else {
@@ -1403,7 +1451,7 @@ void ProxiesBoxController::ShowApplyConfirmation(
 		} else if (type == Type::Mtproto) {
 			add(proxy.password, tr::lng_proxy_box_secret);
 		}
-		box->addButton(tr::lng_sure_enable(), [=] {
+		const auto enableButton = box->addButton(tr::lng_sure_enable(), [=] {
 			auto &proxies = Core::App().settings().proxy().list();
 			if (!ranges::contains(proxies, proxy)) {
 				proxies.push_back(proxy);
@@ -1413,6 +1461,16 @@ void ProxiesBoxController::ShowApplyConfirmation(
 			box->closeBox();
 		});
 		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
+		box->events(
+		) | rpl::on_next([=](not_null<QEvent*> e) {
+			if ((e->type() != QEvent::KeyPress) || !enableButton) {
+				return;
+			}
+			const auto k = static_cast<QKeyEvent*>(e.get());
+			if (k->key() == Qt::Key_Enter || k->key() == Qt::Key_Return) {
+				enableButton->clicked(Qt::KeyboardModifiers(), Qt::LeftButton);
+			}
+		}, box->lifetime());
 	};
 	if (controller) {
 		controller->uiShow()->showBox(Box(box));
@@ -1522,15 +1580,17 @@ void ProxiesBoxController::setupChecker(int id, const Checker &checker) {
 }
 
 object_ptr<Ui::BoxContent> ProxiesBoxController::CreateOwningBox(
-		not_null<Main::Account*> account) {
+		not_null<Main::Account*> account,
+		const QString &highlightId) {
 	auto controller = std::make_unique<ProxiesBoxController>(account);
-	auto box = controller->create();
+	auto box = controller->create(highlightId);
 	Ui::AttachAsChild(box, std::move(controller));
 	return box;
 }
 
-object_ptr<Ui::BoxContent> ProxiesBoxController::create() {
-	auto result = Box<ProxiesBox>(this, _settings);
+object_ptr<Ui::BoxContent> ProxiesBoxController::create(
+		const QString &highlightId) {
+	auto result = Box<ProxiesBox>(this, _settings, highlightId);
 	_show = result->uiShow();
 	for (const auto &item : _list) {
 		updateView(item);
@@ -1854,6 +1914,13 @@ void ProxiesBoxController::share(const ProxyData &proxy, bool qr) {
 	}
 	QGuiApplication::clipboard()->setText(link);
 	_show->showToast(tr::lng_username_copied(tr::now));
+}
+
+void ProxiesBoxController::Show(
+		not_null<Window::SessionController*> controller,
+		const QString &highlightId) {
+	controller->show(
+		CreateOwningBox(&controller->session().account(), highlightId));
 }
 
 ProxiesBoxController::~ProxiesBoxController() {

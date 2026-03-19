@@ -95,7 +95,7 @@ Close::Close(
 
 	std::move(
 		allowCloseAt
-	) | rpl::start_with_next([=](crl::time at) {
+	) | rpl::on_next([=](crl::time at) {
 		const auto now = crl::now();
 		if (!at) {
 			updateProgress(now);
@@ -179,7 +179,6 @@ void Close::paintEvent(QPaintEvent *e) {
 			(height() - st::mediaSponsoredCloseDiameter) / 2,
 			st::mediaSponsoredCloseDiameter,
 			st::mediaSponsoredCloseDiameter);
-		p.setFont(st::mediaSponsoredCloseFont);
 		_countdown.paint(
 			p,
 			inner.x() + (inner.width() - _countdown.countWidth()) / 2,
@@ -358,7 +357,7 @@ void PlaybackSponsored::Message::fadeIn() {
 	_photo->owner()->session().downloaderTaskFinished(
 	) | rpl::filter([=] {
 		return _photo->loaded();
-	}) | rpl::start_with_next([=] {
+	}) | rpl::on_next([=] {
 		_photoLifetime.destroy();
 		startFadeIn();
 	}, _photoLifetime);
@@ -487,6 +486,7 @@ void PlaybackSponsored::Message::mouseReleaseEvent(QMouseEvent *e) {
 int PlaybackSponsored::Message::resizeGetHeight(int newWidth) {
 	const auto &padding = st::mediaSponsoredPadding;
 	const auto userpic = st::mediaSponsoredThumb;
+	_left = padding.left() + (_photo ? (userpic + padding.left()) : 0);
 	const auto innerWidth = newWidth - _left - _close->width();
 	const auto titleWidth = innerWidth - _about->width() - padding.right();
 	_titleHeight = _title.countHeight(titleWidth);
@@ -495,7 +495,6 @@ int PlaybackSponsored::Message::resizeGetHeight(int newWidth) {
 	const auto use = std::max(_titleHeight + _textHeight, userpic);
 
 	const auto height = padding.top() + use + padding.bottom();
-	_left = padding.left() + (_photo ? (userpic + padding.left()) : 0);
 	_top = padding.top() + (use - _titleHeight - _textHeight) / 2;
 
 	_about->move(
@@ -694,14 +693,14 @@ void PlaybackSponsored::show(const Data::SponsoredMessage &data) {
 		_allowCloseAt.value());
 	const auto raw = _widget.get();
 
-	_controlsGeometry.value() | rpl::start_with_next([=](QRect controls) {
+	_controlsGeometry.value() | rpl::on_next([=](QRect controls) {
 		raw->resizeToWidth(controls.width());
 		raw->setFinalPosition(
 			controls.x(),
 			controls.y() - st::mediaSponsoredSkip - raw->height());
 	}, raw->lifetime());
 
-	raw->actions() | rpl::start_with_next([=](Action action) {
+	raw->actions() | rpl::on_next([=](Action action) {
 		switch (action) {
 		case Action::Close: hide(crl::now()); break;
 		case Action::PromotePremium: showPremiumPromo(); break;

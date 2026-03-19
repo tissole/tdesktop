@@ -41,8 +41,10 @@ public:
 
 	[[nodiscard]] Session &owner() const;
 	[[nodiscard]] Main::Session &session() const;
+	[[nodiscard]] not_null<PeerData*> peer() const;
 	[[nodiscard]] not_null<History*> history() const;
-	[[nodiscard]] not_null<ChannelData*> channel() const;
+	[[nodiscard]] UserData *bot() const;
+	[[nodiscard]] ChannelData *channel() const;
 	[[nodiscard]] not_null<Dialogs::MainList*> topicsList();
 	[[nodiscard]] rpl::producer<> destroyed() const;
 	[[nodiscard]] auto topicDestroyed() const
@@ -85,6 +87,7 @@ public:
 	void discardCreatingId(MsgId rootId);
 	[[nodiscard]] bool creating(MsgId rootId) const;
 	void created(MsgId rootId, MsgId realId);
+	[[nodiscard]] ForumTopic *reserveNewBotTopic();
 
 	void clearAllUnreadMentions();
 	void clearAllUnreadReactions();
@@ -98,6 +101,11 @@ public:
 
 	void saveActiveSubsectionThread(not_null<Thread*> thread);
 	[[nodiscard]] Thread *activeSubsectionThread() const;
+
+	void markUnreadCountsUnknown(MsgId readTillId);
+	void updateUnreadCounts(
+		MsgId readTillId,
+		const base::flat_map<not_null<ForumTopic*>, int> &counts);
 
 	[[nodiscard]] rpl::lifetime &lifetime() {
 		return _lifetime;

@@ -74,6 +74,7 @@ constexpr auto kLocationCacheSize = 1'000'000; // kept for LoadedFileCache ctor
 constexpr auto kDedupMapLimit = 1'000'000;
 constexpr auto kMaxEmojiPerRequest = 100;
 constexpr auto kStoriesSliceLimit = 100;
+constexpr auto kProfileMusicSliceLimit = 100;
 
 ApiWrap::LocationKey ComputeLocationKey(const Data::FileLocation &value) {
 	auto result = ApiWrap::LocationKey();
@@ -221,6 +222,7 @@ struct ApiWrap::StartProcess {
 		UserpicsCount,
 		StoriesCount,
 		MediaCounts,
+		ProfileMusicCount,
 		SplitRanges,
 		DialogsCount,
 		LeftChannelsCount,
@@ -265,6 +267,19 @@ struct ApiWrap::StoriesProcess {
 	bool lastSlice = false;
 	int pendingFiles = 0;
 	bool processing = false;
+};
+
+struct ApiWrap::ProfileMusicProcess {
+	FnMut<bool(Data::ProfileMusicInfo&&)> start;
+	Fn<bool(DownloadProgress)> fileProgress;
+	Fn<bool(Data::ProfileMusicSlice&&)> handleSlice;
+	FnMut<void()> finish;
+
+	int processed = 0;
+	std::optional<Data::ProfileMusicSlice> slice;
+	int offsetId = 0;
+	bool lastSlice = false;
+	int fileIndex = 0;
 };
 
 struct ApiWrap::OtherDataProcess {
@@ -328,7 +343,7 @@ struct ApiWrap::DialogsProcess : ChatsProcess {
 };
 
 struct ApiWrap::AbstractMessagesProcess {
-	Fn<bool(ApiWrap::DownloadProgress)> fileProgress;
+	Fn<bool(DownloadProgress)> fileProgress;
 	Fn<bool(Data::MessagesSlice&&)> handleSlice;
 	FnMut<void()> done;
 
@@ -381,6 +396,18 @@ struct ApiWrap::ChatProcess : AbstractMessagesProcess {
 	std::unordered_map<uint64, std::vector<int>> emojiToMessageIndices;
 };
 
+struct ApiWrap::TopicProcess : AbstractMessagesProcess {
+	PeerId peerId = 0;
+	MTPInputPeer inputPeer;
+	int32 topicRootId = 0;
+	QString relativePath;
+
+	FnMut<bool(int count)> start;
+
+	int32 offsetId = 0;
+	int totalCount = 0;
+	int processedCount = 0;
+};
 
 
 template <typename Request>
@@ -589,6 +616,9 @@ void ApiWrap::startExport(
 	if ((_isScanning || _settings->onlySinglePeer()) && !skipMediaCountsForFilteredScan) {
 		_startProcess->steps.push_back(Step::MediaCounts);
 	}
+	if (_settings->types & Settings::Type::ProfileMusic) {
+		_startProcess->steps.push_back(Step::ProfileMusicCount);
+	}
 	if (_settings->types & Settings::Type::AnyChatsMask) {
 		_startProcess->steps.push_back(Step::SplitRanges);
 		_startProcess->steps.push_back(Step::DialogsCount);
@@ -642,6 +672,8 @@ void ApiWrap::sendNextStartRequest() {
 		return requestStoriesCount();
 	case Step::MediaCounts:
 		return requestMediaCounts();
+	case Step::ProfileMusicCount:
+		return requestProfileMusicCount();
 	case Step::SplitRanges:
 		return requestSplitRanges();
 	case Step::DialogsCount:
@@ -726,10 +758,6 @@ void ApiWrap::requestMediaCounts() {
 
 		const auto minId = (_settings->useIdRange && _settings->singlePeerFromId > 0) ? std::max(int64(0), int64(_settings->singlePeerFromId) - 1) : int64(0);
 		const auto maxId = (_settings->useIdRange && _settings->singlePeerTillId > 0) ? (int64(_settings->singlePeerTillId) + 1) : int64(0);
-		// For date-range queries, dates are resolved to IDs (fromId/tillId) before
-		// requestChatMessages. Here we don't have resolved IDs yet, so we pass
-		// min_date/max_date for date-mode only (these are pre-scan estimates, not
-		// paginated retrieval, so date params don't break pagination here).
 		const auto minDate = _settings->useIdRange ? 0 : _settings->singlePeerFrom;
 		const auto maxDate = _settings->useIdRange ? 0 : _settings->singlePeerTill;
 
@@ -760,20 +788,9 @@ void ApiWrap::requestMediaCounts() {
 				[](const MTPDmessages_messagesNotModified &) { return 0; }
 			);
 
-			// We are using purely local counting for everything now to ensure consistency.
-			// Server counts are ignored for the "Total" stats to prevent "Double Counting" and "Zero Size" issues.
-			// Exception: For Links, the server count = messages-containing-links (21858 style).
-			// We seed this as messagesWithLinks so it's available immediately (before/during scan).
-			// The local scan will also accumulate messagesWithLinks by +1 per message, which will
-			// eventually match this server value after a full scan.
 			if (_usingServerCounts && _scanStats && type != Type::Sticker && type != Type::Link && type != Type::Text) {
 				_scanStats->setTotalCount(type, count);
 			}
-			// Seed _stats.totalCount for the progress denominator during export.
-			// When _usingServerCounts: used for per-type bar totals (no-range exports).
-			// When !_usingServerCounts but range is active: these counts ARE range-filtered
-			// (requestMediaCounts sends min_date/max_date), so we use them as the
-			// immediate denominator for the "X / Y" display (e.g. "1 / 847" for May files).
 			const bool hasRange = (_settings->singlePeerFrom != 0)
 				|| (_settings->singlePeerTill != 0)
 				|| _settings->useIdRange;
@@ -784,8 +801,6 @@ void ApiWrap::requestMediaCounts() {
 				_stats->setTotalCount(type, count);
 			}
 			if (type == Type::Link) {
-				// Server count for URL filter = number of messages that contain links.
-				// Store as messagesWithLinks so the "(21858 Messages)" part shows correctly.
 				if (_scanStats) _scanStats->setMessagesWithLinks(count);
 				if (_stats) _stats->setMessagesWithLinks(count);
 			}
@@ -804,6 +819,34 @@ void ApiWrap::requestMediaCounts() {
 			return true;
 		}).send();
 	}
+}
+
+void ApiWrap::requestProfileMusicCount() {
+	Expects(_startProcess != nullptr);
+
+	mainRequest(MTPusers_GetSavedMusic(
+		_user,
+		MTP_int(0), // offset
+		MTP_int(0), // limit
+		MTP_long(0) // hash
+	)).done([=](const MTPusers_SavedMusic &result) {
+		Expects(_settings != nullptr);
+		Expects(_startProcess != nullptr);
+
+		const auto count = result.match(
+		[](const MTPDusers_savedMusic &data) {
+			return data.vcount().v;
+		}, [](const MTPDusers_savedMusicNotModified &data) {
+			return -1;
+		});
+		if (count < 0) {
+			error("Unexpected messagesNotModified received.");
+			return;
+		}
+		_startProcess->info.profileMusicCount = count;
+
+		sendNextStartRequest();
+	}).send();
 }
 
 void ApiWrap::requestSplitRanges() {
@@ -1379,6 +1422,215 @@ void ApiWrap::finishStories() {
 	Expects(_storiesProcess != nullptr);
 
 	base::take(_storiesProcess)->finish();
+}
+
+void ApiWrap::requestProfileMusic(
+		FnMut<bool(Data::ProfileMusicInfo&&)> start,
+		Fn<bool(DownloadProgress)> progress,
+		Fn<bool(Data::ProfileMusicSlice&&)> slice,
+		FnMut<void()> finish) {
+	Expects(_profileMusicProcess == nullptr);
+
+	_profileMusicProcess = std::make_unique<ProfileMusicProcess>();
+	_profileMusicProcess->start = std::move(start);
+	_profileMusicProcess->fileProgress = std::move(progress);
+	_profileMusicProcess->handleSlice = std::move(slice);
+	_profileMusicProcess->finish = std::move(finish);
+
+	mainRequest(MTPusers_GetSavedMusic(
+		_user,
+		MTP_int(0), // offset
+		MTP_int(kProfileMusicSliceLimit), // limit
+		MTP_long(0) // hash
+	)).done([=](const MTPusers_SavedMusic &result) mutable {
+		Expects(_profileMusicProcess != nullptr);
+
+		auto startInfo = result.match(
+		[](const MTPDusers_savedMusic &data) {
+			return Data::ProfileMusicInfo{ data.vcount().v };
+		}, [](const MTPDusers_savedMusicNotModified &data) {
+			return Data::ProfileMusicInfo{ 0 };
+		});
+		if (!_profileMusicProcess->start(std::move(startInfo))) {
+			return;
+		}
+
+		handleProfileMusicSlice(result);
+	}).send();
+}
+
+void ApiWrap::handleProfileMusicSlice(const MTPusers_SavedMusic &result) {
+	Expects(_profileMusicProcess != nullptr);
+	Expects(_selfId.has_value());
+
+	auto context = Data::ParseMediaContext();
+	context.selfPeerId = peerFromUser(*_selfId);
+
+	auto slice = result.match([&](const MTPDusers_savedMusic &data) {
+		if (data.vdocuments().v.size() < kProfileMusicSliceLimit) {
+			_profileMusicProcess->lastSlice = true;
+		}
+		auto result = Data::MessagesSlice();
+		for (const auto &doc : data.vdocuments().v) {
+			auto message = Data::Message();
+			message.id = ++_profileMusicProcess->processed;
+			message.date = 0;
+			message.media.content = Data::ParseDocument(
+				context,
+				doc,
+				"profile_music/",
+				0);
+			result.list.push_back(std::move(message));
+		}
+		return result;
+	}, [&](const MTPDusers_savedMusicNotModified &) {
+		_profileMusicProcess->lastSlice = true;
+		return Data::MessagesSlice();
+	});
+
+	auto profileSlice = Data::ProfileMusicSlice();
+	profileSlice.list.reserve(slice.list.size());
+	for (auto &message : slice.list) {
+		if (v::is<Data::Document>(message.media.content)) {
+			const auto &doc = v::get<Data::Document>(message.media.content);
+			if (doc.isAudioFile) {
+				profileSlice.list.push_back(std::move(message));
+			}
+		}
+	}
+
+	loadProfileMusicFiles(std::move(profileSlice));
+}
+
+void ApiWrap::loadProfileMusicFiles(Data::ProfileMusicSlice &&slice) {
+	Expects(_profileMusicProcess != nullptr);
+	Expects(!_profileMusicProcess->slice.has_value());
+
+	if (slice.list.empty()) {
+		_profileMusicProcess->lastSlice = true;
+	}
+	_profileMusicProcess->slice = std::move(slice);
+	_profileMusicProcess->fileIndex = 0;
+	loadNextProfileMusic();
+}
+
+void ApiWrap::loadNextProfileMusic() {
+	Expects(_profileMusicProcess != nullptr);
+	Expects(_profileMusicProcess->slice.has_value());
+
+	for (auto &list = _profileMusicProcess->slice->list
+		; _profileMusicProcess->fileIndex < list.size()
+		; ++_profileMusicProcess->fileIndex) {
+		auto &message = list[_profileMusicProcess->fileIndex];
+		const auto origin = Data::FileOrigin{ .messageId = message.id };
+		const auto ready = processFileLoad(
+			message.file(),
+			origin,
+			[=](FileProgress value) { return loadProfileMusicProgress(value); },
+			[=](const QString &path) { loadProfileMusicDone(path); },
+			&message);
+		if (!ready) {
+			return;
+		}
+		const auto thumbProgress = [=](FileProgress value) {
+			return loadProfileMusicThumbProgress(value);
+		};
+		const auto thumbReady = processFileLoad(
+			message.thumb().file,
+			origin,
+			thumbProgress,
+			[=](const QString &path) { loadProfileMusicThumbDone(path); },
+			&message);
+		if (!thumbReady) {
+			return;
+		}
+	}
+	finishProfileMusicSlice();
+}
+
+void ApiWrap::finishProfileMusicSlice() {
+	Expects(_profileMusicProcess != nullptr);
+	Expects(_profileMusicProcess->slice.has_value());
+
+	auto slice = *base::take(_profileMusicProcess->slice);
+	if (!slice.list.empty()) {
+		_profileMusicProcess->processed += slice.list.size();
+		_profileMusicProcess->offsetId = slice.list.back().id;
+		if (!_profileMusicProcess->handleSlice(std::move(slice))) {
+			return;
+		}
+	}
+	if (_profileMusicProcess->lastSlice) {
+		finishProfileMusic();
+		return;
+	}
+
+	mainRequest(MTPusers_GetSavedMusic(
+		_user,
+		MTP_int(_profileMusicProcess->offsetId),
+		MTP_int(kProfileMusicSliceLimit),
+		MTP_long(0)
+	)).done([=](const MTPusers_SavedMusic &result) {
+		handleProfileMusicSlice(result);
+	}).send();
+}
+
+bool ApiWrap::loadProfileMusicProgress(FileProgress progress) {
+	Expects(_fileProcess != nullptr);
+	Expects(_profileMusicProcess != nullptr);
+	Expects(_profileMusicProcess->slice.has_value());
+	Expects((_profileMusicProcess->fileIndex >= 0)
+		&& (_profileMusicProcess->fileIndex
+			< _profileMusicProcess->slice->list.size()));
+
+	return _profileMusicProcess->fileProgress(DownloadProgress{
+		_fileProcess->randomId,
+		_fileProcess->relativePath,
+		_profileMusicProcess->fileIndex,
+		progress.ready,
+		progress.total });
+}
+
+void ApiWrap::loadProfileMusicDone(const QString &relativePath) {
+	Expects(_profileMusicProcess != nullptr);
+	Expects(_profileMusicProcess->slice.has_value());
+	Expects((_profileMusicProcess->fileIndex >= 0)
+		&& (_profileMusicProcess->fileIndex
+			< _profileMusicProcess->slice->list.size()));
+
+	const auto index = _profileMusicProcess->fileIndex;
+	auto &file = _profileMusicProcess->slice->list[index].file();
+	file.relativePath = relativePath;
+	if (relativePath.isEmpty()) {
+		file.skipReason = Data::File::SkipReason::Unavailable;
+	}
+	loadNextProfileMusic();
+}
+
+bool ApiWrap::loadProfileMusicThumbProgress(FileProgress progress) {
+	return loadProfileMusicProgress(progress);
+}
+
+void ApiWrap::loadProfileMusicThumbDone(const QString &relativePath) {
+	Expects(_profileMusicProcess != nullptr);
+	Expects(_profileMusicProcess->slice.has_value());
+	Expects((_profileMusicProcess->fileIndex >= 0)
+		&& (_profileMusicProcess->fileIndex
+			< _profileMusicProcess->slice->list.size()));
+
+	const auto index = _profileMusicProcess->fileIndex;
+	auto &file = _profileMusicProcess->slice->list[index].thumb().file;
+	file.relativePath = relativePath;
+	if (relativePath.isEmpty()) {
+		file.skipReason = Data::File::SkipReason::Unavailable;
+	}
+	loadNextProfileMusic();
+}
+
+void ApiWrap::finishProfileMusic() {
+	Expects(_profileMusicProcess != nullptr);
+
+	base::take(_profileMusicProcess)->finish();
 }
 
 void ApiWrap::requestContacts(FnMut<void(Data::ContactsList&&)> done) {
@@ -2666,15 +2918,31 @@ std::optional<QByteArray> ApiWrap::getCustomEmoji(QByteArray &data) {
 			return Data::TextPart::UnavailableEmoji();
 		}
 		auto &file = i->second.file;
-		processFileLoad(
+		const auto fileProgress = [=](FileProgress value) {
+			if (_chatProcess) {
+				return loadMessageEmojiProgress(value);
+			} else if (_topicProcess) {
+				return loadTopicEmojiProgress(value);
+			}
+			return true;
+		};
+		const auto ready = processFileLoad(
 			file,
 			{ .customEmojiId = id },
-			[=](FileProgress value) { return loadMessageEmojiProgress(value); },
-			[=](const QString &path) { loadMessageEmojiDone(id, path); },
-			nullptr,
-			nullptr,
-			false);
-		return std::nullopt;
+			fileProgress,
+			[=](const QString &path) { loadCustomEmojiDone(id, path); });
+		if (!ready) {
+			return std::nullopt;
+		}
+		using SkipReason = Data::File::SkipReason;
+		if (file.skipReason == SkipReason::Unavailable) {
+			return Data::TextPart::UnavailableEmoji();
+		} else if (file.skipReason == SkipReason::FileType
+			|| file.skipReason == SkipReason::FileSize) {
+			return QByteArray();
+		} else {
+			return file.relativePath.toUtf8();
+		}
 	}
 	return data;
 }
@@ -3020,6 +3288,36 @@ void ApiWrap::loadMessageEmojiDone(uint64 id, const QString &relativePath) {
 	}
 }
 
+bool ApiWrap::loadTopicEmojiProgress(FileProgress progress) {
+	Expects(_fileProcess != nullptr);
+	Expects(_topicProcess != nullptr);
+	Expects(_topicProcess->slice.has_value());
+	Expects((_topicProcess->fileIndex >= 0)
+		&& (_topicProcess->fileIndex < _topicProcess->slice->list.size()));
+
+	return _topicProcess->fileProgress(DownloadProgress{
+		.randomId = _fileProcess->randomId,
+		.path = _fileProcess->relativePath,
+		.itemIndex = _topicProcess->fileIndex,
+		.ready = progress.ready,
+		.total = progress.total });
+}
+
+void ApiWrap::loadCustomEmojiDone(uint64 id, const QString &relativePath) {
+	const auto i = _resolvedCustomEmoji.find(id);
+	if (i != end(_resolvedCustomEmoji)) {
+		i->second.file.relativePath = relativePath;
+		if (relativePath.isEmpty()) {
+			i->second.file.skipReason = Data::File::SkipReason::Unavailable;
+		}
+	}
+	if (_chatProcess) {
+		loadNextMessageFile();
+	} else if (_topicProcess) {
+		loadNextTopicMessageFile();
+	}
+}
+
 void ApiWrap::finishMessages() {
 	if (!_chatProcess) return;
 	Expects(!_chatProcess->slice.has_value());
@@ -3052,8 +3350,317 @@ Data::FileOrigin ApiWrap::currentFileMessageOrigin() const {
 	return result;
 }
 
+void ApiWrap::requestTopicMessages(
+		PeerId peerId,
+		MTPInputPeer inputPeer,
+		int32 topicRootId,
+		FnMut<bool(int count)> start,
+		Fn<bool(DownloadProgress)> progress,
+		Fn<bool(Data::MessagesSlice&&)> slice,
+		FnMut<void()> done) {
+	Expects(_topicProcess == nullptr);
+	Expects(_selfId.has_value());
 
-void ApiWrap::processFileLoad(
+	_topicProcess = std::make_unique<TopicProcess>();
+	_topicProcess->context.selfPeerId = peerFromUser(*_selfId);
+	_topicProcess->peerId = peerId;
+	_topicProcess->inputPeer = inputPeer;
+	_topicProcess->topicRootId = topicRootId;
+	_topicProcess->relativePath = "chats/chat_"
+		+ QString::number(peerId.value)
+		+ "/topic_"
+		+ QString::number(topicRootId)
+		+ "/";
+	_topicProcess->start = std::move(start);
+	_topicProcess->fileProgress = std::move(progress);
+	_topicProcess->handleSlice = std::move(slice);
+	_topicProcess->done = std::move(done);
+
+	mainRequest(MTPchannels_GetMessages(
+		MTP_inputChannel(
+			inputPeer.c_inputPeerChannel().vchannel_id(),
+			inputPeer.c_inputPeerChannel().vaccess_hash()),
+		MTP_vector<MTPInputMessage>(
+			1,
+			MTP_inputMessageID(MTP_int(topicRootId)))
+	)).done([=](const MTPmessages_Messages &rootResult) {
+		Expects(_topicProcess != nullptr);
+
+		auto rootSlice = rootResult.match([&](
+				const MTPDmessages_messagesNotModified &) {
+			return Data::MessagesSlice();
+		}, [&](const auto &data) {
+			return Data::ParseMessagesSlice(
+				_topicProcess->context,
+				data.vmessages(),
+				data.vusers(),
+				data.vchats(),
+				_topicProcess->relativePath);
+		});
+
+		auto rootSlicePtr = std::make_shared<Data::MessagesSlice>(
+			std::move(rootSlice));
+
+		requestTopicReplies(
+			0,
+			0,
+			kMessagesSliceLimit,
+			[=](const MTPmessages_Messages &result) {
+				Expects(_topicProcess != nullptr);
+
+				const auto count = result.match(
+					[](const MTPDmessages_messages &data) {
+					return int(data.vmessages().v.size());
+				}, [](const MTPDmessages_messagesSlice &data) {
+					return data.vcount().v;
+				}, [](const MTPDmessages_channelMessages &data) {
+					return data.vcount().v;
+				}, [](const MTPDmessages_messagesNotModified &data) {
+					return -1;
+				});
+				if (count < 0) {
+					error("Unexpected messagesNotModified received.");
+					return;
+				}
+				_topicProcess->totalCount = count;
+				if (!_topicProcess->start(count)) {
+					return;
+				}
+
+				if (!rootSlicePtr->list.empty()) {
+					collectMessagesCustomEmoji(*rootSlicePtr);
+					_topicProcess->slice = std::move(*rootSlicePtr);
+					_topicProcess->fileIndex = 0;
+					resolveTopicCustomEmoji();
+					return;
+				}
+
+				requestTopicMessagesSlice();
+			});
+	}).send();
+}
+
+void ApiWrap::requestTopicMessagesSlice() {
+	Expects(_topicProcess != nullptr);
+
+	const auto offsetId = (_topicProcess->offsetId == 0)
+		? 1
+		: (_topicProcess->offsetId + 1);
+	requestTopicReplies(
+		offsetId,
+		-kMessagesSliceLimit,
+		kMessagesSliceLimit,
+		[=](const MTPmessages_Messages &result) {
+			Expects(_topicProcess != nullptr);
+
+			result.match([&](const MTPDmessages_messagesNotModified &data) {
+				error("Unexpected messagesNotModified received.");
+			}, [&](const auto &data) {
+				if constexpr (MTPDmessages_messages::Is<decltype(data)>()) {
+					_topicProcess->lastSlice = true;
+				}
+				auto slice = Data::ParseMessagesSlice(
+					_topicProcess->context,
+					data.vmessages(),
+					data.vusers(),
+					data.vchats(),
+					_topicProcess->relativePath);
+				if (slice.list.empty()) {
+					_topicProcess->lastSlice = true;
+				}
+				loadTopicMessagesFiles(std::move(slice));
+			});
+		});
+}
+
+void ApiWrap::requestTopicReplies(
+		int offsetId,
+		int addOffset,
+		int limit,
+		FnMut<void(MTPmessages_Messages&&)> done) {
+	Expects(_topicProcess != nullptr);
+
+	_topicProcess->requestDone = std::move(done);
+	const auto doneHandler = [=](MTPmessages_Messages &&result) {
+		Expects(_topicProcess != nullptr);
+		base::take(_topicProcess->requestDone)(std::move(result));
+	};
+
+	mainRequest(MTPmessages_GetReplies(
+		_topicProcess->inputPeer,
+		MTP_int(_topicProcess->topicRootId),
+		MTP_int(offsetId),
+		MTP_int(0),
+		MTP_int(addOffset),
+		MTP_int(limit),
+		MTP_int(0),
+		MTP_int(0),
+		MTP_long(0)
+	)).done(doneHandler).send();
+}
+
+void ApiWrap::loadTopicMessagesFiles(Data::MessagesSlice &&slice) {
+	Expects(_topicProcess != nullptr);
+	Expects(!_topicProcess->slice.has_value());
+
+	collectMessagesCustomEmoji(slice);
+
+	if (slice.list.empty()) {
+		_topicProcess->lastSlice = true;
+	}
+	_topicProcess->slice = std::move(slice);
+	_topicProcess->fileIndex = 0;
+
+	resolveTopicCustomEmoji();
+}
+
+void ApiWrap::resolveTopicCustomEmoji() {
+	if (_unresolvedCustomEmoji.empty()) {
+		loadNextTopicMessageFile();
+		return;
+	}
+	const auto count = std::min(
+		int(_unresolvedCustomEmoji.size()),
+		kMaxEmojiPerRequest);
+	auto v = QVector<MTPlong>();
+	v.reserve(count);
+	const auto till = end(_unresolvedCustomEmoji);
+	const auto from = end(_unresolvedCustomEmoji) - count;
+	for (auto i = from; i != till; ++i) {
+		v.push_back(MTP_long(*i));
+	}
+	_unresolvedCustomEmoji.erase(from, till);
+	const auto finalize = [=] {
+		for (const auto &id : v) {
+			if (_resolvedCustomEmoji.contains(id.v)) {
+				continue;
+			}
+			_resolvedCustomEmoji.emplace(
+				id.v,
+				Data::Document{
+					.file = {
+						.skipReason = Data::File::SkipReason::Unavailable,
+					},
+				});
+		}
+		resolveTopicCustomEmoji();
+	};
+	mainRequest(MTPmessages_GetCustomEmojiDocuments(
+		MTP_vector<MTPlong>(v)
+	)).fail([=](const MTP::Error &error) {
+		LOG(("Export Error: Failed to get documents for emoji."));
+		finalize();
+		return true;
+	}).done([=](const MTPVector<MTPDocument> &result) {
+		for (const auto &entry : result.v) {
+			auto document = Data::ParseDocument(
+				_topicProcess->context,
+				entry,
+				_topicProcess->relativePath,
+				TimeId());
+			_resolvedCustomEmoji.emplace(document.id, std::move(document));
+		}
+		finalize();
+	}).send();
+}
+
+void ApiWrap::loadNextTopicMessageFile() {
+	Expects(_topicProcess != nullptr);
+	Expects(_topicProcess->slice.has_value());
+
+	const auto makeProgress = [=](FileProgress progress) {
+		return _topicProcess->fileProgress(DownloadProgress{
+			.randomId = _fileProcess->randomId,
+			.path = _fileProcess->relativePath,
+			.itemIndex = _topicProcess->fileIndex,
+			.ready = progress.ready,
+			.total = progress.total,
+		});
+	};
+	for (auto &list = _topicProcess->slice->list
+		; _topicProcess->fileIndex < list.size()
+		; ++_topicProcess->fileIndex) {
+		auto &message = list[_topicProcess->fileIndex];
+		if (!messageCustomEmojiReady(message)) {
+			return;
+		}
+		const auto origin = Data::FileOrigin{
+			.peer = _topicProcess->inputPeer,
+			.messageId = message.id
+		};
+		const auto ready = processFileLoad(
+			message.file(),
+			origin,
+			makeProgress,
+			[=, &message](const QString &path) {
+				loadTopicMessageFileOrThumbDone(message.file(), path);
+			},
+			&message);
+		if (!ready) {
+			return;
+		}
+		const auto thumbReady = processFileLoad(
+			message.thumb().file,
+			origin,
+			makeProgress,
+			[=, &message](const QString &path) {
+				loadTopicMessageFileOrThumbDone(message.thumb().file, path);
+			},
+			&message);
+		if (!thumbReady) {
+			return;
+		}
+	}
+	finishTopicMessagesSlice();
+}
+
+void ApiWrap::finishTopicMessagesSlice() {
+	Expects(_topicProcess != nullptr);
+	Expects(_topicProcess->slice.has_value());
+
+	auto slice = *base::take(_topicProcess->slice);
+	if (!slice.list.empty()) {
+		_topicProcess->offsetId = slice.list.back().id;
+		_topicProcess->processedCount += slice.list.size();
+		if (!_topicProcess->handleSlice(std::move(slice))) {
+			return;
+		}
+	}
+
+	const auto reachedTotal = _topicProcess->totalCount > 0
+		&& _topicProcess->processedCount >= _topicProcess->totalCount;
+
+	if (!_topicProcess->lastSlice && !reachedTotal) {
+		requestTopicMessagesSlice();
+	} else {
+		finishTopicMessages();
+	}
+}
+
+void ApiWrap::loadTopicMessageFileOrThumbDone(
+		Data::File &file,
+		const QString &relativePath) {
+	Expects(_topicProcess != nullptr);
+	Expects(_topicProcess->slice.has_value());
+	Expects((_topicProcess->fileIndex >= 0)
+		&& (_topicProcess->fileIndex < _topicProcess->slice->list.size()));
+
+	file.relativePath = relativePath;
+	if (relativePath.isEmpty()) {
+		file.skipReason = Data::File::SkipReason::Unavailable;
+	}
+	loadNextTopicMessageFile();
+}
+
+void ApiWrap::finishTopicMessages() {
+	Expects(_topicProcess != nullptr);
+	Expects(!_topicProcess->slice.has_value());
+
+	const auto process = base::take(_topicProcess);
+	process->done();
+}
+
+bool ApiWrap::processFileLoad(
 		Data::File &file,
 		const Data::FileOrigin &origin,
 		Fn<bool(FileProgress)> progress,
@@ -3101,10 +3708,16 @@ void ApiWrap::processFileLoad(
 		? story->file().size
 		: file.size;
 
+	// Early skip checks (defensive - main filtering happens earlier in loadMessagesFiles)
+	if (message && Data::SkipMessageByDate(*message, *_settings)) {
+		file.skipReason = SkipReason::DateLimits;
+		done(QString());
+		return true;
+	}
+
 	const auto types = _settings->media.types;
 	const bool fullHistorySelected = (types & MediaSettings::Type::FullHistory);
 	const auto oversized = (file.location && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit && !fullHistorySelected && type != Type::Link);
-	const auto locationKey = file.location ? ComputeLocationKey(file.location) : ApiWrap::LocationKey{ 0, 0 };
 
 	// Extract doc ID and filename for new unified dedup map.
 	uint64 dedupDocId = 0;
@@ -3120,12 +3733,11 @@ void ApiWrap::processFileLoad(
 	const int64 dedupSize = fullSize;
 
 	const bool typeSelected = (types & type) || fullHistorySelected;
-	const auto skipDownload = fullHistorySelected // Override download if Full History is active
+	const auto skipDownload = fullHistorySelected
 		|| (types == MediaSettings::Types(0))
-		|| !(types & type); // Only download if the specific type is chosen
+		|| !(types & type);
 
 	// Extension filter: applies to Video, Audio, File types when a filter is active.
-	// Extract extension from dedupName (populated from Document.name above).
 	if (!fullHistorySelected
 			&& (type == Type::Video || type == Type::Audio || type == Type::File)
 			&& _settings->media.extensionFilterMode != MediaSettings::ExtFilterMode::None
@@ -3142,16 +3754,14 @@ void ApiWrap::processFileLoad(
 		if (blocked) {
 			file.skipReason = Data::File::SkipReason::FileType;
 			done(QString());
-			return;
+			return true;
 		}
 	}
 
 	if (_isScanning) {
 		if (message || story) {
 			if (type != Type(0) && !isThumb && (origin.messageId != 0 || origin.storyId != 0)) {
-				// Total scan MUST strictly respect size selected, UNLESS Full History is selected or it is a Link/Text.
 				if (typeSelected) {
-					// dedupDocId/dedupSize/dedupName already extracted above.
 					const auto scanDedup = dedupLookup(dedupDocId, dedupSize, dedupName);
 					const bool alreadyVisited = scanDedup.found;
 					const bool willBeUniqueInChat = !alreadyVisited;
@@ -3159,7 +3769,7 @@ void ApiWrap::processFileLoad(
 					if (willBeUniqueInChat) {
 						dedupRegister(dedupDocId, dedupSize, dedupName, QString());
 					}
-					
+
 					if (_usingServerCounts) {
 						if (type == Type::Sticker || type == Type::Text) {
 							_scanStats->increment(type, fullSize, willBeUniqueInChat);
@@ -3167,8 +3777,6 @@ void ApiWrap::processFileLoad(
 							_scanStats->incrementSizeAndUnique(type, fullSize, willBeUniqueInChat);
 						}
 					} else {
-						// Local scan: Count everything locally.
-						// Exception: Links are handled in loadMessagesFiles to support multiple links per message.
 						if (type != Type::Link) {
 							_scanStats->increment(type, fullSize, willBeUniqueInChat);
 						}
@@ -3177,7 +3785,7 @@ void ApiWrap::processFileLoad(
 			}
 		}
 		done(QString());
-		return;
+		return true;
 	}
 
 	if (_stats
@@ -3185,15 +3793,12 @@ void ApiWrap::processFileLoad(
 		&& !isThumb) {
 		const bool isLinkOrText = (type == Type::Link || type == Type::Text);
 		if (typeSelected && (!oversized || fullHistorySelected || isLinkOrText)) {
-			// Unified dedup lookup: by doc ID first, then by size+name.
 			const auto dedup = dedupLookup(dedupDocId, dedupSize, dedupName);
 			const bool alreadyVisited = dedup.found;
 			const bool willBeUniqueInChat = !alreadyVisited;
 
 			if ((message || story) && type != Type(0)) {
 				if (type != Type::Link) {
-					// When server counts were used to seed totalCount (usingServerCounts),
-					// only update size and unique count locally to avoid double-counting.
 					if (_usingServerCounts && type != Type::Sticker && type != Type::Text) {
 						_stats->incrementSizeAndUnique(type, fullSize, willBeUniqueInChat);
 					} else {
@@ -3202,7 +3807,6 @@ void ApiWrap::processFileLoad(
 				}
 			}
 
-			// For links track URL for unique_links.txt.
 			if (type == Type::Link && !alreadyVisited) {
 				_visitedLinks.emplace(
 					file.content.isEmpty()
@@ -3210,11 +3814,6 @@ void ApiWrap::processFileLoad(
 						: QString::fromUtf8(file.content));
 			}
 
-			// Register in the dedup map whenever a file is seen for the first
-			// time, regardless of whether it will actually be downloaded.
-			// skipDownload only gates the download; the dedup map tracks what
-			// has been SEEN so that duplicate occurrences get willBeUniqueInChat=false
-			// and uniqueCount stays correct (not equal to totalCount).
 			if (!alreadyVisited) {
 				if (type != Type::Link && type != Type::Text) {
 					dedupRegister(dedupDocId, dedupSize, dedupName,
@@ -3227,8 +3826,6 @@ void ApiWrap::processFileLoad(
 				if (type != Type::Link && type != Type::Text) {
 					_stats->incrementUserMediaFiles();
 				}
-				// Re-register with empty path (in-progress) now that we know
-				// we will actually download this file.
 				if (type != Type::Link && type != Type::Text) {
 					dedupRegister(dedupDocId, dedupSize, dedupName, QString());
 				}
@@ -3239,26 +3836,19 @@ void ApiWrap::processFileLoad(
 	if (!file.relativePath.isEmpty()
 		|| file.skipReason != SkipReason::None) {
 		done(file.relativePath);
-		return;
+		return true;
 	} else if (!isThumb) {
-		// Dedup download-skip check: if already saved, reuse the path.
 		const auto dedup = dedupLookup(dedupDocId, dedupSize, dedupName);
 		if (dedup.found) {
 			if (!dedup.path.isEmpty() && dedup.path != "processed") {
-				// Already downloaded — reuse saved path, no download needed.
 				file.relativePath = dedup.path;
 				done(file.relativePath);
-				return;
+				return true;
 			} else if (dedup.path == "processed") {
-				// Primary was seen but not downloaded (Full History / skipDownload).
-				// Duplicate also needs no download — set skipReason so the JSON
-				// serializer's Expects() doesn't fire on empty relativePath.
 				file.skipReason = SkipReason::FileType;
 				done(QString());
-				return;
+				return true;
 			} else if (dedup.path.isEmpty()) {
-				// Currently downloading — attach our done callback to the active
-				// FileProcess so it fires when that download completes.
 				uint64 activeRandomId = 0;
 				if (dedupDocId != 0) {
 					const auto it = _dedupByIdInProgress.find(dedupDocId);
@@ -3275,30 +3865,21 @@ void ApiWrap::processFileLoad(
 				if (activeRandomId) {
 					const auto pit = _fileProcesses.find(activeRandomId);
 					if (pit != _fileProcesses.end()) {
-						// Capture file by pointer so the duplicate message's
-						// relativePath is set when the primary download finishes.
-						// Without this the HTML writer sees an empty path for
-						// duplicate files and generates a broken link.
 						pit->second->pendingDone.push_back(
 							[filePtr = &file, doneMove = std::move(done)](QString path) mutable {
 								filePtr->relativePath = path;
 								doneMove(path);
 							});
-						return;
+						return true;
 					}
 				}
-				// Active process not found (race) — fall through and download.
 			}
 		}
 	}
 
 	auto wrapDone = [=, done = std::move(done)](QString path) mutable {
 		if (!isThumb) {
-			if (path.isEmpty()) {
-				// Download failed — remove so next attempt isn't blocked.
-				// (dedupUpdate with empty would leave a bad entry; just leave as-is
-				//	since next lookup will find empty and fall through anyway.)
-			} else {
+			if (!path.isEmpty()) {
 				dedupUpdate(dedupDocId, dedupSize, dedupName, path);
 			}
 		}
@@ -3308,27 +3889,22 @@ void ApiWrap::processFileLoad(
 	if (!file.location && file.content.isEmpty()) {
 		file.skipReason = SkipReason::Unavailable;
 		wrapDone(QString());
-		return;
+		return true;
 	} else if (writePreloadedFile(file, origin)) {
 		wrapDone(file.relativePath);
-		return;
+		return true;
 	}
 
 	if (!story && skipDownload) {
 		file.skipReason = SkipReason::FileType;
 		wrapDone(QString());
-		return;
+		return true;
 	} else if (oversized) {
 		file.skipReason = SkipReason::FileSize;
 		wrapDone(QString());
-		return;
+		return true;
 	}
 	loadFile(file, origin, LocationKey(), std::move(progress), std::move(wrapDone));
-	// Register this download as in-progress so duplicates can attach to it.
-	// Only register main file downloads — thumb downloads share the same docId
-	// but must NOT overwrite the main file's randomId, or duplicate messages
-	// would attach their pendingDone to the thumb's FileProcess and receive
-	// the thumb path instead of the main file path.
 	if (file.randomId && !isThumb) {
 		if (dedupDocId != 0) {
 			_dedupByIdInProgress[dedupDocId] = file.randomId;
@@ -3337,6 +3913,7 @@ void ApiWrap::processFileLoad(
 			_dedupBySizeNameInProgress[SizeNameKey{ dedupSize, dedupName }] = file.randomId;
 		}
 	}
+	return true;
 }
 
 bool ApiWrap::writePreloadedFile(

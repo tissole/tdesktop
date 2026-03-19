@@ -96,6 +96,7 @@ public:
 		bool enabled,
 		Fn<void(ChosenImage)> chosen);
 	void showSavedMessagesOnSelf(bool enabled);
+	void showMyNotesOnSelf(bool enabled);
 	void overrideShape(PeerUserpicShape shape);
 
 	// Role::ChoosePhoto or Role::ChangePhoto
@@ -109,6 +110,8 @@ public:
 	void showCustom(QImage &&image);
 	void showSource(Source source);
 	void showCustomOnChosen();
+
+	[[nodiscard]] PopupMenu *showChangePhotoMenu();
 
 	void overrideHasPersonalPhoto(bool has);
 	[[nodiscard]] rpl::producer<> resetPersonalRequests() const;
@@ -131,7 +134,7 @@ private:
 	void processNewPeerPhoto();
 	void startNewPhotoShowing();
 	void prepareUserpicPixmap();
-	void fillShape(QPainter &p, const style::color &color) const;
+	void fillShape(QPainter &p, QBrush brush) const;
 	[[nodiscard]] QPoint countPhotoPosition() const;
 	void startChangeOverlayAnimation();
 	void updateCursorInChangeOverlay(QPoint localPos);
@@ -140,6 +143,8 @@ private:
 	void updateVideo();
 	[[nodiscard]] bool showSavedMessages() const;
 	[[nodiscard]] bool showRepliesMessages() const;
+	[[nodiscard]] bool showMyNotes() const;
+	[[nodiscard]] bool showAuthorHidden() const;
 	void checkStreamedIsStarted();
 	bool createStreamingObjects(not_null<PhotoData*> photo);
 	void clearStreaming();
@@ -184,6 +189,7 @@ private:
 	base::unique_qptr<PopupMenu> _menu;
 
 	bool _showSavedMessagesOnSelf = false;
+	bool _showMyNotesOnSelf = false;
 	bool _canOpenPhoto = false;
 	bool _cursorInChangeOverlay = false;
 	bool _changeOverlayEnabled = false;
