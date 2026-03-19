@@ -306,7 +306,7 @@ private:
 
 	[[nodiscard]] MTPMessagesFilter getFilter() const;
 
-	void processFileLoad(
+	[[nodiscard]] bool processFileLoad(
 		Data::File &file,
 		const Data::FileOrigin &origin,
 		Fn<bool(FileProgress)> progress,

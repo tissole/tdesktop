@@ -1576,7 +1576,12 @@ void ApiWrap::finishProfileMusicSlice() {
 }
 
 bool ApiWrap::loadProfileMusicProgress(FileProgress progress) {
-	Expects(_fileProcess != nullptr);
+	const auto it = _fileProcesses.find(progress.randomId);
+	if (it == end(_fileProcesses)) {
+		return false;
+	}
+	const auto &process = *it->second;
+
 	Expects(_profileMusicProcess != nullptr);
 	Expects(_profileMusicProcess->slice.has_value());
 	Expects((_profileMusicProcess->fileIndex >= 0)
@@ -1584,8 +1589,8 @@ bool ApiWrap::loadProfileMusicProgress(FileProgress progress) {
 			< _profileMusicProcess->slice->list.size()));
 
 	return _profileMusicProcess->fileProgress(DownloadProgress{
-		_fileProcess->randomId,
-		_fileProcess->relativePath,
+		process.randomId,
+		process.relativePath,
 		_profileMusicProcess->fileIndex,
 		progress.ready,
 		progress.total });

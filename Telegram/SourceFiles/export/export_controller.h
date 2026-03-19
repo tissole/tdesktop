@@ -105,6 +105,11 @@ struct ProcessingState {
 	bool isScanning = false;
 	bool fullHistory = false;
 
+	uint64 bytesRandomId = 0;
+	QString bytesName;
+	int64 bytesLoaded = 0;
+	int64 bytesCount = 0;
+
 	base::flat_map<uint64, FileDownloadProgress> activeDownloads;
 	std::map<MediaSettings::Type, Output::StatItem> selectedStats;   // current live counts
 	std::map<MediaSettings::Type, Output::StatItem> expectedStats;   // scan totals (denominator)
@@ -155,7 +160,9 @@ class Controller {
 public:
 	Controller(
 		QPointer<MTP::Instance> mtproto,
-		const MTPInputPeer &peer);
+		const MTPInputPeer &peer,
+		const QString &name,
+		int64 id);
 	Controller(
 		QPointer<MTP::Instance> mtproto,
 		const MTPInputPeer &peer,

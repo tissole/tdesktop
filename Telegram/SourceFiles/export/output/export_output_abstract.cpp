@@ -57,6 +57,16 @@ public:
 		return Result::Success();
 	}
 
+	Result writeProfileMusicStart(const Data::ProfileMusicInfo &data) override {
+		return Result::Success();
+	}
+	Result writeProfileMusicSlice(const Data::ProfileMusicSlice &data) override {
+		return Result::Success();
+	}
+	Result writeProfileMusicEnd() override {
+		return Result::Success();
+	}
+
 	Result writeContactsList(const Data::ContactsList &data) override {
 		return Result::Success();
 	}

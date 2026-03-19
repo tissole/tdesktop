@@ -188,8 +188,6 @@ private:
 	//void requestPasswordState();
 	//void passwordStateDone(const MTPaccount_Password &password);
 
-	void fillExportSteps();
-	void fillSubstepsInSteps(const ApiWrap::StartInfo &info);
 	void exportNext();
 	void initialize();
 	void initialized(const ApiWrap::StartInfo &info);
