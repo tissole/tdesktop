@@ -59,6 +59,7 @@ public:
 			return false;
 		}
 		virtual void setWebpagePart() {
+		}
 		virtual bool updateItemData() {
 			return false;
 		}
