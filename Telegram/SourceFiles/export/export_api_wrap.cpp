@@ -1154,7 +1154,7 @@ void ApiWrap::loadNextUserpic() {
 	});
 
 	for (auto &photo : _userpicsProcess->slice->list) {
-		processFileLoad(
+		(void)processFileLoad(
 			photo.image.file,
 			Data::FileOrigin(),
 			[=](FileProgress value) { return loadUserpicProgress(value); },
@@ -1318,7 +1318,7 @@ void ApiWrap::loadNextStory() {
 
 	for (auto &story : _storiesProcess->slice->list) {
 		const auto origin = Data::FileOrigin{ .storyId = story.id };
-		processFileLoad(
+		(void)processFileLoad(
 			story.file(),
 			origin,
 			[=](FileProgress value) { return loadStoryProgress(value); },
@@ -1330,7 +1330,7 @@ void ApiWrap::loadNextStory() {
 			return;
 		}
 
-		processFileLoad(
+		(void)processFileLoad(
 			story.thumb().file,
 			origin,
 			[=](FileProgress value) { return loadStoryThumbProgress(value); },
@@ -3024,7 +3024,7 @@ void ApiWrap::loadNextMessageFile() {
 			&& dedupLookup(parentDocId, parentSize, parentName).found;
 
 		if (message.file().location) {
-			processFileLoad(
+			(void)processFileLoad(
 				message.file(),
 				origin,
 				[=](FileProgress value) {
@@ -3051,7 +3051,7 @@ void ApiWrap::loadNextMessageFile() {
 			// processFileLoad registered the file, so it reflects pre-registration
 			// state: false for the first owner, true for all duplicates.
 			if (!mainFileAlreadySeen) {
-				processFileLoad(
+				(void)processFileLoad(
 					message.thumb().file,
 					origin,
 					[=](FileProgress value) {
@@ -3080,7 +3080,7 @@ void ApiWrap::loadNextMessageFile() {
 			if (part.type == Data::TextPart::Type::CustomEmoji) {
 				if (const auto id = part.additional.toULongLong()) {
 					if (const auto it = _resolvedCustomEmoji.find(id); it != _resolvedCustomEmoji.end()) {
-						processFileLoad(
+						(void)processFileLoad(
 							it->second.file,
 							{ .customEmojiId = id },
 							[=](FileProgress value) {
@@ -3106,7 +3106,7 @@ void ApiWrap::loadNextMessageFile() {
 			if (reaction.type == Data::Reaction::Type::CustomEmoji) {
 				if (const auto id = reaction.documentId.toULongLong()) {
 					if (const auto it = _resolvedCustomEmoji.find(id); it != _resolvedCustomEmoji.end()) {
-						processFileLoad(
+						(void)processFileLoad(
 							it->second.file,
 							{ .customEmojiId = id },
 							[=](FileProgress value) {
