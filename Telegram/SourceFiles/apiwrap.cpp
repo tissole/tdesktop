@@ -3514,6 +3514,7 @@ void ApiWrap::forwardMessages(
 				msg.textWithTags = caption;
 				sendMessage(std::move(msg));
 			}
+		}
 		if (item->isSavedMusicItem()) {
 			SendExistingDocument(MessageToSend(action), item->media()->document());
 			i = draft.items.erase(i);
