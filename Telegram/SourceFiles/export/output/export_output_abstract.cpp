@@ -57,13 +57,13 @@ public:
 		return Result::Success();
 	}
 
-	Result writeProfileMusicStart(const Data::ProfileMusicInfo &data) override {
+	[[nodiscard]] Result writeProfileMusicStart(const Data::ProfileMusicInfo &data) override {
 		return Result::Success();
 	}
-	Result writeProfileMusicSlice(const Data::ProfileMusicSlice &data) override {
+	[[nodiscard]] Result writeProfileMusicSlice(const Data::ProfileMusicSlice &data) override {
 		return Result::Success();
 	}
-	Result writeProfileMusicEnd() override {
+	[[nodiscard]] Result writeProfileMusicEnd() override {
 		return Result::Success();
 	}
 

@@ -3294,15 +3294,19 @@ void ApiWrap::loadMessageEmojiDone(uint64 id, const QString &relativePath) {
 }
 
 bool ApiWrap::loadTopicEmojiProgress(FileProgress progress) {
-	Expects(_fileProcess != nullptr);
+	const auto it = _fileProcesses.find(progress.randomId);
+	if (it == end(_fileProcesses)) {
+		return false;
+	}
+	const auto &process = *it->second;
 	Expects(_topicProcess != nullptr);
 	Expects(_topicProcess->slice.has_value());
 	Expects((_topicProcess->fileIndex >= 0)
 		&& (_topicProcess->fileIndex < _topicProcess->slice->list.size()));
 
 	return _topicProcess->fileProgress(DownloadProgress{
-		.randomId = _fileProcess->randomId,
-		.path = _fileProcess->relativePath,
+		.randomId = process.randomId,
+		.path = process.relativePath,
 		.itemIndex = _topicProcess->fileIndex,
 		.ready = progress.ready,
 		.total = progress.total });
@@ -3573,15 +3577,6 @@ void ApiWrap::loadNextTopicMessageFile() {
 	Expects(_topicProcess != nullptr);
 	Expects(_topicProcess->slice.has_value());
 
-	const auto makeProgress = [=](FileProgress progress) {
-		return _topicProcess->fileProgress(DownloadProgress{
-			.randomId = _fileProcess->randomId,
-			.path = _fileProcess->relativePath,
-			.itemIndex = _topicProcess->fileIndex,
-			.ready = progress.ready,
-			.total = progress.total,
-		});
-	};
 	for (auto &list = _topicProcess->slice->list
 		; _topicProcess->fileIndex < list.size()
 		; ++_topicProcess->fileIndex) {
@@ -3596,7 +3591,7 @@ void ApiWrap::loadNextTopicMessageFile() {
 		const auto ready = processFileLoad(
 			message.file(),
 			origin,
-			makeProgress,
+			[=](FileProgress progress) { return loadTopicEmojiProgress(progress); },
 			[=, &message](const QString &path) {
 				loadTopicMessageFileOrThumbDone(message.file(), path);
 			},
@@ -3607,7 +3602,7 @@ void ApiWrap::loadNextTopicMessageFile() {
 		const auto thumbReady = processFileLoad(
 			message.thumb().file,
 			origin,
-			makeProgress,
+			[=](FileProgress progress) { return loadTopicEmojiProgress(progress); },
 			[=, &message](const QString &path) {
 				loadTopicMessageFileOrThumbDone(message.thumb().file, path);
 			},

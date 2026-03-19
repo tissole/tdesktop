@@ -169,9 +169,6 @@ public:
 	void cancelExportFast(bool keepCache = false);
 	void clearResults();
 
-	// Message export functions
-	void exportNextDialog();
-	void startExportMessages(const Data::DialogInfo *info, uint64 fromId, uint64 tillId);
 
 private:
 	using Step = ProcessingState::Step;
