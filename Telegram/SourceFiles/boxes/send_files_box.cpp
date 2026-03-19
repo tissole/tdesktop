@@ -1155,7 +1155,9 @@ void SendFilesBox::updateCaptionPlaceholder() {
 				_emojiToggle->hide();
 			}
 		} else {
-			_caption->setPlaceholder(FieldPlaceholder(_list, way));
+			const auto slowmode = (_limits & SendFilesAllow::OnlyOne)
+				&& (_list.files.size() > 1);
+			_caption->setPlaceholder(FieldPlaceholder(_list, way, slowmode));
 			_caption->show();
 			if (_emojiToggle) {
 				_emojiToggle->show();
@@ -1754,18 +1756,18 @@ void SendFilesBox::setupCaption() {
 	});
 
 	_fileCaptions->heightChanges(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		captionResized();
 	}, _fileCaptions->lifetime());
 	_fileCaptions->submits(
-	) | rpl::start_with_next([=](Qt::KeyboardModifiers modifiers) {
+	) | rpl::on_next([=](Qt::KeyboardModifiers modifiers) {
 		const auto ctrlShiftEnter = modifiers.testFlag(Qt::ShiftModifier)
 			&& (modifiers.testFlag(Qt::ControlModifier)
 				|| modifiers.testFlag(Qt::MetaModifier));
 		send({}, ctrlShiftEnter);
 	}, _fileCaptions->lifetime());
 	_fileCaptions->cancelled(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		closeBox();
 	}, _fileCaptions->lifetime());
 	_fileCaptions->setMimeDataHook([=](
@@ -1780,12 +1782,12 @@ void SendFilesBox::setupCaption() {
 	});
 
 	_fileCaptions->changes(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		if (GetEnhancedBool("caption_from_file_name") && _list.files.size() > 1) {
 			const auto captionText = _fileCaptions->getTextWithAppliedMarkdown().text;
 			const auto captions = captionText.split("\n", Qt::SkipEmptyParts);
-			
-			for (auto i = 0; i < std::min(captions.size(), static_cast<int>(_list.files.size())); ++i) {
+
+			for (auto i = 0; i < std::min(static_cast<int>(captions.size()), static_cast<int>(_list.files.size())); ++i) {
 				TextWithTags fileCaption;
 				fileCaption.text = captions[i];
 				_list.files[i].fileNameCaption = std::move(fileCaption);
@@ -2373,7 +2375,7 @@ void SendFilesBox::send(
 				const auto fileCaptionText = _fileCaptions->getTextWithAppliedMarkdown().text;
 				const auto fileCaptions = fileCaptionText.split("\n", Qt::SkipEmptyParts);
 
-				for (auto i = 0; i < std::min(fileCaptions.size(), static_cast<int>(_list.files.size())); ++i) {
+				for (auto i = 0; i < std::min(static_cast<int>(fileCaptions.size()), static_cast<int>(_list.files.size())); ++i) {
 					TextWithTags fileCaption;
 					fileCaption.text = fileCaptions[i];
 					_list.files[i].fileNameCaption = std::move(fileCaption);
