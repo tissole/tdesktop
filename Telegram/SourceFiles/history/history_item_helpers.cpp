@@ -575,12 +575,12 @@ MessageFlags NewMessageFlags(not_null<PeerData*> peer) {
 		| (peer->isSelf() ? MessageFlag() : MessageFlag::Outgoing);
 }
 
-TimeId NewMessageDate(History *history, TimeId scheduled) {
+TimeId NewMessageDate(TimeId scheduled) {
 	return scheduled ? scheduled : base::unixtime::now();
 }
 
-TimeId NewMessageDate(not_null<History*> history, const Api::SendOptions &options) {
-	return options.shortcutId ? 1 : NewMessageDate(history, options.scheduled);
+TimeId NewMessageDate(const Api::SendOptions &options) {
+	return options.shortcutId ? 1 : NewMessageDate(options.scheduled);
 }
 
 PeerId NewMessageFromId(const Api::SendAction &action) {

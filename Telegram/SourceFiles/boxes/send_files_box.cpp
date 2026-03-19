@@ -1160,6 +1160,7 @@ void SendFilesBox::updateCaptionPlaceholder() {
 			if (_emojiToggle) {
 				_emojiToggle->show();
 			}
+		}
 	} else {
 		const auto slowmode = (_limits & SendFilesAllow::OnlyOne)
 			&& (_list.files.size() > 1);
