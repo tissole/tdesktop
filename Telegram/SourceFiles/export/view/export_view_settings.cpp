@@ -1465,14 +1465,12 @@ void SettingsWidget::setScanning(bool scanning) {
 
 void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats) {
 	setScanning(false);
-	
+
 	// We use our own calculated totals
 	int totalUniqueMessagesCount = 0;
 	int totalTotalMessagesCount = 0;
-	for (const auto &pair : stats) {
-		const auto type = pair.first;
-		const auto &item = pair.second;
-		totalTotalMessagesCount += item.totalCount;
+	for (const auto &[type, stat] : stats) {
+		totalTotalMessagesCount += stat.totalCount;
 	}
 
 	if (totalTotalMessagesCount <= 0) {

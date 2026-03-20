@@ -2698,12 +2698,7 @@ TextState Message::textState(
 		}
 	}
 
-	const auto keyboard = item->inlineReplyKeyboard();
-	auto keyboardHeight = 0;
 	if (keyboard) {
-		keyboardHeight = keyboard->naturalHeight();
-		g.setHeight(g.height() - st::msgBotKbButton.margin - keyboardHeight);
-
 		if (item->isHistoryEntry() || item->isAdminLogEntry()) {
 			const auto keyboardPosition = QPoint(g.left(), g.top() + g.height() + st::msgBotKbButton.margin);
 			if (QRect(keyboardPosition, QSize(g.width(), keyboardHeight)).contains(point)) {
@@ -5234,7 +5229,6 @@ const HistoryMessageEdited *Message::displayedEditBadge() const {
 	return data()->Get<HistoryMessageEdited>();
 }
 
-} // namespace HistoryView
 void Message::ensureSummarizeButton() const {
 	if (data()->canBeSummarized()
 		/*&& item->originalText().text.size() >= kSummarizeThreshold*/) {
