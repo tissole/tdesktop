@@ -343,7 +343,7 @@ namespace Settings {
 		)->toggledChanges(
 		) | rpl::filter([=](bool toggled) {
 			return (toggled != GetEnhancedBool("caption_from_file_name"));
-		}) | rpl::start_with_next([=](bool toggled) {
+		}) | rpl::on_next([=](bool toggled) {
 			SetEnhancedValue("caption_from_file_name", toggled);
 			EnhancedSettings::Write();
 		}, container->lifetime());
