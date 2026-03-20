@@ -1272,13 +1272,6 @@ void SettingsWidget::addSizeSlider(
 		not_null<Ui::VerticalLayout*> container) {
 	using namespace rpl::mappers;
 
-	const auto label = container->add(
-		object_ptr<Ui::LabelSimple>(
-			container,
-			st::exportFileSizeLabel,
-			QString()),
-		st::exportFileSizePadding + style::margins(0, 10, 0, 0));
-
 	const auto slider = container->add(
 		object_ptr<Ui::MediaSlider>(container, st::exportFileSizeSlider),
 		st::exportFileSizePadding);

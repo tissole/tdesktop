@@ -160,9 +160,7 @@ class Controller {
 public:
 	Controller(
 		QPointer<MTP::Instance> mtproto,
-		const MTPInputPeer &peer,
-		const QString &name,
-		int64 id);
+		const MTPInputPeer &peer);
 	Controller(
 		QPointer<MTP::Instance> mtproto,
 		const MTPInputPeer &peer,

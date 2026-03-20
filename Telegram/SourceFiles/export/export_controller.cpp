@@ -138,9 +138,7 @@ public:
 	ControllerObject(
 		crl::weak_on_queue<ControllerObject> weak,
 		QPointer<MTP::Instance> mtproto,
-		const MTPInputPeer &peer,
-		const QString &name,
-		int64 id);
+		const MTPInputPeer &peer);
 	ControllerObject(
 		crl::weak_on_queue<ControllerObject> weak,
 		QPointer<MTP::Instance> mtproto,
@@ -279,9 +277,7 @@ private:
 ControllerObject::ControllerObject(
 	crl::weak_on_queue<ControllerObject> weak,
 	QPointer<MTP::Instance> mtproto,
-	const MTPInputPeer &peer,
-	const QString &name,
-	int64 id)
+	const MTPInputPeer &peer)
 : _api(mtproto, weak.runner())
 , _state(PasswordCheckState{}) {
 	_api.errors(
@@ -1259,10 +1255,8 @@ ProcessingState ControllerObject::stateTopic(
 
 Controller::Controller(
 	QPointer<MTP::Instance> mtproto,
-	const MTPInputPeer &peer,
-	const QString &name,
-	int64 id)
-: _wrapped(std::move(mtproto), peer, std::move(name), std::move(id)) {
+	const MTPInputPeer &peer)
+: _wrapped(std::move(mtproto), peer) {
 }
 
 Controller::Controller(
