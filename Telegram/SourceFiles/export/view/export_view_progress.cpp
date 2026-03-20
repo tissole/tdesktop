@@ -312,7 +312,7 @@ ProgressWidget::ProgressWidget(
 	_skipFile->moveToLeft(st::exportProgressRowPadding.left(), 0);
 
 	widthValue(
-	) | rpl::start_with_next([=](int width) {
+	) | rpl::on_next([=](int width) {
 		if (const auto widget = static_cast<Ui::RpWidget*>(_scroll->widget())) {
 			widget->resizeToWidth(width);
 		}
@@ -332,7 +332,7 @@ ProgressWidget::ProgressWidget(
 	setupBottomButton(_cancel.get());
 
 	sizeValue()
-		| rpl::start_with_next([=](QSize size) {
+		| rpl::on_next([=](QSize size) {
 			const auto buttonHeight = _cancel ? _cancel->height() : (_done ? _done->height() : 0);
 			const auto bottomGap = buttonHeight + st::exportCancelBottom + 10;
 			_scroll->resize(size.width(), size.height() - bottomGap);

@@ -63,6 +63,19 @@ Content ContentFromState(
 			: addPart(state.entityIndex, state.entityCount);
 		push("main", label, info, isScanning ? addProgress : (doneProgress + addProgress));
 	};
+	const auto pushBytes = [&](
+			const QString &id,
+			const QString &label,
+			uint64 randomId) {
+		if (!state.bytesCount) {
+			return;
+		}
+		const auto progress = state.bytesLoaded / float64(state.bytesCount);
+		const auto info = Ui::FormatDownloadText(
+			state.bytesLoaded,
+			state.bytesCount);
+		push(id, label, info, progress, randomId);
+	};
 
 	switch (state.step) {
 	case Step::Initializing:

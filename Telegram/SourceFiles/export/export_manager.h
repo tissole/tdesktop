@@ -35,9 +35,7 @@ public:
 	void start(not_null<PeerData*> peer);
 	void start(
 		not_null<Main::Session*> session,
-		const MTPInputPeer &singlePeer = MTP_inputPeerEmpty(),
-		const QString &name = QString(),
-		int64 id = 0);
+		const MTPInputPeer &singlePeer = MTP_inputPeerEmpty());
 
 	void startTopic(
 		not_null<PeerData*> peer,

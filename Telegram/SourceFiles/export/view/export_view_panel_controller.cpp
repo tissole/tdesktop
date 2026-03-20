@@ -212,8 +212,6 @@ void PanelController::showSettings() {
 	settingsRaw->exportClicks(
 	) | rpl::on_next([=]() {
 		_panel->setTitle(tr::lng_export_progress_title());
-	settings->startClicks(
-	) | rpl::on_next([=]() {
 		showProgress();
 		_process->startExport(*_settings, PrepareEnvironment(_session));
 	}, settingsRaw->lifetime());
@@ -242,14 +240,6 @@ void PanelController::showSettings() {
 
 	settingsRaw->changes(
 	) | rpl::on_next([=](Settings &&settings) {
-	//settings->cancelClicks(
-	//) | rpl::on_next([=] {
-	//	LOG(("Export Info: Panel Hide By Cancel."));
-	//	_panel->hideGetDuration();
-	//}, settings->lifetime());
-    //
-	//settings->changes(
-	//) | rpl::on_next([=](Settings &&settings) {
 		*_settings = std::move(settings);
 	}, settingsRaw->lifetime());
 

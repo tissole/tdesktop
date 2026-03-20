@@ -126,7 +126,7 @@ SettingsWidget::SettingsWidget(
 	ResolveSettings(session, _internal_data);
 	setupContent();
 
-	_changes.events() | rpl::start_with_next([=](const Settings &data) {
+	_changes.events() | rpl::on_next([=](const Settings &data) {
 		const auto old = _internal_data;
 		const bool filtersChanged = (data.media.types != old.media.types)
 			|| (data.types != old.types)
@@ -592,14 +592,14 @@ void SettingsWidget::addLimitsLabel(
 		idContainer->resize(w, labelH + 4 + inputH + 4);
 	};
 	idContainer->widthValue()
-		| rpl::start_with_next([=](int w) { layoutIdRow(w); }, idContainer->lifetime());
+		| rpl::on_next([=](int w) { layoutIdRow(w); }, idContainer->lifetime());
 
 	// Bind inputs to data
 	value()
 		| rpl::map([](const Settings &data) {
 			return data.singlePeerFromId;
 		})
-		| rpl::start_with_next([=](int32 fromId) {
+		| rpl::on_next([=](int32 fromId) {
 			const auto s = QString::number(fromId);
 			if (fromIdInput->getLastText() != s) {
 				fromIdInput->setText(s);
@@ -610,7 +610,7 @@ void SettingsWidget::addLimitsLabel(
 		| rpl::map([](const Settings &data) {
 			return data.singlePeerTillId;
 		})
-		| rpl::start_with_next([=](int32 tillId) {
+		| rpl::on_next([=](int32 tillId) {
 			const auto s = QString::number(tillId);
 			if (tillIdInput->getLastText() != s) {
 				tillIdInput->setText(s);
@@ -627,7 +627,7 @@ void SettingsWidget::addLimitsLabel(
 		st::exportSettingPadding);
 
 	// Handle input changes with validation
-	fromIdInput->changes() | rpl::start_with_next([=] {
+	fromIdInput->changes() | rpl::on_next([=] {
 		errorLabel->setText(QString());
 		const auto text = fromIdInput->getLastText();
 		bool ok = false;
@@ -657,7 +657,7 @@ void SettingsWidget::addLimitsLabel(
 		});
 	}, fromIdInput->lifetime());
 
-	tillIdInput->changes() | rpl::start_with_next([=] {
+	tillIdInput->changes() | rpl::on_next([=] {
 		errorLabel->setText(QString());
 		const auto text = tillIdInput->getLastText();
 		bool ok = false;
@@ -684,7 +684,7 @@ void SettingsWidget::addLimitsLabel(
 		| rpl::map([](const Settings &data) {
 			return data.useIdRange;
 		})
-		| rpl::start_with_next([=](bool useIdRange) {
+		| rpl::on_next([=](bool useIdRange) {
 			dateLabel->setVisible(!useIdRange);
 			idContainer->setVisible(useIdRange);
 			errorLabel->setVisible(useIdRange);
@@ -1224,7 +1224,7 @@ void SettingsWidget::addExtensionFilter(
 
 	// ── Parse and save extensions on input change ──
 	input->changes()
-		| rpl::start_with_next([=] {
+		| rpl::on_next([=] {
 			const auto text = input->getLastText().toLower().trimmed();
 			const auto parts = text.split(
 				QRegularExpression(u"[\\s,;]+"_q),
@@ -1261,7 +1261,7 @@ void SettingsWidget::addExtensionFilter(
 			return data.media.extensionFilterMode;
 		})
 		| rpl::distinct_until_changed()
-		| rpl::start_with_next([=](ExtMode mode) {
+		| rpl::on_next([=](ExtMode mode) {
 			wlCb->setChecked(mode == ExtMode::Whitelist);
 			blCb->setChecked(mode == ExtMode::Blacklist);
 		}, wlCb->lifetime());
@@ -1385,7 +1385,7 @@ void SettingsWidget::refreshButtons(
 		st::defaultBoxButton);
 	cancelBtn->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 	cancelBtn->show();
-	cancelBtn->clicks() | rpl::to_empty | rpl::start_with_next([=] {
+	cancelBtn->clicks() | rpl::to_empty | rpl::on_next([=] {
 		_cancelClicks.fire({});
 	}, cancelBtn->lifetime());
 
