@@ -262,7 +262,6 @@ QSize GroupedMedia::countOptimalSize() {
 	Assert(layout.size() == _parts.size());
 
 	auto minHeight = 0;
-	bool lastRowHasCaption = false;
 
 	if (_mode == Mode::Column) {
 		auto top = 0;
@@ -355,7 +354,6 @@ QSize GroupedMedia::countOptimalSize() {
 QSize GroupedMedia::countCurrentSize(int newWidth) {
 	accumulate_min(newWidth, maxWidth());
 	auto newHeight = 0;
-	bool lastRowHasCaption = false;
 
 	if (_mode == Mode::Grid && newWidth < st::historyGroupWidthMin) {
 		return { newWidth, newHeight };
@@ -1096,9 +1094,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				// Highlight Range: [range.from, range.to)
 				
 				// Intersection
-				const int from = std::max((int)range.from, textOffset);
-				const int to = std::min((int)range.to, textOffset + len);
-				
+				const int from = std::max(static_cast<int>(range.from), textOffset);
+				const int to = std::min(static_cast<int>(range.to), static_cast<int>(textOffset + len));
+
 				if (from < to) {
 					// Valid intersection, map to local
 					highlightRequest->range = TextSelection(
@@ -1136,7 +1134,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 				.clip = QRect(),
 				.palette = &stm->textPalette,
 				.pre = stm->preCache.get(),
-				.blockquote = context.quoteCache(_parent->contentColorIndex()),
+				.blockquote = context.quoteCache(
+					_parent->contentColorCollectible(),
+					_parent->contentColorIndex()),
 				.colors = context.st->highlightColors(),
 				.spoiler = Ui::Text::DefaultSpoilerCache(),
 				.now = context.now,
@@ -1844,8 +1844,8 @@ SelectedQuote GroupedMedia::selectedQuote(TextSelection selection) const {
 			const auto &text = part.item->originalText();
 			const auto length = text.text.size();
 			if (length > 0) {
-				const auto localFrom = std::max((int)selection.from, offset);
-				const auto localTo = std::min((int)selection.to, offset + length);
+				const auto localFrom = std::max(static_cast<int>(selection.from), offset);
+				const auto localTo = std::min(static_cast<int>(selection.to), static_cast<int>(offset + length));
 				if (localFrom < localTo) {
 					auto localSelection = TextSelection(
 						(uint16)(localFrom - offset),
