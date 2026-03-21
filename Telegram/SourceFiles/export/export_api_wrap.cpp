@@ -4118,7 +4118,7 @@ void ApiWrap::scheduleMoreFiles() {
 			continue;
 		}
 
-		const auto &process = *it->second;
+		auto &process = *it->second;
 		const auto isSmall = process.size < 20 * kMegabyte;
 		const auto limit = isSmall ? kMaxParallelSmallFiles : kMaxParallelLargeFiles;
 		const auto current = isSmall ? smallFilesDownloading : largeFilesDownloading;
