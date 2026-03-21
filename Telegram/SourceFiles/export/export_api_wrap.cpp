@@ -45,10 +45,10 @@ constexpr auto kMaxParallelLargeFiles = 2;  // Files >= 20MB
 
 int GetChunkSizeForFile(int64 fileSize) {
 	// Telegram requires chunk sizes to be powers of 2: 32KB, 64KB, 128KB, 256KB, 512KB, 1MB
-	if (fileSize > 100 * kMegabyte) {
-		return 512 * 1024;  // 512KB for very large files
+	if (fileSize > 500 * kMegabyte) {
+		return 1024 * 1024;  // 1MB for very large files
 	}
-	return 256 * 1024;  // 256KB for small/medium files
+	return 512 * 1024;  // 512KB for small/medium files
 }
 
 int GetConcurrentChunksForFile(int64 fileSize) {
@@ -4102,10 +4102,11 @@ std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 
 void ApiWrap::scheduleMoreFiles() {
 	// Count how many small and large files are currently downloading
+	// Only count files that have chunks actively being downloaded
 	int smallFilesDownloading = 0;
 	int largeFilesDownloading = 0;
 	for (const auto &[randomId, process] : _fileProcesses) {
-		if (process->active) {
+		if (process->active && !process->scheduledOffsets.empty()) {
 			if (process->size < 20 * kMegabyte) {
 				++smallFilesDownloading;
 			} else {
@@ -4129,7 +4130,7 @@ void ApiWrap::scheduleMoreFiles() {
 		const auto current = isSmall ? smallFilesDownloading : largeFilesDownloading;
 
 		if (current >= limit) {
-			break;  // At limit for this file size category
+			break;  // At limit for this file size category - don't add more
 		}
 
 		_fileDownloadQueue.pop_front();
@@ -4142,13 +4143,6 @@ void ApiWrap::scheduleMoreFiles() {
 		}
 
 		loadFilePart(process);
-	}
-
-	for (auto &pair : _fileProcesses) {
-		auto &process = *pair.second;
-		if (process.active) {
-			loadFilePart(process);
-		}
 	}
 }
 

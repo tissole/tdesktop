@@ -548,7 +548,7 @@ void SettingsWidget::addLimitsLabel(
 	// ID range UI — two inputs on a single row (visible when ID mode is selected)
 	const auto idContainer = container->add(
 		object_ptr<Ui::RpWidget>(container),
-		st::exportSubSettingPadding);
+		style::margins());
 
 	// Use st::defaultInputField.heightMin instead of widget->height() because
 	// Ui::InputField::height() returns 0 until first show(). idContainer starts
@@ -557,6 +557,7 @@ void SettingsWidget::addLimitsLabel(
 	const int inputH = st::defaultInputField.heightMin;
 	const int idPadL = 22;
 	const int idGap  = 16;
+	const int labelTop = 0;
 
 	const auto fromIdLabel = Ui::CreateChild<Ui::FlatLabel>(
 		idContainer,
@@ -584,15 +585,15 @@ void SettingsWidget::addLimitsLabel(
 		const int half = (w - idPadL * 2 - idGap) / 2;
 		if (half < 20) return;
 		fromIdLabel->resizeToWidth(half);
-		fromIdLabel->move(idPadL, 0);
+		fromIdLabel->move(idPadL, labelTop);
 		const int labelH = fromIdLabel->height();
-		// Position input closer to label (reduce gap by half)
-		fromIdInput->setGeometry(idPadL, labelH - 6, half, inputH);
+		const int inputTop = labelTop + labelH + 2;
+		fromIdInput->setGeometry(idPadL, inputTop, half, inputH);
 		const int x2 = idPadL + half + idGap;
 		tillIdLabel->resizeToWidth(half);
-		tillIdLabel->move(x2, 0);
-		tillIdInput->setGeometry(x2, labelH - 6, half, inputH);
-		idContainer->resize(w, labelH + inputH - 6);
+		tillIdLabel->move(x2, labelTop);
+		tillIdInput->setGeometry(x2, inputTop, half, inputH);
+		idContainer->resize(w, labelH + 2 + inputH);
 	};
 	idContainer->widthValue()
 		| rpl::on_next([=](int w) { layoutIdRow(w); }, idContainer->lifetime());
