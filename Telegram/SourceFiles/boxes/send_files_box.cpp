@@ -1519,7 +1519,7 @@ void SendFilesBox::setupSendWayControls() {
 	_sendWay.changes(
 	) | rpl::on_next([=](SendFilesWay value) {
 		_groupFiles->setChecked(value.groupFiles());
-		_sendImagesAsPhotos->setChecked(value.sendImagesAsPhotos());
+		_sendImagesAsPhotos->setChecked(!value.sendImagesAsPhotos());
 		
 		if (GetEnhancedBool("caption_from_file_name")) {
 			const auto fileNames = ExtractFileNames(_list.files);

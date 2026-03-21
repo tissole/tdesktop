@@ -97,7 +97,7 @@ PRIVATE
     desktop-app::external_openssl
     desktop-app::external_openal
     desktop-app::external_xxhash
-    windowsapp.lib
+    #windowsapp.lib
 )
 
 target_precompile_headers(Telegram PRIVATE $<$<COMPILE_LANGUAGE:CXX,OBJCXX>:${src_loc}/stdafx.h>)
@@ -1921,15 +1921,15 @@ if (WIN32)
         target_link_libraries(Telegram PRIVATE desktop-app::win_directx_helper)
     endif()
 
-    add_custom_command(
-    TARGET
-        Telegram
-    PRE_LINK
-    COMMAND
-        ${CMAKE_COMMAND} -E rm -f "$<TARGET_FILE_DIR:Telegram>/Telegram.pdb"
-    COMMENT
-        "Deleting broken Telegram.pdb before link (MSVC workaround)"
-    )
+    #add_custom_command(
+    #TARGET
+    #    Telegram
+    #PRE_LINK
+    #COMMAND
+    #    ${CMAKE_COMMAND} -E rm -f "$<TARGET_FILE_DIR:Telegram>/Telegram.pdb"
+    #COMMENT
+    #    "Deleting broken Telegram.pdb before link (MSVC workaround)"
+    #)
     
     target_link_options(Telegram PRIVATE /PDBPAGESIZE:8192)
 elseif (APPLE)
@@ -2110,7 +2110,7 @@ if (MSVC)
     target_link_options(Telegram
     PRIVATE
         /DELAYLOAD:secur32.dll
-        # /DELAYLOAD:winmm.dll
+        /DELAYLOAD:winmm.dll
         /DELAYLOAD:ws2_32.dll
         /DELAYLOAD:user32.dll
         /DELAYLOAD:gdi32.dll
