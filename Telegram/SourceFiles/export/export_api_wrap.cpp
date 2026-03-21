@@ -2442,34 +2442,49 @@ void ApiWrap::requestChatMessages(
 		using Flag = MTPmessages_Search::Flag;
 		auto searchFlags = (_chatProcess->info.onlyMyMessages ? Flag::f_from_id : Flag(0));
 
-		auto request = MTPmessages_Search(
-			MTP_flags(searchFlags),
-			realPeerInput,
-			MTP_string(), // query
-			MTP_inputPeerSelf(),
-			MTP_inputPeerEmpty(), // saved_peer_id
-			MTP_vector<MTPReaction>(), // saved_reaction
-			MTP_int(0), // top_msg_id
-			filter,
-			MTP_int(0), // min_date — do NOT pass date params; use min_id/max_id instead
-			MTP_int(0), // max_date — do NOT pass date params; use min_id/max_id instead
-			MTP_int(offsetId),
-			MTP_int(addOffset),
-			MTP_int(limit),
-			MTP_int(int32(maxId)), // max_id
-			MTP_int(int32(minId)), // min_id
-			MTP_long(0) // hash
-		);
-
 		if (hasRestriction) {
 			// Use normal request for restricted chats
 			normalRequest(MTPInvokeWithMessagesRange<MTPmessages_Search>(
 				_splits[realSplitIndex],
-				request
+				MTPmessages_Search(
+					MTP_flags(searchFlags),
+					realPeerInput,
+					MTP_string(), // query
+					MTP_inputPeerSelf(),
+					MTP_inputPeerEmpty(), // saved_peer_id
+					MTP_vector<MTPReaction>(), // saved_reaction
+					MTP_int(0), // top_msg_id
+					filter,
+					MTP_int(0), // min_date
+					MTP_int(0), // max_date
+					MTP_int(offsetId),
+					MTP_int(addOffset),
+					MTP_int(limit),
+					MTP_int(int32(maxId)), // max_id
+					MTP_int(int32(minId)), // min_id
+					MTP_long(0) // hash
+				)
 			)).done(doneHandler).send();
 		} else {
 			// Use takeout for unrestricted chats
-			splitRequest(realSplitIndex, request)
+			splitRequest(realSplitIndex, MTPmessages_Search(
+				MTP_flags(searchFlags),
+				realPeerInput,
+				MTP_string(), // query
+				MTP_inputPeerSelf(),
+				MTP_inputPeerEmpty(), // saved_peer_id
+				MTP_vector<MTPReaction>(), // saved_reaction
+				MTP_int(0), // top_msg_id
+				filter,
+				MTP_int(0), // min_date
+				MTP_int(0), // max_date
+				MTP_int(offsetId),
+				MTP_int(addOffset),
+				MTP_int(limit),
+				MTP_int(int32(maxId)), // max_id
+				MTP_int(int32(minId)), // min_id
+				MTP_long(0) // hash
+			))
 			.fail([=](const MTP::Error &error) {
 				if (!_chatProcess || !_settings) return false;
 
@@ -2489,59 +2504,66 @@ void ApiWrap::requestChatMessages(
 			}).done(doneHandler).send();
 		}
 	} else {
-		auto request = MTPmessages_GetHistory(
-			realPeerInput,
-			MTP_int(offsetId),
-			MTP_int(0), // offset_date
-			MTP_int(addOffset),
-			MTP_int(limit),
-			MTP_int(int32(maxId)), // max_id
-			MTP_int(int32(minId)), // min_id
-			MTP_long(0)  // hash
-		);
-
 		if (hasRestriction) {
 			// Use normal request for restricted chats
 			normalRequest(MTPInvokeWithMessagesRange<MTPmessages_GetHistory>(
 				_splits[realSplitIndex],
-				request
+				MTPmessages_GetHistory(
+					realPeerInput,
+					MTP_int(offsetId),
+					MTP_int(0), // offset_date
+					MTP_int(addOffset),
+					MTP_int(limit),
+					MTP_int(int32(maxId)), // max_id
+					MTP_int(int32(minId)), // min_id
+					MTP_long(0)  // hash
+				)
 			)).done(doneHandler).send();
 		} else {
 			// Use takeout for unrestricted chats
-			splitRequest(realSplitIndex, request)
-		.fail([=](const MTP::Error &error) {
-			if (!_chatProcess || !_settings) return false;
+			splitRequest(realSplitIndex, MTPmessages_GetHistory(
+				realPeerInput,
+				MTP_int(offsetId),
+				MTP_int(0), // offset_date
+				MTP_int(addOffset),
+				MTP_int(limit),
+				MTP_int(int32(maxId)), // max_id
+				MTP_int(int32(minId)), // min_id
+				MTP_long(0)  // hash
+			))
+			.fail([=](const MTP::Error &error) {
+				if (!_chatProcess || !_settings) return false;
 
-			if (error.type() == u"CHANNEL_PRIVATE"_q) {
-				if (realPeerInput.type() == mtpc_inputPeerChannel
-					&& !_chatProcess->info.onlyMyMessages) {
+				if (error.type() == u"CHANNEL_PRIVATE"_q) {
+					if (realPeerInput.type() == mtpc_inputPeerChannel
+						&& !_chatProcess->info.onlyMyMessages) {
 
-					// Perhaps we just left / were kicked from channel.
-					// Just switch to only my messages.
-					_chatProcess->info.onlyMyMessages = true;
+						// Perhaps we just left / were kicked from channel.
+						// Just switch to only my messages.
+						_chatProcess->info.onlyMyMessages = true;
+						requestChatMessages(
+							splitIndex,
+								offsetId,
+								addOffset,
+								limit,
+								base::take(_chatProcess->requestDone));
+						return true;
+					}
+				} else if (error.type() == u"CHAT_FORWARDS_RESTRICTED"_q) {
+					// Chat has forwarding restrictions - retry without takeout
+					// This handles users/bots where we couldn't pre-check the flag
+					LOG(("Export Info: CHAT_FORWARDS_RESTRICTED detected, retrying without takeout."));
+					_chatProcess->info.hasForwardRestriction = true;
 					requestChatMessages(
 						splitIndex,
-							offsetId,
-							addOffset,
-							limit,
-							base::take(_chatProcess->requestDone));
+						offsetId,
+						addOffset,
+						limit,
+						base::take(_chatProcess->requestDone));
 					return true;
 				}
-			} else if (error.type() == u"CHAT_FORWARDS_RESTRICTED"_q) {
-				// Chat has forwarding restrictions - retry without takeout
-				// This handles users/bots where we couldn't pre-check the flag
-				LOG(("Export Info: CHAT_FORWARDS_RESTRICTED detected, retrying without takeout."));
-				_chatProcess->info.hasForwardRestriction = true;
-				requestChatMessages(
-					splitIndex,
-					offsetId,
-					addOffset,
-					limit,
-					base::take(_chatProcess->requestDone));
-				return true;
-			}
-			return false;
-		}).done(doneHandler).send();
+				return false;
+			}).done(doneHandler).send();
 		}
 	}
 }
