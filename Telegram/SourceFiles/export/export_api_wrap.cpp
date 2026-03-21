@@ -116,7 +116,8 @@ Settings::Type SettingsFromDialogsType(Data::DialogInfo::Type type) {
 uint32 CalculateTakeoutFlags(const Settings &settings, bool isScanning) {
 	using Type = Settings::Type;
 	const auto sizeLimit = isScanning ? kFileMaxSize : settings.media.sizeLimit;
-	const auto hasFiles = settings.media.types
+	const auto hasFiles = isScanning
+		|| settings.media.types
 		|| (settings.types & Type::Userpics)
 		|| (settings.types & Type::Stories);
 
@@ -3241,8 +3242,9 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 void ApiWrap::loadMessageFileDone(int index, const QString &relativePath) {
 	if (!_chatProcess) return;
 	onMessagePartDone(index);
-	--_chatProcess->pendingFiles;
-	Assert(_chatProcess->pendingFiles >= 0);
+	if (_chatProcess->pendingFiles > 0) {
+		--_chatProcess->pendingFiles;
+	}
 	if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
 		finishMessagesSlice();
 	}
@@ -3255,8 +3257,9 @@ bool ApiWrap::loadMessageThumbProgress(FileProgress progress) {
 void ApiWrap::loadMessageThumbDone(int index, const QString &relativePath) {
 	if (!_chatProcess) return;
 	onMessagePartDone(index);
-	--_chatProcess->pendingFiles;
-	Assert(_chatProcess->pendingFiles >= 0);
+	if (_chatProcess->pendingFiles > 0) {
+		--_chatProcess->pendingFiles;
+	}
 	if (_chatProcess->pendingFiles == 0 && !_chatProcess->processing) {
 		finishMessagesSlice();
 	}
@@ -3288,7 +3291,8 @@ void ApiWrap::loadMessageEmojiDone(uint64 id, const QString &relativePath) {
 			}
 		}
 	}
-	if (_chatProcess && _chatProcess->slice) {
+	// Only continue loading if not already processing to avoid recursive calls.
+	if (_chatProcess && _chatProcess->slice && !_chatProcess->processing) {
 		loadNextMessageFile();
 	}
 }
@@ -3320,9 +3324,10 @@ void ApiWrap::loadCustomEmojiDone(uint64 id, const QString &relativePath) {
 			i->second.file.skipReason = Data::File::SkipReason::Unavailable;
 		}
 	}
-	if (_chatProcess) {
+	// Only continue loading if not already processing to avoid recursive calls.
+	if (_chatProcess && !_chatProcess->processing) {
 		loadNextMessageFile();
-	} else if (_topicProcess) {
+	} else if (_topicProcess && !_topicProcess->processing) {
 		loadNextTopicMessageFile();
 	}
 }
@@ -4154,36 +4159,8 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 					return true;
 				}
 
-				if (error.code() == 420 || error.type().startsWith(u"FLOOD_WAIT"_q)) {
-					static const auto FloodWaitRegExp = QRegularExpression("^FLOOD_WAIT_(\\d+)$");
-					const auto match = FloodWaitRegExp.match(error.type());
-					const int seconds = match.hasMatch() ? match.captured(1).toInt() : 2;
-					if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
-						auto &p = *itp->second;
-						if (std::find(p.pendingRetryOffsets.begin(), p.pendingRetryOffsets.end(), retryOffset)
-							== p.pendingRetryOffsets.end()) {
-							p.pendingRetryOffsets.push_back(retryOffset);
-						}
-					}
-					scheduleBatchDelay(seconds * 1000);
-					return true;
-				}
-
-				if (error.code() >= 500 || error.type() == u"TIMEOUT"_q
-					|| error.type() == u"RPC_CALL_FAIL"_q || error.type() == u"INTERNAL"_q) {
-					if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
-						auto &p = *itp->second;
-						const int tries = ++p.retryCounts[retryOffset];
-						if (tries <= kMaxChunkRetries) {
-							p.pendingRetryOffsets.push_back(retryOffset);
-							scheduleBatchDelay(std::min(kRetryBaseDelayMs << (tries - 1), kRetryMaxDelayMs));
-							return true;
-						}
-					}
-					filePartUnavailable(randomId);
-					return true;
-				}
-
+				// For other errors (including FLOOD_WAIT and server errors),
+				// propagate to error handler like the origin repo does.
 				return false;
 			}).send();
 
@@ -4253,36 +4230,8 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 					return true;
 				}
 
-				if (error.code() == 420 || error.type().startsWith(u"FLOOD_WAIT"_q)) {
-					static const auto FloodWaitRegExp = QRegularExpression("^FLOOD_WAIT_(\\d+)$");
-					const auto match = FloodWaitRegExp.match(error.type());
-					const int seconds = match.hasMatch() ? match.captured(1).toInt() : 2;
-					if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
-						auto &p = *itp->second;
-						if (std::find(p.pendingRetryOffsets.begin(), p.pendingRetryOffsets.end(), offset)
-							== p.pendingRetryOffsets.end()) {
-							p.pendingRetryOffsets.push_back(offset);
-						}
-					}
-					scheduleBatchDelay(seconds * 1000);
-					return true;
-				}
-
-				if (error.code() >= 500 || error.type() == u"TIMEOUT"_q
-					|| error.type() == u"RPC_CALL_FAIL"_q || error.type() == u"INTERNAL"_q) {
-					if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
-						auto &p = *itp->second;
-						const int tries = ++p.retryCounts[offset];
-						if (tries <= kMaxChunkRetries) {
-							p.pendingRetryOffsets.push_back(offset);
-							scheduleBatchDelay(std::min(kRetryBaseDelayMs << (tries - 1), kRetryMaxDelayMs));
-							return true;
-						}
-					}
-					filePartUnavailable(randomId);
-					return true;
-				}
-
+				// For other errors (including FLOOD_WAIT and server errors),
+				// propagate to error handler like the origin repo does.
 				return false;
 			}).send();
 
@@ -4293,7 +4242,6 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 				if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
 					auto &p = *itp->second;
 					p.scheduledOffsets.erase(offset);
-					p.pendingRetryOffsets.push_back(offset);
 				}
 			}
 		});
@@ -4305,9 +4253,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 		}
 	}
 
-	if (!process.pendingRetryOffsets.empty()) {
-		scheduleBatchDelay(100);
-	}
+	scheduleMoreFiles();
 }
 
 void ApiWrap::filePartDone(
@@ -4331,17 +4277,6 @@ void ApiWrap::filePartDone(
 	}
 	if (!removed && offset != 0) {
 		return;
-	}
-
-	// Clear retry bookkeeping for this offset on success.
-	if (const auto itc = process.retryCounts.find(offset); itc != process.retryCounts.end()) {
-		process.retryCounts.erase(itc);
-	}
-	if (!process.pendingRetryOffsets.empty()) {
-		const auto e = std::remove(process.pendingRetryOffsets.begin(), process.pendingRetryOffsets.end(), offset);
-		if (e != process.pendingRetryOffsets.end()) {
-			process.pendingRetryOffsets.erase(e, process.pendingRetryOffsets.end());
-		}
 	}
 
 	if (result.type() == mtpc_upload_fileCdnRedirect) {

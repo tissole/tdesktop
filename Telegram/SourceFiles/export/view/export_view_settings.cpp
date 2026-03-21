@@ -566,7 +566,8 @@ void SettingsWidget::addLimitsLabel(
 	const auto fromIdInput = Ui::CreateChild<Ui::InputField>(
 		idContainer,
 		st::defaultInputField,
-		rpl::single(u"0"_q));
+		rpl::single(QString()),
+		u"Message ID"_q);
 
 	const auto tillIdLabel = Ui::CreateChild<Ui::FlatLabel>(
 		idContainer,
@@ -576,7 +577,8 @@ void SettingsWidget::addLimitsLabel(
 	const auto tillIdInput = Ui::CreateChild<Ui::InputField>(
 		idContainer,
 		st::defaultInputField,
-		rpl::single(u"0"_q));
+		rpl::single(QString()),
+		u"Message ID"_q);
 
 	const auto layoutIdRow = [=](int w) {
 		const int half = (w - idPadL * 2 - idGap) / 2;
@@ -600,7 +602,7 @@ void SettingsWidget::addLimitsLabel(
 			return data.singlePeerFromId;
 		})
 		| rpl::on_next([=](int32 fromId) {
-			const auto s = QString::number(fromId);
+			const auto s = (fromId > 0) ? QString::number(fromId) : QString();
 			if (fromIdInput->getLastText() != s) {
 				fromIdInput->setText(s);
 			}
@@ -611,7 +613,7 @@ void SettingsWidget::addLimitsLabel(
 			return data.singlePeerTillId;
 		})
 		| rpl::on_next([=](int32 tillId) {
-			const auto s = QString::number(tillId);
+			const auto s = (tillId > 0) ? QString::number(tillId) : QString();
 			if (tillIdInput->getLastText() != s) {
 				tillIdInput->setText(s);
 			}
