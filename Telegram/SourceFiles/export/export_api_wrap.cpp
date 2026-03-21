@@ -44,8 +44,11 @@ constexpr auto kMaxParallelSmallFiles = 5;  // Files < 20MB
 constexpr auto kMaxParallelLargeFiles = 2;  // Files >= 20MB
 
 int GetChunkSizeForFile(int64 fileSize) {
-	// Telegram uses 128KB for all files - optimal for parallelism
-	return kDownloadPartSize;
+	// Telegram requires chunk sizes to be powers of 2: 32KB, 64KB, 128KB, 256KB, 512KB, 1MB
+	if (fileSize > 500 * kMegabyte) {
+		return 256 * 1024;  // 256KB for very large files
+	}
+	return 128 * 1024;  // 128KB for small/medium files (Telegram default)
 }
 
 int GetConcurrentChunksForFile(int64 fileSize) {

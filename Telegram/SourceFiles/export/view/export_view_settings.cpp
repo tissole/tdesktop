@@ -548,7 +548,7 @@ void SettingsWidget::addLimitsLabel(
 	// ID range UI — two inputs on a single row (visible when ID mode is selected)
 	const auto idContainer = container->add(
 		object_ptr<Ui::RpWidget>(container),
-		st::exportLimitsPadding);
+		st::exportSubSettingPadding);
 
 	// Use st::defaultInputField.heightMin instead of widget->height() because
 	// Ui::InputField::height() returns 0 until first show(). idContainer starts
@@ -586,12 +586,13 @@ void SettingsWidget::addLimitsLabel(
 		fromIdLabel->resizeToWidth(half);
 		fromIdLabel->move(idPadL, 0);
 		const int labelH = fromIdLabel->height();
-		fromIdInput->setGeometry(idPadL, labelH, half, inputH);
+		// Position input closer to label (reduce gap)
+		fromIdInput->setGeometry(idPadL, labelH - 4, half, inputH);
 		const int x2 = idPadL + half + idGap;
 		tillIdLabel->resizeToWidth(half);
 		tillIdLabel->move(x2, 0);
-		tillIdInput->setGeometry(x2, labelH, half, inputH);
-		idContainer->resize(w, labelH + inputH);
+		tillIdInput->setGeometry(x2, labelH - 4, half, inputH);
+		idContainer->resize(w, labelH + inputH - 4);
 	};
 	idContainer->widthValue()
 		| rpl::on_next([=](int w) { layoutIdRow(w); }, idContainer->lifetime());
