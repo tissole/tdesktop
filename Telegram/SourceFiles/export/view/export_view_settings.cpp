@@ -557,7 +557,6 @@ void SettingsWidget::addLimitsLabel(
 	const int inputH = st::defaultInputField.heightMin;
 	const int idPadL = 22;
 	const int idGap  = 16;
-	const int labelTop = 0;
 
 	const auto fromIdLabel = Ui::CreateChild<Ui::FlatLabel>(
 		idContainer,

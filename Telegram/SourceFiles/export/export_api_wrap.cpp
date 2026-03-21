@@ -36,9 +36,6 @@ constexpr auto kMegabyte = 1024 * 1024;
 // 20 req/s is safer for mixed workloads
 constexpr auto kMinRequestIntervalMs = 1000 / 20;
 
-// Chunk size: Telegram uses 128KB for optimal parallelism
-constexpr auto kDownloadPartSize = 128 * 1024;
-
 // Parallel file limits (Telegram API guidelines)
 constexpr auto kMaxParallelSmallFiles = 5;  // Files < 20MB
 constexpr auto kMaxParallelLargeFiles = 2;  // Files >= 20MB
