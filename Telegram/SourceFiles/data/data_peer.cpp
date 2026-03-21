@@ -795,23 +795,23 @@ bool PeerData::canEditMessagesIndefinitely() const {
 }
 
 bool PeerData::canExportChatHistory() const {
-	if (isRepliesChat() || isVerifyCodes() || !allowsForwarding()) {
-		return false;
-	} else if (const auto channel = asChannel()) {
-		if (!channel->amIn() && channel->invitePeekExpires()) {
-			return false;
-		}
-	}
-	for (const auto &block : _owner->history(id)->blocks) {
-		for (const auto &message : block->messages) {
-			if (!message->data()->isService()) {
-				return true;
-			}
-		}
-	}
-	if (const auto from = migrateFrom()) {
-		return from->canExportChatHistory();
-	}
+	//if (isRepliesChat() || isVerifyCodes() || !allowsForwarding()) {
+	//	return false;
+	//} else if (const auto channel = asChannel()) {
+	//	if (!channel->amIn() && channel->invitePeekExpires()) {
+	//		return false;
+	//	}
+	//}
+	//for (const auto &block : _owner->history(id)->blocks) {
+	//	for (const auto &message : block->messages) {
+	//		if (!message->data()->isService()) {
+	//			return true;
+	//		}
+	//	}
+	//}
+	//if (const auto from = migrateFrom()) {
+	//	return from->canExportChatHistory();
+	//}
 	return false;
 }
 
@@ -819,7 +819,6 @@ bool PeerData::autoTranslation() const {
 	if (const auto channel = asChannel()) {
 		return channel->autoTranslation();
 	}
-	return false;
 }
 
 bool PeerData::setAbout(const QString &newAbout) {

@@ -408,7 +408,8 @@ StoryPrivacy Story::privacy() const {
 }
 
 bool Story::forbidsForward() const {
-	return _noForwards;
+	//return _noForwards;
+	return false;
 }
 
 bool Story::edited() const {
