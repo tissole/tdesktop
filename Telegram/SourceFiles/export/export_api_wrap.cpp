@@ -30,31 +30,33 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Export {
 namespace {
 
-
-
-constexpr auto kMaxParallelFiles = 1;
 constexpr auto kMegabyte = 1024 * 1024;
 
-// Rate limiting: Target 20 requests/sec for safety margin (one every 50ms)
-constexpr auto kMinRequestIntervalMs = 1000 / 10;
+// Rate limiting: API allows ~30 req/s, use 25 for safety margin
+constexpr auto kMinRequestIntervalMs = 1000 / 25;
+
+// Chunk size: Telegram uses 128KB for optimal parallelism
+constexpr auto kDownloadPartSize = 128 * 1024;
+
+// Parallel file limits (Telegram API guidelines)
+constexpr auto kMaxParallelSmallFiles = 5;  // Files < 20MB
+constexpr auto kMaxParallelLargeFiles = 2;  // Files >= 20MB
 
 int GetChunkSizeForFile(int64 fileSize) {
-	if (fileSize > 300 * kMegabyte) {
-		//return 512 * 1024; // 1MB for large files
-		return 1 * kMegabyte; // 1MB for large files
-	} else if (fileSize > 10 * kMegabyte) {
-		//return 512 * 1024; // 512KB for medium files
-		return 1 * kMegabyte; // 512KB for medium files
-	}
-	//return 128 * 1024; // 128KB for small files
-	return 1 * kMegabyte; // 256KB for small files
+	// Telegram uses 128KB for all files - optimal for parallelism
+	return kDownloadPartSize;
 }
 
 int GetConcurrentChunksForFile(int64 fileSize) {
-	if (fileSize > 300 * kMegabyte) {
-		return 2; // More concurrency for large files
+	// No API limit on chunks per file, but respect rate limits
+	if (fileSize > 500 * kMegabyte) {
+		return 8;  // Very large: max concurrency (Telegram uses up to 8)
+	} else if (fileSize > 100 * kMegabyte) {
+		return 6;  // Large files: high concurrency
+	} else if (fileSize > 20 * kMegabyte) {
+		return 4;  // Medium files: moderate concurrency
 	}
-	return 2; // Less concurrency for smaller files
+	return 2;  // Small files: low concurrency (we have 5 parallel files)
 }
 
 
@@ -4094,22 +4096,45 @@ std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 }
 
 void ApiWrap::scheduleMoreFiles() {
-	while (!_fileDownloadQueue.empty()) {
-		if (_filesDownloading >= kMaxParallelFiles) {
-			break;
+	// Count how many small and large files are currently downloading
+	int smallFilesDownloading = 0;
+	int largeFilesDownloading = 0;
+	for (const auto &[randomId, process] : _fileProcesses) {
+		if (process->active) {
+			if (process->size < 20 * kMegabyte) {
+				++smallFilesDownloading;
+			} else {
+				++largeFilesDownloading;
+			}
 		}
+	}
 
-		const auto randomId = _fileDownloadQueue.front();
-		const auto it = _fileProcesses.find(randomId);
+	while (!_fileDownloadQueue.empty()) {
+		// Check limits based on file size
+		const auto nextId = _fileDownloadQueue.front();
+		const auto it = _fileProcesses.find(nextId);
 		if (it == end(_fileProcesses)) {
 			_fileDownloadQueue.pop_front();
 			continue;
 		}
 
+		const auto &process = *it->second;
+		const auto isSmall = process.size < 20 * kMegabyte;
+		const auto limit = isSmall ? kMaxParallelSmallFiles : kMaxParallelLargeFiles;
+		const auto current = isSmall ? smallFilesDownloading : largeFilesDownloading;
+
+		if (current >= limit) {
+			break;  // At limit for this file size category
+		}
+
 		_fileDownloadQueue.pop_front();
-		auto &process = *it->second;
 		process.active = true;
 		++_filesDownloading;
+		if (isSmall) {
+			++smallFilesDownloading;
+		} else {
+			++largeFilesDownloading;
+		}
 
 		loadFilePart(process);
 	}
