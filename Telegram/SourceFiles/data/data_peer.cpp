@@ -819,6 +819,7 @@ bool PeerData::autoTranslation() const {
 	if (const auto channel = asChannel()) {
 		return channel->autoTranslation();
 	}
+	return false;    
 }
 
 bool PeerData::setAbout(const QString &newAbout) {
