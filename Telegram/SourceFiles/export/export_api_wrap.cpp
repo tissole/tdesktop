@@ -503,6 +503,16 @@ auto ApiWrap::mainRequest(Request &&request, std::optional<uint64> takeoutId) {
 		[=](const MTP::Error &result) { error(result); });
 }
 
+// Non-takeout request for restricted chats
+template <typename Request>
+auto ApiWrap::normalRequest(Request &&request) {
+	auto original = std::move(_mtp.request(std::forward<Request>(request)));
+
+	return RequestBuilder<Request>(
+		std::move(original),
+		[=](const MTP::Error &result) { error(result); });
+}
+
 template <typename Request>
 auto ApiWrap::splitRequest(int index, Request &&request) {
 	Expects(index < _splits.size());
@@ -2424,11 +2434,15 @@ void ApiWrap::requestChatMessages(
 	const auto useSearch = _chatProcess->info.onlyMyMessages
 		|| (filter.type() != mtpc_inputMessagesFilterEmpty);
 
+	// Check if chat has forwarding restriction (noforwards flag)
+	// If set, use normal requests instead of takeout (takeout silently fails for restricted chats)
+	const bool hasRestriction = _chatProcess->info.hasForwardRestriction;
+
 	if (useSearch) {
 		using Flag = MTPmessages_Search::Flag;
 		auto searchFlags = (_chatProcess->info.onlyMyMessages ? Flag::f_from_id : Flag(0));
 
-		splitRequest(realSplitIndex, MTPmessages_Search(
+		auto request = MTPmessages_Search(
 			MTP_flags(searchFlags),
 			realPeerInput,
 			MTP_string(), // query
@@ -2445,19 +2459,56 @@ void ApiWrap::requestChatMessages(
 			MTP_int(int32(maxId)), // max_id
 			MTP_int(int32(minId)), // min_id
 			MTP_long(0) // hash
-		)).done(doneHandler).send();
+		);
+
+		if (hasRestriction) {
+			// Use normal request for restricted chats
+			normalRequest(MTPInvokeWithMessagesRange<MTPmessages_Search>(
+				_splits[realSplitIndex],
+				request
+			)).done(doneHandler).send();
+		} else {
+			// Use takeout for unrestricted chats
+			splitRequest(realSplitIndex, request)
+			.fail([=](const MTP::Error &error) {
+				if (!_chatProcess || !_settings) return false;
+
+				if (error.type() == u"CHAT_FORWARDS_RESTRICTED"_q) {
+					// Chat has forwarding restrictions - retry without takeout
+					LOG(("Export Info: CHAT_FORWARDS_RESTRICTED detected, retrying without takeout."));
+					_chatProcess->info.hasForwardRestriction = true;
+					requestChatMessages(
+						splitIndex,
+						offsetId,
+						addOffset,
+						limit,
+						base::take(_chatProcess->requestDone));
+					return true;
+				}
+				return false;
+			}).done(doneHandler).send();
+		}
 	} else {
-				splitRequest(realSplitIndex, MTPmessages_GetHistory(
-					MTPmessages_getHistory(
-						realPeerInput,
-						MTP_int(offsetId),
-						MTP_int(0), // offset_date
-						MTP_int(addOffset),
-						MTP_int(limit),
-						MTP_int(int32(maxId)), // max_id
-						MTP_int(int32(minId)), // min_id
-						MTP_long(0)) // hash
-				))
+		auto request = MTPmessages_GetHistory(
+			realPeerInput,
+			MTP_int(offsetId),
+			MTP_int(0), // offset_date
+			MTP_int(addOffset),
+			MTP_int(limit),
+			MTP_int(int32(maxId)), // max_id
+			MTP_int(int32(minId)), // min_id
+			MTP_long(0)  // hash
+		);
+
+		if (hasRestriction) {
+			// Use normal request for restricted chats
+			normalRequest(MTPInvokeWithMessagesRange<MTPmessages_GetHistory>(
+				_splits[realSplitIndex],
+				request
+			)).done(doneHandler).send();
+		} else {
+			// Use takeout for unrestricted chats
+			splitRequest(realSplitIndex, request)
 		.fail([=](const MTP::Error &error) {
 			if (!_chatProcess || !_settings) return false;
 
@@ -2476,9 +2527,22 @@ void ApiWrap::requestChatMessages(
 							base::take(_chatProcess->requestDone));
 					return true;
 				}
+			} else if (error.type() == u"CHAT_FORWARDS_RESTRICTED"_q) {
+				// Chat has forwarding restrictions - retry without takeout
+				// This handles users/bots where we couldn't pre-check the flag
+				LOG(("Export Info: CHAT_FORWARDS_RESTRICTED detected, retrying without takeout."));
+				_chatProcess->info.hasForwardRestriction = true;
+				requestChatMessages(
+					splitIndex,
+					offsetId,
+					addOffset,
+					limit,
+					base::take(_chatProcess->requestDone));
+				return true;
 			}
 			return false;
 		}).done(doneHandler).send();
+		}
 	}
 }
 

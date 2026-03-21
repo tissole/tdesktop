@@ -335,6 +335,7 @@ struct Chat {
 	bool isMonoforumAdmin = false;
 	bool hasMonoforumAdminRights = false;
 	bool isMonoforumOfPublicBroadcast = false;
+	bool hasForwardRestriction = false;  // noforwards flag set by admin
 	BareId monoforumLinkId = 0;
 
 	MTPInputPeer input = MTP_inputPeerEmpty();
@@ -1020,6 +1021,7 @@ struct DialogInfo {
 	bool onlyMyMessages = false;
 	bool isLeftChannel = false;
 	bool isMonoforum = false;
+	bool hasForwardRestriction = false;  // Admin-set forwarding restriction (noforwards)
 	QString relativePath;
 
 	// Filled when requesting dialog messages.

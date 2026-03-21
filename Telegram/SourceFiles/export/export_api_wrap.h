@@ -356,6 +356,9 @@ private:
 	template <typename Request>
 	[[nodiscard]] auto splitRequest(int index, Request &&request);
 
+	template <typename Request>
+	[[nodiscard]] auto normalRequest(Request &&request);
+
 	[[nodiscard]] auto fileRequest(
 		const Data::FileLocation &location,
 		int64 offset,

@@ -1182,6 +1182,7 @@ Chat ParseChat(const MTPChat &data) {
 	data.match([&](const MTPDchat &data) {
 		result.bareId = data.vid().v;
 		result.title = ParseString(data.vtitle());
+		result.hasForwardRestriction = data.is_noforwards();  // Read noforwards flag from server
 		result.input = MTP_inputPeerChat(MTP_long(result.bareId));
 		if (const auto migratedTo = data.vmigrated_to()) {
 			result.migratedToChannelId = migratedTo->match(
@@ -1211,6 +1212,7 @@ Chat ParseChat(const MTPChat &data) {
 		result.isMonoforum = data.is_monoforum();
 		result.isBroadcast = data.is_broadcast();
 		result.isSupergroup = data.is_megagroup();
+		result.hasForwardRestriction = data.is_noforwards();  // Read noforwards flag from server
 		result.hasMonoforumAdminRights = data.is_broadcast()
 			&& (data.is_creator()
 				|| (data.vadmin_rights()
@@ -2385,6 +2387,7 @@ DialogInfo DialogInfoFromChat(const Chat &data) {
 	result.type = DialogTypeFromChat(data);
 	result.migratedToChannelId = data.migratedToChannelId;
 	result.isMonoforum = data.isMonoforum;
+	result.hasForwardRestriction = data.hasForwardRestriction;  // Propagate noforwards flag
 	if (data.isMonoforumAdmin) {
 		result.monoforumBroadcastInput = data.monoforumBroadcastInput;
 	}
