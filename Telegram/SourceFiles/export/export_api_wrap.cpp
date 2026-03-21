@@ -32,9 +32,9 @@ namespace {
 
 constexpr auto kMegabyte = 1024 * 1024;
 
-// Rate limiting: Increase to allow higher throughput
-// 50 req/s × 128KB = 6.4 MB/s theoretical, ~8-10 MB/s with burst
-constexpr auto kMinRequestIntervalMs = 1000 / 50;
+// Rate limiting: Reduce to prevent flooding with many small files
+// 20 req/s is safer for mixed workloads
+constexpr auto kMinRequestIntervalMs = 1000 / 20;
 
 // Chunk size: Telegram uses 128KB for optimal parallelism
 constexpr auto kDownloadPartSize = 128 * 1024;
@@ -47,20 +47,24 @@ int GetChunkSizeForFile(int64 fileSize) {
 	// Telegram requires chunk sizes to be powers of 2: 32KB, 64KB, 128KB, 256KB, 512KB, 1MB
 	if (fileSize > 500 * kMegabyte) {
 		return 1024 * 1024;  // 1MB for very large files
+	} else if (fileSize > 50 * kMegabyte) {
+		return 512 * 1024;  // 512KB for large files
+	} else if (fileSize > 10 * kMegabyte) {
+		return 256 * 1024;  // 256KB for medium files
 	}
-	return 512 * 1024;  // 512KB for small/medium files
+	return 128 * 1024;  // 128KB for small files (prevents rate limiting)
 }
 
 int GetConcurrentChunksForFile(int64 fileSize) {
-	// No API limit on chunks per file, but respect rate limits
+	// Scale concurrency with file size to prevent rate limiting on small files
 	if (fileSize > 500 * kMegabyte) {
-		return 8;  // Very large: max concurrency (Telegram uses up to 8)
-	} else if (fileSize > 100 * kMegabyte) {
+		return 8;  // Very large: max concurrency
+	} else if (fileSize > 50 * kMegabyte) {
 		return 6;  // Large files: high concurrency
-	} else if (fileSize > 20 * kMegabyte) {
+	} else if (fileSize > 10 * kMegabyte) {
 		return 4;  // Medium files: moderate concurrency
 	}
-	return 2;  // Small files: low concurrency (we have 5 parallel files)
+	return 2;  // Small files: low concurrency (prevents flooding)
 }
 
 
@@ -4101,12 +4105,12 @@ std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 }
 
 void ApiWrap::scheduleMoreFiles() {
-	// Count how many small and large files are currently downloading
-	// Only count files that have chunks actively being downloaded
+	// Count how many small and large files are actively downloading
+	// A file is "active" if it has chunks currently being downloaded
 	int smallFilesDownloading = 0;
 	int largeFilesDownloading = 0;
 	for (const auto &[randomId, process] : _fileProcesses) {
-		if (process->active && !process->scheduledOffsets.empty()) {
+		if (process->active && process->scheduledOffsets.size() > 0) {
 			if (process->size < 20 * kMegabyte) {
 				++smallFilesDownloading;
 			} else {
@@ -4116,7 +4120,7 @@ void ApiWrap::scheduleMoreFiles() {
 	}
 
 	while (!_fileDownloadQueue.empty()) {
-		// Check limits based on file size
+		// Strict limit check - don't add more files if at limit
 		const auto nextId = _fileDownloadQueue.front();
 		const auto it = _fileProcesses.find(nextId);
 		if (it == end(_fileProcesses)) {
@@ -4130,7 +4134,7 @@ void ApiWrap::scheduleMoreFiles() {
 		const auto current = isSmall ? smallFilesDownloading : largeFilesDownloading;
 
 		if (current >= limit) {
-			break;  // At limit for this file size category - don't add more
+			return;  // At limit - stop scheduling, don't process queue
 		}
 
 		_fileDownloadQueue.pop_front();
