@@ -36,13 +36,7 @@ constexpr auto kMaxParallelFiles = 1;
 constexpr auto kMegabyte = 1024 * 1024;
 
 // Rate limiting: Target 20 requests/sec for safety margin (one every 50ms)
-// Version 1: Balanced increase for higher throughput.
 constexpr auto kMinRequestIntervalMs = 1000 / 10;
-
-// Transient retry settings (per-chunk).
-constexpr auto kMaxChunkRetries = 1;
-constexpr auto kRetryBaseDelayMs = 200;	  // 200, 400, 800 ms
-constexpr auto kRetryMaxDelayMs = 2000;	  // clamp upper bound
 
 int GetChunkSizeForFile(int64 fileSize) {
 	if (fileSize > 300 * kMegabyte) {
@@ -4344,8 +4338,6 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 			break; // Unknown size, only request one chunk at a time
 		}
 	}
-
-	scheduleMoreFiles();
 }
 
 void ApiWrap::filePartDone(
