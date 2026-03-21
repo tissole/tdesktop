@@ -32,8 +32,9 @@ namespace {
 
 constexpr auto kMegabyte = 1024 * 1024;
 
-// Rate limiting: API allows ~30 req/s, use 25 for safety margin
-constexpr auto kMinRequestIntervalMs = 1000 / 25;
+// Rate limiting: Increase to allow higher throughput
+// 50 req/s × 128KB = 6.4 MB/s theoretical, ~8-10 MB/s with burst
+constexpr auto kMinRequestIntervalMs = 1000 / 50;
 
 // Chunk size: Telegram uses 128KB for optimal parallelism
 constexpr auto kDownloadPartSize = 128 * 1024;

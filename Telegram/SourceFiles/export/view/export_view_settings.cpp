@@ -586,12 +586,12 @@ void SettingsWidget::addLimitsLabel(
 		fromIdLabel->resizeToWidth(half);
 		fromIdLabel->move(idPadL, 0);
 		const int labelH = fromIdLabel->height();
-		fromIdInput->setGeometry(idPadL, labelH + 2, half, inputH);
+		fromIdInput->setGeometry(idPadL, labelH, half, inputH);
 		const int x2 = idPadL + half + idGap;
 		tillIdLabel->resizeToWidth(half);
 		tillIdLabel->move(x2, 0);
-		tillIdInput->setGeometry(x2, labelH + 2, half, inputH);
-		idContainer->resize(w, labelH + 2 + inputH + 2);
+		tillIdInput->setGeometry(x2, labelH, half, inputH);
+		idContainer->resize(w, labelH + inputH);
 	};
 	idContainer->widthValue()
 		| rpl::on_next([=](int w) { layoutIdRow(w); }, idContainer->lifetime());
