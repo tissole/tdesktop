@@ -408,6 +408,7 @@ struct ApiWrap::TopicProcess : AbstractMessagesProcess {
 	int32 offsetId = 0;
 	int totalCount = 0;
 	int processedCount = 0;
+	bool processing = false;
 };
 
 
@@ -3581,6 +3582,11 @@ void ApiWrap::resolveTopicCustomEmoji() {
 void ApiWrap::loadNextTopicMessageFile() {
 	Expects(_topicProcess != nullptr);
 	Expects(_topicProcess->slice.has_value());
+
+	_topicProcess->processing = true;
+	const auto guard = gsl::finally([&] {
+		_topicProcess->processing = false;
+	});
 
 	for (auto &list = _topicProcess->slice->list
 		; _topicProcess->fileIndex < list.size()
