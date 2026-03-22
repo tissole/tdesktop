@@ -4166,7 +4166,6 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 		return;
 	}
 	auto process = std::move(it->second);
-	_fileProcesses.erase(it);
 
 	if (process->active) {
 		--_filesDownloading;
@@ -4190,7 +4189,8 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 		process->progress(fp);
 	}
 
-	// Fire the primary done callback (updates dedup map via wrapDone).
+	_fileProcesses.erase(it);
+
 	process->done(relativePath);
 
 	// Fire any duplicate callbacks that were waiting for this download.

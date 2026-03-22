@@ -557,9 +557,7 @@ void SettingsWidget::addLimitsLabel(
 	// correctly propagated to child widgets (SlideWrap<RpWidget> does not do
 	// this reliably because RpWidget has no resizeGetHeight override).
 	const int inputH = st::defaultInputField.heightMin;
-	const int labelH = st::exportIdFieldLabel.maxHeight
-		? st::exportIdFieldLabel.maxHeight
-		: st::exportIdFieldLabel.style.font->height;
+	const int labelH = st::exportIdFieldLabel.style.font->height;
 	const int idPadL = 22;
 	const int idGap  = 16;
 	const int idRowH = labelH + inputH;
