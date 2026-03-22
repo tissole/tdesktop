@@ -708,10 +708,14 @@ void SettingsWidget::addLimitsLabel(
 			container->resizeToWidth(container->width());
 		}, container->lifetime());
 
-	// Initially set visibility
+	// Initially set visibility.
+	// Must call resizeToWidth() afterwards so the VerticalLayout re-queries
+	// each SlideWrap's height — without it the collapsed wraps still occupy
+	// their full height on the first paint, causing the visible gap.
 	dateLabelWrap->toggle(!readData().useIdRange, anim::type::instant);
 	idContainerWrap->toggle(readData().useIdRange, anim::type::instant);
 	errorLabelWrap->toggle(readData().useIdRange, anim::type::instant);
+	container->resizeToWidth(container->width());
 
 	const auto removeTime = [](TimeId dateTime) {
 		return base::unixtime::serialize(
