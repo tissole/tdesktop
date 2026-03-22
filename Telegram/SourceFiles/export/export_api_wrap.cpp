@@ -4220,6 +4220,20 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 		});
 	}
 
+	// Fire a final progress callback with ready == total so that the
+	// controller unconditionally removes this entry from _activeDownloads.
+	// Without this, files that finish via error or skip (filePartUnavailable)
+	// never reach the ready>=total branch in the progress handler and their
+	// entries accumulate in _activeDownloads, showing as stale rows in the UI.
+	if (process->progress) {
+		const auto finalSize = std::max(process->outputFile.size(), int64(1));
+		process->progress({
+			.randomId = randomId,
+			.ready    = finalSize,
+			.total    = finalSize,
+		});
+	}
+
 	// Fire the primary done callback (updates dedup map via wrapDone).
 	process->done(relativePath);
 
