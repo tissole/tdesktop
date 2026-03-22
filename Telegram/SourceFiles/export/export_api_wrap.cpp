@@ -4183,19 +4183,6 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 		process->fileRef.skipReason = Data::File::SkipReason::Unavailable;
 	}
 
-	// Fire a final progress callback with ready == total so the controller
-	// removes this entry from _activeDownloads. Files that finish via error
-	// or skip never reach ready>=total in filePartDone, so without this
-	// their rows stay stuck in the UI.
-	if (process->progress) {
-		const auto finalSize = std::max(process->outputFile.size(), int64(1));
-		FileProgress fp;
-		fp.randomId = randomId;
-		fp.ready    = finalSize;
-		fp.total    = finalSize;
-		process->progress(fp);
-	}
-
 	_fileProcesses.erase(it);
 
 	process->done(relativePath);
