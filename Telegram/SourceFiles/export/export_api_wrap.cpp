@@ -4184,7 +4184,16 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 	}
 
 	_fileProcesses.erase(it);
+	// Force a final 100% progress update so the UI clears the file from the list.
 
+	if (process->progress) {
+		const auto finalSize = process->size > 0 ? process->size : process->outputFile.size();
+		process->progress({
+			.randomId = randomId,
+			.ready = finalSize,
+			.total = finalSize
+		});
+	}
 	process->done(relativePath);
 
 	// Fire any duplicate callbacks that were waiting for this download.
