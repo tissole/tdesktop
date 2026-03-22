@@ -415,6 +415,7 @@ private:
 	};
 
 	int _filesDownloading = 0;
+	bool _scheduleMoreFilesPending = false; // true while a stagger timer is in flight
 
 	std::shared_ptr<bool> _lifetimeGuard;
 	RequestThrottler _throttler;

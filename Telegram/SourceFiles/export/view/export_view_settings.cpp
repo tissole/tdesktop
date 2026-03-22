@@ -546,9 +546,11 @@ void SettingsWidget::addLimitsLabel(
 		st::exportLimitsPadding);
 
 	// ID range UI — two inputs on a single row (visible when ID mode is selected)
+	// Negative top margin pulls the row up against the radio button above it,
+	// removing the large gap that exportSettingPadding would otherwise leave.
 	const auto idContainer = container->add(
 		object_ptr<Ui::RpWidget>(container),
-		style::margins());
+		style::margins(0, -4, 0, 0));
 
 	// Use st::defaultInputField.heightMin instead of widget->height() because
 	// Ui::InputField::height() returns 0 until first show(). idContainer starts
@@ -584,13 +586,13 @@ void SettingsWidget::addLimitsLabel(
 		const int half = (w - idPadL * 2 - idGap) / 2;
 		if (half < 20) return;
 		fromIdLabel->resizeToWidth(half);
-		fromIdLabel->move(idPadL, 2);
+		fromIdLabel->move(idPadL, 0);
 		const int labelH = fromIdLabel->height();
-		// Input field starts right after label with minimal gap
+		// Input field starts right after label with no extra gap
 		fromIdInput->setGeometry(idPadL, labelH, half, inputH);
 		const int x2 = idPadL + half + idGap;
 		tillIdLabel->resizeToWidth(half);
-		tillIdLabel->move(x2, 2);
+		tillIdLabel->move(x2, 0);
 		tillIdInput->setGeometry(x2, labelH, half, inputH);
 		idContainer->resize(w, labelH + inputH);
 	};

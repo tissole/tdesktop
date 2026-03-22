@@ -34,7 +34,7 @@ constexpr auto kMegabyte = 1024 * 1024;
 
 // Rate limiting: Reduce to prevent flooding with many small files
 // 20 req/s is safer for mixed workloads
-constexpr auto kMinRequestIntervalMs = 1000 / 25;
+constexpr auto kMinRequestIntervalMs = 1000 / 30;
 
 // Parallel file limits (Telegram API guidelines)
 constexpr auto kMaxParallelSmallFiles = 5;  // Files < 20MB
@@ -4102,8 +4102,12 @@ std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 }
 
 void ApiWrap::scheduleMoreFiles() {
-	// Count files that are actively downloading
-	// A file is active from start until finishFile() removes it
+	// Clear the pending flag — this call is the scheduled one (or a direct
+	// call that supersedes any outstanding timer).
+	_scheduleMoreFilesPending = false;
+
+	// Count files that are actively downloading.
+	// A file is active from start until finishFile() removes it.
 	int smallFilesDownloading = 0;
 	int largeFilesDownloading = 0;
 	for (const auto &[randomId, process] : _fileProcesses) {
@@ -4116,20 +4120,12 @@ void ApiWrap::scheduleMoreFiles() {
 		}
 	}
 
+	// Start at most ONE new file per call, then schedule a follow-up with a
+	// small delay so we don't burst-start many files simultaneously.  This
+	// prevents the download queue for small files from being filled faster
+	// than completed files can be retired, while still staying within the
+	// Telegram API parallel-request limits.
 	while (!_fileDownloadQueue.empty()) {
-		// Re-count on each iteration to ensure strict limit
-		smallFilesDownloading = 0;
-		largeFilesDownloading = 0;
-		for (const auto &[randomId, process] : _fileProcesses) {
-			if (process->active) {
-				if (process->size < 20 * kMegabyte) {
-					++smallFilesDownloading;
-				} else {
-					++largeFilesDownloading;
-				}
-			}
-		}
-
 		const auto nextId = _fileDownloadQueue.front();
 		const auto it = _fileProcesses.find(nextId);
 		if (it == end(_fileProcesses)) {
@@ -4155,6 +4151,27 @@ void ApiWrap::scheduleMoreFiles() {
 		}
 
 		loadFilePart(process);
+
+		// If more files are waiting and slots are still open, schedule one
+		// follow-up call after a short delay instead of starting the next
+		// file synchronously.  This spreads burst starts across time and
+		// prevents the small-file queue from being saturated all at once.
+		// The _scheduleMoreFilesPending guard ensures only one timer is
+		// ever in flight at a time (finishFile calls are sufficient to
+		// drain the queue when files complete naturally).
+		if (!_fileDownloadQueue.empty() && !_scheduleMoreFilesPending) {
+			const auto nextIt = _fileProcesses.find(_fileDownloadQueue.front());
+			if (nextIt != end(_fileProcesses)) {
+				const auto nextIsSmall = nextIt->second->size < 20 * kMegabyte;
+				const auto nextLimit = nextIsSmall ? kMaxParallelSmallFiles : kMaxParallelLargeFiles;
+				const auto nextCurrent = nextIsSmall ? smallFilesDownloading : largeFilesDownloading;
+				if (nextCurrent < nextLimit) {
+					_scheduleMoreFilesPending = true;
+					scheduleBatchDelay(kMinRequestIntervalMs);
+				}
+			}
+		}
+		return;  // Always start at most one file per call
 	}
 }
 
@@ -4779,6 +4796,7 @@ void ApiWrap::clearState(bool keepCache) {
 	_fileProcesses.clear();
 	_fileDownloadQueue.clear();
 	_filesDownloading = 0;
+	_scheduleMoreFilesPending = false;
 	_unresolvedCustomEmoji.clear();
 	_resolvedCustomEmoji.clear();
 }
