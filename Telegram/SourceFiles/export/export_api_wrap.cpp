@@ -4214,7 +4214,6 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 		const auto finalSize = std::max(process->outputFile.size(), int64(1));
 		process->progress({
 			.randomId = randomId,
-			.path     = process->relativePath,
 			.ready    = finalSize,
 			.total    = finalSize,
 		});
@@ -4523,9 +4522,6 @@ void ApiWrap::filePartDone(
 	if (process.activeRequestOffsets.empty() && process.pendingRetryOffsets.empty() && (allPartsRequested || receivedEmpty)) {
 		finishFile(randomId, process.relativePath);
 	} else if (process.active) {
-		// CORRECTED: A chunk slot for this file just opened up.
-		// Try to immediately fill it with the next chunk for the same file.
-		// No timers or delays here.
 		loadFilePart(process);
 		if (*_lifetimeGuard) {
 			_throttler.tryProcessQueue();
@@ -4763,25 +4759,12 @@ ApiWrap::DedupResult ApiWrap::dedupLookup(
 		uint64 docId,
 		int64 size,
 		const QString &name) const {
-	// Two sequential filters. Only filter 2 decides whether to download.
-	//
-	// Filter 1 — doc ID:
-	//	 Same doc ID as a previously seen file → definite duplicate, skip now.
-	//	 Different doc ID (or absent) → pass to filter 2.
-	//	 (Doc ID is reliable for files moved across chats; a re-upload by the
-	//	  same or different user gets a new doc ID even for identical content.)
 	if (docId != 0) {
 		const auto it = _dedupById.find(docId);
 		if (it != _dedupById.end()) {
 			return { true, it->second };  // filter 1 skip
 		}
 	}
-	// Filter 2 — size + name (combined key, both must match):
-	//	 Same name AND same size → duplicate (same file re-uploaded), skip.
-	//	 Same name but different size → different file, NOT a duplicate;
-	//	   will be downloaded and renamed (e.g. "file (1).pdf") to avoid
-	//	   filesystem collision with the previously saved file of the same name.
-	//	 This is the only filter that can permit a download.
 	if (size > 0 && !name.isEmpty()) {
 		const auto it = _dedupBySizeName.find({ size, name });
 		if (it != _dedupBySizeName.end()) {
