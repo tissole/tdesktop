@@ -34,7 +34,7 @@ constexpr auto kMegabyte = 1024 * 1024;
 
 // Request rate: Telegram allows ~30 req/s per DC.
 // One tick every 33 ms keeps us safely within that bound.
-constexpr auto kMinRequestIntervalMs = 1000 / 10;
+constexpr auto kMinRequestIntervalMs = 1000 / 20;
 
 // Parallel file limits — match Telegram API documented limits:
 //   ~5 concurrent downloads for small files (< 20 MB)
@@ -68,9 +68,9 @@ int GetChunkSizeForFile(int64 fileSize) {
 	} else if (fileSize > 10 * kMegabyte) {
 		return 256 * 1024;   // 256 KB — medium files
 	} else if (fileSize > 1 * kMegabyte) {
-		return 128 * 1024;   // 256 KB — small files
+		return 256 * 1024;   // 256 KB — small files
 	}
-	return 64 * 1024;       // 128 KB — very small files
+	return 256 * 1024;       // 128 KB — very small files
 }
 
 int GetConcurrentChunksForFile(int64 fileSize) {
