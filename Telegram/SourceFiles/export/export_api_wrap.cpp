@@ -4172,6 +4172,23 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 	if (it == end(_fileProcesses)) {
 		return;
 	}
+    
+
+	// --- CORRECT FIX: Send 100% progress BEFORE erasing from the map ---
+	// This ensures the internal callbacks can still find the file in _fileProcesses
+	// and successfully forward the "complete" signal to the UI to clear the progress bar.
+	if (it->second->progress) {
+		auto finalSize = it->second->size > 0 ? it->second->size : it->second->outputFile.size();
+		if (finalSize <= 0) {
+			finalSize = 1; // Guarantee ready == total and > 0 so the UI clears it immediately
+		}
+		it->second->progress({
+			.randomId = randomId,
+			.ready = finalSize,
+			.total = finalSize
+		});
+	}
+    
 	auto process = std::move(it->second);
 
 	if (process->active) {
@@ -4184,16 +4201,7 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 	}
 
 	_fileProcesses.erase(it);
-	// Force a final 100% progress update so the UI clears the file from the list.
 
-	if (process->progress) {
-		const auto finalSize = process->size > 0 ? process->size : process->outputFile.size();
-		process->progress({
-			.randomId = randomId,
-			.ready = finalSize,
-			.total = finalSize
-		});
-	}
 	process->done(relativePath);
 
 	// Fire any duplicate callbacks that were waiting for this download.
