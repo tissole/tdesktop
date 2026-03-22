@@ -705,6 +705,9 @@ void SettingsWidget::addLimitsLabel(
 			dateLabelWrap->toggle(!useIdRange, anim::type::instant);
 			idContainerWrap->toggle(useIdRange, anim::type::instant);
 			errorLabelWrap->toggle(useIdRange, anim::type::instant);
+			if (useIdRange) {
+				layoutIdRow(idContainer->width());
+			}
 			container->resizeToWidth(container->width());
 		}, container->lifetime());
 

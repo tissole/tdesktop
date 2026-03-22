@@ -4212,11 +4212,11 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 	// entries accumulate in _activeDownloads, showing as stale rows in the UI.
 	if (process->progress) {
 		const auto finalSize = std::max(process->outputFile.size(), int64(1));
-		process->progress({
-			.randomId = randomId,
-			.ready    = finalSize,
-			.total    = finalSize,
-		});
+		FileProgress fp;
+		fp.randomId = randomId;
+		fp.ready    = finalSize;
+		fp.total    = finalSize;
+		process->progress(fp);
 	}
 
 	// Fire a final progress callback with ready == total so that the
