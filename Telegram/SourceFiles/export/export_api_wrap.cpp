@@ -3322,7 +3322,7 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 	const int itemIndex = _isScanning 
 		? ((messageIndexInSlice >= 0 && messageIndexInSlice < int(_chatProcess->messageItemIndices.size()))
 			? _chatProcess->messageItemIndices[messageIndexInSlice]
-			: (currentFileMessage() ? _chatProcess->totalMessagesCounter : 0))
+			: _chatProcess->totalMessagesCounter)
 		: _chatProcess->messagesProcessed;
 
 	const auto textCount = _chatProcess->messagesTextProcessed;

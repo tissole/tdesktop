@@ -566,7 +566,7 @@ void SettingsWidget::addLimitsLabel(
 		object_ptr<Ui::SlideWrap<Ui::FixedHeightWidget>>(
 			container,
 			object_ptr<Ui::FixedHeightWidget>(container, idRowH),
-			style::margins(0, 2, 0, 4)));
+			style::margins(0, 0, 0, 0)));
 	const auto idContainer = idContainerWrap->entity();
 
 	const auto fromIdLabel = Ui::CreateChild<Ui::FlatLabel>(
