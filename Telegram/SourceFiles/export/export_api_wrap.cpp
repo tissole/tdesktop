@@ -32,16 +32,21 @@ namespace {
 
 constexpr auto kMegabyte = 1024 * 1024;
 
-// Rate limiting: Reduce to prevent flooding with many small files
-// 20 req/s is safer for mixed workloads
+// Rate limiting: stay well within Telegram's upload.getFile limits.
+// Telegram allows ~30 req/s per DC but we stay conservative.
 constexpr auto kMinRequestIntervalMs = 1000 / 30;
 
-// Parallel file limits (Telegram API guidelines)
-constexpr auto kMaxParallelSmallFiles = 5;  // Files < 20MB
+// Parallel file limits.
+// Small files (stickers, thumbnails, voice notes) complete very fast, so
+// allowing many at once floods the request queue before earlier ones finish.
+// Keep small-file parallelism low (2) to let each file fully retire before
+// the next batch starts. Large files benefit from more parallelism since
+// each takes many chunks and chunk-level concurrency is the bottleneck there.
+constexpr auto kMaxParallelSmallFiles = 2;  // Files < 20MB
 constexpr auto kMaxParallelLargeFiles = 2;  // Files >= 20MB
 
 int GetChunkSizeForFile(int64 fileSize) {
-	// Telegram requires chunk sizes to be powers of 2: 32KB, 64KB, 128KB, 256KB, 512KB, 1MB
+	// Telegram requires chunk sizes to be powers of 2: 32KB–1MB
 	if (fileSize > 500 * kMegabyte) {
 		return 1024 * 1024;  // 1MB for very large files
 	} else if (fileSize > 50 * kMegabyte) {
@@ -49,11 +54,13 @@ int GetChunkSizeForFile(int64 fileSize) {
 	} else if (fileSize > 10 * kMegabyte) {
 		return 256 * 1024;  // 256KB for medium files
 	}
-	return 128 * 1024;  // 128KB for small files (prevents rate limiting)
+	return 128 * 1024;  // 128KB for small files
 }
 
 int GetConcurrentChunksForFile(int64 fileSize) {
-	// Scale concurrency with file size to prevent rate limiting on small files
+	// Number of simultaneous chunk requests per file.
+	// Small files get only 1 concurrent chunk — they are tiny and fast,
+	// and issuing multiple chunks at once just wastes request tokens.
 	if (fileSize > 500 * kMegabyte) {
 		return 8;  // Very large: max concurrency
 	} else if (fileSize > 50 * kMegabyte) {
@@ -61,7 +68,7 @@ int GetConcurrentChunksForFile(int64 fileSize) {
 	} else if (fileSize > 10 * kMegabyte) {
 		return 4;  // Medium files: moderate concurrency
 	}
-	return 2;  // Small files: low concurrency (prevents flooding)
+	return 1;  // Small files: single chunk at a time, avoids flooding
 }
 
 

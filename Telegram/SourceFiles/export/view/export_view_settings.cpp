@@ -538,19 +538,28 @@ void SettingsWidget::addLimitsLabel(
 		container->resizeToWidth(container->width());
 	});
 
-	const auto dateLabel = container->add(
-		object_ptr<Ui::FlatLabel>(
+	// Wrap dateLabel in SlideWrap so that toggling it off truly removes its
+	// height from the VerticalLayout. Plain setVisible(false) hides the widget
+	// but leaves its full height as dead space — causing the large gap between
+	// the "by message id range" radio and the ID input fields.
+	const auto dateLabelWrap = container->add(
+		object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
 			container,
-			std::move(datesText),
-			st::boxLabel),
-		st::exportLimitsPadding);
+			object_ptr<Ui::FlatLabel>(
+				container,
+				std::move(datesText),
+				st::boxLabel),
+			st::exportLimitsPadding));
+	const auto dateLabel = dateLabelWrap->entity();
 
-	// ID range UI — two inputs on a single row (visible when ID mode is selected)
-	// Negative top margin pulls the row up against the radio button above it,
-	// removing the large gap that exportSettingPadding would otherwise leave.
-	const auto idContainer = container->add(
-		object_ptr<Ui::RpWidget>(container),
-		style::margins(0, -4, 0, 0));
+	// ID range UI — two inputs on a single row (visible when ID mode is selected).
+	// Also wrapped in SlideWrap for the same reason as dateLabel above.
+	const auto idContainerWrap = container->add(
+		object_ptr<Ui::SlideWrap<Ui::RpWidget>>(
+			container,
+			object_ptr<Ui::RpWidget>(container),
+			style::margins(0, 4, 0, 0)));
+	const auto idContainer = idContainerWrap->entity();
 
 	// Use st::defaultInputField.heightMin instead of widget->height() because
 	// Ui::InputField::height() returns 0 until first show(). idContainer starts
@@ -622,14 +631,16 @@ void SettingsWidget::addLimitsLabel(
 			}
 		}, tillIdInput->lifetime());
 
-	// errorLabel lives in the outer container (VerticalLayout) because
-	// idContainer is an RpWidget and does not support .add().
-	const auto errorLabel = container->add(
-		object_ptr<Ui::FlatLabel>(
+	// errorLabel also in a SlideWrap so it collapses fully when hidden.
+	const auto errorLabelWrap = container->add(
+		object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
 			container,
-			rpl::single(QString()),
-			st::exportErrorLabel),
-		st::exportSettingPadding);
+			object_ptr<Ui::FlatLabel>(
+				container,
+				rpl::single(QString()),
+				st::exportErrorLabel),
+			st::exportSettingPadding));
+	const auto errorLabel = errorLabelWrap->entity();
 
 	// Handle input changes with validation
 	fromIdInput->changes() | rpl::on_next([=] {
@@ -684,22 +695,24 @@ void SettingsWidget::addLimitsLabel(
 		});
 	}, tillIdInput->lifetime());
 
-	// Toggle visibility based on mode
+	// Toggle visibility based on mode — using SlideWrap::toggle() so the
+	// hidden widget's height is removed from the layout entirely (setVisible
+	// alone leaves the height as dead space).
 	value()
 		| rpl::map([](const Settings &data) {
 			return data.useIdRange;
 		})
 		| rpl::on_next([=](bool useIdRange) {
-			dateLabel->setVisible(!useIdRange);
-			idContainer->setVisible(useIdRange);
-			errorLabel->setVisible(useIdRange);
+			dateLabelWrap->toggle(!useIdRange, anim::type::instant);
+			idContainerWrap->toggle(useIdRange, anim::type::instant);
+			errorLabelWrap->toggle(useIdRange, anim::type::instant);
 			container->resizeToWidth(container->width());
 		}, container->lifetime());
 
 	// Initially set visibility
-	dateLabel->setVisible(!readData().useIdRange);
-	idContainer->setVisible(readData().useIdRange);
-	errorLabel->setVisible(readData().useIdRange);
+	dateLabelWrap->toggle(!readData().useIdRange, anim::type::instant);
+	idContainerWrap->toggle(readData().useIdRange, anim::type::instant);
+	errorLabelWrap->toggle(readData().useIdRange, anim::type::instant);
 
 	const auto removeTime = [](TimeId dateTime) {
 		return base::unixtime::serialize(
