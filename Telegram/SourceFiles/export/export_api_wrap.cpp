@@ -4106,58 +4106,56 @@ std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 void ApiWrap::scheduleMoreFiles() {
 	_scheduleMoreFilesPending = false;
 
-	int smallFilesDownloading = 0;
-	int largeFilesDownloading = 0;
-	for (const auto &[randomId, process] : _fileProcesses) {
+	// Count currently active downloads by size class.
+	int smallActive = 0;
+	int largeActive = 0;
+	for (const auto &[id, process] : _fileProcesses) {
 		if (process->active) {
 			if (process->size < 20 * kMegabyte) {
-				++smallFilesDownloading;
+				++smallActive;
 			} else {
-				++largeFilesDownloading;
+				++largeActive;
 			}
 		}
 	}
 
-	while (!_fileDownloadQueue.empty()) {
-		const auto nextId = _fileDownloadQueue.front();
-		const auto it = _fileProcesses.find(nextId);
-		if (it == end(_fileProcesses)) {
-			_fileDownloadQueue.pop_front();
+	// Fill all available slots in one pass.
+	// The throttler already rate-limits actual MTP requests, so starting
+	// multiple files here is safe — they just queue into the throttler.
+	auto it = _fileDownloadQueue.begin();
+	while (it != _fileDownloadQueue.end()) {
+		const auto pid = *it;
+		const auto pit = _fileProcesses.find(pid);
+		if (pit == end(_fileProcesses)) {
+			it = _fileDownloadQueue.erase(it);
 			continue;
 		}
 
-		auto &process = *it->second;
+		auto &process = *pit->second;
 		const auto isSmall = process.size < 20 * kMegabyte;
 		const auto limit = isSmall ? kMaxParallelSmallFiles : kMaxParallelLargeFiles;
-		const auto current = isSmall ? smallFilesDownloading : largeFilesDownloading;
+		const auto active = isSmall ? smallActive : largeActive;
 
-		if (current >= limit) {
-			return;  // At limit - stop immediately
+		if (active >= limit) {
+			// This size class is full. Continue looking for the other class.
+			++it;
+			continue;
 		}
 
-		_fileDownloadQueue.pop_front();
+		it = _fileDownloadQueue.erase(it);
 		process.active = true;
 		if (isSmall) {
-			++smallFilesDownloading;
+			++smallActive;
 		} else {
-			++largeFilesDownloading;
+			++largeActive;
 		}
-
 		loadFilePart(process);
 
-		if (!_fileDownloadQueue.empty() && !_scheduleMoreFilesPending) {
-			const auto nextIt = _fileProcesses.find(_fileDownloadQueue.front());
-			if (nextIt != end(_fileProcesses)) {
-				const auto nextIsSmall = nextIt->second->size < 20 * kMegabyte;
-				const auto nextLimit = nextIsSmall ? kMaxParallelSmallFiles : kMaxParallelLargeFiles;
-				const auto nextCurrent = nextIsSmall ? smallFilesDownloading : largeFilesDownloading;
-				if (nextCurrent < nextLimit) {
-					_scheduleMoreFilesPending = true;
-					scheduleBatchDelay(kMinRequestIntervalMs);
-				}
-			}
+		// Stop early if both classes are at their limits.
+		if (smallActive >= kMaxParallelSmallFiles
+				&& largeActive >= kMaxParallelLargeFiles) {
+			break;
 		}
-		return;  // Always start at most one file per call
 	}
 }
 
@@ -4179,6 +4177,10 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 		process->fileRef.skipReason = Data::File::SkipReason::Unavailable;
 	}
 
+	// Fire a final progress callback with ready == total so the controller
+	// removes this entry from _activeDownloads. Files that finish via error
+	// or skip never reach ready>=total in filePartDone, so without this
+	// their rows stay stuck in the UI.
 	if (process->progress) {
 		const auto finalSize = std::max(process->outputFile.size(), int64(1));
 		FileProgress fp;
@@ -4186,24 +4188,6 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 		fp.ready    = finalSize;
 		fp.total    = finalSize;
 		process->progress(fp);
-	}
-
-	if (process->progress) {
-		const auto finalSize = std::max(process->outputFile.size(), int64(1));
-		process->progress({
-			.randomId = randomId,
-			.ready    = finalSize,
-			.total    = finalSize,
-		});
-	}
-
-	if (process->progress) {
-		const auto finalSize = std::max(process->outputFile.size(), int64(1));
-		process->progress({
-			.randomId = randomId,
-			.ready    = finalSize,
-			.total    = finalSize,
-		});
 	}
 
 	// Fire the primary done callback (updates dedup map via wrapDone).
