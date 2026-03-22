@@ -88,6 +88,11 @@ void ProgressWidget::Row::updateData(Content::Row &&data) {
 		}
 	}
 	updateControlsGeometry(width());
+	// Notify the parent VerticalLayout that our height may have changed
+	// (e.g. info text switches between one-line and two-line mode).
+	// Without this the Row stays at its previously allocated height and
+	// clips the info label that moved below the filename.
+	updateGeometry();
 	update();
 }
 

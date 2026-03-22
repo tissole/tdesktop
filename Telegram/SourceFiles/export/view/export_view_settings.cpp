@@ -553,21 +553,23 @@ void SettingsWidget::addLimitsLabel(
 	const auto dateLabel = dateLabelWrap->entity();
 
 	// ID range UI — two inputs on a single row (visible when ID mode is selected).
-	// Also wrapped in SlideWrap for the same reason as dateLabel above.
-	const auto idContainerWrap = container->add(
-		object_ptr<Ui::SlideWrap<Ui::RpWidget>>(
-			container,
-			object_ptr<Ui::RpWidget>(container),
-			style::margins(0, 4, 0, 0)));
-	const auto idContainer = idContainerWrap->entity();
-
-	// Use st::defaultInputField.heightMin instead of widget->height() because
-	// Ui::InputField::height() returns 0 until first show(). idContainer starts
-	// hidden, so the input is never shown before layoutIdRow runs -- using
-	// ->height() would give 0px, making the inputs invisible and unclickable.
+	// Wrapped in SlideWrap<VerticalLayout> so the VerticalLayout's width is
+	// correctly propagated to child widgets (SlideWrap<RpWidget> does not do
+	// this reliably because RpWidget has no resizeGetHeight override).
 	const int inputH = st::defaultInputField.heightMin;
+	const int labelH = st::exportIdFieldLabel.maxHeight
+		? st::exportIdFieldLabel.maxHeight
+		: st::exportIdFieldLabel.style.font->height;
 	const int idPadL = 22;
 	const int idGap  = 16;
+	const int idRowH = labelH + inputH;
+
+	const auto idContainerWrap = container->add(
+		object_ptr<Ui::SlideWrap<Ui::FixedHeightWidget>>(
+			container,
+			object_ptr<Ui::FixedHeightWidget>(container, idRowH),
+			style::margins(0, 4, 0, 4)));
+	const auto idContainer = idContainerWrap->entity();
 
 	const auto fromIdLabel = Ui::CreateChild<Ui::FlatLabel>(
 		idContainer,
@@ -596,14 +598,11 @@ void SettingsWidget::addLimitsLabel(
 		if (half < 20) return;
 		fromIdLabel->resizeToWidth(half);
 		fromIdLabel->move(idPadL, 0);
-		const int labelH = fromIdLabel->height();
-		// Input field starts right after label with no extra gap
 		fromIdInput->setGeometry(idPadL, labelH, half, inputH);
 		const int x2 = idPadL + half + idGap;
 		tillIdLabel->resizeToWidth(half);
 		tillIdLabel->move(x2, 0);
 		tillIdInput->setGeometry(x2, labelH, half, inputH);
-		idContainer->resize(w, labelH + inputH);
 	};
 	idContainer->widthValue()
 		| rpl::on_next([=](int w) { layoutIdRow(w); }, idContainer->lifetime());

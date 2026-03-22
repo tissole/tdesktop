@@ -32,43 +32,46 @@ namespace {
 
 constexpr auto kMegabyte = 1024 * 1024;
 
-// Rate limiting: stay well within Telegram's upload.getFile limits.
-// Telegram allows ~30 req/s per DC but we stay conservative.
+// Request rate: Telegram allows ~30 req/s per DC.
+// One tick every 33 ms keeps us safely within that bound.
 constexpr auto kMinRequestIntervalMs = 1000 / 30;
 
-// Parallel file limits.
-// Small files (stickers, thumbnails, voice notes) complete very fast, so
-// allowing many at once floods the request queue before earlier ones finish.
-// Keep small-file parallelism low (2) to let each file fully retire before
-// the next batch starts. Large files benefit from more parallelism since
-// each takes many chunks and chunk-level concurrency is the bottleneck there.
-constexpr auto kMaxParallelSmallFiles = 2;  // Files < 20MB
-constexpr auto kMaxParallelLargeFiles = 2;  // Files >= 20MB
+// Parallel file limits — match Telegram API documented limits:
+//   ~5 concurrent downloads for small files (< 20 MB)
+//   ~2 concurrent downloads for large files (>= 20 MB)
+constexpr auto kMaxParallelSmallFiles = 5;
+constexpr auto kMaxParallelLargeFiles = 2;
+
+// Throttler burst cap: kMaxParallelSmallFiles × chunksPerSmallFile
+// = 5 files × 2 chunks = 10 requests that can fire in a single tick.
+// This must stay in sync with GetConcurrentChunksForFile for small files.
+constexpr auto kThrottlerBurstCap = 10;
 
 int GetChunkSizeForFile(int64 fileSize) {
-	// Telegram requires chunk sizes to be powers of 2: 32KB–1MB
+	// Telegram requires chunk sizes to be powers of 2: 32 KB – 1 MB.
 	if (fileSize > 500 * kMegabyte) {
-		return 1024 * 1024;  // 1MB for very large files
+		return 1024 * 1024;  // 1 MB  — very large files
 	} else if (fileSize > 50 * kMegabyte) {
-		return 512 * 1024;  // 512KB for large files
+		return 512 * 1024;   // 512 KB — large files
 	} else if (fileSize > 10 * kMegabyte) {
-		return 256 * 1024;  // 256KB for medium files
+		return 256 * 1024;   // 256 KB — medium files
 	}
-	return 128 * 1024;  // 128KB for small files
+	return 128 * 1024;       // 128 KB — small files
 }
 
 int GetConcurrentChunksForFile(int64 fileSize) {
-	// Number of simultaneous chunk requests per file.
-	// Small files get only 1 concurrent chunk — they are tiny and fast,
-	// and issuing multiple chunks at once just wastes request tokens.
+	// Simultaneous chunk requests per file.
+	// Large files use higher concurrency because each chunk takes longer
+	// and pipelining hides latency. Small files use 2 — enough to keep
+	// the pipe full without flooding the throttler.
 	if (fileSize > 500 * kMegabyte) {
-		return 8;  // Very large: max concurrency
+		return 8;  // Very large: maximum pipeline depth
 	} else if (fileSize > 50 * kMegabyte) {
-		return 6;  // Large files: high concurrency
+		return 6;  // Large
 	} else if (fileSize > 10 * kMegabyte) {
-		return 4;  // Medium files: moderate concurrency
+		return 4;  // Medium
 	}
-	return 1;  // Small files: single chunk at a time, avoids flooding
+	return 2;      // Small files: 2 concurrent chunks (was 1 — too slow)
 }
 
 
@@ -186,8 +189,10 @@ void ApiWrap::RequestThrottler::refreshTokens() {
 	const auto elapsed = now - _lastRefresh;
 	if (elapsed >= kMinRequestIntervalMs) {
 		const auto add = int(elapsed / kMinRequestIntervalMs);
-		// Limit burst to prevent flooding - 2 concurrent requests max
-		_tokens = std::min(2, _tokens + add);
+		// Burst cap = kMaxParallelSmallFiles × chunksPerSmallFile = 5 × 2 = 10.
+		// This lets all in-flight chunk requests for all active small files fire
+		// in a single throttler tick without exceeding the per-DC rate limit.
+		_tokens = std::min(kThrottlerBurstCap, _tokens + add);
 		_lastRefresh += add * kMinRequestIntervalMs;
 	}
 }
