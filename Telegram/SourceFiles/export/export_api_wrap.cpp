@@ -3298,7 +3298,9 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 	}
 	const auto &process = *it->second;
 
-	Expects(_chatProcess != nullptr);
+	if (!_chatProcess) {
+		return false;
+	}
 
 	auto mIt = _chatProcess->fileToMessageIndex.find(progress.randomId);
 	int messageIndexInSlice = 0;
@@ -3323,17 +3325,22 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 			: (currentFileMessage() ? _chatProcess->totalMessagesCounter : 0))
 		: _chatProcess->messagesProcessed;
 
-	return _chatProcess->fileProgress(ApiWrap::DownloadProgress{
+	const auto textCount = _chatProcess->messagesTextProcessed;
+	const auto mediaCount = _chatProcess->messagesMediaProcessed;
+	const auto totalCount = _chatProcess->messagesProcessed;
+	const auto textTotal = _chatProcess->messagesTextTotal;
+	const auto fileProgressCb = _chatProcess->fileProgress;
+	return fileProgressCb(ApiWrap::DownloadProgress{
 		.randomId = process.randomId,
 		.path = process.relativePath,
 		.itemIndex = itemIndex,
 		.ready = progress.ready,
 		.total = progress.total,
 		.isAuxiliary = auxiliary,
-		.messagesTextCount = _chatProcess->messagesTextProcessed,
-		.messagesMediaCount = _chatProcess->messagesMediaProcessed,
-		.messagesTotalCount = _chatProcess->messagesProcessed, // Use finished count
-		.messagesTextTotal = _chatProcess->messagesTextTotal });
+		.messagesTextCount = textCount,
+		.messagesMediaCount = mediaCount,
+		.messagesTotalCount = totalCount,
+		.messagesTextTotal = textTotal });
 }
 
 void ApiWrap::loadMessageFileDone(int index, const QString &relativePath) {
