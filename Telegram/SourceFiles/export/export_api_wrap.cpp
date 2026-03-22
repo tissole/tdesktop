@@ -34,7 +34,7 @@ constexpr auto kMegabyte = 1024 * 1024;
 
 // Request rate: Telegram allows ~30 req/s per DC.
 // One tick every 33 ms keeps us safely within that bound.
-constexpr auto kMinRequestIntervalMs = 1000 / 30;
+constexpr auto kMinRequestIntervalMs = 1000 / 25;
 
 // Parallel file limits — match Telegram API documented limits:
 //   ~5 concurrent downloads for small files (< 20 MB)
@@ -60,10 +60,6 @@ int GetChunkSizeForFile(int64 fileSize) {
 }
 
 int GetConcurrentChunksForFile(int64 fileSize) {
-	// Simultaneous chunk requests per file.
-	// Large files use higher concurrency because each chunk takes longer
-	// and pipelining hides latency. Small files use 2 — enough to keep
-	// the pipe full without flooding the throttler.
 	if (fileSize > 500 * kMegabyte) {
 		return 8;  // Very large: maximum pipeline depth
 	} else if (fileSize > 50 * kMegabyte) {
@@ -4076,12 +4072,6 @@ std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 	const LocationKey &dedupKey)
 {
 	Expects(_settings != nullptr);
-
-	// PrepareRelativePath checks the disk to avoid overwriting existing files,
-	// but multiple files in the same slice are all queued before any is written
-	// to disk. Two files with the same suggested name both pass the disk check
-	// and get assigned the same path. _reservedPaths tracks paths claimed
-	// in-memory so we skip them even before they appear on disk.
 	const auto &folder = _settings->path;
 	const auto &suggested = file.suggestedPath;
 	const auto position = suggested.indexOf(QLatin1Char('.'));
@@ -4114,12 +4104,8 @@ std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 }
 
 void ApiWrap::scheduleMoreFiles() {
-	// Clear the pending flag — this call is the scheduled one (or a direct
-	// call that supersedes any outstanding timer).
 	_scheduleMoreFilesPending = false;
 
-	// Count files that are actively downloading.
-	// A file is active from start until finishFile() removes it.
 	int smallFilesDownloading = 0;
 	int largeFilesDownloading = 0;
 	for (const auto &[randomId, process] : _fileProcesses) {
@@ -4132,11 +4118,6 @@ void ApiWrap::scheduleMoreFiles() {
 		}
 	}
 
-	// Start at most ONE new file per call, then schedule a follow-up with a
-	// small delay so we don't burst-start many files simultaneously.  This
-	// prevents the download queue for small files from being filled faster
-	// than completed files can be retired, while still staying within the
-	// Telegram API parallel-request limits.
 	while (!_fileDownloadQueue.empty()) {
 		const auto nextId = _fileDownloadQueue.front();
 		const auto it = _fileProcesses.find(nextId);
@@ -4164,13 +4145,6 @@ void ApiWrap::scheduleMoreFiles() {
 
 		loadFilePart(process);
 
-		// If more files are waiting and slots are still open, schedule one
-		// follow-up call after a short delay instead of starting the next
-		// file synchronously.  This spreads burst starts across time and
-		// prevents the small-file queue from being saturated all at once.
-		// The _scheduleMoreFilesPending guard ensures only one timer is
-		// ever in flight at a time (finishFile calls are sufficient to
-		// drain the queue when files complete naturally).
 		if (!_fileDownloadQueue.empty() && !_scheduleMoreFilesPending) {
 			const auto nextIt = _fileProcesses.find(_fileDownloadQueue.front());
 			if (nextIt != end(_fileProcesses)) {
@@ -4205,11 +4179,6 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 		process->fileRef.skipReason = Data::File::SkipReason::Unavailable;
 	}
 
-	// Fire a final progress callback with ready == total so that the
-	// controller unconditionally removes this entry from _activeDownloads.
-	// Without this, files that finish via error or skip (filePartUnavailable)
-	// never reach the ready>=total branch in the progress handler and their
-	// entries accumulate in _activeDownloads, showing as stale rows in the UI.
 	if (process->progress) {
 		const auto finalSize = std::max(process->outputFile.size(), int64(1));
 		FileProgress fp;
@@ -4219,11 +4188,6 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 		process->progress(fp);
 	}
 
-	// Fire a final progress callback with ready == total so that the
-	// controller unconditionally removes this entry from _activeDownloads.
-	// Without this, files that finish via error or skip (filePartUnavailable)
-	// never reach the ready>=total branch in the progress handler and their
-	// entries accumulate in _activeDownloads, showing as stale rows in the UI.
 	if (process->progress) {
 		const auto finalSize = std::max(process->outputFile.size(), int64(1));
 		process->progress({
@@ -4233,11 +4197,6 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 		});
 	}
 
-	// Fire a final progress callback with ready == total so that the
-	// controller unconditionally removes this entry from _activeDownloads.
-	// Without this, files that finish via error or skip (filePartUnavailable)
-	// never reach the ready>=total branch in the progress handler and their
-	// entries accumulate in _activeDownloads, showing as stale rows in the UI.
 	if (process->progress) {
 		const auto finalSize = std::max(process->outputFile.size(), int64(1));
 		process->progress({
