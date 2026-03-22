@@ -34,7 +34,7 @@ constexpr auto kMegabyte = 1024 * 1024;
 
 // Rate limiting: Reduce to prevent flooding with many small files
 // 20 req/s is safer for mixed workloads
-constexpr auto kMinRequestIntervalMs = 1000 / 20;
+constexpr auto kMinRequestIntervalMs = 1000 / 25;
 
 // Parallel file limits (Telegram API guidelines)
 constexpr auto kMaxParallelSmallFiles = 5;  // Files < 20MB
