@@ -179,8 +179,8 @@ void ApiWrap::RequestThrottler::refreshTokens() {
 	const auto elapsed = now - _lastRefresh;
 	if (elapsed >= kMinRequestIntervalMs) {
 		const auto add = int(elapsed / kMinRequestIntervalMs);
-		// Allow burst of up to 10 concurrent requests for better parallelism
-		_tokens = std::min(10, _tokens + add);
+		// Limit burst to prevent flooding - 2 concurrent requests max
+		_tokens = std::min(2, _tokens + add);
 		_lastRefresh += add * kMinRequestIntervalMs;
 	}
 }
@@ -4102,12 +4102,12 @@ std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 }
 
 void ApiWrap::scheduleMoreFiles() {
-	// Count how many small and large files are actively downloading
-	// A file is "active" if it has chunks currently being downloaded
+	// Count files that are actively downloading
+	// A file is active from start until finishFile() removes it
 	int smallFilesDownloading = 0;
 	int largeFilesDownloading = 0;
 	for (const auto &[randomId, process] : _fileProcesses) {
-		if (process->active && process->scheduledOffsets.size() > 0) {
+		if (process->active) {
 			if (process->size < 20 * kMegabyte) {
 				++smallFilesDownloading;
 			} else {
@@ -4117,7 +4117,19 @@ void ApiWrap::scheduleMoreFiles() {
 	}
 
 	while (!_fileDownloadQueue.empty()) {
-		// Strict limit check - don't add more files if at limit
+		// Re-count on each iteration to ensure strict limit
+		smallFilesDownloading = 0;
+		largeFilesDownloading = 0;
+		for (const auto &[randomId, process] : _fileProcesses) {
+			if (process->active) {
+				if (process->size < 20 * kMegabyte) {
+					++smallFilesDownloading;
+				} else {
+					++largeFilesDownloading;
+				}
+			}
+		}
+
 		const auto nextId = _fileDownloadQueue.front();
 		const auto it = _fileProcesses.find(nextId);
 		if (it == end(_fileProcesses)) {
@@ -4131,12 +4143,11 @@ void ApiWrap::scheduleMoreFiles() {
 		const auto current = isSmall ? smallFilesDownloading : largeFilesDownloading;
 
 		if (current >= limit) {
-			return;  // At limit - stop scheduling, don't process queue
+			return;  // At limit - stop immediately
 		}
 
 		_fileDownloadQueue.pop_front();
 		process.active = true;
-		++_filesDownloading;
 		if (isSmall) {
 			++smallFilesDownloading;
 		} else {
