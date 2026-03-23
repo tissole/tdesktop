@@ -45,7 +45,7 @@ constexpr auto kMaxParallelLargeFiles = 2;
 // Throttler burst cap: kMaxParallelSmallFiles × chunksPerSmallFile
 // = 5 files × 2 chunks = 10 requests that can fire in a single tick.
 // This must stay in sync with GetConcurrentChunksForFile for small files.
-constexpr auto kThrottlerBurstCap = 15;
+constexpr auto kThrottlerBurstCap = 18;
 
 //int GetChunkSizeForFile(int64 fileSize) {
 //	if (fileSize > 750 * kMegabyte) {
