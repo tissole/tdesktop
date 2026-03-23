@@ -34,7 +34,7 @@ constexpr auto kMegabyte = 1024 * 1024;
 
 // Request rate: Telegram allows ~30 req/s per DC.
 // One tick every 33 ms keeps us safely within that bound.
-constexpr auto kMinRequestIntervalMs = 1000 / 20;
+constexpr auto kMinRequestIntervalMs = 1000 / 19;
 
 // Parallel file limits — match Telegram API documented limits:
 //   ~5 concurrent downloads for small files (< 20 MB)
