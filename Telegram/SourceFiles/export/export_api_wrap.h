@@ -409,7 +409,7 @@ private:
 		Fn<void(FnMut<void()>)> _runner;
 		std::shared_ptr<bool> _guard;
 		std::deque<FnMut<void()>> _taskQueue;
-		int _tokens = 1; // 
+		int _tokens = 30; // 
 		crl::time _lastRefresh = 0;
 		bool _retryScheduled = false;
 	};
