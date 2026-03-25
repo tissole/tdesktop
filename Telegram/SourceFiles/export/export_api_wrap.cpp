@@ -34,7 +34,7 @@ constexpr auto kMegabyte = 1024 * 1024;
 
 // Request rate: Telegram allows ~30 req/s per DC.
 // One tick every 33 ms keeps us safely within that bound.
-constexpr auto kMinRequestIntervalMs = 1000 / 20;
+constexpr auto kMinRequestIntervalMs = 1000 / 22;
 
 // Parallel file limits — match Telegram API documented limits:
 //   ~5 concurrent downloads for small files (< 20 MB)
@@ -45,7 +45,7 @@ constexpr auto kMaxParallelLargeFiles = 2;
 // Throttler burst cap: kMaxParallelSmallFiles × chunksPerSmallFile
 // = 5 files × 2 chunks = 10 requests that can fire in a single tick.
 // This must stay in sync with GetConcurrentChunksForFile for small files.
-constexpr auto kThrottlerBurstCap =3;
+constexpr auto kThrottlerBurstCap =1;
 
 //int GetChunkSizeForFile(int64 fileSize) {
 //	if (fileSize > 750 * kMegabyte) {
@@ -62,24 +62,24 @@ constexpr auto kThrottlerBurstCap =3;
 
 int GetChunkSizeForFile(int64 fileSize) {
 	if (fileSize > 100 * kMegabyte) {
-		return 256 * 1024;  // 1 MB  — very large files
+		return 512 * 1024;  // 1 MB  — very large files
 	} else if (fileSize > 20 * kMegabyte) {
-		return 256 * 1024;   // 512 KB — large files
+		return 512 * 1024;   // 512 KB — large files
 	} else if (fileSize > 10 * kMegabyte) {
-		return 256 * 1024;   // 256 KB — medium files
+		return 512 * 1024;   // 256 KB — medium files
 	} else if (fileSize > 1 * kMegabyte) {
-		return 256 * 1024;   // 256 KB — small files
+		return 512 * 1024;   // 256 KB — small files
 	}
-	return 256 * 1024;       // 128 KB — very small files
+	return 512 * 1024;       // 128 KB — very small files
 }
 
 int GetConcurrentChunksForFile(int64 fileSize) {
 	if (fileSize > 750 * kMegabyte) {
-		return 3;  // Very large: maximum pipeline depth
+		return 1;  // Very large: maximum pipeline depth
 	} else if (fileSize > 375 * kMegabyte) {
-		return 3;  // Large
+		return 1;  // Large
 	} else if (fileSize > 32 * kMegabyte) {
-		return 3;  // Medium
+		return 1;  // Medium
 	}
 	return 1;      // Small files: 2 concurrent chunks
 }
