@@ -278,7 +278,7 @@ ControllerObject::ControllerObject(
 	crl::weak_on_queue<ControllerObject> weak,
 	QPointer<MTP::Instance> mtproto,
 	const MTPInputPeer &peer)
-: _api(mtproto, weak.runner())
+: _api(mtproto, weak.runner(), mtproto ? mtproto->mainDcId() : 0)
 , _state(PasswordCheckState{}) {
 	_api.errors(
 	) | rpl::on_next([=](const MTP::Error &error) {
@@ -305,7 +305,7 @@ ControllerObject::ControllerObject(
 	int32 topicRootId,
 	uint64 peerId,
 	const QString &topicTitle)
-: _api(mtproto, weak.runner())
+: _api(mtproto, weak.runner(), mtproto ? mtproto->mainDcId() : 0)
 , _state(PasswordCheckState{})
 , _topicRootId(topicRootId)
 , _topicPeerId(peerId)
