@@ -1294,7 +1294,7 @@ void Document::ensureDataMediaCreated() const {
 
 bool Document::downloadInCorner() const {
 	return _data->isAudioFile()
-		&& _data->canBeStreamed(_realParent)
+		&& _data->canBeStreamed()
 		&& !_data->inappPlaybackFailed();
 }
 

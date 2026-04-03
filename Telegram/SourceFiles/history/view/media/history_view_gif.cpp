@@ -404,7 +404,7 @@ void Gif::validateRoundingMask(QSize size) const {
 
 bool Gif::downloadInCorner() const {
 	return _data->isVideoFile()
-		&& _data->canBeStreamed(_realParent)
+		&& _data->canBeStreamed()
 		&& !_data->inappPlaybackFailed();
 }
 
@@ -1808,7 +1808,7 @@ void Gif::drawGrouped(
 	const auto sti = context.imageStyle();
 	_smallGroupPart = !fullFeaturedGrouped(sides);
 	const auto cornerDownload = downloadInCorner();
-	const auto canBePlayed = _dataMedia->canBePlayed(_realParent);
+	const auto canBePlayed = _dataMedia->canBePlayed();
 
 	const auto revealed = _spoiler
 		? _spoiler->revealAnimation.value(_spoiler->revealed ? 1. : 0.)

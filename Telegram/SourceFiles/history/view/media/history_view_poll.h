@@ -44,9 +44,8 @@ public:
 		return true;
 	}
 	bool customInfoLayout() const override {
-		return true;
+		return false;
 	}
-	QPoint resolveCustomInfoRightBottom() const override;
 
 	[[nodiscard]] TextSelection adjustSelection(
 		TextSelection selection,

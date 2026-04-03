@@ -1881,7 +1881,8 @@ bool Poll::showVotersCount() const {
 }
 
 bool Poll::inlineFooter() const {
-	return showVotersCount() || showVotes();
+	return !(_flags
+		& (PollData::Flag::PublicVotes | PollData::Flag::MultiChoice));
 }
 
 bool Poll::canAddOption() const {
@@ -1961,33 +1962,11 @@ QSize Poll::countCurrentSize(int newWidth) {
 		- st::msgPadding.left()
 		- st::msgPadding.right();
 
-	const auto answersHeight = ranges::accumulate(ranges::views::all(
-		_answers
-	) | ranges::views::transform([&](const Answer &answer) {
-		return countAnswerHeight(answer, innerWidth);
-	}), 0);
-
-	const auto bottomButtonHeight = inlineFooter()
-		? 12 // 12px gap as requested instead of the original skip
-		: st::historyPollBottomButtonSkip;
-	auto newHeight = st::historyPollQuestionTop
-		+ _question.countHeight(innerWidth)
-		+ st::historyPollSubtitleSkip
-		+ st::msgDateFont->height
-		+ st::historyPollAnswersSkip
-		+ answersHeight
-		+ st::historyPollTotalVotesSkip
-		+ bottomButtonHeight
-		+ st::msgDateFont->height
-		+ st::msgPadding.bottom();
-	if (!isBubbleTop()) {
-		newHeight -= st::msgFileTopMinus;
-	}
+	auto newHeight = _headerPart->countHeight(innerWidth)
+		+ _optionsPart->countHeight(innerWidth)
+		+ _addOptionPart->countHeight(innerWidth)
+		+ _footerPart->countHeight(innerWidth);
 	return { newWidth, newHeight };
-}
-
-QPoint Poll::resolveCustomInfoRightBottom() const {
-	return { width(), height() };
 }
 
 void Poll::updateTexts() {
@@ -2859,102 +2838,11 @@ void Poll::draw(Painter &p, const PaintContext &context) const {
 			part->draw(p, padding.left(), paintw, width(), context);
 			p.setTransform(saved);
 		}
-		const auto height = paintAnswer(
-			p,
-			answer,
-			animation,
-			padding.left(),
-			tshift,
-			paintw,
-			width(),
-			context);
-		tshift += height;
-	}
-	if (!inlineFooter()) {
-		paintBottom(p, padding.left(), tshift, paintw, context);
-	} else if (!_totalVotesLabel.isEmpty()) {
-		// Position the vote count text with 12px gap from the last poll content
-		tshift += 12; // 12px gap as requested
-		paintInlineFooter(p, padding.left(), tshift, paintw, context);
-	}
-
-	// Draw info bubble at the bottom with proper alignment
-	_parent->drawInfo(
-		p,
-		context,
-		width(),
-		height(),
-		width(),
-		InfoDisplayType::Default);
-}
-
-void Poll::paintInlineFooter(
-		Painter &p,
-		int left,
-		int top,
-		int paintw,
-		const PaintContext &context) const {
-	const auto stm = context.messageStyle();
-	p.setPen(stm->msgDateFg);
-	// Align the vote count text with the same baseline as the info bubble
-	_totalVotesLabel.drawLeftElided(
-		p,
-		left,
-		top,
-		// Leave space for the info bubble on the right
-		paintw - (_parent->infoWidth() > 0 ? _parent->infoWidth() + 2 : 0), // 2px buffer
-		width());
-}
-
-void Poll::paintBottom(
-		Painter &p,
-		int left,
-		int top,
-		int paintw,
-		const PaintContext &context) const {
-	const auto stringtop = top
-		+ st::msgPadding.bottom()
-		+ st::historyPollBottomButtonTop;
-	const auto stm = context.messageStyle();
-	if (showVotersCount()) {
-		p.setPen(stm->msgDateFg);
-		_totalVotesLabel.draw(p, left, stringtop, paintw, style::al_top);
-	} else {
-		const auto link = showVotes()
-			? _showResultsLink
-			: canSendVotes()
-			? _sendVotesLink
-			: nullptr;
-		if (_linkRipple) {
-			const auto linkHeight = bottomButtonHeight();
-			p.setOpacity(st::historyPollRippleOpacity);
-			_linkRipple->paint(
-				p,
-				left - st::msgPadding.left() - _linkRippleShift,
-				height() - linkHeight,
-				width(),
-				&stm->msgWaveformInactive->c);
-			if (_linkRipple->empty()) {
-				_linkRipple.reset();
-			}
-			p.setOpacity(1.);
-		}
-		p.setFont(st::semiboldFont);
-		p.setPen(link ? stm->msgFileThumbLinkFg : stm->msgDateFg);
-		const auto string = showVotes()
-			? tr::lng_polls_view_results(tr::now, tr::upper)
-			: tr::lng_polls_submit_votes(tr::now, tr::upper);
-		const auto stringw = st::semiboldFont->width(string);
-		p.drawTextLeft(
-			left + (paintw - stringw) / 2,
-			stringtop,
-			width(),
-			string,
-			stringw);
+		tshift += h;
 	}
 }
 
-void Poll::resetAnswersAnimation() const {
+void Poll::Options::resetAnswersAnimation() const {
 	_answersAnimation = nullptr;
 	if (_owner->_poll->sendingVotes.size() != 1
 		|| (_owner->_flags & PollData::Flag::MultiChoice)) {
@@ -3784,19 +3672,6 @@ TextState Poll::textState(QPoint point, StateRequest request) const {
 		symbolAdd += part->selectionLength();
 		tshift += h;
 	}
-
-	// Check if the parent can handle the info bubble tooltip
-	const auto infoResult = _parent->bottomInfoTextState(
-		width(),
-		height(),
-		point,
-		InfoDisplayType::Default);
-	if (infoResult.link
-		|| infoResult.cursor != CursorState::None
-		|| infoResult.customTooltip) {
-		return infoResult;
-	}
-
 	return result;
 }
 
