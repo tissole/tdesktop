@@ -4016,9 +4016,7 @@ void ApiWrap::sendFiles(
 				: nullptr),
 			.type = uploadWithType,
 			.to = to,
-			.caption = (GetEnhancedBool("caption_from_file_name"))
-				? file.fileNameCaption
-				: caption,
+			.caption = std::move(file.caption),
 			.spoiler = file.spoiler,
 			.album = album,
 			.forceFile = forceFile,
@@ -4026,10 +4024,6 @@ void ApiWrap::sendFiles(
 			.idOverride = 0,
 			.displayName = file.displayName,
 		}));
-
-		if (!GetEnhancedBool("caption_from_file_name")) {
-			caption = TextWithTags();
-		}
 	}
 	if (album) {
 		_sendingAlbums.emplace(album->groupId, album);
