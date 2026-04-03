@@ -6,12 +6,12 @@
 
 add_executable(Telegram WIN32 MACOSX_BUNDLE)
 init_non_host_target(Telegram)
-if(DEFINED GOOGLE_TRANSLATE_API_KEY)
-    target_compile_definitions(Telegram PRIVATE
-        GOOGLE_TRANSLATE_API_KEY="${GOOGLE_TRANSLATE_API_KEY}"
-        GOOGLE_TRANSLATE_ANDROID_CERT="${GOOGLE_TRANSLATE_ANDROID_CERT}"
-    )
-endif()    
+#if(DEFINED GOOGLE_TRANSLATE_API_KEY)
+#    target_compile_definitions(Telegram PRIVATE
+#        GOOGLE_TRANSLATE_API_KEY="${GOOGLE_TRANSLATE_API_KEY}"
+#        GOOGLE_TRANSLATE_ANDROID_CERT="${GOOGLE_TRANSLATE_ANDROID_CERT}"
+#    )
+#endif()    
 add_subdirectory(lib_rpl)
 add_subdirectory(lib_crl)
 add_subdirectory(lib_base)
