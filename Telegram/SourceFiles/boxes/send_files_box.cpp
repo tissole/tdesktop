@@ -1280,9 +1280,7 @@ void SendFilesBox::updateCaptionVisibility() {
 		}
 	} else if (!GetEnhancedBool("caption_from_file_name") && !_list.files.empty()) {
 		_fileCaptions->hide();
-		if (!_list.canAddCaption(
-				way.groupFiles() && way.sendImagesAsPhotos(),
-				way.sendImagesAsPhotos())
+		if (!_list.canAddCaption(way.sendImagesAsPhotos())
 			&& ((_limits & SendFilesAllow::OnlyOne)
 				|| !(_limits & SendFilesAllow::Texts))) {
 			_caption->hide();
@@ -1290,18 +1288,12 @@ void SendFilesBox::updateCaptionVisibility() {
 				_emojiToggle->hide();
 			}
 		} else {
-			const auto slowmode = (_limits & SendFilesAllow::OnlyOne)
-				&& (_list.files.size() > 1);
-			_caption->setPlaceholder(FieldPlaceholder(_list, way, slowmode));
 			_caption->show();
 			if (_emojiToggle) {
 				_emojiToggle->show();
 			}
 		}
 	} else {
-		const auto slowmode = (_limits & SendFilesAllow::OnlyOne)
-			&& (_list.files.size() > 1);
-		_caption->setPlaceholder(FieldPlaceholder(_list, way, slowmode));
 		_caption->show();
 		if (_emojiToggle) {
 			_emojiToggle->show();
@@ -1762,7 +1754,7 @@ void SendFilesBox::refreshControls(bool initial) {
 			_fileCaptions->setPlaceholder(tr::lng_photo_caption());
 		}
 	}
-	updateCaptionPlaceholder();
+	updateCaptionVisibility();
 }
 
 void SendFilesBox::setupSendWayControls() {
@@ -1799,7 +1791,7 @@ void SendFilesBox::setupSendWayControls() {
 				_fileCaptions->setPlaceholder(tr::lng_photo_caption());
 			}
 		}
-		updateCaptionPlaceholder();
+		updateCaptionVisibility();
 	}, lifetime());
 
 	_groupFiles->checkedChanges(
@@ -1825,15 +1817,13 @@ void SendFilesBox::setupSendWayControls() {
 					_fileCaptions->setPlaceholder(tr::lng_photo_caption());
 				}
 			} else if (!GetEnhancedBool("caption_from_file_name") && !_list.files.empty()) {
-				const auto canAddCaption = _list.canAddCaption(
-					sendWay.groupFiles() && sendWay.sendImagesAsPhotos(),
-					sendWay.sendImagesAsPhotos());
-				
+				const auto canAddCaption = _list.canAddCaption(sendWay.sendImagesAsPhotos());
+
 				if (canAddCaption) {
 					_caption->setTextWithTags(_list.files[0].fileNameCaption);
 				}
 			}
-			updateCaptionPlaceholder();
+			updateCaptionVisibility();
 		} else {
 			Ui::PostponeCall(_groupFiles.data(), [=] {
 				_groupFiles->setChecked(!checked);
@@ -1850,17 +1840,15 @@ void SendFilesBox::setupSendWayControls() {
 		sendWay.setSendImagesAsPhotos(!checked);
 		if (checkWithWay(sendWay)) {
 			_sendWay = sendWay;
-			
+
 			if (!GetEnhancedBool("caption_from_file_name") && !_list.files.empty()) {
-				const auto canAddCaption = _list.canAddCaption(
-					sendWay.groupFiles() && sendWay.sendImagesAsPhotos(),
-					sendWay.sendImagesAsPhotos());
-				
+				const auto canAddCaption = _list.canAddCaption(sendWay.sendImagesAsPhotos());
+
 				if (canAddCaption) {
 					_caption->setTextWithTags(_list.files[0].fileNameCaption);
 				}
 			}
-			updateCaptionPlaceholder();
+			updateCaptionVisibility();
 		} else {
 			Ui::PostponeCall(_sendImagesAsPhotos.data(), [=] {
 				_sendImagesAsPhotos->setChecked(!checked);
@@ -2003,9 +1991,7 @@ void SendFilesBox::setupCaption() {
 	_fileCaptions->setPlaceholder(tr::lng_photo_caption());
 
 	const auto allowCaptions = [=](not_null<DocumentData*> emoji) {
-		return _captionToPeer
-			? Data::AllowEmojiWithoutPremium(_captionToPeer, emoji)
-			: (_limits & SendFilesAllow::EmojiWithoutPremium);
+		return Data::AllowEmojiWithoutPremium(_toPeer, emoji);
 	};
 	InitMessageFieldHandlers({
 		.session = &show->session(),
@@ -2070,7 +2056,7 @@ void SendFilesBox::setupCaption() {
 		_fileCaptions->setPlaceholder(tr::lng_photo_caption());
 	}
 
-	updateCaptionPlaceholder();
+	updateCaptionVisibility();
 	setupEmojiPanel();
 
 	rpl::single(rpl::empty_value()) | rpl::then(
@@ -2079,11 +2065,8 @@ void SendFilesBox::setupCaption() {
 		if (GetEnhancedBool("caption_from_file_name") && _list.files.size() == 1) {
 			_list.files[0].fileNameCaption = _caption->getTextWithTags();
 		} else if (!GetEnhancedBool("caption_from_file_name") && !_list.files.empty()) {
-			const auto sendWay = _sendWay.current();
-			const auto canAddCaption = _list.canAddCaption(
-				sendWay.groupFiles() && sendWay.sendImagesAsPhotos(),
-				sendWay.sendImagesAsPhotos());
-			
+			const auto canAddCaption = _list.canAddCaption(_sendWay.current().sendImagesAsPhotos());
+
 			if (canAddCaption) {
 				_list.files[0].fileNameCaption = _caption->getTextWithTags();
 			}
@@ -2389,7 +2372,7 @@ void SendFilesBox::addFile(Ui::PreparedFile &&file) {
 				_fileCaptions->setTextWithTags(captionText);
 			}
 		}
-		updateCaptionPlaceholder();
+		updateCaptionVisibility();
 		
 		if (GetEnhancedBool("caption_from_file_name") && _caption && !_caption->isHidden() && _list.files.size() > 1) {
 			_caption->setFocusFast();
@@ -2657,51 +2640,40 @@ void SendFilesBox::send(
 					fileCaption.text = fileCaptions[i];
 					_list.files[i].fileNameCaption = std::move(fileCaption);
 				}
-
-				if (!caption.text.isEmpty()) {
-				}
 			}
 		}
 
-		const auto sendWay = _sendWay.current();
-		const auto isGroupedMedia = (sendWay.groupFiles() && _list.files.size() > 1);
+		Assert(_list.filesToProcess.empty());
 
-		const auto hasGroupableMedia = [&] {
-			using Type = Ui::PreparedFile::Type;
-			for (const auto &file : _list.files) {
-				if (file.type == Type::Photo || file.type == Type::Video) {
-					return true;
-				}
-			}
-			return false;
-		}();
-
-		//const auto currentSendWay = _sendWay.current();
-		//const auto canAddCaption = _list.canAddCaption(
-		//	currentSendWay.groupFiles() && currentSendWay.sendImagesAsPhotos(),
-		//	currentSendWay.sendImagesAsPhotos());
-
-		if (GetEnhancedBool("caption_from_file_name") && isGroupedMedia && hasGroupableMedia && !caption.text.isEmpty()) {
-			TextWithTags commentText = std::move(caption);
-			caption = TextWithTags();
-
-			if (_confirmedCallback) {
-				auto commentList = Ui::PreparedList(Ui::PreparedList::Error::None, QString());
-				_confirmedCallback(
-					std::move(commentList),
-					Ui::SendFilesWay(),
-					std::move(commentText),
-					options,
-					ctrlShiftEnter);
-			}
-		}
-
-		_confirmedCallback(
+		auto groups = DivideByGroups(
 			std::move(_list),
-			_sendWay.current(),
-			std::move(caption),
-			options,
+			way,
+			(_limits & SendFilesAllow::OnlyOne));
+		auto bundle = PrepareFilesBundle(
+			std::move(groups),
+			way,
 			ctrlShiftEnter);
+
+		if (!bundle->groups.empty()) {
+			auto &group = bundle->groups.back();
+			auto &files = group.list.files;
+			if (!files.empty()) {
+				auto &captioned = (group.type == Ui::AlbumType::PhotoVideo)
+					? files.front()
+					: files.back();
+				if (!captioned.isSticker() || way.sendImagesAsPhotos()) {
+					if (GetEnhancedBool("caption_from_file_name")) {
+						for (auto &file : files) {
+							file.caption = std::move(file.fileNameCaption);
+						}
+					} else if (!caption.text.isEmpty()) {
+						captioned.caption = std::move(caption);
+					}
+				}
+			}
+		}
+
+		_confirmedCallback(std::move(bundle), options);
 	}
 	closeBox();
 }
