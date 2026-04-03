@@ -58,22 +58,18 @@ tr::phrase<> SharedMediaTitle(Type type) {
 		return tr::lng_media_type_songs;
 	case Type::File:
 		return tr::lng_media_type_files;
-	case Type::RoundVoiceFile:
-		return tr::lng_media_type_audios;
 	case Type::VoiceFile:
 		return tr::lng_media_type_audios;
 	case Type::Link:
 		return tr::lng_media_type_links;
 	case Type::RoundFile:
 		return tr::lng_media_type_rounds;
-	case Type::PhotoVideo:
-		return tr::lng_media_type_photos;
 	case Type::ChatPhoto:
 		return tr::lng_media_type_photos;
 	case Type::Pinned:
 		return tr::lng_settings_events_pinned;
 	case Type::Poll:
-		return tr::lng_profile_polls;
+		return tr::lng_media_type_polls;
 	default:
 		return tr::lng_profile_shared_media;
 	}
