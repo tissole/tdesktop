@@ -32,22 +32,25 @@ namespace {
 
 constexpr auto kMegabyte = 1024 * 1024;
 
-// Request rate: Telegram allows ~30 req/s per DC.
-// One tick every 33 ms keeps us safely within that bound.
-constexpr auto kMinRequestIntervalMs = 1000 / 25;
+// Same-DC throttling (most restricted)
+constexpr auto kSameDcMinRequestIntervalMs = 150;
+constexpr auto kSameDcBurstCap = 2;
+constexpr auto kSameDcChunkSize = 1024 * 1024;
+constexpr auto kSameDcConcurrentChunks = 2;
+
+// Different-DC throttling (less restrictive)
+constexpr auto kDifferentDcMinRequestIntervalMs = 50;
+constexpr auto kDifferentDcBurstCap = 4;
+constexpr auto kDifferentDcChunkSize = 1024 * 1024;
+constexpr auto kDifferentDcConcurrentChunks = 4;
 
 // Parallel file limits — match Telegram API documented limits:
-//   ~5 concurrent downloads for small files (< 20 MB)
-//   ~2 concurrent downloads for large files (>= 20 MB)
+// ~5 concurrent downloads for small files (< 20 MB)
+// ~2 concurrent downloads for large files (>= 20 MB)
 constexpr auto kMaxParallelSmallFiles = 5;
 constexpr auto kMaxParallelLargeFiles = 2;
 
-// Throttler burst cap: kMaxParallelSmallFiles × chunksPerSmallFile
-// = 5 files × 2 chunks = 10 requests that can fire in a single tick.
-// This must stay in sync with GetConcurrentChunksForFile for small files.
-constexpr auto kThrottlerBurstCap =25;
-
-//int GetChunkSizeForFile(int64 fileSize) {
+//int GetChunkSizeForFile(int64 fileSize, bool isSameDc) {
 //	if (fileSize > 750 * kMegabyte) {
 //		return 1024 * 1024;  // 1 MB  — very large files
 //	} else if (fileSize > 375 * kMegabyte) {
@@ -60,12 +63,12 @@ constexpr auto kThrottlerBurstCap =25;
 //	return 64 * 1024;       // 128 KB — very small files
 //}
 
-int GetChunkSizeForFile(int64 fileSize) {
-	return 1024 * 1024;  // 1 MB  — very large files
+int GetChunkSizeForFile(int64 fileSize, bool isSameDc) {
+return isSameDc ? kSameDcChunkSize : kDifferentDcChunkSize;
 }
 
-int GetConcurrentChunksForFile(int64 fileSize) {
-	return 8;      // Small files: 2 concurrent chunks
+int GetConcurrentChunksForFile(int64 fileSize, bool isSameDc) {
+return isSameDc ? kSameDcConcurrentChunks : kDifferentDcConcurrentChunks;
 }
 
 
@@ -163,9 +166,13 @@ uint32 CalculateTakeoutFlags(const Settings &settings, bool isScanning) {
 
 ApiWrap::RequestThrottler::RequestThrottler(
 	Fn<void(FnMut<void()>)> runner,
-	std::shared_ptr<bool> guard)
+	std::shared_ptr<bool> guard,
+	crl::time minInterval,
+	int burstCap)
 : _runner(runner)
-, _guard(std::move(guard)) {
+, _guard(std::move(guard))
+, _minRequestIntervalMs(minInterval)
+, _burstCap(burstCap) {
 }
 
 ApiWrap::RequestThrottler::~RequestThrottler() = default;
@@ -193,13 +200,10 @@ void ApiWrap::RequestThrottler::refreshTokens() {
 		return;
 	}
 	const auto elapsed = now - _lastRefresh;
-	if (elapsed >= kMinRequestIntervalMs) {
-		const auto add = int(elapsed / kMinRequestIntervalMs);
-		// Burst cap = kMaxParallelSmallFiles × chunksPerSmallFile = 5 × 2 = 10.
-		// This lets all in-flight chunk requests for all active small files fire
-		// in a single throttler tick without exceeding the per-DC rate limit.
-		_tokens = std::min(kThrottlerBurstCap, _tokens + add);
-		_lastRefresh += add * kMinRequestIntervalMs;
+	if (elapsed >= _minRequestIntervalMs) {
+		const auto add = int(elapsed / _minRequestIntervalMs);
+		_tokens = std::min(_burstCap, _tokens + add);
+		_lastRefresh += add * _minRequestIntervalMs;
 	}
 }
 
@@ -214,7 +218,7 @@ void ApiWrap::RequestThrottler::processQueueNow() {
 	}
 	if (!_taskQueue.empty() && !_retryScheduled) {
 		_retryScheduled = true;
-		const auto nextRefresh = _lastRefresh + kMinRequestIntervalMs;
+		const auto nextRefresh = _lastRefresh + _minRequestIntervalMs;
 		const auto now = crl::now();
 		const auto delay = std::max(crl::time(1), nextRefresh - now);
 		const auto runner = _runner;
@@ -560,15 +564,17 @@ auto ApiWrap::fileRequest(const Data::FileLocation &location, int64 offset, int 
 		[=](const MTP::Error &result) { error(result); });
 }
 
-ApiWrap::ApiWrap(base::weak_qptr<MTP::Instance> weak, Fn<void(FnMut<void()>)> runner)
+ApiWrap::ApiWrap(base::weak_qptr<MTP::Instance> weak, Fn<void(FnMut<void()>)> runner, int mainDcId)
 : _mtp(weak, runner)
+, _mainDcId(mainDcId)
 , _lifetimeGuard(std::make_shared<bool>(true))
-, _throttler(runner, _lifetimeGuard)
+, _throttlerSameDc(runner, _lifetimeGuard, kSameDcMinRequestIntervalMs, kSameDcBurstCap)
+, _throttlerDifferentDc(runner, _lifetimeGuard, kDifferentDcMinRequestIntervalMs, kDifferentDcBurstCap)
 {
 }
 
 void ApiWrap::scheduleBatchDelay(crl::time delay) {
-	const auto runner = _throttler.runner();
+	const auto runner = _throttlerSameDc.runner();
 	crl::on_main([=, guard = _lifetimeGuard] {
 		base::call_delayed(delay, [=] {
 			runner([=] {
@@ -4247,8 +4253,11 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 	}
 
 	const auto randomId = process.randomId;
-	const auto requestsCount = GetConcurrentChunksForFile(process.size);
-	const auto chunkSize = GetChunkSizeForFile(process.size);
+	const auto isSameDc = (process.location.dcId == _mainDcId);
+	const auto requestsCount = GetConcurrentChunksForFile(process.size, isSameDc);
+	const auto chunkSize = GetChunkSizeForFile(process.size, isSameDc);
+
+	auto &throttler = isSameDc ? _throttlerSameDc : _throttlerDifferentDc;
 
 	// Count how many requests are already in flight or scheduled in the throttler
 	const auto currentScheduled = int(process.scheduledOffsets.size());
@@ -4281,7 +4290,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 		process.scheduledOffsets.insert(retryOffset);
 
 		// Schedule via throttler - look up process by ID inside lambda
-		_throttler.schedule([=] {
+		throttler.schedule([=] {
 			const auto it = _fileProcesses.find(randomId);
 			if (it == end(_fileProcesses) || !it->second->active) {
 				return; // Process was removed or deactivated
@@ -4348,7 +4357,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 		process.scheduledOffsets.insert(offset);
 
 		// Schedule via throttler - look up process by ID inside lambda
-		_throttler.schedule([=] {
+		throttler.schedule([=] {
 			const auto it = _fileProcesses.find(randomId);
 			if (it == end(_fileProcesses) || !it->second->active) {
 				return; // Process was removed or deactivated
@@ -4486,9 +4495,11 @@ void ApiWrap::filePartDone(
 	if (process.activeRequestOffsets.empty() && process.pendingRetryOffsets.empty() && (allPartsRequested || receivedEmpty)) {
 		finishFile(randomId, process.relativePath);
 	} else if (process.active) {
+		const auto isSameDc = (process.location.dcId == _mainDcId);
+		auto &throttler = isSameDc ? _throttlerSameDc : _throttlerDifferentDc;
 		loadFilePart(process);
 		if (*_lifetimeGuard) {
-			_throttler.tryProcessQueue();
+			throttler.tryProcessQueue();
 		}
 	}
 }

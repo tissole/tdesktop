@@ -61,7 +61,8 @@ public:
 
 	ApiWrap(
 		base::weak_qptr<MTP::Instance> weak,
-		Fn<void(FnMut<void()>)> runner);
+		Fn<void(FnMut<void()>)> runner,
+		int mainDcId = 0);
 
 	rpl::producer<MTP::Error> errors() const;
 	rpl::producer<Output::Result> ioErrors() const;
@@ -372,6 +373,7 @@ private:
 	std::optional<uint64> _takeoutId;
 	uint32 _takeoutFlags = 0;
 	int64 _takeoutSizeLimit = 0;
+	int _mainDcId = 0;
 	std::optional<UserId> _selfId;
 	MTPInputUser _user = MTP_inputUserSelf();
 	std::unique_ptr<Settings> _settings;
@@ -394,7 +396,9 @@ private:
 	public:
 		RequestThrottler(
 			Fn<void(FnMut<void()>)> runner,
-			std::shared_ptr<bool> guard);
+			std::shared_ptr<bool> guard,
+			crl::time minInterval,
+			int burstCap);
 		void schedule(FnMut<void()> task);
 		void tryProcessQueue();
 		[[nodiscard]] Fn<void(FnMut<void()>)> runner() const {
@@ -409,7 +413,9 @@ private:
 		Fn<void(FnMut<void()>)> _runner;
 		std::shared_ptr<bool> _guard;
 		std::deque<FnMut<void()>> _taskQueue;
-		int _tokens = 0; // 
+		crl::time _minRequestIntervalMs;
+	int _burstCap;
+	int _tokens = 0; 
 		crl::time _lastRefresh = 0;
 		bool _retryScheduled = false;
 	};
@@ -418,7 +424,8 @@ private:
 	bool _scheduleMoreFilesPending = false; // true while a stagger timer is in flight
 
 	std::shared_ptr<bool> _lifetimeGuard;
-	RequestThrottler _throttler;
+	RequestThrottler _throttlerSameDc;
+	RequestThrottler _throttlerDifferentDc;
 	
 	std::unique_ptr<LeftChannelsProcess> _leftChannelsProcess;
 	std::unique_ptr<DialogsProcess> _dialogsProcess;
