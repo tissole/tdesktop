@@ -129,8 +129,9 @@ void SublistsWidget::setupOtherTypes() {
 	addMediaButton(Type::MusicFile, st::infoIconMediaAudio);
 	addMediaButton(Type::VoiceFile, st::infoIconMediaVoice);
 	addMediaButton(Type::File, st::infoIconMediaFile);
-	addMediaButton(Type::GIF, st::infoIconMediaGif);
+	addMediaButton(Type::Poll, st::infoIconMediaPoll);
 	addMediaButton(Type::Link, st::infoIconMediaLink);
+	addMediaButton(Type::GIF, st::infoIconMediaGif);
 
 	content->add(object_ptr<Ui::FixedHeightWidget>(
 		content,

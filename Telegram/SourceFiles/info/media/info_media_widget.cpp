@@ -72,6 +72,8 @@ tr::phrase<> SharedMediaTitle(Type type) {
 		return tr::lng_media_type_photos;
 	case Type::Pinned:
 		return tr::lng_settings_events_pinned;
+	case Type::Poll:
+		return tr::lng_profile_polls;
 	default:
 		return tr::lng_profile_shared_media;
 	}

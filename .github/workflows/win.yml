@@ -248,7 +248,7 @@ jobs:
 
           mkdir artifact
           mkdir artifact\Release
-          
+
           if exist %OUT%\Telegram.exe move %OUT%\Telegram.exe artifact\Release\
           if exist %OUT%\Updater.exe move %OUT%\Updater.exe artifact\Release\
 

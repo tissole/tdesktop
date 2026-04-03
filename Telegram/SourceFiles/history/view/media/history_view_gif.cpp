@@ -186,7 +186,7 @@ Gif::Gif(
 		});
 	} else {
 		setDocumentLinks(_data, realParent, [=] {
-			if (!_data->createMediaView()->canBePlayed(realParent)
+			if (!_data->createMediaView()->canBePlayed()
 				|| !_data->isAnimation()
 				|| _data->isVideoMessage()
 				|| !CanPlayInline(_data)) {
@@ -447,7 +447,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	const auto st = context.st;
 	const auto sti = context.imageStyle();
 	const auto cornerDownload = downloadInCorner();
-	const auto canBePlayed = _dataMedia->canBePlayed(_realParent);
+	const auto canBePlayed = _dataMedia->canBePlayed();
 	const auto autoplay = autoplayEnabled()
 		&& canBePlayed
 		&& CanPlayInline(_data);
@@ -459,7 +459,9 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	const auto inWebPage = (_parent->media() != this);
 	const auto isRound = _data->isVideoMessage();
 
-	const auto rounding = inWebPage
+	const auto rounding = (inWebPage
+			// Dangerous change.
+			&& bubbleRounding() == Ui::BubbleRounding())
 		? std::optional<Ui::BubbleRounding>()
 		: adjustedBubbleRounding();
 
@@ -2050,7 +2052,7 @@ ClickHandlerPtr Gif::currentVideoLink() const {
 		? _openl
 		: (_data->loading() && _smallGroupPart)
 		? _cancell
-		: _dataMedia->canBePlayed(_realParent)
+		: _dataMedia->canBePlayed()
 		? _openl
 		: _data->loading()
 		? _cancell
@@ -2295,7 +2297,7 @@ void Gif::updateStatusText() const {
 		statusSize = _data->uploadingData->offset;
 	} else if (!downloadInCorner() && _data->loading()) {
 		statusSize = _data->loadOffset();
-	} else if (dataLoaded() || _dataMedia->canBePlayed(_realParent)) {
+	} else if (dataLoaded() || _dataMedia->canBePlayed()) {
 		statusSize = Ui::FileStatusSizeLoaded;
 	} else {
 		statusSize = Ui::FileStatusSizeReady;
@@ -2420,7 +2422,7 @@ void Gif::playAnimation(bool autoplay) {
 	}
 	if (_streamed) {
 		stopAnimation();
-	} else if (_dataMedia->canBePlayed(_realParent)) {
+	} else if (_dataMedia->canBePlayed()) {
 		if (!autoplayEnabled()) {
 			history()->owner().checkPlayingAnimations();
 		}

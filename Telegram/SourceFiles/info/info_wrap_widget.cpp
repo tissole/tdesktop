@@ -93,6 +93,7 @@ const style::InfoTopBar &TopBarStyle(Wrap wrap) {
 			case Type::VoiceFile: return tr::lng_media_selected_audio;
 			case Type::RoundFile: return tr::lng_media_selected_round;
 			case Type::PhotoVideo: return tr::lng_stories_row_count;
+			case Type::Poll: return tr::lng_media_selected_poll;
 			}
 			Unexpected("Type in TopBar::generateSelectedText()");
 		}()(tr::now, lt_count, count, Ui::StringWithNumbers::FromString);
@@ -838,7 +839,7 @@ void WrapWidget::showFinishedHook() {
 			showTopBarMenu(false);
 			if (_topBarMenu) {
 				const auto menu = _topBarMenu->menu();
-				for (const auto action : menu->actions()) {
+				for (const auto &action : menu->actions()) {
 					const auto controlId = "highlight-control-id";
 					if (action->property(controlId).toString() == highlightId) {
 						if (const auto item = menu->itemForAction(action)) {

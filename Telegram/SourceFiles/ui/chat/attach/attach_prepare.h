@@ -14,6 +14,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QSemaphore>
 #include <deque>
 
+class QPainter;
+
+namespace style {
+struct ComposeControls;
+} // namespace style
+
 namespace Ui {
 
 class RpWidget;
@@ -77,9 +83,11 @@ struct PreparedFile {
 	[[nodiscard]] bool isSticker() const;
 	[[nodiscard]] bool isVideoFile() const;
 	[[nodiscard]] bool isGifv() const;
+	[[nodiscard]] bool canUseHighQualityPhoto() const;
 
 	QString path;
 	QString displayName;
+	TextWithTags caption;
 	QByteArray content;
 	int64 size = 0;
 	std::unique_ptr<PreparedFileInformation> information;
@@ -89,7 +97,8 @@ struct PreparedFile {
 	QSize originalDimensions;
 	Type type = Type::File;
 	bool spoiler = false;
-	TextWithTags fileNameCaption;  // New field for individual file captions (renamed from 'caption')
+	TextWithTags fileNameCaption;
+	bool sendLargePhotos = false;
 };
 
 [[nodiscard]] bool CanBeInAlbumType(PreparedFile::Type type, AlbumType album);
@@ -117,7 +126,7 @@ struct PreparedList {
 		std::vector<int> order);
 	void mergeToEnd(PreparedList &&other, bool cutToAlbumSize = false);
 
-	[[nodiscard]] bool canAddCaption(bool sendingAlbum, bool compress) const;
+	[[nodiscard]] bool canAddCaption(bool compress) const;
 	[[nodiscard]] bool canMoveCaption(
 		bool sendingAlbum,
 		bool compress) const;
@@ -133,6 +142,7 @@ struct PreparedList {
 	[[nodiscard]] bool canHaveEditorHintLabel() const;
 	[[nodiscard]] bool hasSticker() const;
 	[[nodiscard]] bool hasSpoilerMenu(bool compress) const;
+	[[nodiscard]] bool hasSendLargePhotosOption(bool compress) const;
 
 	Error error = Error::None;
 	QString errorData;
@@ -144,36 +154,22 @@ struct PreparedList {
 struct PreparedGroup {
 	PreparedList list;
 	AlbumType type = AlbumType::None;
-
-	[[nodiscard]] bool sentWithCaption() const {
-		return (list.files.size() == 1)
-			|| (type == AlbumType::PhotoVideo);
-	}
 };
 
 [[nodiscard]] std::vector<PreparedGroup> DivideByGroups(
 	PreparedList &&list,
 	SendFilesWay way,
 	bool slowmode);
-[[nodiscard]] bool CaptionWillBeAttached(
-	const std::vector<PreparedGroup> &groups);
-[[nodiscard]] bool CaptionWillBeAttached(
-	const PreparedList &list,
-	SendFilesWay way,
-	bool slowmode);
 
 struct PreparedBundle {
 	std::vector<PreparedGroup> groups;
 	SendFilesWay way;
-	TextWithTags caption;
 	int totalCount = 0;
-	bool sendComment = false;
 	bool ctrlShiftEnter = false;
 };
 [[nodiscard]] std::shared_ptr<PreparedBundle> PrepareFilesBundle(
 	std::vector<PreparedGroup> groups,
 	SendFilesWay way,
-	TextWithTags caption,
 	bool ctrlShiftEnter);
 
 [[nodiscard]] int MaxAlbumItems();
@@ -184,5 +180,11 @@ struct PreparedBundle {
 [[nodiscard]] QPixmap BlurredPreviewFromPixmap(
 	QPixmap pixmap,
 	RectParts corners);
+
+void PaintHighQualityBadge(
+	QPainter &p,
+	const style::ComposeControls &st,
+	QRect rect,
+	RectPart origin = RectPart::BottomLeft);
 
 } // namespace Ui

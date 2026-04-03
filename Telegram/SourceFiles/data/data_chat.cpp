@@ -127,7 +127,7 @@ void ChatData::invalidateParticipants() {
 	setAdminRights(ChatAdminRights());
 	//setDefaultRestrictions(ChatRestrictions());
 	invitedByMe.clear();
-	botStatus = 0;
+	botStatus = Data::BotStatus::Unknown;
 	session().changes().peerUpdated(
 		this,
 		UpdateFlag::Members | UpdateFlag::Admins);
@@ -177,10 +177,14 @@ void ChatData::setDefaultRestrictions(ChatRestrictions rights) {
 
 void ChatData::refreshBotStatus() {
 	if (participants.empty()) {
-		botStatus = 0;
+		botStatus = Data::BotStatus::Unknown;
 	} else {
-		const auto bot = ranges::none_of(participants, &UserData::isBot);
-		botStatus = bot ? -1 : 2;
+		const auto noBots = ranges::none_of(
+			participants,
+			&UserData::isBot);
+		botStatus = noBots
+			? Data::BotStatus::NoBots
+			: Data::BotStatus::HasBots;
 	}
 }
 
@@ -347,7 +351,7 @@ void ApplyChatUpdate(
 		if (chat->count > 0) { // If the count is known.
 			++chat->count;
 		}
-		chat->botStatus = 0;
+		chat->botStatus = Data::BotStatus::Unknown;
 	} else {
 		chat->participants.emplace(user);
 		if (UserId(update.vinviter_id()) == session->userId()) {
@@ -357,7 +361,7 @@ void ApplyChatUpdate(
 		}
 		++chat->count;
 		if (user->isBot()) {
-			chat->botStatus = 2;
+			chat->botStatus = Data::BotStatus::HasBots;
 			if (!user->botInfo->inited) {
 				session->api().requestFullPeer(user);
 			}
@@ -387,7 +391,7 @@ void ApplyChatUpdate(
 		if (chat->count > 0) {
 			chat->count--;
 		}
-		chat->botStatus = 0;
+		chat->botStatus = Data::BotStatus::Unknown;
 	} else {
 		chat->participants.erase(user);
 		chat->count--;
@@ -401,7 +405,7 @@ void ApplyChatUpdate(
 				history->clearLastKeyboard();
 			}
 		}
-		if (chat->botStatus > 0 && user->isBot()) {
+		if (chat->botStatus == Data::BotStatus::HasBots && user->isBot()) {
 			chat->refreshBotStatus();
 		}
 	}

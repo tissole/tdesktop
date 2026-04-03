@@ -360,8 +360,9 @@ object_ptr<Ui::RpWidget> InnerWidget::setupSharedMedia(
 	addMediaButton(MediaType::MusicFile, st::infoIconMediaAudio);
 	addMediaButton(MediaType::VoiceFile, st::infoIconMediaVoice);
 	addMediaButton(MediaType::File, st::infoIconMediaFile);
-	addMediaButton(MediaType::GIF, st::infoIconMediaGif);
+	addMediaButton(MediaType::Poll, st::infoIconMediaPoll);
 	addMediaButton(MediaType::Link, st::infoIconMediaLink);
+	addMediaButton(MediaType::GIF, st::infoIconMediaGif);
 	if (const auto bot = peer->asBot()) {
 		addCommonGroupsButton(bot, st::infoIconMediaGroup);
 		addSimilarPeersButton(bot, st::infoIconMediaBot);
