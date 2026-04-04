@@ -266,19 +266,10 @@ void ProgressWidget::Row::updateInstanceGeometry(
 	const auto infoWidth = instance.info->width();
 	const auto labelNatural = instance.label->naturalWidth();
 	const auto labelAvailable = newWidth - infoWidth;
-	if (labelAvailable < newWidth / 3 || (infoWidth > 0 && labelNatural + infoWidth + 4 > newWidth)) {
-		// Info too wide: give label full width, move info below 
-		instance.label->resizeToWidth(newWidth);
-		instance.info->resizeToWidth(newWidth);
-		instance.label->moveToLeft(0, 0, newWidth);
-		instance.info->moveToLeft(0, instance.label->height(), newWidth);
-	} else {
-		instance.label->resizeToWidth(labelAvailable);
-		instance.info->moveToRight(0, 0, newWidth);
-		instance.label->moveToLeft(0, 0, newWidth);
-	}
-	//instance.info->moveToRight(0, 0, newWidth);
-	//instance.label->moveToLeft(0, 0, newWidth);
+	const auto labelWidth = std::max(labelAvailable, newWidth / 3);
+	instance.label->resizeToWidth(labelWidth);
+	instance.info->moveToRight(0, 0, newWidth);
+	instance.label->moveToLeft(0, 0, newWidth);
 }
 
 ProgressWidget::ProgressWidget(
