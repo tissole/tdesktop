@@ -423,8 +423,7 @@ SendFilesBox::Block::Block(
 	int till,
 	const Ui::Text::MarkedContext &captionContext,
 	Fn<bool()> gifPaused,
-	SendFilesWay way,
-	Fn<bool(const Ui::PreparedFile &, Ui::AttachActionType)> actionAllowed)
+	SendFilesWay way)
 : _items(items)
 , _from(from)
 , _till(till) {
@@ -442,10 +441,7 @@ SendFilesBox::Block::Block(
 			st,
 			my,
 			captionContext,
-			way,
-			[=](int index, Ui::AttachActionType type) {
-				return actionAllowed((*_items)[from + index], type);
-			});
+			way);
 		_preview.reset(preview);
 	} else {
 		const auto media = way.sendImagesAsPhotos()
@@ -453,10 +449,7 @@ SendFilesBox::Block::Block(
 				parent,
 				st,
 				gifPaused,
-				first,
-				[=](Ui::AttachActionType type) {
-					return actionAllowed((*_items)[from], type);
-				})
+				first)
 			: nullptr;
 		if (media) {
 			_isSingleMedia = true;
@@ -531,38 +524,6 @@ rpl::producer<int> SendFilesBox::Block::itemModifyRequest() const {
 	} else if (_isSingleMedia) {
 		const auto media = static_cast<Ui::SingleMediaPreview*>(preview);
 		return media->modifyRequests() | rpl::map_to(from);
-	} else {
-		return rpl::never<int>();
-	}
-}
-
-rpl::producer<int> SendFilesBox::Block::itemEditCoverRequest() const {
-	using namespace rpl::mappers;
-
-	const auto preview = _preview.get();
-	const auto from = _from;
-	if (_isAlbum) {
-		const auto album = static_cast<Ui::AlbumPreview*>(preview);
-		return album->thumbEditCoverRequested() | rpl::map(_1 + from);
-	} else if (_isSingleMedia) {
-		const auto media = static_cast<Ui::SingleMediaPreview*>(preview);
-		return media->editCoverRequests() | rpl::map_to(from);
-	} else {
-		return rpl::never<int>();
-	}
-}
-
-rpl::producer<int> SendFilesBox::Block::itemClearCoverRequest() const {
-	using namespace rpl::mappers;
-
-	const auto preview = _preview.get();
-	const auto from = _from;
-	if (_isAlbum) {
-		const auto album = static_cast<Ui::AlbumPreview*>(preview);
-		return album->thumbClearCoverRequested() | rpl::map(_1 + from);
-	} else if (_isSingleMedia) {
-		const auto media = static_cast<Ui::SingleMediaPreview*>(preview);
-		return media->clearCoverRequests() | rpl::map_to(from);
 	} else {
 		return rpl::never<int>();
 	}
@@ -1359,15 +1320,7 @@ void SendFilesBox::pushBlock(int from, int till) {
 		till,
 		captionContext,
 		gifPaused,
-		_sendWay.current(),
-		[=](const Ui::PreparedFile &file, Ui::AttachActionType type) {
-			return (type == Ui::AttachActionType::ToggleSpoiler)
-				? !hasPrice()
-				: (type == Ui::AttachActionType::EditCover)
-				? (file.isVideoFile()
-					&& (_toPeer->isBroadcast() || _toPeer->isSelf()))
-				: (file.videoCover != nullptr);
-		});
+		_sendWay.current());
 	auto &block = _blocks.back();
 	const auto widget = _inner->add(
 		block.takeWidget(),
@@ -1689,16 +1642,6 @@ void SendFilesBox::pushBlock(int from, int till) {
 	block.itemModifyRequest(
 	) | rpl::on_next([=](int index) {
 		openInPhotoEditor(index);
-	}, widget->lifetime());
-
-	block.itemEditCoverRequest(
-	) | rpl::on_next([=](int index) {
-		editCover(index);
-	}, widget->lifetime());
-
-	block.itemClearCoverRequest(
-	) | rpl::on_next([=](int index) {
-		clearCover(index);
 	}, widget->lifetime());
 
 	block.orderUpdated() | rpl::on_next([=]{
