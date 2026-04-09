@@ -264,7 +264,6 @@ void ProgressWidget::Row::updateInstanceGeometry(
 	// and place info on a second line below.
 	instance.info->resizeToNaturalWidth(newWidth);
 	const auto infoWidth = instance.info->width();
-	const auto labelNatural = instance.label->naturalWidth();
 	const auto labelAvailable = newWidth - infoWidth;
 	const auto labelWidth = std::max(labelAvailable, newWidth / 3);
 	instance.label->resizeToWidth(labelWidth);
