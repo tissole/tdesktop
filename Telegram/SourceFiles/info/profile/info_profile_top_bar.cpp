@@ -327,8 +327,10 @@ TopBar::TopBar(
 , _statusLabel(std::make_unique<StatusLabel>(_status.data(), _peer))
 , _showLastSeen(
 	this,
-	tr::lng_status_lastseen_when(),
-	st::infoProfileTopBarShowLastSeen)
+	object_ptr<Ui::RoundButton>(
+		this,
+		tr::lng_status_lastseen_when(),
+		st::infoProfileTopBarShowLastSeen))
 , _forumButton([&, controller = descriptor.controller] {
 	const auto topic = _key.topic();
 	if (!topic) {
@@ -345,7 +347,6 @@ TopBar::TopBar(
 			.append(' ')
 			.append(Ui::Text::IconEmoji(&st::textMoreIconEmoji, QString()));
 	}));
-	owned->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 	owned->setClickedCallback([=, peer = _peer] {
 		if (const auto forum = peer->forum()) {
 			if (peer->useSubsectionTabs()) {
@@ -515,14 +516,14 @@ void TopBar::adjustColors(const std::optional<QColor> &edgeColor) {
 		: shouldOverrideTitle
 		? std::optional<QColor>(st::groupCallMembersFg->c)
 		: std::nullopt);
-	if (!_showLastSeen->isHidden()) {
+	if (_showLastSeen->toggled()) {
 		if (shouldOverrideTitle) {
 			const auto st = mapActionStyle(edgeColor);
-			_showLastSeen->setBrushOverride(st.bgColor);
-			_showLastSeen->setTextFgOverride(st.fgColor);
+			_showLastSeen->entity()->setBrushOverride(st.bgColor);
+			_showLastSeen->entity()->setTextFgOverride(st.fgColor);
 		} else {
-			_showLastSeen->setBrushOverride(std::nullopt);
-			_showLastSeen->setTextFgOverride(std::nullopt);
+			_showLastSeen->entity()->setBrushOverride(std::nullopt);
+			_showLastSeen->entity()->setTextFgOverride(std::nullopt);
 		}
 	}
 	{
@@ -1704,7 +1705,7 @@ void TopBar::updateStatusPosition(float64 progressCurrent) {
 
 		_status->hide();
 		// _starsRating->hide();
-		_showLastSeen->hide();
+		_showLastSeen->hide(anim::type::instant);
 		return;
 	}
 
@@ -1714,7 +1715,7 @@ void TopBar::updateStatusPosition(float64 progressCurrent) {
 		progressCurrent);
 	const auto totalElementsWidth = _status->width()
 		+ (_starsRating ? _starsRating->width() : 0)
-		+ (!_showLastSeen->isHidden() ? _showLastSeen->width() : 0);
+		+ (_showLastSeen->toggled() ? _showLastSeen->width() : 0);
 	const auto statusLeft = anim::interpolate(
 		statusMostLeft(),
 		(width() - totalElementsWidth) / 2,
@@ -1729,17 +1730,15 @@ void TopBar::updateStatusPosition(float64 progressCurrent) {
 
 	_status->moveToLeft(statusLeft + statusShift, statusTop);
 
-	if (!_showLastSeen->isHidden()) {
+	if (_showLastSeen->toggled()) {
 		_showLastSeen->moveToLeft(
 			statusLeft
 				+ statusShift
 				+ _status->textMaxWidth()
 				+ st::infoProfileTopBarLastSeenSkip.x(),
 			statusTop + st::infoProfileTopBarLastSeenSkip.y());
-		if (_showLastSeenOpacity) {
-			_showLastSeenOpacity->setOpacity(progressCurrent);
-		}
-		_showLastSeen->setAttribute(
+		_showLastSeen->setOpacity(progressCurrent);
+		_showLastSeen->entity()->setAttribute(
 			Qt::WA_TransparentForMouseEvents,
 			!progressCurrent);
 	}
@@ -2141,7 +2140,7 @@ void TopBar::setupShowLastSeen(
 		|| user->isBot()
 		|| user->isServiceUser()
 		|| !user->session().premiumPossible()) {
-		_showLastSeen->hide();
+		_showLastSeen->hide(anim::type::instant);
 		return;
 	}
 
@@ -2149,7 +2148,7 @@ void TopBar::setupShowLastSeen(
 		if (user->lastseen().isHiddenByMe()) {
 			user->updateFullForced();
 		}
-		_showLastSeen->hide();
+		_showLastSeen->hide(anim::type::instant);
 		return;
 	}
 
@@ -2159,13 +2158,13 @@ void TopBar::setupShowLastSeen(
 			Data::PeerUpdate::Flag::OnlineStatus),
 		Data::AmPremiumValue(&user->session())
 	) | rpl::on_next([=](auto, bool premium) {
-		const auto wasShown = !_showLastSeen->isHidden();
+		const auto wasShown = _showLastSeen->toggled();
 		const auto hiddenByMe = user->lastseen().isHiddenByMe();
 		const auto shown = hiddenByMe
 			&& !user->lastseen().isOnline(base::unixtime::now())
 			&& !premium
 			&& user->session().premiumPossible();
-		_showLastSeen->setVisible(shown);
+		_showLastSeen->toggle(shown, anim::type::instant);
 		if (wasShown && premium && hiddenByMe) {
 			user->updateFullForced();
 		}
@@ -2181,16 +2180,11 @@ void TopBar::setupShowLastSeen(
 		}
 	}, _showLastSeen->lifetime());
 
-	_showLastSeenOpacity = Ui::CreateChild<QGraphicsOpacityEffect>(
-		_showLastSeen.get());
-	_showLastSeen->setGraphicsEffect(_showLastSeenOpacity);
-	_showLastSeenOpacity->setOpacity(0.);
+	_showLastSeen->setOpacity(0.);
 
-	using TextTransform = Ui::RoundButton::TextTransform;
-	_showLastSeen->setTextTransform(TextTransform::NoTransform);
-	_showLastSeen->setFullRadius(true);
+	_showLastSeen->entity()->setFullRadius(true);
 
-	_showLastSeen->setClickedCallback([=] {
+	_showLastSeen->entity()->setClickedCallback([=] {
 		const auto type = Ui::ShowOrPremium::LastSeen;
 		controller->show(Box(
 			Ui::ShowOrPremiumBox,

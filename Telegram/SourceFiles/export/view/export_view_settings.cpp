@@ -1378,54 +1378,57 @@ void SettingsWidget::refreshButtons(
 
 	const auto mediaTypesSelected = (readData().media.types != MediaSettings::Types(0));
 
-	const auto exportBtn = Ui::CreateChild<Ui::RoundButton>(
+	const auto export_ = Ui::CreateChild<Ui::RoundButton>(
 		container.get(),
 		tr::lng_export_start(),
 		st::defaultBoxButton);
-	exportBtn->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
-	exportBtn->show();
-	exportBtn->clicks() | rpl::to_empty | rpl::start_to_stream(_exportClicks, exportBtn->lifetime());
+	export_->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
+	export_->show();
+	export_->clicks() | rpl::to_empty | rpl::start_to_stream(_exportClicks, export_->lifetime());
 
-	const auto scanBtn = Ui::CreateChild<Ui::RoundButton>(
+	const auto scan = Ui::CreateChild<Ui::RoundButton>(
 		container.get(),
 		rpl::single(_isScanning ? tr::lng_export_scanning(tr::now) : tr::lng_export_scan(tr::now)),
 		st::defaultBoxButton);
-	scanBtn->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
-	scanBtn->show();
-	scanBtn->clicks() | rpl::to_empty | rpl::start_to_stream(_scanClicks, scanBtn->lifetime());
+	scan->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
+	scan->show();
+	scan->clicks() | rpl::to_empty | rpl::start_to_stream(_scanClicks, scan->lifetime());
 
-	const auto cancelBtn = Ui::CreateChild<Ui::RoundButton>(
+	const auto cancel = Ui::CreateChild<Ui::RoundButton>(
 		container.get(),
 		tr::lng_cancel(),
 		st::defaultBoxButton);
-	cancelBtn->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
-	cancelBtn->show();
-	cancelBtn->clicks() | rpl::to_empty | rpl::on_next([=] {
+	cancel->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
+	cancel->show();
+	cancel->clicks() | rpl::to_empty | rpl::on_next([=] {
 		_cancelClicks.fire({});
-	}, cancelBtn->lifetime());
+	}, cancel->lifetime());
 
 	// State management
 	if (_isScanning) {
-		exportBtn->setDisabled(true);
-		scanBtn->setDisabled(true);
+		export_->setDisabled(true);
+		scan->setDisabled(true);
 	} else if (_hasScanResults) {
-		exportBtn->setDisabled(!canStart);
-		scanBtn->setDisabled(true);
+		export_->setDisabled(!canStart);
+		scan->setDisabled(true);
 	} else {
-		exportBtn->setDisabled(!canStart);
-		scanBtn->setDisabled(!canStart || !mediaTypesSelected);
+		export_->setDisabled(!canStart);
+		scan->setDisabled(!canStart || !mediaTypesSelected);
 	}
 
-	container->sizeValue(
-	) | rpl::on_next([=](QSize size) {
+	rpl::combine(
+		container->sizeValue(),
+		export_->widthValue(),
+		scan->widthValue()
+	) | rpl::on_next([=](QSize size, int exportWidth, int scanWidth) {
 		const auto padding = st::defaultBox.buttonPadding;
 		const auto right = padding.right();
 		const auto top = padding.top();
 
-		exportBtn->moveToRight(right, top);
-		scanBtn->moveToRight(right + exportBtn->width() + padding.left(), top);
-		cancelBtn->moveToRight(right + exportBtn->width() + padding.left() + scanBtn->width() + padding.left(), top);
-	}, _buttonsLayout);
+		export_->moveToRight(right, top);
+		scan->moveToRight(right + exportWidth + padding.left(), top);
+		cancel->moveToRight(right + exportWidth + padding.left() + scanWidth + padding.left(), top);
+	}, cancel->lifetime());
 }
 
 void SettingsWidget::chooseFolder() {
