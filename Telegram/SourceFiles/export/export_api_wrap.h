@@ -397,27 +397,23 @@ private:
 		RequestThrottler(
 			Fn<void(FnMut<void()>)> runner,
 			std::shared_ptr<bool> guard,
-			crl::time minInterval,
-			int burstCap);
+			crl::time batchDelay);
 		void schedule(FnMut<void()> task);
-		void tryProcessQueue();
 		[[nodiscard]] Fn<void(FnMut<void()>)> runner() const {
 			return _runner;
 		}
 		~RequestThrottler();
 
 	private:
-		void processQueueNow();
-		void refreshTokens();
+		void processNext();
+		void fireNextAndSchedule();
 
 		Fn<void(FnMut<void()>)> _runner;
 		std::shared_ptr<bool> _guard;
 		std::deque<FnMut<void()>> _taskQueue;
-		crl::time _minRequestIntervalMs;
-	int _burstCap;
-	int _tokens = 0; 
-		crl::time _lastRefresh = 0;
-		bool _retryScheduled = false;
+		crl::time _batchDelayMs;
+		bool _processing = false;
+		crl::time _lastFireTime = 0;  // Track last fire time for spacing
 	};
 
 	int _filesDownloading = 0;

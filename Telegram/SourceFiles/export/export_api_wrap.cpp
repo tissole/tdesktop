@@ -32,23 +32,20 @@ namespace {
 
 constexpr auto kMegabyte = 1024 * 1024;
 
-// Same-DC throttling (most restricted)
-constexpr auto kSameDcMinRequestIntervalMs = 150;
-constexpr auto kSameDcBurstCap = 2;
-constexpr auto kSameDcChunkSize = 1024 * 1024;
-constexpr auto kSameDcConcurrentChunks = 2;
+// Simple per-DC throttling:
+// - Delay controls when chunk STARTS are spaced
+// - Multiple chunks can be IN FLIGHT simultaneously
+constexpr auto kChunkSize = 1024 * 1024;           // 1 MB per chunk
+constexpr auto kSameDcDelay = 200;                 // 200ms between chunk starts (same-DC)
+constexpr auto kDifferentDcDelay = 60;              // 0ms = fire as fast as possible (different-DC)
+constexpr auto kSameDcConcurrentChunks = 1;        // Max chunks downloading at once (same-DC)
+constexpr auto kDifferentDcConcurrentChunks = 4;   // Max chunks downloading at once (different-DC)
 
-// Different-DC throttling (less restrictive)
-constexpr auto kDifferentDcMinRequestIntervalMs = 50;
-constexpr auto kDifferentDcBurstCap = 4;
-constexpr auto kDifferentDcChunkSize = 1024 * 1024;
-constexpr auto kDifferentDcConcurrentChunks = 4;
-
-// Parallel file limits — match Telegram API documented limits:
-// ~5 concurrent downloads for small files (< 20 MB)
-// ~2 concurrent downloads for large files (>= 20 MB)
-constexpr auto kMaxParallelSmallFiles = 5;
-constexpr auto kMaxParallelLargeFiles = 2;
+// Volume-based rate limiting (DISABLED - kept for future testing)
+// Server allows ~86 MB per 15s window based on 115Mb/s for 6s
+// To re-enable: uncomment trackBytes() and calculateDelay() in throttler
+//constexpr auto kRateLimitWindowMs = 15000;        // Server's rate limit window
+//constexpr auto kTargetRateBytesPerSec = 5LL * 1024 * 1024;  // 5 MB/s (~40 Mb/s) target
 
 //int GetChunkSizeForFile(int64 fileSize, bool isSameDc) {
 //	if (fileSize > 750 * kMegabyte) {
@@ -63,13 +60,25 @@ constexpr auto kMaxParallelLargeFiles = 2;
 //	return 64 * 1024;       // 128 KB — very small files
 //}
 
-int GetChunkSizeForFile(int64 fileSize, bool isSameDc) {
-return isSameDc ? kSameDcChunkSize : kDifferentDcChunkSize;
-}
+// All other size-based functions commented out for future testing:
+//int GetChunkSizeForFile(int64 fileSize, bool isSameDc) {
+//return isSameDc ? kSameDcChunkSize : kDifferentDcChunkSize;
+//}
 
-int GetConcurrentChunksForFile(int64 fileSize, bool isSameDc) {
-return isSameDc ? kSameDcConcurrentChunks : kDifferentDcConcurrentChunks;
-}
+//int GetConcurrentChunksForFile(int64 fileSize, bool isSameDc) {
+//	if (isSameDc) {
+//		// Same-DC: size-based
+//		if (fileSize >= kSameDcLargeFileThreshold) {
+//			return kSameDcConcurrentChunksLarge;   // 2 for large files (>= 100 MB)
+//		}
+//		return kSameDcConcurrentChunksSmall;       // 1 for small files (< 100 MB)
+//	}
+//	// Different-DC: size-based
+//	if (fileSize >= kDifferentDcLargeFileThreshold) {
+//		return kDifferentDcConcurrentChunksLarge;  // 4 for large files (>= 100 MB)
+//	}
+//	return kDifferentDcConcurrentChunksSmall;      // 2 for small files (< 100 MB)
+//}
 
 
 //int GetConcurrentChunksForFile(int64 fileSize) {
@@ -167,12 +176,10 @@ uint32 CalculateTakeoutFlags(const Settings &settings, bool isScanning) {
 ApiWrap::RequestThrottler::RequestThrottler(
 	Fn<void(FnMut<void()>)> runner,
 	std::shared_ptr<bool> guard,
-	crl::time minInterval,
-	int burstCap)
+	crl::time batchDelay)
 : _runner(runner)
 , _guard(std::move(guard))
-, _minRequestIntervalMs(minInterval)
-, _burstCap(burstCap) {
+, _batchDelayMs(batchDelay) {
 }
 
 ApiWrap::RequestThrottler::~RequestThrottler() = default;
@@ -183,47 +190,32 @@ void ApiWrap::RequestThrottler::schedule(FnMut<void()> task) {
 			return;
 		}
 		_taskQueue.push_back(std::move(task));
-		// Try to process immediately if we have tokens
-		processQueueNow();
+		// Start processing if not already processing
+		if (!_processing) {
+			processNext();
+		}
 	});
 }
 
-void ApiWrap::RequestThrottler::tryProcessQueue() {
-	// Just delegate to processQueueNow - this is for external calls
-	processQueueNow();
-}
-
-void ApiWrap::RequestThrottler::refreshTokens() {
+void ApiWrap::RequestThrottler::processNext() {
+	Expects(!_taskQueue.empty());
+	
+	_processing = true;
+	
+	// Calculate actual delay needed based on last fire time
 	const auto now = crl::now();
-	if (_lastRefresh == 0) {
-		_lastRefresh = now;
-		return;
-	}
-	const auto elapsed = now - _lastRefresh;
-	if (elapsed >= _minRequestIntervalMs) {
-		const auto add = int(elapsed / _minRequestIntervalMs);
-		_tokens = std::min(_burstCap, _tokens + add);
-		_lastRefresh += add * _minRequestIntervalMs;
-	}
-}
-
-void ApiWrap::RequestThrottler::processQueueNow() {
-	refreshTokens();
-	// Process as many tasks as we have tokens for - runs synchronously
-	while (!_taskQueue.empty() && _tokens > 0) {
-		--_tokens;
-		auto task = std::move(_taskQueue.front());
-		_taskQueue.pop_front();
-		task();
-	}
-	if (!_taskQueue.empty() && !_retryScheduled) {
-		_retryScheduled = true;
-		const auto nextRefresh = _lastRefresh + _minRequestIntervalMs;
-		const auto now = crl::now();
-		const auto delay = std::max(crl::time(1), nextRefresh - now);
+	const auto elapsedSinceLastFire = now - _lastFireTime;
+	const auto remainingDelay = (_lastFireTime > 0)
+		? std::max(crl::time(0), _batchDelayMs - elapsedSinceLastFire)
+		: crl::time(0);
+	
+	// If we need to wait, schedule delayed fire
+	if (remainingDelay > 0) {
+		const auto delay = remainingDelay;
 		const auto runner = _runner;
-
-		crl::on_main([=, guard = _guard] {
+		const auto guard = _guard;
+		
+		crl::on_main([=] {
 			base::call_delayed(delay, [=] {
 				if (!*guard) {
 					return;
@@ -232,13 +224,83 @@ void ApiWrap::RequestThrottler::processQueueNow() {
 					if (!*guard) {
 						return;
 					}
-					_retryScheduled = false;
-					processQueueNow();
+					fireNextAndSchedule();
 				});
 			});
 		});
+	} else {
+		// No delay needed, fire immediately
+		fireNextAndSchedule();
 	}
 }
+
+void ApiWrap::RequestThrottler::fireNextAndSchedule() {
+	// Fire ONE chunk from queue
+	auto task = std::move(_taskQueue.front());
+	_taskQueue.pop_front();
+	
+	// Record fire time for spacing
+	_lastFireTime = crl::now();
+	
+	task();
+	
+	// If queue still has tasks, schedule next
+	if (!_taskQueue.empty()) {
+		const auto delay = _batchDelayMs;
+		const auto runner = _runner;
+		const auto guard = _guard;
+		
+		crl::on_main([=] {
+			base::call_delayed(delay, [=] {
+				if (!*guard) {
+					return;
+				}
+				runner([=] {
+					if (!*guard) {
+						return;
+					}
+					processNext();
+				});
+			});
+		});
+	} else {
+		_processing = false;
+	}
+}
+
+// Volume tracking (DISABLED - kept for future testing)
+//void ApiWrap::RequestThrottler::trackBytes(int64 bytes) {
+//	_bytesTransferred += bytes;
+//	
+//	if (_windowStart == 0) {
+//		_windowStart = crl::now();
+//	}
+//	
+//	const auto elapsed = crl::now() - _windowStart;
+//	if (elapsed >= kRateLimitWindowMs) {
+//		// Reset window
+//		_bytesTransferred = 0;
+//		_windowStart = crl::now();
+//	}
+//}
+//
+//crl::time ApiWrap::RequestThrottler::calculateDelay() const {
+//	const auto elapsed = crl::now() - _windowStart;
+//	if (elapsed == 0 || _windowStart == 0) return 0;
+//	
+//	const auto elapsedSec = elapsed / 1000.0;
+//	const auto currentRate = _bytesTransferred / elapsedSec;  // bytes/s
+//	
+//	if (currentRate > kTargetRateBytesPerSec) {
+//		// Going too fast - calculate how long to wait
+//		const auto targetBytes = kTargetRateBytesPerSec * elapsedSec;
+//		const auto excessBytes = _bytesTransferred - targetBytes;
+//		const auto waitMs = crl::time(excessBytes * 1000.0 / kTargetRateBytesPerSec);
+//		return std::max(crl::time(50), waitMs);
+//	}
+//	
+//	return 0;  // Under limit, no delay needed
+//}
 
 struct ApiWrap::StartProcess {
 	FnMut<void(StartInfo)> done;
@@ -568,8 +630,8 @@ ApiWrap::ApiWrap(base::weak_qptr<MTP::Instance> weak, Fn<void(FnMut<void()>)> ru
 : _mtp(weak, runner)
 , _mainDcId(mainDcId)
 , _lifetimeGuard(std::make_shared<bool>(true))
-, _throttlerSameDc(runner, _lifetimeGuard, kSameDcMinRequestIntervalMs, kSameDcBurstCap)
-, _throttlerDifferentDc(runner, _lifetimeGuard, kDifferentDcMinRequestIntervalMs, kDifferentDcBurstCap)
+, _throttlerSameDc(runner, _lifetimeGuard, kSameDcDelay)
+, _throttlerDifferentDc(runner, _lifetimeGuard, kDifferentDcDelay)
 {
 }
 
@@ -4129,55 +4191,28 @@ std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 void ApiWrap::scheduleMoreFiles() {
 	_scheduleMoreFilesPending = false;
 
-	// Count currently active downloads by size class.
-	int smallActive = 0;
-	int largeActive = 0;
+	// Count currently active downloads (just 1 at a time)
+	int activeCount = 0;
 	for (const auto &[id, process] : _fileProcesses) {
 		if (process->active) {
-			if (process->size < 20 * kMegabyte) {
-				++smallActive;
-			} else {
-				++largeActive;
-			}
+			++activeCount;
 		}
 	}
 
-	// Fill all available slots in one pass.
-	// The throttler already rate-limits actual MTP requests, so starting
-	// multiple files here is safe — they just queue into the throttler.
-	auto it = _fileDownloadQueue.begin();
-	while (it != _fileDownloadQueue.end()) {
-		const auto pid = *it;
+	if (activeCount >= 1) {
+		return;  // Already downloading, wait for completion
+	}
+
+	// Activate first file in queue
+	if (!_fileDownloadQueue.empty()) {
+		const auto pid = _fileDownloadQueue.front();
+		_fileDownloadQueue.pop_front();
+		
 		const auto pit = _fileProcesses.find(pid);
-		if (pit == end(_fileProcesses)) {
-			it = _fileDownloadQueue.erase(it);
-			continue;
-		}
-
-		auto &process = *pit->second;
-		const auto isSmall = process.size < 20 * kMegabyte;
-		const auto limit = isSmall ? kMaxParallelSmallFiles : kMaxParallelLargeFiles;
-		const auto active = isSmall ? smallActive : largeActive;
-
-		if (active >= limit) {
-			// This size class is full. Continue looking for the other class.
-			++it;
-			continue;
-		}
-
-		it = _fileDownloadQueue.erase(it);
-		process.active = true;
-		if (isSmall) {
-			++smallActive;
-		} else {
-			++largeActive;
-		}
-		loadFilePart(process);
-
-		// Stop early if both classes are at their limits.
-		if (smallActive >= kMaxParallelSmallFiles
-				&& largeActive >= kMaxParallelLargeFiles) {
-			break;
+		if (pit != end(_fileProcesses)) {
+			auto &process = *pit->second;
+			process.active = true;
+			loadFilePart(process);
 		}
 	}
 }
@@ -4254,22 +4289,24 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 
 	const auto randomId = process.randomId;
 	const auto isSameDc = (process.location.dcId == _mainDcId);
-	const auto requestsCount = GetConcurrentChunksForFile(process.size, isSameDc);
-	const auto chunkSize = GetChunkSizeForFile(process.size, isSameDc);
+	const auto chunkSize = kChunkSize;
+	const auto maxConcurrent = isSameDc ? kSameDcConcurrentChunks : kDifferentDcConcurrentChunks;
 
 	auto &throttler = isSameDc ? _throttlerSameDc : _throttlerDifferentDc;
 
-	// Count how many requests are already in flight or scheduled in the throttler
-	const auto currentScheduled = int(process.scheduledOffsets.size());
-	if (currentScheduled >= requestsCount) {
-		return;
+	// Check how many chunks are already scheduled/in-flight
+	const auto currentScheduled = int(process.scheduledOffsets.size()) + int(process.activeRequestOffsets.size());
+	if (currentScheduled >= maxConcurrent) {
+		return;  // At capacity, wait for some to complete
 	}
 
-	// How many more chunks can we schedule?
-	int slotsAvailable = requestsCount - currentScheduled;
+	// First, retry failed offset (if any)
+	while (!process.pendingRetryOffsets.empty()) {
+		const auto currentInFlight = int(process.scheduledOffsets.size()) + int(process.activeRequestOffsets.size());
+		if (currentInFlight >= maxConcurrent) {
+			return;  // At capacity
+		}
 
-	// First, retry failed offsets (if any)
-	while (slotsAvailable > 0 && !process.pendingRetryOffsets.empty()) {
 		const auto retryOffset = process.pendingRetryOffsets.front();
 		process.pendingRetryOffsets.pop_front();
 
@@ -4279,21 +4316,14 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 		}
 
 		auto &requests = process.requests;
-		const auto rIt = ranges::find(
-			requests,
-			retryOffset,
-			[](const FileProcess::Request &r) { return r.offset; });
-		if (rIt == end(requests)) {
-			requests.push_back({ retryOffset });
-		}
-
+		requests.push_back({ retryOffset });
 		process.scheduledOffsets.insert(retryOffset);
 
-		// Schedule via throttler - look up process by ID inside lambda
+		// Schedule via throttler
 		throttler.schedule([=] {
 			const auto it = _fileProcesses.find(randomId);
 			if (it == end(_fileProcesses) || !it->second->active) {
-				return; // Process was removed or deactivated
+				return;
 			}
 			auto &proc = *it->second;
 
@@ -4304,7 +4334,7 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 			).done([=](const MTPupload_File &result) {
 				filePartDone(randomId, retryOffset, result);
 			}).fail([=](const MTP::Error &error) {
-				// Handle errors - same as before but look up by ID
+				// Handle errors
 				if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
 					auto &p = *itp->second;
 					p.scheduledOffsets.erase(retryOffset);
@@ -4342,13 +4372,18 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 			}
 		});
 
-		--slotsAvailable;
+		// Don't return - continue to fill more slots if available
 	}
 
-	// Then fill remaining slots with fresh offsets
-	while (slotsAvailable > 0) {
+	// Schedule fresh chunks while we have capacity
+	while (true) {
+		const auto currentInFlight = int(process.scheduledOffsets.size()) + int(process.activeRequestOffsets.size());
+		if (currentInFlight >= maxConcurrent) {
+			return;  // At capacity
+		}
+
 		if (process.size > 0 && process.offset >= process.size) {
-			break;
+			return;  // All chunks requested
 		}
 
 		const auto offset = process.offset;
@@ -4356,11 +4391,11 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 		process.offset += chunkSize;
 		process.scheduledOffsets.insert(offset);
 
-		// Schedule via throttler - look up process by ID inside lambda
+		// Schedule via throttler (spaces chunk STARTS by delay)
 		throttler.schedule([=] {
 			const auto it = _fileProcesses.find(randomId);
 			if (it == end(_fileProcesses) || !it->second->active) {
-				return; // Process was removed or deactivated
+				return;
 			}
 			auto &proc = *it->second;
 
@@ -4408,15 +4443,10 @@ void ApiWrap::loadFilePart(FileProcess &process) {
 				if (const auto itp = _fileProcesses.find(randomId); itp != end(_fileProcesses)) {
 					auto &p = *itp->second;
 					p.scheduledOffsets.erase(offset);
+					p.pendingRetryOffsets.push_back(offset);
 				}
 			}
 		});
-
-		--slotsAvailable;
-
-		if (process.size == 0) {
-			break; // Unknown size, only request one chunk at a time
-		}
 	}
 }
 
@@ -4495,12 +4525,9 @@ void ApiWrap::filePartDone(
 	if (process.activeRequestOffsets.empty() && process.pendingRetryOffsets.empty() && (allPartsRequested || receivedEmpty)) {
 		finishFile(randomId, process.relativePath);
 	} else if (process.active) {
-		const auto isSameDc = (process.location.dcId == _mainDcId);
-		auto &throttler = isSameDc ? _throttlerSameDc : _throttlerDifferentDc;
+		// File still downloading - schedule more chunks if capacity available
 		loadFilePart(process);
-		if (*_lifetimeGuard) {
-			throttler.tryProcessQueue();
-		}
+		scheduleMoreFiles();
 	}
 }
 
