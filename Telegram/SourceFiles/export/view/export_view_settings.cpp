@@ -1382,7 +1382,7 @@ void SettingsWidget::refreshButtons(
 		container.get(),
 		tr::lng_export_start(),
 		st::defaultBoxButton);
-	export_->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
+	export_->setTextTransform(Ui::RoundButtonTextTransform::NoTransform);
 	export_->show();
 	export_->clicks() | rpl::to_empty | rpl::start_to_stream(_exportClicks, export_->lifetime());
 
@@ -1390,7 +1390,7 @@ void SettingsWidget::refreshButtons(
 		container.get(),
 		rpl::single(_isScanning ? tr::lng_export_scanning(tr::now) : tr::lng_export_scan(tr::now)),
 		st::defaultBoxButton);
-	scan->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
+	scan->setTextTransform(Ui::RoundButtonTextTransform::NoTransform);
 	scan->show();
 	scan->clicks() | rpl::to_empty | rpl::start_to_stream(_scanClicks, scan->lifetime());
 
@@ -1398,7 +1398,7 @@ void SettingsWidget::refreshButtons(
 		container.get(),
 		tr::lng_cancel(),
 		st::defaultBoxButton);
-	cancel->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
+	cancel->setTextTransform(Ui::RoundButtonTextTransform::NoTransform);
 	cancel->show();
 	cancel->clicks() | rpl::to_empty | rpl::on_next([=] {
 		_cancelClicks.fire({});

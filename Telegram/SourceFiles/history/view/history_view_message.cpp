@@ -5433,7 +5433,6 @@ int Message::resizeContentGetHeight(int newWidth) {
 			_reactions->resizeGetHeight(textWidth);
 		}
 
-		{
 		const auto appearing = Get<TextAppearing>();
 		if (contentWidth == maxWidth() && !appearing) {
 			if (mediaDisplayed) {
@@ -5459,27 +5458,6 @@ int Message::resizeContentGetHeight(int newWidth) {
 				if (botTop) {
 					newHeight += botTop->height;
 				}
-				const auto quoteTopSkip = [&] {
-					const auto &textWithEntities = item->originalText();
-					if (textWithEntities.entities.empty()) return 0;
-					const auto &first = textWithEntities.entities.front();
-					if (first.offset() == 0) {
-						if (first.type() == EntityType::Pre) {
-							return st::messageTextStyle.pre.header
-								+ st::messageTextStyle.pre.verticalSkip
-								+ st::messageTextStyle.pre.padding.top();
-						} else if (first.type() == EntityType::Blockquote) {
-							return st::messageTextStyle.blockquote.verticalSkip
-								+ st::messageTextStyle.blockquote.padding.top();
-						}
-					}
-					return 0;
-				}();
-				const auto rawTextHeight = textHeightFor(textWidth);
-				const auto textCorrectedHeight = (textWidth >= text().maxWidth())
-					? std::max(0, rawTextHeight - quoteTopSkip)
-					: rawTextHeight;
-				newHeight += textCorrectedHeight;
 				const auto fullTextHeight = textHeightFor(textWidth);
 				if (appearing) {
 					if (!appearing->geometryValid
@@ -5506,7 +5484,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 					newHeight += fullTextHeight;
 				}
 			}
-			
+
 			auto mediaInBubbleSkip = st::mediaInBubbleSkip;
 			auto msgPaddingBottom = st::msgPadding.bottom();
 
@@ -5571,7 +5549,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 			if (mediaDisplayed) {
 				newHeight += media->height();
 			}
-			
+
 			if (check) {
 				newHeight += check->resizeGetHeight(contentWidth) + mediaInBubbleSkip;
 			}
