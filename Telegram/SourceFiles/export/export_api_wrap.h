@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "mtproto/mtproto_concurrent_sender.h"
 #include "data/data_peer_id.h"
+#include "export/export_progress.h"
 
 namespace base {
 class Timer;
@@ -164,6 +165,9 @@ public:
 	void skipFile(uint64 randomId);
 	void cancelExportFast(bool keepCache = false);
 	void clearState(bool keepCache = false);
+	void setResumeMode(bool enabled) { _resumeMode = enabled; }
+	[[nodiscard]] bool isResumeMode() const { return _resumeMode; }
+	void updateMessageProgress(uint64 messageId);
 
 	void clearResults();
 
@@ -447,6 +451,15 @@ private:
 
 	base::flat_set<QString> _visitedLinks;
 	base::flat_set<QString> _reservedPaths; // paths reserved but not yet written to disk
+
+	// Resume support
+	std::unique_ptr<ExportProgress> _exportProgress;
+	bool _resumeMode = false;
+	void saveProgress();
+	void loadProgress(const QString &folder);
+	void onFileCompleted(const QString &filename, int64 size, uint64 messageId);
+	void onFileStarted(const QString &filename, int64 totalSize, uint64 messageId);
+	void removePartialFile(const QString &filename);
 
 };
 

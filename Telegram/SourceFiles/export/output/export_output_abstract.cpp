@@ -131,7 +131,7 @@ QString NormalizePath(const Settings &settings) {
 		}
 		return value;
 	};
-	const auto base = (settings.onlySinglePeer() && !settings.singlePeerName.isEmpty())
+	const auto base = (settings.onlySinglePeer() && settings.singlePeerId != 0)
 		? QString("ChatExport_%1_%2_%3").arg(date.toString(Qt::ISODate)).arg(settings.singlePeerId).arg(clean(settings.singlePeerName))
 		: QString(settings.onlySinglePeer()
 			? "ChatExport_%1"

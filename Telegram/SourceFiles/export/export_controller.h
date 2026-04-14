@@ -184,6 +184,10 @@ public:
 	void startExport(
 		const Settings &settings,
 		const Environment &environment);
+	void resumeExport(
+		const Settings &settings,
+		const Environment &environment);
+	void checkExistingExport(Fn<void(bool)> callback);
 	void skipFile(uint64 randomId);
 	void cancelExportFast(bool keepCache = false);
 	void clearResults();

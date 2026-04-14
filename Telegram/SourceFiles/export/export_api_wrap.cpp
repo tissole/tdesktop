@@ -18,6 +18,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/random.h"
 #include "base/call_delayed.h"
 #include "core/mime_type.h"
+#include <QtCore/QFileInfo>
+#include <QtCore/QDir>
 #include <set>
 #include <deque>
 #include <atomic>
@@ -380,6 +382,11 @@ struct ApiWrap::FileProcess {
 	, outputFile(fullPath, stats) {
 	}
 
+	FileProcess(Data::File &file, const QString &fullPath, Output::Stats *stats, int64 initialOffset)
+	: fileRef(file)
+	, outputFile(fullPath, initialOffset, stats) {
+	}
+
 	Data::File &fileRef;
 	Output::File outputFile;
 	QString relativePath;
@@ -678,6 +685,36 @@ void ApiWrap::startExport(
 	_chatProcess = nullptr;
 	_startProcess = std::make_unique<StartProcess>();
 	_startProcess->done = std::move(done);
+
+	// Load or initialize progress tracking
+	if (!_settings->path.isEmpty()) {
+		if (_resumeMode) {
+			loadProgress(_settings->path);
+		} else {
+			// New export - check for leftover .partial files from interrupted export
+			_exportProgress = std::make_unique<ExportProgress>();
+			_exportProgress->settings = *_settings; // Save initial settings
+
+			// Scan export folder for leftover .partial files
+
+			QDir dir(_settings->path);
+			const auto partialFiles = dir.entryList(QStringList() << "*.partial", QDir::Files | QDir::NoDotAndDotDot);
+			if (!partialFiles.isEmpty()) {
+				LOG(("Export: Found {1} leftover partial files from previous export").arg(partialFiles.size()));
+				for (const auto &partial : partialFiles) {
+					const QFileInfo fi(_settings->path + '/' + partial);
+					IncompleteFile incomplete;
+					incomplete.filename = partial.mid(0, partial.length() - 8); // Remove .partial extension
+					incomplete.bytesDownloaded = fi.size();
+					incomplete.totalSize = 0; // Unknown until we process the file
+					incomplete.messageId = 0;
+					_exportProgress->incompleteFiles.push_back(std::move(incomplete));
+				}
+			}
+			
+			saveProgress();
+		}
+	}
 
 	const bool fullHistoryMode = (_settings->media.types & MediaSettings::Type::FullHistory);
 	// Enable server-based counts when: single peer, no date/id range, no size limit.
@@ -1858,6 +1895,15 @@ void ApiWrap::requestMessages(
 	Expects(_chatProcess == nullptr);
 	Expects(_selfId.has_value());
 
+	// In resume mode, adjust fromId to skip already exported messages
+	if (_resumeMode && _exportProgress && _exportProgress->lastMessageId > 0) {
+		const auto resumeFromId = static_cast<int64>(_exportProgress->lastMessageId) + 1;
+		if (fromId == 0 || resumeFromId > fromId) {
+			fromId = resumeFromId;
+			LOG(("Export Resume: Adjusted fromId to %1 to skip already exported messages").arg(fromId));
+		}
+	}
+
 	_chatProcess = std::make_unique<ChatProcess>();
 	_chatProcess->context.selfPeerId = peerFromUser(*_selfId);
 	_chatProcess->info = info;
@@ -2082,6 +2128,13 @@ void ApiWrap::finishExport(FnMut<void()> done) {
 	// The export controller ensures this is called only after all message slices
 	// are processed. File downloads complete before finishMessages() fires done(),
 	// so there is no need to defer here.
+	
+	// Clean up progress file on successful completion
+	if (_exportProgress && _settings) {
+		ExportProgress::remove(ExportProgress::progressFilePath(_settings->path));
+		LOG(("Export Progress: Removed progress file on completion"));
+	}
+	
 	const auto takeoutId = base::take(_takeoutId);
 	const auto guard = gsl::finally([&] {
 		clearState();
@@ -2513,14 +2566,12 @@ void ApiWrap::requestChatMessages(
 	const auto minId = (_chatProcess->fromId > 0) ? std::max(int64(0), _chatProcess->fromId - 1) : int64(0);
 	const auto maxId = (_chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
 	const auto filter = getFilter();
-	// Date ranges are resolved to message IDs by resolveDates() before we get here,
-	// so fromId/tillId already encode the date boundary. We must NOT pass
-	// singlePeerFrom/Till as min_date/max_date to the search request: doing so causes
-	// the server to anchor the result window to those dates and prevents proper
-	// pagination for media filters (e.g. links), making the scan stop after the first
-	// matching message. Use min_id/max_id only (same as reference implementation).
-	const auto useSearch = _chatProcess->info.onlyMyMessages
-		|| (filter.type() != mtpc_inputMessagesFilterEmpty);
+	// Use search during scanning ONLY if we have a specific media filter active.
+	// This reduces the number of messages transferred when only one type is selected.
+	// We use the getFilter() helper which returns Empty for complex/multi-type cases.
+	const bool mediaFilterActive = (filter.type() != mtpc_inputMessagesFilterEmpty);
+	const auto useSearch = (_isScanning && mediaFilterActive) || (!_isScanning && (_chatProcess->info.onlyMyMessages
+		|| mediaFilterActive));
 
 	// Check if chat has forwarding restriction (noforwards flag)
 	// If set, use normal requests instead of takeout (takeout silently fails for restricted chats)
@@ -4117,11 +4168,55 @@ bool ApiWrap::writePreloadedFile(
 
 	// Inline content (small files sent as raw bytes, not downloaded).
 	if (!file.content.isEmpty()) {
-		auto process = prepareFileProcess(file, origin, LocationKey());
-		if (const auto result = process->outputFile.writeBlock(file.content)) {
-			file.relativePath = process->relativePath;
-		} else {
-			ioError(result);
+		const auto &folder = _settings->path;
+		const auto &suggested = file.suggestedPath;
+		const auto position = suggested.indexOf(QLatin1Char('.'));
+		const auto base = (position >= 0) ? suggested.mid(0, position) : suggested;
+		const auto ext = (position >= 0) ? suggested.mid(position) : QString();
+		
+		auto relativePath = Output::File::PrepareRelativePath(folder, suggested);
+		if (_reservedPaths.contains(relativePath)) {
+			int attempt = 0;
+			do {
+				++attempt;
+				relativePath = base + QString(" (%1)").arg(attempt) + ext;
+			} while (QFile::exists(folder + relativePath)
+				|| _reservedPaths.contains(relativePath));
+		}
+		_reservedPaths.emplace(relativePath);
+
+		// Use .partial extension during write
+		const auto partialPath = folder + relativePath + u".partial"_q;
+		
+		// Write to partial file (always from scratch for inline content)
+		{
+			Output::File outputFile(partialPath, _stats);
+			if (const auto result = outputFile.writeBlock(file.content)) {
+				file.relativePath = relativePath;
+				
+				// Close file before rename
+				outputFile.close();
+				
+				// Rename .partial file to final name
+				const auto finalPath = folder + relativePath;
+				if (QFile::exists(partialPath) && !QFile::exists(finalPath)) {
+					if (QFile::rename(partialPath, finalPath)) {
+						LOG(("Export: Renamed partial '{1}' to final '{2}'").arg(partialPath, finalPath));
+					} else {
+						QFile::copy(partialPath, finalPath);
+						QFile::remove(partialPath);
+					}
+				} else if (QFile::exists(partialPath) && QFile::exists(finalPath)) {
+					QFile::remove(partialPath);
+				}
+				
+				// Track progress
+				if (_exportProgress) {
+					onFileCompleted(relativePath, outputFile.size(), 0);
+				}
+			} else {
+				ioError(result);
+			}
 		}
 		return true;
 	}
@@ -4173,11 +4268,30 @@ std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 	}
 	_reservedPaths.emplace(relativePath);
 
-	const auto fullPath = _settings->path + relativePath;
+	// ALWAYS use .partial extension for downloads (for resume support)
+	auto finalPath = folder + relativePath + u".partial"_q;
+
+	// Check for existing .partial file and determine initial offset (for resume)
+	int64 initialOffset = 0;
+	{
+		QFileInfo partialInfo(finalPath);
+		if (partialInfo.exists() && partialInfo.size() > 0 && partialInfo.size() < file.size) {
+			// Valid partial file found - resume from this offset
+			initialOffset = partialInfo.size();
+			LOG(("Export Resume: Found partial file '{1}' ({2} of {3} bytes)")
+				.arg(relativePath, QString::number(initialOffset), QString::number(file.size)));
+		} else if (partialInfo.exists() && partialInfo.size() >= file.size) {
+			// File appears complete - use it and skip download
+			LOG(("Export Resume: File '{1}' already complete, skipping").arg(relativePath));
+			initialOffset = file.size;
+		}
+	}
+
 	auto result = std::make_unique<FileProcess>(
 		file,
-		fullPath,
-		_stats);
+		finalPath,
+		_stats,
+		initialOffset);
 
 	result->relativePath = relativePath;
 	result->location = file.location;
@@ -4185,6 +4299,8 @@ std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 	result->origin = origin;
 	result->randomId = base::RandomValue<uint64>();
 	result->dedupKey = dedupKey;
+	result->offset = initialOffset;
+
 	return result;
 }
 
@@ -4223,6 +4339,13 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 	if (it == end(_fileProcesses)) {
 		return;
 	}
+
+	// Track progress: file completed
+	if (!relativePath.isEmpty() && _exportProgress) {
+		const auto &process = it->second;
+		const auto messageId = process->origin.messageId;
+		onFileCompleted(process->relativePath, process->outputFile.size(), messageId);
+	}
     
 
 	// --- CORRECT FIX: Send 100% progress BEFORE erasing from the map ---
@@ -4246,8 +4369,43 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 		--_filesDownloading;
 	}
 
-	process->fileRef.relativePath = relativePath;
-	if (relativePath.isEmpty()) {
+	// ALWAYS rename .partial file to final name on completion
+	QString actualRelativePath = relativePath;
+	if (!relativePath.isEmpty()) {
+		// CRITICAL: Close the file handle before renaming.
+		// On Windows, an open file handle will prevent rename.
+		process->outputFile.close();
+		
+		const auto partialPath = process->outputFile.path();
+		const auto finalPath = _settings->path + relativePath;
+		LOG(("Export: Attempting to rename partial '%1' to final '%2'").arg(partialPath, finalPath));
+		
+		if (QFile::exists(partialPath)) {
+			if (QFile::exists(finalPath)) {
+				// Final file already exists, clean up partial
+				QFile::remove(partialPath);
+				LOG(("Export: Final file exists, removed partial '%1'").arg(partialPath));
+			} else {
+				// Try to rename
+				if (QFile::rename(partialPath, finalPath)) {
+					LOG(("Export: Successfully renamed partial to final '%1'").arg(finalPath));
+				} else {
+					// Rename failed - try copy + delete as fallback
+					if (QFile::copy(partialPath, finalPath)) {
+						QFile::remove(partialPath);
+						LOG(("Export: Copied partial to final and removed partial '%1'").arg(finalPath));
+					} else {
+						LOG(("Export: FAILED to rename or copy partial '%1' to final '%2'").arg(partialPath, finalPath));
+					}
+				}
+			}
+		} else {
+			LOG(("Export: Partial file does not exist '%1'").arg(partialPath));
+		}
+	}
+
+	process->fileRef.relativePath = actualRelativePath;
+	if (actualRelativePath.isEmpty()) {
 		process->fileRef.skipReason = Data::File::SkipReason::Unavailable;
 	}
 
@@ -4839,6 +4997,106 @@ void ApiWrap::clearState(bool keepCache) {
 	_scheduleMoreFilesPending = false;
 	_unresolvedCustomEmoji.clear();
 	_resolvedCustomEmoji.clear();
+}
+
+// =================== Resume Support ===================
+
+void ApiWrap::loadProgress(const QString &folder) {
+	const auto path = ExportProgress::progressFilePath(folder);
+	_exportProgress = ExportProgress::load(path);
+	if (_exportProgress) {
+		LOG(("Export Progress: Loaded from {1} (msg {2}, file '{3}')")
+			.arg(path, QString::number(_exportProgress->lastMessageId), _exportProgress->lastFilename));
+	} else {
+		LOG(("Export Progress: No progress file found at {1}").arg(path));
+	}
+}
+
+void ApiWrap::saveProgress() {
+	if (!_exportProgress || !_settings || _isScanning) {
+		return;
+	}
+	_exportProgress->settings = *_settings; // Sync current settings
+	const auto path = ExportProgress::progressFilePath(_settings->path);
+	
+	// Ensure the export directory exists before saving
+	QDir dir(_settings->path);
+	if (!dir.exists()) {
+		if (!dir.mkpath(dir.absolutePath())) {
+			LOG(("Export Progress: Failed to create directory {1}").arg(_settings->path));
+			return;
+		}
+	}
+	
+	if (!_exportProgress->save(path)) {
+		LOG(("Export Progress: Failed to save progress to {1}").arg(path));
+	} else {
+		LOG(("Export Progress: Saved to {1}").arg(path));
+	}
+}
+
+void ApiWrap::updateMessageProgress(uint64 messageId) {
+	if (!_exportProgress || messageId == 0) {
+		return;
+	}
+	if (messageId > _exportProgress->lastMessageId) {
+		_exportProgress->lastMessageId = messageId;
+		saveProgress();
+	}
+}
+
+void ApiWrap::onFileCompleted(const QString &filename, int64 size, uint64 messageId) {
+	if (!_exportProgress) {
+		return;
+	}
+	
+	_exportProgress->lastFilename = filename;
+	_exportProgress->lastFileSize = size;
+	if (messageId > 0 && messageId > _exportProgress->lastMessageId) {
+		_exportProgress->lastMessageId = messageId;
+	}
+	
+	// Remove from incomplete files list if present
+	auto &incomplete = _exportProgress->incompleteFiles;
+	incomplete.erase(
+		std::remove_if(incomplete.begin(), incomplete.end(),
+			[&](const IncompleteFile &f) { return f.filename == filename; }),
+		incomplete.end()
+	);
+	
+	saveProgress();
+}
+
+void ApiWrap::onFileStarted(const QString &filename, int64 totalSize, uint64 messageId) {
+	if (!_exportProgress) {
+		return;
+	}
+	
+	// Add to incomplete files list
+	auto &incomplete = _exportProgress->incompleteFiles;
+	// Remove old entry if exists
+	incomplete.erase(
+		std::remove_if(incomplete.begin(), incomplete.end(),
+			[&](const IncompleteFile &f) { return f.filename == filename; }),
+		incomplete.end()
+	);
+	
+	IncompleteFile entry;
+	entry.filename = filename;
+	entry.bytesDownloaded = 0;
+	entry.totalSize = totalSize;
+	entry.messageId = messageId;
+	incomplete.push_back(std::move(entry));
+	
+	saveProgress();
+}
+
+void ApiWrap::removePartialFile(const QString &filename) {
+	if (!_settings) {
+		return;
+	}
+	const auto partialPath = _settings->path + '/' + filename + u".partial"_q;
+	QFile::remove(partialPath);
 }
 
 ApiWrap::~ApiWrap() {

@@ -12,10 +12,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "export/export_api_wrap.h"
 #include "export/export_settings.h"
-#include "export/data/export_data_types.h"
+#include "export/export_progress.h"
 #include "export/output/export_output_abstract.h"
+#include "export/data/export_data_types.h"
 #include "export/output/export_output_result.h"
 #include "export/output/export_output_stats.h"
+#include <QtCore/QFile>
+#include <QtCore/QDir>
 #include "mtproto/mtp_instance.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/labels.h"
@@ -163,6 +166,10 @@ public:
 	void startExport(
 		const Settings &settings,
 		const Environment &environment);
+	void resumeExport(
+		const Settings &settings,
+		const Environment &environment);
+	void checkExistingExport(Fn<void(bool)> callback) const;
 	void skipFile(uint64 randomId);
 	void cancelExportFast(bool keepCache = false);
 	void clearResults();
@@ -514,6 +521,210 @@ void ControllerObject::startExport(
 	_steps.clear();
 	fillExportSteps();
 	exportNext();
+}
+
+void ControllerObject::resumeExport(
+		const Settings &settings,
+		const Environment &environment) {
+	// Reset any terminal state
+	if (stopped()) {
+		_state = State();
+	}
+	_api.clearResults();
+	_stepIndex = -1;
+	_dialogIndex = -1;
+
+	_messagesInRangeCountFixed = true;
+	_settings = NormalizeSettings(settings);
+	_environment = environment;
+	_settings.singleTopicRootId = _topicRootId;
+	_settings.singleTopicPeerId = _topicPeerId;
+
+	_stats.clear();
+	using MediaType = MediaSettings::Type;
+	const bool fullHistoryMode = (_settings.media.types & MediaType::FullHistory);
+	int totalMediaFilesCount = 0;
+
+	for (const auto &pair : _scanStats.byType()) {
+		const auto type = pair.first;
+		const auto &item = pair.second;
+		const bool isDownloadable = (type != MediaType::Text && type != MediaType::Link);
+		const bool selected = fullHistoryMode
+			? isDownloadable
+			: (bool)(_settings.media.types & type);
+		if (selected && isDownloadable) {
+			totalMediaFilesCount += item.totalCount;
+		}
+	}
+
+	if (totalMediaFilesCount > 0 || _scanStats.totalCount() > 0) {
+		_stats.setExpectedFilesCount(totalMediaFilesCount);
+		_scanStatsFound = true;
+	} else {
+		_messagesCount = 0;
+		_stats.setExpectedFilesCount(0);
+		_scanStatsFound = false;
+	}
+
+	_isScanning = false;
+	_messagesWritten = 0;
+	_messagesTextCount = 0;
+	_messagesMediaCount = 0;
+	_messagesTotalCount = 0;
+	_messagesTextTotal = 0;
+	_userpicsWritten = 0;
+	_userpicsCount = 0;
+	_storiesWritten = 0;
+	_storiesCount = 0;
+	_contentFilesCount = 0;
+
+	// For single peer export, find the existing folder instead of creating a new one
+	if (_settings.onlySinglePeer() && _settings.singlePeerId != 0) {
+		const auto downloadPath = _settings.path;
+		const auto targetPeerId = _settings.singlePeerId;
+		const auto idStr = QString::number(targetPeerId);
+		
+		// Search for existing ChatExport folder with this peer ID
+		QString existingFolderPath;
+		const QDir parentDir(downloadPath);
+		const auto entries = parentDir.entryList(QStringList() << "ChatExport_*", QDir::Dirs | QDir::NoDotAndDotDot);
+		for (const auto &entry : entries) {
+			if (entry.contains(idStr)) {
+				existingFolderPath = downloadPath + '/' + entry;
+				break;
+			}
+		}
+		
+		if (!existingFolderPath.isEmpty()) {
+			_settings.path = existingFolderPath + '/';
+			LOG(("Export Resume: Resuming in existing folder '%1'").arg(existingFolderPath));
+		} else {
+			// No existing folder found, create a new one
+			_settings.path = Output::NormalizePath(_settings);
+			LOG(("Export Resume: No existing folder found, creating new one"));
+		}
+	} else {
+		_settings.path = Output::NormalizePath(_settings);
+	}
+
+	// Enable resume mode in ApiWrap
+	_api.setResumeMode(true);
+
+	_writer = Output::CreateWriter(_settings.format);
+	_steps.clear();
+	fillExportSteps();
+	exportNext();
+}
+
+void ControllerObject::checkExistingExport(Fn<void(bool)> callback) const {
+	if (!_settings.onlySinglePeer()) {
+		// Also check the state for single peer info
+		const auto *password = std::get_if<PasswordCheckState>(&_state);
+		if (!password || password->singlePeer.type() == mtpc_inputPeerEmpty) {
+			callback(false);
+			return;
+		}
+	}
+
+	// Get the peer ID from _settings or fallback to _state
+	int64 targetPeerId = _settings.singlePeerId;
+	QString targetPeerName = _settings.singlePeerName;
+	MTPInputPeer sourcePeer = _settings.singlePeer;
+	
+	if (targetPeerId == 0 && sourcePeer.type() == mtpc_inputPeerEmpty) {
+		// Try to get from _state
+		const auto *password = std::get_if<PasswordCheckState>(&_state);
+		if (password) {
+			targetPeerId = password->singlePeerId;
+			targetPeerName = password->singlePeerName;
+			sourcePeer = password->singlePeer;
+		}
+	}
+
+	// If still no peer ID, try to extract from singlePeer
+	if (targetPeerId == 0 && sourcePeer.type() != mtpc_inputPeerEmpty) {
+		targetPeerId = sourcePeer.match([](const MTPDinputPeerUser &data) {
+			return static_cast<int64>(data.vuser_id().v);
+		}, [](const MTPDinputPeerUserFromMessage &data) {
+			return static_cast<int64>(data.vuser_id().v);
+		}, [](const MTPDinputPeerChat &data) {
+			return static_cast<int64>(data.vchat_id().v);
+		}, [](const MTPDinputPeerChannel &data) {
+			// Channel IDs are stored as -(10^12 + channel_id)
+			return -(1000000000000LL + static_cast<int64>(data.vchannel_id().v));
+		}, [](const MTPDinputPeerChannelFromMessage &data) {
+			return -(1000000000000LL + static_cast<int64>(data.vchannel_id().v));
+		}, [&](const MTPDinputPeerSelf &data) {
+			return int64(-1);
+		}, [](const MTPDinputPeerEmpty &data) {
+			return int64(0);
+		});
+	}
+
+	if (targetPeerId == 0) {
+		callback(false);
+		return;
+	}
+
+	// Build a temporary settings to get the base path
+	auto tempSettings = Settings();
+	tempSettings.singlePeer = sourcePeer;
+	tempSettings.singlePeerId = targetPeerId;
+	tempSettings.singlePeerName = targetPeerName;
+	
+	const auto basePath = Output::NormalizePath(tempSettings);
+	if (basePath.isEmpty()) {
+		callback(false);
+		return;
+	}
+
+	// Find parent directory (strip the subfolder name)
+	const auto parentPath = [&] {
+		const auto idx = basePath.lastIndexOf('/');
+		return idx > 0 ? basePath.left(idx) : basePath;
+	}();
+
+	// Search for any ChatExport folder containing this peer ID
+	{
+		const QDir parentDir(parentPath);
+		const auto entries = parentDir.entryList(QStringList() << "ChatExport_*", QDir::Dirs | QDir::NoDotAndDotDot);
+		const auto idStr = QString::number(targetPeerId);
+		for (const auto &entry : entries) {
+			// Match ID in format: ChatExport_DATE_PEERID_Name
+			if (entry.contains(idStr)) {
+				const auto folderPath = parentPath + '/' + entry;
+				
+				// Check for progress.json
+				const auto progressPath = ExportProgress::progressFilePath(folderPath);
+				if (QFile::exists(progressPath)) {
+					callback(true);
+					return;
+				}
+				
+				// Also check for leftover .partial files from interrupted export
+				const QDir folderDir(folderPath);
+				const auto partialFiles = folderDir.entryList(QStringList() << "*.partial", QDir::Files | QDir::NoDotAndDotDot);
+				if (!partialFiles.isEmpty()) {
+					callback(true);
+					return;
+				}
+			}
+		}
+	}
+
+	// Fallback: check today's generated path
+	const auto progressPath = ExportProgress::progressFilePath(basePath);
+	if (QFile::exists(progressPath)) {
+		callback(true);
+		return;
+	}
+	
+	// Also check for partial files in today's path
+	{
+		const QDir dir(basePath);
+		const auto partialFiles = dir.entryList(QStringList() << "*.partial", QDir::Files | QDir::NoDotAndDotDot);
+		callback(!partialFiles.isEmpty());
+	}
 }
 
 void ControllerObject::skipFile(uint64 randomId) {
@@ -960,6 +1171,13 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 			return false;
 		}
 		_messagesWritten += result.list.size();
+		
+		// Update progress with last message ID for resume
+		if (!result.list.empty()) {
+			const auto lastMsgId = static_cast<uint64>(result.list.back().id);
+			_api.updateMessageProgress(lastMsgId);
+		}
+		
 		return true;
 	}, [=] {
 		if (ioCatchError(_writer->writeDialogEnd())) {
@@ -1324,6 +1542,22 @@ void Controller::startExport(
 
 	_wrapped.with([=](Implementation &unwrapped) {
 		unwrapped.startExport(settings, environment);
+	});
+}
+
+void Controller::resumeExport(
+		const Settings &settings,
+		const Environment &environment) {
+	LOG(("Export Info: Resuming export from '%1'.").arg(settings.path));
+
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.resumeExport(settings, environment);
+	});
+}
+
+void Controller::checkExistingExport(Fn<void(bool)> callback) {
+	_wrapped.with([callback = std::move(callback)](const Implementation &unwrapped) {
+		unwrapped.checkExistingExport(std::move(callback));
 	});
 }
 

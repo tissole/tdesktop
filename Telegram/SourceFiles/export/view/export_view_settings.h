@@ -19,6 +19,7 @@ class Checkbox;
 class ScrollArea;
 class BoxContent;
 class FlatLabel;
+class RoundButton;
 template <typename Widget> class SlideWrap;
 } // namespace Ui
 
@@ -43,6 +44,7 @@ public:
 	rpl::producer<Settings> changes() const;
 	rpl::producer<> scanClicks() const;
 	rpl::producer<> exportClicks() const;
+	rpl::producer<> resumeClicks() const;
 	rpl::producer<> cancelClicks() const;
 	rpl::producer<> scanInvalidated() const;
 
@@ -50,7 +52,10 @@ public:
 	void clearScanResults();
 	void setScanProgress(int itemIndex, int itemCount);
 	void setScanning(bool scanning);
+	void setHasExistingExport(bool has);
 	void resetToDefault();
+	void restoreSettings(const Settings &data);
+	const Settings &readData() const;
 
 	[[nodiscard]] bool isScanning() const {
 		return _isScanning;
@@ -121,7 +126,6 @@ private:
 		rpl::producer<QString> resetLabel,
 		Fn<void(TimeId)> done);
 
-	const Settings &readData() const;
 	template <typename Callback>
 	void changeData(Callback &&callback);
 
@@ -135,16 +139,25 @@ private:
 	rpl::event_stream<Settings> _changes;
 	rpl::event_stream<> _scanClicks;
 	rpl::event_stream<> _exportClicks;
+	rpl::event_stream<> _resumeClicks;
 	rpl::event_stream<> _cancelClicks;
 	rpl::event_stream<> _scanInvalidated;
 
 	Ui::RpWidget *_buttonsContainer = nullptr;
 	Ui::VerticalLayout *_container = nullptr;
 	rpl::lifetime _buttonsLayout; // cancelled & rebuilt each refreshButtons call
+	Ui::RpWidget *_resumeButton = nullptr;
 	Ui::SlideWrap<Ui::FlatLabel> *_scanResultsLabel = nullptr;
 	bool _isScanning = false;
 	bool _hasScanResults = false;
+	bool _hasExistingExport = false;
 	std::map<MediaSettings::Type, Output::StatItem> _scanResults;
+
+	// Stored button references for layout updates after visibility changes
+	Ui::RoundButton *_exportButtonForLayout = nullptr;
+	Ui::RoundButton *_scanButtonForLayout = nullptr;
+	Ui::RoundButton *_cancelButtonForLayout = nullptr;
+	void updateButtonsLayout();
 
 };
 

@@ -17,6 +17,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/continuous_sliders.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/wrap/vertical_layout.h"
+#include <QtCore/QMetaObject>
+#include <QtCore/QTimer>
 #include "ui/wrap/wrap.h"
 #include "ui/wrap/padding_wrap.h"
 #include "ui/wrap/slide_wrap.h"
@@ -1359,6 +1361,59 @@ void SettingsWidget::addSizeSlider(
 	}, label->lifetime());
 }
 
+void SettingsWidget::updateButtonsLayout() {
+	if (!_buttonsContainer || !_exportButtonForLayout || !_scanButtonForLayout
+			|| !_cancelButtonForLayout || !_resumeButton) {
+		return;
+	}
+	// Ensure the buttons container has the correct width before computing layout.
+	// This is critical because moveToRight() uses the container's actual width.
+	if (_buttonsContainer->parentWidget()) {
+		int parentWidth = _buttonsContainer->parentWidget()->width();
+		if (parentWidth > 0 && _buttonsContainer->width() != parentWidth) {
+			_buttonsContainer->resizeToWidth(parentWidth);
+		}
+	}
+	// Use container's width for safety check (it should now be correct)
+	int containerWidth = _buttonsContainer->width();
+	if (containerWidth <= 0) {
+		// Container not sized yet - retry after a delay
+		QTimer::singleShot(100, this, [=]() {
+			updateButtonsLayout();
+		});
+		return;
+	}
+	// Force Qt to update geometry of all buttons before we compute positions
+	// This ensures widths are current (important after show/hide calls)
+	_resumeButton->adjustSize();
+	_exportButtonForLayout->adjustSize();
+	_scanButtonForLayout->adjustSize();
+	_cancelButtonForLayout->adjustSize();
+	_buttonsContainer->updateGeometry();
+
+	const auto padding = st::defaultBox.buttonPadding;
+	const auto right = padding.right();
+	const auto top = padding.top();
+
+	// Export is always rightmost
+	_exportButtonForLayout->moveToRight(right, top);
+	int nextRight = right + _exportButtonForLayout->width() + padding.left();
+
+	// Resume is between Export and Scan (only if NOT hidden)
+	// We check isHidden() because isVisible() returns false if parent is not visible yet
+	if (!_resumeButton->isHidden()) {
+		_resumeButton->moveToRight(nextRight, top);
+		nextRight += _resumeButton->width() + padding.left();
+	}
+
+	// Scan is next
+	_scanButtonForLayout->moveToRight(nextRight, top);
+
+	// Cancel is leftmost
+	_cancelButtonForLayout->moveToRight(
+		nextRight + _scanButtonForLayout->width() + padding.left(), top);
+}
+
 void SettingsWidget::refreshButtons(
 		not_null<Ui::RpWidget*> container,
 		bool canStart) {
@@ -1371,7 +1426,9 @@ void SettingsWidget::refreshButtons(
 
 	for (const auto child : container->children()) {
 		if (child->isWidgetType()) {
-			static_cast<QWidget*>(child)->setParent(nullptr);
+			auto widget = static_cast<QWidget*>(child);
+			widget->hide(); // Hide before reparenting to prevent floating widgets
+			widget->setParent(nullptr);
 			child->deleteLater();
 		}
 	}
@@ -1385,6 +1442,23 @@ void SettingsWidget::refreshButtons(
 	export_->setTextTransform(Ui::RoundButtonTextTransform::NoTransform);
 	export_->show();
 	export_->clicks() | rpl::to_empty | rpl::start_to_stream(_exportClicks, export_->lifetime());
+	_exportButtonForLayout = export_;
+
+	// Resume button (always created, shown/hidden based on _hasExistingExport)
+	{
+		const auto resume = Ui::CreateChild<Ui::RoundButton>(
+			container.get(),
+			rpl::single(QString("Resume")),
+			st::defaultBoxButton);
+		resume->setTextTransform(Ui::RoundButtonTextTransform::NoTransform);
+		resume->clicks() | rpl::to_empty | rpl::start_to_stream(_resumeClicks, resume->lifetime());
+		if (_hasExistingExport) {
+			resume->show();
+		} else {
+			resume->hide();
+		}
+		_resumeButton = resume;
+	}
 
 	const auto scan = Ui::CreateChild<Ui::RoundButton>(
 		container.get(),
@@ -1393,6 +1467,7 @@ void SettingsWidget::refreshButtons(
 	scan->setTextTransform(Ui::RoundButtonTextTransform::NoTransform);
 	scan->show();
 	scan->clicks() | rpl::to_empty | rpl::start_to_stream(_scanClicks, scan->lifetime());
+	_scanButtonForLayout = scan;
 
 	const auto cancel = Ui::CreateChild<Ui::RoundButton>(
 		container.get(),
@@ -1403,32 +1478,38 @@ void SettingsWidget::refreshButtons(
 	cancel->clicks() | rpl::to_empty | rpl::on_next([=] {
 		_cancelClicks.fire({});
 	}, cancel->lifetime());
+	_cancelButtonForLayout = cancel;
 
 	// State management
 	if (_isScanning) {
 		export_->setDisabled(true);
+		_resumeButton->setDisabled(true);
 		scan->setDisabled(true);
 	} else if (_hasScanResults) {
 		export_->setDisabled(!canStart);
+		_resumeButton->setDisabled(!canStart);
 		scan->setDisabled(true);
 	} else {
 		export_->setDisabled(!canStart);
+		_resumeButton->setDisabled(!canStart);
 		scan->setDisabled(!canStart || !mediaTypesSelected);
 	}
+
+	// Layout is handled by:
+	// 1. rpl::combine below (fires on container/button size changes)
+	// 2. setHasExistingExport() QTimer::singleShot(0) callback
+	// The resume button's shownValue() is handled via the rpl::combine
+	// which includes _resumeButton->widthValue().
 
 	rpl::combine(
 		container->sizeValue(),
 		export_->widthValue(),
-		scan->widthValue()
-	) | rpl::on_next([=](QSize size, int exportWidth, int scanWidth) {
-		const auto padding = st::defaultBox.buttonPadding;
-		const auto right = padding.right();
-		const auto top = padding.top();
-
-		export_->moveToRight(right, top);
-		scan->moveToRight(right + exportWidth + padding.left(), top);
-		cancel->moveToRight(right + exportWidth + padding.left() + scanWidth + padding.left(), top);
-	}, cancel->lifetime());
+		scan->widthValue(),
+		_resumeButton->widthValue(),
+		_resumeButton->shownValue()
+	) | rpl::on_next([=](QSize, int, int, int, bool) {
+		updateButtonsLayout();
+	}, _buttonsLayout);
 }
 
 void SettingsWidget::chooseFolder() {
@@ -1461,6 +1542,10 @@ rpl::producer<> SettingsWidget::exportClicks() const {
 	return _exportClicks.events();
 }
 
+rpl::producer<> SettingsWidget::resumeClicks() const {
+	return _resumeClicks.events();
+}
+
 rpl::producer<> SettingsWidget::cancelClicks() const {
 	return _cancelClicks.events();
 }
@@ -1485,6 +1570,30 @@ void SettingsWidget::setScanning(bool scanning) {
 			_scanResults.clear();
 		}
 		_changes.fire_copy(readData());
+	}
+}
+
+void SettingsWidget::setHasExistingExport(bool has) {
+	if (_hasExistingExport == has) {
+		return;
+	}
+	_hasExistingExport = has;
+	if (_resumeButton) {
+		if (has) {
+			_resumeButton->show();
+		} else {
+			_resumeButton->hide();
+		}
+		// Defer layout update to ensure button visibility change is processed
+		// and container has correct width. Call updateButtonsLayout() directly
+		// to ensure it runs even if rpl::combine doesn't fire.
+		QTimer::singleShot(0, this, [=]() {
+			if (_buttonsContainer && _buttonsContainer->parentWidget()
+					&& _buttonsContainer->parentWidget()->width() > 0) {
+				_buttonsContainer->resizeToWidth(_buttonsContainer->parentWidget()->width());
+			}
+			updateButtonsLayout();
+		});
 	}
 }
 
@@ -1662,6 +1771,18 @@ void SettingsWidget::resetToDefault() {
 		data.media.sizeLimit = 8 * 1024 * 1024; // Explicitly reset size limit
 	});
 	clearScanResults();
+}
+
+void SettingsWidget::restoreSettings(const Settings &data) {
+	changeData([&](Settings &current) {
+		current.media.types = data.media.types;
+		current.media.sizeLimit = data.media.sizeLimit;
+		current.media.extensionFilterMode = data.media.extensionFilterMode;
+		current.media.extensionFilter = data.media.extensionFilter;
+		current.types = data.types;
+		current.fullChats = data.fullChats;
+		current.format = data.format;
+	});
 }
 
 } // namespace View

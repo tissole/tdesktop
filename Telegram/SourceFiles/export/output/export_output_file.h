@@ -22,11 +22,14 @@ class Stats;
 class File {
 public:
 	File(const QString &path, Stats *stats);
+	File(const QString &path, int64 initialOffset, Stats *stats);
 
 	[[nodiscard]] int64 size() const;
 	[[nodiscard]] bool empty() const;
+	[[nodiscard]] const QString &path() const { return _path; }
 
 	[[nodiscard]] Result writeBlock(const QByteArray &block);
+	void close();
 
 	[[nodiscard]] static QString PrepareRelativePath(
 		const QString &folder,

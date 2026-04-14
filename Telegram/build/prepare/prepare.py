@@ -1152,6 +1152,7 @@ stage('ffmpeg', """
     git clone https://github.com/FFmpeg/FFmpeg.git ffmpeg
     cd ffmpeg
 win:
+    git revert --no-edit 1e031d4af713168259ea3fd82c54a25f30b7bada
 depends:patches/ffmpeg.patch
     git apply ../patches/ffmpeg.patch
 

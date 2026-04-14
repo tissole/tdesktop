@@ -7,8 +7,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "export/view/export_view_panel_controller.h"
 
+#include <crl/crl.h>
+#include "data/data_peer_id.h"
+#include "data/data_peer.h"
+#include "tl/tl_basic_types.h"
+#include <QtCore/QDir>
+
 #include "export/view/export_view_settings.h"
 #include "export/view/export_view_progress.h"
+#include "export/export_progress.h"
 #include "export/export_manager.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/separate_panel.h"
@@ -132,6 +139,12 @@ void ResolveSettings(not_null<Main::Session*> session, Settings &settings) {
 	}
 	if (!settings.onlySinglePeer()) {
 		settings.singlePeerFrom = settings.singlePeerTill = 0;
+	} else {
+		// For single peer exports, reset to clean defaults:
+		// - No media types selected by default
+		// - 8 MB size limit by default
+		settings.media.types = MediaSettings::Types(0);
+		settings.media.sizeLimit = 8 * 1024 * 1024;
 	}
 }
 
@@ -203,6 +216,9 @@ void PanelController::showSettings() {
 
 	settingsRaw->scanClicks(
 	) | rpl::on_next([=] {
+		if (settingsRaw->readData().media.types == MediaSettings::Types(0)) {
+			return; // Do nothing if no file type selected
+		}
 		settingsRaw->setScanning(true);
 		_panel->setTitle(tr::lng_export_scanning());
 		_panel->setHideOnDeactivate(true);
@@ -211,9 +227,22 @@ void PanelController::showSettings() {
 
 	settingsRaw->exportClicks(
 	) | rpl::on_next([=]() {
+		if (settingsRaw->readData().media.types == MediaSettings::Types(0)) {
+			return; // Do nothing if no file type selected
+		}
 		_panel->setTitle(tr::lng_export_progress_title());
 		showProgress();
 		_process->startExport(*_settings, PrepareEnvironment(_session));
+	}, settingsRaw->lifetime());
+
+	settingsRaw->resumeClicks(
+	) | rpl::on_next([=]() {
+		if (settingsRaw->readData().media.types == MediaSettings::Types(0)) {
+			return; // Do nothing if no file type selected
+		}
+		_panel->setTitle(tr::lng_export_progress_title());
+		showProgress();
+		_process->resumeExport(*_settings, PrepareEnvironment(_session));
 	}, settingsRaw->lifetime());
 
 	settingsRaw->cancelClicks(
@@ -228,6 +257,7 @@ void PanelController::showSettings() {
 			_process->clearResults();
 		} else {
 			LOG(("Export Info: Panel Hide By Cancel."));
+			settingsRaw->resetToDefault(); // Reset on cancel as requested
 			_panel->hideGetDuration();
 		}
 		_panel->setTitle(tr::lng_export_title());
@@ -243,9 +273,109 @@ void PanelController::showSettings() {
 		*_settings = std::move(settings);
 	}, settingsRaw->lifetime());
 
+	// Check for existing export to show Resume button
+	// We do this on the PanelController side because it has the correct path and peer info
+	LOG(("Export Resume: Starting check - peerId=%1, path='%2', isSinglePeer=%3")
+		.arg(_settings->singlePeerId).arg(_settings->path).arg(_settings->onlySinglePeer()));
+
+	checkExistingExport([=](bool hasExisting, std::optional<Settings> restored) {
+		LOG(("Export Resume: Check result - hasExisting=%1").arg(hasExisting ? "true" : "false"));
+		crl::on_main([=] {
+			if (_panel) {
+				if (auto settingsWidget = dynamic_cast<SettingsWidget*>(_panel->inner())) {
+					settingsWidget->setHasExistingExport(hasExisting);
+					if (hasExisting && restored) {
+						LOG(("Export Resume: Restoring persisted settings"));
+						// Restore message types and size limit from previous session
+						auto data = settingsWidget->readData();
+						data.media.types = restored->media.types;
+						data.media.sizeLimit = restored->media.sizeLimit;
+						data.media.extensionFilterMode = restored->media.extensionFilterMode;
+						data.media.extensionFilter = restored->media.extensionFilter;
+						data.types = restored->types;
+						data.fullChats = restored->fullChats;
+						data.format = restored->format;
+
+						// We need a way to update the widget's internal data and UI
+						// SettingsWidget constructor calls setupContent, so we might
+						// need to fire a change or similar.
+						// For now, let's use resetToDefault style approach if possible,
+						// or just modify _settings and hope for the best if it's already bound.
+						*_settings = data;
+						// Since SettingsWidget uses rpl to track _internal_data, 
+						// we might need a method to set it.
+						// I'll add a 'restoreSettings' method to SettingsWidget.
+						settingsWidget->restoreSettings(data);
+					}
+				}
+			}
+		});
+	});
+
 	_panel->showInner(std::move(settings));
 }
 
+void PanelController::checkExistingExport(Fn<void(bool, std::optional<Settings>)> callback) const {
+	if (!_settings->onlySinglePeer()) {
+		callback(false, std::nullopt);
+		return;
+	}
+
+	const auto targetPeerId = _settings->singlePeerId;
+	if (targetPeerId == 0) {
+		LOG(("Export Resume: No peer ID available for existing export check"));
+		callback(false, std::nullopt);
+		return;
+	}
+
+	auto downloadPath = _settings->path;
+	if (downloadPath.isEmpty()) {
+		LOG(("Export Resume: No download path available for existing export check"));
+		callback(false, std::nullopt);
+		return;
+	}
+
+	// Normalize path separators for Qt
+	downloadPath = QDir::toNativeSeparators(downloadPath);
+
+	LOG(("Export Resume: Checking for existing export in '%1' for peer ID %2")
+		.arg(downloadPath).arg(targetPeerId));
+
+	// Search for any ChatExport folder in the download directory containing this peer ID
+	const auto rawId = std::abs(targetPeerId); // Raw ID without sign
+	const QDir parentDir(downloadPath);
+	const auto entries = parentDir.entryList(QStringList() << "ChatExport_*", QDir::Dirs | QDir::NoDotAndDotDot);
+	for (const auto &entry : entries) {
+		const auto fullIdStr = QString::number(targetPeerId);
+		const auto rawIdStr = QString::number(rawId);
+
+		if (entry.contains(fullIdStr) || entry.contains(rawIdStr)) {
+			const auto folderPath = downloadPath + '/' + entry;
+			LOG(("Export Resume: Found matching folder '%1'").arg(folderPath));
+
+			// Check for progress.json
+			const auto progressPath = ExportProgress::progressFilePath(folderPath);
+			auto progress = ExportProgress::load(progressPath);
+			if (progress) {
+				LOG(("Export Resume: Found progress file, enabling resume"));
+				callback(true, progress->settings);
+				return;
+			}
+
+			// Also check for leftover .partial files from interrupted export
+			const QDir folderDir(folderPath);
+			const auto partialFiles = folderDir.entryList(QStringList() << "*.partial", QDir::Files | QDir::NoDotAndDotDot);
+			if (!partialFiles.isEmpty()) {
+				LOG(("Export Resume: Found %1 partial files, enabling resume").arg(partialFiles.size()));
+				callback(true, std::nullopt);
+				return;
+			}
+		}
+	}
+
+	LOG(("Export Resume: No existing export found"));
+	callback(false, std::nullopt);
+}
 void PanelController::showError(const ApiErrorState &error) {
 	LOG(("Export Info: API Error '%1'.").arg(error.data.type()));
 
@@ -432,11 +562,69 @@ void PanelController::fillParams(const PasswordCheckState &state) {
 	_settings->singlePeer = state.singlePeer;
 	_settings->singlePeerName = state.singlePeerName;
 	_settings->singlePeerId = state.singlePeerId;
+
+	// For single peer exports, always extract fresh from the current peer
+	// (Old settings may have leftover values from a different chat)
+	if (_settings->onlySinglePeer()) {
+		_settings->singlePeerId = 0;
+		_settings->singlePeerName.clear();
+	}
+
+	if (_settings->singlePeerId == 0) {
+		state.singlePeer.match(
+			[&](const MTPDinputPeerUser &data) {
+				_settings->singlePeerId = static_cast<int64>(data.vuser_id().v);
+			},
+			[&](const MTPDinputPeerUserFromMessage &data) {
+				_settings->singlePeerId = static_cast<int64>(data.vuser_id().v);
+			},
+			[&](const MTPDinputPeerChat &data) {
+				_settings->singlePeerId = static_cast<int64>(data.vchat_id().v);
+			},
+			[&](const MTPDinputPeerChannel &data) {
+				// Human-readable channel ID: -100xxxxxxxxxx
+				_settings->singlePeerId = -(1000000000000LL + static_cast<int64>(data.vchannel_id().v));
+			},
+			[&](const MTPDinputPeerChannelFromMessage &data) {
+				_settings->singlePeerId = -(1000000000000LL + static_cast<int64>(data.vchannel_id().v));
+			},
+			[&](const MTPDinputPeerSelf &data) {
+				_settings->singlePeerId = _session->userPeerId().value;
+			},
+			[&](const MTPDinputPeerEmpty &data) {
+				// No peer info available
+			});
+
+		// Get name from session peer data
+		if (_settings->singlePeerId != 0) {
+			const auto peerIdRaw = state.singlePeer.match(
+				[&](const MTPDinputPeerUser &data) { return peerFromUser(data.vuser_id().v); },
+				[&](const MTPDinputPeerUserFromMessage &data) { return peerFromUser(data.vuser_id().v); },
+				[&](const MTPDinputPeerChat &data) { return peerFromChat(data.vchat_id().v); },
+				[&](const MTPDinputPeerChannel &data) { return peerFromChannel(data.vchannel_id().v); },
+				[&](const MTPDinputPeerChannelFromMessage &data) { return peerFromChannel(data.vchannel_id().v); },
+				[&](const MTPDinputPeerSelf &data) { return _session->userPeerId(); },
+				[&](const MTPDinputPeerEmpty &data) { return PeerId(0); });
+			
+			if (peerIdRaw) {
+				const auto peer = _session->data().peer(peerIdRaw);
+				if (peer) {
+					_settings->singlePeerName = peer->name();
+				}
+			}
+		}
+		
+		LOG(("Export Resume: Extracted peer ID=%1, name='%2' from state")
+			.arg(_settings->singlePeerId).arg(_settings->singlePeerName));
+	}
 }
 
 void PanelController::updateState(State &&state) {
+	LOG(("Export State: updateState called, isPasswordCheck=%1").arg(v::is<PasswordCheckState>(state) ? "true" : "false"));
 	if (const auto start = std::get_if<PasswordCheckState>(&state)) {
 		fillParams(*start);
+		LOG(("Export State: fillParams done, peerId=%1, peerName='%2'")
+			.arg(_settings->singlePeerId).arg(_settings->singlePeerName));
 	}
 	if (!_panel) {
 		createPanel();

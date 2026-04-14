@@ -59,6 +59,7 @@ public:
 
 private:
 	void fillParams(const PasswordCheckState &state);
+	void checkExistingExport(Fn<void(bool, std::optional<Settings>)> callback) const;
 	void stopExport();
 	void createPanel();
 	void updateState(State &&state);

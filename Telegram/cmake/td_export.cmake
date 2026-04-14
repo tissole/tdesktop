@@ -16,6 +16,8 @@ PRIVATE
     export/export_controller.cpp
     export/export_controller.h
     export/export_pch.h
+    export/export_progress.cpp
+    export/export_progress.h
     export/export_settings.cpp
     export/export_settings.h
     export/data/export_data_types.cpp

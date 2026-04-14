@@ -2169,6 +2169,7 @@ if (MSVC)
     )
     target_link_options(Telegram
     PRIVATE
+        /IGNORE:4099
         /DELAYLOAD:secur32.dll
         /DELAYLOAD:winmm.dll
         /DELAYLOAD:ws2_32.dll
