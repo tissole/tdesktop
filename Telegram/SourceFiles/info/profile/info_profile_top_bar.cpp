@@ -61,6 +61,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lottie/lottie_animation.h"
 #include "lottie/lottie_multi_player.h"
 #include "main/main_session.h"
+#include "ui/image/image_location.h"
 #include "menu/menu_mute.h"
 #include "settings/settings_credits_graphics.h"
 #include "settings/sections/settings_information.h"
@@ -363,6 +364,7 @@ TopBar::TopBar(
 	return owned;
 }())
 , _id(this, st::infoProfileMegagroupCover.status)
+, _dc(this, QString(), st::infoProfileMegagroupCover.status)
 , _backToggles(std::move(descriptor.backToggles)) {
 	_peer->updateFull();
 	if (const auto broadcast = _peer->monoforumBroadcast()) {
@@ -433,6 +435,10 @@ TopBar::TopBar(
 	}, _title->lifetime());
 
 	setupChatId();
+	setupDcInfo();
+	_dc->widthValue() | rpl::on_next([=] {
+		updateStatusPosition(_progress.current());
+	}, _dc->lifetime());
 	setupUniqueBadgeTooltip();
 	setupButtons(controller, descriptor.source);
 	setupUserpicButton(controller);
@@ -582,6 +588,17 @@ void TopBar::adjustColors(const std::optional<QColor> &edgeColor) {
 			updateStatusPosition(_progress.current());
 		}, _id->lifetime());
 		_id->setTextColorOverride(shouldOverrideId
+			? std::optional<QColor>(st::groupCallVideoSubTextFg->c)
+			: std::nullopt);
+	}
+	{
+		_dc.create(this, QString(), st::infoProfileMegagroupCover.status);
+		_dc->show();
+		setupDcInfo();
+		_dc->widthValue() | rpl::on_next([=] {
+			updateStatusPosition(_progress.current());
+		}, _dc->lifetime());
+		_dc->setTextColorOverride(shouldOverrideId
 			? std::optional<QColor>(st::groupCallVideoSubTextFg->c)
 			: std::nullopt);
 	}
@@ -1748,18 +1765,39 @@ void TopBar::updateStatusPosition(float64 progressCurrent) {
 		st::infoProfileTopBarChatIdTop,
 		progressCurrent);
 
+	const auto idWidth = _id->textMaxWidth();
+	const auto dcWidth = (_dc && !_dcText.isEmpty()) ? _dc->textMaxWidth() : 0;
+	const auto dcSkip = dcWidth > 0 ? st::infoProfileTopBarLastSeenSkip.x() : 0;
+	const auto totalWidth = idWidth + dcWidth + dcSkip;
+
 	const auto idLeft = anim::interpolate(
 		statusMostLeft(),
-		(width() - _id->textMaxWidth()) / 2,
+		(width() - totalWidth) / 2,
 		progressCurrent);
 
-	_id->resizeToWidth(_id->textMaxWidth());
-	_id->moveToLeft(
-		idLeft,
-		idTop);
+	_id->resizeToWidth(idWidth);
+	_id->moveToLeft(idLeft, idTop);
+
+	// Position DC label on the same row, right after ID
+	if (_dc && !_dcText.isEmpty()) {
+		_dc->resizeToWidth(dcWidth);
+		const auto dcLeft = idLeft + idWidth + dcSkip;
+		_dc->moveToLeft(dcLeft, idTop);
+		_dc->show();
+		_dc->setAttribute(
+			Qt::WA_TransparentForMouseEvents,
+			!progressCurrent);
+	} else if (_dc) {
+		_dc->hide();
+	}
 
 	if (_idOpacity) {
 		_idOpacity->setOpacity(progressCurrent);
+	}
+	if (_dc && !_dcText.isEmpty()) {
+		if (const auto effect = static_cast<QGraphicsOpacityEffect*>(_dc->graphicsEffect())) {
+			effect->setOpacity(progressCurrent);
+		}
 	}
 	_id->setAttribute(
 		Qt::WA_TransparentForMouseEvents,
@@ -2861,6 +2899,62 @@ void TopBar::setupChatId() {
 	_idOpacity = Ui::CreateChild<QGraphicsOpacityEffect>(_id.get());
 	_id->setGraphicsEffect(_idOpacity);
 	_idOpacity->setOpacity(0.);
+}
+
+void TopBar::setupDcInfo() {
+	// Get DC info for the peer
+	auto dcId = 0;
+
+	if (_peer->hasUserpic()) {
+		const auto location = _peer->userpicLocation();
+		if (location.valid()) {
+			const auto &data = location.file().data;
+			if (const auto storage = std::get_if<StorageFileLocation>(&data)) {
+				dcId = storage->dcId();
+			}
+		}
+	}
+
+	if (dcId <= 0) {
+		dcId = _peer->session().mainDcId();
+	}
+
+	if (dcId > 0) {
+		_dcText = QString::number(dcId);
+		QString continent;
+		switch (dcId) {
+			case 1:
+			case 3:
+				continent = "USA";
+				break;
+			case 2:
+			case 4:
+				continent = "Europe";
+				break;
+			case 5:
+				continent = "Asia";
+				break;
+			default:
+				break;
+		}
+		auto dcText = continent.isEmpty()
+			? QString("DC: %1").arg(dcId)
+			: QString("DC: %1 (%2)").arg(dcId).arg(continent);
+		_dc->setMarkedText(Ui::Text::Link(dcText));
+		_dc->setLink(1, std::make_shared<LambdaClickHandler>([=] {
+			QGuiApplication::clipboard()->setText(_dcText);
+			Ui::Toast::Show("DC copied");
+		}));
+		_dc->show();
+	} else {
+		_dc->hide();
+	}
+
+	if (!_dc->graphicsEffect()) {
+		auto effect = Ui::CreateChild<QGraphicsOpacityEffect>(_dc.get());
+		effect->setOpacity(0.);
+		_dc->setGraphicsEffect(effect);
+	}
 }
 
 rpl::producer<std::optional<QColor>> TopBar::edgeColor() const {

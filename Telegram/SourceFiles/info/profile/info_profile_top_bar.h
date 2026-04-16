@@ -190,6 +190,7 @@ private:
 	[[nodiscard]] TopBarActionButtonStyle mapActionStyle(
 		std::optional<QColor> c) const;
 	void setupChatId();
+	void setupDcInfo();
 
 	[[nodiscard]] rpl::producer<QString> nameValue() const;
 
@@ -228,6 +229,8 @@ private:
 	object_ptr<Ui::RoundButton> _forumButton = { nullptr };
 	object_ptr<Ui::FlatLabel> _id;
 	QGraphicsOpacityEffect *_idOpacity = nullptr;
+	object_ptr<Ui::FlatLabel> _dc;
+	QString _dcText;
 
 	std::shared_ptr<style::FlatLabel> _statusSt;
 	std::shared_ptr<style::FlatLabel> _idSt;
