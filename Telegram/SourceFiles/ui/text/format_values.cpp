@@ -89,7 +89,7 @@ QString FormatSizeText(qint64 size) {
 		return formatValue(double(size) / TB, 3) + u" TB"_q;
 	}
 	if (size >= GB) {
-		return formatValue(double(size) / GB, 2) + u" GB"_q;
+		return formatValue(double(size) / GB, 1) + u" GB"_q;
 	}
 	if (size >= MB) {
 		return formatValue(double(size) / MB, 1) + u" MB"_q;
