@@ -30,6 +30,8 @@ namespace MTP {
 class Instance;
 } // namespace MTP
 
+#include "export/view/export_view_settings.h"
+
 namespace Export {
 
 class ControllerObject;
@@ -181,13 +183,17 @@ public:
 	void runScan(
 		const Settings &settings,
 		const Environment &environment);
+	void runUpdateScan(
+		const Settings &settings,
+		const Environment &environment,
+		const QString &folderPath);
 	void startExport(
 		const Settings &settings,
 		const Environment &environment);
 	void resumeExport(
 		const Settings &settings,
 		const Environment &environment);
-	void checkExistingExport(Fn<void(bool)> callback);
+	void checkExistingExport(std::function<void(Export::View::SettingsWidget::ExistingExport)> callback) const;
 	void skipFile(uint64 randomId);
 	void cancelExportFast(bool keepCache = false);
 	void clearResults();

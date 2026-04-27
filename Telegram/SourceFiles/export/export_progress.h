@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QJsonObject>
 #include "export/export_settings.h"
 #include <memory>
+#include <map>
 
 namespace Export {
 
@@ -22,23 +23,42 @@ struct IncompleteFile {
 	uint64 messageId = 0;
 };
 
+struct TypeCounter {
+	int uniqueCount = 0;
+	int64 uniqueSize = 0;
+	int localTotalCount = 0;
+	int64 totalSize = 0;
+	int messagesWithLinks = 0;
+};
+
 struct ExportProgress {
 	uint64 lastMessageId = 0;
+	uint64 rangeEndMsgId = 0;
 	QString lastFilename;
 	int64 lastFileSize = 0;
+
+	int messagesProcessed = 0;
+	int messagesTotalCount = 0;
+	int scanTotalMessages = 0;
+	std::map<int, TypeCounter> typeCounters;
+	std::map<int, TypeCounter> scanStats;
+
+	std::map<uint64, QString> dedupById;
+	std::map<QString, QString> dedupBySizeName;
 	std::vector<IncompleteFile> incompleteFiles;
-	Settings settings; // Persisted settings
+
+	// Session state for resume/update flow
+	bool isComplete = false;  // Export completed (not interrupted)
+	QString lastExportDate;       // ISO format date of last export
+	Settings settings;
 	
-	// Serialization
 	QJsonObject toJson() const;
 	static ExportProgress fromJson(const QJsonObject &obj);
 	
-	// File I/O
 	bool save(const QString &path) const;
 	static std::unique_ptr<ExportProgress> load(const QString &path);
 	static void remove(const QString &path);
 	
-	// Helpers
 	QString partialPath(const QString &folder, const QString &filename) const;
 	static QString progressFilePath(const QString &folder);
 };

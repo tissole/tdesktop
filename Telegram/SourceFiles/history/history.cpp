@@ -3198,9 +3198,6 @@ bool History::shouldBeInChatList() const {
 }
 
 void History::unknownMessageDeleted(MsgId messageId) {
-	LOG(("History::unknownMessageDeleted. Peer ID: %1, Message ID: %2.")
-		.arg(peer->id.value & PeerId::kChatTypeMask)
-		.arg(messageId.bare));
 	_unknownDeletedMessages[messageId] = base::unixtime::now();
 	if (_inboxReadBefore && messageId >= *_inboxReadBefore) {
 		owner().histories().requestDialogEntry(this);

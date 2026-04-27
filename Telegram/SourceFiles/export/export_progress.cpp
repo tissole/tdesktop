@@ -7,135 +7,227 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "export/export_progress.h"
 
-#include <QtCore/QFile>
 #include <QtCore/QJsonDocument>
-#include <QtCore/QFileInfo>
-#include <algorithm>
+#include <QtCore/QDir>
 
 namespace Export {
 
-constexpr auto kProgressFileName = "progress.json";
-
-QString ExportProgress::progressFilePath(const QString &folder) {
-	return folder + '/' + kProgressFileName;
-}
-
-QString ExportProgress::partialPath(const QString &folder, const QString &filename) const {
-	return folder + '/' + filename + ".partial";
-}
-
 QJsonObject ExportProgress::toJson() const {
 	QJsonObject obj;
+	obj["last_message_id"] = QString::number(lastMessageId);
+	obj["range_end_msg_id"] = QString::number(rangeEndMsgId);
+	obj["last_filename"] = lastFilename;
+	obj["last_file_size"] = QString::number(lastFileSize);
+	obj["messages_processed"] = messagesProcessed;
+	obj["messages_total_count"] = messagesTotalCount;
+	obj["scan_total_messages"] = scanTotalMessages;
 
-	if (!lastFilename.isEmpty()) {
-		obj["last_filename"] = lastFilename;
-		obj["last_file_size"] = lastFileSize;
+	// Session state fields
+	obj["is_complete"] = isComplete;
+	obj["range_end_msg_id"] = QString::number(rangeEndMsgId);
+	obj["last_export_date"] = lastExportDate;
+
+	if (!typeCounters.empty()) {
+		QJsonObject counters;
+		for (const auto &[type, counter] : typeCounters) {
+			QJsonObject c;
+			c["unique"] = counter.uniqueCount;
+			c["unique_size"] = QString::number(counter.uniqueSize);
+			c["total"] = counter.localTotalCount;
+			c["total_size"] = QString::number(counter.totalSize);
+			if (counter.messagesWithLinks > 0) {
+				c["links"] = counter.messagesWithLinks;
+			}
+			counters[QString::number(type)] = c;
+		}
+		obj["type_counters"] = counters;
 	}
-	if (lastMessageId > 0) {
-		obj["last_message_id"] = static_cast<qint64>(lastMessageId);
+
+	if (!scanStats.empty()) {
+		QJsonObject counters;
+		for (const auto &[type, counter] : scanStats) {
+			QJsonObject c;
+			c["unique"] = counter.uniqueCount;
+			c["unique_size"] = QString::number(counter.uniqueSize);
+			c["total"] = counter.localTotalCount;
+			c["total_size"] = QString::number(counter.totalSize);
+			if (counter.messagesWithLinks > 0) {
+				c["links"] = counter.messagesWithLinks;
+			}
+			counters[QString::number(type)] = c;
+		}
+		obj["scan_stats"] = counters;
+	}
+
+	if (!dedupById.empty()) {
+		QJsonObject dedup;
+		for (const auto &[id, path] : dedupById) {
+			dedup[QString::number(id)] = path;
+		}
+		obj["dedup_by_id"] = dedup;
+	}
+
+	if (!dedupBySizeName.empty()) {
+		QJsonObject dedup;
+		for (const auto &[key, path] : dedupBySizeName) {
+			dedup[key] = path;
+		}
+		obj["dedup_by_size_name"] = dedup;
 	}
 
 	if (!incompleteFiles.empty()) {
-		QJsonArray arr;
+		QJsonArray incomplete;
 		for (const auto &file : incompleteFiles) {
-			QJsonObject entry;
-			entry["filename"] = file.filename;
-			entry["bytes_downloaded"] = file.bytesDownloaded;
-			entry["total_size"] = file.totalSize;
-			entry["message_id"] = static_cast<qint64>(file.messageId);
-			arr.append(entry);
+			QJsonObject f;
+			f["filename"] = file.filename;
+			f["downloaded"] = QString::number(file.bytesDownloaded);
+			f["total"] = QString::number(file.totalSize);
+			f["msg_id"] = QString::number(file.messageId);
+			incomplete.append(f);
 		}
-		obj["incomplete_files"] = arr;
+		obj["incomplete_files"] = incomplete;
 	}
 
-	// Serialize Settings
-	QJsonObject s;
-	s["types"] = static_cast<qint64>(settings.types);
-	s["full_chats"] = static_cast<qint64>(settings.fullChats);
-	s["format"] = static_cast<int>(settings.format);
-	
-	QJsonObject m;
-	m["types"] = static_cast<qint64>(settings.media.types);
-	m["size_limit"] = settings.media.sizeLimit;
-	m["ext_mode"] = static_cast<int>(settings.media.extensionFilterMode);
-	m["extensions"] = QJsonArray::fromStringList(settings.media.extensionFilter);
-	s["media"] = m;
+	if (settings.media.types != MediaSettings::Types(0) || settings.types != Settings::Types(0)) {
+		QJsonObject s;
+		s["media_types"] = static_cast<int>(settings.media.types.value());
+		s["media_size_limit"] = QString::number(settings.media.sizeLimit);
+		s["ext_filter_mode"] = static_cast<int>(settings.media.extensionFilterMode);
+		if (!settings.media.extensionFilter.isEmpty()) {
+			s["ext_filter"] = settings.media.extensionFilter.join(",");
+		}
+		s["types"] = static_cast<int>(settings.types.value());
+		s["full_chats"] = static_cast<int>(settings.fullChats.value());
+		s["format"] = static_cast<int>(settings.format);
+		
+		if (settings.singlePeerFrom) s["single_peer_from"] = static_cast<int>(settings.singlePeerFrom);
+		if (settings.singlePeerTill) s["single_peer_till"] = static_cast<int>(settings.singlePeerTill);
+		
+		s["use_id_range"] = settings.useIdRange;
+		if (settings.singlePeerFromId) s["single_peer_from_id"] = settings.singlePeerFromId;
+		if (settings.singlePeerTillId) s["single_peer_till_id"] = settings.singlePeerTillId;
 
-	obj["settings"] = s;
+		obj["settings"] = s;
+	}
 
 	return obj;
 }
 
 ExportProgress ExportProgress::fromJson(const QJsonObject &obj) {
 	ExportProgress result;
-	
-	if (obj.contains("last_message_id")) {
-		result.lastMessageId = static_cast<uint64>(obj["last_message_id"].toInteger());
+	result.lastMessageId = obj["last_message_id"].toString().toULongLong();
+	result.rangeEndMsgId = obj["range_end_msg_id"].toString().toULongLong();
+	result.lastFilename = obj["last_filename"].toString();
+	result.lastFileSize = obj["last_file_size"].toString().toLongLong();
+	result.messagesProcessed = obj["messages_processed"].toInt();
+	result.messagesTotalCount = obj["messages_total_count"].toInt();
+	result.scanTotalMessages = obj["scan_total_messages"].toInt();
+
+	// Load session state fields
+	result.isComplete = obj["is_complete"].toBool();
+	result.lastExportDate = obj["last_export_date"].toString();
+
+	if (obj.contains("type_counters")) {
+		const auto counters = obj["type_counters"].toObject();
+		for (auto it = counters.begin(); it != counters.end(); ++it) {
+			const int type = it.key().toInt();
+			const auto c = it.value().toObject();
+			TypeCounter counter;
+			counter.uniqueCount = c["unique"].toInt();
+			counter.uniqueSize = c["unique_size"].toString().toLongLong();
+			counter.localTotalCount = c["total"].toInt();
+			counter.totalSize = c["total_size"].toString().toLongLong();
+			if (c.contains("links")) {
+				counter.messagesWithLinks = c["links"].toInt();
+			}
+			result.typeCounters[type] = counter;
+		}
 	}
-	if (obj.contains("last_filename")) {
-		result.lastFilename = obj["last_filename"].toString();
-		result.lastFileSize = obj["last_file_size"].toInteger();
+
+	if (obj.contains("scan_stats")) {
+		const auto counters = obj["scan_stats"].toObject();
+		for (auto it = counters.begin(); it != counters.end(); ++it) {
+			const int type = it.key().toInt();
+			const auto c = it.value().toObject();
+			TypeCounter counter;
+			counter.uniqueCount = c["unique"].toInt();
+			counter.uniqueSize = c["unique_size"].toString().toLongLong();
+			counter.localTotalCount = c["total"].toInt();
+			counter.totalSize = c["total_size"].toString().toLongLong();
+			if (c.contains("links")) {
+				counter.messagesWithLinks = c["links"].toInt();
+			}
+			result.scanStats[type] = counter;
+		}
 	}
-	
+
+	if (obj.contains("dedup_by_id")) {
+		const auto dedup = obj["dedup_by_id"].toObject();
+		for (auto it = dedup.begin(); it != dedup.end(); ++it) {
+			const uint64 id = it.key().toULongLong();
+			const QString path = it.value().toString();
+			result.dedupById[id] = path;
+		}
+	}
+
+	if (obj.contains("dedup_by_size_name")) {
+		const auto dedup = obj["dedup_by_size_name"].toObject();
+		for (auto it = dedup.begin(); it != dedup.end(); ++it) {
+			result.dedupBySizeName[it.key()] = it.value().toString();
+		}
+	}
+
 	if (obj.contains("incomplete_files")) {
-		const auto arr = obj["incomplete_files"].toArray();
-		for (const auto val : arr) {
-			const auto entry = val.toObject();
+		const auto incomplete = obj["incomplete_files"].toArray();
+		for (const auto &val : incomplete) {
+			const auto f = val.toObject();
 			IncompleteFile file;
-			file.filename = entry["filename"].toString();
-			file.bytesDownloaded = entry["bytes_downloaded"].toInteger();
-			file.totalSize = entry["total_size"].toInteger();
-			file.messageId = static_cast<uint64>(entry["message_id"].toInteger());
-			result.incompleteFiles.push_back(std::move(file));
+			file.filename = f["filename"].toString();
+			file.bytesDownloaded = f["downloaded"].toString().toLongLong();
+			file.totalSize = f["total"].toString().toLongLong();
+			file.messageId = f["msg_id"].toString().toULongLong();
+			result.incompleteFiles.push_back(file);
 		}
 	}
 
 	if (obj.contains("settings")) {
 		const auto s = obj["settings"].toObject();
-		result.settings.types = static_cast<Settings::Type>(static_cast<uint32>(s["types"].toInteger()));
-		result.settings.fullChats = static_cast<Settings::Type>(static_cast<uint32>(s["full_chats"].toInteger()));
-		result.settings.format = static_cast<Output::Format>(s["format"].toInt());
-		
-		const auto m = s["media"].toObject();
-		result.settings.media.types = static_cast<MediaSettings::Type>(static_cast<uint32>(m["types"].toInteger()));
-		result.settings.media.sizeLimit = m["size_limit"].toVariant().toLongLong();
-		result.settings.media.extensionFilterMode = static_cast<MediaSettings::ExtFilterMode>(m["ext_mode"].toInt());
-		
-		const auto exts = m["extensions"].toArray();
-		for (const auto &ext : exts) {
-			result.settings.media.extensionFilter.append(ext.toString());
+		result.settings.media.types = static_cast<MediaSettings::Type>(s["media_types"].toInt());
+		result.settings.media.sizeLimit = s["media_size_limit"].toString().toLongLong();
+		result.settings.media.extensionFilterMode = static_cast<MediaSettings::ExtFilterMode>(s["ext_filter_mode"].toInt());
+		if (s.contains("ext_filter")) {
+			result.settings.media.extensionFilter = s["ext_filter"].toString().split(",", Qt::SkipEmptyParts);
 		}
+		result.settings.types = static_cast<Settings::Type>(s["types"].toInt());
+		result.settings.fullChats = static_cast<Settings::Type>(s["full_chats"].toInt());
+		result.settings.format = static_cast<Output::Format>(s["format"].toInt());
+
+		result.settings.singlePeerFrom = s["single_peer_from"].toInt();
+		result.settings.singlePeerTill = s["single_peer_till"].toInt();
+		
+		result.settings.useIdRange = s["use_id_range"].toBool();
+		result.settings.singlePeerFromId = s["single_peer_from_id"].toInt();
+		result.settings.singlePeerTillId = s["single_peer_till_id"].toInt();
 	}
-	
+
 	return result;
 }
 
 bool ExportProgress::save(const QString &path) const {
 	QFile file(path);
-	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+	if (!file.open(QIODevice::WriteOnly)) {
 		return false;
 	}
-	
-	const auto json = QJsonDocument(toJson()).toJson(QJsonDocument::Compact);
-	if (file.write(json) != json.size()) {
-		file.close();
-		QFile::remove(path);
-		return false;
-	}
-	
+	file.write(QJsonDocument(toJson()).toJson());
 	return true;
 }
 
 std::unique_ptr<ExportProgress> ExportProgress::load(const QString &path) {
 	QFile file(path);
-	if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+	if (!file.open(QIODevice::ReadOnly)) {
 		return nullptr;
 	}
-	
-	const auto data = file.readAll();
-	file.close();
-	
-	const auto doc = QJsonDocument::fromJson(data);
+	const auto doc = QJsonDocument::fromJson(file.readAll());
 	if (doc.isNull() || !doc.isObject()) {
 		return nullptr;
 	}
@@ -145,6 +237,14 @@ std::unique_ptr<ExportProgress> ExportProgress::load(const QString &path) {
 
 void ExportProgress::remove(const QString &path) {
 	QFile::remove(path);
+}
+
+QString ExportProgress::partialPath(const QString &folder, const QString &filename) const {
+	return folder + (folder.endsWith('/') ? "" : "/") + filename + ".partial";
+}
+
+QString ExportProgress::progressFilePath(const QString &folder) {
+	return folder + (folder.endsWith('/') ? "" : "/") + "progress.json";
 }
 
 } // namespace Export

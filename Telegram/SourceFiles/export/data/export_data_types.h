@@ -112,6 +112,7 @@ struct File {
 		FileType,
 		FileSize,
 		DateLimits,
+		Duplicate,
 	};
 	FileLocation location;
 	int64 size = 0;
@@ -122,6 +123,7 @@ struct File {
 	QString relativePath;
 	uint64 randomId = 0;
 	SkipReason skipReason = SkipReason::None;
+	bool isDuplicate = false;  // Marked as duplicate by global dedup
 };
 
 struct Image {

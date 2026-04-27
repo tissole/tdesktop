@@ -129,7 +129,7 @@ Content ContentFromState(
 				? (Lang::FormatCountDecimal(state.itemIndex)
 					+ " / "
 					+ Lang::FormatCountDecimal(state.itemCount))
-				: QString()),
+				: Lang::FormatCountDecimal(state.itemIndex)),
 			(state.itemCount > 0
 				? (state.itemIndex / float64(state.itemCount))
 				: 0.));
@@ -145,7 +145,7 @@ Content ContentFromState(
 				? (QString::number(state.itemIndex)
 					+ " / "
 					+ QString::number(state.itemCount))
-				: QString()),
+				: QString::number(state.itemIndex)),
 			(state.itemCount > 0
 				? (state.itemIndex / float64(state.itemCount))
 				: 0.));
@@ -172,18 +172,40 @@ Content ContentFromState(
 			MediaType::Link
 		};
 
+		int categoriesCount = 0;
+		int totalUniqueMessagesCount = 0;
+		int totalTotalMessagesCount = 0;
+		int64 totalUniqueMediaSize = 0;
+		int64 totalMediaSize = 0;
+
+		struct RowData {
+			QString id;
+			QString label;
+			QString info;
+			float64 progress;
+		};
+		std::vector<RowData> typeRows;
+
 		for (const auto type : order) {
 			const auto it = state.selectedStats.find(type);
 			const auto expIt = state.expectedStats.find(type);
-			// Show a row if we have current data OR if we have expected (scan) data for this type
-			const bool hasSelected = (it != state.selectedStats.end() && it->second.totalCount > 0);
-			const bool hasExpected = (expIt != state.expectedStats.end() && expIt->second.totalCount > 0);
+			const bool hasSelected = (it != state.selectedStats.end() && it->second.localTotalCount > 0);
+			const bool hasExpected = (expIt != state.expectedStats.end() && expIt->second.localTotalCount > 0);
 			if (!hasSelected && !hasExpected) {
 				continue;
 			}
-			// Use selected stats if available, otherwise zero-initialise to show a "0 / N" row
 			static const Output::StatItem kEmpty{};
-			const auto &item = hasSelected ? it->second : kEmpty;
+			const auto &selectedItem = hasSelected ? it->second : kEmpty;
+			const auto &expectedItem = hasExpected ? expIt->second : kEmpty;
+
+			Output::StatItem displayItem;
+			displayItem.uniqueCount = selectedItem.uniqueCount;
+			displayItem.uniqueSize = selectedItem.uniqueSize;
+			displayItem.localTotalCount = hasExpected ? expectedItem.localTotalCount : selectedItem.localTotalCount;
+			displayItem.totalSize = hasExpected ? expectedItem.totalSize : selectedItem.totalSize;
+			displayItem.messagesWithLinks = hasExpected ? expectedItem.messagesWithLinks : selectedItem.messagesWithLinks;
+
+			const auto &item = displayItem;
 			QString label;
 			switch (type) {
 			case MediaType::Photo: label = tr::lng_export_option_photos(tr::now); break;
@@ -199,11 +221,12 @@ Content ContentFromState(
 			}
 			if (label.isEmpty()) continue;
 
+			categoriesCount++;
+
 			QString rowLabel, rowInfo;
 			float64 typeProgress = 0.;
 			if (type == MediaType::Text) {
-				rowLabel = label + ": " + Lang::FormatCountDecimal(item.totalCount);
-				// Bug fix: Text had no progress calculation, leaving bar at 1.0 (full) always.
+				rowLabel = label + ": " + Lang::FormatCountDecimal(item.localTotalCount);
 				typeProgress = (state.itemCount > 0)
 					? std::clamp(state.itemIndex / float64(state.itemCount), 0., 1.)
 					: 0.;
@@ -211,44 +234,60 @@ Content ContentFromState(
 				const auto messagesStr = item.messagesWithLinks > 0
 					? " (" + Lang::FormatCountDecimal(item.messagesWithLinks) + " Messages)"
 					: QString();
-				if (item.uniqueCount == item.totalCount) {
+				if (item.uniqueCount == item.localTotalCount) {
 					rowLabel = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) + messagesStr;
 				} else {
 					rowLabel = label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
-						+ ", " + Lang::FormatCountDecimal(item.totalCount) + messagesStr;
+						+ ", " + Lang::FormatCountDecimal(item.localTotalCount) + messagesStr;
 				}
-				// Bug fix: Link had no progress calculation, leaving bar at 1.0 (full) always.
 				typeProgress = (state.itemCount > 0)
 					? std::clamp(state.itemIndex / float64(state.itemCount), 0., 1.)
 					: 0.;
 			} else {
-				// Split: label (left) = "Type: unique (size)", info (right) = "total (size)".
-				// This prevents overflow on the narrow export panel.
 				rowLabel = label + ": "
 					+ Lang::FormatCountDecimal(item.uniqueCount)
 					+ " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
-				rowInfo = Lang::FormatCountDecimal(item.totalCount)
+				
+				// Always show total on the right
+				rowInfo = Lang::FormatCountDecimal(item.localTotalCount)
 					+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
-				// Progress: fraction of expected total already processed.
-				// Use uniqueCount (locally counted) not totalCount (may be server-seeded)
-				// to ensure bars animate as files are actually processed.
-				// Only use scan-based progress when we have prior scan data (hasExpected).
-				// Without scan data, always use overall message progress as a proxy so
-				// bars start at 0 and grow, never appearing pre-filled.
-				const int expected = hasExpected ? expIt->second.totalCount : 0;
-				const int locallyProcessed = item.uniqueCount; // locally deduped, grows as we process
+
+				totalUniqueMediaSize += item.uniqueSize;
+				totalMediaSize += item.totalSize;
+				totalUniqueMessagesCount += item.uniqueCount;
+				totalTotalMessagesCount += item.localTotalCount;
+
+				const int expected = hasExpected ? expectedItem.localTotalCount : 0;
+				const int locallyProcessed = item.uniqueCount;
 				if (hasExpected && expected > 0 && locallyProcessed >= 0 && !state.fullHistory) {
-					// Prior scan available: show per-type progress based on local count vs scan total.
-					// Guard: skip for FullHistory — uniqueCount stays 0 until flush, bars would fill instantly.
 					typeProgress = std::clamp(locallyProcessed / float64(expected), 0., 1.);
 				} else if (state.itemCount > 0) {
-					// No prior scan: use overall message progress as proxy so bar starts at 0
 					typeProgress = std::clamp(state.itemIndex / float64(state.itemCount), 0., 1.);
 				} else {
 					typeProgress = 0.;
 				}
 			}
-			result.rows.push_back({ "stat_" + QString::number((int)type), rowLabel, rowInfo, typeProgress });
+			typeRows.push_back({ "stat_" + QString::number((int)type), rowLabel, rowInfo, typeProgress });
+		}
+
+		const auto progress = (state.itemCount > 0)
+			? std::clamp(state.itemIndex / float64(state.itemCount), 0., 1.)
+			: 0.;
+		if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
+			result.rows.push_back({ QString(), QString(), QString(), 0. });
+
+			const auto label = "Total Media: ";
+			const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
+				+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
+			const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
+				+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
+
+			const QString totalLabel = label + uniqueStr;
+			const QString totalInfo = totalStr; // Always show total media summary
+			result.rows.push_back({ "stat_summary", totalLabel, totalInfo, progress });
+		}
+		for (auto &row : typeRows) {
+			result.rows.push_back({ row.id, row.label, row.info, row.progress });
 		}
 	}
 
@@ -303,9 +342,17 @@ Content ContentFromState(const FinishedState &state) {
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
 
+	struct RowData {
+		QString id;
+		QString label;
+		QString info;
+		float64 progress;
+	};
+	std::vector<RowData> typeRows;
+
 	for (const auto type : order) {
 		const auto it = state.breakdown.find(type);
-		if (it == state.breakdown.end() || it->second.totalCount <= 0) {
+		if (it == state.breakdown.end() || it->second.localTotalCount <= 0) {
 			if (!showAllCategories) {
 				continue;
 			}
@@ -327,50 +374,57 @@ Content ContentFromState(const FinishedState &state) {
 		QString text;
 		
 		if (type == Type::Text) {
-			text = label + ": " + Lang::FormatCountDecimal(item.totalCount);
-			categoriesCount++;
-			result.rows.push_back({ "stat_" + QString::number((int)type), text, QString(), 1. });
+			text = label + ": " + Lang::FormatCountDecimal(item.localTotalCount);
+			typeRows.push_back({ "stat_" + QString::number((int)type), text, QString(), 1. });
 		} else if (type == Type::Link) {
 			const auto messagesStr = item.messagesWithLinks > 0
 				? " (" + Lang::FormatCountDecimal(item.messagesWithLinks) + " Messages)"
 				: QString();
-			if (item.uniqueCount == item.totalCount) {
+			if (item.uniqueCount == item.localTotalCount) {
 				text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) + messagesStr;
 			} else {
 				text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
-					+ ", " + Lang::FormatCountDecimal(item.totalCount) + messagesStr;
+					+ ", " + Lang::FormatCountDecimal(item.localTotalCount) + messagesStr;
 			}
-			categoriesCount++;
-			result.rows.push_back({ "stat_" + QString::number((int)type), text, QString(), 1. });
+			typeRows.push_back({ "stat_" + QString::number((int)type), text, QString(), 1. });
 		} else {
 			// Split into label (unique, left) and info (total, right) to prevent overflow.
 			const auto uniquePart = Lang::FormatCountDecimal(item.uniqueCount)
 				+ " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
-			const auto totalPart = Lang::FormatCountDecimal(item.totalCount)
-				+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
+			const auto totalPart = (item.localTotalCount != item.uniqueCount || item.totalSize != item.uniqueSize)
+				? (Lang::FormatCountDecimal(item.localTotalCount)
+					+ " (" + Ui::FormatSizeText(item.totalSize) + ")")
+				: QString();
 			text = label + ": " + uniquePart;
 
 			totalUniqueMediaSize += item.uniqueSize;
 			totalMediaSize += item.totalSize;
 			totalUniqueMessagesCount += item.uniqueCount;
-			totalTotalMessagesCount += item.totalCount;
+			totalTotalMessagesCount += item.localTotalCount;
 
 			categoriesCount++;
-			result.rows.push_back({ "stat_" + QString::number((int)type), text, totalPart, 1. });
+			typeRows.push_back({ "stat_" + QString::number((int)type), text, totalPart, 1. });
 		}
 	}
 
-	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
-		const auto label = "Total Files: ";
+	int mediaCategoriesCount = categoriesCount;
+	if (mediaCategoriesCount > 1 && totalTotalMessagesCount > 0) {
+		result.rows.push_back({ QString(), QString(), QString(), 0. });
+
+		const auto label = "Total Media: ";
 		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
 		const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
-		// Split into label (left) and info (right) so neither side overflows.
-		// label = "Total Files: unique (size)" info = "total (size)"
 		const QString totalLabel = label + uniqueStr;
-		result.rows.push_back({ "stat_summary", totalLabel, totalStr, 1. });
+		const QString totalInfo = (totalTotalMessagesCount != totalUniqueMessagesCount || totalMediaSize != totalUniqueMediaSize)
+			? totalStr
+			: QString();
+		result.rows.push_back({ "stat_summary", totalLabel, totalInfo, 1. });
+	}
+	for (auto &row : typeRows) {
+		result.rows.push_back({ row.id, row.label, row.info, row.progress });
 	}
 	
 	result.rows.push_back({ Content::kDoneId });

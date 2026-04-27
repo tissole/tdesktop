@@ -75,6 +75,10 @@ QByteArray NoFileDescription(Data::File::SkipReason reason) {
 	case SkipReason::FileType:
 		return "Not included, "
 			"change data exporting settings to download.";
+	case SkipReason::DateLimits:
+		return "Not included due to date limits.";
+	case SkipReason::Duplicate:
+		return "Duplicate file, skipped.";
 	case SkipReason::None:
 		return "";
 	}
@@ -2712,6 +2716,15 @@ MediaData HtmlWriter::Wrap::prepareMediaData(
 	}, [](const UnsupportedMedia &data) {
 		Unexpected("Unsupported message.");
 	}, [](v::null_t) {});
+
+	if (message.file().isDuplicate) {
+		if (result.status.isEmpty()) {
+			result.status = "(Duplicate)";
+		} else {
+			result.status += " (Duplicate)";
+		}
+	}
+
 	return result;
 }
 
@@ -2995,6 +3008,10 @@ Result HtmlWriter::writeUserpicsSlice(const Data::UserpicsSlice &data) {
 			case SkipReason::FileType:
 				return "(Photo not included. "
 					"Change data exporting settings to download.)";
+			case SkipReason::DateLimits:
+				return "(Photo not included due to date limits.)";
+			case SkipReason::Duplicate:
+				return "(Duplicate photo, skipped.)";
 			case SkipReason::None: return Data::FormatFileSize(file.size);
 			}
 			Unexpected("Skip reason while writing photo path.");
@@ -3088,6 +3105,10 @@ Result HtmlWriter::writeStoriesSlice(const Data::StoriesSlice &data) {
 			case SkipReason::FileType:
 				return "(Story not included. "
 					"Change data exporting settings to download.)";
+			case SkipReason::DateLimits:
+				return "(Story not included due to date limits.)";
+			case SkipReason::Duplicate:
+				return "(Duplicate story, skipped.)";
 			case SkipReason::None: return Data::FormatFileSize(file.size);
 			}
 			Unexpected("Skip reason while writing story path.");
@@ -3176,6 +3197,10 @@ Result HtmlWriter::writeProfileMusicSlice(const Data::ProfileMusicSlice &data) {
 			case SkipReason::FileType:
 				return "(File not included. "
 					"Change data exporting settings to download.)";
+			case SkipReason::DateLimits:
+				return "(File not included due to date limits.)";
+			case SkipReason::Duplicate:
+				return "(Duplicate file, skipped.)";
 			case SkipReason::None: return Data::FormatFileSize(file.size);
 			}
 			Unexpected("Skip reason while writing profile music path.");
@@ -3878,7 +3903,7 @@ QByteArray HtmlWriter::statsBlock() const {
 
 	for (const auto type : order) {
 		const auto it = breakdown.find(type);
-		if (it == breakdown.end() || it->second.totalCount <= 0) continue;
+		if (it == breakdown.end() || it->second.localTotalCount <= 0) continue;
 		const auto &item = it->second;
 
 		QByteArray label;
@@ -3900,20 +3925,20 @@ QByteArray HtmlWriter::statsBlock() const {
 
 		result.append("<div class=\"details_entry details\">").append(label).append(": ");
 		if (type == Type::Text) {
-			result.append(QByteArray::number(item.totalCount));
+			result.append(QByteArray::number(item.localTotalCount));
 		} else if (type == Type::Link) {
 			const auto messagesStr = (item.messagesWithLinks > 0)
 				? QByteArray(" (") + QByteArray::number(item.messagesWithLinks) + " Messages)"
 				: QByteArray();
-			if (item.uniqueCount == item.totalCount) {
-				result.append(QByteArray::number(item.uniqueCount)).append(messagesStr);
-			} else {
-				result.append(QByteArray::number(item.uniqueCount)).append(", ").append(QByteArray::number(item.totalCount)).append(messagesStr);
-			}
+			result.append(QByteArray::number(item.uniqueCount)).append(", ").append(QByteArray::number(item.localTotalCount)).append(messagesStr);
 		} else {
 			const auto uniqueStr = QByteArray::number(item.uniqueCount) + " (" + Data::FormatFileSize(item.uniqueSize) + ")";
-			const auto totalStr = QByteArray::number(item.totalCount) + " (" + Data::FormatFileSize(item.totalSize) + ")";
-			result.append(uniqueStr).append(", ").append(totalStr);
+			if (item.localTotalCount == item.uniqueCount && item.totalSize == item.uniqueSize) {
+				result.append(uniqueStr);
+			} else {
+				const auto totalStr = QByteArray::number(item.localTotalCount) + " (" + Data::FormatFileSize(item.totalSize) + ")";
+				result.append(uniqueStr).append(", ").append(totalStr);
+			}
 			totalUniqueMediaSize += item.uniqueSize;
 			totalMediaSize += item.totalSize;
 		}
@@ -3921,15 +3946,19 @@ QByteArray HtmlWriter::statsBlock() const {
 
 		if (type != Type::Link && type != Type::Text) {
 			totalUniqueMessagesCount += item.uniqueCount;
-			totalTotalMessagesCount += item.totalCount;
+			totalTotalMessagesCount += item.localTotalCount;
 		}
 	}
 
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
 		const auto uniqueStr = QByteArray::number(totalUniqueMessagesCount) + " (" + Data::FormatFileSize(totalUniqueMediaSize) + ")";
-		const auto totalStr = QByteArray::number(totalTotalMessagesCount) + " (" + Data::FormatFileSize(totalMediaSize) + ")";
-		result.append("<div class=\"details_entry details bold\">Total Files: ");
-		result.append(uniqueStr).append(", ").append(totalStr).append("</div>\n");
+		result.append("<br><div class=\"details_entry details bold\">Total Media: ");
+		if (totalTotalMessagesCount == totalUniqueMessagesCount && totalMediaSize == totalUniqueMediaSize) {
+			result.append(uniqueStr).append("</div>\n");
+		} else {
+			const auto totalStr = QByteArray::number(totalTotalMessagesCount) + " (" + Data::FormatFileSize(totalMediaSize) + ")";
+			result.append(uniqueStr).append(", ").append(totalStr).append("</div>\n");
+		}
 	}
 
 

@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <memory>
 #include <QStringLiteral>
 
+#include "export/view/export_view_settings.h"
 #include "export/export_api_wrap.h"
 #include "export/export_settings.h"
 #include "export/export_progress.h"
@@ -37,17 +38,15 @@ namespace {
 const auto kNullStateCallback = [](ProcessingState&) {};
 
 void WriteScanStatsFile(
-		const QString &path,
-		const std::map<MediaSettings::Type, Output::StatItem> &stats,
-		int64 chatId,
-		const QString &chatName) {
-	if (!QDir().mkpath(path)) {
+		const Settings &settings,
+		const std::map<MediaSettings::Type, Output::StatItem> &stats) {
+	if (!QDir().mkpath(settings.path)) {
 		return;
 	}
-	auto sanitizedName = chatName;
+	auto sanitizedName = settings.singlePeerName;
 	sanitizedName.replace(QRegularExpression("[^a-zA-Z0-9_-]"), "_");
-	const auto fileName = "scan_results_" + QString::number(chatId) + "_" + sanitizedName + ".txt";
-	QFile file(path + fileName);
+	const auto fileName = "scan_results_" + QString::number(settings.singlePeerId) + "_" + sanitizedName + ".txt";
+	QFile file(settings.path + fileName);
 	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
 		return;
 	}
@@ -69,9 +68,17 @@ void WriteScanStatsFile(
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
 
+	const auto selected = settings.media.types;
+	const bool fullHistory = (selected & Type::FullHistory);
+
 	for (const auto type : order) {
+		const bool isSelected = fullHistory || (selected & type);
+		if (!isSelected) {
+			continue;
+		}
+
 		const auto it = stats.find(type);
-		if (it == stats.end() || it->second.totalCount <= 0) {
+		if (it == stats.end() || it->second.localTotalCount <= 0) {
 			continue;
 		}
 		const auto &item = it->second;
@@ -93,35 +100,62 @@ void WriteScanStatsFile(
 		categoriesCount++;
 
 		if (type == Type::Text) {
-			out << label << ": " << item.totalCount << "\n";
+			out << label << ": " << item.localTotalCount << "\n";
 		} else if (type == Type::Link) {
-			if (item.uniqueCount == item.totalCount) {
-				out << label << ": " << item.uniqueCount << "\n";
-			} else {
-				out << label << ": " << item.uniqueCount << ", " << item.totalCount << "\n";
-			}
+			const auto messagesStr = (item.messagesWithLinks > 0)
+				? " (" + QString::number(item.messagesWithLinks) + " Messages)"
+				: QString();
+			out << label << ": " << item.uniqueCount << ", " << item.localTotalCount << messagesStr << "\n";
 		} else {
 			const auto uniqueStr = QString::number(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
-			const auto totalStr = QString::number(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
-			out << label << ": " << uniqueStr << ", " << totalStr << "\n";
+			if (item.localTotalCount == item.uniqueCount && item.totalSize == item.uniqueSize) {
+				out << label << ": " << uniqueStr << "\n";
+			} else {
+				const auto totalStr = QString::number(item.localTotalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
+				out << label << ": " << uniqueStr << ", " << totalStr << "\n";
+			}
 			totalUniqueMediaSize += item.uniqueSize;
 			totalMediaSize += item.totalSize;
 		}
 
 		if (type != Type::Link && type != Type::Text) {
 			totalUniqueMessagesCount += item.uniqueCount;
-			totalTotalMessagesCount += item.totalCount;
+			totalTotalMessagesCount += item.localTotalCount;
 		}
 	}
 
 	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
 		const auto uniqueStr = QString::number(totalUniqueMessagesCount) + " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
-		const auto totalStr = QString::number(totalTotalMessagesCount) + " (" + Ui::FormatSizeText(totalMediaSize) + ")";
-		out << "\nTotal Files: " << uniqueStr << ", " << totalStr << "\n";
-	} else if (totalTotalMessagesCount <= 0 && categoriesCount > 0) {
-		out << "\nNo items found in this range.\n";
+		if (totalTotalMessagesCount == totalUniqueMessagesCount && totalMediaSize == totalUniqueMediaSize) {
+			out << "\nTotal Media: " << uniqueStr << "\n";
+		} else {
+			const auto totalStr = QString::number(totalTotalMessagesCount) + " (" + Ui::FormatSizeText(totalMediaSize) + ")";
+			out << "\nTotal Media: " << uniqueStr << ", " << totalStr << "\n";
+		}
 	} else if (categoriesCount <= 0) {
 		out << "\nNo messages found in this range.\n";
+	}
+}
+
+void WriteUniqueLinksFile(
+		const Settings &settings,
+		const base::flat_set<QString> &links) {
+	if (links.empty()) {
+		return;
+	}
+	if (!QDir().mkpath(settings.path)) {
+		return;
+	}
+	auto sanitizedName = settings.singlePeerName;
+	sanitizedName.replace(QRegularExpression("[^a-zA-Z0-9_-]"), "_");
+	const auto fileName = "unique_links_" + QString::number(settings.singlePeerId) + "_" + sanitizedName + ".txt";
+	QFile file(settings.path + fileName);
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+		return;
+	}
+	QTextStream out(&file);
+	for (const auto &link : links) {
+		out << link << "\n";
 	}
 }
 
@@ -161,15 +195,19 @@ public:
 
 	// Processing step.
 	void runScan(
-		const Settings &settings,
-		const Environment &environment);
+		const Export::Settings &settings,
+		const Export::Environment &environment);
+	void runUpdateScan(
+		const Export::Settings &settings,
+		const Export::Environment &environment,
+		const QString &folderPath);
 	void startExport(
-		const Settings &settings,
-		const Environment &environment);
+		const Export::Settings &settings,
+		const Export::Environment &environment);
 	void resumeExport(
-		const Settings &settings,
-		const Environment &environment);
-	void checkExistingExport(Fn<void(bool)> callback) const;
+		const Export::Settings &settings,
+		const Export::Environment &environment);
+	void checkExistingExport(std::function<void(Export::View::SettingsWidget::ExistingExport)> callback) const;
 	void skipFile(uint64 randomId);
 	void cancelExportFast(bool keepCache = false);
 	void clearResults();
@@ -245,10 +283,7 @@ private:
 
 	int _messagesWritten = 0;
 	int _messagesCount = 0;
-	int _messagesTextCount = 0;
-	int _messagesMediaCount = 0;
 	int _messagesTotalCount = 0;
-	int _messagesTextTotal = 0;
 	int _userpicsWritten = 0;
 	int _userpicsCount = 0;
 	int _storiesWritten = 0;
@@ -423,11 +458,9 @@ void ControllerObject::clearResults() {
 	_scanStatsFound = false;
 	_messagesCount = 0;
 	_stats.clear();
-	// Use cancelExportFast to properly send FinishTakeoutSession before clearing state.
-	// clearState() just nulls _takeoutId without closing the session on Telegram's server,
-	// which prevents a new takeout from starting until the old one times out.
 	_api.cancelExportFast(false);
 	_dialogIndex = -1;
+	_state = PasswordCheckState();
 }
 
 void ControllerObject::runScan(
@@ -448,6 +481,51 @@ void ControllerObject::runScan(
 	_settings.path = Output::NormalizePath(_settings);
 	_environment = environment;
 
+	_writer = Output::CreateNullWriter();
+
+	_steps.clear();
+	_steps.push_back(Step::Initializing);
+	if (_settings.types & Settings::Type::AnyChatsMask) {
+		_steps.push_back(Step::DialogsList);
+		_steps.push_back(Step::Scanning);
+	}
+
+	exportNext();
+}
+
+void ControllerObject::runUpdateScan(
+		const Settings &settings,
+		const Environment &environment,
+		const QString &folderPath) {
+	if (_isScanning) {
+		return;
+	}
+	if (stopped()) {
+		_state = v::null;
+	}
+	_api.clearResults();
+	clearResults();
+	_isScanning = true;
+	_stepIndex = -1;
+
+	// Load progress to get last message ID
+	const auto progressPath = ExportProgress::progressFilePath(folderPath);
+	auto progress = ExportProgress::load(progressPath);
+	uint64 lastId = 0;
+	if (progress) {
+		lastId = progress->lastMessageId;
+		// Keep existing settings but move the range to start after lastId
+		_settings = progress->settings;
+	} else {
+		_settings = NormalizeSettings(settings);
+	}
+	
+	_settings.path = folderPath;
+	_settings.useIdRange = true;
+	_settings.singlePeerFromId = lastId;
+	_settings.singlePeerTillId = 0; // To current latest
+	
+	_environment = environment;
 	_writer = Output::CreateNullWriter();
 
 	_steps.clear();
@@ -491,11 +569,11 @@ void ControllerObject::startExport(
 			? isDownloadable
 			: (bool)(_settings.media.types & type);
 		if (selected && isDownloadable) {
-			totalMediaFilesCount += item.totalCount;
+			totalMediaFilesCount += item.localTotalCount;
 		}
 	}
 
-	if (totalMediaFilesCount > 0 || _scanStats.totalCount() > 0) {
+	if (totalMediaFilesCount > 0 || _scanStats.localTotalCount() > 0) {
 		_stats.setExpectedFilesCount(totalMediaFilesCount);
 		_scanStatsFound = true;
 	} else {
@@ -506,10 +584,7 @@ void ControllerObject::startExport(
 
 	_isScanning = false;
 	_messagesWritten = 0;
-	_messagesTextCount = 0;
-	_messagesMediaCount = 0;
 	_messagesTotalCount = 0;
-	_messagesTextTotal = 0;
 	_userpicsWritten = 0;
 	_userpicsCount = 0;
 	_storiesWritten = 0;
@@ -553,11 +628,11 @@ void ControllerObject::resumeExport(
 			? isDownloadable
 			: (bool)(_settings.media.types & type);
 		if (selected && isDownloadable) {
-			totalMediaFilesCount += item.totalCount;
+			totalMediaFilesCount += item.localTotalCount;
 		}
 	}
 
-	if (totalMediaFilesCount > 0 || _scanStats.totalCount() > 0) {
+	if (totalMediaFilesCount > 0 || _scanStats.localTotalCount() > 0) {
 		_stats.setExpectedFilesCount(totalMediaFilesCount);
 		_scanStatsFound = true;
 	} else {
@@ -568,60 +643,33 @@ void ControllerObject::resumeExport(
 
 	_isScanning = false;
 	_messagesWritten = 0;
-	_messagesTextCount = 0;
-	_messagesMediaCount = 0;
-	_messagesTotalCount = 0;
-	_messagesTextTotal = 0;
-	_userpicsWritten = 0;
-	_userpicsCount = 0;
-	_storiesWritten = 0;
-	_storiesCount = 0;
 	_contentFilesCount = 0;
 
-	// For single peer export, find the existing folder instead of creating a new one
-	if (_settings.onlySinglePeer() && _settings.singlePeerId != 0) {
-		const auto downloadPath = _settings.path;
-		const auto targetPeerId = _settings.singlePeerId;
-		const auto idStr = QString::number(targetPeerId);
-		
-		// Search for existing ChatExport folder with this peer ID
-		QString existingFolderPath;
-		const QDir parentDir(downloadPath);
-		const auto entries = parentDir.entryList(QStringList() << "ChatExport_*", QDir::Dirs | QDir::NoDotAndDotDot);
-		for (const auto &entry : entries) {
-			if (entry.contains(idStr)) {
-				existingFolderPath = downloadPath + '/' + entry;
-				break;
-			}
-		}
-		
-		if (!existingFolderPath.isEmpty()) {
-			_settings.path = existingFolderPath + '/';
-			LOG(("Export Resume: Resuming in existing folder '%1'").arg(existingFolderPath));
-		} else {
-			// No existing folder found, create a new one
-			_settings.path = Output::NormalizePath(_settings);
-			LOG(("Export Resume: No existing folder found, creating new one"));
-		}
-	} else {
-		_settings.path = Output::NormalizePath(_settings);
-	}
-
+	// Note: _messagesCount will be restored in ApiWrap::startExport via progress.
+	
 	// Enable resume mode in ApiWrap
 	_api.setResumeMode(true);
+
+	_settings.path = Output::NormalizePath(_settings);
 
 	_writer = Output::CreateWriter(_settings.format);
 	_steps.clear();
 	fillExportSteps();
+	
+	// Skip steps that were already processed before resume
+	// We call exportNext() which will execute Step::Initializing.
+	// Step::Initializing will call ApiWrap::startExport, which will load progress
+	// and then call initialized(), which will correctly start the message export.
 	exportNext();
 }
 
-void ControllerObject::checkExistingExport(Fn<void(bool)> callback) const {
+void ControllerObject::checkExistingExport(std::function<void(Export::View::SettingsWidget::ExistingExport)> callback) const {
+	using ExistingExport = Export::View::SettingsWidget::ExistingExport;
 	if (!_settings.onlySinglePeer()) {
 		// Also check the state for single peer info
 		const auto *password = std::get_if<PasswordCheckState>(&_state);
 		if (!password || password->singlePeer.type() == mtpc_inputPeerEmpty) {
-			callback(false);
+			callback(ExistingExport::None);
 			return;
 		}
 	}
@@ -662,7 +710,7 @@ void ControllerObject::checkExistingExport(Fn<void(bool)> callback) const {
 	}
 
 	if (targetPeerId == 0) {
-		callback(false);
+		callback(ExistingExport::None);
 		return;
 	}
 
@@ -674,7 +722,7 @@ void ControllerObject::checkExistingExport(Fn<void(bool)> callback) const {
 	
 	const auto basePath = Output::NormalizePath(tempSettings);
 	if (basePath.isEmpty()) {
-		callback(false);
+		callback(ExistingExport::None);
 		return;
 	}
 
@@ -684,28 +732,46 @@ void ControllerObject::checkExistingExport(Fn<void(bool)> callback) const {
 		return idx > 0 ? basePath.left(idx) : basePath;
 	}();
 
+	const auto checkInFolder = [&](const QString &folderPath) -> std::optional<ExistingExport> {
+		const auto progressPath = ExportProgress::progressFilePath(folderPath);
+		if (QFile::exists(progressPath)) {
+			QFile file(progressPath);
+			if (file.open(QIODevice::ReadOnly)) {
+				const auto doc = QJsonDocument::fromJson(file.readAll());
+				if (!doc.isNull() && doc.isObject()) {
+					const auto progress = ExportProgress::fromJson(doc.object());
+					using Type = MediaSettings::Type;
+					const auto types = progress.settings.media.types;
+					if (!(types & ~(Type::Text | Type::Link | Type::FullHistory))) {
+						return ExistingExport::None;
+					}
+					if (progress.isComplete || (progress.rangeEndMsgId > 0 && progress.lastMessageId >= progress.rangeEndMsgId)) {
+						return ExistingExport::Complete;
+					}
+					if (progress.lastMessageId > 0) {
+						return ExistingExport::Incomplete;
+					}
+				}
+			}
+		}
+		
+		const QDir folderDir(folderPath);
+		const auto partialFiles = folderDir.entryList(QStringList() << "*.partial", QDir::Files | QDir::NoDotAndDotDot);
+		if (!partialFiles.isEmpty()) {
+			return ExistingExport::Incomplete;
+		}
+		return std::nullopt;
+	};
+
 	// Search for any ChatExport folder containing this peer ID
 	{
 		const QDir parentDir(parentPath);
 		const auto entries = parentDir.entryList(QStringList() << "ChatExport_*", QDir::Dirs | QDir::NoDotAndDotDot);
 		const auto idStr = QString::number(targetPeerId);
 		for (const auto &entry : entries) {
-			// Match ID in format: ChatExport_DATE_PEERID_Name
 			if (entry.contains(idStr)) {
-				const auto folderPath = parentPath + '/' + entry;
-				
-				// Check for progress.json
-				const auto progressPath = ExportProgress::progressFilePath(folderPath);
-				if (QFile::exists(progressPath)) {
-					callback(true);
-					return;
-				}
-				
-				// Also check for leftover .partial files from interrupted export
-				const QDir folderDir(folderPath);
-				const auto partialFiles = folderDir.entryList(QStringList() << "*.partial", QDir::Files | QDir::NoDotAndDotDot);
-				if (!partialFiles.isEmpty()) {
-					callback(true);
+				if (const auto result = checkInFolder(parentPath + '/' + entry)) {
+					callback(*result);
 					return;
 				}
 			}
@@ -713,18 +779,12 @@ void ControllerObject::checkExistingExport(Fn<void(bool)> callback) const {
 	}
 
 	// Fallback: check today's generated path
-	const auto progressPath = ExportProgress::progressFilePath(basePath);
-	if (QFile::exists(progressPath)) {
-		callback(true);
+	if (const auto result = checkInFolder(basePath)) {
+		callback(*result);
 		return;
 	}
-	
-	// Also check for partial files in today's path
-	{
-		const QDir dir(basePath);
-		const auto partialFiles = dir.entryList(QStringList() << "*.partial", QDir::Files | QDir::NoDotAndDotDot);
-		callback(!partialFiles.isEmpty());
-	}
+
+	callback(ExistingExport::None);
 }
 
 void ControllerObject::skipFile(uint64 randomId) {
@@ -832,7 +892,20 @@ void ControllerObject::exportNext() {
 	if (++_stepIndex >= _steps.size()) {
 		if (_isScanning) {
 			auto stats = _scanStats.byType();
-			WriteScanStatsFile(_settings.path, stats, _settings.singlePeerId, _settings.singlePeerName);
+			const auto selected = _settings.media.types;
+			const bool fullHistory = (selected & MediaSettings::Type::FullHistory);
+			for (auto it = stats.begin(); it != stats.end();) {
+				const bool isSelected = fullHistory || (selected & it->first);
+				const bool hasAnyCount = (it->second.localTotalCount > 0) || (it->second.uniqueCount > 0);
+				if (!isSelected || !hasAnyCount) {
+					it = stats.erase(it);
+				} else {
+					++it;
+				}
+			}
+			WriteScanStatsFile(_settings, stats);
+			WriteUniqueLinksFile(_settings, _api.visitedLinks());
+			_api.saveScanProgress();
 			_isScanning = false;
 			_stepIndex = -1;
 			setState(ScanDoneState{ std::move(stats) });
@@ -841,7 +914,7 @@ void ControllerObject::exportNext() {
 		if (ioCatchError(_writer->finish())) {
 			return;
 		}
-		(void)_writer->writeUniqueLinks(_api.visitedLinks());
+		WriteUniqueLinksFile(_settings, _api.visitedLinks());
 		_api.finishExport([=] {
 			setFinishedState();
 		});
@@ -878,19 +951,51 @@ void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
 		return;
 	}
 	fillSubstepsInSteps(info);
+
+	if (const auto progress = _api.progress()) {
+		if (!_isScanning && _api.isResumeMode()) {
+			_messagesWritten = progress->messagesProcessed;
+			if (progress->scanTotalMessages > 0) {
+				_messagesCount = progress->scanTotalMessages;
+				_messagesInRangeCountFixed = true;
+			} else if (progress->messagesTotalCount > 0) {
+				_messagesCount = progress->messagesTotalCount;
+				_messagesInRangeCountFixed = true;
+			}
+
+			// Restore type-specific stats so the second row counters are correct
+			_stats.clear();
+			for (const auto &[typeInt, counter] : progress->typeCounters) {
+				const auto type = static_cast<MediaSettings::Type>(typeInt);
+				_stats.increment(type, counter.totalSize, counter.uniqueSize, counter.localTotalCount, counter.uniqueCount, counter.messagesWithLinks);
+				if (type != MediaSettings::Type::Text && type != MediaSettings::Type::Link) {
+					for (int i = 0; i < counter.localTotalCount; ++i) {
+						_stats.incrementUserMediaFiles();
+					}
+				}
+			}
+			_stats.setTotalMessages(progress->messagesTotalCount);
+
+			_scanStats.clear();
+			for (const auto &[typeInt, counter] : progress->scanStats) {
+				const auto type = static_cast<MediaSettings::Type>(typeInt);
+				_scanStats.increment(type, counter.totalSize, counter.uniqueSize, counter.localTotalCount, counter.uniqueCount, counter.messagesWithLinks);
+				if (type != MediaSettings::Type::Text && type != MediaSettings::Type::Link) {
+					for (int i = 0; i < counter.localTotalCount; ++i) {
+						_scanStats.incrementUserMediaFiles();
+					}
+				}
+			}
+			_scanStats.setTotalMessages(progress->scanTotalMessages);
+		}
+	}
+
 	if (_isScanning) {
-		// Only use serverTotalCount as initial denominator when it is accurate
-		// (no date/id range). When a range is active, Telegram returns full-chat
-		// counts ignoring the range — we'll update denominator from messagesTextTotal
-		// once the actual message count per split comes back from requestMessagesCount.
 		if (info.serverCountIsAccurate && info.serverTotalCount > 0) {
 			_messagesCount = info.serverTotalCount;
 			_messagesInRangeCountFixed = true;
 		}
-		// When range is active (!serverCountIsAccurate), leave _messagesCount=0 so it
-		// will be updated dynamically from messagesTextTotal in the progress callback.
 	} else if (!_scanStatsFound && info.serverCountIsAccurate && info.serverTotalCount > 0) {
-		// No prior scan, and server count is range-accurate: use it as denominator.
 		_messagesCount = info.serverTotalCount;
 		_messagesInRangeCountFixed = true;
 	}
@@ -1096,7 +1201,7 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 		} else {
 			const bool hasRange = (fromId > 0 || tillId > 0);
 			const bool fullHistoryMode = (_settings.media.types & MediaSettings::Type::FullHistory);
-			const int serverRangeTotal = _stats.totalCount();
+			const int serverRangeTotal = _stats.localTotalCount();
 			if (hasRange && serverRangeTotal > 0 && !fullHistoryMode) {
 				// Bug 2 fix: use range-filtered server count (e.g. "files in May" = 847)
 				// instead of full-chat messagesCountPerSplit (e.g. 21038).
@@ -1104,7 +1209,7 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 				_messagesCount = serverRangeTotal;
 			} else if (hasRange && fullHistoryMode) {
 				// Bug 1 fix: for FullHistory + range, leave _messagesCount = 0 so
-				// stateDialogs uses messagesTextTotal (actual range message count)
+				// stateDialogs uses messagesTotalCount (actual range message count)
 				// as the denominator once requestMessagesCount returns.
 				// messagesCountPerSplit is the full-chat count and would make progress
 				// appear stuck (e.g. 3000 range msgs / 45187 full chat = 6%).
@@ -1127,13 +1232,13 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 		if (!_stats.expectedFilesCount()) {
 			_stats.setExpectedFilesCount(_messagesCount);
 		}
-		// Reset counters for new dialog
-		_messagesTextCount = 0;
-		_messagesMediaCount = 0;
-		_messagesTotalCount = 0;
+
+		if (_messagesTotalCount > 0) {
+			_messagesCount = _messagesTotalCount;
+		}
 
 		setState(stateDialogs(DownloadProgress{
-			.messagesTotalCount = 0,
+			.messagesTotalCount = _messagesTotalCount,
 		}));
 		return true;
 	}, [=](DownloadProgress progress) {
@@ -1150,18 +1255,15 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 				progress.total
 			};
 		}
-		_messagesTextCount = progress.messagesTextCount;
-		_messagesMediaCount = progress.messagesMediaCount;
 		_messagesTotalCount = progress.messagesTotalCount;
-		_messagesTextTotal = progress.messagesTextTotal;
-		// If the server count was inaccurate (range active), update _messagesCount
+	// If the server count was inaccurate (range active), update _messagesCount
 		// from the actual range count as it accumulates from requestMessagesCount.
 		// This replaces the full-chat count with the range-specific count.
-		if (!_messagesInRangeCountFixed && _messagesTextTotal > 0) {
-			_messagesCount = _messagesTextTotal;
+		if (_messagesTotalCount > 0) {
+			_messagesCount = _messagesTotalCount;
 		}
 		if (_isScanning) {
-			setState(stateScanning(progress.itemIndex, _messagesTextTotal));
+			setState(stateScanning(progress.itemIndex, _messagesTotalCount));
 		} else {
 			setState(stateDialogs(progress));
 		}
@@ -1245,7 +1347,7 @@ ProcessingState ControllerObject::stateOtherData() const {
 ProcessingState ControllerObject::stateScanning(int itemIndex, int itemCount) const {
 	return prepareState(Step::Scanning, [=](ProcessingState &result) {
 		result.itemIndex = itemIndex;
-		result.itemCount = (_messagesCount > 0) ? _messagesCount : itemCount;
+		result.itemCount = itemCount;
 	});
 }
 
@@ -1272,7 +1374,7 @@ void ControllerObject::setFinishedState() {
 	auto exportBreakdown = _stats.byType();
 	const bool exportStatsPopulated = std::any_of(
 		exportBreakdown.begin(), exportBreakdown.end(),
-		[](const auto &p) { return p.second.totalCount > 0; });
+		[](const auto &p) { return p.second.localTotalCount > 0; });
 	auto scanBreakdownFull = _scanStats.byType();
 	// Only use scan stats as fallback if they were gathered with the same settings
 	// (same media types). If scan was full-history but export is selective, scan stats
@@ -1280,7 +1382,7 @@ void ControllerObject::setFinishedState() {
 	// Check: if export has non-empty stats but scan has MORE types, prefer export stats.
 	const bool scanStatsPopulated = _scanStatsFound && std::any_of(
 		scanBreakdownFull.begin(), scanBreakdownFull.end(),
-		[](const auto &p) { return p.second.totalCount > 0; });
+		[](const auto &p) { return p.second.localTotalCount > 0; });
 	auto breakdown = exportStatsPopulated
 		? exportBreakdown
 		: (scanStatsPopulated ? scanBreakdownFull : exportBreakdown);
@@ -1289,10 +1391,10 @@ void ControllerObject::setFinishedState() {
 	if (exportStatsPopulated && scanStatsPopulated) {
 		for (const auto &[type, scanItem] : scanBreakdownFull) {
 			auto it = breakdown.find(type);
-			if (it == breakdown.end() || it->second.totalCount == 0) {
+			if (it == breakdown.end() || it->second.localTotalCount == 0) {
 				breakdown[type] = scanItem;
 			} else if (it->second.uniqueCount == 0 && scanItem.uniqueCount > 0) {
-				// Export stats have totalCount (from server seed) but no uniqueCount/uniqueSize.
+				// Export stats have localTotalCount (from server seed) but no uniqueCount/uniqueSize.
 				// Use scan stats for the unique side so the finished view shows correct data.
 				it->second.uniqueCount = scanItem.uniqueCount;
 				it->second.uniqueSize = scanItem.uniqueSize;
@@ -1321,7 +1423,7 @@ void ControllerObject::setFinishedState() {
 		if (type != Type::Link && type != Type::Text) {
 			totalUniqueCount += item.uniqueCount;
 			totalUniqueSize += item.uniqueSize;
-			totalTotalCount += item.totalCount;
+			totalTotalCount += item.localTotalCount;
 			totalTotalSize += item.totalSize;
 		}
 	}
@@ -1345,6 +1447,7 @@ ProcessingState ControllerObject::prepareState(
 	auto result = ProcessingState();
 	result.step = step;
 	result.isScanning = _isScanning;
+	result.fullHistory = !!(_settings.media.types & MediaSettings::Type::FullHistory);
 
 	if (_lastProcessingStep != step) {
 		_substepsPassed += substepsInStep(_lastProcessingStep);
@@ -1353,6 +1456,9 @@ ProcessingState ControllerObject::prepareState(
 	result.substepsPassed = _substepsPassed;
 	result.substepsNow = substepsInStep(step);
 	result.substepsTotal = _substepsTotal;
+
+	result.selectedStats = _stats.byType();
+	result.expectedStats = _scanStats.byType();
 
 	callback(result);
 	return result;
@@ -1402,8 +1508,11 @@ void ControllerObject::fillMessagesState(
 	result.itemIndex = progress.itemIndex;
 	// Always use total message count for the "X / Y" progress counter.
 	// Using media file count from scan stats was wrong: it excluded Text and Link messages.
-	result.itemCount = (_messagesCount > 0) ? _messagesCount : progress.messagesTextTotal;
+	result.itemCount = (_messagesCount > 0) ? _messagesCount : progress.messagesTotalCount;
 	result.activeDownloads = _activeDownloads;
+
+	result.selectedStats = _stats.byType();
+	result.expectedStats = _scanStats.byType();
 }
 
 void ControllerObject::exportTopic() {
@@ -1535,6 +1644,15 @@ void Controller::runScan(
 	});
 }
 
+void Controller::runUpdateScan(
+		const Settings &settings,
+		const Environment &environment,
+		const QString &folderPath) {
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.runUpdateScan(settings, environment, folderPath);
+	});
+}
+
 void Controller::startExport(
 		const Settings &settings,
 		const Environment &environment) {
@@ -1555,7 +1673,7 @@ void Controller::resumeExport(
 	});
 }
 
-void Controller::checkExistingExport(Fn<void(bool)> callback) {
+void Controller::checkExistingExport(std::function<void(Export::View::SettingsWidget::ExistingExport)> callback) const {
 	_wrapped.with([callback = std::move(callback)](const Implementation &unwrapped) {
 		unwrapped.checkExistingExport(std::move(callback));
 	});

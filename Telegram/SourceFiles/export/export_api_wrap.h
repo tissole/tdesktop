@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_concurrent_sender.h"
 #include "data/data_peer_id.h"
 #include "export/export_progress.h"
+#include "export/export_global_dedup.h"
 
 namespace base {
 class Timer;
@@ -115,11 +116,7 @@ public:
 		int64 ready = 0;
 		int64 total = 0;
 		bool isAuxiliary = false;
-		int messagesTextCount = 0;
-		int messagesMediaCount = 0;
 		int messagesTotalCount = 0;
-		int messagesTextTotal = 0;
-		int messagesUniqueCount = 0;
 	};
 	void requestUserpics(
 		FnMut<bool(Data::UserpicsInfo&&)> start,
@@ -167,6 +164,7 @@ public:
 	void clearState(bool keepCache = false);
 	void setResumeMode(bool enabled) { _resumeMode = enabled; }
 	[[nodiscard]] bool isResumeMode() const { return _resumeMode; }
+	void saveScanProgress() { saveProgress(); }
 	void updateMessageProgress(uint64 messageId);
 
 	void clearResults();
@@ -174,6 +172,10 @@ public:
 	[[nodiscard]] base::flat_set<QString> visitedLinks() const;
 
 	~ApiWrap();
+
+	ExportProgress *progress() const {
+		return _exportProgress.get();
+	}
 
 private:
 	struct StartProcess;
@@ -295,6 +297,9 @@ private:
 	void finishMessagesSlice();
 	void finishMessages();
 
+	void flushBatchStats();
+
+	void processDoneQueue();
 	void onMessagePartDone(int index, bool isSelected = true);
 	void loadTopicMessagesFiles(Data::MessagesSlice &&slice);
 	void resolveTopicCustomEmoji();
@@ -309,6 +314,8 @@ private:
 	[[nodiscard]] Data::Message *currentFileMessage() const;
 	[[nodiscard]] Data::FileOrigin currentFileMessageOrigin() const;
 
+	[[nodiscard]] bool shouldCountLocally(MediaSettings::Type type) const;
+	[[nodiscard]] bool shouldCountLocally() const;
 	[[nodiscard]] MTPMessagesFilter getFilter() const;
 
 	[[nodiscard]] bool processFileLoad(
@@ -338,8 +345,10 @@ private:
 		Data::File &file,
 		const Data::FileOrigin &origin,
 		const LocationKey &dedupKey,
-		Fn<bool(FileProgress)> progress,
-		FnMut<void(QString)> done);
+		std::function<bool(FileProgress)> progress,
+		base::unique_function<void(QString)> done,
+		uint64 dedupDocId,
+		const SizeNameKey &dedupSizeName);
 	void scheduleMoreFiles();	
 	void loadFilePart(FileProcess &process);
 	void finishFile(uint64 randomId, const QString &relativePath);
@@ -383,7 +392,9 @@ private:
 	std::unique_ptr<Settings> _settings;
 	Output::Stats *_stats = nullptr;
 	bool _isScanning = false;
+	uint64 _resumeIdThreshold = 0;
 	bool _usingServerCounts = false;
+	base::flat_set<MediaSettings::Type> _serverCountTrustedTypes;
 	Output::Stats *_scanStats = nullptr;
 	int _serverTotalCount = 0;
 
@@ -460,6 +471,10 @@ private:
 	void onFileCompleted(const QString &filename, int64 size, uint64 messageId);
 	void onFileStarted(const QString &filename, int64 totalSize, uint64 messageId);
 	void removePartialFile(const QString &filename);
+
+	// Global cross-chat deduplication
+	class GlobalDedupManager *_globalDedup = nullptr;
+	std::unique_ptr<class GlobalDedupManager> _globalDedupOwned;
 
 };
 

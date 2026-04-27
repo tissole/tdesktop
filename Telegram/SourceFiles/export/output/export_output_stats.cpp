@@ -20,7 +20,7 @@ Stats::Stats(const Stats &other)
 		auto item = std::make_unique<TypeStat>();
 		item->uniqueCount = stat->uniqueCount.load();
 		item->uniqueSize = stat->uniqueSize.load();
-		item->totalCount = stat->totalCount.load();
+		item->localTotalCount = stat->localTotalCount.load();
 		item->totalSize = stat->totalSize.load();
 		item->messagesWithLinks = stat->messagesWithLinks.load();
 		_stats.emplace(type, std::move(item));
@@ -45,17 +45,21 @@ void Stats::increment(MediaSettings::Type type, int64 size, bool unique) {
 		++stat.uniqueCount;
 		stat.uniqueSize += size;
 	}
-	++stat.totalCount;
+	++stat.localTotalCount;
 	stat.totalSize += size;
 }
 
-void Stats::increment(MediaSettings::Type type, int64 size, int totalCount, int uniqueCount, int messagesWithLinks) {
+void Stats::increment(MediaSettings::Type type, int64 totalSize, int64 uniqueSize, int localTotalCount, int uniqueCount, int messagesWithLinks) {
 	auto &stat = typeStat(type);
 	stat.uniqueCount += uniqueCount;
-	stat.uniqueSize += size;
-	stat.totalCount += totalCount;
-	stat.totalSize += size;
+	stat.uniqueSize += uniqueSize;
+	stat.localTotalCount += localTotalCount;
+	stat.totalSize += totalSize;
 	stat.messagesWithLinks += messagesWithLinks;
+}
+
+void Stats::increment(MediaSettings::Type type, int64 size, int localTotalCount, int uniqueCount, int messagesWithLinks) {
+	increment(type, size, size, localTotalCount, uniqueCount, messagesWithLinks);
 }
 
 void Stats::incrementSizeAndUnique(MediaSettings::Type type, int64 size, bool unique) {
@@ -64,6 +68,7 @@ void Stats::incrementSizeAndUnique(MediaSettings::Type type, int64 size, bool un
 		++stat.uniqueCount;
 		stat.uniqueSize += size;
 	}
+	++stat.localTotalCount;
 	stat.totalSize += size;
 }
 
@@ -73,14 +78,28 @@ void Stats::incrementSize(MediaSettings::Type type, int64 size) {
 	stat.totalSize += size;
 }
 
-void Stats::setTotalCount(MediaSettings::Type type, int count) {
+void Stats::setLocalTotalCount(MediaSettings::Type type, int count) {
 	auto &stat = typeStat(type);
-	stat.totalCount = count;
+	stat.localTotalCount = count;
+}
+
+void Stats::setUniqueCount(MediaSettings::Type type, int count) {
+	auto &stat = typeStat(type);
+	stat.uniqueCount = count;
+}
+
+void Stats::incrementUniqueCount(MediaSettings::Type type, int count) {
+	auto &stat = typeStat(type);
+	stat.uniqueCount += count;
+}
+
+void Stats::setMessagesWithLinks(MediaSettings::Type type, int count) {
+	auto &stat = typeStat(type);
+	stat.messagesWithLinks = count;
 }
 
 void Stats::setMessagesWithLinks(int count) {
-	auto &stat = typeStat(MediaSettings::Type::Link);
-	stat.messagesWithLinks = count;
+	setMessagesWithLinks(MediaSettings::Type::Link, count);
 }
 
 void Stats::setExpectedFilesCount(int count) {
@@ -93,6 +112,10 @@ int Stats::expectedFilesCount() const {
 
 void Stats::incrementTotalMessages() {
 	++_totalMessages;
+}
+
+void Stats::setTotalMessages(int count) {
+	_totalMessages.store(count);
 }
 
 int Stats::totalMessagesCount() const {
@@ -120,10 +143,10 @@ int Stats::userMediaFilesCount() const {
 	return _userMediaFiles.load();
 }
 
-int Stats::totalCount() const {
+int Stats::localTotalCount() const {
 	auto result = 0;
 	for (const auto &[type, stat] : _stats) {
-		result += stat->totalCount.load();
+		result += stat->localTotalCount.load();
 	}
 	return result;
 }
@@ -134,7 +157,7 @@ std::map<MediaSettings::Type, StatItem> Stats::byType() const {
 		result.emplace(type, StatItem{
 			stat->uniqueCount.load(),
 			stat->uniqueSize.load(),
-			stat->totalCount.load(),
+			stat->localTotalCount.load(),
 			stat->totalSize.load(),
 			stat->messagesWithLinks.load()
 		});

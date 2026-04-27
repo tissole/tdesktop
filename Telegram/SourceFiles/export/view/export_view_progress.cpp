@@ -31,6 +31,10 @@ public:
 
 	void updateData(Content::Row &&data);
 
+	[[nodiscard]] QString id() const {
+		return _data.id;
+	}
+
 protected:
 	int resizeGetHeight(int newWidth) override;
 
@@ -88,10 +92,6 @@ void ProgressWidget::Row::updateData(Content::Row &&data) {
 		}
 	}
 	updateControlsGeometry(width());
-	// Notify the parent VerticalLayout that our height may have changed
-	// (e.g. info text switches between one-line and two-line mode).
-	// Without this the Row stays at its previously allocated height and
-	// clips the info label that moved below the filename.
 	updateGeometry();
 	update();
 }
@@ -201,10 +201,6 @@ int ProgressWidget::Row::resizeGetHeight(int newWidth) {
 void ProgressWidget::Row::paintEvent(QPaintEvent *e) {
 	auto p = QPainter(this);
 
-	// Draw the separator line only for active-download rows (main, chat, file_).
-	// Stat summary rows ("stat_*", "header_*") and the invisible sentinel done
-	// row ("done") do not need a separator — they are visually separated by the
-	// FixedHeightWidget spacers inserted between them.
 	const bool isStat = _data.id.startsWith(QStringLiteral("stat_"))
 		|| _data.id.startsWith(QStringLiteral("header_"))
 		|| _data.id == Content::kDoneId
@@ -227,8 +223,6 @@ void ProgressWidget::Row::paintInstance(QPainter &p, const Instance &data) {
 	if (!opacity) {
 		return;
 	}
-	// Don't paint progress bars for invisible/sentinel rows (empty id or kDoneId).
-	// These have height=0 and painting at height()-thickness bleeds into surrounding widgets.
 	if (_data.id.isEmpty() || _data.id == Content::kDoneId) {
 		return;
 	}
@@ -259,9 +253,6 @@ void ProgressWidget::Row::updateInstanceGeometry(
 	if (!instance.label) {
 		return;
 	}
-	// Let the info label resize first, then give remaining width to label.
-	// If overall text is too wide, allow the label to take full width
-	// and place info on a second line below.
 	instance.info->resizeToNaturalWidth(newWidth);
 	const auto infoWidth = instance.info->width();
 	const auto labelAvailable = newWidth - infoWidth;
@@ -363,7 +354,6 @@ void ProgressWidget::setupBottomButton(not_null<Ui::RoundButton*> button) {
 
 void ProgressWidget::updateState(Content &&content) {
 	const auto doneId = Content::kDoneId;
-	// Ignore scan_complete sentinel (clears top bar scanning label only).
 	if (ranges::any_of(content.rows, [](const auto &r) {
 		return r.id == QStringLiteral("scan_complete");
 	})) {
@@ -377,7 +367,7 @@ void ProgressWidget::updateState(Content &&content) {
 	}
 
 	const auto wasCount = _rows.size();
-	const auto headerCount = 2; // _about and _skipFileWrap
+	const auto headerCount = 2;
 	auto index = 0;
 	for (auto &row : content.rows) {
 		if (index < _rows.size()) {
@@ -398,6 +388,7 @@ void ProgressWidget::updateState(Content &&content) {
 		}
 		++index;
 	}
+
 	const auto fileRandomId = !content.rows.empty()
 		? content.rows.back().randomId
 		: uint64(0);

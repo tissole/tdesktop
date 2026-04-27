@@ -355,6 +355,19 @@ void SettingsWidget::addLocationLabel(
 		chooseFolder();
 	});
 #endif // OS_MAC_STORE
+
+	{
+		auto wrap = object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
+			container,
+			object_ptr<Ui::FlatLabel>(
+				container,
+				QString(),
+				st::exportAboutOptionLabel),
+			st::exportAboutOptionPadding);
+		_scanResultsLabel = wrap.data();
+		container->add(std::move(wrap));
+	}
+	_scanResultsLabel->hide(anim::type::instant);
 }
 
 void SettingsWidget::chooseFormat() {
@@ -540,10 +553,6 @@ void SettingsWidget::addLimitsLabel(
 		container->resizeToWidth(container->width());
 	});
 
-	// Wrap dateLabel in SlideWrap so that toggling it off truly removes its
-	// height from the VerticalLayout. Plain setVisible(false) hides the widget
-	// but leaves its full height as dead space — causing the large gap between
-	// the "by message id range" radio and the ID input fields.
 	const auto dateLabelWrap = container->add(
 		object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
 			container,
@@ -554,58 +563,100 @@ void SettingsWidget::addLimitsLabel(
 			st::exportLimitsPadding));
 	const auto dateLabel = dateLabelWrap->entity();
 
-	// ID range UI — two inputs on a single row (visible when ID mode is selected).
-	// Wrapped in SlideWrap<VerticalLayout> so the VerticalLayout's width is
-	// correctly propagated to child widgets (SlideWrap<RpWidget> does not do
-	// this reliably because RpWidget has no resizeGetHeight override).
-	const int inputH = st::defaultInputField.heightMin;
-	const int labelH = st::exportIdFieldLabel.style.font->height;
-	const int idPadL = 22;
-	const int idGap  = 16;
-	const int idRowH = labelH + inputH;
+    //const int idLabelH = st::exportIdFieldLabel.maxHeight;
+    const int idLabelH = st::exportIdFieldLabel.style.font->height - 2;
+    //const int idInputH = st::defaultInputField.heightMin;
+    const int idInputH = st::exportIdInput.heightMin;
+    const int idTopPad = st::exportSettingPadding.top();
+    const int idPadL = st::exportSettingPadding.left();
+    const int idGap = 16;
+    const int idRowH = idTopPad + idLabelH + 2 + idInputH;
+    
+    const auto idContainerWrap = container->add(
+        object_ptr<Ui::SlideWrap<Ui::FixedHeightWidget>>(
+            container,
+            object_ptr<Ui::FixedHeightWidget>(container, idRowH),
+            style::margins(0, 0, 0, 0)));
+    const auto idContainer = idContainerWrap->entity();
 
-	const auto idContainerWrap = container->add(
-		object_ptr<Ui::SlideWrap<Ui::FixedHeightWidget>>(
-			container,
-			object_ptr<Ui::FixedHeightWidget>(container, idRowH),
-			style::margins(0, 0, 0, 0)));
-	const auto idContainer = idContainerWrap->entity();
+//	const int inputH = st::defaultInputField.heightMin;
+//	const int labelH = st::exportIdFieldLabel.style.font->height;
+//	const int idPadL = 22;
+//	const int idGap  = 16;
+//	const int idRowH = labelH + inputH; 
+//
+//
+//	const auto idContainerWrap = container->add(
+//		object_ptr<Ui::SlideWrap<Ui::FixedHeightWidget>>(
+//			container,
+//			object_ptr<Ui::FixedHeightWidget>(container, idRowH),
+//			style::margins(0, 0, 0, 0)));
+//	const auto idContainer = idContainerWrap->entity();
 
 	const auto fromIdLabel = Ui::CreateChild<Ui::FlatLabel>(
 		idContainer,
 		tr::lng_export_id_from_placeholder(tr::now),
 		st::exportIdFieldLabel);
 
-	const auto fromIdInput = Ui::CreateChild<Ui::InputField>(
-		idContainer,
-		st::defaultInputField,
-		rpl::single(QString()),
-		u"Message ID"_q);
+//	const auto fromIdInput = Ui::CreateChild<Ui::InputField>(
+//		idContainer,
+//		st::defaultInputField,
+//		rpl::single(QString()),
+//		u"Message ID"_q);
+
+    const auto fromIdInput = Ui::CreateChild<Ui::InputField>(
+        idContainer,
+        st::exportIdInput,
+        rpl::single(QString()),
+        u"Message ID"_q);
 
 	const auto tillIdLabel = Ui::CreateChild<Ui::FlatLabel>(
 		idContainer,
 		tr::lng_export_id_till_placeholder(tr::now),
 		st::exportIdFieldLabel);
 
-	const auto tillIdInput = Ui::CreateChild<Ui::InputField>(
-		idContainer,
-		st::defaultInputField,
-		rpl::single(QString()),
-		u"Message ID"_q);
+//	const auto tillIdInput = Ui::CreateChild<Ui::InputField>(
+//		idContainer,
+//		st::defaultInputField,
+//		rpl::single(QString()),
+//		u"Message ID"_q);
 
-	const auto layoutIdRow = [=](int w) {
-		const int half = (w - idPadL * 2 - idGap) / 2;
-		if (half < 20) return;
-		fromIdLabel->resizeToWidth(half);
-		fromIdLabel->move(idPadL, 0);
-		fromIdInput->setGeometry(idPadL, labelH, half, inputH);
-		const int x2 = idPadL + half + idGap;
-		tillIdLabel->resizeToWidth(half);
-		tillIdLabel->move(x2, 0);
-		tillIdInput->setGeometry(x2, labelH, half, inputH);
-	};
+    const auto tillIdInput = Ui::CreateChild<Ui::InputField>(
+        idContainer,
+        st::exportIdInput,
+        rpl::single(QString()),
+        u"Message ID"_q);
+
+    const auto layoutIdRow = [=](int w) {
+        const int half = (w - idPadL * 2 - idGap) / 2;
+        if (half < 20) return;
+        const int labelY = idTopPad;
+        const int inputY = idTopPad + idLabelH + 0;
+        fromIdLabel->resizeToWidth(half);
+        fromIdLabel->move(idPadL, labelY);
+        fromIdInput->setGeometry(idPadL, inputY, half, idInputH);
+        const int x2 = idPadL + half + idGap;
+        tillIdLabel->resizeToWidth(half);
+        tillIdLabel->move(x2, labelY);
+        tillIdInput->setGeometry(x2, inputY, half, idInputH);
+    };
+
+//	const auto layoutIdRow = [=](int w) {
+//		const int half = (w - idPadL * 2 - idGap) / 2;
+//		if (half < 20) return;
+//		fromIdLabel->resizeToWidth(half);
+//		fromIdLabel->move(idPadL, 0);
+//		fromIdInput->setGeometry(idPadL, labelH, half, inputH);
+//		const int x2 = idPadL + half + idGap;
+//		tillIdLabel->resizeToWidth(half);
+//		tillIdLabel->move(x2, 0);
+//		tillIdInput->setGeometry(x2, labelH, half, inputH);
+//	};
+    
 	idContainer->widthValue()
 		| rpl::on_next([=](int w) { layoutIdRow(w); }, idContainer->lifetime());
+
+
 
 	// Bind inputs to data
 	value()
@@ -912,6 +963,11 @@ not_null<Ui::RpWidget*> SettingsWidget::setupButtons(
 	_buttonsContainer = buttons;
 
 	value() | rpl::map([=](const Settings &data) {
+		const auto extFilterActive = (data.media.extensionFilterMode != MediaSettings::ExtFilterMode::None);
+		const auto extFilterEmpty = data.media.extensionFilter.isEmpty();
+		if (extFilterActive && extFilterEmpty) {
+			return false;
+		}
 		if (data.onlySinglePeer()) {
 			return (data.media.types != MediaSettings::Types(0));
 		}
@@ -1159,7 +1215,7 @@ void SettingsWidget::addExtensionFilter(
 	using Type    = MediaSettings::Type;
 
 	const auto isEligible = [](const Settings &data) {
-		return bool(data.media.types & (Type::Video | Type::Audio | Type::File));
+		return bool(data.media.types & (Type::Video | Type::Audio | Type::File | Type::Sticker | Type::FullHistory));
 	};
 
 	// ── Whitelist checkbox — label IS the ✓ sign, coloured green ──
@@ -1181,15 +1237,28 @@ void SettingsWidget::addExtensionFilter(
 		st::exportSettingPadding);
 
 	// ── Extension input — shown only when a filter mode is active ──
-	const auto inputWrap = container->add(
-		object_ptr<Ui::SlideWrap<Ui::InputField>>(
-			container,
-			object_ptr<Ui::InputField>(
-				container,
-				st::exportExtInput,
-				rpl::single(QString(u"pdf docx mp4 ..."_q)))),
-		st::exportSubSettingPadding);
-	const auto input = inputWrap->entity();
+	//const auto inputWrap = container->add(
+	//	object_ptr<Ui::SlideWrap<Ui::InputField>>(
+	//		container,
+	//		object_ptr<Ui::InputField>(
+	//			container,
+	//			st::exportExtInput,
+	//			rpl::single(QString(u"pdf, docx, mp4..."_q))))),
+	//	style::margins{ st::exportSubSettingPadding.left(), -10, st::exportSubSettingPadding.right(), 0 };
+	//const auto input = inputWrap->entity();
+
+    auto inputField = object_ptr<Ui::InputField>(
+        container,
+        st::exportExtInput,
+        rpl::single(QString(u"pdf, docx, mp4..."_q)));
+    auto slideWrap = object_ptr<Ui::SlideWrap<Ui::InputField>>(
+        container,
+        std::move(inputField));
+    const auto inputWrap = container->add(
+        std::move(slideWrap),
+        //style::margins{ st::exportSubSettingPadding.left(), -10, st::exportSubSettingPadding.right(), 0 });
+        style::margins{ st::exportSettingPadding.left(), -2, st::exportSettingPadding.right(), 0 });
+    const auto input = inputWrap->entity();
 
 	// Set initial text
 	input->setText(readData().media.extensionFilter.join(u" "_q));
@@ -1211,8 +1280,10 @@ void SettingsWidget::addExtensionFilter(
 		| rpl::filter([](bool v) { return !v; })
 		| rpl::on_next([=] {
 			if (!blCb->checked()) {
+				input->setText(QString());
 				changeData([&](Settings &data) {
 					data.media.extensionFilterMode = ExtMode::None;
+					data.media.extensionFilter.clear();
 				});
 			}
 		}, wlCb->lifetime());
@@ -1230,8 +1301,10 @@ void SettingsWidget::addExtensionFilter(
 		| rpl::filter([](bool v) { return !v; })
 		| rpl::on_next([=] {
 			if (!wlCb->checked()) {
+				input->setText(QString());
 				changeData([&](Settings &data) {
 					data.media.extensionFilterMode = ExtMode::None;
+					data.media.extensionFilter.clear();
 				});
 			}
 		}, blCb->lifetime());
@@ -1262,6 +1335,20 @@ void SettingsWidget::addExtensionFilter(
 			});
 		}, input->lifetime());
 
+	// ── Sync checkboxes when data changes externally ──
+	value()
+		| rpl::map([](const Settings &data) {
+			return data.media.extensionFilterMode;
+		})
+		| rpl::distinct_until_changed()
+		| rpl::on_next([=](ExtMode mode) {
+			wlCb->setChecked(mode == ExtMode::Whitelist);
+			blCb->setChecked(mode == ExtMode::Blacklist);
+			if (mode == ExtMode::None) {
+				input->setText(QString());
+			}
+		}, wlCb->lifetime());
+
 	// ── Enable/disable based on eligible types ──
 	value()
 		| rpl::map(isEligible)
@@ -1273,23 +1360,16 @@ void SettingsWidget::addExtensionFilter(
 				// Clear filter when no eligible type is selected
 				wlCb->setChecked(false);
 				blCb->setChecked(false);
+				input->setText(QString());
 				changeData([&](Settings &data) {
 					data.media.extensionFilterMode = ExtMode::None;
+					data.media.extensionFilter.clear();
 				});
 			}
 		}, wlCb->lifetime());
 
-	// ── Sync checkboxes when data changes externally ──
-	value()
-		| rpl::map([](const Settings &data) {
-			return data.media.extensionFilterMode;
-		})
-		| rpl::distinct_until_changed()
-		| rpl::on_next([=](ExtMode mode) {
-			wlCb->setChecked(mode == ExtMode::Whitelist);
-			blCb->setChecked(mode == ExtMode::Blacklist);
-		}, wlCb->lifetime());
-
+	// Add spacing before the size slider to prevent overlap with the input field label
+	container->add(object_ptr<Ui::FixedHeightWidget>(container, 25));
 }
 
 void SettingsWidget::addSizeSlider(
@@ -1330,9 +1410,16 @@ void SettingsWidget::addSizeSlider(
 	) | rpl::on_next([=](std::pair<int64, MediaSettings::Types> state) {
 		const auto sizeLimit = state.first;
 		const auto types = state.second;
-		const auto disabled = (types & MediaSettings::Type::Link)
-			|| (types & MediaSettings::Type::FullHistory)
-			|| (types & MediaSettings::Type::Text);
+		const auto sizeRelevant = MediaSettings::Type::Photo
+			| MediaSettings::Type::Video
+			| MediaSettings::Type::File
+			| MediaSettings::Type::Audio
+			| MediaSettings::Type::VoiceMessage
+			| MediaSettings::Type::VideoMessage
+			| MediaSettings::Type::Sticker
+			| MediaSettings::Type::GIF
+			| MediaSettings::Type::FullHistory;
+		const auto disabled = !(types & sizeRelevant);
 		slider->setDisabled(disabled);
 
 		const auto limit = sizeLimit / kMegabyte;
@@ -1357,7 +1444,8 @@ void SettingsWidget::addSizeSlider(
 	) | rpl::on_next([=](QRect geometry) {
 		label->moveToRight(
 			st::exportFileSizePadding.right(),
-			geometry.y() - label->height() - st::exportFileSizeLabelBottom);
+			//geometry.y() - label->height() - st::exportFileSizeLabelBottom);
+            geometry.y() - label->height() - 4);
 	}, label->lifetime());
 }
 
@@ -1386,6 +1474,7 @@ void SettingsWidget::updateButtonsLayout() {
 	// Force Qt to update geometry of all buttons before we compute positions
 	// This ensures widths are current (important after show/hide calls)
 	_resumeButton->adjustSize();
+	_updateButton->adjustSize();
 	_exportButtonForLayout->adjustSize();
 	_scanButtonForLayout->adjustSize();
 	_cancelButtonForLayout->adjustSize();
@@ -1399,11 +1488,14 @@ void SettingsWidget::updateButtonsLayout() {
 	_exportButtonForLayout->moveToRight(right, top);
 	int nextRight = right + _exportButtonForLayout->width() + padding.left();
 
-	// Resume is between Export and Scan (only if NOT hidden)
-	// We check isHidden() because isVisible() returns false if parent is not visible yet
+	// Resume or Update is between Export and Scan (only if NOT hidden)
 	if (!_resumeButton->isHidden()) {
 		_resumeButton->moveToRight(nextRight, top);
 		nextRight += _resumeButton->width() + padding.left();
+	}
+	if (!_updateButton->isHidden()) {
+		_updateButton->moveToRight(nextRight, top);
+		nextRight += _updateButton->width() + padding.left();
 	}
 
 	// Scan is next
@@ -1444,7 +1536,7 @@ void SettingsWidget::refreshButtons(
 	export_->clicks() | rpl::to_empty | rpl::start_to_stream(_exportClicks, export_->lifetime());
 	_exportButtonForLayout = export_;
 
-	// Resume button (always created, shown/hidden based on _hasExistingExport)
+	// Resume button (always created, shown/hidden based on _existingExport)
 	{
 		const auto resume = Ui::CreateChild<Ui::RoundButton>(
 			container.get(),
@@ -1452,12 +1544,28 @@ void SettingsWidget::refreshButtons(
 			st::defaultBoxButton);
 		resume->setTextTransform(Ui::RoundButtonTextTransform::NoTransform);
 		resume->clicks() | rpl::to_empty | rpl::start_to_stream(_resumeClicks, resume->lifetime());
-		if (_hasExistingExport) {
+		if (_existingExport == ExistingExport::Incomplete) {
 			resume->show();
 		} else {
 			resume->hide();
 		}
 		_resumeButton = resume;
+	}
+
+	// Update button (always created, shown/hidden based on _existingExport)
+	{
+		const auto update = Ui::CreateChild<Ui::RoundButton>(
+			container.get(),
+			rpl::single(QString("Update")),
+			st::defaultBoxButton);
+		update->setTextTransform(Ui::RoundButtonTextTransform::NoTransform);
+		update->clicks() | rpl::to_empty | rpl::start_to_stream(_updateClicks, update->lifetime());
+		if (_existingExport == ExistingExport::Complete) {
+			update->show();
+		} else {
+			update->hide();
+		}
+		_updateButton = update;
 	}
 
 	const auto scan = Ui::CreateChild<Ui::RoundButton>(
@@ -1484,30 +1592,33 @@ void SettingsWidget::refreshButtons(
 	if (_isScanning) {
 		export_->setDisabled(true);
 		_resumeButton->setDisabled(true);
+		_updateButton->setDisabled(true);
 		scan->setDisabled(true);
 	} else if (_hasScanResults) {
 		export_->setDisabled(!canStart);
 		_resumeButton->setDisabled(!canStart);
+		_updateButton->setDisabled(!canStart);
 		scan->setDisabled(true);
 	} else {
 		export_->setDisabled(!canStart);
 		_resumeButton->setDisabled(!canStart);
+		_updateButton->setDisabled(!canStart);
 		scan->setDisabled(!canStart || !mediaTypesSelected);
 	}
 
 	// Layout is handled by:
 	// 1. rpl::combine below (fires on container/button size changes)
-	// 2. setHasExistingExport() QTimer::singleShot(0) callback
-	// The resume button's shownValue() is handled via the rpl::combine
-	// which includes _resumeButton->widthValue().
+	// 2. setExistingExport() QTimer::singleShot(0) callback
 
 	rpl::combine(
 		container->sizeValue(),
 		export_->widthValue(),
 		scan->widthValue(),
 		_resumeButton->widthValue(),
-		_resumeButton->shownValue()
-	) | rpl::on_next([=](QSize, int, int, int, bool) {
+		_resumeButton->shownValue(),
+		_updateButton->widthValue(),
+		_updateButton->shownValue()
+	) | rpl::on_next([=](QSize, int, int, int, bool, int, bool) {
 		updateButtonsLayout();
 	}, _buttonsLayout);
 }
@@ -1546,6 +1657,10 @@ rpl::producer<> SettingsWidget::resumeClicks() const {
 	return _resumeClicks.events();
 }
 
+rpl::producer<> SettingsWidget::updateClicks() const {
+	return _updateClicks.events();
+}
+
 rpl::producer<> SettingsWidget::cancelClicks() const {
 	return _cancelClicks.events();
 }
@@ -1573,20 +1688,23 @@ void SettingsWidget::setScanning(bool scanning) {
 	}
 }
 
-void SettingsWidget::setHasExistingExport(bool has) {
-	if (_hasExistingExport == has) {
+void SettingsWidget::setExistingExport(ExistingExport state) {
+	if (_existingExport == state) {
 		return;
 	}
-	_hasExistingExport = has;
-	if (_resumeButton) {
-		if (has) {
+	_existingExport = state;
+	if (_resumeButton && _updateButton) {
+		if (state == ExistingExport::Incomplete) {
 			_resumeButton->show();
+			_updateButton->hide();
+		} else if (state == ExistingExport::Complete) {
+			_resumeButton->hide();
+			_updateButton->show();
 		} else {
 			_resumeButton->hide();
+			_updateButton->hide();
 		}
 		// Defer layout update to ensure button visibility change is processed
-		// and container has correct width. Call updateButtonsLayout() directly
-		// to ensure it runs even if rpl::combine doesn't fire.
 		QTimer::singleShot(0, this, [=]() {
 			if (_buttonsContainer && _buttonsContainer->parentWidget()
 					&& _buttonsContainer->parentWidget()->width() > 0) {
@@ -1604,11 +1722,11 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	int totalUniqueMessagesCount = 0;
 	int totalTotalMessagesCount = 0;
 	for (const auto &[type, stat] : stats) {
-		totalTotalMessagesCount += stat.totalCount;
+		totalTotalMessagesCount += stat.localTotalCount;
 	}
 
 	if (totalTotalMessagesCount <= 0) {
-		resetToDefault();
+		setScanning(false);
 		using MediaType = MediaSettings::Type;
 		const auto types = readData().media.types;
 		const auto hasMedia = (types & MediaType::MediaMask) || (types & MediaType::Sticker) || (types & MediaType::GIF) || (types & MediaType::File);
@@ -1663,7 +1781,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 
 	for (const auto type : order) {
 		const auto it = _scanResults.find(type);
-		if (!showAllCategories && (it == _scanResults.end() || it->second.totalCount <= 0)) {
+		if (!showAllCategories && (it == _scanResults.end() || it->second.localTotalCount <= 0)) {
 			continue;
 		}
 		const auto &item = (it != _scanResults.end()) ? it->second : Output::StatItem();
@@ -1684,25 +1802,25 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 			categoriesCount++;
 
 			if (type == MediaType::Text) {
-				text += label + ": " + Lang::FormatCountDecimal(item.totalCount) + "\n";
+				text += label + ": " + Lang::FormatCountDecimal(item.localTotalCount) + "\n";
 			} else if (type == MediaType::Link) {
 				const auto messagesStr = item.messagesWithLinks > 0
 					? " (" + Lang::FormatCountDecimal(item.messagesWithLinks) + " Messages)"
 					: QString();
-				if (item.uniqueCount == item.totalCount) {
+				if (item.uniqueCount == item.localTotalCount) {
 					text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount) + messagesStr + "\n";
 				} else {
 					text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
-						+ ", " + Lang::FormatCountDecimal(item.totalCount) + messagesStr + "\n";
+						+ ", " + Lang::FormatCountDecimal(item.localTotalCount) + messagesStr + "\n";
 				}
 			} else {
-				const bool noDuplicates = (item.uniqueCount == item.totalCount) && (item.uniqueSize == item.totalSize);
+				const bool noDuplicates = (item.uniqueCount == item.localTotalCount) && (item.uniqueSize == item.totalSize);
 				if (noDuplicates) {
-					text += label + ": " + Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")\n";
+					text += label + ": " + Lang::FormatCountDecimal(item.localTotalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")\n";
 				} else {
 					const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount)
 						+ " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
-					const auto totalStr = Lang::FormatCountDecimal(item.totalCount)
+					const auto totalStr = Lang::FormatCountDecimal(item.localTotalCount)
 						+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
 
 					text += label + ": " + uniqueStr + ", " + totalStr + "\n";
@@ -1714,20 +1832,28 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 
 			if (type != MediaType::Link && type != MediaType::Text) {
 				totalUniqueMessagesCount += item.uniqueCount;
-				totalTotalMessagesCount += item.totalCount;
+				totalTotalMessagesCount += item.localTotalCount;
 			}
 		}
 	}
-	if (totalTotalMessagesCount > 0) {
-		if (categoriesCount > 1) {
-			const auto label = "Total Files: ";
-			const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
-				+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
-			const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
+	int mediaCategoriesCount = 0;
+	for (const auto type : order) {
+		const auto it = _scanResults.find(type);
+		const bool hasData = (it != _scanResults.end() && it->second.localTotalCount > 0);
+		const bool isTextOrLink = (type == MediaType::Text || type == MediaType::Link);
+		const bool includeInTotal = !isTextOrLink;
+		if ((showAllCategories || hasData) && includeInTotal) {
+			mediaCategoriesCount++;
+		}
+	}
+	if (mediaCategoriesCount > 1) {
+		const auto label = "Total Media: ";
+		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
+			+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
+		const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
 			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
-			text += "\n" + QString(label) + uniqueStr + ", " + totalStr;
-		}
+		text += "\n" + QString(label) + uniqueStr + ", " + totalStr;
 	}
 	_scanResultsLabel->entity()->setText(text.trimmed());
 	_scanResultsLabel->toggle(true, anim::type::instant);
@@ -1768,7 +1894,10 @@ void SettingsWidget::resetToDefault() {
 		data.singlePeerTillId = 0;
 		data.useIdRange = false;
 		data.media.types = MediaSettings::Types(0); // Reset all media type checkboxes
-		data.media.sizeLimit = 8 * 1024 * 1024; // Explicitly reset size limit
+		data.media.sizeLimit = 4000LL * 1024 * 1024; // Explicitly reset size limit
+		data.media.extensionFilter.clear();
+		data.media.extensionFilterMode = MediaSettings::ExtFilterMode::None;
+		data.types = Settings::Types(0);
 	});
 	clearScanResults();
 }
@@ -1782,6 +1911,12 @@ void SettingsWidget::restoreSettings(const Settings &data) {
 		current.types = data.types;
 		current.fullChats = data.fullChats;
 		current.format = data.format;
+		
+		current.singlePeerFrom = data.singlePeerFrom;
+		current.singlePeerTill = data.singlePeerTill;
+		current.useIdRange = data.useIdRange;
+		current.singlePeerFromId = data.singlePeerFromId;
+		current.singlePeerTillId = data.singlePeerTillId;
 	});
 }
 

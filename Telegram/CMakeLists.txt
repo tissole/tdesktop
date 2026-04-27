@@ -820,6 +820,8 @@ PRIVATE
     editor/scene/scene_item_sticker.h
     export/export_manager.cpp
     export/export_manager.h
+    export/export_global_dedup.cpp
+    export/export_global_dedup.h
     export/view/export_view_content.cpp
     export/view/export_view_content.h
     export/view/export_view_panel_controller.cpp
@@ -828,6 +830,7 @@ PRIVATE
     export/view/export_view_progress.h
     export/view/export_view_settings.cpp
     export/view/export_view_settings.h
+    export/view/export.style
     export/view/export_view_top_bar.cpp
     export/view/export_view_top_bar.h
     history/admin_log/history_admin_log_filter.cpp

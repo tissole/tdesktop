@@ -1809,7 +1809,7 @@ Result JsonWriter::finish() {
 		for (const auto &pair : breakdown) {
 			const auto mediaType = pair.first;
 			const auto &item = pair.second;
-			if (item.totalCount <= 0) continue;
+			if (item.localTotalCount <= 0) continue;
 			QByteArray key;
 			switch (mediaType) {
 			case MediaType::Photo: key = "photos"; break;
@@ -1827,7 +1827,7 @@ Result JsonWriter::finish() {
 				auto itemValues = std::vector<std::pair<QByteArray, QByteArray>>();
 				itemValues.push_back({ "unique_count", QByteArray::number(item.uniqueCount) });
 				itemValues.push_back({ "unique_size", QByteArray::number(item.uniqueSize) });
-				itemValues.push_back({ "total_count", QByteArray::number(item.totalCount) });
+				itemValues.push_back({ "total_count", QByteArray::number(item.localTotalCount) });
 				itemValues.push_back({ "total_size", QByteArray::number(item.totalSize) });
 				statsValues.push_back({ key, SerializeObject(_context, itemValues) });
 			}
@@ -1843,7 +1843,7 @@ Result JsonWriter::finish() {
 			if (mediaType != MediaType::Link) {
 				totalUniqueCount += item.uniqueCount;
 				totalUniqueSize += item.uniqueSize;
-				totalTotalCount += item.totalCount;
+				totalTotalCount += item.localTotalCount;
 				totalTotalSize += item.totalSize;
 			}
 		}

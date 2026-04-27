@@ -45,6 +45,7 @@ public:
 	rpl::producer<> scanClicks() const;
 	rpl::producer<> exportClicks() const;
 	rpl::producer<> resumeClicks() const;
+	rpl::producer<> updateClicks() const;
 	rpl::producer<> cancelClicks() const;
 	rpl::producer<> scanInvalidated() const;
 
@@ -52,7 +53,14 @@ public:
 	void clearScanResults();
 	void setScanProgress(int itemIndex, int itemCount);
 	void setScanning(bool scanning);
-	void setHasExistingExport(bool has);
+
+	enum class ExistingExport {
+		None,
+		Incomplete,
+		Complete
+	};
+	void setExistingExport(ExistingExport state);
+
 	void resetToDefault();
 	void restoreSettings(const Settings &data);
 	const Settings &readData() const;
@@ -140,6 +148,7 @@ private:
 	rpl::event_stream<> _scanClicks;
 	rpl::event_stream<> _exportClicks;
 	rpl::event_stream<> _resumeClicks;
+	rpl::event_stream<> _updateClicks;
 	rpl::event_stream<> _cancelClicks;
 	rpl::event_stream<> _scanInvalidated;
 
@@ -147,10 +156,11 @@ private:
 	Ui::VerticalLayout *_container = nullptr;
 	rpl::lifetime _buttonsLayout; // cancelled & rebuilt each refreshButtons call
 	Ui::RpWidget *_resumeButton = nullptr;
+	Ui::RpWidget *_updateButton = nullptr;
 	Ui::SlideWrap<Ui::FlatLabel> *_scanResultsLabel = nullptr;
 	bool _isScanning = false;
 	bool _hasScanResults = false;
-	bool _hasExistingExport = false;
+	ExistingExport _existingExport = ExistingExport::None;
 	std::map<MediaSettings::Type, Output::StatItem> _scanResults;
 
 	// Stored button references for layout updates after visibility changes

@@ -528,10 +528,7 @@ void ParseAttributes(
 		}, [&](const MTPDdocumentAttributeVideo &data) {
 			if (data.is_round_message()) {
 				result.isVideoMessage = true;
-			} else if (!result.isAnimated) {
-				// Only set isVideoFile if not already flagged as animated GIF.
-				// GIFs have both documentAttributeAnimated and documentAttributeVideo;
-				// isAnimated takes priority so they are not miscounted as Video.
+			} else {
 				result.isVideoFile = true;
 			}
 			result.width = data.vw().v;
@@ -597,9 +594,7 @@ QString ComputeDocumentName(
 }
 
 QString DocumentFolder(const Document &data) {
-	if (data.isVideoFile) {
-		return "video_files";
-	} else if (data.isAnimated) {
+	if (data.isAnimated) {
 		return "animations";
 	} else if (data.isSticker) {
 		return "stickers";
@@ -607,6 +602,8 @@ QString DocumentFolder(const Document &data) {
 		return "voice_messages";
 	} else if (data.isVideoMessage) {
 		return "round_video_messages";
+	} else if (data.isVideoFile) {
+		return "video_files";
 	}
 	return "files";
 }
@@ -1436,6 +1433,13 @@ Media ParseMedia(
 		auto content = document
 			? ParseDocument(context, *document, folder, date)
 			: Document();
+		if (document) {
+			content.isVideoMessage = data.is_round();
+			content.isVoiceMessage = data.is_voice();
+			// Only treat as Video if the server-side 'video' flag is set 
+			// AND it is not a round video message.
+			content.isVideoFile = data.is_video() && !data.is_round();
+		}
 		if (const auto ttl = data.vttl_seconds()) {
 			result.ttl = ttl->v;
 			content.file = File();
@@ -1448,9 +1452,7 @@ Media ParseMedia(
 		}, [](const auto &) {
 			return MTPstring();
 		});
-		if (!url.v.isEmpty()) {
-			result.content = WebPage{ ParseString(url) };
-		}
+		result.content = WebPage{ ParseString(url) };
 	}, [&](const MTPDmessageMediaVenue &data) {
 		result.content = ParseVenue(data);
 	}, [&](const MTPDmessageMediaGame &data) {
@@ -2637,83 +2639,92 @@ bool SkipMessageByDate(const Message &message, const Settings &settings) {
 			return true;
 		}
 	} else {
-		const auto goodFrom = (settings.singlePeerFrom <= 0)
+		const auto goodFrom = (settings.singlePeerFrom == 0)
 			|| (settings.singlePeerFrom <= message.date);
-		const auto goodTill = (settings.singlePeerTill <= 0)
+		const auto goodTill = (settings.singlePeerTill == 0)
 			|| (message.date <= settings.singlePeerTill);
 		if (!goodFrom || !goodTill) {
 			return true;
 		}
 	}
 
-	// 2. Content Filters (Strictly Exclusive)
+	// 2. Content & Selection Filters
 	using Type = MediaSettings::Type;
 	const auto types = settings.media.types;
+	const bool fullHistory = (types & Type::FullHistory);
 
-	// 'Full history (no media export)' overrides all exclusion logic
-	if (types & Type::FullHistory) {
-		return false;
-	}
+	const auto type = v::match(message.media.content, [&](const Data::Document &data) {
+		if (data.isSticker) return Type::Sticker;
+		if (data.isVideoMessage) return Type::VideoMessage;
+		if (data.isVoiceMessage) return Type::VoiceMessage;
+		if (data.isAnimated) return Type::GIF;
+		if (data.isVideoFile) return Type::Video;
+		if (data.isAudioFile) return Type::Audio;
+		return Type::File;
+	}, [](const Data::Photo &data) {
+		return Type::Photo;
+	}, [](const Data::WebPage &data) {
+		return Type::Link;
+	}, [](const v::null_t &) {
+		return Type::Text;
+	}, [](const auto &) {
+		return static_cast<Type>(0);
+	});
 
-	// Correctly check if the message has NO media content
-	const auto hasMedia = !std::holds_alternative<v::null_t>(message.media.content);
-
-	if (hasMedia) {
-		// Identify the type of media
-		const auto type = v::match(message.media.content, [&](
-			const Data::Document &data) {
-			if (data.isSticker) return Type::Sticker;
-			if (data.isVideoMessage) return Type::VideoMessage;
-			if (data.isVoiceMessage) return Type::VoiceMessage;
-			if (data.isAnimated) return Type::GIF;
-			if (data.isVideoFile) return Type::Video;
-			if (data.isAudioFile) return Type::Audio;
-			return Type::File;
-		}, [](const Data::Photo &data) {
-			return Type::Photo;
-		}, [](const Data::WebPage &data) {
-			return Type::Link;
-		}, [](const auto &data) {
-			return Type::Text;
-		});
-
-		// Skip if this media type is NOT selected
-		// Special case: if Link is selected, we also check media captions for links
-		if (!(types & type)) {
-			if (types & Type::Link) {
-				const auto hasLink = std::holds_alternative<Data::WebPage>(message.media.content) || [&] {
-					for (const auto &part : message.text) {
-						if (part.type == Data::TextPart::Type::Url
-							|| part.type == Data::TextPart::Type::TextUrl) {
-							return true;
-						}
-					}
-					return false;
-				}();
-				if (!hasLink) {
-					return true;
-				}
-			} else {
+	const bool hasTextLink = [&] {
+		for (const auto &part : message.text) {
+			if (part.type == Data::TextPart::Type::Url || part.type == Data::TextPart::Type::TextUrl) {
 				return true;
 			}
 		}
-	} else {
-		// It is a Text message (no media)
-		const bool hasTextLink = [&] {
-			for (const auto &part : message.text) {
-				if (part.type == Data::TextPart::Type::Url
-					|| part.type == Data::TextPart::Type::TextUrl) {
-					return true;
+		return false;
+	}();
+
+	const bool selected = fullHistory
+		|| (type != static_cast<Type>(0) && (types & type))
+		|| ((types & Type::Link) && (hasTextLink || type == Type::Link));
+
+	if (!selected) {
+		return true;
+	}
+
+	// 3. Media Constraint Filters (Size & Extension)
+	// These apply only to messages with actual media files
+	const bool isSticker = (type == Type::Sticker);
+	const bool hasMediaFile = (!std::holds_alternative<v::null_t>(message.media.content)
+		&& (type != Type::Link && type != Type::Text && type != static_cast<Type>(0)))
+		|| isSticker;
+
+	if (hasMediaFile) {
+		// Size Filter (Exclude stickers from size limit as they are metadata)
+		if (!isSticker && settings.media.sizeLimit > 0 && message.file().size > settings.media.sizeLimit) {
+			return true;
+		}
+
+		// Extension filter: applies to Video, Audio, File, and Sticker types
+		if (settings.media.extensionFilterMode != MediaSettings::ExtFilterMode::None
+			&& !settings.media.extensionFilter.isEmpty()) {
+			QString name;
+			QString ext;
+			const bool isEligibleType = (type == Type::Video || type == Type::Audio || type == Type::File || isSticker);
+			
+			if (isEligibleType) {
+				v::match(message.media.content, [&](const Data::Document &data) {
+					name = QString::fromUtf8(data.name);
+				}, [](const auto &) {});
+
+				const auto dotPos = name.lastIndexOf(u'.');
+				ext = (dotPos >= 0) ? name.mid(dotPos + 1).toLower() : QString();
+
+				if (!ext.isEmpty()) {
+					const bool inList = settings.media.extensionFilter.contains(ext, Qt::CaseInsensitive);
+					const bool blocked = (settings.media.extensionFilterMode == MediaSettings::ExtFilterMode::Whitelist && !inList)
+						|| (settings.media.extensionFilterMode == MediaSettings::ExtFilterMode::Blacklist && inList);
+					if (blocked) {
+						return true;
+					}
 				}
 			}
-			return false;
-		}();
-
-		const bool textSelected = (types & Type::Text);
-		const bool linkSelected = (types & Type::Link) && hasTextLink;
-
-		if (!textSelected && !linkSelected) {
-			return true;
 		}
 	}
 

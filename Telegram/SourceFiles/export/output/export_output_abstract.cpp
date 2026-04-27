@@ -131,8 +131,10 @@ QString NormalizePath(const Settings &settings) {
 		}
 		return value;
 	};
-	const auto base = (settings.onlySinglePeer() && settings.singlePeerId != 0)
-		? QString("ChatExport_%1_%2_%3").arg(date.toString(Qt::ISODate)).arg(settings.singlePeerId).arg(clean(settings.singlePeerName))
+	const auto base = settings.onlySingleTopic()
+		? QString("ChatExport_%1_%2").arg(settings.singlePeerId).arg(settings.singleTopicRootId)
+		: (settings.onlySinglePeer() && settings.singlePeerId != 0)
+		? QString("ChatExport_%1").arg(settings.singlePeerId)
 		: QString(settings.onlySinglePeer()
 			? "ChatExport_%1"
 			: "DataExport_%1"
@@ -140,11 +142,42 @@ QString NormalizePath(const Settings &settings) {
 	const auto add = [&](int i) {
 		return base + (i ? " (" + QString::number(i) + ')' : QString());
 	};
+
+	// For single peer/topic exports, first try to find an existing folder for this ID
+	if (settings.onlySinglePeer() && settings.singlePeerId != 0) {
+		const auto filter = base + "_*";
+		const auto entries = folder.entryList(QStringList() << filter, QDir::Dirs | QDir::NoDotAndDotDot);
+		for (const auto &entry : entries) {
+			if (settings.onlySingleTopic()) {
+				// For topics, any folder matching ChatExport_PeerId_TopicId_* is a match
+				result += entry + '/';
+				return result;
+			} else {
+				// For normal chats, ensure the folder isn't actually a topic folder
+				// (e.g., skip ChatExport_PeerId_TopicId_* when looking for ChatExport_PeerId_*)
+				const auto parts = entry.split('_');
+				if (parts.size() >= 3 && parts[2].toLongLong() != 0) {
+					continue;
+				}
+				result += entry + '/';
+				return result;
+			}
+		}
+	}
+
 	auto index = 0;
 	while (QDir(result + add(index)).exists()) {
 		++index;
 	}
 	result += add(index) + '/';
+	if (settings.onlySinglePeer() && settings.singlePeerId != 0) {
+		// Append name only to newly created folders to keep them descriptive
+		result.chop(1); // remove trailing slash
+		const auto name = settings.onlySingleTopic()
+			? settings.singleTopicTitle
+			: settings.singlePeerName;
+		result += "_" + clean(name) + "/";
+	}
 	return result;
 }
 

@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/padding_wrap.h"
 #include "mtproto/mtproto_config.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/text/format_values.h"
 #include "lang/lang_keys.h"
 #include "storage/storage_account.h"
 #include "core/application.h"
@@ -137,14 +138,23 @@ void ResolveSettings(not_null<Main::Session*> session, Settings &settings) {
 	} else {
 		settings.forceSubPath = IsDefaultPath(session, settings.path);
 	}
+
+	const bool hasAnyMedia = (settings.media.types != MediaSettings::Types(0));
+	const bool hasAnyType = (settings.types != Settings::Types(0));
+	const bool hasRange = (settings.singlePeerFrom != 0) || (settings.singlePeerTill != 0) || settings.useIdRange;
+
 	if (!settings.onlySinglePeer()) {
 		settings.singlePeerFrom = settings.singlePeerTill = 0;
-	} else {
-		// For single peer exports, reset to clean defaults:
-		// - No media types selected by default
-		// - 8 MB size limit by default
+	}
+
+	if (settings.onlySinglePeer() && !hasAnyMedia && !hasAnyType && !hasRange) {
 		settings.media.types = MediaSettings::Types(0);
-		settings.media.sizeLimit = 8 * 1024 * 1024;
+		settings.media.sizeLimit = 4000LL * 1024 * 1024;
+		settings.types = Settings::Types(0);
+	}
+
+	if (settings.media.sizeLimit <= 0 || settings.media.sizeLimit > 4000LL * 1024 * 1024) {
+		settings.media.sizeLimit = 4000LL * 1024 * 1024;
 	}
 }
 
@@ -156,6 +166,11 @@ PanelController::PanelController(
 , _settings(
 	std::make_unique<Settings>(_session->local().readExportSettings()))
 , _saveSettingsTimer([=] { saveSettings(); }) {
+	if (_settings->onlySinglePeer()) {
+		_settings->media.types = MediaSettings::Types(0);
+		_settings->media.sizeLimit = 4000LL * 1024 * 1024;
+		_settings->types = Settings::Types(0);
+	}
 	ResolveSettings(session, *_settings);
 
 	_process->state(
@@ -193,7 +208,7 @@ void PanelController::createPanel() {
 	_panel->setInnerSize(st::exportPanelSize);
 	_panel->closeRequests(
 	) | rpl::on_next([=] {
-		LOG(("Export Info: Panel Hide By Close."));
+		
 		_panel->hideGetDuration();
 	}, _panel->lifetime());
 	_panelCloseEvents.fire(_panel->closeEvents());
@@ -245,6 +260,17 @@ void PanelController::showSettings() {
 		_process->resumeExport(*_settings, PrepareEnvironment(_session));
 	}, settingsRaw->lifetime());
 
+	settingsRaw->updateClicks(
+	) | rpl::on_next([=]() {
+		if (settingsRaw->readData().media.types == MediaSettings::Types(0)) {
+			return; // Do nothing if no file type selected
+		}
+		settingsRaw->setScanning(true);
+		_panel->setTitle(tr::lng_export_scanning());
+		_panel->setHideOnDeactivate(true);
+		_process->runUpdateScan(*_settings, PrepareEnvironment(_session), _settings->path);
+	}, settingsRaw->lifetime());
+
 	settingsRaw->cancelClicks(
 	) | rpl::on_next([=] {
 		const auto scanning = settingsRaw->isScanning();
@@ -273,20 +299,19 @@ void PanelController::showSettings() {
 		*_settings = std::move(settings);
 	}, settingsRaw->lifetime());
 
-	// Check for existing export to show Resume button
+	// Check for existing export to show Resume/Update buttons
 	// We do this on the PanelController side because it has the correct path and peer info
 	LOG(("Export Resume: Starting check - peerId=%1, path='%2', isSinglePeer=%3")
 		.arg(_settings->singlePeerId).arg(_settings->path).arg(_settings->onlySinglePeer()));
 
-	checkExistingExport([=](bool hasExisting, std::optional<Settings> restored) {
-		LOG(("Export Resume: Check result - hasExisting=%1").arg(hasExisting ? "true" : "false"));
+	checkExistingExport([=](SettingsWidget::ExistingExport state, std::optional<Settings> restored) {
+		LOG(("Export Resume: Check result - state=%1").arg(static_cast<int>(state)));
 		crl::on_main([=] {
 			if (_panel) {
 				if (auto settingsWidget = dynamic_cast<SettingsWidget*>(_panel->inner())) {
-					settingsWidget->setHasExistingExport(hasExisting);
-					if (hasExisting && restored) {
+					settingsWidget->setExistingExport(state);
+					if (state != SettingsWidget::ExistingExport::None && restored) {
 						LOG(("Export Resume: Restoring persisted settings"));
-						// Restore message types and size limit from previous session
 						auto data = settingsWidget->readData();
 						data.media.types = restored->media.types;
 						data.media.sizeLimit = restored->media.sizeLimit;
@@ -295,16 +320,21 @@ void PanelController::showSettings() {
 						data.types = restored->types;
 						data.fullChats = restored->fullChats;
 						data.format = restored->format;
+						
+						data.singlePeerFrom = restored->singlePeerFrom;
+						data.singlePeerTill = restored->singlePeerTill;
+						data.useIdRange = restored->useIdRange;
+						data.singlePeerFromId = restored->singlePeerFromId;
+						data.singlePeerTillId = restored->singlePeerTillId;
 
-						// We need a way to update the widget's internal data and UI
-						// SettingsWidget constructor calls setupContent, so we might
-						// need to fire a change or similar.
-						// For now, let's use resetToDefault style approach if possible,
-						// or just modify _settings and hope for the best if it's already bound.
 						*_settings = data;
-						// Since SettingsWidget uses rpl to track _internal_data, 
-						// we might need a method to set it.
-						// I'll add a 'restoreSettings' method to SettingsWidget.
+						settingsWidget->restoreSettings(data);
+					} else if (state != SettingsWidget::ExistingExport::None) {
+						auto data = settingsWidget->readData();
+						data.media.types = MediaSettings::Types(0);
+						data.media.sizeLimit = 4000LL * 1024 * 1024;
+						data.types = Settings::Types(0);
+						*_settings = data;
 						settingsWidget->restoreSettings(data);
 					}
 				}
@@ -315,23 +345,24 @@ void PanelController::showSettings() {
 	_panel->showInner(std::move(settings));
 }
 
-void PanelController::checkExistingExport(Fn<void(bool, std::optional<Settings>)> callback) const {
+void PanelController::checkExistingExport(Fn<void(SettingsWidget::ExistingExport, std::optional<Settings>)> callback) const {
+	using ExistingExport = SettingsWidget::ExistingExport;
 	if (!_settings->onlySinglePeer()) {
-		callback(false, std::nullopt);
+		callback(ExistingExport::None, std::nullopt);
 		return;
 	}
 
 	const auto targetPeerId = _settings->singlePeerId;
 	if (targetPeerId == 0) {
 		LOG(("Export Resume: No peer ID available for existing export check"));
-		callback(false, std::nullopt);
+		callback(ExistingExport::None, std::nullopt);
 		return;
 	}
 
 	auto downloadPath = _settings->path;
 	if (downloadPath.isEmpty()) {
 		LOG(("Export Resume: No download path available for existing export check"));
-		callback(false, std::nullopt);
+		callback(ExistingExport::None, std::nullopt);
 		return;
 	}
 
@@ -357,9 +388,21 @@ void PanelController::checkExistingExport(Fn<void(bool, std::optional<Settings>)
 			const auto progressPath = ExportProgress::progressFilePath(folderPath);
 			auto progress = ExportProgress::load(progressPath);
 			if (progress) {
-				LOG(("Export Resume: Found progress file, enabling resume"));
-				callback(true, progress->settings);
-				return;
+				const bool completed = progress->isComplete || (progress->rangeEndMsgId > 0
+					&& progress->lastMessageId >= progress->rangeEndMsgId);
+				if (completed) {
+					LOG(("Export Resume: Found progress file, export is COMPLETED (last=%1, target=%2)")
+						.arg(progress->lastMessageId)
+						.arg(progress->rangeEndMsgId));
+					callback(ExistingExport::Complete, progress->settings);
+					return;
+				} else if (progress->lastMessageId > 0) {
+					LOG(("Export Resume: Found progress file (last=%1, target=%2), enabling resume")
+						.arg(progress->lastMessageId)
+						.arg(progress->rangeEndMsgId));
+					callback(ExistingExport::Incomplete, progress->settings);
+					return;
+				}
 			}
 
 			// Also check for leftover .partial files from interrupted export
@@ -367,14 +410,14 @@ void PanelController::checkExistingExport(Fn<void(bool, std::optional<Settings>)
 			const auto partialFiles = folderDir.entryList(QStringList() << "*.partial", QDir::Files | QDir::NoDotAndDotDot);
 			if (!partialFiles.isEmpty()) {
 				LOG(("Export Resume: Found %1 partial files, enabling resume").arg(partialFiles.size()));
-				callback(true, std::nullopt);
+				callback(ExistingExport::Incomplete, std::nullopt);
 				return;
 			}
 		}
 	}
 
 	LOG(("Export Resume: No existing export found"));
-	callback(false, std::nullopt);
+	callback(ExistingExport::None, std::nullopt);
 }
 void PanelController::showError(const ApiErrorState &error) {
 	LOG(("Export Info: API Error '%1'.").arg(error.data.type()));
@@ -620,7 +663,7 @@ void PanelController::fillParams(const PasswordCheckState &state) {
 }
 
 void PanelController::updateState(State &&state) {
-	LOG(("Export State: updateState called, isPasswordCheck=%1").arg(v::is<PasswordCheckState>(state) ? "true" : "false"));
+
 	if (const auto start = std::get_if<PasswordCheckState>(&state)) {
 		fillParams(*start);
 		LOG(("Export State: fillParams done, peerId=%1, peerName='%2'")
@@ -636,12 +679,83 @@ void PanelController::updateState(State &&state) {
 		showError(*error);
 	} else if (const auto scanDone = std::get_if<ScanDoneState>(&_state)) {
 		if (_panel) {
-			_panel->setTitle(tr::lng_export_title());
-			showSettings();
-			if (auto settings = dynamic_cast<SettingsWidget*>(_panel->inner())) {
-				settings->setScanning(false);
-				_panel->setHideOnDeactivate(false);
-				settings->setScanResults(scanDone->stats);
+			const bool isUpdateScan = _settings->useIdRange && (_settings->singlePeerFromId > 0);
+			if (isUpdateScan) {
+				int totalMessages = 0;
+				int64 totalSize = 0;
+				QString mediaText;
+				for (const auto &[type, item] : scanDone->stats) {
+					if (item.localTotalCount <= 0) continue;
+					QString label;
+					switch (type) {
+					case MediaSettings::Type::Photo: label = "Photos"; break;
+					case MediaSettings::Type::Video: label = "Videos"; break;
+					case MediaSettings::Type::File: label = "Files"; break;
+					case MediaSettings::Type::Text: label = "Text messages"; break;
+					case MediaSettings::Type::Link: label = "Links"; break;
+					case MediaSettings::Type::GIF: label = "GIFs"; break;
+					case MediaSettings::Type::Audio: label = "Music"; break;
+					case MediaSettings::Type::VoiceMessage: label = "Voice messages"; break;
+					case MediaSettings::Type::VideoMessage: label = "Video messages"; break;
+					case MediaSettings::Type::Sticker: label = "Stickers"; break;
+					default: label = "Unknown"; break;
+					}
+					mediaText += label + ": " + QString::number(item.localTotalCount);
+					if (item.totalSize > 0) {
+						mediaText += " (" + ::Ui::FormatSizeText(item.totalSize) + ")";
+					}
+					mediaText += "\n";
+					
+					totalMessages += item.localTotalCount;
+					totalSize += item.totalSize;
+				}
+
+				if (totalMessages > 0) {
+					// Show Update Confirmation Dialog
+					auto boxText = QString("New messages found since last export:\n\n");
+					boxText += mediaText;
+					boxText += "\nTotal: " + QString::number(totalMessages) + " new messages";
+					if (totalSize > 0) {
+						boxText += " (" + ::Ui::FormatSizeText(totalSize) + ")";
+					}
+					boxText += "\n\nDo you want to update the export?";
+
+					auto box = Ui::MakeConfirmBox({
+						.text = boxText,
+						.confirmed = [=] {
+							_panel->setTitle(tr::lng_export_progress_title());
+							showProgress();
+							_process->resumeExport(*_settings, PrepareEnvironment(_session));
+						},
+						.cancelled = [=] {
+							_panel->setTitle(tr::lng_export_title());
+							showSettings();
+						},
+						.confirmText = QString("Update"),
+						.cancelText = tr::lng_cancel(),
+					});
+					_panel->showBox(
+						std::move(box),
+						Ui::LayerOption::KeepOther,
+						anim::type::normal);
+				} else {
+					// No new messages found
+					auto box = Ui::MakeInformBox("Export is up to date. No new messages found since last export.");
+					_panel->showBox(
+						std::move(box),
+						Ui::LayerOption::KeepOther,
+						anim::type::normal);
+					_panel->setTitle(tr::lng_export_title());
+					showSettings();
+				}
+			} else {
+				_panel->setTitle(tr::lng_export_title());
+				showSettings();
+				if (auto settings = dynamic_cast<SettingsWidget*>(_panel->inner())) {
+					settings->setScanning(false);
+					_panel->setHideOnDeactivate(false);
+					settings->setScanResults(scanDone->stats);
+				}
 			}
 		}
 	} else if (const auto processing = std::get_if<ProcessingState>(&_state)) {

@@ -44,7 +44,7 @@ struct MediaSettings {
 	friend inline constexpr auto is_flag_type(Type) { return true; };
 
 	Types types = DefaultTypes();
-	int64 sizeLimit = 8 * 1024 * 1024;
+	int64 sizeLimit = 4000LL * 1024 * 1024;
 
 	// Extension filter (applies to Video, Audio, File types)
 	ExtFilterMode extensionFilterMode = ExtFilterMode::None;
