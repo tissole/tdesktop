@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/export_api_wrap.h"
 
 #include "export/export_settings.h"
+#include "export/export_global_dedup.h"
 #include "export/data/export_data_types.h"
 #include "export/output/export_output_result.h"
 #include "export/output/export_output_file.h"
@@ -102,7 +103,7 @@ constexpr auto kMessagesSliceLimit = 100;
 constexpr auto kTopPeerSliceLimit = 100;
 constexpr auto kFileMaxSize = 4000 * int64(1024 * 1024);
 constexpr auto kLocationCacheSize = 1'000'000; // kept for LoadedFileCache ctor
-constexpr auto kDedupMapLimit = 1'000'000;
+// constexpr auto kDedupMapLimit = 1'000'000;
 constexpr auto kMaxEmojiPerRequest = 100;
 constexpr auto kStoriesSliceLimit = 100;
 constexpr auto kProfileMusicSliceLimit = 100;
@@ -714,7 +715,10 @@ void ApiWrap::startExport(
 		}
 
 		if (_exportProgress && !_isScanning) {
-			_dedupById = _exportProgress->dedupById;
+			_dedupById.clear();
+			for (const auto &[id, path] : _exportProgress->dedupById) {
+				_dedupById[id] = path;
+			}
 			for (const auto &[mapKey, path] : _exportProgress->dedupBySizeName) {
 				const int underscorePos = mapKey.indexOf('_');
 				if (underscorePos > 0) {
@@ -1039,6 +1043,16 @@ void ApiWrap::requestMediaCounts() {
 					}
 				} else if (canTrustServerCount || _usingServerCounts) {
 					_scanStats->setLocalTotalCount(type, count);
+				}
+			}
+			if (_stats && type != Type::Sticker && type != Type::Text) {
+				if (isLink) {
+					if (canTrustServerCount) {
+						_stats->setMessagesWithLinks(type, count);
+						_stats->setLocalTotalCount(type, count);
+					}
+				} else if (canTrustServerCount || _usingServerCounts) {
+					_stats->setLocalTotalCount(type, count);
 				}
 			}
 			if (_exportProgress) {
@@ -3086,18 +3100,19 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		if (countThis) {
 			bool uniqueBubble = false;
-			if (!message.file().location) {
+			uint64 bubbleDocId = 0;
+			QString bubbleName;
+			v::match(message.media.content, [&](const Data::Document &data) {
+				bubbleDocId = data.id;
+				bubbleName = QString::fromUtf8(data.name);
+			}, [&](const Data::Photo &data) {
+				bubbleDocId = data.id;
+			}, [](const auto &) {});
+			const int64 bubbleSize = message.file().size;
+			
+			if (bubbleDocId == 0 && bubbleSize == 0) {
 				uniqueBubble = true;
 			} else {
-				uint64 bubbleDocId = 0;
-				QString bubbleName;
-				v::match(message.media.content, [&](const Data::Document &data) {
-					bubbleDocId = data.id;
-					bubbleName = QString::fromUtf8(data.name);
-				}, [&](const Data::Photo &data) {
-					bubbleDocId = data.id;
-				}, [](const auto &) {});
-				const int64 bubbleSize = message.file().size;
 				const auto dedup = dedupLookup(bubbleDocId, bubbleSize, bubbleName);
 				if (!dedup.found) {
 					uniqueBubble = true;
@@ -5086,7 +5101,7 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 		const bool endOfRange = !_isScanning && (_chatProcess->messagesTotalCount > 0 && _chatProcess->messagesProcessed + _chatProcess->batchProcessed >= _chatProcess->messagesTotalCount);
 		if (_chatProcess->batchProcessed >= 100 || endOfRange || lastOfScan) {
 			flushBatchStats();
-			if (!_isScanning) {
+			if (!_isScanning && (_chatProcess->messagesProcessed % 5000 == 0 || endOfRange)) {
 				saveProgress();
 			}
 			_chatProcess->fileProgress(ApiWrap::DownloadProgress{
@@ -5148,13 +5163,6 @@ void ApiWrap::dedupRegister(
 		int64 size,
 		const QString &name,
 		const QString &path) {
-	// Evict oldest entries if over limit (simple: just cap total size)
-	if (_dedupById.size() >= kDedupMapLimit) {
-		_dedupById.erase(_dedupById.begin());
-	}
-	if (_dedupBySizeName.size() >= kDedupMapLimit) {
-		_dedupBySizeName.erase(_dedupBySizeName.begin());
-	}
 	if (docId != 0) {
 		_dedupById.emplace(docId, path);
 	}
@@ -5219,6 +5227,9 @@ void ApiWrap::saveProgress() {
 	if (!_exportProgress || !_settings) {
 		return;
 	}
+	if (_isScanning) {
+		return;
+	}
 	_exportProgress->settings = *_settings;
 	if (_chatProcess) {
 		_exportProgress->messagesProcessed = _chatProcess->messagesProcessed;
@@ -5253,7 +5264,10 @@ void ApiWrap::saveProgress() {
 		}
 	}
 
-	_exportProgress->dedupById = _dedupById;
+	_exportProgress->dedupById.clear();
+	for (const auto &[id, path] : _dedupById) {
+		_exportProgress->dedupById[id] = path;
+	}
 	_exportProgress->dedupBySizeName.clear();
 	for (const auto &[key, path] : _dedupBySizeName) {
 		const QString mapKey = QString::number(key.size) + "_" + key.name;

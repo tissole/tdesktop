@@ -7,10 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include <unordered_map>
 #include "mtproto/mtproto_concurrent_sender.h"
 #include "data/data_peer_id.h"
 #include "export/export_progress.h"
-#include "export/export_global_dedup.h"
 
 namespace base {
 class Timer;
@@ -78,6 +78,12 @@ public:
 		}
 		bool operator==(const SizeNameKey &other) const {
 			return size == other.size && name == other.name;
+		}
+	};
+
+	struct SizeNameKeyHash {
+		std::size_t operator()(const SizeNameKey &key) const {
+			return qHash(key.size) ^ qHash(key.name);
 		}
 	};
 
@@ -449,21 +455,14 @@ private:
 	rpl::event_stream<MTP::Error> _errors;
 	rpl::event_stream<Output::Result> _ioErrors;
 
-	// Unified dedup maps — replaces _scanVisited, _exportVisited, _fileCache.
-	// Primary lookup: by doc/photo ID (most reliable).
-	// Secondary lookup: by {size, name} when no doc ID available.
-	// Both store the saved path; empty string means download in progress.
-	std::map<uint64, QString> _dedupById;            // docId -> path
-	std::map<SizeNameKey, QString> _dedupBySizeName; // {size,name} -> path
-	// Maps dedup keys to the randomId of the active FileProcess downloading
-	// that file, so duplicates can attach their done callback to it.
-	std::map<uint64, uint64> _dedupByIdInProgress;            // docId -> randomId
-	std::map<SizeNameKey, uint64> _dedupBySizeNameInProgress; // {size,name} -> randomId
+	std::unordered_map<uint64, QString> _dedupById;
+	std::unordered_map<SizeNameKey, QString, SizeNameKeyHash> _dedupBySizeName;
+	std::unordered_map<uint64, uint64> _dedupByIdInProgress;
+	std::unordered_map<SizeNameKey, uint64, SizeNameKeyHash> _dedupBySizeNameInProgress;
 
 	base::flat_set<QString> _visitedLinks;
-	base::flat_set<QString> _reservedPaths; // paths reserved but not yet written to disk
+	base::flat_set<QString> _reservedPaths;
 
-	// Resume support
 	std::unique_ptr<ExportProgress> _exportProgress;
 	bool _resumeMode = false;
 	void saveProgress();
@@ -472,7 +471,6 @@ private:
 	void onFileStarted(const QString &filename, int64 totalSize, uint64 messageId);
 	void removePartialFile(const QString &filename);
 
-	// Global cross-chat deduplication
 	class GlobalDedupManager *_globalDedup = nullptr;
 	std::unique_ptr<class GlobalDedupManager> _globalDedupOwned;
 
