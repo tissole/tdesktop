@@ -7,10 +7,46 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "export/export_progress.h"
 
+#include "export/export_settings.h"
 #include <QtCore/QJsonDocument>
 #include <QtCore/QDir>
 
 namespace Export {
+namespace {
+
+QString TypeToString(int type) {
+	using Type = MediaSettings::Type;
+	switch (static_cast<Type>(type)) {
+	case Type::Photo: return u"photos"_q;
+	case Type::Video: return u"videos"_q;
+	case Type::File: return u"files"_q;
+	case Type::Audio: return u"audio"_q;
+	case Type::VoiceMessage: return u"voice_messages"_q;
+	case Type::VideoMessage: return u"video_messages"_q;
+	case Type::Sticker: return u"stickers"_q;
+	case Type::GIF: return u"gifs"_q;
+	case Type::Link: return u"links"_q;
+	case Type::Text: return u"text"_q;
+	}
+	return QString::number(type);
+}
+
+int StringToType(const QString &type) {
+	using Type = MediaSettings::Type;
+	if (type == u"photos"_q) return static_cast<int>(Type::Photo);
+	if (type == u"videos"_q) return static_cast<int>(Type::Video);
+	if (type == u"files"_q) return static_cast<int>(Type::File);
+	if (type == u"audio"_q) return static_cast<int>(Type::Audio);
+	if (type == u"voice_messages"_q) return static_cast<int>(Type::VoiceMessage);
+	if (type == u"video_messages"_q) return static_cast<int>(Type::VideoMessage);
+	if (type == u"stickers"_q) return static_cast<int>(Type::Sticker);
+	if (type == u"gifs"_q) return static_cast<int>(Type::GIF);
+	if (type == u"links"_q) return static_cast<int>(Type::Link);
+	if (type == u"text"_q) return static_cast<int>(Type::Text);
+	return type.toInt();
+}
+
+} // namespace
 
 QJsonObject ExportProgress::toJson() const {
 	QJsonObject obj;
@@ -24,39 +60,31 @@ QJsonObject ExportProgress::toJson() const {
 
 	// Session state fields
 	obj["is_complete"] = isComplete;
-	obj["range_end_msg_id"] = QString::number(rangeEndMsgId);
 	obj["last_export_date"] = lastExportDate;
 
-	if (!typeCounters.empty()) {
+	const auto writeCounters = [&](const std::map<int, TypeCounter> &source) {
 		QJsonObject counters;
-		for (const auto &[type, counter] : typeCounters) {
+		for (const auto &[type, counter] : source) {
 			QJsonObject c;
-			c["unique"] = counter.uniqueCount;
-			c["unique_size"] = QString::number(counter.uniqueSize);
-			c["total"] = counter.localTotalCount;
-			c["total_size"] = QString::number(counter.totalSize);
-			if (counter.messagesWithLinks > 0) {
-				c["links"] = counter.messagesWithLinks;
+			if (counter.uniqueCount > 0) c["unique"] = counter.uniqueCount;
+			if (counter.uniqueSize > 0) c["unique_size"] = QString::number(counter.uniqueSize);
+			if (counter.localTotalCount > 0) c["total"] = counter.localTotalCount;
+			if (counter.totalSize > 0) c["total_size"] = QString::number(counter.totalSize);
+			if (counter.messagesWithLinks > 0) c["links"] = counter.messagesWithLinks;
+			
+			if (!c.isEmpty()) {
+				counters[TypeToString(type)] = c;
 			}
-			counters[QString::number(type)] = c;
 		}
-		obj["type_counters"] = counters;
+		return counters;
+	};
+
+	if (!typeCounters.empty()) {
+		obj["type_counters"] = writeCounters(typeCounters);
 	}
 
 	if (!scanStats.empty()) {
-		QJsonObject counters;
-		for (const auto &[type, counter] : scanStats) {
-			QJsonObject c;
-			c["unique"] = counter.uniqueCount;
-			c["unique_size"] = QString::number(counter.uniqueSize);
-			c["total"] = counter.localTotalCount;
-			c["total_size"] = QString::number(counter.totalSize);
-			if (counter.messagesWithLinks > 0) {
-				c["links"] = counter.messagesWithLinks;
-			}
-			counters[QString::number(type)] = c;
-		}
-		obj["scan_stats"] = counters;
+		obj["scan_stats"] = writeCounters(scanStats);
 	}
 
 	if (!dedupById.empty()) {
@@ -80,9 +108,9 @@ QJsonObject ExportProgress::toJson() const {
 		for (const auto &file : incompleteFiles) {
 			QJsonObject f;
 			f["filename"] = file.filename;
-			f["downloaded"] = QString::number(file.bytesDownloaded);
-			f["total"] = QString::number(file.totalSize);
-			f["msg_id"] = QString::number(file.messageId);
+			if (file.bytesDownloaded > 0) f["downloaded"] = QString::number(file.bytesDownloaded);
+			if (file.totalSize > 0) f["total"] = QString::number(file.totalSize);
+			if (file.messageId > 0) f["msg_id"] = QString::number(file.messageId);
 			incomplete.append(f);
 		}
 		obj["incomplete_files"] = incomplete;
@@ -127,10 +155,9 @@ ExportProgress ExportProgress::fromJson(const QJsonObject &obj) {
 	result.isComplete = obj["is_complete"].toBool();
 	result.lastExportDate = obj["last_export_date"].toString();
 
-	if (obj.contains("type_counters")) {
-		const auto counters = obj["type_counters"].toObject();
+	const auto readCounters = [&](const QJsonObject &counters, std::map<int, TypeCounter> &target) {
 		for (auto it = counters.begin(); it != counters.end(); ++it) {
-			const int type = it.key().toInt();
+			const int type = StringToType(it.key());
 			const auto c = it.value().toObject();
 			TypeCounter counter;
 			counter.uniqueCount = c["unique"].toInt();
@@ -140,25 +167,16 @@ ExportProgress ExportProgress::fromJson(const QJsonObject &obj) {
 			if (c.contains("links")) {
 				counter.messagesWithLinks = c["links"].toInt();
 			}
-			result.typeCounters[type] = counter;
+			target[type] = counter;
 		}
+	};
+
+	if (obj.contains("type_counters")) {
+		readCounters(obj["type_counters"].toObject(), result.typeCounters);
 	}
 
 	if (obj.contains("scan_stats")) {
-		const auto counters = obj["scan_stats"].toObject();
-		for (auto it = counters.begin(); it != counters.end(); ++it) {
-			const int type = it.key().toInt();
-			const auto c = it.value().toObject();
-			TypeCounter counter;
-			counter.uniqueCount = c["unique"].toInt();
-			counter.uniqueSize = c["unique_size"].toString().toLongLong();
-			counter.localTotalCount = c["total"].toInt();
-			counter.totalSize = c["total_size"].toString().toLongLong();
-			if (c.contains("links")) {
-				counter.messagesWithLinks = c["links"].toInt();
-			}
-			result.scanStats[type] = counter;
-		}
+		readCounters(obj["scan_stats"].toObject(), result.scanStats);
 	}
 
 	if (obj.contains("dedup_by_id")) {
