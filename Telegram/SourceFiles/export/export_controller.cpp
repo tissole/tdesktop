@@ -962,31 +962,6 @@ void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
 				_messagesCount = progress->messagesTotalCount;
 				_messagesInRangeCountFixed = true;
 			}
-
-			// Restore type-specific stats so the second row counters are correct
-			_stats.clear();
-			for (const auto &[typeInt, counter] : progress->typeCounters) {
-				const auto type = static_cast<MediaSettings::Type>(typeInt);
-				_stats.increment(type, counter.totalSize, counter.uniqueSize, counter.localTotalCount, counter.uniqueCount, counter.messagesWithLinks);
-				if (type != MediaSettings::Type::Text && type != MediaSettings::Type::Link) {
-					for (int i = 0; i < counter.localTotalCount; ++i) {
-						_stats.incrementUserMediaFiles();
-					}
-				}
-			}
-			_stats.setTotalMessages(progress->messagesTotalCount);
-
-			_scanStats.clear();
-			for (const auto &[typeInt, counter] : progress->scanStats) {
-				const auto type = static_cast<MediaSettings::Type>(typeInt);
-				_scanStats.increment(type, counter.totalSize, counter.uniqueSize, counter.localTotalCount, counter.uniqueCount, counter.messagesWithLinks);
-				if (type != MediaSettings::Type::Text && type != MediaSettings::Type::Link) {
-					for (int i = 0; i < counter.localTotalCount; ++i) {
-						_scanStats.incrementUserMediaFiles();
-					}
-				}
-			}
-			_scanStats.setTotalMessages(progress->scanTotalMessages);
 		}
 	}
 
@@ -1192,7 +1167,11 @@ void ControllerObject::exportNextDialog() {
 }
 
 void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 fromId, uint64 tillId) {
-	if (!_messagesCount || !_scanStatsFound) {
+	// Skip recalculation if already fixed by initialized() from saved progress.
+	// Otherwise we incorrectly use the full-chat count instead of the saved range count.
+	if (_messagesInRangeCountFixed) {
+		// _messagesCount and _messagesWritten already set by initialized().
+	} else if (!_messagesCount || !_scanStatsFound) {
 		// If scan was done, use the count of messages that were actually selected during scan.
 		// This matches the date/size filter, unlike messagesCountPerSplit which is the full chat count.
 		const int scanTotal = _scanStats.totalMessagesCount();
@@ -1203,16 +1182,8 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 			const bool fullHistoryMode = (_settings.media.types & MediaSettings::Type::FullHistory);
 			const int serverRangeTotal = _stats.localTotalCount();
 			if (hasRange && serverRangeTotal > 0 && !fullHistoryMode) {
-				// Bug 2 fix: use range-filtered server count (e.g. "files in May" = 847)
-				// instead of full-chat messagesCountPerSplit (e.g. 21038).
-				// Not used for FullHistory: _stats has no per-type counts for that mode.
 				_messagesCount = serverRangeTotal;
 			} else if (hasRange && fullHistoryMode) {
-				// Bug 1 fix: for FullHistory + range, leave _messagesCount = 0 so
-				// stateDialogs uses messagesTotalCount (actual range message count)
-				// as the denominator once requestMessagesCount returns.
-				// messagesCountPerSplit is the full-chat count and would make progress
-				// appear stuck (e.g. 3000 range msgs / 45187 full chat = 6%).
 				_messagesCount = 0;
 			} else {
 				int count = 0;

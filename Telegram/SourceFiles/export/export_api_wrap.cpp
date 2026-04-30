@@ -735,19 +735,19 @@ void ApiWrap::startExport(
 					const auto type = static_cast<MediaSettings::Type>(typeInt);
 					_stats->increment(type, counter.totalSize, counter.uniqueSize, counter.localTotalCount, counter.uniqueCount, counter.messagesWithLinks);
 					if (type != MediaSettings::Type::Text && type != MediaSettings::Type::Link) {
-						for (int i = 0; i < counter.localTotalCount; ++i) {
+						for (int i = 0; i < counter.uniqueCount; ++i) {
 							_stats->incrementUserMediaFiles();
 						}
 					}
 				}
-				_stats->setTotalMessages(_exportProgress->messagesTotalCount);
+				_stats->setTotalMessages(_exportProgress->messagesProcessed);
 
 				_scanStats->clear();
 				for (const auto &[typeInt, counter] : _exportProgress->scanStats) {
 					const auto type = static_cast<MediaSettings::Type>(typeInt);
 					_scanStats->increment(type, counter.totalSize, counter.uniqueSize, counter.localTotalCount, counter.uniqueCount, counter.messagesWithLinks);
 					if (type != MediaSettings::Type::Text && type != MediaSettings::Type::Link) {
-						for (int i = 0; i < counter.localTotalCount; ++i) {
+						for (int i = 0; i < counter.uniqueCount; ++i) {
 							_scanStats->incrementUserMediaFiles();
 						}
 					}
@@ -1026,10 +1026,10 @@ void ApiWrap::requestMediaCounts() {
 				|| _settings->useIdRange;
 			const bool noRange = !hasDateOrIdRange;
 
-			const bool canTrustServerCount = noRange && !hasExtFilter && fullSize && (isLink || [&] {
+			const bool canTrustServerCount = noRange && !hasExtFilter && fullSize && [&] {
 				return (type == Type::Photo || type == Type::VoiceMessage || type == Type::VideoMessage || type == Type::GIF)
 					|| (type == Type::File || type == Type::Audio || type == Type::Video);
-			}());
+			}();
 
 			if (canTrustServerCount) {
 				_serverCountTrustedTypes.insert(type);
@@ -2051,7 +2051,6 @@ void ApiWrap::requestMessages(
 
 	if (_exportProgress) {
 		_chatProcess->messagesProcessed = _exportProgress->messagesProcessed;
-		_chatProcess->messagesTotalCount = _exportProgress->messagesProcessed;
 
 		if (_scanStats && _exportProgress->scanTotalMessages > 0) {
 			_scanStats->setTotalMessages(_exportProgress->scanTotalMessages);
@@ -2981,15 +2980,15 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		const auto types = _settings->media.types;
 		const bool fullHistorySelected = (types & MediaSettings::Type::FullHistory);
 
-		base::flat_set<QString> linksInThisMessage;
+		std::vector<QString> linksInThisMessage;
 		bool hasWebPageMedia = false;
-		
+
 		// WebPage media first to establish context for text links
 		v::match(message.media.content, [&](const Data::WebPage &webpage) {
 			hasWebPageMedia = true;
 			const auto url = QString::fromUtf8(webpage.url);
 			if (!url.isEmpty()) {
-				linksInThisMessage.insert(url);
+				linksInThisMessage.push_back(url);
 			}
 		}, [](const auto &) {});
 
@@ -3006,7 +3005,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					|| hasWebPageMedia;
 
 				if (substantial) {
-					linksInThisMessage.insert(url);
+					linksInThisMessage.push_back(url);
 				}
 			}
 		}
@@ -3015,7 +3014,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 				if (button.type == Data::HistoryMessageMarkupButton::Type::Url || button.type == Data::HistoryMessageMarkupButton::Type::Auth) {
 					const auto url = QString::fromUtf8(button.data);
 					if (!url.isEmpty()) {
-						linksInThisMessage.insert(url);
+						linksInThisMessage.push_back(url);
 					}
 				}
 			}
@@ -3034,12 +3033,11 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 						|| hasWebPageMedia;
 
 					if (substantial) {
-						linksInThisMessage.insert(url);
+						linksInThisMessage.push_back(url);
 					}
 				}
 			}
-		};
-		v::match(message.media.content, [&](const Data::Poll &poll) {
+		};		v::match(message.media.content, [&](const Data::Poll &poll) {
 			addFromText(poll.question);
 			for (const auto &answer : poll.answers) {
 				addFromText(answer.text);
@@ -5004,6 +5002,11 @@ void ApiWrap::flushBatchStats() {
 
 		const auto typeInt = static_cast<int>(type);
 		auto &target = _exportProgress->typeCounters[typeInt];
+		
+		const bool trusted = _usingServerCounts || _serverCountTrustedTypes.contains(type);
+		const auto localTotalCountIncr = trusted ? 0 : batch.localTotalCount;
+		const auto linkMsgIncr = (type == MediaSettings::Type::Link && trusted) ? 0 : batch.messagesWithLinks;
+
 		if (_usingServerCounts) {
 			target.uniqueCount += batch.uniqueCount;
 			target.uniqueSize += batch.uniqueSize;
@@ -5020,10 +5023,6 @@ void ApiWrap::flushBatchStats() {
 				target.messagesWithLinks += batch.messagesWithLinks;
 			}
 		}
-
-		const bool trusted = _usingServerCounts || _serverCountTrustedTypes.contains(type);
-		const auto localTotalCountIncr = trusted ? 0 : batch.localTotalCount;
-		const auto linkMsgIncr = trusted ? 0 : batch.messagesWithLinks;
 
 		if (_isScanning) {
 			_scanStats->increment(type, batch.totalSize, batch.uniqueSize, localTotalCountIncr, batch.uniqueCount, linkMsgIncr);

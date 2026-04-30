@@ -202,7 +202,7 @@ Content ContentFromState(
 			displayItem.uniqueCount = selectedItem.uniqueCount;
 			displayItem.uniqueSize = selectedItem.uniqueSize;
 			displayItem.localTotalCount = hasExpected ? expectedItem.localTotalCount : selectedItem.localTotalCount;
-			displayItem.totalSize = hasExpected ? expectedItem.totalSize : selectedItem.totalSize;
+			displayItem.totalSize = (hasExpected && expectedItem.totalSize > 0) ? expectedItem.totalSize : selectedItem.totalSize;
 			displayItem.messagesWithLinks = hasExpected ? expectedItem.messagesWithLinks : selectedItem.messagesWithLinks;
 
 			const auto &item = displayItem;
@@ -334,7 +334,7 @@ Content ContentFromState(const FinishedState &state) {
 
 	const auto fullHistory = state.fullHistory;
 	const auto fullRange = state.fullRange;
-	const auto showAllCategories = fullHistory && fullRange;
+	const auto showAllCategories = false;
 
 	int categoriesCount = 0;
 	int totalUniqueMessagesCount = 0;
