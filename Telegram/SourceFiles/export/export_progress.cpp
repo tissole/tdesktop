@@ -116,6 +116,14 @@ QJsonObject ExportProgress::toJson() const {
 		obj["incomplete_files"] = incomplete;
 	}
 
+	if (!visitedLinks.empty()) {
+		QJsonArray links;
+		for (const auto &link : visitedLinks) {
+			links.append(link);
+		}
+		obj["visited_links"] = links;
+	}
+
 	if (settings.media.types != MediaSettings::Types(0) || settings.types != Settings::Types(0)) {
 		QJsonObject s;
 		s["media_types"] = static_cast<int>(settings.media.types.value());
@@ -226,6 +234,14 @@ ExportProgress ExportProgress::fromJson(const QJsonObject &obj) {
 		result.settings.useIdRange = s["use_id_range"].toBool();
 		result.settings.singlePeerFromId = s["single_peer_from_id"].toInt();
 		result.settings.singlePeerTillId = s["single_peer_till_id"].toInt();
+	}
+
+	if (obj.contains("visited_links")) {
+		const auto links = obj["visited_links"].toArray();
+		result.visitedLinks.reserve(links.size());
+		for (const auto &val : links) {
+			result.visitedLinks.push_back(val.toString());
+		}
 	}
 
 	return result;

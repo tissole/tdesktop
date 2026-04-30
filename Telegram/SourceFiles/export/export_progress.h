@@ -46,6 +46,7 @@ struct ExportProgress {
 	std::map<uint64, QString> dedupById;
 	std::map<QString, QString> dedupBySizeName;
 	std::vector<IncompleteFile> incompleteFiles;
+	std::vector<QString> visitedLinks;
 
 	// Session state for resume/update flow
 	bool isComplete = false;  // Export completed (not interrupted)

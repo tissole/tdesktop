@@ -1018,6 +1018,7 @@ void ApiWrap::requestMediaCounts() {
 
 
 			const bool isLink = (type == Type::Link);
+			const bool isFullHistory = (type == Type::FullHistory);
 			const bool fullSize = (_settings->media.sizeLimit >= kFileMaxSize);
 			const bool hasExtFilter = _settings->media.extensionFilterMode != MediaSettings::ExtFilterMode::None
 				&& !_settings->media.extensionFilter.isEmpty();
@@ -1026,44 +1027,45 @@ void ApiWrap::requestMediaCounts() {
 				|| _settings->useIdRange;
 			const bool noRange = !hasDateOrIdRange;
 
-			const bool canTrustServerCount = noRange && !hasExtFilter && fullSize && [&] {
-				return (type == Type::Photo || type == Type::VoiceMessage || type == Type::VideoMessage || type == Type::GIF)
-					|| (type == Type::File || type == Type::Audio || type == Type::Video);
+			const bool canTrustServerCount = [&] {
+				if (!noRange) return false;
+				if (isLink || isFullHistory) return true;
+				return !hasExtFilter && fullSize;
 			}();
 
 			if (canTrustServerCount) {
 				_serverCountTrustedTypes.insert(type);
 			}
 
-			if (_scanStats && type != Type::Sticker && type != Type::Text) {
+			if (_scanStats && type != Type::Sticker && type != Type::Text && !isFullHistory) {
 				if (isLink) {
 					if (canTrustServerCount) {
 						_scanStats->setMessagesWithLinks(type, count);
-						_scanStats->setLocalTotalCount(type, count);
+						_scanStats->setLocalTotalCount(type, 0);
 					}
 				} else if (canTrustServerCount || _usingServerCounts) {
 					_scanStats->setLocalTotalCount(type, count);
 				}
 			}
-			if (_stats && type != Type::Sticker && type != Type::Text) {
+			if (_stats && type != Type::Sticker && type != Type::Text && !isFullHistory) {
 				if (isLink) {
 					if (canTrustServerCount) {
 						_stats->setMessagesWithLinks(type, count);
-						_stats->setLocalTotalCount(type, count);
+						_stats->setLocalTotalCount(type, 0);
 					}
 				} else if (canTrustServerCount || _usingServerCounts) {
 					_stats->setLocalTotalCount(type, count);
 				}
 			}
-			if (_exportProgress) {
+			if (_exportProgress && !isFullHistory) {
 				const auto typeInt = static_cast<int>(type);
 				if (isLink) {
 					if (canTrustServerCount) {
 						_exportProgress->typeCounters[typeInt].messagesWithLinks = count;
-						_exportProgress->typeCounters[typeInt].localTotalCount = count;
+						_exportProgress->typeCounters[typeInt].localTotalCount = 0;
 						if (_isScanning) {
 							_exportProgress->scanStats[typeInt].messagesWithLinks = count;
-							_exportProgress->scanStats[typeInt].localTotalCount = count;
+							_exportProgress->scanStats[typeInt].localTotalCount = 0;
 						}
 					}
 				} else if (canTrustServerCount || _usingServerCounts) {
@@ -2992,78 +2994,58 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			}
 		}, [](const auto &) {});
 
+		bool isLinkMessage = hasWebPageMedia;
 		for (const auto &part : message.text) {
 			using T = Data::TextPart::Type;
 			if (part.type == T::Url || part.type == T::TextUrl) {
-				const auto url = (part.type == T::TextUrl) ? QString::fromUtf8(part.additional) : QString::fromUtf8(part.text);
-				if (url.isEmpty()) continue;
-
-				bool substantial = (part.type == T::TextUrl)
-					|| url.contains(u"://")
-					|| url.startsWith(u"mailto:")
-					|| url.startsWith(u"tg:")
-					|| hasWebPageMedia;
-
-				if (substantial) {
+				const auto url = (part.type == T::TextUrl)
+					? QString::fromUtf8(part.additional)
+					: QString::fromUtf8(part.text);
+				if (!url.isEmpty()) {
+					isLinkMessage = true;
 					linksInThisMessage.push_back(url);
 				}
 			}
 		}
-		for (const auto &row : message.inlineButtonRows) {
-			for (const auto &button : row) {
-				if (button.type == Data::HistoryMessageMarkupButton::Type::Url || button.type == Data::HistoryMessageMarkupButton::Type::Auth) {
-					const auto url = QString::fromUtf8(button.data);
-					if (!url.isEmpty()) {
-						linksInThisMessage.push_back(url);
+
+		const auto linkSelectedForStats = (types & MediaSettings::Type::Link) || fullHistorySelected;
+
+		if (isLinkMessage && linkSelectedForStats) {
+			int uniqueGlobal = 0;
+			for (auto url : linksInThisMessage) {
+				// Normalize URL for consistent deduplication
+				QString normalized = url;
+				if (normalized.contains(u"://"_q)) {
+					const auto parts = normalized.split(u"://"_q);
+					if (parts.size() >= 2) {
+						const auto scheme = parts[0].toLower();
+						const auto rest = parts[1];
+						const auto hostEnd = rest.indexOf(u'/');
+						if (hostEnd != -1) {
+							normalized = scheme + u"://"_q + rest.left(hostEnd).toLower() + rest.mid(hostEnd);
+						} else {
+							normalized = scheme + u"://"_q + rest.toLower();
+						}
+					}
+				} else {
+					// Possible URL without scheme like google.com/Path, lowercase host
+					const auto hostEnd = normalized.indexOf(u'/');
+					if (hostEnd != -1) {
+						normalized = normalized.left(hostEnd).toLower() + normalized.mid(hostEnd);
+					} else {
+						normalized = normalized.toLower();
 					}
 				}
-			}
-		}
-		const auto addFromText = [&](const std::vector<Data::TextPart> &text) {
-			for (const auto &part : text) {
-				using T = Data::TextPart::Type;
-				if (part.type == T::Url || part.type == T::TextUrl) {
-					const auto url = (part.type == T::TextUrl) ? QString::fromUtf8(part.additional) : QString::fromUtf8(part.text);
-					if (url.isEmpty()) continue;
 
-					bool substantial = (part.type == T::TextUrl)
-						|| url.contains(u"://")
-						|| url.startsWith(u"mailto:")
-						|| url.startsWith(u"tg:")
-						|| hasWebPageMedia;
-
-					if (substantial) {
-						linksInThisMessage.push_back(url);
-					}
+				if (_visitedLinks.insert(normalized).second) {
+					uniqueGlobal++;
 				}
 			}
-		};		v::match(message.media.content, [&](const Data::Poll &poll) {
-			addFromText(poll.question);
-			for (const auto &answer : poll.answers) {
-				addFromText(answer.text);
-			}
-		}, [&](const Data::TodoList &list) {
-			addFromText(list.title);
-			for (const auto &item : list.items) {
-				addFromText(item.text);
-			}
-		}, [](const auto &) {});
-		const auto hasAnyLink = !linksInThisMessage.empty() || hasWebPageMedia;
-		const bool linkSelectedForStats = (types & MediaSettings::Type::Link) || fullHistorySelected;
-
-		if (hasAnyLink && linkSelectedForStats) {
-			int uniqueInMsg = 0;
-			for (const auto &url : linksInThisMessage) {
-				if (_visitedLinks.find(url) == _visitedLinks.end()) {
-					_visitedLinks.insert(url);
-					uniqueInMsg++;
-				}
-			}
-			const int linksCount = int(linksInThisMessage.size());
-			ms.links = linksCount;
-			ms.linksUnique = uniqueInMsg;
+			ms.links = int(linksInThisMessage.size());
+			ms.linksUnique = uniqueGlobal;
 			ms.linkMsgIncr = 1;
-		} else if (_isScanning && !fullHistorySelected) {
+		}
+ else if (_isScanning && !fullHistorySelected) {
 			// If message has media but we didn't detect it as a link, check if it's a link preview
 			// that the server might count.
 			if (hasMedia && std::holds_alternative<Data::WebPage>(message.media.content)) {
@@ -3072,13 +3054,13 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		const bool gifUsingServerCounts = (_isScanning && _usingServerCounts && messageType == MediaSettings::Type::GIF);
 		const auto oversized = (hasFile && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit)
-			&& !hasAnyLink && (messageType != MediaSettings::Type::Text && messageType != MediaSettings::Type::Link)
+			&& !isLinkMessage && (messageType != MediaSettings::Type::Text && messageType != MediaSettings::Type::Link)
 			&& !gifUsingServerCounts;
 
 		const bool mediaSelected = (types & messageType) || fullHistorySelected;
 
 		bool selected = (mediaSelected && (!oversized || fullHistorySelected))
-			|| (hasAnyLink && linkSelectedForStats)
+			|| (isLinkMessage && linkSelectedForStats)
 			|| (!hasMedia && ((types & MediaSettings::Type::Text) || fullHistorySelected));
 
 		if (!selected) {
@@ -3094,7 +3076,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		bool isMediaForSum = (messageType != MediaSettings::Type::Link && messageType != MediaSettings::Type::Text);
 		bool countThis = isMediaForSum
 			|| ((types & MediaSettings::Type::Text) || fullHistorySelected)
-			|| (hasAnyLink && linkSelectedForStats);
+			|| (isLinkMessage && linkSelectedForStats);
 
 		if (countThis) {
 			bool uniqueBubble = false;
@@ -5004,10 +4986,10 @@ void ApiWrap::flushBatchStats() {
 		auto &target = _exportProgress->typeCounters[typeInt];
 		
 		const bool trusted = _usingServerCounts || _serverCountTrustedTypes.contains(type);
-		const auto localTotalCountIncr = trusted ? 0 : batch.localTotalCount;
+		const auto localTotalCountIncr = (trusted && type != MediaSettings::Type::Link) ? 0 : batch.localTotalCount;
 		const auto linkMsgIncr = (type == MediaSettings::Type::Link && trusted) ? 0 : batch.messagesWithLinks;
 
-		if (_usingServerCounts) {
+		if (trusted) {
 			target.uniqueCount += batch.uniqueCount;
 			target.uniqueSize += batch.uniqueSize;
 			target.totalSize += batch.totalSize;
@@ -5019,9 +5001,7 @@ void ApiWrap::flushBatchStats() {
 			target.totalSize += batch.totalSize;
 			target.uniqueCount += batch.uniqueCount;
 			target.uniqueSize += batch.uniqueSize;
-			if (type != MediaSettings::Type::Link) {
-				target.messagesWithLinks += batch.messagesWithLinks;
-			}
+			target.messagesWithLinks += batch.messagesWithLinks;
 		}
 
 		if (_isScanning) {
@@ -5220,6 +5200,12 @@ void ApiWrap::clearState(bool keepCache) {
 void ApiWrap::loadProgress(const QString &folder) {
 	const auto path = ExportProgress::progressFilePath(folder);
 	_exportProgress = ExportProgress::load(path);
+	if (_exportProgress) {
+		_visitedLinks.clear();
+		for (const auto &link : _exportProgress->visitedLinks) {
+			_visitedLinks.insert(link);
+		}
+	}
 }
 
 void ApiWrap::saveProgress() {
@@ -5271,6 +5257,12 @@ void ApiWrap::saveProgress() {
 	for (const auto &[key, path] : _dedupBySizeName) {
 		const QString mapKey = QString::number(key.size) + "_" + key.name;
 		_exportProgress->dedupBySizeName[mapKey] = path;
+	}
+
+	_exportProgress->visitedLinks.clear();
+	_exportProgress->visitedLinks.reserve(_visitedLinks.size());
+	for (const auto &link : _visitedLinks) {
+		_exportProgress->visitedLinks.push_back(link);
 	}
 
 	const auto path = ExportProgress::progressFilePath(_settings->path);
