@@ -171,7 +171,10 @@ public:
 	void setResumeMode(bool enabled) { _resumeMode = enabled; }
 	[[nodiscard]] bool isResumeMode() const { return _resumeMode; }
 	void saveScanProgress() { saveProgress(); }
-	void updateMessageProgress(uint64 messageId);
+	void updateMessageProgress(uint64 messageId, int writtenCount = 0);
+	void setFileCompletedCallback(Fn<void()> callback) {
+		_fileCompletedCallback = std::move(callback);
+	}
 
 	void clearResults();
 
@@ -275,6 +278,7 @@ private:
 	void resolveDates();
 	void requestMediaCounts();
 	void requestMessagesSlice();
+	void requestChannelMessagesSlice();
 	void requestChatMessages(
 		int splitIndex,
 		int offsetId,
@@ -320,8 +324,6 @@ private:
 	[[nodiscard]] Data::Message *currentFileMessage() const;
 	[[nodiscard]] Data::FileOrigin currentFileMessageOrigin() const;
 
-	[[nodiscard]] bool shouldCountLocally(MediaSettings::Type type) const;
-	[[nodiscard]] bool shouldCountLocally() const;
 	[[nodiscard]] MTPMessagesFilter getFilter() const;
 
 	[[nodiscard]] bool processFileLoad(
@@ -399,8 +401,6 @@ private:
 	Output::Stats *_stats = nullptr;
 	bool _isScanning = false;
 	uint64 _resumeIdThreshold = 0;
-	bool _usingServerCounts = false;
-	base::flat_set<MediaSettings::Type> _serverCountTrustedTypes;
 	Output::Stats *_scanStats = nullptr;
 	int _serverTotalCount = 0;
 
@@ -465,6 +465,7 @@ private:
 
 	std::unique_ptr<ExportProgress> _exportProgress;
 	bool _resumeMode = false;
+	Fn<void()> _fileCompletedCallback;
 	void saveProgress();
 	void loadProgress(const QString &folder);
 	void onFileCompleted(const QString &filename, int64 size, uint64 messageId);

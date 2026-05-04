@@ -86,6 +86,10 @@ public:
 
 	QString mainFilePath() override;
 
+	int lastWrittenMessageId() const override;
+	
+	void updateStatsInFirstFile();
+
 	~HtmlWriter();
 
 private:
@@ -149,6 +153,9 @@ private:
 
 	[[nodiscard]] QByteArray statsBlock() const;
 	[[nodiscard]] Result prependStats(const QString &relativePath);
+	
+	[[nodiscard]] std::optional<MessageInfo> parseLastMessageFromFile(
+		const QString &filePath);
 
 	Settings _settings;
 	Environment _environment;
@@ -185,6 +192,8 @@ private:
 	std::vector<int> _lastMessageIdsPerFile;
 	std::vector<QString> _chatMessageFiles;
 	bool _chatFileEmpty = false;
+	int _resumingFileIndex = -1;
+	bool _skipFirstDateHeader = false;
 
 };
 

@@ -30,6 +30,7 @@ public:
 
 	[[nodiscard]] Result writeBlock(const QByteArray &block);
 	void close();
+	void flush();
 
 	[[nodiscard]] static QString PrepareRelativePath(
 		const QString &folder,

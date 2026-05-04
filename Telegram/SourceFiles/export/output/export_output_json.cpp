@@ -1741,6 +1741,7 @@ Result JsonWriter::writeDialogSlice(const Data::MessagesSlice &data) {
 			message,
 			data.peers,
 			_environment.internalLinksDomain));
+		_lastWrittenMessageId = message.id;
 	}
 	return block.isEmpty() ? Result::Success() : writeBlock(block);
 }
@@ -1870,6 +1871,127 @@ Result JsonWriter::finish() {
 
 QString JsonWriter::mainFilePath() {
 	return pathWithRelativePath(mainFileRelativePath());
+}
+
+int JsonWriter::lastWrittenMessageId() const {
+	return _lastWrittenMessageId;
+}
+
+void JsonWriter::updateStatsInFirstFile() {
+	if (!_stats || !_output) {
+		return;
+	}
+
+	const auto path = mainFilePath();
+	QFile file(path);
+	if (!file.open(QIODevice::ReadOnly)) {
+		return;
+	}
+
+	auto content = file.readAll();
+	file.close();
+
+	const auto statsMarker = QByteArray("\"export_statistics\"");
+	const auto statsPos = content.lastIndexOf(statsMarker);
+	if (statsPos < 0) {
+		return;
+	}
+
+	const auto breakdown = _stats->byType();
+	auto statsValues = std::vector<std::pair<QByteArray, QByteArray>>();
+	using MediaType = MediaSettings::Type;
+
+	for (const auto &pair : breakdown) {
+		const auto mediaType = pair.first;
+		const auto &item = pair.second;
+		if (item.localTotalCount <= 0) continue;
+		QByteArray key;
+		switch (mediaType) {
+		case MediaType::Photo: key = "photos"; break;
+		case MediaType::Video: key = "videos"; break;
+		case MediaType::VideoMessage: key = "video_messages"; break;
+		case MediaType::Audio: key = "audio_files"; break;
+		case MediaType::VoiceMessage: key = "voice_messages"; break;
+		case MediaType::File: key = "files"; break;
+		case MediaType::Sticker: key = "stickers"; break;
+		case MediaType::GIF: key = "gifs"; break;
+		case MediaType::Text: key = "text_messages"; break;
+		case MediaType::Link: key = "links"; break;
+		}
+		if (!key.isEmpty()) {
+			auto itemValues = std::vector<std::pair<QByteArray, QByteArray>>();
+			itemValues.push_back({ "unique_count", QByteArray::number(item.uniqueCount) });
+			itemValues.push_back({ "unique_size", QByteArray::number(item.uniqueSize) });
+			itemValues.push_back({ "total_count", QByteArray::number(item.localTotalCount) });
+			itemValues.push_back({ "total_size", QByteArray::number(item.totalSize) });
+			statsValues.push_back({ key, SerializeObject(_context, itemValues) });
+		}
+	}
+
+	auto totalUniqueCount = 0;
+	int64 totalUniqueSize = 0;
+	auto totalTotalCount = 0;
+	int64 totalTotalSize = 0;
+	for (const auto &pair : breakdown) {
+		const auto mediaType = pair.first;
+		const auto &item = pair.second;
+		if (mediaType != MediaType::Link) {
+			totalUniqueCount += item.uniqueCount;
+			totalUniqueSize += item.uniqueSize;
+			totalTotalCount += item.localTotalCount;
+			totalTotalSize += item.totalSize;
+		}
+	}
+	auto totalValues = std::vector<std::pair<QByteArray, QByteArray>>();
+	totalValues.push_back({ "unique_count", QByteArray::number(totalUniqueCount) });
+	totalValues.push_back({ "unique_size", QByteArray::number(totalUniqueSize) });
+	totalValues.push_back({ "total_count", QByteArray::number(totalTotalCount) });
+	totalValues.push_back({ "total_size", QByteArray::number(totalTotalSize) });
+	statsValues.push_back({ "total", SerializeObject(_context, totalValues) });
+
+	const auto newStatsBlock = prepareObjectItemStart("export_statistics") + SerializeObject(_context, statsValues);
+
+	auto endPos = statsPos;
+	auto braceCount = 0;
+	auto inString = false;
+	auto escapeNext = false;
+	for (auto i = statsPos + statsMarker.size(); i < content.size(); ++i) {
+		const auto ch = content[i];
+		if (escapeNext) {
+			escapeNext = false;
+			continue;
+		}
+		if (ch == '\\') {
+			escapeNext = true;
+			continue;
+		}
+		if (ch == '"') {
+			inString = !inString;
+			continue;
+		}
+		if (inString) {
+			continue;
+		}
+		if (ch == '{') {
+			++braceCount;
+		} else if (ch == '}') {
+			if (braceCount == 0) {
+				endPos = i;
+				break;
+			}
+			--braceCount;
+		}
+	}
+
+	if (endPos > statsPos) {
+		content.replace(statsPos, endPos - statsPos, newStatsBlock);
+
+		if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+			return;
+		}
+		file.write(content);
+		file.close();
+	}
 }
 
 QString JsonWriter::mainFileRelativePath() const {

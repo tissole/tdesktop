@@ -70,6 +70,10 @@ public:
 
 	QString mainFilePath() override;
 
+	int lastWrittenMessageId() const override;
+
+	void updateStatsInFirstFile() override;
+
 private:
 	using Context = details::JsonContext;
 	enum class DialogsMode {
@@ -110,6 +114,8 @@ private:
 	DialogsMode _dialogsMode = DialogsMode::None;
 
 	std::unique_ptr<File> _output;
+
+	int _lastWrittenMessageId = 0;
 
 };
 

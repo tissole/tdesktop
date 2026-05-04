@@ -97,6 +97,10 @@ public:
 
 	[[nodiscard]] virtual QString mainFilePath() = 0;
 
+	[[nodiscard]] virtual int lastWrittenMessageId() const = 0;
+	
+	virtual void updateStatsInFirstFile() {}
+
 	virtual ~AbstractWriter() = default;
 
 	Stats produceTestExample(

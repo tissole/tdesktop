@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QSize>
 #include <QtCore/QFile>
 #include <QtCore/QDateTime>
+#include <QtCore/QRegularExpression>
 
 namespace Export {
 namespace Output {
@@ -541,6 +542,7 @@ struct HtmlWriter::MessageInfo {
 class HtmlWriter::Wrap {
 public:
 	Wrap(const QString &path, const QString &base, Stats *stats);
+	Wrap(const QString &path, int64 initialOffset, const QString &base, Stats *stats);
 
 	[[nodiscard]] bool empty() const;
 
@@ -611,6 +613,8 @@ public:
 	[[nodiscard]] Result writeBlock(const QByteArray &block);
 
 	[[nodiscard]] Result close();
+	
+	void flush();
 
 	[[nodiscard]] QString relativePath(const QString &path) const;
 	[[nodiscard]] QString relativePath(const Data::File &file) const;
@@ -738,6 +742,23 @@ HtmlWriter::Wrap::Wrap(
 	const QString &base,
 	Stats *stats)
 : _file(path, stats)
+, _stats(stats) {
+	Expects(base.endsWith('/'));
+	Expects(path.startsWith(base));
+
+	const auto left = path.mid(base.size());
+	const auto nesting = ranges::count(left, '/');
+	_base = QString("../").repeated(nesting).toUtf8();
+
+	_composedStart = composeStart();
+}
+
+HtmlWriter::Wrap::Wrap(
+	const QString &path,
+	int64 initialOffset,
+	const QString &base,
+	Stats *stats)
+: _file(path, initialOffset, stats)
 , _stats(stats) {
 	Expects(base.endsWith('/'));
 	Expects(path.startsWith(base));
@@ -1692,6 +1713,7 @@ auto HtmlWriter::Wrap::pushMessage(
 		{ "title", FormatDateTime(message.date, true) },
 	}));
 	block.append(FormatTimeText(message.date));
+	block.append(" [" + NumberToString(message.id) + "]");
 	block.append(popTag());
 	if (wrap) {
 		block.append(pushDiv("from_name"));
@@ -2758,6 +2780,12 @@ Result HtmlWriter::Wrap::close() {
 	return Result::Success();
 }
 
+void HtmlWriter::Wrap::flush() {
+	if (!_file.empty()) {
+		_file.flush();
+	}
+}
+
 QString HtmlWriter::Wrap::relativePath(const QString &path) const {
 	return _base + path;
 }
@@ -3538,15 +3566,146 @@ Result HtmlWriter::writeDialogsStart(const Data::DialogsInfo &data) {
 	return writeSections();
 }
 
+std::optional<HtmlWriter::MessageInfo> HtmlWriter::parseLastMessageFromFile(const QString &filePath) {
+	QFile file(filePath);
+	if (!file.open(QIODevice::ReadOnly)) {
+		LOG(("Export HTML: parseLastMessage - failed to open file"));
+		return std::nullopt;
+	}
+	
+	const auto fileSize = file.size();
+	constexpr auto kMaxTailSize = 10000;
+	const auto readSize = std::min(fileSize, qint64(kMaxTailSize));
+	
+	if (!file.seek(fileSize - readSize)) {
+		LOG(("Export HTML: parseLastMessage - failed to seek"));
+		return std::nullopt;
+	}
+	
+	const auto tail = QString::fromUtf8(file.readAll());
+	file.close();
+	
+	QRegularExpression msgIdRegex("title=\"(\\d{2})\\.(\\d{2})\\.(\\d{4})\\s+([^\"]+)\"[^>]*>\\s*(\\d{2}:\\d{2})\\s*\\[(\\d+)\\]");
+	auto matches = msgIdRegex.globalMatch(tail);
+	
+	QRegularExpressionMatch lastMatch;
+	int matchCount = 0;
+	while (matches.hasNext()) {
+		lastMatch = matches.next();
+		matchCount++;
+	}
+	
+	LOG(("Export HTML: parseLastMessage - found %1 matches").arg(matchCount));
+	
+	if (!lastMatch.hasMatch()) {
+		LOG(("Export HTML: parseLastMessage - no matches found"));
+		return std::nullopt;
+	}
+	
+	bool ok = false;
+	const auto messageId = lastMatch.captured(6).toInt(&ok);
+	if (!ok || messageId <= 0) {
+		LOG(("Export HTML: parseLastMessage - failed to parse ID (ok=%1, id=%2)").arg(ok).arg(messageId));
+		return std::nullopt;
+	}
+	
+	const auto day = lastMatch.captured(1).toInt();
+	const auto month = lastMatch.captured(2).toInt();
+	const auto year = lastMatch.captured(3).toInt();
+	
+	QDate date(year, month, day);
+	QDateTime dateTime(date, QTime(0, 0, 0));
+	const auto unixTime = dateTime.toSecsSinceEpoch();
+	
+	auto info = MessageInfo();
+	info.id = messageId;
+	info.type = MessageInfo::Type::Default;
+	info.fromId = 0;
+	info.date = unixTime;
+	
+	LOG(("Export HTML: Parsed last message id=%1, date=%2 from file").arg(messageId).arg(unixTime));
+	
+	return info;
+}
+
 Result HtmlWriter::writeDialogStart(const Data::DialogInfo &data) {
 	Expects(_chat == nullptr);
 
-	_chat = fileWithRelativePath(data.relativePath + messagesFile(0));
-	_chatMessageFiles.push_back(data.relativePath + messagesFile(0));
-	_chatFileEmpty = true;
-	_messagesCount = 0;
+	LOG(("Export HTML: writeDialogStart called for dialog: %1").arg(QString::fromUtf8(data.name)));
+
+	int lastFileIndex = -1;
+	int64 lastFileSize = 0;
+	
+	for (int i = 0; i < 1000; ++i) {
+		const auto testPath = pathWithRelativePath(data.relativePath + messagesFile(i));
+		QFile testFile(testPath);
+		if (testFile.exists() && testFile.size() > 0) {
+			lastFileIndex = i;
+			lastFileSize = testFile.size();
+		} else {
+			break;
+		}
+	}
+	
+	if (lastFileIndex >= 0) {
+		const auto resumePath = data.relativePath + messagesFile(lastFileIndex);
+		const auto fullPath = pathWithRelativePath(resumePath);
+		
+		const auto lastMsgInfo = parseLastMessageFromFile(fullPath);
+		const auto lastWrittenId = lastMsgInfo.has_value() ? lastMsgInfo->id : 0;
+		
+		const auto expectedLastWrittenId = (data.lastMessageId > 0) ? data.lastMessageId : 0;
+		
+		if (lastWrittenId > 0 && expectedLastWrittenId > 0 && lastWrittenId != expectedLastWrittenId) {
+			LOG(("Export HTML: Last file is incomplete (last written ID=%1, expected=%2), truncating to 0 to restart")
+				.arg(lastWrittenId)
+				.arg(expectedLastWrittenId));
+			lastFileSize = 0;
+		} else {
+			LOG(("Export HTML: Last file appears complete (last written ID=%1)").arg(lastWrittenId));
+		}
+		
+		_chat = std::make_unique<Wrap>(fullPath, lastFileSize, _settings.path, _stats);
+		_chatFileEmpty = (lastFileSize == 0);
+		_messagesCount = (data.resumeMessagesProcessed > 0)
+			? data.resumeMessagesProcessed
+			: (lastFileIndex * kMessagesInFile);
+		_resumingFileIndex = lastFileIndex;
+		
+		(void)_chat->pushDiv("page_body chat_page");
+		(void)_chat->pushDiv("history");
+		LOG(("Export HTML: Resuming - pushed page_body and history onto stack (opening tags already in file)"));
+		
+		LOG(("Export HTML: Resuming - _messagesCount set to %1 (resumeMessagesProcessed=%2, fallback=%3)")
+			.arg(_messagesCount)
+			.arg(data.resumeMessagesProcessed)
+			.arg(lastFileIndex * kMessagesInFile));
+		
+		for (int i = 0; i <= lastFileIndex; ++i) {
+			_chatMessageFiles.push_back(data.relativePath + messagesFile(i));
+		}
+		
+		if (const auto lastMsg = parseLastMessageFromFile(fullPath)) {
+			_lastMessageInfo = std::make_unique<MessageInfo>(*lastMsg);
+			LOG(("Export HTML: Resuming - restored last message info, id=%1").arg(lastMsg->id));
+		} else {
+			_skipFirstDateHeader = true;
+			LOG(("Export HTML: Resuming - could not parse last message, will skip first date header"));
+		}
+		
+		LOG(("Export HTML: Resuming - appending to file %1 (size %2), _messagesCount=%3")
+			.arg(lastFileIndex)
+			.arg(lastFileSize)
+			.arg(_messagesCount));
+	} else {
+		_chat = fileWithRelativePath(data.relativePath + messagesFile(0));
+		_chatMessageFiles.push_back(data.relativePath + messagesFile(0));
+		_chatFileEmpty = true;
+		_messagesCount = 0;
+		LOG(("Export HTML: Starting new export"));
+	}
+	
 	_dateMessageId = 0;
-	_lastMessageInfo = nullptr;
 	_lastMessageIdsPerFile.clear();
 	_dialog = data;
 	return Result::Success();
@@ -3559,9 +3718,12 @@ Result HtmlWriter::writeDialogSlice(const Data::MessagesSlice &data) {
 	const auto messageLinkWrapper = [&](int messageId, QByteArray text) {
 		return wrapMessageLink(messageId, text);
 	};
-	auto oldIndex = (_messagesCount > 0)
-		? ((_messagesCount - 1) / kMessagesInFile)
-		: 0;
+	auto oldIndex = _resumingFileIndex >= 0
+		? _resumingFileIndex
+		: ((_messagesCount > 0)
+			? ((_messagesCount - 1) / kMessagesInFile)
+			: 0);
+	_resumingFileIndex = -1;
 	auto previous = _lastMessageInfo.get();
 	auto saved = std::optional<MessageInfo>();
 	auto block = QByteArray();
@@ -3599,7 +3761,11 @@ Result HtmlWriter::writeDialogSlice(const Data::MessagesSlice &data) {
 			_chatFileEmpty = false;
 		}
 		const auto date = message.date;
-		if (DisplayDate(date, previous ? previous->date : 0)) {
+		const auto shouldDisplayDate = !_skipFirstDateHeader 
+			&& DisplayDate(date, previous ? previous->date : 0);
+		_skipFirstDateHeader = false;
+		
+		if (shouldDisplayDate) {
 			block.append(_chat->pushServiceMessage(
 				--_dateMessageId,
 				_dialog,
@@ -3743,6 +3909,77 @@ Result HtmlWriter::writeDialogEnd() {
 		(_messagesCount > 0
 			? (_dialog.relativePath + "messages.html")
 			: QString())));
+}
+
+void HtmlWriter::updateStatsInFirstFile() {
+	if (_chatMessageFiles.empty() || !_stats) {
+		return;
+	}
+	
+	const auto firstFilePath = pathWithRelativePath(_chatMessageFiles.front());
+	QFile file(firstFilePath);
+	if (!file.open(QIODevice::ReadOnly)) {
+		LOG(("Export HTML: Failed to open first file for stats update"));
+		return;
+	}
+	
+	auto content = QString::fromUtf8(file.readAll());
+	file.close();
+	
+	const auto newStats = statsBlock();
+	const auto statsStart = content.indexOf("<div class=\"export_stats\">");
+	
+	if (statsStart < 0) {
+		LOG(("Export HTML: Stats block not found, adding new stats"));
+		auto index = content.indexOf("<div class=\"history\">");
+		if (index == -1) index = content.indexOf("<div class=\"page_body");
+		if (index == -1) {
+			LOG(("Export HTML: Could not find insertion point for stats"));
+			return;
+		}
+		index = content.indexOf('>', index) + 1;
+		content.insert(index, QString::fromUtf8(newStats));
+	} else {
+		LOG(("Export HTML: Stats block found, updating"));
+		const auto statsEnd = content.indexOf("</div>\n", statsStart);
+		if (statsEnd < 0) {
+			LOG(("Export HTML: Stats block end not found"));
+			return;
+		}
+		
+		int divDepth = 1;
+		int searchPos = statsStart + 27;
+		int actualStatsEnd = statsEnd;
+		
+		while (searchPos < content.length() && divDepth > 0) {
+			const auto nextDiv = content.indexOf("<div", searchPos);
+			const auto nextCloseDiv = content.indexOf("</div>", searchPos);
+			
+			if (nextCloseDiv < 0) break;
+			if (nextDiv >= 0 && nextDiv < nextCloseDiv) {
+				divDepth++;
+				searchPos = nextDiv + 4;
+			} else {
+				divDepth--;
+				if (divDepth == 0) {
+					actualStatsEnd = nextCloseDiv + 6;
+					break;
+				}
+				searchPos = nextCloseDiv + 6;
+			}
+		}
+		
+		content.replace(statsStart, actualStatsEnd - statsStart, QString::fromUtf8(newStats));
+	}
+	
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+		LOG(("Export HTML: Failed to open first file for writing stats"));
+		return;
+	}
+	
+	file.write(content.toUtf8());
+	file.close();
+	LOG(("Export HTML: Updated stats in first file"));
 }
 
 Result HtmlWriter::validateDialogsMode(bool isLeftChannel) {
@@ -4045,8 +4282,8 @@ Result HtmlWriter::finish() {
 	}
 
 	for (const auto &path : _chatMessageFiles) {
-		if (path == _chatMessageFiles.front() || path == _chatMessageFiles.back()) {
-			(void)prependStats(path);
+		if (path == _chatMessageFiles.front()) {
+			updateStatsInFirstFile();
 		}
 	}
 
@@ -4066,6 +4303,10 @@ QString HtmlWriter::mainFilePath() {
 	return pathWithRelativePath(_settings.onlySinglePeer()
 		? messagesFile(0)
 		: mainFileRelativePath());
+}
+
+int HtmlWriter::lastWrittenMessageId() const {
+	return _lastMessageInfo ? _lastMessageInfo->id : 0;
 }
 
 QString HtmlWriter::mainFileRelativePath() const {

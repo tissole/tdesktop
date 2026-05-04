@@ -223,7 +223,10 @@ private:
 	void setState(State &&state);
 	void ioError(const QString &path);
 	bool ioCatchError(Output::Result result);
-	void setFinishedState();
+	void setFinishedState(
+		std::map<MediaSettings::Type, Output::StatItem> exportBreakdown = {},
+		std::map<MediaSettings::Type, Output::StatItem> scanBreakdown = {},
+		bool scanStatsFound = false);
 
 	//void requestPasswordState();
 	//void passwordStateDone(const MTPaccount_Password &password);
@@ -332,6 +335,12 @@ ControllerObject::ControllerObject(
 		ioCatchError(result);
 	}, _lifetime);
 
+	_api.setFileCompletedCallback([=] {
+		if (_writer) {
+			_writer->updateStatsInFirstFile();
+		}
+	});
+
 	//requestPasswordState();
 	auto state = PasswordCheckState();
 	state.checked = false;
@@ -361,6 +370,12 @@ ControllerObject::ControllerObject(
 	) | rpl::on_next([=](const Output::Result &result) {
 		ioCatchError(result);
 	}, _lifetime);
+
+	_api.setFileCompletedCallback([=] {
+		if (_writer) {
+			_writer->updateStatsInFirstFile();
+		}
+	});
 
 	//requestPasswordState();
 	auto state = PasswordCheckState();
@@ -880,6 +895,11 @@ void ControllerObject::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
 
 void ControllerObject::cancelExportFast(bool keepCache) {
 	_isScanning = false;
+	
+	if (_writer && !keepCache) {
+		_writer->updateStatsInFirstFile();
+	}
+	
 	// cancelExportFast sends FinishTakeoutSession to Telegram before clearing.
 	// Using clearState() directly would abandon the takeout without closing it,
 	// leaving it open on the server and stalling the next scan/export attempt.
@@ -915,8 +935,11 @@ void ControllerObject::exportNext() {
 			return;
 		}
 		WriteUniqueLinksFile(_settings, _api.visitedLinks());
+		const auto exportBreakdown = _stats.byType();
+		const auto scanBreakdown = _scanStats.byType();
+		const auto scanStatsFound = _scanStatsFound;
 		_api.finishExport([=] {
-			setFinishedState();
+			setFinishedState(exportBreakdown, scanBreakdown, scanStatsFound);
 		});
 		return;
 	}
@@ -966,11 +989,11 @@ void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
 	}
 
 	if (_isScanning) {
-		if (info.serverCountIsAccurate && info.serverTotalCount > 0) {
+		if (info.serverCountIsAccurate) {
 			_messagesCount = info.serverTotalCount;
 			_messagesInRangeCountFixed = true;
 		}
-	} else if (!_scanStatsFound && info.serverCountIsAccurate && info.serverTotalCount > 0) {
+	} else if (!_scanStatsFound && info.serverCountIsAccurate) {
 		_messagesCount = info.serverTotalCount;
 		_messagesInRangeCountFixed = true;
 	}
@@ -1159,10 +1182,12 @@ void ControllerObject::exportNextDialog() {
 		? _settings.singlePeerTillId
 		: 0;
 
-	if (tillId > 0 && tillId > info->topMessageId) {
-		// Automatically correct tillId to the last message ID instead of showing an error
+	if (tillId > 0 && info->topMessageId > 0 && tillId > info->topMessageId) {
+		LOG(("Export Controller: Correcting tillId from %1 to topMessageId=%2").arg(tillId).arg(info->topMessageId));
 		tillId = info->topMessageId;
 	}
+	
+	LOG(("Export Controller: Calling startExportMessages with fromId=%1, tillId=%2").arg(fromId).arg(tillId));
 	startExportMessages(info, fromId, tillId);
 }
 
@@ -1245,10 +1270,12 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 		}
 		_messagesWritten += result.list.size();
 		
-		// Update progress with last message ID for resume
-		if (!result.list.empty()) {
-			const auto lastMsgId = static_cast<uint64>(result.list.back().id);
-			_api.updateMessageProgress(lastMsgId);
+		const auto lastWrittenId = _writer->lastWrittenMessageId();
+		LOG(("Export: handleSlice callback - lastWrittenId=%1, result.list.size=%2")
+			.arg(lastWrittenId)
+			.arg(result.list.size()));
+		if (lastWrittenId > 0) {
+			_api.updateMessageProgress(static_cast<uint64>(lastWrittenId), result.list.size());
 		}
 		
 		return true;
@@ -1334,24 +1361,34 @@ ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress)
 	});
 }
 
-void ControllerObject::setFinishedState() {
+void ControllerObject::setFinishedState(
+		std::map<MediaSettings::Type, Output::StatItem> exportBreakdown,
+		std::map<MediaSettings::Type, Output::StatItem> scanBreakdownFull,
+		bool scanStatsFound) {
 	auto totalUniqueCount = 0;
 	auto totalUniqueSize = int64(0);
 	auto totalTotalCount = 0;
 	auto totalTotalSize = int64(0);
 	using Type = MediaSettings::Type;
 
+	// If no breakdown provided, get from current stats
+	if (exportBreakdown.empty()) {
+		exportBreakdown = _stats.byType();
+	}
+	if (scanBreakdownFull.empty()) {
+		scanBreakdownFull = _scanStats.byType();
+		scanStatsFound = _scanStatsFound;
+	}
+
 	// Use export stats if populated, else fall back to scan stats.
-	auto exportBreakdown = _stats.byType();
 	const bool exportStatsPopulated = std::any_of(
 		exportBreakdown.begin(), exportBreakdown.end(),
 		[](const auto &p) { return p.second.localTotalCount > 0; });
-	auto scanBreakdownFull = _scanStats.byType();
 	// Only use scan stats as fallback if they were gathered with the same settings
 	// (same media types). If scan was full-history but export is selective, scan stats
 	// have all types but we only want what the export actually processed.
 	// Check: if export has non-empty stats but scan has MORE types, prefer export stats.
-	const bool scanStatsPopulated = _scanStatsFound && std::any_of(
+	const bool scanStatsPopulated = scanStatsFound && std::any_of(
 		scanBreakdownFull.begin(), scanBreakdownFull.end(),
 		[](const auto &p) { return p.second.localTotalCount > 0; });
 	auto breakdown = exportStatsPopulated
@@ -1526,8 +1563,11 @@ void ControllerObject::exportTopic() {
 			if (ioCatchError(_writer->finish())) {
 				return;
 			}
+			const auto exportBreakdown = _stats.byType();
+			const auto scanBreakdown = _scanStats.byType();
+			const auto scanStatsFound = _scanStatsFound;
 			_api.finishExport([=] {
-				setFinishedState();
+				setFinishedState(exportBreakdown, scanBreakdown, scanStatsFound);
 			});
 		});
 }

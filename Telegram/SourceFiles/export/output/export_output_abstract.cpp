@@ -107,6 +107,10 @@ public:
 		return QString();
 	}
 
+	int lastWrittenMessageId() const override {
+		return 0;
+	}
+
 };
 
 } // namespace

@@ -332,8 +332,6 @@ Content ContentFromState(const FinishedState &state) {
 		Type::Link
 	};
 
-	const auto fullHistory = state.fullHistory;
-	const auto fullRange = state.fullRange;
 	const auto showAllCategories = false;
 
 	int categoriesCount = 0;

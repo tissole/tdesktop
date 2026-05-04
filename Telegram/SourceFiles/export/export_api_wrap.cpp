@@ -690,8 +690,6 @@ void ApiWrap::startExport(
 	_stats = stats;
 	_isScanning = isScanning;
 	_scanStats = scanStats;
-	_usingServerCounts = false;
-	_serverCountTrustedTypes.clear();
 	_dedupById.clear();
 	_dedupBySizeName.clear();
 	_dedupByIdInProgress.clear();
@@ -726,6 +724,11 @@ void ApiWrap::startExport(
 					const QString name = mapKey.mid(underscorePos + 1);
 					_dedupBySizeName[{size, name}] = path;
 				}
+			}
+			
+			_visitedLinks.clear();
+			for (const auto &link : _exportProgress->visitedLinks) {
+				_visitedLinks.insert(link);
 			}
 
 			if (_resumeMode) {
@@ -783,48 +786,6 @@ void ApiWrap::startExport(
 		}
 	}
 
-	const bool hasDateOrIdRange = (_settings->singlePeerFrom != 0)
-		|| (_settings->singlePeerTill != 0)
-		|| _settings->useIdRange;
-	const bool hasExtFilter =
-		_settings->media.extensionFilterMode != MediaSettings::ExtFilterMode::None
-		&& !_settings->media.extensionFilter.isEmpty();
-
-	// Check if exactly one media type is selected OR a supported combo (for server filter optimization)
-	const auto types = _settings->media.types;
-	using Type = MediaSettings::Type;
-	// Exclude types without server filter (must count locally): Text, Sticker, FullHistory
-	const auto serverIndexedTypes = types & ~(Type::Text | Type::Sticker | Type::FullHistory);
-
-	// Only trust server counts when:
-	// - No extension filter
-	// - No date/id range
-	// - Full Size (4000 MB)
-	// - Single media type OR supported pairs (Photo+Video, Voice+Round)
-	// - Selected type has server index (Text/Sticker/FullHistory excluded)
-	// - Single peer export
-	const bool hasServerIndexedType = (serverIndexedTypes != 0);
-	const bool noRange = !hasDateOrIdRange;
-	const bool fullSize = (_settings->media.sizeLimit == kFileMaxSize);
-
-	// Single media type check (for server filter)
-	const bool singleMedia = serverIndexedTypes != 0
-		&& (serverIndexedTypes & (serverIndexedTypes - 1)) == 0;
-
-	// Supported pairs (Photo+Video, Voice+Round)
-	const bool photoVideo = (types & Type::Photo) && (types & Type::Video);
-	const bool voiceRound = (types & Type::VoiceMessage) && (types & Type::VideoMessage);
-	const bool supportedPair = photoVideo || voiceRound;
-
-	if (!hasExtFilter
-			&& noRange
-			&& fullSize
-			&& (singleMedia || supportedPair)
-			&& hasServerIndexedType
-			&& _settings->onlySinglePeer()) {
-		_usingServerCounts = true;
-	}
-
 	using Step = StartProcess::Step;
 	if (_settings->types & Settings::Type::Userpics) {
 		_startProcess->steps.push_back(Step::UserpicsCount);
@@ -832,12 +793,7 @@ void ApiWrap::startExport(
 	if (_settings->types & Settings::Type::Stories) {
 		_startProcess->steps.push_back(Step::StoriesCount);
 	}
-	// When scanning with an extension filter, skip the MediaCounts server round-trips.
-	// Server counts are unfiltered so they are wrong for stats, and since
-	// _usingServerCounts is already false in this case, they serve no purpose.
-	// Skipping them means scan starts immediately instead of waiting for N responses.
-	const bool skipMediaCountsForFilteredScan = _isScanning && hasExtFilter;
-	if ((_isScanning || _settings->onlySinglePeer()) && !skipMediaCountsForFilteredScan) {
+	if (_isScanning || _settings->onlySinglePeer()) {
 		_startProcess->steps.push_back(Step::MediaCounts);
 	}
 	if (_settings->types & Settings::Type::ProfileMusic) {
@@ -1015,74 +971,10 @@ void ApiWrap::requestMediaCounts() {
 				[](const MTPDmessages_messagesNotModified &) { return 0; }
 			);
 
-
-
-			const bool isLink = (type == Type::Link);
-			const bool isFullHistory = (type == Type::FullHistory);
-			const bool fullSize = (_settings->media.sizeLimit >= kFileMaxSize);
-			const bool hasExtFilter = _settings->media.extensionFilterMode != MediaSettings::ExtFilterMode::None
-				&& !_settings->media.extensionFilter.isEmpty();
-			const bool hasDateOrIdRange = (_settings->singlePeerFrom != 0)
-				|| (_settings->singlePeerTill != 0)
-				|| _settings->useIdRange;
-			const bool noRange = !hasDateOrIdRange;
-
-			const bool canTrustServerCount = [&] {
-				if (!noRange) return false;
-				if (isLink || isFullHistory) return true;
-				return !hasExtFilter && fullSize;
-			}();
-
-			if (canTrustServerCount) {
-				_serverCountTrustedTypes.insert(type);
-			}
-
-			if (_scanStats && type != Type::Sticker && type != Type::Text && !isFullHistory) {
-				if (isLink) {
-					if (canTrustServerCount) {
-						_scanStats->setMessagesWithLinks(type, count);
-						_scanStats->setLocalTotalCount(type, 0);
-					}
-				} else if (canTrustServerCount || _usingServerCounts) {
-					_scanStats->setLocalTotalCount(type, count);
-				}
-			}
-			if (_stats && type != Type::Sticker && type != Type::Text && !isFullHistory) {
-				if (isLink) {
-					if (canTrustServerCount) {
-						_stats->setMessagesWithLinks(type, count);
-						_stats->setLocalTotalCount(type, 0);
-					}
-				} else if (canTrustServerCount || _usingServerCounts) {
-					_stats->setLocalTotalCount(type, count);
-				}
-			}
-			if (_exportProgress && !isFullHistory) {
-				const auto typeInt = static_cast<int>(type);
-				if (isLink) {
-					if (canTrustServerCount) {
-						_exportProgress->typeCounters[typeInt].messagesWithLinks = count;
-						_exportProgress->typeCounters[typeInt].localTotalCount = 0;
-						if (_isScanning) {
-							_exportProgress->scanStats[typeInt].messagesWithLinks = count;
-							_exportProgress->scanStats[typeInt].localTotalCount = 0;
-						}
-					}
-				} else if (canTrustServerCount || _usingServerCounts) {
-					_exportProgress->typeCounters[typeInt].localTotalCount = count;
-					if (_isScanning) {
-						_exportProgress->scanStats[typeInt].localTotalCount = count;
-					}
-				}
-			}
-			if (type == Type::FullHistory) {
+			if (type == MediaSettings::Type::FullHistory) {
 				_serverTotalCount = count;
-			} else if (!_usingServerCounts) {
-				// Sum up counts of selected types for the estimate
-				// if FullHistory is not available.
-				if (_serverTotalCount == 0) {
-					_serverTotalCount += count;
-				}
+			} else if (_serverTotalCount == 0) {
+				_serverTotalCount += count;
 			}
 
 			if (--_startProcess->pendingCounts == 0) {
@@ -1216,7 +1108,7 @@ void ApiWrap::finishStartProcess() {
 
 	const auto process = base::take(_startProcess);
 	process->info.serverTotalCount = _serverTotalCount;
-	process->info.serverCountIsAccurate = true; // Total count is now requested with filters/range.
+	process->info.serverCountIsAccurate = true;
 	process->done(process->info);
 }
 
@@ -2025,17 +1917,88 @@ void ApiWrap::requestMessages(
 	Expects(_chatProcess == nullptr);
 	Expects(_selfId.has_value());
 
-	// In resume mode, adjust fromId to skip already exported messages
+	LOG(("Export: requestMessages called, fromId=%1, tillId=%2, splits.size=%3")
+		.arg(fromId)
+		.arg(tillId)
+		.arg(info.splits.size()));
+
 	if (_resumeMode && _exportProgress && _exportProgress->lastMessageId > 0) {
-		const auto resumeFromId = static_cast<int64>(_exportProgress->lastMessageId) + 1;
-		if (fromId == 0 || resumeFromId > fromId) {
-			fromId = resumeFromId;
+		if (_settings->useIdRange) {
+			const auto resumeFromId = static_cast<int64>(_exportProgress->lastMessageId) + 1;
+			if (resumeFromId > fromId) {
+				_chatProcess = std::make_unique<ChatProcess>();
+				_chatProcess->context.selfPeerId = peerFromUser(*_selfId);
+				auto infoCopy = info;
+				if (_exportProgress) {
+					infoCopy.resumeMessagesProcessed = _exportProgress->messagesProcessed;
+					infoCopy.lastMessageId = _exportProgress->lastMessageId;
+				}
+				_chatProcess->info = infoCopy;
+				_chatProcess->fromId = fromId;
+				_chatProcess->tillId = tillId;
+				_chatProcess->start = std::move(start);
+				_chatProcess->fileProgress = std::move(progress);
+				_chatProcess->handleSlice = std::move(slice);
+				_chatProcess->done = std::move(done);
+				_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), resumeFromId));
+				LOG(("Export: Resume - Set largestIdPlusOne=%1 from lastMessageId+1").arg(_chatProcess->largestIdPlusOne));
+				
+				if (_exportProgress) {
+					_chatProcess->messagesProcessed = _exportProgress->messagesProcessed;
+					if (_scanStats && _exportProgress->scanTotalMessages > 0) {
+						_scanStats->setTotalMessages(_exportProgress->scanTotalMessages);
+					}
+					if (!_isScanning) {
+						_resumeIdThreshold = _exportProgress->lastMessageId;
+						LOG(("Export: Set _resumeIdThreshold=%1 from lastMessageId").arg(_resumeIdThreshold));
+					}
+					if (tillId > 0) {
+						_exportProgress->rangeEndMsgId = static_cast<uint64>(tillId);
+						LOG(("Export: Set rangeEndMsgId=%1").arg(tillId));
+					}
+				} else {
+					_chatProcess->messagesProcessed = 0;
+					_chatProcess->messagesTotalCount = 0;
+				}
+				
+				LOG(("Export: useIdRange=%1, splits.empty=%2")
+					.arg(_settings->useIdRange)
+					.arg(_chatProcess->info.splits.empty()));
+				
+				if (_settings->useIdRange) {
+					if (_chatProcess->info.splits.empty()) {
+						LOG(("Export: Channel path - calling start callback"));
+						if (_chatProcess->start(_chatProcess->info)) {
+							LOG(("Export: start() returned true, calling requestChannelMessagesSlice"));
+							requestChannelMessagesSlice();
+						} else {
+							LOG(("Export: start() returned false - export stopped"));
+						}
+					} else {
+						LOG(("Export: Non-channel path - calling requestMessagesCount"));
+						requestMessagesCount(0);
+					}
+				} else {
+					resolveDates();
+				}
+				return;
+			}
+		} else {
+			const auto resumeFromId = static_cast<int64>(_exportProgress->lastMessageId) + 1;
+			if (fromId == 0 || resumeFromId > fromId) {
+				fromId = resumeFromId;
+			}
 		}
 	}
 
 	_chatProcess = std::make_unique<ChatProcess>();
 	_chatProcess->context.selfPeerId = peerFromUser(*_selfId);
-	_chatProcess->info = info;
+	auto infoCopy = info;
+	if (_exportProgress) {
+		infoCopy.resumeMessagesProcessed = _exportProgress->messagesProcessed;
+		infoCopy.lastMessageId = _exportProgress->lastMessageId;
+	}
+	_chatProcess->info = infoCopy;
 	_chatProcess->fromId = fromId;
 	_chatProcess->tillId = tillId;
 	_chatProcess->start = std::move(start);
@@ -2043,12 +2006,9 @@ void ApiWrap::requestMessages(
 	_chatProcess->handleSlice = std::move(slice);
 	_chatProcess->done = std::move(done);
 
-	if (_exportProgress && tillId > 0) {
-		_exportProgress->rangeEndMsgId = static_cast<uint64>(tillId);
-	}
-
-	if (fromId > 0) {
+	if (_settings->useIdRange && tillId > 0) {
 		_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
+		LOG(("Export: Set largestIdPlusOne=%1 for ID range (starting from fromId)").arg(_chatProcess->largestIdPlusOne));
 	}
 
 	if (_exportProgress) {
@@ -2060,14 +2020,38 @@ void ApiWrap::requestMessages(
 
 		if (!_isScanning) {
 			_resumeIdThreshold = _exportProgress->lastMessageId;
+			LOG(("Export: Set _resumeIdThreshold=%1 from lastMessageId").arg(_resumeIdThreshold));
+		}
+
+		if (tillId > 0) {
+			_exportProgress->rangeEndMsgId = static_cast<uint64>(tillId);
+			LOG(("Export: Set rangeEndMsgId=%1").arg(tillId));
+		} else {
+			LOG(("Export: WARNING - tillId is 0, not setting rangeEndMsgId"));
 		}
 	} else {
 		_chatProcess->messagesProcessed = 0;
 		_chatProcess->messagesTotalCount = 0;
+		LOG(("Export: WARNING - _exportProgress is null"));
 	}
 
+	LOG(("Export: useIdRange=%1, splits.empty=%2")
+		.arg(_settings->useIdRange)
+		.arg(_chatProcess->info.splits.empty()));
+
 	if (_settings->useIdRange) {
-		requestMessagesCount(0);
+		if (_chatProcess->info.splits.empty()) {
+			LOG(("Export: Channel path - calling start callback"));
+			if (_chatProcess->start(_chatProcess->info)) {
+				LOG(("Export: start() returned true, calling requestChannelMessagesSlice"));
+				requestChannelMessagesSlice();
+			} else {
+				LOG(("Export: start() returned false - export stopped"));
+			}
+		} else {
+			LOG(("Export: Non-channel path - calling requestMessagesCount"));
+			requestMessagesCount(0);
+		}
 	} else {
 		resolveDates();
 	}
@@ -2118,6 +2102,12 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 		}, [](const MTPDmessages_messagesNotModified &data) {
 			return -1;
 		});
+		
+		LOG(("Export: requestMessagesCount returned count=%1, minId=%2, maxId=%3")
+			.arg(count)
+			.arg(minId)
+			.arg(maxId));
+		
 		if (count < 0) {
 			error("Unexpected messagesNotModified received.");
 			return;
@@ -2127,12 +2117,11 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 			&& (_chatProcess->fromId == 0)
 			&& (_chatProcess->tillId == 0);
 		if (skipSplit) {
+			LOG(("Export: Skipping split because hasDateRange but no ID range"));
 			messagesCountLoaded(localSplitIndex, 0);
 			return;
 		}
 		
-		// If scanning text/history in a specific range, use the ID difference as a better estimate
-		// than the total chat count returned by the server.
 		const auto realCount = count;
 		
 		checkFirstMessageDate(localSplitIndex, realCount);
@@ -2150,19 +2139,35 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 	Expects(_chatProcess != nullptr);
 	Expects(localSplitIndex < _chatProcess->info.splits.size());
 
+	LOG(("Export: messagesCountLoaded, localSplitIndex=%1, count=%2").arg(localSplitIndex).arg(count));
+
 	const auto delta = count - _chatProcess->info.messagesCountPerSplit[localSplitIndex];
 	_chatProcess->info.messagesCountPerSplit[localSplitIndex] = count;
 	
 	_chatProcess->messagesTotalCount += delta;
 
 	if (localSplitIndex + 1 < _chatProcess->info.splits.size()) {
+		LOG(("Export: More splits to process, calling requestMessagesCount(%1)").arg(localSplitIndex + 1));
 		requestMessagesCount(localSplitIndex + 1);
-	} else if (_chatProcess->start(_chatProcess->info)) {
-		requestMessagesSlice();
+	} else {
+		LOG(("Export: All splits processed, calling start callback"));
+		const auto startResult = _chatProcess->start(_chatProcess->info);
+		LOG(("Export: start callback returned %1").arg(startResult));
+		if (startResult) {
+			LOG(("Export: Calling requestMessagesSlice"));
+			requestMessagesSlice();
+		} else {
+			LOG(("Export: start callback returned false, export stopped"));
+		}
 	}
 }
 
 void ApiWrap::resolveDates() {
+	if (_settings->useIdRange) {
+		requestMessagesCount(0);
+		return;
+	}
+
 	const auto fromDate = _settings->singlePeerFrom;
 	const auto tillDate = _settings->singlePeerTill;
 
@@ -2618,16 +2623,42 @@ void ApiWrap::appendChatsSlice(
 void ApiWrap::requestMessagesSlice() {
 	Expects(_chatProcess != nullptr);
 
-	const auto count = _chatProcess->info.messagesCountPerSplit[
-		_chatProcess->localSplitIndex];
-	if (!count) {
-		loadMessagesFiles({});
-		return;
-	}
+	const auto addOffset = (_chatProcess->fromId > 0) ? -kMessagesSliceLimit : -kMessagesSliceLimit;
+
 	requestChatMessages(
-		_chatProcess->info.splits[_chatProcess->localSplitIndex],
+		_chatProcess->localSplitIndex,
 		_chatProcess->largestIdPlusOne,
-		-kMessagesSliceLimit,
+		addOffset,
+		kMessagesSliceLimit,
+		[=](const MTPmessages_Messages &result) {
+		LOG(("Export: requestChatMessages got response"));
+		if (!_chatProcess) return;
+
+		result.match([&](const MTPDmessages_messagesNotModified &data) {
+			error("Unexpected messagesNotModified received.");
+		}, [&](const auto &data) {
+			if constexpr (MTPDmessages_messages::Is<decltype(data)>()) {
+				_chatProcess->lastSlice = true;
+			}
+			loadMessagesFiles(Data::ParseMessagesSlice(
+				_chatProcess->context,
+				data.vmessages(),
+				data.vusers(),
+				data.vchats(),
+				_chatProcess->info.relativePath));
+		});
+	});
+}
+
+void ApiWrap::requestChannelMessagesSlice() {
+	Expects(_chatProcess != nullptr);
+
+	const auto addOffset = -kMessagesSliceLimit;
+
+	requestChatMessages(
+		0,
+		_chatProcess->largestIdPlusOne,
+		addOffset,
 		kMessagesSliceLimit,
 		[=](const MTPmessages_Messages &result) {
 		if (!_chatProcess) return;
@@ -2686,8 +2717,12 @@ void ApiWrap::requestChatMessages(
 		? splitIndex
 		: (splitsCount + splitIndex);
 
-	const auto minId = (_chatProcess->fromId > 0) ? std::max(int64(0), _chatProcess->fromId - 1) : int64(0);
-	const auto maxId = (_chatProcess->tillId > 0) ? (_chatProcess->tillId + 1) : int64(0);
+	const auto minId = (_chatProcess->fromId > 0)
+		? int64(_chatProcess->fromId - 1)
+		: int64(0);
+	const auto maxId = (_chatProcess->tillId > 0)
+		? int64(_chatProcess->tillId + 1)
+		: int64(0);
 	const auto filter = getFilter();
 	// Use search during scanning ONLY if we have a specific media filter active.
 	// This reduces the number of messages transferred when only one type is selected.
@@ -2765,6 +2800,13 @@ void ApiWrap::requestChatMessages(
 			}).done(doneHandler).send();
 		}
 	} else {
+		LOG(("Export: messages.getHistory params - offsetId=%1, addOffset=%2, limit=%3, maxId=%4, minId=%5")
+			.arg(offsetId)
+			.arg(addOffset)
+			.arg(limit)
+			.arg(int32(maxId))
+			.arg(int32(minId)));
+		
 		if (hasRestriction) {
 			// Use normal request for restricted chats
 			normalRequest(MTPInvokeWithMessagesRange<MTPmessages_GetHistory>(
@@ -2829,20 +2871,6 @@ void ApiWrap::requestChatMessages(
 }
 
 
-bool ApiWrap::shouldCountLocally(MediaSettings::Type type) const {
-	if (!_usingServerCounts) {
-		return true;
-	}
-	using Type = MediaSettings::Type;
-	return (type == Type::Text)
-		|| (type == Type::Sticker)
-		|| (type == Type::Link);
-}
-
-bool ApiWrap::shouldCountLocally() const {
-	return !_usingServerCounts;
-}
-
 MTPMessagesFilter ApiWrap::getFilter() const {
 	using Type = MediaSettings::Type;
 	const auto types = _settings->media.types;
@@ -2891,10 +2919,23 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 	Expects(_chatProcess != nullptr);
 	Expects(!_chatProcess->slice.has_value());
 
+	LOG(("Export: loadMessagesFiles, received %1 messages").arg(slice.list.size()));
+
 	collectMessagesCustomEmoji(slice);
 
 	if (slice.list.empty()) {
-		_chatProcess->lastSlice = true;
+		if (_chatProcess->fromId > 0) {
+			_chatProcess->largestIdPlusOne += kMessagesSliceLimit;
+			if (_chatProcess->largestIdPlusOne >= _chatProcess->tillId) {
+				LOG(("Export: Empty slice and reached tillId, marking as lastSlice"));
+				_chatProcess->lastSlice = true;
+			} else {
+				LOG(("Export: Empty slice, advancing largestIdPlusOne by %1 to %2 and retrying").arg(kMessagesSliceLimit).arg(_chatProcess->largestIdPlusOne));
+			}
+		} else {
+			LOG(("Export: Slice is empty, marking as lastSlice"));
+			_chatProcess->lastSlice = true;
+		}
 	}
 	_chatProcess->slice.emplace(std::move(slice));
 	auto &s = *_chatProcess->slice;
@@ -2904,10 +2945,15 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 	_chatProcess->messageStats.assign(s.list.size(), ChatProcess::MessageStats());
 	_chatProcess->emojiToMessageIndices.clear();
 
+	int skippedCount = 0;
+	int withinRangeCount = 0;
+
 	for (int i = 0; i < int(s.list.size()); ++i) {
 		const auto &message = s.list[i];
 
-
+		if (i < 5 || i >= int(s.list.size()) - 5) {
+			LOG(("Export: Message[%1] id=%2").arg(i).arg(message.id));
+		}
 
 		auto &ms = _chatProcess->messageStats[i];
 
@@ -2915,10 +2961,12 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		if (skippedByDate) {
 			ms.withinRange = false;
 			onMessagePartDone(i, false);
+			skippedCount++;
 			continue;
 		}
 
 		ms.withinRange = true;
+		withinRangeCount++;
 
 		const auto hasMedia = !std::holds_alternative<v::null_t>(message.media.content);
 
@@ -3052,10 +3100,8 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			}
 		}
 
-		const bool gifUsingServerCounts = (_isScanning && _usingServerCounts && messageType == MediaSettings::Type::GIF);
 		const auto oversized = (hasFile && _settings->media.sizeLimit > 0 && fullSize > _settings->media.sizeLimit)
-			&& !isLinkMessage && (messageType != MediaSettings::Type::Text && messageType != MediaSettings::Type::Link)
-			&& !gifUsingServerCounts;
+			&& !isLinkMessage && (messageType != MediaSettings::Type::Text && messageType != MediaSettings::Type::Link);
 
 		const bool mediaSelected = (types & messageType) || fullHistorySelected;
 
@@ -3145,6 +3191,11 @@ if (required == 0) {
 			onMessagePartDone(i, ms.selected);
 		}
 	}
+
+	LOG(("Export: Processed %1 messages: %2 within range, %3 skipped")
+		.arg(s.list.size())
+		.arg(withinRangeCount)
+		.arg(skippedCount));
 
 	if (_chatProcess->pendingFiles > 0) {
 		resolveCustomEmoji();
@@ -3442,11 +3493,20 @@ void ApiWrap::finishMessagesSlice() {
 
 	auto slice = *base::take(_chatProcess->slice);
 	if (!slice.list.empty()) {
-		_chatProcess->largestIdPlusOne = slice.list.back().id + 1;
-
-		if (_chatProcess->tillId > 0
-			&& _chatProcess->largestIdPlusOne > _chatProcess->tillId) {
-			_chatProcess->lastSlice = true;
+		if (_chatProcess->fromId > 0) {
+			_chatProcess->largestIdPlusOne = slice.list.back().id + 1;
+			LOG(("Export: ID range - updated largestIdPlusOne to %1 (last/highest ID in slice + 1)").arg(_chatProcess->largestIdPlusOne));
+			
+			if (_chatProcess->largestIdPlusOne > _chatProcess->tillId) {
+				LOG(("Export: Reached or passed tillId=%1, marking as lastSlice").arg(_chatProcess->tillId));
+				_chatProcess->lastSlice = true;
+			}
+		} else {
+			_chatProcess->largestIdPlusOne = slice.list.back().id + 1;
+			
+			if (_chatProcess->tillId > 0 && _chatProcess->largestIdPlusOne > _chatProcess->tillId) {
+				_chatProcess->lastSlice = true;
+			}
 		}
 
 		// 2. Collect messages for writing
@@ -3455,9 +3515,14 @@ void ApiWrap::finishMessagesSlice() {
 		auto textBatch = Data::MessagesSlice();
 		textBatch.peers = slice.peers;
 		for (int i = 0; i < int(slice.list.size()); ++i) {
+			auto &message = slice.list[i];
+			
+			if (_resumeIdThreshold > 0 && message.id <= _resumeIdThreshold) {
+				LOG(("Export: Skipping already written message id=%1 (threshold=%2)").arg(message.id).arg(_resumeIdThreshold));
+				continue;
+			}
+			
 			if (_chatProcess->messageFilesRequired[i] == 0) {
-				auto &message = slice.list[i];
-				if (_resumeIdThreshold > 0 && message.id <= _resumeIdThreshold) continue;
 				if (Data::SkipMessageByDate(message, *_settings)) continue;
 				textBatch.list.push_back(std::move(message));
 			}
@@ -3469,13 +3534,25 @@ void ApiWrap::finishMessagesSlice() {
 			for (auto &msg : textBatch.list) _chatProcess->pendingBatch.list.push_back(std::move(msg));
 		}
 
-		// 3. Dispatch writer ONLY every 2000 messages for speed
-		if (_chatProcess->pendingBatch.list.size() >= 2000 || _chatProcess->lastSlice) {
+		// 3. Dispatch writer and save progress every 1000 messages
+		if (_chatProcess->pendingBatch.list.size() >= 1000 || _chatProcess->lastSlice) {
 			if (!_chatProcess->pendingBatch.list.empty()) {
+				std::sort(_chatProcess->pendingBatch.list.begin(), 
+					_chatProcess->pendingBatch.list.end(),
+					[](const Data::Message &a, const Data::Message &b) {
+						return a.id < b.id;
+					});
+				
+				LOG(("Export: Flushing pendingBatch of %1 messages (sorted by ID, first=%2, last=%3)")
+					.arg(_chatProcess->pendingBatch.list.size())
+					.arg(_chatProcess->pendingBatch.list.front().id)
+					.arg(_chatProcess->pendingBatch.list.back().id));
+				
 				if (!_chatProcess->handleSlice(std::move(_chatProcess->pendingBatch))) return;
 				_chatProcess->pendingBatch = Data::MessagesSlice();
 			}
-			saveProgress(); // Disk Save
+			LOG(("Export: Saving progress (batch reached 1000 or lastSlice)"));
+			saveProgress();
 		}
 
 		// 4. Update UI once per slice (Smooth high-speed jumps)
@@ -3649,7 +3726,29 @@ void ApiWrap::loadCustomEmojiDone(uint64 id, const QString &relativePath) {
 
 void ApiWrap::finishMessages() {
 	if (!_chatProcess) return;
+	
+	if (!_chatProcess->pendingBatch.list.empty()) {
+		std::sort(_chatProcess->pendingBatch.list.begin(), 
+			_chatProcess->pendingBatch.list.end(),
+			[](const Data::Message &a, const Data::Message &b) {
+				return a.id < b.id;
+			});
+		
+		LOG(("Export: finishMessages - flushing final pendingBatch of %1 messages (sorted by ID)")
+			.arg(_chatProcess->pendingBatch.list.size()));
+		
+		_chatProcess->handleSlice(std::move(_chatProcess->pendingBatch));
+		_chatProcess->pendingBatch = Data::MessagesSlice();
+	}
+	
 	flushBatchStats();
+	
+	LOG(("Export: finishMessages - saving final progress"));
+	
+	// Save final progress before finishing
+	if (!_isScanning) {
+		saveProgress();
+	}
 
 	if (_isScanning) {
 		_chatProcess->messagesTotalCount = _chatProcess->messagesProcessed;
@@ -4980,40 +5079,24 @@ void ApiWrap::flushBatchStats() {
 	if (!_chatProcess) return;
 
 	for (auto &[type, batch] : _chatProcess->batchStats) {
-		
-
 		const auto typeInt = static_cast<int>(type);
 		auto &target = _exportProgress->typeCounters[typeInt];
-		
-		const bool trusted = _usingServerCounts || _serverCountTrustedTypes.contains(type);
-		const auto localTotalCountIncr = (trusted && type != MediaSettings::Type::Link) ? 0 : batch.localTotalCount;
-		const auto linkMsgIncr = (type == MediaSettings::Type::Link && trusted) ? 0 : batch.messagesWithLinks;
 
-		if (trusted) {
-			target.uniqueCount += batch.uniqueCount;
-			target.uniqueSize += batch.uniqueSize;
-			target.totalSize += batch.totalSize;
-			if (type == MediaSettings::Type::Link) {
-				target.localTotalCount += batch.localTotalCount;
-			}
-		} else {
-			target.localTotalCount += batch.localTotalCount;
-			target.totalSize += batch.totalSize;
-			target.uniqueCount += batch.uniqueCount;
-			target.uniqueSize += batch.uniqueSize;
-			target.messagesWithLinks += batch.messagesWithLinks;
-		}
+		target.localTotalCount += batch.localTotalCount;
+		target.totalSize += batch.totalSize;
+		target.uniqueCount += batch.uniqueCount;
+		target.uniqueSize += batch.uniqueSize;
+		target.messagesWithLinks += batch.messagesWithLinks;
 
 		if (_isScanning) {
-			_scanStats->increment(type, batch.totalSize, batch.uniqueSize, localTotalCountIncr, batch.uniqueCount, linkMsgIncr);
+			_scanStats->increment(type, batch.totalSize, batch.uniqueSize, batch.localTotalCount, batch.uniqueCount, batch.messagesWithLinks);
 		} else if (_stats) {
-			_stats->increment(type, batch.totalSize, batch.uniqueSize, localTotalCountIncr, batch.uniqueCount, linkMsgIncr);
+			_stats->increment(type, batch.totalSize, batch.uniqueSize, batch.localTotalCount, batch.uniqueCount, batch.messagesWithLinks);
 		}
 	}
 	_chatProcess->batchStats.clear();
 
 	_chatProcess->messagesProcessed += _chatProcess->batchProcessed;
-	_exportProgress->messagesProcessed = _chatProcess->messagesProcessed;
 	_chatProcess->batchProcessed = 0;
 }
 
@@ -5031,27 +5114,23 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 
 	const bool alreadyCounted = (_resumeIdThreshold > 0 && messageId <= _resumeIdThreshold);
 	if (!alreadyCounted) {
-		if (messageId > _exportProgress->lastMessageId) {
-			_exportProgress->lastMessageId = messageId;
-		}
-
 		using Type = MediaSettings::Type;
 
 		_chatProcess->batchProcessed++;
 
 		if (ms.linkMsgIncr > 0) {
 			auto &linkBatch = _chatProcess->batchStats[Type::Link];
-			linkBatch.localTotalCount += ms.links;
-			if (ms.selected) {
+			if (isSelected) {
+				linkBatch.localTotalCount += ms.links;
 				linkBatch.uniqueCount += ms.linksUnique;
+				linkBatch.messagesWithLinks += ms.linkMsgIncr;
 			}
-			linkBatch.messagesWithLinks += ms.linkMsgIncr;
 		}
 
 		const bool scanningLinksOnly = _isScanning && (_settings->media.types == Type::Link);
 		if (ms.type != Type::Link && !scanningLinksOnly) {
 			auto &batch = _chatProcess->batchStats[ms.type];
-			if (ms.selected) {
+			if (isSelected) {
 				batch.localTotalCount++;
 				batch.totalSize += ms.size;
 				if (ms.unique) {
@@ -5075,36 +5154,58 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 				}
 			}
 		}
+	}
 
-		const bool lastOfScan = _isScanning && _chatProcess->lastSlice && (_chatProcess->messagesProcessed + _chatProcess->batchProcessed >= _chatProcess->messagesTotalCount);
-		const bool endOfRange = !_isScanning && (_chatProcess->messagesTotalCount > 0 && _chatProcess->messagesProcessed + _chatProcess->batchProcessed >= _chatProcess->messagesTotalCount);
-		if (_chatProcess->batchProcessed >= 100 || endOfRange || lastOfScan) {
-			flushBatchStats();
-			if (!_isScanning && (_chatProcess->messagesProcessed % 5000 == 0 || endOfRange)) {
-				saveProgress();
-			}
-			_chatProcess->fileProgress(ApiWrap::DownloadProgress{
-				.itemIndex = _chatProcess->messagesProcessed,
-				.ready = -1,
-				.total = -1,
-				.isAuxiliary = true,
-				.messagesTotalCount = _chatProcess->messagesTotalCount
-			});
+	const bool lastOfScan = _isScanning && _chatProcess->lastSlice && (_chatProcess->messagesProcessed + _chatProcess->batchProcessed >= _chatProcess->messagesTotalCount);
+	const bool endOfRange = !_isScanning && (_chatProcess->messagesTotalCount > 0 && _chatProcess->messagesProcessed + _chatProcess->batchProcessed >= _chatProcess->messagesTotalCount);
+	if (!_isScanning && (endOfRange || lastOfScan)) {
+		flushBatchStats();
+		if (!_isScanning && (_chatProcess->messagesProcessed % 1000 == 0 || endOfRange)) {
+			saveProgress();
 		}
+		_chatProcess->fileProgress(ApiWrap::DownloadProgress{
+			.itemIndex = _chatProcess->messagesProcessed,
+			.ready = -1,
+			.total = -1,
+			.isAuxiliary = true,
+			.messagesTotalCount = _chatProcess->messagesTotalCount
+		});
 	}
 
 	if (!_isScanning && need > 0) {
 		if (isSelected) {
-			Data::MessagesSlice single;
-			single.list.push_back(std::move(_chatProcess->slice->list[index]));
-			if (!_chatProcess->handleSlice(std::move(single))) {
-				return;
+			auto &message = _chatProcess->slice->list[index];
+			_chatProcess->pendingBatch.list.push_back(std::move(message));
+			if (_chatProcess->pendingBatch.peers.empty()) {
+				_chatProcess->pendingBatch.peers = _chatProcess->slice->peers;
 			}
+			
+			LOG(("Export: Added media message id=%1 to pendingBatch (size now %2)")
+				.arg(messageId)
+				.arg(_chatProcess->pendingBatch.list.size()));
 		}
 	}
 }
 
 void ApiWrap::clearResults() {
+	// Save progress before clearing, in case of cancellation
+	LOG(("Export: clearResults called - _chatProcess=%1, _isScanning=%2, _exportProgress=%3, _settings=%4")
+		.arg(_chatProcess ? "valid" : "null")
+		.arg(_isScanning ? "true" : "false")
+		.arg(_exportProgress ? "valid" : "null")
+		.arg(_settings ? "valid" : "null"));
+	
+	if (_chatProcess && !_isScanning) {
+		if (!_chatProcess->pendingBatch.list.empty()) {
+			LOG(("Export: Discarding %1 pending messages on cancel (will be re-downloaded on resume)")
+				.arg(_chatProcess->pendingBatch.list.size()));
+			_chatProcess->pendingBatch = Data::MessagesSlice();
+		}
+		
+		LOG(("Export: Saving progress on clearResults (cancel)"));
+		saveProgress();
+	}
+	
 	if (_chatProcess) {
 		base::take(_chatProcess)->done();
 	}
@@ -5168,6 +5269,21 @@ base::flat_set<QString> ApiWrap::visitedLinks() const {
 }
 
 void ApiWrap::clearState(bool keepCache) {
+	if (_chatProcess && !_isScanning && _exportProgress && _settings) {
+		if (!_chatProcess->pendingBatch.list.empty()) {
+			LOG(("Export: Discarding %1 pending messages in clearState (will be re-downloaded on resume)")
+				.arg(_chatProcess->pendingBatch.list.size()));
+			_chatProcess->pendingBatch = Data::MessagesSlice();
+			_chatProcess->batchStats.clear();
+			_chatProcess->batchProcessed = 0;
+		} else {
+			flushBatchStats();
+		}
+		
+		LOG(("Export: Saving progress in clearState before clearing"));
+		saveProgress();
+	}
+	
 	_takeoutId = std::nullopt;
 	_takeoutFlags = 0;
 	_takeoutSizeLimit = 0;
@@ -5210,14 +5326,17 @@ void ApiWrap::loadProgress(const QString &folder) {
 
 void ApiWrap::saveProgress() {
 	if (!_exportProgress || !_settings) {
+		LOG(("Export: saveProgress - SKIPPED (_exportProgress=%1, _settings=%2)")
+			.arg(_exportProgress ? "valid" : "null")
+			.arg(_settings ? "valid" : "null"));
 		return;
 	}
 	if (_isScanning) {
+		LOG(("Export: saveProgress - SKIPPED (scanning mode)"));
 		return;
 	}
 	_exportProgress->settings = *_settings;
 	if (_chatProcess) {
-		_exportProgress->messagesProcessed = _chatProcess->messagesProcessed;
 		_exportProgress->messagesTotalCount = _chatProcess->messagesTotalCount;
 	}
 	if (_stats) {
@@ -5267,6 +5386,10 @@ void ApiWrap::saveProgress() {
 
 	const auto path = ExportProgress::progressFilePath(_settings->path);
 	
+	LOG(("Export: saveProgress - lastMessageId=%1, messagesProcessed=%2")
+		.arg(_exportProgress->lastMessageId)
+		.arg(_exportProgress->messagesProcessed));
+	
 	// Ensure the export directory exists before saving
 	QDir dir(_settings->path);
 	if (!dir.exists()) {
@@ -5278,16 +5401,30 @@ void ApiWrap::saveProgress() {
 	
 	if (!_exportProgress->save(path)) {
 		LOG(("Export Error: Failed to save progress to {1}").arg(path));
+	} else {
+		LOG(("Export: Progress saved successfully to {1}").arg(path));
 	}
 }
 
-void ApiWrap::updateMessageProgress(uint64 messageId) {
+void ApiWrap::updateMessageProgress(uint64 messageId, int writtenCount) {
 	if (!_exportProgress || messageId == 0) {
 		return;
 	}
-	if (messageId > _exportProgress->lastMessageId) {
-		_exportProgress->lastMessageId = messageId;
-		saveProgress();
+	LOG(("Export: updateMessageProgress - updating lastMessageId from %1 to %2, messagesProcessed from %3 to %4")
+		.arg(_exportProgress->lastMessageId)
+		.arg(messageId)
+		.arg(_exportProgress->messagesProcessed)
+		.arg(_exportProgress->messagesProcessed + writtenCount));
+	_exportProgress->lastMessageId = messageId;
+	if (writtenCount > 0) {
+		_exportProgress->messagesProcessed += writtenCount;
+		if (_chatProcess) {
+			flushBatchStats();
+			saveProgress();
+			if (_fileCompletedCallback) {
+				_fileCompletedCallback();
+			}
+		}
 	}
 }
 
@@ -5310,7 +5447,15 @@ void ApiWrap::onFileCompleted(const QString &filename, int64 size, uint64 messag
 		incomplete.end()
 	);
 	
+	if (_chatProcess) {
+		flushBatchStats();
+	}
+	
 	saveProgress();
+	
+	if (_fileCompletedCallback) {
+		_fileCompletedCallback();
+	}
 }
 
 void ApiWrap::onFileStarted(const QString &filename, int64 totalSize, uint64 messageId) {

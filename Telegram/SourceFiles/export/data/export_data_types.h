@@ -1043,6 +1043,9 @@ struct DialogInfo {
 
 	// Filled when requesting dialog messages.
 	std::vector<int> messagesCountPerSplit;
+	
+	int resumeMessagesProcessed = 0;
+	uint64 lastMessageId = 0;
 };
 
 struct DialogsInfo {

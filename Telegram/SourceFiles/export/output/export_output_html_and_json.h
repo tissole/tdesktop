@@ -58,6 +58,10 @@ public:
 
 	QString mainFilePath() override;
 
+	int lastWrittenMessageId() const override;
+	
+	void updateStatsInFirstFile() override;
+
 	~HtmlAndJsonWriter();
 
 private:

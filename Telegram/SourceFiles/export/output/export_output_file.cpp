@@ -46,6 +46,12 @@ void File::close() {
 	_file.reset();
 }
 
+void File::flush() {
+	if (_file) {
+		_file->flush();
+	}
+}
+
 Result File::writeBlockAttempt(const QByteArray &block) {
 	if (_stats && !_inStats) {
 		_inStats = true;
