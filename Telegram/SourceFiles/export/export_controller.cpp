@@ -286,7 +286,6 @@ private:
 
 	int _messagesWritten = 0;
 	int _messagesCount = 0;
-	int _messagesTotalCount = 0;
 	int _userpicsWritten = 0;
 	int _userpicsCount = 0;
 	int _storiesWritten = 0;
@@ -599,7 +598,6 @@ void ControllerObject::startExport(
 
 	_isScanning = false;
 	_messagesWritten = 0;
-	_messagesTotalCount = 0;
 	_userpicsWritten = 0;
 	_userpicsCount = 0;
 	_storiesWritten = 0;
@@ -979,13 +977,10 @@ void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
 		if (!_isScanning && _api.isResumeMode()) {
 			_messagesWritten = progress->messagesProcessed;
 			if (progress->scanTotalMessages > 0) {
-				_messagesCount = progress->scanTotalMessages;
-				_messagesInRangeCountFixed = true;
-			} else if (progress->messagesTotalCount > 0) {
-				_messagesCount = progress->messagesTotalCount;
-				_messagesInRangeCountFixed = true;
-			}
+			_messagesCount = progress->scanTotalMessages;
+			_messagesInRangeCountFixed = true;
 		}
+	}
 	}
 
 	if (_isScanning) {
@@ -1229,13 +1224,7 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 			_stats.setExpectedFilesCount(_messagesCount);
 		}
 
-		if (_messagesTotalCount > 0) {
-			_messagesCount = _messagesTotalCount;
-		}
-
-		setState(stateDialogs(DownloadProgress{
-			.messagesTotalCount = _messagesTotalCount,
-		}));
+		setState(stateDialogs(DownloadProgress{}));
 		return true;
 	}, [=](DownloadProgress progress) {
 		if (progress.total > 0 && progress.ready >= progress.total) {
@@ -1251,15 +1240,8 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 				progress.total
 			};
 		}
-		_messagesTotalCount = progress.messagesTotalCount;
-	// If the server count was inaccurate (range active), update _messagesCount
-		// from the actual range count as it accumulates from requestMessagesCount.
-		// This replaces the full-chat count with the range-specific count.
-		if (_messagesTotalCount > 0) {
-			_messagesCount = _messagesTotalCount;
-		}
 		if (_isScanning) {
-			setState(stateScanning(progress.itemIndex, _messagesTotalCount));
+			setState(stateScanning(progress.itemIndex, progress.itemIndex));
 		} else {
 			setState(stateDialogs(progress));
 		}
@@ -1514,9 +1496,7 @@ void ControllerObject::fillMessagesState(
 	result.entityCount = info.chats.size() + info.left.size();
 	
 	result.itemIndex = progress.itemIndex;
-	// Always use total message count for the "X / Y" progress counter.
-	// Using media file count from scan stats was wrong: it excluded Text and Link messages.
-	result.itemCount = (_messagesCount > 0) ? _messagesCount : progress.messagesTotalCount;
+	result.itemCount = progress.itemIndex;
 	result.activeDownloads = _activeDownloads;
 
 	result.selectedStats = _stats.byType();

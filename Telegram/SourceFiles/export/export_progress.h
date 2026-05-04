@@ -38,7 +38,6 @@ struct ExportProgress {
 	int64 lastFileSize = 0;
 
 	int messagesProcessed = 0;
-	int messagesTotalCount = 0;
 	int scanTotalMessages = 0;
 	std::map<int, TypeCounter> typeCounters;
 	std::map<int, TypeCounter> scanStats;

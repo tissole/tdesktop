@@ -468,7 +468,6 @@ struct ApiWrap::ChatProcess : AbstractMessagesProcess {
 
 	// Track items processed
 	int messagesProcessed = 0;
-	int messagesTotalCount = 0;
 
 	struct MessageStats {
 		MediaSettings::Type type = MediaSettings::Type::Text;
@@ -1375,8 +1374,7 @@ bool ApiWrap::loadUserpicProgress(FileProgress progress) {
 		.itemIndex = _userpicsProcess->processed, // This is an approximation now.
 		.ready = progress.ready,
 		.total = progress.total,
-		.isAuxiliary = false,
-		.messagesTotalCount = _chatProcess ? _chatProcess->messagesTotalCount : 0,
+		.isAuxiliary = false
 	});
 }
 
@@ -1551,8 +1549,8 @@ bool ApiWrap::loadStoryProgress(FileProgress progress, bool auxiliary) {
 		.itemIndex = _storiesProcess->processed,
 		.ready = progress.ready,
 		.total = progress.total,
-		.isAuxiliary = auxiliary,
-		.messagesTotalCount = _chatProcess ? _chatProcess->messagesTotalCount : 0 });
+		.isAuxiliary = auxiliary
+	});
 }
 
 void ApiWrap::loadStoryDone(const QString &relativePath) {
@@ -1956,10 +1954,9 @@ void ApiWrap::requestMessages(
 						_exportProgress->rangeEndMsgId = static_cast<uint64>(tillId);
 						LOG(("Export: Set rangeEndMsgId=%1").arg(tillId));
 					}
-				} else {
-					_chatProcess->messagesProcessed = 0;
-					_chatProcess->messagesTotalCount = 0;
-				}
+			} else {
+				_chatProcess->messagesProcessed = 0;
+			}
 				
 				LOG(("Export: useIdRange=%1, splits.empty=%2")
 					.arg(_settings->useIdRange)
@@ -2031,7 +2028,6 @@ void ApiWrap::requestMessages(
 		}
 	} else {
 		_chatProcess->messagesProcessed = 0;
-		_chatProcess->messagesTotalCount = 0;
 		LOG(("Export: WARNING - _exportProgress is null"));
 	}
 
@@ -2141,10 +2137,7 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 
 	LOG(("Export: messagesCountLoaded, localSplitIndex=%1, count=%2").arg(localSplitIndex).arg(count));
 
-	const auto delta = count - _chatProcess->info.messagesCountPerSplit[localSplitIndex];
 	_chatProcess->info.messagesCountPerSplit[localSplitIndex] = count;
-	
-	_chatProcess->messagesTotalCount += delta;
 
 	if (localSplitIndex + 1 < _chatProcess->info.splits.size()) {
 		LOG(("Export: More splits to process, calling requestMessagesCount(%1)").arg(localSplitIndex + 1));
@@ -3560,8 +3553,7 @@ void ApiWrap::finishMessagesSlice() {
 			.itemIndex = _chatProcess->messagesProcessed,
 			.ready = -1,
 			.total = -1,
-			.isAuxiliary = true,
-			.messagesTotalCount = _chatProcess->messagesTotalCount
+			.isAuxiliary = true
 		});
 	}
 
@@ -3615,7 +3607,6 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 	}
 
 	const int itemIndex = _chatProcess->messagesProcessed;
-	const auto localTotalCount = _chatProcess->messagesTotalCount;
 	const auto fileProgressCb = _chatProcess->fileProgress;
 	return fileProgressCb(ApiWrap::DownloadProgress{
 		.randomId = process.randomId,
@@ -3623,8 +3614,8 @@ bool ApiWrap::loadMessageFileProgress(FileProgress progress, bool auxiliary) {
 		.itemIndex = itemIndex,
 		.ready = progress.ready,
 		.total = progress.total,
-		.isAuxiliary = auxiliary,
-		.messagesTotalCount = localTotalCount });
+		.isAuxiliary = auxiliary
+	});
 }
 
 void ApiWrap::loadMessageFileDone(int index, const QString &relativePath) {
@@ -3751,13 +3742,11 @@ void ApiWrap::finishMessages() {
 	}
 
 	if (_isScanning) {
-		_chatProcess->messagesTotalCount = _chatProcess->messagesProcessed;
 		_chatProcess->fileProgress(ApiWrap::DownloadProgress{
 			.itemIndex = _chatProcess->messagesProcessed,
 			.ready = -1,
 			.total = -1,
-			.isAuxiliary = true,
-			.messagesTotalCount = _chatProcess->messagesTotalCount
+			.isAuxiliary = true
 		});
 	}
 
@@ -5143,21 +5132,14 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 		if (done == std::max(need, 1)) {
 			if (_isScanning) {
 				_scanStats->incrementTotalMessages();
-				if (_chatProcess->messagesTotalCount == 0 || _scanStats->totalMessagesCount() > _chatProcess->messagesTotalCount) {
-					_chatProcess->messagesTotalCount = _scanStats->totalMessagesCount();
-				}
 			} else if (_stats) {
 				_stats->incrementTotalMessages();
-				const bool hasRange = (_settings->singlePeerFrom != 0 || _settings->singlePeerTill != 0) || _settings->useIdRange;
-				if (_chatProcess->messagesTotalCount == 0 || (hasRange && _stats->totalMessagesCount() > _chatProcess->messagesTotalCount)) {
-					_chatProcess->messagesTotalCount = _stats->totalMessagesCount();
-				}
 			}
 		}
 	}
 
-	const bool lastOfScan = _isScanning && _chatProcess->lastSlice && (_chatProcess->messagesProcessed + _chatProcess->batchProcessed >= _chatProcess->messagesTotalCount);
-	const bool endOfRange = !_isScanning && (_chatProcess->messagesTotalCount > 0 && _chatProcess->messagesProcessed + _chatProcess->batchProcessed >= _chatProcess->messagesTotalCount);
+	const bool lastOfScan = _isScanning && _chatProcess->lastSlice;
+	const bool endOfRange = !_isScanning && (_chatProcess->lastSlice || (_exportProgress->rangeEndMsgId > 0 && _exportProgress->lastMessageId >= _exportProgress->rangeEndMsgId));
 	if (!_isScanning && (endOfRange || lastOfScan)) {
 		flushBatchStats();
 		if (!_isScanning && (_chatProcess->messagesProcessed % 1000 == 0 || endOfRange)) {
@@ -5167,8 +5149,7 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 			.itemIndex = _chatProcess->messagesProcessed,
 			.ready = -1,
 			.total = -1,
-			.isAuxiliary = true,
-			.messagesTotalCount = _chatProcess->messagesTotalCount
+			.isAuxiliary = true
 		});
 	}
 
@@ -5355,9 +5336,6 @@ void ApiWrap::saveProgress() {
 		return;
 	}
 	_exportProgress->settings = *_settings;
-	if (_chatProcess) {
-		_exportProgress->messagesTotalCount = _chatProcess->messagesTotalCount;
-	}
 	if (_stats) {
 		const auto byType = _stats->byType();
 		_exportProgress->typeCounters.clear();

@@ -55,7 +55,6 @@ QJsonObject ExportProgress::toJson() const {
 	obj["last_filename"] = lastFilename;
 	obj["last_file_size"] = QString::number(lastFileSize);
 	obj["messages_processed"] = messagesProcessed;
-	obj["messages_total_count"] = messagesTotalCount;
 	obj["scan_total_messages"] = scanTotalMessages;
 
 	// Session state fields
@@ -156,7 +155,6 @@ ExportProgress ExportProgress::fromJson(const QJsonObject &obj) {
 	result.lastFilename = obj["last_filename"].toString();
 	result.lastFileSize = obj["last_file_size"].toString().toLongLong();
 	result.messagesProcessed = obj["messages_processed"].toInt();
-	result.messagesTotalCount = obj["messages_total_count"].toInt();
 	result.scanTotalMessages = obj["scan_total_messages"].toInt();
 
 	// Load session state fields
