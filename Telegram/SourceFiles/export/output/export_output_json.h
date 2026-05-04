@@ -86,6 +86,7 @@ private:
 	[[nodiscard]] QByteArray prepareObjectItemStart(const QByteArray &key);
 	[[nodiscard]] QByteArray prepareArrayItemStart();
 	[[nodiscard]] QByteArray popNesting();
+	[[nodiscard]] QByteArray formatSize(int64 bytes) const;
 
 	[[nodiscard]] QString mainFileRelativePath() const;
 	[[nodiscard]] QString pathWithRelativePath(const QString &path) const;

@@ -1826,10 +1826,18 @@ Result JsonWriter::finish() {
 			}
 			if (!key.isEmpty()) {
 				auto itemValues = std::vector<std::pair<QByteArray, QByteArray>>();
-				itemValues.push_back({ "unique_count", QByteArray::number(item.uniqueCount) });
-				itemValues.push_back({ "unique_size", QByteArray::number(item.uniqueSize) });
-				itemValues.push_back({ "total_count", QByteArray::number(item.localTotalCount) });
-				itemValues.push_back({ "total_size", QByteArray::number(item.totalSize) });
+				if (mediaType == MediaType::Text) {
+					itemValues.push_back({ "total_items", QByteArray::number(item.localTotalCount) });
+				} else if (mediaType == MediaType::Link) {
+					itemValues.push_back({ "unique_items", QByteArray::number(item.uniqueCount) });
+					itemValues.push_back({ "total_items", QByteArray::number(item.localTotalCount) });
+					itemValues.push_back({ "messages_with_links", QByteArray::number(item.messagesWithLinks) });
+				} else {
+					itemValues.push_back({ "unique_items", QByteArray::number(item.uniqueCount) });
+					itemValues.push_back({ "unique_size", "\"" + formatSize(item.uniqueSize) + "\"" });
+					itemValues.push_back({ "total_items", QByteArray::number(item.localTotalCount) });
+					itemValues.push_back({ "total_size", "\"" + formatSize(item.totalSize) + "\"" });
+				}
 				statsValues.push_back({ key, SerializeObject(_context, itemValues) });
 			}
 		}
@@ -1841,7 +1849,7 @@ Result JsonWriter::finish() {
 		for (const auto &pair : breakdown) {
 			const auto mediaType = pair.first;
 			const auto &item = pair.second;
-			if (mediaType != MediaType::Link) {
+			if (mediaType != MediaType::Link && mediaType != MediaType::Text) {
 				totalUniqueCount += item.uniqueCount;
 				totalUniqueSize += item.uniqueSize;
 				totalTotalCount += item.localTotalCount;
@@ -1849,11 +1857,11 @@ Result JsonWriter::finish() {
 			}
 		}
 		auto totalValues = std::vector<std::pair<QByteArray, QByteArray>>();
-		totalValues.push_back({ "unique_count", QByteArray::number(totalUniqueCount) });
-		totalValues.push_back({ "unique_size", QByteArray::number(totalUniqueSize) });
-		totalValues.push_back({ "total_count", QByteArray::number(totalTotalCount) });
-		totalValues.push_back({ "total_size", QByteArray::number(totalTotalSize) });
-		statsValues.push_back({ "total", SerializeObject(_context, totalValues) });
+		totalValues.push_back({ "unique_items", QByteArray::number(totalUniqueCount) });
+		totalValues.push_back({ "unique_size", "\"" + formatSize(totalUniqueSize) + "\"" });
+		totalValues.push_back({ "total_items", QByteArray::number(totalTotalCount) });
+		totalValues.push_back({ "total_size", "\"" + formatSize(totalTotalSize) + "\"" });
+		statsValues.push_back({ "total_media", SerializeObject(_context, totalValues) });
 
 		if (const auto result = writeBlock(prepareObjectItemStart("export_statistics") + SerializeObject(_context, statsValues)); !result) {
 			return result;
@@ -1875,6 +1883,25 @@ QString JsonWriter::mainFilePath() {
 
 int JsonWriter::lastWrittenMessageId() const {
 	return _lastWrittenMessageId;
+}
+
+QByteArray JsonWriter::formatSize(int64 bytes) const {
+	constexpr auto kKB = 1024.0;
+	constexpr auto kMB = kKB * 1024.0;
+	constexpr auto kGB = kMB * 1024.0;
+	constexpr auto kTB = kGB * 1024.0;
+
+	if (bytes >= kTB) {
+		return QByteArray::number(bytes / kTB, 'f', 2) + " TB";
+	} else if (bytes >= kGB) {
+		return QByteArray::number(bytes / kGB, 'f', 1) + " GB";
+	} else if (bytes >= kMB) {
+		return QByteArray::number(bytes / kMB, 'f', 1) + " MB";
+	} else if (bytes >= kKB) {
+		return QByteArray::number(bytes / kKB, 'f', 1) + " KB";
+	} else {
+		return QByteArray::number(bytes) + " bytes";
+	}
 }
 
 void JsonWriter::updateStatsInFirstFile() {
@@ -1920,10 +1947,18 @@ void JsonWriter::updateStatsInFirstFile() {
 		}
 		if (!key.isEmpty()) {
 			auto itemValues = std::vector<std::pair<QByteArray, QByteArray>>();
-			itemValues.push_back({ "unique_count", QByteArray::number(item.uniqueCount) });
-			itemValues.push_back({ "unique_size", QByteArray::number(item.uniqueSize) });
-			itemValues.push_back({ "total_count", QByteArray::number(item.localTotalCount) });
-			itemValues.push_back({ "total_size", QByteArray::number(item.totalSize) });
+			if (mediaType == MediaType::Text) {
+				itemValues.push_back({ "total_items", QByteArray::number(item.localTotalCount) });
+			} else if (mediaType == MediaType::Link) {
+				itemValues.push_back({ "unique_items", QByteArray::number(item.uniqueCount) });
+				itemValues.push_back({ "total_items", QByteArray::number(item.localTotalCount) });
+				itemValues.push_back({ "messages_with_links", QByteArray::number(item.messagesWithLinks) });
+			} else {
+				itemValues.push_back({ "unique_items", QByteArray::number(item.uniqueCount) });
+				itemValues.push_back({ "unique_size", "\"" + formatSize(item.uniqueSize) + "\"" });
+				itemValues.push_back({ "total_items", QByteArray::number(item.localTotalCount) });
+				itemValues.push_back({ "total_size", "\"" + formatSize(item.totalSize) + "\"" });
+			}
 			statsValues.push_back({ key, SerializeObject(_context, itemValues) });
 		}
 	}
@@ -1935,7 +1970,7 @@ void JsonWriter::updateStatsInFirstFile() {
 	for (const auto &pair : breakdown) {
 		const auto mediaType = pair.first;
 		const auto &item = pair.second;
-		if (mediaType != MediaType::Link) {
+		if (mediaType != MediaType::Link && mediaType != MediaType::Text) {
 			totalUniqueCount += item.uniqueCount;
 			totalUniqueSize += item.uniqueSize;
 			totalTotalCount += item.localTotalCount;
@@ -1943,11 +1978,11 @@ void JsonWriter::updateStatsInFirstFile() {
 		}
 	}
 	auto totalValues = std::vector<std::pair<QByteArray, QByteArray>>();
-	totalValues.push_back({ "unique_count", QByteArray::number(totalUniqueCount) });
-	totalValues.push_back({ "unique_size", QByteArray::number(totalUniqueSize) });
-	totalValues.push_back({ "total_count", QByteArray::number(totalTotalCount) });
-	totalValues.push_back({ "total_size", QByteArray::number(totalTotalSize) });
-	statsValues.push_back({ "total", SerializeObject(_context, totalValues) });
+	totalValues.push_back({ "unique_items", QByteArray::number(totalUniqueCount) });
+	totalValues.push_back({ "unique_size", "\"" + formatSize(totalUniqueSize) + "\"" });
+	totalValues.push_back({ "total_items", QByteArray::number(totalTotalCount) });
+	totalValues.push_back({ "total_size", "\"" + formatSize(totalTotalSize) + "\"" });
+	statsValues.push_back({ "total_media", SerializeObject(_context, totalValues) });
 
 	const auto newStatsBlock = prepareObjectItemStart("export_statistics") + SerializeObject(_context, statsValues);
 
