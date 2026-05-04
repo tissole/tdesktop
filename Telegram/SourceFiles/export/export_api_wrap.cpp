@@ -5140,7 +5140,7 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 
 	const bool lastOfScan = _isScanning && _chatProcess->lastSlice;
 	const bool endOfRange = !_isScanning && (_chatProcess->lastSlice || (_exportProgress->rangeEndMsgId > 0 && _exportProgress->lastMessageId >= _exportProgress->rangeEndMsgId));
-	if (!_isScanning && (endOfRange || lastOfScan)) {
+	if (endOfRange || lastOfScan) {
 		flushBatchStats();
 		if (!_isScanning && (_chatProcess->messagesProcessed % 1000 == 0 || endOfRange)) {
 			saveProgress();

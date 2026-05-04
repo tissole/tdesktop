@@ -1241,7 +1241,8 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 			};
 		}
 		if (_isScanning) {
-			setState(stateScanning(progress.itemIndex, progress.itemIndex));
+			const int scanTotal = _scanStats.totalMessagesCount();
+			setState(stateScanning(scanTotal, scanTotal));
 		} else {
 			setState(stateDialogs(progress));
 		}

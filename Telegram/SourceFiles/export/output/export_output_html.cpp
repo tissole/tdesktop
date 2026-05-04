@@ -3798,7 +3798,9 @@ Result HtmlWriter::writeEmptySinglePeer() {
 	if (!_settings.onlySinglePeer() || _messagesCount != 0) {
 		return Result::Success();
 	}
-	Assert(_chatFileEmpty);
+	if (!_chatFileEmpty) {
+		_chatFileEmpty = true;
+	}
 	if (const auto result = writeDialogOpening(0); !result) {
 		return result;
 	}
