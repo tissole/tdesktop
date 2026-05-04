@@ -5276,6 +5276,25 @@ void ApiWrap::clearState(bool keepCache) {
 			_chatProcess->pendingBatch = Data::MessagesSlice();
 			_chatProcess->batchStats.clear();
 			_chatProcess->batchProcessed = 0;
+			
+			_dedupById.clear();
+			for (const auto &[id, path] : _exportProgress->dedupById) {
+				_dedupById[id] = path;
+			}
+			_dedupBySizeName.clear();
+			for (const auto &[mapKey, path] : _exportProgress->dedupBySizeName) {
+				const int underscorePos = mapKey.indexOf('_');
+				if (underscorePos > 0) {
+					const int64 size = mapKey.left(underscorePos).toLongLong();
+					const QString name = mapKey.mid(underscorePos + 1);
+					_dedupBySizeName[{size, name}] = path;
+				}
+			}
+			
+			_visitedLinks.clear();
+			for (const auto &link : _exportProgress->visitedLinks) {
+				_visitedLinks.insert(link);
+			}
 		} else {
 			flushBatchStats();
 		}
