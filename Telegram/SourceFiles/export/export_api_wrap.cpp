@@ -461,7 +461,7 @@ struct ApiWrap::ChatProcess : AbstractMessagesProcess {
 	FnMut<bool(const Data::DialogInfo &)> start;
 
 	int localSplitIndex = 0;
-	int32 largestIdPlusOne = 1;
+	int32 nextFetchId = 1;
 
 	int pendingFiles = 0;
 	bool processing = false;
@@ -1938,8 +1938,8 @@ void ApiWrap::requestMessages(
 				_chatProcess->fileProgress = std::move(progress);
 				_chatProcess->handleSlice = std::move(slice);
 				_chatProcess->done = std::move(done);
-				_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), resumeFromId));
-				LOG(("Export: Resume - Set largestIdPlusOne=%1 from lastMessageId+1").arg(_chatProcess->largestIdPlusOne));
+				_chatProcess->nextFetchId = int32(std::min(int64(std::numeric_limits<int32>::max()), resumeFromId));
+				LOG(("Export: Resume - Set nextFetchId=%1 from lastMessageId+1").arg(_chatProcess->nextFetchId));
 				
 				if (_exportProgress) {
 					_chatProcess->messagesProcessed = _exportProgress->messagesProcessed;
@@ -2004,11 +2004,11 @@ void ApiWrap::requestMessages(
 	_chatProcess->done = std::move(done);
 
 	if (_settings->useIdRange && tillId > 0) {
-		_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
-		LOG(("Export: Set largestIdPlusOne=%1 for ID range (starting from fromId)").arg(_chatProcess->largestIdPlusOne));
+		_chatProcess->nextFetchId = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
+		LOG(("Export: Set nextFetchId=%1 for ID range (starting from fromId)").arg(_chatProcess->nextFetchId));
 	} else if (_exportProgress && !_settings->useIdRange) {
-		_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
-		LOG(("Export: Set largestIdPlusOne=%1 for date range resume (starting from resumeFromId)").arg(_chatProcess->largestIdPlusOne));
+		_chatProcess->nextFetchId = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
+		LOG(("Export: Set nextFetchId=%1 for date range resume (starting from resumeFromId)").arg(_chatProcess->nextFetchId));
 	}
 
 	if (_exportProgress) {
@@ -2238,7 +2238,7 @@ void ApiWrap::resolveDates() {
 						return TimeId(m.vdate().v);
 					});
 					_chatProcess->fromId = (date > 0 && date < fromDate) ? (id + 1) : id;
-					_chatProcess->largestIdPlusOne = int32(std::max(int64(1), std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId)));
+					_chatProcess->nextFetchId = int32(std::max(int64(1), std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId)));
 				}
 			});
 			resolveTill();
@@ -2626,7 +2626,7 @@ void ApiWrap::requestMessagesSlice() {
 
 	requestChatMessages(
 		_chatProcess->localSplitIndex,
-		_chatProcess->largestIdPlusOne,
+		_chatProcess->nextFetchId,
 		addOffset,
 		kMessagesSliceLimit,
 		[=](const MTPmessages_Messages &result) {
@@ -2656,7 +2656,7 @@ void ApiWrap::requestChannelMessagesSlice() {
 
 	requestChatMessages(
 		0,
-		_chatProcess->largestIdPlusOne,
+		_chatProcess->nextFetchId,
 		addOffset,
 		kMessagesSliceLimit,
 		[=](const MTPmessages_Messages &result) {
@@ -2924,12 +2924,12 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 	if (slice.list.empty()) {
 		if (_chatProcess->fromId > 0) {
-			_chatProcess->largestIdPlusOne += kMessagesSliceLimit;
-			if (_chatProcess->largestIdPlusOne >= _chatProcess->tillId) {
+			_chatProcess->nextFetchId += kMessagesSliceLimit;
+			if (_chatProcess->nextFetchId >= _chatProcess->tillId) {
 				LOG(("Export: Empty slice and reached tillId, marking as lastSlice"));
 				_chatProcess->lastSlice = true;
 			} else {
-				LOG(("Export: Empty slice, advancing largestIdPlusOne by %1 to %2 and retrying").arg(kMessagesSliceLimit).arg(_chatProcess->largestIdPlusOne));
+				LOG(("Export: Empty slice, advancing nextFetchId by %1 to %2 and retrying").arg(kMessagesSliceLimit).arg(_chatProcess->nextFetchId));
 			}
 		} else {
 			LOG(("Export: Slice is empty, marking as lastSlice"));
@@ -3488,7 +3488,7 @@ void ApiWrap::finishMessagesSlice() {
 				finishMessages();
 			} else {
 				_chatProcess->lastSlice = false;
-				_chatProcess->largestIdPlusOne = (_chatProcess->fromId > 0)
+				_chatProcess->nextFetchId = (_chatProcess->fromId > 0)
 					? int32(std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId))
 					: 1;
 				requestMessagesSlice();
@@ -3502,17 +3502,17 @@ void ApiWrap::finishMessagesSlice() {
 	auto slice = *base::take(_chatProcess->slice);
 	if (!slice.list.empty()) {
 		if (_chatProcess->fromId > 0) {
-			_chatProcess->largestIdPlusOne = slice.list.back().id + 1;
-			LOG(("Export: ID range - updated largestIdPlusOne to %1 (last/highest ID in slice + 1)").arg(_chatProcess->largestIdPlusOne));
+			_chatProcess->nextFetchId = slice.list.back().id + 1;
+			LOG(("Export: ID range - updated nextFetchId to %1 (last/highest ID in slice + 1)").arg(_chatProcess->nextFetchId));
 			
-			if (_chatProcess->tillId > 0 && _chatProcess->largestIdPlusOne > _chatProcess->tillId) {
+			if (_chatProcess->tillId > 0 && _chatProcess->nextFetchId > _chatProcess->tillId) {
 				LOG(("Export: Reached or passed tillId=%1, marking as lastSlice").arg(_chatProcess->tillId));
 				_chatProcess->lastSlice = true;
 			}
 		} else {
-			_chatProcess->largestIdPlusOne = slice.list.back().id + 1;
+			_chatProcess->nextFetchId = slice.list.back().id + 1;
 			
-			if (_chatProcess->tillId > 0 && _chatProcess->largestIdPlusOne > _chatProcess->tillId) {
+			if (_chatProcess->tillId > 0 && _chatProcess->nextFetchId > _chatProcess->tillId) {
 				_chatProcess->lastSlice = true;
 			}
 		}
@@ -3577,7 +3577,7 @@ void ApiWrap::finishMessagesSlice() {
 	if (_chatProcess->lastSlice) {
 		if (++_chatProcess->localSplitIndex < _chatProcess->info.splits.size()) {
 			_chatProcess->lastSlice = false;
-			_chatProcess->largestIdPlusOne = (_chatProcess->fromId > 0)
+			_chatProcess->nextFetchId = (_chatProcess->fromId > 0)
 				? int32(std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId))
 				: 1;
 			requestMessagesSlice();
