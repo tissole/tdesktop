@@ -2006,6 +2006,9 @@ void ApiWrap::requestMessages(
 	if (_settings->useIdRange && tillId > 0) {
 		_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
 		LOG(("Export: Set largestIdPlusOne=%1 for ID range (starting from fromId)").arg(_chatProcess->largestIdPlusOne));
+	} else if (_exportProgress && !_settings->useIdRange) {
+		_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
+		LOG(("Export: Set largestIdPlusOne=%1 for date range resume (starting from resumeFromId)").arg(_chatProcess->largestIdPlusOne));
 	}
 
 	if (_exportProgress) {
@@ -2048,6 +2051,9 @@ void ApiWrap::requestMessages(
 			LOG(("Export: Non-channel path - calling requestMessagesCount"));
 			requestMessagesCount(0);
 		}
+	} else if (_exportProgress && _exportProgress->lastMessageId > 0) {
+		LOG(("Export: Date range resume - skipping resolveDates, calling requestMessagesCount"));
+		requestMessagesCount(0);
 	} else {
 		resolveDates();
 	}
@@ -2950,6 +2956,15 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		auto &ms = _chatProcess->messageStats[i];
 
+		if (_resumeIdThreshold > 0 && message.id <= _resumeIdThreshold) {
+			LOG(("Export: Skipping already written message id=%1 (threshold=%2)")
+				.arg(message.id).arg(_resumeIdThreshold));
+			ms.withinRange = false;
+			onMessagePartDone(i, false);
+			skippedCount++;
+			continue;
+		}
+
 		const auto skippedByDate = Data::SkipMessageByDate(message, *_settings);
 		if (skippedByDate) {
 			ms.withinRange = false;
@@ -3490,7 +3505,7 @@ void ApiWrap::finishMessagesSlice() {
 			_chatProcess->largestIdPlusOne = slice.list.back().id + 1;
 			LOG(("Export: ID range - updated largestIdPlusOne to %1 (last/highest ID in slice + 1)").arg(_chatProcess->largestIdPlusOne));
 			
-			if (_chatProcess->largestIdPlusOne > _chatProcess->tillId) {
+			if (_chatProcess->tillId > 0 && _chatProcess->largestIdPlusOne > _chatProcess->tillId) {
 				LOG(("Export: Reached or passed tillId=%1, marking as lastSlice").arg(_chatProcess->tillId));
 				_chatProcess->lastSlice = true;
 			}
