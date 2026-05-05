@@ -491,9 +491,7 @@ void SettingsWidget::addLimitsLabel(
 
 	const auto mapToTime = [](TimeId id, const QString &link) {
 		return rpl::single(id
-			? QLocale().toString(
-				base::unixtime::parse(id).time(),
-				QLocale::ShortFormat)
+			? base::unixtime::parse(id).time().toString(u"HH:mm:ss"_q)
 			: QString()
 		) | rpl::map(tr::url(link));
 	};
