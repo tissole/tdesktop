@@ -1684,7 +1684,6 @@ void SettingsWidget::setScanning(bool scanning) {
 			_hasScanResults = false;
 			_scanResults.clear();
 		}
-		_changes.fire_copy(readData());
 	}
 }
 

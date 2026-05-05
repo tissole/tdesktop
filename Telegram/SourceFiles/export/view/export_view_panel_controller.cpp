@@ -245,6 +245,9 @@ void PanelController::showSettings() {
 		if (settingsRaw->readData().media.types == MediaSettings::Types(0)) {
 			return; // Do nothing if no file type selected
 		}
+		if (settingsRaw->isScanning()) {
+			return; // Do nothing if scan is in progress
+		}
 		_panel->setTitle(tr::lng_export_progress_title());
 		showProgress();
 		_process->startExport(*_settings, PrepareEnvironment(_session));
