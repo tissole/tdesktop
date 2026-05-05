@@ -221,11 +221,11 @@ void SettingsWidget::setupFullExportOptions(
 		Type::ProfileMusic,
 		tr::lng_export_option_profile_music_about(tr::now));
 	addHeader(container, tr::lng_export_header_chats(tr::now));
-	addOption(
+	addChatOption(
 		container,
 		tr::lng_export_option_personal_chats(tr::now),
 		Type::PersonalChats);
-	addOption(
+	addChatOption(
 		container,
 		tr::lng_export_option_bot_chats(tr::now),
 		Type::BotChats);
@@ -1093,11 +1093,6 @@ void SettingsWidget::addChatOption(
 	}, onlyMy->lifetime());
 
 	onlyMy->toggleOn(checkbox->checkedValue());
-
-	if (types & (Type::PublicGroups | Type::PublicChannels)) {
-		onlyMy->entity()->setChecked(true);
-		onlyMy->entity()->setDisabled(true);
-	}
 }
 
 void SettingsWidget::addMediaOptions(

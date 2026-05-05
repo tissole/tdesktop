@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/export_progress.h"
 
 #include "export/export_settings.h"
+#include "export/output/export_output_abstract.h"
 #include <QtCore/QJsonDocument>
 #include <QtCore/QDir>
 
@@ -44,6 +45,151 @@ int StringToType(const QString &type) {
 	if (type == u"links"_q) return static_cast<int>(Type::Link);
 	if (type == u"text"_q) return static_cast<int>(Type::Text);
 	return type.toInt();
+}
+
+QString FormatToString(Output::Format format) {
+	switch (format) {
+	case Output::Format::Html: return u"Html"_q;
+	case Output::Format::Json: return u"Json"_q;
+	case Output::Format::HtmlAndJson: return u"HtmlAndJson"_q;
+	}
+	return u"Html"_q;
+}
+
+Output::Format StringToFormat(const QString &format) {
+	if (format == u"Html"_q) return Output::Format::Html;
+	if (format == u"Json"_q) return Output::Format::Json;
+	if (format == u"HtmlAndJson"_q) return Output::Format::HtmlAndJson;
+	const int intValue = format.toInt();
+	if (intValue == 0) return Output::Format::Html;
+	if (intValue == 1) return Output::Format::Json;
+	if (intValue == 2) return Output::Format::HtmlAndJson;
+	return Output::Format::Html;
+}
+
+QString ExtFilterModeToString(MediaSettings::ExtFilterMode mode) {
+	switch (mode) {
+	case MediaSettings::ExtFilterMode::None: return u"None"_q;
+	case MediaSettings::ExtFilterMode::Whitelist: return u"Whitelist"_q;
+	case MediaSettings::ExtFilterMode::Blacklist: return u"Blacklist"_q;
+	}
+	return u"None"_q;
+}
+
+MediaSettings::ExtFilterMode StringToExtFilterMode(const QString &mode) {
+	if (mode == u"None"_q) return MediaSettings::ExtFilterMode::None;
+	if (mode == u"Whitelist"_q) return MediaSettings::ExtFilterMode::Whitelist;
+	if (mode == u"Blacklist"_q) return MediaSettings::ExtFilterMode::Blacklist;
+	const int intValue = mode.toInt();
+	if (intValue == 0) return MediaSettings::ExtFilterMode::None;
+	if (intValue == 1) return MediaSettings::ExtFilterMode::Whitelist;
+	if (intValue == 2) return MediaSettings::ExtFilterMode::Blacklist;
+	return MediaSettings::ExtFilterMode::None;
+}
+
+QJsonArray MediaTypesToArray(MediaSettings::Types types) {
+	QJsonArray result;
+	using Type = MediaSettings::Type;
+	if (types & Type::Photo) result.append(u"Photo"_q);
+	if (types & Type::Video) result.append(u"Video"_q);
+	if (types & Type::VoiceMessage) result.append(u"VoiceMessage"_q);
+	if (types & Type::VideoMessage) result.append(u"VideoMessage"_q);
+	if (types & Type::Sticker) result.append(u"Sticker"_q);
+	if (types & Type::GIF) result.append(u"GIF"_q);
+	if (types & Type::File) result.append(u"File"_q);
+	if (types & Type::Text) result.append(u"Text"_q);
+	if (types & Type::Audio) result.append(u"Audio"_q);
+	if (types & Type::FullHistory) result.append(u"FullHistory"_q);
+	if (types & Type::Link) result.append(u"Link"_q);
+	return result;
+}
+
+MediaSettings::Types ArrayToMediaTypes(const QJsonArray &array) {
+	using Type = MediaSettings::Type;
+	MediaSettings::Types result;
+	for (const auto &val : array) {
+		const auto str = val.toString();
+		if (str == u"Photo"_q) result |= Type::Photo;
+		else if (str == u"Video"_q) result |= Type::Video;
+		else if (str == u"VoiceMessage"_q) result |= Type::VoiceMessage;
+		else if (str == u"VideoMessage"_q) result |= Type::VideoMessage;
+		else if (str == u"Sticker"_q) result |= Type::Sticker;
+		else if (str == u"GIF"_q) result |= Type::GIF;
+		else if (str == u"File"_q) result |= Type::File;
+		else if (str == u"Text"_q) result |= Type::Text;
+		else if (str == u"Audio"_q) result |= Type::Audio;
+		else if (str == u"FullHistory"_q) result |= Type::FullHistory;
+		else if (str == u"Link"_q) result |= Type::Link;
+	}
+	return result;
+}
+
+QJsonArray ChatTypesToArray(Settings::Types types) {
+	QJsonArray result;
+	using Type = Settings::Type;
+	if (types & Type::PersonalInfo) result.append(u"PersonalInfo"_q);
+	if (types & Type::Userpics) result.append(u"Userpics"_q);
+	if (types & Type::Contacts) result.append(u"Contacts"_q);
+	if (types & Type::Sessions) result.append(u"Sessions"_q);
+	if (types & Type::OtherData) result.append(u"OtherData"_q);
+	if (types & Type::PersonalChats) result.append(u"PersonalChats"_q);
+	if (types & Type::BotChats) result.append(u"BotChats"_q);
+	if (types & Type::PrivateGroups) result.append(u"PrivateGroups"_q);
+	if (types & Type::PublicGroups) result.append(u"PublicGroups"_q);
+	if (types & Type::PrivateChannels) result.append(u"PrivateChannels"_q);
+	if (types & Type::PublicChannels) result.append(u"PublicChannels"_q);
+	if (types & Type::Stories) result.append(u"Stories"_q);
+	if (types & Type::ProfileMusic) result.append(u"ProfileMusic"_q);
+	return result;
+}
+
+Settings::Types ArrayToChatTypes(const QJsonArray &array) {
+	using Type = Settings::Type;
+	Settings::Types result;
+	for (const auto &val : array) {
+		const auto str = val.toString();
+		if (str == u"PersonalInfo"_q) result |= Type::PersonalInfo;
+		else if (str == u"Userpics"_q) result |= Type::Userpics;
+		else if (str == u"Contacts"_q) result |= Type::Contacts;
+		else if (str == u"Sessions"_q) result |= Type::Sessions;
+		else if (str == u"OtherData"_q) result |= Type::OtherData;
+		else if (str == u"PersonalChats"_q) result |= Type::PersonalChats;
+		else if (str == u"BotChats"_q) result |= Type::BotChats;
+		else if (str == u"PrivateGroups"_q) result |= Type::PrivateGroups;
+		else if (str == u"PublicGroups"_q) result |= Type::PublicGroups;
+		else if (str == u"PrivateChannels"_q) result |= Type::PrivateChannels;
+		else if (str == u"PublicChannels"_q) result |= Type::PublicChannels;
+		else if (str == u"Stories"_q) result |= Type::Stories;
+		else if (str == u"ProfileMusic"_q) result |= Type::ProfileMusic;
+	}
+	return result;
+}
+
+QJsonArray OnlyMyMessagesToArray(Settings::Types chatTypes, Settings::Types fullChats) {
+	QJsonArray result;
+	using Type = Settings::Type;
+	if ((chatTypes & Type::PersonalChats) && !(fullChats & Type::PersonalChats)) result.append(u"PersonalChats"_q);
+	if ((chatTypes & Type::BotChats) && !(fullChats & Type::BotChats)) result.append(u"BotChats"_q);
+	if ((chatTypes & Type::PrivateGroups) && !(fullChats & Type::PrivateGroups)) result.append(u"PrivateGroups"_q);
+	if ((chatTypes & Type::PublicGroups) && !(fullChats & Type::PublicGroups)) result.append(u"PublicGroups"_q);
+	if ((chatTypes & Type::PrivateChannels) && !(fullChats & Type::PrivateChannels)) result.append(u"PrivateChannels"_q);
+	if ((chatTypes & Type::PublicChannels) && !(fullChats & Type::PublicChannels)) result.append(u"PublicChannels"_q);
+	return result;
+}
+
+Settings::Types ArrayToFullChats(Settings::Types chatTypes, const QJsonArray &onlyMyMessages) {
+	Settings::Types result = chatTypes;
+	using Type = Settings::Type;
+	for (const auto &val : onlyMyMessages) {
+		const auto str = val.toString();
+		if (str == u"PersonalChats"_q) result &= ~Type::PersonalChats;
+		else if (str == u"BotChats"_q) result &= ~Type::BotChats;
+		else if (str == u"PrivateGroups"_q) result &= ~Type::PrivateGroups;
+		else if (str == u"PublicGroups"_q) result &= ~Type::PublicGroups;
+		else if (str == u"PrivateChannels"_q) result &= ~Type::PrivateChannels;
+		else if (str == u"PublicChannels"_q) result &= ~Type::PublicChannels;
+	}
+	return result;
 }
 
 } // namespace
@@ -125,15 +271,15 @@ QJsonObject ExportProgress::toJson() const {
 
 	if (settings.media.types != MediaSettings::Types(0) || settings.types != Settings::Types(0)) {
 		QJsonObject s;
-		s["media_types"] = static_cast<int>(settings.media.types.value());
+		s["media_types"] = MediaTypesToArray(settings.media.types);
 		s["media_size_limit"] = QString::number(settings.media.sizeLimit);
-		s["ext_filter_mode"] = static_cast<int>(settings.media.extensionFilterMode);
+		s["ext_filter_mode"] = ExtFilterModeToString(settings.media.extensionFilterMode);
 		if (!settings.media.extensionFilter.isEmpty()) {
 			s["ext_filter"] = settings.media.extensionFilter.join(",");
 		}
-		s["types"] = static_cast<int>(settings.types.value());
-		s["full_chats"] = static_cast<int>(settings.fullChats.value());
-		s["format"] = static_cast<int>(settings.format);
+		s["chat_types"] = ChatTypesToArray(settings.types);
+		s["only_my_messages"] = OnlyMyMessagesToArray(settings.types, settings.fullChats);
+		s["format"] = FormatToString(settings.format);
 		
 		if (settings.singlePeerFrom) s["single_peer_from"] = static_cast<int>(settings.singlePeerFrom);
 		if (settings.singlePeerTill) s["single_peer_till"] = static_cast<int>(settings.singlePeerTill);
@@ -216,15 +362,31 @@ ExportProgress ExportProgress::fromJson(const QJsonObject &obj) {
 
 	if (obj.contains("settings")) {
 		const auto s = obj["settings"].toObject();
-		result.settings.media.types = static_cast<MediaSettings::Type>(s["media_types"].toInt());
+		if (s["media_types"].isArray()) {
+			result.settings.media.types = ArrayToMediaTypes(s["media_types"].toArray());
+		} else {
+			result.settings.media.types = static_cast<MediaSettings::Type>(s["media_types"].toInt());
+		}
 		result.settings.media.sizeLimit = s["media_size_limit"].toString().toLongLong();
-		result.settings.media.extensionFilterMode = static_cast<MediaSettings::ExtFilterMode>(s["ext_filter_mode"].toInt());
+		result.settings.media.extensionFilterMode = StringToExtFilterMode(s["ext_filter_mode"].toString());
 		if (s.contains("ext_filter")) {
 			result.settings.media.extensionFilter = s["ext_filter"].toString().split(",", Qt::SkipEmptyParts);
 		}
-		result.settings.types = static_cast<Settings::Type>(s["types"].toInt());
-		result.settings.fullChats = static_cast<Settings::Type>(s["full_chats"].toInt());
-		result.settings.format = static_cast<Output::Format>(s["format"].toInt());
+		if (s.contains("chat_types")) {
+			if (s["chat_types"].isArray()) {
+				result.settings.types = ArrayToChatTypes(s["chat_types"].toArray());
+			} else {
+				result.settings.types = static_cast<Settings::Type>(s["chat_types"].toInt());
+			}
+		} else if (s.contains("types")) {
+			result.settings.types = static_cast<Settings::Type>(s["types"].toInt());
+		}
+		if (s.contains("only_my_messages")) {
+			result.settings.fullChats = ArrayToFullChats(result.settings.types, s["only_my_messages"].toArray());
+		} else if (s.contains("full_chats")) {
+			result.settings.fullChats = static_cast<Settings::Type>(s["full_chats"].toInt());
+		}
+		result.settings.format = StringToFormat(s["format"].toString());
 
 		result.settings.singlePeerFrom = s["single_peer_from"].toInt();
 		result.settings.singlePeerTill = s["single_peer_till"].toInt();
