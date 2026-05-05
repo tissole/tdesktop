@@ -867,19 +867,17 @@ void SettingsWidget::addLimitsLabel(
 				});
 				return result;
 			};
-			const auto done = [=](TimeId time) {
-				changeData([&](Settings &settings) {
-					const auto result = time
-						+ removeTime(settings.singlePeerTill)
-						+ 59; // Make the selected minute INCLUSIVE (covers :00 to :59)
-					if (result < settings.singlePeerFrom
-							&& settings.singlePeerFrom) {
-						settings.singlePeerTill = settings.singlePeerFrom + 59;
-					} else {
-						settings.singlePeerTill = result;
-					}
-				});
-			};
+		const auto done = [=](TimeId time) {
+			changeData([&](Settings &settings) {
+				const auto result = time + removeTime(settings.singlePeerTill);
+				if (result < settings.singlePeerFrom
+						&& settings.singlePeerFrom) {
+					settings.singlePeerTill = settings.singlePeerFrom;
+				} else {
+					settings.singlePeerTill = result;
+				}
+			});
+		};
 			editTimeLimit(now, done);
 		} else {
 			Unexpected("Click handler URL in export limits edit.");
