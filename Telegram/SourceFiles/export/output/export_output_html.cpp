@@ -3728,14 +3728,17 @@ Result HtmlWriter::writeDialogSlice(const Data::MessagesSlice &data) {
 	auto saved = std::optional<MessageInfo>();
 	auto block = QByteArray();
 	for (const auto &message : data.list) {
-		if (Data::SkipMessageByDate(message, _settings)) {
-			// Count processed messages even if they are skipped by date/filter
-			// to keep progress bar consistent
-			if (_stats) {
-				_stats->incrementUserMediaFiles();
-			}
-			continue;
-		}
+		// Redundant check removed - messages are already filtered in export_api_wrap.cpp
+		// Having two SkipMessageByDate checks can cause inconsistencies if logic differs
+		//if (Data::SkipMessageByDate(message, _settings)) {
+		//	LOG(("Export HTML: Skipping message id=%1 by date/media filter").arg(message.id));
+		//	// Count processed messages even if they are skipped by date/filter
+		//	// to keep progress bar consistent
+		//	if (_stats) {
+		//		_stats->incrementUserMediaFiles();
+		//	}
+		//	continue;
+		//}
 		const auto newIndex = (_messagesCount / kMessagesInFile);
 		if (oldIndex != newIndex) {
 			if (const auto result = _chat->writeBlock(block); !result) {

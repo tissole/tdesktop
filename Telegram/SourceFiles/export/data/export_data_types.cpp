@@ -2682,7 +2682,8 @@ bool SkipMessageByDate(const Message &message, const Settings &settings) {
 
 	const bool selected = fullHistory
 		|| (type != static_cast<Type>(0) && (types & type))
-		|| ((types & Type::Link) && (hasTextLink || type == Type::Link));
+		|| ((types & Type::Link) && (hasTextLink || type == Type::Link))
+		|| ((types & Type::Text) && type == Type::Link);
 
 	if (!selected) {
 		return true;

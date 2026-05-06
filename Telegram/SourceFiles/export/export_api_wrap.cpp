@@ -2006,7 +2006,7 @@ void ApiWrap::requestMessages(
 	if (_settings->useIdRange && tillId > 0) {
 		_chatProcess->nextFetchId = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
 		LOG(("Export: Set nextFetchId=%1 for ID range (starting from fromId)").arg(_chatProcess->nextFetchId));
-	} else if (_exportProgress && !_settings->useIdRange) {
+	} else if (!_isScanning && info.lastMessageId > 0 && !_settings->useIdRange) {
 		_chatProcess->nextFetchId = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
 		LOG(("Export: Set nextFetchId=%1 for date range resume (starting from resumeFromId)").arg(_chatProcess->nextFetchId));
 	}
@@ -2051,7 +2051,7 @@ void ApiWrap::requestMessages(
 			LOG(("Export: Non-channel path - calling requestMessagesCount"));
 			requestMessagesCount(0);
 		}
-	} else if (_exportProgress && _exportProgress->lastMessageId > 0) {
+	} else if (!_isScanning && _exportProgress && _exportProgress->lastMessageId > 0) {
 		LOG(("Export: Date range resume - skipping resolveDates, calling requestMessagesCount"));
 		requestMessagesCount(0);
 	} else {
@@ -2956,7 +2956,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		auto &ms = _chatProcess->messageStats[i];
 
-		if (_resumeIdThreshold > 0 && message.id <= _resumeIdThreshold) {
+		if (!_isScanning && _resumeIdThreshold > 0 && message.id <= _resumeIdThreshold) {
 			LOG(("Export: Skipping already written message id=%1 (threshold=%2)")
 				.arg(message.id).arg(_resumeIdThreshold));
 			ms.withinRange = false;
@@ -3121,7 +3121,7 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 		const bool mediaSelected = (types & messageType) || fullHistorySelected;
 
 		bool selected = (mediaSelected && (!oversized || fullHistorySelected))
-			|| (isLinkMessage && linkSelectedForStats)
+			|| (isLinkMessage && (linkSelectedForStats || (types & MediaSettings::Type::Text)))
 			|| (!hasMedia && ((types & MediaSettings::Type::Text) || fullHistorySelected));
 
 		if (!selected) {
@@ -3131,6 +3131,12 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		ms.selected = true;
 		ms.type = messageType;
+		// WebPage messages should be counted as Text when Text is selected
+		if (messageType == MediaSettings::Type::Link 
+			&& (types & MediaSettings::Type::Text) 
+			&& !(types & MediaSettings::Type::Link)) {
+			ms.type = MediaSettings::Type::Text;
+		}
 		ms.size = fullSize;
 		ms.unique = false; // Reset to ensure correct deduplication result
 
@@ -3532,7 +3538,7 @@ void ApiWrap::finishMessagesSlice() {
 		for (int i = 0; i < int(slice.list.size()); ++i) {
 			auto &message = slice.list[i];
 			
-			if (_resumeIdThreshold > 0 && message.id <= _resumeIdThreshold) {
+			if (!_isScanning && _resumeIdThreshold > 0 && message.id <= _resumeIdThreshold) {
 				LOG(("Export: Skipping already written message id=%1 (threshold=%2)").arg(message.id).arg(_resumeIdThreshold));
 				continue;
 			}

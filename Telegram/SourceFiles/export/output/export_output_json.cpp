@@ -1730,12 +1730,14 @@ Result JsonWriter::writeDialogSlice(const Data::MessagesSlice &data) {
 
 	auto block = QByteArray();
 	for (const auto &message : data.list) {
-		if (Data::SkipMessageByDate(message, _settings)) {
-			if (_stats) {
-				_stats->incrementUserMediaFiles();
-			}
-			continue;
-		}
+		// Redundant check removed - messages are already filtered in export_api_wrap.cpp
+		// Having two SkipMessageByDate checks can cause inconsistencies if logic differs
+		//if (Data::SkipMessageByDate(message, _settings)) {
+		//	if (_stats) {
+		//		_stats->incrementUserMediaFiles();
+		//	}
+		//	continue;
+		//}
 		block.append(prepareArrayItemStart() + SerializeMessage(
 			_context,
 			message,
