@@ -1947,8 +1947,8 @@ void ApiWrap::requestMessages(
 						_scanStats->setTotalMessages(_exportProgress->scanTotalMessages);
 					}
 					if (!_isScanning) {
-						_resumeIdThreshold = _exportProgress->lastMessageId;
-						LOG(("Export: Set _resumeIdThreshold=%1 from lastMessageId").arg(_resumeIdThreshold));
+						_resumeIdThreshold = info.lastMessageId;
+						LOG(("Export: Set _resumeIdThreshold=%1 from info.lastMessageId").arg(_resumeIdThreshold));
 					}
 					if (tillId > 0) {
 						_exportProgress->rangeEndMsgId = static_cast<uint64>(tillId);
@@ -2014,16 +2014,16 @@ void ApiWrap::requestMessages(
 	if (_exportProgress) {
 		_chatProcess->messagesProcessed = _exportProgress->messagesProcessed;
 
-		if (_scanStats && _exportProgress->scanTotalMessages > 0) {
-			_scanStats->setTotalMessages(_exportProgress->scanTotalMessages);
-		}
+	if (_scanStats && _exportProgress->scanTotalMessages > 0) {
+		_scanStats->setTotalMessages(_exportProgress->scanTotalMessages);
+	}
 
-		if (!_isScanning) {
-			_resumeIdThreshold = _exportProgress->lastMessageId;
-			LOG(("Export: Set _resumeIdThreshold=%1 from lastMessageId").arg(_resumeIdThreshold));
-		}
+	if (!_isScanning) {
+		_resumeIdThreshold = info.lastMessageId;
+		LOG(("Export: Set _resumeIdThreshold=%1 from info.lastMessageId").arg(_resumeIdThreshold));
+	}
 
-		if (tillId > 0) {
+	if (tillId > 0) {
 			_exportProgress->rangeEndMsgId = static_cast<uint64>(tillId);
 			LOG(("Export: Set rangeEndMsgId=%1").arg(tillId));
 		} else {
@@ -2967,6 +2967,13 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 		const auto skippedByDate = Data::SkipMessageByDate(message, *_settings);
 		if (skippedByDate) {
+			ms.withinRange = false;
+			onMessagePartDone(i, false);
+			skippedCount++;
+			continue;
+		}
+
+		if (_chatProcess->info.onlyMyMessages && !message.out) {
 			ms.withinRange = false;
 			onMessagePartDone(i, false);
 			skippedCount++;
