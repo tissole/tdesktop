@@ -1027,7 +1027,8 @@ Ui::PreparedFileInformation PrepareForSending(
 
 			result.supportsStreaming = CheckStreamingSupport(
 				localLocation,
-				localData);
+				localData)
+				|| (durationMs > 0);
 		}
 	}
 	return { .media = result };
