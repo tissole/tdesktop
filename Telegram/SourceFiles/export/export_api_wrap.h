@@ -41,10 +41,10 @@ struct FileOrigin;
 
 namespace Output {
 struct Result;
-class Stats;
 } // namespace Output
 
 struct Settings;
+class GlobalDedupManager;
 
 class ApiWrap {
 public:
@@ -69,24 +69,6 @@ public:
 	rpl::producer<MTP::Error> errors() const;
 	rpl::producer<Output::Result> ioErrors() const;
 
-	struct SizeNameKey {
-		int64 size = 0;
-		QString name;
-		bool operator<(const SizeNameKey &other) const {
-			if (size != other.size) return size < other.size;
-			return name < other.name;
-		}
-		bool operator==(const SizeNameKey &other) const {
-			return size == other.size && name == other.name;
-		}
-	};
-
-	struct SizeNameKeyHash {
-		std::size_t operator()(const SizeNameKey &key) const {
-			return qHash(key.size) ^ qHash(key.name);
-		}
-	};
-
 	struct StartInfo {
 		int userpicsCount = 0;
 		int storiesCount = 0;
@@ -100,10 +82,8 @@ public:
 	};
 	void startExport(
 		const Settings &settings,
-		Output::Stats *stats,
 		FnMut<void(StartInfo)> done,
-		bool isScanning = false,
-		Output::Stats *scanStats = nullptr);
+		bool isScanning = false);
 
 	void requestDialogsList(
 		Fn<bool(int count)> progress,
@@ -177,12 +157,16 @@ public:
 
 	void clearResults();
 
-	[[nodiscard]] base::flat_set<QString> visitedLinks() const;
+	[[nodiscard]] base::flat_set<QString> uniqueLinks() const;
 
 	~ApiWrap();
 
 	ExportProgress *progress() const {
 		return _exportProgress.get();
+	}
+
+	[[nodiscard]] GlobalDedupManager *globalDedup() const {
+		return _globalDedup.get();
 	}
 
 private:
@@ -333,14 +317,6 @@ private:
 		Data::Message *message = nullptr,
 		Data::Story *story = nullptr,
 		bool isThumb = false);
-	struct DedupResult {
-		bool found = false;
-		QString path; // empty = in progress, non-empty = already saved
-	};
-	DedupResult dedupLookup(uint64 docId, int64 size, const QString &name) const;
-	void dedupRegister(uint64 docId, int64 size, const QString &name, const QString &path);
-	void dedupUpdate(uint64 docId, int64 size, const QString &name, const QString &path);
-
 	std::unique_ptr<FileProcess> prepareFileProcess(
 		Data::File &file,
 		const Data::FileOrigin &origin,
@@ -355,7 +331,8 @@ private:
 		std::function<bool(FileProgress)> progress,
 		base::unique_function<void(QString)> done,
 		uint64 dedupDocId,
-		const SizeNameKey &dedupSizeName);
+		int64 dedupSize,
+		const QString &dedupName);
 	void scheduleMoreFiles();	
 	void loadFilePart(FileProcess &process);
 	void finishFile(uint64 randomId, const QString &relativePath);
@@ -397,10 +374,8 @@ private:
 	std::optional<UserId> _selfId;
 	MTPInputUser _user = MTP_inputUserSelf();
 	std::unique_ptr<Settings> _settings;
-	Output::Stats *_stats = nullptr;
 	bool _isScanning = false;
 	uint64 _resumeIdThreshold = 0;
-	Output::Stats *_scanStats = nullptr;
 	int _serverTotalCount = 0;
 
 	std::unique_ptr<StartProcess> _startProcess;
@@ -454,12 +429,6 @@ private:
 	rpl::event_stream<MTP::Error> _errors;
 	rpl::event_stream<Output::Result> _ioErrors;
 
-	std::unordered_map<uint64, QString> _dedupById;
-	std::unordered_map<SizeNameKey, QString, SizeNameKeyHash> _dedupBySizeName;
-	std::unordered_map<uint64, uint64> _dedupByIdInProgress;
-	std::unordered_map<SizeNameKey, uint64, SizeNameKeyHash> _dedupBySizeNameInProgress;
-
-	base::flat_set<QString> _visitedLinks;
 	base::flat_set<QString> _reservedPaths;
 
 	std::unique_ptr<ExportProgress> _exportProgress;
@@ -471,8 +440,7 @@ private:
 	void onFileStarted(const QString &filename, int64 totalSize, uint64 messageId);
 	void removePartialFile(const QString &filename);
 
-	class GlobalDedupManager *_globalDedup = nullptr;
-	std::unique_ptr<class GlobalDedupManager> _globalDedupOwned;
+	std::unique_ptr<GlobalDedupManager> _globalDedup;
 
 };
 

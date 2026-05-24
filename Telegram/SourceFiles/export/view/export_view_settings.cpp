@@ -479,7 +479,7 @@ void SettingsWidget::addLimitsLabel(
 
 	// Date range UI (visible when date mode is selected)
 	auto fromDateLink = value() | rpl::map([](const Settings &data) {
-		return data.singlePeerFrom;
+		return data.singlePeerFrom.value_or(0);
 	}) | rpl::distinct_until_changed(
 	) | rpl::map([](TimeId from) {
 		return (from
@@ -497,7 +497,7 @@ void SettingsWidget::addLimitsLabel(
 	};
 
 	auto fromTimeLink = value() | rpl::map([](const Settings &data) {
-		return data.singlePeerFrom;
+		return data.singlePeerFrom.value_or(0);
 	}) | rpl::distinct_until_changed(
 	) | rpl::map([=](TimeId from) {
 		return mapToTime(from, u"internal:edit_from_time"_q);
@@ -513,7 +513,7 @@ void SettingsWidget::addLimitsLabel(
 	});
 
 	auto tillDateLink = value() | rpl::map([](const Settings &data) {
-		return data.singlePeerTill;
+		return data.singlePeerTill.value_or(0);
 	}) | rpl::distinct_until_changed(
 	) | rpl::map([](TimeId till) {
 		return (till
@@ -524,7 +524,7 @@ void SettingsWidget::addLimitsLabel(
 	}) | rpl::flatten_latest();
 
 	auto tillTimeLink = value() | rpl::map([](const Settings &data) {
-		return data.singlePeerTill;
+		return data.singlePeerTill.value_or(0);
 	}) | rpl::distinct_until_changed(
 	) | rpl::map([=](TimeId till) {
 		return mapToTime(till, u"internal:edit_till_time"_q);
@@ -659,9 +659,9 @@ void SettingsWidget::addLimitsLabel(
 	// Bind inputs to data
 	value()
 		| rpl::map([](const Settings &data) {
-			return data.singlePeerFromId;
+			return data.singlePeerFromId.value_or(0);
 		})
-		| rpl::on_next([=](int32 fromId) {
+		| rpl::on_next([=](uint64 fromId) {
 			const auto s = (fromId > 0) ? QString::number(fromId) : QString();
 			if (fromIdInput->getLastText() != s) {
 				fromIdInput->setText(s);
@@ -670,9 +670,9 @@ void SettingsWidget::addLimitsLabel(
 
 	value()
 		| rpl::map([](const Settings &data) {
-			return data.singlePeerTillId;
+			return data.singlePeerTillId.value_or(0);
 		})
-		| rpl::on_next([=](int32 tillId) {
+		| rpl::on_next([=](uint64 tillId) {
 			const auto s = (tillId > 0) ? QString::number(tillId) : QString();
 			if (tillIdInput->getLastText() != s) {
 				tillIdInput->setText(s);
@@ -705,19 +705,21 @@ void SettingsWidget::addLimitsLabel(
 			return;
 		} else if (!ok) {
 			changeData([&](Settings &settings) {
-				settings.singlePeerFromId = 0;
+				settings.singlePeerFromId = std::nullopt;
 			});
 			return;
 		}
 
 		const auto currentTillId = readData().singlePeerTillId;
-		if (currentTillId > 0 && value > currentTillId) {
+		if (currentTillId.has_value() && value > *currentTillId) {
 			errorLabel->setText(tr::lng_export_error_from_too_high(tr::now));
 			return;
 		}
 
 		changeData([&](Settings &settings) {
 			settings.singlePeerFromId = value;
+			settings.useIdRange = true;
+			settings.useDateRange = false;
 		});
 	}, fromIdInput->lifetime());
 
@@ -733,13 +735,15 @@ void SettingsWidget::addLimitsLabel(
 		}
 
 		const auto currentFromId = readData().singlePeerFromId;
-		if (currentFromId > 0 && value < currentFromId) {
+		if (currentFromId.has_value() && value < *currentFromId) {
 			errorLabel->setText(tr::lng_export_error_till_too_low(tr::now));
 			return;
 		}
 
 		changeData([&](Settings &settings) {
 			settings.singlePeerTillId = value;
+			settings.useIdRange = true;
+			settings.useDateRange = false;
 		});
 	}, tillIdInput->lifetime());
 
@@ -810,32 +814,36 @@ void SettingsWidget::addLimitsLabel(
 			const auto done = [=](TimeId limit) {
 				changeData([&](Settings &settings) {
 					settings.singlePeerFrom = limit;
+					settings.useDateRange = true;
+					settings.useIdRange = false;
 				});
 			};
 			editDateLimit(
-				readData().singlePeerFrom,
+				readData().singlePeerFrom.value_or(0),
 				0,
-				readData().singlePeerTill,
+				readData().singlePeerTill.value_or(0),
 				tr::lng_export_from_beginning(),
 				done);
 		} else if (url == u"internal:edit_from_time"_q) {
 			const auto now = [=] {
 				auto result = TimeId(0);
 				changeData([&](Settings &settings) {
-					result = settings.singlePeerFrom;
+					result = settings.singlePeerFrom.value_or(0);
 				});
 				return result;
 			};
 			const auto done = [=](TimeId time) {
 				changeData([&](Settings &settings) {
 					const auto result = time
-						+ removeTime(settings.singlePeerFrom);
-					if (result > settings.singlePeerTill
-							&& settings.singlePeerTill) {
-						settings.singlePeerFrom = settings.singlePeerTill;
+						+ removeTime(settings.singlePeerFrom.value_or(0));
+					const auto tillValue = settings.singlePeerTill.value_or(0);
+					if (tillValue > 0 && result > tillValue) {
+						settings.singlePeerFrom = tillValue;
 					} else {
 						settings.singlePeerFrom = result;
 					}
+					settings.useDateRange = true;
+					settings.useIdRange = false;
 				});
 			};
 			editTimeLimit(now, done);
@@ -849,11 +857,13 @@ void SettingsWidget::addLimitsLabel(
 					} else {
 						settings.singlePeerTill = endOfDay;
 					}
+					settings.useDateRange = true;
+					settings.useIdRange = false;
 				});
 			};
 			editDateLimit(
-				readData().singlePeerTill,
-				readData().singlePeerFrom,
+				readData().singlePeerTill.value_or(0),
+				readData().singlePeerFrom.value_or(0),
 				0,
 				tr::lng_export_till_end(),
 				done);
@@ -861,19 +871,21 @@ void SettingsWidget::addLimitsLabel(
 			const auto now = [=] {
 				auto result = TimeId(0);
 				changeData([&](Settings &settings) {
-					result = settings.singlePeerTill;
+					result = settings.singlePeerTill.value_or(0);
 				});
 				return result;
 			};
 		const auto done = [=](TimeId time) {
 			changeData([&](Settings &settings) {
-				const auto result = time + removeTime(settings.singlePeerTill);
-				if (result < settings.singlePeerFrom
-						&& settings.singlePeerFrom) {
-					settings.singlePeerTill = settings.singlePeerFrom;
+				const auto result = time + removeTime(settings.singlePeerTill.value_or(0));
+				const auto fromValue = settings.singlePeerFrom.value_or(0);
+				if (fromValue > 0 && result < fromValue) {
+					settings.singlePeerTill = fromValue;
 				} else {
 					settings.singlePeerTill = result;
 				}
+				settings.useDateRange = true;
+				settings.useIdRange = false;
 			});
 		};
 			editTimeLimit(now, done);
@@ -1712,7 +1724,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	int totalUniqueMessagesCount = 0;
 	int totalTotalMessagesCount = 0;
 	for (const auto &[type, stat] : stats) {
-		totalTotalMessagesCount += stat.localTotalCount;
+		totalTotalMessagesCount += stat.totalCount;
 	}
 
 	if (totalTotalMessagesCount <= 0) {
@@ -1749,8 +1761,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 	int64 totalUniqueMediaSize = 0;
 	int64 totalMediaSize = 0;
 	const auto fullHistory = (readData().media.types & MediaSettings::Type::FullHistory);
-	const auto fullRange = (readData().singlePeerFrom == 0 && readData().singlePeerTill == 0)
-		&& !readData().useIdRange;
+	const auto fullRange = readData().isFullRange();
 	const auto showAllCategories = fullHistory && fullRange;
 
 	using MediaType = MediaSettings::Type;
@@ -1771,7 +1782,7 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 
 	for (const auto type : order) {
 		const auto it = _scanResults.find(type);
-		if (!showAllCategories && (it == _scanResults.end() || it->second.localTotalCount <= 0)) {
+		if (!showAllCategories && (it == _scanResults.end() || it->second.totalCount <= 0)) {
 			continue;
 		}
 		const auto &item = (it != _scanResults.end()) ? it->second : Output::StatItem();
@@ -1792,25 +1803,25 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 			categoriesCount++;
 
 			if (type == MediaType::Text) {
-				text += label + ": " + Lang::FormatCountDecimal(item.localTotalCount) + "\n";
+				text += label + ": " + Lang::FormatCountDecimal(item.totalCount) + "\n";
 			} else if (type == MediaType::Link) {
 				const auto messagesStr = item.messagesWithLinks > 0
 					? " (" + Lang::FormatCountDecimal(item.messagesWithLinks) + " Messages)"
 					: QString();
-				if (item.uniqueCount == item.localTotalCount) {
+				if (item.uniqueCount == item.totalCount) {
 					text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount) + messagesStr + "\n";
 				} else {
 					text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
-						+ ", " + Lang::FormatCountDecimal(item.localTotalCount) + messagesStr + "\n";
+						+ ", " + Lang::FormatCountDecimal(item.totalCount) + messagesStr + "\n";
 				}
 			} else {
-				const bool noDuplicates = (item.uniqueCount == item.localTotalCount) && (item.uniqueSize == item.totalSize);
+				const bool noDuplicates = (item.uniqueCount == item.totalCount) && (item.uniqueSize == item.totalSize);
 				if (noDuplicates) {
-					text += label + ": " + Lang::FormatCountDecimal(item.localTotalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")\n";
+					text += label + ": " + Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")\n";
 				} else {
 					const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount)
 						+ " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
-					const auto totalStr = Lang::FormatCountDecimal(item.localTotalCount)
+					const auto totalStr = Lang::FormatCountDecimal(item.totalCount)
 						+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
 
 					text += label + ": " + uniqueStr + ", " + totalStr + "\n";
@@ -1822,14 +1833,14 @@ void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatIt
 
 			if (type != MediaType::Link && type != MediaType::Text) {
 				totalUniqueMessagesCount += item.uniqueCount;
-				totalTotalMessagesCount += item.localTotalCount;
+				totalTotalMessagesCount += item.totalCount;
 			}
 		}
 	}
 	int mediaCategoriesCount = 0;
 	for (const auto type : order) {
 		const auto it = _scanResults.find(type);
-		const bool hasData = (it != _scanResults.end() && it->second.localTotalCount > 0);
+		const bool hasData = (it != _scanResults.end() && it->second.totalCount > 0);
 		const bool isTextOrLink = (type == MediaType::Text || type == MediaType::Link);
 		const bool includeInTotal = !isTextOrLink;
 		if ((showAllCategories || hasData) && includeInTotal) {
@@ -1878,10 +1889,11 @@ void SettingsWidget::resetToDefault() {
 		data.path = oldPath;
 		data.format = oldFormat;
 		data.forceSubPath = oldForce;
-		data.singlePeerFrom = 0;
-		data.singlePeerTill = 0;
-		data.singlePeerFromId = 0;
-		data.singlePeerTillId = 0;
+		data.singlePeerFrom = std::nullopt;
+		data.singlePeerTill = std::nullopt;
+		data.useDateRange = true;  // Default to date range mode
+		data.singlePeerFromId = std::nullopt;
+		data.singlePeerTillId = std::nullopt;
 		data.useIdRange = false;
 		data.media.types = MediaSettings::Types(0); // Reset all media type checkboxes
 		data.media.sizeLimit = 4000LL * 1024 * 1024; // Explicitly reset size limit
@@ -1904,6 +1916,7 @@ void SettingsWidget::restoreSettings(const Settings &data) {
 		
 		current.singlePeerFrom = data.singlePeerFrom;
 		current.singlePeerTill = data.singlePeerTill;
+		current.useDateRange = data.useDateRange;
 		current.useIdRange = data.useIdRange;
 		current.singlePeerFromId = data.singlePeerFromId;
 		current.singlePeerTillId = data.singlePeerTillId;

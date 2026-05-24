@@ -10,6 +10,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/flags.h"
 #include "base/flat_map.h"
 
+#include <optional>
+
 namespace Export {
 namespace Output {
 enum class Format;
@@ -101,13 +103,19 @@ struct Settings {
 	MTPInputPeer singlePeer = MTP_inputPeerEmpty();
 	QString singlePeerName;
 	int64 singlePeerId = 0;
-	TimeId singlePeerFrom = 0;
-	TimeId singlePeerTill = 0;
+	std::optional<TimeId> singlePeerFrom;  // nullopt = from beginning
+	std::optional<TimeId> singlePeerTill;  // nullopt = until now
 	
-	// ID range export fields
-	int32 singlePeerFromId = 0;  // 0 means no limit
-	int32 singlePeerTillId = 0;  // 0 means no limit
-	bool useIdRange = false;     // Flag to indicate ID range export
+	// Range mode flags (mutually exclusive, exactly one must be true)
+	bool useDateRange = true;   // Filter by date range (DEFAULT)
+	bool useIdRange = false;    // Filter by message ID range
+	// Both false = INVALID (caught by validation)
+	// Both true = INVALID (caught by validation)
+	
+	// Date range values (only used when useDateRange = true)
+	// ID range values (only used when useIdRange = true)
+	std::optional<uint64> singlePeerFromId;  // nullopt = from first message
+	std::optional<uint64> singlePeerTillId;  // nullopt = until last message
 
 	int32 singleTopicRootId = 0;
 	uint64 singleTopicPeerId = 0;
@@ -121,6 +129,23 @@ struct Settings {
 
 	bool onlySingleTopic() const {
 		return onlySinglePeer() && singleTopicRootId != 0;
+	}
+
+	bool hasDateRange() const {
+		return singlePeerFrom.has_value() || singlePeerTill.has_value();
+	}
+
+	bool hasIdRange() const {
+		return singlePeerFromId.has_value() || singlePeerTillId.has_value();
+	}
+
+	bool isFullRange() const {
+		// Full range means: no restrictions in the active mode
+		if (useDateRange) {
+			return !hasDateRange(); // Date mode with no date restrictions
+		} else {
+			return !hasIdRange(); // ID mode with no ID restrictions
+		}
 	}
 
 	static inline Types DefaultTypes() {

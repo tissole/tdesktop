@@ -33,30 +33,37 @@ bool MediaSettings::validate() const {
 }
 
 bool Settings::validate() const {
-	// Check date range validity.
-	if (singlePeerFrom > 0 && singlePeerTill > 0 && singlePeerTill <= singlePeerFrom) {
+	// Ensure exactly one range mode is active
+	if (useDateRange == useIdRange) {
+		return false; // Both true or both false is invalid
+	}
+	
+	// Check date range validity (if both values are specified)
+	if (singlePeerFrom.has_value() && singlePeerTill.has_value() 
+		&& *singlePeerTill <= *singlePeerFrom) {
 		return false;
 	}
 	
-	// Check ID range validity.
+	// Check ID range validity (if both values are specified)
 	if (useIdRange) {
 		// When using ID range, From ID must be >= 1 if specified
-		if (singlePeerFromId > 0 && singlePeerFromId < 1) {
+		if (singlePeerFromId.has_value() && *singlePeerFromId < 1) {
 			return false;
 		}
 		// To ID must be >= From ID if both are specified
-		if (singlePeerFromId > 0 && singlePeerTillId > 0 && singlePeerTillId < singlePeerFromId) {
+		if (singlePeerFromId.has_value() && singlePeerTillId.has_value() 
+			&& *singlePeerTillId < *singlePeerFromId) {
 			return false;
 		}
 	}
 	
-	// Ensure only one export mode is active
-	if (useIdRange && (singlePeerFrom > 0 || singlePeerTill > 0)) {
+	// If date values are set, useDateRange should be true
+	if (hasDateRange() && !useDateRange) {
 		return false;
 	}
 	
-	if (!useIdRange && (singlePeerFromId > 0 || singlePeerTillId > 0)) {
-		// If ID fields are set but useIdRange is false, that's invalid
+	// If ID values are set, useIdRange should be true
+	if (hasIdRange() && !useIdRange) {
 		return false;
 	}
 

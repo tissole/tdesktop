@@ -141,10 +141,11 @@ void ResolveSettings(not_null<Main::Session*> session, Settings &settings) {
 
 	const bool hasAnyMedia = (settings.media.types != MediaSettings::Types(0));
 	const bool hasAnyType = (settings.types != Settings::Types(0));
-	const bool hasRange = (settings.singlePeerFrom != 0) || (settings.singlePeerTill != 0) || settings.useIdRange;
+	const bool hasRange = settings.singlePeerFrom.has_value() || settings.singlePeerTill.has_value() || settings.useIdRange;
 
 	if (!settings.onlySinglePeer()) {
-		settings.singlePeerFrom = settings.singlePeerTill = 0;
+		settings.singlePeerFrom = std::nullopt;
+		settings.singlePeerTill = std::nullopt;
 	}
 
 	if (settings.onlySinglePeer() && !hasAnyMedia && !hasAnyType && !hasRange) {
@@ -393,6 +394,14 @@ void PanelController::checkExistingExport(Fn<void(SettingsWidget::ExistingExport
 			if (progress) {
 				const bool completed = progress->isComplete || (progress->rangeEndMsgId > 0
 					&& progress->lastMessageId >= progress->rangeEndMsgId);
+				
+				// Only show Resume/Update buttons if export included media files
+				if (!progress->hasMedia) {
+					LOG(("Export Resume: Export was text/links only (no media), skipping resume/update"));
+					callback(ExistingExport::None, std::nullopt);
+					return;
+				}
+				
 				if (completed) {
 					LOG(("Export Resume: Found progress file, export is COMPLETED (last=%1, target=%2)")
 						.arg(progress->lastMessageId)
@@ -682,13 +691,13 @@ void PanelController::updateState(State &&state) {
 		showError(*error);
 	} else if (const auto scanDone = std::get_if<ScanDoneState>(&_state)) {
 		if (_panel) {
-			const bool isUpdateScan = _settings->useIdRange && (_settings->singlePeerFromId > 0);
+			const bool isUpdateScan = _settings->useIdRange && _settings->singlePeerFromId.has_value();
 			if (isUpdateScan) {
 				int totalMessages = 0;
 				int64 totalSize = 0;
 				QString mediaText;
 				for (const auto &[type, item] : scanDone->stats) {
-					if (item.localTotalCount <= 0) continue;
+					if (item.totalCount <= 0) continue;
 					QString label;
 					switch (type) {
 					case MediaSettings::Type::Photo: label = "Photos"; break;
@@ -703,13 +712,13 @@ void PanelController::updateState(State &&state) {
 					case MediaSettings::Type::Sticker: label = "Stickers"; break;
 					default: label = "Unknown"; break;
 					}
-					mediaText += label + ": " + QString::number(item.localTotalCount);
+					mediaText += label + ": " + QString::number(item.totalCount);
 					if (item.totalSize > 0) {
 						mediaText += " (" + ::Ui::FormatSizeText(item.totalSize) + ")";
 					}
 					mediaText += "\n";
 					
-					totalMessages += item.localTotalCount;
+					totalMessages += item.totalCount;
 					totalSize += item.totalSize;
 				}
 

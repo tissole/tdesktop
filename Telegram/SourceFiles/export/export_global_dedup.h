@@ -7,52 +7,118 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "export/export_settings.h"
+#include "base/flat_set.h"
+
 #include <QtCore/QString>
 #include <QtCore/QJsonObject>
 #include <unordered_set>
+#include <unordered_map>
+#include <map>
+#include <vector>
 
 namespace Export {
+namespace Output {
+struct StatItem;
+} // namespace Output
 
-// Cross-chat global deduplication manager
-// Stores media fingerprints in {export_path}/global_dedup.json
-// Format: {"version": 1, "entries": {"i:docId": 1, "s:filename_size": 1}}
+// Unified deduplication and statistics manager
+// Handles three modes:
+// - Disabled: No dedup (text-only exports)
+// - MemoryOnly: In-memory dedup for statistics (links/fullhistory)
+// - Persistent: Disk-backed dedup with global_dedup.json (media exports)
 class GlobalDedupManager {
 public:
+	enum class Mode {
+		Disabled,      // Text-only exports (no dedup, no stats)
+		MemoryOnly,    // Links/FullHistory (stats only, no persistence)
+		Persistent     // Media exports (with global_dedup.json)
+	};
+
+	struct StatItem {
+		std::atomic<int64> totalCount{0};
+		std::atomic<int64> totalSize{0};
+		std::atomic<int64> uniqueCount{0};
+		std::atomic<int64> uniqueSize{0};
+		std::atomic<int> messagesWithLinks{0};
+	};
+
+	struct Stats {
+		std::map<MediaSettings::Type, StatItem> byType;
+
+		std::atomic<int64> totalMediaCount{0};
+		std::atomic<int64> totalMediaSize{0};
+		std::atomic<int64> uniqueMediaCount{0};
+		std::atomic<int64> uniqueMediaSize{0};
+
+		std::atomic<int64> totalMessages{0};
+		std::atomic<int64> inProgressCount{0};
+		std::atomic<int64> filesWritten{0};
+		std::atomic<int64> bytesWritten{0};
+
+		[[nodiscard]] int64 duplicateMediaCount() const {
+			return totalMediaCount.load(std::memory_order_relaxed) 
+				- uniqueMediaCount.load(std::memory_order_relaxed);
+		}
+		[[nodiscard]] int64 duplicateMediaSize() const {
+			return totalMediaSize.load(std::memory_order_relaxed) 
+				- uniqueMediaSize.load(std::memory_order_relaxed);
+		}
+	};
+
 	GlobalDedupManager() = default;
-	explicit GlobalDedupManager(const QString &exportPath);
+	explicit GlobalDedupManager(Mode mode, const QString &exportPath = QString());
 
-	// Load from file
-	bool load(const QString &exportPath);
-	bool load() const; // Uses already set path
+	// Core dedup operations
+	[[nodiscard]] bool isKnown(
+		uint64 docId,
+		int64 size,
+		const QString &name,
+		MediaSettings::Type type);
+	
+	// Special overload for links (no docId/size, just URL)
+	[[nodiscard]] bool isKnownLink(const QString &url);
+	
+	void markInProgress(
+		uint64 docId,
+		int64 size,
+		const QString &name,
+		MediaSettings::Type type);
+	void finalize(
+		uint64 docId,
+		int64 size,
+		const QString &name,
+		MediaSettings::Type type);
+	
+	// Special overload for links
+	void finalizeLink(const QString &url);
+	
+	// Get all unique links (for writing to file)
+	[[nodiscard]] base::flat_set<QString> getUniqueLinks() const;
+	void cancelInProgress(
+		uint64 docId,
+		int64 size,
+		const QString &name,
+		MediaSettings::Type type);
 
-	// Save to file (atomic write)
-	bool save() const;
+	// Message and file tracking
+	void incrementTotalMessages();
+	void incrementFilesWritten();
+	void incrementBytesWritten(int64 bytes);
+	void setMessagesWithLinks(MediaSettings::Type type, int count);
+	void incrementMessagesWithLinks(MediaSettings::Type type, int count = 1);
+	void incrementTotal(MediaSettings::Type type, int64 size);
 
-	// Check if document ID exists
-	[[nodiscard]] bool hasDocumentId(uint64 docId) const;
+	// Statistics
+	[[nodiscard]] std::map<MediaSettings::Type, Output::StatItem> statsByType() const;
+	[[nodiscard]] int totalMessagesCount() const;
+	void resetStats();
 
-	// Check if size+name fingerprint exists
-	[[nodiscard]] bool hasFingerprint(const QString &filename, int64 size) const;
-	[[nodiscard]] bool hasFingerprint(const QString &fingerprint) const;
-
-	// Add new entry (both document ID and fingerprint)
-	void addEntry(uint64 docId, const QString &filename, int64 size);
-
-	// Add just document ID
-	void addDocumentId(uint64 docId);
-
-	// Add just fingerprint
-	void addFingerprint(const QString &filename, int64 size);
-	void addFingerprint(const QString &fingerprint);
-
-	// Get total entries count
-	[[nodiscard]] size_t entryCount() const;
-
-	// Clear all entries
-	void clear();
-
-	// Get file path
-	[[nodiscard]] QString filePath() const;
+	// State management
+	void clearInProgress();
+	bool save();
+	[[nodiscard]] Mode mode() const;
+	[[nodiscard]] QString lastError() const;
 
 	// Static helpers
 	[[nodiscard]] static QString documentIdKey(uint64 docId);
@@ -66,9 +132,23 @@ private:
 	// Atomic save implementation
 	bool atomicSave(const QString &path) const;
 
+	// Update aggregate stats from per-type stats
+	void updateAggregateStats();
+
+	Mode _mode = Mode::Disabled;
 	mutable QString _path;
-	std::unordered_set<uint64> _documentIds;
-	std::unordered_set<QString> _fingerprints;
+	QString _lastError;
+	Stats _stats;
+
+	// In-progress tracking (all modes)
+	std::unordered_set<QString> _inProgress;
+	std::unordered_map<QString, int64> _inProgressSizes;
+
+	// MemoryOnly mode: permanent memory storage
+	std::unordered_set<QString> _memoryDedup;
+
+	// Persistent mode: disk-backed storage
+	std::unordered_set<QString> _persistent;
 };
 
 } // namespace Export

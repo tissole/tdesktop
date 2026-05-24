@@ -1684,8 +1684,6 @@ bool DocumentData::hasMimeType(const QString &mime) const {
 }
 
 void DocumentData::setMimeString(const QString &mime) {
-	// WebM-to-MP4 conversion now handled in send_files_box before upload
-	// Keeping original MIME type from server
 	_mimeString = mime;
 	_mimeString = std::move(_mimeString).toLower();
 }

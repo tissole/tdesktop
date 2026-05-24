@@ -2632,17 +2632,17 @@ bool SingleMessageAfter(
 bool SkipMessageByDate(const Message &message, const Settings &settings) {
 	// 1. Hard filters (ID and Date range)
 	if (settings.useIdRange) {
-		const auto fromId = int64(settings.singlePeerFromId);
-		const auto tillId = int64(settings.singlePeerTillId);
+		const auto fromId = settings.singlePeerFromId.value_or(0);
+		const auto tillId = settings.singlePeerTillId.value_or(0);
 		if ((fromId > 0 && message.id < fromId)
 			|| (tillId > 0 && message.id > tillId)) {
 			return true;
 		}
 	} else {
-		const auto goodFrom = (settings.singlePeerFrom == 0)
-			|| (settings.singlePeerFrom <= message.date);
-		const auto goodTill = (settings.singlePeerTill == 0)
-			|| (message.date <= settings.singlePeerTill);
+		const auto goodFrom = !settings.singlePeerFrom.has_value()
+			|| (*settings.singlePeerFrom <= message.date);
+		const auto goodTill = !settings.singlePeerTill.has_value()
+			|| (message.date <= *settings.singlePeerTill);
 		if (!goodFrom || !goodTill) {
 			return true;
 		}

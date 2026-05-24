@@ -1055,7 +1055,7 @@ win:
 win32:
     SET "TOOLCHAIN=x86-win32-vs17"
 win64:
-    SET "TOOLCHAIN=x86_64-win64-vs17"
+    SET "TOOLCHAIN=x86_64-win64-vs18"
 winarm:
     SET "TOOLCHAIN=arm64-win64-vs17"
 win:

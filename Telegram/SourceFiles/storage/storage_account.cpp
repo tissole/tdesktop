@@ -2987,8 +2987,8 @@ void Account::writeExportSettings(const Export::Settings &settings) {
 	}, [&](const MTPDinputPeerChannelFromMessage &) {
 		Unexpected("From message peer in single peer export settings.");
 	});
-	data.stream << qint32(settings.singlePeerFrom);
-	data.stream << qint32(settings.singlePeerTill);
+	data.stream << qint32(settings.singlePeerFrom.value_or(0));
+	data.stream << qint32(settings.singlePeerTill.value_or(0));
 
 	FileWriteDescriptor file(_exportSettingsKey, _basePath);
 	file.writeEncrypted(data, _localKey);
@@ -3083,8 +3083,12 @@ Export::Settings Account::readExportSettings() {
 		}
 		Unexpected("Type in export data single peer.");
 	}();
-	result.singlePeerFrom = singlePeerFrom;
-	result.singlePeerTill = singlePeerTill;
+	if (singlePeerFrom != 0) {
+		result.singlePeerFrom = singlePeerFrom;
+	}
+	if (singlePeerTill != 0) {
+		result.singlePeerTill = singlePeerTill;
+	}
 	return (file.stream.status() == QDataStream::Ok && result.validate())
 		? result
 		: Export::Settings();

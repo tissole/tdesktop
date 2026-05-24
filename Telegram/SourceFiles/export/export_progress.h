@@ -26,7 +26,7 @@ struct IncompleteFile {
 struct TypeCounter {
 	int uniqueCount = 0;
 	int64 uniqueSize = 0;
-	int localTotalCount = 0;
+	int totalCount = 0;
 	int64 totalSize = 0;
 	int messagesWithLinks = 0;
 };
@@ -42,13 +42,11 @@ struct ExportProgress {
 	std::map<int, TypeCounter> typeCounters;
 	std::map<int, TypeCounter> scanStats;
 
-	std::map<uint64, QString> dedupById;
-	std::map<QString, QString> dedupBySizeName;
 	std::vector<IncompleteFile> incompleteFiles;
-	std::vector<QString> visitedLinks;
 
 	// Session state for resume/update flow
 	bool isComplete = false;  // Export completed (not interrupted)
+	bool hasMedia = false;  // True if export included media file downloads
 	QString lastExportDate;       // ISO format date of last export
 	Settings settings;
 	

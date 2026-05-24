@@ -32,13 +32,12 @@ Content ContentFromState(
 	};
 	const auto pushMain = [&](const QString &label) {
 		const auto isScanning = (state.step == Step::Scanning);
-		const auto isDialogs = (state.step == Step::Dialogs);
-		const auto info = ((isScanning || isDialogs) && state.itemCount > 0)
+		const auto info = (state.itemCount > 0)
 			? (Lang::FormatCountDecimal(state.itemIndex)
 				+ " / "
 				+ Lang::FormatCountDecimal(state.itemCount))
-			: (state.entityCount > 0)
-			? (Lang::FormatCountDecimal(state.entityIndex + 1)
+			: (state.entityCount > 1)
+			? (Lang::FormatCountDecimal(state.entityIndex)
 				+ " / "
 				+ Lang::FormatCountDecimal(state.entityCount))
 			: QString();
@@ -189,8 +188,8 @@ Content ContentFromState(
 		for (const auto type : order) {
 			const auto it = state.selectedStats.find(type);
 			const auto expIt = state.expectedStats.find(type);
-			const bool hasSelected = (it != state.selectedStats.end() && it->second.localTotalCount > 0);
-			const bool hasExpected = (expIt != state.expectedStats.end() && expIt->second.localTotalCount > 0);
+			const bool hasSelected = (it != state.selectedStats.end() && it->second.totalCount > 0);
+			const bool hasExpected = (expIt != state.expectedStats.end() && expIt->second.totalCount > 0);
 			if (!hasSelected && !hasExpected) {
 				continue;
 			}
@@ -201,7 +200,7 @@ Content ContentFromState(
 			Output::StatItem displayItem;
 			displayItem.uniqueCount = selectedItem.uniqueCount;
 			displayItem.uniqueSize = selectedItem.uniqueSize;
-			displayItem.localTotalCount = hasExpected ? expectedItem.localTotalCount : selectedItem.localTotalCount;
+			displayItem.totalCount = hasExpected ? expectedItem.totalCount : selectedItem.totalCount;
 			displayItem.totalSize = (hasExpected && expectedItem.totalSize > 0) ? expectedItem.totalSize : selectedItem.totalSize;
 			displayItem.messagesWithLinks = hasExpected ? expectedItem.messagesWithLinks : selectedItem.messagesWithLinks;
 
@@ -223,91 +222,88 @@ Content ContentFromState(
 
 			categoriesCount++;
 
-			QString rowLabel, rowInfo;
-			float64 typeProgress = 0.;
-			if (type == MediaType::Text) {
-				rowLabel = label + ": " + Lang::FormatCountDecimal(item.localTotalCount);
-				typeProgress = (state.itemCount > 0)
-					? std::clamp(state.itemIndex / float64(state.itemCount), 0., 1.)
-					: 0.;
-			} else if (type == MediaType::Link) {
-				const auto messagesStr = item.messagesWithLinks > 0
-					? " (" + Lang::FormatCountDecimal(item.messagesWithLinks) + " Messages)"
-					: QString();
-				if (item.uniqueCount == item.localTotalCount) {
-					rowLabel = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) + messagesStr;
-				} else {
-					rowLabel = label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
-						+ ", " + Lang::FormatCountDecimal(item.localTotalCount) + messagesStr;
-				}
-				typeProgress = (state.itemCount > 0)
-					? std::clamp(state.itemIndex / float64(state.itemCount), 0., 1.)
-					: 0.;
-			} else {
-				rowLabel = label + ": "
-					+ Lang::FormatCountDecimal(item.uniqueCount)
-					+ " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
-				
-				// Always show total on the right
-				rowInfo = Lang::FormatCountDecimal(item.localTotalCount)
-					+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
-
-				totalUniqueMediaSize += item.uniqueSize;
-				totalMediaSize += item.totalSize;
-				totalUniqueMessagesCount += item.uniqueCount;
-				totalTotalMessagesCount += item.localTotalCount;
-
-				const int expected = hasExpected ? expectedItem.localTotalCount : 0;
-				const int locallyProcessed = item.uniqueCount;
-				if (hasExpected && expected > 0 && locallyProcessed >= 0 && !state.fullHistory) {
-					typeProgress = std::clamp(locallyProcessed / float64(expected), 0., 1.);
-				} else if (state.itemCount > 0) {
-					typeProgress = std::clamp(state.itemIndex / float64(state.itemCount), 0., 1.);
-				} else {
-					typeProgress = 0.;
-				}
-			}
-			typeRows.push_back({ "stat_" + QString::number((int)type), rowLabel, rowInfo, typeProgress });
-		}
-
-		const auto progress = (state.itemCount > 0)
+	QString rowLabel, rowInfo;
+	float64 typeProgress = 0.;
+	if (type == MediaType::Text) {
+		rowLabel = label + ": " + Lang::FormatCountDecimal(item.totalCount);
+		typeProgress = (state.itemCount > 0)
 			? std::clamp(state.itemIndex / float64(state.itemCount), 0., 1.)
 			: 0.;
-		if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
-			result.rows.push_back({ QString(), QString(), QString(), 0. });
-
-			const auto label = "Total Media: ";
-			const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
-				+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
-			const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
-				+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
-
-			const QString totalLabel = label + uniqueStr;
-			const QString totalInfo = totalStr; // Always show total media summary
-			result.rows.push_back({ "stat_summary", totalLabel, totalInfo, progress });
-		}
-		for (auto &row : typeRows) {
-			result.rows.push_back({ row.id, row.label, row.info, row.progress });
-		}
-	}
-
-	for (const auto &[id, download] : state.activeDownloads) {
-		const auto progress = (download.total > 0)
-			? (download.ready / float64(download.total))
+	} else if (type == MediaType::Link) {
+		const auto sharedStr = item.messagesWithLinks > 0
+			? " (" + Lang::FormatCountDecimal(item.messagesWithLinks) + " Messages)"
+			: QString();
+		rowLabel = label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
+			+ ", " + Lang::FormatCountDecimal(item.totalCount) + sharedStr;
+		typeProgress = (state.itemCount > 0)
+			? std::clamp(state.itemIndex / float64(state.itemCount), 0., 1.)
 			: 0.;
-		const auto info = Ui::FormatDownloadText(
-			download.ready,
-			download.total);
-		const auto lastSlash = download.path.lastIndexOf('/');
-		const auto name = download.path.mid(lastSlash + 1);
-		push("file_" + QString::number(id), name, info, progress, id);
+	} else {
+		rowLabel = label + ": "
+			+ Lang::FormatCountDecimal(item.uniqueCount)
+			+ " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
+			+ Lang::FormatCountDecimal(item.totalCount)
+			+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
+		
+		rowInfo = QString();
+
+		totalUniqueMediaSize += item.uniqueSize;
+		totalMediaSize += item.totalSize;
+		totalUniqueMessagesCount += item.uniqueCount;
+		totalTotalMessagesCount += item.totalCount;
+
+		const int expected = hasExpected ? expectedItem.totalCount : 0;
+		const int locallyProcessed = item.uniqueCount;
+		if (hasExpected && expected > 0 && locallyProcessed >= 0 && !state.fullHistory) {
+			typeProgress = std::clamp(locallyProcessed / float64(expected), 0., 1.);
+		} else if (hasExpected && expected > 0 && item.totalCount > 0) {
+			typeProgress = std::clamp(item.totalCount / float64(expected), 0., 1.);
+		} else if (state.itemCount > 0) {
+			typeProgress = std::clamp(state.itemIndex / float64(state.itemCount), 0., 1.);
+		} else {
+			typeProgress = 0.;
+		}
+	}
+	typeRows.push_back({ "stat_" + QString::number((int)type), rowLabel, rowInfo, typeProgress });
 	}
 
-	if (result.rows.empty()) {
-		result.rows.emplace_back();
-	}
+	const auto progress = (state.itemCount > 0)
+		? std::clamp(state.itemIndex / float64(state.itemCount), 0., 1.)
+		: 0.;
+	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
+		result.rows.push_back({ QString(), QString(), QString(), 0. });
 
-	return result;
+	const auto label = "Total Media: ";
+	QString totalLabel;
+	totalLabel = label + Lang::FormatCountDecimal(totalUniqueMessagesCount)
+		+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + "), "
+		+ Lang::FormatCountDecimal(totalTotalMessagesCount)
+		+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
+
+	result.rows.push_back({ "stat_summary", totalLabel, QString(), progress });
+}
+for (auto &row : typeRows) {
+	result.rows.push_back({ row.id, row.label, row.info, row.progress });
+}
+}
+
+for (const auto &[id, download] : state.activeDownloads) {
+	const auto progress = (download.total > 0)
+		? (download.ready / float64(download.total))
+		: 0.;
+	const auto info = Ui::FormatDownloadText(
+		download.ready,
+		download.total);
+	const auto lastSlash = download.path.lastIndexOf('/');
+	const auto name = download.path.mid(lastSlash + 1);
+	push("file_" + QString::number(id), name, info, progress, id);
+}
+
+if (result.rows.empty()) {
+	result.rows.emplace_back();
+}
+
+return result;
 }
 
 Content ContentFromState(const FinishedState &state) {
@@ -350,7 +346,7 @@ Content ContentFromState(const FinishedState &state) {
 
 	for (const auto type : order) {
 		const auto it = state.breakdown.find(type);
-		if (it == state.breakdown.end() || it->second.localTotalCount <= 0) {
+		if (it == state.breakdown.end() || it->second.totalCount <= 0) {
 			if (!showAllCategories) {
 				continue;
 			}
@@ -368,58 +364,47 @@ Content ContentFromState(const FinishedState &state) {
 		case Type::File: label = tr::lng_export_option_files(tr::now); break;
 		case Type::Text: label = tr::lng_export_option_text_messages(tr::now); break;
 		case Type::Link: label = tr::lng_export_option_links(tr::now); break;
-		}
-		QString text;
-		
-		if (type == Type::Text) {
-			text = label + ": " + Lang::FormatCountDecimal(item.localTotalCount);
-			typeRows.push_back({ "stat_" + QString::number((int)type), text, QString(), 1. });
-		} else if (type == Type::Link) {
-			const auto messagesStr = item.messagesWithLinks > 0
-				? " (" + Lang::FormatCountDecimal(item.messagesWithLinks) + " Messages)"
-				: QString();
-			if (item.uniqueCount == item.localTotalCount) {
-				text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount) + messagesStr;
-			} else {
-				text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
-					+ ", " + Lang::FormatCountDecimal(item.localTotalCount) + messagesStr;
-			}
-			typeRows.push_back({ "stat_" + QString::number((int)type), text, QString(), 1. });
-		} else {
-			// Split into label (unique, left) and info (total, right) to prevent overflow.
-			const auto uniquePart = Lang::FormatCountDecimal(item.uniqueCount)
-				+ " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
-			const auto totalPart = (item.localTotalCount != item.uniqueCount || item.totalSize != item.uniqueSize)
-				? (Lang::FormatCountDecimal(item.localTotalCount)
-					+ " (" + Ui::FormatSizeText(item.totalSize) + ")")
-				: QString();
-			text = label + ": " + uniquePart;
+	}
+	QString text;
+	
+	if (type == Type::Text) {
+		text = label + ": " + Lang::FormatCountDecimal(item.totalCount);
+		typeRows.push_back({ "stat_" + QString::number((int)type), text, QString(), 1. });
+	} else if (type == Type::Link) {
+		const auto sharedStr = item.messagesWithLinks > 0
+			? " (" + Lang::FormatCountDecimal(item.messagesWithLinks) + " Messages)"
+			: QString();
+		text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
+			+ ", " + Lang::FormatCountDecimal(item.totalCount) + sharedStr;
+		typeRows.push_back({ "stat_" + QString::number((int)type), text, QString(), 1. });
+	} else {
+		text = label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
+			+ " (" + Ui::FormatSizeText(item.uniqueSize) + "), "
+			+ Lang::FormatCountDecimal(item.totalCount)
+			+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
 
-			totalUniqueMediaSize += item.uniqueSize;
-			totalMediaSize += item.totalSize;
-			totalUniqueMessagesCount += item.uniqueCount;
-			totalTotalMessagesCount += item.localTotalCount;
+		totalUniqueMediaSize += item.uniqueSize;
+		totalMediaSize += item.totalSize;
+		totalUniqueMessagesCount += item.uniqueCount;
+		totalTotalMessagesCount += item.totalCount;
 
-			categoriesCount++;
-			typeRows.push_back({ "stat_" + QString::number((int)type), text, totalPart, 1. });
-		}
+		categoriesCount++;
+		typeRows.push_back({ "stat_" + QString::number((int)type), text, QString(), 1. });
+	}
 	}
 
 	int mediaCategoriesCount = categoriesCount;
 	if (mediaCategoriesCount > 1 && totalTotalMessagesCount > 0) {
 		result.rows.push_back({ QString(), QString(), QString(), 0. });
 
-		const auto label = "Total Media: ";
-		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
-			+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
-		const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
-			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
+	const auto label = "Total Media: ";
+	QString totalLabel;
+	totalLabel = label + Lang::FormatCountDecimal(totalUniqueMessagesCount)
+		+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + "), "
+		+ Lang::FormatCountDecimal(totalTotalMessagesCount)
+		+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
 
-		const QString totalLabel = label + uniqueStr;
-		const QString totalInfo = (totalTotalMessagesCount != totalUniqueMessagesCount || totalMediaSize != totalUniqueMediaSize)
-			? totalStr
-			: QString();
-		result.rows.push_back({ "stat_summary", totalLabel, totalInfo, 1. });
+	result.rows.push_back({ "stat_summary", totalLabel, QString(), 1. });
 	}
 	for (auto &row : typeRows) {
 		result.rows.push_back({ row.id, row.label, row.info, row.progress });

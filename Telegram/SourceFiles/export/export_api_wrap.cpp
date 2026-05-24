@@ -415,7 +415,8 @@ struct ApiWrap::FileProcess {
 	std::vector<FnMut<void(QString)>> pendingDone;
 	// Dedup tracking for global dedup manager
 	uint64 dedupDocId = 0;
-	SizeNameKey dedupSizeName;
+	int64 dedupSize = 0;
+	QString dedupName;
 };
 
 struct ApiWrap::ChatsProcess {
@@ -461,7 +462,7 @@ struct ApiWrap::ChatProcess : AbstractMessagesProcess {
 	FnMut<bool(const Data::DialogInfo &)> start;
 
 	int localSplitIndex = 0;
-	int32 nextFetchId = 1;
+	int32 largestIdPlusOne = 1;
 
 	int pendingFiles = 0;
 	bool processing = false;
@@ -492,7 +493,7 @@ struct ApiWrap::ChatProcess : AbstractMessagesProcess {
 
 	Data::MessagesSlice pendingBatch;
 	struct BatchStats {
-		int localTotalCount = 0;
+		int totalCount = 0;
 		int64 totalSize = 0;
 		int uniqueCount = 0;
 		int64 uniqueSize = 0;
@@ -514,7 +515,7 @@ struct ApiWrap::TopicProcess : AbstractMessagesProcess {
 	FnMut<bool(int count)> start;
 
 	int32 offsetId = 0;
-	int localTotalCount = 0;
+	int totalCount = 0;
 	int processedCount = 0;
 	bool processing = false;
 };
@@ -623,7 +624,14 @@ auto ApiWrap::normalRequest(Request &&request) {
 
 template <typename Request>
 auto ApiWrap::splitRequest(int index, Request &&request) {
-	Expects(index < _splits.size());
+	if (index < 0 || index >= _splits.size()) {
+		LOG(("Export: CRITICAL - splitRequest called with invalid index %1, _splits.size=%2").arg(index).arg(_splits.size()));
+		index = std::max(0, std::min(index, int(_splits.size()) - 1));
+		if (_splits.empty()) {
+			LOG(("Export: CRITICAL - _splits is empty, cannot proceed"));
+			error("Internal error: invalid split index");
+		}
+	}
 
 	return mainRequest(MTPInvokeWithMessagesRange<Request>(
 		_splits[index],
@@ -681,19 +689,10 @@ rpl::producer<Output::Result> ApiWrap::ioErrors() const {
 
 void ApiWrap::startExport(
 		const Settings &settings,
-		Output::Stats *stats,
 		FnMut<void(StartInfo)> done,
-		bool isScanning,
-		Output::Stats *scanStats) {
+		bool isScanning) {
 	_settings = std::make_unique<Settings>(settings);
-	_stats = stats;
 	_isScanning = isScanning;
-	_scanStats = scanStats;
-	_dedupById.clear();
-	_dedupBySizeName.clear();
-	_dedupByIdInProgress.clear();
-	_dedupBySizeNameInProgress.clear();
-	_visitedLinks.clear();
 	_reservedPaths.clear();
 	_serverTotalCount = 0;
 	_chatProcess = nullptr;
@@ -703,58 +702,54 @@ void ApiWrap::startExport(
 	if (!_settings->path.isEmpty()) {
 		loadProgress(_settings->path);
 
-		// Initialize global dedup manager in the parent directory (cross-chat)
-		if (!_globalDedupOwned) {
-			const auto parentPath = QFileInfo(_settings->path).absolutePath();
-			_globalDedupOwned = std::make_unique<GlobalDedupManager>(parentPath);
-			_globalDedup = _globalDedupOwned.get();
-			_globalDedup->load();
+		const auto types = _settings->media.types;
+		GlobalDedupManager::Mode dedupMode;
+
+		if (types == MediaSettings::Types(0) || types == MediaSettings::Type::Text) {
+			dedupMode = GlobalDedupManager::Mode::Disabled;
+		} else if ((types & MediaSettings::Type::FullHistory) 
+			|| types == MediaSettings::Type::Link) {
+			dedupMode = GlobalDedupManager::Mode::MemoryOnly;
+		} else {
+			dedupMode = GlobalDedupManager::Mode::Persistent;
+		}
+
+		// For single chat: use parent directory (so multiple chats can share dedup)
+		// For bulk export: use export directory itself
+		QString dedupPath;
+		if (_settings->onlySinglePeer()) {
+			auto chatPath = _settings->path;
+			while (chatPath.endsWith('/') || chatPath.endsWith('\\')) {
+				chatPath.chop(1);
+			}
+			dedupPath = QFileInfo(chatPath).absolutePath();
+		} else {
+			dedupPath = _settings->path;
+		}
+		
+		LOG(("Export: Global dedup path - onlySinglePeer=%1, settings.path=%2, dedupPath=%3")
+			.arg(_settings->onlySinglePeer())
+			.arg(_settings->path)
+			.arg(dedupPath));
+		
+		_globalDedup = std::make_unique<GlobalDedupManager>(dedupMode, dedupPath);
+
+		if (dedupMode == GlobalDedupManager::Mode::Persistent && !_globalDedup->lastError().isEmpty()) {
+			error(_globalDedup->lastError());
+			return;
+		}
+
+		if (_globalDedup) {
+			_globalDedup->clearInProgress();
 		}
 
 		if (_exportProgress && !_isScanning) {
-			_dedupById.clear();
-			for (const auto &[id, path] : _exportProgress->dedupById) {
-				_dedupById[id] = path;
-			}
-			for (const auto &[mapKey, path] : _exportProgress->dedupBySizeName) {
-				const int underscorePos = mapKey.indexOf('_');
-				if (underscorePos > 0) {
-					const int64 size = mapKey.left(underscorePos).toLongLong();
-					const QString name = mapKey.mid(underscorePos + 1);
-					_dedupBySizeName[{size, name}] = path;
-				}
-			}
-			
-			_visitedLinks.clear();
-			for (const auto &link : _exportProgress->visitedLinks) {
-				_visitedLinks.insert(link);
-			}
-
 			if (_resumeMode) {
-				// Restore type-specific stats so the second row counters are correct
-				_stats->clear();
-				for (const auto &[typeInt, counter] : _exportProgress->typeCounters) {
-					const auto type = static_cast<MediaSettings::Type>(typeInt);
-					_stats->increment(type, counter.totalSize, counter.uniqueSize, counter.localTotalCount, counter.uniqueCount, counter.messagesWithLinks);
-					if (type != MediaSettings::Type::Text && type != MediaSettings::Type::Link) {
-						for (int i = 0; i < counter.uniqueCount; ++i) {
-							_stats->incrementUserMediaFiles();
-						}
-					}
-				}
-				_stats->setTotalMessages(_exportProgress->messagesProcessed);
-
-				_scanStats->clear();
-				for (const auto &[typeInt, counter] : _exportProgress->scanStats) {
-					const auto type = static_cast<MediaSettings::Type>(typeInt);
-					_scanStats->increment(type, counter.totalSize, counter.uniqueSize, counter.localTotalCount, counter.uniqueCount, counter.messagesWithLinks);
-					if (type != MediaSettings::Type::Text && type != MediaSettings::Type::Link) {
-						for (int i = 0; i < counter.uniqueCount; ++i) {
-							_scanStats->incrementUserMediaFiles();
-						}
-					}
-				}
-				_scanStats->setTotalMessages(_exportProgress->scanTotalMessages);
+				_exportProgress->lastMessageId = 0;
+				_exportProgress->messagesProcessed = 0;
+				_exportProgress->typeCounters.clear();
+				_exportProgress->incompleteFiles.clear();
+				_exportProgress->settings = *_settings;
 			} else {
 				_exportProgress->lastMessageId = 0;
 				_exportProgress->messagesProcessed = 0;
@@ -765,6 +760,13 @@ void ApiWrap::startExport(
 		} else {
 			_exportProgress = std::make_unique<ExportProgress>();
 			_exportProgress->settings = *_settings;
+			// Set hasMedia flag based on export type
+			const auto types = _settings->media.types;
+			_exportProgress->hasMedia = (types != MediaSettings::Types(0)) 
+				&& !(types & MediaSettings::Type::FullHistory)
+				&& (types != MediaSettings::Type::Link)
+				&& (types != MediaSettings::Type::Text)
+				&& !(types == (MediaSettings::Type::Link | MediaSettings::Type::Text));
 		}
 
 		if (!_resumeMode) {
@@ -938,10 +940,10 @@ void ApiWrap::requestMediaCounts() {
 		const auto type = pair.first;
 		const auto filter = pair.second;
 
-		const auto minId = (_settings->useIdRange && _settings->singlePeerFromId > 0) ? std::max(int64(0), int64(_settings->singlePeerFromId) - 1) : int64(0);
-		const auto maxId = (_settings->useIdRange && _settings->singlePeerTillId > 0) ? (int64(_settings->singlePeerTillId) + 1) : int64(0);
-		const auto minDate = _settings->useIdRange ? 0 : _settings->singlePeerFrom;
-		const auto maxDate = _settings->useIdRange ? 0 : _settings->singlePeerTill;
+		const auto minId = (_settings->useIdRange && _settings->singlePeerFromId.has_value()) ? std::max(int64(0), int64(*_settings->singlePeerFromId) - 1) : int64(0);
+		const auto maxId = (_settings->useIdRange && _settings->singlePeerTillId.has_value()) ? (int64(*_settings->singlePeerTillId) + 1) : int64(0);
+		const auto minDate = _settings->useIdRange ? 0 : _settings->singlePeerFrom.value_or(0);
+		const auto maxDate = _settings->useIdRange ? 0 : _settings->singlePeerTill.value_or(0);
 
 		mainRequest(MTPmessages_Search(
 			MTP_flags(0),
@@ -1221,7 +1223,8 @@ void ApiWrap::requestOtherData(
 		[](FileProgress progress) { return true; },
 		[=](const QString &result) { otherDataDone(result); },
 		0,
-		SizeNameKey());
+		0,
+		QString());
 }
 
 void ApiWrap::otherDataDone(const QString &relativePath) {
@@ -1938,13 +1941,17 @@ void ApiWrap::requestMessages(
 				_chatProcess->fileProgress = std::move(progress);
 				_chatProcess->handleSlice = std::move(slice);
 				_chatProcess->done = std::move(done);
-				_chatProcess->nextFetchId = int32(std::min(int64(std::numeric_limits<int32>::max()), resumeFromId));
-				LOG(("Export: Resume - Set nextFetchId=%1 from lastMessageId+1").arg(_chatProcess->nextFetchId));
+				_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), resumeFromId));
+				LOG(("Export: Resume - Set largestIdPlusOne=%1 from lastMessageId+1").arg(_chatProcess->largestIdPlusOne));
 				
 				if (_exportProgress) {
-					_chatProcess->messagesProcessed = _exportProgress->messagesProcessed;
-					if (_scanStats && _exportProgress->scanTotalMessages > 0) {
-						_scanStats->setTotalMessages(_exportProgress->scanTotalMessages);
+					// For single peer export, restore the counter for resume
+					// For bulk export, each chat starts from 0
+					_chatProcess->messagesProcessed = _settings->onlySinglePeer() 
+						? _exportProgress->messagesProcessed 
+						: 0;
+					if (_globalDedup && _exportProgress->scanTotalMessages > 0) {
+						_globalDedup->incrementTotalMessages();
 					}
 					if (!_isScanning) {
 						_resumeIdThreshold = info.lastMessageId;
@@ -2004,18 +2011,24 @@ void ApiWrap::requestMessages(
 	_chatProcess->done = std::move(done);
 
 	if (_settings->useIdRange && tillId > 0) {
-		_chatProcess->nextFetchId = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
-		LOG(("Export: Set nextFetchId=%1 for ID range (starting from fromId)").arg(_chatProcess->nextFetchId));
+		_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
+		LOG(("Export: Set largestIdPlusOne=%1 for ID range (starting from fromId)").arg(_chatProcess->largestIdPlusOne));
 	} else if (!_isScanning && info.lastMessageId > 0 && !_settings->useIdRange) {
-		_chatProcess->nextFetchId = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
-		LOG(("Export: Set nextFetchId=%1 for date range resume (starting from resumeFromId)").arg(_chatProcess->nextFetchId));
+		_chatProcess->largestIdPlusOne = int32(std::min(int64(std::numeric_limits<int32>::max()), fromId));
+		LOG(("Export: Set largestIdPlusOne=%1 for date range resume (starting from resumeFromId)").arg(_chatProcess->largestIdPlusOne));
 	}
 
 	if (_exportProgress) {
-		_chatProcess->messagesProcessed = _exportProgress->messagesProcessed;
+		// For single peer export, restore the counter for resume
+		// For bulk export, each chat starts from 0
+		_chatProcess->messagesProcessed = _settings->onlySinglePeer() 
+			? _exportProgress->messagesProcessed 
+			: 0;
 
-	if (_scanStats && _exportProgress->scanTotalMessages > 0) {
-		_scanStats->setTotalMessages(_exportProgress->scanTotalMessages);
+	if (_globalDedup && _exportProgress->scanTotalMessages > 0) {
+		for (int i = 0; i < _exportProgress->scanTotalMessages; ++i) {
+			_globalDedup->incrementTotalMessages();
+		}
 	}
 
 	if (!_isScanning) {
@@ -2114,7 +2127,7 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 			error("Unexpected messagesNotModified received.");
 			return;
 		}
-		const auto hasDateRange = (_settings->singlePeerFrom > 0) || (_settings->singlePeerTill > 0);
+		const auto hasDateRange = _settings->singlePeerFrom.has_value() || _settings->singlePeerTill.has_value();
 		const auto skipSplit = hasDateRange
 			&& (_chatProcess->fromId == 0)
 			&& (_chatProcess->tillId == 0);
@@ -2167,8 +2180,8 @@ void ApiWrap::resolveDates() {
 		return;
 	}
 
-	const auto fromDate = _settings->singlePeerFrom;
-	const auto tillDate = _settings->singlePeerTill;
+	const auto fromDate = _settings->singlePeerFrom.value_or(0);
+	const auto tillDate = _settings->singlePeerTill.value_or(0);
 
 	if (fromDate == 0 && tillDate == 0) {
 		requestMessagesCount(0);
@@ -2238,7 +2251,7 @@ void ApiWrap::resolveDates() {
 						return TimeId(m.vdate().v);
 					});
 					_chatProcess->fromId = (date > 0 && date < fromDate) ? (id + 1) : id;
-					_chatProcess->nextFetchId = int32(std::max(int64(1), std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId)));
+					_chatProcess->largestIdPlusOne = int32(std::max(int64(1), std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId)));
 				}
 			});
 			resolveTill();
@@ -2407,6 +2420,9 @@ void ApiWrap::appendSinglePeerDialogs(Data::DialogsInfo &&info) {
 
 	if (!migratedRequestId) {
 		_dialogsProcess->processedCount += info.chats.size();
+		LOG(("Export: appendSinglePeerDialogs - added %1 chats, processedCount now %2")
+			.arg(info.chats.size())
+			.arg(_dialogsProcess->processedCount));
 	}
 	appendDialogsSlice(std::move(info));
 
@@ -2453,6 +2469,9 @@ void ApiWrap::requestDialogsSlice() {
 
 		auto info = Data::ParseDialogsInfo(result);
 		_dialogsProcess->processedCount += info.chats.size();
+		LOG(("Export: requestDialogsSlice - received %1 chats, processedCount now %2")
+			.arg(info.chats.size())
+			.arg(_dialogsProcess->processedCount));
 		const auto last = info.chats.empty()
 			? Data::DialogInfo()
 			: info.chats.back();
@@ -2513,6 +2532,10 @@ void ApiWrap::finishDialogsList() {
 
 	const auto process = base::take(_dialogsProcess);
 	Data::FinalizeDialogsInfo(process->info, *_settings);
+	LOG(("Export: finishDialogsList - final count: chats=%1, left=%2, total=%3")
+		.arg(process->info.chats.size())
+		.arg(process->info.left.size())
+		.arg(process->info.chats.size() + process->info.left.size()));
 	process->done(std::move(process->info));
 }
 
@@ -2626,7 +2649,7 @@ void ApiWrap::requestMessagesSlice() {
 
 	requestChatMessages(
 		_chatProcess->localSplitIndex,
-		_chatProcess->nextFetchId,
+		_chatProcess->largestIdPlusOne,
 		addOffset,
 		kMessagesSliceLimit,
 		[=](const MTPmessages_Messages &result) {
@@ -2656,7 +2679,7 @@ void ApiWrap::requestChannelMessagesSlice() {
 
 	requestChatMessages(
 		0,
-		_chatProcess->nextFetchId,
+		_chatProcess->largestIdPlusOne,
 		addOffset,
 		kMessagesSliceLimit,
 		[=](const MTPmessages_Messages &result) {
@@ -2712,9 +2735,10 @@ void ApiWrap::requestChatMessages(
 	const auto outgoingInput = _chatProcess->info.isMonoforum
 		? _chatProcess->info.monoforumBroadcastInput
 		: MTP_inputPeerSelf();
-	const auto realSplitIndex = (splitIndex >= 0)
-		? splitIndex
-		: (splitsCount + splitIndex);
+	const auto realSplitIndex = std::clamp(
+		(splitIndex >= 0) ? splitIndex : (splitsCount + splitIndex),
+		0,
+		splitsCount - 1);
 
 	const auto minId = (_chatProcess->fromId > 0)
 		? int64(_chatProcess->fromId - 1)
@@ -2924,12 +2948,12 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 
 	if (slice.list.empty()) {
 		if (_chatProcess->fromId > 0) {
-			_chatProcess->nextFetchId += kMessagesSliceLimit;
-			if (_chatProcess->nextFetchId >= _chatProcess->tillId) {
+			_chatProcess->largestIdPlusOne += kMessagesSliceLimit;
+			if (_chatProcess->largestIdPlusOne >= _chatProcess->tillId) {
 				LOG(("Export: Empty slice and reached tillId, marking as lastSlice"));
 				_chatProcess->lastSlice = true;
 			} else {
-				LOG(("Export: Empty slice, advancing nextFetchId by %1 to %2 and retrying").arg(kMessagesSliceLimit).arg(_chatProcess->nextFetchId));
+				LOG(("Export: Empty slice, advancing largestIdPlusOne by %1 to %2 and retrying").arg(kMessagesSliceLimit).arg(_chatProcess->largestIdPlusOne));
 			}
 		} else {
 			LOG(("Export: Slice is empty, marking as lastSlice"));
@@ -3098,15 +3122,20 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 					} else {
 						normalized = normalized.toLower();
 					}
-				}
-
-				if (_visitedLinks.insert(normalized).second) {
-					uniqueGlobal++;
-				}
 			}
+
+			if (_globalDedup && !_globalDedup->isKnownLink(normalized)) {
+				uniqueGlobal++;
+				_globalDedup->finalizeLink(normalized);
+			}
+		}
 			ms.links = int(linksInThisMessage.size());
 			ms.linksUnique = uniqueGlobal;
 			ms.linkMsgIncr = 1;
+			
+			if (_globalDedup) {
+				_globalDedup->incrementMessagesWithLinks(MediaSettings::Type::Link, 1);
+			}
 		}
  else if (_isScanning && !fullHistorySelected) {
 			// If message has media but we didn't detect it as a link, check if it's a link preview
@@ -3138,39 +3167,48 @@ void ApiWrap::loadMessagesFiles(Data::MessagesSlice &&slice) {
 			ms.type = MediaSettings::Type::Text;
 		}
 		ms.size = fullSize;
-		ms.unique = false; // Reset to ensure correct deduplication result
+		ms.unique = false;
 
 		bool isMediaForSum = (messageType != MediaSettings::Type::Link && messageType != MediaSettings::Type::Text);
-		bool countThis = isMediaForSum
-			|| ((types & MediaSettings::Type::Text) || fullHistorySelected)
-			|| (isLinkMessage && linkSelectedForStats);
+		bool countThis = (isMediaForSum && (types & messageType))
+			|| (messageType == MediaSettings::Type::Text && (types & MediaSettings::Type::Text))
+			|| (messageType == MediaSettings::Type::Link && linkSelectedForStats)
+			|| fullHistorySelected;
 
 		if (countThis) {
 			bool uniqueBubble = false;
 			uint64 bubbleDocId = 0;
 			QString bubbleName;
 			v::match(message.media.content, [&](const Data::Document &data) {
-				bubbleDocId = data.id;
+				// For stickers, use stickerSetId for deduplication (same sticker across messages)
+				// For other documents, use document id (unique per file)
+				bubbleDocId = data.isSticker ? data.stickerSetId : data.id;
 				bubbleName = QString::fromUtf8(data.name);
 			}, [&](const Data::Photo &data) {
 				bubbleDocId = data.id;
 			}, [](const auto &) {});
-			const int64 bubbleSize = message.file().size;
+		const int64 bubbleSize = message.file().size;
+		
+		if (_globalDedup) {
+			_globalDedup->incrementTotal(messageType, bubbleSize);
+		}
+		
+		if (bubbleDocId == 0 && bubbleSize == 0) {
+			uniqueBubble = true;
+		} else if (_globalDedup) {
+			const bool alreadyKnown = _globalDedup->isKnown(bubbleDocId, bubbleSize, bubbleName, messageType);
+			uniqueBubble = !alreadyKnown;
 			
-			if (bubbleDocId == 0 && bubbleSize == 0) {
-				uniqueBubble = true;
-			} else {
-				const auto dedup = dedupLookup(bubbleDocId, bubbleSize, bubbleName);
-				if (!dedup.found) {
-					uniqueBubble = true;
-					if (bubbleDocId != 0 || (bubbleSize > 0 && !bubbleName.isEmpty())) {
-						dedupRegister(bubbleDocId, bubbleSize, bubbleName, QString());
-					}
-				}
+			if (!alreadyKnown && _globalDedup->mode() == GlobalDedupManager::Mode::MemoryOnly) {
+				_globalDedup->markInProgress(bubbleDocId, bubbleSize, bubbleName, messageType);
+				_globalDedup->finalize(bubbleDocId, bubbleSize, bubbleName, messageType);
 			}
-			if (uniqueBubble) {
-				ms.unique = true;
-			}
+		} else {
+			uniqueBubble = true;
+		}
+		if (uniqueBubble) {
+			ms.unique = true;
+		}
 		}
 
 		int required = 0;
@@ -3393,15 +3431,26 @@ void ApiWrap::loadNextMessageFile() {
 		// it as in-progress.
 		uint64 parentDocId = 0;
 		QString parentName;
+		using MediaType = MediaSettings::Type;
+		auto parentType = MediaType::File;
 		v::match(message.media.content, [&](const Data::Document &data) {
 			parentDocId = data.id;
 			parentName = QString::fromUtf8(data.name);
+			if (data.isSticker) parentType = MediaType::Sticker;
+			else if (data.isVideoMessage) parentType = MediaType::VideoMessage;
+			else if (data.isVoiceMessage) parentType = MediaType::VoiceMessage;
+			else if (data.isAnimated) parentType = MediaType::GIF;
+			else if (data.isVideoFile) parentType = MediaType::Video;
+			else if (data.isAudioFile) parentType = MediaType::Audio;
+			else parentType = MediaType::File;
 		}, [&](const Data::Photo &data) {
 			parentDocId = data.id;
+			parentType = MediaType::Photo;
 		}, [](const auto &) {});
 		const int64 parentSize = message.file().size;
 		const bool mainFileAlreadySeen = message.file().location
-			&& dedupLookup(parentDocId, parentSize, parentName).found;
+			&& _globalDedup
+			&& _globalDedup->isKnown(parentDocId, parentSize, parentName, parentType);
 
 		if (message.file().location) {
 			(void)processFileLoad(
@@ -3501,7 +3550,7 @@ void ApiWrap::finishMessagesSlice() {
 				finishMessages();
 			} else {
 				_chatProcess->lastSlice = false;
-				_chatProcess->nextFetchId = (_chatProcess->fromId > 0)
+				_chatProcess->largestIdPlusOne = (_chatProcess->fromId > 0)
 					? int32(std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId))
 					: 1;
 				requestMessagesSlice();
@@ -3515,17 +3564,17 @@ void ApiWrap::finishMessagesSlice() {
 	auto slice = *base::take(_chatProcess->slice);
 	if (!slice.list.empty()) {
 		if (_chatProcess->fromId > 0) {
-			_chatProcess->nextFetchId = slice.list.back().id + 1;
-			LOG(("Export: ID range - updated nextFetchId to %1 (last/highest ID in slice + 1)").arg(_chatProcess->nextFetchId));
+			_chatProcess->largestIdPlusOne = slice.list.back().id + 1;
+			LOG(("Export: ID range - updated largestIdPlusOne to %1 (last/highest ID in slice + 1)").arg(_chatProcess->largestIdPlusOne));
 			
-			if (_chatProcess->tillId > 0 && _chatProcess->nextFetchId > _chatProcess->tillId) {
+			if (_chatProcess->tillId > 0 && _chatProcess->largestIdPlusOne > _chatProcess->tillId) {
 				LOG(("Export: Reached or passed tillId=%1, marking as lastSlice").arg(_chatProcess->tillId));
 				_chatProcess->lastSlice = true;
 			}
 		} else {
-			_chatProcess->nextFetchId = slice.list.back().id + 1;
+			_chatProcess->largestIdPlusOne = slice.list.back().id + 1;
 			
-			if (_chatProcess->tillId > 0 && _chatProcess->nextFetchId > _chatProcess->tillId) {
+			if (_chatProcess->tillId > 0 && _chatProcess->largestIdPlusOne > _chatProcess->tillId) {
 				_chatProcess->lastSlice = true;
 			}
 		}
@@ -3590,7 +3639,7 @@ void ApiWrap::finishMessagesSlice() {
 	if (_chatProcess->lastSlice) {
 		if (++_chatProcess->localSplitIndex < _chatProcess->info.splits.size()) {
 			_chatProcess->lastSlice = false;
-			_chatProcess->nextFetchId = (_chatProcess->fromId > 0)
+			_chatProcess->largestIdPlusOne = (_chatProcess->fromId > 0)
 				? int32(std::min(int64(std::numeric_limits<int32>::max()), _chatProcess->fromId))
 				: 1;
 			requestMessagesSlice();
@@ -3880,7 +3929,7 @@ void ApiWrap::requestTopicMessages(
 					error("Unexpected messagesNotModified received.");
 					return;
 				}
-				_topicProcess->localTotalCount = count;
+				_topicProcess->totalCount = count;
 				if (!_topicProcess->start(count)) {
 					return;
 				}
@@ -4081,8 +4130,8 @@ void ApiWrap::finishTopicMessagesSlice() {
 		}
 	}
 
-	const auto reachedTotal = _topicProcess->localTotalCount > 0
-		&& _topicProcess->processedCount >= _topicProcess->localTotalCount;
+	const auto reachedTotal = _topicProcess->totalCount > 0
+		&& _topicProcess->processedCount >= _topicProcess->totalCount;
 
 	if (!_topicProcess->lastSlice && !reachedTotal) {
 		requestTopicMessagesSlice();
@@ -4188,7 +4237,9 @@ bool ApiWrap::processFileLoad(
 	QString dedupName;
 	if (message) {
 		v::match(message->media.content, [&](const Data::Document &data) {
-			dedupDocId = data.id;
+			// For stickers, use stickerSetId for deduplication (same sticker across messages)
+			// For other documents, use document id (unique per file)
+			dedupDocId = data.isSticker ? data.stickerSetId : data.id;
 			dedupName = QString::fromUtf8(data.name);
 		}, [&](const Data::Photo &data) {
 			dedupDocId = data.id;
@@ -4236,7 +4287,7 @@ bool ApiWrap::processFileLoad(
 		return true;
 	}
 
-	if (_stats
+	if (_globalDedup
 		&& (origin.messageId != 0 || origin.storyId != 0)
 		&& !isThumb) {
 		const bool isLinkOrText = (type == Type::Link || type == Type::Text);
@@ -4246,20 +4297,11 @@ bool ApiWrap::processFileLoad(
 			&& message->id <= static_cast<int32>(_exportProgress->lastMessageId);
 
 		if (typeSelected && (!oversized || fullHistorySelected || isLinkOrText) && !alreadyProcessedInPreviousSession) {
-			const auto dedup = dedupLookup(dedupDocId, dedupSize, dedupName);
-			const bool alreadyVisited = dedup.found;
-
-			if (!alreadyVisited) {
-				if (type != Type::Link && type != Type::Text) {
-					dedupRegister(dedupDocId, dedupSize, dedupName,
-						skipDownload ? QString("processed") : QString());
-				} else {
-					dedupRegister(dedupDocId, dedupSize, dedupName, "processed");
-				}
-			}
-			if (!alreadyVisited && !skipDownload) {
-				if (type != Type::Link && type != Type::Text) {
-					dedupRegister(dedupDocId, dedupSize, dedupName, QString());
+			if (_globalDedup && _globalDedup->mode() == GlobalDedupManager::Mode::MemoryOnly) {
+				const bool alreadyKnown = _globalDedup->isKnown(dedupDocId, dedupSize, dedupName, type);
+				if (!alreadyKnown && type != Type::Link && type != Type::Text) {
+					_globalDedup->markInProgress(dedupDocId, dedupSize, dedupName, type);
+					_globalDedup->finalize(dedupDocId, dedupSize, dedupName, type);
 				}
 			}
 		}
@@ -4269,69 +4311,35 @@ bool ApiWrap::processFileLoad(
 		|| file.skipReason != SkipReason::None) {
 		done(file.relativePath);
 		return true;
-	} else if (!isThumb) {
-		// Check global dedup first (cross-chat deduplication)
-		if (_globalDedup && dedupDocId != 0) {
-			if (_globalDedup->hasDocumentId(dedupDocId)) {
-				file.isDuplicate = true;
-				// Still process locally but mark as duplicate
-			}
-		}
-		if (_globalDedup && !file.isDuplicate && dedupSize > 0 && !dedupName.isEmpty()) {
-			if (_globalDedup->hasFingerprint(dedupName, dedupSize)) {
-				file.isDuplicate = true;
-			}
-		}
-
-		if (file.isDuplicate) {
+	} else if (!isThumb && !skipDownload) {
+		if (_globalDedup && _globalDedup->isKnown(dedupDocId, dedupSize, dedupName, type)) {
+			LOG(("Export: Skipping duplicate - docId=%1, size=%2, name=%3")
+				.arg(dedupDocId)
+				.arg(dedupSize)
+				.arg(dedupName));
+			file.isDuplicate = true;
 			file.skipReason = SkipReason::Duplicate;
+			file.relativePath = QString();
 			done(QString());
 			return true;
 		}
 
-		const auto dedup = dedupLookup(dedupDocId, dedupSize, dedupName);
-		if (dedup.found) {
-			if (!dedup.path.isEmpty() && dedup.path != "processed") {
-				file.relativePath = dedup.path;
-				done(file.relativePath);
-				return true;
-			} else if (dedup.path == "processed") {
-				file.skipReason = SkipReason::FileType;
-				done(QString());
-				return true;
-			} else if (dedup.path.isEmpty()) {
-				uint64 activeRandomId = 0;
-				if (dedupDocId != 0) {
-					const auto it = _dedupByIdInProgress.find(dedupDocId);
-					if (it != _dedupByIdInProgress.end()) {
-						activeRandomId = it->second;
-					}
-				}
-				if (!activeRandomId && dedupSize > 0 && !dedupName.isEmpty()) {
-					const auto it = _dedupBySizeNameInProgress.find({ dedupSize, dedupName });
-					if (it != _dedupBySizeNameInProgress.end()) {
-						activeRandomId = it->second;
-					}
-				}
-				if (activeRandomId) {
-					const auto pit = _fileProcesses.find(activeRandomId);
-					if (pit != _fileProcesses.end()) {
-						pit->second->pendingDone.push_back(
-							[filePtr = &file, doneMove = std::move(done)](QString path) mutable {
-								filePtr->relativePath = path;
-								doneMove(path);
-							});
-						return true;
-					}
-				}
-			}
+		LOG(("Export: Downloading new file - docId=%1, size=%2, name=%3")
+			.arg(dedupDocId)
+			.arg(dedupSize)
+			.arg(dedupName));
+
+		if (_globalDedup) {
+			_globalDedup->markInProgress(dedupDocId, dedupSize, dedupName, type);
 		}
 	}
 
 	auto wrapDone = [=, done = std::move(done)](const QString &path) mutable {
-		if (!isThumb) {
+		if (!isThumb && !skipDownload && _globalDedup) {
 			if (!path.isEmpty()) {
-				dedupUpdate(dedupDocId, dedupSize, dedupName, path);
+				_globalDedup->finalize(dedupDocId, dedupSize, dedupName, type);
+			} else {
+				_globalDedup->cancelInProgress(dedupDocId, dedupSize, dedupName, type);
 			}
 		}
 		done(path);
@@ -4356,28 +4364,7 @@ bool ApiWrap::processFileLoad(
 		return true;
 	}
 
-	// Register as in-progress BEFORE starting download so duplicates can find it
-	const auto dedupSizeName = SizeNameKey{ dedupSize, dedupName };
-	if (!isThumb) {
-		if (dedupDocId != 0) {
-			_dedupByIdInProgress[dedupDocId] = 1; // Placeholder
-		}
-		if (dedupSize > 0 && !dedupName.isEmpty()) {
-			_dedupBySizeNameInProgress[dedupSizeName] = 1; // Placeholder
-		}
-	}
-
-	loadFile(file, origin, LocationKey(), std::move(progress), std::move(wrapDone), dedupDocId, dedupSizeName);
-
-	// Update with real randomId after loadFile assigns it
-	if (file.randomId && !isThumb) {
-		if (dedupDocId != 0) {
-			_dedupByIdInProgress[dedupDocId] = file.randomId;
-		}
-		if (dedupSize > 0 && !dedupName.isEmpty()) {
-			_dedupBySizeNameInProgress[dedupSizeName] = file.randomId;
-		}
-	}
+	loadFile(file, origin, LocationKey(), std::move(progress), std::move(wrapDone), dedupDocId, dedupSize, dedupName);
 
 	return true;
 }
@@ -4413,7 +4400,7 @@ bool ApiWrap::writePreloadedFile(
 		
 		// Write to partial file (always from scratch for inline content)
 		{
-			Output::File outputFile(partialPath, _stats);
+			Output::File outputFile(partialPath, nullptr);
 			if (const auto result = outputFile.writeBlock(file.content)) {
 				file.relativePath = relativePath;
 				
@@ -4451,7 +4438,8 @@ void ApiWrap::loadFile(
 		std::function<bool(FileProgress)> progress,
 		base::unique_function<void(QString)> done,
 		uint64 dedupDocId,
-		const SizeNameKey &dedupSizeName) {
+		int64 dedupSize,
+		const QString &dedupName) {
 	Expects(file.location);
 
 	auto process = prepareFileProcess(file, origin, dedupKey);
@@ -4459,7 +4447,8 @@ void ApiWrap::loadFile(
 	process->done = std::move(done);
 	process->dedupKey = dedupKey;
 	process->dedupDocId = dedupDocId;
-	process->dedupSizeName = dedupSizeName;
+	process->dedupSize = dedupSize;
+	process->dedupName = dedupName;
 
 	const auto randomId = process->randomId;
 	file.randomId = randomId;
@@ -4512,7 +4501,7 @@ std::unique_ptr<ApiWrap::FileProcess> ApiWrap::prepareFileProcess(
 	auto result = std::make_unique<FileProcess>(
 		file,
 		finalPath,
-		_stats,
+		nullptr,
 		initialOffset);
 
 	result->relativePath = relativePath;
@@ -4624,17 +4613,6 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 		process->fileRef.skipReason = Data::File::SkipReason::Unavailable;
 	}
 
-	// Update global dedup manager after successful download
-	if (!actualRelativePath.isEmpty() && _globalDedup && !process->fileRef.isDuplicate) {
-		if (process->dedupDocId != 0) {
-			_globalDedup->addDocumentId(process->dedupDocId);
-		}
-		if (process->dedupSizeName.size > 0 && !process->dedupSizeName.name.isEmpty()) {
-			_globalDedup->addFingerprint(process->dedupSizeName.name, process->dedupSizeName.size);
-		}
-		_globalDedup->save();
-	}
-
 	// Fire any duplicate callbacks that were waiting for this download.
 	// The dedup map now has the real path, so duplicates get the same path.
 	for (auto &cb : process->pendingDone) {
@@ -4644,24 +4622,6 @@ void ApiWrap::finishFile(uint64 randomId, const QString &relativePath) {
 	process->done(relativePath);
 
 	_fileProcesses.erase(it);
-
-	// Clean up in-progress tracking entries for this process.
-	for (auto it2 = _dedupByIdInProgress.begin();
-			it2 != _dedupByIdInProgress.end(); ) {
-		if (it2->second == randomId) {
-			it2 = _dedupByIdInProgress.erase(it2);
-		} else {
-			++it2;
-		}
-	}
-	for (auto it2 = _dedupBySizeNameInProgress.begin();
-			it2 != _dedupBySizeNameInProgress.end(); ) {
-		if (it2->second == randomId) {
-			it2 = _dedupBySizeNameInProgress.erase(it2);
-		} else {
-			++it2;
-		}
-	}
 
 	scheduleMoreFiles();
 }
@@ -4971,19 +4931,32 @@ void ApiWrap::filePartRefreshReference(uint64 randomId, int64 offset) {
 			filePartExtractReference(randomId, offset, result);
 		}).send();
 	} else {
-		splitRequest(
-			origin.split,
-			MTPmessages_GetMessages(
+		if (_splits.size() <= 1 || origin.split < 0 || origin.split >= _splits.size()) {
+			mainRequest(MTPmessages_GetMessages(
 				MTP_vector<MTPInputMessage>(
 					1,
 					MTP_inputMessageID(MTP_int(origin.messageId)))
-			)
-		).fail([=](const MTP::Error &error) {
-			filePartUnavailable(randomId);
-			return true;
-		}).done([=](const MTPmessages_Messages &result) {
-			filePartExtractReference(randomId, offset, result);
-		}).send();
+			)).fail([=](const MTP::Error &error) {
+				filePartUnavailable(randomId);
+				return true;
+			}).done([=](const MTPmessages_Messages &result) {
+				filePartExtractReference(randomId, offset, result);
+			}).send();
+		} else {
+			splitRequest(
+				origin.split,
+				MTPmessages_GetMessages(
+					MTP_vector<MTPInputMessage>(
+						1,
+						MTP_inputMessageID(MTP_int(origin.messageId)))
+				)
+			).fail([=](const MTP::Error &error) {
+				filePartUnavailable(randomId);
+				return true;
+			}).done([=](const MTPmessages_Messages &result) {
+				filePartExtractReference(randomId, offset, result);
+			}).send();
+		}
 	}
 }
 
@@ -5099,17 +5072,11 @@ void ApiWrap::flushBatchStats() {
 		const auto typeInt = static_cast<int>(type);
 		auto &target = _exportProgress->typeCounters[typeInt];
 
-		target.localTotalCount += batch.localTotalCount;
+		target.totalCount += batch.totalCount;
 		target.totalSize += batch.totalSize;
 		target.uniqueCount += batch.uniqueCount;
 		target.uniqueSize += batch.uniqueSize;
 		target.messagesWithLinks += batch.messagesWithLinks;
-
-		if (_isScanning) {
-			_scanStats->increment(type, batch.totalSize, batch.uniqueSize, batch.localTotalCount, batch.uniqueCount, batch.messagesWithLinks);
-		} else if (_stats) {
-			_stats->increment(type, batch.totalSize, batch.uniqueSize, batch.localTotalCount, batch.uniqueCount, batch.messagesWithLinks);
-		}
 	}
 	_chatProcess->batchStats.clear();
 
@@ -5133,22 +5100,26 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 	if (!alreadyCounted) {
 		using Type = MediaSettings::Type;
 
-		_chatProcess->batchProcessed++;
+		// Only count messages that are actually selected for export
+		if (isSelected) {
+			_chatProcess->batchProcessed++;
+		}
 
 		if (ms.linkMsgIncr > 0) {
 			auto &linkBatch = _chatProcess->batchStats[Type::Link];
 			if (isSelected) {
-				linkBatch.localTotalCount += ms.links;
+				linkBatch.totalCount += ms.links;
 				linkBatch.uniqueCount += ms.linksUnique;
 				linkBatch.messagesWithLinks += ms.linkMsgIncr;
 			}
 		}
 
 		const bool scanningLinksOnly = _isScanning && (_settings->media.types == Type::Link);
-		if (ms.type != Type::Link && !scanningLinksOnly) {
+		const bool exportingLinksOnly = !_isScanning && (_settings->media.types == Type::Link);
+		if (ms.type != Type::Link && !scanningLinksOnly && !exportingLinksOnly) {
 			auto &batch = _chatProcess->batchStats[ms.type];
 			if (isSelected) {
-				batch.localTotalCount++;
+				batch.totalCount++;
 				batch.totalSize += ms.size;
 				if (ms.unique) {
 					batch.uniqueCount++;
@@ -5158,17 +5129,17 @@ void ApiWrap::onMessagePartDone(int index, bool isSelected) {
 		}
 
 		if (done == std::max(need, 1)) {
-			if (_isScanning) {
-				_scanStats->incrementTotalMessages();
-			} else if (_stats) {
-				_stats->incrementTotalMessages();
+			if (_globalDedup) {
+				_globalDedup->incrementTotalMessages();
 			}
 		}
 	}
 
 	const bool lastOfScan = _isScanning && _chatProcess->lastSlice;
 	const bool endOfRange = !_isScanning && (_chatProcess->lastSlice || (_exportProgress->rangeEndMsgId > 0 && _exportProgress->lastMessageId >= _exportProgress->rangeEndMsgId));
-	if (endOfRange || lastOfScan) {
+	const bool shouldFlush = (_chatProcess->batchProcessed >= 100) || endOfRange || lastOfScan;
+	
+	if (shouldFlush) {
 		flushBatchStats();
 		if (!_isScanning && (_chatProcess->messagesProcessed % 1000 == 0 || endOfRange)) {
 			saveProgress();
@@ -5218,63 +5189,14 @@ void ApiWrap::clearResults() {
 	if (_chatProcess) {
 		base::take(_chatProcess)->done();
 	}
-	_stats = nullptr;
-	_scanStats = nullptr;
-	_dedupById.clear();
-	_dedupBySizeName.clear();
-	_dedupByIdInProgress.clear();
-	_dedupBySizeNameInProgress.clear();
-	_visitedLinks.clear();
 	_reservedPaths.clear();
-}
-
-ApiWrap::DedupResult ApiWrap::dedupLookup(
-		uint64 docId,
-		int64 size,
-		const QString &name) const {
-	if (docId != 0) {
-		const auto it = _dedupById.find(docId);
-		if (it != _dedupById.end()) {
-			return { true, it->second };  // filter 1 skip
-		}
-	}
-	if (size > 0 && !name.isEmpty()) {
-		const auto it = _dedupBySizeName.find({ size, name });
-		if (it != _dedupBySizeName.end()) {
-			return { true, it->second };  // filter 2 skip
-		}
-	}
-	return { false, {} };  // passes both filters → download
-}
-
-void ApiWrap::dedupRegister(
-		uint64 docId,
-		int64 size,
-		const QString &name,
-		const QString &path) {
-	if (docId != 0) {
-		_dedupById.emplace(docId, path);
-	}
-	if (size > 0 && !name.isEmpty()) {
-		_dedupBySizeName.emplace(SizeNameKey{ size, name }, path);
+	if (_globalDedup) {
+		_globalDedup->save();
 	}
 }
 
-void ApiWrap::dedupUpdate(
-		uint64 docId,
-		int64 size,
-		const QString &name,
-		const QString &path) {
-	if (docId != 0) {
-		_dedupById[docId] = path;
-	}
-	if (size > 0 && !name.isEmpty()) {
-		_dedupBySizeName[SizeNameKey{ size, name }] = path;
-	}
-}
-
-base::flat_set<QString> ApiWrap::visitedLinks() const {
-	return _visitedLinks;
+base::flat_set<QString> ApiWrap::uniqueLinks() const {
+	return _globalDedup ? _globalDedup->getUniqueLinks() : base::flat_set<QString>();
 }
 
 void ApiWrap::clearState(bool keepCache) {
@@ -5286,24 +5208,6 @@ void ApiWrap::clearState(bool keepCache) {
 			_chatProcess->batchStats.clear();
 			_chatProcess->batchProcessed = 0;
 			
-			_dedupById.clear();
-			for (const auto &[id, path] : _exportProgress->dedupById) {
-				_dedupById[id] = path;
-			}
-			_dedupBySizeName.clear();
-			for (const auto &[mapKey, path] : _exportProgress->dedupBySizeName) {
-				const int underscorePos = mapKey.indexOf('_');
-				if (underscorePos > 0) {
-					const int64 size = mapKey.left(underscorePos).toLongLong();
-					const QString name = mapKey.mid(underscorePos + 1);
-					_dedupBySizeName[{size, name}] = path;
-				}
-			}
-			
-			_visitedLinks.clear();
-			for (const auto &link : _exportProgress->visitedLinks) {
-				_visitedLinks.insert(link);
-			}
 		} else {
 			flushBatchStats();
 		}
@@ -5319,9 +5223,6 @@ void ApiWrap::clearState(bool keepCache) {
 	_isScanning = false;
 	if (!keepCache) {
 		clearResults();
-	} else {
-		_stats = nullptr;
-		_scanStats = nullptr;
 	}
 	_startProcess = nullptr;
 	_contactsProcess = nullptr;
@@ -5337,6 +5238,11 @@ void ApiWrap::clearState(bool keepCache) {
 	_scheduleMoreFilesPending = false;
 	_unresolvedCustomEmoji.clear();
 	_resolvedCustomEmoji.clear();
+	
+	if (_globalDedup) {
+		_globalDedup->clearInProgress();
+		_globalDedup->save();
+	}
 }
 
 // =================== Resume Support ===================
@@ -5344,12 +5250,6 @@ void ApiWrap::clearState(bool keepCache) {
 void ApiWrap::loadProgress(const QString &folder) {
 	const auto path = ExportProgress::progressFilePath(folder);
 	_exportProgress = ExportProgress::load(path);
-	if (_exportProgress) {
-		_visitedLinks.clear();
-		for (const auto &link : _exportProgress->visitedLinks) {
-			_visitedLinks.insert(link);
-		}
-	}
 }
 
 void ApiWrap::saveProgress() {
@@ -5364,49 +5264,33 @@ void ApiWrap::saveProgress() {
 		return;
 	}
 	_exportProgress->settings = *_settings;
-	if (_stats) {
-		const auto byType = _stats->byType();
+	if (_globalDedup) {
+		const auto byType = _globalDedup->statsByType();
 		_exportProgress->typeCounters.clear();
 		for (const auto &[type, item] : byType) {
 			TypeCounter counter;
 			counter.uniqueCount = item.uniqueCount;
 			counter.uniqueSize = item.uniqueSize;
-			counter.localTotalCount = item.localTotalCount;
+			counter.totalCount = item.totalCount;
 			counter.totalSize = item.totalSize;
 			counter.messagesWithLinks = item.messagesWithLinks;
 			_exportProgress->typeCounters[static_cast<int>(type)] = counter;
 		}
 	}
 
-	if (_scanStats) {
-		_exportProgress->scanTotalMessages = _scanStats->totalMessagesCount();
-		const auto byType = _scanStats->byType();
+	if (_globalDedup && _isScanning) {
+		_exportProgress->scanTotalMessages = _globalDedup->totalMessagesCount();
+		const auto byType = _globalDedup->statsByType();
 		_exportProgress->scanStats.clear();
 		for (const auto &[type, item] : byType) {
 			TypeCounter counter;
 			counter.uniqueCount = item.uniqueCount;
 			counter.uniqueSize = item.uniqueSize;
-			counter.localTotalCount = item.localTotalCount;
+			counter.totalCount = item.totalCount;
 			counter.totalSize = item.totalSize;
 			counter.messagesWithLinks = item.messagesWithLinks;
 			_exportProgress->scanStats[static_cast<int>(type)] = counter;
 		}
-	}
-
-	_exportProgress->dedupById.clear();
-	for (const auto &[id, path] : _dedupById) {
-		_exportProgress->dedupById[id] = path;
-	}
-	_exportProgress->dedupBySizeName.clear();
-	for (const auto &[key, path] : _dedupBySizeName) {
-		const QString mapKey = QString::number(key.size) + "_" + key.name;
-		_exportProgress->dedupBySizeName[mapKey] = path;
-	}
-
-	_exportProgress->visitedLinks.clear();
-	_exportProgress->visitedLinks.reserve(_visitedLinks.size());
-	for (const auto &link : _visitedLinks) {
-		_exportProgress->visitedLinks.push_back(link);
 	}
 
 	const auto path = ExportProgress::progressFilePath(_settings->path);

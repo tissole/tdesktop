@@ -17,7 +17,7 @@ namespace Output {
 struct StatItem {
 	int uniqueCount = 0;
 	int64 uniqueSize = 0;
-	int localTotalCount = 0;
+	int totalCount = 0;
 	int64 totalSize = 0;
 	int messagesWithLinks = 0; // only meaningful for Link type
 };
@@ -32,8 +32,8 @@ public:
 	void incrementUserMediaFiles();
 
 	void increment(MediaSettings::Type type, int64 size, bool unique);
-	void increment(MediaSettings::Type type, int64 totalSize, int64 uniqueSize, int localTotalCount, int uniqueCount, int messagesWithLinks = 0);
-	void increment(MediaSettings::Type type, int64 size, int localTotalCount, int uniqueCount, int messagesWithLinks = 0);
+	void increment(MediaSettings::Type type, int64 totalSize, int64 uniqueSize, int totalCount, int uniqueCount, int messagesWithLinks = 0);
+	void increment(MediaSettings::Type type, int64 size, int totalCount, int uniqueCount, int messagesWithLinks = 0);
 	void incrementSizeAndUnique(MediaSettings::Type type, int64 size, bool unique);
 	void incrementSize(MediaSettings::Type type, int64 size);
 	void setLocalTotalCount(MediaSettings::Type type, int count);
@@ -51,7 +51,7 @@ public:
 	int filesCount() const;
 	int64 bytesCount() const;
 	int userMediaFilesCount() const;
-	int localTotalCount() const;
+	int totalCount() const;
 
 	std::map<MediaSettings::Type, StatItem> byType() const;
 
@@ -65,7 +65,7 @@ private:
 	struct TypeStat {
 		std::atomic<int> uniqueCount = 0;
 		std::atomic<int64> uniqueSize = 0;
-		std::atomic<int> localTotalCount = 0;
+		std::atomic<int> totalCount = 0;
 		std::atomic<int64> totalSize = 0;
 		std::atomic<int> messagesWithLinks = 0;
 	};

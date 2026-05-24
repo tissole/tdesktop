@@ -100,29 +100,29 @@ using Ui::SendFilesWay;
             QString fileName = fileInfo.fileName();
             
             // Apply renaming logic for video files to ensure compatibility with server processing and consistent captions
-            if (fileName.toLower().endsWith(".webm")) {
-                fileName = fileName.replace(fileName.length()-5, 5, "[webm].mp4");
-            } else if (fileName.toLower().endsWith(".ts")) {
-                fileName = fileName.replace(fileName.length()-3, 3, "[ts].mp4");
-            } else if (fileName.toLower().endsWith(".mts")) {
-                fileName = fileName.replace(fileName.length()-4, 4, "[mts].mp4");
-            } else if (fileName.toLower().endsWith(".m2ts")) {
-                fileName = fileName.replace(fileName.length()-5, 5, "[m2ts].mp4");
-            } else if (fileName.toLower().endsWith(".avi")) {
-                fileName = fileName.replace(fileName.length()-4, 4, "[avi].mp4");
-            } else if (fileName.toLower().endsWith(".asf")) {
-                fileName = fileName.replace(fileName.length()-4, 4, "[asf].mp4");
-            } else if (fileName.toLower().endsWith(".asx")) {
-                fileName = fileName.replace(fileName.length()-4, 4, "[asx].mp4");
-            } else if (fileName.toLower().endsWith(".wmv")) {
-                fileName = fileName.replace(fileName.length()-4, 4, "[wmv].mp4");
-            } else if (fileName.toLower().endsWith(".flv")) {
-                fileName = fileName.replace(fileName.length()-4, 4, "[flv].mp4");
-            } else if (fileName.toLower().endsWith(".m2v")) {
-                fileName = fileName.replace(fileName.length()-4, 4, "[m2v].mp4");
-            } else if (fileName.toLower().endsWith(".vob")) {
-                fileName = fileName.replace(fileName.length()-4, 4, "[vob].mp4");
-            }
+            //if (fileName.toLower().endsWith(".webm")) {
+            //    fileName = fileName.replace(fileName.length()-5, 5, "[webm].mp4");
+            //} else if (fileName.toLower().endsWith(".ts")) {
+            //    fileName = fileName.replace(fileName.length()-3, 3, "[ts].mp4");
+            //} else if (fileName.toLower().endsWith(".mts")) {
+            //    fileName = fileName.replace(fileName.length()-4, 4, "[mts].mp4");
+            //} else if (fileName.toLower().endsWith(".m2ts")) {
+            //    fileName = fileName.replace(fileName.length()-5, 5, "[m2ts].mp4");
+            //} else if (fileName.toLower().endsWith(".avi")) {
+            //    fileName = fileName.replace(fileName.length()-4, 4, "[avi].mp4");
+            //} else if (fileName.toLower().endsWith(".asf")) {
+            //    fileName = fileName.replace(fileName.length()-4, 4, "[asf].mp4");
+            //} else if (fileName.toLower().endsWith(".asx")) {
+            //    fileName = fileName.replace(fileName.length()-4, 4, "[asx].mp4");
+            //} else if (fileName.toLower().endsWith(".wmv")) {
+            //    fileName = fileName.replace(fileName.length()-4, 4, "[wmv].mp4");
+            //} else if (fileName.toLower().endsWith(".flv")) {
+            //    fileName = fileName.replace(fileName.length()-4, 4, "[flv].mp4");
+            //} else if (fileName.toLower().endsWith(".m2v")) {
+            //    fileName = fileName.replace(fileName.length()-4, 4, "[m2v].mp4");
+            //} else if (fileName.toLower().endsWith(".vob")) {
+            //    fileName = fileName.replace(fileName.length()-4, 4, "[vob].mp4");
+            //}
             
             fileNames.append(fileName);
         }

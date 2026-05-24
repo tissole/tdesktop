@@ -396,6 +396,10 @@ QByteArray SerializeMessage(
 			case SkipReason::FileType:
 				return pre + "(File not included. "
 					"Change data exporting settings to download.)";
+			case SkipReason::Duplicate:
+				return pre + "(Duplicate file, already exported)";
+			case SkipReason::DateLimits:
+				return pre + "(File outside date range)";
 			case SkipReason::None: return FormatFilePath(file);
 			}
 			Unexpected("Skip reason while writing file path.");
@@ -1166,9 +1170,8 @@ QByteArray SerializeMessage(
 Result JsonWriter::writeBlock(const QByteArray &block) {
 	Expects(_output != nullptr);
 
-	if (_stats && !block.isEmpty()) {
-		_stats->incrementSize(MediaSettings::Type::Text, block.size());
-	}
+	// Don't count JSON export file size as text statistics
+	// Text statistics should only count actual message text content
 	return _output->writeBlock(block);
 }
 
@@ -1282,6 +1285,10 @@ Result JsonWriter::writeUserpicsSlice(const Data::UserpicsSlice &data) {
 			case SkipReason::FileType:
 				return "(Photo not included. "
 					"Change data exporting settings to download.)";
+			case SkipReason::Duplicate:
+				return "(Duplicate photo, already exported)";
+			case SkipReason::DateLimits:
+				return "(Photo outside date range)";
 			case SkipReason::None: return FormatFilePath(file);
 			}
 			Unexpected("Skip reason while writing photo path.");
@@ -1341,6 +1348,10 @@ Result JsonWriter::writeStoriesSlice(const Data::StoriesSlice &data) {
 			case SkipReason::FileType:
 				return "(Photo not included. "
 					"Change data exporting settings to download.)";
+			case SkipReason::Duplicate:
+				return "(Duplicate photo, already exported)";
+			case SkipReason::DateLimits:
+				return "(Photo outside date range)";
 			case SkipReason::None: return FormatFilePath(file);
 			}
 			Unexpected("Skip reason while writing story path.");
@@ -1812,7 +1823,7 @@ Result JsonWriter::finish() {
 		for (const auto &pair : breakdown) {
 			const auto mediaType = pair.first;
 			const auto &item = pair.second;
-			if (item.localTotalCount <= 0) continue;
+			if (item.totalCount <= 0) continue;
 			QByteArray key;
 			switch (mediaType) {
 			case MediaType::Photo: key = "photos"; break;
@@ -1829,15 +1840,15 @@ Result JsonWriter::finish() {
 			if (!key.isEmpty()) {
 				auto itemValues = std::vector<std::pair<QByteArray, QByteArray>>();
 				if (mediaType == MediaType::Text) {
-					itemValues.push_back({ "total_items", QByteArray::number(item.localTotalCount) });
+					itemValues.push_back({ "total_items", QByteArray::number(item.totalCount) });
 				} else if (mediaType == MediaType::Link) {
 					itemValues.push_back({ "unique_items", QByteArray::number(item.uniqueCount) });
-					itemValues.push_back({ "total_items", QByteArray::number(item.localTotalCount) });
+					itemValues.push_back({ "total_items", QByteArray::number(item.totalCount) });
 					itemValues.push_back({ "messages_with_links", QByteArray::number(item.messagesWithLinks) });
 				} else {
 					itemValues.push_back({ "unique_items", QByteArray::number(item.uniqueCount) });
 					itemValues.push_back({ "unique_size", "\"" + formatSize(item.uniqueSize) + "\"" });
-					itemValues.push_back({ "total_items", QByteArray::number(item.localTotalCount) });
+					itemValues.push_back({ "total_items", QByteArray::number(item.totalCount) });
 					itemValues.push_back({ "total_size", "\"" + formatSize(item.totalSize) + "\"" });
 				}
 				statsValues.push_back({ key, SerializeObject(_context, itemValues) });
@@ -1854,7 +1865,7 @@ Result JsonWriter::finish() {
 			if (mediaType != MediaType::Link && mediaType != MediaType::Text) {
 				totalUniqueCount += item.uniqueCount;
 				totalUniqueSize += item.uniqueSize;
-				totalTotalCount += item.localTotalCount;
+				totalTotalCount += item.totalCount;
 				totalTotalSize += item.totalSize;
 			}
 		}
@@ -1933,7 +1944,7 @@ void JsonWriter::updateStatsInFirstFile() {
 	for (const auto &pair : breakdown) {
 		const auto mediaType = pair.first;
 		const auto &item = pair.second;
-		if (item.localTotalCount <= 0) continue;
+		if (item.totalCount <= 0) continue;
 		QByteArray key;
 		switch (mediaType) {
 		case MediaType::Photo: key = "photos"; break;
@@ -1950,15 +1961,15 @@ void JsonWriter::updateStatsInFirstFile() {
 		if (!key.isEmpty()) {
 			auto itemValues = std::vector<std::pair<QByteArray, QByteArray>>();
 			if (mediaType == MediaType::Text) {
-				itemValues.push_back({ "total_items", QByteArray::number(item.localTotalCount) });
+				itemValues.push_back({ "total_items", QByteArray::number(item.totalCount) });
 			} else if (mediaType == MediaType::Link) {
 				itemValues.push_back({ "unique_items", QByteArray::number(item.uniqueCount) });
-				itemValues.push_back({ "total_items", QByteArray::number(item.localTotalCount) });
+				itemValues.push_back({ "total_items", QByteArray::number(item.totalCount) });
 				itemValues.push_back({ "messages_with_links", QByteArray::number(item.messagesWithLinks) });
 			} else {
 				itemValues.push_back({ "unique_items", QByteArray::number(item.uniqueCount) });
 				itemValues.push_back({ "unique_size", "\"" + formatSize(item.uniqueSize) + "\"" });
-				itemValues.push_back({ "total_items", QByteArray::number(item.localTotalCount) });
+				itemValues.push_back({ "total_items", QByteArray::number(item.totalCount) });
 				itemValues.push_back({ "total_size", "\"" + formatSize(item.totalSize) + "\"" });
 			}
 			statsValues.push_back({ key, SerializeObject(_context, itemValues) });
@@ -1975,7 +1986,7 @@ void JsonWriter::updateStatsInFirstFile() {
 		if (mediaType != MediaType::Link && mediaType != MediaType::Text) {
 			totalUniqueCount += item.uniqueCount;
 			totalUniqueSize += item.uniqueSize;
-			totalTotalCount += item.localTotalCount;
+			totalTotalCount += item.totalCount;
 			totalTotalSize += item.totalSize;
 		}
 	}

@@ -1051,9 +1051,8 @@ QByteArray HtmlWriter::Wrap::pushGenericListEntry(
 Result HtmlWriter::Wrap::writeBlock(const QByteArray &block) {
 	Expects(!_closed);
 
-	if (_stats && !block.isEmpty()) {
-		_stats->incrementSize(MediaSettings::Type::Text, block.size());
-	}
+	// Don't count HTML export file size as text statistics
+	// Text statistics should only count actual message text content
 
 	const auto result = [&] {
 		if (block.isEmpty()) {
@@ -4145,7 +4144,7 @@ QByteArray HtmlWriter::statsBlock() const {
 
 	for (const auto type : order) {
 		const auto it = breakdown.find(type);
-		if (it == breakdown.end() || it->second.localTotalCount <= 0) continue;
+		if (it == breakdown.end() || it->second.totalCount <= 0) continue;
 		const auto &item = it->second;
 
 		QByteArray label;
@@ -4163,45 +4162,41 @@ QByteArray HtmlWriter::statsBlock() const {
 		}
 		if (label.isEmpty()) continue;
 
-		categoriesCount++;
+	categoriesCount++;
 
-		result.append("<div class=\"details_entry details\">").append(label).append(": ");
-		if (type == Type::Text) {
-			result.append(QByteArray::number(item.localTotalCount));
-		} else if (type == Type::Link) {
-			const auto messagesStr = (item.messagesWithLinks > 0)
-				? QByteArray(" (") + QByteArray::number(item.messagesWithLinks) + " Messages)"
-				: QByteArray();
-			result.append(QByteArray::number(item.uniqueCount)).append(", ").append(QByteArray::number(item.localTotalCount)).append(messagesStr);
-		} else {
-			const auto uniqueStr = QByteArray::number(item.uniqueCount) + " (" + Data::FormatFileSize(item.uniqueSize) + ")";
-			if (item.localTotalCount == item.uniqueCount && item.totalSize == item.uniqueSize) {
-				result.append(uniqueStr);
-			} else {
-				const auto totalStr = QByteArray::number(item.localTotalCount) + " (" + Data::FormatFileSize(item.totalSize) + ")";
-				result.append(uniqueStr).append(", ").append(totalStr);
-			}
-			totalUniqueMediaSize += item.uniqueSize;
-			totalMediaSize += item.totalSize;
-		}
-		result.append("</div>\n");
-
-		if (type != Type::Link && type != Type::Text) {
-			totalUniqueMessagesCount += item.uniqueCount;
-			totalTotalMessagesCount += item.localTotalCount;
-		}
+	result.append("<div class=\"details_entry details\">").append(label).append(": ");
+	if (type == Type::Text) {
+		result.append(QByteArray::number(item.totalCount));
+	} else if (type == Type::Link) {
+		const auto sharedStr = (item.messagesWithLinks > 0)
+			? QByteArray(" (") + QByteArray::number(item.messagesWithLinks) + " Messages)"
+			: QByteArray();
+		result.append(QByteArray::number(item.uniqueCount)).append(", ")
+			.append(QByteArray::number(item.totalCount)).append(sharedStr);
+	} else {
+		result.append(QByteArray::number(item.uniqueCount))
+			.append(" (").append(Data::FormatFileSize(item.uniqueSize)).append("), ")
+			.append(QByteArray::number(item.totalCount))
+			.append(" (").append(Data::FormatFileSize(item.totalSize)).append(")");
+		totalUniqueMediaSize += item.uniqueSize;
+		totalMediaSize += item.totalSize;
 	}
+	result.append("</div>\n");
 
-	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
-		const auto uniqueStr = QByteArray::number(totalUniqueMessagesCount) + " (" + Data::FormatFileSize(totalUniqueMediaSize) + ")";
-		result.append("<br><div class=\"details_entry details bold\">Total Media: ");
-		if (totalTotalMessagesCount == totalUniqueMessagesCount && totalMediaSize == totalUniqueMediaSize) {
-			result.append(uniqueStr).append("</div>\n");
-		} else {
-			const auto totalStr = QByteArray::number(totalTotalMessagesCount) + " (" + Data::FormatFileSize(totalMediaSize) + ")";
-			result.append(uniqueStr).append(", ").append(totalStr).append("</div>\n");
-		}
+	if (type != Type::Link && type != Type::Text) {
+		totalUniqueMessagesCount += item.uniqueCount;
+		totalTotalMessagesCount += item.totalCount;
 	}
+}
+
+if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
+	result.append("<br><div class=\"details_entry details bold\">Total Media: ");
+	result.append(QByteArray::number(totalUniqueMessagesCount))
+		.append(" (").append(Data::FormatFileSize(totalUniqueMediaSize)).append("), ")
+		.append(QByteArray::number(totalTotalMessagesCount))
+		.append(" (").append(Data::FormatFileSize(totalMediaSize)).append(")");
+	result.append("</div>\n");
+}
 
 
 

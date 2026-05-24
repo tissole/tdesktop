@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "export/view/export_view_settings.h"
 #include "export/export_api_wrap.h"
+#include "export/export_global_dedup.h"
 #include "export/export_settings.h"
 #include "export/export_progress.h"
 #include "export/output/export_output_abstract.h"
@@ -78,7 +79,7 @@ void WriteScanStatsFile(
 		}
 
 		const auto it = stats.find(type);
-		if (it == stats.end() || it->second.localTotalCount <= 0) {
+		if (it == stats.end() || it->second.totalCount <= 0) {
 			continue;
 		}
 		const auto &item = it->second;
@@ -100,18 +101,18 @@ void WriteScanStatsFile(
 		categoriesCount++;
 
 		if (type == Type::Text) {
-			out << label << ": " << item.localTotalCount << "\n";
+			out << label << ": " << item.totalCount << "\n";
 		} else if (type == Type::Link) {
 			const auto messagesStr = (item.messagesWithLinks > 0)
 				? " (" + QString::number(item.messagesWithLinks) + " Messages)"
 				: QString();
-			out << label << ": " << item.uniqueCount << ", " << item.localTotalCount << messagesStr << "\n";
+			out << label << ": " << item.uniqueCount << ", " << item.totalCount << messagesStr << "\n";
 		} else {
 			const auto uniqueStr = QString::number(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
-			if (item.localTotalCount == item.uniqueCount && item.totalSize == item.uniqueSize) {
+			if (item.totalCount == item.uniqueCount && item.totalSize == item.uniqueSize) {
 				out << label << ": " << uniqueStr << "\n";
 			} else {
-				const auto totalStr = QString::number(item.localTotalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
+				const auto totalStr = QString::number(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
 				out << label << ": " << uniqueStr << ", " << totalStr << "\n";
 			}
 			totalUniqueMediaSize += item.uniqueSize;
@@ -120,7 +121,7 @@ void WriteScanStatsFile(
 
 		if (type != Type::Link && type != Type::Text) {
 			totalUniqueMessagesCount += item.uniqueCount;
-			totalTotalMessagesCount += item.localTotalCount;
+			totalTotalMessagesCount += item.totalCount;
 		}
 	}
 
@@ -270,6 +271,8 @@ private:
 		const Data::DialogsInfo &info,
 		int index,
 		const DownloadProgress &progress) const;
+
+	void syncStatsFromGlobalDedup();
 
 	int substepsInStep(Step step) const;
 
@@ -477,6 +480,30 @@ void ControllerObject::clearResults() {
 	_state = PasswordCheckState();
 }
 
+void ControllerObject::syncStatsFromGlobalDedup() {
+	const auto dedup = _api.globalDedup();
+	if (!dedup) {
+		return;
+	}
+
+	const auto byType = dedup->statsByType();
+	const auto totalMessages = dedup->totalMessagesCount();
+
+	if (_isScanning) {
+		_scanStats.clear();
+		for (const auto &[type, item] : byType) {
+			_scanStats.increment(type, item.totalSize, item.uniqueSize, item.totalCount, item.uniqueCount, item.messagesWithLinks);
+		}
+		_scanStats.setTotalMessages(totalMessages);
+	} else {
+		_stats.clear();
+		for (const auto &[type, item] : byType) {
+			_stats.increment(type, item.totalSize, item.uniqueSize, item.totalCount, item.uniqueCount, item.messagesWithLinks);
+		}
+		_stats.setTotalMessages(totalMessages);
+	}
+}
+
 void ControllerObject::runScan(
 		const Settings &settings,
 		const Environment &environment) {
@@ -537,7 +564,7 @@ void ControllerObject::runUpdateScan(
 	_settings.path = folderPath;
 	_settings.useIdRange = true;
 	_settings.singlePeerFromId = lastId;
-	_settings.singlePeerTillId = 0; // To current latest
+	_settings.singlePeerTillId = std::nullopt; // To current latest
 	
 	_environment = environment;
 	_writer = Output::CreateNullWriter();
@@ -570,6 +597,8 @@ void ControllerObject::startExport(
 	_settings.singleTopicRootId = _topicRootId;
 	_settings.singleTopicPeerId = _topicPeerId;
 
+	syncStatsFromGlobalDedup();
+	
 	_stats.clear();
 	using MediaType = MediaSettings::Type;
 	const bool fullHistoryMode = (_settings.media.types & MediaType::FullHistory);
@@ -583,11 +612,11 @@ void ControllerObject::startExport(
 			? isDownloadable
 			: (bool)(_settings.media.types & type);
 		if (selected && isDownloadable) {
-			totalMediaFilesCount += item.localTotalCount;
+			totalMediaFilesCount += item.totalCount;
 		}
 	}
 
-	if (totalMediaFilesCount > 0 || _scanStats.localTotalCount() > 0) {
+	if (totalMediaFilesCount > 0 || _scanStats.totalCount() > 0) {
 		_stats.setExpectedFilesCount(totalMediaFilesCount);
 		_scanStatsFound = true;
 	} else {
@@ -628,6 +657,8 @@ void ControllerObject::resumeExport(
 	_settings.singleTopicRootId = _topicRootId;
 	_settings.singleTopicPeerId = _topicPeerId;
 
+	syncStatsFromGlobalDedup();
+	
 	_stats.clear();
 	using MediaType = MediaSettings::Type;
 	const bool fullHistoryMode = (_settings.media.types & MediaType::FullHistory);
@@ -641,11 +672,11 @@ void ControllerObject::resumeExport(
 			? isDownloadable
 			: (bool)(_settings.media.types & type);
 		if (selected && isDownloadable) {
-			totalMediaFilesCount += item.localTotalCount;
+			totalMediaFilesCount += item.totalCount;
 		}
 	}
 
-	if (totalMediaFilesCount > 0 || _scanStats.localTotalCount() > 0) {
+	if (totalMediaFilesCount > 0 || _scanStats.totalCount() > 0) {
 		_stats.setExpectedFilesCount(totalMediaFilesCount);
 		_scanStatsFound = true;
 	} else {
@@ -909,30 +940,31 @@ void ControllerObject::cancelExportFast(bool keepCache) {
 void ControllerObject::exportNext() {
 	if (++_stepIndex >= _steps.size()) {
 		if (_isScanning) {
+			syncStatsFromGlobalDedup();
 			auto stats = _scanStats.byType();
 			const auto selected = _settings.media.types;
 			const bool fullHistory = (selected & MediaSettings::Type::FullHistory);
 			for (auto it = stats.begin(); it != stats.end();) {
 				const bool isSelected = fullHistory || (selected & it->first);
-				const bool hasAnyCount = (it->second.localTotalCount > 0) || (it->second.uniqueCount > 0);
+				const bool hasAnyCount = (it->second.totalCount > 0) || (it->second.uniqueCount > 0);
 				if (!isSelected || !hasAnyCount) {
 					it = stats.erase(it);
 				} else {
 					++it;
 				}
-			}
-			WriteScanStatsFile(_settings, stats);
-			WriteUniqueLinksFile(_settings, _api.visitedLinks());
-			_api.saveScanProgress();
-			_isScanning = false;
-			_stepIndex = -1;
-			setState(ScanDoneState{ std::move(stats) });
-			return;
 		}
-		if (ioCatchError(_writer->finish())) {
-			return;
-		}
-		WriteUniqueLinksFile(_settings, _api.visitedLinks());
+		WriteScanStatsFile(_settings, stats);
+		WriteUniqueLinksFile(_settings, _api.uniqueLinks());
+		_api.saveScanProgress();
+		_isScanning = false;
+		_stepIndex = -1;
+		setState(ScanDoneState{ std::move(stats) });
+		return;
+	}
+	if (ioCatchError(_writer->finish())) {
+		return;
+	}
+	WriteUniqueLinksFile(_settings, _api.uniqueLinks());
 		const auto exportBreakdown = _stats.byType();
 		const auto scanBreakdown = _scanStats.byType();
 		const auto scanStatsFound = _scanStatsFound;
@@ -962,9 +994,9 @@ void ControllerObject::exportNext() {
 
 void ControllerObject::initialize() {
 	setState(stateInitializing());
-	_api.startExport(_settings, &_stats, [=](ApiWrap::StartInfo info) {
+	_api.startExport(_settings, [=](ApiWrap::StartInfo info) {
 		initialized(info);
-	}, _isScanning, &_scanStats);
+	}, _isScanning);
 }
 
 void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
@@ -1171,10 +1203,10 @@ void ControllerObject::exportNextDialog() {
 	}
 
 	const auto fromId = _settings.useIdRange
-		? _settings.singlePeerFromId
+		? _settings.singlePeerFromId.value_or(0)
 		: 0;
 	auto tillId = _settings.useIdRange
-		? _settings.singlePeerTillId
+		? _settings.singlePeerTillId.value_or(0)
 		: 0;
 
 	if (tillId > 0 && info->topMessageId > 0 && tillId > info->topMessageId) {
@@ -1187,6 +1219,8 @@ void ControllerObject::exportNextDialog() {
 }
 
 void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 fromId, uint64 tillId) {
+	syncStatsFromGlobalDedup();
+	
 	// Skip recalculation if already fixed by initialized() from saved progress.
 	// Otherwise we incorrectly use the full-chat count instead of the saved range count.
 	if (_messagesInRangeCountFixed) {
@@ -1200,7 +1234,7 @@ void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 
 		} else {
 			const bool hasRange = (fromId > 0 || tillId > 0);
 			const bool fullHistoryMode = (_settings.media.types & MediaSettings::Type::FullHistory);
-			const int serverRangeTotal = _stats.localTotalCount();
+			const int serverRangeTotal = _stats.totalCount();
 			if (hasRange && serverRangeTotal > 0 && !fullHistoryMode) {
 				_messagesCount = serverRangeTotal;
 			} else if (hasRange && fullHistoryMode) {
@@ -1348,6 +1382,8 @@ void ControllerObject::setFinishedState(
 		std::map<MediaSettings::Type, Output::StatItem> exportBreakdown,
 		std::map<MediaSettings::Type, Output::StatItem> scanBreakdownFull,
 		bool scanStatsFound) {
+	syncStatsFromGlobalDedup();
+	
 	auto totalUniqueCount = 0;
 	auto totalUniqueSize = int64(0);
 	auto totalTotalCount = 0;
@@ -1366,14 +1402,14 @@ void ControllerObject::setFinishedState(
 	// Use export stats if populated, else fall back to scan stats.
 	const bool exportStatsPopulated = std::any_of(
 		exportBreakdown.begin(), exportBreakdown.end(),
-		[](const auto &p) { return p.second.localTotalCount > 0; });
+		[](const auto &p) { return p.second.totalCount > 0; });
 	// Only use scan stats as fallback if they were gathered with the same settings
 	// (same media types). If scan was full-history but export is selective, scan stats
 	// have all types but we only want what the export actually processed.
 	// Check: if export has non-empty stats but scan has MORE types, prefer export stats.
 	const bool scanStatsPopulated = scanStatsFound && std::any_of(
 		scanBreakdownFull.begin(), scanBreakdownFull.end(),
-		[](const auto &p) { return p.second.localTotalCount > 0; });
+		[](const auto &p) { return p.second.totalCount > 0; });
 	auto breakdown = exportStatsPopulated
 		? exportBreakdown
 		: (scanStatsPopulated ? scanBreakdownFull : exportBreakdown);
@@ -1382,10 +1418,10 @@ void ControllerObject::setFinishedState(
 	if (exportStatsPopulated && scanStatsPopulated) {
 		for (const auto &[type, scanItem] : scanBreakdownFull) {
 			auto it = breakdown.find(type);
-			if (it == breakdown.end() || it->second.localTotalCount == 0) {
+			if (it == breakdown.end() || it->second.totalCount == 0) {
 				breakdown[type] = scanItem;
 			} else if (it->second.uniqueCount == 0 && scanItem.uniqueCount > 0) {
-				// Export stats have localTotalCount (from server seed) but no uniqueCount/uniqueSize.
+				// Export stats have totalCount (from server seed) but no uniqueCount/uniqueSize.
 				// Use scan stats for the unique side so the finished view shows correct data.
 				it->second.uniqueCount = scanItem.uniqueCount;
 				it->second.uniqueSize = scanItem.uniqueSize;
@@ -1414,7 +1450,7 @@ void ControllerObject::setFinishedState(
 		if (type != Type::Link && type != Type::Text) {
 			totalUniqueCount += item.uniqueCount;
 			totalUniqueSize += item.uniqueSize;
-			totalTotalCount += item.localTotalCount;
+			totalTotalCount += item.totalCount;
 			totalTotalSize += item.totalSize;
 		}
 	}
@@ -1426,7 +1462,7 @@ void ControllerObject::setFinishedState(
 		.totalTotalCount = totalTotalCount,
 		.totalTotalSize = totalTotalSize,
 		.fullHistory = !!(_settings.media.types & Type::FullHistory),
-		.fullRange = (_settings.singlePeerFrom == 0 && _settings.singlePeerTill == 0) && !_settings.useIdRange,
+		.fullRange = _settings.isFullRange(),
 		.breakdown = breakdown,
 	});
 }
@@ -1435,6 +1471,8 @@ template <typename Callback>
 ProcessingState ControllerObject::prepareState(
 		Step step,
 		Callback &&callback) const {
+	const_cast<ControllerObject*>(this)->syncStatsFromGlobalDedup();
+	
 	auto result = ProcessingState();
 	result.step = step;
 	result.isScanning = _isScanning;
@@ -1496,8 +1534,17 @@ void ControllerObject::fillMessagesState(
 	result.entityIndex = index + 1;
 	result.entityCount = info.chats.size() + info.left.size();
 	
+	if (result.entityIndex > result.entityCount) {
+		LOG(("Export: WARNING - entityIndex=%1 exceeds entityCount=%2, chats.size=%3, left.size=%4, _dialogIndex=%5")
+			.arg(result.entityIndex)
+			.arg(result.entityCount)
+			.arg(info.chats.size())
+			.arg(info.left.size())
+			.arg(index));
+	}
+	
 	result.itemIndex = progress.itemIndex;
-	result.itemCount = progress.itemIndex;
+	result.itemCount = 0;  // Don't show message counter for bulk exports
 	result.activeDownloads = _activeDownloads;
 
 	result.selectedStats = _stats.byType();
@@ -1544,6 +1591,7 @@ void ControllerObject::exportTopic() {
 			if (ioCatchError(_writer->finish())) {
 				return;
 			}
+			syncStatsFromGlobalDedup();
 			const auto exportBreakdown = _stats.byType();
 			const auto scanBreakdown = _scanStats.byType();
 			const auto scanStatsFound = _scanStatsFound;

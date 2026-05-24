@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "export/export_global_dedup.h"
 
+#include "export/output/export_output_stats.h"
 #include <QtCore/QFile>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonArray>
@@ -15,7 +16,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Export {
 
 namespace {
-	constexpr auto kCurrentVersion = 1;
 	constexpr auto kBackupSuffix = QLatin1String(".backup");
 
 	QString makeDocumentIdKey(uint64 docId) {
@@ -27,12 +27,35 @@ namespace {
 	}
 }
 
-GlobalDedupManager::GlobalDedupManager(const QString &exportPath)
-: _path(globalDedupFilePath(exportPath)) {
-}
+GlobalDedupManager::GlobalDedupManager(Mode mode, const QString &exportPath)
+: _mode(mode)
+, _path(mode == Mode::Persistent ? globalDedupFilePath(exportPath) : QString()) {
+	if (_mode == Mode::Persistent && !_path.isEmpty()) {
+		QFile file(_path);
+		if (!file.open(QIODevice::ReadOnly)) {
+			return;
+		}
 
-QString GlobalDedupManager::filePath() const {
-	return _path;
+		const auto data = file.readAll();
+		const auto doc = QJsonDocument::fromJson(data);
+
+		if (doc.isNull() || !doc.isObject()) {
+			const auto backupPath = _path + kBackupSuffix;
+			QFile backup(backupPath);
+			if (backup.open(QIODevice::ReadOnly)) {
+				const auto backupData = backup.readAll();
+				const auto backupDoc = QJsonDocument::fromJson(backupData);
+				if (!backupDoc.isNull() && backupDoc.isObject()) {
+					buildFromJson(backupDoc.object());
+					return;
+				}
+			}
+			_lastError = u"Export failed: Deduplication database is corrupted. Please delete global_dedup.json and try again."_q;
+			return;
+		}
+
+		buildFromJson(doc.object());
+	}
 }
 
 QString GlobalDedupManager::globalDedupFilePath(const QString &exportPath) {
@@ -51,109 +74,270 @@ QString GlobalDedupManager::fingerprintKey(const QString &filename, int64 size) 
 	return makeFingerprintKey(filename, size);
 }
 
-bool GlobalDedupManager::load(const QString &exportPath) {
-	_path = globalDedupFilePath(exportPath);
-	return load();
+void GlobalDedupManager::buildFromJson(const QJsonObject &obj) {
+	const auto entriesArray = obj.value(QLatin1String("entries")).toArray();
+	for (const auto &val : entriesArray) {
+		const auto key = val.toString();
+		if (!key.isEmpty()) {
+			_persistent.insert(key);
+		}
+	}
 }
 
-bool GlobalDedupManager::load() const {
-	if (_path.isEmpty()) {
+bool GlobalDedupManager::isKnown(
+		uint64 docId,
+		int64 size,
+		const QString &name,
+		MediaSettings::Type type) {
+	if (_mode == Mode::Disabled) {
 		return false;
 	}
 
-	QFile file(_path);
-	if (!file.open(QIODevice::ReadOnly)) {
-		// No existing file is OK - just empty state
+	const auto docKey = makeDocumentIdKey(docId);
+	const auto fpKey = makeFingerprintKey(name, size);
+
+	const bool alreadyInProgress = _inProgress.contains(docKey) || _inProgress.contains(fpKey);
+	const bool alreadyKnown = (_mode == Mode::MemoryOnly && (_memoryDedup.contains(docKey) || _memoryDedup.contains(fpKey)))
+		|| (_mode == Mode::Persistent && (_persistent.contains(docKey) || _persistent.contains(fpKey)));
+
+	if (alreadyInProgress) {
 		return true;
 	}
 
-	const auto data = file.readAll();
-	const auto doc = QJsonDocument::fromJson(data);
+	return alreadyKnown;
+}
 
-	if (doc.isNull() || !doc.isObject()) {
-		// Try backup file
-		const auto backupPath = _path + kBackupSuffix;
-		QFile backup(backupPath);
-		if (backup.open(QIODevice::ReadOnly)) {
-			const auto backupData = backup.readAll();
-			const auto backupDoc = QJsonDocument::fromJson(backupData);
-			if (!backupDoc.isNull() && backupDoc.isObject()) {
-				const_cast<GlobalDedupManager*>(this)->buildFromJson(backupDoc.object());
-				return true;
-			}
-		}
+bool GlobalDedupManager::isKnownLink(const QString &url) {
+	if (_mode == Mode::Disabled) {
 		return false;
 	}
 
-	const_cast<GlobalDedupManager*>(this)->buildFromJson(doc.object());
-	return true;
+	auto &item = _stats.byType[MediaSettings::Type::Link];
+	item.totalCount.fetch_add(1, std::memory_order_relaxed);
+
+	const auto linkKey = QLatin1String("l:") + url;
+	
+	if (_mode == Mode::MemoryOnly) {
+		return _memoryDedup.contains(linkKey);
+	} else if (_mode == Mode::Persistent) {
+		return _persistent.contains(linkKey);
+	}
+
+	return false;
 }
 
-void GlobalDedupManager::buildFromJson(const QJsonObject &obj) {
-	const auto version = obj.value(QLatin1String("version")).toInt(0);
-	if (version != kCurrentVersion) {
-		// Future: handle version migration
-		// For now, treat as empty
-		if (version == 0) {
-			return;
+void GlobalDedupManager::markInProgress(
+		uint64 docId,
+		int64 size,
+		const QString &name,
+		MediaSettings::Type type) {
+	if (_mode == Mode::Disabled) {
+		return;
+	}
+
+	const auto docKey = makeDocumentIdKey(docId);
+	const auto fpKey = makeFingerprintKey(name, size);
+
+	if (_inProgress.insert(docKey).second) {
+		_inProgressSizes[docKey] = size;
+		_stats.inProgressCount.fetch_add(1, std::memory_order_relaxed);
+	}
+	if (_inProgress.insert(fpKey).second) {
+		_inProgressSizes[fpKey] = size;
+	}
+}
+
+void GlobalDedupManager::finalize(
+		uint64 docId,
+		int64 size,
+		const QString &name,
+		MediaSettings::Type type) {
+	if (_mode == Mode::Disabled) {
+		return;
+	}
+
+	const auto docKey = makeDocumentIdKey(docId);
+	const auto fpKey = makeFingerprintKey(name, size);
+
+	bool wasInProgress = false;
+	if (_inProgress.erase(docKey)) {
+		wasInProgress = true;
+		_stats.inProgressCount.fetch_sub(1, std::memory_order_relaxed);
+		_inProgressSizes.erase(docKey);
+	}
+	if (_inProgress.erase(fpKey)) {
+		_inProgressSizes.erase(fpKey);
+	}
+
+	if (_mode == Mode::MemoryOnly) {
+		_memoryDedup.insert(docKey);
+		_memoryDedup.insert(fpKey);
+	} else if (_mode == Mode::Persistent) {
+		_persistent.insert(docKey);
+		_persistent.insert(fpKey);
+	}
+
+	if (wasInProgress) {
+		auto &item = _stats.byType[type];
+		item.uniqueCount.fetch_add(1, std::memory_order_relaxed);
+		item.uniqueSize.fetch_add(size, std::memory_order_relaxed);
+		updateAggregateStats();
+	}
+}
+
+void GlobalDedupManager::cancelInProgress(
+		uint64 docId,
+		int64 size,
+		const QString &name,
+		MediaSettings::Type type) {
+	if (_mode == Mode::Disabled) {
+		return;
+	}
+
+	const auto docKey = makeDocumentIdKey(docId);
+	const auto fpKey = makeFingerprintKey(name, size);
+
+	if (_inProgress.erase(docKey)) {
+		_stats.inProgressCount--;
+		_inProgressSizes.erase(docKey);
+	}
+	if (_inProgress.erase(fpKey)) {
+		_inProgressSizes.erase(fpKey);
+	}
+}
+
+void GlobalDedupManager::finalizeLink(const QString &url) {
+	if (_mode == Mode::Disabled) {
+		return;
+	}
+
+	const auto linkKey = QLatin1String("l:") + url;
+	
+	bool isNew = false;
+	if (_mode == Mode::MemoryOnly) {
+		isNew = _memoryDedup.insert(linkKey).second;
+	} else if (_mode == Mode::Persistent) {
+		isNew = _persistent.insert(linkKey).second;
+	}
+
+	if (isNew) {
+		auto &item = _stats.byType[MediaSettings::Type::Link];
+		item.uniqueCount.fetch_add(1, std::memory_order_relaxed);
+		updateAggregateStats();
+	}
+}
+
+base::flat_set<QString> GlobalDedupManager::getUniqueLinks() const {
+	base::flat_set<QString> result;
+	
+	const auto &storage = (_mode == Mode::MemoryOnly) ? _memoryDedup : _persistent;
+	
+	for (const auto &key : storage) {
+		if (key.startsWith(QLatin1String("l:"))) {
+			result.insert(key.mid(2)); // Remove "l:" prefix
 		}
 	}
-
-	const auto entriesObj = obj.value(QLatin1String("entries")).toObject();
-	for (auto it = entriesObj.begin(); it != entriesObj.end(); ++it) {
-		const auto key = it.key();
-		if (key.startsWith(QLatin1String("i:"))) {
-			// Document ID entry
-			const auto docIdStr = key.mid(2);
-			bool ok = false;
-			const auto docId = docIdStr.toULongLong(&ok);
-			if (ok) {
-				_documentIds.insert(docId);
-			}
-		} else if (key.startsWith(QLatin1String("s:"))) {
-			// Fingerprint entry
-			_fingerprints.insert(key.mid(2));
-		}
-	}
+	
+	return result;
 }
 
-bool GlobalDedupManager::save() const {
-	if (_path.isEmpty()) {
-		return false;
-	}
-	return atomicSave(_path);
+void GlobalDedupManager::incrementTotalMessages() {
+	_stats.totalMessages.fetch_add(1, std::memory_order_relaxed);
 }
 
-bool GlobalDedupManager::atomicSave(const QString &path) const {
-	// Ensure directory exists
-	const auto dir = QFileInfo(path).path();
+void GlobalDedupManager::incrementFilesWritten() {
+	_stats.filesWritten.fetch_add(1, std::memory_order_relaxed);
+}
+
+void GlobalDedupManager::incrementBytesWritten(int64 bytes) {
+	_stats.bytesWritten.fetch_add(bytes, std::memory_order_relaxed);
+}
+
+void GlobalDedupManager::setMessagesWithLinks(MediaSettings::Type type, int count) {
+	_stats.byType[type].messagesWithLinks.store(count, std::memory_order_relaxed);
+}
+
+void GlobalDedupManager::incrementMessagesWithLinks(MediaSettings::Type type, int count) {
+	_stats.byType[type].messagesWithLinks.fetch_add(count, std::memory_order_relaxed);
+}
+
+void GlobalDedupManager::incrementTotal(MediaSettings::Type type, int64 size) {
+	auto &item = _stats.byType[type];
+	item.totalCount.fetch_add(1, std::memory_order_relaxed);
+	item.totalSize.fetch_add(size, std::memory_order_relaxed);
+	updateAggregateStats();
+}
+
+void GlobalDedupManager::resetStats() {
+	for (auto &[type, item] : _stats.byType) {
+		item.totalCount.store(0, std::memory_order_relaxed);
+		item.totalSize.store(0, std::memory_order_relaxed);
+		item.uniqueCount.store(0, std::memory_order_relaxed);
+		item.uniqueSize.store(0, std::memory_order_relaxed);
+		item.messagesWithLinks.store(0, std::memory_order_relaxed);
+	}
+	_stats.totalMediaCount.store(0, std::memory_order_relaxed);
+	_stats.totalMediaSize.store(0, std::memory_order_relaxed);
+	_stats.uniqueMediaCount.store(0, std::memory_order_relaxed);
+	_stats.uniqueMediaSize.store(0, std::memory_order_relaxed);
+	_stats.totalMessages.store(0, std::memory_order_relaxed);
+	_stats.inProgressCount.store(0, std::memory_order_relaxed);
+	_stats.filesWritten.store(0, std::memory_order_relaxed);
+	_stats.bytesWritten.store(0, std::memory_order_relaxed);
+}
+
+std::map<MediaSettings::Type, Output::StatItem> GlobalDedupManager::statsByType() const {
+	std::map<MediaSettings::Type, Output::StatItem> result;
+	
+	for (const auto &[type, item] : _stats.byType) {
+		Output::StatItem resultItem;
+		resultItem.uniqueCount = static_cast<int>(item.uniqueCount.load(std::memory_order_relaxed));
+		resultItem.uniqueSize = item.uniqueSize.load(std::memory_order_relaxed);
+		resultItem.totalCount = static_cast<int>(item.totalCount.load(std::memory_order_relaxed));
+		resultItem.totalSize = item.totalSize.load(std::memory_order_relaxed);
+		resultItem.messagesWithLinks = item.messagesWithLinks.load(std::memory_order_relaxed);
+		result[type] = resultItem;
+	}
+	
+	return result;
+}
+
+int GlobalDedupManager::totalMessagesCount() const {
+	return static_cast<int>(_stats.totalMessages.load(std::memory_order_relaxed));
+}
+
+void GlobalDedupManager::clearInProgress() {
+	_inProgress.clear();
+	_inProgressSizes.clear();
+	_stats.inProgressCount.store(0, std::memory_order_relaxed);
+}
+
+bool GlobalDedupManager::save() {
+	if (_mode != Mode::Persistent || _path.isEmpty()) {
+		return true;
+	}
+
+	const auto dir = QFileInfo(_path).path();
 	if (!QDir().mkpath(dir)) {
 		return false;
 	}
 
-	// Create backup before overwriting
-	const auto backupPath = path + kBackupSuffix;
-	QFile current(path);
+	const auto backupPath = _path + kBackupSuffix;
+	QFile current(_path);
 	if (current.exists()) {
 		QFile::remove(backupPath);
-		QFile::copy(path, backupPath);
+		QFile::copy(_path, backupPath);
 	}
 
-	// Build JSON
-	QJsonObject entries;
-	for (const auto docId : _documentIds) {
-		entries[makeDocumentIdKey(docId)] = 1;
-	}
-	for (const auto &fp : _fingerprints) {
-		entries[QLatin1String("s:") + fp] = 1;
+	QJsonArray entries;
+	for (const auto &entry : _persistent) {
+		entries.append(entry);
 	}
 
 	QJsonObject root;
-	root[QLatin1String("version")] = kCurrentVersion;
 	root[QLatin1String("entries")] = entries;
 
-	// Write to temp file
-	const auto tempPath = path + QLatin1String(".tmp");
+	const auto tempPath = _path + QLatin1String(".tmp");
 	QFile temp(tempPath);
 	if (!temp.open(QIODevice::WriteOnly)) {
 		return false;
@@ -163,11 +347,8 @@ bool GlobalDedupManager::atomicSave(const QString &path) const {
 	temp.write(data);
 	temp.flush();
 
-	// Atomic rename: Rename temp to final. 
-	// On Windows, rename() fails if destination exists, so we must remove it.
-	// But we have the backup created above, so data is safe.
-	QFile::remove(path);
-	if (!temp.rename(path)) {
+	QFile::remove(_path);
+	if (!temp.rename(_path)) {
 		QFile::remove(tempPath);
 		return false;
 	}
@@ -175,42 +356,33 @@ bool GlobalDedupManager::atomicSave(const QString &path) const {
 	return true;
 }
 
-bool GlobalDedupManager::hasDocumentId(uint64 docId) const {
-	return _documentIds.find(docId) != _documentIds.end();
+GlobalDedupManager::Mode GlobalDedupManager::mode() const {
+	return _mode;
 }
 
-bool GlobalDedupManager::hasFingerprint(const QString &filename, int64 size) const {
-	return hasFingerprint(makeFingerprintKey(filename, size));
+QString GlobalDedupManager::lastError() const {
+	return _lastError;
 }
 
-bool GlobalDedupManager::hasFingerprint(const QString &fingerprint) const {
-	return _fingerprints.find(fingerprint) != _fingerprints.end();
-}
+void GlobalDedupManager::updateAggregateStats() {
+	int64 totalMedia = 0;
+	int64 totalSize = 0;
+	int64 uniqueMedia = 0;
+	int64 uniqueSize = 0;
 
-void GlobalDedupManager::addEntry(uint64 docId, const QString &filename, int64 size) {
-	addDocumentId(docId);
-	addFingerprint(filename, size);
-}
+	for (const auto &[type, item] : _stats.byType) {
+		if (type != MediaSettings::Type::Text && type != MediaSettings::Type::Link) {
+			totalMedia += item.totalCount.load(std::memory_order_relaxed);
+			totalSize += item.totalSize.load(std::memory_order_relaxed);
+			uniqueMedia += item.uniqueCount.load(std::memory_order_relaxed);
+			uniqueSize += item.uniqueSize.load(std::memory_order_relaxed);
+		}
+	}
 
-void GlobalDedupManager::addDocumentId(uint64 docId) {
-	_documentIds.insert(docId);
-}
-
-void GlobalDedupManager::addFingerprint(const QString &filename, int64 size) {
-	addFingerprint(makeFingerprintKey(filename, size));
-}
-
-void GlobalDedupManager::addFingerprint(const QString &fingerprint) {
-	_fingerprints.insert(fingerprint);
-}
-
-size_t GlobalDedupManager::entryCount() const {
-	return _documentIds.size() + _fingerprints.size();
-}
-
-void GlobalDedupManager::clear() {
-	_documentIds.clear();
-	_fingerprints.clear();
+	_stats.totalMediaCount.store(totalMedia, std::memory_order_relaxed);
+	_stats.totalMediaSize.store(totalSize, std::memory_order_relaxed);
+	_stats.uniqueMediaCount.store(uniqueMedia, std::memory_order_relaxed);
+	_stats.uniqueMediaSize.store(uniqueSize, std::memory_order_relaxed);
 }
 
 } // namespace Export

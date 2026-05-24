@@ -141,7 +141,7 @@ QString NormalizePath(const Settings &settings) {
 		? QString("ChatExport_%1").arg(settings.singlePeerId)
 		: QString(settings.onlySinglePeer()
 			? "ChatExport_%1"
-			: "DataExport_%1"
+			: "BulkExport_%1"
 		).arg(date.toString(Qt::ISODate));
 	const auto add = [&](int i) {
 		return base + (i ? " (" + QString::number(i) + ')' : QString());
