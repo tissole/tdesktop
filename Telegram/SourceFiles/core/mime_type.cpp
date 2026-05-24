@@ -250,8 +250,8 @@ raw rw2 sketch svg tga tif tiff webp"_q);
 
     static const auto kVideo = SplitExtensions(u"\
 264 265 3g2 3gp 3gpp aep avi asf asx dav divx f4v flv h264 h265 hevc hvec \
-m2p m2s m2t m2ts m4s m4v mkv mov mp4 mpeg mpg mpv mts mxf ogv ogm ps qt rm rv \
-rmvb srt swf tgs tgv tp trp ts tsv vob webm wmv xvid"_q);
+m2p m2s m2t m2ts m2v m4s m4v mkv mov mp4 mpeg mpg mpv mts mxf ogv ogm ps qt rm rv \
+rmvb srt swf tgs tgv tp trp ts tsv vob webm wmv wtv xvid"_q);
 
     static const auto kAudio = SplitExtensions(u"\
 aac ac3 ac4 aif aifc aiff als amr ape atrac caf cda cue dsf dff dts dtshd \

@@ -687,6 +687,7 @@ bool FileLoadTask::CheckForVideo(
 		u".rv"_q,
 		u".rmvb"_q,
 		u".vob"_q,
+		u".wtv"_q,
 	};
 	if (!CheckMimeOrExtensions(filepath, result->filemime, mimes, extensions)) {
 		return false;
