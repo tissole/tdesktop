@@ -332,7 +332,7 @@ QString ImagesOrAllFilter() {
 }
 
 QString FileDialog::PhotoVideoFilesFilter() {
-	return u"Image and Video Files (*"_q + Ui::ImageExtensions().join(u" *"_q) + u" *.mp4 *.mov *.m4v *.webm *.mkv *.asf *.asx *.avi *.wmv *.flv *.hevc *.qt *.f4v *.f4b *.3gp *.3g2 *.m4a *.m4b *.vob *.mts *.m2ts *.m2s *.m2t *.m4s *.mxf *.rmvb *.divx *.xvid *.ogv *.ogx *.ogm *.rm *.rv *.rmvb *.srt *.tgs *.tgv *.tp *.trv *.swf *.mpg *.mpv *.mpeg *.m2v *.ts *.tsv *.m2p *.ps *.vob);;"_q
+	return u"Image and Video Files (*"_q + Ui::ImageExtensions().join(u" *"_q) + u" *.mp4 *.mov *.m4v *.webm *.mkv *.asf *.asx *.avi *.wmv *.flv *.hevc *.qt *.f4v *.f4b *.3gp *.3g2 *.m4a *.m4b *.vob *.mts *.m2ts *.m2s *.m2t *.m4s *.mxf *.rmvb *.divx *.xvid *.ogv *.ogx *.ogm *.rm *.rv *.srt *.tgs *.tgv *.tp *.trv *.swf *.mpg *.mpv *.mpeg *.m2v *.ts *.tsv *.m2p *.ps);;"_q
 		+ AllFilesFilter();
 }
 
