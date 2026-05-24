@@ -247,7 +247,9 @@ QSize Gif::sizeForAspectRatio() const {
 	//if (!_data->dimensions.isEmpty()) {
 	//	return _data->dimensions;
 	//}
-	if (_data->hasThumbnail()) {
+	if (_videoCover) {
+		return { _videoCover->width(), _videoCover->height() };
+	} else if (_data->hasThumbnail()) {
 		const auto &location = _data->thumbnailLocation();
 		return { location.width(), location.height() };
 	}
@@ -385,6 +387,8 @@ int Gif::adjustHeightForLessCrop(QSize dimensions, QSize current) const {
 QSize Gif::videoSize() const {
 	if (const auto streamed = activeCurrentStreamed()) {
 		return streamed->player().videoSize();
+	} else if (_videoCover) {
+		return QSize(_videoCover->width(), _videoCover->height());
 	} else if (!_data->dimensions.isEmpty()) {
 		return _data->dimensions;
 	} else if (_data->hasThumbnail()) {
