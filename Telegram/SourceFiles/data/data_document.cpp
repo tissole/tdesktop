@@ -525,11 +525,22 @@ void DocumentData::setattributes(
 		setMaybeSupportsStreaming(true);
 	}
 	if (_nameType == Core::NameType::Video && dimensions.isEmpty()) {
+		constexpr auto kMinVideoSide = 640;
 		if (hasThumbnail()) {
-			const auto &l = _thumbnail.location;
-			dimensions = QSize(l.width(), l.height());
-		} else {
-			dimensions = QSize(1, 1);
+			auto w = _thumbnail.location.width();
+			auto h = _thumbnail.location.height();
+			if (w > 0 && h > 0) {
+				const auto smaller = std::min(w, h);
+				if (smaller < kMinVideoSide) {
+					const auto scale = float64(kMinVideoSide) / smaller;
+					w = int(w * scale);
+					h = int(h * scale);
+				}
+				dimensions = QSize(w, h);
+			}
+		}
+		if (dimensions.isEmpty()) {
+			dimensions = QSize(kMinVideoSide, int(kMinVideoSide * 9 / 16));
 		}
 	}
 }
