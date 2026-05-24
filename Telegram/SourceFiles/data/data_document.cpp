@@ -517,10 +517,20 @@ void DocumentData::setattributes(
 	}
 
 	if (isAudioFile()
+		|| isVideoFile()
 		|| isAnimation()
 		|| isVoiceMessage()
-		|| storyMedia()) {
+		|| storyMedia()
+		|| _nameType == Core::NameType::Video) {
 		setMaybeSupportsStreaming(true);
+	}
+	if (_nameType == Core::NameType::Video && dimensions.isEmpty()) {
+		if (hasThumbnail()) {
+			const auto &l = _thumbnail.location;
+			dimensions = QSize(l.width(), l.height());
+		} else {
+			dimensions = QSize(1, 1);
+		}
 	}
 }
 
@@ -1569,7 +1579,8 @@ bool DocumentData::useStreamingLoader() const {
 	return isAnimation()
 		|| isVideoFile()
 		|| isAudioFile()
-		|| isVoiceMessage();
+		|| isVoiceMessage()
+		|| (_nameType == Core::NameType::Video);
 }
 
 bool DocumentData::canBeStreamed() const {
@@ -1820,7 +1831,9 @@ bool DocumentData::isSharedMediaMusic() const {
 }
 
 bool DocumentData::isVideoFile() const {
-	return (type == VideoDocument);
+	return (type == VideoDocument)
+		|| (type == FileDocument
+			&& _nameType == Core::NameType::Video);
 }
 
 bool DocumentData::isSilentVideo() const {
