@@ -545,6 +545,7 @@ bool FileLoadTask::CheckForSong(
 		u"audio/mp4"_q,
 		u"audio/m4a"_q,
 		u"audio/m4b"_q,
+		u"audio/midi"_q,
 		u"audio/x-monkeys-audio"_q,
 		u"audio/x-musepack"_q,
 		u"audio/musepack"_q,		
@@ -563,6 +564,7 @@ bool FileLoadTask::CheckForSong(
 		u"audio/x-ms-wma"_q,
 		u"audio/x-tta"_q,
 		u"audio/x-wavpack"_q,
+		u"audio/x-tak"_q,
         u"audio/vnd.dts"_q,
         u"audio/vnd.dts.hd"_q,
 		u"audio/wav"_q,
@@ -593,17 +595,25 @@ bool FileLoadTask::CheckForSong(
 		u".m4a"_q,
 		u".m4b"_q,
         u".mka"_q,
+		u".mid"_q,
+		u".midi"_q,
+		u".mp1"_q,
+		u".mp2"_q,
 		u".mpc"_q,
 		u".mpp"_q,
 		u".mp+"_q,
 		u".ogg"_q,
+		u".ogx"_q,
 		u".opus"_q,
 		u".oga"_q,
 		u".ra"_q,
-		u".ram"_q,		
+		u".ram"_q,
+		u".spx"_q,
+		u".tak"_q,		
 		u".tta"_q,
 		u".wma"_q,
 		u".wav"_q,
+		u".webma"_q,
 		u".wsd"_q,
 		u".wv"_q,		
 	};
@@ -695,43 +705,79 @@ bool FileLoadTask::CheckForVideo(
 
 	auto media = v::get<Ui::PreparedFileInformation::Video>(
 		Media::Clip::PrepareForSending(filepath, content).media);
-	if (media.duration < 0) {
-		return false;
-	}
-
 	auto coverWidth = media.thumbnail.width();
 	auto coverHeight = media.thumbnail.height();
+	if (media.duration <= 0 && coverWidth <= 0) {
+		// No thumbnail and no duration — not a real video.
+		return false;
+	}
 	if (!ValidateThumbDimensions(coverWidth, coverHeight)) {
 		return false;
 	}
 
-	//if (filepath.endsWith(u".mp4"_q, Qt::CaseInsensitive)) {
-	//		result->filemime = u"video/mp4"_q;
-	//	} else if (filepath.endsWith(u".mov"_q, Qt::CaseInsensitive)) {
-	//		result->filemime = u"video/quicktime"_q;
-	//	} else if (filepath.endsWith(u".mkv"_q, Qt::CaseInsensitive)) {
-	//		result->filemime = u"video/x-matroska"_q;
-	//	} else if (filepath.endsWith(u".webm"_q, Qt::CaseInsensitive)) {
-	//		result->filemime = u"video/mp4"_q;
-	//	} else if (filepath.endsWith(u".asf"_q, Qt::CaseInsensitive)) {
-	//		result->filemime = u"video/mp4"_q;
-	//	} else if (filepath.endsWith(u".asx"_q, Qt::CaseInsensitive)) {
-	//		result->filemime = u"video/mp4"_q;			
-	//	} else if (filepath.endsWith(u".avi"_q, Qt::CaseInsensitive)) {
-	//		result->filemime = u"video/mp4"_q;
-	//	} else if (filepath.endsWith(u".wmv"_q, Qt::CaseInsensitive)) {
-	//		result->filemime = u"video/mp4"_q;
-	//	} else if (filepath.endsWith(u".ts"_q, Qt::CaseInsensitive) ||
-	//				   filepath.endsWith(u".mts"_q, Qt::CaseInsensitive) ||
-	//				   filepath.endsWith(u".m2ts"_q, Qt::CaseInsensitive)) {
-	//		result->filemime = u"video/mp4"_q;
-	//	} else if (filepath.endsWith(u".flv"_q, Qt::CaseInsensitive)) {
-	//		result->filemime = u"video/mp4"_q;			
-	//	} else if (filepath.endsWith(u".m2v"_q, Qt::CaseInsensitive)) {
-	//		result->filemime = u"video/mp4"_q;
-	//	} else if (filepath.endsWith(u".vob"_q, Qt::CaseInsensitive)) {
-	//		result->filemime = u"video/mp4"_q;
-	//	}			
+	if (filepath.endsWith(u".mp4"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".mov"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".qt"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/quicktime"_q;
+	} else if (filepath.endsWith(u".mkv"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".webm"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".asf"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".asx"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".avi"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".wmv"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".ts"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".mts"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".m2ts"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".tp"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".trp"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".flv"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".m2v"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".mpeg"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".mpg"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".mpv"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".m2p"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".m2s"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".m2t"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".ps"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".vob"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".wtv"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".3gp"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".3gpp"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".3g2"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".m4v"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".f4v"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".m4s"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".ogv"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".ogm"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".rm"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".rv"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".rmvb"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".divx"_q, Qt::CaseInsensitive) ||
+				filepath.endsWith(u".xvid"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".mxf"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".dav"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	} else if (filepath.endsWith(u".swf"_q, Qt::CaseInsensitive)) {
+		result->filemime = u"video/mp4"_q;
+	}
 	result->media = std::move(media);
 	return true;
 }
@@ -956,7 +1002,9 @@ void FileLoadTask::process(ProcessArgs &&args) {
 			if (video->supportsStreaming) {
 				flags |= MTPDdocumentAttributeVideo::Flag::f_supports_streaming;
 			}
-			const auto realSeconds = video->duration / 1000.;
+			const auto realSeconds = std::max(
+				video->duration / 1000.,
+				0.);
 			attributes.push_back(MTP_documentAttributeVideo(
 				MTP_flags(flags),
 				MTP_double(realSeconds),
@@ -1000,7 +1048,9 @@ void FileLoadTask::process(ProcessArgs &&args) {
 				if (video->supportsStreaming) {
 					flags |= MTPDdocumentAttributeVideo::Flag::f_supports_streaming;
 				}
-				const auto realSeconds = video->duration / 1000.;
+				const auto realSeconds = std::max(
+					video->duration / 1000.,
+					0.);
 				attributes.push_back(MTP_documentAttributeVideo(
 					MTP_flags(flags),
 					MTP_double(realSeconds),
