@@ -975,61 +975,68 @@ Ui::PreparedFileInformation PrepareForSending(
 	auto reader = std::make_unique<internal::FFMpegReaderImplementation>(&localLocation, &localData);
 	if (reader->start(internal::ReaderImplementation::Mode::Inspecting, seekPositionMs)) {
 		const auto durationMs = reader->durationMs();
-		if (durationMs > 0) {
-			result.isGifv = reader->isGifv();
-			result.isWebmSticker = reader->isWebmSticker();
 
-			bool thumbnailRendered = false;
+		result.isGifv = reader->isGifv();
+		result.isWebmSticker = reader->isWebmSticker();
 
-			// --- ATTEMPT 1: Try to get the frame at 15 seconds ---
-			constexpr crl::time kThumbnailPositionMs = 15000;
-			auto thumbnailPositionMs = (durationMs > kThumbnailPositionMs)
-				? kThumbnailPositionMs
-				: (durationMs / 2);
+		bool thumbnailRendered = false;
 
-			if (reader->inspectAt(thumbnailPositionMs)) {
-				if (reader->readFramesTill(-1, crl::now()) == internal::ReaderImplementation::ReadResult::Success) {
+		constexpr crl::time kThumbnailPositionMs = 15000;
+		auto thumbnailPositionMs = (durationMs > 0 && durationMs < kThumbnailPositionMs)
+			? (durationMs / 2)
+			: kThumbnailPositionMs;
+
+		if (reader->inspectAt(thumbnailPositionMs)) {
+			if (reader->readFramesTill(-1, crl::now()) == internal::ReaderImplementation::ReadResult::Success) {
+				auto index = 0;
+				auto hasAlpha = false;
+				if (reader->renderFrame(result.thumbnail, hasAlpha, index, QSize())) {
+					thumbnailRendered = !result.thumbnail.isNull();
+					if (thumbnailRendered && hasAlpha && !result.isWebmSticker) {
+						result.thumbnail = Images::Opaque(std::move(result.thumbnail));
+					}
+				}
+			}
+		}
+
+		if (!thumbnailRendered) {
+			reader = std::make_unique<internal::FFMpegReaderImplementation>(&localLocation, &localData);
+			auto fallbackPositionMs = crl::time(0);
+			if (reader->start(internal::ReaderImplementation::Mode::Inspecting, fallbackPositionMs)) {
+				constexpr auto kMaxFallbackFrames = 60;
+				auto bestFrame = QImage();
+				auto bestHasAlpha = false;
+				for (auto i = 0; i < kMaxFallbackFrames; ++i) {
+					if (reader->readFramesTill(-1, crl::now()) != internal::ReaderImplementation::ReadResult::Success) {
+						break;
+					}
 					auto index = 0;
 					auto hasAlpha = false;
-					if (reader->renderFrame(result.thumbnail, hasAlpha, index, QSize())) {
-						thumbnailRendered = !result.thumbnail.isNull();
-						if (thumbnailRendered && hasAlpha && !result.isWebmSticker) {
-							result.thumbnail = Images::Opaque(std::move(result.thumbnail));
+					auto frame = QImage();
+					if (reader->renderFrame(frame, hasAlpha, index, QSize())) {
+						if (!frame.isNull()) {
+							bestFrame = std::move(frame);
+							bestHasAlpha = hasAlpha;
 						}
 					}
 				}
-			}
-
-			// --- ATTEMPT 2 (FALLBACK): If the seek failed, get the first frame ---
-			if (!thumbnailRendered) {
-				// We need to re-initialize the reader to go back to the beginning.
-				reader = std::make_unique<internal::FFMpegReaderImplementation>(&localLocation, &localData);
-				
-				// --- THIS IS THE FIX ---
-				// Create a variable for the position and pass it by reference.
-				auto fallbackPositionMs = crl::time(0);
-				if (reader->start(internal::ReaderImplementation::Mode::Inspecting, fallbackPositionMs)) {
-					if (reader->readFramesTill(-1, crl::now()) == internal::ReaderImplementation::ReadResult::Success) {
-						auto index = 0;
-						auto hasAlpha = false;
-						if (reader->renderFrame(result.thumbnail, hasAlpha, index, QSize())) {
-							if (!result.thumbnail.isNull() && hasAlpha && !result.isWebmSticker) {
-								result.thumbnail = Images::Opaque(std::move(result.thumbnail));
-							}
-						}
+				if (!bestFrame.isNull()) {
+					result.thumbnail = std::move(bestFrame);
+					if (bestHasAlpha && !result.isWebmSticker) {
+						result.thumbnail = Images::Opaque(std::move(result.thumbnail));
 					}
 				}
 			}
-
-			if (!result.thumbnail.isNull()) {
-				result.duration = durationMs;
-			}
-
-			result.supportsStreaming = CheckStreamingSupport(
-				localLocation,
-				localData)
-				|| (durationMs > 0);
 		}
+
+		if (!result.thumbnail.isNull()) {
+			result.duration = durationMs;
+		}
+
+		result.supportsStreaming = CheckStreamingSupport(
+			localLocation,
+			localData)
+			|| (durationMs > 0);
 	}
 	return { .media = result };
 }

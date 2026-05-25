@@ -381,10 +381,25 @@ bool FFMpegReaderImplementation::inspectAt(crl::time &positionMs) {
 		const auto timeBase = _fmtContext->streams[_streamId]->time_base;
 		const auto timeStamp = (positionMs * timeBase.den)
 			/ (1000LL * timeBase.num);
-		if (av_seek_frame(_fmtContext, _streamId, timeStamp, 0) < 0) {
-			if (av_seek_frame(_fmtContext, _streamId, timeStamp, AVSEEK_FLAG_BACKWARD) < 0) {
-				return false;
+		bool seeked = (av_seek_frame(_fmtContext, _streamId, timeStamp, 0) >= 0);
+		if (!seeked) {
+			seeked = (av_seek_frame(_fmtContext, _streamId, timeStamp, AVSEEK_FLAG_BACKWARD) >= 0);
+		}
+		if (!seeked) {
+			const auto size = dataSize();
+			if (size > 0) {
+				const auto byteOffset = std::min<int64_t>(
+					size / 3,
+					size - 1);
+				seeked = (av_seek_frame(
+					_fmtContext,
+					-1,
+					byteOffset,
+					AVSEEK_FLAG_BYTE) >= 0);
 			}
+		}
+		if (!seeked) {
+			return false;
 		}
 	}
 
