@@ -329,6 +329,10 @@ void Player::fileError(Error error) {
 	});
 }
 
+void Player::streamFailed(Error error) {
+	fail(error);
+}
+
 void Player::fileFullInCache(bool fullInCache) {
 	crl::on_main(&_sessionGuard, [=] {
 		if (!_fullInCacheSinceStart.has_value()) {
@@ -449,10 +453,6 @@ bool Player::fileReadMore() {
 void Player::streamReady(Information &&information) {
 	SaveValidStartInformation(_information, std::move(information));
 	provideStartInformation();
-}
-
-void Player::streamFailed(Error error) {
-	fail(error);
 }
 
 template <typename Track>

@@ -95,7 +95,12 @@ bool AudioTrack::tryReadFirstFrame(FFmpeg::Packet &&packet) {
 				return true;
 			}
 		} else if (!fillStateFromFrame()) {
-			return false;
+			// Frame has no valid timestamp, skip and try next.
+			_stream.decodedFrame = FFmpeg::MakeFramePointer();
+			if (!_stream.decodedFrame) {
+				return false;
+			}
+			continue;
 		} else if (_startedPosition >= _options.position) {
 			return processFirstFrame();
 		}
