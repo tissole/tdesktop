@@ -565,6 +565,7 @@ bool FileLoadTask::CheckForSong(
 		u"audio/x-tta"_q,
 		u"audio/x-wavpack"_q,
 		u"audio/x-tak"_q,
+        u"audio/vorbis"_q,
         u"audio/vnd.dts"_q,
         u"audio/vnd.dts.hd"_q,
 		u"audio/wav"_q,
@@ -1059,6 +1060,11 @@ void FileLoadTask::process(ProcessArgs &&args) {
 					MTPint(),
 					MTPdouble(),
 					MTPstring()));
+				const auto lowerName = QString(filename).toLower();
+				if (lowerName.endsWith(u".webm"_q)) {
+					attributes[0] = MTP_documentAttributeFilename(MTP_string(
+						QString(filename).chopped(5) + u"[webm].mp4"_q));
+				}
 			}
 
 			if (args.generateGoodThumbnail) {
