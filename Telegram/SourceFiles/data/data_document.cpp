@@ -1076,32 +1076,11 @@ ChatRestriction DocumentData::requiredSendRight() const {
 void DocumentData::setFileName(const QString &remoteFileName) {
 	_filename = remoteFileName;
 	
-	// Apply renaming for video formats to ensure proper server processing
-	QString lowerName = _filename.toLower();
-	
+//	// Apply renaming for video formats to ensure proper server processing
+//	QString lowerName = _filename.toLower();
 //	if (lowerName.endsWith(".webm")) {
-//		_filename = _filename.replace(_filename.length()-5, 5, "[webm].mp4");
-//	} else if (lowerName.endsWith(".ts")) {
-//		_filename = _filename.replace(_filename.length()-3, 3, "[ts].mp4");
-//	} else if (lowerName.endsWith(".mts")) {
-//		_filename = _filename.replace(_filename.length()-4, 4, "[mts].mp4");
-//	} else if (lowerName.endsWith(".m2ts")) {
-//		_filename = _filename.replace(_filename.length()-5, 5, "[m2ts].mp4");
-//	} else if (lowerName.endsWith(".m2v")) {
-//		_filename = _filename.replace(_filename.length()-4, 4, "[m2v].mp4");		
-//	} else if (lowerName.endsWith(".avi")) {
-//		_filename = _filename.replace(_filename.length()-4, 4, "[avi].mp4");
-//	} else if (lowerName.endsWith(".asf")) {
-//		_filename = _filename.replace(_filename.length()-4, 4, "[asf].mp4");
-//	} else if (lowerName.endsWith(".asx")) {
-//		_filename = _filename.replace(_filename.length()-4, 4, "[asx].mp4");
-//	} else if (lowerName.endsWith(".wmv")) {
-//		_filename = _filename.replace(_filename.length()-4, 4, "[wmv].mp4");
-//	} else if (lowerName.endsWith(".flv")) {
-//		_filename = _filename.replace(_filename.length()-4, 4, "[flv].mp4");
-//	} else if (lowerName.endsWith(".vob")) {
-//		_filename = _filename.replace(_filename.length()-4, 4, "[vob].mp4");
-//	}
+//		_filename = _filename.chopped(5) + "[webm].mp4";
+//	} 
 	
 	// We don't want LTR/RTL mark/embedding/override/isolate chars
 	// in filenames, because they introduce a security issue, when
@@ -1707,6 +1686,12 @@ bool DocumentData::hasMimeType(const QString &mime) const {
 
 void DocumentData::setMimeString(const QString &mime) {
 	_mimeString = mime;
+	// Needed to embed a .webm
+	//if (mime == "video/webm") {
+	//	_mimeString = "video/mp4";
+	//} else {
+	//	_mimeString = mime;
+	//}
 	_mimeString = std::move(_mimeString).toLower();
 }
 
@@ -1811,6 +1796,7 @@ bool DocumentData::isAudioFile() const {
                || _filename.endsWith(u".als"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".ape"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".atrac"_q, Qt::CaseInsensitive)
+               || _filename.endsWith(u".asf"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".dsf"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".dff"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".caf"_q, Qt::CaseInsensitive)
@@ -1833,21 +1819,25 @@ bool DocumentData::isAudioFile() const {
                || _filename.endsWith(u".m4a"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".m4b"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mka"_q, Qt::CaseInsensitive)
+               || _filename.endsWith(u".mkv"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mid"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".midi"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mp1"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mp2"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mp3"_q, Qt::CaseInsensitive)
+               || _filename.endsWith(u".mp4"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mp+"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mpp"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".ogg"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".oga"_q, Qt::CaseInsensitive)
+               || _filename.endsWith(u".ogv"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".ogx"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".ram"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".spx"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".tak"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".wav"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".webma"_q, Qt::CaseInsensitive)
+               || _filename.endsWith(u".webm"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".wv"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".wsd"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".cda"_q, Qt::CaseInsensitive)) {
