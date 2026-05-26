@@ -979,57 +979,152 @@ Ui::PreparedFileInformation PrepareForSending(
 		result.isGifv = reader->isGifv();
 		result.isWebmSticker = reader->isWebmSticker();
 
-		bool thumbnailRendered = false;
-
-		constexpr crl::time kThumbnailPositionMs = 15000;
-		auto thumbnailPositionMs = (durationMs > 0 && durationMs < kThumbnailPositionMs)
-			? (durationMs / 2)
-			: kThumbnailPositionMs;
-
-		if (reader->inspectAt(thumbnailPositionMs)) {
-			if (reader->readFramesTill(-1, crl::now()) == internal::ReaderImplementation::ReadResult::Success) {
-				auto index = 0;
-				auto hasAlpha = false;
-				if (reader->renderFrame(result.thumbnail, hasAlpha, index, QSize())) {
-					thumbnailRendered = !result.thumbnail.isNull();
-					if (thumbnailRendered && hasAlpha && !result.isWebmSticker) {
-						result.thumbnail = Images::Opaque(std::move(result.thumbnail));
+		{
+			auto isNonBlank = [](const QImage &image) {
+				if (image.isNull()) return false;
+				const auto sample = image.scaled(
+					16, 12,
+					Qt::IgnoreAspectRatio,
+					Qt::SmoothTransformation);
+				auto totalR = 0LL, totalG = 0LL, totalB = 0LL;
+				auto pixels = 0;
+				for (auto y = 0; y < 12; ++y) {
+					for (auto x = 0; x < 16; ++x) {
+						const auto p = sample.pixel(x, y);
+						totalR += qRed(p);
+						totalG += qGreen(p);
+						totalB += qBlue(p);
+						++pixels;
 					}
 				}
-			}
-		}
-
-		if (!thumbnailRendered) {
-			reader = std::make_unique<internal::FFMpegReaderImplementation>(&localLocation, &localData);
-			auto fallbackPositionMs = crl::time(0);
-			if (reader->start(internal::ReaderImplementation::Mode::Inspecting, fallbackPositionMs)) {
-				constexpr auto kMaxFallbackFrames = 60;
-				auto bestFrame = QImage();
-				auto bestHasAlpha = false;
-				for (auto i = 0; i < kMaxFallbackFrames; ++i) {
-					if (reader->readFramesTill(-1, crl::now()) != internal::ReaderImplementation::ReadResult::Success) {
-						break;
+				const auto avgR = totalR / pixels;
+				const auto avgG = totalG / pixels;
+				const auto avgB = totalB / pixels;
+				auto dev = 0LL;
+				for (auto y = 0; y < 12; ++y) {
+					for (auto x = 0; x < 16; ++x) {
+						const auto p = sample.pixel(x, y);
+						dev += abs(qRed(p) - avgR)
+							+ abs(qGreen(p) - avgG)
+							+ abs(qBlue(p) - avgB);
 					}
-					auto index = 0;
-					auto hasAlpha = false;
-					auto frame = QImage();
-					if (reader->renderFrame(frame, hasAlpha, index, QSize())) {
-						if (!frame.isNull()) {
-							bestFrame = std::move(frame);
-							bestHasAlpha = hasAlpha;
+				}
+				return (dev > 500);
+			};
+
+			if (durationMs > 0) {
+				const auto tryReadNonBlank = [&](
+					internal::FFMpegReaderImplementation &rdr,
+					int maxAttempts) -> bool {
+					for (auto attempt = 0; attempt < maxAttempts; ++attempt) {
+						const auto frameMs = attempt
+							? (rdr.framePresentationTime() + 1)
+							: crl::time(-1);
+						if (rdr.readFramesTill(frameMs, crl::now())
+							!= internal::ReaderImplementation::ReadResult::Success) {
+							break;
+						}
+						auto index = 0;
+						auto hasAlpha = false;
+						auto frame = QImage();
+						if (rdr.renderFrame(frame, hasAlpha, index, QSize())
+							&& isNonBlank(frame)) {
+							if (hasAlpha && !result.isWebmSticker) {
+								frame = Images::Opaque(
+									std::move(frame));
+							}
+							result.thumbnail = std::move(frame);
+							return true;
+						}
+					}
+					return false;
+				};
+
+				// Try multiple positions spanning the file.
+				{
+					auto pos = std::min(
+						crl::time(15000),
+						durationMs - 1000);
+					if (pos > 0 && reader->inspectAt(pos)) {
+						tryReadNonBlank(*reader, 101);
+					}
+				}
+				if (result.thumbnail.isNull()) {
+					for (auto pct : { 30, 50, 70, 85 }) {
+						auto pos = durationMs * pct / 100;
+						if (pos <= 0) continue;
+						if (reader->inspectAt(pos)
+							&& tryReadNonBlank(*reader, 101)) {
+							break;
 						}
 					}
 				}
-				if (!bestFrame.isNull()) {
-					result.thumbnail = std::move(bestFrame);
-					if (bestHasAlpha && !result.isWebmSticker) {
-						result.thumbnail = Images::Opaque(std::move(result.thumbnail));
+
+				if (result.thumbnail.isNull()) {
+					auto fr = std::make_unique<
+						internal::FFMpegReaderImplementation>(
+						&localLocation, &localData);
+					auto pos = crl::time(0);
+					if (fr->start(
+						internal::ReaderImplementation::Mode::Inspecting,
+						pos)) {
+						for (auto attempt = 0; attempt < 2001; ++attempt) {
+							const auto frameMs = attempt
+								? (fr->framePresentationTime() + 1)
+								: crl::time(-1);
+							if (fr->readFramesTill(frameMs, crl::now())
+								!= internal::ReaderImplementation::ReadResult::Success) {
+								break;
+							}
+							auto index = 0;
+							auto hasAlpha = false;
+							auto frame = QImage();
+							if (fr->renderFrame(
+									frame,
+									hasAlpha,
+									index,
+									QSize())) {
+								if (isNonBlank(frame)) {
+									if (hasAlpha && !result.isWebmSticker) {
+										frame = Images::Opaque(
+											std::move(frame));
+									}
+									result.thumbnail = std::move(frame);
+									break;
+								}
+								if (result.thumbnail.isNull()) {
+									const auto bad = [&] {
+										const auto sample = frame.scaled(
+											16, 12,
+											Qt::IgnoreAspectRatio,
+											Qt::SmoothTransformation);
+										auto total = 0LL;
+										for (auto y = 0; y < 12; ++y)
+											for (auto x = 0; x < 16; ++x) {
+												const auto p = sample.pixel(
+													x, y);
+												total += qRed(p)
+													+ qGreen(p)
+													+ qBlue(p);
+											}
+										const auto avg = total / (12 * 16 * 3);
+										return (avg <= 15 || avg >= 240);
+									};
+									if (bad()) {
+										continue;
+									}
+									if (hasAlpha && !result.isWebmSticker) {
+										frame = Images::Opaque(
+											std::move(frame));
+									}
+									result.thumbnail = std::move(frame);
+								}
+							}
+						}
 					}
 				}
 			}
-		}
 
-		if (!result.thumbnail.isNull()) {
 			result.duration = durationMs;
 		}
 
