@@ -254,8 +254,8 @@ m2p m2s m2t m2ts m2v m4s m4v mkv mov mp4 mpeg mpg mpv mts mxf ogv ogm ps qt rm r
 rmvb srt swf tgs tgv tp trp ts tsv vob webm wmv wtv xvid"_q);
 
     static const auto kAudio = SplitExtensions(u"\
-aac ac3 ac4 aif aifc aiff als amr ape atrac awb caf cda cue dsf dff dts dtshd \
-f4a f4b flac gsm m4a m4b mka mid midi mp1 mp2 mp3 mpc mp+ mpp ogg oga ogx \
+aac ac3 ac4 aif aifc aiff alac als amr ape atrac awb caf cda cue dsf dff dts dtshd \
+f4a f4b flac gsm m4a m4b m4r mka mid midi mp1 mp2 mp3 mpc mp+ mpp ogg oga ogx \
 opus ra ram spx tak tta usac wav webma wma wv wsd"_q);
 
 	static const auto kDocument = SplitExtensions(u"\

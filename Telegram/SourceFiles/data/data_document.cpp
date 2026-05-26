@@ -1818,6 +1818,8 @@ bool DocumentData::isAudioFile() const {
                || _filename.endsWith(u".flac"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".m4a"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".m4b"_q, Qt::CaseInsensitive)
+               || _filename.endsWith(u".m4r"_q, Qt::CaseInsensitive)
+               || _filename.endsWith(u".alac"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mka"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mkv"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mid"_q, Qt::CaseInsensitive)
