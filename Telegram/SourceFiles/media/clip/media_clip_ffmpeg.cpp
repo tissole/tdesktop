@@ -199,6 +199,21 @@ crl::time FFMpegReaderImplementation::durationMs() const {
 	} else if (_fmtContext->duration != AV_NOPTS_VALUE) {
 		return rebase(_fmtContext->duration, AVRational{ 1, AV_TIME_BASE });
 	}
+	if (stream->nb_frames > 0) {
+		const auto &fps = stream->avg_frame_rate.num
+			? stream->avg_frame_rate
+			: stream->r_frame_rate;
+		if (fps.num > 0 && fps.den > 0) {
+			return (stream->nb_frames * 1000LL * fps.den) / fps.num;
+		}
+	}
+	if (_codecContext->bit_rate > 0) {
+		return (dataSize() * 8000LL) / _codecContext->bit_rate;
+	}
+	if (dataSize() > 0) {
+		// Rough estimate: assume 4 Mbps for raw streams.
+		return (dataSize() * 8000LL) / 4000000;
+	}
 	return 0;
 }
 
@@ -377,33 +392,40 @@ bool FFMpegReaderImplementation::start(Mode mode, crl::time &positionMs) {
 }
 
 bool FFMpegReaderImplementation::inspectAt(crl::time &positionMs) {
+	bool seeked = false;
 	if (positionMs > 0) {
 		const auto timeBase = _fmtContext->streams[_streamId]->time_base;
 		const auto timeStamp = (positionMs * timeBase.den)
 			/ (1000LL * timeBase.num);
-		bool seeked = (av_seek_frame(_fmtContext, _streamId, timeStamp, 0) >= 0);
+		seeked = (av_seek_frame(_fmtContext, _streamId, timeStamp, 0) >= 0);
 		if (!seeked) {
 			seeked = (av_seek_frame(_fmtContext, _streamId, timeStamp, AVSEEK_FLAG_BACKWARD) >= 0);
 		}
-		if (!seeked) {
-			const auto size = dataSize();
-			if (size > 0) {
-				const auto byteOffset = std::min<int64_t>(
-					size / 3,
-					size - 1);
-				seeked = (av_seek_frame(
+	}
+	if (!seeked) {
+		const auto size = dataSize();
+		if (size > 0) {
+			for (auto div : { 2, 3, 5, 7, 9, 11 }) {
+				if (av_seek_frame(
 					_fmtContext,
 					-1,
-					byteOffset,
-					AVSEEK_FLAG_BYTE) >= 0);
+					std::min<int64_t>(size / div, size - 1),
+					AVSEEK_FLAG_BYTE) >= 0) {
+					seeked = true;
+					break;
+				}
 			}
 		}
-		if (!seeked) {
-			return false;
-		}
+	}
+	if (!seeked) {
+		return false;
 	}
 
 	_packetQueue.clear();
+	_frameRead = false;
+	_hadFrame = false;
+	avcodec_flush_buffers(_codecContext);
+	FFmpeg::ClearFrameMemory(_frame.get());
 
 	FFmpeg::Packet packet;
 	auto readResult = readPacket(packet);
