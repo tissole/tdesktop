@@ -757,7 +757,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			// --- NEW: Bottom-Right Info Bubble for Single Video ---
 			// Only show if media is loaded (cover/thumbnail/video) and it's not a round message
 			// and ONLY if we should show info (hover/selected).
-			if (!isRound && !sponsoredSkip && showInfo && (loaded || _data->hasThumbnail())) {
+			if (!isRound && !sponsoredSkip && showInfo && (loaded || _data->hasThumbnail() || _data->duration() > 0 || _data->size > 0)) {
 				qint64 durSeconds = std::max<qint64>(0, _data->duration() / 1000);
 				qint64 sizeBytes = _data->size;
 
