@@ -346,7 +346,7 @@ QSize GroupedMedia::countOptimalSize() {
 	}
 
 	const auto groupPadding = groupedPadding();
-	minHeight += groupPadding.top() + (_mode == Mode::Grid ? st::historyGroupSkip : groupPadding.bottom());
+	minHeight += groupPadding.top() + groupPadding.bottom();
 
 	return { maxWidth, int(base::SafeRound(minHeight)) };
 }
@@ -476,7 +476,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 	}
 
 	const auto groupPadding = groupedPadding();
-	newHeight += groupPadding.top() + (_mode == Mode::Grid ? st::historyGroupSkip : groupPadding.bottom());
+	newHeight += groupPadding.top() + groupPadding.bottom();
 
 	return { newWidth, int(base::SafeRound(newHeight)) };
 }
