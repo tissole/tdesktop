@@ -506,6 +506,22 @@ auto FileLoadTask::ReadMediaInformation(
 	} else if (CheckForImage(filepath, content, result)) {
 		return result;
 	}
+	if (v::is<v::null_t>(result->media)) {
+		auto check = Media::Player::PrepareForSending(
+			filepath,
+			content);
+		auto &song = v::get<Ui::PreparedFileInformation::Song>(
+			check.media);
+		if (song.duration >= 0) {
+			if (!ValidateThumbDimensions(
+				song.cover.width(),
+				song.cover.height())) {
+				song.cover = QImage();
+			}
+			result->media = std::move(song);
+			result->filemime = u"audio/mp4"_q;
+		}
+	}
 	return result;
 }
 
@@ -674,21 +690,18 @@ bool FileLoadTask::CheckForVideo(
 		u"video/dvd"_q,		
 	};
 	static const auto extensions = {
-		u".mp4"_q,
-		u".mkv"_q,
-		u".mov"_q,
-		u".m4v"_q,
-		u".webm"_q,
 		u".asf"_q,
 		u".asx"_q,
 		u".avi"_q,
-		u".wmv"_q,
 		u".flv"_q,
 		u".f4a"_q,
 		u".f4b"_q,
 		u".f4v"_q,
 		u".f4p"_q,
-		u".ts"_q,		
+		u".mp4"_q,
+		u".mkv"_q,
+		u".mov"_q,
+		u".m4v"_q,        
 		u".mts"_q,
 		u".m2ts"_q,
 		u".m2v"_q,
@@ -700,6 +713,9 @@ bool FileLoadTask::CheckForVideo(
 		u".rv"_q,
 		u".rmvb"_q,
 		u".vob"_q,
+		u".ts"_q,
+		u".webm"_q,
+		u".wmv"_q,
 		u".wtv"_q,
 	};
 	if (!CheckMimeOrExtensions(filepath, result->filemime, mimes, extensions)) {

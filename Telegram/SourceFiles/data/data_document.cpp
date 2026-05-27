@@ -1686,12 +1686,6 @@ bool DocumentData::hasMimeType(const QString &mime) const {
 
 void DocumentData::setMimeString(const QString &mime) {
 	_mimeString = mime;
-	// Needed to embed a .webm
-	//if (mime == "video/webm") {
-	//	_mimeString = "video/mp4";
-	//} else {
-	//	_mimeString = mime;
-	//}
 	_mimeString = std::move(_mimeString).toLower();
 }
 
@@ -1779,11 +1773,12 @@ bool DocumentData::isSong() const {
 }
 
 bool DocumentData::isSongWithCover() const {
-	return isSong() && hasThumbnail();
+	return (isSong() || isAudioFile()) && hasThumbnail();
 }
 
 bool DocumentData::isAudioFile() const {
       if (isVoiceMessage() || isVideoFile()) {
+      //if (isVoiceMessage() || type == VideoDocument) {    
               return false;
       } else if (isSong()) {
               return true;
@@ -1793,10 +1788,11 @@ bool DocumentData::isAudioFile() const {
                || _filename.endsWith(u".aif"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".aifc"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".aiff"_q, Qt::CaseInsensitive)
+               || _filename.endsWith(u".alac"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".als"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".ape"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".atrac"_q, Qt::CaseInsensitive)
-               || _filename.endsWith(u".asf"_q, Qt::CaseInsensitive)
+//               || _filename.endsWith(u".asf"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".dsf"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".dff"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".caf"_q, Qt::CaseInsensitive)
@@ -1818,16 +1814,14 @@ bool DocumentData::isAudioFile() const {
                || _filename.endsWith(u".flac"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".m4a"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".m4b"_q, Qt::CaseInsensitive)
-               || _filename.endsWith(u".m4r"_q, Qt::CaseInsensitive)
-               || _filename.endsWith(u".alac"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mka"_q, Qt::CaseInsensitive)
-               || _filename.endsWith(u".mkv"_q, Qt::CaseInsensitive)
+//               || _filename.endsWith(u".mkv"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mid"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".midi"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mp1"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mp2"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mp3"_q, Qt::CaseInsensitive)
-               || _filename.endsWith(u".mp4"_q, Qt::CaseInsensitive)
+//               || _filename.endsWith(u".mp4"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mp+"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".mpp"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".ogg"_q, Qt::CaseInsensitive)
@@ -1835,11 +1829,16 @@ bool DocumentData::isAudioFile() const {
                || _filename.endsWith(u".ogv"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".ogx"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".ram"_q, Qt::CaseInsensitive)
+//               || _filename.endsWith(u".rm"_q, Qt::CaseInsensitive)
+//               || _filename.endsWith(u".rmvb"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".spx"_q, Qt::CaseInsensitive)
+               || _filename.endsWith(u".ts"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".tak"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".wav"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".webma"_q, Qt::CaseInsensitive)
-               || _filename.endsWith(u".webm"_q, Qt::CaseInsensitive)
+//               || _filename.endsWith(u".webm"_q, Qt::CaseInsensitive)
+               || _filename.endsWith(u".wma"_q, Qt::CaseInsensitive)
+//               || _filename.endsWith(u".wmv"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".wv"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".wsd"_q, Qt::CaseInsensitive)
                || _filename.endsWith(u".cda"_q, Qt::CaseInsensitive)) {
@@ -1866,6 +1865,18 @@ bool DocumentData::isVideoFile() const {
 		|| (type == FileDocument
 			&& _nameType == Core::NameType::Video);
 }
+
+//bool DocumentData::isVideoFile() const {
+//    if (type == VideoDocument) {
+//        return true;
+//    }
+//    if (type == FileDocument && _nameType == Core::NameType::Video) {
+//        // No thumbnail from server means it's likely audio-only
+//        // in a video container (uploaded by official client).
+//        return _thumbnail.location.valid();
+//    }
+//    return false;
+//}
 
 bool DocumentData::isSilentVideo() const {
 	return _flags & Flag::SilentVideo;

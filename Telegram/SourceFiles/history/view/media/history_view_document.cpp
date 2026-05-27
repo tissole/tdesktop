@@ -399,7 +399,7 @@ void Document::createComponents() {
 		mask |= HistoryDocumentVoice::Bit();
 	} else {
 		mask |= HistoryDocumentNamed::Bit();
-		if (_data->hasThumbnail() && !_data->isSong()) {
+		if (_data->hasThumbnail() && !_data->isSong() && !_data->isAudioFile()) {
 			_data->loadThumbnail(_realParent->fullId());
 			mask |= HistoryDocumentThumbed::Bit();
 		}

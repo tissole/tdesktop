@@ -1110,7 +1110,8 @@ Storage::SharedMediaTypesMask MediaFile::sharedMediaTypes() const {
 		return Type::RoundFile;
 	} else if (_document->isGifv()) {
 		return Type::GIF;
-	} else if (_document->isVideoFile() && _document->hasDuration()) {
+	//} else if (_document->isVideoFile()) {
+    } else if (_document->isVideoFile() && _document->hasDuration()) {    
 		return Storage::SharedMediaTypesMask{}
 			.added(Type::Video)
 			.added(Type::PhotoVideo);
@@ -1427,6 +1428,7 @@ std::unique_ptr<HistoryView::Media> MediaFile::createView(
 				_spoiler);
 		}
 	} else if (_document->isAnimation() || _document->isVideoFile()) {
+    //} else if (_document->isAnimation() || (_document->isVideoFile() && !_document->isAudioFile())) {    
 		return std::make_unique<HistoryView::Gif>(
 			message,
 			realParent,
