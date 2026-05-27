@@ -845,11 +845,14 @@ bool FileLoadTask::CheckForDocument(
 		std::unique_ptr<Ui::PreparedFileInformation> &result) {
 	static const auto mimes = {
 		u"application/pdf"_q,
+		u"application/x-mobipocket-ebook"_q,
 	};
 	static const auto extensions = {
 		u".pdf"_q,
 		u".epub"_q,
 		u".cbz"_q,
+		u".mobi"_q,
+		u".prc"_q,
 	};
 	if (!filepath.isEmpty()
 		&& !CheckMimeOrExtensions(
@@ -974,11 +977,352 @@ bool FileLoadTask::CheckForDocument(
 		return QImage();
 	};
 
+	auto tryExtractMobiCover = [&] {
+		auto file = QFile(filepath);
+		if (!file.open(QIODevice::ReadOnly)) {
+			return QImage();
+		}
+		const auto bytes = file.readAll();
+		file.close();
+		if (bytes.size() < 86) {
+			return QImage();
+		}
+
+		// Check PDB type="BOOK" creator="MOBI"
+		if (memcmp(bytes.constData() + 60, "BOOK", 4)
+			|| memcmp(bytes.constData() + 64, "MOBI", 4)) {
+			return QImage();
+		}
+
+		auto read16 = [&](int pos) -> uint16 {
+			return ((uint16)(unsigned char)bytes[pos] << 8)
+				| (unsigned char)bytes[pos + 1];
+		};
+		auto read32 = [&](int pos) -> uint32 {
+			return ((uint32)(unsigned char)bytes[pos] << 24)
+				| ((uint32)(unsigned char)bytes[pos + 1] << 16)
+				| ((uint32)(unsigned char)bytes[pos + 2] << 8)
+				| (unsigned char)bytes[pos + 3];
+		};
+
+		const auto numRecords = read16(76);
+		if (numRecords < 1) {
+			return QImage();
+		}
+
+		auto isNonBlank = [](const QImage &image) -> bool {
+			if (image.isNull()) return false;
+			const auto sample = image.scaled(
+				16, 12,
+				Qt::IgnoreAspectRatio,
+				Qt::SmoothTransformation);
+			auto totalR = 0LL, totalG = 0LL, totalB = 0LL;
+			auto pixels = 0;
+			for (auto y = 0; y < 12; ++y) {
+				for (auto x = 0; x < 16; ++x) {
+					const auto p = sample.pixel(x, y);
+					totalR += qRed(p);
+					totalG += qGreen(p);
+					totalB += qBlue(p);
+					++pixels;
+				}
+			}
+			const auto avgR = totalR / pixels;
+			const auto avgG = totalG / pixels;
+			const auto avgB = totalB / pixels;
+			auto dev = 0LL;
+			for (auto y = 0; y < 12; ++y) {
+				for (auto x = 0; x < 16; ++x) {
+					const auto p = sample.pixel(x, y);
+					dev += abs(qRed(p) - avgR)
+						+ abs(qGreen(p) - avgG)
+						+ abs(qBlue(p) - avgB);
+				}
+			}
+			// Very bright or very dark images need more variation
+			// to be considered non-blank (rejects white text pages).
+			if ((avgR >= 230 && avgG >= 230 && avgB >= 230)
+				|| (avgR <= 15 && avgG <= 15 && avgB <= 15)) {
+				return (dev > 5000);
+			}
+			return (dev > 500);
+		};
+
+		// Try EXTH method first (works for some MOBI files)
+		const auto rec0Offset = read32(78);
+		auto firstResource = (uint32)-1;
+		if (rec0Offset + 12 < bytes.size()) {
+			const auto rec0End = (numRecords > 1)
+				? read32(78 + 8)
+				: (int)bytes.size();
+
+			// Parse PalmDoc header (bytes 0-15 of record 0)
+			// to find where text records end and images/resources begin.
+			const auto palmRecords = read16(rec0Offset + 8);
+			// MOBI header starts at rec0Offset+16, check "MOBI" magic.
+			if (rec0Offset + 0x6C + 4 <= bytes.size()
+				&& memcmp(bytes.constData() + rec0Offset + 16, "MOBI", 4) == 0) {
+				const auto mobiLen = read32(rec0Offset + 20);
+				if (mobiLen >= 0x6C - 16 + 4) {
+					const auto fr = read32(rec0Offset + 0x6C);
+					if (fr != 0xFFFFFFFF) firstResource = fr;
+				}
+			}
+			if (firstResource == (uint32)-1 && palmRecords != (uint16)-1) {
+				firstResource = palmRecords + 1;
+			}
+
+			auto exthPos = -1;
+			for (auto i = rec0Offset; (i < rec0End - 12) && i < bytes.size(); ++i) {
+				if (memcmp(bytes.constData() + i, "EXTH", 4) == 0) {
+					const auto exthLen = read32(i + 4);
+					if (exthLen >= 12 && exthLen <= (rec0End - i)) {
+						exthPos = i;
+						break;
+					}
+				}
+			}
+			if (exthPos >= 0) {
+				const auto exthCount = read32(exthPos + 8);
+				auto pos = exthPos + 12;
+				for (auto i = 0u; i < exthCount; ++i) {
+					if (pos + 8 > bytes.size()) break;
+					const auto type = read32(pos);
+					const auto length = read32(pos + 4);
+					if (length < 8 || pos + length > bytes.size()) break;
+					const auto data = bytes.mid(pos + 8, length - 8);
+					pos += length;
+
+					if (type == 202 && data.size() > 8) {
+						auto image = QImage::fromData(data);
+						if (image.isNull()) {
+							image = QImage::fromData(data.mid(8));
+						}
+						if (!image.isNull()) return image;
+					}
+					if ((type == 201 && data.size() >= 4)
+						|| (type == 202 && data.size() == 4)) {
+						const auto coverIdx = read32(pos - length + 8);
+						LOG(("MOBI: EXTH type=%1 data.size=%2 coverIdx=%3 "
+							"firstResource=%4").arg(type).arg(data.size())
+							.arg(coverIdx).arg(firstResource));
+						if (firstResource != (uint32)-1
+							&& coverIdx < (uint32)numRecords) {
+							const auto absoluteIdx = firstResource + coverIdx;
+							if (absoluteIdx < (uint32)numRecords) {
+								const auto off = read32(78 + absoluteIdx * 8);
+								const auto end = (absoluteIdx + 1 < (uint32)numRecords)
+									? read32(78 + (absoluteIdx + 1) * 8)
+									: (int)bytes.size();
+								if (off < (int)bytes.size() && end > (int)off) {
+									auto image = QImage::fromData(
+										bytes.mid(off, end - off));
+									const auto nb = isNonBlank(image);
+									LOG(("MOBI: EXTH cover absolute=%1 "
+										"null=%2 w=%3 h=%4 nb=%5")
+										.arg(absoluteIdx)
+										.arg(image.isNull())
+										.arg(image.width())
+										.arg(image.height())
+										.arg(nb));
+									if (!image.isNull() && nb) {
+										return image;
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// EXTH failed. Scan all records for the largest image.
+		// The cover is typically the biggest JPEG/PNG/GIF record.
+		auto bestIdx = -1;
+		auto bestSize = 0LL;
+		auto isImage = [&](const unsigned char *b) {
+			return (b[0] == 0xFF && b[1] == 0xD8)           // JPEG
+				|| (b[0] == 0x89 && b[1] == 0x50)           // PNG
+				|| (b[0] == 'G' && b[1] == 'I');            // GIF
+		};
+		for (auto idx = 0; idx < numRecords; ++idx) {
+			const auto off = read32(78 + idx * 8);
+			const auto end = (idx + 1 < numRecords)
+				? read32(78 + (idx + 1) * 8)
+				: (int)bytes.size();
+			if (off + 2 > (int)bytes.size() || end <= off) {
+				continue;
+			}
+			const auto b = (const unsigned char *)bytes.constData() + off;
+			if (isImage(b)) {
+				const auto sz = end - off;
+				if (sz > bestSize) {
+					bestSize = sz;
+					bestIdx = idx;
+				}
+			}
+		}
+		if (bestIdx >= 0) {
+			const auto off = read32(78 + bestIdx * 8);
+			const auto end = (bestIdx + 1 < numRecords)
+				? read32(78 + (bestIdx + 1) * 8)
+				: (int)bytes.size();
+			if (off < (int)bytes.size() && end > off) {
+				auto image = QImage::fromData(
+					bytes.mid(off, end - off));
+				const auto nb = isNonBlank(image);
+				LOG(("MOBI: largest record %1 size=%2 loaded "
+					"null=%3 w=%4 h=%5 nonblank=%6")
+					.arg(bestIdx).arg(bestSize)
+					.arg(image.isNull())
+					.arg(image.width())
+					.arg(image.height())
+					.arg(nb));
+			if (!image.isNull()
+				&& image.width() >= 100
+				&& image.height() >= 100
+				&& nb) {
+				return image;
+			}
+			LOG(("MOBI: largest rejected, scanning fallback"));
+			}
+		}
+		// The largest candidate was a false positive (compressed
+		// text that happened to start with image magic bytes).
+		// Scan remaining candidates by size descending, try to
+		// load each, return the first with real dimensions.
+		struct Candidate {
+			int idx = 0;
+			uint32 size = 0;
+		};
+		auto candidates = std::vector<Candidate>();
+		for (auto idx = 0; idx < numRecords; ++idx) {
+			if (idx == bestIdx) continue;
+			const auto off = read32(78 + idx * 8);
+			const auto end = (idx + 1 < numRecords)
+				? read32(78 + (idx + 1) * 8)
+				: (int)bytes.size();
+			if (off + 2 > (int)bytes.size() || end <= off) continue;
+			const auto b = (const unsigned char *)bytes.constData() + off;
+			if (isImage(b)) {
+				candidates.push_back({ idx, end - off });
+			}
+		}
+		ranges::sort(candidates, std::greater<>(), &Candidate::size);
+		LOG(("MOBI: fallback %1 candidates").arg(candidates.size()));
+		for (const auto &c : candidates) {
+			const auto off = read32(78 + c.idx * 8);
+			const auto end = (c.idx + 1 < numRecords)
+				? read32(78 + (c.idx + 1) * 8)
+				: (int)bytes.size();
+			auto image = QImage::fromData(
+				bytes.mid(off, end - off));
+			const auto nb = isNonBlank(image);
+			LOG(("MOBI: fallback try record %1 size=%2 null=%3 "
+				"w=%4 h=%5 nb=%6")
+				.arg(c.idx).arg(c.size)
+				.arg(image.isNull())
+				.arg(image.width())
+				.arg(image.height())
+				.arg(nb));
+			if (!image.isNull()
+				&& image.width() >= 100
+				&& image.height() >= 100
+				&& nb) {
+				return image;
+			}
+		}
+		// Last resort: render a text page from PalmDoc records.
+		const auto compType = read16(rec0Offset + 0);
+		const auto textRecCount = read16(rec0Offset + 8);
+		const auto maxTextRec = (firstResource != (uint32)-1
+			&& firstResource > 1)
+			? std::min((int)firstResource, (int)numRecords)
+			: std::min((int)textRecCount + 1, (int)numRecords);
+		LOG(("MOBI: text fallback compType=%1 textRecCount=%2 "
+			"maxTextRec=%3").arg(compType).arg(textRecCount)
+			.arg(maxTextRec));
+		if (maxTextRec > 1 && (compType == 1 || compType == 2)) {
+			auto fullText = QString();
+			auto targetLen = 2000;
+			for (auto ti = 1; ti < maxTextRec; ++ti) {
+				const auto off = read32(78 + ti * 8);
+				const auto end = (ti + 1 < numRecords)
+					? read32(78 + (ti + 1) * 8)
+					: bytes.size();
+				if (off >= bytes.size() || end <= off) continue;
+				auto data = bytes.mid(off, end - off);
+				QByteArray dec;
+				if (compType == 2) {
+					auto rpos = 0;
+					while (rpos < data.size()) {
+						const auto b = (unsigned char)data[rpos++];
+						if (b == 0x00) {
+							dec.append((char)0x00);
+						} else if (b <= 0x08) {
+							if (rpos + b > data.size()) break;
+							dec.append(data.constData() + rpos, b);
+							rpos += b;
+						} else if (b <= 0x7F) {
+							dec.append((char)b);
+						} else if (b <= 0xBF) {
+							if (rpos >= data.size()) break;
+							const auto b2 = (unsigned char)data[rpos++];
+							const auto dist = ((b & 0x3F) << 5)
+								| ((b2 & 0xF8) >> 3);
+							const auto len = (b2 & 0x07) + 3;
+							if (dist > dec.size() || dist == 0) break;
+							auto src = dec.size() - dist;
+							for (auto k = 0; k < len; ++k) {
+								dec.append(dec[src + k]);
+							}
+						} else {
+							dec.append(' ');
+							dec.append((char)(b ^ 0x80));
+						}
+					}
+				} else {
+					dec = data;
+				}
+				QString chunk = QString::fromUtf8(dec);
+				chunk.remove(QRegularExpression("<[^>]*>"));
+				chunk = chunk.replace("&amp;", "&").replace("&lt;", "<")
+					.replace("&gt;", ">").replace("&quot;", "\"")
+					.replace("&#39;", "'").replace("&nbsp;", " ");
+				fullText += chunk;
+				if (fullText.size() >= targetLen) break;
+			}
+			fullText = fullText.left(targetLen).trimmed();
+			LOG(("MOBI: text fallback fullText size=%1 isEmpty=%2")
+				.arg(fullText.size()).arg(fullText.isEmpty() ? 1 : 0));
+			if (!fullText.isEmpty()) {
+				QImage img(320, 480, QImage::Format_ARGB32_Premultiplied);
+				img.fill(Qt::white);
+				{
+					QPainter p(&img);
+					QFont f(u"Arial"_q, 14);
+					p.setFont(f);
+					p.setPen(Qt::black);
+					QTextOption opt;
+					opt.setWrapMode(QTextOption::WordWrap);
+					p.drawText(QRectF(10, 10, 300, 460), fullText, opt);
+				}
+				LOG(("MOBI: rendered text page %1x%2")
+					.arg(img.width()).arg(img.height()));
+				return img;
+			}
+		}
+		return QImage();
+	};
+
 	auto image = filepath.endsWith(u".pdf"_q, Qt::CaseInsensitive)
 		? tryRenderViaPdftoppm()
 		: (filepath.endsWith(u".epub"_q, Qt::CaseInsensitive)
 			|| filepath.endsWith(u".cbz"_q, Qt::CaseInsensitive))
 		? tryExtractZipCover()
+		: (filepath.endsWith(u".mobi"_q, Qt::CaseInsensitive)
+			|| filepath.endsWith(u".prc"_q, Qt::CaseInsensitive))
+		? tryExtractMobiCover()
 		: QImage();
 	if (image.isNull()) {
 		return false;
