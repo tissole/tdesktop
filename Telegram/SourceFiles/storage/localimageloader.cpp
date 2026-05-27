@@ -39,9 +39,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mainwidget.h"
 #include "mainwindow.h"
 #include "main/main_session.h"
+#include "base/zlib_help.h"
 
 #include <QtCore/QBuffer>
+#include <QtCore/QProcess>
+#include <QtCore/QStandardPaths>
 #include <QtGui/QImageWriter>
+
+#include <cstdlib>
 
 namespace {
 
@@ -304,7 +309,7 @@ void TaskQueue::stop() {
 	if (_thread) {
 		_thread->requestInterruption();
 		_thread->quit();
-		DEBUG_LOG(("Waiting for taskThread to finish"));
+		LOG(("Waiting for taskThread to finish"));
 		_thread->wait();
 		delete base::take(_worker);
 		delete base::take(_thread);
@@ -504,6 +509,8 @@ auto FileLoadTask::ReadMediaInformation(
 	} else if (CheckForVideo(filepath, content, result)) {
 		return result;
 	} else if (CheckForImage(filepath, content, result)) {
+		return result;
+	} else if (CheckForDocument(filepath, content, result)) {
 		return result;
 	}
 	if (v::is<v::null_t>(result->media)) {
@@ -832,6 +839,157 @@ bool FileLoadTask::CheckForImage(
 		std::move(read.format));
 }
 
+bool FileLoadTask::CheckForDocument(
+		const QString &filepath,
+		const QByteArray &content,
+		std::unique_ptr<Ui::PreparedFileInformation> &result) {
+	static const auto mimes = {
+		u"application/pdf"_q,
+	};
+	static const auto extensions = {
+		u".pdf"_q,
+		u".epub"_q,
+		u".cbz"_q,
+	};
+	if (!filepath.isEmpty()
+		&& !CheckMimeOrExtensions(
+			filepath,
+			result->filemime,
+			mimes,
+			extensions)) {
+		return false;
+	}
+
+	auto tryRenderViaPdftoppm = [&] {
+		const auto dirPath = Core::App().settings().downloadPath();
+		const auto outDir = dirPath.isEmpty()
+			? QStandardPaths::writableLocation(
+				QStandardPaths::DownloadLocation)
+			: dirPath;
+		const auto tag = u"%1_%2"_q.arg(crl::now()).arg(rand());
+		auto bestImage = QImage();
+		auto bestDev = 0LL;
+		for (auto page = 1; page <= 10; ++page) {
+			const auto prefix = outDir + u"/tgpdtmp_" + tag;
+			auto process = QProcess();
+			process.start(u"pdftoppm"_q, {
+				u"-jpeg"_q,
+				u"-scale-to"_q, u"320"_q,
+				u"-f"_q, QString::number(page),
+				u"-l"_q, QString::number(page),
+				u"-singlefile"_q,
+				filepath,
+				prefix + u"_pg%1"_q.arg(page),
+			});
+			if (!process.waitForStarted(5000)
+				|| !process.waitForFinished(15000)
+				|| process.exitCode() != 0) {
+				continue;
+			}
+			const auto pagePath = prefix + u"_pg%1.jpg"_q.arg(page);
+			auto image = QImage(pagePath);
+			if (image.isNull()) {
+				continue;
+			}
+			const auto sample = image.scaled(
+				16, 12,
+				Qt::IgnoreAspectRatio,
+				Qt::SmoothTransformation);
+			auto totalR = 0, totalG = 0, totalB = 0;
+			for (auto y = 0; y < 12; ++y) {
+				for (auto x = 0; x < 16; ++x) {
+					const auto p = sample.pixel(x, y);
+					totalR += qRed(p);
+					totalG += qGreen(p);
+					totalB += qBlue(p);
+				}
+			}
+			const auto avgR = totalR / (12 * 16);
+			const auto avgG = totalG / (12 * 16);
+			const auto avgB = totalB / (12 * 16);
+			auto dev = 0LL;
+			for (auto y = 0; y < 12; ++y) {
+				for (auto x = 0; x < 16; ++x) {
+					const auto p = sample.pixel(x, y);
+					dev += abs(qRed(p) - avgR)
+						+ abs(qGreen(p) - avgG)
+						+ abs(qBlue(p) - avgB);
+				}
+			}
+			if (dev > 20000) {
+				return image;
+			}
+			if (dev > 5000 && dev > bestDev) {
+				bestDev = dev;
+				bestImage = std::move(image);
+			}
+		}
+		return bestImage;
+	};
+
+	auto tryExtractZipCover = [&] {
+		auto file = QFile(filepath);
+		if (!file.open(QIODevice::ReadOnly)) {
+			return QImage();
+		}
+		const auto bytes = file.readAll();
+		if (bytes.isEmpty()) {
+			return QImage();
+		}
+		auto zip = zlib::FileToRead(bytes);
+		if (zip.goToFirstFile() != UNZ_OK) {
+			return QImage();
+		}
+		constexpr auto kMaxSize = 10 * 1024 * 1024;
+		const auto imageExts = {
+			u".jpg"_q, u".jpeg"_q, u".png"_q,
+		};
+		auto firstImageBytes = QByteArray();
+		do {
+			const auto name = zip.getCurrentFileName().toLower();
+			auto isImage = false;
+			for (const auto &ext : imageExts) {
+				if (name.endsWith(ext)) {
+					isImage = true;
+					break;
+				}
+			}
+			if (!isImage) {
+				continue;
+			}
+			auto content = zip.readCurrentFileContent(kMaxSize);
+			if (content.isEmpty()) {
+				continue;
+			}
+			if (name.contains(u"cover"_q)) {
+				return Images::Read({ .content = content }).image;
+			}
+			if (firstImageBytes.isEmpty()) {
+				firstImageBytes = content;
+			}
+		} while (zip.goToNextFile() == UNZ_OK);
+		if (!firstImageBytes.isEmpty()) {
+			return Images::Read({ .content = firstImageBytes }).image;
+		}
+		return QImage();
+	};
+
+	auto image = filepath.endsWith(u".pdf"_q, Qt::CaseInsensitive)
+		? tryRenderViaPdftoppm()
+		: (filepath.endsWith(u".epub"_q, Qt::CaseInsensitive)
+			|| filepath.endsWith(u".cbz"_q, Qt::CaseInsensitive))
+		? tryExtractZipCover()
+		: QImage();
+	if (image.isNull()) {
+		return false;
+	}
+	if (!ValidateThumbDimensions(image.width(), image.height())) {
+		return false;
+	}
+	result->fileThumbnail = std::move(image);
+	return true;
+}
+
 bool FileLoadTask::FillImageInformation(
 		QImage &&image,
 		bool animated,
@@ -1103,6 +1261,12 @@ void FileLoadTask::process(ProcessArgs &&args) {
 				thumbnail = PrepareFileThumbnail(base::duplicate(goodThumbnail));
 			}
 		}
+	}
+
+	if (fullimage.isNull()
+		&& _information
+		&& !_information->fileThumbnail.isNull()) {
+		fullimage = _information->fileThumbnail;
 	}
 
 	if (!fullimage.isNull() && fullimage.width() > 0 && !isSong && !isVideo && !isVoice && !isRound) {

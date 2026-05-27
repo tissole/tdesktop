@@ -48,6 +48,7 @@ struct PreparedFileInformation {
 	};
 
 	QString filemime;
+	QImage fileThumbnail;
 	std::variant<v::null_t, Image, Song, Video> media;
 };
 
