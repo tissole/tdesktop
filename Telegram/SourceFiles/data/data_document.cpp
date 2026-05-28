@@ -529,7 +529,7 @@ void DocumentData::setattributes(
 		if (hasThumbnail()) {
 			auto w = _thumbnail.location.width();
 			auto h = _thumbnail.location.height();
-			if (w > 0 && h > 0) {
+			if (w > 0 && h > 0 && w != h) {
 				const auto smaller = std::min(w, h);
 				if (smaller < kMinVideoSide) {
 					const auto scale = float64(kMinVideoSide) / smaller;
