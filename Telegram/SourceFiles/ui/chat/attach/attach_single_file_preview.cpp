@@ -55,6 +55,8 @@ void SingleFilePreview::preparePreview(const PreparedFile &file) {
 	} else if (const auto video = std::get_if<PreparedFileInformation::Video>(
 		&file.information->media)) {
 		preview = video->thumbnail;
+	} else if (!file.preview.isNull()) {
+		preview = file.preview;
 	}
 	prepareThumbFor(data, preview);
 	const auto filepath = file.path;

@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "core/file_utilities.h"
+#include <QProcess>
 #include "core/mime_type.h"
 #include "base/unixtime.h"
 #include "base/random.h"
@@ -39,12 +40,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mainwidget.h"
 #include "mainwindow.h"
 #include "main/main_session.h"
-#include "base/zlib_help.h"
 
 #include <QtCore/QBuffer>
-#include <QtCore/QProcess>
-#include <QtCore/QStandardPaths>
+#include <QtCore/QFile>
+#include <QtCore/QXmlStreamReader>
+#include <mupdf/fitz.h>
 #include <QtGui/QImageWriter>
+
+#include "base/zlib_help.h"
 
 #include <cstdlib>
 
@@ -555,10 +558,10 @@ bool FileLoadTask::CheckForSong(
 		std::unique_ptr<Ui::PreparedFileInformation> &result) {
 	static const auto mimes = {
 		u"audio/aac"_q,
-        u"audio/ac3"_q,
+		u"audio/ac3"_q,
 		u"audio/ac4"_q,
 		u"audio/als"_q,
-        u"audio/ape"_q,
+		u"audio/ape"_q,
 		u"audio/atrac"_q,
 		u"audio/amr-wb"_q,
 		u"audio/amr"_q,		
@@ -582,27 +585,27 @@ bool FileLoadTask::CheckForSong(
 		u"audio/x-dff"_q,
 		u"audio/x-dsd"_q,
 		u"audio/x-dsf"_q,
-        u"audio/x-matroska"_q,
-        u"audio/x-m4a"_q,
+		u"audio/x-matroska"_q,
+		u"audio/x-m4a"_q,
 		u"audio/x-ms-wma"_q,
 		u"audio/x-tta"_q,
 		u"audio/x-wavpack"_q,
 		u"audio/x-tak"_q,
-        u"audio/vorbis"_q,
-        u"audio/vnd.dts"_q,
-        u"audio/vnd.dts.hd"_q,
+		u"audio/vorbis"_q,
+		u"audio/vnd.dts"_q,
+		u"audio/vnd.dts.hd"_q,
 		u"audio/wav"_q,
-        u"audio/webm"_q,
-        u"audio/x-wav"_q,
-        u"audio/vnd.wave"_q,
-        u"audio/wave"_q,
+		u"audio/webm"_q,
+		u"audio/x-wav"_q,
+		u"audio/vnd.wave"_q,
+		u"audio/wave"_q,
 	};
 	static const auto extensions = {
 		u".aac"_q,
 		u".aiff"_q,
 		u".aifc"_q,
 		u".aif"_q,
-		u".alac"_q,        
+		u".alac"_q,		   
 		u".awb"_q,
 		u".amr"_q,
 		u".ac4"_q,
@@ -669,22 +672,22 @@ bool FileLoadTask::CheckForVideo(
 		const QByteArray &content,
 		std::unique_ptr<Ui::PreparedFileInformation> &result) {
 	static const auto mimes = {
-        u"video/avi"_q,
-        u"video/vnd.dvb.file"_q,
+		u"video/avi"_q,
+		u"video/vnd.dvb.file"_q,
 		u"video/mp4"_q,
 		u"video/x-matroska"_q,
-        u"video/ogg"_q,
+		u"video/ogg"_q,
 		u"video/quicktime"_q,
 		u"video/vnd.rn-realvideo"_q,
 		u"video/x-pn-realvideo"_q,
-        u"application/vnd.rn-realmedia-vbr"_q,
+		u"application/vnd.rn-realmedia-vbr"_q,
 		u"video/webm"_q,
 		u"video/x-ms-asf"_q,
-        u"video/asf"_q,
-        u"video/x-ms-wmv"_q,
-        u"video/msvideo"_q,
+		u"video/asf"_q,
+		u"video/x-ms-wmv"_q,
+		u"video/msvideo"_q,
 		u"video/x-msvideo"_q,
-        u"video/x-m4v"_q,
+		u"video/x-m4v"_q,
 		u"video/x-ms-wm"_q,
 		u"video/x-ms-wmv"_q,
 		u"video/wmv"_q,
@@ -692,7 +695,7 @@ bool FileLoadTask::CheckForVideo(
 		u"video/x-flv"_q,
 		u"application/vnd.adobe.flash.movie"_q,
 		u"application/x-shockwave-flash"_q,
-        u"application/mxf"_q,
+		u"application/mxf"_q,
 		u"video/mpeg"_q,
 		u"video/dvd"_q,		
 	};
@@ -708,11 +711,11 @@ bool FileLoadTask::CheckForVideo(
 		u".mp4"_q,
 		u".mkv"_q,
 		u".mov"_q,
-		u".m4v"_q,        
+		u".m4v"_q,		  
 		u".mts"_q,
 		u".m2ts"_q,
 		u".m2v"_q,
-        u".mxf"_q,
+		u".mxf"_q,
 		u".swf"_q,
 		u".ogv"_q,
 		u".ogm"_q,
@@ -846,13 +849,29 @@ bool FileLoadTask::CheckForDocument(
 	static const auto mimes = {
 		u"application/pdf"_q,
 		u"application/x-mobipocket-ebook"_q,
+		u"application/epub+zip"_q,
+		u"application/vnd.openxmlformats-officedocument.wordprocessingml.document"_q,
+		u"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"_q,
+		u"application/vnd.openxmlformats-officedocument.presentationml.presentation"_q,
+		u"application/x-cbr"_q,
+		u"application/vnd.rar"_q,
 	};
 	static const auto extensions = {
 		u".pdf"_q,
 		u".epub"_q,
 		u".cbz"_q,
+		u".cbr"_q,
 		u".mobi"_q,
 		u".prc"_q,
+		u".docx"_q,
+		u".xlsx"_q,
+		u".pptx"_q,
+		u".fb2"_q,
+		u".txt"_q,
+		u".text"_q,
+		u".html"_q,
+		u".htm"_q,
+		u".xhtml"_q,
 	};
 	if (!filepath.isEmpty()
 		&& !CheckMimeOrExtensions(
@@ -863,71 +882,442 @@ bool FileLoadTask::CheckForDocument(
 		return false;
 	}
 
-	auto tryRenderViaPdftoppm = [&] {
-		const auto dirPath = Core::App().settings().downloadPath();
-		const auto outDir = dirPath.isEmpty()
-			? QStandardPaths::writableLocation(
-				QStandardPaths::DownloadLocation)
-			: dirPath;
-		const auto tag = u"%1_%2"_q.arg(crl::now()).arg(rand());
-		auto bestImage = QImage();
-		auto bestDev = 0LL;
-		for (auto page = 1; page <= 10; ++page) {
-			const auto prefix = outDir + u"/tgpdtmp_" + tag;
-			auto process = QProcess();
-			process.start(u"pdftoppm"_q, {
-				u"-jpeg"_q,
-				u"-scale-to"_q, u"320"_q,
-				u"-f"_q, QString::number(page),
-				u"-l"_q, QString::number(page),
-				u"-singlefile"_q,
-				filepath,
-				prefix + u"_pg%1"_q.arg(page),
-			});
-			if (!process.waitForStarted(5000)
-				|| !process.waitForFinished(15000)
-				|| process.exitCode() != 0) {
-				continue;
-			}
-			const auto pagePath = prefix + u"_pg%1.jpg"_q.arg(page);
-			auto image = QImage(pagePath);
-			if (image.isNull()) {
-				continue;
-			}
-			const auto sample = image.scaled(
-				16, 12,
-				Qt::IgnoreAspectRatio,
-				Qt::SmoothTransformation);
-			auto totalR = 0, totalG = 0, totalB = 0;
-			for (auto y = 0; y < 12; ++y) {
-				for (auto x = 0; x < 16; ++x) {
-					const auto p = sample.pixel(x, y);
-					totalR += qRed(p);
-					totalG += qGreen(p);
-					totalB += qBlue(p);
+	auto tryRenderViaMuPDF = [&] {
+		LOG(("MuPDF thumb: trying %1").arg(filepath));
+		auto ctx = fz_new_context(nullptr, nullptr, FZ_STORE_UNLIMITED);
+		if (!ctx) {
+			LOG(("MuPDF thumb: fz_new_context failed"));
+			return QImage();
+		}
+		fz_register_document_handlers(ctx);
+		fz_document *doc = nullptr;
+		fz_var(doc);
+		auto ok = false;
+		if (filepath.endsWith(u".html"_q) || filepath.endsWith(u".htm"_q) || filepath.endsWith(u".xhtml"_q)) {
+			QFile f(filepath);
+			if (f.open(QIODevice::ReadOnly)) {
+				auto html = f.readAll();
+				f.close();
+				auto sanitized = QByteArray();
+				sanitized.reserve(html.size());
+				int tableDepth = 0;
+				for (int i = 0; i < html.size();) {
+					if (html[i] == '<') {
+						int end = i + 1;
+						bool isClosing = (end < html.size() && html[end] == '/');
+						if (isClosing) ++end;
+						int tagStart = end;
+						while (end < html.size() && html[end] != '>' && html[end] != ' ' && html[end] != '\t' && html[end] != '\n' && html[end] != '\r')
+							++end;
+						auto tagName = html.mid(tagStart, end - tagStart).toLower();
+						auto isTableTag = (tagName == "table" || tagName == "tr" || tagName == "td"
+							|| tagName == "th" || tagName == "tbody" || tagName == "thead"
+							|| tagName == "tfoot" || tagName == "caption" || tagName == "colgroup"
+							|| tagName == "col");
+						if (isTableTag) {
+							if (!isClosing && tagName == "table") ++tableDepth;
+							if (isClosing && tagName == "table") --tableDepth;
+							sanitized.append(isClosing ? "</div>" : "<div");
+							if (!isClosing) {
+								auto attrsEnd = i + 1;
+								while (attrsEnd < html.size() && html[attrsEnd] != '>')
+									++attrsEnd;
+								if (attrsEnd < html.size()) {
+									auto afterName = tagStart + tagName.size();
+									sanitized.append(html.mid(afterName, attrsEnd - afterName));
+									sanitized.append(">");
+									i = attrsEnd + 1;
+									continue;
+								}
+							}
+							sanitized.append(">");
+							i = (html[i] == '>') ? i + 2 : end + 1;
+							while (i < html.size() && html[i] != '>') ++i;
+							if (i < html.size()) ++i;
+							continue;
+						}
+					}
+					sanitized.append(html[i]);
+					++i;
+				}
+				LOG(("MuPDF thumb: HTML sanitized, tableDepth=%1, size=%2→%3")
+					.arg(tableDepth).arg(html.size()).arg(sanitized.size()));
+				fz_try(ctx) {
+					doc = fz_open_document_with_stream(
+						ctx, "html", fz_open_memory(ctx,
+							(const unsigned char*)sanitized.constData(),
+							sanitized.size()));
+					if (doc) ok = true;
+				} fz_catch(ctx) {
+					LOG(("MuPDF thumb: fz_open_document sanitized error: %1")
+						.arg(QString::fromUtf8(fz_caught_message(ctx))));
+				}
+				if (!ok) {
+					LOG(("MuPDF thumb: sanitized open failed, falling back to raw"));
+					fz_try(ctx) {
+						doc = fz_open_document_with_stream(
+							ctx, "html", fz_open_memory(ctx,
+								(const unsigned char*)html.constData(),
+								html.size()));
+						if (doc) ok = true;
+					} fz_catch(ctx) {
+						LOG(("MuPDF thumb: raw fallback also failed: %1")
+							.arg(QString::fromUtf8(fz_caught_message(ctx))));
+					}
+				}
+			} else {
+				LOG(("MuPDF thumb: failed to open HTML file for sanitization"));
+				fz_try(ctx) {
+					doc = fz_open_document(ctx, filepath.toUtf8().constData());
+					if (doc) ok = true;
+				} fz_catch(ctx) {
+					LOG(("MuPDF thumb: fz_open_document error: %1")
+						.arg(QString::fromUtf8(fz_caught_message(ctx))));
 				}
 			}
-			const auto avgR = totalR / (12 * 16);
-			const auto avgG = totalG / (12 * 16);
-			const auto avgB = totalB / (12 * 16);
-			auto dev = 0LL;
-			for (auto y = 0; y < 12; ++y) {
-				for (auto x = 0; x < 16; ++x) {
-					const auto p = sample.pixel(x, y);
-					dev += abs(qRed(p) - avgR)
-						+ abs(qGreen(p) - avgG)
-						+ abs(qBlue(p) - avgB);
-				}
-			}
-			if (dev > 20000) {
-				return image;
-			}
-			if (dev > 5000 && dev > bestDev) {
-				bestDev = dev;
-				bestImage = std::move(image);
+		} else {
+			fz_try(ctx) {
+				doc = fz_open_document(ctx, filepath.toUtf8().constData());
+				if (doc) ok = true;
+			} fz_catch(ctx) {
+				LOG(("MuPDF thumb: fz_open_document error: %1")
+					.arg(QString::fromUtf8(fz_caught_message(ctx))));
 			}
 		}
-		return bestImage;
+		if (!ok) {
+			LOG(("MuPDF thumb: fz_open_document failed"));
+			fz_drop_context(ctx);
+			return QImage();
+		}
+		if (fz_is_document_reflowable(ctx, doc)) {
+			LOG(("MuPDF thumb: reflowable, laying out at 320x400 em=12"));
+			fz_try(ctx) {
+				fz_layout_document(ctx, doc, 320, 400, 12);
+			} fz_catch(ctx) {
+				LOG(("MuPDF thumb: fz_layout_document failed: %1")
+					.arg(QString::fromUtf8(fz_caught_message(ctx))));
+				fz_drop_document(ctx, doc);
+				fz_drop_context(ctx);
+				return QImage();
+			}
+		} else {
+			LOG(("MuPDF thumb: not reflowable"));
+		}
+		auto pageCount = 0;
+		fz_try(ctx) {
+			pageCount = fz_count_pages(ctx, doc);
+		} fz_catch(ctx) {
+			LOG(("MuPDF thumb: fz_count_pages failed: %1")
+				.arg(QString::fromUtf8(fz_caught_message(ctx))));
+			fz_drop_document(ctx, doc);
+			fz_drop_context(ctx);
+			return QImage();
+		}
+		auto bestColorImage = QImage();
+		auto bestFallbackImage = QImage();
+		auto bestFallbackScore = 0;
+		auto lastResortImage = QImage();
+		const auto maxPages = std::min(pageCount, 50);
+		fz_pixmap *pix = nullptr;
+		fz_page *page = nullptr;
+		fz_var(pix);
+		fz_var(page);
+		auto renderPage = [&](int i) {
+			LOG(("MuPDF thumb: rendering page %1").arg(i));
+			fz_try(ctx) {
+				page = fz_load_page(ctx, doc, i);
+				auto bounds = fz_bound_page(ctx, page);
+				LOG(("MuPDF thumb: page %1 bounds=(%2,%3)-(%4,%5)")
+					.arg(i).arg(bounds.x0).arg(bounds.y0)
+					.arg(bounds.x1).arg(bounds.y1));
+				const auto pageW = bounds.x1 - bounds.x0;
+				auto scale = 320.0f / (pageW > 1 ? pageW : 320);
+				if (scale > 3.0f) scale = 3.0f;
+				const auto ctm = fz_scale(scale, scale);
+				auto r = fz_transform_rect(bounds, ctm);
+				auto bbox = fz_round_rect(r);
+				LOG(("MuPDF thumb: page %1 scale=%2 bbox=%3,%4 %5x%6")
+					.arg(i).arg(scale)
+					.arg(bbox.x0).arg(bbox.y0)
+					.arg(bbox.x1 - bbox.x0)
+					.arg(bbox.y1 - bbox.y0));
+				pix = fz_new_pixmap_with_bbox(
+					ctx, fz_device_rgb(ctx), bbox, NULL, 0);
+				LOG(("MuPDF thumb: page %1 pixmap %2x%3 stride=%4")
+					.arg(i).arg(pix->w).arg(pix->h).arg(pix->stride));
+				fz_clear_pixmap_with_value(ctx, pix, 0xFF);
+				auto dev = fz_new_draw_device(ctx, ctm, pix);
+				fz_run_page(ctx, page, dev, fz_identity, NULL);
+				fz_close_device(ctx, dev);
+				fz_drop_device(ctx, dev);
+				fz_drop_page(ctx, page);
+				page = nullptr;
+			} fz_catch(ctx) {
+				LOG(("MuPDF thumb: page %1 render failed: %2")
+					.arg(i)
+					.arg(QString::fromUtf8(fz_caught_message(ctx))));
+				fz_drop_page(ctx, page);
+				page = nullptr;
+				fz_drop_pixmap(ctx, pix);
+				pix = nullptr;
+			}
+		};
+		for (auto i = 0; i < maxPages; ++i) {
+			renderPage(i);
+			if (!pix) continue;
+			QImage image(pix->w, pix->h, QImage::Format_RGB888);
+			for (auto y = 0; y < pix->h; ++y) {
+				auto src = pix->samples + y * pix->stride;
+				auto dst = reinterpret_cast<uchar*>(image.scanLine(y));
+				for (auto x = 0; x < pix->w; ++x) {
+					dst[x * 3 + 0] = src[0];
+					dst[x * 3 + 1] = src[1];
+					dst[x * 3 + 2] = src[2];
+					src += 3;
+				}
+			}
+			{
+				auto minR = 255, minG = 255, minB = 255;
+				auto maxR = 0, maxG = 0, maxB = 0;
+				auto nonWhite = 0;
+				for (auto y = 0; y < pix->h; ++y) {
+					auto src = pix->samples + y * pix->stride;
+					for (auto x = 0; x < pix->w; ++x) {
+						if (src[0] < minR) minR = src[0];
+						if (src[1] < minG) minG = src[1];
+						if (src[2] < minB) minB = src[2];
+						if (src[0] > maxR) maxR = src[0];
+						if (src[1] > maxG) maxG = src[1];
+						if (src[2] > maxB) maxB = src[2];
+						if (src[0] < 255 || src[1] < 255 || src[2] < 255)
+							++nonWhite;
+						src += 3;
+					}
+				}
+			LOG(("MuPDF thumb: page %1 pix stats: "
+				"minRGB=(%2,%3,%4) maxRGB=(%5,%6,%7) "
+				"nonWhite=%8/%9")
+				.arg(i).arg(minR).arg(minG).arg(minB)
+				.arg(maxR).arg(maxG).arg(maxB)
+				.arg(nonWhite).arg(pix->w * pix->h));
+            }    
+			{
+				constexpr auto kHBands = 10;
+				const auto bandH = pix->h / kHBands;
+				for (auto b = 0; b < kHBands; ++b) {
+					auto bandNonWhite = 0;
+					const auto y0 = b * bandH;
+					const auto y1 = (b + 1) * bandH;
+					for (auto y = y0; y < y1; ++y) {
+						auto s = pix->samples + y * pix->stride;
+						for (auto x = 0; x < pix->w; ++x) {
+							if (s[0] < 255 || s[1] < 255 || s[2] < 255)
+								++bandNonWhite;
+							s += 3;
+						}
+					}
+					LOG(("MuPDF thumb: page %1 hband[%2] y=%3-%4 nonWhite=%5")
+						.arg(i).arg(b).arg(y0).arg(y1 - 1).arg(bandNonWhite));
+				}
+			}
+			{
+				constexpr auto kVBands = 10;
+				const auto bandW = pix->w / kVBands;
+				for (auto b = 0; b < kVBands; ++b) {
+					auto bandNonWhite = 0;
+					const auto x0 = b * bandW;
+					const auto x1 = (b + 1) * bandW;
+					for (auto y = 0; y < pix->h; ++y) {
+						auto s = pix->samples + y * pix->stride;
+						for (auto x = 0; x < pix->w; ++x) {
+							if (x >= x0 && x < x1
+								&& (s[0] < 255 || s[1] < 255 || s[2] < 255))
+								++bandNonWhite;
+							s += 3;
+						}
+					}
+					LOG(("MuPDF thumb: page %1 vband[%2] x=%3-%4 nonWhite=%5")
+						.arg(i).arg(b).arg(x0).arg(x1 - 1).arg(bandNonWhite));
+				}
+			}
+
+		if (i == 0 && !image.save("D:/mupdf_thumb_debug.png")) {
+			LOG(("MuPDF thumb: FAILED to save debug image"));
+		} else if (i == 0) {
+			LOG(("MuPDF thumb: saved debug image to D:/mupdf_thumb_debug.png"));
+		}
+		fz_drop_pixmap(ctx, pix);
+		pix = nullptr;
+		if (image.isNull()) continue;
+		if (lastResortImage.isNull())
+			lastResortImage = image;
+		const auto sample = image.scaled(
+			16, 12,
+			Qt::IgnoreAspectRatio,
+			Qt::SmoothTransformation);
+		auto hasColor = false;
+		auto allSame = true;
+		auto contentScore = 0;
+		const auto p0 = sample.pixel(0, 0);
+		const auto firstR = qRed(p0), firstG = qGreen(p0), firstB = qBlue(p0);
+		for (auto y = 0; y < 12; ++y) {
+			for (auto x = 0; x < 16; ++x) {
+				const auto p = sample.pixel(x, y);
+				const auto r = qRed(p), g = qGreen(p), b = qBlue(p);
+				if (r != g || r != b)
+					hasColor = true;
+				if (allSame && (x > 0 || y > 0))
+					if (r != firstR || g != firstG || b != firstB)
+						allSame = false;
+				if (r < 255 || g < 255 || b < 255)
+					++contentScore;
+			}
+		}
+		{
+			auto colorCount = 0;
+			auto firstColoredR = 0, firstColoredG = 0, firstColoredB = 0;
+			for (auto y = 0; y < 12 && !colorCount; ++y)
+				for (auto x = 0; x < 16 && !colorCount; ++x) {
+					const auto p = sample.pixel(x, y);
+					const auto r = qRed(p), g = qGreen(p), b = qBlue(p);
+					if (r != g || r != b) {
+						firstColoredR = r;
+						firstColoredG = g;
+						firstColoredB = b;
+						++colorCount;
+					}
+				}
+			LOG(("MuPDF thumb: page %1 sample firstRGB=(%2,%3,%4) "
+				"hasColor=%5 allSame=%6 score=%7 "
+				"firstColored=(%8,%9,%10)")
+				.arg(i).arg(firstR).arg(firstG).arg(firstB)
+				.arg(hasColor).arg(allSame).arg(contentScore)
+				.arg(firstColoredR).arg(firstColoredG).arg(firstColoredB));
+		}
+		if (hasColor && bestColorImage.isNull()) {
+			LOG(("MuPDF thumb: page %1 hasColor").arg(i));
+			bestColorImage = std::move(image);
+			break;
+		}
+		if (allSame) continue;
+		if (contentScore > bestFallbackScore) {
+			bestFallbackScore = contentScore;
+			bestFallbackImage = std::move(image);
+		}
+		constexpr auto kGoodEnough = 48;
+		if (contentScore >= kGoodEnough) {
+			LOG(("MuPDF thumb: page %1 good enough (%2)")
+				.arg(i).arg(contentScore));
+			break;
+		}
+		}
+	if (fz_is_document_reflowable(ctx, doc)) {
+		LOG(("MuPDF thumb: diagnostic 740pt relayout"));
+		fz_try(ctx) {
+			fz_layout_document(ctx, doc, 740, 400, 12);
+		} fz_catch(ctx) {
+			LOG(("MuPDF thumb: 740pt layout failed: %1")
+				.arg(QString::fromUtf8(fz_caught_message(ctx))));
+		}
+		if (fz_count_pages(ctx, doc) > 0) {
+			const auto savedImage = lastResortImage;
+			renderPage(0);
+			if (pix) {
+				QImage img(pix->w, pix->h, QImage::Format_RGB888);
+				for (auto y = 0; y < pix->h; ++y) {
+					auto s = pix->samples + y * pix->stride;
+					auto d = reinterpret_cast<uchar*>(img.scanLine(y));
+					for (auto x = 0; x < pix->w; ++x) {
+						d[x * 3 + 0] = s[0];
+						d[x * 3 + 1] = s[1];
+						d[x * 3 + 2] = s[2];
+						s += 3;
+					}
+				}
+				auto w = pix->w, h = pix->h;
+				auto minR = 255, minG = 255, minB = 255;
+				auto maxR = 0, maxG = 0, maxB = 0, nonWhite = 0;
+				for (auto y = 0; y < h; ++y) {
+					auto s = pix->samples + y * pix->stride;
+					for (auto x = 0; x < w; ++x) {
+						if (s[0] < minR) minR = s[0];
+						if (s[1] < minG) minG = s[1];
+						if (s[2] < minB) minB = s[2];
+						if (s[0] > maxR) maxR = s[0];
+						if (s[1] > maxG) maxG = s[1];
+						if (s[2] > maxB) maxB = s[2];
+						if (s[0] < 255 || s[1] < 255 || s[2] < 255)
+							++nonWhite;
+						s += 3;
+					}
+				}
+				LOG(("MuPDF thumb: 740pt pix stats: "
+					"minRGB=(%1,%2,%3) maxRGB=(%4,%5,%6) "
+					"nonWhite=%7/%8")
+					.arg(minR).arg(minG).arg(minB)
+					.arg(maxR).arg(maxG).arg(maxB)
+					.arg(nonWhite).arg(w * h));
+				{
+					constexpr auto kH = 10;
+					const auto hh = h / kH;
+					for (auto b = 0; b < kH; ++b) {
+						auto nw = 0;
+						const auto y0 = b * hh;
+						const auto y1 = (b + 1) * hh;
+						for (auto y = y0; y < y1; ++y) {
+							auto s = pix->samples + y * pix->stride;
+							for (auto x = 0; x < w; ++x) {
+								if (s[0] < 255 || s[1] < 255 || s[2] < 255)
+									++nw;
+								s += 3;
+							}
+						}
+						LOG(("MuPDF thumb: 740pt hband[%1] y=%2-%3 nonWhite=%4")
+							.arg(b).arg(y0).arg(y1 - 1).arg(nw));
+					}
+				}
+				{
+					constexpr auto kV = 10;
+					const auto vw = w / kV;
+					for (auto b = 0; b < kV; ++b) {
+						auto nw = 0;
+						const auto x0 = b * vw;
+						const auto x1 = (b + 1) * vw;
+						for (auto y = 0; y < h; ++y) {
+							auto s = pix->samples + y * pix->stride;
+							for (auto x = 0; x < w; ++x) {
+								if (x >= x0 && x < x1
+									&& (s[0] < 255 || s[1] < 255 || s[2] < 255))
+									++nw;
+								s += 3;
+							}
+						}
+						LOG(("MuPDF thumb: 740pt vband[%1] x=%2-%3 nonWhite=%4")
+							.arg(b).arg(x0).arg(x1 - 1).arg(nw));
+					}
+				}
+				if (!img.save("D:/mupdf_thumb_debug_740.png")) {
+					LOG(("MuPDF thumb: FAILED to save 740pt debug"));
+				} else {
+					LOG(("MuPDF thumb: saved 740pt debug to D:/mupdf_thumb_debug_740.png"));
+				}
+				if (!img.isNull())
+					lastResortImage = std::move(img);
+				fz_drop_pixmap(ctx, pix);
+				pix = nullptr;
+			}
+		}
+	}
+	fz_drop_document(ctx, doc);
+	fz_drop_context(ctx);
+	if (!bestColorImage.isNull()) return std::move(bestColorImage);
+	if (!bestFallbackImage.isNull()) {
+		LOG(("MuPDF thumb: best fallback score=%1").arg(bestFallbackScore));
+		return std::move(bestFallbackImage);
+	}
+	LOG(("MuPDF thumb: returning lastResortImage, size=%1x%2")
+		.arg(lastResortImage.width()).arg(lastResortImage.height()));
+	return lastResortImage;
 	};
 
 	auto tryExtractZipCover = [&] {
@@ -940,41 +1330,192 @@ bool FileLoadTask::CheckForDocument(
 			return QImage();
 		}
 		auto zip = zlib::FileToRead(bytes);
+
+		const auto isEpub = filepath.endsWith(u".epub"_q, Qt::CaseInsensitive);
+		if (isEpub) {
+			auto container = zip.readFileContent(
+				"META-INF/container.xml",
+				zlib::kCaseInsensitive,
+				64 * 1024);
+			if (!container.isEmpty()) {
+				auto opfPath = QString();
+				auto r = QXmlStreamReader(container);
+				while (!r.atEnd() && !r.hasError()) {
+					if (r.readNext() == QXmlStreamReader::StartElement
+						&& r.name().toString().compare(
+							u"rootfile"_q,
+							Qt::CaseInsensitive) == 0) {
+						opfPath = r.attributes().value(
+							u"full-path"_q).toString();
+						break;
+					}
+				}
+				if (!opfPath.isEmpty()) {
+					auto opf = zip.readFileContent(
+						opfPath.toUtf8().constData(),
+						zlib::kCaseSensitive,
+						256 * 1024);
+					if (!opf.isEmpty()) {
+						auto epub3Href = QString();
+						auto epub2Id = QString();
+						auto items = QMap<QString, QString>();
+						auto r2 = QXmlStreamReader(opf);
+						while (!r2.atEnd() && !r2.hasError()) {
+							r2.readNext();
+							if (r2.isStartElement()) {
+								const auto tag = r2.name().toString().toLower();
+								if (tag == u"item") {
+									const auto id = r2.attributes().value(
+										u"id"_q).toString();
+									const auto href = r2.attributes().value(
+										u"href"_q).toString();
+									const auto props = r2.attributes().value(
+										u"properties"_q).toString();
+									if (!id.isEmpty() && !href.isEmpty()) {
+										items[id] = href;
+									}
+									if (!props.isEmpty()
+										&& props.split(u' ').contains(
+											u"cover-image"_q)) {
+										epub3Href = href;
+									}
+								} else if (tag == u"meta") {
+									const auto name = r2.attributes().value(
+										u"name"_q).toString();
+									const auto content = r2.attributes().value(
+										u"content"_q).toString();
+									if (name.compare(
+										u"cover"_q,
+										Qt::CaseInsensitive) == 0) {
+										epub2Id = content;
+									}
+								}
+							}
+						}
+						const auto coverHref = !epub3Href.isEmpty()
+							? epub3Href
+							: (!epub2Id.isEmpty() && items.contains(epub2Id)
+								? items[epub2Id]
+								: QString());
+						if (!coverHref.isEmpty()) {
+							auto resolvePath = [](
+									const QString &opfDir,
+									const QString &href) {
+								if (href.startsWith(u'/'))
+									return href.mid(1);
+								auto result = opfDir + href;
+								auto parts = QStringList();
+								for (const auto &p : result.split(u'/')) {
+									if (p == u"..") {
+										if (!parts.isEmpty())
+											parts.removeLast();
+									} else if (!p.isEmpty() && p != u".") {
+										parts.push_back(p);
+									}
+								}
+								return parts.join(u'/');
+							};
+							const auto opfDir = opfPath.contains(u'/')
+								? opfPath.left(
+									opfPath.lastIndexOf(u'/') + 1)
+								: QString();
+							const auto resolved = resolvePath(
+								opfDir,
+								coverHref);
+							constexpr auto kCoverMax = 10 * 1024 * 1024;
+							auto imageData = zip.readFileContent(
+								resolved.toUtf8().constData(),
+								zlib::kCaseSensitive,
+								kCoverMax);
+							if (!imageData.isEmpty()) {
+								auto image = QImage::fromData(imageData);
+								if (!image.isNull()) return image;
+							}
+						}
+					}
+				}
+			}
+			zip.clearError();
+		}
+
 		if (zip.goToFirstFile() != UNZ_OK) {
 			return QImage();
 		}
-		constexpr auto kMaxSize = 10 * 1024 * 1024;
-		const auto imageExts = {
-			u".jpg"_q, u".jpeg"_q, u".png"_q,
-		};
-		auto firstImageBytes = QByteArray();
+		auto candidateNames = std::vector<QString>();
 		do {
-			const auto name = zip.getCurrentFileName().toLower();
-			auto isImage = false;
-			for (const auto &ext : imageExts) {
-				if (name.endsWith(ext)) {
-					isImage = true;
-					break;
-				}
-			}
-			if (!isImage) {
-				continue;
-			}
-			auto content = zip.readCurrentFileContent(kMaxSize);
-			if (content.isEmpty()) {
-				continue;
-			}
-			if (name.contains(u"cover"_q)) {
-				return Images::Read({ .content = content }).image;
-			}
-			if (firstImageBytes.isEmpty()) {
-				firstImageBytes = content;
+			const auto name = zip.getCurrentFileName();
+			const auto lower = name.toLower();
+			if (lower.endsWith(u".jpg"_q)
+				|| lower.endsWith(u".jpeg"_q)
+				|| lower.endsWith(u".png"_q)
+				|| lower.endsWith(u".gif"_q)
+				|| lower.endsWith(u".bmp"_q)
+				|| lower.endsWith(u".webp"_q)
+				|| lower.endsWith(u".tiff"_q)
+				|| lower.endsWith(u".tif"_q)) {
+				candidateNames.push_back(name);
 			}
 		} while (zip.goToNextFile() == UNZ_OK);
-		if (!firstImageBytes.isEmpty()) {
-			return Images::Read({ .content = firstImageBytes }).image;
+
+		if (candidateNames.empty()) return QImage();
+
+		auto naturalCmp = [](const QString &a, const QString &b) {
+			auto i = 0, j = 0;
+			while (i < a.size() && j < b.size()) {
+				if (a[i].isDigit() && b[j].isDigit()) {
+					auto ai = i;
+					while (ai < a.size() && a[ai].isDigit()) ++ai;
+					auto bj = j;
+					while (bj < b.size() && b[bj].isDigit()) ++bj;
+					auto aNum = a.mid(i, ai - i).toULongLong();
+					auto bNum = b.mid(j, bj - j).toULongLong();
+					if (aNum != bNum) return aNum < bNum;
+					i = ai;
+					j = bj;
+				} else {
+					if (a[i].toLower() != b[j].toLower())
+						return a[i].toLower() < b[j].toLower();
+					++i;
+					++j;
+				}
+			}
+			return a.size() < b.size();
+		};
+		std::sort(
+			candidateNames.begin(),
+			candidateNames.end(),
+			naturalCmp);
+
+		auto isCoverName = [](const QString &name) -> bool {
+			const auto lower = name.toLower();
+			const auto base = lower.contains(u'/')
+				? lower.mid(lower.lastIndexOf(u'/') + 1)
+				: lower;
+			const auto dot = base.lastIndexOf(u'.');
+			const auto stem = (dot >= 0) ? base.left(dot) : base;
+			return (stem == u"cover"
+				|| stem == u"folder"
+				|| stem == u"thumb"
+				|| stem == u"thumbnail"
+				|| stem == u"front");
+		};
+		for (const auto &name : candidateNames) {
+			if (isCoverName(name)) {
+				constexpr auto kMaxSize = 10 * 1024 * 1024;
+				auto content = zip.readFileContent(
+					name.toUtf8().constData(),
+					zlib::kCaseSensitive,
+					kMaxSize);
+				auto image = QImage::fromData(content);
+				if (!image.isNull()) return image;
+			}
 		}
-		return QImage();
+		constexpr auto kMaxSize = 10 * 1024 * 1024;
+		auto content = zip.readFileContent(
+			candidateNames.front().toUtf8().constData(),
+			zlib::kCaseSensitive,
+			kMaxSize);
+		return QImage::fromData(content);
 	};
 
 	auto tryExtractMobiCover = [&] {
@@ -984,15 +1525,7 @@ bool FileLoadTask::CheckForDocument(
 		}
 		const auto bytes = file.readAll();
 		file.close();
-		if (bytes.size() < 86) {
-			return QImage();
-		}
-
-		// Check PDB type="BOOK" creator="MOBI"
-		if (memcmp(bytes.constData() + 60, "BOOK", 4)
-			|| memcmp(bytes.constData() + 64, "MOBI", 4)) {
-			return QImage();
-		}
+		if (bytes.size() < 86) return QImage();
 
 		auto read16 = [&](int pos) -> uint16 {
 			return ((uint16)(unsigned char)bytes[pos] << 8)
@@ -1005,325 +1538,171 @@ bool FileLoadTask::CheckForDocument(
 				| (unsigned char)bytes[pos + 3];
 		};
 
-		const auto numRecords = read16(76);
-		if (numRecords < 1) {
+		if (memcmp(bytes.constData() + 60, "BOOK", 4)
+			|| memcmp(bytes.constData() + 64, "MOBI", 4)) {
 			return QImage();
 		}
 
-		auto isNonBlank = [](const QImage &image) -> bool {
-			if (image.isNull()) return false;
-			const auto sample = image.scaled(
-				16, 12,
-				Qt::IgnoreAspectRatio,
-				Qt::SmoothTransformation);
-			auto totalR = 0LL, totalG = 0LL, totalB = 0LL;
-			auto pixels = 0;
-			for (auto y = 0; y < 12; ++y) {
-				for (auto x = 0; x < 16; ++x) {
-					const auto p = sample.pixel(x, y);
-					totalR += qRed(p);
-					totalG += qGreen(p);
-					totalB += qBlue(p);
-					++pixels;
-				}
-			}
-			const auto avgR = totalR / pixels;
-			const auto avgG = totalG / pixels;
-			const auto avgB = totalB / pixels;
-			auto dev = 0LL;
-			for (auto y = 0; y < 12; ++y) {
-				for (auto x = 0; x < 16; ++x) {
-					const auto p = sample.pixel(x, y);
-					dev += abs(qRed(p) - avgR)
-						+ abs(qGreen(p) - avgG)
-						+ abs(qBlue(p) - avgB);
-				}
-			}
-			// Very bright or very dark images need more variation
-			// to be considered non-blank (rejects white text pages).
-			if ((avgR >= 230 && avgG >= 230 && avgB >= 230)
-				|| (avgR <= 15 && avgG <= 15 && avgB <= 15)) {
-				return (dev > 5000);
-			}
-			return (dev > 500);
-		};
-
-		// Try EXTH method first (works for some MOBI files)
+		const auto numRecords = read16(76);
+		if (numRecords < 1) return QImage();
 		const auto rec0Offset = read32(78);
+
+		// Determine first resource (image) record index.
 		auto firstResource = (uint32)-1;
-		if (rec0Offset + 12 < bytes.size()) {
-			const auto rec0End = (numRecords > 1)
-				? read32(78 + 8)
-				: (int)bytes.size();
-
-			// Parse PalmDoc header (bytes 0-15 of record 0)
-			// to find where text records end and images/resources begin.
-			const auto palmRecords = read16(rec0Offset + 8);
-			// MOBI header starts at rec0Offset+16, check "MOBI" magic.
-			if (rec0Offset + 0x6C + 4 <= bytes.size()
-				&& memcmp(bytes.constData() + rec0Offset + 16, "MOBI", 4) == 0) {
-				const auto mobiLen = read32(rec0Offset + 20);
-				if (mobiLen >= 0x6C - 16 + 4) {
-					const auto fr = read32(rec0Offset + 0x6C);
-					if (fr != 0xFFFFFFFF) firstResource = fr;
-				}
-			}
-			if (firstResource == (uint32)-1 && palmRecords != (uint16)-1) {
-				firstResource = palmRecords + 1;
-			}
-
-			auto exthPos = -1;
-			for (auto i = rec0Offset; (i < rec0End - 12) && i < bytes.size(); ++i) {
-				if (memcmp(bytes.constData() + i, "EXTH", 4) == 0) {
-					const auto exthLen = read32(i + 4);
-					if (exthLen >= 12 && exthLen <= (rec0End - i)) {
-						exthPos = i;
-						break;
-					}
-				}
-			}
-			if (exthPos >= 0) {
-				const auto exthCount = read32(exthPos + 8);
-				auto pos = exthPos + 12;
-				for (auto i = 0u; i < exthCount; ++i) {
-					if (pos + 8 > bytes.size()) break;
-					const auto type = read32(pos);
-					const auto length = read32(pos + 4);
-					if (length < 8 || pos + length > bytes.size()) break;
-					const auto data = bytes.mid(pos + 8, length - 8);
-					pos += length;
-
-					if (type == 202 && data.size() > 8) {
-						auto image = QImage::fromData(data);
-						if (image.isNull()) {
-							image = QImage::fromData(data.mid(8));
-						}
-						if (!image.isNull()) return image;
-					}
-					if ((type == 201 && data.size() >= 4)
-						|| (type == 202 && data.size() == 4)) {
-						const auto coverIdx = read32(pos - length + 8);
-						LOG(("MOBI: EXTH type=%1 data.size=%2 coverIdx=%3 "
-							"firstResource=%4").arg(type).arg(data.size())
-							.arg(coverIdx).arg(firstResource));
-						if (firstResource != (uint32)-1
-							&& coverIdx < (uint32)numRecords) {
-							const auto absoluteIdx = firstResource + coverIdx;
-							if (absoluteIdx < (uint32)numRecords) {
-								const auto off = read32(78 + absoluteIdx * 8);
-								const auto end = (absoluteIdx + 1 < (uint32)numRecords)
-									? read32(78 + (absoluteIdx + 1) * 8)
-									: (int)bytes.size();
-								if (off < (int)bytes.size() && end > (int)off) {
-									auto image = QImage::fromData(
-										bytes.mid(off, end - off));
-									const auto nb = isNonBlank(image);
-									LOG(("MOBI: EXTH cover absolute=%1 "
-										"null=%2 w=%3 h=%4 nb=%5")
-										.arg(absoluteIdx)
-										.arg(image.isNull())
-										.arg(image.width())
-										.arg(image.height())
-										.arg(nb));
-									if (!image.isNull() && nb) {
-										return image;
-									}
-								}
-							}
-						}
-					}
-				}
+		if (rec0Offset + 0x6C + 4 <= bytes.size()
+			&& memcmp(bytes.constData() + rec0Offset + 16, "MOBI", 4) == 0) {
+			const auto mobiLen = read32(rec0Offset + 20);
+			if (mobiLen >= 0x6C - 16 + 4) {
+				const auto fr = read32(rec0Offset + 0x6C);
+				if (fr != 0xFFFFFFFF) firstResource = fr;
 			}
 		}
+		if (firstResource == (uint32)-1) {
+			firstResource = read16(rec0Offset + 8) + 1;
+		}
 
-		// EXTH failed. Scan all records for the largest image.
-		// The cover is typically the biggest JPEG/PNG/GIF record.
-		auto bestIdx = -1;
-		auto bestSize = 0LL;
-		auto isImage = [&](const unsigned char *b) {
-			return (b[0] == 0xFF && b[1] == 0xD8)           // JPEG
-				|| (b[0] == 0x89 && b[1] == 0x50)           // PNG
-				|| (b[0] == 'G' && b[1] == 'I');            // GIF
-		};
+		// EXTH records can contain cover data (type 201 = cover offset, 202 = cover data).
+		const auto rec0End = (numRecords > 1)
+			? read32(78 + 8)
+			: (int)bytes.size();
+		for (auto i = rec0Offset; (i < rec0End - 12) && i < bytes.size(); ++i) {
+			if (memcmp(bytes.constData() + i, "EXTH", 4) != 0) continue;
+			const auto exthLen = read32(i + 4);
+			if (exthLen < 12 || exthLen > (rec0End - i)) continue;
+			const auto exthCount = read32(i + 8);
+			auto pos = i + 12;
+			for (auto j = 0u; j < exthCount; ++j) {
+				if (pos + 8 > bytes.size()) break;
+				const auto type = read32(pos);
+				const auto length = read32(pos + 4);
+				if (length < 8 || pos + length > bytes.size()) break;
+				const auto data = bytes.mid(pos + 8, length - 8);
+				pos += length;
+
+				if (type == 202 && data.size() > 8) {
+					auto image = QImage::fromData(data);
+					if (image.isNull()) image = QImage::fromData(data.mid(8));
+					if (!image.isNull()) return image;
+				}
+				if ((type == 201 && data.size() >= 4)
+					|| (type == 202 && data.size() == 4)) {
+					const auto coverIdx = read32(pos - length + 8);
+					if (firstResource == (uint32)-1) continue;
+					const auto absoluteIdx = firstResource + coverIdx;
+					if (absoluteIdx >= (uint32)numRecords) continue;
+					const auto off = read32(78 + absoluteIdx * 8);
+					const auto end = (absoluteIdx + 1 < (uint32)numRecords)
+						? read32(78 + (absoluteIdx + 1) * 8)
+						: (int)bytes.size();
+				if (off < (int)bytes.size() && end > off) {
+					if (off + 4 <= bytes.size()) {
+						const auto *m = (const unsigned char *)bytes.constData() + off;
+						const auto isMarker
+							= (m[0] == 'F' && m[1] == 'L' && m[2] == 'I' && m[3] == 'S')
+							|| (m[0] == 'F' && m[1] == 'C' && m[2] == 'I' && m[3] == 'S')
+							|| (m[0] == 'S' && m[1] == 'R' && m[2] == 'C' && m[3] == 'S')
+							|| (m[0] == 'R' && m[1] == 'E' && m[2] == 'S' && m[3] == 'C')
+							|| (m[0] == 'B' && m[1] == 'O' && m[2] == 'U' && m[3] == 'N')
+							|| (m[0] == 'F' && m[1] == 'D' && m[2] == 'S' && m[3] == 'T')
+							|| (m[0] == 'D' && m[1] == 'A' && m[2] == 'T' && m[3] == 'P')
+							|| (m[0] == 'A' && m[1] == 'U' && m[2] == 'D' && m[3] == 'I')
+							|| (m[0] == 'V' && m[1] == 'I' && m[2] == 'D' && m[3] == 'E')
+							|| (m[0] == 0xE9 && m[1] == 0x8E && m[2] == 0x0D && m[3] == 0x0A);
+						if (isMarker) continue;
+					}
+					auto image = QImage::fromData(bytes.mid(off, end - off));
+					if (!image.isNull()) return image;
+				}
+				}
+			}
+			break;
+		}
+
+		// Scan all records for image data.
 		for (auto idx = 0; idx < numRecords; ++idx) {
-			const auto off = read32(78 + idx * 8);
-			const auto end = (idx + 1 < numRecords)
-				? read32(78 + (idx + 1) * 8)
-				: (int)bytes.size();
-			if (off + 2 > (int)bytes.size() || end <= off) {
-				continue;
-			}
-			const auto b = (const unsigned char *)bytes.constData() + off;
-			if (isImage(b)) {
-				const auto sz = end - off;
-				if (sz > bestSize) {
-					bestSize = sz;
-					bestIdx = idx;
-				}
-			}
-		}
-		if (bestIdx >= 0) {
-			const auto off = read32(78 + bestIdx * 8);
-			const auto end = (bestIdx + 1 < numRecords)
-				? read32(78 + (bestIdx + 1) * 8)
-				: (int)bytes.size();
-			if (off < (int)bytes.size() && end > off) {
-				auto image = QImage::fromData(
-					bytes.mid(off, end - off));
-				const auto nb = isNonBlank(image);
-				LOG(("MOBI: largest record %1 size=%2 loaded "
-					"null=%3 w=%4 h=%5 nonblank=%6")
-					.arg(bestIdx).arg(bestSize)
-					.arg(image.isNull())
-					.arg(image.width())
-					.arg(image.height())
-					.arg(nb));
-			if (!image.isNull()
-				&& image.width() >= 100
-				&& image.height() >= 100
-				&& nb) {
-				return image;
-			}
-			LOG(("MOBI: largest rejected, scanning fallback"));
-			}
-		}
-		// The largest candidate was a false positive (compressed
-		// text that happened to start with image magic bytes).
-		// Scan remaining candidates by size descending, try to
-		// load each, return the first with real dimensions.
-		struct Candidate {
-			int idx = 0;
-			uint32 size = 0;
-		};
-		auto candidates = std::vector<Candidate>();
-		for (auto idx = 0; idx < numRecords; ++idx) {
-			if (idx == bestIdx) continue;
 			const auto off = read32(78 + idx * 8);
 			const auto end = (idx + 1 < numRecords)
 				? read32(78 + (idx + 1) * 8)
 				: (int)bytes.size();
 			if (off + 2 > (int)bytes.size() || end <= off) continue;
 			const auto b = (const unsigned char *)bytes.constData() + off;
-			if (isImage(b)) {
-				candidates.push_back({ idx, end - off });
-			}
-		}
-		ranges::sort(candidates, std::greater<>(), &Candidate::size);
-		LOG(("MOBI: fallback %1 candidates").arg(candidates.size()));
-		for (const auto &c : candidates) {
-			const auto off = read32(78 + c.idx * 8);
-			const auto end = (c.idx + 1 < numRecords)
-				? read32(78 + (c.idx + 1) * 8)
-				: (int)bytes.size();
-			auto image = QImage::fromData(
-				bytes.mid(off, end - off));
-			const auto nb = isNonBlank(image);
-			LOG(("MOBI: fallback try record %1 size=%2 null=%3 "
-				"w=%4 h=%5 nb=%6")
-				.arg(c.idx).arg(c.size)
-				.arg(image.isNull())
-				.arg(image.width())
-				.arg(image.height())
-				.arg(nb));
+			const auto isJpeg = (b[0] == 0xFF && b[1] == 0xD8);
+			const auto isPng = (b[0] == 0x89 && b[1] == 0x50);
+			const auto isGif = (b[0] == 'G' && b[1] == 'I');
+			if (!isJpeg && !isPng && !isGif) continue;
+			auto image = QImage::fromData(bytes.mid(off, end - off));
 			if (!image.isNull()
 				&& image.width() >= 100
-				&& image.height() >= 100
-				&& nb) {
+				&& image.height() >= 100) {
 				return image;
-			}
-		}
-		// Last resort: render a text page from PalmDoc records.
-		const auto compType = read16(rec0Offset + 0);
-		const auto textRecCount = read16(rec0Offset + 8);
-		const auto maxTextRec = (firstResource != (uint32)-1
-			&& firstResource > 1)
-			? std::min((int)firstResource, (int)numRecords)
-			: std::min((int)textRecCount + 1, (int)numRecords);
-		LOG(("MOBI: text fallback compType=%1 textRecCount=%2 "
-			"maxTextRec=%3").arg(compType).arg(textRecCount)
-			.arg(maxTextRec));
-		if (maxTextRec > 1 && (compType == 1 || compType == 2)) {
-			auto fullText = QString();
-			auto targetLen = 2000;
-			for (auto ti = 1; ti < maxTextRec; ++ti) {
-				const auto off = read32(78 + ti * 8);
-				const auto end = (ti + 1 < numRecords)
-					? read32(78 + (ti + 1) * 8)
-					: bytes.size();
-				if (off >= bytes.size() || end <= off) continue;
-				auto data = bytes.mid(off, end - off);
-				QByteArray dec;
-				if (compType == 2) {
-					auto rpos = 0;
-					while (rpos < data.size()) {
-						const auto b = (unsigned char)data[rpos++];
-						if (b == 0x00) {
-							dec.append((char)0x00);
-						} else if (b <= 0x08) {
-							if (rpos + b > data.size()) break;
-							dec.append(data.constData() + rpos, b);
-							rpos += b;
-						} else if (b <= 0x7F) {
-							dec.append((char)b);
-						} else if (b <= 0xBF) {
-							if (rpos >= data.size()) break;
-							const auto b2 = (unsigned char)data[rpos++];
-							const auto dist = ((b & 0x3F) << 5)
-								| ((b2 & 0xF8) >> 3);
-							const auto len = (b2 & 0x07) + 3;
-							if (dist > dec.size() || dist == 0) break;
-							auto src = dec.size() - dist;
-							for (auto k = 0; k < len; ++k) {
-								dec.append(dec[src + k]);
-							}
-						} else {
-							dec.append(' ');
-							dec.append((char)(b ^ 0x80));
-						}
-					}
-				} else {
-					dec = data;
-				}
-				QString chunk = QString::fromUtf8(dec);
-				chunk.remove(QRegularExpression("<[^>]*>"));
-				chunk = chunk.replace("&amp;", "&").replace("&lt;", "<")
-					.replace("&gt;", ">").replace("&quot;", "\"")
-					.replace("&#39;", "'").replace("&nbsp;", " ");
-				fullText += chunk;
-				if (fullText.size() >= targetLen) break;
-			}
-			fullText = fullText.left(targetLen).trimmed();
-			LOG(("MOBI: text fallback fullText size=%1 isEmpty=%2")
-				.arg(fullText.size()).arg(fullText.isEmpty() ? 1 : 0));
-			if (!fullText.isEmpty()) {
-				QImage img(320, 480, QImage::Format_ARGB32_Premultiplied);
-				img.fill(Qt::white);
-				{
-					QPainter p(&img);
-					QFont f(u"Arial"_q, 14);
-					p.setFont(f);
-					p.setPen(Qt::black);
-					QTextOption opt;
-					opt.setWrapMode(QTextOption::WordWrap);
-					p.drawText(QRectF(10, 10, 300, 460), fullText, opt);
-				}
-				LOG(("MOBI: rendered text page %1x%2")
-					.arg(img.width()).arg(img.height()));
-				return img;
 			}
 		}
 		return QImage();
 	};
 
-	auto image = filepath.endsWith(u".pdf"_q, Qt::CaseInsensitive)
-		? tryRenderViaPdftoppm()
-		: (filepath.endsWith(u".epub"_q, Qt::CaseInsensitive)
-			|| filepath.endsWith(u".cbz"_q, Qt::CaseInsensitive))
-		? tryExtractZipCover()
-		: (filepath.endsWith(u".mobi"_q, Qt::CaseInsensitive)
-			|| filepath.endsWith(u".prc"_q, Qt::CaseInsensitive))
-		? tryExtractMobiCover()
-		: QImage();
+	auto tryExtractRarCover = [&] {
+		auto list = QProcess();
+		list.start(u"unrar"_q, {
+			u"lb"_q, u"-c-"_q, u"-p-"_q, filepath
+		});
+		list.waitForFinished(10000);
+		if (list.exitCode() != 0) return QImage();
+		const auto lines = QString::fromUtf8(
+			list.readAllStandardOutput()).split(u'\n', Qt::SkipEmptyParts);
+
+		auto candidates = std::vector<QString>();
+		for (const auto &line : lines) {
+			const auto name = line.trimmed();
+			const auto lower = name.toLower();
+			if (lower.endsWith(u".jpg"_q)
+				|| lower.endsWith(u".jpeg"_q)
+				|| lower.endsWith(u".png"_q)
+				|| lower.endsWith(u".gif"_q)
+				|| lower.endsWith(u".webp"_q)) {
+				candidates.push_back(name);
+			}
+		}
+		if (candidates.empty()) return QImage();
+
+		std::sort(candidates.begin(), candidates.end());
+		for (const auto &name : candidates) {
+			auto extract = QProcess();
+			extract.start(u"unrar"_q, {
+				u"p"_q, u"-c-"_q, u"-p-"_q, u"-inul"_q, filepath, name
+			});
+			extract.waitForFinished(10000);
+			if (extract.exitCode() != 0) continue;
+			auto image = QImage::fromData(
+				extract.readAllStandardOutput());
+			if (!image.isNull()
+				&& image.width() >= 100
+				&& image.height() >= 100) {
+				return image;
+			}
+		}
+		return QImage();
+	};
+
+	auto image = [&]() -> QImage {
+		if (filepath.endsWith(u".pdf"_q, Qt::CaseInsensitive)) {
+			return tryRenderViaMuPDF();
+		}
+		if (filepath.endsWith(u".epub"_q, Qt::CaseInsensitive)
+			|| filepath.endsWith(u".cbz"_q, Qt::CaseInsensitive)) {
+			auto result = tryExtractZipCover();
+			if (!result.isNull()) return result;
+		}
+		if (filepath.endsWith(u".mobi"_q, Qt::CaseInsensitive)
+			|| filepath.endsWith(u".prc"_q, Qt::CaseInsensitive)) {
+			auto result = tryExtractMobiCover();
+			if (!result.isNull()) return result;
+		}
+		if (filepath.endsWith(u".cbr"_q, Qt::CaseInsensitive)) {
+			auto result = tryExtractRarCover();
+			if (!result.isNull()) return result;
+		}
+		return tryRenderViaMuPDF();
+	}();
 	if (image.isNull()) {
 		return false;
 	}
@@ -1503,6 +1882,14 @@ void FileLoadTask::process(ProcessArgs &&args) {
 			? filename
 			: _displayName)));
 
+	if (filename.endsWith(u".htm"_q, Qt::CaseInsensitive)) {
+		attributes[0] = MTP_documentAttributeFilename(MTP_string(
+			QString(filename).chopped(4) + u"[htm].xhtml"_q));
+	} else if (filename.endsWith(u".html"_q, Qt::CaseInsensitive)) {
+		attributes[0] = MTP_documentAttributeFilename(MTP_string(
+			QString(filename).chopped(5) + u"[html].xhtml"_q));
+	}
+
 	auto thumbnail = PreparedFileThumbnail();
 
 	auto photo = MTP_photoEmpty(MTP_long(0));
@@ -1581,7 +1968,7 @@ void FileLoadTask::process(ProcessArgs &&args) {
 					MTPdouble(),
 					MTPstring()));
 				const auto lowerName = QString(filename).toLower();
-				if (lowerName.endsWith(u".webm"_q)) {
+				if (filename.endsWith(u".webm"_q, Qt::CaseInsensitive)) {
 					attributes[0] = MTP_documentAttributeFilename(MTP_string(
 						QString(filename).chopped(5) + u"[webm].mp4"_q));
 				}

@@ -466,6 +466,18 @@ void PrepareDetails(PreparedFile &file, int previewWidth, int sideLimit) {
 		}
 	} else if (v::is<Song>(file.information->media)) {
 		file.type = PreparedFile::Type::Music;
+	} else if (!file.information->fileThumbnail.isNull()) {
+		auto blurred = Images::Blur(Images::Opaque(
+			base::duplicate(file.information->fileThumbnail)));
+		if (!blurred.isNull()) {
+			file.preview = blurred.scaledToWidth(
+				previewWidth * style::DevicePixelRatio(),
+				Qt::SmoothTransformation);
+			if (!file.preview.isNull()) {
+				file.preview.setDevicePixelRatio(
+					style::DevicePixelRatio());
+			}
+		}
 	}
 }
 

@@ -100,6 +100,7 @@ PRIVATE
     desktop-app::external_openssl
     desktop-app::external_openal
     desktop-app::external_xxhash
+    desktop-app::external_mupdf
     runtimeobject.lib
 )
 
