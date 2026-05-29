@@ -244,18 +244,18 @@ QString FileExtension(const QString &filepath) {
 
 NameType DetectNameType(const QString &filepath) {
     static const auto kImage = SplitExtensions(u"\
-afdesign ai apng arw avif bmp cr2 cr3 cur dcm dng exr gif hdr heic icns ico \
-j2k jfif jp2 jpeg jpg jpg-large jpf jpx jxl nef orf png png-large psd qoi \
+afdesign ai apng arw avif bmp cr2 cr3 cur dcm dng exr gif hdr heic heif icns ico \
+j2k jfif jp2 jpeg jpg jpg-large jpf jpx jxl nef orf png png-large psd qoi qta \
 raw rw2 sketch svg tga tif tiff webp"_q);
 
     static const auto kVideo = SplitExtensions(u"\
 264 265 3g2 3gp 3gpp aep avi asf asx dav divx f4v flv h264 h265 hevc hvec \
-m2p m2s m2t m2ts m2v m4s m4v mkv mov mp4 mpeg mpg mpv mts mxf ogv ogm ps qt rm rv \
+m2p m2s m2t m2ts m2v m4v mkv mov mp4 mpeg mpg mpv mts mxf ogv ogm ps qt rm rv \
 rmvb srt swf tgs tgv tp trp ts tsv vob webm wmv wtv xvid"_q);
 
     static const auto kAudio = SplitExtensions(u"\
-aac ac3 ac4 aif aifc aiff alac als amr ape atrac awb caf cda cue dsf dff dts dtshd \
-f4a f4b flac gsm m4a m4b m4r mka mid midi mp1 mp2 mp3 mpc mp+ mpp ogg oga ogx \
+aac ac3 ac4 aff aif aifc aiff alac als amr ape atrac au awb caf cda cue dsf dff dts dtshd  eac3 \
+f4a f4b flac m4a m4b m4p m4r mka mp2 mp3 mpc mp+ mpp ogg oga ogx \
 opus ra ram spx tak tta usac wav webma wma wv wsd"_q);
 
 	static const auto kDocument = SplitExtensions(u"\
@@ -264,7 +264,7 @@ tex xspf xml djvu diag ps ost kml pub epub mobi cbr cbz fb2 prc ris pem p7b \
 m3u m3u8 wpd wpl htm html xhtml key"_q);
 
 	static const auto kArchive = SplitExtensions(u"\
-7z arj bz2 gz rar tar xz z zip zst"_q);
+7z ace arj boz bz2 gz rar tar tgz xz z zip zst"_q);
 
 	static const auto kThemeFile = SplitExtensions(u"\
 tdesktop-theme tdesktop-palette tgios-theme attheme"_q);
@@ -274,7 +274,7 @@ c cc cpp cxx h m mm swift cs ts class java css ninja cmake patch diff plist \
 gyp gitignore strings asoundrc torrent csr json xaml md keylayout sql \
 sln xib mk \
 \
-dmg img iso vcd \
+cdr dmg img iso isoimg vcd \
 \
 pdb eot ics ips ipa core mem pcap ovpn part pcapng dmp pkpass dat zxp crash \
 file bak gbr plain dlc fon fnt otf ttc ttf gpx db rss cur \
@@ -284,8 +284,8 @@ tdesktop-endpoints"_q);
 	static const auto kExecutable = SplitExtensions(
 #ifdef Q_OS_WIN
 		u"\
-ad ade adp ahk app application appref-ms asp aspx asx bas bat bin cab cdxml \
-cer cfg cgi chi chm cmd cnt com conf cpl crt csh der diagcab dll drv eml \
+ad ade adp ahk apk app application appref-ms asp aspx asx bas bat bin cab cdxml \
+cer cfg cgi chi chm cmd cnt com conf cpl crt csh db der diagcab dll drv eml \
 exe fon fxp gadget grp hlp hpj hta htt inf ini ins inx isp isu its jar jnlp \
 job js jse jsp key ksh lexe library-ms lnk local lua mad maf mag mam \
 manifest maq mar mas mat mau mav maw mcf mda mdb mde mdt mdw mdz mht mhtml \
@@ -293,7 +293,7 @@ mjs mmc mof msc msg msh msh1 msh2 msh1xml msh2xml mshxml msi msp mst ops \
 osd paf pcd phar php php3 php4 php5 php7 phps php-s pht phtml pif pl plg pm \
 pod prf prg ps1 ps2 ps1xml ps2xml psc1 psc2 psd1 psm1 pssc pst py py3 pyc \
 pyd pyi pyo pyw pyzw pyz rb reg rgs scf scr sct search-ms settingcontent-ms \
-sh shb shs slk sys swf t tmp u3p url vb vbe vbp vbs vbscript vdx vsmacros \
+sh shb shs slk sqlite sqlite3 sys swf t tmp torrent u3p url vb vbe vbp vbs vbscript vdx vsmacros \
 vsd vsdm vsdx vss vssm vssx vst vstm vstx vsw vsx vtx website wlua ws wsc \
 wsf wsh xbap xll xlsb xlsm xnk xs"_q
 #elif defined Q_OS_MAC // Q_OS_MAC
