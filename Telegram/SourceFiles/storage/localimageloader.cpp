@@ -655,6 +655,51 @@ bool FileLoadTask::CheckForSong(
 	if (!ValidateThumbDimensions(media.cover.width(), media.cover.height())) {
 		media.cover = QImage();
 	}
+	static const auto extToMime = {
+		std::pair(u".aac"_q, u"audio/aac"_q),
+		std::pair(u".ac4"_q, u"audio/ac4"_q),
+		std::pair(u".aif"_q, u"audio/aiff"_q),
+		std::pair(u".aifc"_q, u"audio/aiff"_q),
+		std::pair(u".aiff"_q, u"audio/aiff"_q),
+		std::pair(u".aff"_q, u"audio/x-dff"_q),
+		std::pair(u".alac"_q, u"audio/x-alac"_q),
+		std::pair(u".ape"_q, u"audio/x-ape"_q),
+		std::pair(u".au"_q, u"audio/basic"_q),
+		std::pair(u".caf"_q, u"audio/x-caf"_q),
+		std::pair(u".dff"_q, u"audio/dff"_q),
+		std::pair(u".dsf"_q, u"audio/x-dsf"_q),
+		std::pair(u".dts"_q, u"audio/vnd.dts"_q),
+		std::pair(u".dtshd"_q, u"audio/vnd.dts.hd"_q),
+		std::pair(u".f4a"_q, u"audio/mp4"_q),
+		std::pair(u".f4b"_q, u"audio/mp4"_q),
+		std::pair(u".flac"_q, u"audio/flac"_q),
+		std::pair(u".m4a"_q, u"audio/mp4"_q),
+		std::pair(u".m4b"_q, u"audio/mp4"_q),
+		std::pair(u".m4r"_q, u"audio/mp4"_q),
+		std::pair(u".mka"_q, u"audio/x-matroska"_q),
+		std::pair(u".mp+"_q, u"audio/x-musepack"_q),
+		std::pair(u".mp2"_q, u"audio/mpeg"_q),
+		std::pair(u".mp3"_q, u"audio/mpeg"_q),
+		std::pair(u".mpc"_q, u"audio/x-musepack"_q),
+		std::pair(u".mpp"_q, u"audio/x-musepack"_q),
+		std::pair(u".oga"_q, u"audio/ogg"_q),
+		std::pair(u".ogg"_q, u"audio/ogg"_q),
+		std::pair(u".ogx"_q, u"audio/ogg"_q),
+		std::pair(u".opus"_q, u"audio/opus"_q),
+		std::pair(u".pcm"_q, u"audio/pcm"_q),
+		std::pair(u".snd"_q, u"audio/basic"_q),
+		std::pair(u".wav"_q, u"audio/wav"_q),
+		std::pair(u".webma"_q, u"audio/webm"_q),
+		std::pair(u".wma"_q, u"audio/x-ms-wma"_q),
+		std::pair(u".wsd"_q, u"audio/x-wsd"_q),
+		std::pair(u".wv"_q, u"audio/x-wavpack"_q),
+	};
+	for (const auto &[ext, mime] : extToMime) {
+		if (filepath.endsWith(ext, Qt::CaseInsensitive)) {
+			result->filemime = mime;
+			break;
+		}
+	}
 	result->media = std::move(media);
 	return true;
 }
@@ -678,7 +723,6 @@ bool FileLoadTask::CheckForVideo(
 		u"video/ogg"_q,
 		u"video/quicktime"_q,
 		u"video/vnd.dvb.file"_q,
-		u"video/vnd.rn-realvideo"_q,
 		u"video/webm"_q,
 		u"video/wmv"_q,
 		u"video/x-flv"_q,
@@ -696,7 +740,6 @@ bool FileLoadTask::CheckForVideo(
 		u".asf"_q,
 		u".asx"_q,
 		u".avi"_q,
-		u".f4p"_q,
 		u".f4v"_q,
 		u".flv"_q,
 		u".m2ts"_q,
@@ -709,9 +752,6 @@ bool FileLoadTask::CheckForVideo(
 		u".mxf"_q,
 		u".ogm"_q,
 		u".ogv"_q,
-		u".rm"_q,
-		u".rmvb"_q,
-		u".rv"_q,
 		u".swf"_q,
 		u".ts"_q,
 		u".vob"_q,
@@ -735,68 +775,52 @@ bool FileLoadTask::CheckForVideo(
 		return false;
 	}
 
-	if (filepath.endsWith(u".mp4"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".mov"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".qt"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/quicktime"_q;
-	} else if (filepath.endsWith(u".mkv"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".webm"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".asf"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".asx"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".avi"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".wmv"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".ts"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".mts"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".m2ts"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".tp"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".trp"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".flv"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".m2v"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".mpeg"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".mpg"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".mpv"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".m2p"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".m2s"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".m2t"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".ps"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".vob"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".wtv"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".3gp"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".3gpp"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".3g2"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".m4v"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".f4v"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".m4s"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".ogv"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".ogm"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".rm"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".rv"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".rmvb"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".divx"_q, Qt::CaseInsensitive) ||
-				filepath.endsWith(u".xvid"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".mxf"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".dav"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
-	} else if (filepath.endsWith(u".swf"_q, Qt::CaseInsensitive)) {
-		result->filemime = u"video/mp4"_q;
+	static const auto extToMime = {
+		std::pair(u".mp4"_q, u"video/mp4"_q),
+		std::pair(u".mov"_q, u"video/quicktime"_q),
+		std::pair(u".qt"_q, u"video/quicktime"_q),
+		std::pair(u".mkv"_q, u"video/mp4"_q),
+		std::pair(u".webm"_q, u"video/mp4"_q),
+		std::pair(u".asf"_q, u"video/mp4"_q),
+		std::pair(u".asx"_q, u"video/mp4"_q),
+		std::pair(u".avi"_q, u"video/mp4"_q),
+		std::pair(u".wmv"_q, u"video/mp4"_q),
+		std::pair(u".ts"_q, u"video/mp4"_q),
+		std::pair(u".mts"_q, u"video/mp4"_q),
+		std::pair(u".m2ts"_q, u"video/mp4"_q),
+		std::pair(u".tp"_q, u"video/mp4"_q),
+		std::pair(u".trp"_q, u"video/mp4"_q),
+		std::pair(u".flv"_q, u"video/mp4"_q),
+		std::pair(u".m2v"_q, u"video/mp4"_q),
+		std::pair(u".mpeg"_q, u"video/mp4"_q),
+		std::pair(u".mpg"_q, u"video/mp4"_q),
+		std::pair(u".mpv"_q, u"video/mp4"_q),
+		std::pair(u".m2p"_q, u"video/mp4"_q),
+		std::pair(u".m2s"_q, u"video/mp4"_q),
+		std::pair(u".m2t"_q, u"video/mp4"_q),
+		std::pair(u".ps"_q, u"video/mp4"_q),
+		std::pair(u".vob"_q, u"video/mp4"_q),
+		std::pair(u".wtv"_q, u"video/mp4"_q),
+		std::pair(u".3gp"_q, u"video/mp4"_q),
+		std::pair(u".3gpp"_q, u"video/mp4"_q),
+		std::pair(u".3g2"_q, u"video/mp4"_q),
+		std::pair(u".m4v"_q, u"video/mp4"_q),
+		std::pair(u".f4v"_q, u"video/mp4"_q),
+		std::pair(u".ogv"_q, u"video/mp4"_q),
+		std::pair(u".ogm"_q, u"video/mp4"_q),
+		std::pair(u".rm"_q, u"video/mp4"_q),
+		std::pair(u".rv"_q, u"video/mp4"_q),
+		std::pair(u".rmvb"_q, u"video/mp4"_q),
+		std::pair(u".divx"_q, u"video/mp4"_q),
+		std::pair(u".xvid"_q, u"video/mp4"_q),
+		std::pair(u".mxf"_q, u"video/mp4"_q),
+		std::pair(u".dav"_q, u"video/mp4"_q),
+	};
+	for (const auto &[ext, mime] : extToMime) {
+		if (filepath.endsWith(ext, Qt::CaseInsensitive)) {
+			result->filemime = mime;
+			break;
+		}
 	}
 	result->media = std::move(media);
 	return true;
