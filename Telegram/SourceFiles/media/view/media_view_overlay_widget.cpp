@@ -4712,6 +4712,10 @@ void OverlayWidget::initStreamingThumbnail() {
 			_photo->videoLocation(Data::PhotoSize::Large).height())
 		: good
 		? good->size()
+		: thumbnail
+		? thumbnail->size()
+		: blurred
+		? blurred->size()
 		: _document->dimensions;
 	if (size.isEmpty()) {
 		return;
