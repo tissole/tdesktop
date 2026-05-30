@@ -970,8 +970,18 @@ void Histories::deleteMessages(const MessageIdsList &ids, bool revoke) {
 		}
 	}
 
-	for (const auto &[history, ids] : idsByPeer) {
-		history->owner().histories().deleteMessages(history, ids, revoke);
+	constexpr auto kMaxDeleteBatch = 100;
+	for (const auto &[history, allIds] : idsByPeer) {
+		auto offset = 0;
+		while (offset < allIds.size()) {
+			const auto batchSize = qMin(
+				int(allIds.size()) - offset,
+				kMaxDeleteBatch);
+			auto batch = allIds.mid(offset, batchSize);
+			history->owner().histories().deleteMessages(
+				history, batch, revoke);
+			offset += batchSize;
+		}
 	}
 	for (const auto &[peer, ids] : scheduledIdsByPeer) {
 		peer->session().api().request(MTPmessages_DeleteScheduledMessages(

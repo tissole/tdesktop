@@ -3666,6 +3666,7 @@ void ApiWrap::forwardMessages(
 		sendFlags |= SendFlag::f_reply_to;
 	}
 
+	constexpr auto kMaxForwardBatch = 100;
 	auto forwardFrom = draft.items.front()->history()->peer;
 	auto ids = QVector<MTPint>();
 	auto randomIds = QVector<MTPlong>();
@@ -3799,6 +3800,9 @@ void ApiWrap::forwardMessages(
 		if (forwardFrom != newFrom) {
 			sendAccumulated();
 			forwardFrom = newFrom;
+		}
+		if (ids.size() >= kMaxForwardBatch) {
+			sendAccumulated();
 		}
 		ids.push_back(MTP_int(item->id));
 		randomIds.push_back(MTP_long(randomId));
