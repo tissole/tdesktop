@@ -242,11 +242,9 @@ bool Gif::CanPlayInline(not_null<DocumentData*> document) {
 }
 
 QSize Gif::sizeForAspectRatio() const {
-	// We use size only for aspect ratio and we want to have it
-	// as close to the thumbnail as possible.
-	//if (!_data->dimensions.isEmpty()) {
-	//	return _data->dimensions;
-	//}
+	if (!_data->dimensions.isEmpty()) {
+		return _data->dimensions;
+	}
 	if (_videoCover) {
 		return { _videoCover->width(), _videoCover->height() };
 	} else if (_data->hasThumbnail()) {
@@ -1273,10 +1271,22 @@ QImage Gif::prepareThumbCache(QSize outer) const {
 	} else if (const auto embedded = _dataMedia->thumbnailInline()) {
 		blurred = embedded;
 	}
+	if (!large && !blurred && !_data->hasThumbnail() && _data->isVideoFile()) {
+		static const auto placeholder = QImage(u":/icons/video_placeholder.png"_q);
+		if (!placeholder.isNull()) {
+			return PrepareWithBlurredBackground(
+				outer,
+				::Media::Streaming::DecideVideoFrameResize(
+					outer,
+					placeholder.size()),
+				placeholder,
+				QImage());
+		}
+	}
 	const auto resize = large
 		? ::Media::Streaming::DecideVideoFrameResize(
 			outer,
-			good ? large->size() : _data->dimensions)
+			large->size())
 		: ::Media::Streaming::ExpandDecision();
 	return PrepareWithBlurredBackground(
 		outer,
@@ -2259,9 +2269,28 @@ void Gif::validateGroupedCache(
 		return;
 	}
 
-	const auto original = sizeForAspectRatio();
-	const auto originalWidth = style::ConvertScale(original.width());
-	const auto originalHeight = style::ConvertScale(original.height());
+	if (!image && !_data->hasThumbnail() && _data->isVideoFile()) {
+		static const auto placeholder = QImage(u":/icons/video_placeholder.png"_q);
+		if (!placeholder.isNull()) {
+			*cacheKey = key;
+			const auto pixSize = placeholder.size()
+				.scaled(geometry.size(), Qt::KeepAspectRatio);
+			const auto ratio = style::DevicePixelRatio();
+			auto scaled = Images::Prepare(
+				placeholder,
+				pixSize * ratio,
+				{ .options = options, .outer = geometry.size() });
+			auto rounded = Images::Round(
+				std::move(scaled),
+				MediaRoundingMask(rounding));
+			*cache = Ui::PixmapFromImage(std::move(rounded));
+			return;
+		}
+	}
+
+	const auto imageSize = image ? image->size() : sizeForAspectRatio();
+	const auto originalWidth = style::ConvertScale(imageSize.width());
+	const auto originalHeight = style::ConvertScale(imageSize.height());
 	const auto pixSize = Ui::GetImageScaleSizeForGeometry(
 		{ originalWidth, originalHeight },
 		{ width, height });
