@@ -7976,6 +7976,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_settings_caption_from_file_name" = "Caption with file name";
 "lng_settings_hide_counter" = "Hide online users counter";
 "lng_settings_hide_stories" = "Hide Stories";
+"lng_settings_custom_file_thumbs" = "Custom thumbs for files";
+"lng_settings_choose_thumb_image" = "Choose custom thumb image...";
 "lng_settings_translate_to_tc" = "使用正體中文翻譯訊息";
 "lng_settings_screen_shot_mode" = "Screenshot Mode";
 "lng_settings_restart_hint" = "WARNING: Changing options that are colored in red will take effect only after the app restarts.";

@@ -1272,15 +1272,25 @@ QImage Gif::prepareThumbCache(QSize outer) const {
 		blurred = embedded;
 	}
 	if (!large && !blurred && !_data->hasThumbnail() && _data->isVideoFile()) {
-		static const auto placeholder = QImage(u":/icons/video_placeholder.png"_q);
-		if (!placeholder.isNull()) {
-			return PrepareWithBlurredBackground(
-				outer,
-				::Media::Streaming::DecideVideoFrameResize(
+		if (GetEnhancedBool("custom_file_thumbs")) {
+			auto thumb = QImage();
+			const auto path = GetEnhancedString("custom_thumb_path");
+			if (!path.isEmpty()) {
+				thumb = QImage(path);
+			}
+			if (thumb.isNull()) {
+				static const auto placeholder = QImage(u":/icons/video_placeholder.png"_q);
+				thumb = placeholder;
+			}
+			if (!thumb.isNull()) {
+				return PrepareWithBlurredBackground(
 					outer,
-					placeholder.size()),
-				placeholder,
-				QImage());
+					::Media::Streaming::DecideVideoFrameResize(
+						outer,
+						thumb.size()),
+					thumb,
+					QImage());
+			}
 		}
 	}
 	const auto resize = large
@@ -2270,21 +2280,31 @@ void Gif::validateGroupedCache(
 	}
 
 	if (!image && !_data->hasThumbnail() && _data->isVideoFile()) {
-		static const auto placeholder = QImage(u":/icons/video_placeholder.png"_q);
-		if (!placeholder.isNull()) {
-			*cacheKey = key;
-			const auto pixSize = placeholder.size()
-				.scaled(geometry.size(), Qt::KeepAspectRatio);
-			const auto ratio = style::DevicePixelRatio();
-			auto scaled = Images::Prepare(
-				placeholder,
-				pixSize * ratio,
-				{ .options = options, .outer = geometry.size() });
-			auto rounded = Images::Round(
-				std::move(scaled),
-				MediaRoundingMask(rounding));
-			*cache = Ui::PixmapFromImage(std::move(rounded));
-			return;
+		if (GetEnhancedBool("custom_file_thumbs")) {
+			auto thumb = QImage();
+			const auto path = GetEnhancedString("custom_thumb_path");
+			if (!path.isEmpty()) {
+				thumb = QImage(path);
+			}
+			if (thumb.isNull()) {
+				static const auto placeholder = QImage(u":/icons/video_placeholder.png"_q);
+				thumb = placeholder;
+			}
+			if (!thumb.isNull()) {
+				*cacheKey = key;
+				const auto pixSize = thumb.size()
+					.scaled(geometry.size(), Qt::KeepAspectRatio);
+				const auto ratio = style::DevicePixelRatio();
+				auto scaled = Images::Prepare(
+					thumb,
+					pixSize * ratio,
+					{ .options = options, .outer = geometry.size() });
+				auto rounded = Images::Round(
+					std::move(scaled),
+					MediaRoundingMask(rounding));
+				*cache = Ui::PixmapFromImage(std::move(rounded));
+				return;
+			}
 		}
 	}
 

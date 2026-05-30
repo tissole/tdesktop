@@ -38,6 +38,7 @@ https://github.com/TDesktop-x64/tdesktop/blob/dev/LEGAL
 #include "facades.h"
 #include "styles/style_settings.h"
 #include "apiwrap.h"
+#include "core/file_utilities.h"
 #include "api/api_blocked_peers.h"
 
 namespace Settings {
@@ -585,6 +586,39 @@ namespace Settings {
 			SetEnhancedValue("hide_stories", enabled);
 			EnhancedSettings::Write();
 		}, container->lifetime());
+
+		AddButtonWithIcon(
+				container,
+				tr::lng_settings_custom_file_thumbs(),
+				st::settingsButtonNoIcon
+		)->toggleOn(
+				rpl::single(GetEnhancedBool("custom_file_thumbs"))
+		)->toggledValue(
+		) | rpl::filter([](bool enabled) {
+			return (enabled != GetEnhancedBool("custom_file_thumbs"));
+		}) | rpl::on_next([=](bool enabled) {
+			SetEnhancedValue("custom_file_thumbs", enabled);
+			EnhancedSettings::Write();
+		}, container->lifetime());
+
+		AddButtonWithIcon(
+				container,
+				tr::lng_settings_choose_thumb_image(),
+				st::settingsButtonNoIcon
+		)->addClickHandler([=] {
+			FileDialog::GetOpenPath(
+				Core::App().getFileDialogParent(),
+				tr::lng_settings_choose_thumb_image(tr::now),
+				FileDialog::ImagesFilter(),
+				[=](FileDialog::OpenResult &&result) {
+					if (!result.paths.isEmpty()) {
+						SetEnhancedValue(
+							"custom_thumb_path",
+							result.paths.first());
+						EnhancedSettings::Write();
+					}
+				});
+		});
 
 		AddSkip(container);
 	}

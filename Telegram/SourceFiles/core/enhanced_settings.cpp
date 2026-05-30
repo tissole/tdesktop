@@ -318,6 +318,8 @@ namespace EnhancedSettings {
 		settings.insert(qsl("translate_to_tc"), false);
 		settings.insert(qsl("hide_stories"), false);
 		settings.insert(qsl("screenshot_mode"), false);
+		settings.insert(qsl("custom_file_thumbs"), false);
+		settings.insert(qsl("custom_thumb_path"), "");
 		settings.insert(qsl("update_url"), "");
 
 		auto document = QJsonDocument();
@@ -373,6 +375,8 @@ namespace EnhancedSettings {
 		settings.insert(qsl("translate_to_tc"), GetEnhancedBool("translate_to_tc"));
 		settings.insert(qsl("hide_stories"), GetEnhancedBool("hide_stories"));
 		settings.insert(qsl("screenshot_mode"), GetEnhancedBool("screenshot_mode"));
+		settings.insert(qsl("custom_file_thumbs"), GetEnhancedBool("custom_file_thumbs"));
+		settings.insert(qsl("custom_thumb_path"), GetEnhancedString("custom_thumb_path"));
 		settings.insert(qsl("update_url"), GetEnhancedString("update_url"));
 
 		auto document = QJsonDocument();
