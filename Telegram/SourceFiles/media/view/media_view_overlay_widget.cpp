@@ -4730,19 +4730,19 @@ void OverlayWidget::initStreamingThumbnail() {
 	}
 	const auto options = VideoThumbOptions(_document);
 	const auto goodOptions = (options & ~Images::Option::Blur);
-	setStaticContent((good
-		? good
-		: thumbnail
-		? thumbnail
-		: blurred
-		? blurred
-		: Image::BlankMedia().get())->pixNoCache(
-			size,
-			{
-				.options = good ? goodOptions : options,
-				.outer = size / style::DevicePixelRatio(),
-			}
-		).toImage());
+	//setStaticContent((good
+	//	? good
+	//	: thumbnail
+	//	? thumbnail
+	//	: blurred
+	//	? blurred
+	//	: Image::BlankMedia().get())->pixNoCache(
+	//		size,
+	//		{
+	//			.options = good ? goodOptions : options,
+	//			.outer = size / style::DevicePixelRatio(),
+	//		}
+	//	).toImage());
 }
 
 void OverlayWidget::streamingReady(Streaming::Information &&info) {
