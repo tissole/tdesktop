@@ -874,6 +874,21 @@ void Document::draw(
 						}
 					}
 				}
+			} else if (_data->isAudioFile() && !_data->hasThumbnail()) {
+				auto hq = PainterHighQualityEnabler(p);
+				static const auto placeholder = QImage(u":/icons/video_placeholder.png"_q);
+				if (!placeholder.isNull()) {
+					const auto scaledSize = placeholder.size()
+						.scaled(inner.size(), Qt::KeepAspectRatioByExpanding);
+					auto scaled = Images::Prepare(
+						placeholder,
+						scaledSize * style::DevicePixelRatio(),
+						{ .options = Images::Option::RoundCircle, .outer = inner.size() });
+					p.drawImage(inner.topLeft(), scaled);
+				} else {
+					p.setBrush(stm->msgFileBg);
+					p.drawEllipse(inner);
+				}
 			} else {
 				auto hq = PainterHighQualityEnabler(p);
 				p.setBrush(stm->msgFileBg);
