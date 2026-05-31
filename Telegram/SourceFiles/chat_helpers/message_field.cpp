@@ -48,6 +48,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "settings/settings_common.h"
 #include "settings/sections/settings_premium.h"
+#include "enhanced_forward.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
 #include "styles/style_chat.h"
@@ -1501,6 +1502,81 @@ rpl::producer<TextWithEntities> PaidSendButtonText(
 	return std::move(stars) | rpl::map([=](int count) {
 		return PaidSendButtonText(tr::now, count);
 	});
+}
+
+std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
+		not_null<QWidget*> parent,
+		const PeerId &peer,
+		not_null<Main::Session*> session) {
+	auto result = std::make_unique<Ui::AbstractButton>(parent);
+	const auto raw = result.get();
+	raw->setCursor(style::cur_pointer);
+
+	const auto title = CreateChild<Ui::FlatLabel>(
+		raw,
+		QString(),
+		st::frozenRestrictionTitle);
+	title->setTextColorOverride(st::historyComposeButton.color->c);
+	title->setAttribute(Qt::WA_TransparentForMouseEvents);
+	title->show();
+
+	const auto subtitle = CreateChild<Ui::FlatLabel>(
+		raw,
+		QString(),
+		st::frozenRestrictionSubtitle);
+	subtitle->setAttribute(Qt::WA_TransparentForMouseEvents);
+	subtitle->show();
+
+	const auto updateLabels = [=] {
+		const auto p = EnhancedForward::currentProgress(peer);
+		switch (p.state) {
+		case EnhancedForward::State::Sending:
+			title->setText(
+				u"Enhanced Forward %1/%2"_q
+				.arg(p.sent)
+				.arg(p.total));
+			subtitle->setText(u"[Cancel]"_q);
+			raw->setCursor(style::cur_pointer);
+			break;
+		case EnhancedForward::State::Finished:
+			title->setText(u"Forward Complete"_q);
+			subtitle->setText(QString());
+			raw->setCursor(style::cur_default);
+			break;
+		default:
+			title->setText(QString());
+			subtitle->setText(QString());
+			raw->setCursor(style::cur_default);
+			break;
+		}
+	};
+	updateLabels();
+	const auto timer = raw->lifetime().make_state<base::Timer>(updateLabels);
+	timer->callEach(crl::time(500));
+
+	raw->sizeValue() | rpl::on_next([=](QSize size) {
+		const auto small = 2 * st::defaultDialogRow.photoSize;
+		const auto shown = (size.width() > small);
+
+		title->setVisible(shown);
+		subtitle->setVisible(shown);
+
+		const auto skip = st::defaultDialogRow.padding.left();
+		const auto available = size.width() - skip * 2;
+		title->resizeToWidth(available);
+		subtitle->resizeToWidth(available);
+		const auto height = title->height() + subtitle->height();
+		const auto top = (size.height() - height) / 2;
+		title->moveToLeft(skip, top, size.width());
+		subtitle->moveToLeft(skip, top + title->height(), size.width());
+
+	}, raw->lifetime());
+
+	raw->setClickedCallback([=] {
+		EnhancedForward::cancelForward(peer, session);
+	});
+
+	return result;
 }
 
 void FrozenInfoBox(

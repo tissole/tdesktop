@@ -53,6 +53,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
+#include "enhanced_forward.h"
 #include "data/data_user.h"
 #include "data/data_chat_filters.h"
 #include "data/data_histories.h"
@@ -61,6 +62,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "base/unixtime.h"
 #include "base/random.h"
+#include "logs.h"
 #include "base/call_delayed.h"
 #include "lang/lang_keys.h"
 #include "mainwidget.h"
@@ -3481,23 +3483,71 @@ void ApiWrap::forwardMessages(
 		FnMut<void()> &&successCallback) {
 	Expects(!draft.items.empty());
 
+	const auto enhancedNeeded = EnhancedForward::anyItemNeedsForward(
+		draft.items);
+	LOG(("EnhancedForward: forwardMessages enhancedNeeded=%1 items=%2").arg(enhancedNeeded).arg(int(draft.items.size())));
+	if (enhancedNeeded) {
+		Ui::Toast::Show(
+			tr::lng_forward_cant(tr::now)
+			+ u", Chat restricted, using download/re-upload!"_q);
+		EnhancedForward::startForwardSession(
+			&session(),
+			action.history->peer->id,
+			draft.items.size());
+	}
+	const auto peerId = action.history->peer->id;
+
 	auto &histories = _session->data().histories();
 
 	for (auto i = begin(draft.items); i != end(draft.items);) {
 		const auto item = *i;
-		if ([&] {
-			const auto sourcePeer = item->history()->peer;
-			if (const auto channel = sourcePeer->asChannel()) {
-				if (channel->flags() & ChannelData::Flag::NoForwards) return true;
-			} else if (const auto chat = sourcePeer->asChat()) {
-				if (chat->flags() & ChatData::Flag::NoForwards) return true;
-			} 
-			return false;
-		}()) {
+		 const auto sourcePeer = item->history()->peer;
+		 if (const auto channel = sourcePeer->asChannel()) {
+		 	if (channel->flags() & ChannelData::Flag::NoForwards) return true;
+		 } else if (const auto chat = sourcePeer->asChat()) {
+		 	if (chat->flags() & ChatData::Flag::NoForwards) return true;
+		 } else if (const auto user = sourcePeer->asUser()) {
+		 	if (user->flags() & UserDataFlag::NoForwardsPeerEnabled) return true;
+		 }
+		 return false;
+		 }();
+
+		LOG(("EnhancedForward: item %1 needsBypass=%2")
+			.arg(item->id.bare)
+			.arg(needsBypass));
+
+		if (needsBypass) {
+			// All items from restricted sources go through download/re-upload
 			const auto media = item->media();
 			const auto caption = TextWithTags{ item->originalText().text };
 			const auto to = FileLoadTaskOptions(action);
-			if (media && media->document()) {
+
+			// Handle Saved Music items: they need re-upload like any other restricted item
+			if (item->isSavedMusicItem() && media && media->document()) {
+				const auto document = media->document();
+				const auto path = document->filepath(true);
+				if (!path.isEmpty()) {
+					_fileLoader->addTask(
+						std::make_unique<FileLoadTask>(FileLoadTask::Args{
+							.session = &session(),
+							.filepath = path,
+							.content = QByteArray(),
+							.information = nullptr,
+							.videoCover = nullptr,
+							.type = SendMediaType::File,
+							.to = to,
+							.caption = caption,
+							.spoiler = false,
+							.album = nullptr,
+							.forceFile = false,
+							.idOverride = 0,
+						}));
+				} else {
+					auto msg = MessageToSend(action);
+					msg.textWithTags = caption;
+					SendExistingDocument(std::move(msg), document);
+				}
+			} else if (media && media->document()) {
 				const auto document = media->document();
 				const auto path = document->filepath(true);
 				if (!path.isEmpty()) {
@@ -3522,76 +3572,41 @@ void ApiWrap::forwardMessages(
 					SendExistingDocument(std::move(msg), document);
 				}
 			} else if (media && media->photo()) {
+				// Photos: need to download first, then re-upload to bypass
+				// restrictions. For now, send by reference (may fail for
+				// restricted chats, but photo download infrastructure requires
+				// more setup). Text caption with formatting is preserved.
+				const auto photo = media->photo();
+				photo->load(Data::FileOrigin());
 				auto msg = MessageToSend(action);
 				msg.textWithTags = caption;
-				SendExistingPhoto(std::move(msg), media->photo());
+				SendExistingPhoto(std::move(msg), photo);
 			} else {
+				// Text-only: send as new message with original text + formatting
+				// No forward attribution, but content is preserved
 				auto msg = MessageToSend(action);
 				msg.textWithTags = caption;
 				sendMessage(std::move(msg));
 			}
-		}
-		if (item->isSavedMusicItem()) {
-			SendExistingDocument(MessageToSend(action), item->media()->document());
-			i = draft.items.erase(i);
-		} else if ([&] {
-			const auto sourcePeer = item->history()->peer;
-			if (const auto channel = sourcePeer->asChannel()) {
-				if (channel->flags() & ChannelData::Flag::NoForwards) return true;
-			} else if (const auto chat = sourcePeer->asChat()) {
-				if (chat->flags() & ChatData::Flag::NoForwards) return true;
-			} else if (const auto user = sourcePeer->asUser()) {
-				if (user->flags() & UserDataFlag::NoForwardsPeerEnabled) return true;
-			}
-			return false;
-		}()) {
-			const auto media = item->media();
-			const auto caption = TextWithTags{ item->originalText().text };
-			const auto to = FileLoadTaskOptions(action);
-			if (media && media->document()) {
-				const auto document = media->document();
-				const auto path = document->filepath(true);
-				if (!path.isEmpty()) {
-					_fileLoader->addTask(
-						std::make_unique<FileLoadTask>(FileLoadTask::Args{
-							.session = &session(),
-							.filepath = path,
-							.content = QByteArray(),
-							.information = nullptr,
-							.videoCover = nullptr,
-							.type = SendMediaType::File,
-							.to = to,
-							.caption = caption,
-							.spoiler = false,
-							.album = nullptr,
-							.forceFile = false,
-							.idOverride = 0,
-						}));
-				} else {
-					auto msg = MessageToSend(action);
-					msg.textWithTags = caption;
-					SendExistingDocument(std::move(msg), document);
-				}
-			} else if (media && media->photo()) {
-				auto msg = MessageToSend(action);
-				msg.textWithTags = caption;
-				SendExistingPhoto(std::move(msg), media->photo());
-			} else {
-				auto msg = MessageToSend(action);
-				msg.textWithTags = caption;
-				sendMessage(std::move(msg));
+			if (enhancedNeeded) {
+				EnhancedForward::markItemSent(&session(), peerId);
 			}
 			i = draft.items.erase(i);
 		} else {
+			LOG(("EnhancedForward: item %1 NOT bypassed, ++i").arg(item->id.bare));
 			++i;
 		}
 	}
 	if (draft.items.empty()) {
+		LOG(("EnhancedForward: all items processed, returning success"));
 		if (successCallback) {
 			successCallback();
 		}
 		return;
 	}
+
+	LOG(("EnhancedForward: %1 items remain, going to normal forward API")
+		.arg(draft.items.size()));
 
 	struct SharedCallback {
 		int requestsLeft = 0;

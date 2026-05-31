@@ -1,4 +1,4 @@
-﻿/*
+/*
 This file is part of Telegram Desktop,
 the official desktop application for the Telegram messaging service.
 
@@ -144,6 +144,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "chat_helpers/tabbed_section.h"
 #include "chat_helpers/bot_keyboard.h"
 #include "chat_helpers/message_field.h"
+#include "enhanced_forward.h"
 #include "menu/menu_send.h"
 #include "menu/menu_timecode_action.h"
 #include "mtproto/mtproto_config.h"
@@ -931,6 +932,7 @@ HistoryWidget::HistoryWidget(
 		}
 		if (flags & PeerUpdateFlag::Slowmode) {
 			updateSendButtonType();
+			updateSendRestriction();
 		}
 		if ((flags & PeerUpdateFlag::ManagedBot) && _list) {
 			_list->refreshAboutView();
@@ -7246,7 +7248,14 @@ void HistoryWidget::updateSendRestriction() {
 		return;
 	}
 	_sendRestrictionKey = restriction.text;
-	if (!restriction) {
+	if (EnhancedForward::isForwarding(_peer->id)
+		|| EnhancedForward::currentProgress(_peer->id).state
+			== EnhancedForward::State::Finished) {
+		_sendRestriction = EnhancedForwardWriteRestriction(
+			this,
+			_peer->id,
+			&session());
+	} else if (!restriction) {
 		_sendRestriction = nullptr;
 	} else if (restriction.frozen) {
 		const auto show = controller()->uiShow();

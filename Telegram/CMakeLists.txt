@@ -1893,6 +1893,8 @@ PRIVATE
     apiwrap.cpp
     apiwrap.h
     config.h
+    enhanced_forward.cpp
+    enhanced_forward.h
     facades.cpp
     facades.h
     logs.cpp

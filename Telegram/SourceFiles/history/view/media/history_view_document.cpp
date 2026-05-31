@@ -881,10 +881,6 @@ void Document::draw(
 				if (!path.isEmpty()) {
 					thumb = QImage(path);
 				}
-				if (thumb.isNull()) {
-					static const auto placeholder = QImage(u":/icons/video_placeholder.png"_q);
-					thumb = placeholder;
-				}
 				if (!thumb.isNull()) {
 					const auto scaledSize = thumb.size()
 						.scaled(inner.size(), Qt::KeepAspectRatioByExpanding);

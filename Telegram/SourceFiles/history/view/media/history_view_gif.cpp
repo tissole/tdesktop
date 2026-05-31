@@ -1278,10 +1278,6 @@ QImage Gif::prepareThumbCache(QSize outer) const {
 			if (!path.isEmpty()) {
 				thumb = QImage(path);
 			}
-			if (thumb.isNull()) {
-				static const auto placeholder = QImage(u":/icons/video_placeholder.png"_q);
-				thumb = placeholder;
-			}
 			if (!thumb.isNull()) {
 				return PrepareWithBlurredBackground(
 					outer,
@@ -2285,10 +2281,6 @@ void Gif::validateGroupedCache(
 			const auto path = GetEnhancedString("custom_thumb_path");
 			if (!path.isEmpty()) {
 				thumb = QImage(path);
-			}
-			if (thumb.isNull()) {
-				static const auto placeholder = QImage(u":/icons/video_placeholder.png"_q);
-				thumb = placeholder;
 			}
 			if (!thumb.isNull()) {
 				*cacheKey = key;

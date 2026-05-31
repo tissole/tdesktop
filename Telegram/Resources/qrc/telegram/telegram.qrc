@@ -58,7 +58,7 @@
     <file alias="settings/devices/device_web_edge.lottie">../../icons/settings/devices/device_web_edge.lottie</file>
     <file alias="settings/devices/device_web_firefox.lottie">../../icons/settings/devices/device_web_firefox.lottie</file>
     <file alias="settings/devices/device_web_safari.lottie">../../icons/settings/devices/device_web_safari.lottie</file>
-     <file alias="video_placeholder.png">../../icons/video_placeholder.png</file>
+     
   </qresource>
   <qresource prefix="/misc">
     <file alias="default_shortcuts-custom.json">../../default_shortcuts-custom.json</file>
