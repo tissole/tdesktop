@@ -560,44 +560,44 @@ bool FileLoadTask::CheckForSong(
 		u"audio/aac"_q,
 		u"audio/ac3"_q,
 		u"audio/ac4"_q,
-        u"audio/aiff"_q,
+		u"audio/aiff"_q,
 		u"audio/ape"_q,
-        u"audio/basic"_q,
-        u"audio/dff"_q,
+		u"audio/basic"_q,
+		u"audio/dff"_q,
 		u"audio/dsd"_q,
-        u"audio/eac3"_q,
+		u"audio/eac3"_q,
 		u"audio/flac"_q,
 		u"audio/m4a"_q,
 		u"audio/m4b"_q,
 		u"audio/mp3"_q,
 		u"audio/mp4"_q,
-        u"audio/mpeg"_q,
+		u"audio/mpeg"_q,
 		u"audio/musepack"_q,
 		u"audio/ogg"_q,
 		u"audio/opus"_q,
-        u"audio/pcm"_q,
+		u"audio/pcm"_q,
 		u"audio/vnd.dts"_q,
 		u"audio/vnd.dts.hd"_q,
 		u"audio/vnd.wave"_q,
 		u"audio/vorbis"_q,
 		u"audio/wav"_q,
-        u"audio/wave"_q,
+		u"audio/wave"_q,
 		u"audio/webm"_q,
-        u"audio/x-aiff"_q,
+		u"audio/x-aiff"_q,
 		u"audio/x-caf"_q,
 		u"audio/x-dff"_q,
-        u"audio/x-dop"_q,
+		u"audio/x-dop"_q,
 		u"audio/x-dsd"_q,
 		u"audio/x-dsf"_q,
 		u"audio/x-dsdiff"_q,
-        u"audio/x-flac"_q,
+		u"audio/x-flac"_q,
 		u"audio/x-m4a"_q,
 		u"audio/x-matroska"_q,
-        u"audio/x-m4b"_q,
-        u"audio/x-monkeys-audio"_q,
+		u"audio/x-m4b"_q,
+		u"audio/x-monkeys-audio"_q,
 		u"audio/x-ms-wma"_q,
-        u"audio/x-musepack"_q,
-        u"audio/x-wav"_q,
+		u"audio/x-musepack"_q,
+		u"audio/x-wav"_q,
 		u"audio/x-wavpack"_q,
 	};
 	static const auto extensions = {
@@ -606,10 +606,10 @@ bool FileLoadTask::CheckForSong(
 		u".aif"_q,
 		u".aifc"_q,
 		u".aiff"_q,
-        u".aff"_q,
+		u".aff"_q,
 		u".alac"_q,
 		u".ape"_q,
-        u".au"_q,
+		u".au"_q,
 		u".caf"_q,
 		u".dff"_q,
 		u".dsf"_q,
@@ -631,13 +631,13 @@ bool FileLoadTask::CheckForSong(
 		u".ogg"_q,
 		u".ogx"_q,
 		u".opus"_q,
-        u".pcm"_q,
+		u".pcm"_q,
 		u".wav"_q,
 		u".webma"_q,
 		u".wma"_q,
 		u".wsd"_q,
 		u".wv"_q,
-        u".snd"_q,
+		u".snd"_q,
 	};
 	if (!filepath.isEmpty()
 		&& !CheckMimeOrExtensions(
@@ -681,7 +681,7 @@ bool FileLoadTask::CheckForSong(
 		std::pair(u".mp+"_q, u"audio/x-musepack"_q),
 		std::pair(u".mp2"_q, u"audio/mpeg"_q),
 		std::pair(u".mp3"_q, u"audio/mpeg"_q),
-        std::pair(u".mpga"_q, u"audio/mpeg"_q),
+		std::pair(u".mpga"_q, u"audio/mpeg"_q),
 		std::pair(u".mpc"_q, u"audio/x-musepack"_q),
 		std::pair(u".mpp"_q, u"audio/x-musepack"_q),
 		std::pair(u".oga"_q, u"audio/ogg"_q),
@@ -736,7 +736,7 @@ bool FileLoadTask::CheckForVideo(
 		u"video/x-ms-wmv"_q,
 		u"video/x-msvideo"_q,
 		u"video/x-pn-realvideo"_q,
-        u"video/x-quicktime"_q,
+		u"video/x-quicktime"_q,
 	};
 	static const auto extensions = {
 		u".asf"_q,
@@ -1117,7 +1117,7 @@ bool FileLoadTask::CheckForDocument(
 				.arg(i).arg(minR).arg(minG).arg(minB)
 				.arg(maxR).arg(maxG).arg(maxB)
 				.arg(nonWhite).arg(pix->w * pix->h));
-            }    
+			}	 
 			{
 				constexpr auto kHBands = 10;
 				const auto bandH = pix->h / kHBands;
@@ -1966,9 +1966,15 @@ void FileLoadTask::process(ProcessArgs &&args) {
 				).arg(song->cover.height()
 				).arg(song->cover.isNull() ? "yes" : "no"));
 			thumbnail = PrepareFileThumbnail(std::move(song->cover));
+			LOG(("Enhanced Forward debug: _information=%1, fileThumbnail isNull=%2, size=%3x%4"
+				).arg(!!_information
+				).arg(!_information || _information->fileThumbnail.isNull() ? "yes" : "no"
+				).arg(_information ? _information->fileThumbnail.width() : 0
+				).arg(_information ? _information->fileThumbnail.height() : 0));
 			if (thumbnail.image.isNull()
 				&& _information
 				&& !_information->fileThumbnail.isNull()) {
+				LOG(("Enhanced Forward debug: trying fileThumbnail as fallback"));
 				thumbnail = PrepareFileThumbnail(QImage(_information->fileThumbnail));
 			}
 			LOG(("After PrepareFileThumbnail: thumb image isNull=%1, id=%2"
@@ -2202,7 +2208,7 @@ void FileLoadTask::finish() {
 			Box(FileSizeLimitBox, session, _result->filesize, nullptr),
 			Ui::LayerOption::KeepOther);
 		removeFromAlbum();
-    } else {
+	} else {
 		LOG(("FileLoadTask::finish calling SendConfirmedFile for task %1"
 			).arg(qlonglong(_id)));
 		Api::SendConfirmedFile(session, _result);

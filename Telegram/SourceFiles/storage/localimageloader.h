@@ -193,7 +193,7 @@ struct FilePrepareResult {
 	TextWithTags caption;
 	bool spoiler = false;
 	bool forceFile = false;
-	bool deleteAfterUpload = false;
+
 	std::vector<MTPInputDocument> attachedStickers;
 	std::shared_ptr<FilePrepareResult> videoCover;
 	void setFileData(const QByteArray &filedata);
@@ -217,23 +217,22 @@ public:
 		QByteArray content = {},
 		QByteArray format = {});
 
-    struct Args {
-        not_null<Main::Session*> session;
-        QString filepath;
-        QByteArray content;
-        std::unique_ptr<Ui::PreparedFileInformation> information;
-        std::unique_ptr<FileLoadTask> videoCover;
-        SendMediaType type;
-        FileLoadTo to;
-        TextWithTags caption;
-        bool spoiler = false;
-        std::shared_ptr<SendingAlbum> album;
-        bool forceFile = false;
-        bool sendLargePhotos = false;
-        uint64 idOverride = 0;
-        QString displayName;
-        bool deleteAfterUpload = false;
-    };
+	struct Args {
+		not_null<Main::Session*> session;
+		QString filepath;
+		QByteArray content;
+		std::unique_ptr<Ui::PreparedFileInformation> information;
+		std::unique_ptr<FileLoadTask> videoCover;
+		SendMediaType type;
+		FileLoadTo to;
+		TextWithTags caption;
+		bool spoiler = false;
+		std::shared_ptr<SendingAlbum> album;
+		bool forceFile = false;
+		bool sendLargePhotos = false;
+		uint64 idOverride = 0;
+		QString displayName;
+	};
 
 	struct VoiceArgs {
 		not_null<Main::Session*> session;

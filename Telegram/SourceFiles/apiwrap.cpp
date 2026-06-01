@@ -95,6 +95,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/toast/toast.h"
 #include "support/support_helper.h"
 #include "settings/sections/settings_premium.h"
+#include "ui/image/image_prepare.h"
 #include "storage/localimageloader.h"
 #include "storage/download_manager_mtproto.h"
 #include "storage/file_upload.h"
@@ -3527,7 +3528,7 @@ void ApiWrap::forwardMessages(
 		}
 
 		if (!enhancedItems.empty()) {
-			const auto downloadPath = File::DefaultDownloadPath(&session());
+			const auto downloadPath = File::DefaultDownloadPath(&session()) + "ForwardTemp/";
 
 			struct EnhancedCtx {
 				std::vector<not_null<HistoryItem*>> items;
@@ -3552,6 +3553,7 @@ void ApiWrap::forwardMessages(
 				? std::move(successCallback)
 				: FnMut<void()>());
 			ctx->downloadPath = downloadPath;
+			QDir().mkpath(downloadPath);
 
 			const auto to = FileLoadTaskOptions(action);
 
@@ -3598,31 +3600,30 @@ void ApiWrap::forwardMessages(
 					.forceFile = false,
 					.sendLargePhotos = isPhoto,
 					.idOverride = 0,
-                    .displayName = {},
-					.deleteAfterUpload = true,
+					.displayName = {},
 				};
 				if (doc) {
 					args.displayName = doc->filename();
-					const auto media = doc->activeMediaView();
-					if (media && media->loaded()) {
-						auto info = std::make_unique<Ui::PreparedFileInformation>();
-						info->filemime = doc->mimeString();
-						const auto thumb = media->thumbnail();
-						if (thumb && !thumb->isNull()) {
-							info->fileThumbnail = thumb->original();
-						}
-						// Set audio metadata if available
-						if (doc->duration() >= 0) {
-							Ui::PreparedFileInformation::Song song;
-							song.duration = doc->duration();
-							if (const auto songData = doc->song()) {
-								song.title = songData->title;
-								song.performer = songData->performer;
-							}
-							info->media = std::move(song);
-						}
-						args.information = std::move(info);
+					auto info = std::make_unique<Ui::PreparedFileInformation>();
+					info->filemime = doc->mimeString();
+					if (!doc->inlineThumbnailBytes().isEmpty()) {
+						info->fileThumbnail = Images::FromInlineBytes(
+							doc->inlineThumbnailBytes());
+						LOG(("Enhanced Forward: set fileThumbnail from inlineThumbnailBytes, bytes size=%1, image isNull=%2"
+							).arg(doc->inlineThumbnailBytes().size()
+							).arg(info->fileThumbnail.isNull() ? "yes" : "no"));
 					}
+					if (doc->duration() >= 0) {
+						Ui::PreparedFileInformation::Song song;
+						song.duration = doc->duration();
+						const auto songData = doc->song();
+						if (songData) {
+							song.title = songData->title;
+							song.performer = songData->performer;
+						}
+						info->media = std::move(song);
+					}
+					args.information = std::move(info);
 				}
 				auto task = std::make_unique<FileLoadTask>(
 					std::move(args));
@@ -3787,7 +3788,8 @@ void ApiWrap::forwardMessages(
 					ctx->ready[i] = true;
 					ctx->pendingCount--;
 				} else if (const auto doc = media->document()) {
-					const auto docName = doc->filename();
+					auto docName = doc->filename();
+					docName.replace(QRegularExpression("[:<>\"\\\\/|?*]"), "_");
 					const auto docPath = QDir(
 						ctx->downloadPath
 					).absoluteFilePath(docName);
@@ -3796,8 +3798,8 @@ void ApiWrap::forwardMessages(
 							item->history()->peer->id,
 							item->id)),
 						docPath);
-					LOG(("Enhanced Forward: doc item %1 download started"
-						).arg(item->id.bare));
+					LOG(("Enhanced Forward: doc item %1 download started, path=%2"
+						).arg(item->id.bare).arg(docPath));
 				} else if (media->photo()) {
 					const auto photo = media->photo();
 					photo->load(
@@ -3808,8 +3810,8 @@ void ApiWrap::forwardMessages(
 				}
 			}
 
-            LOG(("Enhanced Forward: initial pendingCount=%1"
-            				).arg(ctx->pendingCount));
+			LOG(("Enhanced Forward: initial pendingCount=%1"
+							).arg(ctx->pendingCount));
 			if (ctx->callback) {
 				ctx->callback();
 			}

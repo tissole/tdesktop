@@ -953,10 +953,22 @@ void Uploader::finishFront() {
 			uploadVideoCover(std::move(ready), entry.file->videoCover);
 		} else {
 			_documentReady.fire(std::move(ready));
-		}
-		if (entry.file->deleteAfterUpload
-			&& !entry.file->filepath.isEmpty()) {
-			QFile(entry.file->filepath).remove();
+			if (entry.file->filepath.contains("ForwardTemp")
+				&& !entry.file->filepath.isEmpty()) {
+				entry.docFile.reset();
+				LOG(("Uploader: delete check - path='%1', exists=%2"
+					).arg(entry.file->filepath)
+					.arg(QFileInfo(entry.file->filepath).exists()));
+				if (QFileInfo(entry.file->filepath).exists()) {
+					if (QFile(entry.file->filepath).remove()) {
+						LOG(("Uploader: successfully deleted %1").arg(entry.file->filepath));
+					} else {
+						LOG(("Uploader: FAILED to delete %1, error=%2"
+							).arg(entry.file->filepath)
+							.arg(QString::number(int(GetLastError()))));
+					}
+				}
+			}
 		}
 	} else if (entry.file->type == SendMediaType::Secure) {
 		_secureReady.fire({
