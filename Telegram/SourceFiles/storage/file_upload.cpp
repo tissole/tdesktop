@@ -317,6 +317,11 @@ void Uploader::upload(
 					file->thumb,
 					ThumbnailFormat(file->filemime),
 					file->thumbbytes));
+		LOG(("Uploader::upload: document type=%1, file->thumb isNull=%2, thumb size=%3x%4"
+			).arg(int(file->type)
+			).arg(file->thumb.isNull() ? "yes" : "no"
+			).arg(file->thumb.width()
+			).arg(file->thumb.height()));
 		document->uploadingData = std::make_unique<Data::UploadState>(
 			document->size);
 		if (const auto active = document->activeMediaView()) {
@@ -325,6 +330,9 @@ void Uploader::upload(
 			}
 			if (!file->thumb.isNull()) {
 				active->setThumbnail(file->thumb);
+				const auto &thumb = active->thumbnail();
+				LOG(("Uploader::upload: setThumbnail called, active thumbnail now isNull=%1"
+					).arg(!thumb || thumb->isNull() ? "yes" : "no"));
 			}
 		}
 		if (!file->goodThumbnailBytes.isEmpty()) {
@@ -945,6 +953,10 @@ void Uploader::finishFront() {
 			uploadVideoCover(std::move(ready), entry.file->videoCover);
 		} else {
 			_documentReady.fire(std::move(ready));
+		}
+		if (entry.file->deleteAfterUpload
+			&& !entry.file->filepath.isEmpty()) {
+			QFile(entry.file->filepath).remove();
 		}
 	} else if (entry.file->type == SendMediaType::Secure) {
 		_secureReady.fire({

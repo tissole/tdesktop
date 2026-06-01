@@ -571,6 +571,7 @@ bool FileLoadTask::CheckForSong(
 		u"audio/m4b"_q,
 		u"audio/mp3"_q,
 		u"audio/mp4"_q,
+        u"audio/mpeg"_q,
 		u"audio/musepack"_q,
 		u"audio/ogg"_q,
 		u"audio/opus"_q,
@@ -589,7 +590,7 @@ bool FileLoadTask::CheckForSong(
 		u"audio/x-dsd"_q,
 		u"audio/x-dsf"_q,
 		u"audio/x-dsdiff"_q,
-        u"audio/x-flac"_q
+        u"audio/x-flac"_q,
 		u"audio/x-m4a"_q,
 		u"audio/x-matroska"_q,
         u"audio/x-m4b"_q,
@@ -680,6 +681,7 @@ bool FileLoadTask::CheckForSong(
 		std::pair(u".mp+"_q, u"audio/x-musepack"_q),
 		std::pair(u".mp2"_q, u"audio/mpeg"_q),
 		std::pair(u".mp3"_q, u"audio/mpeg"_q),
+        std::pair(u".mpga"_q, u"audio/mpeg"_q),
 		std::pair(u".mpc"_q, u"audio/x-musepack"_q),
 		std::pair(u".mpp"_q, u"audio/x-musepack"_q),
 		std::pair(u".oga"_q, u"audio/ogg"_q),
@@ -1957,7 +1959,21 @@ void FileLoadTask::process(ProcessArgs &&args) {
 			const auto seconds = song->duration / 1000;
 			auto flags = MTPDdocumentAttributeAudio::Flag::f_title | MTPDdocumentAttributeAudio::Flag::f_performer;
 			attributes.push_back(MTP_documentAttributeAudio(MTP_flags(flags), MTP_int(seconds), MTP_string(song->title), MTP_string(song->performer), MTPstring()));
+			LOG(("Audio file: title='%1', performer='%2', cover size=%3x%4, isNull=%5"
+				).arg(song->title
+				).arg(song->performer
+				).arg(song->cover.width()
+				).arg(song->cover.height()
+				).arg(song->cover.isNull() ? "yes" : "no"));
 			thumbnail = PrepareFileThumbnail(std::move(song->cover));
+			if (thumbnail.image.isNull()
+				&& _information
+				&& !_information->fileThumbnail.isNull()) {
+				thumbnail = PrepareFileThumbnail(QImage(_information->fileThumbnail));
+			}
+			LOG(("After PrepareFileThumbnail: thumb image isNull=%1, id=%2"
+				).arg(thumbnail.image.isNull() ? "yes" : "no"
+				).arg(thumbnail.id));
 		} else if (auto video = std::get_if<Ui::PreparedFileInformation::Video>(
 				&_information->media)) {
 			isVideo = true;
@@ -2149,6 +2165,12 @@ void FileLoadTask::process(ProcessArgs &&args) {
 	_result->setThumbData(thumbnail.bytes);
 	_result->thumb = std::move(thumbnail.image);
 
+	LOG(("FilePrepareResult: thumbId=%1, thumbname='%2', thumbbytes size=%3, thumb isNull=%4"
+		).arg(_result->thumbId
+		).arg(_result->thumbname
+		).arg(_result->thumbbytes.size()
+		).arg(_result->thumb.isNull() ? "yes" : "no"));
+
 	_result->goodThumbnail = std::move(goodThumbnail);
 	_result->goodThumbnailBytes = std::move(goodThumbnailBytes);
 
@@ -2163,6 +2185,10 @@ void FileLoadTask::finish() {
 	if (!session) {
 		return;
 	}
+	LOG(("FileLoadTask::finish called for task %1, filepath=%2, album=%3"
+		).arg(qlonglong(_id)
+		).arg(_filepath
+		).arg(_album ? "yes" : "no"));
 	const auto premium = session->user()->isPremium();
 	if (!_result || !_result->filesize || _result->filesize < 0) {
 		Ui::show(
@@ -2176,10 +2202,14 @@ void FileLoadTask::finish() {
 			Box(FileSizeLimitBox, session, _result->filesize, nullptr),
 			Ui::LayerOption::KeepOther);
 		removeFromAlbum();
-	} else {
+    } else {
+		LOG(("FileLoadTask::finish calling SendConfirmedFile for task %1"
+			).arg(qlonglong(_id)));
 		Api::SendConfirmedFile(session, _result);
+		// Don't delete file here - uploader needs it. Delete after upload completes.
 	}
 }
+
 
 const std::shared_ptr<FilePrepareResult> &FileLoadTask::peekResult() const {
 	return _result;

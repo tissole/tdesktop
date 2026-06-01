@@ -193,11 +193,9 @@ struct FilePrepareResult {
 	TextWithTags caption;
 	bool spoiler = false;
 	bool forceFile = false;
-
+	bool deleteAfterUpload = false;
 	std::vector<MTPInputDocument> attachedStickers;
-
 	std::shared_ptr<FilePrepareResult> videoCover;
-
 	void setFileData(const QByteArray &filedata);
 	void setThumbData(const QByteArray &thumbdata);
 
@@ -254,6 +252,10 @@ public:
 		return _id;
 	}
 
+	void setAlbum(std::shared_ptr<SendingAlbum> album) {
+		_album = std::move(album);
+	}
+
 	struct ProcessArgs {
 		bool generateGoodThumbnail = true;
 	};
@@ -295,7 +297,7 @@ private:
 	base::weak_ptr<Main::Session> _session;
 	MTP::DcId _dcId = 0;
 	FileLoadTo _to;
-	const std::shared_ptr<SendingAlbum> _album;
+	std::shared_ptr<SendingAlbum> _album;
 	QString _filepath;
 	QString _displayName;
 	QByteArray _content;

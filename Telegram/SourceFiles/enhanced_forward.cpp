@@ -8,7 +8,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "enhanced_forward.h"
 
 #include "base/timer.h"
-#include "logs.h"
 #include "data/data_changes.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
@@ -17,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_user.h"
 #include "history/history.h"
 #include "history/history_item.h"
+#include "main/main_session.h"
 
 namespace EnhancedForward {
 namespace {
@@ -45,34 +45,55 @@ void fireUpdate(not_null<Main::Session*> session, const PeerId &peer) {
 } // namespace
 
 bool isForwardNeeded(not_null<HistoryItem*> item) {
-	return true;
+	if (item->isNoForwards()) {
+		LOG(("Enhanced Forward: item %1 blocked by per-message NoForwards"
+			).arg(item->id.bare));
+		return true;
+	}
 	const auto sourcePeer = item->history()->peer;
 	if (const auto channel = sourcePeer->asChannel()) {
-		const auto hasNoForwards = channel->flags() & ChannelData::Flag::NoForwards;
-		LOG(("EnhancedForward: isForwardNeeded channel %1 flags=%2 NoForwards=%3").arg(sourcePeer->id.value).arg(uint64(channel->flags())).arg(uint64(ChannelData::Flag::NoForwards)));
-	}
-	if (const auto chat = sourcePeer->asChat()) {
-		const auto hasNoForwards = chat->flags() & ChatData::Flag::NoForwards;
-		LOG(("EnhancedForward: isForwardNeeded chat %1 flags=%2 NoForwards=%3").arg(sourcePeer->id.value).arg(uint64(chat->flags())).arg(uint64(ChatData::Flag::NoForwards)));
-		if (hasNoForwards) return true;
+		if (channel->flags() & ChannelData::Flag::NoForwards) {
+			LOG(("Enhanced Forward: item %1 blocked by channel NoForwards"
+				).arg(item->id.bare));
+			return true;
+		}
+		if (channel->isMinimalLoaded()) {
+			LOG(("Enhanced Forward: item %1 channel is minimal, "
+				"treating as restricted"
+				).arg(item->id.bare));
+			return true;
+		}
+		LOG(("Enhanced Forward: item %1 is CHANNEL, flags=%2, "
+			"hasNoForwards=%3, isMin=%4"
+			).arg(item->id.bare
+			).arg(uint64(channel->flags().value())
+			).arg((bool)(channel->flags() & ChannelData::Flag::NoForwards)
+			).arg(channel->isMinimalLoaded()));
 	}
 	if (const auto user = sourcePeer->asUser()) {
-		const auto hasNoForwards = user->flags() & UserDataFlag::NoForwardsPeerEnabled;
-		LOG(("EnhancedForward: isForwardNeeded user %1 flags=%2 NoForwardsPeerEnabled=%3").arg(sourcePeer->id.value).arg(uint64(user->flags())).arg(uint64(UserDataFlag::NoForwardsPeerEnabled)));
-		if (hasNoForwards) return true;
+		if (user->flags() & UserDataFlag::NoForwardsPeerEnabled) {
+			LOG(("Enhanced Forward: item %1 blocked by user NoForwards"
+				).arg(item->id.bare));
+			return true;
+		}
 	}
-	LOG(("EnhancedForward: isForwardNeeded peer %1 NOT restricted").arg(sourcePeer->id.value));
+	if (const auto chat = sourcePeer->asChat()) {
+		if (chat->flags() & ChatData::Flag::NoForwards) {
+			LOG(("Enhanced Forward: item %1 blocked by chat NoForwards"
+				).arg(item->id.bare));
+			return true;
+		}
+	}
 	return false;
-}
-
-bool isFullForwardNeeded(not_null<HistoryItem*> item) {
-	return isForwardNeeded(item);
 }
 
 bool anyItemNeedsForward(
 		const std::vector<not_null<HistoryItem*>> &items) {
 	for (const auto &item : items) {
-		if (isForwardNeeded(item)) return true;
+		const auto needed = isForwardNeeded(item);
+		LOG(("Enhanced Forward: anyItemNeedsForward item %1 => %2"
+			).arg(item->id.bare).arg(needed));
+		if (needed) return true;
 	}
 	return false;
 }
@@ -108,8 +129,6 @@ void markItemSent(
 
 	if (state.sent >= state.total) {
 		state.finished = true;
-		// Auto-clear after 3s so the UI can show "Forward Complete"
-		// then the widget disappears on the next updateSendRestriction()
 		state.finishTimer = std::make_unique<base::Timer>([=] {
 			auto &states = ActiveStates();
 			states.erase(peerId);

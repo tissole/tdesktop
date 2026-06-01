@@ -2888,6 +2888,10 @@ bool HistoryItem::forbidsForward() const {
 	return false;
 }
 
+bool HistoryItem::isNoForwards() const {
+	return (_flags & MessageFlag::NoForwards);
+}
+
 bool HistoryItem::forbidsSaving() const {
 	//if (forbidsForward()) {
 	//	return true;

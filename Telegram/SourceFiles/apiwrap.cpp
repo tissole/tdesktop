@@ -54,6 +54,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_channel.h"
 #include "data/data_chat.h"
 #include "enhanced_forward.h"
+#include "core/file_utilities.h"
+#include "data/data_document_media.h"
+#include "data/data_photo_media.h"
 #include "data/data_user.h"
 #include "data/data_chat_filters.h"
 #include "data/data_histories.h"
@@ -62,6 +65,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "base/unixtime.h"
 #include "base/random.h"
+#include <QDir>
+#include <QMimeDatabase>
+#include <map>
 #include "logs.h"
 #include "base/call_delayed.h"
 #include "lang/lang_keys.h"
@@ -541,12 +547,6 @@ void ApiWrap::sendMessageFail(
 					Ui::LayerOption::CloseOther);
 			}
 		}
-	} else if (show && error == u"CHAT_FORWARDS_RESTRICTED"_q) {
-		show->showToast(peer->isBroadcast()
-			? tr::lng_error_noforwards_channel(tr::now)
-			: peer->isUser()
-			? tr::lng_error_noforwards_user(tr::now)
-			: tr::lng_error_noforwards_group(tr::now), kJoinErrorDuration);
 	} else if (error == u"PREMIUM_ACCOUNT_REQUIRED"_q) {
 		Settings::ShowPremium(&session(), "premium_stickers");
 	} else if (error == u"SCHEDULE_TOO_MUCH"_q) {
@@ -3485,128 +3485,353 @@ void ApiWrap::forwardMessages(
 
 	const auto enhancedNeeded = EnhancedForward::anyItemNeedsForward(
 		draft.items);
-	LOG(("EnhancedForward: forwardMessages enhancedNeeded=%1 items=%2").arg(enhancedNeeded).arg(int(draft.items.size())));
+	LOG(("Enhanced Forward: forwardMessages called, items=%1, "
+		"enhancedNeeded=%2").arg(draft.items.size()).arg(enhancedNeeded));
 	if (enhancedNeeded) {
-		Ui::Toast::Show(
-			tr::lng_forward_cant(tr::now)
-			+ u", Chat restricted, using download/re-upload!"_q);
+		const auto peerId = action.history->peer->id;
+		LOG(("Enhanced Forward: entering enhanced path, peer=%1"
+			).arg(peerId.value));
 		EnhancedForward::startForwardSession(
 			&session(),
-			action.history->peer->id,
+			peerId,
 			draft.items.size());
-	}
-	const auto peerId = action.history->peer->id;
 
-	auto &histories = _session->data().histories();
+		auto savedMusicItems = std::vector<not_null<HistoryItem*>>();
+		auto enhancedItems = std::vector<not_null<HistoryItem*>>();
+		for (const auto &item : draft.items) {
+			if (item->isSavedMusicItem()) {
+				savedMusicItems.push_back(item);
+			} else {
+				LOG(("Enhanced Forward: routing item %1 to enhanced"
+					).arg(item->id.bare));
+				enhancedItems.push_back(item);
+			}
+		}
+		draft.items = decltype(draft.items)();
+		LOG(("Enhanced Forward: split complete - savedMusic=%1, "
+			"enhanced=%2"
+			).arg(savedMusicItems.size()
+			).arg(enhancedItems.size()));
 
-	for (auto i = begin(draft.items); i != end(draft.items);) {
-		const auto item = *i;
-		 const auto sourcePeer = item->history()->peer;
-		 if (const auto channel = sourcePeer->asChannel()) {
-		 	if (channel->flags() & ChannelData::Flag::NoForwards) return true;
-		 } else if (const auto chat = sourcePeer->asChat()) {
-		 	if (chat->flags() & ChatData::Flag::NoForwards) return true;
-		 } else if (const auto user = sourcePeer->asUser()) {
-		 	if (user->flags() & UserDataFlag::NoForwardsPeerEnabled) return true;
-		 }
-		 return false;
-		 }();
-
-		LOG(("EnhancedForward: item %1 needsBypass=%2")
-			.arg(item->id.bare)
-			.arg(needsBypass));
-
-		if (needsBypass) {
-			// All items from restricted sources go through download/re-upload
+		for (const auto &item : savedMusicItems) {
 			const auto media = item->media();
-			const auto caption = TextWithTags{ item->originalText().text };
+			if (media && media->document()) {
+				auto msg = MessageToSend(action);
+				msg.textWithTags = TextWithTags{
+					item->originalText().text };
+				Api::SendExistingDocument(
+					std::move(msg),
+					media->document());
+			}
+			EnhancedForward::markItemSent(&session(), peerId);
+		}
+
+		if (!enhancedItems.empty()) {
+			const auto downloadPath = File::DefaultDownloadPath(&session());
+
+			struct EnhancedCtx {
+				std::vector<not_null<HistoryItem*>> items;
+				std::vector<QString> paths;
+				std::vector<bool> ready;
+				std::vector<std::unique_ptr<FileLoadTask>> tasks;
+				std::vector<uint64> taskGroupIds;
+				std::map<uint64, std::shared_ptr<SendingAlbum>> albums;
+				int pendingCount = 0;
+				int pollCount = 0;
+				FnMut<void()> callback;
+				std::unique_ptr<base::Timer> pollTimer;
+				QString downloadPath;
+			};
+			const auto ctx = std::make_shared<EnhancedCtx>();
+			ctx->items = std::move(enhancedItems);
+			ctx->paths.resize(ctx->items.size());
+			ctx->ready.resize(ctx->items.size(), false);
+			ctx->pendingCount = ctx->items.size();
+			ctx->tasks.reserve(ctx->items.size());
+			ctx->callback = (draft.items.empty()
+				? std::move(successCallback)
+				: FnMut<void()>());
+			ctx->downloadPath = downloadPath;
+
 			const auto to = FileLoadTaskOptions(action);
 
-			// Handle Saved Music items: they need re-upload like any other restricted item
-			if (item->isSavedMusicItem() && media && media->document()) {
-				const auto document = media->document();
-				const auto path = document->filepath(true);
-				if (!path.isEmpty()) {
-					_fileLoader->addTask(
-						std::make_unique<FileLoadTask>(FileLoadTask::Args{
-							.session = &session(),
-							.filepath = path,
-							.content = QByteArray(),
-							.information = nullptr,
-							.videoCover = nullptr,
-							.type = SendMediaType::File,
-							.to = to,
-							.caption = caption,
-							.spoiler = false,
-							.album = nullptr,
-							.forceFile = false,
-							.idOverride = 0,
-						}));
-				} else {
-					auto msg = MessageToSend(action);
-					msg.textWithTags = caption;
-					SendExistingDocument(std::move(msg), document);
+			const auto failItem = [=](int i) {
+				ctx->ready[i] = true;
+				ctx->pendingCount--;
+				LOG(("Enhanced Forward: item %1 failed, sending text-only"
+					).arg(ctx->items[i]->id.bare));
+			};
+
+			const auto makeTask = [=](int i) {
+				const auto &path = ctx->paths[i];
+				const auto item = ctx->items[i];
+				const auto media = item->media();
+				const auto caption = TextWithTags{
+					item->originalText().text };
+				const auto doc = media ? media->document() : nullptr;
+				const auto isPhoto = media && media->photo();
+
+				const auto gid = item->groupId();
+				if (!gid.empty() && !ctx->albums[gid.value]) {
+					const auto a = std::make_shared<SendingAlbum>();
+					a->options = action.options;
+					ctx->albums[gid.value] = a;
 				}
-			} else if (media && media->document()) {
-				const auto document = media->document();
-				const auto path = document->filepath(true);
-				if (!path.isEmpty()) {
-					_fileLoader->addTask(
-						std::make_unique<FileLoadTask>(FileLoadTask::Args{
-							.session = &session(),
-							.filepath = path,
-							.content = QByteArray(),
-							.information = nullptr,
-							.videoCover = nullptr,
-							.type = SendMediaType::File,
-							.to = to,
-							.caption = caption,
-							.spoiler = false,
-							.album = nullptr,
-							.forceFile = false,
-							.idOverride = 0,
-						}));
-				} else {
-					auto msg = MessageToSend(action);
-					msg.textWithTags = caption;
-					SendExistingDocument(std::move(msg), document);
+				LOG(("Enhanced Forward: queuing FileLoadTask for "
+					"item %1 type=%2 path=%3"
+					).arg(item->id.bare
+					).arg(isPhoto ? "photo" : "file"
+					).arg(path));
+                auto args = FileLoadTask::Args{
+                	.session = &session(),
+                	.filepath = path,
+                	.content = QByteArray(),
+                	.information = nullptr,
+                	.videoCover = nullptr,
+                	.type = isPhoto
+                		? SendMediaType::Photo
+                		: SendMediaType::File,
+                	.to = to,
+                	.caption = caption,
+                	.spoiler = false,
+                	.album = nullptr,
+                	.forceFile = false,
+                	.sendLargePhotos = isPhoto,
+                	.idOverride = 0,
+                	.deleteAfterUpload = true,
+                };
+				if (doc) {
+					args.displayName = doc->filename();
+					const auto media = doc->activeMediaView();
+					if (media && media->loaded()) {
+						auto info = std::make_unique<Ui::PreparedFileInformation>();
+						info->filemime = doc->mimeString();
+						const auto thumb = media->thumbnail();
+						if (thumb && !thumb->isNull()) {
+							info->fileThumbnail = thumb->original();
+						}
+						// Set audio metadata if available
+						if (doc->duration() >= 0) {
+							Ui::PreparedFileInformation::Song song;
+							song.duration = doc->duration();
+							if (const auto songData = doc->song()) {
+								song.title = songData->title;
+								song.performer = songData->performer;
+							}
+							info->media = std::move(song);
+						}
+						args.information = std::move(info);
+					}
 				}
-			} else if (media && media->photo()) {
-				// Photos: need to download first, then re-upload to bypass
-				// restrictions. For now, send by reference (may fail for
-				// restricted chats, but photo download infrastructure requires
-				// more setup). Text caption with formatting is preserved.
-				const auto photo = media->photo();
-				photo->load(Data::FileOrigin());
-				auto msg = MessageToSend(action);
-				msg.textWithTags = caption;
-				SendExistingPhoto(std::move(msg), photo);
+				auto task = std::make_unique<FileLoadTask>(
+					std::move(args));
+				ctx->taskGroupIds.push_back(
+					!gid.empty() ? gid.value : 0);
+				ctx->tasks.push_back(std::move(task));
+			};
+
+			const auto flushTasks = [=] {
+				LOG(("Enhanced Forward: flushTasks starting, tasks=%1, albums=%2"
+					).arg(ctx->tasks.size()
+					).arg(ctx->albums.size()));
+				for (auto &[groupId, album] : ctx->albums) {
+					auto allComplete = true;
+					for (auto i = 0; i < ctx->items.size(); i++) {
+						if (ctx->items[i]->groupId().value == groupId
+							&& ctx->paths[i].isEmpty()) {
+							allComplete = false;
+							LOG(("Enhanced Forward: album %1 incomplete, item %2 has empty path"
+								).arg(groupId
+								).arg(ctx->items[i]->id.bare));
+							break;
+						}
+					}
+					if (allComplete) {
+						LOG(("Enhanced Forward: album %1 complete, setting on tasks"
+							).arg(groupId));
+						_sendingAlbums[album->groupId] = album;
+						for (auto i = 0; i < ctx->tasks.size(); i++) {
+							if (ctx->taskGroupIds[i] == groupId) {
+								ctx->tasks[i]->setAlbum(album);
+								album->items.emplace_back(
+									ctx->tasks[i]->id());
+								LOG(("Enhanced Forward: task %1 added to album %2, items now=%3"
+									).arg(qlonglong(ctx->tasks[i]->id())
+									).arg(qlonglong(groupId)
+									).arg(int(album->items.size())));
+							}
+						}
+					} else {
+						LOG(("Enhanced Forward: album %1 NOT complete, skipping"
+							).arg(groupId));
+					}
+				}
+				auto baseTasks = std::vector<std::unique_ptr<Task>>();
+				baseTasks.reserve(ctx->tasks.size());
+				for (auto &task : ctx->tasks) {
+					baseTasks.push_back(std::move(task));
+				}
+				ctx->tasks.clear();
+				LOG(("Enhanced Forward: adding %1 tasks to fileLoader"
+					).arg(baseTasks.size()));
+				_fileLoader->addTasks(std::move(baseTasks));
+				for (auto i = 0; i < ctx->items.size(); i++) {
+					EnhancedForward::markItemSent(
+						&session(), peerId);
+				}
+				LOG(("Enhanced Forward: all items queued, "
+					"calling callback"));
+				ctx->pollTimer = nullptr;
+				if (ctx->callback) {
+					ctx->callback();
+				}
+			};
+
+			const auto processAllItems = [=] {
+				for (auto i = 0; i < ctx->items.size(); i++) {
+					const auto item = ctx->items[i];
+					const auto &path = ctx->paths[i];
+					if (path.isEmpty()) {
+						LOG(("Enhanced Forward: sendMessage for text-only "
+							"item %1").arg(item->id.bare));
+						auto msg = MessageToSend(action);
+						msg.textWithTags = TextWithTags{
+							item->originalText().text };
+						sendMessage(std::move(msg));
+					} else {
+						makeTask(i);
+					}
+				}
+				flushTasks();
+			};
+
+			const auto tryProcessPending = [=] {
+				auto stillPending = 0;
+				++ctx->pollCount;
+				LOG(("Enhanced Forward: poll tick #%1, items=%2"
+					).arg(ctx->pollCount
+					).arg(ctx->items.size()));
+				for (auto i = 0; i < ctx->items.size(); i++) {
+					if (ctx->ready[i]) {
+						continue;
+					}
+					const auto media = ctx->items[i]->media();
+					bool ready = true;
+					QString path;
+					if (media && media->document()) {
+						const auto doc = media->document();
+						if (!doc->loading() && !doc->filepath(true).isEmpty()) {
+							path = doc->filepath(true);
+							ready = true;
+						} else if (!doc->loading()) {
+							failItem(i);
+							continue;
+						} else {
+							ready = false;
+						}
+					} else if (media && media->photo()) {
+						const auto photo = media->photo();
+						if (!photo->loading(
+							Data::PhotoSize::Large)
+							&& !photo->failed(
+								Data::PhotoSize::Large)) {
+							const auto v
+								= photo->activeMediaView();
+							if (v && v->loaded()) {
+								path = QDir(ctx->downloadPath)
+									.absoluteFilePath(
+										QString::number(photo->id)
+										+ u".jpg"_q);
+								ready = v->saveToFile(path);
+							} else {
+								ready = false;
+							}
+						} else if (photo->failed(
+							Data::PhotoSize::Large)) {
+							failItem(i);
+							continue;
+						} else {
+							ready = false;
+						}
+					}
+					if (ready) {
+						LOG(("Enhanced Forward: item %1 ready, path=%2"
+							).arg(ctx->items[i]->id.bare
+							).arg(path));
+						ctx->paths[i] = path;
+						ctx->ready[i] = true;
+						ctx->pendingCount--;
+					} else {
+						stillPending++;
+					}
+				}
+				if (ctx->pollCount >= 120) {
+					for (auto i = 0; i < ctx->items.size(); i++) {
+						if (!ctx->ready[i]) {
+							failItem(i);
+						}
+					}
+					stillPending = 0;
+				}
+				if (!stillPending) {
+					processAllItems();
+				}
+			};
+
+			for (auto i = 0; i < ctx->items.size(); i++) {
+				const auto item = ctx->items[i];
+				const auto media = item->media();
+				if (!media) {
+					LOG(("Enhanced Forward: text-only item %1"
+						).arg(item->id.bare));
+					ctx->ready[i] = true;
+					ctx->pendingCount--;
+				} else if (const auto doc = media->document()) {
+					const auto docName = doc->filename();
+					const auto docPath = QDir(
+						ctx->downloadPath
+					).absoluteFilePath(docName);
+					doc->save(Data::FileOrigin(
+						FullMsgId(
+							item->history()->peer->id,
+							item->id)),
+						docPath);
+					LOG(("Enhanced Forward: doc item %1 download started"
+						).arg(item->id.bare));
+				} else if (media->photo()) {
+					const auto photo = media->photo();
+					photo->load(
+						Data::PhotoSize::Large,
+						Data::FileOrigin());
+					LOG(("Enhanced Forward: photo item %1 load started"
+						).arg(item->id.bare));
+				}
+			}
+
+LOG(("Enhanced Forward: initial pendingCount=%1"
+				).arg(ctx->pendingCount));
+			if (ctx->callback) {
+				ctx->callback();
+			}
+			if (ctx->pendingCount > 0) {
+				ctx->pollTimer = std::make_unique<base::Timer>(
+					tryProcessPending);
+				ctx->pollTimer->callEach(500);
 			} else {
-				// Text-only: send as new message with original text + formatting
-				// No forward attribution, but content is preserved
-				auto msg = MessageToSend(action);
-				msg.textWithTags = caption;
-				sendMessage(std::move(msg));
+				processAllItems();
 			}
-			if (enhancedNeeded) {
-				EnhancedForward::markItemSent(&session(), peerId);
-			}
-			i = draft.items.erase(i);
+		}
+
+		if (draft.items.empty()) {
+			LOG(("Enhanced Forward: returning early, no normal items"));
+			return;
 		} else {
-			LOG(("EnhancedForward: item %1 NOT bypassed, ++i").arg(item->id.bare));
-			++i;
+			LOG(("Enhanced Forward: %1 normal items fall to MTP API"
+				).arg(draft.items.size()));
 		}
-	}
-	if (draft.items.empty()) {
-		LOG(("EnhancedForward: all items processed, returning success"));
-		if (successCallback) {
-			successCallback();
-		}
-		return;
 	}
 
-	LOG(("EnhancedForward: %1 items remain, going to normal forward API")
-		.arg(draft.items.size()));
+	auto &histories = _session->data().histories();
 
 	struct SharedCallback {
 		int requestsLeft = 0;
@@ -4842,6 +5067,9 @@ void ApiWrap::sendAlbumWithUploaded(
 		not_null<HistoryItem*> item,
 		const MessageGroupId &groupId,
 		const MTPInputMedia &media) {
+	LOG(("sendAlbumWithUploaded: item=%1, groupId=%2"
+		).arg(item->id.bare
+		).arg(groupId.value));
 	const auto localId = item->fullId();
 	const auto randomId = base::RandomValue<uint64>();
 	_session->data().registerMessageRandomId(randomId, localId);
@@ -4849,6 +5077,8 @@ void ApiWrap::sendAlbumWithUploaded(
 	const auto albumIt = _sendingAlbums.find(groupId.raw());
 	Assert(albumIt != _sendingAlbums.end());
 	const auto &album = albumIt->second;
+	LOG(("sendAlbumWithUploaded: filling media for album, items=%1"
+		).arg(album->items.size()));
 	album->fillMedia(item, media, randomId);
 	sendAlbumIfReady(album.get());
 }
@@ -4872,11 +5102,17 @@ void ApiWrap::sendAlbumWithCancelled(
 }
 
 void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
+	LOG(("sendAlbumIfReady: album=%1, items=%2, sent=%3"
+		).arg(album->groupId
+		).arg(album->items.size()
+		).arg(album->sent ? 1 : 0));
 	if (album->sent) {
+		LOG(("sendAlbumIfReady: album already sent, returning"));
 		return;
 	}
 	const auto groupId = album->groupId;
 	if (album->items.empty()) {
+		LOG(("sendAlbumIfReady: album items empty, removing"));
 		_sendingAlbums.remove(groupId);
 		return;
 	}
@@ -4885,12 +5121,14 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 	medias.reserve(album->items.size());
 	for (const auto &item : album->items) {
 		if (!item.media) {
+			LOG(("sendAlbumIfReady: item %1 has no media, waiting").arg(item.msgId.msg.bare));
 			return;
 		} else if (!sample) {
 			sample = _session->data().message(item.msgId);
 		}
 		medias.push_back(*item.media);
 	}
+	LOG(("sendAlbumIfReady: all items have media, sending album with %1 items").arg(medias.size()));
 	if (!sample) {
 		_sendingAlbums.remove(groupId);
 		return;

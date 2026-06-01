@@ -14,6 +14,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/storage_account.h"
 #include "ui/boxes/confirm_box.h"
 #include "apiwrap.h"
+#include "enhanced_forward.h"
+#include "base/debug_log.h"
 #include "ui/widgets/chat_filters_tabs_strip.h"
 #include "ui/widgets/checkbox.h"
 #include "ui/widgets/multi_select.h"
@@ -1714,6 +1716,71 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 			show->showBox(MakeSendErrorBox(error, result.size() > 1));
 			return;
 		} else if (!checkPaid()) {
+			return;
+		}
+
+		if (EnhancedForward::anyItemNeedsForward(items)) {
+			LOG(("Enhanced Forward: share_box items need enhanced forward, "
+				"items=%1, destinations=%2"
+				).arg(items.size()).arg(result.size()));
+			auto &api = history->session().api();
+			const auto remaining = std::make_shared<int>(
+				int(result.size()));
+			for (const auto &thread : result) {
+				const auto effectiveThread = [&]()
+					-> not_null<Data::Thread*> {
+					const auto peer = thread->peer();
+					const auto forum = thread->owningHistory()->asForum();
+					const auto needNewTopic = forum
+						&& forum->bot()
+						&& Data::IsBotUserCreatesTopics(peer)
+						&& !thread->asTopic();
+					if (needNewTopic) {
+						const auto topic = forum->reserveNewBotTopic();
+						Assert(topic != nullptr);
+						return topic;
+					}
+					return thread;
+				}();
+				if (!comment.text.isEmpty()) {
+					auto msg = Api::MessageToSend(
+						Api::SendAction(effectiveThread, options));
+					msg.textWithTags = comment;
+					msg.action.clearDraft = false;
+					api.sendMessage(std::move(msg));
+				}
+				auto draft = Data::ResolvedForwardDraft{
+					.items = items,
+					.options = forwardOptions,
+				};
+				api.forwardMessages(
+					std::move(draft),
+					Api::SendAction(effectiveThread, options),
+					[=] {
+						LOG(("ShareBox: forwardMessages callback fired, remaining was=%1"
+							).arg(*remaining));
+						if (--*remaining == 0) {
+							LOG(("ShareBox: remaining==0, calling hideLayer and submitCallback"));
+							if (show) {
+								LOG(("ShareBox: show is valid, calling hideLayer"));
+								show->hideLayer();
+								LOG(("ShareBox: hideLayer called"));
+							} else {
+								LOG(("ShareBox: show is null"));
+							}
+							if (state->submitCallback) {
+								LOG(("ShareBox: submitCallback is set, calling it"));
+								state->submitCallback();
+								LOG(("ShareBox: submitCallback returned"));
+							} else {
+								LOG(("ShareBox: submitCallback is null"));
+							}
+						} else {
+							LOG(("ShareBox: remaining=%1, not closing yet"
+								).arg(*remaining));
+						}
+					});
+			}
 			return;
 		}
 

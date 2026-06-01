@@ -525,8 +525,12 @@ void FillMessagePostFlags(
 }
 
 void SendConfirmedFile(
-		not_null<Main::Session*> session,
-		const std::shared_ptr<FilePrepareResult> &file) {
+	not_null<Main::Session*> session,
+	const std::shared_ptr<FilePrepareResult> &file) {
+	   LOG(("SendConfirmedFile: task=%1, album=%2, filepath=%3"
+	   	).arg(qlonglong(file->taskId)
+	   	).arg(file->album ? "yes" : "no"
+	   	).arg(file->filepath));
 	const auto isEditing = (file->type != SendMediaType::Audio)
 		&& (file->type != SendMediaType::Round)
 		&& (file->to.replaceMediaOf != 0);
@@ -542,6 +546,8 @@ void SendConfirmedFile(
 		};
 		const auto it = ranges::find(file->album->items, file->taskId, proj);
 		Assert(it != file->album->items.end());
+		LOG(("SendConfirmedFile: found album item, msgId=%1"
+			).arg(it->msgId.msg.bare));
 
 		it->msgId = newId;
 	}

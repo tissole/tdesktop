@@ -255,7 +255,7 @@ rmvb srt swf tgs tgv tp trp ts tsv vob webm wmv wtv xvid"_q);
 
     static const auto kAudio = SplitExtensions(u"\
 aac ac3 ac4 aff aif aifc aiff alac als amr ape atrac au awb caf cda cue dsf dff dts dtshd  eac3 \
-f4a f4b flac m4a m4b m4p m4r mka mp2 mp3 mpc mp+ mpp ogg oga ogx \
+f4a f4b flac m4a m4b m4p m4r mka mp2 mp3 mpc mpga mp+ mpp ogg oga ogx \
 opus pcm ra ram spx tak tta usac wav webma wma wv wsd"_q);
 
 	static const auto kDocument = SplitExtensions(u"\
