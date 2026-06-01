@@ -217,22 +217,23 @@ public:
 		QByteArray content = {},
 		QByteArray format = {});
 
-	struct Args {
-		not_null<Main::Session*> session;
-		QString filepath;
-		QByteArray content;
-		std::unique_ptr<Ui::PreparedFileInformation> information;
-		std::unique_ptr<FileLoadTask> videoCover;
-		SendMediaType type;
-		FileLoadTo to;
-		TextWithTags caption;
-		bool spoiler = false;
-		std::shared_ptr<SendingAlbum> album;
-		bool forceFile = false;
-		bool sendLargePhotos = false;
-		uint64 idOverride = 0;
-		QString displayName;
-	};
+    struct Args {
+        not_null<Main::Session*> session;
+        QString filepath;
+        QByteArray content;
+        std::unique_ptr<Ui::PreparedFileInformation> information;
+        std::unique_ptr<FileLoadTask> videoCover;
+        SendMediaType type;
+        FileLoadTo to;
+        TextWithTags caption;
+        bool spoiler = false;
+        std::shared_ptr<SendingAlbum> album;
+        bool forceFile = false;
+        bool sendLargePhotos = false;
+        uint64 idOverride = 0;
+        QString displayName;
+        bool deleteAfterUpload = false;
+    };
 
 	struct VoiceArgs {
 		not_null<Main::Session*> session;
@@ -250,10 +251,6 @@ public:
 
 	uint64 fileid() const {
 		return _id;
-	}
-
-	void setAlbum(std::shared_ptr<SendingAlbum> album) {
-		_album = std::move(album);
 	}
 
 	struct ProcessArgs {
@@ -297,7 +294,7 @@ private:
 	base::weak_ptr<Main::Session> _session;
 	MTP::DcId _dcId = 0;
 	FileLoadTo _to;
-	std::shared_ptr<SendingAlbum> _album;
+	const std::shared_ptr<SendingAlbum> _album;
 	QString _filepath;
 	QString _displayName;
 	QByteArray _content;

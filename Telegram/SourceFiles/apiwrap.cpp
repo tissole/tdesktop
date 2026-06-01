@@ -3582,24 +3582,25 @@ void ApiWrap::forwardMessages(
 					).arg(item->id.bare
 					).arg(isPhoto ? "photo" : "file"
 					).arg(path));
-                auto args = FileLoadTask::Args{
-                	.session = &session(),
-                	.filepath = path,
-                	.content = QByteArray(),
-                	.information = nullptr,
-                	.videoCover = nullptr,
-                	.type = isPhoto
-                		? SendMediaType::Photo
-                		: SendMediaType::File,
-                	.to = to,
-                	.caption = caption,
-                	.spoiler = false,
-                	.album = nullptr,
-                	.forceFile = false,
-                	.sendLargePhotos = isPhoto,
-                	.idOverride = 0,
-                	.deleteAfterUpload = true,
-                };
+				auto args = FileLoadTask::Args{
+					.session = &session(),
+					.filepath = path,
+					.content = QByteArray(),
+					.information = nullptr,
+					.videoCover = nullptr,
+					.type = isPhoto
+						? SendMediaType::Photo
+						: SendMediaType::File,
+					.to = to,
+					.caption = caption,
+					.spoiler = false,
+					.album = !gid.empty() ? ctx->albums[gid.value] : nullptr,
+					.forceFile = false,
+					.sendLargePhotos = isPhoto,
+					.idOverride = 0,
+                    .displayName = {},
+					.deleteAfterUpload = true,
+				};
 				if (doc) {
 					args.displayName = doc->filename();
 					const auto media = doc->activeMediaView();
@@ -3647,12 +3648,11 @@ void ApiWrap::forwardMessages(
 						}
 					}
 					if (allComplete) {
-						LOG(("Enhanced Forward: album %1 complete, setting on tasks"
+						LOG(("Enhanced Forward: album %1 complete, registering"
 							).arg(groupId));
 						_sendingAlbums[album->groupId] = album;
 						for (auto i = 0; i < ctx->tasks.size(); i++) {
 							if (ctx->taskGroupIds[i] == groupId) {
-								ctx->tasks[i]->setAlbum(album);
 								album->items.emplace_back(
 									ctx->tasks[i]->id());
 								LOG(("Enhanced Forward: task %1 added to album %2, items now=%3"
@@ -3808,8 +3808,8 @@ void ApiWrap::forwardMessages(
 				}
 			}
 
-LOG(("Enhanced Forward: initial pendingCount=%1"
-				).arg(ctx->pendingCount));
+            LOG(("Enhanced Forward: initial pendingCount=%1"
+            				).arg(ctx->pendingCount));
 			if (ctx->callback) {
 				ctx->callback();
 			}
