@@ -110,8 +110,7 @@ constexpr auto kSaveCloudDraftTimeout = 1000;
 constexpr auto kSmallDelayMs = 5;
 constexpr auto kReadFeaturedSetsTimeout = crl::time(1000);
 constexpr auto kFileLoaderQueueStopTimeout = crl::time(5000);
-constexpr auto kEnhancedForwardDownloadPoll = crl::time(100);
-constexpr auto kEnhancedForwardMaxDownloadPolls = 600;
+
 constexpr auto kStickersByEmojiInvalidateTimeout = crl::time(6 * 1000);
 constexpr auto kNotifySettingSaveTimeout = crl::time(1000);
 constexpr auto kDialogsFirstLoad = 20;
@@ -3540,11 +3539,10 @@ void ApiWrap::forwardMessages(
 					MessageGroupId,
 					std::shared_ptr<SendingAlbum>> albums;
 				int pendingDownload = 0;
-				int pollCount = 0;
 				int current = 0;
-				bool localItemsCreated = false;
 				FnMut<void()> callback;
-				std::unique_ptr<base::Timer> pollTimer;
+				std::shared_ptr<rpl::lifetime> downloadLifetime;
+				std::unique_ptr<base::Timer> downloadTimeout;
 				std::shared_ptr<rpl::lifetime> uploadLifetime;
 				QString downloadPath;
 			};
@@ -4004,10 +4002,10 @@ void ApiWrap::forwardMessages(
 				}
 			};
 			const auto processAllItems = [=] {
-				if (ctx->pollTimer) {
-					ctx->pollTimer->cancel();
+				if (ctx->downloadLifetime) {
+					ctx->downloadLifetime->destroy();
+					ctx->downloadLifetime = nullptr;
 				}
-				ctx->pollTimer = nullptr;
 				const auto to = FileLoadTaskOptions(action);
 				auto tasks = std::vector<std::unique_ptr<Task>>();
 				tasks.reserve(n);
@@ -4116,9 +4114,8 @@ void ApiWrap::forwardMessages(
 				}
 			};
 
-			const auto pollDownloads = [=] {
+			const auto checkDownloads = [=] {
 				auto stillPending = 0;
-				++ctx->pollCount;
 				for (auto i = 0; i < n; i++) {
 					if (ctx->ready[i]) continue;
 					const auto item = session().data().message(ctx->itemIds[i]);
@@ -4175,13 +4172,15 @@ void ApiWrap::forwardMessages(
 						stillPending++;
 					}
 				}
-				if (ctx->pollCount >= kEnhancedForwardMaxDownloadPolls) {
-					for (auto i = 0; i < n; i++) {
-						if (!ctx->ready[i]) failItem(i);
-					}
-					stillPending = 0;
-				}
 				if (!stillPending) {
+					if (ctx->downloadLifetime) {
+						ctx->downloadLifetime->destroy();
+						ctx->downloadLifetime = nullptr;
+					}
+					if (ctx->downloadTimeout) {
+						ctx->downloadTimeout->cancel();
+						ctx->downloadTimeout = nullptr;
+					}
 					processAllItems();
 				}
 			};
@@ -4241,9 +4240,33 @@ void ApiWrap::forwardMessages(
 			}
 
 			if (ctx->pendingDownload > 0) {
-				ctx->pollTimer = std::make_unique<base::Timer>(
-					pollDownloads);
-				ctx->pollTimer->callEach(kEnhancedForwardDownloadPoll);
+				ctx->downloadLifetime = std::make_shared<rpl::lifetime>();
+				ctx->downloadTimeout = std::make_unique<base::Timer>([=] {
+					for (auto i = 0; i < n; i++) {
+						if (!ctx->ready[i]) failItem(i);
+					}
+					if (ctx->downloadLifetime) {
+						ctx->downloadLifetime->destroy();
+						ctx->downloadLifetime = nullptr;
+					}
+					ctx->downloadTimeout = nullptr;
+					processAllItems();
+				});
+				ctx->downloadTimeout->callOnce(60 * crl::time(1000));
+
+				session().data().documentLoadProgress(
+				) | rpl::filter([=](not_null<DocumentData*> doc) {
+					return !doc->loading();
+				}) | rpl::on_next([=] {
+					checkDownloads();
+				}, *ctx->downloadLifetime);
+
+				session().downloaderTaskFinished(
+				) | rpl::on_next([=] {
+					checkDownloads();
+				}, *ctx->downloadLifetime);
+
+				checkDownloads();
 			} else {
 				processAllItems();
 			}
