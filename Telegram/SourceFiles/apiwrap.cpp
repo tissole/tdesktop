@@ -3947,7 +3947,6 @@ void ApiWrap::forwardMessages(
 						ctx->localItemIds[i], i);
 				}
 				if (!*remaining) {
-					ctx->uploadLifetime->destroy();
 					(*uploadMediaNext)();
 					return;
 				}
