@@ -3849,6 +3849,12 @@ void ApiWrap::forwardMessages(
 					});
 					return;
 				}
+				if (ctx->uploadLifetime) {
+					auto lifetime = std::move(ctx->uploadLifetime);
+					crl::on_main([lifetime = std::move(lifetime)]() mutable {
+						if (lifetime) lifetime->destroy();
+					});
+				}
 			};
 
 			const auto startUploads = [=] {
@@ -3957,14 +3963,8 @@ void ApiWrap::forwardMessages(
 					ctx->uploadInfos[it->second] = std::move(data.info);
 					ctx->uploadDone[it->second] = true;
 					(*remaining)--;
-					if (*remaining == 0) {
-						const auto next = uploadMediaNext;
-						auto lifetime = std::move(ctx->uploadLifetime);
-						crl::on_main([lifetime = std::move(lifetime)]() mutable {
-							if (lifetime) lifetime->destroy();
-						});
-						(*next)();
-					}
+					const auto next = uploadMediaNext;
+					(*next)();
 				};
 				const auto onFail = [=](const FullMsgId &fullId) {
 					if (fullId.peer != peerId) {
@@ -3977,14 +3977,8 @@ void ApiWrap::forwardMessages(
 					ctx->textOnly[it->second] = true;
 					ctx->uploadDone[it->second] = true;
 					(*remaining)--;
-					if (*remaining == 0) {
-						const auto next = uploadMediaNext;
-						auto lifetime = std::move(ctx->uploadLifetime);
-						crl::on_main([lifetime = std::move(lifetime)]() mutable {
-							if (lifetime) lifetime->destroy();
-						});
-						(*next)();
-					}
+					const auto next = uploadMediaNext;
+					(*next)();
 				};
 				session().uploader().photoReady(
 				) | rpl::on_next(onDone, *ctx->uploadLifetime);
