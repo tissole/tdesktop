@@ -128,6 +128,7 @@ struct SendingAlbum {
 	std::vector<Item> items;
 	Api::SendOptions options;
 	bool sent = false;
+	uint32 expectedCount = 0;
 
 };
 

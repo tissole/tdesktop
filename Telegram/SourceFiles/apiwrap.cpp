@@ -3527,113 +3527,130 @@ void ApiWrap::forwardMessages(
 
 			struct Ctx {
 				std::vector<FullMsgId> itemIds;
-				std::vector<QString> paths;
-				std::vector<bool> ready;
-				std::vector<bool> textOnly;
+				// per-item state
+				std::vector<bool> textOnly;     // no media, send text directly
 				std::vector<bool> isPhoto;
-				std::vector<std::shared_ptr<FilePrepareResult>> prepared;
+				std::vector<bool> downloadDone; // download finished (or skipped)
+				std::vector<QString> paths;     // local file path after download
+				std::vector<bool> uploadDone;   // upload to TG servers done
 				std::vector<Api::RemoteFileInfo> uploadInfos;
-				std::vector<bool> uploadDone;
-				std::vector<FullMsgId> localItemIds;
+				std::vector<std::shared_ptr<FilePrepareResult>> prepared;
+				// album tracking (keyed by SOURCE groupId -> SendingAlbum)
 				base::flat_map<
 					MessageGroupId,
 					std::shared_ptr<SendingAlbum>> albums;
-				int pendingDownload = 0;
-				int current = 0;
-				FnMut<void()> callback;
-				std::shared_ptr<rpl::lifetime> downloadLifetime;
-				std::unique_ptr<base::Timer> downloadTimeout;
+				// ordered sender state
+				int current = 0; // next index to send
+				int pendingDownloads = 0;
+				// Serialise UploadMedia+sendMedia: only one in-flight at a time.
+				bool uploadMediaInFlight = false;
+				// upload listeners lifetime (kept alive until all done)
 				std::shared_ptr<rpl::lifetime> uploadLifetime;
+				// download listeners lifetime (kept alive until all done)
+				std::shared_ptr<rpl::lifetime> dlLifetime;
 				QString downloadPath;
 			};
 			const auto ctx = std::make_shared<Ctx>();
-			for (const auto &item : enhancedItems) {
-				ctx->itemIds.push_back(item->fullId());
-			}
-			ctx->paths.resize(n);
-			ctx->ready.resize(n, false);
+			ctx->itemIds.resize(n);
 			ctx->textOnly.resize(n, false);
 			ctx->isPhoto.resize(n, false);
-			ctx->prepared.resize(n);
-			ctx->uploadInfos.resize(n);
+			ctx->downloadDone.resize(n, false);
+			ctx->paths.resize(n);
 			ctx->uploadDone.resize(n, false);
-			ctx->localItemIds.resize(n, FullMsgId());
-			ctx->pendingDownload = n;
-			
-			// Close the share-box dialog immediately when Send is
-			// clicked, decoupled from download/upload/send completion.
+			ctx->uploadInfos.resize(n);
+			ctx->prepared.resize(n);
+			ctx->downloadPath = downloadPath;
+			for (auto i = 0; i < n; i++) {
+				ctx->itemIds[i] = enhancedItems[i]->fullId();
+			}
+
+			// Close the share-box immediately (decoupled from network ops).
 			if (shared && !shared->requestsLeft) {
 				shared->callback();
 				shared->requestsLeft = -1;
 			}
-			ctx->callback = nullptr;
 
-			ctx->downloadPath = downloadPath;
-
+			// --- count album items that will need media upload ---
+			base::flat_map<MessageGroupId, int> albumItemCounts;
 			for (auto i = 0; i < n; i++) {
-				const auto item = session().data().message(ctx->itemIds[i]);
-				if (!item) {
-					ctx->textOnly[i] = true;
-					ctx->ready[i] = true;
-					ctx->pendingDownload--;
-					continue;
-				}
-				const auto media = item->media();
+				const auto srcItem =
+					session().data().message(ctx->itemIds[i]);
+				if (!srcItem) { ctx->textOnly[i] = true; continue; }
+				const auto media = srcItem->media();
 				if (!media) {
 					ctx->textOnly[i] = true;
-					ctx->ready[i] = true;
-					ctx->pendingDownload--;
 				} else if (media->photo()) {
 					ctx->isPhoto[i] = true;
-				} else if (!media->document()) {
+					if (const auto sg = srcItem->groupId()) {
+						albumItemCounts[sg]++;
+					}
+				} else if (media->document()) {
+					if (const auto sg = srcItem->groupId()) {
+						albumItemCounts[sg]++;
+					}
+				} else {
+					// unsupported media type -> treat as text
 					ctx->textOnly[i] = true;
-					ctx->ready[i] = true;
-					ctx->pendingDownload--;
 				}
 			}
 
-			const auto failItem = [=](int i) {
-				ctx->ready[i] = true;
-				ctx->pendingDownload--;
-				ctx->textOnly[i] = true;
-			};
-			const auto markDownloaded = [=](
-					int i,
-					const QString &path) {
-				ctx->paths[i] = path;
-				ctx->ready[i] = true;
-				ctx->pendingDownload--;
-			};
+			// Pre-create SendingAlbum objects for every unique source album.
+			// We do NOT create local messages; albums are purely server-side.
+			for (auto i = 0; i < n; i++) {
+				if (ctx->textOnly[i]) continue;
+				const auto srcItem =
+					session().data().message(ctx->itemIds[i]);
+				if (!srcItem) { ctx->textOnly[i] = true; continue; }
+				if (const auto sg = srcItem->groupId()) {
+					if (ctx->albums.find(sg) == ctx->albums.end()) {
+						auto album = std::make_shared<SendingAlbum>();
+						album->options = action.options;
+						album->expectedCount = [&] {
+							auto it = albumItemCounts.find(sg);
+							return (it != albumItemCounts.end())
+								? it->second : 1;
+						}();
+						_sendingAlbums.emplace(album->groupId, album);
+						ctx->albums.emplace(sg, std::move(album));
+					}
+				}
+			}
 
-			const auto uploadMediaNext
-				= std::make_shared<std::function<void()>>();
-			*uploadMediaNext = [=]() -> void {
+			// --------------------------------------------------------
+			// sendNext: walks ctx->current forward in original order.
+			// For each slot:
+			//   textOnly -> send text message directly.
+			//   media    -> wait until uploadDone[i], then:
+			//     album item -> call sendAlbumWithUploaded (which
+			//                   batches and fires SendMultiMedia when
+			//                   the last member arrives)
+			//     single    -> sendMedia directly
+			// --------------------------------------------------------
+			const auto sendNext =
+				std::make_shared<std::function<void()>>();
+			*sendNext = [=]() -> void {
 				while (ctx->current < n) {
 					const auto i = ctx->current;
-					const auto sourceItem =
+					const auto srcItem =
 						session().data().message(ctx->itemIds[i]);
 
 					if (ctx->textOnly[i]) {
-						const auto localId = ctx->localItemIds[i];
-						const auto item = localId.msg
-							? session().data().message(localId)
-							: nullptr;
-						if (item) {
-							const auto randomId
-								= base::RandomValue<uint64>();
-							_session->data().registerMessageRandomId(
-								randomId, localId);
-							auto caption = item->originalText();
+						// Text-only: send directly via messages.sendMessage.
+						ctx->current++;
+						if (srcItem) {
+							const auto randomId =
+								base::RandomValue<uint64>();
+							const auto history = action.history;
+							const auto peer = history->peer;
+							auto caption = srcItem->originalText();
 							TextUtilities::Trim(caption);
-							auto sentEntities
-								= Api::EntitiesToMTP(
+							auto sentEntities =
+								Api::EntitiesToMTP(
 									_session,
 									caption.entities,
 									Api::ConvertOption::SkipLocal);
-							const auto history = action.history;
-							const auto peer = history->peer;
-							using SendFlag
-								= MTPmessages_SendMessage::Flag;
+							using SendFlag =
+								MTPmessages_SendMessage::Flag;
 							auto sendFlags = SendFlag(0)
 								| (ShouldSendSilent(peer, action.options)
 									? SendFlag::f_silent
@@ -3663,7 +3680,8 @@ void ApiWrap::forwardMessages(
 									const MTP::Error &error,
 									const MTP::Response &) {
 								sendMessageFail(
-									error, peer, randomId, localId);
+									error, peer, randomId,
+									FullMsgId());
 								EnhancedForward::markItemSent(
 									&session(), peerId);
 							};
@@ -3701,517 +3719,463 @@ void ApiWrap::forwardMessages(
 								done,
 								fail);
 						} else {
+							// item disappeared, count as sent
 							EnhancedForward::markItemSent(
 								&session(), peerId);
 						}
-						ctx->current++;
 						continue;
 					}
 
-					if (!ctx->uploadDone[i]) { return; }
-
-					HistoryItem *rawItem = nullptr;
-					const auto localId = ctx->localItemIds[i];
-					if (localId.msg != 0) {
-						rawItem = session().data().message(localId);
-					}
-					if (!rawItem || !sourceItem) {
-						ctx->current++;
-						continue;
-					}
-					const auto item = not_null(rawItem);
-
-					// Album batch: collect ALL consecutive items that
-					// share the same new groupId, wait for every one
-					// to be uploaded, fire their messages.uploadMedia
-					// RPCs in parallel, and only advance current past
-					// the batch when the last RPC completes. This
-					// preserves album integrity AND message order.
-					if (const auto batchGroupId = item->groupId()) {
-						int batchEnd = i + 1;
-						while (batchEnd < n) {
-							if (ctx->textOnly[batchEnd]) break;
-							const auto bId = ctx->localItemIds[batchEnd];
-							if (!bId.msg) break;
-							const auto bItem =
-								session().data().message(bId);
-							if (!bItem
-								|| bItem->groupId() != batchGroupId) break;
-							batchEnd++;
-						}
-						for (auto j = i; j < batchEnd; j++) {
-							if (!ctx->uploadDone[j]) return;
-						}
-						ctx->current = batchEnd;
-						const auto pending =
-							std::make_shared<int>(batchEnd - i);
-						const auto next = uploadMediaNext;
-						for (auto j = i; j < batchEnd; j++) {
-							const auto jLid = ctx->localItemIds[j];
-							const auto jItem =
-								not_null(session().data().message(jLid));
-							const auto jSrc =
-								session().data().message(ctx->itemIds[j]);
-							auto jInfo = ctx->uploadInfos[j];
-							MTPInputMedia jMedia;
-							if (ctx->isPhoto[j]) {
-								jMedia = Api::PrepareUploadedPhoto(
-									jSrc, std::move(jInfo));
-							} else {
-								jMedia = Api::PrepareUploadedDocument(
-									jSrc, std::move(jInfo));
-							}
-							EnhancedForward::markItemSent(
-								&session(), peerId);
-							request(MTPmessages_UploadMedia(
-								MTP_flags(0),
-								MTPstring(),
-								jItem->history()->peer->input(),
-								jMedia
-							)).done([=](const MTPMessageMedia &result) {
-								const auto li =
-									_session->data().message(jLid);
-								if (li) {
-									MTPInputMedia srv;
-									bool ok = false;
-									if (result.type()
-											== mtpc_messageMediaPhoto) {
-										const auto &d =
-											result.c_messageMediaPhoto();
-										const auto ph = d.vphoto();
-										if (ph
-												&& ph->type() == mtpc_photo) {
-											const auto &f = ph->c_photo();
-											srv = MTP_inputMediaPhoto(
-												MTP_flags(0),
-												MTP_inputPhoto(
-													f.vid(),
-													f.vaccess_hash(),
-													f.vfile_reference()),
-												MTP_int(0),
-												MTPInputDocument());
-											ok = true;
-										}
-									} else if (result.type()
-											== mtpc_messageMediaDocument) {
-										const auto &d =
-											result.c_messageMediaDocument();
-										const auto dc = d.vdocument();
-										if (dc
-												&& dc->type() == mtpc_document) {
-											const auto &f = dc->c_document();
-											srv = MTP_inputMediaDocument(
-												MTP_flags(0),
-												MTP_inputDocument(
-													f.vid(),
-													f.vaccess_hash(),
-													f.vfile_reference()),
-												MTPInputPhoto(),
-												MTP_int(0),
-												MTP_int(0),
-												MTPstring());
-											ok = true;
-										}
-									}
-									if (ok) {
-										sendAlbumWithUploaded(
-											li, batchGroupId, srv);
-									}
-								}
-								if (!--(*pending)) (*next)();
-							}).fail([=](const MTP::Error &) {
-								if (!--(*pending)) (*next)();
-							}).send();
-						}
-						return;
-					}
-
-					// Single media item.
-					auto infoCopy = ctx->uploadInfos[i];
+					// Media item: wait until upload is done AND
+					// no other UploadMedia/sendMedia is in-flight.
+					if (!ctx->uploadDone[i]) return;
+					if (ctx->uploadMediaInFlight) return;
 					ctx->current++;
-					MTPInputMedia singleMedia;
-					if (ctx->isPhoto[i]) {
-						singleMedia = Api::PrepareUploadedPhoto(
-							sourceItem, std::move(infoCopy));
-					} else {
-						singleMedia = Api::PrepareUploadedDocument(
-							sourceItem, std::move(infoCopy));
-						if (singleMedia.type() == mtpc_inputMediaEmpty) {
+
+					if (!srcItem) {
+						// source gone, skip
+						EnhancedForward::markItemSent(&session(), peerId);
+						continue;
+					}
+
+					if (const auto albumGroupId = [&]() -> MessageGroupId {
+						// Find the SendingAlbum for this source item's group.
+						const auto sg = srcItem->groupId();
+						if (!sg) return MessageGroupId();
+						const auto it = ctx->albums.find(sg);
+						if (it == ctx->albums.end()) return MessageGroupId();
+						return MessageGroupId::FromRaw(
+							peerId,
+							it->second->groupId,
+							action.options.scheduled);
+					}()) {
+						// Album item: build media ref and hand off to
+						// sendAlbumWithUploaded, which fires SendMultiMedia
+						// once all members have been registered.
+						const auto sg = srcItem->groupId();
+						const auto albumIt = ctx->albums.find(sg);
+						Assert(albumIt != ctx->albums.end());
+						const auto &album = albumIt->second;
+						// Build a temporary local item so sendAlbumWithUploaded
+						// can look up the album entry by msgId.
+						const auto newId = FullMsgId(
+							action.history->peer->id,
+							_session->data().nextLocalMessageId());
+						const auto caption = srcItem->originalText();
+						auto flags = NewMessageFlags(action.history->peer);
+						if (action.replyTo) {
+							flags |= MessageFlag::HasReplyInfo;
+						}
+						FillMessagePostFlags(
+							action, action.history->peer, flags);
+						if (action.options.scheduled) {
+							flags |= MessageFlag::IsOrWasScheduled;
+						}
+						const auto localMsg =
+							action.history->addNewLocalMessage({
+								.id = newId.msg,
+								.flags = flags,
+								.from = NewMessageFromId(action),
+								.replyTo = action.replyTo,
+								.date = NewMessageDate(action.options),
+								.shortcutId =
+									action.options.shortcutId,
+								.starsPaid =
+									action.options.starsApproved,
+								.postAuthor =
+									NewMessagePostAuthor(action),
+								.groupedId = album->groupId,
+								.effectId = action.options.effectId,
+								.suggest = HistoryMessageSuggestInfo(
+									action.options),
+							}, caption, MTP_messageMediaEmpty());
+						album->items.emplace_back(kEmptyTaskId);
+						album->items.back().msgId = localMsg->fullId();
+
+						// Build the server-side media reference.
+						MTPInputMedia inputMedia;
+						auto uploadInfo = ctx->uploadInfos[i];
+						if (ctx->isPhoto[i]) {
+							inputMedia = Api::PrepareUploadedPhoto(
+								srcItem, std::move(uploadInfo));
+						} else {
+							inputMedia = Api::PrepareUploadedDocument(
+								srcItem, std::move(uploadInfo));
+						}
+						// uploadMedia -> get server file ref -> register in album
+						const auto localMsgId = localMsg->fullId();
+						const auto next = sendNext;
+						ctx->uploadMediaInFlight = true;
+						request(MTPmessages_UploadMedia(
+							MTP_flags(0),
+							MTPstring(),
+							action.history->peer->input(),
+							inputMedia
+						)).done([=](const MTPMessageMedia &result) {
+							const auto li =
+								_session->data().message(localMsgId);
+							if (!li) return;
+							MTPInputMedia srv;
+							bool ok = false;
+							if (result.type() == mtpc_messageMediaPhoto) {
+								const auto &d = result.c_messageMediaPhoto();
+								const auto ph = d.vphoto();
+								if (ph && ph->type() == mtpc_photo) {
+									const auto &f = ph->c_photo();
+									srv = MTP_inputMediaPhoto(
+										MTP_flags(0),
+										MTP_inputPhoto(
+											f.vid(),
+											f.vaccess_hash(),
+											f.vfile_reference()),
+										MTP_int(0),
+										MTPInputDocument());
+									ok = true;
+								}
+							} else if (result.type()
+									== mtpc_messageMediaDocument) {
+								const auto &d =
+									result.c_messageMediaDocument();
+								const auto dc = d.vdocument();
+								if (dc && dc->type() == mtpc_document) {
+									const auto &f = dc->c_document();
+									srv = MTP_inputMediaDocument(
+										MTP_flags(0),
+										MTP_inputDocument(
+											f.vid(),
+											f.vaccess_hash(),
+											f.vfile_reference()),
+										MTPInputPhoto(),
+										MTP_int(0),
+										MTP_int(0),
+										MTPstring());
+									ok = true;
+								}
+							}
+							if (ok) {
+								sendAlbumWithUploaded(li, albumGroupId, srv);
+							}
+							ctx->uploadMediaInFlight = false;
+							(*next)();
+						}).fail([=](const MTP::Error &) {
+							ctx->uploadMediaInFlight = false;
 							EnhancedForward::markItemSent(
 								&session(), peerId);
-							(*uploadMediaNext)();
-							return;
-						}
-					}
-					sendMedia(item, singleMedia, action.options, [=](bool) {
-						EnhancedForward::markItemSent(&session(), peerId);
-						(*uploadMediaNext)();
-					});
-					return;
-				}
-				if (ctx->uploadLifetime) {
-					auto lifetime = std::move(ctx->uploadLifetime);
-					crl::on_main([lifetime = std::move(lifetime)]() mutable {
-						if (lifetime) lifetime->destroy();
-					});
-				}
-			};
-
-			const auto startUploads = [=] {
-				ctx->uploadLifetime = std::make_shared<rpl::lifetime>();
-
-				for (auto i = 0; i < n; i++) {
-					if (!ctx->textOnly[i] && !ctx->prepared[i]) {
-						ctx->textOnly[i] = true;
-					}
-				}
-
-				// Create local messages for ALL items in source order,
-				// so block insertion order matches the source sequence.
-				for (auto i = 0; i < n; i++) {
-					const auto sourceItem = session().data().message(ctx->itemIds[i]);
-					if (!sourceItem) {
-						ctx->textOnly[i] = true;
-						continue;
-					}
-					auto groupedId = uint64();
-					if (!ctx->textOnly[i]) {
-						if (const auto sourceGroupId = sourceItem->groupId()) {
-							auto albumIt = ctx->albums.find(sourceGroupId);
-							if (albumIt == end(ctx->albums)) {
-								auto album = std::make_shared<SendingAlbum>();
-								album->options = action.options;
-								_sendingAlbums.emplace(
-									album->groupId,
-									album);
-								albumIt = ctx->albums.emplace(
-									sourceGroupId,
-									std::move(album)).first;
+							(*next)();
+						}).send();
+						return;
+					} else {
+						// Single media item: send directly.
+						auto uploadInfo = ctx->uploadInfos[i];
+						MTPInputMedia singleMedia;
+						if (ctx->isPhoto[i]) {
+							singleMedia = Api::PrepareUploadedPhoto(
+								srcItem, std::move(uploadInfo));
+						} else {
+							singleMedia = Api::PrepareUploadedDocument(
+								srcItem, std::move(uploadInfo));
+							if (singleMedia.type() == mtpc_inputMediaEmpty) {
+								EnhancedForward::markItemSent(
+									&session(), peerId);
+								continue;
 							}
-							groupedId = albumIt->second->groupId;
 						}
-					}
-					const auto caption = sourceItem->originalText();
-					auto flags = NewMessageFlags(action.history->peer);
-					if (action.replyTo) {
-						flags |= MessageFlag::HasReplyInfo;
-					}
-					FillMessagePostFlags(
-						action,
-						action.history->peer,
-						flags);
-					if (action.options.scheduled) {
-						flags |= MessageFlag::IsOrWasScheduled;
-					}
-					if (action.options.shortcutId) {
-						flags |= MessageFlag::ShortcutMessage;
-					}
-					const auto newId = FullMsgId(
-						action.history->peer->id,
-						_session->data().nextLocalMessageId());
-					const auto localMsg = action.history
-						->addNewLocalMessage({
-							.id = newId.msg,
-							.flags = flags,
-							.from = NewMessageFromId(action),
-							.replyTo = action.replyTo,
-							.date = NewMessageDate(action.options),
-							.shortcutId = action.options.shortcutId,
-							.starsPaid = action.options.starsApproved,
-							.postAuthor = NewMessagePostAuthor(action),
-							.groupedId = groupedId,
-							.effectId = action.options.effectId,
-							.suggest = HistoryMessageSuggestInfo(
-								action.options),
-						}, caption, MTP_messageMediaEmpty());
-					ctx->localItemIds[i] = localMsg->fullId();
-					if (!ctx->textOnly[i] && groupedId) {
-						auto albumIt = ctx->albums.find(
-							sourceItem->groupId());
-						Expects(albumIt != end(ctx->albums));
-						albumIt->second->items.emplace_back(kEmptyTaskId);
-						albumIt->second->items.back().msgId
-							= localMsg->fullId();
+						// Create local msg in DEST history so sendMedia
+						// uses the dest peer, not the source peer.
+						const auto singleNewId =
+							_session->data().nextLocalMessageId();
+						auto lflags =
+							NewMessageFlags(action.history->peer);
+						if (action.replyTo) {
+							lflags |= MessageFlag::HasReplyInfo;
+						}
+						FillMessagePostFlags(
+							action, action.history->peer, lflags);
+						if (action.options.scheduled) {
+							lflags |= MessageFlag::IsOrWasScheduled;
+						}
+						const auto localMsg =
+							action.history->addNewLocalMessage({
+								.id = singleNewId,
+								.flags = lflags,
+								.from = NewMessageFromId(action),
+								.replyTo = action.replyTo,
+								.date = NewMessageDate(action.options),
+								.shortcutId =
+									action.options.shortcutId,
+								.starsPaid =
+									action.options.starsApproved,
+								.postAuthor =
+									NewMessagePostAuthor(action),
+								.effectId =
+									action.options.effectId,
+								.suggest =
+									HistoryMessageSuggestInfo(
+										action.options),
+								}, srcItem->originalText(),
+								MTP_messageMediaEmpty());
+						const auto next = sendNext;
+						ctx->uploadMediaInFlight = true;
+						sendMedia(localMsg, singleMedia,
+							action.options,
+							[=](bool) {
+								ctx->uploadMediaInFlight = false;
+								EnhancedForward::markItemSent(
+									&session(), peerId);
+								(*next)();
+							});
+						return;
 					}
 				}
-
-				auto remaining = std::make_shared<int>(0);
-				auto uploadIndex
-					= std::make_shared<base::flat_map<FullMsgId, int>>();
-				for (auto i = 0; i < n; i++) {
-					if (ctx->textOnly[i] || !ctx->localItemIds[i].msg) {
-						continue;
-					}
-					(*remaining)++;
-					uploadIndex->emplace(
-						ctx->localItemIds[i], i);
+				// All items processed; tear down upload and download listeners.
+				if (ctx->uploadLifetime) {
+					auto lt = std::move(ctx->uploadLifetime);
+					crl::on_main([lt = std::move(lt)]() mutable {
+						if (lt) lt->destroy();
+					});
 				}
-				if (!*remaining) {
-					(*uploadMediaNext)();
-					return;
-				}
-				const auto onDone = [=](
-						const Storage::UploadedMedia &data) {
-					if (data.fullId.peer != peerId) {
-						return;
-					}
-					const auto it = uploadIndex->find(data.fullId);
-					if (it == uploadIndex->end()) {
-						return;
-					}
-					ctx->uploadInfos[it->second] = std::move(data.info);
-					ctx->uploadDone[it->second] = true;
-					(*remaining)--;
-					const auto next = uploadMediaNext;
-					(*next)();
-				};
-				const auto onFail = [=](const FullMsgId &fullId) {
-					if (fullId.peer != peerId) {
-						return;
-					}
-					const auto it = uploadIndex->find(fullId);
-					if (it == uploadIndex->end()) {
-						return;
-					}
-					ctx->textOnly[it->second] = true;
-					ctx->uploadDone[it->second] = true;
-					(*remaining)--;
-					const auto next = uploadMediaNext;
-					(*next)();
-				};
-				session().uploader().photoReady(
-				) | rpl::on_next(onDone, *ctx->uploadLifetime);
-				session().uploader().documentReady(
-				) | rpl::on_next(onDone, *ctx->uploadLifetime);
-				session().uploader().photoFailed(
-				) | rpl::on_next(onFail, *ctx->uploadLifetime);
-				session().uploader().documentFailed(
-				) | rpl::on_next(onFail, *ctx->uploadLifetime);
-
-				for (const auto &[localId, i] : *uploadIndex) {
-					_session->uploader().upload(
-						localId,
-						ctx->prepared[i]);
+				if (ctx->dlLifetime) {
+					auto lt = std::move(ctx->dlLifetime);
+					crl::on_main([lt = std::move(lt)]() mutable {
+						if (lt) lt->destroy();
+					});
 				}
 			};
-			const auto processAllItems = [=] {
-				if (ctx->downloadLifetime) {
-					ctx->downloadLifetime->destroy();
-					ctx->downloadLifetime = nullptr;
+
+			// --------------------------------------------------------
+			// Per-item download + immediate upload pipeline.
+			// As soon as a file is downloaded, we immediately:
+			//   1. Create a FileLoadTask (file prep / thumbnail gen)
+			//   2. Hand the prepared result to the uploader
+			//   3. When upload completes, mark uploadDone[i] and
+			//      call sendNext() to advance the ordered dispatcher.
+			// This way downloads and uploads are fully parallel;
+			// only the final SEND step is ordered.
+			// --------------------------------------------------------
+
+			// We install upload listeners once (shared across items).
+			ctx->uploadLifetime = std::make_shared<rpl::lifetime>();
+
+			// Build an uploadIndex mapping localId -> slot index.
+			// We fill this as downloads complete and local uploader items
+			// are created.
+			const auto uploadIndex =
+				std::make_shared<base::flat_map<FullMsgId, int>>();
+
+			// A helper: given a downloaded file at path[i], create a
+			// FileLoadTask, run it, then hand result to the uploader.
+			const auto startUploadForItem = [=](int i) {
+				const auto srcItem =
+					session().data().message(ctx->itemIds[i]);
+				if (!srcItem || ctx->textOnly[i]) {
+					// Nothing to upload; mark done immediately.
+					ctx->uploadDone[i] = true;
+					(*sendNext)();
+					return;
 				}
 				const auto to = FileLoadTaskOptions(action);
-				auto tasks = std::vector<std::unique_ptr<Task>>();
-				tasks.reserve(n);
-				auto prepCount = std::make_shared<int>(0);
-				for (auto i = 0; i < n; i++) {
-					if (ctx->textOnly[i]) {
-						continue;
+				const auto media = srcItem->media();
+				const auto doc = media ? media->document() : nullptr;
+				const auto caption = TextWithTags{
+					srcItem->originalText().text };
+				auto args = FileLoadTask::Args{
+					.session = &session(),
+					.filepath = ctx->paths[i],
+					.content = QByteArray(),
+					.information = nullptr,
+					.videoCover = nullptr,
+					.type = ctx->isPhoto[i]
+						? SendMediaType::Photo
+						: SendMediaType::File,
+					.to = to,
+					.caption = caption,
+					.spoiler = false,
+					.album = nullptr,
+					.forceFile = false,
+					.sendLargePhotos = ctx->isPhoto[i],
+					.idOverride = 0,
+					.displayName = {},
+				};
+				if (doc) {
+					args.displayName = doc->filename();
+					auto info = std::make_unique<
+						Ui::PreparedFileInformation>();
+					info->filemime = doc->mimeString();
+					if (!doc->inlineThumbnailBytes().isEmpty()) {
+						info->fileThumbnail = Images::FromInlineBytes(
+							doc->inlineThumbnailBytes());
 					}
-					const auto item = session().data().message(ctx->itemIds[i]);
-					if (!item) {
-						ctx->textOnly[i] = true;
-						continue;
-					}
-					(*prepCount)++;
-					const auto media = item->media();
-					const auto doc = media ? media->document() : nullptr;
-					const auto caption = TextWithTags{
-						item->originalText().text };
-					auto args = FileLoadTask::Args{
-						.session = &session(),
-						.filepath = ctx->paths[i],
-						.content = QByteArray(),
-						.information = nullptr,
-						.videoCover = nullptr,
-						.type = ctx->isPhoto[i]
-							? SendMediaType::Photo
-							: SendMediaType::File,
-						.to = to,
-						.caption = caption,
-						.spoiler = false,
-						.album = nullptr,
-						.forceFile = false,
-						.sendLargePhotos = ctx->isPhoto[i],
-						.idOverride = 0,
-						.displayName = {},
-					};
-					if (doc) {
-						args.displayName = doc->filename();
-						auto info = std::make_unique<
+					if (doc->duration() >= 0) {
+						Ui::PreparedFileInformation::Song song;
+						song.duration = doc->duration();
+						const auto sd = doc->song();
+						if (sd) {
+							song.title = sd->title;
+							song.performer = sd->performer;
+						}
+						args.information = std::make_unique<
 							Ui::PreparedFileInformation>();
-						info->filemime = doc->mimeString();
-						if (!doc->inlineThumbnailBytes().isEmpty()) {
-							info->fileThumbnail = Images::FromInlineBytes(
-								doc->inlineThumbnailBytes());
-						}
-						if (doc->duration() >= 0) {
-							Ui::PreparedFileInformation::Song song;
-							song.duration = doc->duration();
-							const auto sd = doc->song();
-							if (sd) {
-								song.title = sd->title;
-								song.performer = sd->performer;
-							}
-							info->media = std::move(song);
-						}
+						*args.information = {};
+						args.information->filemime = info->filemime;
+						args.information->fileThumbnail =
+							info->fileThumbnail;
+						args.information->media = std::move(song);
+					} else {
 						args.information = std::move(info);
 					}
-					const auto weakCtx = std::weak_ptr<Ctx>(ctx);
-					class EnhancedFileTask final : public Task {
-					public:
-						EnhancedFileTask(
-							FileLoadTask::Args &&args,
-							Fn<void(
-								std::shared_ptr<FilePrepareResult>
-							)> &&cb)
-						: _impl(std::make_unique<FileLoadTask>(
-							std::move(args)))
-						, _cb(std::move(cb)) {
-						}
-						void process() override {
-							_impl->process();
-						}
-						void finish() override {
-							if (_cb) {
-								_cb(_impl->peekResult());
-							}
-						}
-					private:
-						std::unique_ptr<FileLoadTask> _impl;
-						Fn<void(
-							std::shared_ptr<FilePrepareResult>)> _cb;
-					};
-					tasks.push_back(std::make_unique<EnhancedFileTask>(
-						std::move(args),
-						[=, idx = i](
-								std::shared_ptr<FilePrepareResult>
-									result) {
-							const auto s = weakCtx.lock();
-							if (!s) return;
-							if (result
-								&& result->filesize > 0) {
-								s->prepared[idx] = std::move(result);
-							} else {
-								s->textOnly[idx] = true;
-							}
-							(*prepCount)--;
-							if (*prepCount == 0) {
-								startUploads();
-							}
-						}));
 				}
-				if (*prepCount == 0) {
-					startUploads();
-				} else {
-					_fileLoader->addTasks(std::move(tasks));
-				}
+				const auto weakCtx = std::weak_ptr<Ctx>(ctx);
+				class EnhancedFileTask final : public Task {
+				public:
+					EnhancedFileTask(
+						FileLoadTask::Args &&args,
+						Fn<void(std::shared_ptr<FilePrepareResult>)> &&cb)
+					: _impl(std::make_unique<FileLoadTask>(
+						std::move(args)))
+					, _cb(std::move(cb)) {}
+					void process() override { _impl->process(); }
+					void finish() override {
+						if (_cb) _cb(_impl->peekResult());
+					}
+				private:
+					std::unique_ptr<FileLoadTask> _impl;
+					Fn<void(std::shared_ptr<FilePrepareResult>)> _cb;
+				};
+
+				auto tasks = std::vector<std::unique_ptr<Task>>();
+				tasks.push_back(std::make_unique<EnhancedFileTask>(
+					std::move(args),
+					[=, idx = i](
+							std::shared_ptr<FilePrepareResult> result) {
+						const auto s = weakCtx.lock();
+						if (!s) return;
+						if (result && result->filesize > 0) {
+							s->prepared[idx] = std::move(result);
+						} else {
+							// prep failed -> treat as text
+							s->textOnly[idx] = true;
+							s->uploadDone[idx] = true;
+							(*sendNext)();
+							return;
+						}
+						// Create a throw-away local message just to give
+						// the uploader a FullMsgId key to report back on.
+						const auto srcIt =
+							session().data().message(s->itemIds[idx]);
+						if (!srcIt) {
+							s->textOnly[idx] = true;
+							s->uploadDone[idx] = true;
+							(*sendNext)();
+							return;
+						}
+						// We need a unique FullMsgId to track this upload.
+						// Use a throwaway local message in the DEST history.
+						const auto newId = FullMsgId(
+							action.history->peer->id,
+							session().data().nextLocalMessageId());
+						auto uflags =
+							NewMessageFlags(action.history->peer);
+						FillMessagePostFlags(
+							action, action.history->peer, uflags);
+						const auto uploadPlaceholder =
+							action.history->addNewLocalMessage({
+								.id = newId.msg,
+								.flags = uflags,
+								.from = NewMessageFromId(action),
+								.replyTo = action.replyTo,
+								.date = NewMessageDate(action.options),
+								.postAuthor =
+									NewMessagePostAuthor(action),
+							}, srcIt->originalText(),
+								MTP_messageMediaEmpty());
+						const auto uploadId = uploadPlaceholder->fullId();
+						uploadIndex->emplace(uploadId, idx);
+						session().uploader().upload(
+							uploadId, s->prepared[idx]);
+					}));
+				_fileLoader->addTasks(std::move(tasks));
 			};
 
-			const auto checkDownloads = [=] {
-				auto stillPending = 0;
-				for (auto i = 0; i < n; i++) {
-					if (ctx->ready[i]) continue;
-					const auto item = session().data().message(ctx->itemIds[i]);
-					if (!item) {
-						failItem(i);
-						continue;
-					}
-					const auto media = item->media();
-					bool ready = true;
-					QString path;
-					if (media && media->document()) {
-						const auto doc = media->document();
-						if (!doc->loading()
-							&& !doc->filepath(true).isEmpty()) {
-							path = doc->filepath(true);
-						} else if (!doc->loading()) {
-							failItem(i);
-							continue;
-						} else {
-							ready = false;
-						}
-					} else if (media && media->photo()) {
-						const auto photo = media->photo();
-						const auto v = photo->activeMediaView();
-						if (!photo->loading(Data::PhotoSize::Large)
-							&& !photo->failed(Data::PhotoSize::Large)) {
-							if (v && v->loaded()) {
-								path = QDir(ctx->downloadPath)
-									.absoluteFilePath(
-										QString::number(i)
-										+ u"_"_q
-										+ QString::number(photo->id)
-										+ u".jpg"_q);
-								if (!v->saveToFile(path)) {
-									path.clear();
-									failItem(i);
-									continue;
-								}
-							} else {
-								ready = false;
-							}
-						} else if (photo->failed(Data::PhotoSize::Large)) {
-							failItem(i);
-							continue;
-						} else {
-							ready = false;
-						}
-					}
-					if (ready) {
-						ctx->paths[i] = path;
-						ctx->ready[i] = true;
-						ctx->pendingDownload--;
-					} else {
-						stillPending++;
-					}
+			// Install upload completion listeners (shared for all items).
+			const auto onUploadDone = [=](
+					const Storage::UploadedMedia &data) {
+				if (data.fullId.peer != peerId) return;
+				const auto it = uploadIndex->find(data.fullId);
+				if (it == uploadIndex->end()) return;
+				const auto idx = it->second;
+				// Destroy the upload placeholder (it served its purpose).
+				if (const auto ph =
+						_session->data().message(data.fullId)) {
+					ph->destroy();
 				}
-				if (!stillPending) {
-					if (ctx->downloadLifetime) {
-						ctx->downloadLifetime->destroy();
-						ctx->downloadLifetime = nullptr;
-					}
-					if (ctx->downloadTimeout) {
-						ctx->downloadTimeout->cancel();
-						ctx->downloadTimeout = nullptr;
-					}
-					processAllItems();
-				}
+				ctx->uploadInfos[idx] = std::move(data.info);
+				ctx->uploadDone[idx] = true;
+				(*sendNext)();
 			};
+			const auto onUploadFail = [=](const FullMsgId &fullId) {
+				if (fullId.peer != peerId) return;
+				const auto it = uploadIndex->find(fullId);
+				if (it == uploadIndex->end()) return;
+				const auto idx = it->second;
+				if (const auto ph = _session->data().message(fullId)) {
+					ph->destroy();
+				}
+				ctx->textOnly[idx] = true;
+				ctx->uploadDone[idx] = true;
+				(*sendNext)();
+			};
+			session().uploader().photoReady(
+			) | rpl::on_next(onUploadDone, *ctx->uploadLifetime);
+			session().uploader().documentReady(
+			) | rpl::on_next(onUploadDone, *ctx->uploadLifetime);
+			session().uploader().photoFailed(
+			) | rpl::on_next(onUploadFail, *ctx->uploadLifetime);
+			session().uploader().documentFailed(
+			) | rpl::on_next(onUploadFail, *ctx->uploadLifetime);
 
+			// Kick off downloads (and immediate-upload for text-only items).
+			int stillNeedDownload = 0;
 			for (auto i = 0; i < n; i++) {
-				if (ctx->textOnly[i]) continue;
-				const auto item = session().data().message(ctx->itemIds[i]);
+				if (ctx->textOnly[i]) {
+					// text-only: no download/upload needed
+					ctx->downloadDone[i] = true;
+					ctx->uploadDone[i] = true;
+					continue;
+				}
+				const auto item =
+					session().data().message(ctx->itemIds[i]);
 				if (!item) {
 					ctx->textOnly[i] = true;
-					ctx->ready[i] = true;
-					ctx->pendingDownload--;
+					ctx->downloadDone[i] = true;
+					ctx->uploadDone[i] = true;
 					continue;
 				}
 				const auto media = item->media();
-				if (const auto doc = media->document()) {
+				if (const auto doc = media ? media->document() : nullptr) {
 					const auto filepath = doc->filepath(true);
 					if (!filepath.isEmpty()) {
-						markDownloaded(i, filepath);
-						continue;
-					}
-					auto name = doc->filename();
-					if (name.isEmpty()) {
-						name = u"file"_q;
-					}
-					name.replace(
-						QRegularExpression("[:<>\"\\\\/|?*]"), "_");
-					doc->save(
-						Data::FileOrigin(
-							FullMsgId(
-								item->history()->peer->id,
-								item->id)),
-						QDir(ctx->downloadPath)
+						// Already cached locally.
+						ctx->paths[i] = filepath;
+						ctx->downloadDone[i] = true;
+						startUploadForItem(i);
+					} else {
+						auto name = doc->filename();
+						if (name.isEmpty()) name = u"file"_q;
+						name.replace(
+							QRegularExpression("[:<>\"\\\\|?*]"), "_");
+						ctx->paths[i] = QDir(ctx->downloadPath)
 							.absoluteFilePath(
 								QString::number(i)
-								+ u"_"_q
-								+ name));
-				} else if (media->photo()) {
-					const auto photo = media->photo();
+								+ u"_"_q + name);
+						doc->save(
+							Data::FileOrigin(FullMsgId(
+								item->history()->peer->id,
+								item->id)),
+							ctx->paths[i]);
+						stillNeedDownload++;
+					}
+				} else if (const auto photo =
+						media ? media->photo() : nullptr) {
 					const auto v = photo->activeMediaView();
 					const auto destPath = QDir(ctx->downloadPath)
 						.absoluteFilePath(
@@ -4219,50 +4183,99 @@ void ApiWrap::forwardMessages(
 							+ u"_"_q
 							+ QString::number(photo->id)
 							+ u".jpg"_q);
+					ctx->paths[i] = destPath;
 					if (v && v->loaded() && v->saveToFile(destPath)) {
-						markDownloaded(i, destPath);
-						continue;
-					}
-					photo->load(
-						Data::PhotoSize::Large,
-						Data::FileOrigin(
-							FullMsgId(
+						ctx->downloadDone[i] = true;
+						startUploadForItem(i);
+					} else {
+						photo->load(
+							Data::PhotoSize::Large,
+							Data::FileOrigin(FullMsgId(
 								item->history()->peer->id,
 								item->id)));
+						stillNeedDownload++;
+					}
+				} else {
+					// Unsupported media type.
+					ctx->textOnly[i] = true;
+					ctx->downloadDone[i] = true;
+					ctx->uploadDone[i] = true;
 				}
 			}
 
-			if (ctx->pendingDownload > 0) {
-				ctx->downloadLifetime = std::make_shared<rpl::lifetime>();
-				ctx->downloadTimeout = std::make_unique<base::Timer>([=] {
-					for (auto i = 0; i < n; i++) {
-						if (!ctx->ready[i]) failItem(i);
-					}
-					if (ctx->downloadLifetime) {
-						ctx->downloadLifetime->destroy();
-						ctx->downloadLifetime = nullptr;
-					}
-					ctx->downloadTimeout = nullptr;
-					processAllItems();
-				});
-				ctx->downloadTimeout->callOnce(60 * crl::time(1000));
+			if (stillNeedDownload > 0) {
+				// Watch for document/photo download completions and
+				// immediately kick off the upload for that item.
+				ctx->dlLifetime = std::make_shared<rpl::lifetime>();
 
+				const auto checkItem = [=](int i) {
+					if (ctx->downloadDone[i]) return;
+					const auto item =
+						session().data().message(ctx->itemIds[i]);
+					if (!item) {
+						ctx->textOnly[i] = true;
+						ctx->downloadDone[i] = true;
+						ctx->uploadDone[i] = true;
+						(*sendNext)();
+						return;
+					}
+					const auto media = item->media();
+					if (const auto doc =
+							media ? media->document() : nullptr) {
+						// Fallback: internal TG cache path.
+						const auto fp = doc->filepath(true);
+						if (!fp.isEmpty()) {
+							ctx->paths[i] = fp;
+							ctx->downloadDone[i] = true;
+							startUploadForItem(i);
+						} else if (!doc->loading()) {
+							// Download failed.
+							ctx->textOnly[i] = true;
+							ctx->downloadDone[i] = true;
+							ctx->uploadDone[i] = true;
+							(*sendNext)();
+						}
+					} else if (const auto photo =
+							media ? media->photo() : nullptr) {
+						const auto v = photo->activeMediaView();
+						if (v && v->loaded()) {
+							if (v->saveToFile(ctx->paths[i])) {
+								ctx->downloadDone[i] = true;
+								startUploadForItem(i);
+							} else {
+								ctx->textOnly[i] = true;
+								ctx->downloadDone[i] = true;
+								ctx->uploadDone[i] = true;
+								(*sendNext)();
+							}
+						} else if (photo->failed(Data::PhotoSize::Large)) {
+							ctx->textOnly[i] = true;
+							ctx->downloadDone[i] = true;
+							ctx->uploadDone[i] = true;
+							(*sendNext)();
+						}
+					}
+				};
+
+				// Listen for download completions via reactive streams.
 				session().data().documentLoadProgress(
-				) | rpl::filter([=](not_null<DocumentData*> doc) {
-					return !doc->loading();
-				}) | rpl::on_next([=] {
-					checkDownloads();
-				}, *ctx->downloadLifetime);
+				) | rpl::on_next([=](not_null<DocumentData*>) {
+					for (auto i = 0; i < n; i++) checkItem(i);
+				}, *ctx->dlLifetime);
 
 				session().downloaderTaskFinished(
 				) | rpl::on_next([=] {
-					checkDownloads();
-				}, *ctx->downloadLifetime);
+					for (auto i = 0; i < n; i++) checkItem(i);
+				}, *ctx->dlLifetime);
 
-				checkDownloads();
-			} else {
-				processAllItems();
+				// Initial synchronous check.
+				for (auto i = 0; i < n; i++) checkItem(i);
 			}
+
+			// Kick off the ordered sender (handles text-only items
+			// and any items already marked uploadDone).
+			(*sendNext)();
+
 		}
 
 		if (normalItems.empty()) {
@@ -5529,9 +5542,10 @@ void ApiWrap::sendAlbumWithCancelled(
 }
 
 void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
-	LOG(("sendAlbumIfReady: album=%1, items=%2, sent=%3"
+	LOG(("sendAlbumIfReady: album=%1, items=%2, expected=%3, sent=%4"
 		).arg(album->groupId
 		).arg(album->items.size()
+		).arg(album->expectedCount
 		).arg(album->sent ? 1 : 0));
 	if (album->sent) {
 		LOG(("sendAlbumIfReady: album already sent, returning"));
@@ -5555,7 +5569,13 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 		}
 		medias.push_back(*item.media);
 	}
-	LOG(("sendAlbumIfReady: all items have media, sending album with %1 items").arg(medias.size()));
+	if (album->items.size() != album->expectedCount) {
+		LOG(("sendAlbumIfReady: waiting for more items, have=%1, expected=%2"
+			).arg(album->items.size()
+			).arg(album->expectedCount));
+		return;
+	}
+	LOG(("sendAlbumIfReady: all items ready, sending album with %1 items").arg(medias.size()));
 	if (!sample) {
 		_sendingAlbums.remove(groupId);
 		return;
@@ -5565,11 +5585,17 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 	} else if (medias.size() < 2) {
 		const auto &single = medias.front().data();
 		album->sent = true;
+		const auto historyPeer = sample->history()->peer;
 		sendMediaWithRandomId(
 			sample,
 			single.vmedia(),
 			album->options,
-			single.vrandom_id().v);
+			single.vrandom_id().v,
+			[=](bool) {
+				EnhancedForward::markItemSent(
+					&session(),
+					historyPeer->id);
+			});
 		_sendingAlbums.remove(groupId);
 		return;
 	}
@@ -5618,6 +5644,10 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 			MTP_long(album->options.effectId),
 			MTP_long(starsPaid)
 		), [=](const MTPUpdates &result, const MTP::Response &response) {
+		for (const auto &item : album->items) {
+			(void)item;
+			EnhancedForward::markItemSent(&session(), peer->id);
+		}
 		_sendingAlbums.remove(groupId);
 	}, [=](const MTP::Error &error, const MTP::Response &response) {
 		if (const auto album = _sendingAlbums.take(groupId)) {
