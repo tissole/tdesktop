@@ -5376,7 +5376,6 @@ void ApiWrap::sendMedia(
 		Api::SendOptions options,
 		Fn<void(bool)> done) {
 	const auto randomId = base::RandomValue<uint64>();
-	LOG(("EF sendMedia ENTER: randomId=%1").arg(randomId));
 	_session->data().registerMessageRandomId(randomId, item->fullId());
 
 	sendMediaWithRandomId(item, media, options, randomId, std::move(done));
@@ -5454,7 +5453,6 @@ void ApiWrap::sendMediaWithRandomId(
 			MTP_long(starsPaid),
 			Api::SuggestToMTP(options.suggest)
 		), [=](const MTPUpdates &result, const MTP::Response &response) {
-		LOG(("EF sendMedia DONE RESPONSE: randomId=%1").arg(randomId));
 		if (done) done(true);
 		if (updateRecentStickers) {
 			requestRecentStickers(std::nullopt, true);
@@ -5642,12 +5640,15 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 		const auto &single = medias.front().data();
 		album->sent = true;
 		const auto historyPeer = sample->history()->peer;
+		const auto albumSample = sample;
 		sendMediaWithRandomId(
-			sample,
+			albumSample,
 			single.vmedia(),
 			album->options,
 			single.vrandom_id().v,
 			[=](bool) {
+				_session->data().groups().refreshMessage(
+					albumSample);
 				EnhancedForward::markItemSent(
 					&session(),
 					historyPeer->id);
@@ -5685,6 +5686,15 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 	const auto peer = history->peer;
 	album->sent = true;
 	LOG(("EF sendAlbumIfReady: DISPATCHING SendMultiMedia with %1 items").arg(medias.size()));
+	// Capture message pointers before sending (setRealId changes ids).
+	auto albumMsgs = std::make_shared<std::vector<
+		not_null<HistoryItem*>>>();
+	for (const auto &item : album->items) {
+		if (const auto msg = _session->data().message(
+				item.msgId)) {
+			albumMsgs->push_back(msg);
+		}
+	}
 	histories.sendPreparedMessage(
 		history,
 		replyTo,
@@ -5701,12 +5711,13 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 			MTP_long(album->options.effectId),
 			MTP_long(starsPaid)
 		), [=](const MTPUpdates &result, const MTP::Response &response) {
-		for (const auto &item : album->items) {
-			(void)item;
+		for (const auto &msg : *albumMsgs) {
+			_session->data().groups().refreshMessage(msg);
 			EnhancedForward::markItemSent(&session(), peer->id);
 		}
 		_sendingAlbums.remove(groupId);
-	}, [=](const MTP::Error &error, const MTP::Response &response) {
+	}, [=](const MTP::Error &error,
+			const MTP::Response &response) {
 		if (const auto album = _sendingAlbums.take(groupId)) {
 			for (const auto &item : (*album)->items) {
 				sendMessageFail(error, peer, item.randomId, item.msgId);
