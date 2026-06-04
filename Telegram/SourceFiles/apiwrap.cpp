@@ -3535,6 +3535,8 @@ void ApiWrap::forwardMessages(
 				std::vector<bool> uploadDone;   // upload to TG servers done
 				std::vector<Api::RemoteFileInfo> uploadInfos;
 				std::vector<std::shared_ptr<FilePrepareResult>> prepared;
+				// source groupId for album items (empty if not in album)
+				std::vector<MessageGroupId> sourceGroup;
 				// album tracking (keyed by SOURCE groupId -> SendingAlbum)
 				base::flat_map<
 					MessageGroupId,
@@ -3559,6 +3561,7 @@ void ApiWrap::forwardMessages(
 			ctx->uploadDone.resize(n, false);
 			ctx->uploadInfos.resize(n);
 			ctx->prepared.resize(n);
+			ctx->sourceGroup.resize(n);
 			ctx->downloadPath = downloadPath;
 			for (auto i = 0; i < n; i++) {
 				ctx->itemIds[i] = enhancedItems[i]->fullId();
@@ -3594,6 +3597,20 @@ void ApiWrap::forwardMessages(
 				}
 			}
 
+			// Log source order before any sending.
+			for (auto i = 0; i < n; i++) {
+				const auto srcItem =
+					session().data().message(ctx->itemIds[i]);
+				LOG(("EF source order i=%1: msgId=%2, textOnly=%3, isPhoto=%4, groupId=%5"
+					).arg(i
+					).arg(ctx->itemIds[i].msg.bare
+					).arg(ctx->textOnly[i] ? 1 : 0
+					).arg(ctx->isPhoto[i] ? 1 : 0
+					).arg(srcItem
+						? srcItem->groupId().raw()
+						: uint64(0)));
+			}
+
 			// Pre-create SendingAlbum objects for every unique source album.
 			// We do NOT create local messages; albums are purely server-side.
 			for (auto i = 0; i < n; i++) {
@@ -3602,6 +3619,7 @@ void ApiWrap::forwardMessages(
 					session().data().message(ctx->itemIds[i]);
 				if (!srcItem) { ctx->textOnly[i] = true; continue; }
 				if (const auto sg = srcItem->groupId()) {
+					ctx->sourceGroup[i] = sg;
 					if (ctx->albums.find(sg) == ctx->albums.end()) {
 						auto album = std::make_shared<SendingAlbum>();
 						album->options = action.options;
@@ -3629,10 +3647,16 @@ void ApiWrap::forwardMessages(
 			const auto sendNext =
 				std::make_shared<std::function<void()>>();
 			*sendNext = [=]() -> void {
+				LOG(("EF sendNext: current=%1, n=%2").arg(ctx->current).arg(n));
 				while (ctx->current < n) {
 					const auto i = ctx->current;
 					const auto srcItem =
 						session().data().message(ctx->itemIds[i]);
+					LOG(("EF sendNext processing i=%1, textOnly=%2, uploadDone=%3, uploadMediaInFlight=%4"
+						).arg(i
+						).arg(ctx->textOnly[i] ? 1 : 0
+						).arg(ctx->uploadDone[i] ? 1 : 0
+						).arg(ctx->uploadMediaInFlight ? 1 : 0));
 
 					if (ctx->textOnly[i]) {
 						// Text-only: send directly via messages.sendMessage.
@@ -3670,6 +3694,8 @@ void ApiWrap::forwardMessages(
 							if (action.options.effectId) {
 								sendFlags |= SendFlag::f_effect;
 							}
+							LOG(("EF sendNext i=%1: SENDING TEXT, msgId=%2"
+								).arg(i).arg(ctx->itemIds[i].msg.bare));
 							const auto done = [=](
 									const MTPUpdates &,
 									const MTP::Response &) {
@@ -3738,24 +3764,24 @@ void ApiWrap::forwardMessages(
 						continue;
 					}
 
-					if (const auto albumGroupId = [&]() -> MessageGroupId {
-						// Find the SendingAlbum for this source item's group.
-						const auto sg = srcItem->groupId();
-						if (!sg) return MessageGroupId();
-						const auto it = ctx->albums.find(sg);
-						if (it == ctx->albums.end()) return MessageGroupId();
-						return MessageGroupId::FromRaw(
-							peerId,
-							it->second->groupId,
-							action.options.scheduled);
-					}()) {
-						// Album item: build media ref and hand off to
-						// sendAlbumWithUploaded, which fires SendMultiMedia
-						// once all members have been registered.
-						const auto sg = srcItem->groupId();
+					if (const auto sg = ctx->sourceGroup[i]) {
+						LOG(("EF sendNext i=%1: ALBUM path (sourceGroup=%2)"
+							).arg(i).arg(sg.raw()));
+						// Album item: use cached source groupId to find the
+						// shared SendingAlbum created during pre-creation.
 						const auto albumIt = ctx->albums.find(sg);
-						Assert(albumIt != ctx->albums.end());
+						if (albumIt == ctx->albums.end()) {
+							// Should never happen; fall back to text-only.
+							ctx->textOnly[i] = true;
+							ctx->uploadDone[i] = true;
+							(*sendNext)();
+							return;
+						}
 						const auto &album = albumIt->second;
+						const auto albumGroupId = MessageGroupId::FromRaw(
+							peerId,
+							album->groupId,
+							action.options.scheduled);
 						// Build a temporary local item so sendAlbumWithUploaded
 						// can look up the album entry by msgId.
 						const auto newId = FullMsgId(
@@ -3806,6 +3832,8 @@ void ApiWrap::forwardMessages(
 						const auto localMsgId = localMsg->fullId();
 						const auto next = sendNext;
 						ctx->uploadMediaInFlight = true;
+						LOG(("EF sendNext i=%1: calling UploadMedia, albumGroupId=%2"
+							).arg(i).arg(albumGroupId.value));
 						request(MTPmessages_UploadMedia(
 							MTP_flags(0),
 							MTPstring(),
@@ -3814,7 +3842,11 @@ void ApiWrap::forwardMessages(
 						)).done([=](const MTPMessageMedia &result) {
 							const auto li =
 								_session->data().message(localMsgId);
-							if (!li) return;
+							if (!li) {
+								LOG(("EF UploadMedia done i=%1: local msg gone").arg(i));
+								return;
+							}
+							LOG(("EF UploadMedia done i=%1: ok=%2").arg(i).arg("checking"));
 							MTPInputMedia srv;
 							bool ok = false;
 							if (result.type() == mtpc_messageMediaPhoto) {
@@ -3852,12 +3884,14 @@ void ApiWrap::forwardMessages(
 									ok = true;
 								}
 							}
+							LOG(("EF UploadMedia done i=%1: ok=%2").arg(i).arg(ok ? 1 : 0));
 							if (ok) {
 								sendAlbumWithUploaded(li, albumGroupId, srv);
 							}
 							ctx->uploadMediaInFlight = false;
 							(*next)();
-						}).fail([=](const MTP::Error &) {
+						}).fail([=](const MTP::Error &err) {
+							LOG(("EF UploadMedia fail i=%1: %2").arg(i).arg(err.type()));
 							ctx->uploadMediaInFlight = false;
 							EnhancedForward::markItemSent(
 								&session(), peerId);
@@ -3865,6 +3899,8 @@ void ApiWrap::forwardMessages(
 						}).send();
 						return;
 					} else {
+						LOG(("EF sendNext i=%1: SINGLE path, isPhoto=%2"
+							).arg(i).arg(ctx->isPhoto[i] ? 1 : 0));
 						// Single media item: send directly.
 						auto uploadInfo = ctx->uploadInfos[i];
 						MTPInputMedia singleMedia;
@@ -3875,6 +3911,7 @@ void ApiWrap::forwardMessages(
 							singleMedia = Api::PrepareUploadedDocument(
 								srcItem, std::move(uploadInfo));
 							if (singleMedia.type() == mtpc_inputMediaEmpty) {
+								LOG(("EF sendNext i=%1: inputMediaEmpty, markItemSent").arg(i));
 								EnhancedForward::markItemSent(
 									&session(), peerId);
 								continue;
@@ -3916,9 +3953,14 @@ void ApiWrap::forwardMessages(
 								MTP_messageMediaEmpty());
 						const auto next = sendNext;
 						ctx->uploadMediaInFlight = true;
+						LOG(("EF sendNext i=%1: calling sendMedia").arg(i));
 						sendMedia(localMsg, singleMedia,
 							action.options,
-							[=](bool) {
+							[=](bool success) {
+								LOG(("EF sendMedia callback i=%1: success=%2, current=%3"
+									).arg(i
+									).arg(success ? 1 : 0
+									).arg(ctx->current));
 								ctx->uploadMediaInFlight = false;
 								EnhancedForward::markItemSent(
 									&session(), peerId);
@@ -3927,6 +3969,7 @@ void ApiWrap::forwardMessages(
 						return;
 					}
 				}
+					LOG(("EF sendNext: ALL ITEMS PROCESSED (current=%1, n=%2)").arg(ctx->current).arg(n));
 				// All items processed; tear down upload and download listeners.
 				if (ctx->uploadLifetime) {
 					auto lt = std::move(ctx->uploadLifetime);
@@ -3965,10 +4008,11 @@ void ApiWrap::forwardMessages(
 			// A helper: given a downloaded file at path[i], create a
 			// FileLoadTask, run it, then hand result to the uploader.
 			const auto startUploadForItem = [=](int i) {
+				LOG(("EF startUploadForItem i=%1").arg(i));
 				const auto srcItem =
 					session().data().message(ctx->itemIds[i]);
 				if (!srcItem || ctx->textOnly[i]) {
-					// Nothing to upload; mark done immediately.
+					LOG(("EF startUploadForItem i=%1: skipped (no srcItem or textOnly)").arg(i));
 					ctx->uploadDone[i] = true;
 					(*sendNext)();
 					return;
@@ -4050,16 +4094,17 @@ void ApiWrap::forwardMessages(
 						const auto s = weakCtx.lock();
 						if (!s) return;
 						if (result && result->filesize > 0) {
+							LOG(("EF FileLoadTask done i=%1: filesize=%2, uploading"
+								).arg(idx).arg(result->filesize));
 							s->prepared[idx] = std::move(result);
 						} else {
-							// prep failed -> treat as text
+							LOG(("EF FileLoadTask done i=%1: filesize=%2, text fallback"
+								).arg(idx).arg(result ? result->filesize : -1));
 							s->textOnly[idx] = true;
 							s->uploadDone[idx] = true;
 							(*sendNext)();
 							return;
 						}
-						// Create a throw-away local message just to give
-						// the uploader a FullMsgId key to report back on.
 						const auto srcIt =
 							session().data().message(s->itemIds[idx]);
 						if (!srcIt) {
@@ -4068,27 +4113,14 @@ void ApiWrap::forwardMessages(
 							(*sendNext)();
 							return;
 						}
-						// We need a unique FullMsgId to track this upload.
-						// Use a throwaway local message in the DEST history.
-						const auto newId = FullMsgId(
-							action.history->peer->id,
+						// Bare FullMsgId key for upload tracking only.
+						// Do NOT create a real HistoryItem — the
+						// Uploader's own photoReady listener calls
+						// sendUploadedPhoto which would cause a
+						// DUPLICATE message send.
+						const auto uploadId = FullMsgId(
+							peerId,
 							session().data().nextLocalMessageId());
-						auto uflags =
-							NewMessageFlags(action.history->peer);
-						FillMessagePostFlags(
-							action, action.history->peer, uflags);
-						const auto uploadPlaceholder =
-							action.history->addNewLocalMessage({
-								.id = newId.msg,
-								.flags = uflags,
-								.from = NewMessageFromId(action),
-								.replyTo = action.replyTo,
-								.date = NewMessageDate(action.options),
-								.postAuthor =
-									NewMessagePostAuthor(action),
-							}, srcIt->originalText(),
-								MTP_messageMediaEmpty());
-						const auto uploadId = uploadPlaceholder->fullId();
 						uploadIndex->emplace(uploadId, idx);
 						session().uploader().upload(
 							uploadId, s->prepared[idx]);
@@ -4103,11 +4135,7 @@ void ApiWrap::forwardMessages(
 				const auto it = uploadIndex->find(data.fullId);
 				if (it == uploadIndex->end()) return;
 				const auto idx = it->second;
-				// Destroy the upload placeholder (it served its purpose).
-				if (const auto ph =
-						_session->data().message(data.fullId)) {
-					ph->destroy();
-				}
+				LOG(("EF onUploadDone idx=%1, uploading file to server").arg(idx));
 				ctx->uploadInfos[idx] = std::move(data.info);
 				ctx->uploadDone[idx] = true;
 				(*sendNext)();
@@ -4117,9 +4145,6 @@ void ApiWrap::forwardMessages(
 				const auto it = uploadIndex->find(fullId);
 				if (it == uploadIndex->end()) return;
 				const auto idx = it->second;
-				if (const auto ph = _session->data().message(fullId)) {
-					ph->destroy();
-				}
 				ctx->textOnly[idx] = true;
 				ctx->uploadDone[idx] = true;
 				(*sendNext)();
@@ -4184,10 +4209,17 @@ void ApiWrap::forwardMessages(
 							+ QString::number(photo->id)
 							+ u".jpg"_q);
 					ctx->paths[i] = destPath;
+					LOG(("EF initial photo i=%1: v=%2, loaded=%3, cached=%4"
+						).arg(i
+						).arg(v ? "yes" : "no"
+						).arg((v && v->loaded()) ? "yes" : "no"
+						).arg((v && v->loaded() && v->saveToFile(destPath)) ? "yes" : "no"));
 					if (v && v->loaded() && v->saveToFile(destPath)) {
+						LOG(("EF initial photo i=%1: already cached, uploading immediately").arg(i));
 						ctx->downloadDone[i] = true;
 						startUploadForItem(i);
 					} else {
+						LOG(("EF initial photo i=%1: not cached, starting download").arg(i));
 						photo->load(
 							Data::PhotoSize::Large,
 							Data::FileOrigin(FullMsgId(
@@ -4209,7 +4241,11 @@ void ApiWrap::forwardMessages(
 				ctx->dlLifetime = std::make_shared<rpl::lifetime>();
 
 				const auto checkItem = [=](int i) {
-					if (ctx->downloadDone[i]) return;
+					if (ctx->downloadDone[i]) {
+						LOG(("EF checkItem skip %1 (already done)").arg(i));
+						return;
+					}
+					LOG(("EF checkItem i=%1").arg(i));
 					const auto item =
 						session().data().message(ctx->itemIds[i]);
 					if (!item) {
@@ -4238,17 +4274,25 @@ void ApiWrap::forwardMessages(
 					} else if (const auto photo =
 							media ? media->photo() : nullptr) {
 						const auto v = photo->activeMediaView();
+						LOG(("EF checkItem photo i=%1: v=%2, loaded=%3, failed=%4"
+							).arg(i
+							).arg(v ? "yes" : "no"
+							).arg((v && v->loaded()) ? "yes" : "no"
+							).arg(photo->failed(Data::PhotoSize::Large) ? "yes" : "no"));
 						if (v && v->loaded()) {
 							if (v->saveToFile(ctx->paths[i])) {
+								LOG(("EF checkItem photo i=%1: saved, starting upload").arg(i));
 								ctx->downloadDone[i] = true;
 								startUploadForItem(i);
 							} else {
+								LOG(("EF checkItem photo i=%1: saveToFile failed, text fallback").arg(i));
 								ctx->textOnly[i] = true;
 								ctx->downloadDone[i] = true;
 								ctx->uploadDone[i] = true;
 								(*sendNext)();
 							}
 						} else if (photo->failed(Data::PhotoSize::Large)) {
+							LOG(("EF checkItem photo i=%1: download failed, text fallback").arg(i));
 							ctx->textOnly[i] = true;
 							ctx->downloadDone[i] = true;
 							ctx->uploadDone[i] = true;
@@ -4259,12 +4303,14 @@ void ApiWrap::forwardMessages(
 
 				// Listen for download completions via reactive streams.
 				session().data().documentLoadProgress(
-				) | rpl::on_next([=](not_null<DocumentData*>) {
+				) | rpl::on_next([=](not_null<DocumentData*> doc) {
+					LOG(("EF documentLoadProgress: doc=%1").arg(doc->id));
 					for (auto i = 0; i < n; i++) checkItem(i);
 				}, *ctx->dlLifetime);
 
 				session().downloaderTaskFinished(
 				) | rpl::on_next([=] {
+					LOG(("EF downloaderTaskFinished"));
 					for (auto i = 0; i < n; i++) checkItem(i);
 				}, *ctx->dlLifetime);
 
@@ -4284,211 +4330,211 @@ void ApiWrap::forwardMessages(
 		draft.items = std::move(normalItems);
 	}
 
-	auto &histories = _session->data().histories();
-
-	const auto count = int(draft.items.size());
-	const auto genClientSideMessage = action.generateLocal
-		&& (count < 2)
-		&& (draft.options == Data::ForwardOptions::PreserveInfo);
-	const auto history = action.history;
-	const auto peer = history->peer;
-
-	if (!action.options.scheduled && !action.options.shortcutId) {
-		histories.readInbox(history);
-	}
-	const auto sendAs = action.options.sendAs;
-	const auto silentPost = ShouldSendSilent(peer, action.options);
-
-	using SendFlag = MTPmessages_ForwardMessages::Flag;
-	auto flags = MessageFlags();
-	auto sendFlags = SendFlag() | SendFlag();
-	FillMessagePostFlags(action, peer, flags);
-	if (silentPost) {
-		sendFlags |= SendFlag::f_silent;
-	}
-	if (action.options.scheduled) {
-		flags |= MessageFlag::IsOrWasScheduled;
-		sendFlags |= SendFlag::f_schedule_date;
-		if (action.options.scheduleRepeatPeriod) {
-			sendFlags |= SendFlag::f_schedule_repeat_period;
-		}
-	}
-	if (action.options.shortcutId) {
-		flags |= MessageFlag::ShortcutMessage;
-		sendFlags |= SendFlag::f_quick_reply_shortcut;
-	}
-	if (action.options.effectId) {
-		sendFlags |= SendFlag::f_effect;
-	}
-	if (draft.options != Data::ForwardOptions::PreserveInfo) {
-		sendFlags |= SendFlag::f_drop_author;
-	}
-	if (draft.options == Data::ForwardOptions::NoNamesAndCaptions) {
-		sendFlags |= SendFlag::f_drop_media_captions;
-	}
-	if (sendAs) {
-		sendFlags |= SendFlag::f_send_as;
-	}
-	if (action.options.suggest) {
-		sendFlags |= SendFlag::f_suggested_post;
-	}
-	const auto kGeneralId = Data::ForumTopic::kGeneralId;
-	const auto topicRootId = action.replyTo.topicRootId;
-	const auto topMsgId = (topicRootId == kGeneralId)
-		? MsgId(0)
-		: topicRootId;
-	if (topMsgId) {
-		sendFlags |= SendFlag::f_top_msg_id;
-	}
-	const auto monoforumPeerId = action.replyTo.monoforumPeerId;
-	const auto monoforumPeer = monoforumPeerId
-		? session().data().peer(monoforumPeerId).get()
-		: nullptr;
-	if (monoforumPeer || (action.options.suggest && action.replyTo)) {
-		sendFlags |= SendFlag::f_reply_to;
-	}
-
-	constexpr auto kMaxForwardBatch = 100;
-	auto forwardFrom = draft.items.front()->history()->peer;
-	auto ids = QVector<MTPint>();
-	auto randomIds = QVector<MTPlong>();
-	auto localIds = std::shared_ptr<base::flat_map<uint64, FullMsgId>>();
-
-	const auto sendAccumulated = [&] {
-		if (shared) {
-			++shared->requestsLeft;
-		}
-		const auto idsCopy = localIds;
-		const auto scheduled = action.options.scheduled;
-		const auto starsPaid = std::min(
-			action.options.starsApproved,
-			int(ids.size() * peer->starsPerMessageChecked()));
-		auto oneFlags = sendFlags;
-		if (starsPaid) {
-			action.options.starsApproved -= starsPaid;
-			oneFlags |= SendFlag::f_allow_paid_stars;
-		}
-		auto buildMessage = [=](
-				not_null<History*> history,
-				FullReplyTo replyTo)
-			-> Data::Histories::PreparedMessage {
-			const auto kGeneralId = Data::ForumTopic::kGeneralId;
-			const auto realTopMsgId = (replyTo.topicRootId == kGeneralId)
-				? MsgId(0)
-				: replyTo.topicRootId;
-			auto flags = oneFlags;
-			if (realTopMsgId) {
-				flags |= SendFlag::f_top_msg_id;
-			} else {
-				flags &= ~SendFlag::f_top_msg_id;
-			}
-			return MTPmessages_ForwardMessages(
-				MTP_flags(flags),
-				forwardFrom->input(),
-				MTP_vector<MTPint>(ids),
-				MTP_vector<MTPlong>(randomIds),
-				history->peer->input(),
-				MTP_int(realTopMsgId),
-				(action.options.suggest
-					? ReplyToForMTP(history, replyTo)
-					: monoforumPeer
-					? MTP_inputReplyToMonoForum(
-						monoforumPeer->input())
-					: MTPInputReplyTo()),
-				MTP_int(action.options.scheduled),
-				MTP_int(action.options.scheduleRepeatPeriod),
-				(sendAs
-					? sendAs->input()
-					: MTP_inputPeerEmpty()),
-				Data::ShortcutIdToMTP(
-					&history->session(),
-					action.options.shortcutId),
-				MTP_long(action.options.effectId),
-				MTPint(),
-				MTP_long(starsPaid),
-				Api::SuggestToMTP(action.options.suggest));
-		};
-		histories.sendPreparedMessage(
-			history,
-			FullReplyTo{ .topicRootId = topicRootId },
-			uint64(0),
-			std::move(buildMessage),
-			[=](const MTPUpdates &result, const MTP::Response &) {
-				if (!scheduled) {
-					_session->api().updates().checkForSentToScheduled(
-						result);
-				}
-				if (shared && !--shared->requestsLeft) {
-					shared->callback();
-				}
-				if (peer->isSelf() && _session->premium()) {
-					ProcessRecentSelfForwards(
-						_session,
-						result,
-						peer->id,
-						forwardFrom->id);
-				}
-			},
-			[=](const MTP::Error &error, const MTP::Response &) {
-				if (idsCopy) {
-					for (const auto &[randomId, itemId] : *idsCopy) {
-						_session->api().sendMessageFail(
-							error,
-							peer,
-							randomId,
-							itemId);
-					}
-				} else {
-					_session->api().sendMessageFail(error, peer);
-				}
-			});
-
-		ids.resize(0);
-		randomIds.resize(0);
-		localIds = nullptr;
-	};
-
-	ids.reserve(count);
-	randomIds.reserve(count);
-	for (const auto &item : draft.items) {
-		const auto randomId = base::RandomValue<uint64>();
-		if (genClientSideMessage) {
-			const auto newId = FullMsgId(
-				peer->id,
-				_session->data().nextLocalMessageId());
-			history->addNewLocalMessage({
-				.id = newId.msg,
-				.flags = flags,
-				.from = NewMessageFromId(action),
-				.replyTo = {
-					.topicRootId = topMsgId,
-					.monoforumPeerId = monoforumPeerId,
-				},
-				.date = NewMessageDate(action.options),
-				.shortcutId = action.options.shortcutId,
-				.starsPaid = action.options.starsApproved,
-				.postAuthor = NewMessagePostAuthor(action),
-				.suggest = HistoryMessageSuggestInfo(action.options),
-			}, item);
-			_session->data().registerMessageRandomId(randomId, newId);
-			if (!localIds) {
-				localIds = std::make_shared<base::flat_map<uint64, FullMsgId>>();
-			}
-			localIds->emplace(randomId, newId);
-		}
-		const auto newFrom = item->history()->peer;
-		if (forwardFrom != newFrom) {
-			sendAccumulated();
-			forwardFrom = newFrom;
-		}
-		if (ids.size() >= kMaxForwardBatch) {
-			sendAccumulated();
-		}
-		ids.push_back(MTP_int(item->id));
-		randomIds.push_back(MTP_long(randomId));
-	}
-	sendAccumulated();
-	_session->data().sendHistoryChangeNotifications();
+	//auto &histories = _session->data().histories();
+    //
+	//const auto count = int(draft.items.size());
+	//const auto genClientSideMessage = action.generateLocal
+	//	&& (count < 2)
+	//	&& (draft.options == Data::ForwardOptions::PreserveInfo);
+	//const auto history = action.history;
+	//const auto peer = history->peer;
+    //
+	//if (!action.options.scheduled && !action.options.shortcutId) {
+	//	histories.readInbox(history);
+	//}
+	//const auto sendAs = action.options.sendAs;
+	//const auto silentPost = ShouldSendSilent(peer, action.options);
+    //
+	//using SendFlag = MTPmessages_ForwardMessages::Flag;
+	//auto flags = MessageFlags();
+	//auto sendFlags = SendFlag() | SendFlag();
+	//FillMessagePostFlags(action, peer, flags);
+	//if (silentPost) {
+	//	sendFlags |= SendFlag::f_silent;
+	//}
+	//if (action.options.scheduled) {
+	//	flags |= MessageFlag::IsOrWasScheduled;
+	//	sendFlags |= SendFlag::f_schedule_date;
+	//	if (action.options.scheduleRepeatPeriod) {
+	//		sendFlags |= SendFlag::f_schedule_repeat_period;
+	//	}
+	//}
+	//if (action.options.shortcutId) {
+	//	flags |= MessageFlag::ShortcutMessage;
+	//	sendFlags |= SendFlag::f_quick_reply_shortcut;
+	//}
+	//if (action.options.effectId) {
+	//	sendFlags |= SendFlag::f_effect;
+	//}
+	//if (draft.options != Data::ForwardOptions::PreserveInfo) {
+	//	sendFlags |= SendFlag::f_drop_author;
+	//}
+	//if (draft.options == Data::ForwardOptions::NoNamesAndCaptions) {
+	//	sendFlags |= SendFlag::f_drop_media_captions;
+	//}
+	//if (sendAs) {
+	//	sendFlags |= SendFlag::f_send_as;
+	//}
+	//if (action.options.suggest) {
+	//	sendFlags |= SendFlag::f_suggested_post;
+	//}
+	//const auto kGeneralId = Data::ForumTopic::kGeneralId;
+	//const auto topicRootId = action.replyTo.topicRootId;
+	//const auto topMsgId = (topicRootId == kGeneralId)
+	//	? MsgId(0)
+	//	: topicRootId;
+	//if (topMsgId) {
+	//	sendFlags |= SendFlag::f_top_msg_id;
+	//}
+	//const auto monoforumPeerId = action.replyTo.monoforumPeerId;
+	//const auto monoforumPeer = monoforumPeerId
+	//	? session().data().peer(monoforumPeerId).get()
+	//	: nullptr;
+	//if (monoforumPeer || (action.options.suggest && action.replyTo)) {
+	//	sendFlags |= SendFlag::f_reply_to;
+	//}
+    //
+	//constexpr auto kMaxForwardBatch = 100;
+	//auto forwardFrom = draft.items.front()->history()->peer;
+	//auto ids = QVector<MTPint>();
+	//auto randomIds = QVector<MTPlong>();
+	//auto localIds = std::shared_ptr<base::flat_map<uint64, FullMsgId>>();
+    //
+	//const auto sendAccumulated = [&] {
+	//	if (shared) {
+	//		++shared->requestsLeft;
+	//	}
+	//	const auto idsCopy = localIds;
+	//	const auto scheduled = action.options.scheduled;
+	//	const auto starsPaid = std::min(
+	//		action.options.starsApproved,
+	//		int(ids.size() * peer->starsPerMessageChecked()));
+	//	auto oneFlags = sendFlags;
+	//	if (starsPaid) {
+	//		action.options.starsApproved -= starsPaid;
+	//		oneFlags |= SendFlag::f_allow_paid_stars;
+	//	}
+	//	auto buildMessage = [=](
+	//			not_null<History*> history,
+	//			FullReplyTo replyTo)
+	//		-> Data::Histories::PreparedMessage {
+	//		const auto kGeneralId = Data::ForumTopic::kGeneralId;
+	//		const auto realTopMsgId = (replyTo.topicRootId == kGeneralId)
+	//			? MsgId(0)
+	//			: replyTo.topicRootId;
+	//		auto flags = oneFlags;
+	//		if (realTopMsgId) {
+	//			flags |= SendFlag::f_top_msg_id;
+	//		} else {
+	//			flags &= ~SendFlag::f_top_msg_id;
+	//		}
+	//		return MTPmessages_ForwardMessages(
+	//			MTP_flags(flags),
+	//			forwardFrom->input(),
+	//			MTP_vector<MTPint>(ids),
+	//			MTP_vector<MTPlong>(randomIds),
+	//			history->peer->input(),
+	//			MTP_int(realTopMsgId),
+	//			(action.options.suggest
+	//				? ReplyToForMTP(history, replyTo)
+	//				: monoforumPeer
+	//				? MTP_inputReplyToMonoForum(
+	//					monoforumPeer->input())
+	//				: MTPInputReplyTo()),
+	//			MTP_int(action.options.scheduled),
+	//			MTP_int(action.options.scheduleRepeatPeriod),
+	//			(sendAs
+	//				? sendAs->input()
+	//				: MTP_inputPeerEmpty()),
+	//			Data::ShortcutIdToMTP(
+	//				&history->session(),
+	//				action.options.shortcutId),
+	//			MTP_long(action.options.effectId),
+	//			MTPint(),
+	//			MTP_long(starsPaid),
+	//			Api::SuggestToMTP(action.options.suggest));
+	//	};
+	//	histories.sendPreparedMessage(
+	//		history,
+	//		FullReplyTo{ .topicRootId = topicRootId },
+	//		uint64(0),
+	//		std::move(buildMessage),
+	//		[=](const MTPUpdates &result, const MTP::Response &) {
+	//			if (!scheduled) {
+	//				_session->api().updates().checkForSentToScheduled(
+	//					result);
+	//			}
+	//			if (shared && !--shared->requestsLeft) {
+	//				shared->callback();
+	//			}
+	//			if (peer->isSelf() && _session->premium()) {
+	//				ProcessRecentSelfForwards(
+	//					_session,
+	//					result,
+	//					peer->id,
+	//					forwardFrom->id);
+	//			}
+	//		},
+	//		[=](const MTP::Error &error, const MTP::Response &) {
+	//			if (idsCopy) {
+	//				for (const auto &[randomId, itemId] : *idsCopy) {
+	//					_session->api().sendMessageFail(
+	//						error,
+	//						peer,
+	//						randomId,
+	//						itemId);
+	//				}
+	//			} else {
+	//				_session->api().sendMessageFail(error, peer);
+	//			}
+	//		});
+    //
+	//	ids.resize(0);
+	//	randomIds.resize(0);
+	//	localIds = nullptr;
+	//};
+    //
+	//ids.reserve(count);
+	//randomIds.reserve(count);
+	//for (const auto &item : draft.items) {
+	//	const auto randomId = base::RandomValue<uint64>();
+	//	if (genClientSideMessage) {
+	//		const auto newId = FullMsgId(
+	//			peer->id,
+	//			_session->data().nextLocalMessageId());
+	//		history->addNewLocalMessage({
+	//			.id = newId.msg,
+	//			.flags = flags,
+	//			.from = NewMessageFromId(action),
+	//			.replyTo = {
+	//				.topicRootId = topMsgId,
+	//				.monoforumPeerId = monoforumPeerId,
+	//			},
+	//			.date = NewMessageDate(action.options),
+	//			.shortcutId = action.options.shortcutId,
+	//			.starsPaid = action.options.starsApproved,
+	//			.postAuthor = NewMessagePostAuthor(action),
+	//			.suggest = HistoryMessageSuggestInfo(action.options),
+	//		}, item);
+	//		_session->data().registerMessageRandomId(randomId, newId);
+	//		if (!localIds) {
+	//			localIds = std::make_shared<base::flat_map<uint64, FullMsgId>>();
+	//		}
+	//		localIds->emplace(randomId, newId);
+	//	}
+	//	const auto newFrom = item->history()->peer;
+	//	if (forwardFrom != newFrom) {
+	//		sendAccumulated();
+	//		forwardFrom = newFrom;
+	//	}
+	//	if (ids.size() >= kMaxForwardBatch) {
+	//		sendAccumulated();
+	//	}
+	//	ids.push_back(MTP_int(item->id));
+	//	randomIds.push_back(MTP_long(randomId));
+	//}
+	//sendAccumulated();
+	//_session->data().sendHistoryChangeNotifications();
 }
 
 void ApiWrap::shareContact(
@@ -5323,6 +5369,7 @@ void ApiWrap::sendMedia(
 		Api::SendOptions options,
 		Fn<void(bool)> done) {
 	const auto randomId = base::RandomValue<uint64>();
+	LOG(("EF sendMedia ENTER: randomId=%1").arg(randomId));
 	_session->data().registerMessageRandomId(randomId, item->fullId());
 
 	sendMediaWithRandomId(item, media, options, randomId, std::move(done));
@@ -5400,6 +5447,7 @@ void ApiWrap::sendMediaWithRandomId(
 			MTP_long(starsPaid),
 			Api::SuggestToMTP(options.suggest)
 		), [=](const MTPUpdates &result, const MTP::Response &response) {
+		LOG(("EF sendMedia DONE RESPONSE: randomId=%1").arg(randomId));
 		if (done) done(true);
 		if (updateRecentStickers) {
 			requestRecentStickers(std::nullopt, true);
@@ -5583,6 +5631,7 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 		sendMultiPaidMedia(sample, album);
 		return;
 	} else if (medias.size() < 2) {
+		LOG(("EF sendAlbumIfReady: DISPATCHING single album msg via sendMediaWithRandomId"));
 		const auto &single = medias.front().data();
 		album->sent = true;
 		const auto historyPeer = sample->history()->peer;
@@ -5628,6 +5677,7 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 	auto &histories = history->owner().histories();
 	const auto peer = history->peer;
 	album->sent = true;
+	LOG(("EF sendAlbumIfReady: DISPATCHING SendMultiMedia with %1 items").arg(medias.size()));
 	histories.sendPreparedMessage(
 		history,
 		replyTo,
