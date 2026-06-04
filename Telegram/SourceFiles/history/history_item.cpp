@@ -4822,20 +4822,14 @@ void HistoryItem::refreshMedia(const MTPMessageMedia *media) {
 	}
 }
 
-//void HistoryItem::refreshSentMedia(const MTPMessageMedia *media) {
-//	const auto wasGrouped = history()->owner().groups().isGrouped(this);
-//	refreshMedia(media);
-//	if (wasGrouped) {
-//		history()->owner().groups().refreshMessage(this);
-//	} else {
-//		history()->owner().requestItemViewRefresh(this);
-//	}
-//}
-
-
 void HistoryItem::refreshSentMedia(const MTPMessageMedia *media) {
+	const auto wasGrouped = history()->owner().groups().isGrouped(this);
 	refreshMedia(media);
-	history()->owner().groups().refreshMessage(this);
+	if (wasGrouped) {
+		history()->owner().groups().refreshMessage(this);
+	} else {
+		history()->owner().requestItemViewRefresh(this);
+	}
 }
 
 PreparedServiceText HistoryItem::prepareServiceTextForMessage(
