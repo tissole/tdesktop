@@ -3970,7 +3970,14 @@ void ApiWrap::forwardMessages(
 					}
 				}
 					LOG(("EF sendNext: ALL ITEMS PROCESSED (current=%1, n=%2)").arg(ctx->current).arg(n));
-				// All items processed; tear down upload and download listeners.
+				// Notify UI to refresh now that all messages are sent.
+				_session->data().sendHistoryChangeNotifications();
+				_session->changes().historyUpdated(
+					action.history,
+					(action.options.scheduled
+						? Data::HistoryUpdate::Flag::ScheduledSent
+						: Data::HistoryUpdate::Flag::MessageSent));
+				// Tear down upload and download listeners.
 				if (ctx->uploadLifetime) {
 					auto lt = std::move(ctx->uploadLifetime);
 					crl::on_main([lt = std::move(lt)]() mutable {
@@ -4330,211 +4337,211 @@ void ApiWrap::forwardMessages(
 		draft.items = std::move(normalItems);
 	}
 
-	//auto &histories = _session->data().histories();
-    //
-	//const auto count = int(draft.items.size());
-	//const auto genClientSideMessage = action.generateLocal
-	//	&& (count < 2)
-	//	&& (draft.options == Data::ForwardOptions::PreserveInfo);
-	//const auto history = action.history;
-	//const auto peer = history->peer;
-    //
-	//if (!action.options.scheduled && !action.options.shortcutId) {
-	//	histories.readInbox(history);
-	//}
-	//const auto sendAs = action.options.sendAs;
-	//const auto silentPost = ShouldSendSilent(peer, action.options);
-    //
-	//using SendFlag = MTPmessages_ForwardMessages::Flag;
-	//auto flags = MessageFlags();
-	//auto sendFlags = SendFlag() | SendFlag();
-	//FillMessagePostFlags(action, peer, flags);
-	//if (silentPost) {
-	//	sendFlags |= SendFlag::f_silent;
-	//}
-	//if (action.options.scheduled) {
-	//	flags |= MessageFlag::IsOrWasScheduled;
-	//	sendFlags |= SendFlag::f_schedule_date;
-	//	if (action.options.scheduleRepeatPeriod) {
-	//		sendFlags |= SendFlag::f_schedule_repeat_period;
-	//	}
-	//}
-	//if (action.options.shortcutId) {
-	//	flags |= MessageFlag::ShortcutMessage;
-	//	sendFlags |= SendFlag::f_quick_reply_shortcut;
-	//}
-	//if (action.options.effectId) {
-	//	sendFlags |= SendFlag::f_effect;
-	//}
-	//if (draft.options != Data::ForwardOptions::PreserveInfo) {
-	//	sendFlags |= SendFlag::f_drop_author;
-	//}
-	//if (draft.options == Data::ForwardOptions::NoNamesAndCaptions) {
-	//	sendFlags |= SendFlag::f_drop_media_captions;
-	//}
-	//if (sendAs) {
-	//	sendFlags |= SendFlag::f_send_as;
-	//}
-	//if (action.options.suggest) {
-	//	sendFlags |= SendFlag::f_suggested_post;
-	//}
-	//const auto kGeneralId = Data::ForumTopic::kGeneralId;
-	//const auto topicRootId = action.replyTo.topicRootId;
-	//const auto topMsgId = (topicRootId == kGeneralId)
-	//	? MsgId(0)
-	//	: topicRootId;
-	//if (topMsgId) {
-	//	sendFlags |= SendFlag::f_top_msg_id;
-	//}
-	//const auto monoforumPeerId = action.replyTo.monoforumPeerId;
-	//const auto monoforumPeer = monoforumPeerId
-	//	? session().data().peer(monoforumPeerId).get()
-	//	: nullptr;
-	//if (monoforumPeer || (action.options.suggest && action.replyTo)) {
-	//	sendFlags |= SendFlag::f_reply_to;
-	//}
-    //
-	//constexpr auto kMaxForwardBatch = 100;
-	//auto forwardFrom = draft.items.front()->history()->peer;
-	//auto ids = QVector<MTPint>();
-	//auto randomIds = QVector<MTPlong>();
-	//auto localIds = std::shared_ptr<base::flat_map<uint64, FullMsgId>>();
-    //
-	//const auto sendAccumulated = [&] {
-	//	if (shared) {
-	//		++shared->requestsLeft;
-	//	}
-	//	const auto idsCopy = localIds;
-	//	const auto scheduled = action.options.scheduled;
-	//	const auto starsPaid = std::min(
-	//		action.options.starsApproved,
-	//		int(ids.size() * peer->starsPerMessageChecked()));
-	//	auto oneFlags = sendFlags;
-	//	if (starsPaid) {
-	//		action.options.starsApproved -= starsPaid;
-	//		oneFlags |= SendFlag::f_allow_paid_stars;
-	//	}
-	//	auto buildMessage = [=](
-	//			not_null<History*> history,
-	//			FullReplyTo replyTo)
-	//		-> Data::Histories::PreparedMessage {
-	//		const auto kGeneralId = Data::ForumTopic::kGeneralId;
-	//		const auto realTopMsgId = (replyTo.topicRootId == kGeneralId)
-	//			? MsgId(0)
-	//			: replyTo.topicRootId;
-	//		auto flags = oneFlags;
-	//		if (realTopMsgId) {
-	//			flags |= SendFlag::f_top_msg_id;
-	//		} else {
-	//			flags &= ~SendFlag::f_top_msg_id;
-	//		}
-	//		return MTPmessages_ForwardMessages(
-	//			MTP_flags(flags),
-	//			forwardFrom->input(),
-	//			MTP_vector<MTPint>(ids),
-	//			MTP_vector<MTPlong>(randomIds),
-	//			history->peer->input(),
-	//			MTP_int(realTopMsgId),
-	//			(action.options.suggest
-	//				? ReplyToForMTP(history, replyTo)
-	//				: monoforumPeer
-	//				? MTP_inputReplyToMonoForum(
-	//					monoforumPeer->input())
-	//				: MTPInputReplyTo()),
-	//			MTP_int(action.options.scheduled),
-	//			MTP_int(action.options.scheduleRepeatPeriod),
-	//			(sendAs
-	//				? sendAs->input()
-	//				: MTP_inputPeerEmpty()),
-	//			Data::ShortcutIdToMTP(
-	//				&history->session(),
-	//				action.options.shortcutId),
-	//			MTP_long(action.options.effectId),
-	//			MTPint(),
-	//			MTP_long(starsPaid),
-	//			Api::SuggestToMTP(action.options.suggest));
-	//	};
-	//	histories.sendPreparedMessage(
-	//		history,
-	//		FullReplyTo{ .topicRootId = topicRootId },
-	//		uint64(0),
-	//		std::move(buildMessage),
-	//		[=](const MTPUpdates &result, const MTP::Response &) {
-	//			if (!scheduled) {
-	//				_session->api().updates().checkForSentToScheduled(
-	//					result);
-	//			}
-	//			if (shared && !--shared->requestsLeft) {
-	//				shared->callback();
-	//			}
-	//			if (peer->isSelf() && _session->premium()) {
-	//				ProcessRecentSelfForwards(
-	//					_session,
-	//					result,
-	//					peer->id,
-	//					forwardFrom->id);
-	//			}
-	//		},
-	//		[=](const MTP::Error &error, const MTP::Response &) {
-	//			if (idsCopy) {
-	//				for (const auto &[randomId, itemId] : *idsCopy) {
-	//					_session->api().sendMessageFail(
-	//						error,
-	//						peer,
-	//						randomId,
-	//						itemId);
-	//				}
-	//			} else {
-	//				_session->api().sendMessageFail(error, peer);
-	//			}
-	//		});
-    //
-	//	ids.resize(0);
-	//	randomIds.resize(0);
-	//	localIds = nullptr;
-	//};
-    //
-	//ids.reserve(count);
-	//randomIds.reserve(count);
-	//for (const auto &item : draft.items) {
-	//	const auto randomId = base::RandomValue<uint64>();
-	//	if (genClientSideMessage) {
-	//		const auto newId = FullMsgId(
-	//			peer->id,
-	//			_session->data().nextLocalMessageId());
-	//		history->addNewLocalMessage({
-	//			.id = newId.msg,
-	//			.flags = flags,
-	//			.from = NewMessageFromId(action),
-	//			.replyTo = {
-	//				.topicRootId = topMsgId,
-	//				.monoforumPeerId = monoforumPeerId,
-	//			},
-	//			.date = NewMessageDate(action.options),
-	//			.shortcutId = action.options.shortcutId,
-	//			.starsPaid = action.options.starsApproved,
-	//			.postAuthor = NewMessagePostAuthor(action),
-	//			.suggest = HistoryMessageSuggestInfo(action.options),
-	//		}, item);
-	//		_session->data().registerMessageRandomId(randomId, newId);
-	//		if (!localIds) {
-	//			localIds = std::make_shared<base::flat_map<uint64, FullMsgId>>();
-	//		}
-	//		localIds->emplace(randomId, newId);
-	//	}
-	//	const auto newFrom = item->history()->peer;
-	//	if (forwardFrom != newFrom) {
-	//		sendAccumulated();
-	//		forwardFrom = newFrom;
-	//	}
-	//	if (ids.size() >= kMaxForwardBatch) {
-	//		sendAccumulated();
-	//	}
-	//	ids.push_back(MTP_int(item->id));
-	//	randomIds.push_back(MTP_long(randomId));
-	//}
-	//sendAccumulated();
-	//_session->data().sendHistoryChangeNotifications();
+	auto &histories = _session->data().histories();
+    
+	const auto count = int(draft.items.size());
+	const auto genClientSideMessage = action.generateLocal
+		&& (count < 2)
+		&& (draft.options == Data::ForwardOptions::PreserveInfo);
+	const auto history = action.history;
+	const auto peer = history->peer;
+    
+	if (!action.options.scheduled && !action.options.shortcutId) {
+		histories.readInbox(history);
+	}
+	const auto sendAs = action.options.sendAs;
+	const auto silentPost = ShouldSendSilent(peer, action.options);
+    
+	using SendFlag = MTPmessages_ForwardMessages::Flag;
+	auto flags = MessageFlags();
+	auto sendFlags = SendFlag() | SendFlag();
+	FillMessagePostFlags(action, peer, flags);
+	if (silentPost) {
+		sendFlags |= SendFlag::f_silent;
+	}
+	if (action.options.scheduled) {
+		flags |= MessageFlag::IsOrWasScheduled;
+		sendFlags |= SendFlag::f_schedule_date;
+		if (action.options.scheduleRepeatPeriod) {
+			sendFlags |= SendFlag::f_schedule_repeat_period;
+		}
+	}
+	if (action.options.shortcutId) {
+		flags |= MessageFlag::ShortcutMessage;
+		sendFlags |= SendFlag::f_quick_reply_shortcut;
+	}
+	if (action.options.effectId) {
+		sendFlags |= SendFlag::f_effect;
+	}
+	if (draft.options != Data::ForwardOptions::PreserveInfo) {
+		sendFlags |= SendFlag::f_drop_author;
+	}
+	if (draft.options == Data::ForwardOptions::NoNamesAndCaptions) {
+		sendFlags |= SendFlag::f_drop_media_captions;
+	}
+	if (sendAs) {
+		sendFlags |= SendFlag::f_send_as;
+	}
+	if (action.options.suggest) {
+		sendFlags |= SendFlag::f_suggested_post;
+	}
+	const auto kGeneralId = Data::ForumTopic::kGeneralId;
+	const auto topicRootId = action.replyTo.topicRootId;
+	const auto topMsgId = (topicRootId == kGeneralId)
+		? MsgId(0)
+		: topicRootId;
+	if (topMsgId) {
+		sendFlags |= SendFlag::f_top_msg_id;
+	}
+	const auto monoforumPeerId = action.replyTo.monoforumPeerId;
+	const auto monoforumPeer = monoforumPeerId
+		? session().data().peer(monoforumPeerId).get()
+		: nullptr;
+	if (monoforumPeer || (action.options.suggest && action.replyTo)) {
+		sendFlags |= SendFlag::f_reply_to;
+	}
+    
+	constexpr auto kMaxForwardBatch = 100;
+	auto forwardFrom = draft.items.front()->history()->peer;
+	auto ids = QVector<MTPint>();
+	auto randomIds = QVector<MTPlong>();
+	auto localIds = std::shared_ptr<base::flat_map<uint64, FullMsgId>>();
+    
+	const auto sendAccumulated = [&] {
+		if (shared) {
+			++shared->requestsLeft;
+		}
+		const auto idsCopy = localIds;
+		const auto scheduled = action.options.scheduled;
+		const auto starsPaid = std::min(
+			action.options.starsApproved,
+			int(ids.size() * peer->starsPerMessageChecked()));
+		auto oneFlags = sendFlags;
+		if (starsPaid) {
+			action.options.starsApproved -= starsPaid;
+			oneFlags |= SendFlag::f_allow_paid_stars;
+		}
+		auto buildMessage = [=](
+				not_null<History*> history,
+				FullReplyTo replyTo)
+			-> Data::Histories::PreparedMessage {
+			const auto kGeneralId = Data::ForumTopic::kGeneralId;
+			const auto realTopMsgId = (replyTo.topicRootId == kGeneralId)
+				? MsgId(0)
+				: replyTo.topicRootId;
+			auto flags = oneFlags;
+			if (realTopMsgId) {
+				flags |= SendFlag::f_top_msg_id;
+			} else {
+				flags &= ~SendFlag::f_top_msg_id;
+			}
+			return MTPmessages_ForwardMessages(
+				MTP_flags(flags),
+				forwardFrom->input(),
+				MTP_vector<MTPint>(ids),
+				MTP_vector<MTPlong>(randomIds),
+				history->peer->input(),
+				MTP_int(realTopMsgId),
+				(action.options.suggest
+					? ReplyToForMTP(history, replyTo)
+					: monoforumPeer
+					? MTP_inputReplyToMonoForum(
+						monoforumPeer->input())
+					: MTPInputReplyTo()),
+				MTP_int(action.options.scheduled),
+				MTP_int(action.options.scheduleRepeatPeriod),
+				(sendAs
+					? sendAs->input()
+					: MTP_inputPeerEmpty()),
+				Data::ShortcutIdToMTP(
+					&history->session(),
+					action.options.shortcutId),
+				MTP_long(action.options.effectId),
+				MTPint(),
+				MTP_long(starsPaid),
+				Api::SuggestToMTP(action.options.suggest));
+		};
+		histories.sendPreparedMessage(
+			history,
+			FullReplyTo{ .topicRootId = topicRootId },
+			uint64(0),
+			std::move(buildMessage),
+			[=](const MTPUpdates &result, const MTP::Response &) {
+				if (!scheduled) {
+					_session->api().updates().checkForSentToScheduled(
+						result);
+				}
+				if (shared && !--shared->requestsLeft) {
+					shared->callback();
+				}
+				if (peer->isSelf() && _session->premium()) {
+					ProcessRecentSelfForwards(
+						_session,
+						result,
+						peer->id,
+						forwardFrom->id);
+				}
+			},
+			[=](const MTP::Error &error, const MTP::Response &) {
+				if (idsCopy) {
+					for (const auto &[randomId, itemId] : *idsCopy) {
+						_session->api().sendMessageFail(
+							error,
+							peer,
+							randomId,
+							itemId);
+					}
+				} else {
+					_session->api().sendMessageFail(error, peer);
+				}
+			});
+    
+		ids.resize(0);
+		randomIds.resize(0);
+		localIds = nullptr;
+	};
+    
+	ids.reserve(count);
+	randomIds.reserve(count);
+	for (const auto &item : draft.items) {
+		const auto randomId = base::RandomValue<uint64>();
+		if (genClientSideMessage) {
+			const auto newId = FullMsgId(
+				peer->id,
+				_session->data().nextLocalMessageId());
+			history->addNewLocalMessage({
+				.id = newId.msg,
+				.flags = flags,
+				.from = NewMessageFromId(action),
+				.replyTo = {
+					.topicRootId = topMsgId,
+					.monoforumPeerId = monoforumPeerId,
+				},
+				.date = NewMessageDate(action.options),
+				.shortcutId = action.options.shortcutId,
+				.starsPaid = action.options.starsApproved,
+				.postAuthor = NewMessagePostAuthor(action),
+				.suggest = HistoryMessageSuggestInfo(action.options),
+			}, item);
+			_session->data().registerMessageRandomId(randomId, newId);
+			if (!localIds) {
+				localIds = std::make_shared<base::flat_map<uint64, FullMsgId>>();
+			}
+			localIds->emplace(randomId, newId);
+		}
+		const auto newFrom = item->history()->peer;
+		if (forwardFrom != newFrom) {
+			sendAccumulated();
+			forwardFrom = newFrom;
+		}
+		if (ids.size() >= kMaxForwardBatch) {
+			sendAccumulated();
+		}
+		ids.push_back(MTP_int(item->id));
+		randomIds.push_back(MTP_long(randomId));
+	}
+	sendAccumulated();
+	_session->data().sendHistoryChangeNotifications();
 }
 
 void ApiWrap::shareContact(
