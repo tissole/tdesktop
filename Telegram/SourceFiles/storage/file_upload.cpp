@@ -908,6 +908,12 @@ void Uploader::finishFront() {
 		} else {
 			_photoReady.fire(std::move(ready));
 		}
+		if (entry.file->filepath.contains("ForwardTemp")
+			&& !entry.file->filepath.isEmpty()) {
+			if (QFileInfo(entry.file->filepath).exists()) {
+				QFile(entry.file->filepath).remove();
+			}
+		}
 	} else if (entry.file->type == SendMediaType::File
 		|| entry.file->type == SendMediaType::ThemeFile
 		|| entry.file->type == SendMediaType::Audio

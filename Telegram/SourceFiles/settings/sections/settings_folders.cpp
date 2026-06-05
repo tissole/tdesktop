@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/premium_limits_box.h"
 #include "boxes/premium_preview_box.h"
 #include "core/application.h"
+#include "core/enhanced_settings.h"
 #include "core/ui_integration.h"
 #include "data/data_chat_filters.h"
 #include "data/data_folder.h"
@@ -539,6 +540,10 @@ not_null<Ui::VerticalLayout*> SetupFoldersList(
 
 		return button;
 	};
+
+	// Load local filters lazily when the folders page is opened
+	session->data().chatsFilters().loadLocalFilters();
+
 	const auto &list = session->data().chatsFilters().list();
 	for (const auto &filter : list) {
 		if (filter.id()) {
@@ -574,6 +579,24 @@ not_null<Ui::VerticalLayout*> SetupFoldersList(
 			return;
 		}
 		const auto created = std::make_shared<FilterRowButton*>(nullptr);
+
+		// For local folders the ID is allocated now so EditFilterBox
+		// knows it's a local filter (isLocal check uses the ID).
+		// The ID is safe to allocate here because loadLocalFilters()
+		// has already run by the time the user can open Settings.
+		const auto newId = GetEnhancedBool("local_folders")
+			? session->data().chatsFilters().allocateLocalId()
+			: FilterId();
+		auto newFilter = Data::ChatFilter(
+			newId,
+			Data::ChatFilterTitle(),
+			QString(),
+			std::nullopt,
+			Data::ChatFilter::Flags(),
+			base::flat_set<not_null<History*>>(),
+			std::vector<not_null<History*>>(),
+			base::flat_set<not_null<History*>>());
+
 		const auto doneCallback = [=](const Data::ChatFilter &result) {
 			if (const auto button = *created) {
 				find(button)->filter = result;
@@ -591,30 +614,34 @@ not_null<Ui::VerticalLayout*> SetupFoldersList(
 		controller->window().show(Box(
 			EditFilterBox,
 			controller,
-			Data::ChatFilter(),
+			newFilter,
 			crl::guard(container, doneCallback),
 			crl::guard(container, saveAnd)));
 	});
 
 	const auto prepareGoodIdsForNewFilters = [=] {
 		const auto &list = session->data().chatsFilters().list();
+		const auto &filters = session->data().chatsFilters();
 
-		auto localId = 1;
-		const auto chooseNextId = [&] {
-			++localId;
-			while (ranges::contains(list, localId, &Data::ChatFilter::id)) {
-				++localId;
+		auto serverLocalId = 1;
+		const auto chooseNextServerId = [&] {
+			++serverLocalId;
+			while (ranges::contains(list, serverLocalId, &Data::ChatFilter::id)) {
+				++serverLocalId;
 			}
-			return localId;
+			return serverLocalId;
 		};
 		auto result = base::flat_map<not_null<FilterRowButton*>, FilterId>();
 		for (auto &row : state->rows) {
 			const auto id = row.filter.id();
 			if (row.removed) {
 				continue;
+			} else if (filters.isLocalFilter(id)) {
+				// Local filters already have their permanent ID; don't reassign.
+				continue;
 			} else if (!id
 				|| !ranges::contains(list, id, &Data::ChatFilter::id)) {
-				result.emplace(row.button, chooseNextId());
+				result.emplace(row.button, chooseNextServerId());
 			}
 		}
 		return result;

@@ -862,24 +862,28 @@ void EditFilterBox(
 			filter.id());
 	}
 
-	const auto createLink = AddToggledButton(
-		content,
-		state->hasLinks.value() | rpl::map(!rpl::mappers::_1),
-		tr::lng_filters_link_create(),
-		st::settingsButtonActive,
-		{ &st::settingsFolderShareIcon, IconType::Simple });
-	const auto addLink = AddToggledButton(
-		content,
-		state->hasLinks.value(),
-		tr::lng_group_invite_add(),
-		st::settingsButtonActive,
-		{ &st::settingsIconAdd, IconType::Round, &st::windowBgActive });
+	// Hide chatlist (share) features for local filters
+	const auto isLocal = owner->chatsFilters().isLocalFilter(filter.id());
 
-	SetupFilterLinks(
-		content,
-		window,
-		state->links.value(),
-		[=] { return collect().value_or(Data::ChatFilter()); });
+	if (!isLocal) {
+		const auto createLink = AddToggledButton(
+			content,
+			state->hasLinks.value() | rpl::map(!rpl::mappers::_1),
+			tr::lng_filters_link_create(),
+			st::settingsButtonActive,
+			{ &st::settingsFolderShareIcon, IconType::Simple });
+		const auto addLink = AddToggledButton(
+			content,
+			state->hasLinks.value(),
+			tr::lng_group_invite_add(),
+			st::settingsButtonActive,
+			{ &st::settingsIconAdd, IconType::Round, &st::windowBgActive });
+
+		SetupFilterLinks(
+			content,
+			window,
+			state->links.value(),
+			[=] { return collect().value_or(Data::ChatFilter()); });
 
 	rpl::merge(
 		createLink->clicks(),
@@ -933,6 +937,7 @@ void EditFilterBox(
 			state->hasLinks.value(),
 			tr::lng_filters_link_about_many(),
 			tr::lng_filters_link_about()));
+	}
 
 	const auto show = box->uiShow();
 	const auto refreshPreviews = [=] {
@@ -991,8 +996,13 @@ void EditExistingFilter(
 	const auto doneCallback = [=](const Data::ChatFilter &result) {
 		Expects(id == result.id());
 
+		auto &filters = session->data().chatsFilters();
+		if (filters.isLocalFilter(id)) {
+			filters.set(result);
+			return;
+		}
 		const auto tl = result.tl();
-		session->data().chatsFilters().apply(MTP_updateDialogFilter(
+		filters.apply(MTP_updateDialogFilter(
 			MTP_flags(MTPDupdateDialogFilter::Flag::f_filter),
 			MTP_int(id),
 			tl));

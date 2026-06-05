@@ -127,6 +127,9 @@ namespace EnhancedSettings {
 
 		std::unique_ptr<Manager> Data;
 
+		// In-memory storage for local folders by account ID
+		QMap<uint64, QJsonArray> gLocalFolders;
+
 	} // namespace
 
 	Manager::Manager() {
@@ -180,6 +183,20 @@ namespace EnhancedSettings {
 		}
 
 		loadSettings(settings);
+
+		ReadOption(settings, "local_folders_data", [&](auto v) {
+			if (v.isObject()) {
+				const auto accounts = v.toObject();
+				gLocalFolders.clear();
+				for (auto i = accounts.begin(); i != accounts.end(); ++i) {
+					if (i.value().isArray()) {
+						gLocalFolders.insert(
+							i.key().toULongLong(),
+							i.value().toArray());
+					}
+				}
+			}
+		});
 
 		ReadOption(settings, "net_speed_boost", [&](auto v) {
 			if (v.isDouble()) {
@@ -259,6 +276,15 @@ namespace EnhancedSettings {
 		}
 	}
 
+	QJsonArray Manager::getLocalFolders(uint64 accountId) {
+		return gLocalFolders.value(accountId);
+	}
+
+	void Manager::setLocalFolders(uint64 accountId, QJsonArray folders) {
+		gLocalFolders.insert(accountId, folders);
+		write();
+	}
+
 	void Manager::readBlocklist() {
 		QFile block(cWorkingDir() + qsl("tdata/blocklist.json"));
 		if (block.open(QIODevice::ReadOnly)) {
@@ -321,6 +347,7 @@ namespace EnhancedSettings {
 		settings.insert(qsl("custom_file_thumbs"), false);
 		settings.insert(qsl("custom_thumb_path"), "");
 		settings.insert(qsl("update_url"), "");
+		settings.insert(qsl("local_folders"), false);
 
 		auto document = QJsonDocument();
 		document.setObject(settings);
@@ -378,6 +405,17 @@ namespace EnhancedSettings {
 		settings.insert(qsl("custom_file_thumbs"), GetEnhancedBool("custom_file_thumbs"));
 		settings.insert(qsl("custom_thumb_path"), GetEnhancedString("custom_thumb_path"));
 		settings.insert(qsl("update_url"), GetEnhancedString("update_url"));
+		settings.insert(qsl("local_folders"), GetEnhancedBool("local_folders"));
+
+		if (!gLocalFolders.isEmpty()) {
+			auto accounts = QJsonObject();
+			for (auto i = gLocalFolders.begin(); i != gLocalFolders.end(); ++i) {
+				accounts.insert(
+					QString::number(i.key()),
+					i.value());
+			}
+			settings.insert(qsl("local_folders_data"), accounts);
+		}
 
 		auto document = QJsonDocument();
 		document.setObject(settings);
@@ -409,6 +447,16 @@ namespace EnhancedSettings {
 		if (!Data) return;
 
 		Data->write(true);
+	}
+
+	QJsonArray GetLocalFolders(uint64 accountId) {
+		if (!Data) return QJsonArray();
+		return Data->getLocalFolders(accountId);
+	}
+
+	void SetLocalFolders(uint64 accountId, QJsonArray folders) {
+		if (!Data) return;
+		Data->setLocalFolders(accountId, folders);
 	}
 
 } // namespace EnhancedSettings

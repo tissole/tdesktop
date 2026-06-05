@@ -83,6 +83,11 @@ public:
 		not_null<Session*> owner);
 	[[nodiscard]] MTPDialogFilter tl(FilterId replaceId = 0) const;
 
+	[[nodiscard]] static ChatFilter FromJson(
+		const QJsonObject &data,
+		not_null<Session*> owner);
+	[[nodiscard]] QJsonObject toJson() const;
+
 	[[nodiscard]] FilterId id() const;
 	[[nodiscard]] ChatFilterTitle title() const;
 	[[nodiscard]] const TextWithEntities &titleText() const;
@@ -215,6 +220,12 @@ public:
 	[[nodiscard]] rpl::producer<bool> tagsEnabledValue() const;
 	[[nodiscard]] rpl::producer<bool> tagsEnabledChanges() const;
 	void requestToggleTags(bool value, Fn<void()> fail);
+
+	static constexpr FilterId kLocalFilterIdBase = 1;
+	[[nodiscard]] bool isLocalFilter(FilterId id) const;
+	[[nodiscard]] FilterId allocateLocalId() const;
+	void saveLocalFilters();
+	void loadLocalFilters();
 
 	bool isEarlyStart() const
 	{

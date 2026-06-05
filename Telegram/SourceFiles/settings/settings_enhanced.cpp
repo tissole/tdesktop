@@ -177,6 +177,20 @@ namespace Settings {
 			}, container->lifetime());
 		}
 
+		AddButtonWithIcon(
+				inner,
+				rpl::single(u"Local Folders"_q),
+				st::settingsButtonNoIcon
+		)->toggleOn(
+				rpl::single(GetEnhancedBool("local_folders"))
+		)->toggledChanges(
+		) | rpl::filter([=](bool toggled) {
+			return (toggled != GetEnhancedBool("local_folders"));
+		}) | rpl::on_next([=](bool toggled) {
+			SetEnhancedValue("local_folders", toggled);
+			EnhancedSettings::Write();
+		}, container->lifetime());
+
 		auto value = rpl::single(
 				AlwaysDeleteBox::DeleteLabel(GetEnhancedInt("always_delete_for"))
 		) | rpl::then(

@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "main/main_app_config.h"
 #include "main/main_session.h"
+#include "settings.h"
 
 namespace Data {
 
@@ -71,6 +72,9 @@ int PremiumLimits::dialogFiltersPremium() const {
 	return appConfigLimit("dialog_filters_limit_premium", 20);
 }
 int PremiumLimits::dialogFiltersCurrent() const {
+	if (GetEnhancedBool("local_folders")) {
+		return 100;
+	}
 	return isPremium()
 		? dialogFiltersPremium()
 		: dialogFiltersDefault();

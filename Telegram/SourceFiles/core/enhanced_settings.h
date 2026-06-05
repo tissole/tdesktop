@@ -24,6 +24,10 @@ namespace EnhancedSettings {
 
 		void removeIdFromBlocklist(int64 userId);
 
+		QJsonArray getLocalFolders(uint64 accountId);
+
+		void setLocalFolders(uint64 accountId, QJsonArray folders);
+
 	public Q_SLOTS:
 
 		void writeTimeout();
@@ -48,5 +52,9 @@ namespace EnhancedSettings {
 	void Write();
 
 	void Finish();
+
+	QJsonArray GetLocalFolders(uint64 accountId);
+
+	void SetLocalFolders(uint64 accountId, QJsonArray folders);
 
 } // namespace EnhancedSettings
