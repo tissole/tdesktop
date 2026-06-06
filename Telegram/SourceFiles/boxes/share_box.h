@@ -47,6 +47,7 @@ class IndexedList;
 
 namespace Data {
 enum class ForwardOptions;
+enum class GroupingOptions;
 class Thread;
 } // namespace Data
 
@@ -57,6 +58,8 @@ struct ScrollToRequest;
 template <typename Widget>
 class SlideWrap;
 class PopupMenu;
+class DropdownMenu;
+class IconButton;
 } // namespace Ui
 
 class ShareBox;
@@ -104,8 +107,13 @@ public:
 		Fn<bool()> checkPaid,
 		TextWithTags&&,
 		Api::SendOptions,
-		Data::ForwardOptions)>;
+		Data::ForwardOptions,
+		Data::GroupingOptions)>;
 	using FilterCallback = Fn<bool(not_null<Data::Thread*>)>;
+	using GoToChatCallback = Fn<void(
+		Data::Thread*,
+		Data::ForwardOptions,
+		Data::GroupingOptions)>;
 
 	[[nodiscard]] static auto DefaultForwardCountMessages(
 		not_null<History*> history,
@@ -124,6 +132,7 @@ public:
 		CountMessagesCallback countMessagesCallback;
 		SubmitCallback submitCallback;
 		FilterCallback filterCallback;
+		GoToChatCallback goToChatCallback;
 		object_ptr<Ui::RpWidget> bottomWidget = { nullptr };
 		rpl::producer<QString> copyLinkText;
 		rpl::producer<QString> titleOverride;
@@ -134,6 +143,10 @@ public:
 			int sendersCount = 0;
 			int captionsCount = 0;
 			bool show = false;
+			bool hasMedia = false;
+			bool defaultDropNames = false;
+			bool defaultDropCaptions = false;
+			bool defaultGroupAsAlbum = false;
 		} forwardOptions;
 
 		using MoneyRestrictionError = RecipientMoneyRestrictionError;
@@ -179,6 +192,8 @@ private:
 	void peopleFail(const MTP::Error &error, mtpRequestId requestId);
 
 	void showMenu(not_null<Ui::RpWidget*> parent);
+	bool showForwardMenu(not_null<Ui::IconButton*> button);
+	void updateAdditionalTitle();
 
 	Descriptor _descriptor;
 	MTP::Sender _api;
@@ -188,7 +203,12 @@ private:
 	object_ptr<Ui::RpWidget> _bottomWidget;
 
 	base::unique_qptr<Ui::PopupMenu> _menu;
+	base::unique_qptr<Ui::DropdownMenu> _topMenu;
 	Ui::ForwardOptions _forwardOptions;
+	Data::GroupingOptions _groupOptions = Data::GroupingOptions::GroupAsIs;
+	bool _optionsModified = false;
+	bool _hasUserSelectedForwardOption = false;
+	bool _hasUserSelectedGroupOption = false;
 
 	class Inner;
 	QPointer<Inner> _inner;

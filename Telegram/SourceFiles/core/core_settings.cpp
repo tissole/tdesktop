@@ -266,6 +266,7 @@ QByteArray Settings::serialize() const {
 			+ Serialize::bytearraySize(value);
 	}
 	size += sizeof(qint32); // _audioPlaybackSpeed
+	size += sizeof(qint32) * 4; // _forwardOptions, _groupingOptions, _forwardOptionsEverSet, _groupingOptionsEverSet
 
 	auto result = QByteArray();
 	result.reserve(size);
@@ -440,6 +441,10 @@ QByteArray Settings::serialize() const {
 			stream << key << value;
 		}
 		stream << qint32(SerializePlaybackSpeed(_audioPlaybackSpeed.current()));
+	stream << qint32(_forwardOptions)
+		<< qint32(_groupingOptions)
+		<< qint32(_forwardOptionsEverSet ? 1 : 0)
+		<< qint32(_groupingOptionsEverSet ? 1 : 0);
 	}
 
 	Ensures(result.size() == size);
@@ -580,6 +585,8 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 		: 0;
 	qint32 usePlatformTranslation = _usePlatformTranslation ? 1 : 0;
 	qint32 systemTextReplace = _systemTextReplace.current() ? 1 : 0;
+	qint32 forwardOptions = qint32(_forwardOptions);
+	qint32 groupingOptions = qint32(_groupingOptions);
 
 	stream >> themesAccentColors;
 	if (!stream.atEnd()) {
@@ -954,6 +961,12 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 			audioPlaybackSpeed = speed;
 		}
 	}
+	if (!stream.atEnd()) {
+		stream >> forwardOptions;
+	}
+	if (!stream.atEnd()) {
+		stream >> groupingOptions;
+	}
 	if (stream.status() != QDataStream::Ok) {
 		LOG(("App Error: "
 			"Bad data for Core::Settings::constructFromSerialized()"));
@@ -1191,6 +1204,31 @@ void Settings::addFromSerialized(const QByteArray &serialized) {
 	_chatFiltersHorizontal = (chatFiltersHorizontal == 1);
 	_quickDialogAction = Dialogs::Ui::QuickDialogAction(quickDialogAction);
 	_notificationsVolume = notificationsVolume;
+
+	const auto uncheckedForwardOptions = static_cast<Data::ForwardOptions>(forwardOptions);
+	switch (uncheckedForwardOptions) {
+	case Data::ForwardOptions::Quoted:
+	case Data::ForwardOptions::UnquotedWithCaptions:
+	case Data::ForwardOptions::UnquotedWithoutCaptions:
+		_forwardOptions = uncheckedForwardOptions;
+		break;
+	}
+
+	if (!stream.atEnd()) {
+		qint32 forwardEverSet, groupingEverSet;
+		stream >> forwardEverSet >> groupingEverSet;
+		_forwardOptionsEverSet = (forwardEverSet == 1);
+		_groupingOptionsEverSet = (groupingEverSet == 1);
+	}
+
+	const auto uncheckedGroupingOptions = static_cast<Data::GroupingOptions>(groupingOptions);
+	switch (uncheckedGroupingOptions) {
+	case Data::GroupingOptions::GroupAsIs:
+	case Data::GroupingOptions::RegroupAll:
+	case Data::GroupingOptions::Separate:
+		_groupingOptions = uncheckedGroupingOptions;
+		break;
+	}
 }
 
 void Settings::clearPref(std::string_view key) {

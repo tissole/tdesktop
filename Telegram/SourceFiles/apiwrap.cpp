@@ -3480,6 +3480,169 @@ void ApiWrap::finishForwarding(const SendAction &action) {
 	}
 }
 
+void ApiWrap::sendForwardWithRegrouping(
+		Data::ResolvedForwardDraft &&draft,
+		SendAction &&action,
+		FnMut<void()> &&successCallback,
+		bool regroupAll,
+		bool separate) {
+	
+	Expects(!draft.items.empty());
+	Expects(regroupAll || separate);
+	
+	if (draft.options == Data::ForwardOptions::Quoted) {
+		draft.options = Data::ForwardOptions::UnquotedWithCaptions;
+	}
+	
+	const auto peer = action.history->peer;
+	const auto session = &peer->session();
+	const auto history = action.history;
+	const auto sendAs = action.options.sendAs;
+	
+	if (regroupAll) {
+		// Send ALL items as a single album
+		// Collect all media items
+		auto mediaList = std::vector<MTPInputMedia>();
+		auto captions = std::vector<TextWithEntities>();
+		
+		for (const auto &item : draft.items) {
+			const auto media = item->media();
+			if (!media) {
+				// Text item - skip or handle separately
+				continue;
+			}
+			
+			// Get MTPInputMedia from existing media
+			const auto inputMedia = [&]() -> MTPInputMedia {
+				if (const auto photo = media->photo()) {
+					return MTP_inputMediaPhoto(
+						MTP_flags(0),
+						photo->mtpInput(),
+						MTPint(), // ttl_seconds
+						MTPInputDocument()); // video
+				} else if (const auto document = media->document()) {
+					return MTP_inputMediaDocument(
+						MTP_flags(0),
+						document->mtpInput(),
+						MTPInputPhoto(), // video_cover
+						MTPint(), // ttl_seconds
+						MTPint(), // video_timestamp
+						MTPstring()); // query
+				}
+				return MTP_inputMediaEmpty();
+			}();
+			
+			if (inputMedia.type() != mtpc_inputMediaEmpty) {
+				mediaList.push_back(inputMedia);
+				
+				// Get caption (drop if UnquotedWithoutCaptions)
+				if (draft.options != Data::ForwardOptions::UnquotedWithoutCaptions) {
+					captions.push_back(item->originalText());
+				} else {
+					captions.push_back(TextWithEntities());
+				}
+			}
+		}
+		
+		if (mediaList.empty()) {
+			if (successCallback) successCallback();
+			return;
+		}
+		
+		// Send as single album using messages.sendMultiMedia
+		// Each item keeps its own caption (unless UnquotedWithoutCaptions mode)
+		
+		using Flag = MTPmessages_SendMultiMedia::Flag;
+		const auto flags = Flag(0)
+			| (ShouldSendSilent(peer, action.options) ? Flag::f_silent : Flag(0))
+			| (action.options.scheduled ? Flag::f_schedule_date : Flag(0))
+			| (sendAs ? Flag::f_send_as : Flag(0))
+			| (action.options.shortcutId ? Flag::f_quick_reply_shortcut : Flag(0))
+			| (action.options.effectId ? Flag::f_effect : Flag(0))
+			| (action.options.invertCaption ? Flag::f_invert_media : Flag(0));
+		
+		auto multiMedia = QVector<MTPInputSingleMedia>();
+		multiMedia.reserve(mediaList.size());
+		
+		for (size_t i = 0; i < mediaList.size(); i++) {
+			const auto randomId = base::RandomValue<uint64>();
+			session->data().registerMessageRandomId(randomId, FullMsgId());
+			
+			// Each item gets its own caption (or empty if UnquotedWithoutCaptions)
+			const auto &caption = (i < captions.size()) ? captions[i] : TextWithEntities();
+			
+			// Convert caption entities to MTP
+			auto sentEntities = Api::EntitiesToMTP(
+				session,
+				caption.entities,
+				Api::ConvertOption::SkipLocal);
+			
+			const auto entitiesFlags = !sentEntities.v.isEmpty()
+				? MTPDinputSingleMedia::Flag::f_entities
+				: MTPDinputSingleMedia::Flag(0);
+			
+			auto singleMedia = MTP_inputSingleMedia(
+				MTP_flags(entitiesFlags),
+				mediaList[i],
+				MTP_long(randomId),
+				MTP_string(caption.text),
+				sentEntities);
+			
+			multiMedia.push_back(singleMedia);
+		}
+		
+		auto callbackPtr = std::make_shared<FnMut<void()>>(std::move(successCallback));
+		auto &histories = history->owner().histories();
+		
+		histories.sendPreparedMessage(
+			history,
+			FullReplyTo(),
+			uint64(0),
+			Data::Histories::PrepareMessage<MTPmessages_SendMultiMedia>(
+				MTP_flags(flags),
+				peer->input(),
+				Data::Histories::ReplyToPlaceholder(),
+				MTP_vector<MTPInputSingleMedia>(std::move(multiMedia)),
+				MTP_int(action.options.scheduled),
+				(sendAs ? sendAs->input() : MTP_inputPeerEmpty()),
+				Data::ShortcutIdToMTP(session, action.options.shortcutId),
+				MTP_long(action.options.effectId),
+				MTP_long(0) // stars_paid
+			), [callbackPtr](const MTPUpdates &result, const MTP::Response &response) {
+				if (*callbackPtr) {
+					(*callbackPtr)();
+				}
+			}, [callbackPtr](const MTP::Error &error, const MTP::Response &response) {
+				if (*callbackPtr) {
+					(*callbackPtr)();
+				}
+			});
+} else if (separate) {
+		// Send each item as a separate message
+		const auto remaining = std::make_shared<int>(int(draft.items.size()));
+		auto callbackPtr = std::make_shared<FnMut<void()>>(std::move(successCallback));
+		auto checkComplete = std::make_shared<std::function<void()>>(
+			[callbackPtr, remaining]() {
+				if (--*remaining == 0 && *callbackPtr) {
+					(*callbackPtr)();
+				}
+			});
+		
+		for (const auto &item : draft.items) {
+			auto singleDraft = Data::ResolvedForwardDraft{
+				.items = {item},
+				.options = draft.options,
+				.groupOptions = Data::GroupingOptions::GroupAsIs,
+			};
+			
+			forwardMessages(
+				std::move(singleDraft),
+				action,
+				[checkComplete] { (*checkComplete)(); });
+		}
+	}
+}
+
 void ApiWrap::forwardMessages(
 		Data::ResolvedForwardDraft &&draft,
 		SendAction action,
@@ -3613,20 +3776,58 @@ void ApiWrap::forwardMessages(
 
 			// Pre-create SendingAlbum objects for every unique source album.
 			// We do NOT create local messages; albums are purely server-side.
+			// Grouping modes:
+			// - GroupAsIs: keep source albums (default)
+			// - RegroupAll: all media in one album
+			// - Separate: no albums, each item separate
+			LOG(("EF forwardMessages: draft.groupOptions=%1, items=%2")
+				.arg(int(draft.groupOptions))
+				.arg(draft.items.size()));
+			const auto regroupAll = (draft.groupOptions == Data::GroupingOptions::RegroupAll);
+			const auto separate = (draft.groupOptions == Data::GroupingOptions::Separate);
+			MessageGroupId regroupAllId;
+			if (regroupAll) {
+				regroupAllId = MessageGroupId::FromRaw(
+					action.history->peer->id,
+					base::RandomValue<uint64>(),
+					false);
+			}
 			for (auto i = 0; i < n; i++) {
 				if (ctx->textOnly[i]) continue;
 				const auto srcItem =
 					session().data().message(ctx->itemIds[i]);
 				if (!srcItem) { ctx->textOnly[i] = true; continue; }
-				if (const auto sg = srcItem->groupId()) {
+				
+				MessageGroupId sg;
+				if (separate) {
+					// Separate mode: no grouping
+					sg = MessageGroupId();
+				} else if (regroupAll) {
+					// RegroupAll mode: all media in one album
+					sg = regroupAllId;
+				} else {
+					// GroupAsIs mode: keep source albums
+					sg = srcItem->groupId();
+				}
+				
+				if (sg) {
 					ctx->sourceGroup[i] = sg;
 					if (ctx->albums.find(sg) == ctx->albums.end()) {
 						auto album = std::make_shared<SendingAlbum>();
 						album->options = action.options;
 						album->expectedCount = [&] {
-							auto it = albumItemCounts.find(sg);
-							return (it != albumItemCounts.end())
-								? it->second : 1;
+							if (regroupAll) {
+								// Count all non-text items
+								int count = 0;
+								for (auto j = 0; j < n; j++) {
+									if (!ctx->textOnly[j]) count++;
+								}
+								return count;
+							} else {
+								auto it = albumItemCounts.find(sg);
+								return (it != albumItemCounts.end())
+									? it->second : 1;
+							}
 						}();
 						_sendingAlbums.emplace(album->groupId, album);
 						ctx->albums.emplace(sg, std::move(album));
@@ -4342,7 +4543,7 @@ void ApiWrap::forwardMessages(
 	const auto count = int(draft.items.size());
 	const auto genClientSideMessage = action.generateLocal
 		&& (count < 2)
-		&& (draft.options == Data::ForwardOptions::PreserveInfo);
+		&& (draft.options == Data::ForwardOptions::Quoted);
 	const auto history = action.history;
 	const auto peer = history->peer;
     
@@ -4373,12 +4574,36 @@ void ApiWrap::forwardMessages(
 	if (action.options.effectId) {
 		sendFlags |= SendFlag::f_effect;
 	}
-	if (draft.options != Data::ForwardOptions::PreserveInfo) {
+	if (draft.options != Data::ForwardOptions::Quoted) {
 		sendFlags |= SendFlag::f_drop_author;
 	}
-	if (draft.options == Data::ForwardOptions::NoNamesAndCaptions) {
+	if (draft.options == Data::ForwardOptions::UnquotedWithoutCaptions) {
 		sendFlags |= SendFlag::f_drop_media_captions;
 	}
+	
+	// Check if regrouping is requested (only meaningful when author is dropped)
+	// If user selected a non-default grouping option, it always applies
+	// and overrides Quoted (regrouping requires sending as new messages)
+	const auto regroupAll = (draft.groupOptions == Data::GroupingOptions::RegroupAll);
+	const auto separate = (draft.groupOptions == Data::GroupingOptions::Separate);
+	const auto needsRegrouping = regroupAll || separate;
+	
+	if (needsRegrouping) {
+		// Move the callback from shared (where it was stored at line 3670)
+		// back out so sendForwardWithRegrouping can use it
+		auto regroupCallback = shared
+			? std::move(shared->callback)
+			: FnMut<void()>();
+		// Use separate send path for regrouping - send as new messages with controlled groupId
+		sendForwardWithRegrouping(
+			std::move(draft),
+			std::move(action),
+			std::move(regroupCallback),
+			regroupAll,
+			separate);
+		return;
+	}
+	
 	if (sendAs) {
 		sendFlags |= SendFlag::f_send_as;
 	}

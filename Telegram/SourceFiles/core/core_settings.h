@@ -34,6 +34,11 @@ namespace Calls::Group {
 enum class StickedTooltip;
 } // namespace Calls::Group
 
+namespace Data {
+enum class ForwardOptions;
+enum class GroupingOptions;
+} // namespace Data
+
 namespace Core {
 
 inline constexpr auto kScreenReaderModeDisabledKey
@@ -420,6 +425,34 @@ public:
 	[[nodiscard]] auto sendSubmitWayValue() const
 	-> rpl::producer<Ui::InputSubmitSettings> {
 		return _sendSubmitWay.value();
+	}
+	void setForwardOptionsEverSet(bool value) {
+		_forwardOptionsEverSet = value;
+		_saveDelayed.fire({});
+	}
+	[[nodiscard]] bool forwardOptionsEverSet() const {
+		return _forwardOptionsEverSet;
+	}
+	void setGroupingOptionsEverSet(bool value) {
+		_groupingOptionsEverSet = value;
+		_saveDelayed.fire({});
+	}
+	[[nodiscard]] bool groupingOptionsEverSet() const {
+		return _groupingOptionsEverSet;
+	}
+	void setForwardOptions(Data::ForwardOptions value) {
+		_forwardOptions = value;
+		_saveDelayed.fire({});
+	}
+	[[nodiscard]] Data::ForwardOptions forwardOptions() const {
+		return _forwardOptions;
+	}
+	void setGroupingOptions(Data::GroupingOptions value) {
+		_groupingOptions = value;
+		_saveDelayed.fire({});
+	}
+	[[nodiscard]] Data::GroupingOptions groupingOptions() const {
+		return _groupingOptions;
 	}
 	void setSoundOverride(const QString &key, const QString &path) {
 		_soundOverrides.emplace(key, path);
@@ -1203,6 +1236,12 @@ private:
 	ushort _notificationsVolume = 100;
 
 	QByteArray _photoEditorBrush;
+
+	Data::ForwardOptions _forwardOptions = Data::ForwardOptions::Quoted;
+	Data::GroupingOptions _groupingOptions = Data::GroupingOptions::GroupAsIs;
+
+	bool _forwardOptionsEverSet = false;
+	bool _groupingOptionsEverSet = false;
 
 };
 

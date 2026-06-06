@@ -6653,6 +6653,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_forward_action_hide_captions" = "Hide Captions";
 "lng_forward_action_change_recipient" = "Change Recipient";
 "lng_forward_action_remove" = "Do Not Forward";
+"lng_forward_mode_quoted" = "Forward";
+"lng_forward_mode_unquoted_with_captions" = "Copy with captions";
+"lng_forward_mode_unquoted_no_captions" = "Copy without captions";
+"lng_forward_group_all" = "Album";
+"lng_forward_group_separate" = "Single";
+"lng_forward_subtitle_group_all_media" = "Album";
+"lng_forward_subtitle_separate_messages" = "Single";
+"lng_forward_go_to_chat" = "Go to Chat";
 
 "lng_passport_title" = "Telegram Passport";
 "lng_passport_request1" = "{bot} requests access to your personal data";

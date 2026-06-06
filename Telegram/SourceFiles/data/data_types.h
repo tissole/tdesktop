@@ -383,14 +383,21 @@ using MediaWebPageFlags = base::flags<MediaWebPageFlag>;
 namespace Data {
 
 enum class ForwardOptions {
-	PreserveInfo,
-	NoSenderNames,
-	NoNamesAndCaptions,
+	Quoted,
+	UnquotedWithCaptions,
+	UnquotedWithoutCaptions,
+};
+
+enum class GroupingOptions {
+	GroupAsIs,
+	RegroupAll,
+	Separate,
 };
 
 struct ForwardDraft {
 	MessageIdsList ids;
-	ForwardOptions options = ForwardOptions::PreserveInfo;
+	ForwardOptions options = ForwardOptions::Quoted;
+	GroupingOptions groupOptions = GroupingOptions::GroupAsIs;
 
 	friend inline auto operator<=>(
 		const ForwardDraft&,
@@ -399,7 +406,8 @@ struct ForwardDraft {
 
 struct ResolvedForwardDraft {
 	HistoryItemsList items;
-	ForwardOptions options = ForwardOptions::PreserveInfo;
+	ForwardOptions options = ForwardOptions::Quoted;
+	GroupingOptions groupOptions = GroupingOptions::GroupAsIs;
 };
 
 } // namespace Data

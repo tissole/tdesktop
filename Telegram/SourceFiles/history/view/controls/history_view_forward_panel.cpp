@@ -96,9 +96,9 @@ void ForwardPanel::checkTexts() {
 		return;
 	}
 	const auto keepNames = (_data.options
-		== Data::ForwardOptions::PreserveInfo);
+		== Data::ForwardOptions::Quoted);
 	const auto keepCaptions = (_data.options
-		!= Data::ForwardOptions::NoNamesAndCaptions);
+		!= Data::ForwardOptions::UnquotedWithoutCaptions);
 	auto version = keepNames
 		? 0
 		: keepCaptions
@@ -133,9 +133,9 @@ void ForwardPanel::updateTexts() {
 	QString from;
 	TextWithEntities text;
 	const auto keepNames = (_data.options
-		== Data::ForwardOptions::PreserveInfo);
+		== Data::ForwardOptions::Quoted);
 	const auto keepCaptions = (_data.options
-		!= Data::ForwardOptions::NoNamesAndCaptions);
+		!= Data::ForwardOptions::UnquotedWithoutCaptions);
 	if (const auto count = int(_data.items.size())) {
 		auto insertedPeers = base::flat_set<not_null<PeerData*>>();
 		auto insertedNames = base::flat_set<QString>();
@@ -258,11 +258,11 @@ void ForwardPanel::editToNextOption() {
 	}
 
 	const auto now = _data.options;
-	const auto next = (now == Options::PreserveInfo)
-		? Options::NoSenderNames
-		: ((now == Options::NoSenderNames) && captionsCount)
-		? Options::NoNamesAndCaptions
-		: Options::PreserveInfo;
+	const auto next = (now == Options::Quoted)
+		? Options::UnquotedWithCaptions
+		: ((now == Options::UnquotedWithCaptions) && captionsCount)
+		? Options::UnquotedWithoutCaptions
+		: Options::Quoted;
 
 	const auto topicRootId = _to->topicRootId();
 	const auto monoforumPeerId = _to->monoforumPeerId();

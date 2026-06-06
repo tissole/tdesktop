@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/checkbox.h"
 #include "ui/widgets/multi_select.h"
 #include "ui/widgets/scroll_area.h"
+#include "ui/widgets/dropdown_menu.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/wrap/slide_wrap.h"
@@ -37,6 +38,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_context_menu.h" // CopyPostLink.
 #include "settings/sections/settings_premium.h"
 #include "window/window_session_controller.h"
+#include "window/window_controller.h"
+#include "window/window_separate_id.h"
+#include "mainwidget.h"
 #include "boxes/peer_list_controllers.h"
 #include "chat_helpers/emoji_suggestions_widget.h"
 #include "chat_helpers/share_message_phrase_factory.h"
@@ -54,16 +58,59 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_forum.h"
 #include "data/data_forum_topic.h"
 #include "data/data_changes.h"
+#include "data/data_document.h"
 #include "main/main_session.h"
 #include "core/application.h"
 #include "core/core_settings.h"
+#include "styles/style_media_player.h"
 #include "styles/style_calls.h"
+#include "styles/style_info.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
 #include "styles/style_menu_icons.h"
 
 #include <QtGui/QGuiApplication>
 #include <QtGui/QClipboard>
+
+namespace {
+
+class ForwardOptionItem final : public Ui::Menu::Action {
+public:
+	using Ui::Menu::Action::Action;
+
+	void init(bool checked) {
+		enableMouseSelecting();
+		ItemBase::setPreventClose(true);
+
+		_checkView = std::make_unique<Ui::CheckView>(
+			st::defaultCheck,
+			false);
+		_checkView->checkedChanges(
+		) | rpl::on_next([=](bool checked) {
+			setIcon(checked ? &st::mediaPlayerMenuCheck : nullptr);
+		}, lifetime());
+
+		_checkView->setChecked(checked, anim::type::normal);
+		ItemBase::clicks() | rpl::on_next([=] {
+			if (!_checkView->checked()) {
+				_checkView->setChecked(true, anim::type::normal);
+			}
+		}, lifetime());
+	}
+
+	not_null<Ui::CheckView*> checkView() const {
+		return _checkView.get();
+	}
+
+	void setChecked(bool checked, anim::type animated) {
+		_checkView->setChecked(checked, animated);
+	}
+
+private:
+	std::unique_ptr<Ui::CheckView> _checkView;
+};
+
+} // namespace
 
 class ShareBox::Inner final : public Ui::RpWidget {
 public:
@@ -221,6 +268,29 @@ ShareBox::ShareBox(QWidget*, Descriptor &&descriptor)
 		tr::lng_photos_comment()),
 	st::shareCommentPadding)
 , _bottomWidget(std::move(_descriptor.bottomWidget))
+, _forwardOptions{
+	.sendersCount = _descriptor.forwardOptions.sendersCount,
+	.captionsCount = _descriptor.forwardOptions.captionsCount,
+	.dropNames = (Core::App().settings().forwardOptionsEverSet()
+		? Core::App().settings().forwardOptions() != Data::ForwardOptions::Quoted
+		: _descriptor.forwardOptions.defaultDropNames),
+	.dropCaptions = (Core::App().settings().forwardOptionsEverSet()
+		? Core::App().settings().forwardOptions() == Data::ForwardOptions::UnquotedWithoutCaptions
+		: _descriptor.forwardOptions.defaultDropCaptions),
+}
+, _groupOptions(Core::App().settings().groupingOptionsEverSet()
+	? Core::App().settings().groupingOptions()
+	: _descriptor.forwardOptions.defaultGroupAsAlbum
+	? Data::GroupingOptions::GroupAsIs
+	: Data::GroupingOptions::Separate)
+, _optionsModified(false)
+, _hasUserSelectedForwardOption(
+	Core::App().settings().forwardOptionsEverSet()
+		&& Core::App().settings().forwardOptions() != Data::ForwardOptions::Quoted)
+, _hasUserSelectedGroupOption(
+	Core::App().settings().groupingOptionsEverSet()
+		&& Core::App().settings().groupingOptions() != Data::GroupingOptions::GroupAsIs
+		&& Core::App().settings().groupingOptions() != Data::GroupingOptions::RegroupAll)
 , _copyLinkText(_descriptor.copyLinkText
 	? std::move(_descriptor.copyLinkText)
 	: tr::lng_share_copy_link())
@@ -287,6 +357,7 @@ void ShareBox::prepare() {
 	Ui::SendPendingMoveResizeEvents(_select);
 
 	setTitle(header);
+	updateAdditionalTitle();
 
 	_inner = setInnerWidget(
 		object_ptr<Inner>(this, _descriptor, uiShow()),
@@ -608,8 +679,264 @@ void ShareBox::showMenu(not_null<Ui::RpWidget*> parent) {
 	}
 }
 
+bool ShareBox::showForwardMenu(not_null<Ui::IconButton*> button) {
+	if (_topMenu) {
+		_topMenu->hideAnimated(Ui::InnerDropdown::HideOption::IgnoreShow);
+		return true;
+	}
+
+	LOG(("ShareBox::showForwardMenu: dropNames=%1, dropCaptions=%2, groupOptions=%3")
+		.arg(_forwardOptions.dropNames ? 1 : 0
+		).arg(_forwardOptions.dropCaptions ? 1 : 0
+		).arg(int(_groupOptions)));
+
+	_topMenu = base::make_unique_q<Ui::DropdownMenu>(window());
+	const auto weak = _topMenu.get();
+	_topMenu->setHiddenCallback([=] {
+		weak->deleteLater();
+		if (_topMenu == weak) {
+			button->setForceRippled(false);
+		}
+	});
+	_topMenu->setShowStartCallback([=] {
+		if (_topMenu == weak) {
+			button->setForceRippled(true);
+		}
+	});
+	_topMenu->setHideStartCallback([=] {
+		if (_topMenu == weak) {
+			button->setForceRippled(false);
+		}
+	});
+	button->installEventFilter(_topMenu);
+
+	auto createView = [&](rpl::producer<QString> &&text, bool checked) {
+		auto item = base::make_unique_q<ForwardOptionItem>(
+			_topMenu->menu(),
+			st::popupMenuWithIcons.menu,
+			new QAction(QString(), _topMenu->menu()),
+			nullptr,
+			nullptr);
+		std::move(
+			text
+		) | rpl::on_next([action = item->action()](QString text) {
+			action->setText(text);
+		}, item->lifetime());
+		item->init(checked);
+		const auto raw = item.get();
+		const auto view = item->checkView();
+		_topMenu->addAction(std::move(item));
+		return std::pair{ raw, view };
+	};
+	
+	auto makeView = [&](rpl::producer<QString> &&text, bool checked) {
+		return createView(std::move(text), checked).second;
+	};
+
+	// Initial check state based on current forward options
+	const auto checkedForward = _forwardOptions.dropCaptions
+		? Data::ForwardOptions::UnquotedWithoutCaptions
+		: _forwardOptions.dropNames
+		? Data::ForwardOptions::UnquotedWithCaptions
+		: Data::ForwardOptions::Quoted;
+
+	const auto isQuoted = !_forwardOptions.dropNames && !_forwardOptions.dropCaptions;
+
+	// --- Forward option section ---
+
+	const auto quoted = makeView(
+		tr::lng_forward_mode_quoted(),
+		checkedForward == Data::ForwardOptions::Quoted);
+	const auto noNames = makeView(
+		tr::lng_forward_mode_unquoted_with_captions(),
+		checkedForward == Data::ForwardOptions::UnquotedWithCaptions);
+	const auto noCaptions = makeView(
+		tr::lng_forward_mode_unquoted_no_captions(),
+		checkedForward == Data::ForwardOptions::UnquotedWithoutCaptions);
+
+	ForwardOptionItem *groupAllItem = nullptr;
+	ForwardOptionItem *groupNoneItem = nullptr;
+	Ui::CheckView *groupAll = nullptr;
+	Ui::CheckView *groupNone = nullptr;
+
+	const auto onForwardOptionChange = [=, this](int mode, bool value) {
+		if (value) {
+			quoted->setChecked(mode == 0, anim::type::normal);
+			noNames->setChecked(mode == 1, anim::type::normal);
+			noCaptions->setChecked(mode == 2, anim::type::normal);
+			_forwardOptions.dropNames = (mode != 0);
+			_forwardOptions.dropCaptions = (mode == 2);
+			_optionsModified = true;
+			_hasUserSelectedForwardOption = true;
+			
+			if (mode == 0) {
+				_groupOptions = Data::GroupingOptions::GroupAsIs;
+				if (groupAll) {
+					groupAll->setChecked(false, anim::type::normal);
+					groupNone->setChecked(false, anim::type::normal);
+				}
+				if (groupAllItem) {
+					groupAllItem->setEnabled(false);
+					groupNoneItem->setEnabled(false);
+				}
+				Core::App().settings().setGroupingOptions(_groupOptions);
+				Core::App().settings().setGroupingOptionsEverSet(true);
+			} else {
+				if (groupAllItem) {
+					groupAllItem->setEnabled(true);
+					groupNoneItem->setEnabled(true);
+				}
+			}
+			
+			const auto dataOptions = (mode == 2)
+				? Data::ForwardOptions::UnquotedWithoutCaptions
+				: (mode == 1)
+				? Data::ForwardOptions::UnquotedWithCaptions
+				: Data::ForwardOptions::Quoted;
+			Core::App().settings().setForwardOptions(dataOptions);
+			Core::App().settings().setForwardOptionsEverSet(true);
+			updateAdditionalTitle();
+		}
+	};
+
+	quoted->checkedChanges(
+		) | rpl::on_next([=](bool value) {
+			onForwardOptionChange(0, value);
+		}, _topMenu->lifetime());
+
+	noNames->checkedChanges(
+		) | rpl::on_next([=](bool value) {
+			onForwardOptionChange(1, value);
+		}, _topMenu->lifetime());
+
+	noCaptions->checkedChanges(
+		) | rpl::on_next([=](bool value) {
+			onForwardOptionChange(2, value);
+		}, _topMenu->lifetime());
+
+	_topMenu->addSeparator();
+
+	// --- Grouping options section ---
+
+	if (_descriptor.forwardOptions.hasMedia) {
+
+		const auto savedGrouping = Core::App().settings().groupingOptionsEverSet()
+			? Core::App().settings().groupingOptions()
+			: Data::GroupingOptions::GroupAsIs;
+		const auto hasSavedGrouping = Core::App().settings().groupingOptionsEverSet();
+
+		auto [g1Item, g1View] = createView(
+			tr::lng_forward_group_all(),
+			(!isQuoted && (hasSavedGrouping
+				? (savedGrouping == Data::GroupingOptions::GroupAsIs
+					|| savedGrouping == Data::GroupingOptions::RegroupAll)
+				: _descriptor.forwardOptions.defaultGroupAsAlbum)));
+		auto [g2Item, g2View] = createView(
+			tr::lng_forward_group_separate(),
+			(!isQuoted && (hasSavedGrouping
+				? savedGrouping == Data::GroupingOptions::Separate
+				: !_descriptor.forwardOptions.defaultGroupAsAlbum)));
+		
+		groupAll = g1View;
+		groupNone = g2View;
+		groupAllItem = g1Item;
+		groupNoneItem = g2Item;
+		
+		if (isQuoted) {
+			groupAllItem->setEnabled(false);
+			groupNoneItem->setEnabled(false);
+		}
+		
+		const auto onGroupOptionChange = [=, this](int mode, bool value) {
+			if (value) {
+				groupAll->setChecked(mode == 0, anim::type::normal);
+				groupNone->setChecked(mode == 1, anim::type::normal);
+			_groupOptions = (mode == 1)
+				? Data::GroupingOptions::Separate
+				: _descriptor.forwardOptions.defaultGroupAsAlbum
+				? Data::GroupingOptions::GroupAsIs
+				: Data::GroupingOptions::RegroupAll;
+				_optionsModified = true;
+				_hasUserSelectedGroupOption = true;
+				Core::App().settings().setGroupingOptions(_groupOptions);
+				Core::App().settings().setGroupingOptionsEverSet(true);
+				updateAdditionalTitle();
+			}
+		};
+
+		groupAll->checkedChanges(
+		) | rpl::on_next([=](bool value) {
+			onGroupOptionChange(0, value);
+		}, _topMenu->lifetime());
+
+		groupNone->checkedChanges(
+		) | rpl::on_next([=](bool value) {
+			onGroupOptionChange(1, value);
+		}, _topMenu->lifetime());
+	}
+
+	const auto parentTopLeft = window()->mapToGlobal(QPoint());
+	const auto buttonTopLeft = button->mapToGlobal(QPoint());
+	const auto parentRect = QRect(parentTopLeft, window()->size());
+	const auto buttonRect = QRect(buttonTopLeft, button->size());
+	_topMenu->move(
+		buttonRect.x() + buttonRect.width() - _topMenu->width() - parentRect.x(),
+		buttonRect.y() + buttonRect.height() - parentRect.y() - style::ConvertScale(18));
+	_topMenu->showAnimated(Ui::PanelAnimation::Origin::TopRight);
+
+	return true;
+}
+
+void ShareBox::updateAdditionalTitle() {
+	if (!_descriptor.forwardOptions.show) {
+		return;
+	}
+
+	auto subtitle = QString();
+
+	const auto forwardOptions = (_forwardOptions.dropCaptions)
+		? Data::ForwardOptions::UnquotedWithoutCaptions
+		: _forwardOptions.dropNames
+		? Data::ForwardOptions::UnquotedWithCaptions
+		: Data::ForwardOptions::Quoted;
+
+	switch (forwardOptions) {
+	case Data::ForwardOptions::Quoted:
+		subtitle += u"Forward"_q;
+		break;
+	case Data::ForwardOptions::UnquotedWithCaptions:
+		subtitle += u"Copy captioned"_q;
+		break;
+	case Data::ForwardOptions::UnquotedWithoutCaptions:
+		subtitle += u"Copy uncaptioned"_q;
+		break;
+	}
+
+	if (_descriptor.forwardOptions.hasMedia) {
+		if (!subtitle.isEmpty()) {
+			subtitle += u", "_q;
+		}
+		switch (_groupOptions) {
+		case Data::GroupingOptions::GroupAsIs:
+		case Data::GroupingOptions::RegroupAll:
+			subtitle += u"Album"_q;
+			break;
+		case Data::GroupingOptions::Separate:
+			subtitle += u"Single"_q;
+			break;
+		}
+	}
+
+	setAdditionalTitle(rpl::single(subtitle));
+}
+
 void ShareBox::createButtons() {
 	clearButtons();
+	if (_descriptor.forwardOptions.show) {
+		const auto moreButton = addTopButton(st::infoTopBarMenu);
+		moreButton->setClickedCallback(
+			[=] { showForwardMenu(moreButton.data()); });
+	}
 	if (_hasSelected) {
 		const auto send = addButton(tr::lng_share_confirm(), [=] {
 			submit({});
@@ -618,6 +945,30 @@ void ShareBox::createButtons() {
 			= _descriptor.forwardOptions.sendersCount;
 		_forwardOptions.captionsCount
 			= _descriptor.forwardOptions.captionsCount;
+
+		if (_descriptor.goToChatCallback && _inner->selected().size() == 1) {
+			const auto singleChat = _inner->selected().at(0);
+			addLeftButton(tr::lng_forward_go_to_chat(), [=] {
+				// Left button (Send as Copy) always drops names,
+				// so grouping always applies
+			const auto actualGroupOptions = (_hasUserSelectedGroupOption
+				&& _groupOptions != Data::GroupingOptions::GroupAsIs)
+				? _groupOptions
+				: Data::GroupingOptions::GroupAsIs;
+			
+			// If grouping is active, forward option must drop author
+			const auto groupingActive = (actualGroupOptions != Data::GroupingOptions::GroupAsIs);
+				_descriptor.goToChatCallback(
+					singleChat,
+					(_forwardOptions.captionsCount
+						&& _forwardOptions.dropCaptions)
+						? Data::ForwardOptions::UnquotedWithoutCaptions
+						: (groupingActive || _forwardOptions.dropNames)
+						? Data::ForwardOptions::UnquotedWithCaptions
+						: Data::ForwardOptions::Quoted,
+					actualGroupOptions);
+			});
+		}
 
 		send->setAcceptBoth();
 		send->clicks(
@@ -681,6 +1032,21 @@ void ShareBox::submit(Api::SendOptions options) {
 	const auto weak = base::make_weak(this);
 	const auto field = _comment->entity();
 	auto comment = field->getTextWithAppliedMarkdown();
+	
+	// Use grouping option if user explicitly selected one
+	// If non-default grouping is selected, it takes effect regardless of forward options
+	const auto actualGroupOptions = (_hasUserSelectedGroupOption
+		&& _groupOptions != Data::GroupingOptions::GroupAsIs)
+		? _groupOptions
+		: Data::GroupingOptions::GroupAsIs;
+	
+	LOG(("ShareBox::submit: dropNames=%1, dropCaptions=%2, groupOptions=%3 (actual=%4), modified=%5")
+		.arg(_forwardOptions.dropNames ? 1 : 0
+		).arg(_forwardOptions.dropCaptions ? 1 : 0
+		).arg(int(_groupOptions))
+		.arg(int(actualGroupOptions))
+		.arg(_optionsModified ? 1 : 0));
+		
 	const auto checkPaid = [=] {
 		if (!_descriptor.countMessagesCallback) {
 			return true;
@@ -743,18 +1109,22 @@ void ShareBox::submit(Api::SendOptions options) {
 		return true;
 	};
 	if (const auto onstack = _descriptor.submitCallback) {
+		// If user selected a grouping option, override forward option to drop author
+		// (grouping requires sending as new messages, which inherently drops author)
+		const auto groupingOverridesForward = (actualGroupOptions != Data::GroupingOptions::GroupAsIs);
 		const auto forwardOptions = (_forwardOptions.captionsCount
 			&& _forwardOptions.dropCaptions)
-			? Data::ForwardOptions::NoNamesAndCaptions
-			: _forwardOptions.dropNames
-			? Data::ForwardOptions::NoSenderNames
-			: Data::ForwardOptions::PreserveInfo;
+			? Data::ForwardOptions::UnquotedWithoutCaptions
+			: (groupingOverridesForward || _forwardOptions.dropNames)
+			? Data::ForwardOptions::UnquotedWithCaptions
+			: Data::ForwardOptions::Quoted;
 		onstack(
 			std::move(threads),
 			checkPaid,
 			std::move(comment),
 			options,
-			forwardOptions);
+			forwardOptions,
+			actualGroupOptions);
 	}
 }
 
@@ -1698,7 +2068,8 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 			Fn<bool()> checkPaid,
 			TextWithTags comment,
 			Api::SendOptions options,
-			Data::ForwardOptions forwardOptions) {
+			Data::ForwardOptions forwardOptions,
+			Data::GroupingOptions groupingOptions) {
 		if (!state->requests.empty()) {
 			return; // Share clicked already.
 		}
@@ -1752,6 +2123,7 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 				auto draft = Data::ResolvedForwardDraft{
 					.items = items,
 					.options = forwardOptions,
+					.groupOptions = groupingOptions,
 				};
 				api.forwardMessages(
 					std::move(draft),
@@ -1784,27 +2156,82 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 			return;
 		}
 
+		// Check if regrouping is needed (handled by api.forwardMessages)
+		const auto needsRegrouping = (groupingOptions == Data::GroupingOptions::Separate
+			|| groupingOptions == Data::GroupingOptions::RegroupAll);
+
+		if (needsRegrouping) {
+			LOG(("ShareBox: using forwardMessages path for regrouping, "
+				"items=%1, destinations=%2, groupOptions=%3"
+				).arg(items.size()).arg(result.size()
+				).arg(int(groupingOptions)));
+			auto &api = history->session().api();
+			const auto remaining = std::make_shared<int>(
+				int(result.size()));
+			for (const auto &thread : result) {
+				const auto effectiveThread = [&]()
+					-> not_null<Data::Thread*> {
+					const auto peer = thread->peer();
+					const auto forum = thread->owningHistory()->asForum();
+					const auto needNewTopic = forum
+						&& forum->bot()
+						&& Data::IsBotUserCreatesTopics(peer)
+						&& !thread->asTopic();
+					if (needNewTopic) {
+						const auto topic = forum->reserveNewBotTopic();
+						Assert(topic != nullptr);
+						return topic;
+					}
+					return thread;
+				}();
+				if (!comment.text.isEmpty()) {
+					auto msg = Api::MessageToSend(
+						Api::SendAction(effectiveThread, options));
+					msg.textWithTags = comment;
+					msg.action.clearDraft = false;
+					api.sendMessage(std::move(msg));
+				}
+				auto draft = Data::ResolvedForwardDraft{
+					.items = items,
+					.options = forwardOptions,
+					.groupOptions = groupingOptions,
+				};
+				api.forwardMessages(
+					std::move(draft),
+					Api::SendAction(effectiveThread, options),
+					[=] {
+						LOG(("ShareBox: regrouping forwardMessages callback fired, remaining=%1"
+							).arg(*remaining));
+						if (--*remaining == 0) {
+							LOG(("ShareBox: remaining==0, closing"));
+							if (show) {
+								show->hideLayer();
+							}
+							if (state->submitCallback) {
+								state->submitCallback();
+							}
+						}
+					});
+			}
+			return;
+		}
+
 		using Flag = MTPmessages_ForwardMessages::Flag;
 		auto commonSendFlags = MTPmessages_ForwardMessages::Flags(0);
-		if (no_quote) {
-			commonSendFlags = (options.scheduled ? Flag::f_schedule_date : Flag(0)) | Flag::f_drop_author;
-		} else {
-			commonSendFlags = Flag(0)
-				| Flag::f_with_my_score
-				| (options.scheduled ? Flag::f_schedule_date : Flag(0))
-			| ((options.scheduled && options.scheduleRepeatPeriod)
-				? Flag::f_schedule_repeat_period
-				: Flag(0))
-				| ((forwardOptions != Data::ForwardOptions::PreserveInfo)
-					? Flag::f_drop_author
-					: Flag(0))
-				| ((forwardOptions == Data::ForwardOptions::NoNamesAndCaptions)
-					? Flag::f_drop_media_captions
-				: Flag(0))
-			| (videoTimestamp.has_value()
-				? Flag::f_video_timestamp
-					: Flag(0));
-		}
+		// Use forwardOptions from 3-dots menu to override no_quote
+		const auto actualDropAuthor = (forwardOptions != Data::ForwardOptions::Quoted);
+		const auto actualDropCaptions = (forwardOptions == Data::ForwardOptions::UnquotedWithoutCaptions);
+		commonSendFlags = Flag(0)
+			| Flag::f_with_my_score
+			| (options.scheduled ? Flag::f_schedule_date : Flag(0))
+		| ((options.scheduled && options.scheduleRepeatPeriod)
+			? Flag::f_schedule_repeat_period
+			: Flag(0))
+			| (actualDropAuthor ? Flag::f_drop_author : Flag(0))
+			| (actualDropCaptions ? Flag::f_drop_media_captions : Flag(0))
+		| (videoTimestamp.has_value()
+			? Flag::f_video_timestamp
+				: Flag(0));
 
 		auto mtpMsgIds = QVector<MTPint>();
 		mtpMsgIds.reserve(existingIds.size());
@@ -2064,6 +2491,39 @@ void FastShareMessage(
 		: ranges::all_of(items, [](auto item) {
 			return item->media() && item->media()->forceForwardedInfo();
 		});
+	const auto hasMediaForGrouping = [&] {
+		if (msgIds.size() > 1) {
+			auto mediaCount = 0;
+			for (const auto &item : items) {
+				if (item->media()) {
+					if (++mediaCount > 1) {
+						LOG(("FastShareMessage: hasMediaForGrouping=true, mediaCount=%1").arg(mediaCount));
+						return true;
+					}
+				}
+			}
+			LOG(("FastShareMessage: hasMediaForGrouping=false, mediaCount=%1").arg(mediaCount));
+		} else {
+			LOG(("FastShareMessage: hasMediaForGrouping=false, msgIds.size()=1"));
+		}
+		return false;
+	}();
+
+	const auto defaultGroupAsAlbum = [&] {
+		if (!hasMediaForGrouping) return false;
+		auto allInAlbum = true;
+		for (const auto &item : items) {
+			const auto media = item->media();
+			if (!media) continue;
+			if (media->photo() || (media->document()
+				&& media->document()->isVideoFile())) {
+				if (!item->groupId()) {
+					allInAlbum = false;
+				}
+			}
+		}
+		return allInAlbum;
+	}();
 
 	auto copyCallback = [=] {
 		const auto item = owner->message(msgIds[0]);
@@ -2104,6 +2564,33 @@ void FastShareMessage(
 	auto copyLinkCallback = canCopyLink
 		? Fn<void()>(std::move(copyCallback))
 		: Fn<void()>();
+	auto goToChatCallback = [=](
+			Data::Thread* thread,
+			Data::ForwardOptions forwardOptions,
+			Data::GroupingOptions groupOptions) {
+		const auto peer = thread->peer();
+		const auto id = Window::SeparateId(
+			((peer->isForum() && !peer->useSubsectionTabs())
+				? Window::SeparateType::Forum
+				: Window::SeparateType::Chat),
+			thread);
+		auto controller = Core::App().windowFor(id);
+		if (!controller) {
+			return;
+		}
+		if (controller->maybeSession() != &peer->session()) {
+			controller = Core::App().ensureSeparateWindowFor(id);
+			if (controller->maybeSession() != &peer->session()) {
+				return;
+			}
+		}
+		const auto content = controller->sessionController()->content();
+		content->setForwardDraft(thread, Data::ForwardDraft{
+			.ids = msgIds,
+			.options = forwardOptions,
+			.groupOptions = groupOptions,
+		});
+	};
 	show->show(Box<ShareBox>(ShareBox::Descriptor{
 		.session = session,
 		.copyCallback = std::move(copyLinkCallback),
@@ -2116,11 +2603,14 @@ void FastShareMessage(
 			msgIds,
 			false),
 		.filterCallback = std::move(filterCallback),
+		.goToChatCallback = std::move(goToChatCallback),
 		.st = st,
 		.forwardOptions = {
 			.sendersCount = ItemsForwardSendersCount(items),
 			.captionsCount = ItemsForwardCaptionsCount(items),
 			.show = !hasOnlyForcedForwardedInfo,
+			.hasMedia = hasMediaForGrouping,
+			.defaultGroupAsAlbum = defaultGroupAsAlbum,
 		},
 		.moneyRestrictionError = ShareMessageMoneyRestrictionError(),
 	}), Ui::LayerOption::CloseOther);
@@ -2183,7 +2673,8 @@ void FastShareLink(
 			Fn<bool()> checkPaid,
 			TextWithTags &&comment,
 			Api::SendOptions options,
-			::Data::ForwardOptions) {
+			::Data::ForwardOptions,
+			::Data::GroupingOptions) {
 		if (*sending || result.empty()) {
 			return;
 		}

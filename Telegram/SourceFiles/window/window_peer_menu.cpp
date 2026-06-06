@@ -104,6 +104,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/notify/data_notify_settings.h"
 #include "data/stickers/data_custom_emoji.h"
 #include "data/data_changes.h"
+#include "data/data_document.h"
 #include "data/data_session.h"
 #include "data/data_file_origin.h"
 #include "data/data_folder.h"
@@ -2972,6 +2973,35 @@ QPointer<Ui::BoxContent> ShowNewForwardMessagesBox(
 		: ranges::all_of(items, [](auto item) {
 			return item->media() && item->media()->forceForwardedInfo();
 		});
+	const auto hasMediaForGrouping = [&] {
+		if (msgIds.size() > 1) {
+			auto mediaCount = 0;
+			for (const auto &item : items) {
+				if (item->media()) {
+					if (++mediaCount > 1) {
+						return true;
+					}
+				}
+			}
+		}
+		return false;
+	}();
+
+	const auto defaultGroupAsAlbum = [&] {
+		if (!hasMediaForGrouping) return false;
+		auto allInAlbum = true;
+		for (const auto &item : items) {
+			const auto media = item->media();
+			if (!media) continue;
+			if (media->photo() || (media->document()
+				&& media->document()->isVideoFile())) {
+				if (!item->groupId()) {
+					allInAlbum = false;
+				}
+			}
+		}
+		return allInAlbum;
+	}();
 
 	const auto requiredRight = item->requiredSendRight();
 	const auto requiresInline = item->requiresSendInlineRight();
@@ -2989,6 +3019,8 @@ QPointer<Ui::BoxContent> ShowNewForwardMessagesBox(
 	const auto weak = std::make_shared<base::weak_qptr<ShareBox>>();
 	*weak = Ui::show(Box<ShareBox>(ShareBox::Descriptor{
 						.session = session,
+						.copyCallback = Fn<void()>(),
+						.countMessagesCallback = [](const TextWithTags&) { return 1; },
 						.submitCallback = ShareBox::DefaultForwardCallback(
 						   navigation->parentController()->uiShow(),
 			               history,
@@ -2997,11 +3029,16 @@ QPointer<Ui::BoxContent> ShowNewForwardMessagesBox(
 			               no_quote,
 						   std::move(successCallback)),
 						.filterCallback = std::move(filterCallback),
+						.goToChatCallback = ShareBox::GoToChatCallback(),
 						.title = no_quote ? tr::lng_title_forward_as_copy() : tr::lng_title_multiple_forward(),
 						.forwardOptions = {
 							.sendersCount = ItemsForwardSendersCount(items),
 							.captionsCount = ItemsForwardCaptionsCount(items),
 							.show = !hasOnlyForcedForwardedInfo,
+							.hasMedia = hasMediaForGrouping,
+							.defaultDropNames = no_quote,
+							.defaultDropCaptions = false,
+							.defaultGroupAsAlbum = defaultGroupAsAlbum,
 						},
 						.moneyRestrictionError = WriteMoneyRestrictionError,
 					}), Ui::LayerOption::CloseOther);
@@ -3047,10 +3084,10 @@ base::weak_qptr<Ui::BoxContent> ShowForwardMessagesBox(
 		[[nodiscard]] Data::ForwardOptions forwardOptionsData() const {
 			return (_forwardOptions.captionsCount
 					&& _forwardOptions.dropCaptions)
-				? Data::ForwardOptions::NoNamesAndCaptions
+				? Data::ForwardOptions::UnquotedWithoutCaptions
 				: _forwardOptions.dropNames
-				? Data::ForwardOptions::NoSenderNames
-				: Data::ForwardOptions::PreserveInfo;
+				? Data::ForwardOptions::UnquotedWithCaptions
+				: Data::ForwardOptions::Quoted;
 		}
 		[[nodiscard]] Ui::ForwardOptions forwardOptions() const {
 			return _forwardOptions;
@@ -3373,7 +3410,8 @@ base::weak_qptr<Ui::BoxContent> ShowForwardMessagesBox(
 			checkPaid,
 			std::move(comment),
 			options,
-			state->box->forwardOptionsData());
+			state->box->forwardOptionsData(),
+			Data::GroupingOptions::GroupAsIs);
 		if (!state->submit && successCallback) {
 			successCallback();
 		}

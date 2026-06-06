@@ -315,6 +315,12 @@ public:
 	}
 	void sendAction(const SendAction &action);
 	void finishForwarding(const SendAction &action);
+	void sendForwardWithRegrouping(
+		Data::ResolvedForwardDraft &&draft,
+		SendAction &&action,
+		FnMut<void()> &&successCallback,
+		bool regroupAll,
+		bool separate);
 	void forwardMessages(
 		Data::ResolvedForwardDraft &&draft,
 		SendAction action,

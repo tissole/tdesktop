@@ -275,8 +275,8 @@ void PreviewWrap::showForwardSelector(Data::ResolvedForwardDraft draft) {
 	};
 	const auto wasViews = base::take(_views);
 	using Options = Data::ForwardOptions;
-	const auto dropNames = (draft.options != Options::PreserveInfo);
-	const auto dropCaptions = (draft.options == Options::NoNamesAndCaptions);
+	const auto dropNames = (draft.options != Options::Quoted);
+	const auto dropCaptions = (draft.options == Options::UnquotedWithoutCaptions);
 	for (const auto &source : draft.items) {
 		const auto groupedId = groupByItem(source);
 		const auto item = _history->addNewLocalMessage({
@@ -948,12 +948,12 @@ void DraftOptionsBox(
 		const auto now = state->forward.options;
 		const auto &items = state->forward.items;
 		const auto count = items.size();
-		const auto dropNames = (now != Options::PreserveInfo);
+		const auto dropNames = (now != Options::Quoted);
 		const auto sendersCount = ItemsForwardSendersCount(items);
 		const auto captionsCount = ItemsForwardCaptionsCount(items);
 		const auto hasOnlyForcedForwardedInfo = !captionsCount
 			&& HasOnlyForcedForwardedInfo(items);
-		const auto dropCaptions = (now == Options::NoNamesAndCaptions);
+		const auto dropCaptions = (now == Options::UnquotedWithoutCaptions);
 
 		AddFilledSkip(bottom);
 
@@ -974,8 +974,8 @@ void DraftOptionsBox(
 					: &st::menuIconUserHide }
 			)->setClickedCallback([=] {
 				state->forward.options = dropNames
-					? Options::PreserveInfo
-					: Options::NoSenderNames;
+					? Options::Quoted
+					: Options::UnquotedWithCaptions;
 				state->shown.force_assign(Section::Forward);
 			});
 		}
@@ -995,8 +995,8 @@ void DraftOptionsBox(
 					: &st::menuIconCaptionHide }
 			)->setClickedCallback([=] {
 				state->forward.options = dropCaptions
-					? Options::NoSenderNames
-					: Options::NoNamesAndCaptions;
+					? Options::UnquotedWithCaptions
+					: Options::UnquotedWithoutCaptions;
 				state->shown.force_assign(Section::Forward);
 			});
 		}

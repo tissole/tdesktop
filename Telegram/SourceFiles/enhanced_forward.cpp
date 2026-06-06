@@ -51,24 +51,18 @@ bool isForwardNeeded(not_null<HistoryItem*> item) {
 		return true;
 	}
 	const auto sourcePeer = item->history()->peer;
+	const auto media = item->media();
+	const auto hasMedia = (media != nullptr);
+	LOG(("Enhanced Forward: checking item %1, peer=%2, hasMedia=%3"
+		).arg(item->id.bare
+		).arg(sourcePeer->name()
+		).arg(hasMedia ? 1 : 0));
 	if (const auto channel = sourcePeer->asChannel()) {
 		if (channel->flags() & ChannelData::Flag::NoForwards) {
 			LOG(("Enhanced Forward: item %1 blocked by channel NoForwards"
 				).arg(item->id.bare));
 			return true;
 		}
-		if (channel->isMinimalLoaded()) {
-			LOG(("Enhanced Forward: item %1 channel is minimal, "
-				"treating as restricted"
-				).arg(item->id.bare));
-			return true;
-		}
-		LOG(("Enhanced Forward: item %1 is CHANNEL, flags=%2, "
-			"hasNoForwards=%3, isMin=%4"
-			).arg(item->id.bare
-			).arg(uint64(channel->flags().value())
-			).arg((bool)(channel->flags() & ChannelData::Flag::NoForwards)
-			).arg(channel->isMinimalLoaded()));
 	}
 	if (const auto user = sourcePeer->asUser()) {
 		if (user->flags() & UserDataFlag::NoForwardsPeerEnabled) {
@@ -84,6 +78,8 @@ bool isForwardNeeded(not_null<HistoryItem*> item) {
 			return true;
 		}
 	}
+	LOG(("Enhanced Forward: item %1 NOT restricted, using normal forward"
+		).arg(item->id.bare));
 	return false;
 }
 
