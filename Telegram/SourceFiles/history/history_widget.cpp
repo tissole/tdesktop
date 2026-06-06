@@ -911,7 +911,6 @@ HistoryWidget::HistoryWidget(
 			const auto unavailable = _peer->computeUnavailableReason();
 			if (!unavailable.isEmpty()) {
 				const auto account = not_null(&_peer->account());
-				closeCurrent();
 				if (const auto primary = Core::App().windowFor(account)) {
 					primary->showToast(unavailable);
 				}

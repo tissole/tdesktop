@@ -1380,13 +1380,9 @@ void MainWidget::showHistory(
 		}
 		const auto unavailable = peer->computeUnavailableReason();
 		if (!unavailable.isEmpty()) {
-			if (!isPrimary()) {
-				_controller->window().close();
-			} else if (params.activation != anim::activation::background) {
-				_controller->show(Ui::MakeInformBox(unavailable));
-				_controller->window().activate();
+			if (params.activation != anim::activation::background) {
+				_controller->showToast(unavailable);
 			}
-			return;
 		}
 	}
 	if ((IsServerMsgId(showAtMsgId) || Data::IsScheduledMsgId(showAtMsgId))
