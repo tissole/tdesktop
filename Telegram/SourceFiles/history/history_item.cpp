@@ -4070,13 +4070,6 @@ EffectId HistoryItem::effectId() const {
 }
 
 QString HistoryItem::computeUnavailableReason() const {
-	if (const auto restrictions = Get<HistoryMessageRestrictions>()) {
-		_flags |= MessageFlag::HasRestrictions;
-		_history->owner().registerRestricted(this, restrictions->reasons);
-		return Data::UnavailableReason::Compute(
-			&history()->session(),
-			restrictions->reasons);
-	}
 	return QString();
 }
 

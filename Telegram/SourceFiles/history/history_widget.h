@@ -172,6 +172,23 @@ public:
 	void loadMessages();
 	void loadMessagesDown();
 	void firstLoadMessages();
+	void loadTakeoutChannelMessages(
+		not_null<History*> history,
+		MsgId offsetId,
+		int offset,
+		int loadCount,
+		mtpRequestId &requestSlot,
+		int maxId = 0,
+		int minId = 0);
+	void sendTakeoutHistoryRequest(
+		not_null<History*> history,
+		MsgId offsetId,
+		int offset,
+		int loadCount,
+		mtpRequestId &requestSlot,
+		int maxId = 0,
+		int minId = 0);
+	void finishTakeoutIfNeeded();
 	void delayedShowAt(MsgId showAtMsgId, const Window::SectionShow &params);
 
 	bool updateReplaceMediaButton();
@@ -794,6 +811,7 @@ private:
 	int _firstLoadRequest = 0; // Not real mtpRequestId.
 	int _preloadRequest = 0; // Not real mtpRequestId.
 	int _preloadDownRequest = 0; // Not real mtpRequestId.
+	bool _takeoutInitInProgress = false;
 
 	MsgId _delayedShowAtMsgId = -1;
 	Window::SectionShow _delayedShowAtMsgParams;

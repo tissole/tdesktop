@@ -148,6 +148,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "menu/menu_send.h"
 #include "menu/menu_timecode_action.h"
 #include "mtproto/mtproto_config.h"
+#include "mtproto/core_types.h"
 #include "lang/lang_keys.h"
 #include "settings/business/settings_quick_replies.h"
 #include "settings/settings_credits_graphics.h"
@@ -2355,6 +2356,10 @@ void HistoryWidget::fastShowAtEnd(not_null<History*> history) {
 	if (_history != history) {
 		return;
 	}
+	LOG(("fastShowAtEnd: peer=%1, isReady=%2, firstLoadRequest=%3")
+		.arg(_history->peer->name())
+		.arg(Logs::b(_history->isReadyFor(_showAtMsgId)))
+		.arg(_firstLoadRequest));
 
 	clearAllLoadRequests();
 	setMsgId(ShowAtUnreadMsgId);
@@ -2657,6 +2662,10 @@ void HistoryWidget::showHistory(
 		_chooseTheme = nullptr;
 		_membersDropdown.destroy();
 		_scrollToAnimation.stop();
+
+		finishTakeoutIfNeeded();
+		_takeoutInitInProgress = false;
+		session().api().setTakeoutBypass(false);
 
 		setHistory(nullptr);
 		_list = nullptr;
@@ -4062,6 +4071,16 @@ void HistoryWidget::messagesReceived(
 		peer->processTopics(d.vtopics());
 		histList = &d.vmessages().v;
 		count = histList->size();
+		if (peer->isChannel()) {
+			auto mediaCount = 0, restCount = 0, totalCount = 0;
+			for (const auto &msg : *histList) {
+				if (msg.type() != mtpc_message) continue;
+				totalCount++;
+				if (msg.c_message().vmedia()) mediaCount++;
+				if (msg.c_message().vrestriction_reason()) restCount++;
+			}
+			LOG(("RESTR_DEBUG messages: peer=%1 total=%2 media=%3 rest=%4").arg(peer->name()).arg(totalCount).arg(mediaCount).arg(restCount));
+		}
 	} break;
 	case mtpc_messages_messagesSlice: {
 		auto &d(messages.c_messages_messagesSlice());
@@ -4070,6 +4089,16 @@ void HistoryWidget::messagesReceived(
 		peer->processTopics(d.vtopics());
 		histList = &d.vmessages().v;
 		count = d.vcount().v;
+		if (peer->isChannel()) {
+			auto mediaCount = 0, restCount = 0, totalCount = 0;
+			for (const auto &msg : *histList) {
+				if (msg.type() != mtpc_message) continue;
+				totalCount++;
+				if (msg.c_message().vmedia()) mediaCount++;
+				if (msg.c_message().vrestriction_reason()) restCount++;
+			}
+			LOG(("RESTR_DEBUG messagesSlice: peer=%1 total=%2 media=%3 rest=%4").arg(peer->name()).arg(totalCount).arg(mediaCount).arg(restCount));
+		}
 	} break;
 	case mtpc_messages_channelMessages: {
 		auto &d(messages.c_messages_channelMessages());
@@ -4084,6 +4113,32 @@ void HistoryWidget::messagesReceived(
 		peer->processTopics(d.vtopics());
 		histList = &d.vmessages().v;
 		count = d.vcount().v;
+		if (peer->isChannel()) {
+			auto mediaCount = 0, restCount = 0, totalCount = 0;
+			QString firstMediaInfo = u"none"_q;
+			for (const auto &msg : *histList) {
+				if (msg.type() != mtpc_message) continue;
+				totalCount++;
+				if (msg.c_message().vmedia()) {
+					mediaCount++;
+					if (firstMediaInfo == u"none"_q) {
+						const auto &media = *msg.c_message().vmedia();
+						if (media.type() == mtpc_messageMediaPhoto) firstMediaInfo = u"photo"_q;
+						else if (media.type() == mtpc_messageMediaDocument) firstMediaInfo = u"document"_q;
+						else if (media.type() == mtpc_messageMediaWebPage) firstMediaInfo = u"webpage"_q;
+						else firstMediaInfo = u"other:%1"_q.arg(media.type());
+					}
+				}
+				if (msg.c_message().vrestriction_reason()) restCount++;
+			}
+			LOG(("RESTR_DEBUG channelMessages: peer=%1 total=%2 media=%3 rest=%4 firstMedia=%5")
+				.arg(peer->name()).arg(totalCount).arg(mediaCount).arg(restCount).arg(firstMediaInfo));
+			if (totalCount > 0) {
+				const auto &first = histList->front().c_message();
+				LOG(("MSG_DEBUG: first msg text='%1'")
+					.arg(qs(first.vmessage()).left(80)));
+			}
+		}
 	} break;
 	case mtpc_messages_messagesNotModified: {
 		LOG(("API Error: received messages.messagesNotModified! "
@@ -4206,6 +4261,10 @@ void HistoryWidget::checkActivation() {
 }
 
 void HistoryWidget::firstLoadMessages() {
+	LOG(("firstLoadMessages ENTERED: peer=%1, _history=%2, _firstLoadRequest=%3")
+		.arg(_history ? _history->peer->name() : "null")
+		.arg(Logs::b(_history != nullptr))
+		.arg(_firstLoadRequest));
 	if (!_history || _firstLoadRequest) {
 		return;
 	}
@@ -4251,10 +4310,20 @@ void HistoryWidget::firstLoadMessages() {
 	const auto historyHash = uint64(0);
 
 	const auto history = from;
+
+	if (!session().api().takeoutBypass() && history->peer->isChannel()) {
+		LOG(("firstLoadMessages: channel '%1', using takeout path")
+			.arg(history->peer->name()));
+		loadTakeoutChannelMessages(history, offsetId, offset, loadCount * 2, _firstLoadRequest);
+		return;
+	}
+
 	const auto type = Data::Histories::RequestType::History;
 	auto &histories = history->owner().histories();
 	_firstLoadRequest = histories.sendRequest(history, type, [=](
 			Fn<void()> finish) {
+		LOG(("firstLoadMessages: offsetId=%1, offset=%2, loadCount=%3, peerInputType=%4, unavailable=%5")
+			.arg(offsetId.bare).arg(offset).arg(loadCount).arg(int(history->peer->input().type())).arg(history->peer->computeUnavailableReason()));
 		return history->session().api().request(MTPmessages_GetHistory(
 			history->peer->input(),
 			MTP_int(offsetId),
@@ -4272,6 +4341,103 @@ void HistoryWidget::firstLoadMessages() {
 			finish();
 		}).send();
 	});
+}
+
+void HistoryWidget::loadTakeoutChannelMessages(
+		not_null<History*> history,
+		MsgId offsetId,
+		int offset,
+		int loadCount,
+		mtpRequestId &requestSlot,
+		int maxId,
+		int minId) {
+	if (session().api().takeoutId().has_value()) {
+		sendTakeoutHistoryRequest(history, offsetId, offset, loadCount, requestSlot, maxId, minId);
+		return;
+	}
+	if (_takeoutInitInProgress) {
+		return;
+	}
+
+	_takeoutInitInProgress = true;
+	auto &api = session().api();
+	const auto weak = base::make_weak(this);
+	const auto requestSlotPtr = &requestSlot;
+	api.request(MTPaccount_InitTakeoutSession(
+		MTPaccount_initTakeoutSession(
+			MTP_flags(MTPaccount_initTakeoutSession::Flag::f_message_channels),
+			{}))
+	).done([=](const MTPaccount_Takeout &result) {
+		if (!weak) return;
+		session().api().setTakeoutId(result.data().vid().v);
+		session().api().setTakeoutPeerId(history->peer->id);
+		_takeoutInitInProgress = false;
+		sendTakeoutHistoryRequest(history, offsetId, offset, loadCount, *requestSlotPtr, maxId, minId);
+	}).fail([=](const MTP::Error &error) {
+		LOG(("Takeout init failed for '%1': %2, falling back")
+			.arg(history->peer->name()).arg(error.type()));
+		if (!weak) return;
+		_takeoutInitInProgress = false;
+		session().api().setTakeoutPeerId(0);
+		session().api().setTakeoutBypass(true);
+		firstLoadMessages();
+	}).toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)).send();
+}
+
+void HistoryWidget::sendTakeoutHistoryRequest(
+		not_null<History*> history,
+		MsgId offsetId,
+		int offset,
+		int loadCount,
+		mtpRequestId &requestSlot,
+		int maxId,
+		int minId) {
+	if (!session().api().takeoutId().has_value()) {
+		LOG(("sendTakeoutHistoryRequest: no takeout ID, init new session"));
+		loadTakeoutChannelMessages(history, offsetId, offset, loadCount, requestSlot, maxId, minId);
+		return;
+	}
+
+	const auto offsetDate = 0;
+	const auto historyHash = uint64(0);
+	const auto type = Data::Histories::RequestType::History;
+	auto &histories = history->owner().histories();
+	const auto requestSlotPtr = &requestSlot;
+	requestSlot = histories.sendRequest(history, type, [=](Fn<void()> finish) {
+		return session().api().request(
+			MTPInvokeWithTakeout<MTPmessages_GetHistory>(
+				MTP_long(*session().api().takeoutId()),
+				MTPmessages_GetHistory(
+					history->peer->input(),
+					MTP_int(offsetId),
+					MTP_int(offsetDate),
+					MTP_int(offset),
+					MTP_int(loadCount),
+					MTP_int(maxId),
+					MTP_int(minId),
+					MTP_long(historyHash)))
+		).done([=](const MTPmessages_Messages &result) {
+			messagesReceived(history->peer, result, *requestSlotPtr);
+			finish();
+		}).fail([=](const MTP::Error &error) {
+			messagesFailed(error, *requestSlotPtr);
+			finish();
+		}).toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)).send();
+	});
+}
+
+void HistoryWidget::finishTakeoutIfNeeded() {
+	if (!session().api().takeoutId().has_value()) return;
+
+	const auto id = *session().api().takeoutId();
+	session().api().setTakeoutId(std::nullopt);
+	session().api().setTakeoutPeerId(0);
+	auto &api = session().api();
+	api.request(MTPInvokeWithTakeout<MTPaccount_FinishTakeoutSession>(
+		MTP_long(id),
+		MTPaccount_FinishTakeoutSession(
+			MTP_flags(0)))
+	).toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)).send();
 }
 
 void HistoryWidget::loadMessages() {
@@ -4297,6 +4463,12 @@ void HistoryWidget::loadMessages() {
 	const auto loadCount = offsetId
 		? kMessagesPerPage
 		: kMessagesPerPageFirst;
+
+	if (!session().api().takeoutBypass() && from->peer->isChannel()) {
+		const auto channelLoadCount = loadCount * 2;
+		loadTakeoutChannelMessages(from, offsetId, addOffset, channelLoadCount, _preloadRequest);
+		return;
+	}
 	const auto offsetDate = 0;
 	const auto maxId = 0;
 	const auto minId = 0;
@@ -4356,12 +4528,32 @@ void HistoryWidget::loadMessagesDown() {
 	const auto loadCount = kMessagesPerPage;
 	auto addOffset = -loadCount;
 	auto offsetId = from->maxMsgId();
+
 	if (!offsetId) {
 		if (loadMigrated || !_migrated) {
 			return;
 		}
 		++offsetId;
 		++addOffset;
+	}
+
+	if (!session().api().takeoutBypass() && from->peer->isChannel()) {
+		const auto maxMsg = from->maxMsgId();
+		if (maxMsg && !from->loadedAtBottom()) {
+			const auto channelLoadCount = loadCount * 2;
+			const auto upperBound = maxMsg + channelLoadCount + 1;
+			loadTakeoutChannelMessages(
+				from,
+				upperBound,
+				0,
+				channelLoadCount,
+				_preloadDownRequest,
+				0,
+				maxMsg.bare);
+		} else {
+			loadTakeoutChannelMessages(from, offsetId + 1, addOffset, loadCount, _preloadDownRequest);
+		}
+		return;
 	}
 	const auto offsetDate = 0;
 	const auto maxId = 0;
@@ -4404,6 +4596,9 @@ void HistoryWidget::delayedShowAt(
 	if (!_history) {
 		return;
 	}
+	LOG(("delayedShowAt ENTERED: peer=%1, msgId=%2")
+		.arg(_history->peer->name())
+		.arg(showAtMsgId.bare));
 	_delayedShowAtMsgParams = params;
 	if (_delayedShowAtRequest && _delayedShowAtMsgId == showAtMsgId) {
 		return;
@@ -4447,11 +4642,25 @@ void HistoryWidget::delayedShowAt(
 			offsetId = -_delayedShowAtMsgId;
 		}
 	}
+
+	if (!session().api().takeoutBypass() && from->peer->isChannel()) {
+		if (_delayedShowAtRequest) {
+			return;
+		}
+		if (_migrated) {
+			_migrated->clear(History::ClearType::Unload);
+		}
+		_history->clear(History::ClearType::Unload);
+		LOG(("delayedShowAt: channel '%1', using takeout path")
+			.arg(from->peer->name()));
+		loadTakeoutChannelMessages(from, offsetId, offset, loadCount * 2, _delayedShowAtRequest);
+		return;
+	}
+
 	const auto offsetDate = 0;
 	const auto maxId = 0;
 	const auto minId = 0;
 	const auto historyHash = uint64(0);
-
 	const auto history = from;
 	const auto type = Data::Histories::RequestType::History;
 	auto &histories = history->owner().histories();
@@ -10325,6 +10534,7 @@ HistoryWidget::~HistoryWidget() {
 		// Saving a draft on account switching.
 		saveFieldToHistoryLocalDraft();
 		session().api().saveDraftToCloudDelayed(_history);
+		finishTakeoutIfNeeded();
 		setHistory(nullptr);
 
 		session().data().itemVisibilitiesUpdated();

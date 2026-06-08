@@ -267,17 +267,27 @@ SearchResult ParseSearchResult(
 		}
 	}
 	if (messageId && result.messageIds.empty()) {
-		result.noSkipRange = [&]() -> MsgRange {
-			switch (direction) {
-			case Data::LoadDirection::Before: // All old loaded.
-				return { 0, result.noSkipRange.till };
-			case Data::LoadDirection::Around: // All loaded.
-				return { 0, ServerMaxMsgId };
-			case Data::LoadDirection::After: // All new loaded.
-				return { result.noSkipRange.from, ServerMaxMsgId };
-			}
-			Unexpected("Direction in ParseSearchResult");
-		}();
+		// Only mark the range as exhausted when fullCount is truly 0 or unknown.
+		// If the server returned count > 0 but no messages in this slice
+		// (e.g. a takeout-wrapped search that returns the total count but no
+		// results for this offset range), keep noSkipRange narrow so the storage
+		// does not falsely record the entire history as fully scanned. Widening
+		// to {0, ServerMaxMsgId} would set skippedAfter=0 in the storage query,
+		// stopping infinite scroll even though older items still exist.
+		const auto trulyExhausted = (result.fullCount == 0);
+		if (trulyExhausted) {
+			result.noSkipRange = [&]() -> MsgRange {
+				switch (direction) {
+				case Data::LoadDirection::Before: // All old loaded.
+					return { 0, result.noSkipRange.till };
+				case Data::LoadDirection::Around: // All loaded.
+					return { 0, ServerMaxMsgId };
+				case Data::LoadDirection::After: // All new loaded.
+					return { result.noSkipRange.from, ServerMaxMsgId };
+				}
+				Unexpected("Direction in ParseSearchResult");
+			}();
+		}
 	}
 	return result;
 }

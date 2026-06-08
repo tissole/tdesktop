@@ -3341,10 +3341,10 @@ void ApiWrap::requestSharedMedia(
 	const auto history = _session->data().history(peer);
 	auto &histories = history->owner().histories();
 	const auto requestType = Data::Histories::RequestType::History;
+	const auto takeout = (_takeoutId && _takeoutPeerId == peer->id)
+		? _takeoutId : std::nullopt;
 	histories.sendRequest(history, requestType, [=](Fn<void()> finish) {
-		return request(
-			std::move(*prepared)
-		).done([=](const Api::SearchRequestResult &result) {
+		const auto sharedDone = [=](const Api::SearchRequestResult &result) {
 			_sharedMediaRequests.remove(key);
 			auto parsed = Api::ParseSearchResult(
 				peer,
@@ -3359,12 +3359,43 @@ void ApiWrap::requestSharedMedia(
 				type,
 				std::move(parsed));
 			finish();
-		}).fail([=] {
+		};
+		const auto sharedFail = [=] {
 			_sharedMediaRequests.remove(key);
 			finish();
-		}).send();
+		};
+		if (takeout) {
+			return this->request(
+				MTPInvokeWithTakeout<MTPmessages_Search>(
+					MTP_long(*takeout),
+					std::move(*prepared))
+			).done(sharedDone).fail(sharedFail)
+			.toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)).send();
+		} else {
+			return this->request(std::move(*prepared)
+			).done(sharedDone).fail(sharedFail).send();
+		}
 	});
 	_sharedMediaRequests.emplace(key);
+}
+
+void ApiWrap::setTakeoutId(std::optional<uint64> id) {
+	_takeoutId = id;
+}
+std::optional<uint64> ApiWrap::takeoutId() const {
+	return _takeoutId;
+}
+void ApiWrap::setTakeoutBypass(bool bypass) {
+	_takeoutBypass = bypass;
+}
+bool ApiWrap::takeoutBypass() const {
+	return _takeoutBypass;
+}
+void ApiWrap::setTakeoutPeerId(PeerId peerId) {
+	_takeoutPeerId = peerId;
+}
+PeerId ApiWrap::takeoutPeerId() const {
+	return _takeoutPeerId;
 }
 
 void ApiWrap::sharedMediaDone(

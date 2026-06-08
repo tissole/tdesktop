@@ -301,6 +301,12 @@ public:
 		Storage::SharedMediaType type,
 		MsgId messageId,
 		SliceType slice);
+	void setTakeoutId(std::optional<uint64> id);
+	[[nodiscard]] std::optional<uint64> takeoutId() const;
+	void setTakeoutBypass(bool bypass);
+	[[nodiscard]] bool takeoutBypass() const;
+	void setTakeoutPeerId(PeerId peerId);
+	[[nodiscard]] PeerId takeoutPeerId() const;
 	mtpRequestId requestGlobalMedia(
 		Storage::SharedMediaType type,
 		const QString &query,
@@ -818,5 +824,9 @@ private:
 
 	base::flat_map<FullMsgId, QString> _unlikelyMessageLinks;
 	base::flat_map<FullStoryId, QString> _unlikelyStoryLinks;
+
+	std::optional<uint64> _takeoutId;
+	PeerId _takeoutPeerId = 0;
+	bool _takeoutBypass = false;
 
 };
