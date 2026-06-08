@@ -3189,6 +3189,10 @@ void HistoryWidget::clearAllLoadRequests() {
 		histories.cancelRequest(_preloadDownRequest);
 		_preloadDownRequest = 0;
 	}
+	if (_takeoutInitRequestId) {
+		_history->session().api().request(
+			base::take(_takeoutInitRequestId)).cancel();
+	}
 }
 
 bool HistoryWidget::updateReplaceMediaButton() {
@@ -4071,7 +4075,7 @@ void HistoryWidget::messagesReceived(
 		peer->processTopics(d.vtopics());
 		histList = &d.vmessages().v;
 		count = histList->size();
-		if (peer->isChannel()) {
+		{
 			auto mediaCount = 0, restCount = 0, totalCount = 0;
 			for (const auto &msg : *histList) {
 				if (msg.type() != mtpc_message) continue;
@@ -4089,7 +4093,7 @@ void HistoryWidget::messagesReceived(
 		peer->processTopics(d.vtopics());
 		histList = &d.vmessages().v;
 		count = d.vcount().v;
-		if (peer->isChannel()) {
+		{
 			auto mediaCount = 0, restCount = 0, totalCount = 0;
 			for (const auto &msg : *histList) {
 				if (msg.type() != mtpc_message) continue;
@@ -4113,7 +4117,7 @@ void HistoryWidget::messagesReceived(
 		peer->processTopics(d.vtopics());
 		histList = &d.vmessages().v;
 		count = d.vcount().v;
-		if (peer->isChannel()) {
+		{
 			auto mediaCount = 0, restCount = 0, totalCount = 0;
 			QString firstMediaInfo = u"none"_q;
 			for (const auto &msg : *histList) {
@@ -4133,7 +4137,8 @@ void HistoryWidget::messagesReceived(
 			}
 			LOG(("RESTR_DEBUG channelMessages: peer=%1 total=%2 media=%3 rest=%4 firstMedia=%5")
 				.arg(peer->name()).arg(totalCount).arg(mediaCount).arg(restCount).arg(firstMediaInfo));
-			if (totalCount > 0) {
+			if (totalCount > 0
+				&& histList->front().type() == mtpc_message) {
 				const auto &first = histList->front().c_message();
 				LOG(("MSG_DEBUG: first msg text='%1'")
 					.arg(qs(first.vmessage()).left(80)));
@@ -4363,12 +4368,13 @@ void HistoryWidget::loadTakeoutChannelMessages(
 	auto &api = session().api();
 	const auto weak = base::make_weak(this);
 	const auto requestSlotPtr = &requestSlot;
-	api.request(MTPaccount_InitTakeoutSession(
+	_takeoutInitRequestId = api.request(MTPaccount_InitTakeoutSession(
 		MTPaccount_initTakeoutSession(
 			MTP_flags(MTPaccount_initTakeoutSession::Flag::f_message_channels),
 			{}))
 	).done([=](const MTPaccount_Takeout &result) {
 		if (!weak) return;
+		_takeoutInitRequestId = 0;
 		session().api().setTakeoutId(result.data().vid().v);
 		session().api().setTakeoutPeerId(history->peer->id);
 		_takeoutInitInProgress = false;
@@ -4377,6 +4383,7 @@ void HistoryWidget::loadTakeoutChannelMessages(
 		LOG(("Takeout init failed for '%1': %2, falling back")
 			.arg(history->peer->name()).arg(error.type()));
 		if (!weak) return;
+		_takeoutInitRequestId = 0;
 		_takeoutInitInProgress = false;
 		session().api().setTakeoutPeerId(0);
 		session().api().setTakeoutBypass(true);

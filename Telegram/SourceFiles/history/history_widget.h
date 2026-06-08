@@ -812,6 +812,7 @@ private:
 	int _preloadRequest = 0; // Not real mtpRequestId.
 	int _preloadDownRequest = 0; // Not real mtpRequestId.
 	bool _takeoutInitInProgress = false;
+	mtpRequestId _takeoutInitRequestId = 0;
 
 	MsgId _delayedShowAtMsgId = -1;
 	Window::SectionShow _delayedShowAtMsgParams;
