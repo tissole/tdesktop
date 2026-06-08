@@ -2335,7 +2335,17 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 					for (auto &value : randoms) {
 						value = base::RandomValue<MTPlong>();
 					}
-					return MTPmessages_ForwardMessages(
+					// Wrap in InvokeWithTakeout when forwarding from a NoForwards
+					// channel; the server only accepts those message IDs inside
+					// a takeout session.
+					const auto srcChannel = fromPeer->asChannel();
+					const auto needsTakeoutWrap = srcChannel
+						&& (srcChannel->flags() & ChannelData::Flag::NoForwards)
+						&& history->session().api().takeoutId().has_value()
+						&& (history->session().api().takeoutPeerId() == fromPeer->id);
+					LOG(("ShareBox buildMessage needsTakeoutWrap=%1 peer=%2")
+						.arg(needsTakeoutWrap ? 1 : 0).arg(fromPeer->name()));
+					auto fwdMsg = MTPmessages_ForwardMessages(
 						MTP_flags(flags),
 						fromPeer->input(),
 						MTP_vector<MTPint>(batchIds),
@@ -2356,6 +2366,12 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 						MTP_int(videoTimestamp.value_or(0)),
 						MTP_long(starsPaid),
 						Api::SuggestToMTP(options.suggest));
+					if (needsTakeoutWrap) {
+						return MTPInvokeWithTakeout<MTPmessages_ForwardMessages>(
+							MTP_long(*history->session().api().takeoutId()),
+							std::move(fwdMsg));
+					}
+					return std::move(fwdMsg);
 				};
 				const auto requestDone = [=](
 						const MTPUpdates &updates,

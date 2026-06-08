@@ -114,7 +114,9 @@ public:
 		MTPmessages_SendMedia,
 		MTPmessages_SendInlineBotResult,
 		MTPmessages_SendMultiMedia,
-		MTPmessages_ForwardMessages>;
+		MTPmessages_ForwardMessages,
+		MTPInvokeWithTakeout<MTPmessages_ForwardMessages>,
+		MTPInvokeWithTakeout<MTPmessages_SendMedia>>;
 	int sendPreparedMessage(
 		not_null<History*> history,
 		FullReplyTo replyTo,

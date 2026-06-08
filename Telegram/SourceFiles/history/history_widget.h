@@ -814,6 +814,17 @@ private:
 	bool _takeoutInitInProgress = false;
 	mtpRequestId _takeoutInitRequestId = 0;
 
+	struct PendingTakeoutRequest {
+		not_null<History*> history;
+		MsgId offsetId;
+		int offset = 0;
+		int loadCount = 0;
+		mtpRequestId *requestSlot = nullptr;
+		int maxId = 0;
+		int minId = 0;
+	};
+	std::optional<PendingTakeoutRequest> _pendingTakeoutRequest;
+
 	MsgId _delayedShowAtMsgId = -1;
 	Window::SectionShow _delayedShowAtMsgParams;
 	int _delayedShowAtRequest = 0; // Not real mtpRequestId.

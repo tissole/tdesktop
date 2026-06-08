@@ -1137,23 +1137,48 @@ int Histories::sendPreparedMessage(
 		return sendRequest(history, type, [=](Fn<void()> finish) {
 			const auto session = &_owner->session();
 			const auto api = &session->api();
-			history->sendRequestId = api->request(
-				base::duplicate(request)
-			).done([=](
-					const MTPUpdates &result,
-					const MTP::Response &response) {
-				api->applyUpdates(result, randomId);
-				done(result, response);
-				finish();
-			}).fail([=](
-					const MTP::Error &error,
-					const MTP::Response &response) {
-				fail(error, response);
-				finish();
-			}).afterRequest(
-				history->sendRequestId
-			).send();
-			return history->sendRequestId;
+			// Check if this is a takeout-wrapped request
+			if constexpr (requires {
+				request.c_invokeWithTakeout();
+			}) {
+				// Takeout-wrapped request: send to export DC
+				history->sendRequestId = api->request(
+					base::duplicate(request)
+				).done([=](
+						const MTPUpdates &result,
+						const MTP::Response &response) {
+					api->applyUpdates(result, randomId);
+					done(result, response);
+					finish();
+				}).fail([=](
+						const MTP::Error &error,
+						const MTP::Response &response) {
+					fail(error, response);
+					finish();
+				}).afterRequest(
+					history->sendRequestId
+				).toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)).send();
+				return history->sendRequestId;
+			} else {
+				// Normal request: send to default DC
+				history->sendRequestId = api->request(
+					base::duplicate(request)
+				).done([=](
+						const MTPUpdates &result,
+						const MTP::Response &response) {
+					api->applyUpdates(result, randomId);
+					done(result, response);
+					finish();
+				}).fail([=](
+						const MTP::Error &error,
+						const MTP::Response &response) {
+					fail(error, response);
+					finish();
+				}).afterRequest(
+					history->sendRequestId
+				).send();
+				return history->sendRequestId;
+			}
 		});
 	});
 }

@@ -4691,7 +4691,17 @@ void ApiWrap::forwardMessages(
 			} else {
 				flags &= ~SendFlag::f_top_msg_id;
 			}
-			return MTPmessages_ForwardMessages(
+			// Wrap in InvokeWithTakeout when forwarding from a NoForwards
+			// channel; the server only accepts those message IDs inside
+			// a takeout session.
+			const auto srcChannel = forwardFrom->asChannel();
+			const auto needsTakeoutWrap = srcChannel
+				&& (srcChannel->flags() & ChannelData::Flag::NoForwards)
+				&& _session->api().takeoutId().has_value()
+				&& (_session->api().takeoutPeerId() == forwardFrom->id);
+			LOG(("Enhanced Forward: buildMessage needsTakeoutWrap=%1 peer=%2")
+				.arg(needsTakeoutWrap ? 1 : 0).arg(forwardFrom->name()));
+			auto fwdMsg = MTPmessages_ForwardMessages(
 				MTP_flags(flags),
 				forwardFrom->input(),
 				MTP_vector<MTPint>(ids),
@@ -4716,6 +4726,12 @@ void ApiWrap::forwardMessages(
 				MTPint(),
 				MTP_long(starsPaid),
 				Api::SuggestToMTP(action.options.suggest));
+			if (needsTakeoutWrap) {
+				return MTPInvokeWithTakeout<MTPmessages_ForwardMessages>(
+					MTP_long(*_session->api().takeoutId()),
+					std::move(fwdMsg));
+			}
+			return std::move(fwdMsg);
 		};
 		histories.sendPreparedMessage(
 			history,
