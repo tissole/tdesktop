@@ -45,11 +45,6 @@ void fireUpdate(not_null<Main::Session*> session, const PeerId &peer) {
 } // namespace
 
 bool isForwardNeeded(not_null<HistoryItem*> item) {
-	if (item->isNoForwards()) {
-		LOG(("Enhanced Forward: item %1 blocked by per-message NoForwards"
-			).arg(item->id.bare));
-		return true;
-	}
 	const auto sourcePeer = item->history()->peer;
 	const auto media = item->media();
 	const auto hasMedia = (media != nullptr);
