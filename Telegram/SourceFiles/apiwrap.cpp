@@ -641,16 +641,31 @@ void ApiWrap::resolveMessageDatas() {
 
 	const auto ids = collectMessageIds(_messageDataRequests);
 	if (!ids.isEmpty()) {
-		const auto requestId = request(MTPmessages_GetMessages(
-			MTP_vector<MTPInputMessage>(ids)
-		)).done([=](
-				const MTPmessages_Messages &result,
-				mtpRequestId requestId) {
-			_session->data().processExistingMessages(nullptr, result);
-			finalizeMessageDataRequest(nullptr, requestId);
-		}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
-			finalizeMessageDataRequest(nullptr, requestId);
-		}).afterDelay(kSmallDelayMs).send();
+		const auto requestId = (_takeoutId && _takeoutPeerId != 0 && !peerIsChannel(_takeoutPeerId))
+			? request(MTPInvokeWithTakeout<MTPmessages_GetMessages>(
+				MTP_long(*_takeoutId),
+				MTPmessages_GetMessages(
+					MTP_vector<MTPInputMessage>(ids))
+			)).done([=](
+					const MTPmessages_Messages &result,
+					mtpRequestId requestId) {
+				_session->data().processExistingMessages(nullptr, result);
+				finalizeMessageDataRequest(nullptr, requestId);
+			}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
+				finalizeMessageDataRequest(nullptr, requestId);
+			}).afterDelay(kSmallDelayMs).toDC(
+				MTP::ShiftDcId(0, MTP::kExportDcShift)
+			).send()
+			: request(MTPmessages_GetMessages(
+				MTP_vector<MTPInputMessage>(ids)
+			)).done([=](
+					const MTPmessages_Messages &result,
+					mtpRequestId requestId) {
+				_session->data().processExistingMessages(nullptr, result);
+				finalizeMessageDataRequest(nullptr, requestId);
+			}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
+				finalizeMessageDataRequest(nullptr, requestId);
+			}).afterDelay(kSmallDelayMs).send();
 
 		for (auto &[msgId, request] : _messageDataRequests) {
 			if (request.requestId > 0) {
@@ -667,17 +682,34 @@ void ApiWrap::resolveMessageDatas() {
 		const auto ids = collectMessageIds(j->second);
 		if (!ids.isEmpty()) {
 			const auto channel = j->first;
-			const auto requestId = request(MTPchannels_GetMessages(
-				channel->inputChannel(),
-				MTP_vector<MTPInputMessage>(ids)
-			)).done([=](
-					const MTPmessages_Messages &result,
-					mtpRequestId requestId) {
-				_session->data().processExistingMessages(channel, result);
-				finalizeMessageDataRequest(channel, requestId);
-			}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
-				finalizeMessageDataRequest(channel, requestId);
-			}).afterDelay(kSmallDelayMs).send();
+			const auto requestId = (_takeoutId
+				&& channel->id == _takeoutPeerId)
+				? request(MTPInvokeWithTakeout<MTPchannels_GetMessages>(
+					MTP_long(*_takeoutId),
+					MTPchannels_GetMessages(
+						channel->inputChannel(),
+						MTP_vector<MTPInputMessage>(ids))
+				)).done([=](
+						const MTPmessages_Messages &result,
+						mtpRequestId requestId) {
+					_session->data().processExistingMessages(channel, result);
+					finalizeMessageDataRequest(channel, requestId);
+				}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
+					finalizeMessageDataRequest(channel, requestId);
+				}).afterDelay(kSmallDelayMs).toDC(
+					MTP::ShiftDcId(0, MTP::kExportDcShift)
+				).send()
+				: request(MTPchannels_GetMessages(
+					channel->inputChannel(),
+					MTP_vector<MTPInputMessage>(ids)
+				)).done([=](
+						const MTPmessages_Messages &result,
+						mtpRequestId requestId) {
+					_session->data().processExistingMessages(channel, result);
+					finalizeMessageDataRequest(channel, requestId);
+				}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
+					finalizeMessageDataRequest(channel, requestId);
+				}).afterDelay(kSmallDelayMs).send();
 
 			for (auto &[msgId, request] : j->second) {
 				if (request.requestId > 0) {
@@ -3678,6 +3710,7 @@ void ApiWrap::forwardMessages(
 		Data::ResolvedForwardDraft &&draft,
 		SendAction action,
 		FnMut<void()> &&successCallback) {
+	LOG(("TAKEOUT_TEST: ENTERED forwardMessages"));
 	Expects(!draft.items.empty());
 
 	auto enhancedItems = std::vector<not_null<HistoryItem*>>();
@@ -4691,7 +4724,9 @@ void ApiWrap::forwardMessages(
 			} else {
 				flags &= ~SendFlag::f_top_msg_id;
 			}
-			return MTPmessages_ForwardMessages(
+			// Check NoForwards: if source is a NoForwards channel and takeout
+			// is active, the existing _takeoutId branch below will wrap it.
+			auto fwdMsg = MTPmessages_ForwardMessages(
 				MTP_flags(flags),
 				forwardFrom->input(),
 				MTP_vector<MTPint>(ids),
@@ -4716,41 +4751,57 @@ void ApiWrap::forwardMessages(
 				MTPint(),
 				MTP_long(starsPaid),
 				Api::SuggestToMTP(action.options.suggest));
+			return std::move(fwdMsg);
 		};
-		histories.sendPreparedMessage(
-			history,
-			FullReplyTo{ .topicRootId = topicRootId },
-			uint64(0),
-			std::move(buildMessage),
-			[=](const MTPUpdates &result, const MTP::Response &) {
-				if (!scheduled) {
-					_session->api().updates().checkForSentToScheduled(
-						result);
+		const auto doneCallback = [=](
+				const MTPUpdates &result,
+				const MTP::Response &) {
+			if (!scheduled) {
+				_session->api().updates().checkForSentToScheduled(result);
+			}
+			if (shared && !--shared->requestsLeft) {
+				shared->callback();
+			}
+			if (peer->isSelf() && _session->premium()) {
+				ProcessRecentSelfForwards(
+					_session, result, peer->id, forwardFrom->id);
+			}
+		};
+		const auto failCallback = [=](
+				const MTP::Error &error,
+				const MTP::Response &) {
+			if (idsCopy) {
+				for (const auto &[randomId, itemId] : *idsCopy) {
+					_session->api().sendMessageFail(
+						error, peer, randomId, itemId);
 				}
-				if (shared && !--shared->requestsLeft) {
-					shared->callback();
-				}
-				if (peer->isSelf() && _session->premium()) {
-					ProcessRecentSelfForwards(
-						_session,
-						result,
-						peer->id,
-						forwardFrom->id);
-				}
-			},
-			[=](const MTP::Error &error, const MTP::Response &) {
-				if (idsCopy) {
-					for (const auto &[randomId, itemId] : *idsCopy) {
-						_session->api().sendMessageFail(
-							error,
-							peer,
-							randomId,
-							itemId);
-					}
-				} else {
-					_session->api().sendMessageFail(error, peer);
-				}
-			});
+			} else {
+				_session->api().sendMessageFail(error, peer);
+			}
+		};
+		const auto needsTakeoutForward = (!forwardFrom->computeUnavailableReason().isEmpty()
+			|| forwardFrom->id == _takeoutPeerId)
+			&& _takeoutId.has_value();
+		if (needsTakeoutForward) {
+			auto built = buildMessage(
+				history,
+				FullReplyTo{ .topicRootId = topicRootId });
+			const auto &forwardMsg = std::get<MTPmessages_ForwardMessages>(built);
+			request(
+				MTPInvokeWithTakeout<MTPmessages_ForwardMessages>(
+					MTP_long(*_takeoutId),
+					forwardMsg)
+			).done(doneCallback).fail(failCallback)
+			.toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)).send();
+		} else {
+			histories.sendPreparedMessage(
+				history,
+				FullReplyTo{ .topicRootId = topicRootId },
+				uint64(0),
+				std::move(buildMessage),
+				doneCallback,
+				failCallback);
+		}
     
 		ids.resize(0);
 		randomIds.resize(0);
