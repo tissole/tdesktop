@@ -2663,7 +2663,7 @@ void HistoryWidget::showHistory(
 		_membersDropdown.destroy();
 		_scrollToAnimation.stop();
 
-		finishTakeoutIfNeeded();
+		// finishTakeoutIfNeeded();  // Keep takeout alive for subsequent operations
 		_takeoutInitInProgress = false;
 		session().api().setTakeoutBypass(false);
 
@@ -4323,10 +4323,11 @@ void HistoryWidget::firstLoadMessages() {
 
 	const auto history = from;
 
-	if (!session().api().takeoutBypass() && history->peer->isChannel()) {
-		LOG(("firstLoadMessages: channel '%1', using takeout path")
+	if (!session().api().takeoutBypass()
+		&& !history->peer->computeUnavailableReason().isEmpty()) {
+		LOG(("firstLoadMessages: peer '%1', using takeout path")
 			.arg(history->peer->name()));
-		loadTakeoutChannelMessages(history, offsetId, offset, loadCount * 2, _firstLoadRequest);
+		loadTakeoutMessages(history, offsetId, offset, loadCount * 2, _firstLoadRequest);
 		return;
 	}
 
@@ -4355,7 +4356,7 @@ void HistoryWidget::firstLoadMessages() {
 	});
 }
 
-void HistoryWidget::loadTakeoutChannelMessages(
+void HistoryWidget::loadTakeoutMessages(
 		not_null<History*> history,
 		MsgId offsetId,
 		int offset,
@@ -4363,7 +4364,7 @@ void HistoryWidget::loadTakeoutChannelMessages(
 		mtpRequestId &requestSlot,
 		int maxId,
 		int minId) {
-	LOG(("LOAD_DEBUG loadTakeoutChannelMessages: peer=%1 offsetId=%2 offset=%3 loadCount=%4 takeoutExists=%5 initInProgress=%6")
+	LOG(("LOAD_DEBUG loadTakeoutMessages: peer=%1 offsetId=%2 offset=%3 loadCount=%4 takeoutExists=%5 initInProgress=%6")
 		.arg(history->peer->name()).arg(offsetId.bare).arg(offset).arg(loadCount)
 		.arg(Logs::b(session().api().takeoutId().has_value()))
 		.arg(Logs::b(_takeoutInitInProgress)));
@@ -4371,32 +4372,33 @@ void HistoryWidget::loadTakeoutChannelMessages(
 		sendTakeoutHistoryRequest(history, offsetId, offset, loadCount, requestSlot, maxId, minId);
 		return;
 	}
+	_pendingTakeoutRequest = PendingTakeoutRequest{
+		history, offsetId, offset, loadCount, &requestSlot, maxId, minId};
 	if (_takeoutInitInProgress) {
-		// Queue the most recent request so it replays after init completes.
-		// (Only one pending slot needed: init always calls firstLoadMessages
-		// which recomputes params, but delayedShowAt needs the exact msgId.)
-		_pendingTakeoutRequest = PendingTakeoutRequest{
-			history, offsetId, offset, loadCount, &requestSlot, maxId, minId};
 		return;
 	}
 
 	_takeoutInitInProgress = true;
 	auto &api = session().api();
 	const auto weak = base::make_weak(this);
-	const auto requestSlotPtr = &requestSlot;
+	const auto retryLimit = 2;
+	_takeoutInitRetries = 0;
+	auto requestSlotPtr = &requestSlot;
 	_takeoutInitRequestId = api.request(MTPaccount_InitTakeoutSession(
 		MTPaccount_initTakeoutSession(
-			MTP_flags(MTPaccount_initTakeoutSession::Flag::f_message_channels),
+			MTP_flags(MTPaccount_initTakeoutSession::Flag::f_message_users
+				| MTPaccount_initTakeoutSession::Flag::f_message_chats
+				| MTPaccount_initTakeoutSession::Flag::f_message_megagroups
+				| MTPaccount_initTakeoutSession::Flag::f_message_channels
+				| MTPaccount_initTakeoutSession::Flag::f_files),
 			{}))
 	).done([=](const MTPaccount_Takeout &result) {
 		LOG(("LOAD_DEBUG takeoutInit done: takeoutId=%1 peer=%2").arg(result.data().vid().v).arg(history->peer->name()));
 		if (!weak) return;
 		_takeoutInitRequestId = 0;
+		_takeoutInitInProgress = false;
 		session().api().setTakeoutId(result.data().vid().v);
 		session().api().setTakeoutPeerId(history->peer->id);
-		_takeoutInitInProgress = false;
-		// Replay exact pending request if one was queued during init,
-		// otherwise fall back to firstLoadMessages() for the normal path.
 		if (_pendingTakeoutRequest) {
 			const auto pending = *_pendingTakeoutRequest;
 			_pendingTakeoutRequest = std::nullopt;
@@ -4412,16 +4414,20 @@ void HistoryWidget::loadTakeoutChannelMessages(
 			firstLoadMessages();
 		}
 	}).fail([=](const MTP::Error &error) {
-		LOG(("LOAD_DEBUG takeoutInit FAILED for '%1': %2, falling back")
+		LOG(("LOAD_DEBUG takeoutInit FAILED for '%1': %2")
 			.arg(history->peer->name()).arg(error.type()));
 		if (!weak) return;
 		_takeoutInitRequestId = 0;
 		_takeoutInitInProgress = false;
 		_pendingTakeoutRequest = std::nullopt;
-		session().api().setTakeoutPeerId(0);
-		session().api().setTakeoutBypass(true);
-		firstLoadMessages();
-	}).toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)).send();
+		if (++_takeoutInitRetries < retryLimit) {
+			loadTakeoutMessages(history, offsetId, offset, loadCount, *requestSlotPtr, maxId, minId);
+		} else {
+			session().api().setTakeoutPeerId(0);
+			session().api().setTakeoutBypass(true);
+			firstLoadMessages();
+		}
+	}).send();
 }
 
 void HistoryWidget::sendTakeoutHistoryRequest(
@@ -4436,7 +4442,7 @@ void HistoryWidget::sendTakeoutHistoryRequest(
 		.arg(history->peer->name()).arg(offsetId.bare).arg(offset).arg(loadCount).arg(int(requestSlot)).arg(maxId).arg(minId));
 	if (!session().api().takeoutId().has_value()) {
 		LOG(("LOAD_DEBUG sendTakeoutHistoryRequest: no takeout ID, init new session"));
-		loadTakeoutChannelMessages(history, offsetId, offset, loadCount, requestSlot, maxId, minId);
+		loadTakeoutMessages(history, offsetId, offset, loadCount, requestSlot, maxId, minId);
 		return;
 	}
 
@@ -4506,9 +4512,10 @@ void HistoryWidget::loadMessages() {
 		? kMessagesPerPage
 		: kMessagesPerPageFirst;
 
-	if (!session().api().takeoutBypass() && from->peer->isChannel()) {
-		const auto channelLoadCount = loadCount * 2;
-		loadTakeoutChannelMessages(from, offsetId, addOffset, channelLoadCount, _preloadRequest);
+	if (!session().api().takeoutBypass()
+		&& !from->peer->computeUnavailableReason().isEmpty()) {
+		const auto tloadCount = loadCount * 2;
+		loadTakeoutMessages(from, offsetId, addOffset, tloadCount, _preloadRequest);
 		return;
 	}
 	const auto offsetDate = 0;
@@ -4579,21 +4586,22 @@ void HistoryWidget::loadMessagesDown() {
 		++addOffset;
 	}
 
-	if (!session().api().takeoutBypass() && from->peer->isChannel()) {
+	if (!session().api().takeoutBypass()
+		&& !from->peer->computeUnavailableReason().isEmpty()) {
 		const auto maxMsg = from->maxMsgId();
 		if (maxMsg && !from->loadedAtBottom()) {
-			const auto channelLoadCount = loadCount * 2;
-			const auto upperBound = maxMsg + channelLoadCount + 1;
-			loadTakeoutChannelMessages(
+			const auto tloadCount = loadCount * 2;
+			const auto upperBound = maxMsg + tloadCount + 1;
+			loadTakeoutMessages(
 				from,
 				upperBound,
 				0,
-				channelLoadCount,
+				tloadCount,
 				_preloadDownRequest,
 				0,
 				maxMsg.bare);
 		} else {
-			loadTakeoutChannelMessages(from, offsetId + 1, addOffset, loadCount, _preloadDownRequest);
+			loadTakeoutMessages(from, offsetId + 1, addOffset, loadCount, _preloadDownRequest);
 		}
 		return;
 	}
@@ -4685,7 +4693,8 @@ void HistoryWidget::delayedShowAt(
 		}
 	}
 
-	if (!session().api().takeoutBypass() && from->peer->isChannel()) {
+	if (!session().api().takeoutBypass()
+		&& !from->peer->computeUnavailableReason().isEmpty()) {
 		if (_delayedShowAtRequest) {
 			return;
 		}
@@ -4693,9 +4702,9 @@ void HistoryWidget::delayedShowAt(
 			_migrated->clear(History::ClearType::Unload);
 		}
 		_history->clear(History::ClearType::Unload);
-		LOG(("delayedShowAt: channel '%1', using takeout path")
+		LOG(("delayedShowAt: peer '%1', using takeout path")
 			.arg(from->peer->name()));
-		loadTakeoutChannelMessages(from, offsetId, offset, loadCount * 2, _delayedShowAtRequest);
+		loadTakeoutMessages(from, offsetId, offset, loadCount * 2, _delayedShowAtRequest);
 		return;
 	}
 
@@ -10576,7 +10585,7 @@ HistoryWidget::~HistoryWidget() {
 		// Saving a draft on account switching.
 		saveFieldToHistoryLocalDraft();
 		session().api().saveDraftToCloudDelayed(_history);
-		finishTakeoutIfNeeded();
+		// finishTakeoutIfNeeded(); // Keep takeout alive until explicitly ended
 		setHistory(nullptr);
 
 		session().data().itemVisibilitiesUpdated();
