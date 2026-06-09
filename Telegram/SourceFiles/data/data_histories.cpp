@@ -1139,7 +1139,7 @@ int Histories::sendPreparedMessage(
 			const auto api = &session->api();
 			// Check if this is a takeout-wrapped request
 			if constexpr (requires {
-				request.c_invokeWithTakeout();
+				request.invokeWithTakeout();
 			}) {
 				// Takeout-wrapped request: send to export DC
 				history->sendRequestId = api->request(
