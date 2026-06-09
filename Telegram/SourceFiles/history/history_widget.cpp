@@ -4372,6 +4372,8 @@ void HistoryWidget::loadTakeoutMessages(
 		sendTakeoutHistoryRequest(history, offsetId, offset, loadCount, requestSlot, maxId, minId);
 		return;
 	}
+	// Always save params so the done callback replays this exact request
+	// (whether init was already running or we're about to start it now).
 	_pendingTakeoutRequest = PendingTakeoutRequest{
 		history, offsetId, offset, loadCount, &requestSlot, maxId, minId};
 	if (_takeoutInitInProgress) {
