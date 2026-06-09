@@ -172,7 +172,7 @@ public:
 	void loadMessages();
 	void loadMessagesDown();
 	void firstLoadMessages();
-	void loadTakeoutChannelMessages(
+	void loadTakeoutMessages(
 		not_null<History*> history,
 		MsgId offsetId,
 		int offset,
@@ -812,6 +812,7 @@ private:
 	int _preloadRequest = 0; // Not real mtpRequestId.
 	int _preloadDownRequest = 0; // Not real mtpRequestId.
 	bool _takeoutInitInProgress = false;
+	int _takeoutInitRetries = 0;
 	mtpRequestId _takeoutInitRequestId = 0;
 
 	struct PendingTakeoutRequest {
