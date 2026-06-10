@@ -511,6 +511,9 @@ not_null<HistoryItem*> History::createItem(
 		if (detachExistingItem) {
 			result->removeMainView();
 		}
+		message.match([&](const MTPDmessage &data) {
+			result->updateRawMtpFlags(data.vflags().v);
+		}, [](const auto &) {});
 		if (result->needsUpdateForVideoQualities(message)) {
 			owner().updateEditedMessage(message);
 		}
