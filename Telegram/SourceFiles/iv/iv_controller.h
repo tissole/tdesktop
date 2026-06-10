@@ -35,7 +35,7 @@ class FadeWrapScaled;
 
 namespace Iv {
 
-constexpr auto kTLViewerUrl = "https://tdesktop-x64.github.io/tlv/"_cs;
+constexpr auto kTLViewerUrl = "https://tissole.github.io/tlv/"_cs;
 
 struct Prepared;
 

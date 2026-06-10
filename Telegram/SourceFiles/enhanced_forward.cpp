@@ -48,33 +48,48 @@ bool isForwardNeeded(not_null<HistoryItem*> item) {
 	const auto sourcePeer = item->history()->peer;
 	const auto media = item->media();
 	const auto hasMedia = (media != nullptr);
-	LOG(("Enhanced Forward: checking item %1, peer=%2, hasMedia=%3"
-		).arg(item->id.bare
-		).arg(sourcePeer->name()
-		).arg(hasMedia ? 1 : 0));
+	const auto msgNoForwards = (item->rawMtpFlags() & (1U << 26))
+		? true
+		: false;
+	auto peerNoForwards = false;
 	if (const auto channel = sourcePeer->asChannel()) {
-		if (channel->flags() & ChannelData::Flag::NoForwards) {
-			LOG(("Enhanced Forward: item %1 blocked by channel NoForwards"
-				).arg(item->id.bare));
+		peerNoForwards = (channel->flags() & (1ULL << 20))
+			? true
+			: false;
+	} else if (const auto user = sourcePeer->asUser()) {
+		peerNoForwards = (user->flags() & (1U << 30))
+			? true
+			: false;
+	} else if (const auto chat = sourcePeer->asChat()) {
+		peerNoForwards = (chat->flags() & (1U << 8))
+			? true
+			: false;
+	}
+	LOG(("Enhanced Forward: { \"item_id\": %1, \"peer\": \"%2\", \"hasMedia\": %3, \"msg_noforwards\": %4, \"peer_noforwards\": %5 }"
+		).arg(item->id.bare
+		).arg(sourcePeer->name())
+		.arg(hasMedia ? "true" : "false")
+		.arg(msgNoForwards ? "true" : "false")
+		.arg(peerNoForwards ? "true" : "false"));
+	if (const auto channel = sourcePeer->asChannel()) {
+		if (channel->flags() & (1ULL << 20)) {
+			LOG(("Enhanced Forward: blocked by channel NoForwards"));
 			return true;
 		}
 	}
 	if (const auto user = sourcePeer->asUser()) {
-		if (user->flags() & UserDataFlag::NoForwardsPeerEnabled) {
-			LOG(("Enhanced Forward: item %1 blocked by user NoForwards"
-				).arg(item->id.bare));
+		if (user->flags() & (1U << 30)) {
+			LOG(("Enhanced Forward: blocked by user NoForwards"));
 			return true;
 		}
 	}
 	if (const auto chat = sourcePeer->asChat()) {
-		if (chat->flags() & ChatData::Flag::NoForwards) {
-			LOG(("Enhanced Forward: item %1 blocked by chat NoForwards"
-				).arg(item->id.bare));
+		if (chat->flags() & (1U << 8)) {
+			LOG(("Enhanced Forward: blocked by chat NoForwards"));
 			return true;
 		}
 	}
-	LOG(("Enhanced Forward: item %1 NOT restricted, using normal forward"
-		).arg(item->id.bare));
+	LOG(("Enhanced Forward: NOT restricted, using normal forward"));
 	return false;
 }
 
