@@ -1003,7 +1003,16 @@ void Controller::fillPrivacyTypeButton() {
 		.usernamesOrder = (_peer->isChannel()
 			? _peer->asChannel()->usernames()
 			: std::vector<QString>()),
-		.noForwards = !_peer->allowsForwarding(),
+		.noForwards = [&] {
+			if (const auto ch = _peer->asChannel())
+				return (ch->flags() & ChannelData::Flag::NoForwards) != 0;
+			if (const auto c = _peer->asChat())
+				return (c->flags() & ChatData::Flag::NoForwards) != 0;
+			if (const auto u = _peer->asUser())
+				return (u->flags() & (UserDataFlag::NoForwardsMyEnabled
+					| UserDataFlag::NoForwardsPeerEnabled)) != 0;
+			return false;
+		}(),
 		.joinToWrite = (_peer->isMegagroup()
 			&& _peer->asChannel()->joinToWrite()),
 		.requestToJoin = (_peer->isMegagroup()
@@ -2760,7 +2769,16 @@ void Controller::saveSignatures() {
 
 void Controller::saveForwards() {
 	if (!_savingData.noForwards
-		|| *_savingData.noForwards != _peer->allowsForwarding()) {
+		|| *_savingData.noForwards == [&] {
+			if (const auto ch = _peer->asChannel())
+				return (ch->flags() & ChannelData::Flag::NoForwards) != 0;
+			if (const auto c = _peer->asChat())
+				return (c->flags() & ChatData::Flag::NoForwards) != 0;
+			if (const auto u = _peer->asUser())
+				return (u->flags() & (UserDataFlag::NoForwardsMyEnabled
+					| UserDataFlag::NoForwardsPeerEnabled)) != 0;
+			return false;
+		}()) {
 		return continueSave();
 	}
 	using Flag = MTPmessages_ToggleNoForwards::Flag;

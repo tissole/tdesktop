@@ -454,7 +454,15 @@ public:
 	[[nodiscard]] bool canBeEdited() const;
 	[[nodiscard]] bool canStopPoll() const;
 	[[nodiscard]] bool forbidsForward() const;
-	[[nodiscard]] bool isNoForwards() const;
+	[[nodiscard]] const MessageFlags &flags() const {
+		return _flags;
+	}
+	[[nodiscard]] uint32 rawMtpFlags() const {
+		return _rawMtpFlags;
+	}
+	void updateRawMtpFlags(uint32 flags) const {
+		_rawMtpFlags = flags;
+	}
 	[[nodiscard]] bool forbidsSaving() const;
 	[[nodiscard]] bool allowsSendNow() const;
 	[[nodiscard]] bool allowsReschedule() const;
@@ -746,6 +754,7 @@ private:
 	const not_null<PeerData*> _from;
 	mutable PeerData *_displayFrom = nullptr;
 	mutable MessageFlags _flags = 0;
+	mutable uint32 _rawMtpFlags = 0;
 
 	TextWithEntities _text;
 
