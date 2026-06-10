@@ -2171,12 +2171,6 @@ void FileLoadTask::process(ProcessArgs &&args) {
 	_result->setThumbData(thumbnail.bytes);
 	_result->thumb = std::move(thumbnail.image);
 
-	LOG(("FilePrepareResult: thumbId=%1, thumbname='%2', thumbbytes size=%3, thumb isNull=%4"
-		).arg(_result->thumbId
-		).arg(_result->thumbname
-		).arg(_result->thumbbytes.size()
-		).arg(_result->thumb.isNull() ? "yes" : "no"));
-
 	_result->goodThumbnail = std::move(goodThumbnail);
 	_result->goodThumbnailBytes = std::move(goodThumbnailBytes);
 
