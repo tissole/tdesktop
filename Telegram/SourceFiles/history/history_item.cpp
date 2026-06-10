@@ -427,7 +427,6 @@ HistoryItem::HistoryItem(
 	.starsPaid = int(data.vpaid_message_stars().value_or_empty()),
 	.effectId = data.veffect().value_or_empty(),
 }) {
-	_rawMtpFlags = data.vflags().v;
 	_boostsApplied = data.vfrom_boosts_applied().value_or_empty();
 
 	// Called only for server-received messages, not locally created ones.
