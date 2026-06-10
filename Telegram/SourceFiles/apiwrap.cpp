@@ -3710,7 +3710,6 @@ void ApiWrap::forwardMessages(
 		Data::ResolvedForwardDraft &&draft,
 		SendAction action,
 		FnMut<void()> &&successCallback) {
-	LOG(("TAKEOUT_TEST: ENTERED forwardMessages"));
 	Expects(!draft.items.empty());
 
 	auto enhancedItems = std::vector<not_null<HistoryItem*>>();
@@ -4576,7 +4575,6 @@ void ApiWrap::forwardMessages(
 				// Listen for download completions via reactive streams.
 				session().data().documentLoadProgress(
 				) | rpl::on_next([=](not_null<DocumentData*> doc) {
-					LOG(("EF documentLoadProgress: doc=%1").arg(doc->id));
 					for (auto i = 0; i < n; i++) checkItem(i);
 				}, *ctx->dlLifetime);
 
@@ -4779,30 +4777,6 @@ void ApiWrap::forwardMessages(
 				_session->api().sendMessageFail(error, peer);
 			}
 		};
-		const auto needsTakeoutForward = (!forwardFrom->computeUnavailableReason().isEmpty()
-			|| forwardFrom->id == _takeoutPeerId)
-			&& _takeoutId.has_value();
-		if (needsTakeoutForward) {
-			auto built = buildMessage(
-				history,
-				FullReplyTo{ .topicRootId = topicRootId });
-			const auto &forwardMsg = std::get<MTPmessages_ForwardMessages>(built);
-			request(
-				MTPInvokeWithTakeout<MTPmessages_ForwardMessages>(
-					MTP_long(*_takeoutId),
-					forwardMsg)
-			).done(doneCallback).fail(failCallback)
-			.toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)).send();
-		} else {
-			histories.sendPreparedMessage(
-				history,
-				FullReplyTo{ .topicRootId = topicRootId },
-				uint64(0),
-				std::move(buildMessage),
-				doneCallback,
-				failCallback);
-		}
-    
 		ids.resize(0);
 		randomIds.resize(0);
 		localIds = nullptr;
