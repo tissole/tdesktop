@@ -3717,15 +3717,13 @@ void ApiWrap::forwardMessages(
 	enhancedItems.reserve(draft.items.size());
 	normalItems.reserve(draft.items.size());
 	for (const auto &item : draft.items) {
-		if (EnhancedForward::isForwardNeeded(item)) {
+		if (EnhancedForward::checkItem(item).restricted) {
 			enhancedItems.push_back(item);
 		} else {
 			normalItems.push_back(item);
 		}
 	}
 	const auto enhancedNeeded = !enhancedItems.empty();
-	LOG(("Enhanced Forward: forwardMessages called, items=%1, "
-		"enhanced=%2").arg(draft.items.size()).arg(enhancedItems.size()));
 
 	struct SharedCallback {
 		int requestsLeft = 0;
@@ -3823,29 +3821,12 @@ void ApiWrap::forwardMessages(
 				}
 			}
 
-			// Log source order before any sending.
-			for (auto i = 0; i < n; i++) {
-				const auto srcItem =
-					session().data().message(ctx->itemIds[i]);
-				LOG(("EF source order i=%1: msgId=%2, textOnly=%3, isPhoto=%4, groupId=%5"
-					).arg(i
-					).arg(ctx->itemIds[i].msg.bare
-					).arg(ctx->textOnly[i] ? 1 : 0
-					).arg(ctx->isPhoto[i] ? 1 : 0
-					).arg(srcItem
-						? srcItem->groupId().raw()
-						: uint64(0)));
-			}
-
 			// Pre-create SendingAlbum objects for every unique source album.
 			// We do NOT create local messages; albums are purely server-side.
 			// Grouping modes:
 			// - GroupAsIs: keep source albums (default)
 			// - RegroupAll: all media in one album
 			// - Separate: no albums, each item separate
-			LOG(("EF forwardMessages: draft.groupOptions=%1, items=%2")
-				.arg(int(draft.groupOptions))
-				.arg(draft.items.size()));
 			const auto regroupAll = (draft.groupOptions == Data::GroupingOptions::RegroupAll);
 			const auto separate = (draft.groupOptions == Data::GroupingOptions::Separate);
 			MessageGroupId regroupAllId;
@@ -3911,16 +3892,10 @@ void ApiWrap::forwardMessages(
 			const auto sendNext =
 				std::make_shared<std::function<void()>>();
 			*sendNext = [=]() -> void {
-				LOG(("EF sendNext: current=%1, n=%2").arg(ctx->current).arg(n));
 				while (ctx->current < n) {
 					const auto i = ctx->current;
 					const auto srcItem =
 						session().data().message(ctx->itemIds[i]);
-					LOG(("EF sendNext processing i=%1, textOnly=%2, uploadDone=%3, uploadMediaInFlight=%4"
-						).arg(i
-						).arg(ctx->textOnly[i] ? 1 : 0
-						).arg(ctx->uploadDone[i] ? 1 : 0
-						).arg(ctx->uploadMediaInFlight ? 1 : 0));
 
 					if (ctx->textOnly[i]) {
 						// Text-only: send directly via messages.sendMessage.
@@ -3958,8 +3933,6 @@ void ApiWrap::forwardMessages(
 							if (action.options.effectId) {
 								sendFlags |= SendFlag::f_effect;
 							}
-							LOG(("EF sendNext i=%1: SENDING TEXT, msgId=%2"
-								).arg(i).arg(ctx->itemIds[i].msg.bare));
 							const auto done = [=](
 									const MTPUpdates &,
 									const MTP::Response &) {
@@ -4029,8 +4002,6 @@ void ApiWrap::forwardMessages(
 					}
 
 					if (const auto sg = ctx->sourceGroup[i]) {
-						LOG(("EF sendNext i=%1: ALBUM path (sourceGroup=%2)"
-							).arg(i).arg(sg.raw()));
 						// Album item: use cached source groupId to find the
 						// shared SendingAlbum created during pre-creation.
 						const auto albumIt = ctx->albums.find(sg);
@@ -4096,8 +4067,6 @@ void ApiWrap::forwardMessages(
 						const auto localMsgId = localMsg->fullId();
 						const auto next = sendNext;
 						ctx->uploadMediaInFlight = true;
-						LOG(("EF sendNext i=%1: calling UploadMedia, albumGroupId=%2"
-							).arg(i).arg(albumGroupId.value));
 						request(MTPmessages_UploadMedia(
 							MTP_flags(0),
 							MTPstring(),
@@ -4107,10 +4076,8 @@ void ApiWrap::forwardMessages(
 							const auto li =
 								_session->data().message(localMsgId);
 							if (!li) {
-								LOG(("EF UploadMedia done i=%1: local msg gone").arg(i));
 								return;
 							}
-							LOG(("EF UploadMedia done i=%1: ok=%2").arg(i).arg("checking"));
 							MTPInputMedia srv;
 							bool ok = false;
 							if (result.type() == mtpc_messageMediaPhoto) {
@@ -4148,14 +4115,12 @@ void ApiWrap::forwardMessages(
 									ok = true;
 								}
 							}
-							LOG(("EF UploadMedia done i=%1: ok=%2").arg(i).arg(ok ? 1 : 0));
 							if (ok) {
 								sendAlbumWithUploaded(li, albumGroupId, srv);
 							}
 							ctx->uploadMediaInFlight = false;
 							(*next)();
 						}).fail([=](const MTP::Error &err) {
-							LOG(("EF UploadMedia fail i=%1: %2").arg(i).arg(err.type()));
 							ctx->uploadMediaInFlight = false;
 							EnhancedForward::markItemSent(
 								&session(), peerId);
@@ -4163,8 +4128,6 @@ void ApiWrap::forwardMessages(
 						}).send();
 						return;
 					} else {
-						LOG(("EF sendNext i=%1: SINGLE path, isPhoto=%2"
-							).arg(i).arg(ctx->isPhoto[i] ? 1 : 0));
 						// Single media item: send directly.
 						auto uploadInfo = ctx->uploadInfos[i];
 						MTPInputMedia singleMedia;
@@ -4175,7 +4138,6 @@ void ApiWrap::forwardMessages(
 							singleMedia = Api::PrepareUploadedDocument(
 								srcItem, std::move(uploadInfo));
 							if (singleMedia.type() == mtpc_inputMediaEmpty) {
-								LOG(("EF sendNext i=%1: inputMediaEmpty, markItemSent").arg(i));
 								EnhancedForward::markItemSent(
 									&session(), peerId);
 								continue;
@@ -4217,14 +4179,9 @@ void ApiWrap::forwardMessages(
 								MTP_messageMediaEmpty());
 						const auto next = sendNext;
 						ctx->uploadMediaInFlight = true;
-						LOG(("EF sendNext i=%1: calling sendMedia").arg(i));
 						sendMedia(localMsg, singleMedia,
 							action.options,
 							[=](bool success) {
-								LOG(("EF sendMedia callback i=%1: success=%2, current=%3"
-									).arg(i
-									).arg(success ? 1 : 0
-									).arg(ctx->current));
 								ctx->uploadMediaInFlight = false;
 								EnhancedForward::markItemSent(
 									&session(), peerId);
@@ -4233,7 +4190,6 @@ void ApiWrap::forwardMessages(
 						return;
 					}
 				}
-					LOG(("EF sendNext: ALL ITEMS PROCESSED (current=%1, n=%2)").arg(ctx->current).arg(n));
 				// Notify UI to refresh now that all messages are sent.
 				_session->data().sendHistoryChangeNotifications();
 				_session->changes().historyUpdated(
@@ -4279,11 +4235,9 @@ void ApiWrap::forwardMessages(
 			// A helper: given a downloaded file at path[i], create a
 			// FileLoadTask, run it, then hand result to the uploader.
 			const auto startUploadForItem = [=](int i) {
-				LOG(("EF startUploadForItem i=%1").arg(i));
 				const auto srcItem =
 					session().data().message(ctx->itemIds[i]);
 				if (!srcItem || ctx->textOnly[i]) {
-					LOG(("EF startUploadForItem i=%1: skipped (no srcItem or textOnly)").arg(i));
 					ctx->uploadDone[i] = true;
 					(*sendNext)();
 					return;
@@ -4365,12 +4319,8 @@ void ApiWrap::forwardMessages(
 						const auto s = weakCtx.lock();
 						if (!s) return;
 						if (result && result->filesize > 0) {
-							LOG(("EF FileLoadTask done i=%1: filesize=%2, uploading"
-								).arg(idx).arg(result->filesize));
 							s->prepared[idx] = std::move(result);
 						} else {
-							LOG(("EF FileLoadTask done i=%1: filesize=%2, text fallback"
-								).arg(idx).arg(result ? result->filesize : -1));
 							s->textOnly[idx] = true;
 							s->uploadDone[idx] = true;
 							(*sendNext)();
@@ -4406,7 +4356,6 @@ void ApiWrap::forwardMessages(
 				const auto it = uploadIndex->find(data.fullId);
 				if (it == uploadIndex->end()) return;
 				const auto idx = it->second;
-				LOG(("EF onUploadDone idx=%1, uploading file to server").arg(idx));
 				ctx->uploadInfos[idx] = std::move(data.info);
 				ctx->uploadDone[idx] = true;
 				(*sendNext)();
@@ -4480,17 +4429,10 @@ void ApiWrap::forwardMessages(
 							+ QString::number(photo->id)
 							+ u".jpg"_q);
 					ctx->paths[i] = destPath;
-					LOG(("EF initial photo i=%1: v=%2, loaded=%3, cached=%4"
-						).arg(i
-						).arg(v ? "yes" : "no"
-						).arg((v && v->loaded()) ? "yes" : "no"
-						).arg((v && v->loaded() && v->saveToFile(destPath)) ? "yes" : "no"));
 					if (v && v->loaded() && v->saveToFile(destPath)) {
-						LOG(("EF initial photo i=%1: already cached, uploading immediately").arg(i));
 						ctx->downloadDone[i] = true;
 						startUploadForItem(i);
 					} else {
-						LOG(("EF initial photo i=%1: not cached, starting download").arg(i));
 						photo->load(
 							Data::PhotoSize::Large,
 							Data::FileOrigin(FullMsgId(
@@ -4513,10 +4455,8 @@ void ApiWrap::forwardMessages(
 
 				const auto checkItem = [=](int i) {
 					if (ctx->downloadDone[i]) {
-						LOG(("EF checkItem skip %1 (already done)").arg(i));
 						return;
 					}
-					LOG(("EF checkItem i=%1").arg(i));
 					const auto item =
 						session().data().message(ctx->itemIds[i]);
 					if (!item) {
@@ -4545,25 +4485,17 @@ void ApiWrap::forwardMessages(
 					} else if (const auto photo =
 							media ? media->photo() : nullptr) {
 						const auto v = photo->activeMediaView();
-						LOG(("EF checkItem photo i=%1: v=%2, loaded=%3, failed=%4"
-							).arg(i
-							).arg(v ? "yes" : "no"
-							).arg((v && v->loaded()) ? "yes" : "no"
-							).arg(photo->failed(Data::PhotoSize::Large) ? "yes" : "no"));
 						if (v && v->loaded()) {
 							if (v->saveToFile(ctx->paths[i])) {
-								LOG(("EF checkItem photo i=%1: saved, starting upload").arg(i));
 								ctx->downloadDone[i] = true;
 								startUploadForItem(i);
 							} else {
-								LOG(("EF checkItem photo i=%1: saveToFile failed, text fallback").arg(i));
 								ctx->textOnly[i] = true;
 								ctx->downloadDone[i] = true;
 								ctx->uploadDone[i] = true;
 								(*sendNext)();
 							}
 						} else if (photo->failed(Data::PhotoSize::Large)) {
-							LOG(("EF checkItem photo i=%1: download failed, text fallback").arg(i));
 							ctx->textOnly[i] = true;
 							ctx->downloadDone[i] = true;
 							ctx->uploadDone[i] = true;
@@ -4580,7 +4512,6 @@ void ApiWrap::forwardMessages(
 
 				session().downloaderTaskFinished(
 				) | rpl::on_next([=] {
-					LOG(("EF downloaderTaskFinished"));
 					for (auto i = 0; i < n; i++) checkItem(i);
 				}, *ctx->dlLifetime);
 
@@ -5917,7 +5848,6 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 		sendMultiPaidMedia(sample, album);
 		return;
 	} else if (medias.size() < 2) {
-		LOG(("EF sendAlbumIfReady: DISPATCHING single album msg via sendMediaWithRandomId"));
 		const auto &single = medias.front().data();
 		album->sent = true;
 		const auto historyPeer = sample->history()->peer;
@@ -5966,7 +5896,6 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 	auto &histories = history->owner().histories();
 	const auto peer = history->peer;
 	album->sent = true;
-	LOG(("EF sendAlbumIfReady: DISPATCHING SendMultiMedia with %1 items").arg(medias.size()));
 	// Capture message pointers before sending (setRealId changes ids).
 	auto albumMsgs = std::make_shared<std::vector<
 		not_null<HistoryItem*>>>();
