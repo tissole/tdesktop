@@ -2370,6 +2370,7 @@ void HistoryWidget::fastShowAtEnd(not_null<History*> history) {
 		if (_migrated) {
 			_migrated->forgetScrollState();
 		}
+		setupPinnedTracker();
 		historyLoaded();
 	} else {
 		firstLoadMessages();
@@ -2867,8 +2868,16 @@ void HistoryWidget::showHistory(
 		if (_history->scrollTopItem
 			|| (_migrated && _migrated->scrollTopItem)
 			|| _history->isReadyFor(_showAtMsgId)) {
+			LOG(("HISTORY_LOAD: showHistory READY path "
+				"scrollTopItem=%1 isReady=%2 peer=%3")
+				.arg(Logs::b(_history->scrollTopItem != nullptr))
+				.arg(Logs::b(_history->isReadyFor(_showAtMsgId)))
+				.arg(_history->peer->id.value));
+			setupPinnedTracker();
 			historyLoaded();
 		} else {
+			LOG(("HISTORY_LOAD: showHistory firstLoadMessages path peer=%1")
+				.arg(_history->peer->id.value));
 			firstLoadMessages();
 			doneShow();
 		}
@@ -3177,6 +3186,9 @@ void HistoryWidget::clearAllLoadRequests() {
 	auto &histories = _history->owner().histories();
 	clearDelayedShowAtRequest();
 	if (_firstLoadRequest) {
+		LOG(("HISTORY_LOAD: clearAllLoadRequests cancel _firstLoadRequest=%1 peer=%2")
+			.arg(_firstLoadRequest)
+			.arg(_history->peer->id.value));
 		histories.cancelRequest(_firstLoadRequest);
 		_firstLoadRequest = 0;
 	}
@@ -4060,6 +4072,12 @@ void HistoryWidget::messagesReceived(
 		return;
 	}
 
+	LOG(("HISTORY_LOAD: messagesReceived ENTER peer=%1 requestId=%2 "
+		"_firstLoadRequest=%3 _jumpToMessageRequest=%4")
+		.arg(peer->id.value)
+		.arg(requestId)
+		.arg(_firstLoadRequest)
+		.arg(_jumpToMessageRequest));
 	auto count = 0;
 	const QVector<MTPMessage> emptyList, *histList = &emptyList;
 	switch (messages.type()) {
@@ -4136,60 +4154,15 @@ void HistoryWidget::messagesReceived(
 	} break;
 	}
 
-	if (!session().api().takeoutId().has_value()
-		&& !session().api().takeoutBypass()
-		&& histList && !histList->isEmpty()) {
-		auto noforwards = false;
-		for (const auto &msg : *histList) {
-			if (msg.type() != mtpc_message) continue;
-			const auto &d = msg.c_message();
-			const auto flags = static_cast<uint32>(d.vflags().v);
-			if (flags & (1U << 26)) {
-				noforwards = true;
-				break;
-			}
-		}
-		if (noforwards) {
-			_firstLoadRequest = 0;
-			loadTakeoutMessages(
-				_history, MsgId(), 0,
-				kMessagesPerPageFirst, _firstLoadRequest,
-				0, 0);
-			return;
-		}
-		if (histList->size() == 1 && _savedFirstLoadParams->history) {
-			const auto p = *base::take(_savedFirstLoadParams);
-			const auto type = Data::Histories::RequestType::History;
-			auto &histories = _history->owner().histories();
-			_firstLoadRequest = histories.sendRequest(
-				_history, type, [=](Fn<void()> finish) {
-				return _history->session().api().request(
-					MTPmessages_GetHistory(
-						p.history->peer->input(),
-						MTP_int(p.offsetId),
-						MTP_int(0),
-						MTP_int(p.offset),
-						MTP_int(p.loadCount),
-						MTP_int(p.maxId),
-						MTP_int(p.minId),
-						MTP_long(0))
-				).done([=](
-						const MTPmessages_Messages &result) {
-					messagesReceived(p.history->peer, result, _firstLoadRequest);
-					finish();
-				}).fail([=](const MTP::Error &error) {
-					finish();
-				}).send();
-			});
-			return;
-		}
-	}
-
 	if (_preloadRequest == requestId) {
+		LOG(("HISTORY_LOAD: messagesReceived PRELOAD match requestId=%1 peer=%2")
+			.arg(requestId).arg(peer->id.value));
 		addMessagesToFront(peer, *histList);
 		_preloadRequest = 0;
 		preloadHistoryIfNeeded();
 	} else if (_preloadDownRequest == requestId) {
+		LOG(("HISTORY_LOAD: messagesReceived PRELOAD_DOWN match requestId=%1 peer=%2")
+			.arg(requestId).arg(peer->id.value));
 		addMessagesToBack(peer, *histList);
 		_preloadDownRequest = 0;
 		preloadHistoryIfNeeded();
@@ -4202,7 +4175,9 @@ void HistoryWidget::messagesReceived(
 		} else if (_migrated) {
 			_migrated->clear(History::ClearType::Unload);
 		}
-		if (session().api().takeoutId().has_value() && histList) {
+		if (session().api().takeoutId().has_value()
+			&& session().api().takeoutPeerId() == _history->peer->id
+			&& histList) {
 			for (const auto &msg : *histList) {
 				const auto id = IdFromMessage(msg);
 				if (const auto existing = _history->owner().message(
@@ -4214,6 +4189,10 @@ void HistoryWidget::messagesReceived(
 		addMessagesToFront(peer, *histList);
 		_firstLoadRequest = 0;
 		setupPinnedTracker();
+		LOG(("HISTORY_LOAD: after setupPinnedTracker, loadedAtTop=%1 isEmpty=%2 count=%3")
+			.arg(Logs::b(_history->loadedAtTop()))
+			.arg(Logs::b(_history->isEmpty()))
+			.arg(count));
 		if (_history->loadedAtTop() && _history->isEmpty() && count > 0) {
 			firstLoadMessages();
 			return;
@@ -4254,6 +4233,14 @@ void HistoryWidget::messagesReceived(
 		_jumpToMessageRequest = 0;
 		setMsgId(jumpToMessageId, jumpToMessageParams);
 		historyLoaded();
+	} else {
+		LOG(("HISTORY_LOAD: messagesReceived NO MATCH requestId=%1 "
+			"_preload=%2 _preloadDown=%3 _firstLoad=%4 _jumpToMsg=%5")
+			.arg(requestId)
+			.arg(_preloadRequest)
+			.arg(_preloadDownRequest)
+			.arg(_firstLoadRequest)
+			.arg(_jumpToMessageRequest));
 	}
 	if (session().supportMode()) {
 		crl::on_main(this, [=] { checkSupportPreload(); });
@@ -4311,9 +4298,14 @@ void HistoryWidget::checkActivation() {
 
 void HistoryWidget::firstLoadMessages() {
 	if (!_history || _firstLoadRequest) {
+		LOG(("HISTORY_LOAD: firstLoadMessages SKIP _history=%1 _firstLoadRequest=%2")
+			.arg(Logs::b(_history != nullptr))
+			.arg(_firstLoadRequest));
 		return;
 	}
 
+	LOG(("HISTORY_LOAD: firstLoadMessages ENTER peer=%1")
+		.arg(_history->peer->id.value));
 	auto from = _history;
 	auto offsetId = MsgId();
 	auto offset = 0;
@@ -4356,11 +4348,10 @@ void HistoryWidget::firstLoadMessages() {
 
 	const auto history = from;
 
-	_savedFirstLoadParams = FirstLoadParams{
-		history, offsetId, offset, loadCount, maxId, minId };
-
 	if (session().api().takeoutId().has_value()
 		&& history->peer->id == session().api().takeoutPeerId()) {
+		LOG(("HISTORY_LOAD: takeout active, using sendTakeoutHistoryRequest "
+			"peer=%1").arg(history->peer->id.value));
 		_firstLoadRequest = 0;
 		sendTakeoutHistoryRequest(
 			history, offsetId, offset, loadCount,
@@ -4368,20 +4359,13 @@ void HistoryWidget::firstLoadMessages() {
 		return;
 	}
 
-		const auto checkIfRestricted = !session().api().takeoutBypass()
-		&& !session().api().takeoutId().has_value();
-	const auto probeForRestricted = checkIfRestricted ? 1 : loadCount;
-
-	const auto type = Data::Histories::RequestType::History;
-	auto &histories = history->owner().histories();
-	_firstLoadRequest = histories.sendRequest(history, type, [=](
-			Fn<void()> finish) {
+	const auto normalGenerator = [=](Fn<void()> finish) {
 		return history->session().api().request(MTPmessages_GetHistory(
 			history->peer->input(),
 			MTP_int(offsetId),
 			MTP_int(offsetDate),
 			MTP_int(offset),
-			MTP_int(probeForRestricted),
+			MTP_int(loadCount),
 			MTP_int(maxId),
 			MTP_int(minId),
 			MTP_long(historyHash)
@@ -4392,7 +4376,82 @@ void HistoryWidget::firstLoadMessages() {
 			messagesFailed(error, _firstLoadRequest);
 			finish();
 		}).send();
-	});
+	};
+	const auto sendNormal = [=] {
+		auto &histories = history->owner().histories();
+		_firstLoadRequest = histories.sendRequest(
+			history, Data::Histories::RequestType::History,
+			normalGenerator);
+	};
+
+	if (!session().api().takeoutBypass()
+		&& !session().api().takeoutId().has_value()) {
+		LOG(("HISTORY_LOAD: probe 1 msg peer=%1")
+			.arg(history->peer->id.value));
+		_firstLoadRequest = 1; // sentinel: probe in flight
+		const auto weak = base::make_weak(this);
+		history->session().api().request(MTPmessages_GetHistory(
+			history->peer->input(),
+			MTP_int(offsetId),
+			MTP_int(offsetDate),
+			MTP_int(offset),
+			MTP_int(1),
+			MTP_int(maxId),
+			MTP_int(minId),
+			MTP_long(historyHash)
+		)).done([=](const MTPmessages_Messages &result) {
+			if (!weak) return;
+			_firstLoadRequest = 0;
+			auto noforwards = false;
+			result.match([&](const MTPDmessages_messages &d) {
+				for (const auto &msg : d.vmessages().v) {
+					if (msg.type() != mtpc_message) continue;
+					if (msg.c_message().vflags().v & (1U << 26)) {
+						noforwards = true; break;
+					}
+				}
+			}, [&](const MTPDmessages_messagesSlice &d) {
+				for (const auto &msg : d.vmessages().v) {
+					if (msg.type() != mtpc_message) continue;
+					if (msg.c_message().vflags().v & (1U << 26)) {
+						noforwards = true; break;
+					}
+				}
+			}, [&](const MTPDmessages_channelMessages &d) {
+				if (const auto channel = history->peer->asChannel()) {
+					channel->ptsReceived(d.vpts().v);
+				}
+				for (const auto &msg : d.vmessages().v) {
+					if (msg.type() != mtpc_message) continue;
+					if (msg.c_message().vflags().v & (1U << 26)) {
+						noforwards = true; break;
+					}
+				}
+			}, [](const MTPDmessages_messagesNotModified &) {});
+			if (noforwards) {
+				LOG(("HISTORY_LOAD: noforwards, takeout peer=%1")
+					.arg(history->peer->id.value));
+				loadTakeoutMessages(
+					history, MsgId(), 0, loadCount,
+					_firstLoadRequest, maxId, minId);
+			} else {
+				LOG(("HISTORY_LOAD: probe OK, normal load peer=%1")
+					.arg(history->peer->id.value));
+				sendNormal();
+			}
+		}).fail([=](const MTP::Error &error) {
+			if (!weak) return;
+			_firstLoadRequest = 0;
+			LOG(("HISTORY_LOAD: probe fail, normal load peer=%1")
+				.arg(history->peer->id.value));
+			sendNormal();
+		}).send();
+		return;
+	}
+
+	LOG(("HISTORY_LOAD: bypass probe, normal load peer=%1")
+		.arg(history->peer->id.value));
+	sendNormal();
 }
 
 void HistoryWidget::loadTakeoutMessages(
@@ -4407,15 +4466,18 @@ void HistoryWidget::loadTakeoutMessages(
 		sendTakeoutHistoryRequest(history, offsetId, offset, loadCount, requestSlot, maxId, minId);
 		return;
 	}
-	// Always save params so the done callback replays this exact request
-	// (whether init was already running or we're about to start it now).
+	LOG(("HISTORY_LOAD: takeout init not yet active, saving pending request "
+		"peer=%1").arg(history->peer->id.value));
 	_pendingTakeoutRequest = PendingTakeoutRequest{
 		history, offsetId, offset, loadCount, &requestSlot, maxId, minId};
 	if (_takeoutInitInProgress) {
+		LOG(("HISTORY_LOAD: takeout init already in progress, returning"));
 		return;
 	}
 
 	_takeoutInitInProgress = true;
+	LOG(("HISTORY_LOAD: starting account.initTakeoutSession "
+		"peer=%1").arg(history->peer->id.value));
 	auto &api = session().api();
 	const auto weak = base::make_weak(this);
 	const auto retryLimit = 2;
@@ -4433,11 +4495,15 @@ void HistoryWidget::loadTakeoutMessages(
 		if (!weak) return;
 		_takeoutInitRequestId = 0;
 		_takeoutInitInProgress = false;
+		LOG(("HISTORY_LOAD: takeout init DONE, takeoutId=%1, peer=%2")
+			.arg(result.data().vid().v)
+			.arg(history->peer->id.value));
 		session().api().setTakeoutId(result.data().vid().v);
 		session().api().setTakeoutPeerId(history->peer->id);
 		if (_pendingTakeoutRequest) {
 			const auto pending = *_pendingTakeoutRequest;
 			_pendingTakeoutRequest = std::nullopt;
+			LOG(("HISTORY_LOAD: replaying pending takeout request"));
 			sendTakeoutHistoryRequest(
 				pending.history,
 				pending.offsetId,
@@ -4447,6 +4513,7 @@ void HistoryWidget::loadTakeoutMessages(
 				pending.maxId,
 				pending.minId);
 		} else {
+			LOG(("HISTORY_LOAD: no pending request, calling firstLoadMessages"));
 			firstLoadMessages();
 		}
 	}).fail([=](const MTP::Error &error) {
@@ -4454,9 +4521,14 @@ void HistoryWidget::loadTakeoutMessages(
 		_takeoutInitRequestId = 0;
 		_takeoutInitInProgress = false;
 		_pendingTakeoutRequest = std::nullopt;
+		LOG(("HISTORY_LOAD: takeout init FAILED retry=%1 error=%2")
+			.arg(_takeoutInitRetries)
+			.arg(error.type()));
 		if (++_takeoutInitRetries < retryLimit) {
 			loadTakeoutMessages(history, offsetId, offset, loadCount, *requestSlotPtr, maxId, minId);
 		} else {
+			LOG(("HISTORY_LOAD: takeout init exhausted, falling back to normal API "
+				"peer=%1").arg(history->peer->id.value));
 			session().api().setTakeoutPeerId(0);
 			session().api().setTakeoutBypass(true);
 			firstLoadMessages();
@@ -4473,9 +4545,15 @@ void HistoryWidget::sendTakeoutHistoryRequest(
 		int maxId,
 		int minId) {
 	if (!session().api().takeoutId().has_value()) {
+		LOG(("HISTORY_LOAD: sendTakeoutHistoryRequest called without takeoutId, "
+			"falling back to loadTakeoutMessages"));
 		loadTakeoutMessages(history, offsetId, offset, loadCount, requestSlot, maxId, minId);
 		return;
 	}
+
+	LOG(("HISTORY_LOAD: sending takeout history request peer=%1 "
+		"loadCount=%2 offsetId=%3").arg(history->peer->id.value)
+		.arg(loadCount).arg(offsetId.bare));
 
 	const auto offsetDate = 0;
 	const auto historyHash = uint64(0);

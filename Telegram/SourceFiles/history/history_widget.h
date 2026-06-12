@@ -826,16 +826,6 @@ private:
 	};
 	std::optional<PendingTakeoutRequest> _pendingTakeoutRequest;
 
-	struct FirstLoadParams {
-		not_null<History*> history;
-		MsgId offsetId;
-		int offset = 0;
-		int loadCount = 0;
-		int maxId = 0;
-		int minId = 0;
-	};
-	std::optional<FirstLoadParams> _savedFirstLoadParams;
-
 	MsgId jumpToMessageId = -1;
 	Window::SectionShow jumpToMessageParams;
 	int _jumpToMessageRequest = 0; // Not real mtpRequestId.
