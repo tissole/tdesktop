@@ -7,16 +7,20 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "enhanced_forward.h"
 
+#include "apiwrap.h"
 #include "base/timer.h"
 #include "data/data_changes.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
 #include "data/data_peer.h"
 #include "data/data_session.h"
+#include "data/data_types.h"
 #include "data/data_user.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "main/main_session.h"
+
+#include <QEventLoop>
 
 namespace EnhancedForward {
 namespace {
@@ -44,64 +48,163 @@ void fireUpdate(not_null<Main::Session*> session, const PeerId &peer) {
 
 } // namespace
 
-bool isForwardNeeded(not_null<HistoryItem*> item) {
-	const auto sourcePeer = item->history()->peer;
-	const auto media = item->media();
-	const auto hasMedia = (media != nullptr);
-	const auto msgNoForwards = (item->rawMtpFlags() & (1U << 26))
-		? true
-		: false;
-	auto peerNoForwards = false;
-	if (const auto channel = sourcePeer->asChannel()) {
-		peerNoForwards = (channel->flags() & (1ULL << 20))
-			? true
-			: false;
-	} else if (const auto user = sourcePeer->asUser()) {
-		peerNoForwards = (user->flags() & (1U << 30))
-			? true
-			: false;
-	} else if (const auto chat = sourcePeer->asChat()) {
-		peerNoForwards = (chat->flags() & (1U << 8))
-			? true
-			: false;
+// Fetch message noforwards flag from server
+bool checkMsgRestriction(not_null<HistoryItem*> item) {
+	const auto peer = item->history()->peer;
+	auto result = false;
+	auto loop = QEventLoop();
+	auto finished = false;
+	const auto session = &peer->session();
+
+	if (const auto channel = peer->asChannel()) {
+		session->api().request(MTPchannels_GetMessages(
+			channel->inputChannel(),
+			MTP_vector<MTPInputMessage>(1, MTP_inputMessageID(MTP_int(item->id.bare)))
+		)).done([&](const MTPmessages_Messages &data) {
+			data.match([&](const MTPDmessages_messages &data) {
+				for (const auto &msg : data.vmessages().v) {
+					msg.match([&](const MTPDmessage &m) {
+						result = (m.vflags().v & (1U << 26));
+					}, [&](const MTPDmessageService &m) {
+						result = (m.vflags().v & (1U << 26));
+					}, [](const auto &) {});
+				}
+				finished = true;
+				loop.quit();
+			}, [&](const MTPDmessages_messagesSlice &data) {
+				for (const auto &msg : data.vmessages().v) {
+					msg.match([&](const MTPDmessage &m) {
+						result = (m.vflags().v & (1U << 26));
+					}, [&](const MTPDmessageService &m) {
+						result = (m.vflags().v & (1U << 26));
+					}, [](const auto &) {});
+				}
+				finished = true;
+				loop.quit();
+			}, [&](const MTPDmessages_channelMessages &data) {
+				for (const auto &msg : data.vmessages().v) {
+					msg.match([&](const MTPDmessage &m) {
+						result = (m.vflags().v & (1U << 26));
+					}, [&](const MTPDmessageService &m) {
+						result = (m.vflags().v & (1U << 26));
+					}, [](const auto &) {});
+				}
+				finished = true;
+				loop.quit();
+			}, [&](const MTPDmessages_messagesNotModified &) {
+				finished = true;
+				loop.quit();
+			}, [](const auto &) {
+			});
+		}).fail([&](const MTP::Error &) {
+			finished = true;
+			loop.quit();
+		}).send();
+	} else {
+		session->api().request(MTPmessages_GetMessages(
+			MTP_vector<MTPInputMessage>(1, MTP_inputMessageID(MTP_int(item->id.bare)))
+		)).done([&](const MTPmessages_Messages &data) {
+			data.match([&](const MTPDmessages_messages &data) {
+				for (const auto &msg : data.vmessages().v) {
+					msg.match([&](const MTPDmessage &m) {
+						result = (m.vflags().v & (1U << 26));
+					}, [](const auto &) {});
+				}
+				finished = true;
+				loop.quit();
+			}, [&](const MTPDmessages_messagesSlice &data) {
+				for (const auto &msg : data.vmessages().v) {
+					msg.match([&](const MTPDmessage &m) {
+						result = (m.vflags().v & (1U << 26));
+					}, [](const auto &) {});
+				}
+				finished = true;
+				loop.quit();
+			}, [](const auto &) {
+			});
+		}).fail([&](const MTP::Error &) {
+			finished = true;
+			loop.quit();
+		}).send();
 	}
-	LOG(("Enhanced Forward: { \"item_id\": %1, \"peer\": \"%2\", \"hasMedia\": %3, \"msg_noforwards\": %4, \"peer_noforwards\": %5 }"
-		).arg(item->id.bare
-		).arg(sourcePeer->name())
-		.arg(hasMedia ? "true" : "false")
-		.arg(msgNoForwards ? "true" : "false")
-		.arg(peerNoForwards ? "true" : "false"));
-	if (const auto channel = sourcePeer->asChannel()) {
-		if (channel->flags() & (1ULL << 20)) {
-			LOG(("Enhanced Forward: blocked by channel NoForwards"));
-			return true;
-		}
-	}
-	if (const auto user = sourcePeer->asUser()) {
-		if (user->flags() & (1U << 30)) {
-			LOG(("Enhanced Forward: blocked by user NoForwards"));
-			return true;
-		}
-	}
-	if (const auto chat = sourcePeer->asChat()) {
-		if (chat->flags() & (1U << 8)) {
-			LOG(("Enhanced Forward: blocked by chat NoForwards"));
-			return true;
-		}
-	}
-	LOG(("Enhanced Forward: NOT restricted, using normal forward"));
-	return false;
+
+	if (!finished) loop.exec();
+	return result;
 }
 
-bool anyItemNeedsForward(
-		const std::vector<not_null<HistoryItem*>> &items) {
-	for (const auto &item : items) {
-		const auto needed = isForwardNeeded(item);
-		LOG(("Enhanced Forward: anyItemNeedsForward item %1 => %2"
-			).arg(item->id.bare).arg(needed));
-		if (needed) return true;
+// Fetch peer noforwards flag from server
+bool checkPeerRestriction(not_null<PeerData*> peer) {
+	auto result = false;
+	auto loop = QEventLoop();
+	auto finished = false;
+	const auto session = &peer->session();
+
+	if (const auto channel = peer->asChannel()) {
+		session->api().request(MTPchannels_GetChannels(
+			MTP_vector<MTPInputChannel>(1, channel->inputChannel())
+		)).done([&](const MTPmessages_Chats &data) {
+			data.match([&](const auto &data) {
+				session->data().processChats(data.vchats());
+			});
+			result = (channel->flags() & ChannelDataFlag::NoForwards);
+			finished = true;
+			loop.quit();
+		}).fail([&](const MTP::Error &) {
+			finished = true;
+			loop.quit();
+		}).send();
+	} else if (const auto user = peer->asUser()) {
+		session->api().request(MTPusers_GetFullUser(
+			user->inputUser()
+		)).done([&](const MTPusers_UserFull &data) {
+			const auto &d = data.c_users_userFull();
+			session->data().processUsers(d.vusers());
+			session->data().processChats(d.vchats());
+			result = (user->flags() & UserDataFlag::NoForwardsPeerEnabled);
+			finished = true;
+			loop.quit();
+		}).fail([&](const MTP::Error &) {
+			finished = true;
+			loop.quit();
+		}).send();
+	} else if (const auto chat = peer->asChat()) {
+		session->api().request(MTPmessages_GetFullChat(
+			chat->inputChat()
+		)).done([&](const MTPmessages_ChatFull &data) {
+			const auto &d = data.c_messages_chatFull();
+			session->data().processUsers(d.vusers());
+			session->data().processChats(d.vchats());
+			result = (chat->flags() & ChatDataFlag::NoForwards);
+			finished = true;
+			loop.quit();
+		}).fail([&](const MTP::Error &) {
+			finished = true;
+			loop.quit();
+		}).send();
 	}
-	return false;
+
+	if (!finished) loop.exec();
+	return result;
+}
+
+ItemFlags checkItem(not_null<HistoryItem*> item) {
+	const auto peer = item->history()->peer;
+	const auto msg = checkMsgRestriction(item);
+	const auto peerFlag = checkPeerRestriction(peer);
+	return { msg, peerFlag, (msg || peerFlag) };
+}
+
+Split classifyItems(
+		const std::vector<not_null<HistoryItem*>> &items) {
+	Split result;
+	for (const auto &item : items) {
+		if (checkItem(item).restricted) {
+			result.restricted.push_back(item);
+		} else {
+			result.normal.push_back(item);
+		}
+	}
+	return result;
 }
 
 void startForwardSession(

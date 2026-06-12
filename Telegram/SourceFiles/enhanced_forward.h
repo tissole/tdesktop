@@ -19,6 +19,22 @@ class Session;
 
 namespace EnhancedForward {
 
+struct ItemFlags {
+	bool msg = false;
+	bool peer = false;
+	bool restricted = false; // msg || peer
+};
+
+struct Split {
+	std::vector<not_null<HistoryItem*>> restricted;
+	std::vector<not_null<HistoryItem*>> normal;
+};
+
+[[nodiscard]] ItemFlags checkItem(not_null<HistoryItem*> item);
+[[nodiscard]] Split classifyItems(
+	const std::vector<not_null<HistoryItem*>> &items);
+[[nodiscard]] bool checkMsgRestriction(not_null<HistoryItem*> item);
+
 enum class State : uint8_t {
 	Idle,
 	Sending,
@@ -31,11 +47,6 @@ struct ForwardProgress {
 	int sent = 0;
 	int total = 0;
 };
-
-[[nodiscard]] bool isForwardNeeded(not_null<HistoryItem*> item);
-
-[[nodiscard]] bool anyItemNeedsForward(
-	const std::vector<not_null<HistoryItem*>> &items);
 
 void startForwardSession(
 	not_null<Main::Session*> session,

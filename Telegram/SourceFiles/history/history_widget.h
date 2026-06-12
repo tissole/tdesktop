@@ -189,7 +189,7 @@ public:
 		int maxId = 0,
 		int minId = 0);
 	void finishTakeoutIfNeeded();
-	void delayedShowAt(MsgId showAtMsgId, const Window::SectionShow &params);
+	void jumpToMessage(MsgId showAtMsgId, const Window::SectionShow &params);
 
 	bool updateReplaceMediaButton();
 	void updateFieldPlaceholder();
@@ -826,9 +826,19 @@ private:
 	};
 	std::optional<PendingTakeoutRequest> _pendingTakeoutRequest;
 
-	MsgId _delayedShowAtMsgId = -1;
-	Window::SectionShow _delayedShowAtMsgParams;
-	int _delayedShowAtRequest = 0; // Not real mtpRequestId.
+	struct FirstLoadParams {
+		not_null<History*> history;
+		MsgId offsetId;
+		int offset = 0;
+		int loadCount = 0;
+		int maxId = 0;
+		int minId = 0;
+	};
+	std::optional<FirstLoadParams> _savedFirstLoadParams;
+
+	MsgId jumpToMessageId = -1;
+	Window::SectionShow jumpToMessageParams;
+	int _jumpToMessageRequest = 0; // Not real mtpRequestId.
 
 	History *_supportPreloadHistory = nullptr;
 	int _supportPreloadRequest = 0; // Not real mtpRequestId.

@@ -2090,10 +2090,7 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 			return;
 		}
 
-		if (EnhancedForward::anyItemNeedsForward(items)) {
-			LOG(("Enhanced Forward: share_box items need enhanced forward, "
-				"items=%1, destinations=%2"
-				).arg(items.size()).arg(result.size()));
+		if (!EnhancedForward::classifyItems(items).restricted.empty()) {
 			auto &api = history->session().api();
 			const auto remaining = std::make_shared<int>(
 				int(result.size()));
@@ -2129,27 +2126,13 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 					std::move(draft),
 					Api::SendAction(effectiveThread, options),
 					[=] {
-						LOG(("ShareBox: forwardMessages callback fired, remaining was=%1"
-							).arg(*remaining));
 						if (--*remaining == 0) {
-							LOG(("ShareBox: remaining==0, calling hideLayer and submitCallback"));
 							if (show) {
-								LOG(("ShareBox: show is valid, calling hideLayer"));
 								show->hideLayer();
-								LOG(("ShareBox: hideLayer called"));
-							} else {
-								LOG(("ShareBox: show is null"));
 							}
 							if (state->submitCallback) {
-								LOG(("ShareBox: submitCallback is set, calling it"));
 								state->submitCallback();
-								LOG(("ShareBox: submitCallback returned"));
-							} else {
-								LOG(("ShareBox: submitCallback is null"));
 							}
-						} else {
-							LOG(("ShareBox: remaining=%1, not closing yet"
-								).arg(*remaining));
 						}
 					});
 			}
@@ -2161,10 +2144,6 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 			|| groupingOptions == Data::GroupingOptions::RegroupAll);
 
 		if (needsRegrouping) {
-			LOG(("ShareBox: using forwardMessages path for regrouping, "
-				"items=%1, destinations=%2, groupOptions=%3"
-				).arg(items.size()).arg(result.size()
-				).arg(int(groupingOptions)));
 			auto &api = history->session().api();
 			const auto remaining = std::make_shared<int>(
 				int(result.size()));
@@ -2200,10 +2179,7 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 					std::move(draft),
 					Api::SendAction(effectiveThread, options),
 					[=] {
-						LOG(("ShareBox: regrouping forwardMessages callback fired, remaining=%1"
-							).arg(*remaining));
 						if (--*remaining == 0) {
-							LOG(("ShareBox: remaining==0, closing"));
 							if (show) {
 								show->hideLayer();
 							}
