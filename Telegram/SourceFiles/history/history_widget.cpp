@@ -2861,7 +2861,6 @@ void HistoryWidget::showHistory(
 		_updateHistoryItems.cancel();
 
 		setupTranslateBar();
-		setupPinnedTracker();
 		setupGroupCallBar();
 		setupRequestsBar();
 		checkMessagesTTL();
@@ -4129,10 +4128,6 @@ void HistoryWidget::messagesReceived(
 				}
 				if (msg.c_message().vrestriction_reason()) restCount++;
 			}
-			if (totalCount > 0
-				&& histList->front().type() == mtpc_message) {
-				const auto &first = histList->front().c_message();
-			}
 		}
 	} break;
 	case mtpc_messages_messagesNotModified: {
@@ -4143,8 +4138,7 @@ void HistoryWidget::messagesReceived(
 
 	if (!session().api().takeoutId().has_value()
 		&& !session().api().takeoutBypass()
-		&& histList && !histList->isEmpty()
-		&& peer->isChannel()) {
+		&& histList && !histList->isEmpty()) {
 		auto noforwards = false;
 		for (const auto &msg : *histList) {
 			if (msg.type() != mtpc_message) continue;
@@ -4157,15 +4151,36 @@ void HistoryWidget::messagesReceived(
 		}
 		if (noforwards) {
 			_firstLoadRequest = 0;
-			if (_migrated) {
-				_migrated->clear(History::ClearType::Unload);
-			}
-			_history->clear(History::ClearType::Unload);
-			_history->getReadyFor(ShowAtTheEndMsgId);
 			loadTakeoutMessages(
 				_history, MsgId(), 0,
 				kMessagesPerPageFirst, _firstLoadRequest,
 				0, 0);
+			return;
+		}
+		if (histList->size() == 1 && _savedFirstLoadParams->history) {
+			const auto p = *base::take(_savedFirstLoadParams);
+			const auto type = Data::Histories::RequestType::History;
+			auto &histories = _history->owner().histories();
+			_firstLoadRequest = histories.sendRequest(
+				_history, type, [=](Fn<void()> finish) {
+				return _history->session().api().request(
+					MTPmessages_GetHistory(
+						p.history->peer->input(),
+						MTP_int(p.offsetId),
+						MTP_int(0),
+						MTP_int(p.offset),
+						MTP_int(p.loadCount),
+						MTP_int(p.maxId),
+						MTP_int(p.minId),
+						MTP_long(0))
+				).done([=](
+						const MTPmessages_Messages &result) {
+					messagesReceived(p.history->peer, result, _firstLoadRequest);
+					finish();
+				}).fail([=](const MTP::Error &error) {
+					finish();
+				}).send();
+			});
 			return;
 		}
 	}
@@ -4187,8 +4202,18 @@ void HistoryWidget::messagesReceived(
 		} else if (_migrated) {
 			_migrated->clear(History::ClearType::Unload);
 		}
+		if (session().api().takeoutId().has_value() && histList) {
+			for (const auto &msg : *histList) {
+				const auto id = IdFromMessage(msg);
+				if (const auto existing = _history->owner().message(
+					peer, id)) {
+					existing->destroy();
+				}
+			}
+		}
 		addMessagesToFront(peer, *histList);
 		_firstLoadRequest = 0;
+		setupPinnedTracker();
 		if (_history->loadedAtTop() && _history->isEmpty() && count > 0) {
 			firstLoadMessages();
 			return;
@@ -4331,7 +4356,6 @@ void HistoryWidget::firstLoadMessages() {
 
 	const auto history = from;
 
-	LOG(("TakeoutProbe: firstLoadMessages for peer '%1', normal load").arg(history->peer->name()));
 	_savedFirstLoadParams = FirstLoadParams{
 		history, offsetId, offset, loadCount, maxId, minId };
 
@@ -4344,6 +4368,10 @@ void HistoryWidget::firstLoadMessages() {
 		return;
 	}
 
+		const auto checkIfRestricted = !session().api().takeoutBypass()
+		&& !session().api().takeoutId().has_value();
+	const auto probeForRestricted = checkIfRestricted ? 1 : loadCount;
+
 	const auto type = Data::Histories::RequestType::History;
 	auto &histories = history->owner().histories();
 	_firstLoadRequest = histories.sendRequest(history, type, [=](
@@ -4353,7 +4381,7 @@ void HistoryWidget::firstLoadMessages() {
 			MTP_int(offsetId),
 			MTP_int(offsetDate),
 			MTP_int(offset),
-			MTP_int(loadCount),
+			MTP_int(probeForRestricted),
 			MTP_int(maxId),
 			MTP_int(minId),
 			MTP_long(historyHash)
@@ -4407,9 +4435,6 @@ void HistoryWidget::loadTakeoutMessages(
 		_takeoutInitInProgress = false;
 		session().api().setTakeoutId(result.data().vid().v);
 		session().api().setTakeoutPeerId(history->peer->id);
-		history->clearUpTill(MsgId(std::numeric_limits<int64>::max()));
-		history->getReadyFor(ShowAtTheEndMsgId);
-		setupPinnedTracker();
 		if (_pendingTakeoutRequest) {
 			const auto pending = *_pendingTakeoutRequest;
 			_pendingTakeoutRequest = std::nullopt;
