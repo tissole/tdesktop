@@ -2664,7 +2664,10 @@ void HistoryWidget::showHistory(
 		_membersDropdown.destroy();
 		_scrollToAnimation.stop();
 
-		// finishTakeoutIfNeeded();  // Keep takeout alive for subsequent operations
+		// Takeout lifecycle is managed lazily:
+		// - Reused if same peer is opened again
+		// - Finished & recreated if different restricted peer is opened
+		// - Finished on app close in ~HistoryWidget
 		_takeoutInitInProgress = false;
 		session().api().setTakeoutBypass(false);
 
@@ -2865,18 +2868,20 @@ void HistoryWidget::showHistory(
 		setupGroupCallBar();
 		setupRequestsBar();
 		checkMessagesTTL();
-		if (_history->scrollTopItem
+
+		const auto readyWithTakeout = (_history->scrollTopItem
 			|| (_migrated && _migrated->scrollTopItem)
-			|| _history->isReadyFor(_showAtMsgId)) {
-			LOG(("HISTORY_LOAD: showHistory READY path "
-				"scrollTopItem=%1 isReady=%2 peer=%3")
-				.arg(Logs::b(_history->scrollTopItem != nullptr))
-				.arg(Logs::b(_history->isReadyFor(_showAtMsgId)))
+			|| _history->isReadyFor(_showAtMsgId))
+			&& session().api().takeoutId().has_value()
+			&& session().api().takeoutPeerId() == _history->peer->id;
+
+		if (readyWithTakeout) {
+			LOG(("HISTORY_LOAD: showHistory READY+takeout path peer=%1")
 				.arg(_history->peer->id.value));
 			setupPinnedTracker();
 			historyLoaded();
 		} else {
-			LOG(("HISTORY_LOAD: showHistory firstLoadMessages path peer=%1")
+			LOG(("HISTORY_LOAD: showHistory probe path peer=%1")
 				.arg(_history->peer->id.value));
 			firstLoadMessages();
 			doneShow();
@@ -4348,15 +4353,21 @@ void HistoryWidget::firstLoadMessages() {
 
 	const auto history = from;
 
-	if (session().api().takeoutId().has_value()
-		&& history->peer->id == session().api().takeoutPeerId()) {
-		LOG(("HISTORY_LOAD: takeout active, using sendTakeoutHistoryRequest "
-			"peer=%1").arg(history->peer->id.value));
-		_firstLoadRequest = 0;
-		sendTakeoutHistoryRequest(
-			history, offsetId, offset, loadCount,
-			_firstLoadRequest, maxId, minId);
-		return;
+	if (session().api().takeoutId().has_value()) {
+		if (history->peer->id == session().api().takeoutPeerId()) {
+			LOG(("HISTORY_LOAD: takeout active for same peer, reusing "
+				"peer=%1").arg(history->peer->id.value));
+			_firstLoadRequest = 0;
+			sendTakeoutHistoryRequest(
+				history, offsetId, offset, loadCount,
+				_firstLoadRequest, maxId, minId);
+			return;
+		}
+		LOG(("HISTORY_LOAD: takeout active for different peer, finishing old "
+			"oldPeer=%1 newPeer=%2")
+			.arg(session().api().takeoutPeerId().value)
+			.arg(history->peer->id.value));
+		finishTakeoutIfNeeded();
 	}
 
 	const auto normalGenerator = [=](Fn<void()> finish) {
@@ -4587,8 +4598,10 @@ void HistoryWidget::finishTakeoutIfNeeded() {
 	if (!session().api().takeoutId().has_value()) return;
 
 	const auto id = *session().api().takeoutId();
+	LOG(("HISTORY_LOAD: finishing takeout session id=%1").arg(id));
 	session().api().setTakeoutId(std::nullopt);
-	session().api().setTakeoutPeerId(0);
+	session().api().setTakeoutPeerId(PeerId(0));
+	session().api().setTakeoutBypass(false);
 	auto &api = session().api();
 	api.request(MTPInvokeWithTakeout<MTPaccount_FinishTakeoutSession>(
 		MTP_long(id),
@@ -10679,7 +10692,7 @@ HistoryWidget::~HistoryWidget() {
 		// Saving a draft on account switching.
 		saveFieldToHistoryLocalDraft();
 		session().api().saveDraftToCloudDelayed(_history);
-		// finishTakeoutIfNeeded(); // Keep takeout alive until explicitly ended
+		finishTakeoutIfNeeded();
 		setHistory(nullptr);
 
 		session().data().itemVisibilitiesUpdated();
