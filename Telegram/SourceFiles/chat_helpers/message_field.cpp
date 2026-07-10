@@ -1,4 +1,4 @@
-﻿/*
+/*
 This file is part of Telegram Desktop,
 the official desktop application for the Telegram messaging service.
 
@@ -1520,61 +1520,119 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 	title->setAttribute(Qt::WA_TransparentForMouseEvents);
 	title->show();
 
-	const auto subtitle = CreateChild<Ui::FlatLabel>(
-		raw,
-		QString(),
-		st::frozenRestrictionSubtitle);
-	subtitle->setAttribute(Qt::WA_TransparentForMouseEvents);
-	subtitle->show();
+	auto titleText = std::make_shared<QString>();
 
-	const auto updateLabels = [=] {
+	const auto actionBtn = CreateChild<Ui::LinkButton>(
+		raw,
+		u"Pause"_q,
+		st::defaultLinkButton);
+	actionBtn->setColorOverride(st::historyComposeButton.color->c);
+	actionBtn->show();
+	actionBtn->setClickedCallback([=] {
+		const auto p = EnhancedForward::currentProgress(peer);
+		if (p.state == EnhancedForward::State::Sending) {
+			EnhancedForward::pauseForward(peer, session);
+		} else if (p.state == EnhancedForward::State::Paused) {
+			EnhancedForward::resumeForward(peer, session);
+		}
+	});
+
+	const auto cancelBtn = CreateChild<Ui::LinkButton>(
+		raw,
+		u"Cancel"_q,
+		st::defaultLinkButton);
+	cancelBtn->setColorOverride(st::historyComposeButton.color->c);
+	cancelBtn->show();
+	cancelBtn->setClickedCallback([=] {
+		EnhancedForward::cancelForward(peer, session);
+	});
+
+	const auto relayout = [=] {
+		const auto w = raw->width();
+		const auto h = raw->height();
+		if (w <= 0 || h <= 0) return;
+
+		if (cancelBtn->isHidden()) {
+			const auto top = (h - title->height()) / 2;
+			title->moveToLeft((w - title->width()) / 2, top, w);
+			return;
+		}
+
+		const auto gap = st::defaultDialogRow.padding.left();
+		const auto titleW = (title->width() > 0)
+			? title->width()
+			: QFontMetrics(title->font()).horizontalAdvance(*titleText);
+		const auto contentW = titleW
+			+ gap
+			+ actionBtn->width()
+			+ gap
+			+ cancelBtn->width();
+		const auto startX = std::max(0, (w - contentW) / 2);
+		const auto titleY = (h - title->height()) / 2;
+		const auto actionY = (h - actionBtn->height()) / 2;
+		const auto cancelY = (h - cancelBtn->height()) / 2;
+		title->moveToLeft(startX, titleY, w);
+		actionBtn->moveToLeft(startX + titleW + gap, actionY, w);
+		cancelBtn->moveToLeft(
+			startX + titleW + gap + actionBtn->width() + gap,
+			cancelY,
+			w);
+	};
+
+	const auto update = [=] {
 		const auto p = EnhancedForward::currentProgress(peer);
 		switch (p.state) {
 		case EnhancedForward::State::Sending:
-			title->setText(
-				u"Enhanced Forward %1/%2"_q
+			*titleText = u"Forwarding %1/%2"_q
 				.arg(p.sent)
-				.arg(p.total));
-			subtitle->setText(u"[Cancel]"_q);
+				.arg(p.total);
+			title->setText(*titleText);
+			actionBtn->setText(u"Pause"_q);
+			actionBtn->show();
+			cancelBtn->show();
 			raw->setCursor(style::cur_pointer);
 			break;
+		case EnhancedForward::State::Paused:
+			*titleText = u"Paused %1/%2"_q
+				.arg(p.sent)
+				.arg(p.total);
+			title->setText(*titleText);
+			actionBtn->setText(u"Resume"_q);
+			actionBtn->show();
+			cancelBtn->show();
+			raw->setCursor(style::cur_pointer);
+			break;
+		case EnhancedForward::State::Cancelled:
+			*titleText = u"Forward Canceled"_q;
+			title->setText(*titleText);
+			actionBtn->hide();
+			cancelBtn->hide();
+			raw->setCursor(style::cur_default);
+			break;
 		case EnhancedForward::State::Finished:
-			title->setText(u"Forward Complete"_q);
-			subtitle->setText(QString());
+			*titleText = u"Forward Complete"_q;
+			title->setText(*titleText);
+			actionBtn->hide();
+			cancelBtn->hide();
 			raw->setCursor(style::cur_default);
 			break;
 		default:
-			title->setText(QString());
-			subtitle->setText(QString());
+			titleText->clear();
+			title->setText(*titleText);
+			actionBtn->hide();
+			cancelBtn->hide();
 			raw->setCursor(style::cur_default);
 			break;
 		}
+		relayout();
 	};
-	updateLabels();
-	const auto timer = raw->lifetime().make_state<base::Timer>(updateLabels);
+	update();
+	const auto timer = raw->lifetime().make_state<base::Timer>(update);
 	timer->callEach(crl::time(500));
 
 	raw->sizeValue() | rpl::on_next([=](QSize size) {
-		const auto small = 2 * st::defaultDialogRow.photoSize;
-		const auto shown = (size.width() > small);
-
-		title->setVisible(shown);
-		subtitle->setVisible(shown);
-
-		const auto skip = st::defaultDialogRow.padding.left();
-		const auto available = size.width() - skip * 2;
-		title->resizeToWidth(available);
-		subtitle->resizeToWidth(available);
-		const auto height = title->height() + subtitle->height();
-		const auto top = (size.height() - height) / 2;
-		title->moveToLeft(skip, top, size.width());
-		subtitle->moveToLeft(skip, top + title->height(), size.width());
-
+		relayout();
 	}, raw->lifetime());
-
-	raw->setClickedCallback([=] {
-		EnhancedForward::cancelForward(peer, session);
-	});
 
 	return result;
 }

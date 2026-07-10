@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "api/api_editing.h"
 #include "api/api_bot.h"
+#include "base/debug_log.h"
 #include "api/api_chat_participants.h"
 #include "api/api_global_privacy.h"
 #include "api/api_report.h"
@@ -3624,7 +3625,7 @@ void HistoryWidget::updateControlsVisibility() {
 		if (_inlineResults) {
 			_inlineResults->hide();
 		}
-		if (_sendRestriction) {
+		if (_sendRestriction && _sendRestrictionKey != u"enhanced_forward"_q) {
 			_sendRestriction->hide();
 		}
 		hideFieldIfVisible();
@@ -3687,7 +3688,7 @@ void HistoryWidget::updateControlsVisibility() {
 		if (_botMenu.button) {
 			_botMenu.button->show();
 		}
-		if (_sendRestriction) {
+		if (_sendRestriction && _sendRestrictionKey != u"enhanced_forward"_q) {
 			_sendRestriction->hide();
 		}
 		{
@@ -6840,9 +6841,17 @@ void HistoryWidget::moveFieldControls() {
 		_muteUnmute->setGeometry(fullWidthButtonRect);
 		_joinChannel->setGeometry(fullWidthButtonRect);
 		_reportMessages->setGeometry(fullWidthButtonRect);
-	if (_sendRestriction) {
-		_sendRestriction->setGeometry(fullWidthButtonRect);
 	}
+	if (_sendRestriction) {
+		const auto restrictionHeight = _sendRestriction->height()
+			? _sendRestriction->height()
+			: st::historySendSize.height();
+		_sendRestriction->setGeometry(myrtlrect(
+			0,
+			bottom - restrictionHeight,
+			width(),
+			restrictionHeight));
+		_sendRestriction->raise();
 	}
 }
 
@@ -7609,20 +7618,37 @@ Data::SendError HistoryWidget::computeSendRestriction() const {
 }
 
 void HistoryWidget::updateSendRestriction() {
-	const auto restriction = computeSendRestriction();
-	if (_sendRestrictionKey == restriction.text) {
+	if (!_peer) {
 		return;
 	}
-	_sendRestrictionKey = restriction.text;
-	if (EnhancedForward::isForwarding(_peer->id)
-		|| EnhancedForward::currentProgress(_peer->id).state
-			== EnhancedForward::State::Finished) {
+	const auto restriction = computeSendRestriction();
+	const auto progress = EnhancedForward::currentProgress(_peer->id);
+	const auto isEnhancedForwarding = (progress.state == EnhancedForward::State::Sending
+		|| progress.state == EnhancedForward::State::Finished
+		|| progress.state == EnhancedForward::State::Paused
+		|| progress.state == EnhancedForward::State::Cancelled)
+		&& progress.destPeer == _peer->id;
+	LOG(("ENHANCED_FWD: updateSendRestriction peer=%1 state=%2 destPeer=%3 match=%4")
+		.arg(_peer->id.value)
+		.arg(static_cast<int>(progress.state))
+		.arg(progress.destPeer.value)
+		.arg(Logs::b(isEnhancedForwarding)));
+	const auto key = isEnhancedForwarding
+		? u"enhanced_forward"_q
+		: restriction.text;
+	if (_sendRestrictionKey == key) {
+		return;
+	}
+	_sendRestrictionKey = key;
+	if (isEnhancedForwarding) {
 		_sendRestriction = EnhancedForwardWriteRestriction(
 			this,
 			_peer->id,
 			&session());
 	} else if (!restriction) {
-		_sendRestriction = nullptr;
+		if (_sendRestrictionKey != u"enhanced_forward"_q) {
+			_sendRestriction = nullptr;
+		}
 	} else if (restriction.frozen) {
 		const auto show = controller()->uiShow();
 		_sendRestriction = FrozenWriteRestriction(
@@ -7646,6 +7672,7 @@ void HistoryWidget::updateSendRestriction() {
 	}
 	if (_sendRestriction) {
 		_sendRestriction->show();
+		_sendRestriction->raise();
 		moveFieldControls();
 	}
 }

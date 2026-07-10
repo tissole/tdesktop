@@ -1138,7 +1138,8 @@ void DocumentData::save(
 		Data::FileOrigin origin,
 		const QString &toFile,
 		LoadFromCloudSetting fromCloud,
-		bool autoLoading) {
+		bool autoLoading,
+		bool forceFileLoader) {
 	if (const auto media = activeMediaView(); media && media->loaded(true)) {
 		auto &l = location(true);
 		if (!toFile.isEmpty()) {
@@ -1178,7 +1179,9 @@ void DocumentData::save(
 		}
 	} else {
 		status = FileReady;
-		auto reader = owner().streaming().sharedReader(this, origin, true);
+		auto reader = forceFileLoader
+			? nullptr
+			: owner().streaming().sharedReader(this, origin, true);
 		if (reader) {
 			_loader = std::make_unique<Storage::StreamedFileDownloader>(
 				&session(),

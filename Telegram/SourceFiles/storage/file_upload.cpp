@@ -345,7 +345,8 @@ void Uploader::upload(
 		if (!file->content.isEmpty()) {
 			document->setDataAndCache(file->content);
 		}
-		if (!file->filepath.isEmpty()) {
+		if (!file->filepath.isEmpty()
+			&& !file->filepath.contains("ForwardTemp")) {
 			document->setLocation(Core::FileLocation(file->filepath));
 		}
 		if (file->type == SendMediaType::ThemeFile) {

@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "enhanced_forward.h"
 
 #include "apiwrap.h"
+#include "base/debug_log.h"
 #include "base/timer.h"
 #include "data/data_changes.h"
 #include "data/data_channel.h"
@@ -15,12 +16,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_peer.h"
 #include "data/data_session.h"
 #include "data/data_types.h"
+#include <QDir>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include "data/data_user.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "main/main_session.h"
-
-#include <QEventLoop>
 
 namespace EnhancedForward {
 namespace {
@@ -29,8 +33,21 @@ struct SharedState {
 	int total = 0;
 	int sent = 0;
 	bool cancelled = false;
+	bool paused = false;
 	bool finished = false;
 	std::unique_ptr<base::Timer> finishTimer;
+	PeerId destPeer;
+	Fn<void()> cancelCallback;
+	Fn<void()> pauseCallback;
+	Fn<void()> resumeCallback;
+	int currentDownload = -1;
+	int currentUpload = -1;
+	ItemInfo downloadItem;
+	ItemInfo uploadItem;
+	float64 downloadProgress = 0;
+	float64 uploadProgress = 0;
+	qint64 downloadSpeed = 0;
+	qint64 uploadSpeed = 0;
 };
 
 using StateMap = std::unordered_map<PeerId, SharedState>;
@@ -188,22 +205,40 @@ bool checkPeerRestriction(not_null<PeerData*> peer) {
 }
 
 ItemFlags checkItem(not_null<HistoryItem*> item) {
-	const auto peer = item->history()->peer;
-	const auto msg = checkMsgRestriction(item);
-	const auto peerFlag = checkPeerRestriction(peer);
+	LOG(("ENHANCED_FWD: checkItem item=%1").arg(item->id.bare));
+	const auto history = item->history();
+	const auto peer = history->peer;
+	const auto msg = !!(item->flags() & MessageFlag::NoForwards);
+	auto peerFlag = false;
+	if (const auto channel = peer->asChannel()) {
+		peerFlag = !!(channel->flags() & ChannelDataFlag::NoForwards);
+	} else if (const auto chat = peer->asChat()) {
+		peerFlag = !!(chat->flags() & ChatDataFlag::NoForwards);
+	} else if (const auto user = peer->asUser()) {
+		peerFlag = !!(user->flags() & UserDataFlag::NoForwardsPeerEnabled);
+	}
+	LOG(("ENHANCED_FWD: checkItem msg=%1 peerFlag=%2 restricted=%3")
+		.arg(Logs::b(msg))
+		.arg(Logs::b(peerFlag))
+		.arg(Logs::b(msg || peerFlag)));
 	return { msg, peerFlag, (msg || peerFlag) };
 }
 
 Split classifyItems(
 		const std::vector<not_null<HistoryItem*>> &items) {
+	LOG(("ENHANCED_FWD: classifyItems count=%1").arg(items.size()));
 	Split result;
 	for (const auto &item : items) {
-		if (checkItem(item).restricted) {
+		const auto flags = checkItem(item);
+		if (flags.restricted) {
 			result.restricted.push_back(item);
 		} else {
 			result.normal.push_back(item);
 		}
 	}
+	LOG(("ENHANCED_FWD: classifyItems restricted=%1 normal=%2")
+		.arg(result.restricted.size())
+		.arg(result.normal.size()));
 	return result;
 }
 
@@ -218,7 +253,9 @@ void startForwardSession(
 	state.total = totalItems;
 	state.sent = 0;
 	state.cancelled = false;
+	state.paused = false;
 	state.finished = false;
+	state.destPeer = peerId;
 
 	fireUpdate(session, peerId);
 }
@@ -255,8 +292,128 @@ void cancelForward(
 	if (it == states.end()) return;
 
 	it->second.cancelled = true;
+	it->second.finished = true;
+	if (it->second.cancelCallback) {
+		it->second.cancelCallback();
+	}
 	fireUpdate(session, id);
-	states.erase(it);
+
+	it->second.finishTimer = std::make_unique<base::Timer>([=] {
+		auto &states = ActiveStates();
+		states.erase(id);
+		fireUpdate(session, id);
+	});
+	it->second.finishTimer->callOnce(3000);
+}
+
+void setCancelCallback(
+		const PeerId &id,
+		not_null<Main::Session*> session,
+		Fn<void()> callback) {
+	auto &states = ActiveStates();
+	const auto it = states.find(id);
+	if (it == states.end()) return;
+
+	it->second.cancelCallback = std::move(callback);
+}
+
+void setPauseCallback(
+		const PeerId &id,
+		not_null<Main::Session*> session,
+		Fn<void()> callback) {
+	auto &states = ActiveStates();
+	const auto it = states.find(id);
+	if (it == states.end()) return;
+
+	it->second.pauseCallback = std::move(callback);
+}
+
+void setResumeCallback(
+		const PeerId &id,
+		not_null<Main::Session*> session,
+		Fn<void()> callback) {
+	auto &states = ActiveStates();
+	const auto it = states.find(id);
+	if (it == states.end()) return;
+
+	it->second.resumeCallback = std::move(callback);
+}
+
+void pauseForward(
+		const PeerId &id,
+		not_null<Main::Session*> session) {
+	auto &states = ActiveStates();
+	const auto it = states.find(id);
+	if (it == states.end()) return;
+
+	it->second.paused = true;
+	if (it->second.pauseCallback) {
+		it->second.pauseCallback();
+	}
+	fireUpdate(session, id);
+}
+
+void resumeForward(
+		const PeerId &id,
+		not_null<Main::Session*> session) {
+	auto &states = ActiveStates();
+	const auto it = states.find(id);
+	if (it == states.end()) return;
+
+	it->second.paused = false;
+	if (it->second.resumeCallback) {
+		it->second.resumeCallback();
+	}
+	fireUpdate(session, id);
+}
+
+void cancelCurrentItem(
+		const PeerId &id,
+		not_null<Main::Session*> session) {
+	auto &states = ActiveStates();
+	const auto it = states.find(id);
+	if (it == states.end()) return;
+
+	auto &state = it->second;
+	state.currentDownload = -1;
+	state.currentUpload = -1;
+	state.downloadProgress = 0;
+	state.uploadProgress = 0;
+	fireUpdate(session, id);
+}
+
+void updateDownloadProgress(
+		not_null<Main::Session*> session,
+		const PeerId &peerId,
+		int itemIndex,
+		const ItemInfo &info,
+		float64 progress) {
+	auto &states = ActiveStates();
+	const auto it = states.find(peerId);
+	if (it == states.end()) return;
+
+	auto &state = it->second;
+	state.currentDownload = itemIndex;
+	state.downloadItem = info;
+	state.downloadProgress = progress;
+	fireUpdate(session, peerId);
+}
+
+void updateUploadProgress(
+		not_null<Main::Session*> session,
+		const PeerId &peerId,
+		int itemIndex,
+		const ItemInfo &info,
+		float64 progress) {
+	auto &states = ActiveStates();
+	const auto it = states.find(peerId);
+	if (it == states.end()) return;
+
+	auto &state = it->second;
+	state.currentUpload = itemIndex;
+	state.uploadItem = info;
+	state.uploadProgress = progress;
+	fireUpdate(session, peerId);
 }
 
 bool isForwarding(const PeerId &id) {
@@ -264,6 +421,13 @@ bool isForwarding(const PeerId &id) {
 	const auto it = states.find(id);
 	if (it == states.end()) return false;
 	return !it->second.cancelled && !it->second.finished;
+}
+
+bool isPaused(const PeerId &id) {
+	const auto &states = ActiveStates();
+	const auto it = states.find(id);
+	if (it == states.end()) return false;
+	return it->second.paused && !it->second.cancelled && !it->second.finished;
 }
 
 ForwardProgress currentProgress(const PeerId &id) {
@@ -277,16 +441,66 @@ ForwardProgress currentProgress(const PeerId &id) {
 	const auto &state = it->second;
 	result.sent = state.sent;
 	result.total = state.total;
+	result.destPeer = state.destPeer;
+	result.currentDownload = state.currentDownload;
+	result.currentUpload = state.currentUpload;
+	result.downloadItem = state.downloadItem;
+	result.uploadItem = state.uploadItem;
+	result.downloadProgress = state.downloadProgress;
+	result.uploadProgress = state.uploadProgress;
+	result.downloadSpeed = state.downloadSpeed;
+	result.uploadSpeed = state.uploadSpeed;
 
 	if (state.cancelled) {
 		result.state = State::Cancelled;
 	} else if (state.finished) {
 		result.state = State::Finished;
+	} else if (state.paused) {
+		result.state = State::Paused;
 	} else {
 		result.state = State::Sending;
 	}
 
 	return result;
+}
+
+QString ProgressFilePath(const PeerId &peerId, const QString &dir) {
+	return QDir(dir).absoluteFilePath(
+		u"enhanced_forward_%1.json"_q.arg(peerId.value));
+}
+
+void SaveProgress(
+		const PeerId &peerId,
+		const QString &dir,
+		const QJsonObject &data) {
+	QDir().mkpath(dir);
+	const auto path = ProgressFilePath(peerId, dir);
+	QFile f(path);
+	if (!f.open(QIODevice::WriteOnly)) {
+		LOG(("ENHANCED_FWD: cannot write progress %1").arg(path));
+		return;
+	}
+	f.write(QJsonDocument(data).toJson(QJsonDocument::Indented));
+}
+
+std::optional<QJsonObject> LoadProgress(
+		const PeerId &peerId,
+		const QString &dir) {
+	const auto path = ProgressFilePath(peerId, dir);
+	QFile f(path);
+	if (!f.open(QIODevice::ReadOnly)) {
+		return std::nullopt;
+	}
+	const auto doc = QJsonDocument::fromJson(f.readAll());
+	if (!doc.isObject()) {
+		return std::nullopt;
+	}
+	return doc.object();
+}
+
+void ClearProgress(const PeerId &peerId, const QString &dir) {
+	const auto path = ProgressFilePath(peerId, dir);
+	QFile(path).remove();
 }
 
 } // namespace EnhancedForward

@@ -2070,6 +2070,9 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 			Api::SendOptions options,
 			Data::ForwardOptions forwardOptions,
 			Data::GroupingOptions groupingOptions) {
+		LOG(("ENHANCED_FWD: share_box submit result=%1 msgIds=%2")
+			.arg(result.size())
+			.arg(msgIds.size()));
 		if (!state->requests.empty()) {
 			return; // Share clicked already.
 		}
@@ -2090,6 +2093,7 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 			return;
 		}
 
+		LOG(("ENHANCED_FWD: share_box classifyItems items=%1").arg(items.size()));
 		if (!EnhancedForward::classifyItems(items).restricted.empty()) {
 			auto &api = history->session().api();
 			const auto remaining = std::make_shared<int>(
