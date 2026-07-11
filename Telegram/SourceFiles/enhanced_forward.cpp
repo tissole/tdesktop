@@ -41,6 +41,7 @@ struct SharedState {
 	Fn<void()> pauseCallback;
 	Fn<void()> resumeCallback;
 	int currentDownload = -1;
+	std::vector<TrackedItem> items;
 	int currentUpload = -1;
 	ItemInfo downloadItem;
 	ItemInfo uploadItem;
@@ -256,6 +257,7 @@ void startForwardSession(
 	state.paused = false;
 	state.finished = false;
 	state.destPeer = peerId;
+	state.items.resize(totalItems);
 
 	fireUpdate(session, peerId);
 }
@@ -280,7 +282,7 @@ void markItemSent(
 			states.erase(peerId);
 			fireUpdate(session, peerId);
 		});
-		state.finishTimer->callOnce(3000);
+		state.finishTimer->callOnce(2000);
 	}
 }
 
@@ -393,9 +395,15 @@ void updateDownloadProgress(
 	if (it == states.end()) return;
 
 	auto &state = it->second;
-	state.currentDownload = itemIndex;
-	state.downloadItem = info;
-	state.downloadProgress = progress;
+	if (progress >= 1.0) {
+		state.currentDownload = -1;
+		state.downloadItem = ItemInfo();
+		state.downloadProgress = 0;
+	} else {
+		state.currentDownload = itemIndex;
+		state.downloadItem = info;
+		state.downloadProgress = progress;
+	}
 	fireUpdate(session, peerId);
 }
 
@@ -410,9 +418,40 @@ void updateUploadProgress(
 	if (it == states.end()) return;
 
 	auto &state = it->second;
-	state.currentUpload = itemIndex;
-	state.uploadItem = info;
-	state.uploadProgress = progress;
+	if (progress >= 1.0) {
+		state.currentUpload = -1;
+		state.uploadItem = ItemInfo();
+		state.uploadProgress = 0;
+	} else {
+		state.currentUpload = itemIndex;
+		state.uploadItem = info;
+		state.uploadProgress = progress;
+	}
+	if (itemIndex >= 0 && itemIndex < int(state.items.size())) {
+		state.items[itemIndex].state = ItemState::Uploading;
+		state.items[itemIndex].info = info;
+		state.items[itemIndex].progress = progress;
+	}
+	fireUpdate(session, peerId);
+}
+
+void updateItemState(
+		not_null<Main::Session*> session,
+		const PeerId &peerId,
+		int itemIndex,
+		ItemState newState,
+		const ItemInfo &info,
+		float64 progress) {
+	auto &states = ActiveStates();
+	const auto it = states.find(peerId);
+	if (it == states.end()) return;
+
+	auto &state = it->second;
+	if (itemIndex >= 0 && itemIndex < int(state.items.size())) {
+		state.items[itemIndex].state = newState;
+		state.items[itemIndex].info = info;
+		state.items[itemIndex].progress = progress;
+	}
 	fireUpdate(session, peerId);
 }
 
@@ -450,6 +489,7 @@ ForwardProgress currentProgress(const PeerId &id) {
 	result.uploadProgress = state.uploadProgress;
 	result.downloadSpeed = state.downloadSpeed;
 	result.uploadSpeed = state.uploadSpeed;
+	result.items = state.items;
 
 	if (state.cancelled) {
 		result.state = State::Cancelled;

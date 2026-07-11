@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "apiwrap.h"
 
+#include <algorithm>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -3729,6 +3730,15 @@ void ApiWrap::forwardMessages(
 			normalItems.push_back(item);
 		}
 	}
+	// draft.items are in selection order, not chronological. Sort both
+	// lists by message id ascending so the pipeline (downloads, uploads
+	// and sends) and the standard forward proceed oldest -> newest.
+	const auto byId = [](const not_null<HistoryItem*> &a,
+			const not_null<HistoryItem*> &b) {
+		return a->id < b->id;
+	};
+	std::sort(enhancedItems.begin(), enhancedItems.end(), byId);
+	std::sort(normalItems.begin(), normalItems.end(), byId);
 	const auto enhancedNeeded = !enhancedItems.empty();
 	LOG(("ENHANCED_FWD: enhancedNeeded=%1 enhanced=%2 normal=%3")
 		.arg(Logs::b(enhancedNeeded))
@@ -3787,8 +3797,17 @@ void ApiWrap::forwardMessages(
 					std::shared_ptr<SendingAlbum>> albums;
 				// ordered sender state
 				int current = 0; // next index to send
-				// Serialise UploadMedia+sendMedia: only one in-flight at a time.
-				bool uploadMediaInFlight = false;
+				// Limit concurrent UploadMedia+sendMedia so each finished
+				// upload is sent promptly instead of queueing behind a
+				// single in-flight request (which made everything appear
+				// at the very end).
+				int uploadMediaInFlight = 0;
+				// One download and one upload at a time; the download of
+				// the next item overlaps the upload of the previous one.
+				// Both advance through the (oldest-first) index in order.
+				bool downloadInFlight = false;
+				bool uploadInFlight = false;
+				std::vector<int> uploadQueue;
 				// upload listeners lifetime (kept alive until all done)
 				std::shared_ptr<rpl::lifetime> uploadLifetime;
 				// download listeners lifetime (kept alive until all done)
@@ -3797,6 +3816,9 @@ void ApiWrap::forwardMessages(
 				PeerId peerId;
 				std::shared_ptr<std::function<void()>> sendNextFn;
 				std::function<void()> startNextDownloadFn;
+				int downloadCursor = 0;
+				int uploadCursor = 0;
+				int pendingSend = -1;
 			};
 			const auto ctx = std::make_shared<Ctx>();
 			ctx->itemIds.resize(n);
@@ -4039,6 +4061,7 @@ void ApiWrap::forwardMessages(
 			//                   the last member arrives)
 			//     single    -> sendMedia directly
 			// --------------------------------------------------------
+			constexpr auto kMaxMediaInFlight = 4;
 			const auto sendNext =
 				std::make_shared<std::function<void()>>();
 			ctx->sendNextFn = sendNext;
@@ -4172,7 +4195,7 @@ void ApiWrap::forwardMessages(
 						.arg(Logs::b(ctx->uploadDone[i]))
 						.arg(Logs::b(ctx->uploadMediaInFlight)));
 					if (!ctx->uploadDone[i]) return;
-					if (ctx->uploadMediaInFlight) return;
+					if (ctx->uploadMediaInFlight >= kMaxMediaInFlight) return;
 					ctx->current++;
 					LOG(("ENHANCED_FWD: sendNext media current=%1/%2")
 						.arg(ctx->current).arg(n));
@@ -4245,10 +4268,15 @@ void ApiWrap::forwardMessages(
 							inputMedia = Api::PrepareUploadedDocument(
 								srcItem, std::move(uploadInfo));
 						}
+						if (inputMedia.type() == mtpc_inputMediaEmpty) {
+							EnhancedForward::markItemSent(
+								&session(), peerId);
+							continue;
+						}
 						// uploadMedia -> get server file ref -> register in album
 						const auto localMsgId = localMsg->fullId();
 						const auto next = sendNext;
-						ctx->uploadMediaInFlight = true;
+						ctx->uploadMediaInFlight++;
 						request(MTPmessages_UploadMedia(
 							MTP_flags(0),
 							MTPstring(),
@@ -4300,15 +4328,15 @@ void ApiWrap::forwardMessages(
 							if (ok) {
 								sendAlbumWithUploaded(li, albumGroupId, srv);
 							}
-							ctx->uploadMediaInFlight = false;
+							ctx->uploadMediaInFlight--;
 							(*next)();
 						}).fail([=](const MTP::Error &err) {
-							ctx->uploadMediaInFlight = false;
+							ctx->uploadMediaInFlight--;
 							EnhancedForward::markItemSent(
 								&session(), peerId);
 							(*next)();
 						}).send();
-						return;
+						continue;
 					} else {
 						// Single media item: send directly.
 						auto uploadInfo = ctx->uploadInfos[i];
@@ -4319,11 +4347,11 @@ void ApiWrap::forwardMessages(
 						} else {
 							singleMedia = Api::PrepareUploadedDocument(
 								srcItem, std::move(uploadInfo));
-							if (singleMedia.type() == mtpc_inputMediaEmpty) {
-								EnhancedForward::markItemSent(
-									&session(), peerId);
-								continue;
-							}
+						}
+						if (singleMedia.type() == mtpc_inputMediaEmpty) {
+							EnhancedForward::markItemSent(
+								&session(), peerId);
+							continue;
 						}
 						// Create local msg in DEST history so sendMedia
 						// uses the dest peer, not the source peer.
@@ -4360,20 +4388,20 @@ void ApiWrap::forwardMessages(
 								}, srcItem->originalText(),
 								MTP_messageMediaEmpty());
 						const auto next = sendNext;
-						ctx->uploadMediaInFlight = true;
+						ctx->uploadMediaInFlight++;
 						sendMedia(localMsg, singleMedia,
 							action.options,
 							[=](bool success) {
-								ctx->uploadMediaInFlight = false;
+								ctx->uploadMediaInFlight--;
 								if (!success) {
 									localMsg->destroy();
 								}
-								EnhancedForward::markItemSent(
-									&session(), peerId);
-								(*next)();
-							});
-						return;
-					}
+							EnhancedForward::markItemSent(
+								&session(), peerId);
+							(*next)();
+						});
+					continue;
+				}
 				}
 				// Notify UI to refresh now that all messages are sent.
 				_session->data().sendHistoryChangeNotifications();
@@ -4422,9 +4450,29 @@ void ApiWrap::forwardMessages(
 			ctx->uploadIndex = std::make_shared<
 				base::flat_map<FullMsgId, int>>();
 
+			// Forward-declared so pumpUploads can start an item's upload.
+			const auto startUploadForItem =
+				std::make_shared<std::function<void(int)>>();
+
+			// Start the next upload (prep) if the single upload slot is
+			// free and that file has finished downloading. The upload
+			// itself (network) runs inside startUploadForItem's prep
+			// callback; uploadInFlight stays true for prep+upload so only
+			// one upload is ever in flight, preserving source order.
+			const auto pumpUploads = [=]() {
+				if (ctx->uploadInFlight) return;
+				if (ctx->uploadCursor >= n) return;
+				if (!ctx->downloadDone[ctx->uploadCursor]) return;
+				const auto i = ctx->uploadCursor;
+				ctx->uploadStarted[i] = true;
+				ctx->uploadInFlight = true;
+				ctx->uploadCursor++;
+				(*startUploadForItem)(i);
+			};
+
 			// A helper: given a downloaded file at path[i], create a
 			// FileLoadTask, run it, then hand result to the uploader.
-			const auto startUploadForItem = [=](int i) {
+			*startUploadForItem = [=](int i) {
 				LOG(("ENHANCED_FWD: startUploadForItem i=%1").arg(i));
 				const auto srcItem =
 					session().data().message(ctx->itemIds[i]);
@@ -4433,6 +4481,8 @@ void ApiWrap::forwardMessages(
 					.arg(Logs::b(ctx->textOnly[i])));
 				if (!srcItem || ctx->textOnly[i]) {
 					ctx->uploadDone[i] = true;
+					ctx->uploadInFlight = false;
+					pumpUploads();
 					(*sendNext)();
 					return;
 				}
@@ -4525,11 +4575,15 @@ void ApiWrap::forwardMessages(
 							.arg(result ? result->filesize : -1));
 						s->textOnly[idx] = true;
 						s->uploadDone[idx] = true;
+						s->uploadInFlight = false;
+						pumpUploads();
 						(*sendNext)();
 						return;
 					} else {
 						// Paused / Cancelled / erased: do not send.
 						s->uploadDone[idx] = true;
+						s->uploadInFlight = false;
+						pumpUploads();
 						return;
 					}
 					const auto srcIt =
@@ -4537,6 +4591,8 @@ void ApiWrap::forwardMessages(
 					if (!srcIt) {
 						s->textOnly[idx] = true;
 						s->uploadDone[idx] = true;
+						s->uploadInFlight = false;
+						pumpUploads();
 						(*sendNext)();
 						return;
 					}
@@ -4550,8 +4606,19 @@ void ApiWrap::forwardMessages(
 						session().data().nextLocalMessageId());
 					s->uploadIds[idx] = uploadId;
 					ctx->uploadIndex->emplace(uploadId, idx);
-					session().uploader().upload(
-						uploadId, s->prepared[idx]);
+					EnhancedForward::updateUploadProgress(
+						&session(), ctx->peerId, idx,
+						{ s->prepared[idx]
+							? s->prepared[idx]->filename
+							: QString(),
+						  s->prepared[idx]
+							? qint64(s->prepared[idx]->filesize)
+							: qint64(0) },
+						0.0);
+					// Start the uploader upload now. uploadInFlight already
+					// covers this prep+upload as one ordered slot, so the
+					// next upload only begins after this one finishes.
+					session().uploader().upload(uploadId, s->prepared[idx]);
 					}));
 				_fileLoader->addTasks(std::move(tasks));
 			};
@@ -4578,12 +4645,16 @@ void ApiWrap::forwardMessages(
 					1.0);
 				saveProgress();
 				(*sendNext)();
+				ctx->uploadInFlight = false;
+				pumpUploads();
 			};
+
 			const auto onUploadFail = [=](const FullMsgId &fullId) {
 				if (fullId.peer != peerId) return;
 				const auto it = ctx->uploadIndex->find(fullId);
 				if (it == ctx->uploadIndex->end()) return;
 				const auto idx = it->second;
+				ctx->uploadInFlight = false;
 				const auto state =
 					EnhancedForward::currentProgress(ctx->peerId).state;
 				if (state == EnhancedForward::State::Paused) {
@@ -4602,6 +4673,7 @@ void ApiWrap::forwardMessages(
 				ctx->textOnly[idx] = true;
 				ctx->uploadDone[idx] = true;
 				(*sendNext)();
+				pumpUploads();
 			};
 			session().uploader().photoReady(
 			) | rpl::on_next(onUploadDone, *ctx->uploadLifetime);
@@ -4611,6 +4683,50 @@ void ApiWrap::forwardMessages(
 			) | rpl::on_next(onUploadFail, *ctx->uploadLifetime);
 			session().uploader().documentFailed(
 			) | rpl::on_next(onUploadFail, *ctx->uploadLifetime);
+
+			const auto onUploadProgress = [=](const FullMsgId &fullId) {
+				if (fullId.peer != peerId) return;
+				const auto it = ctx->uploadIndex->find(fullId);
+				if (it == ctx->uploadIndex->end()) return;
+				const auto idx = it->second;
+				if (ctx->uploadDone[idx]) return;
+				const auto prepared = ctx->prepared[idx];
+				const auto filename = prepared ? prepared->filename : QString();
+				const auto filesize = prepared
+					? qint64(prepared->filesize)
+					: qint64(0);
+				auto p = 0.;
+				if (prepared) {
+					const auto readState = [&](const Data::UploadState *s) {
+						if (s && s->size > 0) {
+							p = std::clamp(
+								float64(s->offset) / float64(s->size),
+								0.,
+								1.);
+						}
+					};
+					if (prepared->type == SendMediaType::Photo) {
+						const auto photo = session().data().photo(prepared->id);
+						if (photo->uploading()) {
+							readState(photo->uploadingData.get());
+						}
+					} else {
+						const auto document =
+							session().data().document(prepared->id);
+						if (document->uploading()) {
+							readState(document->uploadingData.get());
+						}
+					}
+				}
+				EnhancedForward::updateUploadProgress(
+					&session(), ctx->peerId, idx,
+					{ filename, filesize },
+					p);
+			};
+			session().uploader().photoProgress(
+			) | rpl::on_next(onUploadProgress, *ctx->uploadLifetime);
+			session().uploader().documentProgress(
+			) | rpl::on_next(onUploadProgress, *ctx->uploadLifetime);
 
 			// Classify each item. Items that need a network download are
 			// only marked here (needsDownload); the actual download is
@@ -4643,16 +4759,17 @@ void ApiWrap::forwardMessages(
 						// in place (no copy, no download).
 						ctx->paths[i] = filepath;
 						ctx->downloadDone[i] = true;
-						startUploadForItem(i);
+						EnhancedForward::updateDownloadProgress(
+							&session(), ctx->peerId, i,
+							{ doc->filename(), doc->size },
+							1.0);
 					} else {
 						auto name = doc->filename();
 						if (name.isEmpty()) name = u"file"_q;
 						name.replace(
 							QRegularExpression("[:<>\"\\\\|?*]"), "_");
 						ctx->paths[i] = QDir(ctx->downloadPath)
-							.absoluteFilePath(
-								QString::number(i)
-								+ u"_"_q + name);
+							.absoluteFilePath(name);
 						QDir().mkpath(
 							QFileInfo(ctx->paths[i]).absolutePath());
 						ctx->needsDownload[i] = true;
@@ -4669,7 +4786,11 @@ void ApiWrap::forwardMessages(
 					ctx->paths[i] = destPath;
 					if (v && v->loaded() && v->saveToFile(destPath)) {
 						ctx->downloadDone[i] = true;
-						startUploadForItem(i);
+						EnhancedForward::updateDownloadProgress(
+							&session(), ctx->peerId, i,
+							{ QString::number(photo->id) + u".jpg"_q,
+							  0 },
+							1.0);
 					} else {
 						ctx->needsDownload[i] = true;
 					}
@@ -4682,44 +4803,79 @@ void ApiWrap::forwardMessages(
 			}
 			LOG(("ENHANCED_FWD: classify done"));
 
+			// Kick off uploads for already-cached items in source order.
+			pumpUploads();
+
 			{
 				LOG(("ENHANCED_FWD: setting up download listeners"));
-				// Watch for document/photo download completions and
-				// immediately kick off the upload for that item.
 				// Always installed so pause/resume can restart downloads.
 				ctx->dlLifetime = std::make_shared<rpl::lifetime>();
 
-				const auto checkItem = [=](int i) {
+				// Forward declarations for the two mutually-recursive
+				// drivers: pumpDownloads (one download at a time,
+				// oldest-first) and checkItem (marks a finished download
+				// and advances both the download and upload pipelines).
+				const auto checkItem =
+					std::make_shared<std::function<void(int)>>();
+				const auto pumpDownloads =
+					std::make_shared<std::function<void()>>();
+
+				*checkItem = [=](int i) {
 					if (ctx->downloadDone[i]) {
 						return;
 					}
-					// Not this item's turn yet: it hasn't been started
-					// (downloads run one-at-a-time in order), so don't
-					// mistake "not loading" for "failed".
-					if (ctx->needsDownload[i]
-						&& !ctx->downloadStarted[i]) {
+					if (!ctx->downloadStarted[i]) {
 						return;
 					}
 					if (EnhancedForward::currentProgress(ctx->peerId).state
 						== EnhancedForward::State::Cancelled) {
 						return;
 					}
-					if (EnhancedForward::isPaused(ctx->peerId)) {
+					// The downloaded file must exist on disk and be
+					// complete for this item to be considered done.
+					const auto fi = QFileInfo(ctx->paths[i]);
+					if (fi.exists()) {
+						const auto item =
+							session().data().message(ctx->itemIds[i]);
+						const auto media = item
+							? item->media()
+							: nullptr;
+						if (const auto doc =
+								media ? media->document() : nullptr) {
+							if (doc->size > 0
+								&& fi.size() < doc->size) {
+								ctx->downloadedBytes[i] = fi.size();
+								EnhancedForward::updateDownloadProgress(
+									&session(), ctx->peerId, i,
+									{ doc->filename(), doc->size },
+									float64(fi.size())
+										/ float64(doc->size));
+								return;
+							}
+						}
+						ctx->downloadDone[i] = true;
+						ctx->downloadedBytes[i] = fi.size();
+						ctx->downloadInFlight = false;
+						EnhancedForward::updateDownloadProgress(
+							&session(), ctx->peerId, i,
+							{ fi.fileName(), fi.size() },
+							1.0);
+						// Immediately start this file's upload and the
+						// next file's download (they overlap).
+						pumpUploads();
+						(*pumpDownloads)();
 						return;
 					}
+					// File not ready yet: report progress from the
+					// document / photo load state.
 					const auto item =
 						session().data().message(ctx->itemIds[i]);
 					if (!item) {
-						ctx->textOnly[i] = true;
-						ctx->downloadDone[i] = true;
-						ctx->uploadDone[i] = true;
-						(*sendNext)();
 						return;
 					}
 					const auto media = item->media();
 					if (const auto doc =
 							media ? media->document() : nullptr) {
-						// Still downloading: report progress and wait.
 						if (doc->loading()) {
 							ctx->downloadedBytes[i] =
 								qint64(doc->loadOffset());
@@ -4727,40 +4883,7 @@ void ApiWrap::forwardMessages(
 								&session(), ctx->peerId, i,
 								{ doc->filename(), doc->size },
 								doc->progress());
-							return;
 						}
-						// Completed into our target file?
-						const auto fi = QFileInfo(ctx->paths[i]);
-						if (fi.exists()
-							&& doc->size > 0
-							&& fi.size() >= doc->size) {
-							ctx->downloadDone[i] = true;
-							ctx->downloadedBytes[i] = fi.size();
-							EnhancedForward::updateDownloadProgress(
-								&session(), ctx->peerId, i,
-								{ doc->filename(), doc->size },
-								1.0);
-							startUploadForItem(i);
-							return;
-						}
-						// Completed into a managed file location?
-						const auto fp = doc->filepath(true);
-						if (!fp.isEmpty()) {
-							ctx->paths[i] = fp;
-							ctx->downloadDone[i] = true;
-							ctx->downloadedBytes[i] = QFile(fp).size();
-							EnhancedForward::updateDownloadProgress(
-								&session(), ctx->peerId, i,
-								{ doc->filename(), doc->size },
-								1.0);
-							startUploadForItem(i);
-							return;
-						}
-						// Not loading and no file: download failed.
-						ctx->textOnly[i] = true;
-						ctx->downloadDone[i] = true;
-						ctx->uploadDone[i] = true;
-						(*sendNext)();
 					} else if (const auto photo =
 							media ? media->photo() : nullptr) {
 						const auto v = photo->activeMediaView();
@@ -4772,8 +4895,10 @@ void ApiWrap::forwardMessages(
 									&session(), ctx->peerId, i,
 									{ QString::number(photo->id) + u".jpg"_q,
 									  0 },
-								1.0);
-								startUploadForItem(i);
+									1.0);
+								ctx->downloadInFlight = false;
+								pumpUploads();
+								(*pumpDownloads)();
 							} else {
 								ctx->textOnly[i] = true;
 								ctx->downloadDone[i] = true;
@@ -4789,97 +4914,87 @@ void ApiWrap::forwardMessages(
 					}
 				};
 
-				// Start the next queued download, strictly one-at-a-time
-				// in index (source) order. This makes files complete in
-				// order so their uploads/sends stream to the chat in
-				// order instead of all at the end.
-				const auto startNextDownload = [=]() {
-					const auto state =
-						EnhancedForward::currentProgress(
-							ctx->peerId).state;
-					if (state == EnhancedForward::State::Cancelled
-						|| state == EnhancedForward::State::Paused) {
+				// Start the next download (one at a time, oldest-first).
+				// After it finishes, checkItem kicks off its upload and
+				// the following download together.
+				*pumpDownloads = [=]() {
+					// Skip items that do not need a download.
+					while (ctx->downloadCursor < n
+						&& (!ctx->needsDownload[ctx->downloadCursor]
+							|| ctx->downloadDone[ctx->downloadCursor])) {
+						ctx->downloadCursor++;
+					}
+					if (ctx->downloadInFlight) return;
+					if (ctx->downloadCursor >= n) {
 						return;
 					}
-					// If a download is already in flight, wait for it.
-					for (auto i = 0; i < n; i++) {
-						if (ctx->needsDownload[i]
-							&& ctx->downloadStarted[i]
-							&& !ctx->downloadDone[i]) {
-							return;
-						}
-					}
-					// Start the next not-yet-started item, in order.
-					for (auto i = 0; i < n; i++) {
-						if (!ctx->needsDownload[i]
-							|| ctx->downloadStarted[i]
-							|| ctx->downloadDone[i]) {
-							continue;
-						}
-						ctx->downloadStarted[i] = true;
-						const auto item =
-							session().data().message(ctx->itemIds[i]);
-						const auto media = item
-							? item->media()
-							: nullptr;
-						const auto doc = media
-							? media->document()
-							: nullptr;
-						const auto photo = media
-							? media->photo()
-							: nullptr;
-						if (doc) {
-							doc->save(
-								Data::FileOrigin(FullMsgId(
-									item->history()->peer->id,
-									item->id)),
-								ctx->paths[i],
-								LoadFromCloudOrLocal,
-								false,
-								true);
-						} else if (photo) {
-							photo->load(
-								Data::PhotoSize::Large,
-								Data::FileOrigin(FullMsgId(
-									item->history()->peer->id,
-									item->id)));
-						} else {
-							// Source gone / unsupported now.
-							ctx->textOnly[i] = true;
-							ctx->downloadDone[i] = true;
-							ctx->uploadDone[i] = true;
-							(*sendNext)();
-							continue;
-						}
-						// Handle an instantly-satisfied download (already
-						// cached) which fires no progress event.
-						checkItem(i);
-						if (ctx->downloadDone[i]) {
-							continue;
-						}
+					const auto i = ctx->downloadCursor;
+					ctx->downloadStarted[i] = true;
+					ctx->downloadInFlight = true;
+					ctx->downloadCursor++;
+					const auto item =
+						session().data().message(ctx->itemIds[i]);
+					const auto media = item
+						? item->media()
+						: nullptr;
+					const auto doc = media
+						? media->document()
+						: nullptr;
+					const auto photo = media
+						? media->photo()
+						: nullptr;
+					if (doc) {
+						doc->save(
+							Data::FileOrigin(FullMsgId(
+								item->history()->peer->id,
+								item->id)),
+							ctx->paths[i],
+							LoadFromCloudOrLocal,
+							false,
+							true);
+					} else if (photo) {
+						photo->load(
+							Data::PhotoSize::Large,
+							Data::FileOrigin(FullMsgId(
+								item->history()->peer->id,
+								item->id)));
+					} else {
+						ctx->textOnly[i] = true;
+						ctx->downloadDone[i] = true;
+						ctx->uploadDone[i] = true;
+						ctx->downloadInFlight = false;
+						(*sendNext)();
+						(*pumpDownloads)();
 						return;
+					}
+					// Already cached on disk: completes immediately.
+					(*checkItem)(i);
+					if (ctx->downloadDone[i]) {
+						(*pumpDownloads)();
 					}
 				};
-				ctx->startNextDownloadFn = startNextDownload;
 
-				// Listen for download completions via reactive streams;
-				// after processing, admit the next queued download.
+				ctx->startNextDownloadFn = [=]() {
+					(*pumpDownloads)();
+					pumpUploads();
+				};
+
+				// Watch for download completions and re-check the item.
 				session().data().documentLoadProgress(
 				) | rpl::on_next([=](not_null<DocumentData*> doc) {
-					for (auto i = 0; i < n; i++) checkItem(i);
-					startNextDownload();
+					for (auto i = 0; i < n; i++) (*checkItem)(i);
 				}, *ctx->dlLifetime);
 
 				session().downloaderTaskFinished(
 				) | rpl::on_next([=] {
-					for (auto i = 0; i < n; i++) checkItem(i);
-					startNextDownload();
+					for (auto i = 0; i < n; i++) (*checkItem)(i);
 				}, *ctx->dlLifetime);
 
-				// Begin the first download; the rest follow one-by-one.
-				LOG(("ENHANCED_FWD: starting ordered downloads"));
-				startNextDownload();
-				LOG(("ENHANCED_FWD: ordered downloads kicked off"));
+				// Begin: download + upload advance together.
+				LOG(("ENHANCED_FWD: starting pipeline"));
+				(*pumpDownloads)();
+				pumpUploads();
+				LOG(("ENHANCED_FWD: pipeline kicked off"));
 			}
 
 			// Kick off the ordered sender (handles text-only items

@@ -48,6 +48,20 @@ struct ItemInfo {
 	qint64 size = 0;
 };
 
+enum class ItemState : uint8 {
+	Pending,
+	Downloading,
+	Uploading,
+	Done,
+	Failed,
+};
+
+struct TrackedItem {
+	ItemState state = ItemState::Pending;
+	ItemInfo info;
+	float64 progress = 0;
+};
+
 struct ForwardProgress {
 	State state = State::Idle;
 	int sent = 0;
@@ -61,6 +75,7 @@ struct ForwardProgress {
 	float64 uploadProgress = 0;
 	qint64 downloadSpeed = 0;
 	qint64 uploadSpeed = 0;
+	std::vector<TrackedItem> items;
 };
 
 void startForwardSession(
@@ -114,6 +129,14 @@ void updateUploadProgress(
 	not_null<Main::Session*> session,
 	const PeerId &peerId,
 	int itemIndex,
+	const ItemInfo &info,
+	float64 progress);
+
+void updateItemState(
+	not_null<Main::Session*> session,
+	const PeerId &peerId,
+	int itemIndex,
+	ItemState state,
 	const ItemInfo &info,
 	float64 progress);
 

@@ -37,6 +37,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/vertical_list.h"
 #include "ui/ui_utility.h"
 #include "data/data_session.h"
+#include "data/data_changes.h"
+#include "data/data_peer.h"
 #include "data/data_user.h"
 #include "data/data_document.h"
 #include "data/stickers/data_custom_emoji.h"
@@ -53,6 +55,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_boxes.h"
 #include "styles/style_chat.h"
 #include "styles/style_chat_helpers.h"
+
+#include <QHBoxLayout>
 #include "styles/style_credits.h"
 #include "styles/style_dialogs.h"
 #include "styles/style_menu_icons.h"
@@ -1511,6 +1515,8 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 	auto result = std::make_unique<Ui::AbstractButton>(parent);
 	const auto raw = result.get();
 	raw->setCursor(style::cur_pointer);
+	raw->setMinimumHeight(56);
+	raw->setFixedHeight(56);
 
 	const auto title = CreateChild<Ui::FlatLabel>(
 		raw,
@@ -1521,6 +1527,92 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 	title->show();
 
 	auto titleText = std::make_shared<QString>();
+	auto downloadText = std::make_shared<QString>();
+	auto uploadText = std::make_shared<QString>();
+	auto downloadPctText = std::make_shared<QString>();
+	auto uploadPctText = std::make_shared<QString>();
+	auto downloadValue = std::make_shared<float64>(0);
+	auto uploadValue = std::make_shared<float64>(0);
+	auto downloadLastActive = std::make_shared<crl::time>(0);
+	auto uploadLastActive = std::make_shared<crl::time>(0);
+
+	class ProgressBar final : public Ui::RpWidget {
+	public:
+		ProgressBar(
+			not_null<QWidget*> parent,
+			std::shared_ptr<float64> value,
+			QColor color)
+		: RpWidget(parent)
+		, _value(std::move(value))
+		, _color(color) {
+			setFixedHeight(3);
+		}
+	protected:
+		void paintEvent(QPaintEvent *e) override {
+			QPainter p(this);
+			const auto w = width();
+			const auto h = height();
+			p.fillRect(QRect(0, 0, w, h), QColor(80, 80, 80, 60));
+			const auto filled = int(w * std::clamp(*_value, 0., 1.));
+			p.fillRect(QRect(0, 0, filled, h), _color);
+		}
+	private:
+		std::shared_ptr<float64> _value;
+		QColor _color;
+	};
+
+	const auto kDownloadColor = QColor(255, 59, 48);
+	const auto kUploadColor = QColor(0, 100, 210);
+
+	const auto makeItem = [&](
+			Ui::FlatLabel *&label,
+			ProgressBar *&bar,
+			Ui::FlatLabel *&pct,
+			std::shared_ptr<float64> value,
+			QColor color) {
+		label = CreateChild<Ui::FlatLabel>(
+			raw,
+			QString(),
+			st::frozenRestrictionSubtitle);
+		label->setTextColorOverride(color);
+		label->setAttribute(Qt::WA_TransparentForMouseEvents);
+		label->show();
+		bar = CreateChild<ProgressBar>(raw, std::move(value), color);
+		bar->setFixedWidth(70);
+		bar->show();
+		pct = CreateChild<Ui::FlatLabel>(
+			raw,
+			QString(),
+			st::frozenRestrictionSubtitle);
+		pct->setTextColorOverride(color);
+		pct->setAttribute(Qt::WA_TransparentForMouseEvents);
+		pct->setFixedWidth(36);
+		pct->show();
+	};
+
+	const auto kBarW = 70;
+	const auto kPctW = 36;
+	const auto kInnerGap = 6;
+	const auto kItemGap = 20;
+
+	Ui::FlatLabel *downloadLabel = nullptr;
+	Ui::FlatLabel *downloadPct = nullptr;
+	Ui::FlatLabel *uploadLabel = nullptr;
+	Ui::FlatLabel *uploadPct = nullptr;
+	ProgressBar *downloadBar = nullptr;
+	ProgressBar *uploadBar = nullptr;
+	makeItem(
+		downloadLabel,
+		downloadBar,
+		downloadPct,
+		downloadValue,
+		kDownloadColor);
+	makeItem(
+		uploadLabel,
+		uploadBar,
+		uploadPct,
+		uploadValue,
+		kUploadColor);
 
 	const auto actionBtn = CreateChild<Ui::LinkButton>(
 		raw,
@@ -1552,37 +1644,119 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 		const auto h = raw->height();
 		if (w <= 0 || h <= 0) return;
 
+		const auto skip = st::defaultDialogRow.padding.left();
+		const auto titleGap = 16;
+		const auto btnGap = 6;
+		const auto topRowH = title->height();
+		const auto rowH = 18;
+		const auto hasDl = !downloadText->isEmpty();
+		const auto hasUl = !uploadText->isEmpty();
+		const auto startY = 3;
+		const auto y = startY + topRowH + 2;
+
+		const auto itemWidth = [=](int textW) {
+			return textW
+				+ kInnerGap
+				+ kBarW
+				+ kInnerGap
+				+ kPctW;
+		};
+
+		const auto placeItem = [=](
+				not_null<Ui::FlatLabel*> label,
+				not_null<ProgressBar*> bar,
+				not_null<Ui::FlatLabel*> pct,
+				int x,
+				bool visible) {
+			if (!visible) {
+				label->hide();
+				bar->hide();
+				pct->hide();
+				return;
+			}
+			label->show();
+			bar->show();
+			pct->show();
+			const auto labelW = label->textMaxWidth();
+			label->resizeToWidth(labelW);
+			label->moveToLeft(x, y, w);
+			bar->setGeometry(
+				x + labelW + kInnerGap,
+				y + (rowH - 3) / 2,
+				kBarW,
+				3);
+			pct->moveToLeft(
+				x + labelW + kInnerGap + kBarW + kInnerGap,
+				y,
+				w);
+		};
+
+		const auto dlW = hasDl ? itemWidth(downloadLabel->textMaxWidth()) : 0;
+		const auto ulW = hasUl ? itemWidth(uploadLabel->textMaxWidth()) : 0;
+		const auto groupW = dlW
+			+ ulW
+			+ ((hasDl && hasUl) ? kItemGap : 0);
+		const auto groupX = (w - groupW) / 2;
+
 		if (cancelBtn->isHidden()) {
-			const auto top = (h - title->height()) / 2;
-			title->moveToLeft((w - title->width()) / 2, top, w);
+			title->moveToLeft((w - title->width()) / 2, startY, w);
+			placeItem(
+				downloadLabel,
+				downloadBar,
+				downloadPct,
+				groupX,
+				hasDl);
+			placeItem(
+				uploadLabel,
+				uploadBar,
+				uploadPct,
+				groupX + dlW + (hasDl ? kItemGap : 0),
+				hasUl);
 			return;
 		}
 
-		const auto gap = st::defaultDialogRow.padding.left();
 		const auto titleW = (title->width() > 0)
 			? title->width()
 			: QFontMetrics(title->font()).horizontalAdvance(*titleText);
 		const auto contentW = titleW
-			+ gap
+			+ titleGap
 			+ actionBtn->width()
-			+ gap
+			+ btnGap
 			+ cancelBtn->width();
-		const auto startX = std::max(0, (w - contentW) / 2);
-		const auto titleY = (h - title->height()) / 2;
-		const auto actionY = (h - actionBtn->height()) / 2;
-		const auto cancelY = (h - cancelBtn->height()) / 2;
-		title->moveToLeft(startX, titleY, w);
-		actionBtn->moveToLeft(startX + titleW + gap, actionY, w);
+		const auto startX = std::max(skip, (w - contentW) / 2);
+
+		title->moveToLeft(startX, startY, w);
+		actionBtn->moveToLeft(startX + titleW + titleGap, startY, w);
 		cancelBtn->moveToLeft(
-			startX + titleW + gap + actionBtn->width() + gap,
-			cancelY,
+			startX + titleW + titleGap + actionBtn->width() + btnGap,
+			startY,
 			w);
+
+		placeItem(
+			downloadLabel,
+			downloadBar,
+			downloadPct,
+			groupX,
+			hasDl);
+		placeItem(
+			uploadLabel,
+			uploadBar,
+			uploadPct,
+			groupX + dlW + (hasDl ? kItemGap : 0),
+			hasUl);
+	};
+
+	const auto formatSize = [](qint64 bytes) -> QString {
+		if (bytes < 1024) return u"%1 B"_q.arg(bytes);
+		if (bytes < 1024 * 1024) return u"%1 KB"_q.arg(bytes / 1024);
+		if (bytes < 1024 * 1024 * 1024) return u"%1 MB"_q.arg(bytes / (1024 * 1024));
+		return u"%1 GB"_q.arg(bytes / (1024 * 1024 * 1024));
 	};
 
 	const auto update = [=] {
 		const auto p = EnhancedForward::currentProgress(peer);
 		switch (p.state) {
-		case EnhancedForward::State::Sending:
+		case EnhancedForward::State::Sending: {
 			*titleText = u"Forwarding %1/%2"_q
 				.arg(p.sent)
 				.arg(p.total);
@@ -1591,8 +1765,46 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 			actionBtn->show();
 			cancelBtn->show();
 			raw->setCursor(style::cur_pointer);
+
+			const auto now = crl::now();
+			const auto kGrace = crl::time(400);
+			if (p.currentDownload >= 0 && !p.downloadItem.name.isEmpty()) {
+				const auto pct = int(p.downloadProgress * 100);
+				*downloadText = u"\u2b07 %1 (%2)"_q
+					.arg(p.downloadItem.name)
+					.arg(formatSize(p.downloadItem.size));
+				*downloadValue = p.downloadProgress;
+				*downloadPctText = QString::number(pct) + '%';
+				*downloadLastActive = now;
+			} else if (!downloadText->isEmpty()
+				&& now - *downloadLastActive >= kGrace) {
+				*downloadText = QString();
+				*downloadValue = 0;
+				*downloadPctText = QString();
+			}
+			if (p.currentUpload >= 0 && !p.uploadItem.name.isEmpty()) {
+				const auto pct = int(p.uploadProgress * 100);
+				*uploadText = u"\u2b06 %1 (%2)"_q
+					.arg(p.uploadItem.name)
+					.arg(formatSize(p.uploadItem.size));
+				*uploadValue = p.uploadProgress;
+				*uploadPctText = QString::number(pct) + '%';
+				*uploadLastActive = now;
+			} else if (!uploadText->isEmpty()
+				&& now - *uploadLastActive >= kGrace) {
+				*uploadText = QString();
+				*uploadValue = 0;
+				*uploadPctText = QString();
+			}
+			downloadLabel->setMarkedText(Ui::Text::Bold(*downloadText));
+			uploadLabel->setMarkedText(Ui::Text::Bold(*uploadText));
+			downloadPct->setMarkedText(Ui::Text::Bold(*downloadPctText));
+			uploadPct->setMarkedText(Ui::Text::Bold(*uploadPctText));
+			downloadBar->update();
+			uploadBar->update();
 			break;
-		case EnhancedForward::State::Paused:
+		}
+		case EnhancedForward::State::Paused: {
 			*titleText = u"Paused %1/%2"_q
 				.arg(p.sent)
 				.arg(p.total);
@@ -1602,11 +1814,24 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 			cancelBtn->show();
 			raw->setCursor(style::cur_pointer);
 			break;
+		}
 		case EnhancedForward::State::Cancelled:
 			*titleText = u"Forward Canceled"_q;
 			title->setText(*titleText);
 			actionBtn->hide();
 			cancelBtn->hide();
+			*downloadText = QString();
+			*uploadText = QString();
+			*downloadPctText = QString();
+			*uploadPctText = QString();
+			downloadLabel->setText(*downloadText);
+			uploadLabel->setText(*uploadText);
+			downloadPct->setText(*downloadPctText);
+			uploadPct->setText(*uploadPctText);
+			*downloadValue = 0;
+			*uploadValue = 0;
+			downloadBar->hide();
+			uploadBar->hide();
 			raw->setCursor(style::cur_default);
 			break;
 		case EnhancedForward::State::Finished:
@@ -1614,6 +1839,18 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 			title->setText(*titleText);
 			actionBtn->hide();
 			cancelBtn->hide();
+			*downloadText = QString();
+			*uploadText = QString();
+			*downloadPctText = QString();
+			*uploadPctText = QString();
+			downloadLabel->setText(*downloadText);
+			uploadLabel->setText(*uploadText);
+			downloadPct->setText(*downloadPctText);
+			uploadPct->setText(*uploadPctText);
+			*downloadValue = 0;
+			*uploadValue = 0;
+			downloadBar->hide();
+			uploadBar->hide();
 			raw->setCursor(style::cur_default);
 			break;
 		default:
@@ -1621,6 +1858,18 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 			title->setText(*titleText);
 			actionBtn->hide();
 			cancelBtn->hide();
+			*downloadText = QString();
+			*uploadText = QString();
+			*downloadPctText = QString();
+			*uploadPctText = QString();
+			downloadLabel->setText(*downloadText);
+			uploadLabel->setText(*uploadText);
+			downloadPct->setText(*downloadPctText);
+			uploadPct->setText(*uploadPctText);
+			*downloadValue = 0;
+			*uploadValue = 0;
+			downloadBar->hide();
+			uploadBar->hide();
 			raw->setCursor(style::cur_default);
 			break;
 		}
@@ -1628,7 +1877,14 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 	};
 	update();
 	const auto timer = raw->lifetime().make_state<base::Timer>(update);
-	timer->callEach(crl::time(500));
+	timer->callEach(crl::time(200));
+
+	session->changes().peerUpdates(
+		session->data().peer(peer),
+		Data::PeerUpdate::Flag::Slowmode
+	) | rpl::on_next([=](const Data::PeerUpdate &) {
+		update();
+	}, raw->lifetime());
 
 	raw->sizeValue() | rpl::on_next([=](QSize size) {
 		relayout();
