@@ -7,7 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include <optional>
+
 #include "data/data_peer_id.h"
+#include "rpl/producer.h"
 
 class HistoryItem;
 class PhotoData;
@@ -79,9 +82,10 @@ struct ForwardProgress {
 };
 
 void startForwardSession(
-	not_null<Main::Session*> session,
-	const PeerId &peerId,
-	int totalItems);
+		not_null<Main::Session*> session,
+		const PeerId &peerId,
+		int totalItems,
+		Fn<void()> saveCallback);
 
 void markItemSent(
 	not_null<Main::Session*> session,
@@ -142,19 +146,48 @@ void updateItemState(
 
 [[nodiscard]] bool isForwarding(const PeerId &id);
 
+[[nodiscard]] std::optional<PeerId> activeJobPeer();
+
 [[nodiscard]] bool isPaused(const PeerId &id);
 
 [[nodiscard]] ForwardProgress currentProgress(const PeerId &id);
 
 // Resume progress persistence (mirrors export's progress.json).
-QString ProgressFilePath(const PeerId &peerId, const QString &dir);
+// Files are named EF_<SrcChatName>.json for easy identification;
+// the peer ids live inside the JSON body (src_peer / dst_peer).
+QString ProgressFilePath(const QString &bareName, const QString &dir);
+QString ProgressFileBareName(const QString &srcName);
 void SaveProgress(
-	const PeerId &peerId,
-	const QString &dir,
+	const QString &path,
 	const QJsonObject &data);
-[[nodiscard]] std::optional<QJsonObject> LoadProgress(
-	const PeerId &peerId,
+[[nodiscard]] std::optional<QJsonObject> LoadProgress(const QString &path);
+void ClearProgress(const QString &path);
+
+struct SavedJob {
+	PeerId srcId = PeerId();
+	PeerId dstId = PeerId();
+	QString path;
+	int total = 0;
+	int sent = 0;
+	std::vector<FullMsgId> sourceMsgs;
+	std::vector<bool> uploadDone;
+	// Persisted resumable upload state: the client-chosen
+	// file_id and the number of server-acked parts, so a
+	// paused/interrupted upload can continue instead of
+	// re-uploading from the beginning after a restart.
+	std::vector<uint64> fileId;
+	std::vector<int> uploadedParts;
+};
+
+// List unfinished forward jobs (sent < total) found in dir.
+[[nodiscard]] std::vector<SavedJob> GetUnfinishedJobs(const QString &dir);
+
+// Find the unfinished forward job targeting dstId, if any.
+[[nodiscard]] std::optional<SavedJob> GetUnfinishedJobByDst(
+	const PeerId &dstId,
 	const QString &dir);
-void ClearProgress(const PeerId &peerId, const QString &dir);
+
+// Fires the destination peer whenever its forward state changes.
+[[nodiscard]] rpl::producer<PeerId> stateChanges();
 
 } // namespace EnhancedForward

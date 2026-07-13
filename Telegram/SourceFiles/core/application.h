@@ -347,7 +347,7 @@ public:
 protected:
 	bool eventFilter(QObject *object, QEvent *event) override;
 
-private:
+public:
 	static constexpr auto kDefaultSaveDelay = crl::time(1000);
 
 	friend bool IsAppLaunched();
@@ -374,11 +374,10 @@ private:
 	void processCreatedWindow(not_null<Window::Controller*> window);
 	void refreshApplicationIcon(Main::Session *session);
 
-	friend void QuitAttempt();
 	void quitDelayed();
 	[[nodiscard]] bool readyToQuit();
-
 	void showOpenGLCrashNotification();
+
 	void clearPasscodeLock();
 	void closeAdditionalWindows();
 
@@ -487,5 +486,7 @@ void Quit(QuitReason reason = QuitReason::Default);
 [[nodiscard]] bool Quitting();
 
 void Restart();
+
+void QuitAttempt();
 
 } // namespace Core

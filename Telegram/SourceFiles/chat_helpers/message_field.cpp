@@ -48,6 +48,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "mainwindow.h"
 #include "main/main_session.h"
+#include "apiwrap.h"
+#include "core/file_utilities.h"
 #include "settings/settings_common.h"
 #include "settings/sections/settings_premium.h"
 #include "enhanced_forward.h"
@@ -1639,6 +1641,55 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 		EnhancedForward::cancelForward(peer, session);
 	});
 
+	auto jobSrcId = PeerId();
+	auto jobPath = QString();
+	const auto dir = File::DefaultDownloadPath(session) + "ForwardTemp/";
+	std::function<void()> updateLaterRow;
+	const auto laterLabel = CreateChild<Ui::FlatLabel>(
+		raw,
+		u"Unfinished forward"_q,
+		st::frozenRestrictionSubtitle);
+	laterLabel->setTextColorOverride(st::historyComposeButton.color->c);
+	laterLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+	laterLabel->hide();
+	const auto laterResumeBtn = CreateChild<Ui::LinkButton>(
+		raw,
+		u"Resume"_q,
+		st::defaultLinkButton);
+	laterResumeBtn->setColorOverride(st::historyComposeButton.color->c);
+	laterResumeBtn->hide();
+	laterResumeBtn->setClickedCallback([=] {
+		session->api().startResumeForward(jobSrcId, peer, session);
+	});
+	const auto laterCancelBtn = CreateChild<Ui::LinkButton>(
+		raw,
+		u"Cancel"_q,
+		st::defaultLinkButton);
+	laterCancelBtn->setColorOverride(st::historyComposeButton.color->c);
+	laterCancelBtn->hide();
+	laterCancelBtn->setClickedCallback([=] {
+		EnhancedForward::ClearProgress(jobPath);
+		updateLaterRow();
+	});
+
+	updateLaterRow = [=, &jobSrcId, &jobPath] {
+		const auto active = EnhancedForward::currentProgress(peer).state;
+		const auto job = EnhancedForward::GetUnfinishedJobByDst(peer, dir);
+		const auto visible = (active == EnhancedForward::State::Idle)
+			&& job.has_value();
+		laterLabel->setVisible(visible);
+		laterResumeBtn->setVisible(visible);
+		laterCancelBtn->setVisible(visible);
+		if (visible) {
+			jobSrcId = job->srcId;
+			jobPath = job->path;
+			laterLabel->setText(
+				u"Unfinished forward %1/%2"_q
+					.arg(job->sent)
+					.arg(job->total));
+		}
+	};
+
 	const auto relayout = [=] {
 		const auto w = raw->width();
 		const auto h = raw->height();
@@ -1653,6 +1704,34 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 		const auto hasUl = !uploadText->isEmpty();
 		const auto startY = 3;
 		const auto y = startY + topRowH + 2;
+
+		const auto laterVisible = !laterLabel->isHidden();
+		const auto fullH = laterVisible ? 74 : 56;
+		if (raw->height() != fullH) {
+			raw->setFixedHeight(fullH);
+		}
+		if (laterVisible) {
+			const auto ly = fullH - 18;
+			const auto lContentW = laterLabel->textMaxWidth()
+				+ titleGap
+				+ laterResumeBtn->width()
+				+ btnGap
+				+ laterCancelBtn->width();
+			const auto lStartX = std::max(skip, (w - lContentW) / 2);
+			laterLabel->moveToLeft(lStartX, ly, w);
+			laterResumeBtn->moveToLeft(
+				lStartX + laterLabel->textMaxWidth() + titleGap,
+				ly,
+				w);
+			laterCancelBtn->moveToLeft(
+				lStartX
+					+ laterLabel->textMaxWidth()
+					+ titleGap
+					+ laterResumeBtn->width()
+					+ btnGap,
+				ly,
+				w);
+		}
 
 		const auto itemWidth = [=](int textW) {
 			return textW
@@ -1777,7 +1856,8 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 				*downloadPctText = QString::number(pct) + '%';
 				*downloadLastActive = now;
 			} else if (!downloadText->isEmpty()
-				&& now - *downloadLastActive >= kGrace) {
+				&& (now - *downloadLastActive >= kGrace
+					|| p.currentUpload >= 0)) {
 				*downloadText = QString();
 				*downloadValue = 0;
 				*downloadPctText = QString();
@@ -1874,6 +1954,7 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 			break;
 		}
 		relayout();
+		updateLaterRow();
 	};
 	update();
 	const auto timer = raw->lifetime().make_state<base::Timer>(update);
@@ -1888,6 +1969,13 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 
 	raw->sizeValue() | rpl::on_next([=](QSize size) {
 		relayout();
+	}, raw->lifetime());
+
+	EnhancedForward::stateChanges(
+	) | rpl::filter([=](const PeerId &id) {
+		return id == peer;
+	}) | rpl::on_next([=] {
+		updateLaterRow();
 	}, raw->lifetime());
 
 	return result;

@@ -42,6 +42,12 @@ struct UploadSecureProgress {
 	int64 size = 0;
 };
 
+struct UploadProgress {
+	FullMsgId fullId;
+	int64 offset = 0;
+	int64 size = 0;
+};
+
 struct UploadSecureDone {
 	FullMsgId fullId;
 	uint64 fileId = 0;
@@ -58,7 +64,8 @@ public:
 
 	void upload(
 		FullMsgId itemId,
-		const std::shared_ptr<FilePrepareResult> &file);
+		const std::shared_ptr<FilePrepareResult> &file,
+		int resumeFromParts = 0);
 
 	void pause(FullMsgId itemId);
 	void cancel(FullMsgId itemId);
@@ -78,6 +85,14 @@ public:
 	}
 	[[nodiscard]] rpl::producer<FullMsgId> documentProgress() const {
 		return _documentProgress.events();
+	}
+	[[nodiscard]] auto photoProgressInfo() const
+	-> rpl::producer<UploadProgress> {
+		return _photoProgressInfo.events();
+	}
+	[[nodiscard]] auto documentProgressInfo() const
+	-> rpl::producer<UploadProgress> {
+		return _documentProgressInfo.events();
 	}
 	[[nodiscard]] auto secureProgress() const
 	-> rpl::producer<UploadSecureProgress> {
@@ -180,6 +195,8 @@ private:
 	rpl::event_stream<UploadSecureDone> _secureReady;
 	rpl::event_stream<FullMsgId> _photoProgress;
 	rpl::event_stream<FullMsgId> _documentProgress;
+	rpl::event_stream<UploadProgress> _photoProgressInfo;
+	rpl::event_stream<UploadProgress> _documentProgressInfo;
 	rpl::event_stream<UploadSecureProgress> _secureProgress;
 	rpl::event_stream<FullMsgId> _photoFailed;
 	rpl::event_stream<FullMsgId> _documentFailed;

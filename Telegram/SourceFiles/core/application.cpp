@@ -104,7 +104,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Core {
 namespace {
 
-constexpr auto kQuitPreventTimeoutMs = crl::time(1500);
 constexpr auto kAutoLockTimeoutLateMs = crl::time(3000);
 constexpr auto kClearEmojiImageSourceTimeout = 10 * crl::time(1000);
 
@@ -1768,7 +1767,7 @@ void Application::refreshGlobalProxy() {
 	Sandbox::Instance().refreshGlobalProxy();
 }
 
-void QuitAttempt() {
+void Core::QuitAttempt() {
 	const auto savingSession = Sandbox::Instance().isSavingSession();
 	if (!IsAppLaunched()
 		|| savingSession
@@ -1815,11 +1814,7 @@ void Application::quitPreventFinished() {
 
 void Application::quitDelayed() {
 	for (const auto &[id, controller] : _windows) {
-		controller->widget()->hide();
-	}
-	if (!_private->quitTimer.isActive()) {
-		_private->quitTimer.setCallback([] { Sandbox::QuitWhenStarted(); });
-		_private->quitTimer.callOnce(kQuitPreventTimeoutMs);
+		controller->showEnhancedForwardQuitConfirm();
 	}
 }
 

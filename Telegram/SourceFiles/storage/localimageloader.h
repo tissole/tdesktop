@@ -164,6 +164,7 @@ struct FilePrepareResult {
 
 	TaskId taskId = kEmptyTaskId;
 	uint64 id = 0;
+	uint64 fileId = 0; // explicit file_id for saveFilePart (0 = use id/thumbId)
 	FileLoadTo to;
 	std::shared_ptr<SendingAlbum> album;
 	SendMediaType type = SendMediaType::File;

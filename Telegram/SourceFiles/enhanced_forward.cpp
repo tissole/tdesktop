@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "enhanced_forward.h"
 
 #include "apiwrap.h"
+#include "rpl/rpl.h"
 #include "base/debug_log.h"
 #include "base/timer.h"
 #include "data/data_changes.h"
@@ -40,6 +41,7 @@ struct SharedState {
 	Fn<void()> cancelCallback;
 	Fn<void()> pauseCallback;
 	Fn<void()> resumeCallback;
+	Fn<void()> saveCallback;
 	int currentDownload = -1;
 	std::vector<TrackedItem> items;
 	int currentUpload = -1;
@@ -53,6 +55,14 @@ struct SharedState {
 
 using StateMap = std::unordered_map<PeerId, SharedState>;
 
+rpl::event_stream<PeerId> StateChanges;
+
+void NotifyStateChanged(const PeerId &peer) {
+	StateChanges.fire_copy(peer);
+}
+
+} // namespace
+
 StateMap &ActiveStates() {
 	static StateMap map;
 	return map;
@@ -62,9 +72,8 @@ void fireUpdate(not_null<Main::Session*> session, const PeerId &peer) {
 	session->changes().peerUpdated(
 		session->data().peer(peer),
 		Data::PeerUpdate::Flag::Slowmode);
+	NotifyStateChanged(peer);
 }
-
-} // namespace
 
 // Fetch message noforwards flag from server
 bool checkMsgRestriction(not_null<HistoryItem*> item) {
@@ -246,7 +255,8 @@ Split classifyItems(
 void startForwardSession(
 		not_null<Main::Session*> session,
 		const PeerId &peerId,
-		int totalItems) {
+		int totalItems,
+		Fn<void()> saveCallback) {
 	auto &states = ActiveStates();
 	states.erase(peerId);
 
@@ -258,6 +268,7 @@ void startForwardSession(
 	state.finished = false;
 	state.destPeer = peerId;
 	state.items.resize(totalItems);
+	state.saveCallback = std::move(saveCallback);
 
 	fireUpdate(session, peerId);
 }
@@ -274,6 +285,9 @@ void markItemSent(
 
 	state.sent++;
 	fireUpdate(session, peerId);
+	if (state.saveCallback) {
+		state.saveCallback();
+	}
 
 	if (state.sent >= state.total) {
 		state.finished = true;
@@ -462,6 +476,16 @@ bool isForwarding(const PeerId &id) {
 	return !it->second.cancelled && !it->second.finished;
 }
 
+std::optional<PeerId> activeJobPeer() {
+	const auto &states = ActiveStates();
+	for (const auto &[peer, state] : states) {
+		if (!state.cancelled && !state.finished) {
+			return peer;
+		}
+	}
+	return std::nullopt;
+}
+
 bool isPaused(const PeerId &id) {
 	const auto &states = ActiveStates();
 	const auto it = states.find(id);
@@ -504,17 +528,29 @@ ForwardProgress currentProgress(const PeerId &id) {
 	return result;
 }
 
-QString ProgressFilePath(const PeerId &peerId, const QString &dir) {
+QString ProgressFilePath(
+		const QString &bareName,
+		const QString &dir) {
 	return QDir(dir).absoluteFilePath(
-		u"enhanced_forward_%1.json"_q.arg(peerId.value));
+		u"EF_%1.json"_q.arg(bareName));
+}
+
+QString ProgressFileBareName(const QString &srcName) {
+	auto name = srcName;
+	static const QRegularExpression bad(
+		QRegularExpression::escape(u"\\/:*?\"<>|"_q));
+	name.replace(bad, u"_"_q);
+	name = name.trimmed();
+	if (name.isEmpty()) {
+		name = u"chat"_q;
+	}
+	return name;
 }
 
 void SaveProgress(
-		const PeerId &peerId,
-		const QString &dir,
+		const QString &path,
 		const QJsonObject &data) {
-	QDir().mkpath(dir);
-	const auto path = ProgressFilePath(peerId, dir);
+	QDir().mkpath(QFileInfo(path).absolutePath());
 	QFile f(path);
 	if (!f.open(QIODevice::WriteOnly)) {
 		LOG(("ENHANCED_FWD: cannot write progress %1").arg(path));
@@ -523,10 +559,7 @@ void SaveProgress(
 	f.write(QJsonDocument(data).toJson(QJsonDocument::Indented));
 }
 
-std::optional<QJsonObject> LoadProgress(
-		const PeerId &peerId,
-		const QString &dir) {
-	const auto path = ProgressFilePath(peerId, dir);
+std::optional<QJsonObject> LoadProgress(const QString &path) {
 	QFile f(path);
 	if (!f.open(QIODevice::ReadOnly)) {
 		return std::nullopt;
@@ -538,9 +571,64 @@ std::optional<QJsonObject> LoadProgress(
 	return doc.object();
 }
 
-void ClearProgress(const PeerId &peerId, const QString &dir) {
-	const auto path = ProgressFilePath(peerId, dir);
+void ClearProgress(const QString &path) {
 	QFile(path).remove();
+}
+
+std::vector<SavedJob> GetUnfinishedJobs(const QString &dir) {
+	std::vector<SavedJob> result;
+	// Files are EF_<SrcChatName>.json; peer ids live inside.
+	const auto files = QDir(dir).entryList(
+		QStringList(u"EF_*.json"_q),
+		QDir::Files);
+	for (const auto &name : files) {
+		const auto path = ProgressFilePath(name, dir);
+		const auto data = LoadProgress(path);
+		if (!data) continue;
+		const auto srcId = PeerId(
+			(*data)["src_peer"].toVariant().toULongLong());
+		const auto dstId = PeerId(
+			(*data)["peer_id"].toVariant().toULongLong());
+		if (!srcId || !dstId) continue;
+		const auto total = int((*data)["total"].toInt(0));
+		const auto sent = int((*data)["sent"].toInt(0));
+		if (total <= 0 || sent >= total) continue;
+		SavedJob job;
+		job.srcId = srcId;
+		job.dstId = dstId;
+		job.path = path;
+		job.total = total;
+		job.sent = sent;
+		const auto msgs = (*data)["source_msgs"].toArray();
+		for (const auto &v : msgs) {
+			const auto obj = v.toObject();
+			job.sourceMsgs.push_back(FullMsgId(
+				PeerId(obj["peer"].toVariant().toULongLong()),
+				MsgId(obj["msg"].toVariant().toLongLong())));
+		}
+		const auto items = (*data)["items"].toArray();
+		for (const auto &v : items) {
+			const auto obj = v.toObject();
+			job.uploadDone.push_back(obj["upload_done"].toBool(false));
+		}
+		result.push_back(std::move(job));
+	}
+	return result;
+}
+
+std::optional<SavedJob> GetUnfinishedJobByDst(
+		const PeerId &dstId,
+		const QString &dir) {
+	for (const auto &job : GetUnfinishedJobs(dir)) {
+		if (job.dstId == dstId) {
+			return job;
+		}
+	}
+	return std::nullopt;
+}
+
+rpl::producer<PeerId> stateChanges() {
+	return StateChanges.events();
 }
 
 } // namespace EnhancedForward

@@ -1021,7 +1021,9 @@ not_null<HistoryItem*> History::addNewToBack(
 	if (!unread && item->isRegular()) {
 		const auto from = loadedAtTop() ? 0 : minMsgId();
 		const auto till = loadedAtBottom() ? ServerMaxMsgId : maxMsgId();
-		if (_messages) {
+		// Defensive: ensure from <= till to avoid assertion failure.
+		// This can happen if the message list is in an inconsistent state.
+		if (from <= till && _messages) {
 			_messages->addExisting(item->id, { from, till });
 		}
 		if (const auto types = item->sharedMediaTypes()) {
@@ -1745,6 +1747,10 @@ void History::addItemToBlock(not_null<HistoryItem*> item) {
 void History::addEdgesToSharedMedia() {
 	auto from = loadedAtTop() ? 0 : minMsgId();
 	auto till = loadedAtBottom() ? ServerMaxMsgId : maxMsgId();
+	// Defensive: ensure from <= till to avoid assertion failure.
+	if (from > till) {
+		return;
+	}
 	for (auto i = 0; i != Storage::kSharedMediaTypeCount; ++i) {
 		const auto type = static_cast<Storage::SharedMediaType>(i);
 		session().storage().add(Storage::SharedMediaAddSlice(
@@ -3781,6 +3787,10 @@ Data::HistoryMessages &History::messages() {
 		const auto max = maxMsgId();
 		const auto from = loadedAtTop() ? 0 : minMsgId();
 		const auto till = loadedAtBottom() ? ServerMaxMsgId : max;
+		// Defensive: ensure from <= till to avoid assertion failure.
+		if (from > till) {
+			return *_messages;
+		}
 		auto list = std::vector<MsgId>();
 		list.reserve(std::min(
 			int(_items.size()),

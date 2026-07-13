@@ -254,9 +254,18 @@ bool FileLoader::checkForOpen() {
 		|| _fileIsOpen) {
 		return true;
 	}
-	_fileIsOpen = _file.open(QIODevice::WriteOnly);
-	if (_fileIsOpen) {
-		return true;
+	if (QFileInfo(_filename).exists()
+		&& QFileInfo(_filename).size() > 0) {
+		_fileIsOpen = _file.open(QIODevice::ReadWrite);
+		if (_fileIsOpen) {
+			onResumeFromOffset(_file.size());
+			return true;
+		}
+	} else {
+		_fileIsOpen = _file.open(QIODevice::WriteOnly);
+		if (_fileIsOpen) {
+			return true;
+		}
 	}
 	cancel(FailureReason::FileWriteFailure);
 	return false;
@@ -326,6 +335,17 @@ bool FileLoader::tryLoadLocal() {
 	}
 	_localStatus = LocalStatus::NotFound;
 	return false;
+}
+
+void FileLoader::pause() {
+	cancelHook();
+
+	_paused = true;
+	if (_fileIsOpen) {
+		_file.close();
+		_fileIsOpen = false;
+	}
+	_updates.fire_done();
 }
 
 void FileLoader::cancel() {

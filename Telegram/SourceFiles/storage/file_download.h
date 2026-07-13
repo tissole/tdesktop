@@ -84,6 +84,9 @@ public:
 	[[nodiscard]] bool cancelled() const {
 		return _cancelled;
 	}
+	[[nodiscard]] bool paused() const {
+		return _paused;
+	}
 	[[nodiscard]] const QByteArray &bytes() const {
 		return _data;
 	}
@@ -110,6 +113,7 @@ public:
 	void increaseLoadSize(int64 size, bool autoLoading);
 
 	void start();
+	void pause();
 	void cancel();
 
 	[[nodiscard]] bool loadingLocal() const {
@@ -152,6 +156,8 @@ protected:
 	virtual void startLoadingWithPartial(const QByteArray &data) {
 		startLoading();
 	}
+	virtual void onResumeFromOffset(int64 offset) {
+	}
 
 	void cancel(FailureReason failed);
 
@@ -167,6 +173,7 @@ protected:
 	uint8 _cacheTag = 0;
 	bool _finished = false;
 	bool _cancelled = false;
+	bool _paused = false;
 	mutable LocalStatus _localStatus = LocalStatus::NotTried;
 
 	QString _filename;

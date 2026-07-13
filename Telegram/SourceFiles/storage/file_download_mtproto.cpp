@@ -114,9 +114,21 @@ mtpFileLoader::mtpFileLoader(
 }
 
 mtpFileLoader::~mtpFileLoader() {
+	if (_paused) {
+		if (_fileIsOpen) {
+			_file.close();
+			_fileIsOpen = false;
+		}
+		_finished = true;
+		return;
+	}
 	if (!_finished) {
 		cancel();
 	}
+}
+
+void mtpFileLoader::onResumeFromOffset(int64 offset) {
+	_nextRequestOffset = offset;
 }
 
 Data::FileOrigin mtpFileLoader::fileOrigin() const {

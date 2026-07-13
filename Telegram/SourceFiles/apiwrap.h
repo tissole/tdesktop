@@ -41,6 +41,10 @@ namespace InlineBots {
 class Result;
 } // namespace InlineBots
 
+namespace EnhancedForward {
+struct SavedJob;
+} // namespace EnhancedForward
+
 namespace Storage {
 enum class SharedMediaType : signed char;
 class DownloadMtprotoTask;
@@ -330,7 +334,16 @@ public:
 	void forwardMessages(
 		Data::ResolvedForwardDraft &&draft,
 		SendAction action,
-		FnMut<void()> &&successCallback = nullptr);
+		FnMut<void()> &&successCallback = nullptr,
+		std::shared_ptr<EnhancedForward::SavedJob> resumeJob = nullptr);
+	void startResumeForward(
+		const PeerId &srcId,
+		const PeerId &dstId,
+		not_null<Main::Session*> session);
+	void startResumeEnhancedForward(
+		const PeerId &srcId,
+		const PeerId &dstId,
+		not_null<Main::Session*> session);
 	void shareContact(
 		const QString &phone,
 		const QString &firstName,

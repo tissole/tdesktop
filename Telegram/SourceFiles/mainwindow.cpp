@@ -30,6 +30,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_domain.h"
 #include "mainwidget.h"
 #include "ui/boxes/confirm_box.h"
+#include "enhanced_forward.h"
+#include "core/file_utilities.h"
+#include "ui/wrap/vertical_layout.h"
+#include "ui/widgets/labels.h"
 #include "boxes/connection_box.h"
 #include "storage/storage_account.h"
 #include "storage/localstorage.h"
@@ -97,6 +101,13 @@ MainWindow::MainWindow(not_null<Window::Controller*> controller)
 	Core::App().passcodeLockChanges(
 	) | rpl::on_next([=] {
 		updateGlobalMenu();
+	}, lifetime());
+
+	Core::App().domain().activeSessionChanges(
+	) | rpl::on_next([=](Main::Session *session) {
+		if (session) {
+			showUnfinishedForwards(session);
+		}
 	}, lifetime());
 
 	Ui::Emoji::Updated(
@@ -705,6 +716,34 @@ void MainWindow::closeEvent(QCloseEvent *e) {
 		e->accept();
 		return;
 	}
+	const auto active = EnhancedForward::activeJobPeer();
+	if (active.has_value() && !EnhancedForward::isPaused(*active)) {
+		e->ignore();
+		const auto peer = *active;
+		const auto session = sessionController()
+			? &sessionController()->session()
+			: nullptr;
+		if (!session) {
+			e->accept();
+			Core::Quit();
+			return;
+		}
+		Ui::ConfirmBoxArgs args;
+		args.text = tr::lng_enhanced_forward_close_confirm(tr::now);
+		args.confirmText = tr::lng_enhanced_forward_pause(tr::now);
+		args.cancelText = tr::lng_enhanced_forward_cancel(tr::now);
+		args.confirmStyle = &st::defaultBoxButton;
+		args.cancelled = [=] {
+			EnhancedForward::cancelForward(peer, session);
+			close();
+		};
+		args.confirmed = [=] {
+			EnhancedForward::pauseForward(peer, session);
+			close();
+		};
+		controller().show(Ui::MakeConfirmBox(std::move(args)));
+		return;
+	}
 	e->ignore();
 	const auto hasAuth = [&] {
 		if (!Core::App().domain().started()) {
@@ -720,6 +759,88 @@ void MainWindow::closeEvent(QCloseEvent *e) {
 	if (!hasAuth || !hideNoQuit()) {
 		Core::Quit();
 	}
+}
+
+void MainWindow::showUnfinishedForwards(not_null<Main::Session*> session) {
+	const auto dir = File::DefaultDownloadPath(session)
+		+ "ForwardTemp/";
+	const auto jobs = EnhancedForward::GetUnfinishedJobs(dir);
+	if (jobs.empty()) return;
+
+	auto box = Box([](not_null<Ui::GenericBox*>) {});
+	box->setTitle(u"Unfinished enhanced forwards"_q);
+
+	for (const auto &job : jobs) {
+		box->verticalLayout()->add(object_ptr<Ui::FlatLabel>(
+			box.get(),
+			u"Forward to %1: %2/%3 sent"_q
+				.arg(job.dstId.value)
+				.arg(job.sent)
+				.arg(job.total),
+			st::defaultFlatLabel));
+		const auto buttons = box->verticalLayout()->add(
+			Box<Ui::VerticalLayout>());
+		const auto resume = buttons->add(
+			object_ptr<Ui::RoundButton>(
+				box.get(), rpl::single(u"Resume"_q), st::defaultBoxButton),
+			style::al_right);
+		const auto cancel = buttons->add(
+			object_ptr<Ui::RoundButton>(
+				box.get(), rpl::single(u"Cancel"_q), st::defaultBoxButton),
+			style::al_right);
+		const auto later = buttons->add(
+			object_ptr<Ui::RoundButton>(
+				box.get(), rpl::single(u"Later"_q), st::defaultBoxButton),
+			style::al_right);
+		resume->setClickedCallback([&, job] {
+			session->api().startResumeForward(job.srcId, job.dstId, session);
+			box->closeBox();
+		});
+		cancel->setClickedCallback([&, job] {
+			EnhancedForward::ClearProgress(job.path);
+			box->closeBox();
+		});
+		later->setClickedCallback([&] {
+			box->closeBox();
+		});
+	}
+	const auto laterAll = box->verticalLayout()->add(
+		object_ptr<Ui::RoundButton>(
+			box.get(), rpl::single(u"Later all"_q), st::defaultBoxButton),
+		style::al_right);
+	laterAll->setClickedCallback([&] {
+		box->closeBox();
+	});
+
+	controller().show(std::move(box));
+}
+
+void MainWindow::showEnhancedForwardQuitConfirm() {
+	const auto active = EnhancedForward::activeJobPeer();
+	if (!active.has_value() || EnhancedForward::isPaused(*active)) {
+		return;
+	}
+	const auto peer = *active;
+	const auto session = sessionController()
+		? &sessionController()->session()
+		: nullptr;
+	if (!session) {
+		return;
+	}
+	Ui::ConfirmBoxArgs args;
+	args.text = tr::lng_enhanced_forward_close_confirm(tr::now);
+	args.confirmText = tr::lng_enhanced_forward_pause(tr::now);
+	args.cancelText = tr::lng_enhanced_forward_cancel(tr::now);
+	args.confirmStyle = &st::defaultBoxButton;
+	args.cancelled = [=] {
+		EnhancedForward::cancelForward(peer, session);
+		Core::QuitAttempt();
+	};
+	args.confirmed = [=] {
+		EnhancedForward::pauseForward(peer, session);
+		Core::QuitAttempt();
+	};
+	controller().show(Ui::MakeConfirmBox(std::move(args)));
 }
 
 void MainWindow::updateControlsGeometry() {

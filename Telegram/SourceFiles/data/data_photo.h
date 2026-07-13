@@ -175,6 +175,9 @@ public:
 	int32 getDC(){
 		return this->_dc;
 	};
+	[[nodiscard]] uint64 accessHash() const {
+		return _access;
+	}
 
 private:
 	[[nodiscard]] Data::CloudFile &videoFile(Data::PhotoSize size);

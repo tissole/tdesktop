@@ -61,6 +61,7 @@ private:
 	void startLoading() override;
 	void startLoadingWithPartial(const QByteArray &data) override;
 	void cancelHook() override;
+	void onResumeFromOffset(int64 offset) override;
 
 	bool readyToRequest() const override;
 	int64 takeNextRequestOffset() override;

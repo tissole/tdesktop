@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "window/window_controller.h"
 
+#include "window/main_window.h"
+
 #include "api/api_updates.h"
 #include "core/application.h"
 #include "core/click_handler_types.h"
@@ -647,6 +649,10 @@ void Controller::checkHighlightControl(const QString &id, QWidget *widget) {
 
 rpl::lifetime &Controller::lifetime() {
 	return _lifetime;
+}
+
+void Controller::showEnhancedForwardQuitConfirm() {
+	widget()->showEnhancedForwardQuitConfirm();
 }
 
 } // namespace Window

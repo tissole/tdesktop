@@ -1294,6 +1294,14 @@ void DocumentData::cancel() {
 	_owner->documentLoadDone(this);
 }
 
+void DocumentData::pause() {
+	if (!loading() || !_loader) {
+		return;
+	}
+
+	_loader->pause();
+}
+
 bool DocumentData::cancelled() const {
 	return (_flags & Flag::DownloadCancelled);
 }

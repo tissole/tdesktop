@@ -70,7 +70,10 @@ constexpr auto kAcceptAsFastIfTotalAtLeast = 512 * 1024;
 } // namespace
 
 struct Uploader::Entry {
-	Entry(FullMsgId itemId, const std::shared_ptr<FilePrepareResult> &file);
+	Entry(
+		FullMsgId itemId,
+		const std::shared_ptr<FilePrepareResult> &file,
+		int startPartsSent = 0);
 
 	void setDocSize(int64 size);
 	bool setPartSize(int partSize);
@@ -94,7 +97,6 @@ struct Uploader::Entry {
 	ushort docPartsSent = 0;
 	ushort docPartsCount = 0;
 	ushort docPartsWaiting = 0;
-
 };
 
 struct Uploader::Request {
@@ -111,23 +113,28 @@ struct Uploader::Request {
 
 Uploader::Entry::Entry(
 	FullMsgId itemId,
-	const std::shared_ptr<FilePrepareResult> &file)
+	const std::shared_ptr<FilePrepareResult> &file,
+	int startPartsSent)
 : itemId(itemId)
 , file(file)
 , parts((file->type == SendMediaType::Photo
 	|| file->type == SendMediaType::Secure)
 		? &file->fileparts
 		: &file->thumbparts)
-, partsOfId((file->type == SendMediaType::Photo
-	|| file->type == SendMediaType::Secure)
+, partsOfId((file->fileId != 0)
+		? file->fileId
+		: ((file->type == SendMediaType::Photo
+			|| file->type == SendMediaType::Secure)
 		? file->id
-		: file->thumbId) {
+		: file->thumbId)) {
 	if (file->type == SendMediaType::File
 		|| file->type == SendMediaType::ThemeFile
 		|| file->type == SendMediaType::Audio
 		|| file->type == SendMediaType::Round) {
 		setDocSize(file->filesize);
+		docPartsSent = ushort(startPartsSent);
 	}
+	partsSent = ushort(startPartsSent);
 }
 
 void Uploader::Entry::setDocSize(int64 size) {
@@ -298,7 +305,8 @@ FullMsgId Uploader::currentUploadId() const {
 
 void Uploader::upload(
 		FullMsgId itemId,
-		const std::shared_ptr<FilePrepareResult> &file) {
+		const std::shared_ptr<FilePrepareResult> &file,
+		int resumeFromParts) {
 	if (file->type == SendMediaType::Photo) {
 		const auto photo = session().data().processPhoto(
 			file->photo,
@@ -358,7 +366,7 @@ void Uploader::upload(
 				file->videoCover->photoThumbs);
 		}
 	}
-	_queue.push_back({ itemId, file });
+	_queue.push_back(Entry(itemId, file, resumeFromParts));
 	if (!_nextTimer.isActive()) {
 		maybeSend();
 	}
@@ -453,6 +461,14 @@ QByteArray Uploader::readDocPart(not_null<Entry*> entry) {
 		entry->docFile = std::make_unique<QFile>(filepath);
 		if (!entry->docFile->open(QIODevice::ReadOnly)) {
 			return QByteArray();
+		}
+		// A resumed upload opens the doc at the byte offset of the
+		// first part we still need to (re)send.
+		if (entry->docPartsSent > 0) {
+			entry->docFile->seek(
+				int64(entry->docPartsSent) * entry->docPartSize);
+			entry->docSentSize =
+				int64(entry->docPartsSent) * entry->docPartSize;
 		}
 	}
 	return checked(entry->docFile->read(entry->docPartSize));
@@ -794,25 +810,33 @@ void Uploader::partLoaded(const MTPBool &result, mtpRequestId requestId) {
 		entry.sentSize += bytes;
 	}
 
-	if (entry.file->type == SendMediaType::Photo) {
-		const auto photo = session().data().photo(entry.file->id);
-		if (photo->uploading()) {
-			photo->uploadingData->size = entry.file->partssize;
-			photo->uploadingData->offset = entry.sentSize;
-		}
-		_photoProgress.fire_copy(itemId);
-	} else if (entry.file->type == SendMediaType::File
-		|| entry.file->type == SendMediaType::ThemeFile
-		|| entry.file->type == SendMediaType::Audio
-		|| entry.file->type == SendMediaType::Round) {
-		const auto document = session().data().document(entry.file->id);
-		if (document->uploading()) {
-			document->uploadingData->offset = std::min(
-				document->uploadingData->size,
-				entry.docSentSize);
-		}
-		_documentProgress.fire_copy(itemId);
-	} else if (entry.file->type == SendMediaType::Secure) {
+		if (entry.file->type == SendMediaType::Photo) {
+			const auto photo = session().data().photo(entry.file->id);
+			if (photo->uploading()) {
+				photo->uploadingData->size = entry.file->partssize;
+				photo->uploadingData->offset = entry.sentSize;
+			}
+			_photoProgress.fire_copy(itemId);
+			_photoProgressInfo.fire_copy(UploadProgress{
+				itemId,
+				entry.sentSize,
+				entry.file->partssize });
+		} else if (entry.file->type == SendMediaType::File
+			|| entry.file->type == SendMediaType::ThemeFile
+			|| entry.file->type == SendMediaType::Audio
+			|| entry.file->type == SendMediaType::Round) {
+			const auto document = session().data().document(entry.file->id);
+			if (document->uploading()) {
+				document->uploadingData->offset = std::min(
+					document->uploadingData->size,
+					entry.docSentSize);
+			}
+			_documentProgress.fire_copy(itemId);
+			_documentProgressInfo.fire_copy(UploadProgress{
+				itemId,
+				entry.docSentSize,
+				document->size });
+		} else if (entry.file->type == SendMediaType::Secure) {
 		_secureProgress.fire_copy({
 			.fullId = itemId,
 			.offset = entry.sentSize,

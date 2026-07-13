@@ -99,6 +99,8 @@ public:
 		const Window::SectionShow &params);
 	void ui_hideSettingsAndLayer(anim::type animated);
 	void ui_removeLayerBlackout();
+	void showUnfinishedForwards(not_null<Main::Session*> session);
+	void showEnhancedForwardQuitConfirm();
 	[[nodiscard]] bool ui_isLayerShown() const;
 	bool showMediaPreview(
 		Data::FileOrigin origin,

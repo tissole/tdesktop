@@ -8098,3 +8098,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_blocked_user_hint" = "[Blocked User Message]\n";
 // Keys finished
 "lng_uploaded" = "Uploaded";
+
+"lng_enhanced_forward_close_confirm" = "An enhanced forward is still in progress. Pause it (so you can resume later) or cancel it?";
+"lng_enhanced_forward_pause" = "Pause";
+"lng_enhanced_forward_cancel" = "Cancel";
+"lng_enhanced_forward_resume" = "Resume";

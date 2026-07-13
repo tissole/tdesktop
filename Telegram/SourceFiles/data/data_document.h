@@ -138,6 +138,7 @@ public:
 		bool autoLoading = false,
 		bool forceFileLoader = false);
 	void cancel();
+	void pause();
 	[[nodiscard]] bool cancelled() const;
 	void resetCancelled();
 	[[nodiscard]] float64 progress() const;
@@ -316,6 +317,9 @@ public:
 	int32 getDC(){
 		return this->_dc;
 	};
+	[[nodiscard]] uint64 accessHash() const {
+		return _access;
+	}
 
 private:
 	enum class Flag : ushort {
