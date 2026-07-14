@@ -3794,6 +3794,9 @@ void ApiWrap::forwardMessages(
 				std::vector<int> uploadedParts; // parts acked by server
 				std::vector<int> uploadRetries; // failed-upload retry count
 				std::vector<int> lastSavedPct; // last saved % for periodic save
+				// keep the photo media view alive so the loaded Large bytes
+				// are not recycled by the chat view while we save them
+				std::vector<std::shared_ptr<Data::PhotoMedia>> photoViews;
 				// source groupId for album items (empty if not in album)
 				std::vector<MessageGroupId> sourceGroup;
 				// album tracking (keyed by SOURCE groupId -> SendingAlbum)
@@ -3847,8 +3850,10 @@ void ApiWrap::forwardMessages(
 			ctx->uploadedParts.resize(n, 0);
 			ctx->uploadRetries.resize(n, 0);
 			ctx->lastSavedPct.resize(n, -10);
+			ctx->photoViews.resize(n);
 			ctx->sourceGroup.resize(n);
 			ctx->downloadPath = downloadPath;
+			QDir().mkpath(downloadPath);
 			ctx->peerId = peerId;
 			ctx->srcPeer = !enhancedItems.empty()
 				? enhancedItems.front()->history()->peer->id
@@ -5157,8 +5162,20 @@ void ApiWrap::forwardMessages(
 						}
 					} else if (const auto photo =
 							media ? media->photo() : nullptr) {
-						const auto v = photo->activeMediaView();
-						if (v && v->loaded()) {
+						const auto v = ctx->photoViews[i]
+							? ctx->photoViews[i]
+							: photo->activeMediaView();
+						const auto loaded = v && v->loaded();
+						const auto failed = photo->failed(
+							Data::PhotoSize::Large);
+						const auto loading = photo->loading(
+							Data::PhotoSize::Large);
+						LOG(("ENHANCED_FWD: checkItem photo i=%1 loaded=%2 failed=%3 loading=%4")
+							.arg(i)
+							.arg(int(loaded))
+							.arg(int(failed))
+							.arg(int(loading)));
+						if (loaded) {
 							if (v->saveToFile(ctx->paths[i])) {
 								ctx->downloadDone[i] = true;
 								ctx->downloadedBytes[i] = QFile(ctx->paths[i]).size();
@@ -5176,11 +5193,25 @@ void ApiWrap::forwardMessages(
 								ctx->uploadDone[i] = true;
 								(*sendNext)();
 							}
-						} else if (photo->failed(Data::PhotoSize::Large)) {
+						} else if (failed) {
 							ctx->textOnly[i] = true;
 							ctx->downloadDone[i] = true;
 							ctx->uploadDone[i] = true;
+							ctx->downloadInFlight = false;
 							(*sendNext)();
+							(*pumpDownloads)();
+						} else if (!loading) {
+							// Load neither completed nor is in progress:
+							// LoadCloudFile bailed out (e.g. invalid Large
+							// location) so nothing will ever resolve this.
+							LOG(("ENHANCED_FWD: photo i=%1 stuck, falling back to text-only")
+								.arg(i));
+							ctx->textOnly[i] = true;
+							ctx->downloadDone[i] = true;
+							ctx->uploadDone[i] = true;
+							ctx->downloadInFlight = false;
+							(*sendNext)();
+							(*pumpDownloads)();
 						}
 					}
 				};
@@ -5227,6 +5258,14 @@ void ApiWrap::forwardMessages(
 							false,
 							true);
 					} else if (photo) {
+						ctx->photoViews[i] = photo->createMediaView();
+						LOG(("ENHANCED_FWD: photo load i=%1 peer=%2 msg=%3 locValid=%4 loading=%5 failed=%6")
+							.arg(i)
+							.arg(quint64(item->history()->peer->id.value))
+							.arg(quint64(item->id.bare))
+							.arg(int(photo->location(Data::PhotoSize::Large).valid()))
+							.arg(int(photo->loading(Data::PhotoSize::Large)))
+							.arg(int(photo->failed(Data::PhotoSize::Large))));
 						photo->load(
 							Data::PhotoSize::Large,
 							Data::FileOrigin(FullMsgId(
