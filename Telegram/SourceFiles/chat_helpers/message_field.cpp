@@ -1531,11 +1531,20 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 	raw->setMinimumHeight(56);
 	raw->setFixedHeight(56);
 
+	// Semi-transparent black panel so the white text and the colored
+	// bars/arrows stay readable over any chat wallpaper.
+	raw->paintRequest() | rpl::on_next([=](QRect clip) {
+		auto p = QPainter(raw);
+		p.setPen(Qt::NoPen);
+		p.setBrush(QColor(0, 0, 0, 150));
+		p.drawRoundedRect(raw->rect(), 6, 6);
+	}, raw->lifetime());
+
 	const auto title = CreateChild<Ui::FlatLabel>(
 		raw,
 		QString(),
 		st::frozenRestrictionTitle);
-	title->setTextColorOverride(st::historyComposeButton.color->c);
+	title->setTextColorOverride(QColor(255, 255, 255));
 	title->setAttribute(Qt::WA_TransparentForMouseEvents);
 	title->show();
 
@@ -1574,20 +1583,61 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 		QColor _color;
 	};
 
+	class ArrowWidget final : public Ui::RpWidget {
+	public:
+		ArrowWidget(
+			not_null<QWidget*> parent,
+			bool up,
+			QColor color)
+		: RpWidget(parent)
+		, _up(up)
+		, _color(color) {
+			setFixedSize(18, 18);
+		}
+	protected:
+		void paintEvent(QPaintEvent *e) override {
+			auto p = QPainter(this);
+			p.setRenderHint(QPainter::Antialiasing);
+			p.setPen(Qt::NoPen);
+			p.setBrush(_color);
+			const auto r = rect();
+			if (_up) {
+				p.drawPolygon(QPolygonF({
+					QPointF(r.x(), r.bottom()),
+					QPointF(r.center().x(), r.y()),
+					QPointF(r.right(), r.bottom()),
+				}));
+			} else {
+				p.drawPolygon(QPolygonF({
+					QPointF(r.x(), r.y()),
+					QPointF(r.center().x(), r.bottom()),
+					QPointF(r.right(), r.y()),
+				}));
+			}
+		}
+	private:
+		bool _up = false;
+		QColor _color;
+	};
+
 	const auto kDownloadColor = QColor(255, 59, 48);
 	const auto kUploadColor = QColor(0, 100, 210);
 
 	const auto makeItem = [&](
+			Ui::RpWidget *&arrow,
 			Ui::FlatLabel *&label,
 			ProgressBar *&bar,
 			Ui::FlatLabel *&pct,
 			std::shared_ptr<float64> value,
-			QColor color) {
+			QColor color,
+			bool up) {
+		arrow = CreateChild<ArrowWidget>(raw, up, color);
+		arrow->show();
 		label = CreateChild<Ui::FlatLabel>(
 			raw,
 			QString(),
 			st::frozenRestrictionSubtitle);
-		label->setTextColorOverride(color);
+		label->setTextColorOverride(QColor(255, 255, 255));
 		label->setAttribute(Qt::WA_TransparentForMouseEvents);
 		label->show();
 		bar = CreateChild<ProgressBar>(raw, std::move(value), color);
@@ -1597,7 +1647,7 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 			raw,
 			QString(),
 			st::frozenRestrictionSubtitle);
-		pct->setTextColorOverride(color);
+		pct->setTextColorOverride(QColor(255, 255, 255));
 		pct->setAttribute(Qt::WA_TransparentForMouseEvents);
 		pct->setFixedWidth(36);
 		pct->show();
@@ -1605,33 +1655,43 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 
 	const auto kBarW = 70;
 	const auto kPctW = 36;
-	const auto kInnerGap = 6;
-	const auto kItemGap = 20;
+	const auto kInnerGap = 10;
+	const auto kBarGap = 14;
+	const auto kItemGap = 24;
+	const auto kArrowW = 18;
+	const auto kArrowOffsetY = 3;
+	const auto kBarOffsetY = 3;
 
+	Ui::RpWidget *downloadArrow = nullptr;
 	Ui::FlatLabel *downloadLabel = nullptr;
 	Ui::FlatLabel *downloadPct = nullptr;
+	Ui::RpWidget *uploadArrow = nullptr;
 	Ui::FlatLabel *uploadLabel = nullptr;
 	Ui::FlatLabel *uploadPct = nullptr;
 	ProgressBar *downloadBar = nullptr;
 	ProgressBar *uploadBar = nullptr;
 	makeItem(
+		downloadArrow,
 		downloadLabel,
 		downloadBar,
 		downloadPct,
 		downloadValue,
-		kDownloadColor);
+		kDownloadColor,
+		false);
 	makeItem(
+		uploadArrow,
 		uploadLabel,
 		uploadBar,
 		uploadPct,
 		uploadValue,
-		kUploadColor);
+		kUploadColor,
+		true);
 
 	const auto actionBtn = CreateChild<Ui::LinkButton>(
 		raw,
 		u"Pause"_q,
 		st::defaultLinkButton);
-	actionBtn->setColorOverride(st::historyComposeButton.color->c);
+	actionBtn->setColorOverride(QColor(255, 204, 0));
 	actionBtn->show();
 	actionBtn->setClickedCallback([=] {
 		const auto p = EnhancedForward::currentProgress(peer);
@@ -1648,7 +1708,7 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 		raw,
 		u"Cancel"_q,
 		st::defaultLinkButton);
-	cancelBtn->setColorOverride(st::historyComposeButton.color->c);
+	cancelBtn->setColorOverride(QColor(255, 204, 0));
 	cancelBtn->show();
 	cancelBtn->setClickedCallback([=] {
 		LOG(("ENHANCED_FWD: cancelBtn clicked, peer=%1").arg(peer.value));
@@ -1690,38 +1750,46 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 		const auto y = startY + topRowH + 2;
 
 		const auto itemWidth = [=](int textW) {
-			return textW
+			return kArrowW
+				+ kInnerGap
+				+ textW
 				+ kInnerGap
 				+ kBarW
-				+ kInnerGap
+				+ kBarGap
 				+ kPctW;
 		};
 
 		const auto placeItem = [=](
+				not_null<Ui::RpWidget*> arrow,
 				not_null<Ui::FlatLabel*> label,
 				not_null<ProgressBar*> bar,
 				not_null<Ui::FlatLabel*> pct,
 				int x,
 				bool visible) {
 			if (!visible) {
+				arrow->hide();
 				label->hide();
 				bar->hide();
 				pct->hide();
 				return;
 			}
+			arrow->show();
 			label->show();
 			bar->show();
 			pct->show();
+			const auto arrowW = arrow->width();
+			arrow->moveToLeft(x, y + kArrowOffsetY, w);
+			const auto labelX = x + arrowW + kInnerGap;
 			const auto labelW = label->textMaxWidth();
 			label->resizeToWidth(labelW);
-			label->moveToLeft(x, y, w);
+			label->moveToLeft(labelX, y, w);
 			bar->setGeometry(
-				x + labelW + kInnerGap,
-				y + (rowH - 3) / 2,
+				labelX + labelW + kInnerGap,
+				y + (rowH - 3) / 2 + kBarOffsetY,
 				kBarW,
 				3);
 			pct->moveToLeft(
-				x + labelW + kInnerGap + kBarW + kInnerGap,
+				labelX + labelW + kInnerGap + kBarW + kBarGap,
 				y,
 				w);
 		};
@@ -1736,12 +1804,14 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 		if (cancelBtn->isHidden()) {
 			title->moveToLeft((w - title->width()) / 2, startY, w);
 			placeItem(
+				downloadArrow,
 				downloadLabel,
 				downloadBar,
 				downloadPct,
 				groupX,
 				hasDl);
 			placeItem(
+				uploadArrow,
 				uploadLabel,
 				uploadBar,
 				uploadPct,
@@ -1768,12 +1838,14 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 			w);
 
 		placeItem(
+			downloadArrow,
 			downloadLabel,
 			downloadBar,
 			downloadPct,
 			groupX,
 			hasDl);
 		placeItem(
+			uploadArrow,
 			uploadLabel,
 			uploadBar,
 			uploadPct,
@@ -1804,7 +1876,7 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 			const auto kGrace = crl::time(400);
 			if (p.currentDownload >= 0 && !p.downloadItem.name.isEmpty()) {
 				const auto pct = int(p.downloadProgress * 100);
-				*downloadText = u"\u2b07 %1 (%2)"_q
+				*downloadText = u"%1 (%2)"_q
 					.arg(p.downloadItem.name)
 					.arg(formatSize(p.downloadItem.size));
 				*downloadValue = p.downloadProgress;
@@ -1819,7 +1891,7 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 			}
 			if (p.currentUpload >= 0 && !p.uploadItem.name.isEmpty()) {
 				const auto pct = int(p.uploadProgress * 100);
-				*uploadText = u"\u2b06 %1 (%2)"_q
+				*uploadText = u"%1 (%2)"_q
 					.arg(p.uploadItem.name)
 					.arg(formatSize(p.uploadItem.size));
 				*uploadValue = p.uploadProgress;
@@ -1944,7 +2016,7 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 								? std::clamp(int(float64(downloadedBytes)
 									/ float64(itemSize) * 100), 0, 100)
 								: 0;
-							*downloadText = u"\u2b07 %1%2"_q
+							*downloadText = u"%1%2"_q
 								.arg(itemName).arg(sizeStr);
 							downloadLabel->setText(*downloadText);
 							*downloadValue = (itemSize > 0)
@@ -1967,7 +2039,7 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 								? std::clamp(int(float64(uploadedParts)
 									/ float64(totalParts) * 100), 0, 100)
 								: 0;
-							*uploadText = u"\u2b06 %1%2"_q
+							*uploadText = u"%1%2"_q
 								.arg(itemName).arg(sizeStr);
 							uploadLabel->setText(*uploadText);
 							*uploadValue = float64(pct) / 100.0;
