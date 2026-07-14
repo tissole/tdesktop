@@ -358,6 +358,7 @@ void setResumeCallback(
 void pauseForward(
 		const PeerId &id,
 		not_null<Main::Session*> session) {
+	LOG(("ENHANCED_FWD: pauseForward peer=%1").arg(id.value));
 	auto &states = ActiveStates();
 	const auto it = states.find(id);
 	if (it == states.end()) return;
@@ -486,6 +487,18 @@ std::optional<PeerId> activeJobPeer() {
 	return std::nullopt;
 }
 
+void saveProgressForPeer(
+		const PeerId &peer,
+		not_null<Main::Session*> session) {
+	const auto &states = ActiveStates();
+	const auto it = states.find(peer);
+	if (it == states.end()) return;
+	const auto &state = it->second;
+	if (state.saveCallback) {
+		state.saveCallback();
+	}
+}
+
 bool isPaused(const PeerId &id) {
 	const auto &states = ActiveStates();
 	const auto it = states.find(id);
@@ -575,20 +588,36 @@ void ClearProgress(const QString &path) {
 	QFile(path).remove();
 }
 
+void CleanupPartialFiles(const QString &progressPath) {
+	const auto data = LoadProgress(progressPath);
+	if (data) {
+		const auto items = (*data)["items"].toArray();
+		for (const auto &v : items) {
+			const auto obj = v.toObject();
+			const auto filePath = obj["path"].toString();
+			if (!filePath.isEmpty()) {
+				QFile(filePath).remove();
+			}
+		}
+	}
+	QFile(progressPath).remove();
+}
+
 std::vector<SavedJob> GetUnfinishedJobs(const QString &dir) {
 	std::vector<SavedJob> result;
-	// Files are EF_<SrcChatName>.json; peer ids live inside.
 	const auto files = QDir(dir).entryList(
 		QStringList(u"EF_*.json"_q),
 		QDir::Files);
 	for (const auto &name : files) {
-		const auto path = ProgressFilePath(name, dir);
+		const auto path = dir + name;
 		const auto data = LoadProgress(path);
-		if (!data) continue;
-		const auto srcId = PeerId(
-			(*data)["src_peer"].toVariant().toULongLong());
-		const auto dstId = PeerId(
-			(*data)["peer_id"].toVariant().toULongLong());
+		if (!data) {
+			continue;
+		}
+		const auto srcPeerVal = (*data)["src_peer"].toDouble();
+		const auto dstPeerVal = (*data)["dst_peer"].toDouble();
+		const auto srcId = PeerId(qulonglong(srcPeerVal));
+		const auto dstId = PeerId(qulonglong(dstPeerVal));
 		if (!srcId || !dstId) continue;
 		const auto total = int((*data)["total"].toInt(0));
 		const auto sent = int((*data)["sent"].toInt(0));

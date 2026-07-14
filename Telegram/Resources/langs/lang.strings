@@ -8103,3 +8103,4 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_enhanced_forward_pause" = "Pause";
 "lng_enhanced_forward_cancel" = "Cancel";
 "lng_enhanced_forward_resume" = "Resume";
+"lng_enhanced_forward_upload_failed" = "Failed to upload {file_name}. The enhanced forward has been paused. You can resume it later from the chat controls.";

@@ -57,6 +57,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_account.h"
 #include "main/main_domain.h"
 #include "main/main_session.h"
+#include "enhanced_forward.h"
 #include "media/view/media_view_overlay_widget.h"
 #include "media/view/media_view_open_common.h"
 #include "mtproto/mtproto_dc_options.h"
@@ -1061,6 +1062,13 @@ bool Application::uploadPreventsQuit() {
 			continue;
 		}
 		if (account->session().uploadsInProgress()) {
+			// An in-progress upload that belongs to an enhanced forward
+			// is handled by the enhanced-forward quit confirmation
+			// (it offers pause/cancel and keeps the resumable state),
+			// so don't show the generic "stop uploading" box here.
+			if (EnhancedForward::activeJobPeer().has_value()) {
+				return false;
+			}
 			account->session().uploadsStopWithConfirmation([=] {
 				for (const auto &[index, account] : _domain->accounts()) {
 					if (account->sessionExists()) {
@@ -1813,8 +1821,8 @@ void Application::quitPreventFinished() {
 }
 
 void Application::quitDelayed() {
-	for (const auto &[id, controller] : _windows) {
-		controller->showEnhancedForwardQuitConfirm();
+	if (const auto window = activeWindow()) {
+		window->showEnhancedForwardQuitConfirm();
 	}
 }
 

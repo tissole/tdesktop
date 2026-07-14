@@ -46,6 +46,7 @@ struct UploadProgress {
 	FullMsgId fullId;
 	int64 offset = 0;
 	int64 size = 0;
+	int partSize = 0;
 };
 
 struct UploadSecureDone {

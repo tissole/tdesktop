@@ -835,7 +835,8 @@ void Uploader::partLoaded(const MTPBool &result, mtpRequestId requestId) {
 			_documentProgressInfo.fire_copy(UploadProgress{
 				itemId,
 				entry.docSentSize,
-				document->size });
+				document->size,
+				entry.docPartSize });
 		} else if (entry.file->type == SendMediaType::Secure) {
 		_secureProgress.fire_copy({
 			.fullId = itemId,

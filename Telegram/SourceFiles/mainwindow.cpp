@@ -54,6 +54,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_window.h"
 
 #include <QtGui/QWindow>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonObject>
 
 namespace {
 
@@ -718,31 +721,12 @@ void MainWindow::closeEvent(QCloseEvent *e) {
 	}
 	const auto active = EnhancedForward::activeJobPeer();
 	if (active.has_value() && !EnhancedForward::isPaused(*active)) {
-		e->ignore();
-		const auto peer = *active;
 		const auto session = sessionController()
 			? &sessionController()->session()
 			: nullptr;
-		if (!session) {
-			e->accept();
-			Core::Quit();
-			return;
+		if (session) {
+			EnhancedForward::saveProgressForPeer(*active, session);
 		}
-		Ui::ConfirmBoxArgs args;
-		args.text = tr::lng_enhanced_forward_close_confirm(tr::now);
-		args.confirmText = tr::lng_enhanced_forward_pause(tr::now);
-		args.cancelText = tr::lng_enhanced_forward_cancel(tr::now);
-		args.confirmStyle = &st::defaultBoxButton;
-		args.cancelled = [=] {
-			EnhancedForward::cancelForward(peer, session);
-			close();
-		};
-		args.confirmed = [=] {
-			EnhancedForward::pauseForward(peer, session);
-			close();
-		};
-		controller().show(Ui::MakeConfirmBox(std::move(args)));
-		return;
 	}
 	e->ignore();
 	const auto hasAuth = [&] {
@@ -764,60 +748,62 @@ void MainWindow::closeEvent(QCloseEvent *e) {
 void MainWindow::showUnfinishedForwards(not_null<Main::Session*> session) {
 	const auto dir = File::DefaultDownloadPath(session)
 		+ "ForwardTemp/";
+	LOG(("ENHANCED_FWD: showUnfinishedForwards dir=%1").arg(dir));
 	const auto jobs = EnhancedForward::GetUnfinishedJobs(dir);
+	LOG(("ENHANCED_FWD: showUnfinishedForwards jobs=%1").arg(jobs.size()));
 	if (jobs.empty()) return;
 
-	auto box = Box([](not_null<Ui::GenericBox*>) {});
-	box->setTitle(u"Unfinished enhanced forwards"_q);
-
 	for (const auto &job : jobs) {
-		box->verticalLayout()->add(object_ptr<Ui::FlatLabel>(
-			box.get(),
-			u"Forward to %1: %2/%3 sent"_q
-				.arg(job.dstId.value)
-				.arg(job.sent)
-				.arg(job.total),
-			st::defaultFlatLabel));
-		const auto buttons = box->verticalLayout()->add(
-			Box<Ui::VerticalLayout>());
-		const auto resume = buttons->add(
-			object_ptr<Ui::RoundButton>(
-				box.get(), rpl::single(u"Resume"_q), st::defaultBoxButton),
-			style::al_right);
-		const auto cancel = buttons->add(
-			object_ptr<Ui::RoundButton>(
-				box.get(), rpl::single(u"Cancel"_q), st::defaultBoxButton),
-			style::al_right);
-		const auto later = buttons->add(
-			object_ptr<Ui::RoundButton>(
-				box.get(), rpl::single(u"Later"_q), st::defaultBoxButton),
-			style::al_right);
-		resume->setClickedCallback([&, job] {
-			session->api().startResumeForward(job.srcId, job.dstId, session);
-			box->closeBox();
-		});
-		cancel->setClickedCallback([&, job] {
-			EnhancedForward::ClearProgress(job.path);
-			box->closeBox();
-		});
-		later->setClickedCallback([&] {
-			box->closeBox();
-		});
-	}
-	const auto laterAll = box->verticalLayout()->add(
-		object_ptr<Ui::RoundButton>(
-			box.get(), rpl::single(u"Later all"_q), st::defaultBoxButton),
-		style::al_right);
-	laterAll->setClickedCallback([&] {
-		box->closeBox();
-	});
+		const auto json = EnhancedForward::LoadProgress(job.path);
+		const auto srcName = json
+			? (*json)["src_name"].toString(QString())
+			: QString();
+		const auto chatName = !srcName.isEmpty()
+			? srcName
+			: QFileInfo(job.path).baseName().mid(3);
 
-	controller().show(std::move(box));
+		auto box = Box([=](not_null<Ui::GenericBox*> box) {
+			const auto maxTitleLen = 35;
+			const auto elided = (chatName.size() > maxTitleLen)
+				? chatName.left(maxTitleLen - 1) + QChar(0x2026)
+				: chatName;
+			const auto titleLabel = box->addRow(
+				object_ptr<Ui::FlatLabel>(
+					box.get(),
+					u"Paused forward from %1"_q.arg(elided),
+					st::boxTitle));
+			if (elided != chatName) {
+				titleLabel->setAttribute(Qt::WA_Hover);
+				titleLabel->setToolTip(chatName);
+			}
+
+			box->addRow(object_ptr<Ui::FlatLabel>(
+				box.get(),
+				u"%1/%2 forwarded"_q
+					.arg(job.sent)
+					.arg(job.total),
+				st::defaultFlatLabel));
+
+			box->addButton(rpl::single(u"Resume"_q), [=] {
+				session->api().startResumeForward(
+					job.srcId, job.dstId, session, job.path);
+				box->closeBox();
+			});
+			box->addButton(rpl::single(u"Cancel"_q), [=] {
+				EnhancedForward::CleanupPartialFiles(job.path);
+				box->closeBox();
+			});
+			box->addButton(rpl::single(u"Later"_q), [=] {
+				box->closeBox();
+			});
+		});
+		controller().show(std::move(box));
+	}
 }
 
 void MainWindow::showEnhancedForwardQuitConfirm() {
 	const auto active = EnhancedForward::activeJobPeer();
-	if (!active.has_value() || EnhancedForward::isPaused(*active)) {
+	if (!active.has_value()) {
 		return;
 	}
 	const auto peer = *active;
@@ -825,6 +811,11 @@ void MainWindow::showEnhancedForwardQuitConfirm() {
 		? &sessionController()->session()
 		: nullptr;
 	if (!session) {
+		return;
+	}
+	EnhancedForward::saveProgressForPeer(peer, session);
+	if (EnhancedForward::isPaused(peer)) {
+		Core::QuitAttempt();
 		return;
 	}
 	Ui::ConfirmBoxArgs args;

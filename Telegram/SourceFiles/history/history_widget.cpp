@@ -7628,19 +7628,19 @@ void HistoryWidget::updateSendRestriction() {
 		|| progress.state == EnhancedForward::State::Paused
 		|| progress.state == EnhancedForward::State::Cancelled)
 		&& progress.destPeer == _peer->id;
-	LOG(("ENHANCED_FWD: updateSendRestriction peer=%1 state=%2 destPeer=%3 match=%4")
-		.arg(_peer->id.value)
-		.arg(static_cast<int>(progress.state))
-		.arg(progress.destPeer.value)
-		.arg(Logs::b(isEnhancedForwarding)));
-	const auto key = isEnhancedForwarding
+	const auto dir = File::DefaultDownloadPath(&session())
+		+ u"ForwardTemp/"_q;
+	const auto hasUnfinishedJob = !isEnhancedForwarding
+		&& EnhancedForward::GetUnfinishedJobByDst(_peer->id, dir).has_value();
+	const auto key = (isEnhancedForwarding || hasUnfinishedJob)
 		? u"enhanced_forward"_q
 		: restriction.text;
 	if (_sendRestrictionKey == key) {
 		return;
 	}
 	_sendRestrictionKey = key;
-	if (isEnhancedForwarding) {
+	if (isEnhancedForwarding || hasUnfinishedJob) {
+		if (!controller()) return;
 		_sendRestriction = EnhancedForwardWriteRestriction(
 			this,
 			_peer->id,

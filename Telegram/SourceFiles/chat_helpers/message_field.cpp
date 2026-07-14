@@ -71,6 +71,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QTextBlock>
 #include <QtGui/QClipboard>
 #include <QtWidgets/QApplication>
+#include <QJsonArray>
+#include <QJsonObject>
 
 namespace {
 
@@ -1514,8 +1516,17 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 		not_null<QWidget*> parent,
 		const PeerId &peer,
 		not_null<Main::Session*> session) {
+	LOG(("ENHANCED_FWD: EnhancedForwardWriteRestriction peer=%1")
+		.arg(peer.value));
 	auto result = std::make_unique<Ui::AbstractButton>(parent);
 	const auto raw = result.get();
+
+	const auto formatSize = [](qint64 bytes) -> QString {
+		if (bytes < 1024) return u"%1 B"_q.arg(bytes);
+		if (bytes < 1024 * 1024) return u"%1 KB"_q.arg(bytes / 1024);
+		if (bytes < 1024 * 1024 * 1024) return u"%1 MB"_q.arg(bytes / (1024 * 1024));
+		return u"%1 GB"_q.arg(bytes / (1024 * 1024 * 1024));
+	};
 	raw->setCursor(style::cur_pointer);
 	raw->setMinimumHeight(56);
 	raw->setFixedHeight(56);
@@ -1624,6 +1635,8 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 	actionBtn->show();
 	actionBtn->setClickedCallback([=] {
 		const auto p = EnhancedForward::currentProgress(peer);
+		LOG(("ENHANCED_FWD: actionBtn clicked, state=%1 peer=%2")
+			.arg(int(p.state)).arg(peer.value));
 		if (p.state == EnhancedForward::State::Sending) {
 			EnhancedForward::pauseForward(peer, session);
 		} else if (p.state == EnhancedForward::State::Paused) {
@@ -1638,56 +1651,27 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 	cancelBtn->setColorOverride(st::historyComposeButton.color->c);
 	cancelBtn->show();
 	cancelBtn->setClickedCallback([=] {
+		LOG(("ENHANCED_FWD: cancelBtn clicked, peer=%1").arg(peer.value));
 		EnhancedForward::cancelForward(peer, session);
 	});
 
-	auto jobSrcId = PeerId();
-	auto jobPath = QString();
+	auto jobSrcId = std::make_shared<PeerId>();
+	auto jobPath = std::make_shared<QString>();
 	const auto dir = File::DefaultDownloadPath(session) + "ForwardTemp/";
-	std::function<void()> updateLaterRow;
-	const auto laterLabel = CreateChild<Ui::FlatLabel>(
-		raw,
-		u"Unfinished forward"_q,
-		st::frozenRestrictionSubtitle);
-	laterLabel->setTextColorOverride(st::historyComposeButton.color->c);
-	laterLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
-	laterLabel->hide();
-	const auto laterResumeBtn = CreateChild<Ui::LinkButton>(
-		raw,
-		u"Resume"_q,
-		st::defaultLinkButton);
-	laterResumeBtn->setColorOverride(st::historyComposeButton.color->c);
-	laterResumeBtn->hide();
-	laterResumeBtn->setClickedCallback([=] {
-		session->api().startResumeForward(jobSrcId, peer, session);
-	});
-	const auto laterCancelBtn = CreateChild<Ui::LinkButton>(
-		raw,
-		u"Cancel"_q,
-		st::defaultLinkButton);
-	laterCancelBtn->setColorOverride(st::historyComposeButton.color->c);
-	laterCancelBtn->hide();
-	laterCancelBtn->setClickedCallback([=] {
-		EnhancedForward::ClearProgress(jobPath);
-		updateLaterRow();
-	});
 
-	updateLaterRow = [=, &jobSrcId, &jobPath] {
+	const auto computeShowLater = [=]() -> bool {
 		const auto active = EnhancedForward::currentProgress(peer).state;
 		const auto job = EnhancedForward::GetUnfinishedJobByDst(peer, dir);
-		const auto visible = (active == EnhancedForward::State::Idle)
+		const auto showLater = (active == EnhancedForward::State::Idle)
 			&& job.has_value();
-		laterLabel->setVisible(visible);
-		laterResumeBtn->setVisible(visible);
-		laterCancelBtn->setVisible(visible);
-		if (visible) {
-			jobSrcId = job->srcId;
-			jobPath = job->path;
-			laterLabel->setText(
-				u"Unfinished forward %1/%2"_q
-					.arg(job->sent)
-					.arg(job->total));
+		if (showLater) {
+			*jobSrcId = job->srcId;
+			*jobPath = job->path;
+		} else {
+			*jobSrcId = PeerId();
+			*jobPath = QString();
 		}
+		return showLater;
 	};
 
 	const auto relayout = [=] {
@@ -1704,34 +1688,6 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 		const auto hasUl = !uploadText->isEmpty();
 		const auto startY = 3;
 		const auto y = startY + topRowH + 2;
-
-		const auto laterVisible = !laterLabel->isHidden();
-		const auto fullH = laterVisible ? 74 : 56;
-		if (raw->height() != fullH) {
-			raw->setFixedHeight(fullH);
-		}
-		if (laterVisible) {
-			const auto ly = fullH - 18;
-			const auto lContentW = laterLabel->textMaxWidth()
-				+ titleGap
-				+ laterResumeBtn->width()
-				+ btnGap
-				+ laterCancelBtn->width();
-			const auto lStartX = std::max(skip, (w - lContentW) / 2);
-			laterLabel->moveToLeft(lStartX, ly, w);
-			laterResumeBtn->moveToLeft(
-				lStartX + laterLabel->textMaxWidth() + titleGap,
-				ly,
-				w);
-			laterCancelBtn->moveToLeft(
-				lStartX
-					+ laterLabel->textMaxWidth()
-					+ titleGap
-					+ laterResumeBtn->width()
-					+ btnGap,
-				ly,
-				w);
-		}
 
 		const auto itemWidth = [=](int textW) {
 			return textW
@@ -1825,13 +1781,6 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 			hasUl);
 	};
 
-	const auto formatSize = [](qint64 bytes) -> QString {
-		if (bytes < 1024) return u"%1 B"_q.arg(bytes);
-		if (bytes < 1024 * 1024) return u"%1 KB"_q.arg(bytes / 1024);
-		if (bytes < 1024 * 1024 * 1024) return u"%1 MB"_q.arg(bytes / (1024 * 1024));
-		return u"%1 GB"_q.arg(bytes / (1024 * 1024 * 1024));
-	};
-
 	const auto update = [=] {
 		const auto p = EnhancedForward::currentProgress(peer);
 		switch (p.state) {
@@ -1844,6 +1793,12 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 			actionBtn->show();
 			cancelBtn->show();
 			raw->setCursor(style::cur_pointer);
+			actionBtn->setClickedCallback([=] {
+				EnhancedForward::pauseForward(peer, session);
+			});
+			cancelBtn->setClickedCallback([=] {
+				EnhancedForward::cancelForward(peer, session);
+			});
 
 			const auto now = crl::now();
 			const auto kGrace = crl::time(400);
@@ -1893,6 +1848,12 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 			actionBtn->show();
 			cancelBtn->show();
 			raw->setCursor(style::cur_pointer);
+			actionBtn->setClickedCallback([=] {
+				EnhancedForward::resumeForward(peer, session);
+			});
+			cancelBtn->setClickedCallback([=] {
+				EnhancedForward::cancelForward(peer, session);
+			});
 			break;
 		}
 		case EnhancedForward::State::Cancelled:
@@ -1933,33 +1894,120 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 			uploadBar->hide();
 			raw->setCursor(style::cur_default);
 			break;
-		default:
-			titleText->clear();
-			title->setText(*titleText);
-			actionBtn->hide();
-			cancelBtn->hide();
-			*downloadText = QString();
-			*uploadText = QString();
-			*downloadPctText = QString();
-			*uploadPctText = QString();
-			downloadLabel->setText(*downloadText);
-			uploadLabel->setText(*uploadText);
-			downloadPct->setText(*downloadPctText);
-			uploadPct->setText(*uploadPctText);
-			*downloadValue = 0;
-			*uploadValue = 0;
-			downloadBar->hide();
-			uploadBar->hide();
+		default: {
+			const auto showLater = computeShowLater();
+			if (showLater) {
+				const auto job = EnhancedForward::GetUnfinishedJobByDst(
+					peer,
+					dir);
+				title->setText(u"Forwarding %1/%2"_q
+					.arg(job->sent).arg(job->total));
+				actionBtn->setText(u"Resume"_q);
+				actionBtn->setClickedCallback([=] {
+					session->api().startResumeForward(
+						*jobSrcId,
+						peer,
+						session,
+						*jobPath);
+				});
+				cancelBtn->setText(u"Cancel"_q);
+				cancelBtn->setClickedCallback([=] {
+					EnhancedForward::CleanupPartialFiles(*jobPath);
+					*jobSrcId = PeerId();
+					*jobPath = QString();
+				});
+				actionBtn->show();
+				cancelBtn->show();
+				raw->setCursor(style::cur_pointer);
+
+				const auto json = EnhancedForward::LoadProgress(*jobPath);
+				if (json) {
+					const auto items = (*json)["items"].toArray();
+					for (const auto &v : items) {
+						const auto obj = v.toObject();
+						const auto downloadDone
+							= obj["download_done"].toBool();
+						const auto uploadDone
+							= obj["upload_done"].toBool();
+						if (uploadDone) continue;
+						const auto itemName = obj["name"].toString();
+						const auto itemSize
+							= qint64(obj["size"].toDouble());
+						if (itemName.isEmpty()) continue;
+						const auto sizeStr = (itemSize > 0)
+							? u" (%1)"_q.arg(formatSize(itemSize))
+							: QString();
+						if (!downloadDone) {
+							const auto downloadedBytes
+								= qint64(obj["downloaded"].toDouble());
+							const auto pct = (itemSize > 0)
+								? std::clamp(int(float64(downloadedBytes)
+									/ float64(itemSize) * 100), 0, 100)
+								: 0;
+							*downloadText = u"\u2b07 %1%2"_q
+								.arg(itemName).arg(sizeStr);
+							downloadLabel->setText(*downloadText);
+							*downloadValue = (itemSize > 0)
+								? float64(downloadedBytes) / float64(itemSize)
+								: 0;
+							*downloadPctText = u"%1%"_q.arg(pct);
+							downloadPct->setText(*downloadPctText);
+							downloadBar->show();
+							downloadPct->show();
+						} else {
+							const auto uploadedParts
+								= obj["uploaded_parts"].toInt(0);
+							const auto partSize
+								= int(obj["part_size"].toDouble());
+							const auto totalParts = (partSize > 0
+									&& itemSize > 0)
+								? int(itemSize / partSize)
+								: 0;
+							const auto pct = (totalParts > 0)
+								? std::clamp(int(float64(uploadedParts)
+									/ float64(totalParts) * 100), 0, 100)
+								: 0;
+							*uploadText = u"\u2b06 %1%2"_q
+								.arg(itemName).arg(sizeStr);
+							uploadLabel->setText(*uploadText);
+							*uploadValue = float64(pct) / 100.0;
+							*uploadPctText = u"%1%"_q.arg(pct);
+							uploadPct->setText(*uploadPctText);
+							uploadBar->show();
+							uploadPct->show();
+						}
+						break;
+					}
+				}
+			} else {
+				titleText->clear();
+				title->setText(*titleText);
+				actionBtn->hide();
+				cancelBtn->hide();
+				*downloadText = QString();
+				*uploadText = QString();
+				*downloadPctText = QString();
+				*uploadPctText = QString();
+				downloadLabel->setText(*downloadText);
+				uploadLabel->setText(*uploadText);
+				downloadPct->setText(*downloadPctText);
+				uploadPct->setText(*uploadPctText);
+				*downloadValue = 0;
+				*uploadValue = 0;
+				downloadBar->hide();
+				uploadBar->hide();
 			raw->setCursor(style::cur_default);
-			break;
 		}
-		relayout();
-		updateLaterRow();
+		break;
+		}
+	}
+	relayout();
 	};
 	update();
 	const auto timer = raw->lifetime().make_state<base::Timer>(update);
 	timer->callEach(crl::time(200));
 
+	LOG(("ENHANCED_FWD: EnhancedForwardWriteRestriction setting up subscriptions"));
 	session->changes().peerUpdates(
 		session->data().peer(peer),
 		Data::PeerUpdate::Flag::Slowmode
@@ -1975,8 +2023,9 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 	) | rpl::filter([=](const PeerId &id) {
 		return id == peer;
 	}) | rpl::on_next([=] {
-		updateLaterRow();
+		update();
 	}, raw->lifetime());
+	LOG(("ENHANCED_FWD: EnhancedForwardWriteRestriction done"));
 
 	return result;
 }

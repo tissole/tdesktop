@@ -2360,14 +2360,10 @@ bool ApiWrap::isQuitPrevent() {
 		saveDraftsToCloud();
 		return true;
 	}
-	// Prevent quit while an enhanced forward is actively sending, so the
-	// user gets a chance to pause (resumable) or cancel it instead of
-	// losing the in-progress transfer.
 	const auto active = EnhancedForward::activeJobPeer();
-	if (active.has_value()
-		&& !EnhancedForward::isPaused(*active)
-		&& EnhancedForward::currentProgress(*active).state
-			== EnhancedForward::State::Sending) {
+	if (active.has_value() && !EnhancedForward::isPaused(*active)) {
+		const auto session = _session;
+		EnhancedForward::saveProgressForPeer(*active, session);
 		return true;
 	}
 	return false;
@@ -3797,6 +3793,7 @@ void ApiWrap::forwardMessages(
 				std::vector<qint64> uploadPartSize; // bytes per part
 				std::vector<int> uploadedParts; // parts acked by server
 				std::vector<int> uploadRetries; // failed-upload retry count
+				std::vector<int> lastSavedPct; // last saved % for periodic save
 				// source groupId for album items (empty if not in album)
 				std::vector<MessageGroupId> sourceGroup;
 				// album tracking (keyed by SOURCE groupId -> SendingAlbum)
@@ -3849,6 +3846,7 @@ void ApiWrap::forwardMessages(
 			ctx->uploadPartSize.resize(n, 0);
 			ctx->uploadedParts.resize(n, 0);
 			ctx->uploadRetries.resize(n, 0);
+			ctx->lastSavedPct.resize(n, -10);
 			ctx->sourceGroup.resize(n);
 			ctx->downloadPath = downloadPath;
 			ctx->peerId = peerId;
@@ -3861,14 +3859,13 @@ void ApiWrap::forwardMessages(
 
 			const auto saveProgress = [=] {
 				QJsonObject root;
-				root["peer_id"] = qint64(ctx->peerId.value);
+				root["dst_peer"] = qint64(ctx->peerId.value);
 				root["src_peer"] = qint64(ctx->srcPeer.value);
 				root["total"] = int(ctx->itemIds.size());
 				root["sent"] = int(ctx->sent);
 				QJsonArray msgs;
 				for (const auto &full : ctx->itemIds) {
 					QJsonObject m;
-					m["peer"] = qint64(full.peer.value);
 					m["msg"] = qint64(full.msg.bare);
 					msgs.append(m);
 				}
@@ -3882,17 +3879,31 @@ void ApiWrap::forwardMessages(
 					item["download_done"] = bool(ctx->downloadDone[i]);
 					item["upload_done"] = bool(ctx->uploadDone[i]);
 					item["text_only"] = bool(ctx->textOnly[i]);
-					item["file_id"] = qint64(ctx->uploadFileId[i]);
+					item["file_id"] = QString::number(ctx->uploadFileId[i]);
 					item["part_size"] = qint64(ctx->uploadPartSize[i]);
 					item["uploaded_parts"] = int(ctx->uploadedParts[i]);
+					const auto srcItem = session().data().message(ctx->itemIds[i]);
+					if (srcItem) {
+						const auto media = srcItem->media();
+						if (const auto doc = media ? media->document() : nullptr) {
+							item["name"] = doc->filename();
+							item["size"] = qint64(doc->size);
+						} else if (media && media->photo()) {
+							item["name"] = u"photo.jpg"_q;
+							item["size"] = qint64(0);
+						} else {
+							item["name"] = QFileInfo(ctx->paths[i]).fileName();
+							item["size"] = qint64(0);
+						}
+					}
 					items.append(item);
 				}
 				root["items"] = items;
-				root["dst_peer"] = qint64(ctx->peerId.value);
 				const auto srcPeer = session().data().peer(ctx->srcPeer);
 				const auto srcName = srcPeer
 					? srcPeer->name()
 					: u"chat"_q;
+				root["src_name"] = srcName;
 				const auto path = EnhancedForward::ProgressFilePath(
 					EnhancedForward::ProgressFileBareName(srcName),
 					ctx->downloadPath);
@@ -3928,7 +3939,7 @@ void ApiWrap::forwardMessages(
 					ctx->textOnly[i] = obj["text_only"].toBool();
 					ctx->downloadDone[i] = obj["download_done"].toBool();
 					ctx->uploadDone[i] = obj["upload_done"].toBool();
-					ctx->uploadFileId[i] = uint64(obj["file_id"].toDouble());
+					ctx->uploadFileId[i] = obj["file_id"].toString().toULongLong();
 					ctx->uploadPartSize[i] = qint64(obj["part_size"].toDouble());
 					ctx->uploadedParts[i] = int(obj["uploaded_parts"].toInt(0));
 				}
@@ -3944,39 +3955,53 @@ void ApiWrap::forwardMessages(
 					}
 				}
 				ctx->sent = resumeJob->sent;
-				for (auto i = 0; i < n; i++) {
-					if (i < int(resumeJob->uploadDone.size())
-							&& resumeJob->uploadDone[i]) {
-						ctx->textOnly[i] = false;
-						ctx->downloadDone[i] = true;
-						ctx->needsDownload[i] = false;
-						ctx->uploadDone[i] = true;
-					} else {
-					    // Do NOT re-download if the local file is
-					    // already on disk (e.g. an in-flight download
-					    // that finished while paused, or a partial file
-					    // from a previous run). Only re-fetch when the
-					    // file is genuinely missing.
-					    const auto local = QFileInfo(ctx->paths[i]);
-					    if (local.exists() && local.size() > 0) {
-					    	ctx->downloadDone[i] = true;
-					    	ctx->needsDownload[i] = false;
-					    	ctx->uploadDone[i] = false;
-					    } else {
-					    	ctx->downloadDone[i] = false;
-					    	ctx->needsDownload[i] = true;
-					    	ctx->uploadDone[i] = false;
-					    }
-                    }    
-				}
-				// Restore the pause/resume upload state (file_id and
-				// server-acked parts) from the saved JSON so the
-				// upload continues where it left off instead of
-				// re-uploading from the beginning after a restart.
+				LOG(("ENHANCED_FWD: resume job sent=%1 path=%2")
+					.arg(ctx->sent).arg(resumeJob->path));
+				// Restore progress state from JSON FIRST so paths and
+				// upload state are available for the checks below.
 				if (!resumeJob->path.isEmpty()) {
 					ctx->progressPath = resumeJob->path;
 				}
 				loadProgress();
+				LOG(("ENHANCED_FWD: after loadProgress, checking items"));
+				for (auto i = 0; i < n; i++) {
+					const auto jobUploadDone = (i < int(resumeJob->uploadDone.size()))
+						? resumeJob->uploadDone[i]
+						: false;
+					LOG(("ENHANCED_FWD: resume item %1 jobUploadDone=%2 path=%3")
+						.arg(i)
+						.arg(Logs::b(jobUploadDone))
+						.arg(ctx->paths[i]));
+					if (jobUploadDone) {
+						ctx->textOnly[i] = false;
+						ctx->downloadDone[i] = true;
+						ctx->needsDownload[i] = false;
+						ctx->uploadDone[i] = true;
+						LOG(("ENHANCED_FWD: resume item %1 -> uploadDone=TRUE (was done in job)").arg(i));
+					} else {
+						const auto local = QFileInfo(ctx->paths[i]);
+						const auto fileExists = local.exists() && local.size() > 0;
+						const auto jsonSaysDownloadDone = ctx->downloadDone[i];
+						LOG(("ENHANCED_FWD: resume item %1 fileExists=%2 size=%3 jsonDownloadDone=%4")
+							.arg(i)
+							.arg(Logs::b(fileExists))
+							.arg(local.size())
+							.arg(Logs::b(jsonSaysDownloadDone)));
+						if (jsonSaysDownloadDone && fileExists) {
+							ctx->needsDownload[i] = false;
+							ctx->uploadDone[i] = false;
+							LOG(("ENHANCED_FWD: resume item %1 -> download done (JSON+file), needs upload").arg(i));
+						} else {
+							ctx->downloadDone[i] = false;
+							ctx->needsDownload[i] = true;
+							ctx->uploadDone[i] = false;
+							LOG(("ENHANCED_FWD: resume item %1 -> needs download (JSON=%2, file=%3)")
+								.arg(i)
+								.arg(Logs::b(jsonSaysDownloadDone))
+								.arg(Logs::b(fileExists)));
+						}
+					}
+				}
 			} else {
 				loadProgress();
 			}
@@ -3985,7 +4010,9 @@ void ApiWrap::forwardMessages(
 			EnhancedForward::setCancelCallback(
 				peerId,
 				&session(),
-				[ctx, session = &session()] {
+				[ctx, session = &session(), peerId] {
+					LOG(("ENHANCED_FWD: cancelCallback called for peer=%1 path=%2")
+						.arg(peerId.value).arg(ctx->progressPath));
 					for (auto i = 0; i < int(ctx->itemIds.size()); i++) {
 						const auto item = ctx->itemIds[i];
 						const auto msg = session->data().message(item);
@@ -4001,13 +4028,14 @@ void ApiWrap::forwardMessages(
 							ctx->uploadIndex->erase(ctx->uploadIds[i]);
 						}
 					}
-					EnhancedForward::ClearProgress(ctx->progressPath);
+					EnhancedForward::CleanupPartialFiles(ctx->progressPath);
 				});
 
 			EnhancedForward::setPauseCallback(
 				peerId,
 				&session(),
-				[ctx, session = &session(), saveProgress] {
+				[ctx, session = &session(), saveProgress, peerId] {
+					LOG(("ENHANCED_FWD: pauseCallback called for peer=%1").arg(peerId.value));
 					for (auto i = 0; i < int(ctx->itemIds.size()); i++) {
 						if (ctx->textOnly[i] || ctx->uploadDone[i]) continue;
 						// Pause: abort any in-flight source download.
@@ -4046,9 +4074,10 @@ void ApiWrap::forwardMessages(
 				&session(),
 				[ctx, session = &session(), loadProgress] {
 					loadProgress();
+					const auto savedUploadDone = ctx->uploadDone;
 					session->uploader().unpause();
 					for (auto i = 0; i < int(ctx->itemIds.size()); i++) {
-						if (ctx->textOnly[i] || ctx->uploadDone[i]) continue;
+						if (ctx->textOnly[i] || savedUploadDone[i]) continue;
 						const auto srcItem =
 							session->data().message(ctx->itemIds[i]);
 						if (!srcItem) {
@@ -4064,21 +4093,11 @@ void ApiWrap::forwardMessages(
 						}
 						ctx->downloadStarted[i] = false;
 						ctx->uploadStarted[i] = false;
-						// Only re-download if the file wasn't already
-						// downloaded before the pause. A fully-downloaded
-						// item must keep downloadDone so resume doesn't
-						// re-fetch it from scratch (the local file is
-						// intact and the in-flight upload resumes via the
-						// uploader). Uploads only start once the download
-						// is fully complete.
 						if (!ctx->downloadDone[i]) {
 							ctx->needsDownload[i] = true;
 						}
 						ctx->uploadDone[i] = false;
 					}
-					// Restart the pipelines from the beginning: the cursors
-					// are monotonic and have already reached the end, so they
-					// must be reset for the pumps to re-scan pending items.
 					ctx->downloadCursor = 0;
 					ctx->uploadCursor = 0;
 					ctx->downloadInFlight = false;
@@ -4718,6 +4737,13 @@ void ApiWrap::forwardMessages(
 								s->prepared[idx]->partssize = realSize;
 							}
 						}
+						// Capture the actual part size used by the
+						// uploader so uploadedParts can be computed.
+						if (s->prepared[idx]->partssize > 0
+							&& !s->prepared[idx]->fileparts.empty()) {
+							s->uploadPartSize[idx] = s->prepared[idx]->partssize
+								/ int(s->prepared[idx]->fileparts.size());
+						}
 					} else if (prepareState == EnhancedForward::State::Sending) {
 						LOG(("ENHANCED_FWD: prep fail idx=%1 "
 							"result=%2 filesize=%3")
@@ -4757,19 +4783,25 @@ void ApiWrap::forwardMessages(
 						session().data().nextLocalMessageId());
 					s->uploadIds[idx] = uploadId;
 					ctx->uploadIndex->emplace(uploadId, idx);
+					const auto fileSize = s->prepared[idx]
+						? qint64(s->prepared[idx]->filesize)
+						: qint64(0);
+					const auto partSize = s->uploadPartSize[idx];
+					const auto totalParts = (partSize > 0 && fileSize > 0)
+						? int((fileSize + partSize - 1) / partSize)
+						: 0;
+					const auto initialProgress = (totalParts > 0)
+						? float64(s->uploadedParts[idx]) / float64(totalParts)
+						: 0.0;
 					EnhancedForward::updateUploadProgress(
 						&session(), ctx->peerId, idx,
 						{ s->prepared[idx]
 							? s->prepared[idx]->filename
 							: QString(),
-						  s->prepared[idx]
-							? qint64(s->prepared[idx]->filesize)
-							: qint64(0) },
-						0.0);
+						  fileSize },
+						initialProgress);
 					// Clear any stale uploading state left over from a
-					// previous (paused/interrupted) upload of this file so
-					// the progress bar starts from 0 instead of showing the
-					// leftover partial offset after a restart.
+					// previous (paused/interrupted) upload of this file.
 					if (const auto prepared = s->prepared[idx]) {
 						if (prepared->type == SendMediaType::Photo) {
 							if (const auto photo = session().data().photo(
@@ -4781,11 +4813,10 @@ void ApiWrap::forwardMessages(
 							document->uploadingData = nullptr;
 						}
 					}
-					// Start the uploader upload now. uploadInFlight already
-					// covers this prep+upload as one ordered slot, so the
-					// next upload only begins after this one finishes.
-					// Resume from the last server-acked part (cross
-					// restart) when we have a persisted file_id.
+					LOG(("ENHANCED_FWD: upload starting idx=%1 uploadedParts=%2 fileId=%3")
+						.arg(idx)
+						.arg(s->uploadedParts[idx])
+						.arg(s->uploadFileId[idx]));
 					session().uploader().upload(
 						uploadId,
 						s->prepared[idx],
@@ -4862,10 +4893,38 @@ void ApiWrap::forwardMessages(
 				(*startUploadForItem)(idx);
 				return;
 			}
-			ctx->textOnly[idx] = true;
-			ctx->uploadDone[idx] = true;
-			(*sendNext)();
-			pumpUploads();
+			// All retries exhausted — pause and notify the user.
+			LOG(("ENHANCED_FWD: upload failed permanently idx=%1").arg(idx));
+			ctx->uploadInFlight = false;
+			ctx->uploadDone[idx] = false;
+			// Reset retry state so resume starts a fresh upload.
+			ctx->uploadRetries[idx] = 0;
+			ctx->uploadedParts[idx] = 0;
+			ctx->uploadFileId[idx] = base::RandomValue<uint64>();
+			// Send a notification message to the destination chat.
+			const auto history = session().data().history(ctx->peerId);
+			const auto fileName = ctx->prepared[idx]
+				? ctx->prepared[idx]->filename
+				: u"file"_q;
+			const auto text = tr::lng_enhanced_forward_upload_failed(
+				tr::now,
+				lt_file_name,
+				fileName);
+			const auto randomId = base::RandomValue<uint64>();
+			const auto newId = FullMsgId(
+				ctx->peerId,
+				session().data().nextLocalMessageId());
+			session().data().registerMessageRandomId(randomId, newId);
+			history->addNewLocalMessage({
+				.id = newId.msg,
+				.flags = MessageFlags(),
+				.from = NewMessageFromId(action),
+				.date = NewMessageDate(action.options),
+			}, TextWithEntities::Simple(text), MTP_messageMediaEmpty());
+			EnhancedForward::markItemSent(_session, ctx->peerId);
+			saveProgress();
+			// Pause the forward — the user can resume later.
+			EnhancedForward::pauseForward(ctx->peerId, _session);
 		};
 			session().uploader().photoReady(
 			) | rpl::on_next(onUploadDone, *ctx->uploadLifetime);
@@ -4897,13 +4956,25 @@ void ApiWrap::forwardMessages(
 						0.,
 						1.)
 					: 0.;
-				// Track the last server-acked part so a paused
-				// transfer can be resumed from here across a restart.
-				if (data.size > 0) {
-					ctx->uploadedParts[idx] = int(
-						data.offset / data.size * ctx->uploadPartSize[idx]
-							? data.offset / ctx->uploadPartSize[idx]
-							: 0);
+			// Track the last server-acked part so a paused
+			// transfer can be resumed from here across a restart.
+			if (data.partSize > 0) {
+				ctx->uploadPartSize[idx] = data.partSize;
+			}
+			if (data.size > 0
+				&& ctx->uploadPartSize[idx] > 0) {
+				ctx->uploadedParts[idx] = int(
+					data.offset / ctx->uploadPartSize[idx]);
+					// Periodically save progress so resume survives
+					// an app kill during upload.
+					const auto newPct = (data.size > 0)
+						? int(float64(data.offset) / float64(data.size) * 100)
+						: 0;
+					const auto lastSaved = ctx->lastSavedPct[idx];
+					if (newPct >= lastSaved + 10 || newPct >= 99) {
+						ctx->lastSavedPct[idx] = newPct;
+						saveProgress();
+					}
 				}
 				EnhancedForward::updateUploadProgress(
 					&session(), ctx->peerId, idx,
@@ -4989,6 +5060,13 @@ void ApiWrap::forwardMessages(
 				}
 			}
 			LOG(("ENHANCED_FWD: classify done"));
+			for (auto i = 0; i < n; i++) {
+				LOG(("ENHANCED_FWD: post-classify item %1 uploadDone=%2 textOnly=%3 downloadDone=%4")
+					.arg(i)
+					.arg(Logs::b(ctx->uploadDone[i]))
+					.arg(Logs::b(ctx->textOnly[i]))
+					.arg(Logs::b(ctx->downloadDone[i])));
+			}
 
 			// Kick off uploads for already-cached items in source order.
 			pumpUploads();
@@ -5437,41 +5515,63 @@ void ApiWrap::forwardMessages(
 void ApiWrap::startResumeForward(
 		const PeerId &srcId,
 		const PeerId &dstId,
-		not_null<Main::Session*> session) {
-	startResumeEnhancedForward(srcId, dstId, session);
+		not_null<Main::Session*> session,
+		const QString &path) {
+	startResumeEnhancedForward(srcId, dstId, session, path);
 }
 
 void ApiWrap::startResumeEnhancedForward(
 		const PeerId &srcId,
 		const PeerId &dstId,
-		not_null<Main::Session*> session) {
-	const auto dir = File::DefaultDownloadPath(session)
-		+ "ForwardTemp/";
-	const auto data = EnhancedForward::LoadProgress(
-		EnhancedForward::ProgressFilePath(
-			EnhancedForward::ProgressFileBareName(
-				session->data().peer(srcId)->name()),
-			dir));
-	if (!data) return;
+		not_null<Main::Session*> session,
+		const QString &path) {
+	LOG(("ENHANCED_FWD: startResumeEnhancedForward src=%1 dst=%2 path=%3")
+		.arg(srcId.value).arg(dstId.value).arg(path));
+	const auto progressPath = !path.isEmpty()
+		? path
+		: [&] {
+			const auto dir = File::DefaultDownloadPath(session)
+				+ "ForwardTemp/";
+			const auto srcName = session->data().peer(srcId)->name();
+			const auto bareName = EnhancedForward::ProgressFileBareName(srcName);
+			return EnhancedForward::ProgressFilePath(bareName, dir);
+		}();
+	LOG(("ENHANCED_FWD: startResumeEnhancedForward progressPath=%1")
+		.arg(progressPath));
+	const auto data = EnhancedForward::LoadProgress(progressPath);
+	if (!data) {
+		LOG(("ENHANCED_FWD: startResumeEnhancedForward load failed"));
+		return;
+	}
 	const auto total = int((*data)["total"].toInt(0));
 	const auto sent = int((*data)["sent"].toInt(0));
 	if (total <= 0 || sent >= total) {
 		return;
 	}
+	// Guard against starting the same resume twice (e.g. the user
+	// clicking "Resume" repeatedly while source messages are still
+	// being fetched). Without this, each click would spin up its own
+	// pipeline against the same peer.
+	static auto Resuming = std::set<PeerId>();
+	if (Resuming.contains(dstId)) {
+		return;
+	}
+	const auto done = [=] {
+		Resuming.erase(dstId);
+	};
 	auto job = std::make_shared<EnhancedForward::SavedJob>();
 	job->srcId = srcId;
 	job->dstId = dstId;
 	job->total = total;
 	job->sent = sent;
-	job->path = EnhancedForward::ProgressFilePath(
-		EnhancedForward::ProgressFileBareName(
-			session->data().peer(srcId)->name()),
-		dir);
+	job->path = progressPath;
+	const auto srcPeerId = PeerId(
+		qulonglong((*data)["src_peer"].toDouble()));
 	const auto msgs = (*data)["source_msgs"].toArray();
 	for (const auto &v : msgs) {
 		const auto obj = v.toObject();
 		job->sourceMsgs.push_back(FullMsgId(
-			PeerId(obj["peer"].toVariant().toULongLong()),
+			srcPeerId,
 			MsgId(obj["msg"].toVariant().toLongLong())));
 	}
 	const auto items = (*data)["items"].toArray();
@@ -5479,7 +5579,7 @@ void ApiWrap::startResumeEnhancedForward(
 		const auto obj = v.toObject();
 		job->uploadDone.push_back(obj["upload_done"].toBool(false));
 		job->fileId.push_back(
-			uint64(obj["file_id"].toDouble()));
+			obj["file_id"].toString().toULongLong());
 		job->uploadedParts.push_back(
 			int(obj["uploaded_parts"].toInt(0)));
 	}
@@ -5493,11 +5593,15 @@ void ApiWrap::startResumeEnhancedForward(
 			if (item) {
 				resolved.push_back(item);
 			} else {
+				LOG(("ENHANCED_FWD: resume source msg not found peer=%1 msg=%2")
+					.arg(full.peer.value).arg(full.msg.bare));
 				ok = false;
 				break;
 			}
 		}
 		if (!ok || resolved.empty()) return false;
+		LOG(("ENHANCED_FWD: resume resolved %1 messages, starting forward")
+			.arg(resolved.size()));
 		Data::ResolvedForwardDraft draft;
 		draft.items = std::move(resolved);
 		SendAction action(session->data().history(dstId));
@@ -5506,26 +5610,61 @@ void ApiWrap::startResumeEnhancedForward(
 			action,
 			nullptr,
 			job);
+		done();
 		return true;
 	};
 
 	if (resume()) {
 		return;
 	}
-	// Source messages may not be loaded yet (e.g. right after login).
-	// Retry for a few seconds until they become available.
-	struct RetryState {
-		int attempts = 0;
-	};
-	const auto state = std::make_shared<RetryState>();
-	const auto timer = std::make_shared<base::Timer>();
-	timer->setCallback([=] {
-		state->attempts++;
-		if (resume() || state->attempts > 40) {
-			timer->cancel();
+
+	const auto fetchAndResume = [=] {
+		auto ids = QVector<MTPInputMessage>();
+		ids.reserve(job->sourceMsgs.size());
+		for (const auto &full : job->sourceMsgs) {
+			ids.push_back(MTP_inputMessageID(MTP_int(full.msg.bare)));
 		}
-	});
-	timer->callEach(crl::time(250));
+		const auto srcPeer = session->data().peer(srcId);
+		const auto channel = srcPeer
+			? srcPeer->asChannel()
+			: nullptr;
+		auto afterFetch = [=] {
+			struct RetryState {
+				int attempts = 0;
+			};
+			const auto state = std::make_shared<RetryState>();
+			const auto timer = std::make_shared<base::Timer>();
+			timer->setCallback([=] {
+				state->attempts++;
+				if (resume() || state->attempts > 20) {
+					timer->cancel();
+					done();
+				}
+			});
+			timer->callEach(crl::time(250));
+		};
+		if (channel) {
+			request(MTPchannels_GetMessages(
+				channel->inputChannel(),
+				MTP_vector<MTPInputMessage>(ids)
+			)).done([=](const MTPmessages_Messages &result) {
+				session->data().processExistingMessages(channel, result);
+				afterFetch();
+			}).fail([=](const MTP::Error &) {
+				afterFetch();
+			}).send();
+		} else {
+			request(MTPmessages_GetMessages(
+				MTP_vector<MTPInputMessage>(ids)
+			)).done([=](const MTPmessages_Messages &result) {
+				session->data().processExistingMessages(nullptr, result);
+				afterFetch();
+			}).fail([=](const MTP::Error &) {
+				afterFetch();
+			}).send();
+		}
+	};
+	fetchAndResume();
 }
 
 void ApiWrap::shareContact(

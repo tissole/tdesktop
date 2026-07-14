@@ -148,6 +148,10 @@ void updateItemState(
 
 [[nodiscard]] std::optional<PeerId> activeJobPeer();
 
+void saveProgressForPeer(
+	const PeerId &peer,
+	not_null<Main::Session*> session);
+
 [[nodiscard]] bool isPaused(const PeerId &id);
 
 [[nodiscard]] ForwardProgress currentProgress(const PeerId &id);
@@ -162,6 +166,7 @@ void SaveProgress(
 	const QJsonObject &data);
 [[nodiscard]] std::optional<QJsonObject> LoadProgress(const QString &path);
 void ClearProgress(const QString &path);
+void CleanupPartialFiles(const QString &progressPath);
 
 struct SavedJob {
 	PeerId srcId = PeerId();
