@@ -763,19 +763,10 @@ void MainWindow::showUnfinishedForwards(not_null<Main::Session*> session) {
 			: QFileInfo(job.path).baseName().mid(3);
 
 		auto box = Box([=](not_null<Ui::GenericBox*> box) {
-			const auto maxTitleLen = 35;
-			const auto elided = (chatName.size() > maxTitleLen)
-				? chatName.left(maxTitleLen - 1) + QChar(0x2026)
-				: chatName;
-			const auto titleLabel = box->addRow(
-				object_ptr<Ui::FlatLabel>(
-					box.get(),
-					u"Paused forward from %1"_q.arg(elided),
-					st::boxTitle));
-			if (elided != chatName) {
-				titleLabel->setAttribute(Qt::WA_Hover);
-				titleLabel->setToolTip(chatName);
-			}
+			box->addRow(object_ptr<Ui::FlatLabel>(
+				box.get(),
+				u"Unfinished forward from %1"_q.arg(chatName),
+				st::boxLabel));
 
 			box->addRow(object_ptr<Ui::FlatLabel>(
 				box.get(),
