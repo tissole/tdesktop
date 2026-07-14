@@ -7635,8 +7635,7 @@ void HistoryWidget::updateSendRestriction() {
 	const auto progress = EnhancedForward::currentProgress(_peer->id);
 	const auto isEnhancedForwarding = (progress.state == EnhancedForward::State::Sending
 		|| progress.state == EnhancedForward::State::Finished
-		|| progress.state == EnhancedForward::State::Paused
-		|| progress.state == EnhancedForward::State::Cancelled)
+		|| progress.state == EnhancedForward::State::Paused)
 		&& progress.destPeer == _peer->id;
 	const auto dir = File::DefaultDownloadPath(&session())
 		+ u"ForwardTemp/"_q;

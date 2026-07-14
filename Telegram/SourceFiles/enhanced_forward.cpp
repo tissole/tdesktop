@@ -166,14 +166,40 @@ bool checkPeerRestriction(not_null<PeerData*> peer) {
 	auto finished = false;
 	const auto session = &peer->session();
 
-	if (const auto channel = peer->asChannel()) {
-		session->api().request(MTPchannels_GetChannels(
-			MTP_vector<MTPInputChannel>(1, channel->inputChannel())
-		)).done([&](const MTPmessages_Chats &data) {
-			data.match([&](const auto &data) {
-				session->data().processChats(data.vchats());
+	if (peer->asChannel()) {
+		// channels_GetChannels needs a valid access_hash, which can be
+		// missing for a restricted source (inputChannel -> PEER_ID_INVALID).
+		// Mirror the history-load probe: read the raw per-message
+		// noforwards flag (bit 26) from messages_GetHistory using the
+		// working inputPeer.
+		const auto scan = [&](const MTPVector<MTPMessage> &msgs) {
+			for (const auto &msg : msgs.v) {
+				if (msg.type() != mtpc_message) continue;
+				if (msg.c_message().vflags().v & (1U << 26)) {
+					result = true;
+					break;
+				}
+			}
+		};
+		session->api().request(MTPmessages_GetHistory(
+			peer->input(),
+			MTP_int(0),
+			MTP_int(0),
+			MTP_int(0),
+			MTP_int(1),
+			MTP_int(0),
+			MTP_int(0),
+			MTP_long(0)
+		)).done([&](const MTPmessages_Messages &data) {
+			data.match([&](const MTPDmessages_messages &d) {
+				scan(d.vmessages());
+			}, [&](const MTPDmessages_messagesSlice &d) {
+				scan(d.vmessages());
+			}, [&](const MTPDmessages_channelMessages &d) {
+				scan(d.vmessages());
+			}, [&](const MTPDmessages_messagesNotModified &) {
+			}, [](const auto &) {
 			});
-			result = (channel->flags() & ChannelDataFlag::NoForwards);
 			finished = true;
 			loop.quit();
 		}).fail([&](const MTP::Error &) {
@@ -216,17 +242,12 @@ bool checkPeerRestriction(not_null<PeerData*> peer) {
 
 ItemFlags checkItem(not_null<HistoryItem*> item) {
 	LOG(("ENHANCED_FWD: checkItem item=%1").arg(item->id.bare));
-	const auto history = item->history();
-	const auto peer = history->peer;
-	const auto msg = !!(item->flags() & MessageFlag::NoForwards);
-	auto peerFlag = false;
-	if (const auto channel = peer->asChannel()) {
-		peerFlag = !!(channel->flags() & ChannelDataFlag::NoForwards);
-	} else if (const auto chat = peer->asChat()) {
-		peerFlag = !!(chat->flags() & ChatDataFlag::NoForwards);
-	} else if (const auto user = peer->asUser()) {
-		peerFlag = !!(user->flags() & UserDataFlag::NoForwardsPeerEnabled);
-	}
+	const auto peer = item->history()->peer;
+	// Read the raw flags directly: the message's raw MTP noforwards bit
+	// (26) and the peer's raw noforwards flag fetched from the server.
+	// Both bypass the forced allowsForwarding()/isNoForwards() overrides.
+	const auto msg = (item->rawMtpFlags() & (1U << 26)) != 0;
+	const auto peerFlag = checkPeerRestriction(peer);
 	LOG(("ENHANCED_FWD: checkItem msg=%1 peerFlag=%2 restricted=%3")
 		.arg(Logs::b(msg))
 		.arg(Logs::b(peerFlag))
@@ -290,13 +311,22 @@ void markItemSent(
 	}
 
 	if (state.sent >= state.total) {
-		state.finished = true;
+		// Keep the completed "N/N" progress visible for a moment
+		// before switching to the finished state, then collapse.
 		state.finishTimer = std::make_unique<base::Timer>([=] {
 			auto &states = ActiveStates();
-			states.erase(peerId);
-			fireUpdate(session, peerId);
+			const auto it = states.find(peerId);
+			if (it == states.end()) return;
+			if (!it->second.finished) {
+				it->second.finished = true;
+				fireUpdate(session, peerId);
+				states[peerId].finishTimer->callOnce(2000);
+			} else {
+				states.erase(peerId);
+				fireUpdate(session, peerId);
+			}
 		});
-		state.finishTimer->callOnce(2000);
+		state.finishTimer->callOnce(1000);
 	}
 }
 

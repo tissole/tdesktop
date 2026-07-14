@@ -3867,7 +3867,8 @@ void ApiWrap::forwardMessages(
 				root["dst_peer"] = qint64(ctx->peerId.value);
 				root["src_peer"] = qint64(ctx->srcPeer.value);
 				root["total"] = int(ctx->itemIds.size());
-				root["sent"] = int(ctx->sent);
+				root["sent"] = EnhancedForward::currentProgress(
+					ctx->peerId).sent;
 				QJsonArray msgs;
 				for (const auto &full : ctx->itemIds) {
 					QJsonObject m;

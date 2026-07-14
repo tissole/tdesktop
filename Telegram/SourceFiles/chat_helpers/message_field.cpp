@@ -1546,8 +1546,14 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 	raw->setFixedHeight(56);
 
 	// Semi-transparent black panel so the white text and the colored
-	// bars/arrows stay readable over any chat wallpaper.
+	// bars/arrows stay readable over any chat wallpaper. It is not
+	// painted once the forward is cancelled, so the dim disappears at
+	// once instead of lingering until the state is cleaned up.
 	raw->paintRequest() | rpl::on_next([=](QRect clip) {
+		if (EnhancedForward::currentProgress(peer).state
+			== EnhancedForward::State::Cancelled) {
+			return;
+		}
 		auto p = QPainter(raw);
 		p.setPen(Qt::NoPen);
 		p.setBrush(QColor(0, 0, 0, 150));
@@ -1969,6 +1975,7 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 			downloadBar->hide();
 			uploadBar->hide();
 			raw->setCursor(style::cur_default);
+			raw->hide();
 			InvokeQueued(raw, [=] {
 				session->changes().peerUpdated(
 					session->data().peer(peer),
