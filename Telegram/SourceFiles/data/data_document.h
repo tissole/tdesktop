@@ -187,6 +187,7 @@ public:
 	[[nodiscard]] bool isMusicForProfile() const;
 	[[nodiscard]] bool isVoiceMessage() const;
 	[[nodiscard]] bool isVideoMessage() const;
+	[[nodiscard]] bool isVideo() const;
 	[[nodiscard]] bool isSong() const;
 	[[nodiscard]] bool isSongWithCover() const;
 	[[nodiscard]] bool isAudioFile() const;

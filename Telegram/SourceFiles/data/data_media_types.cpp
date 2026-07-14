@@ -1111,7 +1111,7 @@ Storage::SharedMediaTypesMask MediaFile::sharedMediaTypes() const {
 	} else if (_document->isGifv()) {
 		return Type::GIF;
 	//} else if (_document->isVideoFile()) {
-    } else if (_document->isVideoFile() && _document->hasDuration()) {    
+    } else if (_document->isVideo()) {
 		return Storage::SharedMediaTypesMask{}
 			.added(Type::Video)
 			.added(Type::PhotoVideo);
