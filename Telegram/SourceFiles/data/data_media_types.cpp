@@ -1117,7 +1117,7 @@ Storage::SharedMediaTypesMask MediaFile::sharedMediaTypes() const {
 			.added(Type::PhotoVideo);
 	} else if (_document->isVoiceMessage()) {
 		return Type::VoiceFile;
-	} else if (_document->isAudioFile()) {
+	} else if (_document->isSong()) {
 		return Type::MusicFile;
 	}
 	return Type::File;

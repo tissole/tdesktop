@@ -47,7 +47,7 @@ bool IsItemGoodForType(const not_null<HistoryItem*> item, Type type) {
 	const auto roundDoc = document->isVideoMessage();
 
 	const auto audioType = (type == Type::MusicFile);
-	const auto audioDoc = document->isAudioFile();
+	const auto audioDoc = document->isSong();
 
 	const auto gifType = (type == Type::GIF);
 	const auto gifDoc = document->isGifv();
@@ -71,7 +71,8 @@ bool IsItemGoodForType(const not_null<HistoryItem*> item, Type type) {
 		|| (fileType && (document->isTheme()
 			|| document->isImage()
 			|| !document->canBeStreamed()
-			|| (document->isVideoFile() && !document->hasDuration())));
+			|| (document->isVideoFile() && !document->hasDuration())
+			|| (document->isAudioFile() && !document->isSong())));
 }
 
 } // namespace
