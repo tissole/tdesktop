@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "rpl/rpl.h"
 #include "base/debug_log.h"
+#include "base/flat_map.h"
 #include "base/timer.h"
 #include "data/data_changes.h"
 #include "data/data_channel.h"
@@ -169,12 +170,17 @@ bool checkPeerRestriction(not_null<PeerData*> peer) {
 	const auto session = &peer->session();
 
 	const auto scanMessages = [&](const MTPVector<MTPMessage> &msgs) {
+		// Walk from the newest message backwards, skipping service messages
+		// (joins, pins, ...), until the first genuine content message is
+		// found. For a copyright-all / platform-wide restriction every
+		// message is flagged, so that newest valid message is representative;
+		// its raw noforwards bit (26) decides the peer's restriction.
 		for (const auto &msg : msgs.v) {
 			if (msg.type() != mtpc_message) continue;
 			if (msg.c_message().vflags().v & (1U << 26)) {
 				result = true;
-				break;
 			}
+			break;
 		}
 	};
 	const auto scanPeers = [&](const MTPVector<MTPChat> &chats) {
@@ -196,15 +202,17 @@ bool checkPeerRestriction(not_null<PeerData*> peer) {
 	if (peer->asChannel() || peer->asChat()) {
 		// messages_GetHistory works with the regular inputPeer, so it avoids
 		// the PEER_ID_INVALID that channels_GetChannels can hit when the
-		// channel access_hash is missing. The response carries both the raw
-		// peer noforwards flag (is_noforwards) in vchats() and the raw
-		// per-message noforwards bit (26) in the messages.
+		// channel access_hash is missing. A single probe fetches the most
+		// recent messages so scanMessages can walk backwards past any
+		// service messages to the first genuine content message. The response
+		// also carries the raw peer noforwards flag (is_noforwards) in
+		// vchats() for admin-level restrictions.
 		session->api().request(MTPmessages_GetHistory(
 			peer->input(),
 			MTP_int(0),
 			MTP_int(0),
 			MTP_int(0),
-			MTP_int(20),
+			MTP_int(10),
 			MTP_int(0),
 			MTP_int(0),
 			MTP_long(0)
@@ -250,28 +258,36 @@ bool checkPeerRestriction(not_null<PeerData*> peer) {
 	return result;
 }
 
-ItemFlags checkItem(not_null<HistoryItem*> item) {
-	LOG(("ENHANCED_FWD: checkItem item=%1").arg(item->id.bare));
-	const auto peer = item->history()->peer;
-	// Read the raw flags directly: the message's raw MTP noforwards bit
-	// (26) and the peer's raw noforwards flag fetched from the server.
-	// Both bypass the forced allowsForwarding()/isNoForwards() overrides.
-	const auto msg = (item->rawMtpFlags() & (1U << 26)) != 0;
-	const auto peerFlag = checkPeerRestriction(peer);
-	LOG(("ENHANCED_FWD: checkItem msg=%1 peerFlag=%2 restricted=%3")
-		.arg(Logs::b(msg))
-		.arg(Logs::b(peerFlag))
-		.arg(Logs::b(msg || peerFlag)));
-	return { msg, peerFlag, (msg || peerFlag) };
-}
-
 Split classifyItems(
 		const std::vector<not_null<HistoryItem*>> &items) {
 	LOG(("ENHANCED_FWD: classifyItems count=%1").arg(items.size()));
 	Split result;
+
+	// The peer noforwards probe is a blocking server round-trip, so fetch
+	// it once per unique source peer instead of once per forwarded item.
+	base::flat_map<PeerId, bool> peerRestricted;
 	for (const auto &item : items) {
-		const auto flags = checkItem(item);
-		if (flags.restricted) {
+		const auto peerId = item->history()->peer->id;
+		if (!peerRestricted.contains(peerId)) {
+			peerRestricted.emplace(
+				peerId,
+				checkPeerRestriction(item->history()->peer));
+		}
+	}
+
+	for (const auto &item : items) {
+		// A peer is restricted when either the peer-level noforwards flag is
+		// set (admin restriction) or any of its messages carries the raw
+		// noforwards bit 26 (server-side copyright-all / platform-wide
+		// restriction). Both are detected once per peer by the probe below,
+		// so every message from that peer is treated as restricted. There is
+		// no need to inspect each message individually.
+		const auto peerFlag = peerRestricted[item->history()->peer->id];
+		LOG(("ENHANCED_FWD: checkItem item=%1 peerFlag=%2 restricted=%3")
+			.arg(item->id.bare)
+			.arg(Logs::b(peerFlag))
+			.arg(Logs::b(peerFlag)));
+		if (peerFlag) {
 			result.restricted.push_back(item);
 		} else {
 			result.normal.push_back(item);

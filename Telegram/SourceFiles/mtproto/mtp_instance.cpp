@@ -985,7 +985,7 @@ void Instance::Private::checkDelayedRequests() {
 		if (const auto shiftedDcId = queryRequestByDc(requestId)) {
 			dcWithShift = *shiftedDcId;
 		} else {
-			LOG(("MTP Error: could not find request dc for delayed resend, requestId %1").arg(requestId));
+			DEBUG_LOG(("MTP Error: could not find request dc for delayed resend, requestId %1").arg(requestId));
 			continue;
 		}
 

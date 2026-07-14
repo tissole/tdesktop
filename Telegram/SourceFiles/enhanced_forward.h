@@ -22,18 +22,11 @@ class Session;
 
 namespace EnhancedForward {
 
-struct ItemFlags {
-	bool msg = false;
-	bool peer = false;
-	bool restricted = false; // msg || peer
-};
-
 struct Split {
 	std::vector<not_null<HistoryItem*>> restricted;
 	std::vector<not_null<HistoryItem*>> normal;
 };
 
-[[nodiscard]] ItemFlags checkItem(not_null<HistoryItem*> item);
 [[nodiscard]] Split classifyItems(
 	const std::vector<not_null<HistoryItem*>> &items);
 [[nodiscard]] bool checkMsgRestriction(not_null<HistoryItem*> item);

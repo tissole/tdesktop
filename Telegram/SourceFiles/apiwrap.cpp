@@ -3726,17 +3726,9 @@ void ApiWrap::forwardMessages(
 
 	LOG(("ENHANCED_FWD: forwardMessages items=%1").arg(draft.items.size()));
 
-	auto enhancedItems = std::vector<not_null<HistoryItem*>>();
-	auto normalItems = decltype(draft.items)();
-	enhancedItems.reserve(draft.items.size());
-	normalItems.reserve(draft.items.size());
-	for (const auto &item : draft.items) {
-		if (EnhancedForward::checkItem(item).restricted) {
-			enhancedItems.push_back(item);
-		} else {
-			normalItems.push_back(item);
-		}
-	}
+	const auto split = EnhancedForward::classifyItems(draft.items);
+	auto enhancedItems = split.restricted;
+	auto normalItems = split.normal;
 	// draft.items are in selection order, not chronological. Sort both
 	// lists by message id ascending so the pipeline (downloads, uploads
 	// and sends) and the standard forward proceed oldest -> newest.
