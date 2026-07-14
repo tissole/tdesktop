@@ -159,44 +159,65 @@ bool checkMsgRestriction(not_null<HistoryItem*> item) {
 	return result;
 }
 
-// Fetch peer noforwards flag from server
+// Fetch the raw peer noforwards flag from the server. This bypasses the
+// forced allowsForwarding()=true override (commit 89d5e20). Both the raw
+// peer flag and the raw per-message noforwards bit (26) are checked.
 bool checkPeerRestriction(not_null<PeerData*> peer) {
 	auto result = false;
 	auto loop = QEventLoop();
 	auto finished = false;
 	const auto session = &peer->session();
 
-	if (peer->asChannel()) {
-		// channels_GetChannels needs a valid access_hash, which can be
-		// missing for a restricted source (inputChannel -> PEER_ID_INVALID).
-		// Mirror the history-load probe: read the raw per-message
-		// noforwards flag (bit 26) from messages_GetHistory using the
-		// working inputPeer.
-		const auto scan = [&](const MTPVector<MTPMessage> &msgs) {
-			for (const auto &msg : msgs.v) {
-				if (msg.type() != mtpc_message) continue;
-				if (msg.c_message().vflags().v & (1U << 26)) {
+	const auto scanMessages = [&](const MTPVector<MTPMessage> &msgs) {
+		for (const auto &msg : msgs.v) {
+			if (msg.type() != mtpc_message) continue;
+			if (msg.c_message().vflags().v & (1U << 26)) {
+				result = true;
+				break;
+			}
+		}
+	};
+	const auto scanPeers = [&](const MTPVector<MTPChat> &chats) {
+		for (const auto &c : chats.v) {
+			if (c.type() == mtpc_channel) {
+				if (c.c_channel().is_noforwards()) {
+					result = true;
+					break;
+				}
+			} else if (c.type() == mtpc_chat) {
+				if (c.c_chat().is_noforwards()) {
 					result = true;
 					break;
 				}
 			}
-		};
+		}
+	};
+
+	if (peer->asChannel() || peer->asChat()) {
+		// messages_GetHistory works with the regular inputPeer, so it avoids
+		// the PEER_ID_INVALID that channels_GetChannels can hit when the
+		// channel access_hash is missing. The response carries both the raw
+		// peer noforwards flag (is_noforwards) in vchats() and the raw
+		// per-message noforwards bit (26) in the messages.
 		session->api().request(MTPmessages_GetHistory(
 			peer->input(),
 			MTP_int(0),
 			MTP_int(0),
 			MTP_int(0),
-			MTP_int(1),
+			MTP_int(20),
 			MTP_int(0),
 			MTP_int(0),
 			MTP_long(0)
 		)).done([&](const MTPmessages_Messages &data) {
 			data.match([&](const MTPDmessages_messages &d) {
-				scan(d.vmessages());
+				scanMessages(d.vmessages());
+				scanPeers(d.vchats());
 			}, [&](const MTPDmessages_messagesSlice &d) {
-				scan(d.vmessages());
+				scanMessages(d.vmessages());
+				scanPeers(d.vchats());
 			}, [&](const MTPDmessages_channelMessages &d) {
-				scan(d.vmessages());
+				scanMessages(d.vmessages());
+				scanPeers(d.vchats());
 			}, [&](const MTPDmessages_messagesNotModified &) {
 			}, [](const auto &) {
 			});
@@ -213,21 +234,8 @@ bool checkPeerRestriction(not_null<PeerData*> peer) {
 			const auto &d = data.c_users_userFull();
 			session->data().processUsers(d.vusers());
 			session->data().processChats(d.vchats());
-			result = (user->flags() & UserDataFlag::NoForwardsPeerEnabled);
-			finished = true;
-			loop.quit();
-		}).fail([&](const MTP::Error &) {
-			finished = true;
-			loop.quit();
-		}).send();
-	} else if (const auto chat = peer->asChat()) {
-		session->api().request(MTPmessages_GetFullChat(
-			chat->inputChat()
-		)).done([&](const MTPmessages_ChatFull &data) {
-			const auto &d = data.c_messages_chatFull();
-			session->data().processUsers(d.vusers());
-			session->data().processChats(d.vchats());
-			result = (chat->flags() & ChatDataFlag::NoForwards);
+			result = (user->flags() & UserDataFlag::NoForwardsPeerEnabled)
+				|| (user->flags() & UserDataFlag::NoForwardsMyEnabled);
 			finished = true;
 			loop.quit();
 		}).fail([&](const MTP::Error &) {
@@ -237,6 +245,8 @@ bool checkPeerRestriction(not_null<PeerData*> peer) {
 	}
 
 	if (!finished) loop.exec();
+	LOG(("ENHANCED_FWD: checkPeerRestriction result=%1")
+		.arg(Logs::b(result)));
 	return result;
 }
 
