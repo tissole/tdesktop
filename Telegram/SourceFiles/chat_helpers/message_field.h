@@ -217,7 +217,8 @@ void SelectTextInFieldWithMargins(
 [[nodiscard]] std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 	not_null<QWidget*> parent,
 	const PeerId &peer,
-	not_null<Main::Session*> session);
+	not_null<Main::Session*> session,
+	const std::shared_ptr<Ui::Show> &show);
 
 void FrozenInfoBox(
 	not_null<Ui::GenericBox*> box,

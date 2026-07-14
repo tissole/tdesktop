@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/event_filter.h"
 #include "ui/chat/chat_style.h"
 #include "ui/layers/generic_box.h"
+#include "ui/boxes/confirm_box.h"
 #include "ui/boxes/calendar_box.h"
 #include "ui/boxes/choose_date_time.h"
 #include "ui/basic_click_handlers.h"
@@ -1515,11 +1516,24 @@ rpl::producer<TextWithEntities> PaidSendButtonText(
 std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 		not_null<QWidget*> parent,
 		const PeerId &peer,
-		not_null<Main::Session*> session) {
+		not_null<Main::Session*> session,
+		const std::shared_ptr<Ui::Show> &show) {
 	LOG(("ENHANCED_FWD: EnhancedForwardWriteRestriction peer=%1")
 		.arg(peer.value));
 	auto result = std::make_unique<Ui::AbstractButton>(parent);
 	const auto raw = result.get();
+
+	const auto confirmCancel = [=](Fn<void()> onYes) {
+		show->showBox(Ui::MakeConfirmBox({
+			.text = tr::lng_enhanced_forward_cancel_confirm(tr::now),
+			.confirmed = [onYes](Fn<void()> close) {
+				onYes();
+				close();
+			},
+			.confirmText = tr::lng_enhanced_forward_cancel_yes(tr::now),
+			.cancelText = tr::lng_enhanced_forward_cancel_no(tr::now),
+		}));
+	};
 
 	const auto formatSize = [](qint64 bytes) -> QString {
 		if (bytes < 1024) return u"%1 B"_q.arg(bytes);
@@ -1687,10 +1701,10 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 		kUploadColor,
 		true);
 
-	const auto actionBtn = CreateChild<Ui::LinkButton>(
-		raw,
-		u"Pause"_q,
-		st::defaultLinkButton);
+		const auto actionBtn = CreateChild<Ui::LinkButton>(
+			raw,
+			tr::lng_enhanced_forward_pause(tr::now),
+			st::defaultLinkButton);
 	actionBtn->setColorOverride(QColor(255, 204, 0));
 	actionBtn->show();
 	actionBtn->setClickedCallback([=] {
@@ -1704,10 +1718,10 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 		}
 	});
 
-	const auto cancelBtn = CreateChild<Ui::LinkButton>(
-		raw,
-		u"Cancel"_q,
-		st::defaultLinkButton);
+		const auto cancelBtn = CreateChild<Ui::LinkButton>(
+			raw,
+			tr::lng_enhanced_forward_cancel(tr::now),
+			st::defaultLinkButton);
 	cancelBtn->setColorOverride(QColor(255, 204, 0));
 	cancelBtn->show();
 	cancelBtn->setClickedCallback([=] {
@@ -1857,11 +1871,14 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 		const auto p = EnhancedForward::currentProgress(peer);
 		switch (p.state) {
 		case EnhancedForward::State::Sending: {
-			*titleText = u"Forwarding %1/%2"_q
-				.arg(p.sent)
-				.arg(p.total);
+			*titleText = tr::lng_enhanced_forward_forwarding(
+				tr::now,
+				lt_sent,
+				QString::number(p.sent),
+				lt_total,
+				QString::number(p.total));
 			title->setText(*titleText);
-			actionBtn->setText(u"Pause"_q);
+			actionBtn->setText(tr::lng_enhanced_forward_pause(tr::now));
 			actionBtn->show();
 			cancelBtn->show();
 			raw->setCursor(style::cur_pointer);
@@ -1869,7 +1886,9 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 				EnhancedForward::pauseForward(peer, session);
 			});
 			cancelBtn->setClickedCallback([=] {
-				EnhancedForward::cancelForward(peer, session);
+				confirmCancel([=] {
+					EnhancedForward::cancelForward(peer, session);
+				});
 			});
 
 			const auto now = crl::now();
@@ -1912,11 +1931,14 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 			break;
 		}
 		case EnhancedForward::State::Paused: {
-			*titleText = u"Paused %1/%2"_q
-				.arg(p.sent)
-				.arg(p.total);
+			*titleText = tr::lng_enhanced_forward_paused(
+				tr::now,
+				lt_sent,
+				QString::number(p.sent),
+				lt_total,
+				QString::number(p.total));
 			title->setText(*titleText);
-			actionBtn->setText(u"Resume"_q);
+			actionBtn->setText(tr::lng_enhanced_forward_resume(tr::now));
 			actionBtn->show();
 			cancelBtn->show();
 			raw->setCursor(style::cur_pointer);
@@ -1924,13 +1946,14 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 				EnhancedForward::resumeForward(peer, session);
 			});
 			cancelBtn->setClickedCallback([=] {
-				EnhancedForward::cancelForward(peer, session);
+				confirmCancel([=] {
+					EnhancedForward::cancelForward(peer, session);
+				});
 			});
 			break;
 		}
-		case EnhancedForward::State::Cancelled:
-			*titleText = u"Forward Canceled"_q;
-			title->setText(*titleText);
+		case EnhancedForward::State::Cancelled: {
+			title->setText(QString());
 			actionBtn->hide();
 			cancelBtn->hide();
 			*downloadText = QString();
@@ -1946,9 +1969,15 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 			downloadBar->hide();
 			uploadBar->hide();
 			raw->setCursor(style::cur_default);
+			InvokeQueued(raw, [=] {
+				session->changes().peerUpdated(
+					session->data().peer(peer),
+					Data::PeerUpdate::Flag::Slowmode);
+			});
 			break;
+		}
 		case EnhancedForward::State::Finished:
-			*titleText = u"Forward Complete"_q;
+			*titleText = tr::lng_enhanced_forward_complete(tr::now);
 			title->setText(*titleText);
 			actionBtn->hide();
 			cancelBtn->hide();
@@ -1972,9 +2001,13 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 				const auto job = EnhancedForward::GetUnfinishedJobByDst(
 					peer,
 					dir);
-				title->setText(u"Forwarding %1/%2"_q
-					.arg(job->sent).arg(job->total));
-				actionBtn->setText(u"Resume"_q);
+				title->setText(tr::lng_enhanced_forward_forwarding(
+					tr::now,
+					lt_sent,
+					QString::number(job->sent),
+					lt_total,
+					QString::number(job->total)));
+				actionBtn->setText(tr::lng_enhanced_forward_resume(tr::now));
 				actionBtn->setClickedCallback([=] {
 					session->api().startResumeForward(
 						*jobSrcId,
@@ -1982,12 +2015,20 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 						session,
 						*jobPath);
 				});
-				cancelBtn->setText(u"Cancel"_q);
-				cancelBtn->setClickedCallback([=] {
-					EnhancedForward::CleanupPartialFiles(*jobPath);
+			cancelBtn->setText(tr::lng_enhanced_forward_cancel(tr::now));
+			cancelBtn->setClickedCallback([=] {
+				confirmCancel([=] {
+					const auto path = *jobPath;
+					EnhancedForward::CleanupPartialFiles(path);
 					*jobSrcId = PeerId();
 					*jobPath = QString();
+					InvokeQueued(raw, [=] {
+						session->changes().peerUpdated(
+							session->data().peer(peer),
+							Data::PeerUpdate::Flag::Slowmode);
+					});
 				});
+			});
 				actionBtn->show();
 				cancelBtn->show();
 				raw->setCursor(style::cur_pointer);

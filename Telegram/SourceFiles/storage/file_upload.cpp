@@ -914,7 +914,7 @@ void Uploader::finishFront() {
 		}
 		const auto md5 = entry.file->filemd5;
 		const auto file = MTP_inputFile(
-			MTP_long(entry.file->id),
+			MTP_long(entry.partsOfId),
 			MTP_int(entry.parts->size()),
 			MTP_string(photoFilename),
 			MTP_bytes(md5));
@@ -964,7 +964,7 @@ void Uploader::finishFront() {
 			const auto thumbFilename = entry.file->thumbname;
 			const auto thumbMd5 = entry.file->thumbmd5;
 			return MTP_inputFile(
-				MTP_long(entry.file->thumbId),
+				MTP_long(entry.partsOfId),
 				MTP_int(entry.parts->size()),
 				MTP_string(thumbFilename),
 				MTP_bytes(thumbMd5));

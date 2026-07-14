@@ -8104,3 +8104,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_enhanced_forward_cancel" = "Cancel";
 "lng_enhanced_forward_resume" = "Resume";
 "lng_enhanced_forward_upload_failed" = "Failed to upload {file_name}. The enhanced forward has been paused. You can resume it later from the chat controls.";
+"lng_enhanced_forward_cancel_confirm" = "Do you want to cancel forward?\nYes — will cancel without any notification.\nNo — will continue forwarding.";
+"lng_enhanced_forward_cancel_yes" = "Yes";
+"lng_enhanced_forward_cancel_no" = "No";
+"lng_enhanced_forward_forwarding" = "Forwarding {sent}/{total}";
+"lng_enhanced_forward_paused" = "Paused {sent}/{total}";
+"lng_enhanced_forward_complete" = "Forward Complete";
+"lng_enhanced_forward_unfinished" = "Unfinished forward from {chat_name}";
+"lng_enhanced_forward_later" = "Later";

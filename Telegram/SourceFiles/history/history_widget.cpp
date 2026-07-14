@@ -7654,7 +7654,8 @@ void HistoryWidget::updateSendRestriction() {
 		_sendRestriction = EnhancedForwardWriteRestriction(
 			this,
 			_peer->id,
-			&session());
+			&session(),
+			controller()->uiShow());
 	} else if (!restriction) {
 		if (_sendRestrictionKey != u"enhanced_forward"_q) {
 			_sendRestriction = nullptr;

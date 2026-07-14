@@ -765,7 +765,10 @@ void MainWindow::showUnfinishedForwards(not_null<Main::Session*> session) {
 		auto box = Box([=](not_null<Ui::GenericBox*> box) {
 			box->addRow(object_ptr<Ui::FlatLabel>(
 				box.get(),
-				u"Unfinished forward from %1"_q.arg(chatName),
+				tr::lng_enhanced_forward_unfinished(
+					tr::now,
+					lt_chat_name,
+					chatName),
 				st::boxLabel));
 
 			box->addRow(object_ptr<Ui::FlatLabel>(
@@ -775,16 +778,29 @@ void MainWindow::showUnfinishedForwards(not_null<Main::Session*> session) {
 					.arg(job.total),
 				st::defaultFlatLabel));
 
-			box->addButton(rpl::single(u"Resume"_q), [=] {
+			box->addButton(
+				tr::lng_enhanced_forward_resume(),
+				[=] {
 				session->api().startResumeForward(
 					job.srcId, job.dstId, session, job.path);
 				box->closeBox();
 			});
-			box->addButton(rpl::single(u"Cancel"_q), [=] {
-				EnhancedForward::CleanupPartialFiles(job.path);
-				box->closeBox();
+			box->addButton(
+				tr::lng_enhanced_forward_cancel(),
+				[=] {
+				controller().show(Ui::MakeConfirmBox({
+					.text = tr::lng_enhanced_forward_cancel_confirm(tr::now),
+					.confirmed = [=] {
+						EnhancedForward::CleanupPartialFiles(job.path);
+						box->closeBox();
+					},
+					.confirmText = tr::lng_enhanced_forward_cancel_yes(tr::now),
+					.cancelText = tr::lng_enhanced_forward_cancel_no(tr::now),
+				}));
 			});
-			box->addButton(rpl::single(u"Later"_q), [=] {
+			box->addButton(
+				tr::lng_enhanced_forward_later(),
+				[=] {
 				box->closeBox();
 			});
 		});
