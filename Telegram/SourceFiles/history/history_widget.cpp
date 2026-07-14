@@ -6846,9 +6846,19 @@ void HistoryWidget::moveFieldControls() {
 		const auto restrictionHeight = _sendRestriction->height()
 			? _sendRestriction->height()
 			: st::historySendSize.height();
+		// Enhanced-forward status floats above the compose bar (in the
+		// chat area) so the real text field, media and send buttons stay
+		// fully usable; other restrictions cover the bar instead.
+		const auto enhanced = (_sendRestrictionKey == u"enhanced_forward"_q);
+		const auto y = enhanced
+			? (bottom
+				- fieldHeight()
+				- 2 * st::historySendPadding
+				- restrictionHeight)
+			: (bottom - restrictionHeight);
 		_sendRestriction->setGeometry(myrtlrect(
 			0,
-			bottom - restrictionHeight,
+			y,
 			width(),
 			restrictionHeight));
 		_sendRestriction->raise();
@@ -7739,6 +7749,10 @@ void HistoryWidget::updateHistoryGeometry(
 	} else {
 		if (editingMessage() || _canSendMessages) {
 			newScrollHeight -= (fieldHeight() + 2 * st::historySendPadding);
+			if (_sendRestrictionKey == u"enhanced_forward"_q
+				&& _sendRestriction) {
+				newScrollHeight -= _sendRestriction->height();
+			}
 		} else if (_sendRestriction) {
 			newScrollHeight -= _sendRestriction->height();
 		}
