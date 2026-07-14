@@ -7749,10 +7749,6 @@ void HistoryWidget::updateHistoryGeometry(
 	} else {
 		if (editingMessage() || _canSendMessages) {
 			newScrollHeight -= (fieldHeight() + 2 * st::historySendPadding);
-			if (_sendRestrictionKey == u"enhanced_forward"_q
-				&& _sendRestriction) {
-				newScrollHeight -= _sendRestriction->height();
-			}
 		} else if (_sendRestriction) {
 			newScrollHeight -= _sendRestriction->height();
 		}
