@@ -8,17 +8,30 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include <optional>
-
 #include "data/data_peer_id.h"
 #include "rpl/producer.h"
+#include "api/api_common.h"
 
 class HistoryItem;
 class PhotoData;
 class DocumentData;
+class ApiWrap;
+struct SendingAlbum;
+struct FilePrepareResult;
 
-namespace Main {
-class Session;
-} // namespace Main
+namespace Storage {
+struct UploadedMedia;
+struct UploadProgress;
+} // namespace Storage
+
+namespace Api {
+struct RemoteFileInfo;
+} // namespace Api
+
+namespace Data {
+enum class GroupingOptions;
+class PhotoMedia;
+} // namespace Data
 
 namespace EnhancedForward {
 
@@ -187,5 +200,93 @@ struct SavedJob {
 
 // Fires the destination peer whenever its forward state changes.
 [[nodiscard]] rpl::producer<PeerId> stateChanges();
+
+struct ItemTask {
+	FullMsgId sourceId;
+	QString path;
+	bool textOnly = false;
+	bool isPhoto = false;
+	MessageGroupId sourceGroup;
+
+	bool needsDownload = false;
+	bool downloadStarted = false;
+	bool downloadDone = false;
+	qint64 downloadedBytes = 0;
+	std::shared_ptr<Data::PhotoMedia> photoView;
+
+	bool uploadStarted = false;
+	bool uploadDone = false;
+	bool sent = false;
+	FullMsgId localMsgId;
+	FullMsgId uploadId;
+	std::shared_ptr<FilePrepareResult> prepared;
+	Api::RemoteFileInfo uploadInfo;
+	uint64 fileId = 0;
+	int uploadedParts = 0;
+	int retries = 0;
+	int lastSavedPct = -10;
+	qint64 partSize = 0;
+};
+
+class Pipeline final : public std::enable_shared_from_this<Pipeline> {
+public:
+	static void Start(
+		not_null<ApiWrap*> api,
+		std::vector<not_null<HistoryItem*>> &&items,
+		const Api::SendAction &action,
+		Data::GroupingOptions groupOptions,
+		std::shared_ptr<SavedJob> resumeJob);
+
+	Pipeline(
+		not_null<ApiWrap*> api,
+		std::vector<not_null<HistoryItem*>> &&items,
+		const Api::SendAction &action,
+		Data::GroupingOptions groupOptions,
+		std::shared_ptr<SavedJob> resumeJob);
+
+	~Pipeline();
+
+private:
+	void run();
+	void saveProgress();
+	bool loadProgress();
+	void setupCallbacks();
+	void sendNext();
+	void pumpUploads();
+	void startUploadForItem(int idx);
+	void onUploadDone(const Storage::UploadedMedia &data);
+	void onUploadFail(const FullMsgId &fullId);
+	void onUploadProgress(const Storage::UploadProgress &data);
+	void checkItem(int idx);
+	void pumpDownloads();
+
+	not_null<ApiWrap*> _api;
+	Main::Session &_session;
+	Api::SendAction _action;
+	Data::GroupingOptions _groupOptions;
+
+	int _n = 0;
+	std::vector<ItemTask> _items;
+	std::shared_ptr<base::flat_map<FullMsgId, int>> _uploadIndex;
+	base::flat_map<
+		MessageGroupId,
+		std::shared_ptr<SendingAlbum>> _albums;
+
+	int _current = 0;
+	bool _downloadInFlight = false;
+	bool _uploadInFlight = false;
+	
+	std::shared_ptr<rpl::lifetime> _uploadLifetime;
+	std::shared_ptr<rpl::lifetime> _dlLifetime;
+
+	QString _downloadPath;
+	QString _progressPath;
+	PeerId _peerId;
+	PeerId _srcPeer;
+	int _sent = 0;
+
+	int _downloadCursor = 0;
+	int _uploadCursor = 0;
+};
 
 } // namespace EnhancedForward

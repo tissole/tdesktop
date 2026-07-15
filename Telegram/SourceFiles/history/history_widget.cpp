@@ -7679,8 +7679,9 @@ void HistoryWidget::updateSendRestriction() {
 	if (_sendRestriction) {
 		_sendRestriction->show();
 		_sendRestriction->raise();
-		moveFieldControls();
 	}
+	moveFieldControls();
+	updateHistoryGeometry();
 }
 
 void HistoryWidget::updateHistoryGeometry(
@@ -7745,6 +7746,15 @@ void HistoryWidget::updateHistoryGeometry(
 	} else {
 		if (editingMessage() || _canSendMessages) {
 			newScrollHeight -= (fieldHeight() + 2 * st::historySendPadding);
+			// Enhanced-forward restriction floats above the compose bar,
+			// reserving space so it doesn't overlap the last message.
+			if (_sendRestrictionKey == u"enhanced_forward"_q
+				&& _sendRestriction) {
+				const auto restrictionHeight = _sendRestriction->height()
+					? _sendRestriction->height()
+					: st::historySendSize.height();
+				newScrollHeight -= restrictionHeight;
+			}
 		} else if (_sendRestriction) {
 			newScrollHeight -= _sendRestriction->height();
 		}

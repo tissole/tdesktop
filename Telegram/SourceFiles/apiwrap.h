@@ -43,6 +43,7 @@ class Result;
 
 namespace EnhancedForward {
 struct SavedJob;
+class Pipeline;
 } // namespace EnhancedForward
 
 namespace Storage {
@@ -141,6 +142,8 @@ QString RequestKey(Types &&...values) {
 } // namespace Api
 
 class ApiWrap final : public MTP::Sender {
+	friend class EnhancedForward::Pipeline;
+
 public:
 	using SendAction = Api::SendAction;
 	using MessageToSend = Api::MessageToSend;
