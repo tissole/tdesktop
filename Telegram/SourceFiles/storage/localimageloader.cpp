@@ -314,12 +314,18 @@ void TaskQueue::stop() {
 		_thread->quit();
 		LOG(("Waiting for taskThread to finish"));
 		_thread->wait();
+		LOG(("TaskQueue::stop: thread finished, cleaning up worker"));
 		delete base::take(_worker);
+		LOG(("TaskQueue::stop: worker deleted, cleaning up thread"));
 		delete base::take(_thread);
+		LOG(("TaskQueue::stop: thread deleted"));
 	}
+	LOG(("TaskQueue::stop: clearing tasks (count=%1)")
+		.arg(_tasksToProcess.size() + _tasksToFinish.size()));
 	_tasksToProcess.clear();
 	_tasksToFinish.clear();
 	_taskInProcessId = TaskId();
+	LOG(("TaskQueue::stop: done"));
 }
 
 TaskQueue::~TaskQueue() {

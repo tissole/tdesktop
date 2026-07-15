@@ -89,13 +89,18 @@ public:
 	EnhancedFileTask(
 		FileLoadTask::Args &&args,
 		Fn<void(std::shared_ptr<FilePrepareResult>)> &&cb)
-	: _impl(std::make_unique<FileLoadTask>(std::move(args)))
+	: _session(base::make_weak(args.session))
+	, _impl(std::make_unique<FileLoadTask>(std::move(args)))
 	, _cb(std::move(cb)) {}
 	void process() override { _impl->process(); }
 	void finish() override {
+		if (!_session) {
+			return;
+		}
 		if (_cb) _cb(_impl->peekResult());
 	}
 private:
+	base::weak_ptr<Main::Session> _session;
 	std::unique_ptr<FileLoadTask> _impl;
 	Fn<void(std::shared_ptr<FilePrepareResult>)> _cb;
 };
@@ -982,12 +987,26 @@ void Pipeline::run() {
 
 	_session.data().documentLoadProgress(
 	) | rpl::on_next([self](not_null<DocumentData*> doc) {
-		for (auto i = 0; i < self->_n; i++) self->checkItem(i);
+		for (auto i = 0; i < self->_n; i++) {
+			self->checkItem(i);
+			const auto &item = self->_items[i];
+			if (item.sentItem
+				&& item.sentItem->media()
+				&& item.sentItem->media()->document() == doc) {
+				self->_session.data().requestItemRepaint(item.sentItem);
+			}
+		}
 	}, *_dlLifetime);
 
 	_session.downloaderTaskFinished(
 	) | rpl::on_next([self] {
-		for (auto i = 0; i < self->_n; i++) self->checkItem(i);
+		for (auto i = 0; i < self->_n; i++) {
+			self->checkItem(i);
+			if (self->_items[i].sentItem) {
+				self->_session.data().requestItemRepaint(
+					self->_items[i].sentItem);
+			}
+		}
 	}, *_dlLifetime);
 
 	pumpDownloads();
@@ -1427,6 +1446,17 @@ void Pipeline::startUploadForItem(int i) {
 			};
 			TextUtilities::Trim(caption);
 
+			// Start the upload BEFORE creating the local message, exactly
+			// like Api::SendConfirmedFile does. This way the DocumentData is
+			// created with the real (InMemoryLocation) thumbnail already
+			// attached, so isSongWithCover() is true when the view is built
+			// and the cover gets requested/loaded during the session.
+			item.uploadId = localMsgId;
+			_uploadIndex->emplace(localMsgId, i);
+			LOG(("ENHANCED_FWD: upload starting idx=%1 uploadedParts=%2 fileId=%3")
+				.arg(i).arg(item.uploadedParts).arg(item.fileId));
+			_session.uploader().upload(localMsgId, item.prepared, item.uploadedParts);
+
 			const auto localMsg = _action.history->addNewLocalMessage({
 				.id = localMsgId.msg,
 				.flags = flags,
@@ -1451,8 +1481,7 @@ void Pipeline::startUploadForItem(int i) {
 			}
 
 			// Set up upload tracking (use localMsgId as upload ID)
-			item.uploadId = localMsgId;
-			_uploadIndex->emplace(localMsgId, i);
+			item.sentItem = localMsg.get();
 
 			const auto fileSize = prepared ? qint64(prepared->filesize) : qint64(0);
 			const auto partSize = item.partSize;
@@ -1466,16 +1495,6 @@ void Pipeline::startUploadForItem(int i) {
 				&_session, _peerId, i,
 				{ prepared ? prepared->filename : QString(), fileSize },
 				initialProgress);
-			if (prepared->type == SendMediaType::Photo) {
-				if (const auto photo = _session.data().photo(prepared->id)) {
-					photo->uploadingData = nullptr;
-				}
-			} else if (const auto document = _session.data().document(prepared->id)) {
-				document->uploadingData = nullptr;
-			}
-			LOG(("ENHANCED_FWD: upload starting idx=%1 uploadedParts=%2 fileId=%3")
-				.arg(i).arg(item.uploadedParts).arg(item.fileId));
-			_session.uploader().upload(localMsgId, item.prepared, item.uploadedParts);
 		}));
 	_api->_fileLoader->addTasks(std::move(tasks));
 }
@@ -1499,6 +1518,9 @@ void Pipeline::onUploadDone(const Storage::UploadedMedia &data) {
 	// The Uploader itself already calls sendUploadedPhoto/Document
 	// via its internal subscription (file_upload.cpp lines 183/199).
 	// We just track completion here.
+	if (item.sentItem) {
+		_session.data().requestItemRepaint(item.sentItem);
+	}
 	item.sent = true;
 	EnhancedForward::markItemSent(&_session, _peerId);
 

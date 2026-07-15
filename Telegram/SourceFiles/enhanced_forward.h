@@ -218,6 +218,7 @@ struct ItemTask {
 	bool uploadDone = false;
 	bool sent = false;
 	FullMsgId localMsgId;
+	HistoryItem *sentItem = nullptr;
 	FullMsgId uploadId;
 	std::shared_ptr<FilePrepareResult> prepared;
 	Api::RemoteFileInfo uploadInfo;

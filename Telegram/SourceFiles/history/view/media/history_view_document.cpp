@@ -905,8 +905,12 @@ void Document::draw(
 				return _data->isSongWithCover()
 					? sti->historyFileThumbWaiting
 					: stm->historyFileWaiting;
+			} else if (_data->uploading()) {
+				return _data->isSongWithCover()
+					? sti->historyFileThumbCancel
+					: stm->historyFileCancel;
 			} else if (!cornerDownload
-				&& (_data->loading() || _data->uploading())) {
+				&& _data->loading()) {
 				return _data->isSongWithCover()
 					? sti->historyFileThumbCancel
 					: stm->historyFileCancel;
@@ -1354,7 +1358,7 @@ void Document::drawCornerDownload(
 		PainterHighQualityEnabler hq(p);
 		p.drawEllipse(inner);
 	}
-	const auto &icon = _data->loading()
+	const auto &icon = (_data->loading() || _data->uploading())
 		? stm->historyAudioCancel
 		: stm->historyAudioDownload;
 	const auto paintContent = [&](QPainter &q) {
@@ -1406,7 +1410,9 @@ TextState Document::cornerDownloadTextState(
 	const auto size = st::historyAudioDownloadSize;
 	const auto inner = style::rtlrect(st.padding.left() + shift, forcedTop - topMinus + shift, size, size, width());
 	if (inner.contains(point)) {
-		result.link = _data->loading() ? _cancell : _savel;
+		result.link = (_data->loading() || _data->uploading())
+			? _cancell
+			: _savel;
 	}
 	return result;
 }
