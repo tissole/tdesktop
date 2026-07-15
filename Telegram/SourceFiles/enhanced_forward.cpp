@@ -1304,25 +1304,36 @@ void Pipeline::startUploadForItem(int i) {
 	};
 	if (doc) {
 		args.displayName = doc->filename();
-		auto info = std::make_unique<Ui::PreparedFileInformation>();
-		info->filemime = doc->mimeString();
-		if (!doc->inlineThumbnailBytes().isEmpty()) {
-			info->fileThumbnail = Images::FromInlineBytes(doc->inlineThumbnailBytes());
-		}
-		if (doc->duration() >= 0) {
-			Ui::PreparedFileInformation::Song song;
-			song.duration = doc->duration();
-			const auto sd = doc->song();
-			if (sd) {
-				song.title = sd->title;
-				song.performer = sd->performer;
+	}
+	if (!item.isPhoto && !item.path.isEmpty()) {
+		auto info = FileLoadTask::ReadMediaInformation(
+			item.path,
+			QByteArray(),
+			doc ? doc->mimeString() : QString());
+		if (info) {
+			if (doc) {
+				if (const auto sd = doc->song()) {
+					if (auto song = std::get_if<Ui::PreparedFileInformation::Song>(
+							&info->media)) {
+						if (song->title.isEmpty()) song->title = sd->title;
+						if (song->performer.isEmpty()) {
+							song->performer = sd->performer;
+						}
+					}
+				}
+				if (!doc->inlineThumbnailBytes().isEmpty()) {
+					const auto inlineThumb = Images::FromInlineBytes(
+						doc->inlineThumbnailBytes());
+					if (!inlineThumb.isNull()) {
+						if (auto song = std::get_if<Ui::PreparedFileInformation::Song>(
+								&info->media)) {
+							if (song->cover.isNull()) song->cover = inlineThumb;
+						} else if (info->fileThumbnail.isNull()) {
+							info->fileThumbnail = inlineThumb;
+						}
+					}
+				}
 			}
-			args.information = std::make_unique<Ui::PreparedFileInformation>();
-			*args.information = {};
-			args.information->filemime = info->filemime;
-			args.information->fileThumbnail = info->fileThumbnail;
-			args.information->media = std::move(song);
-		} else {
 			args.information = std::move(info);
 		}
 	}
