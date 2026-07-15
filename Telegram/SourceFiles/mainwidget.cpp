@@ -1378,12 +1378,6 @@ void MainWidget::showHistory(
 				showAtMsgId = -showAtMsgId;
 			}
 		}
-		const auto unavailable = peer->computeUnavailableReason();
-		if (!unavailable.isEmpty()) {
-			if (params.activation != anim::activation::background) {
-				_controller->showToast(unavailable);
-			}
-		}
 	}
 	if ((IsServerMsgId(showAtMsgId) || Data::IsScheduledMsgId(showAtMsgId))
 		&& _mainSection

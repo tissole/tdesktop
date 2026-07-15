@@ -912,10 +912,6 @@ HistoryWidget::HistoryWidget(
 		if (flags & PeerUpdateFlag::UnavailableReason) {
 			const auto unavailable = _peer->computeUnavailableReason();
 			if (!unavailable.isEmpty()) {
-				const auto account = not_null(&_peer->account());
-				if (const auto primary = Core::App().windowFor(account)) {
-					primary->showToast(unavailable);
-				}
 				return;
 			}
 		}
