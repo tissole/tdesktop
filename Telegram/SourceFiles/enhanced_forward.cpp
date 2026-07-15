@@ -1291,7 +1291,10 @@ void Pipeline::startUploadForItem(int i) {
 		.videoCover = nullptr,
 		.type = item.isPhoto ? SendMediaType::Photo : SendMediaType::File,
 		.to = to,
-		.caption = TextWithTags{ srcItem->originalText().text },
+		.caption = {
+			srcItem->originalText().text,
+			TextUtilities::ConvertEntitiesToTextTags(srcItem->originalText().entities)
+		},
 		.spoiler = false,
 		.album = nullptr,
 		.forceFile = false,
