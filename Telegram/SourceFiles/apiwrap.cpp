@@ -3756,19 +3756,19 @@ void ApiWrap::forwardMessages(
 	}
 
     if (enhancedNeeded) {
-    		if (successCallback) {
-    			successCallback();
-    		}
     		EnhancedForward::Pipeline::Start(
     			this,
     			std::move(enhancedItems),
     			action,
     			draft.groupOptions,
     			resumeJob);
-    
+
     		LOG(("ENHANCED_FWD: checking normalItems"));
     		if (normalItems.empty()) {
-    			LOG(("ENHANCED_FWD: normalItems empty, returning"));
+    			LOG(("ENHANCED_FWD: normalItems empty, firing success callback"));
+    			if (shared) {
+    				shared->callback();
+    			}
     			return;
     		}
     		draft.items = std::move(normalItems);
