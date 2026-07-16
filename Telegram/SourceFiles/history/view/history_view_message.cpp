@@ -733,8 +733,9 @@ QSize Message::performCountOptimalSize() {
 		}
 
 		// Entry page is always a bubble bottom.
-		const auto withVisibleText = hasVisibleText();
-		const auto textualWidth = textualMaxWidth();
+		withVisibleText = hasVisibleText();
+		fullTextualWidth = textualMaxWidth();
+		const auto textualWidth = bubbleTextualWidth();
 
 		const auto quoteTopSkip = [&] {
 			if (!withVisibleText) return 0;
@@ -1536,12 +1537,12 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 					context.reactionInfo->effectOffset -= add;
 				}
 			}
-			if (_comments) {
-				const auto o = p.opacity();
-				p.setOpacity(0.3);
-				p.fillRect(g.left(), g.top() + g.height() - st::historyCommentsButtonHeight - st::lineWidth, g.width(), st::lineWidth, stm->msgDateFg);
-				p.setOpacity(o);
-			}
+		}
+		if (_comments) {
+			const auto o = p.opacity();
+			p.setOpacity(0.3);
+			p.fillRect(g.left(), g.top() + g.height() - st::historyCommentsButtonHeight - st::lineWidth, g.width(), st::lineWidth, stm->msgDateFg);
+			p.setOpacity(o);
 		}
 		ensureSummarizeButton();
 		if (const auto size = rightActionSize(); size || _summarize) {
@@ -4328,7 +4329,17 @@ bool Message::isSignedAuthorElided() const {
 }
 
 bool Message::embedReactionsInBubble() const {
-	return needInfoDisplay();
+	const auto media = this->media();
+	const auto mediaDisplayed = media ? media->isDisplayed() : false;
+	const auto check = factcheckBlock();
+	const auto entry = logEntryOriginal();
+	return entry
+		? !entry->customInfoLayout()
+		: check
+		? !check->customInfoLayout()
+		: ((mediaDisplayed && media->isBubbleBottom())
+			? !media->customInfoLayout()
+			: true);
 }
 
 void Message::validateFromNameText(PeerData *from) const {
@@ -5436,6 +5447,7 @@ int Message::resizeContentGetHeight(int newWidth) {
 		const auto appearing = Get<TextAppearing>();
 		if (contentWidth == maxWidth() && !appearing) {
 			if (mediaDisplayed) {
+				newHeight += media->height() - media->minHeight();
 				if (check) {
 					newHeight += check->resizeGetHeight(contentWidth) + st::mediaInBubbleSkip;
 				}
