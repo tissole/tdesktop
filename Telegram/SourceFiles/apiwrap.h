@@ -314,6 +314,10 @@ public:
 	[[nodiscard]] bool takeoutBypass() const;
 	void setTakeoutPeerId(PeerId peerId);
 	[[nodiscard]] PeerId takeoutPeerId() const;
+	void ensureTakeout(
+		not_null<PeerData*> peer,
+		Fn<void(bool)> done);
+	void finishTakeout(Fn<void()> done = nullptr);
 	mtpRequestId requestGlobalMedia(
 		Storage::SharedMediaType type,
 		const QString &query,
@@ -560,6 +564,13 @@ private:
 		Fn<void(not_null<PeerData*>, MsgId)> callback);
 	template <typename Callback>
 	void requestMessageAfterDate(
+		not_null<PeerData*> peer,
+		MsgId topicRootId,
+		PeerId monoforumPeerId,
+		const QDate &date,
+		Callback &&callback);
+	template <typename Callback>
+	void ensureJumpToDateTakeout(
 		not_null<PeerData*> peer,
 		MsgId topicRootId,
 		PeerId monoforumPeerId,
@@ -846,5 +857,15 @@ private:
 	std::optional<uint64> _takeoutId;
 	PeerId _takeoutPeerId = 0;
 	bool _takeoutBypass = false;
+	bool _takeoutInitializing = false;
+	bool _takeoutFinishing = false;
+	struct TakeoutRequest {
+		PeerId peerId = 0;
+		Fn<void(bool)> done;
+	};
+	std::vector<TakeoutRequest> _takeoutRequests;
+	std::vector<Fn<void()>> _takeoutFinishCallbacks;
+
+	void processTakeoutRequests();
 
 };

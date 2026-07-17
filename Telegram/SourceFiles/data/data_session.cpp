@@ -671,14 +671,15 @@ not_null<UserData*> Session::processUser(const MTPUser &data) {
 					? PeerData::StoriesState::HasUnread
 					: PeerData::StoriesState::HasRead);
 			}
+			result->setRestrictedFlag(data.is_restricted());
 			if (const auto restriction = data.vrestriction_reason()) {
 				result->setUnavailableReasons(Data::UnavailableReason::Extract(
 					data.vrestriction_reason()));
 				QString reason;
 				for (const auto &v : restriction->v) {
 					reason += QString("%1-%2: %3\n").arg(v.c_restrictionReason().vreason().v.constData(),
-														 v.c_restrictionReason().vplatform().v.constData(),
-														 v.c_restrictionReason().vtext().v.constData());
+													 v.c_restrictionReason().vplatform().v.constData(),
+													 v.c_restrictionReason().vtext().v.constData());
 				}
 				result->restriction_reason = reason;
 			}
@@ -962,6 +963,7 @@ not_null<PeerData*> Session::processChat(const MTPChat &data) {
 		} else {
 			channel->setEmojiStatus(EmojiStatusId());
 		}
+		channel->setRestrictedFlag(data.is_restricted());
 		if (!minimal) {
 			if (const auto rights = data.vadmin_rights()) {
 				channel->setAdminRights(ChatAdminRightsInfo(*rights).flags);
@@ -980,8 +982,8 @@ not_null<PeerData*> Session::processChat(const MTPChat &data) {
 				QString reason;
 				for (const auto &v : restriction->v) {
 					reason += QString("%1-%2: %3\n").arg(v.c_restrictionReason().vreason().v.constData(),
-														 v.c_restrictionReason().vplatform().v.constData(),
-														 v.c_restrictionReason().vtext().v.constData());
+													 v.c_restrictionReason().vplatform().v.constData(),
+													 v.c_restrictionReason().vtext().v.constData());
 				}
 				channel->restriction_reason = reason;
 			}
@@ -2833,7 +2835,8 @@ void Session::registerMessage(not_null<HistoryItem*> item) {
 	const auto itemId = item->id;
 	const auto i = list->find(itemId);
 	if (i != list->end()) {
-		LOG(("App Error: Trying to re-registerMessage()."));
+		LOG(("DBG_DUP: re-registerMessage peer=%1 id=%2")
+			.arg(peerId.value).arg(itemId.bare));
 		i->second->destroy();
 	}
 	list->emplace(itemId, item);

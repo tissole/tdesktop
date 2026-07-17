@@ -2641,6 +2641,13 @@ void Element::attachToBlock(not_null<HistoryBlock*> block, int index) {
 
 	_block = block;
 	_indexInBlock = index;
+	if (_data->mainView() != nullptr && _data->mainView() != this) {
+		LOG(("DBG_MAINVIEW_DUP: peer=%1 id=%2 already has mainView=%3 new=%4")
+			.arg(_data->fullId().peer.value)
+			.arg(_data->fullId().msg.bare)
+			.arg(quintptr(_data->mainView()))
+			.arg(quintptr(this)));
+	}
 	_data->setMainView(this);
 	previousInBlocksChanged();
 }

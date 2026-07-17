@@ -81,6 +81,13 @@ private:
 		MsgId afterId) const;
 
 	[[nodiscard]] bool buildFromData(not_null<Viewer*> viewer);
+	mtpRequestId sendGetReplies(
+		Fn<void(const MTPmessages_Messages&)> done,
+		Fn<void()> fail,
+		mtpRequestId *requestSlot,
+		MsgId offsetId,
+		int addOffset,
+		Fn<void()> resend);
 	[[nodiscard]] bool applyItemDestroyed(
 		not_null<Viewer*> viewer,
 		not_null<HistoryItem*> item);

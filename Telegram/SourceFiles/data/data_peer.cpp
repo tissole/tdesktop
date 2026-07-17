@@ -1654,6 +1654,14 @@ bool PeerData::isGigagroup() const {
 	return false;
 }
 
+bool PeerData::isRestricted() const {
+	return _restrictedFlag != 0;
+}
+
+void PeerData::setRestrictedFlag(bool restricted) {
+	_restrictedFlag = restricted ? 1 : 0;
+}
+
 bool PeerData::isRepliesChat() const {
 	constexpr auto kProductionId = peerFromUser(1271266957);
 	constexpr auto kTestId = peerFromUser(708513);

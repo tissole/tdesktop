@@ -811,20 +811,6 @@ private:
 	int _firstLoadRequest = 0; // Not real mtpRequestId.
 	int _preloadRequest = 0; // Not real mtpRequestId.
 	int _preloadDownRequest = 0; // Not real mtpRequestId.
-	bool _takeoutInitInProgress = false;
-	int _takeoutInitRetries = 0;
-	mtpRequestId _takeoutInitRequestId = 0;
-
-	struct PendingTakeoutRequest {
-		not_null<History*> history;
-		MsgId offsetId;
-		int offset = 0;
-		int loadCount = 0;
-		mtpRequestId *requestSlot = nullptr;
-		int maxId = 0;
-		int minId = 0;
-	};
-	std::optional<PendingTakeoutRequest> _pendingTakeoutRequest;
 
 	MsgId jumpToMessageId = -1;
 	Window::SectionShow jumpToMessageParams;

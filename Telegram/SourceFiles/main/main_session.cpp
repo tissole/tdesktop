@@ -295,6 +295,7 @@ void Session::finishLogout() {
 }
 
 Session::~Session() {
+	api().finishTakeout();
 	unlockTerms();
 	data().clear();
 	ClickHandler::clearActive();

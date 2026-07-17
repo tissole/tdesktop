@@ -525,6 +525,71 @@ HistoryItem *RepliesList::lookupRoot() {
 	return _history->owner().message(_history->peer->id, _rootId);
 }
 
+mtpRequestId RepliesList::sendGetReplies(
+		Fn<void(const MTPmessages_Messages&)> done,
+		Fn<void()> fail,
+		mtpRequestId *requestSlot,
+		MsgId offsetId,
+		int addOffset,
+		Fn<void()> resend) {
+	const auto &apiRef = _history->session().api();
+	const auto takeout = (apiRef.takeoutId() && apiRef.takeoutPeerId() == _history->peer->id)
+		? apiRef.takeoutId()
+		: std::nullopt;
+	auto mtp = MTPmessages_GetReplies(
+		_history->peer->input(),
+		MTP_int(_rootId),
+		MTP_int(offsetId),
+		MTP_int(0),
+		MTP_int(addOffset),
+		MTP_int(kMessagesPerPage),
+		MTP_int(0),
+		MTP_int(0),
+		MTP_long(0));
+	if (takeout) {
+		*requestSlot = histories().sendRequest(
+			_history,
+			Histories::RequestType::History,
+			[=](Fn<void()> finish) {
+				return _history->session().api().request(
+					MTPInvokeWithTakeout<MTPmessages_GetReplies>(
+						MTP_long(*takeout),
+						mtp)
+				).done([=](const MTPmessages_Messages &result) {
+					*requestSlot = 0;
+					done(result);
+					finish();
+				}).fail([=] {
+					*requestSlot = 0;
+					fail();
+					finish();
+				}).toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)).send();
+			});
+		return *requestSlot;
+	}
+	if (_history->peer->isRestricted()
+		&& !apiRef.takeoutBypass()) {
+		_history->session().api().ensureTakeout(
+			_history->peer,
+			[=, resend = std::move(resend)](bool ready) mutable {
+				if (ready) {
+					resend();
+				} else {
+					fail();
+				}
+			});
+		return 0;
+	}
+	return _history->session().api().request(std::move(mtp)
+	).done([=](const MTPmessages_Messages &result) {
+		*requestSlot = 0;
+		done(result);
+	}).fail([=] {
+		*requestSlot = 0;
+		fail();
+	}).send();
+}
+
 void RepliesList::loadAround(MsgId id) {
 	Expects(!_creating);
 
@@ -535,17 +600,7 @@ void RepliesList::loadAround(MsgId id) {
 	histories().cancelRequest(base::take(_afterId));
 
 	const auto send = [=](Fn<void()> finish) {
-		return _history->session().api().request(MTPmessages_GetReplies(
-			_history->peer->input(),
-			MTP_int(_rootId),
-			MTP_int(id), // offset_id
-			MTP_int(0), // offset_date
-			MTP_int(id ? (-kMessagesPerPage / 2) : 0), // add_offset
-			MTP_int(kMessagesPerPage), // limit
-			MTP_int(0), // max_id
-			MTP_int(0), // min_id
-			MTP_long(0) // hash
-		)).done([=](const MTPmessages_Messages &result) {
+		return sendGetReplies([=](const MTPmessages_Messages &result) {
 			_beforeId = 0;
 			_loadingAround = std::nullopt;
 			finish();
@@ -568,11 +623,14 @@ void RepliesList::loadAround(MsgId id) {
 				}
 			}
 			checkReadTillEnd();
-		}).fail([=] {
+		}, [=] {
 			_beforeId = 0;
 			_loadingAround = std::nullopt;
 			finish();
-		}).send();
+		}, &_beforeId, id, id ? (-kMessagesPerPage / 2) : 0, [=] {
+			_loadingAround = std::nullopt;
+			loadAround(id);
+		});
 	};
 	_loadingAround = id;
 	_beforeId = histories().sendRequest(
@@ -592,17 +650,7 @@ void RepliesList::loadBefore() {
 
 	const auto last = _list.back();
 	const auto send = [=](Fn<void()> finish) {
-		return _history->session().api().request(MTPmessages_GetReplies(
-			_history->peer->input(),
-			MTP_int(_rootId),
-			MTP_int(last), // offset_id
-			MTP_int(0), // offset_date
-			MTP_int(0), // add_offset
-			MTP_int(kMessagesPerPage), // limit
-			MTP_int(0), // min_id
-			MTP_int(0), // max_id
-			MTP_long(0) // hash
-		)).done([=](const MTPmessages_Messages &result) {
+		return sendGetReplies([=](const MTPmessages_Messages &result) {
 			_beforeId = 0;
 			finish();
 
@@ -616,10 +664,12 @@ void RepliesList::loadBefore() {
 					_fullCount = _list.size();
 				}
 			}
-		}).fail([=] {
+		}, [=] {
 			_beforeId = 0;
 			finish();
-		}).send();
+		}, &_beforeId, last, 0, [=] {
+			loadBefore();
+		});
 	};
 	_beforeId = histories().sendRequest(
 		_history,
@@ -636,17 +686,7 @@ void RepliesList::loadAfter() {
 
 	const auto first = _list.front();
 	const auto send = [=](Fn<void()> finish) {
-		return _history->session().api().request(MTPmessages_GetReplies(
-			_history->peer->input(),
-			MTP_int(_rootId),
-			MTP_int(first + 1), // offset_id
-			MTP_int(0), // offset_date
-			MTP_int(-kMessagesPerPage), // add_offset
-			MTP_int(kMessagesPerPage), // limit
-			MTP_int(0), // min_id
-			MTP_int(0), // max_id
-			MTP_long(0) // hash
-		)).done([=](const MTPmessages_Messages &result) {
+		return sendGetReplies([=](const MTPmessages_Messages &result) {
 			_afterId = 0;
 			finish();
 
@@ -661,10 +701,12 @@ void RepliesList::loadAfter() {
 				}
 				checkReadTillEnd();
 			}
-		}).fail([=] {
+		}, [=] {
 			_afterId = 0;
 			finish();
-		}).send();
+		}, &_afterId, first + 1, -kMessagesPerPage, [=] {
+			loadAfter();
+		});
 	};
 	_afterId = histories().sendRequest(
 		_history,

@@ -268,6 +268,8 @@ public:
 	[[nodiscard]] bool isBroadcast() const;
 	[[nodiscard]] bool isForum() const;
 	[[nodiscard]] bool isMonoforum() const;
+	[[nodiscard]] bool isRestricted() const;
+	void setRestrictedFlag(bool restricted);
 	[[nodiscard]] bool isGigagroup() const;
 	[[nodiscard]] bool isRepliesChat() const;
 	[[nodiscard]] bool isVerifyCodes() const;
@@ -640,6 +642,7 @@ private:
 	uint32 _sensitiveContent : 1 = 0;
 	uint32 _wallPaperOverriden : 1 = 0;
 	uint32 _checkedTrustedPayForMessage : 1 = 0;
+	uint32 _restrictedFlag : 1 = 0;
 
 	TimeId _ttlPeriod = 0;
 

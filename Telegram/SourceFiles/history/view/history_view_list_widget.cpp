@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/history_view_list_widget.h"
 
+#include "base/flat_map.h"
 #include "base/unixtime.h"
 #include "base/qt/qt_key_modifiers.h"
 #include "base/qt/qt_common_adapters.h"
@@ -668,6 +669,17 @@ void ListWidget::refreshRows(const Data::MessagesSlice &old) {
 	_resizePending = true;
 	_items.clear();
 	_items.reserve(_slice.ids.size());
+	{
+		base::flat_set<FullMsgId> uniq;
+		for (const auto &id : _slice.ids) uniq.emplace(id);
+		if (uniq.size() != _slice.ids.size()) {
+			LOG(("DBG_SLICE_DUP: peer=%1 sliceIds=%2 unique=%3")
+				.arg((_slice.ids.empty()
+					? PeerId(0)
+					: _slice.ids.front().peer).value)
+				.arg(_slice.ids.size()).arg(uniq.size()));
+		}
+	}
 	std::swap(_views, _viewsCapacity);
 	auto nearestIndex = -1;
 	for (const auto &fullId : _slice.ids) {
@@ -682,6 +694,18 @@ void ListWidget::refreshRows(const Data::MessagesSlice &old) {
 			}
 			if (clearingOverElement == view) {
 				clearingOverElement = nullptr;
+			}
+		}
+	}
+	{
+		base::flat_map<FullMsgId, int> perItem;
+		for (const auto &view : _items) {
+			perItem[view->data()->fullId()]++;
+		}
+		for (const auto &[id, count] : perItem) {
+			if (count > 1) {
+				LOG(("DBG_ROWS_DUP: peer=%1 id=%2 rows=%3")
+					.arg(id.peer.value).arg(id.msg.bare).arg(count));
 			}
 		}
 	}

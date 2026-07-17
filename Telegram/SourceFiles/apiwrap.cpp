@@ -3231,8 +3231,21 @@ void ApiWrap::requestMessageAfterDate(
 			callback(ShowAtUnreadMsgId);
 		}).send();
 	};
-	if (topicRootId) {
-		send(MTPmessages_GetReplies(
+	const auto sendTakeoutWrapped = [&](auto &&serialized) {
+		using Type = std::decay_t<decltype(serialized)>;
+		const auto takeout = (_takeoutId && _takeoutPeerId == peer->id)
+			? _takeoutId
+			: std::nullopt;
+		if (takeout) {
+			send(MTPInvokeWithTakeout<Type>(
+				MTP_long(*takeout),
+				std::move(serialized)));
+		} else {
+			send(std::move(serialized));
+		}
+	};
+	const auto buildForum = [&] {
+		return MTPmessages_GetReplies(
 			peer->input(),
 			MTP_int(topicRootId),
 			MTP_int(offsetId),
@@ -3241,7 +3254,36 @@ void ApiWrap::requestMessageAfterDate(
 			MTP_int(limit),
 			MTP_int(maxId),
 			MTP_int(minId),
-			MTP_long(historyHash)));
+			MTP_long(historyHash));
+	};
+	const auto buildHistory = [&] {
+		return MTPmessages_GetHistory(
+			peer->input(),
+			MTP_int(offsetId),
+			MTP_int(offsetDate),
+			MTP_int(addOffset),
+			MTP_int(limit),
+			MTP_int(maxId),
+			MTP_int(minId),
+			MTP_long(historyHash));
+	};
+	const auto takeoutActive = _takeoutId.has_value()
+		&& _takeoutPeerId == peer->id;
+	const auto needsTakeout = !_takeoutBypass
+		&& peer->isRestricted()
+		&& (topicRootId || !monoforumPeerId);
+
+	if (topicRootId) {
+		if (takeoutActive || !needsTakeout) {
+			sendTakeoutWrapped(buildForum());
+		} else {
+			ensureJumpToDateTakeout(
+				peer,
+				topicRootId,
+				monoforumPeerId,
+				date,
+				std::forward<Callback>(callback));
+		}
 	} else if (monoforumPeerId) {
 		send(MTPmessages_GetSavedHistory(
 			MTP_flags(MTPmessages_GetSavedHistory::Flag::f_parent_peer),
@@ -3255,16 +3297,46 @@ void ApiWrap::requestMessageAfterDate(
 			MTP_int(minId),
 			MTP_long(historyHash)));
 	} else {
-		send(MTPmessages_GetHistory(
-			peer->input(),
-			MTP_int(offsetId),
-			MTP_int(offsetDate),
-			MTP_int(addOffset),
-			MTP_int(limit),
-			MTP_int(maxId),
-			MTP_int(minId),
-			MTP_long(historyHash)));
+		if (takeoutActive || !needsTakeout) {
+			sendTakeoutWrapped(buildHistory());
+		} else {
+			ensureJumpToDateTakeout(
+				peer,
+				topicRootId,
+				monoforumPeerId,
+				date,
+				std::forward<Callback>(callback));
+		}
 	}
+}
+
+template <typename Callback>
+void ApiWrap::ensureJumpToDateTakeout(
+		not_null<PeerData*> peer,
+		MsgId topicRootId,
+		PeerId monoforumPeerId,
+		const QDate &date,
+		Callback &&callback) {
+	if (_takeoutBypass || !peer->isRestricted()) {
+		requestMessageAfterDate(
+			peer,
+			topicRootId,
+			monoforumPeerId,
+			date,
+			callback);
+		return;
+	}
+	ensureTakeout(peer, [=](bool ready) {
+		if (!ready) {
+			setTakeoutBypass(true);
+		}
+		requestMessageAfterDate(
+			peer,
+			topicRootId,
+			monoforumPeerId,
+			date,
+			callback);
+	});
 }
 
 void ApiWrap::resolveJumpToHistoryDate(
@@ -3323,14 +3395,26 @@ void ApiWrap::requestHistory(
 	if (_historyRequests.contains(key)) {
 		return;
 	}
+	if (peer->isRestricted()
+		&& !_takeoutBypass
+		&& (!_takeoutId || _takeoutPeerId != peer->id)) {
+		ensureTakeout(peer, [=](bool ready) {
+			if (!ready) {
+				setTakeoutBypass(true);
+			}
+			requestHistory(history, messageId, slice);
+		});
+		return;
+	}
 
 	const auto prepared = Api::PrepareHistoryRequest(peer, messageId, slice);
 	auto &histories = history->owner().histories();
 	const auto requestType = Data::Histories::RequestType::History;
 	histories.sendRequest(history, requestType, [=](Fn<void()> finish) {
-		return request(
-			std::move(prepared)
-		).done([=](const Api::HistoryRequestResult &result) {
+		const auto takeout = (_takeoutId && _takeoutPeerId == peer->id)
+			? _takeoutId
+			: std::nullopt;
+		const auto done = [=](const Api::HistoryRequestResult &result) {
 			_historyRequests.remove(key);
 			auto parsed = Api::ParseHistoryResult(
 				peer,
@@ -3342,10 +3426,19 @@ void ApiWrap::requestHistory(
 				parsed.noSkipRange,
 				parsed.fullCount);
 			finish();
-		}).fail([=] {
+		};
+		const auto fail = [=] {
 			_historyRequests.remove(key);
 			finish();
-		}).send();
+		};
+		if (takeout) {
+			return request(MTPInvokeWithTakeout<Api::HistoryRequest>(
+				MTP_long(*takeout),
+				std::move(prepared))
+			).done(done).fail(fail)
+			.toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)).send();
+		}
+		return request(std::move(prepared)).done(done).fail(fail).send();
 	});
 	_historyRequests.emplace(key);
 }
@@ -3366,6 +3459,23 @@ void ApiWrap::requestSharedMedia(
 		slice,
 	};
 	if (_sharedMediaRequests.contains(key)) {
+		return;
+	}
+	if (peer->isRestricted()
+		&& !_takeoutBypass
+		&& (!_takeoutId || _takeoutPeerId != peer->id)) {
+		ensureTakeout(peer, [=](bool ready) {
+			if (!ready) {
+				setTakeoutBypass(true);
+			}
+			requestSharedMedia(
+				peer,
+				topicRootId,
+				monoforumPeerId,
+				type,
+				messageId,
+				slice);
+		});
 		return;
 	}
 
@@ -3439,6 +3549,109 @@ void ApiWrap::setTakeoutPeerId(PeerId peerId) {
 }
 PeerId ApiWrap::takeoutPeerId() const {
 	return _takeoutPeerId;
+}
+
+void ApiWrap::ensureTakeout(
+		not_null<PeerData*> peer,
+		Fn<void(bool)> done) {
+	if (_takeoutBypass) {
+		done(false);
+		return;
+	}
+	if (_takeoutId && _takeoutPeerId == peer->id) {
+		done(true);
+		return;
+	}
+	_takeoutRequests.push_back({ peer->id, std::move(done) });
+	processTakeoutRequests();
+}
+
+void ApiWrap::finishTakeout(Fn<void()> done) {
+	if (done) {
+		_takeoutFinishCallbacks.push_back(std::move(done));
+	}
+	if (_takeoutFinishing) {
+		return;
+	}
+	if (!_takeoutId) {
+		const auto callbacks = base::take(_takeoutFinishCallbacks);
+		for (const auto &callback : callbacks) {
+			callback();
+		}
+		return;
+	}
+	const auto id = base::take(_takeoutId);
+	_takeoutPeerId = 0;
+	_takeoutFinishing = true;
+	request(MTPInvokeWithTakeout<MTPaccount_FinishTakeoutSession>(
+		MTP_long(*id),
+		MTPaccount_FinishTakeoutSession(MTP_flags(0))
+	)).done([=] {
+		_takeoutFinishing = false;
+		const auto callbacks = base::take(_takeoutFinishCallbacks);
+		for (const auto &callback : callbacks) {
+			callback();
+		}
+		processTakeoutRequests();
+	}).fail([=](const MTP::Error &) {
+		_takeoutFinishing = false;
+		const auto callbacks = base::take(_takeoutFinishCallbacks);
+		for (const auto &callback : callbacks) {
+			callback();
+		}
+		processTakeoutRequests();
+	}).toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)).send();
+}
+
+void ApiWrap::processTakeoutRequests() {
+	if (_takeoutInitializing || _takeoutFinishing || _takeoutRequests.empty()) {
+		return;
+	}
+	const auto peerId = _takeoutRequests.front().peerId;
+	if (_takeoutId && _takeoutPeerId != peerId) {
+		finishTakeout();
+		return;
+	}
+	if (_takeoutId) {
+		auto ready = std::vector<Fn<void(bool)>>();
+		while (!_takeoutRequests.empty()
+			&& _takeoutRequests.front().peerId == peerId) {
+			ready.push_back(std::move(_takeoutRequests.front().done));
+			_takeoutRequests.erase(_takeoutRequests.begin());
+		}
+		for (const auto &callback : ready) {
+			callback(true);
+		}
+		processTakeoutRequests();
+		return;
+	}
+	_takeoutInitializing = true;
+	request(MTPaccount_InitTakeoutSession(
+		MTPaccount_initTakeoutSession(
+			MTP_flags(MTPaccount_initTakeoutSession::Flag::f_message_users
+				| MTPaccount_initTakeoutSession::Flag::f_message_chats
+				| MTPaccount_initTakeoutSession::Flag::f_message_megagroups
+				| MTPaccount_initTakeoutSession::Flag::f_message_channels
+				| MTPaccount_initTakeoutSession::Flag::f_files),
+			{}))
+	).done([=](const MTPaccount_Takeout &result) {
+		_takeoutInitializing = false;
+		_takeoutId = result.data().vid().v;
+		_takeoutPeerId = peerId;
+		processTakeoutRequests();
+	}).fail([=](const MTP::Error &) {
+		_takeoutInitializing = false;
+		auto failed = std::vector<Fn<void(bool)>>();
+		while (!_takeoutRequests.empty()
+			&& _takeoutRequests.front().peerId == peerId) {
+			failed.push_back(std::move(_takeoutRequests.front().done));
+			_takeoutRequests.erase(_takeoutRequests.begin());
+		}
+		for (const auto &callback : failed) {
+			callback(false);
+		}
+		processTakeoutRequests();
+	}).send();
 }
 
 void ApiWrap::sharedMediaDone(
