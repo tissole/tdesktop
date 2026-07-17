@@ -310,10 +310,6 @@ public:
 		SliceType slice);
 	void setTakeoutId(std::optional<uint64> id);
 	[[nodiscard]] std::optional<uint64> takeoutId() const;
-	void setTakeoutBypass(bool bypass);
-	[[nodiscard]] bool takeoutBypass() const;
-	void setTakeoutPeerId(PeerId peerId);
-	[[nodiscard]] PeerId takeoutPeerId() const;
 	void ensureTakeout(
 		not_null<PeerData*> peer,
 		Fn<void(bool)> done);
@@ -855,17 +851,18 @@ private:
 	base::flat_map<FullStoryId, QString> _unlikelyStoryLinks;
 
 	std::optional<uint64> _takeoutId;
-	PeerId _takeoutPeerId = 0;
-	bool _takeoutBypass = false;
 	bool _takeoutInitializing = false;
 	bool _takeoutFinishing = false;
+	int _takeoutInitRetries = 0;
+	base::Timer _takeoutInitRetryTimer;
 	struct TakeoutRequest {
-		PeerId peerId = 0;
 		Fn<void(bool)> done;
 	};
 	std::vector<TakeoutRequest> _takeoutRequests;
 	std::vector<Fn<void()>> _takeoutFinishCallbacks;
 
 	void processTakeoutRequests();
+	void initTakeoutSession();
+	void failTakeoutRequests();
 
 };

@@ -2661,8 +2661,6 @@ void HistoryWidget::showHistory(
 		_membersDropdown.destroy();
 		_scrollToAnimation.stop();
 
-		session().api().setTakeoutBypass(false);
-
 		setHistory(nullptr);
 		_list = nullptr;
 		_peer = nullptr;
@@ -2861,14 +2859,19 @@ void HistoryWidget::showHistory(
 		setupRequestsBar();
 		checkMessagesTTL();
 
-		const auto readyWithTakeout = (_history->scrollTopItem
-			|| (_migrated && _migrated->scrollTopItem)
-			|| _history->isReadyFor(_showAtMsgId))
-			&& session().api().takeoutId().has_value()
-			&& session().api().takeoutPeerId() == _history->peer->id;
+		const auto restrictedNeedsTakeout = _history->peer->isRestricted()
+			&& !session().api().takeoutId().has_value();
+		if (restrictedNeedsTakeout) {
+			_history->clear(History::ClearType::Unload);
+			_history->getReadyFor(ShowAtTheEndMsgId);
+		}
+		const auto readyWithTakeout = !restrictedNeedsTakeout
+			&& (_history->scrollTopItem
+				|| (_migrated && _migrated->scrollTopItem)
+				|| _history->isReadyFor(_showAtMsgId));
 
 		if (readyWithTakeout) {
-			LOG(("HISTORY_LOAD: showHistory READY+takeout path peer=%1")
+			LOG(("HISTORY_LOAD: showHistory READY path peer=%1")
 				.arg(_history->peer->id.value));
 			setupPinnedTracker();
 			historyLoaded();
@@ -4152,7 +4155,7 @@ void HistoryWidget::messagesReceived(
 	}
 
 	if (session().api().takeoutId().has_value()
-		&& session().api().takeoutPeerId() == peer->id
+		&& peer->isRestricted()
 		&& histList
 		&& !histList->isEmpty()) {
 		const auto &l = *histList;
@@ -4209,7 +4212,7 @@ void HistoryWidget::messagesReceived(
 			_migrated->clear(History::ClearType::Unload);
 		}
 		if (session().api().takeoutId().has_value()
-			&& session().api().takeoutPeerId() == peer->id
+			&& peer->isRestricted()
 			&& histList) {
 			for (const auto &msg : *histList) {
 				const auto id = IdFromMessage(msg);
@@ -4401,21 +4404,22 @@ void HistoryWidget::firstLoadMessages() {
 
 	const auto history = from;
 
-	if (session().api().takeoutId().has_value()) {
-		if (history->peer->id == session().api().takeoutPeerId()) {
-			LOG(("HISTORY_LOAD: takeout active for same peer, reusing "
-				"peer=%1").arg(history->peer->id.value));
+	if (history->peer->isRestricted()) {
+		if (session().api().takeoutId().has_value()) {
+			LOG(("HISTORY_LOAD: takeout active, reusing for peer=%1")
+				.arg(history->peer->id.value));
 			_firstLoadRequest = 0;
 			sendTakeoutHistoryRequest(
-				history, offsetId, offset, loadCount,
+				history, MsgId(), 0, loadCount,
 				_firstLoadRequest, maxId, minId);
-			return;
+		} else {
+			LOG(("HISTORY_LOAD: restricted, takeout peer=%1")
+				.arg(history->peer->id.value));
+			loadTakeoutMessages(
+				history, MsgId(), 0, loadCount,
+				_firstLoadRequest, maxId, minId);
 		}
-		LOG(("HISTORY_LOAD: takeout active for different peer, finishing old "
-			"oldPeer=%1 newPeer=%2")
-			.arg(session().api().takeoutPeerId().value)
-			.arg(history->peer->id.value));
-		finishTakeoutIfNeeded();
+		return;
 	}
 
 	const auto normalGenerator = [=](Fn<void()> finish) {
@@ -4436,30 +4440,12 @@ void HistoryWidget::firstLoadMessages() {
 			finish();
 		}).send();
 	};
-	const auto sendNormal = [=] {
-		LOG(("DBG_LOAD_NORMAL: firstLoadMessages sending NORMAL getHistory "
-			"peer=%1 offsetId=%2 loadCount=%3").arg(history->peer->id.value)
-			.arg(offsetId.bare).arg(loadCount));
-		auto &histories = history->owner().histories();
-		_firstLoadRequest = histories.sendRequest(
-			history, Data::Histories::RequestType::History,
-			normalGenerator);
-	};
-
-	if (!session().api().takeoutBypass()
-		&& !session().api().takeoutId().has_value()) {
-		if (history->peer->isRestricted()) {
-			LOG(("HISTORY_LOAD: restricted, takeout peer=%1")
-				.arg(history->peer->id.value));
-			loadTakeoutMessages(
-				history, MsgId(), 0, loadCount,
-				_firstLoadRequest, maxId, minId);
-		} else {
-			LOG(("HISTORY_LOAD: normal load peer=%1")
-				.arg(history->peer->id.value));
-			sendNormal();
-		}
-	}
+	LOG(("HISTORY_LOAD: normal load peer=%1")
+		.arg(history->peer->id.value));
+	auto &histories = history->owner().histories();
+	_firstLoadRequest = histories.sendRequest(
+		history, Data::Histories::RequestType::History,
+		normalGenerator);
 }
 
 void HistoryWidget::loadTakeoutMessages(
@@ -4471,7 +4457,7 @@ void HistoryWidget::loadTakeoutMessages(
 		int maxId,
 		int minId) {
 	if (session().api().takeoutId().has_value()
-		&& session().api().takeoutPeerId() == history->peer->id) {
+		&& history->peer->isRestricted()) {
 		sendTakeoutHistoryRequest(
 			history, offsetId, offset, loadCount, requestSlot, maxId, minId);
 		return;
@@ -4479,22 +4465,17 @@ void HistoryWidget::loadTakeoutMessages(
 	const auto weak = base::make_weak(this);
 	const auto requestSlotPtr = &requestSlot;
 	session().api().ensureTakeout(history->peer, [=](bool ready) {
-		if (!weak) {
+		if (!weak || !ready) {
 			return;
 		}
-		if (ready) {
-			sendTakeoutHistoryRequest(
-				history,
-				offsetId,
-				offset,
-				loadCount,
-				*requestSlotPtr,
-				maxId,
-				minId);
-		} else {
-			session().api().setTakeoutBypass(true);
-			firstLoadMessages();
-		}
+		sendTakeoutHistoryRequest(
+			history,
+			offsetId,
+			offset,
+			loadCount,
+			*requestSlotPtr,
+			maxId,
+			minId);
 	});
 }
 
@@ -4559,7 +4540,6 @@ void HistoryWidget::loadMessages() {
 	}
 
 	if (_history->peer->isRestricted()
-		&& !session().api().takeoutBypass()
 		&& !session().api().takeoutId().has_value()) {
 		return;
 	}
@@ -4579,8 +4559,7 @@ void HistoryWidget::loadMessages() {
 		? kMessagesPerPage
 		: kMessagesPerPageFirst;
 
-	if (session().api().takeoutId().has_value()
-		&& from->peer->id == session().api().takeoutPeerId()) {
+	if (from->peer->isRestricted() && session().api().takeoutId().has_value()) {
 		const auto tloadCount = loadCount * 2;
 		loadTakeoutMessages(from, offsetId, addOffset, tloadCount, _preloadRequest);
 		return;
@@ -4653,8 +4632,7 @@ void HistoryWidget::loadMessagesDown() {
 		++addOffset;
 	}
 
-	if (session().api().takeoutId().has_value()
-		&& from->peer->id == session().api().takeoutPeerId()) {
+	if (from->peer->isRestricted() && session().api().takeoutId().has_value()) {
 		const auto maxMsg = from->maxMsgId();
 		if (maxMsg && !from->loadedAtBottom()) {
 			const auto tloadCount = loadCount * 2;
@@ -4759,10 +4737,9 @@ void HistoryWidget::jumpToMessage(
 	const auto maxId = 0;
 	const auto minId = 0;
 
-	if (session().api().takeoutId().has_value()
-		&& history->peer->id == session().api().takeoutPeerId()) {
+	if (history->peer->isRestricted()) {
 		const auto tloadCount = loadCount * 2;
-		sendTakeoutHistoryRequest(
+		loadTakeoutMessages(
 			history, offsetId, offset, tloadCount,
 			_jumpToMessageRequest, maxId, minId);
 		return;

@@ -121,6 +121,8 @@ constexpr auto kNotifySettingSaveTimeout = crl::time(1000);
 constexpr auto kDialogsFirstLoad = 20;
 constexpr auto kDialogsPerPage = 500;
 constexpr auto kStatsSessionKillTimeout = 10 * crl::time(1000);
+constexpr auto kTakeoutInitMaxRetries = 3;
+constexpr auto kTakeoutInitRetryTimeout = crl::time(1000);
 
 using PhotoFileLocationId = Data::PhotoFileLocationId;
 using DocumentFileLocationId = Data::DocumentFileLocationId;
@@ -189,6 +191,7 @@ ApiWrap::ApiWrap(not_null<Main::Session*> session)
 , _fileLoader(std::make_unique<TaskQueue>(kFileLoaderQueueStopTimeout))
 , _updateNotifyTimer([=] { sendNotifySettingsUpdates(); })
 , _statsSessionKillTimer([=] { checkStatsSessions(); })
+, _takeoutInitRetryTimer([=] { initTakeoutSession(); })
 , _authorizations(std::make_unique<Api::Authorizations>(this))
 , _attachedStickers(std::make_unique<Api::AttachedStickers>(this))
 , _blockedPeers(std::make_unique<Api::BlockedPeers>(this))
@@ -646,31 +649,16 @@ void ApiWrap::resolveMessageDatas() {
 
 	const auto ids = collectMessageIds(_messageDataRequests);
 	if (!ids.isEmpty()) {
-		const auto requestId = (_takeoutId && _takeoutPeerId != 0 && !peerIsChannel(_takeoutPeerId))
-			? request(MTPInvokeWithTakeout<MTPmessages_GetMessages>(
-				MTP_long(*_takeoutId),
-				MTPmessages_GetMessages(
-					MTP_vector<MTPInputMessage>(ids))
-			)).done([=](
-					const MTPmessages_Messages &result,
-					mtpRequestId requestId) {
-				_session->data().processExistingMessages(nullptr, result);
-				finalizeMessageDataRequest(nullptr, requestId);
-			}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
-				finalizeMessageDataRequest(nullptr, requestId);
-			}).afterDelay(kSmallDelayMs).toDC(
-				MTP::ShiftDcId(0, MTP::kExportDcShift)
-			).send()
-			: request(MTPmessages_GetMessages(
-				MTP_vector<MTPInputMessage>(ids)
-			)).done([=](
-					const MTPmessages_Messages &result,
-					mtpRequestId requestId) {
-				_session->data().processExistingMessages(nullptr, result);
-				finalizeMessageDataRequest(nullptr, requestId);
-			}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
-				finalizeMessageDataRequest(nullptr, requestId);
-			}).afterDelay(kSmallDelayMs).send();
+		const auto requestId = request(MTPmessages_GetMessages(
+			MTP_vector<MTPInputMessage>(ids)
+		)).done([=](
+				const MTPmessages_Messages &result,
+				mtpRequestId requestId) {
+			_session->data().processExistingMessages(nullptr, result);
+			finalizeMessageDataRequest(nullptr, requestId);
+		}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
+			finalizeMessageDataRequest(nullptr, requestId);
+		}).afterDelay(kSmallDelayMs).send();
 
 		for (auto &[msgId, request] : _messageDataRequests) {
 			if (request.requestId > 0) {
@@ -687,8 +675,7 @@ void ApiWrap::resolveMessageDatas() {
 		const auto ids = collectMessageIds(j->second);
 		if (!ids.isEmpty()) {
 			const auto channel = j->first;
-			const auto requestId = (_takeoutId
-				&& channel->id == _takeoutPeerId)
+			const auto requestId = (_takeoutId && channel->isRestricted())
 				? request(MTPInvokeWithTakeout<MTPchannels_GetMessages>(
 					MTP_long(*_takeoutId),
 					MTPchannels_GetMessages(
@@ -3233,7 +3220,7 @@ void ApiWrap::requestMessageAfterDate(
 	};
 	const auto sendTakeoutWrapped = [&](auto &&serialized) {
 		using Type = std::decay_t<decltype(serialized)>;
-		const auto takeout = (_takeoutId && _takeoutPeerId == peer->id)
+		const auto takeout = (_takeoutId && peer->isRestricted())
 			? _takeoutId
 			: std::nullopt;
 		if (takeout) {
@@ -3268,9 +3255,9 @@ void ApiWrap::requestMessageAfterDate(
 			MTP_long(historyHash));
 	};
 	const auto takeoutActive = _takeoutId.has_value()
-		&& _takeoutPeerId == peer->id;
-	const auto needsTakeout = !_takeoutBypass
 		&& peer->isRestricted()
+		&& (topicRootId || !monoforumPeerId);
+	const auto needsTakeout = peer->isRestricted()
 		&& (topicRootId || !monoforumPeerId);
 
 	if (topicRootId) {
@@ -3317,7 +3304,7 @@ void ApiWrap::ensureJumpToDateTakeout(
 		PeerId monoforumPeerId,
 		const QDate &date,
 		Callback &&callback) {
-	if (_takeoutBypass || !peer->isRestricted()) {
+	if (!peer->isRestricted()) {
 		requestMessageAfterDate(
 			peer,
 			topicRootId,
@@ -3326,10 +3313,7 @@ void ApiWrap::ensureJumpToDateTakeout(
 			callback);
 		return;
 	}
-	ensureTakeout(peer, [=](bool ready) {
-		if (!ready) {
-			setTakeoutBypass(true);
-		}
+	ensureTakeout(peer, [=](bool) {
 		requestMessageAfterDate(
 			peer,
 			topicRootId,
@@ -3395,13 +3379,8 @@ void ApiWrap::requestHistory(
 	if (_historyRequests.contains(key)) {
 		return;
 	}
-	if (peer->isRestricted()
-		&& !_takeoutBypass
-		&& (!_takeoutId || _takeoutPeerId != peer->id)) {
-		ensureTakeout(peer, [=](bool ready) {
-			if (!ready) {
-				setTakeoutBypass(true);
-			}
+	if (peer->isRestricted() && !_takeoutId) {
+		ensureTakeout(peer, [=](bool) {
 			requestHistory(history, messageId, slice);
 		});
 		return;
@@ -3411,7 +3390,7 @@ void ApiWrap::requestHistory(
 	auto &histories = history->owner().histories();
 	const auto requestType = Data::Histories::RequestType::History;
 	histories.sendRequest(history, requestType, [=](Fn<void()> finish) {
-		const auto takeout = (_takeoutId && _takeoutPeerId == peer->id)
+		const auto takeout = (_takeoutId && peer->isRestricted())
 			? _takeoutId
 			: std::nullopt;
 		const auto done = [=](const Api::HistoryRequestResult &result) {
@@ -3461,13 +3440,8 @@ void ApiWrap::requestSharedMedia(
 	if (_sharedMediaRequests.contains(key)) {
 		return;
 	}
-	if (peer->isRestricted()
-		&& !_takeoutBypass
-		&& (!_takeoutId || _takeoutPeerId != peer->id)) {
-		ensureTakeout(peer, [=](bool ready) {
-			if (!ready) {
-				setTakeoutBypass(true);
-			}
+	if (peer->isRestricted() && !_takeoutId) {
+		ensureTakeout(peer, [=](bool) {
 			requestSharedMedia(
 				peer,
 				topicRootId,
@@ -3494,7 +3468,7 @@ void ApiWrap::requestSharedMedia(
 	const auto history = _session->data().history(peer);
 	auto &histories = history->owner().histories();
 	const auto requestType = Data::Histories::RequestType::History;
-	const auto takeout = (_takeoutId && _takeoutPeerId == peer->id)
+	const auto takeout = (_takeoutId && peer->isRestricted())
 		? _takeoutId : std::nullopt;
 	histories.sendRequest(history, requestType, [=](Fn<void()> finish) {
 		const auto sharedDone = [=](const Api::SearchRequestResult &result) {
@@ -3538,31 +3512,15 @@ void ApiWrap::setTakeoutId(std::optional<uint64> id) {
 std::optional<uint64> ApiWrap::takeoutId() const {
 	return _takeoutId;
 }
-void ApiWrap::setTakeoutBypass(bool bypass) {
-	_takeoutBypass = bypass;
-}
-bool ApiWrap::takeoutBypass() const {
-	return _takeoutBypass;
-}
-void ApiWrap::setTakeoutPeerId(PeerId peerId) {
-	_takeoutPeerId = peerId;
-}
-PeerId ApiWrap::takeoutPeerId() const {
-	return _takeoutPeerId;
-}
 
 void ApiWrap::ensureTakeout(
-		not_null<PeerData*> peer,
+		not_null<PeerData*> /*peer*/,
 		Fn<void(bool)> done) {
-	if (_takeoutBypass) {
-		done(false);
-		return;
-	}
-	if (_takeoutId && _takeoutPeerId == peer->id) {
+	if (_takeoutId) {
 		done(true);
 		return;
 	}
-	_takeoutRequests.push_back({ peer->id, std::move(done) });
+	_takeoutRequests.push_back({ std::move(done) });
 	processTakeoutRequests();
 }
 
@@ -3581,7 +3539,6 @@ void ApiWrap::finishTakeout(Fn<void()> done) {
 		return;
 	}
 	const auto id = base::take(_takeoutId);
-	_takeoutPeerId = 0;
 	_takeoutFinishing = true;
 	request(MTPInvokeWithTakeout<MTPaccount_FinishTakeoutSession>(
 		MTP_long(*id),
@@ -3607,22 +3564,18 @@ void ApiWrap::processTakeoutRequests() {
 	if (_takeoutInitializing || _takeoutFinishing || _takeoutRequests.empty()) {
 		return;
 	}
-	const auto peerId = _takeoutRequests.front().peerId;
-	if (_takeoutId && _takeoutPeerId != peerId) {
-		finishTakeout();
+	if (_takeoutId) {
+		const auto ready = base::take(_takeoutRequests);
+		for (const auto &request : ready) {
+			request.done(true);
+		}
 		return;
 	}
-	if (_takeoutId) {
-		auto ready = std::vector<Fn<void(bool)>>();
-		while (!_takeoutRequests.empty()
-			&& _takeoutRequests.front().peerId == peerId) {
-			ready.push_back(std::move(_takeoutRequests.front().done));
-			_takeoutRequests.erase(_takeoutRequests.begin());
-		}
-		for (const auto &callback : ready) {
-			callback(true);
-		}
-		processTakeoutRequests();
+	initTakeoutSession();
+}
+
+void ApiWrap::initTakeoutSession() {
+	if (_takeoutInitializing || _takeoutFinishing || _takeoutRequests.empty()) {
 		return;
 	}
 	_takeoutInitializing = true;
@@ -3636,22 +3589,40 @@ void ApiWrap::processTakeoutRequests() {
 			{}))
 	).done([=](const MTPaccount_Takeout &result) {
 		_takeoutInitializing = false;
+		_takeoutInitRetries = 0;
 		_takeoutId = result.data().vid().v;
-		_takeoutPeerId = peerId;
 		processTakeoutRequests();
-	}).fail([=](const MTP::Error &) {
+	}).fail([=](const MTP::Error &error) {
 		_takeoutInitializing = false;
-		auto failed = std::vector<Fn<void(bool)>>();
-		while (!_takeoutRequests.empty()
-			&& _takeoutRequests.front().peerId == peerId) {
-			failed.push_back(std::move(_takeoutRequests.front().done));
-			_takeoutRequests.erase(_takeoutRequests.begin());
+		const auto &type = error.type();
+		if (type.startsWith(u"TAKEOUT_INIT_DELAY_"_q)) {
+			LOG(("Takeout: init delayed, aborting (%1).").arg(type));
+			_takeoutInitRetries = 0;
+			failTakeoutRequests();
+			return;
 		}
-		for (const auto &callback : failed) {
-			callback(false);
+		if (++_takeoutInitRetries <= kTakeoutInitMaxRetries) {
+			const auto delay = kTakeoutInitRetryTimeout * _takeoutInitRetries;
+			LOG(("Takeout: init failed (%1), retry %2 in %3ms.")
+				.arg(type)
+				.arg(_takeoutInitRetries)
+				.arg(delay));
+			_takeoutInitRetryTimer.callOnce(delay);
+			return;
 		}
-		processTakeoutRequests();
+		LOG(("Takeout: init failed (%1), giving up after %2 retries.")
+			.arg(type)
+			.arg(kTakeoutInitMaxRetries));
+		_takeoutInitRetries = 0;
+		failTakeoutRequests();
 	}).send();
+}
+
+void ApiWrap::failTakeoutRequests() {
+	const auto failed = base::take(_takeoutRequests);
+	for (const auto &request : failed) {
+		request.done(false);
+	}
 }
 
 void ApiWrap::sharedMediaDone(

@@ -533,7 +533,7 @@ mtpRequestId RepliesList::sendGetReplies(
 		int addOffset,
 		Fn<void()> resend) {
 	const auto &apiRef = _history->session().api();
-	const auto takeout = (apiRef.takeoutId() && apiRef.takeoutPeerId() == _history->peer->id)
+	const auto takeout = (apiRef.takeoutId() && _history->peer->isRestricted())
 		? apiRef.takeoutId()
 		: std::nullopt;
 	auto mtp = MTPmessages_GetReplies(
@@ -567,8 +567,7 @@ mtpRequestId RepliesList::sendGetReplies(
 			});
 		return *requestSlot;
 	}
-	if (_history->peer->isRestricted()
-		&& !apiRef.takeoutBypass()) {
+	if (_history->peer->isRestricted()) {
 		_history->session().api().ensureTakeout(
 			_history->peer,
 			[=, resend = std::move(resend)](bool ready) mutable {
