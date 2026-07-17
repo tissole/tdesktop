@@ -2859,8 +2859,7 @@ void HistoryWidget::showHistory(
 		setupRequestsBar();
 		checkMessagesTTL();
 
-		const auto restrictedNeedsTakeout = _history->peer->isRestricted()
-			&& !session().api().takeoutId().has_value();
+		const auto restrictedNeedsTakeout = _history->peer->isRestricted();
 		if (restrictedNeedsTakeout) {
 			_history->clear(History::ClearType::Unload);
 			_history->getReadyFor(ShowAtTheEndMsgId);
