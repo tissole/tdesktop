@@ -226,15 +226,12 @@ void DownloadManager::addLoading(DownloadObject object) {
 		return;
 	}
 
-	const auto shownExists = !data.downloading.empty()
-		&& !data.downloading.front().hiddenByView;
 	data.downloading.push_back({
 		.object = object,
 		.started = computeNextStartDate(),
 		.path = path,
 		.total = size,
-		.hiddenByView = (!shownExists
-			&& item->history()->owner().queryItemVisibility(item)),
+		.hiddenByView = false,
 	});
 	_loading.emplace(item);
 	_loadingDocuments.emplace(object.document);

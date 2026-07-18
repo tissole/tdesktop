@@ -1262,24 +1262,9 @@ void Widget::setupDownloadBar() {
 
 			_downloadBar->clicks(
 			) | rpl::on_next([=] {
-				auto &&list = Core::App().downloadManager().loadingList();
-				const auto guard = gsl::finally([] {
-					Core::App().downloadManager().clearIfFinished();
-				});
-				auto first = (HistoryItem*)nullptr;
-				for (const auto id : list) {
-					if (!first) {
-						first = id->object.item;
-					} else {
-						controller()->showSection(
-							Info::Downloads::Make(
-								controller()->session().user()));
-						return;
-					}
-				}
-				if (first) {
-					controller()->showMessage(first);
-				}
+				controller()->showSection(
+					Info::Downloads::Make(
+						controller()->session().user()));
 			}, _downloadBar->lifetime());
 
 			if (_connecting) {
