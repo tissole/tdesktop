@@ -184,6 +184,10 @@ namespace EnhancedSettings {
 
 		loadSettings(settings);
 
+		if (!settings.contains("download_folder_mode")) {
+			SetEnhancedValue("download_folder_mode", 1);
+		}
+
 		ReadOption(settings, "local_folders_data", [&](auto v) {
 			if (v.isObject()) {
 				const auto accounts = v.toObject();
@@ -348,6 +352,7 @@ namespace EnhancedSettings {
 		settings.insert(qsl("custom_thumb_path"), "");
 		settings.insert(qsl("update_url"), "");
 		settings.insert(qsl("local_folders"), false);
+		settings.insert(qsl("download_folder_mode"), 1);
 
 		auto document = QJsonDocument();
 		document.setObject(settings);
@@ -406,6 +411,7 @@ namespace EnhancedSettings {
 		settings.insert(qsl("custom_thumb_path"), GetEnhancedString("custom_thumb_path"));
 		settings.insert(qsl("update_url"), GetEnhancedString("update_url"));
 		settings.insert(qsl("local_folders"), GetEnhancedBool("local_folders"));
+		settings.insert(qsl("download_folder_mode"), GetEnhancedInt("download_folder_mode"));
 
 		if (!gLocalFolders.isEmpty()) {
 			auto accounts = QJsonObject();

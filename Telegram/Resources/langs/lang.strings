@@ -7999,6 +7999,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_settings_delete_for_person" = "Person";
 "lng_settings_delete_for_both" = "Why not both?";
 
+"lng_settings_download_folder_type" = "Download folder with file type subfolders";
+"lng_settings_download_folder_flat" = "Download folder without file type subfolders";
+"lng_settings_download_per_chat_type" = "Per chat downloads with file type subfolders";
+"lng_settings_download_per_chat_flat" = "Per chat downloads without file type subfolders";
+
 "lng_net_speed_boost_title" = "Network speed boost";
 "lng_net_speed_boost_desc" = "Warning: changing this parameter to high values on slow networks can make it even worse. Use it at your own risk.";
 

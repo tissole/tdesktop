@@ -299,7 +299,12 @@ void DocumentMedia::automaticLoad(
 	const auto indata = _owner->filename();
 	const auto filename = toCache
 		? QString()
-		: DocumentFileNameForSave(_owner);
+		: DocumentFileNameForSave(
+			_owner,
+			false,
+			QString(),
+			QDir(),
+			item ? item->history()->peer.get() : nullptr);
 	const auto shouldLoadFromCloud = (indata.isEmpty()
 		|| Core::DetectNameType(indata) != Core::NameType::Executable)
 		&& (item

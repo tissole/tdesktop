@@ -54,7 +54,8 @@ public:
 		Data::FileOrigin origin,
 		not_null<DocumentData*> document,
 		Mode mode = Mode::ToCacheOrFile,
-		Fn<void()> started = nullptr);
+		Fn<void()> started = nullptr,
+		PeerData *peer = nullptr);
 	static void SaveAndTrack(
 		FullMsgId itemId,
 		not_null<DocumentData*> document,

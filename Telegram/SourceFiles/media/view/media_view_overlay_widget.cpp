@@ -3176,6 +3176,18 @@ void OverlayWidget::downloadMedia() {
 		path = Core::App().settings().downloadPath();
 	}
 	if (path.isEmpty()) return;
+	const auto downloadPeer = _message
+		? _message->history()->peer.get()
+		: nullptr;
+	const auto downloadSubfolder = _document
+		? DownloadSubfolderForDocument(_document, downloadPeer)
+		: DownloadSubfolderForPhoto(downloadPeer);
+	if (!downloadSubfolder.isEmpty()) {
+		if (!path.endsWith('/')) {
+			path += '/';
+		}
+		path += downloadSubfolder + '/';
+	}
 	QString toName;
 	if (_document) {
 		const auto &location = _document->location(true);

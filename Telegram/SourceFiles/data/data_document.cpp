@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document.h"
 
 #include "data/data_document_resolver.h"
+#include "data/data_peer.h"
 #include "data/data_session.h"
 #include "data/data_streaming.h"
 #include "data/data_document_media.h"
@@ -40,6 +41,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "lottie/lottie_animation.h"
 #include "boxes/abstract_box.h" // Ui::hideLayer().
+#include "settings.h"
 
 #include <QtCore/QBuffer>
 #include <QtCore/QMimeType>
@@ -97,7 +99,8 @@ QString FileNameUnsafe(
 		const QString &prefix,
 		QString name,
 		bool savingAs,
-		const QDir &dir) {
+		const QDir &dir,
+		const QString &subfolder) {
 	name = base::FileNameFromUserString(name);
 	if (Core::App().settings().askDownloadPath() || savingAs) {
 		if (!name.isEmpty() && name.at(0) == QChar::fromLatin1('.')) {
@@ -154,6 +157,12 @@ QString FileNameUnsafe(
 		}
 	}();
 	if (path.isEmpty()) return QString();
+	if (!subfolder.isEmpty() && dir.path() == u"."_q) {
+		if (!path.endsWith('/')) {
+			path += '/';
+		}
+		path += subfolder + '/';
+	}
 	if (name.isEmpty()) name = u".unknown"_q;
 	if (name.at(0) == QChar::fromLatin1('.')) {
 		if (!QDir().exists(path)) QDir().mkpath(path);
@@ -188,7 +197,8 @@ QString FileNameForSave(
 		const QString &prefix,
 		QString name,
 		bool savingAs,
-		const QDir &dir) {
+		const QDir &dir,
+		const QString &subfolder) {
 	const auto result = FileNameUnsafe(
 		session,
 		title,
@@ -196,7 +206,8 @@ QString FileNameForSave(
 		prefix,
 		name,
 		savingAs,
-		dir);
+		dir,
+		subfolder);
 #ifdef Q_OS_WIN
 	const auto lower = result.trimmed().toLower();
 	const auto kBadExtensions = { u".lnk"_q, u".scf"_q };
@@ -210,11 +221,68 @@ QString FileNameForSave(
 	return result;
 }
 
+QString DownloadTypeSubfolder(not_null<const DocumentData*> data) {
+	if (data->isAnimation() || data->isGifv()) {
+		return u"animations"_q;
+	} else if (data->sticker()) {
+		return u"stickers"_q;
+	} else if (data->isVoiceMessage()) {
+		return u"voice_messages"_q;
+	} else if (data->isVideoMessage()) {
+		return u"round_video_messages"_q;
+	} else if (data->isVideoFile()) {
+		return u"video_files"_q;
+	} else if (data->isAudioFile()) {
+		return u"music"_q;
+	} else if (data->isImage()) {
+		return u"photos"_q;
+	}
+	return u"files"_q;
+}
+
+QString DownloadPeerFolder(not_null<PeerData*> peer) {
+	const auto name = peer->isSelf()
+		? (base::FileNameFromUserString(peer->name()) + u"_SavedMessages"_q)
+		: base::FileNameFromUserString(peer->name());
+	const auto bareId = peer->id.value & PeerId::kChatTypeMask;
+	return u"DL_%1_%2"_q.arg(QString::number(bareId), name);
+}
+
+[[nodiscard]] QString ComposeDownloadSubfolder(
+		PeerData *peer,
+		const QString &typeSubfolder) {
+	const auto mode = GetEnhancedInt(u"download_folder_mode"_q);
+	const auto perChat = (mode == 2) || (mode == 3);
+	const auto withType = (mode == 0) || (mode == 2);
+	auto result = QString();
+	if (perChat && peer) {
+		result = DownloadPeerFolder(peer);
+	}
+	if (withType) {
+		if (!result.isEmpty()) {
+			result += '/';
+		}
+		result += typeSubfolder;
+	}
+	return result;
+}
+
+QString DownloadSubfolderForDocument(
+		not_null<const DocumentData*> data,
+		PeerData *peer) {
+	return ComposeDownloadSubfolder(peer, DownloadTypeSubfolder(data));
+}
+
+QString DownloadSubfolderForPhoto(PeerData *peer) {
+	return ComposeDownloadSubfolder(peer, u"photos"_q);
+}
+
 QString DocumentFileNameForSave(
 		not_null<const DocumentData*> data,
 		bool forceSavingAs,
 		const QString &already,
-		const QDir &dir) {
+		const QDir &dir,
+		PeerData *peer) {
 	auto alreadySavingFilename = data->loadingFilePath();
 	if (!alreadySavingFilename.isEmpty()) {
 		return alreadySavingFilename;
@@ -266,7 +334,8 @@ QString DocumentFileNameForSave(
 		prefix,
 		name,
 		forceSavingAs,
-		dir);
+		dir,
+		DownloadSubfolderForDocument(data, peer));
 }
 
 Data::FileOrigin StickerData::setOrigin() const {

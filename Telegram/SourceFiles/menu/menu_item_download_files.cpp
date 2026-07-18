@@ -17,6 +17,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_photo.h"
 #include "data/data_photo_media.h"
 #include "data/data_session.h"
+#include "data/data_peer.h"
+#include "history/history.h"
 #include "history/history_inner_widget.h"
 #include "history/history_item.h"
 #include "history/view/history_view_list_widget.h" // HistoryView::SelectedItem.
@@ -88,7 +90,11 @@ void AddAction(
 		if (path.isEmpty()) {
 			return;
 		}
-		QDir().mkpath(path);
+		auto basePath = path;
+		if (!basePath.endsWith('/')) {
+			basePath += '/';
+		}
+		QDir().mkpath(basePath);
 
 		const auto showToast = !shouldShowToast
 			? Fn<void(const QString &)>(nullptr)
@@ -129,16 +135,36 @@ void AddAction(
 			return true;
 		};
 
+		const auto photoPeers = [&] {
+			auto result = std::vector<PeerData*>();
+			result.reserve(photos.size());
+			for (const auto &[photo, fullId] : photos) {
+				const auto item = session->data().message(fullId);
+				result.push_back(item ? item->history()->peer.get() : nullptr);
+			}
+			return result;
+		}();
 		const auto saveToFiles = [=] {
 			const auto fullPath = [&](int i) {
+				auto dir = basePath;
+				if (folderPath.isEmpty()) {
+					const auto peer = (i < int(photoPeers.size()))
+						? photoPeers[i]
+						: nullptr;
+					const auto subfolder = DownloadSubfolderForPhoto(peer);
+					if (!subfolder.isEmpty()) {
+						dir += subfolder + '/';
+						QDir().mkpath(dir);
+					}
+				}
 				return filedialogDefaultName(
-					u"photo_"_q + QString::number(i),
+					u"photo_"_q + QString::number(i + 1),
 					u".jpg"_q,
-					path);
+					dir);
 			};
 			auto lastPath = QString();
 			for (auto i = 0; i < views.size(); i++) {
-				lastPath = fullPath(i + 1);
+				lastPath = fullPath(i);
 				views[i]->saveToFile(lastPath);
 			}
 			if (showToast) {

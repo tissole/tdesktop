@@ -47,6 +47,8 @@ class ReplyPreview;
 enum class StickersType : uchar;
 } // namespace Data
 
+class PeerData;
+
 namespace Main {
 class Session;
 } // namespace Main
@@ -418,6 +420,13 @@ private:
 VoiceWaveform documentWaveformDecode(const QByteArray &encoded5bit);
 QByteArray documentWaveformEncode5bit(const VoiceWaveform &waveform);
 
+[[nodiscard]] QString DownloadTypeSubfolder(not_null<const DocumentData*> data);
+[[nodiscard]] QString DownloadPeerFolder(not_null<PeerData*> peer);
+[[nodiscard]] QString DownloadSubfolderForDocument(
+	not_null<const DocumentData*> data,
+	PeerData *peer);
+[[nodiscard]] QString DownloadSubfolderForPhoto(PeerData *peer);
+
 QString FileNameForSave(
 	not_null<Main::Session*> session,
 	const QString &title,
@@ -425,10 +434,12 @@ QString FileNameForSave(
 	const QString &prefix,
 	QString name,
 	bool savingAs,
-	const QDir &dir = QDir());
+	const QDir &dir = QDir(),
+	const QString &subfolder = QString());
 
 QString DocumentFileNameForSave(
 	not_null<const DocumentData*> data,
 	bool forceSavingAs = false,
 	const QString &already = QString(),
-	const QDir &dir = QDir());
+	const QDir &dir = QDir(),
+	PeerData *peer = nullptr);

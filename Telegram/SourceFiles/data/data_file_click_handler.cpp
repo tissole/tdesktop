@@ -14,6 +14,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "data/data_download_manager.h"
 #include "data/data_photo.h"
+#include "data/data_peer.h"
+#include "history/history.h"
+#include "history/history_item.h"
 #include "main/main_session.h"
 
 FileClickHandler::FileClickHandler(FullMsgId context)
@@ -75,7 +78,8 @@ void DocumentSaveClickHandler::Save(
 		Data::FileOrigin origin,
 		not_null<DocumentData*> data,
 		Mode mode,
-		Fn<void()> started) {
+		Fn<void()> started,
+		PeerData *peer) {
 	if (data->isNull()) {
 		return;
 	}
@@ -108,7 +112,8 @@ void DocumentSaveClickHandler::Save(
 			data,
 			(mode == Mode::ToNewFile),
 			filename,
-			filedir);
+			filedir,
+			peer);
 		if (!savename.isEmpty()) {
 			data->save(origin, savename);
 			if (started) {
@@ -123,6 +128,8 @@ void DocumentSaveClickHandler::SaveAndTrack(
 		not_null<DocumentData*> document,
 		Mode mode,
 		Fn<void()> started) {
+	const auto item = document->owner().message(itemId);
+	const auto peer = item ? item->history()->peer.get() : nullptr;
 	Save(itemId ? itemId : Data::FileOrigin(), document, mode, [=] {
 		if (document->loading() && !document->loadingFilePath().isEmpty()) {
 			if (const auto item = document->owner().message(itemId)) {
@@ -135,7 +142,7 @@ void DocumentSaveClickHandler::SaveAndTrack(
 		if (started) {
 			started();
 		}
-	});
+	}, peer);
 }
 
 void DocumentSaveClickHandler::onClickImpl() const {

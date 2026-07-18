@@ -393,6 +393,27 @@ namespace Settings {
 		}, container->lifetime());
 
 		AddDividerText(inner, tr::lng_settings_hide_messages_desc());
+
+		const auto downloadFolderGroup = std::make_shared<Ui::RadiobuttonGroup>(
+			GetEnhancedInt("download_folder_mode"));
+		const auto addDownloadFolderOption = [&](int value, tr::phrase<> label) {
+			inner->add(
+				object_ptr<Ui::Radiobutton>(
+					inner,
+					downloadFolderGroup,
+					value,
+					label(tr::now),
+					st::settingsSendType),
+				st::settingsSendTypePadding);
+		};
+		addDownloadFolderOption(0, tr::lng_settings_download_folder_type);
+		addDownloadFolderOption(1, tr::lng_settings_download_folder_flat);
+		addDownloadFolderOption(2, tr::lng_settings_download_per_chat_type);
+		addDownloadFolderOption(3, tr::lng_settings_download_per_chat_flat);
+		downloadFolderGroup->setChangedCallback([=](int value) {
+			SetEnhancedValue("download_folder_mode", value);
+			EnhancedSettings::Write();
+		});
 	}
 
 	void Enhanced::SetupEnhancedButton(not_null<Ui::VerticalLayout *> container) {
