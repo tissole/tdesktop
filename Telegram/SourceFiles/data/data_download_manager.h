@@ -73,6 +73,7 @@ struct DownloadingId {
 	int64 total = 0;
 	bool hiddenByView = false;
 	bool done = false;
+	bool paused = false;
 };
 
 class DownloadManager final {
@@ -110,6 +111,17 @@ public:
 	void loadingStopWithConfirmation(
 		Fn<void()> callback,
 		Main::Session *onlyInSession = nullptr);
+
+	void pause(not_null<const HistoryItem*> item);
+	void resume(not_null<const HistoryItem*> item);
+	void cancel(not_null<const HistoryItem*> item);
+	void pauseAll();
+	void resumeAll();
+	void cancelAll();
+	void clearFinishedLoading();
+	[[nodiscard]] bool anyPaused() const;
+	[[nodiscard]] bool anyResumable() const;
+	[[nodiscard]] bool anyFinishedLoading() const;
 
 	[[nodiscard]] auto loadedList()
 		-> ranges::any_view<const DownloadedId*, ranges::category::input>;

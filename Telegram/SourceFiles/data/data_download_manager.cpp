@@ -284,9 +284,15 @@ void DownloadManager::check(
 	} else if (!document->loading()) {
 		remove(data, i);
 	} else {
+		const auto nowPaused = document->downloadPaused();
+		const auto pausedChanged = (entry.paused != nowPaused);
+		entry.paused = nowPaused;
 		const auto totalChange = document->size - entry.total;
 		const auto readyChange = document->loadOffset() - entry.ready;
 		if (!readyChange && !totalChange) {
+			if (pausedChanged) {
+				_loadingListChanges.fire({});
+			}
 			return;
 		}
 		entry.ready += readyChange;
@@ -607,6 +613,23 @@ void DownloadManager::clearLoading() {
 	}
 }
 
+void DownloadManager::clearFinishedLoading() {
+	for (auto &[session, data] : _sessions) {
+		auto finished = std::vector<not_null<const HistoryItem*>>();
+		for (const auto &entry : data.downloading) {
+			if (!_loading.contains(entry.object.item)) {
+				finished.push_back(entry.object.item);
+			}
+		}
+		for (const auto item : finished) {
+			const auto i = ranges::find(data.downloading, item, ByItem);
+			if (i != end(data.downloading)) {
+				remove(data, i);
+			}
+		}
+	}
+}
+
 auto DownloadManager::loadedList()
 -> ranges::any_view<const DownloadedId*, ranges::category::input> {
 	for (auto &[session, data] : _sessions) {
@@ -828,6 +851,129 @@ void DownloadManager::cancel(
 			photo->cancel();
 		}
 	}
+}
+
+void DownloadManager::pause(not_null<const HistoryItem*> item) {
+	auto &data = sessionData(item);
+	const auto i = ranges::find(data.downloading, item, ByItem);
+	if (i == end(data.downloading)) {
+		return;
+	}
+	const auto document = i->object.document;
+	if (document && document->loading() && !document->downloadPaused()) {
+		document->pause();
+		i->paused = true;
+		_loadingListChanges.fire({});
+	}
+}
+
+void DownloadManager::resume(not_null<const HistoryItem*> item) {
+	auto &data = sessionData(item);
+	const auto i = ranges::find(data.downloading, item, ByItem);
+	if (i == end(data.downloading)) {
+		return;
+	}
+	const auto document = i->object.document;
+	if (document && document->downloadPaused()) {
+		document->resume();
+		i->paused = false;
+		_loadingListChanges.fire({});
+	}
+}
+
+void DownloadManager::cancel(not_null<const HistoryItem*> item) {
+	auto &data = sessionData(item);
+	const auto i = ranges::find(data.downloading, item, ByItem);
+	if (i == end(data.downloading)) {
+		return;
+	}
+	cancel(data, i);
+}
+
+void DownloadManager::pauseAll() {
+	auto changed = false;
+	for (auto &[session, data] : _sessions) {
+		for (auto &entry : data.downloading) {
+			const auto document = entry.object.document;
+			if (document
+				&& document->loading()
+				&& !document->downloadPaused()) {
+				document->pause();
+				entry.paused = true;
+				changed = true;
+			}
+		}
+	}
+	if (changed) {
+		_loadingListChanges.fire({});
+	}
+}
+
+void DownloadManager::resumeAll() {
+	auto changed = false;
+	for (auto &[session, data] : _sessions) {
+		for (auto &entry : data.downloading) {
+			const auto document = entry.object.document;
+			if (document && document->downloadPaused()) {
+				document->resume();
+				entry.paused = false;
+				changed = true;
+			}
+		}
+	}
+	if (changed) {
+		_loadingListChanges.fire({});
+	}
+}
+
+void DownloadManager::cancelAll() {
+	for (auto &[session, data] : _sessions) {
+		auto active = std::vector<not_null<const HistoryItem*>>();
+		for (const auto &entry : data.downloading) {
+			if (_loading.contains(entry.object.item)) {
+				active.push_back(entry.object.item);
+			}
+		}
+		for (const auto item : active) {
+			const auto i = ranges::find(data.downloading, item, ByItem);
+			if (i != end(data.downloading)) {
+				cancel(data, i);
+			}
+		}
+	}
+}
+
+bool DownloadManager::anyFinishedLoading() const {
+	for (const auto &[session, data] : _sessions) {
+		for (const auto &entry : data.downloading) {
+			if (!_loading.contains(entry.object.item)) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool DownloadManager::anyPaused() const {
+	for (const auto &[session, data] : _sessions) {
+		for (const auto &entry : data.downloading) {
+			if (entry.paused) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool DownloadManager::anyResumable() const {
+	for (const auto &[session, data] : _sessions) {
+		for (const auto &entry : data.downloading) {
+			if (!entry.paused && !entry.done) {
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 void DownloadManager::changed(not_null<const HistoryItem*> item) {

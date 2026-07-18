@@ -338,6 +338,9 @@ bool FileLoader::tryLoadLocal() {
 }
 
 void FileLoader::pause() {
+	if (_finished || _cancelled || _paused) {
+		return;
+	}
 	cancelHook();
 
 	_paused = true;
@@ -345,7 +348,18 @@ void FileLoader::pause() {
 		_file.close();
 		_fileIsOpen = false;
 	}
-	_updates.fire_done();
+	notifyAboutProgress();
+}
+
+void FileLoader::resume() {
+	if (_finished || _cancelled || !_paused) {
+		return;
+	}
+	_paused = false;
+	if (checkForOpen()) {
+		startLoading();
+	}
+	notifyAboutProgress();
 }
 
 void FileLoader::cancel() {

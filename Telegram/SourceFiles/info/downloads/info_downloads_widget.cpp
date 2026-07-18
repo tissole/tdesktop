@@ -106,6 +106,27 @@ void Widget::selectionAction(SelectionAction action) {
 
 void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 	const auto window = controller()->parentController();
+	const auto &loadingManager = Core::App().downloadManager();
+
+	if (loadingManager.anyResumable()) {
+		addAction(
+			tr::lng_downloads_pause_all(tr::now),
+			[] { Core::App().downloadManager().pauseAll(); },
+			&st::menuIconSchedule);
+	}
+	if (loadingManager.anyPaused()) {
+		addAction(
+			tr::lng_downloads_resume_all(tr::now),
+			[] { Core::App().downloadManager().resumeAll(); },
+			&st::menuIconDownload);
+	}
+	if (loadingManager.anyFinishedLoading()) {
+		addAction(
+			tr::lng_downloads_clear_list(tr::now),
+			[] { Core::App().downloadManager().clearFinishedLoading(); },
+			&st::menuIconClear);
+	}
+
 	const auto deleteAll = [=] {
 		auto &manager = Core::App().downloadManager();
 		const auto phrase = tr::lng_downloads_delete_sure_all(tr::now);

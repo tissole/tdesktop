@@ -1371,6 +1371,18 @@ void DocumentData::pause() {
 	_loader->pause();
 }
 
+void DocumentData::resume() {
+	if (!_loader || !_loader->paused()) {
+		return;
+	}
+
+	_loader->resume();
+}
+
+bool DocumentData::downloadPaused() const {
+	return _loader && _loader->paused();
+}
+
 bool DocumentData::cancelled() const {
 	return (_flags & Flag::DownloadCancelled);
 }

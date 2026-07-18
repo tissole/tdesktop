@@ -141,6 +141,8 @@ public:
 		bool forceFileLoader = false);
 	void cancel();
 	void pause();
+	void resume();
+	[[nodiscard]] bool downloadPaused() const;
 	[[nodiscard]] bool cancelled() const;
 	void resetCancelled();
 	[[nodiscard]] float64 progress() const;

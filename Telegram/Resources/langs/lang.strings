@@ -5247,6 +5247,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_downloads_delete_sure#other" = "Do you want to delete {count} files?";
 "lng_downloads_delete_in_cloud_one" = "It will be deleted from your disk, but will remain accessible in the cloud.";
 "lng_downloads_delete_in_cloud" = "They will be deleted from your disk, but will remain accessible in the cloud.";
+"lng_downloads_pause_all" = "Pause all downloads";
+"lng_downloads_resume_all" = "Resume all downloads";
+"lng_downloads_cancel_all" = "Cancel all downloads";
+"lng_downloads_clear_list" = "Clear list";
 
 "lng_send_image_empty" = "File: {name} is empty and can't be sent.";
 "lng_send_images_selected#one" = "{count} image selected";

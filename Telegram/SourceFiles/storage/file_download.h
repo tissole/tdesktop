@@ -114,6 +114,7 @@ public:
 
 	void start();
 	void pause();
+	void resume();
 	void cancel();
 
 	[[nodiscard]] bool loadingLocal() const {

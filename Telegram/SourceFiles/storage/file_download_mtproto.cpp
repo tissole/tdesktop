@@ -141,6 +141,7 @@ uint64 mtpFileLoader::objId() const {
 
 bool mtpFileLoader::readyToRequest() const {
 	return !_finished
+		&& !_paused
 		&& !_lastComplete
 		&& (_fullSize != 0 || !haveSentRequests())
 		&& (!_fullSize || _nextRequestOffset < _loadSize);
@@ -211,6 +212,7 @@ void mtpFileLoader::startLoadingWithPartial(const QByteArray &data) {
 
 void mtpFileLoader::cancelHook() {
 	cancelAllRequests();
+	removeFromQueue();
 }
 
 Storage::Cache::Key mtpFileLoader::cacheKey() const {
