@@ -171,7 +171,7 @@ void Controller::showTonSite(
 		}) | rpl::map([=](QString value) {
 			return HttpsToTonsite(value);
 			});
-		_windowTitleText = _subtitleText.value();
+	_windowTitleText = _subtitleText.value();
 }
 
 void Controller::showTLViewer(
@@ -362,7 +362,8 @@ void Controller::createWebview(const Webview::StorageId &storageId) {
 		Q_UNUSED(newWindow);
 
 		if (uri == u"about:blank"_q
-			|| QUrl(uri).host().toLower().endsWith(u".magic.org"_q)) {
+			|| QUrl(uri).host().toLower().endsWith(u".magic.org"_q)
+			|| uri.startsWith(Iv::kTLViewerUrl.utf16())) {
 			return true;
 		}
 		_events.fire({ .type = Event::Type::OpenLink, .url = uri });
