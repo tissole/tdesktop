@@ -22,6 +22,7 @@ class SessionShow;
 
 namespace Ui {
 class PopupMenu;
+class Show;
 enum class ReportReason;
 } // namespace Ui
 
@@ -166,7 +167,14 @@ void AddSelectRestrictionAction(
 void AddStickerSetOwnerActions(
 	not_null<Ui::PopupMenu*> menu,
 	not_null<DocumentData*> document,
-	HistoryItem* item);
+	HistoryItem* item);	
+void AddEphemeralMessageActions(
+	not_null<Ui::PopupMenu*> menu,
+	std::shared_ptr<Ui::Show> show,
+	not_null<HistoryItem*> item);
+void AddEphemeralAboutAction(
+	not_null<Ui::PopupMenu*> menu,
+	not_null<HistoryItem*> item);
 
 [[nodiscard]] TextWithEntities TransribedText(not_null<HistoryItem*> item);
 
