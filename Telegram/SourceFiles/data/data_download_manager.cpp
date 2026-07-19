@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_photo.h"
 #include "data/data_document.h"
 #include "data/data_document_media.h"
+#include "data/data_file_click_handler.h"
+#include "data/data_peer.h"
 #include "data/data_web_page.h"
 #include "data/data_changes.h"
 #include "data/data_user.h"
@@ -28,6 +30,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/mime_type.h"
 #include "ui/controls/download_bar.h"
+#include "info/downloads/info_downloads_widget.h"
+#include "info/info_memento.h"
 #include "ui/text/format_song_document_name.h"
 #include "ui/layers/generic_box.h"
 #include "ui/ui_utility.h"
@@ -35,7 +39,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
 #include "apiwrap.h"
+#include "ui/boxes/confirm_box.h"
 #include "styles/style_layers.h"
+
+#include <QtCore/QDir>
+#include <QtCore/QFile>
+#include <QtCore/QFileInfo>
+#include <QtCore/QJsonArray>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
 
 namespace Data {
 namespace {
@@ -43,6 +55,7 @@ namespace {
 constexpr auto kClearLoadingTimeout = 5 * crl::time(1000);
 constexpr auto kMaxFileSize = 4000 * int64(1024 * 1024);
 constexpr auto kMaxResolvePerAttempt = 100;
+constexpr auto kResumeSaveTimeout = crl::time(1000);
 
 constexpr auto ByItem = [](const auto &entry) {
 	if constexpr (std::is_same_v<decltype(entry), const DownloadingId&>) {
@@ -119,10 +132,15 @@ struct DownloadManager::DeleteFilesDescriptor {
 };
 
 DownloadManager::DownloadManager()
-: _clearLoadingTimer([=] { clearLoading(); }) {
+: _clearLoadingTimer([=] { clearLoading(); })
+, _resumeSaveTimer([=] { flushResumeSaves(); }) {
 }
 
-DownloadManager::~DownloadManager() = default;
+DownloadManager::~DownloadManager() {
+	_resumeSaveTimer.cancel();
+	_resumeSavePending.clear();
+	_sessions.clear();
+}
 
 bool DownloadManager::empty() const {
 	for (const auto &[session, data] : _sessions) {
@@ -241,6 +259,7 @@ void DownloadManager::addLoading(DownloadObject object) {
 	};
 	_loadingListChanges.fire({});
 	_clearLoadingTimer.cancel();
+	scheduleResumeSave(item->history()->peer);
 
 	check(item);
 }
@@ -301,6 +320,7 @@ void DownloadManager::check(
 			.ready = _loadingProgress.current().ready + readyChange,
 			.total = _loadingProgress.current().total + totalChange,
 		};
+		scheduleResumeSave(entry.object.item->history()->peer);
 	}
 }
 
@@ -354,6 +374,7 @@ void DownloadManager::addLoaded(
 		entry.done = true;
 		_loading.erase(j);
 		_loadingDone.emplace(entry.object.item);
+		scheduleResumeSave(entry.object.item->history()->peer);
 		_loadingProgress = DownloadProgress{
 			.ready = _loadingProgress.current().ready + readyChange,
 			.total = _loadingProgress.current().total + totalChange,
@@ -585,6 +606,54 @@ void DownloadManager::loadingStopWithConfirmation(
 	window->activate();
 }
 
+void DownloadManager::quitWithConfirmation(Fn<void()> quit) {
+	const auto item = lookupLoadingItem(nullptr);
+	if (!item) {
+		if (quit) {
+			quit();
+		}
+		return;
+	}
+	const auto window = Core::App().windowFor(
+		not_null(&item->history()->session().account()));
+	if (!window) {
+		if (quit) {
+			quit();
+		}
+		return;
+	}
+	auto box = Box([=](not_null<Ui::GenericBox*> box) {
+		box->setCloseByOutsideClick(false);
+		box->setCloseByEscape(false);
+		box->addRow(
+			object_ptr<Ui::FlatLabel>(
+				box.get(),
+				tr::lng_downloads_quit_confirm(),
+				st::boxLabel),
+			st::boxPadding + QMargins(0, 0, 0, st::boxPadding.bottom()));
+		box->setStyle(st::defaultBox);
+		box->addButton(tr::lng_downloads_quit_pause(), [=] {
+			box->closeBox();
+			pauseAll();
+			if (quit) {
+				quit();
+			}
+		});
+		box->addButton(tr::lng_downloads_quit_cancel(), [=] {
+			box->closeBox();
+			loadingStop(nullptr);
+			if (quit) {
+				quit();
+			}
+		}, st::attentionBoxButton);
+		box->addButton(tr::lng_downloads_quit_continue(), [=] {
+			box->closeBox();
+		});
+	});
+	window->show(std::move(box));
+	window->activate();
+}
+
 void DownloadManager::loadingStop(Main::Session *onlyInSession) {
 	const auto stopInSession = [&](SessionData &data) {
 		while (!data.downloading.empty()) {
@@ -614,19 +683,31 @@ void DownloadManager::clearLoading() {
 }
 
 void DownloadManager::clearFinishedLoading() {
+	auto sessions = base::flat_set<not_null<Main::Session*>>();
 	for (auto &[session, data] : _sessions) {
-		auto finished = std::vector<not_null<const HistoryItem*>>();
-		for (const auto &entry : data.downloading) {
-			if (!_loading.contains(entry.object.item)) {
-				finished.push_back(entry.object.item);
+		if (_clearLoadingTimer.isActive()) {
+			_clearLoadingTimer.cancel();
+			clearLoading();
+		}
+		if (data.downloaded.empty()) {
+			continue;
+		}
+		for (auto &id : base::take(data.downloaded)) {
+			const auto object = id.object.get();
+			const auto document = object ? object->document : nullptr;
+			if (document) {
+				_generatedDocuments.remove(document);
+			}
+			if (const auto item = object ? object->item.get() : nullptr) {
+				_loaded.remove(item);
+				_generated.remove(item);
+				_loadedRemoved.fire_copy(item);
 			}
 		}
-		for (const auto item : finished) {
-			const auto i = ranges::find(data.downloading, item, ByItem);
-			if (i != end(data.downloading)) {
-				remove(data, i);
-			}
-		}
+		sessions.emplace(session);
+	}
+	for (const auto &session : sessions) {
+		writePostponed(session);
 	}
 }
 
@@ -843,6 +924,9 @@ void DownloadManager::cancel(
 		std::vector<DownloadingId>::iterator i) {
 	const auto object = i->object;
 	const auto item = object.item;
+	const auto path = i->path;
+	const auto peer = item->history()->peer;
+	const auto session = &item->history()->session();
 	remove(data, i);
 	if (!item->isAdminLogEntry()) {
 		if (const auto document = object.document) {
@@ -851,6 +935,8 @@ void DownloadManager::cancel(
 			photo->cancel();
 		}
 	}
+	writeResumeForPeer(peer);
+	PruneEmptyDownloadFolders(session, path);
 }
 
 void DownloadManager::pause(not_null<const HistoryItem*> item) {
@@ -864,6 +950,7 @@ void DownloadManager::pause(not_null<const HistoryItem*> item) {
 		document->pause();
 		i->paused = true;
 		_loadingListChanges.fire({});
+		writeResumeForPeer(item->history()->peer);
 	}
 }
 
@@ -878,6 +965,7 @@ void DownloadManager::resume(not_null<const HistoryItem*> item) {
 		document->resume();
 		i->paused = false;
 		_loadingListChanges.fire({});
+		scheduleResumeSave(item->history()->peer);
 	}
 }
 
@@ -892,6 +980,7 @@ void DownloadManager::cancel(not_null<const HistoryItem*> item) {
 
 void DownloadManager::pauseAll() {
 	auto changed = false;
+	auto peers = base::flat_set<not_null<PeerData*>>();
 	for (auto &[session, data] : _sessions) {
 		for (auto &entry : data.downloading) {
 			const auto document = entry.object.document;
@@ -900,9 +989,13 @@ void DownloadManager::pauseAll() {
 				&& !document->downloadPaused()) {
 				document->pause();
 				entry.paused = true;
+				peers.emplace(entry.object.item->history()->peer);
 				changed = true;
 			}
 		}
+	}
+	for (const auto &peer : peers) {
+		writeResumeForPeer(peer);
 	}
 	if (changed) {
 		_loadingListChanges.fire({});
@@ -917,6 +1010,7 @@ void DownloadManager::resumeAll() {
 			if (document && document->downloadPaused()) {
 				document->resume();
 				entry.paused = false;
+				scheduleResumeSave(entry.object.item->history()->peer);
 				changed = true;
 			}
 		}
@@ -945,6 +1039,9 @@ void DownloadManager::cancelAll() {
 
 bool DownloadManager::anyFinishedLoading() const {
 	for (const auto &[session, data] : _sessions) {
+		if (!data.downloaded.empty()) {
+			return true;
+		}
 		for (const auto &entry : data.downloading) {
 			if (!_loading.contains(entry.object.item)) {
 				return true;
@@ -1204,9 +1301,325 @@ std::vector<DownloadedId> DownloadManager::deserialize(
 	return result;
 }
 
+void DownloadManager::scheduleResumeSave(not_null<PeerData*> peer) {
+	_resumeSavePending.emplace(peer);
+	if (!_resumeSaveTimer.isActive()) {
+		_resumeSaveTimer.callOnce(kResumeSaveTimeout);
+	}
+}
+
+void DownloadManager::flushResumeSaves() {
+	const auto pending = base::take(_resumeSavePending);
+	for (const auto &peer : pending) {
+		writeResumeForPeer(peer);
+	}
+}
+
+void DownloadManager::writeResumeForPeer(not_null<PeerData*> peer) {
+	const auto session = &peer->session();
+	const auto i = _sessions.find(session);
+	if (i == end(_sessions)) {
+		return;
+	}
+	const auto path = DownloadResumeJsonPath(session, peer);
+	if (path.isEmpty()) {
+		return;
+	}
+	auto items = QJsonArray();
+	for (const auto &entry : i->second.downloading) {
+		const auto item = entry.object.item;
+		if (item->history()->peer != peer) {
+			continue;
+		}
+		const auto document = entry.object.document;
+		if (!document || entry.done) {
+			continue;
+		}
+		if (!IsServerMsgId(item->id)) {
+			continue;
+		}
+		auto obj = QJsonObject();
+		obj["msg"] = qint64(item->id.bare);
+		obj["document_id"] = QString::number(document->id);
+		obj["size"] = qint64(entry.total);
+		obj["downloaded"] = qint64(entry.ready);
+		obj["path"] = entry.path;
+		items.append(obj);
+	}
+	if (items.isEmpty()) {
+		QFile(path).remove();
+		PruneEmptyDownloadFolders(session, path);
+		return;
+	}
+	auto root = QJsonObject();
+	root["peer"] = qint64(peer->id.value);
+	root["peer_access_hash"] = QString::number(PeerAccessHash(peer));
+	root["chat_name"] = peer->name();
+	root["items"] = items;
+
+	QDir().mkpath(QFileInfo(path).absolutePath());
+	const auto tmp = path + u".tmp"_q;
+	auto file = QFile(tmp);
+	if (!file.open(QIODevice::WriteOnly)) {
+		return;
+	}
+	file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+	file.close();
+	QFile(path).remove();
+	if (!file.rename(path)) {
+		QFile(tmp).remove();
+	}
+}
+
+std::vector<QString> DownloadManager::resumeFilesForSession(
+		not_null<Main::Session*> session) const {
+	auto result = std::vector<QString>();
+	auto root = DownloadRootPath(session);
+	if (root.isEmpty()) {
+		return result;
+	}
+	if (!root.endsWith('/')) {
+		root += '/';
+	}
+	const auto atRoot = QDir(root).entryList(
+		QStringList(u"DL_*.json"_q),
+		QDir::Files);
+	for (const auto &name : atRoot) {
+		result.push_back(root + name);
+	}
+	const auto folders = QDir(root).entryList(
+		QStringList(u"DL_*"_q),
+		QDir::Dirs | QDir::NoDotAndDotDot);
+	for (const auto &folder : folders) {
+		const auto sub = root + folder + '/';
+		const auto inside = QDir(sub).entryList(
+			QStringList(u"DL_*.json"_q),
+			QDir::Files);
+		for (const auto &name : inside) {
+			result.push_back(sub + name);
+		}
+	}
+	return result;
+}
+
+bool DownloadManager::hasUnfinishedResume(
+		not_null<Main::Session*> session) const {
+	return !resumeFilesForSession(session).empty();
+}
+
+void DownloadManager::showResumeUnfinished(
+		not_null<Main::Session*> session) {
+	const auto files = resumeFilesForSession(session);
+	if (files.empty()) {
+		return;
+	}
+	struct FileJob {
+		QString path;
+		PeerId peerId;
+		uint64 peerAccessHash = 0;
+		QString chatName;
+		std::vector<ResumeEntry> entries;
+	};
+	auto jobs = std::make_shared<std::vector<FileJob>>();
+	auto totalItems = 0;
+	for (const auto &path : files) {
+		auto file = QFile(path);
+		if (!file.open(QIODevice::ReadOnly)) {
+			continue;
+		}
+		const auto doc = QJsonDocument::fromJson(file.readAll());
+		if (!doc.isObject()) {
+			continue;
+		}
+		const auto root = doc.object();
+		auto job = FileJob();
+		job.path = path;
+		job.peerId = PeerId(quint64(
+			root["peer"].toVariant().toULongLong()));
+		job.peerAccessHash = root["peer_access_hash"]
+			.toString().toULongLong();
+		job.chatName = root["chat_name"].toString();
+		const auto items = root["items"].toArray();
+		for (const auto &v : items) {
+			const auto obj = v.toObject();
+			auto entry = ResumeEntry();
+			entry.msgId = MsgId(obj["msg"].toVariant().toLongLong());
+			entry.documentId = obj["document_id"]
+				.toString().toULongLong();
+			entry.size = obj["size"].toVariant().toLongLong();
+			entry.downloaded = obj["downloaded"].toVariant().toLongLong();
+			entry.path = obj["path"].toString();
+			if (entry.msgId && entry.documentId) {
+				job.entries.push_back(entry);
+			}
+		}
+		if (!job.entries.empty() && job.peerId) {
+			totalItems += int(job.entries.size());
+			jobs->push_back(std::move(job));
+		}
+	}
+	if (jobs->empty()) {
+		return;
+	}
+
+	const auto weak = base::make_weak(session);
+	const auto resumeAllJobs = [=](bool startPaused) {
+		const auto strong = weak.get();
+		if (!strong) {
+			return;
+		}
+		for (const auto &job : *jobs) {
+			auto ids = QVector<MTPInputMessage>();
+			for (const auto &entry : job.entries) {
+				ids.push_back(
+					MTP_inputMessageID(MTP_int(entry.msgId.bare)));
+			}
+			const auto startDownloads = [=](
+					not_null<Main::Session*> strong) {
+				for (const auto &entry : job.entries) {
+					const auto item = strong->data().message(
+						job.peerId,
+						entry.msgId);
+					if (!item) {
+						continue;
+					}
+					const auto media = item->media();
+					const auto document = media
+						? media->document()
+						: nullptr;
+					if (!document) {
+						continue;
+					}
+					document->save(
+						item->fullId(),
+						entry.path);
+					if (document->loading()
+						&& !document->loadingFilePath().isEmpty()) {
+						addLoading({
+							.item = item,
+							.document = document,
+						});
+						if (startPaused) {
+							pause(item);
+						}
+					}
+				}
+			};
+			if (peerIsChannel(job.peerId)) {
+				strong->api().request(MTPchannels_GetMessages(
+					MTP_inputChannel(
+						MTP_long(peerToChannel(job.peerId).bare),
+						MTP_long(job.peerAccessHash)),
+					MTP_vector<MTPInputMessage>(ids))
+				).done([=](const MTPmessages_Messages &result) {
+					if (const auto strong = weak.get()) {
+						strong->data().processExistingMessages(
+							strong->data().channelLoaded(
+								peerToChannel(job.peerId)),
+							result);
+						startDownloads(strong);
+					}
+				}).send();
+			} else {
+				strong->api().request(MTPmessages_GetMessages(
+					MTP_vector<MTPInputMessage>(ids))
+				).done([=](const MTPmessages_Messages &result) {
+					if (const auto strong = weak.get()) {
+						strong->data().processExistingMessages(
+							nullptr,
+							result);
+						startDownloads(strong);
+					}
+				}).send();
+			}
+		}
+	};
+	const auto cancelAllJobs = [=] {
+		for (const auto &job : *jobs) {
+			for (const auto &entry : job.entries) {
+				if (!entry.path.isEmpty()) {
+					QFile(entry.path).remove();
+					if (const auto strong = weak.get()) {
+						PruneEmptyDownloadFolders(strong, entry.path);
+					}
+				}
+			}
+			QFile(job.path).remove();
+			if (const auto strong = weak.get()) {
+				PruneEmptyDownloadFolders(strong, job.path);
+			}
+		}
+	};
+
+	const auto window = Core::App().windowFor(
+		not_null(&session->account()));
+	if (!window) {
+		return;
+	}
+	const auto openPanel = [=] {
+		crl::on_main(crl::guard(weak, [=] {
+			const auto strong = weak.get();
+			if (!strong) {
+				return;
+			}
+			const auto window = Core::App().windowFor(
+				not_null(&strong->account()));
+			if (!window) {
+				return;
+			}
+			if (const auto controller = window->sessionController()) {
+				controller->showSection(
+					Info::Downloads::Make(strong->user()));
+			}
+		}));
+	};
+	auto box = Box([=](not_null<Ui::GenericBox*> box) {
+		box->setCloseByOutsideClick(false);
+		box->setCloseByEscape(false);
+		box->addRow(object_ptr<Ui::FlatLabel>(
+			box.get(),
+			tr::lng_downloads_resume_unfinished(
+				tr::now,
+				lt_count,
+				totalItems),
+			st::boxLabel));
+		box->addButton(tr::lng_downloads_resume_yes(), [=] {
+			box->closeBox();
+			crl::on_main(crl::guard(weak, [=] {
+				resumeAllJobs(false);
+				openPanel();
+			}));
+		});
+		box->addButton(tr::lng_downloads_resume_cancel(), [=] {
+			box->closeBox();
+			crl::on_main(crl::guard(weak, [=] {
+				cancelAllJobs();
+			}));
+		}, st::attentionBoxButton);
+		box->addButton(tr::lng_downloads_resume_later(), [=] {
+			box->closeBox();
+			crl::on_main(crl::guard(weak, [=] {
+				resumeAllJobs(true);
+			}));
+		});
+	});
+	window->show(std::move(box));
+	window->activate();
+}
+
 void DownloadManager::untrack(not_null<Main::Session*> session) {
 	const auto i = _sessions.find(session);
 	Assert(i != end(_sessions));
+
+	for (auto j = _resumeSavePending.begin(); j != _resumeSavePending.end();) {
+		const auto peer = *j;
+		if (&peer->session() == session) {
+			writeResumeForPeer(peer);
+			j = _resumeSavePending.erase(j);
+		} else {
+			++j;
+		}
+	}
 
 	for (const auto &entry : i->second.downloaded) {
 		if (const auto resolved = entry.object.get()) {

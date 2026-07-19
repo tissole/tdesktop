@@ -5251,6 +5251,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_downloads_resume_all" = "Resume all downloads";
 "lng_downloads_cancel_all" = "Cancel all downloads";
 "lng_downloads_clear_list" = "Clear list";
+"lng_downloads_quit_confirm" = "You have unfinished downloads. Do you want to pause them, cancel them or continue?";
+"lng_downloads_quit_pause" = "Pause";
+"lng_downloads_quit_cancel" = "Cancel";
+"lng_downloads_quit_continue" = "Continue";
+
+"lng_downloads_resume_unfinished#one" = "You have {count} unfinished download. Do you want to resume it, cancel it or decide later?";
+"lng_downloads_resume_unfinished#other" = "You have {count} unfinished downloads. Do you want to resume them, cancel them or decide later?";
+"lng_downloads_resume_yes" = "Resume";
+"lng_downloads_resume_cancel" = "Cancel";
+"lng_downloads_resume_later" = "Later";
 
 "lng_send_image_empty" = "File: {name} is empty and can't be sent.";
 "lng_send_images_selected#one" = "{count} image selected";

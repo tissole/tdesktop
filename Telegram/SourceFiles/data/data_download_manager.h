@@ -111,6 +111,7 @@ public:
 	void loadingStopWithConfirmation(
 		Fn<void()> callback,
 		Main::Session *onlyInSession = nullptr);
+	void quitWithConfirmation(Fn<void()> quit);
 
 	void pause(not_null<const HistoryItem*> item);
 	void resume(not_null<const HistoryItem*> item);
@@ -131,7 +132,18 @@ public:
 		-> rpl::producer<not_null<const HistoryItem*>>;
 	[[nodiscard]] rpl::producer<> loadedResolveDone() const;
 
+	[[nodiscard]] bool hasUnfinishedResume(
+		not_null<Main::Session*> session) const;
+	void showResumeUnfinished(not_null<Main::Session*> session);
+
 private:
+	struct ResumeEntry {
+		MsgId msgId = 0;
+		DocumentId documentId = 0;
+		int64 size = 0;
+		int64 downloaded = 0;
+		QString path;
+	};
 	struct DeleteFilesDescriptor;
 	struct SessionData {
 		std::vector<DownloadedId> downloaded;
@@ -193,6 +205,12 @@ private:
 	[[nodiscard]] std::vector<DownloadedId> deserialize(
 		not_null<Main::Session*> session) const;
 
+	void scheduleResumeSave(not_null<PeerData*> peer);
+	void flushResumeSaves();
+	void writeResumeForPeer(not_null<PeerData*> peer);
+	[[nodiscard]] std::vector<QString> resumeFilesForSession(
+		not_null<Main::Session*> session) const;
+
 	base::flat_map<not_null<Main::Session*>, SessionData> _sessions;
 	base::flat_set<not_null<const HistoryItem*>> _loading;
 	base::flat_set<not_null<DocumentData*>> _loadingDocuments;
@@ -212,6 +230,9 @@ private:
 	rpl::variable<bool> _loadedResolveDone;
 
 	base::Timer _clearLoadingTimer;
+
+	base::flat_set<not_null<PeerData*>> _resumeSavePending;
+	base::Timer _resumeSaveTimer;
 
 };
 

@@ -271,7 +271,14 @@ void Tray::addAction(rpl::producer<QString> text, Fn<void()> &&callback) {
 		using namespace rpl::mappers;
 		_callbackFromTrayLifetime = _menu->shownValue(
 		) | rpl::filter(!_1) | rpl::take(1) | rpl::on_next([=] {
-			callback();
+			// Defer the actual callback by one more event-loop turn.
+			// Calling it synchronously here can happen while we are still
+			// nested inside Ui::Animations::Manager::update() (this signal
+			// fires from the popup menu's hide animation completing), and
+			// e.g. Core::Quit() can synchronously destroy Application (and
+			// its Animations::Manager) reentrantly, crashing on the
+			// Manager::~Manager() Expects(_active.empty()) check.
+			InvokeQueued(_menu.get(), [=] { callback(); });
 		});
 	});
 

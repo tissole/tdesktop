@@ -44,6 +44,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings.h"
 
 #include <QtCore/QBuffer>
+#include <QtCore/QDir>
 #include <QtCore/QMimeType>
 #include <QtCore/QMimeDatabase>
 
@@ -275,6 +276,61 @@ QString DownloadSubfolderForDocument(
 
 QString DownloadSubfolderForPhoto(PeerData *peer) {
 	return ComposeDownloadSubfolder(peer, u"photos"_q);
+}
+
+QString DownloadRootPath(not_null<Main::Session*> session) {
+	const auto path = Core::App().settings().downloadPath();
+	if (path.isEmpty()) {
+		return File::DefaultDownloadPath(session);
+	} else if (path == FileDialog::Tmp()) {
+		return session->local().tempDirectory();
+	}
+	return path;
+}
+
+QString DownloadResumeJsonPath(
+		not_null<Main::Session*> session,
+		not_null<PeerData*> peer) {
+	auto root = DownloadRootPath(session);
+	if (root.isEmpty()) {
+		return QString();
+	}
+	if (!root.endsWith('/')) {
+		root += '/';
+	}
+	const auto folder = DownloadPeerFolder(peer);
+	const auto mode = GetEnhancedInt(u"download_folder_mode"_q);
+	const auto perChat = (mode == 2) || (mode == 3);
+	const auto dir = perChat ? (root + folder + '/') : root;
+	return dir + folder + u".json"_q;
+}
+
+void PruneEmptyDownloadFolders(
+		not_null<Main::Session*> session,
+		const QString &removedFilePath) {
+	if (removedFilePath.isEmpty()) {
+		return;
+	}
+	auto root = QDir::cleanPath(DownloadRootPath(session));
+	if (root.isEmpty()) {
+		return;
+	}
+	auto current = QFileInfo(removedFilePath).absolutePath();
+	while (!current.isEmpty()) {
+		const auto cleaned = QDir::cleanPath(current);
+		if (cleaned == root || !cleaned.startsWith(root + '/')) {
+			break;
+		}
+		auto dir = QDir(cleaned);
+		if (!dir.exists() || !dir.isEmpty()) {
+			break;
+		}
+		const auto parent = QFileInfo(cleaned).absolutePath();
+		if (!dir.rmdir(cleaned)) {
+			break;
+		}
+		current = parent;
+	}
 }
 
 QString DocumentFileNameForSave(

@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_instance.h"
 #include "core/sandbox.h"
 #include "core/application.h"
+#include "data/data_download_manager.h"
 #include "export/export_manager.h"
 #include "inline_bots/bot_attach_web_view.h" // AttachWebView::cancel.
 #include "intro/intro_widget.h"
@@ -110,6 +111,7 @@ MainWindow::MainWindow(not_null<Window::Controller*> controller)
 	) | rpl::on_next([=](Main::Session *session) {
 		if (session) {
 			showUnfinishedForwards(session);
+			Core::App().downloadManager().showResumeUnfinished(session);
 		}
 	}, lifetime());
 

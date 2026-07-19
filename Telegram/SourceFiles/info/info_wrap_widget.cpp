@@ -1153,6 +1153,10 @@ void WrapWidget::replaceSwipeHandler(
 	_content->replaceSwipeHandler(std::move(incompleteArgs));
 }
 
-WrapWidget::~WrapWidget() = default;
+WrapWidget::~WrapWidget() {
+	if (_topBarMenu) {
+		_topBarMenu->hideMenu(true);
+	}
+}
 
 } // namespace Info

@@ -1084,11 +1084,13 @@ bool Application::uploadPreventsQuit() {
 }
 
 bool Application::downloadPreventsQuit() {
-	if (_downloadManager->loadingInProgress()) {
-		_downloadManager->loadingStopWithConfirmation([=] { Quit(); });
-		return true;
+	if (!_downloadManager->loadingInProgress()) {
+		return false;
+	} else if (!_downloadManager->anyResumable()) {
+		return false;
 	}
-	return false;
+	_downloadManager->quitWithConfirmation([=] { Quit(); });
+	return true;
 }
 
 bool Application::preventsQuit(QuitReason reason) {

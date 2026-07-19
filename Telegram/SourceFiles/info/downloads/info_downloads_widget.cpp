@@ -111,19 +111,31 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 	if (loadingManager.anyResumable()) {
 		addAction(
 			tr::lng_downloads_pause_all(tr::now),
-			[] { Core::App().downloadManager().pauseAll(); },
+			[=] {
+				Ui::PostponeCall(this, [] {
+					Core::App().downloadManager().pauseAll();
+				});
+			},
 			&st::menuIconSchedule);
 	}
 	if (loadingManager.anyPaused()) {
 		addAction(
 			tr::lng_downloads_resume_all(tr::now),
-			[] { Core::App().downloadManager().resumeAll(); },
+			[=] {
+				Ui::PostponeCall(this, [] {
+					Core::App().downloadManager().resumeAll();
+				});
+			},
 			&st::menuIconDownload);
 	}
 	if (loadingManager.anyFinishedLoading()) {
 		addAction(
 			tr::lng_downloads_clear_list(tr::now),
-			[] { Core::App().downloadManager().clearFinishedLoading(); },
+			[=] {
+				Ui::PostponeCall(this, [] {
+					Core::App().downloadManager().clearFinishedLoading();
+				});
+			},
 			&st::menuIconClear);
 	}
 
