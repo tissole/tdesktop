@@ -1758,7 +1758,7 @@ Ui::VideoUserpic *InnerWidget::validateVideoUserpic(
 		|| peer->userpicPhotoUnknown()
 		|| !peer->userpicHasVideo()
 		|| GetEnhancedBool("disable_premium_animation")
-		|| GetEnhancedBool("screenshot_mode"))
+		|| GetEnhancedBool("screenshot_mode")
 		|| peer->isSelf()
 		|| peer->isRepliesChat()) {
 		_videoUserpics.remove(peer);

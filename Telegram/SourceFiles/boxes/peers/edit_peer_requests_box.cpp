@@ -131,7 +131,7 @@ QRect Row::elementGeometry(int element, int outerWidth) const {
 		const auto reject = _delegate->rowRejectButtonSize();
 		const auto size = _delegate->rowBanButtonSize();
 		return QRect(
-					(st::requestAcceptPosition
+					(st::communityRequestAcceptPosition
 				+ QPoint(accept.width() + reject.width() + st::requestButtonsSkip, 0)),
 				size);
 	} break;
@@ -293,6 +293,12 @@ RequestsBoxController::RowHelper::RowHelper(bool isGroup)
 , _rejectRectOver(
 	st::requestsAcceptButton.height / 2,
 	st::requestsRejectButton.textBgOver)
+, _banRect(
+	st::requestsAcceptButton.height / 2,
+	st::requestsBanButton.textBg)
+, _banRectOver(
+	st::requestsAcceptButton.height / 2,
+	st::requestsBanButton.textBgOver)
 , _acceptText(isGroup
 	? tr::lng_group_requests_add(tr::now)
 	: tr::lng_group_requests_add_channel(tr::now))
