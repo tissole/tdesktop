@@ -349,20 +349,6 @@ namespace Settings {
 			EnhancedSettings::Write();
 		}, container->lifetime());
 
-		AddButtonWithIcon(
-				inner,
-				tr::lng_settings_caption_from_file_name(),
-				st::settingsButtonNoIcon
-		)->toggleOn(
-				rpl::single(GetEnhancedBool("caption_from_file_name"))
-		)->toggledChanges(
-		) | rpl::filter([=](bool toggled) {
-			return (toggled != GetEnhancedBool("caption_from_file_name"));
-		}) | rpl::on_next([=](bool toggled) {
-			SetEnhancedValue("caption_from_file_name", toggled);
-			EnhancedSettings::Write();
-		}, container->lifetime());
-
 		auto hideBtn = AddButtonWithIcon(
 			inner,
 			tr::lng_settings_hide_messages(),
@@ -394,6 +380,20 @@ namespace Settings {
 
 		AddDividerText(inner, tr::lng_settings_hide_messages_desc());
 
+		AddButtonWithIcon(
+				inner,
+				tr::lng_settings_caption_from_file_name(),
+				st::settingsButtonNoIcon
+		)->toggleOn(
+				rpl::single(GetEnhancedBool("caption_from_file_name"))
+		)->toggledChanges(
+		) | rpl::filter([=](bool toggled) {
+			return (toggled != GetEnhancedBool("caption_from_file_name"));
+		}) | rpl::on_next([=](bool toggled) {
+			SetEnhancedValue("caption_from_file_name", toggled);
+			EnhancedSettings::Write();
+		}, container->lifetime());
+
 		const auto downloadFolderGroup = std::make_shared<Ui::RadiobuttonGroup>(
 			GetEnhancedInt("download_folder_mode"));
 		const auto addDownloadFolderOption = [&](int value, tr::phrase<> label) {
@@ -414,6 +414,20 @@ namespace Settings {
 			SetEnhancedValue("download_folder_mode", value);
 			EnhancedSettings::Write();
 		});
+
+		AddButtonWithIcon(
+				inner,
+				tr::lng_settings_prevent_download_duplicates(),
+				st::settingsButtonNoIcon
+		)->toggleOn(
+				rpl::single(GetEnhancedBool("prevent_download_duplicates"))
+		)->toggledChanges(
+		) | rpl::filter([=](bool toggled) {
+			return (toggled != GetEnhancedBool("prevent_download_duplicates"));
+		}) | rpl::on_next([=](bool toggled) {
+			SetEnhancedValue("prevent_download_duplicates", toggled);
+			EnhancedSettings::Write();
+		}, container->lifetime());
 	}
 
 	void Enhanced::SetupEnhancedButton(not_null<Ui::VerticalLayout *> container) {

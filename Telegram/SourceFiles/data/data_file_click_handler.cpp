@@ -84,9 +84,8 @@ void DocumentSaveClickHandler::Save(
 		return;
 	}
 
-	auto savename = QString();
 	if (mode == Mode::ToCacheOrFile && data->saveToCache()) {
-		data->save(origin, savename);
+		data->save(origin, QString());
 		return;
 	}
 	InvokeQueued(qApp, crl::guard(&data->session(), [=] {
@@ -114,12 +113,23 @@ void DocumentSaveClickHandler::Save(
 			filename,
 			filedir,
 			peer);
-		if (!savename.isEmpty()) {
+		if (savename.isEmpty()) {
+			return;
+		}
+		const auto proceed = [=] {
 			data->save(origin, savename);
 			if (started) {
 				started();
 			}
-		}
+		};
+		Core::App().downloadManager().checkDuplicate(
+			&data->session(),
+			data,
+			[=](bool skip) {
+				if (!skip) {
+					proceed();
+				}
+			});
 	}));
 }
 

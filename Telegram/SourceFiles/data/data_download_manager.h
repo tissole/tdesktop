@@ -136,12 +136,28 @@ public:
 		not_null<Main::Session*> session) const;
 	void showResumeUnfinished(not_null<Main::Session*> session);
 
+	// Decides whether downloading the given remote document should be skipped
+	// because an identical file was already downloaded. Calls done(true) to
+	// skip, done(false) to proceed. The content-hash check (for documents with
+	// a different id but identical bytes) requires fetching two sampled chunks
+	// from the server, so the result is delivered asynchronously.
+	void checkDuplicate(
+		not_null<Main::Session*> session,
+		not_null<DocumentData*> document,
+		Fn<void(bool)> done);
+
 private:
 	struct ResumeEntry {
 		MsgId msgId = 0;
 		DocumentId documentId = 0;
 		int64 size = 0;
 		int64 downloaded = 0;
+		QString path;
+	};
+	struct DedupEntry {
+		uint64 documentId = 0;
+		int64 size = 0;
+		QByteArray hash;
 		QString path;
 	};
 	struct DeleteFilesDescriptor;
@@ -211,6 +227,22 @@ private:
 	[[nodiscard]] std::vector<QString> resumeFilesForSession(
 		not_null<Main::Session*> session) const;
 
+	void loadDedup();
+	void scheduleDedupSave();
+	void flushDedupSave();
+	[[nodiscard]] QString dedupFilePath() const;
+	[[nodiscard]] bool sizeBucketExists(int64 size) const;
+	[[nodiscard]] bool findDupByDocumentId(
+		uint64 documentId,
+		int64 size) const;
+	[[nodiscard]] bool findDupByHash(
+		int64 size,
+		const QByteArray &hash) const;
+	void storeDedup(
+		uint64 documentId,
+		int64 size,
+		const QString &path);
+
 	base::flat_map<not_null<Main::Session*>, SessionData> _sessions;
 	base::flat_set<not_null<const HistoryItem*>> _loading;
 	base::flat_set<not_null<DocumentData*>> _loadingDocuments;
@@ -233,6 +265,11 @@ private:
 
 	base::flat_set<not_null<PeerData*>> _resumeSavePending;
 	base::Timer _resumeSaveTimer;
+
+	base::flat_map<int64, std::vector<DedupEntry>> _dedupBySize;
+	bool _dedupLoaded = false;
+	bool _dedupDirty = false;
+	base::Timer _dedupSaveTimer;
 
 };
 

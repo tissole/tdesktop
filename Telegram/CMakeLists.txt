@@ -646,6 +646,8 @@ PRIVATE
     data/data_document_resolver.h
     data/data_download_manager.cpp
     data/data_download_manager.h
+    data/data_file_hash.cpp
+    data/data_file_hash.h
     data/data_drafts.cpp
     data/data_drafts.h
     data/data_emoji_statuses.cpp

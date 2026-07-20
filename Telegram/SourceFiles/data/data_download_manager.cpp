@@ -7,6 +7,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_download_manager.h"
 
+#include "data/data_file_hash.h"
+#include "logs.h"
+#include "core/enhanced_settings.h"
 #include "data/data_session.h"
 #include "data/data_photo.h"
 #include "data/data_document.h"
@@ -133,12 +136,14 @@ struct DownloadManager::DeleteFilesDescriptor {
 
 DownloadManager::DownloadManager()
 : _clearLoadingTimer([=] { clearLoading(); })
-, _resumeSaveTimer([=] { flushResumeSaves(); }) {
+, _resumeSaveTimer([=] { flushResumeSaves(); })
+, _dedupSaveTimer([=] { flushDedupSave(); }) {
 }
 
 DownloadManager::~DownloadManager() {
 	_resumeSaveTimer.cancel();
 	_resumeSavePending.clear();
+	flushDedupSave();
 	_sessions.clear();
 }
 
@@ -244,24 +249,28 @@ void DownloadManager::addLoading(DownloadObject object) {
 		return;
 	}
 
-	data.downloading.push_back({
-		.object = object,
-		.started = computeNextStartDate(),
-		.path = path,
-		.total = size,
-		.hiddenByView = false,
-	});
-	_loading.emplace(item);
-	_loadingDocuments.emplace(object.document);
-	_loadingProgress = DownloadProgress{
-		.ready = _loadingProgress.current().ready,
-		.total = _loadingProgress.current().total + size,
-	};
-	_loadingListChanges.fire({});
-	_clearLoadingTimer.cancel();
-	scheduleResumeSave(item->history()->peer);
+	const auto start = [=, &data] {
+		data.downloading.push_back({
+			.object = object,
+			.started = computeNextStartDate(),
+			.path = path,
+			.total = size,
+			.hiddenByView = false,
+		});
+		_loading.emplace(item);
+		_loadingDocuments.emplace(object.document);
+		_loadingProgress = DownloadProgress{
+			.ready = _loadingProgress.current().ready,
+			.total = _loadingProgress.current().total + size,
+		};
+		_loadingListChanges.fire({});
+		_clearLoadingTimer.cancel();
+		scheduleResumeSave(item->history()->peer);
 
-	check(item);
+		check(item);
+	};
+
+	start();
 }
 
 void DownloadManager::check(not_null<const HistoryItem*> item) {
@@ -353,6 +362,12 @@ void DownloadManager::addLoaded(
 	});
 	_loaded.emplace(item);
 	_loadedAdded.fire(&data.downloaded.back());
+
+	if (GetEnhancedBool("prevent_download_duplicates")) {
+		if (const auto document = object.document) {
+			storeDedup(document->id, size, path);
+		}
+	}
 
 	writePostponed(&item->history()->session());
 
@@ -1405,6 +1420,202 @@ std::vector<QString> DownloadManager::resumeFilesForSession(
 bool DownloadManager::hasUnfinishedResume(
 		not_null<Main::Session*> session) const {
 	return !resumeFilesForSession(session).empty();
+}
+
+QString DownloadManager::dedupFilePath() const {
+	if (_sessions.empty()) {
+		return QString();
+	}
+	const auto path = DownloadRootPath(_sessions.begin()->first);
+	if (path.isEmpty()) {
+		return QString();
+	}
+	return path.endsWith('/') ? (path + u"DL_hashes.json"_q) : (path + u"/DL_hashes.json"_q);
+}
+
+void DownloadManager::loadDedup() {
+	if (_dedupLoaded) {
+		return;
+	}
+	_dedupLoaded = true;
+	const auto path = dedupFilePath();
+	if (path.isEmpty() || !QFile(path).exists()) {
+		LOG(("DEDUP: loadDedup no file path=%1 exists=%2").arg(
+			path).arg(Logs::b(!path.isEmpty() && QFile(path).exists())));
+		return;
+	}
+	auto file = QFile(path);
+	if (!file.open(QIODevice::ReadOnly)) {
+		return;
+	}
+	const auto document = QJsonDocument::fromJson(file.readAll());
+	if (!document.isObject()) {
+		return;
+	}
+	const auto root = document.object();
+	const auto entries = root["entries"].toArray();
+	for (const auto &value : entries) {
+		const auto obj = value.toObject();
+		const auto documentId = obj["document_id"].toString().toULongLong();
+		const auto size = int64(obj["size"].toDouble());
+		const auto hash = QByteArray::fromHex(obj["hash"].toString().toLatin1());
+		if (hash.isEmpty()) {
+			continue;
+		}
+			_dedupBySize[size / kDedupSizeBucket].push_back({
+				.documentId = documentId,
+				.size = size,
+				.hash = hash,
+			});
+	}
+	LOG(("DEDUP: loadDedup loaded from %1 buckets=%2").arg(
+		path).arg(_dedupBySize.size()));
+}
+
+void DownloadManager::scheduleDedupSave() {
+	_dedupDirty = true;
+	if (!_dedupSaveTimer.isActive()) {
+		_dedupSaveTimer.callOnce(kResumeSaveTimeout);
+	}
+}
+
+void DownloadManager::flushDedupSave() {
+	if (!_dedupDirty) {
+		return;
+	}
+	_dedupDirty = false;
+	_dedupSaveTimer.cancel();
+	const auto path = dedupFilePath();
+	if (path.isEmpty()) {
+		return;
+	}
+	auto root = QJsonObject();
+	auto items = QJsonArray();
+	for (const auto &[bucket, entries] : _dedupBySize) {
+		for (const auto &entry : entries) {
+			auto obj = QJsonObject();
+			obj["document_id"] = QString::number(entry.documentId);
+			obj["size"] = qint64(entry.size);
+			obj["hash"] = QString::fromLatin1(entry.hash.toHex());
+			items.append(obj);
+		}
+	}
+	if (items.isEmpty()) {
+		QFile(path).remove();
+		return;
+	}
+	root["entries"] = items;
+	QDir().mkpath(QFileInfo(path).absolutePath());
+	const auto tmp = path + u".tmp"_q;
+	auto file = QFile(tmp);
+	if (!file.open(QIODevice::WriteOnly)) {
+		return;
+	}
+	file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+	file.close();
+	QFile(path).remove();
+	if (!file.rename(path)) {
+		QFile(tmp).remove();
+	}
+}
+
+bool DownloadManager::sizeBucketExists(int64 size) const {
+	return _dedupBySize.find(size / kDedupSizeBucket) != end(_dedupBySize);
+}
+
+bool DownloadManager::findDupByDocumentId(uint64 documentId, int64 size) const {
+	if (!documentId) {
+		return false;
+	}
+	const auto i = _dedupBySize.find(size / kDedupSizeBucket);
+	if (i == end(_dedupBySize)) {
+		return false;
+	}
+	for (const auto &entry : i->second) {
+		if (entry.documentId && entry.documentId == documentId) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool DownloadManager::findDupByHash(int64 size, const QByteArray &hash) const {
+	const auto i = _dedupBySize.find(size / kDedupSizeBucket);
+	if (i == end(_dedupBySize)) {
+		LOG(("DEDUP: findDupByHash no bucket size=%1 bucket=%2").arg(
+			size).arg(size / kDedupSizeBucket));
+		return false;
+	}
+	LOG(("DEDUP: findDupByHash size=%1 entries=%2 query=%3").arg(
+		size).arg(i->second.size()).arg(QString::fromLatin1(hash.toHex())));
+	for (const auto &entry : i->second) {
+		LOG(("DEDUP:   candidate size=%1 hash=%2").arg(
+			entry.size).arg(QString::fromLatin1(entry.hash.toHex())));
+		if (entry.size == size && entry.hash == hash) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void DownloadManager::storeDedup(
+		uint64 documentId,
+		int64 size,
+		const QString &path) {
+	loadDedup();
+	const auto hash = Data::FileFingerprint(path, size);
+	if (hash.isEmpty()) {
+		return;
+	}
+	auto &entries = _dedupBySize[size / kDedupSizeBucket];
+	for (auto &entry : entries) {
+		if (entry.size == size && entry.hash == hash) {
+			if (!entry.documentId && documentId) {
+				entry.documentId = documentId;
+				entry.path = path;
+				scheduleDedupSave();
+			}
+			return;
+		}
+	}
+	entries.push_back({ documentId, size, hash, path });
+	scheduleDedupSave();
+}
+
+void DownloadManager::checkDuplicate(
+		not_null<Main::Session*> session,
+		not_null<DocumentData*> document,
+		Fn<void(bool)> done) {
+	if (!GetEnhancedBool("prevent_download_duplicates")) {
+		done(false);
+		return;
+	}
+	const auto size = document->size;
+	loadDedup();
+	if (findDupByDocumentId(document->id, size)) {
+		done(true);
+		return;
+	}
+	if (!sizeBucketExists(size)) {
+		done(false);
+		return;
+	}
+	Data::RemoteFileFingerprint(
+		session,
+		document,
+		[this, document, done](QByteArray hash) {
+			const auto skip = !hash.isEmpty()
+				&& findDupByHash(document->size, hash);
+			LOG(("DEDUP: checkDuplicate doc=%1 size=%2 hash=%3 skip=%4").arg(
+				document->id
+			).arg(
+				document->size
+			).arg(
+				QString::fromLatin1(hash.toHex())
+			).arg(
+				skip));
+			done(skip);
+		});
 }
 
 void DownloadManager::showResumeUnfinished(
