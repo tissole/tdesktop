@@ -16,6 +16,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_photo.h"
 #include "data/data_peer.h"
 #include "history/history.h"
+#include "lang/lang_keys.h"
+#include "ui/toast/toast.h"
 #include "history/history_item.h"
 #include "main/main_session.h"
 
@@ -126,9 +128,12 @@ void DocumentSaveClickHandler::Save(
 			&data->session(),
 			data,
 			[=](bool skip) {
-				if (!skip) {
-					proceed();
+				if (skip) {
+					Ui::Toast::Show(
+						tr::lng_download_duplicate_skipped(tr::now));
+					return;
 				}
+				proceed();
 			});
 	}));
 }

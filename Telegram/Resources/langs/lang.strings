@@ -8132,3 +8132,5 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_enhanced_forward_complete" = "Forward Complete";
 "lng_enhanced_forward_unfinished" = "Unfinished forward from {chat_name}";
 "lng_enhanced_forward_later" = "Later";
+
+"lng_download_duplicate_skipped" = "File already downloaded.";
