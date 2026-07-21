@@ -160,6 +160,11 @@ private:
 		QByteArray hash;
 		QString path;
 	};
+	struct PendingDedup {
+		int64 size = 0;
+		QByteArray hash;
+		DocumentData *document = nullptr;
+	};
 	struct DeleteFilesDescriptor;
 	struct SessionData {
 		std::vector<DownloadedId> downloaded;
@@ -243,6 +248,18 @@ private:
 		int64 size,
 		const QString &path);
 
+	void addPendingDedup(
+		not_null<DocumentData*> document,
+		int64 size);
+	void removePendingDedup(
+		not_null<DocumentData*> document,
+		int64 size);
+	[[nodiscard]] PendingDedup* findPendingSameSize(int64 size);
+	void storeDedupHashForPending(
+		not_null<DocumentData*> document,
+		int64 size,
+		const QByteArray &hash);
+
 	base::flat_map<not_null<Main::Session*>, SessionData> _sessions;
 	base::flat_set<not_null<const HistoryItem*>> _loading;
 	base::flat_set<not_null<DocumentData*>> _loadingDocuments;
@@ -270,6 +287,8 @@ private:
 	bool _dedupLoaded = false;
 	bool _dedupDirty = false;
 	base::Timer _dedupSaveTimer;
+
+	base::flat_map<int64, std::vector<PendingDedup>> _pendingDedup;
 
 };
 

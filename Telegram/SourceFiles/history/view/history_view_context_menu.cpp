@@ -74,6 +74,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_photo.h"
 #include "data/data_photo_media.h"
 #include "data/data_document.h"
+#include "data/data_download_manager.h"
 #include "data/data_media_types.h"
 #include "data/data_poll.h"
 #include "data/data_forum_topic.h"
@@ -114,6 +115,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtGui/QGuiApplication>
 #include <QtGui/QClipboard>
+#include <QtCore/QFile>
 
 #include "data/data_saved_sublist.h"
 
@@ -150,7 +152,7 @@ bool HasEditMessageAction(
 	return true;
 }
 
-void SavePhotoToFile(not_null<PhotoData*> photo) {
+void SavePhotoToFile(not_null<PhotoData*> photo, HistoryItem *item) {
 	const auto media = photo->activeMediaView();
 	if (photo->isNull() || !media || !media->loaded()) {
 		return;
@@ -165,6 +167,13 @@ void SavePhotoToFile(not_null<PhotoData*> photo) {
 		crl::guard(&photo->session(), [=](const QString &result) {
 			if (!result.isEmpty()) {
 				media->saveToFile(result);
+				if (item) {
+					auto &manager = Core::App().downloadManager();
+					manager.addLoaded({
+						.item = item,
+						.photo = photo,
+					}, result, manager.computeNextStartDate());
+				}
 			}
 		}));
 }
@@ -202,7 +211,7 @@ void AddPhotoActions(
 			base::fn_delayed(
 				st::defaultDropdownMenu.menu.ripple.hideDuration,
 				&photo->session(),
-				[=] { SavePhotoToFile(photo); }),
+				[=] { SavePhotoToFile(photo, item); }),
 			&st::menuIconSaveImage);
 		menu->addAction(tr::lng_context_copy_image(tr::now), [=] {
 			const auto item = photo->owner().message(contextId);

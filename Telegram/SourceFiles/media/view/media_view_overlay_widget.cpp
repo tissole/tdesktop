@@ -111,6 +111,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtWidgets/QApplication>
 #include <QtCore/QBuffer>
+#include <QtCore/QFile>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QWindow>
 #include <QtGui/QScreen>
@@ -3102,6 +3103,13 @@ void OverlayWidget::saveAs() {
 			crl::guard(_window, [=](const QString &result) {
 				if (!result.isEmpty() && _photo == photo) {
 					media->saveToFile(result);
+					if (_message) {
+						auto &manager = Core::App().downloadManager();
+						manager.addLoaded({
+							.item = _message,
+							.photo = photo,
+						}, result, manager.computeNextStartDate());
+					}
 				}
 			}));
 	}
@@ -3267,13 +3275,24 @@ void OverlayWidget::downloadMedia() {
 			const auto saved = _photoMedia->saveToFile(toName);
 			if (!saved) {
 				toName = QString();
+			} else if (_message) {
+				auto &manager = Core::App().downloadManager();
+				manager.addLoaded({
+					.item = _message,
+					.photo = _photo,
+				}, toName, manager.computeNextStartDate());
 			}
 		}
 	}
 	if (!toName.isEmpty()) {
-		showSaveMsgToast(toName, (_stories && _document)
-			? tr::lng_mediaview_video_saved_to
-			: tr::lng_mediaview_saved_to);
+		if (QFile::exists(toName)) {
+			showSaveMsgToast(toName, (_stories && _document)
+				? tr::lng_mediaview_video_saved_to
+				: tr::lng_mediaview_saved_to);
+		} else {
+			uiShow()->showToast(
+				tr::lng_download_duplicate_skipped(tr::now));
+		}
 	}
 }
 

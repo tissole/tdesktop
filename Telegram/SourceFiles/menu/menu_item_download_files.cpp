@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/file_utilities.h"
 #include "data/data_document.h"
 #include "data/data_document_media.h"
+#include "data/data_download_manager.h"
 #include "data/data_file_click_handler.h"
 #include "data/data_photo.h"
 #include "data/data_photo_media.h"
@@ -33,6 +34,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_controller.h"
 #include "styles/style_menu_icons.h"
 #include "styles/style_widgets.h"
+
+#include <QtCore/QFile>
 
 namespace Menu {
 namespace {
@@ -163,12 +166,31 @@ void AddAction(
 					dir);
 			};
 			auto lastPath = QString();
+			auto allDuplicates = true;
 			for (auto i = 0; i < views.size(); i++) {
 				lastPath = fullPath(i);
 				views[i]->saveToFile(lastPath);
+				const auto &photo = photos[i].first;
+				const auto fullId = photos[i].second;
+				const auto item = session->data().message(fullId);
+				if (item) {
+					auto &manager = Core::App().downloadManager();
+					manager.addLoaded({
+						.item = item,
+						.photo = photo,
+					}, lastPath, manager.computeNextStartDate());
+				}
+				if (QFile::exists(lastPath)) {
+					allDuplicates = false;
+				}
 			}
 			if (showToast) {
-				showToast(lastPath);
+				if (allDuplicates) {
+					controller->showToast(
+						tr::lng_download_duplicate_skipped(tr::now));
+				} else {
+					showToast(lastPath);
+				}
 			}
 		};
 

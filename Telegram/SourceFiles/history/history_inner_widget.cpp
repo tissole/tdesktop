@@ -110,6 +110,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_saved_sublist.h"
 #include "data/data_session.h"
 #include "data/data_document.h"
+#include "data/data_download_manager.h"
 #include "data/data_channel.h"
 #include "data/data_forum_topic.h"
 #include "data/data_photo_media.h"
@@ -129,6 +130,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QClipboard>
 #include <QtWidgets/QApplication>
 #include <QtCore/QCoreApplication>
+#include <QtCore/QFile>
 #include <QtCore/QMimeData>
 #include <api/api_sending.h>
 
@@ -2768,7 +2770,7 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 		const auto itemId = item ? item->fullId() : FullMsgId();
 		if (!photo->isNull() && media && media->loaded() && !hasCopyMediaRestriction(item)) {
 			_menu->addAction(tr::lng_context_save_image(tr::now), base::fn_delayed(st::defaultDropdownMenu.menu.ripple.hideDuration, this, [=] {
-				savePhotoToFile(photo);
+				savePhotoToFile(photo, item);
 			}), &st::menuIconSaveImage);
 			_menu->addAction(tr::lng_context_copy_image(tr::now), [=] {
 				copyContextImage(photo, itemId);
@@ -3839,7 +3841,7 @@ void HistoryInner::editCaptionUploadLayer(not_null<HistoryItem*> item) {
 	}
 }
 
-void HistoryInner::savePhotoToFile(not_null<PhotoData*> photo) {
+void HistoryInner::savePhotoToFile(not_null<PhotoData*> photo, HistoryItem *item) {
 	const auto media = photo->activeMediaView();
 	if (photo->isNull() || !media || !media->loaded()) {
 		return;
@@ -3854,6 +3856,13 @@ void HistoryInner::savePhotoToFile(not_null<PhotoData*> photo) {
 		crl::guard(this, [=](const QString &result) {
 			if (!result.isEmpty()) {
 				media->saveToFile(result);
+				if (item) {
+					auto &manager = Core::App().downloadManager();
+					manager.addLoaded({
+						.item = item,
+						.photo = photo,
+					}, result, manager.computeNextStartDate());
+				}
 			}
 		}));
 }

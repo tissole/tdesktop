@@ -252,6 +252,9 @@ QString DownloadPeerFolder(not_null<PeerData*> peer) {
 [[nodiscard]] QString ComposeDownloadSubfolder(
 		PeerData *peer,
 		const QString &typeSubfolder) {
+	if (!Core::App().settings().downloadPath().isEmpty()) {
+		return QString();
+	}
 	const auto mode = GetEnhancedInt(u"download_folder_mode"_q);
 	const auto perChat = (mode == 2) || (mode == 3);
 	const auto withType = (mode == 0) || (mode == 2);

@@ -63,6 +63,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_photo.h"
 #include "data/data_photo_media.h"
 #include "data/data_document.h"
+#include "data/data_download_manager.h"
 #include "data/data_media_types.h"
 #include "data/data_file_click_handler.h"
 #include "data/data_file_origin.h"
@@ -75,6 +76,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtWidgets/QApplication>
 #include <QtGui/QClipboard>
+#include <QtCore/QFile>
 
 #include "boxes/abstract_box.h"
 
@@ -1339,8 +1341,11 @@ void InnerWidget::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 		if (lnkPhoto) {
 			const auto media = lnkPhoto->activeMediaView();
 			if (!lnkPhoto->isNull() && media && media->loaded()) {
+				const auto photoItem = view
+					? view->data()->fullId()
+					: FullMsgId();
 				_menu->addAction(tr::lng_context_save_image(tr::now), base::fn_delayed(st::defaultDropdownMenu.menu.ripple.hideDuration, this, [=] {
-					savePhotoToFile(lnkPhoto);
+					savePhotoToFile(lnkPhoto, session().data().message(photoItem));
 				}), &st::menuIconSaveImage);
 				_menu->addAction(tr::lng_context_copy_image(tr::now), [=] {
 					copyContextImage(lnkPhoto);
@@ -1497,7 +1502,7 @@ void InnerWidget::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 	}
 }
 
-void InnerWidget::savePhotoToFile(not_null<PhotoData*> photo) {
+void InnerWidget::savePhotoToFile(not_null<PhotoData*> photo, HistoryItem *item) {
 	const auto media = photo->activeMediaView();
 	if (photo->isNull() || !media || !media->loaded()) {
 		return;
@@ -1512,6 +1517,13 @@ void InnerWidget::savePhotoToFile(not_null<PhotoData*> photo) {
 		crl::guard(this, [=](const QString &result) {
 			if (!result.isEmpty()) {
 				media->saveToFile(result);
+				if (item) {
+					auto &manager = Core::App().downloadManager();
+					manager.addLoaded({
+						.item = item,
+						.photo = photo,
+					}, result, manager.computeNextStartDate());
+				}
 			}
 		}));
 }

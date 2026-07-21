@@ -75,14 +75,32 @@ void DedupSampleOffsets(
 		int64 size,
 		int64 &headOffset,
 		int64 &tailOffset) {
-	headOffset = std::min(int64(kDedupHeadSkip), size / 2 - kDedupChunk);
+	headOffset = std::min<int64>(kDedupHeadSkip, (size / 2) - kDedupChunk);
+	headOffset = std::max<int64>(0, headOffset);
 	headOffset = (headOffset / kDedupAlignment) * kDedupAlignment;
-	const auto blockStart = ((size - kDedupChunk) / kDedupBlock) * kDedupBlock;
-	tailOffset = blockStart + (kDedupBlock - kDedupChunk);
-	if (tailOffset < headOffset + kDedupChunk) {
-		tailOffset = size - kDedupChunk;
-	}
+	tailOffset = size - kDedupChunk;
+	tailOffset = std::max<int64>(0, tailOffset);
 	tailOffset = (tailOffset / kDedupAlignment) * kDedupAlignment;
+	if (tailOffset < headOffset + kDedupChunk) {
+		tailOffset = headOffset + kDedupChunk;
+	}
+	if (tailOffset + kDedupChunk > size) {
+		tailOffset = std::max<int64>(headOffset + kDedupChunk, size - kDedupChunk);
+	}
+	const auto ensureWithinBlock = [](int64 &offset) {
+		const auto blockOffset = offset % kDedupBlock;
+		if (blockOffset + kDedupChunk > kDedupBlock) {
+			offset -= kDedupAlignment;
+			offset = (offset / kDedupAlignment) * kDedupAlignment;
+			const auto newBlockOffset = offset % kDedupBlock;
+			if (newBlockOffset + kDedupChunk > kDedupBlock) {
+				offset = (offset / kDedupBlock) * kDedupBlock
+					+ kDedupBlock - kDedupChunk;
+			}
+		}
+	};
+	ensureWithinBlock(headOffset);
+	ensureWithinBlock(tailOffset);
 }
 
 } // namespace
@@ -113,9 +131,15 @@ QByteArray FileFingerprint(const QString &path, int64 size) {
 	}
 	if (size < kDedupMinPartialHashSize) {
 		const auto r = ReadHash(path, 0, size);
+		if (r.isEmpty()) {
+			LOG(("DEDUP: FileFingerprint full failed path=%1 size=%2").arg(
+				path).arg(size));
+			return QByteArray();
+		}
+		const auto result = HashChunks(r, QByteArray());
 		LOG(("DEDUP: FileFingerprint full path=%1 size=%2 result=%3").arg(
-			path).arg(size).arg(QString::fromLatin1(r.toHex())));
-		return r;
+			path).arg(size).arg(QString::fromLatin1(result.toHex())));
+		return result;
 	}
 	int64 headOffset = 0;
 	int64 tailOffset = 0;
@@ -156,10 +180,8 @@ void RemoteFileFingerprint(
 	int64 tailOffset = 0;
 	DedupSampleOffsets(size, headOffset, tailOffset);
 	const auto chunk = int64(kDedupChunk);
-	LOG(("DEDUP: RemoteFileFingerprint size=%1 headOff=%2 tailOff=%3 chunk=%4").arg(
-		size).arg(headOffset).arg(tailOffset).arg(chunk));
-
 	const auto dcId = MTP::updaterDcId(document->getDC());
+
 	const auto head = std::make_shared<QByteArray>();
 	const auto tail = std::make_shared<QByteArray>();
 	const auto pending = std::make_shared<int>(2);
