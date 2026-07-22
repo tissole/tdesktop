@@ -10,6 +10,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/flat_set.h"
 #include "base/timer.h"
 
+#include <QHash>
+#include <QSet>
+#include <QVector>
+
 namespace Ui {
 struct DownloadBarProgress;
 struct DownloadBarContent;
@@ -158,13 +162,6 @@ private:
 	struct DedupEntry {
 		uint64 documentId = 0;
 		int64 size = 0;
-		QByteArray hash;
-		QString path;
-	};
-	struct PendingDedup {
-		int64 size = 0;
-		QByteArray hash;
-		DocumentData *document = nullptr;
 	};
 	struct DeleteFilesDescriptor;
 	struct SessionData {
@@ -256,7 +253,7 @@ private:
 	void removePendingDedup(
 		not_null<DocumentData*> document,
 		int64 size);
-	[[nodiscard]] PendingDedup* findPendingSameSize(int64 size);
+	[[nodiscard]] DocumentData* findPendingDocWithoutHash(int64 size);
 	void storeDedupHashForPending(
 		not_null<DocumentData*> document,
 		int64 size,
@@ -285,13 +282,23 @@ private:
 	base::flat_set<not_null<PeerData*>> _resumeSavePending;
 	base::Timer _resumeSaveTimer;
 
-	base::flat_map<int64, std::vector<DedupEntry>> _dedupBySize;
+	// O(1) dedup lookup maps for completed downloads (DB)
+	QHash<QByteArray, DedupEntry> dedup_DB;       // hash -> entry
+	QHash<uint64, QByteArray> id_DB;               // documentId -> hash
+	QSet<int64> size_DB;                           // set of sizes
+
+	// O(1) dedup lookup maps for pending downloads (in progress)
+	QHash<QByteArray, DedupEntry> dedup_Pending;   // hash -> entry (only with hash)
+	QHash<uint64, QByteArray> id_Pending;          // documentId -> hash
+	QSet<int64> size_Pending;                      // set of sizes
+	QHash<uint64, not_null<DocumentData*>> pendingDocs;  // documentId -> document
+	QHash<int64, QVector<uint64>> pendingWithoutHash;    // size -> docIds without hash
+
 	bool _dedupLoaded = false;
+	int _dedupCheckInProgress = 0;
 	base::flat_set<int64> _dedupPendingBuckets;
 	crl::time _lastDedupFlushTs = 0;
 	base::Timer _dedupSaveTimer;
-
-	base::flat_map<int64, std::vector<PendingDedup>> _pendingDedup;
 
 };
 

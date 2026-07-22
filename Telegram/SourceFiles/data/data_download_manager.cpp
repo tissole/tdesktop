@@ -356,6 +356,9 @@ void DownloadManager::addLoaded(
 	const auto dedupHash = GetEnhancedBool("prevent_download_duplicates")
 		? Data::FileFingerprint(path, size)
 		: QByteArray();
+	if (!dedupHash.isEmpty()) {
+		loadDedup();
+	}
 	if (!dedupHash.isEmpty() && findDupByHash(size, dedupHash)) {
 		LOG(("DEDUP: addLoaded dup size=%1 path=%2").arg(
 			size).arg(path));
@@ -412,24 +415,14 @@ void DownloadManager::addLoaded(
 
 	if (!dedupHash.isEmpty()) {
 		loadDedup();
-		auto &entries = _dedupBySize[size / kDedupSizeBucket];
-		auto found = false;
-		for (auto &entry : entries) {
-			if (entry.size == size && entry.hash == dedupHash) {
-				found = true;
-				break;
-			}
-		}
-		if (!found) {
-			entries.push_back({
-				.documentId = object.document
-					? object.document->id
-					: (object.photo ? object.photo->id : 0),
-				.size = size,
-				.hash = dedupHash,
-				.path = path,
-			});
-			_dedupPendingBuckets.emplace(size / kDedupSizeBucket);
+		if (!dedup_DB.contains(dedupHash)) {
+			const auto docId = object.document
+				? object.document->id
+				: (object.photo ? object.photo->id : 0);
+			dedup_DB.insert(dedupHash, DedupEntry{ docId, size });
+			id_DB.insert(docId, dedupHash);
+			size_DB.insert(size);
+			_dedupPendingBuckets.emplace(size);
 			scheduleDedupSave();
 		}
 		if (const auto document = object.document) {
@@ -1520,7 +1513,14 @@ void DownloadManager::loadDedup() {
 	if (!file.open(QIODevice::ReadOnly)) {
 		return;
 	}
-	const auto document = QJsonDocument::fromJson(file.readAll());
+	const auto fileSize = file.size();
+	const auto mapped = file.map(0, fileSize);
+	if (!mapped) {
+		return;
+	}
+	const auto document = QJsonDocument::fromJson(
+		QByteArray::fromRawData(reinterpret_cast<const char*>(mapped), fileSize));
+	file.unmap(mapped);
 	if (!document.isObject()) {
 		return;
 	}
@@ -1534,18 +1534,18 @@ void DownloadManager::loadDedup() {
 		if (hash.isEmpty()) {
 			continue;
 		}
-			_dedupBySize[size / kDedupSizeBucket].push_back({
-				.documentId = documentId,
-				.size = size,
-				.hash = hash,
-			});
+		if (!dedup_DB.contains(hash)) {
+			dedup_DB.insert(hash, DedupEntry{ documentId, size });
+			id_DB.insert(documentId, hash);
+			size_DB.insert(size);
+		}
 	}
-	LOG(("DEDUP: loadDedup loaded from %1 buckets=%2").arg(
-		path).arg(_dedupBySize.size()));
+	LOG(("DEDUP: loadDedup loaded from %1 entries=%2").arg(
+		path).arg(dedup_DB.size()));
 }
 
 void DownloadManager::scheduleDedupSave() {
-	if (_dedupPendingBuckets.empty() && _dedupBySize.empty()) {
+	if (_dedupPendingBuckets.empty() && dedup_DB.empty()) {
 		return;
 	}
 	const auto now = crl::now();
@@ -1576,32 +1576,36 @@ void DownloadManager::flushDedupSave() {
 	if (QFile::exists(path)) {
 		auto file = QFile(path);
 		if (file.open(QIODevice::ReadOnly)) {
-			const auto document = QJsonDocument::fromJson(file.readAll());
-			file.close();
-			if (document.isObject()) {
-				const auto existing = document.object()["entries"].toArray();
-				for (const auto &value : existing) {
-					const auto obj = value.toObject();
-					const auto oldSize = int64(obj["size"].toDouble());
-					const auto bucket = oldSize / kDedupSizeBucket;
-					if (!_dedupPendingBuckets.contains(bucket)) {
-						items.append(value);
+			const auto fileSize = file.size();
+			const auto mapped = file.map(0, fileSize);
+			if (mapped) {
+				const auto document = QJsonDocument::fromJson(
+					QByteArray::fromRawData(reinterpret_cast<const char*>(mapped), fileSize));
+				file.unmap(mapped);
+				if (document.isObject()) {
+					const auto existing = document.object()["entries"].toArray();
+					for (const auto &value : existing) {
+						const auto obj = value.toObject();
+						const auto oldSize = int64(obj["size"].toDouble());
+						if (!_dedupPendingBuckets.contains(oldSize)) {
+							items.append(value);
+						}
 					}
 				}
 			}
 		}
 	}
-	for (const auto bucket : _dedupPendingBuckets) {
-		const auto it = _dedupBySize.find(bucket);
-		if (it == end(_dedupBySize)) {
-			continue;
-		}
-		for (const auto &entry : it->second) {
-			auto obj = QJsonObject();
-			obj["document_id"] = QString::number(entry.documentId);
-			obj["size"] = qint64(entry.size);
-			obj["hash"] = QString::fromLatin1(entry.hash.toHex());
-			items.append(obj);
+	for (const auto size : _dedupPendingBuckets) {
+		for (auto it = dedup_DB.constBegin(); it != dedup_DB.constEnd(); ++it) {
+			const auto &hash = it.key();
+			const auto &entry = it.value();
+			if (entry.size == size) {
+				auto obj = QJsonObject();
+				obj["document_id"] = QString::number(entry.documentId);
+				obj["size"] = qint64(entry.size);
+				obj["hash"] = QString::fromLatin1(hash.toHex());
+				items.append(obj);
+			}
 		}
 	}
 	_dedupPendingBuckets.clear();
@@ -1626,22 +1630,27 @@ void DownloadManager::flushDedupSave() {
 }
 
 bool DownloadManager::sizeBucketExists(int64 size) const {
-	return _dedupBySize.find(size / kDedupSizeBucket) != end(_dedupBySize)
-		|| _pendingDedup.find(size / kDedupSizeBucket) != end(_pendingDedup);
+	return size_DB.contains(size) || size_Pending.contains(size);
 }
 
 void DownloadManager::maybeClearDedupIfIdle() {
 	if (!_loading.empty()) {
 		return;
 	}
-	if (!_pendingDedup.empty()) {
+	if (!id_Pending.empty() || !dedup_Pending.empty()
+		|| !pendingDocs.empty() || !pendingWithoutHash.empty()) {
+		return;
+	}
+	if (_dedupCheckInProgress > 0) {
 		return;
 	}
 	if (!_dedupPendingBuckets.empty()) {
 		flushDedupSave();
 	}
-	if (!_dedupBySize.empty()) {
-		_dedupBySize.clear();
+	if (!dedup_DB.empty()) {
+		dedup_DB.clear();
+		id_DB.clear();
+		size_DB.clear();
 		_dedupLoaded = false;
 	}
 }
@@ -1650,33 +1659,15 @@ bool DownloadManager::findDupByDocumentId(uint64 documentId, int64 size) const {
 	if (!documentId) {
 		return false;
 	}
-	const auto i = _dedupBySize.find(size / kDedupSizeBucket);
-	if (i == end(_dedupBySize)) {
-		return false;
-	}
-	for (const auto &entry : i->second) {
-		if (entry.documentId && entry.documentId == documentId) {
-			return true;
-		}
-	}
-	return false;
+	return id_DB.contains(documentId) || id_Pending.contains(documentId);
 }
 
 bool DownloadManager::findDupByHash(int64 size, const QByteArray &hash) const {
-	const auto i = _dedupBySize.find(size / kDedupSizeBucket);
-	if (i == end(_dedupBySize)) {
-		LOG(("DEDUP: findDupByHash no bucket size=%1 bucket=%2").arg(
-			size).arg(size / kDedupSizeBucket));
-		return false;
+	if (dedup_DB.contains(hash)) {
+		return dedup_DB[hash].size == size;
 	}
-	LOG(("DEDUP: findDupByHash size=%1 entries=%2 query=%3").arg(
-		size).arg(i->second.size()).arg(QString::fromLatin1(hash.toHex())));
-	for (const auto &entry : i->second) {
-		LOG(("DEDUP:   candidate size=%1 hash=%2").arg(
-			entry.size).arg(QString::fromLatin1(entry.hash.toHex())));
-		if (entry.size == size && entry.hash == hash) {
-			return true;
-		}
+	if (dedup_Pending.contains(hash)) {
+		return dedup_Pending[hash].size == size;
 	}
 	return false;
 }
@@ -1690,68 +1681,87 @@ void DownloadManager::storeDedup(
 	if (hash.isEmpty()) {
 		return;
 	}
-	auto &entries = _dedupBySize[size / kDedupSizeBucket];
-	for (auto &entry : entries) {
-		if (entry.size == size && entry.hash == hash) {
-			if (!entry.documentId && documentId) {
-				entry.documentId = documentId;
-				entry.path = path;
-				_dedupPendingBuckets.emplace(size / kDedupSizeBucket);
-				scheduleDedupSave();
-			}
-			return;
+	auto it = dedup_DB.find(hash);
+	if (it != dedup_DB.end()) {
+		if (!it.value().documentId && documentId) {
+			it.value().documentId = documentId;
+			_dedupPendingBuckets.emplace(size);
+			scheduleDedupSave();
 		}
+		return;
 	}
-	entries.push_back({ documentId, size, hash, path });
-	_dedupPendingBuckets.emplace(size / kDedupSizeBucket);
+	dedup_DB.insert(hash, DedupEntry{ documentId, size });
+	id_DB.insert(documentId, hash);
+	size_DB.insert(size);
+	_dedupPendingBuckets.emplace(size);
 	scheduleDedupSave();
 }
 
 void DownloadManager::addPendingDedup(
 		not_null<DocumentData*> document,
 		int64 size) {
-	auto &entries = _pendingDedup[size / kDedupSizeBucket];
-	entries.push_back({ size, QByteArray(), document.get() });
+	const auto docId = document->id;
+	id_Pending.insert(docId, QByteArray());
+	size_Pending.insert(size);
+	pendingDocs.insert(docId, document);
+	pendingWithoutHash[size].push_back(docId);
 }
 
 void DownloadManager::removePendingDedup(
 		not_null<DocumentData*> document,
 		int64 size) {
-	const auto bucket = size / kDedupSizeBucket;
-	auto it = _pendingDedup.find(bucket);
-	if (it == end(_pendingDedup)) {
-		return;
-	}
-	auto &entries = it->second;
-	entries.erase(
-		ranges::remove(entries, document.get(), &PendingDedup::document),
-		end(entries));
-	if (entries.empty()) {
-		_pendingDedup.erase(it);
+	const auto docId = document->id;
+	id_Pending.remove(docId);
+	pendingDocs.remove(docId);
+	auto it = pendingWithoutHash.find(size);
+	if (it != pendingWithoutHash.end()) {
+		auto &vec = it.value();
+		vec.erase(
+			ranges::remove(vec, docId),
+			vec.end());
+		if (vec.empty()) {
+			pendingWithoutHash.erase(it);
+		}
 	}
 }
 
-DownloadManager::PendingDedup* DownloadManager::findPendingSameSize(int64 size) {
-	const auto bucket = size / kDedupSizeBucket;
-	auto it = _pendingDedup.find(bucket);
-	if (it == end(_pendingDedup)) {
+DocumentData* DownloadManager::findPendingDocWithoutHash(int64 size) {
+	const auto it = pendingWithoutHash.find(size);
+	if (it == pendingWithoutHash.end() || it.value().empty()) {
 		return nullptr;
 	}
-	for (auto &entry : it->second) {
-		if (entry.size == size) {
-			return &entry;
-		}
+	const auto docId = it.value().front();
+	const auto docIt = pendingDocs.find(docId);
+	if (docIt == pendingDocs.end()) {
+		return nullptr;
 	}
-	return nullptr;
+	return docIt.value().get();
 }
 
 void DownloadManager::storeDedupHashForPending(
 		not_null<DocumentData*> document,
 		int64 size,
 		const QByteArray &hash) {
-	auto *entry = findPendingSameSize(size);
-	if (entry && entry->document == document.get()) {
-		entry->hash = hash;
+	const auto docId = document->id;
+	auto it = pendingWithoutHash.find(size);
+	if (it != pendingWithoutHash.end()) {
+		auto &vec = it.value();
+		vec.erase(
+			ranges::remove(vec, docId),
+			vec.end());
+		if (vec.empty()) {
+			pendingWithoutHash.erase(it);
+		}
+	}
+	if (id_Pending.contains(docId)) {
+		const auto oldHash = id_Pending[docId];
+		if (!oldHash.isEmpty()) {
+			dedup_Pending.remove(oldHash);
+		}
+		id_Pending[docId] = hash;
+	}
+	if (!hash.isEmpty()) {
+		dedup_Pending.insert(hash, DedupEntry{ docId, size });
 	}
 }
 
@@ -1763,38 +1773,34 @@ void DownloadManager::checkDuplicate(
 		done(false);
 		return;
 	}
+	_dedupCheckInProgress++;
 	const auto size = document->size;
+	auto wrappedDone = [=, this](bool skip) {
+		_dedupCheckInProgress--;
+		done(skip);
+		maybeClearDedupIfIdle();
+	};
 	loadDedup();
 
-	if (findDupByDocumentId(document->id, size)) {
-		done(true);
-		return;
-	}
-	{
-		const auto bucket = size / kDedupSizeBucket;
-		auto it = _pendingDedup.find(bucket);
-		if (it != end(_pendingDedup)) {
-			for (const auto &entry : it->second) {
-				if (entry.size == size
-					&& entry.document
-					&& entry.document->id == document->id) {
-					done(true);
-					return;
-				}
-			}
-		}
-	}
-
+	// Step 1: Check if size exists in DB or pending simultaneously
 	if (!sizeBucketExists(size)) {
 		addPendingDedup(document, size);
-		done(false);
+		wrappedDone(false);
 		return;
 	}
 
+	// Step 2: Check doc ID in DB and pending simultaneously
+	if (findDupByDocumentId(document->id, size)) {
+		wrappedDone(true);
+		return;
+	}
+
+	// Step 3: Fetch chunks, compute hash, check hash in DB and pending simultaneously
 	Data::RemoteFileFingerprint(
 		session,
 		document,
 		[=](QByteArray hash) {
+			loadDedup();
 			const auto skip = !hash.isEmpty()
 				&& findDupByHash(document->size, hash);
 			LOG(("DEDUP: checkDuplicate doc=%1 size=%2 hash=%3 skip=%4").arg(
@@ -1806,20 +1812,14 @@ void DownloadManager::checkDuplicate(
 			).arg(
 				skip));
 			if (skip) {
-				done(true);
+				wrappedDone(true);
 				return;
 			}
 
-			auto *pending = findPendingSameSize(document->size);
-			if (pending) {
-				if (!hash.isEmpty()
-					&& !pending->hash.isEmpty()
-					&& pending->hash == hash) {
-					done(true);
-					return;
-				}
-				if (!hash.isEmpty() && pending->hash.isEmpty()) {
-					auto otherDoc = pending->document;
+			// Step 4: Cross-check with pending docs of same size without hash
+			auto otherDoc = findPendingDocWithoutHash(document->size);
+			if (otherDoc) {
+				if (!hash.isEmpty()) {
 					auto otherSession = &otherDoc->session();
 					auto otherHash = std::make_shared<QByteArray>();
 					Data::RemoteFileFingerprint(
@@ -1837,9 +1837,9 @@ void DownloadManager::checkDuplicate(
 								|| hash.isEmpty()
 								|| *otherHash != hash) {
 								addPendingDedup(document, size);
-								done(false);
+								wrappedDone(false);
 							} else {
-								done(true);
+								wrappedDone(true);
 							}
 						});
 					return;
@@ -1847,7 +1847,7 @@ void DownloadManager::checkDuplicate(
 			}
 
 			addPendingDedup(document, size);
-			done(false);
+			wrappedDone(false);
 		});
 }
 

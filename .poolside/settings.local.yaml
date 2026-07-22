@@ -1,0 +1,13 @@
+tools:
+    shell:
+        allow:
+            - find *
+            - sort
+            - Get-ChildItem *
+            - Select-Object FullName
+            - Sort-Object
+            - grep *
+            - Select-Object *
+            - Select-String *
+            - cd *
+            - findstr *
