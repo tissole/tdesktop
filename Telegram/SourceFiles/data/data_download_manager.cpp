@@ -59,7 +59,7 @@ constexpr auto kClearLoadingTimeout = 5 * crl::time(1000);
 constexpr auto kMaxFileSize = 4000 * int64(1024 * 1024);
 constexpr auto kMaxResolvePerAttempt = 100;
 constexpr auto kResumeSaveTimeout = crl::time(1000);
-constexpr auto kDedupSaveTimeout = 10 * crl::time(1000);
+constexpr auto kDedupSaveTimeout = crl::time(1000);
 
 constexpr auto ByItem = [](const auto &entry) {
 	if constexpr (std::is_same_v<decltype(entry), const DownloadingId&>) {
@@ -378,6 +378,7 @@ void DownloadManager::addLoaded(
 			if (j != end(_loading)) {
 				_loading.erase(j);
 			}
+			maybeClearDedupIfIdle();
 			_loadingProgress = DownloadProgress{
 				.ready = std::max(
 					int64(0),
@@ -428,6 +429,7 @@ void DownloadManager::addLoaded(
 				.hash = dedupHash,
 				.path = path,
 			});
+			_dedupPendingBuckets.emplace(size / kDedupSizeBucket);
 			scheduleDedupSave();
 		}
 		if (const auto document = object.document) {
@@ -455,6 +457,7 @@ void DownloadManager::addLoaded(
 		entry.done = true;
 		_loading.erase(j);
 		_loadingDone.emplace(entry.object.item);
+		maybeClearDedupIfIdle();
 		scheduleResumeSave(entry.object.item->history()->peer);
 		_loadingProgress = DownloadProgress{
 			.ready = _loadingProgress.current().ready + readyChange,
@@ -1542,26 +1545,58 @@ void DownloadManager::loadDedup() {
 }
 
 void DownloadManager::scheduleDedupSave() {
-	_dedupDirty = true;
+	if (_dedupPendingBuckets.empty() && _dedupBySize.empty()) {
+		return;
+	}
+	const auto now = crl::now();
+	const auto sinceLast = now - _lastDedupFlushTs;
+	if (sinceLast >= kDedupSaveTimeout) {
+		flushDedupSave();
+		return;
+	}
 	if (!_dedupSaveTimer.isActive()) {
-		_dedupSaveTimer.callOnce(kDedupSaveTimeout);
+		const auto wait = kDedupSaveTimeout - sinceLast;
+		_dedupSaveTimer.callOnce(wait > 0 ? wait : 1);
 	}
 }
 
 void DownloadManager::flushDedupSave() {
-	if (!_dedupDirty) {
+	_dedupSaveTimer.cancel();
+	if (_dedupPendingBuckets.empty()) {
 		return;
 	}
-	_dedupDirty = false;
-	_dedupSaveTimer.cancel();
 	const auto path = dedupFilePath();
 	if (path.isEmpty()) {
 		return;
 	}
+	_lastDedupFlushTs = crl::now();
+
 	auto root = QJsonObject();
 	auto items = QJsonArray();
-	for (const auto &[bucket, entries] : _dedupBySize) {
-		for (const auto &entry : entries) {
+	if (QFile::exists(path)) {
+		auto file = QFile(path);
+		if (file.open(QIODevice::ReadOnly)) {
+			const auto document = QJsonDocument::fromJson(file.readAll());
+			file.close();
+			if (document.isObject()) {
+				const auto existing = document.object()["entries"].toArray();
+				for (const auto &value : existing) {
+					const auto obj = value.toObject();
+					const auto oldSize = int64(obj["size"].toDouble());
+					const auto bucket = oldSize / kDedupSizeBucket;
+					if (!_dedupPendingBuckets.contains(bucket)) {
+						items.append(value);
+					}
+				}
+			}
+		}
+	}
+	for (const auto bucket : _dedupPendingBuckets) {
+		const auto it = _dedupBySize.find(bucket);
+		if (it == end(_dedupBySize)) {
+			continue;
+		}
+		for (const auto &entry : it->second) {
 			auto obj = QJsonObject();
 			obj["document_id"] = QString::number(entry.documentId);
 			obj["size"] = qint64(entry.size);
@@ -1569,6 +1604,8 @@ void DownloadManager::flushDedupSave() {
 			items.append(obj);
 		}
 	}
+	_dedupPendingBuckets.clear();
+
 	if (items.isEmpty()) {
 		QFile(path).remove();
 		return;
@@ -1591,6 +1628,22 @@ void DownloadManager::flushDedupSave() {
 bool DownloadManager::sizeBucketExists(int64 size) const {
 	return _dedupBySize.find(size / kDedupSizeBucket) != end(_dedupBySize)
 		|| _pendingDedup.find(size / kDedupSizeBucket) != end(_pendingDedup);
+}
+
+void DownloadManager::maybeClearDedupIfIdle() {
+	if (!_loading.empty()) {
+		return;
+	}
+	if (!_pendingDedup.empty()) {
+		return;
+	}
+	if (!_dedupPendingBuckets.empty()) {
+		flushDedupSave();
+	}
+	if (!_dedupBySize.empty()) {
+		_dedupBySize.clear();
+		_dedupLoaded = false;
+	}
 }
 
 bool DownloadManager::findDupByDocumentId(uint64 documentId, int64 size) const {
@@ -1643,12 +1696,14 @@ void DownloadManager::storeDedup(
 			if (!entry.documentId && documentId) {
 				entry.documentId = documentId;
 				entry.path = path;
+				_dedupPendingBuckets.emplace(size / kDedupSizeBucket);
 				scheduleDedupSave();
 			}
 			return;
 		}
 	}
 	entries.push_back({ documentId, size, hash, path });
+	_dedupPendingBuckets.emplace(size / kDedupSizeBucket);
 	scheduleDedupSave();
 }
 

@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/flat_set.h"
 #include "base/timer.h"
 
 namespace Ui {
@@ -235,6 +236,7 @@ private:
 	void loadDedup();
 	void scheduleDedupSave();
 	void flushDedupSave();
+	void maybeClearDedupIfIdle();
 	[[nodiscard]] QString dedupFilePath() const;
 	[[nodiscard]] bool sizeBucketExists(int64 size) const;
 	[[nodiscard]] bool findDupByDocumentId(
@@ -285,7 +287,8 @@ private:
 
 	base::flat_map<int64, std::vector<DedupEntry>> _dedupBySize;
 	bool _dedupLoaded = false;
-	bool _dedupDirty = false;
+	base::flat_set<int64> _dedupPendingBuckets;
+	crl::time _lastDedupFlushTs = 0;
 	base::Timer _dedupSaveTimer;
 
 	base::flat_map<int64, std::vector<PendingDedup>> _pendingDedup;
