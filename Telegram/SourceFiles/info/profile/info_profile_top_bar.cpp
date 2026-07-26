@@ -43,8 +43,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_star_gift.h"
 #include "data/data_stories.h"
 #include "data/data_user.h"
-#include "data/notify/data_notify_settings.h"
-#include "data/notify/data_peer_notify_settings.h"
 #include "data/stickers/data_custom_emoji.h"
 #include "editor/photo_editor_common.h"
 #include "editor/photo_editor_layer_widget.h"
@@ -160,7 +158,6 @@ constexpr auto kMinContrast = 5.5;
 constexpr auto kStoryOutlineFadeEnd = 0.4;
 constexpr auto kStoryOutlineFadeRange = 1. - kStoryOutlineFadeEnd;
 constexpr auto kSwapMoveAmplitude = 0.3;
-constexpr auto kStandaloneGroupProgress = 0.5;
 
 using AnimatedPatternPoint = TopBar::AnimatedPatternPoint;
 
@@ -1014,38 +1011,26 @@ void TopBar::setupActions(not_null<Window::SessionController*> controller) {
 		notifications->finishAnimating();
 
 		notifications->setAcceptBoth();
-		const auto notifySettings = &peer->owner().notifySettings();
-			MuteMenu::SetupMuteMenu(
-				notifications,
-				notifications->clicks(
-				) | rpl::filter([=](Qt::MouseButton button) {
-					if (button == Qt::RightButton) {
-						return true;
-					}
-					const auto topic = topicRootId
-						? peer->forumTopicFor(topicRootId)
-						: nullptr;
-					Assert(!topicRootId || topic != nullptr);
-					const auto is = topic
-						? notifySettings->isMuted(topic)
-						: notifySettings->isMuted(peer);
-					if (is) {
-						if (topic) {
-							notifySettings->update(topic, { .unmute = true });
-						} else {
-							notifySettings->update(peer, { .unmute = true });
-						}
-						return false;
-					} else {
-						return true;
-					}
-				}) | rpl::to_empty,
-				makeThread,
-				controller->uiShow(),
-				[=, skip = st::infoProfileTopBarActionMenuSkip] {
-					return notifications->mapToGlobal(
-						QPoint(0, notifications->height() + skip));
-				});
+		notifications->clicks(
+		) | rpl::filter([](Qt::MouseButton button) {
+			return (button == Qt::LeftButton);
+		}) | rpl::on_next([=] {
+			if (const auto thread = makeThread()) {
+				MuteMenu::ToggleMuteForever(thread);
+			}
+		}, notifications->lifetime());
+		MuteMenu::SetupMuteMenu(
+			notifications,
+			notifications->clicks(
+			) | rpl::filter([](Qt::MouseButton button) {
+				return (button == Qt::RightButton);
+			}) | rpl::to_empty,
+			makeThread,
+			controller->uiShow(),
+			[=, skip = st::infoProfileTopBarActionMenuSkip] {
+				return notifications->mapToGlobal(
+					QPoint(0, notifications->height() + skip));
+			});
 		buttons.push_back(notifications);
 		_actions->add(notifications);
 		_edgeColor.value() | rpl::on_next([=](
@@ -2136,11 +2121,13 @@ void TopBar::applyTabBindings(TabTopBarBindings &&bindings) {
 void TopBar::setupStandaloneGroupControl(
 		rpl::producer<bool> state,
 		rpl::producer<bool> available,
+		rpl::producer<bool> reached,
 		Fn<void(bool)> toggle) {
 	_standaloneGroup = true;
 	_tabSetGroup = std::move(toggle);
 	_tabGroupActive = false;
 	_tabGroupAvailable = false;
+	_standaloneGroupReached = false;
 	std::move(
 		state
 	) | rpl::on_next([=](bool grouped) {
@@ -2154,8 +2141,10 @@ void TopBar::setupStandaloneGroupControl(
 		_tabGroupAvailable = value;
 		updateTabSwapVisibility();
 	}, lifetime());
-	_progress.changes(
-	) | rpl::on_next([=] {
+	std::move(
+		reached
+	) | rpl::on_next([=](bool value) {
+		_standaloneGroupReached = value;
 		updateTabSwapVisibility();
 	}, lifetime());
 	updateTabGroupActive();
@@ -2175,26 +2164,46 @@ void TopBar::setTabSelectedItems(SelectedItems &&items) {
 	if (_tabSelectionBar) {
 		if (mode) {
 			updateTabSelectionState();
-			_tabSelectionBar->raise();
+			raiseTabSelectionOverlay();
 		}
 		_tabSelectionBar->toggle(mode, anim::type::normal);
 	}
 }
 
+void TopBar::raiseTabSelectionOverlay() {
+	if (!_tabSelectionBar || !tabSelectionMode()) {
+		return;
+	}
+	_tabSelectionBar->raise();
+}
+
 void TopBar::createTabSelectionBar() {
 	_tabSelectionBar.create(
 		this,
-		object_ptr<Ui::RpWidget>(this),
-		st::infoTopBarScale);
+		object_ptr<Ui::RpWidget>(this));
 	const auto bar = _tabSelectionBar.data();
 	bar->setDuration(st::infoTopBarDuration);
 	bar->toggle(false, anim::type::instant);
 
 	const auto inner = bar->entity();
 	inner->paintRequest(
-	) | rpl::on_next([=](QRect clip) {
+	) | rpl::on_next([=] {
 		auto p = QPainter(inner);
-		p.fillRect(clip, _st.bg);
+		auto hq = PainterHighQualityEnabler(p);
+		const auto radius = _roundEdges ? st::boxRadius : 0;
+		p.setPen(Qt::NoPen);
+		p.setBrush(_st.bg);
+		p.drawRoundedRect(
+			inner->rect() + QMargins(0, 0, 0, radius),
+			radius,
+			radius);
+		const auto line = st::lineWidth;
+		p.fillRect(
+			0,
+			inner->height() - line,
+			inner->width(),
+			line,
+			st::shadowFg);
 	}, inner->lifetime());
 
 	const auto forwardAction = [=](SelectionAction action) {
@@ -2317,7 +2326,7 @@ void TopBar::updateTabSelectionGeometry() {
 	_tabSelectionBar->move(0, 0);
 
 	_tabSelectionCancel->moveToLeft(0, 0);
-	auto right = 0;
+	auto right = _st.mediaActionsSkip;
 	if (!_tabSelectionDelete->isHidden()) {
 		_tabSelectionDelete->moveToRight(right, 0, inner->width());
 		right += _tabSelectionDelete->width();
@@ -2385,18 +2394,11 @@ void TopBar::showTabSearch() {
 
 		const auto cancel = Ui::CreateChild<Ui::IconButton>(
 			inner,
-			_closeColored
-				? st::infoTopBarColoredClose
-				: st::infoTopBarBlackClose);
+			st::infoTopBarBlackClose);
 		cancel->setAccessibleName(tr::lng_sr_cancel_search(tr::now));
 		cancel->show();
 		cancel->addClickHandler([=] {
-			if (_tabSearchField->getLastText().isEmpty()) {
-				hideTabSearch();
-				updateTabSwapVisibility();
-			} else {
-				_tabSearchField->setText(QString());
-			}
+			cancelTabSearch();
 		});
 		inner->widthValue(
 		) | rpl::on_next([=](int newWidth) {
@@ -2408,7 +2410,7 @@ void TopBar::showTabSearch() {
 	_tabSearchShown = true;
 	updateTabSwapVisibility();
 	updateTabSearchGeometry();
-	_tabSearchBar->raise();
+	raiseTabSearchOverlay();
 	_tabSearchBar->toggle(true, anim::type::normal);
 	_tabSearchField->setFocus();
 }
@@ -2419,11 +2421,57 @@ void TopBar::hideTabSearch() {
 		return;
 	}
 	_tabSearchShown = false;
+	if (_back) {
+		_back->entity()->setIconOverride(nullptr, nullptr);
+	}
 	if (_tabSearchField->hasFocus()) {
 		setFocus();
 	}
 	_tabSearchField->setText(QString());
 	_tabSearchBar->toggle(false, anim::type::normal);
+}
+
+bool TopBar::cancelTabSearch() {
+	if (!_tabSearchShown) {
+		return false;
+	} else if (!_tabSearchField->getLastText().isEmpty()) {
+		_tabSearchField->setText(QString());
+	} else {
+		hideTabSearch();
+		updateTabSwapVisibility();
+	}
+	return true;
+}
+
+void TopBar::checkBeforeCloseByEscape(Fn<void()> close) {
+	if (!cancelTabSearch()) {
+		close();
+	}
+}
+
+bool TopBar::searchAvailable() const {
+	return _tabSearchShown || (tabSwapActive() && _tabSearchAvailable);
+}
+
+void TopBar::showSearch() {
+	if (_tabSearchShown) {
+		_tabSearchField->setFocus();
+	} else if (tabSwapActive() && _tabSearchAvailable) {
+		showTabSearch();
+	}
+}
+
+void TopBar::raiseTabSearchOverlay() {
+	if (!_tabSearchBar || !_tabSearchShown) {
+		return;
+	}
+	_tabSearchBar->raise();
+	if (_back) {
+		_back->raise();
+		_back->entity()->setIconOverride(
+			&st::infoTopBarBlackBack.icon,
+			&st::infoTopBarBlackBack.iconOver);
+	}
 }
 
 void TopBar::updateTabSearchGeometry() {
@@ -2500,10 +2548,10 @@ void TopBar::updateTabSwapVisibility() {
 		}
 	}
 	if (_tabGroupToggle) {
-		const auto collapsed = _standaloneGroup
-			? (_progress.current() < kStandaloneGroupProgress)
+		const auto reached = _standaloneGroup
+			? _standaloneGroupReached
 			: swap;
-		const auto shown = collapsed
+		const auto shown = reached
 			&& !_tabSearchShown
 			&& (_tabSetGroup != nullptr)
 			&& _tabGroupAvailable;
@@ -2807,7 +2855,6 @@ void TopBar::setupButtons(
 			&& (kMinContrast > Ui::CountContrast(
 				st::boxTitleCloseFg->c,
 				*edgeColor));
-		_closeColored = shouldUseColored;
 		_back = base::make_unique_q<Ui::FadeWrap<Ui::IconButton>>(
 			this,
 			object_ptr<Ui::IconButton>(
@@ -2922,6 +2969,8 @@ void TopBar::setupButtons(
 				addTopBarEditButton(controller, wrap, shouldUseColored);
 			}
 		}
+		raiseTabSearchOverlay();
+		raiseTabSelectionOverlay();
 	}, lifetime());
 }
 
