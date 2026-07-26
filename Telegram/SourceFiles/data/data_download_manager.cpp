@@ -21,6 +21,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_user.h"
 #include "data/data_channel.h"
 #include "data/data_file_origin.h"
+#include "storage/file_upload.h"
 #include "base/unixtime.h"
 #include "base/random.h"
 #include "main/main_session.h"
@@ -32,6 +33,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item_helpers.h"
 #include "core/application.h"
 #include "core/mime_type.h"
+#include "platform/platform_file_utilities.h"
 #include "ui/controls/download_bar.h"
 #include "info/downloads/info_downloads_widget.h"
 #include "info/info_memento.h"
@@ -260,8 +262,11 @@ void DownloadManager::addLoading(DownloadObject object) {
 		});
 		_loading.emplace(item);
 		_loadingDocuments.emplace(object.document);
+		const auto ready = QFileInfo(path).exists()
+			? QFileInfo(path).size()
+			: 0;
 		_loadingProgress = DownloadProgress{
-			.ready = _loadingProgress.current().ready,
+			.ready = _loadingProgress.current().ready + ready,
 			.total = _loadingProgress.current().total + size,
 		};
 		_loadingListChanges.fire({});
@@ -553,7 +558,7 @@ void DownloadManager::finishFilesDelete(DeleteFilesDescriptor &&descriptor) {
 	}
 	crl::async([files = std::move(descriptor.files)]{
 		for (const auto &file : files) {
-			QFile(file.first).remove();
+			Platform::File::MoveToTrash(file.first);
 			crl::on_main([descriptor = file.second] {
 				if (const auto session = SessionByUniqueId(
 						descriptor.sessionUniqueId)) {
@@ -699,16 +704,45 @@ void DownloadManager::quitWithConfirmation(Fn<void()> quit) {
 		}
 		return;
 	}
+	auto loadingCount = 0;
+	for ([[maybe_unused]] const auto &id : loadingList()) {
+		++loadingCount;
+	}
 	auto box = Box([=](not_null<Ui::GenericBox*> box) {
 		box->setCloseByOutsideClick(false);
 		box->setCloseByEscape(false);
 		box->addRow(
 			object_ptr<Ui::FlatLabel>(
 				box.get(),
-				tr::lng_downloads_quit_confirm(),
+				tr::lng_downloads_quit_confirm(
+					tr::now,
+					lt_count,
+					loadingCount),
 				st::boxLabel),
 			st::boxPadding + QMargins(0, 0, 0, st::boxPadding.bottom()));
 		box->setStyle(st::defaultBox);
+		box->addButton(tr::lng_downloads_quit_cancel(), [=] {
+			box->closeBox();
+			auto confirmBox = Box([=](not_null<Ui::GenericBox*> confirmBox) {
+				confirmBox->setCloseByOutsideClick(false);
+				confirmBox->setCloseByEscape(false);
+				confirmBox->addRow(object_ptr<Ui::FlatLabel>(
+					confirmBox.get(),
+					tr::lng_download_cancel_confirm(tr::now),
+					st::boxLabel));
+				confirmBox->addButton(tr::lng_download_cancel_yes(), [=] {
+					confirmBox->closeBox();
+					loadingStop(nullptr);
+					if (quit) {
+						quit();
+					}
+				});
+				confirmBox->addButton(tr::lng_download_cancel_no(), [=] {
+					confirmBox->closeBox();
+				});
+			});
+			window->show(std::move(confirmBox));
+		}, st::attentionBoxButton);
 		box->addButton(tr::lng_downloads_quit_pause(), [=] {
 			box->closeBox();
 			pauseAll();
@@ -716,13 +750,6 @@ void DownloadManager::quitWithConfirmation(Fn<void()> quit) {
 				quit();
 			}
 		});
-		box->addButton(tr::lng_downloads_quit_cancel(), [=] {
-			box->closeBox();
-			loadingStop(nullptr);
-			if (quit) {
-				quit();
-			}
-		}, st::attentionBoxButton);
 		box->addButton(tr::lng_downloads_quit_continue(), [=] {
 			box->closeBox();
 		});
@@ -2027,23 +2054,38 @@ void DownloadManager::showResumeUnfinished(
 				lt_count,
 				totalItems),
 			st::boxLabel));
-		box->addButton(tr::lng_downloads_resume_yes(), [=] {
-			box->closeBox();
-			crl::on_main(crl::guard(weak, [=] {
-				resumeAllJobs(false);
-				openPanel();
-			}));
-		});
 		box->addButton(tr::lng_downloads_resume_cancel(), [=] {
 			box->closeBox();
-			crl::on_main(crl::guard(weak, [=] {
-				cancelAllJobs();
-			}));
+			auto confirmBox = Box([=](not_null<Ui::GenericBox*> confirmBox) {
+				confirmBox->setCloseByOutsideClick(false);
+				confirmBox->setCloseByEscape(false);
+				confirmBox->addRow(object_ptr<Ui::FlatLabel>(
+					confirmBox.get(),
+					tr::lng_download_cancel_confirm(tr::now),
+					st::boxLabel));
+				confirmBox->addButton(tr::lng_download_cancel_yes(), [=] {
+					confirmBox->closeBox();
+					crl::on_main(crl::guard(weak, [=] {
+						cancelAllJobs();
+					}));
+				});
+				confirmBox->addButton(tr::lng_download_cancel_no(), [=] {
+					confirmBox->closeBox();
+				});
+			});
+			window->show(std::move(confirmBox));
 		}, st::attentionBoxButton);
 		box->addButton(tr::lng_downloads_resume_later(), [=] {
 			box->closeBox();
 			crl::on_main(crl::guard(weak, [=] {
 				resumeAllJobs(true);
+			}));
+		});
+		box->addButton(tr::lng_downloads_resume_yes(), [=] {
+			box->closeBox();
+			crl::on_main(crl::guard(weak, [=] {
+				resumeAllJobs(false);
+				openPanel();
 			}));
 		});
 	});
@@ -2082,11 +2124,19 @@ void DownloadManager::untrack(not_null<Main::Session*> session) {
 }
 
 rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
-	return Core::App().downloadManager().loadingProgressValue(
-	) | rpl::map([=](const DownloadProgress &progress) {
+	const auto session = Core::App().maybePrimarySession();
+	auto uploadProgress = session
+		? session->uploader().uploadProgressValue()
+		: rpl::single(Storage::UploadProgress{});
+	return rpl::combine(
+		Core::App().downloadManager().loadingProgressValue(),
+		std::move(uploadProgress)
+	) | rpl::map([=](const DownloadProgress &downloadProgress, const Storage::UploadProgress &uploadProgress) {
 		return Ui::DownloadBarProgress{
-			.ready = progress.ready,
-			.total = progress.total,
+			.ready = downloadProgress.ready,
+			.total = downloadProgress.total,
+			.uploadReady = uploadProgress.offset,
+			.uploadTotal = uploadProgress.size,
 		};
 	});
 }
@@ -2200,6 +2250,93 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 		) | rpl::filter([=] {
 			return !state->scheduled;
 		}) | rpl::on_next(state->push, lifetime);
+
+		notify();
+		return lifetime;
+	};
+}
+
+rpl::producer<Ui::DownloadBarProgress> MakeUploadBarProgress() {
+	const auto session = Core::App().maybePrimarySession();
+	auto uploadProgress = session
+		? session->uploader().uploadProgressValue()
+		: rpl::single(Storage::UploadProgress{});
+	return std::move(uploadProgress)
+		| rpl::map([=](const Storage::UploadProgress &uploadProgress) {
+			return Ui::DownloadBarProgress{
+				.ready = 0,
+				.total = 0,
+				.uploadReady = uploadProgress.offset,
+				.uploadTotal = uploadProgress.size,
+			};
+		});
+}
+
+rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent() {
+	return [](auto consumer) {
+		auto lifetime = rpl::lifetime();
+		const auto session = Core::App().maybePrimarySession();
+		struct State {
+			base::has_weak_ptr guard;
+			bool scheduled = false;
+		};
+		const auto state = lifetime.make_state<State>();
+
+		const auto notify = [=] {
+			auto content = Ui::DownloadBarContent();
+			if (!session) {
+				consumer.put_next(std::move(content));
+				return;
+			}
+			content.uploadCount = int(session->uploader().queueSize());
+			if (!content.uploadCount) {
+				content.uploadCount = session->uploader().pendingResumeCount();
+			}
+			if (content.uploadCount == 1) {
+				const auto name = session->uploader().queueSize()
+					? session->uploader().firstUploadName()
+					: session->uploader().firstPendingUploadName();
+				content.singleUploadName = name.isEmpty()
+					? TextWithEntities()
+					: tr::marked(name);
+			}
+			if (!session->uploader().queueSize()) {
+				const auto pending = session->uploader().pendingUploads();
+				for (const auto &p : pending) {
+					content.uploadReady += p.sent;
+					content.uploadTotal += p.total;
+				}
+				if (pending.size() == 1) {
+					content.uploadSingleReady = pending[0].sent;
+					content.uploadSingleTotal = pending[0].total;
+				}
+			} else {
+				const auto uploads = session->uploader().activeUploads();
+				for (const auto &u : uploads) {
+					content.uploadReady += u.offset;
+					content.uploadTotal += u.total;
+				}
+				if (uploads.size() == 1) {
+					content.uploadSingleReady = uploads[0].offset;
+					content.uploadSingleTotal = uploads[0].total;
+				}
+			}
+			consumer.put_next(std::move(content));
+		};
+
+		const auto push = [=] {
+			if (state->scheduled) return;
+			state->scheduled = true;
+			Ui::PostponeCall(&state->guard, [=] {
+				state->scheduled = false;
+				notify();
+			});
+		};
+
+		if (session) {
+			session->uploader().loadingListChanges(
+			) | rpl::on_next(push, lifetime);
+		}
 
 		notify();
 		return lifetime;

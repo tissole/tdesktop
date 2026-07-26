@@ -420,6 +420,7 @@ public:
 		QPoint point,
 		StateRequest request) const override;
 
+	void itemDataChanged() override;
 	void clearHeavyPart() override;
 
 protected:

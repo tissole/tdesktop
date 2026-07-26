@@ -79,6 +79,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/storage_domain.h"
 #include "storage/storage_databases.h"
 #include "storage/localstorage.h"
+#include "storage/file_upload.h"
 #include "payments/payments_checkout_process.h"
 #include "export/export_manager.h"
 #include "webrtc/webrtc_environment.h"
@@ -1061,15 +1062,17 @@ bool Application::uploadPreventsQuit() {
 		if (!account->sessionExists()) {
 			continue;
 		}
-		if (account->session().uploadsInProgress()) {
-			// An in-progress upload that belongs to an enhanced forward
-			// is handled by the enhanced-forward quit confirmation
-			// (it offers pause/cancel and keeps the resumable state),
-			// so don't show the generic "stop uploading" box here.
+		if (account->session().uploadsInProgress()
+			&& !account->session().uploader().anyUploadsPaused()) {
 			if (EnhancedForward::activeJobPeer().has_value()) {
 				return false;
 			}
-			account->session().uploadsStopWithConfirmation([=] {
+			const auto window = Core::App().windowFor(
+				not_null(&account->session().account()));
+			if (!window) {
+				return false;
+			}
+			account->session().uploader().showQuitUnfinished(window, [=] {
 				for (const auto &[index, account] : _domain->accounts()) {
 					if (account->sessionExists()) {
 						account->session().uploadsStop();

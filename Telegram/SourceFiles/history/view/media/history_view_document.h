@@ -53,6 +53,7 @@ public:
 		const SelectedQuote &quote) const override;
 
 	bool uploading() const override;
+	bool updateItemData() override;
 
 	DocumentData *getDocument() const override {
 		return _data;
@@ -182,6 +183,7 @@ private:
 	mutable float64 _voiceHoverProgress = -1;
 
 	bool _transcribedRound = false;
+	bool _wasUploading = true;
 
 };
 

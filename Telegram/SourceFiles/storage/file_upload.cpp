@@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "api/api_editing.h"
 #include "api/api_send_progress.h"
+#include "base/random.h"
+#include "base/unixtime.h"
 #include "storage/localimageloader.h"
 #include "storage/file_download.h"
 #include "data/data_document.h"
@@ -16,12 +18,32 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_photo.h"
 #include "data/data_session.h"
 #include "ui/image/image_location_factory.h"
+#include "ui/layers/generic_box.h"
+#include "ui/widgets/buttons.h"
+#include "ui/widgets/labels.h"
 #include "history/history_item.h"
 #include "history/history.h"
+#include "history/history_item_helpers.h"
 #include "core/file_location.h"
 #include "core/mime_type.h"
+#include "core/application.h"
+#include "platform/platform_file_utilities.h"
+#include "window/window_controller.h"
 #include "main/main_session.h"
+#include "main/main_account.h"
+#include "storage/storage_account.h"
 #include "apiwrap.h"
+#include "lang/lang_keys.h"
+#include "styles/style_layers.h"
+
+#include "storage/serialize_common.h"
+
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QDir>
+#include <QFileInfo>
 
 namespace Storage {
 namespace {
@@ -135,6 +157,9 @@ Uploader::Entry::Entry(
 		docPartsSent = ushort(startPartsSent);
 	}
 	partsSent = ushort(startPartsSent);
+	if (docPartsSent > 0 && docPartSize > 0) {
+		docSentSize = int64(docPartsSent) * int64(docPartSize);
+	}
 }
 
 void Uploader::Entry::setDocSize(int64 size) {
@@ -229,6 +254,26 @@ Uploader::Uploader(not_null<ApiWrap*> api)
 		if (i != end(_requests)) {
 			i->second.nonPremiumDelayed = true;
 		}
+	}, _lifetime);
+
+}
+
+void Uploader::finishInit() {
+	const auto session = &_api->session();
+	loadFinishedUploadsFromAccount();
+	session->account().local().updateUploads(serializeFinishedUploads());
+	session->data().itemIdChanged(
+	) | rpl::on_next([=](const Data::Session::IdChange &change) {
+		const auto oldFullId = FullMsgId(change.newId.peer, change.oldId);
+		_finishedUploads.remove(oldFullId);
+		_finishedUploads.emplace(change.newId);
+		for (auto &info : _finishedUploadsList) {
+			if (info.itemId == oldFullId) {
+				info.itemId = change.newId;
+				break;
+			}
+		}
+		session->account().local().updateUploads(serializeFinishedUploads());
 	}, _lifetime);
 }
 
@@ -367,6 +412,8 @@ void Uploader::upload(
 		}
 	}
 	_queue.push_back(Entry(itemId, file, resumeFromParts));
+	saveResumeState();
+	_uploadListChanges.fire(rpl::empty_value{});
 	if (!_nextTimer.isActive()) {
 		maybeSend();
 	}
@@ -374,9 +421,12 @@ void Uploader::upload(
 
 void Uploader::failed(FullMsgId itemId) {
 	const auto i = ranges::find(_queue, itemId, &Entry::itemId);
+	QString failedFilePath;
 	if (i != end(_queue)) {
 		const auto entry = std::move(*i);
 		_queue.erase(i);
+		_uploadListChanges.fire(rpl::empty_value{});
+		failedFilePath = entry.file ? entry.file->filepath : QString();
 		notifyFailed(entry);
 	} else if (const auto coverId = _videoIdToCoverId.take(itemId)) {
 		if (const auto video = _videoWaitingCover.take(*coverId)) {
@@ -394,6 +444,9 @@ void Uploader::failed(FullMsgId itemId) {
 			document->status = FileUploadFailed;
 		}
 		_documentFailed.fire_copy(video->fullId);
+	}
+	if (!failedFilePath.isEmpty()) {
+		clearResumeState(itemId.peer, failedFilePath);
 	}
 	cancelRequests(itemId);
 	maybeFinishFront();
@@ -706,6 +759,8 @@ void Uploader::cancelAll() {
 	}
 	clear();
 	unpause();
+	_paused = false;
+	notifyListChanged();
 }
 
 void Uploader::pause(FullMsgId itemId) {
@@ -809,8 +864,22 @@ void Uploader::partLoaded(const MTPBool &result, mtpRequestId requestId) {
 		--entry.partsWaiting;
 		entry.sentSize += bytes;
 	}
+	saveResumeState();
 
-		if (entry.file->type == SendMediaType::Photo) {
+	auto totalSent = int64(0);
+	auto totalSize = int64(0);
+	for (const auto &e : _queue) {
+		totalSent += e.docSentSize + e.sentSize;
+		totalSize += e.file ? e.file->filesize : 0;
+	}
+	_uploadProgress = UploadProgress{
+		.fullId = itemId,
+		.offset = totalSent,
+		.size = totalSize,
+		.partSize = 0,
+	};
+
+	if (entry.file->type == SendMediaType::Photo) {
 			const auto photo = session().data().photo(entry.file->id);
 			if (photo->uploading()) {
 				photo->uploadingData->size = entry.file->partssize;
@@ -895,6 +964,21 @@ void Uploader::finishFront() {
 
 	auto entry = std::move(_queue.front());
 	_queue.erase(_queue.begin());
+	_uploadListChanges.fire(rpl::empty_value{});
+	if (entry.file) {
+		clearResumeState(entry.itemId.peer, entry.file->filepath);
+	}
+	_finishedUploads.emplace(entry.itemId);
+	if (entry.file) {
+		auto info = FinishedUpload{
+			.itemId = entry.itemId,
+			.filename = entry.file->filepath,
+			.started = int64(base::unixtime::now()) * 1000,
+		};
+		_finishedUploadsList.push_back(std::move(info));
+		_finishedUploadAdded.fire_copy(entry.itemId);
+		session().account().local().updateUploads(serializeFinishedUploads());
+	}
 
 	const auto options = entry.file
 		? entry.file->to.options
@@ -905,6 +989,10 @@ void Uploader::finishFront() {
 		? entry.file->attachedStickers
 		: std::vector<MTPInputDocument>();
 	if (entry.file->type == SendMediaType::Photo) {
+		const auto photo = session().data().photo(entry.file->id);
+		if (photo && photo->uploadingData) {
+			photo->uploadingData = nullptr;
+		}
 		auto photoFilename = entry.file->filename;
 		if (!photoFilename.endsWith(u".jpg"_q, Qt::CaseInsensitive)) {
 			// Server has some extensions checking for inputMediaUploadedPhoto,
@@ -944,6 +1032,10 @@ void Uploader::finishFront() {
 		|| entry.file->type == SendMediaType::ThemeFile
 		|| entry.file->type == SendMediaType::Audio
 		|| entry.file->type == SendMediaType::Round) {
+		const auto document = session().data().document(entry.file->id);
+		if (document && document->uploadingData) {
+			document->uploadingData = nullptr;
+		}
 		QByteArray docMd5(32, Qt::Uninitialized);
 		hashMd5Hex(entry.md5Hash.result(), docMd5.data());
 
@@ -1013,6 +1105,28 @@ void Uploader::finishFront() {
 
 void Uploader::partFailed(const MTP::Error &error, mtpRequestId requestId) {
 	const auto request = finishRequest(requestId);
+	const auto type = error.type();
+	if (type.startsWith("FILE_PART_")) {
+		const auto i = ranges::find(
+			_queue,
+			request.itemId,
+			&Entry::itemId);
+		if (i != end(_queue)) {
+			i->partsSent = 0;
+			i->docPartsSent = 0;
+			i->sentSize = 0;
+			i->docSentSize = 0;
+			i->docFile = nullptr;
+			saveResumeState();
+			_uploadListChanges.fire(rpl::empty_value{});
+			LOG(("Uploader: restarting upload from part 0 due to %1"
+				).arg(type));
+			if (!_nextTimer.isActive()) {
+				maybeSend();
+			}
+			return;
+		}
+	}
 	failed(request.itemId);
 }
 
@@ -1065,6 +1179,819 @@ void Uploader::uploadCoverAsPhoto(
 	}).fail([=] {
 		failed(coverId);
 	}).send();
+}
+
+QString Uploader::resumeFilePath(PeerId peerId) const {
+	const auto path = DownloadRootPath(&session());
+	if (path.isEmpty()) {
+		return QString();
+	}
+	const auto name = u"UL_"_q + QString::number(peerId.value);
+	const auto root = path.endsWith('/') ? path : (path + '/');
+	return root + name + u".json"_q;
+}
+
+Fn<std::optional<QByteArray>()> Uploader::serializeFinishedUploads() {
+	return [this, weak = base::make_weak(this)]()
+		-> std::optional<QByteArray> {
+		const auto strong = weak.get();
+		if (!strong) {
+			return std::nullopt;
+		}
+		auto result = QByteArray();
+		const auto count = _finishedUploadsList.size();
+		const auto constant = sizeof(quint64) // itemId.peer
+			+ sizeof(qint64) // itemId.msg
+			+ sizeof(qint64); // started
+		auto size = sizeof(qint32) // count
+			+ count * constant;
+		for (const auto &upload : _finishedUploadsList) {
+			size += Serialize::stringSize(upload.filename);
+		}
+		result.reserve(size);
+
+		auto stream = QDataStream(&result, QIODevice::WriteOnly);
+		stream.setVersion(QDataStream::Qt_5_1);
+		stream << qint32(count);
+		for (const auto &upload : _finishedUploadsList) {
+			stream
+				<< quint64(upload.itemId.peer.value)
+				<< qint64(upload.itemId.msg.bare)
+				<< qint64(upload.started)
+				<< upload.filename;
+		}
+		stream.device()->close();
+
+		return result;
+	};
+}
+
+void Uploader::loadFinishedUploadsFromAccount() {
+	const auto serialized = session().account().local().uploadsSerialized();
+	if (serialized.isEmpty()) {
+		return;
+	}
+
+	QDataStream stream(serialized);
+	stream.setVersion(QDataStream::Qt_5_1);
+
+	auto count = qint32();
+	stream >> count;
+	if (stream.status() != QDataStream::Ok || count < 0 || count > 99'999) {
+		return;
+	}
+	for (auto i = 0; i != count; ++i) {
+		auto peerIdValue = quint64();
+		auto msgIdBare = qint64();
+		auto started = qint64();
+		auto filename = QString();
+		stream
+			>> peerIdValue
+			>> msgIdBare
+			>> started
+			>> filename;
+		if (stream.status() != QDataStream::Ok) {
+			return;
+		}
+		const auto itemId = FullMsgId(PeerId(peerIdValue), MsgId(msgIdBare));
+		_finishedUploads.emplace(itemId);
+		_finishedUploadsList.push_back({
+			.itemId = itemId,
+			.filename = filename,
+			.started = started,
+		});
+	}
+}
+
+void Uploader::saveResumeState() {
+	base::flat_map<PeerId, QJsonArray> byPeer;
+	for (const auto &entry : _queue) {
+		if (!entry.file) {
+			continue;
+		}
+		auto obj = QJsonObject();
+		obj[u"file_path"_q] = entry.file->filepath;
+		obj[u"file_size"_q] = qlonglong(entry.file->filesize);
+		obj[u"parts_sent"_q] = int(entry.partsSent - entry.partsWaiting);
+		obj[u"doc_parts_sent"_q] = int(entry.docPartsSent - entry.docPartsWaiting);
+		obj[u"sent_size"_q] = qlonglong(entry.docSentSize);
+		obj[u"peer_id"_q] = QString::number(entry.itemId.peer.value);
+		obj[u"file_id"_q] = QString::number(entry.file->id);
+		byPeer[entry.itemId.peer].append(obj);
+	}
+	for (const auto &[peerId, entries] : byPeer) {
+		const auto path = resumeFilePath(peerId);
+		if (path.isEmpty()) {
+			continue;
+		}
+		QDir().mkpath(QFileInfo(path).absolutePath());
+		auto doc = QJsonObject();
+		doc[u"entries"_q] = entries;
+		doc[u"paused"_q] = _paused;
+		auto file = QFile(path);
+		if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+			file.write(QJsonDocument(doc).toJson(QJsonDocument::Compact));
+		}
+	}
+}
+
+void Uploader::clearResumeState(PeerId peerId, const QString &filePath) {
+	const auto path = resumeFilePath(peerId);
+	if (path.isEmpty() || !QFile(path).exists()) {
+		return;
+	}
+	auto file = QFile(path);
+	if (!file.open(QIODevice::ReadOnly)) {
+		return;
+	}
+	const auto doc = QJsonDocument::fromJson(file.readAll()).object();
+	auto entries = doc[u"entries"_q].toArray();
+	auto newEntries = QJsonArray();
+	for (const auto &val : entries) {
+		const auto obj = val.toObject();
+		if (obj[u"file_path"_q].toString() == filePath) {
+			continue;
+		}
+		newEntries.append(obj);
+	}
+	auto newDoc = QJsonObject();
+	newDoc[u"entries"_q] = newEntries;
+	file.close();
+	if (newEntries.empty()) {
+		(void)QFile(path).remove();
+	} else {
+		(void)file.open(QIODevice::WriteOnly | QIODevice::Truncate);
+		file.write(QJsonDocument(newDoc).toJson(QJsonDocument::Compact));
+	}
+}
+
+bool Uploader::hasUnfinishedResume() const {
+	const auto root = DownloadRootPath(&session());
+	if (root.isEmpty()) {
+		return false;
+	}
+	const auto dir = QDir(root);
+	const auto files = dir.entryList(
+		QStringList(u"UL_*"_q),
+		QDir::Files,
+		QDir::Name);
+	for (const auto &file : files) {
+		const auto path = dir.absoluteFilePath(file);
+		auto f = QFile(path);
+		if (!f.open(QIODevice::ReadOnly)) {
+			continue;
+		}
+		const auto doc = QJsonDocument::fromJson(f.readAll()).object();
+		if (!doc[u"entries"_q].toArray().empty()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+int Uploader::pendingResumeCount() const {
+	const auto root = DownloadRootPath(&session());
+	if (root.isEmpty()) {
+		return 0;
+	}
+	const auto dir = QDir(root);
+	const auto files = dir.entryList(
+		QStringList(u"UL_*"_q),
+		QDir::Files,
+		QDir::Name);
+	auto count = 0;
+	for (const auto &file : files) {
+		const auto path = dir.absoluteFilePath(file);
+		auto f = QFile(path);
+		if (!f.open(QIODevice::ReadOnly)) {
+			continue;
+		}
+		const auto doc = QJsonDocument::fromJson(f.readAll()).object();
+		const auto entries = doc[u"entries"_q].toArray();
+		for (const auto &val : entries) {
+			const auto obj = val.toObject();
+			const auto filePath = obj[u"file_path"_q].toString();
+			if (QFileInfo::exists(filePath)) {
+				++count;
+			}
+		}
+	}
+	return count;
+}
+
+void Uploader::showResumeUnfinished() {
+	const auto root = DownloadRootPath(&session());
+	if (root.isEmpty()) {
+		return;
+	}
+	const auto dir = QDir(root);
+	const auto files = dir.entryList(
+		QStringList(u"UL_*"_q),
+		QDir::Files,
+		QDir::Name);
+	auto toResume = QVector<Uploader::ResumeEntry>();
+	for (const auto &file : files) {
+		const auto path = dir.absoluteFilePath(file);
+		auto f = QFile(path);
+		if (!f.open(QIODevice::ReadOnly)) {
+			continue;
+		}
+		const auto doc = QJsonDocument::fromJson(f.readAll()).object();
+		const auto entries = doc[u"entries"_q].toArray();
+		for (const auto &val : entries) {
+			const auto obj = val.toObject();
+			auto entry = Uploader::ResumeEntry();
+			entry.filePath = obj[u"file_path"_q].toString();
+			entry.fileSize = obj[u"file_size"_q].toVariant().toLongLong();
+			const auto partsSent = ushort(obj[u"parts_sent"_q].toVariant().toUInt());
+			const auto docPartsSent = ushort(obj[u"doc_parts_sent"_q].toVariant().toUInt());
+			entry.partsSent = std::max(partsSent, docPartsSent);
+			entry.sentSize = obj[u"sent_size"_q].toVariant().toLongLong();
+			entry.peerId = PeerId(PeerIdHelper(obj[u"peer_id"_q].toVariant().toULongLong()));
+			const auto fileIdVal = obj[u"file_id"_q];
+			if (fileIdVal.isString()) {
+				entry.fileId = fileIdVal.toString().toULongLong();
+			} else {
+				entry.fileId = 0;
+				entry.partsSent = 0;
+			}
+			if (QFileInfo::exists(entry.filePath)) {
+				toResume.push_back(entry);
+			}
+		}
+	}
+	if (toResume.empty()) {
+		return;
+	}
+	const auto window = Core::App().windowFor(
+		not_null(&session().account()));
+	if (!window) {
+		return;
+	}
+	const auto resumeAll = [=]() {
+		for (const auto &entry : toResume) {
+			const auto newId = FullMsgId(
+				entry.peerId,
+				session().data().nextLocalMessageId());
+			const auto fileId = entry.fileId
+				? entry.fileId
+				: base::RandomValue<uint64>();
+			auto file = MakePreparedFile(FilePrepareDescriptor{
+				kEmptyTaskId,
+				fileId,
+				SendMediaType::File,
+				FileLoadTo(
+					entry.peerId,
+					Api::SendOptions(),
+					FullReplyTo(),
+					MsgId()),
+			});
+			file->filepath = entry.filePath;
+			file->filesize = entry.fileSize;
+			file->filename = QFileInfo(entry.filePath).fileName();
+			file->filemime = Core::MimeTypeForFile(
+				QFileInfo(entry.filePath)).name();
+			const auto now = int(base::unixtime::now());
+			const auto docProto = MTP_document(
+				MTP_flags(0),
+				MTP_long(fileId),
+				MTP_long(0),
+				MTP_bytes(),
+				MTP_int(now),
+				MTP_string(file->filemime),
+				MTP_long(file->filesize),
+				MTP_vector<MTPPhotoSize>(),
+				MTPVector<MTPVideoSize>(),
+				MTP_int(0),
+				MTP_vector<MTPDocumentAttribute>({
+					MTP_documentAttributeFilename(
+						MTP_string(file->filename)),
+				}));
+			file->document = MTPDocument(docProto);
+
+			const auto peer = session().data().peer(entry.peerId);
+			if (peer) {
+				const auto history = session().data().history(peer);
+				const auto doc = session().data().processDocument(
+					file->document);
+				doc->uploadingData = std::make_unique<Data::UploadState>(
+					doc->size);
+				auto flags = NewMessageFlags(peer);
+				history->addNewLocalMessage({
+					.id = newId.msg,
+					.flags = flags,
+					.from = session().userPeerId(),
+					.date = base::unixtime::now(),
+				}, doc, TextWithEntities{});
+			}
+			upload(newId, file, entry.partsSent);
+			if (peer) {
+				const auto newDoc = session().data().document(file->id);
+				if (newDoc && newDoc->uploading()) {
+					newDoc->uploadingData->offset = std::min(
+						newDoc->uploadingData->size,
+						entry.sentSize);
+				}
+			}
+			LOG(("Uploader: resuming upload for %1").arg(entry.filePath));
+		}
+		const auto root = DownloadRootPath(&session());
+		if (!root.isEmpty()) {
+			const auto dir = QDir(root);
+			const auto files = dir.entryList(
+				QStringList(u"UL_*"_q),
+				QDir::Files,
+				QDir::Name);
+			for (const auto &file : files) {
+				(void)QFile(dir.absoluteFilePath(file)).remove();
+			}
+		}
+	};
+	auto box = Box([=](not_null<Ui::GenericBox*> box) {
+		box->setCloseByOutsideClick(false);
+		box->setCloseByEscape(false);
+		auto text = tr::lng_upload_resume_multiple(
+			tr::now,
+			lt_count, int(toResume.size()));
+		box->addRow(object_ptr<Ui::FlatLabel>(
+			box.get(),
+			text,
+			st::boxLabel));
+		box->addButton(tr::lng_upload_resume_cancel(), [=] {
+			box->closeBox();
+			auto cancelBox = Box([=](not_null<Ui::GenericBox*> cancelBox) {
+				cancelBox->setCloseByOutsideClick(false);
+				cancelBox->setCloseByEscape(false);
+				cancelBox->addRow(object_ptr<Ui::FlatLabel>(
+					cancelBox.get(),
+					tr::lng_upload_cancel_confirm(tr::now),
+					st::boxLabel));
+				cancelBox->addButton(tr::lng_upload_cancel_yes(), [=] {
+					cancelBox->closeBox();
+					crl::on_main([=] {
+						const auto root = DownloadRootPath(&session());
+						if (!root.isEmpty()) {
+							const auto dir = QDir(root);
+							const auto files = dir.entryList(
+								QStringList(u"UL_*"_q),
+								QDir::Files,
+								QDir::Name);
+							for (const auto &file : files) {
+								(void)QFile(dir.absoluteFilePath(file)).remove();
+							}
+						}
+						notifyListChanged();
+					});
+				});
+				cancelBox->addButton(tr::lng_upload_cancel_no(), [=] {
+					cancelBox->closeBox();
+					crl::on_main([=] { notifyListChanged(); });
+				});
+			});
+			window->show(std::move(cancelBox));
+		}, st::attentionBoxButton);
+		box->addButton(tr::lng_upload_resume_later(), [=] {
+			box->closeBox();
+			crl::on_main([=] {
+				_paused = true;
+				_pausedId = FullMsgId(
+					PeerId(1),
+					session().data().nextLocalMessageId());
+				resumeEntriesFromDisk();
+			});
+		});
+		box->addButton(tr::lng_upload_resume_yes(), [=] {
+			box->closeBox();
+			crl::on_main([=] {
+				resumeAll();
+				notifyListChanged();
+			});
+		});
+	});
+	window->show(std::move(box));
+	window->activate();
+}
+
+void Uploader::showQuitUnfinished(not_null<Window::Controller*> window, Fn<void()> quit) {
+	if (!anyUploads()) {
+		if (quit) {
+			quit();
+		}
+		return;
+	}
+	auto count = 0;
+	for (const auto &entry : _queue) {
+		if (entry.file && !entry.file->filepath.isEmpty()) {
+			++count;
+		}
+	}
+	if (!count) {
+		if (quit) {
+			quit();
+		}
+		return;
+	}
+	auto box = Box([=](not_null<Ui::GenericBox*> box) {
+		box->setCloseByOutsideClick(false);
+		box->setCloseByEscape(false);
+		box->addRow(object_ptr<Ui::FlatLabel>(
+			box.get(),
+			tr::lng_upload_quit_unfinished(
+				tr::now,
+				lt_count, count),
+			st::boxLabel));
+		box->addButton(tr::lng_upload_quit_cancel(), [=] {
+			box->closeBox();
+			auto confirmBox = Box([=](not_null<Ui::GenericBox*> confirmBox) {
+				confirmBox->setCloseByOutsideClick(false);
+				confirmBox->setCloseByEscape(false);
+				confirmBox->addRow(object_ptr<Ui::FlatLabel>(
+					confirmBox.get(),
+					tr::lng_upload_cancel_confirm(tr::now),
+					st::boxLabel));
+				confirmBox->addButton(tr::lng_upload_cancel_yes(), [=] {
+					confirmBox->closeBox();
+					crl::on_main([=] {
+						cancelAll();
+						const auto root = DownloadRootPath(&session());
+						if (!root.isEmpty()) {
+							const auto dir = QDir(root);
+							const auto files = dir.entryList(
+								QStringList(u"UL_*"_q),
+								QDir::Files,
+								QDir::Name);
+							for (const auto &file : files) {
+								(void)QFile(dir.absoluteFilePath(file)).remove();
+							}
+						}
+						if (quit) {
+							quit();
+						}
+					});
+				});
+				confirmBox->addButton(tr::lng_upload_cancel_no(), [=] {
+					confirmBox->closeBox();
+				});
+			});
+			window->show(std::move(confirmBox));
+		}, st::attentionBoxButton);
+		box->addButton(tr::lng_upload_quit_pause(), [=] {
+			box->closeBox();
+			pauseAllUploads();
+			Core::Quit();
+		});
+		box->addButton(tr::lng_upload_quit_continue(), [=] {
+			box->closeBox();
+		});
+	});
+	window->show(std::move(box));
+	window->activate();
+}
+
+rpl::producer<> Uploader::loadingListChanges() const {
+	return _uploadListChanges.events();
+}
+
+void Uploader::notifyListChanged() {
+	_uploadListChanges.fire(rpl::empty_value{});
+}
+
+rpl::producer<> Uploader::finishedUploadsCleared() const {
+	return _finishedUploadsCleared.events();
+}
+
+rpl::producer<UploadProgress> Uploader::uploadProgressValue() const {
+	return _uploadProgress.value();
+}
+
+bool Uploader::anyUploads() const {
+	return !_queue.empty();
+}
+
+bool Uploader::anyUploadsPaused() const {
+	return !!_pausedId;
+}
+
+bool Uploader::isPaused() const {
+	return _paused;
+}
+
+int Uploader::queueSize() const {
+	return int(_queue.size());
+}
+
+bool Uploader::wasUploaded(FullMsgId itemId) const {
+	return _finishedUploads.contains(itemId);
+}
+
+int Uploader::anyFinishedUploads() const {
+	return int(_finishedUploads.size());
+}
+
+void Uploader::clearFinishedUploads() {
+	_finishedUploads.clear();
+	_finishedUploadsList.clear();
+	_finishedUploadsCleared.fire(rpl::empty_value{});
+	notifyListChanged();
+	session().account().local().updateUploads(serializeFinishedUploads());
+}
+
+rpl::producer<FullMsgId> Uploader::finishedUploadAdded() const {
+	return _finishedUploadAdded.events();
+}
+
+rpl::producer<FullMsgId> Uploader::finishedUploadRemoved() const {
+	return _finishedUploadRemoved.events();
+}
+
+bool Uploader::allFinished() const {
+	return _queue.empty() && !_finishedUploads.empty();
+}
+
+const std::vector<Uploader::FinishedUpload> &Uploader::finishedUploadList() const {
+	return _finishedUploadsList;
+}
+
+void Uploader::removeFinishedUpload(FullMsgId itemId) {
+	_finishedUploads.erase(itemId);
+	_finishedUploadsList.erase(
+		ranges::remove(_finishedUploadsList, itemId, &FinishedUpload::itemId),
+		end(_finishedUploadsList));
+	_finishedUploadRemoved.fire_copy(itemId);
+	notifyListChanged();
+	session().account().local().updateUploads(serializeFinishedUploads());
+}
+
+void Uploader::deleteFinishedUpload(FullMsgId itemId) {
+	QString filenameToRemove;
+	for (const auto &entry : _finishedUploadsList) {
+		if (entry.itemId == itemId) {
+			filenameToRemove = entry.filename;
+			break;
+		}
+	}
+	if (!filenameToRemove.isEmpty()
+		&& QFileInfo::exists(filenameToRemove)) {
+		Platform::File::MoveToTrash(filenameToRemove);
+	}
+	removeFinishedUpload(itemId);
+}
+
+void Uploader::deleteAllFinishedUploads() {
+	for (const auto &entry : _finishedUploadsList) {
+		if (!entry.filename.isEmpty()
+			&& QFileInfo::exists(entry.filename)) {
+			Platform::File::MoveToTrash(entry.filename);
+		}
+	}
+	clearFinishedUploads();
+}
+
+std::vector<Uploader::UiUploadInfo> Uploader::activeUploads() const {
+	auto result = std::vector<UiUploadInfo>();
+	result.reserve(_queue.size());
+	for (const auto &entry : _queue) {
+		auto info = UiUploadInfo();
+		info.itemId = entry.itemId;
+		if (entry.file) {
+			info.filename = entry.file->filepath;
+			info.total = entry.file->filesize;
+			info.offset = entry.docSentSize + entry.sentSize;
+		}
+		info.paused = (entry.itemId == _pausedId);
+		result.push_back(std::move(info));
+	}
+	return result;
+}
+
+std::vector<Uploader::UiPendingUpload> Uploader::pendingUploads() const {
+	auto result = std::vector<UiPendingUpload>();
+	const auto root = DownloadRootPath(&session());
+	if (root.isEmpty()) {
+		return result;
+	}
+	const auto dir = QDir(root);
+	const auto files = dir.entryList(
+		QStringList(u"UL_*"_q),
+		QDir::Files,
+		QDir::Name);
+	for (const auto &file : files) {
+		const auto path = dir.absoluteFilePath(file);
+		auto f = QFile(path);
+		if (!f.open(QIODevice::ReadOnly)) {
+			continue;
+		}
+		const auto doc = QJsonDocument::fromJson(f.readAll()).object();
+		const auto entries = doc[u"entries"_q].toArray();
+		for (const auto &val : entries) {
+			const auto obj = val.toObject();
+			const auto filePath = obj[u"file_path"_q].toString();
+			if (!QFileInfo::exists(filePath)) {
+				continue;
+			}
+			auto info = UiPendingUpload();
+			info.filename = QFileInfo(filePath).fileName();
+			info.total = obj[u"file_size"_q].toVariant().toLongLong();
+			info.sent = obj[u"sent_size"_q].toVariant().toLongLong();
+			info.itemId = FullMsgId(
+				PeerId(PeerIdHelper(obj[u"peer_id"_q].toVariant().toULongLong())),
+				MsgId(0));
+			result.push_back(std::move(info));
+		}
+	}
+	return result;
+}
+
+QString Uploader::firstUploadName() const {
+	if (_queue.empty()) {
+		return QString();
+	}
+	const auto &file = _queue.front().file;
+	if (!file) {
+		return QString();
+	}
+	return QFileInfo(file->filepath).fileName();
+}
+
+QString Uploader::firstPendingUploadName() const {
+	const auto root = DownloadRootPath(&session());
+	if (root.isEmpty()) {
+		return QString();
+	}
+	const auto dir = QDir(root);
+	const auto files = dir.entryList(
+		QStringList(u"UL_*"_q),
+		QDir::Files,
+		QDir::Name);
+	for (const auto &file : files) {
+		const auto path = dir.absoluteFilePath(file);
+		auto f = QFile(path);
+		if (!f.open(QIODevice::ReadOnly)) {
+			continue;
+		}
+		const auto doc = QJsonDocument::fromJson(f.readAll()).object();
+		const auto entries = doc[u"entries"_q].toArray();
+		for (const auto &val : entries) {
+			const auto obj = val.toObject();
+			const auto filePath = obj[u"file_path"_q].toString();
+			if (QFileInfo::exists(filePath)) {
+				return QFileInfo(filePath).fileName();
+			}
+		}
+	}
+	return QString();
+}
+
+void Uploader::pauseAllUploads() {
+	for (const auto &entry : _queue) {
+		pause(entry.itemId);
+	}
+	_paused = true;
+	saveResumeState();
+	notifyListChanged();
+}
+
+void Uploader::resumeAllUploads() {
+	_paused = false;
+	saveResumeState();
+	if (_queue.empty()) {
+		resumeEntriesFromDisk();
+	} else {
+		unpause();
+	}
+}
+
+void Uploader::resumeEntriesFromDisk() {
+	const auto root = DownloadRootPath(&session());
+	if (root.isEmpty()) {
+		return;
+	}
+	const auto dir = QDir(root);
+	const auto files = dir.entryList(
+		QStringList(u"UL_*"_q),
+		QDir::Files,
+		QDir::Name);
+	auto toResume = QVector<Uploader::ResumeEntry>();
+	for (const auto &file : files) {
+		const auto path = dir.absoluteFilePath(file);
+		auto f = QFile(path);
+		if (!f.open(QIODevice::ReadOnly)) {
+			continue;
+		}
+		const auto doc = QJsonDocument::fromJson(f.readAll()).object();
+		const auto entries = doc[u"entries"_q].toArray();
+		for (const auto &val : entries) {
+			const auto obj = val.toObject();
+			auto entry = Uploader::ResumeEntry();
+			entry.filePath = obj[u"file_path"_q].toString();
+			entry.fileSize = obj[u"file_size"_q].toVariant().toLongLong();
+			const auto partsSent = ushort(obj[u"parts_sent"_q].toVariant().toUInt());
+			const auto docPartsSent = ushort(obj[u"doc_parts_sent"_q].toVariant().toUInt());
+			entry.partsSent = std::max(partsSent, docPartsSent);
+			entry.sentSize = obj[u"sent_size"_q].toVariant().toLongLong();
+			entry.peerId = PeerId(PeerIdHelper(obj[u"peer_id"_q].toVariant().toULongLong()));
+			const auto fileIdVal = obj[u"file_id"_q];
+			if (fileIdVal.isString()) {
+				entry.fileId = fileIdVal.toString().toULongLong();
+			} else {
+				entry.fileId = 0;
+				entry.partsSent = 0;
+			}
+			if (QFileInfo::exists(entry.filePath)) {
+				toResume.push_back(entry);
+			}
+		}
+	}
+	if (toResume.empty()) {
+		return;
+	}
+	for (const auto &entry : toResume) {
+		const auto newId = FullMsgId(
+			entry.peerId,
+			session().data().nextLocalMessageId());
+		const auto fileId = entry.fileId
+			? entry.fileId
+			: base::RandomValue<uint64>();
+		auto file = MakePreparedFile(FilePrepareDescriptor{
+			kEmptyTaskId,
+			fileId,
+			SendMediaType::File,
+			FileLoadTo(
+				entry.peerId,
+				Api::SendOptions(),
+				FullReplyTo(),
+				MsgId()),
+		});
+		file->filepath = entry.filePath;
+		file->filesize = entry.fileSize;
+		file->filename = QFileInfo(entry.filePath).fileName();
+		file->filemime = Core::MimeTypeForFile(
+				QFileInfo(entry.filePath)).name();
+		const auto now = int(base::unixtime::now());
+		const auto docProto = MTP_document(
+			MTP_flags(0),
+			MTP_long(fileId),
+			MTP_long(0),
+			MTP_bytes(),
+			MTP_int(now),
+			MTP_string(file->filemime),
+			MTP_long(file->filesize),
+			MTP_vector<MTPPhotoSize>(),
+			MTPVector<MTPVideoSize>(),
+			MTP_int(0),
+			MTP_vector<MTPDocumentAttribute>({
+				MTP_documentAttributeFilename(
+					MTP_string(file->filename)),
+			}));
+		file->document = MTPDocument(docProto);
+
+		const auto peer = session().data().peer(entry.peerId);
+		if (peer) {
+			const auto history = session().data().history(peer);
+			const auto doc = session().data().processDocument(
+				file->document);
+			doc->uploadingData = std::make_unique<Data::UploadState>(
+				doc->size);
+			auto flags = NewMessageFlags(peer);
+			history->addNewLocalMessage({
+				.id = newId.msg,
+				.flags = flags,
+				.from = session().userPeerId(),
+				.date = base::unixtime::now(),
+			}, doc, TextWithEntities{});
+		}
+		upload(newId, file, entry.partsSent);
+		if (!_queue.empty() && entry.sentSize > 0) {
+			_queue.back().docSentSize = entry.sentSize;
+		}
+		if (peer) {
+			const auto newDoc = session().data().document(file->id);
+			if (newDoc && newDoc->uploading()) {
+				newDoc->uploadingData->offset = std::min(
+					newDoc->uploadingData->size,
+					entry.sentSize);
+			}
+		}
+		LOG(("Uploader: resuming upload for %1").arg(entry.filePath));
+	}
+	if (!_paused) {
+		for (const auto &file : files) {
+			(void)QFile(dir.absoluteFilePath(file)).remove();
+		}
+	}
+	auto totalSent = int64(0);
+	auto totalSize = int64(0);
+	for (const auto &e : _queue) {
+		totalSent += e.docSentSize + e.sentSize;
+		totalSize += e.file ? e.file->filesize : 0;
+	}
+	_uploadProgress = UploadProgress{
+		.fullId = FullMsgId(),
+		.offset = totalSent,
+		.size = totalSize,
+		.partSize = 0,
+	};
+	notifyListChanged();
 }
 
 } // namespace Storage

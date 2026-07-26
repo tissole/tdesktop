@@ -33,6 +33,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/search_field_controller.h"
 #include "ui/ui_utility.h"
 #include "core/application.h"
+#include "storage/file_upload.h"
 #include "calls/calls_instance.h"
 #include "core/shortcuts.h"
 #include "window/window_session_controller.h"
@@ -473,6 +474,15 @@ void WrapWidget::setupTopBarMenuToggle() {
 		addTopBarMenuButton();
 	} else if (section.type() == Section::Type::Downloads) {
 		auto &manager = Core::App().downloadManager();
+		const auto hasUploads = [=] {
+			if (const auto s = Core::App().maybePrimarySession()) {
+				return s->uploader().anyUploads()
+					|| s->uploader().isPaused()
+					|| s->uploader().anyFinishedUploads() > 0
+					|| s->uploader().pendingResumeCount() > 0;
+			}
+			return false;
+		};
 		rpl::merge(
 			rpl::single(false),
 			manager.loadingListChanges() | rpl::map_to(false),
@@ -486,7 +496,7 @@ void WrapWidget::setupTopBarMenuToggle() {
 				for ([[maybe_unused]] const auto id : manager.loadedList()) {
 					return true;
 				}
-				return false;
+				return hasUploads();
 			};
 			if (!definitelyHas && !has()) {
 				_topBarMenuToggle = nullptr;
@@ -494,6 +504,31 @@ void WrapWidget::setupTopBarMenuToggle() {
 				addTopBarMenuButton();
 			}
 		}, _topBar->lifetime());
+		if (const auto s = Core::App().maybePrimarySession()) {
+			s->uploader().loadingListChanges(
+			) | rpl::on_next([=] {
+				if (hasUploads() && !_topBarMenuToggle) {
+					addTopBarMenuButton();
+				}
+			}, _topBar->lifetime());
+			s->uploader().finishedUploadsCleared(
+			) | rpl::on_next([=, &manager] {
+				const auto hasDownloads = [&] {
+					for ([[maybe_unused]] const auto id
+						: manager.loadingList()) {
+						return true;
+					}
+					for ([[maybe_unused]] const auto id
+						: manager.loadedList()) {
+						return true;
+					}
+					return false;
+				};
+				if (!hasUploads() && !hasDownloads()) {
+					_topBarMenuToggle = nullptr;
+				}
+			}, _topBar->lifetime());
+		}
 	} else if (key.giftsPeer()) {
 		addTopBarMenuButton();
 	}

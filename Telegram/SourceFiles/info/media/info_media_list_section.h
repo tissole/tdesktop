@@ -35,6 +35,7 @@ public:
 	[[nodiscard]] int oneColumnRightPadding() const;
 
 	bool removeItem(not_null<const HistoryItem*> item);
+	void removeLayout(not_null<BaseLayout*> layout);
 	void reorderItems(int oldPosition, int newPosition);
 	[[nodiscard]] std::optional<ListFoundItem> findItemByItem(
 		not_null<const HistoryItem*> item) const;

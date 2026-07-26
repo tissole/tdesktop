@@ -30,6 +30,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_download_manager.h"
 #include "data/data_forum_topic.h"
 #include "data/data_saved_sublist.h"
+#include "storage/file_upload.h"
 #include "history/view/media/history_view_save_document_action.h"
 #include "history/view/history_view_cursor_state.h"
 #include "history/view/history_view_service_message.h"
@@ -188,6 +189,9 @@ void ListWidget::start() {
 			_overLayout = nullptr;
 		}
 		_heavyLayouts.remove(layout);
+		for (auto &section : _sections) {
+			section.removeLayout(layout);
+		}
 	}, lifetime());
 
 	_provider->refreshed(
@@ -1150,7 +1154,7 @@ void ListWidget::showContextMenu(
 	_contextMenu = base::make_unique_q<Ui::PopupMenu>(
 		this,
 		st::popupMenuWithIcons);
-	if (item->isHistoryEntry()) {
+	if (item->isHistoryEntry() || _controller->isDownloads()) {
 		_contextMenu->addAction(
 			tr::lng_context_to_msg(tr::now),
 			[=] {
@@ -1179,7 +1183,7 @@ void ListWidget::showContextMenu(
 						lnkDocument->cancel();
 					},
 					&st::menuIconCancel);
-			} else {
+			} else if (!lnkDocument->uploading()) {
 				const auto filepath = _provider->showInFolderPath(
 					item,
 					lnkDocument);
@@ -1312,8 +1316,40 @@ void ListWidget::showContextMenu(
 					crl::guard(this, [=] { forwardItem(globalId); }),
 					&st::menuIconForward);
 			}
+			const auto isUpload = [&]() -> bool {
+				if (const auto media = item->media()) {
+					if (const auto doc = media->document()) {
+						return doc->uploading();
+					}
+					if (const auto photo = media->photo()) {
+						return photo->uploading();
+					}
+				}
+				return false;
+			}();
+			if (isUpload) {
+				const auto itemId = item->fullId();
+				_contextMenu->addAction(
+					tr::lng_context_cancel_upload(tr::now),
+					crl::guard(this, [=] {
+						_controller->session().uploader().cancel(
+							itemId);
+					}),
+					&st::menuIconCancel);
+			}
 			if (selectionData.canDelete) {
-				if (_controller->isDownloads()) {
+				if (_controller->isDownloads()
+					&& _controller->session().uploader()
+						.wasUploaded(globalId.itemId)) {
+					_contextMenu->addAction(
+						tr::lng_context_delete_from_disk(tr::now),
+						crl::guard(this, [=] {
+							_controller->session().uploader()
+								.deleteFinishedUpload(
+									globalId.itemId);
+						}),
+						&st::menuIconDelete);
+				} else if (_controller->isDownloads()) {
 					_contextMenu->addAction(
 						tr::lng_context_delete_from_disk(tr::now),
 						crl::guard(this, [=] { deleteItem(globalId); }),
@@ -1567,12 +1603,25 @@ void ListWidget::deleteItems(SelectedItems &&items, Fn<void()> confirmed) {
 					box->closeBox();
 				}
 			});
-			const auto ids = ranges::views::all(
-				items.list
-			) | ranges::views::transform([](const SelectedItem &item) {
-				return item.globalId;
-			}) | ranges::to_vector;
-			Core::App().downloadManager().deleteFiles(ids);
+			auto downloadIds = std::vector<GlobalMsgId>();
+			auto uploadIds = std::vector<FullMsgId>();
+			for (const auto &entry : items.list) {
+				if (_controller->session().uploader()
+						.wasUploaded(entry.globalId.itemId)) {
+					uploadIds.push_back(entry.globalId.itemId);
+				} else {
+					downloadIds.push_back(entry.globalId);
+				}
+			}
+			if (!downloadIds.empty()) {
+				Core::App().downloadManager().deleteFiles(downloadIds);
+			}
+			if (!uploadIds.empty()) {
+				for (const auto id : uploadIds) {
+					_controller->session().uploader()
+						.removeFinishedUpload(id);
+				}
+			}
 			if (confirmed) {
 				confirmed();
 			}

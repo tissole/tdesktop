@@ -23,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item_helpers.h"
 #include "history/history.h"
 #include "core/application.h"
+#include "storage/file_upload.h"
 #include "storage/storage_shared_media.h"
 #include "layout/layout_selection.h"
 #include "styles/style_overview.h"
@@ -145,7 +146,14 @@ void Provider::refreshViewer() {
 		}
 		for (const auto &item : copy) {
 			Assert(!_downloaded.contains(item));
-			remove(item);
+			const auto inPostponed = ranges::contains(
+				_addPostponed,
+				item,
+				&Element::item);
+			_downloading.remove(item);
+			if (!inPostponed) {
+				remove(item);
+			}
 		}
 		if (!_fullCount.has_value()) {
 			refreshPostponed(false);
@@ -179,6 +187,128 @@ void Provider::refreshViewer() {
 			_fullCount = 0;
 		}
 	}, _lifetime);
+
+	if (const auto session = Core::App().maybePrimarySession()) {
+		auto pull = [=] {
+			auto copy = _uploading;
+			for (const auto &info : session->uploader().activeUploads()) {
+				const auto item = session->data().message(info.itemId);
+				if (!item) continue;
+				if (!copy.remove(info.itemId)
+					&& !_uploaded.contains(info.itemId)
+					&& !_downloading.contains(item)
+					&& !_downloaded.contains(item)) {
+					_uploading.emplace(info.itemId);
+					addElementNow({
+						.item = item,
+						.started = int64(item->date()) * 1000,
+						.path = info.filename,
+					});
+					refreshPostponed(true);
+				}
+			}
+			for (const auto &left : copy) {
+				_uploading.remove(left);
+				_uploaded.emplace(left);
+			}
+		};
+		rpl::single(rpl::empty) | rpl::then(
+			session->uploader().loadingListChanges() | rpl::to_empty
+		) | rpl::on_next(pull, _lifetime);
+
+		session->uploader().documentFailed(
+		) | rpl::on_next([=](FullMsgId itemId) {
+			_uploading.remove(itemId);
+			_uploaded.remove(itemId);
+			if (const auto item = session->data().message(itemId)) {
+				remove(item);
+				item->destroy();
+			}
+		}, _lifetime);
+		session->uploader().photoFailed(
+		) | rpl::on_next([=](FullMsgId itemId) {
+			_uploading.remove(itemId);
+			_uploaded.remove(itemId);
+			if (const auto item = session->data().message(itemId)) {
+				remove(item);
+				item->destroy();
+			}
+		}, _lifetime);
+
+		for (const auto &info : session->uploader().finishedUploadList()) {
+			const auto item = session->data().message(info.itemId);
+			if (!item) continue;
+			if (!_uploaded.contains(info.itemId)
+				&& !_uploading.contains(info.itemId)) {
+				_uploaded.emplace(info.itemId);
+				addElementNow({
+					.item = item,
+					.started = (info.started
+						? info.started
+						: int64(item->date()) * 1000),
+					.path = info.filename,
+				});
+				refreshPostponed(true);
+			}
+		}
+
+		session->uploader().finishedUploadAdded(
+		) | rpl::on_next([=](FullMsgId itemId) {
+			const auto item = session->data().message(itemId);
+			if (!item) return;
+			if (!_uploaded.contains(itemId)
+				&& !_uploading.contains(itemId)) {
+				_uploaded.emplace(itemId);
+				addElementNow({
+					.item = item,
+					.started = int64(item->date()) * 1000,
+					.path = QString(),
+				});
+				refreshPostponed(true);
+			}
+		}, _lifetime);
+
+		session->uploader().finishedUploadsCleared(
+		) | rpl::on_next([=] {
+			const auto copy = _uploaded;
+			for (const auto &itemId : copy) {
+				const auto item = session->data().message(itemId);
+				if (!item) {
+					_uploaded.remove(itemId);
+					continue;
+				}
+				_uploaded.remove(itemId);
+				remove(item);
+			}
+		}, _lifetime);
+
+		session->uploader().finishedUploadRemoved(
+		) | rpl::on_next([=](FullMsgId itemId) {
+			if (_uploaded.remove(itemId)) {
+				if (const auto item = session->data().message(itemId)) {
+					remove(item);
+				}
+			}
+		}, _lifetime);
+
+		session->data().itemIdChanged(
+		) | rpl::on_next([=](const Data::Session::IdChange &change) {
+			const auto oldFullId = FullMsgId(change.newId.peer, change.oldId);
+			if (_uploaded.remove(oldFullId)) {
+				_uploaded.emplace(change.newId);
+			}
+			if (_uploading.remove(oldFullId)) {
+				_uploading.emplace(change.newId);
+			}
+			if (const auto item = session->data().message(change.newId)) {
+				if (const auto i = _layouts.find(item); i != _layouts.end()) {
+					_layoutRemoved.fire(i->second.item.get());
+					_layouts.erase(i);
+					refreshPostponed(false);
+				}
+			}
+		}, _lifetime);
+	}
 
 	performAdd();
 	performRefresh();
@@ -462,7 +592,13 @@ ListItemSelectionData Provider::computeSelectionData(
 		not_null<const HistoryItem*> item,
 		TextSelection selection) {
 	auto result = ListItemSelectionData(selection);
-	result.canDelete = true;
+	const auto isUploadInProgress = [&] {
+		if (const auto media = item->media()) {
+			return media->uploading();
+		}
+		return false;
+	}();
+	result.canDelete = !isUploadInProgress;
 	result.canForward = item->allowsForward()
 		&& (&item->history()->session() == &_controller->session());
 	return result;
@@ -522,6 +658,11 @@ bool Provider::allowSaveFileAs(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) {
 	return false;
+}
+
+bool Provider::isUploadItem(not_null<const HistoryItem*> item) {
+	return _uploading.contains(item->fullId())
+		|| _uploaded.contains(item->fullId());
 }
 
 QString Provider::showInFolderPath(

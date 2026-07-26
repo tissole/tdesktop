@@ -23,6 +23,13 @@ inline void UnsafeOpenEmailLink(const QString &email) {
 inline void PostprocessDownloaded(const QString &filepath) {
 }
 
+inline bool MoveToTrash(const QString &filepath) {
+	if (filepath.isEmpty() || !QFileInfo::exists(filepath)) {
+		return false;
+	}
+	return QFile(filepath).remove();
+}
+
 } // namespace File
 
 namespace FileDialog {

@@ -165,6 +165,8 @@ Session::Session(
 , _saveSettingsTimer([=] { saveSettings(); }) {
 	Expects(_settings != nullptr);
 
+	_uploader->finishInit();
+
 	_api->requestTermsUpdate();
 	_api->requestFullPeer(_user);
 

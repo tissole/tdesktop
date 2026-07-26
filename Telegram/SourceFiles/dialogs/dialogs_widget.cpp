@@ -64,6 +64,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_slide_animation.h"
 #include "window/window_connecting_widget.h"
 #include "window/window_main_menu.h"
+#include "storage/file_upload.h"
 #include "storage/storage_media_prepare.h"
 #include "storage/storage_account.h"
 #include "storage/storage_domain.h"
@@ -714,6 +715,7 @@ Widget::Widget(
 
 		setupMoreChatsBar();
 		setupDownloadBar();
+		setupUploadBar();
 		setupShortcuts(controller);
 	}
 	setupSwipeBack();
@@ -1266,6 +1268,50 @@ void Widget::setupDownloadBar() {
 					Info::Downloads::Make(
 						controller()->session().user()));
 			}, _downloadBar->lifetime());
+
+			if (_connecting) {
+				_connecting->raise();
+			}
+		}
+	}, lifetime());
+}
+
+void Widget::setupUploadBar() {
+	if (_layout == Layout::Child) {
+		return;
+	}
+
+	Data::MakeUploadBarContent(
+	) | rpl::on_next([=](Ui::DownloadBarContent &&content) {
+		const auto create = (content.uploadCount && !_uploadBar);
+		if (create) {
+			_uploadBar = std::make_unique<Ui::DownloadBar>(
+				this,
+				Data::MakeUploadBarProgress());
+		}
+		if (_uploadBar) {
+			_uploadBar->show(std::move(content));
+		}
+		if (create) {
+			_uploadBar->heightValue(
+			) | rpl::on_next([=] {
+				updateControlsGeometry();
+			}, _uploadBar->lifetime());
+
+			_uploadBar->shownValue(
+			) | rpl::filter(
+				!rpl::mappers::_1
+			) | rpl::on_next([=] {
+				_uploadBar = nullptr;
+				updateControlsGeometry();
+			}, _uploadBar->lifetime());
+
+			_uploadBar->clicks(
+			) | rpl::on_next([=] {
+				controller()->showSection(
+					Info::Downloads::Make(
+						controller()->session().user()));
+			}, _uploadBar->lifetime());
 
 			if (_connecting) {
 				_connecting->raise();
@@ -4052,6 +4098,7 @@ void Widget::updateControlsGeometry() {
 		}
 	};
 	putBottomButton(_updateTelegram);
+	putBottomButton(_uploadBar);
 	putBottomButton(_downloadBar);
 	putBottomButton(_loadMoreChats);
 	if (_connecting) {
@@ -4502,6 +4549,7 @@ Widget::~Widget() {
 
 	// Destructor may hide the bar and attempt to double-destroy it.
 	base::take(_downloadBar);
+	base::take(_uploadBar);
 }
 
 } // namespace Dialogs

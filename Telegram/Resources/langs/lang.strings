@@ -5239,6 +5239,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_translate_cocoon_done" = "Understood";
 
 "lng_downloads_section" = "Downloads";
+"lng_uploads_section" = "Uploads";
 "lng_downloads_view_in_chat" = "View in chat";
 "lng_downloads_view_in_section" = "View in downloads";
 "lng_downloads_delete_sure_one" = "Do you want to delete this file?";
@@ -5247,20 +5248,39 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_downloads_delete_sure#other" = "Do you want to delete {count} files?";
 "lng_downloads_delete_in_cloud_one" = "It will be deleted from your disk, but will remain accessible in the cloud.";
 "lng_downloads_delete_in_cloud" = "They will be deleted from your disk, but will remain accessible in the cloud.";
+"lng_downloads_delete_all_downloads" = "Delete all downloads";
 "lng_downloads_pause_all" = "Pause all downloads";
 "lng_downloads_resume_all" = "Resume all downloads";
 "lng_downloads_cancel_all" = "Cancel all downloads";
-"lng_downloads_clear_list" = "Clear list";
-"lng_downloads_quit_confirm" = "You have unfinished downloads. Do you want to pause them, cancel them or continue?";
+"lng_downloads_clear_list" = "Clear downloads";
+"lng_downloads_quit_confirm#one" = "You have unfinished {count} download. Do you want to continue downloading, cancel or pause?";
+"lng_downloads_quit_confirm#other" = "You have unfinished {count} downloads. Do you want to continue downloading, cancel or pause?";
 "lng_downloads_quit_pause" = "Pause";
 "lng_downloads_quit_cancel" = "Cancel";
 "lng_downloads_quit_continue" = "Continue";
+"lng_download_cancel_confirm" = "Are you sure you want to cancel downloading?";
+"lng_download_cancel_yes" = "Yes";
+"lng_download_cancel_no" = "No";
 
 "lng_downloads_resume_unfinished#one" = "You have {count} unfinished download. Do you want to resume it, cancel it or decide later?";
 "lng_downloads_resume_unfinished#other" = "You have {count} unfinished downloads. Do you want to resume them, cancel them or decide later?";
 "lng_downloads_resume_yes" = "Resume";
 "lng_downloads_resume_cancel" = "Cancel";
 "lng_downloads_resume_later" = "Later";
+
+"lng_upload_resume_multiple#one" = "You have {count} unfinished upload. Do you want to resume it, cancel it or decide later?";
+"lng_upload_resume_multiple#other" = "You have {count} unfinished uploads. Do you want to resume them, cancel them or decide later?";
+"lng_upload_resume_yes" = "Resume";
+"lng_upload_resume_cancel" = "Cancel";
+"lng_upload_resume_later" = "Later";
+"lng_upload_cancel_confirm" = "Are you sure you want to cancel uploading?";
+"lng_upload_cancel_yes" = "Yes";
+"lng_upload_cancel_no" = "No";
+"lng_upload_quit_unfinished#one" = "You have {count} unfinished upload. Do you want to continue uploading, cancel or pause?";
+"lng_upload_quit_unfinished#other" = "You have {count} unfinished uploads. Do you want to continue uploading, cancel or pause?";
+"lng_upload_quit_continue" = "Continue";
+"lng_upload_quit_cancel" = "Cancel";
+"lng_upload_quit_pause" = "Pause";
 
 "lng_send_image_empty" = "File: {name} is empty and can't be sent.";
 "lng_send_images_selected#one" = "{count} image selected";
@@ -8134,3 +8154,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_enhanced_forward_later" = "Later";
 
 "lng_download_duplicate_skipped" = "File already downloaded.";
+"lng_uploads_pause_all" = "Pause all uploads";
+"lng_uploads_resume_all" = "Resume all uploads";
+"lng_uploads_cancel_all" = "Cancel all uploads";
+"lng_uploads_clear_list" = "Clear uploads";
+"lng_uploads_delete_sure_all" = "Do you want to cancel all uploads?";
+"lng_uploads_empty" = "No uploads here yet";
+"lng_uploads_empty_search" = "No uploads found";
+"lng_uploads_view_in_section" = "View in uploads";
+"lng_uploads_view_in_chat" = "View in chat";
+"lng_uploads_choose_section" = "Your uploads";
+"lng_uploads_delete_all" = "Delete all uploads";
+"lng_uploads_delete_all_sure" = "Do you want to delete all uploaded files from disk? They will remain accessible in the cloud.";
+"lng_uploads_delete_all_confirm" = "Delete files";
+"lng_uploads_clear_all" = "Clear all";
+"lng_downloads_prefix" = "DL {name}";
+"lng_uploads_prefix" = "UL {name}";

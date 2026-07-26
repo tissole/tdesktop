@@ -20,5 +20,7 @@ inline void UnsafeOpenUrl(const QString &url) {
 	return ::File::internal::UnsafeOpenUrlDefault(url);
 }
 
+bool MoveToTrash(const QString &filepath);
+
 } // namespace File
 } // namespace Platform

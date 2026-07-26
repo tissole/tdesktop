@@ -307,4 +307,9 @@ private:
 
 [[nodiscard]] rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent();
 
+[[nodiscard]] auto MakeUploadBarProgress()
+-> rpl::producer<Ui::DownloadBarProgress>;
+
+[[nodiscard]] rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent();
+
 } // namespace Data

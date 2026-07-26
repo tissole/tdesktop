@@ -112,6 +112,16 @@ bool ListSection::removeItem(not_null<const HistoryItem*> item) {
 	return false;
 }
 
+void ListSection::removeLayout(not_null<BaseLayout*> layout) {
+	for (auto i = _byItem.begin(); i != _byItem.end(); ) {
+		if (i->second == layout) {
+			i = _byItem.erase(i);
+		} else {
+			++i;
+		}
+	}
+}
+
 void ListSection::reorderItems(int oldPosition, int newPosition) {
 	base::reorder(_items, oldPosition, newPosition);
 	refreshHeight();

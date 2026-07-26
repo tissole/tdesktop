@@ -19,6 +19,8 @@ class RippleButton;
 struct DownloadBarProgress {
 	int64 ready = 0;
 	int64 total = 0;
+	int64 uploadReady = 0;
+	int64 uploadTotal = 0;
 };
 
 struct DownloadBarContent {
@@ -26,6 +28,13 @@ struct DownloadBarContent {
 	QImage singleThumbnail;
 	int count = 0;
 	int done = 0;
+	int uploadCount = 0;
+	int uploadDone = 0;
+	TextWithEntities singleUploadName;
+	int64 uploadReady = 0;
+	int64 uploadTotal = 0;
+	int64 uploadSingleReady = 0;
+	int64 uploadSingleTotal = 0;
 };
 
 class DownloadBar final {

@@ -12,6 +12,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/weak_ptr.h"
 #include "mtproto/facade.h"
 
+#include <QString>
+#include <QVector>
+
 class ApiWrap;
 struct FilePrepareResult;
 
@@ -22,6 +25,10 @@ enum class SendProgressType;
 namespace Main {
 class Session;
 } // namespace Main
+
+namespace Window {
+class Controller;
+} // namespace Window
 
 namespace Storage {
 
@@ -113,12 +120,73 @@ public:
 		return _nonPremiumDelays.events();
 	}
 
+	void finishInit();
+
 	void unpause();
 	void stopSessions();
+
+	[[nodiscard]] bool hasUnfinishedResume() const;
+	[[nodiscard]] int pendingResumeCount() const;
+	void showResumeUnfinished();
+	void showQuitUnfinished(not_null<Window::Controller*> window, Fn<void()> quit);
+
+	[[nodiscard]] rpl::producer<> loadingListChanges() const;
+	void notifyListChanged();
+	[[nodiscard]] rpl::producer<> finishedUploadsCleared() const;
+	[[nodiscard]] rpl::producer<UploadProgress> uploadProgressValue() const;
+	[[nodiscard]] bool anyUploads() const;
+	[[nodiscard]] int anyFinishedUploads() const;
+	[[nodiscard]] bool anyUploadsPaused() const;
+	[[nodiscard]] bool isPaused() const;
+	[[nodiscard]] int queueSize() const;
+	[[nodiscard]] bool wasUploaded(FullMsgId itemId) const;
+	[[nodiscard]] bool allFinished() const;
+	[[nodiscard]] rpl::producer<FullMsgId> finishedUploadAdded() const;
+	[[nodiscard]] rpl::producer<FullMsgId> finishedUploadRemoved() const;
+	void clearFinishedUploads();
+	void removeFinishedUpload(FullMsgId itemId);
+	void deleteFinishedUpload(FullMsgId itemId);
+	void deleteAllFinishedUploads();
+	[[nodiscard]] QString firstUploadName() const;
+	[[nodiscard]] QString firstPendingUploadName() const;
+	void pauseAllUploads();
+	void resumeAllUploads();
+
+	struct UiUploadInfo {
+		FullMsgId itemId;
+		QString filename;
+		int64 total = 0;
+		int64 offset = 0;
+		bool paused = false;
+	};
+	[[nodiscard]] std::vector<UiUploadInfo> activeUploads() const;
+
+	struct UiPendingUpload {
+		FullMsgId itemId;
+		QString filename;
+		int64 total = 0;
+		int64 sent = 0;
+	};
+	[[nodiscard]] std::vector<UiPendingUpload> pendingUploads() const;
+
+	struct FinishedUpload {
+		FullMsgId itemId;
+		QString filename;
+		int64 started = 0;
+	};
+	[[nodiscard]] const std::vector<FinishedUpload> &finishedUploadList() const;
 
 private:
 	struct Entry;
 	struct Request;
+	struct ResumeEntry {
+		QString filePath;
+		int64 fileSize = 0;
+		ushort partsSent = 0;
+		int64 sentSize = 0;
+		PeerId peerId;
+		uint64 fileId = 0;
+	};
 
 	enum class SendResult : uchar {
 		Success,
@@ -151,6 +219,8 @@ private:
 	void partFailed(const MTP::Error &error, mtpRequestId requestId);
 	Request finishRequest(mtpRequestId requestId);
 
+	void resumeEntriesFromDisk();
+
 	void uploadVideoCover(
 		UploadedMedia &&video,
 		std::shared_ptr<FilePrepareResult> videoCover);
@@ -172,9 +242,17 @@ private:
 		Api::SendProgressType type,
 		int progress = 0);
 
+	void saveResumeState();
+	void clearResumeState(PeerId peerId, const QString &filePath);
+	[[nodiscard]] QString resumeFilePath(PeerId peerId = PeerId()) const;
+	Fn<std::optional<QByteArray>()> serializeFinishedUploads();
+	void loadFinishedUploadsFromAccount();
+
 	const not_null<ApiWrap*> _api;
 
 	std::vector<Entry> _queue;
+	base::flat_set<FullMsgId> _finishedUploads;
+	std::vector<FinishedUpload> _finishedUploadsList;
 
 	base::flat_map<mtpRequestId, Request> _requests;
 	std::vector<int> _sentPerDcIndex;
@@ -203,6 +281,14 @@ private:
 	rpl::event_stream<FullMsgId> _documentFailed;
 	rpl::event_stream<FullMsgId> _secureFailed;
 	rpl::event_stream<FullMsgId> _nonPremiumDelays;
+
+	rpl::event_stream<> _uploadListChanges;
+	rpl::event_stream<> _finishedUploadsCleared;
+	rpl::event_stream<FullMsgId> _finishedUploadAdded;
+	rpl::event_stream<FullMsgId> _finishedUploadRemoved;
+	rpl::variable<UploadProgress> _uploadProgress;
+
+	bool _paused = false;
 
 	rpl::lifetime _lifetime;
 

@@ -109,6 +109,9 @@ public:
 	void updateDownloads(Fn<std::optional<QByteArray>()> downloadsSerialize);
 	[[nodiscard]] QByteArray downloadsSerialized() const;
 
+	void updateUploads(Fn<std::optional<QByteArray>()> uploadsSerialize);
+	[[nodiscard]] QByteArray uploadsSerialized() const;
+
 	[[nodiscard]] EncryptionKey cacheKey() const;
 	[[nodiscard]] QString cachePath() const;
 	[[nodiscard]] Cache::Database::Settings cacheSettings() const;
@@ -333,6 +336,9 @@ private:
 
 	QByteArray _downloadsSerialized;
 	Fn<std::optional<QByteArray>()> _downloadsSerialize;
+
+	QByteArray _uploadsSerialized;
+	Fn<std::optional<QByteArray>()> _uploadsSerialize;
 
 	FileKey _prefsKey = 0;
 	FileKey _locationsKey = 0;

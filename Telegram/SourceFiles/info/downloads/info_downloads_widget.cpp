@@ -17,6 +17,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/ui_utility.h"
 #include "data/data_download_manager.h"
 #include "data/data_user.h"
+#include "main/main_session.h"
+#include "storage/file_upload.h"
 #include "core/application.h"
 #include "lang/lang_keys.h"
 #include "styles/style_info.h"
@@ -128,6 +130,83 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 			},
 			&st::menuIconDownload);
 	}
+	if (const auto session = Core::App().maybePrimarySession()) {
+		const auto uploadsActive = session->uploader().anyUploads();
+		const auto uploadsPaused = session->uploader().isPaused();
+		const auto onlyOnDisk = !uploadsActive
+			&& session->uploader().pendingResumeCount() > 0;
+		if (uploadsActive && !uploadsPaused) {
+			addAction(
+				tr::lng_uploads_pause_all(tr::now),
+				[=] {
+					Ui::PostponeCall(this, [] {
+						if (const auto s = Core::App().maybePrimarySession()) {
+							s->uploader().pauseAllUploads();
+						}
+					});
+				},
+				&st::menuIconSchedule);
+		} else if (uploadsPaused || onlyOnDisk) {
+			addAction(
+				tr::lng_uploads_resume_all(tr::now),
+				[=] {
+					Ui::PostponeCall(this, [] {
+						if (const auto s = Core::App().maybePrimarySession()) {
+							s->uploader().resumeAllUploads();
+						}
+					});
+				},
+				&st::menuIconDownload);
+		}
+		if (uploadsActive || uploadsPaused || onlyOnDisk) {
+			addAction(
+				tr::lng_uploads_cancel_all(tr::now),
+				[=] {
+					window->show(Ui::MakeConfirmBox({
+						.text = tr::lng_uploads_delete_sure_all(tr::now),
+						.confirmed = [=](Fn<void()> close) {
+							close();
+							if (const auto s = Core::App().maybePrimarySession()) {
+								s->uploader().cancelAll();
+							}
+						},
+						.confirmText = tr::lng_upload_cancel_yes(tr::now),
+						.cancelText = tr::lng_upload_cancel_no(tr::now),
+						.confirmStyle = &st::attentionBoxButton,
+					}));
+				},
+				&st::menuIconDelete);
+		}
+		if (session->uploader().anyFinishedUploads() > 0) {
+			addAction(
+				tr::lng_uploads_clear_list(tr::now),
+				[=] {
+					if (const auto s = Core::App().maybePrimarySession()) {
+						s->uploader().clearFinishedUploads();
+					}
+				},
+				&st::menuIconClear);
+		}
+		if (session->uploader().allFinished()) {
+			addAction(
+				tr::lng_uploads_delete_all(tr::now),
+				[=] {
+					window->show(Ui::MakeConfirmBox({
+						.text = tr::lng_uploads_delete_all_sure(tr::now),
+						.confirmed = [=](Fn<void()> close) {
+							close();
+							if (const auto s = Core::App().maybePrimarySession()) {
+								s->uploader().deleteAllFinishedUploads();
+							}
+						},
+						.confirmText = tr::lng_uploads_delete_all_confirm(tr::now),
+						.cancelText = tr::lng_cancel(tr::now),
+						.confirmStyle = &st::attentionBoxButton,
+					}));
+				},
+				&st::menuIconDelete);
+		}
+	}
 	if (loadingManager.anyFinishedLoading()) {
 		addAction(
 			tr::lng_downloads_clear_list(tr::now),
@@ -156,14 +235,47 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 			.confirmStyle = &st::attentionBoxButton,
 		}));
 	};
-	addAction(
-		tr::lng_context_delete_all_files(tr::now),
-		deleteAll,
-		&st::menuIconDelete);
+	if (loadingManager.anyResumable()
+		|| loadingManager.anyFinishedLoading()) {
+		addAction(
+			tr::lng_downloads_delete_all_downloads(tr::now),
+			deleteAll,
+			&st::menuIconDelete);
+	}
 }
 
 rpl::producer<QString> Widget::title() {
-	return tr::lng_downloads_section();
+	const auto computeTitle = [=]() -> QString {
+		const auto session = &controller()->session();
+		auto &manager = Core::App().downloadManager();
+		auto hasDl = false;
+		for ([[maybe_unused]] const auto id : manager.loadingList()) {
+			hasDl = true;
+			break;
+		}
+		if (!hasDl) {
+			for ([[maybe_unused]] const auto id : manager.loadedList()) {
+				hasDl = true;
+				break;
+			}
+		}
+		const auto hasUl = session->uploader().anyUploads()
+			|| session->uploader().isPaused()
+			|| session->uploader().pendingResumeCount() > 0;
+		if (hasDl && hasUl) {
+			return tr::lng_downloads_section(tr::now)
+				+ u" & "_q
+				+ tr::lng_uploads_section(tr::now);
+		} else if (hasUl) {
+			return tr::lng_uploads_section(tr::now);
+		}
+		return tr::lng_downloads_section(tr::now);
+	};
+	return rpl::merge(
+		rpl::single(computeTitle()),
+		controller()->session().uploader().loadingListChanges()
+			| rpl::map([=] { return computeTitle(); })
+	);
 }
 
 std::shared_ptr<Info::Memento> Make(not_null<UserData*> self) {

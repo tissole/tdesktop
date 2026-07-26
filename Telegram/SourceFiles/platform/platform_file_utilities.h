@@ -23,6 +23,11 @@ void UnsafeLaunch(const QString &filepath);
 
 void PostprocessDownloaded(const QString &filepath);
 
+// Returns true if the file was successfully moved to the system trash bin.
+// On failure falls back to permanent deletion. If the file does not exist,
+// returns false without doing anything.
+bool MoveToTrash(const QString &filepath);
+
 } // namespace File
 
 namespace FileDialog {

@@ -65,15 +65,16 @@ DownloadBar::DownloadBar(
 DownloadBar::~DownloadBar() = default;
 
 void DownloadBar::show(DownloadBarContent &&content) {
-	_button.toggle(content.count > 0, anim::type::normal);
-	if (!content.count) {
+	_button.toggle(content.count > 0 || content.uploadCount > 0, anim::type::normal);
+	if (!content.count && !content.uploadCount) {
 		return;
 	}
 	if (!_radial.animating()) {
 		_radial.start(computeProgress());
 	}
 	_content = content;
-	const auto finished = (_content.done == _content.count);
+	const auto finished = (_content.done == _content.count)
+		&& (_content.uploadDone == _content.uploadCount);
 	if (_finished != finished) {
 		_finished = finished;
 		_finishedAnimation.start(
@@ -83,12 +84,25 @@ void DownloadBar::show(DownloadBarContent &&content) {
 			st::widgetFadeDuration);
 	}
 	refreshThumbnail();
+	const auto dlPrefix = u"DL "_q;
+	const auto ulPrefix = u"UL "_q;
 	_title.setMarkedText(
 		st::defaultTextStyle,
 		(content.count > 1
-			? tr::bold(
-				tr::lng_profile_files(tr::now, lt_count, content.count))
-			: content.singleName));
+			? tr::bold(dlPrefix + tr::lng_profile_files(
+				tr::now,
+				lt_count, content.count))
+			: content.count == 1
+			? tr::bold(tr::lng_downloads_prefix(
+				tr::now,
+				lt_name, content.singleName.text))
+			: (content.uploadCount > 1
+				? tr::bold(ulPrefix + tr::lng_profile_files(
+					tr::now,
+					lt_count, content.uploadCount))
+				: tr::bold(tr::lng_uploads_prefix(
+					tr::now,
+					lt_name, content.singleUploadName.text)))));
 	refreshInfo(_progress.current());
 }
 
@@ -136,14 +150,43 @@ void DownloadBar::refreshIcon() {
 }
 
 void DownloadBar::refreshInfo(const DownloadBarProgress &progress) {
+	auto text = TextWithEntities();
+	const auto effectiveUploadReady = progress.uploadReady
+		? progress.uploadReady
+		: (_content.uploadCount > 1
+			? _content.uploadReady
+			: _content.uploadSingleReady);
+	const auto effectiveUploadTotal = progress.uploadTotal
+		? progress.uploadTotal
+		: (_content.uploadCount > 1
+			? _content.uploadTotal
+			: _content.uploadSingleTotal);
+	const auto effectiveReady = progress.ready;
+	const auto effectiveTotal = progress.total;
+	if (effectiveReady < effectiveTotal) {
+		text = tr::marked(
+			FormatDownloadText(effectiveReady, effectiveTotal));
+	} else if (effectiveUploadReady < effectiveUploadTotal) {
+		text = tr::marked(
+			FormatDownloadText(effectiveUploadReady, effectiveUploadTotal));
+	} else if (_content.uploadCount == 1 && _content.uploadReady < _content.uploadTotal) {
+		text = tr::marked(
+			FormatDownloadText(_content.uploadReady, _content.uploadTotal));
+	} else if (_content.count > 1 || _content.uploadCount > 1) {
+		const auto downloadsOnly = _content.count > 0 && _content.uploadCount == 0;
+		text = tr::marked(
+			downloadsOnly
+				? tr::lng_downloads_view_in_section(tr::now)
+				: tr::lng_uploads_view_in_section(tr::now));
+	} else if (_content.count == 1) {
+		text = tr::marked(
+			tr::lng_downloads_view_in_chat(tr::now));
+	} else {
+		text = TextWithEntities();
+	}
 	_info.setMarkedText(
 		st::downloadInfoStyle,
-		(progress.ready < progress.total
-			? tr::marked(
-				FormatDownloadText(progress.ready, progress.total))
-			: Text::Link((_content.count > 1)
-				? tr::lng_downloads_view_in_section(tr::now)
-				: tr::lng_downloads_view_in_chat(tr::now))));
+		std::move(text));
 	_button.entity()->update();
 }
 
@@ -288,7 +331,17 @@ void DownloadBar::paint(Painter &p, QRect clip) {
 
 float64 DownloadBar::computeProgress() const {
 	const auto now = _progress.current();
-	return now.total ? (now.ready / float64(now.total)) : 0.;
+	if (now.total) {
+		return now.ready / float64(now.total);
+	} else if (_content.uploadSingleReady < _content.uploadSingleTotal
+		&& _content.uploadSingleTotal > 0) {
+		return _content.uploadSingleReady
+			/ float64(_content.uploadSingleTotal);
+	} else if (_content.uploadReady < _content.uploadTotal
+		&& _content.uploadTotal > 0) {
+		return _content.uploadReady / float64(_content.uploadTotal);
+	}
+	return 0.;
 }
 
 void DownloadBar::radialAnimationCallback(crl::time now) {

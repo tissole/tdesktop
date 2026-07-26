@@ -369,6 +369,7 @@ Document::Document(
 	}
 
 	setStatusSize(Ui::FileStatusSizeReady);
+	_wasUploading = _data->uploading();
 }
 
 Document::~Document() {
@@ -2337,6 +2338,15 @@ rpl::producer<> TTLVoiceStops(FullMsgId fullId) {
 		}) | rpl::to_empty,
 		::Media::Player::instance()->stops(AudioMsgId::Type::Voice)
 	);
+}
+
+bool Document::updateItemData() {
+	const auto uploading = _data->uploading();
+	if (_wasUploading != uploading) {
+		_wasUploading = uploading;
+		return true;
+	}
+	return false;
 }
 
 bool Document::hideMessageText() const {

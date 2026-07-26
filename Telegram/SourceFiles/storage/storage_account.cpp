@@ -795,6 +795,8 @@ void Account::reset() {
 	_fileLocationAliases.clear();
 	_downloadsSerialize = nullptr;
 	_downloadsSerialized = QByteArray();
+	_uploadsSerialize = nullptr;
+	_uploadsSerialized = QByteArray();
 	_cacheTotalSizeLimit = Database::Settings().totalSizeLimit;
 	_cacheTotalTimeLimit = Database::Settings().totalTimeLimit;
 	_cacheBigFileTotalSizeLimit = Database::Settings().totalSizeLimit;
@@ -854,6 +856,11 @@ void Account::writeLocations() {
 			_downloadsSerialized = std::move(*serialized);
 		}
 	}
+	if (_uploadsSerialize) {
+		if (auto serialized = _uploadsSerialize()) {
+			_uploadsSerialized = std::move(*serialized);
+		}
+	}
 	if (_fileLocations.isEmpty() && _downloadsSerialized.isEmpty()) {
 		if (_locationsKey) {
 			ClearKey(_locationsKey, _basePath);
@@ -892,6 +899,7 @@ void Account::writeLocations() {
 
 		size += sizeof(quint32); // legacy webLocationsCount
 		size += Serialize::bytearraySize(_downloadsSerialized);
+		size += Serialize::bytearraySize(_uploadsSerialized);
 
 		EncryptedDescriptor data(size);
 		auto legacyTypeField = 0;
@@ -914,7 +922,7 @@ void Account::writeLocations() {
 			data.stream << quint64(i.key().first) << quint64(i.key().second) << quint64(i.value().first) << quint64(i.value().second);
 		}
 
-		data.stream << quint32(0) << _downloadsSerialized;
+		data.stream << quint32(0) << _downloadsSerialized << _uploadsSerialized;
 
 		FileWriteDescriptor file(_locationsKey, _basePath);
 		file.writeEncrypted(data, _localKey);
@@ -993,6 +1001,9 @@ void Account::readLocations() {
 			if (!locations.stream.atEnd()) {
 				locations.stream >> _downloadsSerialized;
 			}
+			if (!locations.stream.atEnd()) {
+				locations.stream >> _uploadsSerialized;
+			}
 		}
 	}
 }
@@ -1005,6 +1016,15 @@ void Account::updateDownloads(
 
 QByteArray Account::downloadsSerialized() const {
 	return _downloadsSerialized;
+}
+
+void Account::updateUploads(Fn<std::optional<QByteArray>()> uploadsSerialize) {
+	_uploadsSerialize = std::move(uploadsSerialize);
+	writeLocationsDelayed();
+}
+
+QByteArray Account::uploadsSerialized() const {
+	return _uploadsSerialized;
 }
 
 void Account::writeSessionSettings() {

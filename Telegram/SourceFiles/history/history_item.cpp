@@ -2464,6 +2464,8 @@ void HistoryItem::updateSentContent(
 	} else if (media || _media) {
 		if (!media || !_media || !_media->updateSentMedia(*media)) {
 			refreshSentMedia(media);
+		} else {
+			history()->owner().requestItemViewRefresh(this);
 		}
 	}
 	history()->owner().requestItemResize(this);

@@ -1184,6 +1184,17 @@ Document::Document(
 	}
 }
 
+void Document::itemDataChanged() {
+	_name.setMarkedText(
+		st::defaultTextStyle,
+		(!_forceFileLayout
+			? Ui::Text::FormatSongNameFor(_data).textWithEntities()
+			: Ui::Text::FormatDownloadsName(_data)),
+		_documentNameOptions);
+	initDimensions();
+	delegate()->repaintItem(this);
+}
+
 bool Document::downloadInCorner() const {
 	return _data->isAudioFile()
 		&& parent()->allowsForward()
@@ -1628,7 +1639,7 @@ float64 Document::dataProgress() const {
 }
 
 bool Document::dataFinished() const {
-	return !_data->loading();
+	return !_data->loading() && !_data->uploading();
 }
 
 bool Document::dataLoaded() const {
@@ -2399,7 +2410,7 @@ float64 Gif::dataProgress() const {
 }
 
 bool Gif::dataFinished() const {
-	return !_data->loading();
+	return !_data->loading() && !_data->uploading();
 }
 
 bool Gif::dataLoaded() const {

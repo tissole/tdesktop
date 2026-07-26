@@ -321,6 +321,33 @@ void PostprocessDownloaded(const QString &filepath) {
 	}
 }
 
+bool MoveToTrash(const QString &filepath) {
+	if (filepath.isEmpty() || !QFileInfo::exists(filepath)) {
+		return false;
+	}
+	auto nativePath = QDir::toNativeSeparators(filepath).toStdWString();
+	// SHFileOperation requires double-null-terminated path buffer.
+	WCHAR pathBuffer[4096];
+	memset(pathBuffer, 0, sizeof(pathBuffer));
+	wcsncpy_s(pathBuffer, nativePath.c_str(), _TRUNCATE);
+	pathBuffer[nativePath.size()] = 0;
+	pathBuffer[nativePath.size() + 1] = 0;
+	SHFILEOPSTRUCT fileOp = {};
+	fileOp.hwnd = 0;
+	fileOp.wFunc = FO_DELETE;
+	fileOp.pFrom = pathBuffer;
+	fileOp.pTo = nullptr;
+	fileOp.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT;
+	fileOp.fAnyOperationsAborted = FALSE;
+	fileOp.hNameMappings = nullptr;
+	fileOp.lpszProgressTitle = nullptr;
+	const auto result = SHFileOperation(&fileOp);
+	if (result != 0 || fileOp.fAnyOperationsAborted) {
+		return QFile::remove(filepath);
+	}
+	return true;
+}
+
 } // namespace File
 
 namespace FileDialog {
