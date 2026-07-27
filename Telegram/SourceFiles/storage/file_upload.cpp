@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "api/api_editing.h"
 #include "api/api_send_progress.h"
+
 #include "base/random.h"
 #include "base/unixtime.h"
 #include "storage/localimageloader.h"
@@ -17,6 +18,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document_media.h"
 #include "data/data_photo.h"
 #include "data/data_session.h"
+#include "data/data_channel.h"
+#include "data/data_changes.h"
 #include "ui/image/image_location_factory.h"
 #include "ui/layers/generic_box.h"
 #include "ui/widgets/buttons.h"
@@ -1469,33 +1472,52 @@ void Uploader::showResumeUnfinished() {
 				}));
 			file->document = MTPDocument(docProto);
 
-			const auto peer = session().data().peer(entry.peerId);
-			if (peer) {
-				const auto history = session().data().history(peer);
-				const auto doc = session().data().processDocument(
-					file->document);
-				doc->uploadingData = std::make_unique<Data::UploadState>(
-					doc->size);
-				auto flags = NewMessageFlags(peer);
-				history->addNewLocalMessage({
-					.id = newId.msg,
-					.flags = flags,
-					.from = session().userPeerId(),
-					.date = base::unixtime::now(),
-				}, doc, TextWithEntities{});
+		const auto peer = session().data().peer(entry.peerId);
+		if (peer) {
+			const auto history = session().data().history(peer);
+			const auto doc = session().data().processDocument(
+				file->document);
+			doc->uploadingData = std::make_unique<Data::UploadState>(
+				doc->size);
+			auto flags = NewMessageFlags(peer);
+		const auto channel = peer->asBroadcast();
+		if (channel) {
+			flags |= MessageFlag::Post;
+			flags |= MessageFlag::HasViews;
+			if (channel->addsSignature()) {
+				flags |= MessageFlag::HasPostAuthor;
 			}
-			upload(newId, file, entry.partsSent);
-			if (peer) {
-				const auto newDoc = session().data().document(file->id);
-				if (newDoc && newDoc->uploading()) {
-					newDoc->uploadingData->offset = std::min(
-						newDoc->uploadingData->size,
-						entry.sentSize);
-				}
-			}
-			LOG(("Uploader: resuming upload for %1").arg(entry.filePath));
 		}
-		const auto root = DownloadRootPath(&session());
+			const auto media = MTP_messageMediaDocument(
+				MTP_flags(MTPDmessageMediaDocument::Flag::f_document),
+				file->document,
+				MTPVector<MTPDocument>(),
+				MTPPhoto(),
+				MTPint(),
+				MTPint());
+			history->addNewLocalMessage({
+				.id = newId.msg,
+				.flags = flags,
+				.from = session().userPeerId(),
+				.date = base::unixtime::now(),
+			}, TextWithEntities{}, media);
+			session().data().sendHistoryChangeNotifications();
+			session().changes().historyUpdated(
+				history,
+				Data::HistoryUpdate::Flag::MessageSent);
+		}
+		upload(newId, file, entry.partsSent);
+		if (peer) {
+			const auto newDoc = session().data().document(file->id);
+			if (newDoc && newDoc->uploading()) {
+				newDoc->uploadingData->offset = std::min(
+					newDoc->uploadingData->size,
+					entry.sentSize);
+			}
+		}
+		LOG(("Uploader: resuming upload for %1").arg(entry.filePath));
+	}
+	const auto root = DownloadRootPath(&session());
 		if (!root.isEmpty()) {
 			const auto dir = QDir(root);
 			const auto files = dir.entryList(
@@ -1953,12 +1975,31 @@ void Uploader::resumeEntriesFromDisk() {
 			doc->uploadingData = std::make_unique<Data::UploadState>(
 				doc->size);
 			auto flags = NewMessageFlags(peer);
-			history->addNewLocalMessage({
-				.id = newId.msg,
-				.flags = flags,
-				.from = session().userPeerId(),
-				.date = base::unixtime::now(),
-			}, doc, TextWithEntities{});
+		const auto channel = peer->asBroadcast();
+		if (channel) {
+			flags |= MessageFlag::Post;
+			flags |= MessageFlag::HasViews;
+			if (channel->addsSignature()) {
+				flags |= MessageFlag::HasPostAuthor;
+			}
+		}
+		const auto media = MTP_messageMediaDocument(
+			MTP_flags(MTPDmessageMediaDocument::Flag::f_document),
+			file->document,
+			MTPVector<MTPDocument>(),
+			MTPPhoto(),
+			MTPint(),
+			MTPint());
+		history->addNewLocalMessage({
+			.id = newId.msg,
+			.flags = flags,
+			.from = session().userPeerId(),
+			.date = base::unixtime::now(),
+		}, TextWithEntities{}, media);
+		session().data().sendHistoryChangeNotifications();
+		session().changes().historyUpdated(
+			history,
+			Data::HistoryUpdate::Flag::MessageSent);
 		}
 		upload(newId, file, entry.partsSent);
 		if (!_queue.empty() && entry.sentSize > 0) {
