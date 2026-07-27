@@ -297,14 +297,6 @@ void DocumentMedia::automaticLoad(
 		return;
 	}
 	const auto indata = _owner->filename();
-	const auto filename = toCache
-		? QString()
-		: DocumentFileNameForSave(
-			_owner,
-			false,
-			QString(),
-			QDir(),
-			item ? item->history()->peer.get() : nullptr);
 	const auto shouldLoadFromCloud = (indata.isEmpty()
 		|| Core::DetectNameType(indata) != Core::NameType::Executable)
 		&& (item
@@ -315,6 +307,20 @@ void DocumentMedia::automaticLoad(
 			: Data::AutoDownload::Should(
 				_owner->session().settings().autoDownload(),
 				_owner));
+	if (!toCache && !shouldLoadFromCloud) {
+		// Nothing to cache and cloud loading isn't allowed: there is no
+		// point in resolving a save path (and creating its folder on
+		// disk as a side effect) just to immediately cancel below.
+		return;
+	}
+	const auto filename = toCache
+		? QString()
+		: DocumentFileNameForSave(
+			_owner,
+			false,
+			QString(),
+			QDir(),
+			item ? item->history()->peer.get() : nullptr);
 	const auto loadFromCloud = shouldLoadFromCloud
 		? LoadFromCloudOrLocal
 		: LoadFromLocalOnly;
