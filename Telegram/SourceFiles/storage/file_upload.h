@@ -186,6 +186,7 @@ private:
 		int64 sentSize = 0;
 		PeerId peerId;
 		uint64 fileId = 0;
+		MsgId topicRootId = 0;
 	};
 
 	enum class SendResult : uchar {

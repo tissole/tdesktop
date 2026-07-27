@@ -1280,6 +1280,14 @@ void Uploader::saveResumeState() {
 		obj[u"sent_size"_q] = qlonglong(entry.docSentSize);
 		obj[u"peer_id"_q] = QString::number(entry.itemId.peer.value);
 		obj[u"file_id"_q] = QString::number(entry.file->id);
+		const auto topicRootId = entry.file->to.replyTo.topicRootId;
+		LOG(("RESUME_SAVE: peer=%1 fileId=%2 topicRootId=%3"
+			).arg(entry.itemId.peer.value
+			).arg(entry.file->id
+			).arg(topicRootId.bare));
+		if (topicRootId) {
+			obj[u"topic_root_id"_q] = QString::number(topicRootId.bare);
+		}
 		byPeer[entry.itemId.peer].append(obj);
 	}
 	for (const auto &[peerId, entries] : byPeer) {
@@ -1418,8 +1426,16 @@ void Uploader::showResumeUnfinished() {
 				entry.fileId = 0;
 				entry.partsSent = 0;
 			}
+			const auto topicRootIdVal = obj[u"topic_root_id"_q];
+			if (topicRootIdVal.isString()) {
+				entry.topicRootId = MsgId(topicRootIdVal.toString().toLongLong());
+			}
 			if (QFileInfo::exists(entry.filePath)) {
 				toResume.push_back(entry);
+				LOG(("RESUME_LOAD: peer=%1 file=%2 topicRootId=%3"
+					).arg(entry.peerId.value
+					).arg(entry.filePath
+					).arg(entry.topicRootId.bare));
 			}
 		}
 	}
@@ -1446,7 +1462,7 @@ void Uploader::showResumeUnfinished() {
 				FileLoadTo(
 					entry.peerId,
 					Api::SendOptions(),
-					FullReplyTo(),
+					FullReplyTo{ .topicRootId = entry.topicRootId },
 					MsgId()),
 			});
 			file->filepath = entry.filePath;
@@ -1488,6 +1504,12 @@ void Uploader::showResumeUnfinished() {
 				flags |= MessageFlag::HasPostAuthor;
 			}
 		}
+			if (!peer->amAnonymous()) {
+				flags |= MessageFlag::HasFromId;
+			}
+			if (entry.topicRootId) {
+				flags |= MessageFlag::HasReplyInfo;
+			}
 			const auto media = MTP_messageMediaDocument(
 				MTP_flags(MTPDmessageMediaDocument::Flag::f_document),
 				file->document,
@@ -1495,10 +1517,19 @@ void Uploader::showResumeUnfinished() {
 				MTPPhoto(),
 				MTPint(),
 				MTPint());
+			LOG(("RESUME_MSG: peer=%1 topicRootId=%2 creating local msg"
+				).arg(entry.peerId.value
+				).arg(entry.topicRootId.bare));
 			history->addNewLocalMessage({
 				.id = newId.msg,
 				.flags = flags,
 				.from = session().userPeerId(),
+				.replyTo = FullReplyTo{
+					.messageId = FullMsgId(
+						entry.peerId,
+						entry.topicRootId),
+					.topicRootId = entry.topicRootId,
+				},
 				.date = base::unixtime::now(),
 			}, TextWithEntities{}, media);
 			session().data().sendHistoryChangeNotifications();
@@ -1919,8 +1950,16 @@ void Uploader::resumeEntriesFromDisk() {
 				entry.fileId = 0;
 				entry.partsSent = 0;
 			}
+			const auto topicRootIdVal = obj[u"topic_root_id"_q];
+			if (topicRootIdVal.isString()) {
+				entry.topicRootId = MsgId(topicRootIdVal.toString().toLongLong());
+			}
 			if (QFileInfo::exists(entry.filePath)) {
 				toResume.push_back(entry);
+				LOG(("RESUME_LOAD: peer=%1 file=%2 topicRootId=%3"
+					).arg(entry.peerId.value
+					).arg(entry.filePath
+					).arg(entry.topicRootId.bare));
 			}
 		}
 	}
@@ -1941,7 +1980,7 @@ void Uploader::resumeEntriesFromDisk() {
 			FileLoadTo(
 				entry.peerId,
 				Api::SendOptions(),
-				FullReplyTo(),
+				FullReplyTo{ .topicRootId = entry.topicRootId },
 				MsgId()),
 		});
 		file->filepath = entry.filePath;
@@ -1983,17 +2022,32 @@ void Uploader::resumeEntriesFromDisk() {
 				flags |= MessageFlag::HasPostAuthor;
 			}
 		}
-		const auto media = MTP_messageMediaDocument(
-			MTP_flags(MTPDmessageMediaDocument::Flag::f_document),
-			file->document,
-			MTPVector<MTPDocument>(),
-			MTPPhoto(),
-			MTPint(),
-			MTPint());
+			if (!peer->amAnonymous()) {
+				flags |= MessageFlag::HasFromId;
+			}
+			if (entry.topicRootId) {
+				flags |= MessageFlag::HasReplyInfo;
+			}
+			const auto media = MTP_messageMediaDocument(
+				MTP_flags(MTPDmessageMediaDocument::Flag::f_document),
+				file->document,
+				MTPVector<MTPDocument>(),
+				MTPPhoto(),
+				MTPint(),
+				MTPint());
+		LOG(("RESUME_MSG(disk): peer=%1 topicRootId=%2 creating local msg"
+			).arg(entry.peerId.value
+			).arg(entry.topicRootId.bare));
 		history->addNewLocalMessage({
 			.id = newId.msg,
 			.flags = flags,
 			.from = session().userPeerId(),
+			.replyTo = FullReplyTo{
+				.messageId = FullMsgId(
+					entry.peerId,
+					entry.topicRootId),
+				.topicRootId = entry.topicRootId,
+			},
 			.date = base::unixtime::now(),
 		}, TextWithEntities{}, media);
 		session().data().sendHistoryChangeNotifications();

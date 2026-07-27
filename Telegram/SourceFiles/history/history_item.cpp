@@ -4284,6 +4284,7 @@ const std::vector<ClickHandlerPtr> &HistoryItem::customTextLinks() const {
 void HistoryItem::createComponents(CreateConfig &&config) {
 	uint64 mask = 0;
 	if (config.reply.messageId
+		|| config.reply.topMessageId
 		|| config.reply.externalSenderId
 		|| !config.reply.externalSenderName.isEmpty()
 		|| config.reply.storyId) {
@@ -4637,6 +4638,8 @@ void HistoryItem::createComponentsHelper(HistoryItemCommonFields &&fields) {
 			? (replyTo.topicRootId
 				&& (replyTo.topicRootId != Data::ForumTopic::kGeneralId))
 			: (topic
+				|| (replyTo.topicRootId
+					&& (replyTo.topicRootId != Data::ForumTopic::kGeneralId))
 				|| LookupReplyIsTopicPost(to)
 				|| (to && to->Has<HistoryServiceTopicInfo>())
 				|| (forum && forum->creating(config.reply.topMessageId)));
