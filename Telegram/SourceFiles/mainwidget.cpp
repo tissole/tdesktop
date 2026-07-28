@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document_media.h"
 #include "data/data_document_resolver.h"
 #include "data/data_forum_topic.h"
+#include "data/data_msg_id.h"
 #include "data/data_web_page.h"
 #include "data/data_game.h"
 #include "data/data_peer_values.h"
@@ -1587,7 +1588,23 @@ void MainWidget::showMessage(
 		}
 	}
 	if (const auto topic = item->topic()) {
-		_controller->showTopic(topic, item->id, params);
+		const auto topicMsgId = IsServerMsgId(itemId)
+			? itemId
+			: MsgId(0);
+		_controller->showTopic(topic, topicMsgId, params);
+		if (params.activation != anim::activation::background) {
+			_controller->window().activate();
+		}
+	} else if (const auto rootId = item->topicRootId();
+		rootId && rootId != Data::ForumTopic::kGeneralId) {
+		const auto commentId = IsServerMsgId(itemId)
+			? itemId
+			: MsgId(0);
+		_controller->showRepliesForMessage(
+			item->history(),
+			rootId,
+			commentId,
+			params);
 		if (params.activation != anim::activation::background) {
 			_controller->window().activate();
 		}
