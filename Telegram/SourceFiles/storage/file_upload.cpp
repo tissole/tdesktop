@@ -355,6 +355,9 @@ void Uploader::upload(
 		FullMsgId itemId,
 		const std::shared_ptr<FilePrepareResult> &file,
 		int resumeFromParts) {
+	if (_queue.empty() && !_pausedId && _paused) {
+		_paused = false;
+	}
 	if (file->type == SendMediaType::Photo) {
 		const auto photo = session().data().processPhoto(
 			file->photo,
