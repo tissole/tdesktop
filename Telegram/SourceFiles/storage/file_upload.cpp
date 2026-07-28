@@ -1284,10 +1284,6 @@ void Uploader::saveResumeState() {
 		obj[u"peer_id"_q] = QString::number(entry.itemId.peer.value);
 		obj[u"file_id"_q] = QString::number(entry.file->id);
 		const auto topicRootId = entry.file->to.replyTo.topicRootId;
-		LOG(("RESUME_SAVE: peer=%1 fileId=%2 topicRootId=%3"
-			).arg(entry.itemId.peer.value
-			).arg(entry.file->id
-			).arg(topicRootId.bare));
 		if (topicRootId) {
 			obj[u"topic_root_id"_q] = QString::number(topicRootId.bare);
 		}
@@ -1435,10 +1431,6 @@ void Uploader::showResumeUnfinished() {
 			}
 			if (QFileInfo::exists(entry.filePath)) {
 				toResume.push_back(entry);
-				LOG(("RESUME_LOAD: peer=%1 file=%2 topicRootId=%3"
-					).arg(entry.peerId.value
-					).arg(entry.filePath
-					).arg(entry.topicRootId.bare));
 			}
 		}
 	}
@@ -1520,9 +1512,6 @@ void Uploader::showResumeUnfinished() {
 				MTPPhoto(),
 				MTPint(),
 				MTPint());
-			LOG(("RESUME_MSG: peer=%1 topicRootId=%2 creating local msg"
-				).arg(entry.peerId.value
-				).arg(entry.topicRootId.bare));
 			history->addNewLocalMessage({
 				.id = newId.msg,
 				.flags = flags,
@@ -1959,10 +1948,6 @@ void Uploader::resumeEntriesFromDisk() {
 			}
 			if (QFileInfo::exists(entry.filePath)) {
 				toResume.push_back(entry);
-				LOG(("RESUME_LOAD: peer=%1 file=%2 topicRootId=%3"
-					).arg(entry.peerId.value
-					).arg(entry.filePath
-					).arg(entry.topicRootId.bare));
 			}
 		}
 	}
@@ -2038,9 +2023,6 @@ void Uploader::resumeEntriesFromDisk() {
 				MTPPhoto(),
 				MTPint(),
 				MTPint());
-		LOG(("RESUME_MSG(disk): peer=%1 topicRootId=%2 creating local msg"
-			).arg(entry.peerId.value
-			).arg(entry.topicRootId.bare));
 		history->addNewLocalMessage({
 			.id = newId.msg,
 			.flags = flags,

@@ -2353,10 +2353,6 @@ void HistoryWidget::fastShowAtEnd(not_null<History*> history) {
 	if (_history != history) {
 		return;
 	}
-	LOG(("fastShowAtEnd: peer=%1, isReady=%2, firstLoadRequest=%3")
-		.arg(_history->peer->name())
-		.arg(Logs::b(_history->isReadyFor(_showAtMsgId)))
-		.arg(_firstLoadRequest));
 
 	clearAllLoadRequests();
 	setMsgId(ShowAtUnreadMsgId);
@@ -2870,13 +2866,9 @@ void HistoryWidget::showHistory(
 				|| _history->isReadyFor(_showAtMsgId));
 
 		if (readyWithTakeout) {
-			LOG(("HISTORY_LOAD: showHistory READY path peer=%1")
-				.arg(_history->peer->id.value));
 			setupPinnedTracker();
 			historyLoaded();
 		} else {
-			LOG(("HISTORY_LOAD: showHistory probe path peer=%1")
-				.arg(_history->peer->id.value));
 			firstLoadMessages();
 			doneShow();
 		}
@@ -3185,9 +3177,6 @@ void HistoryWidget::clearAllLoadRequests() {
 	auto &histories = _history->owner().histories();
 	clearDelayedShowAtRequest();
 	if (_firstLoadRequest) {
-		LOG(("HISTORY_LOAD: clearAllLoadRequests cancel _firstLoadRequest=%1 peer=%2")
-			.arg(_firstLoadRequest)
-			.arg(_history->peer->id.value));
 		histories.cancelRequest(_firstLoadRequest);
 		_firstLoadRequest = 0;
 	}
@@ -4071,12 +4060,6 @@ void HistoryWidget::messagesReceived(
 		return;
 	}
 
-	LOG(("HISTORY_LOAD: messagesReceived ENTER peer=%1 requestId=%2 "
-		"_firstLoadRequest=%3 _jumpToMessageRequest=%4")
-		.arg(peer->id.value)
-		.arg(requestId)
-		.arg(_firstLoadRequest)
-		.arg(_jumpToMessageRequest));
 	auto count = 0;
 	const QVector<MTPMessage> emptyList, *histList = &emptyList;
 	switch (messages.type()) {
@@ -4190,14 +4173,10 @@ void HistoryWidget::messagesReceived(
 	}
 
 	if (_preloadRequest == requestId) {
-		LOG(("HISTORY_LOAD: messagesReceived PRELOAD match requestId=%1 peer=%2")
-			.arg(requestId).arg(peer->id.value));
 		addMessagesToFront(peer, *histList);
 		_preloadRequest = 0;
 		preloadHistoryIfNeeded();
 	} else if (_preloadDownRequest == requestId) {
-		LOG(("HISTORY_LOAD: messagesReceived PRELOAD_DOWN match requestId=%1 peer=%2")
-			.arg(requestId).arg(peer->id.value));
 		addMessagesToBack(peer, *histList);
 		_preloadDownRequest = 0;
 		preloadHistoryIfNeeded();
