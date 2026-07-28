@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/downloads/info_downloads_inner_widget.h"
 
 #include "info/downloads/info_downloads_widget.h"
+#include "info/downloads/info_downloads_provider.h"
 #include "info/media/info_media_list_widget.h"
 #include "info/info_controller.h"
 #include "ui/widgets/labels.h"
@@ -138,6 +139,27 @@ void InnerWidget::saveState(not_null<Memento*> memento) {
 
 void InnerWidget::restoreState(not_null<Memento*> memento) {
 	_list->restoreState(&memento->media());
+}
+
+Provider *InnerWidget::provider() const {
+	return static_cast<Provider*>(_list->provider().get());
+}
+
+void InnerWidget::setFilter(Tab tab) {
+	const auto filter = (tab == Tab::Downloads)
+		? Provider::Filter::Downloads
+		: (tab == Tab::Uploads)
+		? Provider::Filter::Uploads
+		: Provider::Filter::All;
+	provider()->setFilter(filter);
+}
+
+rpl::producer<bool> InnerWidget::hasDownloadsValue() const {
+	return provider()->hasDownloadsValue();
+}
+
+rpl::producer<bool> InnerWidget::hasUploadsValue() const {
+	return provider()->hasUploadsValue();
 }
 
 rpl::producer<SelectedItems> InnerWidget::selectedListValue() const {

@@ -5240,6 +5240,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 "lng_downloads_section" = "Downloads";
 "lng_uploads_section" = "Uploads";
+"lng_transfer_manager_title" = "Transfer Manager";
+"lng_downloads_tab_all" = "All";
 "lng_downloads_view_in_chat" = "View in chat";
 "lng_downloads_view_in_section" = "View in downloads";
 "lng_downloads_delete_sure_one" = "Do you want to delete this file?";

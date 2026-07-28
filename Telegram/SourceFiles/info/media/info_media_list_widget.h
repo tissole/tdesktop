@@ -65,6 +65,8 @@ public:
 
 	Main::Session &session() const;
 
+	[[nodiscard]] not_null<ListProvider*> provider() const;
+
 	void restart();
 
 	rpl::producer<int> scrollToRequests() const;

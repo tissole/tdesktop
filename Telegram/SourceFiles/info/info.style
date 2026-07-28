@@ -21,6 +21,11 @@ InfoToggle {
 	rippleAreaPadding: pixels;
 }
 
+downloadsTabsSlider: SettingsSlider(defaultTabsSlider) {
+	height: 44px;
+	barTop: 41px;
+}
+
 InfoPeerBadge {
 	verified: icon;
 	verifiedCheck: icon;

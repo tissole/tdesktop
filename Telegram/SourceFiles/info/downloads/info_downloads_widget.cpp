@@ -12,8 +12,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/info_memento.h"
 #include "ui/boxes/confirm_box.h"
 #include "ui/search_field_controller.h"
+#include "ui/widgets/discrete_sliders.h"
 #include "ui/widgets/menu/menu_add_action_callback.h"
 #include "ui/widgets/scroll_area.h"
+#include "ui/widgets/shadow.h"
 #include "ui/ui_utility.h"
 #include "data/data_download_manager.h"
 #include "data/data_user.h"
@@ -66,6 +68,100 @@ Widget::Widget(
 	) | rpl::on_next([this](Ui::ScrollToRequest request) {
 		scrollTo(request);
 	}, _inner->lifetime());
+	setupTabs();
+}
+
+void Widget::setupTabs() {
+	_tabs = object_ptr<Ui::SettingsSlider>(this, st::downloadsTabsSlider);
+	_tabsShadow = object_ptr<Ui::PlainShadow>(this);
+	_tabs->hide();
+	_tabsShadow->hide();
+
+	const auto tabsHeight = _tabs->st().height;
+	widthValue(
+	) | rpl::on_next([=](int width) {
+		_tabs->resizeToWidth(width);
+		_tabs->moveToLeft(0, 0);
+		_tabsShadow->setGeometry(0, tabsHeight, width, st::lineWidth);
+	}, lifetime());
+
+	_tabs->sectionActivated(
+	) | rpl::on_next([=](int index) {
+		if (index >= 0 && index < int(_tabList.size())) {
+			applyTab(_tabList[index], false);
+		}
+	}, _tabs->lifetime());
+
+	rpl::combine(
+		_inner->hasDownloadsValue(),
+		_inner->hasUploadsValue()
+	) | rpl::on_next([=](bool hasDownloads, bool hasUploads) {
+		_hasDownloads = hasDownloads;
+		_hasUploads = hasUploads;
+		refreshTabs();
+	}, lifetime());
+}
+
+void Widget::rebuildTabSections() {
+	if (_tabList.empty()) {
+		return;
+	}
+	auto labels = std::vector<QString>();
+	labels.reserve(_tabList.size());
+	for (const auto tab : _tabList) {
+		labels.push_back((tab == Tab::Uploads)
+			? tr::lng_uploads_section(tr::now)
+			: (tab == Tab::Both)
+			? tr::lng_downloads_tab_all(tr::now)
+			: tr::lng_downloads_section(tr::now));
+	}
+	_tabs->setSections(labels);
+}
+
+void Widget::refreshTabs() {
+	auto tabs = std::vector<Tab>();
+	if (_hasDownloads && _hasUploads) {
+		tabs = { Tab::Downloads, Tab::Uploads, Tab::Both };
+	} else if (_hasDownloads) {
+		tabs = { Tab::Downloads };
+	} else if (_hasUploads) {
+		tabs = { Tab::Uploads };
+	}
+	const auto show = !tabs.empty();
+	if (tabs != _tabList) {
+		_tabList = std::move(tabs);
+		rebuildTabSections();
+	}
+	if (show != _tabsShown) {
+		_tabsShown = show;
+		_tabs->setVisible(show);
+		_tabsShadow->setVisible(show);
+		setScrollTopSkip(show ? (_tabs->st().height + st::lineWidth) : 0);
+	}
+	if (show) {
+		auto tab = _currentTab;
+		if (std::find(_tabList.begin(), _tabList.end(), tab)
+			== _tabList.end()) {
+			tab = _tabList.front();
+		}
+		applyTab(tab, true);
+	} else {
+		_inner->setFilter(Tab::Both);
+	}
+}
+
+void Widget::applyTab(Tab tab, bool updateSlider) {
+	_currentTab = tab;
+	_inner->setFilter(tab);
+	if (updateSlider) {
+		const auto i = std::find(_tabList.begin(), _tabList.end(), tab);
+		if (i != _tabList.end()) {
+			const auto index = int(i - _tabList.begin());
+			if (_tabs->activeSection() != index) {
+				_tabs->setActiveSectionFast(index);
+			}
+		}
+	}
 }
 
 bool Widget::showInternal(not_null<ContentMemento*> memento) {
@@ -91,13 +187,16 @@ std::shared_ptr<ContentMemento> Widget::doCreateMemento() {
 }
 
 void Widget::saveState(not_null<Memento*> memento) {
+	memento->setTab(_currentTab);
 	memento->setScrollTop(scrollTopSave());
 	_inner->saveState(memento);
 }
 
 void Widget::restoreState(not_null<Memento*> memento) {
+	_currentTab = memento->tab();
 	_inner->restoreState(memento);
 	scrollTopRestore(memento->scrollTop());
+	refreshTabs();
 }
 
 rpl::producer<SelectedItems> Widget::selectedListValue() const {
@@ -111,8 +210,15 @@ void Widget::selectionAction(SelectionAction action) {
 void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 	const auto window = controller()->parentController();
 	const auto &loadingManager = Core::App().downloadManager();
+	const auto both = _hasDownloads && _hasUploads;
+	const auto showDownloads = both
+		? (_currentTab != Tab::Uploads)
+		: _hasDownloads;
+	const auto showUploads = both
+		? (_currentTab != Tab::Downloads)
+		: _hasUploads;
 
-	if (loadingManager.anyResumable()) {
+	if (showDownloads && loadingManager.anyResumable()) {
 		addAction(
 			tr::lng_downloads_pause_all(tr::now),
 			[=] {
@@ -122,7 +228,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 			},
 			&st::menuIconSchedule);
 	}
-	if (loadingManager.anyPaused()) {
+	if (showDownloads && loadingManager.anyPaused()) {
 		addAction(
 			tr::lng_downloads_resume_all(tr::now),
 			[=] {
@@ -132,7 +238,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 			},
 			&st::menuIconDownload);
 	}
-	if (const auto session = Core::App().maybePrimarySession()) {
+	if (showUploads && Core::App().maybePrimarySession()) {
 		auto uploadsActive = false;
 		auto uploadsPaused = false;
 		auto uploadsOnDisk = false;
@@ -197,14 +303,10 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				&st::menuIconDelete);
 		}
 		auto hasFinishedUploads = false;
-		auto allFinished = true;
 		for (const auto &account : Core::App().domain().orderedAccounts()) {
 			if (const auto s = account->maybeSession()) {
 				if (s->uploader().anyFinishedUploads() > 0) {
 					hasFinishedUploads = true;
-				}
-				if (!s->uploader().allFinished()) {
-					allFinished = false;
 				}
 			}
 		}
@@ -220,7 +322,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				},
 				&st::menuIconClear);
 		}
-		if (allFinished && (uploadsActive || uploadsPaused || onlyOnDisk || hasFinishedUploads)) {
+		if (hasFinishedUploads) {
 			addAction(
 				tr::lng_uploads_delete_all(tr::now),
 				[=] {
@@ -242,7 +344,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				&st::menuIconDelete);
 		}
 	}
-	if (loadingManager.anyFinishedLoading()) {
+	if (showDownloads && loadingManager.anyFinishedLoading()) {
 		addAction(
 			tr::lng_downloads_clear_list(tr::now),
 			[=] {
@@ -270,8 +372,9 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 			.confirmStyle = &st::attentionBoxButton,
 		}));
 	};
-	if (loadingManager.anyResumable()
-		|| loadingManager.anyFinishedLoading()) {
+	if (showDownloads
+		&& (loadingManager.anyResumable()
+			|| loadingManager.anyFinishedLoading())) {
 		addAction(
 			tr::lng_downloads_delete_all_downloads(tr::now),
 			deleteAll,
@@ -280,51 +383,16 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 }
 
 rpl::producer<QString> Widget::title() {
-	const auto computeTitle = [=]() -> QString {
-		auto &manager = Core::App().downloadManager();
-		auto hasDl = false;
-		for ([[maybe_unused]] const auto id : manager.loadingList()) {
-			hasDl = true;
-			break;
-		}
-		if (!hasDl) {
-			for ([[maybe_unused]] const auto id : manager.loadedList()) {
-				hasDl = true;
-				break;
-			}
-		}
-		auto hasUl = false;
-		for (const auto &account : Core::App().domain().orderedAccounts()) {
-			if (const auto s = account->maybeSession()) {
-				if (s->uploader().anyUploads()
-					|| s->uploader().isPaused()
-					|| s->uploader().pendingResumeCount() > 0) {
-					hasUl = true;
-					break;
-				}
-			}
-		}
-		if (hasDl && hasUl) {
-			return tr::lng_downloads_section(tr::now)
-				+ u" & "_q
-				+ tr::lng_uploads_section(tr::now);
-		} else if (hasUl) {
-			return tr::lng_uploads_section(tr::now);
-		}
-		return tr::lng_downloads_section(tr::now);
-	};
-	return rpl::merge(
-		rpl::single(computeTitle()),
-		controller()->session().uploader().loadingListChanges()
-			| rpl::map([=] { return computeTitle(); })
-	);
+	return tr::lng_transfer_manager_title();
 }
 
-std::shared_ptr<Info::Memento> Make(not_null<UserData*> self) {
+std::shared_ptr<Info::Memento> Make(not_null<UserData*> self, Tab tab) {
+	auto memento = std::make_shared<Memento>(self);
+	memento->setTab(tab);
 	return std::make_shared<Info::Memento>(
 		std::vector<std::shared_ptr<ContentMemento>>(
 			1,
-			std::make_shared<Memento>(self)));
+			std::move(memento)));
 }
 
 } // namespace Info::Downloads

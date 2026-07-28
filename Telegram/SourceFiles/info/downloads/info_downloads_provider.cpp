@@ -24,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item_helpers.h"
 #include "history/history.h"
 #include "core/application.h"
+#include "lang/lang_keys.h"
 #include "storage/file_upload.h"
 #include "storage/storage_shared_media.h"
 #include "layout/layout_selection.h"
@@ -60,17 +61,47 @@ rpl::producer<bool> Provider::hasSelectRestrictionChanges() {
 }
 
 bool Provider::sectionHasFloatingHeader() {
-	return false;
+	return _showGroupHeaders;
 }
 
 QString Provider::sectionTitle(not_null<const BaseLayout*> item) {
-	return QString();
+	if (!_showGroupHeaders) {
+		return QString();
+	}
+	return isUploadItem(item->getItem())
+		? tr::lng_uploads_section(tr::now)
+		: tr::lng_downloads_section(tr::now);
 }
 
 bool Provider::sectionItemBelongsHere(
 		not_null<const BaseLayout*> item,
 		not_null<const BaseLayout*> previous) {
-	return true;
+	if (!_showGroupHeaders) {
+		return true;
+	}
+	return isUploadItem(item->getItem())
+		== isUploadItem(previous->getItem());
+}
+
+void Provider::setFilter(Filter filter) {
+	if (_filter == filter) {
+		return;
+	}
+	_filter = filter;
+	_refreshed.fire({});
+}
+
+rpl::producer<bool> Provider::hasDownloadsValue() const {
+	return _hasDownloads.value();
+}
+
+rpl::producer<bool> Provider::hasUploadsValue() const {
+	return _hasUploads.value();
+}
+
+void Provider::updateAvailability() {
+	_hasDownloads = !_downloading.empty() || !_downloaded.empty();
+	_hasUploads = !_uploading.empty() || !_uploaded.empty();
 }
 
 bool Provider::isPossiblyMyItem(not_null<const HistoryItem*> item) {
@@ -134,12 +165,17 @@ void Provider::refreshViewer() {
 			if (!id->done) {
 				const auto item = id->object.item;
 				if (!copy.remove(item) && !_downloaded.contains(item)) {
+					const auto fullId = item->fullId();
+					const auto wasUploading = _uploading.remove(fullId);
+					const auto wasUploaded = _uploaded.remove(fullId);
 					_downloading.emplace(item);
-					addElementNow({
-						.item = item,
-						.started = id->started,
-						.path = id->path,
-					});
+					if (!wasUploading && !wasUploaded) {
+						addElementNow({
+							.item = item,
+							.started = id->started,
+							.path = id->path,
+						});
+					}
 					trackItemSession(item);
 					refreshPostponed(true);
 				}
@@ -243,7 +279,9 @@ void Provider::refreshViewer() {
 			const auto item = session->data().message(info.itemId);
 			if (!item) continue;
 			if (!_uploaded.contains(info.itemId)
-				&& !_uploading.contains(info.itemId)) {
+				&& !_uploading.contains(info.itemId)
+				&& !_downloading.contains(item)
+				&& !_downloaded.contains(item)) {
 				_uploaded.emplace(info.itemId);
 				addElementNow({
 					.item = item,
@@ -261,7 +299,9 @@ void Provider::refreshViewer() {
 			const auto item = session->data().message(itemId);
 			if (!item) return;
 			if (!_uploaded.contains(itemId)
-				&& !_uploading.contains(itemId)) {
+				&& !_uploading.contains(itemId)
+				&& !_downloading.contains(item)
+				&& !_downloaded.contains(item)) {
 				_uploaded.emplace(itemId);
 				addElementNow({
 					.item = item,
@@ -428,6 +468,7 @@ void Provider::performRefresh() {
 		ranges::sort(_elements, ranges::less(), &Element::started);
 	}
 	_refreshed.fire({});
+	updateAvailability();
 }
 
 void Provider::trackItemSession(not_null<const HistoryItem*> item) {
@@ -461,21 +502,66 @@ std::vector<ListSection> Provider::fillSections(
 	}
 	const auto guard = gsl::finally([&] { clearStaleLayouts(); });
 
+	const auto hasDownloads = !_downloading.empty() || !_downloaded.empty();
+	const auto hasUploads = !_uploading.empty() || !_uploaded.empty();
+	_showGroupHeaders = (_filter == Filter::All)
+		&& hasDownloads
+		&& hasUploads;
+
 	if (_elements.empty() || (search && !_foundCount)) {
 		return {};
 	}
 
+	const auto matches = [&](not_null<const HistoryItem*> item) {
+		if (_filter == Filter::All) {
+			return true;
+		}
+		const auto upload = isUploadItem(item);
+		return (_filter == Filter::Uploads) ? upload : !upload;
+	};
+
 	auto result = std::vector<ListSection>();
-	result.emplace_back(Type::File, sectionDelegate());
-	auto &section = result.back();
-	for (const auto &element : ranges::views::reverse(_elements)) {
-		if (search && !element.found) {
-			continue;
-		} else if (auto layout = getLayout(element, delegate)) {
-			section.addItem(layout);
+	if (_showGroupHeaders) {
+		auto downloads = ListSection(Type::File, sectionDelegate());
+		auto uploads = ListSection(Type::File, sectionDelegate());
+		for (const auto &element : ranges::views::reverse(_elements)) {
+			if (search && !element.found) {
+				continue;
+			}
+			const auto layout = getLayout(element, delegate);
+			if (!layout) {
+				continue;
+			}
+			if (isUploadItem(element.item)) {
+				uploads.addItem(layout);
+			} else {
+				downloads.addItem(layout);
+			}
+		}
+		downloads.finishSection();
+		uploads.finishSection();
+		if (!downloads.empty()) {
+			result.push_back(std::move(downloads));
+		}
+		if (!uploads.empty()) {
+			result.push_back(std::move(uploads));
+		}
+	} else {
+		auto section = ListSection(Type::File, sectionDelegate());
+		for (const auto &element : ranges::views::reverse(_elements)) {
+			if (search && !element.found) {
+				continue;
+			} else if (!matches(element.item)) {
+				continue;
+			} else if (auto layout = getLayout(element, delegate)) {
+				section.addItem(layout);
+			}
+		}
+		section.finishSection();
+		if (!section.empty()) {
+			result.push_back(std::move(section));
 		}
 	}
-	section.finishSection();
 	return result;
 }
 
@@ -682,7 +768,10 @@ bool Provider::allowSaveFileAs(
 	return false;
 }
 
-bool Provider::isUploadItem(not_null<const HistoryItem*> item) {
+bool Provider::isUploadItem(not_null<const HistoryItem*> item) const {
+	if (_downloading.contains(item) || _downloaded.contains(item)) {
+		return false;
+	}
 	return _uploading.contains(item->fullId())
 		|| _uploaded.contains(item->fullId());
 }

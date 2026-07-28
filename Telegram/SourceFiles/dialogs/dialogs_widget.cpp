@@ -1266,7 +1266,8 @@ void Widget::setupDownloadBar() {
 			) | rpl::on_next([=] {
 				controller()->showSection(
 					Info::Downloads::Make(
-						controller()->session().user()));
+						controller()->session().user(),
+						Info::Downloads::Tab::Downloads));
 			}, _downloadBar->lifetime());
 
 			if (_connecting) {
@@ -1310,7 +1311,8 @@ void Widget::setupUploadBar() {
 			) | rpl::on_next([=] {
 				controller()->showSection(
 					Info::Downloads::Make(
-						controller()->session().user()));
+						controller()->session().user(),
+						Info::Downloads::Tab::Uploads));
 			}, _uploadBar->lifetime());
 
 			if (_connecting) {

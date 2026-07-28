@@ -9,6 +9,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "info/info_content_widget.h"
 #include "info/media/info_media_widget.h"
+#include "base/object_ptr.h"
+
+namespace Ui {
+class SettingsSlider;
+class PlainShadow;
+} // namespace Ui
 
 namespace Ui {
 class SearchFieldController;
@@ -17,6 +23,12 @@ class SearchFieldController;
 namespace Info::Downloads {
 
 class InnerWidget;
+
+enum class Tab {
+	Downloads,
+	Uploads,
+	Both,
+};
 
 class Memento final : public ContentMemento {
 public:
@@ -31,6 +43,13 @@ public:
 
 	Section section() const override;
 
+	void setTab(Tab tab) {
+		_tab = tab;
+	}
+	[[nodiscard]] Tab tab() const {
+		return _tab;
+	}
+
 	[[nodiscard]] Media::Memento &media() {
 		return _media;
 	}
@@ -40,6 +59,7 @@ public:
 
 private:
 	Media::Memento _media;
+	Tab _tab = Tab::Downloads;
 
 };
 
@@ -64,13 +84,26 @@ public:
 private:
 	void saveState(not_null<Memento*> memento);
 	void restoreState(not_null<Memento*> memento);
+	void setupTabs();
+	void refreshTabs();
+	void rebuildTabSections();
+	void applyTab(Tab tab, bool updateSlider);
 
 	std::shared_ptr<ContentMemento> doCreateMemento() override;
 
 	InnerWidget *_inner = nullptr;
+	object_ptr<Ui::SettingsSlider> _tabs = { nullptr };
+	object_ptr<Ui::PlainShadow> _tabsShadow = { nullptr };
+	std::vector<Tab> _tabList;
+	Tab _currentTab = Tab::Downloads;
+	bool _hasDownloads = false;
+	bool _hasUploads = false;
+	bool _tabsShown = false;
 
 };
 
-[[nodiscard]] std::shared_ptr<Info::Memento> Make(not_null<UserData*> self);
+[[nodiscard]] std::shared_ptr<Info::Memento> Make(
+	not_null<UserData*> self,
+	Tab tab = Tab::Downloads);
 
 } // namespace Info::Downloads

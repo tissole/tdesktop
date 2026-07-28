@@ -178,6 +178,10 @@ Main::Session &ListWidget::session() const {
 	return _controller->session();
 }
 
+not_null<ListProvider*> ListWidget::provider() const {
+	return _provider.get();
+}
+
 void ListWidget::start() {
 	setMouseTracking(true);
 
@@ -692,8 +696,10 @@ void ListWidget::refreshRows() {
 	_sections = _provider->fillSections(this);
 
 	if (_controller->isDownloads() && !_sections.empty()) {
-		for (const auto &item : _sections.back().items()) {
-			trackSession(&item->getItem()->history()->session());
+		for (const auto &section : _sections) {
+			for (const auto &item : section.items()) {
+				trackSession(&item->getItem()->history()->session());
+			}
 		}
 	} else if (!_storyMsgsToMarkSelected.empty()) {
 		markStoryMsgsSelected();
@@ -2375,7 +2381,11 @@ std::vector<ListSection>::iterator ListWidget::findSectionByItem(
 	if (_sections.size() < 2) {
 		return _sections.begin();
 	}
-	Assert(!_controller->isDownloads() && !_controller->isGlobalMedia());
+	if (_controller->isDownloads() || _controller->isGlobalMedia()) {
+		return ranges::find_if(_sections, [&](const Section &section) {
+			return section.findItemByItem(item).has_value();
+		});
+	}
 	return ranges::lower_bound(
 		_sections,
 		GetUniversalId(item),

@@ -30,6 +30,8 @@ namespace Downloads {
 
 class Memento;
 class EmptyWidget;
+class Provider;
+enum class Tab;
 
 class InnerWidget final : public Ui::RpWidget {
 public:
@@ -43,6 +45,10 @@ public:
 	void restoreState(not_null<Memento*> memento);
 
 	void setScrollHeightValue(rpl::producer<int> value);
+
+	void setFilter(Tab tab);
+	[[nodiscard]] rpl::producer<bool> hasDownloadsValue() const;
+	[[nodiscard]] rpl::producer<bool> hasUploadsValue() const;
 
 	rpl::producer<Ui::ScrollToRequest> scrollToRequests() const;
 	rpl::producer<SelectedItems> selectedListValue() const;
@@ -61,6 +67,7 @@ private:
 	void refreshHeight();
 
 	object_ptr<Media::ListWidget> setupList();
+	[[nodiscard]] Provider *provider() const;
 
 	const not_null<Controller*> _controller;
 

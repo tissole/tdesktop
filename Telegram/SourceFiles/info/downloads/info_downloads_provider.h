@@ -25,7 +25,17 @@ class Provider final
 	, private Media::ListSectionDelegate
 	, public base::has_weak_ptr {
 public:
+	enum class Filter {
+		All,
+		Downloads,
+		Uploads,
+	};
+
 	explicit Provider(not_null<AbstractController*> controller);
+
+	void setFilter(Filter filter);
+	[[nodiscard]] rpl::producer<bool> hasDownloadsValue() const;
+	[[nodiscard]] rpl::producer<bool> hasUploadsValue() const;
 
 	Media::Type type() override;
 	bool hasSelectRestriction() override;
@@ -69,7 +79,7 @@ public:
 	bool allowSaveFileAs(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) override;
-	bool isUploadItem(not_null<const HistoryItem*> item);
+	bool isUploadItem(not_null<const HistoryItem*> item) const;
 	QString showInFolderPath(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) override;
@@ -105,6 +115,7 @@ private:
 	[[nodiscard]] bool searchMode() const;
 	void fillSearchIndex(Element &element);
 	[[nodiscard]] bool computeIsFound(const Element &element) const;
+	void updateAvailability();
 
 	void itemRemoved(not_null<const HistoryItem*> item);
 	void markLayoutsStale();
@@ -134,6 +145,11 @@ private:
 	base::flat_set<FullMsgId> _uploading;
 	base::flat_set<FullMsgId> _uploaded;
 	int _storiesAddToAlbumId = 0;
+
+	Filter _filter = Filter::All;
+	bool _showGroupHeaders = false;
+	rpl::variable<bool> _hasDownloads = false;
+	rpl::variable<bool> _hasUploads = false;
 
 	std::vector<Element> _addPostponed;
 
