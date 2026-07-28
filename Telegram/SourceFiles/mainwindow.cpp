@@ -112,8 +112,11 @@ MainWindow::MainWindow(not_null<Window::Controller*> controller)
 	) | rpl::on_next([=](Main::Session *session) {
 		if (session) {
 			showUnfinishedForwards(session);
-			Core::App().downloadManager().showResumeUnfinished(session);
-			session->uploader().showResumeUnfinished();
+			if (!_resumeShown) {
+				_resumeShown = true;
+				Core::App().downloadManager().showResumeUnfinished(session);
+				session->uploader().showResumeUnfinished();
+			}
 		}
 	}, lifetime());
 

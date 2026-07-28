@@ -136,6 +136,7 @@ private:
 
 	object_ptr<Window::Theme::WarningWidget> _testingThemeWarning = { nullptr };
 
+	bool _resumeShown = false;
 };
 
 namespace App {

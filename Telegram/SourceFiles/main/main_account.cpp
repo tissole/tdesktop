@@ -27,6 +27,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "main/main_domain.h"
 #include "main/main_session_settings.h"
+#include "storage/file_upload.h"
+#include "data/data_download_manager.h"
 
 namespace Main {
 namespace {
@@ -542,6 +544,10 @@ void Account::forcedLogOut() {
 void Account::loggedOut() {
 	_loggingOut = false;
 	Media::Player::mixer()->stopAndClear();
+	if (sessionExists()) {
+		session().uploader().pauseAllUploads();
+		Core::App().downloadManager().pauseAll();
+	}
 	destroySession(DestroyReason::LoggedOut);
 	local().reset();
 	cSetOtherOnline(0);
