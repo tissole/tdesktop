@@ -3074,7 +3074,6 @@ void SessionController::cancelUploadLayer(not_null<HistoryItem*> item) {
 			}
 			data.sendHistoryChangeNotifications();
 		}
-		session().uploader().unpause();
 		close();
 	};
 	const auto continueUpload = [=](Fn<void()> close) {
