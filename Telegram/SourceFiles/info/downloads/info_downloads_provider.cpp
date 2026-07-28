@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_account.h"
 #include "main/main_app_config.h"
 #include "main/main_session.h"
+#include "main/main_domain.h"
 #include "history/history_item.h"
 #include "history/history_item_helpers.h"
 #include "history/history.h"
@@ -188,7 +189,10 @@ void Provider::refreshViewer() {
 		}
 	}, _lifetime);
 
-	if (const auto session = Core::App().maybePrimarySession()) {
+	for (const auto &account : Core::App().domain().orderedAccounts()) {
+		const auto session = account->maybeSession();
+		if (!session) continue;
+
 		auto pull = [=] {
 			auto copy = _uploading;
 			for (const auto &info : session->uploader().activeUploads()) {
@@ -270,16 +274,34 @@ void Provider::refreshViewer() {
 
 		session->uploader().finishedUploadsCleared(
 		) | rpl::on_next([=] {
-			const auto copy = _uploaded;
-			for (const auto &itemId : copy) {
-				const auto item = session->data().message(itemId);
-				if (!item) {
-					_uploaded.remove(itemId);
-					continue;
-				}
+			const auto uploadedCopy = _uploaded;
+			const auto uploadingCopy = _uploading;
+			for (const auto &itemId : uploadedCopy) {
 				_uploaded.remove(itemId);
-				remove(item);
 			}
+			for (const auto &itemId : uploadingCopy) {
+				_uploading.remove(itemId);
+			}
+			for (auto i = _elements.begin(); i != _elements.end();) {
+				const auto id = i->item->fullId();
+				if (uploadedCopy.contains(id)
+					|| uploadingCopy.contains(id)) {
+					i = _elements.erase(i);
+				} else {
+					++i;
+				}
+			}
+			for (auto it = _layouts.begin(); it != _layouts.end();) {
+				const auto id = it->first->fullId();
+				if (uploadedCopy.contains(id)
+					|| uploadingCopy.contains(id)) {
+					_layoutRemoved.fire(it->second.item.get());
+					it = _layouts.erase(it);
+				} else {
+					++it;
+				}
+			}
+			refreshPostponed(false);
 		}, _lifetime);
 
 		session->uploader().finishedUploadRemoved(

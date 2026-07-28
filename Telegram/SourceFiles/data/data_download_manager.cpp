@@ -26,6 +26,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/random.h"
 #include "main/main_session.h"
 #include "main/main_account.h"
+#include "main/main_domain.h"
 #include "lang/lang_keys.h"
 #include "storage/storage_account.h"
 #include "history/history.h"
@@ -2124,21 +2125,75 @@ void DownloadManager::untrack(not_null<Main::Session*> session) {
 }
 
 rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
-	const auto session = Core::App().maybePrimarySession();
-	auto uploadProgress = session
-		? session->uploader().uploadProgressValue()
-		: rpl::single(Storage::UploadProgress{});
-	return rpl::combine(
-		Core::App().downloadManager().loadingProgressValue(),
-		std::move(uploadProgress)
-	) | rpl::map([=](const DownloadProgress &downloadProgress, const Storage::UploadProgress &uploadProgress) {
-		return Ui::DownloadBarProgress{
-			.ready = downloadProgress.ready,
-			.total = downloadProgress.total,
-			.uploadReady = uploadProgress.offset,
-			.uploadTotal = uploadProgress.size,
+	return [](auto consumer) {
+		auto lifetime = rpl::lifetime();
+
+		struct State {
+			base::has_weak_ptr guard;
+			bool scheduled = false;
+			Fn<void()> push;
+			rpl::lifetime uploadSubscriptions;
 		};
-	});
+		const auto state = lifetime.make_state<State>();
+
+		const auto notify = [=] {
+			const auto downloadProgress = Core::App().downloadManager().loadingProgress();
+			auto uploadReady = int64(0);
+			auto uploadTotal = int64(0);
+			for (const auto &account : Core::App().domain().orderedAccounts()) {
+				if (const auto session = account->maybeSession()) {
+					for (const auto &u : session->uploader().activeUploads()) {
+						uploadReady += u.offset;
+						uploadTotal += u.total;
+					}
+				}
+			}
+			consumer.put_next(Ui::DownloadBarProgress{
+				.ready = downloadProgress.ready,
+				.total = downloadProgress.total,
+				.uploadReady = uploadReady,
+				.uploadTotal = uploadTotal,
+			});
+		};
+
+		state->push = [=] {
+			if (state->scheduled) return;
+			state->scheduled = true;
+			Ui::PostponeCall(&state->guard, [=] {
+				state->scheduled = false;
+				notify();
+			});
+		};
+
+		Core::App().downloadManager().loadingProgressValue(
+		) | rpl::on_next([=](const DownloadProgress &) {
+			state->push();
+		}, lifetime);
+		for (const auto &account : Core::App().domain().orderedAccounts()) {
+			if (const auto session = account->maybeSession()) {
+				session->uploader().loadingListChanges(
+				) | rpl::on_next(state->push, lifetime);
+				session->uploader().uploadProgressValue(
+				) | rpl::on_next([=](const Storage::UploadProgress &) {
+					state->push();
+				}, lifetime);
+			}
+		}
+		Core::App().domain().activeSessionChanges(
+		) | rpl::on_next([state](Main::Session *session) {
+			if (session) {
+				session->uploader().loadingListChanges(
+				) | rpl::on_next(state->push, state->uploadSubscriptions);
+				session->uploader().uploadProgressValue(
+				) | rpl::on_next([state](const Storage::UploadProgress &) {
+					state->push();
+				}, state->uploadSubscriptions);
+			}
+		}, lifetime);
+
+		notify();
+		return lifetime;
+	};
 }
 
 rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
@@ -2257,74 +2312,37 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 }
 
 rpl::producer<Ui::DownloadBarProgress> MakeUploadBarProgress() {
-	const auto session = Core::App().maybePrimarySession();
-	auto uploadProgress = session
-		? session->uploader().uploadProgressValue()
-		: rpl::single(Storage::UploadProgress{});
-	return std::move(uploadProgress)
-		| rpl::map([=](const Storage::UploadProgress &uploadProgress) {
-			return Ui::DownloadBarProgress{
-				.ready = 0,
-				.total = 0,
-				.uploadReady = uploadProgress.offset,
-				.uploadTotal = uploadProgress.size,
-			};
-		});
-}
-
-rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent() {
 	return [](auto consumer) {
 		auto lifetime = rpl::lifetime();
-		const auto session = Core::App().maybePrimarySession();
+
 		struct State {
 			base::has_weak_ptr guard;
 			bool scheduled = false;
+			Fn<void()> push;
+			rpl::lifetime uploadSubscriptions;
 		};
 		const auto state = lifetime.make_state<State>();
 
 		const auto notify = [=] {
-			auto content = Ui::DownloadBarContent();
-			if (!session) {
-				consumer.put_next(std::move(content));
-				return;
-			}
-			content.uploadCount = int(session->uploader().queueSize());
-			if (!content.uploadCount) {
-				content.uploadCount = session->uploader().pendingResumeCount();
-			}
-			if (content.uploadCount == 1) {
-				const auto name = session->uploader().queueSize()
-					? session->uploader().firstUploadName()
-					: session->uploader().firstPendingUploadName();
-				content.singleUploadName = name.isEmpty()
-					? TextWithEntities()
-					: tr::marked(name);
-			}
-			if (!session->uploader().queueSize()) {
-				const auto pending = session->uploader().pendingUploads();
-				for (const auto &p : pending) {
-					content.uploadReady += p.sent;
-					content.uploadTotal += p.total;
-				}
-				if (pending.size() == 1) {
-					content.uploadSingleReady = pending[0].sent;
-					content.uploadSingleTotal = pending[0].total;
-				}
-			} else {
-				const auto uploads = session->uploader().activeUploads();
-				for (const auto &u : uploads) {
-					content.uploadReady += u.offset;
-					content.uploadTotal += u.total;
-				}
-				if (uploads.size() == 1) {
-					content.uploadSingleReady = uploads[0].offset;
-					content.uploadSingleTotal = uploads[0].total;
+			auto ready = int64(0);
+			auto total = int64(0);
+			for (const auto &account : Core::App().domain().orderedAccounts()) {
+				if (const auto session = account->maybeSession()) {
+					for (const auto &u : session->uploader().activeUploads()) {
+						ready += u.offset;
+						total += u.total;
+					}
 				}
 			}
-			consumer.put_next(std::move(content));
+			consumer.put_next(Ui::DownloadBarProgress{
+				.ready = 0,
+				.total = 0,
+				.uploadReady = ready,
+				.uploadTotal = total,
+			});
 		};
 
-		const auto push = [=] {
+		state->push = [=] {
 			if (state->scheduled) return;
 			state->scheduled = true;
 			Ui::PostponeCall(&state->guard, [=] {
@@ -2333,10 +2351,149 @@ rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent() {
 			});
 		};
 
-		if (session) {
-			session->uploader().loadingListChanges(
-			) | rpl::on_next(push, lifetime);
+		for (const auto &account : Core::App().domain().orderedAccounts()) {
+			if (const auto session = account->maybeSession()) {
+				session->uploader().loadingListChanges(
+				) | rpl::on_next(state->push, lifetime);
+				session->uploader().uploadProgressValue(
+				) | rpl::on_next([=](const Storage::UploadProgress &) {
+					state->push();
+				}, lifetime);
+			}
 		}
+		Core::App().domain().activeSessionChanges(
+		) | rpl::on_next([state](Main::Session *session) {
+			if (session) {
+				session->uploader().loadingListChanges(
+				) | rpl::on_next(state->push, state->uploadSubscriptions);
+				session->uploader().uploadProgressValue(
+				) | rpl::on_next([state](const Storage::UploadProgress &) {
+					state->push();
+				}, state->uploadSubscriptions);
+			}
+		}, lifetime);
+
+		notify();
+		return lifetime;
+	};
+}
+
+rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent() {
+	return [](auto consumer) {
+		auto lifetime = rpl::lifetime();
+		struct State {
+			base::has_weak_ptr guard;
+			bool scheduled = false;
+			Fn<void()> push;
+			rpl::lifetime uploadSubscriptions;
+		};
+		const auto state = lifetime.make_state<State>();
+
+		const auto notify = [=] {
+			auto content = Ui::DownloadBarContent();
+			auto totalQueue = int(0);
+			auto totalPending = int(0);
+			auto totalReady = int64(0);
+			auto totalSize = int64(0);
+			auto firstActiveName = QString();
+			auto firstPendingName = QString();
+			auto firstActiveReady = int64(0);
+			auto firstActiveTotal = int64(0);
+			auto firstPendingReady = int64(0);
+			auto firstPendingTotal = int64(0);
+			auto firstActiveFound = false;
+			auto firstPendingFound = false;
+			for (const auto &account : Core::App().domain().orderedAccounts()) {
+				const auto session = account->maybeSession();
+				if (!session) continue;
+				const auto qSize = session->uploader().queueSize();
+				const auto pSize = session->uploader().pendingResumeCount();
+				totalQueue += qSize;
+				totalPending += pSize;
+				if (qSize > 0) {
+					if (!firstActiveFound) {
+						firstActiveFound = true;
+						firstActiveName = session->uploader().firstUploadName();
+					}
+					const auto uploads = session->uploader().activeUploads();
+					for (const auto &u : uploads) {
+						totalReady += u.offset;
+						totalSize += u.total;
+					}
+					if (uploads.size() == 1 && !firstActiveTotal) {
+						firstActiveReady = uploads[0].offset;
+						firstActiveTotal = uploads[0].total;
+					}
+				} else if (pSize > 0) {
+					if (!firstPendingFound) {
+						firstPendingFound = true;
+						firstPendingName = session->uploader().firstPendingUploadName();
+					}
+					const auto pending = session->uploader().pendingUploads();
+					for (const auto &p : pending) {
+						totalReady += p.sent;
+						totalSize += p.total;
+					}
+					if (pending.size() == 1 && !firstPendingTotal) {
+						firstPendingReady = pending[0].sent;
+						firstPendingTotal = pending[0].total;
+					}
+				}
+			}
+			content.uploadCount = totalQueue;
+			if (!content.uploadCount) {
+				content.uploadCount = totalPending;
+			}
+			if (content.uploadCount == 1) {
+				const auto name = totalQueue
+					? firstActiveName
+					: firstPendingName;
+				content.singleUploadName = name.isEmpty()
+					? TextWithEntities()
+					: tr::marked(name);
+			}
+			content.uploadReady = totalReady;
+			content.uploadTotal = totalSize;
+			if (totalQueue == 0 && totalPending == 1) {
+				content.uploadSingleReady = firstPendingReady;
+				content.uploadSingleTotal = firstPendingTotal;
+			} else if (totalQueue == 1 && totalPending == 0) {
+				content.uploadSingleReady = firstActiveReady;
+				content.uploadSingleTotal = firstActiveTotal;
+			}
+			consumer.put_next(std::move(content));
+		};
+
+		state->push = [=] {
+			if (state->scheduled) return;
+			state->scheduled = true;
+			Ui::PostponeCall(&state->guard, [=] {
+				state->scheduled = false;
+				notify();
+			});
+		};
+
+		for (const auto &account : Core::App().domain().orderedAccounts()) {
+			if (const auto session = account->maybeSession()) {
+				session->uploader().loadingListChanges(
+				) | rpl::on_next(state->push, lifetime);
+				session->uploader().uploadProgressValue(
+				) | rpl::on_next([=](const Storage::UploadProgress &) {
+					state->push();
+				}, lifetime);
+			}
+		}
+		Core::App().domain().activeSessionChanges(
+		) | rpl::on_next([state](Main::Session *session) {
+			if (session) {
+				session->uploader().loadingListChanges(
+				) | rpl::on_next(state->push, state->uploadSubscriptions);
+				session->uploader().uploadProgressValue(
+				) | rpl::on_next([state](const Storage::UploadProgress &) {
+					state->push();
+				}, state->uploadSubscriptions);
+			}
+		}, lifetime);
 
 		notify();
 		return lifetime;

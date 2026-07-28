@@ -18,6 +18,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_download_manager.h"
 #include "data/data_user.h"
 #include "main/main_session.h"
+#include "main/main_account.h"
+#include "main/main_domain.h"
 #include "storage/file_upload.h"
 #include "core/application.h"
 #include "lang/lang_keys.h"
@@ -131,17 +133,30 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 			&st::menuIconDownload);
 	}
 	if (const auto session = Core::App().maybePrimarySession()) {
-		const auto uploadsActive = session->uploader().anyUploads();
-		const auto uploadsPaused = session->uploader().isPaused();
-		const auto onlyOnDisk = !uploadsActive
-			&& session->uploader().pendingResumeCount() > 0;
+		auto uploadsActive = false;
+		auto uploadsPaused = false;
+		auto uploadsOnDisk = false;
+		for (const auto &account : Core::App().domain().orderedAccounts()) {
+			if (const auto s = account->maybeSession()) {
+				const auto active = s->uploader().anyUploads();
+				const auto paused = s->uploader().isPaused();
+				const auto onDisk = !active
+					&& s->uploader().pendingResumeCount() > 0;
+				uploadsActive |= active;
+				uploadsPaused |= paused;
+				uploadsOnDisk |= onDisk;
+			}
+		}
+		const auto onlyOnDisk = !uploadsActive && uploadsOnDisk;
 		if (uploadsActive && !uploadsPaused) {
 			addAction(
 				tr::lng_uploads_pause_all(tr::now),
 				[=] {
 					Ui::PostponeCall(this, [] {
-						if (const auto s = Core::App().maybePrimarySession()) {
-							s->uploader().pauseAllUploads();
+						for (const auto &account : Core::App().domain().orderedAccounts()) {
+							if (const auto s = account->maybeSession()) {
+								s->uploader().pauseAllUploads();
+							}
 						}
 					});
 				},
@@ -151,8 +166,10 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				tr::lng_uploads_resume_all(tr::now),
 				[=] {
 					Ui::PostponeCall(this, [] {
-						if (const auto s = Core::App().maybePrimarySession()) {
-							s->uploader().resumeAllUploads();
+						for (const auto &account : Core::App().domain().orderedAccounts()) {
+							if (const auto s = account->maybeSession()) {
+								s->uploader().resumeAllUploads();
+							}
 						}
 					});
 				},
@@ -166,8 +183,10 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 						.text = tr::lng_uploads_delete_sure_all(tr::now),
 						.confirmed = [=](Fn<void()> close) {
 							close();
-							if (const auto s = Core::App().maybePrimarySession()) {
-								s->uploader().cancelAll();
+							for (const auto &account : Core::App().domain().orderedAccounts()) {
+								if (const auto s = account->maybeSession()) {
+									s->uploader().cancelAll();
+								}
 							}
 						},
 						.confirmText = tr::lng_upload_cancel_yes(tr::now),
@@ -177,17 +196,31 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				},
 				&st::menuIconDelete);
 		}
-		if (session->uploader().anyFinishedUploads() > 0) {
+		auto hasFinishedUploads = false;
+		auto allFinished = true;
+		for (const auto &account : Core::App().domain().orderedAccounts()) {
+			if (const auto s = account->maybeSession()) {
+				if (s->uploader().anyFinishedUploads() > 0) {
+					hasFinishedUploads = true;
+				}
+				if (!s->uploader().allFinished()) {
+					allFinished = false;
+				}
+			}
+		}
+		if (hasFinishedUploads) {
 			addAction(
 				tr::lng_uploads_clear_list(tr::now),
 				[=] {
-					if (const auto s = Core::App().maybePrimarySession()) {
-						s->uploader().clearFinishedUploads();
+					for (const auto &account : Core::App().domain().orderedAccounts()) {
+						if (const auto s = account->maybeSession()) {
+							s->uploader().clearFinishedUploads();
+						}
 					}
 				},
 				&st::menuIconClear);
 		}
-		if (session->uploader().allFinished()) {
+		if (allFinished && (uploadsActive || uploadsPaused || onlyOnDisk || hasFinishedUploads)) {
 			addAction(
 				tr::lng_uploads_delete_all(tr::now),
 				[=] {
@@ -195,8 +228,10 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 						.text = tr::lng_uploads_delete_all_sure(tr::now),
 						.confirmed = [=](Fn<void()> close) {
 							close();
-							if (const auto s = Core::App().maybePrimarySession()) {
-								s->uploader().deleteAllFinishedUploads();
+							for (const auto &account : Core::App().domain().orderedAccounts()) {
+								if (const auto s = account->maybeSession()) {
+									s->uploader().deleteAllFinishedUploads();
+								}
 							}
 						},
 						.confirmText = tr::lng_uploads_delete_all_confirm(tr::now),
@@ -246,7 +281,6 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 
 rpl::producer<QString> Widget::title() {
 	const auto computeTitle = [=]() -> QString {
-		const auto session = &controller()->session();
 		auto &manager = Core::App().downloadManager();
 		auto hasDl = false;
 		for ([[maybe_unused]] const auto id : manager.loadingList()) {
@@ -259,9 +293,17 @@ rpl::producer<QString> Widget::title() {
 				break;
 			}
 		}
-		const auto hasUl = session->uploader().anyUploads()
-			|| session->uploader().isPaused()
-			|| session->uploader().pendingResumeCount() > 0;
+		auto hasUl = false;
+		for (const auto &account : Core::App().domain().orderedAccounts()) {
+			if (const auto s = account->maybeSession()) {
+				if (s->uploader().anyUploads()
+					|| s->uploader().isPaused()
+					|| s->uploader().pendingResumeCount() > 0) {
+					hasUl = true;
+					break;
+				}
+			}
+		}
 		if (hasDl && hasUl) {
 			return tr::lng_downloads_section(tr::now)
 				+ u" & "_q

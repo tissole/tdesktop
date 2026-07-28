@@ -42,6 +42,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/boxes/confirm_box.h"
 #include "ui/boxes/peer_qr_box.h"
 #include "main/main_session.h"
+#include "main/main_account.h"
+#include "main/main_domain.h"
 #include "mtproto/mtproto_config.h"
 #include "data/data_download_manager.h"
 #include "data/data_session.h"
@@ -475,11 +477,15 @@ void WrapWidget::setupTopBarMenuToggle() {
 	} else if (section.type() == Section::Type::Downloads) {
 		auto &manager = Core::App().downloadManager();
 		const auto hasUploads = [=] {
-			if (const auto s = Core::App().maybePrimarySession()) {
-				return s->uploader().anyUploads()
-					|| s->uploader().isPaused()
-					|| s->uploader().anyFinishedUploads() > 0
-					|| s->uploader().pendingResumeCount() > 0;
+			for (const auto &account : Core::App().domain().orderedAccounts()) {
+				if (const auto s = account->maybeSession()) {
+					if (s->uploader().anyUploads()
+						|| s->uploader().isPaused()
+						|| s->uploader().anyFinishedUploads() > 0
+						|| s->uploader().pendingResumeCount() > 0) {
+						return true;
+					}
+				}
 			}
 			return false;
 		};
@@ -504,31 +510,39 @@ void WrapWidget::setupTopBarMenuToggle() {
 				addTopBarMenuButton();
 			}
 		}, _topBar->lifetime());
-		if (const auto s = Core::App().maybePrimarySession()) {
-			s->uploader().loadingListChanges(
-			) | rpl::on_next([=] {
-				if (hasUploads() && !_topBarMenuToggle) {
-					addTopBarMenuButton();
-				}
-			}, _topBar->lifetime());
-			s->uploader().finishedUploadsCleared(
-			) | rpl::on_next([=, &manager] {
-				const auto hasDownloads = [&] {
-					for ([[maybe_unused]] const auto id
-						: manager.loadingList()) {
-						return true;
+		for (const auto &account : Core::App().domain().orderedAccounts()) {
+			if (const auto s = account->maybeSession()) {
+				s->uploader().loadingListChanges(
+				) | rpl::on_next([=] {
+					if (hasUploads() && !_topBarMenuToggle) {
+						addTopBarMenuButton();
 					}
-					for ([[maybe_unused]] const auto id
-						: manager.loadedList()) {
-						return true;
+				}, _topBar->lifetime());
+				s->uploader().finishedUploadsCleared(
+				) | rpl::on_next([=, &manager] {
+					const auto hasDownloads = [&] {
+						for ([[maybe_unused]] const auto id
+							: manager.loadingList()) {
+							return true;
+						}
+						for ([[maybe_unused]] const auto id
+							: manager.loadedList()) {
+							return true;
+						}
+						return false;
+					};
+					if (!hasUploads() && !hasDownloads()) {
+						_topBarMenuToggle = nullptr;
 					}
-					return false;
-				};
-				if (!hasUploads() && !hasDownloads()) {
-					_topBarMenuToggle = nullptr;
-				}
-			}, _topBar->lifetime());
+				}, _topBar->lifetime());
+			}
 		}
+		Core::App().domain().activeSessionChanges(
+		) | rpl::on_next([=] {
+			if (hasUploads() && !_topBarMenuToggle) {
+				addTopBarMenuButton();
+			}
+		}, _topBar->lifetime());
 	} else if (key.giftsPeer()) {
 		addTopBarMenuButton();
 	}
