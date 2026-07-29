@@ -205,6 +205,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "support/support_preload.h"
 #include "dialogs/dialogs_key.h"
 #include "calls/calls_instance.h"
+#include "styles/style_boxes.h"
 #include "styles/style_chat.h"
 #include "styles/style_window.h"
 #include "styles/style_chat_helpers.h"
@@ -7944,7 +7945,10 @@ void HistoryWidget::updateControlsGeometry() {
 		}
 	}
 
-	updateHistoryGeometry(false, false, { ScrollChangeAdd, _topDelta });
+	updateHistoryGeometry(
+		false,
+		false,
+		{ ScrollChangeAdd, base::take(_topDelta) });
 
 	updateFieldSize();
 

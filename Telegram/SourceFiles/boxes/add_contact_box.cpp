@@ -43,6 +43,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_self_destruct.h"
 #include "main/main_session.h"
 #include "facades.h"
+#include "styles/style_add_contact_box.h"
+#include "styles/style_boxes.h"
 #include "styles/style_chat_helpers.h"
 #include "styles/style_info.h"
 #include "styles/style_layers.h"
