@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/enhanced_settings.h"
 #include "settings/settings_enhanced.h"
+#include "styles/style_passcode_box.h"
 
 NetBoostBox::NetBoostBox(QWidget *parent) {
 }
