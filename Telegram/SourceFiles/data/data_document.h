@@ -411,6 +411,8 @@ private:
 	mutable Flags _flags = kStreamingSupportedUnknown;
 	GoodThumbnailState _goodThumbnailState = GoodThumbnailState();
 	Core::NameType _nameType = Core::NameType();
+	mutable int64 _lastKnownOffset = 0;
+	mutable float64 _lastKnownProgress = 0.;
 	std::unique_ptr<FileLoader> _loader;
 
 };
@@ -423,11 +425,16 @@ VoiceWaveform documentWaveformDecode(const QByteArray &encoded5bit);
 QByteArray documentWaveformEncode5bit(const VoiceWaveform &waveform);
 
 [[nodiscard]] QString DownloadTypeSubfolder(not_null<const DocumentData*> data);
-[[nodiscard]] QString DownloadPeerFolder(not_null<PeerData*> peer);
+[[nodiscard]] QString DownloadPeerFolder(
+	not_null<PeerData*> peer,
+	const QString &topicName = QString());
 [[nodiscard]] QString DownloadSubfolderForDocument(
 	not_null<const DocumentData*> data,
-	PeerData *peer);
-[[nodiscard]] QString DownloadSubfolderForPhoto(PeerData *peer);
+	PeerData *peer,
+	const QString &topicName = QString());
+[[nodiscard]] QString DownloadSubfolderForPhoto(
+	PeerData *peer,
+	const QString &topicName = QString());
 
 [[nodiscard]] QString DownloadRootPath(not_null<Main::Session*> session);
 void PruneEmptyDownloadFolders(
@@ -452,4 +459,5 @@ QString DocumentFileNameForSave(
 	bool forceSavingAs = false,
 	const QString &already = QString(),
 	const QDir &dir = QDir(),
-	PeerData *peer = nullptr);
+	PeerData *peer = nullptr,
+	const QString &topicName = QString());

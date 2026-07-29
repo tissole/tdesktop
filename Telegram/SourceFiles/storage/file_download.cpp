@@ -343,6 +343,7 @@ void FileLoader::pause() {
 	}
 	cancelHook();
 
+	_pausedOffset = currentOffset();
 	_paused = true;
 	if (_fileIsOpen) {
 		_file.close();
@@ -393,6 +394,9 @@ void FileLoader::cancel(FailureReason fail) {
 }
 
 int64 FileLoader::currentOffset() const {
+	if (_paused) {
+		return _pausedOffset;
+	}
 	return (_fileIsOpen ? _file.size() : _data.size()) - _skippedBytes;
 }
 

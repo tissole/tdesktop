@@ -19,6 +19,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ffmpeg/ffmpeg_frame_generator.h"
 #include "history/history_item.h"
 #include "history/history.h"
+#include "data/data_forum_topic.h"
+#include "data/data_peer.h"
 #include "window/themes/window_theme_preview.h"
 #include "core/core_settings.h"
 #include "core/application.h"
@@ -313,6 +315,19 @@ void DocumentMedia::automaticLoad(
 		// disk as a side effect) just to immediately cancel below.
 		return;
 	}
+	auto topicName = QString();
+	if (item) {
+		const auto peer = item->history()->peer.get();
+		if (peer->isForum()) {
+			const auto rootId = item->topicRootId();
+			if (rootId != Data::ForumTopic::kGeneralId) {
+				const auto topic = peer->forumTopicFor(rootId);
+				if (topic) {
+					topicName = topic->title();
+				}
+			}
+		}
+	}
 	const auto filename = toCache
 		? QString()
 		: DocumentFileNameForSave(
@@ -320,7 +335,8 @@ void DocumentMedia::automaticLoad(
 			false,
 			QString(),
 			QDir(),
-			item ? item->history()->peer.get() : nullptr);
+			item ? item->history()->peer.get() : nullptr,
+			topicName);
 	const auto loadFromCloud = shouldLoadFromCloud
 		? LoadFromCloudOrLocal
 		: LoadFromLocalOnly;

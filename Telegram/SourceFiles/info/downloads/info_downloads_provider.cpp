@@ -405,7 +405,11 @@ void Provider::performAdd() {
 	}
 	for (auto &element : base::take(_addPostponed)) {
 		_downloaded.emplace(element.item);
-		if (!_downloading.remove(element.item)) {
+		const auto already = ranges::contains(
+			_elements,
+			element.item,
+			&Element::item);
+		if (!already) {
 			addElementNow(std::move(element));
 		}
 	}
@@ -502,11 +506,7 @@ std::vector<ListSection> Provider::fillSections(
 	}
 	const auto guard = gsl::finally([&] { clearStaleLayouts(); });
 
-	const auto hasDownloads = !_downloading.empty() || !_downloaded.empty();
-	const auto hasUploads = !_uploading.empty() || !_uploaded.empty();
-	_showGroupHeaders = (_filter == Filter::All)
-		&& hasDownloads
-		&& hasUploads;
+	_showGroupHeaders = (_filter == Filter::All);
 
 	if (_elements.empty() || (search && !_foundCount)) {
 		return {};

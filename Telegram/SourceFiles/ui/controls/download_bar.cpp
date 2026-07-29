@@ -65,8 +65,10 @@ DownloadBar::DownloadBar(
 DownloadBar::~DownloadBar() = default;
 
 void DownloadBar::show(DownloadBarContent &&content) {
-	_button.toggle(content.count > 0 || content.uploadCount > 0, anim::type::normal);
-	if (!content.count && !content.uploadCount) {
+	const auto allFinished = (content.done >= content.count)
+		&& (content.uploadDone >= content.uploadCount);
+	_button.toggle(!allFinished, anim::type::normal);
+	if (allFinished) {
 		return;
 	}
 	if (!_radial.animating()) {
@@ -172,15 +174,6 @@ void DownloadBar::refreshInfo(const DownloadBarProgress &progress) {
 	} else if (_content.uploadCount == 1 && _content.uploadReady < _content.uploadTotal) {
 		text = tr::marked(
 			FormatDownloadText(_content.uploadReady, _content.uploadTotal));
-	} else if (_content.count > 1 || _content.uploadCount > 1) {
-		const auto downloadsOnly = _content.count > 0 && _content.uploadCount == 0;
-		text = tr::marked(
-			downloadsOnly
-				? tr::lng_downloads_view_in_section(tr::now)
-				: tr::lng_uploads_view_in_section(tr::now));
-	} else if (_content.count == 1) {
-		text = tr::marked(
-			tr::lng_downloads_view_in_chat(tr::now));
 	} else {
 		text = TextWithEntities();
 	}

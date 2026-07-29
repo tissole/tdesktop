@@ -175,6 +175,7 @@ protected:
 	bool _finished = false;
 	bool _cancelled = false;
 	bool _paused = false;
+	mutable int64 _pausedOffset = 0;
 	mutable LocalStatus _localStatus = LocalStatus::NotTried;
 
 	QString _filename;

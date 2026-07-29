@@ -66,6 +66,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_group_call_bar.h"
 #include "history/view/reactions/history_view_reactions_selector.h"
 #include "data/components/sponsored_messages.h"
+#include "data/data_forum_topic.h"
 #include "data/data_group_call.h"
 #include "data/data_session.h"
 #include "data/data_changes.h"
@@ -3187,9 +3188,19 @@ void OverlayWidget::downloadMedia() {
 	const auto downloadPeer = _message
 		? _message->history()->peer.get()
 		: nullptr;
+	auto topicName = QString();
+	if (_message && downloadPeer && downloadPeer->isForum()) {
+		const auto rootId = _message->topicRootId();
+		if (rootId != Data::ForumTopic::kGeneralId) {
+			const auto topic = downloadPeer->forumTopicFor(rootId);
+			if (topic) {
+				topicName = topic->title();
+			}
+		}
+	}
 	const auto downloadSubfolder = _document
-		? DownloadSubfolderForDocument(_document, downloadPeer)
-		: DownloadSubfolderForPhoto(downloadPeer);
+		? DownloadSubfolderForDocument(_document, downloadPeer, topicName)
+		: DownloadSubfolderForPhoto(downloadPeer, topicName);
 	if (!downloadSubfolder.isEmpty()) {
 		if (!path.endsWith('/')) {
 			path += '/';

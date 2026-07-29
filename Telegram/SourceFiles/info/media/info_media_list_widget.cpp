@@ -1185,9 +1185,19 @@ void ListWidget::showContextMenu(
 			if (lnkDocument->loading()) {
 				_contextMenu->addAction(
 					tr::lng_context_cancel_download(tr::now),
-					[lnkDocument] {
-						lnkDocument->cancel();
-					},
+					crl::guard(this, [=] {
+						const auto window = _controller->parentController();
+						setActionBoxWeak(window->show(Ui::MakeConfirmBox({
+							.text = tr::lng_download_cancel_confirm(tr::now),
+							.confirmed = [=](Fn<void()> close) {
+								close();
+								lnkDocument->cancel();
+							},
+							.confirmText = tr::lng_download_cancel_yes(tr::now),
+							.cancelText = tr::lng_download_cancel_no(tr::now),
+							.confirmStyle = &st::attentionBoxButton,
+						})));
+					}),
 					&st::menuIconCancel);
 			} else if (!lnkDocument->uploading()) {
 				const auto filepath = _provider->showInFolderPath(
@@ -1338,8 +1348,18 @@ void ListWidget::showContextMenu(
 				_contextMenu->addAction(
 					tr::lng_context_cancel_upload(tr::now),
 					crl::guard(this, [=] {
-						_controller->session().uploader().cancel(
-							itemId);
+						const auto window = _controller->parentController();
+						setActionBoxWeak(window->show(Ui::MakeConfirmBox({
+							.text = tr::lng_upload_cancel_confirm(tr::now),
+							.confirmed = [=](Fn<void()> close) {
+								close();
+								_controller->session().uploader().cancel(
+									itemId);
+							},
+							.confirmText = tr::lng_upload_cancel_yes(tr::now),
+							.cancelText = tr::lng_upload_cancel_no(tr::now),
+							.confirmStyle = &st::attentionBoxButton,
+						})));
 					}),
 					&st::menuIconCancel);
 			}
@@ -1350,9 +1370,24 @@ void ListWidget::showContextMenu(
 					_contextMenu->addAction(
 						tr::lng_context_delete_from_disk(tr::now),
 						crl::guard(this, [=] {
-							_controller->session().uploader()
-								.deleteFinishedUpload(
-									globalId.itemId);
+							// Uploads used to be deleted straight away here,
+							// unlike downloads (below) which already asked for
+							// confirmation - a stray right-click+Delete could
+							// wipe a finished upload with no way back.
+							const auto uploader = &_controller->session()
+								.uploader();
+							const auto itemId = globalId.itemId;
+							setActionBoxWeak(_controller->parentController()->show(
+								Ui::MakeConfirmBox({
+									.text = tr::lng_downloads_delete_sure_one(
+										tr::now),
+									.confirmed = [=](Fn<void()> close) {
+										close();
+										uploader->deleteFinishedUpload(itemId);
+									},
+									.confirmText = tr::lng_box_delete(tr::now),
+									.confirmStyle = &st::attentionBoxButton,
+								})));
 						}),
 						&st::menuIconDelete);
 				} else if (_controller->isDownloads()) {

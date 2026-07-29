@@ -13,12 +13,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document.h"
 #include "data/data_session.h"
 #include "data/data_download_manager.h"
+#include "storage/file_upload.h"
 #include "data/data_photo.h"
 #include "data/data_peer.h"
 #include "history/history.h"
 #include "lang/lang_keys.h"
 #include "ui/toast/toast.h"
 #include "history/history_item.h"
+#include "data/data_forum_topic.h"
 #include "main/main_session.h"
 
 FileClickHandler::FileClickHandler(FullMsgId context)
@@ -81,7 +83,8 @@ void DocumentSaveClickHandler::Save(
 		not_null<DocumentData*> data,
 		Mode mode,
 		Fn<void()> started,
-		PeerData *peer) {
+		PeerData *peer,
+		const QString &topicName) {
 	if (data->isNull()) {
 		return;
 	}
@@ -114,7 +117,8 @@ void DocumentSaveClickHandler::Save(
 			(mode == Mode::ToNewFile),
 			filename,
 			filedir,
-			peer);
+			peer,
+			topicName);
 		if (savename.isEmpty()) {
 			return;
 		}
@@ -145,6 +149,16 @@ void DocumentSaveClickHandler::SaveAndTrack(
 		Fn<void()> started) {
 	const auto item = document->owner().message(itemId);
 	const auto peer = item ? item->history()->peer.get() : nullptr;
+	auto topicName = QString();
+	if (item && peer && peer->isForum()) {
+		const auto rootId = item->topicRootId();
+		if (rootId != Data::ForumTopic::kGeneralId) {
+			const auto topic = peer->forumTopicFor(rootId);
+			if (topic) {
+				topicName = topic->title();
+			}
+		}
+	}
 	Save(itemId ? itemId : Data::FileOrigin(), document, mode, [=] {
 		if (document->loading() && !document->loadingFilePath().isEmpty()) {
 			if (const auto item = document->owner().message(itemId)) {
@@ -157,7 +171,7 @@ void DocumentSaveClickHandler::SaveAndTrack(
 		if (started) {
 			started();
 		}
-	}, peer);
+	}, peer, topicName);
 }
 
 void DocumentSaveClickHandler::onClickImpl() const {
@@ -176,8 +190,17 @@ void DocumentCancelClickHandler::onClickImpl() const {
 	const auto data = document();
 	if (data->isNull()) {
 		return;
-	} else if (data->uploading() && _handler) {
-		_handler(context());
+	} else if (data->uploading()) {
+		if (_handler) {
+			_handler(context());
+		} else {
+			data->owner().session().uploader().cancel(context());
+		}
+	} else if (const auto item = data->owner().message(context())) {
+		// Ask before cancelling an in-progress download, so an accidental
+		// tap on the X (the progress circle in the chat bubble) doesn't
+		// silently drop it.
+		Core::App().downloadManager().cancelWithConfirmation(item);
 	} else {
 		data->cancel();
 	}

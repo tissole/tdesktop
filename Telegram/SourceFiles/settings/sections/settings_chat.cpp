@@ -1925,9 +1925,9 @@ void SetupDataStorage(
 
 	AddButtonWithIcon(
 		container,
-		tr::lng_downloads_section(),
+		tr::lng_transfer_manager_title(),
 		st::settingsButton,
-		{ &st::menuIconDownload }
+		{ &st::menuIconTransfer }
 	)->setClickedCallback([=] {
 		controller->showSection(
 			Info::Downloads::Make(controller->session().user()));

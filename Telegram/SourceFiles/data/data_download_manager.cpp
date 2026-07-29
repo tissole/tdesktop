@@ -254,18 +254,19 @@ void DownloadManager::addLoading(DownloadObject object) {
 	}
 
 	const auto start = [=, &data] {
+	    const auto ready = QFileInfo(path).exists()
+		    ? QFileInfo(path).size()
+		    : 0;
 		data.downloading.push_back({
 			.object = object,
 			.started = computeNextStartDate(),
 			.path = path,
+			.ready = ready,
 			.total = size,
 			.hiddenByView = false,
 		});
 		_loading.emplace(item);
 		_loadingDocuments.emplace(object.document);
-		const auto ready = QFileInfo(path).exists()
-			? QFileInfo(path).size()
-			: 0;
 		_loadingProgress = DownloadProgress{
 			.ready = _loadingProgress.current().ready + ready,
 			.total = _loadingProgress.current().total + size,
@@ -273,6 +274,13 @@ void DownloadManager::addLoading(DownloadObject object) {
 		_loadingListChanges.fire({});
 		_clearLoadingTimer.cancel();
 		scheduleResumeSave(item->history()->peer);
+
+		if (GetEnhancedBool("prevent_download_duplicates")) {
+			storeActiveDedup(
+				&item->history()->session(),
+				object.document,
+				size);
+		}
 
 		check(item);
 	};
@@ -323,7 +331,7 @@ void DownloadManager::check(
 		const auto pausedChanged = (entry.paused != nowPaused);
 		entry.paused = nowPaused;
 		const auto totalChange = document->size - entry.total;
-		const auto readyChange = document->loadOffset() - entry.ready;
+        const auto readyChange = document->loadOffset() - entry.ready;
 		if (!readyChange && !totalChange) {
 			if (pausedChanged) {
 				_loadingListChanges.fire({});
@@ -359,13 +367,46 @@ void DownloadManager::addLoaded(
 		? DownloadId{ object.document->id, DownloadType::Document }
 		: DownloadId{ object.photo->id, DownloadType::Photo };
 
-	const auto dedupHash = GetEnhancedBool("prevent_download_duplicates")
-		? Data::FileFingerprint(path, size)
-		: QByteArray();
-	if (!dedupHash.isEmpty()) {
+	auto dedupHash = QByteArray();
+	const auto docId = object.document
+		? object.document->id
+		: (object.photo ? object.photo->id : 0);
+	if (GetEnhancedBool("prevent_download_duplicates")) {
 		loadDedup();
+		const auto known = docId ? id_DB.find(docId) : id_DB.end();
+		if (known != id_DB.end()) {
+			// storeActiveDedup() already fetched and stored this exact
+			// fingerprint from the server when the download started.
+			// Re-reading the same 2 sample chunks off the just-finished
+			// file here would just recompute the same hash a second time.
+			dedupHash = known.value();
+		} else {
+			// No start-time record: dedup was off when this started, the
+			// remote fetch failed, or the file was too small to sample
+			// remotely (see kDedupMinPartialHashSize). FileFingerprint()
+			// covers that last case with a full-file local hash, so it's
+			// still worth trying here as a fallback.
+			dedupHash = Data::FileFingerprint(path, size);
+		}
 	}
-	if (!dedupHash.isEmpty() && findDupByHash(size, dedupHash)) {
+	// A hash match against our *own* active record (the one storeActiveDedup
+	// wrote for this same docId when the download started) is not a
+	// duplicate, it's just this download recognizing itself - excluding it
+	// here is required, otherwise every dedup-tracked download would delete
+	// the file it just finished the moment it completed.
+	const auto isDuplicateOfOther = [&] {
+		if (dedupHash.isEmpty()) {
+			return false;
+		}
+		if (const auto it = dedup_DB.find(dedupHash); it != dedup_DB.end()) {
+			return (it.value().size == size) && (it.value().documentId != docId);
+		}
+		if (const auto it = dedup_Pending.find(dedupHash); it != dedup_Pending.end()) {
+			return (it.value().size == size) && (it.value().documentId != docId);
+		}
+		return false;
+	}();
+	if (isDuplicateOfOther) {
 		LOG(("DEDUP: addLoaded dup size=%1 path=%2").arg(
 			size).arg(path));
 		QFile::remove(path);
@@ -422,12 +463,13 @@ void DownloadManager::addLoaded(
 	if (!dedupHash.isEmpty()) {
 		loadDedup();
 		if (!dedup_DB.contains(dedupHash)) {
-			const auto docId = object.document
-				? object.document->id
-				: (object.photo ? object.photo->id : 0);
 			dedup_DB.insert(dedupHash, DedupEntry{ docId, size });
 			id_DB.insert(docId, dedupHash);
 			size_DB.insert(size);
+			_dedupPendingBuckets.emplace(size);
+			scheduleDedupSave();
+		} else if (dedup_DB[dedupHash].active) {
+			dedup_DB[dedupHash].active = false;
 			_dedupPendingBuckets.emplace(size);
 			scheduleDedupSave();
 		}
@@ -463,9 +505,11 @@ void DownloadManager::addLoaded(
 			.total = _loadingProgress.current().total + totalChange,
 		};
 		_loadingListChanges.fire({});
-		if (_loading.empty()) {
-			_clearLoadingTimer.callOnce(kClearLoadingTimeout);
-		}
+		// Previously this scheduled clearLoading() after kClearLoadingTimeout,
+		// which silently dropped the finished entry (and any other finished
+		// entries) from the downloads list a few seconds after completion.
+		// Finished downloads must stay listed until the user explicitly
+		// cancels them or clears the list (see clearIfFinished()).
 	}
 }
 
@@ -497,6 +541,11 @@ void DownloadManager::deleteFiles(const std::vector<GlobalMsgId> &ids) {
 			const auto k = ranges::find(data.downloaded, item, ByItem);
 			if (k != end(data.downloaded)) {
 				const auto document = k->object->document;
+				// The dedup record for this document is intentionally kept:
+				// it only ever gets dropped for downloads that are cancelled
+				// or removed before finishing (see remove()). Deleting the
+				// already-downloaded file here doesn't undo the fact that we
+				// downloaded this content once already.
 				descriptor.files.emplace(k->path, DocumentDescriptor{
 					.sessionUniqueId = id.sessionUniqueId,
 					.documentId = document ? document->id : DocumentId(),
@@ -532,6 +581,8 @@ void DownloadManager::deleteAll() {
 		for (auto &id : base::take(data.downloaded)) {
 			const auto object = id.object.get();
 			const auto document = object ? object->document : nullptr;
+			// Same as deleteFiles(): completed dedup records are kept even
+			// when the downloaded file itself is deleted here.
 			descriptor.files.emplace(id.path, DocumentDescriptor{
 				.sessionUniqueId = sessionUniqueId,
 				.documentId = document ? document->id : DocumentId(),
@@ -1017,14 +1068,22 @@ void DownloadManager::remove(
 		_loadingDocuments.remove(document);
 		if (GetEnhancedBool("prevent_download_duplicates")) {
 			removePendingDedup(document, i->total);
+			if (!i->done) {
+				// Only a cancelled/failed (not finished) download drops its
+				// record: completed downloads keep both the dedup entry and
+				// the cached fingerprint, they're removed only when the file
+				// itself is deleted (see deleteFiles/deleteAll).
+				removeDedupByDocId(document->id, i->total);
+				fingerprintCacheDrop(document->id);
+			}
 		}
 	}
 	data.downloading.erase(i);
 	_loadingListChanges.fire({});
 	_loadingProgress = now;
-	if (_loading.empty() && !_loadingDone.empty()) {
-		_clearLoadingTimer.callOnce(kClearLoadingTimeout);
-	}
+	// No auto-clear scheduling here either: entries only leave the list via
+	// remove() itself, called from an explicit cancel or clearLoading()/
+	// clearIfFinished() triggered by the user.
 }
 
 void DownloadManager::cancel(
@@ -1084,6 +1143,64 @@ void DownloadManager::cancel(not_null<const HistoryItem*> item) {
 		return;
 	}
 	cancel(data, i);
+}
+
+void DownloadManager::cancelWithConfirmation(not_null<const HistoryItem*> item) {
+	auto &data = sessionData(item);
+	const auto i = ranges::find(data.downloading, item, ByItem);
+	const auto tracked = (i != end(data.downloading));
+	if (tracked && i->done) {
+		// Nothing to cancel: it already finished. Removing a finished entry
+		// from the list is not "cancel a download" and doesn't need this
+		// confirmation - that's clearFinishedLoading()/clearIfFinished().
+		return;
+	}
+	const auto window = Core::App().windowFor(
+		not_null(&item->history()->session().account()));
+	if (!window) {
+		// No window to show the confirmation in (e.g. headless/background
+		// call) - fall back to cancelling directly rather than silently
+		// doing nothing.
+		cancel(item);
+		return;
+	}
+	const auto weak = base::make_weak(&item->history()->session());
+	const auto id = item->fullId();
+	auto box = Box([=](not_null<Ui::GenericBox*> box) {
+		box->addRow(object_ptr<Ui::FlatLabel>(
+			box.get(),
+			tr::lng_download_cancel_confirm(tr::now),
+			st::boxLabel));
+		box->setStyle(st::defaultBox);
+		box->addButton(tr::lng_download_cancel_yes(), [=] {
+			box->closeBox();
+			if (const auto strong = weak.get()) {
+				if (const auto item = strong->data().message(id)) {
+					// The document may not be tracked as a download at all
+					// (e.g. it was only ever auto-loaded, never registered
+					// via addLoading()) - cancel() only acts on tracked
+					// entries, so fall back to cancelling the document's own
+					// loader directly for the untracked case.
+				    auto &data = sessionData(item);
+				    const auto itemId = not_null<HistoryItem*>(item);
+				    const auto i = ranges::find(data.downloading, itemId, ByItem);
+					if (i != end(data.downloading)) {
+						cancel(item);
+					} else if (const auto media = item->media()) {
+						if (const auto document = media->document()) {
+							document->cancel();
+						} else if (const auto photo = media->photo()) {
+							photo->cancel();
+						}
+					}
+				}
+			}
+		}, st::attentionBoxButton);
+		box->addButton(tr::lng_download_cancel_no(), [=] {
+			box->closeBox();
+		});
+	});
+	window->show(std::move(box));
 }
 
 void DownloadManager::pauseAll() {
@@ -1450,7 +1567,6 @@ void DownloadManager::writeResumeForPeer(not_null<PeerData*> peer) {
 		obj["msg"] = qint64(item->id.bare);
 		obj["document_id"] = QString::number(document->id);
 		obj["size"] = qint64(entry.total);
-		obj["downloaded"] = qint64(entry.ready);
 		obj["path"] = entry.path;
 		items.append(obj);
 	}
@@ -1559,11 +1675,12 @@ void DownloadManager::loadDedup() {
 		const auto documentId = obj["document_id"].toString().toULongLong();
 		const auto size = int64(obj["size"].toDouble());
 		const auto hash = QByteArray::fromHex(obj["hash"].toString().toLatin1());
+		const auto active = (obj["status"].toString() == u"active"_q);
 		if (hash.isEmpty()) {
 			continue;
 		}
 		if (!dedup_DB.contains(hash)) {
-			dedup_DB.insert(hash, DedupEntry{ documentId, size });
+			dedup_DB.insert(hash, DedupEntry{ documentId, size, active });
 			id_DB.insert(documentId, hash);
 			size_DB.insert(size);
 		}
@@ -1632,6 +1749,9 @@ void DownloadManager::flushDedupSave() {
 				obj["document_id"] = QString::number(entry.documentId);
 				obj["size"] = qint64(entry.size);
 				obj["hash"] = QString::fromLatin1(hash.toHex());
+				obj["status"] = entry.active
+					? u"active"_q
+					: u"completed"_q;
 				items.append(obj);
 			}
 		}
@@ -1662,6 +1782,18 @@ bool DownloadManager::sizeBucketExists(int64 size) const {
 }
 
 void DownloadManager::maybeClearDedupIfIdle() {
+	// The dedup DB (dedup_DB/id_DB/size_DB) is kept in memory permanently
+	// once loaded, for the lifetime of the app: it mirrors DL_hashes.json,
+	// which is itself permanent and only ever shrinks entry-by-entry when a
+	// downloaded file is actually deleted (never wholesale on pause, cancel,
+	// idle, or app quit). Dropping it here used to force a full reload from
+	// disk (and, if a save landed while the maps were empty, could silently
+	// wipe still-valid on-disk records for buckets rewritten from an empty
+	// in-memory copy). We only flush pending writes to disk here, we don't
+	// touch the in-memory maps.
+	if (_dedupPendingBuckets.empty()) {
+		return;
+	}
 	if (!_loading.empty()) {
 		return;
 	}
@@ -1672,15 +1804,7 @@ void DownloadManager::maybeClearDedupIfIdle() {
 	if (_dedupCheckInProgress > 0) {
 		return;
 	}
-	if (!_dedupPendingBuckets.empty()) {
-		flushDedupSave();
-	}
-	if (!dedup_DB.empty()) {
-		dedup_DB.clear();
-		id_DB.clear();
-		size_DB.clear();
-		_dedupLoaded = false;
-	}
+	flushDedupSave();
 }
 
 bool DownloadManager::findDupByDocumentId(uint64 documentId, int64 size) const {
@@ -1721,6 +1845,87 @@ void DownloadManager::storeDedup(
 	dedup_DB.insert(hash, DedupEntry{ documentId, size });
 	id_DB.insert(documentId, hash);
 	size_DB.insert(size);
+	_dedupPendingBuckets.emplace(size);
+	scheduleDedupSave();
+}
+
+void DownloadManager::fetchFingerprint(
+		not_null<Main::Session*> session,
+		not_null<DocumentData*> document,
+		Fn<void(QByteArray)> done) {
+	const auto docId = document->id;
+	const auto cached = _fingerprintCache.find(docId);
+	if (cached != _fingerprintCache.end()) {
+		done(cached.value());
+		return;
+	}
+	Data::RemoteFileFingerprint(session, document, [=](QByteArray hash) {
+		_fingerprintCache[docId] = hash;
+		done(hash);
+	});
+}
+
+void DownloadManager::fingerprintCacheDrop(uint64 documentId) {
+	_fingerprintCache.remove(documentId);
+}
+
+void DownloadManager::storeActiveDedup(
+		not_null<Main::Session*> session,
+		not_null<DocumentData*> document,
+		int64 size) {
+	loadDedup();
+	const auto docId = document->id;
+	if (id_DB.contains(docId)) {
+		// Already has a record (active or completed), most likely restored
+		// from disk on startup together with a resumed download. Don't kick
+		// off another remote fingerprint fetch for it.
+		return;
+	}
+	fetchFingerprint(session, document, [=](QByteArray hash) {
+		if (hash.isEmpty()) {
+			return;
+		}
+		// The download could've been cancelled, finished or removed while
+		// we were waiting for the server to answer with the sampled chunks.
+		if (!_loadingDocuments.contains(document)) {
+			return;
+		}
+		loadDedup();
+		if (dedup_DB.contains(hash)) {
+			// Another download already registered this content (either as
+			// an active or a completed record), don't overwrite it.
+			return;
+		}
+		dedup_DB.insert(hash, DedupEntry{ docId, size, true });
+		id_DB.insert(docId, hash);
+		size_DB.insert(size);
+		_dedupPendingBuckets.emplace(size);
+		scheduleDedupSave();
+	});
+}
+
+void DownloadManager::removeDedupByDocId(uint64 documentId, int64 size) {
+	if (!documentId) {
+		return;
+	}
+	const auto it = id_DB.find(documentId);
+	if (it == id_DB.end()) {
+		return;
+	}
+	const auto hash = it.value();
+	id_DB.erase(it);
+	dedup_DB.remove(hash);
+
+	auto sizeStillUsed = false;
+	for (auto i = dedup_DB.constBegin(); i != dedup_DB.constEnd(); ++i) {
+		if (i.value().size == size) {
+			sizeStillUsed = true;
+			break;
+		}
+	}
+	if (!sizeStillUsed) {
+		size_DB.remove(size);
+	}
 	_dedupPendingBuckets.emplace(size);
 	scheduleDedupSave();
 }
@@ -1824,7 +2029,7 @@ void DownloadManager::checkDuplicate(
 	}
 
 	// Step 3: Fetch chunks, compute hash, check hash in DB and pending simultaneously
-	Data::RemoteFileFingerprint(
+	fetchFingerprint(
 		session,
 		document,
 		[=](QByteArray hash) {
@@ -1850,7 +2055,7 @@ void DownloadManager::checkDuplicate(
 				if (!hash.isEmpty()) {
 					auto otherSession = &otherDoc->session();
 					auto otherHash = std::make_shared<QByteArray>();
-					Data::RemoteFileFingerprint(
+					fetchFingerprint(
 						otherSession,
 						otherDoc,
 						[=](QByteArray h) mutable {
@@ -1919,7 +2124,6 @@ void DownloadManager::showResumeUnfinished(
 			entry.documentId = obj["document_id"]
 				.toString().toULongLong();
 			entry.size = obj["size"].toVariant().toLongLong();
-			entry.downloaded = obj["downloaded"].toVariant().toLongLong();
 			entry.path = obj["path"].toString();
 			if (entry.msgId && entry.documentId) {
 				job.entries.push_back(entry);
@@ -2132,27 +2336,16 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 			base::has_weak_ptr guard;
 			bool scheduled = false;
 			Fn<void()> push;
-			rpl::lifetime uploadSubscriptions;
 		};
 		const auto state = lifetime.make_state<State>();
 
 		const auto notify = [=] {
 			const auto downloadProgress = Core::App().downloadManager().loadingProgress();
-			auto uploadReady = int64(0);
-			auto uploadTotal = int64(0);
-			for (const auto &account : Core::App().domain().orderedAccounts()) {
-				if (const auto session = account->maybeSession()) {
-					for (const auto &u : session->uploader().activeUploads()) {
-						uploadReady += u.offset;
-						uploadTotal += u.total;
-					}
-				}
-			}
 			consumer.put_next(Ui::DownloadBarProgress{
 				.ready = downloadProgress.ready,
 				.total = downloadProgress.total,
-				.uploadReady = uploadReady,
-				.uploadTotal = uploadTotal,
+				.uploadReady = 0,
+				.uploadTotal = 0,
 			});
 		};
 
@@ -2168,27 +2361,6 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 		Core::App().downloadManager().loadingProgressValue(
 		) | rpl::on_next([=](const DownloadProgress &) {
 			state->push();
-		}, lifetime);
-		for (const auto &account : Core::App().domain().orderedAccounts()) {
-			if (const auto session = account->maybeSession()) {
-				session->uploader().loadingListChanges(
-				) | rpl::on_next(state->push, lifetime);
-				session->uploader().uploadProgressValue(
-				) | rpl::on_next([=](const Storage::UploadProgress &) {
-					state->push();
-				}, lifetime);
-			}
-		}
-		Core::App().domain().activeSessionChanges(
-		) | rpl::on_next([state](Main::Session *session) {
-			if (session) {
-				session->uploader().loadingListChanges(
-				) | rpl::on_next(state->push, state->uploadSubscriptions);
-				session->uploader().uploadProgressValue(
-				) | rpl::on_next([state](const Storage::UploadProgress &) {
-					state->push();
-				}, state->uploadSubscriptions);
-			}
 		}, lifetime);
 
 		notify();

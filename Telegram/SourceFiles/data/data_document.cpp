@@ -241,23 +241,30 @@ QString DownloadTypeSubfolder(not_null<const DocumentData*> data) {
 	return u"files"_q;
 }
 
-QString DownloadPeerFolder(not_null<PeerData*> peer) {
+QString DownloadPeerFolder(
+		not_null<PeerData*> peer,
+		const QString &topicName) {
 	const auto name = peer->isSelf()
 		? (base::FileNameFromUserString(peer->name()) + u"_SavedMessages"_q)
 		: base::FileNameFromUserString(peer->name());
 	const auto bareId = peer->id.value & PeerId::kChatTypeMask;
-	return u"DL_%1_%2"_q.arg(QString::number(bareId), name);
+	auto result = u"DL_%1_%2"_q.arg(QString::number(bareId), name);
+	if (!topicName.isEmpty()) {
+		result += u"_%1"_q.arg(base::FileNameFromUserString(topicName));
+	}
+	return result;
 }
 
 [[nodiscard]] QString ComposeDownloadSubfolder(
 		PeerData *peer,
-		const QString &typeSubfolder) {
+		const QString &typeSubfolder,
+		const QString &topicName = QString()) {
 	const auto mode = GetEnhancedInt(u"download_folder_mode"_q);
 	const auto perChat = (mode == 2) || (mode == 3);
 	const auto withType = (mode == 0) || (mode == 2);
 	auto result = QString();
 	if (perChat && peer) {
-		result = DownloadPeerFolder(peer);
+		result = DownloadPeerFolder(peer, topicName);
 	}
 	if (withType) {
 		if (!result.isEmpty()) {
@@ -270,12 +277,18 @@ QString DownloadPeerFolder(not_null<PeerData*> peer) {
 
 QString DownloadSubfolderForDocument(
 		not_null<const DocumentData*> data,
-		PeerData *peer) {
-	return ComposeDownloadSubfolder(peer, DownloadTypeSubfolder(data));
+		PeerData *peer,
+		const QString &topicName) {
+	return ComposeDownloadSubfolder(
+		peer,
+		DownloadTypeSubfolder(data),
+		topicName);
 }
 
-QString DownloadSubfolderForPhoto(PeerData *peer) {
-	return ComposeDownloadSubfolder(peer, u"photos"_q);
+QString DownloadSubfolderForPhoto(
+		PeerData *peer,
+		const QString &topicName) {
+	return ComposeDownloadSubfolder(peer, u"photos"_q, topicName);
 }
 
 QString DownloadRootPath(not_null<Main::Session*> session) {
@@ -338,7 +351,8 @@ QString DocumentFileNameForSave(
 		bool forceSavingAs,
 		const QString &already,
 		const QDir &dir,
-		PeerData *peer) {
+		PeerData *peer,
+		const QString &topicName) {
 	auto alreadySavingFilename = data->loadingFilePath();
 	if (!alreadySavingFilename.isEmpty()) {
 		return alreadySavingFilename;
@@ -391,7 +405,7 @@ QString DocumentFileNameForSave(
 		name,
 		forceSavingAs,
 		dir,
-		DownloadSubfolderForDocument(data, peer));
+		DownloadSubfolderForDocument(data, peer, topicName));
 }
 
 Data::FileOrigin StickerData::setOrigin() const {
@@ -1147,11 +1161,25 @@ float64 DocumentData::progress() const {
 		}
 		return 0.;
 	}
-	return loading() ? _loader->currentProgress() : 0.;
+	if (!loading()) {
+		return 0.;
+	}
+	const auto result = _loader->currentProgress();
+	if (result > 0.) {
+		_lastKnownProgress = result;
+	}
+	return result ? result : _lastKnownProgress;
 }
 
 int64 DocumentData::loadOffset() const {
-	return loading() ? _loader->currentOffset() : 0;
+	if (!loading()) {
+		return 0;
+	}
+	const auto result = _loader->currentOffset();
+	if (result > 0) {
+		_lastKnownOffset = result;
+	}
+	return result ? result : _lastKnownOffset;
 }
 
 bool DocumentData::uploading() const {

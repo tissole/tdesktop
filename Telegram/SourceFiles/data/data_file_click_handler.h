@@ -55,7 +55,8 @@ public:
 		not_null<DocumentData*> document,
 		Mode mode = Mode::ToCacheOrFile,
 		Fn<void()> started = nullptr,
-		PeerData *peer = nullptr);
+		PeerData *peer = nullptr,
+		const QString &topicName = QString());
 	static void SaveAndTrack(
 		FullMsgId itemId,
 		not_null<DocumentData*> document,

@@ -121,6 +121,12 @@ public:
 	void pause(not_null<const HistoryItem*> item);
 	void resume(not_null<const HistoryItem*> item);
 	void cancel(not_null<const HistoryItem*> item);
+	// Shows a "Cancel download?" Yes/No confirmation box, then cancels only
+	// on confirmation. Meant to back the X button both on a chat bubble's
+	// progress circle and on a row in the downloads window - both should
+	// route through this instead of calling cancel() directly, so a stray
+	// click can't silently drop a download.
+	void cancelWithConfirmation(not_null<const HistoryItem*> item);
 	void pauseAll();
 	void resumeAll();
 	void cancelAll();
@@ -156,12 +162,12 @@ private:
 		MsgId msgId = 0;
 		DocumentId documentId = 0;
 		int64 size = 0;
-		int64 downloaded = 0;
 		QString path;
 	};
 	struct DedupEntry {
 		uint64 documentId = 0;
 		int64 size = 0;
+		bool active = false;
 	};
 	struct DeleteFilesDescriptor;
 	struct SessionData {
@@ -246,6 +252,21 @@ private:
 		uint64 documentId,
 		int64 size,
 		const QString &path);
+	// Fetches (or reuses an already-fetched) partial remote fingerprint for
+	// a document. The result (including an empty one, e.g. for small files)
+	// is cached per documentId so the 2 sample chunks are only requested
+	// from the server once per document, until fingerprintCacheDrop() is
+	// called for it (e.g. on cancel).
+	void fetchFingerprint(
+		not_null<Main::Session*> session,
+		not_null<DocumentData*> document,
+		Fn<void(QByteArray)> done);
+	void fingerprintCacheDrop(uint64 documentId);
+	void storeActiveDedup(
+		not_null<Main::Session*> session,
+		not_null<DocumentData*> document,
+		int64 size);
+	void removeDedupByDocId(uint64 documentId, int64 size);
 
 	void addPendingDedup(
 		not_null<DocumentData*> document,
@@ -299,6 +320,12 @@ private:
 	base::flat_set<int64> _dedupPendingBuckets;
 	crl::time _lastDedupFlushTs = 0;
 	base::Timer _dedupSaveTimer;
+
+	// Caches the partial remote fingerprint per documentId so the 2 sample
+	// chunks are requested from the server only once per download attempt,
+	// shared between checkDuplicate() and storeActiveDedup(). An empty
+	// QByteArray is a valid cached value (e.g. file too small to sample).
+	QHash<uint64, QByteArray> _fingerprintCache;
 
 };
 

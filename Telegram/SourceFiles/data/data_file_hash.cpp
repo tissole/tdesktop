@@ -185,11 +185,22 @@ void RemoteFileFingerprint(
 	const auto head = std::make_shared<QByteArray>();
 	const auto tail = std::make_shared<QByteArray>();
 	const auto pending = std::make_shared<int>(2);
-	const auto doneHash = [head, tail, pending, done] {
+	// 'failed' makes sure 'done' fires exactly once no matter which/how many
+	// of the two requests fail: every completion path (success, MTP error,
+	// or an unparsable response) always funnels through doneHash(), and
+	// doneHash() itself only calls 'done' once 'pending' has been decremented
+	// by both requests. Previously, an MTP error called 'done' directly
+	// without going through 'pending', so if both requests failed, 'done'
+	// was invoked twice; and an unparsable response returned without calling
+	// doneHash() at all, so 'pending' never reached 0 and 'done' was never
+	// called, leaving the caller (and e.g. checkDuplicate's in-flight
+	// counter) stuck waiting forever.
+	const auto failed = std::make_shared<bool>(false);
+	const auto doneHash = [head, tail, pending, failed, done] {
 		if (--*pending != 0) {
 			return;
 		}
-		done(HashChunks(*head, *tail));
+		done(*failed ? QByteArray() : HashChunks(*head, *tail));
 	};
 
 	auto &mtp = session->account().mtp();
@@ -199,18 +210,21 @@ void RemoteFileFingerprint(
 			location,
 			MTP_long(headOffset),
 			MTP_int(int(chunk))),
-		[head, doneHash](const MTP::Response &response) {
+		[head, failed, doneHash](const MTP::Response &response) {
 			MTPupload_File result;
 			auto from = response.reply.constData();
 			if (!result.read(from, from + response.reply.size())) {
-				return false;
+				*failed = true;
+				doneHash();
+				return true;
 			}
 			*head = ChunkFromRemote(result);
 			doneHash();
 			return true;
 		},
-		[done](const MTP::Error &error, const MTP::Response &) {
-			done(QByteArray());
+		[failed, doneHash](const MTP::Error &error, const MTP::Response &) {
+			*failed = true;
+			doneHash();
 			return true;
 		},
 		dcId);
@@ -220,18 +234,21 @@ void RemoteFileFingerprint(
 			location,
 			MTP_long(tailOffset),
 			MTP_int(int(chunk))),
-		[tail, doneHash](const MTP::Response &response) {
+		[tail, failed, doneHash](const MTP::Response &response) {
 			MTPupload_File result;
 			auto from = response.reply.constData();
 			if (!result.read(from, from + response.reply.size())) {
-				return false;
+				*failed = true;
+				doneHash();
+				return true;
 			}
 			*tail = ChunkFromRemote(result);
 			doneHash();
 			return true;
 		},
-		[done](const MTP::Error &error, const MTP::Response &) {
-			done(QByteArray());
+		[failed, doneHash](const MTP::Error &error, const MTP::Response &) {
+			*failed = true;
+			doneHash();
 			return true;
 		},
 		dcId);

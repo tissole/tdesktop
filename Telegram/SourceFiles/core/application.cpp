@@ -1054,6 +1054,89 @@ bool Application::exportPreventsQuit() {
 	return false;
 }
 
+void Application::uploaderPauseAll() {
+	for (const auto &[index, account] : _domain->accounts()) {
+		if (const auto s = account->maybeSession()) {
+			s->uploader().pauseAllUploads();
+		}
+	}
+}
+
+void Application::uploaderResumeAll() {
+	for (const auto &[index, account] : _domain->accounts()) {
+		if (const auto s = account->maybeSession()) {
+			s->uploader().resumeAllUploads();
+		}
+	}
+}
+
+void Application::uploaderCancelAll() {
+	for (const auto &[index, account] : _domain->accounts()) {
+		if (const auto s = account->maybeSession()) {
+			s->uploader().cancelAll();
+		}
+	}
+}
+
+void Application::uploaderClearFinished() {
+	for (const auto &[index, account] : _domain->accounts()) {
+		if (const auto s = account->maybeSession()) {
+			s->uploader().clearFinishedUploads();
+		}
+	}
+}
+
+void Application::uploaderDeleteAllFinished() {
+	for (const auto &[index, account] : _domain->accounts()) {
+		if (const auto s = account->maybeSession()) {
+			s->uploader().deleteAllFinishedUploads();
+		}
+	}
+}
+
+bool Application::uploaderAny() const {
+	for (const auto &[index, account] : _domain->accounts()) {
+		if (const auto s = account->maybeSession()) {
+			if (s->uploader().anyUploads()) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool Application::uploaderAnyPaused() const {
+	for (const auto &[index, account] : _domain->accounts()) {
+		if (const auto s = account->maybeSession()) {
+			if (s->uploader().isPaused()) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool Application::uploaderAnyFinished() const {
+	for (const auto &[index, account] : _domain->accounts()) {
+		if (const auto s = account->maybeSession()) {
+			if (s->uploader().anyFinishedUploads() > 0) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+int Application::uploaderPendingResumeCount() const {
+	auto result = 0;
+	for (const auto &[index, account] : _domain->accounts()) {
+		if (const auto s = account->maybeSession()) {
+			result += s->uploader().pendingResumeCount();
+		}
+	}
+	return result;
+}
+
 bool Application::uploadPreventsQuit() {
 	if (!_domain->started()) {
 		return false;

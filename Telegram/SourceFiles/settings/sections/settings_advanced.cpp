@@ -174,15 +174,15 @@ void BuildDataStorageSection(SectionBuilder &builder) {
 
 	builder.addButton({
 		.id = u"advanced/downloads"_q,
-		.title = tr::lng_downloads_section(),
-		.icon = { &st::menuIconDownload },
+		.title = tr::lng_transfer_manager_title(),
+		.icon = { &st::menuIconTransfer },
 		.onClick = [=] {
 			if (controller) {
 				controller->showSection(
 					Info::Downloads::Make(controller->session().user()));
 			}
 		},
-		.keywords = { u"downloads"_q, u"files"_q },
+		.keywords = { u"transfer manager"_q, u"downloads"_q, u"files"_q, u"uploads"_q },
 	});
 
 	const auto askDownloadPath = builder.addButton({

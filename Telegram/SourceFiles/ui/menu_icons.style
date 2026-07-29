@@ -209,6 +209,7 @@ menuIconDownloadOff: icon {{ "menu/download_off-24x24", menuIconColor }};
 menuIconShareOff: icon {{ "menu/share_off-24x24", menuIconColor }};
 menuIconShareOn: icon {{ "menu/share_on-24x24", menuIconColor }};
 menuIconStar: icon {{ "menu/star", menuIconColor }};
+menuIconTransfer: icon {{ "menu/transfer_manager", menuIconColor }};
 
 menuIconTTLAny: icon {{ "menu/auto_delete_plain", menuIconColor }};
 menuIconTTLAnyTextPosition: point(11px, 22px);

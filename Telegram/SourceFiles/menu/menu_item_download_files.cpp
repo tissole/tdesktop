@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_photo.h"
 #include "data/data_photo_media.h"
 #include "data/data_session.h"
+#include "data/data_forum_topic.h"
 #include "data/data_peer.h"
 #include "history/history.h"
 #include "history/history_inner_widget.h"
@@ -147,6 +148,23 @@ void AddAction(
 			}
 			return result;
 		}();
+		const auto photoTopicNames = [&] {
+			auto result = std::vector<QString>(photos.size());
+			for (auto i = 0; i < photos.size(); i++) {
+				const auto &fullId = photos[i].second;
+				const auto item = session->data().message(fullId);
+				if (!item) continue;
+				const auto peer = item->history()->peer.get();
+				if (!peer->isForum()) continue;
+				const auto rootId = item->topicRootId();
+				if (rootId == Data::ForumTopic::kGeneralId) continue;
+				const auto topic = peer->forumTopicFor(rootId);
+				if (topic) {
+					result[i] = topic->title();
+				}
+			}
+			return result;
+		}();
 		const auto saveToFiles = [=] {
 			const auto fullPath = [&](int i) {
 				auto dir = basePath;
@@ -154,7 +172,11 @@ void AddAction(
 					const auto peer = (i < int(photoPeers.size()))
 						? photoPeers[i]
 						: nullptr;
-					const auto subfolder = DownloadSubfolderForPhoto(peer);
+					const auto subfolder = DownloadSubfolderForPhoto(
+						peer,
+						(i < int(photoTopicNames.size()))
+							? photoTopicNames[i]
+							: QString());
 					if (!subfolder.isEmpty()) {
 						dir += subfolder + '/';
 						QDir().mkpath(dir);

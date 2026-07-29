@@ -156,6 +156,15 @@ public:
 	[[nodiscard]] Data::DownloadManager &downloadManager() const {
 		return *_downloadManager;
 	}
+	void uploaderPauseAll();
+	void uploaderResumeAll();
+	void uploaderCancelAll();
+	void uploaderClearFinished();
+	void uploaderDeleteAllFinished();
+	[[nodiscard]] bool uploaderAny() const;
+	[[nodiscard]] bool uploaderAnyPaused() const;
+	[[nodiscard]] bool uploaderAnyFinished() const;
+	[[nodiscard]] int uploaderPendingResumeCount() const;
 	[[nodiscard]] Tray &tray() const {
 		return *_tray;
 	}

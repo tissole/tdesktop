@@ -74,8 +74,6 @@ Widget::Widget(
 void Widget::setupTabs() {
 	_tabs = object_ptr<Ui::SettingsSlider>(this, st::downloadsTabsSlider);
 	_tabsShadow = object_ptr<Ui::PlainShadow>(this);
-	_tabs->hide();
-	_tabsShadow->hide();
 
 	const auto tabsHeight = _tabs->st().height;
 	widthValue(
@@ -91,6 +89,12 @@ void Widget::setupTabs() {
 			applyTab(_tabList[index], false);
 		}
 	}, _tabs->lifetime());
+
+	_tabList = { Tab::Downloads, Tab::Uploads, Tab::Both };
+	rebuildTabSections();
+	_tabsShown = true;
+	setScrollTopSkip(_tabs->st().height + st::lineWidth);
+	applyTab(_currentTab, true);
 
 	rpl::combine(
 		_inner->hasDownloadsValue(),
@@ -119,35 +123,12 @@ void Widget::rebuildTabSections() {
 }
 
 void Widget::refreshTabs() {
-	auto tabs = std::vector<Tab>();
-	if (_hasDownloads && _hasUploads) {
-		tabs = { Tab::Downloads, Tab::Uploads, Tab::Both };
-	} else if (_hasDownloads) {
-		tabs = { Tab::Downloads };
-	} else if (_hasUploads) {
-		tabs = { Tab::Uploads };
+	const auto tab = _currentTab;
+	if (std::find(_tabList.begin(), _tabList.end(), tab)
+		== _tabList.end()) {
+		_currentTab = _tabList.front();
 	}
-	const auto show = !tabs.empty();
-	if (tabs != _tabList) {
-		_tabList = std::move(tabs);
-		rebuildTabSections();
-	}
-	if (show != _tabsShown) {
-		_tabsShown = show;
-		_tabs->setVisible(show);
-		_tabsShadow->setVisible(show);
-		setScrollTopSkip(show ? (_tabs->st().height + st::lineWidth) : 0);
-	}
-	if (show) {
-		auto tab = _currentTab;
-		if (std::find(_tabList.begin(), _tabList.end(), tab)
-			== _tabList.end()) {
-			tab = _tabList.front();
-		}
-		applyTab(tab, true);
-	} else {
-		_inner->setFilter(Tab::Both);
-	}
+	applyTab(_currentTab, true);
 }
 
 void Widget::applyTab(Tab tab, bool updateSlider) {
@@ -210,13 +191,48 @@ void Widget::selectionAction(SelectionAction action) {
 void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 	const auto window = controller()->parentController();
 	const auto &loadingManager = Core::App().downloadManager();
-	const auto both = _hasDownloads && _hasUploads;
-	const auto showDownloads = both
-		? (_currentTab != Tab::Uploads)
-		: _hasDownloads;
-	const auto showUploads = both
-		? (_currentTab != Tab::Downloads)
-		: _hasUploads;
+	const auto showDownloads = (_currentTab == Tab::Downloads) && _hasDownloads;
+	const auto showUploads = (_currentTab == Tab::Uploads) && _hasUploads;
+
+	if (_currentTab == Tab::Both) {
+		const auto hasFinishedDownloads = loadingManager.anyFinishedLoading();
+		const auto hasFinishedUploads = Core::App().uploaderAnyFinished();
+		const auto hasAnyDownloads = loadingManager.anyResumable()
+			|| loadingManager.anyPaused()
+			|| hasFinishedDownloads;
+
+		if (hasFinishedDownloads || hasFinishedUploads) {
+			addAction(
+				tr::lng_uploads_clear_all(tr::now),
+				[=] {
+					Ui::PostponeCall(this, [=] {
+						Core::App().downloadManager().clearFinishedLoading();
+						Core::App().uploaderClearFinished();
+					});
+				},
+				&st::menuIconClear);
+		}
+		if (hasAnyDownloads || hasFinishedUploads) {
+			addAction(
+				tr::lng_group_invite_context_delete_all(tr::now),
+				[=] {
+					window->show(Ui::MakeConfirmBox({
+						.text = tr::lng_downloads_delete_sure_all(tr::now),
+						.confirmed = [=](Fn<void()> close) {
+							close();
+							Ui::PostponeCall(this, [=] {
+								Core::App().downloadManager().deleteAll();
+								Core::App().uploaderDeleteAllFinished();
+							});
+						},
+						.confirmText = tr::lng_box_delete(tr::now),
+						.confirmStyle = &st::attentionBoxButton,
+					}));
+				},
+				&st::menuIconDelete);
+		}
+		return;
+	}
 
 	if (showDownloads && loadingManager.anyResumable()) {
 		addAction(
@@ -238,32 +254,17 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 			},
 			&st::menuIconDownload);
 	}
-	if (showUploads && Core::App().maybePrimarySession()) {
-		auto uploadsActive = false;
-		auto uploadsPaused = false;
-		auto uploadsOnDisk = false;
-		for (const auto &account : Core::App().domain().orderedAccounts()) {
-			if (const auto s = account->maybeSession()) {
-				const auto active = s->uploader().anyUploads();
-				const auto paused = s->uploader().isPaused();
-				const auto onDisk = !active
-					&& s->uploader().pendingResumeCount() > 0;
-				uploadsActive |= active;
-				uploadsPaused |= paused;
-				uploadsOnDisk |= onDisk;
-			}
-		}
-		const auto onlyOnDisk = !uploadsActive && uploadsOnDisk;
+	if (showUploads) {
+		const auto uploadsActive = Core::App().uploaderAny();
+		const auto uploadsPaused = Core::App().uploaderAnyPaused();
+		const auto onlyOnDisk = !uploadsActive
+			&& (Core::App().uploaderPendingResumeCount() > 0);
 		if (uploadsActive && !uploadsPaused) {
 			addAction(
 				tr::lng_uploads_pause_all(tr::now),
 				[=] {
 					Ui::PostponeCall(this, [] {
-						for (const auto &account : Core::App().domain().orderedAccounts()) {
-							if (const auto s = account->maybeSession()) {
-								s->uploader().pauseAllUploads();
-							}
-						}
+						Core::App().uploaderPauseAll();
 					});
 				},
 				&st::menuIconSchedule);
@@ -272,11 +273,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				tr::lng_uploads_resume_all(tr::now),
 				[=] {
 					Ui::PostponeCall(this, [] {
-						for (const auto &account : Core::App().domain().orderedAccounts()) {
-							if (const auto s = account->maybeSession()) {
-								s->uploader().resumeAllUploads();
-							}
-						}
+						Core::App().uploaderResumeAll();
 					});
 				},
 				&st::menuIconDownload);
@@ -289,11 +286,9 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 						.text = tr::lng_uploads_delete_sure_all(tr::now),
 						.confirmed = [=](Fn<void()> close) {
 							close();
-							for (const auto &account : Core::App().domain().orderedAccounts()) {
-								if (const auto s = account->maybeSession()) {
-									s->uploader().cancelAll();
-								}
-							}
+							Ui::PostponeCall(this, [] {
+								Core::App().uploaderCancelAll();
+							});
 						},
 						.confirmText = tr::lng_upload_cancel_yes(tr::now),
 						.cancelText = tr::lng_upload_cancel_no(tr::now),
@@ -302,23 +297,12 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				},
 				&st::menuIconDelete);
 		}
-		auto hasFinishedUploads = false;
-		for (const auto &account : Core::App().domain().orderedAccounts()) {
-			if (const auto s = account->maybeSession()) {
-				if (s->uploader().anyFinishedUploads() > 0) {
-					hasFinishedUploads = true;
-				}
-			}
-		}
+		const auto hasFinishedUploads = Core::App().uploaderAnyFinished();
 		if (hasFinishedUploads) {
 			addAction(
 				tr::lng_uploads_clear_list(tr::now),
 				[=] {
-					for (const auto &account : Core::App().domain().orderedAccounts()) {
-						if (const auto s = account->maybeSession()) {
-							s->uploader().clearFinishedUploads();
-						}
-					}
+					Core::App().uploaderClearFinished();
 				},
 				&st::menuIconClear);
 		}
@@ -330,11 +314,9 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 						.text = tr::lng_uploads_delete_all_sure(tr::now),
 						.confirmed = [=](Fn<void()> close) {
 							close();
-							for (const auto &account : Core::App().domain().orderedAccounts()) {
-								if (const auto s = account->maybeSession()) {
-									s->uploader().deleteAllFinishedUploads();
-								}
-							}
+							Ui::PostponeCall(this, [] {
+								Core::App().uploaderDeleteAllFinished();
+							});
 						},
 						.confirmText = tr::lng_uploads_delete_all_confirm(tr::now),
 						.cancelText = tr::lng_cancel(tr::now),
