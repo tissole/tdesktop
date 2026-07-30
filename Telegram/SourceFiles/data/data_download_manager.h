@@ -164,10 +164,11 @@ private:
 		int64 size = 0;
 		QString path;
 	};
+	enum class DedupStatus { Unfinished, Finished };
 	struct DedupEntry {
 		uint64 documentId = 0;
 		int64 size = 0;
-		bool active = false;
+		DedupStatus status = DedupStatus::Unfinished;
 	};
 	struct DeleteFilesDescriptor;
 	struct SessionData {
@@ -236,46 +237,42 @@ private:
 	[[nodiscard]] std::vector<QString> resumeFilesForSession(
 		not_null<Main::Session*> session) const;
 
-	void loadDedup();
-	void scheduleDedupSave();
-	void flushDedupSave();
-	void maybeClearDedupIfIdle();
+	void loadFileHashes();
+	void scheduleSave();
+	void saveToDisk();
+	void saveIfIdle();
 	[[nodiscard]] QString dedupFilePath() const;
-	[[nodiscard]] bool sizeBucketExists(int64 size) const;
-	[[nodiscard]] bool findDupByDocumentId(
+	[[nodiscard]] bool hasFileSize(int64 size) const;
+	[[nodiscard]] bool findDuplicateByDocumentId(
 		uint64 documentId,
 		int64 size) const;
-	[[nodiscard]] bool findDupByHash(
+	[[nodiscard]] bool findDuplicateByHash(
 		int64 size,
 		const QByteArray &hash) const;
-	void storeDedup(
-		uint64 documentId,
-		int64 size,
-		const QString &path);
 	// Fetches (or reuses an already-fetched) partial remote fingerprint for
 	// a document. The result (including an empty one, e.g. for small files)
 	// is cached per documentId so the 2 sample chunks are only requested
-	// from the server once per document, until fingerprintCacheDrop() is
+	// from the server once per document, until clearFingerprintCache() is
 	// called for it (e.g. on cancel).
 	void fetchFingerprint(
 		not_null<Main::Session*> session,
 		not_null<DocumentData*> document,
 		Fn<void(QByteArray)> done);
-	void fingerprintCacheDrop(uint64 documentId);
-	void storeActiveDedup(
+	void clearFingerprintCache(uint64 documentId);
+	void saveFileHash(
 		not_null<Main::Session*> session,
 		not_null<DocumentData*> document,
 		int64 size);
-	void removeDedupByDocId(uint64 documentId, int64 size);
+	void removeFileHash(uint64 documentId, int64 size);
 
-	void addPendingDedup(
+	void addPendingDocument(
 		not_null<DocumentData*> document,
 		int64 size);
-	void removePendingDedup(
+	void removePendingDocument(
 		not_null<DocumentData*> document,
 		int64 size);
-	[[nodiscard]] DocumentData* findPendingDocWithoutHash(int64 size);
-	void storeDedupHashForPending(
+	[[nodiscard]] DocumentData* findDocumentAwaitingHash(int64 size);
+	void updatePendingHash(
 		not_null<DocumentData*> document,
 		int64 size,
 		const QByteArray &hash);
@@ -303,27 +300,27 @@ private:
 	base::flat_set<not_null<PeerData*>> _resumeSavePending;
 	base::Timer _resumeSaveTimer;
 
-	// O(1) dedup lookup maps for completed downloads (DB)
-	QHash<QByteArray, DedupEntry> dedup_DB;       // hash -> entry
-	QHash<uint64, QByteArray> id_DB;               // documentId -> hash
-	QSet<int64> size_DB;                           // set of sizes
+	// O(1) dedup lookup maps for completed downloads
+	QHash<QByteArray, DedupEntry> fileHashes;       // hash -> entry
+	QHash<uint64, QByteArray> documentIds;           // documentId -> hash
+	QSet<int64> fileSizes;                           // set of sizes
 
 	// O(1) dedup lookup maps for pending downloads (in progress)
-	QHash<QByteArray, DedupEntry> dedup_Pending;   // hash -> entry (only with hash)
-	QHash<uint64, QByteArray> id_Pending;          // documentId -> hash
-	QSet<int64> size_Pending;                      // set of sizes
-	QHash<uint64, not_null<DocumentData*>> pendingDocs;  // documentId -> document
-	QHash<int64, QVector<uint64>> pendingWithoutHash;    // size -> docIds without hash
+	QHash<QByteArray, DedupEntry> pendingFileHashes; // hash -> entry (only with hash)
+	QHash<uint64, QByteArray> pendingDocumentIds;    // documentId -> hash
+	QSet<int64> pendingFileSizes;                    // set of sizes
+	QHash<uint64, not_null<DocumentData*>> pendingDocuments;  // documentId -> document
+	QHash<int64, QVector<uint64>> documentsAwaitingHash;      // size -> docIds without hash
 
-	bool _dedupLoaded = false;
-	int _dedupCheckInProgress = 0;
-	base::flat_set<int64> _dedupPendingBuckets;
-	crl::time _lastDedupFlushTs = 0;
-	base::Timer _dedupSaveTimer;
+	bool _hasLoadedHashes = false;
+	int _checksInProgress = 0;
+	base::flat_set<int64> _sizesToSave;
+	crl::time _lastSaveTime = 0;
+	base::Timer _saveTimer;
 
 	// Caches the partial remote fingerprint per documentId so the 2 sample
 	// chunks are requested from the server only once per download attempt,
-	// shared between checkDuplicate() and storeActiveDedup(). An empty
+	// shared between checkDuplicate() and saveFileHash(). An empty
 	// QByteArray is a valid cached value (e.g. file too small to sample).
 	QHash<uint64, QByteArray> _fingerprintCache;
 
