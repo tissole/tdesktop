@@ -644,6 +644,8 @@ PRIVATE
     data/data_document_media.h
     data/data_document_resolver.cpp
     data/data_document_resolver.h
+    data/data_dedup_db.cpp
+    data/data_dedup_db.h
     data/data_download_manager.cpp
     data/data_download_manager.h
     data/data_file_hash.cpp

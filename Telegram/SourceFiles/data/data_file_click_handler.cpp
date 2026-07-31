@@ -22,6 +22,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item.h"
 #include "data/data_forum_topic.h"
 #include "main/main_session.h"
+#include "main/main_account.h"
+#include "base/weak_ptr.h"
+#include "ui/layers/generic_box.h"
+#include "ui/widgets/labels.h"
+#include "window/window_controller.h"
+#include "styles/style_layers.h"
 
 FileClickHandler::FileClickHandler(FullMsgId context)
 : _context(context) {
@@ -193,6 +199,36 @@ void DocumentCancelClickHandler::onClickImpl() const {
 	} else if (data->uploading()) {
 		if (_handler) {
 			_handler(context());
+		} else if (const auto item = data->owner().message(context())) {
+			// Ask before cancelling an in-progress upload, the same way the
+			// download branch below and the transfer manager context menu do,
+			// so an accidental tap on the X doesn't silently drop it.
+			const auto &session = item->history()->session();
+			const auto window = Core::App().windowFor(
+				not_null(&session.account()));
+			if (!window) {
+				session.uploader().cancel(item->fullId());
+				return;
+			}
+			const auto weak = base::make_weak(&session);
+			const auto id = item->fullId();
+			auto box = Box([=](not_null<Ui::GenericBox*> box) {
+				box->addRow(object_ptr<Ui::FlatLabel>(
+					box.get(),
+					tr::lng_upload_cancel_confirm(tr::now),
+					st::boxLabel));
+				box->setStyle(st::defaultBox);
+				box->addButton(tr::lng_upload_cancel_yes(), [=] {
+					box->closeBox();
+					if (const auto strong = weak.get()) {
+						strong->uploader().cancel(id);
+					}
+				}, st::attentionBoxButton);
+				box->addButton(tr::lng_upload_cancel_no(), [=] {
+					box->closeBox();
+				});
+			});
+			window->show(std::move(box));
 		} else {
 			data->owner().session().uploader().cancel(context());
 		}

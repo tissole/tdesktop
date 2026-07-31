@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/flat_set.h"
 #include "base/timer.h"
+#include "data/data_dedup_db.h"
 
 #include <QHash>
 #include <QSet>
@@ -146,6 +147,7 @@ public:
 	[[nodiscard]] bool hasUnfinishedResume(
 		not_null<Main::Session*> session) const;
 	void showResumeUnfinished(not_null<Main::Session*> session);
+	void clearFingerprintCache();
 
 	// Decides whether downloading the given remote document should be skipped
 	// because an identical file was already downloaded. Calls done(true) to
@@ -156,6 +158,8 @@ public:
 		not_null<Main::Session*> session,
 		not_null<DocumentData*> document,
 		Fn<void(bool)> done);
+
+	[[nodiscard]] DedupDb &dedupDb() const;
 
 private:
 	struct ResumeEntry {
@@ -231,17 +235,11 @@ private:
 	[[nodiscard]] std::vector<DownloadedId> deserialize(
 		not_null<Main::Session*> session) const;
 
-	void scheduleResumeSave(not_null<PeerData*> peer);
-	void flushResumeSaves();
-	void writeResumeForPeer(not_null<PeerData*> peer);
-	[[nodiscard]] std::vector<QString> resumeFilesForSession(
-		not_null<Main::Session*> session) const;
-
 	void loadFileHashes();
-	void scheduleSave();
+	DedupDb &ensureDedupDb() const;
 	void saveToDisk();
 	void saveIfIdle();
-	[[nodiscard]] QString dedupFilePath() const;
+	[[nodiscard]] QString dedupDbPath() const;
 	[[nodiscard]] bool hasFileSize(int64 size) const;
 	[[nodiscard]] bool findDuplicateByDocumentId(
 		uint64 documentId,
@@ -297,9 +295,6 @@ private:
 
 	base::Timer _clearLoadingTimer;
 
-	base::flat_set<not_null<PeerData*>> _resumeSavePending;
-	base::Timer _resumeSaveTimer;
-
 	// O(1) dedup lookup maps for completed downloads
 	QHash<QByteArray, DedupEntry> fileHashes;       // hash -> entry
 	QHash<uint64, QByteArray> documentIds;           // documentId -> hash
@@ -312,11 +307,9 @@ private:
 	QHash<uint64, not_null<DocumentData*>> pendingDocuments;  // documentId -> document
 	QHash<int64, QVector<uint64>> documentsAwaitingHash;      // size -> docIds without hash
 
+	mutable std::unique_ptr<DedupDb> _dedupDb;
 	bool _hasLoadedHashes = false;
 	int _checksInProgress = 0;
-	base::flat_set<int64> _sizesToSave;
-	crl::time _lastSaveTime = 0;
-	base::Timer _saveTimer;
 
 	// Caches the partial remote fingerprint per documentId so the 2 sample
 	// chunks are requested from the server only once per download attempt,

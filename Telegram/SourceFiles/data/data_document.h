@@ -440,9 +440,6 @@ QByteArray documentWaveformEncode5bit(const VoiceWaveform &waveform);
 void PruneEmptyDownloadFolders(
 	not_null<Main::Session*> session,
 	const QString &removedFilePath);
-[[nodiscard]] QString DownloadResumeJsonPath(
-	not_null<Main::Session*> session,
-	not_null<PeerData*> peer);
 
 QString FileNameForSave(
 	not_null<Main::Session*> session,

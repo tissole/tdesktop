@@ -158,6 +158,19 @@ QByteArray FileFingerprint(const QString &path, int64 size) {
 	return HashChunks(head, tail);
 }
 
+QByteArray ContentFingerprint(const QByteArray &content) {
+	if (content.isEmpty()) {
+		return QByteArray();
+	}
+	auto state = XXH3_state_t();
+	XXH3_128bits_reset(&state);
+	XXH3_128bits_update(
+		&state,
+		content.constData(),
+		static_cast<size_t>(content.size()));
+	return HashState(&state);
+}
+
 void RemoteFileFingerprint(
 		not_null<Main::Session*> session,
 		not_null<DocumentData*> document,
@@ -172,15 +185,49 @@ void RemoteFileFingerprint(
 		MTP_long(document->accessHash()),
 		MTP_bytes(document->fileReference()),
 		MTP_string());
+	const auto dcId = MTP::updaterDcId(document->getDC());
+
 	if (size < kDedupMinPartialHashSize) {
-		done(QByteArray());
+		const auto limit = ((size + 1023) / 1024) * 1024;
+		const auto content = std::make_shared<QByteArray>();
+		auto &mtp = session->account().mtp();
+		mtp.send(
+			MTPupload_GetFile(
+				MTP_flags(MTPupload_GetFile::Flag::f_precise),
+				location,
+				MTP_long(0),
+				MTP_int(int(limit))),
+		[content, done](const MTP::Response &response) {
+			auto from = response.reply.constData();
+			if (!from || response.reply.isEmpty()) {
+				done(QByteArray());
+				return true;
+			}
+			auto result = MTPupload_File();
+			if (!result.read(from, from + response.reply.size())) {
+				done(QByteArray());
+				return true;
+			}
+			if (result.type() != mtpc_upload_file) {
+				done(QByteArray());
+				return true;
+			}
+			*content = result.c_upload_file().vbytes().v;
+			done(ContentFingerprint(*content));
+			return true;
+		},
+		[done](const MTP::Error &, const MTP::Response &) {
+			done(QByteArray());
+			return true;
+		},
+		dcId);
 		return;
 	}
+
 	int64 headOffset = 0;
 	int64 tailOffset = 0;
 	DedupSampleOffsets(size, headOffset, tailOffset);
 	const auto chunk = int64(kDedupChunk);
-	const auto dcId = MTP::updaterDcId(document->getDC());
 
 	const auto head = std::make_shared<QByteArray>();
 	const auto tail = std::make_shared<QByteArray>();

@@ -8013,6 +8013,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_settings_disable_link_warning" = "Disable open link warning";
 "lng_settings_hide_messages" = "Hide messages from blocked user";
 "lng_settings_prevent_download_duplicates" = "Prevent downloading duplicates";
+"lng_settings_prevent_upload_duplicates" = "Prevent uploading duplicates";
 "lng_settings_disable_premium_animation" = "Disable Premium Animation";
 "lng_settings_disable_global_search" = "Disable global search";
 "lng_settings_show_group_sender_avatar" = "Show sender's avatar in groups";
@@ -8156,6 +8157,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_enhanced_forward_later" = "Later";
 
 "lng_download_duplicate_skipped" = "File already downloaded.";
+"lng_upload_duplicate_skipped" = "File already uploaded.";
 "lng_uploads_pause_all" = "Pause all uploads";
 "lng_uploads_resume_all" = "Resume all uploads";
 "lng_uploads_cancel_all" = "Cancel all uploads";

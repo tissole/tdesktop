@@ -354,6 +354,7 @@ namespace EnhancedSettings {
 		settings.insert(qsl("local_folders"), false);
 		settings.insert(qsl("download_folder_mode"), 1);
 		settings.insert(qsl("prevent_download_duplicates"), false);
+		settings.insert(qsl("prevent_upload_duplicates"), false);
 
 		auto document = QJsonDocument();
 		document.setObject(settings);
@@ -414,6 +415,7 @@ namespace EnhancedSettings {
 		settings.insert(qsl("local_folders"), GetEnhancedBool("local_folders"));
 		settings.insert(qsl("download_folder_mode"), GetEnhancedInt("download_folder_mode"));
 		settings.insert(qsl("prevent_download_duplicates"), GetEnhancedBool("prevent_download_duplicates"));
+		settings.insert(qsl("prevent_upload_duplicates"), GetEnhancedBool("prevent_upload_duplicates"));
 
 		if (!gLocalFolders.isEmpty()) {
 			auto accounts = QJsonObject();

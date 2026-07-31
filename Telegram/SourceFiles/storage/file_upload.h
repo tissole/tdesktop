@@ -75,6 +75,18 @@ public:
 		const std::shared_ptr<FilePrepareResult> &file,
 		int resumeFromParts = 0);
 
+	// Returns true if this file would be a duplicate (by hash in dedup DB
+	// or currently in-progress uploads), so the caller can skip sending.
+	// Registers the hash as an in-progress upload when not a duplicate, so
+	// a second check for the same file doesn't pass while it is uploading.
+	[[nodiscard]] bool checkUploadDuplicate(
+		FullMsgId itemId,
+		const std::shared_ptr<FilePrepareResult> &file);
+
+	// Called when a finished upload's local document is replaced by the real
+	// server document, so the UL dedup record gets the real document id.
+	void documentIdWriteback(uint64 localId, uint64 realId);
+
 	void pause(FullMsgId itemId);
 	void cancel(FullMsgId itemId);
 	void cancelAll();
@@ -220,7 +232,7 @@ private:
 	void partFailed(const MTP::Error &error, mtpRequestId requestId);
 	Request finishRequest(mtpRequestId requestId);
 
-	void resumeEntriesFromDisk();
+	void resumeEntriesFromDb();
 
 	void uploadVideoCover(
 		UploadedMedia &&video,
@@ -243,11 +255,20 @@ private:
 		Api::SendProgressType type,
 		int progress = 0);
 
-	void saveResumeState();
+	void saveResumeState(bool force = false);
 	void clearResumeState(PeerId peerId, const QString &filePath);
-	[[nodiscard]] QString resumeFilePath(PeerId peerId = PeerId()) const;
 	Fn<std::optional<QByteArray>()> serializeFinishedUploads();
 	void loadFinishedUploadsFromAccount();
+
+	// Upload dedup tracking (in-progress uploads)
+	QHash<QByteArray, int64> _uploadPendingHashes;
+	QHash<FullMsgId, QByteArray> _uploadPendingByItem;
+
+	// Maps the local document id of a finished upload to its content hash,
+	// so the real server document id can be written back once the sent
+	// message is confirmed.
+	QHash<uint64, QByteArray> _uploadPendingDocIds;
+	QHash<uint64, int64> _uploadPendingDocSizes;
 
 	const not_null<ApiWrap*> _api;
 
@@ -290,6 +311,7 @@ private:
 	rpl::variable<UploadProgress> _uploadProgress;
 
 	bool _paused = false;
+	crl::time _lastResumeSave = 0;
 
 	rpl::lifetime _lifetime;
 

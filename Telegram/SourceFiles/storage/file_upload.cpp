@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "data/data_channel.h"
 #include "data/data_changes.h"
+#include "data/data_dedup_db.h"
 #include "ui/image/image_location_factory.h"
 #include "ui/layers/generic_box.h"
 #include "ui/widgets/buttons.h"
@@ -30,6 +31,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/file_location.h"
 #include "core/mime_type.h"
 #include "core/application.h"
+#include "core/enhanced_settings.h"
+#include "data/data_file_hash.h"
+#include "data/data_download_manager.h"
+#include "core/application.h"
 #include "platform/platform_file_utilities.h"
 #include "window/window_controller.h"
 #include "main/main_session.h"
@@ -38,14 +43,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "lang/lang_keys.h"
 #include "styles/style_layers.h"
+#include "ui/toast/toast.h"
 
 #include "storage/serialize_common.h"
 
 #include <QFile>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
-#include <QDir>
 #include <QFileInfo>
 
 namespace Storage {
@@ -87,6 +89,7 @@ constexpr auto kSlowRequestThreshold = 8 * crl::time(1000);
 // Request is 'fast' if it was done in less than 1s and
 // (it-s size + queued before size) >= 512kb.
 constexpr auto kAcceptAsFastIfTotalAtLeast = 512 * 1024;
+constexpr auto kResumeSaveInterval = 10 * crl::time(1000);
 
 [[nodiscard]] const char *ThumbnailFormat(const QString &mime) {
 	return Core::IsMimeSticker(mime) ? "WEBP" : "JPG";
@@ -351,6 +354,58 @@ FullMsgId Uploader::currentUploadId() const {
 	return _queue.empty() ? FullMsgId() : _queue.front().itemId;
 }
 
+bool Uploader::checkUploadDuplicate(
+		FullMsgId itemId,
+		const std::shared_ptr<FilePrepareResult> &file) {
+	if (!GetEnhancedBool("prevent_upload_duplicates")
+		|| (file->type != SendMediaType::File
+			&& file->type != SendMediaType::ThemeFile
+			&& file->type != SendMediaType::Photo)) {
+		return false;
+	}
+	const auto hash = (file->type == SendMediaType::Photo)
+		? Data::ContentFingerprint(file->content)
+		: Data::FileFingerprint(file->filepath, file->filesize);
+	if (hash.isEmpty()) {
+		return false;
+	}
+	if (Core::App().downloadManager().dedupDb().contains(
+		Data::DedupDb::Table::Uploads,
+		hash,
+		file->filesize)
+		|| _uploadPendingHashes.contains(hash)) {
+		return true;
+	}
+	_uploadPendingHashes.insert(hash, file->filesize);
+	_uploadPendingByItem.emplace(itemId, hash);
+	return false;
+}
+
+void Uploader::documentIdWriteback(uint64 localId, uint64 realId) {
+	if (!realId || realId == localId) {
+		return;
+	}
+	const auto hashIt = _uploadPendingDocIds.find(localId);
+	if (hashIt == _uploadPendingDocIds.end()) {
+		return;
+	}
+	const auto sizeIt = _uploadPendingDocSizes.find(localId);
+	const auto size = (sizeIt != _uploadPendingDocSizes.end())
+		? sizeIt.value()
+		: 0;
+	Core::App().downloadManager().dedupDb().insert(
+		Data::DedupDb::Table::Uploads,
+		{
+			.hash = hashIt.value(),
+			.size = size,
+			.documentId = realId,
+		});
+	_uploadPendingDocIds.erase(hashIt);
+	if (sizeIt != _uploadPendingDocSizes.end()) {
+		_uploadPendingDocSizes.erase(sizeIt);
+	}
+}
+
 void Uploader::upload(
 		FullMsgId itemId,
 		const std::shared_ptr<FilePrepareResult> &file,
@@ -417,8 +472,9 @@ void Uploader::upload(
 				file->videoCover->photoThumbs);
 		}
 	}
+
 	_queue.push_back(Entry(itemId, file, resumeFromParts));
-	saveResumeState();
+	saveResumeState(true);
 	_uploadListChanges.fire(rpl::empty_value{});
 	if (!_nextTimer.isActive()) {
 		maybeSend();
@@ -460,6 +516,15 @@ void Uploader::failed(FullMsgId itemId) {
 	crl::on_main(this, [=] {
 		maybeSend();
 	});
+
+	const auto it = _uploadPendingByItem.find(itemId);
+	if (it != _uploadPendingByItem.end()) {
+		const auto hash = it.value();
+		if (!hash.isEmpty()) {
+			_uploadPendingHashes.remove(hash);
+		}
+		_uploadPendingByItem.erase(it);
+	}
 }
 
 void Uploader::notifyFailed(const Entry &entry) {
@@ -1107,6 +1172,29 @@ void Uploader::finishFront() {
 			int(entry.parts->size()),
 		});
 	}
+
+	if (GetEnhancedBool("prevent_upload_duplicates")
+		&& (entry.file->type == SendMediaType::File
+			|| entry.file->type == SendMediaType::ThemeFile
+			|| entry.file->type == SendMediaType::Photo)) {
+		const auto it = _uploadPendingByItem.find(entry.itemId);
+		if (it != _uploadPendingByItem.end()) {
+			const auto hash = it.value();
+			if (!hash.isEmpty()) {
+				Core::App().downloadManager().dedupDb().insert(
+					Data::DedupDb::Table::Uploads,
+					{
+						.hash = hash,
+						.size = entry.file->filesize,
+						.documentId = entry.file->id,
+					});
+				_uploadPendingDocIds[entry.file->id] = hash;
+				_uploadPendingDocSizes[entry.file->id] = entry.file->filesize;
+				_uploadPendingHashes.remove(hash);
+			}
+			_uploadPendingByItem.erase(it);
+		}
+	}
 }
 
 void Uploader::partFailed(const MTP::Error &error, mtpRequestId requestId) {
@@ -1123,7 +1211,7 @@ void Uploader::partFailed(const MTP::Error &error, mtpRequestId requestId) {
 			i->sentSize = 0;
 			i->docSentSize = 0;
 			i->docFile = nullptr;
-			saveResumeState();
+			saveResumeState(true);
 			_uploadListChanges.fire(rpl::empty_value{});
 			LOG(("Uploader: restarting upload from part 0 due to %1"
 				).arg(type));
@@ -1185,16 +1273,6 @@ void Uploader::uploadCoverAsPhoto(
 	}).fail([=] {
 		failed(coverId);
 	}).send();
-}
-
-QString Uploader::resumeFilePath(PeerId peerId) const {
-	const auto path = DownloadRootPath(&session());
-	if (path.isEmpty()) {
-		return QString();
-	}
-	const auto name = u"UL_"_q + QString::number(peerId.value);
-	const auto root = path.endsWith('/') ? path : (path + '/');
-	return root + name + u".json"_q;
 }
 
 Fn<std::optional<QByteArray>()> Uploader::serializeFinishedUploads() {
@@ -1269,90 +1347,42 @@ void Uploader::loadFinishedUploadsFromAccount() {
 	}
 }
 
-void Uploader::saveResumeState() {
-	base::flat_map<PeerId, QJsonArray> byPeer;
-	for (const auto &entry : _queue) {
-		if (!entry.file) {
-			continue;
-		}
-		auto obj = QJsonObject();
-		obj[u"file_path"_q] = entry.file->filepath;
-		obj[u"file_size"_q] = qlonglong(entry.file->filesize);
-		obj[u"parts_sent"_q] = int(entry.partsSent - entry.partsWaiting);
-		obj[u"doc_parts_sent"_q] = int(entry.docPartsSent - entry.docPartsWaiting);
-		obj[u"sent_size"_q] = qlonglong(entry.docSentSize);
-		obj[u"peer_id"_q] = QString::number(entry.itemId.peer.value);
-		obj[u"file_id"_q] = QString::number(entry.file->id);
-		const auto topicRootId = entry.file->to.replyTo.topicRootId;
-		if (topicRootId) {
-			obj[u"topic_root_id"_q] = QString::number(topicRootId.bare);
-		}
-		byPeer[entry.itemId.peer].append(obj);
+void Uploader::saveResumeState(bool force) {
+	const auto now = crl::now();
+	if (!force && (now - _lastResumeSave) < kResumeSaveInterval) {
+		return;
 	}
-	for (const auto &[peerId, entries] : byPeer) {
-		const auto path = resumeFilePath(peerId);
-		if (path.isEmpty()) {
+	_lastResumeSave = now;
+	auto &db = Core::App().downloadManager().dedupDb();
+	for (const auto &entry : _queue) {
+		if (!entry.file || entry.file->filepath.isEmpty()) {
 			continue;
 		}
-		QDir().mkpath(QFileInfo(path).absolutePath());
-		auto doc = QJsonObject();
-		doc[u"entries"_q] = entries;
-		doc[u"paused"_q] = _paused;
-		auto file = QFile(path);
-		if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-			file.write(QJsonDocument(doc).toJson(QJsonDocument::Compact));
-		}
+		const auto topicRootId = entry.file->to.replyTo.topicRootId;
+		db.insertResumeUl({
+			.peerId = entry.itemId.peer.value,
+			.path = entry.file->filepath,
+			.size = entry.file->filesize,
+			.partsSent = int(std::max(
+				entry.partsSent - entry.partsWaiting,
+				entry.docPartsSent - entry.docPartsWaiting)),
+			.sentSize = entry.docSentSize,
+			.fileId = entry.file->id,
+			.topicRootId = topicRootId.bare,
+		});
 	}
 }
 
 void Uploader::clearResumeState(PeerId peerId, const QString &filePath) {
-	const auto path = resumeFilePath(peerId);
-	if (path.isEmpty() || !QFile(path).exists()) {
-		return;
-	}
-	auto file = QFile(path);
-	if (!file.open(QIODevice::ReadOnly)) {
-		return;
-	}
-	const auto doc = QJsonDocument::fromJson(file.readAll()).object();
-	auto entries = doc[u"entries"_q].toArray();
-	auto newEntries = QJsonArray();
-	for (const auto &val : entries) {
-		const auto obj = val.toObject();
-		if (obj[u"file_path"_q].toString() == filePath) {
-			continue;
-		}
-		newEntries.append(obj);
-	}
-	auto newDoc = QJsonObject();
-	newDoc[u"entries"_q] = newEntries;
-	file.close();
-	if (newEntries.empty()) {
-		(void)QFile(path).remove();
-	} else {
-		(void)file.open(QIODevice::WriteOnly | QIODevice::Truncate);
-		file.write(QJsonDocument(newDoc).toJson(QJsonDocument::Compact));
-	}
+	Core::App().downloadManager().dedupDb().removeResumeUl(
+		peerId.value,
+		filePath);
 }
 
 bool Uploader::hasUnfinishedResume() const {
-	const auto root = DownloadRootPath(&session());
-	if (root.isEmpty()) {
-		return false;
-	}
-	const auto dir = QDir(root);
-	const auto files = dir.entryList(
-		QStringList(u"UL_*"_q),
-		QDir::Files,
-		QDir::Name);
-	for (const auto &file : files) {
-		const auto path = dir.absoluteFilePath(file);
-		auto f = QFile(path);
-		if (!f.open(QIODevice::ReadOnly)) {
-			continue;
-		}
-		const auto doc = QJsonDocument::fromJson(f.readAll()).object();
-		if (!doc[u"entries"_q].toArray().empty()) {
+	const auto records = Core::App().downloadManager().dedupDb().loadAllResumeUl();
+	for (const auto &record : records) {
+		if (QFileInfo::exists(record.path)) {
 			return true;
 		}
 	}
@@ -1360,78 +1390,31 @@ bool Uploader::hasUnfinishedResume() const {
 }
 
 int Uploader::pendingResumeCount() const {
-	const auto root = DownloadRootPath(&session());
-	if (root.isEmpty()) {
-		return 0;
-	}
-	const auto dir = QDir(root);
-	const auto files = dir.entryList(
-		QStringList(u"UL_*"_q),
-		QDir::Files,
-		QDir::Name);
 	auto count = 0;
-	for (const auto &file : files) {
-		const auto path = dir.absoluteFilePath(file);
-		auto f = QFile(path);
-		if (!f.open(QIODevice::ReadOnly)) {
-			continue;
-		}
-		const auto doc = QJsonDocument::fromJson(f.readAll()).object();
-		const auto entries = doc[u"entries"_q].toArray();
-		for (const auto &val : entries) {
-			const auto obj = val.toObject();
-			const auto filePath = obj[u"file_path"_q].toString();
-			if (QFileInfo::exists(filePath)) {
-				++count;
-			}
+	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl()) {
+		if (QFileInfo::exists(record.path)) {
+			++count;
 		}
 	}
 	return count;
 }
 
 void Uploader::showResumeUnfinished() {
-	const auto root = DownloadRootPath(&session());
-	if (root.isEmpty()) {
-		return;
-	}
-	const auto dir = QDir(root);
-	const auto files = dir.entryList(
-		QStringList(u"UL_*"_q),
-		QDir::Files,
-		QDir::Name);
 	auto toResume = QVector<Uploader::ResumeEntry>();
-	for (const auto &file : files) {
-		const auto path = dir.absoluteFilePath(file);
-		auto f = QFile(path);
-		if (!f.open(QIODevice::ReadOnly)) {
-			continue;
+	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl()) {
+		auto entry = Uploader::ResumeEntry();
+		entry.filePath = record.path;
+		entry.fileSize = record.size;
+		entry.partsSent = ushort(record.partsSent);
+		entry.sentSize = record.sentSize;
+		entry.peerId = PeerId(record.peerId);
+		entry.fileId = record.fileId;
+		if (!entry.fileId) {
+			entry.partsSent = 0;
 		}
-		const auto doc = QJsonDocument::fromJson(f.readAll()).object();
-		const auto entries = doc[u"entries"_q].toArray();
-		for (const auto &val : entries) {
-			const auto obj = val.toObject();
-			auto entry = Uploader::ResumeEntry();
-			entry.filePath = obj[u"file_path"_q].toString();
-			entry.fileSize = obj[u"file_size"_q].toVariant().toLongLong();
-			const auto partsSent = ushort(obj[u"parts_sent"_q].toVariant().toUInt());
-			const auto docPartsSent = ushort(obj[u"doc_parts_sent"_q].toVariant().toUInt());
-			entry.partsSent = std::max(partsSent, docPartsSent);
-			entry.sentSize = obj[u"sent_size"_q].toVariant().toLongLong();
-			entry.peerId = PeerId(PeerIdHelper(obj[u"peer_id"_q].toVariant().toULongLong()));
-			const auto fileIdVal = obj[u"file_id"_q];
-			if (fileIdVal.isString()) {
-				entry.fileId = fileIdVal.toString().toULongLong();
-			} else {
-				entry.fileId = 0;
-				entry.partsSent = 0;
-			}
-			const auto topicRootIdVal = obj[u"topic_root_id"_q];
-			if (topicRootIdVal.isString()) {
-				entry.topicRootId = MsgId(topicRootIdVal.toString().toLongLong());
-			}
-			if (QFileInfo::exists(entry.filePath)) {
-				toResume.push_back(entry);
-			}
+		entry.topicRootId = MsgId(record.topicRootId);
+		if (QFileInfo::exists(entry.filePath)) {
+			toResume.push_back(entry);
 		}
 	}
 	if (toResume.empty()) {
@@ -1540,18 +1523,7 @@ void Uploader::showResumeUnfinished() {
 		}
 		LOG(("Uploader: resuming upload for %1").arg(entry.filePath));
 	}
-	const auto root = DownloadRootPath(&session());
-		if (!root.isEmpty()) {
-			const auto dir = QDir(root);
-			const auto files = dir.entryList(
-				QStringList(u"UL_*"_q),
-				QDir::Files,
-				QDir::Name);
-			for (const auto &file : files) {
-				(void)QFile(dir.absoluteFilePath(file)).remove();
-			}
-		}
-	};
+};
 	auto box = Box([=](not_null<Ui::GenericBox*> box) {
 		box->setCloseByOutsideClick(false);
 		box->setCloseByEscape(false);
@@ -1574,17 +1546,7 @@ void Uploader::showResumeUnfinished() {
 				cancelBox->addButton(tr::lng_upload_cancel_yes(), [=] {
 					cancelBox->closeBox();
 					crl::on_main([=] {
-						const auto root = DownloadRootPath(&session());
-						if (!root.isEmpty()) {
-							const auto dir = QDir(root);
-							const auto files = dir.entryList(
-								QStringList(u"UL_*"_q),
-								QDir::Files,
-								QDir::Name);
-							for (const auto &file : files) {
-								(void)QFile(dir.absoluteFilePath(file)).remove();
-							}
-						}
+						Core::App().downloadManager().dedupDb().clearResumeUl();
 						notifyListChanged();
 					});
 				});
@@ -1602,7 +1564,7 @@ void Uploader::showResumeUnfinished() {
 				_pausedId = FullMsgId(
 					PeerId(1),
 					session().data().nextLocalMessageId());
-				resumeEntriesFromDisk();
+				resumeEntriesFromDb();
 			});
 		});
 		box->addButton(tr::lng_upload_resume_yes(), [=] {
@@ -1658,17 +1620,7 @@ void Uploader::showQuitUnfinished(not_null<Window::Controller*> window, Fn<void(
 					confirmBox->closeBox();
 					crl::on_main([=] {
 						cancelAll();
-						const auto root = DownloadRootPath(&session());
-						if (!root.isEmpty()) {
-							const auto dir = QDir(root);
-							const auto files = dir.entryList(
-								QStringList(u"UL_*"_q),
-								QDir::Files,
-								QDir::Name);
-							for (const auto &file : files) {
-								(void)QFile(dir.absoluteFilePath(file)).remove();
-							}
-						}
+						Core::App().downloadManager().dedupDb().clearResumeUl();
 						if (quit) {
 							quit();
 						}
@@ -1811,38 +1763,16 @@ std::vector<Uploader::UiUploadInfo> Uploader::activeUploads() const {
 
 std::vector<Uploader::UiPendingUpload> Uploader::pendingUploads() const {
 	auto result = std::vector<UiPendingUpload>();
-	const auto root = DownloadRootPath(&session());
-	if (root.isEmpty()) {
-		return result;
-	}
-	const auto dir = QDir(root);
-	const auto files = dir.entryList(
-		QStringList(u"UL_*"_q),
-		QDir::Files,
-		QDir::Name);
-	for (const auto &file : files) {
-		const auto path = dir.absoluteFilePath(file);
-		auto f = QFile(path);
-		if (!f.open(QIODevice::ReadOnly)) {
+	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl()) {
+		if (!QFileInfo::exists(record.path)) {
 			continue;
 		}
-		const auto doc = QJsonDocument::fromJson(f.readAll()).object();
-		const auto entries = doc[u"entries"_q].toArray();
-		for (const auto &val : entries) {
-			const auto obj = val.toObject();
-			const auto filePath = obj[u"file_path"_q].toString();
-			if (!QFileInfo::exists(filePath)) {
-				continue;
-			}
-			auto info = UiPendingUpload();
-			info.filename = QFileInfo(filePath).fileName();
-			info.total = obj[u"file_size"_q].toVariant().toLongLong();
-			info.sent = obj[u"sent_size"_q].toVariant().toLongLong();
-			info.itemId = FullMsgId(
-				PeerId(PeerIdHelper(obj[u"peer_id"_q].toVariant().toULongLong())),
-				MsgId(0));
-			result.push_back(std::move(info));
-		}
+		auto info = UiPendingUpload();
+		info.filename = QFileInfo(record.path).fileName();
+		info.total = record.size;
+		info.sent = record.sentSize;
+		info.itemId = FullMsgId(PeerId(record.peerId), MsgId(0));
+		result.push_back(std::move(info));
 	}
 	return result;
 }
@@ -1859,29 +1789,9 @@ QString Uploader::firstUploadName() const {
 }
 
 QString Uploader::firstPendingUploadName() const {
-	const auto root = DownloadRootPath(&session());
-	if (root.isEmpty()) {
-		return QString();
-	}
-	const auto dir = QDir(root);
-	const auto files = dir.entryList(
-		QStringList(u"UL_*"_q),
-		QDir::Files,
-		QDir::Name);
-	for (const auto &file : files) {
-		const auto path = dir.absoluteFilePath(file);
-		auto f = QFile(path);
-		if (!f.open(QIODevice::ReadOnly)) {
-			continue;
-		}
-		const auto doc = QJsonDocument::fromJson(f.readAll()).object();
-		const auto entries = doc[u"entries"_q].toArray();
-		for (const auto &val : entries) {
-			const auto obj = val.toObject();
-			const auto filePath = obj[u"file_path"_q].toString();
-			if (QFileInfo::exists(filePath)) {
-				return QFileInfo(filePath).fileName();
-			}
+	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl()) {
+		if (QFileInfo::exists(record.path)) {
+			return QFileInfo(record.path).fileName();
 		}
 	}
 	return QString();
@@ -1892,63 +1802,37 @@ void Uploader::pauseAllUploads() {
 		pause(entry.itemId);
 	}
 	_paused = true;
-	saveResumeState();
+	Core::App().downloadManager().clearFingerprintCache();
+	saveResumeState(true);
 	notifyListChanged();
 }
 
 void Uploader::resumeAllUploads() {
 	_paused = false;
-	saveResumeState();
+	saveResumeState(true);
 	if (_queue.empty()) {
-		resumeEntriesFromDisk();
+		resumeEntriesFromDb();
 	} else {
 		unpause();
 	}
 }
 
-void Uploader::resumeEntriesFromDisk() {
-	const auto root = DownloadRootPath(&session());
-	if (root.isEmpty()) {
-		return;
-	}
-	const auto dir = QDir(root);
-	const auto files = dir.entryList(
-		QStringList(u"UL_*"_q),
-		QDir::Files,
-		QDir::Name);
+void Uploader::resumeEntriesFromDb() {
 	auto toResume = QVector<Uploader::ResumeEntry>();
-	for (const auto &file : files) {
-		const auto path = dir.absoluteFilePath(file);
-		auto f = QFile(path);
-		if (!f.open(QIODevice::ReadOnly)) {
-			continue;
+	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl()) {
+		auto entry = Uploader::ResumeEntry();
+		entry.filePath = record.path;
+		entry.fileSize = record.size;
+		entry.partsSent = ushort(record.partsSent);
+		entry.sentSize = record.sentSize;
+		entry.peerId = PeerId(record.peerId);
+		entry.fileId = record.fileId;
+		if (!entry.fileId) {
+			entry.partsSent = 0;
 		}
-		const auto doc = QJsonDocument::fromJson(f.readAll()).object();
-		const auto entries = doc[u"entries"_q].toArray();
-		for (const auto &val : entries) {
-			const auto obj = val.toObject();
-			auto entry = Uploader::ResumeEntry();
-			entry.filePath = obj[u"file_path"_q].toString();
-			entry.fileSize = obj[u"file_size"_q].toVariant().toLongLong();
-			const auto partsSent = ushort(obj[u"parts_sent"_q].toVariant().toUInt());
-			const auto docPartsSent = ushort(obj[u"doc_parts_sent"_q].toVariant().toUInt());
-			entry.partsSent = std::max(partsSent, docPartsSent);
-			entry.sentSize = obj[u"sent_size"_q].toVariant().toLongLong();
-			entry.peerId = PeerId(PeerIdHelper(obj[u"peer_id"_q].toVariant().toULongLong()));
-			const auto fileIdVal = obj[u"file_id"_q];
-			if (fileIdVal.isString()) {
-				entry.fileId = fileIdVal.toString().toULongLong();
-			} else {
-				entry.fileId = 0;
-				entry.partsSent = 0;
-			}
-			const auto topicRootIdVal = obj[u"topic_root_id"_q];
-			if (topicRootIdVal.isString()) {
-				entry.topicRootId = MsgId(topicRootIdVal.toString().toLongLong());
-			}
-			if (QFileInfo::exists(entry.filePath)) {
-				toResume.push_back(entry);
-			}
+		entry.topicRootId = MsgId(record.topicRootId);
+		if (QFileInfo::exists(entry.filePath)) {
+			toResume.push_back(entry);
 		}
 	}
 	if (toResume.empty()) {
@@ -2053,11 +1937,6 @@ void Uploader::resumeEntriesFromDisk() {
 			}
 		}
 		LOG(("Uploader: resuming upload for %1").arg(entry.filePath));
-	}
-	if (!_paused) {
-		for (const auto &file : files) {
-			(void)QFile(dir.absoluteFilePath(file)).remove();
-		}
 	}
 	auto totalSent = int64(0);
 	auto totalSize = int64(0);

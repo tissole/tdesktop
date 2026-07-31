@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session_settings.h"
 #include "main/main_app_config.h"
 #include "apiwrap.h"
+#include "storage/file_upload.h"
 #include "mainwidget.h"
 #include "api/api_bot.h"
 #include "api/api_premium.h"
@@ -3680,6 +3681,7 @@ void Session::documentConvert(
 	const auto id = data.match([](const auto &data) {
 		return data.vid().v;
 	});
+	const auto oldId = original->id;
 	const auto oldCacheKey = original->cacheKey();
 	const auto oldGoodKey = original->goodThumbnailCacheKey();
 	const auto idChanged = (original->id != id);
@@ -3703,6 +3705,7 @@ void Session::documentConvert(
 	}
 	documentApplyFields(original, data);
 	if (idChanged) {
+		_session->uploader().documentIdWriteback(oldId, id);
 		cache().moveIfEmpty(oldCacheKey, original->cacheKey());
 		cache().moveIfEmpty(oldGoodKey, original->goodThumbnailCacheKey());
 		if (stickers().savedGifs().indexOf(original) >= 0) {

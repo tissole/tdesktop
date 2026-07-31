@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "data/data_file_hash.h"
 #include "logs.h"
+#include "settings.h"
 #include "core/enhanced_settings.h"
 #include "data/data_session.h"
 #include "data/data_photo.h"
@@ -29,6 +30,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_domain.h"
 #include "lang/lang_keys.h"
 #include "storage/storage_account.h"
+
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include "history/history.h"
 #include "history/history_item.h"
 #include "history/history_item_helpers.h"
@@ -51,9 +56,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
-#include <QtCore/QJsonArray>
-#include <QtCore/QJsonDocument>
-#include <QtCore/QJsonObject>
 
 namespace Data {
 namespace {
@@ -61,8 +63,7 @@ namespace {
 constexpr auto kClearLoadingTimeout = 5 * crl::time(1000);
 constexpr auto kMaxFileSize = 4000 * int64(1024 * 1024);
 constexpr auto kMaxResolvePerAttempt = 100;
-constexpr auto kResumeSaveTimeout = crl::time(1000);
-constexpr auto kDedupSaveTimeout = crl::time(1000);
+
 
 constexpr auto ByItem = [](const auto &entry) {
 	if constexpr (std::is_same_v<decltype(entry), const DownloadingId&>) {
@@ -139,15 +140,10 @@ struct DownloadManager::DeleteFilesDescriptor {
 };
 
 DownloadManager::DownloadManager()
-: _clearLoadingTimer([=] { clearLoading(); })
-, _resumeSaveTimer([=] { flushResumeSaves(); })
-, _saveTimer([=] { saveToDisk(); }) {
+: _clearLoadingTimer([=] { clearLoading(); }) {
 }
 
 DownloadManager::~DownloadManager() {
-	_resumeSaveTimer.cancel();
-	_resumeSavePending.clear();
-	saveToDisk();
 	_sessions.clear();
 }
 
@@ -273,7 +269,20 @@ void DownloadManager::addLoading(DownloadObject object) {
 		};
 		_loadingListChanges.fire({});
 		_clearLoadingTimer.cancel();
-		scheduleResumeSave(item->history()->peer);
+
+		if (const auto document = object.document) {
+			if (IsServerMsgId(item->id)) {
+				const auto peer = item->history()->peer;
+				ensureDedupDb().insertResumeDl({
+					.peerId = peer->id.value,
+					.peerAccessHash = PeerAccessHash(peer),
+					.msgId = item->id.bare,
+					.documentId = document->id,
+					.size = size,
+					.path = path,
+				});
+			}
+		}
 
 		if (GetEnhancedBool("prevent_download_duplicates")) {
 			saveFileHash(
@@ -344,7 +353,6 @@ void DownloadManager::check(
 			.ready = _loadingProgress.current().ready + readyChange,
 			.total = _loadingProgress.current().total + totalChange,
 		};
-		scheduleResumeSave(entry.object.item->history()->peer);
 	}
 }
 
@@ -412,6 +420,7 @@ void DownloadManager::addLoaded(
 		QFile::remove(path);
 		if (const auto document = object.document) {
 			removePendingDocument(document, size);
+			ensureDedupDb().removeResumeDlByDocumentId(document->id);
 		}
 		const auto i = ranges::find(
 			data.downloading,
@@ -466,12 +475,10 @@ void DownloadManager::addLoaded(
 			fileHashes.insert(dedupHash, DedupEntry{ docId, size, DedupStatus::Finished });
 			documentIds.insert(docId, dedupHash);
 			fileSizes.insert(size);
-			_sizesToSave.emplace(size);
-			scheduleSave();
+			ensureDedupDb().insert(DedupDb::Table::Downloads, { .hash = dedupHash, .size = size, .documentId = docId });
 		} else if (fileHashes[dedupHash].status == DedupStatus::Unfinished) {
 			fileHashes[dedupHash].status = DedupStatus::Finished;
-			_sizesToSave.emplace(size);
-			scheduleSave();
+			ensureDedupDb().insert(DedupDb::Table::Downloads, { .hash = dedupHash, .size = size, .documentId = docId });
 		}
 		if (const auto document = object.document) {
 			removePendingDocument(document, size);
@@ -499,7 +506,9 @@ void DownloadManager::addLoaded(
 		_loading.erase(j);
 		_loadingDone.emplace(entry.object.item);
 		saveIfIdle();
-		scheduleResumeSave(entry.object.item->history()->peer);
+		if (const auto document = entry.object.document) {
+			ensureDedupDb().removeResumeDlByDocumentId(document->id);
+		}
 		_loadingProgress = DownloadProgress{
 			.ready = _loadingProgress.current().ready + readyChange,
 			.total = _loadingProgress.current().total + totalChange,
@@ -1102,7 +1111,9 @@ void DownloadManager::cancel(
 			photo->cancel();
 		}
 	}
-	writeResumeForPeer(peer);
+	if (document) {
+		ensureDedupDb().removeResumeDlByDocumentId(document->id);
+	}
 	PruneEmptyDownloadFolders(session, path);
 }
 
@@ -1117,7 +1128,6 @@ void DownloadManager::pause(not_null<const HistoryItem*> item) {
 		document->pause();
 		i->paused = true;
 		_loadingListChanges.fire({});
-		writeResumeForPeer(item->history()->peer);
 	}
 }
 
@@ -1132,7 +1142,6 @@ void DownloadManager::resume(not_null<const HistoryItem*> item) {
 		document->resume();
 		i->paused = false;
 		_loadingListChanges.fire({});
-		scheduleResumeSave(item->history()->peer);
 	}
 }
 
@@ -1205,7 +1214,6 @@ void DownloadManager::cancelWithConfirmation(not_null<const HistoryItem*> item) 
 
 void DownloadManager::pauseAll() {
 	auto changed = false;
-	auto peers = base::flat_set<not_null<PeerData*>>();
 	for (auto &[session, data] : _sessions) {
 		for (auto &entry : data.downloading) {
 			const auto document = entry.object.document;
@@ -1214,16 +1222,13 @@ void DownloadManager::pauseAll() {
 				&& !document->downloadPaused()) {
 				document->pause();
 				entry.paused = true;
-				peers.emplace(entry.object.item->history()->peer);
 				changed = true;
 			}
 		}
 	}
-	for (const auto &peer : peers) {
-		writeResumeForPeer(peer);
-	}
 	if (changed) {
 		_loadingListChanges.fire({});
+		clearFingerprintCache();
 	}
 }
 
@@ -1235,7 +1240,6 @@ void DownloadManager::resumeAll() {
 			if (document && document->downloadPaused()) {
 				document->resume();
 				entry.paused = false;
-				scheduleResumeSave(entry.object.item->history()->peer);
 				changed = true;
 			}
 		}
@@ -1526,120 +1530,28 @@ std::vector<DownloadedId> DownloadManager::deserialize(
 	return result;
 }
 
-void DownloadManager::scheduleResumeSave(not_null<PeerData*> peer) {
-	_resumeSavePending.emplace(peer);
-	if (!_resumeSaveTimer.isActive()) {
-		_resumeSaveTimer.callOnce(kResumeSaveTimeout);
-	}
-}
-
-void DownloadManager::flushResumeSaves() {
-	const auto pending = base::take(_resumeSavePending);
-	for (const auto &peer : pending) {
-		writeResumeForPeer(peer);
-	}
-}
-
-void DownloadManager::writeResumeForPeer(not_null<PeerData*> peer) {
-	const auto session = &peer->session();
-	const auto i = _sessions.find(session);
-	if (i == end(_sessions)) {
-		return;
-	}
-	const auto path = DownloadResumeJsonPath(session, peer);
-	if (path.isEmpty()) {
-		return;
-	}
-	auto items = QJsonArray();
-	for (const auto &entry : i->second.downloading) {
-		const auto item = entry.object.item;
-		if (item->history()->peer != peer) {
-			continue;
-		}
-		const auto document = entry.object.document;
-		if (!document || entry.done) {
-			continue;
-		}
-		if (!IsServerMsgId(item->id)) {
-			continue;
-		}
-		auto obj = QJsonObject();
-		obj["msg"] = qint64(item->id.bare);
-		obj["document_id"] = QString::number(document->id);
-		obj["size"] = qint64(entry.total);
-		obj["path"] = entry.path;
-		items.append(obj);
-	}
-	if (items.isEmpty()) {
-		QFile(path).remove();
-		PruneEmptyDownloadFolders(session, path);
-		return;
-	}
-	auto root = QJsonObject();
-	root["peer"] = qint64(peer->id.value);
-	root["peer_access_hash"] = QString::number(PeerAccessHash(peer));
-	root["chat_name"] = peer->name();
-	root["items"] = items;
-
-	QDir().mkpath(QFileInfo(path).absolutePath());
-	const auto tmp = path + u".tmp"_q;
-	auto file = QFile(tmp);
-	if (!file.open(QIODevice::WriteOnly)) {
-		return;
-	}
-	file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-	file.close();
-	QFile(path).remove();
-	if (!file.rename(path)) {
-		QFile(tmp).remove();
-	}
-}
-
-std::vector<QString> DownloadManager::resumeFilesForSession(
-		not_null<Main::Session*> session) const {
-	auto result = std::vector<QString>();
-	auto root = DownloadRootPath(session);
-	if (root.isEmpty()) {
-		return result;
-	}
-	if (!root.endsWith('/')) {
-		root += '/';
-	}
-	const auto atRoot = QDir(root).entryList(
-		QStringList(u"DL_*.json"_q),
-		QDir::Files);
-	for (const auto &name : atRoot) {
-		result.push_back(root + name);
-	}
-	const auto folders = QDir(root).entryList(
-		QStringList(u"DL_*"_q),
-		QDir::Dirs | QDir::NoDotAndDotDot);
-	for (const auto &folder : folders) {
-		const auto sub = root + folder + '/';
-		const auto inside = QDir(sub).entryList(
-			QStringList(u"DL_*.json"_q),
-			QDir::Files);
-		for (const auto &name : inside) {
-			result.push_back(sub + name);
-		}
-	}
-	return result;
-}
-
 bool DownloadManager::hasUnfinishedResume(
 		not_null<Main::Session*> session) const {
-	return !resumeFilesForSession(session).empty();
+	return ensureDedupDb().isOpen()
+		&& !ensureDedupDb().loadAllResumeDl().empty();
 }
 
-QString DownloadManager::dedupFilePath() const {
-	if (_sessions.empty()) {
-		return QString();
+QString DownloadManager::dedupDbPath() const {
+	return cWorkingDir() + u"tdata/dedup.db"_q;
+}
+
+DedupDb &DownloadManager::dedupDb() const {
+	return ensureDedupDb();
+}
+
+DedupDb &DownloadManager::ensureDedupDb() const {
+	if (!_dedupDb) {
+		const auto path = dedupDbPath();
+		if (!path.isEmpty()) {
+			_dedupDb = std::make_unique<DedupDb>(path);
+		}
 	}
-	const auto path = DownloadRootPath(_sessions.begin()->first);
-	if (path.isEmpty()) {
-		return QString();
-	}
-	return path.endsWith('/') ? (path + u"DL_hashes.json"_q) : (path + u"/DL_hashes.json"_q);
+	return *_dedupDb;
 }
 
 void DownloadManager::loadFileHashes() {
@@ -1647,166 +1559,36 @@ void DownloadManager::loadFileHashes() {
 		return;
 	}
 	_hasLoadedHashes = true;
-	const auto path = dedupFilePath();
-	if (path.isEmpty() || !QFile(path).exists()) {
-		LOG(("DEDUP: loadFileHashes no file path=%1 exists=%2").arg(
-			path).arg(Logs::b(!path.isEmpty() && QFile(path).exists())));
+	auto &db = ensureDedupDb();
+	if (!db.isOpen()) {
 		return;
 	}
-	auto file = QFile(path);
-	if (!file.open(QIODevice::ReadOnly)) {
-		return;
-	}
-	const auto fileSize = file.size();
-	const auto mapped = file.map(0, fileSize);
-	if (!mapped) {
-		return;
-	}
-	const auto document = QJsonDocument::fromJson(
-		QByteArray::fromRawData(reinterpret_cast<const char*>(mapped), fileSize));
-	file.unmap(mapped);
-	if (!document.isObject()) {
-		return;
-	}
-	const auto root = document.object();
-	const auto entries = root["entries"].toArray();
-	for (const auto &value : entries) {
-		const auto obj = value.toObject();
-		const auto documentId = obj["document_id"].toString().toULongLong();
-		const auto size = int64(obj["size"].toDouble());
-		const auto hash = QByteArray::fromHex(obj["hash"].toString().toLatin1());
-		const auto status = (obj["status"].toString() == u"finished"_q)
-			? DedupStatus::Finished
-			: DedupStatus::Unfinished;
-		if (hash.isEmpty()) {
+	auto records = db.loadAll(DedupDb::Table::Downloads);
+	for (const auto &record : records) {
+		if (record.hash.isEmpty()) {
 			continue;
 		}
-		if (!fileHashes.contains(hash)) {
-			fileHashes.insert(hash, DedupEntry{ documentId, size, status });
-			documentIds.insert(documentId, hash);
-			fileSizes.insert(size);
+		if (!fileHashes.contains(record.hash)) {
+			fileHashes.insert(record.hash, DedupEntry{
+				.documentId = record.documentId,
+				.size = record.size,
+				.status = DedupStatus::Finished,
+			});
+			documentIds.insert(record.documentId, record.hash);
+			fileSizes.insert(record.size);
 		}
 	}
-	LOG(("DEDUP: loadFileHashes loaded from %1 entries=%2").arg(
-		path).arg(fileHashes.size()));
-}
-
-void DownloadManager::scheduleSave() {
-	if (_sizesToSave.empty() && fileHashes.empty()) {
-		return;
-	}
-	const auto now = crl::now();
-	const auto sinceLast = now - _lastSaveTime;
-	if (sinceLast >= kDedupSaveTimeout) {
-		saveToDisk();
-		return;
-	}
-	if (!_saveTimer.isActive()) {
-		const auto wait = kDedupSaveTimeout - sinceLast;
-		_saveTimer.callOnce(wait > 0 ? wait : 1);
-	}
+	LOG(("DEDUP: loadFileHashes loaded entries=%1").arg(fileHashes.size()));
 }
 
 void DownloadManager::saveToDisk() {
-	_saveTimer.cancel();
-	if (_sizesToSave.empty()) {
-		return;
-	}
-	const auto path = dedupFilePath();
-	if (path.isEmpty()) {
-		return;
-	}
-	_lastSaveTime = crl::now();
+}
 
-	auto root = QJsonObject();
-	auto items = QJsonArray();
-	if (QFile::exists(path)) {
-		auto file = QFile(path);
-		if (file.open(QIODevice::ReadOnly)) {
-			const auto fileSize = file.size();
-			const auto mapped = file.map(0, fileSize);
-			if (mapped) {
-				const auto document = QJsonDocument::fromJson(
-					QByteArray::fromRawData(reinterpret_cast<const char*>(mapped), fileSize));
-				file.unmap(mapped);
-				if (document.isObject()) {
-					const auto existing = document.object()["entries"].toArray();
-					for (const auto &value : existing) {
-						const auto obj = value.toObject();
-						const auto oldSize = int64(obj["size"].toDouble());
-						if (!_sizesToSave.contains(oldSize)) {
-							items.append(value);
-						}
-					}
-				}
-			}
-		}
-	}
-	for (const auto size : _sizesToSave) {
-		for (auto it = fileHashes.constBegin(); it != fileHashes.constEnd(); ++it) {
-			const auto &hash = it.key();
-			const auto &entry = it.value();
-			if (entry.size == size) {
-				auto obj = QJsonObject();
-				obj["document_id"] = QString::number(entry.documentId);
-				obj["size"] = qint64(entry.size);
-				obj["hash"] = QString::fromLatin1(hash.toHex());
-				obj["status"] = (entry.status == DedupStatus::Finished)
-					? u"finished"_q
-					: u"unfinished"_q;
-				items.append(obj);
-			}
-		}
-	}
-	_sizesToSave.clear();
-
-	if (items.isEmpty()) {
-		QFile(path).remove();
-		return;
-	}
-	root["entries"] = items;
-	QDir().mkpath(QFileInfo(path).absolutePath());
-	const auto tmp = path + u".tmp"_q;
-	auto file = QFile(tmp);
-	if (!file.open(QIODevice::WriteOnly)) {
-		return;
-	}
-	file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-	file.close();
-	QFile(path).remove();
-	if (!file.rename(path)) {
-		QFile(tmp).remove();
-	}
+void DownloadManager::saveIfIdle() {
 }
 
 bool DownloadManager::hasFileSize(int64 size) const {
 	return fileSizes.contains(size) || pendingFileSizes.contains(size);
-}
-
-void DownloadManager::saveIfIdle() {
-	// The dedup DB (fileHashes/documentIds/fileSizes) is kept in memory permanently
-	// once loaded, for the lifetime of the app: it mirrors DL_hashes.json,
-	// which is itself permanent and only ever shrinks entry-by-entry when a
-	// downloaded file is actually deleted (never wholesale on pause, cancel,
-	// idle, or app quit). Dropping it here used to force a full reload from
-	// disk (and, if a save landed while the maps were empty, could silently
-	// wipe still-valid on-disk records for buckets rewritten from an empty
-	// in-memory copy). We only flush pending writes to disk here, we don't
-	// touch the in-memory maps.
-	if (_sizesToSave.empty()) {
-		return;
-	}
-	if (!_loading.empty()) {
-		return;
-	}
-	if (!pendingDocumentIds.empty() || !pendingFileHashes.empty()
-		|| !pendingDocuments.empty() || !documentsAwaitingHash.empty()) {
-		return;
-	}
-	if (_checksInProgress > 0) {
-		return;
-	}
-	saveToDisk();
 }
 
 bool DownloadManager::findDuplicateByDocumentId(uint64 documentId, int64 size) const {
@@ -1846,6 +1628,10 @@ void DownloadManager::clearFingerprintCache(uint64 documentId) {
 	_fingerprintCache.remove(documentId);
 }
 
+void DownloadManager::clearFingerprintCache() {
+	_fingerprintCache.clear();
+}
+
 void DownloadManager::saveFileHash(
 		not_null<Main::Session*> session,
 		not_null<DocumentData*> document,
@@ -1874,10 +1660,9 @@ void DownloadManager::saveFileHash(
 				return;
 			}
 			fileHashes.insert(hash, DedupEntry{ docId, size, DedupStatus::Unfinished });
-		documentIds.insert(docId, hash);
-		fileSizes.insert(size);
-		_sizesToSave.emplace(size);
-		scheduleSave();
+			documentIds.insert(docId, hash);
+			fileSizes.insert(size);
+			ensureDedupDb().insert(DedupDb::Table::Downloads, { .hash = hash, .size = size, .documentId = docId });
 	});
 }
 
@@ -1892,6 +1677,7 @@ void DownloadManager::removeFileHash(uint64 documentId, int64 size) {
 	const auto hash = it.value();
 	documentIds.erase(it);
 	fileHashes.remove(hash);
+	ensureDedupDb().remove(DedupDb::Table::Downloads, hash, size);
 
 	auto sizeStillUsed = false;
 	for (auto i = fileHashes.constBegin(); i != fileHashes.constEnd(); ++i) {
@@ -1903,8 +1689,6 @@ void DownloadManager::removeFileHash(uint64 documentId, int64 size) {
 	if (!sizeStillUsed) {
 		fileSizes.remove(size);
 	}
-	_sizesToSave.emplace(size);
-	scheduleSave();
 }
 
 void DownloadManager::addPendingDocument(
@@ -1921,8 +1705,13 @@ void DownloadManager::removePendingDocument(
 		not_null<DocumentData*> document,
 		int64 size) {
 	const auto docId = document->id;
+	const auto hashIt = pendingDocumentIds.find(docId);
+	if (hashIt != pendingDocumentIds.end() && !hashIt.value().isEmpty()) {
+		pendingFileHashes.remove(hashIt.value());
+	}
 	pendingDocumentIds.remove(docId);
 	pendingDocuments.remove(docId);
+	_fingerprintCache.remove(docId);
 	auto it = documentsAwaitingHash.find(size);
 	if (it != documentsAwaitingHash.end()) {
 		auto &vec = it.value();
@@ -1932,6 +1721,20 @@ void DownloadManager::removePendingDocument(
 		if (vec.empty()) {
 			documentsAwaitingHash.erase(it);
 		}
+	}
+	auto sizeStillUsed = documentsAwaitingHash.contains(size);
+	if (!sizeStillUsed) {
+		for (auto i = pendingFileHashes.constBegin();
+				i != pendingFileHashes.constEnd();
+				++i) {
+			if (i.value().size == size) {
+				sizeStillUsed = true;
+				break;
+			}
+		}
+	}
+	if (!sizeStillUsed) {
+		pendingFileSizes.remove(size);
 	}
 }
 
@@ -1992,16 +1795,16 @@ void DownloadManager::checkDuplicate(
 	};
 	loadFileHashes();
 
-	// Step 1: Check if size exists in DB or pending simultaneously
-	if (!hasFileSize(size)) {
-		addPendingDocument(document, size);
-		wrappedDone(false);
+	// Step 1: Check doc ID (fastest - O(1), catches same doc re-download)
+	if (findDuplicateByDocumentId(document->id, size)) {
+		wrappedDone(true);
 		return;
 	}
 
-	// Step 2: Check doc ID in DB and pending simultaneously
-	if (findDuplicateByDocumentId(document->id, size)) {
-		wrappedDone(true);
+	// Step 2: Check if size exists in DB or pending simultaneously
+	if (!hasFileSize(size)) {
+		addPendingDocument(document, size);
+		wrappedDone(false);
 		return;
 	}
 
@@ -2063,53 +1866,39 @@ void DownloadManager::checkDuplicate(
 
 void DownloadManager::showResumeUnfinished(
 		not_null<Main::Session*> session) {
-	const auto files = resumeFilesForSession(session);
-	if (files.empty()) {
+	const auto records = ensureDedupDb().loadAllResumeDl();
+	if (records.empty()) {
 		return;
 	}
 	struct FileJob {
-		QString path;
 		PeerId peerId;
 		uint64 peerAccessHash = 0;
-		QString chatName;
 		std::vector<ResumeEntry> entries;
 	};
 	auto jobs = std::make_shared<std::vector<FileJob>>();
 	auto totalItems = 0;
-	for (const auto &path : files) {
-		auto file = QFile(path);
-		if (!file.open(QIODevice::ReadOnly)) {
+	for (const auto &record : records) {
+		if (!record.peerId || !record.msgId || !record.documentId) {
 			continue;
 		}
-		const auto doc = QJsonDocument::fromJson(file.readAll());
-		if (!doc.isObject()) {
-			continue;
+		const auto peerId = PeerId(record.peerId);
+		auto jobIt = ranges::find(*jobs, peerId, &FileJob::peerId);
+		if (jobIt == end(*jobs)) {
+			jobs->push_back({
+				.peerId = peerId,
+				.peerAccessHash = record.peerAccessHash,
+			});
+			jobIt = end(*jobs) - 1;
 		}
-		const auto root = doc.object();
-		auto job = FileJob();
-		job.path = path;
-		job.peerId = PeerId(quint64(
-			root["peer"].toVariant().toULongLong()));
-		job.peerAccessHash = root["peer_access_hash"]
-			.toString().toULongLong();
-		job.chatName = root["chat_name"].toString();
-		const auto items = root["items"].toArray();
-		for (const auto &v : items) {
-			const auto obj = v.toObject();
-			auto entry = ResumeEntry();
-			entry.msgId = MsgId(obj["msg"].toVariant().toLongLong());
-			entry.documentId = obj["document_id"]
-				.toString().toULongLong();
-			entry.size = obj["size"].toVariant().toLongLong();
-			entry.path = obj["path"].toString();
-			if (entry.msgId && entry.documentId) {
-				job.entries.push_back(entry);
-			}
-		}
-		if (!job.entries.empty() && job.peerId) {
-			totalItems += int(job.entries.size());
-			jobs->push_back(std::move(job));
-		}
+		jobIt->entries.push_back({
+			.msgId = MsgId(record.msgId),
+			.documentId = record.documentId,
+			.size = record.size,
+			.path = record.path,
+		});
+	}
+	for (const auto &job : *jobs) {
+		totalItems += int(job.entries.size());
 	}
 	if (jobs->empty()) {
 		return;
@@ -2196,10 +1985,8 @@ void DownloadManager::showResumeUnfinished(
 						PruneEmptyDownloadFolders(strong, entry.path);
 					}
 				}
-			}
-			QFile(job.path).remove();
-			if (const auto strong = weak.get()) {
-				PruneEmptyDownloadFolders(strong, job.path);
+				ensureDedupDb().removeResumeDlByDocumentId(
+					entry.documentId);
 			}
 		}
 	};
@@ -2278,16 +2065,6 @@ void DownloadManager::showResumeUnfinished(
 void DownloadManager::untrack(not_null<Main::Session*> session) {
 	const auto i = _sessions.find(session);
 	Assert(i != end(_sessions));
-
-	for (auto j = _resumeSavePending.begin(); j != _resumeSavePending.end();) {
-		const auto peer = *j;
-		if (&peer->session() == session) {
-			writeResumeForPeer(peer);
-			j = _resumeSavePending.erase(j);
-		} else {
-			++j;
-		}
-	}
 
 	for (const auto &entry : i->second.downloaded) {
 		if (const auto resolved = entry.object.get()) {
@@ -2556,9 +2333,7 @@ rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent() {
 				const auto session = account->maybeSession();
 				if (!session) continue;
 				const auto qSize = session->uploader().queueSize();
-				const auto pSize = session->uploader().pendingResumeCount();
 				totalQueue += qSize;
-				totalPending += pSize;
 				if (qSize > 0) {
 					if (!firstActiveFound) {
 						firstActiveFound = true;
@@ -2573,19 +2348,23 @@ rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent() {
 						firstActiveReady = uploads[0].offset;
 						firstActiveTotal = uploads[0].total;
 					}
-				} else if (pSize > 0) {
-					if (!firstPendingFound) {
-						firstPendingFound = true;
-						firstPendingName = session->uploader().firstPendingUploadName();
-					}
+				} else {
 					const auto pending = session->uploader().pendingUploads();
-					for (const auto &p : pending) {
-						totalReady += p.sent;
-						totalSize += p.total;
-					}
-					if (pending.size() == 1 && !firstPendingTotal) {
-						firstPendingReady = pending[0].sent;
-						firstPendingTotal = pending[0].total;
+					const auto pSize = int(pending.size());
+					totalPending += pSize;
+					if (pSize > 0) {
+						if (!firstPendingFound) {
+							firstPendingFound = true;
+							firstPendingName = pending[0].filename;
+						}
+						for (const auto &p : pending) {
+							totalReady += p.sent;
+							totalSize += p.total;
+						}
+						if (pending.size() == 1 && !firstPendingTotal) {
+							firstPendingReady = pending[0].sent;
+							firstPendingTotal = pending[0].total;
+						}
 					}
 				}
 			}

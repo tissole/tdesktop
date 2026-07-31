@@ -29,11 +29,14 @@ constexpr auto kDedupChunk = 16 * 1024;
 constexpr auto kDedupMinPartialHashSize = 320 * 1024;
 constexpr auto kDedupSizeBucket = 1024 * 1024;
 constexpr auto kDedupBlock = 1024 * 1024;
-constexpr auto kDedupAlignment = 4 * 1024;
+constexpr auto kDedupAlignment = 1 * 1024;
 
 // Returns the 16-byte XXH3_128bits hash of a local file's fingerprint.
 // Empty array if the file cannot be read or is empty.
 [[nodiscard]] QByteArray FileFingerprint(const QString &path, int64 size);
+
+// Returns the 16-byte XXH3_128bits hash of in-memory content.
+[[nodiscard]] QByteArray ContentFingerprint(const QByteArray &content);
 
 // Combines two sampled byte chunks (head and tail) into the same 128-bit
 // fingerprint used for files. Shared by local and remote fingerprinting.

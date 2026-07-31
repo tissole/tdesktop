@@ -31,6 +31,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_app_config.h"
 #include "storage/localimageloader.h"
 #include "storage/file_upload.h"
+#include "ui/toast/toast.h"
+#include "lang/lang_keys.h"
 #include "mainwidget.h"
 #include "apiwrap.h"
 
@@ -560,6 +562,11 @@ void SendConfirmedFile(
 		file->to.replyTo.topicRootId = histories->convertTopicReplyToId(
 			history,
 			file->to.replyTo.topicRootId);
+	}
+
+	if (session->uploader().checkUploadDuplicate(newId, file)) {
+		Ui::Toast::Show(tr::lng_upload_duplicate_skipped(tr::now));
+		return;
 	}
 
 	session->uploader().upload(newId, file);
