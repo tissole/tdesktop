@@ -191,29 +191,6 @@ namespace Settings {
 			EnhancedSettings::Write();
 		}, container->lifetime());
 
-		auto value = rpl::single(
-				AlwaysDeleteBox::DeleteLabel(GetEnhancedInt("always_delete_for"))
-		) | rpl::then(
-				_AlwaysDeleteChanged.events()
-		) | rpl::map([] {
-			return AlwaysDeleteBox::DeleteLabel(GetEnhancedInt("always_delete_for"));
-		});
-
-		auto btn = AddButtonWithLabel(
-				container,
-				tr::lng_settings_always_delete_for(),
-				std::move(value),
-				st::settingsButtonNoIcon
-		);
-		btn->events(
-		) | rpl::on_next([=](not_null<QEvent*> e) {
-			const auto event = e->type();
-			if (event == QEvent::UpdateLater) _AlwaysDeleteChanged.fire({});
-		}, container->lifetime());
-		btn->addClickHandler([=] {
-			Ui::show(Box<AlwaysDeleteBox>());
-		});
-
 		AddButtonWithIcon(
 				inner,
 				tr::lng_settings_disable_cloud_draft_sync(),
@@ -380,6 +357,31 @@ namespace Settings {
 
 		AddDividerText(inner, tr::lng_settings_hide_messages_desc());
 
+		auto value = rpl::single(
+				AlwaysDeleteBox::DeleteLabel(GetEnhancedInt("always_delete_for"))
+		) | rpl::then(
+				_AlwaysDeleteChanged.events()
+		) | rpl::map([] {
+			return AlwaysDeleteBox::DeleteLabel(GetEnhancedInt("always_delete_for"));
+		});
+
+		auto btn = AddButtonWithLabel(
+				inner,
+				tr::lng_settings_always_delete_for(),
+				std::move(value),
+				st::settingsButtonNoIcon
+		);
+		btn->events(
+		) | rpl::on_next([=](not_null<QEvent*> e) {
+			const auto event = e->type();
+			if (event == QEvent::UpdateLater) _AlwaysDeleteChanged.fire({});
+		}, inner->lifetime());
+		btn->addClickHandler([=] {
+			Ui::show(Box<AlwaysDeleteBox>());
+		});
+
+		AddSubsectionTitle(inner, rpl::single(u"Captions"_q));
+
 		AddButtonWithIcon(
 				inner,
 				tr::lng_settings_caption_from_file_name(),
@@ -393,6 +395,9 @@ namespace Settings {
 			SetEnhancedValue("caption_from_file_name", toggled);
 			EnhancedSettings::Write();
 		}, container->lifetime());
+
+		AddDivider(inner);
+		AddSubsectionTitle(inner, rpl::single(u"Download locations"_q));
 
 		const auto downloadFolderGroup = std::make_shared<Ui::RadiobuttonGroup>(
 			GetEnhancedInt("download_folder_mode"));
@@ -414,6 +419,8 @@ namespace Settings {
 			SetEnhancedValue("download_folder_mode", value);
 			EnhancedSettings::Write();
 		});
+
+		AddDivider(inner);
 
 		AddButtonWithIcon(
 				inner,
@@ -440,6 +447,20 @@ namespace Settings {
 			return (toggled != GetEnhancedBool("prevent_upload_duplicates"));
 		}) | rpl::on_next([=](bool toggled) {
 			SetEnhancedValue("prevent_upload_duplicates", toggled);
+			EnhancedSettings::Write();
+		}, container->lifetime());
+
+		AddButtonWithIcon(
+				inner,
+				tr::lng_settings_prevent_forward_duplicates(),
+				st::settingsButtonNoIcon
+		)->toggleOn(
+				rpl::single(GetEnhancedBool("prevent_forward_duplicates"))
+		)->toggledChanges(
+		) | rpl::filter([=](bool toggled) {
+			return (toggled != GetEnhancedBool("prevent_forward_duplicates"));
+		}) | rpl::on_next([=](bool toggled) {
+			SetEnhancedValue("prevent_forward_duplicates", toggled);
 			EnhancedSettings::Write();
 		}, container->lifetime());
 	}

@@ -414,7 +414,15 @@ void DownloadManager::addLoaded(
 		}
 		return false;
 	}();
-	if (isDuplicateOfOther) {
+	const auto isDuplicatePhotoById = [&] {
+		if (!object.photo || !docId) {
+			return false;
+		}
+		// The same photo id already has a dedup record (finished or still
+		// unfinished), so the content is already known to be downloaded.
+		return documentIds.contains(docId) || pendingDocumentIds.contains(docId);
+	}();
+	if (isDuplicateOfOther || isDuplicatePhotoById) {
 		LOG(("DEDUP: addLoaded dup size=%1 path=%2").arg(
 			size).arg(path));
 		QFile::remove(path);
@@ -475,10 +483,20 @@ void DownloadManager::addLoaded(
 			fileHashes.insert(dedupHash, DedupEntry{ docId, size, DedupStatus::Finished });
 			documentIds.insert(docId, dedupHash);
 			fileSizes.insert(size);
-			ensureDedupDb().insert(DedupDb::Table::Downloads, { .hash = dedupHash, .size = size, .documentId = docId });
+			ensureDedupDb().insert(DedupDb::Table::Downloads, {
+				.hash = dedupHash,
+				.size = size,
+				.documentId = docId,
+				.status = u"f"_q,
+			});
 		} else if (fileHashes[dedupHash].status == DedupStatus::Unfinished) {
 			fileHashes[dedupHash].status = DedupStatus::Finished;
-			ensureDedupDb().insert(DedupDb::Table::Downloads, { .hash = dedupHash, .size = size, .documentId = docId });
+			ensureDedupDb().insert(DedupDb::Table::Downloads, {
+				.hash = dedupHash,
+				.size = size,
+				.documentId = docId,
+				.status = u"f"_q,
+			});
 		}
 		if (const auto document = object.document) {
 			removePendingDocument(document, size);
@@ -1572,7 +1590,9 @@ void DownloadManager::loadFileHashes() {
 			fileHashes.insert(record.hash, DedupEntry{
 				.documentId = record.documentId,
 				.size = record.size,
-				.status = DedupStatus::Finished,
+				.status = (record.status == u"u"_q)
+					? DedupStatus::Unfinished
+					: DedupStatus::Finished,
 			});
 			documentIds.insert(record.documentId, record.hash);
 			fileSizes.insert(record.size);
@@ -1662,7 +1682,12 @@ void DownloadManager::saveFileHash(
 			fileHashes.insert(hash, DedupEntry{ docId, size, DedupStatus::Unfinished });
 			documentIds.insert(docId, hash);
 			fileSizes.insert(size);
-			ensureDedupDb().insert(DedupDb::Table::Downloads, { .hash = hash, .size = size, .documentId = docId });
+			ensureDedupDb().insert(DedupDb::Table::Downloads, {
+				.hash = hash,
+				.size = size,
+				.documentId = docId,
+				.status = u"u"_q,
+			});
 	});
 }
 

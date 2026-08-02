@@ -20,9 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_types.h"
 #include <QDir>
 #include <QFile>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
+#include <deque>
 #include "data/data_user.h"
 #include "history/history.h"
 #include "history/history_item.h"
@@ -57,6 +55,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/business/data_shortcut_messages.h"
 #include "ui/chat/attach/attach_prepare.h"
 #include "storage/storage_account.h"
+#include "core/application.h"
+#include "data/data_download_manager.h"
+#include "data/data_file_hash.h"
+#include "ui/toast/toast.h"
+#include "settings.h"
 
 namespace EnhancedForward {
 namespace {
@@ -118,6 +121,44 @@ void NotifyStateChanged(const PeerId &peer) {
 StateMap &ActiveStates() {
 	static StateMap map;
 	return map;
+}
+
+struct StartRequest {
+	not_null<ApiWrap*> api;
+	std::vector<not_null<HistoryItem*>> items;
+	Api::SendAction action;
+	Data::GroupingOptions groupOptions;
+	std::shared_ptr<SavedJob> resumeJob;
+};
+
+using StartQueueMap = std::unordered_map<PeerId, std::deque<StartRequest>>;
+
+StartQueueMap &StartQueue() {
+	static StartQueueMap map;
+	return map;
+}
+
+void processStartQueue(const PeerId &peerId) {
+	auto &queue = StartQueue();
+	const auto it = queue.find(peerId);
+	if (it == queue.end() || it->second.empty()) {
+		return;
+	}
+	if (ActiveStates().find(peerId) != ActiveStates().end()) {
+		return;
+	}
+	auto request = std::move(it->second.front());
+	it->second.pop_front();
+	if (it->second.empty()) {
+		queue.erase(it);
+	}
+	LOG(("ENHANCED_FWD: starting queued forward to peer=%1").arg(peerId.value));
+	Pipeline::Start(
+		request.api,
+		std::move(request.items),
+		request.action,
+		request.groupOptions,
+		std::move(request.resumeJob));
 }
 
 void fireUpdate(not_null<Main::Session*> session, const PeerId &peer) {
@@ -376,6 +417,36 @@ void markItemSent(
 			auto &states = ActiveStates();
 			states.erase(peerId);
 			fireUpdate(session, peerId);
+			processStartQueue(peerId);
+		});
+		state.finishTimer->callOnce(3000);
+	}
+}
+
+void markItemSkipped(
+		not_null<Main::Session*> session,
+		const PeerId &peerId) {
+	auto &states = ActiveStates();
+	const auto it = states.find(peerId);
+	if (it == states.end()) return;
+
+	auto &state = it->second;
+	if (state.cancelled || state.finished) return;
+
+	if (state.total > 0) state.total--;
+	fireUpdate(session, peerId);
+	if (state.saveCallback) {
+		state.saveCallback();
+	}
+
+	if (state.sent >= state.total) {
+		state.finished = true;
+		fireUpdate(session, peerId);
+		state.finishTimer = std::make_unique<base::Timer>([=] {
+			auto &states = ActiveStates();
+			states.erase(peerId);
+			fireUpdate(session, peerId);
+			processStartQueue(peerId);
 		});
 		state.finishTimer->callOnce(3000);
 	}
@@ -399,6 +470,7 @@ void cancelForward(
 		auto &states = ActiveStates();
 		states.erase(id);
 		fireUpdate(session, id);
+		processStartQueue(id);
 	});
 	it->second.finishTimer->callOnce(3000);
 }
@@ -622,116 +694,65 @@ ForwardProgress currentProgress(const PeerId &id) {
 	return result;
 }
 
-QString ProgressFilePath(
-		const QString &bareName,
-		const QString &dir) {
-	return QDir(dir).absoluteFilePath(
-		u"EF_%1.json"_q.arg(bareName));
-}
-
-QString ProgressFileBareName(const QString &srcName) {
-	auto name = srcName;
-	static const QRegularExpression bad(
-		QRegularExpression::escape(u"\\/:*?\"<>|"_q));
-	name.replace(bad, u"_"_q);
-	name = name.trimmed();
-	if (name.isEmpty()) {
-		name = u"chat"_q;
+void ClearProgressForPeer(const PeerId &peerId) {
+	auto &db = Core::App().downloadManager().dedupDb();
+	if (db.isOpen()) {
+		db.clearEfResumeForPeer(peerId);
 	}
-	return name;
 }
 
-void SaveProgress(
-		const QString &path,
-		const QJsonObject &data) {
-	QDir().mkpath(QFileInfo(path).absolutePath());
-	QFile f(path);
-	if (!f.open(QIODevice::WriteOnly)) {
-		LOG(("ENHANCED_FWD: cannot write progress %1").arg(path));
+void CleanupPartialFilesForPeer(
+		not_null<Main::Session*> session,
+		const PeerId &peerId) {
+	auto &db = Core::App().downloadManager().dedupDb();
+	if (!db.isOpen()) {
 		return;
 	}
-	f.write(QJsonDocument(data).toJson(QJsonDocument::Indented));
-}
-
-std::optional<QJsonObject> LoadProgress(const QString &path) {
-	QFile f(path);
-	if (!f.open(QIODevice::ReadOnly)) {
-		return std::nullopt;
-	}
-	const auto doc = QJsonDocument::fromJson(f.readAll());
-	if (!doc.isObject()) {
-		return std::nullopt;
-	}
-	return doc.object();
-}
-
-void ClearProgress(const QString &path) {
-	QFile(path).remove();
-}
-
-void CleanupPartialFiles(const QString &progressPath) {
-	const auto data = LoadProgress(progressPath);
-	if (data) {
-		const auto items = (*data)["items"].toArray();
-		for (const auto &v : items) {
-			const auto obj = v.toObject();
-			const auto filePath = obj["path"].toString();
-			if (!filePath.isEmpty()) {
-				QFile(filePath).remove();
-			}
+	const auto tempDir = File::DefaultDownloadPath(session) + "ForwardTemp/";
+	const auto records = db.loadEfResumeItemsForPeer(peerId);
+	for (const auto &record : records) {
+		if (!record.localPath.isEmpty()
+				&& record.localPath.startsWith(tempDir)
+				&& QFileInfo(record.localPath).exists()) {
+			QFile(record.localPath).remove();
 		}
 	}
-	QFile(progressPath).remove();
+	db.clearEfResumeForPeer(peerId);
 }
 
-std::vector<SavedJob> GetUnfinishedJobs(const QString &dir) {
+std::vector<SavedJob> GetUnfinishedJobs() {
+	auto &db = Core::App().downloadManager().dedupDb();
+	if (!db.isOpen()) {
+		return {};
+	}
+	const auto records = db.loadUnfinishedEfResumeItems();
+	base::flat_map<QString, SavedJob> jobs;
+	for (const auto &record : records) {
+		auto &job = jobs[record.jobId];
+		if (job.dstId == PeerId()) {
+			job.dstId = record.peerId;
+			job.srcId = record.sourceId.peer;
+		}
+		job.total++;
+		if (record.state.toInt() >= 3) {
+			job.sent++;
+		}
+		job.sourceMsgs.push_back(record.sourceId);
+		job.uploadDone.push_back(record.state.toInt() >= 2);
+		job.fileId.push_back(record.fileId);
+		job.uploadedParts.push_back(record.uploadedParts);
+	}
 	std::vector<SavedJob> result;
-	const auto files = QDir(dir).entryList(
-		QStringList(u"EF_*.json"_q),
-		QDir::Files);
-	for (const auto &name : files) {
-		const auto path = dir + name;
-		const auto data = LoadProgress(path);
-		if (!data) {
-			continue;
+	for (auto &[_, job] : jobs) {
+		if (job.sent < job.total) {
+			result.push_back(std::move(job));
 		}
-		const auto srcPeerVal = (*data)["src_peer"].toDouble();
-		const auto dstPeerVal = (*data)["dst_peer"].toDouble();
-		const auto srcId = PeerId(qulonglong(srcPeerVal));
-		const auto dstId = PeerId(qulonglong(dstPeerVal));
-		if (!srcId || !dstId) continue;
-		const auto total = int((*data)["total"].toInt(0));
-		const auto sent = int((*data)["sent"].toInt(0));
-		if (total <= 0 || sent >= total) continue;
-		SavedJob job;
-		job.srcId = srcId;
-		job.dstId = dstId;
-		job.path = path;
-		job.total = total;
-		job.sent = sent;
-		const auto msgs = (*data)["source_msgs"].toArray();
-		for (const auto &v : msgs) {
-			const auto obj = v.toObject();
-			job.sourceMsgs.push_back(FullMsgId(
-				srcId,
-				MsgId(obj["msg"].toVariant().toLongLong())));
-		}
-		const auto items = (*data)["items"].toArray();
-		for (const auto &v : items) {
-			const auto obj = v.toObject();
-			job.uploadDone.push_back(obj["upload_done"].toBool(false));
-			job.fileId.push_back(obj["file_id"].toString().toULongLong());
-			job.uploadedParts.push_back(int(obj["uploaded_parts"].toInt(0)));
-		}
-		result.push_back(std::move(job));
 	}
 	return result;
 }
 
-std::optional<SavedJob> GetUnfinishedJobByDst(
-		const PeerId &dstId,
-		const QString &dir) {
-	for (const auto &job : GetUnfinishedJobs(dir)) {
+std::optional<SavedJob> GetUnfinishedJobByDst(const PeerId &dstId) {
+	for (const auto &job : GetUnfinishedJobs()) {
 		if (job.dstId == dstId) {
 			return job;
 		}
@@ -749,6 +770,18 @@ void Pipeline::Start(
 		const Api::SendAction &action,
 		Data::GroupingOptions groupOptions,
 		std::shared_ptr<SavedJob> resumeJob) {
+	const auto dstId = action.history->peer->id;
+	if (ActiveStates().find(dstId) != ActiveStates().end()) {
+		LOG(("ENHANCED_FWD: queueing forward to peer=%1 (job active)")
+			.arg(dstId.value));
+		StartQueue()[dstId].push_back(StartRequest{
+			api,
+			std::move(items),
+			action,
+			groupOptions,
+			std::move(resumeJob) });
+		return;
+	}
 	auto pipeline = std::make_shared<Pipeline>(
 		api,
 		std::move(items),
@@ -767,7 +800,8 @@ Pipeline::Pipeline(
 : _api(api)
 , _session(api->session())
 , _action(action)
-, _groupOptions(groupOptions) {
+, _groupOptions(groupOptions)
+, _runId(base::RandomValue<uint64>()) {
 	_downloadPath = File::DefaultDownloadPath(&_session) + "ForwardTemp/";
 	_peerId = action.history->peer->id;
 	_srcPeer = !items.empty()
@@ -781,7 +815,6 @@ Pipeline::Pipeline(
 			_items[i].sourceId = resumeJob->sourceMsgs[i];
 		}
 		_sent = resumeJob->sent;
-		_progressPath = resumeJob->path;
 		loadProgress();
 
 		for (auto i = 0; i < _n; i++) {
@@ -813,21 +846,26 @@ Pipeline::Pipeline(
 	}
 }
 
-Pipeline::~Pipeline() = default;
+Pipeline::~Pipeline() {
+	if (GetEnhancedBool("prevent_forward_duplicates")) {
+		auto &db = Core::App().downloadManager().dedupDb();
+		if (db.isOpen()) {
+			for (const auto &item : _items) {
+				if (item.mediaId) {
+					db.removePending(
+						Data::DedupDb::Table::Uploads,
+						item.mediaId);
+				}
+			}
+		}
+	}
+}
 
 void Pipeline::run() {
 	const auto self = shared_from_this();
 	_uploadLifetime = std::make_shared<rpl::lifetime>();
 	_dlLifetime = std::make_shared<rpl::lifetime>();
 	_uploadIndex = std::make_shared<base::flat_map<FullMsgId, int>>();
-
-	if (_progressPath.isEmpty()) {
-		const auto srcPeer = _session.data().peer(_srcPeer);
-		const auto srcName = srcPeer ? srcPeer->name() : u"chat"_q;
-		_progressPath = EnhancedForward::ProgressFilePath(
-			EnhancedForward::ProgressFileBareName(srcName),
-			_downloadPath);
-	}
 
 	EnhancedForward::startForwardSession(
 		&_session,
@@ -927,14 +965,17 @@ void Pipeline::run() {
 					auto name = doc->filename();
 					if (name.isEmpty()) name = u"file"_q;
 					name.replace(QRegularExpression("[:<>\"\\\\|?*]"), "_");
-					_items[i].path = QDir(_downloadPath).absoluteFilePath(name);
-					QDir().mkpath(QFileInfo(_items[i].path).absolutePath());
-					_items[i].needsDownload = true;
+				_items[i].path = QDir(_downloadPath).absoluteFilePath(
+					QString::number(_runId) + u"_"_q
+					+ QString::number(i) + u"_"_q + name);
+				QDir().mkpath(QFileInfo(_items[i].path).absolutePath());
+				_items[i].needsDownload = true;
 				}
 			} else if (const auto photo = media ? media->photo() : nullptr) {
 				const auto v = photo->activeMediaView();
 				const auto destPath = QDir(_downloadPath).absoluteFilePath(
-					QString::number(i) + u"_"_q + QString::number(photo->id) + u".jpg"_q);
+					QString::number(_runId) + u"_"_q
+					+ QString::number(i) + u"_"_q + QString::number(photo->id) + u".jpg"_q);
 				_items[i].path = destPath;
 				if (v && v->loaded() && v->saveToFile(destPath)) {
 					_items[i].downloadDone = true;
@@ -1009,77 +1050,100 @@ void Pipeline::run() {
 		}
 	}, *_dlLifetime);
 
+	if (GetEnhancedBool("prevent_forward_duplicates")) {
+		for (auto i = 0; i < _n; i++) {
+			auto &item = _items[i];
+			if (item.textOnly || item.uploadDone || item.dedupSkipped) continue;
+			if (!item.mediaId) {
+				const auto srcItem = _session.data().message(item.sourceId);
+				const auto media = srcItem ? srcItem->media() : nullptr;
+				const auto doc = media ? media->document() : nullptr;
+				const auto photo = media ? media->photo() : nullptr;
+				if (!doc && !photo) continue;
+				item.mediaId = doc ? uint64(doc->id) : uint64(photo->id);
+			}
+			if (item.downloadDone && !item.path.isEmpty()) {
+				item.dedupNeedsHash = true;
+			}
+		}
+		auto &dedupDb = Core::App().downloadManager().dedupDb();
+		if (dedupDb.isOpen()) {
+			for (auto i = 0; i < _n; i++) {
+				if (_items[i].mediaId) {
+					dedupDb.removeByDocumentId(
+						Data::DedupDb::Table::Uploads,
+						_items[i].mediaId,
+						u"u"_q);
+				}
+			}
+		}
+		for (auto i = 0; i < _n; i++) {
+			if (_items[i].dedupNeedsHash) {
+				dedupCheckItem(i);
+			}
+		}
+	}
+
 	pumpDownloads();
 	pumpUploads();
 	sendNext();
 }
 
 void Pipeline::saveProgress() {
-	QJsonObject root;
-	root["dst_peer"] = qint64(_peerId.value);
-	root["src_peer"] = qint64(_srcPeer.value);
-	root["total"] = int(_items.size());
-	root["sent"] = EnhancedForward::currentProgress(_peerId).sent;
-	QJsonArray msgs;
-	for (const auto &it : _items) {
-		QJsonObject m;
-		m["msg"] = qint64(it.sourceId.msg.bare);
-		msgs.append(m);
+	auto &db = Core::App().downloadManager().dedupDb();
+	if (!db.isOpen()) {
+		return;
 	}
-	root["source_msgs"] = msgs;
-	QJsonArray items;
+	const auto jobId = u"ef_%1_%2"_q.arg(_srcPeer.value).arg(_peerId.value);
 	for (auto i = 0; i < int(_items.size()); i++) {
-		QJsonObject item;
-		item["index"] = i;
-		item["path"] = _items[i].path;
-		item["downloaded"] = _items[i].downloadedBytes;
-		item["download_done"] = bool(_items[i].downloadDone);
-		item["upload_done"] = bool(_items[i].uploadDone);
-		item["text_only"] = bool(_items[i].textOnly);
-		item["file_id"] = QString::number(_items[i].fileId);
-		item["part_size"] = qint64(_items[i].partSize);
-		item["uploaded_parts"] = int(_items[i].uploadedParts);
-		const auto srcItem = _session.data().message(_items[i].sourceId);
-		if (srcItem) {
-			const auto media = srcItem->media();
-			if (const auto doc = media ? media->document() : nullptr) {
-				item["name"] = doc->filename();
-				item["size"] = qint64(doc->size);
-			} else if (media && media->photo()) {
-				item["name"] = u"photo.jpg"_q;
-				item["size"] = qint64(0);
-			} else {
-				item["name"] = QFileInfo(_items[i].path).fileName();
-				item["size"] = qint64(0);
-			}
-		}
-		items.append(item);
+		const auto &it = _items[i];
+		auto record = Data::EfResumeItem();
+		record.jobId = jobId;
+		record.itemIndex = i;
+		record.peerId = _peerId;
+		record.sourceId = it.sourceId;
+		record.state = QString::number(it.uploadDone
+			? (it.sent ? 3 : 2)
+			: (it.downloadDone ? 1 : 0));
+		record.localPath = it.path;
+		record.fileId = it.fileId;
+		record.uploadedParts = it.uploadedParts;
+		record.fileSize = it.prepared
+			? qint64(it.prepared->filesize)
+			: qint64(0);
+		record.fileHash = it.fileHash;
+		record.mediaId = it.mediaId;
+		db.insertEfResumeItem(record);
 	}
-	root["items"] = items;
-	const auto srcPeer = _session.data().peer(_srcPeer);
-	const auto srcName = srcPeer ? srcPeer->name() : u"chat"_q;
-	root["src_name"] = srcName;
-	
-	EnhancedForward::SaveProgress(_progressPath, root);
 }
 
 bool Pipeline::loadProgress() {
-	const auto data = EnhancedForward::LoadProgress(_progressPath);
-	if (!data) return false;
-	_sent = int((*data)["sent"].toInt(0));
-	const auto items = (*data)["items"].toArray();
-	for (const auto &v : items) {
-		const auto obj = v.toObject();
-		const auto i = obj["index"].toInt(-1);
-		if (i < 0 || i >= int(_items.size())) continue;
-		_items[i].path = obj["path"].toString();
-		_items[i].downloadedBytes = qint64(obj["downloaded"].toDouble());
-		_items[i].textOnly = obj["text_only"].toBool();
-		_items[i].downloadDone = obj["download_done"].toBool();
-		_items[i].uploadDone = obj["upload_done"].toBool();
-		_items[i].fileId = obj["file_id"].toString().toULongLong();
-		_items[i].partSize = qint64(obj["part_size"].toDouble());
-		_items[i].uploadedParts = int(obj["uploaded_parts"].toInt(0));
+	auto &db = Core::App().downloadManager().dedupDb();
+	if (!db.isOpen()) {
+		return false;
+	}
+	const auto records = db.loadEfResumeItemsForPeer(_peerId);
+	if (records.empty()) {
+		return false;
+	}
+	for (const auto &record : records) {
+		for (auto i = 0; i < int(_items.size()); i++) {
+			if (_items[i].sourceId != record.sourceId) {
+				continue;
+			}
+			const auto state = record.state.toInt();
+			_items[i].path = record.localPath;
+			_items[i].downloadDone = (state >= 1);
+			_items[i].uploadDone = (state >= 2);
+			_items[i].sent = (state >= 3);
+			_items[i].fileId = record.fileId;
+			_items[i].uploadedParts = record.uploadedParts;
+			_items[i].fileHash = record.fileHash;
+			_items[i].mediaId = record.mediaId
+				? record.mediaId
+				: _items[i].mediaId;
+			break;
+		}
 	}
 	return true;
 }
@@ -1090,6 +1154,7 @@ void Pipeline::setupCallbacks() {
 		_peerId,
 		&_session,
 		[self] {
+			auto &dedupDb = Core::App().downloadManager().dedupDb();
 			for (auto i = 0; i < self->_n; i++) {
 				const auto msg = self->_session.data().message(self->_items[i].sourceId);
 				if (!msg) continue;
@@ -1103,8 +1168,16 @@ void Pipeline::setupCallbacks() {
 					self->_session.uploader().cancel(self->_items[i].uploadId);
 					self->_uploadIndex->erase(self->_items[i].uploadId);
 				}
+				if (!self->_items[i].uploadDone
+					&& self->_items[i].mediaId
+					&& dedupDb.isOpen()) {
+					dedupDb.removeByDocumentId(
+						Data::DedupDb::Table::Uploads,
+						self->_items[i].mediaId,
+						u"u"_q);
+				}
 			}
-			EnhancedForward::CleanupPartialFiles(self->_progressPath);
+			EnhancedForward::CleanupPartialFilesForPeer(&self->_session, self->_peerId);
 		});
 
 	EnhancedForward::setPauseCallback(
@@ -1256,6 +1329,13 @@ void Pipeline::sendNext() {
 		if (!_items[i].sent) return;
 	}
 
+	if (_skippedCount > 0) {
+		Ui::Toast::Show(tr::lng_enhanced_forward_duplicates_skipped(
+			tr::now,
+			lt_count,
+			_skippedCount));
+	}
+
 	// Cleanup
 	_session.data().sendHistoryChangeNotifications();
 	_session.changes().historyUpdated(
@@ -1268,13 +1348,16 @@ void Pipeline::sendNext() {
 			QFile::remove(_items[i].path);
 		}
 	}
-	EnhancedForward::ClearProgress(_progressPath);
+	EnhancedForward::ClearProgressForPeer(_peerId);
 	if (_uploadLifetime) _uploadLifetime->destroy();
 	if (_dlLifetime) _dlLifetime->destroy();
 }
 
 void Pipeline::pumpUploads() {
 	if (_uploadInFlight) return;
+	while (_uploadCursor < _n && _items[_uploadCursor].dedupSkipped) {
+		_uploadCursor++;
+	}
 	if (_uploadCursor >= _n) return;
 	if (!_items[_uploadCursor].downloadDone) return;
 	const auto i = _uploadCursor;
@@ -1508,6 +1591,21 @@ void Pipeline::onUploadDone(const Storage::UploadedMedia &data) {
 	item.uploadInfo = std::move(data.info);
 	item.uploadDone = true;
 	item.retries = 0;
+	if (GetEnhancedBool("prevent_forward_duplicates")
+			&& !item.fileHash.isEmpty()
+			&& item.mediaId) {
+		auto &db = Core::App().downloadManager().dedupDb();
+		if (db.isOpen()) {
+			db.updateDedupStatus(
+				Data::DedupDb::Table::Uploads,
+				item.fileHash,
+				item.fileSize,
+				u"f"_q);
+			db.removePending(
+				Data::DedupDb::Table::Uploads,
+				item.mediaId);
+		}
+	}
 	EnhancedForward::updateUploadProgress(
 		&_session, _peerId, idx,
 		{ item.prepared ? item.prepared->filename : QString(),
@@ -1563,6 +1661,18 @@ void Pipeline::onUploadFail(const FullMsgId &fullId) {
 	item.retries = 0;
 	item.uploadedParts = 0;
 	item.fileId = base::RandomValue<uint64>();
+	if (!item.fileHash.isEmpty() && item.mediaId) {
+		auto &db = Core::App().downloadManager().dedupDb();
+		if (db.isOpen()) {
+			db.removeByDocumentId(
+				Data::DedupDb::Table::Uploads,
+				item.mediaId,
+				u"u"_q);
+			db.removePending(
+				Data::DedupDb::Table::Uploads,
+				item.mediaId);
+		}
+	}
 	const auto history = _session.data().history(_peerId);
 	const auto fileName = item.prepared ? item.prepared->filename : u"file"_q;
 	const auto text = tr::lng_enhanced_forward_upload_failed(
@@ -1638,6 +1748,7 @@ void Pipeline::checkItem(int i) {
 			&_session, _peerId, i,
 			{ fi.fileName(), fi.size() },
 			1.0);
+		dedupCheckItem(i);
 		pumpUploads();
 		pumpDownloads();
 		return;
@@ -1667,6 +1778,7 @@ void Pipeline::checkItem(int i) {
 					{ QString::number(photo->id) + u".jpg"_q, 0 },
 					1.0);
 				_downloadInFlight = false;
+				dedupCheckItem(i);
 				pumpUploads();
 				pumpDownloads();
 			} else {
@@ -1711,6 +1823,71 @@ void Pipeline::pumpDownloads() {
 	const auto media = srcItem ? srcItem->media() : nullptr;
 	const auto doc = media ? media->document() : nullptr;
 	const auto photo = media ? media->photo() : nullptr;
+
+	if (GetEnhancedBool("prevent_forward_duplicates") && (doc || photo)) {
+		const auto mediaId = doc ? uint64(doc->id) : uint64(photo->id);
+		item.mediaId = mediaId;
+		auto &dedupDb = Core::App().downloadManager().dedupDb();
+		if (dedupDb.isOpen()
+				&& dedupDb.containsDocId(Data::DedupDb::Table::Uploads, mediaId)) {
+			skipAsDuplicate(i);
+			return;
+		}
+		const auto size = doc ? qint64(doc->size) : qint64(0);
+		const auto remotePrecheck = doc
+			&& size >= Data::kDedupMinPartialHashSize
+			&& dedupDb.isOpen()
+			&& dedupDb.containsSize(Data::DedupDb::Table::Uploads, size);
+		if (dedupDb.isOpen()) {
+			dedupDb.addPending(Data::DedupDb::Table::Uploads, mediaId, size);
+		}
+		if (remotePrecheck) {
+			const auto origin = Data::FileOrigin(
+				FullMsgId(srcItem->history()->peer->id, srcItem->id));
+			Data::RemoteFileFingerprint(&_session, doc, [=](QByteArray hash) {
+				auto &it = _items[i];
+				if (hash.isEmpty()) {
+					it.dedupNeedsHash = true;
+					doc->save(origin, it.path, LoadFromCloudOrLocal, false, true);
+					checkItem(i);
+					if (it.downloadDone) {
+						pumpDownloads();
+					}
+					return;
+				}
+				it.fileHash = hash;
+				it.fileSize = size;
+				auto &db = Core::App().downloadManager().dedupDb();
+				db.updatePendingHash(
+					Data::DedupDb::Table::Uploads,
+					mediaId,
+					hash);
+				const auto duplicate = db.isOpen()
+					? db.findUploadDuplicateByHash(hash, size, mediaId)
+					: std::optional<Data::DedupRecord>();
+				if (duplicate && duplicate->documentId != mediaId) {
+					if (duplicate->documentId) {
+						db.insertIdMapping(mediaId, hash);
+					}
+					skipAsDuplicate(i);
+					return;
+				}
+				db.insert(Data::DedupDb::Table::Uploads, {
+					hash,
+					size,
+					mediaId,
+					u"u"_q });
+				doc->save(origin, it.path, LoadFromCloudOrLocal, false, true);
+				checkItem(i);
+				if (it.downloadDone) {
+					pumpDownloads();
+				}
+			});
+			return;
+		}
+		item.dedupNeedsHash = true;
+	}
+
 	if (doc) {
 		doc->save(
 			Data::FileOrigin(FullMsgId(srcItem->history()->peer->id, srcItem->id)),
@@ -1736,6 +1913,85 @@ void Pipeline::pumpDownloads() {
 	if (item.downloadDone) {
 		pumpDownloads();
 	}
+}
+
+void Pipeline::dedupCheckItem(int i) {
+	auto &item = _items[i];
+	if (!GetEnhancedBool("prevent_forward_duplicates")) return;
+	if (item.dedupSkipped || item.uploadDone || !item.dedupNeedsHash) return;
+	item.dedupNeedsHash = false;
+
+	QByteArray hash;
+	qint64 size = 0;
+	uint64 mediaId = item.mediaId;
+	const auto srcItem = _session.data().message(item.sourceId);
+	const auto media = srcItem ? srcItem->media() : nullptr;
+	const auto doc = media ? media->document() : nullptr;
+	const auto photo = media ? media->photo() : nullptr;
+	if (photo) {
+		QFile f(item.path);
+		if (!f.open(QIODevice::ReadOnly)) return;
+		const auto content = f.readAll();
+		if (content.isEmpty()) return;
+		hash = Data::ContentFingerprint(content);
+		size = content.size();
+		if (!mediaId) mediaId = photo->id;
+	} else if (doc) {
+		hash = Data::FileFingerprint(item.path, qint64(doc->size));
+		size = qint64(doc->size);
+		if (!mediaId) mediaId = doc->id;
+	} else {
+		return;
+	}
+	item.fileHash = hash;
+	item.fileSize = size;
+	if (hash.isEmpty() || !mediaId) return;
+
+	auto &dedupDb = Core::App().downloadManager().dedupDb();
+	if (!dedupDb.isOpen()) return;
+	dedupDb.updatePendingHash(
+		Data::DedupDb::Table::Uploads,
+		mediaId,
+		hash);
+	const auto duplicate = dedupDb.findUploadDuplicateByHash(hash, size, mediaId);
+	if (duplicate && duplicate->documentId != mediaId) {
+		if (item.path.startsWith(_downloadPath)) {
+			QFile::remove(item.path);
+		}
+		if (duplicate->documentId) {
+			dedupDb.insertIdMapping(mediaId, hash);
+		}
+		skipAsDuplicate(i);
+	} else {
+		dedupDb.insert(Data::DedupDb::Table::Uploads, {
+			hash,
+			size,
+			mediaId,
+			u"u"_q });
+	}
+}
+
+void Pipeline::skipAsDuplicate(int i) {
+	auto &item = _items[i];
+	item.dedupSkipped = true;
+	item.downloadDone = true;
+	item.uploadDone = true;
+	item.sent = true;
+	_downloadInFlight = false;
+	_uploadInFlight = false;
+	_skippedCount++;
+	if (item.mediaId) {
+		auto &db = Core::App().downloadManager().dedupDb();
+		if (db.isOpen()) {
+			db.removePending(Data::DedupDb::Table::Uploads, item.mediaId);
+		}
+	}
+	EnhancedForward::markItemSkipped(&_session, _peerId);
+	Ui::Toast::Show(tr::lng_enhanced_forward_duplicate_skipped(tr::now));
+	saveProgress();
+	sendNext();
+	pumpUploads();
+	pumpDownloads();
 }
 
 } // namespace EnhancedForward

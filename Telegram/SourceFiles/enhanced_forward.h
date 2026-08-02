@@ -97,6 +97,10 @@ void markItemSent(
 	not_null<Main::Session*> session,
 	const PeerId &peerId);
 
+void markItemSkipped(
+	not_null<Main::Session*> session,
+	const PeerId &peerId);
+
 void cancelForward(
 	const PeerId &id,
 	not_null<Main::Session*> session);
@@ -162,41 +166,26 @@ void saveProgressForPeer(
 
 [[nodiscard]] ForwardProgress currentProgress(const PeerId &id);
 
-// Resume progress persistence (mirrors export's progress.json).
-// Files are named EF_<SrcChatName>.json for easy identification;
-// the peer ids live inside the JSON body (src_peer / dst_peer).
-QString ProgressFilePath(const QString &bareName, const QString &dir);
-QString ProgressFileBareName(const QString &srcName);
-void SaveProgress(
-	const QString &path,
-	const QJsonObject &data);
-[[nodiscard]] std::optional<QJsonObject> LoadProgress(const QString &path);
-void ClearProgress(const QString &path);
-void CleanupPartialFiles(const QString &progressPath);
+void ClearProgressForPeer(const PeerId &peerId);
+void CleanupPartialFilesForPeer(
+	not_null<Main::Session*> session,
+	const PeerId &peerId);
 
 struct SavedJob {
 	PeerId srcId = PeerId();
 	PeerId dstId = PeerId();
-	QString path;
 	int total = 0;
 	int sent = 0;
 	std::vector<FullMsgId> sourceMsgs;
 	std::vector<bool> uploadDone;
-	// Persisted resumable upload state: the client-chosen
-	// file_id and the number of server-acked parts, so a
-	// paused/interrupted upload can continue instead of
-	// re-uploading from the beginning after a restart.
 	std::vector<uint64> fileId;
 	std::vector<int> uploadedParts;
 };
 
-// List unfinished forward jobs (sent < total) found in dir.
-[[nodiscard]] std::vector<SavedJob> GetUnfinishedJobs(const QString &dir);
+[[nodiscard]] std::vector<SavedJob> GetUnfinishedJobs();
 
-// Find the unfinished forward job targeting dstId, if any.
 [[nodiscard]] std::optional<SavedJob> GetUnfinishedJobByDst(
-	const PeerId &dstId,
-	const QString &dir);
+	const PeerId &dstId);
 
 // Fires the destination peer whenever its forward state changes.
 [[nodiscard]] rpl::producer<PeerId> stateChanges();
@@ -213,6 +202,11 @@ struct ItemTask {
 	bool downloadDone = false;
 	qint64 downloadedBytes = 0;
 	std::shared_ptr<Data::PhotoMedia> photoView;
+	uint64 mediaId = 0;
+	QByteArray fileHash;
+	qint64 fileSize = 0;
+	bool dedupNeedsHash = false;
+	bool dedupSkipped = false;
 
 	bool uploadStarted = false;
 	bool uploadDone = false;
@@ -260,6 +254,8 @@ private:
 	void onUploadProgress(const Storage::UploadProgress &data);
 	void checkItem(int idx);
 	void pumpDownloads();
+	void dedupCheckItem(int idx);
+	void skipAsDuplicate(int idx);
 
 	not_null<ApiWrap*> _api;
 	Main::Session &_session;
@@ -281,10 +277,12 @@ private:
 	std::shared_ptr<rpl::lifetime> _dlLifetime;
 
 	QString _downloadPath;
-	QString _progressPath;
+	uint64 _runId = 0;
+
 	PeerId _peerId;
 	PeerId _srcPeer;
 	int _sent = 0;
+	int _skippedCount = 0;
 
 	int _downloadCursor = 0;
 	int _uploadCursor = 0;

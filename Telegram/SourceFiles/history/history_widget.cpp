@@ -7540,10 +7540,8 @@ void HistoryWidget::updateSendRestriction() {
 		|| progress.state == EnhancedForward::State::Finished
 		|| progress.state == EnhancedForward::State::Paused)
 		&& progress.destPeer == _peer->id;
-	const auto dir = File::DefaultDownloadPath(&session())
-		+ u"ForwardTemp/"_q;
 	const auto hasUnfinishedJob = !isEnhancedForwarding
-		&& EnhancedForward::GetUnfinishedJobByDst(_peer->id, dir).has_value();
+		&& EnhancedForward::GetUnfinishedJobByDst(_peer->id).has_value();
 	const auto key = (isEnhancedForwarding || hasUnfinishedJob)
 		? u"enhanced_forward"_q
 		: restriction.text;

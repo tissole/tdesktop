@@ -753,21 +753,14 @@ void MainWindow::closeEvent(QCloseEvent *e) {
 }
 
 void MainWindow::showUnfinishedForwards(not_null<Main::Session*> session) {
-	const auto dir = File::DefaultDownloadPath(session)
-		+ "ForwardTemp/";
-	LOG(("ENHANCED_FWD: showUnfinishedForwards dir=%1").arg(dir));
-	const auto jobs = EnhancedForward::GetUnfinishedJobs(dir);
-	LOG(("ENHANCED_FWD: showUnfinishedForwards jobs=%1").arg(jobs.size()));
+	const auto jobs = EnhancedForward::GetUnfinishedJobs();
 	if (jobs.empty()) return;
 
 	for (const auto &job : jobs) {
-		const auto json = EnhancedForward::LoadProgress(job.path);
-		const auto srcName = json
-			? (*json)["src_name"].toString(QString())
-			: QString();
-		const auto chatName = !srcName.isEmpty()
-			? srcName
-			: QFileInfo(job.path).baseName().mid(3);
+		const auto srcPeer = session->data().peerLoaded(job.srcId);
+		const auto chatName = srcPeer
+			? srcPeer->name()
+			: u"chat"_q;
 
 		auto box = Box([=](not_null<Ui::GenericBox*> box) {
 			box->addRow(object_ptr<Ui::FlatLabel>(
@@ -789,7 +782,7 @@ void MainWindow::showUnfinishedForwards(not_null<Main::Session*> session) {
 				tr::lng_enhanced_forward_resume(),
 				[=] {
 				session->api().startResumeForward(
-					job.srcId, job.dstId, session, job.path);
+					job.srcId, job.dstId, session);
 				box->closeBox();
 			});
 			box->addButton(
@@ -798,7 +791,7 @@ void MainWindow::showUnfinishedForwards(not_null<Main::Session*> session) {
 				controller().show(Ui::MakeConfirmBox({
 					.text = tr::lng_enhanced_forward_cancel_confirm(tr::now),
 					.confirmed = [=] {
-						EnhancedForward::CleanupPartialFiles(job.path);
+						EnhancedForward::CleanupPartialFilesForPeer(session, job.dstId);
 						box->closeBox();
 					},
 					.confirmText = tr::lng_enhanced_forward_cancel_yes(tr::now),

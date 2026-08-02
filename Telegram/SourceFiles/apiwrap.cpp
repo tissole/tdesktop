@@ -4190,80 +4190,30 @@ void ApiWrap::forwardMessages(
 void ApiWrap::startResumeForward(
 		const PeerId &srcId,
 		const PeerId &dstId,
-		not_null<Main::Session*> session,
-		const QString &path) {
-	startResumeEnhancedForward(srcId, dstId, session, path);
+		not_null<Main::Session*> session) {
+	startResumeEnhancedForward(srcId, dstId, session);
 }
 
 void ApiWrap::startResumeEnhancedForward(
 		const PeerId &srcId,
 		const PeerId &dstId,
-		not_null<Main::Session*> session,
-		const QString &path) {
-	LOG(("ENHANCED_FWD: startResumeEnhancedForward src=%1 dst=%2 path=%3")
-		.arg(srcId.value).arg(dstId.value).arg(path));
-	const auto progressPath = !path.isEmpty()
-		? path
-		: [&] {
-			const auto dir = File::DefaultDownloadPath(session)
-				+ "ForwardTemp/";
-			const auto srcName = session->data().peer(srcId)->name();
-			const auto bareName = EnhancedForward::ProgressFileBareName(srcName);
-			return EnhancedForward::ProgressFilePath(bareName, dir);
-		}();
-	LOG(("ENHANCED_FWD: startResumeEnhancedForward progressPath=%1")
-		.arg(progressPath));
-	const auto data = EnhancedForward::LoadProgress(progressPath);
-	if (!data) {
-		LOG(("ENHANCED_FWD: startResumeEnhancedForward load failed"));
+		not_null<Main::Session*> session) {
+	LOG(("ENHANCED_FWD: startResumeEnhancedForward src=%1 dst=%2")
+		.arg(srcId.value).arg(dstId.value));
+	const auto job = EnhancedForward::GetUnfinishedJobByDst(dstId);
+	if (!job) {
+		LOG(("ENHANCED_FWD: no unfinished job for dst=%1").arg(dstId.value));
 		return;
 	}
-	const auto total = int((*data)["total"].toInt(0));
-	const auto sent = int((*data)["sent"].toInt(0));
-	if (total <= 0 || sent >= total) {
-		return;
-	}
-	// Guard against starting the same resume twice (e.g. the user
-	// clicking "Resume" repeatedly while source messages are still
-	// being fetched). Without this, each click would spin up its own
-	// pipeline against the same peer.
-	static auto Resuming = std::set<PeerId>();
-	if (Resuming.contains(dstId)) {
-		return;
-	}
-	const auto done = [=] {
-		Resuming.erase(dstId);
-	};
-	auto job = std::make_shared<EnhancedForward::SavedJob>();
-	job->srcId = srcId;
-	job->dstId = dstId;
-	job->total = total;
-	job->sent = sent;
-	job->path = progressPath;
-	const auto srcPeerId = PeerId(
-		qulonglong((*data)["src_peer"].toDouble()));
-	const auto msgs = (*data)["source_msgs"].toArray();
-	for (const auto &v : msgs) {
-		const auto obj = v.toObject();
-		job->sourceMsgs.push_back(FullMsgId(
-			srcPeerId,
-			MsgId(obj["msg"].toVariant().toLongLong())));
-	}
-	const auto items = (*data)["items"].toArray();
-	for (const auto &v : items) {
-		const auto obj = v.toObject();
-		job->uploadDone.push_back(obj["upload_done"].toBool(false));
-		job->fileId.push_back(
-			obj["file_id"].toString().toULongLong());
-		job->uploadedParts.push_back(
-			int(obj["uploaded_parts"].toInt(0)));
-	}
+
+	auto jobPtr = std::make_shared<EnhancedForward::SavedJob>(*job);
+	const auto resumeFn = std::make_shared<std::function<bool()>>();
 
 	const auto resume = [=] {
 		auto resolved = std::vector<not_null<HistoryItem*>>();
-		resolved.reserve(job->sourceMsgs.size());
+		resolved.reserve(jobPtr->sourceMsgs.size());
 		auto ok = true;
-		for (const auto &full : job->sourceMsgs) {
+		for (const auto &full : jobPtr->sourceMsgs) {
 			const auto item = session->data().message(full);
 			if (item) {
 				resolved.push_back(item);
@@ -4284,10 +4234,10 @@ void ApiWrap::startResumeEnhancedForward(
 			std::move(draft),
 			action,
 			nullptr,
-			job);
-		done();
+			jobPtr);
 		return true;
 	};
+	*resumeFn = resume;
 
 	if (resume()) {
 		return;
@@ -4311,9 +4261,8 @@ void ApiWrap::startResumeEnhancedForward(
 			const auto timer = std::make_shared<base::Timer>();
 			timer->setCallback([=] {
 				state->attempts++;
-				if (resume() || state->attempts > 20) {
+				if ((*resumeFn)() || state->attempts > 20) {
 					timer->cancel();
-					done();
 				}
 			});
 			timer->callEach(crl::time(250));

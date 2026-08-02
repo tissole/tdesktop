@@ -42,6 +42,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_peer.h"
 #include "data/data_user.h"
 #include "data/data_document.h"
+#include "data/data_download_manager.h"
+#include "data/data_dedup_db.h"
 #include "data/stickers/data_custom_emoji.h"
 #include "chat_helpers/emoji_suggestions_widget.h"
 #include "history/view/controls/compose_controls_common.h"
@@ -1736,20 +1738,16 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 	});
 
 	auto jobSrcId = std::make_shared<PeerId>();
-	auto jobPath = std::make_shared<QString>();
-	const auto dir = File::DefaultDownloadPath(session) + "ForwardTemp/";
 
 	const auto computeShowLater = [=]() -> bool {
 		const auto active = EnhancedForward::currentProgress(peer).state;
-		const auto job = EnhancedForward::GetUnfinishedJobByDst(peer, dir);
+		const auto job = EnhancedForward::GetUnfinishedJobByDst(peer);
 		const auto showLater = (active == EnhancedForward::State::Idle)
 			&& job.has_value();
 		if (showLater) {
 			*jobSrcId = job->srcId;
-			*jobPath = job->path;
 		} else {
 			*jobSrcId = PeerId();
-			*jobPath = QString();
 		}
 		return showLater;
 	};
@@ -2005,9 +2003,7 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 		default: {
 			const auto showLater = computeShowLater();
 			if (showLater) {
-				const auto job = EnhancedForward::GetUnfinishedJobByDst(
-					peer,
-					dir);
+				const auto job = EnhancedForward::GetUnfinishedJobByDst(peer);
 				title->setText(tr::lng_enhanced_forward_forwarding(
 					tr::now,
 					lt_sent,
@@ -2019,16 +2015,13 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 					session->api().startResumeForward(
 						*jobSrcId,
 						peer,
-						session,
-						*jobPath);
+						session);
 				});
 			cancelBtn->setText(tr::lng_enhanced_forward_cancel(tr::now));
 			cancelBtn->setClickedCallback([=] {
 				confirmCancel([=] {
-					const auto path = *jobPath;
-					EnhancedForward::CleanupPartialFiles(path);
+					EnhancedForward::CleanupPartialFilesForPeer(session, peer);
 					*jobSrcId = PeerId();
-					*jobPath = QString();
 					InvokeQueued(raw, [=] {
 						session->changes().peerUpdated(
 							session->data().peer(peer),
@@ -2040,64 +2033,16 @@ std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
 				cancelBtn->show();
 				raw->setCursor(style::cur_pointer);
 
-				const auto json = EnhancedForward::LoadProgress(*jobPath);
-				if (json) {
-					const auto items = (*json)["items"].toArray();
-					for (const auto &v : items) {
-						const auto obj = v.toObject();
-						const auto downloadDone
-							= obj["download_done"].toBool();
-						const auto uploadDone
-							= obj["upload_done"].toBool();
-						if (uploadDone) continue;
-						const auto itemName = obj["name"].toString();
-						const auto itemSize
-							= qint64(obj["size"].toDouble());
-						if (itemName.isEmpty()) continue;
-						const auto sizeStr = (itemSize > 0)
-							? u" (%1)"_q.arg(formatSize(itemSize))
-							: QString();
-						if (!downloadDone) {
-							const auto downloadedBytes
-								= qint64(obj["downloaded"].toDouble());
-							const auto pct = (itemSize > 0)
-								? std::clamp(int(float64(downloadedBytes)
-									/ float64(itemSize) * 100), 0, 100)
-								: 0;
-							*downloadText = u"%1%2"_q
-								.arg(itemName).arg(sizeStr);
-							downloadLabel->setText(*downloadText);
-							*downloadValue = (itemSize > 0)
-								? float64(downloadedBytes) / float64(itemSize)
-								: 0;
-							*downloadPctText = u"%1%"_q.arg(pct);
-							downloadPct->setText(*downloadPctText);
-							downloadBar->show();
-							downloadPct->show();
-						} else {
-							const auto uploadedParts
-								= obj["uploaded_parts"].toInt(0);
-							const auto partSize
-								= int(obj["part_size"].toDouble());
-							const auto totalParts = (partSize > 0
-									&& itemSize > 0)
-								? int(itemSize / partSize)
-								: 0;
-							const auto pct = (totalParts > 0)
-								? std::clamp(int(float64(uploadedParts)
-									/ float64(totalParts) * 100), 0, 100)
-								: 0;
-							*uploadText = u"%1%2"_q
-								.arg(itemName).arg(sizeStr);
-							uploadLabel->setText(*uploadText);
-							*uploadValue = float64(pct) / 100.0;
-							*uploadPctText = u"%1%"_q.arg(pct);
-							uploadPct->setText(*uploadPctText);
-							uploadBar->show();
-							uploadPct->show();
-						}
-						break;
-					}
+				const auto records = Core::App().downloadManager().dedupDb().isOpen()
+					? Core::App().downloadManager().dedupDb().loadEfResumeItemsForPeer(peer)
+					: std::vector<Data::EfResumeItem>();
+				if (!records.empty()) {
+					downloadLabel->setText(QString());
+					uploadLabel->setText(QString());
+					downloadPct->setText(QString());
+					uploadPct->setText(QString());
+					downloadBar->hide();
+					uploadBar->hide();
 				}
 			} else {
 				titleText->clear();

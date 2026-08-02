@@ -342,13 +342,11 @@ public:
 	void startResumeForward(
 		const PeerId &srcId,
 		const PeerId &dstId,
-		not_null<Main::Session*> session,
-		const QString &path = QString());
+		not_null<Main::Session*> session);
 	void startResumeEnhancedForward(
 		const PeerId &srcId,
 		const PeerId &dstId,
-		not_null<Main::Session*> session,
-		const QString &path = QString());
+		not_null<Main::Session*> session);
 	void shareContact(
 		const QString &phone,
 		const QString &firstName,
