@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/media/info_media_provider.h"
 #include "info/media/info_media_list_section.h"
 #include "info/downloads/info_downloads_provider.h"
+#include "enhanced_forward.h"
 #include "info/saved/info_saved_music_provider.h"
 #include "info/stories/info_stories_provider.h"
 #include "info/info_controller.h"
@@ -1103,6 +1104,14 @@ void ListWidget::showContextMenu(
 	}
 	_contextItem = item;
 	const auto globalId = item->globalId();
+	const auto isEfItem = [&] {
+		if (!_controller->isDownloads()) {
+			return false;
+		}
+		const auto provider = static_cast<Info::Downloads::Provider*>(
+			_provider.get());
+		return provider->isEnhancedForward(item);
+	}();
 
 	enum class SelectionState {
 		NoSelectedItems,
@@ -1171,6 +1180,52 @@ void ListWidget::showContextMenu(
 			&st::menuIconShowInChat);
 	}
 
+	if (isEfItem) {
+		const auto session = &_controller->session();
+		auto jobs = EnhancedForward::AllJobs(session);
+		const auto itemId = item->globalId().itemId;
+		auto foundPeer = PeerId();
+		auto foundIndex = -1;
+		auto efState = EnhancedForward::State::Idle;
+		for (const auto &job : jobs) {
+			for (auto i = 0; i < int(job.progress.sourceIds.size()); i++) {
+				const auto &srcId = job.progress.sourceIds[i];
+				if (srcId.peer == itemId.peer && srcId.msg == itemId.msg) {
+					foundPeer = job.peer;
+					foundIndex = i;
+					efState = job.progress.state;
+					break;
+				}
+			}
+			if (foundPeer) {
+				break;
+			}
+		}
+		const auto efActive = (efState == EnhancedForward::State::Sending)
+			|| (efState == EnhancedForward::State::Paused);
+		const auto efFinished = (efState == EnhancedForward::State::Finished)
+			|| (efState == EnhancedForward::State::Cancelled);
+		if (efActive) {
+			_contextMenu->addAction(
+				tr::lng_enhanced_forward_cancel(tr::now),
+				crl::guard(this, [=] {
+					EnhancedForward::cancelForward(foundPeer, session);
+				}),
+				&st::menuIconCancel);
+		}
+		if (efFinished) {
+			_contextMenu->addAction(
+				tr::lng_enhanced_forward_clear(tr::now),
+				crl::guard(this, [=] {
+					EnhancedForward::ClearFinishedItems(
+						session,
+						foundPeer,
+						{ foundIndex });
+				}),
+				&st::menuIconClear);
+		}
+	}
+
 	const auto lnkPhoto = link
 		? reinterpret_cast<PhotoData*>(
 			link->property(kPhotoLinkMediaProperty).toULongLong())
@@ -1181,7 +1236,7 @@ void ListWidget::showContextMenu(
 		: nullptr;
 	if (lnkPhoto || lnkDocument) {
 		if (lnkPhoto) {
-		} else {
+		} else if (!isEfItem) {
 			if (lnkDocument->loading()) {
 				_contextMenu->addAction(
 					tr::lng_context_cancel_download(tr::now),

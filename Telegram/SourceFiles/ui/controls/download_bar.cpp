@@ -66,7 +66,8 @@ DownloadBar::~DownloadBar() = default;
 
 void DownloadBar::show(DownloadBarContent &&content) {
 	const auto allFinished = (content.done >= content.count)
-		&& (content.uploadDone >= content.uploadCount);
+		&& (content.uploadDone >= content.uploadCount)
+		&& (content.efDone >= content.efCount);
 	_button.toggle(!allFinished, anim::type::normal);
 	if (allFinished) {
 		return;
@@ -76,7 +77,8 @@ void DownloadBar::show(DownloadBarContent &&content) {
 	}
 	_content = content;
 	const auto finished = (_content.done == _content.count)
-		&& (_content.uploadDone == _content.uploadCount);
+		&& (_content.uploadDone == _content.uploadCount)
+		&& (_content.efDone == _content.efCount);
 	if (_finished != finished) {
 		_finished = finished;
 		_finishedAnimation.start(
@@ -88,6 +90,7 @@ void DownloadBar::show(DownloadBarContent &&content) {
 	refreshThumbnail();
 	const auto dlPrefix = u"DL "_q;
 	const auto ulPrefix = u"UL "_q;
+	const auto efPrefix = u"EF "_q;
 	_title.setMarkedText(
 		st::defaultTextStyle,
 		(content.count > 1
@@ -98,13 +101,19 @@ void DownloadBar::show(DownloadBarContent &&content) {
 			? tr::bold(tr::lng_downloads_prefix(
 				tr::now,
 				lt_name, content.singleName.text))
-			: (content.uploadCount > 1
-				? tr::bold(ulPrefix + tr::lng_profile_files(
+			: (content.efCount > 1
+				? tr::bold(efPrefix + tr::lng_profile_files(
 					tr::now,
-					lt_count, content.uploadCount))
-				: tr::bold(tr::lng_uploads_prefix(
-					tr::now,
-					lt_name, content.singleUploadName.text)))));
+					lt_count, content.efCount))
+				: content.efCount == 1
+				? tr::bold(efPrefix + content.singleName.text)
+				: (content.uploadCount > 1
+					? tr::bold(ulPrefix + tr::lng_profile_files(
+						tr::now,
+						lt_count, content.uploadCount))
+					: tr::bold(tr::lng_uploads_prefix(
+						tr::now,
+						lt_name, content.singleUploadName.text))))));
 	refreshInfo(_progress.current());
 }
 
@@ -165,7 +174,12 @@ void DownloadBar::refreshInfo(const DownloadBarProgress &progress) {
 			: _content.uploadSingleTotal);
 	const auto effectiveReady = progress.ready;
 	const auto effectiveTotal = progress.total;
-	if (effectiveReady < effectiveTotal) {
+	const auto efReady = progress.efReady;
+	const auto efTotal = progress.efTotal;
+	if (efReady < efTotal && efTotal > 0) {
+		text = tr::marked(
+			u"EF "_q + FormatDownloadText(efReady, efTotal));
+	} else if (effectiveReady < effectiveTotal) {
 		text = tr::marked(
 			FormatDownloadText(effectiveReady, effectiveTotal));
 	} else if (effectiveUploadReady < effectiveUploadTotal) {
@@ -324,7 +338,9 @@ void DownloadBar::paint(Painter &p, QRect clip) {
 
 float64 DownloadBar::computeProgress() const {
 	const auto now = _progress.current();
-	if (now.total) {
+	if (now.efTotal > 0) {
+		return now.efReady / float64(now.efTotal);
+	} else if (now.total) {
 		return now.ready / float64(now.total);
 	} else if (_content.uploadSingleReady < _content.uploadSingleTotal
 		&& _content.uploadSingleTotal > 0) {
@@ -338,7 +354,8 @@ float64 DownloadBar::computeProgress() const {
 }
 
 void DownloadBar::radialAnimationCallback(crl::time now) {
-	const auto finished = (_content.done == _content.count);
+	const auto finished = (_content.done == _content.count)
+		&& (_content.efDone == _content.efCount);
 	const auto updated = _radial.update(computeProgress(), finished, now);
 	if (!anim::Disabled() || updated) {
 		const auto button = _button.entity();

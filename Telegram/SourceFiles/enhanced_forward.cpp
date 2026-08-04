@@ -11,7 +11,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "rpl/rpl.h"
 #include "base/debug_log.h"
 #include "base/flat_map.h"
+#include "base/flat_set.h"
 #include "base/timer.h"
+#include "base/weak_ptr.h"
+#include "data/data_msg_id.h"
 #include "data/data_changes.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
@@ -21,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QDir>
 #include <QFile>
 #include <deque>
+#include <unordered_set>
 #include "data/data_user.h"
 #include "history/history.h"
 #include "history/history_item.h"
@@ -59,6 +63,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_download_manager.h"
 #include "data/data_file_hash.h"
 #include "ui/toast/toast.h"
+#include "ui/layers/generic_box.h"
+#include "ui/boxes/confirm_box.h"
+#include "window/window_controller.h"
+#include "styles/style_layers.h"
+#include "styles/style_boxes.h"
 #include "settings.h"
 
 namespace EnhancedForward {
@@ -67,16 +76,18 @@ namespace {
 struct SharedState {
 	int total = 0;
 	int sent = 0;
+	int skipped = 0;
 	bool cancelled = false;
 	bool paused = false;
 	bool finished = false;
-	std::unique_ptr<base::Timer> finishTimer;
 	PeerId destPeer;
+	PeerId srcPeer;
 	Fn<void()> cancelCallback;
 	Fn<void()> pauseCallback;
 	Fn<void()> resumeCallback;
 	Fn<void()> saveCallback;
 	int currentDownload = -1;
+	std::vector<FullMsgId> sourceIds;
 	std::vector<TrackedItem> items;
 	int currentUpload = -1;
 	ItemInfo downloadItem;
@@ -116,11 +127,119 @@ void NotifyStateChanged(const PeerId &peer) {
 	StateChanges.fire_copy(peer);
 }
 
+std::unordered_set<FullMsgId> &EFUploadIds() {
+	static auto set = std::unordered_set<FullMsgId>();
+	return set;
+}
+
+void RemoveEFUploadsForPeer(const PeerId &peer) {
+	auto &set = EFUploadIds();
+	for (auto it = set.begin(); it != set.end();) {
+		if (it->peer == peer) {
+			it = set.erase(it);
+		} else {
+			++it;
+		}
+	}
+}
+
+void EnsureEFUploadIdSync(not_null<Main::Session*> session) {
+	static base::flat_set<not_null<Main::Session*>> synced;
+	if (!synced.emplace(session).second) {
+		return;
+	}
+	session->lifetime().add([session] {
+		synced.remove(session);
+	});
+	// EF uploads are tracked by their local (negative) message id, but the
+	// uploader switches its finished list to the server id once the message
+	// is confirmed. Keep EFUploadIds in sync so the transfer manager keeps
+	// excluding enhanced-forward uploads from the regular Uploads tab even
+	// after the pipeline itself is gone.
+	session->data().itemIdChanged() | rpl::on_next([session](
+			const Data::Session::IdChange &change) {
+		auto &ids = EFUploadIds();
+		const auto oldFull = FullMsgId(change.newId.peer, change.oldId);
+		if (ids.contains(oldFull)) {
+			ids.erase(oldFull);
+			ids.emplace(change.newId);
+		}
+	}, session->lifetime());
+}
+
+void SetShadowUpload(
+		not_null<Main::Session*> session,
+		not_null<HistoryItem*> item,
+		int64 size) {
+	const auto media = item->media();
+	const auto doc = media ? media->document() : nullptr;
+	if (!doc) {
+		return;
+	}
+	doc->uploadingData = std::make_unique<Data::UploadState>(size);
+	session->data().requestItemRepaint(item);
+}
+
+void UpdateShadowUpload(
+		not_null<Main::Session*> session,
+		not_null<HistoryItem*> item,
+		int64 offset,
+		int64 size) {
+	const auto media = item->media();
+	const auto doc = media ? media->document() : nullptr;
+	if (!doc || !doc->uploadingData) {
+		return;
+	}
+	doc->uploadingData->offset = std::clamp(offset, int64(0), size);
+	session->data().requestItemRepaint(item);
+}
+
+void ClearShadowUpload(
+		not_null<Main::Session*> session,
+		not_null<HistoryItem*> item) {
+	const auto media = item->media();
+	const auto doc = media ? media->document() : nullptr;
+	if (!doc || !doc->uploadingData) {
+		return;
+	}
+	doc->uploadingData = nullptr;
+	session->data().requestItemRepaint(item);
+}
+
 } // namespace
 
 StateMap &ActiveStates() {
 	static StateMap map;
 	return map;
+}
+
+StateMap &FinishedStates() {
+	static StateMap map;
+	return map;
+}
+
+void processStartQueue(const PeerId &peerId);
+
+void finishJob(not_null<Main::Session*> session, const PeerId &peerId) {
+	auto &states = ActiveStates();
+	const auto it = states.find(peerId);
+	if (it == states.end()) return;
+	auto &state = it->second;
+	state.finished = true;
+	// Release the pipeline references so finished jobs don't keep the
+	// whole Pipeline (and its per-item tasks) alive in FinishedStates.
+	state.cancelCallback = nullptr;
+	state.pauseCallback = nullptr;
+	state.resumeCallback = nullptr;
+	state.saveCallback = nullptr;
+	auto &finished = FinishedStates();
+	finished[peerId] = std::move(it->second);
+	states.erase(it);
+	NotifyStateChanged(peerId);
+	session->changes().peerUpdated(
+		session->data().peer(peerId),
+		Data::PeerUpdate::Flag::Slowmode);
+	processStartQueue(peerId);
 }
 
 struct StartRequest {
@@ -376,19 +495,27 @@ Split classifyItems(
 void startForwardSession(
 		not_null<Main::Session*> session,
 		const PeerId &peerId,
-		int totalItems,
+		const PeerId &srcPeer,
+		const std::vector<FullMsgId> &sourceIds,
 		Fn<void()> saveCallback) {
+	auto &db = Core::App().downloadManager().dedupDb();
+	if (db.isOpen()) {
+		db.clearDoneEfResumeForPeer(peerId);
+	}
 	auto &states = ActiveStates();
 	states.erase(peerId);
 
 	auto &state = states[peerId];
-	state.total = totalItems;
+	state.total = int(sourceIds.size());
 	state.sent = 0;
+	state.skipped = 0;
 	state.cancelled = false;
 	state.paused = false;
 	state.finished = false;
 	state.destPeer = peerId;
-	state.items.resize(totalItems);
+	state.srcPeer = srcPeer;
+	state.sourceIds = sourceIds;
+	state.items.resize(state.total);
 	state.saveCallback = std::move(saveCallback);
 
 	fireUpdate(session, peerId);
@@ -411,15 +538,7 @@ void markItemSent(
 	}
 
 	if (state.sent >= state.total) {
-		state.finished = true;
-		fireUpdate(session, peerId);
-		state.finishTimer = std::make_unique<base::Timer>([=] {
-			auto &states = ActiveStates();
-			states.erase(peerId);
-			fireUpdate(session, peerId);
-			processStartQueue(peerId);
-		});
-		state.finishTimer->callOnce(3000);
+		finishJob(session, peerId);
 	}
 }
 
@@ -434,21 +553,14 @@ void markItemSkipped(
 	if (state.cancelled || state.finished) return;
 
 	if (state.total > 0) state.total--;
+	state.skipped++;
 	fireUpdate(session, peerId);
 	if (state.saveCallback) {
 		state.saveCallback();
 	}
 
 	if (state.sent >= state.total) {
-		state.finished = true;
-		fireUpdate(session, peerId);
-		state.finishTimer = std::make_unique<base::Timer>([=] {
-			auto &states = ActiveStates();
-			states.erase(peerId);
-			fireUpdate(session, peerId);
-			processStartQueue(peerId);
-		});
-		state.finishTimer->callOnce(3000);
+		finishJob(session, peerId);
 	}
 }
 
@@ -460,19 +572,10 @@ void cancelForward(
 	if (it == states.end()) return;
 
 	it->second.cancelled = true;
-	it->second.finished = true;
 	if (it->second.cancelCallback) {
 		it->second.cancelCallback();
 	}
-	fireUpdate(session, id);
-
-	it->second.finishTimer = std::make_unique<base::Timer>([=] {
-		auto &states = ActiveStates();
-		states.erase(id);
-		fireUpdate(session, id);
-		processStartQueue(id);
-	});
-	it->second.finishTimer->callOnce(3000);
+	finishJob(session, id);
 }
 
 void setCancelCallback(
@@ -572,6 +675,14 @@ void updateDownloadProgress(
 		state.downloadItem = info;
 		state.downloadProgress = progress;
 	}
+	if (itemIndex >= 0 && itemIndex < int(state.items.size())) {
+		state.items[itemIndex].state = (progress >= 1.0)
+			? ItemState::Uploading
+			: ItemState::Downloading;
+		state.items[itemIndex].info = info;
+		state.items[itemIndex].downloadProgress = progress;
+		state.items[itemIndex].progress = progress;
+	}
 	fireUpdate(session, peerId);
 }
 
@@ -596,8 +707,11 @@ void updateUploadProgress(
 		state.uploadProgress = progress;
 	}
 	if (itemIndex >= 0 && itemIndex < int(state.items.size())) {
-		state.items[itemIndex].state = ItemState::Uploading;
+		state.items[itemIndex].state = (progress >= 1.0)
+			? ItemState::Done
+			: ItemState::Uploading;
 		state.items[itemIndex].info = info;
+		state.items[itemIndex].uploadProgress = progress;
 		state.items[itemIndex].progress = progress;
 	}
 	fireUpdate(session, peerId);
@@ -619,6 +733,10 @@ void updateItemState(
 		state.items[itemIndex].state = newState;
 		state.items[itemIndex].info = info;
 		state.items[itemIndex].progress = progress;
+		if (newState == ItemState::Done || newState == ItemState::Failed) {
+			state.items[itemIndex].downloadProgress = 1.0;
+			state.items[itemIndex].uploadProgress = 1.0;
+		}
 	}
 	fireUpdate(session, peerId);
 }
@@ -670,6 +788,7 @@ ForwardProgress currentProgress(const PeerId &id) {
 	const auto &state = it->second;
 	result.sent = state.sent;
 	result.total = state.total;
+	result.skipped = state.skipped;
 	result.destPeer = state.destPeer;
 	result.currentDownload = state.currentDownload;
 	result.currentUpload = state.currentUpload;
@@ -679,6 +798,7 @@ ForwardProgress currentProgress(const PeerId &id) {
 	result.uploadProgress = state.uploadProgress;
 	result.downloadSpeed = state.downloadSpeed;
 	result.uploadSpeed = state.uploadSpeed;
+	result.sourceIds = state.sourceIds;
 	result.items = state.items;
 
 	if (state.cancelled) {
@@ -760,8 +880,388 @@ std::optional<SavedJob> GetUnfinishedJobByDst(const PeerId &dstId) {
 	return std::nullopt;
 }
 
+std::vector<SavedJob> GetFinishedJobs() {
+	auto &db = Core::App().downloadManager().dedupDb();
+	if (!db.isOpen()) {
+		return {};
+	}
+	const auto records = db.loadFinishedEfResumeItems();
+	base::flat_map<QString, SavedJob> jobs;
+	for (const auto &record : records) {
+		auto &job = jobs[record.jobId];
+		if (job.dstId == PeerId()) {
+			job.dstId = record.peerId;
+			job.srcId = record.sourceId.peer;
+		}
+		job.total++;
+		job.sent++;
+		job.sourceMsgs.push_back(record.sourceId);
+		job.uploadDone.push_back(true);
+		job.fileId.push_back(record.fileId);
+		job.uploadedParts.push_back(record.uploadedParts);
+	}
+	std::vector<SavedJob> result;
+	for (auto &[_, job] : jobs) {
+		if (job.total > 0 && job.sent >= job.total) {
+			result.push_back(std::move(job));
+		}
+	}
+	return result;
+}
+
+void EnsureForwardSourceMessages(
+		not_null<Main::Session*> session,
+		const std::vector<FullMsgId> &sourceIds,
+		Fn<void(bool succeeded)> done) {
+	struct Pending {
+		uint64 peerAccessHash = 0;
+		QVector<MTPInputMessage> ids;
+	};
+	static base::flat_set<PeerId> inFlight;
+	auto &owner = session->data();
+	auto prepared = base::flat_map<PeerId, Pending>();
+	for (const auto &sourceId : sourceIds) {
+		if (owner.message(sourceId) || !IsServerMsgId(sourceId.msg)) {
+			continue;
+		}
+		const auto groupPeer = peerIsChannel(sourceId.peer)
+			? sourceId.peer
+			: session->userPeerId();
+		auto &perPeer = prepared[groupPeer];
+		if (peerIsChannel(sourceId.peer)) {
+			const auto channel = owner.channelLoaded(
+				peerToChannel(sourceId.peer));
+			if (!channel) {
+				continue;
+			}
+			if (!perPeer.peerAccessHash) {
+				perPeer.peerAccessHash = channel->accessHash();
+			}
+		}
+		perPeer.ids.push_back(MTP_inputMessageID(MTP_int(sourceId.msg.bare)));
+	}
+	if (prepared.empty()) {
+		return;
+	}
+	const auto weakSession = base::make_weak(session);
+	const auto remaining = std::make_shared<int>(0);
+	const auto anyFailed = std::make_shared<bool>(false);
+	const auto finishOne = [=](const PeerId &groupPeer, bool ok) {
+		inFlight.remove(groupPeer);
+		if (!ok) {
+			*anyFailed = true;
+		}
+		if (--*remaining <= 0 && weakSession && done) {
+			done(!*anyFailed);
+		}
+	};
+	for (auto &[groupPeer, perPeer] : prepared) {
+		if (inFlight.contains(groupPeer)) {
+			continue;
+		}
+		inFlight.emplace(groupPeer);
+		++*remaining;
+		if (const auto channelId = peerToChannel(groupPeer)) {
+			session->api().request(MTPchannels_GetMessages(
+				MTP_inputChannel(
+					MTP_long(channelId.bare),
+					MTP_long(perPeer.peerAccessHash)),
+				MTP_vector<MTPInputMessage>(perPeer.ids)
+			)).done([=](const MTPmessages_Messages &result) {
+				if (weakSession) {
+					session->data().processExistingMessages(
+						session->data().channelLoaded(channelId),
+						result);
+				}
+				finishOne(groupPeer, true);
+			}).fail([=](const MTP::Error &) {
+				finishOne(groupPeer, false);
+			}).send();
+		} else {
+			session->api().request(MTPmessages_GetMessages(
+				MTP_vector<MTPInputMessage>(perPeer.ids)
+			)).done([=](const MTPmessages_Messages &result) {
+				if (weakSession) {
+					session->data().processExistingMessages(nullptr, result);
+				}
+				finishOne(groupPeer, true);
+			}).fail([=](const MTP::Error &) {
+				finishOne(groupPeer, false);
+			}).send();
+		}
+	}
+	if (*remaining <= 0) {
+		return;
+	}
+}
+
+bool isEnhancedUpload(const FullMsgId &uploadId) {
+	if (EFUploadIds().contains(uploadId)) {
+		return true;
+	}
+	auto &active = Pipeline::Active();
+	for (const auto &[peer, weak] : active) {
+		if (const auto pipeline = weak.lock()) {
+			if (pipeline->containsUpload(uploadId)) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool isEnhancedTempUpload(
+		not_null<Main::Session*> session,
+		const QString &filename) {
+	return filename.startsWith(
+		File::DefaultDownloadPath(session) + "ForwardTemp/");
+}
+
 rpl::producer<PeerId> stateChanges() {
 	return StateChanges.events();
+}
+
+std::vector<JobSnapshot> AllJobs(not_null<Main::Session*> session) {
+	auto result = std::vector<JobSnapshot>();
+
+	const auto belongsToSession = [&](const PeerId &peer) {
+		return session->data().peerLoaded(peer)
+			&& &session->data().peer(peer)->session() == session;
+	};
+
+	for (const auto &[peer, state] : ActiveStates()) {
+		if (!belongsToSession(peer)) continue;
+		result.push_back({
+			.peer = peer,
+			.srcPeer = state.srcPeer,
+			.progress = currentProgress(peer),
+			.active = true,
+		});
+	}
+	for (const auto &[peer, state] : FinishedStates()) {
+		if (!belongsToSession(peer)) continue;
+		auto progress = ForwardProgress();
+		progress.state = State::Finished;
+		progress.sent = state.sent;
+		progress.total = state.total;
+		progress.skipped = state.skipped;
+		progress.destPeer = peer;
+		progress.sourceIds = state.sourceIds;
+		progress.items = state.items;
+		result.push_back({
+			.peer = peer,
+			.srcPeer = state.srcPeer,
+			.progress = std::move(progress),
+			.finished = true,
+		});
+	}
+
+	for (const auto &job : GetUnfinishedJobs()) {
+		if (!belongsToSession(job.dstId)) continue;
+		if (ActiveStates().find(job.dstId) != ActiveStates().end()
+			|| FinishedStates().find(job.dstId) != FinishedStates().end()) {
+			continue;
+		}
+		auto progress = ForwardProgress();
+		progress.state = State::Idle;
+		progress.sent = job.sent;
+		progress.total = job.total;
+		progress.destPeer = job.dstId;
+		progress.sourceIds = job.sourceMsgs;
+		result.push_back({
+			.peer = job.dstId,
+			.srcPeer = job.srcId,
+			.progress = std::move(progress),
+			.resumable = true,
+		});
+	}
+
+	for (const auto &job : GetFinishedJobs()) {
+		if (!belongsToSession(job.dstId)) continue;
+		if (ActiveStates().find(job.dstId) != ActiveStates().end()
+			|| FinishedStates().find(job.dstId) != FinishedStates().end()) {
+			continue;
+		}
+		auto progress = ForwardProgress();
+		progress.state = State::Finished;
+		progress.sent = job.sent;
+		progress.total = job.total;
+		progress.skipped = 0;
+		progress.destPeer = job.dstId;
+		progress.sourceIds = job.sourceMsgs;
+		result.push_back({
+			.peer = job.dstId,
+			.srcPeer = job.srcId,
+			.progress = std::move(progress),
+			.finished = true,
+		});
+	}
+	return result;
+}
+
+rpl::producer<std::vector<JobSnapshot>> jobsValue(
+		not_null<Main::Session*> session) {
+	return rpl::single(AllJobs(session)) | rpl::then(
+		StateChanges.events()
+		| rpl::map([session](const PeerId &) {
+			return AllJobs(session);
+		})
+	);
+}
+
+void cancelItem(
+		not_null<Main::Session*> session,
+		const PeerId &peer,
+		int itemIndex) {
+	auto &states = ActiveStates();
+	const auto it = states.find(peer);
+	if (it == states.end()) return;
+	auto &state = it->second;
+	if (state.cancelled || state.finished) return;
+	if (itemIndex < 0 || itemIndex >= int(state.items.size())) return;
+
+	const auto pipeline = Pipeline::Active().find(peer);
+	if (pipeline != Pipeline::Active().end()) {
+		pipeline->second.lock()->cancelItem(itemIndex);
+	} else {
+		// No live pipeline: just drop the item from the visible state.
+		if (state.total > 0) state.total--;
+		state.items[itemIndex].cancelled = true;
+		fireUpdate(session, peer);
+	}
+}
+
+void CancelAll(not_null<Main::Session*> session) {
+	const auto peers = [&] {
+		auto result = std::vector<PeerId>();
+		for (const auto &[peer, state] : ActiveStates()) {
+			if (session->data().peerLoaded(peer)
+				&& &session->data().peer(peer)->session() == session) {
+				result.push_back(peer);
+			}
+		}
+		return result;
+	}();
+	for (const auto &peer : peers) {
+		cancelForward(peer, session);
+	}
+}
+
+void ClearFinished(
+		not_null<Main::Session*> session,
+		const PeerId &peer) {
+	auto &finished = FinishedStates();
+	const auto it = finished.find(peer);
+	auto &db = Core::App().downloadManager().dedupDb();
+	if (db.isOpen()) {
+		db.clearDoneEfResumeForPeer(peer);
+	}
+	RemoveEFUploadsForPeer(peer);
+	if (it != finished.end()) {
+		finished.erase(it);
+	}
+	NotifyStateChanged(peer);
+}
+
+void ClearFinishedItems(
+		not_null<Main::Session*> session,
+		const PeerId &peer,
+		const std::vector<int> &itemIndices) {
+	auto &finished = FinishedStates();
+	const auto it = finished.find(peer);
+	if (it != finished.end()) {
+		auto &state = it->second;
+		auto indices = itemIndices;
+		ranges::sort(indices, ranges::greater());
+		for (const auto index : indices) {
+			if (index < 0 || index >= int(state.items.size())) {
+				continue;
+			}
+			state.items.erase(state.items.begin() + index);
+			if (index < int(state.sourceIds.size())) {
+				state.sourceIds.erase(state.sourceIds.begin() + index);
+			}
+			state.total = std::max(0, state.total - 1);
+		}
+		if (state.total <= 0 || state.items.empty()) {
+			RemoveEFUploadsForPeer(peer);
+			finished.erase(it);
+		}
+		NotifyStateChanged(peer);
+		return;
+	}
+
+	auto &db = Core::App().downloadManager().dedupDb();
+	if (!db.isOpen()) {
+		return;
+	}
+	const auto records = db.loadFinishedEfResumeItems();
+	auto jobIds = std::vector<QString>();
+	for (const auto &record : records) {
+		if (record.peerId == peer
+			&& ranges::find(jobIds, record.jobId) == end(jobIds)) {
+			jobIds.push_back(record.jobId);
+		}
+	}
+	if (jobIds.size() != 1) {
+		return;
+	}
+	const auto jobId = jobIds.front();
+	auto indices = itemIndices;
+	ranges::sort(indices, ranges::greater());
+	for (const auto index : indices) {
+		db.removeEfResumeItem(jobId, index);
+	}
+	NotifyStateChanged(peer);
+}
+
+void preventQuit(
+		not_null<Main::Session*> session,
+		Fn<void()> quit) {
+	const auto peer = activeJobPeer();
+	if (!peer.has_value() || isPaused(*peer)) {
+		if (quit) quit();
+		return;
+	}
+	saveProgressForPeer(*peer, session);
+	const auto window = Core::App().windowFor(
+		not_null(&session->account()));
+	if (!window) {
+		if (quit) quit();
+		return;
+	}
+	auto box = Box([=](not_null<Ui::GenericBox*> box) {
+		box->setCloseByOutsideClick(false);
+		box->setCloseByEscape(false);
+		box->addRow(
+			object_ptr<Ui::FlatLabel>(
+				box.get(),
+				tr::lng_enhanced_forward_close_confirm(tr::now),
+				st::boxLabel),
+			st::boxPadding + QMargins(0, 0, 0, st::boxPadding.bottom()));
+		box->setStyle(st::defaultBox);
+		box->addButton(tr::lng_enhanced_forward_pause(), [=] {
+			pauseForward(*peer, session);
+			box->closeBox();
+			if (quit) quit();
+		});
+		box->addButton(tr::lng_enhanced_forward_cancel(), [=] {
+			cancelForward(*peer, session);
+			box->closeBox();
+			if (quit) quit();
+		}, st::attentionBoxButton);
+		box->addButton(tr::lng_cancel(), [=] {
+			box->closeBox();
+		});
+	});
+	window->show(std::move(box));
+	window->activate();
+}
+
+auto Pipeline::Active()
+-> std::unordered_map<PeerId, std::weak_ptr<Pipeline>> & {
+	static auto map = std::unordered_map<PeerId, std::weak_ptr<Pipeline>>();
+	return map;
 }
 
 void Pipeline::Start(
@@ -788,6 +1288,7 @@ void Pipeline::Start(
 		action,
 		groupOptions,
 		resumeJob);
+	Active()[dstId] = pipeline;
 	pipeline->run();
 }
 
@@ -844,6 +1345,8 @@ Pipeline::Pipeline(
 			_items[i].sourceId = items[i]->fullId();
 		}
 	}
+
+	EnsureEFUploadIdSync(&_session);
 }
 
 Pipeline::~Pipeline() {
@@ -859,6 +1362,16 @@ Pipeline::~Pipeline() {
 			}
 		}
 	}
+	auto &active = Active();
+	const auto it = active.find(_peerId);
+	if (it != active.end() && it->second.lock().get() == this) {
+		active.erase(it);
+	}
+	for (const auto &item : _items) {
+		if (const auto srcItem = _session.data().message(item.sourceId)) {
+			ClearShadowUpload(&_session, srcItem);
+		}
+	}
 }
 
 void Pipeline::run() {
@@ -867,10 +1380,16 @@ void Pipeline::run() {
 	_dlLifetime = std::make_shared<rpl::lifetime>();
 	_uploadIndex = std::make_shared<base::flat_map<FullMsgId, int>>();
 
+	std::vector<FullMsgId> sourceIds;
+	sourceIds.reserve(_n);
+	for (auto i = 0; i < _n; i++) {
+		sourceIds.push_back(_items[i].sourceId);
+	}
 	EnhancedForward::startForwardSession(
 		&_session,
 		_peerId,
-		_n,
+		_srcPeer,
+		sourceIds,
 		[self] { self->saveProgress(); });
 
 	// Classify items
@@ -1243,6 +1762,7 @@ void Pipeline::setupCallbacks() {
 }
 
 void Pipeline::sendNext() {
+	const auto self = shared_from_this();
 	if (EnhancedForward::currentProgress(_peerId).state == EnhancedForward::State::Cancelled) {
 		if (_uploadLifetime) _uploadLifetime->destroy();
 		if (_dlLifetime) _dlLifetime->destroy();
@@ -1256,6 +1776,12 @@ void Pipeline::sendNext() {
 	// Send text-only items; media items are handled by upload callbacks
 	while (_current < _n) {
 		const auto i = _current;
+
+		if (_items[i].cancelled) {
+			_current++;
+			_items[i].sent = true;
+			continue;
+		}
 
 		if (_items[i].textOnly) {
 			_current++;
@@ -1284,11 +1810,21 @@ void Pipeline::sendNext() {
 				if (_action.options.effectId) {
 					sendFlags |= SendFlag::f_effect;
 				}
-				const auto done = [this](const MTPUpdates &, const MTP::Response &) {
+				const auto done = [this, i](const MTPUpdates &, const MTP::Response &) {
+					EnhancedForward::updateItemState(
+						&_session, _peerId, i,
+						ItemState::Done,
+						{ _items[i].path, 0 },
+						1.0);
 					EnhancedForward::markItemSent(&_session, _peerId);
 				};
-				const auto fail = [this, randomId](const MTP::Error &error, const MTP::Response &) {
+				const auto fail = [this, i, randomId](const MTP::Error &error, const MTP::Response &) {
 					_api->sendMessageFail(error, _action.history->peer, randomId, FullMsgId());
+					EnhancedForward::updateItemState(
+						&_session, _peerId, i,
+						ItemState::Done,
+						{ _items[i].path, 0 },
+						1.0);
 					EnhancedForward::markItemSent(&_session, _peerId);
 				};
 				_session.data().histories().sendPreparedMessage(
@@ -1348,14 +1884,39 @@ void Pipeline::sendNext() {
 			QFile::remove(_items[i].path);
 		}
 	}
-	EnhancedForward::ClearProgressForPeer(_peerId);
+	for (auto i = 0; i < _n; i++) {
+		refreshSourceItemState(i);
+	}
+	auto &db = Core::App().downloadManager().dedupDb();
+	if (db.isOpen()) {
+		const auto jobId = u"ef_%1_%2"_q.arg(_srcPeer.value).arg(_peerId.value);
+		for (auto i = 0; i < _n; i++) {
+			auto record = Data::EfResumeItem();
+			record.jobId = jobId;
+			record.itemIndex = i;
+			record.peerId = _peerId;
+			record.sourceId = _items[i].sourceId;
+			record.state = u"done"_q;
+			record.localPath = _items[i].path;
+			record.fileId = _items[i].fileId;
+			record.uploadedParts = _items[i].uploadedParts;
+			record.fileSize = _items[i].prepared
+				? qint64(_items[i].prepared->filesize)
+				: qint64(0);
+			record.fileHash = _items[i].fileHash;
+			record.mediaId = _items[i].mediaId;
+			db.insertEfResumeItem(record);
+		}
+	}
 	if (_uploadLifetime) _uploadLifetime->destroy();
 	if (_dlLifetime) _dlLifetime->destroy();
 }
 
 void Pipeline::pumpUploads() {
+	const auto self = shared_from_this();
 	if (_uploadInFlight) return;
-	while (_uploadCursor < _n && _items[_uploadCursor].dedupSkipped) {
+	while (_uploadCursor < _n
+			&& (_items[_uploadCursor].dedupSkipped || _items[_uploadCursor].cancelled)) {
 		_uploadCursor++;
 	}
 	if (_uploadCursor >= _n) return;
@@ -1445,6 +2006,11 @@ void Pipeline::startUploadForItem(int i) {
 		std::move(args),
 		[this, i, self](std::shared_ptr<FilePrepareResult> result) {
 			auto &item = _items[i];
+			if (item.cancelled) {
+				_uploadInFlight = false;
+				pumpUploads();
+				return;
+			}
 			const auto prepareState = EnhancedForward::currentProgress(_peerId).state;
 			if (result && result->filesize > 0) {
 				item.prepared = std::move(result);
@@ -1536,9 +2102,17 @@ void Pipeline::startUploadForItem(int i) {
 			// and the cover gets requested/loaded during the session.
 			item.uploadId = localMsgId;
 			_uploadIndex->emplace(localMsgId, i);
+			EFUploadIds().emplace(localMsgId);
 			LOG(("ENHANCED_FWD: upload starting idx=%1 uploadedParts=%2 fileId=%3")
 				.arg(i).arg(item.uploadedParts).arg(item.fileId));
 			_session.uploader().upload(localMsgId, item.prepared, item.uploadedParts);
+
+			if (const auto srcItem = _session.data().message(item.sourceId)) {
+				SetShadowUpload(
+					&_session,
+					srcItem,
+					item.prepared ? int64(item.prepared->filesize) : item.fileSize);
+			}
 
 			const auto localMsg = _action.history->addNewLocalMessage({
 				.id = localMsgId.msg,
@@ -1613,6 +2187,10 @@ void Pipeline::onUploadDone(const Storage::UploadedMedia &data) {
 		1.0);
 	saveProgress();
 
+	if (const auto srcItem = _session.data().message(item.sourceId)) {
+		ClearShadowUpload(&_session, srcItem);
+	}
+
 	// The Uploader itself already calls sendUploadedPhoto/Document
 	// via its internal subscription (file_upload.cpp lines 183/199).
 	// We just track completion here.
@@ -1622,9 +2200,50 @@ void Pipeline::onUploadDone(const Storage::UploadedMedia &data) {
 	item.sent = true;
 	EnhancedForward::markItemSent(&_session, _peerId);
 
+	if (const auto srcItem = _session.data().message(item.sourceId)) {
+		Core::App().downloadManager().removeLoading(srcItem);
+	}
+
+	// The uploader deletes the ForwardTemp file synchronously after this
+	// callback, so defer the document state refresh to run once the local
+	// file no longer exists. Otherwise the document would still report a
+	// stale downloaded state and hide the download arrow.
+	const auto self = shared_from_this();
+	crl::on_main([self, idx] {
+		self->refreshSourceItemState(idx);
+	});
+
 	_uploadInFlight = false;
 	pumpUploads();
 	sendNext();
+}
+
+void Pipeline::refreshSourceItemState(int idx) {
+	if (idx < 0 || idx >= _n) {
+		return;
+	}
+	const auto &item = _items[idx];
+	if (const auto srcItem = _session.data().message(item.sourceId)) {
+		if (const auto media = srcItem->media()) {
+			if (const auto doc = media->document()) {
+				if (doc->filepath(true).startsWith(_downloadPath)) {
+					_session.local().removeFileLocation(doc->mediaKey());
+					[[maybe_unused]] const auto refreshedPath = doc->filepath(true);
+				}
+				_session.data().requestDocumentViewRepaint(doc);
+			}
+		}
+		_session.data().requestItemRepaint(srcItem);
+	}
+	if (item.sentItem) {
+		if (const auto media = item.sentItem->media()) {
+			if (const auto doc = media->document()) {
+				[[maybe_unused]] const auto refreshedPath = doc->filepath(true);
+				_session.data().requestDocumentViewRepaint(doc);
+			}
+		}
+		_session.data().requestItemRepaint(item.sentItem);
+	}
 }
 
 void Pipeline::onUploadFail(const FullMsgId &fullId) {
@@ -1641,6 +2260,9 @@ void Pipeline::onUploadFail(const FullMsgId &fullId) {
 	}
 	if (state != EnhancedForward::State::Sending) {
 		item.uploadDone = true;
+		if (const auto srcItem = _session.data().message(item.sourceId)) {
+			ClearShadowUpload(&_session, srcItem);
+		}
 		return;
 	}
 	constexpr auto kMaxUploadRetries = 3;
@@ -1661,6 +2283,9 @@ void Pipeline::onUploadFail(const FullMsgId &fullId) {
 	item.retries = 0;
 	item.uploadedParts = 0;
 	item.fileId = base::RandomValue<uint64>();
+	if (const auto srcItem = _session.data().message(item.sourceId)) {
+		ClearShadowUpload(&_session, srcItem);
+	}
 	if (!item.fileHash.isEmpty() && item.mediaId) {
 		auto &db = Core::App().downloadManager().dedupDb();
 		if (db.isOpen()) {
@@ -1708,19 +2333,23 @@ void Pipeline::onUploadProgress(const Storage::UploadProgress &data) {
 	if (data.partSize > 0) {
 		item.partSize = data.partSize;
 	}
-	if (data.size > 0 && item.partSize > 0) {
-		item.uploadedParts = int(data.offset / item.partSize);
-		const auto newPct = (data.size > 0) ? int(float64(data.offset) / float64(data.size) * 100) : 0;
-		const auto lastSaved = item.lastSavedPct;
-		if (newPct >= lastSaved + 10 || newPct >= 99) {
-			item.lastSavedPct = newPct;
-			saveProgress();
+		if (data.size > 0 && item.partSize > 0) {
+			item.uploadedParts = int(data.offset / item.partSize);
+			const auto newPct = (data.size > 0) ? int(float64(data.offset) / float64(data.size) * 100) : 0;
+			const auto lastSaved = item.lastSavedPct;
+			if (newPct >= lastSaved + 10 || newPct >= 99) {
+				item.lastSavedPct = newPct;
+				saveProgress();
+			}
 		}
-	}
+		if (const auto srcItem = _session.data().message(item.sourceId)) {
+			UpdateShadowUpload(&_session, srcItem, data.offset, size);
+		}
 	EnhancedForward::updateUploadProgress(&_session, _peerId, idx, { filename, filesize }, p);
 }
 
 void Pipeline::checkItem(int i) {
+	const auto self = shared_from_this();
 	auto &item = _items[i];
 	if (item.downloadDone) return;
 	if (!item.downloadStarted) return;
@@ -1806,8 +2435,11 @@ void Pipeline::checkItem(int i) {
 }
 
 void Pipeline::pumpDownloads() {
+	const auto self = shared_from_this();
 	while (_downloadCursor < _n
-			&& (!_items[_downloadCursor].needsDownload || _items[_downloadCursor].downloadDone)) {
+			&& (!_items[_downloadCursor].needsDownload
+				|| _items[_downloadCursor].downloadDone
+				|| _items[_downloadCursor].cancelled)) {
 		_downloadCursor++;
 	}
 	if (EnhancedForward::isPaused(_peerId)) return;
@@ -1872,17 +2504,20 @@ void Pipeline::pumpDownloads() {
 					skipAsDuplicate(i);
 					return;
 				}
-				db.insert(Data::DedupDb::Table::Uploads, {
-					hash,
-					size,
-					mediaId,
-					u"u"_q });
-				doc->save(origin, it.path, LoadFromCloudOrLocal, false, true);
-				checkItem(i);
-				if (it.downloadDone) {
-					pumpDownloads();
-				}
-			});
+			db.insert(Data::DedupDb::Table::Uploads, {
+				hash,
+				size,
+				mediaId,
+				u"u"_q });
+			doc->save(origin, it.path, LoadFromCloudOrLocal, false, true);
+			Core::App().downloadManager().addLoading(
+				{ .item = srcItem, .document = doc },
+				true);
+			checkItem(i);
+			if (it.downloadDone) {
+				pumpDownloads();
+			}
+		});
 			return;
 		}
 		item.dedupNeedsHash = true;
@@ -1894,6 +2529,9 @@ void Pipeline::pumpDownloads() {
 			item.path,
 			LoadFromCloudOrLocal,
 			false,
+			true);
+		Core::App().downloadManager().addLoading(
+			{ .item = srcItem, .document = doc },
 			true);
 	} else if (photo) {
 		item.photoView = photo->createMediaView();
@@ -1916,6 +2554,7 @@ void Pipeline::pumpDownloads() {
 }
 
 void Pipeline::dedupCheckItem(int i) {
+	const auto self = shared_from_this();
 	auto &item = _items[i];
 	if (!GetEnhancedBool("prevent_forward_duplicates")) return;
 	if (item.dedupSkipped || item.uploadDone || !item.dedupNeedsHash) return;
@@ -1972,6 +2611,7 @@ void Pipeline::dedupCheckItem(int i) {
 }
 
 void Pipeline::skipAsDuplicate(int i) {
+	const auto self = shared_from_this();
 	auto &item = _items[i];
 	item.dedupSkipped = true;
 	item.downloadDone = true;
@@ -1980,14 +2620,92 @@ void Pipeline::skipAsDuplicate(int i) {
 	_downloadInFlight = false;
 	_uploadInFlight = false;
 	_skippedCount++;
+	if (const auto srcItem = _session.data().message(item.sourceId)) {
+		Core::App().downloadManager().removeLoading(srcItem);
+	}
+	refreshSourceItemState(i);
 	if (item.mediaId) {
 		auto &db = Core::App().downloadManager().dedupDb();
 		if (db.isOpen()) {
 			db.removePending(Data::DedupDb::Table::Uploads, item.mediaId);
 		}
 	}
+	auto &states = ActiveStates();
+	const auto sit = states.find(_peerId);
+	if (sit != states.end() && i >= 0 && i < int(sit->second.items.size())) {
+		sit->second.items[i].dedupSkipped = true;
+		sit->second.items[i].sent = true;
+	}
 	EnhancedForward::markItemSkipped(&_session, _peerId);
 	Ui::Toast::Show(tr::lng_enhanced_forward_duplicate_skipped(tr::now));
+	saveProgress();
+	sendNext();
+	pumpUploads();
+	pumpDownloads();
+}
+
+void Pipeline::cancelItem(int idx) {
+	const auto self = shared_from_this();
+	if (idx < 0 || idx >= _n) return;
+	auto &item = _items[idx];
+	if (item.cancelled || item.sent) return;
+	item.cancelled = true;
+
+	const auto srcItem = _session.data().message(item.sourceId);
+	const auto media = srcItem ? srcItem->media() : nullptr;
+	if (!item.downloadDone && srcItem) {
+		if (const auto doc = media ? media->document() : nullptr) {
+			doc->cancel();
+		} else if (const auto photo = media ? media->photo() : nullptr) {
+			photo->cancel();
+		}
+	}
+	if (item.uploadId != FullMsgId()) {
+		_session.uploader().cancel(item.uploadId);
+		_uploadIndex->erase(item.uploadId);
+	}
+	if (const auto srcItem = _session.data().message(item.sourceId)) {
+		ClearShadowUpload(&_session, srcItem);
+	}
+	if (GetEnhancedBool("prevent_forward_duplicates")
+		&& !item.uploadDone
+		&& item.mediaId) {
+		auto &db = Core::App().downloadManager().dedupDb();
+		if (db.isOpen()) {
+			db.removePending(Data::DedupDb::Table::Uploads, item.mediaId);
+		}
+	}
+	if (!item.path.isEmpty() && item.path.startsWith(_downloadPath)) {
+		QFile::remove(item.path);
+	}
+	if (srcItem) {
+		Core::App().downloadManager().removeLoading(srcItem);
+	}
+	refreshSourceItemState(idx);
+
+	item.downloadDone = true;
+	item.uploadDone = true;
+	item.sent = true;
+	if (_downloadCursor > 0 && _downloadCursor - 1 == idx) {
+		_downloadInFlight = false;
+	}
+	if (_uploadCursor > 0 && _uploadCursor - 1 == idx) {
+		_uploadInFlight = false;
+	}
+
+	auto &states = ActiveStates();
+	const auto stateIt = states.find(_peerId);
+	if (stateIt != states.end()
+		&& idx >= 0 && idx < int(stateIt->second.items.size())) {
+		auto &tracked = stateIt->second.items[idx];
+		tracked.cancelled = true;
+		tracked.state = ItemState::Done;
+		tracked.downloadProgress = 1.0;
+		tracked.uploadProgress = 1.0;
+		tracked.progress = 1.0;
+	}
+
+	EnhancedForward::markItemSkipped(&_session, _peerId);
 	saveProgress();
 	sendNext();
 	pumpUploads();

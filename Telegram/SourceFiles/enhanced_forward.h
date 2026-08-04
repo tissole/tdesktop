@@ -69,12 +69,19 @@ struct TrackedItem {
 	ItemState state = ItemState::Pending;
 	ItemInfo info;
 	float64 progress = 0;
+	float64 downloadProgress = -1; // -1 = no download phase
+	float64 uploadProgress = -1;   // -1 = no upload phase
+	bool textOnly = false;
+	bool cancelled = false;
+	bool sent = false;
+	bool dedupSkipped = false;
 };
 
 struct ForwardProgress {
 	State state = State::Idle;
 	int sent = 0;
 	int total = 0;
+	int skipped = 0;
 	PeerId destPeer;
 	int currentDownload = -1;
 	int currentUpload = -1;
@@ -84,13 +91,24 @@ struct ForwardProgress {
 	float64 uploadProgress = 0;
 	qint64 downloadSpeed = 0;
 	qint64 uploadSpeed = 0;
+	std::vector<FullMsgId> sourceIds;
 	std::vector<TrackedItem> items;
+};
+
+struct JobSnapshot {
+	PeerId peer;
+	PeerId srcPeer;
+	ForwardProgress progress;
+	bool active = false;    // running/paused now
+	bool finished = false;  // finished/cancelled, awaiting clear
+	bool resumable = false; // persisted unfinished DB row, no live state
 };
 
 void startForwardSession(
 		not_null<Main::Session*> session,
 		const PeerId &peerId,
-		int totalItems,
+		const PeerId &srcPeer,
+		const std::vector<FullMsgId> &sourceIds,
 		Fn<void()> saveCallback);
 
 void markItemSent(
@@ -184,17 +202,61 @@ struct SavedJob {
 
 [[nodiscard]] std::vector<SavedJob> GetUnfinishedJobs();
 
+[[nodiscard]] std::vector<SavedJob> GetFinishedJobs();
+
+void EnsureForwardSourceMessages(
+	not_null<Main::Session*> session,
+	const std::vector<FullMsgId> &sourceIds,
+	Fn<void(bool succeeded)> done);
+
 [[nodiscard]] std::optional<SavedJob> GetUnfinishedJobByDst(
 	const PeerId &dstId);
 
 // Fires the destination peer whenever its forward state changes.
 [[nodiscard]] rpl::producer<PeerId> stateChanges();
 
+[[nodiscard]] std::vector<JobSnapshot> AllJobs(
+	not_null<Main::Session*> session);
+[[nodiscard]] rpl::producer<std::vector<JobSnapshot>> jobsValue(
+	not_null<Main::Session*> session);
+
+// Returns true if the given upload id is currently handled by an active
+// Enhanced Forward pipeline (so it should be shown as "EF", not a plain
+// upload in the transfer manager / upload bar).
+[[nodiscard]] bool isEnhancedUpload(const FullMsgId &uploadId);
+
+// Returns true if the given upload source path lives inside the Enhanced
+// Forward temp directory. Used as a fallback marker for uploads that were
+// interrupted before their id could be registered (e.g. after restart).
+[[nodiscard]] bool isEnhancedTempUpload(
+	not_null<Main::Session*> session,
+	const QString &filename);
+
+void cancelItem(
+	not_null<Main::Session*> session,
+	const PeerId &peer,
+	int itemIndex);
+void CancelAll(not_null<Main::Session*> session);
+void ClearFinished(
+	not_null<Main::Session*> session,
+	const PeerId &peer);
+void ClearFinishedItems(
+	not_null<Main::Session*> session,
+	const PeerId &peer,
+	const std::vector<int> &itemIndices);
+
+// Shows a quit-confirmation box if an enhanced forward is running, then calls
+// quit on confirmation (mirrors DownloadManager::quitWithConfirmation).
+void preventQuit(
+	not_null<Main::Session*> session,
+	Fn<void()> quit);
+
 struct ItemTask {
 	FullMsgId sourceId;
 	QString path;
 	bool textOnly = false;
 	bool isPhoto = false;
+	bool cancelled = false;
 	MessageGroupId sourceGroup;
 
 	bool needsDownload = false;
@@ -225,6 +287,9 @@ struct ItemTask {
 
 class Pipeline final : public std::enable_shared_from_this<Pipeline> {
 public:
+	[[nodiscard]] static auto Active()
+		-> std::unordered_map<PeerId, std::weak_ptr<Pipeline>> &;
+
 	static void Start(
 		not_null<ApiWrap*> api,
 		std::vector<not_null<HistoryItem*>> &&items,
@@ -241,6 +306,12 @@ public:
 
 	~Pipeline();
 
+	void cancelItem(int idx);
+
+	[[nodiscard]] bool containsUpload(const FullMsgId &uploadId) const {
+		return _uploadIndex && _uploadIndex->find(uploadId) != end(*_uploadIndex);
+	}
+
 private:
 	void run();
 	void saveProgress();
@@ -256,6 +327,7 @@ private:
 	void pumpDownloads();
 	void dedupCheckItem(int idx);
 	void skipAsDuplicate(int idx);
+	void refreshSourceItemState(int idx);
 
 	not_null<ApiWrap*> _api;
 	Main::Session &_session;

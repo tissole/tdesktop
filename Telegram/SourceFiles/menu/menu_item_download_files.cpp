@@ -188,7 +188,7 @@ void AddAction(
 					dir);
 			};
 			auto lastPath = QString();
-			auto allDuplicates = true;
+			auto skippedCount = 0;
 			for (auto i = 0; i < views.size(); i++) {
 				lastPath = fullPath(i);
 				views[i]->saveToFile(lastPath);
@@ -202,14 +202,17 @@ void AddAction(
 						.photo = photo,
 					}, lastPath, manager.computeNextStartDate());
 				}
-				if (QFile::exists(lastPath)) {
-					allDuplicates = false;
+				if (!QFile::exists(lastPath)) {
+					skippedCount++;
 				}
 			}
 			if (showToast) {
-				if (allDuplicates) {
+				if (skippedCount > 0) {
 					controller->showToast(
-						tr::lng_download_duplicate_skipped(tr::now));
+						tr::lng_download_duplicates_skipped(
+							tr::now,
+							lt_count,
+							skippedCount));
 				} else {
 					showToast(lastPath);
 				}

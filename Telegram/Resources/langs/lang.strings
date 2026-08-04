@@ -8157,11 +8157,23 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_enhanced_forward_duplicate_skipped" = "Duplicate skipped";
 "lng_enhanced_forward_duplicates_skipped#one" = "{count} duplicate skipped";
 "lng_enhanced_forward_duplicates_skipped#other" = "{count} duplicates skipped";
+"lng_enhanced_forward_downloaded" = "EF {ready}/{total}";
 "lng_enhanced_forward_unfinished" = "Unfinished forward from {chat_name}";
 "lng_enhanced_forward_later" = "Later";
+"lng_forwards_section" = "Forwards";
+"lng_enhanced_forward_cancel_all" = "Cancel all";
+"lng_enhanced_forward_cancel_all_confirm" = "Do you want to cancel all forwards?";
+"lng_enhanced_forward_clear_all" = "Clear all";
+"lng_enhanced_forward_cancel_item_confirm" = "Do you want to cancel this item? The downloaded file will be deleted.";
+"lng_enhanced_forward_clear" = "Clear";
+"lng_enhanced_forward_clear_selected" = "Clear selected items";
+"lng_enhanced_forward_go_to_source" = "Go to message";
+"lng_enhanced_forward_select" = "Select";
 
-"lng_download_duplicate_skipped" = "File already downloaded.";
-"lng_upload_duplicate_skipped" = "File already uploaded.";
+"lng_download_duplicates_skipped#one" = "{count} duplicate skipped";
+"lng_download_duplicates_skipped#other" = "{count} duplicates skipped";
+"lng_upload_duplicates_skipped#one" = "{count} duplicate skipped";
+"lng_upload_duplicates_skipped#other" = "{count} duplicates skipped";
 "lng_uploads_pause_all" = "Pause all uploads";
 "lng_uploads_resume_all" = "Resume all uploads";
 "lng_uploads_cancel_all" = "Cancel all uploads";

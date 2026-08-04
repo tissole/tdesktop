@@ -83,6 +83,8 @@ public:
 	[[nodiscard]] std::vector<EfResumeItem> loadEfResumeItemsForPeer(
 		PeerId peerId) const;
 	[[nodiscard]] std::vector<EfResumeItem> loadUnfinishedEfResumeItems() const;
+	[[nodiscard]] std::vector<EfResumeItem> loadFinishedEfResumeItems() const;
+	void clearDoneEfResumeForPeer(PeerId peerId);
 
 	[[nodiscard]] std::optional<DedupRecord> findUploadDuplicateByHash(
 		const QByteArray &hash,
@@ -670,6 +672,57 @@ std::vector<EfResumeItem> DedupDb::Impl::loadUnfinishedEfResumeItems() const {
 	return result;
 }
 
+std::vector<EfResumeItem> DedupDb::Impl::loadFinishedEfResumeItems() const {
+	auto result = std::vector<EfResumeItem>();
+	if (!_open) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	if (!q.exec(u"SELECT job_id, item_index, peer_id, source_peer_id, "
+		"source_msg_id, state, local_path, file_id, uploaded_parts, "
+		"file_size, file_hash, media_id, created_at, updated_at FROM ef_resume "
+		"WHERE state = 'done' ORDER BY item_index"_q)) {
+		LOG(("DedupDb: LoadFinishedEfResumeItems failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto item = EfResumeItem();
+		item.jobId = q.value(0).toString();
+		item.itemIndex = q.value(1).toInt();
+		item.peerId = PeerId(q.value(2).toULongLong());
+		item.sourceId = FullMsgId(
+			PeerId(q.value(3).toULongLong()),
+			MsgId(q.value(4).toLongLong()));
+		item.state = q.value(5).toString();
+		item.localPath = q.value(6).toString();
+		item.fileId = q.value(7).toULongLong();
+		item.uploadedParts = q.value(8).toInt();
+		item.fileSize = q.value(9).toLongLong();
+		item.fileHash = q.value(10).toByteArray();
+		item.mediaId = q.value(11).toULongLong();
+		item.createdAt = q.value(12).toLongLong();
+		item.updatedAt = q.value(13).toLongLong();
+		result.push_back(std::move(item));
+	}
+	return result;
+}
+
+void DedupDb::Impl::clearDoneEfResumeForPeer(PeerId peerId) {
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM ef_resume "
+		"WHERE peer_id = :peer_id AND state = 'done'"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ClearDoneEfResumeForPeer failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
 std::optional<DedupRecord> DedupDb::Impl::findUploadDuplicateByHash(
 		const QByteArray &hash,
 		int64 size,
@@ -961,6 +1014,14 @@ std::vector<EfResumeItem> DedupDb::loadEfResumeItemsForPeer(
 
 std::vector<EfResumeItem> DedupDb::loadUnfinishedEfResumeItems() const {
 	return _impl->loadUnfinishedEfResumeItems();
+}
+
+std::vector<EfResumeItem> DedupDb::loadFinishedEfResumeItems() const {
+	return _impl->loadFinishedEfResumeItems();
+}
+
+void DedupDb::clearDoneEfResumeForPeer(PeerId peerId) {
+	_impl->clearDoneEfResumeForPeer(peerId);
 }
 
 std::optional<DedupRecord> DedupDb::findUploadDuplicateByHash(

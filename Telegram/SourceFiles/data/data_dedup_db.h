@@ -116,6 +116,8 @@ public:
 	[[nodiscard]] std::vector<EfResumeItem> loadEfResumeItemsForPeer(
 		PeerId peerId) const;
 	[[nodiscard]] std::vector<EfResumeItem> loadUnfinishedEfResumeItems() const;
+	[[nodiscard]] std::vector<EfResumeItem> loadFinishedEfResumeItems() const;
+	void clearDoneEfResumeForPeer(PeerId peerId);
 
 	[[nodiscard]] std::optional<DedupRecord> findUploadDuplicateByHash(
 		const QByteArray &hash,

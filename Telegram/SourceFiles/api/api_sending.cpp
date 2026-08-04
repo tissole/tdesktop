@@ -565,7 +565,11 @@ void SendConfirmedFile(
 	}
 
 	if (session->uploader().checkUploadDuplicate(newId, file)) {
-		Ui::Toast::Show(tr::lng_upload_duplicate_skipped(tr::now));
+		Ui::Toast::Show(
+			tr::lng_upload_duplicates_skipped(
+				tr::now,
+				lt_count,
+				1));
 		return;
 	}
 

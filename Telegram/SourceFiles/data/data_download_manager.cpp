@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "logs.h"
 #include "settings.h"
 #include "core/enhanced_settings.h"
+#include "enhanced_forward.h"
 #include "data/data_session.h"
 #include "data/data_photo.h"
 #include "data/data_document.h"
@@ -225,7 +226,9 @@ int64 DownloadManager::computeNextStartDate() {
 	return int64(_lastStartedBase) * 1000 + _lastStartedAdded;
 }
 
-void DownloadManager::addLoading(DownloadObject object) {
+void DownloadManager::addLoading(
+		DownloadObject object,
+		bool enhancedForward) {
 	Expects(object.item != nullptr);
 	Expects(object.document != nullptr);
 
@@ -260,6 +263,7 @@ void DownloadManager::addLoading(DownloadObject object) {
 			.ready = ready,
 			.total = size,
 			.hiddenByView = false,
+			.enhancedForward = enhancedForward,
 		});
 		_loading.emplace(item);
 		_loadingDocuments.emplace(object.document);
@@ -271,7 +275,7 @@ void DownloadManager::addLoading(DownloadObject object) {
 		_clearLoadingTimer.cancel();
 
 		if (const auto document = object.document) {
-			if (IsServerMsgId(item->id)) {
+			if (!enhancedForward && IsServerMsgId(item->id)) {
 				const auto peer = item->history()->peer;
 				ensureDedupDb().insertResumeDl({
 					.peerId = peer->id.value,
@@ -284,7 +288,7 @@ void DownloadManager::addLoading(DownloadObject object) {
 			}
 		}
 
-		if (GetEnhancedBool("prevent_download_duplicates")) {
+		if (GetEnhancedBool("prevent_download_duplicates") && !enhancedForward) {
 			saveFileHash(
 				&item->history()->session(),
 				object.document,
@@ -330,7 +334,24 @@ void DownloadManager::check(
 
 	const auto path = document->filepath(true);
 	if (!path.isEmpty()) {
-		if (_loading.contains(entry.object.item)) {
+		if (entry.enhancedForward) {
+			if (_loading.contains(entry.object.item)) {
+				const auto totalChange = document->size - entry.total;
+				const auto readyChange = document->size - entry.ready;
+				entry.ready += readyChange;
+				entry.total += totalChange;
+				entry.done = true;
+				_loadingDocuments.remove(document);
+				_loading.remove(entry.object.item);
+				_loadingDone.emplace(entry.object.item);
+				saveIfIdle();
+				_loadingProgress = DownloadProgress{
+					.ready = _loadingProgress.current().ready + readyChange,
+					.total = _loadingProgress.current().total + totalChange,
+				};
+				_loadingListChanges.fire({});
+			}
+		} else if (_loading.contains(entry.object.item)) {
 			addLoaded(entry.object, path, entry.started);
 		}
 	} else if (!document->loading()) {
@@ -892,6 +913,15 @@ void DownloadManager::clearFinishedLoading() {
 	for (const auto &session : sessions) {
 		writePostponed(session);
 	}
+}
+
+void DownloadManager::removeLoading(not_null<const HistoryItem*> item) {
+	auto &data = sessionData(item);
+	const auto i = ranges::find(data.downloading, item, ByItem);
+	if (i == end(data.downloading)) {
+		return;
+	}
+	remove(data, i);
 }
 
 auto DownloadManager::loadedList()
@@ -2118,13 +2148,18 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 		};
 		const auto state = lifetime.make_state<State>();
 
-		const auto notify = [=] {
-			const auto downloadProgress = Core::App().downloadManager().loadingProgress();
+	const auto notify = [=] {
+			DownloadProgress dlProgress;
+			for (const auto id : Core::App().downloadManager().loadingList()) {
+				if (id->enhancedForward) {
+					continue;
+				}
+				dlProgress.ready += id->ready;
+				dlProgress.total += id->total;
+			}
 			consumer.put_next(Ui::DownloadBarProgress{
-				.ready = downloadProgress.ready,
-				.total = downloadProgress.total,
-				.uploadReady = 0,
-				.uploadTotal = 0,
+				.ready = dlProgress.ready,
+				.total = dlProgress.total,
 			});
 		};
 
@@ -2210,6 +2245,9 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 				if (id->hiddenByView) {
 					break;
 				}
+				if (id->enhancedForward) {
+					continue;
+				}
 				if (!single) {
 					single = &id->object;
 				}
@@ -2280,6 +2318,9 @@ rpl::producer<Ui::DownloadBarProgress> MakeUploadBarProgress() {
 			for (const auto &account : Core::App().domain().orderedAccounts()) {
 				if (const auto session = account->maybeSession()) {
 					for (const auto &u : session->uploader().activeUploads()) {
+						if (EnhancedForward::isEnhancedUpload(u.itemId)) {
+							continue;
+						}
 						ready += u.offset;
 						total += u.total;
 					}
@@ -2357,38 +2398,65 @@ rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent() {
 			for (const auto &account : Core::App().domain().orderedAccounts()) {
 				const auto session = account->maybeSession();
 				if (!session) continue;
+				const auto uploads = session->uploader().activeUploads();
+				auto efActive = 0;
+				for (const auto &u : uploads) {
+					if (EnhancedForward::isEnhancedUpload(u.itemId)) {
+						efActive++;
+					}
+				}
 				const auto qSize = session->uploader().queueSize();
-				totalQueue += qSize;
-				if (qSize > 0) {
+				const auto realQueue = qSize - efActive;
+				totalQueue += realQueue;
+				if (realQueue > 0) {
 					if (!firstActiveFound) {
 						firstActiveFound = true;
 						firstActiveName = session->uploader().firstUploadName();
 					}
-					const auto uploads = session->uploader().activeUploads();
 					for (const auto &u : uploads) {
+						if (EnhancedForward::isEnhancedUpload(u.itemId)) {
+							continue;
+						}
 						totalReady += u.offset;
 						totalSize += u.total;
 					}
-					if (uploads.size() == 1 && !firstActiveTotal) {
-						firstActiveReady = uploads[0].offset;
-						firstActiveTotal = uploads[0].total;
+					if (realQueue == 1 && !firstActiveTotal) {
+						for (const auto &u : uploads) {
+							if (!EnhancedForward::isEnhancedUpload(u.itemId)) {
+								firstActiveReady = u.offset;
+								firstActiveTotal = u.total;
+								break;
+							}
+						}
 					}
 				} else {
 					const auto pending = session->uploader().pendingUploads();
-					const auto pSize = int(pending.size());
+					auto pSize = int(pending.size());
+					for (const auto &p : pending) {
+						if (EnhancedForward::isEnhancedUpload(p.itemId)
+							|| p.path.contains(u"ForwardTemp"_q)) {
+							pSize--;
+						}
+					}
 					totalPending += pSize;
 					if (pSize > 0) {
-						if (!firstPendingFound) {
-							firstPendingFound = true;
-							firstPendingName = pending[0].filename;
-						}
+						auto addedPendingName = false;
 						for (const auto &p : pending) {
+							if (EnhancedForward::isEnhancedUpload(p.itemId)
+								|| p.path.contains(u"ForwardTemp"_q)) {
+								continue;
+							}
+							if (!firstPendingFound) {
+								firstPendingFound = true;
+								firstPendingName = p.filename;
+							}
 							totalReady += p.sent;
 							totalSize += p.total;
-						}
-						if (pending.size() == 1 && !firstPendingTotal) {
-							firstPendingReady = pending[0].sent;
-							firstPendingTotal = pending[0].total;
+							if (!addedPendingName) {
+								addedPendingName = true;
+								firstPendingReady = p.sent;
+								firstPendingTotal = p.total;
+							}
 						}
 					}
 				}

@@ -32,6 +32,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/mime_type.h"
 #include "core/application.h"
 #include "core/enhanced_settings.h"
+#include "enhanced_forward.h"
 #include "data/data_file_hash.h"
 #include "data/data_download_manager.h"
 #include "core/application.h"
@@ -52,6 +53,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Storage {
 namespace {
+
+bool IsEnhancedForwardTempPath(const QString &path) {
+	return path.contains("ForwardTemp");
+}
 
 // max 1mb uploaded at the same time in each session
 constexpr auto kMaxUploadPerSession = 1024 * 1024;
@@ -1355,7 +1360,9 @@ void Uploader::saveResumeState(bool force) {
 	_lastResumeSave = now;
 	auto &db = Core::App().downloadManager().dedupDb();
 	for (const auto &entry : _queue) {
-		if (!entry.file || entry.file->filepath.isEmpty()) {
+		if (!entry.file || entry.file->filepath.isEmpty()
+			|| IsEnhancedForwardTempPath(entry.file->filepath)
+			|| EnhancedForward::isEnhancedUpload(entry.itemId)) {
 			continue;
 		}
 		const auto topicRootId = entry.file->to.replyTo.topicRootId;
@@ -1382,6 +1389,9 @@ void Uploader::clearResumeState(PeerId peerId, const QString &filePath) {
 bool Uploader::hasUnfinishedResume() const {
 	const auto records = Core::App().downloadManager().dedupDb().loadAllResumeUl();
 	for (const auto &record : records) {
+		if (IsEnhancedForwardTempPath(record.path)) {
+			continue;
+		}
 		if (QFileInfo::exists(record.path)) {
 			return true;
 		}
@@ -1392,6 +1402,9 @@ bool Uploader::hasUnfinishedResume() const {
 int Uploader::pendingResumeCount() const {
 	auto count = 0;
 	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl()) {
+		if (IsEnhancedForwardTempPath(record.path)) {
+			continue;
+		}
 		if (QFileInfo::exists(record.path)) {
 			++count;
 		}
@@ -1413,7 +1426,8 @@ void Uploader::showResumeUnfinished() {
 			entry.partsSent = 0;
 		}
 		entry.topicRootId = MsgId(record.topicRootId);
-		if (QFileInfo::exists(entry.filePath)) {
+		if (!IsEnhancedForwardTempPath(entry.filePath)
+			&& QFileInfo::exists(entry.filePath)) {
 			toResume.push_back(entry);
 		}
 	}
@@ -1764,11 +1778,15 @@ std::vector<Uploader::UiUploadInfo> Uploader::activeUploads() const {
 std::vector<Uploader::UiPendingUpload> Uploader::pendingUploads() const {
 	auto result = std::vector<UiPendingUpload>();
 	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl()) {
+		if (IsEnhancedForwardTempPath(record.path)) {
+			continue;
+		}
 		if (!QFileInfo::exists(record.path)) {
 			continue;
 		}
 		auto info = UiPendingUpload();
 		info.filename = QFileInfo(record.path).fileName();
+		info.path = record.path;
 		info.total = record.size;
 		info.sent = record.sentSize;
 		info.itemId = FullMsgId(PeerId(record.peerId), MsgId(0));
@@ -1790,6 +1808,9 @@ QString Uploader::firstUploadName() const {
 
 QString Uploader::firstPendingUploadName() const {
 	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl()) {
+		if (IsEnhancedForwardTempPath(record.path)) {
+			continue;
+		}
 		if (QFileInfo::exists(record.path)) {
 			return QFileInfo(record.path).fileName();
 		}
@@ -1831,7 +1852,8 @@ void Uploader::resumeEntriesFromDb() {
 			entry.partsSent = 0;
 		}
 		entry.topicRootId = MsgId(record.topicRootId);
-		if (QFileInfo::exists(entry.filePath)) {
+		if (!IsEnhancedForwardTempPath(entry.filePath)
+			&& QFileInfo::exists(entry.filePath)) {
 			toResume.push_back(entry);
 		}
 	}

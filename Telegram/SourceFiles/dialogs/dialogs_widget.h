@@ -211,6 +211,7 @@ private:
 	void setupMoreChatsBar();
 	void setupDownloadBar();
 	void setupUploadBar();
+	void setupForwardsBar();
 	void setupShortcuts();
 	void setupStories();
 	void setupSwipeBack();
@@ -349,6 +350,7 @@ private:
 	object_ptr<BottomButton> _loadMoreChats = { nullptr };
 	std::unique_ptr<Ui::DownloadBar> _downloadBar;
 	std::unique_ptr<Ui::DownloadBar> _uploadBar;
+	std::unique_ptr<Ui::DownloadBar> _forwardsBar;
 	std::unique_ptr<Window::ConnectionState> _connecting;
 
 	Ui::Animations::Simple _scrollToAnimation;

@@ -80,6 +80,7 @@ struct DownloadingId {
 	bool hiddenByView = false;
 	bool done = false;
 	bool paused = false;
+	bool enhancedForward = false;
 };
 
 class DownloadManager final {
@@ -94,11 +95,12 @@ public:
 
 	[[nodiscard]] DownloadDate computeNextStartDate();
 
-	void addLoading(DownloadObject object);
+	void addLoading(DownloadObject object, bool enhancedForward = false);
 	void addLoaded(
 		DownloadObject object,
 		const QString &path,
 		DownloadDate started);
+	void removeLoading(not_null<const HistoryItem*> item);
 
 	void clearIfFinished();
 	void deleteFiles(const std::vector<GlobalMsgId> &ids);

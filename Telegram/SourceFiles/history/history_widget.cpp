@@ -145,7 +145,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "chat_helpers/tabbed_section.h"
 #include "chat_helpers/bot_keyboard.h"
 #include "chat_helpers/message_field.h"
-#include "enhanced_forward.h"
 #include "menu/menu_send.h"
 #include "menu/menu_timecode_action.h"
 #include "mtproto/mtproto_config.h"
@@ -3607,7 +3606,7 @@ void HistoryWidget::updateControlsVisibility() {
 		if (_inlineResults) {
 			_inlineResults->hide();
 		}
-		if (_sendRestriction && _sendRestrictionKey != u"enhanced_forward"_q) {
+		if (_sendRestriction) {
 			_sendRestriction->hide();
 		}
 		hideFieldIfVisible();
@@ -3670,7 +3669,7 @@ void HistoryWidget::updateControlsVisibility() {
 		if (_botMenu.button) {
 			_botMenu.button->show();
 		}
-		if (_sendRestriction && _sendRestrictionKey != u"enhanced_forward"_q) {
+		if (_sendRestriction) {
 			_sendRestriction->hide();
 		}
 		{
@@ -6749,16 +6748,7 @@ void HistoryWidget::moveFieldControls() {
 		const auto restrictionHeight = _sendRestriction->height()
 			? _sendRestriction->height()
 			: st::historySendSize.height();
-		// Enhanced-forward status floats above the compose bar (in the
-		// chat area) so the real text field, media and send buttons stay
-		// fully usable; other restrictions cover the bar instead.
-		const auto enhanced = (_sendRestrictionKey == u"enhanced_forward"_q);
-		const auto y = enhanced
-			? (bottom
-				- fieldHeight()
-				- 2 * st::historySendPadding
-				- restrictionHeight)
-			: (bottom - restrictionHeight);
+		const auto y = bottom - restrictionHeight;
 		_sendRestriction->setGeometry(myrtlrect(
 			0,
 			y,
@@ -7535,31 +7525,13 @@ void HistoryWidget::updateSendRestriction() {
 		return;
 	}
 	const auto restriction = computeSendRestriction();
-	const auto progress = EnhancedForward::currentProgress(_peer->id);
-	const auto isEnhancedForwarding = (progress.state == EnhancedForward::State::Sending
-		|| progress.state == EnhancedForward::State::Finished
-		|| progress.state == EnhancedForward::State::Paused)
-		&& progress.destPeer == _peer->id;
-	const auto hasUnfinishedJob = !isEnhancedForwarding
-		&& EnhancedForward::GetUnfinishedJobByDst(_peer->id).has_value();
-	const auto key = (isEnhancedForwarding || hasUnfinishedJob)
-		? u"enhanced_forward"_q
-		: restriction.text;
+	const auto key = restriction.text;
 	if (_sendRestrictionKey == key) {
 		return;
 	}
 	_sendRestrictionKey = key;
-	if (isEnhancedForwarding || hasUnfinishedJob) {
-		if (!controller()) return;
-		_sendRestriction = EnhancedForwardWriteRestriction(
-			this,
-			_peer->id,
-			&session(),
-			controller()->uiShow());
-	} else if (!restriction) {
-		if (_sendRestrictionKey != u"enhanced_forward"_q) {
-			_sendRestriction = nullptr;
-		}
+	if (!restriction) {
+		_sendRestriction = nullptr;
 	} else if (restriction.frozen) {
 		const auto show = controller()->uiShow();
 		_sendRestriction = FrozenWriteRestriction(
@@ -7651,15 +7623,6 @@ void HistoryWidget::updateHistoryGeometry(
 	} else {
 		if (editingMessage() || _canSendMessages) {
 			newScrollHeight -= (fieldHeight() + 2 * st::historySendPadding);
-			// Enhanced-forward restriction floats above the compose bar,
-			// reserving space so it doesn't overlap the last message.
-			if (_sendRestrictionKey == u"enhanced_forward"_q
-				&& _sendRestriction) {
-				const auto restrictionHeight = _sendRestriction->height()
-					? _sendRestriction->height()
-					: st::historySendSize.height();
-				newScrollHeight -= restrictionHeight;
-			}
 		} else if (_sendRestriction) {
 			newScrollHeight -= _sendRestriction->height();
 		}

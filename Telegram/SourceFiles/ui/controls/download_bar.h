@@ -21,6 +21,8 @@ struct DownloadBarProgress {
 	int64 total = 0;
 	int64 uploadReady = 0;
 	int64 uploadTotal = 0;
+	int64 efReady = 0;
+	int64 efTotal = 0;
 };
 
 struct DownloadBarContent {
@@ -31,6 +33,8 @@ struct DownloadBarContent {
 	int uploadCount = 0;
 	int uploadDone = 0;
 	TextWithEntities singleUploadName;
+	int efCount = 0;
+	int efDone = 0;
 	int64 uploadReady = 0;
 	int64 uploadTotal = 0;
 	int64 uploadSingleReady = 0;

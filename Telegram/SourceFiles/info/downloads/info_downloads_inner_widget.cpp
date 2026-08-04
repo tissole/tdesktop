@@ -86,18 +86,37 @@ InnerWidget::InnerWidget(
 	not_null<Controller*> controller)
 : RpWidget(parent)
 , _controller(controller)
+, _list(this, _controller)
 , _empty(this) {
+	const auto heightLifetime = std::make_shared<rpl::lifetime>();
+	_list->heightValue(
+	) | rpl::on_next(
+		[this] { refreshHeight(); },
+		*heightLifetime);
+	using namespace rpl::mappers;
+	_list->scrollToRequests(
+	) | rpl::map([widget = _list.data()](int to) {
+		return Ui::ScrollToRequest {
+			widget->y() + to,
+			-1
+		};
+	}) | rpl::start_to_stream(
+		_scrollToRequests,
+		*heightLifetime);
+	_selectedLists.fire(_list->selectedListValue());
+	_listTops.fire(_list->topValue());
 	_empty->heightValue(
 	) | rpl::on_next(
 		[this] { refreshHeight(); },
 		_empty->lifetime());
-	_list = setupList();
 }
 
 void InnerWidget::visibleTopBottomUpdated(
 		int visibleTop,
 		int visibleBottom) {
-	setChildVisibleTopBottom(_list, visibleTop, visibleBottom);
+	if (_list) {
+		setChildVisibleTopBottom(_list, visibleTop, visibleBottom);
+	}
 }
 
 bool InnerWidget::showInternal(not_null<Memento*> memento) {
@@ -108,30 +127,7 @@ bool InnerWidget::showInternal(not_null<Memento*> memento) {
 	return false;
 }
 
-object_ptr<Media::ListWidget> InnerWidget::setupList() {
-	auto result = object_ptr<Media::ListWidget>(this, _controller);
-	result->heightValue(
-	) | rpl::on_next(
-		[this] { refreshHeight(); },
-		result->lifetime());
-	using namespace rpl::mappers;
-	result->scrollToRequests(
-	) | rpl::map([widget = result.data()](int to) {
-		return Ui::ScrollToRequest {
-			widget->y() + to,
-			-1
-		};
-	}) | rpl::start_to_stream(
-		_scrollToRequests,
-		result->lifetime());
-	_selectedLists.fire(result->selectedListValue());
-	_listTops.fire(result->topValue());
-	_controller->searchQueryValue(
-	) | rpl::on_next([this](const QString &query) {
-		_empty->setSearchQuery(query);
-	}, result->lifetime());
-	return result;
-}
+
 
 void InnerWidget::saveState(not_null<Memento*> memento) {
 	_list->saveState(&memento->media());
@@ -150,8 +146,12 @@ void InnerWidget::setFilter(Tab tab) {
 		? Provider::Filter::Downloads
 		: (tab == Tab::Uploads)
 		? Provider::Filter::Uploads
+		: (tab == Tab::Forwards)
+		? Provider::Filter::Forwards
 		: Provider::Filter::All;
 	provider()->setFilter(filter);
+	_selectedLists.fire(_list->selectedListValue());
+	refreshHeight();
 }
 
 rpl::producer<bool> InnerWidget::hasDownloadsValue() const {
@@ -192,13 +192,9 @@ void InnerWidget::refreshHeight() {
 
 int InnerWidget::recountHeight() {
 	auto top = 0;
-	auto listHeight = 0;
-	if (_list) {
+	if (_list->heightNoMargins() > 0) {
 		_list->moveToLeft(0, top);
-		listHeight = _list->heightNoMargins();
-		top += listHeight;
-	}
-	if (listHeight > 0) {
+		top += _list->heightNoMargins();
 		_empty->hide();
 	} else {
 		_empty->show();

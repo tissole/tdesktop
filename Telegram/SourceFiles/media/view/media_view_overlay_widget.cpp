@@ -3302,7 +3302,10 @@ void OverlayWidget::downloadMedia() {
 				: tr::lng_mediaview_saved_to);
 		} else {
 			uiShow()->showToast(
-				tr::lng_download_duplicate_skipped(tr::now));
+				tr::lng_download_duplicates_skipped(
+					tr::now,
+					lt_count,
+					1));
 		}
 	}
 }

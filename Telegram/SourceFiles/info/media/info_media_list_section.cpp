@@ -120,6 +120,8 @@ void ListSection::removeLayout(not_null<BaseLayout*> layout) {
 			++i;
 		}
 	}
+	_items.erase(ranges::remove(_items, layout), end(_items));
+	refreshHeight();
 }
 
 void ListSection::reorderItems(int oldPosition, int newPosition) {

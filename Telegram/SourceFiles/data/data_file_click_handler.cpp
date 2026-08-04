@@ -140,7 +140,10 @@ void DocumentSaveClickHandler::Save(
 			[=](bool skip) {
 				if (skip) {
 					Ui::Toast::Show(
-						tr::lng_download_duplicate_skipped(tr::now));
+						tr::lng_download_duplicates_skipped(
+							tr::now,
+							lt_count,
+							1));
 					return;
 				}
 				proceed();

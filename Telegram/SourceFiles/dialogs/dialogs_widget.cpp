@@ -87,6 +87,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_stories.h"
 #include "info/downloads/info_downloads_widget.h"
 #include "info/info_memento.h"
+#include "info/downloads/info_downloads_widget.h"
+#include "enhanced_forward.h"
+
+#include <algorithm>
 #include "inline_bots/bot_attach_web_view.h"
 #include "styles/style_dialogs.h"
 #include "styles/style_chat.h"
@@ -716,6 +720,7 @@ Widget::Widget(
 		setupMoreChatsBar();
 		setupDownloadBar();
 		setupUploadBar();
+		setupForwardsBar();
 		setupShortcuts(controller);
 	}
 	setupSwipeBack();
@@ -1237,9 +1242,10 @@ void Widget::setupDownloadBar() {
 		return;
 	}
 
-	Data::MakeDownloadBarContent(
-	) | rpl::on_next([=](Ui::DownloadBarContent &&content) {
-		const auto create = (content.count && !_downloadBar);
+		Data::MakeDownloadBarContent(
+		) | rpl::on_next([=](Ui::DownloadBarContent &&content) {
+			const auto create = (content.count
+				&& !_downloadBar);
 		if (create) {
 			_downloadBar = std::make_unique<Ui::DownloadBar>(
 				this,
@@ -1314,6 +1320,104 @@ void Widget::setupUploadBar() {
 						controller()->session().user(),
 						Info::Downloads::Tab::Uploads));
 			}, _uploadBar->lifetime());
+
+			if (_connecting) {
+				_connecting->raise();
+			}
+		}
+	}, lifetime());
+}
+
+void Widget::setupForwardsBar() {
+	if (_layout == Layout::Child) {
+		return;
+	}
+	const auto makeProgress = [=]() {
+		return EnhancedForward::jobsValue(&controller()->session())
+			| rpl::map([](const std::vector<EnhancedForward::JobSnapshot> &jobs) {
+				Ui::DownloadBarProgress result;
+				for (const auto &job : jobs) {
+					for (const auto &item : job.progress.items) {
+						if (item.cancelled || item.dedupSkipped) {
+							continue;
+						}
+						const auto size = std::max<qint64>(item.info.size, 0);
+						const auto uploading = (item.state
+							== EnhancedForward::ItemState::Uploading);
+						const auto isDone = item.sent
+							|| (item.state == EnhancedForward::ItemState::Done);
+						const auto phase = uploading
+							? item.uploadProgress
+							: item.downloadProgress;
+						const auto ready = isDone
+							? size
+							: qint64(size * std::clamp(phase, 0., 1.));
+						result.efTotal += size;
+						result.efReady += ready;
+					}
+				}
+				return result;
+			});
+	};
+
+	EnhancedForward::jobsValue(&controller()->session()) | rpl::on_next([=](
+			const std::vector<EnhancedForward::JobSnapshot> &jobs) {
+		auto efCount = 0;
+		auto efDone = 0;
+		QString firstName;
+		for (const auto &job : jobs) {
+			for (const auto &item : job.progress.items) {
+				if (item.cancelled || item.dedupSkipped) {
+					continue;
+				}
+				const auto isDone = item.sent
+					|| (item.state == EnhancedForward::ItemState::Done);
+				efCount++;
+				if (isDone) efDone++;
+				if (firstName.isEmpty() && !item.info.name.isEmpty()) {
+					firstName = item.info.name;
+				}
+			}
+		}
+		if (!efCount) {
+			_forwardsBar = nullptr;
+			updateControlsGeometry();
+			return;
+		}
+		const auto create = !_forwardsBar && (efDone < efCount);
+		if (create) {
+			_forwardsBar = std::make_unique<Ui::DownloadBar>(
+				this,
+				makeProgress());
+		}
+		if (_forwardsBar) {
+			Ui::DownloadBarContent content;
+			content.efCount = efCount;
+			content.efDone = efDone;
+			content.singleName.text = firstName;
+			_forwardsBar->show(std::move(content));
+		}
+		if (create) {
+			_forwardsBar->heightValue(
+			) | rpl::on_next([=] {
+				updateControlsGeometry();
+			}, _forwardsBar->lifetime());
+
+			_forwardsBar->shownValue(
+			) | rpl::filter(
+				!rpl::mappers::_1
+			) | rpl::on_next([=] {
+				_forwardsBar = nullptr;
+				updateControlsGeometry();
+			}, _forwardsBar->lifetime());
+
+			_forwardsBar->clicks(
+			) | rpl::on_next([=] {
+				controller()->showSection(
+					Info::Downloads::Make(
+						controller()->session().user(),
+						Info::Downloads::Tab::Forwards));
+			}, _forwardsBar->lifetime());
 
 			if (_connecting) {
 				_connecting->raise();
@@ -4102,6 +4206,7 @@ void Widget::updateControlsGeometry() {
 	putBottomButton(_updateTelegram);
 	putBottomButton(_uploadBar);
 	putBottomButton(_downloadBar);
+	putBottomButton(_forwardsBar);
 	putBottomButton(_loadMoreChats);
 	if (_connecting) {
 		_connecting->setBottomSkip(bottomSkip);
@@ -4552,6 +4657,7 @@ Widget::~Widget() {
 	// Destructor may hide the bar and attempt to double-destroy it.
 	base::take(_downloadBar);
 	base::take(_uploadBar);
+	base::take(_forwardsBar);
 }
 
 } // namespace Dialogs

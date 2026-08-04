@@ -475,74 +475,7 @@ void WrapWidget::setupTopBarMenuToggle() {
 	} else if (section.type() == Section::Type::Media) {
 		addTopBarMenuButton();
 	} else if (section.type() == Section::Type::Downloads) {
-		auto &manager = Core::App().downloadManager();
-		const auto hasUploads = [=] {
-			for (const auto &account : Core::App().domain().orderedAccounts()) {
-				if (const auto s = account->maybeSession()) {
-					if (s->uploader().anyUploads()
-						|| s->uploader().isPaused()
-						|| s->uploader().anyFinishedUploads() > 0
-						|| s->uploader().pendingResumeCount() > 0) {
-						return true;
-					}
-				}
-			}
-			return false;
-		};
-		rpl::merge(
-			rpl::single(false),
-			manager.loadingListChanges() | rpl::map_to(false),
-			manager.loadedAdded() | rpl::map_to(true),
-			manager.loadedRemoved() | rpl::map_to(false)
-		) | rpl::on_next([=, &manager](bool definitelyHas) {
-			const auto has = [&] {
-				for ([[maybe_unused]] const auto id : manager.loadingList()) {
-					return true;
-				}
-				for ([[maybe_unused]] const auto id : manager.loadedList()) {
-					return true;
-				}
-				return hasUploads();
-			};
-			if (!definitelyHas && !has()) {
-				_topBarMenuToggle = nullptr;
-			} else if (!_topBarMenuToggle) {
-				addTopBarMenuButton();
-			}
-		}, _topBar->lifetime());
-		for (const auto &account : Core::App().domain().orderedAccounts()) {
-			if (const auto s = account->maybeSession()) {
-				s->uploader().loadingListChanges(
-				) | rpl::on_next([=] {
-					if (hasUploads() && !_topBarMenuToggle) {
-						addTopBarMenuButton();
-					}
-				}, _topBar->lifetime());
-				s->uploader().finishedUploadsCleared(
-				) | rpl::on_next([=, &manager] {
-					const auto hasDownloads = [&] {
-						for ([[maybe_unused]] const auto id
-							: manager.loadingList()) {
-							return true;
-						}
-						for ([[maybe_unused]] const auto id
-							: manager.loadedList()) {
-							return true;
-						}
-						return false;
-					};
-					if (!hasUploads() && !hasDownloads()) {
-						_topBarMenuToggle = nullptr;
-					}
-				}, _topBar->lifetime());
-			}
-		}
-		Core::App().domain().activeSessionChanges(
-		) | rpl::on_next([=] {
-			if (hasUploads() && !_topBarMenuToggle) {
-				addTopBarMenuButton();
-			}
-		}, _topBar->lifetime());
+		addTopBarMenuButton();
 	} else if (key.giftsPeer()) {
 		addTopBarMenuButton();
 	}
@@ -576,9 +509,6 @@ void WrapWidget::addTopBarMenuButton() {
 	{
 		const auto guard = gsl::finally([&] { _topBarMenu = nullptr; });
 		showTopBarMenu(true);
-		if (!_topBarMenu) {
-			return;
-		}
 	}
 
 	_topBarMenuToggle.reset(_topBar->addButton(

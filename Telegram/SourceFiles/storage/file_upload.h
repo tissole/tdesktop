@@ -176,6 +176,7 @@ public:
 	struct UiPendingUpload {
 		FullMsgId itemId;
 		QString filename;
+		QString path;
 		int64 total = 0;
 		int64 sent = 0;
 	};

@@ -66,7 +66,6 @@ private:
 	int recountHeight();
 	void refreshHeight();
 
-	object_ptr<Media::ListWidget> setupList();
 	[[nodiscard]] Provider *provider() const;
 
 	const not_null<Controller*> _controller;

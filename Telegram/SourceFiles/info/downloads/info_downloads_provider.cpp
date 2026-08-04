@@ -23,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item.h"
 #include "history/history_item_helpers.h"
 #include "history/history.h"
+#include "enhanced_forward.h"
 #include "core/application.h"
 #include "lang/lang_keys.h"
 #include "storage/file_upload.h"
@@ -161,13 +162,28 @@ void Provider::refreshViewer() {
 		manager.loadingListChanges() | rpl::to_empty
 	) | rpl::on_next([=, &manager] {
 		auto copy = _downloading;
+		auto efCopy = _enhancedForward;
 		for (const auto id : manager.loadingList()) {
 			if (!id->done) {
 				const auto item = id->object.item;
-				if (!copy.remove(item) && !_downloaded.contains(item)) {
-					const auto fullId = item->fullId();
-					const auto wasUploading = _uploading.remove(fullId);
-					const auto wasUploaded = _uploaded.remove(fullId);
+				if (id->enhancedForward) {
+					if (!efCopy.remove(item) && !_downloaded.contains(item)) {
+						const auto wasUploading = _uploading.remove(item->fullId());
+						const auto wasUploaded = _uploaded.remove(item->fullId());
+						_enhancedForward.emplace(item);
+						if (!wasUploading && !wasUploaded) {
+							addElementNow({
+								.item = item,
+								.started = id->started,
+								.path = id->path,
+							});
+						}
+						trackItemSession(item);
+						refreshPostponed(true);
+					}
+				} else if (!copy.remove(item) && !_downloaded.contains(item)) {
+					const auto wasUploading = _uploading.remove(item->fullId());
+					const auto wasUploaded = _uploaded.remove(item->fullId());
 					_downloading.emplace(item);
 					if (!wasUploading && !wasUploaded) {
 						addElementNow({
@@ -179,17 +195,36 @@ void Provider::refreshViewer() {
 					trackItemSession(item);
 					refreshPostponed(true);
 				}
-			}
+		} else if (id->enhancedForward) {
+			// EF item download is done, but the forward may still upload.
+			// Keep the item in _enhancedForward until it's fully removed
+			// from loadingList() (when removeLoading is called after upload).
+		} else {
+			copy.remove(id->object.item);
 		}
+	}
 		for (const auto &item : copy) {
-			Assert(!_downloaded.contains(item));
 			const auto inPostponed = ranges::contains(
 				_addPostponed,
 				item,
 				&Element::item);
 			_downloading.remove(item);
-			if (!inPostponed) {
+			if (!_downloaded.contains(item) && !inPostponed) {
 				remove(item);
+			}
+		}
+		for (const auto &item : efCopy) {
+			const auto inPostponed = ranges::contains(
+				_addPostponed,
+				item,
+				&Element::item);
+			if (!inPostponed) {
+				// Keep EF items in _enhancedForward even after they're
+				// fully done (download + upload complete) so they stay
+				// visible in the Forwards tab until user clears them.
+				// The item will be removed from loadingList() when
+				// removeLoading() is called after upload completion,
+				// but we keep it here for display.
 			}
 		}
 		if (!_fullCount.has_value()) {
@@ -208,6 +243,9 @@ void Provider::refreshViewer() {
 
 	manager.loadedRemoved(
 	) | rpl::on_next([=](not_null<const HistoryItem*> item) {
+		if (_enhancedForward.contains(item)) {
+			return;
+		}
 		if (!_downloading.contains(item)) {
 			remove(item);
 		} else {
@@ -234,10 +272,17 @@ void Provider::refreshViewer() {
 			for (const auto &info : session->uploader().activeUploads()) {
 				const auto item = session->data().message(info.itemId);
 				if (!item) continue;
-				if (!copy.remove(info.itemId)
-					&& !_uploaded.contains(info.itemId)
-					&& !_downloading.contains(item)
-					&& !_downloaded.contains(item)) {
+				if (EnhancedForward::isEnhancedUpload(info.itemId)
+					|| EnhancedForward::isEnhancedTempUpload(
+						session,
+						info.filename)) {
+					continue;
+				}
+			if (!copy.remove(info.itemId)
+				&& !_uploaded.contains(info.itemId)
+				&& !_downloading.contains(item)
+				&& !_enhancedForward.contains(item)
+				&& !_downloaded.contains(item)) {
 					_uploading.emplace(info.itemId);
 					addElementNow({
 						.item = item,
@@ -278,30 +323,39 @@ void Provider::refreshViewer() {
 		for (const auto &info : session->uploader().finishedUploadList()) {
 			const auto item = session->data().message(info.itemId);
 			if (!item) continue;
-			if (!_uploaded.contains(info.itemId)
-				&& !_uploading.contains(info.itemId)
-				&& !_downloading.contains(item)
-				&& !_downloaded.contains(item)) {
-				_uploaded.emplace(info.itemId);
-				addElementNow({
-					.item = item,
-					.started = (info.started
-						? info.started
-						: int64(item->date()) * 1000),
-					.path = info.filename,
-				});
-				refreshPostponed(true);
-			}
+		if (EnhancedForward::isEnhancedUpload(info.itemId)
+			|| EnhancedForward::isEnhancedTempUpload(session, info.filename)) {
+			continue;
 		}
+		if (!_uploaded.contains(info.itemId)
+			&& !_uploading.contains(info.itemId)
+			&& !_downloading.contains(item)
+			&& !_enhancedForward.contains(item)
+			&& !_downloaded.contains(item)) {
+			_uploaded.emplace(info.itemId);
+			addElementNow({
+				.item = item,
+				.started = (info.started
+					? info.started
+					: int64(item->date()) * 1000),
+				.path = info.filename,
+			});
+			refreshPostponed(true);
+		}
+	}
 
-		session->uploader().finishedUploadAdded(
-		) | rpl::on_next([=](FullMsgId itemId) {
-			const auto item = session->data().message(itemId);
-			if (!item) return;
-			if (!_uploaded.contains(itemId)
-				&& !_uploading.contains(itemId)
-				&& !_downloading.contains(item)
-				&& !_downloaded.contains(item)) {
+	session->uploader().finishedUploadAdded(
+	) | rpl::on_next([=](FullMsgId itemId) {
+		const auto item = session->data().message(itemId);
+		if (!item) return;
+		if (EnhancedForward::isEnhancedUpload(itemId)) {
+			return;
+		}
+		if (!_uploaded.contains(itemId)
+			&& !_uploading.contains(itemId)
+			&& !_downloading.contains(item)
+			&& !_enhancedForward.contains(item)
+			&& !_downloaded.contains(item)) {
 				_uploaded.emplace(itemId);
 				addElementNow({
 					.item = item,
@@ -370,6 +424,89 @@ void Provider::refreshViewer() {
 				}
 			}
 		}, _lifetime);
+
+		const auto refreshEF = std::make_shared<Fn<void()>>();
+		const auto failedResolve = std::make_shared<base::flat_set<FullMsgId>>();
+		*refreshEF = [=, refreshEF = refreshEF.get()] {
+			auto jobItems = base::flat_set<not_null<const HistoryItem*>>();
+			auto unresolved = std::vector<FullMsgId>();
+			for (const auto &job : EnhancedForward::AllJobs(session)) {
+				for (const auto &srcId : job.progress.sourceIds) {
+					const auto message = session->data().message(srcId);
+					if (!message) {
+						if (!failedResolve->contains(srcId)) {
+							unresolved.push_back(srcId);
+						}
+						continue;
+					}
+					const auto item = not_null<HistoryItem*>(message);
+					jobItems.emplace(item);
+					if (_enhancedForward.contains(item)) {
+						continue;
+					}
+					_enhancedForward.emplace(item);
+					const auto alreadyInElements = ranges::any_of(
+						_elements,
+						[&](const Element &element) {
+							return element.item == item;
+						});
+					if (!alreadyInElements) {
+						addElementNow(Element{
+							item,
+							int64(item->date()) * 1000,
+							QString(),
+						});
+					}
+					trackItemSession(item);
+					refreshPostponed(true);
+				}
+			}
+			auto toRemove = std::vector<not_null<const HistoryItem*>>();
+			auto &downloadManager = Core::App().downloadManager();
+			for (const auto &item : _enhancedForward) {
+				if (jobItems.contains(item)) {
+					continue;
+				}
+				const auto stillLoading = ranges::any_of(
+					downloadManager.loadingList(),
+					[&](const auto &id) {
+						return id->enhancedForward
+							&& (id->object.item == item);
+					});
+				if (!stillLoading) {
+					toRemove.push_back(item);
+				}
+			}
+			for (const auto &item : toRemove) {
+				_enhancedForward.remove(item);
+				remove(item);
+			}
+			if (!unresolved.empty()) {
+				const auto weak = base::make_weak(this);
+				EnhancedForward::EnsureForwardSourceMessages(
+					session,
+					unresolved,
+					[weak, refreshEF, failedResolve, unresolved](bool ok) {
+						if (ok) {
+							for (const auto &id : unresolved) {
+								failedResolve->erase(id);
+							}
+						} else {
+							for (const auto &id : unresolved) {
+								failedResolve->emplace(id);
+							}
+						}
+						if (const auto alive = weak.get()) {
+							(*refreshEF)();
+						}
+					});
+			}
+		};
+		rpl::single(rpl::empty) | rpl::then(
+			EnhancedForward::stateChanges() | rpl::to_empty
+		) | rpl::on_next([refreshEF] {
+			(*refreshEF)();
+		}, _lifetime);
 	}
 
 	performAdd();
@@ -431,6 +568,7 @@ void Provider::remove(not_null<const HistoryItem*> item) {
 		ranges::remove(_addPostponed, item, &Element::item),
 		end(_addPostponed));
 	_downloading.remove(item);
+	_enhancedForward.remove(item);
 	_downloaded.remove(item);
 	const auto proj = [&](const Element &element) {
 		if (element.item != item) {
@@ -469,7 +607,7 @@ void Provider::performRefresh() {
 		_fullCount = _elements.size();
 	}
 	if (base::take(_postponedRefreshSort)) {
-		ranges::sort(_elements, ranges::less(), &Element::started);
+		ranges::stable_sort(_elements, ranges::less(), &Element::started);
 	}
 	_refreshed.fire({});
 	updateAvailability();
@@ -512,7 +650,17 @@ std::vector<ListSection> Provider::fillSections(
 		return {};
 	}
 
+	const auto isEf = [this](not_null<const HistoryItem*> item) {
+		return _enhancedForward.contains(item);
+	};
 	const auto matches = [&](not_null<const HistoryItem*> item) {
+		const auto ef = isEf(item);
+		if (_filter == Filter::Forwards) {
+			return ef;
+		}
+		if (ef) {
+			return false;
+		}
 		if (_filter == Filter::All) {
 			return true;
 		}
@@ -548,7 +696,11 @@ std::vector<ListSection> Provider::fillSections(
 		}
 	} else {
 		auto section = ListSection(Type::File, sectionDelegate());
-		for (const auto &element : ranges::views::reverse(_elements)) {
+		const auto forward = (_filter == Filter::Forwards);
+		for (auto i = 0; i != int(_elements.size()); ++i) {
+			const auto &element = _elements[forward
+				? i
+				: int(_elements.size() - 1 - i)];
 			if (search && !element.found) {
 				continue;
 			} else if (!matches(element.item)) {
@@ -591,7 +743,9 @@ BaseLayout *Provider::lookupLayout(const HistoryItem *item) {
 }
 
 bool Provider::isMyItem(not_null<const HistoryItem*> item) {
-	return _downloading.contains(item) || _downloaded.contains(item);
+	return _downloading.contains(item)
+		|| _enhancedForward.contains(item)
+		|| _downloaded.contains(item);
 }
 
 bool Provider::isAfter(
@@ -700,14 +854,17 @@ ListItemSelectionData Provider::computeSelectionData(
 		not_null<const HistoryItem*> item,
 		TextSelection selection) {
 	auto result = ListItemSelectionData(selection);
+	const auto ef = _enhancedForward.contains(item);
 	const auto isUploadInProgress = [&] {
+		if (ef) return false;
 		if (const auto media = item->media()) {
 			return media->uploading();
 		}
 		return false;
 	}();
-	result.canDelete = !isUploadInProgress;
-	result.canForward = item->allowsForward()
+	result.canDelete = !isUploadInProgress && !ef;
+	result.canForward = !ef
+		&& item->allowsForward()
 		&& (&item->history()->session() == &_controller->session());
 	return result;
 }
@@ -769,11 +926,17 @@ bool Provider::allowSaveFileAs(
 }
 
 bool Provider::isUploadItem(not_null<const HistoryItem*> item) const {
-	if (_downloading.contains(item) || _downloaded.contains(item)) {
+	if (_downloading.contains(item)
+		|| _enhancedForward.contains(item)
+		|| _downloaded.contains(item)) {
 		return false;
 	}
 	return _uploading.contains(item->fullId())
 		|| _uploaded.contains(item->fullId());
+}
+
+bool Provider::isEnhancedForward(not_null<const HistoryItem*> item) const {
+	return _enhancedForward.contains(item);
 }
 
 QString Provider::showInFolderPath(

@@ -29,6 +29,7 @@ public:
 		All,
 		Downloads,
 		Uploads,
+		Forwards,
 	};
 
 	explicit Provider(not_null<AbstractController*> controller);
@@ -80,6 +81,7 @@ public:
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) override;
 	bool isUploadItem(not_null<const HistoryItem*> item) const;
+	bool isEnhancedForward(not_null<const HistoryItem*> item) const;
 	QString showInFolderPath(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) override;
@@ -141,6 +143,7 @@ private:
 	std::vector<Element> _elements;
 	std::optional<int> _fullCount;
 	base::flat_set<not_null<const HistoryItem*>> _downloading;
+	base::flat_set<not_null<const HistoryItem*>> _enhancedForward;
 	base::flat_set<not_null<const HistoryItem*>> _downloaded;
 	base::flat_set<FullMsgId> _uploading;
 	base::flat_set<FullMsgId> _uploaded;

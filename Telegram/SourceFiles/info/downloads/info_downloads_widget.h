@@ -27,6 +27,7 @@ class InnerWidget;
 enum class Tab {
 	Downloads,
 	Uploads,
+	Forwards,
 	Both,
 };
 
