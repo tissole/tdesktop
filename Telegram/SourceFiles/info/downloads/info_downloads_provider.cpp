@@ -168,8 +168,8 @@ void Provider::refreshViewer() {
 				const auto item = id->object.item;
 				if (id->enhancedForward) {
 					if (!efCopy.remove(item) && !_downloaded.contains(item)) {
-						const auto wasUploading = _uploading.remove(item->fullId());
-						const auto wasUploaded = _uploaded.remove(item->fullId());
+						const auto wasUploading = _uploading.contains(item->fullId());
+						const auto wasUploaded = _uploaded.contains(item->fullId());
 						_enhancedForward.emplace(item);
 						if (!wasUploading && !wasUploaded) {
 							addElementNow({
@@ -659,7 +659,12 @@ std::vector<ListSection> Provider::fillSections(
 			return ef;
 		}
 		if (ef) {
-			return false;
+			const auto genuine = _uploading.contains(item->fullId())
+				|| _uploaded.contains(item->fullId())
+				|| _downloading.contains(item);
+			if (!genuine) {
+				return false;
+			}
 		}
 		if (_filter == Filter::All) {
 			return true;
@@ -926,11 +931,6 @@ bool Provider::allowSaveFileAs(
 }
 
 bool Provider::isUploadItem(not_null<const HistoryItem*> item) const {
-	if (_downloading.contains(item)
-		|| _enhancedForward.contains(item)
-		|| _downloaded.contains(item)) {
-		return false;
-	}
 	return _uploading.contains(item->fullId())
 		|| _uploaded.contains(item->fullId());
 }
