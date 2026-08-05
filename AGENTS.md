@@ -141,29 +141,20 @@ its path if the run stops before verification. Then rerun the same test once.
 If the signature persists after that clean rebuild, continue normal crash
 diagnosis or report the blocker. Do not loop clean rebuilds.
 
-### Build fails with PDB or EXE access errors
+### Build output locks
 
-**âš ï¸ CRITICAL: DO NOT RETRY THE BUILD. STOP AND WAIT FOR USER.**
+For builds owned by the autonomous `continue` / `perform-task` workflow, read
+and follow `.agents/shared/build-lock-recovery.md`. PDB, EXE, OBJ, and other
+build-output lock errors are recoverable: stop only the exact checkout
+executable or verified build-tree holders, delete only exact named artifacts
+inside that checkout's build tree, and retry within the bounded recovery
+budget. Never stop an installed Telegram client, another checkout, an IDE, or
+an unknown process.
 
-If the build fails with ANY of these errors:
-- `fatal error C1041: cannot open program database`
-- `cannot open output file 'Telegram.exe'`
-- `LNK1104: cannot open file`
-- Any "access denied" or "file in use" error
-
-**STOP IMMEDIATELY.** These errors mean files are locked by a running process (Telegram.exe or debugger).
-
-**What to do:**
-1. Do NOT attempt another build - it will fail the same way
-2. Do NOT try to delete files - they are locked
-3. Do NOT try any workarounds or fixes
-4. IMMEDIATELY inform the user:
-
-> "Build failed - files are locked. Please close Telegram.exe (and any debugger) so I can rebuild."
-
-**Then WAIT for user confirmation before attempting any build.**
-
-Retrying builds wastes time and context. The ONLY fix is for the user to close the running process.
+Outside that autonomous workflow, an exact checkout executable may be running
+because the user is testing it. Do not terminate it or delete locked build
+outputs without explicit permission. Report the exact locked path and ask the
+user to close that checkout's Telegram/debugger before rebuilding.
 
 ## Best Practices
 
@@ -179,6 +170,13 @@ Retrying builds wastes time and context. The ONLY fix is for the user to close t
 ## Commits
 
 - Subject: one concise, plain-language line summarizing the change, ~50-60 characters, matching the style of recent `git log` subjects. This is usually the entire message.
+- For an `ai-tdesktop` task, start the subject with exactly `[ai] ` when the
+  retained task implementation changes permanent test-helper code, the agent
+  harness, or agent documentation in any way. This includes
+  `Telegram/SourceFiles/test/`, `.agents/`, `.claude/`, `AGENTS.md`,
+  `CLAUDE.md`, and files whose sole role is supporting those systems. Do not
+  count the disposable test overlay or external AI task artifacts. For every
+  other task, the subject must not contain `[ai]` anywhere.
 - For ordinary work not associated with an AI task, add a short plain-language body only when the subject can't carry it (what was done, not the technical how) — a line or two at most.
 - Never add a `Co-Authored-By:` line or any tool/assistant attribution trailer.
 - Never add `Autotask:`/attempt or other internal run markers. A commit owned by
@@ -548,7 +546,7 @@ primaryButton: MyButtonStyle(defaultButton) {
 - `pixels` - Pixel values with `px` suffix (e.g., `10px`)
 - `color` - Named colors from `ui/colors.palette`
 - `icon` - Inline icon definition: `icon{{ "path/stem", color }}`
-- `margins` - Four values: `margins(top, right, bottom, left)`
+- `margins` - Four values: `margins(left, top, right, bottom)`
 - `size` - Two values: `size(width, height)`
 - `point` - Two values: `point(x, y)`
 - `align` - Alignment: `align(center)`, `align(left)`

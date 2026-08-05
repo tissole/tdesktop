@@ -195,7 +195,9 @@ prompts, plus the host-specific orchestration rules.
   touch and the change is mechanical — roughly two source files or fewer, no
   new APIs, strings, or style tokens, no layout derivation. When in doubt,
   delegate. Assessment always runs as a fresh leaf and has the authority to
-  reject the fast-path sizing, which forces a proper Phase 1 leaf rerun.
+  reject the fast-path sizing or the plan's whole approach as over-engineered;
+  either rejection forces a Phase 1 leaf rerun, an approach rejection with the
+  assessor's simpler direction added to the prompt.
 - Use `fork_turns: "none"` with explicit paths. Fork the smallest turn window
   only for genuinely unavailable chat-only visual context.
 - Inherit the parent's model and reasoning level. Do not invent tool fields.
@@ -236,18 +238,24 @@ Run sequentially:
    the performer may run this phase as a same-session checklist producing the
    same artifacts.
 2. **Assess.** Independently verify paths and APIs, completeness, design,
-   duplication, edge cases, repository conventions, and phase sizing; on
-   layout tasks verify the visual contract's anchors and derivation; on a
-   fast-path plan verify the sizing itself. Require `Phases: <N>` and
-   `Assessed: yes`.
+   duplication, edge cases, repository conventions, and phase sizing; weigh
+   the approach against the closest repository precedent and its containment
+   against the shared modules it touches, and reject over-engineering rather
+   than refining it; on layout tasks verify the visual contract's anchors and
+   derivation; on a fast-path plan verify the sizing itself. Require
+   `Phases: <N>` and `Assessed: yes`, or a recorded `Fast-Path: rejected` /
+   `Approach: rejected` outcome that reruns Phase 1 as a fresh leaf — an
+   approach rejection with the assessor's simpler direction as added input.
 3. **Implement.** Run one leaf per assessed plan phase. Before each edit,
    update `work/owned-paths.txt`. A leaf edits only its owned paths and its
    phase status; it does not commit.
 4. **Build.** Run the resolved Debug build in the performer. Fix only build
    errors belonging to the task. If the task changed only a resource consumed
    by codegen, force its documented regeneration so the Debug binary contains
-   the new resource. A file-lock/access-denied build error is an immediate
-   global hard stop with no retry or workaround.
+   the new resource. On Windows, run the exact-path proactive cleanup before
+   every build. Recover file-lock/access-denied failures through
+   `.agents/shared/build-lock-recovery.md`; only an exhausted or unsafe
+   recovery is a global hard stop.
 5. **Review.** Run the multi-lens review/fix loop from the phase prompts for up
    to three review iterations. Each iteration runs four independent lenses over
    the task diff — correctness, lifetime and ownership, reuse, structure — and
@@ -269,7 +277,8 @@ Run sequentially:
    ```bash
    python3 SOURCE_ROOT/.agents/skills/process-inbox/scripts/workspace.py \
      source-commit --source-root SOURCE_ROOT --task TASK_ID \
-     --subject "<one concise plain-language subject>" --mark-green
+     --subject "<subject with the required conditional [ai] prefix>" \
+     --mark-green
    ```
 
    It verifies every dirty path against `work/owned-paths.txt` (plus the
@@ -368,10 +377,19 @@ unintended one can never slip into an attempt.
 Every implementation or implementation-fix commit message is exactly:
 
 ```text
-<one concise plain-language subject, about 50-60 characters>
+<conditional [ai] prefix><concise plain-language subject, about 50-60 characters>
 
 Task: <full TASK_ID>
 ```
+
+Determine the prefix from the retained task implementation, not from the
+temporary test overlay. Start the subject with exactly `[ai] ` when the task
+changes permanent test-helper code, the agent harness, or agent documentation
+in any way. This includes `Telegram/SourceFiles/test/`, `.agents/`, `.claude/`,
+`AGENTS.md`, `CLAUDE.md`, and files whose sole role is supporting those
+systems. The disposable test overlay and external AI task artifacts do not
+count. For every other task, the subject must not contain `[ai]` anywhere. The
+prefix counts toward the subject length.
 
 Do not add a body, `Autotask:`, attempt marker, `Co-Authored-By:`, assistant
 attribution, or any other trailer. Track rationale in the AI task. If a short
@@ -398,13 +416,14 @@ rules, with these external-task safety adaptations:
   `source-commit`).
 - The overlay is authored against the permanent harness in
   `Telegram/SourceFiles/test/` and normally consists of replacing
-  `Telegram/SourceFiles/test/test_scenario.cpp` alone — that slot file is
-  always a permitted overlay path. Beyond it, overlay code may modify only
-  tracked task-owned source paths (one-line `Test::Fire` waitpoints or true
-  in-situ injections). Inventory every overlay path in
-  `work/test-overlay.paths`; never introduce an untracked source file, and
-  never re-implement logging, widget-finding, capture, watchdog, or quit
-  mechanics the harness already provides.
+  `Telegram/SourceFiles/test/test_scenario.cpp` alone on the first run. That is
+  a preference, not a boundary: after a setup or reachability failure, overlay
+  code may modify any relevant tracked source path, including initialized
+  submodules, to place a disposable probe or direct entry point beside the
+  changed production code. Inventory every overlay path in
+  `work/test-overlay.paths`; never introduce an untracked source file, commit
+  an overlay or submodule injection, or re-implement logging, widget-finding,
+  capture, watchdog, or quit mechanics the harness already provides.
 - Save and restore the overlay with the scripted helper instead of manual git
   mechanics:
 
@@ -414,8 +433,9 @@ rules, with these external-task safety adaptations:
   ```
 
   It verifies every dirty path against the inventory, refuses untracked
-  files, writes a nonempty verified `work/test-overlay.patch`, and restores
-  only inventoried paths to `RUN_REF` — never a repository-wide hard reset.
+  files, writes a verified top-level patch plus per-submodule patch bundle
+  when needed, and restores only inventoried paths to `RUN_REF` or the
+  submodule's current baseline — never a repository-wide hard reset.
   After an implementation-fix commit (`source-commit --mark-green` moves both
   `GREEN_REF` and `RUN_REF`), reapply with:
 
@@ -431,17 +451,30 @@ rules, with these external-task safety adaptations:
   actions or Qt events, log assertions and geometry, capture widgets/windows
   in-process, save the artifacts, and quit. Do not require an OS-level desktop
   screenshot or interactive Computer Use evidence.
-- Missing `test_TelegramForcePortable` is the only portable-account setup
-  blocker. A `testing` marker file inside the live folder marks it as the
-  reusable test copy: marker present means touch no folders and go test. An
-  unmarked live folder is real data: move it to real when real is absent;
-  delete it only when real already exists. Only then deep-copy golden to live
-  and create the `testing` marker inside the copy. There is NO folder cleanup
-  after testing — the marked copy stays live for the next run and next task.
-  Never delete, rename, move, or alter golden or real.
+- Missing `test_TelegramForcePortable` is a portable-account setup blocker. A
+  `testing` marker file inside the live folder marks it as the reusable test
+  copy: never copy, move, or delete any of the three folders on this branch.
+  For this reused marked-live account only, after the exact-path straggler kill
+  and before launch, `test-run` moves a non-empty live `tdata/working` to
+  `RUN_DIR/stale-crash/working` and every live `tdata/dumps/*.dmp` to
+  `RUN_DIR/stale-crash/dumps/`; a zero-byte `tdata/working` is neither moved
+  nor reported. The report is moved because leaving it makes the app show the
+  previous-launch window instead of starting, so no `test_log.txt` is written
+  and the run reads as a hang. A leftover dump never blocks launch and is
+  moved only to keep the current run's mtime-filtered dump report free of old
+  minidumps. After successful relocation, the next SETUP finds nothing left
+  to move. An unmarked live folder is real data: move it to real when real is
+  absent; delete it only when real already exists. Only then deep-copy golden
+  to live and create the `testing` marker inside the copy. The four account
+  results remain `fresh-copy`, `reused-marked-live`, `preserved-real`, and
+  `replaced-manual-live`; clearing creates no fifth account state. There is NO
+  folder cleanup after testing — the marked copy stays live for the next run
+  and next task. Never delete, rename, move, or alter golden or real.
 - Set `RUN_DIR` and `EVIDENCE_DIR` to
-  `TASK_DIR/.local/runs/attempt-<n>/run-<m>/`. Promote only decisive compact
-  logs/screenshots into tracked `evidence/`.
+  `TASK_DIR/.local/runs/attempt-<n>/run-<m>/`, an ignored run-specific path.
+  Promote only decisive compact logs/screenshots and decisive preserved
+  `RUN_DIR/stale-crash/` payloads into tracked `evidence/`; keep promotion
+  selective rather than committing every large dump.
 - Execute every app run through the scripted runner instead of hand-composed
   launch/poll/kill shell:
 
@@ -452,13 +485,21 @@ rules, with these external-task safety adaptations:
   ```
 
   One call performs the idempotent portable-account SETUP, the path-scoped
-  straggler kill, the `-testagent -noupdate` launch (never auto-update a
-  test binary) with stdout/stderr capture and
-  `TDESKTOP_TEST_EVIDENCE_DIR` set to `RUN_DIR`, the external wall-clock
-  deadline and quiet-log watchdog, and returns one JSON report: outcome,
-  `TEST_COMPLETE` state, parsed `TEST_STEP`/`TEST_RESULT`/`SCREENSHOT`
-  markers, stderr tail, fresh `tdata/working` crash excerpt, and minidump
-  paths. The performer then judges the evidence itself — the runner gathers,
+  straggler kill, stale-crash relocation for a reused marked-live account
+  after that kill and before launch, and the `-testagent -noupdate` launch
+  (never auto-update a test binary) with stdout/stderr capture and
+  `TDESKTOP_TEST_EVIDENCE_DIR` set to `RUN_DIR`. It enforces the external
+  wall-clock deadline and quiet-log watchdog and returns one JSON report:
+  outcome, `TEST_COMPLETE` state, parsed
+  `TEST_STEP`/`TEST_RESULT`/`SCREENSHOT` markers, stderr tail, fresh
+  `tdata/working` crash excerpt, minidump paths, and
+  `stale_crash_cleared`. That field is an ordered list of
+  `{from, kind, to}` entries whose `kind` is `"report"` or `"dump"`, and is
+  `[]` when nothing was cleared. If a stale report cannot be moved, `test-run`
+  refuses before launch, prints the helper error on stderr, exits non-zero,
+  and emits no JSON. If a dump cannot be moved, the run leaves it in place,
+  records its entry with `"to": null` (a null destination), and continues to
+  launch. The performer then judges the evidence itself — the runner gathers,
   it never assesses. Crash detection keys on process death without
   `TEST_COMPLETE` plus a fresh `tdata/working`, not exit code.
 - If the account breaks mid-loop (login screen, `AUTH_KEY_DUPLICATED`), run
@@ -466,6 +507,11 @@ rules, with these external-task safety adaptations:
   re-copies golden — then retry once.
 - Enforce the in-app watchdog too. Count test runs independently from
   implementation attempts and stop at `MAX_TEST_RUNS`.
+- A repeated setup failure is not a reason to stop below that cap. Apply the
+  shared test loop's directness ladder: preserve what the run proved, forbid
+  the failed fixture technique, and make the next overlay more manual and
+  closer to the changed production seam. Once a setup outside the task's diff
+  fails repeatedly, bypass that setup rather than continuing to test it.
 - Plan the fewest possible runs: one complete programmed scenario per attempt
   that proves every check in a single execution, splitting only for checks
   that cannot share one process lifetime. `MAX_TEST_RUNS` is a safety cap,
@@ -520,12 +566,14 @@ settled, never the reason to leave a reachable surface unmeasured. Where an
 acceptance criterion ranges over a parameter — every value of an enum, both
 halves of a branch, more than one interface scale — the author iterates the
 range rather than sampling it, because a hand-picked subset is exactly the shape
-of gap that comes back later as its own task. Missing
-or ambiguous evidence is `TEST_FLAW`; no expected task delta is `IMPL_BUG`. Two
-identical consecutive failure signatures block early, except that the macOS
-cached-language signature first gets the shared test loop's one-time Xcode
-clean-rebuild recovery. A known implementation bug at the attempt cap is
-implementation-blocked, not a successful retained commit.
+of gap that comes back later as its own task. Missing or ambiguous evidence is
+`TEST_FLAW`; no expected task delta is `IMPL_BUG`. Repeated failure signatures
+trigger the shared directness ladder, not an automatic block. Block before
+`MAX_TEST_RUNS` only after a fresh recovery assessment proves that every
+applicable more-direct strategy is unsafe, unavailable, or would bypass the
+changed code. The macOS cached-language signature first gets the shared test
+loop's one-time Xcode clean-rebuild recovery. A known implementation bug at the
+attempt cap is implementation-blocked, not a successful retained commit.
 
 Skip runtime testing only for a task with no runnable behavior. Record
 `NOT_APPLICABLE` and exact file-level validation. Configuration alone is not a
@@ -652,8 +700,9 @@ delays finishing the work actually in hand.
   proceed with independent work, but the next invocation retries it once before
   starting new shared work. A dirty/non-buildable checkout or global
   environment problem stops the current invocation.
-- A file-lock build error always stops immediately and asks the human to close
-  this checkout's Telegram/debugger.
+- A Windows file-lock build error follows the shared bounded exact-checkout
+  recovery. Only exhaustion or an unsafe/non-owned holder stops the run and
+  asks the human; the task remains `in-progress`.
 - A locked macOS session and the resulting unavailable Computer Use driver
   never stop or block the task; continue with the complete in-binary overlay
   flow.

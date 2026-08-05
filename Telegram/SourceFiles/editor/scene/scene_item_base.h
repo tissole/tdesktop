@@ -77,6 +77,8 @@ public:
 		float64 scale = 1.;
 		float64 zValue = 0.;
 		float64 size = 0.;
+		float64 aspectRatio = 1.;
+		float64 bend = 0.;
 		bool flipped = false;
 
 		friend inline bool operator==(
@@ -97,8 +99,8 @@ public:
 
 	void updateZoom(float64 zoom);
 
-	[[nodiscard]] Placement placement() const;
-	void applyPlacement(const Placement &placement);
+	[[nodiscard]] virtual Placement placement() const;
+	virtual void applyPlacement(const Placement &placement);
 
 	bool hasState(SaveState state) const override;
 	void save(SaveState state) override;
@@ -136,6 +138,9 @@ protected:
 	[[nodiscard]] bool fitsMinimumSize() const;
 	void setVerticalMinimumEnabled(bool enabled);
 	[[nodiscard]] bool isHandling() const;
+	void resetDragging();
+	[[nodiscard]] bool dragThresholdPassed(
+		not_null<QGraphicsSceneMouseEvent*> event);
 	[[nodiscard]] float64 scaledHandleSize() const;
 	void paintHandle(QPainter *p, const QRectF &rect, bool hasFocus) const;
 
@@ -186,6 +191,7 @@ private:
 
 	bool _flipped = false;
 	bool _verticalMinimumEnabled = true;
+	bool _dragging = false;
 
 };
 

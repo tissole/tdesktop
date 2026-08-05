@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QGraphicsSceneHoverEvent>
 #include <QGraphicsSceneMouseEvent>
 #include <QStyleOptionGraphicsItem>
+#include <QtWidgets/QApplication>
 #include <QtMath>
 
 namespace Editor {
@@ -147,6 +148,9 @@ void ItemBase::paintHandle(
 }
 
 void ItemBase::mouseMoveEvent(QGraphicsSceneMouseEvent *event) {
+	if (!dragThresholdPassed(event)) {
+		return;
+	}
 	if (isHandling()) {
 		const auto mousePos = event->pos();
 		const auto shift = event->modifiers().testFlag(Qt::ShiftModifier);
@@ -193,6 +197,7 @@ void ItemBase::hoverMoveEvent(QGraphicsSceneHoverEvent *event) {
 
 void ItemBase::mousePressEvent(QGraphicsSceneMouseEvent *event) {
 	raiseToTop();
+	resetDragging();
 	if (event->button() == Qt::LeftButton) {
 		_handle = handleType(event->pos());
 	}
@@ -340,6 +345,21 @@ bool ItemBase::isHandling() const {
 	return _handle != HandleType::None;
 }
 
+void ItemBase::resetDragging() {
+	_dragging = false;
+}
+
+bool ItemBase::dragThresholdPassed(
+		not_null<QGraphicsSceneMouseEvent*> event) {
+	if (!_dragging) {
+		const auto delta = event->screenPos()
+			- event->buttonDownScreenPos(Qt::LeftButton);
+		const auto distance = QApplication::startDragDistance();
+		_dragging = (delta.manhattanLength() >= distance);
+	}
+	return _dragging;
+}
+
 float64 ItemBase::size() const {
 	return _horizontalSize;
 }
@@ -438,8 +458,8 @@ void ItemBase::updateZoom(float64 zoom) {
 		_imageSize.width(),
 		_imageSize.height());
 	_sizeLimits = {
-		.min = int(maxSide * kMinSizeRatio),
-		.max = int(maxSide * kMaxSizeRatio),
+		.min = std::max(int(maxSide * kMinSizeRatio), 1),
+		.max = std::max(int(maxSide * kMaxSizeRatio), 1),
 	};
 	_horizontalSize = std::clamp(
 		_horizontalSize,
@@ -494,6 +514,7 @@ ItemBase::Placement ItemBase::placement() const {
 		.scale = scale(),
 		.zValue = zValue(),
 		.size = _horizontalSize,
+		.aspectRatio = _aspectRatio,
 		.flipped = _flipped,
 	};
 }
@@ -501,6 +522,7 @@ ItemBase::Placement ItemBase::placement() const {
 void ItemBase::applyPlacement(const Placement &placement) {
 	prepareGeometryChange();
 	_horizontalSize = placement.size;
+	_aspectRatio = placement.aspectRatio;
 	updateVerticalSize();
 	setPos(placement.position);
 	setRotation(placement.rotation);

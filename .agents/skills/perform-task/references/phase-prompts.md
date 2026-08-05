@@ -10,6 +10,7 @@
 - [Assessment](#phase-3-plan-assessment)
 - [Implementation and build](#phase-4-implementation)
 - [Review](#phase-6-code-review-loop)
+- [Test-flaw recovery](#test-flaw-recovery-and-directness)
 - [Windows normalization](#phase-7-native-windows-text-normalization)
 - [Prompt delivery](#prompt-delivery-and-logs)
 
@@ -105,7 +106,7 @@ Do not restate the full context, plan, diff, or long reasoning in the chat reply
   were made. For a project task, `project.proposed.md` must also exist and be
   non-empty. For a `Visual: layout` task, `visual.md` must also satisfy the
   visual design completion check below.
-- Phase 3 is complete only when `plan.md` contains both `Phases:` in the Status section and `Assessed: yes`.
+- Phase 3 is complete only when `plan.md` contains both `Phases:` in the Status section and `Assessed: yes`, or records a rejection outcome (`Fast-Path: rejected` or `Approach: rejected`) that sends the performer back to a fresh Phase 1 leaf.
 - Phase 4 is complete only when the target phase checkbox changed to checked and the touched-file list matches the owned write set, or the blocker explains any mismatch.
 - Phase 5 is complete only when the build outcome is known and the build checkbox is updated on success.
 - Phase 6a is complete only when every lens scheduled for iteration `R` wrote `review<R>-<lens>.md` with a `## Verdict:` line and a non-empty `## Checked` section. A lens report that records no checked surfaces is incomplete work: rerun that lens rather than accepting it.
@@ -196,7 +197,14 @@ The plan.md should contain:
 <one-line summary>
 
 ## Approach
-<high-level description of the implementation approach>
+<high-level description of the implementation approach. Name the closest
+existing analogue in this repository for this kind of change and how the plan
+follows its shape. One line per new file, class, switch, or abstraction the
+plan introduces: the role boundary or constraint that requires it — and for a
+new entry point, switch, or hook, which existing ones were checked and why
+none fits. State where the change is contained: the fewest insertion points
+into existing shared modules, with platform-specific work behind the
+`Platform::` seam rather than inline conditional blocks.>
 
 ## Files to Modify
 <list of files that will be created or modified>
@@ -412,6 +420,13 @@ Do not author overlay code and do not implement anything in this phase.
 
 ## Phase 3: Plan Assessment
 
+Assessment has two rejection outcomes besides refinement, and both withhold
+`Assessed: yes` and send the performer back to a fresh Phase 1 leaf:
+`Fast-Path: rejected` when the performer's same-session Phase 1 undersized the
+task, and `Approach: rejected` when the plan is over-engineered or over-coupled
+beyond step-level repair. On an approach rejection the performer appends the
+assessor's named simpler direction to the Phase 1 rerun prompt.
+
 ```text
 You are a plan assessment agent. Review and refine an implementation plan.
 
@@ -426,7 +441,32 @@ Assess the plan:
 1. Correctness: Are the file paths and line references accurate? Does the plan reference real functions and types?
 2. Completeness: Are there missing steps? Edge cases not handled?
 3. Code quality: Will the plan minimize code duplication? Does it follow existing codebase patterns from AGENTS.md?
-4. Design: Could the approach be improved? Are there better patterns already used in the codebase?
+4. Approach fit — judge this adversarially, as the reviewer who must later
+   defend the diff. Anchor on precedent: find the closest existing feature of
+   the same kind in this repository and compare shapes; when the plan's
+   Approach names no analogue, find one yourself and record it. A plan several
+   times the size or spread of its precedent carries the burden of proof.
+   - Existing mechanism first: before the plan adds a new entry point, switch,
+     flag, hook, or IPC path, search for an existing one whose semantics
+     already fit. Riding an existing mechanism is the strongest simplification
+     this assessment can produce, and it can carry benefits a new surface
+     cannot — code already shipped may already invoke it.
+   - Containment: count the plan's insertion points into existing shared
+     modules. A feature woven through many functions of a global module —
+     platform-specific `#ifdef` blocks or feature-mode conditionals scattered
+     inline through cross-platform code — is the disaster shape even when
+     every hunk is small. Platform work belongs behind the `Platform::` seam;
+     a mode belongs in one contained flow, not in special cases threaded
+     through everything the module already did.
+   - Structure must be load-bearing: for each new file, class, abstraction, or
+     indirection, the plan must name what it enables — a second caller, a
+     second platform, a real layering constraint. A seam with one
+     implementation and no second user, a state machine over a linear flow, a
+     wrapper around a single call, and scaffolding for a testing style this
+     repository does not practice serve no purpose and come out of the plan.
+   - New files are not the problem: a focused file bounding a coherent role
+     beats both growing a mega-module and scattering through one; judge
+     whether the boundary does work, not whether it is new.
 5. Phase sizing: Each phase should be implementable by a single agent in one session. If a phase has more than about 8-10 substantive code changes, split it further.
 6. Visual contract (layout tasks): when visual.md exists, verify its anchors
    are real (the cited style tokens, fonts, and reference widgets exist),
@@ -439,10 +479,20 @@ Assess the plan:
    `Fast-Path: rejected` to the Status section, do NOT add `Assessed: yes`,
    and state what was underestimated; the performer must rerun Phase 1 as a
    fresh leaf.
+8. Approach rejection: when item 4 fails structurally — the approach is
+   several times larger, more scattered, or more coupled than the task
+   warrants and trimming individual steps would not fix it — do not refine
+   the plan. Add `Approach: rejected` to the Status section, do NOT add
+   `Assessed: yes`, and state in 2-3 lines the simpler direction: the
+   precedent or existing mechanism to ride on, which existing files absorb
+   the change, and where it stays contained. The performer reruns Phase 1 as
+   a fresh leaf with those lines as input.
 
 Update plan.md with your refinements. Keep the same structure but:
 - fix any inaccuracies
 - add missing steps
+- remove files, abstractions, and steps the task does not need — deletion is
+  as much a refinement as addition
 - improve the approach if you found better patterns
 - ensure phases are properly sized for single-agent execution
 - add a line at the top of the Status section: `Phases: <N>`
@@ -504,14 +554,16 @@ You are a build verification agent.
 Read these files:
 - <WORK_DIR>/context.md
 - <WORK_DIR>/plan.md
+- .agents/shared/build-lock-recovery.md
 
 The implementation is complete. Your job is to build the project and fix any build errors that block the planned work.
 
 Steps:
-1. Run the resolved Debug build command from context.md (`<BUILD>`) at the repository root. On WSL
+1. On native Windows, run the recovery contract's exact-path proactive cleanup.
+2. Run the resolved Debug build command from context.md (`<BUILD>`) at the repository root. On WSL
    this is the repository Docker entry point; do not run native Windows CMake against that tree.
-2. If the build succeeds, update plan.md: change `- [ ] Build verification` to `- [x] Build verification`
-3. If the build fails:
+3. If the build succeeds, update plan.md: change `- [ ] Build verification` to `- [x] Build verification`
+4. If the build fails:
    a. Read the error messages carefully
    b. Read the relevant source files
    c. Fix the errors in accordance with the plan and AGENTS.md conventions
@@ -521,7 +573,9 @@ Steps:
 Rules:
 - Only fix build errors. Do not refactor or improve code beyond what is needed for a passing build.
 - Follow AGENTS.md conventions.
-- If build fails with file-locked errors (C1041, LNK1104, "cannot open output file", or similar access-denied lock issues), stop and report the lock. Do not retry.
+- If the build fails with C1041, LNK1104, "cannot open output file", or a similar
+  access-denied lock, follow the shared bounded recovery contract. Do not edit
+  source to work around an environment lock.
 - You are not alone in the codebase. Respect existing changes and do not revert unrelated work.
 
 When finished, report the build result and which files, if any, you changed.
@@ -694,9 +748,10 @@ This lens is not satisfied by reading the diff. Reuse lives OUTSIDE the diff, wh
 is exactly why a single generalist reviewer misses it. Search the repository before
 you judge anything.
 
-- For each helper, widget, algorithm, constant, string, or style value the change
-  introduces: search for an existing equivalent, then either use it or state in your
-  report why the existing one does not fit. Report the search you ran.
+- For each helper, widget, algorithm, constant, string, style value, entry
+  point, or command-line switch the change introduces: search for an existing
+  equivalent, then either use it or state in your report why the existing one
+  does not fit. Report the search you ran.
 - Logic repeated within the change itself that should be shared.
 - A reimplementation of an established repository pattern instead of following it —
   the strongest finding this lens produces, and the one that compounds worst if it
@@ -718,6 +773,18 @@ codebase, and is it no bigger than it needs to be?
 - Minimality: diff hunks with no functional effect; changes broader than the task
   requires; abstraction, indirection, validation, or error handling for cases that
   cannot happen; a compatibility shim or flag where the code can simply change.
+- Scatter: task or platform logic threaded through many existing functions of a
+  shared module. Platform-specific `#ifdef` blocks inline in cross-platform code
+  where a `Platform::` seam exists, or a mode's special cases woven through a
+  module's existing flow instead of one contained hook, are findings even when
+  each hunk is small.
+- Load-bearing structure: every new file, class, or seam needs a nameable
+  enabling purpose — a second user, a second platform, a real layering
+  constraint. An interface with one implementation, a state machine over a
+  linear flow, a wrapper around a single call, or scaffolding for a testing
+  style this repository does not practice is structure without purpose. A
+  focused new file bounding a coherent role is not a finding — that beats
+  growing a mega-module.
 - Dead code: anything added or left behind that nothing reaches.
 - Conventions: REVIEW.md mechanical rules and AGENTS.md coding conventions.
 - Local idiom: comment density, naming, and construction match the surrounding code.
@@ -792,11 +859,69 @@ Write <WORK_DIR>/test-design.md:
   observed
 - a run plan compressed to the fewest possible runs — normally exactly one —
   splitting only for checks that cannot share one process lifetime
+- a fixture fallback plan naming at least two progressively more direct ways
+  to reach the changed production seam if the preferred fixture does not
+  materialize; do not make unrelated UI setup a single point of failure
 - a `## Reconcile` line reminding the test author to re-verify every check
   against the final retained diff after the review loop
 
 Every check needs an oracle that can come out FAIL. "The screen opened" is
 not a check. Do not reuse a generic navigate-and-screenshot scenario.
+```
+
+## Test-Flaw Recovery And Directness
+
+Use this prompt for every `TEST_FLAW` recovery. On a repeated signature, use a
+fresh leaf and include every prior recovery plan. Do not ask it to "try again"
+or merely repair the same fixture.
+
+```text
+You are a test-recovery agent for one Telegram Desktop task. The product
+implementation is retained; repair only the disposable test overlay and its
+test report. You are a leaf and must not delegate.
+
+Read:
+- the task spec and final retained task diff
+- <WORK_DIR>/test-design.md
+- <WORK_DIR>/test.md, including every prior Run and Recovery plan
+- <WORK_DIR>/test-overlay.paths and the current saved overlay
+- .agents/shared/test-loop.md, especially the repeated-failure directness ladder
+
+The latest failure signature is:
+<FAILURE_SIGNATURE>
+
+The previous fixture/recovery techniques are forbidden:
+<FORBIDDEN_TECHNIQUES>
+
+Before editing, append a Recovery plan to the pending Run in test.md:
+- Prior proof: the positive facts already established by earlier runs
+- Failed assumption: the exact setup predicate or fixture behavior that failed
+- Forbidden technique: the approach you will not repeat
+- New directness strategy: the next unused ladder strategy
+- Reachability: why this strategy reaches the task's changed production code
+  even if the failed setup never succeeds
+
+Then implement the recovery. Prefer fewer assumptions and more manual control:
+- insert the production object by hand through an established data API;
+- add a narrow inventoried _DEBUG seam and call the real changed
+  collector/handler directly when unrelated UI setup is flaky;
+- place that seam in any relevant tracked production file or initialized
+  submodule when centralizing it in test_scenario.cpp adds indirection;
+- inject the exact server response/error at the callback or transport seam for
+  retry behavior;
+- use a real disposable account fixture or exact Qt input only when those are
+  part of the behavior under test.
+
+Keep an independent falsifiable oracle. A direct seam may bypass setup outside
+the task diff, but it must not reimplement or bypass the changed code itself.
+Fix every test flaw visible in the latest run together, build Debug, and return
+the compact phase block.
+
+If no unused strategy can safely reach the changed code, do not cite the
+repeated signature as the reason. Add `## Recovery exhaustion` to test.md with
+one row per ladder strategy: attempted evidence, or the concrete reason it is
+unsafe, unavailable, or would bypass the task diff. Return `BLOCKED` for the
+performer to confirm independently.
 ```
 
 ### Step 6s: Review synthesis
@@ -864,6 +989,7 @@ Read these files:
 - <WORK_DIR>/context.md
 - <WORK_DIR>/plan.md
 - <WORK_DIR>/review<R>.md
+- .agents/shared/build-lock-recovery.md
 
 Then read the source files mentioned in the review.
 
@@ -884,9 +1010,11 @@ Rules:
   and report. An empty fix is a valid and complete outcome.
 
 After all changes are made:
-1. Run the resolved Debug build command from context.md (`<BUILD>`) at the repository root.
-2. If the build fails, fix build errors and rebuild until it passes.
-3. If build fails with file-locked errors (C1041, LNK1104, "cannot open output file", or similar access-denied lock issues), stop and report the lock. Do not retry.
+1. On native Windows, run the recovery contract's exact-path proactive cleanup.
+2. Run the resolved Debug build command from context.md (`<BUILD>`) at the repository root.
+3. If the build fails, fix build errors and rebuild until it passes.
+4. If the build fails with C1041, LNK1104, "cannot open output file", or a
+   similar access-denied lock, follow the shared bounded recovery contract.
 
 When finished, report what changes were made and which files you touched.
 ```

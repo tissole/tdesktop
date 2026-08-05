@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "test/test_agent.h"
 
+#ifdef _DEBUG
+
 #include "test/test_log.h"
 #include "settings.h"
 #include "ui/style/style_core_scale.h"
@@ -22,11 +24,7 @@ namespace {
 } // namespace
 
 bool Active() {
-#ifdef _DEBUG
 	return cTestAgent();
-#else // _DEBUG
-	return false;
-#endif // _DEBUG
 }
 
 void ApplyStartupOverrides() {
@@ -34,17 +32,25 @@ void ApplyStartupOverrides() {
 		return;
 	}
 	const auto value = qEnvironmentVariable("TDESKTOP_TEST_SCALE");
-	if (value.isEmpty()) {
-		return;
+	auto selectedScale = style::kScaleDefault;
+	auto source = u"default"_q;
+	if (!value.isEmpty()) {
+		auto ok = false;
+		const auto scale = value.toInt(&ok);
+		if (ok && scale >= style::kScaleMin && scale <= style::kScaleMax) {
+			selectedScale = style::CheckScale(scale);
+			source = u"environment"_q;
+		} else {
+			Note(u"TDESKTOP_TEST_SCALE rejected: %1"_q.arg(value));
+		}
 	}
-	auto ok = false;
-	const auto scale = value.toInt(&ok);
-	if (ok && scale >= style::kScaleMin && scale <= style::kScaleMax) {
-		cSetConfigScale(scale);
-		Note(u"TDESKTOP_TEST_SCALE applied: %1"_q.arg(scale));
-	} else {
-		Note(u"TDESKTOP_TEST_SCALE rejected: %1"_q.arg(value));
-	}
+	cSetConfigScale(selectedScale);
+	const auto report = u"TDESKTOP_TEST_SCALE=[%1] applied: %2 source=%3"_q
+		.arg(
+			value,
+			QString::number(selectedScale),
+			source);
+	Note(report);
 }
 
 void Fire(const QString &event) {
@@ -59,3 +65,25 @@ bool HasFired(const QString &event) {
 }
 
 } // namespace Test
+
+#else // _DEBUG
+
+namespace Test {
+
+bool Active() {
+	return false;
+}
+
+void ApplyStartupOverrides() {
+}
+
+void Fire(const QString &) {
+}
+
+bool HasFired(const QString &) {
+	return false;
+}
+
+} // namespace Test
+
+#endif // _DEBUG
