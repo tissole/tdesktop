@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document_media.h"
 #include "data/data_photo.h"
 #include "data/data_session.h"
+#include "data/data_msg_id.h"
 #include "data/data_channel.h"
 #include "data/data_changes.h"
 #include "data/data_dedup_db.h"
@@ -116,6 +117,8 @@ struct Uploader::Entry {
 	std::shared_ptr<FilePrepareResult> file;
 	not_null<std::vector<QByteArray>*> parts;
 	uint64 partsOfId = 0;
+
+	int jobIndex = 0;
 
 	int64 sentSize = 0;
 	ushort partsSent = 0;
@@ -273,9 +276,23 @@ void Uploader::finishInit() {
 	const auto session = &_api->session();
 	loadFinishedUploadsFromAccount();
 	session->account().local().updateUploads(serializeFinishedUploads());
-	session->data().itemIdChanged(
+session->data().itemIdChanged(
 	) | rpl::on_next([=](const Data::Session::IdChange &change) {
 		const auto oldFullId = FullMsgId(change.newId.peer, change.oldId);
+		if (const auto i = _awaitingFinishedUploads.find(oldFullId);
+			i != _awaitingFinishedUploads.end()) {
+			auto awaiting = std::move(i->second);
+			_awaitingFinishedUploads.erase(i);
+			if (IsServerMsgId(change.newId.msg)) {
+				awaiting.itemId = change.newId;
+				commitFinishedUpload(std::move(awaiting));
+			} else {
+				awaiting.itemId = change.newId;
+				_awaitingFinishedUploads.emplace(
+					change.newId,
+					std::move(awaiting));
+			}
+		}
 		_finishedUploads.remove(oldFullId);
 		_finishedUploads.emplace(change.newId);
 		for (auto &info : _finishedUploadsList) {
@@ -284,7 +301,7 @@ void Uploader::finishInit() {
 				break;
 			}
 		}
-		session->account().local().updateUploads(serializeFinishedUploads());
+session->account().local().updateUploads(serializeFinishedUploads());
 	}, _lifetime);
 }
 
@@ -478,7 +495,15 @@ void Uploader::upload(
 		}
 	}
 
+	const auto newJob = _queue.empty();
 	_queue.push_back(Entry(itemId, file, resumeFromParts));
+	if (newJob) {
+		++_jobId;
+	}
+	_queue.back().jobIndex = _jobId;
+	if (!EnhancedForward::isEnhancedUpload(itemId)) {
+		_jobCounterChanged.fire({});
+	}
 	saveResumeState(true);
 	_uploadListChanges.fire(rpl::empty_value{});
 	if (!_nextTimer.isActive()) {
@@ -1044,16 +1069,24 @@ void Uploader::finishFront() {
 	if (entry.file) {
 		clearResumeState(entry.itemId.peer, entry.file->filepath);
 	}
-	_finishedUploads.emplace(entry.itemId);
 	if (entry.file) {
+		auto started = int64(base::unixtime::now()) * 1000;
+		if (const auto item = session().data().message(entry.itemId)) {
+			started = int64(item->date()) * 1000;
+		}
 		auto info = FinishedUpload{
 			.itemId = entry.itemId,
 			.filename = entry.file->filepath,
-			.started = int64(base::unixtime::now()) * 1000,
+			.started = started,
+			.jobIndex = entry.jobIndex,
 		};
-		_finishedUploadsList.push_back(std::move(info));
-		_finishedUploadAdded.fire_copy(entry.itemId);
-		session().account().local().updateUploads(serializeFinishedUploads());
+		if (IsServerMsgId(entry.itemId.msg)) {
+			commitFinishedUpload(std::move(info));
+		} else {
+			_awaitingFinishedUploads.emplace(
+				entry.itemId,
+				std::move(info));
+		}
 	}
 
 	const auto options = entry.file
@@ -1291,9 +1324,12 @@ Fn<std::optional<QByteArray>()> Uploader::serializeFinishedUploads() {
 		const auto count = _finishedUploadsList.size();
 		const auto constant = sizeof(quint64) // itemId.peer
 			+ sizeof(qint64) // itemId.msg
-			+ sizeof(qint64); // started
-		auto size = sizeof(qint32) // count
-			+ count * constant;
+			+ sizeof(qint64) // started
+			+ sizeof(qint32); // jobIndex
+		auto size = sizeof(qint32) // version
+			+ sizeof(qint32) // count
+			+ count * constant
+			+ sizeof(qint32); // jobId
 		for (const auto &upload : _finishedUploadsList) {
 			size += Serialize::stringSize(upload.filename);
 		}
@@ -1301,14 +1337,16 @@ Fn<std::optional<QByteArray>()> Uploader::serializeFinishedUploads() {
 
 		auto stream = QDataStream(&result, QIODevice::WriteOnly);
 		stream.setVersion(QDataStream::Qt_5_1);
-		stream << qint32(count);
+		stream << qint32(-1) << qint32(int(count));
 		for (const auto &upload : _finishedUploadsList) {
 			stream
 				<< quint64(upload.itemId.peer.value)
 				<< qint64(upload.itemId.msg.bare)
 				<< qint64(upload.started)
-				<< upload.filename;
+				<< upload.filename
+				<< qint32(upload.jobIndex);
 		}
+		stream << qint32(_jobId);
 		stream.device()->close();
 
 		return result;
@@ -1326,7 +1364,16 @@ void Uploader::loadFinishedUploadsFromAccount() {
 
 	auto count = qint32();
 	stream >> count;
-	if (stream.status() != QDataStream::Ok || count < 0 || count > 99'999) {
+	if (stream.status() != QDataStream::Ok) {
+		return;
+	}
+	const auto legacy = (count >= 0);
+	if (!legacy) {
+		stream >> count;
+	}
+	if (stream.status() != QDataStream::Ok
+		|| count < 0
+		|| count > 99'999) {
 		return;
 	}
 	for (auto i = 0; i != count; ++i) {
@@ -1339,6 +1386,10 @@ void Uploader::loadFinishedUploadsFromAccount() {
 			>> msgIdBare
 			>> started
 			>> filename;
+		auto jobIndex = qint32(0);
+		if (!legacy) {
+			stream >> jobIndex;
+		}
 		if (stream.status() != QDataStream::Ok) {
 			return;
 		}
@@ -1348,8 +1399,23 @@ void Uploader::loadFinishedUploadsFromAccount() {
 			.itemId = itemId,
 			.filename = filename,
 			.started = started,
+			.jobIndex = legacy ? 0 : int(jobIndex),
 		});
 	}
+	if (legacy) {
+		_jobId = 1;
+	} else if (!stream.atEnd()) {
+		stream >> _jobId;
+	}
+}
+
+void Uploader::commitFinishedUpload(FinishedUpload &&upload) {
+	_finishedUploads.emplace(upload.itemId);
+	_finishedUploadsList.push_back(std::move(upload));
+	_finishedUploadAdded.fire_copy(upload.itemId);
+	_jobCounterChanged.fire({});
+	notifyListChanged();
+	session().account().local().updateUploads(serializeFinishedUploads());
 }
 
 void Uploader::saveResumeState(bool force) {
@@ -1699,10 +1765,50 @@ int Uploader::anyFinishedUploads() const {
 	return int(_finishedUploads.size());
 }
 
+int Uploader::jobTotal() const {
+	auto result = 0;
+	for (const auto &entry : _queue) {
+		if (entry.jobIndex == _jobId
+			&& !EnhancedForward::isEnhancedUpload(entry.itemId)) {
+			++result;
+		}
+	}
+	for (const auto &[itemId, upload] : _awaitingFinishedUploads) {
+		if (upload.jobIndex == _jobId
+			&& !EnhancedForward::isEnhancedUpload(itemId)) {
+			++result;
+		}
+	}
+	for (const auto &upload : _finishedUploadsList) {
+		if (upload.jobIndex == _jobId
+			&& !EnhancedForward::isEnhancedUpload(upload.itemId)) {
+			++result;
+		}
+	}
+	return result;
+}
+
+int Uploader::jobDone() const {
+	auto result = 0;
+	for (const auto &upload : _finishedUploadsList) {
+		if (upload.jobIndex == _jobId
+			&& !EnhancedForward::isEnhancedUpload(upload.itemId)) {
+			++result;
+		}
+	}
+	return result;
+}
+
+rpl::producer<> Uploader::jobCounterChanged() const {
+	return _jobCounterChanged.events();
+}
+
 void Uploader::clearFinishedUploads() {
 	_finishedUploads.clear();
 	_finishedUploadsList.clear();
+	_awaitingFinishedUploads.clear();
 	_finishedUploadsCleared.fire(rpl::empty_value{});
+	_jobCounterChanged.fire({});
 	notifyListChanged();
 	session().account().local().updateUploads(serializeFinishedUploads());
 }
@@ -1728,6 +1834,8 @@ void Uploader::removeFinishedUpload(FullMsgId itemId) {
 	_finishedUploadsList.erase(
 		ranges::remove(_finishedUploadsList, itemId, &FinishedUpload::itemId),
 		end(_finishedUploadsList));
+	_awaitingFinishedUploads.erase(itemId);
+	_jobCounterChanged.fire({});
 	_finishedUploadRemoved.fire_copy(itemId);
 	notifyListChanged();
 	session().account().local().updateUploads(serializeFinishedUploads());

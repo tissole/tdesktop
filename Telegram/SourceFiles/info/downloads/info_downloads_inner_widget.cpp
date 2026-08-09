@@ -88,6 +88,7 @@ InnerWidget::InnerWidget(
 , _controller(controller)
 , _list(this, _controller)
 , _empty(this) {
+	_counter.create(this, st::downloadsCounter);
 	const auto heightLifetime = std::make_shared<rpl::lifetime>();
 	_list->heightValue(
 	) | rpl::on_next(
@@ -109,6 +110,17 @@ InnerWidget::InnerWidget(
 	) | rpl::on_next(
 		[this] { refreshHeight(); },
 		_empty->lifetime());
+
+	_counter->heightValue(
+	) | rpl::on_next(
+		[this] { refreshHeight(); },
+		_counter->lifetime());
+	provider()->counterValue(
+	) | rpl::on_next([=](const QString &text) {
+		_counter->setText(text);
+		_counter->setVisible(!text.isEmpty());
+		refreshHeight();
+	}, _counter->lifetime());
 }
 
 void InnerWidget::visibleTopBottomUpdated(
@@ -180,6 +192,7 @@ int InnerWidget::resizeGetHeight(int newWidth) {
 
 	_list->resizeToWidth(newWidth);
 	_empty->resizeToWidth(newWidth);
+	_counter->resizeToWidth(newWidth);
 	return recountHeight();
 }
 
@@ -192,6 +205,13 @@ void InnerWidget::refreshHeight() {
 
 int InnerWidget::recountHeight() {
 	auto top = 0;
+	const auto counterShown = !_counter->isHidden();
+	if (counterShown) {
+		top += st::downloadsCounterSkip;
+		_counter->moveToLeft(0, top);
+		top += _counter->heightNoMargins();
+		top += st::downloadsCounterSkip;
+	}
 	if (_list->heightNoMargins() > 0) {
 		_list->moveToLeft(0, top);
 		top += _list->heightNoMargins();

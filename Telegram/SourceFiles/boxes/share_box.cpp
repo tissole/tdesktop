@@ -2094,8 +2094,9 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 		}
 
 		LOG(("ENHANCED_FWD: share_box classifyItems items=%1").arg(items.size()));
-		if (!EnhancedForward::classifyItems(items).restricted.empty()) {
-			auto &api = history->session().api();
+		EnhancedForward::classifyItems(items, [=](const EnhancedForward::Split &split) mutable {
+			if (!split.restricted.empty()) {
+				auto &api = history->session().api();
 			const auto remaining = std::make_shared<int>(
 				int(result.size()));
 			for (const auto &thread : result) {
@@ -2416,6 +2417,7 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 		if (state->submitCallback) {
 			state->submitCallback();
 		}
+		});
 	};
 }
 

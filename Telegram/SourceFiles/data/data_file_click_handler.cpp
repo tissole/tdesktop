@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document.h"
 #include "data/data_session.h"
 #include "data/data_download_manager.h"
+#include "enhanced_forward.h"
 #include "storage/file_upload.h"
 #include "data/data_photo.h"
 #include "data/data_peer.h"
@@ -199,7 +200,39 @@ void DocumentCancelClickHandler::onClickImpl() const {
 	const auto data = document();
 	if (data->isNull()) {
 		return;
-	} else if (data->uploading()) {
+	}
+	if (const auto item = data->owner().message(context())) {
+		if (EnhancedForward::isEnhancedForwardItem(
+				&item->history()->session(),
+				item)) {
+			const auto weak = base::make_weak(&item->history()->session());
+			const auto id = item->fullId();
+			auto box = Box([=](not_null<Ui::GenericBox*> box) {
+				box->addRow(object_ptr<Ui::FlatLabel>(
+					box.get(),
+					tr::lng_enhanced_forward_cancel_confirm(tr::now),
+					st::boxLabel));
+				box->setStyle(st::defaultBox);
+				box->addButton(tr::lng_enhanced_forward_cancel_yes(), [=] {
+					box->closeBox();
+					if (const auto strong = weak.get()) {
+						if (const auto live = strong->data().message(id)) {
+							EnhancedForward::cancelItemByMessage(strong, live);
+						}
+					}
+				}, st::attentionBoxButton);
+				box->addButton(tr::lng_enhanced_forward_cancel_no(), [=] {
+					box->closeBox();
+				});
+			});
+			if (const auto window = Core::App().windowFor(
+					not_null(&item->history()->session().account()))) {
+				window->show(std::move(box));
+			}
+			return;
+		}
+	}
+	if (data->uploading()) {
 		if (_handler) {
 			_handler(context());
 		} else if (const auto item = data->owner().message(context())) {

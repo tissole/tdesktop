@@ -82,9 +82,16 @@ public:
 		not_null<DocumentData*> document) override;
 	bool isUploadItem(not_null<const HistoryItem*> item) const;
 	bool isEnhancedForward(not_null<const HistoryItem*> item) const;
+	bool isDownloading(not_null<const HistoryItem*> item) const;
+	bool isDownloaded(not_null<const HistoryItem*> item) const;
+	bool isUploading(not_null<const HistoryItem*> item) const;
+	bool isUploaded(not_null<const HistoryItem*> item) const;
+	bool isEnhancedForwardFinished(not_null<const HistoryItem*> item) const;
 	QString showInFolderPath(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) override;
+
+	[[nodiscard]] rpl::producer<QString> counterValue() const;
 
 
 	int64 scrollTopStatePosition(not_null<HistoryItem*> item) override;
@@ -106,6 +113,12 @@ private:
 		QStringList words;
 		base::flat_set<QChar> letters;
 		bool found = false;
+	};
+
+	struct PendingFinishedUpload {
+		not_null<Main::Session*> session;
+		int64 started = 0;
+		QString path;
 	};
 
 	bool sectionHasFloatingHeader() override;
@@ -130,6 +143,12 @@ private:
 	void addElementNow(Element &&element);
 	void remove(not_null<const HistoryItem*> item);
 	void trackItemSession(not_null<const HistoryItem*> item);
+	void updateCounter();
+	void addFinishedUpload(
+		not_null<Main::Session*> session,
+		FullMsgId itemId,
+		const PendingFinishedUpload &upload);
+	void resolvePendingFinishedUploads(not_null<Main::Session*> session);
 
 	[[nodiscard]] Media::BaseLayout *getLayout(
 		Element element,
@@ -147,13 +166,15 @@ private:
 	base::flat_set<not_null<const HistoryItem*>> _downloaded;
 	base::flat_set<FullMsgId> _uploading;
 	base::flat_set<FullMsgId> _uploaded;
+	base::flat_map<FullMsgId, PendingFinishedUpload> _pendingFinishedUploads;
+	base::flat_set<FullMsgId> _pendingFinishedUploadsFetching;
 	int _storiesAddToAlbumId = 0;
 
 	Filter _filter = Filter::All;
 	bool _showGroupHeaders = false;
 	rpl::variable<bool> _hasDownloads = false;
 	rpl::variable<bool> _hasUploads = false;
-
+	rpl::variable<QString> _counterText;
 	std::vector<Element> _addPostponed;
 
 	std::unordered_map<

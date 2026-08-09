@@ -956,6 +956,13 @@ infoEmptyLabel: FlatLabel(defaultFlatLabel) {
 	minWidth: 220px;
 	textFg: windowSubTextFg;
 }
+downloadsCounter: FlatLabel(defaultFlatLabel) {
+	minWidth: 220px;
+	align: align(center);
+	style: semiboldTextStyle;
+	textFg: windowSubTextFg;
+}
+downloadsCounterSkip: 6px;
 
 infoStoriesAboutArchive: FlatLabel(defaultFlatLabel) {
 	minWidth: 245px;

@@ -222,6 +222,9 @@ private:
 	void forwardItem(GlobalMsgId globalId);
 	void forwardItems(MessageIdsList &&items);
 	void deleteSelected();
+	void cancelSelected();
+	void deleteFinishedSelected();
+	void clearSelectedItems();
 	void toggleStoryPinSelected();
 	void toggleStoryInProfileSelected(bool toProfile);
 	void deleteItem(GlobalMsgId globalId);

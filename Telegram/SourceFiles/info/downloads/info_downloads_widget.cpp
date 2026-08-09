@@ -20,6 +20,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_download_manager.h"
 #include "data/data_user.h"
 #include "enhanced_forward.h"
+#include "history/history.h"
+#include "history/history_item.h"
 #include "main/main_session.h"
 #include "main/main_account.h"
 #include "main/main_domain.h"
@@ -193,77 +195,114 @@ void Widget::selectionAction(SelectionAction action) {
 
 void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 	const auto window = controller()->parentController();
-	const auto &loadingManager = Core::App().downloadManager();
+	auto &loadingManager = Core::App().downloadManager();
 	const auto showDownloads = (_currentTab == Tab::Downloads) && _hasDownloads;
 	const auto showUploads = (_currentTab == Tab::Uploads) && _hasUploads;
 
-	if (_currentTab == Tab::Forwards) {
+	const auto downloadsRunning = loadingManager.anyResumable();
+	const auto downloadsPaused = loadingManager.anyPaused();
+	const auto downloadsFinished = loadingManager.anyFinishedLoading();
+	const auto uploadsActive = Core::App().uploaderAny();
+	const auto uploadsPaused = Core::App().uploaderAnyPaused();
+	const auto uploadsOnlyOnDisk = !uploadsActive
+		&& (Core::App().uploaderPendingResumeCount() > 0);
+	const auto uploadsFinished = Core::App().uploaderAnyFinished();
+
+	auto forwardsActive = false;
+	auto forwardsPaused = false;
+	auto forwardsFinished = false;
+	if (_currentTab == Tab::Forwards || _currentTab == Tab::Both) {
 		const auto session = &window->session();
-		const auto jobs = EnhancedForward::AllJobs(session);
-		auto hasActive = false;
-		auto hasPaused = false;
-		auto hasFinished = false;
-		for (const auto &job : jobs) {
-			if (job.progress.state == EnhancedForward::State::Paused) {
-				hasPaused = true;
-			}
+		for (const auto &job : EnhancedForward::AllJobs(session)) {
 			if (job.active) {
-				hasActive = true;
-			}
-			if (job.finished) {
-				hasFinished = true;
+				forwardsActive = true;
+				if (job.progress.state == EnhancedForward::State::Paused) {
+					forwardsPaused = true;
+				}
+			} else if (job.finished) {
+				forwardsFinished = true;
 			}
 		}
-		if (hasPaused) {
+	}
+
+	const auto finishedDownloadIds = [] {
+		auto result = std::vector<GlobalMsgId>();
+		auto &manager = Core::App().downloadManager();
+		for (const auto &id : manager.loadedList()) {
+			if (id->object) {
+				result.push_back({
+					.itemId = id->itemId,
+					.sessionUniqueId = id->object->item->history()
+						->session().uniqueId(),
+				});
+			}
+		}
+		return result;
+	};
+
+	if (_currentTab == Tab::Forwards) {
+		if (forwardsPaused) {
 			addAction(
-				tr::lng_enhanced_forward_resume(tr::now),
+				tr::lng_tm_fw_resume(tr::now),
 				[=] {
 					Ui::PostponeCall(this, [=] {
-						for (const auto &job : jobs) {
-							EnhancedForward::resumeForward(job.peer, session);
+						const auto session = &window->session();
+						for (const auto &job : EnhancedForward::AllJobs(session)) {
+							if (job.active
+								&& job.progress.state
+									== EnhancedForward::State::Paused) {
+								EnhancedForward::resumeForward(job.peer, session);
+							}
 						}
 					});
 				},
 				&st::menuIconDownload);
-		} else if (hasActive) {
+		} else if (forwardsActive) {
 			addAction(
-				tr::lng_enhanced_forward_pause(tr::now),
+				tr::lng_tm_fw_pause(tr::now),
 				[=] {
 					Ui::PostponeCall(this, [=] {
-						for (const auto &job : jobs) {
-							EnhancedForward::pauseForward(job.peer, session);
+						const auto session = &window->session();
+						for (const auto &job : EnhancedForward::AllJobs(session)) {
+							if (job.active) {
+								EnhancedForward::pauseForward(job.peer, session);
+							}
 						}
 					});
 				},
 				&st::menuIconSchedule);
 		}
-		if (hasActive || hasPaused) {
+		if (forwardsActive || forwardsPaused) {
 			addAction(
-				tr::lng_enhanced_forward_cancel_all(tr::now),
+				tr::lng_tm_fw_cancel(tr::now),
 				[=] {
 					window->show(Ui::MakeConfirmBox({
 						.text = tr::lng_enhanced_forward_cancel_all_confirm(tr::now),
 						.confirmed = [=](Fn<void()> close) {
 							close();
 							Ui::PostponeCall(this, [=] {
-								EnhancedForward::CancelAll(session);
+								EnhancedForward::CancelAll(&window->session());
 							});
 						},
-						.confirmText = tr::lng_enhanced_forward_cancel(tr::now),
+						.confirmText = tr::lng_box_yes(tr::now),
+						.cancelText = tr::lng_box_no(tr::now),
 						.confirmStyle = &st::attentionBoxButton,
 					}));
 				},
 				&st::menuIconCancel);
 		}
-		if (hasFinished) {
+		if (forwardsFinished) {
 			addAction(
-				tr::lng_enhanced_forward_clear_all(tr::now),
+				tr::lng_tm_fw_clear(tr::now),
 				[=] {
-					for (const auto &job : jobs) {
-						if (job.finished) {
-							EnhancedForward::ClearFinished(session, job.peer);
+					Ui::PostponeCall(this, [=] {
+						const auto session = &window->session();
+						for (const auto &job : EnhancedForward::AllJobs(session)) {
+							if (job.finished) {
+								EnhancedForward::ClearFinished(session, job.peer);
+							}
 						}
-					}
+					});
 				},
 				&st::menuIconClear);
 		}
@@ -271,51 +310,121 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 	}
 
 	if (_currentTab == Tab::Both) {
-		const auto hasFinishedDownloads = loadingManager.anyFinishedLoading();
-		const auto hasFinishedUploads = Core::App().uploaderAnyFinished();
-		const auto hasAnyDownloads = loadingManager.anyResumable()
-			|| loadingManager.anyPaused()
-			|| hasFinishedDownloads;
-
-		if (hasFinishedDownloads || hasFinishedUploads) {
+		if (!_hasDownloads && !_hasUploads
+			&& !forwardsActive && !forwardsPaused && !forwardsFinished) {
+			return;
+		}
+		const auto hasAnyRunning = downloadsRunning
+			|| uploadsActive
+			|| forwardsActive;
+		const auto hasAnyPaused = downloadsPaused
+			|| uploadsPaused
+			|| uploadsOnlyOnDisk
+			|| forwardsPaused;
+		const auto hasAnyFinished = downloadsFinished
+			|| uploadsFinished
+			|| forwardsFinished;
+		if (hasAnyRunning && !hasAnyPaused) {
 			addAction(
-				tr::lng_uploads_clear_all(tr::now),
+				tr::lng_tm_all_pause(tr::now),
 				[=] {
 					Ui::PostponeCall(this, [=] {
-						Core::App().downloadManager().clearFinishedLoading();
-						Core::App().uploaderClearFinished();
+						Core::App().downloadManager().pauseAll();
+						Core::App().uploaderPauseAll();
+						const auto session = &window->session();
+						for (const auto &job : EnhancedForward::AllJobs(session)) {
+							if (job.active) {
+								EnhancedForward::pauseForward(job.peer, session);
+							}
+						}
 					});
 				},
-				&st::menuIconClear);
-		}
-		if (hasAnyDownloads || hasFinishedUploads) {
+				&st::menuIconSchedule);
+		} else if (hasAnyPaused) {
 			addAction(
-				tr::lng_group_invite_context_delete_all(tr::now),
+				tr::lng_tm_all_resume(tr::now),
+				[=] {
+					Ui::PostponeCall(this, [=] {
+						Core::App().downloadManager().resumeAll();
+						Core::App().uploaderResumeAll();
+						const auto session = &window->session();
+						for (const auto &job : EnhancedForward::AllJobs(session)) {
+							if (job.active
+								&& job.progress.state
+									== EnhancedForward::State::Paused) {
+								EnhancedForward::resumeForward(job.peer, session);
+							}
+						}
+					});
+				},
+				&st::menuIconDownload);
+		}
+		if (hasAnyRunning || hasAnyPaused) {
+			addAction(
+				tr::lng_tm_all_cancel(tr::now),
 				[=] {
 					window->show(Ui::MakeConfirmBox({
-						.text = tr::lng_downloads_delete_sure_all(tr::now),
+						.text = tr::lng_tm_all_cancel_confirm(tr::now),
 						.confirmed = [=](Fn<void()> close) {
 							close();
 							Ui::PostponeCall(this, [=] {
-								Core::App().downloadManager().deleteAll();
-								Core::App().uploaderDeleteAllFinished();
-								const auto session = &window->session();
-								EnhancedForward::CancelAll(session);
+								Core::App().downloadManager().cancelAll();
+								Core::App().uploaderCancelAll();
+								EnhancedForward::CancelAll(&window->session());
 							});
 						},
-						.confirmText = tr::lng_box_delete(tr::now),
+						.confirmText = tr::lng_box_yes(tr::now),
+						.cancelText = tr::lng_box_no(tr::now),
+						.confirmStyle = &st::attentionBoxButton,
+					}));
+				},
+				&st::menuIconCancel);
+		}
+		if (downloadsFinished || uploadsFinished) {
+			addAction(
+				tr::lng_tm_all_delete(tr::now),
+				[=] {
+					window->show(Ui::MakeConfirmBox({
+						.text = tr::lng_tm_all_delete_confirm(tr::now),
+						.confirmed = [=](Fn<void()> close) {
+							close();
+							Ui::PostponeCall(this, [=] {
+								auto ids = finishedDownloadIds();
+								if (!ids.empty()) {
+									Core::App().downloadManager().deleteFiles(
+										std::move(ids));
+								}
+								Core::App().uploaderDeleteAllFinished();
+							});
+						},
+						.confirmText = tr::lng_box_yes(tr::now),
+						.cancelText = tr::lng_box_no(tr::now),
 						.confirmStyle = &st::attentionBoxButton,
 					}));
 				},
 				&st::menuIconDelete);
 		}
+		if (hasAnyFinished) {
+			addAction(
+				tr::lng_tm_all_clear(tr::now),
+				[=] {
+					Ui::PostponeCall(this, [=] {
+						Core::App().downloadManager().clearFinishedLoading();
+						Core::App().uploaderClearFinished();
+						const auto session = &window->session();
+						for (const auto &job : EnhancedForward::AllJobs(session)) {
+							if (job.finished) {
+								EnhancedForward::ClearFinished(session, job.peer);
+							}
+						}
+					});
+				},
+				&st::menuIconClear);
+		}
 		return;
 	}
 
 	if (showDownloads) {
-		const auto downloadsRunning = loadingManager.anyResumable();
-		const auto downloadsPaused = loadingManager.anyPaused();
-		const auto downloadsFinished = loadingManager.anyFinishedLoading();
 		if (downloadsRunning && !downloadsPaused) {
 			addAction(
 				tr::lng_downloads_pause_all(tr::now),
@@ -347,33 +456,39 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 								Core::App().downloadManager().cancelAll();
 							});
 						},
-						.confirmText = tr::lng_box_delete(tr::now),
+						.confirmText = tr::lng_box_yes(tr::now),
+						.cancelText = tr::lng_box_no(tr::now),
 						.confirmStyle = &st::attentionBoxButton,
 					}));
 				},
 				&st::menuIconCancel);
 		}
 		if (downloadsFinished) {
-			const auto deleteAll = [=] {
-				auto &manager = Core::App().downloadManager();
-				const auto phrase = tr::lng_downloads_delete_sure_all(tr::now);
-				const auto added = manager.loadedHasNonCloudFile()
-					? QString()
-					: tr::lng_downloads_delete_in_cloud(tr::now);
-				const auto deleteSure = [=, &manager](Fn<void()> close) {
-					Ui::PostponeCall(this, close);
-					manager.deleteAll();
-				};
-				window->show(Ui::MakeConfirmBox({
-					.text = phrase + (added.isEmpty() ? QString() : "\n\n" + added),
-					.confirmed = deleteSure,
-					.confirmText = tr::lng_box_delete(tr::now),
-					.confirmStyle = &st::attentionBoxButton,
-				}));
-			};
 			addAction(
 				tr::lng_downloads_delete_all_downloads(tr::now),
-				deleteAll,
+				[=] {
+					const auto phrase = tr::lng_downloads_delete_sure_all(tr::now);
+					const auto added = Core::App().downloadManager()
+						.loadedHasNonCloudFile()
+						? QString()
+						: tr::lng_downloads_delete_in_cloud(tr::now);
+					const auto deleteSure = [=](Fn<void()> close) {
+						Ui::PostponeCall(this, close);
+						auto ids = finishedDownloadIds();
+						if (!ids.empty()) {
+							Core::App().downloadManager().deleteFiles(
+								std::move(ids));
+						}
+					};
+					window->show(Ui::MakeConfirmBox({
+						.text = phrase
+							+ (added.isEmpty() ? QString() : "\n\n" + added),
+						.confirmed = deleteSure,
+						.confirmText = tr::lng_box_yes(tr::now),
+						.cancelText = tr::lng_box_no(tr::now),
+						.confirmStyle = &st::attentionBoxButton,
+					}));
+				},
 				&st::menuIconDelete);
 			addAction(
 				tr::lng_downloads_clear_list(tr::now),
@@ -386,10 +501,6 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 		}
 	}
 	if (showUploads) {
-		const auto uploadsActive = Core::App().uploaderAny();
-		const auto uploadsPaused = Core::App().uploaderAnyPaused();
-		const auto onlyOnDisk = !uploadsActive
-			&& (Core::App().uploaderPendingResumeCount() > 0);
 		if (uploadsActive && !uploadsPaused) {
 			addAction(
 				tr::lng_uploads_pause_all(tr::now),
@@ -399,7 +510,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 					});
 				},
 				&st::menuIconSchedule);
-		} else if (uploadsPaused || onlyOnDisk) {
+		} else if (uploadsPaused || uploadsOnlyOnDisk) {
 			addAction(
 				tr::lng_uploads_resume_all(tr::now),
 				[=] {
@@ -409,12 +520,12 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				},
 				&st::menuIconDownload);
 		}
-		if (uploadsActive || uploadsPaused || onlyOnDisk) {
+		if (uploadsActive || uploadsPaused || uploadsOnlyOnDisk) {
 			addAction(
 				tr::lng_uploads_cancel_all(tr::now),
 				[=] {
 					window->show(Ui::MakeConfirmBox({
-						.text = tr::lng_uploads_delete_sure_all(tr::now),
+						.text = tr::lng_uploads_cancel_sure_all(tr::now),
 						.confirmed = [=](Fn<void()> close) {
 							close();
 							Ui::PostponeCall(this, [] {
@@ -428,8 +539,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				},
 				&st::menuIconCancel);
 		}
-		const auto hasFinishedUploads = Core::App().uploaderAnyFinished();
-		if (hasFinishedUploads) {
+		if (uploadsFinished) {
 			addAction(
 				tr::lng_uploads_delete_all(tr::now),
 				[=] {
@@ -441,8 +551,8 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 								Core::App().uploaderDeleteAllFinished();
 							});
 						},
-						.confirmText = tr::lng_uploads_delete_all_confirm(tr::now),
-						.cancelText = tr::lng_cancel(tr::now),
+						.confirmText = tr::lng_box_yes(tr::now),
+						.cancelText = tr::lng_box_no(tr::now),
 						.confirmStyle = &st::attentionBoxButton,
 					}));
 				},

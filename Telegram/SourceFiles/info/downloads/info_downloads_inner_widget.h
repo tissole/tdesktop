@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Ui {
 class VerticalLayout;
 class SearchFieldController;
+class FlatLabel;
 } // namespace Ui
 
 namespace Info {
@@ -72,6 +73,7 @@ private:
 
 	object_ptr<Media::ListWidget> _list = { nullptr };
 	object_ptr<EmptyWidget> _empty;
+	object_ptr<Ui::FlatLabel> _counter = { nullptr };
 
 	bool _inResize = false;
 

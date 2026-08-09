@@ -67,6 +67,7 @@ struct DownloadedId {
 	int64 size = 0;
 	FullMsgId itemId;
 	uint64 peerAccessHash = 0;
+	int jobIndex = 0;
 
 	std::unique_ptr<DownloadObject> object;
 };
@@ -81,6 +82,7 @@ struct DownloadingId {
 	bool done = false;
 	bool paused = false;
 	bool enhancedForward = false;
+	int jobIndex = 0;
 };
 
 class DownloadManager final {
@@ -89,6 +91,10 @@ public:
 	~DownloadManager();
 
 	[[nodiscard]] bool empty() const;
+
+	[[nodiscard]] int jobTotal(not_null<Main::Session*> session) const;
+	[[nodiscard]] int jobDone(not_null<Main::Session*> session) const;
+	[[nodiscard]] rpl::producer<> jobCounterChanged() const;
 
 	void trackSession(not_null<Main::Session*> session);
 	void itemVisibilitiesUpdated(not_null<Main::Session*> session);
@@ -134,6 +140,7 @@ public:
 	void resumeAll();
 	void cancelAll();
 	void clearFinishedLoading();
+	void clearFinishedItem(not_null<const HistoryItem*> item);
 	[[nodiscard]] bool anyPaused() const;
 	[[nodiscard]] bool anyResumable() const;
 	[[nodiscard]] bool anyFinishedLoading() const;
@@ -183,6 +190,7 @@ private:
 		int resolveNeeded = 0;
 		int resolveSentRequests = 0;
 		int resolveSentTotal = 0;
+		int jobId = 0;
 		rpl::lifetime lifetime;
 	};
 
@@ -235,7 +243,8 @@ private:
 	[[nodiscard]] Fn<std::optional<QByteArray>()> serializator(
 		not_null<Main::Session*> session) const;
 	[[nodiscard]] std::vector<DownloadedId> deserialize(
-		not_null<Main::Session*> session) const;
+		not_null<Main::Session*> session,
+		int *jobId = nullptr) const;
 
 	void loadFileHashes();
 	DedupDb &ensureDedupDb() const;
@@ -290,6 +299,7 @@ private:
 
 	rpl::event_stream<> _loadingListChanges;
 	rpl::variable<DownloadProgress> _loadingProgress;
+	rpl::event_stream<> _jobCounterChanged;
 
 	rpl::event_stream<not_null<const DownloadedId*>> _loadedAdded;
 	rpl::event_stream<not_null<const HistoryItem*>> _loadedRemoved;

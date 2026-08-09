@@ -292,6 +292,7 @@ bool checkMsgRestriction(not_null<HistoryItem*> item) {
 	auto result = false;
 	auto loop = QEventLoop();
 	auto finished = false;
+	const auto guard = std::make_shared<bool>(true);
 	const auto session = &peer->session();
 
 	if (const auto channel = peer->asChannel()) {
@@ -366,45 +367,46 @@ bool checkMsgRestriction(not_null<HistoryItem*> item) {
 		}).send();
 	}
 
-	QTimer::singleShot(10000, [&] {
-		if (!finished) { finished = true; loop.quit(); }
+	QTimer::singleShot(10000, [guard, &finished, &loop] {
+		if (*guard && !finished) { finished = true; loop.quit(); }
 	});
 	if (!finished) loop.exec();
+	*guard = false;
 	return result;
 }
 
-bool checkPeerRestriction(not_null<PeerData*> peer) {
-	auto result = false;
-	auto loop = QEventLoop();
-	auto finished = false;
+void checkPeerRestriction(
+		not_null<PeerData*> peer,
+		Fn<void(bool)> done) {
 	const auto session = &peer->session();
 
-	const auto scanMessages = [&](const MTPVector<MTPMessage> &msgs) {
-		for (const auto &msg : msgs.v) {
-			if (msg.type() != mtpc_message) continue;
-			if (msg.c_message().vflags().v & (1U << 26)) {
-				result = true;
-			}
-			break;
-		}
-	};
-	const auto scanPeers = [&](const MTPVector<MTPChat> &chats) {
-		for (const auto &c : chats.v) {
-			if (c.type() == mtpc_channel) {
-				if (c.c_channel().is_noforwards()) {
-					result = true;
-					break;
-				}
-			} else if (c.type() == mtpc_chat) {
-				if (c.c_chat().is_noforwards()) {
-					result = true;
-					break;
-				}
-			}
-		}
-	};
-
 	if (peer->asChannel() || peer->asChat()) {
+		const auto finish = [=](bool result) {
+			LOG(("ENHANCED_FWD: checkPeerRestriction result=%1")
+				.arg(Logs::b(result)));
+			done(result);
+		};
+		const auto scanMessages = [](const MTPVector<MTPMessage> &msgs) {
+			for (const auto &msg : msgs.v) {
+				if (msg.type() != mtpc_message) continue;
+				return bool(msg.c_message().vflags().v & (1U << 26));
+			}
+			return false;
+		};
+		const auto scanPeers = [](const MTPVector<MTPChat> &chats) {
+			for (const auto &c : chats.v) {
+				if (c.type() == mtpc_channel) {
+					if (c.c_channel().is_noforwards()) {
+						return true;
+					}
+				} else if (c.type() == mtpc_chat) {
+					if (c.c_chat().is_noforwards()) {
+						return true;
+					}
+				}
+			}
+			return false;
+		};
 		session->api().request(MTPmessages_GetHistory(
 			peer->input(),
 			MTP_int(0),
@@ -414,82 +416,97 @@ bool checkPeerRestriction(not_null<PeerData*> peer) {
 			MTP_int(0),
 			MTP_int(0),
 			MTP_long(0)
-		)).done([&](const MTPmessages_Messages &data) {
+		)).done([=](const MTPmessages_Messages &data) {
+			auto result = false;
 			data.match([&](const MTPDmessages_messages &d) {
-				scanMessages(d.vmessages());
-				scanPeers(d.vchats());
+				result = scanMessages(d.vmessages())
+					|| scanPeers(d.vchats());
 			}, [&](const MTPDmessages_messagesSlice &d) {
-				scanMessages(d.vmessages());
-				scanPeers(d.vchats());
+				result = scanMessages(d.vmessages())
+					|| scanPeers(d.vchats());
 			}, [&](const MTPDmessages_channelMessages &d) {
-				scanMessages(d.vmessages());
-				scanPeers(d.vchats());
+				result = scanMessages(d.vmessages())
+					|| scanPeers(d.vchats());
 			}, [&](const MTPDmessages_messagesNotModified &) {
 			}, [](const auto &) {
 			});
-			finished = true;
-			loop.quit();
-		}).fail([&](const MTP::Error &) {
-			finished = true;
-			loop.quit();
+			finish(result);
+		}).fail([=](const MTP::Error &) {
+			finish(false);
 		}).send();
 	} else if (const auto user = peer->asUser()) {
 		session->api().request(MTPusers_GetFullUser(
 			user->inputUser()
-		)).done([&](const MTPusers_UserFull &data) {
+		)).done([=](const MTPusers_UserFull &data) {
 			const auto &d = data.c_users_userFull();
 			session->data().processUsers(d.vusers());
 			session->data().processChats(d.vchats());
-			result = (user->flags() & UserDataFlag::NoForwardsPeerEnabled)
+			const auto result = (user->flags() & UserDataFlag::NoForwardsPeerEnabled)
 				|| (user->flags() & UserDataFlag::NoForwardsMyEnabled);
-			finished = true;
-			loop.quit();
-		}).fail([&](const MTP::Error &) {
-			finished = true;
-			loop.quit();
+			LOG(("ENHANCED_FWD: checkPeerRestriction result=%1")
+				.arg(Logs::b(result)));
+			done(result);
+		}).fail([=](const MTP::Error &) {
+			LOG(("ENHANCED_FWD: checkPeerRestriction result=%1")
+				.arg(Logs::b(false)));
+			done(false);
 		}).send();
+	} else {
+		LOG(("ENHANCED_FWD: checkPeerRestriction result=%1")
+			.arg(Logs::b(false)));
+		done(false);
 	}
-
-	QTimer::singleShot(10000, [&] {
-		if (!finished) { finished = true; loop.quit(); }
-	});
-	if (!finished) loop.exec();
-	LOG(("ENHANCED_FWD: checkPeerRestriction result=%1")
-		.arg(Logs::b(result)));
-	return result;
 }
 
-Split classifyItems(
-		const std::vector<not_null<HistoryItem*>> &items) {
+void classifyItems(
+		const std::vector<not_null<HistoryItem*>> &items,
+		base::unique_function<void(Split)> done) {
 	LOG(("ENHANCED_FWD: classifyItems count=%1").arg(items.size()));
-	Split result;
-
-	base::flat_map<PeerId, bool> peerRestricted;
-	for (const auto &item : items) {
+	if (items.empty()) {
+		done(Split());
+		return;
+	}
+	const auto session = &items.front()->history()->session();
+	const auto myItems = std::make_shared<std::vector<not_null<HistoryItem*>>>(items);
+	auto peerIds = std::vector<PeerId>();
+	for (const auto &item : *myItems) {
 		const auto peerId = item->history()->peer->id;
-		if (!peerRestricted.contains(peerId)) {
-			peerRestricted.emplace(
-				peerId,
-				checkPeerRestriction(item->history()->peer));
+		if (ranges::find(peerIds, peerId) == end(peerIds)) {
+			peerIds.push_back(peerId);
 		}
 	}
-
-	for (const auto &item : items) {
-		const auto peerFlag = peerRestricted[item->history()->peer->id];
-		LOG(("ENHANCED_FWD: checkItem item=%1 peerFlag=%2 restricted=%3")
-			.arg(item->id.bare)
-			.arg(Logs::b(peerFlag))
-			.arg(Logs::b(peerFlag)));
-		if (peerFlag) {
-			result.restricted.push_back(item);
-		} else {
-			result.normal.push_back(item);
+	auto peerRestricted = std::make_shared<base::flat_map<PeerId, bool>>();
+	auto remaining = std::make_shared<int>(int(peerIds.size()));
+	auto doneHolder = std::make_shared<base::unique_function<void(Split)>>(std::move(done));
+	const auto finish = [myItems, peerRestricted, remaining, doneHolder] {
+		if (--*remaining > 0) {
+			return;
 		}
+		Split result;
+		for (const auto &item : *myItems) {
+			const auto peerFlag = (*peerRestricted)[item->history()->peer->id];
+			LOG(("ENHANCED_FWD: checkItem item=%1 peerFlag=%2 restricted=%3")
+				.arg(item->id.bare)
+				.arg(Logs::b(peerFlag))
+				.arg(Logs::b(peerFlag)));
+			if (peerFlag) {
+				result.restricted.push_back(item);
+			} else {
+				result.normal.push_back(item);
+			}
+		}
+		LOG(("ENHANCED_FWD: classifyItems restricted=%1 normal=%2")
+			.arg(result.restricted.size())
+			.arg(result.normal.size()));
+		(*doneHolder)(std::move(result));
+	};
+	for (const auto &peerId : peerIds) {
+		const auto peer = session->data().peer(peerId);
+		checkPeerRestriction(peer, [peerRestricted, peerId, finish](bool restricted) {
+			(*peerRestricted)[peerId] = restricted;
+			finish();
+		});
 	}
-	LOG(("ENHANCED_FWD: classifyItems restricted=%1 normal=%2")
-		.arg(result.restricted.size())
-		.arg(result.normal.size()));
-	return result;
 }
 
 void startForwardSession(
@@ -1041,7 +1058,9 @@ std::vector<JobSnapshot> AllJobs(not_null<Main::Session*> session) {
 	for (const auto &[peer, state] : FinishedStates()) {
 		if (!belongsToSession(peer)) continue;
 		auto progress = ForwardProgress();
-		progress.state = State::Finished;
+		progress.state = state.cancelled
+			? State::Cancelled
+			: State::Finished;
 		progress.sent = state.sent;
 		progress.total = state.total;
 		progress.skipped = state.skipped;
@@ -1128,6 +1147,38 @@ void cancelItem(
 		if (state.total > 0) state.total--;
 		state.items[itemIndex].cancelled = true;
 		fireUpdate(session, peer);
+	}
+}
+
+bool isEnhancedForwardItem(
+		not_null<Main::Session*> session,
+		not_null<const HistoryItem*> item) {
+	const auto id = item->fullId();
+	for (const auto &job : AllJobs(session)) {
+		if (!job.active) {
+			continue;
+		}
+		if (ranges::find(job.progress.sourceIds, id) != end(job.progress.sourceIds)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void cancelItemByMessage(
+		not_null<Main::Session*> session,
+		not_null<const HistoryItem*> item) {
+	const auto id = item->fullId();
+	for (const auto &job : AllJobs(session)) {
+		if (!job.active) {
+			continue;
+		}
+		for (auto i = 0; i < int(job.progress.sourceIds.size()); i++) {
+			if (job.progress.sourceIds[i] == id) {
+				cancelItem(session, job.peer, i);
+				return;
+			}
+		}
 	}
 }
 
@@ -2468,8 +2519,7 @@ void Pipeline::pumpDownloads() {
 		const auto size = doc ? qint64(doc->size) : qint64(0);
 		const auto remotePrecheck = doc
 			&& size >= Data::kDedupMinPartialHashSize
-			&& dedupDb.isOpen()
-			&& dedupDb.containsSize(Data::DedupDb::Table::Uploads, size);
+			&& dedupDb.isOpen();
 		if (dedupDb.isOpen()) {
 			dedupDb.addPending(Data::DedupDb::Table::Uploads, mediaId, size);
 		}

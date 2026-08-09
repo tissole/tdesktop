@@ -24,12 +24,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item_helpers.h"
 #include "history/history.h"
 #include "enhanced_forward.h"
+#include "logs.h"
 #include "core/application.h"
 #include "lang/lang_keys.h"
+#include "settings.h"
 #include "storage/file_upload.h"
 #include "storage/storage_shared_media.h"
 #include "layout/layout_selection.h"
 #include "styles/style_overview.h"
+#include "data/data_msg_id.h"
 
 namespace Info::Downloads {
 namespace {
@@ -89,7 +92,12 @@ void Provider::setFilter(Filter filter) {
 		return;
 	}
 	_filter = filter;
+	updateCounter();
 	_refreshed.fire({});
+}
+
+rpl::producer<QString> Provider::counterValue() const {
+	return _counterText.value();
 }
 
 rpl::producer<bool> Provider::hasDownloadsValue() const {
@@ -103,6 +111,67 @@ rpl::producer<bool> Provider::hasUploadsValue() const {
 void Provider::updateAvailability() {
 	_hasDownloads = !_downloading.empty() || !_downloaded.empty();
 	_hasUploads = !_uploading.empty() || !_uploaded.empty();
+}
+
+void Provider::updateCounter() {
+	const auto wantDownloads = (_filter == Filter::Downloads
+		|| _filter == Filter::All);
+	const auto wantUploads = (_filter == Filter::Uploads
+		|| _filter == Filter::All);
+	const auto wantForwards = (_filter == Filter::Forwards);
+	auto done = 0;
+	auto total = 0;
+	if (wantForwards) {
+		const auto session = &_controller->session();
+		using ForwardJob = EnhancedForward::JobSnapshot;
+		const auto jobs = EnhancedForward::AllJobs(session);
+		const ForwardJob *current = nullptr;
+		for (const auto &job : jobs) {
+			if (job.active) {
+				current = &job;
+				break;
+			}
+		}
+		if (!current) {
+			for (const auto &job : jobs) {
+				if (job.finished || job.resumable) {
+					current = &job;
+					break;
+				}
+			}
+		}
+		if (current) {
+			for (const auto &item : current->progress.items) {
+				if (item.cancelled) {
+					continue;
+				}
+				++total;
+				if (item.sent
+					|| (item.state == EnhancedForward::ItemState::Done)) {
+					++done;
+				}
+			}
+		}
+	}
+	if (wantDownloads) {
+		const auto session = &_controller->session();
+		auto &manager = Core::App().downloadManager();
+		total += manager.jobTotal(session);
+		done += manager.jobDone(session);
+	}
+	if (wantUploads) {
+		const auto session = &_controller->session();
+		total += session->uploader().jobTotal();
+		done += session->uploader().jobDone();
+	}
+	if (total == 0) {
+		_counterText = QString();
+		return;
+	}
+	_counterText = tr::lng_tm_counter(
+		tr::now,
+		lt_done, QString::number(done),
+		lt_total, QString::number(total));
 }
 
 bool Provider::isPossiblyMyItem(not_null<const HistoryItem*> item) {
@@ -174,7 +243,7 @@ void Provider::refreshViewer() {
 						if (!wasUploading && !wasUploaded) {
 							addElementNow({
 								.item = item,
-								.started = id->started,
+								.started = int64(item->date()) * 1000,
 								.path = id->path,
 							});
 						}
@@ -238,6 +307,9 @@ void Provider::refreshViewer() {
 
 	manager.loadedAdded(
 	) | rpl::on_next([=](not_null<const Data::DownloadedId*> entry) {
+		if (const auto object = entry->object.get()) {
+			_downloading.remove(not_null(object->item));
+		}
 		addPostponed(entry);
 	}, _lifetime);
 
@@ -296,6 +368,9 @@ void Provider::refreshViewer() {
 				_uploading.remove(left);
 				_uploaded.emplace(left);
 			}
+			if (!copy.empty()) {
+				refreshPostponed(false);
+			}
 		};
 		rpl::single(rpl::empty) | rpl::then(
 			session->uploader().loadingListChanges() | rpl::to_empty
@@ -322,33 +397,34 @@ void Provider::refreshViewer() {
 
 		for (const auto &info : session->uploader().finishedUploadList()) {
 			const auto item = session->data().message(info.itemId);
-			if (!item) continue;
-		if (EnhancedForward::isEnhancedUpload(info.itemId)
-			|| EnhancedForward::isEnhancedTempUpload(session, info.filename)) {
-			continue;
-		}
-		if (!_uploaded.contains(info.itemId)
-			&& !_uploading.contains(info.itemId)
-			&& !_downloading.contains(item)
-			&& !_enhancedForward.contains(item)
-			&& !_downloaded.contains(item)) {
-			_uploaded.emplace(info.itemId);
-			addElementNow({
-				.item = item,
-				.started = (info.started
-					? info.started
-					: int64(item->date()) * 1000),
+			if (!item) {
+				_pendingFinishedUploads.emplace(
+					info.itemId,
+					PendingFinishedUpload{
+						.session = session,
+						.started = info.started,
+						.path = info.filename,
+					});
+				continue;
+			}
+			addFinishedUpload(session, info.itemId, {
+				.session = session,
+				.started = info.started,
 				.path = info.filename,
 			});
-			refreshPostponed(true);
 		}
-	}
+		resolvePendingFinishedUploads(session);
 
 	session->uploader().finishedUploadAdded(
 	) | rpl::on_next([=](FullMsgId itemId) {
 		const auto item = session->data().message(itemId);
 		if (!item) return;
 		if (EnhancedForward::isEnhancedUpload(itemId)) {
+			return;
+		}
+		if (ranges::any_of(_elements, [&](const Element &element) {
+			return element.item.get() == item;
+		})) {
 			return;
 		}
 		if (!_uploaded.contains(itemId)
@@ -416,6 +492,18 @@ void Provider::refreshViewer() {
 			if (_uploading.remove(oldFullId)) {
 				_uploading.emplace(change.newId);
 			}
+			if (const auto i = _pendingFinishedUploads.find(oldFullId);
+				i != _pendingFinishedUploads.end()) {
+				const auto upload = i->second;
+				_pendingFinishedUploads.erase(i);
+				_pendingFinishedUploads.emplace(change.newId, upload);
+				resolvePendingFinishedUploads(session);
+			}
+			if (const auto i = _pendingFinishedUploadsFetching.find(oldFullId);
+				i != _pendingFinishedUploadsFetching.end()) {
+				_pendingFinishedUploadsFetching.erase(i);
+				_pendingFinishedUploadsFetching.emplace(change.newId);
+			}
 			if (const auto item = session->data().message(change.newId)) {
 				if (const auto i = _layouts.find(item); i != _layouts.end()) {
 					_layoutRemoved.fire(i->second.item.get());
@@ -431,7 +519,15 @@ void Provider::refreshViewer() {
 			auto jobItems = base::flat_set<not_null<const HistoryItem*>>();
 			auto unresolved = std::vector<FullMsgId>();
 			for (const auto &job : EnhancedForward::AllJobs(session)) {
-				for (const auto &srcId : job.progress.sourceIds) {
+				if (job.progress.state == EnhancedForward::State::Cancelled) {
+					continue;
+				}
+				for (auto i = 0; i < int(job.progress.sourceIds.size()); i++) {
+					if (int(job.progress.items.size()) > i
+						&& job.progress.items[i].cancelled) {
+						continue;
+					}
+					const auto srcId = job.progress.sourceIds[i];
 					const auto message = session->data().message(srcId);
 					if (!message) {
 						if (!failedResolve->contains(srcId)) {
@@ -507,10 +603,100 @@ void Provider::refreshViewer() {
 		) | rpl::on_next([refreshEF] {
 			(*refreshEF)();
 		}, _lifetime);
+
+		Core::App().downloadManager().jobCounterChanged(
+		) | rpl::on_next([=] {
+			updateCounter();
+		}, _lifetime);
+		session->uploader().jobCounterChanged(
+		) | rpl::on_next([=] {
+			updateCounter();
+		}, _lifetime);
 	}
 
 	performAdd();
 	performRefresh();
+}
+
+void Provider::addFinishedUpload(
+		not_null<Main::Session*> session,
+		FullMsgId itemId,
+		const PendingFinishedUpload &upload) {
+	const auto item = session->data().message(itemId);
+	if (!item) return;
+	if (EnhancedForward::isEnhancedUpload(itemId)
+		|| EnhancedForward::isEnhancedTempUpload(session, upload.path)) {
+		return;
+	}
+if (ranges::any_of(_elements, [&](const Element &element) {
+			return element.item.get() == item;
+		})) {
+			return;
+		}
+if (!_uploaded.contains(itemId)
+		&& !_uploading.contains(itemId)
+		&& !_downloading.contains(item)
+		&& !_enhancedForward.contains(item)
+		&& !_downloaded.contains(item)) {
+		_uploaded.emplace(itemId);
+		addElementNow({
+			.item = item,
+			.started = (upload.started
+				? upload.started
+				: int64(item->date()) * 1000),
+			.path = upload.path,
+		});
+		refreshPostponed(true);
+	}
+}
+
+void Provider::resolvePendingFinishedUploads(
+		not_null<Main::Session*> session) {
+	auto unresolved = std::vector<FullMsgId>();
+	for (auto i = _pendingFinishedUploads.begin();
+			i != _pendingFinishedUploads.end();) {
+		const auto &upload = i->second;
+		if (upload.session != session) {
+			++i;
+			continue;
+		}
+		const auto itemId = i->first;
+		if (session->data().message(itemId)) {
+			addFinishedUpload(session, itemId, upload);
+			i = _pendingFinishedUploads.erase(i);
+			continue;
+		}
+		if (IsServerMsgId(itemId.msg)
+			&& !_pendingFinishedUploadsFetching.contains(itemId)) {
+			unresolved.push_back(itemId);
+			_pendingFinishedUploadsFetching.emplace(itemId);
+		}
+		++i;
+	}
+	if (!unresolved.empty()) {
+		const auto weak = base::make_weak(this);
+		EnhancedForward::EnsureForwardSourceMessages(
+			session,
+			unresolved,
+			[this, weak, session, unresolved](bool ok) {
+				if (!weak) {
+					return;
+				}
+				for (const auto &itemId : unresolved) {
+					_pendingFinishedUploadsFetching.remove(itemId);
+				}
+				if (ok) {
+					for (const auto &itemId : unresolved) {
+						if (session->data().message(itemId)) {
+							continue;
+						}
+						_pendingFinishedUploads.erase(itemId);
+						session->uploader().removeFinishedUpload(itemId);
+					}
+				}
+				resolvePendingFinishedUploads(session);
+			});
+	}
 }
 
 void Provider::addPostponed(not_null<const Data::DownloadedId*> entry) {
@@ -611,6 +797,7 @@ void Provider::performRefresh() {
 	}
 	_refreshed.fire({});
 	updateAvailability();
+	updateCounter();
 }
 
 void Provider::trackItemSession(not_null<const HistoryItem*> item) {
@@ -859,17 +1046,9 @@ ListItemSelectionData Provider::computeSelectionData(
 		not_null<const HistoryItem*> item,
 		TextSelection selection) {
 	auto result = ListItemSelectionData(selection);
-	const auto ef = _enhancedForward.contains(item);
-	const auto isUploadInProgress = [&] {
-		if (ef) return false;
-		if (const auto media = item->media()) {
-			return media->uploading();
-		}
-		return false;
-	}();
-	result.canDelete = !isUploadInProgress && !ef;
-	result.canForward = !ef
-		&& item->allowsForward()
+	const auto ef = isEnhancedForward(item);
+	result.canDelete = !(ef && isEnhancedForwardFinished(item));
+	result.canForward = item->allowsForward()
 		&& (&item->history()->session() == &_controller->session());
 	return result;
 }
@@ -937,6 +1116,38 @@ bool Provider::isUploadItem(not_null<const HistoryItem*> item) const {
 
 bool Provider::isEnhancedForward(not_null<const HistoryItem*> item) const {
 	return _enhancedForward.contains(item);
+}
+
+bool Provider::isDownloading(not_null<const HistoryItem*> item) const {
+	return _downloading.contains(item);
+}
+
+bool Provider::isDownloaded(not_null<const HistoryItem*> item) const {
+	return _downloaded.contains(item);
+}
+
+bool Provider::isUploading(not_null<const HistoryItem*> item) const {
+	return _uploading.contains(item->fullId());
+}
+
+bool Provider::isUploaded(not_null<const HistoryItem*> item) const {
+	return _uploaded.contains(item->fullId());
+}
+
+bool Provider::isEnhancedForwardFinished(
+		not_null<const HistoryItem*> item) const {
+	if (!_enhancedForward.contains(item)) {
+		return false;
+	}
+	const auto itemId = item->globalId().itemId;
+	for (const auto &job : EnhancedForward::AllJobs(&_controller->session())) {
+		for (const auto &srcId : job.progress.sourceIds) {
+			if (srcId.peer == itemId.peer && srcId.msg == itemId.msg) {
+				return job.finished;
+			}
+		}
+	}
+	return false;
 }
 
 QString Provider::showInFolderPath(

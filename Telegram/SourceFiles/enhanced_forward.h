@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include <optional>
+#include "base/unique_function.h"
 #include "data/data_peer_id.h"
 #include "rpl/producer.h"
 #include "api/api_common.h"
@@ -40,9 +41,11 @@ struct Split {
 	std::vector<not_null<HistoryItem*>> normal;
 };
 
-[[nodiscard]] Split classifyItems(
-	const std::vector<not_null<HistoryItem*>> &items);
-[[nodiscard]] bool checkMsgRestriction(not_null<HistoryItem*> item);
+// Fetches the no-forwards restriction flag for each distinct source peer
+// asynchronously, then calls `done` with the classified Split. Never blocks.
+void classifyItems(
+	const std::vector<not_null<HistoryItem*>> &items,
+	base::unique_function<void(Split)> done);
 
 enum class State : uint8_t {
 	Idle,
@@ -236,6 +239,16 @@ void cancelItem(
 	not_null<Main::Session*> session,
 	const PeerId &peer,
 	int itemIndex);
+// True if the given message is currently a part of an active enhanced-forward
+// job (used to route per-item cancel actions away from the generic download
+// / upload cancel).
+[[nodiscard]] bool isEnhancedForwardItem(
+	not_null<Main::Session*> session,
+	not_null<const HistoryItem*> item);
+// Cancels just that one message inside its active forward job.
+void cancelItemByMessage(
+	not_null<Main::Session*> session,
+	not_null<const HistoryItem*> item);
 void CancelAll(not_null<Main::Session*> session);
 void ClearFinished(
 	not_null<Main::Session*> session,

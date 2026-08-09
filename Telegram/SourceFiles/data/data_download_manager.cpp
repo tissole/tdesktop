@@ -159,7 +159,7 @@ bool DownloadManager::empty() const {
 
 void DownloadManager::trackSession(not_null<Main::Session*> session) {
 	auto &data = _sessions.emplace(session, SessionData()).first->second;
-	data.downloaded = deserialize(session);
+	data.downloaded = deserialize(session, &data.jobId);
 	data.resolveNeeded = data.downloaded.size();
 
 	session->data().documentLoadProgress(
@@ -256,6 +256,17 @@ void DownloadManager::addLoading(
 	    const auto ready = QFileInfo(path).exists()
 		    ? QFileInfo(path).size()
 		    : 0;
+		if (!enhancedForward) {
+			const auto active = ranges::any_of(
+				data.downloading,
+				[](const DownloadingId &entry) {
+					return !entry.done;
+				});
+			if (!active) {
+				++data.jobId;
+			}
+			_jobCounterChanged.fire({});
+		}
 		data.downloading.push_back({
 			.object = object,
 			.started = computeNextStartDate(),
@@ -264,6 +275,7 @@ void DownloadManager::addLoading(
 			.total = size,
 			.hiddenByView = false,
 			.enhancedForward = enhancedForward,
+			.jobIndex = data.jobId,
 		});
 		_loading.emplace(item);
 		_loadingDocuments.emplace(object.document);
@@ -486,6 +498,32 @@ void DownloadManager::addLoaded(
 		return;
 	}
 
+	if (!dedupHash.isEmpty()
+		&& !documentIds.contains(docId)
+		&& !pendingDocumentIds.contains(docId)) {
+		loadFileHashes();
+		if (!fileHashes.contains(dedupHash)) {
+			fileHashes.insert(dedupHash, DedupEntry{
+				.documentId = docId,
+				.size = size,
+				.status = DedupStatus::Finished,
+			});
+			documentIds.insert(docId, dedupHash);
+			fileSizes.insert(size);
+			ensureDedupDb().insert(DedupDb::Table::Downloads, {
+				.hash = dedupHash,
+				.size = size,
+				.documentId = docId,
+				.status = u"f"_q,
+			});
+		}
+	}
+
+	const auto completedJobIndex = [&] {
+		const auto i = ranges::find(data.downloading, item, ByItem);
+		return (i != end(data.downloading)) ? i->jobIndex : data.jobId;
+	}();
+
 	data.downloaded.push_back({
 		.download = id,
 		.started = started,
@@ -493,6 +531,7 @@ void DownloadManager::addLoaded(
 		.size = size,
 		.itemId = item->fullId(),
 		.peerAccessHash = PeerAccessHash(item->history()->peer),
+		.jobIndex = completedJobIndex,
 		.object = std::make_unique<DownloadObject>(object),
 	});
 	_loaded.emplace(item);
@@ -544,6 +583,7 @@ void DownloadManager::addLoaded(
 		entry.done = true;
 		_loading.erase(j);
 		_loadingDone.emplace(entry.object.item);
+		_jobCounterChanged.fire({});
 		saveIfIdle();
 		if (const auto document = entry.object.document) {
 			ensureDedupDb().removeResumeDlByDocumentId(document->id);
@@ -606,6 +646,7 @@ void DownloadManager::deleteFiles(const std::vector<GlobalMsgId> &ids) {
 				}
 				data.downloaded.erase(k);
 				_loadedRemoved.fire_copy(item);
+				_jobCounterChanged.fire({});
 
 				descriptor.sessions.emplace(session);
 			}
@@ -645,6 +686,7 @@ void DownloadManager::deleteAll() {
 				_loadedRemoved.fire_copy(item);
 			}
 		}
+		_jobCounterChanged.fire({});
 	}
 	for (const auto &session : descriptor.sessions) {
 		writePostponed(session);
@@ -659,9 +701,10 @@ void DownloadManager::finishFilesDelete(DeleteFilesDescriptor &&descriptor) {
 	crl::async([files = std::move(descriptor.files)]{
 		for (const auto &file : files) {
 			Platform::File::MoveToTrash(file.first);
-			crl::on_main([descriptor = file.second] {
+			crl::on_main([descriptor = file.second, path = file.first] {
 				if (const auto session = SessionByUniqueId(
 						descriptor.sessionUniqueId)) {
+					PruneEmptyDownloadFolders(session, path);
 					if (const auto id = descriptor.documentId) {
 						[[maybe_unused]] const auto location
 							= session->data().document(id)->location(true);
@@ -915,6 +958,24 @@ void DownloadManager::clearFinishedLoading() {
 	}
 }
 
+void DownloadManager::clearFinishedItem(not_null<const HistoryItem*> item) {
+	auto &data = sessionData(item);
+	const auto i = ranges::find(data.downloaded, item, ByItem);
+	if (i == end(data.downloaded)) {
+		return;
+	}
+	const auto object = i->object.get();
+	const auto document = object ? object->document : nullptr;
+	if (document) {
+		_generatedDocuments.remove(document);
+	}
+	_loaded.remove(item);
+	_generated.remove(item);
+	data.downloaded.erase(i);
+	_loadedRemoved.fire_copy(item);
+	writePostponed(&item->history()->session());
+}
+
 void DownloadManager::removeLoading(not_null<const HistoryItem*> item) {
 	auto &data = sessionData(item);
 	const auto i = ranges::find(data.downloading, item, ByItem);
@@ -1030,6 +1091,7 @@ void DownloadManager::resolveRequestsFinished(
 		const auto i = begin(data.downloaded) + (--data.resolveNeeded);
 		if (i->path.isEmpty()) {
 			data.downloaded.erase(i);
+			_jobCounterChanged.fire({});
 			continue;
 		}
 		const auto item = owner.message(i->itemId);
@@ -1130,6 +1192,7 @@ void DownloadManager::remove(
 	data.downloading.erase(i);
 	_loadingListChanges.fire({});
 	_loadingProgress = now;
+	_jobCounterChanged.fire({});
 	// No auto-clear scheduling here either: entries only leave the list via
 	// remove() itself, called from an explicit cancel or clearLoading()/
 	// clearIfFinished() triggered by the user.
@@ -1489,9 +1552,12 @@ Fn<std::optional<QByteArray>()> DownloadManager::serializator(
 			+ sizeof(quint32) // size
 			+ sizeof(quint64) // itemId.peer
 			+ sizeof(qint64) // itemId.msg
-			+ sizeof(quint64); // peerAccessHash
-		auto size = sizeof(qint32) // count
-			+ count * constant;
+			+ sizeof(quint64) // peerAccessHash
+			+ sizeof(qint32); // jobIndex
+		auto size = sizeof(qint32) // version
+			+ sizeof(qint32) // count
+			+ count * constant
+			+ sizeof(qint32); // jobId
 		for (const auto &id : data.downloaded) {
 			size += Serialize::stringSize(id.path);
 		}
@@ -1499,7 +1565,7 @@ Fn<std::optional<QByteArray>()> DownloadManager::serializator(
 
 		auto stream = QDataStream(&result, QIODevice::WriteOnly);
 		stream.setVersion(QDataStream::Qt_5_1);
-		stream << qint32(count);
+		stream << qint32(-1) << qint32(int(count));
 		for (const auto &id : data.downloaded) {
 			stream
 				<< quint64(id.download.objectId)
@@ -1510,8 +1576,10 @@ Fn<std::optional<QByteArray>()> DownloadManager::serializator(
 				<< quint64(id.itemId.peer.value)
 				<< qint64(id.itemId.msg.bare)
 				<< quint64(id.peerAccessHash)
-				<< id.path;
+				<< id.path
+				<< qint32(id.jobIndex);
 		}
+		stream << qint32(data.jobId);
 		stream.device()->close();
 
 		return result;
@@ -1519,7 +1587,8 @@ Fn<std::optional<QByteArray>()> DownloadManager::serializator(
 }
 
 std::vector<DownloadedId> DownloadManager::deserialize(
-		not_null<Main::Session*> session) const {
+		not_null<Main::Session*> session,
+		int *jobId) const {
 	const auto serialized = session->account().local().downloadsSerialized();
 	if (serialized.isEmpty()) {
 		return {};
@@ -1530,7 +1599,16 @@ std::vector<DownloadedId> DownloadManager::deserialize(
 
 	auto count = qint32();
 	stream >> count;
-	if (stream.status() != QDataStream::Ok || count <= 0 || count > 99'999) {
+	if (stream.status() != QDataStream::Ok) {
+		return {};
+	}
+	const auto legacy = (count >= 0);
+	if (!legacy) {
+		stream >> count;
+	}
+	if (stream.status() != QDataStream::Ok
+		|| count <= 0
+		|| count > 99'999) {
 		return {};
 	}
 	auto result = std::vector<DownloadedId>();
@@ -1554,6 +1632,10 @@ std::vector<DownloadedId> DownloadManager::deserialize(
 			>> itemIdMsg
 			>> peerAccessHash
 			>> path;
+		auto jobIndex = qint32(0);
+		if (!legacy) {
+			stream >> jobIndex;
+		}
 		const auto downloadType = DownloadType(uncheckedDownloadType);
 		if (stream.status() != QDataStream::Ok
 			|| path.isEmpty()
@@ -1573,9 +1655,60 @@ std::vector<DownloadedId> DownloadManager::deserialize(
 			.size = int64(size),
 			.itemId = { PeerId(itemIdPeer), MsgId(itemIdMsg) },
 			.peerAccessHash = peerAccessHash,
+			.jobIndex = legacy ? 0 : int(jobIndex),
 		});
 	}
+	if (legacy) {
+		if (jobId) {
+			*jobId = 1;
+		}
+	} else if (jobId && !stream.atEnd()) {
+		auto value = qint32();
+		stream >> value;
+		*jobId = value;
+	}
 	return result;
+}
+
+int DownloadManager::jobTotal(not_null<Main::Session*> session) const {
+	const auto i = _sessions.find(session);
+	if (i == end(_sessions)) {
+		return 0;
+	}
+	const auto &data = i->second;
+	auto result = 0;
+	for (const auto &entry : data.downloading) {
+		if (entry.jobIndex == data.jobId
+			&& !entry.done
+			&& !entry.enhancedForward) {
+			++result;
+		}
+	}
+	for (const auto &id : data.downloaded) {
+		if (id.jobIndex == data.jobId) {
+			++result;
+		}
+	}
+	return result;
+}
+
+int DownloadManager::jobDone(not_null<Main::Session*> session) const {
+	const auto i = _sessions.find(session);
+	if (i == end(_sessions)) {
+		return 0;
+	}
+	const auto &data = i->second;
+	auto result = 0;
+	for (const auto &id : data.downloaded) {
+		if (id.jobIndex == data.jobId) {
+			++result;
+		}
+	}
+	return result;
+}
+
+rpl::producer<> DownloadManager::jobCounterChanged() const {
+	return _jobCounterChanged.events();
 }
 
 bool DownloadManager::hasUnfinishedResume(

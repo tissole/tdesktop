@@ -1243,8 +1243,9 @@ void Widget::setupDownloadBar() {
 	}
 
 		Data::MakeDownloadBarContent(
-		) | rpl::on_next([=](Ui::DownloadBarContent &&content) {
+		) | rpl::on_next(crl::guard(this, [=](Ui::DownloadBarContent &&content) {
 			const auto create = (content.count
+				&& content.done < content.count
 				&& !_downloadBar);
 		if (create) {
 			_downloadBar = std::make_unique<Ui::DownloadBar>(
@@ -1280,7 +1281,7 @@ void Widget::setupDownloadBar() {
 				_connecting->raise();
 			}
 		}
-	}, lifetime());
+	}), lifetime());
 }
 
 void Widget::setupUploadBar() {
@@ -1289,8 +1290,10 @@ void Widget::setupUploadBar() {
 	}
 
 	Data::MakeUploadBarContent(
-	) | rpl::on_next([=](Ui::DownloadBarContent &&content) {
-		const auto create = (content.uploadCount && !_uploadBar);
+	) | rpl::on_next(crl::guard(this, [=](Ui::DownloadBarContent &&content) {
+		const auto create = (content.uploadCount
+			&& content.uploadDone < content.uploadCount
+			&& !_uploadBar);
 		if (create) {
 			_uploadBar = std::make_unique<Ui::DownloadBar>(
 				this,
@@ -1325,20 +1328,24 @@ void Widget::setupUploadBar() {
 				_connecting->raise();
 			}
 		}
-	}, lifetime());
+	}), lifetime());
 }
 
 void Widget::setupForwardsBar() {
 	if (_layout == Layout::Child) {
 		return;
 	}
+	const auto skipDuplicates = GetEnhancedBool(
+		u"prevent_forward_duplicates"_q);
 	const auto makeProgress = [=]() {
 		return EnhancedForward::jobsValue(&controller()->session())
-			| rpl::map([](const std::vector<EnhancedForward::JobSnapshot> &jobs) {
+			| rpl::map([skipDuplicates](
+				const std::vector<EnhancedForward::JobSnapshot> &jobs) {
 				Ui::DownloadBarProgress result;
 				for (const auto &job : jobs) {
 					for (const auto &item : job.progress.items) {
-						if (item.cancelled || item.dedupSkipped) {
+						if (item.cancelled
+							|| (skipDuplicates && item.dedupSkipped)) {
 							continue;
 						}
 						const auto size = std::max<qint64>(item.info.size, 0);
@@ -1360,14 +1367,15 @@ void Widget::setupForwardsBar() {
 			});
 	};
 
-	EnhancedForward::jobsValue(&controller()->session()) | rpl::on_next([=](
+	EnhancedForward::jobsValue(&controller()->session()) | rpl::on_next(crl::guard(this, [=](
 			const std::vector<EnhancedForward::JobSnapshot> &jobs) {
 		auto efCount = 0;
 		auto efDone = 0;
 		QString firstName;
 		for (const auto &job : jobs) {
 			for (const auto &item : job.progress.items) {
-				if (item.cancelled || item.dedupSkipped) {
+				if (item.cancelled
+					|| (skipDuplicates && item.dedupSkipped)) {
 					continue;
 				}
 				const auto isDone = item.sent
@@ -1423,7 +1431,7 @@ void Widget::setupForwardsBar() {
 				_connecting->raise();
 			}
 		}
-	}, lifetime());
+	}), lifetime());
 }
 
 void Widget::setupShortcuts(not_null<Window::SessionController *> controller) {

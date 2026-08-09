@@ -88,6 +88,269 @@ namespace {
 
 constexpr auto kMediaCountForSearch = 10;
 
+enum class TmItemKind {
+	Downloading,
+	Downloaded,
+	Uploading,
+	Uploaded,
+	EnhancedForwardActive,
+	EnhancedForwardFinished,
+	Other,
+};
+
+struct TmEfInfo {
+	PeerId peer;
+	int index = -1;
+	bool active = false;
+	bool finished = false;
+	bool valid = false;
+};
+
+[[nodiscard]] std::vector<std::pair<FullMsgId, TmEfInfo>> TmBuildEfLookup(
+		not_null<Main::Session*> session) {
+	auto result = std::vector<std::pair<FullMsgId, TmEfInfo>>();
+	for (const auto &job : EnhancedForward::AllJobs(session)) {
+		for (auto i = 0; i < int(job.progress.sourceIds.size()); i++) {
+			result.emplace_back(
+				job.progress.sourceIds[i],
+				TmEfInfo{
+					.peer = job.peer,
+					.index = i,
+					.active = job.active,
+					.finished = job.finished,
+					.valid = true,
+				});
+		}
+	}
+	return result;
+}
+
+[[nodiscard]] TmEfInfo TmFindEf(
+		const std::vector<std::pair<FullMsgId, TmEfInfo>> &lookup,
+		not_null<const HistoryItem*> item) {
+	const auto itemId = item->globalId().itemId;
+	for (const auto &[srcId, info] : lookup) {
+		if (srcId.peer == itemId.peer && srcId.msg == itemId.msg) {
+			return info;
+		}
+	}
+	return {};
+}
+
+[[nodiscard]] TmItemKind TmClassify(
+		not_null<const HistoryItem*> item,
+		const Info::Downloads::Provider *provider,
+		const TmEfInfo &ef) {
+	if (!provider) {
+		return TmItemKind::Other;
+	}
+	if (provider->isDownloading(item)) {
+		return TmItemKind::Downloading;
+	}
+	if (provider->isDownloaded(item)) {
+		return TmItemKind::Downloaded;
+	}
+	if (provider->isUploading(item)) {
+		return TmItemKind::Uploading;
+	}
+	if (provider->isUploaded(item)) {
+		return TmItemKind::Uploaded;
+	}
+	if (provider->isEnhancedForward(item)) {
+		return (ef.valid && ef.finished)
+			? TmItemKind::EnhancedForwardFinished
+			: TmItemKind::EnhancedForwardActive;
+	}
+	return TmItemKind::Other;
+}
+
+void TmCancelItems(
+		not_null<Main::Session*> session,
+		const std::vector<SelectedItem> &list,
+		const Info::Downloads::Provider *provider,
+		const std::vector<std::pair<FullMsgId, TmEfInfo>> &efLookup) {
+	if (!provider) {
+		return;
+	}
+	for (const auto &entry : list) {
+		if (const auto item = MessageByGlobalId(entry.globalId)) {
+			const auto kind = TmClassify(
+				item,
+				provider,
+				TmFindEf(efLookup, item));
+			switch (kind) {
+			case TmItemKind::Downloading:
+				Core::App().downloadManager().cancel(item);
+				break;
+			case TmItemKind::Uploading:
+				session->uploader().cancel(item->fullId());
+				break;
+		case TmItemKind::EnhancedForwardActive: {
+				const auto ef = TmFindEf(efLookup, item);
+				EnhancedForward::cancelItem(session, ef.peer, ef.index);
+				break;
+			}
+			default:
+				break;
+			}
+		}
+	}
+}
+
+void TmDeleteFinishedItems(
+		not_null<Main::Session*> session,
+		const std::vector<SelectedItem> &list,
+		const Info::Downloads::Provider *provider,
+		const std::vector<std::pair<FullMsgId, TmEfInfo>> &efLookup) {
+	if (!provider) {
+		return;
+	}
+	auto downloadIds = std::vector<GlobalMsgId>();
+	for (const auto &entry : list) {
+		if (const auto item = MessageByGlobalId(entry.globalId)) {
+			const auto kind = TmClassify(
+				item,
+				provider,
+				TmFindEf(efLookup, item));
+			switch (kind) {
+			case TmItemKind::Downloaded:
+				downloadIds.push_back(entry.globalId);
+				break;
+			case TmItemKind::Uploaded:
+				session->uploader().deleteFinishedUpload(item->fullId());
+				break;
+			default:
+				break;
+			}
+		}
+	}
+	if (!downloadIds.empty()) {
+		Core::App().downloadManager().deleteFiles(std::move(downloadIds));
+	}
+}
+
+void TmClearFinishedItems(
+		not_null<Main::Session*> session,
+		const std::vector<SelectedItem> &list,
+		const Info::Downloads::Provider *provider,
+		const std::vector<std::pair<FullMsgId, TmEfInfo>> &efLookup) {
+	if (!provider) {
+		return;
+	}
+	for (const auto &entry : list) {
+		if (const auto item = MessageByGlobalId(entry.globalId)) {
+			const auto ef = TmFindEf(efLookup, item);
+			const auto kind = TmClassify(item, provider, ef);
+			switch (kind) {
+			case TmItemKind::Downloaded:
+				Core::App().downloadManager().clearFinishedItem(item);
+				break;
+			case TmItemKind::Uploaded:
+				session->uploader().removeFinishedUpload(item->fullId());
+				break;
+			case TmItemKind::EnhancedForwardFinished:
+				EnhancedForward::ClearFinishedItems(
+					session,
+					ef.peer,
+					{ ef.index });
+				break;
+			default:
+				break;
+			}
+		}
+	}
+}
+
+struct TmSelKinds {
+	int runningDownload = 0;
+	int runningUpload = 0;
+	int runningForward = 0;
+	int deleteDownload = 0;
+	int deleteUpload = 0;
+	int clearable = 0;
+};
+
+[[nodiscard]] TmSelKinds TmCountKinds(
+		const std::vector<SelectedItem> &list,
+		const Info::Downloads::Provider *provider,
+		const std::vector<std::pair<FullMsgId, TmEfInfo>> &efLookup) {
+	auto result = TmSelKinds();
+	if (!provider) {
+		return result;
+	}
+	for (const auto &entry : list) {
+		if (const auto item = MessageByGlobalId(entry.globalId)) {
+			const auto kind = TmClassify(
+				item,
+				provider,
+				TmFindEf(efLookup, item));
+			switch (kind) {
+			case TmItemKind::Downloading:
+				++result.runningDownload;
+				break;
+			case TmItemKind::Uploading:
+				++result.runningUpload;
+				break;
+			case TmItemKind::EnhancedForwardActive:
+				++result.runningForward;
+				break;
+			case TmItemKind::Downloaded:
+				++result.deleteDownload;
+				++result.clearable;
+				break;
+			case TmItemKind::Uploaded:
+				++result.deleteUpload;
+				++result.clearable;
+				break;
+			case TmItemKind::EnhancedForwardFinished:
+				++result.clearable;
+				break;
+			default:
+				break;
+			}
+		}
+	}
+	return result;
+}
+
+[[nodiscard]] QString TmCancelConfirmText(const TmSelKinds &kinds) {
+	const auto total = kinds.runningDownload
+		+ kinds.runningUpload
+		+ kinds.runningForward;
+	const auto onlyDownload = kinds.runningDownload
+		&& !kinds.runningUpload
+		&& !kinds.runningForward;
+	const auto onlyUpload = kinds.runningUpload
+		&& !kinds.runningDownload
+		&& !kinds.runningForward;
+	const auto onlyForward = kinds.runningForward
+		&& !kinds.runningDownload
+		&& !kinds.runningUpload;
+	if (onlyForward) {
+		return tr::lng_tm_sel_cancel_forward(tr::now, lt_count, total);
+	}
+	if (onlyDownload) {
+		return tr::lng_tm_sel_cancel_download(tr::now, lt_count, total);
+	}
+	if (onlyUpload) {
+		return tr::lng_tm_sel_cancel_upload(tr::now, lt_count, total);
+	}
+	return tr::lng_tm_sel_cancel_confirm(tr::now, lt_count, total);
+}
+
+[[nodiscard]] QString TmDeleteConfirmText(const TmSelKinds &kinds) {
+	const auto total = kinds.deleteDownload + kinds.deleteUpload;
+	const auto onlyDownload = kinds.deleteDownload && !kinds.deleteUpload;
+	const auto onlyUpload = kinds.deleteUpload && !kinds.deleteDownload;
+	if (onlyDownload) {
+		return tr::lng_tm_sel_delete_download(tr::now, lt_count, total);
+	}
+	if (onlyUpload) {
+		return tr::lng_tm_sel_delete_upload(tr::now, lt_count, total);
+	}
+	return tr::lng_tm_sel_delete_confirm(tr::now, lt_count, total);
+}
+
 } // namespace
 
 struct ListWidget::DateBadge {
@@ -1104,14 +1367,11 @@ void ListWidget::showContextMenu(
 	}
 	_contextItem = item;
 	const auto globalId = item->globalId();
-	const auto isEfItem = [&] {
-		if (!_controller->isDownloads()) {
-			return false;
-		}
-		const auto provider = static_cast<Info::Downloads::Provider*>(
-			_provider.get());
-		return provider->isEnhancedForward(item);
-	}();
+	const auto downloadsProvider = _controller->isDownloads()
+		? static_cast<Info::Downloads::Provider*>(_provider.get())
+		: nullptr;
+	const auto isEfItem = (downloadsProvider != nullptr)
+		&& downloadsProvider->isEnhancedForward(item);
 
 	enum class SelectionState {
 		NoSelectedItems,
@@ -1180,47 +1440,35 @@ void ListWidget::showContextMenu(
 			&st::menuIconShowInChat);
 	}
 
-	if (isEfItem) {
+	if (isEfItem && overSelected == SelectionState::NoSelectedItems) {
 		const auto session = &_controller->session();
-		auto jobs = EnhancedForward::AllJobs(session);
-		const auto itemId = item->globalId().itemId;
-		auto foundPeer = PeerId();
-		auto foundIndex = -1;
-		auto efState = EnhancedForward::State::Idle;
-		for (const auto &job : jobs) {
-			for (auto i = 0; i < int(job.progress.sourceIds.size()); i++) {
-				const auto &srcId = job.progress.sourceIds[i];
-				if (srcId.peer == itemId.peer && srcId.msg == itemId.msg) {
-					foundPeer = job.peer;
-					foundIndex = i;
-					efState = job.progress.state;
-					break;
-				}
-			}
-			if (foundPeer) {
-				break;
-			}
-		}
-		const auto efActive = (efState == EnhancedForward::State::Sending)
-			|| (efState == EnhancedForward::State::Paused);
-		const auto efFinished = (efState == EnhancedForward::State::Finished)
-			|| (efState == EnhancedForward::State::Cancelled);
-		if (efActive) {
+		const auto ef = TmFindEf(TmBuildEfLookup(session), item);
+		if (ef.valid && ef.active) {
 			_contextMenu->addAction(
-				tr::lng_enhanced_forward_cancel(tr::now),
+				tr::lng_tm_item_cancel_forward(tr::now),
 				crl::guard(this, [=] {
-					EnhancedForward::cancelForward(foundPeer, session);
+					const auto window = _controller->parentController();
+					setActionBoxWeak(window->show(Ui::MakeConfirmBox({
+						.text = tr::lng_enhanced_forward_cancel_confirm(tr::now),
+						.confirmed = [=](Fn<void()> close) {
+							close();
+							EnhancedForward::cancelItem(session, ef.peer, ef.index);
+						},
+						.confirmText = tr::lng_enhanced_forward_cancel_yes(tr::now),
+						.cancelText = tr::lng_enhanced_forward_cancel_no(tr::now),
+						.confirmStyle = &st::attentionBoxButton,
+					})));
 				}),
 				&st::menuIconCancel);
 		}
-		if (efFinished) {
+		if (ef.valid && ef.finished) {
 			_contextMenu->addAction(
-				tr::lng_enhanced_forward_clear(tr::now),
+				tr::lng_tm_item_clear_forward(tr::now),
 				crl::guard(this, [=] {
 					EnhancedForward::ClearFinishedItems(
 						session,
-						foundPeer,
-						{ foundIndex });
+						ef.peer,
+						{ ef.index });
 				}),
 				&st::menuIconClear);
 		}
@@ -1243,7 +1491,7 @@ void ListWidget::showContextMenu(
 					crl::guard(this, [=] {
 						const auto window = _controller->parentController();
 						setActionBoxWeak(window->show(Ui::MakeConfirmBox({
-							.text = tr::lng_download_cancel_confirm(tr::now),
+							.text = tr::lng_tm_item_cancel_download_confirm(tr::now),
 							.confirmed = [=](Fn<void()> close) {
 								close();
 								lnkDocument->cancel();
@@ -1334,22 +1582,72 @@ void ListWidget::showContextMenu(
 				}),
 				&st::menuIconForward);
 		}
-		if (canDeleteAll()) {
+		if (_controller->isDownloads() && downloadsProvider) {
+			const auto session = &_controller->session();
+			const auto efLookup = TmBuildEfLookup(session);
+			auto running = 0;
+			auto deletable = 0;
+			auto clearable = 0;
+			for (const auto &[item, data] : _selected) {
+				const auto kind = TmClassify(
+					item,
+					downloadsProvider,
+					TmFindEf(efLookup, item));
+				if (kind == TmItemKind::Downloading
+					|| kind == TmItemKind::Uploading
+					|| kind == TmItemKind::EnhancedForwardActive) {
+					++running;
+				}
+				if (kind == TmItemKind::Downloaded
+					|| kind == TmItemKind::Uploaded) {
+					++deletable;
+				}
+				if (kind == TmItemKind::Downloaded
+					|| kind == TmItemKind::Uploaded
+					|| kind == TmItemKind::EnhancedForwardFinished) {
+					++clearable;
+				}
+			}
+			if (running > 0) {
+				_contextMenu->addAction(
+					tr::lng_tm_sel_cancel(tr::now),
+					crl::guard(this, [this] {
+						cancelSelected();
+					}),
+					&st::menuIconCancel);
+			}
+			if (deletable > 0) {
+				_contextMenu->addAction(
+					tr::lng_tm_sel_delete(tr::now),
+					crl::guard(this, [this] {
+						deleteFinishedSelected();
+					}),
+					&st::menuIconDelete);
+			}
+			if (clearable > 0) {
+				_contextMenu->addAction(
+					tr::lng_tm_sel_clear(tr::now),
+					crl::guard(this, [this] {
+						clearSelectedItems();
+					}),
+					&st::menuIconClear);
+			}
+		} else {
+			if (canDeleteAll()) {
+				_contextMenu->addAction(
+					tr::lng_context_delete_selected(tr::now),
+					crl::guard(this, [this] {
+						deleteSelected();
+					}),
+					&st::menuIconDelete);
+			}
 			_contextMenu->addAction(
-				(_controller->isDownloads()
-					? tr::lng_context_delete_from_disk(tr::now)
-					: tr::lng_context_delete_selected(tr::now)),
+				tr::lng_context_clear_selection(tr::now),
 				crl::guard(this, [this] {
-					deleteSelected();
+					clearSelected();
 				}),
-				&st::menuIconDelete);
+				&st::menuIconSelect);
 		}
-		_contextMenu->addAction(
-			tr::lng_context_clear_selection(tr::now),
-			crl::guard(this, [this] {
-				clearSelected();
-			}),
-			&st::menuIconSelect);
 	} else {
 		if (overSelected != SelectionState::NotOverSelectedItems) {
 			const auto selectionData = _provider->computeSelectionData(
@@ -1405,7 +1703,7 @@ void ListWidget::showContextMenu(
 					crl::guard(this, [=] {
 						const auto window = _controller->parentController();
 						setActionBoxWeak(window->show(Ui::MakeConfirmBox({
-							.text = tr::lng_upload_cancel_confirm(tr::now),
+							.text = tr::lng_tm_item_cancel_upload_confirm(tr::now),
 							.confirmed = [=](Fn<void()> close) {
 								close();
 								_controller->session().uploader().cancel(
@@ -1418,7 +1716,11 @@ void ListWidget::showContextMenu(
 					}),
 					&st::menuIconCancel);
 			}
-			if (selectionData.canDelete) {
+			if (selectionData.canDelete
+				&& !isEfItem
+				&& !isUpload
+				&& !(downloadsProvider
+					&& downloadsProvider->isDownloading(item))) {
 				if (_controller->isDownloads()
 					&& _controller->session().uploader()
 						.wasUploaded(globalId.itemId)) {
@@ -1440,7 +1742,8 @@ void ListWidget::showContextMenu(
 										close();
 										uploader->deleteFinishedUpload(itemId);
 									},
-									.confirmText = tr::lng_box_delete(tr::now),
+									.confirmText = tr::lng_box_yes(tr::now),
+									.cancelText = tr::lng_box_no(tr::now),
 									.confirmStyle = &st::attentionBoxButton,
 								})));
 						}),
@@ -1456,6 +1759,24 @@ void ListWidget::showContextMenu(
 						crl::guard(this, [=] { deleteItem(globalId); }),
 						item->ttlDestroyAt(),
 						[=] { _contextMenu = nullptr; }));
+				}
+			}
+			if (_controller->isDownloads() && downloadsProvider) {
+				if (downloadsProvider->isDownloaded(item)) {
+					_contextMenu->addAction(
+						tr::lng_tm_item_clear_download(tr::now),
+						crl::guard(this, [=] {
+							Core::App().downloadManager().clearFinishedItem(item);
+						}),
+						&st::menuIconClear);
+				} else if (downloadsProvider->isUploaded(item)) {
+					_contextMenu->addAction(
+						tr::lng_tm_item_clear_upload(tr::now),
+						crl::guard(this, [=] {
+							_controller->session().uploader()
+								.removeFinishedUpload(item->fullId());
+						}),
+						&st::menuIconClear);
 				}
 			}
 		}
@@ -1558,9 +1879,122 @@ void ListWidget::forwardItems(MessageIdsList &&items) {
 }
 
 void ListWidget::deleteSelected() {
-	deleteItems(collectSelectedItems(), crl::guard(this, [=]{
-		clearSelected();
-	}));
+	if (!_controller->isDownloads()) {
+		deleteItems(collectSelectedItems(), crl::guard(this, [=] {
+			clearSelected();
+		}));
+		return;
+	}
+	const auto items = collectSelectedItems();
+	if (items.list.empty()) {
+		return;
+	}
+	const auto window = _controller->parentController();
+	const auto provider = static_cast<Info::Downloads::Provider*>(_provider.get());
+	const auto session = &_controller->session();
+	const auto efLookup = TmBuildEfLookup(session);
+	const auto kinds = TmCountKinds(items.list, provider, efLookup);
+	const auto running = kinds.runningDownload
+		+ kinds.runningUpload
+		+ kinds.runningForward;
+	const auto deletable = kinds.deleteDownload + kinds.deleteUpload;
+	if (running <= 0 && deletable <= 0) {
+		return;
+	}
+	const auto text = (running > 0 && deletable > 0)
+		? tr::lng_tm_sel_mixed_confirm(tr::now)
+		: (running > 0)
+		? TmCancelConfirmText(kinds)
+		: TmDeleteConfirmText(kinds);
+	const auto sure = [=](Fn<void()> close) {
+		close();
+		Ui::PostponeCall(this, [=] {
+			TmCancelItems(session, items.list, provider, efLookup);
+			TmDeleteFinishedItems(session, items.list, provider, efLookup);
+			clearSelected();
+		});
+	};
+	setActionBoxWeak(window->show(Ui::MakeConfirmBox({
+		.text = text,
+		.confirmed = sure,
+		.confirmText = tr::lng_box_yes(tr::now),
+		.cancelText = tr::lng_box_no(tr::now),
+		.confirmStyle = &st::attentionBoxButton,
+	})));
+}
+
+void ListWidget::cancelSelected() {
+	const auto items = collectSelectedItems();
+	if (items.list.empty() || !_controller->isDownloads()) {
+		return;
+	}
+	const auto window = _controller->parentController();
+	const auto provider = static_cast<Info::Downloads::Provider*>(_provider.get());
+	const auto session = &_controller->session();
+	const auto efLookup = TmBuildEfLookup(session);
+	const auto kinds = TmCountKinds(items.list, provider, efLookup);
+	if (kinds.runningDownload + kinds.runningUpload + kinds.runningForward <= 0) {
+		return;
+	}
+	const auto sure = [=](Fn<void()> close) {
+		close();
+		Ui::PostponeCall(this, [=] {
+			TmCancelItems(session, items.list, provider, efLookup);
+			clearSelected();
+		});
+	};
+	setActionBoxWeak(window->show(Ui::MakeConfirmBox({
+		.text = TmCancelConfirmText(kinds),
+		.confirmed = sure,
+		.confirmText = tr::lng_box_yes(tr::now),
+		.cancelText = tr::lng_box_no(tr::now),
+		.confirmStyle = &st::attentionBoxButton,
+	})));
+}
+
+void ListWidget::deleteFinishedSelected() {
+	const auto items = collectSelectedItems();
+	if (items.list.empty() || !_controller->isDownloads()) {
+		return;
+	}
+	const auto window = _controller->parentController();
+	const auto provider = static_cast<Info::Downloads::Provider*>(_provider.get());
+	const auto session = &_controller->session();
+	const auto efLookup = TmBuildEfLookup(session);
+	const auto kinds = TmCountKinds(items.list, provider, efLookup);
+	if (kinds.deleteDownload + kinds.deleteUpload <= 0) {
+		return;
+	}
+	const auto sure = [=](Fn<void()> close) {
+		close();
+		Ui::PostponeCall(this, [=] {
+			TmDeleteFinishedItems(session, items.list, provider, efLookup);
+			clearSelected();
+		});
+	};
+	setActionBoxWeak(window->show(Ui::MakeConfirmBox({
+		.text = TmDeleteConfirmText(kinds),
+		.confirmed = sure,
+		.confirmText = tr::lng_box_yes(tr::now),
+		.cancelText = tr::lng_box_no(tr::now),
+		.confirmStyle = &st::attentionBoxButton,
+	})));
+}
+
+void ListWidget::clearSelectedItems() {
+	const auto items = collectSelectedItems();
+	if (items.list.empty() || !_controller->isDownloads()) {
+		return;
+	}
+	const auto provider = static_cast<Info::Downloads::Provider*>(_provider.get());
+	const auto session = &_controller->session();
+	const auto efLookup = TmBuildEfLookup(session);
+	const auto kinds = TmCountKinds(items.list, provider, efLookup);
+	if (kinds.clearable <= 0) {
+		return;
+	}
+	TmClearFinishedItems(session, items.list, provider, efLookup);
+	clearSelected();
 }
 
 void ListWidget::toggleStoryInProfileSelected(bool toProfile) {
@@ -1725,7 +2159,8 @@ void ListWidget::deleteItems(SelectedItems &&items, Fn<void()> confirmed) {
 		setActionBoxWeak(window->show(Ui::MakeConfirmBox({
 			.text = phrase + (added.isEmpty() ? QString() : "\n\n" + added),
 			.confirmed = deleteSure,
-			.confirmText = tr::lng_box_delete(tr::now),
+			.confirmText = tr::lng_box_yes(tr::now),
+			.cancelText = tr::lng_box_no(tr::now),
 			.confirmStyle = &st::attentionBoxButton,
 		})));
 	} else if (_controller->storiesPeer()) {

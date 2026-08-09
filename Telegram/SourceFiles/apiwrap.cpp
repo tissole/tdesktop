@@ -3910,7 +3910,14 @@ void ApiWrap::forwardMessages(
 
 	LOG(("ENHANCED_FWD: forwardMessages items=%1").arg(draft.items.size()));
 
-	const auto split = EnhancedForward::classifyItems(draft.items);
+	const auto forwardItems = draft.items;
+	EnhancedForward::classifyItems(forwardItems, [
+		this,
+		draft = std::move(draft),
+		action = std::move(action),
+		successCallback = std::move(successCallback),
+		resumeJob = std::move(resumeJob)
+	](EnhancedForward::Split split) mutable {
 	auto enhancedItems = split.restricted;
 	auto normalItems = split.normal;
 	// draft.items are in selection order, not chronological. Sort both
@@ -4185,6 +4192,7 @@ void ApiWrap::forwardMessages(
 	}
 	sendAccumulated();
 	_session->data().sendHistoryChangeNotifications();
+	});
 }
 
 void ApiWrap::startResumeForward(

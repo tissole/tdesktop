@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/painter.h"
 #include "lang/lang_keys.h"
 #include "styles/style_dialogs.h"
+#include <rpl/never.h>
 
 namespace Ui {
 namespace {
@@ -102,9 +103,10 @@ void DownloadBar::show(DownloadBarContent &&content) {
 				tr::now,
 				lt_name, content.singleName.text))
 			: (content.efCount > 1
-				? tr::bold(efPrefix + tr::lng_profile_files(
+				? tr::bold(efPrefix + tr::lng_tm_files_progress(
 					tr::now,
-					lt_count, content.efCount))
+					lt_done, QString::number(content.efDone),
+					lt_total, QString::number(content.efCount)))
 				: content.efCount == 1
 				? tr::bold(efPrefix + content.singleName.text)
 				: (content.uploadCount > 1
@@ -220,7 +222,11 @@ void DownloadBar::setGeometry(int left, int top, int width, int height) {
 }
 
 rpl::producer<> DownloadBar::clicks() const {
-	return _button.entity()->clicks() | rpl::to_empty;
+	const auto entity = _button.entity();
+	if (!entity) {
+		return rpl::never<>();
+	}
+	return entity->clicks() | rpl::to_empty;
 }
 
 rpl::lifetime &DownloadBar::lifetime() {

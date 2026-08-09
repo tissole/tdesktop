@@ -153,6 +153,9 @@ public:
 	[[nodiscard]] int queueSize() const;
 	[[nodiscard]] bool wasUploaded(FullMsgId itemId) const;
 	[[nodiscard]] bool allFinished() const;
+	[[nodiscard]] int jobTotal() const;
+	[[nodiscard]] int jobDone() const;
+	[[nodiscard]] rpl::producer<> jobCounterChanged() const;
 	[[nodiscard]] rpl::producer<FullMsgId> finishedUploadAdded() const;
 	[[nodiscard]] rpl::producer<FullMsgId> finishedUploadRemoved() const;
 	void clearFinishedUploads();
@@ -186,6 +189,7 @@ public:
 		FullMsgId itemId;
 		QString filename;
 		int64 started = 0;
+		int jobIndex = 0;
 	};
 	[[nodiscard]] const std::vector<FinishedUpload> &finishedUploadList() const;
 
@@ -260,6 +264,7 @@ private:
 	void clearResumeState(PeerId peerId, const QString &filePath);
 	Fn<std::optional<QByteArray>()> serializeFinishedUploads();
 	void loadFinishedUploadsFromAccount();
+	void commitFinishedUpload(FinishedUpload &&upload);
 
 	// Upload dedup tracking (in-progress uploads)
 	QHash<QByteArray, int64> _uploadPendingHashes;
@@ -276,6 +281,9 @@ private:
 	std::vector<Entry> _queue;
 	base::flat_set<FullMsgId> _finishedUploads;
 	std::vector<FinishedUpload> _finishedUploadsList;
+	base::flat_map<FullMsgId, FinishedUpload> _awaitingFinishedUploads;
+	int _jobId = 0;
+	rpl::event_stream<> _jobCounterChanged;
 
 	base::flat_map<mtpRequestId, Request> _requests;
 	std::vector<int> _sentPerDcIndex;
