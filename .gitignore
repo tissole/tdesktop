@@ -72,3 +72,4 @@ settings.local.json
 /docs/changelog/
 *.md
 /.poolside
+/.freebuff
