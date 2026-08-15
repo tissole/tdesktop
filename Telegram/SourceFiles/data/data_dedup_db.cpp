@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QSqlError>
+#include <QSet>
 #include <QVariant>
 #include <QUuid>
 
@@ -91,7 +92,7 @@ public:
 private:
 	struct TableState {
 		QHash<uint64, QByteArray> docToHash;
-		QHash<QByteArray, uint64> hashToDoc;
+		QHash<QByteArray, QSet<uint64>> hashToDoc;
 		bool loaded = false;
 	};
 
@@ -172,9 +173,7 @@ void DedupDb::Impl::ensureLoaded(Table table) const {
 			continue;
 		}
 		s.docToHash[docId] = hash;
-		if (!s.hashToDoc.contains(hash)) {
-			s.hashToDoc[hash] = docId;
-		}
+		s.hashToDoc[hash].insert(docId);
 	}
 }
 
@@ -251,11 +250,15 @@ void DedupDb::Impl::insert(Table table, const DedupRecord &record) {
 	auto &s = state(table);
 	if (record.documentId && !record.hash.isEmpty()) {
 		s.docToHash[record.documentId] = record.hash;
-		if (!s.hashToDoc.contains(record.hash)) {
-			s.hashToDoc[record.hash] = record.documentId;
-		}
+		s.hashToDoc[record.hash].insert(record.documentId);
 	}
 	if (!_open) {
+		return;
+	}
+	if (record.hash.isEmpty()) {
+		// An empty hash (in-flight 'u' row) can't be used for dedup and the
+		// column is NOT NULL, so skip the DB write. The in-memory state above
+		// still tracks the doc id for containsDocId().
 		return;
 	}
 	QSqlQuery q(_db);
@@ -285,20 +288,11 @@ void DedupDb::Impl::removeByDocumentId(
 	if (it != s.docToHash.constEnd()) {
 		const auto hash = it.value();
 		s.docToHash.remove(documentId);
-		if (s.hashToDoc.value(hash) == documentId) {
-			auto replacement = uint64(0);
-			for (auto i = s.docToHash.constBegin();
-					i != s.docToHash.constEnd();
-					++i) {
-				if (i.value() == hash) {
-					replacement = i.key();
-					break;
-				}
-			}
-			if (replacement) {
-				s.hashToDoc[hash] = replacement;
-			} else {
-				s.hashToDoc.remove(hash);
+		const auto hashes = s.hashToDoc.find(hash);
+		if (hashes != s.hashToDoc.end()) {
+			hashes.value().remove(documentId);
+			if (hashes.value().isEmpty()) {
+				s.hashToDoc.erase(hashes);
 			}
 		}
 	}
@@ -342,8 +336,10 @@ void DedupDb::Impl::rekey(
 	const auto hash = s.docToHash.take(oldDocumentId);
 	if (!hash.isEmpty()) {
 		s.docToHash[newDocumentId] = hash;
-		if (s.hashToDoc.value(hash) == oldDocumentId) {
-			s.hashToDoc[hash] = newDocumentId;
+		const auto hashes = s.hashToDoc.find(hash);
+		if (hashes != s.hashToDoc.end()) {
+			hashes.value().remove(oldDocumentId);
+			hashes.value().insert(newDocumentId);
 		}
 	}
 	if (!_open) {
@@ -398,12 +394,9 @@ uint64 DedupDb::Impl::seekDocumentId(
 	if (it == s.hashToDoc.end()) {
 		return 0;
 	}
-	if (it.value() != excludeDocumentId) {
-		return it.value();
-	}
-	for (auto i = s.docToHash.constBegin(); i != s.docToHash.constEnd(); ++i) {
-		if (i.value() == hash && i.key() != excludeDocumentId) {
-			return i.key();
+	for (const auto docId : it.value()) {
+		if (docId != excludeDocumentId) {
+			return docId;
 		}
 	}
 	return 0;

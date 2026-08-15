@@ -439,6 +439,7 @@ void DownloadManager::addLoaded(
 		: DownloadId{ object.photo->id, DownloadType::Photo };
 
 	auto dedupHash = QByteArray();
+	auto isBigFile = false;
 	const auto docId = object.document
 		? object.document->id
 		: (object.photo ? object.photo->id : 0);
@@ -450,6 +451,10 @@ void DownloadManager::addLoaded(
 			// chunks off the just-finished file would recompute it, so reuse.
 			dedupHash = dedupDb.hashForDocId(DedupDb::Table::Downloads, docId);
 		}
+		// Only big files get a 2-chunk remote hash at download start, which
+		// means their duplicate decision was already made before download, in
+		// checkDuplicate. So isBigFile here really means "decided earlier".
+		isBigFile = !dedupHash.isEmpty();
 		if (dedupHash.isEmpty()) {
 			// No start-time record: dedup was off when this started, the
 			// remote fetch failed, or the file was too small to sample
@@ -464,7 +469,7 @@ void DownloadManager::addLoaded(
 	// just this download recognizing itself. Excluding it here is required,
 	// otherwise every dedup-tracked download would delete the file it just
 	// finished the moment it completed.
-	const auto isDuplicateOfOther = [&] {
+	const auto isDuplicateByHash = [&] {
 		if (dedupHash.isEmpty() || !dedupDb.isOpen()) {
 			return false;
 		}
@@ -481,7 +486,12 @@ void DownloadManager::addLoaded(
 		// unfinished), so the content is already known to be downloaded.
 		return dedupDb.containsDocId(DedupDb::Table::Downloads, docId);
 	}();
-	if (isDuplicateOfOther || isDuplicatePhotoById) {
+	if ((isDuplicateByHash || isDuplicatePhotoById) && !isBigFile) {
+		// A 2-chunk remote hash (big files only) means the duplicate decision
+		// was already made in checkDuplicate - the duplicate was skipped and
+		// never written to disk, so re-checking here would delete the real
+		// download. Only files without one (small files, photos, failed
+		// remote samples) are decided here.
 		LOG(("DEDUP: addLoaded dup size=%1 path=%2").arg(
 			size).arg(path));
 		QFile::remove(path);
