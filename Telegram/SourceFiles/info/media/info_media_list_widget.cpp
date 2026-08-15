@@ -457,8 +457,18 @@ void ListWidget::start() {
 			_overLayout = nullptr;
 		}
 		_heavyLayouts.remove(layout);
-		for (auto &section : _sections) {
-			section.removeLayout(layout);
+		auto needHeightRefresh = false;
+		for (auto i = _sections.begin(); i != _sections.end();) {
+			i->removeLayout(layout);
+			if (i->empty()) {
+				i = _sections.erase(i);
+				needHeightRefresh = true;
+			} else {
+				++i;
+			}
+		}
+		if (needHeightRefresh) {
+			refreshHeight();
 		}
 	}, lifetime());
 

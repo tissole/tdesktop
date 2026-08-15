@@ -52,6 +52,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // ADDITIONAL INTERNAL DATA TYPES REQUIRED FOR THE STAGE PIPELINE:
 #include "data/data_document.h"
+#include "data/data_document_media.h"
 #include "data/data_photo.h"
 #include "data/data_photo_media.h"
 #include "data/data_file_origin.h"
@@ -2163,6 +2164,20 @@ void Pipeline::startUploadForItem(int i) {
 					&_session,
 					srcItem,
 					item.prepared ? int64(item.prepared->filesize) : item.fileSize);
+				if (const auto media = srcItem->media()) {
+					if (const auto doc = media->document()) {
+						// The destination chat already renders the prepared
+						// thumbnail. Mirror it onto the source document's
+						// shared media view so the transfer manager rows for
+						// this source item show the same cover instead of a
+						// black box. Media-view only: never persist an
+						// in-memory thumb into the document location, because
+						// serialized in-memory thumbs are rejected on reload.
+						if (!doc->hasThumbnail() && !item.prepared->thumb.isNull()) {
+							doc->createMediaView()->setThumbnail(item.prepared->thumb);
+						}
+					}
+				}
 			}
 
 			const auto localMsg = _action.history->addNewLocalMessage({
@@ -2224,7 +2239,6 @@ void Pipeline::onUploadDone(const Storage::UploadedMedia &data) {
 			db.updateDedupStatus(
 				Data::DedupDb::Table::Uploads,
 				item.fileHash,
-				item.fileSize,
 				u"f"_q);
 			db.removePending(
 				Data::DedupDb::Table::Uploads,
@@ -2521,7 +2535,12 @@ void Pipeline::pumpDownloads() {
 			&& size >= Data::kDedupMinPartialHashSize
 			&& dedupDb.isOpen();
 		if (dedupDb.isOpen()) {
-			dedupDb.addPending(Data::DedupDb::Table::Uploads, mediaId, size);
+			// In-flight upload registration; the hash fills in once the
+			// remote fingerprint (or the local file hash) is computed.
+			dedupDb.addPending(
+				Data::DedupDb::Table::Uploads,
+				mediaId,
+				QByteArray());
 		}
 		if (remotePrecheck) {
 			const auto origin = Data::FileOrigin(
@@ -2540,34 +2559,27 @@ void Pipeline::pumpDownloads() {
 				it.fileHash = hash;
 				it.fileSize = size;
 				auto &db = Core::App().downloadManager().dedupDb();
-				db.updatePendingHash(
+				db.addPending(
 					Data::DedupDb::Table::Uploads,
 					mediaId,
 					hash);
-				const auto duplicate = db.isOpen()
-					? db.findUploadDuplicateByHash(hash, size, mediaId)
-					: std::optional<Data::DedupRecord>();
-				if (duplicate && duplicate->documentId != mediaId) {
-					if (duplicate->documentId) {
-						db.insertIdMapping(mediaId, hash);
-					}
+				const auto duplicateId = db.seekDocumentId(
+					Data::DedupDb::Table::Uploads,
+					hash,
+					mediaId);
+				if (duplicateId) {
 					skipAsDuplicate(i);
 					return;
 				}
-			db.insert(Data::DedupDb::Table::Uploads, {
-				hash,
-				size,
-				mediaId,
-				u"u"_q });
-			doc->save(origin, it.path, LoadFromCloudOrLocal, false, true);
-			Core::App().downloadManager().addLoading(
-				{ .item = srcItem, .document = doc },
-				true);
-			checkItem(i);
-			if (it.downloadDone) {
-				pumpDownloads();
-			}
-		});
+				doc->save(origin, it.path, LoadFromCloudOrLocal, false, true);
+				Core::App().downloadManager().addLoading(
+					{ .item = srcItem, .document = doc },
+					true);
+				checkItem(i);
+				if (it.downloadDone) {
+					pumpDownloads();
+				}
+			});
 			return;
 		}
 		item.dedupNeedsHash = true;
@@ -2638,25 +2650,19 @@ void Pipeline::dedupCheckItem(int i) {
 
 	auto &dedupDb = Core::App().downloadManager().dedupDb();
 	if (!dedupDb.isOpen()) return;
-	dedupDb.updatePendingHash(
+	dedupDb.addPending(
 		Data::DedupDb::Table::Uploads,
 		mediaId,
 		hash);
-	const auto duplicate = dedupDb.findUploadDuplicateByHash(hash, size, mediaId);
-	if (duplicate && duplicate->documentId != mediaId) {
+	const auto duplicateId = dedupDb.seekDocumentId(
+		Data::DedupDb::Table::Uploads,
+		hash,
+		mediaId);
+	if (duplicateId) {
 		if (item.path.startsWith(_downloadPath)) {
 			QFile::remove(item.path);
 		}
-		if (duplicate->documentId) {
-			dedupDb.insertIdMapping(mediaId, hash);
-		}
 		skipAsDuplicate(i);
-	} else {
-		dedupDb.insert(Data::DedupDb::Table::Uploads, {
-			hash,
-			size,
-			mediaId,
-			u"u"_q });
 	}
 }
 
@@ -2674,10 +2680,16 @@ void Pipeline::skipAsDuplicate(int i) {
 		Core::App().downloadManager().removeLoading(srcItem);
 	}
 	refreshSourceItemState(i);
-	if (item.mediaId) {
+	if (item.mediaId && !item.fileHash.isEmpty()) {
 		auto &db = Core::App().downloadManager().dedupDb();
 		if (db.isOpen()) {
-			db.removePending(Data::DedupDb::Table::Uploads, item.mediaId);
+			// Same as downloads: keep the new id -> same content mapping so
+			// a future forward of this exact media is skipped O(1).
+			db.insert(Data::DedupDb::Table::Uploads, {
+				.hash = item.fileHash,
+				.documentId = item.mediaId,
+				.status = u"f"_q,
+			});
 		}
 	}
 	auto &states = ActiveStates();

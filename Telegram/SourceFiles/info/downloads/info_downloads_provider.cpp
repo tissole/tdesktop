@@ -118,14 +118,17 @@ void Provider::updateCounter() {
 		|| _filter == Filter::All);
 	const auto wantUploads = (_filter == Filter::Uploads
 		|| _filter == Filter::All);
-	const auto wantForwards = (_filter == Filter::Forwards);
+	const auto wantForwards = (_filter == Filter::Forwards
+		|| _filter == Filter::All);
 	auto done = 0;
 	auto total = 0;
 	if (wantForwards) {
 		const auto session = &_controller->session();
-		using ForwardJob = EnhancedForward::JobSnapshot;
 		const auto jobs = EnhancedForward::AllJobs(session);
-		const ForwardJob *current = nullptr;
+		// Like the download/upload jobId counters, show the current job only:
+		// the active forward, or the latest finished/resumable batch when
+		// nothing is running. Finished jobs do not accumulate.
+		const EnhancedForward::JobSnapshot *current = nullptr;
 		for (const auto &job : jobs) {
 			if (job.active) {
 				current = &job;
@@ -279,7 +282,14 @@ void Provider::refreshViewer() {
 				&Element::item);
 			_downloading.remove(item);
 			if (!_downloaded.contains(item) && !inPostponed) {
-				remove(item);
+				if (manager.isDone(item)) {
+					// The item finished during the provider's setup window and
+					// its loadedAdded was missed (we subscribed afterwards).
+					// Keep it listed instead of dropping it from the tab.
+					_downloaded.emplace(item);
+				} else {
+					remove(item);
+				}
 			}
 		}
 		for (const auto &item : efCopy) {
@@ -515,10 +525,34 @@ void Provider::refreshViewer() {
 
 		const auto refreshEF = std::make_shared<Fn<void()>>();
 		const auto failedResolve = std::make_shared<base::flat_set<FullMsgId>>();
-		*refreshEF = [=, refreshEF = refreshEF.get()] {
+		const auto refreshScheduled = std::make_shared<bool>(false);
+		const auto scheduleRefresh = std::make_shared<Fn<void()>>();
+		*scheduleRefresh = [this, refreshScheduled, refreshEF = refreshEF.get()] {
+			if (*refreshScheduled) {
+				return;
+			}
+			*refreshScheduled = true;
+			Ui::PostponeCall(this, [refreshScheduled, refreshEF] {
+				*refreshScheduled = false;
+				(*refreshEF)();
+			});
+		};
+		*refreshEF = [this, session, failedResolve, scheduleRefresh = scheduleRefresh.get()] {
 			auto jobItems = base::flat_set<not_null<const HistoryItem*>>();
+			auto allSourceIds = base::flat_set<FullMsgId>();
 			auto unresolved = std::vector<FullMsgId>();
-			for (const auto &job : EnhancedForward::AllJobs(session)) {
+			auto jobs = EnhancedForward::AllJobs(session);
+			// Finished/resumable batches come first so that when a new job
+			// runs for the same peer the merged Forwards list keeps a stable
+			// source order and finished items never flicker out and back in.
+			ranges::stable_sort(
+				jobs,
+				ranges::less(),
+				[](const EnhancedForward::JobSnapshot &job) {
+					return !(job.finished || job.resumable);
+				});
+			auto canonical = 0;
+			for (const auto &job : jobs) {
 				if (job.progress.state == EnhancedForward::State::Cancelled) {
 					continue;
 				}
@@ -528,6 +562,7 @@ void Provider::refreshViewer() {
 						continue;
 					}
 					const auto srcId = job.progress.sourceIds[i];
+					allSourceIds.emplace(srcId);
 					const auto message = session->data().message(srcId);
 					if (!message) {
 						if (!failedResolve->contains(srcId)) {
@@ -537,30 +572,36 @@ void Provider::refreshViewer() {
 					}
 					const auto item = not_null<HistoryItem*>(message);
 					jobItems.emplace(item);
-					if (_enhancedForward.contains(item)) {
-						continue;
+					if (!_enhancedForward.contains(item)) {
+						_enhancedForward.emplace(item);
+						const auto alreadyInElements = ranges::any_of(
+							_elements,
+							[&](const Element &element) {
+								return element.item == item;
+							});
+						if (!alreadyInElements) {
+							addElementNow(Element{
+								item,
+								int64(item->date()) * 1000,
+								QString(),
+							});
+						}
+						trackItemSession(item);
+						refreshPostponed(true);
 					}
-					_enhancedForward.emplace(item);
-					const auto alreadyInElements = ranges::any_of(
-						_elements,
-						[&](const Element &element) {
-							return element.item == item;
-						});
-					if (!alreadyInElements) {
-						addElementNow(Element{
-							item,
-							int64(item->date()) * 1000,
-							QString(),
-						});
+					for (auto &element : _elements) {
+						if (element.item == item) {
+							element.order = canonical++;
+							break;
+						}
 					}
-					trackItemSession(item);
-					refreshPostponed(true);
 				}
 			}
 			auto toRemove = std::vector<not_null<const HistoryItem*>>();
 			auto &downloadManager = Core::App().downloadManager();
 			for (const auto &item : _enhancedForward) {
-				if (jobItems.contains(item)) {
+				if (jobItems.contains(item)
+					|| allSourceIds.contains(item->fullId())) {
 					continue;
 				}
 				const auto stillLoading = ranges::any_of(
@@ -582,7 +623,7 @@ void Provider::refreshViewer() {
 				EnhancedForward::EnsureForwardSourceMessages(
 					session,
 					unresolved,
-					[weak, refreshEF, failedResolve, unresolved](bool ok) {
+					[weak, failedResolve, unresolved, scheduleRefresh](bool ok) {
 						if (ok) {
 							for (const auto &id : unresolved) {
 								failedResolve->erase(id);
@@ -593,15 +634,15 @@ void Provider::refreshViewer() {
 							}
 						}
 						if (const auto alive = weak.get()) {
-							(*refreshEF)();
+							(*scheduleRefresh)();
 						}
 					});
 			}
 		};
 		rpl::single(rpl::empty) | rpl::then(
 			EnhancedForward::stateChanges() | rpl::to_empty
-		) | rpl::on_next([refreshEF] {
-			(*refreshEF)();
+		) | rpl::on_next([refreshEF, scheduleRefresh] {
+			(*scheduleRefresh)();
 		}, _lifetime);
 
 		Core::App().downloadManager().jobCounterChanged(
@@ -740,6 +781,18 @@ void Provider::performAdd() {
 }
 
 void Provider::addElementNow(Element &&element) {
+	const auto itemId = element.item->fullId();
+	const auto already = ranges::find_if(
+		_elements,
+		[&](const Element &existing) {
+			return existing.item->fullId() == itemId;
+		});
+	if (already != end(_elements)) {
+		// The same item may be reported by several sources at once (the
+		// loading list, the EF job list, uploader events): keep one row.
+		return;
+	}
+	element.order = _nextElementOrder++;
 	_elements.push_back(std::move(element));
 	auto &added = _elements.back();
 	fillSearchIndex(added);
@@ -793,7 +846,14 @@ void Provider::performRefresh() {
 		_fullCount = _elements.size();
 	}
 	if (base::take(_postponedRefreshSort)) {
-		ranges::stable_sort(_elements, ranges::less(), &Element::started);
+		// Forwards keep the job's source order; Downloads/Uploads sort by
+		// their start time so a rebuilt provider (reopened tab) still shows
+		// source-chat order instead of completion order.
+		if (_filter == Filter::Forwards) {
+			ranges::stable_sort(_elements, ranges::less(), &Element::order);
+		} else {
+			ranges::stable_sort(_elements, ranges::less(), &Element::started);
+		}
 	}
 	_refreshed.fire({});
 	updateAvailability();
@@ -864,7 +924,7 @@ std::vector<ListSection> Provider::fillSections(
 	if (_showGroupHeaders) {
 		auto downloads = ListSection(Type::File, sectionDelegate());
 		auto uploads = ListSection(Type::File, sectionDelegate());
-		for (const auto &element : ranges::views::reverse(_elements)) {
+		for (const auto &element : _elements) {
 			if (search && !element.found) {
 				continue;
 			}
@@ -888,17 +948,50 @@ std::vector<ListSection> Provider::fillSections(
 		}
 	} else {
 		auto section = ListSection(Type::File, sectionDelegate());
-		const auto forward = (_filter == Filter::Forwards);
-		for (auto i = 0; i != int(_elements.size()); ++i) {
-			const auto &element = _elements[forward
-				? i
-				: int(_elements.size() - 1 - i)];
-			if (search && !element.found) {
-				continue;
-			} else if (!matches(element.item)) {
-				continue;
-			} else if (auto layout = getLayout(element, delegate)) {
-				section.addItem(layout);
+		if (_filter == Filter::Forwards
+			|| _filter == Filter::Uploads
+			|| _filter == Filter::Downloads) {
+			// Forwards/Uploads/Downloads keep source-chat order. Forwards use
+			// the job's source order (Element::order); Downloads use the time
+			// the download started and Uploads the message date - both are
+			// the order the files were picked in the source chat and they
+			// survive a provider rebuild (entry order alone becomes
+			// completion order and is not stable).
+			std::vector<const Element*> eligible;
+			eligible.reserve(_elements.size());
+			for (const auto &element : _elements) {
+				if (!search || element.found) {
+					eligible.push_back(&element);
+				}
+			}
+			if (_filter == Filter::Forwards) {
+				ranges::stable_sort(
+					eligible,
+					ranges::less(),
+					[](const Element *element) { return element->order; });
+			} else {
+				ranges::stable_sort(
+					eligible,
+					ranges::less(),
+					&Element::started);
+			}
+			for (const auto *element : eligible) {
+				if (!matches(element->item)) {
+					continue;
+				} else if (auto layout = getLayout(*element, delegate)) {
+					section.addItem(layout);
+				}
+			}
+		} else {
+			for (auto i = 0; i != int(_elements.size()); ++i) {
+				const auto &element = _elements[_elements.size() - 1 - i];
+				if (search && !element.found) {
+					continue;
+				} else if (!matches(element.item)) {
+					continue;
+				} else if (auto layout = getLayout(element, delegate)) {
+					section.addItem(layout);
+				}
 			}
 		}
 		section.finishSection();

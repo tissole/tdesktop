@@ -3403,6 +3403,7 @@ void Session::photoConvert(
 	});
 	const auto idChanged = (original->id != id);
 	if (idChanged) {
+		const auto localId = original->id;
 		auto i = _photos.find(id);
 		if (i == _photos.end()) {
 			const auto j = _photos.find(original->id);
@@ -3417,6 +3418,10 @@ void Session::photoConvert(
 
 		if (i->second.get() != original) {
 			photoApplyFields(i->second.get(), data);
+		}
+
+		if (localId) {
+			_session->uploader().photoIdWriteback(localId, id);
 		}
 	}
 	photoApplyFields(original, data);

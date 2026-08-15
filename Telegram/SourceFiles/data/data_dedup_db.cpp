@@ -38,32 +38,31 @@ public:
 
 	[[nodiscard]] bool isOpen() const;
 	void insert(Table table, const DedupRecord &record);
-	void remove(Table table, const QByteArray &hash, int64 size);
-	[[nodiscard]] bool contains(
-		Table table,
-		const QByteArray &hash,
-		int64 size) const;
-	[[nodiscard]] bool containsDocId(
-		Table table,
-		uint64 documentId) const;
-	[[nodiscard]] uint64 findDocumentId(
-		Table table,
-		const QByteArray &hash,
-		int64 size) const;
-	[[nodiscard]] std::vector<DedupRecord> loadAll(Table table) const;
-
-	void insertIdMapping(uint64 mediaId, const QByteArray &hash);
-	[[nodiscard]] bool containsIdMapping(uint64 mediaId) const;
-	[[nodiscard]] bool containsSize(Table table, int64 size) const;
-	void updateDedupStatus(
-		Table table,
-		const QByteArray &hash,
-		int64 size,
-		const QString &status);
 	void removeByDocumentId(
 		Table table,
 		uint64 documentId,
 		const QString &status);
+	[[nodiscard]] bool containsDocId(
+		Table table,
+		uint64 documentId) const;
+	[[nodiscard]] bool containsHash(
+		Table table,
+		const QByteArray &hash) const;
+	void rekey(Table table, uint64 oldDocumentId, uint64 newDocumentId);
+	void updateDedupStatus(
+		Table table,
+		const QByteArray &hash,
+		const QString &status);
+	[[nodiscard]] QByteArray hashForDocId(
+		Table table,
+		uint64 documentId) const;
+	[[nodiscard]] uint64 seekDocumentId(
+		Table table,
+		const QByteArray &hash,
+		uint64 excludeDocumentId) const;
+	void addPending(Table table, uint64 documentId, const QByteArray &hash);
+	void removePending(Table table, uint64 documentId);
+	[[nodiscard]] std::vector<DedupRecord> loadAll(Table table) const;
 
 	void insertResumeDl(const ResumeDlRecord &record);
 	void removeResumeDl(uint64 peerId, int64 msgId);
@@ -86,38 +85,26 @@ public:
 	[[nodiscard]] std::vector<EfResumeItem> loadFinishedEfResumeItems() const;
 	void clearDoneEfResumeForPeer(PeerId peerId);
 
-	[[nodiscard]] std::optional<DedupRecord> findUploadDuplicateByHash(
-		const QByteArray &hash,
-		int64 size,
-		uint64 excludeDocumentId = 0) const;
-
-	void addPending(Table table, uint64 documentId, int64 size);
-	void updatePendingHash(
-		Table table,
-		uint64 documentId,
-		const QByteArray &hash);
-	void removePending(Table table, uint64 documentId);
-
 	void beginTransaction();
 	void commitTransaction();
 
 private:
-	struct PendingEntry {
-		uint64 documentId = 0;
-		int64 size = 0;
-		QByteArray hash;
+	struct TableState {
+		QHash<uint64, QByteArray> docToHash;
+		QHash<QByteArray, uint64> hashToDoc;
+		bool loaded = false;
 	};
 
-	[[nodiscard]] std::vector<PendingEntry> &pendingList(Table table);
-	[[nodiscard]] const std::vector<PendingEntry> &pendingList(
-		Table table) const;
+	[[nodiscard]] TableState &state(Table table);
+	[[nodiscard]] const TableState &state(Table table) const;
+	void ensureLoaded(Table table) const;
 
-	[[nodiscard]] bool createTables();
+	bool createTables();
 
 	QString _connectionName;
 	QSqlDatabase _db;
 	bool _open = false;
-	std::vector<PendingEntry> _pending[2];
+	mutable TableState _state[2];
 };
 
 DedupDb::Impl::Impl(const QString &path)
@@ -135,6 +122,19 @@ DedupDb::Impl::Impl(const QString &path)
 	pragma.exec(u"PRAGMA journal_mode=WAL"_q);
 	pragma.exec(u"PRAGMA synchronous=NORMAL"_q);
 	_open = createTables();
+	if (_open) {
+		// In-flight rows can only survive a crash: at process start nothing
+		// is downloading or uploading yet, so every 'u' row is stale. If left
+		// around, a phantom pending record would make checkDuplicate treat a
+		// fresh download/upload of the same content as a duplicate and delete
+		// its just-finished file. Wipe them before any state is loaded.
+		QSqlQuery cleanup(_db);
+		if (!cleanup.exec(u"DELETE FROM dedup_dl WHERE status = 'u'"_q)
+			|| !cleanup.exec(u"DELETE FROM dedup_ul WHERE status = 'u'"_q)) {
+			LOG(("DedupDb: Failed to purge stale pending rows: %1").arg(
+				cleanup.lastError().text()));
+		}
+	}
 }
 
 DedupDb::Impl::~Impl() {
@@ -142,6 +142,40 @@ DedupDb::Impl::~Impl() {
 		_db.close();
 	}
 	QSqlDatabase::removeDatabase(_connectionName);
+}
+
+DedupDb::Impl::TableState &DedupDb::Impl::state(Table table) {
+	ensureLoaded(table);
+	return _state[int(table)];
+}
+
+const DedupDb::Impl::TableState &DedupDb::Impl::state(Table table) const {
+	ensureLoaded(table);
+	return _state[int(table)];
+}
+
+void DedupDb::Impl::ensureLoaded(Table table) const {
+	auto &s = _state[int(table)];
+	if (s.loaded || !_open) {
+		return;
+	}
+	s.loaded = true;
+	QSqlQuery q(_db);
+	if (!q.exec(u"SELECT hash, doc_id FROM " + TableName(table))) {
+		LOG(("DedupDb: Load failed: %1").arg(q.lastError().text()));
+		return;
+	}
+	while (q.next()) {
+		const auto hash = q.value(0).toByteArray();
+		const auto docId = q.value(1).toULongLong();
+		if (hash.isEmpty() || !docId) {
+			continue;
+		}
+		s.docToHash[docId] = hash;
+		if (!s.hashToDoc.contains(hash)) {
+			s.hashToDoc[hash] = docId;
+		}
+	}
 }
 
 bool DedupDb::Impl::isOpen() const {
@@ -159,42 +193,21 @@ bool DedupDb::Impl::createTables() {
 		}
 		return true;
 	};
-	const auto addColumnIfMissing = [&](
-			const QString &table,
-			const QString &column,
-			const QString &definition) {
-		QSqlQuery check(_db);
-		check.prepare(u"PRAGMA table_info('" + table + u"')"_q);
-		if (!check.exec()) {
-			return true;
-		}
-		while (check.next()) {
-			if (check.value(1).toString() == column) {
-				return true;
-			}
-		}
-		return exec(u"ALTER TABLE " + table + u" ADD COLUMN "
-			+ column + u" " + definition);
-	};
+	// Compact single-row-per-content layout: one row per doc/media id,
+	// identical content with a different id is an extra row with the same
+	// hash. No size column: size is never used as a dedup criterion.
 	return exec(u"CREATE TABLE IF NOT EXISTS dedup_dl ("
+		"doc_id INTEGER PRIMARY KEY, "
 		"hash BLOB NOT NULL, "
-		"size INTEGER NOT NULL, "
-		"doc_id INTEGER NOT NULL DEFAULT 0, "
-		"status TEXT NOT NULL DEFAULT 'f', "
-		"PRIMARY KEY (hash, size))"_q)
+		"status TEXT NOT NULL DEFAULT 'f')"_q)
 		&& exec(u"CREATE TABLE IF NOT EXISTS dedup_ul ("
+			"doc_id INTEGER PRIMARY KEY, "
 			"hash BLOB NOT NULL, "
-			"size INTEGER NOT NULL, "
-			"doc_id INTEGER NOT NULL DEFAULT 0, "
-			"status TEXT NOT NULL DEFAULT 'f', "
-			"PRIMARY KEY (hash, size))"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS dedup_ids ("
-			"media_id INTEGER PRIMARY KEY, "
-			"hash BLOB NOT NULL)"_q)
-		&& exec(u"CREATE INDEX IF NOT EXISTS idx_dedup_dl_doc_id "
-			"ON dedup_dl(doc_id)"_q)
-		&& exec(u"CREATE INDEX IF NOT EXISTS idx_dedup_ul_doc_id "
-			"ON dedup_ul(doc_id)"_q)
+			"status TEXT NOT NULL DEFAULT 'f')"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_dedup_dl_hash "
+			"ON dedup_dl(hash)"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_dedup_ul_hash "
+			"ON dedup_ul(hash)"_q)
 		&& exec(u"CREATE TABLE IF NOT EXISTS resume_dl ("
 			"peer_id INTEGER NOT NULL, "
 			"peer_access_hash INTEGER NOT NULL DEFAULT 0, "
@@ -231,120 +244,213 @@ bool DedupDb::Impl::createTables() {
 		&& exec(u"CREATE INDEX IF NOT EXISTS idx_ef_resume_peer "
 			"ON ef_resume(peer_id, state)"_q)
 		&& exec(u"CREATE INDEX IF NOT EXISTS idx_ef_resume_hash "
-			"ON ef_resume(file_hash)"_q)
-		&& addColumnIfMissing(u"ef_resume"_q, u"media_id"_q,
-			u"INTEGER NOT NULL DEFAULT 0"_q);
+			"ON ef_resume(file_hash)"_q);
 }
 
 void DedupDb::Impl::insert(Table table, const DedupRecord &record) {
+	auto &s = state(table);
+	if (record.documentId && !record.hash.isEmpty()) {
+		s.docToHash[record.documentId] = record.hash;
+		if (!s.hashToDoc.contains(record.hash)) {
+			s.hashToDoc[record.hash] = record.documentId;
+		}
+	}
 	if (!_open) {
 		return;
 	}
 	QSqlQuery q(_db);
 	q.prepare(u"INSERT OR REPLACE INTO " + TableName(table)
-		+ u" (hash, size, doc_id, status) "
-		"VALUES (:hash, :size, :doc_id, :status)"_q);
-	q.bindValue(u":hash"_q, record.hash);
-	q.bindValue(u":size"_q, QVariant::fromValue(record.size));
+		+ u" (doc_id, hash, status) "
+		"VALUES (:doc_id, :hash, :status)"_q);
 	q.bindValue(u":doc_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(record.documentId)));
+	q.bindValue(u":hash"_q, record.hash);
 	q.bindValue(u":status"_q, record.status);
 	if (!q.exec()) {
 		LOG(("DedupDb: Insert failed: %1").arg(q.lastError().text()));
 	}
 }
 
-void DedupDb::Impl::remove(Table table, const QByteArray &hash, int64 size) {
-	if (!_open) {
+void DedupDb::Impl::removeByDocumentId(
+		Table table,
+		uint64 documentId,
+		const QString &status) {
+	auto &s = state(table);
+	if (!status.isEmpty()) {
+		// Only drop in-memory when the on-disk row would be dropped too.
+		// Memory tracks the current rows one-to-one, so a status-filtered
+		// delete still removes the id from memory.
+	}
+	const auto it = s.docToHash.constFind(documentId);
+	if (it != s.docToHash.constEnd()) {
+		const auto hash = it.value();
+		s.docToHash.remove(documentId);
+		if (s.hashToDoc.value(hash) == documentId) {
+			auto replacement = uint64(0);
+			for (auto i = s.docToHash.constBegin();
+					i != s.docToHash.constEnd();
+					++i) {
+				if (i.value() == hash) {
+					replacement = i.key();
+					break;
+				}
+			}
+			if (replacement) {
+				s.hashToDoc[hash] = replacement;
+			} else {
+				s.hashToDoc.remove(hash);
+			}
+		}
+	}
+	if (!_open || !documentId) {
 		return;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM " + TableName(table)
-		+ u" WHERE hash = :hash AND size = :size"_q);
-	q.bindValue(u":hash"_q, hash);
-	q.bindValue(u":size"_q, QVariant::fromValue(size));
+	if (status.isEmpty()) {
+		q.prepare(u"DELETE FROM " + TableName(table)
+			+ u" WHERE doc_id = :doc_id"_q);
+	} else {
+		q.prepare(u"DELETE FROM " + TableName(table)
+			+ u" WHERE doc_id = :doc_id AND status = :status"_q);
+		q.bindValue(u":status"_q, status);
+	}
+	q.bindValue(u":doc_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(documentId)));
 	if (!q.exec()) {
 		LOG(("DedupDb: Remove failed: %1").arg(q.lastError().text()));
 	}
 }
 
-bool DedupDb::Impl::contains(
-		Table table,
-		const QByteArray &hash,
-		int64 size) const {
-	if (!_open) {
-		return false;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"SELECT 1 FROM " + TableName(table)
-		+ u" WHERE hash = :hash AND size = :size AND status = 'f'"_q);
-	q.bindValue(u":hash"_q, hash);
-	q.bindValue(u":size"_q, QVariant::fromValue(size));
-	if (!q.exec()) {
-		return false;
-	}
-	return q.next();
+bool DedupDb::Impl::containsDocId(Table table, uint64 documentId) const {
+	const auto &s = state(table);
+	return s.docToHash.contains(documentId);
 }
 
-bool DedupDb::Impl::containsDocId(Table table, uint64 documentId) const {
-	for (const auto &entry : pendingList(table)) {
-		if (entry.documentId == documentId) {
-			return true;
+bool DedupDb::Impl::containsHash(Table table, const QByteArray &hash) const {
+	const auto &s = state(table);
+	return s.hashToDoc.contains(hash);
+}
+
+void DedupDb::Impl::rekey(
+		Table table,
+		uint64 oldDocumentId,
+		uint64 newDocumentId) {
+	if (!oldDocumentId || !newDocumentId || oldDocumentId == newDocumentId) {
+		return;
+	}
+	auto &s = state(table);
+	const auto hash = s.docToHash.take(oldDocumentId);
+	if (!hash.isEmpty()) {
+		s.docToHash[newDocumentId] = hash;
+		if (s.hashToDoc.value(hash) == oldDocumentId) {
+			s.hashToDoc[hash] = newDocumentId;
 		}
 	}
 	if (!_open) {
-		return false;
+		return;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT 1 FROM " + TableName(table)
-		+ u" WHERE doc_id = :doc_id "
-		"UNION ALL "
-		"SELECT 1 FROM dedup_ids WHERE media_id = :media_id "
-		"LIMIT 1"_q);
-	q.bindValue(u":doc_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(documentId)));
-	q.bindValue(u":media_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(documentId)));
+	q.prepare(u"UPDATE " + TableName(table)
+		+ u" SET doc_id = :new_doc_id "
+		"WHERE doc_id = :old_doc_id"_q);
+	q.bindValue(u":new_doc_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(newDocumentId)));
+	q.bindValue(u":old_doc_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(oldDocumentId)));
 	if (!q.exec()) {
-		return false;
+		LOG(("DedupDb: Rekey failed: %1").arg(q.lastError().text()));
 	}
-	return q.next();
 }
 
-uint64 DedupDb::Impl::findDocumentId(
+void DedupDb::Impl::updateDedupStatus(
 		Table table,
 		const QByteArray &hash,
-		int64 size) const {
-	if (!_open) {
-		return 0;
+		const QString &status) {
+	(void)status;
+	ensureLoaded(table);
+	if (!_open || hash.isEmpty()) {
+		return;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT doc_id FROM " + TableName(table)
-		+ u" WHERE hash = :hash AND size = :size"_q);
+	q.prepare(u"UPDATE " + TableName(table)
+		+ u" SET status = :status "
+		"WHERE hash = :hash"_q);
+	q.bindValue(u":status"_q, status);
 	q.bindValue(u":hash"_q, hash);
-	q.bindValue(u":size"_q, QVariant::fromValue(size));
-	if (!q.exec() || !q.next()) {
+	if (!q.exec()) {
+		LOG(("DedupDb: UpdateDedupStatus failed: %1").arg(q.lastError().text()));
+	}
+}
+
+QByteArray DedupDb::Impl::hashForDocId(
+		Table table,
+		uint64 documentId) const {
+	const auto &s = state(table);
+	return s.docToHash.value(documentId);
+}
+
+uint64 DedupDb::Impl::seekDocumentId(
+		Table table,
+		const QByteArray &hash,
+		uint64 excludeDocumentId) const {
+	const auto &s = state(table);
+	const auto it = s.hashToDoc.find(hash);
+	if (it == s.hashToDoc.end()) {
 		return 0;
 	}
-	return q.value(0).toULongLong();
+	if (it.value() != excludeDocumentId) {
+		return it.value();
+	}
+	for (auto i = s.docToHash.constBegin(); i != s.docToHash.constEnd(); ++i) {
+		if (i.value() == hash && i.key() != excludeDocumentId) {
+			return i.key();
+		}
+	}
+	return 0;
+}
+
+void DedupDb::Impl::addPending(
+		Table table,
+		uint64 documentId,
+		const QByteArray &hash) {
+	insert(table, {
+		.hash = hash,
+		.documentId = documentId,
+		.status = u"u"_q,
+	});
+}
+
+void DedupDb::Impl::removePending(Table table, uint64 documentId) {
+	removeByDocumentId(table, documentId, u"u"_q);
 }
 
 std::vector<DedupRecord> DedupDb::Impl::loadAll(Table table) const {
+	auto &s = state(table);
+	if (s.loaded) {
+		auto result = std::vector<DedupRecord>();
+		result.reserve(s.docToHash.size());
+		for (auto i = s.docToHash.constBegin(); i != s.docToHash.constEnd(); ++i) {
+			result.push_back({
+				.hash = i.value(),
+				.documentId = i.key(),
+			});
+		}
+		return result;
+	}
 	auto result = std::vector<DedupRecord>();
 	if (!_open) {
 		return result;
 	}
 	QSqlQuery q(_db);
-	if (!q.exec(u"SELECT hash, size, doc_id, status FROM " + TableName(table))) {
+	if (!q.exec(u"SELECT hash, doc_id, status FROM " + TableName(table))) {
 		LOG(("DedupDb: LoadAll failed: %1").arg(q.lastError().text()));
 		return result;
 	}
 	while (q.next()) {
 		auto record = DedupRecord();
 		record.hash = q.value(0).toByteArray();
-		record.size = q.value(1).toLongLong();
-		record.documentId = q.value(2).toULongLong();
-		record.status = q.value(3).toString();
+		record.documentId = q.value(1).toULongLong();
+		record.status = q.value(2).toString();
 		result.push_back(std::move(record));
 	}
 	return result;
@@ -723,179 +829,6 @@ void DedupDb::Impl::clearDoneEfResumeForPeer(PeerId peerId) {
 	}
 }
 
-std::optional<DedupRecord> DedupDb::Impl::findUploadDuplicateByHash(
-		const QByteArray &hash,
-		int64 size,
-		uint64 excludeDocumentId) const {
-	if (hash.isEmpty()) {
-		return std::nullopt;
-	}
-	for (const auto &entry : pendingList(Table::Uploads)) {
-		if (entry.hash == hash
-			&& entry.size == size
-			&& entry.documentId != excludeDocumentId) {
-			return DedupRecord{ hash, size, entry.documentId, u"u"_q };
-		}
-	}
-	if (!_open) {
-		return std::nullopt;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"SELECT hash, size, doc_id FROM dedup_ul "
-		"WHERE hash = :hash AND size = :size "
-		"AND doc_id != :exclude"_q);
-	q.bindValue(u":hash"_q, hash);
-	q.bindValue(u":size"_q, QVariant::fromValue(size));
-	q.bindValue(u":exclude"_q, QVariant::fromValue(
-		static_cast<qulonglong>(excludeDocumentId)));
-	if (!q.exec() || !q.next()) {
-		return std::nullopt;
-	}
-	auto record = DedupRecord();
-	record.hash = q.value(0).toByteArray();
-	record.size = q.value(1).toLongLong();
-	record.documentId = q.value(2).toULongLong();
-	return record;
-}
-
-std::vector<DedupDb::Impl::PendingEntry> &DedupDb::Impl::pendingList(
-		Table table) {
-	return _pending[int(table)];
-}
-
-const std::vector<DedupDb::Impl::PendingEntry> &DedupDb::Impl::pendingList(
-		Table table) const {
-	return _pending[int(table)];
-}
-
-void DedupDb::Impl::addPending(
-		Table table,
-		uint64 documentId,
-		int64 size) {
-	if (!documentId) {
-		return;
-	}
-	auto &list = pendingList(table);
-	for (auto &entry : list) {
-		if (entry.documentId == documentId) {
-			entry.size = size;
-			return;
-		}
-	}
-	list.push_back({ documentId, size, {} });
-}
-
-void DedupDb::Impl::updatePendingHash(
-		Table table,
-		uint64 documentId,
-		const QByteArray &hash) {
-	for (auto &entry : pendingList(table)) {
-		if (entry.documentId == documentId) {
-			entry.hash = hash;
-			return;
-		}
-	}
-}
-
-void DedupDb::Impl::removePending(Table table, uint64 documentId) {
-	auto &list = pendingList(table);
-	list.erase(std::remove_if(list.begin(), list.end(), [&](PendingEntry &entry) {
-		return entry.documentId == documentId;
-	}), list.end());
-}
-
-void DedupDb::Impl::insertIdMapping(uint64 mediaId, const QByteArray &hash) {
-	if (!_open || hash.isEmpty()) {
-		return;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"INSERT OR REPLACE INTO dedup_ids (media_id, hash) "
-		"VALUES (:media_id, :hash)"_q);
-	q.bindValue(u":media_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(mediaId)));
-	q.bindValue(u":hash"_q, hash);
-	if (!q.exec()) {
-		LOG(("DedupDb: InsertIdMapping failed: %1").arg(q.lastError().text()));
-	}
-}
-
-bool DedupDb::Impl::containsIdMapping(uint64 mediaId) const {
-	if (!_open) {
-		return false;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"SELECT 1 FROM dedup_ids WHERE media_id = :media_id"_q);
-	q.bindValue(u":media_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(mediaId)));
-	if (!q.exec()) {
-		return false;
-	}
-	return q.next();
-}
-
-bool DedupDb::Impl::containsSize(Table table, int64 size) const {
-	for (const auto &entry : pendingList(table)) {
-		if (entry.size == size) {
-			return true;
-		}
-	}
-	if (!_open) {
-		return false;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"SELECT 1 FROM " + TableName(table)
-		+ u" WHERE size = :size LIMIT 1"_q);
-	q.bindValue(u":size"_q, QVariant::fromValue(size));
-	if (!q.exec()) {
-		return false;
-	}
-	return q.next();
-}
-
-void DedupDb::Impl::updateDedupStatus(
-		Table table,
-		const QByteArray &hash,
-		int64 size,
-		const QString &status) {
-	if (!_open) {
-		return;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"UPDATE " + TableName(table)
-		+ u" SET status = :status "
-		"WHERE hash = :hash AND size = :size"_q);
-	q.bindValue(u":status"_q, status);
-	q.bindValue(u":hash"_q, hash);
-	q.bindValue(u":size"_q, QVariant::fromValue(size));
-	if (!q.exec()) {
-		LOG(("DedupDb: UpdateDedupStatus failed: %1").arg(q.lastError().text()));
-	}
-}
-
-void DedupDb::Impl::removeByDocumentId(
-		Table table,
-		uint64 documentId,
-		const QString &status) {
-	if (!_open) {
-		return;
-	}
-	QSqlQuery q(_db);
-	if (status.isEmpty()) {
-		q.prepare(u"DELETE FROM " + TableName(table)
-			+ u" WHERE doc_id = :doc_id"_q);
-	} else {
-		q.prepare(u"DELETE FROM " + TableName(table)
-			+ u" WHERE doc_id = :doc_id AND status = :status"_q);
-		q.bindValue(u":status"_q, status);
-	}
-	q.bindValue(u":doc_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(documentId)));
-	if (!q.exec()) {
-		LOG(("DedupDb: RemoveByDocumentId failed: %1").arg(
-			q.lastError().text()));
-	}
-}
-
 void DedupDb::Impl::beginTransaction() {
 	if (!_open) {
 		return;
@@ -932,23 +865,54 @@ void DedupDb::insert(Table table, const DedupRecord &record) {
 	_impl->insert(table, record);
 }
 
-void DedupDb::remove(Table table, const QByteArray &hash, int64 size) {
-	_impl->remove(table, hash, size);
-}
-
-bool DedupDb::contains(Table table, const QByteArray &hash, int64 size) const {
-	return _impl->contains(table, hash, size);
+void DedupDb::removeByDocumentId(
+		Table table,
+		uint64 documentId,
+		const QString &status) {
+	_impl->removeByDocumentId(table, documentId, status);
 }
 
 bool DedupDb::containsDocId(Table table, uint64 documentId) const {
 	return _impl->containsDocId(table, documentId);
 }
 
-uint64 DedupDb::findDocumentId(
+bool DedupDb::containsHash(Table table, const QByteArray &hash) const {
+	return _impl->containsHash(table, hash);
+}
+
+void DedupDb::rekey(
+		Table table,
+		uint64 oldDocumentId,
+		uint64 newDocumentId) {
+	_impl->rekey(table, oldDocumentId, newDocumentId);
+}
+
+void DedupDb::updateDedupStatus(
 		Table table,
 		const QByteArray &hash,
-		int64 size) const {
-	return _impl->findDocumentId(table, hash, size);
+		const QString &status) {
+	_impl->updateDedupStatus(table, hash, status);
+}
+
+QByteArray DedupDb::hashForDocId(
+		Table table,
+		uint64 documentId) const {
+	return _impl->hashForDocId(table, documentId);
+}
+
+uint64 DedupDb::seekDocumentId(
+		Table table,
+		const QByteArray &hash,
+		uint64 excludeDocumentId) const {
+	return _impl->seekDocumentId(table, hash, excludeDocumentId);
+}
+
+void DedupDb::addPending(Table table, uint64 documentId, const QByteArray &hash) {
+	_impl->addPending(table, documentId, hash);
+}
+
+void DedupDb::removePending(Table table, uint64 documentId) {
+	_impl->removePending(table, documentId);
 }
 
 std::vector<DedupRecord> DedupDb::loadAll(Table table) const {
@@ -1024,64 +988,12 @@ void DedupDb::clearDoneEfResumeForPeer(PeerId peerId) {
 	_impl->clearDoneEfResumeForPeer(peerId);
 }
 
-std::optional<DedupRecord> DedupDb::findUploadDuplicateByHash(
-		const QByteArray &hash,
-		int64 size,
-		uint64 excludeDocumentId) const {
-	return _impl->findUploadDuplicateByHash(
-		hash,
-		size,
-		excludeDocumentId);
-}
-
-void DedupDb::addPending(Table table, uint64 documentId, int64 size) {
-	_impl->addPending(table, documentId, size);
-}
-
-void DedupDb::updatePendingHash(
-		Table table,
-		uint64 documentId,
-		const QByteArray &hash) {
-	_impl->updatePendingHash(table, documentId, hash);
-}
-
-void DedupDb::removePending(Table table, uint64 documentId) {
-	_impl->removePending(table, documentId);
-}
-
 void DedupDb::beginTransaction() {
 	_impl->beginTransaction();
 }
 
 void DedupDb::commitTransaction() {
 	_impl->commitTransaction();
-}
-
-void DedupDb::insertIdMapping(uint64 mediaId, const QByteArray &hash) {
-	_impl->insertIdMapping(mediaId, hash);
-}
-
-bool DedupDb::containsIdMapping(uint64 mediaId) const {
-	return _impl->containsIdMapping(mediaId);
-}
-
-bool DedupDb::containsSize(Table table, int64 size) const {
-	return _impl->containsSize(table, size);
-}
-
-void DedupDb::updateDedupStatus(
-		Table table,
-		const QByteArray &hash,
-		int64 size,
-		const QString &status) {
-	_impl->updateDedupStatus(table, hash, size, status);
-}
-
-void DedupDb::removeByDocumentId(
-		Table table,
-		uint64 documentId,
-		const QString &status) {
-	_impl->removeByDocumentId(table, documentId, status);
 }
 
 } // namespace Data

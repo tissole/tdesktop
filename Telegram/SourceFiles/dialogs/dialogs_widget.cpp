@@ -1343,6 +1343,9 @@ void Widget::setupForwardsBar() {
 				const std::vector<EnhancedForward::JobSnapshot> &jobs) {
 				Ui::DownloadBarProgress result;
 				for (const auto &job : jobs) {
+					if (!job.active) {
+						continue;
+					}
 					for (const auto &item : job.progress.items) {
 						if (item.cancelled
 							|| (skipDuplicates && item.dedupSkipped)) {
@@ -1373,6 +1376,9 @@ void Widget::setupForwardsBar() {
 		auto efDone = 0;
 		QString firstName;
 		for (const auto &job : jobs) {
+			if (!job.active) {
+				continue;
+			}
 			for (const auto &item : job.progress.items) {
 				if (item.cancelled
 					|| (skipDuplicates && item.dedupSkipped)) {

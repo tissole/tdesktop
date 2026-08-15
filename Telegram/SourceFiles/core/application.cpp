@@ -1081,7 +1081,9 @@ void Application::uploaderCancelAll() {
 void Application::uploaderClearFinished() {
 	for (const auto &[index, account] : _domain->accounts()) {
 		if (const auto s = account->maybeSession()) {
-			s->uploader().clearFinishedUploads();
+			if (const auto weak = base::make_weak(&s->uploader())) {
+				weak->clearFinishedUploads();
+			}
 		}
 	}
 }
@@ -1089,7 +1091,9 @@ void Application::uploaderClearFinished() {
 void Application::uploaderDeleteAllFinished() {
 	for (const auto &[index, account] : _domain->accounts()) {
 		if (const auto s = account->maybeSession()) {
-			s->uploader().deleteAllFinishedUploads();
+			if (const auto weak = base::make_weak(&s->uploader())) {
+				weak->deleteAllFinishedUploads();
+			}
 		}
 	}
 }
@@ -1097,8 +1101,10 @@ void Application::uploaderDeleteAllFinished() {
 bool Application::uploaderAny() const {
 	for (const auto &[index, account] : _domain->accounts()) {
 		if (const auto s = account->maybeSession()) {
-			if (s->uploader().anyUploads()) {
-				return true;
+			if (const auto weak = base::make_weak(&s->uploader())) {
+				if (weak->anyUploads()) {
+					return true;
+				}
 			}
 		}
 	}

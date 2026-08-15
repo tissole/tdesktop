@@ -94,7 +94,10 @@ public:
 
 	[[nodiscard]] int jobTotal(not_null<Main::Session*> session) const;
 	[[nodiscard]] int jobDone(not_null<Main::Session*> session) const;
+	[[nodiscard]] int jobId(not_null<Main::Session*> session) const;
 	[[nodiscard]] rpl::producer<> jobCounterChanged() const;
+
+	[[nodiscard]] bool isDone(not_null<const HistoryItem*> item) const;
 
 	void trackSession(not_null<Main::Session*> session);
 	void itemVisibilitiesUpdated(not_null<Main::Session*> session);
@@ -170,18 +173,19 @@ public:
 
 	[[nodiscard]] DedupDb &dedupDb() const;
 
+	// Counts a duplicate that was skipped in a flow and shows one aggregated
+	// toast for the whole batch (e.g. "12 duplicate downloads"). A short
+	// debounce merges consecutive skips so a multi-file selection produces a
+	// single toast with the total count.
+	void reportDuplicateSkipped(DedupDb::Table table);
+
 private:
+	void notifyDuplicateSkips();
 	struct ResumeEntry {
 		MsgId msgId = 0;
 		DocumentId documentId = 0;
 		int64 size = 0;
 		QString path;
-	};
-	enum class DedupStatus { Unfinished, Finished };
-	struct DedupEntry {
-		uint64 documentId = 0;
-		int64 size = 0;
-		DedupStatus status = DedupStatus::Unfinished;
 	};
 	struct DeleteFilesDescriptor;
 	struct SessionData {
@@ -246,18 +250,10 @@ private:
 		not_null<Main::Session*> session,
 		int *jobId = nullptr) const;
 
-	void loadFileHashes();
 	DedupDb &ensureDedupDb() const;
 	void saveToDisk();
 	void saveIfIdle();
 	[[nodiscard]] QString dedupDbPath() const;
-	[[nodiscard]] bool hasFileSize(int64 size) const;
-	[[nodiscard]] bool findDuplicateByDocumentId(
-		uint64 documentId,
-		int64 size) const;
-	[[nodiscard]] bool findDuplicateByHash(
-		int64 size,
-		const QByteArray &hash) const;
 	// Fetches (or reuses an already-fetched) partial remote fingerprint for
 	// a document. The result (including an empty one, e.g. for small files)
 	// is cached per documentId so the 2 sample chunks are only requested
@@ -273,18 +269,6 @@ private:
 		not_null<DocumentData*> document,
 		int64 size);
 	void removeFileHash(uint64 documentId, int64 size);
-
-	void addPendingDocument(
-		not_null<DocumentData*> document,
-		int64 size);
-	void removePendingDocument(
-		not_null<DocumentData*> document,
-		int64 size);
-	[[nodiscard]] DocumentData* findDocumentAwaitingHash(int64 size);
-	void updatePendingHash(
-		not_null<DocumentData*> document,
-		int64 size,
-		const QByteArray &hash);
 
 	base::flat_map<not_null<Main::Session*>, SessionData> _sessions;
 	base::flat_set<not_null<const HistoryItem*>> _loading;
@@ -307,20 +291,7 @@ private:
 
 	base::Timer _clearLoadingTimer;
 
-	// O(1) dedup lookup maps for completed downloads
-	QHash<QByteArray, DedupEntry> fileHashes;       // hash -> entry
-	QHash<uint64, QByteArray> documentIds;           // documentId -> hash
-	QSet<int64> fileSizes;                           // set of sizes
-
-	// O(1) dedup lookup maps for pending downloads (in progress)
-	QHash<QByteArray, DedupEntry> pendingFileHashes; // hash -> entry (only with hash)
-	QHash<uint64, QByteArray> pendingDocumentIds;    // documentId -> hash
-	QSet<int64> pendingFileSizes;                    // set of sizes
-	QHash<uint64, not_null<DocumentData*>> pendingDocuments;  // documentId -> document
-	QHash<int64, QVector<uint64>> documentsAwaitingHash;      // size -> docIds without hash
-
 	mutable std::unique_ptr<DedupDb> _dedupDb;
-	bool _hasLoadedHashes = false;
 	int _checksInProgress = 0;
 
 	// Caches the partial remote fingerprint per documentId so the 2 sample
@@ -328,6 +299,9 @@ private:
 	// shared between checkDuplicate() and saveFileHash(). An empty
 	// QByteArray is a valid cached value (e.g. file too small to sample).
 	QHash<uint64, QByteArray> _fingerprintCache;
+
+	base::Timer _duplicatesToastTimer;
+	int _duplicatesSkipped[2] = { 0, 0 };
 
 };
 

@@ -19,7 +19,6 @@ namespace Data {
 
 struct DedupRecord {
 	QByteArray hash;
-	int64 size = 0;
 	uint64 documentId = 0;
 	QString status = u"f"_q;
 };
@@ -72,30 +71,40 @@ public:
 	[[nodiscard]] bool isOpen() const;
 
 	void insert(Table table, const DedupRecord &record);
-	void remove(Table table, const QByteArray &hash, int64 size);
-	[[nodiscard]] bool contains(
-		Table table,
-		const QByteArray &hash,
-		int64 size) const;
-	[[nodiscard]] bool containsDocId(
-		Table table,
-		uint64 documentId) const;
-	void insertIdMapping(uint64 mediaId, const QByteArray &hash);
-	[[nodiscard]] bool containsIdMapping(uint64 mediaId) const;
-	[[nodiscard]] bool containsSize(Table table, int64 size) const;
-	void updateDedupStatus(
-		Table table,
-		const QByteArray &hash,
-		int64 size,
-		const QString &status);
 	void removeByDocumentId(
 		Table table,
 		uint64 documentId,
-		const QString &status);
-	[[nodiscard]] uint64 findDocumentId(
+		const QString &status = QString());
+
+	[[nodiscard]] bool containsDocId(
+		Table table,
+		uint64 documentId) const;
+	[[nodiscard]] bool containsHash(
+		Table table,
+		const QByteArray &hash) const;
+	// Re-keys the row for an upload from the local temporary document id to
+	// the definitive server-returned id (document or photo). Keeps the hash.
+	void rekey(
+		Table table,
+		uint64 oldDocumentId,
+		uint64 newDocumentId);
+	void updateDedupStatus(
 		Table table,
 		const QByteArray &hash,
-		int64 size) const;
+		const QString &status);
+	[[nodiscard]] QByteArray hashForDocId(
+		Table table,
+		uint64 documentId) const;
+	[[nodiscard]] uint64 seekDocumentId(
+		Table table,
+		const QByteArray &hash,
+		uint64 excludeDocumentId = 0) const;
+
+	// In-flight (RAM only) registration: content that is being downloaded /
+	// uploaded right now and doesn't have a durable row yet.
+	void addPending(Table table, uint64 documentId, const QByteArray &hash);
+	void removePending(Table table, uint64 documentId);
+
 	[[nodiscard]] std::vector<DedupRecord> loadAll(Table table) const;
 
 	void insertResumeDl(const ResumeDlRecord &record);
@@ -118,18 +127,6 @@ public:
 	[[nodiscard]] std::vector<EfResumeItem> loadUnfinishedEfResumeItems() const;
 	[[nodiscard]] std::vector<EfResumeItem> loadFinishedEfResumeItems() const;
 	void clearDoneEfResumeForPeer(PeerId peerId);
-
-	[[nodiscard]] std::optional<DedupRecord> findUploadDuplicateByHash(
-		const QByteArray &hash,
-		int64 size,
-		uint64 excludeDocumentId = 0) const;
-
-	void addPending(Table table, uint64 documentId, int64 size);
-	void updatePendingHash(
-		Table table,
-		uint64 documentId,
-		const QByteArray &hash);
-	void removePending(Table table, uint64 documentId);
 
 	void beginTransaction();
 	void commitTransaction();

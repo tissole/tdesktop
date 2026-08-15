@@ -283,7 +283,11 @@ session->data().itemIdChanged(
 			i != _awaitingFinishedUploads.end()) {
 			auto awaiting = std::move(i->second);
 			_awaitingFinishedUploads.erase(i);
-			if (IsServerMsgId(change.newId.msg)) {
+			if (EnhancedForward::isEnhancedUpload(oldFullId)) {
+				// EF uploads are tracked by the forward pipeline itself;
+				// keep them out of the finished-uploads bookkeeping so the
+				// transfer-manager Upload tab never shows them.
+			} else if (IsServerMsgId(change.newId.msg)) {
 				awaiting.itemId = change.newId;
 				commitFinishedUpload(std::move(awaiting));
 			} else {
@@ -292,6 +296,12 @@ session->data().itemIdChanged(
 					change.newId,
 					std::move(awaiting));
 			}
+		}
+		if (EnhancedForward::isEnhancedUpload(oldFullId)) {
+			// EF uploads are tracked by the forward pipeline itself; they must
+			// never enter the finished-uploads bookkeeping (the Upload tab and
+			// the "Delete all items" gate key off that bookkeeping).
+			return;
 		}
 		_finishedUploads.remove(oldFullId);
 		_finishedUploads.emplace(change.newId);
@@ -391,15 +401,24 @@ bool Uploader::checkUploadDuplicate(
 	if (hash.isEmpty()) {
 		return false;
 	}
-	if (Core::App().downloadManager().dedupDb().contains(
-		Data::DedupDb::Table::Uploads,
-		hash,
-		file->filesize)
+	auto &dedupDb = Core::App().downloadManager().dedupDb();
+	if (dedupDb.containsHash(Data::DedupDb::Table::Uploads, hash)
 		|| _uploadPendingHashes.contains(hash)) {
 		return true;
 	}
 	_uploadPendingHashes.insert(hash, file->filesize);
 	_uploadPendingByItem.emplace(itemId, hash);
+	// Register the content as an in-progress upload ('u') immediately, so a
+	// second batch of files (or an EF job running in parallel) dedups against
+	// it while we are uploading. The row is re-keyed to the real server id
+	// and marked 'f' once the upload completes.
+	if (dedupDb.isOpen() && file->id) {
+		dedupDb.insert(Data::DedupDb::Table::Uploads, {
+			.hash = hash,
+			.documentId = file->id,
+			.status = u"u"_q,
+		});
+	}
 	return false;
 }
 
@@ -411,21 +430,40 @@ void Uploader::documentIdWriteback(uint64 localId, uint64 realId) {
 	if (hashIt == _uploadPendingDocIds.end()) {
 		return;
 	}
-	const auto sizeIt = _uploadPendingDocSizes.find(localId);
-	const auto size = (sizeIt != _uploadPendingDocSizes.end())
-		? sizeIt.value()
-		: 0;
-	Core::App().downloadManager().dedupDb().insert(
-		Data::DedupDb::Table::Uploads,
-		{
-			.hash = hashIt.value(),
-			.size = size,
-			.documentId = realId,
-		});
-	_uploadPendingDocIds.erase(hashIt);
-	if (sizeIt != _uploadPendingDocSizes.end()) {
-		_uploadPendingDocSizes.erase(sizeIt);
+	auto &dedup = Core::App().downloadManager().dedupDb();
+	if (dedup.isOpen()) {
+		dedup.rekey(
+			Data::DedupDb::Table::Uploads,
+			localId,
+			realId);
+		dedup.updateDedupStatus(
+			Data::DedupDb::Table::Uploads,
+			hashIt.value(),
+			u"f"_q);
 	}
+	_uploadPendingDocIds.erase(hashIt);
+}
+
+void Uploader::photoIdWriteback(uint64 localId, uint64 realId) {
+	if (!realId || realId == localId) {
+		return;
+	}
+	const auto hashIt = _uploadPendingDocIds.find(localId);
+	if (hashIt == _uploadPendingDocIds.end()) {
+		return;
+	}
+	auto &dedup = Core::App().downloadManager().dedupDb();
+	if (dedup.isOpen()) {
+		dedup.rekey(
+			Data::DedupDb::Table::Uploads,
+			localId,
+			realId);
+		dedup.updateDedupStatus(
+			Data::DedupDb::Table::Uploads,
+			hashIt.value(),
+			u"f"_q);
+	}
+	_uploadPendingDocIds.erase(hashIt);
 }
 
 void Uploader::upload(
@@ -514,11 +552,13 @@ void Uploader::upload(
 void Uploader::failed(FullMsgId itemId) {
 	const auto i = ranges::find(_queue, itemId, &Entry::itemId);
 	QString failedFilePath;
+	uint64 failedFileId = 0;
 	if (i != end(_queue)) {
 		const auto entry = std::move(*i);
 		_queue.erase(i);
 		_uploadListChanges.fire(rpl::empty_value{});
 		failedFilePath = entry.file ? entry.file->filepath : QString();
+		failedFileId = entry.file ? entry.file->id : 0;
 		notifyFailed(entry);
 	} else if (const auto coverId = _videoIdToCoverId.take(itemId)) {
 		if (const auto video = _videoWaitingCover.take(*coverId)) {
@@ -552,6 +592,12 @@ void Uploader::failed(FullMsgId itemId) {
 		const auto hash = it.value();
 		if (!hash.isEmpty()) {
 			_uploadPendingHashes.remove(hash);
+// Upload cancelled/failed: drop the 'u' record so a later retry
+			// is not treated as a duplicate of a file that never uploaded.
+			Core::App().downloadManager().dedupDb().removeByDocumentId(
+				Data::DedupDb::Table::Uploads,
+				failedFileId,
+				u"u"_q);
 		}
 		_uploadPendingByItem.erase(it);
 	}
@@ -1086,6 +1132,9 @@ void Uploader::finishFront() {
 			_awaitingFinishedUploads.emplace(
 				entry.itemId,
 				std::move(info));
+			if (!EnhancedForward::isEnhancedUpload(entry.itemId)) {
+				_jobCounterChanged.fire({});
+			}
 		}
 	}
 
@@ -1219,15 +1268,14 @@ void Uploader::finishFront() {
 		if (it != _uploadPendingByItem.end()) {
 			const auto hash = it.value();
 			if (!hash.isEmpty()) {
-				Core::App().downloadManager().dedupDb().insert(
+				// The row was registered with status 'u' when the upload
+				// started. Mark it finished and keep the local id for the
+				// writeback that will replace it with the real server id.
+				Core::App().downloadManager().dedupDb().updateDedupStatus(
 					Data::DedupDb::Table::Uploads,
-					{
-						.hash = hash,
-						.size = entry.file->filesize,
-						.documentId = entry.file->id,
-					});
+					hash,
+					u"f"_q);
 				_uploadPendingDocIds[entry.file->id] = hash;
-				_uploadPendingDocSizes[entry.file->id] = entry.file->filesize;
 				_uploadPendingHashes.remove(hash);
 			}
 			_uploadPendingByItem.erase(it);
@@ -1394,6 +1442,11 @@ void Uploader::loadFinishedUploadsFromAccount() {
 			return;
 		}
 		const auto itemId = FullMsgId(PeerId(peerIdValue), MsgId(msgIdBare));
+		if (EnhancedForward::isEnhancedTempUpload(&session(), filename)) {
+			// Enhanced-Forward uploads are tracked by the forward pipeline
+			// itself; never restore them as finished uploads.
+			continue;
+		}
 		_finishedUploads.emplace(itemId);
 		_finishedUploadsList.push_back({
 			.itemId = itemId,
@@ -1505,7 +1558,11 @@ void Uploader::showResumeUnfinished() {
 	if (!window) {
 		return;
 	}
+	const auto weak = base::make_weak(this);
 	const auto resumeAll = [=]() {
+		if (!weak) {
+			return;
+		}
 		for (const auto &entry : toResume) {
 			const auto newId = FullMsgId(
 				entry.peerId,
@@ -1625,34 +1682,34 @@ void Uploader::showResumeUnfinished() {
 					st::boxLabel));
 				cancelBox->addButton(tr::lng_upload_cancel_yes(), [=] {
 					cancelBox->closeBox();
-					crl::on_main([=] {
+					crl::on_main(crl::guard(weak, [=] {
 						Core::App().downloadManager().dedupDb().clearResumeUl();
 						notifyListChanged();
-					});
+					}));
 				});
 				cancelBox->addButton(tr::lng_upload_cancel_no(), [=] {
 					cancelBox->closeBox();
-					crl::on_main([=] { notifyListChanged(); });
+					crl::on_main(crl::guard(weak, [=] { notifyListChanged(); }));
 				});
 			});
 			window->show(std::move(cancelBox));
 		}, st::attentionBoxButton);
 		box->addButton(tr::lng_upload_resume_later(), [=] {
 			box->closeBox();
-			crl::on_main([=] {
+			crl::on_main(crl::guard(weak, [=] {
 				_paused = true;
 				_pausedId = FullMsgId(
 					PeerId(1),
 					session().data().nextLocalMessageId());
 				resumeEntriesFromDb();
-			});
+			}));
 		});
 		box->addButton(tr::lng_upload_resume_yes(), [=] {
 			box->closeBox();
-			crl::on_main([=] {
+			crl::on_main(crl::guard(weak, [=] {
 				resumeAll();
 				notifyListChanged();
-			});
+			}));
 		});
 	});
 	window->show(std::move(box));
@@ -1790,6 +1847,12 @@ int Uploader::jobTotal() const {
 
 int Uploader::jobDone() const {
 	auto result = 0;
+	for (const auto &[itemId, upload] : _awaitingFinishedUploads) {
+		if (upload.jobIndex == _jobId
+			&& !EnhancedForward::isEnhancedUpload(itemId)) {
+			++result;
+		}
+	}
 	for (const auto &upload : _finishedUploadsList) {
 		if (upload.jobIndex == _jobId
 			&& !EnhancedForward::isEnhancedUpload(upload.itemId)) {

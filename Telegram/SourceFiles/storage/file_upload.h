@@ -87,6 +87,9 @@ public:
 	// server document, so the UL dedup record gets the real document id.
 	void documentIdWriteback(uint64 localId, uint64 realId);
 
+	// Same as documentIdWriteback() but for photos (server photo id).
+	void photoIdWriteback(uint64 localId, uint64 realId);
+
 	void pause(FullMsgId itemId);
 	void cancel(FullMsgId itemId);
 	void cancelAll();
@@ -274,7 +277,6 @@ private:
 	// so the real server document id can be written back once the sent
 	// message is confirmed.
 	QHash<uint64, QByteArray> _uploadPendingDocIds;
-	QHash<uint64, int64> _uploadPendingDocSizes;
 
 	const not_null<ApiWrap*> _api;
 

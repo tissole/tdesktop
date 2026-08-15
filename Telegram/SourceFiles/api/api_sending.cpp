@@ -31,6 +31,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_app_config.h"
 #include "storage/localimageloader.h"
 #include "storage/file_upload.h"
+#include "data/data_download_manager.h"
+#include "core/application.h"
 #include "ui/toast/toast.h"
 #include "lang/lang_keys.h"
 #include "mainwidget.h"
@@ -565,11 +567,8 @@ void SendConfirmedFile(
 	}
 
 	if (session->uploader().checkUploadDuplicate(newId, file)) {
-		Ui::Toast::Show(
-			tr::lng_upload_duplicates_skipped(
-				tr::now,
-				lt_count,
-				1));
+		Core::App().downloadManager().reportDuplicateSkipped(
+			Data::DedupDb::Table::Uploads);
 		return;
 	}
 

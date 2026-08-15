@@ -109,6 +109,7 @@ private:
 		not_null<HistoryItem*> item;
 		int64 started = 0; // unixtime * 1000
 		QString path;
+		int order = 0;     // insertion order (source order for forwards)
 
 		QStringList words;
 		base::flat_set<QChar> letters;
@@ -188,6 +189,7 @@ private:
 	int _foundCount = 0;
 
 	base::flat_map<not_null<Main::Session*>, rpl::lifetime> _trackedSessions;
+	int _nextElementOrder = 0;
 	bool _postponedRefreshSort = false;
 	bool _postponedRefresh = false;
 	bool _started = false;

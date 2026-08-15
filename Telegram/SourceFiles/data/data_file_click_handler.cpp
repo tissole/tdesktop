@@ -140,11 +140,8 @@ void DocumentSaveClickHandler::Save(
 			data,
 			[=](bool skip) {
 				if (skip) {
-					Ui::Toast::Show(
-						tr::lng_download_duplicates_skipped(
-							tr::now,
-							lt_count,
-							1));
+					Core::App().downloadManager().reportDuplicateSkipped(
+						Data::DedupDb::Table::Downloads);
 					return;
 				}
 				proceed();

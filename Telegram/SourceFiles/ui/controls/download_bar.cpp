@@ -110,9 +110,10 @@ void DownloadBar::show(DownloadBarContent &&content) {
 				: content.efCount == 1
 				? tr::bold(efPrefix + content.singleName.text)
 				: (content.uploadCount > 1
-					? tr::bold(ulPrefix + tr::lng_profile_files(
+					? tr::bold(ulPrefix + tr::lng_tm_files_progress(
 						tr::now,
-						lt_count, content.uploadCount))
+						lt_done, QString::number(content.uploadDone),
+						lt_total, QString::number(content.uploadCount)))
 					: tr::bold(tr::lng_uploads_prefix(
 						tr::now,
 						lt_name, content.singleUploadName.text))))));

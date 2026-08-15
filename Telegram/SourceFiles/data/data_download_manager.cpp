@@ -52,6 +52,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "apiwrap.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/toast/toast.h"
 #include "styles/style_layers.h"
 
 #include <QtCore/QDir>
@@ -141,11 +142,40 @@ struct DownloadManager::DeleteFilesDescriptor {
 };
 
 DownloadManager::DownloadManager()
-: _clearLoadingTimer([=] { clearLoading(); }) {
+: _clearLoadingTimer([=] { clearLoading(); })
+, _duplicatesToastTimer([=] { notifyDuplicateSkips(); }) {
 }
 
 DownloadManager::~DownloadManager() {
 	_sessions.clear();
+}
+
+void DownloadManager::reportDuplicateSkipped(DedupDb::Table table) {
+	const auto type = int(table);
+	if (type < 0 || type >= 2) {
+		return;
+	}
+	_duplicatesSkipped[type]++;
+	_duplicatesToastTimer.callOnce(600);
+}
+
+void DownloadManager::notifyDuplicateSkips() {
+	const auto downloads = _duplicatesSkipped[int(DedupDb::Table::Downloads)];
+	const auto uploads = _duplicatesSkipped[int(DedupDb::Table::Uploads)];
+	_duplicatesSkipped[int(DedupDb::Table::Downloads)] = 0;
+	_duplicatesSkipped[int(DedupDb::Table::Uploads)] = 0;
+	if (downloads > 0) {
+		Ui::Toast::Show(tr::lng_download_duplicates_skipped(
+			tr::now,
+			lt_count,
+			downloads));
+	}
+	if (uploads > 0) {
+		Ui::Toast::Show(tr::lng_upload_duplicates_skipped(
+			tr::now,
+			lt_count,
+			uploads));
+	}
 }
 
 bool DownloadManager::empty() const {
@@ -412,16 +442,15 @@ void DownloadManager::addLoaded(
 	const auto docId = object.document
 		? object.document->id
 		: (object.photo ? object.photo->id : 0);
-	if (GetEnhancedBool("prevent_download_duplicates")) {
-		loadFileHashes();
-		const auto known = docId ? documentIds.find(docId) : documentIds.end();
-		if (known != documentIds.end()) {
-			// saveFileHash() already fetched and stored this exact
-			// fingerprint from the server when the download started.
-			// Re-reading the same 2 sample chunks off the just-finished
-			// file here would just recompute the same hash a second time.
-			dedupHash = known.value();
-		} else {
+	auto &dedupDb = ensureDedupDb();
+	if (GetEnhancedBool("prevent_download_duplicates") && dedupDb.isOpen()) {
+		if (docId) {
+			// saveFileHash() may have stored the remote fingerprint for this
+			// doc id when the download started. Re-reading the same 2 sample
+			// chunks off the just-finished file would recompute it, so reuse.
+			dedupHash = dedupDb.hashForDocId(DedupDb::Table::Downloads, docId);
+		}
+		if (dedupHash.isEmpty()) {
 			// No start-time record: dedup was off when this started, the
 			// remote fetch failed, or the file was too small to sample
 			// remotely (see kDedupMinPartialHashSize). FileFingerprint()
@@ -430,22 +459,19 @@ void DownloadManager::addLoaded(
 			dedupHash = Data::FileFingerprint(path, size);
 		}
 	}
-	// A hash match against our *own* unfinished record (the one saveFileHash
-	// wrote for this same docId when the download started) is not a
-	// duplicate, it's just this download recognizing itself - excluding it
-	// here is required, otherwise every dedup-tracked download would delete
-	// the file it just finished the moment it completed.
+	// A hash match against our *own* record (the one saveFileHash wrote for
+	// this same docId when the download started) is not a duplicate - it's
+	// just this download recognizing itself. Excluding it here is required,
+	// otherwise every dedup-tracked download would delete the file it just
+	// finished the moment it completed.
 	const auto isDuplicateOfOther = [&] {
-		if (dedupHash.isEmpty()) {
+		if (dedupHash.isEmpty() || !dedupDb.isOpen()) {
 			return false;
 		}
-		if (const auto it = fileHashes.find(dedupHash); it != fileHashes.end()) {
-			return (it.value().size == size) && (it.value().documentId != docId);
-		}
-		if (const auto it = pendingFileHashes.find(dedupHash); it != pendingFileHashes.end()) {
-			return (it.value().size == size) && (it.value().documentId != docId);
-		}
-		return false;
+		return (dedupDb.seekDocumentId(
+			DedupDb::Table::Downloads,
+			dedupHash,
+			docId) != 0);
 	}();
 	const auto isDuplicatePhotoById = [&] {
 		if (!object.photo || !docId) {
@@ -453,14 +479,23 @@ void DownloadManager::addLoaded(
 		}
 		// The same photo id already has a dedup record (finished or still
 		// unfinished), so the content is already known to be downloaded.
-		return documentIds.contains(docId) || pendingDocumentIds.contains(docId);
+		return dedupDb.containsDocId(DedupDb::Table::Downloads, docId);
 	}();
 	if (isDuplicateOfOther || isDuplicatePhotoById) {
 		LOG(("DEDUP: addLoaded dup size=%1 path=%2").arg(
 			size).arg(path));
 		QFile::remove(path);
+		if (!dedupHash.isEmpty() && docId && dedupDb.isOpen()) {
+			// Remember this doc id -> same content so future dedup of this
+			// exact id is O(1) without re-fetching a fingerprint.
+			dedupDb.insert(DedupDb::Table::Downloads, {
+				.hash = dedupHash,
+				.documentId = docId,
+				.status = u"f"_q,
+			});
+		}
 		if (const auto document = object.document) {
-			removePendingDocument(document, size);
+			_fingerprintCache.remove(document->id);
 			ensureDedupDb().removeResumeDlByDocumentId(document->id);
 		}
 		const auto i = ranges::find(
@@ -498,27 +533,6 @@ void DownloadManager::addLoaded(
 		return;
 	}
 
-	if (!dedupHash.isEmpty()
-		&& !documentIds.contains(docId)
-		&& !pendingDocumentIds.contains(docId)) {
-		loadFileHashes();
-		if (!fileHashes.contains(dedupHash)) {
-			fileHashes.insert(dedupHash, DedupEntry{
-				.documentId = docId,
-				.size = size,
-				.status = DedupStatus::Finished,
-			});
-			documentIds.insert(docId, dedupHash);
-			fileSizes.insert(size);
-			ensureDedupDb().insert(DedupDb::Table::Downloads, {
-				.hash = dedupHash,
-				.size = size,
-				.documentId = docId,
-				.status = u"f"_q,
-			});
-		}
-	}
-
 	const auto completedJobIndex = [&] {
 		const auto i = ranges::find(data.downloading, item, ByItem);
 		return (i != end(data.downloading)) ? i->jobIndex : data.jobId;
@@ -537,29 +551,14 @@ void DownloadManager::addLoaded(
 	_loaded.emplace(item);
 	_loadedAdded.fire(&data.downloaded.back());
 
-	if (!dedupHash.isEmpty()) {
-		loadFileHashes();
-		if (!fileHashes.contains(dedupHash)) {
-			fileHashes.insert(dedupHash, DedupEntry{ docId, size, DedupStatus::Finished });
-			documentIds.insert(docId, dedupHash);
-			fileSizes.insert(size);
-			ensureDedupDb().insert(DedupDb::Table::Downloads, {
-				.hash = dedupHash,
-				.size = size,
-				.documentId = docId,
-				.status = u"f"_q,
-			});
-		} else if (fileHashes[dedupHash].status == DedupStatus::Unfinished) {
-			fileHashes[dedupHash].status = DedupStatus::Finished;
-			ensureDedupDb().insert(DedupDb::Table::Downloads, {
-				.hash = dedupHash,
-				.size = size,
-				.documentId = docId,
-				.status = u"f"_q,
-			});
-		}
+	if (!dedupHash.isEmpty() && docId && dedupDb.isOpen()) {
+		dedupDb.insert(DedupDb::Table::Downloads, {
+			.hash = dedupHash,
+			.documentId = docId,
+			.status = u"f"_q,
+		});
 		if (const auto document = object.document) {
-			removePendingDocument(document, size);
+			_fingerprintCache.remove(document->id);
 		}
 	}
 
@@ -1186,7 +1185,11 @@ void DownloadManager::remove(
 	if (const auto document = i->object.document) {
 		_loadingDocuments.remove(document);
 		if (GetEnhancedBool("prevent_download_duplicates")) {
-			removePendingDocument(document, i->total);
+			_fingerprintCache.remove(document->id);
+			ensureDedupDb().removeByDocumentId(
+				DedupDb::Table::Downloads,
+				document->id,
+				u"u"_q);
 		}
 	}
 	data.downloading.erase(i);
@@ -1383,6 +1386,11 @@ bool DownloadManager::anyFinishedLoading() const {
 			return true;
 		}
 		for (const auto &entry : data.downloading) {
+			if (entry.enhancedForward) {
+				// Enhanced-Forward downloads are tracked by the forward
+				// pipeline; they must not count as finished downloads.
+				continue;
+			}
 			if (!_loading.contains(entry.object.item)) {
 				return true;
 			}
@@ -1707,6 +1715,15 @@ int DownloadManager::jobDone(not_null<Main::Session*> session) const {
 	return result;
 }
 
+int DownloadManager::jobId(not_null<Main::Session*> session) const {
+	const auto i = _sessions.find(session);
+	return (i == end(_sessions)) ? 0 : i->second.jobId;
+}
+
+bool DownloadManager::isDone(not_null<const HistoryItem*> item) const {
+	return _loaded.contains(item) || _loadingDone.contains(item);
+}
+
 rpl::producer<> DownloadManager::jobCounterChanged() const {
 	return _jobCounterChanged.events();
 }
@@ -1735,60 +1752,10 @@ DedupDb &DownloadManager::ensureDedupDb() const {
 	return *_dedupDb;
 }
 
-void DownloadManager::loadFileHashes() {
-	if (_hasLoadedHashes) {
-		return;
-	}
-	_hasLoadedHashes = true;
-	auto &db = ensureDedupDb();
-	if (!db.isOpen()) {
-		return;
-	}
-	auto records = db.loadAll(DedupDb::Table::Downloads);
-	for (const auto &record : records) {
-		if (record.hash.isEmpty()) {
-			continue;
-		}
-		if (!fileHashes.contains(record.hash)) {
-			fileHashes.insert(record.hash, DedupEntry{
-				.documentId = record.documentId,
-				.size = record.size,
-				.status = (record.status == u"u"_q)
-					? DedupStatus::Unfinished
-					: DedupStatus::Finished,
-			});
-			documentIds.insert(record.documentId, record.hash);
-			fileSizes.insert(record.size);
-		}
-	}
-	LOG(("DEDUP: loadFileHashes loaded entries=%1").arg(fileHashes.size()));
-}
-
 void DownloadManager::saveToDisk() {
 }
 
 void DownloadManager::saveIfIdle() {
-}
-
-bool DownloadManager::hasFileSize(int64 size) const {
-	return fileSizes.contains(size) || pendingFileSizes.contains(size);
-}
-
-bool DownloadManager::findDuplicateByDocumentId(uint64 documentId, int64 size) const {
-	if (!documentId) {
-		return false;
-	}
-	return documentIds.contains(documentId) || pendingDocumentIds.contains(documentId);
-}
-
-bool DownloadManager::findDuplicateByHash(int64 size, const QByteArray &hash) const {
-	if (fileHashes.contains(hash)) {
-		return fileHashes[hash].size == size;
-	}
-	if (pendingFileHashes.contains(hash)) {
-		return pendingFileHashes[hash].size == size;
-	}
-	return false;
 }
 
 void DownloadManager::fetchFingerprint(
@@ -1819,38 +1786,29 @@ void DownloadManager::saveFileHash(
 		not_null<Main::Session*> session,
 		not_null<DocumentData*> document,
 		int64 size) {
-	loadFileHashes();
 	const auto docId = document->id;
-		if (documentIds.contains(docId)) {
-			// Already has a record (unfinished or finished), most likely
-			// restored from disk on startup together with a resumed download.
-			// Don't kick off another remote fingerprint fetch for it.
+	auto &db = ensureDedupDb();
+	if (!db.isOpen() || db.containsDocId(DedupDb::Table::Downloads, docId)) {
+		return;
+	}
+	fetchFingerprint(session, document, [=, &db](QByteArray hash) {
+		if (hash.isEmpty()) {
 			return;
 		}
-		fetchFingerprint(session, document, [=](QByteArray hash) {
-			if (hash.isEmpty()) {
-				return;
-			}
-			// The download could've been cancelled, finished or removed while
-			// we were waiting for the server to answer with the sampled chunks.
-			if (!_loadingDocuments.contains(document)) {
-				return;
-			}
-			loadFileHashes();
-			if (fileHashes.contains(hash)) {
-				// Another download already registered this content (either as
-				// an unfinished or a finished record), don't overwrite it.
-				return;
-			}
-			fileHashes.insert(hash, DedupEntry{ docId, size, DedupStatus::Unfinished });
-			documentIds.insert(docId, hash);
-			fileSizes.insert(size);
-			ensureDedupDb().insert(DedupDb::Table::Downloads, {
-				.hash = hash,
-				.size = size,
-				.documentId = docId,
-				.status = u"u"_q,
-			});
+		if (!_loadingDocuments.contains(document)) {
+			return;
+		}
+		// Register this document's content so a concurrent download of the
+		// same content (different doc id) can be skipped while we download.
+		ensureDedupDb().insert(DedupDb::Table::Downloads, {
+			.hash = hash,
+			.documentId = docId,
+			.status = u"u"_q,
+		});
+		LOG(("DEDUP: saveFileHash doc=%1 hash=%2").arg(
+			docId
+		).arg(
+			QString::fromLatin1(hash.toHex())));
 	});
 }
 
@@ -1858,112 +1816,11 @@ void DownloadManager::removeFileHash(uint64 documentId, int64 size) {
 	if (!documentId) {
 		return;
 	}
-	const auto it = documentIds.find(documentId);
-	if (it == documentIds.end()) {
-		return;
-	}
-	const auto hash = it.value();
-	documentIds.erase(it);
-	fileHashes.remove(hash);
-	ensureDedupDb().remove(DedupDb::Table::Downloads, hash, size);
-
-	auto sizeStillUsed = false;
-	for (auto i = fileHashes.constBegin(); i != fileHashes.constEnd(); ++i) {
-		if (i.value().size == size) {
-			sizeStillUsed = true;
-			break;
-		}
-	}
-	if (!sizeStillUsed) {
-		fileSizes.remove(size);
-	}
-}
-
-void DownloadManager::addPendingDocument(
-		not_null<DocumentData*> document,
-		int64 size) {
-	const auto docId = document->id;
-	pendingDocumentIds.insert(docId, QByteArray());
-	pendingFileSizes.insert(size);
-	pendingDocuments.insert(docId, document);
-	documentsAwaitingHash[size].push_back(docId);
-}
-
-void DownloadManager::removePendingDocument(
-		not_null<DocumentData*> document,
-		int64 size) {
-	const auto docId = document->id;
-	const auto hashIt = pendingDocumentIds.find(docId);
-	if (hashIt != pendingDocumentIds.end() && !hashIt.value().isEmpty()) {
-		pendingFileHashes.remove(hashIt.value());
-	}
-	pendingDocumentIds.remove(docId);
-	pendingDocuments.remove(docId);
-	_fingerprintCache.remove(docId);
-	auto it = documentsAwaitingHash.find(size);
-	if (it != documentsAwaitingHash.end()) {
-		auto &vec = it.value();
-		vec.erase(
-			ranges::remove(vec, docId),
-			vec.end());
-		if (vec.empty()) {
-			documentsAwaitingHash.erase(it);
-		}
-	}
-	auto sizeStillUsed = documentsAwaitingHash.contains(size);
-	if (!sizeStillUsed) {
-		for (auto i = pendingFileHashes.constBegin();
-				i != pendingFileHashes.constEnd();
-				++i) {
-			if (i.value().size == size) {
-				sizeStillUsed = true;
-				break;
-			}
-		}
-	}
-	if (!sizeStillUsed) {
-		pendingFileSizes.remove(size);
-	}
-}
-
-DocumentData* DownloadManager::findDocumentAwaitingHash(int64 size) {
-	const auto it = documentsAwaitingHash.find(size);
-	if (it == documentsAwaitingHash.end() || it.value().empty()) {
-		return nullptr;
-	}
-	const auto docId = it.value().front();
-	const auto docIt = pendingDocuments.find(docId);
-	if (docIt == pendingDocuments.end()) {
-		return nullptr;
-	}
-	return docIt.value().get();
-}
-
-void DownloadManager::updatePendingHash(
-		not_null<DocumentData*> document,
-		int64 size,
-		const QByteArray &hash) {
-	const auto docId = document->id;
-	auto it = documentsAwaitingHash.find(size);
-	if (it != documentsAwaitingHash.end()) {
-		auto &vec = it.value();
-		vec.erase(
-			ranges::remove(vec, docId),
-			vec.end());
-		if (vec.empty()) {
-			documentsAwaitingHash.erase(it);
-		}
-	}
-	if (pendingDocumentIds.contains(docId)) {
-		const auto oldHash = pendingDocumentIds[docId];
-		if (!oldHash.isEmpty()) {
-			pendingFileHashes.remove(oldHash);
-		}
-		pendingDocumentIds[docId] = hash;
-	}
-	if (!hash.isEmpty()) {
-		pendingFileHashes.insert(hash, DedupEntry{ docId, size });
-	}
+	_fingerprintCache.remove(documentId);
+	ensureDedupDb().removeByDocumentId(
+		DedupDb::Table::Downloads,
+		documentId,
+		u"u"_q);
 }
 
 void DownloadManager::checkDuplicate(
@@ -1981,74 +1838,52 @@ void DownloadManager::checkDuplicate(
 		done(skip);
 		saveIfIdle();
 	};
-	loadFileHashes();
+	auto &db = ensureDedupDb();
 
-	// Step 1: Check doc ID (fastest - O(1), catches same doc re-download)
-	if (findDuplicateByDocumentId(document->id, size)) {
+	// Step 1: Check doc ID (O(1), catches same doc re-download).
+	if (db.containsDocId(DedupDb::Table::Downloads, document->id)) {
 		wrappedDone(true);
 		return;
 	}
 
-	// Step 2: Check if size exists in DB or pending simultaneously
-	if (!hasFileSize(size)) {
-		addPendingDocument(document, size);
+	// Step 2: Small files / photos can't be sampled remotely: they are
+	// downloaded first and deduplicated by full local hash after download
+	// (in addLoaded). Just proceed.
+	if (size < Data::kDedupMinPartialHashSize) {
 		wrappedDone(false);
 		return;
 	}
 
-	// Step 3: Fetch chunks, compute hash, check hash in DB and pending simultaneously
+	// Step 3: Fetch 2 sample chunks, compute the hash, compare with known
+	// content (both finished and in-flight 'u' rows).
 	fetchFingerprint(
 		session,
 		document,
-		[=](QByteArray hash) {
-			loadFileHashes();
-			const auto skip = !hash.isEmpty()
-				&& findDuplicateByHash(document->size, hash);
-			LOG(("DEDUP: checkDuplicate doc=%1 size=%2 hash=%3 skip=%4").arg(
-				document->id
-			).arg(
-				document->size
-			).arg(
-				QString::fromLatin1(hash.toHex())
-			).arg(
-				skip));
-			if (skip) {
-				wrappedDone(true);
+		[=, &db](QByteArray hash) {
+			if (hash.isEmpty()) {
+				// Remote sampling failed (small file, no access, etc.) - the
+				// full local hash after download will decide then.
+				wrappedDone(false);
 				return;
 			}
-
-			// Step 4: Cross-check with pending docs of same size without hash
-			auto otherDoc = findDocumentAwaitingHash(document->size);
-			if (otherDoc) {
-				if (!hash.isEmpty()) {
-					auto otherSession = &otherDoc->session();
-					auto otherHash = std::make_shared<QByteArray>();
-					fetchFingerprint(
-						otherSession,
-						otherDoc,
-						[=](QByteArray h) mutable {
-							*otherHash = h;
-							if (!h.isEmpty()) {
-								updatePendingHash(
-									otherDoc,
-									document->size,
-									h);
-							}
-							if (h.isEmpty()
-								|| hash.isEmpty()
-								|| *otherHash != hash) {
-								addPendingDocument(document, size);
-								wrappedDone(false);
-							} else {
-								wrappedDone(true);
-							}
-						});
-					return;
-				}
+			if (!db.isOpen() || !db.containsHash(DedupDb::Table::Downloads, hash)) {
+				// No known content with this hash -> not a duplicate.
+				wrappedDone(false);
+				return;
 			}
-
-			addPendingDocument(document, size);
-			wrappedDone(false);
+			// Same content already known. Remember the alias id -> hash so
+			// future dedup of this exact doc id is O(1) without fetching.
+			ensureDedupDb().insert(DedupDb::Table::Downloads, {
+				.hash = hash,
+				.documentId = document->id,
+				.status = u"f"_q,
+			});
+			LOG(("DEDUP: checkDuplicate skip doc=%1 hash=%2").arg(
+				document->id
+			).arg(
+				QString::fromLatin1(hash.toHex())));
+			wrappedDone(true);
+			return;
 		});
 }
 
@@ -2283,8 +2118,13 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 
 	const auto notify = [=] {
 			DownloadProgress dlProgress;
-			for (const auto id : Core::App().downloadManager().loadingList()) {
+			auto &manager = Core::App().downloadManager();
+			for (const auto id : manager.loadingList()) {
 				if (id->enhancedForward) {
+					continue;
+				}
+				if (id->jobIndex != manager.jobId(
+					&id->object.item->history()->session())) {
 					continue;
 				}
 				dlProgress.ready += id->ready;
@@ -2379,6 +2219,10 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 					break;
 				}
 				if (id->enhancedForward) {
+					continue;
+				}
+				if (id->jobIndex != manager.jobId(
+					&id->object.item->history()->session())) {
 					continue;
 				}
 				if (!single) {
@@ -2597,6 +2441,18 @@ rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent() {
 			content.uploadCount = totalQueue;
 			if (!content.uploadCount) {
 				content.uploadCount = totalPending;
+			}
+			auto jobTotal = 0;
+			auto jobDone = 0;
+			for (const auto &account : Core::App().domain().orderedAccounts()) {
+				const auto session = account->maybeSession();
+				if (!session) continue;
+				jobTotal += session->uploader().jobTotal();
+				jobDone += session->uploader().jobDone();
+			}
+			if (jobTotal > 0) {
+				content.uploadCount = jobTotal;
+				content.uploadDone = jobDone;
 			}
 			if (content.uploadCount == 1) {
 				const auto name = totalQueue
