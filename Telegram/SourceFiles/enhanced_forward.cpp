@@ -1936,6 +1936,9 @@ void Pipeline::sendNext() {
 			QFile::remove(_items[i].path);
 		}
 	}
+	if (QDir dir(_downloadPath); dir.exists()) {
+		dir.rmdir(_downloadPath);
+	}
 	for (auto i = 0; i < _n; i++) {
 		refreshSourceItemState(i);
 	}
@@ -2240,9 +2243,6 @@ void Pipeline::onUploadDone(const Storage::UploadedMedia &data) {
 				Data::DedupDb::Table::Uploads,
 				item.fileHash,
 				u"f"_q);
-			db.removePending(
-				Data::DedupDb::Table::Uploads,
-				item.mediaId);
 		}
 	}
 	EnhancedForward::updateUploadProgress(
