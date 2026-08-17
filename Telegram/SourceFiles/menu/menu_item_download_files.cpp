@@ -237,7 +237,12 @@ void AddAction(
 			if (!folderPath.isEmpty()) {
 				const auto name =
 					base::FileNameFromUserString(document->filename());
-				document->save(origin, folderPath + name);
+				document->save(
+					origin,
+					folderPath + name,
+					LoadFromCloudOrLocal,
+					false,
+					true);
 			} else {
 				DocumentSaveClickHandler::SaveAndTrack(origin, document);
 			}

@@ -71,7 +71,6 @@ public:
 
 	void insertResumeDl(const ResumeDlRecord &record);
 	void removeResumeDl(uint64 peerId, int64 msgId);
-	void removeResumeDlByDocumentId(uint64 documentId);
 	void clearResumeDl();
 	[[nodiscard]] std::vector<ResumeDlRecord> loadAllResumeDl() const;
 
@@ -225,8 +224,6 @@ bool DedupDb::Impl::createTables() {
 			"peer_id INTEGER NOT NULL, "
 			"peer_access_hash INTEGER NOT NULL DEFAULT 0, "
 			"msg_id INTEGER NOT NULL, "
-			"document_id INTEGER NOT NULL, "
-			"size INTEGER NOT NULL, "
 			"path TEXT NOT NULL, "
 			"PRIMARY KEY (peer_id, msg_id))"_q)
 		&& exec(u"CREATE TABLE IF NOT EXISTS resume_ul ("
@@ -496,18 +493,14 @@ void DedupDb::Impl::insertResumeDl(const ResumeDlRecord &record) {
 	}
 	QSqlQuery q(_db);
 	q.prepare(u"INSERT OR REPLACE INTO resume_dl "
-		"(peer_id, peer_access_hash, msg_id, document_id, size, path) "
-		"VALUES (:peer_id, :peer_access_hash, :msg_id, :document_id, :size, "
-		":path)"_q);
+		"(peer_id, peer_access_hash, msg_id, path) "
+		"VALUES (:peer_id, :peer_access_hash, :msg_id, :path)"_q);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(record.peerId)));
 	q.bindValue(u":peer_access_hash"_q, QVariant::fromValue(
 		static_cast<qulonglong>(record.peerAccessHash)));
 	q.bindValue(u":msg_id"_q, QVariant::fromValue(
 		static_cast<qlonglong>(record.msgId)));
-	q.bindValue(u":document_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.documentId)));
-	q.bindValue(u":size"_q, QVariant::fromValue(record.size));
 	q.bindValue(u":path"_q, record.path);
 	if (!q.exec()) {
 		LOG(("DedupDb: InsertResumeDl failed: %1").arg(q.lastError().text()));
@@ -530,20 +523,6 @@ void DedupDb::Impl::removeResumeDl(uint64 peerId, int64 msgId) {
 	}
 }
 
-void DedupDb::Impl::removeResumeDlByDocumentId(uint64 documentId) {
-	if (!_open) {
-		return;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM resume_dl WHERE document_id = :document_id"_q);
-	q.bindValue(u":document_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(documentId)));
-	if (!q.exec()) {
-		LOG(("DedupDb: RemoveResumeDlByDocumentId failed: %1").arg(
-			q.lastError().text()));
-	}
-}
-
 void DedupDb::Impl::clearResumeDl() {
 	if (!_open) {
 		return;
@@ -560,8 +539,8 @@ std::vector<ResumeDlRecord> DedupDb::Impl::loadAllResumeDl() const {
 		return result;
 	}
 	QSqlQuery q(_db);
-	if (!q.exec(u"SELECT peer_id, peer_access_hash, msg_id, document_id, "
-		"size, path FROM resume_dl"_q)) {
+	if (!q.exec(u"SELECT peer_id, peer_access_hash, msg_id, "
+		"path FROM resume_dl"_q)) {
 		LOG(("DedupDb: LoadAllResumeDl failed: %1").arg(
 			q.lastError().text()));
 		return result;
@@ -571,9 +550,7 @@ std::vector<ResumeDlRecord> DedupDb::Impl::loadAllResumeDl() const {
 		record.peerId = q.value(0).toULongLong();
 		record.peerAccessHash = q.value(1).toULongLong();
 		record.msgId = q.value(2).toLongLong();
-		record.documentId = q.value(3).toULongLong();
-		record.size = q.value(4).toLongLong();
-		record.path = q.value(5).toString();
+		record.path = q.value(3).toString();
 		result.push_back(std::move(record));
 	}
 	return result;
@@ -1062,10 +1039,6 @@ void DedupDb::insertResumeDl(const ResumeDlRecord &record) {
 
 void DedupDb::removeResumeDl(uint64 peerId, int64 msgId) {
 	_impl->removeResumeDl(peerId, msgId);
-}
-
-void DedupDb::removeResumeDlByDocumentId(uint64 documentId) {
-	_impl->removeResumeDlByDocumentId(documentId);
 }
 
 void DedupDb::clearResumeDl() {
