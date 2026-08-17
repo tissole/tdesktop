@@ -331,8 +331,6 @@ void DownloadManager::addLoading(
 					.peerId = peer->id.value,
 					.peerAccessHash = PeerAccessHash(peer),
 					.msgId = item->id.bare,
-					.documentId = document->id,
-					.size = size,
 					.path = path,
 				});
 			}
@@ -514,7 +512,9 @@ void DownloadManager::addLoaded(
 		}
 		if (const auto document = object.document) {
 			_fingerprintCache.remove(document->id);
-			ensureDedupDb().removeResumeDlByDocumentId(document->id);
+			ensureDedupDb().removeResumeDl(
+				item->history()->peer->id.value,
+				item->id.bare);
 		}
 		const auto i = ranges::find(
 			data.downloading,
@@ -603,7 +603,9 @@ void DownloadManager::addLoaded(
 		_jobCounterChanged.fire({});
 		saveIfIdle();
 		if (const auto document = entry.object.document) {
-			ensureDedupDb().removeResumeDlByDocumentId(document->id);
+			ensureDedupDb().removeResumeDl(
+				entry.object.item->history()->peer->id.value,
+				entry.object.item->id.bare);
 		}
 		_loadingProgress = DownloadProgress{
 			.ready = _loadingProgress.current().ready + readyChange,
@@ -1244,7 +1246,9 @@ void DownloadManager::cancel(
 		}
 	}
 	if (document) {
-		ensureDedupDb().removeResumeDlByDocumentId(document->id);
+		ensureDedupDb().removeResumeDl(
+			item->history()->peer->id.value,
+			item->id.bare);
 	}
 	PruneEmptyDownloadFolders(session, path);
 }
@@ -1919,7 +1923,7 @@ void DownloadManager::showResumeUnfinished(
 	auto jobs = std::make_shared<std::vector<FileJob>>();
 	auto totalItems = 0;
 	for (const auto &record : records) {
-		if (!record.peerId || !record.msgId || !record.documentId) {
+		if (!record.peerId || !record.msgId) {
 			continue;
 		}
 		const auto peerId = PeerId(record.peerId);
@@ -1933,8 +1937,6 @@ void DownloadManager::showResumeUnfinished(
 		}
 		jobIt->entries.push_back({
 			.msgId = MsgId(record.msgId),
-			.documentId = record.documentId,
-			.size = record.size,
 			.path = record.path,
 		});
 	}
@@ -1973,9 +1975,16 @@ void DownloadManager::showResumeUnfinished(
 					if (!document) {
 						continue;
 					}
+					// Use a plain file loader so a paused-then-resumed
+					// download restarts reliably - the streaming-reader
+					// downloader can't be resumed after being paused before
+					// its first part request.
 					document->save(
 						item->fullId(),
-						entry.path);
+						entry.path,
+						LoadFromCloudOrLocal,
+						false,
+						true);
 					if (document->loading()
 						&& !document->loadingFilePath().isEmpty()) {
 						addLoading({
@@ -2026,8 +2035,9 @@ void DownloadManager::showResumeUnfinished(
 						PruneEmptyDownloadFolders(strong, entry.path);
 					}
 				}
-				ensureDedupDb().removeResumeDlByDocumentId(
-					entry.documentId);
+				ensureDedupDb().removeResumeDl(
+					job.peerId.value,
+					entry.msgId.bare);
 			}
 		}
 	};

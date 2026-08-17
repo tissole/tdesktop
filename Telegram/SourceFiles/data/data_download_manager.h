@@ -195,8 +195,6 @@ private:
 	void notifyDuplicateSkips();
 	struct ResumeEntry {
 		MsgId msgId = 0;
-		DocumentId documentId = 0;
-		int64 size = 0;
 		QString path;
 	};
 	struct DeleteFilesDescriptor;

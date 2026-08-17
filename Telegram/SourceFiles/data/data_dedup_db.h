@@ -27,8 +27,6 @@ struct ResumeDlRecord {
 	uint64 peerId = 0;
 	uint64 peerAccessHash = 0;
 	int64 msgId = 0;
-	uint64 documentId = 0;
-	int64 size = 0;
 	QString path;
 };
 
@@ -114,7 +112,6 @@ public:
 
 	void insertResumeDl(const ResumeDlRecord &record);
 	void removeResumeDl(uint64 peerId, int64 msgId);
-	void removeResumeDlByDocumentId(uint64 documentId);
 	void clearResumeDl();
 	[[nodiscard]] std::vector<ResumeDlRecord> loadAllResumeDl() const;
 

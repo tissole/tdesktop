@@ -130,7 +130,10 @@ void DocumentSaveClickHandler::Save(
 			return;
 		}
 		const auto proceed = [=] {
-			data->save(origin, savename);
+			// Force the plain file loader: saves to disk must resume reliably
+			// after a pause. The streaming-reader downloader is only required
+			// for feeding in-progress playback, which uses its own loaders.
+			data->save(origin, savename, LoadFromCloudOrLocal, false, true);
 			if (started) {
 				started();
 			}
