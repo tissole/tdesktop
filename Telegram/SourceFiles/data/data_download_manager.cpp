@@ -262,6 +262,10 @@ void DownloadManager::addLoading(
 	Expects(object.item != nullptr);
 	Expects(object.document != nullptr);
 
+	Info::Downloads::SetLastActivityTab(enhancedForward
+		? Info::Downloads::Tab::Forwards
+		: Info::Downloads::Tab::Downloads);
+
 	const auto item = object.item;
 	auto &data = sessionData(item);
 

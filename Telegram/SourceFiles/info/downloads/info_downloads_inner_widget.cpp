@@ -115,6 +115,13 @@ InnerWidget::InnerWidget(
 	) | rpl::on_next(
 		[this] { refreshHeight(); },
 		_counter->lifetime());
+	// Re-lay-out when items arrive: the provider issues _refreshed after
+	// adding Forwards documents, which must also update the list/empty
+	// widgets even if the list's own height signal was already settled.
+	provider()->refreshed(
+	) | rpl::on_next([this] {
+		refreshHeight();
+	}, _counter->lifetime());
 	provider()->counterValue(
 	) | rpl::on_next([=](const QString &text) {
 		_counter->setText(text);

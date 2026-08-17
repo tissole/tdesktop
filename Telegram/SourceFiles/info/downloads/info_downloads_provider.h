@@ -14,6 +14,10 @@ namespace Data {
 struct DownloadedId;
 } // namespace Data
 
+namespace EnhancedForward {
+struct JobSnapshot;
+} // namespace EnhancedForward
+
 namespace Info {
 class AbstractController;
 } // namespace Info
@@ -142,6 +146,9 @@ private:
 	void performRefresh();
 	void performAdd();
 	void addElementNow(Element &&element);
+	void refreshEF(
+		not_null<Main::Session*> session,
+		const std::vector<EnhancedForward::JobSnapshot> &jobs);
 	void remove(not_null<const HistoryItem*> item);
 	void trackItemSession(not_null<const HistoryItem*> item);
 	void updateCounter();
@@ -190,6 +197,8 @@ private:
 
 	base::flat_map<not_null<Main::Session*>, rpl::lifetime> _trackedSessions;
 	int _nextElementOrder = 0;
+	base::flat_set<FullMsgId> _failedEFResolve;
+	base::flat_set<FullMsgId> _fetchingEFResolve;
 	bool _postponedRefreshSort = false;
 	bool _postponedRefresh = false;
 	bool _started = false;

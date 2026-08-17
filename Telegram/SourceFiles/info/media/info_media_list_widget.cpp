@@ -251,8 +251,7 @@ void TmClearFinishedItems(
 			case TmItemKind::EnhancedForwardFinished:
 				EnhancedForward::ClearFinishedItems(
 					session,
-					ef.peer,
-					{ ef.index });
+					item->fullId());
 				break;
 			default:
 				break;
@@ -986,6 +985,7 @@ void ListWidget::refreshRows() {
 	}
 
 	resizeToWidth(width());
+	refreshHeight();
 	restoreScrollState();
 	mouseActionUpdate();
 	update();
@@ -1477,8 +1477,7 @@ void ListWidget::showContextMenu(
 				crl::guard(this, [=] {
 					EnhancedForward::ClearFinishedItems(
 						session,
-						ef.peer,
-						{ ef.index });
+						item->fullId());
 				}),
 				&st::menuIconClear);
 		}

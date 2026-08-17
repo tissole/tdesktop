@@ -32,6 +32,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/localimageloader.h"
 #include "storage/file_upload.h"
 #include "data/data_download_manager.h"
+#include "info/downloads/info_downloads_widget.h"
 #include "core/application.h"
 #include "ui/toast/toast.h"
 #include "lang/lang_keys.h"
@@ -531,6 +532,7 @@ void FillMessagePostFlags(
 void SendConfirmedFile(
 	not_null<Main::Session*> session,
 	const std::shared_ptr<FilePrepareResult> &file) {
+	Info::Downloads::SetLastActivityTab(Info::Downloads::Tab::Uploads);
 	const auto isEditing = (file->type != SendMediaType::Audio)
 		&& (file->type != SendMediaType::Round)
 		&& (file->to.replaceMediaOf != 0);
@@ -548,6 +550,9 @@ void SendConfirmedFile(
 		Assert(it != file->album->items.end());
 
 		it->msgId = newId;
+		// The album is only sent once it has received all of its items, so
+		// track the count here - the SF path never initializes expectedCount.
+		file->album->expectedCount++;
 	}
 
 	const auto itemToEdit = isEditing
@@ -569,6 +574,21 @@ void SendConfirmedFile(
 	if (session->uploader().checkUploadDuplicate(newId, file)) {
 		Core::App().downloadManager().reportDuplicateSkipped(
 			Data::DedupDb::Table::Uploads);
+		// A skipped duplicate can't provide media, so drop it from the album
+		// and fix the expected count - otherwise the album waits on it forever
+		// and is never sent.
+		if (file->album) {
+			auto &items = file->album->items;
+			items.erase(
+				ranges::remove(
+					items,
+					newId,
+					&SendingAlbum::Item::msgId),
+				end(items));
+			if (file->album->expectedCount > 0) {
+				file->album->expectedCount--;
+			}
+		}
 		return;
 	}
 

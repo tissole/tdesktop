@@ -572,12 +572,30 @@ rpl::producer<QString> Widget::title() {
 }
 
 std::shared_ptr<Info::Memento> Make(not_null<UserData*> self, Tab tab) {
+	if (tab == Tab::Downloads) {
+		tab = LastActivityTab();
+	}
 	auto memento = std::make_shared<Memento>(self);
 	memento->setTab(tab);
 	return std::make_shared<Info::Memento>(
 		std::vector<std::shared_ptr<ContentMemento>>(
 			1,
 			std::move(memento)));
+}
+
+namespace {
+Tab &LastActivityTabRef() {
+	static auto tab = Tab::Downloads;
+	return tab;
+}
+} // namespace
+
+void SetLastActivityTab(Tab tab) {
+	LastActivityTabRef() = tab;
+}
+
+Tab LastActivityTab() {
+	return LastActivityTabRef();
 }
 
 } // namespace Info::Downloads

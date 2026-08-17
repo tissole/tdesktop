@@ -8,6 +8,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include <optional>
+#include <deque>
+#include <utility>
+#include "base/timer.h"
 #include "base/unique_function.h"
 #include "data/data_peer_id.h"
 #include "rpl/producer.h"
@@ -30,6 +33,7 @@ struct RemoteFileInfo;
 } // namespace Api
 
 namespace Data {
+enum class ForwardOptions;
 enum class GroupingOptions;
 class PhotoMedia;
 } // namespace Data
@@ -218,10 +222,31 @@ void EnsureForwardSourceMessages(
 // Fires the destination peer whenever its forward state changes.
 [[nodiscard]] rpl::producer<PeerId> stateChanges();
 
+// Fires whenever the forward job counters (total/sent/skipped) change, so the
+// UI can refresh the counter text from the maintained totals - mirrors the
+// download/upload jobCounterChanged signals (no scanning, no polling).
+[[nodiscard]] rpl::producer<> counterChanges();
+
+// In-memory job snapshots only (ActiveStates + FinishedStates): the cheap
+// push-based view used by jobsValue and by the UI update path. No DB reads.
+[[nodiscard]] std::vector<JobSnapshot> MemoryJobs(
+	not_null<Main::Session*> session);
+// Same as MemoryJobs plus the persisted resume rows that were not seeded yet
+// (one-off SQL, used by context menus and other non-hot paths).
 [[nodiscard]] std::vector<JobSnapshot> AllJobs(
 	not_null<Main::Session*> session);
 [[nodiscard]] rpl::producer<std::vector<JobSnapshot>> jobsValue(
 	not_null<Main::Session*> session);
+
+// Loads the persisted resume rows once and merges them into the in-memory
+// states, so a job left unfinished or finished from a previous run is
+// rendered by the push-based jobsValue stream without reading the database
+// on every update. Safe to call multiple times per session (idempotent).
+void EnsureResumeStatesSeeded(not_null<Main::Session*> session);
+
+// The last completed forward's (done, total): keeps the transfer-manager
+// counter visible until the next forward replaces it, across restarts.
+[[nodiscard]] std::pair<int, int> LastBatchCounts();
 
 // Returns true if the given upload id is currently handled by an active
 // Enhanced Forward pipeline (so it should be shown as "EF", not a plain
@@ -253,10 +278,11 @@ void CancelAll(not_null<Main::Session*> session);
 void ClearFinished(
 	not_null<Main::Session*> session,
 	const PeerId &peer);
+// Removes a single finished forwarded item (by its source message) from the
+// Forwards history and from the persisted done list.
 void ClearFinishedItems(
 	not_null<Main::Session*> session,
-	const PeerId &peer,
-	const std::vector<int> &itemIndices);
+	const FullMsgId &sourceId);
 
 // Shows a quit-confirmation box if an enhanced forward is running, then calls
 // quit on confirmation (mirrors DownloadManager::quitWithConfirmation).
@@ -281,6 +307,8 @@ struct ItemTask {
 	QByteArray fileHash;
 	qint64 fileSize = 0;
 	bool dedupNeedsHash = false;
+	bool dedupHashPending = false;
+	bool dedupPrechecked = false;
 	bool dedupSkipped = false;
 
 	bool uploadStarted = false;
@@ -307,6 +335,7 @@ public:
 		not_null<ApiWrap*> api,
 		std::vector<not_null<HistoryItem*>> &&items,
 		const Api::SendAction &action,
+		Data::ForwardOptions forwardOptions,
 		Data::GroupingOptions groupOptions,
 		std::shared_ptr<SavedJob> resumeJob);
 
@@ -314,12 +343,14 @@ public:
 		not_null<ApiWrap*> api,
 		std::vector<not_null<HistoryItem*>> &&items,
 		const Api::SendAction &action,
+		Data::ForwardOptions forwardOptions,
 		Data::GroupingOptions groupOptions,
 		std::shared_ptr<SavedJob> resumeJob);
 
 	~Pipeline();
 
 	void cancelItem(int idx);
+	void adjustAlbumCount(int idx);
 
 	[[nodiscard]] bool containsUpload(const FullMsgId &uploadId) const {
 		return _uploadIndex && _uploadIndex->find(uploadId) != end(*_uploadIndex);
@@ -339,12 +370,23 @@ private:
 	void checkItem(int idx);
 	void pumpDownloads();
 	void dedupCheckItem(int idx);
+	void dedupHashed(
+		int idx,
+		QByteArray &&hash,
+		qint64 size,
+		uint64 mediaId,
+		bool needsDelete);
 	void skipAsDuplicate(int idx);
+	void premarkDuplicate(int idx);
+	void startSession();
+	void runNextPrecheck();
+	void remotePrechecked(int idx, QByteArray &&hash, qint64 size);
 	void refreshSourceItemState(int idx);
 
 	not_null<ApiWrap*> _api;
 	Main::Session &_session;
 	Api::SendAction _action;
+	Data::ForwardOptions _forwardOptions;
 	Data::GroupingOptions _groupOptions;
 
 	int _n = 0;
@@ -363,6 +405,8 @@ private:
 
 	QString _downloadPath;
 	uint64 _runId = 0;
+	crl::time _lastDlProgressMs = 0;
+	crl::time _lastShadowRepaintMs = 0;
 
 	PeerId _peerId;
 	PeerId _srcPeer;
@@ -371,6 +415,7 @@ private:
 
 	int _downloadCursor = 0;
 	int _uploadCursor = 0;
+	std::deque<int> _dedupPrecheckQueue;
 };
 
 } // namespace EnhancedForward

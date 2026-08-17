@@ -107,4 +107,7 @@ private:
 	not_null<UserData*> self,
 	Tab tab = Tab::Downloads);
 
+void SetLastActivityTab(Tab tab);
+[[nodiscard]] Tab LastActivityTab();
+
 } // namespace Info::Downloads

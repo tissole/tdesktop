@@ -33,6 +33,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "layout/layout_selection.h"
 #include "styles/style_overview.h"
 #include "data/data_msg_id.h"
+#include "base/timer.h"
+#include <crl/crl.h>
 
 namespace Info::Downloads {
 namespace {
@@ -114,6 +116,7 @@ void Provider::updateAvailability() {
 }
 
 void Provider::updateCounter() {
+	const auto start = crl::now();
 	const auto wantDownloads = (_filter == Filter::Downloads
 		|| _filter == Filter::All);
 	const auto wantUploads = (_filter == Filter::Uploads
@@ -124,36 +127,48 @@ void Provider::updateCounter() {
 	auto total = 0;
 	if (wantForwards) {
 		const auto session = &_controller->session();
-		const auto jobs = EnhancedForward::AllJobs(session);
+		const auto jobs = EnhancedForward::MemoryJobs(session);
 		// Like the download/upload jobId counters, show the current job only:
 		// the active forward, or the latest finished/resumable batch when
-		// nothing is running. Finished jobs do not accumulate.
+		// nothing is running. Finished jobs do not accumulate and cancelled
+		// jobs are never counted.
 		const EnhancedForward::JobSnapshot *current = nullptr;
 		for (const auto &job : jobs) {
-			if (job.active) {
+			if (job.active
+				&& job.progress.state != EnhancedForward::State::Cancelled) {
 				current = &job;
 				break;
 			}
 		}
 		if (!current) {
+			// Interrupted batches awaiting resume also count, like the
+			// resumable downloads. Finished items are never counted.
 			for (const auto &job : jobs) {
-				if (job.finished || job.resumable) {
+				if (job.resumable
+					&& job.progress.state != EnhancedForward::State::Cancelled) {
 					current = &job;
 					break;
 				}
 			}
 		}
 		if (current) {
-			for (const auto &item : current->progress.items) {
-				if (item.cancelled) {
-					continue;
-				}
-				++total;
-				if (item.sent
-					|| (item.state == EnhancedForward::ItemState::Done)) {
-					++done;
-				}
-			}
+			// The totals are maintained incrementally (dedup skips and per-item
+			// cancels subtract from total, sent counts finished uploads), so
+			// reading them is O(1) - the same as the download/upload counters.
+			total += current->progress.total;
+			done += current->progress.sent;
+			LOG(("EF_FREEZE: counter job total=%1 sent=%2 skipped=%3 active=%4 resumable=%5")
+				.arg(current->progress.total)
+				.arg(current->progress.sent)
+				.arg(current->progress.skipped)
+				.arg(current->active ? 1 : 0)
+				.arg(current->resumable ? 1 : 0));
+		} else {
+			// Nothing is running: keep the last completed batch visible in the
+			// counter until the next forward replaces it (also after restart).
+			const auto [lastDone, lastTotal] = EnhancedForward::LastBatchCounts();
+			total += lastTotal;
+			done += lastDone;
 		}
 	}
 	if (wantDownloads) {
@@ -175,6 +190,10 @@ void Provider::updateCounter() {
 		tr::now,
 		lt_done, QString::number(done),
 		lt_total, QString::number(total));
+	const auto took = crl::now() - start;
+	if (took >= 16) {
+		LOG(("EF_FREEZE: updateCounter took %1ms").arg(took));
+	}
 }
 
 bool Provider::isPossiblyMyItem(not_null<const HistoryItem*> item) {
@@ -523,126 +542,18 @@ void Provider::refreshViewer() {
 			}
 		}, _lifetime);
 
-		const auto refreshEF = std::make_shared<Fn<void()>>();
-		const auto failedResolve = std::make_shared<base::flat_set<FullMsgId>>();
-		const auto refreshScheduled = std::make_shared<bool>(false);
-		const auto scheduleRefresh = std::make_shared<Fn<void()>>();
-		*scheduleRefresh = [this, refreshScheduled, refreshEF = refreshEF.get()] {
-			if (*refreshScheduled) {
-				return;
-			}
-			*refreshScheduled = true;
-			Ui::PostponeCall(this, [refreshScheduled, refreshEF] {
-				*refreshScheduled = false;
-				(*refreshEF)();
-			});
-		};
-		*refreshEF = [this, session, failedResolve, scheduleRefresh = scheduleRefresh.get()] {
-			auto jobItems = base::flat_set<not_null<const HistoryItem*>>();
-			auto allSourceIds = base::flat_set<FullMsgId>();
-			auto unresolved = std::vector<FullMsgId>();
-			auto jobs = EnhancedForward::AllJobs(session);
-			// Finished/resumable batches come first so that when a new job
-			// runs for the same peer the merged Forwards list keeps a stable
-			// source order and finished items never flicker out and back in.
-			ranges::stable_sort(
-				jobs,
-				ranges::less(),
-				[](const EnhancedForward::JobSnapshot &job) {
-					return !(job.finished || job.resumable);
-				});
-			auto canonical = 0;
-			for (const auto &job : jobs) {
-				if (job.progress.state == EnhancedForward::State::Cancelled) {
-					continue;
-				}
-				for (auto i = 0; i < int(job.progress.sourceIds.size()); i++) {
-					if (int(job.progress.items.size()) > i
-						&& job.progress.items[i].cancelled) {
-						continue;
-					}
-					const auto srcId = job.progress.sourceIds[i];
-					allSourceIds.emplace(srcId);
-					const auto message = session->data().message(srcId);
-					if (!message) {
-						if (!failedResolve->contains(srcId)) {
-							unresolved.push_back(srcId);
-						}
-						continue;
-					}
-					const auto item = not_null<HistoryItem*>(message);
-					jobItems.emplace(item);
-					if (!_enhancedForward.contains(item)) {
-						_enhancedForward.emplace(item);
-						const auto alreadyInElements = ranges::any_of(
-							_elements,
-							[&](const Element &element) {
-								return element.item == item;
-							});
-						if (!alreadyInElements) {
-							addElementNow(Element{
-								item,
-								int64(item->date()) * 1000,
-								QString(),
-							});
-						}
-						trackItemSession(item);
-						refreshPostponed(true);
-					}
-					for (auto &element : _elements) {
-						if (element.item == item) {
-							element.order = canonical++;
-							break;
-						}
-					}
-				}
-			}
-			auto toRemove = std::vector<not_null<const HistoryItem*>>();
-			auto &downloadManager = Core::App().downloadManager();
-			for (const auto &item : _enhancedForward) {
-				if (jobItems.contains(item)
-					|| allSourceIds.contains(item->fullId())) {
-					continue;
-				}
-				const auto stillLoading = ranges::any_of(
-					downloadManager.loadingList(),
-					[&](const auto &id) {
-						return id->enhancedForward
-							&& (id->object.item == item);
-					});
-				if (!stillLoading) {
-					toRemove.push_back(item);
-				}
-			}
-			for (const auto &item : toRemove) {
-				_enhancedForward.remove(item);
-				remove(item);
-			}
-			if (!unresolved.empty()) {
-				const auto weak = base::make_weak(this);
-				EnhancedForward::EnsureForwardSourceMessages(
-					session,
-					unresolved,
-					[weak, failedResolve, unresolved, scheduleRefresh](bool ok) {
-						if (ok) {
-							for (const auto &id : unresolved) {
-								failedResolve->erase(id);
-							}
-						} else {
-							for (const auto &id : unresolved) {
-								failedResolve->emplace(id);
-							}
-						}
-						if (const auto alive = weak.get()) {
-							(*scheduleRefresh)();
-						}
-					});
-			}
-		};
-		rpl::single(rpl::empty) | rpl::then(
-			EnhancedForward::stateChanges() | rpl::to_empty
-		) | rpl::on_next([refreshEF, scheduleRefresh] {
-			(*scheduleRefresh)();
+		// The persisted resume rows are merged into the in-memory job states
+		// once (peers may still be loading right after restart); afterwards
+		// the Forwards list is driven purely by the push-based jobsValue
+		// stream - no polling timer and no database reads on the hot path.
+		EnhancedForward::EnsureResumeStatesSeeded(session);
+		EnhancedForward::jobsValue(session) | rpl::on_next([=](const auto &jobs) {
+			refreshEF(session, jobs);
+		}, _lifetime);
+		// Mirror the download/upload jobCounterChanged signals: refresh the
+		// counter text only when the forward counts actually changed.
+		EnhancedForward::counterChanges() | rpl::on_next([=] {
+			updateCounter();
 		}, _lifetime);
 
 		Core::App().downloadManager().jobCounterChanged(
@@ -657,6 +568,127 @@ void Provider::refreshViewer() {
 
 	performAdd();
 	performRefresh();
+}
+
+void Provider::refreshEF(
+		not_null<Main::Session*> session,
+		const std::vector<EnhancedForward::JobSnapshot> &jobs) {
+	const auto start = crl::now();
+	const auto guard = gsl::finally([&] {
+		const auto took = crl::now() - start;
+		if (took >= 16) {
+			LOG(("EF_FREEZE: refreshEF took %1ms").arg(took));
+		}
+	});
+	auto jobItems = base::flat_set<not_null<const HistoryItem*>>();
+	auto allSourceIds = base::flat_set<FullMsgId>();
+	auto unresolved = std::vector<FullMsgId>();
+	// Finished/resumable batches come first so that when a new job runs for
+	// the same peer the merged Forwards list keeps a stable source order.
+	auto ordered = jobs;
+	ranges::stable_sort(
+		ordered,
+		ranges::less(),
+		[](const EnhancedForward::JobSnapshot &job) {
+			return !(job.finished || job.resumable);
+		});
+	for (const auto &job : ordered) {
+		if (job.progress.state == EnhancedForward::State::Cancelled) {
+			continue;
+		}
+		for (auto i = 0; i < int(job.progress.sourceIds.size()); i++) {
+			if (int(job.progress.items.size()) > i
+				&& (job.progress.items[i].cancelled
+					|| job.progress.items[i].dedupSkipped)) {
+				continue;
+			}
+			const auto srcId = job.progress.sourceIds[i];
+			allSourceIds.emplace(srcId);
+			const auto message = session->data().message(srcId);
+			if (!message) {
+				if (IsServerMsgId(srcId.msg)
+					&& !_failedEFResolve.contains(srcId)) {
+					unresolved.push_back(srcId);
+				}
+				continue;
+			}
+			const auto item = not_null<HistoryItem*>(message);
+			jobItems.emplace(item);
+			// Key presence by fullId, not HistoryItem*: the source messages
+			// can be re-resolved to different pointers across renders
+			// (reload after restart), which made a pointer-based check
+			// re-add the same item every time (double adds, churn).
+			const auto fullIdInElements = ranges::any_of(
+				_elements,
+				[&](const Element &element) {
+					return element.item->fullId() == srcId;
+				});
+			if (!fullIdInElements) {
+				_enhancedForward.emplace(item);
+				addElementNow(Element{
+					item,
+					int64(item->date()) * 1000,
+					QString(),
+				});
+				trackItemSession(item);
+				refreshPostponed(true);
+			} else if (!_enhancedForward.contains(item)) {
+				_enhancedForward.emplace(item);
+			}
+		}
+	}
+	auto toRemove = std::vector<not_null<const HistoryItem*>>();
+	for (const auto &item : _enhancedForward) {
+		if (jobItems.contains(item)
+			|| allSourceIds.contains(item->fullId())) {
+			continue;
+		}
+		const auto stillLoading = ranges::any_of(
+			Core::App().downloadManager().loadingList(),
+			[&](const auto &id) {
+				return id->enhancedForward
+					&& (id->object.item == item);
+			});
+		if (!stillLoading) {
+			toRemove.push_back(item);
+		}
+	}
+	for (const auto &item : toRemove) {
+		_enhancedForward.remove(item);
+		remove(item);
+	}
+	if (!unresolved.empty()) {
+		auto toFetch = std::vector<FullMsgId>();
+		for (const auto &id : unresolved) {
+			if (_fetchingEFResolve.contains(id)) {
+				continue;
+			}
+			_fetchingEFResolve.emplace(id);
+			toFetch.push_back(id);
+		}
+		if (!toFetch.empty()) {
+			const auto weak = base::make_weak(this);
+			EnhancedForward::EnsureForwardSourceMessages(
+				session,
+				toFetch,
+				[weak, session, toFetch](bool ok) {
+					if (!weak) {
+						return;
+					}
+					for (const auto &id : toFetch) {
+						weak->_fetchingEFResolve.remove(id);
+						if (ok) {
+							weak->_failedEFResolve.remove(id);
+						} else {
+							weak->_failedEFResolve.emplace(id);
+						}
+					}
+					weak->refreshEF(
+						session,
+						EnhancedForward::MemoryJobs(session));
+				});
+		}
+	}
 }
 
 void Provider::addFinishedUpload(
@@ -744,6 +776,15 @@ void Provider::addPostponed(not_null<const Data::DownloadedId*> entry) {
 	Expects(entry->object != nullptr);
 
 	const auto item = entry->object->item;
+	// Enhanced-forward temp downloads should never appear in the regular
+	// Downloads tab: the DownloadManager records every finished document
+	// (including the ones enhanced forward downloaded to ForwardTemp/), but
+	// those are only meaningful in the Forwards tab.
+	if (EnhancedForward::isEnhancedTempUpload(
+			&item->history()->session(),
+			entry->path)) {
+		return;
+	}
 	trackItemSession(item);
 	const auto i = ranges::find(_addPostponed, item, &Element::item);
 	if (i != end(_addPostponed)) {
@@ -1112,16 +1153,17 @@ BaseLayout *Provider::getLayout(
 std::unique_ptr<BaseLayout> Provider::createLayout(
 		Element element,
 		not_null<Overview::Layout::Delegate*> delegate) {
-	const auto getFile = [&]() -> DocumentData* {
-		if (auto media = element.item->media()) {
-			return media->document();
-		}
-		return nullptr;
-	};
-
+	const auto media = element.item->media();
 	using namespace Overview::Layout;
-	auto &songSt = st::overviewFileLayout;
-	if (const auto file = getFile()) {
+	if (const auto photo = media ? media->photo() : nullptr) {
+		return std::make_unique<Photo>(
+			delegate,
+			element.item,
+			photo,
+			MediaOptions{ .spoiler = media && media->hasSpoiler() });
+	}
+	if (const auto file = media ? media->document() : nullptr) {
+		auto &songSt = st::overviewFileLayout;
 		return std::make_unique<Document>(
 			delegate,
 			element.item,

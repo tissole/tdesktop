@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QUuid>
 
 #include "logs.h"
+#include <crl/crl.h>
 
 #include <algorithm>
 
@@ -44,6 +45,9 @@ public:
 		uint64 documentId,
 		const QString &status);
 	[[nodiscard]] bool containsDocId(
+		Table table,
+		uint64 documentId) const;
+	[[nodiscard]] bool containsDocIdInDb(
 		Table table,
 		uint64 documentId) const;
 	[[nodiscard]] bool containsHash(
@@ -85,6 +89,16 @@ public:
 	[[nodiscard]] std::vector<EfResumeItem> loadUnfinishedEfResumeItems() const;
 	[[nodiscard]] std::vector<EfResumeItem> loadFinishedEfResumeItems() const;
 	void clearDoneEfResumeForPeer(PeerId peerId);
+
+	void insertForwardedDone(
+		const FullMsgId &sourceId,
+		const QByteArray &hash);
+	[[nodiscard]] std::vector<FullMsgId> loadForwardedDone() const;
+	void removeForwardedDone(const FullMsgId &sourceId);
+	void clearForwardedDone();
+
+	void saveLastBatchCounts(int done, int total);
+	[[nodiscard]] std::pair<int, int> loadLastBatchCounts() const;
 
 	void beginTransaction();
 	void commitTransaction();
@@ -243,7 +257,17 @@ bool DedupDb::Impl::createTables() {
 		&& exec(u"CREATE INDEX IF NOT EXISTS idx_ef_resume_peer "
 			"ON ef_resume(peer_id, state)"_q)
 		&& exec(u"CREATE INDEX IF NOT EXISTS idx_ef_resume_hash "
-			"ON ef_resume(file_hash)"_q);
+			"ON ef_resume(file_hash)"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS ef_done ("
+			"source_peer_id INTEGER NOT NULL, "
+			"source_msg_id INTEGER NOT NULL, "
+			"hash BLOB NOT NULL DEFAULT '', "
+			"created_at INTEGER NOT NULL DEFAULT 0, "
+			"PRIMARY KEY (source_peer_id, source_msg_id))"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS ef_last ("
+			"id INTEGER PRIMARY KEY CHECK (id = 1), "
+			"done INTEGER NOT NULL, "
+			"total INTEGER NOT NULL)"_q);
 }
 
 void DedupDb::Impl::insert(Table table, const DedupRecord &record) {
@@ -266,7 +290,7 @@ void DedupDb::Impl::insert(Table table, const DedupRecord &record) {
 		+ u" (doc_id, hash, status) "
 		"VALUES (:doc_id, :hash, :status)"_q);
 	q.bindValue(u":doc_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.documentId)));
+		static_cast<qlonglong>(record.documentId)));
 	q.bindValue(u":hash"_q, record.hash);
 	q.bindValue(u":status"_q, record.status);
 	if (!q.exec()) {
@@ -309,7 +333,7 @@ void DedupDb::Impl::removeByDocumentId(
 		q.bindValue(u":status"_q, status);
 	}
 	q.bindValue(u":doc_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(documentId)));
+		static_cast<qlonglong>(documentId)));
 	if (!q.exec()) {
 		LOG(("DedupDb: Remove failed: %1").arg(q.lastError().text()));
 	}
@@ -318,6 +342,23 @@ void DedupDb::Impl::removeByDocumentId(
 bool DedupDb::Impl::containsDocId(Table table, uint64 documentId) const {
 	const auto &s = state(table);
 	return s.docToHash.contains(documentId);
+}
+
+bool DedupDb::Impl::containsDocIdInDb(
+		Table table,
+		uint64 documentId) const {
+	if (!_open || !documentId) {
+		return false;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT EXISTS(SELECT 1 FROM " + TableName(table)
+		+ u" WHERE doc_id = :doc_id)"_q);
+	q.bindValue(u":doc_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(documentId)));
+	if (!q.exec() || !q.next()) {
+		return false;
+	}
+	return q.value(0).toBool();
 }
 
 bool DedupDb::Impl::containsHash(Table table, const QByteArray &hash) const {
@@ -350,9 +391,9 @@ void DedupDb::Impl::rekey(
 		+ u" SET doc_id = :new_doc_id "
 		"WHERE doc_id = :old_doc_id"_q);
 	q.bindValue(u":new_doc_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(newDocumentId)));
+		static_cast<qlonglong>(newDocumentId)));
 	q.bindValue(u":old_doc_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(oldDocumentId)));
+		static_cast<qlonglong>(oldDocumentId)));
 	if (!q.exec()) {
 		LOG(("DedupDb: Rekey failed: %1").arg(q.lastError().text()));
 	}
@@ -822,6 +863,105 @@ void DedupDb::Impl::clearDoneEfResumeForPeer(PeerId peerId) {
 	}
 }
 
+void DedupDb::Impl::insertForwardedDone(
+		const FullMsgId &sourceId,
+		const QByteArray &hash) {
+	if (!_open || !sourceId.peer || !sourceId.msg) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"INSERT OR IGNORE INTO ef_done "
+		"(source_peer_id, source_msg_id, hash, created_at) "
+		"VALUES (:peer_id, :msg_id, :hash, :created_at)"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sourceId.peer.value)));
+	q.bindValue(u":msg_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(sourceId.msg.bare)));
+	q.bindValue(u":hash"_q, hash);
+	q.bindValue(u":created_at"_q, QVariant::fromValue(
+		static_cast<qlonglong>(crl::now())));
+	if (!q.exec()) {
+		LOG(("DedupDb: InsertForwardedDone failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+std::vector<FullMsgId> DedupDb::Impl::loadForwardedDone() const {
+	auto result = std::vector<FullMsgId>();
+	if (!_open) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT source_peer_id, source_msg_id FROM ef_done "
+		"ORDER BY created_at"_q);
+	if (!q.exec()) {
+		LOG(("DedupDb: LoadForwardedDone failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		result.emplace_back(
+			PeerId(q.value(0).toULongLong()),
+			MsgId(q.value(1).toLongLong()));
+	}
+	return result;
+}
+
+void DedupDb::Impl::removeForwardedDone(const FullMsgId &sourceId) {
+	if (!_open || !sourceId.peer || !sourceId.msg) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM ef_done "
+		"WHERE source_peer_id = :peer_id AND source_msg_id = :msg_id"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sourceId.peer.value)));
+	q.bindValue(u":msg_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(sourceId.msg.bare)));
+	if (!q.exec()) {
+		LOG(("DedupDb: RemoveForwardedDone failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::clearForwardedDone() {
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	if (!q.exec(u"DELETE FROM ef_done"_q)) {
+		LOG(("DedupDb: ClearForwardedDone failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::saveLastBatchCounts(int done, int total) {
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"INSERT OR REPLACE INTO ef_last (id, done, total) "
+		"VALUES (1, :done, :total)"_q);
+	q.bindValue(u":done"_q, done);
+	q.bindValue(u":total"_q, total);
+	if (!q.exec()) {
+		LOG(("DedupDb: SaveLastBatchCounts failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+std::pair<int, int> DedupDb::Impl::loadLastBatchCounts() const {
+	if (!_open) {
+		return { 0, 0 };
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT done, total FROM ef_last WHERE id = 1"_q);
+	if (!q.exec() || !q.next()) {
+		return { 0, 0 };
+	}
+	return { q.value(0).toInt(), q.value(1).toInt() };
+}
+
 void DedupDb::Impl::beginTransaction() {
 	if (!_open) {
 		return;
@@ -867,6 +1007,10 @@ void DedupDb::removeByDocumentId(
 
 bool DedupDb::containsDocId(Table table, uint64 documentId) const {
 	return _impl->containsDocId(table, documentId);
+}
+
+bool DedupDb::containsDocIdInDb(Table table, uint64 documentId) const {
+	return _impl->containsDocIdInDb(table, documentId);
 }
 
 bool DedupDb::containsHash(Table table, const QByteArray &hash) const {
@@ -979,6 +1123,32 @@ std::vector<EfResumeItem> DedupDb::loadFinishedEfResumeItems() const {
 
 void DedupDb::clearDoneEfResumeForPeer(PeerId peerId) {
 	_impl->clearDoneEfResumeForPeer(peerId);
+}
+
+void DedupDb::insertForwardedDone(
+		const FullMsgId &sourceId,
+		const QByteArray &hash) {
+	_impl->insertForwardedDone(sourceId, hash);
+}
+
+std::vector<FullMsgId> DedupDb::loadForwardedDone() const {
+	return _impl->loadForwardedDone();
+}
+
+void DedupDb::removeForwardedDone(const FullMsgId &sourceId) {
+	_impl->removeForwardedDone(sourceId);
+}
+
+void DedupDb::clearForwardedDone() {
+	_impl->clearForwardedDone();
+}
+
+void DedupDb::saveLastBatchCounts(int done, int total) {
+	_impl->saveLastBatchCounts(done, total);
+}
+
+std::pair<int, int> DedupDb::loadLastBatchCounts() const {
+	return _impl->loadLastBatchCounts();
 }
 
 void DedupDb::beginTransaction() {

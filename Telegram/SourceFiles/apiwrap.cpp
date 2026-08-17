@@ -3951,6 +3951,7 @@ void ApiWrap::forwardMessages(
     			this,
     			std::move(enhancedItems),
     			action,
+    			draft.options,
     			draft.groupOptions,
     			resumeJob);
 

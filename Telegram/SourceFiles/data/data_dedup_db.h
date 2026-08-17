@@ -79,6 +79,11 @@ public:
 	[[nodiscard]] bool containsDocId(
 		Table table,
 		uint64 documentId) const;
+	// Direct on-disk existence check (memory maps may lag right after the
+	// load window); used by one-shot prechecks, not per-tick paths.
+	[[nodiscard]] bool containsDocIdInDb(
+		Table table,
+		uint64 documentId) const;
 	[[nodiscard]] bool containsHash(
 		Table table,
 		const QByteArray &hash) const;
@@ -127,6 +132,20 @@ public:
 	[[nodiscard]] std::vector<EfResumeItem> loadUnfinishedEfResumeItems() const;
 	[[nodiscard]] std::vector<EfResumeItem> loadFinishedEfResumeItems() const;
 	void clearDoneEfResumeForPeer(PeerId peerId);
+
+	// Finished forwarded items: one flat row per source message, persisted so
+	// the Forwards tab keeps every sent item across restarts until cleared.
+	void insertForwardedDone(
+		const FullMsgId &sourceId,
+		const QByteArray &hash);
+	[[nodiscard]] std::vector<FullMsgId> loadForwardedDone() const;
+	void removeForwardedDone(const FullMsgId &sourceId);
+	void clearForwardedDone();
+
+	// The last completed forward's (done, total): keeps the counter visible
+	// until the next forward replaces it, even across restarts.
+	void saveLastBatchCounts(int done, int total);
+	[[nodiscard]] std::pair<int, int> loadLastBatchCounts() const;
 
 	void beginTransaction();
 	void commitTransaction();
