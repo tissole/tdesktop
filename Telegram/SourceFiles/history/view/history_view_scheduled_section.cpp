@@ -56,6 +56,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/storage_media_prepare.h"
 #include "storage/storage_account.h"
 #include "storage/localimageloader.h"
+#include "data/data_download_manager.h"
 #include "inline_bots/inline_bot_result.h"
 #include "lang/lang_keys.h"
 #include "styles/style_chat.h"
@@ -505,8 +506,12 @@ void ScheduledWidget::chooseAttach() {
 			}
 		} else {
 			const auto premium = controller()->session().user()->isPremium();
+			auto paths = Data::FilterUploadDuplicates(result.paths);
+			if (paths.isEmpty()) {
+				return;
+			}
 			auto list = Storage::PrepareMediaList(
-				result.paths,
+				paths,
 				st::sendMediaPreviewSize,
 				premium);
 			confirmSendingFiles(std::move(list));

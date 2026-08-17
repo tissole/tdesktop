@@ -56,7 +56,6 @@ namespace {
 constexpr auto kThumbnailQuality = 100;
 constexpr auto kThumbnailSize = 320;
 constexpr auto kPhotoUploadPartSize = 32 * 1024;
-constexpr auto kRecompressAfterBpp = 16;
 
 using Ui::ValidateThumbDimensions;
 
@@ -179,6 +178,10 @@ struct PreparedFileThumbnail {
 	}) | ranges::to_vector;
 }
 
+} // namespace
+
+constexpr auto kRecompressAfterBpp = 16;
+
 [[nodiscard]] QByteArray ComputePhotoJpegBytes(
 		QImage &full,
 		const QByteArray &bytes,
@@ -208,8 +211,6 @@ struct PreparedFileThumbnail {
 	return result;
 }
 
-} // namespace
-
 int PhotoSideLimit(bool large) {
 	return large ? 2560 : 1280;
 }
@@ -217,6 +218,27 @@ int PhotoSideLimit(bool large) {
 int PhotoSideLimit() {
 	return PhotoSideLimit(
 		Core::App().settings().sendFilesWay().sendLargePhotos());
+}
+
+// Computes the exact JPEG bytes the photo uploader would submit for this
+// source file, so pick-time dedup can be keyed on the encoded content.
+[[nodiscard]] QByteArray PreparePhotoUploadBytes(
+		const QString &filepath,
+		bool sendLargePhotos) {
+	auto image = Images::Opaque(Images::Read({ .path = filepath }).image);
+	if (image.isNull()
+		|| !Ui::ValidateThumbDimensions(image.width(), image.height())) {
+		return QByteArray();
+	}
+	const auto limit = PhotoSideLimit(sendLargePhotos);
+	if (image.width() > limit || image.height() > limit) {
+		image = image.scaled(
+			limit,
+			limit,
+			Qt::KeepAspectRatio,
+			Qt::SmoothTransformation);
+	}
+	return ComputePhotoJpegBytes(image, QByteArray(), QByteArray());
 }
 
 TaskQueue::TaskQueue(crl::time stopTimeoutMs) {

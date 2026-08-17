@@ -13,7 +13,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QHash>
 #include <QSet>
+#include <QStringList>
 #include <QVector>
+
+#include <optional>
 
 namespace Ui {
 struct DownloadBarProgress;
@@ -31,6 +34,15 @@ enum class DownloadType {
 	Document,
 	Photo,
 };
+
+// Filters out local files whose content fingerprint already exists in the
+// upload dedup records, or repeats within the selection. Images are filtered
+// by the mode they will be sent as: photos hash the encoded bytes, documents
+// the source bytes. When the mode is not known yet a file is only removed if
+// it was uploaded before both as a photo and as a document.
+[[nodiscard]] QStringList FilterUploadDuplicates(
+	QStringList paths,
+	std::optional<bool> sendImagesAsPhotos = {});
 
 // unixtime * 1000.
 using DownloadDate = int64;
@@ -177,7 +189,7 @@ public:
 	// toast for the whole batch (e.g. "12 duplicate downloads"). A short
 	// debounce merges consecutive skips so a multi-file selection produces a
 	// single toast with the total count.
-	void reportDuplicateSkipped(DedupDb::Table table);
+	void reportDuplicateSkipped(DedupDb::Table table, int count = 1);
 
 private:
 	void notifyDuplicateSkips();

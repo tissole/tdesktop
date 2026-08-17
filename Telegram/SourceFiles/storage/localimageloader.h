@@ -206,6 +206,12 @@ struct FilePrepareResult {
 [[nodiscard]] std::shared_ptr<FilePrepareResult> MakePreparedFile(
 	FilePrepareDescriptor &&descriptor);
 
+// Computes the exact JPEG bytes the photo uploader would submit for this
+// source file (re-encode + optional downscale), used for pick-time dedup.
+[[nodiscard]] QByteArray PreparePhotoUploadBytes(
+	const QString &filepath,
+	bool sendLargePhotos);
+
 class FileLoadTask final : public Task {
 public:
 	static std::unique_ptr<Ui::PreparedFileInformation> ReadMediaInformation(

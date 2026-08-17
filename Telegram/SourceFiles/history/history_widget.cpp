@@ -160,6 +160,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/audio/media_audio_capture.h"
 #include "media/player/media_player_instance.h"
 #include "core/application.h"
+#include "data/data_download_manager.h"
+#include "data/data_file_hash.h"
+#include "settings.h"
 #include "apiwrap.h"
 #include "base/options.h"
 #include "base/qthelp_regex.h"
@@ -5773,8 +5776,14 @@ void HistoryWidget::chooseAttach(
 			}
 		} else {
 			const auto premium = controller()->session().user()->isPremium();
-			auto list = Storage::PrepareMediaList(
+			auto paths = Data::FilterUploadDuplicates(
 				result.paths,
+				overrideSendImagesAsPhotos);
+			if (paths.isEmpty()) {
+				return;
+			}
+			auto list = Storage::PrepareMediaList(
+				paths,
 				st::sendMediaPreviewSize,
 				premium);
 			list.overrideSendImagesAsPhotos = overrideSendImagesAsPhotos;
@@ -6995,8 +7004,13 @@ bool HistoryWidget::confirmSendingFiles(
 		const QStringList &files,
 		const QString &insertTextOnCancel) {
 	const auto premium = controller()->session().user()->isPremium();
+	const auto list = Data::FilterUploadDuplicates(files);
+	if (list.isEmpty() && !files.isEmpty()) {
+		// Everything was a duplicate: nothing to show, don't open the panel.
+		return true;
+	}
 	return confirmSendingFiles(
-		Storage::PrepareMediaList(files, st::sendMediaPreviewSize, premium),
+		Storage::PrepareMediaList(list, st::sendMediaPreviewSize, premium),
 		insertTextOnCancel);
 }
 
@@ -7141,8 +7155,29 @@ bool HistoryWidget::confirmSendingFiles(
 	const auto premium = controller()->session().user()->isPremium();
 
 	if (const auto urls = Core::ReadMimeUrls(data); !urls.empty()) {
+		auto localPaths = QStringList();
+		for (const auto &url : urls) {
+			if (url.isLocalFile()) {
+				localPaths.push_back(url.toLocalFile());
+			}
+		}
+		auto filtered = QList<QUrl>();
+		if (localPaths.size() == urls.size()) {
+			const auto kept = Data::FilterUploadDuplicates(
+				localPaths,
+				overrideSendImagesAsPhotos);
+			if (kept.isEmpty() && !urls.empty()) {
+				return true;
+			}
+			filtered.reserve(kept.size());
+			for (const auto &path : kept) {
+				filtered.push_back(QUrl::fromLocalFile(path));
+			}
+		} else {
+			filtered = urls;
+		}
 		auto list = Storage::PrepareMediaList(
-			urls,
+			filtered,
 			st::sendMediaPreviewSize,
 			premium);
 		if (list.error != Ui::PreparedList::Error::NonLocalUrl) {

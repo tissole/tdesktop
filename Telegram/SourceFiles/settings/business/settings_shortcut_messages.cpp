@@ -44,6 +44,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/business/settings_quick_replies.h"
 #include "settings/business/settings_recipients_helper.h"
 #include "storage/localimageloader.h"
+#include "data/data_download_manager.h"
 #include "storage/storage_account.h"
 #include "storage/storage_media_prepare.h"
 #include "storage/storage_shared_media.h"
@@ -1423,8 +1424,14 @@ void ShortcutMessages::chooseAttach(
 			}
 		} else {
 			const auto premium = _controller->session().user()->isPremium();
-			auto list = Storage::PrepareMediaList(
+			auto paths = Data::FilterUploadDuplicates(
 				result.paths,
+				overrideSendImagesAsPhotos);
+			if (paths.isEmpty()) {
+				return;
+			}
+			auto list = Storage::PrepareMediaList(
+				paths,
 				st::sendMediaPreviewSize,
 				premium);
 			list.overrideSendImagesAsPhotos = overrideSendImagesAsPhotos;

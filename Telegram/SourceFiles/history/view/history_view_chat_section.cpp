@@ -83,6 +83,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/storage_media_prepare.h"
 #include "storage/storage_account.h"
 #include "storage/localimageloader.h"
+#include "data/data_download_manager.h"
 #include "inline_bots/inline_bot_result.h"
 #include "info/profile/info_profile_values.h"
 #include "lang/lang_keys.h"
@@ -1168,8 +1169,14 @@ void ChatWidget::chooseAttach(
 			}
 		} else {
 			const auto premium = controller()->session().user()->isPremium();
-			auto list = Storage::PrepareMediaList(
+			auto paths = Data::FilterUploadDuplicates(
 				result.paths,
+				overrideSendImagesAsPhotos);
+			if (paths.isEmpty()) {
+				return;
+			}
+			auto list = Storage::PrepareMediaList(
+				paths,
 				st::sendMediaPreviewSize,
 				premium);
 			list.overrideSendImagesAsPhotos = overrideSendImagesAsPhotos;

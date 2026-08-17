@@ -10,8 +10,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_file_hash.h"
 #include "logs.h"
 #include "settings.h"
+#include "core/core_settings.h"
 #include "core/enhanced_settings.h"
 #include "enhanced_forward.h"
+#include "storage/localimageloader.h"
 #include "data/data_session.h"
 #include "data/data_photo.h"
 #include "data/data_document.h"
@@ -150,12 +152,14 @@ DownloadManager::~DownloadManager() {
 	_sessions.clear();
 }
 
-void DownloadManager::reportDuplicateSkipped(DedupDb::Table table) {
+void DownloadManager::reportDuplicateSkipped(
+		DedupDb::Table table,
+		int count) {
 	const auto type = int(table);
-	if (type < 0 || type >= 2) {
+	if (type < 0 || type >= 2 || count <= 0) {
 		return;
 	}
-	_duplicatesSkipped[type]++;
+	_duplicatesSkipped[type] += count;
 	_duplicatesToastTimer.callOnce(600);
 }
 
@@ -2522,6 +2526,95 @@ rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent() {
 		notify();
 		return lifetime;
 	};
+}
+
+QStringList FilterUploadDuplicates(
+		QStringList paths,
+		std::optional<bool> sendImagesAsPhotos) {
+	if (!GetEnhancedBool(u"prevent_upload_duplicates"_q)) {
+		return paths;
+	}
+	static const auto imageSuffixes = {
+		u"jpg"_q, u"jpeg"_q, u"png"_q, u"gif"_q, u"webp"_q,
+		u"bmp"_q, u"tif"_q, u"tiff"_q, u"heic"_q, u"heif"_q, u"jxl"_q,
+		u"avif"_q,
+	};
+	auto &db = Core::App().downloadManager().dedupDb();
+	if (!db.isOpen()) {
+		return paths;
+	}
+	const auto sendLargePhotos = Core::App().settings()
+		.sendFilesWay().sendLargePhotos();
+	auto seen = base::flat_set<QByteArray>();
+	auto duplicates = 0;
+	auto result = QStringList();
+	result.reserve(paths.size());
+	const auto inSeenOrDb = [&](const QByteArray &hash) {
+		return !hash.isEmpty()
+			&& (seen.contains(hash)
+				|| db.containsHash(Data::DedupDb::Table::Uploads, hash));
+	};
+	for (const auto &path : paths) {
+		const auto size = QFileInfo(path).size();
+		if (size <= 0) {
+			result.push_back(path);
+			continue;
+		}
+		if (ranges::contains(
+			imageSuffixes,
+			QFileInfo(path).suffix().toLower())) {
+			// Photos are re-encoded before upload, so as photos they dedup by
+			// the encoded bytes, as documents by the source bytes. Only drop
+			// the file when the chosen mode matches a previous upload - when
+			// the mode isn't known yet, require both modes to have seen it.
+			const auto raw = Data::FileFingerprint(path, size);
+			const auto encoded = (sendImagesAsPhotos == false)
+				? QByteArray()
+				: Data::ContentFingerprint(
+					PreparePhotoUploadBytes(path, sendLargePhotos));
+			const auto photo = inSeenOrDb(encoded);
+			const auto document = inSeenOrDb(raw);
+			auto duplicate = false;
+			if (sendImagesAsPhotos == true) {
+				duplicate = photo;
+			} else if (sendImagesAsPhotos == false) {
+				duplicate = document;
+			} else {
+				duplicate = photo && document;
+			}
+			if (!encoded.isEmpty()) {
+				seen.emplace(encoded);
+			}
+			if (!raw.isEmpty()) {
+				seen.emplace(raw);
+			}
+			if (duplicate) {
+				duplicates++;
+			} else {
+				result.push_back(path);
+			}
+			continue;
+		}
+		const auto hash = Data::FileFingerprint(path, size);
+		if (hash.isEmpty()) {
+			result.push_back(path);
+			continue;
+		}
+		const auto seenBefore = seen.contains(hash);
+		seen.emplace(hash);
+		if (db.containsHash(Data::DedupDb::Table::Uploads, hash)
+			|| seenBefore) {
+			duplicates++;
+		} else {
+			result.push_back(path);
+		}
+	}
+	if (duplicates > 0) {
+		Core::App().downloadManager().reportDuplicateSkipped(
+			Data::DedupDb::Table::Uploads,
+			duplicates);
+	}
+	return result;
 }
 
 } // namespace Data

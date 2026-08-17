@@ -395,9 +395,20 @@ bool Uploader::checkUploadDuplicate(
 			&& file->type != SendMediaType::Photo)) {
 		return false;
 	}
-	const auto hash = (file->type == SendMediaType::Photo)
-		? Data::ContentFingerprint(file->content)
-		: Data::FileFingerprint(file->filepath, file->filesize);
+	auto hash = QByteArray();
+	if (file->type == SendMediaType::Photo) {
+		// Photos are re-encoded locally before upload, so dedup must hash the
+		// encoded bytes that are actually submitted - photoThumbs['y'] holds
+		// exactly those bytes and is deterministic for an identical source.
+		if (const auto it = file->photoThumbs.find('y');
+			it != end(file->photoThumbs)) {
+			hash = Data::ContentFingerprint(it->second.bytes);
+		} else {
+			hash = Data::FileFingerprint(file->filepath, file->filesize);
+		}
+	} else {
+		hash = Data::FileFingerprint(file->filepath, file->filesize);
+	}
 	if (hash.isEmpty()) {
 		return false;
 	}
