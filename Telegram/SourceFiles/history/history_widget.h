@@ -612,6 +612,9 @@ private:
 	[[nodiscard]] HistoryItem *lookupReplyNavItem(FullMsgId itemId) const;
 	bool replyToPreviousMessage();
 	bool replyToNextMessage();
+	bool editPreviousMessage();
+	bool editNextMessage();
+	void confirmDiscardEdit(Fn<void()> proceed);
 	[[nodiscard]] bool showSlowmodeError();
 
 	void hideChildWidgets();

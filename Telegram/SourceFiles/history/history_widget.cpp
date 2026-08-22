@@ -79,6 +79,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/notify/data_notify_settings.h"
 #include "data/data_changes.h"
 #include "data/data_drafts.h"
+#include "data/data_groups.h"
 #include "data/data_session.h"
 #include "data/data_todo_list.h"
 #include "data/data_web_page.h"
@@ -235,6 +236,12 @@ constexpr auto kCommonModifiers = 0
 	| Qt::ShiftModifier
 	| Qt::MetaModifier
 	| Qt::ControlModifier;
+
+[[nodiscard]] bool IsEditCycleModifiers(Qt::KeyboardModifiers modifiers) {
+	return (modifiers & (kCommonModifiers | Qt::AltModifier))
+		== (Qt::AltModifier | Qt::ShiftModifier);
+}
+
 const auto kPsaAboutPrefix = "cloud_lng_about_psa_";
 
 [[nodiscard]] rpl::producer<PeerData*> ActivePeerValue(
@@ -6497,6 +6504,12 @@ bool HistoryWidget::eventFilter(QObject *obj, QEvent *e) {
 #endif
 				return replyToNextMessage();
 			}
+		} else if (IsEditCycleModifiers(k->modifiers())) {
+			if (k->key() == Qt::Key_Up) {
+				return editPreviousMessage();
+			} else if (k->key() == Qt::Key_Down) {
+				return editNextMessage();
+			}
 		}
 	}
 	return RpWidget::eventFilter(obj, e);
@@ -8957,6 +8970,16 @@ void HistoryWidget::keyPressEvent(QKeyEvent *e) {
 		if (!replyToNextMessage()) {
 			e->ignore();
 		}
+	} else if (e->key() == Qt::Key_Up
+		&& IsEditCycleModifiers(e->modifiers())) {
+		if (!editPreviousMessage()) {
+			e->ignore();
+		}
+	} else if (e->key() == Qt::Key_Down
+		&& IsEditCycleModifiers(e->modifiers())) {
+		if (!editNextMessage()) {
+			e->ignore();
+		}
 	} else if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
 		if (!_botStart->isHidden()) {
 			sendBotStartCommand();
@@ -9103,6 +9126,87 @@ bool HistoryWidget::replyToNextMessage() {
 		}
 	}
 	return false;
+}
+
+bool HistoryWidget::editPreviousMessage() {
+	if (!_history) {
+		return false;
+	}
+	const auto target = [&]() -> HistoryItem* {
+		if (!_editMsgId || !_replyEditMsg) {
+			return _history->lastEditableMessage();
+		}
+		const auto view = _replyEditMsg->mainView();
+		if (!view) {
+			return nullptr;
+		}
+		const auto now = base::unixtime::now();
+		auto previous = view->previousDisplayedInBlocks();
+		while (previous && !previous->data()->allowsEdit(now)) {
+			previous = previous->previousDisplayedInBlocks();
+		}
+		if (!previous) {
+			return nullptr;
+		}
+		return session().data().groups().findItemToEdit(previous->data());
+	}();
+	if (!target) {
+		return false;
+	}
+	const auto id = target->fullId();
+	confirmDiscardEdit(crl::guard(this, [=] {
+		if (const auto item = session().data().message(id)) {
+			editMessage(item, {});
+		}
+	}));
+	return true;
+}
+
+bool HistoryWidget::editNextMessage() {
+	if (!_history || !_editMsgId || !_replyEditMsg) {
+		return false;
+	}
+	const auto view = _replyEditMsg->mainView();
+	if (!view) {
+		return false;
+	}
+	const auto now = base::unixtime::now();
+	auto next = view->nextDisplayedInBlocks();
+	while (next && !next->data()->allowsEdit(now)) {
+		next = next->nextDisplayedInBlocks();
+	}
+	if (next) {
+		const auto id = session().data().groups().findItemToEdit(
+			next->data())->fullId();
+		confirmDiscardEdit(crl::guard(this, [=] {
+			if (const auto item = session().data().message(id)) {
+				editMessage(item, {});
+			}
+		}));
+	} else {
+		confirmDiscardEdit(crl::guard(this, [=] {
+			cancelEdit();
+		}));
+	}
+	return true;
+}
+
+void HistoryWidget::confirmDiscardEdit(Fn<void()> proceed) {
+	if (_editMsgId
+		&& _replyEditMsg
+		&& EditTextChanged(_replyEditMsg, _field->getTextWithTags())) {
+		controller()->show(Ui::MakeConfirmBox({
+			.text = tr::lng_cancel_edit_post_sure(),
+			.confirmed = crl::guard(this, [=](Fn<void()> &&close) {
+				proceed();
+				close();
+			}),
+			.confirmText = tr::lng_cancel_edit_post_yes(),
+			.cancelText = tr::lng_cancel_edit_post_no(),
+		}));
+	} else {
+		proceed();
+	}
 }
 
 bool HistoryWidget::showSlowmodeError() {
