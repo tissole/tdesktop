@@ -276,20 +276,10 @@ void EraseResumableBatchesForPeer(const PeerId &peer) {
 void processStartQueue(const PeerId &peerId);
 
 void finishJob(not_null<Main::Session*> session, const PeerId &peerId) {
-	LOG(("ENHANCED_FWD: finishJob peer=%1").arg(peerId.value));
 	auto &states = ActiveStates();
 	const auto it = states.find(peerId);
 	if (it == states.end()) return;
 	auto &state = it->second;
-	for (auto i = 0; i < int(state.items.size()); i++) {
-		LOG(("TM_FW: finish item=%1 sent=%2 cancelled=%3 dup=%4 dlDone=%5")
-			.arg(i)
-			.arg(state.items[i].sent)
-			.arg(state.items[i].cancelled)
-			.arg(state.items[i].dedupSkipped)
-			.arg(state.items[i].state == EnhancedForward::ItemState::Done
-				? 1 : 0));
-	}
 	state.finished = true;
 	// Release the pipeline references so finished jobs don't keep the
 	// whole Pipeline (and its per-item tasks) alive in FinishedStates.
@@ -361,7 +351,6 @@ void processStartQueue(const PeerId &peerId) {
 	if (it->second.empty()) {
 		queue.erase(it);
 	}
-	LOG(("ENHANCED_FWD: starting queued forward to peer=%1").arg(peerId.value));
 	Pipeline::Start(
 		request.api,
 		std::move(request.items),
@@ -473,8 +462,6 @@ void checkPeerRestriction(
 
 	if (peer->asChannel() || peer->asChat()) {
 		const auto finish = [=](bool result) {
-			LOG(("ENHANCED_FWD: checkPeerRestriction result=%1")
-				.arg(Logs::b(result)));
 			done(result);
 		};
 		const auto scanMessages = [](const MTPVector<MTPMessage> &msgs) {
@@ -534,17 +521,11 @@ void checkPeerRestriction(
 			session->data().processChats(d.vchats());
 			const auto result = (user->flags() & UserDataFlag::NoForwardsPeerEnabled)
 				|| (user->flags() & UserDataFlag::NoForwardsMyEnabled);
-			LOG(("ENHANCED_FWD: checkPeerRestriction result=%1")
-				.arg(Logs::b(result)));
 			done(result);
 		}).fail([=](const MTP::Error &) {
-			LOG(("ENHANCED_FWD: checkPeerRestriction result=%1")
-				.arg(Logs::b(false)));
 			done(false);
 		}).send();
 	} else {
-		LOG(("ENHANCED_FWD: checkPeerRestriction result=%1")
-			.arg(Logs::b(false)));
 		done(false);
 	}
 }
@@ -552,7 +533,6 @@ void checkPeerRestriction(
 void classifyItems(
 		const std::vector<not_null<HistoryItem*>> &items,
 		base::unique_function<void(Split)> done) {
-	LOG(("ENHANCED_FWD: classifyItems count=%1").arg(items.size()));
 	if (items.empty()) {
 		done(Split());
 		return;
@@ -576,19 +556,12 @@ void classifyItems(
 		Split result;
 		for (const auto &item : *myItems) {
 			const auto peerFlag = (*peerRestricted)[item->history()->peer->id];
-			LOG(("ENHANCED_FWD: checkItem item=%1 peerFlag=%2 restricted=%3")
-				.arg(item->id.bare)
-				.arg(Logs::b(peerFlag))
-				.arg(Logs::b(peerFlag)));
 			if (peerFlag) {
 				result.restricted.push_back(item);
 			} else {
 				result.normal.push_back(item);
 			}
 		}
-		LOG(("ENHANCED_FWD: classifyItems restricted=%1 normal=%2")
-			.arg(result.restricted.size())
-			.arg(result.normal.size()));
 		(*doneHolder)(std::move(result));
 	};
 	for (const auto &peerId : peerIds) {
@@ -640,8 +613,6 @@ void markItemSent(
 	if (state.cancelled || state.finished) return;
 
 	state.sent++;
-	LOG(("ENHANCED_FWD: markItemSent peer=%1 sent=%2 total=%3")
-		.arg(peerId.value).arg(state.sent).arg(state.total));
 	fireUpdate(session, peerId);
 	NotifyCounterChanged();
 	if (state.saveCallback) {
@@ -665,8 +636,6 @@ void markItemSkipped(
 
 	if (state.total > 0) state.total--;
 	state.skipped++;
-	LOG(("ENHANCED_FWD: markItemSkipped peer=%1 total=%2 skipped=%3")
-		.arg(peerId.value).arg(state.total).arg(state.skipped));
 	fireUpdate(session, peerId);
 	NotifyCounterChanged();
 	if (state.saveCallback) {
@@ -761,7 +730,6 @@ void setResumeCallback(
 void pauseForward(
 		const PeerId &id,
 		not_null<Main::Session*> session) {
-	LOG(("ENHANCED_FWD: pauseForward peer=%1").arg(id.value));
 	auto &states = ActiveStates();
 	const auto it = states.find(id);
 	if (it == states.end()) return;
@@ -1011,13 +979,10 @@ void CleanupLeftoverForwardFiles(
 		if (keep.contains(path)) {
 			continue;
 		}
-		LOG(("ENHANCED_FWD: cleanup stale file %1").arg(path));
 		QFile::remove(path);
 	}
 	const auto cleaned = QDir::cleanPath(tempDir);
-	const auto removed = QDir().rmdir(cleaned);
-	LOG(("ENHANCED_FWD: cleanup rmdir %1 result=%2")
-		.arg(cleaned).arg(removed ? 1 : 0));
+	QDir().rmdir(cleaned);
 }
 
 std::vector<SavedJob> GetUnfinishedJobs(
@@ -1027,8 +992,6 @@ std::vector<SavedJob> GetUnfinishedJobs(
 		return {};
 	}
 	const auto records = db.loadUnfinishedEfResumeItems(session->uniqueId());
-	LOG(("TM_COUNT: session=%1 records=%2").arg(
-		session->uniqueId()).arg(records.size()));
 	base::flat_map<QString, SavedJob> jobs;
 	for (const auto &record : records) {
 		auto &job = jobs[record.jobId];
@@ -1794,7 +1757,6 @@ void CancelAll(not_null<Main::Session*> session) {
 }
 
 void notifyTransfersUpdated() {
-	LOG(("TM_EVENT: transfersUpdated"));
 	NotifyCounterChanged();
 }
 
@@ -1874,16 +1836,12 @@ void Pipeline::Start(
 		const auto live = Active().find(dstId);
 		if (!resumeJob && live != Active().end()) {
 			if (const auto pipeline = live->second.lock()) {
-				LOG(("ENHANCED_FWD: merging %1 item(s) into active forward to peer=%2")
-					.arg(items.size()).arg(dstId.value));
 				pipeline->appendItems(std::move(items));
 				NotifyStateChanged(dstId);
 				NotifyCounterChanged();
 				return;
 			}
 		}
-		LOG(("ENHANCED_FWD: queueing forward to peer=%1 (job active)")
-			.arg(dstId.value));
 		StartQueue()[dstId].push_back(StartRequest{
 			api,
 			std::move(items),
@@ -2252,7 +2210,6 @@ void Pipeline::run() {
 				continue;
 			}
 			if (!seenMediaIds.emplace(item.mediaId).second) {
-				LOG(("DEDUP: premark duplicate idx=%1 mediaId=%2").arg(i).arg(item.mediaId));
 				premarkDuplicate(i);
 			}
 		}
@@ -2605,8 +2562,6 @@ void Pipeline::sendNext() {
 			: Data::HistoryUpdate::Flag::MessageSent));
 	for (auto i = 0; i < _n; i++) {
 		if (!_items[i].path.isEmpty() && _items[i].path.startsWith(_downloadPath)) {
-			LOG(("ENHANCED_FWD: completion remove idx=%1 path=%2")
-				.arg(i).arg(_items[i].path));
 			QFile::remove(_items[i].path);
 		}
 	}
@@ -2683,7 +2638,6 @@ void Pipeline::pumpUploads() {
 }
 
 void Pipeline::startUploadForItem(int i) {
-	LOG(("ENHANCED_FWD: startUploadForItem i=%1").arg(i));
 	auto &item = _items[i];
 	const auto srcItem = _session.data().message(item.sourceId);
 	if (!srcItem || item.textOnly) {
@@ -2786,7 +2740,6 @@ void Pipeline::startUploadForItem(int i) {
 					item.partSize = item.prepared->partssize / int(item.prepared->fileparts.size());
 				}
 			} else if (prepareState == EnhancedForward::State::Sending) {
-				LOG(("ENHANCED_FWD: prep fail idx=%1").arg(i));
 				adjustAlbumCount(i);
 				item.textOnly = true;
 				item.uploadDone = true;
@@ -2807,7 +2760,6 @@ void Pipeline::startUploadForItem(int i) {
 			if (EnhancedForward::isPaused(_peerId)) {
 				// The batch was paused while this file was being prepared.
 				// Do not start the upload - the resume callback restarts it.
-				LOG(("ENHANCED_FWD: prep done while paused idx=%1").arg(i));
 				item.uploadDone = false;
 				_uploadInFlight = false;
 				saveProgress();
@@ -2838,10 +2790,6 @@ void Pipeline::startUploadForItem(int i) {
 						: uint64(0);
 				}()
 				: uint64(0);
-			LOG(("ENHANCED_FWD: upload idx=%1 groupId=%2 albumExists=%3")
-				.arg(i)
-				.arg(groupId)
-				.arg(_albums.find(item.sourceGroup) != _albums.end() ? 1 : 0));
 
 			const auto msgMedia = MTPMessageMedia([&] {
 				if (prepared->type == SendMediaType::Photo) {
@@ -2877,8 +2825,6 @@ void Pipeline::startUploadForItem(int i) {
 			item.uploadId = localMsgId;
 			_uploadIndex->emplace(localMsgId, i);
 			EFUploadIds().emplace(localMsgId);
-			LOG(("ENHANCED_FWD: upload starting idx=%1 uploadedParts=%2 fileId=%3")
-				.arg(i).arg(item.uploadedParts).arg(item.fileId));
 			_session.uploader().upload(localMsgId, item.prepared, item.uploadedParts);
 			saveProgress();
 
@@ -2934,8 +2880,6 @@ void Pipeline::startUploadForItem(int i) {
 					}
 					album->items.emplace_back(kEmptyTaskId);
 					album->items.back().msgId = localMsg->fullId();
-					LOG(("ENHANCED_FWD: album item idx=%1 groupId=%2 items=%3 expected=%4")
-						.arg(i).arg(groupId).arg(album->items.size()).arg(album->expectedCount));
 				}
 			}
 
@@ -2996,8 +2940,6 @@ void Pipeline::onUploadDone(const Storage::UploadedMedia &data) {
 		_session.data().requestItemRepaint(item.sentItem);
 	}
 	item.sent = true;
-	LOG(("ENHANCED_FWD: onUploadDone idx=%1 album=%2")
-		.arg(idx).arg(item.sourceGroup ? 1 : 0));
 	EnhancedForward::markItemSent(&_session, _peerId);
 	MarkForwardedDone(&_session, item.sourceId, item.fileHash);
 
@@ -3071,14 +3013,11 @@ void Pipeline::onUploadFail(const FullMsgId &fullId) {
 		item.retries++;
 		item.uploadedParts = 0;
 		item.fileId = base::RandomValue<uint64>();
-		LOG(("ENHANCED_FWD: upload failed, fresh retry %1/%2 idx=%3")
-			.arg(item.retries).arg(kMaxUploadRetries).arg(idx));
 		item.uploadDone = false;
 		_uploadInFlight = true;
 		startUploadForItem(idx);
 		return;
 	}
-	LOG(("ENHANCED_FWD: upload failed permanently idx=%1").arg(idx));
 	_uploadInFlight = false;
 	item.uploadDone = false;
 	item.retries = 0;
@@ -3127,15 +3066,12 @@ void Pipeline::downloadFailed(int idx) {
 	if (item.retries < kMaxDownloadRetries) {
 		item.retries++;
 		item.downloadedBytes = 0;
-		LOG(("ENHANCED_FWD: download failed, retry %1/%2 idx=%3")
-			.arg(item.retries).arg(kMaxDownloadRetries).arg(idx));
 		item.downloadDone = false;
 		_downloadInFlight = false;
 		_downloadCursor = idx;
 		pumpDownloads();
 		return;
 	}
-	LOG(("ENHANCED_FWD: download failed permanently idx=%1").arg(idx));
 	_downloadInFlight = false;
 	item.retries = 0;
 	if (item.mediaId) {
@@ -3223,7 +3159,6 @@ void Pipeline::checkItem(int i) {
 	if (item.downloadDone) return;
 	if (!item.downloadStarted) return;
 	if (EnhancedForward::currentProgress(_peerId).state == EnhancedForward::State::Cancelled) {
-		LOG(("TM_FW: chk idx=%1 cancelled state").arg(i));
 		return;
 	}
 	if (EnhancedForward::isPaused(_peerId)) return;
@@ -3235,8 +3170,6 @@ void Pipeline::checkItem(int i) {
 		if (const auto doc = media ? media->document() : nullptr) {
 			if (doc->size > 0 && fi.size() < doc->size) {
 				item.downloadedBytes = fi.size();
-				LOG(("TM_FW: chk idx=%1 partial %2/%3").arg(i)
-					.arg(fi.size()).arg(doc->size));
 				EnhancedForward::updateDownloadProgress(
 					&_session, _peerId, i,
 					{ doc->filename(), doc->size },
@@ -3248,7 +3181,6 @@ void Pipeline::checkItem(int i) {
 				return;
 			}
 		}
-		LOG(("TM_FW: chk idx=%1 DONE size=%2").arg(i).arg(fi.size()));
 		item.downloadDone = true;
 		item.downloadedBytes = fi.size();
 		item.retries = 0;
@@ -3264,15 +3196,12 @@ void Pipeline::checkItem(int i) {
 	}
 	const auto srcItem = _session.data().message(item.sourceId);
 	if (!srcItem) {
-		LOG(("TM_FW: chk idx=%1 no srcItem").arg(i));
 		return;
 	}
 	const auto media = srcItem->media();
 	if (const auto doc = media ? media->document() : nullptr) {
 		if (doc->loading()) {
 			item.downloadedBytes = qint64(doc->loadOffset());
-			LOG(("TM_FW: chk idx=%1 loading off=%2").arg(i)
-				.arg(doc->loadOffset()));
 			EnhancedForward::updateDownloadProgress(
 				&_session, _peerId, i,
 				{ doc->filename(), doc->size },
@@ -3280,11 +3209,8 @@ void Pipeline::checkItem(int i) {
 			_session.data().notifyDocumentLayoutChanged(doc);
 			_session.data().requestItemRepaint(srcItem);
 		} else if (doc->status == FileDownloadFailed) {
-			LOG(("TM_FW: chk idx=%1 load FAILED").arg(i));
 			downloadFailed(i);
 			return;
-		} else {
-			LOG(("TM_FW: chk idx=%1 idle size=%2").arg(i).arg(doc->size));
 		}
 	} else if (const auto photo = media ? media->photo() : nullptr) {
 		const auto v = item.photoView ? item.photoView : photo->activeMediaView();
@@ -3361,7 +3287,6 @@ void Pipeline::pumpDownloads() {
 					|| dedupDb.containsDocIdInDb(
 						Data::DedupDb::Table::Uploads,
 						mediaId))) {
-			LOG(("DEDUP: pre-check skip idx=%1 mediaId=%2").arg(i).arg(mediaId));
 			skipAsDuplicate(i);
 			return;
 		}
@@ -3404,8 +3329,6 @@ void Pipeline::pumpDownloads() {
 					Data::DedupDb::Table::Uploads,
 					hash,
 					0);
-				LOG(("DEDUP: remote precheck idx=%1 mediaId=%2 duplicateId=%3")
-					.arg(i).arg(mediaId).arg(duplicateId));
 				if (duplicateId) {
 					skipAsDuplicate(i);
 					return;
@@ -3438,7 +3361,6 @@ void Pipeline::pumpDownloads() {
 		Core::App().downloadManager().addLoading(
 			{ .item = srcItem, .document = doc },
 			true);
-		LOG(("TM_DL: track idx=%1 path=%2").arg(i).arg(item.path));
 		saveProgress();
 	} else if (photo) {
 		item.photoView = photo->createMediaView();
@@ -3553,12 +3475,6 @@ void Pipeline::dedupHashed(
 		Data::DedupDb::Table::Uploads,
 		hash,
 		0);
-	LOG(("DEDUP: dedupHashed idx=%1 size=%2 hash=%3 mediaId=%4 duplicateId=%5")
-		.arg(i)
-		.arg(size)
-		.arg(QString::fromLatin1(hash.toHex()))
-		.arg(mediaId)
-		.arg(duplicateId));
 	if (duplicateId || selfDone) {
 		if (needsDelete) {
 			QFile::remove(item.path);
@@ -3659,8 +3575,6 @@ void Pipeline::startSession() {
 		EnhancedForward::NotifyStateChanged(_peerId);
 		EnhancedForward::NotifyCounterChanged();
 		saveProgress();
-		LOG(("ENHANCED_FWD: startSession total=%1 skipped=%2")
-			.arg(state.total).arg(state.skipped));
 		// If everything was dedup-skipped or cancelled up front there is
 		// nothing to send: finish right away so the job doesn't linger as
 		// "active", which would block new forwards (they'd be queued) and
@@ -3785,7 +3699,6 @@ void Pipeline::runNextPrecheck() {
 			|| dedupDb.containsDocIdInDb(
 				Data::DedupDb::Table::Uploads,
 				item.mediaId))) {
-		LOG(("DEDUP: idHit idx=%1 mediaId=%2").arg(i).arg(item.mediaId));
 		premarkDuplicate(i);
 		runNextPrecheck();
 		return;

@@ -1157,7 +1157,7 @@ int Histories::sendPreparedMessage(
 					finish();
 				}).afterRequest(
 					history->sendRequestId
-				).toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)).send();
+				).send();
 				return history->sendRequestId;
 			} else {
 				// Normal request: send to default DC

@@ -1247,8 +1247,6 @@ void Widget::setupDownloadBar() {
 
 		Data::MakeDownloadBarContent(
 		) | rpl::on_next(crl::guard(this, [=](Ui::DownloadBarContent &&content) {
-			LOG(("TM_BAR: content count=%1 done=%2").arg(content.count)
-				.arg(content.done));
 			const auto create = (content.count
 				&& content.done < content.count
 				&& !_downloadBar);

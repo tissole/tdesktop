@@ -499,8 +499,6 @@ void DownloadManager::addLoaded(
 		// never written to disk, so re-checking here would delete the real
 		// download. Only files without one (small files, photos, failed
 		// remote samples) are decided here.
-		LOG(("DEDUP: addLoaded dup size=%1 path=%2").arg(
-			size).arg(path));
 		QFile::remove(path);
 		if (!dedupHash.isEmpty() && docId && dedupDb.isOpen()) {
 			// Remember this doc id -> same content so future dedup of this
@@ -1725,10 +1723,6 @@ void DownloadManager::saveFileHash(
 			.documentId = docId,
 			.status = u"u"_q,
 		});
-		LOG(("DEDUP: saveFileHash doc=%1 hash=%2").arg(
-			docId
-		).arg(
-			QString::fromLatin1(hash.toHex())));
 	});
 }
 
@@ -2145,13 +2139,9 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 			state->efDone = doneF;
 		};
 		computeEfPending();
-		LOG(("TM_BAR: init efTotal=%1 efDone=%2").arg(
-			state->efTotal).arg(state->efDone));
 		EnhancedForward::counterChanges(
 		) | rpl::on_next([=] {
 			computeEfPending();
-			LOG(("TM_BAR: recompute efTotal=%1 efDone=%2").arg(
-				state->efTotal).arg(state->efDone));
 			state->push();
 		}, lifetime);
 

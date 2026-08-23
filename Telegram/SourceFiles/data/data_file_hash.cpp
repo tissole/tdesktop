@@ -37,22 +37,13 @@ namespace {
 [[nodiscard]] QByteArray ReadHash(const QString &path, int64 offset, int64 count) {
 	auto file = QFile(path);
 	if (!file.open(QIODevice::ReadOnly)) {
-		LOG(("DEDUP: ReadHash open failed path=%1 offset=%2 count=%3 err=%4").arg(
-			path).arg(offset).arg(count).arg(file.errorString()));
 		return QByteArray();
 	}
-	const auto fileSize = file.size();
 	if (!file.seek(offset)) {
-		LOG(("DEDUP: ReadHash seek failed path=%1 offset=%2 size=%3").arg(
-			path).arg(offset).arg(fileSize));
 		return QByteArray();
 	}
 	const auto data = file.read(count);
-	LOG(("DEDUP: ReadHash path=%1 offset=%2 requested=%3 got=%4 fileSize=%5").arg(
-		path).arg(offset).arg(count).arg(data.size()).arg(fileSize));
 	if (data.size() != count) {
-		LOG(("DEDUP: ReadHash short read path=%1 offset=%2 count=%3 got=%4").arg(
-			path).arg(offset).arg(count).arg(data.size()));
 		return QByteArray();
 	}
 	return data;
@@ -125,34 +116,21 @@ QByteArray HashChunks(const QByteArray &head, const QByteArray &tail) {
 
 QByteArray FileFingerprint(const QString &path, int64 size) {
 	if (size <= 0) {
-		LOG(("DEDUP: FileFingerprint size<=0 path=%1 size=%2").arg(path).arg(
-			size));
 		return QByteArray();
 	}
 	if (size < kDedupMinPartialHashSize) {
 		const auto r = ReadHash(path, 0, size);
 		if (r.isEmpty()) {
-			LOG(("DEDUP: FileFingerprint full failed path=%1 size=%2").arg(
-				path).arg(size));
 			return QByteArray();
 		}
-		const auto result = HashChunks(r, QByteArray());
-		LOG(("DEDUP: FileFingerprint full path=%1 size=%2 result=%3").arg(
-			path).arg(size).arg(QString::fromLatin1(result.toHex())));
-		return result;
+		return HashChunks(r, QByteArray());
 	}
 	int64 headOffset = 0;
 	int64 tailOffset = 0;
 	DedupSampleOffsets(size, headOffset, tailOffset);
 	const auto head = ReadHash(path, headOffset, kDedupChunk);
 	const auto tail = ReadHash(path, tailOffset, kDedupChunk);
-	LOG(("DEDUP: FileFingerprint path=%1 size=%2 headOff=%3 tailOff=%4 headLen=%5 tailLen=%6 result=%7").arg(
-		path).arg(size).arg(headOffset).arg(tailOffset).arg(
-		head.size()).arg(tail.size()).arg(
-		QString::fromLatin1(HashChunks(head, tail).toHex())));
 	if (head.isEmpty() || tail.isEmpty()) {
-		LOG(("DEDUP: FileFingerprint empty head/tail path=%1 headEmpty=%2 tailEmpty=%3").arg(
-			path).arg(Logs::b(head.isEmpty())).arg(Logs::b(tail.isEmpty())));
 		return QByteArray();
 	}
 	return HashChunks(head, tail);

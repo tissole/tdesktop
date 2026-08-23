@@ -1407,8 +1407,6 @@ void Application::showUnfinishedOperations() {
 		}
 	}
 	const auto total = dlCount + ulCount + fwFiles;
-	LOG(("TM_RESUME: dl=%1 ul=%2 fwFiles=%3 total=%4").arg(dlCount)
-		.arg(ulCount).arg(fwFiles).arg(total));
 	EnhancedForward::notifyTransfersUpdated();
 	for (const auto &[index, account] : _domain->accounts()) {
 		if (const auto session = account->maybeSession()) {
@@ -1416,13 +1414,6 @@ void Application::showUnfinishedOperations() {
 		}
 	}
 	EnhancedForward::notifyTransfersUpdated();
-	for (const auto &[session, job] : fwJobs) {
-		LOG(("TM_RESUME: job dst=%1 total=%2 sent=%3 unfinished=%4")
-			.arg(job.dstId.value)
-			.arg(job.total)
-			.arg(job.sent)
-			.arg(job.unfinishedFiles));
-	}
 	if (!total) {
 		return;
 	}

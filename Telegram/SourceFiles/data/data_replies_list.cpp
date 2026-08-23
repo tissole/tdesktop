@@ -563,7 +563,7 @@ mtpRequestId RepliesList::sendGetReplies(
 					*requestSlot = 0;
 					fail();
 					finish();
-				}).toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)).send();
+				}).send();
 			});
 		return *requestSlot;
 	}

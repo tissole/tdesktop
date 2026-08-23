@@ -688,9 +688,7 @@ void ApiWrap::resolveMessageDatas() {
 					finalizeMessageDataRequest(channel, requestId);
 				}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
 					finalizeMessageDataRequest(channel, requestId);
-				}).afterDelay(kSmallDelayMs).toDC(
-					MTP::ShiftDcId(0, MTP::kExportDcShift)
-				).send()
+				}).afterDelay(kSmallDelayMs).send()
 				: request(MTPchannels_GetMessages(
 					channel->inputChannel(),
 					MTP_vector<MTPInputMessage>(ids)
@@ -3414,8 +3412,7 @@ void ApiWrap::requestHistory(
 			return request(MTPInvokeWithTakeout<Api::HistoryRequest>(
 				MTP_long(*takeout),
 				std::move(prepared))
-			).done(done).fail(fail)
-			.toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)).send();
+			).done(done).fail(fail).send();
 		}
 		return request(std::move(prepared)).done(done).fail(fail).send();
 	});
@@ -3496,8 +3493,7 @@ void ApiWrap::requestSharedMedia(
 				MTPInvokeWithTakeout<MTPmessages_Search>(
 					MTP_long(*takeout),
 					std::move(*prepared))
-			).done(sharedDone).fail(sharedFail)
-			.toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)).send();
+			).done(sharedDone).fail(sharedFail).send();
 		} else {
 			return this->request(std::move(*prepared)
 			).done(sharedDone).fail(sharedFail).send();
@@ -3557,7 +3553,7 @@ void ApiWrap::finishTakeout(Fn<void()> done) {
 			callback();
 		}
 		processTakeoutRequests();
-	}).toDC(MTP::ShiftDcId(0, MTP::kExportDcShift)).send();
+	}).send();
 }
 
 void ApiWrap::processTakeoutRequests() {
@@ -3908,8 +3904,6 @@ void ApiWrap::forwardMessages(
 		std::shared_ptr<EnhancedForward::SavedJob> resumeJob) {
 	Expects(!draft.items.empty() || resumeJob);
 
-	LOG(("ENHANCED_FWD: forwardMessages items=%1").arg(draft.items.size()));
-
 	const auto forwardItems = draft.items;
 	EnhancedForward::classifyItems(forwardItems, [
 		this,
@@ -3930,10 +3924,6 @@ void ApiWrap::forwardMessages(
 	std::sort(enhancedItems.begin(), enhancedItems.end(), byId);
 	std::sort(normalItems.begin(), normalItems.end(), byId);
 	const auto enhancedNeeded = !enhancedItems.empty();
-	LOG(("ENHANCED_FWD: enhancedNeeded=%1 enhanced=%2 normal=%3")
-		.arg(Logs::b(enhancedNeeded))
-		.arg(enhancedItems.size())
-		.arg(normalItems.size()));
 
 	struct SharedCallback {
 		int requestsLeft = 0;
@@ -3955,9 +3945,7 @@ void ApiWrap::forwardMessages(
     			draft.groupOptions,
     			resumeJob);
 
-    		LOG(("ENHANCED_FWD: checking normalItems"));
     		if (normalItems.empty()) {
-    			LOG(("ENHANCED_FWD: normalItems empty, firing success callback"));
     			if (shared) {
     				shared->callback();
     			}
@@ -4207,11 +4195,8 @@ void ApiWrap::startResumeEnhancedForward(
 		const PeerId &srcId,
 		const PeerId &dstId,
 		not_null<Main::Session*> session) {
-	LOG(("ENHANCED_FWD: startResumeEnhancedForward src=%1 dst=%2")
-		.arg(srcId.value).arg(dstId.value));
 	const auto job = EnhancedForward::GetUnfinishedJobByDst(dstId, session);
 	if (!job) {
-		LOG(("ENHANCED_FWD: no unfinished job for dst=%1").arg(dstId.value));
 		return;
 	}
 
@@ -4227,15 +4212,11 @@ void ApiWrap::startResumeEnhancedForward(
 			if (item) {
 				resolved.push_back(item);
 			} else {
-				LOG(("ENHANCED_FWD: resume source msg not found peer=%1 msg=%2")
-					.arg(full.peer.value).arg(full.msg.bare));
 				ok = false;
 				break;
 			}
 		}
 		if (!ok || resolved.empty()) return false;
-		LOG(("ENHANCED_FWD: resume resolved %1 messages, starting forward")
-			.arg(resolved.size()));
 		Data::ResolvedForwardDraft draft;
 		draft.items = std::move(resolved);
 		SendAction action(session->data().history(dstId));
