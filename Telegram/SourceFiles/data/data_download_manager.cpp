@@ -169,13 +169,13 @@ void DownloadManager::notifyDuplicateSkips() {
 	_duplicatesSkipped[int(DedupDb::Table::Downloads)] = 0;
 	_duplicatesSkipped[int(DedupDb::Table::Uploads)] = 0;
 	if (downloads > 0) {
-		Ui::Toast::Show(tr::lng_download_duplicates_skipped(
+		Ui::Toast::Show(tr::lng_tm_dl_duplicates_skipped(
 			tr::now,
 			lt_count,
 			downloads));
 	}
 	if (uploads > 0) {
-		Ui::Toast::Show(tr::lng_upload_duplicates_skipped(
+		Ui::Toast::Show(tr::lng_tm_ul_duplicates_skipped(
 			tr::now,
 			lt_count,
 			uploads));
@@ -328,10 +328,11 @@ void DownloadManager::addLoading(
 			if (!enhancedForward && IsServerMsgId(item->id)) {
 				const auto peer = item->history()->peer;
 				ensureDedupDb().insertResumeDl({
+					.sessionId = item->history()->session().uniqueId(),
 					.peerId = peer->id.value,
-					.peerAccessHash = PeerAccessHash(peer),
 					.msgId = item->id.bare,
 					.path = path,
+					.fileSize = size,
 				});
 			}
 		}
@@ -513,6 +514,7 @@ void DownloadManager::addLoaded(
 		if (const auto document = object.document) {
 			_fingerprintCache.remove(document->id);
 			ensureDedupDb().removeResumeDl(
+				item->history()->session().uniqueId(),
 				item->history()->peer->id.value,
 				item->id.bare);
 		}
@@ -526,6 +528,10 @@ void DownloadManager::addLoaded(
 				_loadingDocuments.remove(
 					entry.object.document);
 			}
+			ensureDedupDb().removeResumeDl(
+				entry.object.item->history()->session().uniqueId(),
+				entry.object.item->history()->peer->id.value,
+				entry.object.item->id.bare);
 			data.downloading.erase(i);
 			const auto j = _loading.find(item);
 			if (j != end(_loading)) {
@@ -604,6 +610,7 @@ void DownloadManager::addLoaded(
 		saveIfIdle();
 		if (const auto document = entry.object.document) {
 			ensureDedupDb().removeResumeDl(
+				entry.object.item->history()->session().uniqueId(),
 				entry.object.item->history()->peer->id.value,
 				entry.object.item->id.bare);
 		}
@@ -738,19 +745,6 @@ void DownloadManager::finishFilesDelete(DeleteFilesDescriptor &&descriptor) {
 	});
 }
 
-bool DownloadManager::loadedHasNonCloudFile() const {
-	for (const auto &[session, data] : _sessions) {
-		for (const auto &id : data.downloaded) {
-			if (const auto object = id.object.get()) {
-				if (!object->item->isHistoryEntry()) {
-					return true;
-				}
-			}
-		}
-	}
-	return false;
-}
-
 auto DownloadManager::loadingList() const
 -> ranges::any_view<const DownloadingId*, ranges::category::input> {
 	return ranges::views::all(
@@ -799,125 +793,6 @@ HistoryItem *DownloadManager::lookupLoadingItem(
 		}
 	}
 	return nullptr;
-}
-
-void DownloadManager::loadingStopWithConfirmation(
-		Fn<void()> callback,
-		Main::Session *onlyInSession) {
-	const auto item = lookupLoadingItem(onlyInSession);
-	if (!item) {
-		return;
-	}
-	const auto window = Core::App().windowFor(
-		not_null(&item->history()->session().account()));
-	if (!window) {
-		return;
-	}
-	const auto weak = base::make_weak(&item->history()->session());
-	const auto id = item->fullId();
-	auto box = Box([=](not_null<Ui::GenericBox*> box) {
-		box->addRow(
-			object_ptr<Ui::FlatLabel>(
-				box.get(),
-				tr::lng_download_sure_stop(),
-				st::boxLabel),
-			st::boxPadding + QMargins(0, 0, 0, st::boxPadding.bottom()));
-		box->setStyle(st::defaultBox);
-		box->addButton(tr::lng_selected_upload_stop(), [=] {
-			box->closeBox();
-
-			if (!onlyInSession || weak.get()) {
-				loadingStop(onlyInSession);
-			}
-			if (callback) {
-				callback();
-			}
-		}, st::attentionBoxButton);
-		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
-		box->addLeftButton(tr::lng_upload_show_file(), [=] {
-			box->closeBox();
-
-			if (const auto strong = weak.get()) {
-				if (const auto item = strong->data().message(id)) {
-					if (const auto window = strong->tryResolveWindow()) {
-						window->showMessage(item);
-					}
-				}
-			}
-		});
-	});
-	window->show(std::move(box));
-	window->activate();
-}
-
-void DownloadManager::quitWithConfirmation(Fn<void()> quit) {
-	const auto item = lookupLoadingItem(nullptr);
-	if (!item) {
-		if (quit) {
-			quit();
-		}
-		return;
-	}
-	const auto window = Core::App().windowFor(
-		not_null(&item->history()->session().account()));
-	if (!window) {
-		if (quit) {
-			quit();
-		}
-		return;
-	}
-	auto loadingCount = 0;
-	for ([[maybe_unused]] const auto &id : loadingList()) {
-		++loadingCount;
-	}
-	auto box = Box([=](not_null<Ui::GenericBox*> box) {
-		box->setCloseByOutsideClick(false);
-		box->setCloseByEscape(false);
-		box->addRow(
-			object_ptr<Ui::FlatLabel>(
-				box.get(),
-				tr::lng_downloads_quit_confirm(
-					tr::now,
-					lt_count,
-					loadingCount),
-				st::boxLabel),
-			st::boxPadding + QMargins(0, 0, 0, st::boxPadding.bottom()));
-		box->setStyle(st::defaultBox);
-		box->addButton(tr::lng_downloads_quit_cancel(), [=] {
-			box->closeBox();
-			auto confirmBox = Box([=](not_null<Ui::GenericBox*> confirmBox) {
-				confirmBox->setCloseByOutsideClick(false);
-				confirmBox->setCloseByEscape(false);
-				confirmBox->addRow(object_ptr<Ui::FlatLabel>(
-					confirmBox.get(),
-					tr::lng_download_cancel_confirm(tr::now),
-					st::boxLabel));
-				confirmBox->addButton(tr::lng_download_cancel_yes(), [=] {
-					confirmBox->closeBox();
-					loadingStop(nullptr);
-					if (quit) {
-						quit();
-					}
-				});
-				confirmBox->addButton(tr::lng_download_cancel_no(), [=] {
-					confirmBox->closeBox();
-				});
-			});
-			window->show(std::move(confirmBox));
-		}, st::attentionBoxButton);
-		box->addButton(tr::lng_downloads_quit_pause(), [=] {
-			box->closeBox();
-			pauseAll();
-			if (quit) {
-				quit();
-			}
-		});
-		box->addButton(tr::lng_downloads_quit_continue(), [=] {
-			box->closeBox();
-		});
-	});
-	window->show(std::move(box));
-	window->activate();
 }
 
 void DownloadManager::loadingStop(Main::Session *onlyInSession) {
@@ -1247,6 +1122,7 @@ void DownloadManager::cancel(
 	}
 	if (document) {
 		ensureDedupDb().removeResumeDl(
+			item->history()->session().uniqueId(),
 			item->history()->peer->id.value,
 			item->id.bare);
 	}
@@ -1314,10 +1190,10 @@ void DownloadManager::cancelWithConfirmation(not_null<const HistoryItem*> item) 
 	auto box = Box([=](not_null<Ui::GenericBox*> box) {
 		box->addRow(object_ptr<Ui::FlatLabel>(
 			box.get(),
-			tr::lng_download_cancel_confirm(tr::now),
+			tr::lng_tm_dl_cancel_confirm(tr::now),
 			st::boxLabel));
 		box->setStyle(st::defaultBox);
-		box->addButton(tr::lng_download_cancel_yes(), [=] {
+		box->addButton(tr::lng_box_yes(), [=] {
 			box->closeBox();
 			if (const auto strong = weak.get()) {
 				if (const auto item = strong->data().message(id)) {
@@ -1341,7 +1217,7 @@ void DownloadManager::cancelWithConfirmation(not_null<const HistoryItem*> item) 
 				}
 			}
 		}, st::attentionBoxButton);
-		box->addButton(tr::lng_download_cancel_no(), [=] {
+		box->addButton(tr::lng_box_no(), [=] {
 			box->closeBox();
 		});
 	});
@@ -1360,6 +1236,28 @@ void DownloadManager::pauseAll() {
 				entry.paused = true;
 				changed = true;
 			}
+		}
+	}
+	if (changed) {
+		_loadingListChanges.fire({});
+		clearFingerprintCache();
+	}
+}
+
+void DownloadManager::pauseAll(not_null<Main::Session*> session) {
+	const auto i = _sessions.find(session);
+	if (i == end(_sessions)) {
+		return;
+	}
+	auto changed = false;
+	for (auto &entry : i->second.downloading) {
+		const auto document = entry.object.document;
+		if (document
+			&& document->loading()
+			&& !document->downloadPaused()) {
+			document->pause();
+			entry.paused = true;
+			changed = true;
 		}
 	}
 	if (changed) {
@@ -1750,10 +1648,10 @@ rpl::producer<> DownloadManager::jobCounterChanged() const {
 	return _jobCounterChanged.events();
 }
 
-bool DownloadManager::hasUnfinishedResume(
-		not_null<Main::Session*> session) const {
+int DownloadManager::resumeDlCount() const {
 	return ensureDedupDb().isOpen()
-		&& !ensureDedupDb().loadAllResumeDl().empty();
+		? int(ensureDedupDb().loadAllResumeDl().size())
+		: 0;
 }
 
 QString DownloadManager::dedupDbPath() const {
@@ -1895,43 +1793,44 @@ void DownloadManager::checkDuplicate(
 			}
 			// Same content already known. Remember the alias id -> hash so
 			// future dedup of this exact doc id is O(1) without fetching.
-			ensureDedupDb().insert(DedupDb::Table::Downloads, {
-				.hash = hash,
-				.documentId = document->id,
-				.status = u"f"_q,
-			});
-			LOG(("DEDUP: checkDuplicate skip doc=%1 hash=%2").arg(
-				document->id
-			).arg(
-				QString::fromLatin1(hash.toHex())));
+			// Aliases must reference finished content only: one based on an
+			// in-flight row would survive its cancel and block this content.
+			if (db.containsFinishedHash(DedupDb::Table::Downloads, hash)) {
+				ensureDedupDb().insert(DedupDb::Table::Downloads, {
+					.hash = hash,
+					.documentId = document->id,
+					.status = u"f"_q,
+				});
+			}
 			wrappedDone(true);
 			return;
 		});
 }
 
-void DownloadManager::showResumeUnfinished(
-		not_null<Main::Session*> session) {
-	const auto records = ensureDedupDb().loadAllResumeDl();
+void DownloadManager::startAllResumeDownloads(bool startPaused) {
+	auto &db = ensureDedupDb();
+	const auto records = db.loadAllResumeDl();
 	if (records.empty()) {
 		return;
 	}
 	struct FileJob {
+		uint64 sessionId = 0;
 		PeerId peerId;
-		uint64 peerAccessHash = 0;
 		std::vector<ResumeEntry> entries;
 	};
 	auto jobs = std::make_shared<std::vector<FileJob>>();
-	auto totalItems = 0;
 	for (const auto &record : records) {
-		if (!record.peerId || !record.msgId) {
+		if (!record.sessionId || !record.peerId || !record.msgId) {
 			continue;
 		}
 		const auto peerId = PeerId(record.peerId);
-		auto jobIt = ranges::find(*jobs, peerId, &FileJob::peerId);
+		auto jobIt = ranges::find_if(*jobs, [&](const FileJob &job) {
+			return job.sessionId == record.sessionId && job.peerId == peerId;
+		});
 		if (jobIt == end(*jobs)) {
 			jobs->push_back({
+				.sessionId = record.sessionId,
 				.peerId = peerId,
-				.peerAccessHash = record.peerAccessHash,
 			});
 			jobIt = end(*jobs) - 1;
 		}
@@ -1940,177 +1839,138 @@ void DownloadManager::showResumeUnfinished(
 			.path = record.path,
 		});
 	}
-	for (const auto &job : *jobs) {
-		totalItems += int(job.entries.size());
-	}
-	if (jobs->empty()) {
-		return;
-	}
-
-	const auto weak = base::make_weak(session);
-	const auto resumeAllJobs = [=](bool startPaused) {
-		const auto strong = weak.get();
-		if (!strong) {
-			return;
-		}
-		for (const auto &job : *jobs) {
-			auto ids = QVector<MTPInputMessage>();
-			for (const auto &entry : job.entries) {
-				ids.push_back(
-					MTP_inputMessageID(MTP_int(entry.msgId.bare)));
+	const auto findSession = [](uint64 sessionId) -> Main::Session* {
+		for (const auto &account : Core::App().domain().orderedAccounts()) {
+			const auto session = account->maybeSession();
+			if (session && session->uniqueId() == sessionId) {
+				return session;
 			}
-			const auto startDownloads = [=](
-					not_null<Main::Session*> strong) {
-				for (const auto &entry : job.entries) {
-					const auto item = strong->data().message(
-						job.peerId,
-						entry.msgId);
-					if (!item) {
-						continue;
-					}
-					const auto media = item->media();
-					const auto document = media
-						? media->document()
-						: nullptr;
-					if (!document) {
-						continue;
-					}
-					// Use a plain file loader so a paused-then-resumed
-					// download restarts reliably - the streaming-reader
-					// downloader can't be resumed after being paused before
-					// its first part request.
-					document->save(
-						item->fullId(),
-						entry.path,
-						LoadFromCloudOrLocal,
-						false,
-						true);
-					if (document->loading()
-						&& !document->loadingFilePath().isEmpty()) {
-						addLoading({
-							.item = item,
-							.document = document,
-						});
-						if (startPaused) {
-							pause(item);
-						}
+		}
+		return nullptr;
+	};
+	for (const auto &job : *jobs) {
+		const auto strong = findSession(job.sessionId);
+		if (!strong) {
+			continue;
+		}
+		auto ids = QVector<MTPInputMessage>();
+		for (const auto &entry : job.entries) {
+			ids.push_back(
+				MTP_inputMessageID(MTP_int(entry.msgId.bare)));
+		}
+		const auto startDownloads = [=](
+				not_null<Main::Session*> strong) {
+			for (const auto &entry : job.entries) {
+				const auto item = strong->data().message(
+					job.peerId,
+					entry.msgId);
+				if (!item) {
+					continue;
+				}
+				const auto media = item->media();
+				const auto document = media
+					? media->document()
+					: nullptr;
+				if (!document) {
+					continue;
+				}
+				// Use a plain file loader so a paused-then-resumed
+				// download restarts reliably - the streaming-reader
+				// downloader can't be resumed after being paused before
+				// its first part request.
+				document->save(
+					item->fullId(),
+					entry.path,
+					LoadFromCloudOrLocal,
+					false,
+					true);
+				if (document->loading()
+					&& !document->loadingFilePath().isEmpty()) {
+					addLoading({
+						.item = item,
+						.document = document,
+					});
+					if (startPaused) {
+						pause(item);
 					}
 				}
-			};
-			if (peerIsChannel(job.peerId)) {
+			}
+		};
+		if (peerIsChannel(job.peerId)) {
+			const auto channelId = peerToChannel(job.peerId);
+			const auto live = strong->data().channelLoaded(channelId);
+			const auto primaryHash = (live && live->accessHash() != 0)
+				? uint64(live->accessHash())
+				: 0;
+			auto attempt = std::make_shared<Fn<void(uint64)>>();
+			*attempt = [=](uint64 hash) {
 				strong->api().request(MTPchannels_GetMessages(
 					MTP_inputChannel(
-						MTP_long(peerToChannel(job.peerId).bare),
-						MTP_long(job.peerAccessHash)),
+						MTP_long(channelId.bare),
+						MTP_long(hash)),
 					MTP_vector<MTPInputMessage>(ids))
 				).done([=](const MTPmessages_Messages &result) {
-					if (const auto strong = weak.get()) {
+					if (const auto session = findSession(job.sessionId)) {
+						const auto strong =
+							not_null<Main::Session*>(session);
 						strong->data().processExistingMessages(
-							strong->data().channelLoaded(
-								peerToChannel(job.peerId)),
+							strong->data().channelLoaded(channelId),
 							result);
 						startDownloads(strong);
 					}
-				}).send();
-			} else {
-				strong->api().request(MTPmessages_GetMessages(
-					MTP_vector<MTPInputMessage>(ids))
-				).done([=](const MTPmessages_Messages &result) {
-					if (const auto strong = weak.get()) {
-						strong->data().processExistingMessages(
-							nullptr,
-							result);
-						startDownloads(strong);
+				}).fail([=](const MTP::Error &error) {
+					if (hash != 0
+						&& error.type() == u"CHANNEL_INVALID"_q) {
+						(*attempt)(0);
 					}
 				}).send();
-			}
-		}
-	};
-	const auto cancelAllJobs = [=] {
-		for (const auto &job : *jobs) {
-			for (const auto &entry : job.entries) {
-				if (!entry.path.isEmpty()) {
-					QFile(entry.path).remove();
-					if (const auto strong = weak.get()) {
-						PruneEmptyDownloadFolders(strong, entry.path);
-					}
+			};
+			(*attempt)(primaryHash);
+		} else {
+			strong->api().request(MTPmessages_GetMessages(
+				MTP_vector<MTPInputMessage>(ids))
+			).done([=](const MTPmessages_Messages &result) {
+				if (const auto session = findSession(job.sessionId)) {
+					const auto strong = not_null<Main::Session*>(session);
+					strong->data().processExistingMessages(
+						nullptr,
+						result);
+					startDownloads(strong);
 				}
-				ensureDedupDb().removeResumeDl(
-					job.peerId.value,
-					entry.msgId.bare);
+			}).send();
+		}
+	}
+}
+
+void DownloadManager::cancelAllResumeDownloads() {
+	auto &db = ensureDedupDb();
+	const auto records = db.loadAllResumeDl();
+	const auto findSession = [](uint64 sessionId) -> Main::Session* {
+		for (const auto &account : Core::App().domain().orderedAccounts()) {
+			const auto session = account->maybeSession();
+			if (session && session->uniqueId() == sessionId) {
+				return session;
 			}
 		}
+		return nullptr;
 	};
-
-	const auto window = Core::App().windowFor(
-		not_null(&session->account()));
-	if (!window) {
-		return;
+	for (const auto &record : records) {
+		if (!record.sessionId || !record.peerId || !record.msgId) {
+			continue;
+		}
+		const auto session = findSession(record.sessionId);
+		if (!record.path.isEmpty()) {
+			QFile(record.path).remove();
+			if (session) {
+				PruneEmptyDownloadFolders(session, record.path);
+			}
+		}
+		ensureDedupDb().removeResumeDl(
+			record.sessionId,
+			record.peerId,
+			record.msgId);
 	}
-	const auto openPanel = [=] {
-		crl::on_main(crl::guard(weak, [=] {
-			const auto strong = weak.get();
-			if (!strong) {
-				return;
-			}
-			const auto window = Core::App().windowFor(
-				not_null(&strong->account()));
-			if (!window) {
-				return;
-			}
-			if (const auto controller = window->sessionController()) {
-				controller->showSection(
-					Info::Downloads::Make(strong->user()));
-			}
-		}));
-	};
-	auto box = Box([=](not_null<Ui::GenericBox*> box) {
-		box->setCloseByOutsideClick(false);
-		box->setCloseByEscape(false);
-		box->addRow(object_ptr<Ui::FlatLabel>(
-			box.get(),
-			tr::lng_downloads_resume_unfinished(
-				tr::now,
-				lt_count,
-				totalItems),
-			st::boxLabel));
-		box->addButton(tr::lng_downloads_resume_cancel(), [=] {
-			box->closeBox();
-			auto confirmBox = Box([=](not_null<Ui::GenericBox*> confirmBox) {
-				confirmBox->setCloseByOutsideClick(false);
-				confirmBox->setCloseByEscape(false);
-				confirmBox->addRow(object_ptr<Ui::FlatLabel>(
-					confirmBox.get(),
-					tr::lng_download_cancel_confirm(tr::now),
-					st::boxLabel));
-				confirmBox->addButton(tr::lng_download_cancel_yes(), [=] {
-					confirmBox->closeBox();
-					crl::on_main(crl::guard(weak, [=] {
-						cancelAllJobs();
-					}));
-				});
-				confirmBox->addButton(tr::lng_download_cancel_no(), [=] {
-					confirmBox->closeBox();
-				});
-			});
-			window->show(std::move(confirmBox));
-		}, st::attentionBoxButton);
-		box->addButton(tr::lng_downloads_resume_later(), [=] {
-			box->closeBox();
-			crl::on_main(crl::guard(weak, [=] {
-				resumeAllJobs(true);
-			}));
-		});
-		box->addButton(tr::lng_downloads_resume_yes(), [=] {
-			box->closeBox();
-			crl::on_main(crl::guard(weak, [=] {
-				resumeAllJobs(false);
-				openPanel();
-			}));
-		});
-	});
-	window->show(std::move(box));
-	window->activate();
+	_loadingListChanges.fire({});
 }
 
 void DownloadManager::untrack(not_null<Main::Session*> session) {
@@ -2146,21 +2006,81 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 
 	const auto notify = [=] {
 			DownloadProgress dlProgress;
+			auto efProgress = DownloadProgress();
 			auto &manager = Core::App().downloadManager();
 			for (const auto id : manager.loadingList()) {
-				if (id->enhancedForward) {
-					continue;
-				}
 				if (id->jobIndex != manager.jobId(
 					&id->object.item->history()->session())) {
+					continue;
+				}
+				if (id->enhancedForward) {
+					efProgress.ready += id->ready;
+					efProgress.total += id->total;
 					continue;
 				}
 				dlProgress.ready += id->ready;
 				dlProgress.total += id->total;
 			}
+			if (dlProgress.total == 0) {
+				for (const auto &account : Core::App().domain().orderedAccounts()) {
+					if (const auto session = account->maybeSession()) {
+						auto &db = Core::App().downloadManager().ensureDedupDb();
+						if (!db.isOpen()) {
+							continue;
+						}
+						for (const auto &record : db.loadAllResumeDl()) {
+							if (record.sessionId != session->uniqueId()) {
+								continue;
+							}
+							qint64 total = record.fileSize;
+							if (total <= 0) {
+								const auto peerId = PeerId(record.peerId);
+								const auto msgId = MsgId(record.msgId);
+								if (const auto item = session->data().message(peerId, msgId)) {
+									if (const auto media = item->media()) {
+										if (const auto doc = media->document()) {
+											total = doc->size;
+										}
+									}
+								}
+							}
+							if (total <= 0) {
+								continue;
+							}
+							const auto ready = QFileInfo::exists(record.path)
+								? qint64(QFileInfo(record.path).size())
+								: qint64(0);
+							dlProgress.total += total;
+							dlProgress.ready += std::min(ready, total);
+						}
+					}
+				}
+			}
+			qint64 persistedReady = 0, persistedTotal = 0;
+			for (const auto &account :
+					Core::App().domain().orderedAccounts()) {
+				if (const auto session = account->maybeSession()) {
+					qint64 total = 0;
+					persistedReady += EnhancedForward::PersistedForwardBytes(
+						session,
+						&total);
+					persistedTotal += total;
+				}
+			}
+			auto efReady = efProgress.ready;
+			auto efTotalBytes = efProgress.total;
+			if (efTotalBytes == 0) {
+				efReady = persistedReady;
+				efTotalBytes = persistedTotal;
+			} else if (persistedTotal > efTotalBytes) {
+				efTotalBytes = persistedTotal;
+				efReady = std::max(efReady, persistedReady);
+			}
 			consumer.put_next(Ui::DownloadBarProgress{
 				.ready = dlProgress.ready,
 				.total = dlProgress.total,
+				.efReady = efReady,
+				.efTotal = efTotalBytes,
 			});
 		};
 
@@ -2175,6 +2095,11 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 
 		Core::App().downloadManager().loadingProgressValue(
 		) | rpl::on_next([=](const DownloadProgress &) {
+			state->push();
+		}, lifetime);
+
+		EnhancedForward::counterChanges(
+		) | rpl::on_next([=] {
 			state->push();
 		}, lifetime);
 
@@ -2196,10 +2121,39 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 			base::has_weak_ptr guard;
 			bool scheduled = false;
 			Fn<void()> push;
+			int efTotal = 0;
+			int efDone = 0;
 		};
 
 		const auto state = lifetime.make_state<State>();
 		auto &manager = Core::App().downloadManager();
+
+		const auto computeEfPending = [=] {
+			auto totalF = 0;
+			auto doneF = 0;
+			for (const auto &account :
+					Core::App().domain().orderedAccounts()) {
+				if (const auto session = account->maybeSession()) {
+					for (const auto &job :
+							EnhancedForward::GetUnfinishedJobs(session)) {
+						totalF += job.total;
+						doneF += job.sent;
+					}
+				}
+			}
+			state->efTotal = totalF;
+			state->efDone = doneF;
+		};
+		computeEfPending();
+		LOG(("TM_BAR: init efTotal=%1 efDone=%2").arg(
+			state->efTotal).arg(state->efDone));
+		EnhancedForward::counterChanges(
+		) | rpl::on_next([=] {
+			computeEfPending();
+			LOG(("TM_BAR: recompute efTotal=%1 efDone=%2").arg(
+				state->efTotal).arg(state->efDone));
+			state->push();
+		}, lifetime);
 
 		const auto resolveThumbnailRecursive = [=](auto &&self) -> bool {
 			if (state->document && !state->document->hasThumbnail()) {
@@ -2261,6 +2215,29 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 					++content.done;
 				}
 			}
+			if (content.count == 0) {
+				int pausedCount = 0;
+				for (const auto &account : Core::App().domain().orderedAccounts()) {
+					if (const auto session = account->maybeSession()) {
+						auto &db = Core::App().downloadManager().ensureDedupDb();
+						if (!db.isOpen()) {
+							continue;
+						}
+						for (const auto &record : db.loadAllResumeDl()) {
+							if (record.sessionId != session->uniqueId()) {
+								continue;
+							}
+							++pausedCount;
+						}
+					}
+				}
+				if (pausedCount > 0) {
+					content.count = pausedCount;
+					content.done = 0;
+				}
+			}
+			content.efCount = state->efTotal;
+			content.efDone = state->efDone;
 			if (content.count == 1) {
 				const auto document = single->document;
 				const auto thumbnailed = (single->item

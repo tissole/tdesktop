@@ -75,8 +75,8 @@ QString Provider::sectionTitle(not_null<const BaseLayout*> item) {
 		return QString();
 	}
 	return isUploadItem(item->getItem())
-		? tr::lng_uploads_section(tr::now)
-		: tr::lng_downloads_section(tr::now);
+		? tr::lng_tm_ul_section(tr::now)
+		: tr::lng_tm_dl_section(tr::now);
 }
 
 bool Provider::sectionItemBelongsHere(
@@ -111,12 +111,14 @@ rpl::producer<bool> Provider::hasUploadsValue() const {
 }
 
 void Provider::updateAvailability() {
-	_hasDownloads = !_downloading.empty() || !_downloaded.empty();
+	_hasDownloads = !_downloading.empty()
+		|| !_downloaded.empty()
+		|| ((_filter == Filter::Forwards || _filter == Filter::All)
+			&& !_enhancedForward.empty());
 	_hasUploads = !_uploading.empty() || !_uploaded.empty();
 }
 
 void Provider::updateCounter() {
-	const auto start = crl::now();
 	const auto wantDownloads = (_filter == Filter::Downloads
 		|| _filter == Filter::All);
 	const auto wantUploads = (_filter == Filter::Uploads
@@ -125,62 +127,68 @@ void Provider::updateCounter() {
 		|| _filter == Filter::All);
 	auto done = 0;
 	auto total = 0;
+	const auto eachSession = [&](auto &&callback) {
+		for (const auto &account : Core::App().domain().orderedAccounts()) {
+			if (const auto session = account->maybeSession()) {
+				callback(session);
+			}
+		}
+	};
+	auto accounts = 0;
+	auto fwDone = 0;
+	auto fwTotal = 0;
+	auto fwJobs = 0;
 	if (wantForwards) {
-		const auto session = &_controller->session();
-		const auto jobs = EnhancedForward::MemoryJobs(session);
-		// Like the download/upload jobId counters, show the current job only:
-		// the active forward, or the latest finished/resumable batch when
-		// nothing is running. Finished jobs do not accumulate and cancelled
-		// jobs are never counted.
-		const EnhancedForward::JobSnapshot *current = nullptr;
-		for (const auto &job : jobs) {
-			if (job.active
-				&& job.progress.state != EnhancedForward::State::Cancelled) {
-				current = &job;
-				break;
-			}
-		}
-		if (!current) {
-			// Interrupted batches awaiting resume also count, like the
-			// resumable downloads. Finished items are never counted.
-			for (const auto &job : jobs) {
-				if (job.resumable
-					&& job.progress.state != EnhancedForward::State::Cancelled) {
-					current = &job;
-					break;
+		// Count every pending forward item. Forward jobs are keyed globally
+		// by peer and reported by every session that has that peer loaded, so
+		// deduplicate by peer to avoid counting one forward per account.
+		auto seen = base::flat_set<PeerId>();
+		eachSession([&](not_null<Main::Session*> session) {
+			accounts++;
+			for (const auto &job : EnhancedForward::MemoryJobs(session)) {
+				if (job.finished
+					|| job.progress.state
+						== EnhancedForward::State::Cancelled) {
+					continue;
 				}
+				if (!seen.emplace(job.peer).second) {
+					continue;
+				}
+				fwJobs++;
+				fwTotal += job.progress.total;
+				fwDone += job.progress.sent;
 			}
-		}
-		if (current) {
-			// The totals are maintained incrementally (dedup skips and per-item
-			// cancels subtract from total, sent counts finished uploads), so
-			// reading them is O(1) - the same as the download/upload counters.
-			total += current->progress.total;
-			done += current->progress.sent;
-			LOG(("EF_FREEZE: counter job total=%1 sent=%2 skipped=%3 active=%4 resumable=%5")
-				.arg(current->progress.total)
-				.arg(current->progress.sent)
-				.arg(current->progress.skipped)
-				.arg(current->active ? 1 : 0)
-				.arg(current->resumable ? 1 : 0));
-		} else {
+		});
+		if (fwDone == 0 && fwTotal == 0) {
 			// Nothing is running: keep the last completed batch visible in the
 			// counter until the next forward replaces it (also after restart).
 			const auto [lastDone, lastTotal] = EnhancedForward::LastBatchCounts();
-			total += lastTotal;
-			done += lastDone;
+			fwTotal += lastTotal;
+			fwDone += lastDone;
 		}
+		total += fwTotal;
+		done += fwDone;
 	}
+	auto dlDone = 0;
+	auto dlTotal = 0;
 	if (wantDownloads) {
-		const auto session = &_controller->session();
 		auto &manager = Core::App().downloadManager();
-		total += manager.jobTotal(session);
-		done += manager.jobDone(session);
+		eachSession([&](not_null<Main::Session*> session) {
+			dlTotal += manager.jobTotal(session);
+			dlDone += manager.jobDone(session);
+		});
+		total += dlTotal;
+		done += dlDone;
 	}
+	auto ulDone = 0;
+	auto ulTotal = 0;
 	if (wantUploads) {
-		const auto session = &_controller->session();
-		total += session->uploader().jobTotal();
-		done += session->uploader().jobDone();
+		eachSession([&](not_null<Main::Session*> session) {
+			ulTotal += session->uploader().jobTotal();
+			ulDone += session->uploader().jobDone();
+		});
+		total += ulTotal;
+		done += ulDone;
 	}
 	if (total == 0) {
 		_counterText = QString();
@@ -190,10 +198,6 @@ void Provider::updateCounter() {
 		tr::now,
 		lt_done, QString::number(done),
 		lt_total, QString::number(total));
-	const auto took = crl::now() - start;
-	if (took >= 16) {
-		LOG(("EF_FREEZE: updateCounter took %1ms").arg(took));
-	}
 }
 
 bool Provider::isPossiblyMyItem(not_null<const HistoryItem*> item) {
@@ -328,6 +332,26 @@ void Provider::refreshViewer() {
 		if (!_fullCount.has_value()) {
 			refreshPostponed(false);
 		}
+		_efTransferring.clear();
+		for (const auto id : manager.loadingList()) {
+			if (id->enhancedForward
+				&& !id->done
+				&& id->object.item != nullptr) {
+				const auto fullId = id->object.item->fullId();
+				const auto added = _efTransferring.emplace(fullId).second;
+				const auto it = ranges::find_if(
+					_layouts,
+					[&](const auto &pair) {
+						return pair.first->fullId() == fullId;
+					});
+				if (it != end(_layouts)) {
+					it->second.item->itemDataChanged();
+				} else if (added) {
+					LOG(("TM_XFER: no layout yet msg=%1").arg(
+						fullId.msg.bare));
+				}
+			}
+		}
 	}, _lifetime);
 
 	for (const auto id : manager.loadedList()) {
@@ -370,6 +394,14 @@ void Provider::refreshViewer() {
 
 		auto pull = [=] {
 			auto copy = _uploading;
+			auto activeIds = base::flat_set<FullMsgId>();
+			for (const auto &account : Core::App().domain().orderedAccounts()) {
+				if (const auto s = account->maybeSession()) {
+					for (const auto &info : s->uploader().activeUploads()) {
+						activeIds.emplace(info.itemId);
+					}
+				}
+			}
 			for (const auto &info : session->uploader().activeUploads()) {
 				const auto item = session->data().message(info.itemId);
 				if (!item) continue;
@@ -379,11 +411,15 @@ void Provider::refreshViewer() {
 						info.filename)) {
 					continue;
 				}
-			if (!copy.remove(info.itemId)
-				&& !_uploaded.contains(info.itemId)
-				&& !_downloading.contains(item)
-				&& !_enhancedForward.contains(item)
-				&& !_downloaded.contains(item)) {
+				// An entry still present in the upload queue is never a
+				// finished upload: clear-finished must not drop it from the
+				// tab together with the genuinely finished items.
+				_uploaded.remove(info.itemId);
+				if (!copy.remove(info.itemId)
+					&& !_uploading.contains(info.itemId)
+					&& !_downloading.contains(item)
+					&& !_enhancedForward.contains(item)
+					&& !_downloaded.contains(item)) {
 					_uploading.emplace(info.itemId);
 					addElementNow({
 						.item = item,
@@ -394,6 +430,16 @@ void Provider::refreshViewer() {
 				}
 			}
 			for (const auto &left : copy) {
+				if (activeIds.contains(left)) {
+					// This upload is still queued in some session (not this
+					// one). Keeping it classified as finished would let the
+					// clear-finished action remove it from the tab together
+					// with the genuinely finished items.
+					if (!_uploading.contains(left)) {
+						_uploading.emplace(left);
+					}
+					continue;
+				}
 				_uploading.remove(left);
 				_uploaded.emplace(left);
 			}
@@ -473,18 +519,28 @@ void Provider::refreshViewer() {
 
 		session->uploader().finishedUploadsCleared(
 		) | rpl::on_next([=] {
+			auto activeIds = base::flat_set<FullMsgId>();
+			for (const auto &account : Core::App().domain().orderedAccounts()) {
+				if (const auto s = account->maybeSession()) {
+					for (const auto &info : s->uploader().activeUploads()) {
+						activeIds.emplace(info.itemId);
+					}
+				}
+			}
 			const auto uploadedCopy = _uploaded;
-			const auto uploadingCopy = _uploading;
 			for (const auto &itemId : uploadedCopy) {
 				_uploaded.remove(itemId);
+				if (activeIds.contains(itemId)) {
+					// Still queued in some uploader: keep it as an active
+					// upload, not as a finished one that we are clearing.
+					_uploading.emplace(itemId);
+				}
 			}
-			for (const auto &itemId : uploadingCopy) {
-				_uploading.remove(itemId);
-			}
+			// Only the finished items are cleared - active and paused uploads
+			// must stay visible in the Uploads tab.
 			for (auto i = _elements.begin(); i != _elements.end();) {
 				const auto id = i->item->fullId();
-				if (uploadedCopy.contains(id)
-					|| uploadingCopy.contains(id)) {
+				if (uploadedCopy.contains(id) && !activeIds.contains(id)) {
 					i = _elements.erase(i);
 				} else {
 					++i;
@@ -492,8 +548,7 @@ void Provider::refreshViewer() {
 			}
 			for (auto it = _layouts.begin(); it != _layouts.end();) {
 				const auto id = it->first->fullId();
-				if (uploadedCopy.contains(id)
-					|| uploadingCopy.contains(id)) {
+				if (uploadedCopy.contains(id) && !activeIds.contains(id)) {
 					_layoutRemoved.fire(it->second.item.get());
 					it = _layouts.erase(it);
 				} else {
@@ -573,13 +628,6 @@ void Provider::refreshViewer() {
 void Provider::refreshEF(
 		not_null<Main::Session*> session,
 		const std::vector<EnhancedForward::JobSnapshot> &jobs) {
-	const auto start = crl::now();
-	const auto guard = gsl::finally([&] {
-		const auto took = crl::now() - start;
-		if (took >= 16) {
-			LOG(("EF_FREEZE: refreshEF took %1ms").arg(took));
-		}
-	});
 	auto jobItems = base::flat_set<not_null<const HistoryItem*>>();
 	auto allSourceIds = base::flat_set<FullMsgId>();
 	auto unresolved = std::vector<FullMsgId>();
@@ -596,6 +644,7 @@ void Provider::refreshEF(
 		if (job.progress.state == EnhancedForward::State::Cancelled) {
 			continue;
 		}
+		const auto active = job.active && !job.finished;
 		for (auto i = 0; i < int(job.progress.sourceIds.size()); i++) {
 			if (int(job.progress.items.size()) > i
 				&& (job.progress.items[i].cancelled
@@ -603,6 +652,15 @@ void Provider::refreshEF(
 				continue;
 			}
 			const auto srcId = job.progress.sourceIds[i];
+			const auto pending = (active || job.resumable)
+				&& int(job.progress.items.size()) > i
+				&& job.progress.items[i].state
+					== EnhancedForward::ItemState::Pending;
+			if (pending) {
+				_efPending.emplace(srcId);
+			} else {
+				_efPending.remove(srcId);
+			}
 			allSourceIds.emplace(srcId);
 			const auto message = session->data().message(srcId);
 			if (!message) {
@@ -665,8 +723,7 @@ void Provider::refreshEF(
 			}
 			_fetchingEFResolve.emplace(id);
 			toFetch.push_back(id);
-		}
-		if (!toFetch.empty()) {
+		}		if (!toFetch.empty()) {
 			const auto weak = base::make_weak(this);
 			EnhancedForward::EnsureForwardSourceMessages(
 				session,
@@ -686,9 +743,16 @@ void Provider::refreshEF(
 					weak->refreshEF(
 						session,
 						EnhancedForward::MemoryJobs(session));
+					EnhancedForward::notifyTransfersUpdated();
 				});
 		}
 	}
+	for (auto &pair : _layouts) {
+		if (allSourceIds.contains(pair.first->fullId())) {
+			pair.second.item->itemDataChanged();
+		}
+	}
+	updateAvailability();
 }
 
 void Provider::addFinishedUpload(
@@ -850,6 +914,7 @@ void Provider::remove(not_null<const HistoryItem*> item) {
 	_downloading.remove(item);
 	_enhancedForward.remove(item);
 	_downloaded.remove(item);
+	_efPending.remove(item->fullId());
 	const auto proj = [&](const Element &element) {
 		if (element.item != item) {
 			return false;
@@ -1164,6 +1229,8 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 	}
 	if (const auto file = media ? media->document() : nullptr) {
 		auto &songSt = st::overviewFileLayout;
+		const auto srcId = element.item->fullId();
+		const auto session = &_controller->session();
 		return std::make_unique<Document>(
 			delegate,
 			element.item,
@@ -1171,6 +1238,33 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 				.document = file,
 				.dateOverride = Data::DateFromDownloadDate(element.started),
 				.forceFileLayout = true,
+				.forceCancelCheck = [this, id = srcId] {
+					if (_efPending.contains(id)
+						|| _efTransferring.contains(id)) {
+						return true;
+					}
+					const auto item = _controller->session().data().message(id);
+					if (!item) {
+						return false;
+					}
+					const auto media = item->media();
+					const auto doc = media ? media->document() : nullptr;
+					return doc && (doc->uploadingData != nullptr);
+				},
+				.savedProgress = [session, srcId](qint64 *r, qint64 *t) {
+					const auto bytes = EnhancedForward::persistedItemBytes(
+						session,
+						srcId);
+					const auto total = EnhancedForward::persistedItemFileSize(
+						session,
+						srcId);
+					if (!bytes || !total || *total <= 0) {
+						return false;
+					}
+					*r = std::min(*bytes, *total);
+					*t = *total;
+					return true;
+				},
 			},
 			songSt);
 	}

@@ -69,7 +69,6 @@ public:
 
 	void firstShow();
 	void finishFirstShow();
-	void showEnhancedForwardQuitConfirm();
 
 	void setupPasscodeLock();
 	void clearPasscodeLock();

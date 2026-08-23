@@ -520,58 +520,6 @@ void Session::addWindow(not_null<Window::SessionController*> controller) {
 	}) | rpl::distinct_until_changed());
 }
 
-bool Session::uploadsInProgress() const {
-	return !!_uploader->currentUploadId();
-}
-
-void Session::uploadsStopWithConfirmation(Fn<void()> done) {
-	const auto id = _uploader->currentUploadId();
-	const auto message = data().message(id);
-	const auto exists = (message != nullptr);
-	const auto window = message
-		? Core::App().windowFor(message->history()->peer)
-		: Core::App().activePrimaryWindow();
-	if (!window) {
-		done();
-		return;
-	}
-	auto box = Box([=](not_null<Ui::GenericBox*> box) {
-		box->addRow(
-			object_ptr<Ui::FlatLabel>(
-				box.get(),
-				tr::lng_upload_sure_stop(),
-				st::boxLabel),
-			st::boxPadding + QMargins(0, 0, 0, st::boxPadding.bottom()));
-		box->setStyle(st::defaultBox);
-		box->addButton(tr::lng_selected_upload_stop(), [=] {
-			box->closeBox();
-
-			uploadsStop();
-			if (done) {
-				done();
-			}
-		}, st::attentionBoxButton);
-		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
-		if (exists) {
-			box->addLeftButton(tr::lng_upload_show_file(), [=] {
-				box->closeBox();
-
-				if (const auto item = data().message(id)) {
-					if (const auto window = tryResolveWindow()) {
-						window->showMessage(item);
-					}
-				}
-			});
-		}
-	});
-	window->show(std::move(box));
-	window->activate();
-}
-
-void Session::uploadsStop() {
-	_uploader->cancelAll();
-}
-
 auto Session::windows() const
 -> const base::flat_set<not_null<Window::SessionController*>> & {
 	return _windows;

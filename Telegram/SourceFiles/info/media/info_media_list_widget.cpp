@@ -103,6 +103,7 @@ struct TmEfInfo {
 	int index = -1;
 	bool active = false;
 	bool finished = false;
+	bool resumable = false;
 	bool valid = false;
 };
 
@@ -118,6 +119,7 @@ struct TmEfInfo {
 					.index = i,
 					.active = job.active,
 					.finished = job.finished,
+					.resumable = job.resumable,
 					.valid = true,
 				});
 		}
@@ -186,8 +188,7 @@ void TmCancelItems(
 				session->uploader().cancel(item->fullId());
 				break;
 		case TmItemKind::EnhancedForwardActive: {
-				const auto ef = TmFindEf(efLookup, item);
-				EnhancedForward::cancelItem(session, ef.peer, ef.index);
+				EnhancedForward::cancelItemByMessage(session, item);
 				break;
 			}
 			default:
@@ -1453,19 +1454,24 @@ void ListWidget::showContextMenu(
 	if (isEfItem && overSelected == SelectionState::NoSelectedItems) {
 		const auto session = &_controller->session();
 		const auto ef = TmFindEf(TmBuildEfLookup(session), item);
-		if (ef.valid && ef.active) {
+		if (ef.valid && (ef.active || ef.resumable)) {
 			_contextMenu->addAction(
 				tr::lng_tm_item_cancel_forward(tr::now),
 				crl::guard(this, [=] {
 					const auto window = _controller->parentController();
 					setActionBoxWeak(window->show(Ui::MakeConfirmBox({
-						.text = tr::lng_enhanced_forward_cancel_confirm(tr::now),
+						.text = tr::lng_tm_item_cancel_forward_confirm(
+							tr::now,
+							lt_count,
+							1),
 						.confirmed = [=](Fn<void()> close) {
 							close();
-							EnhancedForward::cancelItem(session, ef.peer, ef.index);
+							EnhancedForward::cancelItemByMessage(
+								session,
+								item);
 						},
-						.confirmText = tr::lng_enhanced_forward_cancel_yes(tr::now),
-						.cancelText = tr::lng_enhanced_forward_cancel_no(tr::now),
+						.confirmText = tr::lng_box_yes(tr::now),
+						.cancelText = tr::lng_box_no(tr::now),
 						.confirmStyle = &st::attentionBoxButton,
 					})));
 				}),
@@ -1494,19 +1500,23 @@ void ListWidget::showContextMenu(
 	if (lnkPhoto || lnkDocument) {
 		if (lnkPhoto) {
 		} else if (!isEfItem) {
-			if (lnkDocument->loading()) {
+			if (lnkDocument->loading()
+				&& overSelected == SelectionState::NoSelectedItems) {
 				_contextMenu->addAction(
-					tr::lng_context_cancel_download(tr::now),
+					tr::lng_tm_item_cancel_download(tr::now),
 					crl::guard(this, [=] {
 						const auto window = _controller->parentController();
 						setActionBoxWeak(window->show(Ui::MakeConfirmBox({
-							.text = tr::lng_tm_item_cancel_download_confirm(tr::now),
+							.text = tr::lng_tm_item_cancel_download_confirm(
+								tr::now,
+								lt_count,
+								1),
 							.confirmed = [=](Fn<void()> close) {
 								close();
 								lnkDocument->cancel();
 							},
-							.confirmText = tr::lng_download_cancel_yes(tr::now),
-							.cancelText = tr::lng_download_cancel_no(tr::now),
+							.confirmText = tr::lng_box_yes(tr::now),
+							.cancelText = tr::lng_box_no(tr::now),
 							.confirmStyle = &st::attentionBoxButton,
 						})));
 					}),
@@ -1708,18 +1718,21 @@ void ListWidget::showContextMenu(
 			if (isUpload) {
 				const auto itemId = item->fullId();
 				_contextMenu->addAction(
-					tr::lng_context_cancel_upload(tr::now),
+					tr::lng_tm_item_cancel_upload(tr::now),
 					crl::guard(this, [=] {
 						const auto window = _controller->parentController();
 						setActionBoxWeak(window->show(Ui::MakeConfirmBox({
-							.text = tr::lng_tm_item_cancel_upload_confirm(tr::now),
+							.text = tr::lng_tm_item_cancel_upload_confirm(
+								tr::now,
+								lt_count,
+								1),
 							.confirmed = [=](Fn<void()> close) {
 								close();
 								_controller->session().uploader().cancel(
 									itemId);
 							},
-							.confirmText = tr::lng_upload_cancel_yes(tr::now),
-							.cancelText = tr::lng_upload_cancel_no(tr::now),
+							.confirmText = tr::lng_box_yes(tr::now),
+							.cancelText = tr::lng_box_no(tr::now),
 							.confirmStyle = &st::attentionBoxButton,
 						})));
 					}),
@@ -1745,8 +1758,10 @@ void ListWidget::showContextMenu(
 							const auto itemId = globalId.itemId;
 							setActionBoxWeak(_controller->parentController()->show(
 								Ui::MakeConfirmBox({
-									.text = tr::lng_downloads_delete_sure_one(
-										tr::now),
+									.text = tr::lng_tm_ul_delete_sure(
+										tr::now,
+										lt_count,
+										1),
 									.confirmed = [=](Fn<void()> close) {
 										close();
 										uploader->deleteFinishedUpload(itemId);
@@ -2123,19 +2138,20 @@ void ListWidget::deleteItems(SelectedItems &&items, Fn<void()> confirmed) {
 		return;
 	} else if (_controller->isDownloads()) {
 		const auto count = items.list.size();
-		const auto allInCloud = ranges::all_of(items.list, [](
+		const auto allUploads = ranges::all_of(items.list, [&](
 				const SelectedItem &entry) {
-			const auto item = MessageByGlobalId(entry.globalId);
-			return item && item->isHistoryEntry();
+			return _controller->session().uploader()
+				.wasUploaded(entry.globalId.itemId);
 		});
-		const auto phrase = (count == 1)
-			? tr::lng_downloads_delete_sure_one(tr::now)
-			: tr::lng_downloads_delete_sure(tr::now, lt_count, count);
-		const auto added = !allInCloud
-			? QString()
-			: (count == 1
-				? tr::lng_downloads_delete_in_cloud_one(tr::now)
-				: tr::lng_downloads_delete_in_cloud(tr::now));
+		const auto phrase = allUploads
+			? tr::lng_tm_ul_delete_sure(
+				tr::now,
+				lt_count,
+				count)
+			: tr::lng_tm_dl_delete_sure(
+				tr::now,
+				lt_count,
+				count);
 		const auto deleteSure = [=] {
 			Ui::PostponeCall(this, [=] {
 				if (const auto box = _actionBoxWeak.get()) {
@@ -2166,7 +2182,7 @@ void ListWidget::deleteItems(SelectedItems &&items, Fn<void()> confirmed) {
 			}
 		};
 		setActionBoxWeak(window->show(Ui::MakeConfirmBox({
-			.text = phrase + (added.isEmpty() ? QString() : "\n\n" + added),
+			.text = phrase,
 			.confirmed = deleteSure,
 			.confirmText = tr::lng_box_yes(tr::now),
 			.cancelText = tr::lng_box_no(tr::now),
@@ -2819,6 +2835,43 @@ void ListWidget::mouseActionFinish(
 	_wasSelectedText = false;
 	if (activated) {
 		mouseActionCancel();
+		if (const auto downloadsProvider = _controller->isDownloads()
+			? static_cast<Info::Downloads::Provider*>(_provider.get())
+			: nullptr) {
+			if (const auto item = pressState.item) {
+				if (downloadsProvider->isEnhancedForward(item)
+					&& (dynamic_cast<DocumentCancelClickHandler*>(
+							activated.get())
+						|| dynamic_cast<DocumentSaveClickHandler*>(
+							activated.get()))) {
+					const auto session = &_controller->session();
+					const auto ef = TmFindEf(
+						TmBuildEfLookup(session),
+						item);
+					if (ef.valid
+						&& (ef.active || ef.resumable)
+						&& !ef.finished) {
+						const auto window = _controller->parentController();
+						Ui::ConfirmBoxArgs args;
+						args.text = tr::lng_tm_fw_cancel_confirm(
+							tr::now);
+						args.confirmed = [=](Fn<void()> close) {
+							close();
+							EnhancedForward::cancelItemByMessage(
+								session,
+								item);
+						};
+						args.confirmText = tr::lng_box_yes(tr::now);
+						args.cancelText = tr::lng_box_no(tr::now);
+						args.confirmStyle = &st::attentionBoxButton;
+						setActionBoxWeak(
+							window->show(Ui::MakeConfirmBox(
+								std::move(args))));
+						return;
+					}
+				}
+			}
+		}
 		const auto found = findItemByItem(pressState.item);
 		const auto fullId = found
 			? found->layout->getItem()->fullId()

@@ -1142,6 +1142,9 @@ Document::Document(
 , _st(st)
 , _generic(::Layout::DocumentGenericPreview::Create(_data))
 , _forceFileLayout(fields.forceFileLayout)
+, _forceCancel(fields.forceCancel)
+, _forceCancelCheck(fields.forceCancelCheck)
+, _savedProgress(fields.savedProgress)
 , _date(langDateTime(base::unixtime::parse(fields.dateOverride
 	? fields.dateOverride
 	: parent->date())))
@@ -1211,6 +1214,10 @@ void Document::initDimensions() {
 	}
 }
 
+bool Document::forceCancelShown() const {
+	return _forceCancelCheck ? _forceCancelCheck() : _forceCancel;
+}
+
 void Document::paint(Painter &p, const QRect &clip, TextSelection selection, const PaintContext *context) {
 	ensureDataMediaCreated();
 
@@ -1248,7 +1255,9 @@ void Document::paint(Painter &p, const QRect &clip, TextSelection selection, con
 		auto inner = style::rtlrect(_st.songPadding.left(), _st.songPadding.top(), _st.songThumbSize, _st.songThumbSize, _width);
 		if (clip.intersects(inner)) {
 			const auto isLoading = (!cornerDownload
-				&& (_data->loading() || _data->uploading()));
+				&& (_data->loading()
+					|| _data->uploading()
+					|| (forceCancelShown() && !loaded)));
 			p.setPen(Qt::NoPen);
 
 			using namespace HistoryView;
@@ -1380,7 +1389,7 @@ void Document::paint(Painter &p, const QRect &clip, TextSelection selection, con
 					st::roundRadiusSmall);
 			}
 
-			if (radial || (!loaded && !_data->loading())) {
+			if (radial || (forceCancelShown() && !loaded) || (!loaded && !_data->loading())) {
 				QRect inner(rthumb.x() + (rthumb.width() - _st.songThumbSize) / 2, rthumb.y() + (rthumb.height() - _st.songThumbSize) / 2, _st.songThumbSize, _st.songThumbSize);
 				if (clip.intersects(inner)) {
 					auto radialOpacity = (radial && loaded && !_data->uploading()) ? _radial->opacity() : 1;
@@ -1390,7 +1399,7 @@ void Document::paint(Painter &p, const QRect &clip, TextSelection selection, con
 							? st::msgDateImgBgSelected
 							: _generic.selected);
 					} else {
-						auto over = ClickHandler::showAsActive(_data->loading() ? _cancell : _savel);
+						auto over = ClickHandler::showAsActive((_data->loading() || (forceCancelShown() && !loaded)) ? _cancell : _savel);
 						p.setBrush(anim::brush(
 							wthumb ? st::msgDateImgBg : _generic.dark,
 							wthumb ? st::msgDateImgBgOver : _generic.over,
@@ -1405,7 +1414,7 @@ void Document::paint(Painter &p, const QRect &clip, TextSelection selection, con
 
 					p.setOpacity(radialOpacity);
 					auto icon = ([loaded, this, selected] {
-						if (loaded || _data->loading()) {
+						if (loaded || _data->loading() || (forceCancelShown() && !loaded)) {
 							return &(selected ? st::historyFileThumbCancelSelected : st::historyFileThumbCancel);
 						}
 						return &(selected ? st::historyFileThumbDownloadSelected : st::historyFileThumbDownload);
@@ -1536,7 +1545,9 @@ TextState Document::getState(
 			_width);
 		if (inner.contains(point)) {
 			const auto link = (!downloadInCorner()
-				&& (_data->loading() || _data->uploading()))
+				&& (_data->loading()
+					|| _data->uploading()
+					|| (forceCancelShown() && !loaded)))
 				? _cancell
 				: (loaded || _dataMedia->canBePlayed())
 				? _openl
@@ -1569,7 +1580,9 @@ TextState Document::getState(
 			_width);
 
 		if (rthumb.contains(point)) {
-			const auto link = (_data->loading() || _data->uploading())
+			const auto link = (_data->loading()
+				|| _data->uploading()
+				|| (forceCancelShown() && !loaded))
 				? _cancell
 				: loaded
 				? _openl
@@ -1672,6 +1685,16 @@ bool Document::updateStatusText() {
 		statusSize = Ui::FileStatusSizeLoaded;
 	} else {
 		statusSize = Ui::FileStatusSizeReady;
+	}
+	if (statusSize == Ui::FileStatusSizeReady && _savedProgress) {
+		qint64 ready = 0;
+		qint64 total = 0;
+		if (_savedProgress(&ready, &total)
+			&& ready > 0
+			&& total > 0
+			&& !dataLoaded()) {
+			statusSize = std::clamp<qint64>(ready, 0, _data->size);
+		}
 	}
 
 	const auto isSong = songLayout();

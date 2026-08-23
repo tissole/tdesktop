@@ -1925,7 +1925,7 @@ void SetupDataStorage(
 
 	AddButtonWithIcon(
 		container,
-		tr::lng_transfer_manager_title(),
+		tr::lng_tm_title(),
 		st::settingsButton,
 		{ &st::menuIconTransfer }
 	)->setClickedCallback([=] {

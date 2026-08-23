@@ -174,7 +174,7 @@ void BuildDataStorageSection(SectionBuilder &builder) {
 
 	builder.addButton({
 		.id = u"advanced/downloads"_q,
-		.title = tr::lng_transfer_manager_title(),
+		.title = tr::lng_tm_title(),
 		.icon = { &st::menuIconTransfer },
 		.onClick = [=] {
 			if (controller) {

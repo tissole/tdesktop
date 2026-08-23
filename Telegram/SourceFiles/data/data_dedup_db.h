@@ -24,16 +24,17 @@ struct DedupRecord {
 };
 
 struct ResumeDlRecord {
+	uint64 sessionId = 0;
 	uint64 peerId = 0;
-	uint64 peerAccessHash = 0;
 	int64 msgId = 0;
 	QString path;
+	qint64 fileSize = 0;
 };
 
 struct ResumeUlRecord {
+	uint64 sessionId = 0;
 	uint64 peerId = 0;
 	QString path;
-	int64 size = 0;
 	int partsSent = 0;
 	int64 sentSize = 0;
 	uint64 fileId = 0;
@@ -41,6 +42,7 @@ struct ResumeUlRecord {
 };
 
 struct EfResumeItem {
+	uint64 sessionId = 0;
 	QString jobId;
 	int itemIndex = 0;
 	PeerId peerId;
@@ -49,11 +51,9 @@ struct EfResumeItem {
 	QString localPath;
 	uint64 fileId = 0;
 	int uploadedParts = 0;
-	int64 fileSize = 0;
 	QByteArray fileHash;
 	uint64 mediaId = 0;
-	int64 createdAt = 0;
-	int64 updatedAt = 0;
+	qint64 fileSize = 0;
 };
 
 class DedupDb {
@@ -85,6 +85,9 @@ public:
 	[[nodiscard]] bool containsHash(
 		Table table,
 		const QByteArray &hash) const;
+	[[nodiscard]] bool containsFinishedHash(
+		Table table,
+		const QByteArray &hash) const;
 	// Re-keys the row for an upload from the local temporary document id to
 	// the definitive server-returned id (document or photo). Keeps the hash.
 	void rekey(
@@ -95,6 +98,7 @@ public:
 		Table table,
 		const QByteArray &hash,
 		const QString &status);
+	void removeUnfinishedByHash(Table table, const QByteArray &hash);
 	[[nodiscard]] QByteArray hashForDocId(
 		Table table,
 		uint64 documentId) const;
@@ -111,23 +115,36 @@ public:
 	[[nodiscard]] std::vector<DedupRecord> loadAll(Table table) const;
 
 	void insertResumeDl(const ResumeDlRecord &record);
-	void removeResumeDl(uint64 peerId, int64 msgId);
+	void removeResumeDl(uint64 sessionId, uint64 peerId, int64 msgId);
 	void clearResumeDl();
 	[[nodiscard]] std::vector<ResumeDlRecord> loadAllResumeDl() const;
 
 	void insertResumeUl(const ResumeUlRecord &record);
-	void removeResumeUl(uint64 peerId, const QString &path);
-	void clearResumeUl();
-	[[nodiscard]] std::vector<ResumeUlRecord> loadAllResumeUl() const;
+	void removeResumeUl(
+		uint64 sessionId,
+		uint64 peerId,
+		const QString &path);
+	void clearResumeUl(uint64 sessionId);
+	[[nodiscard]] std::vector<ResumeUlRecord> loadAllResumeUl(
+		uint64 sessionId) const;
 
 	void insertEfResumeItem(const EfResumeItem &item);
-	void removeEfResumeItem(const QString &jobId, int itemIndex);
+	void removeEfResumeItem(
+		const QString &jobId,
+		int itemIndex);
+	void removeEfResumeBySource(
+		uint64 sessionId,
+		PeerId destPeerId,
+		MsgId sourceMsgId);
 	void clearEfResumeForPeer(PeerId peerId);
 	void clearEfResumeJob(const QString &jobId);
 	[[nodiscard]] std::vector<EfResumeItem> loadEfResumeItemsForPeer(
+		uint64 sessionId,
 		PeerId peerId) const;
-	[[nodiscard]] std::vector<EfResumeItem> loadUnfinishedEfResumeItems() const;
-	[[nodiscard]] std::vector<EfResumeItem> loadFinishedEfResumeItems() const;
+	[[nodiscard]] std::vector<EfResumeItem> loadUnfinishedEfResumeItems(
+		uint64 sessionId) const;
+	[[nodiscard]] std::vector<EfResumeItem> loadFinishedEfResumeItems(
+		uint64 sessionId) const;
 	void clearDoneEfResumeForPeer(PeerId peerId);
 
 	// Finished forwarded items: one flat row per source message, persisted so

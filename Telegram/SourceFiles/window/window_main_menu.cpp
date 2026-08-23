@@ -756,7 +756,7 @@ void MainMenu::setupMenu() {
 	});
 
 	addAction(
-		tr::lng_transfer_manager_title(),
+		tr::lng_tm_title(),
 		{ &st::menuIconTransfer }
 	)->setClickedCallback([=] {
 		controller->showSection(

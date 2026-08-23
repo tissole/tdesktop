@@ -111,11 +111,9 @@ MainWindow::MainWindow(not_null<Window::Controller*> controller)
 	Core::App().domain().activeSessionChanges(
 	) | rpl::on_next([=](Main::Session *session) {
 		if (session) {
-			showUnfinishedForwards(session);
 			if (!_resumeShown) {
 				_resumeShown = true;
-				Core::App().downloadManager().showResumeUnfinished(session);
-				session->uploader().showResumeUnfinished();
+				Core::App().showUnfinishedOperations();
 			}
 		}
 	}, lifetime());
@@ -750,95 +748,6 @@ void MainWindow::closeEvent(QCloseEvent *e) {
 	if (!hasAuth || !hideNoQuit()) {
 		Core::Quit();
 	}
-}
-
-void MainWindow::showUnfinishedForwards(not_null<Main::Session*> session) {
-	const auto jobs = EnhancedForward::GetUnfinishedJobs();
-	if (jobs.empty()) return;
-
-	for (const auto &job : jobs) {
-		const auto srcPeer = session->data().peerLoaded(job.srcId);
-		const auto chatName = srcPeer
-			? srcPeer->name()
-			: u"chat"_q;
-
-		auto box = Box([=](not_null<Ui::GenericBox*> box) {
-			box->addRow(object_ptr<Ui::FlatLabel>(
-				box.get(),
-				tr::lng_enhanced_forward_unfinished(
-					tr::now,
-					lt_chat_name,
-					chatName),
-				st::boxLabel));
-
-			box->addRow(object_ptr<Ui::FlatLabel>(
-				box.get(),
-				u"%1/%2 forwarded"_q
-					.arg(job.sent)
-					.arg(job.total),
-				st::defaultFlatLabel));
-
-			box->addButton(
-				tr::lng_enhanced_forward_resume(),
-				[=] {
-				session->api().startResumeForward(
-					job.srcId, job.dstId, session);
-				box->closeBox();
-			});
-			box->addButton(
-				tr::lng_enhanced_forward_cancel(),
-				[=] {
-				controller().show(Ui::MakeConfirmBox({
-					.text = tr::lng_enhanced_forward_cancel_confirm(tr::now),
-					.confirmed = [=] {
-						EnhancedForward::CleanupPartialFilesForPeer(session, job.dstId);
-						box->closeBox();
-					},
-					.confirmText = tr::lng_enhanced_forward_cancel_yes(tr::now),
-					.cancelText = tr::lng_enhanced_forward_cancel_no(tr::now),
-				}));
-			});
-			box->addButton(
-				tr::lng_enhanced_forward_later(),
-				[=] {
-				box->closeBox();
-			});
-		});
-		controller().show(std::move(box));
-	}
-}
-
-void MainWindow::showEnhancedForwardQuitConfirm() {
-	const auto active = EnhancedForward::activeJobPeer();
-	if (!active.has_value()) {
-		return;
-	}
-	const auto peer = *active;
-	const auto session = sessionController()
-		? &sessionController()->session()
-		: nullptr;
-	if (!session) {
-		return;
-	}
-	EnhancedForward::saveProgressForPeer(peer, session);
-	if (EnhancedForward::isPaused(peer)) {
-		Core::QuitAttempt();
-		return;
-	}
-	Ui::ConfirmBoxArgs args;
-	args.text = tr::lng_enhanced_forward_close_confirm(tr::now);
-	args.confirmText = tr::lng_enhanced_forward_pause(tr::now);
-	args.cancelText = tr::lng_enhanced_forward_cancel(tr::now);
-	args.confirmStyle = &st::defaultBoxButton;
-	args.cancelled = [=] {
-		EnhancedForward::cancelForward(peer, session);
-		Core::QuitAttempt();
-	};
-	args.confirmed = [=] {
-		EnhancedForward::pauseForward(peer, session);
-		Core::QuitAttempt();
-	};
-	controller().show(Ui::MakeConfirmBox(std::move(args)));
 }
 
 void MainWindow::updateControlsGeometry() {

@@ -651,8 +651,4 @@ rpl::lifetime &Controller::lifetime() {
 	return _lifetime;
 }
 
-void Controller::showEnhancedForwardQuitConfirm() {
-	widget()->showEnhancedForwardQuitConfirm();
-}
-
 } // namespace Window

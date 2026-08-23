@@ -140,10 +140,7 @@ public:
 	void unpause();
 	void stopSessions();
 
-	[[nodiscard]] bool hasUnfinishedResume() const;
 	[[nodiscard]] int pendingResumeCount() const;
-	void showResumeUnfinished();
-	void showQuitUnfinished(not_null<Window::Controller*> window, Fn<void()> quit);
 
 	[[nodiscard]] rpl::producer<> loadingListChanges() const;
 	void notifyListChanged();
@@ -152,6 +149,7 @@ public:
 	[[nodiscard]] bool anyUploads() const;
 	[[nodiscard]] int anyFinishedUploads() const;
 	[[nodiscard]] bool anyUploadsPaused() const;
+	[[nodiscard]] bool anyActiveUploads() const;
 	[[nodiscard]] bool isPaused() const;
 	[[nodiscard]] int queueSize() const;
 	[[nodiscard]] bool wasUploaded(FullMsgId itemId) const;
@@ -169,6 +167,7 @@ public:
 	[[nodiscard]] QString firstPendingUploadName() const;
 	void pauseAllUploads();
 	void resumeAllUploads();
+	void queueResumeForLater();
 
 	struct UiUploadInfo {
 		FullMsgId itemId;
@@ -234,7 +233,7 @@ private:
 	void sendPreparedRequest(Prepared &&prepared, Request &&request);
 
 	void maybeFinishFront();
-	void finishFront();
+	void finishEntry(std::vector<Entry>::iterator i);
 
 	void partLoaded(const MTPBool &result, mtpRequestId requestId);
 	void partFailed(const MTP::Error &error, mtpRequestId requestId);
@@ -299,7 +298,6 @@ private:
 	base::flat_map<FullMsgId, FullMsgId> _videoIdToCoverId;
 	base::flat_map<FullMsgId, UploadedMedia> _videoWaitingCover;
 
-	FullMsgId _pausedId;
 	base::Timer _nextTimer, _stopSessionsTimer;
 
 	rpl::event_stream<UploadedMedia> _photoReady;

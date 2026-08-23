@@ -126,7 +126,6 @@ public:
 	void clearIfFinished();
 	void deleteFiles(const std::vector<GlobalMsgId> &ids);
 	void deleteAll();
-	[[nodiscard]] bool loadedHasNonCloudFile() const;
 
 	[[nodiscard]] auto loadingList() const
 		-> ranges::any_view<const DownloadingId*, ranges::category::input>;
@@ -137,10 +136,7 @@ public:
 
 	[[nodiscard]] bool loadingInProgress(
 		Main::Session *onlyInSession = nullptr) const;
-	void loadingStopWithConfirmation(
-		Fn<void()> callback,
-		Main::Session *onlyInSession = nullptr);
-	void quitWithConfirmation(Fn<void()> quit);
+	void loadingStop(Main::Session *onlyInSession);
 
 	void pause(not_null<const HistoryItem*> item);
 	void resume(not_null<const HistoryItem*> item);
@@ -152,6 +148,7 @@ public:
 	// click can't silently drop a download.
 	void cancelWithConfirmation(not_null<const HistoryItem*> item);
 	void pauseAll();
+	void pauseAll(not_null<Main::Session*> session);
 	void resumeAll();
 	void cancelAll();
 	void clearFinishedLoading();
@@ -168,9 +165,9 @@ public:
 		-> rpl::producer<not_null<const HistoryItem*>>;
 	[[nodiscard]] rpl::producer<> loadedResolveDone() const;
 
-	[[nodiscard]] bool hasUnfinishedResume(
-		not_null<Main::Session*> session) const;
-	void showResumeUnfinished(not_null<Main::Session*> session);
+	[[nodiscard]] int resumeDlCount() const;
+	void startAllResumeDownloads(bool startPaused);
+	void cancelAllResumeDownloads();
 	void clearFingerprintCache();
 
 	// Decides whether downloading the given remote document should be skipped
@@ -184,7 +181,7 @@ public:
 		Fn<void(bool)> done);
 
 	[[nodiscard]] DedupDb &dedupDb() const;
-
+	DedupDb &ensureDedupDb() const;
 	// Counts a duplicate that was skipped in a flow and shows one aggregated
 	// toast for the whole batch (e.g. "12 duplicate downloads"). A short
 	// debounce merges consecutive skips so a multi-file selection produces a
@@ -250,7 +247,6 @@ private:
 
 	[[nodiscard]] HistoryItem *lookupLoadingItem(
 		Main::Session *onlyInSession) const;
-	void loadingStop(Main::Session *onlyInSession);
 
 	void finishFilesDelete(DeleteFilesDescriptor &&descriptor);
 	void writePostponed(not_null<Main::Session*> session);
@@ -260,7 +256,6 @@ private:
 		not_null<Main::Session*> session,
 		int *jobId = nullptr) const;
 
-	DedupDb &ensureDedupDb() const;
 	void saveToDisk();
 	void saveIfIdle();
 	[[nodiscard]] QString dedupDbPath() const;

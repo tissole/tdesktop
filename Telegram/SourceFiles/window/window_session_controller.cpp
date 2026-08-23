@@ -3082,7 +3082,7 @@ void SessionController::cancelUploadLayer(not_null<HistoryItem*> item) {
 	};
 
 	show(Ui::MakeConfirmBox({
-		.text = tr::lng_selected_cancel_sure_this(),
+		.text = tr::lng_tm_ul_cancel_confirm(),
 		.confirmed = stopUpload,
 		.cancelled = continueUpload,
 		.confirmText = tr::lng_box_yes(),

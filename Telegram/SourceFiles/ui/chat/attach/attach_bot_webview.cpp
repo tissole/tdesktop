@@ -747,7 +747,7 @@ bool Panel::showWebview(Args &&args, const Webview::ThemeParams &params) {
 				_delegate->botDownloadsAction(id, type);
 			};
 			callback(Ui::Menu::MenuCallback::Args{
-				.text = tr::lng_downloads_section(tr::now),
+				.text = tr::lng_tm_dl_section(tr::now),
 				.icon = &st::menuIconDownload,
 				.fillSubmenu = FillAttachBotDownloadsSubmenu(
 					std::move(value),

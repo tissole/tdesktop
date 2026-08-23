@@ -5238,51 +5238,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_translate_cocoon_text_link" = "t.me/cocoon?direct";
 "lng_translate_cocoon_done" = "Understood";
 
-"lng_downloads_section" = "Downloads";
-"lng_uploads_section" = "Uploads";
-"lng_transfer_manager_title" = "Transfer Manager";
-"lng_downloads_tab_all" = "All";
-"lng_downloads_view_in_chat" = "View in chat";
-"lng_downloads_view_in_section" = "View in downloads";
-"lng_downloads_delete_sure_one" = "Do you want to delete this file?";
-"lng_downloads_delete_sure_all" = "Do you want to delete all files?";
-"lng_downloads_delete_sure#one" = "Do you want to delete {count} file?";
-"lng_downloads_delete_sure#other" = "Do you want to delete {count} files?";
-"lng_downloads_delete_in_cloud_one" = "It will be deleted from your disk, but will remain accessible in the cloud.";
-"lng_downloads_delete_in_cloud" = "They will be deleted from your disk, but will remain accessible in the cloud.";
-"lng_downloads_delete_all_downloads" = "Delete downloads from disk";
-"lng_downloads_pause_all" = "Pause downloads";
-"lng_downloads_resume_all" = "Resume downloads";
-"lng_downloads_cancel_all" = "Cancel downloads";
-"lng_downloads_clear_list" = "Clear downloads from UI";
-"lng_downloads_quit_confirm#one" = "You have unfinished {count} download. Do you want to continue downloading, cancel or pause?";
-"lng_downloads_quit_confirm#other" = "You have unfinished {count} downloads. Do you want to continue downloading, cancel or pause?";
-"lng_downloads_quit_pause" = "Pause";
-"lng_downloads_quit_cancel" = "Cancel";
-"lng_downloads_quit_continue" = "Continue";
-"lng_download_cancel_confirm" = "Are you sure you want to cancel downloading?";
-"lng_download_cancel_yes" = "Yes";
-"lng_download_cancel_no" = "No";
 
-"lng_downloads_resume_unfinished#one" = "You have {count} unfinished download. Do you want to resume it, cancel it or decide later?";
-"lng_downloads_resume_unfinished#other" = "You have {count} unfinished downloads. Do you want to resume them, cancel them or decide later?";
-"lng_downloads_resume_yes" = "Resume";
-"lng_downloads_resume_cancel" = "Cancel";
-"lng_downloads_resume_later" = "Later";
 
-"lng_upload_resume_multiple#one" = "You have {count} unfinished upload. Do you want to resume it, cancel it or decide later?";
-"lng_upload_resume_multiple#other" = "You have {count} unfinished uploads. Do you want to resume them, cancel them or decide later?";
-"lng_upload_resume_yes" = "Resume";
-"lng_upload_resume_cancel" = "Cancel";
-"lng_upload_resume_later" = "Later";
-"lng_upload_cancel_confirm" = "Are you sure you want to cancel uploading?";
-"lng_upload_cancel_yes" = "Yes";
-"lng_upload_cancel_no" = "No";
-"lng_upload_quit_unfinished#one" = "You have {count} unfinished upload. Do you want to continue uploading, cancel or pause?";
-"lng_upload_quit_unfinished#other" = "You have {count} unfinished uploads. Do you want to continue uploading, cancel or pause?";
-"lng_upload_quit_continue" = "Continue";
-"lng_upload_quit_cancel" = "Cancel";
-"lng_upload_quit_pause" = "Pause";
 
 "lng_send_image_empty" = "File: {name} is empty and can't be sent.";
 "lng_send_images_selected#one" = "{count} image selected";
@@ -5540,8 +5497,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_selected_delete" = "Delete";
 "lng_selected_forward" = "Forward";
 "lng_selected_send_now" = "Send now";
-"lng_selected_cancel_sure_this" = "Cancel uploading?";
-"lng_selected_upload_stop" = "Stop";
 "lng_selected_delete_sure_this" = "Do you want to delete this message?";
 "lng_selected_delete_sure#one" = "Do you want to delete {count} message?";
 "lng_selected_delete_sure#other" = "Do you want to delete {count} messages?";
@@ -8141,92 +8096,114 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 "lng_blocked_user_hint" = "[Blocked User Message]\n";
 // Keys finished
+
 "lng_uploaded" = "Uploaded";
 
-"lng_enhanced_forward_close_confirm" = "An enhanced forward is still in progress. Pause it (so you can resume later) or cancel it?";
-"lng_enhanced_forward_pause" = "Pause";
-"lng_enhanced_forward_cancel" = "Cancel";
-"lng_enhanced_forward_resume" = "Resume";
-"lng_enhanced_forward_upload_failed" = "Failed to upload {file_name}. The enhanced forward has been paused. You can resume it later from the chat controls.";
-"lng_enhanced_forward_cancel_confirm" = "Do you want to cancel forward?";
-"lng_enhanced_forward_cancel_yes" = "Yes";
-"lng_enhanced_forward_cancel_no" = "No";
-"lng_enhanced_forward_forwarding" = "Forwarding {sent}/{total}";
-"lng_enhanced_forward_paused" = "Paused {sent}/{total}";
-"lng_enhanced_forward_complete" = "Forward Complete";
-"lng_enhanced_forward_duplicate_skipped" = "Duplicate skipped";
-"lng_enhanced_forward_duplicates_skipped#one" = "{count} duplicate skipped";
-"lng_enhanced_forward_duplicates_skipped#other" = "{count} duplicates skipped";
-"lng_enhanced_forward_downloaded" = "EF {ready}/{total}";
-"lng_enhanced_forward_unfinished" = "Unfinished forward from {chat_name}";
-"lng_enhanced_forward_later" = "Later";
-"lng_forwards_section" = "Forwards";
-"lng_enhanced_forward_cancel_all" = "Cancel all";
-"lng_enhanced_forward_cancel_all_confirm" = "Do you want to cancel all forwards?";
-"lng_enhanced_forward_clear_all" = "Clear all";
-"lng_enhanced_forward_cancel_item_confirm" = "Do you want to cancel this item? The downloaded file will be deleted.";
-"lng_enhanced_forward_clear" = "Clear";
-"lng_enhanced_forward_clear_selected" = "Clear selected items";
-"lng_enhanced_forward_go_to_source" = "Go to message";
-"lng_enhanced_forward_select" = "Select";
+// Transfer manager - title and counters
+"lng_tm_title" = "Transfer Manager";
+"lng_tm_files_progress" = "{done}/{total} files";
+"lng_tm_counter" = "{done}/{total}";
 
-"lng_download_duplicates_skipped#one" = "{count} duplicate skipped";
-"lng_download_duplicates_skipped#other" = "{count} duplicates skipped";
-"lng_upload_duplicates_skipped#one" = "{count} duplicate skipped";
-"lng_upload_duplicates_skipped#other" = "{count} duplicates skipped";
-"lng_uploads_pause_all" = "Pause uploads";
-"lng_uploads_resume_all" = "Resume uploads";
-"lng_uploads_cancel_all" = "Cancel uploads";
-"lng_uploads_clear_list" = "Clear uploads from UI";
-"lng_uploads_cancel_sure_all" = "Do you want to cancel all uploads? Files will remain on disk";
-"lng_uploads_empty" = "No uploads here yet";
-"lng_uploads_empty_search" = "No uploads found";
-"lng_uploads_view_in_section" = "View in uploads";
-"lng_uploads_view_in_chat" = "View in chat";
-"lng_uploads_choose_section" = "Your uploads";
-"lng_uploads_delete_all" = "Delete uploads from disk";
-"lng_uploads_delete_all_sure" = "Do you want to delete all uploaded files from disk? They will remain accessible in the cloud.";
-"lng_uploads_delete_all_confirm" = "Delete files";
-"lng_uploads_clear_all" = "Clear all";
-"lng_downloads_prefix" = "DL {name}";
-"lng_uploads_prefix" = "UL {name}";
-"lng_tm_fw_pause" = "Pause forwards";
-"lng_tm_fw_resume" = "Resume forwards";
-"lng_tm_fw_cancel" = "Cancel forwards";
+// Transfer manager - downloads
+"lng_tm_dl_section" = "Downloads";
+"lng_tm_dl_prefix" = "DL - {name}";
+"lng_tm_dl_cancel_all" = "Cancel downloads";
+"lng_tm_dl_cancel_all_confirm" = "Cancel all downloads?";
+"lng_tm_dl_cancel_confirm" = "Cancel download?";
+"lng_tm_dl_pause_all" = "Pause downloads";
+"lng_tm_dl_resume_all" = "Resume downloads";
+"lng_tm_dl_delete_all" = "Delete downloads from disk";
+"lng_tm_dl_delete_sure_all" = "Delete all downloads from disk? Files will remain accessible in the cloud";
+"lng_tm_dl_delete_sure#one" = "Delete {count} download from disk? File will remain accessible in the cloud";
+"lng_tm_dl_delete_sure#other" = "Delete {count} downloads from disk? Files will remain accessible in the cloud";
+"lng_tm_dl_clear_list" = "Clear downloads from UI";
+"lng_tm_dl_duplicates_skipped#one" = "{count} duplicate skipped";
+"lng_tm_dl_duplicates_skipped#other" = "{count} duplicates skipped";
+
+// Transfer manager - uploads
+"lng_tm_ul_section" = "Uploads";
+"lng_tm_ul_prefix" = "UL - {name}";
+"lng_tm_ul_cancel_all" = "Cancel uploads";
+"lng_tm_ul_cancel_all_confirm" = "Cancel all uploads?";
+"lng_tm_ul_cancel_confirm" = "Cancel upload?";
+"lng_tm_ul_pause_all" = "Pause uploads";
+"lng_tm_ul_resume_all" = "Resume uploads";
+"lng_tm_ul_delete_all" = "Delete uploads from disk";
+"lng_tm_ul_delete_sure_all" = "Delete all uploads from disk? Files will remain accessible in the cloud";
+"lng_tm_ul_delete_sure#one" = "Delete {count} upload from disk? File will remain accessible in the cloud";
+"lng_tm_ul_delete_sure#other" = "Delete {count} uploads from disk? Files will remain accessible in the cloud";
+"lng_tm_ul_clear_list" = "Clear uploads from UI";
+"lng_tm_ul_duplicates_skipped#one" = "{count} duplicate skipped";
+"lng_tm_ul_duplicates_skipped#other" = "{count} duplicates skipped";
+
+// Transfer manager - forwards
+"lng_tm_fw_section" = "Forwards";
+"lng_tm_fw_prefix" = "FW - {name}";
+"lng_tm_fw_cancel_all" = "Cancel forwards";
+"lng_tm_fw_cancel_all_confirm" = "Cancel all forwards?";
+"lng_tm_fw_cancel_confirm" = "Cancel forward?";
+"lng_tm_fw_pause_all" = "Pause forwards";
+"lng_tm_fw_resume_all" = "Resume forwards";
 "lng_tm_fw_clear" = "Clear forwards from UI";
+"lng_tm_fw_duplicates_skipped#one" = "{count} duplicate skipped";
+"lng_tm_fw_duplicates_skipped#other" = "{count} duplicates skipped";
+"lng_tm_fw_upload_failed" = "Failed to upload {file_name}. The enhanced forward has been paused. You can resume it from the Forwards tab.";
+"lng_tm_fw_download_failed" = "Failed to download {file_name}. The enhanced forward has been paused. You can resume it from the Forwards tab.";
+
+// Transfer manager - All tab operations
+"lng_tm_all_tab" = "All";
 "lng_tm_all_pause" = "Pause all";
 "lng_tm_all_resume" = "Resume all";
 "lng_tm_all_cancel" = "Cancel all";
-"lng_tm_all_cancel_confirm" = "Do you want to cancel all running downloads, uploads and forwards? Partial files will be deleted.";
+"lng_tm_all_cancel_confirm" = "Cancel all downloads, uploads and forwards?";
 "lng_tm_all_delete" = "Delete all items";
 "lng_tm_all_delete_confirm" = "Do you want to delete all finished files from disk? They will remain accessible in the cloud.";
 "lng_tm_all_clear" = "Clear all items from UI";
+
+// Transfer manager - selection toolbar
+"lng_tm_sel_cancel" = "Cancel selected";
+"lng_tm_sel_cancel_confirm#one" = "Cancel {count} selected item?";
+"lng_tm_sel_cancel_confirm#other" = "Cancel {count} selected items?";
+"lng_tm_sel_cancel_download#one" = "Cancel {count} selected download?";
+"lng_tm_sel_cancel_download#other" = "Cancel {count} selected downloads?";
+"lng_tm_sel_cancel_upload#one" = "Cancel {count} selected upload?";
+"lng_tm_sel_cancel_upload#other" = "Cancel {count} selected uploads?";
+"lng_tm_sel_cancel_forward#one" = "Cancel {count} selected forward?";
+"lng_tm_sel_cancel_forward#other" = "Cancel {count} selected forwards?";
+"lng_tm_sel_delete" = "Delete selected";
+"lng_tm_sel_delete_confirm#one" = "Delete {count} selected file from disk? File will remain accessible in the cloud";
+"lng_tm_sel_delete_confirm#other" = "Delete {count} selected files from disk? Files will remain accessible in the cloud";
+"lng_tm_sel_delete_download#one" = "Delete {count} selected download from disk? File will remain accessible in the cloud";
+"lng_tm_sel_delete_download#other" = "Delete {count} selected downloads from disk? Files will remain accessible in the cloud";
+"lng_tm_sel_delete_upload#one" = "Delete {count} selected upload from disk? File will remain accessible in the cloud";
+"lng_tm_sel_delete_upload#other" = "Delete {count} selected uploads from disk? Files will remain accessible in the cloud";
+"lng_tm_sel_clear" = "Clear selected";
+"lng_tm_sel_mixed_confirm" = "Cancel running items and delete finished files from disk?";
+
+// Transfer manager - item context menu
 "lng_tm_item_clear_download" = "Clear download";
 "lng_tm_item_clear_upload" = "Clear upload";
 "lng_tm_item_clear_forward" = "Clear forward";
 "lng_tm_item_cancel_forward" = "Cancel forward";
-"lng_tm_sel_cancel" = "Cancel selected";
-"lng_tm_sel_cancel_confirm#one" = "Do you want to cancel {count} selected item?";
-"lng_tm_sel_cancel_confirm#other" = "Do you want to cancel {count} selected items?";
-"lng_tm_sel_cancel_download#one" = "Do you want to cancel {count} selected download?";
-"lng_tm_sel_cancel_download#other" = "Do you want to cancel {count} selected downloads?";
-"lng_tm_sel_cancel_upload#one" = "Do you want to cancel {count} selected upload?";
-"lng_tm_sel_cancel_upload#other" = "Do you want to cancel {count} selected uploads?";
-"lng_tm_sel_cancel_forward#one" = "Do you want to cancel {count} selected forward?";
-"lng_tm_sel_cancel_forward#other" = "Do you want to cancel {count} selected forwards?";
-"lng_tm_sel_mixed_confirm" = "Do you want to cancel running items and delete finished files from disk?";
-"lng_tm_sel_delete" = "Delete selected";
-"lng_tm_sel_delete_confirm#one" = "Do you want to delete {count} selected item from disk?";
-"lng_tm_sel_delete_confirm#other" = "Do you want to delete {count} selected items from disk?";
-"lng_tm_sel_delete_download#one" = "Do you want to delete {count} selected download from disk?";
-"lng_tm_sel_delete_download#other" = "Do you want to delete {count} selected downloads from disk?";
-"lng_tm_sel_delete_upload#one" = "Do you want to delete {count} selected upload from disk?";
-"lng_tm_sel_delete_upload#other" = "Do you want to delete {count} selected uploads from disk?";
-"lng_tm_sel_clear_confirm#one" = "Do you want to remove {count} selected item from the list?";
-"lng_tm_sel_clear_confirm#other" = "Do you want to remove {count} selected items from the list?";
-"lng_tm_sel_clear" = "Clear selected";
-"lng_tm_item_cancel_download_confirm" = "Do you want to cancel this download?";
-"lng_tm_item_cancel_upload_confirm" = "Do you want to cancel this upload?";
-"lng_tm_files_progress" = "{done}/{total} files";
-"lng_tm_counter" = "{done}/{total}";
-"lng_tm_counter_dup" = "{done}/{total}, {dups} duplicates";
+"lng_tm_item_cancel_download" = "Cancel download";
+"lng_tm_item_cancel_upload" = "Cancel upload";
+"lng_tm_item_cancel_download_confirm#one" = "Cancel {count} selected download?";
+"lng_tm_item_cancel_download_confirm#other" = "Cancel {count} selected downloads?";
+"lng_tm_item_cancel_upload_confirm#one" = "Cancel {count} selected upload?";
+"lng_tm_item_cancel_upload_confirm#other" = "Cancel {count} selected uploads?";
+"lng_tm_item_cancel_forward_confirm#one" = "Cancel {count} selected forward?";
+"lng_tm_item_cancel_forward_confirm#other" = "Cancel {count} selected forwards?";
+
+// Transfer manager - quit and resume unfinished
+"lng_tm_quit_confirm#one" = "You have {count} unfinished transfer. Continue, pause or cancel?";
+"lng_tm_quit_confirm#other" = "You have {count} unfinished transfers. Continue, pause or cancel?";
+"lng_tm_quit_cancel" = "Cancel";
+"lng_tm_quit_pause" = "Pause";
+"lng_tm_quit_continue" = "Continue";
+"lng_tm_quit_cancel_confirm" = "Cancel all downloads, uploads and forwards?";
+"lng_tm_resume_unfinished#one" = "You have {count} unfinished transfer. Resume, decide later or cancel?";
+"lng_tm_resume_unfinished#other" = "You have {count} unfinished transfers. Resume, decide later or cancel?";
+"lng_tm_resume_yes" = "Resume";
+"lng_tm_resume_cancel" = "Cancel";
+"lng_tm_resume_later" = "Later";
+"lng_tm_resume_cancel_confirm" = "Cancel all downloads, uploads and forwards?";

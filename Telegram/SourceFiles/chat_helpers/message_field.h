@@ -214,12 +214,6 @@ void SelectTextInFieldWithMargins(
 	rpl::producer<int> stars,
 	rpl::producer<QString> fallback = nullptr);
 
-[[nodiscard]] std::unique_ptr<Ui::RpWidget> EnhancedForwardWriteRestriction(
-	not_null<QWidget*> parent,
-	const PeerId &peer,
-	not_null<Main::Session*> session,
-	const std::shared_ptr<Ui::Show> &show);
-
 void FrozenInfoBox(
 	not_null<Ui::GenericBox*> box,
 	not_null<Main::Session*> session,

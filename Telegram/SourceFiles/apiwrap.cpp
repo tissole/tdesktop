@@ -4209,7 +4209,7 @@ void ApiWrap::startResumeEnhancedForward(
 		not_null<Main::Session*> session) {
 	LOG(("ENHANCED_FWD: startResumeEnhancedForward src=%1 dst=%2")
 		.arg(srcId.value).arg(dstId.value));
-	const auto job = EnhancedForward::GetUnfinishedJobByDst(dstId);
+	const auto job = EnhancedForward::GetUnfinishedJobByDst(dstId, session);
 	if (!job) {
 		LOG(("ENHANCED_FWD: no unfinished job for dst=%1").arg(dstId.value));
 		return;

@@ -209,7 +209,7 @@ void AddAction(
 			if (showToast) {
 				if (skippedCount > 0) {
 					controller->showToast(
-						tr::lng_download_duplicates_skipped(
+						tr::lng_tm_dl_duplicates_skipped(
 							tr::now,
 							lt_count,
 							skippedCount));

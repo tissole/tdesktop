@@ -258,11 +258,6 @@ public:
 	// Can be called only right before ~Session.
 	void finishLogout();
 
-	// Uploads cancel with confirmation.
-	[[nodiscard]] bool uploadsInProgress() const;
-	void uploadsStopWithConfirmation(Fn<void()> done);
-	void uploadsStop();
-
 	[[nodiscard]] rpl::lifetime &lifetime() {
 		return _lifetime;
 	}

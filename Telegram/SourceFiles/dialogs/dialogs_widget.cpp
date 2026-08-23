@@ -68,11 +68,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/storage_media_prepare.h"
 #include "storage/storage_account.h"
 #include "storage/storage_domain.h"
+#include "logs.h"
 #include "data/components/recent_peers.h"
 #include "data/components/sponsored_messages.h"
 #include "data/data_session.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
+#include "data/data_document.h"
+#include "data/data_media_types.h"
 #include "data/stickers/data_custom_emoji.h"
 #include "data/data_user.h"
 #include "data/data_folder.h"
@@ -1244,6 +1247,8 @@ void Widget::setupDownloadBar() {
 
 		Data::MakeDownloadBarContent(
 		) | rpl::on_next(crl::guard(this, [=](Ui::DownloadBarContent &&content) {
+			LOG(("TM_BAR: content count=%1 done=%2").arg(content.count)
+				.arg(content.done));
 			const auto create = (content.count
 				&& content.done < content.count
 				&& !_downloadBar);
@@ -1339,19 +1344,41 @@ void Widget::setupForwardsBar() {
 		u"prevent_forward_duplicates"_q);
 	const auto makeProgress = [=]() {
 		return EnhancedForward::jobsValue(&controller()->session())
-			| rpl::map([skipDuplicates](
+			| rpl::map([skipDuplicates,
+					session = &controller()->session()](
 				const std::vector<EnhancedForward::JobSnapshot> &jobs) {
 				Ui::DownloadBarProgress result;
+				auto activeHasItems = false;
 				for (const auto &job : jobs) {
 					if (!job.active) {
 						continue;
 					}
-					for (const auto &item : job.progress.items) {
+					activeHasItems = true;
+					for (auto i = 0; i < int(job.progress.items.size()); i++) {
+						const auto &item = job.progress.items[i];
 						if (item.cancelled
 							|| (skipDuplicates && item.dedupSkipped)) {
 							continue;
 						}
-						const auto size = std::max<qint64>(item.info.size, 0);
+						auto size = std::max<qint64>(item.info.size, 0);
+						if (size == 0 && i < int(job.progress.sourceIds.size())) {
+							const auto srcId = job.progress.sourceIds[i];
+							if (const auto msg = session->data().message(srcId)) {
+								if (const auto media = msg->media()) {
+									if (const auto doc = media->document()) {
+										size = doc->size;
+									}
+								}
+							}
+							if (size == 0) {
+								for (const auto &r : Core::App().downloadManager().ensureDedupDb().loadUnfinishedEfResumeItems(session->uniqueId())) {
+									if (r.sourceId == srcId && r.fileSize > 0) {
+										size = r.fileSize;
+										break;
+									}
+								}
+							}
+						}
 						const auto uploading = (item.state
 							== EnhancedForward::ItemState::Uploading);
 						const auto isDone = item.sent
@@ -1366,28 +1393,44 @@ void Widget::setupForwardsBar() {
 						result.efReady += ready;
 					}
 				}
+				if (!result.efTotal) {
+					qint64 total = 0;
+					result.efReady += EnhancedForward::PersistedForwardBytes(
+						session,
+						&total);
+					result.efTotal += total;
+				} else {
+					qint64 persistedTotal = 0;
+					qint64 persistedReady = 0;
+					persistedReady = EnhancedForward::PersistedForwardBytes(
+						session,
+						&persistedTotal);
+					if (persistedTotal > result.efTotal) {
+						result.efTotal = persistedTotal;
+						result.efReady = std::max(result.efReady, persistedReady);
+					}
+				}
 				return result;
 			});
 	};
 
-	EnhancedForward::jobsValue(&controller()->session()) | rpl::on_next(crl::guard(this, [=](
-			const std::vector<EnhancedForward::JobSnapshot> &jobs) {
+	const auto updateForwardsBar = crl::guard(this, [=](
+			std::vector<EnhancedForward::JobSnapshot> jobs) {
 		auto efCount = 0;
 		auto efDone = 0;
 		QString firstName;
+		for (const auto &job :
+				EnhancedForward::GetUnfinishedJobs(
+					&controller()->session())) {
+			efCount += job.total;
+			efDone += job.sent;
+		}
 		for (const auto &job : jobs) {
-			if (!job.active) {
+			if (job.finished
+				|| job.progress.state == EnhancedForward::State::Cancelled) {
 				continue;
 			}
 			for (const auto &item : job.progress.items) {
-				if (item.cancelled
-					|| (skipDuplicates && item.dedupSkipped)) {
-					continue;
-				}
-				const auto isDone = item.sent
-					|| (item.state == EnhancedForward::ItemState::Done);
-				efCount++;
-				if (isDone) efDone++;
 				if (firstName.isEmpty() && !item.info.name.isEmpty()) {
 					firstName = item.info.name;
 				}
@@ -1437,7 +1480,15 @@ void Widget::setupForwardsBar() {
 				_connecting->raise();
 			}
 		}
-	}), lifetime());
+	});
+	EnhancedForward::jobsValue(
+		&controller()->session()
+	) | rpl::on_next(std::move(updateForwardsBar), lifetime());
+	EnhancedForward::counterChanges(
+	) | rpl::on_next([=] {
+		updateForwardsBar(
+			std::vector<EnhancedForward::JobSnapshot>{});
+	}, lifetime());
 }
 
 void Widget::setupShortcuts(not_null<Window::SessionController *> controller) {

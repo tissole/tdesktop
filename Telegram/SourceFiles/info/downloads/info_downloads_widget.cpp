@@ -20,6 +20,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_download_manager.h"
 #include "data/data_user.h"
 #include "enhanced_forward.h"
+#include "apiwrap.h"
+#include "logs.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "main/main_session.h"
@@ -27,6 +29,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_domain.h"
 #include "storage/file_upload.h"
 #include "core/application.h"
+#include "core/core_settings.h"
 #include "lang/lang_keys.h"
 #include "styles/style_info.h"
 #include "styles/style_layers.h"
@@ -117,12 +120,12 @@ void Widget::rebuildTabSections() {
 	labels.reserve(_tabList.size());
 	for (const auto tab : _tabList) {
 		labels.push_back((tab == Tab::Uploads)
-			? tr::lng_uploads_section(tr::now)
+			? tr::lng_tm_ul_section(tr::now)
 			: (tab == Tab::Forwards)
-			? tr::lng_forwards_section(tr::now)
+			? tr::lng_tm_fw_section(tr::now)
 			: (tab == Tab::Both)
-			? tr::lng_downloads_tab_all(tr::now)
-			: tr::lng_downloads_section(tr::now));
+			? tr::lng_tm_all_tab(tr::now)
+			: tr::lng_tm_dl_section(tr::now));
 	}
 	_tabs->setSections(labels);
 }
@@ -203,6 +206,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 	const auto downloadsPaused = loadingManager.anyPaused();
 	const auto downloadsFinished = loadingManager.anyFinishedLoading();
 	const auto uploadsActive = Core::App().uploaderAny();
+	const auto uploadsRunning = Core::App().uploaderAnyActive();
 	const auto uploadsPaused = Core::App().uploaderAnyPaused();
 	const auto uploadsOnlyOnDisk = !uploadsActive
 		&& (Core::App().uploaderPendingResumeCount() > 0);
@@ -219,6 +223,8 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				if (job.progress.state == EnhancedForward::State::Paused) {
 					forwardsPaused = true;
 				}
+			} else if (job.resumable) {
+				forwardsPaused = true;
 			} else if (job.finished) {
 				forwardsFinished = true;
 			}
@@ -243,7 +249,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 	if (_currentTab == Tab::Forwards) {
 		if (forwardsPaused) {
 			addAction(
-				tr::lng_tm_fw_resume(tr::now),
+				tr::lng_tm_fw_resume_all(tr::now),
 				[=] {
 					Ui::PostponeCall(this, [=] {
 						const auto session = &window->session();
@@ -252,6 +258,11 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 								&& job.progress.state
 									== EnhancedForward::State::Paused) {
 								EnhancedForward::resumeForward(job.peer, session);
+							} else if (!job.active && job.resumable) {
+								session->api().startResumeForward(
+									job.srcPeer,
+									job.peer,
+									session);
 							}
 						}
 					});
@@ -259,7 +270,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				&st::menuIconDownload);
 		} else if (forwardsActive) {
 			addAction(
-				tr::lng_tm_fw_pause(tr::now),
+				tr::lng_tm_fw_pause_all(tr::now),
 				[=] {
 					Ui::PostponeCall(this, [=] {
 						const auto session = &window->session();
@@ -274,10 +285,10 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 		}
 		if (forwardsActive || forwardsPaused) {
 			addAction(
-				tr::lng_tm_fw_cancel(tr::now),
+				tr::lng_tm_fw_cancel_all(tr::now),
 				[=] {
 					window->show(Ui::MakeConfirmBox({
-						.text = tr::lng_enhanced_forward_cancel_all_confirm(tr::now),
+						.text = tr::lng_tm_fw_cancel_all_confirm(tr::now),
 						.confirmed = [=](Fn<void()> close) {
 							close();
 							Ui::PostponeCall(this, [=] {
@@ -315,7 +326,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 			return;
 		}
 		const auto hasAnyRunning = downloadsRunning
-			|| uploadsActive
+			|| uploadsRunning
 			|| forwardsActive;
 		const auto hasAnyPaused = downloadsPaused
 			|| uploadsPaused
@@ -324,7 +335,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 		const auto hasAnyFinished = downloadsFinished
 			|| uploadsFinished
 			|| forwardsFinished;
-		if (hasAnyRunning && !hasAnyPaused) {
+		if (hasAnyRunning) {
 			addAction(
 				tr::lng_tm_all_pause(tr::now),
 				[=] {
@@ -340,7 +351,8 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 					});
 				},
 				&st::menuIconSchedule);
-		} else if (hasAnyPaused) {
+		}
+		if (hasAnyPaused) {
 			addAction(
 				tr::lng_tm_all_resume(tr::now),
 				[=] {
@@ -353,6 +365,11 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 								&& job.progress.state
 									== EnhancedForward::State::Paused) {
 								EnhancedForward::resumeForward(job.peer, session);
+							} else if (!job.active && job.resumable) {
+								session->api().startResumeForward(
+									job.srcPeer,
+									job.peer,
+									session);
 							}
 						}
 					});
@@ -425,18 +442,19 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 	}
 
 	if (showDownloads) {
-		if (downloadsRunning && !downloadsPaused) {
+		if (downloadsRunning) {
 			addAction(
-				tr::lng_downloads_pause_all(tr::now),
+				tr::lng_tm_dl_pause_all(tr::now),
 				[=] {
 					Ui::PostponeCall(this, [] {
 						Core::App().downloadManager().pauseAll();
 					});
 				},
 				&st::menuIconSchedule);
-		} else if (downloadsPaused) {
+		}
+		if (downloadsPaused) {
 			addAction(
-				tr::lng_downloads_resume_all(tr::now),
+				tr::lng_tm_dl_resume_all(tr::now),
 				[=] {
 					Ui::PostponeCall(this, [] {
 						Core::App().downloadManager().resumeAll();
@@ -446,10 +464,10 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 		}
 		if (downloadsRunning || downloadsPaused) {
 			addAction(
-				tr::lng_downloads_cancel_all(tr::now),
+				tr::lng_tm_dl_cancel_all(tr::now),
 				[=] {
 					window->show(Ui::MakeConfirmBox({
-						.text = tr::lng_downloads_delete_sure_all(tr::now),
+						.text = tr::lng_tm_dl_cancel_all_confirm(tr::now),
 						.confirmed = [=](Fn<void()> close) {
 							close();
 							Ui::PostponeCall(this, [] {
@@ -465,13 +483,9 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 		}
 		if (downloadsFinished) {
 			addAction(
-				tr::lng_downloads_delete_all_downloads(tr::now),
+				tr::lng_tm_dl_delete_all(tr::now),
 				[=] {
-					const auto phrase = tr::lng_downloads_delete_sure_all(tr::now);
-					const auto added = Core::App().downloadManager()
-						.loadedHasNonCloudFile()
-						? QString()
-						: tr::lng_downloads_delete_in_cloud(tr::now);
+					const auto phrase = tr::lng_tm_dl_delete_sure_all(tr::now);
 					const auto deleteSure = [=](Fn<void()> close) {
 						Ui::PostponeCall(this, close);
 						auto ids = finishedDownloadIds();
@@ -481,8 +495,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 						}
 					};
 					window->show(Ui::MakeConfirmBox({
-						.text = phrase
-							+ (added.isEmpty() ? QString() : "\n\n" + added),
+						.text = phrase,
 						.confirmed = deleteSure,
 						.confirmText = tr::lng_box_yes(tr::now),
 						.cancelText = tr::lng_box_no(tr::now),
@@ -491,7 +504,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				},
 				&st::menuIconDelete);
 			addAction(
-				tr::lng_downloads_clear_list(tr::now),
+				tr::lng_tm_dl_clear_list(tr::now),
 				[=] {
 					Ui::PostponeCall(this, [] {
 						Core::App().downloadManager().clearFinishedLoading();
@@ -501,18 +514,19 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 		}
 	}
 	if (showUploads) {
-		if (uploadsActive && !uploadsPaused) {
+		if (uploadsRunning) {
 			addAction(
-				tr::lng_uploads_pause_all(tr::now),
+				tr::lng_tm_ul_pause_all(tr::now),
 				[=] {
 					Ui::PostponeCall(this, [] {
 						Core::App().uploaderPauseAll();
 					});
 				},
 				&st::menuIconSchedule);
-		} else if (uploadsPaused || uploadsOnlyOnDisk) {
+		}
+		if (uploadsPaused || uploadsOnlyOnDisk) {
 			addAction(
-				tr::lng_uploads_resume_all(tr::now),
+				tr::lng_tm_ul_resume_all(tr::now),
 				[=] {
 					Ui::PostponeCall(this, [] {
 						Core::App().uploaderResumeAll();
@@ -522,18 +536,18 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 		}
 		if (uploadsActive || uploadsPaused || uploadsOnlyOnDisk) {
 			addAction(
-				tr::lng_uploads_cancel_all(tr::now),
+				tr::lng_tm_ul_cancel_all(tr::now),
 				[=] {
 					window->show(Ui::MakeConfirmBox({
-						.text = tr::lng_uploads_cancel_sure_all(tr::now),
+						.text = tr::lng_tm_ul_cancel_all_confirm(tr::now),
 						.confirmed = [=](Fn<void()> close) {
 							close();
 							Ui::PostponeCall(this, [] {
 								Core::App().uploaderCancelAll();
 							});
 						},
-						.confirmText = tr::lng_upload_cancel_yes(tr::now),
-						.cancelText = tr::lng_upload_cancel_no(tr::now),
+						.confirmText = tr::lng_box_yes(tr::now),
+						.cancelText = tr::lng_box_no(tr::now),
 						.confirmStyle = &st::attentionBoxButton,
 					}));
 				},
@@ -541,10 +555,10 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 		}
 		if (uploadsFinished) {
 			addAction(
-				tr::lng_uploads_delete_all(tr::now),
+				tr::lng_tm_ul_delete_all(tr::now),
 				[=] {
 					window->show(Ui::MakeConfirmBox({
-						.text = tr::lng_uploads_delete_all_sure(tr::now),
+						.text = tr::lng_tm_ul_delete_sure_all(tr::now),
 						.confirmed = [=](Fn<void()> close) {
 							close();
 							Ui::PostponeCall(this, [] {
@@ -558,7 +572,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				},
 				&st::menuIconDelete);
 			addAction(
-				tr::lng_uploads_clear_list(tr::now),
+				tr::lng_tm_ul_clear_list(tr::now),
 				[=] {
 					Core::App().uploaderClearFinished();
 				},
@@ -568,12 +582,32 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 }
 
 rpl::producer<QString> Widget::title() {
-	return tr::lng_transfer_manager_title();
+	return tr::lng_tm_title();
 }
 
 std::shared_ptr<Info::Memento> Make(not_null<UserData*> self, Tab tab) {
 	if (tab == Tab::Downloads) {
 		tab = LastActivityTab();
+	}
+	// Only keep the last-used tab when its items are still visible:
+	// persisted uploads/forwards that were cancelled or cleared should not
+	// pin the manager to an empty section.
+	if (tab == Tab::Uploads) {
+		const auto &uploader = self->session().uploader();
+		if (!uploader.anyUploads()
+			&& uploader.pendingResumeCount() == 0
+			&& uploader.anyFinishedUploads() == 0) {
+			tab = Tab::Downloads;
+		}
+	} else if (tab == Tab::Forwards) {
+		const auto hasForwards = ranges::any_of(
+			EnhancedForward::AllJobs(&self->session()),
+			[](const EnhancedForward::JobSnapshot &job) {
+				return job.active || job.finished || job.resumable;
+			});
+		if (!hasForwards) {
+			tab = Tab::Downloads;
+		}
 	}
 	auto memento = std::make_shared<Memento>(self);
 	memento->setTab(tab);
@@ -584,18 +618,28 @@ std::shared_ptr<Info::Memento> Make(not_null<UserData*> self, Tab tab) {
 }
 
 namespace {
+
+constexpr auto kLastActivityTabKey = "transfer_manager_last_activity_tab";
+
 Tab &LastActivityTabRef() {
-	static auto tab = Tab::Downloads;
+	static auto tab = LastActivityTab();
 	return tab;
 }
+
 } // namespace
 
 void SetLastActivityTab(Tab tab) {
 	LastActivityTabRef() = tab;
+	Core::App().settings().writePref<int>(kLastActivityTabKey, int(tab));
 }
 
 Tab LastActivityTab() {
-	return LastActivityTabRef();
+	const auto saved = Core::App().settings().readPref<int>(
+		kLastActivityTabKey,
+		int(Tab::Downloads));
+	return (saved >= int(Tab::Downloads) && saved <= int(Tab::Both))
+		? Tab(saved)
+		: Tab::Downloads;
 }
 
 } // namespace Info::Downloads

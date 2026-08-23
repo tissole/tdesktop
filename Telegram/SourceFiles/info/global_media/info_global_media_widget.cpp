@@ -107,16 +107,13 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 	const auto window = controller()->parentController();
 	const auto deleteAll = [=] {
 		auto &manager = Core::App().downloadManager();
-		const auto phrase = tr::lng_downloads_delete_sure_all(tr::now);
-		const auto added = manager.loadedHasNonCloudFile()
-			? QString()
-			: tr::lng_downloads_delete_in_cloud(tr::now);
+		const auto phrase = tr::lng_tm_dl_delete_sure_all(tr::now);
 		const auto deleteSure = [=, &manager](Fn<void()> close) {
 			Ui::PostponeCall(this, close);
 			manager.deleteAll();
 		};
 		window->show(Ui::MakeConfirmBox({
-			.text = phrase + (added.isEmpty() ? QString() : "\n\n" + added),
+			.text = phrase,
 			.confirmed = deleteSure,
 			.confirmText = tr::lng_box_delete(tr::now),
 			.confirmStyle = &st::attentionBoxButton,

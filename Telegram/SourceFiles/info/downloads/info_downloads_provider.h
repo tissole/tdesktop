@@ -174,6 +174,8 @@ private:
 	base::flat_set<not_null<const HistoryItem*>> _downloaded;
 	base::flat_set<FullMsgId> _uploading;
 	base::flat_set<FullMsgId> _uploaded;
+	base::flat_set<FullMsgId> _efPending;
+	base::flat_set<FullMsgId> _efTransferring;
 	base::flat_map<FullMsgId, PendingFinishedUpload> _pendingFinishedUploads;
 	base::flat_set<FullMsgId> _pendingFinishedUploadsFetching;
 	int _storiesAddToAlbumId = 0;

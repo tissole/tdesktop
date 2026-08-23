@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include <functional>
+
 #include "layout/layout_item_base.h"
 #include "layout/layout_document_generic_preview.h"
 #include "media/clip/media_clip_reader.h"
@@ -404,6 +406,10 @@ struct DocumentFields {
 	not_null<DocumentData*> document;
 	TimeId dateOverride = 0;
 	bool forceFileLayout = false;
+	bool forceCancel = false;
+	std::function<bool()> forceCancelCheck;
+	// Paused-download override: fills (ready, total) for the status line.
+	std::function<bool(qint64 *, qint64 *)> savedProgress;
 };
 
 class Document final : public RadialProgressItem {
@@ -436,6 +442,7 @@ private:
 	[[nodiscard]] TextState cornerDownloadTextState(
 		QPoint point,
 		StateRequest request) const;
+	[[nodiscard]] bool forceCancelShown() const;
 
 	[[nodiscard]] bool songLayout() const;
 	void ensureDataMediaCreated() const;
@@ -450,6 +457,9 @@ private:
 
 	bool _thumbLoaded = false;
 	bool _forceFileLayout = false;
+	bool _forceCancel = false;
+	std::function<bool()> _forceCancelCheck;
+	std::function<bool(qint64 *, qint64 *)> _savedProgress;
 	QPixmap _thumb;
 
 	Ui::Text::String _name;

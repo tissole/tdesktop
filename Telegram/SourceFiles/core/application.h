@@ -163,8 +163,19 @@ public:
 	void uploaderDeleteAllFinished();
 	[[nodiscard]] bool uploaderAny() const;
 	[[nodiscard]] bool uploaderAnyPaused() const;
+	[[nodiscard]] bool uploaderAnyActive() const;
 	[[nodiscard]] bool uploaderAnyFinished() const;
 	[[nodiscard]] int uploaderPendingResumeCount() const;
+
+	// Shows one global box with the unfinished downloads / uploads / forwards
+	// of every logged-in account: Resume all, Cancel or Later.
+	void showUnfinishedOperations();
+	void showUnfinishedOperationsBox(
+		not_null<Window::Controller*> window,
+		int total,
+		Fn<void()> pauseAll,
+		Fn<void()> cancelAll,
+		Fn<void()> proceed);
 	[[nodiscard]] Tray &tray() const {
 		return *_tray;
 	}
@@ -303,8 +314,7 @@ public:
 	void forceLogOut(
 		not_null<Main::Account*> account,
 		const TextWithEntities &explanation);
-	[[nodiscard]] bool uploadPreventsQuit();
-	[[nodiscard]] bool downloadPreventsQuit();
+	[[nodiscard]] bool transferPreventsQuit();
 	void checkLocalTime();
 	void lockByPasscode();
 	void maybeLockByPasscode();
@@ -383,7 +393,6 @@ public:
 	void processCreatedWindow(not_null<Window::Controller*> window);
 	void refreshApplicationIcon(Main::Session *session);
 
-	void quitDelayed();
 	[[nodiscard]] bool readyToQuit();
 	void showOpenGLCrashNotification();
 

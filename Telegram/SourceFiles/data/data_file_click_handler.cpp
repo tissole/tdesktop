@@ -210,10 +210,10 @@ void DocumentCancelClickHandler::onClickImpl() const {
 			auto box = Box([=](not_null<Ui::GenericBox*> box) {
 				box->addRow(object_ptr<Ui::FlatLabel>(
 					box.get(),
-					tr::lng_enhanced_forward_cancel_confirm(tr::now),
+					tr::lng_tm_fw_cancel_confirm(tr::now),
 					st::boxLabel));
 				box->setStyle(st::defaultBox);
-				box->addButton(tr::lng_enhanced_forward_cancel_yes(), [=] {
+				box->addButton(tr::lng_box_yes(), [=] {
 					box->closeBox();
 					if (const auto strong = weak.get()) {
 						if (const auto live = strong->data().message(id)) {
@@ -221,7 +221,7 @@ void DocumentCancelClickHandler::onClickImpl() const {
 						}
 					}
 				}, st::attentionBoxButton);
-				box->addButton(tr::lng_enhanced_forward_cancel_no(), [=] {
+				box->addButton(tr::lng_box_no(), [=] {
 					box->closeBox();
 				});
 			});
@@ -251,16 +251,16 @@ void DocumentCancelClickHandler::onClickImpl() const {
 			auto box = Box([=](not_null<Ui::GenericBox*> box) {
 				box->addRow(object_ptr<Ui::FlatLabel>(
 					box.get(),
-					tr::lng_upload_cancel_confirm(tr::now),
+					tr::lng_tm_ul_cancel_confirm(tr::now),
 					st::boxLabel));
 				box->setStyle(st::defaultBox);
-				box->addButton(tr::lng_upload_cancel_yes(), [=] {
+				box->addButton(tr::lng_box_yes(), [=] {
 					box->closeBox();
 					if (const auto strong = weak.get()) {
 						strong->uploader().cancel(id);
 					}
 				}, st::attentionBoxButton);
-				box->addButton(tr::lng_upload_cancel_no(), [=] {
+				box->addButton(tr::lng_box_no(), [=] {
 					box->closeBox();
 				});
 			});

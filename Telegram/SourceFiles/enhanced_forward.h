@@ -201,15 +201,34 @@ struct SavedJob {
 	PeerId dstId = PeerId();
 	int total = 0;
 	int sent = 0;
+	int unfinishedFiles = 0;
 	std::vector<FullMsgId> sourceMsgs;
 	std::vector<bool> uploadDone;
 	std::vector<uint64> fileId;
 	std::vector<int> uploadedParts;
 };
 
-[[nodiscard]] std::vector<SavedJob> GetUnfinishedJobs();
+[[nodiscard]] qint64 PersistedForwardBytes(
+	not_null<Main::Session*> session,
+	qint64 *total = nullptr);
 
-[[nodiscard]] std::vector<SavedJob> GetFinishedJobs();
+// Downloaded bytes of one persisted forward item (from its temp file),
+// or nullopt when the item has no pending record.
+[[nodiscard]] std::optional<qint64> persistedItemBytes(
+	not_null<Main::Session*> session,
+	const FullMsgId &sourceId);
+
+// Total file size of one persisted forward item (from DB file_size),
+// or nullopt when the item has no pending record.
+[[nodiscard]] std::optional<qint64> persistedItemFileSize(
+	not_null<Main::Session*> session,
+	const FullMsgId &sourceId);
+
+[[nodiscard]] std::vector<SavedJob> GetUnfinishedJobs(
+	not_null<Main::Session*> session);
+
+[[nodiscard]] std::vector<SavedJob> GetFinishedJobs(
+	not_null<Main::Session*> session);
 
 void EnsureForwardSourceMessages(
 	not_null<Main::Session*> session,
@@ -217,7 +236,8 @@ void EnsureForwardSourceMessages(
 	Fn<void(bool succeeded)> done);
 
 [[nodiscard]] std::optional<SavedJob> GetUnfinishedJobByDst(
-	const PeerId &dstId);
+	const PeerId &dstId,
+	not_null<Main::Session*> session);
 
 // Fires the destination peer whenever its forward state changes.
 [[nodiscard]] rpl::producer<PeerId> stateChanges();
@@ -275,6 +295,8 @@ void cancelItemByMessage(
 	not_null<Main::Session*> session,
 	not_null<const HistoryItem*> item);
 void CancelAll(not_null<Main::Session*> session);
+
+void notifyTransfersUpdated();
 void ClearFinished(
 	not_null<Main::Session*> session,
 	const PeerId &peer);
@@ -285,10 +307,7 @@ void ClearFinishedItems(
 	const FullMsgId &sourceId);
 
 // Shows a quit-confirmation box if an enhanced forward is running, then calls
-// quit on confirmation (mirrors DownloadManager::quitWithConfirmation).
-void preventQuit(
-	not_null<Main::Session*> session,
-	Fn<void()> quit);
+// quit on confirmation (the global quit flow aggregates all accounts).
 
 struct ItemTask {
 	FullMsgId sourceId;
@@ -369,6 +388,7 @@ private:
 	void onUploadProgress(const Storage::UploadProgress &data);
 	void checkItem(int idx);
 	void pumpDownloads();
+	void downloadFailed(int idx);
 	void dedupCheckItem(int idx);
 	void dedupHashed(
 		int idx,
@@ -382,6 +402,7 @@ private:
 	void runNextPrecheck();
 	void remotePrechecked(int idx, QByteArray &&hash, qint64 size);
 	void refreshSourceItemState(int idx);
+	void appendItems(std::vector<not_null<HistoryItem*>> &&items);
 
 	not_null<ApiWrap*> _api;
 	Main::Session &_session;

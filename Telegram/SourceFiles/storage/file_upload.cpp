@@ -59,6 +59,20 @@ bool IsEnhancedForwardTempPath(const QString &path) {
 	return path.contains("ForwardTemp");
 }
 
+// The resume table is shared by every logged-in session, but each session
+// has its own uploader queue. Guard the in-flight file paths so a record
+// is only re-queued by the first session that picks it up - otherwise each
+// session would create its own copy of the same upload (duplicate rows in
+// the Uploads tab).
+base::flat_set<QString> &ResumeActivePaths() {
+	static auto paths = base::flat_set<QString>();
+	return paths;
+}
+
+bool IsResumeActive(const QString &path) {
+	return ResumeActivePaths().contains(path);
+}
+
 // max 1mb uploaded at the same time in each session
 constexpr auto kMaxUploadPerSession = 1024 * 1024;
 
@@ -133,6 +147,10 @@ struct Uploader::Entry {
 	ushort docPartsSent = 0;
 	ushort docPartsCount = 0;
 	ushort docPartsWaiting = 0;
+
+	// Per-item pause: paused entries are skipped by the send loop and stay
+	// visible in the Uploads tab until the user resumes them explicitly.
+	bool paused = false;
 };
 
 struct Uploader::Request {
@@ -481,9 +499,6 @@ void Uploader::upload(
 		FullMsgId itemId,
 		const std::shared_ptr<FilePrepareResult> &file,
 		int resumeFromParts) {
-	if (_queue.empty() && !_pausedId && _paused) {
-		_paused = false;
-	}
 	if (file->type == SendMediaType::Photo) {
 		const auto photo = session().data().processPhoto(
 			file->photo,
@@ -546,6 +561,11 @@ void Uploader::upload(
 
 	const auto newJob = _queue.empty();
 	_queue.push_back(Entry(itemId, file, resumeFromParts));
+	if (_paused && resumeFromParts > 0) {
+		// Entries queued by "Resume later" stay paused: a fresh user upload
+		// (resumeFromParts == 0) must upload right away instead.
+		_queue.back().paused = true;
+	}
 	if (newJob) {
 		++_jobId;
 	}
@@ -603,12 +623,11 @@ void Uploader::failed(FullMsgId itemId) {
 		const auto hash = it.value();
 		if (!hash.isEmpty()) {
 			_uploadPendingHashes.remove(hash);
-// Upload cancelled/failed: drop the 'u' record so a later retry
+			// Upload cancelled/failed: drop the 'u' record so a later retry
 			// is not treated as a duplicate of a file that never uploaded.
-			Core::App().downloadManager().dedupDb().removeByDocumentId(
+			Core::App().downloadManager().dedupDb().removeUnfinishedByHash(
 				Data::DedupDb::Table::Uploads,
-				failedFileId,
-				u"u"_q);
+				hash);
 		}
 		_uploadPendingByItem.erase(it);
 	}
@@ -722,11 +741,15 @@ Uploader::Entry *Uploader::chooseEntryForNextRequest() {
 	if (!_pendingFromRemovedDcIndices.empty()) {
 		const auto itemId = _pendingFromRemovedDcIndices.front().itemId;
 		const auto i = ranges::find(_queue, itemId, &Entry::itemId);
-		Assert(i != end(_queue));
-		return &*i;
+		if (i != end(_queue) && !i->paused) {
+			return &*i;
+		}
 	}
 
 	for (auto i = begin(_queue); i != end(_queue); ++i) {
+		if (i->paused) {
+			continue;
+		}
 		if (i->partsSent < i->parts->size()
 			|| i->docPartsSent < i->docPartsCount) {
 			return &*i;
@@ -737,9 +760,13 @@ Uploader::Entry *Uploader::chooseEntryForNextRequest() {
 
 auto Uploader::sendPart(not_null<Entry*> entry, uchar dcIndex)
 -> SendResult {
-	return !_pendingFromRemovedDcIndices.empty()
-		? sendPendingPart(entry, dcIndex)
-		: (entry->partsSent < entry->parts->size())
+	if (!_pendingFromRemovedDcIndices.empty()
+		&& _pendingFromRemovedDcIndices.front().itemId == entry->itemId) {
+		return sendPendingPart(entry, dcIndex);
+	}
+	// Pending parts of a paused entry wait until it resumes; the current
+	// entry simply sends its own next part instead.
+	return (entry->partsSent < entry->parts->size())
 		? sendSlicedPart(entry, dcIndex)
 		: sendDocPart(entry, dcIndex);
 }
@@ -868,9 +895,6 @@ void Uploader::maybeSend() {
 		if (!stopping) {
 			_stopSessionsTimer.callOnce(kKillSessionTimeout);
 		}
-		_pausedId = FullMsgId();
-		return;
-	} else if (_pausedId) {
 		return;
 	} else if (stopping) {
 		_stopSessionsTimer.cancel();
@@ -916,17 +940,24 @@ void Uploader::cancelAll() {
 		failed(_queue.front().itemId);
 	}
 	clear();
+	ResumeActivePaths().clear();
 	unpause();
 	_paused = false;
 	notifyListChanged();
 }
 
 void Uploader::pause(FullMsgId itemId) {
-	_pausedId = itemId;
+	for (auto &entry : _queue) {
+		if (entry.itemId == itemId) {
+			entry.paused = true;
+		}
+	}
 }
 
 void Uploader::unpause() {
-	_pausedId = FullMsgId();
+	for (auto &entry : _queue) {
+		entry.paused = false;
+	}
 	maybeSend();
 }
 
@@ -1075,7 +1106,7 @@ void Uploader::partLoaded(const MTPBool &result, mtpRequestId requestId) {
 		_nonPremiumDelays.fire_copy(itemId);
 	}
 
-	if (!_queue.empty() && itemId == _queue.front().itemId) {
+	if (!_queue.empty()) {
 		maybeFinishFront();
 	}
 	maybeSend();
@@ -1104,24 +1135,31 @@ void Uploader::removeDcIndex() {
 }
 
 void Uploader::maybeFinishFront() {
-	while (!_queue.empty()) {
-		const auto &entry = _queue.front();
-		if (entry.partsSent >= entry.parts->size()
-			&& entry.docPartsSent >= entry.docPartsCount
-			&& !entry.partsWaiting
-			&& !entry.docPartsWaiting) {
-			finishFront();
+	auto safe = begin(_queue);
+	while (safe != end(_queue)) {
+		if (safe->paused) {
+			++safe;
+			continue;
+		}
+		if (safe->partsSent >= safe->parts->size()
+			&& safe->docPartsSent >= safe->docPartsCount
+			&& !safe->partsWaiting
+			&& !safe->docPartsWaiting) {
+			// Any completed entry is finalized, not only the front one: a
+			// paused entry in front of it must not postpone its completion.
+			finishEntry(safe);
+			safe = begin(_queue);
 		} else {
-			break;
+			++safe;
 		}
 	}
 }
 
-void Uploader::finishFront() {
-	Expects(!_queue.empty());
+void Uploader::finishEntry(std::vector<Entry>::iterator i) {
+	Expects(i != end(_queue));
 
-	auto entry = std::move(_queue.front());
-	_queue.erase(_queue.begin());
+	auto entry = std::move(*i);
+	_queue.erase(i);
 	_uploadListChanges.fire(rpl::empty_value{});
 	if (entry.file) {
 		clearResumeState(entry.itemId.peer, entry.file->filepath);
@@ -1497,9 +1535,9 @@ void Uploader::saveResumeState(bool force) {
 		}
 		const auto topicRootId = entry.file->to.replyTo.topicRootId;
 		db.insertResumeUl({
+			.sessionId = session().uniqueId(),
 			.peerId = entry.itemId.peer.value,
 			.path = entry.file->filepath,
-			.size = entry.file->filesize,
 			.partsSent = int(std::max(
 				entry.partsSent - entry.partsWaiting,
 				entry.docPartsSent - entry.docPartsWaiting)),
@@ -1511,286 +1549,31 @@ void Uploader::saveResumeState(bool force) {
 }
 
 void Uploader::clearResumeState(PeerId peerId, const QString &filePath) {
+	ResumeActivePaths().erase(filePath);
 	Core::App().downloadManager().dedupDb().removeResumeUl(
+		session().uniqueId(),
 		peerId.value,
 		filePath);
 }
 
-bool Uploader::hasUnfinishedResume() const {
-	const auto records = Core::App().downloadManager().dedupDb().loadAllResumeUl();
-	for (const auto &record : records) {
-		if (IsEnhancedForwardTempPath(record.path)) {
-			continue;
-		}
-		if (QFileInfo::exists(record.path)) {
-			return true;
-		}
-	}
-	return false;
-}
-
 int Uploader::pendingResumeCount() const {
 	auto count = 0;
-	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl()) {
+	auto &db = Core::App().downloadManager().dedupDb();
+	for (const auto &record : db.loadAllResumeUl(session().uniqueId())) {
 		if (IsEnhancedForwardTempPath(record.path)) {
 			continue;
 		}
-		if (QFileInfo::exists(record.path)) {
-			++count;
+		QFileInfo info(record.path);
+		if (!info.exists()) {
+			continue;
 		}
+		if (info.size() <= record.sentSize) {
+			db.removeResumeUl(record.sessionId, record.peerId, record.path);
+			continue;
+		}
+		++count;
 	}
 	return count;
-}
-
-void Uploader::showResumeUnfinished() {
-	auto toResume = QVector<Uploader::ResumeEntry>();
-	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl()) {
-		auto entry = Uploader::ResumeEntry();
-		entry.filePath = record.path;
-		entry.fileSize = record.size;
-		entry.partsSent = ushort(record.partsSent);
-		entry.sentSize = record.sentSize;
-		entry.peerId = PeerId(record.peerId);
-		entry.fileId = record.fileId;
-		if (!entry.fileId) {
-			entry.partsSent = 0;
-		}
-		entry.topicRootId = MsgId(record.topicRootId);
-		if (!IsEnhancedForwardTempPath(entry.filePath)
-			&& QFileInfo::exists(entry.filePath)) {
-			toResume.push_back(entry);
-		}
-	}
-	if (toResume.empty()) {
-		return;
-	}
-	const auto window = Core::App().windowFor(
-		not_null(&session().account()));
-	if (!window) {
-		return;
-	}
-	const auto weak = base::make_weak(this);
-	const auto resumeAll = [=]() {
-		if (!weak) {
-			return;
-		}
-		for (const auto &entry : toResume) {
-			const auto newId = FullMsgId(
-				entry.peerId,
-				session().data().nextLocalMessageId());
-			const auto fileId = entry.fileId
-				? entry.fileId
-				: base::RandomValue<uint64>();
-			auto file = MakePreparedFile(FilePrepareDescriptor{
-				kEmptyTaskId,
-				fileId,
-				SendMediaType::File,
-				FileLoadTo(
-					entry.peerId,
-					Api::SendOptions(),
-					FullReplyTo{ .topicRootId = entry.topicRootId },
-					MsgId()),
-			});
-			file->filepath = entry.filePath;
-			file->filesize = entry.fileSize;
-			file->filename = QFileInfo(entry.filePath).fileName();
-			file->filemime = Core::MimeTypeForFile(
-				QFileInfo(entry.filePath)).name();
-			const auto now = int(base::unixtime::now());
-			const auto docProto = MTP_document(
-				MTP_flags(0),
-				MTP_long(fileId),
-				MTP_long(0),
-				MTP_bytes(),
-				MTP_int(now),
-				MTP_string(file->filemime),
-				MTP_long(file->filesize),
-				MTP_vector<MTPPhotoSize>(),
-				MTPVector<MTPVideoSize>(),
-				MTP_int(0),
-				MTP_vector<MTPDocumentAttribute>({
-					MTP_documentAttributeFilename(
-						MTP_string(file->filename)),
-				}));
-			file->document = MTPDocument(docProto);
-
-		const auto peer = session().data().peer(entry.peerId);
-		if (peer) {
-			const auto history = session().data().history(peer);
-			const auto doc = session().data().processDocument(
-				file->document);
-			doc->uploadingData = std::make_unique<Data::UploadState>(
-				doc->size);
-			auto flags = NewMessageFlags(peer);
-		const auto channel = peer->asBroadcast();
-		if (channel) {
-			flags |= MessageFlag::Post;
-			flags |= MessageFlag::HasViews;
-			if (channel->addsSignature()) {
-				flags |= MessageFlag::HasPostAuthor;
-			}
-		}
-			if (!peer->amAnonymous()) {
-				flags |= MessageFlag::HasFromId;
-			}
-			if (entry.topicRootId) {
-				flags |= MessageFlag::HasReplyInfo;
-			}
-			const auto media = MTP_messageMediaDocument(
-				MTP_flags(MTPDmessageMediaDocument::Flag::f_document),
-				file->document,
-				MTPVector<MTPDocument>(),
-				MTPPhoto(),
-				MTPint(),
-				MTPint());
-			history->addNewLocalMessage({
-				.id = newId.msg,
-				.flags = flags,
-				.from = session().userPeerId(),
-				.replyTo = FullReplyTo{
-					.messageId = FullMsgId(
-						entry.peerId,
-						entry.topicRootId),
-					.topicRootId = entry.topicRootId,
-				},
-				.date = base::unixtime::now(),
-			}, TextWithEntities{}, media);
-			session().data().sendHistoryChangeNotifications();
-			session().changes().historyUpdated(
-				history,
-				Data::HistoryUpdate::Flag::MessageSent);
-		}
-		upload(newId, file, entry.partsSent);
-		if (peer) {
-			const auto newDoc = session().data().document(file->id);
-			if (newDoc && newDoc->uploading()) {
-				newDoc->uploadingData->offset = std::min(
-					newDoc->uploadingData->size,
-					entry.sentSize);
-			}
-		}
-		LOG(("Uploader: resuming upload for %1").arg(entry.filePath));
-	}
-};
-	auto box = Box([=](not_null<Ui::GenericBox*> box) {
-		box->setCloseByOutsideClick(false);
-		box->setCloseByEscape(false);
-		auto text = tr::lng_upload_resume_multiple(
-			tr::now,
-			lt_count, int(toResume.size()));
-		box->addRow(object_ptr<Ui::FlatLabel>(
-			box.get(),
-			text,
-			st::boxLabel));
-		box->addButton(tr::lng_upload_resume_cancel(), [=] {
-			box->closeBox();
-			auto cancelBox = Box([=](not_null<Ui::GenericBox*> cancelBox) {
-				cancelBox->setCloseByOutsideClick(false);
-				cancelBox->setCloseByEscape(false);
-				cancelBox->addRow(object_ptr<Ui::FlatLabel>(
-					cancelBox.get(),
-					tr::lng_upload_cancel_confirm(tr::now),
-					st::boxLabel));
-				cancelBox->addButton(tr::lng_upload_cancel_yes(), [=] {
-					cancelBox->closeBox();
-					crl::on_main(crl::guard(weak, [=] {
-						Core::App().downloadManager().dedupDb().clearResumeUl();
-						notifyListChanged();
-					}));
-				});
-				cancelBox->addButton(tr::lng_upload_cancel_no(), [=] {
-					cancelBox->closeBox();
-					crl::on_main(crl::guard(weak, [=] { notifyListChanged(); }));
-				});
-			});
-			window->show(std::move(cancelBox));
-		}, st::attentionBoxButton);
-		box->addButton(tr::lng_upload_resume_later(), [=] {
-			box->closeBox();
-			crl::on_main(crl::guard(weak, [=] {
-				_paused = true;
-				_pausedId = FullMsgId(
-					PeerId(1),
-					session().data().nextLocalMessageId());
-				resumeEntriesFromDb();
-			}));
-		});
-		box->addButton(tr::lng_upload_resume_yes(), [=] {
-			box->closeBox();
-			crl::on_main(crl::guard(weak, [=] {
-				resumeAll();
-				notifyListChanged();
-			}));
-		});
-	});
-	window->show(std::move(box));
-	window->activate();
-}
-
-void Uploader::showQuitUnfinished(not_null<Window::Controller*> window, Fn<void()> quit) {
-	if (!anyUploads()) {
-		if (quit) {
-			quit();
-		}
-		return;
-	}
-	auto count = 0;
-	for (const auto &entry : _queue) {
-		if (entry.file && !entry.file->filepath.isEmpty()) {
-			++count;
-		}
-	}
-	if (!count) {
-		if (quit) {
-			quit();
-		}
-		return;
-	}
-	auto box = Box([=](not_null<Ui::GenericBox*> box) {
-		box->setCloseByOutsideClick(false);
-		box->setCloseByEscape(false);
-		box->addRow(object_ptr<Ui::FlatLabel>(
-			box.get(),
-			tr::lng_upload_quit_unfinished(
-				tr::now,
-				lt_count, count),
-			st::boxLabel));
-		box->addButton(tr::lng_upload_quit_cancel(), [=] {
-			box->closeBox();
-			auto confirmBox = Box([=](not_null<Ui::GenericBox*> confirmBox) {
-				confirmBox->setCloseByOutsideClick(false);
-				confirmBox->setCloseByEscape(false);
-				confirmBox->addRow(object_ptr<Ui::FlatLabel>(
-					confirmBox.get(),
-					tr::lng_upload_cancel_confirm(tr::now),
-					st::boxLabel));
-				confirmBox->addButton(tr::lng_upload_cancel_yes(), [=] {
-					confirmBox->closeBox();
-					crl::on_main([=] {
-						cancelAll();
-						Core::App().downloadManager().dedupDb().clearResumeUl();
-						if (quit) {
-							quit();
-						}
-					});
-				});
-				confirmBox->addButton(tr::lng_upload_cancel_no(), [=] {
-					confirmBox->closeBox();
-				});
-			});
-			window->show(std::move(confirmBox));
-		}, st::attentionBoxButton);
-		box->addButton(tr::lng_upload_quit_pause(), [=] {
-			box->closeBox();
-			pauseAllUploads();
-			Core::Quit();
-		});
-		box->addButton(tr::lng_upload_quit_continue(), [=] {
-			box->closeBox();
-		});
-	});
-	window->show(std::move(box));
-	window->activate();
 }
 
 rpl::producer<> Uploader::loadingListChanges() const {
@@ -1814,7 +1597,13 @@ bool Uploader::anyUploads() const {
 }
 
 bool Uploader::anyUploadsPaused() const {
-	return !!_pausedId;
+	return ranges::any_of(_queue, &Entry::paused);
+}
+
+bool Uploader::anyActiveUploads() const {
+	return ranges::any_of(_queue, [](const Entry &entry) {
+		return !entry.paused;
+	});
 }
 
 bool Uploader::isPaused() const {
@@ -1951,7 +1740,7 @@ std::vector<Uploader::UiUploadInfo> Uploader::activeUploads() const {
 			info.total = entry.file->filesize;
 			info.offset = entry.docSentSize + entry.sentSize;
 		}
-		info.paused = (entry.itemId == _pausedId);
+		info.paused = entry.paused;
 		result.push_back(std::move(info));
 	}
 	return result;
@@ -1959,7 +1748,7 @@ std::vector<Uploader::UiUploadInfo> Uploader::activeUploads() const {
 
 std::vector<Uploader::UiPendingUpload> Uploader::pendingUploads() const {
 	auto result = std::vector<UiPendingUpload>();
-	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl()) {
+	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl(session().uniqueId())) {
 		if (IsEnhancedForwardTempPath(record.path)) {
 			continue;
 		}
@@ -1969,7 +1758,7 @@ std::vector<Uploader::UiPendingUpload> Uploader::pendingUploads() const {
 		auto info = UiPendingUpload();
 		info.filename = QFileInfo(record.path).fileName();
 		info.path = record.path;
-		info.total = record.size;
+		info.total = QFileInfo(record.path).size();
 		info.sent = record.sentSize;
 		info.itemId = FullMsgId(PeerId(record.peerId), MsgId(0));
 		result.push_back(std::move(info));
@@ -1989,7 +1778,7 @@ QString Uploader::firstUploadName() const {
 }
 
 QString Uploader::firstPendingUploadName() const {
-	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl()) {
+	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl(session().uniqueId())) {
 		if (IsEnhancedForwardTempPath(record.path)) {
 			continue;
 		}
@@ -2001,8 +1790,8 @@ QString Uploader::firstPendingUploadName() const {
 }
 
 void Uploader::pauseAllUploads() {
-	for (const auto &entry : _queue) {
-		pause(entry.itemId);
+	for (auto &entry : _queue) {
+		entry.paused = true;
 	}
 	_paused = true;
 	Core::App().downloadManager().clearFingerprintCache();
@@ -2020,12 +1809,20 @@ void Uploader::resumeAllUploads() {
 	}
 }
 
+void Uploader::queueResumeForLater() {
+	_paused = true;
+	for (auto &entry : _queue) {
+		entry.paused = true;
+	}
+	resumeEntriesFromDb();
+}
+
 void Uploader::resumeEntriesFromDb() {
 	auto toResume = QVector<Uploader::ResumeEntry>();
-	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl()) {
+	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl(session().uniqueId())) {
 		auto entry = Uploader::ResumeEntry();
 		entry.filePath = record.path;
-		entry.fileSize = record.size;
+		entry.fileSize = QFileInfo(record.path).size();
 		entry.partsSent = ushort(record.partsSent);
 		entry.sentSize = record.sentSize;
 		entry.peerId = PeerId(record.peerId);
@@ -2034,8 +1831,14 @@ void Uploader::resumeEntriesFromDb() {
 			entry.partsSent = 0;
 		}
 		entry.topicRootId = MsgId(record.topicRootId);
-		if (!IsEnhancedForwardTempPath(entry.filePath)
+		const auto alreadyQueued = ranges::any_of(_queue, [&](const Entry &e) {
+			return e.file && (e.file->filepath == entry.filePath);
+		});
+		if (!alreadyQueued
+			&& !IsResumeActive(entry.filePath)
+			&& !IsEnhancedForwardTempPath(entry.filePath)
 			&& QFileInfo::exists(entry.filePath)) {
+			ResumeActivePaths().emplace(entry.filePath);
 			toResume.push_back(entry);
 		}
 	}

@@ -38,6 +38,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/platform_specific.h"
 #include "platform/platform_integration.h"
 #include "history/history.h"
+#include "history/history_item.h"
 #include "apiwrap.h"
 #include "api/api_updates.h"
 #include "calls/calls_instance.h"
@@ -92,8 +93,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/premium_limits_box.h"
 #include "ui/accessible/ui_accessible_factory.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/layers/generic_box.h"
+#include "ui/widgets/buttons.h"
+#include "ui/widgets/labels.h"
+#include "info/downloads/info_downloads_widget.h"
+#include "info/info_memento.h"
 #include "core/cached_webview_availability.h"
 #include "styles/style_window.h"
+#include "styles/style_layers.h"
 
 #include <QtCore/QStandardPaths>
 #include <QtCore/QMimeDatabase>
@@ -936,17 +943,69 @@ void Application::logoutWithChecks(Main::Account *account) {
 	};
 	if (!account || !account->sessionExists()) {
 		logout(account);
-	} else if (_exportManager->inProgress(&account->session())) {
-		_exportManager->stopWithConfirmation(retry);
-	} else if (account->session().uploadsInProgress()) {
-		account->session().uploadsStopWithConfirmation(retry);
-	} else if (_downloadManager->loadingInProgress(&account->session())) {
-		_downloadManager->loadingStopWithConfirmation(
-			retry,
-			&account->session());
-	} else {
-		logout(account);
+		return;
 	}
+	const auto session = &account->session();
+	if (_exportManager->inProgress(session)) {
+		_exportManager->stopWithConfirmation(retry);
+		return;
+	}
+	auto dlCount = 0;
+	for (const auto *id : _downloadManager->loadingList()) {
+		if (&id->object.item->history()->session() == session
+			&& !id->paused
+			&& !id->done) {
+			++dlCount;
+		}
+	}
+	auto ulCount = int(ranges::count_if(
+		session->uploader().activeUploads(),
+		[](const auto &info) { return !info.paused; }));
+	auto fwCount = 0;
+	for (const auto &job : EnhancedForward::AllJobs(session)) {
+		if (job.active
+			&& job.progress.state != EnhancedForward::State::Paused) {
+			++fwCount;
+		}
+	}
+	const auto total = dlCount + ulCount + fwCount;
+	if (!total) {
+		logout(account);
+		return;
+	}
+	const auto window = windowFor(not_null(&session->account()));
+	if (!window) {
+		logout(account);
+		return;
+	}
+	const auto pauseAccount = [=] {
+		_downloadManager->pauseAll(session);
+		session->uploader().pauseAllUploads();
+		for (const auto &job : EnhancedForward::AllJobs(session)) {
+			if (job.active
+				&& job.progress.state != EnhancedForward::State::Paused) {
+				EnhancedForward::saveProgressForPeer(job.peer, session);
+				EnhancedForward::pauseForward(job.peer, session);
+			}
+		}
+	};
+	const auto cancelAccount = [=] {
+		_downloadManager->loadingStop(session);
+		session->uploader().cancelAll();
+		_downloadManager->dedupDb().clearResumeUl(session->uniqueId());
+		for (const auto &job : EnhancedForward::AllJobs(session)) {
+			if (job.active || job.resumable) {
+				EnhancedForward::CancelAll(session);
+				break;
+			}
+		}
+	};
+	showUnfinishedOperationsBox(
+		not_null(window),
+		total,
+		pauseAccount,
+		cancelAccount,
+		[=] { logout(account); });
 }
 
 void Application::forceLogOut(
@@ -1114,7 +1173,18 @@ bool Application::uploaderAny() const {
 bool Application::uploaderAnyPaused() const {
 	for (const auto &[index, account] : _domain->accounts()) {
 		if (const auto s = account->maybeSession()) {
-			if (s->uploader().isPaused()) {
+			if (s->uploader().anyUploadsPaused()) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool Application::uploaderAnyActive() const {
+	for (const auto &[index, account] : _domain->accounts()) {
+		if (const auto s = account->maybeSession()) {
+			if (s->uploader().anyActiveUploads()) {
 				return true;
 			}
 		}
@@ -1143,52 +1213,169 @@ int Application::uploaderPendingResumeCount() const {
 	return result;
 }
 
-bool Application::uploadPreventsQuit() {
+void Application::showUnfinishedOperationsBox(
+		not_null<Window::Controller*> window,
+		int total,
+		Fn<void()> pauseAll,
+		Fn<void()> cancelAll,
+		Fn<void()> proceed) {
+	auto box = Box([=](not_null<Ui::GenericBox*> box) {
+		box->setCloseByOutsideClick(false);
+		box->setCloseByEscape(false);
+		box->addRow(object_ptr<Ui::FlatLabel>(
+			box.get(),
+			tr::lng_tm_quit_confirm(
+				tr::now,
+				lt_count,
+				total),
+			st::boxLabel),
+			st::boxPadding + QMargins(0, 0, 0, st::boxPadding.bottom()));
+		box->addButton(tr::lng_tm_quit_cancel(), [=] {
+			box->closeBox();
+			window->show(Ui::MakeConfirmBox({
+				.text = tr::lng_tm_quit_cancel_confirm(tr::now),
+				.confirmed = [=](Fn<void()> close) {
+					close();
+					crl::on_main([=] {
+						cancelAll();
+						proceed();
+					});
+				},
+				.confirmText = tr::lng_box_yes(tr::now),
+				.cancelText = tr::lng_box_no(tr::now),
+				.confirmStyle = &st::attentionBoxButton,
+			}));
+		}, st::attentionBoxButton);
+		box->addButton(tr::lng_tm_quit_pause(), [=] {
+			box->closeBox();
+			crl::on_main([=] {
+				pauseAll();
+				proceed();
+			});
+		});
+		box->addButton(tr::lng_tm_quit_continue(), [=] {
+			box->closeBox();
+		});
+	});
+	window->show(std::move(box));
+	window->activate();
+}
+
+bool Application::transferPreventsQuit() {
 	if (!_domain->started()) {
 		return false;
 	}
+	auto dlCount = 0;
+	for (const auto *id : _downloadManager->loadingList()) {
+		if (!id->enhancedForward && !id->paused && !id->done) {
+			++dlCount;
+		}
+	}
+	auto ulCount = 0;
+	auto fwCount = 0;
+	base::flat_set<PeerId> fwCountedPeers;
 	for (const auto &[index, account] : _domain->accounts()) {
-		if (!account->sessionExists()) {
+		const auto session = account->maybeSession();
+		if (!session) {
 			continue;
 		}
-		if (account->session().uploadsInProgress()
-			&& !account->session().uploader().anyUploadsPaused()) {
-			if (EnhancedForward::activeJobPeer().has_value()) {
-				return false;
+		ulCount += int(ranges::count_if(
+			session->uploader().activeUploads(),
+			[](const auto &info) {
+				return !info.paused
+					&& !EnhancedForward::isEnhancedUpload(info.itemId);
+			}));
+		for (const auto &job : EnhancedForward::AllJobs(session)) {
+			if (!job.active
+				|| job.progress.state == EnhancedForward::State::Paused) {
+				continue;
 			}
-			const auto window = Core::App().windowFor(
-				not_null(&account->session().account()));
-			if (!window) {
-				return false;
+			if (!fwCountedPeers.emplace(job.peer).second) {
+				continue;
 			}
-			account->session().uploader().showQuitUnfinished(window, [=] {
-				for (const auto &[index, account] : _domain->accounts()) {
-					if (account->sessionExists()) {
-						account->session().uploadsStop();
-					}
+			if (job.progress.items.empty()) {
+				fwCount += std::max(
+					0,
+					job.progress.total - job.progress.sent);
+				continue;
+			}
+			for (const auto &item : job.progress.items) {
+				if (!item.cancelled
+					&& !item.dedupSkipped
+					&& !item.sent) {
+					++fwCount;
 				}
-				Quit();
-			});
-			return true;
+			}
 		}
 	}
-	return false;
-}
-
-bool Application::downloadPreventsQuit() {
-	if (!_downloadManager->loadingInProgress()) {
-		return false;
-	} else if (!_downloadManager->anyResumable()) {
+	const auto total = dlCount + ulCount + fwCount;
+	LOG(("TM_QUIT: dl=%1 ul=%2 fw=%3").arg(dlCount).arg(ulCount)
+		.arg(fwCount));
+	if (!total) {
 		return false;
 	}
-	_downloadManager->quitWithConfirmation([=] { Quit(); });
+	auto window = activePrimaryWindow();
+	if (!window) {
+		for (const auto &[index, account] : _domain->accounts()) {
+			if (const auto session = account->maybeSession()) {
+				window = windowFor(not_null(&session->account()));
+				if (window) {
+					break;
+				}
+			}
+		}
+	}
+	if (!window) {
+		return false;
+	}
+	const auto pauseAll = [=] {
+		_downloadManager->pauseAll();
+		for (const auto &[index, account] : _domain->accounts()) {
+			if (const auto session = account->maybeSession()) {
+				session->uploader().pauseAllUploads();
+				for (const auto &job : EnhancedForward::AllJobs(session)) {
+					if (job.active
+						&& job.progress.state
+							!= EnhancedForward::State::Paused) {
+						EnhancedForward::saveProgressForPeer(
+							job.peer,
+							session);
+						EnhancedForward::pauseForward(job.peer, session);
+					}
+				}
+			}
+		}
+	};
+	const auto cancelAll = [=] {
+		_downloadManager->cancelAll();
+		_downloadManager->cancelAllResumeDownloads();
+		for (const auto &[index, account] : _domain->accounts()) {
+			if (const auto session = account->maybeSession()) {
+				auto &uploader = session->uploader();
+				uploader.cancelAll();
+				_downloadManager->dedupDb().clearResumeUl(
+					session->uniqueId());
+				for (const auto &job : EnhancedForward::AllJobs(session)) {
+					if (job.active || job.resumable) {
+						EnhancedForward::CancelAll(session);
+						break;
+					}
+				}
+			}
+		}
+	};
+	showUnfinishedOperationsBox(
+		not_null(window),
+		total,
+		pauseAll,
+		cancelAll,
+		[=] { Quit(); });
 	return true;
 }
 
 bool Application::preventsQuit(QuitReason reason) {
 	if (exportPreventsQuit()
-		|| uploadPreventsQuit()
-		|| downloadPreventsQuit()) {
+		|| transferPreventsQuit()) {
 		return true;
 	} else if ((!_mediaView
 		|| _mediaView->isHidden()
@@ -1197,6 +1384,135 @@ bool Application::preventsQuit(QuitReason reason) {
 		return true;
 	}
 	return false;
+}
+
+void Application::showUnfinishedOperations() {
+	if (!_domain->started()) {
+		return;
+	}
+	const auto dlCount = _downloadManager->resumeDlCount();
+	const auto ulCount = uploaderPendingResumeCount();
+	auto fwJobs = std::vector<std::pair<
+		not_null<Main::Session*>,
+		EnhancedForward::SavedJob>>();
+	auto fwFiles = 0;
+	for (const auto &[index, account] : _domain->accounts()) {
+		const auto session = account->maybeSession();
+		if (!session) {
+			continue;
+		}
+		for (const auto &job : EnhancedForward::GetUnfinishedJobs(session)) {
+			fwFiles += job.unfinishedFiles;
+			fwJobs.push_back({ session, job });
+		}
+	}
+	const auto total = dlCount + ulCount + fwFiles;
+	LOG(("TM_RESUME: dl=%1 ul=%2 fwFiles=%3 total=%4").arg(dlCount)
+		.arg(ulCount).arg(fwFiles).arg(total));
+	EnhancedForward::notifyTransfersUpdated();
+	for (const auto &[index, account] : _domain->accounts()) {
+		if (const auto session = account->maybeSession()) {
+			EnhancedForward::EnsureResumeStatesSeeded(session);
+		}
+	}
+	EnhancedForward::notifyTransfersUpdated();
+	for (const auto &[session, job] : fwJobs) {
+		LOG(("TM_RESUME: job dst=%1 total=%2 sent=%3 unfinished=%4")
+			.arg(job.dstId.value)
+			.arg(job.total)
+			.arg(job.sent)
+			.arg(job.unfinishedFiles));
+	}
+	if (!total) {
+		return;
+	}
+	auto window = activePrimaryWindow();
+	if (!window) {
+		for (const auto &[index, account] : _domain->accounts()) {
+			if (const auto session = account->maybeSession()) {
+				window = windowFor(not_null(&session->account()));
+				if (window) {
+					break;
+				}
+			}
+		}
+	}
+	if (!window) {
+		return;
+	}
+	const auto resumeAll = [=] {
+		_downloadManager->startAllResumeDownloads(false);
+		for (const auto &[index, account] : _domain->accounts()) {
+			if (const auto session = account->maybeSession()) {
+				session->uploader().resumeAllUploads();
+			}
+		}
+		for (const auto &[session, job] : fwJobs) {
+			session->api().startResumeForward(
+				job.srcId,
+				job.dstId,
+				session);
+		}
+		EnhancedForward::notifyTransfersUpdated();
+	};
+	const auto laterAll = [=] {
+		_downloadManager->startAllResumeDownloads(true);
+		for (const auto &[index, account] : _domain->accounts()) {
+			if (const auto session = account->maybeSession()) {
+				session->uploader().queueResumeForLater();
+			}
+		}
+		EnhancedForward::notifyTransfersUpdated();
+	};
+	const auto cancelAll = [=] {
+		_downloadManager->cancelAllResumeDownloads();
+		for (const auto &[index, account] : _domain->accounts()) {
+			if (const auto session = account->maybeSession()) {
+				session->uploader().cancelAll();
+				_downloadManager->dedupDb().clearResumeUl(
+					session->uniqueId());
+			}
+		}
+		for (const auto &[session, job] : fwJobs) {
+			EnhancedForward::CleanupPartialFilesForPeer(session, job.dstId);
+		}
+	};
+	auto box = Box([=](not_null<Ui::GenericBox*> box) {
+		box->setCloseByOutsideClick(false);
+		box->setCloseByEscape(false);
+		box->addRow(object_ptr<Ui::FlatLabel>(
+			box.get(),
+			tr::lng_tm_resume_unfinished(
+				tr::now,
+				lt_count,
+				total),
+			st::boxLabel));
+		box->addButton(tr::lng_tm_resume_cancel(), [=] {
+			box->closeBox();
+			window->show(Ui::MakeConfirmBox({
+				.text = tr::lng_tm_resume_cancel_confirm(tr::now),
+				.confirmed = [=](Fn<void()> close) {
+					close();
+					crl::on_main([=] { cancelAll(); });
+				},
+				.confirmText = tr::lng_box_yes(tr::now),
+				.cancelText = tr::lng_box_no(tr::now),
+				.confirmStyle = &st::attentionBoxButton,
+			}));
+		}, st::attentionBoxButton);
+		box->addButton(tr::lng_tm_resume_later(), [=] {
+			box->closeBox();
+			crl::on_main([=] { laterAll(); });
+		});
+		box->addButton(tr::lng_tm_resume_yes(), [=] {
+			box->closeBox();
+			crl::on_main([=] {
+				resumeAll();
+			});
+		});
+	});
+	window->show(std::move(box));
+	window->activate();
 }
 
 int Application::unreadBadge() const {
@@ -1902,7 +2218,6 @@ bool Application::readyToQuit() {
 		}
 	}
 	if (prevented) {
-		quitDelayed();
 		return false;
 	}
 	return true;
@@ -1911,12 +2226,6 @@ bool Application::readyToQuit() {
 void Application::quitPreventFinished() {
 	if (Quitting()) {
 		QuitAttempt();
-	}
-}
-
-void Application::quitDelayed() {
-	if (const auto window = activeWindow()) {
-		window->showEnhancedForwardQuitConfirm();
 	}
 }
 
