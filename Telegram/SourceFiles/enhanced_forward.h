@@ -20,6 +20,7 @@ class HistoryItem;
 class PhotoData;
 class DocumentData;
 class ApiWrap;
+class PeerData;
 struct SendingAlbum;
 struct FilePrepareResult;
 
@@ -45,11 +46,15 @@ struct Split {
 	std::vector<not_null<HistoryItem*>> normal;
 };
 
-// Fetches the no-forwards restriction flag for each distinct source peer
-// asynchronously, then calls `done` with the classified Split. Never blocks.
-void classifyItems(
-	const std::vector<not_null<HistoryItem*>> &items,
-	base::unique_function<void(Split)> done);
+// Fail-driven restriction handling: peers are never probed. The registry is
+// synced from raw noforwards flags on every peer update and from definite
+// forward refusals; unknown peers always take the plain path.
+[[nodiscard]] Split classifyItems(
+	const std::vector<not_null<HistoryItem*>> &items);
+
+void NotePeerNoforwardsFlag(not_null<PeerData*> peer, bool value);
+void MarkPeerProtectedByError(not_null<PeerData*> peer);
+[[nodiscard]] bool PeerNeedsEnhancedForward(not_null<PeerData*> peer);
 
 enum class State : uint8_t {
 	Idle,

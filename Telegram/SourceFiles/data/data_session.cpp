@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session_settings.h"
 #include "main/main_app_config.h"
 #include "apiwrap.h"
+#include "enhanced_forward.h"
 #include "storage/file_upload.h"
 #include "mainwidget.h"
 #include "api/api_bot.h"
@@ -904,6 +905,9 @@ not_null<PeerData*> Session::processChat(const MTPChat &data) {
 				: Flag())
 			| (data.is_noforwards() ? Flag::NoForwards : Flag());
 		chat->setFlags((chat->flags() & ~flagsMask) | flagsSet);
+		EnhancedForward::NotePeerNoforwardsFlag(
+			result,
+			data.is_noforwards());
 		chat->count = data.vparticipants_count().v;
 
 		if (canAddMembers != chat->canAddMembers()) {
@@ -1099,6 +1103,9 @@ not_null<PeerData*> Session::processChat(const MTPChat &data) {
 						: Flag()))
 				: Flag::StarsPerMessageKnown);
 		channel->setFlags((channel->flags() & ~flagsMask) | flagsSet);
+		EnhancedForward::NotePeerNoforwardsFlag(
+			result,
+			data.is_noforwards());
 		channel->setBotVerifyDetailsIcon(
 			data.vbot_verification_icon().value_or_empty());
 		if (!minimal && storiesState) {

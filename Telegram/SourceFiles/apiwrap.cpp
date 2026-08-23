@@ -3904,16 +3904,10 @@ void ApiWrap::forwardMessages(
 		std::shared_ptr<EnhancedForward::SavedJob> resumeJob) {
 	Expects(!draft.items.empty() || resumeJob);
 
-	const auto forwardItems = draft.items;
-	EnhancedForward::classifyItems(forwardItems, [
-		this,
-		draft = std::move(draft),
-		action = std::move(action),
-		successCallback = std::move(successCallback),
-		resumeJob = std::move(resumeJob)
-	](EnhancedForward::Split split) mutable {
-	auto enhancedItems = split.restricted;
-	auto normalItems = split.normal;
+	auto split = EnhancedForward::classifyItems(draft.items);
+	{
+	auto enhancedItems = std::move(split.restricted);
+	auto normalItems = std::move(split.normal);
 	// draft.items are in selection order, not chronological. Sort both
 	// lists by message id ascending so the pipeline (downloads, uploads
 	// and sends) and the standard forward proceed oldest -> newest.
@@ -4046,12 +4040,16 @@ void ApiWrap::forwardMessages(
 	auto ids = QVector<MTPint>();
 	auto randomIds = QVector<MTPlong>();
 	auto localIds = std::shared_ptr<base::flat_map<uint64, FullMsgId>>();
-    
+	auto chunkItems = std::make_shared<std::vector<not_null<HistoryItem*>>>();
+	const auto forwardOptions = draft.options;
+	const auto groupOptions = draft.groupOptions;
+
 	const auto sendAccumulated = [&] {
 		if (shared) {
 			++shared->requestsLeft;
 		}
 		const auto idsCopy = localIds;
+		const auto itemsCopy = chunkItems;
 		const auto scheduled = action.options.scheduled;
 		const auto starsPaid = std::min(
 			action.options.starsApproved,
@@ -4116,10 +4114,21 @@ void ApiWrap::forwardMessages(
 					_session, result, peer->id, forwardFrom->id);
 			}
 		};
-		const auto failCallback = [=](
+		const auto failCallback = [=, this](
 				const MTP::Error &error,
 				const MTP::Response &) {
-			if (idsCopy) {
+			if (error.type() == u"CHAT_FORWARDS_RESTRICTED"_q
+				&& itemsCopy
+				&& !itemsCopy->empty()) {
+				EnhancedForward::MarkPeerProtectedByError(forwardFrom);
+				EnhancedForward::Pipeline::Start(
+					this,
+					std::move(*itemsCopy),
+					action,
+					forwardOptions,
+					groupOptions,
+					nullptr);
+			} else if (idsCopy) {
 				for (const auto &[randomId, itemId] : *idsCopy) {
 					_session->api().sendMessageFail(
 						error, peer, randomId, itemId);
@@ -4138,6 +4147,7 @@ void ApiWrap::forwardMessages(
 		ids.resize(0);
 		randomIds.resize(0);
 		localIds = nullptr;
+		chunkItems = std::make_shared<std::vector<not_null<HistoryItem*>>>();
 	};
     
 	ids.reserve(count);
@@ -4178,10 +4188,11 @@ void ApiWrap::forwardMessages(
 		}
 		ids.push_back(MTP_int(item->id));
 		randomIds.push_back(MTP_long(randomId));
+		chunkItems->push_back(item);
 	}
 	sendAccumulated();
 	_session->data().sendHistoryChangeNotifications();
-	});
+	}
 }
 
 void ApiWrap::startResumeForward(

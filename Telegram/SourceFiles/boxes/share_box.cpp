@@ -2090,7 +2090,8 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 			return;
 		}
 
-		EnhancedForward::classifyItems(items, [=](const EnhancedForward::Split &split) mutable {
+		const auto split = EnhancedForward::classifyItems(items);
+		{
 			if (!split.restricted.empty()) {
 				auto &api = history->session().api();
 			const auto remaining = std::make_shared<int>(
@@ -2413,7 +2414,7 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 		if (state->submitCallback) {
 			state->submitCallback();
 		}
-		});
+		}
 	};
 }
 

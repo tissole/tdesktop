@@ -367,210 +367,43 @@ void fireUpdate(not_null<Main::Session*> session, const PeerId &peer) {
 	NotifyStateChanged(peer);
 }
 
-bool checkMsgRestriction(not_null<HistoryItem*> item) {
-	const auto peer = item->history()->peer;
-	auto result = false;
-	auto loop = QEventLoop();
-	auto finished = false;
-	const auto guard = std::make_shared<bool>(true);
-	const auto session = &peer->session();
-
-	if (const auto channel = peer->asChannel()) {
-		session->api().request(MTPchannels_GetMessages(
-			channel->inputChannel(),
-			MTP_vector<MTPInputMessage>(1, MTP_inputMessageID(MTP_int(item->id.bare)))
-		)).done([&](const MTPmessages_Messages &data) {
-			data.match([&](const MTPDmessages_messages &data) {
-				for (const auto &msg : data.vmessages().v) {
-					msg.match([&](const MTPDmessage &m) {
-						result = (m.vflags().v & (1U << 26));
-					}, [&](const MTPDmessageService &m) {
-						result = (m.vflags().v & (1U << 26));
-					}, [](const auto &) {});
-				}
-				finished = true;
-				loop.quit();
-			}, [&](const MTPDmessages_messagesSlice &data) {
-				for (const auto &msg : data.vmessages().v) {
-					msg.match([&](const MTPDmessage &m) {
-						result = (m.vflags().v & (1U << 26));
-					}, [&](const MTPDmessageService &m) {
-						result = (m.vflags().v & (1U << 26));
-					}, [](const auto &) {});
-				}
-				finished = true;
-				loop.quit();
-			}, [&](const MTPDmessages_channelMessages &data) {
-				for (const auto &msg : data.vmessages().v) {
-					msg.match([&](const MTPDmessage &m) {
-						result = (m.vflags().v & (1U << 26));
-					}, [&](const MTPDmessageService &m) {
-						result = (m.vflags().v & (1U << 26));
-					}, [](const auto &) {});
-				}
-				finished = true;
-				loop.quit();
-			}, [&](const MTPDmessages_messagesNotModified &) {
-				finished = true;
-				loop.quit();
-			}, [](const auto &) {
-			});
-		}).fail([&](const MTP::Error &) {
-			finished = true;
-			loop.quit();
-		}).send();
-	} else {
-		session->api().request(MTPmessages_GetMessages(
-			MTP_vector<MTPInputMessage>(1, MTP_inputMessageID(MTP_int(item->id.bare)))
-		)).done([&](const MTPmessages_Messages &data) {
-			data.match([&](const MTPDmessages_messages &data) {
-				for (const auto &msg : data.vmessages().v) {
-					msg.match([&](const MTPDmessage &m) {
-						result = (m.vflags().v & (1U << 26));
-					}, [](const auto &) {});
-				}
-				finished = true;
-				loop.quit();
-			}, [&](const MTPDmessages_messagesSlice &data) {
-				for (const auto &msg : data.vmessages().v) {
-					msg.match([&](const MTPDmessage &m) {
-						result = (m.vflags().v & (1U << 26));
-					}, [](const auto &) {});
-				}
-				finished = true;
-				loop.quit();
-			}, [](const auto &) {
-			});
-		}).fail([&](const MTP::Error &) {
-			finished = true;
-			loop.quit();
-		}).send();
-	}
-
-	QTimer::singleShot(10000, [guard, &finished, &loop] {
-		if (*guard && !finished) { finished = true; loop.quit(); }
-	});
-	if (!finished) loop.exec();
-	*guard = false;
+base::flat_set<not_null<PeerData*>> &FlagProtectedPeers() {
+	static base::flat_set<not_null<PeerData*>> result;
 	return result;
 }
 
-void checkPeerRestriction(
-		not_null<PeerData*> peer,
-		Fn<void(bool)> done) {
-	const auto session = &peer->session();
+base::flat_set<not_null<PeerData*>> &ErrorProtectedPeers() {
+	static base::flat_set<not_null<PeerData*>> result;
+	return result;
+}
 
-	if (peer->asChannel() || peer->asChat()) {
-		const auto finish = [=](bool result) {
-			done(result);
-		};
-		const auto scanMessages = [](const MTPVector<MTPMessage> &msgs) {
-			for (const auto &msg : msgs.v) {
-				if (msg.type() != mtpc_message) continue;
-				return bool(msg.c_message().vflags().v & (1U << 26));
-			}
-			return false;
-		};
-		const auto scanPeers = [](const MTPVector<MTPChat> &chats) {
-			for (const auto &c : chats.v) {
-				if (c.type() == mtpc_channel) {
-					if (c.c_channel().is_noforwards()) {
-						return true;
-					}
-				} else if (c.type() == mtpc_chat) {
-					if (c.c_chat().is_noforwards()) {
-						return true;
-					}
-				}
-			}
-			return false;
-		};
-		session->api().request(MTPmessages_GetHistory(
-			peer->input(),
-			MTP_int(0),
-			MTP_int(0),
-			MTP_int(0),
-			MTP_int(10),
-			MTP_int(0),
-			MTP_int(0),
-			MTP_long(0)
-		)).done([=](const MTPmessages_Messages &data) {
-			auto result = false;
-			data.match([&](const MTPDmessages_messages &d) {
-				result = scanMessages(d.vmessages())
-					|| scanPeers(d.vchats());
-			}, [&](const MTPDmessages_messagesSlice &d) {
-				result = scanMessages(d.vmessages())
-					|| scanPeers(d.vchats());
-			}, [&](const MTPDmessages_channelMessages &d) {
-				result = scanMessages(d.vmessages())
-					|| scanPeers(d.vchats());
-			}, [&](const MTPDmessages_messagesNotModified &) {
-			}, [](const auto &) {
-			});
-			finish(result);
-		}).fail([=](const MTP::Error &) {
-			finish(false);
-		}).send();
-	} else if (const auto user = peer->asUser()) {
-		session->api().request(MTPusers_GetFullUser(
-			user->inputUser()
-		)).done([=](const MTPusers_UserFull &data) {
-			const auto &d = data.c_users_userFull();
-			session->data().processUsers(d.vusers());
-			session->data().processChats(d.vchats());
-			const auto result = (user->flags() & UserDataFlag::NoForwardsPeerEnabled)
-				|| (user->flags() & UserDataFlag::NoForwardsMyEnabled);
-			done(result);
-		}).fail([=](const MTP::Error &) {
-			done(false);
-		}).send();
+void NotePeerNoforwardsFlag(not_null<PeerData*> peer, bool value) {
+	if (value) {
+		FlagProtectedPeers().insert(peer);
 	} else {
-		done(false);
+		FlagProtectedPeers().erase(peer);
 	}
 }
 
-void classifyItems(
-		const std::vector<not_null<HistoryItem*>> &items,
-		base::unique_function<void(Split)> done) {
-	if (items.empty()) {
-		done(Split());
-		return;
-	}
-	const auto session = &items.front()->history()->session();
-	const auto myItems = std::make_shared<std::vector<not_null<HistoryItem*>>>(items);
-	auto peerIds = std::vector<PeerId>();
-	for (const auto &item : *myItems) {
-		const auto peerId = item->history()->peer->id;
-		if (ranges::find(peerIds, peerId) == end(peerIds)) {
-			peerIds.push_back(peerId);
+void MarkPeerProtectedByError(not_null<PeerData*> peer) {
+	ErrorProtectedPeers().insert(peer);
+}
+
+bool PeerNeedsEnhancedForward(not_null<PeerData*> peer) {
+	return FlagProtectedPeers().contains(peer)
+		|| ErrorProtectedPeers().contains(peer);
+}
+
+Split classifyItems(const std::vector<not_null<HistoryItem*>> &items) {
+	auto result = Split();
+	for (const auto &item : items) {
+		if (PeerNeedsEnhancedForward(item->history()->peer)) {
+			result.restricted.push_back(item);
+		} else {
+			result.normal.push_back(item);
 		}
 	}
-	auto peerRestricted = std::make_shared<base::flat_map<PeerId, bool>>();
-	auto remaining = std::make_shared<int>(int(peerIds.size()));
-	auto doneHolder = std::make_shared<base::unique_function<void(Split)>>(std::move(done));
-	const auto finish = [myItems, peerRestricted, remaining, doneHolder] {
-		if (--*remaining > 0) {
-			return;
-		}
-		Split result;
-		for (const auto &item : *myItems) {
-			const auto peerFlag = (*peerRestricted)[item->history()->peer->id];
-			if (peerFlag) {
-				result.restricted.push_back(item);
-			} else {
-				result.normal.push_back(item);
-			}
-		}
-		(*doneHolder)(std::move(result));
-	};
-	for (const auto &peerId : peerIds) {
-		const auto peer = session->data().peer(peerId);
-		checkPeerRestriction(peer, [peerRestricted, peerId, finish](bool restricted) {
-			(*peerRestricted)[peerId] = restricted;
-			finish();
-		});
-	}
+	return result;
 }
 
 void startForwardSession(
