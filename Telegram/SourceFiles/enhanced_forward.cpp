@@ -65,13 +65,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_download_manager.h"
 #include "info/downloads/info_downloads_widget.h"
 #include "data/data_file_hash.h"
+#include "data/data_forum_topic.h"
 #include "ui/toast/toast.h"
-#include "ui/layers/generic_box.h"
 #include "ui/boxes/confirm_box.h"
 #include "window/window_controller.h"
 #include "styles/style_layers.h"
 #include "styles/style_boxes.h"
 #include "settings.h"
+
+#include <algorithm>
 
 namespace EnhancedForward {
 namespace {
@@ -3718,3 +3720,783 @@ void Pipeline::cancelItem(int idx) {
 }
 
 } // namespace EnhancedForward
+
+namespace NormalForward {
+namespace {
+
+constexpr auto kMaxBatchIds = 100;
+constexpr auto kMaxAlbumIds = 10;
+constexpr auto kMaxFingerprintsInFlight = 2;
+constexpr auto kMaxFingerprintRetries = 3;
+constexpr auto kGeneralId = Data::ForumTopic::kGeneralId;
+
+rpl::event_stream<> CountersChanged;
+
+void Notify() {
+	CountersChanged.fire({});
+}
+
+struct Registration {
+	uint64 mediaId = 0;
+	QByteArray hash;
+};
+
+class Job final : public std::enable_shared_from_this<Job> {
+public:
+	enum class State {
+		Running,
+		FloodWait,
+		Paused,
+		Done,
+		Cancelled,
+	};
+
+	Job(
+		not_null<Main::Session*> session,
+		ApiWrap *api,
+		PeerId dst,
+		PeerId src,
+		Api::SendAction action,
+		Data::ForwardOptions forwardOptions,
+		Data::GroupingOptions groupOptions)
+	: session(session)
+	, api(api)
+	, dst(dst)
+	, src(src)
+	, action(std::move(action))
+	, forwardOptions(forwardOptions)
+	, groupOptions(groupOptions) {
+	}
+
+	Main::Session *session = nullptr;
+	ApiWrap *api = nullptr;
+
+	PeerId dst = PeerId();
+	PeerId src = PeerId();
+	Api::SendAction action;
+	Data::ForwardOptions forwardOptions = Data::ForwardOptions();
+	Data::GroupingOptions groupOptions = Data::GroupingOptions();
+
+	State state = State::Running;
+
+	int total = 0;
+	int done = 0;
+	int skipped = 0;
+	MsgId lastMsgId = 0;
+	QString lastFileName;
+	int floodSeconds = 0;
+
+	std::vector<MsgId> remaining;   // source ids not yet acked
+	std::vector<MsgId> queue;       // deduped, ready to send
+	base::flat_map<MsgId, Registration> regs;
+	base::flat_set<MsgId> awaitingHash;
+	base::flat_map<MsgId, QByteArray> hashes;
+	base::flat_map<MsgId, uint64> mediaIds;
+	size_t scanned = 0;             // prepare cursor over remaining
+	int inflightFetches = 0;
+	bool batchInFlight = false;
+	bool pumping = false;
+	bool completionFired = false;
+	base::flat_map<MsgId, int> fingerprintRetries;
+
+	std::vector<mtpRequestId> requests;
+	base::Timer floodTimer;
+	base::Timer tickTimer;
+	std::optional<TimeId> videoTimestamp;
+
+	Fn<void()> completion;
+
+	[[nodiscard]] int maxBatch() const {
+		if (groupOptions == Data::GroupingOptions::Separate) {
+			return 1;
+		}
+		if (groupOptions == Data::GroupingOptions::RegroupAll) {
+			return kMaxAlbumIds;
+		}
+		return kMaxBatchIds;
+	}
+
+	[[nodiscard]] bool alive() const {
+		return state == State::Running || state == State::FloodWait;
+	}
+};
+
+using JobsMap = base::flat_map<PeerId, std::shared_ptr<Job>>;
+
+JobsMap &Jobs() {
+	static JobsMap result;
+	return result;
+}
+
+[[nodiscard]] bool BelongsTo(
+		const Job &job,
+		not_null<Main::Session*> session) {
+	return job.session == session.get();
+}
+
+void FireCompletion(not_null<Job*> j) {
+	if (!j->completionFired) {
+		j->completionFired = true;
+		if (j->completion) {
+			j->completion();
+		}
+	}
+}
+
+void SaveSnapshot(not_null<Job*> j) {
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (!db.isOpen()) {
+		return;
+	}
+	auto record = Data::NfResumeRecord();
+	record.sessionId = j->session->uniqueId();
+	record.destPeerId = j->dst;
+	record.srcPeerId = j->src;
+	record.total = j->total;
+	record.done = j->done;
+	record.skipped = j->skipped;
+	record.lastMsgId = j->lastMsgId;
+	switch (j->state) {
+	case Job::State::FloodWait: record.state = u"flood"_q; break;
+	case Job::State::Paused: record.state = u"paused"_q; break;
+	default: record.state = u"running"_q; break;
+	}
+	record.remaining = j->remaining;
+	db.insertNfResume(record);
+}
+
+void Pump(not_null<Job*> j);
+
+void StopTimers(not_null<Job*> j) {
+	j->floodTimer.cancel();
+	j->tickTimer.cancel();
+}
+
+void Finish(not_null<Job*> j) {
+	j->state = Job::State::Done;
+	for (const auto requestId : base::take(j->requests)) {
+		j->api->request(requestId).cancel();
+	}
+	StopTimers(j);
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	for (const auto &[msgId, registration] : j->regs) {
+		db.removePending(
+			Data::DedupDb::Table::Uploads,
+			registration.mediaId);
+	}
+	j->regs.clear();
+	db.removeNfResume(j->session->uniqueId(), j->dst);
+	if (j->done > 0) {
+		const auto text = tr::lng_nf_done_toast(
+			tr::now,
+			lt_done,
+			QString::number(j->done),
+			lt_total,
+			QString::number(j->total),
+			lt_skipped,
+			QString::number(j->skipped));
+		if (const auto primary =
+			Core::App().windowFor(not_null(&j->session->account()))) {
+			primary->showToast(text, crl::time(4000));
+		}
+	} else if (j->skipped > 0) {
+		const auto text = tr::lng_tm_dl_duplicates_skipped(
+			tr::now,
+			lt_count,
+			j->skipped);
+		if (const auto primary =
+			Core::App().windowFor(not_null(&j->session->account()))) {
+			primary->showToast(text, crl::time(4000));
+		}
+	}
+	FireCompletion(j);
+	Jobs().remove(j->dst);
+	Notify();
+}
+
+void PauseJob(not_null<Job*> j) {
+	if (j->state != Job::State::Running) {
+		return;
+	}
+	j->state = Job::State::Paused;
+	SaveSnapshot(j);
+	FireCompletion(j);
+	Notify();
+}
+
+void CancelJob(not_null<Job*> j) {
+	j->state = Job::State::Cancelled;
+	for (const auto requestId : base::take(j->requests)) {
+		j->api->request(requestId).cancel();
+	}
+	StopTimers(j);
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	for (const auto &[msgId, registration] : j->regs) {
+		db.removePending(
+			Data::DedupDb::Table::Uploads,
+			registration.mediaId);
+	}
+	j->regs.clear();
+	db.removeNfResume(j->session->uniqueId(), j->dst);
+	Jobs().remove(j->dst);
+	FireCompletion(j);
+	Notify();
+}
+
+void PauseJob(not_null<Job*> j);
+
+void StartFingerprint(
+		not_null<Job*> j,
+		MsgId msgId,
+		not_null<DocumentData*> document) {
+	auto &retries = j->fingerprintRetries[msgId];
+	if (retries >= kMaxFingerprintRetries) {
+		LOG(("NF: fingerprint failed %1 times msg=%2, pausing").arg(
+			retries).arg(msgId.bare));
+		PauseJob(j);
+		return;
+	}
+	retries++;
+	j->inflightFetches++;
+	j->awaitingHash.insert(msgId);
+	const auto weak = j->weak_from_this();
+	Data::RemoteFileFingerprint(j->session, document, [=](QByteArray hash) {
+		if (const auto strong = weak.lock()) {
+			strong->inflightFetches--;
+			strong->awaitingHash.remove(msgId);
+			if (hash.isEmpty()) {
+				Pump(strong.get());
+				return;
+			}
+			strong->fingerprintRetries.remove(msgId);
+			strong->hashes.emplace_or_assign(msgId, std::move(hash));
+			Pump(strong.get());
+		}
+	});
+}
+
+void StartPhotoFingerprint(
+		not_null<Job*> j,
+		MsgId msgId,
+		not_null<PhotoData*> photo) {
+	auto &retries = j->fingerprintRetries[msgId];
+	if (retries >= kMaxFingerprintRetries) {
+		LOG(("NF: photo fingerprint failed %1 times msg=%2, pausing").arg(
+			retries).arg(msgId.bare));
+		PauseJob(j);
+		return;
+	}
+	retries++;
+	j->inflightFetches++;
+	j->awaitingHash.insert(msgId);
+	const auto weak = j->weak_from_this();
+	Data::RemotePhotoFingerprint(j->session, photo, [=](QByteArray hash) {
+		if (const auto strong = weak.lock()) {
+			strong->inflightFetches--;
+			strong->awaitingHash.remove(msgId);
+			if (hash.isEmpty()) {
+				Pump(strong.get());
+				return;
+			}
+			strong->fingerprintRetries.remove(msgId);
+			strong->hashes.emplace_or_assign(msgId, std::move(hash));
+			Pump(strong.get());
+		}
+	});
+}
+
+[[nodiscard]] MTPInputMedia InputMediaForMedia(
+		not_null<Data::Session*> data,
+		const Data::Media *media) {
+	if (const auto photo = media->photo()) {
+		return MTP_inputMediaPhoto(
+			MTP_flags(0),
+			photo->mtpInput(),
+			MTPint(),
+			MTPInputDocument());
+	} else if (const auto document = media->document()) {
+		return MTP_inputMediaDocument(
+			MTP_flags(0),
+			document->mtpInput(),
+			MTPInputPhoto(),
+			MTPint(),
+			MTPint(),
+			MTPstring());
+	}
+	return MTP_inputMediaEmpty();
+}
+
+void FlushForwardBatch(
+		not_null<Job*> j,
+		std::vector<MsgId> chunk) {
+	Expects(!chunk.empty());
+
+	const auto history = j->session->data().history(j->dst);
+	const auto srcPeer = j->session->data().peer(j->src);
+
+	auto idsVector = QVector<MTPint>();
+	auto randoms = QVector<MTPlong>();
+	idsVector.reserve(int(chunk.size()));
+	randoms.reserve(int(chunk.size()));
+	for (const auto msgId : chunk) {
+		idsVector.push_back(MTP_int(msgId.bare));
+		randoms.push_back(MTP_long(base::RandomValue<uint64>()));
+	}
+
+	const auto topicRootId = j->action.replyTo.topicRootId;
+	const auto realTopMsgId = (topicRootId == kGeneralId)
+		? MsgId(0)
+		: topicRootId;
+	using Flag = MTPmessages_ForwardMessages::Flag;
+	auto approved = j->action.options.starsApproved;
+	const auto starsPaid = std::min(
+		history->peer->starsPerMessageChecked(),
+		approved);
+	if (starsPaid) {
+		approved -= starsPaid;
+		j->action.options.starsApproved = approved;
+	}
+	LOG(("NF: flush batch=%1 fwdOpts=%2 grpOpts=%3 dropAuthor=%4 dropCaptions=%5").arg(
+		chunk.size()).arg(int(j->forwardOptions)).arg(
+		int(j->groupOptions)).arg(
+		Logs::b(j->forwardOptions != Data::ForwardOptions::Quoted)).arg(
+		Logs::b(j->forwardOptions == Data::ForwardOptions::UnquotedWithoutCaptions)));
+	auto flags = Flag(0)
+		| Flag::f_with_my_score
+		| (ShouldSendSilent(history->peer, j->action.options)
+			? Flag::f_silent
+			: Flag(0))
+		| (realTopMsgId ? Flag::f_top_msg_id : Flag(0))
+		| ((j->action.options.sendAs)
+			? Flag::f_send_as
+			: Flag(0))
+		| (j->forwardOptions != Data::ForwardOptions::Quoted
+			? Flag::f_drop_author
+			: Flag(0))
+		| (j->forwardOptions == Data::ForwardOptions::UnquotedWithoutCaptions
+			? Flag::f_drop_media_captions
+			: Flag(0))
+		| (j->videoTimestamp.has_value()
+			? Flag::f_video_timestamp
+			: Flag(0))
+		| (j->action.options.shortcutId
+			? Flag::f_quick_reply_shortcut
+			: Flag(0))
+		| (j->action.options.scheduled
+			? Flag::f_schedule_date
+			: Flag(0))
+		| ((j->action.options.scheduled
+				&& j->action.options.scheduleRepeatPeriod)
+			? Flag::f_schedule_repeat_period
+			: Flag(0))
+		| (starsPaid ? Flag::f_allow_paid_stars : Flag(0));
+
+	const auto maxSourceId = chunk.back();
+
+	const auto weak = j->weak_from_this();
+	const auto requestId = j->api->request(
+		MTPmessages_ForwardMessages(
+			MTP_flags(flags),
+			srcPeer->input(),
+			MTP_vector<MTPint>(idsVector),
+			MTP_vector<MTPlong>(randoms),
+			history->peer->input(),
+			MTP_int(realTopMsgId.bare),
+			ReplyToForMTP(history, j->action.replyTo),
+			MTP_int(j->action.options.scheduled),
+			MTP_int(j->action.options.scheduleRepeatPeriod),
+			(j->action.options.sendAs
+				? j->action.options.sendAs->input()
+				: MTP_inputPeerEmpty()),
+			Data::ShortcutIdToMTP(
+				j->session,
+				j->action.options.shortcutId),
+			MTP_long(j->action.options.effectId),
+			MTP_int(j->videoTimestamp.value_or(0)),
+			MTP_long(starsPaid),
+			Api::SuggestToMTP(j->action.options.suggest))
+	).done([=](
+			const MTPUpdates &result) mutable {
+		const auto strong = weak.lock();
+		if (!strong) {
+			return;
+		}
+		auto job = not_null{ strong.get() };
+		job->api->applyUpdates(result);
+		job->done += int(chunk.size());
+		job->lastMsgId = std::max(job->lastMsgId, maxSourceId);
+		for (const auto msgId : chunk) {
+			const auto item = job->session->data().message(
+				FullMsgId(job->src, msgId));
+			const auto media = item ? item->media() : nullptr;
+			if (!media) {
+				continue;
+			} else if (const auto doc = media->document()) {
+				job->lastFileName = doc->filename();
+			} else if (media->photo()) {
+				job->lastFileName = u"photo_%1.jpg"_q.arg(msgId.bare);
+			}
+		}
+		auto &db = Core::App().downloadManager().ensureDedupDb();
+		for (const auto msgId : chunk) {
+			if (const auto it = job->regs.find(msgId); it != end(job->regs)) {
+				db.insert(Data::DedupDb::Table::Uploads, {
+					.hash = it->second.hash,
+					.documentId = it->second.mediaId,
+					.status = u"f"_q,
+				});
+				db.removePending(
+					Data::DedupDb::Table::Uploads,
+					it->second.mediaId);
+				job->regs.erase(it);
+			}
+		}
+		job->batchInFlight = false;
+		SaveSnapshot(job);
+		Notify();
+		Pump(job);
+	}).fail([=](
+			const MTP::Error &error) mutable {
+		const auto strong = weak.lock();
+		if (!strong) {
+			return;
+		}
+		auto job = not_null{ strong.get() };
+		job->batchInFlight = false;
+		for (auto it = chunk.rbegin(); it != chunk.rend(); ++it) {
+			job->queue.insert(job->queue.begin(), *it);
+		}
+		const auto &type = error.type();
+		if (type.startsWith(u"FLOOD_WAIT_"_q)) {
+			job->floodSeconds = type.mid(u"FLOOD_WAIT_"_q.size()).toInt();
+			job->state = Job::State::FloodWait;
+			SaveSnapshot(job);
+			Notify();
+			j->floodTimer.setCallback([weak] {
+				if (const auto strong = weak.lock()) {
+					if (strong->state == Job::State::FloodWait) {
+						strong->floodSeconds = 0;
+						strong->tickTimer.cancel();
+						strong->state = Job::State::Running;
+						SaveSnapshot(strong.get());
+						Notify();
+						Pump(strong.get());
+					}
+				}
+			});
+			j->floodTimer.callOnce((job->floodSeconds + 1) * 1000);
+			j->tickTimer.setCallback([weak] {
+				if (const auto strong = weak.lock()) {
+					if (strong->floodSeconds > 0) {
+						strong->floodSeconds--;
+						Notify();
+					}
+				}
+			});
+			j->tickTimer.callEach(1000);
+			return;
+		}
+		j->api->sendMessageFail(error, history->peer);
+		PauseJob(j);
+	}).send();
+	j->requests.push_back(requestId);
+	j->batchInFlight = true;
+}
+
+void Pump(not_null<Job*> j) {
+	if (j->state != Job::State::Running
+		|| j->pumping
+		|| j->batchInFlight) {
+		return;
+	}
+	j->pumping = true;
+	const auto guard = gsl::finally([&] { j->pumping = false; });
+
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
+	const auto windowSize = j->maxBatch();
+
+	// Check-ahead pipeline: fill the queue up to one batch ahead.
+	// Doc-id check is instant; fingerprints are bounded to 2 concurrent.
+	// The flush fires as soon as the queue reaches the target size.
+	while (int(j->queue.size()) < windowSize
+		&& j->scanned < j->remaining.size()) {
+		const auto msgId = j->remaining[j->scanned];
+
+		if (!dedupOn) {
+			j->scanned++;
+			j->queue.push_back(msgId);
+			continue;
+		}
+
+		if (const auto it = j->hashes.find(msgId); it != end(j->hashes)) {
+			j->scanned++;
+			const auto &hash = it->second;
+			const auto duplicate = !hash.isEmpty()
+				&& db.seekDocumentId(
+					Data::DedupDb::Table::Uploads,
+					hash) != 0;
+			LOG(("NF: hash %1 dup=%2 id=%3").arg(
+				QString::fromLatin1(hash.toHex())).arg(
+				Logs::b(duplicate)).arg(msgId.bare));
+			if (duplicate) {
+				j->skipped++;
+				continue;
+			}
+			const auto mediaIt = j->mediaIds.find(msgId);
+			const auto mediaId = (mediaIt != end(j->mediaIds))
+				? mediaIt->second
+				: uint64(0);
+			if (mediaId && !hash.isEmpty()) {
+				db.addPending(
+					Data::DedupDb::Table::Uploads,
+					mediaId,
+					hash);
+				j->regs.emplace_or_assign(
+					msgId,
+					Registration{ mediaId, hash });
+			}
+			j->queue.push_back(msgId);
+			continue;
+		}
+
+		const auto item = j->session->data().message(
+			FullMsgId(j->src, msgId));
+		const auto media = item ? item->media() : nullptr;
+		const auto document = media ? media->document() : nullptr;
+		const auto photo = media ? media->photo() : nullptr;
+
+		if (!document && !photo) {
+			j->scanned++;
+			j->queue.push_back(msgId);
+			continue;
+		}
+
+		const auto mediaId = document
+			? uint64(document->id)
+			: uint64(photo->id);
+		LOG(("NF: media id=%1 doc=%2 photo=%3 msg=%4").arg(
+			QString::number(mediaId)).arg(
+			Logs::b(document != nullptr)).arg(
+			Logs::b(photo != nullptr)).arg(msgId.bare));
+		if (db.containsDocId(Data::DedupDb::Table::Uploads, mediaId)
+			|| db.containsDocIdInDb(
+				Data::DedupDb::Table::Uploads,
+				mediaId)) {
+			j->scanned++;
+			j->skipped++;
+			continue;
+		}
+
+		if (j->awaitingHash.contains(msgId)) {
+			break; // its callback resumes the pump
+		}
+		if (j->inflightFetches >= kMaxFingerprintsInFlight) {
+			break;
+		}
+
+		j->mediaIds.emplace(msgId, mediaId);
+		if (document) {
+			StartFingerprint(j, msgId, document);
+		} else {
+			StartPhotoFingerprint(j, msgId, photo);
+		}
+		break; // callback resumes the pump
+	}
+
+	if (!j->queue.empty()) {
+		// Flush only when the batch is full or nothing else is pending.
+		// Flushing early would split albums into fragments.
+		const auto readyToFlush = int(j->queue.size()) >= windowSize
+			|| (j->scanned >= j->remaining.size()
+				&& j->inflightFetches == 0
+				&& j->awaitingHash.empty());
+		if (!readyToFlush) {
+			return;
+		}
+		auto chunk = base::take(j->queue);
+		j->batchInFlight = true;
+		FlushForwardBatch(j, std::move(chunk));
+		return;
+	}
+
+	if (j->scanned >= j->remaining.size()
+		&& j->inflightFetches == 0
+		&& j->awaitingHash.empty()) {
+		Finish(j);
+	}
+}
+
+} // namespace
+
+void Start(
+		not_null<ApiWrap*> api,
+		std::vector<not_null<HistoryItem*>> items,
+		const Api::SendAction &action,
+		Data::ForwardOptions forwardOptions,
+		Data::GroupingOptions groupOptions,
+		Fn<void()> completion,
+		std::optional<TimeId> videoTimestamp) {
+	if (items.empty()) {
+		if (completion) {
+			completion();
+		}
+		return;
+	}
+	const auto session = not_null{ &items.front()->history()->session() };
+	const auto dst = action.history->peer->id;
+	const auto src = items.front()->history()->peer->id;
+
+	auto remaining = std::vector<MsgId>();
+	remaining.reserve(items.size());
+	for (const auto &item : items) {
+		remaining.push_back(item->fullId().msg);
+	}
+	std::sort(remaining.begin(), remaining.end());
+	LOG(("NF: Start items=%1 dst=%2 src=%3 grouping=%4").arg(
+		remaining.size()).arg(dst.value).arg(src.value).arg(
+		int(groupOptions)));
+
+	auto &jobs = Jobs();
+	if (const auto it = jobs.find(dst); it != end(jobs)) {
+		const auto job = not_null{ it->second.get() };
+		job->total += int(remaining.size());
+		job->remaining.insert(
+			end(job->remaining),
+			std::make_move_iterator(begin(remaining)),
+			std::make_move_iterator(end(remaining)));
+		std::sort(job->remaining.begin(), job->remaining.end());
+		if (job->state == Job::State::Paused) {
+			job->state = Job::State::Running;
+		}
+		SaveSnapshot(job);
+		Notify();
+		Pump(job);
+		return;
+	}
+
+	auto job = std::make_shared<Job>(
+		session,
+		api,
+		dst,
+		src,
+		action,
+		forwardOptions,
+		groupOptions);
+	if (completion) {
+		job->completion = std::move(completion);
+	}
+	job->total = int(remaining.size());
+	job->remaining = std::move(remaining);
+	job->videoTimestamp = videoTimestamp;
+	jobs.emplace(dst, std::move(job));
+	auto &stored = jobs.find(dst)->second;
+	SaveSnapshot(stored.get());
+	Notify();
+	Pump(stored.get());
+}
+
+void PauseAll(not_null<Main::Session*> session) {
+	auto &jobs = Jobs();
+	for (auto it = begin(jobs); it != end(jobs);) {
+		const auto job = it->second.get();
+		if (BelongsTo(*job, session) && job->alive()) {
+			for (const auto requestId : base::take(job->requests)) {
+				job->api->request(requestId).cancel();
+			}
+			StopTimers(job);
+			job->batchInFlight = false;
+			job->state = Job::State::Paused;
+			SaveSnapshot(job);
+			FireCompletion(job);
+			it = jobs.erase(it);
+		} else {
+			++it;
+		}
+	}
+	Notify();
+}
+
+void CancelAll(not_null<Main::Session*> session) {
+	auto &jobs = Jobs();
+	for (auto it = begin(jobs); it != end(jobs);) {
+		const auto job = it->second.get();
+		if (BelongsTo(*job, session)) {
+			CancelJob(job);
+			it = jobs.erase(it);
+		} else {
+			++it;
+		}
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	db.clearNfResume(session->uniqueId());
+	Notify();
+}
+
+void ResumeAll(not_null<Main::Session*> session) {
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	for (const auto &record : db.loadNfResume(session->uniqueId())) {
+		if (record.remaining.empty()
+			|| Jobs().contains(record.destPeerId)) {
+			continue;
+		}
+		auto action = Api::SendAction(
+			session->data().history(record.destPeerId));
+		auto job = std::make_shared<Job>(
+			session,
+			&session->api(),
+			record.destPeerId,
+			record.srcPeerId,
+			std::move(action),
+			Data::ForwardOptions(),
+			Data::GroupingOptions());
+		job->total = record.total;
+		job->done = record.done;
+		job->skipped = record.skipped;
+		job->lastMsgId = record.lastMsgId;
+		job->remaining = record.remaining;
+		job->state = (record.state == u"running"_q)
+			? Job::State::Running
+			: Job::State::Paused;
+		Jobs().emplace(record.destPeerId, job);
+		if (job->state == Job::State::Running) {
+			Pump(job.get());
+		}
+	}
+	Notify();
+}
+
+int UnfinishedCount(not_null<Main::Session*> session) {
+	auto result = 0;
+	for (const auto &[dst, job] : Jobs()) {
+		if (BelongsTo(*job, session) && !job->remaining.empty()) {
+			result++;
+		}
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	return std::max(result, int(db.loadNfResume(session->uniqueId()).size()));
+}
+
+Counters CountersFor(not_null<Main::Session*> session) {
+	auto result = Counters();
+	for (const auto &[dst, job] : Jobs()) {
+		if (BelongsTo(*job, session)) {
+			result.done = job->done;
+			result.total = job->total;
+			result.skipped = job->skipped;
+			result.lastFileName = job->lastFileName;
+			result.floodSeconds = (job->state == Job::State::FloodWait)
+				? job->floodSeconds
+				: 0;
+			result.active = job->alive() || !job->remaining.empty();
+			break;
+		}
+	}
+	return result;
+}
+
+rpl::producer<> countersChanged() {
+	return CountersChanged.events();
+}
+
+} // namespace NormalForward

@@ -328,17 +328,12 @@ public:
 	}
 	void sendAction(const SendAction &action);
 	void finishForwarding(const SendAction &action);
-	void sendForwardWithRegrouping(
-		Data::ResolvedForwardDraft &&draft,
-		SendAction &&action,
-		FnMut<void()> &&successCallback,
-		bool regroupAll,
-		bool separate);
 	void forwardMessages(
 		Data::ResolvedForwardDraft &&draft,
 		SendAction action,
 		FnMut<void()> &&successCallback = nullptr,
-		std::shared_ptr<EnhancedForward::SavedJob> resumeJob = nullptr);
+		std::shared_ptr<EnhancedForward::SavedJob> resumeJob = nullptr,
+		std::optional<TimeId> videoTimestamp = std::nullopt);
 	void startResumeForward(
 		const PeerId &srcId,
 		const PeerId &dstId,

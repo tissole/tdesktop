@@ -1406,7 +1406,15 @@ void Application::showUnfinishedOperations() {
 			fwJobs.push_back({ session, job });
 		}
 	}
-	const auto total = dlCount + ulCount + fwFiles;
+	auto nfCount = 0;
+	for (const auto &[index, account] : _domain->accounts()) {
+		const auto session = account->maybeSession();
+		if (!session) {
+			continue;
+		}
+		nfCount += NormalForward::UnfinishedCount(session);
+	}
+	const auto total = dlCount + ulCount + fwFiles + nfCount;
 	EnhancedForward::notifyTransfersUpdated();
 	for (const auto &[index, account] : _domain->accounts()) {
 		if (const auto session = account->maybeSession()) {
@@ -1436,6 +1444,7 @@ void Application::showUnfinishedOperations() {
 		for (const auto &[index, account] : _domain->accounts()) {
 			if (const auto session = account->maybeSession()) {
 				session->uploader().resumeAllUploads();
+				NormalForward::ResumeAll(session);
 			}
 		}
 		for (const auto &[session, job] : fwJobs) {
@@ -1451,6 +1460,7 @@ void Application::showUnfinishedOperations() {
 		for (const auto &[index, account] : _domain->accounts()) {
 			if (const auto session = account->maybeSession()) {
 				session->uploader().queueResumeForLater();
+				NormalForward::PauseAll(session);
 			}
 		}
 		EnhancedForward::notifyTransfersUpdated();
@@ -1462,6 +1472,7 @@ void Application::showUnfinishedOperations() {
 				session->uploader().cancelAll();
 				_downloadManager->dedupDb().clearResumeUl(
 					session->uniqueId());
+				NormalForward::CancelAll(session);
 			}
 		}
 		for (const auto &[session, job] : fwJobs) {

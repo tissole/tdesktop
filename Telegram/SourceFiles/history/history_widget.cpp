@@ -9923,8 +9923,6 @@ void HistoryWidget::forwardSelectedToSavedMessages() {
 	auto resolved = history->resolveForwardDraft(Data::ForwardDraft{ .ids = items });
 
 	api->forwardMessages(std::move(resolved), action, [=] {
-		Ui::Toast::Show(tr::lng_share_done(tr::now));
-
 		if (const auto strong = weak.get()) {
 			strong->clearSelected();
 		}

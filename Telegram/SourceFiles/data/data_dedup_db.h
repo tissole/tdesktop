@@ -56,6 +56,18 @@ struct EfResumeItem {
 	qint64 fileSize = 0;
 };
 
+struct NfResumeRecord {
+	uint64 sessionId = 0;
+	PeerId destPeerId = PeerId();
+	PeerId srcPeerId = PeerId();
+	int total = 0;
+	int done = 0;
+	int skipped = 0;
+	MsgId lastMsgId = 0;
+	QString state;
+	std::vector<MsgId> remaining;
+};
+
 class DedupDb {
 public:
 	enum class Table {
@@ -146,6 +158,12 @@ public:
 	[[nodiscard]] std::vector<EfResumeItem> loadFinishedEfResumeItems(
 		uint64 sessionId) const;
 	void clearDoneEfResumeForPeer(PeerId peerId);
+
+	void insertNfResume(const NfResumeRecord &record);
+	void removeNfResume(uint64 sessionId, PeerId destPeerId);
+	void clearNfResume(uint64 sessionId);
+	[[nodiscard]] std::vector<NfResumeRecord> loadNfResume(
+		uint64 sessionId) const;
 
 	// Finished forwarded items: one flat row per source message, persisted so
 	// the Forwards tab keeps every sent item across restarts until cleared.

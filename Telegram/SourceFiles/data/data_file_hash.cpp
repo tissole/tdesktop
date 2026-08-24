@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_file_hash.h"
 
 #include <QtCore/QFile>
+#include <variant>
 
 #include <memory>
 
@@ -15,10 +16,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "logs.h"
 #include "data/data_document.h"
+#include "data/data_photo.h"
+#include "data/data_user.h"
 #include "main/main_account.h"
 #include "main/main_session.h"
 #include "mtproto/facade.h"
 #include "mtproto/mtp_instance.h"
+#include "ui/image/image_location.h"
 
 namespace Data {
 
@@ -277,6 +281,72 @@ void RemoteFileFingerprint(
 			return true;
 		},
 		dcId);
+}
+
+void RemotePhotoFingerprint(
+		not_null<Main::Session*> session,
+		not_null<PhotoData*> photo,
+		Fn<void(QByteArray)> done) {
+	const auto &imageLocation = photo->location(Data::PhotoSize::Large);
+	const auto storage = std::get_if<StorageFileLocation>(
+		&imageLocation.file().data);
+	if (!storage || !storage->valid()) {
+		done(QByteArray());
+		return;
+	}
+	const auto dcId = MTP::updaterDcId(storage->dcId());
+	const auto location = storage->tl(session->userId());
+
+	constexpr auto kChunk = 1024 * 1024;
+	constexpr auto kMaxTotal = 16 * 1024 * 1024;
+
+	auto accumulated = std::make_shared<QByteArray>();
+	auto offset = std::make_shared<int64>(0);
+	auto step = std::make_shared<Fn<void()>>();
+	*step = [=, done = std::move(done)]() mutable {
+		auto &mtp = session->account().mtp();
+		mtp.send(
+			MTPupload_GetFile(
+				MTP_flags(MTPupload_GetFile::Flag::f_precise),
+				location,
+				MTP_long(*offset),
+				MTP_int(kChunk)),
+			[=](const MTP::Response &response) {
+				auto result = MTPupload_File();
+				auto from = response.reply.constData();
+				if (!from
+					|| response.reply.isEmpty()
+					|| !result.read(from, from + response.reply.size())
+					|| result.type() != mtpc_upload_file) {
+					*step = nullptr;
+					done(QByteArray());
+					return true;
+				}
+				const auto bytes = ChunkFromRemote(result);
+				if (bytes.isEmpty()) {
+					*step = nullptr;
+					done(QByteArray());
+					return true;
+				}
+				accumulated->append(bytes);
+				if (bytes.size() < kChunk
+					|| accumulated->size() >= kMaxTotal) {
+					*step = nullptr;
+					done(ContentFingerprint(*accumulated));
+					return true;
+				}
+				*offset += int64(bytes.size());
+				(*step)();
+				return true;
+			},
+			[=](const MTP::Error &, const MTP::Response &) {
+				*step = nullptr;
+				done(QByteArray());
+				return true;
+			},
+			dcId);
+	};
+	(*step)();
 }
 
 } // namespace Data

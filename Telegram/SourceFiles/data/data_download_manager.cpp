@@ -2070,11 +2070,31 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 				efTotalBytes = persistedTotal;
 				efReady = std::max(efReady, persistedReady);
 			}
+			auto nfDone = 0;
+			auto nfTotal = 0;
+			auto nfSkipped = 0;
+			auto nfFloodSeconds = 0;
+			for (const auto &account :
+					Core::App().domain().orderedAccounts()) {
+				if (const auto session = account->maybeSession()) {
+					const auto nf = NormalForward::CountersFor(session);
+					nfDone = std::max(nfDone, nf.done);
+					nfTotal = std::max(nfTotal, nf.total);
+					nfSkipped = std::max(nfSkipped, nf.skipped);
+					nfFloodSeconds = std::max(
+						nfFloodSeconds,
+						nf.floodSeconds);
+				}
+			}
 			consumer.put_next(Ui::DownloadBarProgress{
 				.ready = dlProgress.ready,
 				.total = dlProgress.total,
 				.efReady = efReady,
 				.efTotal = efTotalBytes,
+				.nfDone = nfDone,
+				.nfTotal = nfTotal,
+				.nfSkipped = nfSkipped,
+				.nfFloodSeconds = nfFloodSeconds,
 			});
 		};
 
@@ -2093,6 +2113,11 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 		}, lifetime);
 
 		EnhancedForward::counterChanges(
+		) | rpl::on_next([=] {
+			state->push();
+		}, lifetime);
+
+		NormalForward::countersChanged(
 		) | rpl::on_next([=] {
 			state->push();
 		}, lifetime);
@@ -2228,6 +2253,16 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 			}
 			content.efCount = state->efTotal;
 			content.efDone = state->efDone;
+			for (const auto &account : Core::App().domain().orderedAccounts()) {
+				if (const auto session = account->maybeSession()) {
+					const auto nf = NormalForward::CountersFor(session);
+					if (nf.total > content.nfCount) {
+						content.nfCount = nf.total;
+						content.nfDone = nf.done;
+						content.nfLastName = nf.lastFileName;
+					}
+				}
+			}
 			if (content.count == 1) {
 				const auto document = single->document;
 				const auto thumbnailed = (single->item
@@ -2266,6 +2301,11 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 		) | rpl::filter([=] {
 			return !state->scheduled;
 		}) | rpl::on_next(state->push, lifetime);
+
+		NormalForward::countersChanged(
+		) | rpl::on_next([=] {
+			state->push();
+		}, lifetime);
 
 		notify();
 		return lifetime;

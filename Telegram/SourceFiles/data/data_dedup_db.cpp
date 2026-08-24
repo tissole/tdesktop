@@ -104,6 +104,12 @@ public:
 		uint64 sessionId) const;
 	void clearDoneEfResumeForPeer(PeerId peerId);
 
+	void insertNfResume(const NfResumeRecord &record);
+	void removeNfResume(uint64 sessionId, PeerId destPeerId);
+	void clearNfResume(uint64 sessionId);
+	[[nodiscard]] std::vector<NfResumeRecord> loadNfResume(
+		uint64 sessionId) const;
+
 	void insertForwardedDone(
 		const FullMsgId &sourceId,
 		const QByteArray &hash);
@@ -284,7 +290,18 @@ bool DedupDb::Impl::createTables() {
 		&& exec(u"CREATE TABLE IF NOT EXISTS ef_last ("
 			"id INTEGER PRIMARY KEY CHECK (id = 1), "
 			"done INTEGER NOT NULL, "
-			"total INTEGER NOT NULL)"_q);
+			"total INTEGER NOT NULL)"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS nf_resume ("
+			"session_id INTEGER NOT NULL DEFAULT 0, "
+			"dest_peer_id INTEGER NOT NULL, "
+			"src_peer_id INTEGER NOT NULL, "
+			"total INTEGER NOT NULL DEFAULT 0, "
+			"done INTEGER NOT NULL DEFAULT 0, "
+			"skipped INTEGER NOT NULL DEFAULT 0, "
+			"last_msg_id INTEGER NOT NULL DEFAULT 0, "
+			"state TEXT NOT NULL DEFAULT 'running', "
+			"remaining BLOB NOT NULL DEFAULT x'', "
+			"PRIMARY KEY (session_id, dest_peer_id))"_q);
 	return created;
 }
 
@@ -1224,6 +1241,111 @@ std::vector<ResumeUlRecord> DedupDb::loadAllResumeUl(
 	return _impl->loadAllResumeUl(sessionId);
 }
 
+void DedupDb::Impl::insertNfResume(const NfResumeRecord &record) {
+	if (!_open) {
+		return;
+	}
+	auto remaining = QByteArray();
+	remaining.reserve(int(record.remaining.size()) * 4);
+	for (const auto &msgId : record.remaining) {
+		const auto value = qint32(msgId.bare);
+		char buffer[4] = {};
+		memcpy(buffer, &value, 4);
+		remaining.append(buffer, 4);
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"INSERT OR REPLACE INTO nf_resume "
+		"(session_id, dest_peer_id, src_peer_id, total, done, skipped, "
+		"last_msg_id, state, remaining) "
+		"VALUES (:session_id, :dest_peer_id, :src_peer_id, :total, :done, "
+		":skipped, :last_msg_id, :state, :remaining)"_q);
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(record.sessionId)));
+	q.bindValue(u":dest_peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(record.destPeerId.value)));
+	q.bindValue(u":src_peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(record.srcPeerId.value)));
+	q.bindValue(u":total"_q, record.total);
+	q.bindValue(u":done"_q, record.done);
+	q.bindValue(u":skipped"_q, record.skipped);
+	q.bindValue(u":last_msg_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(record.lastMsgId.bare)));
+	q.bindValue(u":state"_q, record.state);
+	q.bindValue(u":remaining"_q, remaining);
+	if (!q.exec()) {
+		LOG(("DedupDb: InsertNfResume failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::removeNfResume(uint64 sessionId, PeerId destPeerId) {
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM nf_resume "
+		"WHERE session_id = :session_id AND dest_peer_id = :dest_peer_id"_q);
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	q.bindValue(u":dest_peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(destPeerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: RemoveNfResume failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::clearNfResume(uint64 sessionId) {
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM nf_resume WHERE session_id = :session_id"_q);
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ClearNfResume failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+std::vector<NfResumeRecord> DedupDb::Impl::loadNfResume(
+		uint64 sessionId) const {
+	auto result = std::vector<NfResumeRecord>();
+	if (!_open) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT dest_peer_id, src_peer_id, total, done, skipped, "
+		"last_msg_id, state, remaining FROM nf_resume "
+		"WHERE session_id = :session_id"_q);
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: LoadNfResume failed: %1").arg(q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto record = NfResumeRecord();
+		record.sessionId = sessionId;
+		record.destPeerId = PeerId(q.value(0).toULongLong());
+		record.srcPeerId = PeerId(q.value(1).toULongLong());
+		record.total = q.value(2).toInt();
+		record.done = q.value(3).toInt();
+		record.skipped = q.value(4).toInt();
+		record.lastMsgId = MsgId(q.value(5).toLongLong());
+		record.state = q.value(6).toString();
+		const auto raw = q.value(7).toByteArray();
+		for (int i = 0; i + 4 <= raw.size(); i += 4) {
+			auto value = qint32();
+			memcpy(&value, raw.constData() + i, 4);
+			record.remaining.push_back(MsgId(value));
+		}
+		result.push_back(std::move(record));
+	}
+	return result;
+}
+
 void DedupDb::insertEfResumeItem(const EfResumeItem &item) {
 	_impl->insertEfResumeItem(item);
 }
@@ -1265,6 +1387,22 @@ std::vector<EfResumeItem> DedupDb::loadFinishedEfResumeItems(
 
 void DedupDb::clearDoneEfResumeForPeer(PeerId peerId) {
 	_impl->clearDoneEfResumeForPeer(peerId);
+}
+
+void DedupDb::insertNfResume(const NfResumeRecord &record) {
+	_impl->insertNfResume(record);
+}
+
+void DedupDb::removeNfResume(uint64 sessionId, PeerId destPeerId) {
+	_impl->removeNfResume(sessionId, destPeerId);
+}
+
+void DedupDb::clearNfResume(uint64 sessionId) {
+	_impl->clearNfResume(sessionId);
+}
+
+std::vector<NfResumeRecord> DedupDb::loadNfResume(uint64 sessionId) const {
+	return _impl->loadNfResume(sessionId);
 }
 
 void DedupDb::insertForwardedDone(

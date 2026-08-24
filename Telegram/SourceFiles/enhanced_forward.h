@@ -445,3 +445,45 @@ private:
 };
 
 } // namespace EnhancedForward
+
+namespace NormalForward {
+
+struct Counters {
+	int done = 0;
+	int total = 0;
+	int skipped = 0;
+	QString lastFileName;
+	int floodSeconds = 0; // > 0 while the job waits out a FLOOD_WAIT
+	bool active = false;
+};
+
+// Takes over the plain part of a forward after the enhanced split:
+// deduplicates media against the Uploads table (doc id first, then remote
+// content fingerprints) and sends survivors either as forwardMessages
+// batches of up to 100 ids or, for regroup modes, as sendMultiMedia
+// chunks. Handles FLOOD_WAIT by pausing and auto-resuming.
+void Start(
+	not_null<ApiWrap*> api,
+	std::vector<not_null<HistoryItem*>> items,
+	const Api::SendAction &action,
+	Data::ForwardOptions forwardOptions,
+	Data::GroupingOptions groupOptions,
+	Fn<void()> completion = nullptr,
+	std::optional<TimeId> videoTimestamp = std::nullopt);
+
+// Stops live jobs for this session: pending requests are cancelled and the
+// state is persisted as 'paused' (resumable via ResumeAll).
+void PauseAll(not_null<Main::Session*> session);
+
+// Drops live jobs and all persisted state for this session.
+void CancelAll(not_null<Main::Session*> session);
+
+// Rebuilds persisted jobs from the DB (paused or interrupted) and runs them.
+void ResumeAll(not_null<Main::Session*> session);
+
+[[nodiscard]] int UnfinishedCount(not_null<Main::Session*> session);
+[[nodiscard]] Counters CountersFor(not_null<Main::Session*> session);
+
+[[nodiscard]] rpl::producer<> countersChanged();
+
+} // namespace NormalForward

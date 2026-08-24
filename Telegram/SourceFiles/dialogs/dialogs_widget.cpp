@@ -1247,9 +1247,12 @@ void Widget::setupDownloadBar() {
 
 		Data::MakeDownloadBarContent(
 		) | rpl::on_next(crl::guard(this, [=](Ui::DownloadBarContent &&content) {
-			const auto create = (content.count
-				&& content.done < content.count
-				&& !_downloadBar);
+			const auto nfActive = content.nfCount > 0
+				&& content.nfDone < content.nfCount;
+			const auto create = ((content.count
+				&& content.done < content.count)
+				|| nfActive
+				) && !_downloadBar;
 		if (create) {
 			_downloadBar = std::make_unique<Ui::DownloadBar>(
 				this,

@@ -827,35 +827,36 @@ bool ShareBox::showForwardMenu(not_null<Ui::IconButton*> button) {
 
 		auto [g1Item, g1View] = createView(
 			tr::lng_forward_group_all(),
-			(!isQuoted && (hasSavedGrouping
-				? (savedGrouping == Data::GroupingOptions::GroupAsIs
-					|| savedGrouping == Data::GroupingOptions::RegroupAll)
-				: _descriptor.forwardOptions.defaultGroupAsAlbum)));
+			(hasSavedGrouping
+				? savedGrouping == Data::GroupingOptions::RegroupAll
+				: false));
 		auto [g2Item, g2View] = createView(
 			tr::lng_forward_group_separate(),
-			(!isQuoted && (hasSavedGrouping
+			(hasSavedGrouping
 				? savedGrouping == Data::GroupingOptions::Separate
-				: !_descriptor.forwardOptions.defaultGroupAsAlbum)));
-		
+				: false));
+		auto [g3Item, g3View] = createView(
+			tr::lng_forward_group_preserve(),
+			(hasSavedGrouping
+				? savedGrouping == Data::GroupingOptions::GroupAsIs
+				: true));
+
 		groupAll = g1View;
 		groupNone = g2View;
+		auto groupPreserve = g3View;
 		groupAllItem = g1Item;
 		groupNoneItem = g2Item;
-		
-		if (isQuoted) {
-			groupAllItem->setEnabled(false);
-			groupNoneItem->setEnabled(false);
-		}
-		
+
 		const auto onGroupOptionChange = [=, this](int mode, bool value) {
 			if (value) {
 				groupAll->setChecked(mode == 0, anim::type::normal);
 				groupNone->setChecked(mode == 1, anim::type::normal);
-			_groupOptions = (mode == 1)
+				groupPreserve->setChecked(mode == 2, anim::type::normal);
+			_groupOptions = (mode == 0)
+				? Data::GroupingOptions::RegroupAll
+				: (mode == 1)
 				? Data::GroupingOptions::Separate
-				: _descriptor.forwardOptions.defaultGroupAsAlbum
-				? Data::GroupingOptions::GroupAsIs
-				: Data::GroupingOptions::RegroupAll;
+				: Data::GroupingOptions::GroupAsIs;
 				_optionsModified = true;
 				_hasUserSelectedGroupOption = true;
 				Core::App().settings().setGroupingOptions(_groupOptions);
@@ -872,6 +873,11 @@ bool ShareBox::showForwardMenu(not_null<Ui::IconButton*> button) {
 		groupNone->checkedChanges(
 		) | rpl::on_next([=](bool value) {
 			onGroupOptionChange(1, value);
+		}, _topMenu->lifetime());
+
+		groupPreserve->checkedChanges(
+		) | rpl::on_next([=](bool value) {
+			onGroupOptionChange(2, value);
 		}, _topMenu->lifetime());
 	}
 
@@ -894,22 +900,12 @@ void ShareBox::updateAdditionalTitle() {
 
 	auto subtitle = QString();
 
-	const auto forwardOptions = (_forwardOptions.dropCaptions)
-		? Data::ForwardOptions::UnquotedWithoutCaptions
-		: _forwardOptions.dropNames
-		? Data::ForwardOptions::UnquotedWithCaptions
-		: Data::ForwardOptions::Quoted;
-
-	switch (forwardOptions) {
-	case Data::ForwardOptions::Quoted:
-		subtitle += u"Forward"_q;
-		break;
-	case Data::ForwardOptions::UnquotedWithCaptions:
-		subtitle += u"Copy captioned"_q;
-		break;
-	case Data::ForwardOptions::UnquotedWithoutCaptions:
+	if (_forwardOptions.dropCaptions) {
 		subtitle += u"Copy uncaptioned"_q;
-		break;
+	} else if (_forwardOptions.dropNames) {
+		subtitle += u"Copy captioned"_q;
+	} else {
+		subtitle += u"Forward"_q;
 	}
 
 	if (_descriptor.forwardOptions.hasMedia) {
@@ -918,6 +914,8 @@ void ShareBox::updateAdditionalTitle() {
 		}
 		switch (_groupOptions) {
 		case Data::GroupingOptions::GroupAsIs:
+			subtitle += u"Preserve"_q;
+			break;
 		case Data::GroupingOptions::RegroupAll:
 			subtitle += u"Album"_q;
 			break;
@@ -1111,11 +1109,10 @@ void ShareBox::submit(Api::SendOptions options) {
 	if (const auto onstack = _descriptor.submitCallback) {
 		// If user selected a grouping option, override forward option to drop author
 		// (grouping requires sending as new messages, which inherently drops author)
-		const auto groupingOverridesForward = (actualGroupOptions != Data::GroupingOptions::GroupAsIs);
 		const auto forwardOptions = (_forwardOptions.captionsCount
 			&& _forwardOptions.dropCaptions)
 			? Data::ForwardOptions::UnquotedWithoutCaptions
-			: (groupingOverridesForward || _forwardOptions.dropNames)
+			: _forwardOptions.dropNames
 			? Data::ForwardOptions::UnquotedWithCaptions
 			: Data::ForwardOptions::Quoted;
 		onstack(
@@ -2194,60 +2191,17 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 			return;
 		}
 
-		using Flag = MTPmessages_ForwardMessages::Flag;
-		auto commonSendFlags = MTPmessages_ForwardMessages::Flags(0);
-		// Use forwardOptions from 3-dots menu to override no_quote
-		const auto actualDropAuthor = (forwardOptions != Data::ForwardOptions::Quoted);
-		const auto actualDropCaptions = (forwardOptions == Data::ForwardOptions::UnquotedWithoutCaptions);
-		commonSendFlags = Flag(0)
-			| Flag::f_with_my_score
-			| (options.scheduled ? Flag::f_schedule_date : Flag(0))
-		| ((options.scheduled && options.scheduleRepeatPeriod)
-			? Flag::f_schedule_repeat_period
-			: Flag(0))
-			| (actualDropAuthor ? Flag::f_drop_author : Flag(0))
-			| (actualDropCaptions ? Flag::f_drop_media_captions : Flag(0))
-		| (videoTimestamp.has_value()
-			? Flag::f_video_timestamp
-				: Flag(0));
-
-		auto mtpMsgIds = QVector<MTPint>();
-		mtpMsgIds.reserve(existingIds.size());
-		for (const auto &fullId : existingIds) {
-			mtpMsgIds.push_back(MTP_int(fullId.msg));
-		}
 		auto &api = history->session().api();
-		auto &histories = history->owner().histories();
-		const auto donePhraseArgs = CreateForwardedMessagePhraseArgs(
-			result,
-			msgIds);
-		const auto showRecentForwardsToSelf = result.size() == 1
-			&& result.front()->peer()->isSelf()
-			&& history->session().premium();
-
-		constexpr auto kMaxForwardBatch = 100;
-		auto batches = QVector<QVector<MTPint>>();
-		for (auto i = 0; i < mtpMsgIds.size(); i += kMaxForwardBatch) {
-			auto batch = QVector<MTPint>();
-			const auto end = qMin(
-				i + kMaxForwardBatch,
-				mtpMsgIds.size());
-			batch.reserve(end - i);
-			for (auto j = i; j < end; ++j) {
-				batch.push_back(mtpMsgIds[j]);
-			}
-			batches.push_back(std::move(batch));
-		}
-
+		const auto remaining = std::make_shared<int>(int(result.size()));
 		for (const auto &thread : result) {
-			const auto peer = thread->peer();
-			const auto threadHistory = thread->owningHistory();
-			const auto forum = threadHistory->asForum();
-			const auto needNewTopic = forum
-				&& forum->bot()
-				&& Data::IsBotUserCreatesTopics(peer)
-				&& !thread->asTopic();
-			const auto effectiveThread = [&]() -> not_null<Data::Thread*> {
+			const auto effectiveThread = [&]()
+				-> not_null<Data::Thread*> {
+				const auto peer = thread->peer();
+				const auto forum = thread->owningHistory()->asForum();
+				const auto needNewTopic = forum
+					&& forum->bot()
+					&& Data::IsBotUserCreatesTopics(peer)
+					&& !thread->asTopic();
 				if (needNewTopic) {
 					const auto topic = forum->reserveNewBotTopic();
 					Assert(topic != nullptr);
@@ -2255,164 +2209,33 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 				}
 				return thread;
 			}();
-
 			if (!comment.text.isEmpty()) {
-				auto message = Api::MessageToSend(
+				auto msg = Api::MessageToSend(
 					Api::SendAction(effectiveThread, options));
-				message.textWithTags = comment;
-				message.action.clearDraft = false;
-				api.sendMessage(std::move(message));
+				msg.textWithTags = comment;
+				msg.action.clearDraft = false;
+				api.sendMessage(std::move(msg));
 			}
-
-			const auto topicRootId = effectiveThread->topicRootId();
-			const auto sublistPeer = needNewTopic
-				? nullptr
-				: thread->maybeSublistPeer();
-			const auto fromPeer = history->peer;
-
-			for (const auto &batchIds : batches) {
-				const auto batchSize = int(batchIds.size());
-				const auto starsPaid = std::min(
-					peer->starsPerMessageChecked(),
-					options.starsApproved);
-				if (starsPaid) {
-					options.starsApproved -= starsPaid;
-				}
-				const auto sendFlags = commonSendFlags
-					| (ShouldSendSilent(peer, options)
-						? Flag::f_silent
-						: Flag(0))
-					| (options.shortcutId
-						? Flag::f_quick_reply_shortcut
-						: Flag(0))
-					| (starsPaid ? Flag::f_allow_paid_stars : Flag())
-					| (sublistPeer ? Flag::f_reply_to : Flag())
-					| (options.suggest ? Flag::f_suggested_post : Flag())
-					| (options.effectId ? Flag::f_effect : Flag());
-				auto buildMessage = [
-						=,
-						batchIds = batchIds,
-						batchSize = batchSize,
-						starsPaid = starsPaid](
-						not_null<History*> history,
-						FullReplyTo replyTo)
-					-> Data::Histories::PreparedMessage {
-					const auto kGeneralId
-						= Data::ForumTopic::kGeneralId;
-					const auto realTopMsgId
-						= (replyTo.topicRootId == kGeneralId)
-						? MsgId(0)
-						: replyTo.topicRootId;
-					auto flags = sendFlags;
-					if (realTopMsgId) {
-						flags |= Flag::f_top_msg_id;
-					} else {
-						flags &= ~Flag::f_top_msg_id;
-					}
-					auto randoms = QVector<MTPlong>(batchSize);
-					for (auto &value : randoms) {
-						value = base::RandomValue<MTPlong>();
-					}
-					return MTPmessages_ForwardMessages(
-						MTP_flags(flags),
-						fromPeer->input(),
-						MTP_vector<MTPint>(batchIds),
-						MTP_vector<MTPlong>(randoms),
-						history->peer->input(),
-						MTP_int(realTopMsgId),
-						(sublistPeer
-							? MTP_inputReplyToMonoForum(
-								sublistPeer->input())
-							: MTPInputReplyTo()),
-						MTP_int(options.scheduled),
-						MTP_int(options.scheduleRepeatPeriod),
-						MTP_inputPeerEmpty(),
-						Data::ShortcutIdToMTP(
-							&history->session(),
-							options.shortcutId),
-						MTP_long(options.effectId),
-						MTP_int(videoTimestamp.value_or(0)),
-						MTP_long(starsPaid),
-						Api::SuggestToMTP(options.suggest));
-				};
-				const auto requestDone = [=](
-						const MTPUpdates &updates,
-						mtpRequestId requestKey) {
-					if (showRecentForwardsToSelf) {
-						ApiWrap::ProcessRecentSelfForwards(
-							&threadHistory->session(),
-							updates,
-							peer->id,
-							history->peer->id);
-					}
-					state->requests.remove(requestKey);
-					if (state->requests.empty()) {
-						if (show->valid()) {
-							auto phrase = rpl::variable<
-								TextWithEntities>(
-								ChatHelpers::ForwardedMessagePhrase(
-									donePhraseArgs)).current();
-							if (!phrase.empty()) {
-								show->showToast(std::move(phrase));
-							}
+			auto draft = Data::ResolvedForwardDraft{
+				.items = items,
+				.options = forwardOptions,
+				.groupOptions = groupingOptions,
+			};
+			api.forwardMessages(
+				std::move(draft),
+				Api::SendAction(effectiveThread, options),
+				[=] {
+					if (--*remaining == 0) {
+						if (show && show->valid()) {
 							show->hideLayer();
 						}
-					}
-				};
-				const auto requestFail = [=](
-						const MTP::Error &error,
-						mtpRequestId requestKey) {
-					const auto type = error.type();
-					if (type.startsWith(
-							u"ALLOW_PAYMENT_REQUIRED_"_q)) {
-						show->showToast(
-							u"Payment requirements changed. "
-							"Please, try again."_q);
-					} else if (type
-						== u"VOICE_MESSAGES_FORBIDDEN"_q) {
-						show->showToast(
-							tr::lng_restricted_send_voice_messages(
-								tr::now,
-								lt_user,
-								peer->name()));
-					}
-					state->requests.remove(requestKey);
-					if (state->requests.empty()) {
-						if (show->valid()) {
-							show->hideLayer();
+						if (state->submitCallback) {
+							state->submitCallback();
 						}
 					}
-				};
-				const auto requestKey = ++state->nextRequestKey;
-				state->requests.insert(requestKey);
-				histories.sendPreparedMessage(
-					threadHistory,
-					FullReplyTo{ .topicRootId = topicRootId },
-					uint64(0),
-					std::move(buildMessage),
-					[=](const MTPUpdates &updates,
-							const MTP::Response &) {
-						requestDone(updates, requestKey);
-					},
-					[=](const MTP::Error &error,
-							const MTP::Response &) {
-						requestFail(error, requestKey);
-					});
-			}
-		}
-		if (state->requests.empty()) {
-			if (show->valid()) {
-				auto phrase = rpl::variable<TextWithEntities>(
-					ChatHelpers::ForwardedMessagePhrase(
-						donePhraseArgs)).current();
-				if (!phrase.empty()) {
-					show->showToast(std::move(phrase));
-				}
-				show->hideLayer();
-			}
-		}
-		if (state->submitCallback) {
-			state->submitCallback();
+				},
+				nullptr,
+				videoTimestamp);
 		}
 		}
 	};
@@ -2599,25 +2422,11 @@ void FastShareMessageToSelf(
 		std::shared_ptr<Main::SessionShow> show,
 		not_null<HistoryItem*> item) {
 	const auto self = show->session().user();
-	const auto donePhraseArgs = ChatHelpers::ForwardedMessagePhraseArgs{
-		.toCount = 1,
-		.singleMessage = true,
-		.to1 = self,
-		.to2 = nullptr,
-	};
 	auto sendAction = Api::SendAction(self->owner().history(self));
 	sendAction.clearDraft = false;
 	show->session().api().forwardMessages(
 		Data::ResolvedForwardDraft{ .items = {item} },
-		std::move(sendAction),
-		[=] {
-			auto phrase = rpl::variable<TextWithEntities>(
-				ChatHelpers::ForwardedMessagePhrase(
-					donePhraseArgs)).current();
-			if (!phrase.empty()) {
-				show->showToast(std::move(phrase));
-			}
-		});
+		std::move(sendAction));
 }
 
 void FastShareMessage(

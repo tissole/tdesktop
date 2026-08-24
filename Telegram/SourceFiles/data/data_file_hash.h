@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QByteArray>
 
 class DocumentData;
+class PhotoData;
 
 namespace Main {
 class Session;
@@ -51,6 +52,14 @@ constexpr auto kDedupAlignment = 1 * 1024;
 void RemoteFileFingerprint(
 	not_null<Main::Session*> session,
 	not_null<DocumentData*> document,
+	Fn<void(QByteArray)> done);
+
+// Downloads the largest photo size fully into memory and hashes it with the
+// same ContentFingerprint used for small files. Photos are compressed and
+// small, so no partial sampling is needed. Empty hash on failure.
+void RemotePhotoFingerprint(
+	not_null<Main::Session*> session,
+	not_null<PhotoData*> photo,
 	Fn<void(QByteArray)> done);
 
 } // namespace Data

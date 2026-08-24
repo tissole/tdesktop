@@ -68,7 +68,8 @@ DownloadBar::~DownloadBar() = default;
 void DownloadBar::show(DownloadBarContent &&content) {
 	const auto allFinished = (content.done >= content.count)
 		&& (content.uploadDone >= content.uploadCount)
-		&& (content.efDone >= content.efCount);
+		&& (content.efDone >= content.efCount)
+		&& (content.nfCount == 0 || content.nfDone >= content.nfCount);
 	_button.toggle(!allFinished, anim::type::normal);
 	if (allFinished) {
 		return;
@@ -79,7 +80,8 @@ void DownloadBar::show(DownloadBarContent &&content) {
 	_content = content;
 	const auto finished = (_content.done == _content.count)
 		&& (_content.uploadDone == _content.uploadCount)
-		&& (_content.efDone == _content.efCount);
+		&& (_content.efDone == _content.efCount)
+		&& (_content.nfCount == 0 || _content.nfDone >= _content.nfCount);
 	if (_finished != finished) {
 		_finished = finished;
 		_finishedAnimation.start(
@@ -92,6 +94,7 @@ void DownloadBar::show(DownloadBarContent &&content) {
 	const auto dlPrefix = u"DL "_q;
 	const auto ulPrefix = u"UL "_q;
 	const auto efPrefix = u"EF "_q;
+	const auto nfPrefix = u"FWD "_q;
 	_title.setMarkedText(
 		st::defaultTextStyle,
 		(content.count > 1
@@ -111,14 +114,19 @@ void DownloadBar::show(DownloadBarContent &&content) {
 				? tr::bold(tr::lng_tm_fw_prefix(
 					tr::now,
 					lt_name, content.singleName.text))
-				: (content.uploadCount > 1
-					? tr::bold(ulPrefix + tr::lng_tm_files_progress(
+				: (content.nfCount > 0
+					? tr::bold(nfPrefix + tr::lng_tm_files_progress(
 						tr::now,
-						lt_done, QString::number(content.uploadDone),
-						lt_total, QString::number(content.uploadCount)))
-					: tr::bold(tr::lng_tm_ul_prefix(
-						tr::now,
-						lt_name, content.singleUploadName.text))))));
+						lt_done, QString::number(content.nfDone),
+						lt_total, QString::number(content.nfCount)))
+					: (content.uploadCount > 1
+						? tr::bold(ulPrefix + tr::lng_tm_files_progress(
+							tr::now,
+							lt_done, QString::number(content.uploadDone),
+							lt_total, QString::number(content.uploadCount)))
+						: tr::bold(tr::lng_tm_ul_prefix(
+							tr::now,
+							lt_name, content.singleUploadName.text)))))));
 	refreshInfo(_progress.current());
 }
 
@@ -181,7 +189,12 @@ void DownloadBar::refreshInfo(const DownloadBarProgress &progress) {
 	const auto effectiveTotal = progress.total;
 	const auto efReady = progress.efReady;
 	const auto efTotal = progress.efTotal;
-	if (efReady < efTotal && efTotal > 0) {
+	if (_content.nfCount > 0
+		&& _content.nfDone < _content.nfCount
+		&& progress.nfFloodSeconds > 0) {
+		text = tr::marked(
+			u"FLOOD_WAIT %1s"_q.arg(progress.nfFloodSeconds));
+	} else if (efReady < efTotal && efTotal > 0) {
 		text = tr::marked(
 			FormatDownloadText(efReady, efTotal));
 	} else if (_content.efCount > 0 && efReady > 0) {

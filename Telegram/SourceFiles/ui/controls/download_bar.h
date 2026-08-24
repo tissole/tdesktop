@@ -23,6 +23,10 @@ struct DownloadBarProgress {
 	int64 uploadTotal = 0;
 	int64 efReady = 0;
 	int64 efTotal = 0;
+	int nfDone = 0;
+	int nfTotal = 0;
+	int nfSkipped = 0;
+	int nfFloodSeconds = 0;
 };
 
 struct DownloadBarContent {
@@ -35,6 +39,9 @@ struct DownloadBarContent {
 	TextWithEntities singleUploadName;
 	int efCount = 0;
 	int efDone = 0;
+	QString nfLastName;
+	int nfCount = 0;
+	int nfDone = 0;
 	int64 uploadReady = 0;
 	int64 uploadTotal = 0;
 	int64 uploadSingleReady = 0;
