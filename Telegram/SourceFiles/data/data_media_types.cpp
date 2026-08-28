@@ -1130,6 +1130,8 @@ bool MediaFile::canBeGrouped() const {
 		return true;
 	} else if (_document->isTheme() && _document->hasThumbnail()) {
 		return false;
+	} else if (_document->type == FileDocument) {
+		return false;
 	}
 	return true;
 }

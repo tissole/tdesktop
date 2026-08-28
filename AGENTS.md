@@ -2,6 +2,9 @@
 
 This guide defines repository-wide instructions for coding agents working with the Telegram Desktop codebase.
 
+# # Comands
+Do not run in any circumstance git checkout without prior approval
+
 ## Build System Structure
 
 The build system expects this directory layout:

@@ -289,8 +289,7 @@ ShareBox::ShareBox(QWidget*, Descriptor &&descriptor)
 		&& Core::App().settings().forwardOptions() != Data::ForwardOptions::Quoted)
 , _hasUserSelectedGroupOption(
 	Core::App().settings().groupingOptionsEverSet()
-		&& Core::App().settings().groupingOptions() != Data::GroupingOptions::GroupAsIs
-		&& Core::App().settings().groupingOptions() != Data::GroupingOptions::RegroupAll)
+		&& Core::App().settings().groupingOptions() != Data::GroupingOptions::GroupAsIs)
 , _copyLinkText(_descriptor.copyLinkText
 	? std::move(_descriptor.copyLinkText)
 	: tr::lng_share_copy_link())
@@ -685,11 +684,6 @@ bool ShareBox::showForwardMenu(not_null<Ui::IconButton*> button) {
 		return true;
 	}
 
-	LOG(("ShareBox::showForwardMenu: dropNames=%1, dropCaptions=%2, groupOptions=%3")
-		.arg(_forwardOptions.dropNames ? 1 : 0
-		).arg(_forwardOptions.dropCaptions ? 1 : 0
-		).arg(int(_groupOptions)));
-
 	_topMenu = base::make_unique_q<Ui::DropdownMenu>(window());
 	const auto weak = _topMenu.get();
 	_topMenu->setHiddenCallback([=] {
@@ -769,23 +763,9 @@ bool ShareBox::showForwardMenu(not_null<Ui::IconButton*> button) {
 			_optionsModified = true;
 			_hasUserSelectedForwardOption = true;
 			
-			if (mode == 0) {
-				_groupOptions = Data::GroupingOptions::GroupAsIs;
-				if (groupAll) {
-					groupAll->setChecked(false, anim::type::normal);
-					groupNone->setChecked(false, anim::type::normal);
-				}
-				if (groupAllItem) {
-					groupAllItem->setEnabled(false);
-					groupNoneItem->setEnabled(false);
-				}
-				Core::App().settings().setGroupingOptions(_groupOptions);
-				Core::App().settings().setGroupingOptionsEverSet(true);
-			} else {
-				if (groupAllItem) {
-					groupAllItem->setEnabled(true);
-					groupNoneItem->setEnabled(true);
-				}
+			if (groupAllItem) {
+				groupAllItem->setEnabled(true);
+				groupNoneItem->setEnabled(true);
 			}
 			
 			const auto dataOptions = (mode == 2)
@@ -1037,13 +1017,6 @@ void ShareBox::submit(Api::SendOptions options) {
 		&& _groupOptions != Data::GroupingOptions::GroupAsIs)
 		? _groupOptions
 		: Data::GroupingOptions::GroupAsIs;
-	
-	LOG(("ShareBox::submit: dropNames=%1, dropCaptions=%2, groupOptions=%3 (actual=%4), modified=%5")
-		.arg(_forwardOptions.dropNames ? 1 : 0
-		).arg(_forwardOptions.dropCaptions ? 1 : 0
-		).arg(int(_groupOptions))
-		.arg(int(actualGroupOptions))
-		.arg(_optionsModified ? 1 : 0));
 		
 	const auto checkPaid = [=] {
 		if (!_descriptor.countMessagesCallback) {

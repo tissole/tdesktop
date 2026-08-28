@@ -3726,7 +3726,8 @@ namespace {
 
 constexpr auto kMaxBatchIds = 100;
 constexpr auto kMaxAlbumIds = 10;
-constexpr auto kMaxFingerprintsInFlight = 2;
+constexpr auto kFingerprintConcurrencyBase = 50;
+constexpr auto kFingerprintConcurrencyMax = 100;
 constexpr auto kMaxFingerprintRetries = 3;
 constexpr auto kGeneralId = Data::ForumTopic::kGeneralId;
 
@@ -3787,17 +3788,22 @@ public:
 	int floodSeconds = 0;
 
 	std::vector<MsgId> remaining;   // source ids not yet acked
-	std::vector<MsgId> queue;       // deduped, ready to send
+	std::vector<MsgId> queue;       // natural singles, batchable
+	std::vector<MessageGroupId> queueGroups; // source groupId per queue entry
+	std::vector<MsgId> soloQueue;   // album members, 1 per request
 	base::flat_map<MsgId, Registration> regs;
 	base::flat_set<MsgId> awaitingHash;
 	base::flat_map<MsgId, QByteArray> hashes;
 	base::flat_map<MsgId, uint64> mediaIds;
 	size_t scanned = 0;             // prepare cursor over remaining
 	int inflightFetches = 0;
+	int soloInFlight = 0;
+	constexpr static auto kMaxSoloConcurrent = 10;
 	bool batchInFlight = false;
 	bool pumping = false;
 	bool completionFired = false;
 	base::flat_map<MsgId, int> fingerprintRetries;
+	std::vector<MsgId> hashRetries;
 
 	std::vector<mtpRequestId> requests;
 	base::Timer floodTimer;
@@ -3945,14 +3951,51 @@ void CancelJob(not_null<Job*> j) {
 
 void PauseJob(not_null<Job*> j);
 
+void EnqueueNatural(not_null<Job*> j, MsgId msgId) {
+	const auto item = j->session->data().message(FullMsgId(j->src, msgId));
+	j->queue.push_back(msgId);
+	j->queueGroups.push_back(
+		item ? item->groupId() : MessageGroupId());
+}
+
+void EnqueueResolved(
+		not_null<Job*> j,
+		MsgId msgId,
+		const QByteArray &hash) {
+	j->awaitingHash.remove(msgId);
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	const auto duplicate = !hash.isEmpty()
+		&& db.seekDocumentId(Data::DedupDb::Table::Uploads, hash) != 0;
+	if (duplicate) {
+		j->skipped++;
+		return;
+	}
+	const auto mediaIt = j->mediaIds.find(msgId);
+	const auto mediaId = (mediaIt != end(j->mediaIds))
+		? mediaIt->second
+		: uint64(0);
+	if (mediaId && !hash.isEmpty()) {
+		db.addPending(Data::DedupDb::Table::Uploads, mediaId, hash);
+		j->regs.emplace_or_assign(msgId, Registration{ mediaId, hash });
+	}
+	const auto item = j->session->data().message(
+		FullMsgId(j->src, msgId));
+	const auto isSolo = j->groupOptions == Data::GroupingOptions::Separate
+		&& item
+		&& item->groupId() != MessageGroupId();
+	if (isSolo) {
+		j->soloQueue.push_back(msgId);
+	} else {
+		EnqueueNatural(j, msgId);
+	}
+}
+
 void StartFingerprint(
 		not_null<Job*> j,
 		MsgId msgId,
 		not_null<DocumentData*> document) {
 	auto &retries = j->fingerprintRetries[msgId];
 	if (retries >= kMaxFingerprintRetries) {
-		LOG(("NF: fingerprint failed %1 times msg=%2, pausing").arg(
-			retries).arg(msgId.bare));
 		PauseJob(j);
 		return;
 	}
@@ -3963,13 +4006,15 @@ void StartFingerprint(
 	Data::RemoteFileFingerprint(j->session, document, [=](QByteArray hash) {
 		if (const auto strong = weak.lock()) {
 			strong->inflightFetches--;
-			strong->awaitingHash.remove(msgId);
 			if (hash.isEmpty()) {
-				Pump(strong.get());
+				strong->awaitingHash.remove(msgId);
+				strong->hashRetries.push_back(msgId);
+				PauseJob(strong.get());
 				return;
 			}
 			strong->fingerprintRetries.remove(msgId);
 			strong->hashes.emplace_or_assign(msgId, std::move(hash));
+			EnqueueResolved(strong.get(), msgId, strong->hashes[msgId]);
 			Pump(strong.get());
 		}
 	});
@@ -3981,8 +4026,6 @@ void StartPhotoFingerprint(
 		not_null<PhotoData*> photo) {
 	auto &retries = j->fingerprintRetries[msgId];
 	if (retries >= kMaxFingerprintRetries) {
-		LOG(("NF: photo fingerprint failed %1 times msg=%2, pausing").arg(
-			retries).arg(msgId.bare));
 		PauseJob(j);
 		return;
 	}
@@ -3993,13 +4036,15 @@ void StartPhotoFingerprint(
 	Data::RemotePhotoFingerprint(j->session, photo, [=](QByteArray hash) {
 		if (const auto strong = weak.lock()) {
 			strong->inflightFetches--;
-			strong->awaitingHash.remove(msgId);
 			if (hash.isEmpty()) {
-				Pump(strong.get());
+				strong->awaitingHash.remove(msgId);
+				strong->hashRetries.push_back(msgId);
+				PauseJob(strong.get());
 				return;
 			}
 			strong->fingerprintRetries.remove(msgId);
 			strong->hashes.emplace_or_assign(msgId, std::move(hash));
+			EnqueueResolved(strong.get(), msgId, strong->hashes[msgId]);
 			Pump(strong.get());
 		}
 	});
@@ -4024,6 +4069,38 @@ void StartPhotoFingerprint(
 			MTPstring());
 	}
 	return MTP_inputMediaEmpty();
+}
+
+[[nodiscard]] QString DescribeAcks(const MTPUpdates &result) {
+	auto line = QString();
+	const auto addMessage = [&](const MTPMessage &message) {
+		message.match([&](const MTPDmessage &data) {
+			line += u" %1:g%2"_q.arg(data.vid().v).arg(
+				data.vgrouped_id().value_or_empty());
+		}, [&](const MTPDmessageEmpty &) {
+			line += u" ?:e"_q;
+		}, [&](const MTPDmessageService &data) {
+			line += u" %1:s"_q.arg(data.vid().v);
+		});
+	};
+	result.match([&](const MTPDupdates &data) {
+		for (const auto &update : data.vupdates().v) {
+			update.match([&](const MTPDupdateNewMessage &d) {
+				addMessage(d.vmessage());
+			}, [&](const MTPDupdateNewChannelMessage &d) {
+				addMessage(d.vmessage());
+			}, [&](const auto &) {});
+		}
+	}, [&](const MTPDupdatesCombined &data) {
+		for (const auto &update : data.vupdates().v) {
+			update.match([&](const MTPDupdateNewMessage &d) {
+				addMessage(d.vmessage());
+			}, [&](const MTPDupdateNewChannelMessage &d) {
+				addMessage(d.vmessage());
+			}, [&](const auto &) {});
+		}
+	}, [&](const auto &) {});
+	return line;
 }
 
 void FlushForwardBatch(
@@ -4056,11 +4133,6 @@ void FlushForwardBatch(
 		approved -= starsPaid;
 		j->action.options.starsApproved = approved;
 	}
-	LOG(("NF: flush batch=%1 fwdOpts=%2 grpOpts=%3 dropAuthor=%4 dropCaptions=%5").arg(
-		chunk.size()).arg(int(j->forwardOptions)).arg(
-		int(j->groupOptions)).arg(
-		Logs::b(j->forwardOptions != Data::ForwardOptions::Quoted)).arg(
-		Logs::b(j->forwardOptions == Data::ForwardOptions::UnquotedWithoutCaptions)));
 	auto flags = Flag(0)
 		| Flag::f_with_my_score
 		| (ShouldSendSilent(history->peer, j->action.options)
@@ -4152,6 +4224,10 @@ void FlushForwardBatch(
 			}
 		}
 		job->batchInFlight = false;
+		if (job->soloInFlight > 0) {
+			job->soloInFlight--;
+		}
+		job->session->data().sendHistoryChangeNotifications();
 		SaveSnapshot(job);
 		Notify();
 		Pump(job);
@@ -4165,6 +4241,11 @@ void FlushForwardBatch(
 		job->batchInFlight = false;
 		for (auto it = chunk.rbegin(); it != chunk.rend(); ++it) {
 			job->queue.insert(job->queue.begin(), *it);
+			const auto item = job->session->data().message(
+				FullMsgId(job->src, *it));
+			job->queueGroups.insert(
+				job->queueGroups.begin(),
+				item ? item->groupId() : MessageGroupId());
 		}
 		const auto &type = error.type();
 		if (type.startsWith(u"FLOOD_WAIT_"_q)) {
@@ -4209,54 +4290,36 @@ void Pump(not_null<Job*> j) {
 		|| j->batchInFlight) {
 		return;
 	}
+	// Separate-mode solo sends (1 id each) are independent — no
+	// batchInFlight serialization needed. Batched modes serialize.
 	j->pumping = true;
 	const auto guard = gsl::finally([&] { j->pumping = false; });
 
 	auto &db = Core::App().downloadManager().ensureDedupDb();
 	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
 	const auto windowSize = j->maxBatch();
+	// Adaptive concurrency: when both send queues are empty the pipeline
+	// is starved, so allow more fingerprint fetches to catch up.
+	const auto maxInflight = (j->queue.empty() && j->soloQueue.empty())
+		? kFingerprintConcurrencyMax
+		: kFingerprintConcurrencyBase;
 
 	// Check-ahead pipeline: fill the queue up to one batch ahead.
 	// Doc-id check is instant; fingerprints are bounded to 2 concurrent.
 	// The flush fires as soon as the queue reaches the target size.
-	while (int(j->queue.size()) < windowSize
+	while (int(j->queue.size()) + int(j->soloQueue.size()) < windowSize
 		&& j->scanned < j->remaining.size()) {
 		const auto msgId = j->remaining[j->scanned];
 
 		if (!dedupOn) {
 			j->scanned++;
-			j->queue.push_back(msgId);
+			EnqueueNatural(j, msgId);
 			continue;
 		}
 
 		if (const auto it = j->hashes.find(msgId); it != end(j->hashes)) {
 			j->scanned++;
-			const auto &hash = it->second;
-			const auto duplicate = !hash.isEmpty()
-				&& db.seekDocumentId(
-					Data::DedupDb::Table::Uploads,
-					hash) != 0;
-			LOG(("NF: hash %1 dup=%2 id=%3").arg(
-				QString::fromLatin1(hash.toHex())).arg(
-				Logs::b(duplicate)).arg(msgId.bare));
-			if (duplicate) {
-				j->skipped++;
-				continue;
-			}
-			const auto mediaIt = j->mediaIds.find(msgId);
-			const auto mediaId = (mediaIt != end(j->mediaIds))
-				? mediaIt->second
-				: uint64(0);
-			if (mediaId && !hash.isEmpty()) {
-				db.addPending(
-					Data::DedupDb::Table::Uploads,
-					mediaId,
-					hash);
-				j->regs.emplace_or_assign(
-					msgId,
-					Registration{ mediaId, hash });
-			}
-			j->queue.push_back(msgId);
+			EnqueueResolved(j, msgId, it->second);
 			continue;
 		}
 
@@ -4266,47 +4329,65 @@ void Pump(not_null<Job*> j) {
 		const auto document = media ? media->document() : nullptr;
 		const auto photo = media ? media->photo() : nullptr;
 
+		if (j->awaitingHash.contains(msgId)) {
+			j->scanned++;
+			continue;
+		}
+
 		if (!document && !photo) {
 			j->scanned++;
-			j->queue.push_back(msgId);
+			EnqueueNatural(j, msgId);
 			continue;
 		}
 
 		const auto mediaId = document
 			? uint64(document->id)
 			: uint64(photo->id);
-		LOG(("NF: media id=%1 doc=%2 photo=%3 msg=%4").arg(
-			QString::number(mediaId)).arg(
-			Logs::b(document != nullptr)).arg(
-			Logs::b(photo != nullptr)).arg(msgId.bare));
-		if (db.containsDocId(Data::DedupDb::Table::Uploads, mediaId)
-			|| db.containsDocIdInDb(
-				Data::DedupDb::Table::Uploads,
-				mediaId)) {
+		if (db.containsDocId(Data::DedupDb::Table::Uploads, mediaId)) {
 			j->scanned++;
 			j->skipped++;
 			continue;
 		}
 
-		if (j->awaitingHash.contains(msgId)) {
-			break; // its callback resumes the pump
-		}
-		if (j->inflightFetches >= kMaxFingerprintsInFlight) {
+		if (j->inflightFetches >= maxInflight) {
 			break;
 		}
 
 		j->mediaIds.emplace(msgId, mediaId);
+		j->awaitingHash.insert(msgId);
 		if (document) {
 			StartFingerprint(j, msgId, document);
 		} else {
 			StartPhotoFingerprint(j, msgId, photo);
 		}
-		break; // callback resumes the pump
+		j->scanned++;
+		continue;
+	}
+
+	if (!j->soloQueue.empty()) {
+		// Album members go one per request (breaks grouping).
+		auto chunk = std::vector<MsgId>(
+			begin(j->soloQueue),
+			begin(j->soloQueue) + 1);
+		j->soloQueue.erase(begin(j->soloQueue));
+		j->soloInFlight++;
+		FlushForwardBatch(j, std::move(chunk));
+		return;
 	}
 
 	if (!j->queue.empty()) {
-		// Flush only when the batch is full or nothing else is pending.
-		// Flushing early would split albums into fragments.
+		// Ensure ascending msgId order regardless of fingerprint
+		// callback completion order, keeping groupIds paired.
+		auto paired = std::vector<std::pair<MsgId, MessageGroupId>>();
+		paired.reserve(j->queue.size());
+		for (auto i = size_t(0); i < j->queue.size(); ++i) {
+			paired.emplace_back(j->queue[i], j->queueGroups[i]);
+		}
+		std::sort(begin(paired), end(paired));
+		for (auto i = size_t(0); i < paired.size(); ++i) {
+			j->queue[i] = paired[i].first;
+			j->queueGroups[i] = paired[i].second;
+		}
 		const auto readyToFlush = int(j->queue.size()) >= windowSize
 			|| (j->scanned >= j->remaining.size()
 				&& j->inflightFetches == 0
@@ -4314,7 +4395,46 @@ void Pump(not_null<Job*> j) {
 		if (!readyToFlush) {
 			return;
 		}
-		auto chunk = base::take(j->queue);
+		auto count = std::min(j->queue.size(), size_t(windowSize));
+		for (auto i = size_t(0); i < count; ++i) {
+			if (i > 0
+				&& j->groupOptions == Data::GroupingOptions::RegroupAll) {
+				const auto prev = j->queueGroups[i - 1];
+				const auto cur = j->queueGroups[i];
+				const auto boundary = (prev != MessageGroupId())
+					? (cur != prev)
+					: (cur != MessageGroupId());
+				if (boundary) {
+					count = i;
+					break;
+				}
+				const auto prevItem = j->session->data().message(
+					FullMsgId(j->src, j->queue[i - 1]));
+				const auto curItem = j->session->data().message(
+					FullMsgId(j->src, j->queue[i]));
+				const auto prevMedia = prevItem ? prevItem->media() : nullptr;
+				const auto curMedia = curItem ? curItem->media() : nullptr;
+				const auto prevCan = prevMedia && prevMedia->canBeGrouped();
+				const auto curCan = curMedia && curMedia->canBeGrouped();
+				if (prevCan != curCan) {
+					count = i;
+					break;
+				}
+			}
+		}
+		auto chunk = std::vector<MsgId>(
+			begin(j->queue),
+			begin(j->queue) + count);
+		if (j->groupOptions == Data::GroupingOptions::GroupAsIs
+			&& chunk.size() > 10) {
+			std::reverse(begin(chunk), end(chunk));
+		}
+		j->queue.erase(
+			begin(j->queue),
+			begin(j->queue) + count);
+		j->queueGroups.erase(
+			begin(j->queueGroups),
+			begin(j->queueGroups) + count);
 		j->batchInFlight = true;
 		FlushForwardBatch(j, std::move(chunk));
 		return;
@@ -4322,12 +4442,35 @@ void Pump(not_null<Job*> j) {
 
 	if (j->scanned >= j->remaining.size()
 		&& j->inflightFetches == 0
-		&& j->awaitingHash.empty()) {
+		&& j->awaitingHash.empty()
+		&& j->queue.empty()
+		&& j->soloQueue.empty()) {
 		Finish(j);
 	}
 }
-
 } // namespace
+
+void RestartFailedFingerprints(not_null<Job*> j) {
+	if (j->hashRetries.empty()) {
+		return;
+	}
+	auto failed = base::take(j->hashRetries);
+	for (const auto msgId : failed) {
+		if (j->state != Job::State::Running) {
+			return;
+		}
+		const auto item = j->session->data().message(
+			FullMsgId(j->src, msgId));
+		const auto media = item ? item->media() : nullptr;
+		const auto document = media ? media->document() : nullptr;
+		const auto photo = media ? media->photo() : nullptr;
+		if (document) {
+			StartFingerprint(j, msgId, document);
+		} else if (photo) {
+			StartPhotoFingerprint(j, msgId, photo);
+		}
+	}
+}
 
 void Start(
 		not_null<ApiWrap*> api,
@@ -4353,9 +4496,6 @@ void Start(
 		remaining.push_back(item->fullId().msg);
 	}
 	std::sort(remaining.begin(), remaining.end());
-	LOG(("NF: Start items=%1 dst=%2 src=%3 grouping=%4").arg(
-		remaining.size()).arg(dst.value).arg(src.value).arg(
-		int(groupOptions)));
 
 	auto &jobs = Jobs();
 	if (const auto it = jobs.find(dst); it != end(jobs)) {
@@ -4369,6 +4509,7 @@ void Start(
 		if (job->state == Job::State::Paused) {
 			job->state = Job::State::Running;
 		}
+		RestartFailedFingerprints(job);
 		SaveSnapshot(job);
 		Notify();
 		Pump(job);
