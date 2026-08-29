@@ -760,7 +760,7 @@ base::unique_qptr<Ui::SideBarButton> FiltersMenu::prepareButton(
 					crl::guard(&_outer, std::move(args.handler)),
 					args.icon);
 			});
-			Window::MenuAddMarkAsReadAllChatsAction(
+			MarkAsReadMenu::AddAllChatsAction(
 					&_session->session(),
 					_session->uiShow(),
 					addAction);
