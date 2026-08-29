@@ -175,14 +175,15 @@ struct LocalMarkdownTarget {
 		return false;
 	}
 	auto article = Markdown::MarkdownArticle(st::defaultMarkdown);
+	article.setTextRepaintCallbacks([] {}, [](QRect) {});
 	article.setContent(content);
 	const auto width = article.maxWidth();
-	static_cast<void>(article.resizeGetHeight(width));
+	article.resizeGetHeight(width);
 	auto top = article.anchorTop(anchorId);
 	if (top < 0) {
 		const auto expansion = article.expandDetailsToAnchor(anchorId);
 		if (expansion.changed) {
-			static_cast<void>(article.resizeGetHeight(width));
+			article.resizeGetHeight(width);
 		}
 		top = article.anchorTop(anchorId);
 	}
@@ -861,7 +862,7 @@ void Instance::showOpenedPage(
 		case Type::OpenLinkExternal:
 			if (urlChecked) {
 				File::OpenUrl(event.url);
-				closeAll();
+				closeLegacyWindows();
 			} else if (tonsite) {
 				showTonSite(event.url);
 			}
@@ -938,10 +939,11 @@ void Instance::showOpenedPage(
 				}
 			}
 			requested.lastRequestedAt = crl::now();
-			session->api().request(MTPmessages_GetWebPage(
+			const auto requestId = session->api().request(MTPmessages_GetWebPage(
 				MTP_string(url),
 				MTP_int(requested.hash)
-			)).done([=](const MTPmessages_WebPage &result) {
+			)).done([=](const MTPmessages_WebPage &result, mtpRequestId id) {
+				finishInPageRequest(session, id);
 				const auto processed = processReceivedPage(
 					session,
 					requestKey,
@@ -965,9 +967,11 @@ void Instance::showOpenedPage(
 				} else {
 					UrlClickHandler::Open(event.url);
 				}
-			}).fail([=] {
+			}).fail([=](const MTP::Error &error, mtpRequestId id) {
+				finishInPageRequest(session, id);
 				UrlClickHandler::Open(event.url);
 			}).send();
+			_inPageRequested[session].emplace(requestId);
 		} break;
 		case Type::Report:
 			if (const auto controller = _shownSession->tryResolveWindow()) {
@@ -1031,23 +1035,29 @@ void Instance::trackSession(not_null<Main::Session*> session) {
 		_tracking.remove(session);
 		_joining.remove(session);
 		_fullRequested.remove(session);
-		if (const auto i = _richMessageRequested.find(session)
-			; i != end(_richMessageRequested)) {
-			for (const auto &[itemId, requested] : i->second) {
-				if (requested.requestId) {
-					session->api().request(requested.requestId).cancel();
-				}
-			}
-			_richMessageRequested.erase(i);
-		}
+		cancelRichMessageRequests(session);
+		cancelInPageRequests(session);
 		_ivCache.remove(session);
 		if (_ivRequestSession == session) {
-			session->api().request(_ivRequestId).cancel();
-			_ivRequestSession = nullptr;
-			_ivRequestUri = QString();
-			_ivRequestId = 0;
+			cancelIvRequest();
 		}
 	});
+}
+
+QString Instance::activeMarkdownKey() const {
+	for (const auto &[key, controller] : _markdowns) {
+		if (controller->active()) {
+			return key;
+		}
+	}
+	return QString();
+}
+
+void Instance::takeMarkdown(const QString &key) {
+	_markdownBindings.remove(key);
+	if (auto taken = _markdowns.take(key)) {
+		destroyLater(std::move(*taken));
+	}
 }
 
 void Instance::bindMarkdown(
@@ -1074,10 +1084,7 @@ void Instance::closeMarkdownsForItem(
 		}
 	}
 	for (const auto &key : keys) {
-		_markdownBindings.remove(key);
-		if (auto taken = _markdowns.take(key)) {
-			destroyLater(std::move(*taken));
-		}
+		takeMarkdown(key);
 	}
 }
 
@@ -1089,10 +1096,7 @@ void Instance::closeMarkdownsForSession(not_null<Main::Session*> session) {
 		}
 	}
 	for (const auto &key : keys) {
-		_markdownBindings.remove(key);
-		if (auto taken = _markdowns.take(key)) {
-			destroyLater(std::move(*taken));
-		}
+		takeMarkdown(key);
 	}
 }
 
@@ -1111,6 +1115,52 @@ void Instance::closeSessionDataViews(not_null<Main::Session*> session) {
 	if (_shown && _shown->showingFrom(session)) {
 		destroyLater(base::take(_shown));
 	}
+}
+
+void Instance::cancelRichMessageRequests(not_null<Main::Session*> session) {
+	const auto i = _richMessageRequested.find(session);
+	if (i == end(_richMessageRequested)) {
+		return;
+	}
+	for (const auto &[itemId, requested] : i->second) {
+		if (requested.requestId) {
+			session->api().request(requested.requestId).cancel();
+		}
+	}
+	_richMessageRequested.erase(i);
+}
+
+void Instance::finishInPageRequest(
+		not_null<Main::Session*> session,
+		mtpRequestId requestId) {
+	const auto i = _inPageRequested.find(session);
+	if (i == end(_inPageRequested)) {
+		return;
+	}
+	i->second.remove(requestId);
+	if (i->second.empty()) {
+		_inPageRequested.erase(i);
+	}
+}
+
+void Instance::cancelInPageRequests(not_null<Main::Session*> session) {
+	const auto i = _inPageRequested.find(session);
+	if (i == end(_inPageRequested)) {
+		return;
+	}
+	for (const auto requestId : i->second) {
+		session->api().request(requestId).cancel();
+	}
+	_inPageRequested.erase(i);
+}
+
+void Instance::cancelIvRequest() {
+	const auto session = base::take(_ivRequestSession);
+	if (!session) {
+		return;
+	}
+	session->api().request(base::take(_ivRequestId)).cancel();
+	_ivRequestUri = QString();
 }
 
 void Instance::openWithIvPreferred(
@@ -1146,7 +1196,7 @@ void Instance::openWithIvPreferred(
 	trackSession(session);
 	const auto hash = (parts.size() > 1) ? parts[1] : u""_q;
 	const auto url = parts[0];
-	auto &cache = _ivCache[session];
+	const auto &cache = _ivCache[session];
 	if (const auto i = cache.find(url); i != end(cache)) {
 		const auto page = i->second;
 		if (page && page->iv) {
@@ -1162,15 +1212,12 @@ void Instance::openWithIvPreferred(
 		return;
 	} else if (_ivRequestSession == session.get() && _ivRequestUri == uri) {
 		return;
-	} else if (_ivRequestId) {
-		_ivRequestSession->api().request(_ivRequestId).cancel();
 	}
+	cancelIvRequest();
 	const auto finish = [=](WebPageData *page) {
 		Expects(_ivRequestSession == session);
 
-		_ivRequestId = 0;
-		_ivRequestUri = QString();
-		_ivRequestSession = nullptr;
+		cancelIvRequest();
 		_ivCache[session][url] = page;
 		if (page && page->iv) {
 			this->showOpenedPage(session, page->iv.get(), hash, false);
@@ -1223,7 +1270,7 @@ void Instance::showTonSite(
 		case Type::OpenLinkExternal:
 			if (urlChecked) {
 				File::OpenUrl(event.url);
-				closeAll();
+				closeLegacyWindows();
 			} else if (tonsite) {
 				showTonSite(event.url);
 			}
@@ -1556,10 +1603,7 @@ void Instance::showRichMessage(
 			using Type = Markdown::Event::Type;
 			switch (event.type) {
 			case Type::Close:
-				_markdownBindings.remove(key);
-				if (auto taken = _markdowns.take(key)) {
-					destroyLater(std::move(*taken));
-				}
+				takeMarkdown(key);
 				break;
 			case Type::Quit:
 				Shortcuts::Launch(Shortcuts::Command::Quit);
@@ -1612,10 +1656,7 @@ bool Instance::showMarkdown(
 				using Type = Markdown::Event::Type;
 				switch (event.type) {
 				case Type::Close:
-					_markdownBindings.remove(target.key);
-					if (auto taken = _markdowns.take(target.key)) {
-						destroyLater(std::move(*taken));
-					}
+					takeMarkdown(target.key);
 					break;
 				case Type::Quit:
 					Shortcuts::Launch(Shortcuts::Command::Quit);
@@ -1844,7 +1885,12 @@ void Instance::processJoinChannel(const QString &context) {
 }
 
 bool Instance::hasActiveWindow(not_null<Main::Session*> session) const {
-	return _shown && _shown->activeFor(session);
+	if (_shown && _shown->activeFor(session)) {
+		return true;
+	}
+	const auto i = _markdownBindings.find(activeMarkdownKey());
+	return (i != end(_markdownBindings))
+		&& (i->second.session == session.get());
 }
 
 bool Instance::closeActive() {
@@ -1858,15 +1904,12 @@ bool Instance::closeActive() {
 		_tlv = nullptr;
 		return true;
 	}
-	for (auto &[key, controller] : _markdowns) {
-		if (controller->active()) {
-			if (auto taken = _markdowns.take(key)) {
-				destroyLater(std::move(*taken));
-			}
-			return true;
-		}
+	const auto key = activeMarkdownKey();
+	if (key.isEmpty()) {
+		return false;
 	}
-	return false;
+	takeMarkdown(key);
+	return true;
 }
 
 bool Instance::minimizeActive() {
@@ -1880,13 +1923,33 @@ bool Instance::minimizeActive() {
 		_tlv->minimize();
 		return true;
 	}
-	return false;
+	const auto i = _markdowns.find(activeMarkdownKey());
+	if (i == end(_markdowns)) {
+		return false;
+	}
+	i->second->minimize();
+	return true;
 }
 
-void Instance::closeAll() {
+void Instance::closeLegacyWindows() {
 	destroyLater(base::take(_shown));
 	destroyLater(base::take(_tonSite));
 	destroyLater(base::take(_tlv));
+}
+
+void Instance::closeAll() {
+	while (!_richMessageRequested.empty()) {
+		cancelRichMessageRequests(_richMessageRequested.front().first);
+	}
+	while (!_inPageRequested.empty()) {
+		cancelInPageRequests(_inPageRequested.front().first);
+	}
+	cancelIvRequest();
+	closeLegacyWindows();
+	_markdownBindings.clear();
+	for (auto &[_, controller] : base::take(_markdowns)) {
+		destroyLater(std::move(controller));
+	}
 }
 
 void Instance::destroyLater(std::shared_ptr<void> object) {
