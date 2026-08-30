@@ -3819,6 +3819,7 @@ void ApiWrap::forwardMessages(
 	if (draft.options != Data::ForwardOptions::Quoted
 		&& draft.groupOptions == Data::GroupingOptions::RegroupAll
 		&& !draft.items.empty()) {
+		LOG(("DEDUP_DEBUG: copy album via SendMultiMedia bypasses dedup total=%1 dedupOn=%2").arg(draft.items.size()).arg(GetEnhancedBool("prevent_forward_duplicates")));
 		auto copyItems = draft.items;
 		auto copyAction = action;
 		auto copyShared = shared;
@@ -3826,7 +3827,39 @@ void ApiWrap::forwardMessages(
 			std::sort(copyItems.begin(), copyItems.end(), [](auto a, auto b) {
 				return a->id < b->id;
 			});
-		std::vector<std::pair<int, std::vector<not_null<HistoryItem*>>>> batches;
+			if (GetEnhancedBool("prevent_forward_duplicates")) {
+				auto &db = Core::App().downloadManager().ensureDedupDb();
+				QSet<uint64> seen;
+				auto filtered = std::vector<not_null<HistoryItem*>>();
+				filtered.reserve(copyItems.size());
+				int skipped = 0;
+				for (const auto item : copyItems) {
+					const auto media = item->media();
+					const auto doc = media ? media->document() : nullptr;
+					const auto photo = media ? media->photo() : nullptr;
+					uint64 mediaId = 0;
+					if (doc) mediaId = uint64(doc->id);
+					else if (photo) mediaId = uint64(photo->id);
+					else { filtered.push_back(item); continue; }
+					if (seen.contains(mediaId) || db.containsDocId(Data::DedupDb::Table::Uploads, mediaId)) {
+						LOG(("DEDUP_DEBUG: copy album skip duplicate msgId=%1 mediaId=%2").arg(item->id.bare).arg(mediaId));
+						skipped++;
+						continue;
+					}
+					seen.insert(mediaId);
+					filtered.push_back(item);
+				}
+				if (skipped > 0) {
+					LOG(("DEDUP_DEBUG: copy album skipped %1 duplicates").arg(skipped));
+					Ui::Toast::Show(tr::lng_tm_fw_duplicates_skipped(tr::now, lt_count, skipped));
+				}
+				copyItems = std::move(filtered);
+				if (copyItems.empty()) {
+					if (copyShared && !--copyShared->requestsLeft) copyShared->callback();
+					return;
+				}
+			}
+			std::vector<std::pair<int, std::vector<not_null<HistoryItem*>>>> batches;
 		std::vector<not_null<HistoryItem*>> remaining;
 		remaining.reserve(draft.items.size());
 		{
@@ -3856,7 +3889,7 @@ void ApiWrap::forwardMessages(
 				}
 				return 0;
 			};
-			for (const auto item : draft.items) {
+			for (const auto item : copyItems) {
 				const int kind = getKind(item);
 				const auto groupId = item->groupId();
 				const bool same = groupId != MessageGroupId()

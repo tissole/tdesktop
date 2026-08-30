@@ -9,6 +9,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/weak_ptr.h"
 #include "data/data_file_hash.h"
+#include "history/history_item.h"
+#include "data/data_document.h"
+#include "data/data_photo.h"
+#include "core/application.h"
+#include "ui/toast/toast.h"
+#include "lang/lang_keys.h"
 
 namespace Data {
 namespace {
@@ -25,6 +31,103 @@ void SetCopyAlbumProgress(int done, int total) {
 std::pair<int,int> CopyAlbumProgress() {
 	return { g_copyAlbumDone, g_copyAlbumTotal };
 }
+
+void FilterCopyAlbumDuplicates(
+		not_null<Main::Session*> session,
+		std::vector<not_null<HistoryItem*>> items,
+		Fn<void(std::vector<not_null<HistoryItem*>>)> done) {
+	if (!GetEnhancedBool("prevent_forward_duplicates")) {
+		done(std::move(items));
+		return;
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	QSet<uint64> seenIds;
+	auto filteredIds = std::vector<not_null<HistoryItem*>>();
+	filteredIds.reserve(items.size());
+	int skippedIds = 0;
+	for (const auto item : items) {
+		const auto media = item->media();
+		const auto doc = media ? media->document() : nullptr;
+		const auto photo = media ? media->photo() : nullptr;
+		uint64 mediaId = 0;
+		if (doc) mediaId = uint64(doc->id);
+		else if (photo) mediaId = uint64(photo->id);
+		else { filteredIds.push_back(item); continue; }
+		if (seenIds.contains(mediaId) || db.containsDocId(Data::DedupDb::Table::Uploads, mediaId)) {
+			skippedIds++;
+			continue;
+		}
+		seenIds.insert(mediaId);
+		filteredIds.push_back(item);
+	}
+	QSet<QByteArray> seenHashes;
+	auto finalFiltered = std::vector<not_null<HistoryItem*>>();
+	finalFiltered.reserve(filteredIds.size());
+	auto hashCandidates = std::vector<not_null<HistoryItem*>>();
+	for (const auto item : filteredIds) {
+		if (const auto doc = item->media()->document()) {
+			if (doc->size > 0) { hashCandidates.push_back(item); continue; }
+		} else if (item->media()->photo()) {
+			hashCandidates.push_back(item); continue;
+		}
+		finalFiltered.push_back(item);
+	}
+	if (hashCandidates.empty()) {
+		if (skippedIds > 0) {
+			Ui::Toast::Show(tr::lng_tm_fw_duplicates_skipped(tr::now, lt_count, skippedIds));
+		}
+		done(std::move(finalFiltered));
+		return;
+	}
+	auto remaining = std::make_shared<int>(int(hashCandidates.size()));
+	auto hashes = std::make_shared<QMap<MsgId, QByteArray>>();
+	auto seenHashesPtr = std::make_shared<QSet<QByteArray>>(std::move(seenHashes));
+	auto finalFilteredPtr = std::make_shared<std::vector<not_null<HistoryItem*>>>(std::move(finalFiltered));
+	auto skippedHashesPtr = std::make_shared<int>(0);
+	auto allDone = std::make_shared<Fn<void()>>();
+	*allDone = [=]() mutable {
+		if (--(*remaining) > 0) return;
+		auto &db2 = Core::App().downloadManager().ensureDedupDb();
+		for (const auto item : hashCandidates) {
+			const auto h = hashes->value(item->id);
+			bool isDup = !h.isEmpty() && (seenHashesPtr->contains(h) || db2.containsFinishedHash(Data::DedupDb::Table::Uploads, h));
+			if (isDup) {
+				(*skippedHashesPtr)++;
+				if (!h.isEmpty() && !db2.containsFinishedHash(Data::DedupDb::Table::Uploads, h)) {
+					uint64 mid = 0;
+					if (const auto doc = item->media()->document()) mid = uint64(doc->id);
+					else if (const auto photo = item->media()->photo()) mid = uint64(photo->id);
+					db2.insert(Data::DedupDb::Table::Uploads, { .hash = h, .documentId = mid, .status = u"f"_q });
+				}
+				continue;
+			}
+			if (!h.isEmpty()) seenHashesPtr->insert(h);
+			finalFilteredPtr->push_back(item);
+		}
+		int totalSkipped = skippedIds + *skippedHashesPtr;
+		if (totalSkipped > 0) {
+			Ui::Toast::Show(tr::lng_tm_fw_duplicates_skipped(tr::now, lt_count, totalSkipped));
+		}
+		done(std::move(*finalFilteredPtr));
+	};
+	for (const auto item : hashCandidates) {
+		if (const auto doc = item->media()->document()) {
+			Core::App().downloadManager().fetchFingerprint(session, doc, [=](QByteArray h) {
+				(*hashes)[item->id] = h;
+				(*allDone)();
+			});
+		} else if (const auto photo = item->media()->photo()) {
+			Core::App().downloadManager().fetchFingerprint(session, photo, [=](QByteArray h) {
+				(*hashes)[item->id] = h;
+				(*allDone)();
+			});
+		} else {
+			(*hashes)[item->id] = QByteArray();
+			(*allDone)();
+		}
+	}
+}
+
 } // namespace Data
 #include "logs.h"
 #include "settings.h"
@@ -1708,6 +1811,13 @@ void DownloadManager::fetchFingerprint(
 		_fingerprintCache[docId] = hash;
 		done(hash);
 	});
+}
+
+void DownloadManager::fetchFingerprint(
+		not_null<Main::Session*> session,
+		not_null<PhotoData*> photo,
+		Fn<void(QByteArray)> done) {
+	done(QByteArray::number(photo->id));
 }
 
 void DownloadManager::clearFingerprintCache(uint64 documentId) {

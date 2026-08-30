@@ -179,6 +179,14 @@ public:
 		not_null<Main::Session*> session,
 		not_null<DocumentData*> document,
 		Fn<void(bool)> done);
+	void fetchFingerprint(
+		not_null<Main::Session*> session,
+		not_null<DocumentData*> document,
+		Fn<void(QByteArray)> done);
+	void fetchFingerprint(
+		not_null<Main::Session*> session,
+		not_null<PhotoData*> photo,
+		Fn<void(QByteArray)> done);
 
 	[[nodiscard]] DedupDb &dedupDb() const;
 	DedupDb &ensureDedupDb() const;
@@ -259,15 +267,6 @@ private:
 	void saveToDisk();
 	void saveIfIdle();
 	[[nodiscard]] QString dedupDbPath() const;
-	// Fetches (or reuses an already-fetched) partial remote fingerprint for
-	// a document. The result (including an empty one, e.g. for small files)
-	// is cached per documentId so the 2 sample chunks are only requested
-	// from the server once per document, until clearFingerprintCache() is
-	// called for it (e.g. on cancel).
-	void fetchFingerprint(
-		not_null<Main::Session*> session,
-		not_null<DocumentData*> document,
-		Fn<void(QByteArray)> done);
 	void clearFingerprintCache(uint64 documentId);
 	void saveFileHash(
 		not_null<Main::Session*> session,
@@ -312,6 +311,10 @@ private:
 
 void SetCopyAlbumProgress(int done, int total);
 [[nodiscard]] std::pair<int,int> CopyAlbumProgress();
+void FilterCopyAlbumDuplicates(
+	not_null<Main::Session*> session,
+	std::vector<not_null<HistoryItem*>> items,
+	Fn<void(std::vector<not_null<HistoryItem*>>)> done);
 
 [[nodiscard]] auto MakeDownloadBarProgress()
 -> rpl::producer<Ui::DownloadBarProgress>;
