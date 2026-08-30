@@ -734,8 +734,6 @@ bool ShareBox::showForwardMenu(not_null<Ui::IconButton*> button) {
 		? Data::ForwardOptions::UnquotedWithCaptions
 		: Data::ForwardOptions::Quoted;
 
-	const auto isQuoted = !_forwardOptions.dropNames && !_forwardOptions.dropCaptions;
-
 	// --- Forward option section ---
 
 	const auto quoted = makeView(
@@ -2267,21 +2265,21 @@ void FastShareMessage(
 			return item->media() && item->media()->forceForwardedInfo();
 		});
 	const auto hasMediaForGrouping = [&] {
-		if (msgIds.size() > 1) {
-			auto mediaCount = 0;
-			for (const auto &item : items) {
-				if (item->media()) {
-					if (++mediaCount > 1) {
-						LOG(("FastShareMessage: hasMediaForGrouping=true, mediaCount=%1").arg(mediaCount));
-						return true;
-					}
+		if (msgIds.size() <= 1) {
+			return false;
+		}
+		auto totalMedia = 0;
+		auto groupableMedia = 0;
+		for (const auto &item : items) {
+			if (item->media()) {
+				++totalMedia;
+				if (item->media()->canBeGrouped()) {
+					++groupableMedia;
 				}
 			}
-			LOG(("FastShareMessage: hasMediaForGrouping=false, mediaCount=%1").arg(mediaCount));
-		} else {
-			LOG(("FastShareMessage: hasMediaForGrouping=false, msgIds.size()=1"));
 		}
-		return false;
+		const bool result = (groupableMedia > 0 && totalMedia > 1);
+		return result;
 	}();
 
 	const auto defaultGroupAsAlbum = [&] {

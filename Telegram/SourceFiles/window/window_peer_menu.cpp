@@ -2975,14 +2975,17 @@ QPointer<Ui::BoxContent> ShowNewForwardMessagesBox(
 		});
 	const auto hasMediaForGrouping = [&] {
 		if (msgIds.size() > 1) {
-			auto mediaCount = 0;
+			auto totalMedia = 0;
+			auto groupableMedia = 0;
 			for (const auto &item : items) {
 				if (item->media()) {
-					if (++mediaCount > 1) {
-						return true;
+					++totalMedia;
+					if (item->media()->canBeGrouped()) {
+						++groupableMedia;
 					}
 				}
 			}
+			return (groupableMedia > 0 && totalMedia > 1);
 		}
 		return false;
 	}();

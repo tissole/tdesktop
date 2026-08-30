@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "ui/controls/download_bar.h"
 
+#include "logs.h"
 #include "ui/widgets/buttons.h"
 #include "ui/text/format_values.h"
 #include "ui/text/text_utilities.h"
@@ -216,7 +217,9 @@ void DownloadBar::refreshInfo(const DownloadBarProgress &progress) {
 	_info.setMarkedText(
 		st::downloadInfoStyle,
 		std::move(text));
-	_button.entity()->update();
+	if (!_button.entity()->isHidden()) {
+		crl::on_main(_button.entity(), [=] { _button.entity()->update(); });
+	}
 }
 
 bool DownloadBar::isHidden() const {

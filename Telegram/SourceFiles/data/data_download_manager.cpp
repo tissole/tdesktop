@@ -7,7 +7,25 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_download_manager.h"
 
+#include "base/weak_ptr.h"
 #include "data/data_file_hash.h"
+
+namespace Data {
+namespace {
+int g_copyAlbumDone = 0;
+int g_copyAlbumTotal = 0;
+rpl::event_stream<> g_copyAlbumChanges;
+} // namespace
+
+void SetCopyAlbumProgress(int done, int total) {
+	g_copyAlbumDone = done;
+	g_copyAlbumTotal = total;
+	g_copyAlbumChanges.fire({});
+}
+std::pair<int,int> CopyAlbumProgress() {
+	return { g_copyAlbumDone, g_copyAlbumTotal };
+}
+} // namespace Data
 #include "logs.h"
 #include "settings.h"
 #include "core/core_settings.h"
@@ -2086,6 +2104,11 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 						nf.floodSeconds);
 				}
 			}
+			{
+				const auto copy = CopyAlbumProgress();
+				nfDone = std::max(nfDone, copy.first);
+				nfTotal = std::max(nfTotal, copy.second);
+			}
 			consumer.put_next(Ui::DownloadBarProgress{
 				.ready = dlProgress.ready,
 				.total = dlProgress.total,
@@ -2118,6 +2141,11 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 		}, lifetime);
 
 		NormalForward::countersChanged(
+		) | rpl::on_next([=] {
+			state->push();
+		}, lifetime);
+
+		g_copyAlbumChanges.events(
 		) | rpl::on_next([=] {
 			state->push();
 		}, lifetime);
@@ -2263,6 +2291,13 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 					}
 				}
 			}
+			{
+				const auto copy = CopyAlbumProgress();
+				if (copy.second > content.nfCount) {
+					content.nfCount = copy.second;
+					content.nfDone = copy.first;
+				}
+			}
 			if (content.count == 1) {
 				const auto document = single->document;
 				const auto thumbnailed = (single->item
@@ -2303,6 +2338,11 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 		}) | rpl::on_next(state->push, lifetime);
 
 		NormalForward::countersChanged(
+		) | rpl::on_next([=] {
+			state->push();
+		}, lifetime);
+
+		g_copyAlbumChanges.events(
 		) | rpl::on_next([=] {
 			state->push();
 		}, lifetime);

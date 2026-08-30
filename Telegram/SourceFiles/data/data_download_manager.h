@@ -310,6 +310,9 @@ private:
 
 };
 
+void SetCopyAlbumProgress(int done, int total);
+[[nodiscard]] std::pair<int,int> CopyAlbumProgress();
+
 [[nodiscard]] auto MakeDownloadBarProgress()
 -> rpl::producer<Ui::DownloadBarProgress>;
 

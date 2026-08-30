@@ -58,6 +58,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
+#include "data/data_download_manager.h"
 #include "enhanced_forward.h"
 #include "core/file_utilities.h"
 #include "data/data_document_media.h"
@@ -3786,9 +3787,13 @@ void ApiWrap::forwardMessages(
     		draft.items = std::move(normalItems);
     	}
 
-	const auto useNormalForwardPipeline = !(action.generateLocal
-		&& draft.items.size() < 2
-		&& draft.options == Data::ForwardOptions::Quoted);
+	const auto isCopyAlbum = (draft.options != Data::ForwardOptions::Quoted
+		&& draft.groupOptions == Data::GroupingOptions::RegroupAll
+		&& !draft.items.empty());
+	const auto useNormalForwardPipeline = !isCopyAlbum
+		&& !(action.generateLocal
+			&& draft.items.size() < 2
+			&& draft.options == Data::ForwardOptions::Quoted);
 	if (useNormalForwardPipeline) {
 		if (shared) {
 			++shared->requestsLeft;
@@ -3807,6 +3812,286 @@ void ApiWrap::forwardMessages(
 			draft.groupOptions,
 			std::move(completion),
 			videoTimestamp);
+		return;
+	}
+
+	// Copy+Album - photo/video via SendMultiMedia with grouping
+	if (draft.options != Data::ForwardOptions::Quoted
+		&& draft.groupOptions == Data::GroupingOptions::RegroupAll
+		&& !draft.items.empty()) {
+		auto copyItems = draft.items;
+		auto copyAction = action;
+		auto copyShared = shared;
+		auto refreshAndSend = [=]() mutable {
+			std::sort(copyItems.begin(), copyItems.end(), [](auto a, auto b) {
+				return a->id < b->id;
+			});
+		std::vector<std::pair<int, std::vector<not_null<HistoryItem*>>>> batches;
+		std::vector<not_null<HistoryItem*>> remaining;
+		remaining.reserve(draft.items.size());
+		{
+			struct Batch {
+				std::vector<not_null<HistoryItem*>> items;
+				MessageGroupId groupId;
+				int kind = 0;
+			};
+			std::vector<Batch> pending;
+			Batch current;
+			MessageGroupId currentGroupId;
+			int currentKind = 0;
+			auto getKind = [](not_null<HistoryItem*> item) {
+				if (item->media()->photo()) {
+					return 1;
+				}
+				if (const auto doc = item->media()->document()) {
+					if (doc->isVideoFile()) {
+						return 2;
+					}
+					if (doc->isSong()) {
+						return 3;
+					}
+					if (item->media()->canBeGrouped()) {
+						return 4;
+					}
+				}
+				return 0;
+			};
+			for (const auto item : draft.items) {
+				const int kind = getKind(item);
+				const auto groupId = item->groupId();
+				const bool same = groupId != MessageGroupId()
+					&& currentGroupId != MessageGroupId()
+					&& groupId == currentGroupId;
+				bool split = false;
+				if (!current.items.empty()) {
+					if (currentKind != kind) {
+						split = true;
+					} else if (same) {
+						split = current.items.size() >= 10;
+					} else {
+						const bool boundary = (currentGroupId != MessageGroupId()
+							? groupId != currentGroupId
+							: groupId != MessageGroupId());
+						split = boundary || current.items.size() >= 10;
+					}
+					if (currentKind == 0 || kind == 0) {
+						split = true;
+					}
+				}
+				if (split) {
+					pending.push_back(std::move(current));
+					current = Batch();
+					currentGroupId = groupId;
+					currentKind = kind;
+				}
+				if (current.items.empty()) {
+					currentGroupId = groupId;
+					currentKind = kind;
+					current.groupId = groupId;
+					current.kind = kind;
+				}
+				current.items.push_back(item);
+			}
+			if (!current.items.empty()) {
+				pending.push_back(std::move(current));
+			}
+			for (auto &batch : pending) {
+				if ((batch.kind == 1 || batch.kind == 2) && batch.items.size() >= 2) {
+					batches.emplace_back(1, batch.items);
+				} else if ((batch.kind == 3 || batch.kind == 4) && batch.items.size() >= 2) {
+					batches.emplace_back(2, batch.items);
+				} else {
+					for (const auto item : batch.items) {
+						if (item->media()->photo() || (item->media()->document() && item->media()->document()->isVideoFile())) {
+							batches.emplace_back(1, std::vector<not_null<HistoryItem*>>{ item });
+						} else {
+							batches.emplace_back(2, std::vector<not_null<HistoryItem*>>{ item });
+						}
+					}
+				}
+			}
+		}
+		if (!batches.empty() || !remaining.empty()) {
+			if (!batches.empty()) {
+				if (shared) {
+					++shared->requestsLeft;
+				}
+				auto totalItems = 0;
+				for (const auto &p : batches) totalItems += int(p.second.size());
+				auto copyDone = std::make_shared<int>(0);
+				Data::SetCopyAlbumProgress(0, totalItems);
+				auto orderedAction = action;
+				auto sharedBatches = std::make_shared<std::vector<std::pair<int, std::vector<not_null<HistoryItem*>>>>>(std::move(batches));
+				auto sharedIndex = std::make_shared<size_t>(0);
+				auto sendNext = std::make_shared<Fn<void()>>();
+				*sendNext = [=]() mutable {
+					if (*sharedIndex >= sharedBatches->size()) {
+						if (shared && !--shared->requestsLeft) {
+							shared->callback();
+						}
+						return;
+					}
+					auto &pair = (*sharedBatches)[*sharedIndex];
+					++(*sharedIndex);
+					if (pair.first == 1) {
+						auto &items = pair.second;
+						auto inputs = std::make_shared<QVector<MTPInputSingleMedia>>();
+						auto meds = std::make_shared<QVector<const Data::Media*>>();
+						inputs->reserve(items.size());
+						meds->reserve(items.size());
+						for (const auto item : items) {
+							auto media = item->media();
+							meds->push_back(media);
+							const bool isPhoto = media && media->photo() != nullptr;
+							const MTPInputMedia inputMedia = isPhoto
+								? MTP_inputMediaPhoto(MTP_flags(0), media->photo()->mtpInput(), MTPint(), MTPInputDocument())
+								: MTP_inputMediaDocument(MTP_flags(0), media->document()->mtpInput(), MTPInputPhoto(), MTPint(), MTPint(), MTPstring());
+							const auto caption = (draft.options == Data::ForwardOptions::UnquotedWithoutCaptions) ? TextWithEntities() : item->originalText();
+							const auto entities = Api::EntitiesToMTP(_session, caption.entities, Api::ConvertOption::SkipLocal);
+							const auto flags = !entities.v.isEmpty() ? MTPDinputSingleMedia::Flag::f_entities : MTPDinputSingleMedia::Flag(0);
+							const auto randomId = base::RandomValue<uint64>();
+							inputs->push_back(MTP_inputSingleMedia(MTP_flags(flags), inputMedia, MTP_long(randomId), MTP_string(caption.text), entities));
+						}
+						auto peer = orderedAction.history->peer;
+						auto stars = std::min(int(meds->size()) * peer->starsPerMessageChecked(), orderedAction.options.starsApproved);
+						orderedAction.options.starsApproved -= stars;
+						auto flags = MTPmessages_SendMultiMedia::Flags(0)
+							| (ShouldSendSilent(peer, orderedAction.options) ? MTPmessages_SendMultiMedia::Flag::f_silent : MTPmessages_SendMultiMedia::Flag(0))
+							| (orderedAction.options.scheduled ? MTPmessages_SendMultiMedia::Flag::f_schedule_date : MTPmessages_SendMultiMedia::Flag(0))
+							| (stars ? MTPmessages_SendMultiMedia::Flag::f_allow_paid_stars : MTPmessages_SendMultiMedia::Flag(0))
+							| (orderedAction.options.sendAs ? MTPmessages_SendMultiMedia::Flag::f_send_as : MTPmessages_SendMultiMedia::Flag(0))
+							| (orderedAction.options.shortcutId ? MTPmessages_SendMultiMedia::Flag::f_quick_reply_shortcut : MTPmessages_SendMultiMedia::Flag(0))
+							| (orderedAction.options.effectId ? MTPmessages_SendMultiMedia::Flag::f_effect : MTPmessages_SendMultiMedia::Flag(0));
+						auto sendAs = orderedAction.options.sendAs;
+						auto history = orderedAction.history;
+						_session->data().histories().sendRequest(
+							history,
+							Data::Histories::RequestType::Send,
+							[=](Fn<void()> finish) {
+								auto requestId = request(
+									MTPmessages_SendMultiMedia(
+										MTP_flags(flags),
+										peer->input(),
+										orderedAction.mtpReplyTo(),
+										MTP_vector<MTPInputSingleMedia>(*inputs),
+										MTP_int(orderedAction.options.scheduled),
+										sendAs ? sendAs->input() : MTP_inputPeerEmpty(),
+										Data::ShortcutIdToMTP(_session, orderedAction.options.shortcutId),
+										MTP_long(orderedAction.options.effectId),
+										MTP_long(stars))
+								).done([=](const MTPUpdates &result) {
+									applyUpdates(result);
+									_session->data().sendHistoryChangeNotifications();
+									*copyDone += int(items.size());
+									Data::SetCopyAlbumProgress(*copyDone, totalItems);
+									if (*copyDone >= totalItems) {
+										Data::SetCopyAlbumProgress(0, 0);
+									}
+									finish();
+									(*sendNext)();
+								}).fail([=](const MTP::Error &error) {
+									_session->data().sendHistoryChangeNotifications();
+									sendMessageFail(error, peer);
+									*copyDone += int(items.size());
+									Data::SetCopyAlbumProgress(*copyDone, totalItems);
+									if (*copyDone >= totalItems) {
+										Data::SetCopyAlbumProgress(0, 0);
+									}
+									finish();
+									(*sendNext)();
+								}).afterRequest(history->sendRequestId).send();
+								return requestId;
+							});
+					} else {
+						auto &items = pair.second;
+						auto ids = QVector<MTPint>();
+						ids.reserve(items.size());
+						auto randomIds = QVector<MTPlong>();
+						randomIds.reserve(items.size());
+						for (const auto item : items) {
+							ids.push_back(MTP_int(item->id.bare));
+							randomIds.push_back(MTP_long(base::RandomValue<uint64>()));
+						}
+						const bool dropAuthor = (draft.options != Data::ForwardOptions::Quoted);
+						const bool dropCaption = (draft.options == Data::ForwardOptions::UnquotedWithoutCaptions);
+						auto flags = MTPmessages_ForwardMessages::Flags(0) | MTPmessages_ForwardMessages::Flag::f_with_my_score;
+						if (ShouldSendSilent(orderedAction.history->peer, orderedAction.options)) {
+							flags |= MTPmessages_ForwardMessages::Flag::f_silent;
+						}
+						if (dropAuthor) {
+							flags |= MTPmessages_ForwardMessages::Flag::f_drop_author;
+						}
+						if (dropCaption) {
+							flags |= MTPmessages_ForwardMessages::Flag::f_drop_media_captions;
+						}
+						if (orderedAction.options.sendAs) {
+							flags |= MTPmessages_ForwardMessages::Flag::f_send_as;
+						}
+						if (orderedAction.options.scheduled) {
+							flags |= MTPmessages_ForwardMessages::Flag::f_schedule_date;
+						}
+						auto fromPeer = items.front()->history()->peer;
+						auto peer = orderedAction.history->peer;
+						auto history = orderedAction.history;
+						_session->data().histories().sendRequest(
+							history,
+							Data::Histories::RequestType::Send,
+							[=](Fn<void()> finish) {
+								auto requestId = request(
+									MTPmessages_ForwardMessages(
+										MTP_flags(flags),
+										fromPeer->input(),
+										MTP_vector<MTPint>(ids),
+										MTP_vector<MTPlong>(randomIds),
+										peer->input(),
+										MTP_int(0),
+										MTPInputReplyTo(),
+										MTP_int(orderedAction.options.scheduled),
+										MTP_int(orderedAction.options.scheduleRepeatPeriod),
+										orderedAction.options.sendAs ? orderedAction.options.sendAs->input() : MTP_inputPeerEmpty(),
+										Data::ShortcutIdToMTP(_session, orderedAction.options.shortcutId),
+										MTP_long(orderedAction.options.effectId),
+										MTP_int(0),
+										MTP_long(0),
+										Api::SuggestToMTP(orderedAction.options.suggest))
+								).done([=](const MTPUpdates &result) {
+									applyUpdates(result);
+									_session->data().sendHistoryChangeNotifications();
+									*copyDone += int(items.size());
+									Data::SetCopyAlbumProgress(*copyDone, totalItems);
+									if (*copyDone >= totalItems) {
+										Data::SetCopyAlbumProgress(0, 0);
+									}
+									finish();
+									(*sendNext)();
+								}).fail([=](const MTP::Error &error) {
+									_session->data().sendHistoryChangeNotifications();
+									sendMessageFail(error, peer);
+									*copyDone += int(items.size());
+									Data::SetCopyAlbumProgress(*copyDone, totalItems);
+									if (*copyDone >= totalItems) {
+										Data::SetCopyAlbumProgress(0, 0);
+									}
+									finish();
+									(*sendNext)();
+								}).afterRequest(history->sendRequestId).send();
+								return requestId;
+							});
+					}
+				};
+				(*sendNext)();
+				if (!remaining.empty()) {
+					draft.items = std::move(remaining);
+				} else {
+					return;
+				}
+			}
+			if (!remaining.empty()) {
+				draft.items = std::move(remaining);
+			}
+		}
+		};
+		refreshAndSend();
 		return;
 	}
 

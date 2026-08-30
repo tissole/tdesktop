@@ -3731,6 +3731,25 @@ constexpr auto kFingerprintConcurrencyMax = 100;
 constexpr auto kMaxFingerprintRetries = 3;
 constexpr auto kGeneralId = Data::ForumTopic::kGeneralId;
 
+enum class AlbumKind : uint8 {
+	NotGroupable,
+	AlbumsPhoto,
+	AlbumsVideo,
+	AlbumsMusic,
+	AlbumsDocuments,
+};
+
+[[nodiscard]] AlbumKind KindOf(const Data::Media *m) {
+	if (!m) return AlbumKind::NotGroupable;
+	if (m->photo()) return AlbumKind::AlbumsPhoto;
+	if (const auto d = m->document()) {
+		if (d->isVideoFile()) return AlbumKind::AlbumsVideo;
+		if (d->isSong()) return AlbumKind::AlbumsMusic;
+		if (m->canBeGrouped()) return AlbumKind::AlbumsDocuments;
+	}
+	return AlbumKind::NotGroupable;
+}
+
 rpl::event_stream<> CountersChanged;
 
 void Notify() {
@@ -4401,6 +4420,16 @@ void Pump(not_null<Job*> j) {
 				&& j->groupOptions == Data::GroupingOptions::RegroupAll) {
 				const auto prev = j->queueGroups[i - 1];
 				const auto cur = j->queueGroups[i];
+				const auto isSameAlbum = prev != MessageGroupId()
+					&& cur != MessageGroupId()
+					&& prev == cur;
+				if (isSameAlbum) {
+					if (i >= kMaxAlbumIds) {
+						count = i;
+						break;
+					}
+					continue;
+				}
 				const auto boundary = (prev != MessageGroupId())
 					? (cur != prev)
 					: (cur != MessageGroupId());
@@ -4414,9 +4443,25 @@ void Pump(not_null<Job*> j) {
 					FullMsgId(j->src, j->queue[i]));
 				const auto prevMedia = prevItem ? prevItem->media() : nullptr;
 				const auto curMedia = curItem ? curItem->media() : nullptr;
-				const auto prevCan = prevMedia && prevMedia->canBeGrouped();
-				const auto curCan = curMedia && curMedia->canBeGrouped();
-				if (prevCan != curCan) {
+				const auto prevKind = KindOf(prevMedia);
+				const auto curKind = KindOf(curMedia);
+				auto isGrouped = [&](AlbumKind k) {
+					if (k == AlbumKind::NotGroupable) return false;
+					if (j->groupOptions == Data::GroupingOptions::RegroupAll
+						&& j->forwardOptions != Data::ForwardOptions::Quoted) {
+						return k == AlbumKind::AlbumsPhoto
+							|| k == AlbumKind::AlbumsVideo
+							|| k == AlbumKind::AlbumsMusic
+							|| k == AlbumKind::AlbumsDocuments;
+					}
+					if (k == AlbumKind::AlbumsPhoto
+						|| k == AlbumKind::AlbumsVideo) return false;
+					return k == AlbumKind::AlbumsMusic
+						|| k == AlbumKind::AlbumsDocuments;
+				};
+				if (!isGrouped(prevKind)
+					|| !isGrouped(curKind)
+					|| prevKind != curKind) {
 					count = i;
 					break;
 				}

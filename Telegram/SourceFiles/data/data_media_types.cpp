@@ -1126,14 +1126,18 @@ Storage::SharedMediaTypesMask MediaFile::sharedMediaTypes() const {
 bool MediaFile::canBeGrouped() const {
 	if (_document->sticker() || _document->isAnimation()) {
 		return false;
+	} else if (_document->isVoiceMessage() || _document->isVideoMessage()) {
+		return false;
 	} else if (_document->isVideoFile()) {
 		return true;
-	} else if (_document->isTheme() && _document->hasThumbnail()) {
+	} else if (_document->isSong()) {
+		return true;
+	} else if (_document->isTheme()) {
 		return false;
-	} else if (_document->type == FileDocument) {
-		return false;
+	} else if (_document->isImage() || _document->type == FileDocument) {
+		return true;
 	}
-	return true;
+	return false;
 }
 
 bool MediaFile::hasReplyPreview() const {
