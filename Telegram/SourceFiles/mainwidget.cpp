@@ -1063,11 +1063,14 @@ void MainWidget::setCurrentExportView(Export::View::PanelController *view) {
 			const bool isDone = !data.rows.empty() && (data.rows[0].id == Export::View::Content::kDoneId || data.rows[0].id == "header_finished");
 			if (isDone) {
 				if (_exportTopBar) {
-				_exportTopBar->hide(anim::type::instant);
-				_exportTopBar.destroy();
-				_exportTopBarHeight = _contentScrollAddToY = 0;
-				updateControlsGeometry();
+					_exportTopBar->hide(anim::type::instant);
+					_exportTopBar.destroy();
+					_exportTopBarHeight = _contentScrollAddToY = 0;
+					updateControlsGeometry();
+				}
+				return;
 			}
+			if (!_exportTopBar) {
 		//) | rpl::on_next([=](Export::View::Content &&data) {
 		//	if (!data.rows.empty()
 		//		&& data.rows[0].id == Export::View::Content::kDoneId) {
@@ -1082,9 +1085,10 @@ void MainWidget::setCurrentExportView(Export::View::PanelController *view) {
 		}, _exportViewLifetime);
 	} else {
 		_exportViewLifetime.destroy();
-
-		LOG(("Export Info: Destroy top bar by controller removal."));
-		destroyExportTopBar();
+		if (_exportTopBar) {
+			LOG(("Export Info: Destroy top bar by controller removal."));
+			destroyExportTopBar();
+		}
 	}
 }
 

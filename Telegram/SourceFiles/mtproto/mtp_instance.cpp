@@ -1157,11 +1157,15 @@ void Instance::Private::processCallback(const Response &response) {
 	}
 	if (handler.done || handler.fail) {
 		const auto handleError = [&](const Error &error) {
-			DEBUG_LOG(("RPC Info: "
-				"error received, code %1, type %2, description: %3").arg(
-					QString::number(error.code()),
-					error.type(),
-					error.description()));
+			if (error.type() != u"WEBFILE_NOT_AVAILABLE"_q
+				&& error.type() != u"PEER_ID_INVALID"_q
+				&& error.type() != u"USER_NOT_PARTICIPANT"_q) {
+				DEBUG_LOG(("RPC Info: "
+					"error received, code %1, type %2, description: %3").arg(
+						QString::number(error.code()),
+						error.type(),
+						error.description()));
+			}
 			const auto guard = QPointer<Instance>(_instance);
 			if (rpcErrorOccured(response, handler, error) && guard) {
 				unregisterRequest(requestId);
@@ -1235,13 +1239,17 @@ bool Instance::Private::rpcErrorOccured(
 	if (onErrorDefault(error, response)) {
 		return false;
 	}
-	LOG(("RPC Error: request %1 got fail with code %2, error %3%4").arg(
-		QString::number(response.requestId),
-		QString::number(error.code()),
-		error.type(),
-		error.description().isEmpty()
-			? QString()
-			: QString(": %1").arg(error.description())));
+	if (error.type() != u"PEER_ID_INVALID"_q
+		&& error.type() != u"USER_NOT_PARTICIPANT"_q
+		&& error.type() != u"WEBFILE_NOT_AVAILABLE"_q) {
+		LOG(("RPC Error: request %1 got fail with code %2, error %3%4").arg(
+			QString::number(response.requestId),
+			QString::number(error.code()),
+			error.type(),
+			error.description().isEmpty()
+				? QString()
+				: QString(": %1").arg(error.description())));
+	}
 	if (onFail) {
 		const auto guard = QPointer<Instance>(_instance);
 		onFail(error, response);

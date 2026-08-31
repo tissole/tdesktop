@@ -3,7 +3,7 @@
 This guide defines repository-wide instructions for coding agents working with the Telegram Desktop codebase.
 
 # # Comands
-Do not run in any circumstance git checkout without prior approval
+It is forbidden to run these commands: "git checkout *" *", git reset *", "git restore *" or "rm *" .
 
 ## Build System Structure
 

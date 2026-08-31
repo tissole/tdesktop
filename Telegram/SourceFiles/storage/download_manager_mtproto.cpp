@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "storage/download_manager_mtproto.h"
 
+#include <QSet>
+
 #include "mtproto/facade.h"
 #include "mtproto/mtproto_auth_key.h"
 #include "mtproto/mtproto_response.h"
@@ -32,6 +34,8 @@ constexpr auto kMaxTrackedSuccesses = kRetryAddSessionSuccesses
 constexpr auto kRemoveSessionAfterTimeouts = 4;
 constexpr auto kResetDownloadPrioritiesTimeout = crl::time(200);
 constexpr auto kBadRequestDurationThreshold = 8 * crl::time(1000);
+
+QSet<uint64> g_failedAudioAlbumThumbs;
 
 // Each (session remove by timeouts) we wait for time:
 // kRetryAddSessionTimeout * max(removesCount, kMaxTrackedSessionRemoves)
@@ -560,6 +564,15 @@ mtpRequestId DownloadMtprotoTask::sendRequest(
 			partFailed(error, id);
 		}).toDC(shiftedDcId).send();
 	}, [&](const AudioAlbumThumbLocation &location) {
+		const auto doc = api().session().data().document(location.documentId);
+		if (!doc->hasWebLocation()) {
+			crl::on_main(this, [=] { cancelOnFail(); });
+			return mtpRequestId(0);
+		}
+		if (g_failedAudioAlbumThumbs.contains(location.documentId)) {
+			crl::on_main(this, [=] { cancelOnFail(); });
+			return mtpRequestId(0);
+		}
 		using Flag = MTPDinputWebFileAudioAlbumThumbLocation::Flag;
 		const auto owner = &api().session().data();
 		return api().request(MTPupload_GetWebFile(
@@ -629,7 +642,19 @@ void DownloadMtprotoTask::normalPartLoaded(
 	result.match([&](const MTPDupload_fileCdnRedirect &data) {
 		switchToCDN(requestData, data);
 	}, [&](const MTPDupload_file &data) {
-		partLoaded(requestData.offset, data.vbytes().v);
+		const auto &bytes = data.vbytes().v;
+		if (bytes.isEmpty()) {
+			return;
+		}
+		if (bytes.size() >= 2
+			&& bytes[0] == char(0xFF)
+			&& bytes[1] == char(0xD8)
+			&& (bytes.size() < 2
+				|| bytes[bytes.size() - 2] != char(0xFF)
+				|| bytes[bytes.size() - 1] != char(0xD9))) {
+			return;
+		}
+		partLoaded(requestData.offset, bytes);
 	});
 
 	// 'this' may be deleted at this point.
@@ -645,6 +670,9 @@ void DownloadMtprotoTask::webPartLoaded(
 	const auto owner = _owner;
 	const auto dcId = this->dcId();
 	result.match([&](const MTPDupload_webFile &data) {
+		if (data.vbytes().v.size() < data.vsize().v && data.vsize().v > 0) {
+			return;
+		}
 		if (setWebFileSizeHook(data.vsize().v)) {
 			partLoaded(requestData.offset, data.vbytes().v);
 		}
@@ -946,6 +974,11 @@ bool DownloadMtprotoTask::partFailed(
 		mtpRequestId requestId) {
 	if (MTP::IsDefaultHandledError(error)) {
 		return false;
+	}
+	if (error.type() == u"WEBFILE_NOT_AVAILABLE"_q) {
+		if (const auto *audio = std::get_if<AudioAlbumThumbLocation>(&_location.data)) {
+			g_failedAudioAlbumThumbs.insert(audio->documentId);
+		}
 	}
 	cancelOnFail();
 	return true;
