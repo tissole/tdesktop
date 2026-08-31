@@ -4362,9 +4362,7 @@ void Pump(not_null<Job*> j) {
 		const auto mediaId = document
 			? uint64(document->id)
 			: uint64(photo->id);
-		LOG(("DEDUP_DEBUG: check msgId=%1 mediaId=%2 doc=%3 photo=%4 dedupOn=%5").arg(msgId.bare).arg(mediaId).arg(document ? document->id : 0).arg(photo ? photo->id : 0).arg(dedupOn));
 		if (db.containsDocId(Data::DedupDb::Table::Uploads, mediaId)) {
-			LOG(("DEDUP_DEBUG: skip duplicate docId msgId=%1 mediaId=%2").arg(msgId.bare).arg(mediaId));
 			j->scanned++;
 			j->skipped++;
 			continue;
