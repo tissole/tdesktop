@@ -1309,8 +1309,6 @@ bool Application::transferPreventsQuit() {
 		}
 	}
 	const auto total = dlCount + ulCount + fwCount;
-	LOG(("TM_QUIT: dl=%1 ul=%2 fw=%3").arg(dlCount).arg(ulCount)
-		.arg(fwCount));
 	if (!total) {
 		return false;
 	}

@@ -91,8 +91,6 @@ private:
 	Text::String _title;
 	Text::String _info;
 	RadialAnimation _radial;
-	bool _inRefreshInfo = false;
-	bool _inPaint = false;
 
 };
 

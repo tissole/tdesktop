@@ -8,7 +8,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/controls/download_bar.h"
 
 #include "logs.h"
-#include "ui/ui_utility.h"
 #include "ui/widgets/buttons.h"
 #include "ui/text/format_values.h"
 #include "ui/text/text_utilities.h"
@@ -16,7 +15,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/painter.h"
 #include "lang/lang_keys.h"
 #include "styles/style_dialogs.h"
-#include <QTimer>
 #include <rpl/never.h>
 
 namespace Ui {
@@ -69,10 +67,6 @@ DownloadBar::DownloadBar(
 DownloadBar::~DownloadBar() = default;
 
 void DownloadBar::show(DownloadBarContent &&content) {
-	if (_inPaint) {
-		QTimer::singleShot(0, _button.entity(), [this, c = std::move(content)]() mutable { show(std::move(c)); });
-		return;
-	}
 	const auto allFinished = (content.done >= content.count)
 		&& (content.uploadDone >= content.uploadCount)
 		&& (content.efDone >= content.efCount)
@@ -134,7 +128,7 @@ void DownloadBar::show(DownloadBarContent &&content) {
 						: tr::bold(tr::lng_tm_ul_prefix(
 							tr::now,
 							lt_name, content.singleUploadName.text)))))));
-	QTimer::singleShot(0, _button.entity(), [=] { refreshInfo(_progress.current()); });
+	refreshInfo(_progress.current());
 }
 
 void DownloadBar::refreshThumbnail() {
@@ -223,8 +217,8 @@ void DownloadBar::refreshInfo(const DownloadBarProgress &progress) {
 	_info.setMarkedText(
 		st::downloadInfoStyle,
 		std::move(text));
-	if (!_inPaint && !_button.entity()->isHidden()) {
-		_button.entity()->update();
+	if (!_button.entity()->isHidden()) {
+		crl::on_main(_button.entity(), [=] { _button.entity()->update(); });
 	}
 }
 
@@ -263,8 +257,6 @@ rpl::lifetime &DownloadBar::lifetime() {
 }
 
 void DownloadBar::paint(Painter &p, QRect clip) {
-	_inPaint = true;
-	auto guard = gsl::finally([&] { _inPaint = false; });
 	const auto button = _button.entity();
 	const auto outerw = button->width();
 	const auto over = button->isOver() || button->isDown();
