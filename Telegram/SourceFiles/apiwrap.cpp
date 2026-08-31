@@ -3819,45 +3819,35 @@ void ApiWrap::forwardMessages(
 	if (draft.options != Data::ForwardOptions::Quoted
 		&& draft.groupOptions == Data::GroupingOptions::RegroupAll
 		&& !draft.items.empty()) {
-		LOG(("DEDUP_DEBUG: copy album via SendMultiMedia bypasses dedup total=%1 dedupOn=%2").arg(draft.items.size()).arg(GetEnhancedBool("prevent_forward_duplicates")));
-		auto copyItems = draft.items;
+		auto copyItems = std::make_shared<std::vector<not_null<HistoryItem*>>>(draft.items);
 		auto copyAction = action;
 		auto copyShared = shared;
-		auto refreshAndSend = [=]() mutable {
-			std::sort(copyItems.begin(), copyItems.end(), [](auto a, auto b) {
+		auto alreadyFiltered = std::make_shared<bool>(false);
+		auto totalBefore = std::make_shared<int>(0);
+		auto skippedCount = std::make_shared<int>(0);
+		auto refreshAndSend = std::make_shared<Fn<void()>>();
+		*refreshAndSend = [=]() mutable {
+			std::sort(copyItems->begin(), copyItems->end(), [](auto a, auto b) {
 				return a->id < b->id;
 			});
-			if (GetEnhancedBool("prevent_forward_duplicates")) {
-				auto &db = Core::App().downloadManager().ensureDedupDb();
-				QSet<uint64> seen;
-				auto filtered = std::vector<not_null<HistoryItem*>>();
-				filtered.reserve(copyItems.size());
-				int skipped = 0;
-				for (const auto item : copyItems) {
-					const auto media = item->media();
-					const auto doc = media ? media->document() : nullptr;
-					const auto photo = media ? media->photo() : nullptr;
-					uint64 mediaId = 0;
-					if (doc) mediaId = uint64(doc->id);
-					else if (photo) mediaId = uint64(photo->id);
-					else { filtered.push_back(item); continue; }
-					if (seen.contains(mediaId) || db.containsDocId(Data::DedupDb::Table::Uploads, mediaId)) {
-						LOG(("DEDUP_DEBUG: copy album skip duplicate msgId=%1 mediaId=%2").arg(item->id.bare).arg(mediaId));
-						skipped++;
-						continue;
+			if (GetEnhancedBool("prevent_forward_duplicates") && !*alreadyFiltered) {
+				*alreadyFiltered = true;
+				const auto totalBeforeVal = int(copyItems->size());
+				Data::FilterCopyAlbumDuplicates(_session, *copyItems, [=](std::vector<not_null<HistoryItem*>> filtered) mutable {
+					*totalBefore = totalBeforeVal;
+					*skippedCount = totalBeforeVal - int(filtered.size());
+					*copyItems = std::move(filtered);
+					if (copyItems->empty()) {
+						if (*skippedCount > 0) {
+							Ui::Toast::Show(u"Sent 0 of %1, %2 duplicates skipped"_q.arg(*totalBefore).arg(*skippedCount));
+						}
+						Data::SetCopyAlbumProgress(0, 0);
+						if (copyShared && !--copyShared->requestsLeft) copyShared->callback();
+						return;
 					}
-					seen.insert(mediaId);
-					filtered.push_back(item);
-				}
-				if (skipped > 0) {
-					LOG(("DEDUP_DEBUG: copy album skipped %1 duplicates").arg(skipped));
-					Ui::Toast::Show(tr::lng_tm_fw_duplicates_skipped(tr::now, lt_count, skipped));
-				}
-				copyItems = std::move(filtered);
-				if (copyItems.empty()) {
-					if (copyShared && !--copyShared->requestsLeft) copyShared->callback();
-					return;
-				}
+					(*refreshAndSend)();
+				});
+				return;
 			}
 			std::vector<std::pair<int, std::vector<not_null<HistoryItem*>>>> batches;
 		std::vector<not_null<HistoryItem*>> remaining;
@@ -3877,6 +3867,9 @@ void ApiWrap::forwardMessages(
 					return 1;
 				}
 				if (const auto doc = item->media()->document()) {
+					if (doc->hasWebLocation()) {
+						return 0;
+					}
 					if (doc->isVideoFile()) {
 						return 2;
 					}
@@ -3889,7 +3882,7 @@ void ApiWrap::forwardMessages(
 				}
 				return 0;
 			};
-			for (const auto item : copyItems) {
+			for (const auto item : *copyItems) {
 				const int kind = getKind(item);
 				const auto groupId = item->groupId();
 				const bool same = groupId != MessageGroupId()
@@ -3959,6 +3952,14 @@ void ApiWrap::forwardMessages(
 				auto sendNext = std::make_shared<Fn<void()>>();
 				*sendNext = [=]() mutable {
 					if (*sharedIndex >= sharedBatches->size()) {
+						if (*totalBefore > 0) {
+							const auto sent = *totalBefore - *skippedCount;
+							if (*skippedCount > 0) {
+								Ui::Toast::Show(u"Sent %1 of %2, %3 duplicates skipped"_q.arg(sent).arg(*totalBefore).arg(*skippedCount));
+							}
+							LOG(("Forward done: sent %1 of %2, skipped %3").arg(sent).arg(*totalBefore).arg(*skippedCount));
+						}
+						Data::SetCopyAlbumProgress(0, 0);
 						if (shared && !--shared->requestsLeft) {
 							shared->callback();
 						}
@@ -4124,7 +4125,7 @@ void ApiWrap::forwardMessages(
 			}
 		}
 		};
-		refreshAndSend();
+		(*refreshAndSend)();
 		return;
 	}
 

@@ -9,12 +9,58 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/weak_ptr.h"
 #include "data/data_file_hash.h"
-#include "history/history_item.h"
-#include "data/data_document.h"
+#include "logs.h"
+#include "settings.h"
+#include "core/core_settings.h"
+#include "core/enhanced_settings.h"
+#include "enhanced_forward.h"
+#include "storage/localimageloader.h"
+#include "data/data_session.h"
 #include "data/data_photo.h"
-#include "core/application.h"
-#include "ui/toast/toast.h"
+#include "data/data_document.h"
+#include "data/data_document_media.h"
+#include "data/data_file_click_handler.h"
+#include "data/data_peer.h"
+#include "data/data_web_page.h"
+#include "data/data_changes.h"
+#include "data/data_user.h"
+#include "data/data_channel.h"
+#include "data/data_file_origin.h"
+#include "storage/file_upload.h"
+#include "base/unixtime.h"
+#include "base/random.h"
+#include "main/main_session.h"
+#include "main/main_account.h"
+#include "main/main_domain.h"
 #include "lang/lang_keys.h"
+#include "storage/storage_account.h"
+
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include "history/history.h"
+#include "history/history_item.h"
+#include "history/history_item_helpers.h"
+#include "core/application.h"
+#include "core/mime_type.h"
+#include "platform/platform_file_utilities.h"
+#include "ui/controls/download_bar.h"
+#include "info/downloads/info_downloads_widget.h"
+#include "info/info_memento.h"
+#include "ui/text/format_song_document_name.h"
+#include "ui/layers/generic_box.h"
+#include "ui/ui_utility.h"
+#include "storage/serialize_common.h"
+#include "window/window_controller.h"
+#include "window/window_session_controller.h"
+#include "apiwrap.h"
+#include "ui/boxes/confirm_box.h"
+#include "ui/toast/toast.h"
+#include "styles/style_layers.h"
+
+#include <QtCore/QDir>
+#include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 
 namespace Data {
 namespace {
@@ -73,9 +119,6 @@ void FilterCopyAlbumDuplicates(
 		finalFiltered.push_back(item);
 	}
 	if (hashCandidates.empty()) {
-		if (skippedIds > 0) {
-			Ui::Toast::Show(tr::lng_tm_fw_duplicates_skipped(tr::now, lt_count, skippedIds));
-		}
 		done(std::move(finalFiltered));
 		return;
 	}
@@ -104,10 +147,6 @@ void FilterCopyAlbumDuplicates(
 			if (!h.isEmpty()) seenHashesPtr->insert(h);
 			finalFilteredPtr->push_back(item);
 		}
-		int totalSkipped = skippedIds + *skippedHashesPtr;
-		if (totalSkipped > 0) {
-			Ui::Toast::Show(tr::lng_tm_fw_duplicates_skipped(tr::now, lt_count, totalSkipped));
-		}
 		done(std::move(*finalFilteredPtr));
 	};
 	for (const auto item : hashCandidates) {
@@ -128,61 +167,6 @@ void FilterCopyAlbumDuplicates(
 	}
 }
 
-} // namespace Data
-#include "logs.h"
-#include "settings.h"
-#include "core/core_settings.h"
-#include "core/enhanced_settings.h"
-#include "enhanced_forward.h"
-#include "storage/localimageloader.h"
-#include "data/data_session.h"
-#include "data/data_photo.h"
-#include "data/data_document.h"
-#include "data/data_document_media.h"
-#include "data/data_file_click_handler.h"
-#include "data/data_peer.h"
-#include "data/data_web_page.h"
-#include "data/data_changes.h"
-#include "data/data_user.h"
-#include "data/data_channel.h"
-#include "data/data_file_origin.h"
-#include "storage/file_upload.h"
-#include "base/unixtime.h"
-#include "base/random.h"
-#include "main/main_session.h"
-#include "main/main_account.h"
-#include "main/main_domain.h"
-#include "lang/lang_keys.h"
-#include "storage/storage_account.h"
-
-#include <QDir>
-#include <QFile>
-#include <QFileInfo>
-#include "history/history.h"
-#include "history/history_item.h"
-#include "history/history_item_helpers.h"
-#include "core/application.h"
-#include "core/mime_type.h"
-#include "platform/platform_file_utilities.h"
-#include "ui/controls/download_bar.h"
-#include "info/downloads/info_downloads_widget.h"
-#include "info/info_memento.h"
-#include "ui/text/format_song_document_name.h"
-#include "ui/layers/generic_box.h"
-#include "ui/ui_utility.h"
-#include "storage/serialize_common.h"
-#include "window/window_controller.h"
-#include "window/window_session_controller.h"
-#include "apiwrap.h"
-#include "ui/boxes/confirm_box.h"
-#include "ui/toast/toast.h"
-#include "styles/style_layers.h"
-
-#include <QtCore/QDir>
-#include <QtCore/QFile>
-#include <QtCore/QFileInfo>
-
-namespace Data {
 namespace {
 
 constexpr auto kClearLoadingTimeout = 5 * crl::time(1000);
@@ -1817,7 +1801,7 @@ void DownloadManager::fetchFingerprint(
 		not_null<Main::Session*> session,
 		not_null<PhotoData*> photo,
 		Fn<void(QByteArray)> done) {
-	done(QByteArray::number(photo->id));
+	Data::RemotePhotoFingerprint(session, photo, std::move(done));
 }
 
 void DownloadManager::clearFingerprintCache(uint64 documentId) {
