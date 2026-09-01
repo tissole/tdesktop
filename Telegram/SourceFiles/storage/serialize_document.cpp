@@ -85,7 +85,7 @@ DocumentData *Document::readFromStreamHelper(
 	QByteArray fileReference;
 	stream >> id >> access >> date;
 	if (streamAppVersion >= 9061) {
-		if (streamAppVersion >= 1003013) {
+		if (streamAppVersion >= 1001099) {
 			stream >> fileReference;
 		}
 		stream >> versionTag;
