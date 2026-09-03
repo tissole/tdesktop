@@ -82,6 +82,8 @@ public:
 	[[nodiscard]] QRect desktopRect() const;
 	[[nodiscard]] Core::WindowPosition withScreenInPosition(
 		Core::WindowPosition position) const;
+	[[nodiscard]] Core::WindowPosition countPositionForSave();
+	void applySavedPosition(const Core::WindowPosition &position);
 
 	void init();
 
@@ -138,9 +140,7 @@ public:
 
 	void firstShow();
 	bool minimizeToTray();
-	void updateGlobalMenu() {
-		updateGlobalMenuHook();
-	}
+	void updateGlobalMenu();
 
 	[[nodiscard]] virtual rpl::producer<QPoint> globalForceClicks() {
 		return rpl::never<QPoint>();
@@ -195,6 +195,8 @@ protected:
 
 private:
 	void refreshTitleWidget();
+	void setupCanaryTitleLabel();
+	[[nodiscard]] QString nativeTitleSuffix() const;
 	void updateMinimumSize();
 	void updatePalette();
 

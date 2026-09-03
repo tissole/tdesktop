@@ -18,102 +18,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Export {
 namespace Output {
-namespace {
-
-class NullWriter : public AbstractWriter {
-public:
-	Format format() override {
-		return Format::Html;
-	}
-
-	Result start(
-			const Settings &settings,
-			const Environment &environment,
-			Stats *stats) override {
-		return Result::Success();
-	}
-
-	Result writePersonal(const Data::PersonalInfo &data) override {
-		return Result::Success();
-	}
-
-	Result writeUserpicsStart(const Data::UserpicsInfo &data) override {
-		return Result::Success();
-	}
-	Result writeUserpicsSlice(const Data::UserpicsSlice &data) override {
-		return Result::Success();
-	}
-	Result writeUserpicsEnd() override {
-		return Result::Success();
-	}
-
-	Result writeStoriesStart(const Data::StoriesInfo &data) override {
-		return Result::Success();
-	}
-	Result writeStoriesSlice(const Data::StoriesSlice &data) override {
-		return Result::Success();
-	}
-	Result writeStoriesEnd() override {
-		return Result::Success();
-	}
-
-	[[nodiscard]] Result writeProfileMusicStart(const Data::ProfileMusicInfo &data) override {
-		return Result::Success();
-	}
-	[[nodiscard]] Result writeProfileMusicSlice(const Data::ProfileMusicSlice &data) override {
-		return Result::Success();
-	}
-	[[nodiscard]] Result writeProfileMusicEnd() override {
-		return Result::Success();
-	}
-
-	Result writeContactsList(const Data::ContactsList &data) override {
-		return Result::Success();
-	}
-
-	Result writeSessionsList(const Data::SessionsList &data) override {
-		return Result::Success();
-	}
-
-	Result writeOtherData(const Data::File &data) override {
-		return Result::Success();
-	}
-
-	Result writeDialogsStart(const Data::DialogsInfo &data) override {
-		return Result::Success();
-	}
-	Result writeDialogStart(const Data::DialogInfo &data) override {
-		return Result::Success();
-	}
-	Result writeDialogSlice(const Data::MessagesSlice &data) override {
-		return Result::Success();
-	}
-	Result writeDialogEnd() override {
-		return Result::Success();
-	}
-	Result writeDialogsEnd() override {
-		return Result::Success();
-	}
-
-	Result writeUniqueLinks(const base::flat_set<QString> &links) override {
-		return Result::Success();
-	}
-
-	Result finish() override {
-		return Result::Success();
-	}
-
-	QString mainFilePath() override {
-		return QString();
-	}
-
-	int lastWrittenMessageId() const override {
-		return 0;
-	}
-
-};
-
-} // namespace
 
 QString NormalizePath(const Settings &settings) {
 	QDir folder(settings.path);
@@ -128,60 +32,18 @@ QString NormalizePath(const Settings &settings) {
 		return result;
 	}
 	const auto date = QDate::currentDate();
-	const auto clean = [](QString value) {
-		const auto invalid = { '/', '\\', ':', '*', '?', '"', '<', '>', '|' };
-		for (const auto c : invalid) {
-			value.replace(c, '_');
-		}
-		return value;
-	};
-	const auto base = settings.onlySingleTopic()
-		? QString("ChatExport_%1_%2").arg(settings.singlePeerId).arg(settings.singleTopicRootId)
-		: (settings.onlySinglePeer() && settings.singlePeerId != 0)
-		? QString("ChatExport_%1").arg(settings.singlePeerId)
-		: QString(settings.onlySinglePeer()
-			? "ChatExport_%1"
-			: "BulkExport_%1"
-		).arg(date.toString(Qt::ISODate));
+	const auto base = QString(settings.onlySinglePeer()
+		? "ChatExport_%1"
+		: "DataExport_%1"
+	).arg(date.toString(Qt::ISODate));
 	const auto add = [&](int i) {
 		return base + (i ? " (" + QString::number(i) + ')' : QString());
 	};
-
-	// For single peer/topic exports, first try to find an existing folder for this ID
-	if (settings.onlySinglePeer() && settings.singlePeerId != 0) {
-		const auto filter = base + "_*";
-		const auto entries = folder.entryList(QStringList() << filter, QDir::Dirs | QDir::NoDotAndDotDot);
-		for (const auto &entry : entries) {
-			if (settings.onlySingleTopic()) {
-				// For topics, any folder matching ChatExport_PeerId_TopicId_* is a match
-				result += entry + '/';
-				return result;
-			} else {
-				// For normal chats, ensure the folder isn't actually a topic folder
-				// (e.g., skip ChatExport_PeerId_TopicId_* when looking for ChatExport_PeerId_*)
-				const auto parts = entry.split('_');
-				if (parts.size() >= 3 && parts[2].toLongLong() != 0) {
-					continue;
-				}
-				result += entry + '/';
-				return result;
-			}
-		}
-	}
-
 	auto index = 0;
 	while (QDir(result + add(index)).exists()) {
 		++index;
 	}
 	result += add(index) + '/';
-	if (settings.onlySinglePeer() && settings.singlePeerId != 0) {
-		// Append name only to newly created folders to keep them descriptive
-		result.chop(1); // remove trailing slash
-		const auto name = settings.onlySingleTopic()
-			? settings.singleTopicTitle
-			: settings.singlePeerName;
-		result += "_" + clean(name) + "/";
-	}
 	return result;
 }
 
@@ -192,10 +54,6 @@ std::unique_ptr<AbstractWriter> CreateWriter(Format format) {
 	case Format::HtmlAndJson: return std::make_unique<HtmlAndJsonWriter>();
 	}
 	Unexpected("Format in Export::Output::CreateWriter.");
-}
-
-std::unique_ptr<AbstractWriter> CreateNullWriter() {
-	return std::make_unique<NullWriter>();
 }
 
 Stats AbstractWriter::produceTestExample(

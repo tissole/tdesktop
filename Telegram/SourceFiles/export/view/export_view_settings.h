@@ -8,19 +8,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "export/export_settings.h"
-#include "export/output/export_output_stats.h"
 #include "ui/rp_widget.h"
 #include "base/object_ptr.h"
-#include <map>
 
 namespace Ui {
 class VerticalLayout;
 class Checkbox;
 class ScrollArea;
 class BoxContent;
-class FlatLabel;
-class RoundButton;
-template <typename Widget> class SlideWrap;
 } // namespace Ui
 
 namespace Main {
@@ -40,37 +35,12 @@ public:
 		not_null<Main::Session*> session,
 		Settings data);
 
+	[[nodiscard]] int sizeLimitExtraHeight() const;
+
 	rpl::producer<Settings> value() const;
 	rpl::producer<Settings> changes() const;
-	rpl::producer<> scanClicks() const;
-	rpl::producer<> exportClicks() const;
-	rpl::producer<> resumeClicks() const;
-	rpl::producer<> updateClicks() const;
+	rpl::producer<> startClicks() const;
 	rpl::producer<> cancelClicks() const;
-	rpl::producer<> scanInvalidated() const;
-
-	void setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats);
-	void clearScanResults();
-	void setScanProgress(int itemIndex, int itemCount);
-	void setScanning(bool scanning);
-
-	enum class ExistingExport {
-		None,
-		Incomplete,
-		Complete
-	};
-	void setExistingExport(ExistingExport state);
-
-	void resetToDefault();
-	void restoreSettings(const Settings &data);
-	const Settings &readData() const;
-
-	[[nodiscard]] bool isScanning() const {
-		return _isScanning;
-	}
-	[[nodiscard]] bool hasScanResults() const {
-		return _hasScanResults;
-	}
 
 	void setShowBoxCallback(Fn<void(object_ptr<Ui::BoxContent>)> callback) {
 		_showBoxCallback = std::move(callback);
@@ -109,12 +79,14 @@ private:
 		const QString &text,
 		Types types);
 	void addMediaOptions(not_null<Ui::VerticalLayout*> container);
-	void addMediaOption(
+	not_null<Ui::Checkbox*> addMediaOption(
 		not_null<Ui::VerticalLayout*> container,
 		const QString &text,
 		MediaType type);
-	void addSizeSlider(not_null<Ui::VerticalLayout*> container);
 	void addExtensionFilter(not_null<Ui::VerticalLayout*> container);
+	void addSizeSlider(
+		not_null<Ui::VerticalLayout*> container,
+		not_null<Ui::Checkbox*> above);
 	void addLocationLabel(
 		not_null<Ui::VerticalLayout*> container);
 	void addFormatAndLocationLabel(
@@ -134,6 +106,7 @@ private:
 		rpl::producer<QString> resetLabel,
 		Fn<void(TimeId)> done);
 
+	const Settings &readData() const;
 	template <typename Callback>
 	void changeData(Callback &&callback);
 
@@ -144,30 +117,18 @@ private:
 	// Use through readData / changeData wrappers.
 	Settings _internal_data;
 
+	int _sizeLimitExtraHeight = 0;
+
+	struct Wrap {
+		Wrap(rpl::producer<> value = nullptr)
+		: value(std::move(value)) {
+		}
+
+		rpl::producer<> value;
+	};
 	rpl::event_stream<Settings> _changes;
-	rpl::event_stream<> _scanClicks;
-	rpl::event_stream<> _exportClicks;
-	rpl::event_stream<> _resumeClicks;
-	rpl::event_stream<> _updateClicks;
-	rpl::event_stream<> _cancelClicks;
-	rpl::event_stream<> _scanInvalidated;
-
-	Ui::RpWidget *_buttonsContainer = nullptr;
-	Ui::VerticalLayout *_container = nullptr;
-	rpl::lifetime _buttonsLayout; // cancelled & rebuilt each refreshButtons call
-	Ui::RpWidget *_resumeButton = nullptr;
-	Ui::RpWidget *_updateButton = nullptr;
-	Ui::SlideWrap<Ui::FlatLabel> *_scanResultsLabel = nullptr;
-	bool _isScanning = false;
-	bool _hasScanResults = false;
-	ExistingExport _existingExport = ExistingExport::None;
-	std::map<MediaSettings::Type, Output::StatItem> _scanResults;
-
-	// Stored button references for layout updates after visibility changes
-	Ui::RoundButton *_exportButtonForLayout = nullptr;
-	Ui::RoundButton *_scanButtonForLayout = nullptr;
-	Ui::RoundButton *_cancelButtonForLayout = nullptr;
-	void updateButtonsLayout();
+	rpl::variable<Wrap> _startClicks;
+	rpl::variable<Wrap> _cancelClicks;
 
 };
 

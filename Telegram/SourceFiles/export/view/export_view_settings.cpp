@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "export/view/export_view_settings.h"
+#include <QtCore/QRegularExpression>
 
 #include "export/output/export_output_abstract.h"
 #include "export/view/export_view_panel_controller.h"
@@ -15,11 +16,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/widgets/continuous_sliders.h"
-#include "ui/widgets/fields/input_field.h"
+#include "ui/widgets/input_fields.h"
 #include "ui/wrap/vertical_layout.h"
-#include <QtCore/QMetaObject>
-#include <QtCore/QTimer>
-#include "ui/wrap/wrap.h"
 #include "ui/wrap/padding_wrap.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/fade_wrap.h"
@@ -27,13 +25,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_utilities.h"
 #include "ui/boxes/calendar_box.h"
 #include "ui/boxes/choose_time.h"
-#include "ui/text/format_values.h"
 #include "platform/platform_specific.h"
 #include "core/application.h"
 #include "core/file_utilities.h"
 #include "base/unixtime.h"
 #include "main/main_session.h"
-#include "styles/style_widgets.h"
 #include "styles/style_export.h"
 #include "styles/style_layers.h"
 
@@ -61,6 +57,16 @@ constexpr auto kMegabyte = int64(1024) * 1024;
 	}, [](const MTPDinputPeerEmpty &data) {
 		return PeerId(0);
 	});
+}
+
+[[nodiscard]] bool SizeLimitFitsOptionLine(
+		int outerWidth,
+		int optionWidth,
+		int labelWidth) {
+	const auto available = outerWidth
+		- st::exportSettingPadding.left()
+		- st::exportFileSizePadding.right();
+	return (optionWidth + labelWidth <= available);
 }
 
 void ChooseFormatBox(
@@ -127,32 +133,6 @@ SettingsWidget::SettingsWidget(
 , _internal_data(std::move(data)) {
 	ResolveSettings(session, _internal_data);
 	setupContent();
-
-	_changes.events() | rpl::on_next([=](const Settings &data) {
-		const auto old = _internal_data;
-		const bool filtersChanged = (data.media.types != old.media.types)
-			|| (data.types != old.types)
-			|| (data.media.sizeLimit != old.media.sizeLimit);
-		const bool rangeChanged = (data.singlePeerFrom != old.singlePeerFrom)
-			|| (data.singlePeerTill != old.singlePeerTill)
-			|| (data.singlePeerFromId != old.singlePeerFromId)
-			|| (data.singlePeerTillId != old.singlePeerTillId)
-			|| (data.useIdRange != old.useIdRange);
-
-		if (!_isScanning && (filtersChanged || rangeChanged)) {
-			_scanResults.clear();
-			if (_scanResultsLabel) {
-				_scanResultsLabel->entity()->setText(QString());
-				_scanResultsLabel->hide(anim::type::instant);
-				_container->resizeToWidth(_container->width());
-			}
-			_scanInvalidated.fire({});
-		}
-	}, lifetime());
-}
-
-rpl::producer<> SettingsWidget::scanInvalidated() const {
-	return _scanInvalidated.events();
 }
 
 const Settings &SettingsWidget::readData() const {
@@ -174,7 +154,6 @@ void SettingsWidget::setupContent() {
 			scroll,
 			object_ptr<Ui::VerticalLayout>(scroll)));
 	const auto content = static_cast<Ui::VerticalLayout*>(wrap->entity());
-	_container = content;
 
 	const auto buttons = setupButtons(scroll, wrap);
 	setupOptions(content);
@@ -221,11 +200,11 @@ void SettingsWidget::setupFullExportOptions(
 		Type::ProfileMusic,
 		tr::lng_export_option_profile_music_about(tr::now));
 	addHeader(container, tr::lng_export_header_chats(tr::now));
-	addChatOption(
+	addOption(
 		container,
 		tr::lng_export_option_personal_chats(tr::now),
 		Type::PersonalChats);
-	addChatOption(
+	addOption(
 		container,
 		tr::lng_export_option_bot_chats(tr::now),
 		Type::BotChats);
@@ -355,19 +334,6 @@ void SettingsWidget::addLocationLabel(
 		chooseFolder();
 	});
 #endif // OS_MAC_STORE
-
-	{
-		auto wrap = object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
-			container,
-			object_ptr<Ui::FlatLabel>(
-				container,
-				QString(),
-				st::exportAboutOptionLabel),
-			st::exportAboutOptionPadding);
-		_scanResultsLabel = wrap.data();
-		container->add(std::move(wrap));
-	}
-	_scanResultsLabel->hide(anim::type::instant);
 }
 
 void SettingsWidget::chooseFormat() {
@@ -440,46 +406,8 @@ void SettingsWidget::addFormatAndLocationLabel(
 
 void SettingsWidget::addLimitsLabel(
 		not_null<Ui::VerticalLayout*> container) {
-	// Add export mode selection (date range or ID range)
-	const auto modeGroup = std::make_shared<Ui::RadioenumGroup<bool>>(
-		readData().useIdRange ? true : false);
-
-	[[maybe_unused]] const auto dateMode = container->add(
-		object_ptr<Ui::Radioenum<bool>>(
-			container,
-			modeGroup,
-			false, // date mode
-			tr::lng_export_mode_date(tr::now),
-			st::defaultBoxCheckbox),
-		st::exportSettingPadding);
-
-	[[maybe_unused]] const auto idMode = container->add(
-		object_ptr<Ui::Radioenum<bool>>(
-			container,
-			modeGroup,
-			true, // ID mode
-			tr::lng_export_mode_id(tr::now),
-			st::defaultBoxCheckbox),
-		st::exportSettingPadding);
-
-	modeGroup->setChangedCallback([=](bool useIdRange) {
-		changeData([&](Settings &settings) {
-			settings.useIdRange = useIdRange;
-		});
-	});
-
-	value()
-		| rpl::map([](const Settings &data) {
-			return data.useIdRange;
-		})
-		| rpl::distinct_until_changed()
-		| rpl::on_next([=](bool useIdRange) {
-			modeGroup->setValue(useIdRange);
-		}, container->lifetime());
-
-	// Date range UI (visible when date mode is selected)
 	auto fromDateLink = value() | rpl::map([](const Settings &data) {
-		return data.singlePeerFrom.value_or(0);
+		return data.singlePeerFrom;
 	}) | rpl::distinct_until_changed(
 	) | rpl::map([](TimeId from) {
 		return (from
@@ -491,13 +419,21 @@ void SettingsWidget::addLimitsLabel(
 
 	const auto mapToTime = [](TimeId id, const QString &link) {
 		return rpl::single(id
-			? base::unixtime::parse(id).time().toString(u"HH:mm:ss"_q)
+			? QLocale().toString(
+				base::unixtime::parse(id).time(),
+				QLocale::ShortFormat)
 			: QString()
 		) | rpl::map(tr::url(link));
 	};
 
+	const auto concat = [](TextWithEntities date, TextWithEntities link) {
+		return link.text.isEmpty()
+			? date
+			: date.append(u", "_q).append(std::move(link));
+	};
+
 	auto fromTimeLink = value() | rpl::map([](const Settings &data) {
-		return data.singlePeerFrom.value_or(0);
+		return data.singlePeerFrom;
 	}) | rpl::distinct_until_changed(
 	) | rpl::map([=](TimeId from) {
 		return mapToTime(from, u"internal:edit_from_time"_q);
@@ -506,14 +442,10 @@ void SettingsWidget::addLimitsLabel(
 	auto fromLink = rpl::combine(
 		std::move(fromDateLink),
 		std::move(fromTimeLink)
-	) | rpl::map([](TextWithEntities date, TextWithEntities link) {
-		return link.text.isEmpty()
-			? date
-			: date.append(u", "_q).append(std::move(link));
-	});
+	) | rpl::map(concat);
 
 	auto tillDateLink = value() | rpl::map([](const Settings &data) {
-		return data.singlePeerTill.value_or(0);
+		return data.singlePeerTill;
 	}) | rpl::distinct_until_changed(
 	) | rpl::map([](TimeId till) {
 		return (till
@@ -524,17 +456,11 @@ void SettingsWidget::addLimitsLabel(
 	}) | rpl::flatten_latest();
 
 	auto tillTimeLink = value() | rpl::map([](const Settings &data) {
-		return data.singlePeerTill.value_or(0);
+		return data.singlePeerTill;
 	}) | rpl::distinct_until_changed(
 	) | rpl::map([=](TimeId till) {
 		return mapToTime(till, u"internal:edit_till_time"_q);
 	}) | rpl::flatten_latest();
-
-	const auto concat = [](TextWithEntities date, TextWithEntities link) {
-		return link.text.isEmpty()
-			? date
-			: date.append(u", "_q).append(std::move(link));
-	};
 
 	auto tillLink = rpl::combine(
 		std::move(tillDateLink),
@@ -551,227 +477,12 @@ void SettingsWidget::addLimitsLabel(
 		container->resizeToWidth(container->width());
 	});
 
-	const auto dateLabelWrap = container->add(
-		object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
+	const auto label = container->add(
+		object_ptr<Ui::FlatLabel>(
 			container,
-			object_ptr<Ui::FlatLabel>(
-				container,
-				std::move(datesText),
-				st::boxLabel),
-			st::exportLimitsPadding));
-	const auto dateLabel = dateLabelWrap->entity();
-
-    //const int idLabelH = st::exportIdFieldLabel.maxHeight;
-    const int idLabelH = st::exportIdFieldLabel.style.font->height - 2;
-    //const int idInputH = st::defaultInputField.heightMin;
-    const int idInputH = st::exportIdInput.heightMin;
-    const int idTopPad = st::exportSettingPadding.top();
-    const int idPadL = st::exportSettingPadding.left();
-    const int idGap = 16;
-    const int idRowH = idTopPad + idLabelH + 2 + idInputH;
-    
-    const auto idContainerWrap = container->add(
-        object_ptr<Ui::SlideWrap<Ui::FixedHeightWidget>>(
-            container,
-            object_ptr<Ui::FixedHeightWidget>(container, idRowH),
-            style::margins(0, 0, 0, 0)));
-    const auto idContainer = idContainerWrap->entity();
-
-//	const int inputH = st::defaultInputField.heightMin;
-//	const int labelH = st::exportIdFieldLabel.style.font->height;
-//	const int idPadL = 22;
-//	const int idGap  = 16;
-//	const int idRowH = labelH + inputH; 
-//
-//
-//	const auto idContainerWrap = container->add(
-//		object_ptr<Ui::SlideWrap<Ui::FixedHeightWidget>>(
-//			container,
-//			object_ptr<Ui::FixedHeightWidget>(container, idRowH),
-//			style::margins(0, 0, 0, 0)));
-//	const auto idContainer = idContainerWrap->entity();
-
-	const auto fromIdLabel = Ui::CreateChild<Ui::FlatLabel>(
-		idContainer,
-		tr::lng_export_id_from_placeholder(tr::now),
-		st::exportIdFieldLabel);
-
-//	const auto fromIdInput = Ui::CreateChild<Ui::InputField>(
-//		idContainer,
-//		st::defaultInputField,
-//		rpl::single(QString()),
-//		u"Message ID"_q);
-
-    const auto fromIdInput = Ui::CreateChild<Ui::InputField>(
-        idContainer,
-        st::exportIdInput,
-        rpl::single(QString()),
-        u"Message ID"_q);
-
-	const auto tillIdLabel = Ui::CreateChild<Ui::FlatLabel>(
-		idContainer,
-		tr::lng_export_id_till_placeholder(tr::now),
-		st::exportIdFieldLabel);
-
-//	const auto tillIdInput = Ui::CreateChild<Ui::InputField>(
-//		idContainer,
-//		st::defaultInputField,
-//		rpl::single(QString()),
-//		u"Message ID"_q);
-
-    const auto tillIdInput = Ui::CreateChild<Ui::InputField>(
-        idContainer,
-        st::exportIdInput,
-        rpl::single(QString()),
-        u"Message ID"_q);
-
-    const auto layoutIdRow = [=](int w) {
-        const int half = (w - idPadL * 2 - idGap) / 2;
-        if (half < 20) return;
-        const int labelY = idTopPad;
-        const int inputY = idTopPad + idLabelH + 0;
-        fromIdLabel->resizeToWidth(half);
-        fromIdLabel->move(idPadL, labelY);
-        fromIdInput->setGeometry(idPadL, inputY, half, idInputH);
-        const int x2 = idPadL + half + idGap;
-        tillIdLabel->resizeToWidth(half);
-        tillIdLabel->move(x2, labelY);
-        tillIdInput->setGeometry(x2, inputY, half, idInputH);
-    };
-
-//	const auto layoutIdRow = [=](int w) {
-//		const int half = (w - idPadL * 2 - idGap) / 2;
-//		if (half < 20) return;
-//		fromIdLabel->resizeToWidth(half);
-//		fromIdLabel->move(idPadL, 0);
-//		fromIdInput->setGeometry(idPadL, labelH, half, inputH);
-//		const int x2 = idPadL + half + idGap;
-//		tillIdLabel->resizeToWidth(half);
-//		tillIdLabel->move(x2, 0);
-//		tillIdInput->setGeometry(x2, labelH, half, inputH);
-//	};
-    
-	idContainer->widthValue()
-		| rpl::on_next([=](int w) { layoutIdRow(w); }, idContainer->lifetime());
-
-
-
-	// Bind inputs to data
-	value()
-		| rpl::map([](const Settings &data) {
-			return data.singlePeerFromId.value_or(0);
-		})
-		| rpl::on_next([=](uint64 fromId) {
-			const auto s = (fromId > 0) ? QString::number(fromId) : QString();
-			if (fromIdInput->getLastText() != s) {
-				fromIdInput->setText(s);
-			}
-		}, fromIdInput->lifetime());
-
-	value()
-		| rpl::map([](const Settings &data) {
-			return data.singlePeerTillId.value_or(0);
-		})
-		| rpl::on_next([=](uint64 tillId) {
-			const auto s = (tillId > 0) ? QString::number(tillId) : QString();
-			if (tillIdInput->getLastText() != s) {
-				tillIdInput->setText(s);
-			}
-		}, tillIdInput->lifetime());
-
-	// errorLabel also in a SlideWrap so it collapses fully when hidden.
-	const auto errorLabelWrap = container->add(
-		object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
-			container,
-			object_ptr<Ui::FlatLabel>(
-				container,
-				rpl::single(QString()),
-				st::exportErrorLabel),
-			st::exportSettingPadding));
-	const auto errorLabel = errorLabelWrap->entity();
-
-	// Handle input changes with validation
-	fromIdInput->changes() | rpl::on_next([=] {
-		errorLabel->setText(QString());
-		const auto text = fromIdInput->getLastText();
-		bool ok = false;
-		const auto value = text.toInt(&ok);
-
-		if (!ok && !text.isEmpty()) {
-			errorLabel->setText(tr::lng_export_error_invalid_id(tr::now));
-			return;
-		} else if (ok && value < 1) {
-			errorLabel->setText(tr::lng_export_error_from_invalid(tr::now));
-			return;
-		} else if (!ok) {
-			changeData([&](Settings &settings) {
-				settings.singlePeerFromId = std::nullopt;
-			});
-			return;
-		}
-
-		const auto currentTillId = readData().singlePeerTillId;
-		if (currentTillId.has_value() && value > *currentTillId) {
-			errorLabel->setText(tr::lng_export_error_from_too_high(tr::now));
-			return;
-		}
-
-		changeData([&](Settings &settings) {
-			settings.singlePeerFromId = value;
-			settings.useIdRange = true;
-			settings.useDateRange = false;
-		});
-	}, fromIdInput->lifetime());
-
-	tillIdInput->changes() | rpl::on_next([=] {
-		errorLabel->setText(QString());
-		const auto text = tillIdInput->getLastText();
-		bool ok = false;
-		const auto value = text.toInt(&ok);
-
-		if (!ok || value < 1) {
-			errorLabel->setText(tr::lng_export_error_invalid_id(tr::now));
-			return;
-		}
-
-		const auto currentFromId = readData().singlePeerFromId;
-		if (currentFromId.has_value() && value < *currentFromId) {
-			errorLabel->setText(tr::lng_export_error_till_too_low(tr::now));
-			return;
-		}
-
-		changeData([&](Settings &settings) {
-			settings.singlePeerTillId = value;
-			settings.useIdRange = true;
-			settings.useDateRange = false;
-		});
-	}, tillIdInput->lifetime());
-
-	// Toggle visibility based on mode — using SlideWrap::toggle() so the
-	// hidden widget's height is removed from the layout entirely (setVisible
-	// alone leaves the height as dead space).
-	value()
-		| rpl::map([](const Settings &data) {
-			return data.useIdRange;
-		})
-		| rpl::on_next([=](bool useIdRange) {
-			dateLabelWrap->toggle(!useIdRange, anim::type::instant);
-			idContainerWrap->toggle(useIdRange, anim::type::instant);
-			errorLabelWrap->toggle(useIdRange, anim::type::instant);
-			if (useIdRange) {
-				layoutIdRow(idContainer->width());
-			}
-			container->resizeToWidth(container->width());
-		}, container->lifetime());
-
-	// Initially set visibility.
-	// Must call resizeToWidth() afterwards so the VerticalLayout re-queries
-	// each SlideWrap's height — without it the collapsed wraps still occupy
-	// their full height on the first paint, causing the visible gap.
-	dateLabelWrap->toggle(!readData().useIdRange, anim::type::instant);
-	idContainerWrap->toggle(readData().useIdRange, anim::type::instant);
-	errorLabelWrap->toggle(readData().useIdRange, anim::type::instant);
-	container->resizeToWidth(container->width());
+			std::move(datesText),
+			st::boxLabel),
+		st::exportLimitsPadding);
 
 	const auto removeTime = [](TimeId dateTime) {
 		return base::unixtime::serialize(
@@ -809,61 +520,58 @@ void SettingsWidget::addLimitsLabel(
 		}));
 	};
 
-	dateLabel->overrideLinkClickHandler([=](const QString &url) {
+	constexpr auto kOffset = 600;
+
+	label->overrideLinkClickHandler([=](const QString &url) {
 		if (url == u"internal:edit_from"_q) {
 			const auto done = [=](TimeId limit) {
 				changeData([&](Settings &settings) {
 					settings.singlePeerFrom = limit;
-					settings.useDateRange = true;
-					settings.useIdRange = false;
 				});
 			};
 			editDateLimit(
-				readData().singlePeerFrom.value_or(0),
+				readData().singlePeerFrom,
 				0,
-				readData().singlePeerTill.value_or(0),
+				readData().singlePeerTill,
 				tr::lng_export_from_beginning(),
 				done);
 		} else if (url == u"internal:edit_from_time"_q) {
 			const auto now = [=] {
 				auto result = TimeId(0);
 				changeData([&](Settings &settings) {
-					result = settings.singlePeerFrom.value_or(0);
+					result = settings.singlePeerFrom;
 				});
 				return result;
 			};
 			const auto done = [=](TimeId time) {
 				changeData([&](Settings &settings) {
 					const auto result = time
-						+ removeTime(settings.singlePeerFrom.value_or(0));
-					const auto tillValue = settings.singlePeerTill.value_or(0);
-					if (tillValue > 0 && result > tillValue) {
-						settings.singlePeerFrom = tillValue;
+						+ removeTime(settings.singlePeerFrom);
+					if (result >= settings.singlePeerTill
+							&& settings.singlePeerTill) {
+						settings.singlePeerFrom = settings.singlePeerTill
+							- kOffset;
 					} else {
 						settings.singlePeerFrom = result;
 					}
-					settings.useDateRange = true;
-					settings.useIdRange = false;
 				});
 			};
 			editTimeLimit(now, done);
 		} else if (url == u"internal:edit_till"_q) {
 			const auto done = [=](TimeId limit) {
 				changeData([&](Settings &settings) {
-					const auto endOfDay = limit + 86399;
-					if (endOfDay < settings.singlePeerFrom
+					if (limit <= settings.singlePeerFrom
 							&& settings.singlePeerFrom) {
-						settings.singlePeerTill = settings.singlePeerFrom;
+						settings.singlePeerTill = settings.singlePeerFrom
+							+ kOffset;
 					} else {
-						settings.singlePeerTill = endOfDay;
+						settings.singlePeerTill = limit;
 					}
-					settings.useDateRange = true;
-					settings.useIdRange = false;
 				});
 			};
 			editDateLimit(
-				readData().singlePeerTill.value_or(0),
-				readData().singlePeerFrom.value_or(0),
+				readData().singlePeerTill,
+				readData().singlePeerFrom,
 				0,
 				tr::lng_export_till_end(),
 				done);
@@ -871,23 +579,23 @@ void SettingsWidget::addLimitsLabel(
 			const auto now = [=] {
 				auto result = TimeId(0);
 				changeData([&](Settings &settings) {
-					result = settings.singlePeerTill.value_or(0);
+					result = settings.singlePeerTill;
 				});
 				return result;
 			};
-		const auto done = [=](TimeId time) {
-			changeData([&](Settings &settings) {
-				const auto result = time + removeTime(settings.singlePeerTill.value_or(0));
-				const auto fromValue = settings.singlePeerFrom.value_or(0);
-				if (fromValue > 0 && result < fromValue) {
-					settings.singlePeerTill = fromValue;
-				} else {
-					settings.singlePeerTill = result;
-				}
-				settings.useDateRange = true;
-				settings.useIdRange = false;
-			});
-		};
+			const auto done = [=](TimeId time) {
+				changeData([&](Settings &settings) {
+					const auto result = time
+						+ removeTime(settings.singlePeerTill);
+					if (result <= settings.singlePeerFrom
+							&& settings.singlePeerFrom) {
+						settings.singlePeerTill = settings.singlePeerFrom
+							+ kOffset;
+					} else {
+						settings.singlePeerTill = result;
+					}
+				});
+			};
 			editTimeLimit(now, done);
 		} else {
 			Unexpected("Click handler URL in export limits edit.");
@@ -946,6 +654,8 @@ void SettingsWidget::editDateLimit(
 not_null<Ui::RpWidget*> SettingsWidget::setupButtons(
 		not_null<Ui::ScrollArea*> scroll,
 		not_null<Ui::RpWidget*> wrap) {
+	using namespace rpl::mappers;
+
 	const auto buttonsPadding = st::defaultBox.buttonPadding;
 	const auto buttonsHeight = buttonsPadding.top()
 		+ st::defaultBoxButton.height
@@ -955,32 +665,19 @@ not_null<Ui::RpWidget*> SettingsWidget::setupButtons(
 		buttonsHeight);
 	const auto topShadow = Ui::CreateChild<Ui::FadeShadow>(this);
 	const auto bottomShadow = Ui::CreateChild<Ui::FadeShadow>(this);
-	topShadow->toggleOn(
-		scroll->scrollTopValue() | rpl::map(rpl::mappers::_1 > 0)
-	);
-	bottomShadow->toggleOn(
-		rpl::combine(
-			scroll->heightValue(),
-			scroll->scrollTopValue(),
-			wrap->heightValue()
-		) | rpl::map([=](int height, int top, int contentHeight) {
-			return top < scroll->scrollTopMax();
-		})
-	);
+	topShadow->toggleOn(scroll->scrollTopValue(
+	) | rpl::map(_1 > 0));
+	bottomShadow->toggleOn(rpl::combine(
+		scroll->heightValue(),
+		scroll->scrollTopValue(),
+		wrap->heightValue(),
+		_2
+	) | rpl::map([=](int top) {
+		return top < scroll->scrollTopMax();
+	}));
 
-	_buttonsContainer = buttons;
-
-	value() | rpl::map([=](const Settings &data) {
-		const auto extFilterActive = (data.media.extensionFilterMode != MediaSettings::ExtFilterMode::None);
-		const auto extFilterEmpty = data.media.extensionFilter.isEmpty();
-		if (extFilterActive && extFilterEmpty) {
-			return false;
-		}
-		if (data.onlySinglePeer()) {
-			return (data.media.types != MediaSettings::Types(0));
-		}
-		return (data.types != Types(0))
-			|| (data.media.types != MediaSettings::Types(0));
+	value() | rpl::map([](const Settings &data) {
+		return (data.types != Types(0)) || data.onlySinglePeer();
 	}) | rpl::distinct_until_changed(
 	) | rpl::on_next([=](bool canStart) {
 		refreshButtons(buttons, canStart);
@@ -1027,27 +724,12 @@ not_null<Ui::Checkbox*> SettingsWidget::addOption(
 	) | rpl::on_next([=](bool checked) {
 		changeData([&](Settings &data) {
 			if (checked) {
-				data.media.types &= ~MediaType::FullHistory;
-				data.media.types &= ~MediaType::Link;
 				data.types |= types;
 			} else {
 				data.types &= ~types;
 			}
 		});
 	}, checkbox->lifetime());
-
-	value() | rpl::map([=](const Settings &data) {
-		const bool checked = (data.types & types) == types;
-		const bool linkSelected = (data.media.types & MediaType::Link);
-		const bool historySelected = (data.media.types & MediaType::FullHistory);
-		const bool enabled = !linkSelected && !historySelected;
-		return std::make_pair(checked, enabled);
-	}) | rpl::distinct_until_changed(
-	) | rpl::on_next([=](std::pair<bool, bool> state) {
-		checkbox->setChecked(state.first);
-		checkbox->setEnabled(state.second);
-	}, checkbox->lifetime());
-
 	return checkbox;
 }
 
@@ -1092,19 +774,12 @@ void SettingsWidget::addChatOption(
 		});
 	}, onlyMy->lifetime());
 
-	value() | rpl::map([=](const Settings &data) {
-		const bool checked = (data.fullChats & types) != types;
-		const bool linkSelected = (data.media.types & MediaType::Link);
-		const bool historySelected = (data.media.types & MediaType::FullHistory);
-		const bool enabled = !linkSelected && !historySelected;
-		return std::make_pair(checked, enabled);
-	}) | rpl::distinct_until_changed(
-	) | rpl::on_next([=](std::pair<bool, bool> state) {
-		onlyMy->entity()->setChecked(state.first);
-		onlyMy->entity()->setEnabled(state.second);
-	}, onlyMy->lifetime());
-
 	onlyMy->toggleOn(checkbox->checkedValue());
+
+	if (types & (Type::PublicGroups | Type::PublicChannels)) {
+		onlyMy->entity()->setChecked(true);
+		onlyMy->entity()->setDisabled(true);
+	}
 }
 
 void SettingsWidget::addMediaOptions(
@@ -1131,16 +806,16 @@ void SettingsWidget::addMediaOptions(
 		MediaType::VoiceMessage);
 	addMediaOption(
 		container,
-		tr::lng_export_option_files(tr::now),
-		MediaType::File);
-	addMediaOption(
-		container,
 		tr::lng_export_option_stickers(tr::now),
 		MediaType::Sticker);
 	addMediaOption(
 		container,
 		tr::lng_export_option_gifs(tr::now),
 		MediaType::GIF);
+	const auto files = addMediaOption(
+		container,
+		tr::lng_export_option_files(tr::now),
+		MediaType::File);
 	addMediaOption(
 		container,
 		tr::lng_export_option_text_messages(tr::now),
@@ -1154,23 +829,10 @@ void SettingsWidget::addMediaOptions(
 		tr::lng_export_option_full_history(tr::now),
 		MediaType::FullHistory);
 	addExtensionFilter(container);
-	addSizeSlider(container);
-
-	{
-		auto wrap = object_ptr<Ui::SlideWrap<Ui::FlatLabel>>(
-			container,
-			object_ptr<Ui::FlatLabel>(
-				container,
-				QString(),
-				st::exportAboutOptionLabel),
-			st::exportAboutOptionPadding);
-		_scanResultsLabel = wrap.data();
-		container->add(std::move(wrap));
-	}
-	_scanResultsLabel->hide(anim::type::instant);
+	addSizeSlider(container, files);
 }
 
-void SettingsWidget::addMediaOption(
+not_null<Ui::Checkbox*> SettingsWidget::addMediaOption(
 		not_null<Ui::VerticalLayout*> container,
 		const QString &text,
 		MediaType type) {
@@ -1185,12 +847,10 @@ void SettingsWidget::addMediaOption(
 	) | rpl::on_next([=](bool checked) {
 		changeData([&](Settings &data) {
 			if (checked) {
-				if (type == MediaType::FullHistory) {
-					data.media.types = MediaType::FullHistory;
-					data.types = Settings::Types(0);
-				} else if (type == MediaType::Link) {
-					data.media.types = MediaType::Link;
-					data.types = Settings::Types(0);
+				// Full history and links-only are exclusive modes.
+				if (type == MediaType::FullHistory
+					|| type == MediaType::Link) {
+					data.media.types = type;
 				} else {
 					data.media.types &= ~MediaType::FullHistory;
 					data.media.types &= ~MediaType::Link;
@@ -1201,199 +861,107 @@ void SettingsWidget::addMediaOption(
 			}
 		});
 	}, checkbox->lifetime());
-
-	value() | rpl::map([=](const Settings &data) {
-		const bool checked = (data.media.types & type) == type;
-		return std::make_pair(checked, true);
-	}) | rpl::distinct_until_changed(
-	) | rpl::on_next([=](std::pair<bool, bool> state) {
-		checkbox->setChecked(state.first);
-		checkbox->setEnabled(state.second);
-	}, checkbox->lifetime());
+	return checkbox;
 }
 
 void SettingsWidget::addExtensionFilter(
 		not_null<Ui::VerticalLayout*> container) {
 	using ExtMode = MediaSettings::ExtFilterMode;
-	using Type    = MediaSettings::Type;
+	using Type = MediaSettings::Type;
 
 	const auto isEligible = [](const Settings &data) {
-		return bool(data.media.types & (Type::Video | Type::Audio | Type::File | Type::Sticker | Type::FullHistory));
+		return bool(data.media.types
+			& (Type::Video | Type::Audio | Type::File
+				| Type::Sticker | Type::FullHistory));
 	};
 
-	// ── Whitelist checkbox — label IS the ✓ sign, coloured green ──
-	const auto wlCb = container->add(
+	const auto whitelist = container->add(
 		object_ptr<Ui::Checkbox>(
 			container,
-			QString(u"\u2713  whitelist"_q),
+			QString(u"\u2713 whitelist"_q),
 			(readData().media.extensionFilterMode == ExtMode::Whitelist),
 			st::exportExtCheckboxGreen),
 		st::exportSettingPadding);
-
-	// ── Blacklist checkbox — label IS the ✕ sign, coloured red ──
-	const auto blCb = container->add(
+	const auto blacklist = container->add(
 		object_ptr<Ui::Checkbox>(
 			container,
-			QString(u"\u2715  blacklist"_q),
+			QString(u"\u2715 blacklist"_q),
 			(readData().media.extensionFilterMode == ExtMode::Blacklist),
 			st::exportExtCheckboxRed),
 		st::exportSettingPadding);
 
-	// ── Extension input — shown only when a filter mode is active ──
-	//const auto inputWrap = container->add(
-	//	object_ptr<Ui::SlideWrap<Ui::InputField>>(
-	//		container,
-	//		object_ptr<Ui::InputField>(
-	//			container,
-	//			st::exportExtInput,
-	//			rpl::single(QString(u"pdf, docx, mp4..."_q))))),
-	//	style::margins{ st::exportSubSettingPadding.left(), -10, st::exportSubSettingPadding.right(), 0 };
-	//const auto input = inputWrap->entity();
-
-    auto inputField = object_ptr<Ui::InputField>(
-        container,
-        st::exportExtInput,
-        rpl::single(QString(u"pdf, docx, mp4..."_q)));
-    auto slideWrap = object_ptr<Ui::SlideWrap<Ui::InputField>>(
-        container,
-        std::move(inputField));
-    const auto inputWrap = container->add(
-        std::move(slideWrap),
-        //style::margins{ st::exportSubSettingPadding.left(), -10, st::exportSubSettingPadding.right(), 0 });
-        style::margins{ st::exportSettingPadding.left(), -2, st::exportSettingPadding.right(), 0 });
-    const auto input = inputWrap->entity();
-
-	// Set initial text
+	auto inputWrap = container->add(
+		object_ptr<Ui::SlideWrap<Ui::InputField>>(
+			container,
+			object_ptr<Ui::InputField>(
+				container,
+				st::exportExtInput,
+				rpl::single(QString(u"pdf, docx, mp4..."_q)))),
+		st::exportSettingPadding);
+	const auto input = inputWrap->entity();
 	input->setText(readData().media.extensionFilter.join(u" "_q));
 	inputWrap->toggle(
 		readData().media.extensionFilterMode != ExtMode::None,
 		anim::type::instant);
 
-	// ── Mutual exclusion + mode update ──
-	wlCb->checkedChanges()
-		| rpl::filter([](bool v) { return v; })
-		| rpl::on_next([=] {
-			blCb->setChecked(false);
+	const auto setMode = [=](ExtMode mode) {
+		changeData([&](Settings &data) {
+			data.media.extensionFilterMode = mode;
+		});
+		whitelist->setChecked(mode == ExtMode::Whitelist);
+		blacklist->setChecked(mode == ExtMode::Blacklist);
+		inputWrap->toggle(mode != ExtMode::None, anim::type::normal);
+		if (mode == ExtMode::None) {
+			input->setText(QString());
 			changeData([&](Settings &data) {
-				data.media.extensionFilterMode = ExtMode::Whitelist;
+				data.media.extensionFilter.clear();
 			});
-		}, wlCb->lifetime());
+		}
+	};
 
-	wlCb->checkedChanges()
-		| rpl::filter([](bool v) { return !v; })
-		| rpl::on_next([=] {
-			if (!blCb->checked()) {
-				input->setText(QString());
-				changeData([&](Settings &data) {
-					data.media.extensionFilterMode = ExtMode::None;
-					data.media.extensionFilter.clear();
-				});
-			}
-		}, wlCb->lifetime());
+	whitelist->checkedChanges() | rpl::filter([](bool v) {
+		return v;
+	}) | rpl::on_next([=] {
+		setMode(ExtMode::Whitelist);
+	}, whitelist->lifetime());
+	blacklist->checkedChanges() | rpl::filter([](bool v) {
+		return v;
+	}) | rpl::on_next([=] {
+		setMode(ExtMode::Blacklist);
+	}, blacklist->lifetime());
 
-	blCb->checkedChanges()
-		| rpl::filter([](bool v) { return v; })
-		| rpl::on_next([=] {
-			wlCb->setChecked(false);
-			changeData([&](Settings &data) {
-				data.media.extensionFilterMode = ExtMode::Blacklist;
-			});
-		}, blCb->lifetime());
+	input->changes() | rpl::on_next([=] {
+		const auto text = input->getLastText().toLower().trimmed();
+		const auto parts = text.split(
+			QRegularExpression(u"[\\s,;]+"_q),
+			Qt::SkipEmptyParts);
+		auto exts = QStringList();
+		for (const auto &part : parts) {
+			exts.append(part.startsWith(u'.') ? part.mid(1) : part);
+		}
+		changeData([&](Settings &data) {
+			data.media.extensionFilter = exts;
+		});
+	}, input->lifetime());
 
-	blCb->checkedChanges()
-		| rpl::filter([](bool v) { return !v; })
-		| rpl::on_next([=] {
-			if (!wlCb->checked()) {
-				input->setText(QString());
-				changeData([&](Settings &data) {
-					data.media.extensionFilterMode = ExtMode::None;
-					data.media.extensionFilter.clear();
-				});
-			}
-		}, blCb->lifetime());
-
-	// ── Show/hide input when mode changes ──
-	value()
-		| rpl::map([](const Settings &data) {
-			return data.media.extensionFilterMode != ExtMode::None;
-		})
-		| rpl::distinct_until_changed()
-		| rpl::on_next([=](bool on) {
-			inputWrap->toggle(on, anim::type::normal);
-		}, inputWrap->lifetime());
-
-	// ── Parse and save extensions on input change ──
-	input->changes()
-		| rpl::on_next([=] {
-			const auto text = input->getLastText().toLower().trimmed();
-			const auto parts = text.split(
-				QRegularExpression(u"[\\s,;]+"_q),
-				Qt::SkipEmptyParts);
-			QStringList exts;
-			for (const auto &p : parts) {
-				exts.append(p.startsWith('.') ? p.mid(1) : p);
-			}
-			changeData([&](Settings &data) {
-				data.media.extensionFilter = exts;
-			});
-		}, input->lifetime());
-
-	// ── Sync checkboxes when data changes externally ──
-	value()
-		| rpl::map([](const Settings &data) {
-			return data.media.extensionFilterMode;
-		})
-		| rpl::distinct_until_changed()
-		| rpl::on_next([=](ExtMode mode) {
-			wlCb->setChecked(mode == ExtMode::Whitelist);
-			blCb->setChecked(mode == ExtMode::Blacklist);
-			if (mode == ExtMode::None) {
-				input->setText(QString());
-			}
-		}, wlCb->lifetime());
-
-	// ── Enable/disable based on eligible types ──
-	value()
-		| rpl::map(isEligible)
-		| rpl::distinct_until_changed()
-		| rpl::on_next([=](bool eligible) {
-			wlCb->setEnabled(eligible);
-			blCb->setEnabled(eligible);
-			if (!eligible) {
-				// Clear filter when no eligible type is selected
-				wlCb->setChecked(false);
-				blCb->setChecked(false);
-				input->setText(QString());
-				changeData([&](Settings &data) {
-					data.media.extensionFilterMode = ExtMode::None;
-					data.media.extensionFilter.clear();
-				});
-			}
-		}, wlCb->lifetime());
-
-	// Add spacing before the size slider to prevent overlap with the input field label
-	container->add(object_ptr<Ui::FixedHeightWidget>(container, 25));
+	value() | rpl::map(isEligible) | rpl::distinct_until_changed() | rpl::on_next([=](bool eligible) {
+		whitelist->setEnabled(eligible);
+		blacklist->setEnabled(eligible);
+		if (!eligible && readData().media.extensionFilterMode != ExtMode::None) {
+			setMode(ExtMode::None);
+		}
+	}, whitelist->lifetime());
 }
 
 void SettingsWidget::addSizeSlider(
-		not_null<Ui::VerticalLayout*> container) {
-	using namespace rpl::mappers;
-
+		not_null<Ui::VerticalLayout*> container,
+		not_null<Ui::Checkbox*> above) {
+	const auto wrap = container->add(
+		object_ptr<Ui::FixedHeightWidget>(container));
 	const auto slider = container->add(
 		object_ptr<Ui::MediaSlider>(container, st::exportFileSizeSlider),
 		st::exportFileSizePadding);
 	slider->resize(st::exportFileSizeSlider.seekSize);
-
-	const auto sectionsCount = (kSizeValueCount - 1);
-	const auto getIndexByLimit = [](int64 sizeLimit) {
-		for (auto index = 0; index != kSizeValueCount; ++index) {
-			if (sizeLimit <= SizeLimitByIndex(index)) {
-				return index;
-			}
-		}
-		return kSizeValueCount - 1;
-	};
-
 	slider->setPseudoDiscrete(
 		kSizeValueCount,
 		SizeLimitByIndex,
@@ -1408,23 +976,8 @@ void SettingsWidget::addSizeSlider(
 		container.get(),
 		st::exportFileSizeLabel);
 	value() | rpl::map([](const Settings &data) {
-		return std::make_pair(data.media.sizeLimit, data.media.types);
-	}) | rpl::distinct_until_changed(
-	) | rpl::on_next([=](std::pair<int64, MediaSettings::Types> state) {
-		const auto sizeLimit = state.first;
-		const auto types = state.second;
-		const auto sizeRelevant = MediaSettings::Type::Photo
-			| MediaSettings::Type::Video
-			| MediaSettings::Type::File
-			| MediaSettings::Type::Audio
-			| MediaSettings::Type::VoiceMessage
-			| MediaSettings::Type::VideoMessage
-			| MediaSettings::Type::Sticker
-			| MediaSettings::Type::GIF
-			| MediaSettings::Type::FullHistory;
-		const auto disabled = !(types & sizeRelevant);
-		slider->setDisabled(disabled);
-
+		return data.media.sizeLimit;
+	}) | rpl::on_next([=](int64 sizeLimit) {
 		const auto limit = sizeLimit / kMegabyte;
 		const auto size = QString::number(limit) + " MB";
 		const auto text = tr::lng_export_option_size_limit(
@@ -1432,198 +985,80 @@ void SettingsWidget::addSizeSlider(
 			lt_size,
 			size);
 		label->setText(text);
-
-		const auto index = getIndexByLimit(sizeLimit);
-		const auto pos = index / float64(sectionsCount);
-		if (std::abs(slider->value() - pos) > 0.001) {
-			slider->setValue(pos);
-		}
 	}, slider->lifetime());
 
+	_sizeLimitExtraHeight = SizeLimitFitsOptionLine(
+		st::exportPanelSize.width(),
+		above->naturalWidth(),
+		label->width())
+		? 0
+		: label->height();
+
 	rpl::combine(
+		container->widthValue(),
 		label->widthValue(),
-		slider->geometryValue(),
-		_2
-	) | rpl::on_next([=](QRect geometry) {
+		slider->geometryValue()
+	) | rpl::on_next([=](int outerWidth, int labelWidth, QRect geometry) {
+		const auto sameLine = SizeLimitFitsOptionLine(
+			outerWidth,
+			above->naturalWidth(),
+			labelWidth);
+		wrap->resize(wrap->width(), sameLine ? 0 : label->height());
 		label->moveToRight(
 			st::exportFileSizePadding.right(),
-			//geometry.y() - label->height() - st::exportFileSizeLabelBottom);
-            geometry.y() - label->height() - 4);
+			(sameLine
+				? (geometry.y()
+					- label->height()
+					- st::exportFileSizeLabelBottom)
+				: wrap->y()),
+			outerWidth);
 	}, label->lifetime());
-}
-
-void SettingsWidget::updateButtonsLayout() {
-	if (!_buttonsContainer || !_exportButtonForLayout || !_scanButtonForLayout
-			|| !_cancelButtonForLayout || !_resumeButton) {
-		return;
-	}
-	// Ensure the buttons container has the correct width before computing layout.
-	// This is critical because moveToRight() uses the container's actual width.
-	if (_buttonsContainer->parentWidget()) {
-		int parentWidth = _buttonsContainer->parentWidget()->width();
-		if (parentWidth > 0 && _buttonsContainer->width() != parentWidth) {
-			_buttonsContainer->resizeToWidth(parentWidth);
-		}
-	}
-	// Use container's width for safety check (it should now be correct)
-	int containerWidth = _buttonsContainer->width();
-	if (containerWidth <= 0) {
-		// Container not sized yet - retry after a delay
-		QTimer::singleShot(100, this, [=]() {
-			updateButtonsLayout();
-		});
-		return;
-	}
-	// Force Qt to update geometry of all buttons before we compute positions
-	// This ensures widths are current (important after show/hide calls)
-	_resumeButton->adjustSize();
-	_updateButton->adjustSize();
-	_exportButtonForLayout->adjustSize();
-	_scanButtonForLayout->adjustSize();
-	_cancelButtonForLayout->adjustSize();
-	_buttonsContainer->updateGeometry();
-
-	const auto padding = st::defaultBox.buttonPadding;
-	const auto right = padding.right();
-	const auto top = padding.top();
-
-	// Export is always rightmost
-	_exportButtonForLayout->moveToRight(right, top);
-	int nextRight = right + _exportButtonForLayout->width() + padding.left();
-
-	// Resume or Update is between Export and Scan (only if NOT hidden)
-	if (!_resumeButton->isHidden()) {
-		_resumeButton->moveToRight(nextRight, top);
-		nextRight += _resumeButton->width() + padding.left();
-	}
-	if (!_updateButton->isHidden()) {
-		_updateButton->moveToRight(nextRight, top);
-		nextRight += _updateButton->width() + padding.left();
-	}
-
-	// Scan is next
-	_scanButtonForLayout->moveToRight(nextRight, top);
-
-	// Cancel is leftmost
-	_cancelButtonForLayout->moveToRight(
-		nextRight + _scanButtonForLayout->width() + padding.left(), top);
 }
 
 void SettingsWidget::refreshButtons(
 		not_null<Ui::RpWidget*> container,
 		bool canStart) {
-	using namespace rpl::mappers;
-
-	// Cancel the old sizeValue subscription BEFORE reparenting old buttons.
-	// If we cancel after setParent(nullptr), a pending resize event can fire
-	// the old lambda and call moveToRight on a widget with no parent → crash.
-	_buttonsLayout.destroy();
-
-	for (const auto child : container->children()) {
+	container->hideChildren();
+	const auto children = container->children();
+	for (const auto child : children) {
 		if (child->isWidgetType()) {
-			auto widget = static_cast<QWidget*>(child);
-			widget->hide(); // Hide before reparenting to prevent floating widgets
-			widget->setParent(nullptr);
 			child->deleteLater();
 		}
 	}
-
-	const auto mediaTypesSelected = (readData().media.types != MediaSettings::Types(0));
-
-	const auto export_ = Ui::CreateChild<Ui::RoundButton>(
-		container.get(),
-		tr::lng_export_start(),
-		st::defaultBoxButton);
-	export_->setTextTransform(Ui::RoundButtonTextTransform::NoTransform);
-	export_->show();
-	export_->clicks() | rpl::to_empty | rpl::start_to_stream(_exportClicks, export_->lifetime());
-	_exportButtonForLayout = export_;
-
-	// Resume button (always created, shown/hidden based on _existingExport)
-	{
-		const auto resume = Ui::CreateChild<Ui::RoundButton>(
+	const auto start = canStart
+		? Ui::CreateChild<Ui::RoundButton>(
 			container.get(),
-			rpl::single(QString("Resume")),
-			st::defaultBoxButton);
-		resume->setTextTransform(Ui::RoundButtonTextTransform::NoTransform);
-		resume->clicks() | rpl::to_empty | rpl::start_to_stream(_resumeClicks, resume->lifetime());
-		if (_existingExport == ExistingExport::Incomplete) {
-			resume->show();
-		} else {
-			resume->hide();
-		}
-		_resumeButton = resume;
-	}
+			tr::lng_export_start(),
+			st::defaultBoxButton)
+		: nullptr;
+	if (start) {
+		start->show();
+		_startClicks = start->clicks() | rpl::to_empty;
 
-	// Update button (always created, shown/hidden based on _existingExport)
-	{
-		const auto update = Ui::CreateChild<Ui::RoundButton>(
-			container.get(),
-			rpl::single(QString("Update")),
-			st::defaultBoxButton);
-		update->setTextTransform(Ui::RoundButtonTextTransform::NoTransform);
-		update->clicks() | rpl::to_empty | rpl::start_to_stream(_updateClicks, update->lifetime());
-		if (_existingExport == ExistingExport::Complete) {
-			update->show();
-		} else {
-			update->hide();
-		}
-		_updateButton = update;
+		container->sizeValue(
+		) | rpl::on_next([=](QSize size) {
+			const auto right = st::defaultBox.buttonPadding.right();
+			const auto top = st::defaultBox.buttonPadding.top();
+			start->moveToRight(right, top);
+		}, start->lifetime());
 	}
-
-	const auto scan = Ui::CreateChild<Ui::RoundButton>(
-		container.get(),
-		rpl::single(_isScanning ? tr::lng_export_scanning(tr::now) : tr::lng_export_scan(tr::now)),
-		st::defaultBoxButton);
-	scan->setTextTransform(Ui::RoundButtonTextTransform::NoTransform);
-	scan->show();
-	scan->clicks() | rpl::to_empty | rpl::start_to_stream(_scanClicks, scan->lifetime());
-	_scanButtonForLayout = scan;
 
 	const auto cancel = Ui::CreateChild<Ui::RoundButton>(
 		container.get(),
 		tr::lng_cancel(),
 		st::defaultBoxButton);
-	cancel->setTextTransform(Ui::RoundButtonTextTransform::NoTransform);
 	cancel->show();
-	cancel->clicks() | rpl::to_empty | rpl::on_next([=] {
-		_cancelClicks.fire({});
-	}, cancel->lifetime());
-	_cancelButtonForLayout = cancel;
-
-	// State management
-	if (_isScanning) {
-		export_->setDisabled(true);
-		_resumeButton->setDisabled(true);
-		_updateButton->setDisabled(true);
-		scan->setDisabled(true);
-	} else if (_hasScanResults) {
-		export_->setDisabled(!canStart);
-		_resumeButton->setDisabled(!canStart);
-		_updateButton->setDisabled(!canStart);
-		scan->setDisabled(true);
-	} else {
-		export_->setDisabled(!canStart);
-		_resumeButton->setDisabled(!canStart);
-		_updateButton->setDisabled(!canStart);
-		scan->setDisabled(!canStart || !mediaTypesSelected);
-	}
-
-	// Layout is handled by:
-	// 1. rpl::combine below (fires on container/button size changes)
-	// 2. setExistingExport() QTimer::singleShot(0) callback
+	_cancelClicks = cancel->clicks() | rpl::to_empty;
 
 	rpl::combine(
 		container->sizeValue(),
-		export_->widthValue(),
-		scan->widthValue(),
-		_resumeButton->widthValue(),
-		_resumeButton->shownValue(),
-		_updateButton->widthValue(),
-		_updateButton->shownValue()
-	) | rpl::on_next([=](QSize, int, int, int, bool, int, bool) {
-		updateButtonsLayout();
-	}, _buttonsLayout);
+		start ? start->widthValue() : rpl::single(0)
+	) | rpl::on_next([=](QSize size, int width) {
+		const auto right = st::defaultBox.buttonPadding.right()
+			+ (width ? width + st::defaultBox.buttonPadding.left() : 0);
+		const auto top = st::defaultBox.buttonPadding.top();
+		cancel->moveToRight(right, top);
+	}, cancel->lifetime());
 }
 
 void SettingsWidget::chooseFolder() {
@@ -1644,283 +1079,26 @@ rpl::producer<Settings> SettingsWidget::changes() const {
 	return _changes.events();
 }
 
+int SettingsWidget::sizeLimitExtraHeight() const {
+	return _sizeLimitExtraHeight;
+}
+
 rpl::producer<Settings> SettingsWidget::value() const {
 	return rpl::single(readData()) | rpl::then(changes());
 }
 
-rpl::producer<> SettingsWidget::scanClicks() const {
-	return _scanClicks.events();
-}
-
-rpl::producer<> SettingsWidget::exportClicks() const {
-	return _exportClicks.events();
-}
-
-rpl::producer<> SettingsWidget::resumeClicks() const {
-	return _resumeClicks.events();
-}
-
-rpl::producer<> SettingsWidget::updateClicks() const {
-	return _updateClicks.events();
+rpl::producer<> SettingsWidget::startClicks() const {
+	return _startClicks.value(
+	) | rpl::map([](Wrap &&wrap) {
+		return std::move(wrap.value);
+	}) | rpl::flatten_latest();
 }
 
 rpl::producer<> SettingsWidget::cancelClicks() const {
-	return _cancelClicks.events();
-}
-
-void SettingsWidget::setScanProgress(int itemIndex, int itemCount) {
-	if (!_scanResultsLabel) return;
-	_scanResultsLabel->entity()->setText(tr::lng_export_scanning_progress(
-		tr::now,
-		lt_index,
-		Lang::FormatCountDecimal(itemIndex),
-		lt_amount,
-		Lang::FormatCountDecimal(itemCount)));
-	_scanResultsLabel->toggle(true, anim::type::instant);
-	_container->resizeToWidth(_container->width());
-}
-
-void SettingsWidget::setScanning(bool scanning) {
-	if (_isScanning != scanning) {
-		_isScanning = scanning;
-		if (scanning) {
-			_hasScanResults = false;
-			_scanResults.clear();
-		}
-	}
-}
-
-void SettingsWidget::setExistingExport(ExistingExport state) {
-	if (_existingExport == state) {
-		return;
-	}
-	_existingExport = state;
-	if (_resumeButton && _updateButton) {
-		if (state == ExistingExport::Incomplete) {
-			_resumeButton->show();
-			_updateButton->hide();
-		} else if (state == ExistingExport::Complete) {
-			_resumeButton->hide();
-			_updateButton->show();
-		} else {
-			_resumeButton->hide();
-			_updateButton->hide();
-		}
-		// Defer layout update to ensure button visibility change is processed
-		QTimer::singleShot(0, this, [=]() {
-			if (_buttonsContainer && _buttonsContainer->parentWidget()
-					&& _buttonsContainer->parentWidget()->width() > 0) {
-				_buttonsContainer->resizeToWidth(_buttonsContainer->parentWidget()->width());
-			}
-			updateButtonsLayout();
-		});
-	}
-}
-
-void SettingsWidget::setScanResults(std::map<MediaSettings::Type, Output::StatItem> stats) {
-	setScanning(false);
-
-	// We use our own calculated totals
-	int totalUniqueMessagesCount = 0;
-	int totalTotalMessagesCount = 0;
-	for (const auto &[type, stat] : stats) {
-		totalTotalMessagesCount += stat.totalCount;
-	}
-
-	if (totalTotalMessagesCount <= 0) {
-		setScanning(false);
-		using MediaType = MediaSettings::Type;
-		const auto types = readData().media.types;
-		const auto hasMedia = (types & MediaType::MediaMask) || (types & MediaType::Sticker) || (types & MediaType::GIF) || (types & MediaType::File);
-		const auto textOnly = (types == MediaType::Text);
-		const auto linksOnly = (types == MediaType::Link);
-		const auto textAndLinks = (types == (MediaType::Text | MediaType::Link));
-
-		QString text;
-		if (hasMedia) {
-			text = tr::lng_export_none_found(tr::now);
-		} else if (textOnly || linksOnly || textAndLinks) {
-			text = "No messages found in this range.";
-		} else {
-			text = "No items found matching selected filters.";
-		}
-		_scanResultsLabel->entity()->setText(text);
-		_scanResultsLabel->toggle(true, anim::type::instant);
-		_container->resizeToWidth(_container->width());
-		return;
-	}
-
-	_scanResults = std::move(stats);
-	_hasScanResults = true;
-	_changes.fire_copy(readData());
-	if (!_scanResultsLabel) return;
-
-	QString text;
-	totalUniqueMessagesCount = 0;
-	totalTotalMessagesCount = 0;
-	int64 totalUniqueMediaSize = 0;
-	int64 totalMediaSize = 0;
-	const auto fullHistory = (readData().media.types & MediaSettings::Type::FullHistory);
-	const auto fullRange = readData().isFullRange();
-	const auto showAllCategories = fullHistory && fullRange;
-
-	using MediaType = MediaSettings::Type;
-	const std::vector<MediaType> order = {
-		MediaType::Photo,
-		MediaType::Video,
-		MediaType::VideoMessage,
-		MediaType::Audio,
-		MediaType::VoiceMessage,
-		MediaType::File,
-		MediaType::Sticker,
-		MediaType::GIF,
-		MediaType::Text,
-		MediaType::Link
-	};
-
-	int categoriesCount = 0;
-
-	for (const auto type : order) {
-		const auto it = _scanResults.find(type);
-		if (!showAllCategories && (it == _scanResults.end() || it->second.totalCount <= 0)) {
-			continue;
-		}
-		const auto &item = (it != _scanResults.end()) ? it->second : Output::StatItem();
-		QString label;
-		switch (type) {
-		case MediaType::Photo: label = tr::lng_export_option_photos(tr::now); break;
-		case MediaType::Video: label = tr::lng_export_option_video_files(tr::now); break;
-		case MediaType::VoiceMessage: label = tr::lng_export_option_voice_messages(tr::now); break;
-		case MediaType::VideoMessage: label = tr::lng_export_option_video_messages(tr::now); break;
-		case MediaType::Audio: label = tr::lng_export_option_audios(tr::now); break;
-		case MediaType::Sticker: label = tr::lng_export_option_stickers(tr::now); break;
-		case MediaType::GIF: label = tr::lng_export_option_gifs(tr::now); break;
-		case MediaType::File: label = tr::lng_export_option_files(tr::now); break;
-		case MediaType::Text: label = tr::lng_export_option_text_messages(tr::now); break;
-		case MediaType::Link: label = tr::lng_export_option_links(tr::now); break;
-		}
-		if (!label.isEmpty()) {
-			categoriesCount++;
-
-			if (type == MediaType::Text) {
-				text += label + ": " + Lang::FormatCountDecimal(item.totalCount) + "\n";
-			} else if (type == MediaType::Link) {
-				const auto messagesStr = item.messagesWithLinks > 0
-					? " (" + Lang::FormatCountDecimal(item.messagesWithLinks) + " Messages)"
-					: QString();
-				if (item.uniqueCount == item.totalCount) {
-					text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount) + messagesStr + "\n";
-				} else {
-					text += label + ": " + Lang::FormatCountDecimal(item.uniqueCount)
-						+ ", " + Lang::FormatCountDecimal(item.totalCount) + messagesStr + "\n";
-				}
-			} else {
-				const bool noDuplicates = (item.uniqueCount == item.totalCount) && (item.uniqueSize == item.totalSize);
-				if (noDuplicates) {
-					text += label + ": " + Lang::FormatCountDecimal(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")\n";
-				} else {
-					const auto uniqueStr = Lang::FormatCountDecimal(item.uniqueCount)
-						+ " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
-					const auto totalStr = Lang::FormatCountDecimal(item.totalCount)
-						+ " (" + Ui::FormatSizeText(item.totalSize) + ")";
-
-					text += label + ": " + uniqueStr + ", " + totalStr + "\n";
-				}
-
-				totalUniqueMediaSize += item.uniqueSize;
-				totalMediaSize += item.totalSize;
-			}
-
-			if (type != MediaType::Link && type != MediaType::Text) {
-				totalUniqueMessagesCount += item.uniqueCount;
-				totalTotalMessagesCount += item.totalCount;
-			}
-		}
-	}
-	int mediaCategoriesCount = 0;
-	for (const auto type : order) {
-		const auto it = _scanResults.find(type);
-		const bool hasData = (it != _scanResults.end() && it->second.totalCount > 0);
-		const bool isTextOrLink = (type == MediaType::Text || type == MediaType::Link);
-		const bool includeInTotal = !isTextOrLink;
-		if ((showAllCategories || hasData) && includeInTotal) {
-			mediaCategoriesCount++;
-		}
-	}
-	if (mediaCategoriesCount > 1) {
-		const auto label = "Total Media: ";
-		const auto uniqueStr = Lang::FormatCountDecimal(totalUniqueMessagesCount)
-			+ " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
-		const auto totalStr = Lang::FormatCountDecimal(totalTotalMessagesCount)
-			+ " (" + Ui::FormatSizeText(totalMediaSize) + ")";
-
-		text += "\n" + QString(label) + uniqueStr + ", " + totalStr;
-	}
-	_scanResultsLabel->entity()->setText(text.trimmed());
-	_scanResultsLabel->toggle(true, anim::type::instant);
-	_container->resizeToWidth(_container->width());
-	_changes.fire_copy(readData());
-}
-
-void SettingsWidget::clearScanResults() {
-	_scanResults.clear();
-	_hasScanResults = false;
-	if (_scanResultsLabel) {
-		_scanResultsLabel->entity()->setText(QString());
-		_scanResultsLabel->hide(anim::type::instant);
-		_container->resizeToWidth(_container->width());
-	}
-	_changes.fire_copy(readData());
-}
-
-void SettingsWidget::resetToDefault() {
-	setScanning(false);
-	changeData([&](Settings &data) {
-		const auto oldSinglePeer = data.singlePeer;
-		const auto oldName = data.singlePeerName;
-		const auto oldId = data.singlePeerId;
-		const auto oldPath = data.path;
-		const auto oldFormat = data.format;
-		const auto oldForce = data.forceSubPath;
-		data = Settings();
-		data.singlePeer = oldSinglePeer;
-		data.singlePeerName = oldName;
-		data.singlePeerId = oldId;
-		data.path = oldPath;
-		data.format = oldFormat;
-		data.forceSubPath = oldForce;
-		data.singlePeerFrom = std::nullopt;
-		data.singlePeerTill = std::nullopt;
-		data.useDateRange = true;  // Default to date range mode
-		data.singlePeerFromId = std::nullopt;
-		data.singlePeerTillId = std::nullopt;
-		data.useIdRange = false;
-		data.media.types = MediaSettings::Types(0); // Reset all media type checkboxes
-		data.media.sizeLimit = 4000LL * 1024 * 1024; // Explicitly reset size limit
-		data.media.extensionFilter.clear();
-		data.media.extensionFilterMode = MediaSettings::ExtFilterMode::None;
-		data.types = Settings::Types(0);
-	});
-	clearScanResults();
-}
-
-void SettingsWidget::restoreSettings(const Settings &data) {
-	changeData([&](Settings &current) {
-		current.media.types = data.media.types;
-		current.media.sizeLimit = data.media.sizeLimit;
-		current.media.extensionFilterMode = data.media.extensionFilterMode;
-		current.media.extensionFilter = data.media.extensionFilter;
-		current.types = data.types;
-		current.fullChats = data.fullChats;
-		current.format = data.format;
-		
-		current.singlePeerFrom = data.singlePeerFrom;
-		current.singlePeerTill = data.singlePeerTill;
-		current.useDateRange = data.useDateRange;
-		current.useIdRange = data.useIdRange;
-		current.singlePeerFromId = data.singlePeerFromId;
-		current.singlePeerTillId = data.singlePeerTillId;
-	});
+	return _cancelClicks.value(
+	) | rpl::map([](Wrap &&wrap) {
+		return std::move(wrap.value);
+	}) | rpl::flatten_latest();
 }
 
 } // namespace View

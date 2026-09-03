@@ -139,12 +139,6 @@ Result HtmlAndJsonWriter::writeDialogsEnd() {
 	});
 }
 
-Result HtmlAndJsonWriter::writeUniqueLinks(const base::flat_set<QString> &links) {
-	return invoke([&](WriterPtr w) {
-		return w->writeUniqueLinks(links);
-	});
-}
-
 Result HtmlAndJsonWriter::finish() {
 	return invoke([&](WriterPtr w) {
 		return w->finish();
@@ -153,16 +147,6 @@ Result HtmlAndJsonWriter::finish() {
 
 QString HtmlAndJsonWriter::mainFilePath() {
 	return _writers.front()->mainFilePath();
-}
-
-int HtmlAndJsonWriter::lastWrittenMessageId() const {
-	return _writers.front()->lastWrittenMessageId();
-}
-
-void HtmlAndJsonWriter::updateStatsInFirstFile() {
-	for (const auto &writer : _writers) {
-		writer->updateStatsInFirstFile();
-	}
 }
 
 HtmlAndJsonWriter::~HtmlAndJsonWriter() = default;
@@ -179,4 +163,3 @@ Result HtmlAndJsonWriter::invoke(Fn<Result(WriterPtr)> method) const {
 }
 
 } // namespace Export::Output
-

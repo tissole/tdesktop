@@ -16,6 +16,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "data/data_media_types.h"
 #include "data/data_forum_topic.h"
+#include "data/data_user.h"
+#include "iv/editor/iv_editor_session.h"
 #include "main/main_session.h"
 #include "ui/chat/forward_options_box.h"
 #include "ui/effects/spoiler_mess.h"
@@ -96,9 +98,9 @@ void ForwardPanel::checkTexts() {
 		return;
 	}
 	const auto keepNames = (_data.options
-		== Data::ForwardOptions::Quoted);
+		== Data::ForwardOptions::PreserveInfo);
 	const auto keepCaptions = (_data.options
-		!= Data::ForwardOptions::UnquotedWithoutCaptions);
+		!= Data::ForwardOptions::NoNamesAndCaptions);
 	auto version = keepNames
 		? 0
 		: keepCaptions
@@ -133,9 +135,9 @@ void ForwardPanel::updateTexts() {
 	QString from;
 	TextWithEntities text;
 	const auto keepNames = (_data.options
-		== Data::ForwardOptions::Quoted);
+		== Data::ForwardOptions::PreserveInfo);
 	const auto keepCaptions = (_data.options
-		!= Data::ForwardOptions::UnquotedWithoutCaptions);
+		!= Data::ForwardOptions::NoNamesAndCaptions);
 	if (const auto count = int(_data.items.size())) {
 		auto insertedPeers = base::flat_set<not_null<PeerData*>>();
 		auto insertedNames = base::flat_set<QString>();
@@ -236,7 +238,9 @@ bool ForwardPanel::empty() const {
 void ForwardPanel::applyOptions(Data::ForwardOptions options) {
 	if (_data.items.empty()) {
 		return;
-	} else if (_data.options != options) {
+	}
+	options = NormalizeForwardOptions(&_to->session(), _data.items, options);
+	if (_data.options != options) {
 		const auto topicRootId = _to->topicRootId();
 		const auto monoforumPeerId = _to->monoforumPeerId();
 		_data.options = options;
@@ -258,11 +262,11 @@ void ForwardPanel::editToNextOption() {
 	}
 
 	const auto now = _data.options;
-	const auto next = (now == Options::Quoted)
-		? Options::UnquotedWithCaptions
-		: ((now == Options::UnquotedWithCaptions) && captionsCount)
-		? Options::UnquotedWithoutCaptions
-		: Options::Quoted;
+	const auto next = (now == Options::PreserveInfo)
+		? Options::NoSenderNames
+		: ((now == Options::NoSenderNames) && captionsCount)
+		? Options::NoNamesAndCaptions
+		: Options::PreserveInfo;
 
 	const auto topicRootId = _to->topicRootId();
 	const auto monoforumPeerId = _to->monoforumPeerId();
@@ -477,6 +481,50 @@ bool HasDropForwardedInfoSetting(const HistoryItemsList &list) {
 		}
 	}
 	return false;
+}
+
+bool HasRichPage(const HistoryItemsList &list) {
+	for (const auto &item : list) {
+		if (item->richPage()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool CanHideForwardAuthor(
+		not_null<Main::Session*> session,
+		const HistoryItemsList &list) {
+	if (list.empty()) {
+		return true;
+	}
+	if (HasOnlyForcedForwardedInfo(list)) {
+		return false;
+	}
+	if (!Iv::Editor::CanAuthorRichMessages(session) && HasRichPage(list)) {
+		return false;
+	}
+	return session->premium() || !HasRichPage(list);
+}
+
+bool HideForwardAuthorPremiumRequired(
+		not_null<Main::Session*> session,
+		const HistoryItemsList &list) {
+	return Iv::Editor::CanAuthorRichMessages(session)
+		&& !list.empty()
+		&& !session->premium()
+		&& !HasOnlyForcedForwardedInfo(list)
+		&& HasRichPage(list)
+		&& HasDropForwardedInfoSetting(list);
+}
+
+Data::ForwardOptions NormalizeForwardOptions(
+		not_null<Main::Session*> session,
+		const HistoryItemsList &list,
+		Data::ForwardOptions options) {
+	return CanHideForwardAuthor(session, list)
+		? options
+		: Data::ForwardOptions::PreserveInfo;
 }
 
 } // namespace HistoryView::Controls

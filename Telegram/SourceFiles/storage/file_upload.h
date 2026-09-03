@@ -49,7 +49,7 @@ struct UploadSecureProgress {
 	int64 size = 0;
 };
 
-struct UploadProgress {
+struct UploadFileProgress {
 	FullMsgId fullId;
 	int64 offset = 0;
 	int64 size = 0;
@@ -100,6 +100,9 @@ public:
 	[[nodiscard]] rpl::producer<UploadedMedia> documentReady() const {
 		return _documentReady.events();
 	}
+	[[nodiscard]] rpl::producer<UploadedMedia> secondaryFileReady() const {
+		return _secondaryFileReady.events();
+	}
 	[[nodiscard]] rpl::producer<UploadSecureDone> secureReady() const {
 		return _secureReady.events();
 	}
@@ -110,22 +113,29 @@ public:
 		return _documentProgress.events();
 	}
 	[[nodiscard]] auto photoProgressInfo() const
-	-> rpl::producer<UploadProgress> {
+	-> rpl::producer<UploadFileProgress> {
 		return _photoProgressInfo.events();
 	}
 	[[nodiscard]] auto documentProgressInfo() const
-	-> rpl::producer<UploadProgress> {
+	-> rpl::producer<UploadFileProgress> {
 		return _documentProgressInfo.events();
 	}
 	[[nodiscard]] auto secureProgress() const
 	-> rpl::producer<UploadSecureProgress> {
 		return _secureProgress.events();
 	}
+	[[nodiscard]] auto secondaryFileProgress() const
+	-> rpl::producer<UploadFileProgress> {
+		return _secondaryFileProgress.events();
+	}
 	[[nodiscard]] rpl::producer<FullMsgId> photoFailed() const {
 		return _photoFailed.events();
 	}
 	[[nodiscard]] rpl::producer<FullMsgId> documentFailed() const {
 		return _documentFailed.events();
+	}
+	[[nodiscard]] rpl::producer<FullMsgId> secondaryFileFailed() const {
+		return _secondaryFileFailed.events();
 	}
 	[[nodiscard]] rpl::producer<FullMsgId> secureFailed() const {
 		return _secureFailed.events();
@@ -145,7 +155,7 @@ public:
 	[[nodiscard]] rpl::producer<> loadingListChanges() const;
 	void notifyListChanged();
 	[[nodiscard]] rpl::producer<> finishedUploadsCleared() const;
-	[[nodiscard]] rpl::producer<UploadProgress> uploadProgressValue() const;
+	[[nodiscard]] rpl::producer<UploadFileProgress> uploadProgressValue() const;
 	[[nodiscard]] bool anyUploads() const;
 	[[nodiscard]] int anyFinishedUploads() const;
 	[[nodiscard]] bool anyUploadsPaused() const;
@@ -215,6 +225,14 @@ private:
 	};
 
 	void maybeSend();
+	void startTranscode(FullMsgId itemId);
+	void maybeStartTranscode();
+	void runTranscode(FullMsgId itemId);
+	void updatePrepareProgress(FullMsgId itemId, float64 progress);
+	void finishTranscode(
+		FullMsgId itemId,
+		QByteArray bytes,
+		const QString &path);
 	[[nodiscard]] bool canAddDcIndex() const;
 	[[nodiscard]] std::optional<uchar> chooseDcIndexForNextRequest(
 		const base::flat_set<uchar> &used);
@@ -285,6 +303,8 @@ private:
 	base::flat_map<FullMsgId, FinishedUpload> _awaitingFinishedUploads;
 	int _jobId = 0;
 	rpl::event_stream<> _jobCounterChanged;
+	std::deque<FullMsgId> _transcodeQueue;
+	bool _transcodeRunning = false;
 
 	base::flat_map<mtpRequestId, Request> _requests;
 	std::vector<int> _sentPerDcIndex;
@@ -302,14 +322,17 @@ private:
 
 	rpl::event_stream<UploadedMedia> _photoReady;
 	rpl::event_stream<UploadedMedia> _documentReady;
+	rpl::event_stream<UploadedMedia> _secondaryFileReady;
 	rpl::event_stream<UploadSecureDone> _secureReady;
 	rpl::event_stream<FullMsgId> _photoProgress;
 	rpl::event_stream<FullMsgId> _documentProgress;
-	rpl::event_stream<UploadProgress> _photoProgressInfo;
-	rpl::event_stream<UploadProgress> _documentProgressInfo;
+	rpl::event_stream<UploadFileProgress> _photoProgressInfo;
+	rpl::event_stream<UploadFileProgress> _documentProgressInfo;
+	rpl::event_stream<UploadFileProgress> _secondaryFileProgress;
 	rpl::event_stream<UploadSecureProgress> _secureProgress;
 	rpl::event_stream<FullMsgId> _photoFailed;
 	rpl::event_stream<FullMsgId> _documentFailed;
+	rpl::event_stream<FullMsgId> _secondaryFileFailed;
 	rpl::event_stream<FullMsgId> _secureFailed;
 	rpl::event_stream<FullMsgId> _nonPremiumDelays;
 
@@ -317,7 +340,7 @@ private:
 	rpl::event_stream<> _finishedUploadsCleared;
 	rpl::event_stream<FullMsgId> _finishedUploadAdded;
 	rpl::event_stream<FullMsgId> _finishedUploadRemoved;
-	rpl::variable<UploadProgress> _uploadProgress;
+	rpl::variable<UploadFileProgress> _uploadProgress;
 
 	bool _paused = false;
 	crl::time _lastResumeSave = 0;

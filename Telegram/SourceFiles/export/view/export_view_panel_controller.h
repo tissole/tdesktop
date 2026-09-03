@@ -45,7 +45,6 @@ public:
 	void activatePanel();
 	void stopWithConfirmation(Fn<void()> callback = nullptr);
 
-	[[nodiscard]] bool isScanning() const;
 	[[nodiscard]] rpl::producer<> stopRequests() const;
 
 	[[nodiscard]] rpl::lifetime &lifetime() {
@@ -54,12 +53,12 @@ public:
 
 	auto progressState() const {
 		return ContentFromState(
+			_settings.get(),
 			rpl::single(_state) | rpl::then(_process->state()));
 	}
 
 private:
 	void fillParams(const PasswordCheckState &state);
-	void checkExistingExport(Fn<void(SettingsWidget::ExistingExport, std::optional<Settings>)> callback) const;
 	void stopExport();
 	void createPanel();
 	void updateState(State &&state);

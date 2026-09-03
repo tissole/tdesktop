@@ -16,8 +16,6 @@ PRIVATE
     export/export_controller.cpp
     export/export_controller.h
     export/export_pch.h
-    export/export_progress.cpp
-    export/export_progress.h
     export/export_settings.cpp
     export/export_settings.h
     export/data/export_data_types.cpp
@@ -44,7 +42,6 @@ PUBLIC
 
 target_link_libraries(td_export
 PUBLIC
-    tdesktop::td_ui
     desktop-app::lib_base
     tdesktop::td_scheme
 )

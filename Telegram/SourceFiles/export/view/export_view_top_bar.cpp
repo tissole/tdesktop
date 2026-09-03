@@ -39,10 +39,6 @@ rpl::producer<Qt::MouseButton> TopBar::clicks() const {
 	return _button->clicks();
 }
 
-rpl::producer<> TopBar::hideRequests() const {
-	return _hideRequests.events();
-}
-
 void TopBar::resizeToWidthInfo(int w) {
 	if (w <= 0) {
 		return;
@@ -88,23 +84,11 @@ void TopBar::updateData(Content &&content) {
 	if (content.rows.empty()) {
 		return;
 	}
-	// "scan_complete" is a sentinel emitted after scanning finishes or is cancelled.
-	// Clear the top bar so "Scanning..." / "Exporting your data" disappears.
-	if (content.rows[0].id == QStringLiteral("scan_complete")) {
-		_infoLeft->setText(QString());
-		_infoMiddle->setText(QString());
-		_infoRight->setText(QString());
-		_progress->setValue(0.);
-		hideShadow();
-		_hideRequests.fire({});
-		return;
-	}
-	// Bug fix: showShadow not called during export, only during scan.
-	// Call it here so the progress bar is always visible for both phases.
-	showShadow();
 	const auto &row = content.rows[0];
 	_infoLeft->setMarkedText(
-		(content.isScanning ? tr::lng_export_scanning : tr::lng_export_progress_title)(tr::now, Ui::Text::Bold));
+		tr::lng_export_progress_title(tr::now, tr::bold)
+			.append(' ')
+			.append(QChar(0x2013)));
 	_infoMiddle->setText(row.label);
 	_infoRight->setMarkedText(Ui::Text::Colorized(row.info));
 	resizeToWidthInfo(width());

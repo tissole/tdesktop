@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document_media.h"
 #include "dialogs/ui/dialogs_layout.h"
 #include "history/history.h"
+#include "history/history_drag_area.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/shadow.h"
@@ -51,8 +52,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "window/window_setup_email.h"
 #include "window/window_media_preview.h"
-#include "styles/style_dialogs.h"
-#include "styles/style_layers.h"
 #include "styles/style_window.h"
 
 #include <QtGui/QWindow>
@@ -187,7 +186,8 @@ void MainWindow::clearWidgetsHook() {
 }
 
 QPixmap MainWindow::grabForSlideAnimation() {
-	return Ui::GrabWidget(bodyWidget());
+	const auto body = bodyWidget();
+	return body->size().isEmpty() ? QPixmap() : Ui::GrabWidget(body);
 }
 
 void MainWindow::preventOrInvoke(Fn<void()> callback) {
@@ -267,7 +267,6 @@ void MainWindow::clearSetupEmailLock() {
 		_main->show();
 		updateControlsGeometry();
 		_main->showAnimated(std::move(oldContentCache), true);
-		Core::App().checkStartUrls();
 	}
 }
 
@@ -298,6 +297,7 @@ void MainWindow::clearPasscodeLock() {
 
 void MainWindow::setupIntro(
 		Intro::EnterPoint point,
+		Main::Account *accountBeforeIntro,
 		QPixmap oldContentCache) {
 	auto animated = (_main || _passcodeLock || _setupEmailLock);
 
@@ -306,7 +306,8 @@ void MainWindow::setupIntro(
 		bodyWidget(),
 		&controller(),
 		&account(),
-		point);
+		point,
+		accountBeforeIntro);
 	created->showSettingsRequested(
 	) | rpl::on_next([=] {
 		showSettings();
@@ -314,6 +315,9 @@ void MainWindow::setupIntro(
 
 	clearWidgets();
 	_intro = std::move(created);
+	DragArea::SetupProxyDropArea(_intro.data(), [](const QString &localUrl) {
+		Core::App().openLocalUrl(localUrl, {});
+	});
 	if (_passcodeLock || _setupEmailLock) {
 		_intro->hide();
 	} else {
@@ -382,6 +386,7 @@ void MainWindow::showSettings() {
 	if (const auto session = sessionController()) {
 		session->showSettings();
 	} else {
+		controller().hideLayer(anim::type::instant);
 		showSpecialLayer(
 			Box<Settings::LayerWidget>(&controller()),
 			anim::type::normal);
@@ -438,6 +443,11 @@ void MainWindow::ensureLayerCreated() {
 		destroyLayer();
 	}, _layer->lifetime());
 
+	_layer->boxShownValue(
+	) | rpl::on_next([=](bool shown) {
+		_boxShown = shown;
+	}, _layer->lifetime());
+
 	if (const auto controller = sessionController()) {
 		controller->enableGifPauseReason(Window::GifPauseReason::Layer);
 	}
@@ -449,6 +459,7 @@ void MainWindow::destroyLayer() {
 	}
 
 	auto layer = base::take(_layer);
+	_boxShown = false;
 	const auto resetFocus = Ui::InFocusChain(layer);
 	if (resetFocus) {
 		setFocus();
@@ -514,6 +525,14 @@ void MainWindow::showOrHideBoxOrLayer(
 
 bool MainWindow::ui_isLayerShown() const {
 	return _layer != nullptr;
+}
+
+rpl::producer<bool> MainWindow::ui_boxShownValue() const {
+	return _boxShown.value();
+}
+
+bool MainWindow::closeLayerByBackButton() {
+	return _layer && _layer->closeCurrentByBackButton();
 }
 
 bool MainWindow::showMediaPreview(
@@ -779,14 +798,18 @@ void MainWindow::updateControlsGeometry() {
 	if (_main) _main->checkMainSectionToLayer();
 }
 
-void MainWindow::sendPaths() {
+void MainWindow::handleStartFiles(
+		QStringList interprets,
+		QStringList paths) {
 	if (controller().locked()) {
 		return;
 	}
 	Core::App().hideMediaView();
 	ui_hideSettingsAndLayer(anim::type::instant);
 	if (_main) {
-		_main->activate();
+		_main->handleStartFiles(
+			std::move(interprets),
+			std::move(paths));
 	}
 }
 

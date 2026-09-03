@@ -978,6 +978,7 @@ Ui::PreparedFileInformation PrepareForSending(
 
 		result.isGifv = reader->isGifv();
 		result.isWebmSticker = reader->isWebmSticker();
+		result.hasAudio = reader->hasAudio();
 
 		{
 			auto isNonBlank = [](const QImage &image) {

@@ -64,15 +64,9 @@ public:
 	Result writeDialogEnd() override;
 	Result writeDialogsEnd() override;
 
-	Result writeUniqueLinks(const base::flat_set<QString> &links) override;
-
 	Result finish() override;
 
 	QString mainFilePath() override;
-
-	int lastWrittenMessageId() const override;
-
-	void updateStatsInFirstFile() override;
 
 private:
 	using Context = details::JsonContext;
@@ -86,14 +80,12 @@ private:
 	[[nodiscard]] QByteArray prepareObjectItemStart(const QByteArray &key);
 	[[nodiscard]] QByteArray prepareArrayItemStart();
 	[[nodiscard]] QByteArray popNesting();
-	[[nodiscard]] QByteArray formatSize(int64 bytes) const;
 
 	[[nodiscard]] QString mainFileRelativePath() const;
 	[[nodiscard]] QString pathWithRelativePath(const QString &path) const;
 	[[nodiscard]] std::unique_ptr<File> fileWithRelativePath(
 		const QString &path) const;
 
-	[[nodiscard]] Result writeBlock(const QByteArray &block);
 	[[nodiscard]] Result writeSavedContacts(const Data::ContactsList &data);
 	[[nodiscard]] Result writeFrequentContacts(const Data::ContactsList &data);
 
@@ -115,8 +107,6 @@ private:
 	DialogsMode _dialogsMode = DialogsMode::None;
 
 	std::unique_ptr<File> _output;
-
-	int _lastWrittenMessageId = 0;
 
 };
 

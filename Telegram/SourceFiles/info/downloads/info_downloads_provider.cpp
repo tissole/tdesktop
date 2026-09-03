@@ -926,7 +926,13 @@ void Provider::remove(not_null<const HistoryItem*> item) {
 	_elements.erase(ranges::remove_if(_elements, proj), end(_elements));
 	if (const auto i = _layouts.find(item); i != end(_layouts)) {
 		_layoutRemoved.fire(i->second.item.get());
-		_layouts.erase(i);
+		// The list widget handles layoutRemoved() synchronously and may
+		// refresh its height from there, which can reach refreshViewer()
+		// -> refreshRows() -> fillSections() -> clearStaleLayouts() before
+		// we get back here, erasing this very entry, so look it up again.
+		if (const auto j = _layouts.find(item); j != end(_layouts)) {
+			_layouts.erase(j);
+		}
 	}
 	refreshPostponed(false);
 }
@@ -1218,8 +1224,15 @@ BaseLayout *Provider::getLayout(
 std::unique_ptr<BaseLayout> Provider::createLayout(
 		Element element,
 		not_null<Overview::Layout::Delegate*> delegate) {
-	const auto media = element.item->media();
+	const auto getFile = [&]() -> DocumentData* {
+		if (auto media = element.item->media()) {
+			return media->document();
+		}
+		return nullptr;
+	};
+
 	using namespace Overview::Layout;
+	const auto media = element.item->media();
 	if (const auto photo = media ? media->photo() : nullptr) {
 		return std::make_unique<Photo>(
 			delegate,
@@ -1227,45 +1240,65 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 			photo,
 			MediaOptions{ .spoiler = media && media->hasSpoiler() });
 	}
-	if (const auto file = media ? media->document() : nullptr) {
-		auto &songSt = st::overviewFileLayout;
+	const auto &songSt = st::overviewFileLayout;
+	if (const auto file = getFile()) {
 		const auto srcId = element.item->fullId();
 		const auto session = &_controller->session();
+		auto fields = DocumentFields{
+			.document = file,
+			.dateOverride = Data::DateFromDownloadDate(element.started),
+			.forceFileLayout = true,
+			.forceCancelCheck = [this, id = srcId] {
+				if (_efPending.contains(id)
+					|| _efTransferring.contains(id)) {
+					return true;
+				}
+				const auto item = _controller->session().data().message(id);
+				if (!item) {
+					return false;
+				}
+				const auto media = item->media();
+				const auto doc = media ? media->document() : nullptr;
+				return doc && (doc->uploadingData != nullptr);
+			},
+			.savedProgress = [session, srcId](qint64 *r, qint64 *t) {
+				const auto bytes = EnhancedForward::persistedItemBytes(
+					session,
+					srcId);
+				const auto total = EnhancedForward::persistedItemFileSize(
+					session,
+					srcId);
+				if (!bytes || !total || *total <= 0) {
+					return false;
+				}
+				*r = std::min(*bytes, *total);
+				*t = *total;
+				return true;
+			},
+		};
+		const auto item = element.item;
+		auto &manager = Core::App().downloadManager();
+		if (manager.loadingExternalState(item).has_value()) {
+			fields.externalLoading = [item]()
+			-> std::optional<DocumentExternalLoading> {
+				auto &manager = Core::App().downloadManager();
+				const auto state = manager.loadingExternalState(item);
+				if (!state || state->done) {
+					return std::nullopt;
+				}
+				return DocumentExternalLoading{
+					.ready = state->ready,
+					.total = state->total,
+				};
+			};
+			fields.externalCancel = [item] {
+				Core::App().downloadManager().cancelLoadingExternal(item);
+			};
+		}
 		return std::make_unique<Document>(
 			delegate,
 			element.item,
-			DocumentFields{
-				.document = file,
-				.dateOverride = Data::DateFromDownloadDate(element.started),
-				.forceFileLayout = true,
-				.forceCancelCheck = [this, id = srcId] {
-					if (_efPending.contains(id)
-						|| _efTransferring.contains(id)) {
-						return true;
-					}
-					const auto item = _controller->session().data().message(id);
-					if (!item) {
-						return false;
-					}
-					const auto media = item->media();
-					const auto doc = media ? media->document() : nullptr;
-					return doc && (doc->uploadingData != nullptr);
-				},
-				.savedProgress = [session, srcId](qint64 *r, qint64 *t) {
-					const auto bytes = EnhancedForward::persistedItemBytes(
-						session,
-						srcId);
-					const auto total = EnhancedForward::persistedItemFileSize(
-						session,
-						srcId);
-					if (!bytes || !total || *total <= 0) {
-						return false;
-					}
-					*r = std::min(*bytes, *total);
-					*t = *total;
-					return true;
-				},
-			},
+			std::move(fields),
 			songSt);
 	}
 	return nullptr;

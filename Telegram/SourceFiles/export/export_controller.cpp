@@ -7,158 +7,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "export/export_controller.h"
 
-#include <memory>
-#include <QStringLiteral>
-
-#include "export/view/export_view_settings.h"
 #include "export/export_api_wrap.h"
-#include "export/export_global_dedup.h"
 #include "export/export_settings.h"
-#include "export/export_progress.h"
-#include "export/output/export_output_abstract.h"
 #include "export/data/export_data_types.h"
+#include "export/output/export_output_abstract.h"
 #include "export/output/export_output_result.h"
 #include "export/output/export_output_stats.h"
-#include <QtCore/QFile>
-#include <QtCore/QDir>
 #include "mtproto/mtp_instance.h"
-#include "ui/widgets/buttons.h"
-#include "ui/widgets/labels.h"
-#include "ui/boxes/confirm_box.h"
-#include "ui/layers/show.h"
-#include "ui/text/format_values.h"
-#include "lang/lang_keys.h"
-#include "base/weak_ptr.h"
-
-#include <QtCore/QFile>
-#include <QtCore/QTextStream>
 
 namespace Export {
 namespace {
 
 const auto kNullStateCallback = [](ProcessingState&) {};
-
-void WriteScanStatsFile(
-		const Settings &settings,
-		const std::map<MediaSettings::Type, Output::StatItem> &stats) {
-	if (!QDir().mkpath(settings.path)) {
-		return;
-	}
-	auto sanitizedName = settings.singlePeerName;
-	sanitizedName.replace(QRegularExpression("[^a-zA-Z0-9_-]"), "_");
-	const auto fileName = "scan_results_" + QString::number(settings.singlePeerId) + "_" + sanitizedName + ".txt";
-	QFile file(settings.path + fileName);
-	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-		return;
-	}
-
-	QTextStream out(&file);
-	out << "Export Scan Results\n";
-	out << "-------------------\n";
-
-	using Type = MediaSettings::Type;
-	const std::vector<Type> order = {
-		Type::Photo, Type::Video, Type::VideoMessage, Type::Audio,
-		Type::VoiceMessage, Type::File, Type::Sticker, Type::GIF,
-		Type::Text, Type::Link
-	};
-
-	int categoriesCount = 0;
-	int totalUniqueMessagesCount = 0;
-	int totalTotalMessagesCount = 0;
-	int64 totalUniqueMediaSize = 0;
-	int64 totalMediaSize = 0;
-
-	const auto selected = settings.media.types;
-	const bool fullHistory = (selected & Type::FullHistory);
-
-	for (const auto type : order) {
-		const bool isSelected = fullHistory || (selected & type);
-		if (!isSelected) {
-			continue;
-		}
-
-		const auto it = stats.find(type);
-		if (it == stats.end() || it->second.totalCount <= 0) {
-			continue;
-		}
-		const auto &item = it->second;
-		QString label;
-		switch (type) {
-		case Type::Photo: label = tr::lng_export_option_photos(tr::now); break;
-		case Type::Video: label = tr::lng_export_option_video_files(tr::now); break;
-		case Type::VoiceMessage: label = tr::lng_export_option_voice_messages(tr::now); break;
-		case Type::VideoMessage: label = tr::lng_export_option_video_messages(tr::now); break;
-		case Type::Audio: label = tr::lng_export_option_audios(tr::now); break;
-		case Type::Sticker: label = tr::lng_export_option_stickers(tr::now); break;
-		case Type::GIF: label = tr::lng_export_option_gifs(tr::now); break;
-		case Type::File: label = tr::lng_export_option_files(tr::now); break;
-		case Type::Text: label = tr::lng_export_option_text_messages(tr::now); break;
-		case Type::Link: label = tr::lng_export_option_links(tr::now); break;
-		}
-		if (label.isEmpty()) continue;
-
-		categoriesCount++;
-
-		if (type == Type::Text) {
-			out << label << ": " << item.totalCount << "\n";
-		} else if (type == Type::Link) {
-			const auto messagesStr = (item.messagesWithLinks > 0)
-				? " (" + QString::number(item.messagesWithLinks) + " Messages)"
-				: QString();
-			out << label << ": " << item.uniqueCount << ", " << item.totalCount << messagesStr << "\n";
-		} else {
-			const auto uniqueStr = QString::number(item.uniqueCount) + " (" + Ui::FormatSizeText(item.uniqueSize) + ")";
-			if (item.totalCount == item.uniqueCount && item.totalSize == item.uniqueSize) {
-				out << label << ": " << uniqueStr << "\n";
-			} else {
-				const auto totalStr = QString::number(item.totalCount) + " (" + Ui::FormatSizeText(item.totalSize) + ")";
-				out << label << ": " << uniqueStr << ", " << totalStr << "\n";
-			}
-			totalUniqueMediaSize += item.uniqueSize;
-			totalMediaSize += item.totalSize;
-		}
-
-		if (type != Type::Link && type != Type::Text) {
-			totalUniqueMessagesCount += item.uniqueCount;
-			totalTotalMessagesCount += item.totalCount;
-		}
-	}
-
-	if (categoriesCount > 1 && totalTotalMessagesCount > 0) {
-		const auto uniqueStr = QString::number(totalUniqueMessagesCount) + " (" + Ui::FormatSizeText(totalUniqueMediaSize) + ")";
-		if (totalTotalMessagesCount == totalUniqueMessagesCount && totalMediaSize == totalUniqueMediaSize) {
-			out << "\nTotal Media: " << uniqueStr << "\n";
-		} else {
-			const auto totalStr = QString::number(totalTotalMessagesCount) + " (" + Ui::FormatSizeText(totalMediaSize) + ")";
-			out << "\nTotal Media: " << uniqueStr << ", " << totalStr << "\n";
-		}
-	} else if (categoriesCount <= 0) {
-		out << "\nNo messages found in this range.\n";
-	}
-}
-
-void WriteUniqueLinksFile(
-		const Settings &settings,
-		const base::flat_set<QString> &links) {
-	if (links.empty()) {
-		return;
-	}
-	if (!QDir().mkpath(settings.path)) {
-		return;
-	}
-	auto sanitizedName = settings.singlePeerName;
-	sanitizedName.replace(QRegularExpression("[^a-zA-Z0-9_-]"), "_");
-	const auto fileName = "unique_links_" + QString::number(settings.singlePeerId) + "_" + sanitizedName + ".txt";
-	QFile file(settings.path + fileName);
-	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-		return;
-	}
-	QTextStream out(&file);
-	for (const auto &link : links) {
-		out << link << "\n";
-	}
-}
 
 Settings NormalizeSettings(const Settings &settings) {
 	if (!settings.onlySinglePeer()) {
@@ -195,39 +55,21 @@ public:
 	//void cancelUnconfirmedPassword();
 
 	// Processing step.
-	void runScan(
-		const Export::Settings &settings,
-		const Export::Environment &environment);
-	void runUpdateScan(
-		const Export::Settings &settings,
-		const Export::Environment &environment,
-		const QString &folderPath);
 	void startExport(
-		const Export::Settings &settings,
-		const Export::Environment &environment);
-	void resumeExport(
-		const Export::Settings &settings,
-		const Export::Environment &environment);
-	void checkExistingExport(std::function<void(Export::View::SettingsWidget::ExistingExport)> callback) const;
+		const Settings &settings,
+		const Environment &environment);
 	void skipFile(uint64 randomId);
-	void cancelExportFast(bool keepCache = false);
-	void clearResults();
-
+	void cancelExportFast();
 
 private:
 	using Step = ProcessingState::Step;
 	using DownloadProgress = ApiWrap::DownloadProgress;
 
-	base::flat_map<uint64, FileDownloadProgress> _activeDownloads;
-
 	[[nodiscard]] bool stopped() const;
 	void setState(State &&state);
 	void ioError(const QString &path);
 	bool ioCatchError(Output::Result result);
-	void setFinishedState(
-		std::map<MediaSettings::Type, Output::StatItem> exportBreakdown = {},
-		std::map<MediaSettings::Type, Output::StatItem> scanBreakdown = {},
-		bool scanStatsFound = false);
+	void setFinishedState();
 
 	//void requestPasswordState();
 	//void passwordStateDone(const MTPaccount_Password &password);
@@ -247,7 +89,6 @@ private:
 	void exportOtherData();
 	void exportDialogs();
 	void exportNextDialog();
-	void startExportMessages(const Data::DialogInfo *info, uint64 fromId, uint64 tillId);
 	void exportTopic();
 
 	template <typename Callback = const decltype(kNullStateCallback) &>
@@ -263,7 +104,6 @@ private:
 	ProcessingState stateContacts() const;
 	ProcessingState stateSessions() const;
 	ProcessingState stateOtherData() const;
-	ProcessingState stateScanning(int itemIndex, int itemCount) const;
 	ProcessingState stateDialogs(const DownloadProgress &progress) const;
 	ProcessingState stateTopic(const DownloadProgress &progress) const;
 	void fillMessagesState(
@@ -272,29 +112,24 @@ private:
 		int index,
 		const DownloadProgress &progress) const;
 
-	void syncStatsFromGlobalDedup();
-
 	int substepsInStep(Step step) const;
 
 	ApiWrap _api;
 	Settings _settings;
 	Environment _environment;
 
-	bool _isScanning = false;
-	bool _scanStatsFound = false;
-	Output::Stats _scanStats;
-
 	Data::DialogsInfo _dialogsInfo;
 	int _dialogIndex = -1;
 
 	int _messagesWritten = 0;
 	int _messagesCount = 0;
+
 	int _userpicsWritten = 0;
 	int _userpicsCount = 0;
+
 	int _storiesWritten = 0;
 	int _storiesCount = 0;
-	int _contentFilesCount = 0;
-	bool _messagesInRangeCountFixed = false;
+
 	int _profileMusicWritten = 0;
 	int _profileMusicCount = 0;
 
@@ -325,7 +160,7 @@ ControllerObject::ControllerObject(
 	crl::weak_on_queue<ControllerObject> weak,
 	QPointer<MTP::Instance> mtproto,
 	const MTPInputPeer &peer)
-: _api(mtproto, weak.runner(), mtproto ? mtproto->mainDcId() : 0)
+: _api(mtproto, weak.runner())
 , _state(PasswordCheckState{}) {
 	_api.errors(
 	) | rpl::on_next([=](const MTP::Error &error) {
@@ -336,12 +171,6 @@ ControllerObject::ControllerObject(
 	) | rpl::on_next([=](const Output::Result &result) {
 		ioCatchError(result);
 	}, _lifetime);
-
-	_api.setFileCompletedCallback([=] {
-		if (_writer) {
-			_writer->updateStatsInFirstFile();
-		}
-	});
 
 	//requestPasswordState();
 	auto state = PasswordCheckState();
@@ -358,7 +187,7 @@ ControllerObject::ControllerObject(
 	int32 topicRootId,
 	uint64 peerId,
 	const QString &topicTitle)
-: _api(mtproto, weak.runner(), mtproto ? mtproto->mainDcId() : 0)
+: _api(mtproto, weak.runner())
 , _state(PasswordCheckState{})
 , _topicRootId(topicRootId)
 , _topicPeerId(peerId)
@@ -372,12 +201,6 @@ ControllerObject::ControllerObject(
 	) | rpl::on_next([=](const Output::Result &result) {
 		ioCatchError(result);
 	}, _lifetime);
-
-	_api.setFileCompletedCallback([=] {
-		if (_writer) {
-			_writer->updateStatsInFirstFile();
-		}
-	});
 
 	//requestPasswordState();
 	auto state = PasswordCheckState();
@@ -401,7 +224,6 @@ rpl::producer<State> ControllerObject::state() const {
 bool ControllerObject::stopped() const {
 	return v::is<CancelledState>(_state)
 		|| v::is<ApiErrorState>(_state)
-		|| v::is<ValueErrorState>(_state)
 		|| v::is<OutputErrorState>(_state)
 		|| v::is<FinishedState>(_state);
 }
@@ -470,372 +292,27 @@ bool ControllerObject::ioCatchError(Output::Result result) {
 //
 //}
 
-void ControllerObject::clearResults() {
-	_scanStats.clear();
-	_scanStatsFound = false;
-	_messagesCount = 0;
-	_stats.clear();
-	_api.cancelExportFast(false);
-	_dialogIndex = -1;
-	_state = PasswordCheckState();
-}
-
-void ControllerObject::syncStatsFromGlobalDedup() {
-	const auto dedup = _api.globalDedup();
-	if (!dedup) {
-		return;
-	}
-
-	const auto byType = dedup->statsByType();
-	const auto totalMessages = dedup->totalMessagesCount();
-
-	if (_isScanning) {
-		_scanStats.clear();
-		for (const auto &[type, item] : byType) {
-			_scanStats.increment(type, item.totalSize, item.uniqueSize, item.totalCount, item.uniqueCount, item.messagesWithLinks);
-		}
-		_scanStats.setTotalMessages(totalMessages);
-	} else {
-		_stats.clear();
-		for (const auto &[type, item] : byType) {
-			_stats.increment(type, item.totalSize, item.uniqueSize, item.totalCount, item.uniqueCount, item.messagesWithLinks);
-		}
-		_stats.setTotalMessages(totalMessages);
-	}
-}
-
-void ControllerObject::runScan(
-		const Settings &settings,
-		const Environment &environment) {
-	if (_isScanning) {
-		return;
-	}
-	// Reset any terminal state so setState() calls during scan are not blocked.
-	if (stopped()) {
-		_state = v::null;
-	}
-	_api.clearResults();
-	clearResults();
-	_isScanning = true;
-	_stepIndex = -1;
-	_settings = NormalizeSettings(settings);
-	_settings.path = Output::NormalizePath(_settings);
-	_environment = environment;
-
-	_writer = Output::CreateNullWriter();
-
-	_steps.clear();
-	_steps.push_back(Step::Initializing);
-	if (_settings.types & Settings::Type::AnyChatsMask) {
-		_steps.push_back(Step::DialogsList);
-		_steps.push_back(Step::Scanning);
-	}
-
-	exportNext();
-}
-
-void ControllerObject::runUpdateScan(
-		const Settings &settings,
-		const Environment &environment,
-		const QString &folderPath) {
-	if (_isScanning) {
-		return;
-	}
-	if (stopped()) {
-		_state = v::null;
-	}
-	_api.clearResults();
-	clearResults();
-	_isScanning = true;
-	_stepIndex = -1;
-
-	// Load progress to get last message ID
-	const auto progressPath = ExportProgress::progressFilePath(folderPath);
-	auto progress = ExportProgress::load(progressPath);
-	uint64 lastId = 0;
-	if (progress) {
-		lastId = progress->lastMessageId;
-		// Keep existing settings but move the range to start after lastId
-		_settings = progress->settings;
-	} else {
-		_settings = NormalizeSettings(settings);
-	}
-	
-	_settings.path = folderPath;
-	_settings.useIdRange = true;
-	_settings.singlePeerFromId = lastId;
-	_settings.singlePeerTillId = std::nullopt; // To current latest
-	
-	_environment = environment;
-	_writer = Output::CreateNullWriter();
-
-	_steps.clear();
-	_steps.push_back(Step::Initializing);
-	if (_settings.types & Settings::Type::AnyChatsMask) {
-		_steps.push_back(Step::DialogsList);
-		_steps.push_back(Step::Scanning);
-	}
-
-	exportNext();
-}
-
 void ControllerObject::startExport(
 		const Settings &settings,
 		const Environment &environment) {
-	// Reset any terminal state (CancelledState, FinishedState, error states) so that
-	// setState() calls during the export are not blocked by stopped() returning true.
-	if (stopped()) {
-		_state = v::null;
+	if (!_settings.path.isEmpty()) {
+		return;
 	}
-	_api.clearResults();
-	_stepIndex = -1;
-	_dialogIndex = -1;
-
-	_messagesInRangeCountFixed = true;
 	_settings = NormalizeSettings(settings);
 	_environment = environment;
 	_settings.singleTopicRootId = _topicRootId;
 	_settings.singleTopicPeerId = _topicPeerId;
 
-	syncStatsFromGlobalDedup();
-	
-	_stats.clear();
-	using MediaType = MediaSettings::Type;
-	const bool fullHistoryMode = (_settings.media.types & MediaType::FullHistory);
-	int totalMediaFilesCount = 0; // media-only count for file download progress
-
-	for (const auto &pair : _scanStats.byType()) {
-		const auto type = pair.first;
-		const auto &item = pair.second;
-		const bool isDownloadable = (type != MediaType::Text && type != MediaType::Link);
-		const bool selected = fullHistoryMode
-			? isDownloadable
-			: (bool)(_settings.media.types & type);
-		if (selected && isDownloadable) {
-			totalMediaFilesCount += item.totalCount;
-		}
-	}
-
-	if (totalMediaFilesCount > 0 || _scanStats.totalCount() > 0) {
-		_stats.setExpectedFilesCount(totalMediaFilesCount);
-		_scanStatsFound = true;
-	} else {
-		_messagesCount = 0;
-		_stats.setExpectedFilesCount(0);
-		_scanStatsFound = false;
-	}
-
-	_isScanning = false;
-	_messagesWritten = 0;
-	_userpicsWritten = 0;
-	_userpicsCount = 0;
-	_storiesWritten = 0;
-	_storiesCount = 0;
-	_contentFilesCount = 0;
-
 	_settings.path = Output::NormalizePath(_settings);
 	_writer = Output::CreateWriter(_settings.format);
-	_steps.clear();
 	fillExportSteps();
 	exportNext();
-}
-
-void ControllerObject::resumeExport(
-		const Settings &settings,
-		const Environment &environment) {
-	// Reset any terminal state
-	if (stopped()) {
-		_state = State();
-	}
-	_api.clearResults();
-	_stepIndex = -1;
-	_dialogIndex = -1;
-
-	_messagesInRangeCountFixed = true;
-	_settings = NormalizeSettings(settings);
-	_environment = environment;
-	_settings.singleTopicRootId = _topicRootId;
-	_settings.singleTopicPeerId = _topicPeerId;
-
-	syncStatsFromGlobalDedup();
-	
-	_stats.clear();
-	using MediaType = MediaSettings::Type;
-	const bool fullHistoryMode = (_settings.media.types & MediaType::FullHistory);
-	int totalMediaFilesCount = 0;
-
-	for (const auto &pair : _scanStats.byType()) {
-		const auto type = pair.first;
-		const auto &item = pair.second;
-		const bool isDownloadable = (type != MediaType::Text && type != MediaType::Link);
-		const bool selected = fullHistoryMode
-			? isDownloadable
-			: (bool)(_settings.media.types & type);
-		if (selected && isDownloadable) {
-			totalMediaFilesCount += item.totalCount;
-		}
-	}
-
-	if (totalMediaFilesCount > 0 || _scanStats.totalCount() > 0) {
-		_stats.setExpectedFilesCount(totalMediaFilesCount);
-		_scanStatsFound = true;
-	} else {
-		_messagesCount = 0;
-		_stats.setExpectedFilesCount(0);
-		_scanStatsFound = false;
-	}
-
-	_isScanning = false;
-	_messagesWritten = 0;
-	_contentFilesCount = 0;
-
-	// Note: _messagesCount will be restored in ApiWrap::startExport via progress.
-	
-	// Enable resume mode in ApiWrap
-	_api.setResumeMode(true);
-
-	_settings.path = Output::NormalizePath(_settings);
-
-	_writer = Output::CreateWriter(_settings.format);
-	_steps.clear();
-	fillExportSteps();
-	
-	// Skip steps that were already processed before resume
-	// We call exportNext() which will execute Step::Initializing.
-	// Step::Initializing will call ApiWrap::startExport, which will load progress
-	// and then call initialized(), which will correctly start the message export.
-	exportNext();
-}
-
-void ControllerObject::checkExistingExport(std::function<void(Export::View::SettingsWidget::ExistingExport)> callback) const {
-	using ExistingExport = Export::View::SettingsWidget::ExistingExport;
-	if (!_settings.onlySinglePeer()) {
-		// Also check the state for single peer info
-		const auto *password = std::get_if<PasswordCheckState>(&_state);
-		if (!password || password->singlePeer.type() == mtpc_inputPeerEmpty) {
-			callback(ExistingExport::None);
-			return;
-		}
-	}
-
-	// Get the peer ID from _settings or fallback to _state
-	int64 targetPeerId = _settings.singlePeerId;
-	QString targetPeerName = _settings.singlePeerName;
-	MTPInputPeer sourcePeer = _settings.singlePeer;
-	
-	if (targetPeerId == 0 && sourcePeer.type() == mtpc_inputPeerEmpty) {
-		// Try to get from _state
-		const auto *password = std::get_if<PasswordCheckState>(&_state);
-		if (password) {
-			targetPeerId = password->singlePeerId;
-			targetPeerName = password->singlePeerName;
-			sourcePeer = password->singlePeer;
-		}
-	}
-
-	// If still no peer ID, try to extract from singlePeer
-	if (targetPeerId == 0 && sourcePeer.type() != mtpc_inputPeerEmpty) {
-		targetPeerId = sourcePeer.match([](const MTPDinputPeerUser &data) {
-			return static_cast<int64>(data.vuser_id().v);
-		}, [](const MTPDinputPeerUserFromMessage &data) {
-			return static_cast<int64>(data.vuser_id().v);
-		}, [](const MTPDinputPeerChat &data) {
-			return static_cast<int64>(data.vchat_id().v);
-		}, [](const MTPDinputPeerChannel &data) {
-			// Channel IDs are stored as -(10^12 + channel_id)
-			return -(1000000000000LL + static_cast<int64>(data.vchannel_id().v));
-		}, [](const MTPDinputPeerChannelFromMessage &data) {
-			return -(1000000000000LL + static_cast<int64>(data.vchannel_id().v));
-		}, [&](const MTPDinputPeerSelf &data) {
-			return int64(-1);
-		}, [](const MTPDinputPeerEmpty &data) {
-			return int64(0);
-		});
-	}
-
-	if (targetPeerId == 0) {
-		callback(ExistingExport::None);
-		return;
-	}
-
-	// Build a temporary settings to get the base path
-	auto tempSettings = Settings();
-	tempSettings.singlePeer = sourcePeer;
-	tempSettings.singlePeerId = targetPeerId;
-	tempSettings.singlePeerName = targetPeerName;
-	
-	const auto basePath = Output::NormalizePath(tempSettings);
-	if (basePath.isEmpty()) {
-		callback(ExistingExport::None);
-		return;
-	}
-
-	// Find parent directory (strip the subfolder name)
-	const auto parentPath = [&] {
-		const auto idx = basePath.lastIndexOf('/');
-		return idx > 0 ? basePath.left(idx) : basePath;
-	}();
-
-	const auto checkInFolder = [&](const QString &folderPath) -> std::optional<ExistingExport> {
-		const auto progressPath = ExportProgress::progressFilePath(folderPath);
-		if (QFile::exists(progressPath)) {
-			QFile file(progressPath);
-			if (file.open(QIODevice::ReadOnly)) {
-				const auto doc = QJsonDocument::fromJson(file.readAll());
-				if (!doc.isNull() && doc.isObject()) {
-					const auto progress = ExportProgress::fromJson(doc.object());
-					using Type = MediaSettings::Type;
-					const auto types = progress.settings.media.types;
-					if (!(types & ~(Type::Text | Type::Link | Type::FullHistory))) {
-						return ExistingExport::None;
-					}
-					if (progress.isComplete || (progress.rangeEndMsgId > 0 && progress.lastMessageId >= progress.rangeEndMsgId)) {
-						return ExistingExport::Complete;
-					}
-					if (progress.lastMessageId > 0) {
-						return ExistingExport::Incomplete;
-					}
-				}
-			}
-		}
-		
-		const QDir folderDir(folderPath);
-		const auto partialFiles = folderDir.entryList(QStringList() << "*.partial", QDir::Files | QDir::NoDotAndDotDot);
-		if (!partialFiles.isEmpty()) {
-			return ExistingExport::Incomplete;
-		}
-		return std::nullopt;
-	};
-
-	// Search for any ChatExport folder containing this peer ID
-	{
-		const QDir parentDir(parentPath);
-		const auto entries = parentDir.entryList(QStringList() << "ChatExport_*", QDir::Dirs | QDir::NoDotAndDotDot);
-		const auto idStr = QString::number(targetPeerId);
-		for (const auto &entry : entries) {
-			if (entry.contains(idStr)) {
-				if (const auto result = checkInFolder(parentPath + '/' + entry)) {
-					callback(*result);
-					return;
-				}
-			}
-		}
-	}
-
-	// Fallback: check today's generated path
-	if (const auto result = checkInFolder(basePath)) {
-		callback(*result);
-		return;
-	}
-
-	callback(ExistingExport::None);
 }
 
 void ControllerObject::skipFile(uint64 randomId) {
 	if (stopped()) {
 		return;
 	}
-	_activeDownloads.remove(randomId);
 	_api.skipFile(randomId);
 }
 
@@ -885,9 +362,6 @@ void ControllerObject::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
 		result[index] = count;
 	};
 	push(Step::Initializing, 1);
-	if (_isScanning) {
-		push(Step::Scanning, info.dialogsCount);
-	}
 	if (_settings.types & Settings::Type::AnyChatsMask) {
 		push(Step::DialogsList, 1);
 	}
@@ -922,54 +396,18 @@ void ControllerObject::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
 	_substepsTotal = ranges::accumulate(_substepsInStep, 0);
 }
 
-void ControllerObject::cancelExportFast(bool keepCache) {
-	_isScanning = false;
-	
-	if (_writer && !keepCache) {
-		_writer->updateStatsInFirstFile();
-	}
-	
-	// cancelExportFast sends FinishTakeoutSession to Telegram before clearing.
-	// Using clearState() directly would abandon the takeout without closing it,
-	// leaving it open on the server and stalling the next scan/export attempt.
-	_api.cancelExportFast(keepCache);
-	clearResults();
+void ControllerObject::cancelExportFast() {
+	_api.cancelExportFast();
 	setState(CancelledState());
 }
 
 void ControllerObject::exportNext() {
 	if (++_stepIndex >= _steps.size()) {
-		if (_isScanning) {
-			syncStatsFromGlobalDedup();
-			auto stats = _scanStats.byType();
-			const auto selected = _settings.media.types;
-			const bool fullHistory = (selected & MediaSettings::Type::FullHistory);
-			for (auto it = stats.begin(); it != stats.end();) {
-				const bool isSelected = fullHistory || (selected & it->first);
-				const bool hasAnyCount = (it->second.totalCount > 0) || (it->second.uniqueCount > 0);
-				if (!isSelected || !hasAnyCount) {
-					it = stats.erase(it);
-				} else {
-					++it;
-				}
+		if (ioCatchError(_writer->finish())) {
+			return;
 		}
-		WriteScanStatsFile(_settings, stats);
-		WriteUniqueLinksFile(_settings, _api.uniqueLinks());
-		_api.saveScanProgress();
-		_isScanning = false;
-		_stepIndex = -1;
-		setState(ScanDoneState{ std::move(stats) });
-		return;
-	}
-	if (ioCatchError(_writer->finish())) {
-		return;
-	}
-	WriteUniqueLinksFile(_settings, _api.uniqueLinks());
-		const auto exportBreakdown = _stats.byType();
-		const auto scanBreakdown = _scanStats.byType();
-		const auto scanStatsFound = _scanStatsFound;
 		_api.finishExport([=] {
-			setFinishedState(exportBreakdown, scanBreakdown, scanStatsFound);
+			setFinishedState();
 		});
 		return;
 	}
@@ -985,7 +423,6 @@ void ControllerObject::exportNext() {
 	case Step::Contacts: return exportContacts();
 	case Step::Sessions: return exportSessions();
 	case Step::OtherData: return exportOtherData();
-	case Step::Scanning:
 	case Step::Dialogs: return exportDialogs();
 	case Step::Topic: return exportTopic();
 	}
@@ -994,9 +431,9 @@ void ControllerObject::exportNext() {
 
 void ControllerObject::initialize() {
 	setState(stateInitializing());
-	_api.startExport(_settings, [=](ApiWrap::StartInfo info) {
+	_api.startExport(_settings, &_stats, [=](ApiWrap::StartInfo info) {
 		initialized(info);
-	}, _isScanning);
+	});
 }
 
 void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
@@ -1004,26 +441,6 @@ void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
 		return;
 	}
 	fillSubstepsInSteps(info);
-
-	if (const auto progress = _api.progress()) {
-		if (!_isScanning && _api.isResumeMode()) {
-			_messagesWritten = progress->messagesProcessed;
-			if (progress->scanTotalMessages > 0) {
-			_messagesCount = progress->scanTotalMessages;
-			_messagesInRangeCountFixed = true;
-		}
-	}
-	}
-
-	if (_isScanning) {
-		if (info.serverCountIsAccurate) {
-			_messagesCount = info.serverTotalCount;
-			_messagesInRangeCountFixed = true;
-		}
-	} else if (!_scanStatsFound && info.serverCountIsAccurate) {
-		_messagesCount = info.serverTotalCount;
-		_messagesInRangeCountFixed = true;
-	}
 	exportNext();
 }
 
@@ -1059,19 +476,6 @@ void ControllerObject::exportUserpics() {
 		_userpicsCount = start.count;
 		return true;
 	}, [=](DownloadProgress progress) {
-		if (progress.total > 0 && progress.ready >= progress.total) {
-			_activeDownloads.remove(progress.randomId);
-			if (!progress.isAuxiliary) {
-				_contentFilesCount++;
-			}
-		} else if (progress.total > 0) {
-			_activeDownloads[progress.randomId] = {
-				progress.randomId,
-				progress.path,
-				progress.ready,
-				progress.total
-			};
-		}
 		setState(stateUserpics(progress));
 		return true;
 	}, [=](Data::UserpicsSlice &&slice) {
@@ -1079,6 +483,7 @@ void ControllerObject::exportUserpics() {
 			return false;
 		}
 		_userpicsWritten += slice.list.size();
+		setState(stateUserpics(DownloadProgress()));
 		return true;
 	}, [=] {
 		if (ioCatchError(_writer->writeUserpicsEnd())) {
@@ -1097,19 +502,6 @@ void ControllerObject::exportStories() {
 		_storiesCount = start.count;
 		return true;
 	}, [=](DownloadProgress progress) {
-		if (progress.total > 0 && progress.ready >= progress.total) {
-			_activeDownloads.remove(progress.randomId);
-			if (!progress.isAuxiliary) {
-				_contentFilesCount++;
-			}
-		} else if (progress.total > 0) {
-			_activeDownloads[progress.randomId] = {
-				progress.randomId,
-				progress.path,
-				progress.ready,
-				progress.total
-			};
-		}
 		setState(stateStories(progress));
 		return true;
 	}, [=](Data::StoriesSlice &&slice) {
@@ -1117,6 +509,7 @@ void ControllerObject::exportStories() {
 			return false;
 		}
 		_storiesWritten += slice.list.size();
+		setState(stateStories(DownloadProgress()));
 		return true;
 	}, [=] {
 		if (ioCatchError(_writer->writeStoriesEnd())) {
@@ -1194,141 +587,103 @@ void ControllerObject::exportDialogs() {
 void ControllerObject::exportNextDialog() {
 	const auto index = ++_dialogIndex;
 	const auto info = _dialogsInfo.item(index);
-	if (!info) {
-		if (ioCatchError(_writer->writeDialogsEnd())) {
-			return;
-		}
-		exportNext();
+	if (info) {
+		_api.requestMessages(*info, [=](const Data::DialogInfo &info) {
+			if (ioCatchError(_writer->writeDialogStart(info))) {
+				return false;
+			}
+			_messagesWritten = 0;
+			_messagesCount = ranges::accumulate(
+				info.messagesCountPerSplit,
+				0);
+			setState(stateDialogs(DownloadProgress()));
+			return true;
+		}, [=](DownloadProgress progress) {
+			setState(stateDialogs(progress));
+			return true;
+		}, [=](Data::MessagesSlice &&result) {
+			if (ioCatchError(_writer->writeDialogSlice(result))) {
+				return false;
+			}
+			_messagesWritten += result.list.size();
+			setState(stateDialogs(DownloadProgress()));
+			return true;
+		}, [=] {
+			if (ioCatchError(_writer->writeDialogEnd())) {
+				return;
+			}
+			exportNextDialog();
+		});
 		return;
 	}
-
-	const auto fromId = _settings.useIdRange
-		? _settings.singlePeerFromId.value_or(0)
-		: 0;
-	auto tillId = _settings.useIdRange
-		? _settings.singlePeerTillId.value_or(0)
-		: 0;
-
-	if (tillId > 0 && info->topMessageId > 0 && tillId > info->topMessageId) {
-		LOG(("Export Controller: Correcting tillId from %1 to topMessageId=%2").arg(tillId).arg(info->topMessageId));
-		tillId = info->topMessageId;
+	if (ioCatchError(_writer->writeDialogsEnd())) {
+		return;
 	}
-	
-	LOG(("Export Controller: Calling startExportMessages with fromId=%1, tillId=%2").arg(fromId).arg(tillId));
-	startExportMessages(info, fromId, tillId);
+	exportNext();
 }
 
-void ControllerObject::startExportMessages(const Data::DialogInfo *info, uint64 fromId, uint64 tillId) {
-	syncStatsFromGlobalDedup();
-	
-	// Skip recalculation if already fixed by initialized() from saved progress.
-	// Otherwise we incorrectly use the full-chat count instead of the saved range count.
-	if (_messagesInRangeCountFixed) {
-		// _messagesCount and _messagesWritten already set by initialized().
-	} else if (!_messagesCount || !_scanStatsFound) {
-		// If scan was done, use the count of messages that were actually selected during scan.
-		// This matches the date/size filter, unlike messagesCountPerSplit which is the full chat count.
-		const int scanTotal = _scanStats.totalMessagesCount();
-		if (_scanStatsFound && scanTotal > 0) {
-			_messagesCount = scanTotal;
-		} else {
-			const bool hasRange = (fromId > 0 || tillId > 0);
-			const bool fullHistoryMode = (_settings.media.types & MediaSettings::Type::FullHistory);
-			const int serverRangeTotal = _stats.totalCount();
-			if (hasRange && serverRangeTotal > 0 && !fullHistoryMode) {
-				_messagesCount = serverRangeTotal;
-			} else if (hasRange && fullHistoryMode) {
-				_messagesCount = 0;
-			} else {
-				int count = 0;
-				for (int splitCount : info->messagesCountPerSplit) {
-					count += splitCount;
-				}
-				_messagesCount = count;
-			}
-		}
+template <typename Callback>
+ProcessingState ControllerObject::prepareState(
+		Step step,
+		Callback &&callback) const {
+	if (step != _lastProcessingStep) {
+		_substepsPassed += substepsInStep(_lastProcessingStep);
+		_lastProcessingStep = step;
 	}
 
-	_api.requestMessages(*info, fromId, tillId, [=](const Data::DialogInfo &info) {
-		if (ioCatchError(_writer->writeDialogStart(info))) {
-			return false;
-		}
-		_messagesWritten = 0;
-		if (!_stats.expectedFilesCount()) {
-			_stats.setExpectedFilesCount(_messagesCount);
-		}
-
-		setState(stateDialogs(DownloadProgress{}));
-		return true;
-	}, [=](DownloadProgress progress) {
-		if (progress.total > 0 && progress.ready >= progress.total) {
-			_activeDownloads.remove(progress.randomId);
-			if (!progress.isAuxiliary) {
-				_contentFilesCount++;
-			}
-		} else if (progress.total > 0) {
-			_activeDownloads[progress.randomId] = {
-				progress.randomId,
-				progress.path,
-				progress.ready,
-				progress.total
-			};
-		}
-		if (_isScanning) {
-			const int scanTotal = _scanStats.totalMessagesCount();
-			setState(stateScanning(scanTotal, scanTotal));
-		} else {
-			setState(stateDialogs(progress));
-		}
-		return true;
-	}, [=](Data::MessagesSlice &&result) {
-		if (ioCatchError(_writer->writeDialogSlice(result))) {
-			return false;
-		}
-		_messagesWritten += result.list.size();
-		
-		const auto lastWrittenId = _writer->lastWrittenMessageId();
-		LOG(("Export: handleSlice callback - lastWrittenId=%1, result.list.size=%2")
-			.arg(lastWrittenId)
-			.arg(result.list.size()));
-		if (lastWrittenId > 0) {
-			_api.updateMessageProgress(static_cast<uint64>(lastWrittenId), result.list.size());
-		}
-		
-		return true;
-	}, [=] {
-		if (ioCatchError(_writer->writeDialogEnd())) {
-			return;
-		}
-		exportNextDialog();
-	});
+	auto result = ProcessingState();
+	callback(result);
+	result.step = step;
+	result.substepsPassed = _substepsPassed;
+	result.substepsNow = substepsInStep(_lastProcessingStep);
+	result.substepsTotal = _substepsTotal;
+	return result;
 }
 
 ProcessingState ControllerObject::stateInitializing() const {
-	return prepareState(Step::Initializing);
+	return ProcessingState();
 }
 
 ProcessingState ControllerObject::stateDialogsList(int processed) const {
-	return prepareState(Step::DialogsList, [=](ProcessingState &result) {
-		result.itemIndex = processed;
+	const auto step = Step::DialogsList;
+	return prepareState(step, [&](ProcessingState &result) {
+		result.entityIndex = processed;
+		result.entityCount = std::max(
+			processed,
+			substepsInStep(Step::Dialogs));
 	});
 }
-
 ProcessingState ControllerObject::statePersonalInfo() const {
 	return prepareState(Step::PersonalInfo);
 }
 
-ProcessingState ControllerObject::stateUserpics(const DownloadProgress &progress) const {
-	return prepareState(Step::Userpics, [=](ProcessingState &result) {
-		result.itemIndex = progress.itemIndex;
-		result.itemCount = progress.total;
+ProcessingState ControllerObject::stateUserpics(
+		const DownloadProgress &progress) const {
+	return prepareState(Step::Userpics, [&](ProcessingState &result) {
+		result.entityIndex = _userpicsWritten + progress.itemIndex;
+		result.entityCount = std::max(_userpicsCount, result.entityIndex);
+		result.bytesRandomId = progress.randomId;
+		if (!progress.path.isEmpty()) {
+			const auto last = progress.path.lastIndexOf('/');
+			result.bytesName = progress.path.mid(last + 1);
+		}
+		result.bytesLoaded = progress.ready;
+		result.bytesCount = progress.total;
 	});
 }
 
-ProcessingState ControllerObject::stateStories(const DownloadProgress &progress) const {
-	return prepareState(Step::Stories, [=](ProcessingState &result) {
-		result.itemIndex = progress.itemIndex;
-		result.itemCount = progress.total;
+ProcessingState ControllerObject::stateStories(
+		const DownloadProgress &progress) const {
+	return prepareState(Step::Stories, [&](ProcessingState &result) {
+		result.entityIndex = _storiesWritten + progress.itemIndex;
+		result.entityCount = std::max(_storiesCount, result.entityIndex);
+		result.bytesRandomId = progress.randomId;
+		if (!progress.path.isEmpty()) {
+			const auto last = progress.path.lastIndexOf('/');
+			result.bytesName = progress.path.mid(last + 1);
+		}
+		result.bytesLoaded = progress.ready;
+		result.bytesCount = progress.total;
 	});
 }
 
@@ -1359,145 +714,16 @@ ProcessingState ControllerObject::stateOtherData() const {
 	return prepareState(Step::OtherData);
 }
 
-ProcessingState ControllerObject::stateScanning(int itemIndex, int itemCount) const {
-	return prepareState(Step::Scanning, [=](ProcessingState &result) {
-		result.itemIndex = itemIndex;
-		result.itemCount = itemCount;
-	});
-}
-
-ProcessingState ControllerObject::stateDialogs(const DownloadProgress &progress) const {
-	return prepareState(Step::Dialogs, [=](ProcessingState &result) {
+ProcessingState ControllerObject::stateDialogs(
+		const DownloadProgress &progress) const {
+	const auto step = Step::Dialogs;
+	return prepareState(step, [&](ProcessingState &result) {
 		fillMessagesState(
 			result,
 			_dialogsInfo,
 			_dialogIndex,
 			progress);
-		result.selectedStats = _stats.byType();
-		result.expectedStats = _scanStats.byType();
 	});
-}
-
-void ControllerObject::setFinishedState(
-		std::map<MediaSettings::Type, Output::StatItem> exportBreakdown,
-		std::map<MediaSettings::Type, Output::StatItem> scanBreakdownFull,
-		bool scanStatsFound) {
-	syncStatsFromGlobalDedup();
-	
-	auto totalUniqueCount = 0;
-	auto totalUniqueSize = int64(0);
-	auto totalTotalCount = 0;
-	auto totalTotalSize = int64(0);
-	using Type = MediaSettings::Type;
-
-	// If no breakdown provided, get from current stats
-	if (exportBreakdown.empty()) {
-		exportBreakdown = _stats.byType();
-	}
-	if (scanBreakdownFull.empty()) {
-		scanBreakdownFull = _scanStats.byType();
-		scanStatsFound = _scanStatsFound;
-	}
-
-	// Use export stats if populated, else fall back to scan stats.
-	const bool exportStatsPopulated = std::any_of(
-		exportBreakdown.begin(), exportBreakdown.end(),
-		[](const auto &p) { return p.second.totalCount > 0; });
-	// Only use scan stats as fallback if they were gathered with the same settings
-	// (same media types). If scan was full-history but export is selective, scan stats
-	// have all types but we only want what the export actually processed.
-	// Check: if export has non-empty stats but scan has MORE types, prefer export stats.
-	const bool scanStatsPopulated = scanStatsFound && std::any_of(
-		scanBreakdownFull.begin(), scanBreakdownFull.end(),
-		[](const auto &p) { return p.second.totalCount > 0; });
-	auto breakdown = exportStatsPopulated
-		? exportBreakdown
-		: (scanStatsPopulated ? scanBreakdownFull : exportBreakdown);
-	// Supplement export stats with scan data for any type that wasn't counted
-	// during export (e.g. files skipped due to size limit).
-	if (exportStatsPopulated && scanStatsPopulated) {
-		for (const auto &[type, scanItem] : scanBreakdownFull) {
-			auto it = breakdown.find(type);
-			if (it == breakdown.end() || it->second.totalCount == 0) {
-				breakdown[type] = scanItem;
-			} else if (it->second.uniqueCount == 0 && scanItem.uniqueCount > 0) {
-				// Export stats have totalCount (from server seed) but no uniqueCount/uniqueSize.
-				// Use scan stats for the unique side so the finished view shows correct data.
-				it->second.uniqueCount = scanItem.uniqueCount;
-				it->second.uniqueSize = scanItem.uniqueSize;
-			}
-		}
-	}
-
-	// messagesWithLinks: copy from whichever stats have it (export first, then scan).
-	int mwlForBreakdown = 0;
-	const auto exportBreakdownForLinks = _stats.byType();
-	const auto exportLinkIt = exportBreakdownForLinks.find(Type::Link);
-	if (exportLinkIt != exportBreakdownForLinks.end())
-		mwlForBreakdown = exportLinkIt->second.messagesWithLinks;
-	if (mwlForBreakdown <= 0) {
-		const auto scanBreakdown = _scanStats.byType();
-		const auto scanLinkIt = scanBreakdown.find(Type::Link);
-		if (scanLinkIt != scanBreakdown.end())
-			mwlForBreakdown = scanLinkIt->second.messagesWithLinks;
-	}
-	if (mwlForBreakdown > 0)
-		breakdown[Type::Link].messagesWithLinks = mwlForBreakdown;
-
-	for (const auto &pair : breakdown) {
-		const auto type = pair.first;
-		const auto &item = pair.second;
-		if (type != Type::Link && type != Type::Text) {
-			totalUniqueCount += item.uniqueCount;
-			totalUniqueSize += item.uniqueSize;
-			totalTotalCount += item.totalCount;
-			totalTotalSize += item.totalSize;
-		}
-	}
-
-	setState(FinishedState{
-		.path = _writer->mainFilePath(),
-		.totalUniqueCount = totalUniqueCount,
-		.totalUniqueSize = totalUniqueSize,
-		.totalTotalCount = totalTotalCount,
-		.totalTotalSize = totalTotalSize,
-		.fullHistory = !!(_settings.media.types & Type::FullHistory),
-		.fullRange = _settings.isFullRange(),
-		.breakdown = breakdown,
-	});
-}
-
-template <typename Callback>
-ProcessingState ControllerObject::prepareState(
-		Step step,
-		Callback &&callback) const {
-	const_cast<ControllerObject*>(this)->syncStatsFromGlobalDedup();
-	
-	auto result = ProcessingState();
-	result.step = step;
-	result.isScanning = _isScanning;
-	result.fullHistory = !!(_settings.media.types & MediaSettings::Type::FullHistory);
-
-	if (_lastProcessingStep != step) {
-		_substepsPassed += substepsInStep(_lastProcessingStep);
-		_lastProcessingStep = step;
-	}
-	result.substepsPassed = _substepsPassed;
-	result.substepsNow = substepsInStep(step);
-	result.substepsTotal = _substepsTotal;
-
-	result.selectedStats = _stats.byType();
-	result.expectedStats = _scanStats.byType();
-
-	callback(result);
-	return result;
-}
-
-int ControllerObject::substepsInStep(Step step) const {
-	const auto index = static_cast<int>(step);
-	return (index >= 0 && index < _substepsInStep.size())
-		? _substepsInStep[index]
-		: 0;
 }
 
 void ControllerObject::fillMessagesState(
@@ -1505,50 +731,34 @@ void ControllerObject::fillMessagesState(
 		const Data::DialogsInfo &info,
 		int index,
 		const DownloadProgress &progress) const {
-	const auto i = info.item(index);
-	Assert(i != nullptr);
+	const auto dialog = info.item(index);
+	Assert(dialog != nullptr);
 
-	switch (i->type) {
-	case Data::DialogInfo::Type::Self:
-	case Data::DialogInfo::Type::Replies:
-		result.entityType = ProcessingState::EntityType::SavedMessages;
-		break;
-	case Data::DialogInfo::Type::Personal:
-	case Data::DialogInfo::Type::Bot:
-	case Data::DialogInfo::Type::PrivateGroup:
-	case Data::DialogInfo::Type::PrivateSupergroup:
-	case Data::DialogInfo::Type::PublicSupergroup:
-	case Data::DialogInfo::Type::PrivateChannel:
-	case Data::DialogInfo::Type::PublicChannel:
-		result.entityType = ProcessingState::EntityType::Chat;
-		break;
-	case Data::DialogInfo::Type::VerifyCodes:
-		result.entityType = ProcessingState::EntityType::VerifyCodes;
-		break;
-	default:
-		result.entityType = ProcessingState::EntityType::Other;
-		break;
-	}
-
-	result.entityName = i->name;
-	result.entityIndex = index + 1;
+	result.entityIndex = index;
 	result.entityCount = info.chats.size() + info.left.size();
-	
-	if (result.entityIndex > result.entityCount) {
-		LOG(("Export: WARNING - entityIndex=%1 exceeds entityCount=%2, chats.size=%3, left.size=%4, _dialogIndex=%5")
-			.arg(result.entityIndex)
-			.arg(result.entityCount)
-			.arg(info.chats.size())
-			.arg(info.left.size())
-			.arg(index));
+	result.entityName = dialog->name;
+	result.entityType = (dialog->type == Data::DialogInfo::Type::Self)
+		? ProcessingState::EntityType::SavedMessages
+		: (dialog->type == Data::DialogInfo::Type::Replies)
+		? ProcessingState::EntityType::RepliesMessages
+		: (dialog->type == Data::DialogInfo::Type::VerifyCodes)
+		? ProcessingState::EntityType::VerifyCodes
+		: ProcessingState::EntityType::Chat;
+	result.itemIndex = _messagesWritten + progress.itemIndex;
+	result.itemCount = std::max(_messagesCount, result.itemIndex);
+	result.bytesRandomId = progress.randomId;
+	if (!progress.path.isEmpty()) {
+		const auto last = progress.path.lastIndexOf('/');
+		result.bytesName = progress.path.mid(last + 1);
 	}
-	
-	result.itemIndex = progress.itemIndex;
-	result.itemCount = 0;  // Don't show message counter for bulk exports
-	result.activeDownloads = _activeDownloads;
+	result.bytesLoaded = progress.ready;
+	result.bytesCount = progress.total;
+}
 
-	result.selectedStats = _stats.byType();
-	result.expectedStats = _scanStats.byType();
+int ControllerObject::substepsInStep(Step step) const {
+	Expects(_substepsInStep.size() > static_cast<int>(step));
+
+	return _substepsInStep[static_cast<int>(step)];
 }
 
 void ControllerObject::exportTopic() {
@@ -1591,12 +801,8 @@ void ControllerObject::exportTopic() {
 			if (ioCatchError(_writer->finish())) {
 				return;
 			}
-			syncStatsFromGlobalDedup();
-			const auto exportBreakdown = _stats.byType();
-			const auto scanBreakdown = _scanStats.byType();
-			const auto scanStatsFound = _scanStatsFound;
 			_api.finishExport([=] {
-				setFinishedState(exportBreakdown, scanBreakdown, scanStatsFound);
+				setFinishedState();
 			});
 		});
 }
@@ -1618,6 +824,13 @@ ProcessingState ControllerObject::stateTopic(
 		result.bytesLoaded = progress.ready;
 		result.bytesCount = progress.total;
 	});
+}
+
+void ControllerObject::setFinishedState() {
+	setState(FinishedState{
+		_writer->mainFilePath(),
+		_stats.filesCount(),
+		_stats.bytesCount() });
 }
 
 Controller::Controller(
@@ -1676,23 +889,6 @@ rpl::producer<State> Controller::state() const {
 //	});
 //}
 
-void Controller::runScan(
-		const Settings &settings,
-		const Environment &environment) {
-	_wrapped.with([=](Implementation &unwrapped) {
-		unwrapped.runScan(settings, environment);
-	});
-}
-
-void Controller::runUpdateScan(
-		const Settings &settings,
-		const Environment &environment,
-		const QString &folderPath) {
-	_wrapped.with([=](Implementation &unwrapped) {
-		unwrapped.runUpdateScan(settings, environment, folderPath);
-	});
-}
-
 void Controller::startExport(
 		const Settings &settings,
 		const Environment &environment) {
@@ -1703,39 +899,17 @@ void Controller::startExport(
 	});
 }
 
-void Controller::resumeExport(
-		const Settings &settings,
-		const Environment &environment) {
-	LOG(("Export Info: Resuming export from '%1'.").arg(settings.path));
-
-	_wrapped.with([=](Implementation &unwrapped) {
-		unwrapped.resumeExport(settings, environment);
-	});
-}
-
-void Controller::checkExistingExport(std::function<void(Export::View::SettingsWidget::ExistingExport)> callback) const {
-	_wrapped.with([callback = std::move(callback)](const Implementation &unwrapped) {
-		unwrapped.checkExistingExport(std::move(callback));
-	});
-}
-
 void Controller::skipFile(uint64 randomId) {
 	_wrapped.with([=](Implementation &unwrapped) {
 		unwrapped.skipFile(randomId);
 	});
 }
 
-void Controller::cancelExportFast(bool keepCache) {
+void Controller::cancelExportFast() {
 	LOG(("Export Info: Cancelled export."));
 
 	_wrapped.with([=](Implementation &unwrapped) {
-		unwrapped.cancelExportFast(keepCache);
-	});
-}
-
-void Controller::clearResults() {
-	_wrapped.with([=](Implementation &unwrapped) {
-		unwrapped.clearResults();
+		unwrapped.cancelExportFast();
 	});
 }
 

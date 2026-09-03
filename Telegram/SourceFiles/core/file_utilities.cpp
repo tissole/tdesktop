@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/file_utilities.h"
 
+#include "core/version.h"
 #include "storage/localstorage.h"
 #include "storage/storage_account.h"
 #include "base/platform/base_platform_file_utilities.h"
@@ -331,8 +332,24 @@ QString ImagesOrAllFilter() {
 	return ImagesFilter() + u";;"_q + AllFilesFilter();
 }
 
-QString FileDialog::PhotoVideoFilesFilter() {
-	return u"Image and Video Files (*"_q + Ui::ImageExtensions().join(u" *"_q) + u" *.mp4 *.mov *.m4v *.webm *.mkv *.asf *.asx *.avi *.wmv *.flv *.hevc *.qt *.f4v *.f4b *.3gp *.3g2 *.m4a *.m4b *.vob *.mts *.m2ts *.m2s *.m2t *.m4s *.mxf *.rmvb *.divx *.xvid *.ogv *.ogx *.ogm *.rm *.rv *.srt *.tgs *.tgv *.tp *.trv *.swf *.mpg *.mpv *.mpeg *.m2v *.ts *.tsv *.m2p *.ps *.wtv);;"_q
+QString PhotoVideoFilesFilter() {
+	return u"Image and Video Files (*"_q + Ui::ImageExtensions().join(u" *"_q) + u" *.mp4 *.mov *.m4v *.webm *.mkv *.asf *.asx *.avi *.wmv *.flv *.hevc *.qt *.f4v *.f4b *.3gp *.3g2 *.m4a *.m4b *.vob *.mts *.m2ts *.m2s *.m2t *.m4s *.mxf *.rmvb *.divx *.xvid *.ogv *.ogx *.ogm *.rm *.rv *.srt *.tgs *.tgv *.tp *.trv *.swf *.mpg *.mpv *.mpeg *.m2v *.ts *.tsv *.m2p *.ps *.wtv);;"_q;
+}
+
+QString PhotoVideoAudioFilesFilter() {
+	return u"Image, Video and Audio Files (*"_q
+		+ Ui::ImageExtensions().join(u" *"_q)
+		+ u" *.mp4 *.mov *.m4v *.webm"_q
+		+ u" *.mp3 *.m4a *.aac *.ogg *.flac *.opus *.oga)"_q;
+}
+
+QString AudioFilesFilter() {
+	return u"Audio Files (*.mp3 *.m4a *.aac *.ogg *.flac *.opus *.oga);;"_q
+		+ AllFilesFilter();
+}
+
+QString MusicFilesFilter() {
+	return u"Audio files (*.mp3 *.m4a *.flac *.ogg *.wav *.aac *.opus);;"_q
 		+ AllFilesFilter();
 }
 

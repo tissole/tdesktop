@@ -7,22 +7,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "export/view/export_view_panel_controller.h"
 
-#include <crl/crl.h>
-#include "data/data_peer_id.h"
-#include "data/data_peer.h"
-#include "tl/tl_basic_types.h"
-#include <QtCore/QDir>
-
 #include "export/view/export_view_settings.h"
 #include "export/view/export_view_progress.h"
-#include "export/export_progress.h"
 #include "export/export_manager.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/separate_panel.h"
 #include "ui/wrap/padding_wrap.h"
 #include "mtproto/mtproto_config.h"
 #include "ui/boxes/confirm_box.h"
-#include "ui/text/format_values.h"
 #include "lang/lang_keys.h"
 #include "storage/storage_account.h"
 #include "core/application.h"
@@ -105,6 +97,9 @@ Environment PrepareEnvironment(not_null<Main::Session*> session) {
 }
 
 base::weak_qptr<Ui::BoxContent> SuggestStart(not_null<Main::Session*> session) {
+	if (Core::App().passcodeLocked()) {
+		return {};
+	}
 	ClearSuggestStart(session);
 	return Ui::show(
 		Box<SuggestBox>(session),
@@ -138,24 +133,8 @@ void ResolveSettings(not_null<Main::Session*> session, Settings &settings) {
 	} else {
 		settings.forceSubPath = IsDefaultPath(session, settings.path);
 	}
-
-	const bool hasAnyMedia = (settings.media.types != MediaSettings::Types(0));
-	const bool hasAnyType = (settings.types != Settings::Types(0));
-	const bool hasRange = settings.singlePeerFrom.has_value() || settings.singlePeerTill.has_value() || settings.useIdRange;
-
 	if (!settings.onlySinglePeer()) {
-		settings.singlePeerFrom = std::nullopt;
-		settings.singlePeerTill = std::nullopt;
-	}
-
-	if (settings.onlySinglePeer() && !hasAnyMedia && !hasAnyType && !hasRange) {
-		settings.media.types = MediaSettings::Types(0);
-		settings.media.sizeLimit = 4000LL * 1024 * 1024;
-		settings.types = Settings::Types(0);
-	}
-
-	if (settings.media.sizeLimit <= 0 || settings.media.sizeLimit > 4000LL * 1024 * 1024) {
-		settings.media.sizeLimit = 4000LL * 1024 * 1024;
+		settings.singlePeerFrom = settings.singlePeerTill = 0;
 	}
 }
 
@@ -167,11 +146,6 @@ PanelController::PanelController(
 , _settings(
 	std::make_unique<Settings>(_session->local().readExportSettings()))
 , _saveSettingsTimer([=] { saveSettings(); }) {
-	if (_settings->onlySinglePeer()) {
-		_settings->media.types = MediaSettings::Types(0);
-		_settings->media.sizeLimit = 4000LL * 1024 * 1024;
-		_settings->types = Settings::Types(0);
-	}
 	ResolveSettings(session, *_settings);
 
 	_process->state(
@@ -206,10 +180,9 @@ void PanelController::createPanel() {
 		: singlePeer
 		? tr::lng_export_header_chats
 		: tr::lng_export_title)());
-	_panel->setInnerSize(st::exportPanelSize);
 	_panel->closeRequests(
 	) | rpl::on_next([=] {
-		
+		LOG(("Export Info: Panel Hide By Close."));
 		_panel->hideGetDuration();
 	}, _panel->lifetime());
 	_panelCloseEvents.fire(_panel->closeEvents());
@@ -222,215 +195,37 @@ void PanelController::showSettings() {
 		_panel,
 		_session,
 		*_settings);
-	const auto settingsRaw = settings.get();
-	settingsRaw->setShowBoxCallback([=](object_ptr<Ui::BoxContent> box) {
+	settings->setShowBoxCallback([=](object_ptr<Ui::BoxContent> box) {
 		_panel->showBox(
 			std::move(box),
 			Ui::LayerOption::KeepOther,
 			anim::type::normal);
 	});
 
-	settingsRaw->scanClicks(
-	) | rpl::on_next([=] {
-		if (settingsRaw->readData().media.types == MediaSettings::Types(0)) {
-			return; // Do nothing if no file type selected
-		}
-		settingsRaw->setScanning(true);
-		_panel->setTitle(tr::lng_export_scanning());
-		_panel->setHideOnDeactivate(true);
-		_process->runScan(*_settings, PrepareEnvironment(_session));
-	}, settingsRaw->lifetime());
-
-	settingsRaw->exportClicks(
+	settings->startClicks(
 	) | rpl::on_next([=]() {
-		if (settingsRaw->readData().media.types == MediaSettings::Types(0)) {
-			return; // Do nothing if no file type selected
-		}
-		if (settingsRaw->isScanning()) {
-			return; // Do nothing if scan is in progress
-		}
-		_panel->setTitle(tr::lng_export_progress_title());
 		showProgress();
 		_process->startExport(*_settings, PrepareEnvironment(_session));
-	}, settingsRaw->lifetime());
+	}, settings->lifetime());
 
-	settingsRaw->resumeClicks(
-	) | rpl::on_next([=]() {
-		if (settingsRaw->readData().media.types == MediaSettings::Types(0)) {
-			return; // Do nothing if no file type selected
-		}
-		_panel->setTitle(tr::lng_export_progress_title());
-		showProgress();
-		_process->resumeExport(*_settings, PrepareEnvironment(_session));
-	}, settingsRaw->lifetime());
-
-	settingsRaw->updateClicks(
-	) | rpl::on_next([=]() {
-		if (settingsRaw->readData().media.types == MediaSettings::Types(0)) {
-			return; // Do nothing if no file type selected
-		}
-		settingsRaw->setScanning(true);
-		_panel->setTitle(tr::lng_export_scanning());
-		_panel->setHideOnDeactivate(true);
-		_process->runUpdateScan(*_settings, PrepareEnvironment(_session), _settings->path);
-	}, settingsRaw->lifetime());
-
-	settingsRaw->cancelClicks(
+	settings->cancelClicks(
 	) | rpl::on_next([=] {
-		const auto scanning = settingsRaw->isScanning();
-		const auto hasResults = settingsRaw->hasScanResults();
-		if (scanning) {
-			settingsRaw->resetToDefault();
-			_process->cancelExportFast();
-		} else if (hasResults) {
-			settingsRaw->resetToDefault();
-			_process->clearResults();
-		} else {
-			LOG(("Export Info: Panel Hide By Cancel."));
-			settingsRaw->resetToDefault(); // Reset on cancel as requested
-			_panel->hideGetDuration();
-		}
-		_panel->setTitle(tr::lng_export_title());
-	}, settingsRaw->lifetime());
+		LOG(("Export Info: Panel Hide By Cancel."));
+		_panel->hideGetDuration();
+	}, settings->lifetime());
 
-	settingsRaw->scanInvalidated(
-	) | rpl::on_next([=] {
-		_process->clearResults();
-	}, settingsRaw->lifetime());
-
-	settingsRaw->changes(
+	settings->changes(
 	) | rpl::on_next([=](Settings &&settings) {
 		*_settings = std::move(settings);
-	}, settingsRaw->lifetime());
+	}, settings->lifetime());
 
-	// Check for existing export to show Resume/Update buttons
-	// We do this on the PanelController side because it has the correct path and peer info
-	LOG(("Export Resume: Starting check - peerId=%1, path='%2', isSinglePeer=%3")
-		.arg(_settings->singlePeerId).arg(_settings->path).arg(_settings->onlySinglePeer()));
-
-	checkExistingExport([=](SettingsWidget::ExistingExport state, std::optional<Settings> restored) {
-		LOG(("Export Resume: Check result - state=%1").arg(static_cast<int>(state)));
-		crl::on_main([=] {
-			if (_panel) {
-				if (auto settingsWidget = dynamic_cast<SettingsWidget*>(_panel->inner())) {
-					settingsWidget->setExistingExport(state);
-					if (state != SettingsWidget::ExistingExport::None && restored) {
-						LOG(("Export Resume: Restoring persisted settings"));
-						auto data = settingsWidget->readData();
-						data.media.types = restored->media.types;
-						data.media.sizeLimit = restored->media.sizeLimit;
-						data.media.extensionFilterMode = restored->media.extensionFilterMode;
-						data.media.extensionFilter = restored->media.extensionFilter;
-						data.types = restored->types;
-						data.fullChats = restored->fullChats;
-						data.format = restored->format;
-						
-						data.singlePeerFrom = restored->singlePeerFrom;
-						data.singlePeerTill = restored->singlePeerTill;
-						data.useIdRange = restored->useIdRange;
-						data.singlePeerFromId = restored->singlePeerFromId;
-						data.singlePeerTillId = restored->singlePeerTillId;
-
-						*_settings = data;
-						settingsWidget->restoreSettings(data);
-					} else if (state != SettingsWidget::ExistingExport::None) {
-						auto data = settingsWidget->readData();
-						data.media.types = MediaSettings::Types(0);
-						data.media.sizeLimit = 4000LL * 1024 * 1024;
-						data.types = Settings::Types(0);
-						*_settings = data;
-						settingsWidget->restoreSettings(data);
-					}
-				}
-			}
-		});
-	});
+	auto size = st::exportPanelSize;
+	size.setHeight(size.height() + settings->sizeLimitExtraHeight());
+	_panel->setInnerSize(size);
 
 	_panel->showInner(std::move(settings));
 }
 
-void PanelController::checkExistingExport(Fn<void(SettingsWidget::ExistingExport, std::optional<Settings>)> callback) const {
-	using ExistingExport = SettingsWidget::ExistingExport;
-	if (!_settings->onlySinglePeer()) {
-		callback(ExistingExport::None, std::nullopt);
-		return;
-	}
-
-	const auto targetPeerId = _settings->singlePeerId;
-	if (targetPeerId == 0) {
-		LOG(("Export Resume: No peer ID available for existing export check"));
-		callback(ExistingExport::None, std::nullopt);
-		return;
-	}
-
-	auto downloadPath = _settings->path;
-	if (downloadPath.isEmpty()) {
-		LOG(("Export Resume: No download path available for existing export check"));
-		callback(ExistingExport::None, std::nullopt);
-		return;
-	}
-
-	// Normalize path separators for Qt
-	downloadPath = QDir::toNativeSeparators(downloadPath);
-
-	LOG(("Export Resume: Checking for existing export in '%1' for peer ID %2")
-		.arg(downloadPath).arg(targetPeerId));
-
-	// Search for any ChatExport folder in the download directory containing this peer ID
-	const auto rawId = std::abs(targetPeerId); // Raw ID without sign
-	const QDir parentDir(downloadPath);
-	const auto entries = parentDir.entryList(QStringList() << "ChatExport_*", QDir::Dirs | QDir::NoDotAndDotDot);
-	for (const auto &entry : entries) {
-		const auto fullIdStr = QString::number(targetPeerId);
-		const auto rawIdStr = QString::number(rawId);
-
-		if (entry.contains(fullIdStr) || entry.contains(rawIdStr)) {
-			const auto folderPath = downloadPath + '/' + entry;
-			LOG(("Export Resume: Found matching folder '%1'").arg(folderPath));
-
-			// Check for progress.json
-			const auto progressPath = ExportProgress::progressFilePath(folderPath);
-			auto progress = ExportProgress::load(progressPath);
-			if (progress) {
-				const bool completed = progress->isComplete || (progress->rangeEndMsgId > 0
-					&& progress->lastMessageId >= progress->rangeEndMsgId);
-				
-				// Only show Resume/Update buttons if export included media files
-				if (!progress->hasMedia) {
-					LOG(("Export Resume: Export was text/links only (no media), skipping resume/update"));
-					callback(ExistingExport::None, std::nullopt);
-					return;
-				}
-				
-				if (completed) {
-					LOG(("Export Resume: Found progress file, export is COMPLETED (last=%1, target=%2)")
-						.arg(progress->lastMessageId)
-						.arg(progress->rangeEndMsgId));
-					callback(ExistingExport::Complete, progress->settings);
-					return;
-				} else if (progress->lastMessageId > 0) {
-					LOG(("Export Resume: Found progress file (last=%1, target=%2), enabling resume")
-						.arg(progress->lastMessageId)
-						.arg(progress->rangeEndMsgId));
-					callback(ExistingExport::Incomplete, progress->settings);
-					return;
-				}
-			}
-
-			// Also check for leftover .partial files from interrupted export
-			const QDir folderDir(folderPath);
-			const auto partialFiles = folderDir.entryList(QStringList() << "*.partial", QDir::Files | QDir::NoDotAndDotDot);
-			if (!partialFiles.isEmpty()) {
-				LOG(("Export Resume: Found %1 partial files, enabling resume").arg(partialFiles.size()));
-				callback(ExistingExport::Incomplete, std::nullopt);
-				return;
-			}
-		}
-	}
-
-	LOG(("Export Resume: No existing export found"));
-	callback(ExistingExport::None, std::nullopt);
-}
 void PanelController::showError(const ApiErrorState &error) {
 	LOG(("Export Info: API Error '%1'.").arg(error.data.type()));
 
@@ -516,11 +311,10 @@ void PanelController::showProgress() {
 
 	_panel->setTitle(tr::lng_export_progress_title());
 
-	_state = ProcessingState();
 	auto progress = base::make_unique_q<ProgressWidget>(
 		_panel.get(),
 		rpl::single(
-			ContentFromState(ProcessingState())
+			ContentFromState(_settings.get(), ProcessingState())
 		) | rpl::then(progressState()));
 
 	progress->skipFileClicks(
@@ -548,7 +342,7 @@ void PanelController::showProgress() {
 }
 
 void PanelController::stopWithConfirmation(Fn<void()> callback) {
-	if (v::is<FinishedState>(_state) || v::is<PasswordCheckState>(_state)) {
+	if (!v::is<ProcessingState>(_state)) {
 		LOG(("Export Info: Stop Panel Without Confirmation."));
 		stopExport();
 		if (callback) {
@@ -556,11 +350,7 @@ void PanelController::stopWithConfirmation(Fn<void()> callback) {
 		}
 		return;
 	}
-	const auto weak = std::make_shared<base::weak_qptr<Ui::GenericBox>>();
 	auto stop = [=, callback = std::move(callback)]() mutable {
-		if (const auto strong = weak->get()) {
-			strong->closeBox();
-		}
 		if (auto saved = std::move(callback)) {
 			LOG(("Export Info: Stop Panel With Confirmation."));
 			stopExport();
@@ -578,7 +368,6 @@ void PanelController::stopWithConfirmation(Fn<void()> callback) {
 		.confirmStyle = &st::attentionBoxButton,
 	});
 	_confirmStopBox = box.data();
-	*weak = box.data();
 	_panel->showBox(
 		std::move(box),
 		Ui::LayerOption::CloseOther,
@@ -598,13 +387,6 @@ void PanelController::stopExport() {
 	_panel->hideGetDuration();
 }
 
-bool PanelController::isScanning() const {
-	if (const auto state = std::get_if<ProcessingState>(&_state)) {
-		return state->isScanning;
-	}
-	return false;
-}
-
 rpl::producer<> PanelController::stopRequests() const {
 	return _panelCloseEvents.events(
 	) | rpl::flatten_latest(
@@ -615,71 +397,11 @@ rpl::producer<> PanelController::stopRequests() const {
 
 void PanelController::fillParams(const PasswordCheckState &state) {
 	_settings->singlePeer = state.singlePeer;
-	_settings->singlePeerName = state.singlePeerName;
-	_settings->singlePeerId = state.singlePeerId;
-
-	// For single peer exports, always extract fresh from the current peer
-	// (Old settings may have leftover values from a different chat)
-	if (_settings->onlySinglePeer()) {
-		_settings->singlePeerId = 0;
-		_settings->singlePeerName.clear();
-	}
-
-	if (_settings->singlePeerId == 0) {
-		state.singlePeer.match(
-			[&](const MTPDinputPeerUser &data) {
-				_settings->singlePeerId = static_cast<int64>(data.vuser_id().v);
-			},
-			[&](const MTPDinputPeerUserFromMessage &data) {
-				_settings->singlePeerId = static_cast<int64>(data.vuser_id().v);
-			},
-			[&](const MTPDinputPeerChat &data) {
-				_settings->singlePeerId = static_cast<int64>(data.vchat_id().v);
-			},
-			[&](const MTPDinputPeerChannel &data) {
-				// Human-readable channel ID: -100xxxxxxxxxx
-				_settings->singlePeerId = -(1000000000000LL + static_cast<int64>(data.vchannel_id().v));
-			},
-			[&](const MTPDinputPeerChannelFromMessage &data) {
-				_settings->singlePeerId = -(1000000000000LL + static_cast<int64>(data.vchannel_id().v));
-			},
-			[&](const MTPDinputPeerSelf &data) {
-				_settings->singlePeerId = _session->userPeerId().value;
-			},
-			[&](const MTPDinputPeerEmpty &data) {
-				// No peer info available
-			});
-
-		// Get name from session peer data
-		if (_settings->singlePeerId != 0) {
-			const auto peerIdRaw = state.singlePeer.match(
-				[&](const MTPDinputPeerUser &data) { return peerFromUser(data.vuser_id().v); },
-				[&](const MTPDinputPeerUserFromMessage &data) { return peerFromUser(data.vuser_id().v); },
-				[&](const MTPDinputPeerChat &data) { return peerFromChat(data.vchat_id().v); },
-				[&](const MTPDinputPeerChannel &data) { return peerFromChannel(data.vchannel_id().v); },
-				[&](const MTPDinputPeerChannelFromMessage &data) { return peerFromChannel(data.vchannel_id().v); },
-				[&](const MTPDinputPeerSelf &data) { return _session->userPeerId(); },
-				[&](const MTPDinputPeerEmpty &data) { return PeerId(0); });
-			
-			if (peerIdRaw) {
-				const auto peer = _session->data().peer(peerIdRaw);
-				if (peer) {
-					_settings->singlePeerName = peer->name();
-				}
-			}
-		}
-		
-		LOG(("Export Resume: Extracted peer ID=%1, name='%2' from state")
-			.arg(_settings->singlePeerId).arg(_settings->singlePeerName));
-	}
 }
 
 void PanelController::updateState(State &&state) {
-
 	if (const auto start = std::get_if<PasswordCheckState>(&state)) {
 		fillParams(*start);
-		LOG(("Export State: fillParams done, peerId=%1, peerName='%2'")
-			.arg(_settings->singlePeerId).arg(_settings->singlePeerName));
 	}
 	if (!_panel) {
 		createPanel();
@@ -689,110 +411,12 @@ void PanelController::updateState(State &&state) {
 		showError(*apiError);
 	} else if (const auto error = std::get_if<OutputErrorState>(&_state)) {
 		showError(*error);
-	} else if (const auto scanDone = std::get_if<ScanDoneState>(&_state)) {
-		if (_panel) {
-			const bool isUpdateScan = _settings->useIdRange && _settings->singlePeerFromId.has_value();
-			if (isUpdateScan) {
-				int totalMessages = 0;
-				int64 totalSize = 0;
-				QString mediaText;
-				for (const auto &[type, item] : scanDone->stats) {
-					if (item.totalCount <= 0) continue;
-					QString label;
-					switch (type) {
-					case MediaSettings::Type::Photo: label = "Photos"; break;
-					case MediaSettings::Type::Video: label = "Videos"; break;
-					case MediaSettings::Type::File: label = "Files"; break;
-					case MediaSettings::Type::Text: label = "Text messages"; break;
-					case MediaSettings::Type::Link: label = "Links"; break;
-					case MediaSettings::Type::GIF: label = "GIFs"; break;
-					case MediaSettings::Type::Audio: label = "Music"; break;
-					case MediaSettings::Type::VoiceMessage: label = "Voice messages"; break;
-					case MediaSettings::Type::VideoMessage: label = "Video messages"; break;
-					case MediaSettings::Type::Sticker: label = "Stickers"; break;
-					default: label = "Unknown"; break;
-					}
-					mediaText += label + ": " + QString::number(item.totalCount);
-					if (item.totalSize > 0) {
-						mediaText += " (" + ::Ui::FormatSizeText(item.totalSize) + ")";
-					}
-					mediaText += "\n";
-					
-					totalMessages += item.totalCount;
-					totalSize += item.totalSize;
-				}
-
-				if (totalMessages > 0) {
-					// Show Update Confirmation Dialog
-					auto boxText = QString("New messages found since last export:\n\n");
-					boxText += mediaText;
-					boxText += "\nTotal: " + QString::number(totalMessages) + " new messages";
-					if (totalSize > 0) {
-						boxText += " (" + ::Ui::FormatSizeText(totalSize) + ")";
-					}
-					boxText += "\n\nDo you want to update the export?";
-
-					auto box = Ui::MakeConfirmBox({
-						.text = boxText,
-						.confirmed = [=] {
-							_panel->setTitle(tr::lng_export_progress_title());
-							showProgress();
-							_process->resumeExport(*_settings, PrepareEnvironment(_session));
-						},
-						.cancelled = [=] {
-							_panel->setTitle(tr::lng_export_title());
-							showSettings();
-						},
-						.confirmText = QString("Update"),
-						.cancelText = tr::lng_cancel(),
-					});
-					_panel->showBox(
-						std::move(box),
-						Ui::LayerOption::KeepOther,
-						anim::type::normal);
-				} else {
-					// No new messages found
-					auto box = Ui::MakeInformBox("Export is up to date. No new messages found since last export.");
-					_panel->showBox(
-						std::move(box),
-						Ui::LayerOption::KeepOther,
-						anim::type::normal);
-					_panel->setTitle(tr::lng_export_title());
-					showSettings();
-				}
-			} else {
-				_panel->setTitle(tr::lng_export_title());
-				showSettings();
-				if (auto settings = dynamic_cast<SettingsWidget*>(_panel->inner())) {
-					settings->setScanning(false);
-					_panel->setHideOnDeactivate(false);
-					settings->setScanResults(scanDone->stats);
-				}
-			}
-		}
-	} else if (const auto processing = std::get_if<ProcessingState>(&_state)) {
-		if (_panel) {
-			if (auto settings = dynamic_cast<SettingsWidget*>(_panel->inner())) {
-				if (processing->step == ProcessingState::Step::Scanning) {
-					settings->setScanProgress(processing->itemIndex, processing->itemCount);
-				}
-			}
-		}
 	} else if (v::is<FinishedState>(_state)) {
-		_stopRequested = false;
 		_panel->setTitle(tr::lng_export_title());
 		_panel->setHideOnDeactivate(false);
 	} else if (v::is<CancelledState>(_state)) {
-		LOG(("Export Info: Reset Panel After Cancel."));
-		_stopRequested = false;
-		_panel->setHideOnDeactivate(false);
-		_panel->setTitle(tr::lng_export_title());
-		showSettings();
-		if (auto settings = dynamic_cast<SettingsWidget*>(_panel->inner())) {
-			settings->setScanning(false);
-			settings->clearScanResults();
-		}
-		_panel->showAndActivate();
+		LOG(("Export Info: Stop Panel After Cancel."));
+		stopExport();
 	}
 }
 

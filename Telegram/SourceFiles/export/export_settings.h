@@ -9,8 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/flags.h"
 #include "base/flat_map.h"
-
-#include <optional>
+#include <QtCore/QStringList>
 
 namespace Export {
 namespace Output {
@@ -48,12 +47,12 @@ struct MediaSettings {
 	Types types = DefaultTypes();
 	int64 sizeLimit = 4000LL * 1024 * 1024;
 
-	// Extension filter (applies to Video, Audio, File types)
+	// Extension filter (applies to Video, Audio, File types).
 	ExtFilterMode extensionFilterMode = ExtFilterMode::None;
-	QStringList extensionFilter; // lowercase, no dots, e.g. {"pdf","docx"}
+	QStringList extensionFilter; // lowercase, no dots, e.g. { "pdf", "docx" }.
 
 	static inline Types DefaultTypes() {
-		return Types(0);
+		return Type::Photo;
 	}
 
 };
@@ -101,21 +100,8 @@ struct Settings {
 	MediaSettings media;
 
 	MTPInputPeer singlePeer = MTP_inputPeerEmpty();
-	QString singlePeerName;
-	int64 singlePeerId = 0;
-	std::optional<TimeId> singlePeerFrom;  // nullopt = from beginning
-	std::optional<TimeId> singlePeerTill;  // nullopt = until now
-	
-	// Range mode flags (mutually exclusive, exactly one must be true)
-	bool useDateRange = true;   // Filter by date range (DEFAULT)
-	bool useIdRange = false;    // Filter by message ID range
-	// Both false = INVALID (caught by validation)
-	// Both true = INVALID (caught by validation)
-	
-	// Date range values (only used when useDateRange = true)
-	// ID range values (only used when useIdRange = true)
-	std::optional<uint64> singlePeerFromId;  // nullopt = from first message
-	std::optional<uint64> singlePeerTillId;  // nullopt = until last message
+	TimeId singlePeerFrom = 0;
+	TimeId singlePeerTill = 0;
 
 	int32 singleTopicRootId = 0;
 	uint64 singleTopicPeerId = 0;
@@ -129,23 +115,6 @@ struct Settings {
 
 	bool onlySingleTopic() const {
 		return onlySinglePeer() && singleTopicRootId != 0;
-	}
-
-	bool hasDateRange() const {
-		return singlePeerFrom.has_value() || singlePeerTill.has_value();
-	}
-
-	bool hasIdRange() const {
-		return singlePeerFromId.has_value() || singlePeerTillId.has_value();
-	}
-
-	bool isFullRange() const {
-		// Full range means: no restrictions in the active mode
-		if (useDateRange) {
-			return !hasDateRange(); // Date mode with no date restrictions
-		} else {
-			return !hasIdRange(); // ID mode with no ID restrictions
-		}
 	}
 
 	static inline Types DefaultTypes() {

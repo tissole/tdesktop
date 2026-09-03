@@ -26,7 +26,7 @@ struct FilePrepareResult;
 
 namespace Storage {
 struct UploadedMedia;
-struct UploadProgress;
+struct UploadFileProgress;
 } // namespace Storage
 
 namespace Api {
@@ -390,7 +390,7 @@ private:
 	void startUploadForItem(int idx);
 	void onUploadDone(const Storage::UploadedMedia &data);
 	void onUploadFail(const FullMsgId &fullId);
-	void onUploadProgress(const Storage::UploadProgress &data);
+	void onUploadProgress(const Storage::UploadFileProgress &data);
 	void checkItem(int idx);
 	void pumpDownloads();
 	void downloadFailed(int idx);

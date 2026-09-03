@@ -7,14 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include <unordered_map>
 #include "mtproto/mtproto_concurrent_sender.h"
 #include "data/data_peer_id.h"
-#include "export/export_progress.h"
-
-namespace base {
-class Timer;
-} // namespace base
 
 namespace Export {
 namespace Data {
@@ -41,30 +35,16 @@ struct FileOrigin;
 
 namespace Output {
 struct Result;
+class Stats;
 } // namespace Output
 
 struct Settings;
-class GlobalDedupManager;
 
 class ApiWrap {
 public:
-	struct LocationKey {
-		uint64 type = 0;
-		uint64 id = 0;
-
-		LocationKey() = default;
-		LocationKey(uint64 type, uint64 id) : type(type), id(id) {
-		}
-
-		inline bool operator<(const LocationKey &other) const {
-			return std::tie(type, id) < std::tie(other.type, other.id);
-		}
-	};
-
 	ApiWrap(
 		base::weak_qptr<MTP::Instance> weak,
-		Fn<void(FnMut<void()>)> runner,
-		int mainDcId = 0);
+		Fn<void(FnMut<void()>)> runner);
 
 	rpl::producer<MTP::Error> errors() const;
 	rpl::producer<Output::Result> ioErrors() const;
@@ -74,16 +54,11 @@ public:
 		int storiesCount = 0;
 		int profileMusicCount = 0;
 		int dialogsCount = 0;
-		int serverTotalCount = 0;
-		// True when serverTotalCount accurately reflects the selected range
-		// (no date/id range applied, or server range-filtering is reliable).
-		// False when server counts are for full-chat scope (ignore for denominator).
-		bool serverCountIsAccurate = false;
 	};
 	void startExport(
 		const Settings &settings,
-		FnMut<void(StartInfo)> done,
-		bool isScanning = false);
+		Output::Stats *stats,
+		FnMut<void(StartInfo)> done);
 
 	void requestDialogsList(
 		Fn<bool(int count)> progress,
@@ -101,7 +76,6 @@ public:
 		int itemIndex = 0;
 		int64 ready = 0;
 		int64 total = 0;
-		bool isAuxiliary = false;
 	};
 	void requestUserpics(
 		FnMut<bool(Data::UserpicsInfo&&)> start,
@@ -127,8 +101,6 @@ public:
 
 	void requestMessages(
 		const Data::DialogInfo &info,
-		int64 fromId,
-		int64 tillId,
 		FnMut<bool(const Data::DialogInfo &)> start,
 		Fn<bool(DownloadProgress)> progress,
 		Fn<bool(Data::MessagesSlice&&)> slice,
@@ -145,31 +117,12 @@ public:
 
 	void finishExport(FnMut<void()> done);
 	void skipFile(uint64 randomId);
-	void cancelExportFast(bool keepCache = false);
-	void clearState(bool keepCache = false);
-	void setResumeMode(bool enabled) { _resumeMode = enabled; }
-	[[nodiscard]] bool isResumeMode() const { return _resumeMode; }
-	void saveScanProgress() { saveProgress(); }
-	void updateMessageProgress(uint64 messageId, int writtenCount = 0);
-	void setFileCompletedCallback(Fn<void()> callback) {
-		_fileCompletedCallback = std::move(callback);
-	}
-
-	void clearResults();
-
-	[[nodiscard]] base::flat_set<QString> uniqueLinks() const;
+	void cancelExportFast();
 
 	~ApiWrap();
 
-	ExportProgress *progress() const {
-		return _exportProgress.get();
-	}
-
-	[[nodiscard]] GlobalDedupManager *globalDedup() const {
-		return _globalDedup.get();
-	}
-
 private:
+	class LoadedFileCache;
 	struct StartProcess;
 	struct ContactsProcess;
 	struct UserpicsProcess;
@@ -177,11 +130,9 @@ private:
 	struct ProfileMusicProcess;
 	struct OtherDataProcess;
 	struct FileProcess;
-	struct FileProgress {
-		uint64 randomId = 0;
-		int64 ready = 0;
-		int64 total = 0;
-	};
+	struct FileProgress;
+	struct FilePolicy;
+	struct MessageFileWork;
 	struct ChatsProcess;
 	struct LeftChannelsProcess;
 	struct DialogsProcess;
@@ -189,7 +140,7 @@ private:
 	struct ChatProcess;
 	struct TopicProcess;
 
-	void startMainSession(uint32 flags, FnMut<void()> done);
+	void startMainSession(FnMut<void()> done);
 	void sendNextStartRequest();
 	void requestUserpicsCount();
 	void requestStoriesCount();
@@ -213,7 +164,6 @@ private:
 	void loadStoriesFiles(Data::StoriesSlice &&slice);
 	void loadNextStory();
 	bool loadStoryProgress(FileProgress value);
-	bool loadStoryProgress(FileProgress value, bool auxiliary);
 	void loadStoryDone(const QString &relativePath);
 	bool loadStoryThumbProgress(FileProgress value);
 	void loadStoryThumbDone(const QString &relativePath);
@@ -259,15 +209,20 @@ private:
 	void checkFirstMessageDate(int localSplitIndex, int count);
 	void messagesCountLoaded(int localSplitIndex, int count);
 	void resolveDates();
-	void requestMediaCounts();
 	void requestMessagesSlice();
-	void requestChannelMessagesSlice();
 	void requestChatMessages(
 		int splitIndex,
 		int offsetId,
 		int addOffset,
 		int limit,
 		FnMut<void(MTPmessages_Messages&&)> done);
+	void startMessagesSlice(Data::MessagesSlice &&slice);
+	void resumeMessagesSlice();
+	void hydrateMessageDone(
+		bool topic,
+		int index,
+		int32 rawId,
+		const MTPmessages_Messages &result);
 	void requestTopicMessagesSlice();
 	void requestTopicReplies(
 		int offsetId,
@@ -276,91 +231,101 @@ private:
 		FnMut<void(MTPmessages_Messages&&)> done);
 	void collectMessagesCustomEmoji(const Data::MessagesSlice &slice);
 	void resolveCustomEmoji();
-	void loadMessagesFiles(Data::MessagesSlice &&slice);
+	void buildMessageFileWork(
+		AbstractMessagesProcess &process,
+		Data::Message &message);
 	void loadNextMessageFile();
-	[[nodiscard]] std::optional<QByteArray> getCustomEmoji(QByteArray &data);
+	[[nodiscard]] std::optional<QByteArray> getCustomEmoji(
+		Data::Message &message,
+		QByteArray &data);
 	bool messageCustomEmojiReady(Data::Message &message);
-	bool loadMessageFileProgress(FileProgress value);
-	bool loadMessageFileProgress(FileProgress value, bool auxiliary);
-	void loadMessageFileDone(int index, const QString &relativePath);
-	bool loadMessageThumbProgress(FileProgress value);
-	void loadMessageThumbDone(int index, const QString &relativePath);
+	bool loadMessageFileProgress(int index, FileProgress value);
+	void loadMessageFileDone(
+		int index,
+		Data::File *file,
+		const QString &relativePath);
 	bool loadMessageEmojiProgress(FileProgress progress);
 	void loadMessageEmojiDone(uint64 id, const QString &relativePath);
 	void finishMessagesSlice();
 	void finishMessages();
 
-	void flushBatchStats();
-
-	void processDoneQueue();
-	void onMessagePartDone(int index, bool isSelected = true);
 	void loadTopicMessagesFiles(Data::MessagesSlice &&slice);
 	void resolveTopicCustomEmoji();
 	void loadNextTopicMessageFile();
+	bool loadTopicMessageFileProgress(int index, FileProgress value);
+	void loadTopicMessageFileDone(
+		int index,
+		Data::File *file,
+		const QString &relativePath);
 	bool loadTopicEmojiProgress(FileProgress progress);
 	void loadCustomEmojiDone(uint64 id, const QString &relativePath);
-	void loadTopicMessageFileOrThumbDone(
-		Data::File &file,
-		const QString &relativePath);
 	void finishTopicMessagesSlice();
 	void finishTopicMessages();
+
 	[[nodiscard]] Data::Message *currentFileMessage() const;
 	[[nodiscard]] Data::FileOrigin currentFileMessageOrigin() const;
 
-	[[nodiscard]] MTPMessagesFilter getFilter() const;
-
-	[[nodiscard]] bool processFileLoad(
+	bool processFileLoad(
+		Data::File &file,
+		const Data::FileOrigin &origin,
+		Fn<bool(FileProgress)> progress,
+		FnMut<void(QString)> done,
+		const FilePolicy &policy);
+	bool processFileLoad(
 		Data::File &file,
 		const Data::FileOrigin &origin,
 		Fn<bool(FileProgress)> progress,
 		FnMut<void(QString)> done,
 		Data::Message *message = nullptr,
-		Data::Story *story = nullptr,
-		bool isThumb = false);
+		Data::Story *story = nullptr);
 	std::unique_ptr<FileProcess> prepareFileProcess(
-		Data::File &file,
-		const Data::FileOrigin &origin,
-		const LocationKey &dedupKey);
+		const Data::File &file,
+		const Data::FileOrigin &origin) const;
 	bool writePreloadedFile(
 		Data::File &file,
 		const Data::FileOrigin &origin);
 	void loadFile(
-		Data::File &file,
+		const Data::File &file,
 		const Data::FileOrigin &origin,
-		const LocationKey &dedupKey,
-		std::function<bool(FileProgress)> progress,
-		base::unique_function<void(QString)> done,
-		uint64 dedupDocId,
-		int64 dedupSize,
-		const QString &dedupName);
-	void scheduleMoreFiles();	
-	void loadFilePart(FileProcess &process);
-	void finishFile(uint64 randomId, const QString &relativePath);
-	void filePartDone(uint64 randomId, int64 offset, const MTPupload_File &result);
-	void scheduleBatchDelay(crl::time delay);
-	void filePartUnavailable(uint64 randomId);
-	void filePartRefreshReference(uint64 randomId, int64 offset);
-	void filePartExtractReference(uint64 randomId, int64 offset, const MTPmessages_Messages &result);
-	void filePartExtractReference(uint64 randomId, int64 offset, const MTPstories_Stories &result);
+		Fn<bool(FileProgress)> progress,
+		FnMut<void(QString)> done);
+	void loadFilePart();
+	void filePartDone(int64 offset, const MTPupload_File &result);
+	void filePartUnavailable();
+	[[nodiscard]] QString filePartMediaFolder() const;
+	void filePartRetryReference(
+		int64 offset,
+		Data::FileLocation location);
+	void filePartRefreshReference(int64 offset);
+	void filePartExtractCustomEmojiReference(
+		int64 offset,
+		uint64 customEmojiId,
+		const QString &folder,
+		const MTPVector<MTPDocument> &result);
+	void filePartExtractRichReference(
+		int64 offset,
+		const Data::FileOrigin &origin,
+		const QString &folder,
+		const MTPmessages_Messages &result);
+	void filePartExtractReference(
+		int64 offset,
+		const MTPmessages_Messages &result);
+	void filePartExtractReference(
+		int64 offset,
+		const MTPstories_Stories &result);
 
 	template <typename Request>
 	class RequestBuilder;
 
 	template <typename Request>
-	[[nodiscard]] auto mainRequest(
-		Request &&request,
-		std::optional<uint64> takeoutId = std::nullopt);
+	[[nodiscard]] auto mainRequest(Request &&request);
 
 	template <typename Request>
 	[[nodiscard]] auto splitRequest(int index, Request &&request);
 
-	template <typename Request>
-	[[nodiscard]] auto normalRequest(Request &&request);
-
 	[[nodiscard]] auto fileRequest(
 		const Data::FileLocation &location,
-		int64 offset,
-		int chunkSize);
+		int64 offset);
 
 	void error(const MTP::Error &error);
 	void error(const QString &text);
@@ -368,56 +333,20 @@ private:
 
 	MTP::ConcurrentSender _mtp;
 	std::optional<uint64> _takeoutId;
-	uint32 _takeoutFlags = 0;
-	int64 _takeoutSizeLimit = 0;
-	int _mainDcId = 0;
 	std::optional<UserId> _selfId;
-	MTPInputUser _user = MTP_inputUserSelf();
+	Output::Stats *_stats = nullptr;
+
 	std::unique_ptr<Settings> _settings;
-	bool _isScanning = false;
-	uint64 _resumeIdThreshold = 0;
-	int _serverTotalCount = 0;
+	MTPInputUser _user = MTP_inputUserSelf();
 
 	std::unique_ptr<StartProcess> _startProcess;
+	std::unique_ptr<LoadedFileCache> _fileCache;
 	std::unique_ptr<ContactsProcess> _contactsProcess;
 	std::unique_ptr<UserpicsProcess> _userpicsProcess;
 	std::unique_ptr<StoriesProcess> _storiesProcess;
 	std::unique_ptr<ProfileMusicProcess> _profileMusicProcess;
 	std::unique_ptr<OtherDataProcess> _otherDataProcess;
-	
-	std::map<uint64, std::unique_ptr<FileProcess>> _fileProcesses;
-	std::deque<uint64> _fileDownloadQueue;
-	class RequestThrottler {
-	public:
-		RequestThrottler(
-			Fn<void(FnMut<void()>)> runner,
-			std::shared_ptr<bool> guard,
-			crl::time batchDelay);
-		void schedule(FnMut<void()> task);
-		[[nodiscard]] Fn<void(FnMut<void()>)> runner() const {
-			return _runner;
-		}
-		~RequestThrottler();
-
-	private:
-		void processNext();
-		void fireNextAndSchedule();
-
-		Fn<void(FnMut<void()>)> _runner;
-		std::shared_ptr<bool> _guard;
-		std::deque<FnMut<void()>> _taskQueue;
-		crl::time _batchDelayMs;
-		bool _processing = false;
-		crl::time _lastFireTime = 0;  // Track last fire time for spacing
-	};
-
-	int _filesDownloading = 0;
-	bool _scheduleMoreFilesPending = false; // true while a stagger timer is in flight
-
-	std::shared_ptr<bool> _lifetimeGuard;
-	RequestThrottler _throttlerSameDc;
-	RequestThrottler _throttlerDifferentDc;
-	
+	std::unique_ptr<FileProcess> _fileProcess;
 	std::unique_ptr<LeftChannelsProcess> _leftChannelsProcess;
 	std::unique_ptr<DialogsProcess> _dialogsProcess;
 	std::unique_ptr<ChatProcess> _chatProcess;
@@ -428,19 +357,6 @@ private:
 
 	rpl::event_stream<MTP::Error> _errors;
 	rpl::event_stream<Output::Result> _ioErrors;
-
-	base::flat_set<QString> _reservedPaths;
-
-	std::unique_ptr<ExportProgress> _exportProgress;
-	bool _resumeMode = false;
-	Fn<void()> _fileCompletedCallback;
-	void saveProgress();
-	void loadProgress(const QString &folder);
-	void onFileCompleted(const QString &filename, int64 size, uint64 messageId);
-	void onFileStarted(const QString &filename, int64 totalSize, uint64 messageId);
-	void removePartialFile(const QString &filename);
-
-	std::unique_ptr<GlobalDedupManager> _globalDedup;
 
 };
 

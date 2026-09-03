@@ -10,13 +10,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_top_bar_widget.h"
 #include "history/view/history_view_translate_bar.h"
 #include "history/view/history_view_list_widget.h"
+#include "history/view/controls/history_view_compose_search.h"
+#include "api/api_messages_search.h"
+#include "data/data_forum_topic.h"
 #include "data/data_chat_participant_status.h"
 #include "history/history.h"
 #include "history/history_item_components.h"
 #include "history/history_item.h"
 #include "history/history_view_swipe_back_session.h"
 #include "ui/boxes/confirm_box.h"
-#include "ui/widgets/scroll_area.h"
+#include "ui/widgets/elastic_scroll.h"
 #include "ui/widgets/shadow.h"
 #include "ui/widgets/buttons.h"
 #include "ui/layers/generic_box.h"
@@ -34,7 +37,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/event_filter.h"
 #include "base/call_delayed.h"
 #include "base/qt/qt_key_modifiers.h"
+#include "core/application.h"
 #include "core/file_utilities.h"
+#include "core/shortcuts.h"
 #include "main/main_session.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
@@ -50,8 +55,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat.h"
 #include "styles/style_chat_helpers.h"
 #include "styles/style_window.h"
-#include "styles/style_info.h"
-#include "styles/style_boxes.h"
 
 #include <QtCore/QMimeData>
 
@@ -109,10 +112,9 @@ PinnedWidget::PinnedWidget(
 , _topBar(this, controller)
 , _topBarShadow(this)
 , _translateBar(std::make_unique<TranslateBar>(this, controller, _history))
-, _scroll(std::make_unique<Ui::ScrollArea>(
+, _scroll(std::make_unique<Ui::ElasticScroll>(
 	this,
-	controller->chatStyle()->value(lifetime(), st::historyScroll),
-	false))
+	controller->chatStyle()->value(lifetime(), st::historyScroll)))
 , _clearButton(std::make_unique<Ui::FlatButton>(
 	this,
 	QString(),
@@ -170,6 +172,10 @@ PinnedWidget::PinnedWidget(
 	) | rpl::on_next([=] {
 		clearSelected();
 	}, _topBar->lifetime());
+	_topBar->searchRequest(
+	) | rpl::on_next([=] {
+		searchInPinned();
+	}, _topBar->lifetime());
 
 	_translateBar->raise();
 	_topBarShadow->raise();
@@ -178,12 +184,20 @@ PinnedWidget::PinnedWidget(
 		updateAdaptiveLayout();
 	}, lifetime());
 
+	_scroll->setHandleTouch(false);
 	_inner = _scroll->setOwnedWidget(object_ptr<ListWidget>(
 		this,
 		&controller->session(),
 		static_cast<ListDelegate*>(this)));
+	_inner->lower();
 	_scroll->move(0, _topBar->height());
 	_scroll->show();
+	_scroll->setOverscrollBg(QColor(0, 0, 0, 0));
+	_scroll->setOverscrollEdges([=] {
+		return _inner->loadedAtTopKnown() && _inner->loadedAtTop();
+	}, [=] {
+		return _inner->loadedAtBottomKnown() && _inner->loadedAtBottom();
+	});
 	_scroll->scrolls(
 	) | rpl::on_next([=] {
 		onScroll();
@@ -196,6 +210,7 @@ PinnedWidget::PinnedWidget(
 
 	setupClearButton();
 	setupTranslateBar();
+	setupShortcuts();
 	Window::SetupSwipeBackSection(this, _scroll.get(), _inner);
 }
 
@@ -246,6 +261,95 @@ void PinnedWidget::setupTranslateBar() {
 	}, _translateBar->lifetime());
 
 	_translateBar->finishAnimating();
+}
+
+void PinnedWidget::setupShortcuts() {
+	Shortcuts::Requests(
+	) | rpl::filter([=] {
+		return Ui::AppInFocus()
+			&& Ui::InFocusChain(this)
+			&& !controller()->isLayerShown()
+			&& (Core::App().activeWindow() == &controller()->window())
+			&& !_history->peer->isSelf();
+	}) | rpl::on_next([=](not_null<Shortcuts::Request*> request) {
+		using Command = Shortcuts::Command;
+		request->check(Command::Search, 1) && request->handle([=] {
+			searchInPinned();
+			return true;
+		});
+	}, lifetime());
+}
+
+void PinnedWidget::searchInPinned() {
+	if (_history->peer->isSelf()) {
+		return;
+	}
+	if (_composeSearch) {
+		_composeSearch->setInnerFocus();
+		return;
+	}
+	_composeSearch = std::make_unique<ComposeSearch>(
+		this,
+		controller(),
+		_history,
+		nullptr);
+	_composeSearch->setSearchFilter(Api::SearchFilter::Pinned);
+	_composeSearch->setCalendarChat(Dialogs::Key(_thread));
+	_composeSearch->setCalendarJumpHandler(crl::guard(this, [=](
+			FullMsgId id,
+			Fn<void()> close) {
+		const auto universalId = (id.peer == _history->peer->id)
+			? id.msg
+			: (id.msg - ServerMaxMsgId);
+		SharedMediaMergedViewer(
+			&_thread->session(),
+			SharedMediaMergedKey(
+				SparseIdsMergedSlice::Key(
+					_history->peer->id,
+					_thread->topicRootId(),
+					_thread->monoforumPeerId(),
+					_migratedPeer ? _migratedPeer->id : 0,
+					universalId),
+				Storage::SharedMediaType::Pinned),
+			1,
+			1
+		) | rpl::filter([=](const SparseIdsMergedSlice &slice) {
+			return (slice.size() > 0)
+				|| (slice.fullCount().value_or(-1) == 0);
+		}) | rpl::take(1) | rpl::on_next([=](
+				const SparseIdsMergedSlice &slice) {
+			if (const auto nearest = slice.nearest(universalId)) {
+				showAtPosition(Data::MessagePosition{
+					.fullId = *nearest,
+					.date = TimeId(0),
+				});
+			}
+			close();
+		}, lifetime());
+	}));
+	if (const auto topic = _thread->asTopic()) {
+		_composeSearch->setTopMsgId(topic->rootId());
+	}
+
+	_topBarShadow->hide();
+	_clearButton->hide();
+	updateControlsGeometry();
+	doSetInnerFocus();
+
+	_composeSearch->activations(
+	) | rpl::on_next([=](ComposeSearch::Activation activation) {
+		showAtPosition(activation.item->position());
+	}, _composeSearch->lifetime());
+
+	_composeSearch->destroyRequests(
+	) | rpl::take(1) | rpl::on_next([=] {
+		_composeSearch = nullptr;
+
+		_topBarShadow->show();
+		_clearButton->show();
+		updateControlsGeometry();
+		doSetInnerFocus();
+	}, _composeSearch->lifetime());
 }
 
 void PinnedWidget::cornerButtonsShowAtPosition(
@@ -324,7 +428,11 @@ void PinnedWidget::checkActivation() {
 }
 
 void PinnedWidget::doSetInnerFocus() {
-	_inner->setFocus();
+	if (_composeSearch) {
+		_composeSearch->setInnerFocus();
+	} else {
+		_inner->setFocus();
+	}
 }
 
 bool PinnedWidget::showInternal(
@@ -352,6 +460,11 @@ std::shared_ptr<Window::SectionMemento> PinnedWidget::createMemento() {
 	auto result = std::make_shared<PinnedMemento>(thread());
 	saveState(result.get());
 	return result;
+}
+
+auto PinnedWidget::createIdentityMemento()
+-> std::shared_ptr<Window::SectionMemento> {
+	return std::make_shared<PinnedMemento>(thread());
 }
 
 bool PinnedWidget::showMessage(
@@ -417,7 +530,7 @@ void PinnedWidget::updateControlsGeometry() {
 
 	const auto newScrollTop = _scroll->isHidden()
 		? std::nullopt
-		: base::make_optional(_scroll->scrollTop() + topDelta());
+		: base::make_optional(_scroll->scrollTop() + takeTopDelta());
 	_topBar->resizeToWidth(contentWidth);
 	_topBarShadow->resize(contentWidth, st::lineWidth);
 
@@ -581,7 +694,7 @@ bool PinnedWidget::listAllowsMultiSelect() {
 
 bool PinnedWidget::listIsItemGoodForSelection(
 		not_null<HistoryItem*> item) {
-	return item->isRegular() && !item->isService();
+	return item->canBeSelected();
 }
 
 bool PinnedWidget::listIsLessInOrder(
@@ -727,6 +840,14 @@ History *PinnedWidget::listTranslateHistory() {
 
 void PinnedWidget::listAddTranslatedItems(
 	not_null<TranslateTracker*> tracker) {
+}
+
+Ui::ElasticScroll *PinnedWidget::listScrollArea() const {
+	return _scroll.get();
+}
+
+bool PinnedWidget::listThanosEffectEnabled() const {
+	return false;
 }
 
 void PinnedWidget::confirmDeleteSelected() {

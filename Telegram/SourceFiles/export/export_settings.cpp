@@ -22,52 +22,26 @@ bool MediaSettings::validate() const {
 	} else if (sizeLimit < 0 || sizeLimit > kMaxFileSize) {
 		return false;
 	}
-	// Extension filter only valid when eligible types are selected
-	if (extensionFilterMode != ExtFilterMode::None) {
-		const auto eligible = Type::Video | Type::Audio | Type::File;
-		if (!(types & eligible)) {
-			return false;
-		}
-	}
 	return true;
 }
 
 bool Settings::validate() const {
-	// Ensure exactly one range mode is active
-	if (useDateRange == useIdRange) {
-		return false; // Both true or both false is invalid
-	}
-	
-	// Check date range validity (if both values are specified)
-	if (singlePeerFrom.has_value() && singlePeerTill.has_value() 
-		&& *singlePeerTill <= *singlePeerFrom) {
+	using Format = Output::Format;
+	const auto MustBeFull = Type::PersonalChats | Type::BotChats;
+	const auto MustNotBeFull = Type::PublicGroups | Type::PublicChannels;
+	if ((types | Type::AllMask) != Type::AllMask) {
 		return false;
-	}
-	
-	// Check ID range validity (if both values are specified)
-	if (useIdRange) {
-		// When using ID range, From ID must be >= 1 if specified
-		if (singlePeerFromId.has_value() && *singlePeerFromId < 1) {
-			return false;
-		}
-		// To ID must be >= From ID if both are specified
-		if (singlePeerFromId.has_value() && singlePeerTillId.has_value() 
-			&& *singlePeerTillId < *singlePeerFromId) {
-			return false;
-		}
-	}
-	
-	// If date values are set, useDateRange should be true
-	if (hasDateRange() && !useDateRange) {
+	} else if ((fullChats | Type::AllMask) != Type::AllMask) {
 		return false;
-	}
-	
-	// If ID values are set, useIdRange should be true
-	if (hasIdRange() && !useIdRange) {
+	} else if ((fullChats & MustBeFull) != MustBeFull) {
 		return false;
-	}
-
-	if (!media.validate()) {
+	} else if ((fullChats & MustNotBeFull) != 0) {
+		return false;
+	} else if (format != Format::Html && format != Format::Json) {
+		return false;
+	} else if (!media.validate()) {
+		return false;
+	} else if (singlePeerTill > 0 && singlePeerTill <= singlePeerFrom) {
 		return false;
 	}
 	return true;

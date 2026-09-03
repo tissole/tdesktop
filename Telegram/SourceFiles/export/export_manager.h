@@ -7,8 +7,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "chat_helpers/compose/compose_show.h"
-
 class PeerData;
 
 namespace Ui {
@@ -36,7 +34,6 @@ public:
 	void start(
 		not_null<Main::Session*> session,
 		const MTPInputPeer &singlePeer = MTP_inputPeerEmpty());
-
 	void startTopic(
 		not_null<PeerData*> peer,
 		MsgId topicRootId,
@@ -49,8 +46,8 @@ public:
 	void stop();
 
 private:
-	std::shared_ptr<ChatHelpers::Show> _show;
 	void setupPanel(not_null<Main::Session*> session);
+
 	std::unique_ptr<Controller> _controller;
 	std::unique_ptr<View::PanelController> _panel;
 	rpl::event_stream<View::PanelController*> _viewChanges;

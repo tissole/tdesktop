@@ -80,15 +80,9 @@ public:
 	Result writeDialogEnd() override;
 	Result writeDialogsEnd() override;
 
-	Result writeUniqueLinks(const base::flat_set<QString> &links) override;
-
 	Result finish() override;
 
 	QString mainFilePath() override;
-
-	int lastWrittenMessageId() const override;
-	
-	void updateStatsInFirstFile();
 
 	~HtmlWriter();
 
@@ -151,12 +145,6 @@ private:
 		int messageId,
 		QByteArray text);
 
-	[[nodiscard]] QByteArray statsBlock() const;
-	[[nodiscard]] Result prependStats(const QString &relativePath);
-	
-	[[nodiscard]] std::optional<MessageInfo> parseLastMessageFromFile(
-		const QString &filePath);
-
 	Settings _settings;
 	Environment _environment;
 	Stats *_stats = nullptr;
@@ -190,10 +178,7 @@ private:
 	std::unique_ptr<Wrap> _chats;
 	std::unique_ptr<Wrap> _chat;
 	std::vector<int> _lastMessageIdsPerFile;
-	std::vector<QString> _chatMessageFiles;
 	bool _chatFileEmpty = false;
-	int _resumingFileIndex = -1;
-	bool _skipFirstDateHeader = false;
 
 };
 

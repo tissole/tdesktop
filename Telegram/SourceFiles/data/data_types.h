@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_msg_id.h"
 #include "base/qt/qt_compare.h"
 
+struct AudioAlbumThumbLocation;
 class HistoryItem;
 using HistoryItemsList = std::vector<not_null<HistoryItem*>>;
 
@@ -45,6 +46,8 @@ struct UploadState {
 	int64 offset = 0;
 	int64 size = 0;
 	bool waitingForAlbum = false;
+	bool preparing = false;
+	float64 prepareProgress = 0.;
 };
 
 Storage::Cache::Key DocumentCacheKey(int32 dcId, uint64 id);
@@ -366,6 +369,11 @@ enum class MessageFlag : uint64 {
 	HasUnreadPollVote     = (1ULL << 59),
 
 	TextAppearing         = (1ULL << 60),
+	TextAppearingStarted  = (1ULL << 61),
+
+	GuestChatViaFrom      = (1ULL << 62),
+
+	Ephemeral             = (1ULL << 63),
 };
 inline constexpr bool is_flag_type(MessageFlag) { return true; }
 using MessageFlags = base::flags<MessageFlag>;
@@ -383,9 +391,9 @@ using MediaWebPageFlags = base::flags<MediaWebPageFlag>;
 namespace Data {
 
 enum class ForwardOptions {
-	Quoted,
-	UnquotedWithCaptions,
-	UnquotedWithoutCaptions,
+	PreserveInfo,
+	NoSenderNames,
+	NoNamesAndCaptions,
 };
 
 enum class GroupingOptions {
@@ -394,9 +402,14 @@ enum class GroupingOptions {
 	Separate,
 };
 
+enum class ViewRemovalReason : uchar {
+	Removed,
+	Detached,
+};
+
 struct ForwardDraft {
 	MessageIdsList ids;
-	ForwardOptions options = ForwardOptions::Quoted;
+	ForwardOptions options = ForwardOptions::PreserveInfo;
 	GroupingOptions groupOptions = GroupingOptions::GroupAsIs;
 
 	friend inline auto operator<=>(
@@ -406,7 +419,7 @@ struct ForwardDraft {
 
 struct ResolvedForwardDraft {
 	HistoryItemsList items;
-	ForwardOptions options = ForwardOptions::Quoted;
+	ForwardOptions options = ForwardOptions::PreserveInfo;
 	GroupingOptions groupOptions = GroupingOptions::GroupAsIs;
 };
 

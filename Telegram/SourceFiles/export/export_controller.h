@@ -7,43 +7,21 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include <memory>
-#include <map>
-
 #include "base/variant.h"
 #include "mtproto/mtproto_response.h"
-#include "export/data/export_data_types.h"
-#include "export/export_settings.h"
-#include "export/output/export_output_stats.h"
 
 #include <QtCore/QPointer>
 #include <crl/crl_object_on_queue.h>
 
-#include "base/flat_map.h"
-#include "tl/tl_boxed.h"
-
-namespace Ui {
-class Show;
-}
-
 namespace MTP {
 class Instance;
 } // namespace MTP
-
-#include "export/view/export_view_settings.h"
 
 namespace Export {
 
 class ControllerObject;
 struct Settings;
 struct Environment;
-
-struct FileDownloadProgress {
-	uint64 randomId = 0;
-	QString path;
-	int64 ready = 0;
-	int64 total = 0;
-};
 
 struct PasswordCheckState {
 	QString hint;
@@ -52,25 +30,11 @@ struct PasswordCheckState {
 	bool hasPassword = false;
 	bool checked = false;
 	MTPInputPeer singlePeer = MTP_inputPeerEmpty();
-	QString singlePeerName;
-	int64 singlePeerId = 0;
-};
-
-struct FinishedState {
-	QString path;
-	int totalUniqueCount = 0;
-	int64 totalUniqueSize = 0;
-	int totalTotalCount = 0;
-	int64 totalTotalSize = 0;
-	bool fullHistory = false;
-	bool fullRange = false;
-	std::map<MediaSettings::Type, Output::StatItem> breakdown;
 };
 
 struct ProcessingState {
 	enum class Step {
 		Initializing,
-		Scanning,
 		DialogsList,
 		PersonalInfo,
 		Userpics,
@@ -104,29 +68,15 @@ struct ProcessingState {
 
 	int itemIndex = 0;
 	int itemCount = 0;
-	bool isScanning = false;
-	bool fullHistory = false;
 
 	uint64 bytesRandomId = 0;
 	QString bytesName;
 	int64 bytesLoaded = 0;
 	int64 bytesCount = 0;
-
-	base::flat_map<uint64, FileDownloadProgress> activeDownloads;
-	std::map<MediaSettings::Type, Output::StatItem> selectedStats;   // current live counts
-	std::map<MediaSettings::Type, Output::StatItem> expectedStats;   // scan totals (denominator)
-};
-
-struct ScanDoneState {
-	std::map<MediaSettings::Type, Output::StatItem> stats;
 };
 
 struct ApiErrorState {
 	MTP::Error data;
-};
-
-struct ValueErrorState {
-	QString message;
 };
 
 struct OutputErrorState {
@@ -136,15 +86,19 @@ struct OutputErrorState {
 struct CancelledState {
 };
 
+struct FinishedState {
+	QString path;
+	int filesCount = 0;
+	int64 bytesCount = 0;
+};
+
 using State = std::variant<
 	v::null_t,
 	PasswordCheckState,
 	ProcessingState,
 	ApiErrorState,
-	ValueErrorState,
 	OutputErrorState,
 	CancelledState,
-	ScanDoneState,
 	FinishedState>;
 
 //struct PasswordUpdate {
@@ -180,23 +134,11 @@ public:
 	//void cancelUnconfirmedPassword();
 
 	// Processing step.
-	void runScan(
-		const Settings &settings,
-		const Environment &environment);
-	void runUpdateScan(
-		const Settings &settings,
-		const Environment &environment,
-		const QString &folderPath);
 	void startExport(
 		const Settings &settings,
 		const Environment &environment);
-	void resumeExport(
-		const Settings &settings,
-		const Environment &environment);
-	void checkExistingExport(std::function<void(Export::View::SettingsWidget::ExistingExport)> callback) const;
 	void skipFile(uint64 randomId);
-	void cancelExportFast(bool keepCache = false);
-	void clearResults();
+	void cancelExportFast();
 
 	rpl::lifetime &lifetime();
 

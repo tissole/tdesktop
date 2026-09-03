@@ -26,38 +26,30 @@ struct Content {
 	};
 
 	std::vector<Row> rows;
-	bool isScanning = false;
 
 	static const QString kDoneId;
 
 };
 
 [[nodiscard]] Content ContentFromState(
-	const ProcessingState &state); // <-- REMOVE 'settings' argument
+	not_null<Settings*> settings,
+	const ProcessingState &state);
 [[nodiscard]] Content ContentFromState(const FinishedState &state);
-[[nodiscard]] Content ContentFromState(const ScanDoneState &state);
 
 [[nodiscard]] inline auto ContentFromState(
+		not_null<Settings*> settings,
 		rpl::producer<State> state) {
 	return std::move(
 		state
 	) | rpl::filter([](const State &state) {
-		return v::is<ProcessingState>(state)
-			|| v::is<FinishedState>(state)
-			|| v::is<ScanDoneState>(state)
-			|| v::is<CancelledState>(state);
+		return v::is<ProcessingState>(state) || v::is<FinishedState>(state);
 	}) | rpl::map([=](const State &state) {
 		if (const auto process = std::get_if<ProcessingState>(&state)) {
-			return ContentFromState(*process);
-		} else if (v::is<FinishedState>(state)) {
-			return ContentFromState(std::get<FinishedState>(state));
-		} else if (v::is<ScanDoneState>(state)) {
-			// ScanDoneState: clear top bar after scan completes
-			return ContentFromState(std::get<ScanDoneState>(state));
-		} else {
-			// CancelledState: emit scan_complete sentinel to clear top bar
-			return ContentFromState(ScanDoneState{});
+			return ContentFromState(settings, *process);
+		} else if (const auto done = std::get_if<FinishedState>(&state)) {
+			return ContentFromState(*done);
 		}
+		Unexpected("State type in ContentFromState.");
 	});
 }
 

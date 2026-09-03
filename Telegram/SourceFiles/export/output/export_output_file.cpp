@@ -22,10 +22,6 @@ namespace Output {
 File::File(const QString &path, Stats *stats) : _path(path), _stats(stats) {
 }
 
-File::File(const QString &path, int64 initialOffset, Stats *stats)
-: _path(path), _offset(initialOffset), _stats(stats) {
-}
-
 int64 File::size() const {
 	return _offset;
 }
@@ -40,16 +36,6 @@ Result File::writeBlock(const QByteArray &block) {
 		_file.reset();
 	}
 	return result;
-}
-
-void File::close() {
-	_file.reset();
-}
-
-void File::flush() {
-	if (_file) {
-		_file->flush();
-	}
 }
 
 Result File::writeBlockAttempt(const QByteArray &block) {

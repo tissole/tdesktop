@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/share_box.h"
 
 #include "api/api_premium.h"
+#include "base/call_delayed.h"
 #include "base/random.h"
 #include "lang/lang_keys.h"
 #include "base/qthelp_url.h"
@@ -26,6 +27,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/slide_wrap.h"
 #include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h"
+#include "ui/toast/toast.h"
 #include "ui/painter.h"
 #include "ui/ui_utility.h"
 #include "chat_helpers/message_field.h"
@@ -34,6 +36,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history.h"
 #include "history/history_item.h"
 #include "history/history_item_helpers.h"
+#include "history/view/controls/history_view_forward_panel.h"
 #include "history/view/history_view_element.h"
 #include "history/view/history_view_context_menu.h" // CopyPostLink.
 #include "settings/sections/settings_premium.h"
@@ -47,6 +50,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/business/data_shortcut_messages.h"
 #include "data/data_channel.h"
 #include "data/data_chat_filters.h"
+#include "data/data_community.h"
 #include "data/data_game.h"
 #include "data/data_histories.h"
 #include "data/data_user.h"
@@ -64,10 +68,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/core_settings.h"
 #include "styles/style_media_player.h"
 #include "styles/style_calls.h"
+#include "styles/style_chat_helpers.h"
 #include "styles/style_info.h"
 #include "styles/style_layers.h"
-#include "styles/style_boxes.h"
-#include "styles/style_menu_icons.h"
+#include "styles/style_share_box.h"
 
 #include <QtGui/QGuiApplication>
 #include <QtGui/QClipboard>
@@ -197,6 +201,7 @@ private:
 	void changeCheckState(Chat *chat);
 	void chooseForumTopic(not_null<Data::Forum*> forum);
 	void chooseMonoforumSublist(not_null<Data::SavedMessages*> monoforum);
+	void chooseCommunityChat(not_null<Data::CommunityInfo*> community);
 	enum class ChangeStateWay {
 		Default,
 		SkipCallback,
@@ -272,10 +277,10 @@ ShareBox::ShareBox(QWidget*, Descriptor &&descriptor)
 	.sendersCount = _descriptor.forwardOptions.sendersCount,
 	.captionsCount = _descriptor.forwardOptions.captionsCount,
 	.dropNames = (Core::App().settings().forwardOptionsEverSet()
-		? Core::App().settings().forwardOptions() != Data::ForwardOptions::Quoted
+		? Core::App().settings().forwardOptions() != Data::ForwardOptions::PreserveInfo
 		: _descriptor.forwardOptions.defaultDropNames),
 	.dropCaptions = (Core::App().settings().forwardOptionsEverSet()
-		? Core::App().settings().forwardOptions() == Data::ForwardOptions::UnquotedWithoutCaptions
+		? Core::App().settings().forwardOptions() == Data::ForwardOptions::NoNamesAndCaptions
 		: _descriptor.forwardOptions.defaultDropCaptions),
 }
 , _groupOptions(Core::App().settings().groupingOptionsEverSet()
@@ -286,7 +291,7 @@ ShareBox::ShareBox(QWidget*, Descriptor &&descriptor)
 , _optionsModified(false)
 , _hasUserSelectedForwardOption(
 	Core::App().settings().forwardOptionsEverSet()
-		&& Core::App().settings().forwardOptions() != Data::ForwardOptions::Quoted)
+		&& Core::App().settings().forwardOptions() != Data::ForwardOptions::PreserveInfo)
 , _hasUserSelectedGroupOption(
 	Core::App().settings().groupingOptionsEverSet()
 		&& Core::App().settings().groupingOptions() != Data::GroupingOptions::GroupAsIs)
@@ -437,7 +442,10 @@ void ShareBox::prepare() {
 				_inner->applyChatFilter(id);
 				scrollToY(0);
 			},
-			Window::GifPauseReason::Layer);
+			Window::GifPauseReason::Layer,
+			nullptr,
+			false,
+			true);
 		chatsFilters->lower();
 		chatsFilters->heightValue() | rpl::on_next([this](int h) {
 			updateScrollSkips();
@@ -492,6 +500,7 @@ bool ShareBox::searchByUsername(bool searchCache) {
 			_peopleQuery = query;
 			_peopleFull = false;
 			_peopleRequest = _api.request(MTPcontacts_Search(
+				MTP_flags(0),
 				MTP_string(_peopleQuery),
 				MTP_int(SearchPeopleLimit)
 			)).done([=](const MTPcontacts_Found &result, mtpRequestId requestId) {
@@ -528,7 +537,7 @@ void ShareBox::peopleDone(
 	if (_peopleRequest == requestId) {
 		switch (result.type()) {
 		case mtpc_contacts_found: {
-			auto &found = result.c_contacts_found();
+			const auto &found = result.c_contacts_found();
 			_descriptor.session->data().processUsers(found.vusers());
 			_descriptor.session->data().processChats(found.vchats());
 			_inner->peopleReceived(
@@ -729,22 +738,22 @@ bool ShareBox::showForwardMenu(not_null<Ui::IconButton*> button) {
 
 	// Initial check state based on current forward options
 	const auto checkedForward = _forwardOptions.dropCaptions
-		? Data::ForwardOptions::UnquotedWithoutCaptions
+		? Data::ForwardOptions::NoNamesAndCaptions
 		: _forwardOptions.dropNames
-		? Data::ForwardOptions::UnquotedWithCaptions
-		: Data::ForwardOptions::Quoted;
+		? Data::ForwardOptions::NoSenderNames
+		: Data::ForwardOptions::PreserveInfo;
 
 	// --- Forward option section ---
 
-	const auto quoted = makeView(
-		tr::lng_forward_mode_quoted(),
-		checkedForward == Data::ForwardOptions::Quoted);
+	const auto PreserveInfo = makeView(
+		tr::lng_forward_mode_PreserveInfo(),
+		checkedForward == Data::ForwardOptions::PreserveInfo);
 	const auto noNames = makeView(
 		tr::lng_forward_mode_unquoted_with_captions(),
-		checkedForward == Data::ForwardOptions::UnquotedWithCaptions);
+		checkedForward == Data::ForwardOptions::NoSenderNames);
 	const auto noCaptions = makeView(
 		tr::lng_forward_mode_unquoted_no_captions(),
-		checkedForward == Data::ForwardOptions::UnquotedWithoutCaptions);
+		checkedForward == Data::ForwardOptions::NoNamesAndCaptions);
 
 	ForwardOptionItem *groupAllItem = nullptr;
 	ForwardOptionItem *groupNoneItem = nullptr;
@@ -753,7 +762,7 @@ bool ShareBox::showForwardMenu(not_null<Ui::IconButton*> button) {
 
 	const auto onForwardOptionChange = [=, this](int mode, bool value) {
 		if (value) {
-			quoted->setChecked(mode == 0, anim::type::normal);
+			PreserveInfo->setChecked(mode == 0, anim::type::normal);
 			noNames->setChecked(mode == 1, anim::type::normal);
 			noCaptions->setChecked(mode == 2, anim::type::normal);
 			_forwardOptions.dropNames = (mode != 0);
@@ -767,17 +776,17 @@ bool ShareBox::showForwardMenu(not_null<Ui::IconButton*> button) {
 			}
 			
 			const auto dataOptions = (mode == 2)
-				? Data::ForwardOptions::UnquotedWithoutCaptions
+				? Data::ForwardOptions::NoNamesAndCaptions
 				: (mode == 1)
-				? Data::ForwardOptions::UnquotedWithCaptions
-				: Data::ForwardOptions::Quoted;
+				? Data::ForwardOptions::NoSenderNames
+				: Data::ForwardOptions::PreserveInfo;
 			Core::App().settings().setForwardOptions(dataOptions);
 			Core::App().settings().setForwardOptionsEverSet(true);
 			updateAdditionalTitle();
 		}
 	};
 
-	quoted->checkedChanges(
+	PreserveInfo->checkedChanges(
 		) | rpl::on_next([=](bool value) {
 			onForwardOptionChange(0, value);
 		}, _topMenu->lifetime());
@@ -938,10 +947,10 @@ void ShareBox::createButtons() {
 					singleChat,
 					(_forwardOptions.captionsCount
 						&& _forwardOptions.dropCaptions)
-						? Data::ForwardOptions::UnquotedWithoutCaptions
+						? Data::ForwardOptions::NoNamesAndCaptions
 						: (groupingActive || _forwardOptions.dropNames)
-						? Data::ForwardOptions::UnquotedWithCaptions
-						: Data::ForwardOptions::Quoted,
+						? Data::ForwardOptions::NoSenderNames
+						: Data::ForwardOptions::PreserveInfo,
 					actualGroupOptions);
 			});
 		}
@@ -1082,10 +1091,10 @@ void ShareBox::submit(Api::SendOptions options) {
 		// (grouping requires sending as new messages, which inherently drops author)
 		const auto forwardOptions = (_forwardOptions.captionsCount
 			&& _forwardOptions.dropCaptions)
-			? Data::ForwardOptions::UnquotedWithoutCaptions
+			? Data::ForwardOptions::NoNamesAndCaptions
 			: _forwardOptions.dropNames
-			? Data::ForwardOptions::UnquotedWithCaptions
-			: Data::ForwardOptions::Quoted;
+			? Data::ForwardOptions::NoSenderNames
+			: Data::ForwardOptions::PreserveInfo;
 		onstack(
 			std::move(threads),
 			checkPaid,
@@ -1184,6 +1193,7 @@ ShareBox::Inner::Inner(
 			if (const auto history = row->history()) {
 				if (!history->peer->isSelf()
 					&& (history->asForum()
+						|| JoinedCommunityChats(history->peer)
 						|| _descriptor.filterCallback(history))) {
 					_defaultChatsIndexed->addToEnd(history);
 				}
@@ -1558,9 +1568,14 @@ ShareBox::Inner::Chat::Chat(
 	st.checkbox,
 	updateCallback,
 	PaintUserpicCallback(peer, true),
-	[=](int size) { return (peer->isForum() || peer->isMonoforum())
-		? int(size * Ui::ForumUserpicRadiusMultiplier())
-		: std::optional<int>(); })
+	[=](int size) {
+		const auto channel = peer->asChannel();
+		return (peer->isForum()
+			|| peer->isMonoforum()
+			|| (channel && channel->isCommunity()))
+			? int(size * Ui::ForumUserpicRadiusMultiplier())
+			: std::optional<int>();
+	})
 , name(st.checkbox.imageRadius * 2) {
 }
 
@@ -1706,12 +1721,15 @@ void ShareBox::Inner::changeCheckState(Chat *chat) {
 	const auto checked = chat->checkbox.checked();
 	const auto forum = chat->peer->forum();
 	const auto monoforum = chat->peer->monoforum();
-	if (checked || (!forum && !monoforum)) {
+	const auto community = JoinedCommunityChats(chat->peer);
+	if (checked || (!forum && !monoforum && !community)) {
 		changePeerCheckState(chat, !checked);
 	} else if (forum) {
 		chooseForumTopic(forum);
 	} else if (monoforum) {
 		chooseMonoforumSublist(monoforum);
+	} else if (community) {
+		chooseCommunityChat(community);
 	}
 }
 
@@ -1805,6 +1823,66 @@ void ShareBox::Inner::chooseMonoforumSublist(
 	auto box = Box<PeerListBox>(
 		std::make_unique<ChooseSublistBoxController>(
 			monoforum,
+			std::move(chosen),
+			std::move(filter)),
+		std::move(initBox));
+	*weak = box.data();
+	_show->showBox(std::move(box));
+}
+
+void ShareBox::Inner::chooseCommunityChat(
+		not_null<Data::CommunityInfo*> community) {
+	const auto guard = base::make_weak(this);
+	const auto weak = std::make_shared<base::weak_qptr<Ui::BoxContent>>();
+	auto chosen = [=](not_null<Data::Thread*> thread) {
+		if (const auto strong = *weak) {
+			strong->closeBox();
+		}
+		if (!guard) {
+			return;
+		}
+		const auto history = thread->owningHistory();
+		auto row = _chatsIndexed->getRow(history);
+		if (!row) {
+			row = _chatsIndexed->addToEnd(history).main;
+		}
+		const auto chat = getChat(row);
+		if (chat->checkbox.checked()) {
+			changePeerCheckState(chat, false);
+		}
+		_chatsIndexed->moveToTop(history);
+		refresh();
+		if (const auto topic = thread->asTopic()) {
+			chat->topic = topic;
+			chat->topic->destroyed(
+			) | rpl::on_next([=] {
+				changePeerCheckState(chat, false);
+			}, chat->topicLifetime);
+		}
+		updateChatName(chat);
+		changePeerCheckState(chat, true);
+	};
+	auto initBox = [=](not_null<PeerListBox*> box) {
+		box->addButton(tr::lng_cancel(), [=] {
+			box->closeBox();
+		});
+
+		community->channel()->flagsValue(
+		) | rpl::filter([=](const ChannelData::Flags::Change &update) {
+			using Flag = ChannelData::Flag;
+			return (update.diff & Flag::Community)
+				&& !(update.value & Flag::Community);
+		}) | rpl::on_next([=] {
+			box->closeBox();
+		}, box->lifetime());
+	};
+	auto filter = [=](not_null<Data::Thread*> thread) {
+		return guard
+			&& (thread->asForum() || _descriptor.filterCallback(thread));
+	};
+	auto box = Box<PeerListBox>(
+		std::make_unique<ChooseCommunityChatBoxController>(
+			community,
 			std::move(chosen),
 			std::move(filter)),
 		std::move(initBox));
@@ -1908,6 +1986,7 @@ void ShareBox::Inner::applyChatFilter(FilterId id) {
 			for (const auto &row : list->all()) {
 				if (const auto history = row->history()) {
 					if (history->asForum()
+							|| JoinedCommunityChats(history->peer)
 							|| _descriptor.filterCallback(history)) {
 						_customChatsIndexed->addToEnd(history);
 					}
@@ -1938,6 +2017,7 @@ void ShareBox::Inner::peopleReceived(
 				const auto history = _descriptor.session->data().history(
 					peer);
 				if (!history->asForum()
+					&& !JoinedCommunityChats(peer)
 					&& !_descriptor.filterCallback(history)) {
 					continue;
 				} else if (history && _chatsIndexed->getRow(history)) {
@@ -2006,6 +2086,29 @@ ChatHelpers::ForwardedMessagePhraseArgs CreateForwardedMessagePhraseArgs(
 	};
 }
 
+void ShowForwardedMessageToast(
+		std::shared_ptr<Ui::Show> show,
+		not_null<Main::Session*> session,
+		ChatHelpers::ForwardedMessagePhraseArgs args) {
+	const auto phrase = rpl::variable<TextWithEntities>(
+		ChatHelpers::ForwardedMessagePhrase(args)).current();
+	if (phrase.empty()) {
+		return;
+	}
+	const auto icon = ChatHelpers::ForwardedMessagePhraseIcon(args);
+	base::call_delayed(st::boxDuration, session, [=] {
+		if (!show->valid()) {
+			return;
+		}
+		show->showToast({
+			.text = phrase,
+			.filter = ChatHelpers::ForwardedToSavedMessagesFilter(session),
+			.iconLottie = icon,
+			.iconLottieSize = st::toastLottieIconSize,
+		});
+	});
+}
+
 ShareBox::CountMessagesCallback ShareBox::DefaultForwardCountMessages(
 		not_null<History*> history,
 		MessageIdsList msgIds) {
@@ -2028,6 +2131,7 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 		}
 		base::flat_set<mtpRequestId> requests;
 		mtpRequestId nextRequestKey = 0;
+		bool failed = false;
 		FnMut<void()> submitCallback;
 	};
 	const auto state = std::make_shared<State>(std::move(successCallback));
@@ -2041,11 +2145,18 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 		if (!state->requests.empty()) {
 			return; // Share clicked already.
 		}
+		state->failed = false;
 
 		const auto items = history->owner().idsToItems(msgIds);
 		const auto existingIds = history->owner().itemsToIds(items);
 		if (existingIds.empty() || result.empty()) {
 			return;
+		}
+		if (HistoryView::Controls::HasRichPage(items)) {
+			forwardOptions = HistoryView::Controls::NormalizeForwardOptions(
+				&history->session(),
+				items,
+				forwardOptions);
 		}
 
 		const auto error = GetErrorForSending(
@@ -2314,8 +2425,13 @@ void FastShareMessage(
 
 					QGuiApplication::clipboard()->setText(link);
 
-					show->showToast(
-						tr::lng_share_game_link_copied(tr::now));
+					show->showToast({
+						.text = {
+							tr::lng_share_game_link_copied(tr::now),
+						},
+						.iconLottie = u"toast/voip_invite"_q,
+						.iconLottieSize = st::toastLottieIconSize,
+					});
 				}
 			}
 		}
@@ -2393,11 +2509,34 @@ void FastShareMessageToSelf(
 		std::shared_ptr<Main::SessionShow> show,
 		not_null<HistoryItem*> item) {
 	const auto self = show->session().user();
-	auto sendAction = Api::SendAction(self->owner().history(self));
+	auto &owner = self->owner();
+	const auto items = owner.idsToItems(owner.itemOrItsGroup(item));
+	const auto donePhraseArgs = ChatHelpers::ForwardedMessagePhraseArgs{
+		.toCount = 1,
+		.singleMessage = (items.size() == 1),
+		.to1 = self,
+		.to2 = nullptr,
+	};
+	auto sendAction = Api::SendAction(owner.history(self));
 	sendAction.clearDraft = false;
 	show->session().api().forwardMessages(
-		Data::ResolvedForwardDraft{ .items = {item} },
-		std::move(sendAction));
+		Data::ResolvedForwardDraft{ .items = items },
+		std::move(sendAction),
+		[=] {
+			auto phrase = rpl::variable<TextWithEntities>(
+				ChatHelpers::ForwardedMessagePhrase(
+					donePhraseArgs)).current();
+			if (!phrase.empty()) {
+				show->showToast({
+					.text = std::move(phrase),
+					.filter = ChatHelpers::ForwardedToSavedMessagesFilter(
+						&show->session()),
+					.iconLottie = ChatHelpers::ForwardedMessagePhraseIcon(
+						donePhraseArgs),
+					.iconLottieSize = st::toastLottieIconSize,
+				});
+			}
+		});
 }
 
 void FastShareMessage(
@@ -2422,7 +2561,11 @@ void FastShareLink(
 	const auto sending = std::make_shared<bool>();
 	auto copyCallback = [=] {
 		QGuiApplication::clipboard()->setText(url);
-		show->showToast(tr::lng_background_link_copied(tr::now));
+		show->showToast({
+			.text = { tr::lng_background_link_copied(tr::now) },
+			.iconLottie = u"toast/voip_invite"_q,
+			.iconLottieSize = st::toastLottieIconSize,
+		});
 	};
 	auto countMessagesCallback = [=](const TextWithTags &comment) {
 		return 1;

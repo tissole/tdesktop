@@ -1959,12 +1959,12 @@ void Pipeline::run() {
 	}, *_uploadLifetime);
 
 	_session.uploader().photoProgressInfo(
-	) | rpl::on_next([self](const Storage::UploadProgress &data) {
+	) | rpl::on_next([self](const Storage::UploadFileProgress &data) {
 		self->onUploadProgress(data);
 	}, *_uploadLifetime);
 
 	_session.uploader().documentProgressInfo(
-	) | rpl::on_next([self](const Storage::UploadProgress &data) {
+	) | rpl::on_next([self](const Storage::UploadFileProgress &data) {
 		self->onUploadProgress(data);
 	}, *_uploadLifetime);
 
@@ -2498,7 +2498,7 @@ void Pipeline::startUploadForItem(int i) {
 		.type = item.isPhoto ? SendMediaType::Photo : SendMediaType::File,
 		.to = to,
 		.caption = (_forwardOptions
-			== Data::ForwardOptions::UnquotedWithoutCaptions)
+			== Data::ForwardOptions::NoNamesAndCaptions)
 			? TextWithTags()
 			: TextWithTags{
 				srcItem->originalText().text,
@@ -2952,7 +2952,7 @@ void Pipeline::downloadFailed(int idx) {
 	EnhancedForward::pauseForward(_peerId, &_session);
 }
 
-void Pipeline::onUploadProgress(const Storage::UploadProgress &data) {
+void Pipeline::onUploadProgress(const Storage::UploadFileProgress &data) {
 	if (data.fullId.peer != _peerId) return;
 	const auto it = _uploadIndex->find(data.fullId);
 	if (it == _uploadIndex->end()) return;
@@ -4161,10 +4161,10 @@ void FlushForwardBatch(
 		| ((j->action.options.sendAs)
 			? Flag::f_send_as
 			: Flag(0))
-		| (j->forwardOptions != Data::ForwardOptions::Quoted
+		| (j->forwardOptions != Data::ForwardOptions::PreserveInfo
 			? Flag::f_drop_author
 			: Flag(0))
-		| (j->forwardOptions == Data::ForwardOptions::UnquotedWithoutCaptions
+		| (j->forwardOptions == Data::ForwardOptions::NoNamesAndCaptions
 			? Flag::f_drop_media_captions
 			: Flag(0))
 		| (j->videoTimestamp.has_value()
@@ -4448,7 +4448,7 @@ void Pump(not_null<Job*> j) {
 				auto isGrouped = [&](AlbumKind k) {
 					if (k == AlbumKind::NotGroupable) return false;
 					if (j->groupOptions == Data::GroupingOptions::RegroupAll
-						&& j->forwardOptions != Data::ForwardOptions::Quoted) {
+						&& j->forwardOptions != Data::ForwardOptions::PreserveInfo) {
 						return k == AlbumKind::AlbumsPhoto
 							|| k == AlbumKind::AlbumsVideo
 							|| k == AlbumKind::AlbumsMusic

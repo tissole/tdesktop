@@ -407,8 +407,8 @@ void SendSuggest(
 	show->session().api().forwardMessages({
 		.items = { item },
 		.options = (isForward
-			? Data::ForwardOptions::Quoted
-			: Data::ForwardOptions::UnquotedWithCaptions),
+			? Data::ForwardOptions::PreserveInfo
+			: Data::ForwardOptions::NoSenderNames),
 		}, action);
 	if (const auto onstack = done) {
 		onstack();

@@ -101,6 +101,8 @@ struct VoiceData : public DocumentAdditionalData {
 struct VideoData : public DocumentAdditionalData {
 	QString codec;
 	std::vector<not_null<DocumentData*>> qualities;
+	QSize realVideoSize;
+	crl::time startTs = 0;
 };
 
 using RoundData = VoiceData;
@@ -124,6 +126,9 @@ public:
 	void automaticLoadSettingsChanged();
 	void setVideoQualities(std::vector<not_null<DocumentData*>> qualities);
 	[[nodiscard]] int resolveVideoQuality() const;
+	[[nodiscard]] int resolveOriginalVideoQuality() const;
+	[[nodiscard]] Media::VideoQuality initialPlaybackVideoQuality(
+		Media::VideoQuality request) const;
 	[[nodiscard]] auto resolveQualities(HistoryItem *context) const
 		-> const std::vector<not_null<DocumentData*>> &;
 	[[nodiscard]] not_null<DocumentData*> chooseQuality(
@@ -131,6 +136,7 @@ public:
 		Media::VideoQuality request);
 
 	[[nodiscard]] bool loading() const;
+	void permitLoadFromCloud();
 	[[nodiscard]] QString loadingFilePath() const;
 	[[nodiscard]] bool displayLoading() const;
 	void save(
@@ -170,7 +176,8 @@ public:
 	[[nodiscard]] Image *getReplyPreview(
 		Data::FileOrigin origin,
 		not_null<PeerData*> context,
-		bool spoiler);
+		bool spoiler,
+		bool skipCover = false);
 	[[nodiscard]] Image *getReplyPreview(not_null<HistoryItem*> item);
 	[[nodiscard]] bool replyPreviewLoaded(bool spoiler) const;
 
@@ -213,6 +220,7 @@ public:
 	[[nodiscard]] bool isPatternWallPaper() const;
 	[[nodiscard]] bool isPatternWallPaperPNG() const;
 	[[nodiscard]] bool isPatternWallPaperSVG() const;
+	[[nodiscard]] bool isSvgImage() const;
 	[[nodiscard]] bool isPremiumSticker() const;
 	[[nodiscard]] bool isPremiumEmoji() const;
 	[[nodiscard]] bool emojiUsesTextColor() const;

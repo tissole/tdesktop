@@ -23,6 +23,7 @@ class SessionShow;
 
 namespace Ui {
 class PopupMenu;
+class Show;
 enum class ReportReason;
 } // namespace Ui
 
@@ -61,6 +62,10 @@ base::unique_qptr<Ui::PopupMenu> FillContextMenu(
 	const ContextMenuRequest &request);
 
 void InsertPollHiddenResultsLabel(not_null<Ui::PopupMenu*> menu);
+void InsertPollVoteRestrictionsLabel(
+	not_null<Ui::PopupMenu*> menu,
+	not_null<HistoryItem*> item,
+	not_null<PollData*> poll);
 
 void CopyPostLink(
 	not_null<Window::SessionController*> controller,
@@ -86,6 +91,7 @@ void FillPollOptionPage(
 	not_null<Data::Session*> owner,
 	FullMsgId itemId,
 	const QByteArray &pollOption,
+	not_null<Window::SessionController*> controller,
 	Fn<void()> replyToOption = nullptr);
 
 void AttachPollOptionTabs(
@@ -101,7 +107,8 @@ void AddPollActions(
 	not_null<HistoryItem*> item,
 	Context context,
 	not_null<Window::SessionController*> controller,
-	bool skipRetractVote = false);
+	bool skipRetractVote = false,
+	bool skipViewStats = false);
 void AddSaveSoundForNotifications(
 	not_null<Ui::PopupMenu*> menu,
 	not_null<HistoryItem*> item,
@@ -140,6 +147,7 @@ enum class EmojiPacksSource {
 	Reaction,
 	Reactions,
 	Tag,
+	PollOption,
 };
 [[nodiscard]] std::vector<StickerSetIdentifier> CollectEmojiPacks(
 	not_null<HistoryItem*> item,
@@ -161,7 +169,14 @@ void AddSelectRestrictionAction(
 void AddStickerSetOwnerActions(
 	not_null<Ui::PopupMenu*> menu,
 	not_null<DocumentData*> document,
-	HistoryItem* item);
+	HistoryItem* item);	
+void AddEphemeralMessageActions(
+	not_null<Ui::PopupMenu*> menu,
+	std::shared_ptr<Ui::Show> show,
+	not_null<HistoryItem*> item);
+void AddEphemeralAboutAction(
+	not_null<Ui::PopupMenu*> menu,
+	not_null<HistoryItem*> item);
 
 [[nodiscard]] TextWithEntities TransribedText(not_null<HistoryItem*> item);
 

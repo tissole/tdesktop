@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "mtproto/sender.h"
 #include "spellcheck/spellcheck_types.h"
 
 class History;
@@ -43,22 +44,27 @@ private:
 	};
 	struct ItemToRequest {
 		int length = 0;
+		bool rich = false;
 	};
 
 	void setup();
 	bool add(not_null<HistoryItem*> item, bool skipDependencies);
 	void recognizeCollected();
 	void trackSkipLanguages();
+	void trackTranslationDisabled();
 	void checkRecognized();
 	void checkRecognized(const std::vector<LanguageId> &skip);
 	void applyLimit();
 	void requestSome();
+	void requestSomeRich(LanguageId to, PeerId peerId);
 	void cancelToRequest();
 	void cancelSentRequest();
+	void stopAndRevert();
 	void switchTranslation(not_null<HistoryItem*> item, LanguageId id);
 
 	const not_null<History*> _history;
 	const std::unique_ptr<Ui::TranslateProvider> _provider;
+	MTP::Sender _api;
 	rpl::variable<bool> _trackingLanguage = false;
 	base::flat_map<FullMsgId, ItemForRecognize> _itemsForRecognize;
 	uint64 _generation = 0;

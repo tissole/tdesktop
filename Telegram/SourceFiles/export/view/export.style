@@ -10,10 +10,8 @@ using "ui/basic.style";
 using "ui/widgets/widgets.style";
 using "boxes/boxes.style";
 
-exportExtCheckboxPadding: margins(22px, 4px, 22px, 4px);
-
-exportPanelSize: size(364px, 780px);
-exportSettingPadding: margins(22px, 6px, 22px, 6px);
+exportPanelSize: size(364px, 480px);
+exportSettingPadding: margins(22px, 8px, 22px, 8px);
 exportSubSettingPadding: margins(56px, 4px, 22px, 12px);
 exportHeaderLabel: FlatLabel(boxTitle) {
 	style: TextStyle(defaultTextStyle) {
@@ -105,8 +103,6 @@ exportCalendarSizes: CalendarSizes(defaultCalendarSizes) {
 	padding: margins(14px, 0px, 14px, 0px);
 }
 
-// Extension filter row styles
-// Checkbox styles with coloured label text for the ✓ / ✕ signs
 exportExtCheckboxGreen: Checkbox(defaultBoxCheckbox) {
 	textFg: boxTextFgGood;
 	textFgActive: boxTextFgGood;
@@ -118,16 +114,5 @@ exportExtCheckboxRed: Checkbox(defaultBoxCheckbox) {
 exportExtInput: InputField(defaultInputField) {
 	textMargins: margins(7px, 3px, 7px, 3px);
 	heightMin: 24px;
-    placeholderFont: normalFont;
-}
-exportIdInput: InputField(defaultInputField) {
-	textMargins: margins(4px, 2px, 4px, 2px);
-	heightMin: 28px;
-}
-exportIdFieldLabel: FlatLabel(defaultFlatLabel) {
-	textFg: windowSubTextFg;
-	style: TextStyle(defaultTextStyle) {
-		font: font(11px);
-	}
-	maxHeight: 16px;
+	placeholderFont: normalFont;
 }

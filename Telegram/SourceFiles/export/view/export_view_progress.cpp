@@ -10,12 +10,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/animations.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/buttons.h"
-#include "ui/widgets/scroll_area.h"
 #include "ui/wrap/fade_wrap.h"
 #include "ui/wrap/vertical_layout.h"
 #include "lang/lang_keys.h"
-#include "styles/style_boxes.h"
 #include "styles/style_export.h"
+#include "styles/style_widgets.h"
 
 namespace Export {
 namespace View {
@@ -30,10 +29,6 @@ public:
 	Row(QWidget *parent, Content::Row &&data);
 
 	void updateData(Content::Row &&data);
-
-	[[nodiscard]] QString id() const {
-		return _data.id;
-	}
 
 protected:
 	int resizeGetHeight(int newWidth) override;
@@ -92,7 +87,6 @@ void ProgressWidget::Row::updateData(Content::Row &&data) {
 		}
 	}
 	updateControlsGeometry(width());
-	updateGeometry();
 	update();
 }
 
@@ -188,28 +182,15 @@ void ProgressWidget::Row::removeOldInstance(
 
 int ProgressWidget::Row::resizeGetHeight(int newWidth) {
 	updateControlsGeometry(newWidth);
-	if (_data.id.isEmpty() || _data.id == Content::kDoneId) {
-		return 0;
-	}
-	// If info was placed below label (two-line mode), return combined height.
-	if (_current.label && _current.info && _current.info->y() > 0) {
-		return _current.label->height() + _current.info->height() + st::exportProgressWidth;
-	}
 	return st::exportProgressRowHeight;
 }
 
 void ProgressWidget::Row::paintEvent(QPaintEvent *e) {
 	auto p = QPainter(this);
 
-	const bool isStat = _data.id.startsWith(QStringLiteral("stat_"))
-		|| _data.id.startsWith(QStringLiteral("header_"))
-		|| _data.id == Content::kDoneId
-		|| _data.id.isEmpty();
-	if (!isStat) {
-		const auto thickness = st::exportProgressWidth;
-		const auto top = height() - thickness;
-		p.fillRect(0, top, width(), thickness, st::shadowFg);
-	}
+	const auto thickness = st::exportProgressWidth;
+	const auto top = height() - thickness;
+	p.fillRect(0, top, width(), thickness, st::shadowFg);
 
 	for (const auto &instance : _old) {
 		paintInstance(p, instance);
@@ -221,9 +202,6 @@ void ProgressWidget::Row::paintInstance(QPainter &p, const Instance &data) {
 	const auto opacity = data.opacity.value(data.hiding ? 0. : 1.);
 
 	if (!opacity) {
-		return;
-	}
-	if (_data.id.isEmpty() || _data.id == Content::kDoneId) {
 		return;
 	}
 	p.setOpacity(opacity);
@@ -254,10 +232,7 @@ void ProgressWidget::Row::updateInstanceGeometry(
 		return;
 	}
 	instance.info->resizeToNaturalWidth(newWidth);
-	const auto infoWidth = instance.info->width();
-	const auto labelAvailable = newWidth - infoWidth;
-	const auto labelWidth = std::max(labelAvailable, newWidth / 3);
-	instance.label->resizeToWidth(labelWidth);
+	instance.label->resizeToWidth(newWidth - instance.info->width());
 	instance.info->moveToRight(0, 0, newWidth);
 	instance.label->moveToLeft(0, 0, newWidth);
 }
@@ -266,18 +241,8 @@ ProgressWidget::ProgressWidget(
 	QWidget *parent,
 	rpl::producer<Content> content)
 : RpWidget(parent)
-, _scroll(Ui::CreateChild<Ui::ScrollArea>(this, st::defaultScrollArea))
-, _body(static_cast<Ui::VerticalLayout*>(_scroll->setOwnedWidget(
-	object_ptr<Ui::OverrideMargins>(
-		_scroll,
-		object_ptr<Ui::VerticalLayout>(_scroll)))->entity()))
+, _body(this)
 , _fileShowSkipTimer([=] { _skipFile->show(anim::type::normal); }) {
-	_about = _body->add(
-		object_ptr<Ui::FlatLabel>(
-			this,
-			tr::lng_export_progress(tr::now),
-			st::exportAboutLabel),
-		st::exportAboutPadding);
 	widthValue(
 	) | rpl::on_next([=](int width) {
 		_body->resizeToWidth(width);
@@ -285,9 +250,8 @@ ProgressWidget::ProgressWidget(
 	}, _body->lifetime());
 
 	auto skipFileWrap = _body->add(object_ptr<Ui::FixedHeightWidget>(
-		_body,
+		_body.data(),
 		st::defaultLinkButton.font->height + st::exportProgressRowSkip));
-	_skipFileWrap = skipFileWrap;
 	_skipFile = base::make_unique_q<Ui::FadeWrap<Ui::LinkButton>>(
 		skipFileWrap,
 		object_ptr<Ui::LinkButton>(
@@ -297,13 +261,12 @@ ProgressWidget::ProgressWidget(
 	_skipFile->hide(anim::type::instant);
 	_skipFile->moveToLeft(st::exportProgressRowPadding.left(), 0);
 
-	widthValue(
-	) | rpl::on_next([=](int width) {
-		if (const auto widget = static_cast<Ui::RpWidget*>(_scroll->widget())) {
-			widget->resizeToWidth(width);
-		}
-		_body->resizeToWidth(width);
-	}, lifetime());
+	_about = _body->add(
+		object_ptr<Ui::FlatLabel>(
+			this,
+			tr::lng_export_progress(tr::now),
+			st::exportAboutLabel),
+		st::exportAboutPadding);
 
 	std::move(
 		content
@@ -316,14 +279,6 @@ ProgressWidget::ProgressWidget(
 		tr::lng_export_stop(),
 		st::exportCancelButton);
 	setupBottomButton(_cancel.get());
-
-	sizeValue()
-		| rpl::on_next([=](QSize size) {
-			const auto buttonHeight = _cancel ? _cancel->height() : (_done ? _done->height() : 0);
-			const auto bottomGap = buttonHeight + st::exportCancelBottom + 10;
-			_scroll->resize(size.width(), size.height() - bottomGap);
-			_scroll->moveToLeft(0, 0);
-		}, lifetime());
 }
 
 rpl::producer<uint64> ProgressWidget::skipFileClicks() const {
@@ -353,21 +308,11 @@ void ProgressWidget::setupBottomButton(not_null<Ui::RoundButton*> button) {
 }
 
 void ProgressWidget::updateState(Content &&content) {
-	const auto doneId = Content::kDoneId;
-	if (ranges::any_of(content.rows, [](const auto &r) {
-		return r.id == QStringLiteral("scan_complete");
-	})) {
-		return;
-	}
-	const auto done = ranges::any_of(content.rows, [&](const auto &row) {
-		return row.id == doneId;
-	});
-	if (done) {
+	if (!content.rows.empty() && content.rows[0].id == Content::kDoneId) {
 		showDone();
 	}
 
 	const auto wasCount = _rows.size();
-	const auto headerCount = 2;
 	auto index = 0;
 	for (auto &row : content.rows) {
 		if (index < _rows.size()) {
@@ -375,20 +320,19 @@ void ProgressWidget::updateState(Content &&content) {
 		} else {
 			if (index > 0) {
 				_body->insert(
-					headerCount + index * 2 - 1,
+					index * 2 - 1,
 					object_ptr<Ui::FixedHeightWidget>(
 						this,
 						st::exportProgressRowSkip));
 			}
 			_rows.push_back(_body->insert(
-				headerCount + index * 2,
+				index * 2,
 				object_ptr<Row>(this, std::move(row)),
 				st::exportProgressRowPadding));
 			_rows.back()->show();
 		}
 		++index;
 	}
-
 	const auto fileRandomId = !content.rows.empty()
 		? content.rows.back().randomId
 		: uint64(0);
@@ -410,16 +354,9 @@ void ProgressWidget::updateState(Content &&content) {
 
 void ProgressWidget::showDone() {
 	_cancel = nullptr;
-	if (_skipFileWrap) {
-		_skipFileWrap->hide();
-	}
 	_skipFile->hide(anim::type::instant);
 	_fileShowSkipTimer.cancel();
-
 	_about->setText(tr::lng_export_about_done(tr::now));
-
-	_body->resizeToWidth(width());
-
 	_done = base::make_unique_q<Ui::RoundButton>(
 		this,
 		tr::lng_export_done(),
