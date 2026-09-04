@@ -5609,7 +5609,7 @@ void Message::drawInfo(
 				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
 				: QLocale::system().timeFormat(QLocale::ShortFormat));
 		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-			? QString(" %1").arg(item->fullId().msg.bare)
+			? QString(" (%1)").arg(item->fullId().msg.bare)
 			: QString();
 		const auto views = item->Get<HistoryMessageViews>();
 		const auto viewsText = (views && views->views.count >= 0)
@@ -5705,7 +5705,7 @@ TextState Message::bottomInfoTextState(
 				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
 				: QLocale::system().timeFormat(QLocale::ShortFormat));
 		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-			? QString(" %1").arg(item->fullId().msg.bare)
+			? QString(" (%1)").arg(item->fullId().msg.bare)
 			: QString();
 		const auto views = item->Get<HistoryMessageViews>();
 		const auto viewsText = (views && views->views.count >= 0)

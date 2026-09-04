@@ -1,4 +1,4 @@
-﻿/*
+/*
 This file is part of Telegram Desktop,
 the official desktop application for the Telegram messaging service.
 
@@ -749,7 +749,7 @@ BottomInfo::Data BottomInfoDataFromMessage(not_null<Message*> message) {
 	}
 	if (GetEnhancedBool("show_messages_id")) {
 		if (item->fullId().msg > 0)
-			result.msgId = QString(" %1").arg(item->fullId().msg.bare);
+			result.msgId = QString(" (%1)").arg(item->fullId().msg.bare);
 	}
 	if (!forwarded) {
 		return result;

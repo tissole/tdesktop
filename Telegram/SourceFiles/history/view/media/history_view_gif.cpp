@@ -908,7 +908,11 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 				if (durSeconds >= 0 && sizeBytes > 0) {
 					const auto font = st::msgDateFont;
 					const auto sti = context.imageStyle();
-					const auto text = Ui::FormatDurationText(durSeconds) + QChar(' ') + Ui::FormatSizeText(sizeBytes);
+					const auto text = Ui::FormatDurationText(durSeconds)
+						+ QChar(' ')
+						+ QChar('(')
+						+ Ui::FormatSizeText(sizeBytes)
+						+ QChar(')');
 					const auto textWidth = font->width(text);
 					const auto textHeight = font->height;
 					const auto hPadding = 2;
@@ -1103,7 +1107,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
 					: QLocale::system().timeFormat(QLocale::ShortFormat));
 			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-				? QString(" %1").arg(item->fullId().msg.bare)
+				? QString(" (%1)").arg(item->fullId().msg.bare)
 				: QString();
 
 			// Construct display string: "[ViewsIcon] [Count] [AuthorName] [Time] [ID]"
@@ -1209,7 +1213,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 				: QLocale::system().timeFormat(QLocale::ShortFormat));
 
 		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-			? QString(" %1").arg(item->fullId().msg.bare)
+			? QString(" (%1)").arg(item->fullId().msg.bare)
 			: QString();
 
 		const auto views = item->Get<HistoryMessageViews>();
@@ -1625,7 +1629,7 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 				: QLocale::system().timeFormat(QLocale::ShortFormat));
 
 		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-			? QString(" %1").arg(item->fullId().msg.bare)
+			? QString(" (%1)").arg(item->fullId().msg.bare)
 			: QString();
 
 		const auto views = item->Get<HistoryMessageViews>();
@@ -1899,7 +1903,7 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 					? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
 					: QLocale::system().timeFormat(QLocale::ShortFormat));
 			const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-				? QString(" %1").arg(item->fullId().msg.bare)
+				? QString(" (%1)").arg(item->fullId().msg.bare)
 				: QString();
 
 			QString displayText = viewsText;

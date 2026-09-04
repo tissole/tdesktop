@@ -320,7 +320,7 @@ void UnwrappedMedia::drawSurrounding(
 				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
 				: QLocale::system().timeFormat(QLocale::ShortFormat));
 		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-			? QString(" %1").arg(item->fullId().msg.bare)
+			? QString(" (%1)").arg(item->fullId().msg.bare)
 			: QString();
 
 		QString displayText = viewsText;
@@ -698,7 +698,7 @@ TextState UnwrappedMedia::textState(QPoint point, StateRequest request) const {
 				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
 				: QLocale::system().timeFormat(QLocale::ShortFormat));
 		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-			? QString(" %1").arg(item->fullId().msg.bare)
+			? QString(" (%1)").arg(item->fullId().msg.bare)
 			: QString();
 
 		QString displayText = viewsText;
@@ -881,7 +881,7 @@ int UnwrappedMedia::calculateFullRight(const QRect &inner) const {
 				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
 				: QLocale::system().timeFormat(QLocale::ShortFormat));
 		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-			? QString(" %1").arg(item->fullId().msg.bare)
+			? QString(" (%1)").arg(item->fullId().msg.bare)
 			: QString();
 
 		QString displayText = viewsText;
@@ -992,7 +992,7 @@ int UnwrappedMedia::additionalWidth(
 				? QLocale::system().timeFormat(QLocale::LongFormat).remove("t")
 				: QLocale::system().timeFormat(QLocale::ShortFormat));
 		const auto msgIdText = (GetEnhancedBool("show_messages_id") && item->fullId().msg > 0)
-			? QString(" %1").arg(item->fullId().msg.bare)
+			? QString(" (%1)").arg(item->fullId().msg.bare)
 			: QString();
 
 		QString displayText = viewsText;
