@@ -1,4 +1,4 @@
-﻿/*
+/*
 This file is part of Telegram Desktop,
 the official desktop application for the Telegram messaging service.
 
@@ -1176,10 +1176,7 @@ void MainWidget::createExportTopBar(Export::View::Content &&data) {
 
 void MainWidget::destroyExportTopBar() {
 	if (_exportTopBar) {
-		const auto type = (_currentExportView && _currentExportView->isScanning())
-			? anim::type::instant
-			: anim::type::normal;
-		_exportTopBar->hide(type);
+		_exportTopBar->hide(anim::type::normal);
 	}
 }
 

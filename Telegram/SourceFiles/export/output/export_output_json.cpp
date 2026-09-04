@@ -2302,6 +2302,9 @@ QByteArray SerializeMessage(
 		}));
 	}, [&](const PaidMedia &data) {
 		push("paid_stars_amount", data.stars);
+	}, [&](const WebPage &data) {
+		push("media_type", "link");
+		push("link_url", data.url);
 	}, [&](const UnsupportedMedia &) {
 		Expects(message.richMessage.has_value());
 	}, [](v::null_t) {});

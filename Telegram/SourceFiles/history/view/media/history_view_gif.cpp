@@ -961,9 +961,9 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			const auto editedGlyph = (item->Get<HistoryMessageEdited>() && !item->hideEditedBadge())
 				? (QString::fromUtf8("✏️") + " ")
 				: QString();
-			const auto statusText = editedGlyph + _statusText;
+			const auto drawnStatusText = editedGlyph + _statusText;
 			p.setPen(st->msgDateImgFg());
-			p.drawTextLeft(statusX, statusY, width(), statusText, statusW - 2 * st::msgDateImgPadding.x());
+			p.drawTextLeft(statusX, statusY, width(), drawnStatusText, statusW - 2 * st::msgDateImgPadding.x());
 			if (mediaUnread) {
 				p.setPen(Qt::NoPen);
 				p.setBrush(st->msgServiceFg());
@@ -1835,7 +1835,7 @@ TextState Gif::textState(QPoint point, StateRequest request) const {
 					: (isRound && _parent->data()->media()->ttlSeconds())
 					? _openl // Overriden.
 					: _spoiler->link)
-				: currentVideoLink();
+				: currentVideoLink(true);
 		}
 	} else if (QRect(usex + paintx, painty, usew, painth).contains(point)) {
 		ensureDataMediaCreated();
@@ -2176,7 +2176,6 @@ void Gif::drawGrouped(
 	const auto sti = context.imageStyle();
 	_smallGroupPart = !fullFeaturedGrouped(sides);
 	const auto cornerDownload = downloadInCorner();
-	const auto canBePlayed = _dataMedia->canBePlayed();
 
 	const auto revealed = revealedProgress();
 	const auto fullHiddenBySpoiler = (revealed == 0.);

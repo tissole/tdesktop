@@ -41,6 +41,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "mainwidget.h"
 #include "apiwrap.h"
+#include "rpl/rpl.h"
 
 namespace Api {
 namespace {
@@ -1301,6 +1302,22 @@ void AddConfirmedLocalPlaceholder(const ConfirmedLocalFile &local) {
 
 } // namespace
 
+static void TrackSingleUploadDoneToast(
+		not_null<Main::Session*> session,
+		FullMsgId fullId) {
+	auto lifetime = std::make_shared<rpl::lifetime>();
+	const auto show = [=](const Storage::UploadedMedia &media) {
+		if (media.fullId != fullId || media.edit) {
+			return;
+		}
+		Ui::Toast::Show(tr::lng_tm_ul_done(tr::now, lt_count, 1));
+		lifetime->destroy();
+	};
+	session->uploader().documentReady() | rpl::on_next(show, *lifetime);
+	session->uploader().photoReady() | rpl::on_next(show, *lifetime);
+	session->uploader().secondaryFileReady() | rpl::on_next(show, *lifetime);
+}
+
 void SendConfirmedFile(
 		not_null<Main::Session*> session,
 		const std::shared_ptr<FilePrepareResult> &file) {
@@ -1349,6 +1366,10 @@ void SendConfirmedFile(
 	session->uploader().upload(local.newId, file);
 	session->api().sendAction(local.action);
 	AddConfirmedLocalPlaceholder(local);
+
+	if (!file->album && !local.itemToEdit) {
+		TrackSingleUploadDoneToast(session, local.newId);
+	}
 
 	if (local.itemToEdit) {
 		return;

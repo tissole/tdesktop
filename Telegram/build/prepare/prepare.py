@@ -519,7 +519,7 @@ stage('lzma', """
 win:
     git clone https://github.com/desktop-app/lzma.git
     cd lzma\\C\\Util\\LzmaLib
-    SET "ToolsetProp="
+    SET "ToolsetProp=/property:PlatformToolset=v145"
 winarm:
     SET "ToolsetProp=/property:PlatformToolset=v145"
 win:
@@ -1487,7 +1487,7 @@ depends:patches/breakpad.diff
 win:
     SET "PYTHONUTF8=1"
     SET "FolderPostfix="
-    SET "ToolsetProp="
+    SET "ToolsetProp=/property:PlatformToolset=v145"
 win64:
     SET "FolderPostfix=_x64"
 winarm:

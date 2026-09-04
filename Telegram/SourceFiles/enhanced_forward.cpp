@@ -238,6 +238,18 @@ std::pair<int, int> LastBatchCounts() {
 	return LastBatchCountsCache();
 }
 
+void ShowForwardDoneToast(int sent, int total, int skipped) {
+	const auto text = (skipped > 0)
+		? tr::lng_tm_fw_done_skipped(tr::now,
+			lt_done, QString::number(sent),
+			lt_total, QString::number(total),
+			lt_skipped, QString::number(skipped))
+		: tr::lng_tm_fw_done(tr::now,
+			lt_done, QString::number(sent),
+			lt_total, QString::number(total));
+	Ui::Toast::Show(text);
+}
+
 StateMap &ActiveStates() {
 	static StateMap map;
 	return map;
@@ -2368,7 +2380,8 @@ void Pipeline::sendNext() {
 						Data::ShortcutIdToMTP(&_session, _action.options.shortcutId),
 						MTP_long(_action.options.effectId),
 						MTP_long(0),
-						Api::SuggestToMTP(_action.options.suggest)),
+						Api::SuggestToMTP(_action.options.suggest),
+						MTPInputRichMessage()),
 					done,
 					fail);
 			} else {
@@ -2386,6 +2399,19 @@ void Pipeline::sendNext() {
 	// Check if all items are done
 	for (auto i = 0; i < _n; i++) {
 		if (!_items[i].sent) return;
+	}
+
+	auto done = 0;
+	for (auto i = 0; i < _n; i++) {
+		if (!_items[i].cancelled && !_items[i].dedupSkipped) {
+			done++;
+		}
+	}
+	if (done > 0 || _skippedCount > 0) {
+		EnhancedForward::ShowForwardDoneToast(
+			done,
+			done + _skippedCount,
+			_skippedCount);
 	}
 
 	// Cleanup
@@ -3911,28 +3937,8 @@ void Finish(not_null<Job*> j) {
 	}
 	j->regs.clear();
 	db.removeNfResume(j->session->uniqueId(), j->dst);
-	if (j->done > 0) {
-		const auto text = tr::lng_nf_done_toast(
-			tr::now,
-			lt_done,
-			QString::number(j->done),
-			lt_total,
-			QString::number(j->total),
-			lt_skipped,
-			QString::number(j->skipped));
-		if (const auto primary =
-			Core::App().windowFor(not_null(&j->session->account()))) {
-			primary->showToast(text, crl::time(4000));
-		}
-	} else if (j->skipped > 0) {
-		const auto text = tr::lng_tm_dl_duplicates_skipped(
-			tr::now,
-			lt_count,
-			j->skipped);
-		if (const auto primary =
-			Core::App().windowFor(not_null(&j->session->account()))) {
-			primary->showToast(text, crl::time(4000));
-		}
+	if (j->done > 0 || j->skipped > 0) {
+		EnhancedForward::ShowForwardDoneToast(j->done, j->total, j->skipped);
 	}
 	FireCompletion(j);
 	Jobs().remove(j->dst);

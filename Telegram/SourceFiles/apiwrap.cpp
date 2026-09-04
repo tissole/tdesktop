@@ -3776,7 +3776,7 @@ void ApiWrap::requestHistory(
 				parsed.fullCount);
 			finish();
 		};
-		const auto fail = [=] {
+		const auto fail = [=](const MTP::Error &error) {
 			_historyRequests.remove(key);
 			if (error.type() == u"CHANNEL_PRIVATE"_q
 				&& peer->isChannel()
@@ -4239,6 +4239,7 @@ void ApiWrap::forwardMessages(
 			std::sort(copyItems->begin(), copyItems->end(), [](auto a, auto b) {
 				return a->id < b->id;
 			});
+			*totalBefore = int(copyItems->size());
 			if (GetEnhancedBool("prevent_forward_duplicates") && !*alreadyFiltered) {
 				*alreadyFiltered = true;
 				const auto totalBeforeVal = int(copyItems->size());
@@ -4247,9 +4248,7 @@ void ApiWrap::forwardMessages(
 					*skippedCount = totalBeforeVal - int(filtered.size());
 					*copyItems = std::move(filtered);
 					if (copyItems->empty()) {
-						if (*skippedCount > 0) {
-							Ui::Toast::Show(u"Sent 0 of %1, %2 duplicates skipped"_q.arg(*totalBefore).arg(*skippedCount));
-						}
+						EnhancedForward::ShowForwardDoneToast(*totalBefore, *totalBefore, *skippedCount);
 						Data::SetCopyAlbumProgress(0, 0);
 						if (copyShared && !--copyShared->requestsLeft) copyShared->callback();
 						return;
@@ -4363,9 +4362,7 @@ void ApiWrap::forwardMessages(
 					if (*sharedIndex >= sharedBatches->size()) {
 						if (*totalBefore > 0) {
 							const auto sent = *totalBefore - *skippedCount;
-							if (*skippedCount > 0) {
-								Ui::Toast::Show(u"Sent %1 of %2, %3 duplicates skipped"_q.arg(sent).arg(*totalBefore).arg(*skippedCount));
-							}
+							EnhancedForward::ShowForwardDoneToast(sent, *totalBefore, *skippedCount);
 							LOG(("Forward done: sent %1 of %2, skipped %3").arg(sent).arg(*totalBefore).arg(*skippedCount));
 						}
 						Data::SetCopyAlbumProgress(0, 0);
@@ -6388,6 +6385,12 @@ void ApiWrap::sendAlbumIfReady(not_null<SendingAlbum*> album) {
 	auto &histories = history->owner().histories();
 	const auto peer = history->peer;
 	album->sent = true;
+	if (medias.size() >= 2) {
+		Ui::Toast::Show(tr::lng_tm_ul_done(
+			tr::now,
+			lt_count,
+			int(medias.size())));
+	}
 	// Capture message pointers before sending (setRealId changes ids).
 	auto albumMsgs = std::make_shared<std::vector<
 		not_null<HistoryItem*>>>();

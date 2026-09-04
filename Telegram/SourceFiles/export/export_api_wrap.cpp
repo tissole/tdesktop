@@ -108,6 +108,8 @@ MediaSettings::Type DocumentMediaType(const Data::Document &document) {
 MediaSettings::Type OrdinaryMediaType(const Data::Media &media) {
 	return v::match(media.content, [](const Data::Document &document) {
 		return DocumentMediaType(document);
+	}, [](const Data::WebPage &) {
+		return MediaSettings::Type::Link;
 	}, [](const auto &) {
 		return MediaSettings::Type::Photo;
 	});
@@ -1802,7 +1804,7 @@ void ApiWrap::resolveDates() {
 	Expects(_chatProcess != nullptr);
 
 	// Without a date range there is nothing to resolve: start from the top.
-	if (_settings->singlePeerFrom <= 0 && _settings->singlePeerTill <= 0) {
+	if (!_settings->singlePeerFrom && !_settings->singlePeerTill) {
 		requestMessagesCount(0);
 		return;
 	}
@@ -1811,7 +1813,7 @@ void ApiWrap::resolveDates() {
 		if (!_chatProcess) {
 			return;
 		}
-		if (_settings->singlePeerTill <= 0) {
+		if (!_settings->singlePeerTill) {
 			requestMessagesCount(0);
 			return;
 		}
@@ -1819,7 +1821,7 @@ void ApiWrap::resolveDates() {
 		mainRequest(MTPmessages_GetHistory(
 			peer,
 			MTP_int(0),                           // offset_id
-			MTP_int(_settings->singlePeerTill),   // offset_date
+			MTP_int(*_settings->singlePeerTill),   // offset_date
 			MTP_int(0),                           // add_offset
 			MTP_int(1),                           // limit
 			MTP_int(0),                           // max_id
@@ -1843,7 +1845,7 @@ void ApiWrap::resolveDates() {
 		}).send();
 	};
 
-	if (_settings->singlePeerFrom <= 0) {
+	if (!_settings->singlePeerFrom) {
 		resolveTill();
 		return;
 	}
@@ -1851,7 +1853,7 @@ void ApiWrap::resolveDates() {
 	mainRequest(MTPmessages_GetHistory(
 		peer,
 		MTP_int(0),                             // offset_id
-		MTP_int(_settings->singlePeerFrom),     // offset_date
+		MTP_int(*_settings->singlePeerFrom),     // offset_date
 		MTP_int(0),                             // add_offset
 		MTP_int(1),                             // limit
 		MTP_int(0),                             // max_id
@@ -1874,7 +1876,7 @@ void ApiWrap::resolveDates() {
 					return TimeId(m.vdate().v);
 				});
 				// Exclude the boundary message only when it predates the range.
-				_chatProcess->fromId = (date > 0 && date < _settings->singlePeerFrom)
+				_chatProcess->fromId = (date > 0 && date < *_settings->singlePeerFrom)
 					? (id + 1)
 					: id;
 				if (_chatProcess->fromId > 0) {
@@ -1918,7 +1920,7 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 		}
 		const auto skipSplit = !Data::SingleMessageAfter(
 			result,
-			_settings->singlePeerFrom);
+			_settings->singlePeerFrom.value_or(0));
 		if (skipSplit) {
 			// No messages from the requested range, skip this split.
 			messagesCountLoaded(localSplitIndex, 0);
@@ -1932,7 +1934,7 @@ void ApiWrap::checkFirstMessageDate(int localSplitIndex, int count) {
 	Expects(_chatProcess != nullptr);
 	Expects(localSplitIndex < _chatProcess->info.splits.size());
 
-	if (_settings->singlePeerTill <= 0) {
+	if (!_settings->singlePeerTill) {
 		messagesCountLoaded(localSplitIndex, count);
 		return;
 	}
@@ -1948,7 +1950,7 @@ void ApiWrap::checkFirstMessageDate(int localSplitIndex, int count) {
 
 		const auto skipSplit = !Data::SingleMessageBefore(
 			result,
-			_settings->singlePeerTill);
+			_settings->singlePeerTill.value_or(0));
 		messagesCountLoaded(localSplitIndex, skipSplit ? 0 : count);
 	});
 }

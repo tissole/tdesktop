@@ -100,8 +100,16 @@ struct Settings {
 	MediaSettings media;
 
 	MTPInputPeer singlePeer = MTP_inputPeerEmpty();
-	TimeId singlePeerFrom = 0;
-	TimeId singlePeerTill = 0;
+	std::optional<TimeId> singlePeerFrom;  // nullopt = from beginning
+	std::optional<TimeId> singlePeerTill;  // nullopt = until now
+
+	// Range mode flags (mutually exclusive, exactly one is used).
+	bool useDateRange = true;
+	bool useIdRange = false;
+
+	// ID range values (only used when useIdRange = true).
+	std::optional<uint64> singlePeerFromId;  // nullopt = from first message
+	std::optional<uint64> singlePeerTillId;  // nullopt = until last message
 
 	int32 singleTopicRootId = 0;
 	uint64 singleTopicPeerId = 0;

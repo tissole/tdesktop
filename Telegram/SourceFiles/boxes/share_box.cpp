@@ -746,7 +746,7 @@ bool ShareBox::showForwardMenu(not_null<Ui::IconButton*> button) {
 	// --- Forward option section ---
 
 	const auto PreserveInfo = makeView(
-		tr::lng_forward_mode_PreserveInfo(),
+		tr::lng_forward_mode_quoted(),
 		checkedForward == Data::ForwardOptions::PreserveInfo);
 	const auto noNames = makeView(
 		tr::lng_forward_mode_unquoted_with_captions(),

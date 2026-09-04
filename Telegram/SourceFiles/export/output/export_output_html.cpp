@@ -5550,6 +5550,11 @@ MediaData HtmlWriter::Wrap::prepareMediaData(
 	}, [&](const PaidMedia &data) {
 		result.classes = "media_invoice";
 		result.status = Data::FormatMoneyAmount(data.stars, "XTR");
+	}, [&](const WebPage &data) {
+		result.classes = "media_link";
+		result.title = "Link";
+		result.status = data.url;
+		result.link = data.url;
 	}, [](const UnsupportedMedia &data) {
 		Unexpected("Unsupported message.");
 	}, [](v::null_t) {});

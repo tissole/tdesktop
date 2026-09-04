@@ -134,7 +134,8 @@ void ResolveSettings(not_null<Main::Session*> session, Settings &settings) {
 		settings.forceSubPath = IsDefaultPath(session, settings.path);
 	}
 	if (!settings.onlySinglePeer()) {
-		settings.singlePeerFrom = settings.singlePeerTill = 0;
+		settings.singlePeerFrom = std::nullopt;
+		settings.singlePeerTill = std::nullopt;
 	}
 }
 

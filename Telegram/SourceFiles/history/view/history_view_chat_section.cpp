@@ -92,6 +92,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/components/recent_inline_bots.h"
 #include "data/components/scheduled_messages.h"
 #include "data/components/sponsored_messages.h"
+#include "data/data_download_manager.h"
 #include "data/data_histories.h"
 #include "data/data_history_messages.h"
 #include "data/data_msg_id.h"

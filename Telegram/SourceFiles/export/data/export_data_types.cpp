@@ -2327,7 +2327,12 @@ Media ParseMedia(
 		content.spoilered = data.is_spoiler();
 		result.content = content;
 	}, [&](const MTPDmessageMediaWebPage &data) {
-		// Ignore web pages.
+		const auto url = data.vwebpage().match([](const MTPDwebPage &data) {
+			return data.vurl();
+		}, [](const auto &) {
+			return MTPstring();
+		});
+		result.content = WebPage{ ParseString(url) };
 	}, [&](const MTPDmessageMediaVenue &data) {
 		result.content = ParseVenue(data);
 	}, [&](const MTPDmessageMediaGame &data) {
@@ -3520,10 +3525,10 @@ bool SingleMessageAfter(
 }
 
 bool SkipMessageByDate(const Message &message, const Settings &settings) {
-	const auto goodFrom = (settings.singlePeerFrom <= 0)
-		|| (settings.singlePeerFrom <= message.date);
-	const auto goodTill = (settings.singlePeerTill <= 0)
-		|| (message.date < settings.singlePeerTill);
+	const auto goodFrom = !settings.singlePeerFrom
+		|| (*settings.singlePeerFrom <= message.date);
+	const auto goodTill = !settings.singlePeerTill
+		|| (message.date < *settings.singlePeerTill);
 	if (!goodFrom || !goodTill) {
 		return true;
 	}

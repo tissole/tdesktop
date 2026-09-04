@@ -1147,6 +1147,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_download_path_choose" = "Choose download path";
 "lng_download_path_failed" = "File download could not be started.\n\nThis might be because your selected download location is invalid. Try changing it in Settings > Advanced > Download Path.";
 "lng_download_finish_failed" = "File download could not be completed.\n\nWould you like to try again?";
+"lng_downloads_section" = "Downloads";
 
 "lng_settings_section_privacy" = "Privacy and Security";
 
@@ -8969,6 +8970,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_tm_dl_clear_list" = "Clear downloads from UI";
 "lng_tm_dl_duplicates_skipped#one" = "{count} duplicate skipped";
 "lng_tm_dl_duplicates_skipped#other" = "{count} duplicates skipped";
+"lng_tm_dl_done#one" = "Downloaded {count} file";
+"lng_tm_dl_done#other" = "Downloaded {count} files";
 
 // Transfer manager - uploads
 "lng_tm_ul_section" = "Uploads";
@@ -8985,6 +8988,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_tm_ul_clear_list" = "Clear uploads from UI";
 "lng_tm_ul_duplicates_skipped#one" = "{count} duplicate skipped";
 "lng_tm_ul_duplicates_skipped#other" = "{count} duplicates skipped";
+"lng_tm_ul_done#one" = "Uploaded {count} file";
+"lng_tm_ul_done#other" = "Uploaded {count} files";
 
 // Transfer manager - forwards
 "lng_tm_fw_section" = "Forwards";
@@ -8997,8 +9002,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_tm_fw_clear" = "Clear forwards from UI";
 "lng_tm_fw_duplicates_skipped#one" = "{count} duplicate skipped";
 "lng_tm_fw_duplicates_skipped#other" = "{count} duplicates skipped";
+"lng_tm_fw_done" = "Sent {done} of {total}";
+"lng_tm_fw_done_skipped" = "Sent {done} of {total} ({skipped} duplicates skipped)";
 "lng_tm_fw_upload_failed" = "Failed to upload {file_name}. The enhanced forward has been paused. You can resume it from the Forwards tab.";
-"lng_nf_done_toast" = "Forwarded {done} of {total} selected ({skipped} skipped)";
 "lng_forward_group_preserve" = "Preserve grouping";
 "lng_tm_fw_download_failed" = "Failed to download {file_name}. The enhanced forward has been paused. You can resume it from the Forwards tab.";
 

@@ -746,6 +746,10 @@ SessionsList ParseWebSessionsList(const MTPaccount_WebAuthorizations &data);
 struct UnsupportedMedia {
 };
 
+struct WebPage {
+	Utf8String url;
+};
+
 struct Media {
 	std::variant<
 		v::null_t,
@@ -761,6 +765,7 @@ struct Media {
 		GiveawayStart,
 		GiveawayResults,
 		PaidMedia,
+		WebPage,
 		UnsupportedMedia> content;
 	TimeId ttl = 0;
 

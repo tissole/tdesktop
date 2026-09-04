@@ -16,7 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/widgets/continuous_sliders.h"
-#include "ui/widgets/input_fields.h"
+#include "ui/widgets/fields/input_field.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/padding_wrap.h"
 #include "ui/wrap/slide_wrap.h"
@@ -409,10 +409,10 @@ void SettingsWidget::addLimitsLabel(
 	auto fromDateLink = value() | rpl::map([](const Settings &data) {
 		return data.singlePeerFrom;
 	}) | rpl::distinct_until_changed(
-	) | rpl::map([](TimeId from) {
+	) | rpl::map([](std::optional<TimeId> from) {
 		return (from
 			? rpl::single(langDayOfMonthFull(
-				base::unixtime::parse(from).date()))
+				base::unixtime::parse(*from).date()))
 			: tr::lng_export_beginning()
 		) | rpl::map(tr::url(u"internal:edit_from"_q));
 	}) | rpl::flatten_latest();
@@ -435,8 +435,8 @@ void SettingsWidget::addLimitsLabel(
 	auto fromTimeLink = value() | rpl::map([](const Settings &data) {
 		return data.singlePeerFrom;
 	}) | rpl::distinct_until_changed(
-	) | rpl::map([=](TimeId from) {
-		return mapToTime(from, u"internal:edit_from_time"_q);
+	) | rpl::map([=](std::optional<TimeId> from) {
+		return mapToTime(from.value_or(0), u"internal:edit_from_time"_q);
 	}) | rpl::flatten_latest();
 
 	auto fromLink = rpl::combine(
@@ -447,10 +447,10 @@ void SettingsWidget::addLimitsLabel(
 	auto tillDateLink = value() | rpl::map([](const Settings &data) {
 		return data.singlePeerTill;
 	}) | rpl::distinct_until_changed(
-	) | rpl::map([](TimeId till) {
+	) | rpl::map([](std::optional<TimeId> till) {
 		return (till
 			? rpl::single(langDayOfMonthFull(
-				base::unixtime::parse(till).date()))
+				base::unixtime::parse(*till).date()))
 			: tr::lng_export_end()
 		) | rpl::map(tr::url(u"internal:edit_till"_q));
 	}) | rpl::flatten_latest();
@@ -458,8 +458,8 @@ void SettingsWidget::addLimitsLabel(
 	auto tillTimeLink = value() | rpl::map([](const Settings &data) {
 		return data.singlePeerTill;
 	}) | rpl::distinct_until_changed(
-	) | rpl::map([=](TimeId till) {
-		return mapToTime(till, u"internal:edit_till_time"_q);
+	) | rpl::map([=](std::optional<TimeId> till) {
+		return mapToTime(till.value_or(0), u"internal:edit_till_time"_q);
 	}) | rpl::flatten_latest();
 
 	auto tillLink = rpl::combine(
@@ -530,26 +530,26 @@ void SettingsWidget::addLimitsLabel(
 				});
 			};
 			editDateLimit(
-				readData().singlePeerFrom,
+				readData().singlePeerFrom.value_or(0),
 				0,
-				readData().singlePeerTill,
+				readData().singlePeerTill.value_or(0),
 				tr::lng_export_from_beginning(),
 				done);
 		} else if (url == u"internal:edit_from_time"_q) {
 			const auto now = [=] {
 				auto result = TimeId(0);
 				changeData([&](Settings &settings) {
-					result = settings.singlePeerFrom;
+					result = settings.singlePeerFrom.value_or(0);
 				});
 				return result;
 			};
 			const auto done = [=](TimeId time) {
 				changeData([&](Settings &settings) {
 					const auto result = time
-						+ removeTime(settings.singlePeerFrom);
-					if (result >= settings.singlePeerTill
-							&& settings.singlePeerTill) {
-						settings.singlePeerFrom = settings.singlePeerTill
+						+ removeTime(settings.singlePeerFrom.value_or(0));
+					if (settings.singlePeerTill
+							&& result >= *settings.singlePeerTill) {
+						settings.singlePeerFrom = *settings.singlePeerTill
 							- kOffset;
 					} else {
 						settings.singlePeerFrom = result;
@@ -560,9 +560,9 @@ void SettingsWidget::addLimitsLabel(
 		} else if (url == u"internal:edit_till"_q) {
 			const auto done = [=](TimeId limit) {
 				changeData([&](Settings &settings) {
-					if (limit <= settings.singlePeerFrom
-							&& settings.singlePeerFrom) {
-						settings.singlePeerTill = settings.singlePeerFrom
+					if (settings.singlePeerFrom
+							&& limit <= *settings.singlePeerFrom) {
+						settings.singlePeerTill = *settings.singlePeerFrom
 							+ kOffset;
 					} else {
 						settings.singlePeerTill = limit;
@@ -570,8 +570,8 @@ void SettingsWidget::addLimitsLabel(
 				});
 			};
 			editDateLimit(
-				readData().singlePeerTill,
-				readData().singlePeerFrom,
+				readData().singlePeerTill.value_or(0),
+				readData().singlePeerFrom.value_or(0),
 				0,
 				tr::lng_export_till_end(),
 				done);
@@ -579,17 +579,17 @@ void SettingsWidget::addLimitsLabel(
 			const auto now = [=] {
 				auto result = TimeId(0);
 				changeData([&](Settings &settings) {
-					result = settings.singlePeerTill;
+					result = settings.singlePeerTill.value_or(0);
 				});
 				return result;
 			};
 			const auto done = [=](TimeId time) {
 				changeData([&](Settings &settings) {
 					const auto result = time
-						+ removeTime(settings.singlePeerTill);
-					if (result <= settings.singlePeerFrom
-							&& settings.singlePeerFrom) {
-						settings.singlePeerTill = settings.singlePeerFrom
+						+ removeTime(settings.singlePeerTill.value_or(0));
+					if (settings.singlePeerFrom
+							&& result <= *settings.singlePeerFrom) {
+						settings.singlePeerTill = *settings.singlePeerFrom
 							+ kOffset;
 					} else {
 						settings.singlePeerTill = result;

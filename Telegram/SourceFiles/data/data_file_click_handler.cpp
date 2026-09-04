@@ -29,6 +29,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "window/window_controller.h"
 #include "styles/style_layers.h"
+#include "rpl/rpl.h"
 
 FileClickHandler::FileClickHandler(FullMsgId context)
 : _context(context) {
@@ -136,6 +137,19 @@ void DocumentSaveClickHandler::Save(
 			if (started) {
 				started();
 			}
+			auto lifetime = std::make_shared<rpl::lifetime>();
+			data->session().data().documentLoadProgress(
+			) | rpl::filter([=](not_null<DocumentData*> doc) {
+				return (doc == data);
+			}) | rpl::on_next([=](not_null<DocumentData*> doc) {
+				if (doc->loading()) {
+					return;
+				}
+				if (!doc->filepath(true).isEmpty()) {
+					Ui::Toast::Show(tr::lng_tm_dl_done(tr::now, lt_count, 1));
+				}
+				lifetime->destroy();
+			}, *lifetime);
 		};
 		Core::App().downloadManager().checkDuplicate(
 			&data->session(),

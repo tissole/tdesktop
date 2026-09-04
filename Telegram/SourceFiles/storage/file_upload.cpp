@@ -1801,7 +1801,7 @@ rpl::producer<> Uploader::finishedUploadsCleared() const {
 	return _finishedUploadsCleared.events();
 }
 
-rpl::producer<UploadFileProgress> Uploader::UploadFileProgressValue() const {
+rpl::producer<UploadFileProgress> Uploader::uploadProgressValue() const {
 	return _uploadProgress.value();
 }
 

@@ -137,7 +137,6 @@ bool Provider::sectionHasFloatingHeader() {
 	case Type::VoiceFile:
 	case Type::RoundVoiceFile:
 	case Type::MusicFile:
-	case Type::PhotoVideo:
 	case Type::ChatPhoto:
 	case Type::Pinned:
 		return false;
@@ -159,7 +158,6 @@ QString Provider::sectionTitle(not_null<const BaseLayout*> item) {
 	case Type::VoiceFile:
 	case Type::RoundVoiceFile:
 	case Type::File:
-	case Type::PhotoVideo:
 	case Type::ChatPhoto:
 	case Type::Pinned:
 		return langMonthFull(item->dateTime().date());
@@ -189,7 +187,6 @@ bool Provider::sectionItemBelongsHere(
 	case Type::VoiceFile:
 	case Type::RoundVoiceFile:
 	case Type::File:
-	case Type::PhotoVideo:
 	case Type::ChatPhoto:
 	case Type::Pinned:
 		return date.year() == sectionDate.year()
@@ -551,13 +548,6 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 		return nullptr;
 	case Type::Video:
 		if (const auto file = getFile()) {
-			return std::make_unique<Video>(delegate, item, file, options());
-		}
-		return nullptr;
-	case Type::PhotoVideo:
-		if (const auto photo = getPhoto()) {
-			return std::make_unique<Photo>(delegate, item, photo, options());
-		} else if (const auto file = getFile()) {
 			return std::make_unique<Video>(delegate, item, file, options());
 		}
 		return nullptr;
