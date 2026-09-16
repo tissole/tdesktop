@@ -36,6 +36,7 @@ public:
 		Settings data);
 
 	[[nodiscard]] int sizeLimitExtraHeight() const;
+	[[nodiscard]] rpl::producer<int> contentHeightValue() const;
 
 	rpl::producer<Settings> value() const;
 	rpl::producer<Settings> changes() const;
@@ -118,6 +119,10 @@ private:
 	Settings _internal_data;
 
 	int _sizeLimitExtraHeight = 0;
+
+	Ui::RpWidget *_content = nullptr;
+	Ui::ScrollArea *_scroll = nullptr;
+	int _buttonsHeight = 0;
 
 	struct Wrap {
 		Wrap(rpl::producer<> value = nullptr)

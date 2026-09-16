@@ -356,6 +356,7 @@ namespace EnhancedSettings {
 		settings.insert(qsl("prevent_download_duplicates"), false);
 		settings.insert(qsl("prevent_upload_duplicates"), false);
 		settings.insert(qsl("prevent_forward_duplicates"), false);
+		settings.insert(qsl("prevent_export_duplicates"), false);
 
 		auto document = QJsonDocument();
 		document.setObject(settings);
@@ -418,6 +419,7 @@ namespace EnhancedSettings {
 		settings.insert(qsl("prevent_download_duplicates"), GetEnhancedBool("prevent_download_duplicates"));
 		settings.insert(qsl("prevent_upload_duplicates"), GetEnhancedBool("prevent_upload_duplicates"));
 		settings.insert(qsl("prevent_forward_duplicates"), GetEnhancedBool("prevent_forward_duplicates"));
+		settings.insert(qsl("prevent_export_duplicates"), GetEnhancedBool("prevent_export_duplicates"));
 
 		if (!gLocalFolders.isEmpty()) {
 			auto accounts = QJsonObject();

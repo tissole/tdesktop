@@ -160,7 +160,7 @@ Content ContentFromState(
 		break;
 	default: Unexpected("Step in ContentFromState.");
 	}
-	const auto requiredRows = settings->onlySinglePeer() ? 2 : 3;
+	const auto requiredRows = settings->onlySinglePeer() ? 1 : 2;
 	while (result.rows.size() < requiredRows) {
 		result.rows.emplace_back();
 	}
@@ -168,28 +168,130 @@ Content ContentFromState(
 }
 
 Content ContentFromState(const FinishedState &state) {
+	const auto pollGroup = [&] {
+		for (auto i = 0; i != Output::Stats::kGroups; ++i) {
+			if (Output::Stats::kGroupStats[i].type
+				== MediaSettings::Type::Poll) {
+				return i;
+			}
+		}
+		Unexpected("Poll group in stats.");
+	}();
+	const auto groupName = [](int index) {
+		switch (index) {
+		case 0: return tr::lng_export_option_photos(tr::now);
+		case 1: return tr::lng_export_option_video_files(tr::now);
+		case 2: return tr::lng_export_option_voice_messages(tr::now);
+		case 3: return tr::lng_export_option_video_messages(tr::now);
+		case 4: return tr::lng_export_option_stickers(tr::now);
+		case 5: return tr::lng_export_option_gifs(tr::now);
+		case 6: return tr::lng_export_option_files(tr::now);
+		case 7: return tr::lng_export_option_text_messages(tr::now);
+		case 8: return tr::lng_export_option_audios(tr::now);
+		case 9: return tr::lng_export_option_full_history(tr::now);
+		case 10: return tr::lng_export_option_links(tr::now);
+		case 11: return tr::lng_export_option_polls(tr::now);
+		}
+		Unexpected("Group in ContentFromState.");
+	};
 	auto result = Content();
 	result.rows.push_back({
 		Content::kDoneId,
 		tr::lng_export_finished(tr::now),
 		QString(),
-		1. });
+		1.,
+		0,
+		true });
 	result.rows.push_back({
 		Content::kDoneId,
-		tr::lng_export_total_amount(
+		tr::lng_export_stats_total(
 			tr::now,
 			lt_amount,
-			QString::number(state.filesCount)),
-		QString(),
-		1. });
-	result.rows.push_back({
-		Content::kDoneId,
-		tr::lng_export_total_size(
-			tr::now,
+			QString::number(state.filesCount),
 			lt_size,
 			Ui::FormatSizeText(state.bytesCount)),
 		QString(),
 		1. });
+	if (state.skippedFiles > 0) {
+		result.rows.push_back({
+			Content::kDoneId,
+			tr::lng_export_total_skipped(
+				tr::now,
+				lt_amount,
+				QString::number(state.skippedFiles),
+				lt_size,
+				Ui::FormatSizeText(state.skippedBytes)),
+			QString(),
+			1. });
+	}
+	for (const auto i : Output::Stats::kDisplayOrder) {
+		const auto files = state.groupFiles[i];
+		const auto skipped = state.groupSkipped[i];
+		if (!files && !skipped) {
+			continue;
+		}
+		result.rows.push_back({
+			Content::kDoneId,
+			tr::lng_export_selected_label(
+				tr::now,
+				lt_label,
+				groupName(i),
+				lt_amount,
+				QString::number(files),
+				lt_size,
+				Ui::FormatSizeText(state.groupBytes[i])),
+			(skipped > 0)
+				? tr::lng_export_stats_skipped(
+					tr::now,
+					lt_count,
+					int(skipped),
+					lt_size,
+					Ui::FormatSizeText(state.groupSkippedBytes[i]))
+				: QString(),
+			1. });
+	}
+	if (state.linkMessages > 0) {
+		const auto amount = QString("%1 (%2)")
+			.arg(state.linkTotal)
+			.arg(state.linkTotal - state.linkDuplicates);
+		result.rows.push_back({
+			Content::kDoneId,
+			tr::lng_export_stats_group(
+				tr::now,
+				lt_label,
+				tr::lng_export_option_links(tr::now),
+				lt_amount,
+				amount),
+			(state.linkDuplicates > 0)
+				? (QString("Dups: ")
+					+ QString::number(state.linkDuplicates))
+				: QString(),
+			1. });
+	}
+	if (state.groupFiles[pollGroup] > 0) {
+		result.rows.push_back({
+			Content::kDoneId,
+			tr::lng_export_stats_group(
+				tr::now,
+				lt_label,
+				groupName(pollGroup),
+				lt_amount,
+				QString::number(state.groupFiles[pollGroup])),
+			QString(),
+			1. });
+	}
+	if (state.textMessages > 0) {
+		result.rows.push_back({
+			Content::kDoneId,
+			tr::lng_export_stats_group(
+				tr::now,
+				lt_label,
+				tr::lng_export_option_text_messages(tr::now),
+				lt_amount,
+				QString::number(state.textMessages)),
+			QString(),
+			1. });
+	}
 	return result;
 }
 

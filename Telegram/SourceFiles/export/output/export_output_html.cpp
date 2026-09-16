@@ -82,6 +82,8 @@ QByteArray NoFileDescription(Data::File::SkipReason reason) {
 	case SkipReason::FileType:
 		return "Not included, "
 			"change data exporting settings to download.";
+	case SkipReason::Duplicate:
+		return "Duplicate of an already exported file.";
 	case SkipReason::None:
 		return "";
 	}
@@ -98,6 +100,7 @@ Data::File RichFilePresentation(const Data::File *file) {
 		switch (result.skipReason) {
 		case SkipReason::FileType:
 		case SkipReason::FileSize:
+		case SkipReason::Duplicate:
 			break;
 		case SkipReason::None:
 		case SkipReason::Unavailable:

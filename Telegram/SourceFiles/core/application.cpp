@@ -1074,7 +1074,7 @@ void Application::logoutWithChecks(Main::Account *account) {
 	const auto cancelAccount = [=] {
 		_downloadManager->loadingStop(session);
 		session->uploader().cancelAll();
-		_downloadManager->dedupDb().clearResumeUl(session->uniqueId());
+		_downloadManager->dedupDb().clearUlResume(session->uniqueId());
 		for (const auto &job : EnhancedForward::AllJobs(session)) {
 			if (job.active || job.resumable) {
 				EnhancedForward::CancelAll(session);
@@ -1433,7 +1433,7 @@ bool Application::transferPreventsQuit() {
 			if (const auto session = account->maybeSession()) {
 				auto &uploader = session->uploader();
 				uploader.cancelAll();
-				_downloadManager->dedupDb().clearResumeUl(
+				_downloadManager->dedupDb().clearUlResume(
 					session->uniqueId());
 				for (const auto &job : EnhancedForward::AllJobs(session)) {
 					if (job.active || job.resumable) {
@@ -1470,7 +1470,7 @@ void Application::showUnfinishedOperations() {
 	if (!_domain->started()) {
 		return;
 	}
-	const auto dlCount = _downloadManager->resumeDlCount();
+	const auto dlCount = _downloadManager->dlResumeCount();
 	const auto ulCount = uploaderPendingResumeCount();
 	auto fwJobs = std::vector<std::pair<
 		not_null<Main::Session*>,
@@ -1541,6 +1541,7 @@ void Application::showUnfinishedOperations() {
 			if (const auto session = account->maybeSession()) {
 				session->uploader().queueResumeForLater();
 				NormalForward::PauseAll(session);
+				EnhancedForward::PauseAll(session);
 			}
 		}
 		EnhancedForward::notifyTransfersUpdated();
@@ -1550,7 +1551,7 @@ void Application::showUnfinishedOperations() {
 		for (const auto &[index, account] : _domain->accounts()) {
 			if (const auto session = account->maybeSession()) {
 				session->uploader().cancelAll();
-				_downloadManager->dedupDb().clearResumeUl(
+				_downloadManager->dedupDb().clearUlResume(
 					session->uniqueId());
 				NormalForward::CancelAll(session);
 			}

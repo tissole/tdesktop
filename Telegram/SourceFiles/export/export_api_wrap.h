@@ -7,8 +7,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include <QByteArray>
+
+#include "export/export_settings.h"
+#include "export/data/export_data_types.h"
 #include "mtproto/mtproto_concurrent_sender.h"
 #include "data/data_peer_id.h"
+
+namespace Data {
+class DedupDb;
+} // namespace Data
 
 namespace Export {
 namespace Data {
@@ -106,6 +114,8 @@ public:
 		Fn<bool(Data::MessagesSlice&&)> slice,
 		FnMut<void()> done);
 
+	void requestRangeTotal(Fn<void(int)> done);
+
 	void requestTopicMessages(
 		PeerId peerId,
 		MTPInputPeer inputPeer,
@@ -118,11 +128,13 @@ public:
 	void finishExport(FnMut<void()> done);
 	void skipFile(uint64 randomId);
 	void cancelExportFast();
+	void setSessionId(uint64 sessionId);
+	void setDedupDb(const QString &path);
+	[[nodiscard]] std::vector<QString> linkUrls() const;
 
 	~ApiWrap();
 
 private:
-	class LoadedFileCache;
 	struct StartProcess;
 	struct ContactsProcess;
 	struct UserpicsProcess;
@@ -222,7 +234,8 @@ private:
 		bool topic,
 		int index,
 		int32 rawId,
-		const MTPmessages_Messages &result);
+		const MTPmessages_Messages &result,
+		int gen);
 	void requestTopicMessagesSlice();
 	void requestTopicReplies(
 		int offsetId,
@@ -278,6 +291,30 @@ private:
 		FnMut<void(QString)> done,
 		Data::Message *message = nullptr,
 		Data::Story *story = nullptr);
+	bool decideFileWithMedia(
+		Data::File &file,
+		Data::FileOrigin origin,
+		const FilePolicy &policy,
+		Fn<bool(FileProgress)> progress,
+		FnMut<void(QString)> done);
+	bool skipDuplicateById(Data::File &file, const FilePolicy &policy);
+	void recordFinishedContent(Data::File &file, const FilePolicy &policy);
+	void finishFileRecord(Data::File *file);
+	void noteMediaWritten(const Data::File &file);
+	bool decideFileWithoutMedia(
+		Data::File &file,
+		const FilePolicy &policy,
+		FnMut<void(QString)> done);
+	bool mainFileDuplicate(const FilePolicy &policy);
+	void beginSliceWalk(bool topic);
+	void prefetchNextSlice();
+	bool skipMedia() const;
+	void bufferNextSlice(Data::MessagesSlice &&slice, bool last);
+	void startBufferedSlice();
+	void clearDedupRun();
+	::Data::DedupDb *dedupDb() const;
+	PeerId currentPeer() const;
+	Data::File *walkParkedFile(const Data::File *file) const;
 	std::unique_ptr<FileProcess> prepareFileProcess(
 		const Data::File &file,
 		const Data::FileOrigin &origin) const;
@@ -331,16 +368,18 @@ private:
 	void error(const QString &text);
 	void ioError(const Output::Result &result);
 
+	Fn<void(FnMut<void()>)> _runner;
 	MTP::ConcurrentSender _mtp;
 	std::optional<uint64> _takeoutId;
 	std::optional<UserId> _selfId;
 	Output::Stats *_stats = nullptr;
+	uint64 _sessionId = 0;
+	std::unique_ptr<::Data::DedupDb> _dedupDb;
 
 	std::unique_ptr<Settings> _settings;
 	MTPInputUser _user = MTP_inputUserSelf();
 
 	std::unique_ptr<StartProcess> _startProcess;
-	std::unique_ptr<LoadedFileCache> _fileCache;
 	std::unique_ptr<ContactsProcess> _contactsProcess;
 	std::unique_ptr<UserpicsProcess> _userpicsProcess;
 	std::unique_ptr<StoriesProcess> _storiesProcess;
@@ -354,6 +393,30 @@ private:
 	base::flat_set<uint64> _unresolvedCustomEmoji;
 	base::flat_map<uint64, Data::Document> _resolvedCustomEmoji;
 	QVector<MTPMessageRange> _splits;
+	struct DedupPending {
+		uint64 docId = 0;
+		QByteArray hash;
+		bool photo = false;
+		PeerId peer = 0;
+		MediaSettings::Type type = MediaSettings::Type();
+	};
+	base::flat_map<Data::File*, DedupPending> _pendingHash;
+	base::flat_map<uint64, QByteArray> _knownFileHash;
+	base::flat_map<uint64, QByteArray> _knownFileContent;
+	base::flat_set<QByteArray> _knownLinks;
+	base::flat_set<QByteArray> _linkUrls;
+	struct PrefetchedSlice {
+		Data::MessagesSlice slice;
+		bool last = false;
+	};
+	std::optional<PrefetchedSlice> _nextSlice;
+	bool _nextRequested = false;
+	bool _waitNext = false;
+	base::flat_set<uint64> _inflightDocs;
+	base::flat_set<const Data::File*> _decidingFiles;
+	base::flat_set<PeerId> _dedupPeers;
+	int _dedupGen = 0;
+	int _sliceGen = 0;
 
 	rpl::event_stream<MTP::Error> _errors;
 	rpl::event_stream<Output::Result> _ioErrors;

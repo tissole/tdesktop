@@ -14,11 +14,21 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/output/export_output_result.h"
 #include "export/output/export_output_stats.h"
 #include "mtproto/mtp_instance.h"
+#include "ui/text/format_values.h"
+
+#include <QtCore/QFile>
+#include <QtCore/QTextStream>
 
 namespace Export {
 namespace {
 
 const auto kNullStateCallback = [](ProcessingState&) {};
+
+// History-without-media output is buffered and written in whole chunks so
+// one disk write covers many message slices instead of one per slice.
+const auto kDialogWriteBatch = 100;
+
+// Group order matches Output::Stats group indices.
 
 Settings NormalizeSettings(const Settings &settings) {
 	if (!settings.onlySinglePeer()) {
@@ -60,6 +70,8 @@ public:
 		const Environment &environment);
 	void skipFile(uint64 randomId);
 	void cancelExportFast();
+	void setSessionId(uint64 sessionId);
+	void setDedupDb(const QString &path);
 
 private:
 	using Step = ProcessingState::Step;
@@ -70,6 +82,8 @@ private:
 	void ioError(const QString &path);
 	bool ioCatchError(Output::Result result);
 	void setFinishedState();
+	Output::Result writeStatsFile() const;
+	Output::Result writeLinksFile() const;
 
 	//void requestPasswordState();
 	//void passwordStateDone(const MTPaccount_Password &password);
@@ -90,6 +104,8 @@ private:
 	void exportDialogs();
 	void exportNextDialog();
 	void exportTopic();
+	bool batchDialogSlices() const;
+	bool flushPendingSlice();
 
 	template <typename Callback = const decltype(kNullStateCallback) &>
 	ProcessingState prepareState(
@@ -123,6 +139,7 @@ private:
 
 	int _messagesWritten = 0;
 	int _messagesCount = 0;
+	Data::MessagesSlice _pendingSlice;
 
 	int _userpicsWritten = 0;
 	int _userpicsCount = 0;
@@ -401,9 +418,23 @@ void ControllerObject::cancelExportFast() {
 	setState(CancelledState());
 }
 
+void ControllerObject::setSessionId(uint64 sessionId) {
+	_api.setSessionId(sessionId);
+}
+
+void ControllerObject::setDedupDb(const QString &path) {
+	_api.setDedupDb(path);
+}
+
 void ControllerObject::exportNext() {
 	if (++_stepIndex >= _steps.size()) {
 		if (ioCatchError(_writer->finish())) {
+			return;
+		}
+		if (ioCatchError(writeStatsFile())) {
+			return;
+		}
+		if (ioCatchError(writeLinksFile())) {
 			return;
 		}
 		_api.finishExport([=] {
@@ -584,6 +615,29 @@ void ControllerObject::exportDialogs() {
 	exportNextDialog();
 }
 
+bool ControllerObject::batchDialogSlices() const {
+	if (!_settings.onlySinglePeer()) {
+		return false;
+	}
+	using Type = MediaSettings::Type;
+	const auto fileTypes = Type::Photo | Type::Video | Type::VoiceMessage
+		| Type::VideoMessage | Type::Sticker | Type::GIF | Type::File
+		| Type::Audio;
+	return ((_settings.media.types & fileTypes) == 0);
+}
+
+bool ControllerObject::flushPendingSlice() {
+	if (_pendingSlice.list.empty()) {
+		return true;
+	}
+	auto slice = std::move(_pendingSlice);
+	_pendingSlice = Data::MessagesSlice();
+	if (ioCatchError(_writer->writeDialogSlice(slice))) {
+		return false;
+	}
+	return true;
+}
+
 void ControllerObject::exportNextDialog() {
 	const auto index = ++_dialogIndex;
 	const auto info = _dialogsInfo.item(index);
@@ -597,11 +651,34 @@ void ControllerObject::exportNextDialog() {
 				info.messagesCountPerSplit,
 				0);
 			setState(stateDialogs(DownloadProgress()));
+			if (_settings.singlePeerFrom || _settings.singlePeerTill) {
+				_api.requestRangeTotal([=](int count) {
+					_messagesCount = count;
+					setState(stateDialogs(DownloadProgress()));
+				});
+			}
 			return true;
 		}, [=](DownloadProgress progress) {
 			setState(stateDialogs(progress));
 			return true;
 		}, [=](Data::MessagesSlice &&result) {
+			if (batchDialogSlices()) {
+				const auto size = result.list.size();
+				for (auto &entry : result.peers) {
+					_pendingSlice.peers.emplace(
+						entry.first,
+						std::move(entry.second));
+				}
+				for (auto &message : result.list) {
+					_pendingSlice.list.push_back(std::move(message));
+				}
+				_messagesWritten += size;
+				setState(stateDialogs(DownloadProgress()));
+				if (int(_pendingSlice.list.size()) < kDialogWriteBatch) {
+					return true;
+				}
+				return flushPendingSlice();
+			}
 			if (ioCatchError(_writer->writeDialogSlice(result))) {
 				return false;
 			}
@@ -609,6 +686,9 @@ void ControllerObject::exportNextDialog() {
 			setState(stateDialogs(DownloadProgress()));
 			return true;
 		}, [=] {
+			if (!flushPendingSlice()) {
+				return;
+			}
 			if (ioCatchError(_writer->writeDialogEnd())) {
 				return;
 			}
@@ -787,6 +867,23 @@ void ControllerObject::exportTopic() {
 			return true;
 		},
 		[=](Data::MessagesSlice &&slice) {
+			if (batchDialogSlices()) {
+				const auto size = slice.list.size();
+				for (auto &entry : slice.peers) {
+					_pendingSlice.peers.emplace(
+						entry.first,
+						std::move(entry.second));
+				}
+				for (auto &message : slice.list) {
+					_pendingSlice.list.push_back(std::move(message));
+				}
+				_messagesWritten += size;
+				setState(stateTopic(DownloadProgress()));
+				if (int(_pendingSlice.list.size()) < kDialogWriteBatch) {
+					return true;
+				}
+				return flushPendingSlice();
+			}
 			if (ioCatchError(_writer->writeDialogSlice(slice))) {
 				return false;
 			}
@@ -795,10 +892,19 @@ void ControllerObject::exportTopic() {
 			return true;
 		},
 		[=] {
+			if (!flushPendingSlice()) {
+				return;
+			}
 			if (ioCatchError(_writer->writeDialogEnd())) {
 				return;
 			}
 			if (ioCatchError(_writer->finish())) {
+				return;
+			}
+			if (ioCatchError(writeStatsFile())) {
+				return;
+			}
+			if (ioCatchError(writeLinksFile())) {
 				return;
 			}
 			_api.finishExport([=] {
@@ -827,10 +933,134 @@ ProcessingState ControllerObject::stateTopic(
 }
 
 void ControllerObject::setFinishedState() {
-	setState(FinishedState{
-		_writer->mainFilePath(),
-		_stats.filesCount(),
-		_stats.bytesCount() });
+	auto state = FinishedState();
+	state.path = _writer->mainFilePath();
+	for (auto i = 0; i != Output::Stats::kGroups; ++i) {
+		const auto type = Output::Stats::kGroupStats[i].type;
+		state.groupFiles[i] = _stats.typeFiles(type);
+		state.groupBytes[i] = _stats.typeBytes(type);
+		state.groupSkipped[i] = _stats.typeSkipped(type);
+		state.groupSkippedBytes[i] = _stats.typeSkippedBytes(type);
+		if (type == MediaSettings::Type::Poll) {
+			continue;
+		}
+		state.filesCount += int(state.groupFiles[i]);
+		state.bytesCount += state.groupBytes[i];
+		state.skippedFiles += state.groupSkipped[i];
+		state.skippedBytes += state.groupSkippedBytes[i];
+	}
+	state.textMessages = _stats.textMessages();
+	state.linkMessages = _stats.linkMessages();
+	state.linkTotal = _stats.linkTotal();
+	state.linkDuplicates = _stats.linkDuplicates();
+	state.messagesTotal = _stats.messagesTotal();
+	setState(std::move(state));
+}
+
+constexpr auto kDiagBuild = 10;
+
+Output::Result ControllerObject::writeStatsFile() const {
+	const auto path = _settings.path + QString::fromLatin1("stats.txt");
+	auto file = QFile(path);
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+		return Output::Result(Output::Result::Type::Error, path);
+	}
+	auto stream = QTextStream(&file);
+	auto totalFiles = int64(0);
+	auto totalBytes = int64(0);
+	auto skippedFiles = int64(0);
+	auto skippedBytes = int64(0);
+	for (auto i = 0; i != Output::Stats::kGroups; ++i) {
+		const auto type = Output::Stats::kGroupStats[i].type;
+		if (type == MediaSettings::Type::Poll) {
+			continue;
+		}
+		totalFiles += _stats.typeFiles(type);
+		totalBytes += _stats.typeBytes(type);
+		skippedFiles += _stats.typeSkipped(type);
+		skippedBytes += _stats.typeSkippedBytes(type);
+	}
+	stream << "Total unique files: " << totalFiles << " ("
+		<< Ui::FormatSizeText(totalBytes) << "), Total duplicates: "
+		<< skippedFiles << " ("
+		<< Ui::FormatSizeText(skippedBytes) << ")\n\n";
+	LOG(("ExportDiag: summary messages=%1 unique=%2 dupes=%3 build=%4")
+		.arg(_stats.messagesTotal())
+		.arg(totalFiles)
+		.arg(skippedFiles)
+		.arg(kDiagBuild));
+	for (const auto i : Output::Stats::kDisplayOrder) {
+		const auto &group = Output::Stats::kGroupStats[i];
+		const auto files = _stats.typeFiles(group.type);
+		const auto skipped = _stats.typeSkipped(group.type);
+		if (!files && !skipped) {
+			continue;
+		}
+		LOG(("ExportDiag: group %1 unique=%2 uniquebytes=%3 dupes=%4 dupebytes=%5")
+			.arg(group.key)
+			.arg(files)
+			.arg(_stats.typeBytes(group.type))
+			.arg(skipped)
+			.arg(_stats.typeSkippedBytes(group.type)));
+		stream << group.name << ": " << files
+			<< " ("
+			<< Ui::FormatSizeText(_stats.typeBytes(group.type)) << ')';
+		if (skipped > 0) {
+			stream << ", Dups: " << skipped << ", ("
+				<< Ui::FormatSizeText(_stats.typeSkippedBytes(group.type))
+				<< ')';
+		}
+		stream << '\n';
+	}
+	if (_stats.linkMessages()) {
+		stream << "Links: " << _stats.linkTotal() << " ("
+			<< (_stats.linkTotal() - _stats.linkDuplicates()) << ')';
+		if (const auto dup = _stats.linkDuplicates()) {
+			stream << ", Duplicates: " << dup;
+		}
+		stream << '\n';
+	}
+	for (auto i = 0; i != Output::Stats::kGroups; ++i) {
+		if (Output::Stats::kGroupStats[i].type
+			!= MediaSettings::Type::Poll) {
+			continue;
+		}
+		stream << Output::Stats::kGroupStats[i].name << ": "
+			<< _stats.typeFiles(Output::Stats::kGroupStats[i].type) << '\n';
+	}
+	if (const auto text = _stats.textMessages()) {
+		stream << "Text messages: " << text << '\n';
+	}
+	stream.flush();
+	if (stream.status() != QTextStream::Ok) {
+		return Output::Result(Output::Result::Type::Error, path);
+	}
+	return Output::Result::Success();
+}
+
+Output::Result ControllerObject::writeLinksFile() const {
+	using Type = MediaSettings::Type;
+	if (!(_settings.media.types & (Type::Link | Type::FullHistory))) {
+		return Output::Result::Success();
+	}
+	const auto urls = _api.linkUrls();
+	if (urls.empty()) {
+		return Output::Result::Success();
+	}
+	const auto path = _settings.path + QString::fromLatin1("links.txt");
+	auto file = QFile(path);
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+		return Output::Result(Output::Result::Type::Error, path);
+	}
+	auto stream = QTextStream(&file);
+	for (const auto &url : urls) {
+		stream << url << '\n';
+	}
+	stream.flush();
+	if (stream.status() != QTextStream::Ok) {
+		return Output::Result(Output::Result::Type::Error, path);
+	}
+	return Output::Result::Success();
 }
 
 Controller::Controller(
@@ -910,6 +1140,18 @@ void Controller::cancelExportFast() {
 
 	_wrapped.with([=](Implementation &unwrapped) {
 		unwrapped.cancelExportFast();
+	});
+}
+
+void Controller::setSessionId(uint64 sessionId) {
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.setSessionId(sessionId);
+	});
+}
+
+void Controller::setDedupDb(const QString &path) {
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.setDedupDb(path);
 	});
 }
 

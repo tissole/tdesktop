@@ -708,6 +708,10 @@ void ChatParticipants::requestSelf(not_null<ChannelData*> channel) {
 		}
 	};
 	_selfParticipantRequests.emplace(channel);
+	// Stagger simultaneous self checks: opening the app fires one per
+	// channel in the same instant, tripping flood waits. Roughly 4/sec.
+	const auto queued = int(_selfParticipantRequests.size()) - 1;
+	const auto delay = kSmallDelayMs + crl::time(queued * 250);
 	_api.request(MTPchannels_GetParticipant(
 		channel->inputChannel(),
 		MTP_inputPeerSelf()
@@ -750,7 +754,7 @@ void ChatParticipants::requestSelf(not_null<ChannelData*> channel) {
 			channel->privateErrorReceived();
 		}
 		finalize();
-	}).afterDelay(kSmallDelayMs).send();
+	}).afterDelay(delay).send();
 }
 
 void ChatParticipants::kick(

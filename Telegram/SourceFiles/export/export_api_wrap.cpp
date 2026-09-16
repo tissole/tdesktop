@@ -7,7 +7,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "export/export_api_wrap.h"
 
+#include "settings.h"
+#include "data/data_dedup_db.h"
+#include "data/data_file_hash.h"
+#include "export/export_dedup.h"
 #include "export/export_settings.h"
+#include "export/output/export_output_stats.h"
 #include "export/data/export_data_types.h"
 #include "export/output/export_output_result.h"
 #include "export/output/export_output_file.h"
@@ -17,6 +22,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/random.h"
 #include <set>
 #include <deque>
+#include <algorithm>
+
+#include <QDateTime>
 
 namespace Export {
 namespace {
@@ -29,44 +37,13 @@ constexpr auto kChatsSliceLimit = 100;
 constexpr auto kMessagesSliceLimit = 100;
 constexpr auto kTopPeerSliceLimit = 100;
 constexpr auto kFileMaxSize = 4000 * int64(1024 * 1024);
-constexpr auto kLocationCacheSize = 100'000;
+constexpr auto kHydrateParallel = 4;
+constexpr auto kWarmupBigParallel = 50;
+constexpr auto kWarmupSmallParallel = 0;
+constexpr auto kWalkHashAttempts = 20;
 constexpr auto kMaxEmojiPerRequest = 100;
 constexpr auto kStoriesSliceLimit = 100;
 constexpr auto kProfileMusicSliceLimit = 100;
-
-struct LocationKey {
-	uint64 type;
-	uint64 id;
-
-	inline bool operator<(const LocationKey &other) const {
-		return std::tie(type, id) < std::tie(other.type, other.id);
-	}
-};
-
-LocationKey ComputeLocationKey(const Data::FileLocation &value) {
-	auto result = LocationKey();
-	result.type = value.dcId;
-	value.data.match([&](const MTPDinputDocumentFileLocation &data) {
-		const auto letter = data.vthumb_size().v.isEmpty()
-			? char(0)
-			: data.vthumb_size().v[0];
-		result.type |= (2ULL << 24);
-		result.type |= (uint64(uint32(letter)) << 16);
-		result.id = data.vid().v;
-	}, [&](const MTPDinputPhotoFileLocation &data) {
-		const auto letter = data.vthumb_size().v.isEmpty()
-			? char(0)
-			: data.vthumb_size().v[0];
-		result.type |= (6ULL << 24);
-		result.type |= (uint64(uint32(letter)) << 16);
-		result.id = data.vid().v;
-	}, [&](const MTPDinputTakeoutFileLocation &data) {
-		result.type |= (5ULL << 24);
-	}, [](const auto &data) {
-		Unexpected("File location type in Export::ComputeLocationKey.");
-	});
-	return result;
-}
 
 Settings::Type SettingsFromDialogsType(Data::DialogInfo::Type type) {
 	using DialogType = Data::DialogInfo::Type;
@@ -101,6 +78,8 @@ MediaSettings::Type DocumentMediaType(const Data::Document &document) {
 		return Type::GIF;
 	} else if (document.isVideoFile) {
 		return Type::Video;
+	} else if (document.isAudioFile) {
+		return Type::Audio;
 	}
 	return Type::File;
 }
@@ -412,22 +391,6 @@ void VisitRichMessage(
 
 } // namespace
 
-class ApiWrap::LoadedFileCache {
-public:
-	using Location = Data::FileLocation;
-
-	LoadedFileCache(int limit);
-
-	void save(const Location &location, const QString &relativePath);
-	std::optional<QString> find(const Location &location) const;
-
-private:
-	int _limit = 0;
-	std::map<LocationKey, QString> _map;
-	std::deque<LocationKey> _list;
-
-};
-
 struct ApiWrap::StartProcess {
 	FnMut<void(StartInfo)> done;
 
@@ -528,6 +491,7 @@ struct ApiWrap::FilePolicy {
 	const Data::Message *message = nullptr;
 	MediaSettings::Type type = MediaSettings::Type();
 	int64 controllingSize = 0;
+	bool mainFile = false;
 };
 
 struct ApiWrap::MessageFileWork {
@@ -535,6 +499,7 @@ struct ApiWrap::MessageFileWork {
 	int64 controllingSize = 0;
 	MediaSettings::Type type = MediaSettings::Type();
 	bool rich : 1 = false;
+	bool main : 1 = false;
 };
 
 struct ApiWrap::ChatsProcess {
@@ -571,6 +536,7 @@ struct ApiWrap::AbstractMessagesProcess {
 	std::vector<MessageFileWork> messageFileWork;
 	bool lastSlice = false;
 	int hydrationIndex = 0;
+	int hydrationPending = 0;
 	int fileIndex = 0;
 	int messageFileWorkIndex = 0;
 	int messageFileWorkMessageIndex = -1;
@@ -614,6 +580,7 @@ public:
 	[[nodiscard]] RequestBuilder &done(FnMut<void()> &&handler);
 	[[nodiscard]] RequestBuilder &done(
 		FnMut<void(Response &&)> &&handler);
+	[[nodiscard]] RequestBuilder &handleFloodErrors() noexcept;
 	[[nodiscard]] RequestBuilder &fail(
 		Fn<bool(const MTP::Error&)> &&handler);
 
@@ -654,6 +621,12 @@ auto ApiWrap::RequestBuilder<Request>::done(
 }
 
 template <typename Request>
+ApiWrap::RequestBuilder<Request> &ApiWrap::RequestBuilder<Request>::handleFloodErrors() noexcept {
+	[[maybe_unused]] auto &silence_warning = _builder.handleFloodErrors();
+	return *this;
+}
+
+template <typename Request>
 auto ApiWrap::RequestBuilder<Request>::fail(
 	Fn<bool(const MTP::Error &)> &&handler
 ) -> RequestBuilder& {
@@ -675,38 +648,6 @@ mtpRequestId ApiWrap::RequestBuilder<Request>::send() {
 	return _commonFailHandler
 		? _builder.fail(base::take(_commonFailHandler)).send()
 		: _builder.send();
-}
-
-ApiWrap::LoadedFileCache::LoadedFileCache(int limit) : _limit(limit) {
-	Expects(limit >= 0);
-}
-
-void ApiWrap::LoadedFileCache::save(
-		const Location &location,
-		const QString &relativePath) {
-	if (!location) {
-		return;
-	}
-	const auto key = ComputeLocationKey(location);
-	_map[key] = relativePath;
-	_list.push_back(key);
-	if (_list.size() > _limit) {
-		const auto key = _list.front();
-		_list.pop_front();
-		_map.erase(key);
-	}
-}
-
-std::optional<QString> ApiWrap::LoadedFileCache::find(
-		const Location &location) const {
-	if (!location) {
-		return std::nullopt;
-	}
-	const auto key = ComputeLocationKey(location);
-	if (const auto i = _map.find(key); i != end(_map)) {
-		return i->second;
-	}
-	return std::nullopt;
 }
 
 ApiWrap::FileProcess::FileProcess(const QString &path, Output::Stats *stats)
@@ -778,8 +719,8 @@ auto ApiWrap::fileRequest(const Data::FileLocation &location, int64 offset) {
 ApiWrap::ApiWrap(
 	base::weak_qptr<MTP::Instance> weak,
 	Fn<void(FnMut<void()>)> runner)
-: _mtp(weak, std::move(runner))
-, _fileCache(std::make_unique<LoadedFileCache>(kLocationCacheSize)) {
+: _runner(runner)
+, _mtp(weak, std::move(runner)) {
 }
 
 rpl::producer<MTP::Error> ApiWrap::errors() const {
@@ -1137,6 +1078,7 @@ void ApiWrap::requestOtherData(
 	_otherDataProcess->done = std::move(done);
 	_otherDataProcess->file.location.data = MTP_inputTakeoutFileLocation();
 	_otherDataProcess->file.suggestedPath = suggestedPath;
+	_dedupGen++;
 	loadFile(
 		_otherDataProcess->file,
 		Data::FileOrigin(),
@@ -1167,6 +1109,7 @@ void ApiWrap::requestUserpics(
 	_userpicsProcess->fileProgress = std::move(progress);
 	_userpicsProcess->handleSlice = std::move(slice);
 	_userpicsProcess->finish = std::move(finish);
+	_dedupGen++;
 
 	mainRequest(MTPphotos_GetUserPhotos(
 		_user,
@@ -1210,6 +1153,7 @@ void ApiWrap::loadUserpicsFiles(Data::UserpicsSlice &&slice) {
 	if (slice.list.empty()) {
 		_userpicsProcess->lastSlice = true;
 	}
+	++_sliceGen;
 	_userpicsProcess->slice = std::move(slice);
 	_userpicsProcess->fileIndex = 0;
 	loadNextUserpic();
@@ -1230,6 +1174,7 @@ void ApiWrap::loadNextUserpic() {
 		if (!ready) {
 			return;
 		}
+		noteMediaWritten(list[_userpicsProcess->fileIndex].image.file);
 	}
 	finishUserpicsSlice();
 }
@@ -1289,6 +1234,8 @@ void ApiWrap::loadUserpicDone(const QString &relativePath) {
 	file.relativePath = relativePath;
 	if (relativePath.isEmpty()) {
 		file.skipReason = Data::File::SkipReason::Unavailable;
+	} else {
+		noteMediaWritten(file);
 	}
 	loadNextUserpic();
 }
@@ -1311,6 +1258,7 @@ void ApiWrap::requestStories(
 	_storiesProcess->fileProgress = std::move(progress);
 	_storiesProcess->handleSlice = std::move(slice);
 	_storiesProcess->finish = std::move(finish);
+	_dedupGen++;
 
 	mainRequest(MTPstories_GetStoriesArchive(
 		MTP_inputPeerSelf(),
@@ -1343,6 +1291,7 @@ void ApiWrap::loadStoriesFiles(Data::StoriesSlice &&slice) {
 	if (!slice.lastId) {
 		_storiesProcess->lastSlice = true;
 	}
+	++_sliceGen;
 	_storiesProcess->slice = std::move(slice);
 	_storiesProcess->fileIndex = 0;
 	loadNextStory();
@@ -1365,6 +1314,7 @@ void ApiWrap::loadNextStory() {
 		if (!ready) {
 			return;
 		}
+		noteMediaWritten(story.file());
 		const auto thumbProgress = [=](FileProgress value) {
 			return loadStoryThumbProgress(value);
 		};
@@ -1378,6 +1328,7 @@ void ApiWrap::loadNextStory() {
 		if (!thumbReady) {
 			return;
 		}
+		noteMediaWritten(story.thumb().file);
 	}
 	finishStoriesSlice();
 }
@@ -1436,6 +1387,8 @@ void ApiWrap::loadStoryDone(const QString &relativePath) {
 	file.relativePath = relativePath;
 	if (relativePath.isEmpty()) {
 		file.skipReason = Data::File::SkipReason::Unavailable;
+	} else {
+		noteMediaWritten(file);
 	}
 	loadNextStory();
 }
@@ -1456,6 +1409,8 @@ void ApiWrap::loadStoryThumbDone(const QString &relativePath) {
 	file.relativePath = relativePath;
 	if (relativePath.isEmpty()) {
 		file.skipReason = Data::File::SkipReason::Unavailable;
+	} else {
+		noteMediaWritten(file);
 	}
 	loadNextStory();
 }
@@ -1478,6 +1433,7 @@ void ApiWrap::requestProfileMusic(
 	_profileMusicProcess->fileProgress = std::move(progress);
 	_profileMusicProcess->handleSlice = std::move(slice);
 	_profileMusicProcess->finish = std::move(finish);
+	_dedupGen++;
 
 	mainRequest(MTPusers_GetSavedMusic(
 		_user,
@@ -1551,6 +1507,7 @@ void ApiWrap::loadProfileMusicFiles(Data::ProfileMusicSlice &&slice) {
 	if (slice.list.empty()) {
 		_profileMusicProcess->lastSlice = true;
 	}
+	++_sliceGen;
 	_profileMusicProcess->slice = std::move(slice);
 	_profileMusicProcess->fileIndex = 0;
 	loadNextProfileMusic();
@@ -1574,6 +1531,7 @@ void ApiWrap::loadNextProfileMusic() {
 		if (!ready) {
 			return;
 		}
+		noteMediaWritten(message.file());
 		const auto thumbProgress = [=](FileProgress value) {
 			return loadProfileMusicThumbProgress(value);
 		};
@@ -1586,6 +1544,7 @@ void ApiWrap::loadNextProfileMusic() {
 		if (!thumbReady) {
 			return;
 		}
+		noteMediaWritten(message.thumb().file);
 	}
 	finishProfileMusicSlice();
 }
@@ -1643,6 +1602,7 @@ void ApiWrap::loadProfileMusicDone(const QString &relativePath) {
 	const auto index = _profileMusicProcess->fileIndex;
 	auto &file = _profileMusicProcess->slice->list[index].file();
 	file.relativePath = relativePath;
+	finishFileRecord(&file);
 	if (relativePath.isEmpty()) {
 		file.skipReason = Data::File::SkipReason::Unavailable;
 	}
@@ -1663,6 +1623,7 @@ void ApiWrap::loadProfileMusicThumbDone(const QString &relativePath) {
 	const auto index = _profileMusicProcess->fileIndex;
 	auto &file = _profileMusicProcess->slice->list[index].thumb().file;
 	file.relativePath = relativePath;
+	finishFileRecord(&file);
 	if (relativePath.isEmpty()) {
 		file.skipReason = Data::File::SkipReason::Unavailable;
 	}
@@ -1797,6 +1758,12 @@ void ApiWrap::requestMessages(
 	_chatProcess->handleSlice = std::move(slice);
 	_chatProcess->done = std::move(done);
 
+	// Kill stale async callbacks from previous chats: their file
+	// references die with their slices while this process is alive.
+	_dedupGen++;
+	_nextSlice.reset();
+	_nextRequested = false;
+	_waitNext = false;
 	resolveDates();
 }
 
@@ -1967,8 +1934,60 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 	}
 }
 
+void ApiWrap::requestRangeTotal(Fn<void(int)> done) {
+	if (!_chatProcess || !_takeoutId) {
+		return;
+	}
+	const auto peer = _chatProcess->info.input;
+	const auto takeout = *_takeoutId;
+	const auto gen = _dedupGen;
+	const auto from = _settings->singlePeerFrom
+		? MTP_int(*_settings->singlePeerFrom)
+		: MTP_int(0);
+	const auto till = _settings->singlePeerTill
+		? MTP_int(*_settings->singlePeerTill)
+		: MTP_int(0);
+	mainRequest(MTPmessages_Search(
+		MTP_flags(0),
+		peer,
+		MTP_string(),
+		MTPInputPeer(),
+		MTPInputPeer(),
+		MTPVector<MTPReaction>(),
+		MTPint(),
+		MTP_inputMessagesFilterEmpty(),
+		from,
+		till,
+		MTP_int(0),
+		MTP_int(0),
+		MTP_int(1),
+		MTP_int(0),
+		MTP_int(0),
+		MTP_long(0)
+	)).handleFloodErrors().done([=](const MTPmessages_Messages &result) {
+		if (gen != _dedupGen || !_chatProcess || _takeoutId != takeout) {
+			return;
+		}
+		const auto count = result.match(
+			[](const MTPDmessages_messages &data) {
+				return int(data.vmessages().v.size());
+			}, [](const MTPDmessages_messagesSlice &data) {
+				return data.vcount().v;
+			}, [](const MTPDmessages_channelMessages &data) {
+				return data.vcount().v;
+			}, [](const MTPDmessages_messagesNotModified &data) {
+				return -1;
+			});
+		if (count < 0) {
+			return;
+		}
+		done(count);
+	}).send();
+}
+
 void ApiWrap::finishExport(FnMut<void()> done) {
 	const auto guard = gsl::finally([&] { _takeoutId = std::nullopt; });
+	clearDedupRun();
 
 	mainRequest(MTPaccount_FinishTakeoutSession(
 		MTP_flags(MTPaccount_FinishTakeoutSession::Flag::f_success)
@@ -1987,6 +2006,20 @@ void ApiWrap::skipFile(uint64 randomId) {
 }
 
 void ApiWrap::cancelExportFast() {
+	_dedupGen++;
+	_decidingFiles.clear();
+	clearDedupRun();
+	_nextSlice = std::nullopt;
+	_nextRequested = false;
+	_waitNext = false;
+	if (const auto db = dedupDb()) {
+		for (const auto docId : base::take(_inflightDocs)) {
+			Export::CancelFile(*db, docId);
+		}
+	} else {
+		_inflightDocs.clear();
+	}
+	_pendingHash.clear();
 	if (_takeoutId.has_value()) {
 		const auto requestId = mainRequest(MTPaccount_FinishTakeoutSession(
 			MTP_flags(0)
@@ -2425,8 +2458,10 @@ void ApiWrap::startMessagesSlice(Data::MessagesSlice &&slice) {
 	if (slice.list.empty()) {
 		process->lastSlice = true;
 	}
+	++_sliceGen;
 	process->slice = std::move(slice);
 	process->hydrationIndex = 0;
+	process->hydrationPending = 0;
 	process->fileIndex = 0;
 	process->messageFileWork.clear();
 	process->messageFileWorkIndex = 0;
@@ -2445,7 +2480,9 @@ void ApiWrap::resumeMessagesSlice() {
 	Expects(process->slice.has_value());
 
 	const auto &list = process->slice->list;
-	while (process->hydrationIndex < list.size()) {
+	const auto parallel = skipMedia() ? kHydrateParallel : 1;
+	while (process->hydrationIndex < list.size()
+		&& process->hydrationPending < parallel) {
 		const auto index = process->hydrationIndex;
 		const auto &message = list[index];
 		if (Data::SkipMessageByDate(message, *_settings)) {
@@ -2467,12 +2504,17 @@ void ApiWrap::resumeMessagesSlice() {
 				peer = _chatProcess->info.migratedFromInput;
 			}
 		}
+		const auto gen = _dedupGen;
+		++process->hydrationIndex;
+		++process->hydrationPending;
 		mainRequest(MTPmessages_GetRichMessage(
 			peer,
 			MTP_int(rawId)
-		)).done([=](const MTPmessages_Messages &result) {
-			hydrateMessageDone(topic, index, rawId, result);
+		)).handleFloodErrors().done([=](const MTPmessages_Messages &result) {
+			hydrateMessageDone(topic, index, rawId, result, gen);
 		}).send();
+	}
+	if (process->hydrationPending > 0) {
 		return;
 	}
 
@@ -2488,7 +2530,11 @@ void ApiWrap::hydrateMessageDone(
 		bool topic,
 		int index,
 		int32 rawId,
-		const MTPmessages_Messages &result) {
+		const MTPmessages_Messages &result,
+		int gen) {
+	if (gen != _dedupGen) {
+		return;
+	}
 	const auto richMessage = ExtractFullRichMessage(result, rawId);
 	const auto process = topic
 		? static_cast<AbstractMessagesProcess*>(_topicProcess.get())
@@ -2499,8 +2545,7 @@ void ApiWrap::hydrateMessageDone(
 	if (!richMessage
 		|| !process
 		|| otherProcess
-		|| !process->slice
-		|| process->hydrationIndex != index) {
+		|| !process->slice) {
 		error("Unexpected rich message hydration result.");
 		return;
 	}
@@ -2526,7 +2571,6 @@ void ApiWrap::hydrateMessageDone(
 		message.date);
 	if (parsed.part
 		|| !process->slice
-		|| process->hydrationIndex != index
 		|| index < 0
 		|| index >= process->slice->list.size()) {
 		error("Unexpected rich message hydration result.");
@@ -2540,7 +2584,7 @@ void ApiWrap::hydrateMessageDone(
 		return;
 	}
 	stored.richMessage = std::move(parsed);
-	++process->hydrationIndex;
+	--process->hydrationPending;
 	resumeMessagesSlice();
 }
 
@@ -2580,7 +2624,7 @@ void ApiWrap::collectMessagesCustomEmoji(const Data::MessagesSlice &slice) {
 
 void ApiWrap::resolveCustomEmoji() {
 	if (_unresolvedCustomEmoji.empty()) {
-		loadNextMessageFile();
+		beginSliceWalk(false);
 		return;
 	}
 	const auto count = std::min(
@@ -2744,17 +2788,72 @@ void ApiWrap::buildMessageFileWork(
 	Expects(process.messageFileWorkIndex == 0);
 	Expects(process.messageFileWorkMessageIndex < 0);
 
+	if (_stats) {
+		_stats->incrementMessage();
+		if (v::match(message.media.content,
+			[](const Data::Poll &) { return true; },
+			[](const auto &) { return false; })) {
+			_stats->incrementType(MediaSettings::Type::Poll, 0);
+		}
+		auto links = 0;
+		auto dupLinks = 0;
+		auto hasText = false;
+		for (const auto &part : message.text) {
+			if (part.type == Data::TextPart::Type::Text
+				&& !part.text.isEmpty()) {
+				hasText = true;
+			}
+		}
+		for (const auto &link : message.links) {
+			if (_knownLinks.contains(link)) {
+				++dupLinks;
+			} else {
+				_knownLinks.insert(link);
+				++links;
+			}
+			_linkUrls.emplace(link);
+		}
+		if (!links && !dupLinks) {
+			if (const auto webpage = std::get_if<Data::WebPage>(
+					&message.media.content)) {
+				if (!webpage->url.isEmpty()) {
+					if (_knownLinks.contains(webpage->url)) {
+						++dupLinks;
+					} else {
+						_knownLinks.insert(webpage->url);
+						++links;
+					}
+					_linkUrls.emplace(webpage->url);
+				}
+			}
+		}
+		const auto hasMedia = v::match(message.media.content,
+			[](v::null_t) { return false; },
+			[](const auto &) { return true; });
+		if (hasText && !hasMedia) {
+			_stats->incrementTextMessage();
+		}
+		if (links + dupLinks > 0) {
+			_stats->incrementLinkMessage(links + dupLinks);
+		}
+		if (dupLinks > 0) {
+			_stats->incrementLinkDuplicates(dupLinks);
+		}
+	}
+
 	const auto append = [&process](
 			Data::File *file,
 			MediaSettings::Type type,
 			int64 controllingSize,
-			bool rich) {
+			bool rich,
+			bool main) {
 		Expects(file != nullptr);
 		process.messageFileWork.push_back(MessageFileWork{
 			.file = file,
 			.controllingSize = controllingSize,
 			.type = type,
 			.rich = rich,
+			.main = main,
 		});
 	};
 
@@ -2792,13 +2891,14 @@ void ApiWrap::buildMessageFileWork(
 		[](auto &) {});
 	const auto ordinarySize = ordinaryMain ? ordinaryMain->size : 0;
 	if (ordinaryMain) {
-		append(ordinaryMain, ordinaryType, ordinarySize, false);
+		append(ordinaryMain, ordinaryType, ordinarySize, false, true);
 	}
 	if (ordinaryDocument && ordinaryDocument->thumb.width > 0) {
 		append(
 			&ordinaryDocument->thumb.file,
 			DocumentMediaType(*ordinaryDocument),
 			ordinarySize,
+			false,
 			false);
 	}
 
@@ -2807,9 +2907,10 @@ void ApiWrap::buildMessageFileWork(
 		const auto appendRich = [&richFiles, &append](
 				Data::File &file,
 				MediaSettings::Type type,
-				int64 controllingSize) {
+				int64 controllingSize,
+				bool main) {
 			if (richFiles.emplace(&file).second) {
-				append(&file, type, controllingSize, true);
+				append(&file, type, controllingSize, true, main);
 			}
 		};
 		VisitRichMessage(
@@ -2819,14 +2920,15 @@ void ApiWrap::buildMessageFileWork(
 				appendRich(
 					photo.image.file,
 					MediaSettings::Type::Photo,
-					photo.image.file.size);
+					photo.image.file.size,
+					false);
 			},
 			[&](Data::Document &document) {
 				const auto type = DocumentMediaType(document);
 				const auto controllingSize = document.file.size;
-				appendRich(document.file, type, controllingSize);
+				appendRich(document.file, type, controllingSize, false);
 				if (document.thumb.width > 0) {
-					appendRich(document.thumb.file, type, controllingSize);
+					appendRich(document.thumb.file, type, controllingSize, false);
 				}
 			});
 	}
@@ -2870,6 +2972,7 @@ void ApiWrap::loadNextMessageFile() {
 				.message = &message,
 				.type = work.type,
 				.controllingSize = work.controllingSize,
+			.mainFile = work.main,
 			};
 			const auto ready = processFileLoad(
 				*target,
@@ -2922,7 +3025,13 @@ void ApiWrap::finishMessagesSlice() {
 		_chatProcess->largestIdPlusOne = 1;
 	}
 	if (!_chatProcess->lastSlice) {
-		requestMessagesSlice();
+		if (_nextSlice) {
+			startBufferedSlice();
+		} else if (!_nextRequested) {
+			requestMessagesSlice();
+		} else {
+			_waitNext = true;
+		}
 	} else {
 		finishMessages();
 	}
@@ -2960,7 +3069,9 @@ void ApiWrap::loadMessageFileDone(
 		_chatProcess->messageFileWorkIndex].file == file);
 
 	file->relativePath = relativePath;
-	if (relativePath.isEmpty()) {
+	finishFileRecord(file);
+	if (file->relativePath.isEmpty()
+		&& file->skipReason == Data::File::SkipReason::None) {
 		file->skipReason = Data::File::SkipReason::Unavailable;
 	}
 	loadNextMessageFile();
@@ -3039,6 +3150,8 @@ void ApiWrap::requestTopicMessages(
 	_topicProcess->fileProgress = std::move(progress);
 	_topicProcess->handleSlice = std::move(slice);
 	_topicProcess->done = std::move(done);
+
+	_dedupGen++;
 
 	mainRequest(MTPchannels_GetMessages(
 		MTP_inputChannel(
@@ -3174,7 +3287,7 @@ void ApiWrap::resolveTopicCustomEmoji() {
 		== _topicProcess->slice->list.size());
 
 	if (_unresolvedCustomEmoji.empty()) {
-		loadNextTopicMessageFile();
+		beginSliceWalk(true);
 		return;
 	}
 	const auto count = std::min(
@@ -3262,6 +3375,7 @@ void ApiWrap::loadNextTopicMessageFile() {
 				.message = &message,
 				.type = work.type,
 				.controllingSize = work.controllingSize,
+			.mainFile = work.main,
 			};
 			const auto ready = processFileLoad(
 				*target,
@@ -3298,6 +3412,7 @@ void ApiWrap::finishTopicMessagesSlice() {
 	Expects(_topicProcess->messageFileWorkMessageIndex < 0);
 
 	auto slice = *base::take(_topicProcess->slice);
+	LOG(("Export Info: Topic slice done, messages: %1.").arg(slice.list.size()));
 	if (!slice.list.empty()) {
 		_topicProcess->offsetId = slice.list.back().id;
 		_topicProcess->processedCount += slice.list.size();
@@ -3310,7 +3425,13 @@ void ApiWrap::finishTopicMessagesSlice() {
 		&& _topicProcess->processedCount >= _topicProcess->totalCount;
 
 	if (!_topicProcess->lastSlice && !reachedTotal) {
-		requestTopicMessagesSlice();
+		if (_nextSlice) {
+			startBufferedSlice();
+		} else if (!_nextRequested) {
+			requestTopicMessagesSlice();
+		} else {
+			_waitNext = true;
+		}
 	} else {
 		finishTopicMessages();
 	}
@@ -3350,7 +3471,9 @@ void ApiWrap::loadTopicMessageFileDone(
 		_topicProcess->messageFileWorkIndex].file == file);
 
 	file->relativePath = relativePath;
-	if (relativePath.isEmpty()) {
+	finishFileRecord(file);
+	if (file->relativePath.isEmpty()
+		&& file->skipReason == Data::File::SkipReason::None) {
 		file->skipReason = Data::File::SkipReason::Unavailable;
 	}
 	loadNextTopicMessageFile();
@@ -3362,6 +3485,813 @@ void ApiWrap::finishTopicMessages() {
 
 	const auto process = base::take(_topicProcess);
 	process->done();
+}
+
+void ApiWrap::setSessionId(uint64 sessionId) {
+	_sessionId = sessionId;
+}
+
+void ApiWrap::setDedupDb(const QString &path) {
+	_dedupDb = std::make_unique<::Data::DedupDb>(path, false);
+}
+
+std::vector<QString> ApiWrap::linkUrls() const {
+	auto result = std::vector<QString>();
+	result.reserve(_linkUrls.size());
+	for (const auto &url : _linkUrls) {
+		result.push_back(QString::fromUtf8(url));
+	}
+	std::sort(result.begin(), result.end());
+	return result;
+}
+
+::Data::DedupDb *ApiWrap::dedupDb() const {
+	return (_dedupDb && _dedupDb->isOpen()) ? _dedupDb.get() : nullptr;
+}
+
+PeerId ApiWrap::currentPeer() const {
+	if (_chatProcess) {
+		return _chatProcess->info.peerId;
+	} else if (_topicProcess) {
+		return _topicProcess->peerId;
+	}
+	return PeerId(0);
+}
+
+bool MainMediaId(
+		const Data::Message &message,
+		uint64 &docId,
+		bool &isPhoto) {
+	return v::match(message.media.content,
+		[&](const Data::Photo &photo) {
+			docId = photo.id;
+			isPhoto = true;
+			return true;
+		},
+		[&](const Data::Document &document) {
+			docId = document.id;
+			isPhoto = false;
+			return true;
+		},
+		[](const auto &) {
+			return false;
+		});
+}
+
+bool ApiWrap::skipDuplicateById(Data::File &file, const FilePolicy &policy) {
+	if (!policy.mainFile || !policy.message) {
+		return false;
+	}
+	auto docId = uint64(0);
+	auto isPhoto = false;
+	if (!MainMediaId(*policy.message, docId, isPhoto) || !docId) {
+		return false;
+	}
+	const auto db = dedupDb();
+	if (!db) {
+		return false;
+	}
+	const auto peer = currentPeer();
+	_dedupPeers.emplace(peer);
+	const auto known = GetEnhancedBool("prevent_export_duplicates")
+		? db->containsDocId(::Data::DedupDb::Table::Downloads, docId)
+		: db->containsExTmpDocId(_sessionId, peer, docId);
+	if (!known) {
+		return false;
+	}
+	file.skipReason = Data::File::SkipReason::Duplicate;
+	return true;
+}
+
+void ApiWrap::recordFinishedContent(
+		Data::File &file,
+		const FilePolicy &policy) {
+	if (!policy.mainFile || !policy.message || file.relativePath.isEmpty()) {
+		return;
+	}
+	auto docId = uint64(0);
+	auto isPhoto = false;
+	if (!MainMediaId(*policy.message, docId, isPhoto) || !docId) {
+		return;
+	}
+	const auto db = dedupDb();
+	if (!db) {
+		return;
+	}
+	const auto global = GetEnhancedBool("prevent_export_duplicates");
+	const auto fullPath = _settings->path + file.relativePath;
+	_dedupPeers.emplace(currentPeer());
+	if (Export::FinishFile(
+			*db,
+			_sessionId,
+			currentPeer(),
+			docId,
+			file.content,
+			fullPath,
+			file.size,
+			QByteArray(),
+			global,
+			isPhoto)) {
+		QFile::remove(fullPath);
+		file.relativePath = QString();
+		file.skipReason = Data::File::SkipReason::Duplicate;
+		if (_stats) {
+			_stats->incrementSkipped(policy.type, file.size);
+		}
+	} else if (_stats) {
+		_stats->incrementMediaWritten(file.size);
+	}
+}
+
+void ApiWrap::noteMediaWritten(const Data::File &file) {
+	if (_stats && !file.relativePath.isEmpty()) {
+		_stats->incrementMediaWritten(file.size);
+	}
+}
+
+void ApiWrap::finishFileRecord(Data::File *file) {
+	_decidingFiles.erase(file);
+	const auto i = _pendingHash.find(file);
+	if (i == end(_pendingHash)) {
+		return;
+	}
+	const auto pending = i->second;
+	_pendingHash.erase(i);
+	_inflightDocs.remove(pending.docId);
+	if (pending.docId == 0) {
+		return;
+	}
+	const auto db = dedupDb();
+	if (!db) {
+		return;
+	}
+	const auto global = GetEnhancedBool("prevent_export_duplicates");
+	if (file->relativePath.isEmpty()) {
+		if (!pending.hash.isEmpty()) {
+			Export::CancelFile(*db, pending.docId);
+		}
+		return;
+	}
+	const auto fullPath = _settings->path + file->relativePath;
+	if (Export::FinishFile(
+			*db,
+			_sessionId,
+			pending.peer,
+			pending.docId,
+			QByteArray(),
+			fullPath,
+			file->size,
+			pending.hash,
+			global,
+			pending.photo)) {
+		QFile::remove(fullPath);
+		file->relativePath = QString();
+		file->skipReason = Data::File::SkipReason::Duplicate;
+		if (_stats) {
+			_stats->incrementSkipped(pending.type, file->size);
+		}
+	} else if (_stats) {
+		_stats->incrementMediaWritten(file->size);
+	}
+}
+
+void ApiWrap::clearDedupRun() {
+	const auto peers = base::take(_dedupPeers);
+	const auto db = dedupDb();
+	if (!db) {
+		return;
+	}
+	for (const auto peer : peers) {
+		db->clearExTmpRun(_sessionId, peer);
+	}
+}
+
+bool ApiWrap::skipMedia() const {
+	using Type = MediaSettings::Type;
+	const auto fileTypes = Type::Photo | Type::Video | Type::VoiceMessage
+		| Type::VideoMessage | Type::Sticker | Type::GIF | Type::File
+		| Type::Audio;
+	return _settings && ((_settings->media.types & fileTypes) == 0);
+}
+
+void ApiWrap::prefetchNextSlice() {
+	if (!skipMedia() || _nextSlice || _nextRequested) {
+		return;
+	}
+	if (_chatProcess && !_chatProcess->lastSlice && _chatProcess->slice) {
+		const auto &list = _chatProcess->slice->list;
+		if (list.empty()) {
+			return;
+		}
+		_nextRequested = true;
+		const auto gen = _dedupGen;
+		requestChatMessages(
+			_chatProcess->info.splits[_chatProcess->localSplitIndex],
+			list.back().id + 1,
+			-kMessagesSliceLimit,
+			kMessagesSliceLimit,
+			[=](MTPmessages_Messages &&result) {
+				if (gen != _dedupGen || !_chatProcess || _topicProcess) {
+					_nextRequested = false;
+					return;
+				}
+				result.match([&](const MTPDmessages_messagesNotModified &data) {
+					error("Unexpected messagesNotModified received.");
+				}, [&](const auto &data) {
+					auto slice = Data::ParseMessagesSlice(
+						_chatProcess->context,
+						data.vmessages(),
+						data.vusers(),
+						data.vchats(),
+						_chatProcess->info.relativePath);
+					auto last = false;
+					if constexpr (MTPDmessages_messages::Is<decltype(data)>()) {
+						last = true;
+					}
+					bufferNextSlice(std::move(slice), last);
+				});
+			});
+	} else if (_topicProcess
+		&& !_topicProcess->lastSlice
+		&& _topicProcess->slice) {
+		const auto &list = _topicProcess->slice->list;
+		if (list.empty()) {
+			return;
+		}
+		if (_topicProcess->totalCount > 0
+			&& _topicProcess->processedCount + int(list.size())
+				>= _topicProcess->totalCount) {
+			return;
+		}
+		_nextRequested = true;
+		const auto gen = _dedupGen;
+		requestTopicReplies(
+			list.back().id + 1,
+			-kMessagesSliceLimit,
+			kMessagesSliceLimit,
+			[=](MTPmessages_Messages &&result) {
+				if (gen != _dedupGen || !_topicProcess || _chatProcess) {
+					_nextRequested = false;
+					return;
+				}
+				result.match([&](const MTPDmessages_messagesNotModified &data) {
+					error("Unexpected messagesNotModified received.");
+				}, [&](const auto &data) {
+					auto slice = Data::ParseMessagesSlice(
+						_topicProcess->context,
+						data.vmessages(),
+						data.vusers(),
+						data.vchats(),
+						_topicProcess->relativePath);
+					auto last = false;
+					if constexpr (MTPDmessages_messages::Is<decltype(data)>()) {
+						last = true;
+					}
+					bufferNextSlice(std::move(slice), last);
+				});
+			});
+	}
+}
+
+void ApiWrap::bufferNextSlice(Data::MessagesSlice &&slice, bool last) {
+	_nextRequested = false;
+	_nextSlice = PrefetchedSlice{ std::move(slice), last };
+	if (_waitNext) {
+		_waitNext = false;
+		startBufferedSlice();
+	}
+}
+
+void ApiWrap::startBufferedSlice() {
+	Expects(_nextSlice.has_value());
+	auto next = base::take(_nextSlice);
+	if (next->last) {
+		if (_chatProcess) {
+			_chatProcess->lastSlice = true;
+		} else {
+			Expects(_topicProcess != nullptr);
+			_topicProcess->lastSlice = true;
+		}
+	}
+	startMessagesSlice(std::move(next->slice));
+}
+
+void ApiWrap::beginSliceWalk(bool topic) {
+	prefetchNextSlice();
+	const auto walk = [=, this] {
+		if (topic) {
+			loadNextTopicMessageFile();
+		} else {
+			loadNextMessageFile();
+		}
+	};
+	const auto process = topic
+		? static_cast<AbstractMessagesProcess*>(_topicProcess.get())
+		: static_cast<AbstractMessagesProcess*>(_chatProcess.get());
+	const auto db = dedupDb();
+	if (!process || !process->slice || !db || !_takeoutId) {
+		walk();
+		return;
+	}
+	if (!skipMedia()) {
+		walk();
+		return;
+	}
+	struct Target {
+		uint64 docId = 0;
+		Data::FileLocation location;
+		int64 size = 0;
+	};
+	const auto peer = currentPeer();
+	const auto global = GetEnhancedBool("prevent_export_duplicates");
+	auto bigTargets = std::vector<Target>();
+	auto smallTargets = std::vector<Target>();
+	for (const auto &message : process->slice->list) {
+		if (int(bigTargets.size() + smallTargets.size())
+			>= kMessagesSliceLimit) {
+			break;
+		}
+		if (Data::SkipMessageByDate(message, *_settings)) {
+			continue;
+		}
+		auto docId = uint64(0);
+		auto location = Data::FileLocation();
+		auto size = int64(0);
+		v::match(message.media.content,
+			[&](const Data::Photo &photo) {
+				docId = photo.id;
+				location = photo.image.file.location;
+				size = photo.image.file.size;
+			},
+			[&](const Data::Document &document) {
+				docId = document.id;
+				location = document.file.location;
+				size = document.file.size;
+			},
+			[](const auto &) {});
+		if (!docId || !location) {
+			continue;
+		}
+		if (_knownFileHash.contains(docId)
+			|| _knownFileContent.contains(docId)
+			|| (global && db->containsDocId(
+				::Data::DedupDb::Table::Downloads,
+				docId))) {
+			continue;
+		}
+		((size >= ::Data::kDedupMinPartialHashSize)
+			? bigTargets
+			: smallTargets).push_back({ docId, location, size });
+	}
+	if (bigTargets.empty() && smallTargets.empty()) {
+		walk();
+		return;
+	}
+	// Bonus prefetch only: the walk never waits for it.
+	// Big lane: 2-chunk hashes. Small lane: full contents. 10 files each.
+	const auto gen = _dedupGen;
+	const auto fireBig = std::make_shared<Fn<void()>>();
+	const auto bigActive = std::make_shared<int>(0);
+	const auto bigIndex = std::make_shared<size_t>(0);
+	const auto sharedBig = std::make_shared<std::vector<Target>>(
+		std::move(bigTargets));
+	*fireBig = [=, this] {
+		while (*bigActive < kWarmupBigParallel
+			&& *bigIndex < sharedBig->size()) {
+			const auto target = (*sharedBig)[*bigIndex];
+			++*bigIndex;
+			++*bigActive;
+			Export::FetchHash(
+				_mtp,
+				_runner,
+				*_takeoutId,
+				target.location,
+				target.size,
+				[=, this] {
+					return (_chatProcess != nullptr)
+						|| (_topicProcess != nullptr);
+				},
+				[=, this](QByteArray hash) {
+					--*bigActive;
+					if (gen != _dedupGen) {
+						return;
+					}
+					if (!hash.isEmpty()) {
+						_knownFileHash[target.docId] = hash;
+					}
+					if (*bigIndex < sharedBig->size()) {
+						(*fireBig)();
+					}
+				},
+				5,
+				u"warmup-big:%1:%2"_q.arg(target.size).arg(target.location.dcId));
+		}
+	};
+	const auto fireSmall = std::make_shared<Fn<void()>>();
+	const auto smallActive = std::make_shared<int>(0);
+	const auto smallIndex = std::make_shared<size_t>(0);
+	const auto sharedSmall = std::make_shared<std::vector<Target>>(
+		std::move(smallTargets));
+	*fireSmall = [=, this] {
+		while (*smallActive < kWarmupSmallParallel
+			&& *smallIndex < sharedSmall->size()) {
+			const auto target = (*sharedSmall)[*smallIndex];
+			++*smallIndex;
+			++*smallActive;
+			Export::FetchFullFile(
+				_mtp,
+				_runner,
+				*_takeoutId,
+				target.location,
+				target.size,
+				[=, this] {
+					return (_chatProcess != nullptr)
+						|| (_topicProcess != nullptr);
+				},
+				[=, this](QByteArray content) {
+					--*smallActive;
+					if (gen != _dedupGen) {
+						return;
+					}
+					if (!content.isEmpty()) {
+						_knownFileContent[target.docId] = content;
+					}
+					if (*smallIndex < sharedSmall->size()) {
+						(*fireSmall)();
+					}
+				},
+				5,
+				u"warmup-small:%1:%2"_q.arg(target.size).arg(target.location.dcId));
+		}
+	};
+	(*fireBig)();
+	(*fireSmall)();
+	walk();
+}
+
+bool ApiWrap::mainFileDuplicate(const FilePolicy &policy) {
+	using SkipReason = Data::File::SkipReason;
+	if (policy.mainFile || !policy.message) {
+		return false;
+	}
+	const auto process = _chatProcess
+		? static_cast<AbstractMessagesProcess*>(_chatProcess.get())
+		: static_cast<AbstractMessagesProcess*>(_topicProcess.get());
+	if (!process) {
+		return false;
+	}
+	for (const auto &work : process->messageFileWork) {
+		if (work.main
+			&& work.file
+			&& work.file->skipReason == SkipReason::Duplicate) {
+			return true;
+		}
+	}
+	return false;
+}
+
+Data::File *ApiWrap::walkParkedFile(const Data::File *file) const {
+	const auto process = _topicProcess
+		? static_cast<const AbstractMessagesProcess*>(
+			_topicProcess.get())
+		: (_chatProcess
+			? static_cast<const AbstractMessagesProcess*>(
+				_chatProcess.get())
+			: nullptr);
+	if (!process || !process->slice.has_value()) {
+		return nullptr;
+	}
+	const auto &list = process->slice->list;
+	if (process->fileIndex < 0
+		|| process->fileIndex >= int(list.size())
+		|| process->messageFileWorkMessageIndex != process->fileIndex
+		|| process->messageFileWorkIndex < 0
+		|| process->messageFileWorkIndex >= process->messageFileWork.size()
+		|| process->messageFileWork[process->messageFileWorkIndex].file
+			!= file) {
+		return nullptr;
+	}
+	return process->messageFileWork[process->messageFileWorkIndex].file;
+}
+
+bool ApiWrap::decideFileWithoutMedia(
+		Data::File &file,
+		const FilePolicy &policy,
+		FnMut<void(QString)> done) {
+	using SkipReason = Data::File::SkipReason;
+	if (file.skipReason != SkipReason::None) {
+		return true;
+	}
+	if (!_decidingFiles.emplace(&file).second) {
+		return false;
+	}
+	Data::File *const filePtr = &file;
+	const auto markType = [](Data::File &file) {
+		file.skipReason = SkipReason::FileType;
+	};
+	if (!policy.mainFile
+		|| !policy.message
+		|| !(_settings->media.types & MediaSettings::Type::FullHistory)) {
+		markType(file);
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	const auto type = policy.type;
+	const auto controllingSize = policy.controllingSize;
+	auto docId = uint64(0);
+	auto isPhoto = false;
+	const auto markNew = [this, type, controllingSize](Data::File &file) {
+		file.skipReason = SkipReason::FileType;
+		if (_stats) {
+			_stats->incrementType(type, controllingSize);
+		}
+	};
+	if (!MainMediaId(*policy.message, docId, isPhoto) || !docId) {
+		markNew(file);
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	const auto db = dedupDb();
+	if (!db) {
+		markNew(file);
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	const auto peer = currentPeer();
+	_dedupPeers.emplace(peer);
+	const auto global = GetEnhancedBool("prevent_export_duplicates");
+	const auto markDup = [this, type](Data::File &file) {
+		file.skipReason = SkipReason::Duplicate;
+		if (_stats) {
+			_stats->incrementSkipped(type, file.size);
+		}
+	};
+	if (global && db->containsDocId(
+		::Data::DedupDb::Table::Downloads,
+		docId)) {
+		markDup(file);
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	const auto decide = [=, this](Data::File &file, const QByteArray &hash) {
+		if (!hash.isEmpty()) {
+			const auto seen = db->containsExTmpHash(
+				_sessionId,
+				peer,
+				hash);
+			const auto known = seen || (global && db->containsHash(
+				::Data::DedupDb::Table::Downloads,
+				hash));
+			if (!known) {
+				db->insertExTmp(_sessionId, peer, docId, hash);
+				markNew(file);
+			} else {
+				markDup(file);
+			}
+		} else {
+			markNew(file);
+		}
+	};
+	if (const auto i = _knownFileHash.find(docId);
+		i != end(_knownFileHash) && !i->second.isEmpty()) {
+		decide(file, i->second);
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	if (const auto i = _knownFileContent.find(docId);
+		i != end(_knownFileContent) && !i->second.isEmpty()) {
+		decide(file, ::Data::ContentFingerprint(i->second));
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	if (!file.content.isEmpty()) {
+		const auto hash = ::Data::ContentFingerprint(file.content);
+		if (!hash.isEmpty()) {
+			_knownFileHash[docId] = hash;
+		}
+		decide(file, hash);
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	if (!file.location
+		|| (file.location.dcId == 0
+			&& file.location.data.type() != mtpc_inputTakeoutFileLocation)
+		|| !_takeoutId) {
+		markNew(file);
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	const auto sharedDone = std::make_shared<FnMut<void(QString)>>(
+		std::move(done));
+	const auto gen = _dedupGen;
+	const auto sliceGen = _sliceGen;
+	if (file.size >= ::Data::kDedupMinPartialHashSize) {
+		Export::FetchHash(
+			_mtp,
+			_runner,
+			*_takeoutId,
+			file.location,
+			file.size,
+			[=, this] {
+				return (_chatProcess != nullptr)
+					|| (_topicProcess != nullptr);
+			},
+			[=, this](QByteArray hash) mutable {
+				_decidingFiles.erase(filePtr);
+				if (gen != _dedupGen
+					|| sliceGen != _sliceGen
+					|| (!_chatProcess && !_topicProcess)) {
+					return;
+				}
+				const auto live = walkParkedFile(filePtr);
+				if (!live) {
+					return;
+				}
+				if (!hash.isEmpty()) {
+					_knownFileHash[docId] = hash;
+				}
+				decide(*live, hash);
+				(*sharedDone)(QString());
+			},
+			kWalkHashAttempts,
+			u"walk:%1:%2:%3:%4"_q.arg(int(type)).arg(file.size).arg(docId).arg(file.location.dcId));
+		return false;
+	}
+	Export::FetchFullFile(
+		_mtp,
+		_runner,
+		*_takeoutId,
+		file.location,
+		file.size,
+		[=, this] {
+			return (_chatProcess != nullptr)
+				|| (_topicProcess != nullptr);
+		},
+		[=, this](QByteArray content) mutable {
+			_decidingFiles.erase(filePtr);
+			if (gen != _dedupGen
+				|| sliceGen != _sliceGen
+				|| (!_chatProcess && !_topicProcess)) {
+				return;
+			}
+			const auto live = walkParkedFile(filePtr);
+			if (!live) {
+				return;
+			}
+			if (!content.isEmpty()) {
+				_knownFileContent[docId] = content;
+			}
+			const auto hash = ::Data::ContentFingerprint(content);
+			if (!hash.isEmpty()) {
+				_knownFileHash[docId] = hash;
+			}
+			decide(*live, hash);
+			(*sharedDone)(QString());
+		},
+		kWalkHashAttempts,
+		u"walk:%1:%2:%3:%4"_q.arg(int(type)).arg(file.size).arg(docId).arg(file.location.dcId));
+	return false;
+}
+
+bool ApiWrap::decideFileWithMedia(
+		Data::File &file,
+		Data::FileOrigin origin,
+		const FilePolicy &policy,
+		Fn<bool(FileProgress)> progress,
+		FnMut<void(QString)> done) {
+	using SkipReason = Data::File::SkipReason;
+	if (file.skipReason != SkipReason::None) {
+		return true;
+	}
+	if (!_decidingFiles.emplace(&file).second) {
+		return false;
+	}
+	Data::File *const filePtr = &file;
+	const auto sharedProgress = std::make_shared<Fn<bool(FileProgress)>>(
+		std::move(progress));
+	const auto sharedDone = std::make_shared<FnMut<void(QString)>>(
+		std::move(done));
+	const auto startLoad = [=, this] {
+		loadFile(file, origin, *sharedProgress, std::move(*sharedDone));
+	};
+	if (!policy.mainFile || !policy.message || !_takeoutId) {
+		_decidingFiles.erase(&file);
+		startLoad();
+		return false;
+	}
+	auto docId = uint64(0);
+	auto isPhoto = false;
+	if (!MainMediaId(*policy.message, docId, isPhoto) || !docId) {
+		_decidingFiles.erase(&file);
+		startLoad();
+		return false;
+	}
+	const auto peer = currentPeer();
+	const auto global = GetEnhancedBool("prevent_export_duplicates");
+	const auto db = dedupDb();
+	if (!db) {
+		_decidingFiles.erase(&file);
+		startLoad();
+		return false;
+	}
+	_dedupPeers.emplace(peer);
+	const auto fileType = policy.type;
+	if (const auto i = _knownFileHash.find(docId);
+		i != end(_knownFileHash) && !i->second.isEmpty()) {
+		const auto cached = Export::CheckHash(
+			*db,
+			_sessionId,
+			peer,
+			docId,
+			i->second,
+			global);
+		if (cached.skip) {
+			file.skipReason = SkipReason::Duplicate;
+			if (_stats) {
+				_stats->incrementSkipped(fileType, file.size);
+			}
+			_decidingFiles.erase(&file);
+			return true;
+		}
+		_pendingHash[&file] = { docId, cached.hash, isPhoto, peer, fileType };
+		if (global) {
+			_inflightDocs.emplace(docId);
+		}
+		startLoad();
+		return false;
+	}
+	const auto gen = _dedupGen;
+	const auto sliceGen = _sliceGen;
+	const auto sync = std::make_shared<bool>(true);
+	const auto syncResult = std::make_shared<std::optional<Export::CheckResult>>();
+	Export::CheckDuplicate(
+		_mtp,
+		_runner,
+		*_takeoutId,
+		*db,
+		_sessionId,
+		peer,
+		docId,
+		file.location,
+		file.size,
+		[=, this] {
+			return (_chatProcess != nullptr)
+				|| (_topicProcess != nullptr);
+		},
+		global,
+		isPhoto,
+		[=, this](Export::CheckResult result) mutable {
+			_decidingFiles.erase(filePtr);
+			if (*sync) {
+				*syncResult = result;
+				return;
+			}
+			if (!result.hash.isEmpty()) {
+				_knownFileHash[docId] = result.hash;
+			}
+			if (gen != _dedupGen
+				|| sliceGen != _sliceGen
+				|| (!_chatProcess && !_topicProcess)) {
+				return;
+			}
+			const auto live = walkParkedFile(filePtr);
+			if (!live) {
+				return;
+			}
+			if (result.skip) {
+				live->skipReason = SkipReason::Duplicate;
+				if (_stats) {
+					_stats->incrementSkipped(fileType, live->size);
+				}
+				(*sharedDone)(QString());
+				return;
+			}
+			_pendingHash[live] = { docId, result.hash, isPhoto, peer, fileType };
+			if (!result.hash.isEmpty() && global) {
+				_inflightDocs.emplace(docId);
+			}
+			startLoad();
+		});
+	*sync = false;
+	if (!*syncResult) {
+		return false;
+	}
+	if (!(*syncResult)->hash.isEmpty()) {
+		_knownFileHash[docId] = (*syncResult)->hash;
+	}
+	if ((*syncResult)->skip) {
+		file.skipReason = SkipReason::Duplicate;
+		if (_stats) {
+			_stats->incrementSkipped(policy.type, file.size);
+		}
+		return true;
+	}
+	_pendingHash[&file] = { docId, (*syncResult)->hash, isPhoto, peer, policy.type };
+	if (!(*syncResult)->hash.isEmpty() && global) {
+		_inflightDocs.emplace(docId);
+	}
+	startLoad();
+	return false;
 }
 
 bool ApiWrap::processFileLoad(
@@ -3379,6 +4309,9 @@ bool ApiWrap::processFileLoad(
 	if (!file.relativePath.isEmpty()
 		|| file.skipReason != SkipReason::None) {
 		return true;
+	} else if (mainFileDuplicate(policy)) {
+		file.skipReason = SkipReason::Duplicate;
+		return true;
 	} else if (Data::SkipMessageByDate(*policy.message, *_settings)) {
 		file.skipReason = SkipReason::DateLimits;
 		return true;
@@ -3386,16 +4319,32 @@ bool ApiWrap::processFileLoad(
 		file.skipReason = SkipReason::Unavailable;
 		return true;
 	} else if ((_settings->media.types & policy.type) != policy.type) {
-		file.skipReason = SkipReason::FileType;
-		return true;
+		return decideFileWithoutMedia(file, policy, std::move(done));
 	} else if (policy.controllingSize > _settings->media.sizeLimit) {
 		file.skipReason = SkipReason::FileSize;
 		return true;
-	} else if (writePreloadedFile(file, origin)) {
+	}
+	if (skipDuplicateById(file, policy)) {
+		if (_stats) {
+			_stats->incrementSkipped(policy.type, policy.controllingSize);
+		}
+		return true;
+	}
+	if (policy.mainFile && _stats) {
+		_stats->incrementType(policy.type, policy.controllingSize);
+	}
+	if (writePreloadedFile(file, origin)) {
+		if (!file.relativePath.isEmpty()) {
+			recordFinishedContent(file, policy);
+		}
 		return !file.relativePath.isEmpty();
 	}
-	loadFile(file, origin, std::move(progress), std::move(done));
-	return false;
+	return decideFileWithMedia(
+		file,
+		origin,
+		policy,
+		std::move(progress),
+		std::move(done));
 }
 
 bool ApiWrap::processFileLoad(
@@ -3453,14 +4402,10 @@ bool ApiWrap::writePreloadedFile(
 
 	using namespace Output;
 
-	if (const auto path = _fileCache->find(file.location)) {
-		file.relativePath = *path;
-		return true;
-	} else if (!file.content.isEmpty()) {
+	if (!file.content.isEmpty()) {
 		const auto process = prepareFileProcess(file, origin);
 		if (const auto result = process->file.writeBlock(file.content)) {
 			file.relativePath = process->relativePath;
-			_fileCache->save(file.location, file.relativePath);
 		} else {
 			ioError(result);
 		}
@@ -3606,8 +4551,6 @@ void ApiWrap::filePartDone(int64 offset, const MTPupload_File &result) {
 	}
 
 	auto process = base::take(_fileProcess);
-	const auto relativePath = process->relativePath;
-	_fileCache->save(process->location, relativePath);
 	process->done(process->relativePath);
 }
 
@@ -3907,6 +4850,7 @@ void ApiWrap::filePartUnavailable() {
 }
 
 void ApiWrap::error(const MTP::Error &error) {
+	_dedupGen++;
 	_errors.fire_copy(error);
 }
 
@@ -3916,6 +4860,7 @@ void ApiWrap::error(const QString &text) {
 }
 
 void ApiWrap::ioError(const Output::Result &result) {
+	_dedupGen++;
 	_ioErrors.fire_copy(result);
 }
 

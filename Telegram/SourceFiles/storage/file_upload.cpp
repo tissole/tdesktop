@@ -1739,7 +1739,7 @@ void Uploader::saveResumeState(bool force) {
 			continue;
 		}
 		const auto topicRootId = entry.file->to.replyTo.topicRootId;
-		db.insertResumeUl({
+		db.insertUlResume({
 			.sessionId = session().uniqueId(),
 			.peerId = entry.itemId.peer.value,
 			.path = entry.file->filepath,
@@ -1755,7 +1755,7 @@ void Uploader::saveResumeState(bool force) {
 
 void Uploader::clearResumeState(PeerId peerId, const QString &filePath) {
 	ResumeActivePaths().erase(filePath);
-	Core::App().downloadManager().dedupDb().removeResumeUl(
+	Core::App().downloadManager().dedupDb().removeUlResume(
 		session().uniqueId(),
 		peerId.value,
 		filePath);
@@ -1764,7 +1764,7 @@ void Uploader::clearResumeState(PeerId peerId, const QString &filePath) {
 int Uploader::pendingResumeCount() const {
 	auto count = 0;
 	auto &db = Core::App().downloadManager().dedupDb();
-	for (const auto &record : db.loadAllResumeUl(session().uniqueId())) {
+	for (const auto &record : db.loadAllUlResume(session().uniqueId())) {
 		if (IsEnhancedForwardTempPath(record.path)) {
 			continue;
 		}
@@ -1773,7 +1773,7 @@ int Uploader::pendingResumeCount() const {
 			continue;
 		}
 		if (info.size() <= record.sentSize) {
-			db.removeResumeUl(record.sessionId, record.peerId, record.path);
+			db.removeUlResume(record.sessionId, record.peerId, record.path);
 			continue;
 		}
 		++count;
@@ -1953,7 +1953,7 @@ std::vector<Uploader::UiUploadInfo> Uploader::activeUploads() const {
 
 std::vector<Uploader::UiPendingUpload> Uploader::pendingUploads() const {
 	auto result = std::vector<UiPendingUpload>();
-	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl(session().uniqueId())) {
+	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllUlResume(session().uniqueId())) {
 		if (IsEnhancedForwardTempPath(record.path)) {
 			continue;
 		}
@@ -1983,7 +1983,7 @@ QString Uploader::firstUploadName() const {
 }
 
 QString Uploader::firstPendingUploadName() const {
-	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl(session().uniqueId())) {
+	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllUlResume(session().uniqueId())) {
 		if (IsEnhancedForwardTempPath(record.path)) {
 			continue;
 		}
@@ -2024,7 +2024,7 @@ void Uploader::queueResumeForLater() {
 
 void Uploader::resumeEntriesFromDb() {
 	auto toResume = QVector<Uploader::ResumeEntry>();
-	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllResumeUl(session().uniqueId())) {
+	for (const auto &record : Core::App().downloadManager().dedupDb().loadAllUlResume(session().uniqueId())) {
 		auto entry = Uploader::ResumeEntry();
 		entry.filePath = record.path;
 		entry.fileSize = QFileInfo(record.path).size();

@@ -143,6 +143,9 @@ void resumeForward(
 	const PeerId &id,
 	not_null<Main::Session*> session);
 
+// Marks every unfinished job of the session paused, live and persisted.
+void PauseAll(not_null<Main::Session*> session);
+
 void cancelCurrentItem(
 	const PeerId &id,
 	not_null<Main::Session*> session);
@@ -207,6 +210,7 @@ struct SavedJob {
 	int total = 0;
 	int sent = 0;
 	int unfinishedFiles = 0;
+	bool paused = false;
 	std::vector<FullMsgId> sourceMsgs;
 	std::vector<bool> uploadDone;
 	std::vector<uint64> fileId;
@@ -230,9 +234,6 @@ struct SavedJob {
 	const FullMsgId &sourceId);
 
 [[nodiscard]] std::vector<SavedJob> GetUnfinishedJobs(
-	not_null<Main::Session*> session);
-
-[[nodiscard]] std::vector<SavedJob> GetFinishedJobs(
 	not_null<Main::Session*> session);
 
 void EnsureForwardSourceMessages(
@@ -268,10 +269,6 @@ void EnsureForwardSourceMessages(
 // rendered by the push-based jobsValue stream without reading the database
 // on every update. Safe to call multiple times per session (idempotent).
 void EnsureResumeStatesSeeded(not_null<Main::Session*> session);
-
-// The last completed forward's (done, total): keeps the transfer-manager
-// counter visible until the next forward replaces it, across restarts.
-[[nodiscard]] std::pair<int, int> LastBatchCounts();
 
 // Returns true if the given upload id is currently handled by an active
 // Enhanced Forward pipeline (so it should be shown as "EF", not a plain

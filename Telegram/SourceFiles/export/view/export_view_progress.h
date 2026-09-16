@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Ui {
 class VerticalLayout;
+class ScrollArea;
 class RoundButton;
 class FlatLabel;
 class LinkButton;
@@ -33,18 +34,21 @@ public:
 	rpl::producer<uint64> skipFileClicks() const;
 	rpl::producer<> cancelClicks() const;
 	rpl::producer<> doneClicks() const;
+	[[nodiscard]] int scrollOverflow() const;
 
 	~ProgressWidget();
 
 private:
 	void setupBottomButton(not_null<Ui::RoundButton*> button);
+	void updateScrollGeometry();
 	void updateState(Content &&content);
 	void showDone();
 
 	Content _content;
 
 	class Row;
-	object_ptr<Ui::VerticalLayout> _body;
+	QPointer<Ui::VerticalLayout> _body;
+	base::unique_qptr<Ui::ScrollArea> _rowsScroll;
 	std::vector<not_null<Row*>> _rows;
 
 	base::unique_qptr<Ui::FadeWrap<Ui::LinkButton>> _skipFile;

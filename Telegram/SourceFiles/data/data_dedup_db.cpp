@@ -14,6 +14,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QVariant>
 #include <QUuid>
 
+#include <map>
+#include <memory>
+#include <mutex>
+#include <tuple>
+#include <vector>
+
 #include "logs.h"
 #include <crl/crl.h>
 
@@ -31,11 +37,49 @@ namespace {
 	Unexpected("DedupDb::Table");
 }
 
+struct TableState {
+	QHash<uint64, QByteArray> docToHash;
+	QHash<QByteArray, QSet<uint64>> hashToDoc;
+	QSet<uint64> unfinishedDocs;
+	bool loaded = false;
+};
+
+// Single process-wide memory copy of the downloads/uploads tables per
+// database file. Downloads run on the main thread, exports on the export
+// thread, and a SQLite connection cannot cross threads, so each side opens
+// its own connection but they share these maps under a mutex. Reads stay
+// O(1) memory lookups, writes update memory under lock and then the
+// caller's own connection. Whoever touches a table first loads it once.
+struct SharedDownloads {
+	std::mutex mutex;
+	TableState state[2];
+};
+
+[[nodiscard]] std::shared_ptr<SharedDownloads> SharedDownloadsForPath(
+		const QString &path) {
+	static std::mutex mutex;
+	static std::map<QString, std::weak_ptr<SharedDownloads>> stores;
+	std::lock_guard<std::mutex> lock(mutex);
+	if (const auto i = stores.find(path); i != stores.end()) {
+		if (auto alive = i->second.lock()) {
+			return alive;
+		}
+	}
+	auto fresh = std::make_shared<SharedDownloads>();
+	stores[path] = fresh;
+	return fresh;
+}
+
+// Temp export rows are write-buffered: checks read memory, so disk writes
+// can wait until 100 pile up and go out in one transaction. A crash loses
+// at most unflushed temp rows, which the next startup purges anyway.
+constexpr auto kExWriteBatchLimit = 100;
+
 } // namespace
 
 class DedupDb::Impl {
 public:
-	explicit Impl(const QString &path);
+	explicit Impl(const QString &path, bool purgePending);
 	~Impl();
 
 	[[nodiscard]] bool isOpen() const;
@@ -73,18 +117,18 @@ public:
 	void removePending(Table table, uint64 documentId);
 	[[nodiscard]] std::vector<DedupRecord> loadAll(Table table) const;
 
-	void insertResumeDl(const ResumeDlRecord &record);
-	void removeResumeDl(uint64 sessionId, uint64 peerId, int64 msgId);
-	void clearResumeDl();
-	[[nodiscard]] std::vector<ResumeDlRecord> loadAllResumeDl() const;
+	void insertDlResume(const DlResumeRecord &record);
+	void removeDlResume(uint64 sessionId, uint64 peerId, int64 msgId);
+	void clearDlResume();
+	[[nodiscard]] std::vector<DlResumeRecord> loadAllDlResume() const;
 
-	void insertResumeUl(const ResumeUlRecord &record);
-	void removeResumeUl(
+	void insertUlResume(const UlResumeRecord &record);
+	void removeUlResume(
 		uint64 sessionId,
 		uint64 peerId,
 		const QString &path);
-	void clearResumeUl(uint64 sessionId);
-	[[nodiscard]] std::vector<ResumeUlRecord> loadAllResumeUl(
+	void clearUlResume(uint64 sessionId);
+	[[nodiscard]] std::vector<UlResumeRecord> loadAllUlResume(
 		uint64 sessionId) const;
 
 	void insertEfResumeItem(const EfResumeItem &item);
@@ -95,14 +139,12 @@ public:
 		MsgId sourceMsgId);
 	void clearEfResumeForPeer(PeerId peerId);
 	void clearEfResumeJob(const QString &jobId);
+	void setEfResumePaused(uint64 sessionId, PeerId peerId, bool paused);
 	[[nodiscard]] std::vector<EfResumeItem> loadEfResumeItemsForPeer(
 		uint64 sessionId,
 		PeerId peerId) const;
 	[[nodiscard]] std::vector<EfResumeItem> loadUnfinishedEfResumeItems(
 		uint64 sessionId) const;
-	[[nodiscard]] std::vector<EfResumeItem> loadFinishedEfResumeItems(
-		uint64 sessionId) const;
-	void clearDoneEfResumeForPeer(PeerId peerId);
 
 	void insertNfResume(const NfResumeRecord &record);
 	void removeNfResume(uint64 sessionId, PeerId destPeerId);
@@ -110,41 +152,77 @@ public:
 	[[nodiscard]] std::vector<NfResumeRecord> loadNfResume(
 		uint64 sessionId) const;
 
-	void insertForwardedDone(
-		const FullMsgId &sourceId,
-		const QByteArray &hash);
-	[[nodiscard]] std::vector<FullMsgId> loadForwardedDone() const;
-	void removeForwardedDone(const FullMsgId &sourceId);
-	void clearForwardedDone();
+	void insertExResume(const ExResumeRecord &record);
+	void removeExResume(uint64 sessionId, PeerId peerId);
+	void clearExResume(uint64 sessionId);
+	[[nodiscard]] std::vector<ExResumeRecord> loadExResume(
+		uint64 sessionId) const;
 
-	void saveLastBatchCounts(int done, int total);
-	[[nodiscard]] std::pair<int, int> loadLastBatchCounts() const;
+	void insertExTmp(
+		uint64 sessionId,
+		PeerId peerId,
+		uint64 documentId,
+		const QByteArray &hash);
+	[[nodiscard]] bool containsExTmpDocId(
+		uint64 sessionId,
+		PeerId peerId,
+		uint64 documentId) const;
+	[[nodiscard]] bool containsExTmpHash(
+		uint64 sessionId,
+		PeerId peerId,
+		const QByteArray &hash) const;
+	[[nodiscard]] QByteArray hashForExTmpDocId(
+		uint64 sessionId,
+		PeerId peerId,
+		uint64 documentId) const;
+	void clearExTmpRun(uint64 sessionId, PeerId peerId);
+	void clearExTmpSession(uint64 sessionId);
 
 	void beginTransaction();
 	void commitTransaction();
 
 private:
-	struct TableState {
+	struct ExTmpKey {
+		uint64 sessionId = 0;
+		uint64 peerId = 0;
+		inline bool operator<(const ExTmpKey &other) const {
+			return std::tie(sessionId, peerId)
+				< std::tie(other.sessionId, other.peerId);
+		}
+	};
+
+	struct ExTmpState {
 		QHash<uint64, QByteArray> docToHash;
 		QHash<QByteArray, QSet<uint64>> hashToDoc;
-		QSet<uint64> unfinishedDocs;
+		struct Pending {
+			uint64 docId = 0;
+			QByteArray hash;
+		};
+		std::vector<Pending> pending;
 		bool loaded = false;
 	};
 
-	[[nodiscard]] TableState &state(Table table);
-	[[nodiscard]] const TableState &state(Table table) const;
 	void ensureLoaded(Table table) const;
+	[[nodiscard]] ExTmpState &exTmpState(uint64 sessionId, PeerId peerId);
+	[[nodiscard]] const ExTmpState &exTmpState(
+		uint64 sessionId,
+		PeerId peerId) const;
+	void ensureExTmpLoaded(uint64 sessionId, PeerId peerId) const;
+	void flushExPending();
 
 	bool createTables();
 
 	QString _connectionName;
 	QSqlDatabase _db;
 	bool _open = false;
-	mutable TableState _state[2];
+	std::shared_ptr<SharedDownloads> _shared;
+	mutable std::map<ExTmpKey, ExTmpState> _exTmpStates;
+	int _exPendingWrites = 0;
 };
 
-DedupDb::Impl::Impl(const QString &path)
-: _connectionName(QUuid::createUuid().toString()) {
+DedupDb::Impl::Impl(const QString &path, bool purgePending)
+: _connectionName(QUuid::createUuid().toString())
+, _shared(SharedDownloadsForPath(path)) {
 	_db = QSqlDatabase::addDatabase(u"QSQLITE"_q, _connectionName);
 	_db.setDatabaseName(path);
 	_open = _db.open();
@@ -157,15 +235,27 @@ DedupDb::Impl::Impl(const QString &path)
 	QSqlQuery pragma(_db);
 	pragma.exec(u"PRAGMA journal_mode=WAL"_q);
 	pragma.exec(u"PRAGMA synchronous=NORMAL"_q);
+	pragma.exec(u"PRAGMA busy_timeout=5000"_q);
 	_open = createTables();
-	if (_open) {
+	if (_open && purgePending) {
 		// 'u' rows can only survive a crash; at startup nothing is in flight.
+		// Second connections must not purge another thread's rows.
 		QSqlQuery cleanup(_db);
 		if (!cleanup.exec(u"DELETE FROM dedup_dl WHERE status = 'u'"_q)
-			|| !cleanup.exec(u"DELETE FROM dedup_ul WHERE status = 'u'"_q)) {
+			|| !cleanup.exec(u"DELETE FROM dedup_ul WHERE status = 'u'"_q)
+			|| !cleanup.exec(u"DELETE FROM ex_tmp WHERE NOT EXISTS ("
+				"SELECT 1 FROM ex_resume "
+				"WHERE ex_resume.session_id = ex_tmp.session_id "
+				"AND ex_resume.peer_id = ex_tmp.peer_id)"_q)) {
 			LOG(("DedupDb: Failed to purge stale pending rows: %1").arg(
 				cleanup.lastError().text()));
 		}
+		// The purge deleted rows straight in the database, so a memory
+		// copy filled before it would be stale. Drop it, the next check
+		// reloads from disk.
+		std::lock_guard<std::mutex> lock(_shared->mutex);
+		_shared->state[0] = TableState();
+		_shared->state[1] = TableState();
 	}
 }
 
@@ -176,18 +266,53 @@ DedupDb::Impl::~Impl() {
 	QSqlDatabase::removeDatabase(_connectionName);
 }
 
-DedupDb::Impl::TableState &DedupDb::Impl::state(Table table) {
-	ensureLoaded(table);
-	return _state[int(table)];
+DedupDb::Impl::ExTmpState &DedupDb::Impl::exTmpState(
+		uint64 sessionId,
+		PeerId peerId) {
+	ensureExTmpLoaded(sessionId, peerId);
+	return _exTmpStates[{ sessionId, peerId.value }];
 }
 
-const DedupDb::Impl::TableState &DedupDb::Impl::state(Table table) const {
-	ensureLoaded(table);
-	return _state[int(table)];
+const DedupDb::Impl::ExTmpState &DedupDb::Impl::exTmpState(
+		uint64 sessionId,
+		PeerId peerId) const {
+	ensureExTmpLoaded(sessionId, peerId);
+	return _exTmpStates[{ sessionId, peerId.value }];
+}
+
+void DedupDb::Impl::ensureExTmpLoaded(
+		uint64 sessionId,
+		PeerId peerId) const {
+	auto &s = _exTmpStates[{ sessionId, peerId.value }];
+	if (s.loaded || !_open) {
+		return;
+	}
+	s.loaded = true;
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT doc_id, hash FROM ex_tmp "
+		"WHERE session_id = :session_id AND peer_id = :peer_id"_q);
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: LoadExTmp failed: %1").arg(q.lastError().text()));
+		return;
+	}
+	while (q.next()) {
+		const auto docId = q.value(0).toULongLong();
+		const auto hash = q.value(1).toByteArray();
+		if (!docId || hash.isEmpty()) {
+			continue;
+		}
+		s.docToHash[docId] = hash;
+		s.hashToDoc[hash].insert(docId);
+	}
 }
 
 void DedupDb::Impl::ensureLoaded(Table table) const {
-	auto &s = _state[int(table)];
+	std::lock_guard<std::mutex> lock(_shared->mutex);
+	auto &s = _shared->state[int(table)];
 	if (s.loaded || !_open) {
 		return;
 	}
@@ -241,19 +366,14 @@ bool DedupDb::Impl::createTables() {
 			"ON dedup_dl(hash)"_q)
 		&& exec(u"CREATE INDEX IF NOT EXISTS idx_dedup_ul_hash "
 			"ON dedup_ul(hash)"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS resume_dl ("
+		&& exec(u"CREATE TABLE IF NOT EXISTS dl_resume ("
 			"session_id INTEGER NOT NULL DEFAULT 0, "
 			"peer_id INTEGER NOT NULL, "
 			"msg_id INTEGER NOT NULL, "
 			"path TEXT NOT NULL, "
 			"file_size INTEGER NOT NULL DEFAULT 0, "
 			"PRIMARY KEY (peer_id, msg_id))"_q)
-		&& [] (QSqlDatabase &db) {
-			QSqlQuery q(db);
-			q.exec(u"ALTER TABLE resume_dl ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0"_q);
-			return true;
-		}(_db)
-		&& exec(u"CREATE TABLE IF NOT EXISTS resume_ul ("
+		&& exec(u"CREATE TABLE IF NOT EXISTS ul_resume ("
 			"session_id INTEGER NOT NULL DEFAULT 0, "
 			"peer_id INTEGER NOT NULL, "
 			"path TEXT NOT NULL, "
@@ -276,21 +396,12 @@ bool DedupDb::Impl::createTables() {
 			"file_hash BLOB, "
 			"media_id INTEGER NOT NULL DEFAULT 0, "
 			"file_size INTEGER NOT NULL DEFAULT 0, "
+			"paused INTEGER NOT NULL DEFAULT 0, "
 			"PRIMARY KEY (job_id, item_index))"_q)
 		&& exec(u"CREATE INDEX IF NOT EXISTS idx_ef_resume_peer "
 			"ON ef_resume(dest_peer_id, state)"_q)
 		&& exec(u"CREATE INDEX IF NOT EXISTS idx_ef_resume_hash "
 			"ON ef_resume(file_hash)"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS ef_done ("
-			"source_peer_id INTEGER NOT NULL, "
-			"source_msg_id INTEGER NOT NULL, "
-			"hash BLOB NOT NULL DEFAULT '', "
-			"created_at INTEGER NOT NULL DEFAULT 0, "
-			"PRIMARY KEY (source_peer_id, source_msg_id))"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS ef_last ("
-			"id INTEGER PRIMARY KEY CHECK (id = 1), "
-			"done INTEGER NOT NULL, "
-			"total INTEGER NOT NULL)"_q)
 		&& exec(u"CREATE TABLE IF NOT EXISTS nf_resume ("
 			"session_id INTEGER NOT NULL DEFAULT 0, "
 			"dest_peer_id INTEGER NOT NULL, "
@@ -301,13 +412,34 @@ bool DedupDb::Impl::createTables() {
 			"last_msg_id INTEGER NOT NULL DEFAULT 0, "
 			"state TEXT NOT NULL DEFAULT 'running', "
 			"remaining BLOB NOT NULL DEFAULT x'', "
-			"PRIMARY KEY (session_id, dest_peer_id))"_q);
+			"PRIMARY KEY (session_id, dest_peer_id))"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS ex_resume ("
+			"session_id INTEGER NOT NULL DEFAULT 0, "
+			"peer_id INTEGER NOT NULL, "
+			"last_msg_id INTEGER NOT NULL DEFAULT 0, "
+			"total INTEGER NOT NULL DEFAULT 0, "
+			"done INTEGER NOT NULL DEFAULT 0, "
+			"skipped INTEGER NOT NULL DEFAULT 0, "
+			"path TEXT NOT NULL DEFAULT '', "
+			"state TEXT NOT NULL DEFAULT 'running', "
+			"PRIMARY KEY (session_id, peer_id))"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS ex_tmp ("
+			"session_id INTEGER NOT NULL DEFAULT 0, "
+			"peer_id INTEGER NOT NULL, "
+			"doc_id INTEGER NOT NULL, "
+			"hash BLOB NOT NULL, "
+			"status TEXT NOT NULL DEFAULT 'f', "
+			"PRIMARY KEY (session_id, peer_id, doc_id))"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_ex_tmp_hash "
+			"ON ex_tmp(session_id, peer_id, hash)"_q);
 	return created;
 }
 
 void DedupDb::Impl::insert(Table table, const DedupRecord &record) {
-	auto &s = state(table);
+	ensureLoaded(table);
 	if (record.documentId && !record.hash.isEmpty()) {
+		std::lock_guard<std::mutex> lock(_shared->mutex);
+		auto &s = _shared->state[int(table)];
 		s.docToHash[record.documentId] = record.hash;
 		s.hashToDoc[record.hash].insert(record.documentId);
 		if (record.status == u"u") {
@@ -342,18 +474,22 @@ void DedupDb::Impl::removeByDocumentId(
 		Table table,
 		uint64 documentId,
 		const QString &status) {
-	auto &s = state(table);
-	const auto it = s.docToHash.constFind(documentId);
-	if (it != s.docToHash.constEnd()) {
-		const auto hash = it.value();
-		if (status.isEmpty() || s.unfinishedDocs.contains(documentId)) {
-			s.docToHash.remove(documentId);
-			s.unfinishedDocs.remove(documentId);
-			const auto hashes = s.hashToDoc.find(hash);
-			if (hashes != s.hashToDoc.end()) {
-				hashes.value().remove(documentId);
-				if (hashes.value().isEmpty()) {
-					s.hashToDoc.erase(hashes);
+	ensureLoaded(table);
+	{
+		std::lock_guard<std::mutex> lock(_shared->mutex);
+		auto &s = _shared->state[int(table)];
+		const auto it = s.docToHash.constFind(documentId);
+		if (it != s.docToHash.constEnd()) {
+			const auto hash = it.value();
+			if (status.isEmpty() || s.unfinishedDocs.contains(documentId)) {
+				s.docToHash.remove(documentId);
+				s.unfinishedDocs.remove(documentId);
+				const auto hashes = s.hashToDoc.find(hash);
+				if (hashes != s.hashToDoc.end()) {
+					hashes.value().remove(documentId);
+					if (hashes.value().isEmpty()) {
+						s.hashToDoc.erase(hashes);
+					}
 				}
 			}
 		}
@@ -378,8 +514,9 @@ void DedupDb::Impl::removeByDocumentId(
 }
 
 bool DedupDb::Impl::containsDocId(Table table, uint64 documentId) const {
-	const auto &s = state(table);
-	return s.docToHash.contains(documentId);
+	ensureLoaded(table);
+	std::lock_guard<std::mutex> lock(_shared->mutex);
+	return _shared->state[int(table)].docToHash.contains(documentId);
 }
 
 bool DedupDb::Impl::containsDocIdInDb(
@@ -400,8 +537,9 @@ bool DedupDb::Impl::containsDocIdInDb(
 }
 
 bool DedupDb::Impl::containsHash(Table table, const QByteArray &hash) const {
-	const auto &s = state(table);
-	return s.hashToDoc.contains(hash);
+	ensureLoaded(table);
+	std::lock_guard<std::mutex> lock(_shared->mutex);
+	return _shared->state[int(table)].hashToDoc.contains(hash);
 }
 
 bool DedupDb::Impl::containsFinishedHash(
@@ -410,14 +548,19 @@ bool DedupDb::Impl::containsFinishedHash(
 	if (!_open || hash.isEmpty()) {
 		return false;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"SELECT EXISTS(SELECT 1 FROM " + TableName(table)
-		+ u" WHERE hash = :hash AND status = 'f')"_q);
-	q.bindValue(u":hash"_q, hash);
-	if (!q.exec() || !q.next()) {
+	ensureLoaded(table);
+	std::lock_guard<std::mutex> lock(_shared->mutex);
+	const auto &s = _shared->state[int(table)];
+	const auto it = s.hashToDoc.find(hash);
+	if (it == s.hashToDoc.end()) {
 		return false;
 	}
-	return q.value(0).toBool();
+	for (const auto docId : it.value()) {
+		if (!s.unfinishedDocs.contains(docId)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 void DedupDb::Impl::rekey(
@@ -427,18 +570,22 @@ void DedupDb::Impl::rekey(
 	if (!oldDocumentId || !newDocumentId || oldDocumentId == newDocumentId) {
 		return;
 	}
-	auto &s = state(table);
-	const auto hash = s.docToHash.take(oldDocumentId);
-	const auto wasUnfinished = s.unfinishedDocs.remove(oldDocumentId);
-	if (!hash.isEmpty()) {
-		s.docToHash[newDocumentId] = hash;
-		if (wasUnfinished) {
-			s.unfinishedDocs.insert(newDocumentId);
-		}
-		const auto hashes = s.hashToDoc.find(hash);
-		if (hashes != s.hashToDoc.end()) {
-			hashes.value().remove(oldDocumentId);
-			hashes.value().insert(newDocumentId);
+	ensureLoaded(table);
+	{
+		std::lock_guard<std::mutex> lock(_shared->mutex);
+		auto &s = _shared->state[int(table)];
+		const auto hash = s.docToHash.take(oldDocumentId);
+		const auto wasUnfinished = s.unfinishedDocs.remove(oldDocumentId);
+		if (!hash.isEmpty()) {
+			s.docToHash[newDocumentId] = hash;
+			if (wasUnfinished) {
+				s.unfinishedDocs.insert(newDocumentId);
+			}
+			const auto hashes = s.hashToDoc.find(hash);
+			if (hashes != s.hashToDoc.end()) {
+				hashes.value().remove(oldDocumentId);
+				hashes.value().insert(newDocumentId);
+			}
 		}
 	}
 	if (!_open) {
@@ -465,14 +612,17 @@ void DedupDb::Impl::updateDedupStatus(
 	if (!_open || hash.isEmpty()) {
 		return;
 	}
-	auto &s = state(table);
-	const auto hashes = s.hashToDoc.find(hash);
-	if (hashes != s.hashToDoc.end()) {
-		for (const auto docId : hashes.value()) {
-			if (status == u"u") {
-				s.unfinishedDocs.insert(docId);
-			} else {
-				s.unfinishedDocs.remove(docId);
+	{
+		std::lock_guard<std::mutex> lock(_shared->mutex);
+		auto &s = _shared->state[int(table)];
+		const auto hashes = s.hashToDoc.find(hash);
+		if (hashes != s.hashToDoc.end()) {
+			for (const auto docId : hashes.value()) {
+				if (status == u"u") {
+					s.unfinishedDocs.insert(docId);
+				} else {
+					s.unfinishedDocs.remove(docId);
+				}
 			}
 		}
 	}
@@ -490,20 +640,24 @@ void DedupDb::Impl::updateDedupStatus(
 void DedupDb::Impl::removeUnfinishedByHash(
 		Table table,
 		const QByteArray &hash) {
-	auto &s = state(table);
-	const auto hashes = s.hashToDoc.find(hash);
-	if (hashes != s.hashToDoc.end()) {
-		auto ids = hashes.value();
-		for (const auto docId : ids) {
-			if (!s.unfinishedDocs.contains(docId)) {
-				continue;
+	ensureLoaded(table);
+	{
+		std::lock_guard<std::mutex> lock(_shared->mutex);
+		auto &s = _shared->state[int(table)];
+		const auto hashes = s.hashToDoc.find(hash);
+		if (hashes != s.hashToDoc.end()) {
+			auto ids = hashes.value();
+			for (const auto docId : ids) {
+				if (!s.unfinishedDocs.contains(docId)) {
+					continue;
+				}
+				s.docToHash.remove(docId);
+				s.unfinishedDocs.remove(docId);
+				hashes.value().remove(docId);
 			}
-			s.docToHash.remove(docId);
-			s.unfinishedDocs.remove(docId);
-			hashes.value().remove(docId);
-		}
-		if (hashes.value().isEmpty()) {
-			s.hashToDoc.erase(hashes);
+			if (hashes.value().isEmpty()) {
+				s.hashToDoc.erase(hashes);
+			}
 		}
 	}
 	if (!_open) {
@@ -522,17 +676,20 @@ void DedupDb::Impl::removeUnfinishedByHash(
 QByteArray DedupDb::Impl::hashForDocId(
 		Table table,
 		uint64 documentId) const {
-	const auto &s = state(table);
-	return s.docToHash.value(documentId);
+	ensureLoaded(table);
+	std::lock_guard<std::mutex> lock(_shared->mutex);
+	return _shared->state[int(table)].docToHash.value(documentId);
 }
 
 uint64 DedupDb::Impl::seekDocumentId(
 		Table table,
 		const QByteArray &hash,
 		uint64 excludeDocumentId) const {
-	const auto &s = state(table);
-	const auto it = s.hashToDoc.find(hash);
-	if (it == s.hashToDoc.end()) {
+	ensureLoaded(table);
+	std::lock_guard<std::mutex> lock(_shared->mutex);
+	const auto &docs = _shared->state[int(table)].hashToDoc;
+	const auto it = docs.find(hash);
+	if (it == docs.end()) {
 		return 0;
 	}
 	for (const auto docId : it.value()) {
@@ -559,17 +716,21 @@ void DedupDb::Impl::removePending(Table table, uint64 documentId) {
 }
 
 std::vector<DedupRecord> DedupDb::Impl::loadAll(Table table) const {
-	auto &s = state(table);
-	if (s.loaded) {
-		auto result = std::vector<DedupRecord>();
-		result.reserve(s.docToHash.size());
-		for (auto i = s.docToHash.constBegin(); i != s.docToHash.constEnd(); ++i) {
-			result.push_back({
-				.hash = i.value(),
-				.documentId = i.key(),
-			});
+	ensureLoaded(table);
+	{
+		std::lock_guard<std::mutex> lock(_shared->mutex);
+		const auto &s = _shared->state[int(table)];
+		if (s.loaded) {
+			auto result = std::vector<DedupRecord>();
+			result.reserve(s.docToHash.size());
+			for (auto i = s.docToHash.constBegin(); i != s.docToHash.constEnd(); ++i) {
+				result.push_back({
+					.hash = i.value(),
+					.documentId = i.key(),
+				});
+			}
+			return result;
 		}
-		return result;
 	}
 	auto result = std::vector<DedupRecord>();
 	if (!_open) {
@@ -590,12 +751,12 @@ std::vector<DedupRecord> DedupDb::Impl::loadAll(Table table) const {
 	return result;
 }
 
-void DedupDb::Impl::insertResumeDl(const ResumeDlRecord &record) {
+void DedupDb::Impl::insertDlResume(const DlResumeRecord &record) {
 	if (!_open) {
 		return;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"INSERT OR REPLACE INTO resume_dl "
+	q.prepare(u"INSERT OR REPLACE INTO dl_resume "
 		"(session_id, peer_id, msg_id, path, file_size) "
 		"VALUES (:session_id, :peer_id, :msg_id, :path, :file_size)"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
@@ -608,11 +769,11 @@ void DedupDb::Impl::insertResumeDl(const ResumeDlRecord &record) {
 	q.bindValue(u":file_size"_q, QVariant::fromValue(
 		static_cast<qlonglong>(record.fileSize)));
 	if (!q.exec()) {
-		LOG(("DedupDb: InsertResumeDl failed: %1").arg(q.lastError().text()));
+		LOG(("DedupDb: InsertDlResume failed: %1").arg(q.lastError().text()));
 	}
 }
 
-void DedupDb::Impl::removeResumeDl(
+void DedupDb::Impl::removeDlResume(
 		uint64 sessionId,
 		uint64 peerId,
 		int64 msgId) {
@@ -620,7 +781,7 @@ void DedupDb::Impl::removeResumeDl(
 		return;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM resume_dl "
+	q.prepare(u"DELETE FROM dl_resume "
 		"WHERE peer_id = :peer_id AND msg_id = :msg_id "
 		"AND session_id = :session_id"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
@@ -630,34 +791,34 @@ void DedupDb::Impl::removeResumeDl(
 	q.bindValue(u":msg_id"_q, QVariant::fromValue(
 		static_cast<qlonglong>(msgId)));
 	if (!q.exec()) {
-		LOG(("DedupDb: RemoveResumeDl failed: %1").arg(q.lastError().text()));
+		LOG(("DedupDb: RemoveDlResume failed: %1").arg(q.lastError().text()));
 	}
 }
 
-void DedupDb::Impl::clearResumeDl() {
+void DedupDb::Impl::clearDlResume() {
 	if (!_open) {
 		return;
 	}
 	QSqlQuery q(_db);
-	if (!q.exec(u"DELETE FROM resume_dl"_q)) {
-		LOG(("DedupDb: ClearResumeDl failed: %1").arg(q.lastError().text()));
+	if (!q.exec(u"DELETE FROM dl_resume"_q)) {
+		LOG(("DedupDb: ClearDlResume failed: %1").arg(q.lastError().text()));
 	}
 }
 
-std::vector<ResumeDlRecord> DedupDb::Impl::loadAllResumeDl() const {
-	auto result = std::vector<ResumeDlRecord>();
+std::vector<DlResumeRecord> DedupDb::Impl::loadAllDlResume() const {
+	auto result = std::vector<DlResumeRecord>();
 	if (!_open) {
 		return result;
 	}
 	QSqlQuery q(_db);
 	if (!q.exec(u"SELECT session_id, peer_id, msg_id, "
-		"path, file_size FROM resume_dl"_q)) {
-		LOG(("DedupDb: LoadAllResumeDl failed: %1").arg(
+		"path, file_size FROM dl_resume"_q)) {
+		LOG(("DedupDb: LoadAllDlResume failed: %1").arg(
 			q.lastError().text()));
 		return result;
 	}
 	while (q.next()) {
-		auto record = ResumeDlRecord();
+		auto record = DlResumeRecord();
 		record.sessionId = q.value(0).toULongLong();
 		record.peerId = q.value(1).toULongLong();
 		record.msgId = q.value(2).toLongLong();
@@ -668,12 +829,12 @@ std::vector<ResumeDlRecord> DedupDb::Impl::loadAllResumeDl() const {
 	return result;
 }
 
-void DedupDb::Impl::insertResumeUl(const ResumeUlRecord &record) {
+void DedupDb::Impl::insertUlResume(const UlResumeRecord &record) {
 	if (!_open) {
 		return;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"INSERT OR REPLACE INTO resume_ul "
+	q.prepare(u"INSERT OR REPLACE INTO ul_resume "
 		"(session_id, peer_id, path, parts_sent, sent_size, file_id, "
 		"topic_root_id) "
 		"VALUES (:session_id, :peer_id, :path, :parts_sent, :sent_size, "
@@ -690,11 +851,11 @@ void DedupDb::Impl::insertResumeUl(const ResumeUlRecord &record) {
 	q.bindValue(u":topic_root_id"_q, QVariant::fromValue(
 		static_cast<qlonglong>(record.topicRootId)));
 	if (!q.exec()) {
-		LOG(("DedupDb: InsertResumeUl failed: %1").arg(q.lastError().text()));
+		LOG(("DedupDb: InsertUlResume failed: %1").arg(q.lastError().text()));
 	}
 }
 
-void DedupDb::Impl::removeResumeUl(
+void DedupDb::Impl::removeUlResume(
 		uint64 sessionId,
 		uint64 peerId,
 		const QString &path) {
@@ -702,7 +863,7 @@ void DedupDb::Impl::removeResumeUl(
 		return;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM resume_ul "
+	q.prepare(u"DELETE FROM ul_resume "
 		"WHERE peer_id = :peer_id AND path = :path "
 		"AND session_id = :session_id"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
@@ -711,42 +872,42 @@ void DedupDb::Impl::removeResumeUl(
 		static_cast<qulonglong>(peerId)));
 	q.bindValue(u":path"_q, path);
 	if (!q.exec()) {
-		LOG(("DedupDb: RemoveResumeUl failed: %1").arg(q.lastError().text()));
+		LOG(("DedupDb: RemoveUlResume failed: %1").arg(q.lastError().text()));
 	}
 }
 
-void DedupDb::Impl::clearResumeUl(uint64 sessionId) {
+void DedupDb::Impl::clearUlResume(uint64 sessionId) {
 	if (!_open) {
 		return;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM resume_ul WHERE session_id = :session_id"_q);
+	q.prepare(u"DELETE FROM ul_resume WHERE session_id = :session_id"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(sessionId)));
 	if (!q.exec()) {
-		LOG(("DedupDb: ClearResumeUl failed: %1").arg(q.lastError().text()));
+		LOG(("DedupDb: ClearUlResume failed: %1").arg(q.lastError().text()));
 	}
 }
 
-std::vector<ResumeUlRecord> DedupDb::Impl::loadAllResumeUl(
+std::vector<UlResumeRecord> DedupDb::Impl::loadAllUlResume(
 		uint64 sessionId) const {
-	auto result = std::vector<ResumeUlRecord>();
+	auto result = std::vector<UlResumeRecord>();
 	if (!_open) {
 		return result;
 	}
 	QSqlQuery q(_db);
 	q.prepare(u"SELECT session_id, peer_id, path, parts_sent, sent_size, "
-		"file_id, topic_root_id FROM resume_ul "
+		"file_id, topic_root_id FROM ul_resume "
 		"WHERE session_id = :session_id"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(sessionId)));
 	if (!q.exec()) {
-		LOG(("DedupDb: LoadAllResumeUl failed: %1").arg(
+		LOG(("DedupDb: LoadAllUlResume failed: %1").arg(
 			q.lastError().text()));
 		return result;
 	}
 	while (q.next()) {
-		auto record = ResumeUlRecord();
+		auto record = UlResumeRecord();
 		record.sessionId = q.value(0).toULongLong();
 		record.peerId = q.value(1).toULongLong();
 		record.path = q.value(2).toString();
@@ -767,10 +928,10 @@ void DedupDb::Impl::insertEfResumeItem(const EfResumeItem &item) {
 	q.prepare(u"INSERT OR REPLACE INTO ef_resume "
 		"(session_id, job_id, item_index, dest_peer_id, source_peer_id, "
 		"source_msg_id, state, local_path, file_id, uploaded_parts, "
-		"file_hash, media_id, file_size) "
+		"file_hash, media_id, file_size, paused) "
 		"VALUES (:session_id, :job_id, :item_index, :dest_peer_id, :source_peer_id, "
 		":source_msg_id, :state, :local_path, :file_id, :uploaded_parts, "
-		":file_hash, :media_id, :file_size)"_q);
+		":file_hash, :media_id, :file_size, :paused)"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(item.sessionId)));
 	q.bindValue(u":job_id"_q, item.jobId);
@@ -791,6 +952,7 @@ void DedupDb::Impl::insertEfResumeItem(const EfResumeItem &item) {
 		static_cast<qlonglong>(item.mediaId)));
 	q.bindValue(u":file_size"_q, QVariant::fromValue(
 		static_cast<qlonglong>(item.fileSize)));
+	q.bindValue(u":paused"_q, item.paused ? 1 : 0);
 	if (!q.exec()) {
 		LOG(("DedupDb: InsertEfResumeItem failed: %1").arg(
 			q.lastError().text()));
@@ -874,7 +1036,7 @@ std::vector<EfResumeItem> DedupDb::Impl::loadEfResumeItemsForPeer(
 	QSqlQuery q(_db);
 	q.prepare(u"SELECT job_id, item_index, source_peer_id, source_msg_id, "
 		"state, local_path, file_id, uploaded_parts, file_hash, "
-		"media_id, file_size FROM ef_resume "
+		"media_id, file_size, paused FROM ef_resume "
 		"WHERE dest_peer_id = :dest_peer_id AND session_id = :session_id "
 		"ORDER BY item_index"_q);
 	q.bindValue(u":dest_peer_id"_q, QVariant::fromValue(
@@ -901,6 +1063,7 @@ std::vector<EfResumeItem> DedupDb::Impl::loadEfResumeItemsForPeer(
 		item.fileHash = q.value(8).toByteArray();
 		item.mediaId = static_cast<uint64>(q.value(9).toLongLong());
 		item.fileSize = q.value(10).toLongLong();
+		item.paused = (q.value(11).toInt() != 0);
 		result.push_back(std::move(item));
 	}
 	return result;
@@ -915,7 +1078,7 @@ std::vector<EfResumeItem> DedupDb::Impl::loadUnfinishedEfResumeItems(
 	QSqlQuery q(_db);
 	q.prepare(u"SELECT job_id, item_index, dest_peer_id, source_peer_id, "
 		"source_msg_id, state, local_path, file_id, uploaded_parts, "
-		"file_hash, media_id, file_size FROM ef_resume "
+		"file_hash, media_id, file_size, paused FROM ef_resume "
 		"WHERE state <> 'done' AND session_id = :session_id ORDER BY item_index"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(sessionId)));
@@ -939,161 +1102,36 @@ std::vector<EfResumeItem> DedupDb::Impl::loadUnfinishedEfResumeItems(
 		item.fileHash = q.value(9).toByteArray();
 		item.mediaId = static_cast<uint64>(q.value(10).toLongLong());
 		item.fileSize = q.value(11).toLongLong();
+		item.paused = (q.value(12).toInt() != 0);
 		result.push_back(std::move(item));
 	}
 	return result;
 }
 
-std::vector<EfResumeItem> DedupDb::Impl::loadFinishedEfResumeItems(
-		uint64 sessionId) const {
-	auto result = std::vector<EfResumeItem>();
+void DedupDb::Impl::setEfResumePaused(
+		uint64 sessionId,
+		PeerId peerId,
+		bool paused) {
 	if (!_open) {
-		return result;
+		return;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT job_id, item_index, dest_peer_id, source_peer_id, "
-		"source_msg_id, state, local_path, file_id, uploaded_parts, "
-		"file_hash, media_id, file_size FROM ef_resume "
-		"WHERE state = 'done' AND session_id = :session_id ORDER BY item_index"_q);
+	if (peerId) {
+		q.prepare(u"UPDATE ef_resume SET paused = :paused "
+			"WHERE session_id = :session_id AND dest_peer_id = :peer_id"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+	} else {
+		q.prepare(u"UPDATE ef_resume SET paused = :paused "
+			"WHERE session_id = :session_id"_q);
+	}
+	q.bindValue(u":paused"_q, paused ? 1 : 0);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(sessionId)));
 	if (!q.exec()) {
-		LOG(("DedupDb: LoadFinishedEfResumeItems failed: %1").arg(
-			q.lastError().text()));
-		return result;
-	}
-	while (q.next()) {
-		auto item = EfResumeItem();
-		item.jobId = q.value(0).toString();
-		item.itemIndex = q.value(1).toInt();
-		item.peerId = PeerId(q.value(2).toULongLong());
-		item.sourceId = FullMsgId(
-			PeerId(q.value(3).toULongLong()),
-			MsgId(q.value(4).toLongLong()));
-		item.state = q.value(5).toString();
-		item.localPath = q.value(6).toString();
-		item.fileId = static_cast<uint64>(q.value(7).toLongLong());
-		item.uploadedParts = q.value(8).toInt();
-		item.fileHash = q.value(9).toByteArray();
-		item.mediaId = static_cast<uint64>(q.value(10).toLongLong());
-		item.fileSize = q.value(11).toLongLong();
-		result.push_back(std::move(item));
-	}
-	return result;
-}
-
-void DedupDb::Impl::clearDoneEfResumeForPeer(PeerId peerId) {
-	if (!_open) {
-		return;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM ef_resume "
-		"WHERE dest_peer_id = :dest_peer_id AND state = 'done'"_q);
-	q.bindValue(u":dest_peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	if (!q.exec()) {
-		LOG(("DedupDb: ClearDoneEfResumeForPeer failed: %1").arg(
+		LOG(("DedupDb: SetEfResumePaused failed: %1").arg(
 			q.lastError().text()));
 	}
-}
-
-void DedupDb::Impl::insertForwardedDone(
-		const FullMsgId &sourceId,
-		const QByteArray &hash) {
-	if (!_open || !sourceId.peer || !sourceId.msg) {
-		return;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"INSERT OR IGNORE INTO ef_done "
-		"(source_peer_id, source_msg_id, hash, created_at) "
-		"VALUES (:peer_id, :msg_id, :hash, :created_at)"_q);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sourceId.peer.value)));
-	q.bindValue(u":msg_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(sourceId.msg.bare)));
-	q.bindValue(u":hash"_q, hash);
-	q.bindValue(u":created_at"_q, QVariant::fromValue(
-		static_cast<qlonglong>(crl::now())));
-	if (!q.exec()) {
-		LOG(("DedupDb: InsertForwardedDone failed: %1").arg(
-			q.lastError().text()));
-	}
-}
-
-std::vector<FullMsgId> DedupDb::Impl::loadForwardedDone() const {
-	auto result = std::vector<FullMsgId>();
-	if (!_open) {
-		return result;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"SELECT source_peer_id, source_msg_id FROM ef_done "
-		"ORDER BY created_at"_q);
-	if (!q.exec()) {
-		LOG(("DedupDb: LoadForwardedDone failed: %1").arg(
-			q.lastError().text()));
-		return result;
-	}
-	while (q.next()) {
-		result.emplace_back(
-			PeerId(q.value(0).toULongLong()),
-			MsgId(q.value(1).toLongLong()));
-	}
-	return result;
-}
-
-void DedupDb::Impl::removeForwardedDone(const FullMsgId &sourceId) {
-	if (!_open || !sourceId.peer || !sourceId.msg) {
-		return;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM ef_done "
-		"WHERE source_peer_id = :peer_id AND source_msg_id = :msg_id"_q);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sourceId.peer.value)));
-	q.bindValue(u":msg_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(sourceId.msg.bare)));
-	if (!q.exec()) {
-		LOG(("DedupDb: RemoveForwardedDone failed: %1").arg(
-			q.lastError().text()));
-	}
-}
-
-void DedupDb::Impl::clearForwardedDone() {
-	if (!_open) {
-		return;
-	}
-	QSqlQuery q(_db);
-	if (!q.exec(u"DELETE FROM ef_done"_q)) {
-		LOG(("DedupDb: ClearForwardedDone failed: %1").arg(
-			q.lastError().text()));
-	}
-}
-
-void DedupDb::Impl::saveLastBatchCounts(int done, int total) {
-	if (!_open) {
-		return;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"INSERT OR REPLACE INTO ef_last (id, done, total) "
-		"VALUES (1, :done, :total)"_q);
-	q.bindValue(u":done"_q, done);
-	q.bindValue(u":total"_q, total);
-	if (!q.exec()) {
-		LOG(("DedupDb: SaveLastBatchCounts failed: %1").arg(
-			q.lastError().text()));
-	}
-}
-
-std::pair<int, int> DedupDb::Impl::loadLastBatchCounts() const {
-	if (!_open) {
-		return { 0, 0 };
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"SELECT done, total FROM ef_last WHERE id = 1"_q);
-	if (!q.exec() || !q.next()) {
-		return { 0, 0 };
-	}
-	return { q.value(0).toInt(), q.value(1).toInt() };
 }
 
 void DedupDb::Impl::beginTransaction() {
@@ -1118,8 +1156,8 @@ void DedupDb::Impl::commitTransaction() {
 	}
 }
 
-DedupDb::DedupDb(const QString &path)
-: _impl(std::make_unique<Impl>(path)) {
+DedupDb::DedupDb(const QString &path, bool purgePending)
+: _impl(std::make_unique<Impl>(path, purgePending)) {
 }
 
 DedupDb::~DedupDb() = default;
@@ -1202,43 +1240,43 @@ std::vector<DedupRecord> DedupDb::loadAll(Table table) const {
 	return _impl->loadAll(table);
 }
 
-void DedupDb::insertResumeDl(const ResumeDlRecord &record) {
-	_impl->insertResumeDl(record);
+void DedupDb::insertDlResume(const DlResumeRecord &record) {
+	_impl->insertDlResume(record);
 }
 
-void DedupDb::removeResumeDl(
+void DedupDb::removeDlResume(
 		uint64 sessionId,
 		uint64 peerId,
 		int64 msgId) {
-	_impl->removeResumeDl(sessionId, peerId, msgId);
+	_impl->removeDlResume(sessionId, peerId, msgId);
 }
 
-void DedupDb::clearResumeDl() {
-	_impl->clearResumeDl();
+void DedupDb::clearDlResume() {
+	_impl->clearDlResume();
 }
 
-std::vector<ResumeDlRecord> DedupDb::loadAllResumeDl() const {
-	return _impl->loadAllResumeDl();
+std::vector<DlResumeRecord> DedupDb::loadAllDlResume() const {
+	return _impl->loadAllDlResume();
 }
 
-void DedupDb::insertResumeUl(const ResumeUlRecord &record) {
-	_impl->insertResumeUl(record);
+void DedupDb::insertUlResume(const UlResumeRecord &record) {
+	_impl->insertUlResume(record);
 }
 
-void DedupDb::removeResumeUl(
+void DedupDb::removeUlResume(
 		uint64 sessionId,
 		uint64 peerId,
 		const QString &path) {
-	_impl->removeResumeUl(sessionId, peerId, path);
+	_impl->removeUlResume(sessionId, peerId, path);
 }
 
-void DedupDb::clearResumeUl(uint64 sessionId) {
-	_impl->clearResumeUl(sessionId);
+void DedupDb::clearUlResume(uint64 sessionId) {
+	_impl->clearUlResume(sessionId);
 }
 
-std::vector<ResumeUlRecord> DedupDb::loadAllResumeUl(
+std::vector<UlResumeRecord> DedupDb::loadAllUlResume(
 		uint64 sessionId) const {
-	return _impl->loadAllResumeUl(sessionId);
+	return _impl->loadAllUlResume(sessionId);
 }
 
 void DedupDb::Impl::insertNfResume(const NfResumeRecord &record) {
@@ -1346,6 +1384,217 @@ std::vector<NfResumeRecord> DedupDb::Impl::loadNfResume(
 	return result;
 }
 
+void DedupDb::Impl::insertExResume(const ExResumeRecord &record) {
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"INSERT OR REPLACE INTO ex_resume "
+		"(session_id, peer_id, last_msg_id, total, done, skipped, "
+		"path, state) "
+		"VALUES (:session_id, :peer_id, :last_msg_id, :total, :done, "
+		":skipped, :path, :state)"_q);
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(record.sessionId)));
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(record.peerId.value)));
+	q.bindValue(u":last_msg_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(record.lastMsgId.bare)));
+	q.bindValue(u":total"_q, record.total);
+	q.bindValue(u":done"_q, record.done);
+	q.bindValue(u":skipped"_q, record.skipped);
+	q.bindValue(u":path"_q, record.path);
+	q.bindValue(u":state"_q, record.state);
+	if (!q.exec()) {
+		LOG(("DedupDb: InsertExResume failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::removeExResume(uint64 sessionId, PeerId peerId) {
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM ex_resume "
+		"WHERE session_id = :session_id AND peer_id = :peer_id"_q);
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: RemoveExResume failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::clearExResume(uint64 sessionId) {
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM ex_resume WHERE session_id = :session_id"_q);
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ClearExResume failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+std::vector<ExResumeRecord> DedupDb::Impl::loadExResume(
+		uint64 sessionId) const {
+	auto result = std::vector<ExResumeRecord>();
+	if (!_open) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT peer_id, last_msg_id, total, done, skipped, "
+		"path, state FROM ex_resume "
+		"WHERE session_id = :session_id"_q);
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: LoadExResume failed: %1").arg(q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto record = ExResumeRecord();
+		record.sessionId = sessionId;
+		record.peerId = PeerId(q.value(0).toULongLong());
+		record.lastMsgId = MsgId(q.value(1).toLongLong());
+		record.total = q.value(2).toInt();
+		record.done = q.value(3).toInt();
+		record.skipped = q.value(4).toInt();
+		record.path = q.value(5).toString();
+		record.state = q.value(6).toString();
+		result.push_back(std::move(record));
+	}
+	return result;
+}
+
+void DedupDb::Impl::insertExTmp(
+		uint64 sessionId,
+		PeerId peerId,
+		uint64 documentId,
+		const QByteArray &hash) {
+	if (!_open || !documentId || hash.isEmpty()) {
+		return;
+	}
+	auto &s = exTmpState(sessionId, peerId);
+	s.docToHash[documentId] = hash;
+	s.hashToDoc[hash].insert(documentId);
+	s.pending.push_back({ documentId, hash });
+	if (++_exPendingWrites >= kExWriteBatchLimit) {
+		flushExPending();
+	}
+}
+
+void DedupDb::Impl::flushExPending() {
+	if (_exPendingWrites == 0 || !_open) {
+		return;
+	}
+	_exPendingWrites = 0;
+	beginTransaction();
+	QSqlQuery tmp(_db);
+	tmp.prepare(u"INSERT OR REPLACE INTO ex_tmp "
+		"(session_id, peer_id, doc_id, hash, status) "
+		"VALUES (:session_id, :peer_id, :doc_id, :hash, 'f')"_q);
+	for (auto &[key, s] : _exTmpStates) {
+		for (const auto &row : s.pending) {
+			tmp.bindValue(u":session_id"_q, QVariant::fromValue(
+				static_cast<qulonglong>(key.sessionId)));
+			tmp.bindValue(u":peer_id"_q, QVariant::fromValue(
+				static_cast<qulonglong>(key.peerId)));
+			tmp.bindValue(u":doc_id"_q, QVariant::fromValue(
+				static_cast<qulonglong>(row.docId)));
+			tmp.bindValue(u":hash"_q, row.hash);
+			if (!tmp.exec()) {
+				LOG(("DedupDb: InsertExTmp failed: %1").arg(
+					tmp.lastError().text()));
+			}
+		}
+		s.pending.clear();
+	}
+	commitTransaction();
+}
+
+bool DedupDb::Impl::containsExTmpDocId(
+		uint64 sessionId,
+		PeerId peerId,
+		uint64 documentId) const {
+	if (!documentId) {
+		return false;
+	}
+	return exTmpState(sessionId, peerId).docToHash.contains(documentId);
+}
+
+bool DedupDb::Impl::containsExTmpHash(
+		uint64 sessionId,
+		PeerId peerId,
+		const QByteArray &hash) const {
+	if (hash.isEmpty()) {
+		return false;
+	}
+	const auto &s = exTmpState(sessionId, peerId);
+	const auto i = s.hashToDoc.find(hash);
+	return (i != s.hashToDoc.end()) && !i->isEmpty();
+}
+
+QByteArray DedupDb::Impl::hashForExTmpDocId(
+		uint64 sessionId,
+		PeerId peerId,
+		uint64 documentId) const {
+	if (!documentId) {
+		return {};
+	}
+	return exTmpState(sessionId, peerId).docToHash.value(documentId);
+}
+
+void DedupDb::Impl::clearExTmpRun(uint64 sessionId, PeerId peerId) {
+	if (const auto i = _exTmpStates.find({ sessionId, peerId.value });
+		i != _exTmpStates.end()) {
+		_exPendingWrites -= int(i->second.pending.size());
+		_exTmpStates.erase(i);
+	}
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM ex_tmp "
+		"WHERE session_id = :session_id AND peer_id = :peer_id"_q);
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ClearExTmpRun failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::clearExTmpSession(uint64 sessionId) {
+	for (auto i = _exTmpStates.begin(); i != _exTmpStates.end();) {
+		if (i->first.sessionId == sessionId) {
+			_exPendingWrites -= int(i->second.pending.size());
+			i = _exTmpStates.erase(i);
+		} else {
+			++i;
+		}
+	}
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM ex_tmp WHERE session_id = :session_id"_q);
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ClearExTmpSession failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
 void DedupDb::insertEfResumeItem(const EfResumeItem &item) {
 	_impl->insertEfResumeItem(item);
 }
@@ -1380,13 +1629,11 @@ std::vector<EfResumeItem> DedupDb::loadUnfinishedEfResumeItems(
 	return _impl->loadUnfinishedEfResumeItems(sessionId);
 }
 
-std::vector<EfResumeItem> DedupDb::loadFinishedEfResumeItems(
-		uint64 sessionId) const {
-	return _impl->loadFinishedEfResumeItems(sessionId);
-}
-
-void DedupDb::clearDoneEfResumeForPeer(PeerId peerId) {
-	_impl->clearDoneEfResumeForPeer(peerId);
+void DedupDb::setEfResumePaused(
+		uint64 sessionId,
+		PeerId peerId,
+		bool paused) {
+	_impl->setEfResumePaused(sessionId, peerId, paused);
 }
 
 void DedupDb::insertNfResume(const NfResumeRecord &record) {
@@ -1405,30 +1652,57 @@ std::vector<NfResumeRecord> DedupDb::loadNfResume(uint64 sessionId) const {
 	return _impl->loadNfResume(sessionId);
 }
 
-void DedupDb::insertForwardedDone(
-		const FullMsgId &sourceId,
+void DedupDb::insertExResume(const ExResumeRecord &record) {
+	_impl->insertExResume(record);
+}
+
+void DedupDb::removeExResume(uint64 sessionId, PeerId peerId) {
+	_impl->removeExResume(sessionId, peerId);
+}
+
+void DedupDb::clearExResume(uint64 sessionId) {
+	_impl->clearExResume(sessionId);
+}
+
+std::vector<ExResumeRecord> DedupDb::loadExResume(uint64 sessionId) const {
+	return _impl->loadExResume(sessionId);
+}
+
+void DedupDb::insertExTmp(
+		uint64 sessionId,
+		PeerId peerId,
+		uint64 documentId,
 		const QByteArray &hash) {
-	_impl->insertForwardedDone(sourceId, hash);
+	_impl->insertExTmp(sessionId, peerId, documentId, hash);
 }
 
-std::vector<FullMsgId> DedupDb::loadForwardedDone() const {
-	return _impl->loadForwardedDone();
+bool DedupDb::containsExTmpDocId(
+		uint64 sessionId,
+		PeerId peerId,
+		uint64 documentId) const {
+	return _impl->containsExTmpDocId(sessionId, peerId, documentId);
 }
 
-void DedupDb::removeForwardedDone(const FullMsgId &sourceId) {
-	_impl->removeForwardedDone(sourceId);
+bool DedupDb::containsExTmpHash(
+		uint64 sessionId,
+		PeerId peerId,
+		const QByteArray &hash) const {
+	return _impl->containsExTmpHash(sessionId, peerId, hash);
 }
 
-void DedupDb::clearForwardedDone() {
-	_impl->clearForwardedDone();
+QByteArray DedupDb::hashForExTmpDocId(
+		uint64 sessionId,
+		PeerId peerId,
+		uint64 documentId) const {
+	return _impl->hashForExTmpDocId(sessionId, peerId, documentId);
 }
 
-void DedupDb::saveLastBatchCounts(int done, int total) {
-	_impl->saveLastBatchCounts(done, total);
+void DedupDb::clearExTmpRun(uint64 sessionId, PeerId peerId) {
+	_impl->clearExTmpRun(sessionId, peerId);
 }
 
-std::pair<int, int> DedupDb::loadLastBatchCounts() const {
-	return _impl->loadLastBatchCounts();
+void DedupDb::clearExTmpSession(uint64 sessionId) {
+	_impl->clearExTmpSession(sessionId);
 }
 
 void DedupDb::beginTransaction() {

@@ -293,6 +293,9 @@ void AppendRichFileAvailability(
 		case SkipReason::FileSize:
 			values.emplace_back(reasonKey, SerializeString("file_size"));
 			return;
+		case SkipReason::Duplicate:
+			values.emplace_back(reasonKey, SerializeString("duplicate"));
+			return;
 		case SkipReason::DateLimits:
 			values.emplace_back(reasonKey, SerializeString("date_limits"));
 			return;
@@ -1672,6 +1675,9 @@ QByteArray SerializeMessage(
 			case SkipReason::FileType:
 				return pre + "(File not included. "
 					"Change data exporting settings to download.)";
+			case SkipReason::Duplicate:
+				return pre + "(File is a duplicate "
+					"of an already exported file.)";
 			case SkipReason::None: return FormatFilePath(file);
 			}
 			Unexpected("Skip reason while writing file path.");
@@ -2560,6 +2566,9 @@ Result JsonWriter::writeUserpicsSlice(const Data::UserpicsSlice &data) {
 			case SkipReason::FileType:
 				return "(Photo not included. "
 					"Change data exporting settings to download.)";
+			case SkipReason::Duplicate:
+				return "(File is a duplicate "
+					"of an already exported file.)";
 			case SkipReason::None: return FormatFilePath(file);
 			}
 			Unexpected("Skip reason while writing photo path.");
@@ -2619,6 +2628,9 @@ Result JsonWriter::writeStoriesSlice(const Data::StoriesSlice &data) {
 			case SkipReason::FileType:
 				return "(Photo not included. "
 					"Change data exporting settings to download.)";
+			case SkipReason::Duplicate:
+				return "(File is a duplicate "
+					"of an already exported file.)";
 			case SkipReason::None: return FormatFilePath(file);
 			}
 			Unexpected("Skip reason while writing story path.");

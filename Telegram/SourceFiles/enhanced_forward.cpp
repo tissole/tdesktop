@@ -23,12 +23,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_types.h"
 #include <QDir>
 #include <QFile>
+#include <QDataStream>
 #include <deque>
 #include <unordered_set>
 #include "data/data_user.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "main/main_session.h"
+#include "main/main_account.h"
+#include "main/main_domain.h"
 
 // HIGH-LEVEL SENDING AND ITEM RESOLUTION HELPERS:
 #include "api/api_sending.h"
@@ -219,24 +222,7 @@ void ClearShadowUpload(
 	session->data().requestItemRepaint(item);
 }
 
-std::pair<int, int> &LastBatchCountsCache() {
-	static auto value = std::pair<int, int>{ 0, 0 };
-	return value;
-}
-
-void SaveLastBatchCounts(int done, int total) {
-	LastBatchCountsCache() = { done, total };
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (db.isOpen()) {
-		db.saveLastBatchCounts(done, total);
-	}
-}
-
 } // namespace
-
-std::pair<int, int> LastBatchCounts() {
-	return LastBatchCountsCache();
-}
 
 void ShowForwardDoneToast(int sent, int, int skipped) {
 	if (sent <= 0 && skipped <= 0) {
@@ -292,6 +278,11 @@ void EraseResumableBatchesForPeer(const PeerId &peer) {
 
 void processStartQueue(const PeerId &peerId);
 
+Fn<std::optional<QByteArray>()> ForwardedDoneSerializer();
+void WriteForwardedDonePostponed();
+[[nodiscard]] std::vector<FullMsgId> DeserializeForwardedDone(
+	const QByteArray &blob);
+
 void finishJob(not_null<Main::Session*> session, const PeerId &peerId) {
 	auto &states = ActiveStates();
 	const auto it = states.find(peerId);
@@ -312,7 +303,6 @@ void finishJob(not_null<Main::Session*> session, const PeerId &peerId) {
 	if (allDead) {
 		states.erase(it);		
 		CleanupPartialFilesForPeer(session, peerId);
-		SaveLastBatchCounts(0, 0);
 		NotifyStateChanged(peerId);
 		NotifyCounterChanged();
 		session->changes().peerUpdated(
@@ -325,11 +315,7 @@ void finishJob(not_null<Main::Session*> session, const PeerId &peerId) {
 	auto &batch = it->second;
 	finished.push_back(std::move(batch));
 	states.erase(it);
-	// Keep the counter visible with the last completed batch's counts until
-	// the next forward replaces it. A cancelled batch clears the counter.
-	SaveLastBatchCounts(
-		finished.back().cancelled ? 0 : finished.back().sent,
-		finished.back().cancelled ? 0 : finished.back().total);
+	WriteForwardedDonePostponed();
 	NotifyStateChanged(peerId);
 	NotifyCounterChanged();
 	session->changes().peerUpdated(
@@ -588,6 +574,9 @@ void pauseForward(
 	if (it->second.pauseCallback) {
 		it->second.pauseCallback();
 	}
+	if (it->second.saveCallback) {
+		it->second.saveCallback();
+	}
 	fireUpdate(session, id);
 }
 
@@ -601,6 +590,9 @@ void resumeForward(
 	it->second.paused = false;
 	if (it->second.resumeCallback) {
 		it->second.resumeCallback();
+	}
+	if (it->second.saveCallback) {
+		it->second.saveCallback();
 	}
 	fireUpdate(session, id);
 }
@@ -855,6 +847,7 @@ std::vector<SavedJob> GetUnfinishedJobs(
 		} else {
 			job.unfinishedFiles++;
 		}
+		job.paused = job.paused || record.paused;
 		job.sourceMsgs.push_back(record.sourceId);
 		job.uploadDone.push_back(record.state.toInt() >= 2);
 		job.fileId.push_back(record.fileId);
@@ -967,36 +960,6 @@ std::optional<SavedJob> GetUnfinishedJobByDst(
 		}
 	}
 	return std::nullopt;
-}
-
-std::vector<SavedJob> GetFinishedJobs(
-		not_null<Main::Session*> session) {
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (!db.isOpen()) {
-		return {};
-	}
-	const auto records = db.loadFinishedEfResumeItems(session->uniqueId());
-	base::flat_map<QString, SavedJob> jobs;
-	for (const auto &record : records) {
-		auto &job = jobs[record.jobId];
-		if (job.dstId == PeerId()) {
-			job.dstId = record.peerId;
-			job.srcId = record.sourceId.peer;
-		}
-		job.total++;
-		job.sent++;
-		job.sourceMsgs.push_back(record.sourceId);
-		job.uploadDone.push_back(true);
-		job.fileId.push_back(record.fileId);
-		job.uploadedParts.push_back(record.uploadedParts);
-	}
-	std::vector<SavedJob> result;
-	for (auto &[_, job] : jobs) {
-		if (job.total > 0 && job.sent >= job.total) {
-			result.push_back(std::move(job));
-		}
-	}
-	return result;
 }
 
 void EnsureForwardSourceMessages(
@@ -1254,17 +1217,116 @@ void MarkForwardedDone(
 		not_null<Main::Session*> session,
 		const FullMsgId &sourceId,
 		const QByteArray &hash) {
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (db.isOpen()) {
-		db.insertForwardedDone(sourceId, hash);
+	Q_UNUSED(session);
+	Q_UNUSED(sourceId);
+	Q_UNUSED(hash);
+	// The serializer below reads the live states, where the just-sent item
+	// is already marked, so nothing needs its ids passed in.
+	WriteForwardedDonePostponed();
+}
+
+Fn<std::optional<QByteArray>()> ForwardedDoneSerializer() {
+	return []() -> std::optional<QByteArray> {
+		auto result = QByteArray();
+		auto stream = QDataStream(&result, QIODevice::WriteOnly);
+		stream.setVersion(QDataStream::Qt_5_1);
+		auto count = 0;
+		for (const auto &state : FinishedStates()) {
+			if (state.resumable) {
+				continue;
+			}
+			count += int(state.sourceIds.size());
+		}
+		for (const auto &[_, state] : ActiveStates()) {
+			const auto n = std::min(
+				state.items.size(),
+				state.sourceIds.size());
+			for (auto i = 0U; i != n; ++i) {
+				if (state.items[i].sent) {
+					++count;
+				}
+			}
+		}
+		stream << qint32(1) << qint32(count);
+		for (const auto &state : FinishedStates()) {
+			if (state.resumable) {
+				continue;
+			}
+			for (const auto &id : state.sourceIds) {
+				stream << quint64(id.peer.value) << qint64(id.msg.bare);
+			}
+		}
+		for (const auto &[_, state] : ActiveStates()) {
+			const auto n = std::min(
+				state.items.size(),
+				state.sourceIds.size());
+			for (auto i = 0U; i != n; ++i) {
+				if (state.items[i].sent) {
+					const auto &id = state.sourceIds[i];
+					stream << quint64(id.peer.value)
+						<< qint64(id.msg.bare);
+				}
+			}
+		}
+		return result;
+	};
+}
+
+void WriteForwardedDonePostponed() {
+	// The done list is global, not per account, so every account stores the
+	// same blob and whichever logs in next finds it.
+	for (const auto &account : Core::App().domain().orderedAccounts()) {
+		if (const auto session = account->maybeSession()) {
+			session->account().local().updateForwardedDone(
+				ForwardedDoneSerializer());
+		}
 	}
 }
 
-std::vector<FullMsgId> GetForwardedDone() {
+std::vector<FullMsgId> DeserializeForwardedDone(const QByteArray &blob) {
+	auto result = std::vector<FullMsgId>();
+	if (blob.isEmpty()) {
+		return result;
+	}
+	auto stream = QDataStream(blob);
+	stream.setVersion(QDataStream::Qt_5_1);
+	auto version = qint32(0);
+	auto count = qint32(0);
+	stream >> version >> count;
+	if (stream.status() != QDataStream::Ok
+		|| version != 1
+		|| count < 0
+		|| count > blob.size() / 16) {
+		return {};
+	}
+	for (auto i = 0; i != count; ++i) {
+		auto peer = quint64(0);
+		auto msg = qint64(0);
+		stream >> peer >> msg;
+		if (stream.status() != QDataStream::Ok) {
+			break;
+		}
+		if (!peer || !msg) {
+			continue;
+		}
+		result.emplace_back(PeerId(peer), MsgId(msg));
+	}
+	return result;
+}
+
+void PauseAll(not_null<Main::Session*> session) {
+	const auto jobs = GetUnfinishedJobs(session);
+	for (const auto &job : jobs) {
+		pauseForward(job.dstId, session);
+	}
 	auto &db = Core::App().downloadManager().ensureDedupDb();
-	return db.isOpen()
-		? db.loadForwardedDone()
-		: std::vector<FullMsgId>();
+	if (db.isOpen()) {
+		db.setEfResumePaused(session->uniqueId(), PeerId(), true);
+	}
+	for (const auto &job : jobs) {
+		NotifyStateChanged(job.dstId);
+	}
+	NotifyCounterChanged();
 }
 
 void EnsureResumeStatesSeeded(not_null<Main::Session*> session) {
@@ -1277,23 +1339,15 @@ void EnsureResumeStatesSeeded(not_null<Main::Session*> session) {
 	});
 	auto &active = ActiveStates();
 	auto &finished = FinishedStates();
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (db.isOpen()) {
-		// One-time migration: finished batches saved by older versions as
-		// ef_resume 'done' rows become the flat per-item done table. Old
-		// rows keep the per-index resume layout, so only import the leftover
-		// items that never got an ef_done row.
-		for (const auto &job : GetFinishedJobs(session)) {
-			for (const auto &sourceId : job.sourceMsgs) {
-				db.insertForwardedDone(sourceId, QByteArray());
-			}
-		}
-		LastBatchCountsCache() = db.loadLastBatchCounts();
-	}
+	const auto doneItems = DeserializeForwardedDone(
+		session->account().local().forwardedDoneSerialized());
 	// The Forwards tab shows every forwarded item, persisted per-item so the
 	// list accumulates across batches and restarts until the user clears it.
-	auto doneItems = GetForwardedDone();
+	auto seen = std::unordered_set<FullMsgId>();
 	for (const auto &sourceId : doneItems) {
+		if (!seen.emplace(sourceId).second) {
+			continue;
+		}
 		const auto already = ranges::any_of(
 			finished,
 			[&](const SharedState &state) {
@@ -1335,7 +1389,7 @@ void EnsureResumeStatesSeeded(not_null<Main::Session*> session) {
 		state.sent = job.sent;
 		state.skipped = 0;
 		state.cancelled = false;
-		state.paused = false;
+		state.paused = job.paused;
 		state.finished = true;
 		state.resumable = true;
 		state.destPeer = job.dstId;
@@ -1622,10 +1676,7 @@ void ClearFinished(
 		}
 	}
 	RemoveEFUploadsForPeer(peer);
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (db.isOpen()) {
-		db.clearForwardedDone();
-	}
+	WriteForwardedDonePostponed();
 	NotifyStateChanged(peer);
 	NotifyCounterChanged();
 }
@@ -1656,10 +1707,7 @@ void ClearFinishedItems(
 			++i;
 		}
 	}
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (db.isOpen()) {
-		db.removeForwardedDone(sourceId);
-	}
+	WriteForwardedDonePostponed();
 	NotifyStateChanged(sourceId.peer);
 	NotifyCounterChanged();
 }
@@ -1805,6 +1853,14 @@ Pipeline::~Pipeline() {
 
 void Pipeline::run() {
 	const auto self = shared_from_this();
+	{
+		// A restarted job takes over its persisted rows unpaused; the next
+		// progress save keeps them that way.
+		auto &db = Core::App().downloadManager().ensureDedupDb();
+		if (db.isOpen()) {
+			db.setEfResumePaused(_session.uniqueId(), _peerId, false);
+		}
+	}
 	Info::Downloads::SetLastActivityTab(Info::Downloads::Tab::Forwards);
 	_uploadLifetime = std::make_shared<rpl::lifetime>();
 	_dlLifetime = std::make_shared<rpl::lifetime>();
@@ -2146,6 +2202,7 @@ void Pipeline::saveProgress() {
 		record.mediaId = it.mediaId;
 		record.fileSize = it.fileSize;
 		record.sessionId = _session.uniqueId();
+		record.paused = isPaused(_peerId);
 		db.insertEfResumeItem(record);
 	}
 }
@@ -2436,29 +2493,6 @@ void Pipeline::sendNext() {
 	});
 	for (auto i = 0; i < _n; i++) {
 		refreshSourceItemState(i);
-	}
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (db.isOpen()) {
-		const auto jobId = u"ef_%1_%2"_q.arg(_srcPeer.value).arg(_peerId.value);
-		for (auto i = 0; i < _n; i++) {
-			if (_items[i].cancelled || _items[i].dedupSkipped) {
-				continue;
-			}
-			auto record = Data::EfResumeItem();
-			record.jobId = jobId;
-			record.itemIndex = i;
-			record.peerId = _peerId;
-			record.sourceId = _items[i].sourceId;
-			record.state = u"done"_q;
-			record.localPath = _items[i].path;
-			record.fileId = _items[i].fileId;
-			record.uploadedParts = _items[i].uploadedParts;
-			record.fileHash = _items[i].fileHash;
-			record.mediaId = _items[i].mediaId;
-			record.fileSize = _items[i].fileSize;
-			record.sessionId = _session.uniqueId();
-			db.insertEfResumeItem(record);
-		}
 	}
 	if (_uploadLifetime) _uploadLifetime->destroy();
 	if (_dlLifetime) _dlLifetime->destroy();

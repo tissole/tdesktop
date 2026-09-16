@@ -31,6 +31,8 @@ void ResolveSettings(not_null<Main::Session*> session, Settings &settings);
 
 class Panel;
 
+class ProgressWidget;
+
 class PanelController {
 public:
 	PanelController(
@@ -77,6 +79,7 @@ private:
 	base::Timer _saveSettingsTimer;
 
 	base::unique_qptr<Ui::SeparatePanel> _panel;
+	QPointer<ProgressWidget> _progress;
 
 	State _state;
 	base::weak_qptr<Ui::BoxContent> _confirmStopBox;

@@ -191,7 +191,7 @@ public:
 		-> rpl::producer<not_null<const HistoryItem*>>;
 	[[nodiscard]] rpl::producer<> loadedResolveDone() const;
 
-	[[nodiscard]] int resumeDlCount() const;
+	[[nodiscard]] int dlResumeCount() const;
 	void startAllResumeDownloads(bool startPaused);
 	void cancelAllResumeDownloads();
 	void clearFingerprintCache();
@@ -216,6 +216,7 @@ public:
 
 	[[nodiscard]] DedupDb &dedupDb() const;
 	DedupDb &ensureDedupDb() const;
+	[[nodiscard]] QString dedupDbPath() const;
 	// Counts a duplicate that was skipped in a flow and shows one aggregated
 	// toast for the whole batch (e.g. "12 duplicate downloads"). A short
 	// debounce merges consecutive skips so a multi-file selection produces a
@@ -294,7 +295,6 @@ private:
 
 	void saveToDisk();
 	void saveIfIdle();
-	[[nodiscard]] QString dedupDbPath() const;
 	void clearFingerprintCache(uint64 documentId);
 	void saveFileHash(
 		not_null<Main::Session*> session,

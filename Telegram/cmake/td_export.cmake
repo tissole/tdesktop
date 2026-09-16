@@ -15,6 +15,8 @@ PRIVATE
     export/export_api_wrap.h
     export/export_controller.cpp
     export/export_controller.h
+    export/export_dedup.cpp
+    export/export_dedup.h
     export/export_pch.h
     export/export_settings.cpp
     export/export_settings.h
@@ -43,5 +45,6 @@ PUBLIC
 target_link_libraries(td_export
 PUBLIC
     desktop-app::lib_base
+    desktop-app::lib_ui
     tdesktop::td_scheme
 )

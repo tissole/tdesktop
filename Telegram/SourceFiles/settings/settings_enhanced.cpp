@@ -463,6 +463,20 @@ namespace Settings {
 			SetEnhancedValue("prevent_forward_duplicates", toggled);
 			EnhancedSettings::Write();
 		}, container->lifetime());
+
+		AddButtonWithIcon(
+				inner,
+				tr::lng_settings_prevent_export_duplicates(),
+				st::settingsButtonNoIcon
+		)->toggleOn(
+				rpl::single(GetEnhancedBool("prevent_export_duplicates"))
+		)->toggledChanges(
+		) | rpl::filter([=](bool toggled) {
+			return (toggled != GetEnhancedBool("prevent_export_duplicates"));
+		}) | rpl::on_next([=](bool toggled) {
+			SetEnhancedValue("prevent_export_duplicates", toggled);
+			EnhancedSettings::Write();
+		}, container->lifetime());
 	}
 
 	void Enhanced::SetupEnhancedButton(not_null<Ui::VerticalLayout *> container) {

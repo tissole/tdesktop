@@ -9,9 +9,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/variant.h"
 #include "mtproto/mtproto_response.h"
+#include "export/output/export_output_stats.h"
 
 #include <QtCore/QPointer>
 #include <crl/crl_object_on_queue.h>
+#include <array>
 
 namespace MTP {
 class Instance;
@@ -90,6 +92,17 @@ struct FinishedState {
 	QString path;
 	int filesCount = 0;
 	int64 bytesCount = 0;
+	std::array<int64, Output::Stats::kGroups> groupFiles = {};
+	std::array<int64, Output::Stats::kGroups> groupBytes = {};
+	std::array<int64, Output::Stats::kGroups> groupSkipped = {};
+	std::array<int64, Output::Stats::kGroups> groupSkippedBytes = {};
+	int64 skippedFiles = 0;
+	int64 skippedBytes = 0;
+	int64 textMessages = 0;
+	int64 linkMessages = 0;
+	int64 linkTotal = 0;
+	int64 linkDuplicates = 0;
+	int64 messagesTotal = 0;
 };
 
 using State = std::variant<
@@ -139,6 +152,8 @@ public:
 		const Environment &environment);
 	void skipFile(uint64 randomId);
 	void cancelExportFast();
+	void setSessionId(uint64 sessionId);
+	void setDedupDb(const QString &path);
 
 	rpl::lifetime &lifetime();
 

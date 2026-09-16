@@ -156,6 +156,9 @@ void SettingsWidget::setupContent() {
 	const auto content = static_cast<Ui::VerticalLayout*>(wrap->entity());
 
 	const auto buttons = setupButtons(scroll, wrap);
+	_content = content;
+	_scroll = scroll;
+	_buttonsHeight = buttons->height();
 	setupOptions(content);
 	setupPathAndFormat(content);
 
@@ -794,36 +797,40 @@ void SettingsWidget::addMediaOptions(
 		MediaType::Video);
 	addMediaOption(
 		container,
-		tr::lng_export_option_video_messages(tr::now),
-		MediaType::VideoMessage);
-	addMediaOption(
-		container,
 		tr::lng_export_option_audios(tr::now),
 		MediaType::Audio);
-	addMediaOption(
-		container,
-		tr::lng_export_option_voice_messages(tr::now),
-		MediaType::VoiceMessage);
-	addMediaOption(
-		container,
-		tr::lng_export_option_stickers(tr::now),
-		MediaType::Sticker);
-	addMediaOption(
-		container,
-		tr::lng_export_option_gifs(tr::now),
-		MediaType::GIF);
 	const auto files = addMediaOption(
 		container,
 		tr::lng_export_option_files(tr::now),
 		MediaType::File);
 	addMediaOption(
 		container,
-		tr::lng_export_option_text_messages(tr::now),
-		MediaType::Text);
+		tr::lng_export_option_video_messages(tr::now),
+		MediaType::VideoMessage);
+	addMediaOption(
+		container,
+		tr::lng_export_option_voice_messages(tr::now),
+		MediaType::VoiceMessage);
+	addMediaOption(
+		container,
+		tr::lng_export_option_gifs(tr::now),
+		MediaType::GIF);
+	addMediaOption(
+		container,
+		tr::lng_export_option_stickers(tr::now),
+		MediaType::Sticker);
+	addMediaOption(
+		container,
+		tr::lng_export_option_polls(tr::now),
+		MediaType::Poll);
 	addMediaOption(
 		container,
 		tr::lng_export_option_links(tr::now),
 		MediaType::Link);
+	addMediaOption(
+		container,
+		tr::lng_export_option_text_messages(tr::now),
+		MediaType::Text);
 	addMediaOption(
 		container,
 		tr::lng_export_option_full_history(tr::now),
@@ -1081,6 +1088,18 @@ rpl::producer<Settings> SettingsWidget::changes() const {
 
 int SettingsWidget::sizeLimitExtraHeight() const {
 	return _sizeLimitExtraHeight;
+}
+
+rpl::producer<int> SettingsWidget::contentHeightValue() const {
+	return _content->heightValue(
+	) | rpl::map([=](int height) {
+		LOG(("ExportDiag: measure widget=%1 hint=%2 viewport=%3 overflow=%4")
+			.arg(height)
+			.arg(_content->sizeHint().height())
+			.arg(_scroll ? _scroll->height() : -1)
+			.arg(_scroll ? _scroll->scrollTopMax() : -1));
+		return height + _buttonsHeight;
+	});
 }
 
 rpl::producer<Settings> SettingsWidget::value() const {

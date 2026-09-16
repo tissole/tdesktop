@@ -23,7 +23,7 @@ struct DedupRecord {
 	QString status = u"f"_q;
 };
 
-struct ResumeDlRecord {
+struct DlResumeRecord {
 	uint64 sessionId = 0;
 	uint64 peerId = 0;
 	int64 msgId = 0;
@@ -31,7 +31,7 @@ struct ResumeDlRecord {
 	qint64 fileSize = 0;
 };
 
-struct ResumeUlRecord {
+struct UlResumeRecord {
 	uint64 sessionId = 0;
 	uint64 peerId = 0;
 	QString path;
@@ -54,6 +54,7 @@ struct EfResumeItem {
 	QByteArray fileHash;
 	uint64 mediaId = 0;
 	qint64 fileSize = 0;
+	bool paused = false;
 };
 
 struct NfResumeRecord {
@@ -68,6 +69,17 @@ struct NfResumeRecord {
 	std::vector<MsgId> remaining;
 };
 
+struct ExResumeRecord {
+	uint64 sessionId = 0;
+	PeerId peerId = PeerId();
+	int total = 0;
+	int done = 0;
+	int skipped = 0;
+	MsgId lastMsgId = 0;
+	QString path;
+	QString state;
+};
+
 class DedupDb {
 public:
 	enum class Table {
@@ -75,7 +87,7 @@ public:
 		Uploads,
 	};
 
-	explicit DedupDb(const QString &path);
+	explicit DedupDb(const QString &path, bool purgePending = true);
 	~DedupDb();
 
 	[[nodiscard]] bool isOpen() const;
@@ -126,18 +138,18 @@ public:
 
 	[[nodiscard]] std::vector<DedupRecord> loadAll(Table table) const;
 
-	void insertResumeDl(const ResumeDlRecord &record);
-	void removeResumeDl(uint64 sessionId, uint64 peerId, int64 msgId);
-	void clearResumeDl();
-	[[nodiscard]] std::vector<ResumeDlRecord> loadAllResumeDl() const;
+	void insertDlResume(const DlResumeRecord &record);
+	void removeDlResume(uint64 sessionId, uint64 peerId, int64 msgId);
+	void clearDlResume();
+	[[nodiscard]] std::vector<DlResumeRecord> loadAllDlResume() const;
 
-	void insertResumeUl(const ResumeUlRecord &record);
-	void removeResumeUl(
+	void insertUlResume(const UlResumeRecord &record);
+	void removeUlResume(
 		uint64 sessionId,
 		uint64 peerId,
 		const QString &path);
-	void clearResumeUl(uint64 sessionId);
-	[[nodiscard]] std::vector<ResumeUlRecord> loadAllResumeUl(
+	void clearUlResume(uint64 sessionId);
+	[[nodiscard]] std::vector<UlResumeRecord> loadAllUlResume(
 		uint64 sessionId) const;
 
 	void insertEfResumeItem(const EfResumeItem &item);
@@ -155,9 +167,7 @@ public:
 		PeerId peerId) const;
 	[[nodiscard]] std::vector<EfResumeItem> loadUnfinishedEfResumeItems(
 		uint64 sessionId) const;
-	[[nodiscard]] std::vector<EfResumeItem> loadFinishedEfResumeItems(
-		uint64 sessionId) const;
-	void clearDoneEfResumeForPeer(PeerId peerId);
+	void setEfResumePaused(uint64 sessionId, PeerId peerId, bool paused);
 
 	void insertNfResume(const NfResumeRecord &record);
 	void removeNfResume(uint64 sessionId, PeerId destPeerId);
@@ -165,19 +175,32 @@ public:
 	[[nodiscard]] std::vector<NfResumeRecord> loadNfResume(
 		uint64 sessionId) const;
 
-	// Finished forwarded items: one flat row per source message, persisted so
-	// the Forwards tab keeps every sent item across restarts until cleared.
-	void insertForwardedDone(
-		const FullMsgId &sourceId,
-		const QByteArray &hash);
-	[[nodiscard]] std::vector<FullMsgId> loadForwardedDone() const;
-	void removeForwardedDone(const FullMsgId &sourceId);
-	void clearForwardedDone();
+	void insertExResume(const ExResumeRecord &record);
+	void removeExResume(uint64 sessionId, PeerId peerId);
+	void clearExResume(uint64 sessionId);
+	[[nodiscard]] std::vector<ExResumeRecord> loadExResume(
+		uint64 sessionId) const;
 
-	// The last completed forward's (done, total): keeps the counter visible
-	// until the next forward replaces it, even across restarts.
-	void saveLastBatchCounts(int done, int total);
-	[[nodiscard]] std::pair<int, int> loadLastBatchCounts() const;
+	// Same-run export dedup: temp per-chat rows, deleted on finish/cancel.
+	void insertExTmp(
+		uint64 sessionId,
+		PeerId peerId,
+		uint64 documentId,
+		const QByteArray &hash);
+	[[nodiscard]] bool containsExTmpDocId(
+		uint64 sessionId,
+		PeerId peerId,
+		uint64 documentId) const;
+	[[nodiscard]] bool containsExTmpHash(
+		uint64 sessionId,
+		PeerId peerId,
+		const QByteArray &hash) const;
+	[[nodiscard]] QByteArray hashForExTmpDocId(
+		uint64 sessionId,
+		PeerId peerId,
+		uint64 documentId) const;
+	void clearExTmpRun(uint64 sessionId, PeerId peerId);
+	void clearExTmpSession(uint64 sessionId);
 
 	void beginTransaction();
 	void commitTransaction();

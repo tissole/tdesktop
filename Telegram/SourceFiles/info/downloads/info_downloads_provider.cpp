@@ -159,13 +159,6 @@ void Provider::updateCounter() {
 				fwDone += job.progress.sent;
 			}
 		});
-		if (fwDone == 0 && fwTotal == 0) {
-			// Nothing is running: keep the last completed batch visible in the
-			// counter until the next forward replaces it (also after restart).
-			const auto [lastDone, lastTotal] = EnhancedForward::LastBatchCounts();
-			fwTotal += lastTotal;
-			fwDone += lastDone;
-		}
 		total += fwTotal;
 		done += fwDone;
 	}

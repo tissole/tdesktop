@@ -800,6 +800,8 @@ void Account::reset() {
 	_downloadsSerialized = QByteArray();
 	_uploadsSerialize = nullptr;
 	_uploadsSerialized = QByteArray();
+	_forwardedDoneSerialize = nullptr;
+	_forwardedDoneSerialized = QByteArray();
 	_cacheTotalSizeLimit = Database::Settings().totalSizeLimit;
 	_cacheTotalTimeLimit = Database::Settings().totalTimeLimit;
 	_cacheBigFileTotalSizeLimit = Database::Settings().totalSizeLimit;
@@ -864,7 +866,15 @@ void Account::writeLocations() {
 			_uploadsSerialized = std::move(*serialized);
 		}
 	}
-	if (_fileLocations.isEmpty() && _downloadsSerialized.isEmpty()) {
+	if (_forwardedDoneSerialize) {
+		if (auto serialized = _forwardedDoneSerialize()) {
+			_forwardedDoneSerialized = std::move(*serialized);
+		}
+	}
+	if (_fileLocations.isEmpty()
+		&& _downloadsSerialized.isEmpty()
+		&& _uploadsSerialized.isEmpty()
+		&& _forwardedDoneSerialized.isEmpty()) {
 		if (_locationsKey) {
 			ClearKey(_locationsKey, _basePath);
 			_locationsKey = 0;
@@ -903,6 +913,7 @@ void Account::writeLocations() {
 		size += sizeof(quint32); // legacy webLocationsCount
 		size += Serialize::bytearraySize(_downloadsSerialized);
 		size += Serialize::bytearraySize(_uploadsSerialized);
+		size += Serialize::bytearraySize(_forwardedDoneSerialized);
 
 		EncryptedDescriptor data(size);
 		auto legacyTypeField = 0;
@@ -925,7 +936,8 @@ void Account::writeLocations() {
 			data.stream << quint64(i.key().first) << quint64(i.key().second) << quint64(i.value().first) << quint64(i.value().second);
 		}
 
-		data.stream << quint32(0) << _downloadsSerialized << _uploadsSerialized;
+		data.stream << quint32(0) << _downloadsSerialized << _uploadsSerialized
+			<< _forwardedDoneSerialized;
 
 		FileWriteDescriptor file(_locationsKey, _basePath);
 		file.writeEncrypted(data, _localKey);
@@ -1007,6 +1019,9 @@ void Account::readLocations() {
 			if (!locations.stream.atEnd()) {
 				locations.stream >> _uploadsSerialized;
 			}
+			if (!locations.stream.atEnd()) {
+				locations.stream >> _forwardedDoneSerialized;
+			}
 		}
 	}
 }
@@ -1028,6 +1043,16 @@ void Account::updateUploads(Fn<std::optional<QByteArray>()> uploadsSerialize) {
 
 QByteArray Account::uploadsSerialized() const {
 	return _uploadsSerialized;
+}
+
+void Account::updateForwardedDone(
+		Fn<std::optional<QByteArray>()> forwardedDoneSerialize) {
+	_forwardedDoneSerialize = std::move(forwardedDoneSerialize);
+	writeLocationsDelayed();
+}
+
+QByteArray Account::forwardedDoneSerialized() const {
+	return _forwardedDoneSerialized;
 }
 
 void Account::writeSessionSettings() {

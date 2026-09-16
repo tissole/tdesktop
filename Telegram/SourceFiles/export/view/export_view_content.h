@@ -23,6 +23,7 @@ struct Content {
 		QString info;
 		float64 progress = 0.;
 		uint64 randomId = 0;
+		bool hideProgress = false;
 	};
 
 	std::vector<Row> rows;

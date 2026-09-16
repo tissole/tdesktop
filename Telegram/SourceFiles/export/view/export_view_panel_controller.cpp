@@ -21,12 +21,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/file_utilities.h"
 #include "main/main_session.h"
 #include "data/data_session.h"
+#include "data/data_download_manager.h"
 #include "base/platform/base_platform_info.h"
 #include "base/unixtime.h"
 #include "base/qt/qt_common_adapters.h"
 #include "boxes/abstract_box.h" // Ui::show().
 #include "styles/style_export.h"
 #include "styles/style_layers.h"
+
+#include <QtGui/QGuiApplication>
+#include <QApplication>
 
 namespace Export {
 namespace View {
@@ -82,6 +86,41 @@ void SuggestBox::prepare() {
 }
 
 } // namespace
+
+void CenterPanel(not_null<Ui::SeparatePanel*> panel) {
+	if (panel->isHidden()) {
+		return;
+	}
+	const auto active = QApplication::activeWindow();
+	const auto screen = active
+		? active->screen()
+		: QGuiApplication::primaryScreen();
+	const auto available = screen ? screen->availableGeometry() : QRect();
+	const auto parentGeometry = (active && active->isVisible())
+		? active->geometry()
+		: available;
+	auto geometry = QRect(QPoint(), panel->size());
+	geometry.moveCenter(parentGeometry.center());
+	if (!available.isNull()) {
+		if (geometry.width() <= available.width()) {
+			if (geometry.left() < available.left()) {
+				geometry.moveLeft(available.left());
+			}
+			if (geometry.right() > available.right()) {
+				geometry.moveRight(available.right());
+			}
+		}
+		if (geometry.height() <= available.height()) {
+			if (geometry.top() < available.top()) {
+				geometry.moveTop(available.top());
+			}
+			if (geometry.bottom() > available.bottom()) {
+				geometry.moveBottom(available.bottom());
+			}
+		}
+	}
+	panel->move(geometry.topLeft());
+}
 
 Environment PrepareEnvironment(not_null<Main::Session*> session) {
 	auto result = Environment();
@@ -206,6 +245,9 @@ void PanelController::showSettings() {
 	settings->startClicks(
 	) | rpl::on_next([=]() {
 		showProgress();
+		_process->setSessionId(_session->uniqueId());
+		_process->setDedupDb(
+			Core::App().downloadManager().dedupDbPath());
 		_process->startExport(*_settings, PrepareEnvironment(_session));
 	}, settings->lifetime());
 
@@ -221,8 +263,34 @@ void PanelController::showSettings() {
 	}, settings->lifetime());
 
 	auto size = st::exportPanelSize;
-	size.setHeight(size.height() + settings->sizeLimitExtraHeight());
+	const auto screen = QGuiApplication::primaryScreen();
+	const auto fixedHeight = _settings->onlySinglePeer() ? 820 : 1000;
+	size.setHeight(screen
+		? std::min(screen->availableGeometry().height() - 40, fixedHeight)
+		: fixedHeight);
+	settings->resize(size.width(), size.height());
 	_panel->setInnerSize(size);
+
+	const auto weakSettings = base::make_weak(settings.get());
+	settings->contentHeightValue(
+	) | rpl::on_next([=](int height) {
+		const auto strong = weakSettings.get();
+		if (!strong || !_panel) {
+			return;
+		}
+		const auto inner = _panel->inner();
+		if (!inner || height <= 0) {
+			return;
+		}
+		const auto screen = QGuiApplication::primaryScreen();
+		LOG(("ExportDiag: settings content=%1 cap=%2 screen=%3 inner=%4 panel=%5 dpr=%6")
+			.arg(height)
+			.arg(screen ? (screen->availableGeometry().height() - 40) : 800)
+			.arg(screen ? screen->availableGeometry().height() : -1)
+			.arg(inner->height())
+			.arg(_panel->size().height())
+			.arg(screen ? screen->devicePixelRatio() : -1.));
+	}, _lifetime);
 
 	_panel->showInner(std::move(settings));
 }
@@ -338,6 +406,7 @@ void PanelController::showProgress() {
 		}
 	}, progress->lifetime());
 
+	_progress = progress.get();
 	_panel->showInner(std::move(progress));
 	_panel->setHideOnDeactivate(true);
 }
@@ -412,9 +481,70 @@ void PanelController::updateState(State &&state) {
 		showError(*apiError);
 	} else if (const auto error = std::get_if<OutputErrorState>(&_state)) {
 		showError(*error);
-	} else if (v::is<FinishedState>(_state)) {
+	} else if (const auto finished = std::get_if<FinishedState>(&_state)) {
 		_panel->setTitle(tr::lng_export_title());
 		_panel->setHideOnDeactivate(false);
+		auto rows = 2;
+		if (finished->skippedFiles > 0) {
+			++rows;
+		}
+		for (const auto i : Output::Stats::kDisplayOrder) {
+			if (finished->groupFiles[i] || finished->groupSkipped[i]) {
+				++rows;
+			}
+		}
+		if (finished->linkMessages > 0) {
+			++rows;
+		}
+		for (auto i = 0; i != Output::Stats::kGroups; ++i) {
+			if (Output::Stats::kGroupStats[i].type
+				== MediaSettings::Type::Poll
+				&& finished->groupFiles[i]) {
+				++rows;
+			}
+		}
+		if (finished->textMessages > 0) {
+			++rows;
+		}
+		const auto unit = st::exportProgressRowHeight
+			+ st::exportProgressRowPadding.top()
+			+ st::exportProgressRowPadding.bottom();
+		const auto skip = int(st::exportProgressRowSkip);
+		const auto wanted = 150 + rows * unit + (rows - 1) * skip;
+		const auto screen = QGuiApplication::primaryScreen();
+		const auto cap = screen
+			? (screen->availableGeometry().height() - 80)
+			: 800;
+		if (const auto inner = _panel->inner()) {
+			const auto height = std::min(wanted, cap);
+			if (inner->height() != height) {
+				_panel->setInnerSize({ inner->width(), height });
+				CenterPanel(_panel.get());
+			}
+			if (!_progress.isNull() && inner == _progress.get()) {
+				const auto progress = _progress.get();
+				progress->heightValue(
+				) | rpl::on_next([=] {
+					if (!v::is<FinishedState>(_state)) {
+						return;
+					}
+					const auto overflow = progress->scrollOverflow();
+					if (overflow <= 0) {
+						return;
+					}
+					if (const auto innerNow = _panel->inner()) {
+						const auto grown = std::min(
+							innerNow->height() + overflow,
+							cap);
+						if (grown != innerNow->height()) {
+							_panel->setInnerSize(
+								{ innerNow->width(), grown });
+							CenterPanel(_panel.get());
+						}
+					}
+				}, _lifetime);
+			}
+		}
 	} else if (v::is<CancelledState>(_state)) {
 		LOG(("Export Info: Stop Panel After Cancel."));
 		stopExport();

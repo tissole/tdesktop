@@ -470,7 +470,7 @@ void DownloadManager::addLoading(
 		if (const auto document = object.document) {
 			if (!enhancedForward && IsServerMsgId(item->id)) {
 				const auto peer = item->history()->peer;
-				ensureDedupDb().insertResumeDl({
+				ensureDedupDb().insertDlResume({
 					.sessionId = item->history()->session().uniqueId(),
 					.peerId = peer->id.value,
 					.msgId = item->id.bare,
@@ -786,7 +786,7 @@ void DownloadManager::addLoaded(
 		}
 		if (const auto document = object.document) {
 			_fingerprintCache.remove(document->id);
-			ensureDedupDb().removeResumeDl(
+			ensureDedupDb().removeDlResume(
 				item->history()->session().uniqueId(),
 				item->history()->peer->id.value,
 				item->id.bare);
@@ -801,7 +801,7 @@ void DownloadManager::addLoaded(
 				_loadingDocuments.remove(
 					entry.object.document);
 			}
-			ensureDedupDb().removeResumeDl(
+			ensureDedupDb().removeDlResume(
 				entry.object.item->history()->session().uniqueId(),
 				entry.object.item->history()->peer->id.value,
 				entry.object.item->id.bare);
@@ -882,7 +882,7 @@ void DownloadManager::addLoaded(
 		_jobCounterChanged.fire({});
 		saveIfIdle();
 		if (const auto document = entry.object.document) {
-			ensureDedupDb().removeResumeDl(
+			ensureDedupDb().removeDlResume(
 				entry.object.item->history()->session().uniqueId(),
 				entry.object.item->history()->peer->id.value,
 				entry.object.item->id.bare);
@@ -1415,7 +1415,7 @@ void DownloadManager::cancel(
 		}
 	}
 	if (document) {
-		ensureDedupDb().removeResumeDl(
+		ensureDedupDb().removeDlResume(
 			item->history()->session().uniqueId(),
 			item->history()->peer->id.value,
 			item->id.bare);
@@ -1961,9 +1961,9 @@ rpl::producer<> DownloadManager::jobCounterChanged() const {
 	return _jobCounterChanged.events();
 }
 
-int DownloadManager::resumeDlCount() const {
+int DownloadManager::dlResumeCount() const {
 	return ensureDedupDb().isOpen()
-		? int(ensureDedupDb().loadAllResumeDl().size())
+		? int(ensureDedupDb().loadAllDlResume().size())
 		: 0;
 }
 
@@ -2125,7 +2125,7 @@ void DownloadManager::checkDuplicate(
 
 void DownloadManager::startAllResumeDownloads(bool startPaused) {
 	auto &db = ensureDedupDb();
-	const auto records = db.loadAllResumeDl();
+	const auto records = db.loadAllDlResume();
 	if (records.empty()) {
 		return;
 	}
@@ -2260,7 +2260,7 @@ void DownloadManager::startAllResumeDownloads(bool startPaused) {
 
 void DownloadManager::cancelAllResumeDownloads() {
 	auto &db = ensureDedupDb();
-	const auto records = db.loadAllResumeDl();
+	const auto records = db.loadAllDlResume();
 	const auto findSession = [](uint64 sessionId) -> Main::Session* {
 		for (const auto &account : Core::App().domain().orderedAccounts()) {
 			const auto session = account->maybeSession();
@@ -2281,7 +2281,7 @@ void DownloadManager::cancelAllResumeDownloads() {
 				PruneEmptyDownloadFolders(session, record.path);
 			}
 		}
-		ensureDedupDb().removeResumeDl(
+		ensureDedupDb().removeDlResume(
 			record.sessionId,
 			record.peerId,
 			record.msgId);
@@ -2344,7 +2344,7 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 						if (!db.isOpen()) {
 							continue;
 						}
-						for (const auto &record : db.loadAllResumeDl()) {
+						for (const auto &record : db.loadAllDlResume()) {
 							if (record.sessionId != session->uniqueId()) {
 								continue;
 							}
@@ -2570,7 +2570,7 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 						if (!db.isOpen()) {
 							continue;
 						}
-						for (const auto &record : db.loadAllResumeDl()) {
+						for (const auto &record : db.loadAllDlResume()) {
 							if (record.sessionId != session->uniqueId()) {
 								continue;
 							}

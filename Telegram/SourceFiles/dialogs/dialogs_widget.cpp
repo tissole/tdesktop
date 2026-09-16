@@ -112,6 +112,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/abstract_box.h"
 
 #include <QtCore/QMimeData>
+#include <QtCore/QFileInfo>
 #include <QtGui/QTextBlock>
 #include <QtWidgets/QScrollBar>
 #include <QtWidgets/QTextEdit>
@@ -1752,6 +1753,24 @@ void Widget::setupForwardsBar() {
 			for (const auto &item : job.progress.items) {
 				if (firstName.isEmpty() && !item.info.name.isEmpty()) {
 					firstName = item.info.name;
+				}
+			}
+		}
+		if (firstName.isEmpty() && efCount) {
+			// No live pipeline (e.g. right after a restart): fall back to
+			// the persisted temp file name so the bar still names a file.
+			auto &db = Core::App().downloadManager().ensureDedupDb();
+			if (db.isOpen()) {
+				const auto records = db.loadUnfinishedEfResumeItems(
+					controller()->session().uniqueId());
+				for (const auto &record : records) {
+					if (!record.localPath.isEmpty()) {
+						firstName = QFileInfo(
+							record.localPath).fileName();
+						if (!firstName.isEmpty()) {
+							break;
+						}
+					}
 				}
 			}
 		}

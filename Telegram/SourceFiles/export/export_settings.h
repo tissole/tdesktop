@@ -37,9 +37,10 @@ struct MediaSettings {
 		Audio        = 0x100,
 		FullHistory  = 0x200,
 		Link         = 0x400,
+		Poll         = 0x800,
 
 		MediaMask    = Photo | Video | VoiceMessage | VideoMessage | Audio,
-		AllMask      = MediaMask | Sticker | GIF | File | Text | FullHistory | Link,
+		AllMask      = MediaMask | Sticker | GIF | File | Text | FullHistory | Link | Poll,
 	};
 	using Types = base::flags<Type>;
 	friend inline constexpr auto is_flag_type(Type) { return true; };
@@ -52,7 +53,7 @@ struct MediaSettings {
 	QStringList extensionFilter; // lowercase, no dots, e.g. { "pdf", "docx" }.
 
 	static inline Types DefaultTypes() {
-		return Type::Photo;
+		return Types();
 	}
 
 };

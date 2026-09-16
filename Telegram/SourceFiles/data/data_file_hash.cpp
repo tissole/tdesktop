@@ -61,6 +61,8 @@ namespace {
 	return data.vbytes().v;
 }
 
+} // namespace
+
 // Two sample offsets (head and tail) used for the partial fingerprint.
 // Both local and remote fingerprinting must use identical offsets so the
 // resulting hash matches. Offsets are aligned to the server's 4KB boundary,
@@ -97,8 +99,6 @@ void DedupSampleOffsets(
 	ensureWithinBlock(headOffset);
 	ensureWithinBlock(tailOffset);
 }
-
-} // namespace
 
 QByteArray HashChunks(const QByteArray &head, const QByteArray &tail) {
 	auto state = XXH3_state_t();

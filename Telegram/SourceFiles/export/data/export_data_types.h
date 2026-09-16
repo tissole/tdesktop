@@ -431,6 +431,7 @@ struct File {
 		FileType,
 		FileSize,
 		DateLimits,
+		Duplicate,
 	};
 	FileLocation location;
 	int64 size = 0;
@@ -1279,6 +1280,10 @@ struct Message {
 	PeerId replyToPeerId = 0;
 	std::vector<TextPart> text;
 	std::vector<Reaction> reactions;
+	// Link texts dropped by nested entities, kept for counting.
+	std::vector<TextPart> nestedLinks;
+	// Link occurrences with greedy outer spans removed, for counting.
+	std::vector<Utf8String> links;
 	Media media;
 	int64 media_group_id;
 	ServiceAction action;

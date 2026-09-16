@@ -32,6 +32,10 @@ constexpr auto kDedupSizeBucket = 1024 * 1024;
 constexpr auto kDedupBlock = 1024 * 1024;
 constexpr auto kDedupAlignment = 1 * 1024;
 
+// Two sample offsets (head, tail) for the 2-chunk partial fingerprint.
+// Shared by local, remote and export fingerprinting so hashes match.
+void DedupSampleOffsets(int64 size, int64 &headOffset, int64 &tailOffset);
+
 // Returns the 16-byte XXH3_128bits hash of a local file's fingerprint.
 // Empty array if the file cannot be read or is empty.
 [[nodiscard]] QByteArray FileFingerprint(const QString &path, int64 size);

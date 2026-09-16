@@ -367,6 +367,125 @@ std::vector<TextPart> ParseText(const MTPTextWithEntities &text) {
 	return ParseText(text.data().vtext(), text.data().ventities().v);
 }
 
+std::vector<TextPart> CollectNestedLinks(
+		const MTPstring &data,
+		const QVector<MTPMessageEntity> &entities) {
+	const auto text = QString::fromUtf8(data.v);
+	const auto size = data.v.size();
+	const auto mid = [&](int offset, int length) {
+		return text.mid(offset, length).toUtf8();
+	};
+	auto result = std::vector<TextPart>();
+	auto offset = 0;
+	for (const auto &entity : entities) {
+		const auto start = entity.match([](const auto &data) {
+			return data.voffset().v;
+		});
+		const auto length = entity.match([](const auto &data) {
+			return data.vlength().v;
+		});
+		if (start < offset || length <= 0 || start + length > size) {
+			auto part = TextPart();
+			entity.match(
+			[&](const MTPDmessageEntityUrl&) {
+				part.type = TextPart::Type::Url;
+			},
+			[&](const MTPDmessageEntityTextUrl &data) {
+				part.type = TextPart::Type::TextUrl;
+				part.additional = ParseString(data.vurl());
+			},
+			[&](const MTPDmessageEntityEmail&) {
+				part.type = TextPart::Type::Email;
+			},
+			[](const auto&) {});
+			if (part.type == TextPart::Type::Url
+				|| part.type == TextPart::Type::TextUrl
+				|| part.type == TextPart::Type::Email) {
+				part.text = mid(start, length);
+				result.push_back(std::move(part));
+			}
+			continue;
+		}
+		offset = start + length;
+	}
+	return result;
+}
+
+std::vector<Utf8String> CollectMessageLinks(
+		const MTPstring &data,
+		const QVector<MTPMessageEntity> &entities) {
+	const auto text = QString::fromUtf8(data.v);
+	const auto size = text.size();
+	struct Span {
+		int start = 0;
+		int length = 0;
+		bool textUrl = false;
+		Utf8String target;
+	};
+	auto spans = std::vector<Span>();
+	spans.reserve(entities.size());
+	for (const auto &entity : entities) {
+		const auto start = entity.match([](const auto &data) {
+			return data.voffset().v;
+		});
+		const auto length = entity.match([](const auto &data) {
+			return data.vlength().v;
+		});
+		if (start < 0 || length <= 0 || start + length > size) {
+			continue;
+		}
+		auto span = Span();
+		span.start = start;
+		span.length = length;
+		entity.match(
+		[&](const MTPDmessageEntityUrl&) {
+			span.target = text.mid(start, length).toUtf8();
+		},
+		[&](const MTPDmessageEntityTextUrl &data) {
+			span.textUrl = true;
+			span.target = ParseString(data.vurl());
+		},
+		[&](const MTPDmessageEntityEmail&) {
+			span.target = text.mid(start, length).toUtf8();
+		},
+		[](const auto&) {});
+		if (span.target.isEmpty()) {
+			continue;
+		}
+		const auto duplicate = ranges::find_if(
+			spans,
+			[&](const Span &other) {
+				return other.start == span.start
+					&& other.length == span.length
+					&& other.target == span.target;
+			}) != end(spans);
+		if (!duplicate) {
+			spans.push_back(std::move(span));
+		}
+	}
+	auto result = std::vector<Utf8String>();
+	result.reserve(spans.size());
+	for (const auto &span : spans) {
+		if (!span.textUrl) {
+			const auto outerEnd = span.start + span.length;
+			const auto covered = ranges::find_if(
+				spans,
+				[&](const Span &other) {
+					return &other != &span
+						&& other.start >= span.start
+						&& other.start + other.length <= outerEnd
+						&& (other.start != span.start
+							|| other.start + other.length != outerEnd);
+				}) != end(spans);
+			if (covered) {
+				continue;
+			}
+		}
+		result.push_back(span.target);
+	}
+	return result;
+}
+
 Photo ParsePhoto(const MTPPhoto &data, const QString &suggestedPath);
 
 namespace {
@@ -2324,6 +2443,15 @@ Media ParseMedia(
 			result.ttl = ttl->v;
 			content.file = File();
 		}
+		if (data.is_video()
+			&& !content.isSticker
+			&& !content.isAnimated
+			&& !content.isVideoMessage
+			&& !content.isVoiceMessage
+			&& !content.isVideoFile
+			&& !content.isAudioFile) {
+			content.isVideoFile = true;
+		}
 		content.spoilered = data.is_spoiler();
 		result.content = content;
 	}, [&](const MTPDmessageMediaWebPage &data) {
@@ -2960,6 +3088,12 @@ Message ParseMessage(
 		result.text = ParseText(
 			data.vmessage(),
 			data.ventities().value_or_empty());
+		result.nestedLinks = CollectNestedLinks(
+			data.vmessage(),
+			data.ventities().value_or_empty());
+		result.links = CollectMessageLinks(
+			data.vmessage(),
+			data.ventities().value_or_empty());
 			if (data.vreactions().has_value()) {
 				result.reactions = ParseReactions(*data.vreactions());
 			}
@@ -3548,6 +3682,8 @@ bool SkipMessageByDate(const Message &message, const Settings &settings) {
 		return Type::File;
 	}, [](const Data::Photo &data) {
 		return Type::Photo;
+	}, [](const Data::Poll &data) {
+		return Type::Poll;
 	}, [](const Data::WebPage &data) {
 		return Type::Link;
 	}, [](const v::null_t &) {
