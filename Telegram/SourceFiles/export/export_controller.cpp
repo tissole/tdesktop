@@ -17,7 +17,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/format_values.h"
 
 #include <QtCore/QFile>
+#include <QtCore/QDir>
 #include <QtCore/QTextStream>
+#include <QtCore/QDateTime>
 
 namespace Export {
 namespace {
@@ -67,7 +69,12 @@ public:
 	// Processing step.
 	void startExport(
 		const Settings &settings,
-		const Environment &environment);
+		const Environment &environment,
+		const QString &singlePeerFolder = QString());
+	void startScan(
+		const Settings &settings,
+		const Environment &environment,
+		const QString &singlePeerFolder = QString());
 	void skipFile(uint64 randomId);
 	void cancelExportFast();
 	void setSessionId(uint64 sessionId);
@@ -164,6 +171,9 @@ private:
 	std::unique_ptr<Output::AbstractWriter> _writer;
 	std::vector<Step> _steps;
 	int _stepIndex = -1;
+	bool _scanMode = false;
+	// "id_name" from the chat itself, never the on-disk folder.
+	QString _singlePeerFolder;
 
 	int32 _topicRootId = 0;
 	uint64 _topicPeerId = 0;
@@ -311,7 +321,8 @@ bool ControllerObject::ioCatchError(Output::Result result) {
 
 void ControllerObject::startExport(
 		const Settings &settings,
-		const Environment &environment) {
+		const Environment &environment,
+		const QString &singlePeerFolder) {
 	if (!_settings.path.isEmpty()) {
 		return;
 	}
@@ -320,8 +331,33 @@ void ControllerObject::startExport(
 	_settings.singleTopicRootId = _topicRootId;
 	_settings.singleTopicPeerId = _topicPeerId;
 
-	_settings.path = Output::NormalizePath(_settings);
+	_settings.path = Output::NormalizePath(_settings, singlePeerFolder);
+	_singlePeerFolder = singlePeerFolder;
+	_scanMode = false;
+	_api.setScanMode(false);
 	_writer = Output::CreateWriter(_settings.format);
+	fillExportSteps();
+	exportNext();
+}
+
+void ControllerObject::startScan(
+		const Settings &settings,
+		const Environment &environment,
+		const QString &singlePeerFolder) {
+	if (!_settings.path.isEmpty()) {
+		return;
+	}
+	_settings = NormalizeSettings(settings);
+	_environment = environment;
+	_settings.singleTopicRootId = _topicRootId;
+	_settings.singleTopicPeerId = _topicPeerId;
+
+	_settings.path = Output::NormalizePath(_settings, singlePeerFolder);
+	_singlePeerFolder = singlePeerFolder;
+	_scanMode = true;
+	_api.setScanMode(true);
+	_writer = nullptr;
+	QDir().mkpath(_settings.path);
 	fillExportSteps();
 	exportNext();
 }
@@ -428,13 +464,13 @@ void ControllerObject::setDedupDb(const QString &path) {
 
 void ControllerObject::exportNext() {
 	if (++_stepIndex >= _steps.size()) {
-		if (ioCatchError(_writer->finish())) {
+		if (!_scanMode && ioCatchError(_writer->finish())) {
 			return;
 		}
 		if (ioCatchError(writeStatsFile())) {
 			return;
 		}
-		if (ioCatchError(writeLinksFile())) {
+		if (!_scanMode && ioCatchError(writeLinksFile())) {
 			return;
 		}
 		_api.finishExport([=] {
@@ -468,7 +504,8 @@ void ControllerObject::initialize() {
 }
 
 void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
-	if (ioCatchError(_writer->start(_settings, _environment, &_stats))) {
+	if (!_scanMode
+		&& ioCatchError(_writer->start(_settings, _environment, &_stats))) {
 		return;
 	}
 	fillSubstepsInSteps(info);
@@ -608,7 +645,7 @@ void ControllerObject::exportOtherData() {
 }
 
 void ControllerObject::exportDialogs() {
-	if (ioCatchError(_writer->writeDialogsStart(_dialogsInfo))) {
+	if (!_scanMode && ioCatchError(_writer->writeDialogsStart(_dialogsInfo))) {
 		return;
 	}
 
@@ -627,6 +664,10 @@ bool ControllerObject::batchDialogSlices() const {
 }
 
 bool ControllerObject::flushPendingSlice() {
+	if (_scanMode) {
+		_pendingSlice = Data::MessagesSlice();
+		return true;
+	}
 	if (_pendingSlice.list.empty()) {
 		return true;
 	}
@@ -643,7 +684,7 @@ void ControllerObject::exportNextDialog() {
 	const auto info = _dialogsInfo.item(index);
 	if (info) {
 		_api.requestMessages(*info, [=](const Data::DialogInfo &info) {
-			if (ioCatchError(_writer->writeDialogStart(info))) {
+			if (!_scanMode && ioCatchError(_writer->writeDialogStart(info))) {
 				return false;
 			}
 			_messagesWritten = 0;
@@ -662,6 +703,11 @@ void ControllerObject::exportNextDialog() {
 			setState(stateDialogs(progress));
 			return true;
 		}, [=](Data::MessagesSlice &&result) {
+			if (_scanMode) {
+				_messagesWritten += result.list.size();
+				setState(stateDialogs(DownloadProgress()));
+				return true;
+			}
 			if (batchDialogSlices()) {
 				const auto size = result.list.size();
 				for (auto &entry : result.peers) {
@@ -689,14 +735,14 @@ void ControllerObject::exportNextDialog() {
 			if (!flushPendingSlice()) {
 				return;
 			}
-			if (ioCatchError(_writer->writeDialogEnd())) {
+			if (!_scanMode && ioCatchError(_writer->writeDialogEnd())) {
 				return;
 			}
 			exportNextDialog();
 		});
 		return;
 	}
-	if (ioCatchError(_writer->writeDialogsEnd())) {
+	if (!_scanMode && ioCatchError(_writer->writeDialogsEnd())) {
 		return;
 	}
 	exportNext();
@@ -848,7 +894,7 @@ void ControllerObject::exportTopic() {
 	topicInfo.peerId = PeerId(_topicPeerId);
 	topicInfo.relativePath = QString();
 
-	if (ioCatchError(_writer->writeDialogStart(topicInfo))) {
+	if (!_scanMode && ioCatchError(_writer->writeDialogStart(topicInfo))) {
 		return;
 	}
 
@@ -867,6 +913,11 @@ void ControllerObject::exportTopic() {
 			return true;
 		},
 		[=](Data::MessagesSlice &&slice) {
+			if (_scanMode) {
+				_messagesWritten += slice.list.size();
+				setState(stateTopic(DownloadProgress()));
+				return true;
+			}
 			if (batchDialogSlices()) {
 				const auto size = slice.list.size();
 				for (auto &entry : slice.peers) {
@@ -895,16 +946,16 @@ void ControllerObject::exportTopic() {
 			if (!flushPendingSlice()) {
 				return;
 			}
-			if (ioCatchError(_writer->writeDialogEnd())) {
+			if (!_scanMode && ioCatchError(_writer->writeDialogEnd())) {
 				return;
 			}
-			if (ioCatchError(_writer->finish())) {
+			if (!_scanMode && ioCatchError(_writer->finish())) {
 				return;
 			}
 			if (ioCatchError(writeStatsFile())) {
 				return;
 			}
-			if (ioCatchError(writeLinksFile())) {
+			if (!_scanMode && ioCatchError(writeLinksFile())) {
 				return;
 			}
 			_api.finishExport([=] {
@@ -934,7 +985,9 @@ ProcessingState ControllerObject::stateTopic(
 
 void ControllerObject::setFinishedState() {
 	auto state = FinishedState();
-	state.path = _writer->mainFilePath();
+	state.path = _scanMode
+		? (_settings.path + QString::fromLatin1("stats.txt"))
+		: _writer->mainFilePath();
 	for (auto i = 0; i != Output::Stats::kGroups; ++i) {
 		const auto type = Output::Stats::kGroupStats[i].type;
 		state.groupFiles[i] = _stats.typeFiles(type);
@@ -957,7 +1010,7 @@ void ControllerObject::setFinishedState() {
 	setState(std::move(state));
 }
 
-constexpr auto kDiagBuild = 10;
+constexpr auto kDiagBuild = 16;
 
 Output::Result ControllerObject::writeStatsFile() const {
 	const auto path = _settings.path + QString::fromLatin1("stats.txt");
@@ -966,6 +1019,29 @@ Output::Result ControllerObject::writeStatsFile() const {
 		return Output::Result(Output::Result::Type::Error, path);
 	}
 	auto stream = QTextStream(&file);
+	const auto date = QDateTime::currentDateTime().toString(
+		"dd.MM.yyyy, hh.mm.ss");
+	const auto cut = _singlePeerFolder.indexOf('_');
+	auto done = false;
+	if (cut > 0) {
+		const auto id = _singlePeerFolder.mid(0, cut);
+		const auto name = _singlePeerFolder.mid(cut + 1);
+		const auto digits = id.startsWith('-') ? id.mid(1) : id;
+		auto numeric = !digits.isEmpty() && !name.isEmpty();
+		for (const auto c : digits) {
+			if (!c.isDigit()) {
+				numeric = false;
+				break;
+			}
+		}
+		if (numeric) {
+			stream << id << ". " << name << ", " << date << "\n\n";
+			done = true;
+		}
+	}
+	if (!done) {
+		stream << QDir(_settings.path).dirName() << ", " << date << "\n\n";
+	}
 	auto totalFiles = int64(0);
 	auto totalBytes = int64(0);
 	auto skippedFiles = int64(0);
@@ -980,10 +1056,20 @@ Output::Result ControllerObject::writeStatsFile() const {
 		skippedFiles += _stats.typeSkipped(type);
 		skippedBytes += _stats.typeSkippedBytes(type);
 	}
-	stream << "Total unique files: " << totalFiles << " ("
-		<< Ui::FormatSizeText(totalBytes) << "), Total duplicates: "
-		<< skippedFiles << " ("
-		<< Ui::FormatSizeText(skippedBytes) << ")\n\n";
+	auto dataGroups = 0;
+	for (const auto i : Output::Stats::kDisplayOrder) {
+		const auto &group = Output::Stats::kGroupStats[i];
+		if (_stats.typeFiles(group.type) || _stats.typeSkipped(group.type)) {
+			++dataGroups;
+		}
+	}
+	// Single-category runs skip totals: the total is the category itself.
+	if (dataGroups > 1) {
+		stream << "Total unique files: " << totalFiles << " ("
+			<< Ui::FormatSizeText(totalBytes) << "), Total duplicates: "
+			<< skippedFiles << " ("
+			<< Ui::FormatSizeText(skippedBytes) << ")\n\n";
+	}
 	LOG(("ExportDiag: summary messages=%1 unique=%2 dupes=%3 build=%4")
 		.arg(_stats.messagesTotal())
 		.arg(totalFiles)
@@ -1025,8 +1111,11 @@ Output::Result ControllerObject::writeStatsFile() const {
 			!= MediaSettings::Type::Poll) {
 			continue;
 		}
-		stream << Output::Stats::kGroupStats[i].name << ": "
-			<< _stats.typeFiles(Output::Stats::kGroupStats[i].type) << '\n';
+		if (const auto polls = _stats.typeFiles(
+				Output::Stats::kGroupStats[i].type)) {
+			stream << Output::Stats::kGroupStats[i].name << ": "
+				<< polls << '\n';
+		}
 	}
 	if (const auto text = _stats.textMessages()) {
 		stream << "Text messages: " << text << '\n';
@@ -1121,11 +1210,23 @@ rpl::producer<State> Controller::state() const {
 
 void Controller::startExport(
 		const Settings &settings,
-		const Environment &environment) {
+		const Environment &environment,
+		const QString &singlePeerFolder) {
 	LOG(("Export Info: Started export to '%1'.").arg(settings.path));
 
 	_wrapped.with([=](Implementation &unwrapped) {
-		unwrapped.startExport(settings, environment);
+		unwrapped.startExport(settings, environment, singlePeerFolder);
+	});
+}
+
+void Controller::startScan(
+		const Settings &settings,
+		const Environment &environment,
+		const QString &singlePeerFolder) {
+	LOG(("Export Info: Started scan to '%1'.").arg(settings.path));
+
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.startScan(settings, environment, singlePeerFolder);
 	});
 }
 

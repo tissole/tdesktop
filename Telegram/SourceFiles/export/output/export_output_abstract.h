@@ -31,7 +31,9 @@ struct Environment;
 
 namespace Output {
 
-QString NormalizePath(const Settings &settings);
+QString NormalizePath(
+	const Settings &settings,
+	const QString &singlePeerFolder = QString());
 
 struct Result;
 class Stats;

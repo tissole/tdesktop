@@ -19,7 +19,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Export {
 namespace Output {
 
-QString NormalizePath(const Settings &settings) {
+QString NormalizePath(
+		const Settings &settings,
+		const QString &singlePeerFolder) {
 	QDir folder(settings.path);
 	const auto path = folder.absolutePath();
 	auto result = path.endsWith('/') ? path : (path + '/');
@@ -32,10 +34,13 @@ QString NormalizePath(const Settings &settings) {
 		return result;
 	}
 	const auto date = QDate::currentDate();
-	const auto base = QString(settings.onlySinglePeer()
+	const auto fallback = QString(settings.onlySinglePeer()
 		? "ChatExport_%1"
 		: "DataExport_%1"
 	).arg(date.toString(Qt::ISODate));
+	const auto base = (settings.onlySinglePeer() && !singlePeerFolder.isEmpty())
+		? singlePeerFolder
+		: fallback;
 	const auto add = [&](int i) {
 		return base + (i ? " (" + QString::number(i) + ')' : QString());
 	};

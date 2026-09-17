@@ -17,6 +17,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/output/export_output_result.h"
 #include "export/output/export_output_file.h"
 #include "mtproto/mtproto_response.h"
+#include <crl/crl_on_main.h>
+#include <QtCore/QTimer>
 #include "base/bytes.h"
 #include "base/options.h"
 #include "base/random.h"
@@ -38,12 +40,55 @@ constexpr auto kMessagesSliceLimit = 100;
 constexpr auto kTopPeerSliceLimit = 100;
 constexpr auto kFileMaxSize = 4000 * int64(1024 * 1024);
 constexpr auto kHydrateParallel = 4;
-constexpr auto kWarmupBigParallel = 50;
-constexpr auto kWarmupSmallParallel = 0;
 constexpr auto kWalkHashAttempts = 20;
 constexpr auto kMaxEmojiPerRequest = 100;
 constexpr auto kStoriesSliceLimit = 100;
 constexpr auto kProfileMusicSliceLimit = 100;
+
+[[nodiscard]] std::vector<MTPMessagesFilter> ScanSearchFilters(
+		MediaSettings::Types types) {
+	using Type = MediaSettings::Type;
+	const auto has = [&](Type type) {
+		return ((types & type) == type);
+	};
+	if (has(Type::Text) || has(Type::FullHistory)) {
+		return {};
+	}
+	auto result = std::vector<MTPMessagesFilter>();
+	if (has(Type::Photo) && has(Type::Video)) {
+		result.push_back(MTP_inputMessagesFilterPhotoVideo());
+	} else {
+		if (has(Type::Photo)) {
+			result.push_back(MTP_inputMessagesFilterPhotos());
+		}
+		if (has(Type::Video)) {
+			result.push_back(MTP_inputMessagesFilterVideo());
+		}
+	}
+	if (has(Type::VoiceMessage)) {
+		result.push_back(MTP_inputMessagesFilterVoice());
+		result.push_back(MTP_inputMessagesFilterRoundVoice());
+	}
+	if (has(Type::VideoMessage)) {
+		result.push_back(MTP_inputMessagesFilterRoundVideo());
+	}
+	if (has(Type::GIF)) {
+		result.push_back(MTP_inputMessagesFilterGif());
+	}
+	if (has(Type::File) || has(Type::Sticker)) {
+		result.push_back(MTP_inputMessagesFilterDocument());
+	}
+	if (has(Type::Audio)) {
+		result.push_back(MTP_inputMessagesFilterMusic());
+	}
+	if (has(Type::Link)) {
+		result.push_back(MTP_inputMessagesFilterUrl());
+	}
+	if (has(Type::Poll)) {
+		result.push_back(MTP_inputMessagesFilterPoll());
+	}
+	return result;
+}
 
 Settings::Type SettingsFromDialogsType(Data::DialogInfo::Type type) {
 	using DialogType = Data::DialogInfo::Type;
@@ -551,6 +596,14 @@ struct ApiWrap::ChatProcess : AbstractMessagesProcess {
 	int32 largestIdPlusOne = 1;
 	int32 fromId = 0; // First message id of the date/id range (0 = from start).
 	int32 tillId = 0; // Last message id of the date/id range (0 = until now).
+
+	std::vector<MTPMessagesFilter> scanFilters;
+	std::vector<std::vector<int>> scanCounts;
+	int scanFilterIndex = -1;
+	int scanCountFilter = 0;
+	int scanCountSplit = 0;
+	bool scanBySearch = false;
+	crl::time scanNextAllowedAt = 0;
 };
 
 struct ApiWrap::TopicProcess : AbstractMessagesProcess {
@@ -1764,6 +1817,11 @@ void ApiWrap::requestMessages(
 	_nextSlice.reset();
 	_nextRequested = false;
 	_waitNext = false;
+	if (_scanMode) {
+		_chatProcess->scanFilters = ScanSearchFilters(
+			_settings->media.types);
+		_scanSeenMessages.clear();
+	}
 	resolveDates();
 }
 
@@ -1929,9 +1987,176 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 	_chatProcess->info.messagesCountPerSplit[localSplitIndex] = count;
 	if (localSplitIndex + 1 < _chatProcess->info.splits.size()) {
 		requestMessagesCount(localSplitIndex + 1);
+	} else if (_scanMode
+		&& !_chatProcess->scanFilters.empty()
+		&& _chatProcess->scanCounts.empty()
+		&& !_chatProcess->info.onlyMyMessages) {
+		requestScanCount();
 	} else if (_chatProcess->start(_chatProcess->info)) {
 		requestMessagesSlice();
 	}
+}
+
+void ApiWrap::requestScanCount() {
+	Expects(_chatProcess != nullptr);
+	Expects(!_chatProcess->scanFilters.empty());
+
+	const auto &process = *_chatProcess;
+	if (process.scanCountFilter >= int(process.scanFilters.size())) {
+		decideScanMethod();
+		return;
+	}
+	const auto filterIndex = process.scanCountFilter;
+	const auto splitPosition = process.scanCountSplit;
+	Expects(splitPosition < process.info.splits.size());
+
+	if (!splitPosition && !filterIndex) {
+		_chatProcess->scanCounts.assign(
+			_chatProcess->scanFilters.size(),
+			std::vector<int>(
+				_chatProcess->info.splits.size(),
+				0));
+	}
+	const auto splitsCount = int(_splits.size());
+	const auto splitIndex = process.info.splits[splitPosition];
+	const auto realPeerInput = (splitIndex >= 0)
+		? process.info.input
+		: process.info.migratedFromInput;
+	const auto realSplitIndex = (splitIndex >= 0)
+		? splitIndex
+		: (splitsCount + splitIndex);
+	const auto minId = (process.fromId > 0)
+		? int32(process.fromId - 1)
+		: int32(0);
+	const auto maxId = (process.tillId > 0)
+		? int32(process.tillId + 1)
+		: int32(0);
+	const auto from = _settings->singlePeerFrom
+		? MTP_int(*_settings->singlePeerFrom)
+		: MTP_int(0);
+	const auto till = _settings->singlePeerTill
+		? MTP_int(*_settings->singlePeerTill)
+		: MTP_int(0);
+	const auto gen = _dedupGen;
+	splitRequest(realSplitIndex, MTPmessages_Search(
+		MTP_flags(0),
+		realPeerInput,
+		MTP_string(),
+		MTPInputPeer(),
+		MTPInputPeer(),
+		MTPVector<MTPReaction>(),
+		MTPint(),
+		process.scanFilters[filterIndex],
+		from,
+		till,
+		MTP_int(0),
+		MTP_int(0),
+		MTP_int(1),
+		MTP_int(maxId),
+		MTP_int(minId),
+		MTP_long(0)
+	)).done([=](const MTPmessages_Messages &result) {
+		if (gen != _dedupGen || !_chatProcess) {
+			return;
+		}
+		const auto count = result.match(
+			[](const MTPDmessages_messages &data) {
+				return int(data.vmessages().v.size());
+			}, [](const MTPDmessages_messagesSlice &data) {
+				return data.vcount().v;
+			}, [](const MTPDmessages_channelMessages &data) {
+				return data.vcount().v;
+			}, [](const MTPDmessages_messagesNotModified &data) {
+				return 0;
+			});
+		_chatProcess->scanCounts[filterIndex][splitPosition] = count;
+		if (splitPosition + 1 < _chatProcess->info.splits.size()) {
+			_chatProcess->scanCountSplit = splitPosition + 1;
+		} else {
+			_chatProcess->scanCountSplit = 0;
+			_chatProcess->scanCountFilter = filterIndex + 1;
+		}
+		requestScanCount();
+	}).fail([=](const MTP::Error &error) {
+		if (gen != _dedupGen || !_chatProcess) {
+			return true;
+		}
+		_chatProcess->scanCounts[filterIndex][splitPosition] = 0;
+		if (splitPosition + 1 < _chatProcess->info.splits.size()) {
+			_chatProcess->scanCountSplit = splitPosition + 1;
+		} else {
+			_chatProcess->scanCountSplit = 0;
+			_chatProcess->scanCountFilter = filterIndex + 1;
+		}
+		requestScanCount();
+		return true;
+	}).send();
+}
+
+void ApiWrap::decideScanMethod() {
+	Expects(_chatProcess != nullptr);
+	Expects(!_chatProcess->scanFilters.empty());
+
+	auto historyTotal = 0;
+	for (const auto count : _chatProcess->info.messagesCountPerSplit) {
+		historyTotal += count;
+	}
+	auto searchTotal = 0;
+	for (const auto &perFilter : _chatProcess->scanCounts) {
+		for (const auto count : perFilter) {
+			searchTotal += count;
+		}
+	}
+	if (historyTotal > 0 && searchTotal * 2 <= historyTotal) {
+		_chatProcess->scanBySearch = true;
+		_chatProcess->scanFilterIndex = 0;
+		for (auto i = 0; i != _chatProcess->info.splits.size(); ++i) {
+			auto total = 0;
+			for (const auto &perFilter : _chatProcess->scanCounts) {
+				total += perFilter[i];
+			}
+			_chatProcess->info.messagesCountPerSplit[i] = total;
+		}
+		if (!_chatProcess->start(_chatProcess->info)) {
+			return;
+		}
+		for (auto i = 0; i != _chatProcess->info.splits.size(); ++i) {
+			_chatProcess->info.messagesCountPerSplit[i]
+				= _chatProcess->scanCounts[0][i];
+		}
+		requestMessagesSlice();
+		return;
+	}
+	if (_chatProcess->start(_chatProcess->info)) {
+		requestMessagesSlice();
+	}
+}
+
+bool ApiWrap::scanAdvanceFilter() {
+	Expects(_chatProcess != nullptr);
+
+	if (!_chatProcess->scanBySearch) {
+		return false;
+	}
+	const auto next = _chatProcess->scanFilterIndex + 1;
+	if (next >= int(_chatProcess->scanFilters.size())) {
+		return false;
+	}
+	_chatProcess->scanFilterIndex = next;
+	_chatProcess->localSplitIndex = 0;
+	_chatProcess->largestIdPlusOne = (_chatProcess->fromId > 0)
+		? _chatProcess->fromId
+		: 1;
+	_chatProcess->lastSlice = false;
+	for (auto i = 0; i != _chatProcess->info.splits.size(); ++i) {
+		_chatProcess->info.messagesCountPerSplit[i]
+			= _chatProcess->scanCounts[next][i];
+	}
+	_nextSlice.reset();
+	_nextRequested = false;
+	_waitNext = false;
+	requestMessagesSlice();
+	return true;
 }
 
 void ApiWrap::requestRangeTotal(Fn<void(int)> done) {
@@ -1964,7 +2189,10 @@ void ApiWrap::requestRangeTotal(Fn<void(int)> done) {
 		MTP_int(0),
 		MTP_int(0),
 		MTP_long(0)
-	)).handleFloodErrors().done([=](const MTPmessages_Messages &result) {
+	)).fail([=](const MTP::Error &error) {
+		// Advisory query: never kill the run, keep the fallback total.
+		return true;
+	}).done([=](const MTPmessages_Messages &result) {
 		if (gen != _dedupGen || !_chatProcess || _takeoutId != takeout) {
 			return;
 		}
@@ -2334,6 +2562,25 @@ void ApiWrap::appendChatsSlice(
 void ApiWrap::requestMessagesSlice() {
 	Expects(_chatProcess != nullptr);
 
+	// Search pages go strictly serial at the server rate. Firing early
+	// floods, and the flood wait costs more than the pause.
+	if (_scanMode && _chatProcess->scanBySearch) {
+		const auto wait = _chatProcess->scanNextAllowedAt - crl::now();
+		if (wait > 0) {
+			LOG(("Export Info: Server page rate, waiting %1ms.").arg(wait));
+			const auto runner = _runner;
+			crl::on_main([=] {
+				QTimer::singleShot(int(wait), Qt::CoarseTimer, [=] {
+					runner([=] {
+						if (_chatProcess) {
+							requestMessagesSlice();
+						}
+					});
+				});
+			});
+			return;
+		}
+	}
 	const auto count = _chatProcess->info.messagesCountPerSplit[
 		_chatProcess->localSplitIndex];
 	if (!count) {
@@ -2413,6 +2660,46 @@ void ApiWrap::requestChatMessages(
 			MTP_int(minId), // min_id
 			MTP_long(0) // hash
 		)).done(doneHandler).send();
+	} else if (_scanMode
+		&& _chatProcess->scanBySearch
+		&& _chatProcess->scanFilterIndex >= 0
+		&& _chatProcess->scanFilterIndex
+			< int(_chatProcess->scanFilters.size())) {
+		const auto from = _settings->singlePeerFrom
+			? MTP_int(*_settings->singlePeerFrom)
+			: MTP_int(0);
+		const auto till = _settings->singlePeerTill
+			? MTP_int(*_settings->singlePeerTill)
+			: MTP_int(0);
+		splitRequest(realSplitIndex, MTPmessages_Search(
+			MTP_flags(0),
+			realPeerInput,
+			MTP_string(), // query
+			MTPInputPeer(), // from_id
+			MTPInputPeer(), // saved_peer_id
+			MTPVector<MTPReaction>(), // saved_reaction
+			MTPint(), // top_msg_id
+			_chatProcess->scanFilters[_chatProcess->scanFilterIndex],
+			from,
+			till,
+			MTP_int(offsetId),
+			MTP_int(addOffset),
+			MTP_int(limit),
+			MTP_int(maxId), // max_id
+			MTP_int(minId), // min_id
+			MTP_long(0) // hash
+		)).done([=](MTPmessages_Messages &&result) mutable {
+			// Honor the server page rate or the next pages flood.
+			if (_chatProcess) {
+				result.match([&](const MTPDmessages_messagesSlice &data) {
+					if (const auto rate = data.vnext_rate()) {
+						_chatProcess->scanNextAllowedAt = crl::now()
+							+ rate->v * 1000;
+					}
+			}, [](const auto &) {});
+			}
+			doneHandler(std::move(result));
+		}).send();
 	} else {
 		splitRequest(realSplitIndex, MTPmessages_GetHistory(
 			realPeerInput,
@@ -2479,6 +2766,14 @@ void ApiWrap::resumeMessagesSlice() {
 		: static_cast<AbstractMessagesProcess*>(_chatProcess.get());
 	Expects(process->slice.has_value());
 
+	// Scan needs only ids, sizes and hashes: skip hydration and emoji.
+	// Hydration must still read complete: the walk asserts on it.
+	if (_scanMode && !topic && _chatProcess && _chatProcess->scanBySearch) {
+		process->hydrationIndex = process->slice->list.size();
+		process->hydrationPending = 0;
+		beginSliceWalk(false);
+		return;
+	}
 	const auto &list = process->slice->list;
 	const auto parallel = skipMedia() ? kHydrateParallel : 1;
 	while (process->hydrationIndex < list.size()
@@ -2790,53 +3085,71 @@ void ApiWrap::buildMessageFileWork(
 
 	if (_stats) {
 		_stats->incrementMessage();
-		if (v::match(message.media.content,
+		const auto selected = _settings->media.types;
+		const auto countPolls = ((selected & MediaSettings::Type::Poll)
+			== MediaSettings::Type::Poll)
+			|| ((selected & MediaSettings::Type::FullHistory)
+				== MediaSettings::Type::FullHistory);
+		if (countPolls && v::match(message.media.content,
 			[](const Data::Poll &) { return true; },
 			[](const auto &) { return false; })) {
 			_stats->incrementType(MediaSettings::Type::Poll, 0);
 		}
+		const auto countLinks = ((selected & MediaSettings::Type::Link)
+			== MediaSettings::Type::Link)
+			|| ((selected & MediaSettings::Type::FullHistory)
+				== MediaSettings::Type::FullHistory);
+		const auto countText = ((selected & MediaSettings::Type::Text)
+			== MediaSettings::Type::Text)
+			|| ((selected & MediaSettings::Type::FullHistory)
+				== MediaSettings::Type::FullHistory);
 		auto links = 0;
 		auto dupLinks = 0;
 		auto hasText = false;
-		for (const auto &part : message.text) {
-			if (part.type == Data::TextPart::Type::Text
-				&& !part.text.isEmpty()) {
-				hasText = true;
+		if (countText || countLinks) {
+			for (const auto &part : message.text) {
+				if (part.type == Data::TextPart::Type::Text
+					&& !part.text.isEmpty()) {
+					hasText = true;
+					break;
+				}
 			}
 		}
-		for (const auto &link : message.links) {
-			if (_knownLinks.contains(link)) {
-				++dupLinks;
-			} else {
-				_knownLinks.insert(link);
-				++links;
+		if (countLinks) {
+			for (const auto &link : message.links) {
+				if (_knownLinks.contains(link)) {
+					++dupLinks;
+				} else {
+					_knownLinks.insert(link);
+					++links;
+				}
+				_linkUrls.emplace(link);
 			}
-			_linkUrls.emplace(link);
-		}
-		if (!links && !dupLinks) {
-			if (const auto webpage = std::get_if<Data::WebPage>(
-					&message.media.content)) {
-				if (!webpage->url.isEmpty()) {
-					if (_knownLinks.contains(webpage->url)) {
-						++dupLinks;
-					} else {
-						_knownLinks.insert(webpage->url);
-						++links;
+			if (!links && !dupLinks) {
+				if (const auto webpage = std::get_if<Data::WebPage>(
+						&message.media.content)) {
+					if (!webpage->url.isEmpty()) {
+						if (_knownLinks.contains(webpage->url)) {
+							++dupLinks;
+						} else {
+							_knownLinks.insert(webpage->url);
+							++links;
+						}
+						_linkUrls.emplace(webpage->url);
 					}
-					_linkUrls.emplace(webpage->url);
 				}
 			}
 		}
 		const auto hasMedia = v::match(message.media.content,
 			[](v::null_t) { return false; },
 			[](const auto &) { return true; });
-		if (hasText && !hasMedia) {
+		if (countText && hasText && !hasMedia) {
 			_stats->incrementTextMessage();
 		}
-		if (links + dupLinks > 0) {
+		if (countLinks && links + dupLinks > 0) {
 			_stats->incrementLinkMessage(links + dupLinks);
 		}
-		if (dupLinks > 0) {
+		if (countLinks && dupLinks > 0) {
 			_stats->incrementLinkDuplicates(dupLinks);
 		}
 	}
@@ -2953,7 +3266,16 @@ void ApiWrap::loadNextMessageFile() {
 			++process.fileIndex;
 			continue;
 		}
-		if (!messageCustomEmojiReady(message)) {
+		if (process.scanBySearch) {
+			const auto split = process.info.splits[process.localSplitIndex];
+			const auto key = (uint64(uint32(split)) << 32)
+				| uint64(uint32(message.id));
+			if (_scanSeenMessages.contains(key)) {
+				++process.fileIndex;
+				continue;
+			}
+		}
+		if (!process.scanBySearch && !messageCustomEmojiReady(message)) {
 			return;
 		}
 		if (process.messageFileWorkMessageIndex < 0) {
@@ -2994,6 +3316,11 @@ void ApiWrap::loadNextMessageFile() {
 		process.messageFileWork.clear();
 		process.messageFileWorkIndex = 0;
 		process.messageFileWorkMessageIndex = -1;
+		if (process.scanBySearch) {
+			const auto split = process.info.splits[process.localSplitIndex];
+			_scanSeenMessages.emplace(
+				(uint64(uint32(split)) << 32) | uint64(uint32(list[index].id)));
+		}
 		++process.fileIndex;
 	}
 	finishMessagesSlice();
@@ -3032,7 +3359,7 @@ void ApiWrap::finishMessagesSlice() {
 		} else {
 			_waitNext = true;
 		}
-	} else {
+	} else if (!scanAdvanceFilter()) {
 		finishMessages();
 	}
 }
@@ -3495,6 +3822,10 @@ void ApiWrap::setDedupDb(const QString &path) {
 	_dedupDb = std::make_unique<::Data::DedupDb>(path, false);
 }
 
+void ApiWrap::setScanMode(bool scan) {
+	_scanMode = scan;
+}
+
 std::vector<QString> ApiWrap::linkUrls() const {
 	auto result = std::vector<QString>();
 	result.reserve(_linkUrls.size());
@@ -3675,7 +4006,10 @@ bool ApiWrap::skipMedia() const {
 }
 
 void ApiWrap::prefetchNextSlice() {
-	if (!skipMedia() || _nextSlice || _nextRequested) {
+	const auto scanSearch = _scanMode
+		&& _chatProcess
+		&& _chatProcess->scanBySearch;
+	if (!skipMedia() || scanSearch || _nextSlice || _nextRequested) {
 		return;
 	}
 	if (_chatProcess && !_chatProcess->lastSlice && _chatProcess->slice) {
@@ -3685,6 +4019,7 @@ void ApiWrap::prefetchNextSlice() {
 		}
 		_nextRequested = true;
 		const auto gen = _dedupGen;
+		const auto filter = _chatProcess->scanFilterIndex;
 		requestChatMessages(
 			_chatProcess->info.splits[_chatProcess->localSplitIndex],
 			list.back().id + 1,
@@ -3692,6 +4027,10 @@ void ApiWrap::prefetchNextSlice() {
 			kMessagesSliceLimit,
 			[=](MTPmessages_Messages &&result) {
 				if (gen != _dedupGen || !_chatProcess || _topicProcess) {
+					_nextRequested = false;
+					return;
+				}
+				if (filter != _chatProcess->scanFilterIndex) {
 					_nextRequested = false;
 					return;
 				}
@@ -3793,7 +4132,11 @@ void ApiWrap::beginSliceWalk(bool topic) {
 		walk();
 		return;
 	}
-	if (!skipMedia()) {
+	const auto scanSearch = _scanMode
+		&& !topic
+		&& _chatProcess
+		&& _chatProcess->scanBySearch;
+	if (!skipMedia() && !scanSearch) {
 		walk();
 		return;
 	}
@@ -3847,20 +4190,25 @@ void ApiWrap::beginSliceWalk(bool topic) {
 		walk();
 		return;
 	}
-	// Bonus prefetch only: the walk never waits for it.
-	// Big lane: 2-chunk hashes. Small lane: full contents. 10 files each.
+	// Fetch the whole slice in parallel, then walk from memory.
 	const auto gen = _dedupGen;
-	const auto fireBig = std::make_shared<Fn<void()>>();
-	const auto bigActive = std::make_shared<int>(0);
-	const auto bigIndex = std::make_shared<size_t>(0);
-	const auto sharedBig = std::make_shared<std::vector<Target>>(
-		std::move(bigTargets));
-	*fireBig = [=, this] {
-		while (*bigActive < kWarmupBigParallel
-			&& *bigIndex < sharedBig->size()) {
-			const auto target = (*sharedBig)[*bigIndex];
-			++*bigIndex;
-			++*bigActive;
+	const auto scanBatch = _scanMode
+		&& !topic
+		&& _chatProcess
+		&& _chatProcess->scanBySearch;
+	if (scanBatch || skipMedia()) {
+		const auto pending = std::make_shared<int>(
+			int(bigTargets.size() + smallTargets.size()));
+		const auto maybeWalk = [=, this] {
+			if (--*pending > 0) {
+				return;
+			}
+			if (gen != _dedupGen) {
+				return;
+			}
+			walk();
+		};
+		for (const auto &target : bigTargets) {
 			Export::FetchHash(
 				_mtp,
 				_runner,
@@ -3872,60 +4220,55 @@ void ApiWrap::beginSliceWalk(bool topic) {
 						|| (_topicProcess != nullptr);
 				},
 				[=, this](QByteArray hash) {
-					--*bigActive;
-					if (gen != _dedupGen) {
-						return;
-					}
-					if (!hash.isEmpty()) {
+					if (gen == _dedupGen && !hash.isEmpty()) {
 						_knownFileHash[target.docId] = hash;
 					}
-					if (*bigIndex < sharedBig->size()) {
-						(*fireBig)();
-					}
+					maybeWalk();
 				},
 				5,
-				u"warmup-big:%1:%2"_q.arg(target.size).arg(target.location.dcId));
+				u"scan-big:%1:%2"_q.arg(target.size).arg(target.location.dcId));
 		}
-	};
-	const auto fireSmall = std::make_shared<Fn<void()>>();
-	const auto smallActive = std::make_shared<int>(0);
-	const auto smallIndex = std::make_shared<size_t>(0);
-	const auto sharedSmall = std::make_shared<std::vector<Target>>(
-		std::move(smallTargets));
-	*fireSmall = [=, this] {
-		while (*smallActive < kWarmupSmallParallel
-			&& *smallIndex < sharedSmall->size()) {
-			const auto target = (*sharedSmall)[*smallIndex];
-			++*smallIndex;
-			++*smallActive;
-			Export::FetchFullFile(
-				_mtp,
-				_runner,
-				*_takeoutId,
-				target.location,
-				target.size,
-				[=, this] {
-					return (_chatProcess != nullptr)
-						|| (_topicProcess != nullptr);
-				},
-				[=, this](QByteArray content) {
-					--*smallActive;
-					if (gen != _dedupGen) {
-						return;
-					}
-					if (!content.isEmpty()) {
-						_knownFileContent[target.docId] = content;
-					}
-					if (*smallIndex < sharedSmall->size()) {
-						(*fireSmall)();
-					}
-				},
-				5,
-				u"warmup-small:%1:%2"_q.arg(target.size).arg(target.location.dcId));
+		// Small whole-file fetches flood in parallel: one at a time.
+		const auto fireSmall = std::make_shared<Fn<void()>>();
+		const auto smallActive = std::make_shared<int>(0);
+		const auto smallIndex = std::make_shared<size_t>(0);
+		const auto sharedSmall = std::make_shared<std::vector<Target>>(
+			std::move(smallTargets));
+		*fireSmall = [=, this] {
+			while (*smallActive < 1
+				&& *smallIndex < sharedSmall->size()) {
+				const auto target = (*sharedSmall)[*smallIndex];
+				++*smallIndex;
+				++*smallActive;
+				Export::FetchFullFile(
+					_mtp,
+					_runner,
+					*_takeoutId,
+					target.location,
+					target.size,
+					[=, this] {
+						return (_chatProcess != nullptr)
+							|| (_topicProcess != nullptr);
+					},
+					[=, this](QByteArray content) {
+						--*smallActive;
+						if (gen == _dedupGen && !content.isEmpty()) {
+							_knownFileContent[target.docId] = content;
+						}
+						if (*smallIndex < sharedSmall->size()) {
+							(*fireSmall)();
+						}
+						maybeWalk();
+					},
+					5,
+					u"scan-small:%1:%2"_q.arg(target.size).arg(target.location.dcId));
+			}
+		};
+		if (!sharedSmall->empty()) {
+			(*fireSmall)();
 		}
-	};
-	(*fireBig)();
-	(*fireSmall)();
+		return;
+	}
 	walk();
 }
 
@@ -3972,6 +4315,211 @@ Data::File *ApiWrap::walkParkedFile(const Data::File *file) const {
 		return nullptr;
 	}
 	return process->messageFileWork[process->messageFileWorkIndex].file;
+}
+
+bool ApiWrap::decideFileScan(
+		Data::File &file,
+		const FilePolicy &policy,
+		FnMut<void(QString)> done) {
+	using SkipReason = Data::File::SkipReason;
+	if (file.skipReason != SkipReason::None) {
+		return true;
+	}
+	if (!_decidingFiles.emplace(&file).second) {
+		return false;
+	}
+	Data::File *const filePtr = &file;
+	const auto markType = [](Data::File &file) {
+		file.skipReason = SkipReason::FileType;
+	};
+	if (!policy.mainFile || !policy.message) {
+		markType(file);
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	const auto fullHistory = bool(
+		_settings->media.types & MediaSettings::Type::FullHistory);
+	const auto fileTypes = MediaSettings::Type::Photo
+		| MediaSettings::Type::Video
+		| MediaSettings::Type::VoiceMessage
+		| MediaSettings::Type::VideoMessage
+		| MediaSettings::Type::Sticker
+		| MediaSettings::Type::GIF
+		| MediaSettings::Type::File
+		| MediaSettings::Type::Audio;
+	const auto accepted = ((policy.type & _settings->media.types)
+		== policy.type)
+		|| (fullHistory && (policy.type & fileTypes) == policy.type);
+	if (!accepted) {
+		markType(file);
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	if (policy.controllingSize > _settings->media.sizeLimit) {
+		file.skipReason = SkipReason::FileSize;
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	const auto type = policy.type;
+	const auto controllingSize = policy.controllingSize;
+	auto docId = uint64(0);
+	auto isPhoto = false;
+	const auto markNew = [this, type, controllingSize](Data::File &file) {
+		file.skipReason = SkipReason::FileType;
+		if (_stats) {
+			_stats->incrementType(type, controllingSize);
+		}
+	};
+	if (!MainMediaId(*policy.message, docId, isPhoto) || !docId) {
+		markNew(file);
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	const auto db = dedupDb();
+	if (!db) {
+		markNew(file);
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	const auto peer = currentPeer();
+	_dedupPeers.emplace(peer);
+	const auto global = GetEnhancedBool("prevent_export_duplicates");
+	const auto markDup = [this, type](Data::File &file) {
+		file.skipReason = SkipReason::Duplicate;
+		if (_stats) {
+			_stats->incrementSkipped(type, file.size);
+		}
+	};
+	if (global && db->containsDocId(
+		::Data::DedupDb::Table::Downloads,
+		docId)) {
+		markDup(file);
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	if (db->containsExTmpDocId(_sessionId, peer, docId)) {
+		markDup(file);
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	const auto decide = [=, this](Data::File &file, const QByteArray &hash) {
+		if (!hash.isEmpty()) {
+			const auto seen = db->containsExTmpHash(
+				_sessionId,
+				peer,
+				hash);
+			const auto known = seen || (global && db->containsHash(
+				::Data::DedupDb::Table::Downloads,
+				hash));
+			if (!known) {
+				db->insertExTmp(_sessionId, peer, docId, hash);
+				markNew(file);
+			} else {
+				markDup(file);
+			}
+		} else {
+			markNew(file);
+		}
+	};
+	if (const auto i = _knownFileHash.find(docId);
+		i != end(_knownFileHash) && !i->second.isEmpty()) {
+		decide(file, i->second);
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	if (const auto i = _knownFileContent.find(docId);
+		i != end(_knownFileContent) && !i->second.isEmpty()) {
+		decide(file, ::Data::ContentFingerprint(i->second));
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	if (!file.content.isEmpty()) {
+		const auto hash = ::Data::ContentFingerprint(file.content);
+		if (!hash.isEmpty()) {
+			_knownFileHash[docId] = hash;
+		}
+		decide(file, hash);
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	if (!file.location
+		|| (file.location.dcId == 0
+			&& file.location.data.type() != mtpc_inputTakeoutFileLocation)
+		|| !_takeoutId) {
+		markNew(file);
+		_decidingFiles.erase(filePtr);
+		return true;
+	}
+	const auto sharedDone = std::make_shared<FnMut<void(QString)>>(
+		std::move(done));
+	const auto gen = _dedupGen;
+	const auto sliceGen = _sliceGen;
+	if (file.size >= ::Data::kDedupMinPartialHashSize) {
+		Export::FetchHash(
+			_mtp,
+			_runner,
+			*_takeoutId,
+			file.location,
+			file.size,
+			[=, this] {
+				return (_chatProcess != nullptr)
+					|| (_topicProcess != nullptr);
+			},
+			[=, this](QByteArray hash) mutable {
+				_decidingFiles.erase(filePtr);
+				if (gen != _dedupGen
+					|| sliceGen != _sliceGen
+					|| (!_chatProcess && !_topicProcess)) {
+					return;
+				}
+				const auto live = walkParkedFile(filePtr);
+				if (!live) {
+					return;
+				}
+				if (!hash.isEmpty()) {
+					_knownFileHash[docId] = hash;
+				}
+				decide(*live, hash);
+				(*sharedDone)(QString());
+			},
+			kWalkHashAttempts,
+			u"scan:%1:%2:%3:%4"_q.arg(int(type)).arg(file.size).arg(docId).arg(file.location.dcId));
+		return false;
+	}
+	Export::FetchFullFile(
+		_mtp,
+		_runner,
+		*_takeoutId,
+		file.location,
+		file.size,
+		[=, this] {
+			return (_chatProcess != nullptr)
+				|| (_topicProcess != nullptr);
+		},
+		[=, this](QByteArray content) mutable {
+			_decidingFiles.erase(filePtr);
+			if (gen != _dedupGen
+				|| sliceGen != _sliceGen
+				|| (!_chatProcess && !_topicProcess)) {
+				return;
+			}
+			const auto live = walkParkedFile(filePtr);
+			if (!live) {
+				return;
+			}
+			if (!content.isEmpty()) {
+				_knownFileContent[docId] = content;
+			}
+			const auto hash = ::Data::ContentFingerprint(content);
+			if (!hash.isEmpty()) {
+				_knownFileHash[docId] = hash;
+			}
+			decide(*live, hash);
+			(*sharedDone)(QString());
+		},
+		kWalkHashAttempts,
+		u"scan:%1:%2:%3:%4"_q.arg(int(type)).arg(file.size).arg(docId).arg(file.location.dcId));
+	return false;
 }
 
 bool ApiWrap::decideFileWithoutMedia(
@@ -4318,6 +4866,8 @@ bool ApiWrap::processFileLoad(
 	} else if (!file.location && file.content.isEmpty()) {
 		file.skipReason = SkipReason::Unavailable;
 		return true;
+	} else if (_scanMode) {
+		return decideFileScan(file, policy, std::move(done));
 	} else if ((_settings->media.types & policy.type) != policy.type) {
 		return decideFileWithoutMedia(file, policy, std::move(done));
 	} else if (policy.controllingSize > _settings->media.sizeLimit) {

@@ -65,7 +65,7 @@ private:
 	void createPanel();
 	void updateState(State &&state);
 	void showSettings();
-	void showProgress();
+	void showProgress(bool scanning = false);
 	void showError(const ApiErrorState &error);
 	void showError(const OutputErrorState &error);
 	void showError(const QString &text);

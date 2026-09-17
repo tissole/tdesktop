@@ -10,6 +10,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/view/export_view_settings.h"
 #include "export/view/export_view_progress.h"
 #include "export/export_manager.h"
+#include "data/data_session.h"
+#include "data/data_peer.h"
+#include "data/data_peer_id.h"
+#include "base/base_file_utilities.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/separate_panel.h"
 #include "ui/wrap/padding_wrap.h"
@@ -122,8 +126,48 @@ void CenterPanel(not_null<Ui::SeparatePanel*> panel) {
 	panel->move(geometry.topLeft());
 }
 
-Environment PrepareEnvironment(not_null<Main::Session*> session) {
-	auto result = Environment();
+[[nodiscard]] QString SinglePeerFolder(
+		not_null<Main::Session*> session,
+		const Settings &settings) {
+	if (!settings.onlySinglePeer()) {
+		return QString();
+	}
+	const auto peerId = settings.singlePeer.match([](
+			const MTPDinputPeerUser &data) {
+		return peerFromUser(data.vuser_id().v);
+	}, [](const MTPDinputPeerUserFromMessage &data) {
+		return peerFromUser(data.vuser_id().v);
+	}, [](const MTPDinputPeerChat &data) {
+		return peerFromChat(data.vchat_id().v);
+	}, [](const MTPDinputPeerChannel &data) {
+		return peerFromChannel(data.vchannel_id().v);
+	}, [](const MTPDinputPeerChannelFromMessage &data) {
+		return peerFromChannel(data.vchannel_id().v);
+	}, [&](const MTPDinputPeerSelf &data) {
+		return session->userPeerId();
+	}, [](const MTPDinputPeerEmpty &data) {
+		return PeerId(0);
+	});
+	if (!peerId) {
+		return QString();
+	}
+	const auto peer = session->data().peerLoaded(peerId);
+	const auto name = peer
+		? base::FileNameFromUserString(peer->name())
+		: QString();
+	const auto bare = peerToBareMTPInt(peerId).v;
+	const auto id = peerIsChannel(peerId)
+		? (u"-100"_q + QString::number(bare))
+		: peerIsChat(peerId)
+		? (u"-"_q + QString::number(bare))
+		: QString::number(bare);
+	if (name.isEmpty()) {
+		return id;
+	}
+	return id + '_' + name;
+}
+
+Environment PrepareEnvironment(not_null<Main::Session*> session) {	auto result = Environment();
 	result.internalLinksDomain = session->serverConfig().internalLinksDomain;
 	result.aboutTelegram = tr::lng_export_about_telegram(tr::now).toUtf8();
 	result.aboutContacts = tr::lng_export_about_contacts(tr::now).toUtf8();
@@ -248,7 +292,22 @@ void PanelController::showSettings() {
 		_process->setSessionId(_session->uniqueId());
 		_process->setDedupDb(
 			Core::App().downloadManager().dedupDbPath());
-		_process->startExport(*_settings, PrepareEnvironment(_session));
+		_process->startExport(
+			*_settings,
+			PrepareEnvironment(_session),
+			SinglePeerFolder(_session, *_settings));
+	}, settings->lifetime());
+
+	settings->scanClicks(
+	) | rpl::on_next([=]() {
+		showProgress(true);
+		_process->setSessionId(_session->uniqueId());
+		_process->setDedupDb(
+			Core::App().downloadManager().dedupDbPath());
+		_process->startScan(
+			*_settings,
+			PrepareEnvironment(_session),
+			SinglePeerFolder(_session, *_settings));
 	}, settings->lifetime());
 
 	settings->cancelClicks(
@@ -374,11 +433,13 @@ void PanelController::showError(const QString &text) {
 	_panel->setHideOnDeactivate(false);
 }
 
-void PanelController::showProgress() {
+void PanelController::showProgress(bool scanning) {
 	_settings->availableAt = 0;
 	ClearSuggestStart(_session);
 
-	_panel->setTitle(tr::lng_export_progress_title());
+	_panel->setTitle(scanning
+		? tr::lng_export_scanning()
+		: tr::lng_export_progress_title());
 
 	auto progress = base::make_unique_q<ProgressWidget>(
 		_panel.get(),
@@ -484,6 +545,8 @@ void PanelController::updateState(State &&state) {
 	} else if (const auto finished = std::get_if<FinishedState>(&_state)) {
 		_panel->setTitle(tr::lng_export_title());
 		_panel->setHideOnDeactivate(false);
+		// Keep total-row space: exact sizing overlaps the button
+		// while stale progress rows are still in the layout.
 		auto rows = 2;
 		if (finished->skippedFiles > 0) {
 			++rows;

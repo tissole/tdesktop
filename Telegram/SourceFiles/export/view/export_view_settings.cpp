@@ -854,13 +854,13 @@ not_null<Ui::Checkbox*> SettingsWidget::addMediaOption(
 	) | rpl::on_next([=](bool checked) {
 		changeData([&](Settings &data) {
 			if (checked) {
-				// Full history and links-only are exclusive modes.
+				// Full history and text-only are exclusive modes.
 				if (type == MediaType::FullHistory
-					|| type == MediaType::Link) {
+					|| type == MediaType::Text) {
 					data.media.types = type;
 				} else {
 					data.media.types &= ~MediaType::FullHistory;
-					data.media.types &= ~MediaType::Link;
+					data.media.types &= ~MediaType::Text;
 					data.media.types |= type;
 				}
 			} else {
@@ -1050,6 +1050,17 @@ void SettingsWidget::refreshButtons(
 		}, start->lifetime());
 	}
 
+	const auto scan = canStart
+		? Ui::CreateChild<Ui::RoundButton>(
+			container.get(),
+			tr::lng_export_scan(),
+			st::defaultBoxButton)
+		: nullptr;
+	if (scan) {
+		scan->show();
+		_scanClicks = scan->clicks() | rpl::to_empty;
+	}
+
 	const auto cancel = Ui::CreateChild<Ui::RoundButton>(
 		container.get(),
 		tr::lng_cancel(),
@@ -1057,15 +1068,31 @@ void SettingsWidget::refreshButtons(
 	cancel->show();
 	_cancelClicks = cancel->clicks() | rpl::to_empty;
 
-	rpl::combine(
-		container->sizeValue(),
-		start ? start->widthValue() : rpl::single(0)
-	) | rpl::on_next([=](QSize size, int width) {
-		const auto right = st::defaultBox.buttonPadding.right()
-			+ (width ? width + st::defaultBox.buttonPadding.left() : 0);
-		const auto top = st::defaultBox.buttonPadding.top();
-		cancel->moveToRight(right, top);
-	}, cancel->lifetime());
+	if (scan && start) {
+		rpl::combine(
+			container->sizeValue(),
+			start->widthValue(),
+			scan->widthValue()
+		) | rpl::on_next([=](QSize size, int startWidth, int scanWidth) {
+			const auto right = st::defaultBox.buttonPadding.right();
+			const auto top = st::defaultBox.buttonPadding.top();
+			const auto gap = st::defaultBox.buttonPadding.left();
+			scan->moveToRight(right + startWidth + gap, top);
+			cancel->moveToRight(
+				right + startWidth + gap + scanWidth + gap,
+				top);
+		}, cancel->lifetime());
+	} else {
+		rpl::combine(
+			container->sizeValue(),
+			start ? start->widthValue() : rpl::single(0)
+		) | rpl::on_next([=](QSize size, int width) {
+			const auto right = st::defaultBox.buttonPadding.right()
+				+ (width ? width + st::defaultBox.buttonPadding.left() : 0);
+			const auto top = st::defaultBox.buttonPadding.top();
+			cancel->moveToRight(right, top);
+		}, cancel->lifetime());
+	}
 }
 
 void SettingsWidget::chooseFolder() {
@@ -1108,6 +1135,13 @@ rpl::producer<Settings> SettingsWidget::value() const {
 
 rpl::producer<> SettingsWidget::startClicks() const {
 	return _startClicks.value(
+	) | rpl::map([](Wrap &&wrap) {
+		return std::move(wrap.value);
+	}) | rpl::flatten_latest();
+}
+
+rpl::producer<> SettingsWidget::scanClicks() const {
+	return _scanClicks.value(
 	) | rpl::map([](Wrap &&wrap) {
 		return std::move(wrap.value);
 	}) | rpl::flatten_latest();

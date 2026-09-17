@@ -41,6 +41,7 @@ public:
 	rpl::producer<Settings> value() const;
 	rpl::producer<Settings> changes() const;
 	rpl::producer<> startClicks() const;
+	rpl::producer<> scanClicks() const;
 	rpl::producer<> cancelClicks() const;
 
 	void setShowBoxCallback(Fn<void(object_ptr<Ui::BoxContent>)> callback) {
@@ -133,6 +134,7 @@ private:
 	};
 	rpl::event_stream<Settings> _changes;
 	rpl::variable<Wrap> _startClicks;
+	rpl::variable<Wrap> _scanClicks;
 	rpl::variable<Wrap> _cancelClicks;
 
 };

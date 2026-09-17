@@ -202,27 +202,36 @@ Content ContentFromState(const FinishedState &state) {
 		1.,
 		0,
 		true });
-	result.rows.push_back({
-		Content::kDoneId,
-		tr::lng_export_stats_total(
-			tr::now,
-			lt_amount,
-			QString::number(state.filesCount),
-			lt_size,
-			Ui::FormatSizeText(state.bytesCount)),
-		QString(),
-		1. });
-	if (state.skippedFiles > 0) {
+	auto dataGroups = 0;
+	for (const auto i : Output::Stats::kDisplayOrder) {
+		if (state.groupFiles[i] || state.groupSkipped[i]) {
+			++dataGroups;
+		}
+	}
+	// Single-category runs skip totals: the total is the category itself.
+	if (dataGroups > 1) {
 		result.rows.push_back({
 			Content::kDoneId,
-			tr::lng_export_total_skipped(
+			tr::lng_export_stats_total(
 				tr::now,
 				lt_amount,
-				QString::number(state.skippedFiles),
+				QString::number(state.filesCount),
 				lt_size,
-				Ui::FormatSizeText(state.skippedBytes)),
+				Ui::FormatSizeText(state.bytesCount)),
 			QString(),
 			1. });
+		if (state.skippedFiles > 0) {
+			result.rows.push_back({
+				Content::kDoneId,
+				tr::lng_export_total_skipped(
+					tr::now,
+					lt_amount,
+					QString::number(state.skippedFiles),
+					lt_size,
+					Ui::FormatSizeText(state.skippedBytes)),
+				QString(),
+				1. });
+		}
 	}
 	for (const auto i : Output::Stats::kDisplayOrder) {
 		const auto files = state.groupFiles[i];

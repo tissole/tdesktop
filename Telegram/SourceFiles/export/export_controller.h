@@ -149,7 +149,12 @@ public:
 	// Processing step.
 	void startExport(
 		const Settings &settings,
-		const Environment &environment);
+		const Environment &environment,
+		const QString &singlePeerFolder = QString());
+	void startScan(
+		const Settings &settings,
+		const Environment &environment,
+		const QString &singlePeerFolder = QString());
 	void skipFile(uint64 randomId);
 	void cancelExportFast();
 	void setSessionId(uint64 sessionId);

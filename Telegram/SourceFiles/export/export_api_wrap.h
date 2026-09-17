@@ -130,6 +130,7 @@ public:
 	void cancelExportFast();
 	void setSessionId(uint64 sessionId);
 	void setDedupDb(const QString &path);
+	void setScanMode(bool scan);
 	[[nodiscard]] std::vector<QString> linkUrls() const;
 
 	~ApiWrap();
@@ -151,6 +152,10 @@ private:
 	struct AbstractMessagesProcess;
 	struct ChatProcess;
 	struct TopicProcess;
+
+	void requestScanCount();
+	void decideScanMethod();
+	bool scanAdvanceFilter();
 
 	void startMainSession(FnMut<void()> done);
 	void sendNextStartRequest();
@@ -305,6 +310,10 @@ private:
 		Data::File &file,
 		const FilePolicy &policy,
 		FnMut<void(QString)> done);
+	bool decideFileScan(
+		Data::File &file,
+		const FilePolicy &policy,
+		FnMut<void(QString)> done);
 	bool mainFileDuplicate(const FilePolicy &policy);
 	void beginSliceWalk(bool topic);
 	void prefetchNextSlice();
@@ -415,6 +424,8 @@ private:
 	base::flat_set<uint64> _inflightDocs;
 	base::flat_set<const Data::File*> _decidingFiles;
 	base::flat_set<PeerId> _dedupPeers;
+	base::flat_set<uint64> _scanSeenMessages;
+	bool _scanMode = false;
 	int _dedupGen = 0;
 	int _sliceGen = 0;
 
