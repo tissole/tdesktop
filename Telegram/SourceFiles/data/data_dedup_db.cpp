@@ -416,12 +416,28 @@ bool DedupDb::Impl::createTables() {
 		&& exec(u"CREATE TABLE IF NOT EXISTS ex_resume ("
 			"session_id INTEGER NOT NULL DEFAULT 0, "
 			"peer_id INTEGER NOT NULL, "
-			"last_msg_id INTEGER NOT NULL DEFAULT 0, "
+			"last_id INTEGER NOT NULL DEFAULT 0, "
 			"total INTEGER NOT NULL DEFAULT 0, "
-			"done INTEGER NOT NULL DEFAULT 0, "
+			"msgs_done INTEGER NOT NULL DEFAULT 0, "
 			"skipped INTEGER NOT NULL DEFAULT 0, "
-			"path TEXT NOT NULL DEFAULT '', "
+			"export_folder TEXT NOT NULL DEFAULT '', "
 			"state TEXT NOT NULL DEFAULT 'running', "
+			"media INTEGER NOT NULL DEFAULT 0, "
+			"size INTEGER NOT NULL DEFAULT 0, "
+			"export_format INTEGER NOT NULL DEFAULT 0, "
+			"from_date INTEGER NOT NULL DEFAULT 0, "
+			"till_date INTEGER NOT NULL DEFAULT 0, "
+			"html_index INTEGER NOT NULL DEFAULT 0, "
+			"replied_index BLOB NOT NULL DEFAULT x'', "
+			"last_msg_id INTEGER NOT NULL DEFAULT 0, "
+			"last_msg_date INTEGER NOT NULL DEFAULT 0, "
+			"last_msg_from INTEGER NOT NULL DEFAULT 0, "
+			"date_index INTEGER NOT NULL DEFAULT 0, "
+			"json_state INTEGER NOT NULL DEFAULT 0, "
+			"stats BLOB NOT NULL DEFAULT x'', "
+			"doc_id INTEGER NOT NULL DEFAULT 0, "
+			"paused_file TEXT NOT NULL DEFAULT '', "
+			"paused_bytes INTEGER NOT NULL DEFAULT 0, "
 			"PRIMARY KEY (session_id, peer_id))"_q)
 		&& exec(u"CREATE TABLE IF NOT EXISTS ex_tmp ("
 			"session_id INTEGER NOT NULL DEFAULT 0, "
@@ -1390,21 +1406,49 @@ void DedupDb::Impl::insertExResume(const ExResumeRecord &record) {
 	}
 	QSqlQuery q(_db);
 	q.prepare(u"INSERT OR REPLACE INTO ex_resume "
-		"(session_id, peer_id, last_msg_id, total, done, skipped, "
-		"path, state) "
-		"VALUES (:session_id, :peer_id, :last_msg_id, :total, :done, "
-		":skipped, :path, :state)"_q);
+		"(session_id, peer_id, last_id, total, msgs_done, skipped, "
+		"export_folder, state, media, size, export_format, from_date, "
+		"till_date, html_index, replied_index, last_msg_id, "
+		"last_msg_date, last_msg_from, date_index, json_state, stats, "
+		"doc_id, paused_file, paused_bytes) "
+		"VALUES (:session_id, :peer_id, :last_id, :total, :msgs_done, "
+		":skipped, :export_folder, :state, :media, :size, "
+		":export_format, :from_date, :till_date, :html_index, "
+		":replied_index, :last_msg_id, :last_msg_date, :last_msg_from, "
+		":date_index, :json_state, :stats, :doc_id, :paused_file, "
+		":paused_bytes)"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(record.sessionId)));
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(record.peerId.value)));
-	q.bindValue(u":last_msg_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(record.lastMsgId.bare)));
+	q.bindValue(u":last_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(record.lastId.bare)));
 	q.bindValue(u":total"_q, record.total);
-	q.bindValue(u":done"_q, record.done);
+	q.bindValue(u":msgs_done"_q, record.msgsDone);
 	q.bindValue(u":skipped"_q, record.skipped);
-	q.bindValue(u":path"_q, record.path);
+	q.bindValue(u":export_folder"_q, record.exportFolder);
 	q.bindValue(u":state"_q, record.state);
+	q.bindValue(u":media"_q, QVariant::fromValue(
+		static_cast<qulonglong>(record.media)));
+	q.bindValue(u":size"_q, QVariant::fromValue(
+		static_cast<qlonglong>(record.size)));
+	q.bindValue(u":export_format"_q, record.exportFormat);
+	q.bindValue(u":from_date"_q, record.fromDate);
+	q.bindValue(u":till_date"_q, record.tillDate);
+	q.bindValue(u":html_index"_q, record.htmlIndex);
+	q.bindValue(u":replied_index"_q, record.repliedIndex);
+	q.bindValue(u":last_msg_id"_q, record.lastMsgId);
+	q.bindValue(u":last_msg_date"_q, record.lastMsgDate);
+	q.bindValue(u":last_msg_from"_q, QVariant::fromValue(
+		static_cast<qulonglong>(record.lastMsgFrom)));
+	q.bindValue(u":date_index"_q, record.dateIndex);
+	q.bindValue(u":json_state"_q, record.jsonState);
+	q.bindValue(u":stats"_q, record.stats);
+	q.bindValue(u":doc_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(record.docId)));
+	q.bindValue(u":paused_file"_q, record.pausedFile);
+	q.bindValue(u":paused_bytes"_q, QVariant::fromValue(
+		static_cast<qlonglong>(record.pausedBytes)));
 	if (!q.exec()) {
 		LOG(("DedupDb: InsertExResume failed: %1").arg(
 			q.lastError().text()));
@@ -1449,8 +1493,11 @@ std::vector<ExResumeRecord> DedupDb::Impl::loadExResume(
 		return result;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT peer_id, last_msg_id, total, done, skipped, "
-		"path, state FROM ex_resume "
+	q.prepare(u"SELECT peer_id, last_id, total, msgs_done, skipped, "
+		"export_folder, state, media, size, export_format, from_date, "
+		"till_date, html_index, replied_index, last_msg_id, "
+		"last_msg_date, last_msg_from, date_index, json_state, stats, "
+		"doc_id, paused_file, paused_bytes FROM ex_resume "
 		"WHERE session_id = :session_id"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(sessionId)));
@@ -1462,12 +1509,28 @@ std::vector<ExResumeRecord> DedupDb::Impl::loadExResume(
 		auto record = ExResumeRecord();
 		record.sessionId = sessionId;
 		record.peerId = PeerId(q.value(0).toULongLong());
-		record.lastMsgId = MsgId(q.value(1).toLongLong());
+		record.lastId = MsgId(q.value(1).toLongLong());
 		record.total = q.value(2).toInt();
-		record.done = q.value(3).toInt();
+		record.msgsDone = q.value(3).toInt();
 		record.skipped = q.value(4).toInt();
-		record.path = q.value(5).toString();
+		record.exportFolder = q.value(5).toString();
 		record.state = q.value(6).toString();
+		record.media = uint32(q.value(7).toULongLong());
+		record.size = q.value(8).toLongLong();
+		record.exportFormat = q.value(9).toInt();
+		record.fromDate = q.value(10).toInt();
+		record.tillDate = q.value(11).toInt();
+		record.htmlIndex = q.value(12).toInt();
+		record.repliedIndex = q.value(13).toByteArray();
+		record.lastMsgId = q.value(14).toInt();
+		record.lastMsgDate = q.value(15).toInt();
+		record.lastMsgFrom = q.value(16).toULongLong();
+		record.dateIndex = q.value(17).toInt();
+		record.jsonState = q.value(18).toInt();
+		record.stats = q.value(19).toByteArray();
+		record.docId = q.value(20).toULongLong();
+		record.pausedFile = q.value(21).toString();
+		record.pausedBytes = q.value(22).toLongLong();
 		result.push_back(std::move(record));
 	}
 	return result;

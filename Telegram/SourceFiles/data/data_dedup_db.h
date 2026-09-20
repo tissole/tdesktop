@@ -73,11 +73,27 @@ struct ExResumeRecord {
 	uint64 sessionId = 0;
 	PeerId peerId = PeerId();
 	int total = 0;
-	int done = 0;
+	int msgsDone = 0;
 	int skipped = 0;
-	MsgId lastMsgId = 0;
-	QString path;
+	MsgId lastId = 0;
+	QString exportFolder;
 	QString state;
+	uint32 media = 0;
+	int64 size = 0;
+	int exportFormat = 0;
+	int fromDate = 0;
+	int tillDate = 0;
+	int htmlIndex = 0;
+	QByteArray repliedIndex;
+	int lastMsgId = 0;
+	int lastMsgDate = 0;
+	uint64 lastMsgFrom = 0;
+	int dateIndex = 0;
+	int jsonState = 0;
+	QByteArray stats;
+	uint64 docId = 0;
+	QString pausedFile;
+	int64 pausedBytes = 0;
 };
 
 class DedupDb {

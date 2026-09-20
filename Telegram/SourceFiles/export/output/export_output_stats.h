@@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "export/export_settings.h"
 
+#include <QtCore/QByteArray>
+
 #include <array>
 #include <atomic>
 
@@ -54,6 +56,9 @@ public:
 
 	int64 mediaFiles() const;
 	int64 mediaBytes() const;
+
+	[[nodiscard]] QByteArray serialize() const;
+	bool restore(const QByteArray &data);
 
 	static constexpr auto kGroups = 12;
 

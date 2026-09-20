@@ -227,6 +227,9 @@ private:
 	void messagesCountLoaded(int localSplitIndex, int count);
 	void resolveDates();
 	void requestMessagesSlice();
+	void consumeChatPage(MTPmessages_Messages result);
+	void firePagePrefetch();
+	void fireScanCountSlot(int filterIndex, int splitPosition);
 	void requestChatMessages(
 		int splitIndex,
 		int offsetId,
@@ -316,10 +319,7 @@ private:
 		FnMut<void(QString)> done);
 	bool mainFileDuplicate(const FilePolicy &policy);
 	void beginSliceWalk(bool topic);
-	void prefetchNextSlice();
 	bool skipMedia() const;
-	void bufferNextSlice(Data::MessagesSlice &&slice, bool last);
-	void startBufferedSlice();
 	void clearDedupRun();
 	::Data::DedupDb *dedupDb() const;
 	PeerId currentPeer() const;
@@ -412,15 +412,9 @@ private:
 	base::flat_map<Data::File*, DedupPending> _pendingHash;
 	base::flat_map<uint64, QByteArray> _knownFileHash;
 	base::flat_map<uint64, QByteArray> _knownFileContent;
+	base::flat_set<uint64> _hashFailedDocs;
 	base::flat_set<QByteArray> _knownLinks;
 	base::flat_set<QByteArray> _linkUrls;
-	struct PrefetchedSlice {
-		Data::MessagesSlice slice;
-		bool last = false;
-	};
-	std::optional<PrefetchedSlice> _nextSlice;
-	bool _nextRequested = false;
-	bool _waitNext = false;
 	base::flat_set<uint64> _inflightDocs;
 	base::flat_set<const Data::File*> _decidingFiles;
 	base::flat_set<PeerId> _dedupPeers;

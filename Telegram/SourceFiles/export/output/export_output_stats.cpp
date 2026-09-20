@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "export/output/export_output_stats.h"
 
+#include <QtCore/QDataStream>
+
 namespace Export {
 namespace Output {
 
@@ -165,6 +167,85 @@ int64 Stats::mediaBytes() const {
 		result += bytes.load();
 	}
 	return result;
+}
+
+QByteArray Stats::serialize() const {
+	auto result = QByteArray();
+	auto stream = QDataStream(&result, QIODevice::WriteOnly);
+	stream.setVersion(QDataStream::Qt_5_1);
+	stream << int64(_files.load()) << _bytes.load();
+	for (auto i = 0; i != kGroups; ++i) {
+		stream
+			<< _groupFiles[i].load()
+			<< _groupBytes[i].load()
+			<< _groupSkipped[i].load()
+			<< _groupSkippedBytes[i].load();
+	}
+	stream
+		<< _mediaWrittenFiles.load()
+		<< _mediaWrittenBytes.load()
+		<< _textMessages.load()
+		<< _linkMessages.load()
+		<< _linkTotal.load()
+		<< _linkDuplicates.load()
+		<< _messagesTotal.load();
+	return result;
+}
+
+bool Stats::restore(const QByteArray &data) {
+	auto stream = QDataStream(data);
+	stream.setVersion(QDataStream::Qt_5_1);
+	auto files = int64(0);
+	auto bytes = int64(0);
+	stream >> files >> bytes;
+	if (stream.status() != QDataStream::Ok) {
+		return false;
+	}
+	auto groupFiles = std::array<int64, kGroups>{};
+	auto groupBytes = std::array<int64, kGroups>{};
+	auto groupSkipped = std::array<int64, kGroups>{};
+	auto groupSkippedBytes = std::array<int64, kGroups>{};
+	for (auto i = 0; i != kGroups; ++i) {
+		stream
+			>> groupFiles[i]
+			>> groupBytes[i]
+			>> groupSkipped[i]
+			>> groupSkippedBytes[i];
+	}
+	auto mediaWrittenFiles = int64(0);
+	auto mediaWrittenBytes = int64(0);
+	auto textMessages = int64(0);
+	auto linkMessages = int64(0);
+	auto linkTotal = int64(0);
+	auto linkDuplicates = int64(0);
+	auto messagesTotal = int64(0);
+	stream
+		>> mediaWrittenFiles
+		>> mediaWrittenBytes
+		>> textMessages
+		>> linkMessages
+		>> linkTotal
+		>> linkDuplicates
+		>> messagesTotal;
+	if (stream.status() != QDataStream::Ok || !stream.atEnd()) {
+		return false;
+	}
+	_files = int(files);
+	_bytes = bytes;
+	for (auto i = 0; i != kGroups; ++i) {
+		_groupFiles[i] = groupFiles[i];
+		_groupBytes[i] = groupBytes[i];
+		_groupSkipped[i] = groupSkipped[i];
+		_groupSkippedBytes[i] = groupSkippedBytes[i];
+	}
+	_mediaWrittenFiles = mediaWrittenFiles;
+	_mediaWrittenBytes = mediaWrittenBytes;
+	_textMessages = textMessages;
+	_linkMessages = linkMessages;
+	_linkTotal = linkTotal;
+	_linkDuplicates = linkDuplicates;
+	_messagesTotal = messagesTotal;
+	return true;
 }
 
 } // namespace Output

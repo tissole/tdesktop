@@ -1010,7 +1010,7 @@ void ControllerObject::setFinishedState() {
 	setState(std::move(state));
 }
 
-constexpr auto kDiagBuild = 16;
+constexpr auto kDiagBuild = 17;
 
 Output::Result ControllerObject::writeStatsFile() const {
 	const auto path = _settings.path + QString::fromLatin1("stats.txt");
