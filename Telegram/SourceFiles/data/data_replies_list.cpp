@@ -547,6 +547,7 @@ mtpRequestId RepliesList::sendGetReplies(
 		MTP_int(0),
 		MTP_long(0));
 	if (takeout) {
+		const auto refreshed = std::make_shared<bool>(false);
 		*requestSlot = histories().sendRequest(
 			_history,
 			Histories::RequestType::History,
@@ -559,8 +560,25 @@ mtpRequestId RepliesList::sendGetReplies(
 					*requestSlot = 0;
 					done(result);
 					finish();
-				}).fail([=] {
+				}).fail([=](const MTP::Error &error) {
 					*requestSlot = 0;
+					if (error.type() == u"TAKEOUT_INVALID"_q
+						&& !*refreshed) {
+						*refreshed = true;
+						auto &apiRef = _history->session().api();
+						apiRef.setTakeoutId(std::nullopt);
+						apiRef.ensureTakeout(
+							_history->peer,
+							[=, resend = resend](bool ready) mutable {
+								if (ready) {
+									resend();
+								} else {
+									fail();
+								}
+								finish();
+							});
+						return;
+					}
 					fail();
 					finish();
 				}).send();

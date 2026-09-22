@@ -13,11 +13,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/output/export_output_abstract.h"
 #include "export/output/export_output_result.h"
 #include "export/output/export_output_stats.h"
+#include "data/data_dedup_db.h"
+#include <crl/crl_on_main.h>
 #include "mtproto/mtp_instance.h"
 #include "ui/text/format_values.h"
 
 #include <QtCore/QFile>
 #include <QtCore/QDir>
+#include <optional>
 #include <QtCore/QTextStream>
 #include <QtCore/QDateTime>
 
@@ -71,6 +74,18 @@ public:
 		const Settings &settings,
 		const Environment &environment,
 		const QString &singlePeerFolder = QString());
+	void startResumeExport(
+		const Settings &settings,
+		const Environment &environment,
+		const ::Data::ExResumeRecord &record);
+	void startUpdateExport(
+		const Settings &settings,
+		const Environment &environment,
+		const ::Data::ExResumeRecord &record);
+	void setUpdateConfirmHandler(
+		Fn<void(int newCount, FnMut<void(bool)> proceed)> handler);
+	void closeDialogFiles();
+	void onUpdateChecked(int newCount);
 	void startScan(
 		const Settings &settings,
 		const Environment &environment,
@@ -79,6 +94,12 @@ public:
 	void cancelExportFast();
 	void setSessionId(uint64 sessionId);
 	void setDedupDb(const QString &path);
+	void setSharedTakeoutId(uint64 id);
+	void setTakeoutRefreshHook(Fn<void()> hook);
+	void takeoutRefreshDone(uint64 id);
+	void requestPause();
+	void resumeExport();
+	rpl::producer<bool> pauseChanges() const;
 
 private:
 	using Step = ProcessingState::Step;
@@ -129,6 +150,7 @@ private:
 	ProcessingState stateOtherData() const;
 	ProcessingState stateDialogs(const DownloadProgress &progress) const;
 	ProcessingState stateTopic(const DownloadProgress &progress) const;
+	DownloadProgress selectedProgress() const;
 	void fillMessagesState(
 		ProcessingState &result,
 		const Data::DialogsInfo &info,
@@ -140,12 +162,16 @@ private:
 	ApiWrap _api;
 	Settings _settings;
 	Environment _environment;
+	std::optional<::Data::ExResumeRecord> _resumeRecord;
+	bool _dialogOpen = false;
+	Fn<void(int newCount, FnMut<void(bool)> proceed)> _updateConfirm;
 
 	Data::DialogsInfo _dialogsInfo;
 	int _dialogIndex = -1;
 
 	int _messagesWritten = 0;
 	int _messagesCount = 0;
+	bool _selectedCounting = false;
 	Data::MessagesSlice _pendingSlice;
 
 	int _userpicsWritten = 0;
@@ -340,6 +366,75 @@ void ControllerObject::startExport(
 	exportNext();
 }
 
+void ControllerObject::onUpdateChecked(int newCount) {
+	// The walk is parked: all count responses are in, nothing runs.
+	// Hop to main for UI, proceed/abort back here is safe.
+	crl::on_main([=, handler = _updateConfirm]() mutable {
+		if (handler) {
+			handler(newCount, [=](bool proceed) mutable {
+				if (proceed) {
+					_api.proceedUpdate();
+				} else {
+					_api.abortUpdate();
+				}
+			});
+			return;
+		}
+		_api.proceedUpdate();
+	});
+}
+
+void ControllerObject::startResumeExport(
+		const Settings &settings,
+		const Environment &environment,
+		const ::Data::ExResumeRecord &record) {
+	if (!_settings.path.isEmpty()) {
+		return;
+	}
+	// Caller passes the stored folder in settings.path: same-chat
+	// resume/update never renumbers, it reuses the exact path.
+	_settings = NormalizeSettings(settings);
+	_environment = environment;
+	_settings.singleTopicRootId = _topicRootId;
+	_settings.singleTopicPeerId = _topicPeerId;
+	if (!_settings.path.endsWith('/')) {
+		_settings.path += '/';
+	}
+	_singlePeerFolder = QString();
+	_resumeRecord = record;
+	_scanMode = false;
+	_api.setScanMode(false);
+	_writer = Output::CreateWriter(_settings.format);
+	fillExportSteps();
+	exportNext();
+}
+
+void ControllerObject::startUpdateExport(
+		const Settings &settings,
+		const Environment &environment,
+		const ::Data::ExResumeRecord &record) {
+	if (!_settings.path.isEmpty()) {
+		return;
+	}
+	_settings = NormalizeSettings(settings);
+	_environment = environment;
+	_settings.singleTopicRootId = _topicRootId;
+	_settings.singleTopicPeerId = _topicPeerId;
+	if (!_settings.path.endsWith('/')) {
+		_settings.path += '/';
+	}
+	_singlePeerFolder = QString();
+	_resumeRecord = record;
+	_scanMode = false;
+	_api.setScanMode(false);
+	_writer = Output::CreateWriter(_settings.format);
+	_api.setUpdateCheck(record.total, [=](int newCount) {
+		onUpdateChecked(newCount);
+	});
+	fillExportSteps();
+	exportNext();
+}
+
 void ControllerObject::startScan(
 		const Settings &settings,
 		const Environment &environment,
@@ -367,6 +462,38 @@ void ControllerObject::skipFile(uint64 randomId) {
 		return;
 	}
 	_api.skipFile(randomId);
+}
+
+void ControllerObject::requestPause() {
+	if (stopped()) {
+		return;
+	}
+	_api.requestPause();
+}
+
+void ControllerObject::closeDialogFiles() {
+	if (!_dialogOpen || !_writer) {
+		return;
+	}
+	_dialogOpen = false;
+	// Closes the open messages file; folder gets deleted right after.
+	ioCatchError(_writer->writeDialogEnd());
+}
+
+void ControllerObject::setUpdateConfirmHandler(
+		Fn<void(int newCount, FnMut<void(bool)> proceed)> handler) {
+	_updateConfirm = std::move(handler);
+}
+
+void ControllerObject::resumeExport() {
+	if (stopped()) {
+		return;
+	}
+	_api.resumeExport();
+}
+
+rpl::producer<bool> ControllerObject::pauseChanges() const {
+	return _api.pauseChanges();
 }
 
 void ControllerObject::fillExportSteps() {
@@ -462,6 +589,18 @@ void ControllerObject::setDedupDb(const QString &path) {
 	_api.setDedupDb(path);
 }
 
+void ControllerObject::setSharedTakeoutId(uint64 id) {
+	_api.setSharedTakeoutId(id);
+}
+
+void ControllerObject::setTakeoutRefreshHook(Fn<void()> hook) {
+	_api.setTakeoutRefreshHook(std::move(hook));
+}
+
+void ControllerObject::takeoutRefreshDone(uint64 id) {
+	_api.takeoutRefreshDone(id);
+}
+
 void ControllerObject::exportNext() {
 	if (++_stepIndex >= _steps.size()) {
 		if (!_scanMode && ioCatchError(_writer->finish())) {
@@ -470,7 +609,7 @@ void ControllerObject::exportNext() {
 		if (ioCatchError(writeStatsFile())) {
 			return;
 		}
-		if (!_scanMode && ioCatchError(writeLinksFile())) {
+		if (ioCatchError(writeLinksFile())) {
 			return;
 		}
 		_api.finishExport([=] {
@@ -501,7 +640,39 @@ void ControllerObject::initialize() {
 	_api.startExport(_settings, &_stats, [=](ApiWrap::StartInfo info) {
 		initialized(info);
 	});
+	if (_resumeRecord) {
+		_api.setResumeCheckpoint(*_resumeRecord);
+	}
+	_api.setWriterStateGetter([=] {
+		return _writer
+			? _writer->dialogState()
+			: Output::DialogState();
+	});
+	if (_writer) {
+		_api.setPauseFlushHandler([=](Data::MessagesSlice prefix) {
+			if (prefix.list.empty()) {
+				flushPendingSlice();
+				return prefix;
+			}
+			if (batchDialogSlices()) {
+				for (auto &entry : prefix.peers) {
+					_pendingSlice.peers.emplace(
+						entry.first,
+						std::move(entry.second));
+				}
+				for (auto &message : prefix.list) {
+					_pendingSlice.list.push_back(std::move(message));
+				}
+				flushPendingSlice();
+			} else if (ioCatchError(_writer->writeDialogSlice(prefix))) {
+				return prefix;
+			}
+			return prefix;
+		});
+	}
 }
+
+
 
 void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
 	if (!_scanMode
@@ -684,20 +855,42 @@ void ControllerObject::exportNextDialog() {
 	const auto info = _dialogsInfo.item(index);
 	if (info) {
 		_api.requestMessages(*info, [=](const Data::DialogInfo &info) {
-			if (!_scanMode && ioCatchError(_writer->writeDialogStart(info))) {
-				return false;
+			_dialogOpen = true;
+			if (!_scanMode && _resumeRecord && _settings.onlySinglePeer()) {
+				auto state = Output::DialogState();
+				state.messagesCount = _resumeRecord->htmlIndex;
+				state.dateMessageId = _resumeRecord->dateIndex;
+				state.lastIds = _resumeRecord->repliedIndex;
+				state.lastMessage = _resumeRecord->lastMsg;
+				if (ioCatchError(
+					_writer->resumeDialogStart(info, state)
+				)) {
+					return false;
+				}
+				_messagesWritten = _resumeRecord->msgsDone;
+				_resumeRecord = std::nullopt;
+			} else {
+				if (!_scanMode
+					&& ioCatchError(_writer->writeDialogStart(info))) {
+					return false;
+				}
+				_messagesWritten = 0;
 			}
-			_messagesWritten = 0;
-			_messagesCount = ranges::accumulate(
+		// File-filtered exports count selected messages, not
+		// walked ones: the ApiWrap probes carry the exact total.
+		_selectedCounting = _api.hasSelectedTotal();
+		_messagesCount = _selectedCounting
+			? _api.selectedTotal()
+			: ranges::accumulate(
 				info.messagesCountPerSplit,
 				0);
-			setState(stateDialogs(DownloadProgress()));
-			if (_settings.singlePeerFrom || _settings.singlePeerTill) {
-				_api.requestRangeTotal([=](int count) {
-					_messagesCount = count;
-					setState(stateDialogs(DownloadProgress()));
-				});
-			}
+		setState(stateDialogs(selectedProgress()));
+		if (_settings.singlePeerFrom || _settings.singlePeerTill) {
+			_api.requestRangeTotal([=](int count) {
+				_messagesCount = count;
+				setState(stateDialogs(selectedProgress()));
+			});
+		}
 			return true;
 		}, [=](DownloadProgress progress) {
 			setState(stateDialogs(progress));
@@ -708,29 +901,29 @@ void ControllerObject::exportNextDialog() {
 				setState(stateDialogs(DownloadProgress()));
 				return true;
 			}
-			if (batchDialogSlices()) {
-				const auto size = result.list.size();
-				for (auto &entry : result.peers) {
-					_pendingSlice.peers.emplace(
-						entry.first,
-						std::move(entry.second));
-				}
-				for (auto &message : result.list) {
-					_pendingSlice.list.push_back(std::move(message));
-				}
-				_messagesWritten += size;
-				setState(stateDialogs(DownloadProgress()));
-				if (int(_pendingSlice.list.size()) < kDialogWriteBatch) {
-					return true;
-				}
-				return flushPendingSlice();
+		if (batchDialogSlices()) {
+			const auto size = result.list.size();
+			for (auto &entry : result.peers) {
+				_pendingSlice.peers.emplace(
+					entry.first,
+					std::move(entry.second));
 			}
-			if (ioCatchError(_writer->writeDialogSlice(result))) {
-				return false;
+			for (auto &message : result.list) {
+				_pendingSlice.list.push_back(std::move(message));
 			}
-			_messagesWritten += result.list.size();
-			setState(stateDialogs(DownloadProgress()));
-			return true;
+			_messagesWritten += size;
+			setState(stateDialogs(selectedProgress()));
+			if (int(_pendingSlice.list.size()) < kDialogWriteBatch) {
+				return true;
+			}
+			return flushPendingSlice();
+		}
+		if (ioCatchError(_writer->writeDialogSlice(result))) {
+			return false;
+		}
+		_messagesWritten += result.list.size();
+		setState(stateDialogs(selectedProgress()));
+		return true;
 		}, [=] {
 			if (!flushPendingSlice()) {
 				return;
@@ -738,6 +931,7 @@ void ControllerObject::exportNextDialog() {
 			if (!_scanMode && ioCatchError(_writer->writeDialogEnd())) {
 				return;
 			}
+			_dialogOpen = false;
 			exportNextDialog();
 		});
 		return;
@@ -852,6 +1046,14 @@ ProcessingState ControllerObject::stateDialogs(
 	});
 }
 
+ControllerObject::DownloadProgress ControllerObject::selectedProgress() const {
+	auto result = DownloadProgress();
+	if (_selectedCounting) {
+		result.itemIndex = _api.chatSelectedDone();
+	}
+	return result;
+}
+
 void ControllerObject::fillMessagesState(
 		ProcessingState &result,
 		const Data::DialogsInfo &info,
@@ -870,7 +1072,11 @@ void ControllerObject::fillMessagesState(
 		: (dialog->type == Data::DialogInfo::Type::VerifyCodes)
 		? ProcessingState::EntityType::VerifyCodes
 		: ProcessingState::EntityType::Chat;
-	result.itemIndex = _messagesWritten + progress.itemIndex;
+	// Selected mode reports absolute selected ordinals from the
+	// walk; otherwise the walked base plus the slice position.
+	result.itemIndex = _selectedCounting
+		? progress.itemIndex
+		: _messagesWritten + progress.itemIndex;
 	result.itemCount = std::max(_messagesCount, result.itemIndex);
 	result.bytesRandomId = progress.randomId;
 	if (!progress.path.isEmpty()) {
@@ -1230,9 +1436,63 @@ void Controller::startScan(
 	});
 }
 
+void Controller::startResumeExport(
+		const Settings &settings,
+		const Environment &environment,
+		const ::Data::ExResumeRecord &record) {
+	LOG(("Export Info: Resumed export to '%1'.").arg(settings.path));
+
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.startResumeExport(settings, environment, record);
+	});
+}
+
+void Controller::startUpdateExport(
+		const Settings &settings,
+		const Environment &environment,
+		const ::Data::ExResumeRecord &record) {
+	LOG(("Export Info: Update export to '%1'.").arg(settings.path));
+
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.startUpdateExport(settings, environment, record);
+	});
+}
+
+void Controller::setUpdateConfirmHandler(
+		Fn<void(int newCount, FnMut<void(bool)> proceed)> handler) {
+	_wrapped.with([=, handler = std::move(handler)](
+			Implementation &unwrapped) mutable {
+		unwrapped.setUpdateConfirmHandler(std::move(handler));
+	});
+}
+
 void Controller::skipFile(uint64 randomId) {
 	_wrapped.with([=](Implementation &unwrapped) {
 		unwrapped.skipFile(randomId);
+	});
+}
+
+void Controller::closeDialogFiles() {
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.closeDialogFiles();
+	});
+}
+
+void Controller::requestPause() {
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.requestPause();
+	});
+}
+
+void Controller::resumeExport() {
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.resumeExport();
+	});
+}
+
+rpl::producer<bool> Controller::pauseChanges() const {
+	return _wrapped.producer_on_main([=](const Implementation &unwrapped) {
+		return unwrapped.pauseChanges();
 	});
 }
 
@@ -1253,6 +1513,24 @@ void Controller::setSessionId(uint64 sessionId) {
 void Controller::setDedupDb(const QString &path) {
 	_wrapped.with([=](Implementation &unwrapped) {
 		unwrapped.setDedupDb(path);
+	});
+}
+
+void Controller::setSharedTakeoutId(uint64 id) {
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.setSharedTakeoutId(id);
+	});
+}
+
+void Controller::setTakeoutRefreshHook(Fn<void()> hook) {
+	_wrapped.with([=, hook = std::move(hook)](Implementation &unwrapped) mutable {
+		unwrapped.setTakeoutRefreshHook(std::move(hook));
+	});
+}
+
+void Controller::takeoutRefreshDone(uint64 id) {
+	_wrapped.with([=](Implementation &unwrapped) {
+		unwrapped.takeoutRefreshDone(id);
 	});
 }
 

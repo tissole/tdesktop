@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "export/export_settings.h"
 #include "export/data/export_data_types.h"
+#include "export/output/export_output_abstract.h"
+#include "data/data_dedup_db.h"
 #include "mtproto/mtproto_concurrent_sender.h"
 #include "data/data_peer_id.h"
 
@@ -115,6 +117,9 @@ public:
 		FnMut<void()> done);
 
 	void requestRangeTotal(Fn<void(int)> done);
+	[[nodiscard]] bool hasSelectedTotal() const;
+	[[nodiscard]] int selectedTotal() const;
+	[[nodiscard]] int chatSelectedDone() const;
 
 	void requestTopicMessages(
 		PeerId peerId,
@@ -128,9 +133,24 @@ public:
 	void finishExport(FnMut<void()> done);
 	void skipFile(uint64 randomId);
 	void cancelExportFast();
+	bool requestPause();
+	void resumeExport();
+	[[nodiscard]] bool exportPaused() const;
+	rpl::producer<bool> pauseChanges() const;
+	void setPauseFlushHandler(
+		Fn<Data::MessagesSlice(Data::MessagesSlice)> handler);
 	void setSessionId(uint64 sessionId);
 	void setDedupDb(const QString &path);
 	void setScanMode(bool scan);
+	void setResumeCheckpoint(const ::Data::ExResumeRecord &record);
+	void setWriterStateGetter(Fn<Output::DialogState()> getter);
+	void refreshTakeoutSession(FnMut<void(uint64)> done);
+	void setSharedTakeoutId(uint64 id);
+	void setTakeoutRefreshHook(Fn<void()> hook);
+	void takeoutRefreshDone(uint64 id);
+	void setUpdateCheck(int knownTotal, Fn<void(int newCount)> handler);
+	void proceedUpdate();
+	void abortUpdate();
 	[[nodiscard]] std::vector<QString> linkUrls() const;
 
 	~ApiWrap();
@@ -229,6 +249,9 @@ private:
 	void requestMessagesSlice();
 	void consumeChatPage(MTPmessages_Messages result);
 	void firePagePrefetch();
+	bool startExportFilterCounts();
+	void fireExportCountSlot(int filterIndex, int splitPosition);
+	void decideExportSearch();
 	void fireScanCountSlot(int filterIndex, int splitPosition);
 	void requestChatMessages(
 		int splitIndex,
@@ -321,12 +344,15 @@ private:
 	void beginSliceWalk(bool topic);
 	bool skipMedia() const;
 	void clearDedupRun();
+	void clearExTmpOnly();
+	void commitExportProgress(int32 committedMax, const QString &state);
 	::Data::DedupDb *dedupDb() const;
 	PeerId currentPeer() const;
 	Data::File *walkParkedFile(const Data::File *file) const;
 	std::unique_ptr<FileProcess> prepareFileProcess(
 		const Data::File &file,
-		const Data::FileOrigin &origin) const;
+		const Data::FileOrigin &origin);
+	bool filePartChunkFailed(int64 offset);
 	bool writePreloadedFile(
 		Data::File &file,
 		const Data::FileOrigin &origin);
@@ -337,6 +363,7 @@ private:
 		FnMut<void(QString)> done);
 	void loadFilePart();
 	void filePartDone(int64 offset, const MTPupload_File &result);
+	void parkForPause();
 	void filePartUnavailable();
 	[[nodiscard]] QString filePartMediaFolder() const;
 	void filePartRetryReference(
@@ -384,6 +411,21 @@ private:
 	Output::Stats *_stats = nullptr;
 	uint64 _sessionId = 0;
 	std::unique_ptr<::Data::DedupDb> _dedupDb;
+	bool _resumeArmed = false;
+	int32 _resumeLastId = 0;
+	int _resumeSplitIndex = 0;
+	int _resumeSelectedDone = 0;
+	int _resumeFilterIndex = 0;
+	bool _resumeFilterRedo = false;
+	int32 _walkIdFloor = 0;
+	uint64 _resumeDocId = 0;
+	QString _resumePausedFile;
+	QString _resumeFolder;
+	base::flat_map<QString, uint64> _preparedFileIds;
+	bool _updateMode = false;
+	int _updateKnownTotal = 0;
+	Fn<void(int newCount)> _updateCheckHandler;
+	Fn<Output::DialogState()> _writerStateGetter;
 
 	std::unique_ptr<Settings> _settings;
 	MTPInputUser _user = MTP_inputUserSelf();
@@ -425,6 +467,16 @@ private:
 
 	rpl::event_stream<MTP::Error> _errors;
 	rpl::event_stream<Output::Result> _ioErrors;
+	rpl::event_stream<bool> _pauseChanges;
+	bool _pauseRequested = false;
+	bool _paused = false;
+	bool _takeoutRefreshing = false;
+	crl::time _takeoutRefreshedAt = 0;
+	std::vector<FnMut<void(uint64)>> _takeoutWaiters;
+	Fn<void()> _takeoutRefreshHook;
+	bool _takeoutInvalidPending = false;
+	Fn<Data::MessagesSlice(Data::MessagesSlice)> _pauseFlushHandler;
+	int _pauseFlushedPrefix = 0;
 
 };
 

@@ -476,6 +476,7 @@ void DownloadManager::addLoading(
 					.msgId = item->id.bare,
 					.path = path,
 					.fileSize = size,
+					.docId = uint64(document->id),
 				});
 			}
 		}
@@ -2153,6 +2154,7 @@ void DownloadManager::startAllResumeDownloads(bool startPaused) {
 		jobIt->entries.push_back({
 			.msgId = MsgId(record.msgId),
 			.path = record.path,
+			.docId = record.docId,
 		});
 	}
 	const auto findSession = [](uint64 sessionId) -> Main::Session* {
@@ -2183,21 +2185,42 @@ void DownloadManager::startAllResumeDownloads(bool startPaused) {
 				if (!item) {
 					continue;
 				}
-				const auto media = item->media();
-				const auto document = media
-					? media->document()
-					: nullptr;
-				if (!document) {
-					continue;
+			const auto media = item->media();
+			const auto document = media
+				? media->document()
+				: nullptr;
+			if (!document) {
+				continue;
+			}
+			auto path = entry.path;
+			if (entry.docId && entry.docId != uint64(document->id)) {
+				// Message edited to a different file: never
+				// resume into the stale prefix, renumber fresh.
+				// Legacy rows (docId 0) keep the old trust.
+				const auto slash = path.lastIndexOf('/');
+				const auto dot = path.lastIndexOf('.');
+				const auto base = (dot > slash) ? path.mid(0, dot) : path;
+				const auto ext = (dot > slash) ? path.mid(dot) : QString();
+				for (int i = 0; QFileInfo::exists(path); ++i) {
+					path = base + u" (%1)"_q.arg(i + 2) + ext;
 				}
-				// Use a plain file loader so a paused-then-resumed
-				// download restarts reliably - the streaming-reader
-				// downloader can't be resumed after being paused before
-				// its first part request.
-				document->save(
-					item->fullId(),
-					entry.path,
-					LoadFromCloudOrLocal,
+				ensureDedupDb().insertDlResume({
+					.sessionId = uint64(job.sessionId),
+					.peerId = uint64(job.peerId.value),
+					.msgId = entry.msgId.bare,
+					.path = path,
+					.fileSize = document->size,
+					.docId = uint64(document->id),
+				});
+			}
+			// Use a plain file loader so a paused-then-resumed
+			// download restarts reliably - the streaming-reader
+			// downloader can't be resumed after being paused before
+			// its first part request.
+			document->save(
+				item->fullId(),
+				path,
+				LoadFromCloudOrLocal,
 					false,
 					true);
 				if (document->loading()

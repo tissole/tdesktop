@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/scroll_area.h"
 #include "lang/lang_keys.h"
 #include "styles/style_export.h"
+#include "styles/style_layers.h"
 #include "styles/style_widgets.h"
 
 namespace Export {
@@ -285,7 +286,94 @@ ProgressWidget::ProgressWidget(
 		this,
 		tr::lng_export_stop(),
 		st::exportCancelButton);
-	setupBottomButton(_cancel.get());
+	_pauseToggle = base::make_unique_q<Ui::RoundButton>(
+		this,
+		tr::lng_export_pause(),
+		st::exportCancelButton);
+	_pauseToggle->hide();
+	setupBottomButtons();
+}
+
+rpl::producer<> ProgressWidget::pauseToggleClicks() const {
+	return _pauseToggle
+		? (_pauseToggle->clicks() | rpl::to_empty)
+		: (rpl::never<>() | rpl::type_erased);
+}
+
+void ProgressWidget::setPaused(bool paused) {
+	if (_pauseToggle) {
+		_pauseToggle->setText(paused
+			? tr::lng_export_resume()
+			: tr::lng_export_pause());
+	}
+	if (_about) {
+		_about->setText(paused
+			? tr::lng_export_paused_safe(tr::now)
+			: tr::lng_export_progress(tr::now));
+	}
+	relayoutBottomButtons();
+}
+
+void ProgressWidget::setPauseEnabled(bool enabled) {
+	if (!_pauseToggle) {
+		return;
+	}
+	const auto wasVisible = _pauseToggle->isVisible();
+	_pauseToggle->setVisible(enabled);
+	if (enabled || wasVisible) {
+		relayoutBottomButtons();
+	}
+}
+
+void ProgressWidget::relayoutBottomButtons() {
+	const auto size = this->size();
+	const auto bottom = size.height()
+		- st::exportCancelBottom
+		- st::exportCancelButton.height;
+	const auto gap = st::defaultBox.buttonPadding.left();
+	if (_pauseToggle && _pauseToggle->isVisible()) {
+		const auto pauseW = _pauseToggle->width();
+		const auto cancelW = _cancel ? _cancel->width() : 0;
+		auto left = (size.width() - (pauseW + gap + cancelW)) / 2;
+		_pauseToggle->move(left, bottom);
+		left += pauseW + gap;
+		if (_cancel) {
+			_cancel->move(left, bottom);
+		}
+	} else if (_cancel) {
+		_cancel->move(
+			(size.width() - _cancel->width()) / 2,
+			bottom);
+	}
+	if (_done) {
+		_done->move(
+			(size.width() - _done->width()) / 2,
+			bottom);
+	}
+}
+
+void ProgressWidget::resizeEvent(QResizeEvent *e) {
+	RpWidget::resizeEvent(e);
+	relayoutBottomButtons();
+}
+
+void ProgressWidget::setupBottomButtons() {
+	sizeValue(
+	) | rpl::on_next([=](QSize) {
+		relayoutBottomButtons();
+	}, lifetime());
+	if (_pauseToggle) {
+		_pauseToggle->widthValue(
+		) | rpl::on_next([=](int) {
+			relayoutBottomButtons();
+		}, lifetime());
+	}
+	if (_cancel) {
+		_cancel->widthValue(
+		) | rpl::on_next([=](int) {
+			relayoutBottomButtons();
+		}, lifetime());
+	}
 }
 
 rpl::producer<uint64> ProgressWidget::skipFileClicks() const {
@@ -354,6 +442,7 @@ void ProgressWidget::updateState(Content &&content) {
 		_rows[index]->updateData(Content::Row());
 	}
 	_body->resizeToWidth(_rowsScroll->viewport()->width());
+	relayoutBottomButtons();
 }
 
 void ProgressWidget::updateScrollGeometry() {
@@ -380,6 +469,9 @@ int ProgressWidget::scrollOverflow() const {
 
 void ProgressWidget::showDone() {
 	_cancel = nullptr;
+	if (_pauseToggle) {
+		_pauseToggle->hide();
+	}
 	_skipFile->hide(anim::type::instant);
 	if (const auto wrap = _skipFile->parentWidget()) {
 		wrap->hide();

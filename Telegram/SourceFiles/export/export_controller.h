@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/variant.h"
 #include "mtproto/mtproto_response.h"
 #include "export/output/export_output_stats.h"
+#include "data/data_dedup_db.h"
 
 #include <QtCore/QPointer>
 #include <crl/crl_object_on_queue.h>
@@ -151,6 +152,17 @@ public:
 		const Settings &settings,
 		const Environment &environment,
 		const QString &singlePeerFolder = QString());
+	void startResumeExport(
+		const Settings &settings,
+		const Environment &environment,
+		const ::Data::ExResumeRecord &record);
+	void startUpdateExport(
+		const Settings &settings,
+		const Environment &environment,
+		const ::Data::ExResumeRecord &record);
+	void setUpdateConfirmHandler(
+		Fn<void(int newCount, FnMut<void(bool)> proceed)> handler);
+	void closeDialogFiles();
 	void startScan(
 		const Settings &settings,
 		const Environment &environment,
@@ -159,6 +171,12 @@ public:
 	void cancelExportFast();
 	void setSessionId(uint64 sessionId);
 	void setDedupDb(const QString &path);
+	void setSharedTakeoutId(uint64 id);
+	void setTakeoutRefreshHook(Fn<void()> hook);
+	void takeoutRefreshDone(uint64 id);
+	void requestPause();
+	void resumeExport();
+	rpl::producer<bool> pauseChanges() const;
 
 	rpl::lifetime &lifetime();
 

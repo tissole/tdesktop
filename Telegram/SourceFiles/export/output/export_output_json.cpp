@@ -2949,6 +2949,28 @@ Result JsonWriter::writeDialogsStart(const Data::DialogsInfo &data) {
 	return Result::Success();
 }
 
+DialogState JsonWriter::dialogState() const {
+	auto result = DialogState();
+	result.messagesCount = _messagesWritten;
+	return result;
+}
+
+Result JsonWriter::resumeDialogStart(
+		const Data::DialogInfo &,
+		const DialogState &state) {
+	Expects(_output == nullptr);
+
+	if (!_settings.onlySinglePeer()) {
+		return Result(Result::Type::Error, QString());
+	}
+	_output = fileWithRelativePath(mainFileRelativePath());
+	_context.nesting.push_back(Context::kObject);
+	_context.nesting.push_back(Context::kArray);
+	_messagesWritten = state.messagesCount;
+	_currentNestingHadItem = (state.messagesCount > 0);
+	return Result::Success();
+}
+
 Result JsonWriter::writeDialogStart(const Data::DialogInfo &data) {
 	Expects(_output != nullptr);
 
@@ -3023,6 +3045,7 @@ Result JsonWriter::writeDialogSlice(const Data::MessagesSlice &data) {
 		if (Data::SkipMessageByDate(message, _settings)) {
 			continue;
 		}
+		++_messagesWritten;
 		block.append(prepareArrayItemStart() + SerializeMessage(
 			_context,
 			message,

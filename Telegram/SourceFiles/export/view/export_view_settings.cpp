@@ -786,7 +786,8 @@ void SettingsWidget::addChatOption(
 }
 
 void SettingsWidget::addMediaOptions(
-		not_null<Ui::VerticalLayout*> container) {
+	not_null<Ui::VerticalLayout*> container) {
+	_mediaBoxes.clear();
 	addMediaOption(
 		container,
 		tr::lng_export_option_photos(tr::now),
@@ -850,6 +851,7 @@ not_null<Ui::Checkbox*> SettingsWidget::addMediaOption(
 			((readData().media.types & type) == type),
 			st::defaultBoxCheckbox),
 		st::exportSettingPadding);
+	_mediaBoxes.emplace_back(checkbox, type);
 	checkbox->checkedChanges(
 	) | rpl::on_next([=](bool checked) {
 		changeData([&](Settings &data) {
@@ -867,8 +869,21 @@ not_null<Ui::Checkbox*> SettingsWidget::addMediaOption(
 				data.media.types &= ~type;
 			}
 		});
+		syncMediaBoxes();
 	}, checkbox->lifetime());
 	return checkbox;
+}
+
+void SettingsWidget::syncMediaBoxes() {
+	const auto types = readData().media.types;
+	for (const auto &[box, type] : _mediaBoxes) {
+		const auto should = ((types & type) == type);
+		if (box->checked() != should) {
+			box->setChecked(
+				should,
+				Ui::Checkbox::NotifyAboutChange::DontNotify);
+		}
+	}
 }
 
 void SettingsWidget::addExtensionFilter(
@@ -1022,9 +1037,38 @@ void SettingsWidget::addSizeSlider(
 	}, label->lifetime());
 }
 
+void SettingsWidget::setResumeUpdateEnabled(bool resume, bool update) {
+	if (_resumeEnabled == resume && _updateEnabled == update) {
+		return;
+	}
+	_resumeEnabled = resume;
+	_updateEnabled = update;
+	if (const auto container = _buttonsContainer.data()) {
+		refreshButtons(container, _canStart);
+	}
+}
+
+void SettingsWidget::setStartEnabled(bool enabled) {
+	if (_startEnabled == enabled) {
+		return;
+	}
+	_startEnabled = enabled;
+	if (const auto container = _buttonsContainer.data()) {
+		refreshButtons(container, _canStart);
+	}
+}
+
+void SettingsWidget::setOptionsEnabled(bool enabled) {
+	if (_scroll) {
+		_scroll->setEnabled(enabled);
+	}
+}
+
 void SettingsWidget::refreshButtons(
 		not_null<Ui::RpWidget*> container,
 		bool canStart) {
+	_canStart = canStart;
+	_buttonsContainer = container.get();
 	container->hideChildren();
 	const auto children = container->children();
 	for (const auto child : children) {
@@ -1032,67 +1076,72 @@ void SettingsWidget::refreshButtons(
 			child->deleteLater();
 		}
 	}
-	const auto start = canStart
-		? Ui::CreateChild<Ui::RoundButton>(
+	const auto setGrayed = [](Ui::RoundButton *button, bool enabled) {
+		button->setEnabled(enabled);
+		if (enabled) {
+			button->setBrushOverride(std::nullopt);
+			button->setTextFgOverride(std::nullopt);
+		} else {
+			auto bg = button->st().textBg->c;
+			bg.setAlpha(70);
+			auto fg = button->st().textFg->c;
+			fg.setAlpha(110);
+			button->setBrushOverride(QBrush(bg));
+			button->setTextFgOverride(fg);
+		}
+		button->update();
+	};
+	const auto make = [&](rpl::producer<QString> text) {
+		const auto button = Ui::CreateChild<Ui::RoundButton>(
 			container.get(),
-			tr::lng_export_start(),
-			st::defaultBoxButton)
-		: nullptr;
-	if (start) {
-		start->show();
-		_startClicks = start->clicks() | rpl::to_empty;
+			std::move(text),
+			st::defaultBoxButton);
+		button->show();
+		return button;
+	};
+	const auto start = make(tr::lng_export_start());
+	setGrayed(start, canStart && _startEnabled);
+	_startClicks = start->clicks() | rpl::to_empty;
 
-		container->sizeValue(
-		) | rpl::on_next([=](QSize size) {
-			const auto right = st::defaultBox.buttonPadding.right();
-			const auto top = st::defaultBox.buttonPadding.top();
-			start->moveToRight(right, top);
-		}, start->lifetime());
-	}
+	const auto scan = make(tr::lng_export_scan());
+	setGrayed(scan, canStart && _startEnabled);
+	_scanClicks = scan->clicks() | rpl::to_empty;
 
-	const auto scan = canStart
-		? Ui::CreateChild<Ui::RoundButton>(
-			container.get(),
-			tr::lng_export_scan(),
-			st::defaultBoxButton)
-		: nullptr;
-	if (scan) {
-		scan->show();
-		_scanClicks = scan->clicks() | rpl::to_empty;
-	}
+	const auto resume = make(tr::lng_export_resume());
+	setGrayed(resume, _resumeEnabled);
+	_resumeClicks = resume->clicks() | rpl::to_empty;
 
-	const auto cancel = Ui::CreateChild<Ui::RoundButton>(
-		container.get(),
-		tr::lng_cancel(),
-		st::defaultBoxButton);
-	cancel->show();
+	const auto update = make(tr::lng_export_update());
+	setGrayed(update, _updateEnabled);
+	_updateClicks = update->clicks() | rpl::to_empty;
+
+	const auto cancel = make(tr::lng_cancel());
 	_cancelClicks = cancel->clicks() | rpl::to_empty;
 
-	if (scan && start) {
-		rpl::combine(
-			container->sizeValue(),
-			start->widthValue(),
-			scan->widthValue()
-		) | rpl::on_next([=](QSize size, int startWidth, int scanWidth) {
-			const auto right = st::defaultBox.buttonPadding.right();
-			const auto top = st::defaultBox.buttonPadding.top();
-			const auto gap = st::defaultBox.buttonPadding.left();
-			scan->moveToRight(right + startWidth + gap, top);
-			cancel->moveToRight(
-				right + startWidth + gap + scanWidth + gap,
-				top);
-		}, cancel->lifetime());
-	} else {
-		rpl::combine(
-			container->sizeValue(),
-			start ? start->widthValue() : rpl::single(0)
-		) | rpl::on_next([=](QSize size, int width) {
-			const auto right = st::defaultBox.buttonPadding.right()
-				+ (width ? width + st::defaultBox.buttonPadding.left() : 0);
-			const auto top = st::defaultBox.buttonPadding.top();
-			cancel->moveToRight(right, top);
-		}, cancel->lifetime());
-	}
+	container->sizeValue(
+	) | rpl::on_next([=](QSize size) {
+		const auto right = st::defaultBox.buttonPadding.right();
+		const auto top = st::defaultBox.buttonPadding.top();
+		const auto gap = st::defaultBox.buttonPadding.left();
+		const auto fair = std::max(
+			(int(size.width()) - right - 4 * gap) / 5,
+			64);
+		start->setFullWidth(fair);
+		scan->setFullWidth(fair);
+		resume->setFullWidth(fair);
+		update->setFullWidth(fair);
+		cancel->setFullWidth(fair);
+		auto offset = right;
+		start->moveToRight(offset, top);
+		offset += fair + gap;
+		scan->moveToRight(offset, top);
+		offset += fair + gap;
+		resume->moveToRight(offset, top);
+		offset += fair + gap;
+		update->moveToRight(offset, top);
+		offset += fair + gap;
+		cancel->moveToRight(offset, top);
+	}, cancel->lifetime());
 }
 
 void SettingsWidget::chooseFolder() {
@@ -1149,6 +1198,20 @@ rpl::producer<> SettingsWidget::scanClicks() const {
 
 rpl::producer<> SettingsWidget::cancelClicks() const {
 	return _cancelClicks.value(
+	) | rpl::map([](Wrap &&wrap) {
+		return std::move(wrap.value);
+	}) | rpl::flatten_latest();
+}
+
+rpl::producer<> SettingsWidget::resumeClicks() const {
+	return _resumeClicks.value(
+	) | rpl::map([](Wrap &&wrap) {
+		return std::move(wrap.value);
+	}) | rpl::flatten_latest();
+}
+
+rpl::producer<> SettingsWidget::updateClicks() const {
+	return _updateClicks.value(
 	) | rpl::map([](Wrap &&wrap) {
 		return std::move(wrap.value);
 	}) | rpl::flatten_latest();

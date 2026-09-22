@@ -26,6 +26,24 @@ int64 File::size() const {
 	return _offset;
 }
 
+void File::close() {
+	_file.reset();
+}
+
+void File::resumeFrom(int64 existing) {
+	if (existing < 0) {
+		return;
+	}
+	_offset = existing;
+	_inStats = true;
+}
+
+void File::repath(const QString &path) {
+	close();
+	_path = path;
+	_offset = 0;
+}
+
 bool File::empty() const {
 	return !_offset;
 }

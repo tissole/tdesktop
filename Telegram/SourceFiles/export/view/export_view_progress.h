@@ -34,12 +34,18 @@ public:
 	rpl::producer<uint64> skipFileClicks() const;
 	rpl::producer<> cancelClicks() const;
 	rpl::producer<> doneClicks() const;
+	rpl::producer<> pauseToggleClicks() const;
+	void setPaused(bool paused);
+	void setPauseEnabled(bool enabled);
 	[[nodiscard]] int scrollOverflow() const;
 
 	~ProgressWidget();
 
 private:
 	void setupBottomButton(not_null<Ui::RoundButton*> button);
+	void setupBottomButtons();
+	void relayoutBottomButtons();
+	void resizeEvent(QResizeEvent *e) override;
 	void updateScrollGeometry();
 	void updateState(Content &&content);
 	void showDone();
@@ -55,6 +61,7 @@ private:
 	QPointer<Ui::FlatLabel> _about;
 	base::unique_qptr<Ui::RoundButton> _cancel;
 	base::unique_qptr<Ui::RoundButton> _done;
+	base::unique_qptr<Ui::RoundButton> _pauseToggle;
 	rpl::event_stream<> _doneClicks;
 
 	uint64 _fileRandomId = 0;

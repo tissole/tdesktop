@@ -88,6 +88,22 @@ bool Manager::inProgress(not_null<Main::Session*> session) const {
 	return _panel && (&_panel->session() == session);
 }
 
+bool Manager::activeUnpausedExport() const {
+	return _panel && _panel->isExportRunning();
+}
+
+void Manager::pauseActiveExport() {
+	if (_panel) {
+		_panel->pauseRunningExport();
+	}
+}
+
+void Manager::cancelActiveExport() {
+	if (_panel) {
+		_panel->cancelRunningExport();
+	}
+}
+
 void Manager::stopWithConfirmation(Fn<void()> callback) {
 	if (!_panel) {
 		callback();

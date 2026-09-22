@@ -40,7 +40,8 @@ void FetchHash(
 	Fn<bool()> alive,
 	Fn<void(QByteArray)> done,
 	int maxAttempts = 5,
-	const QString &tag = QString());
+	const QString &tag = QString(),
+	Fn<void(FnMut<void(uint64 freshId)>)> refreshTakeout = nullptr);
 
 // Fetches a whole small file (or photo) into memory over takeout.
 // Sequential precise 1MB chunks; calls done exactly once, empty on failure.
@@ -53,7 +54,8 @@ void FetchFullFile(
 	Fn<bool()> alive,
 	Fn<void(QByteArray)> done,
 	int maxAttempts = 5,
-	const QString &tag = QString());
+	const QString &tag = QString(),
+	Fn<void(FnMut<void(uint64 freshId)>)> refreshTakeout = nullptr);
 // Same decision tree as download dedup: document id first, then the
 // 2-chunk remote hash for big files. Small files and photos are decided
 // after download (decided == false). With global set the downloads table

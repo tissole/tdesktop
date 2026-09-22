@@ -1186,13 +1186,56 @@ Main::Session *Application::maybePrimarySession() const {
 }
 
 bool Application::exportPreventsQuit() {
-	if (_exportManager->inProgress()) {
-		_exportManager->stopWithConfirmation([] {
-			Quit();
-		});
-		return true;
+	if (!_exportManager->activeUnpausedExport()) {
+		return false;
 	}
-	return false;
+	auto window = activePrimaryWindow();
+	if (!window) {
+		return false;
+	}
+	auto box = Box([=](not_null<Ui::GenericBox*> box) {
+		box->setCloseByOutsideClick(false);
+		box->setCloseByEscape(false);
+		box->addRow(object_ptr<Ui::FlatLabel>(
+			box.get(),
+			tr::lng_export_quit_unfinished(tr::now),
+			st::boxLabel));
+		// Added in reverse: the box lays buttons right to
+		// left, so this renders Continue, Pause, Cancel.
+		box->addButton(tr::lng_cancel(), [=] {
+			box->closeBox();
+			window->show(Ui::MakeConfirmBox({
+				.text = tr::lng_export_cancel_delete(tr::now),
+				.confirmed = [=](Fn<void()> close) {
+					close();
+					crl::on_main([=] {
+						_exportManager->cancelActiveExport();
+						Quit();
+					});
+				},
+				.confirmText = tr::lng_box_yes(tr::now),
+				.cancelText = tr::lng_box_no(tr::now),
+				.confirmStyle = &st::attentionBoxButton,
+			}));
+		}, st::attentionBoxButton);
+		box->addButton(tr::lng_export_pause(), [=] {
+			box->closeBox();
+			crl::on_main([=] {
+				_exportManager->pauseActiveExport();
+				Quit();
+			});
+		});
+		box->addButton(tr::lng_continue(), [=] {
+			box->closeBox();
+		});
+	});
+	window->show(std::move(box));
+	// Deferred: a synchronous activate can run before the box
+	// window is mapped (first click then only focuses it).
+	crl::on_main(window, [=] {
+		window->activate();
+	});
+	return true;
 }
 
 void Application::uploaderPauseAll() {

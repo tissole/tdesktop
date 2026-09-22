@@ -223,7 +223,6 @@ ApiWrap::ApiWrap(not_null<Main::Session*> session)
 , _fileLoader(std::make_unique<TaskQueue>(kFileLoaderQueueStopTimeout))
 , _updateNotifyTimer([=] { sendNotifySettingsUpdates(); })
 , _statsSessionKillTimer([=] { checkStatsSessions(); })
-, _takeoutInitRetryTimer([=] { initTakeoutSession(); })
 , _authorizations(std::make_unique<Api::Authorizations>(this))
 , _attachedStickers(std::make_unique<Api::AttachedStickers>(this))
 , _blockedPeers(std::make_unique<Api::BlockedPeers>(this))
@@ -252,7 +251,8 @@ ApiWrap::ApiWrap(not_null<Main::Session*> session)
 , _premium(std::make_unique<Api::Premium>(this))
 , _usernames(std::make_unique<Api::Usernames>(this))
 , _websites(std::make_unique<Api::Websites>(this))
-, _peerColors(std::make_unique<Api::PeerColors>(this)) {
+, _peerColors(std::make_unique<Api::PeerColors>(this))
+, _takeoutInitRetryTimer([=] { initTakeoutSession(); }) {
 	crl::on_main(session, [=] {
 		// You can't use _session->lifetime() in the constructor,
 		// only queued, because it is not constructed yet.
@@ -3543,11 +3543,10 @@ void ApiWrap::requestMessageAfterDate(
 	const auto minId = 0;
 	const auto historyHash = uint64(0);
 
+	Fn<void(MsgId)> sharedCallback = std::forward<Callback>(callback);
 	auto send = [&](auto &&serialized) {
-		request(std::move(serialized)).done([
-			=,
-			callback = std::forward<Callback>(callback)
-		](const MTPmessages_Messages &result) {
+		request(std::move(serialized)).done([=](
+				const MTPmessages_Messages &result) mutable {
 			const auto handleMessages = [&](auto &messages) {
 				_session->data().processUsers(messages.vusers());
 				_session->data().processChats(messages.vchats());
@@ -3580,12 +3579,28 @@ void ApiWrap::requestMessageAfterDate(
 					NewMessageType::Existing);
 				for (const auto &message : *list) {
 					if (DateFromMessage(message) >= offsetDate) {
-						callback(IdFromMessage(message));
+						sharedCallback(IdFromMessage(message));
 						return;
 					}
 				}
 			}
-			callback(ShowAtUnreadMsgId);
+			sharedCallback(ShowAtUnreadMsgId);
+		}).fail([=](const MTP::Error &error) mutable {
+			const auto now = crl::now();
+			if (error.type() != u"TAKEOUT_INVALID"_q
+				|| !peer->isRestricted()
+				|| now - _takeoutLastRefresh < crl::time(30000)) {
+				return false;
+			}
+			_takeoutLastRefresh = now;
+			setTakeoutId(std::nullopt);
+			ensureJumpToDateTakeout(
+				peer,
+				topicRootId,
+				monoforumPeerId,
+				date,
+				std::move(sharedCallback));
+			return true;
 		}).send();
 	};
 	const auto sendTakeoutWrapped = [&](auto &&serialized) {
@@ -3892,13 +3907,36 @@ std::optional<uint64> ApiWrap::takeoutId() const {
 
 void ApiWrap::ensureTakeout(
 		not_null<PeerData*> /*peer*/,
-		Fn<void(bool)> done) {
+		Fn<void(bool)> done,
+		int64 fileMaxSize) {
 	if (_takeoutId) {
 		done(true);
 		return;
 	}
+	// The docs require file_max_size whenever files is set: an
+	// export passes its exact size-limit slider, views don't care
+	// (0) and keep whatever is pending.
+	if (fileMaxSize > 0) {
+		_takeoutFileMaxSize = fileMaxSize;
+	}
 	_takeoutRequests.push_back({ std::move(done) });
 	processTakeoutRequests();
+}
+
+void ApiWrap::addTakeoutViewer() {
+	++_takeoutViewers;
+}
+
+void ApiWrap::removeTakeoutViewer() {
+	_takeoutViewers = std::max(0, _takeoutViewers - 1);
+}
+
+void ApiWrap::setTakeoutBorrowed(bool borrowed) {
+	_takeoutBorrowed = borrowed;
+}
+
+bool ApiWrap::takeoutMayFinish() const {
+	return !_takeoutBorrowed && (_takeoutViewers == 0);
 }
 
 void ApiWrap::finishTakeout(Fn<void()> done) {
@@ -3956,14 +3994,18 @@ void ApiWrap::initTakeoutSession() {
 		return;
 	}
 	_takeoutInitializing = true;
+	constexpr auto kDefaultTakeoutFileMaxSize = 4000LL * 1024 * 1024;
 	request(MTPaccount_InitTakeoutSession(
 		MTPaccount_initTakeoutSession(
-			MTP_flags(MTPaccount_initTakeoutSession::Flag::f_message_users
+			MTP_flags(MTPaccount_initTakeoutSession::Flag::f_contacts
+				| MTPaccount_initTakeoutSession::Flag::f_message_users
 				| MTPaccount_initTakeoutSession::Flag::f_message_chats
 				| MTPaccount_initTakeoutSession::Flag::f_message_megagroups
 				| MTPaccount_initTakeoutSession::Flag::f_message_channels
 				| MTPaccount_initTakeoutSession::Flag::f_files),
-			{}))
+			MTP_long(_takeoutFileMaxSize > 0
+				? _takeoutFileMaxSize
+				: kDefaultTakeoutFileMaxSize)))
 	).done([=](const MTPaccount_Takeout &result) {
 		_takeoutInitializing = false;
 		_takeoutInitRetries = 0;

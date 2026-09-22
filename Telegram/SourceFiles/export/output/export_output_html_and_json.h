@@ -48,6 +48,10 @@ public:
 
 	Result writeDialogsStart(const Data::DialogsInfo &data) override;
 	Result writeDialogStart(const Data::DialogInfo &data) override;
+	Result resumeDialogStart(
+		const Data::DialogInfo &data,
+		const DialogState &state) override;
+	DialogState dialogState() const override;
 	Result writeDialogSlice(const Data::MessagesSlice &data) override;
 	Result writeDialogEnd() override;
 	Result writeDialogsEnd() override;

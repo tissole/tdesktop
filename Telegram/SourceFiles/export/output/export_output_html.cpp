@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <cmath>
 
+#include <QtCore/QDataStream>
 #include <QtCore/QDateTime>
 #include <QtCore/QFile>
 #include <QtCore/QRect>
@@ -6360,6 +6361,96 @@ Result HtmlWriter::writeDialogsStart(const Data::DialogsInfo &data) {
 		data.chats.size() + data.left.size(),
 		"lists/chats.html");
 	return writeSections();
+}
+
+DialogState HtmlWriter::dialogState() const {
+	auto result = DialogState();
+	result.messagesCount = _messagesCount;
+	result.dateMessageId = _dateMessageId;
+	if (!_lastMessageIdsPerFile.empty()) {
+		auto stream = QDataStream(
+			&result.lastIds,
+			QIODevice::WriteOnly);
+		stream.setVersion(QDataStream::Qt_6_0);
+		stream << int(_lastMessageIdsPerFile.size());
+		for (const auto id : _lastMessageIdsPerFile) {
+			stream << id;
+		}
+	}
+	if (_lastMessageInfo) {
+		auto stream = QDataStream(
+			&result.lastMessage,
+			QIODevice::WriteOnly);
+		stream.setVersion(QDataStream::Qt_6_0);
+		stream << _lastMessageInfo->id
+			<< int(_lastMessageInfo->type)
+			<< quint64(_lastMessageInfo->fromId.value)
+			<< quint64(_lastMessageInfo->viaBotId.bare)
+			<< int(_lastMessageInfo->date)
+			<< quint64(_lastMessageInfo->forwardedFromId.value)
+			<< _lastMessageInfo->forwardedFromName
+			<< _lastMessageInfo->forwarded
+			<< _lastMessageInfo->showForwardedAsOriginal
+			<< int(_lastMessageInfo->forwardedDate);
+	}
+	return result;
+}
+
+Result HtmlWriter::resumeDialogStart(
+		const Data::DialogInfo &data,
+		const DialogState &state) {
+	Expects(_chat == nullptr);
+
+	_messagesCount = state.messagesCount;
+	_dateMessageId = state.dateMessageId;
+	if (!state.lastIds.isEmpty()) {
+		auto stream = QDataStream(state.lastIds);
+		stream.setVersion(QDataStream::Qt_6_0);
+		auto size = int(0);
+		stream >> size;
+		_lastMessageIdsPerFile.clear();
+		for (auto i = 0; i != size && !stream.atEnd(); ++i) {
+			auto id = int(0);
+			stream >> id;
+			_lastMessageIdsPerFile.push_back(id);
+		}
+	}
+	_chatFileEmpty = (state.messagesCount <= 0);
+	_chat = fileWithRelativePath(data.relativePath
+		+ messagesFile(state.messagesCount / kMessagesInFile));
+	_lastMessageInfo = nullptr;
+	if (!state.lastMessage.isEmpty()) {
+		auto stream = QDataStream(state.lastMessage);
+		stream.setVersion(QDataStream::Qt_6_0);
+		auto info = std::make_unique<MessageInfo>();
+		auto type = int(0);
+		auto fromId = quint64(0);
+		auto viaBotId = quint64(0);
+		auto date = int(0);
+		auto forwardedFromId = quint64(0);
+		auto forwardedDate = int(0);
+		stream >> info->id
+			>> type
+			>> fromId
+			>> viaBotId
+			>> date
+			>> forwardedFromId
+			>> info->forwardedFromName
+			>> info->forwarded
+			>> info->showForwardedAsOriginal
+			>> forwardedDate;
+		if (stream.status() == QDataStream::Ok) {
+			info->type = MessageInfo::Type(type);
+			info->fromId = PeerId(fromId);
+			info->viaBotId = UserId(viaBotId);
+			info->date = TimeId(date);
+			info->forwardedFromId = PeerId(forwardedFromId);
+			info->forwardedDate = TimeId(forwardedDate);
+			_lastMessageInfo = std::move(info);
+		}
+	}
+	_dialog = data;
+	return Result::Success();
 }
 
 Result HtmlWriter::writeDialogStart(const Data::DialogInfo &data) {

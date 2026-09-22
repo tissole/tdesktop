@@ -228,6 +228,7 @@ private:
 	struct ResumeEntry {
 		MsgId msgId = 0;
 		QString path;
+		uint64 docId = 0;
 	};
 	struct DeleteFilesDescriptor;
 	struct SessionData {

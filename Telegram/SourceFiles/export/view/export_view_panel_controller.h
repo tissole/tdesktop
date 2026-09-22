@@ -9,8 +9,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "export/export_controller.h"
 #include "export/view/export_view_content.h"
+#include "data/data_dedup_db.h"
 #include "base/unique_qptr.h"
 #include "base/timer.h"
+#include <optional>
 
 namespace Ui {
 class SeparatePanel;
@@ -46,6 +48,9 @@ public:
 
 	void activatePanel();
 	void stopWithConfirmation(Fn<void()> callback = nullptr);
+	[[nodiscard]] bool isExportRunning() const;
+	void pauseRunningExport();
+	void cancelRunningExport();
 
 	[[nodiscard]] rpl::producer<> stopRequests() const;
 
@@ -72,6 +77,17 @@ private:
 	void showCriticalError(const QString &text);
 
 	void saveSettings() const;
+	void ensureSharedTakeout(
+		FnMut<void(uint64)> done,
+		int64 fileMaxSize);
+	void finishExportTakeout();
+	void refreshResumeRow();
+	void applyRowSettings(
+		Settings &settings,
+		const ::Data::ExResumeRecord &row);
+	[[nodiscard]] const std::optional<::Data::ExResumeRecord> &resumeRow() const {
+		return _resumeRow;
+	}
 
 	const not_null<Main::Session*> _session;
 	const not_null<Controller*> _process;
@@ -82,6 +98,12 @@ private:
 	QPointer<ProgressWidget> _progress;
 
 	State _state;
+	std::optional<::Data::ExResumeRecord> _resumeRow;
+	int _startGen = 0;
+	bool _paused = false;
+	bool _pausePending = false;
+	bool _running = false;
+	bool _scanning = false;
 	base::weak_qptr<Ui::BoxContent> _confirmStopBox;
 	rpl::event_stream<rpl::producer<>> _panelCloseEvents;
 	bool _stopRequested = false;

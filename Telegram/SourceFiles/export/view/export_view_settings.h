@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/rp_widget.h"
 #include "base/object_ptr.h"
 
+#include <vector>
+
 namespace Ui {
 class VerticalLayout;
 class Checkbox;
@@ -43,6 +45,11 @@ public:
 	rpl::producer<> startClicks() const;
 	rpl::producer<> scanClicks() const;
 	rpl::producer<> cancelClicks() const;
+	rpl::producer<> resumeClicks() const;
+	rpl::producer<> updateClicks() const;
+	void setResumeUpdateEnabled(bool resume, bool update);
+	void setStartEnabled(bool enabled);
+	void setOptionsEnabled(bool enabled);
 
 	void setShowBoxCallback(Fn<void(object_ptr<Ui::BoxContent>)> callback) {
 		_showBoxCallback = std::move(callback);
@@ -85,6 +92,7 @@ private:
 		not_null<Ui::VerticalLayout*> container,
 		const QString &text,
 		MediaType type);
+	void syncMediaBoxes();
 	void addExtensionFilter(not_null<Ui::VerticalLayout*> container);
 	void addSizeSlider(
 		not_null<Ui::VerticalLayout*> container,
@@ -119,10 +127,14 @@ private:
 	// Use through readData / changeData wrappers.
 	Settings _internal_data;
 
+	// Raw boxes die with the widget; synced after exclusivity edits.
+	std::vector<std::pair<Ui::Checkbox*, MediaType>> _mediaBoxes;
+
 	int _sizeLimitExtraHeight = 0;
 
 	Ui::RpWidget *_content = nullptr;
 	Ui::ScrollArea *_scroll = nullptr;
+	QPointer<Ui::RpWidget> _buttonsContainer;
 	int _buttonsHeight = 0;
 
 	struct Wrap {
@@ -136,6 +148,12 @@ private:
 	rpl::variable<Wrap> _startClicks;
 	rpl::variable<Wrap> _scanClicks;
 	rpl::variable<Wrap> _cancelClicks;
+	rpl::variable<Wrap> _resumeClicks;
+	rpl::variable<Wrap> _updateClicks;
+	bool _canStart = true;
+	bool _resumeEnabled = false;
+	bool _updateEnabled = false;
+	bool _startEnabled = true;
 
 };
 

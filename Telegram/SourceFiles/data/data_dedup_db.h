@@ -29,6 +29,7 @@ struct DlResumeRecord {
 	int64 msgId = 0;
 	QString path;
 	qint64 fileSize = 0;
+	uint64 docId = 0;
 };
 
 struct UlResumeRecord {
@@ -85,15 +86,16 @@ struct ExResumeRecord {
 	int tillDate = 0;
 	int htmlIndex = 0;
 	QByteArray repliedIndex;
-	int lastMsgId = 0;
-	int lastMsgDate = 0;
-	uint64 lastMsgFrom = 0;
 	int dateIndex = 0;
 	int jsonState = 0;
 	QByteArray stats;
 	uint64 docId = 0;
 	QString pausedFile;
 	int64 pausedBytes = 0;
+	QByteArray lastMsg;
+	int splitIndex = 0;
+	int selectedDone = 0;
+	int filterIndex = 0;
 };
 
 class DedupDb {
@@ -217,6 +219,7 @@ public:
 		uint64 documentId) const;
 	void clearExTmpRun(uint64 sessionId, PeerId peerId);
 	void clearExTmpSession(uint64 sessionId);
+	void flushExTmp();
 
 	void beginTransaction();
 	void commitTransaction();

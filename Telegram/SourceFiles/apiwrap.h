@@ -338,8 +338,13 @@ public:
 	[[nodiscard]] std::optional<uint64> takeoutId() const;
 	void ensureTakeout(
 		not_null<PeerData*> peer,
-		Fn<void(bool)> done);
+		Fn<void(bool)> done,
+		int64 fileMaxSize = 0);
 	void finishTakeout(Fn<void()> done = nullptr);
+	void addTakeoutViewer();
+	void removeTakeoutViewer();
+	void setTakeoutBorrowed(bool borrowed);
+	[[nodiscard]] bool takeoutMayFinish() const;
 	mtpRequestId requestGlobalMedia(
 		Storage::SharedMediaType type,
 		const QString &query,
@@ -902,9 +907,13 @@ private:
 	base::flat_map<FullStoryId, QString> _unlikelyStoryLinks;
 
 	std::optional<uint64> _takeoutId;
+	int64 _takeoutFileMaxSize = 0;
+	int _takeoutViewers = 0;
+	bool _takeoutBorrowed = false;
 	bool _takeoutInitializing = false;
 	bool _takeoutFinishing = false;
 	int _takeoutInitRetries = 0;
+	crl::time _takeoutLastRefresh = 0;
 	base::Timer _takeoutInitRetryTimer;
 	struct TakeoutRequest {
 		Fn<void(bool)> done;

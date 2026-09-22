@@ -51,10 +51,12 @@ void FetchHash(
 		Fn<bool()> alive,
 		Fn<void(QByteArray)> done,
 		int maxAttempts,
-		const QString &tag) {
+		const QString &tag,
+		Fn<void(FnMut<void(uint64 freshId)>)> refreshTakeout) {
 	int64 headOffset = 0;
 	int64 tailOffset = 0;
 	::Data::DedupSampleOffsets(size, headOffset, tailOffset);
+	const auto currentTakeout = std::make_shared<uint64>(takeoutId);
 	const auto head = std::make_shared<QByteArray>();
 	const auto tail = std::make_shared<QByteArray>();
 	const auto pending = std::make_shared<int>(2);
@@ -69,6 +71,7 @@ void FetchHash(
 		const auto gen = std::make_shared<int>(0);
 		const auto settled = std::make_shared<bool>(false);
 		const auto armedFor = std::make_shared<int>(0);
+		const auto refreshed = std::make_shared<bool>(false);
 		const auto timer = std::make_shared<base::ConcurrentTimer>(runner);
 		const auto waitFor = [](int attempt) {
 			return 2000 + std::min(attempt * 500, 4000) + (attempt * 137) % 300;
@@ -113,7 +116,7 @@ void FetchHash(
 			}
 			const auto my = ++*gen;
 			mtp.request(MTPInvokeWithTakeout<MTPupload_GetFile>(
-				MTP_long(takeoutId),
+				MTP_long(*currentTakeout),
 				MTPupload_GetFile(
 					MTP_flags(MTPupload_GetFile::Flag::f_precise),
 					location.data,
@@ -142,6 +145,22 @@ void FetchHash(
 				} else if (!alive()) {
 					*settled = true;
 					timer->cancel();
+					return;
+				}
+				if (error.type() == u"TAKEOUT_INVALID"_q
+					&& refreshTakeout
+					&& !*refreshed) {
+					*refreshed = true;
+					refreshTakeout([=](uint64 fresh) mutable {
+						if (*settled || *gen != my) {
+							return;
+						}
+						if (fresh) {
+							*currentTakeout = fresh;
+							*gen = 0;
+						}
+						(*sendChunk)();
+					});
 					return;
 				}
 				if (my == 1 && !MTP::IsFloodError(error)) {
@@ -176,8 +195,10 @@ void FetchFullFile(
 	Fn<bool()> alive,
 	Fn<void(QByteArray)> done,
 	int maxAttempts,
-	const QString &tag) {
+	const QString &tag,
+	Fn<void(FnMut<void(uint64 freshId)>)> refreshTakeout) {
 	constexpr auto kChunk = 1024 * 1024;
+	const auto currentTakeout = std::make_shared<uint64>(takeoutId);
 	const auto content = std::make_shared<QByteArray>();
 	const auto fetchNext = std::make_shared<Fn<void()>>();
 	*fetchNext = [=, &mtp] {
@@ -185,6 +206,7 @@ void FetchFullFile(
 			done(*content);
 			return;
 		}
+		const auto refreshed = std::make_shared<bool>(false);
 		const auto gen = std::make_shared<int>(0);
 		const auto settled = std::make_shared<bool>(false);
 		const auto waitFor = [](int attempt) {
@@ -231,7 +253,7 @@ void FetchFullFile(
 			}
 			const auto my = ++*gen;
 			mtp.request(MTPInvokeWithTakeout<MTPupload_GetFile>(
-				MTP_long(takeoutId),
+				MTP_long(*currentTakeout),
 				MTPupload_GetFile(
 					MTP_flags(MTPupload_GetFile::Flag::f_precise),
 					location.data,
@@ -265,6 +287,22 @@ void FetchFullFile(
 				} else if (!alive()) {
 					*settled = true;
 					timer->cancel();
+					return;
+				}
+				if (error.type() == u"TAKEOUT_INVALID"_q
+					&& refreshTakeout
+					&& !*refreshed) {
+					*refreshed = true;
+					refreshTakeout([=](uint64 fresh) mutable {
+						if (*settled || *gen != my) {
+							return;
+						}
+						if (fresh) {
+							*currentTakeout = fresh;
+							*gen = 0;
+						}
+						(*sendChunk)();
+					});
 					return;
 				}
 				if (my == 1 && !MTP::IsFloodError(error)) {

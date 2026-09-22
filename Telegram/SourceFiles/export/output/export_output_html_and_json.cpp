@@ -121,6 +121,25 @@ Result HtmlAndJsonWriter::writeDialogStart(const Data::DialogInfo &data) {
 	});
 }
 
+Result HtmlAndJsonWriter::resumeDialogStart(
+		const Data::DialogInfo &data,
+		const DialogState &state) {
+	return invoke([&](WriterPtr w) {
+		return w->resumeDialogStart(data, state);
+	});
+}
+
+DialogState HtmlAndJsonWriter::dialogState() const {
+	auto result = DialogState();
+	for (const auto &writer : _writers) {
+		const auto state = writer->dialogState();
+		if (state.messagesCount > result.messagesCount) {
+			result = state;
+		}
+	}
+	return result;
+}
+
 Result HtmlAndJsonWriter::writeDialogSlice(const Data::MessagesSlice &data) {
 	return invoke([&](WriterPtr w) {
 		return w->writeDialogSlice(data);

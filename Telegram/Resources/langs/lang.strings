@@ -7464,8 +7464,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_export_state_chats" = "Chats";
 "lng_export_skip_file" = "Skip this file";
 "lng_export_progress" = "You can close this window now. Please don't quit Telegram until the data export is completed.";
+"lng_export_paused_safe" = "Export paused. You can quit Telegram, it will resume later.";
+"lng_export_quit_unfinished" = "You have an unfinished export. Continue, pause or cancel?";
 "lng_export_stop" = "Stop";
 "lng_export_sure_stop" = "Are you sure you want to stop exporting your data?\n\nIf you do, you'll need to start over.";
+"lng_export_sure_stop_scan" = "Are you sure you want to stop scanning your data?\n\nIf you do, you'll need to start over.";
 "lng_export_about_done" = "Your data was successfully exported.";
 "lng_export_done" = "Show my data";
 "lng_export_finished" = "Data export completed.";
@@ -7479,6 +7482,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_export_stats_skipped#other" = "Dups: {count}, ({size})";
 "lng_export_total_skipped" = "Total duplicates: {amount} ({size})";
 "lng_export_none_found" = "No files found in this range.";
+"lng_export_nothing_selected" = "Select at least one export option.";
+"lng_export_pause" = "Pause";
+"lng_export_resume" = "Resume";
+"lng_export_update" = "Update";
+"lng_export_up_to_date" = "Export is up to date.";
+"lng_export_update_confirm" = "Download {amount} new messages?";
+"lng_export_cancel_delete" = "Cancel and delete export folder?";
 "lng_export_scan" = "Scan";
 "lng_export_scanning" = "Scanning...";
 "lng_export_scanning_progress" = "Scanning messages... {index} / {amount}";

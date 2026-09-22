@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include <QtCore/QString>
+#include <QtCore/QByteArray>
 
 namespace Export {
 namespace Data {
@@ -37,6 +38,14 @@ QString NormalizePath(
 
 struct Result;
 class Stats;
+
+// Position inside an unfinished dialog export, for resume.
+struct DialogState {
+	int messagesCount = 0;
+	int dateMessageId = 0;
+	QByteArray lastIds;
+	QByteArray lastMessage;
+};
 
 enum class Format {
 	Html,
@@ -91,6 +100,10 @@ public:
 		const Data::MessagesSlice &data) = 0;
 	[[nodiscard]] virtual Result writeDialogEnd() = 0;
 	[[nodiscard]] virtual Result writeDialogsEnd() = 0;
+	[[nodiscard]] virtual DialogState dialogState() const = 0;
+	[[nodiscard]] virtual Result resumeDialogStart(
+		const Data::DialogInfo &data,
+		const DialogState &state) = 0;
 
 	[[nodiscard]] virtual Result finish() = 0;
 

@@ -163,7 +163,21 @@ QString FileNameUnsafe(
 				fil = QString();
 			}
 		}
-		return filedialogGetSaveFile(name, title, fil, name) ? name : QString();
+		if (!filedialogGetSaveFile(name, title, fil, name)) {
+			return QString();
+		}
+		// Unique by default, like auto downloads below: a taken
+		// path renumbers instead of overwriting, so a later resume
+		// can never continue inside a foreign file.
+		const auto slashPos = name.lastIndexOf('/');
+		const auto extPos = name.lastIndexOf('.');
+		const auto hasExt = extPos > slashPos;
+		const auto nameBase = hasExt ? name.mid(0, extPos) : name;
+		const auto extension = hasExt ? name.mid(extPos) : QString();
+		for (int i = 0; QFileInfo::exists(name); ++i) {
+			name = nameBase + u" (%1)"_q.arg(i + 2) + extension;
+		}
+		return name;
 	}
 
 	auto path = [&] {

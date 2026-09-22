@@ -42,6 +42,9 @@ public:
 	[[nodiscard]] rpl::producer<View::PanelController*> currentView() const;
 	[[nodiscard]] bool inProgress() const;
 	[[nodiscard]] bool inProgress(not_null<Main::Session*> session) const;
+	[[nodiscard]] bool activeUnpausedExport() const;
+	void pauseActiveExport();
+	void cancelActiveExport();
 	void stopWithConfirmation(Fn<void()> callback);
 	void stop();
 

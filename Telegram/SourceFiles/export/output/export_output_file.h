@@ -25,6 +25,17 @@ public:
 
 	[[nodiscard]] int64 size() const;
 	[[nodiscard]] bool empty() const;
+	void close();
+
+	// Resume into an existing partial file: bytes [0, existing)
+	// are taken as already written, further writes append after
+	// them. Also suppresses the files counter (counted pre-crash).
+	void resumeFrom(int64 existing);
+
+	// Restart under a fresh path from zero (stale-prefix
+	// recovery): keeps the files counter, re-opens lazily on the
+	// next write. Re-downloaded bytes recount in stats.
+	void repath(const QString &path);
 
 	[[nodiscard]] Result writeBlock(const QByteArray &block);
 

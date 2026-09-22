@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/export_manager.h"
 #include "data/data_session.h"
 #include "data/data_peer.h"
+#include "data/data_user.h"
 #include "data/data_peer_id.h"
 #include "base/base_file_utilities.h"
 #include "ui/widgets/labels.h"
@@ -24,12 +25,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/file_utilities.h"
 #include "main/main_session.h"
+#include "apiwrap.h"
+#include <crl/crl_on_main.h>
 #include "data/data_session.h"
 #include "data/data_download_manager.h"
 #include "base/platform/base_platform_info.h"
 #include "base/unixtime.h"
 #include "base/qt/qt_common_adapters.h"
 #include "boxes/abstract_box.h" // Ui::show().
+#include <ui/toast/toast.h>
 #include "styles/style_export.h"
 #include "styles/style_layers.h"
 
@@ -155,16 +159,42 @@ void CenterPanel(not_null<Ui::SeparatePanel*> panel) {
 	const auto name = peer
 		? base::FileNameFromUserString(peer->name())
 		: QString();
-	const auto bare = peerToBareMTPInt(peerId).v;
-	const auto id = peerIsChannel(peerId)
-		? (u"-100"_q + QString::number(bare))
-		: peerIsChat(peerId)
-		? (u"-"_q + QString::number(bare))
-		: QString::number(bare);
+	const auto bare = peerId.value & PeerId::kChatTypeMask;
+	const auto id = u"EX_"_q + QString::number(bare);
 	if (name.isEmpty()) {
 		return id;
 	}
 	return id + '_' + name;
+}
+
+[[nodiscard]] PeerId SinglePeerId(
+		not_null<Main::Session*> session,
+		const Settings &settings) {
+	if (!settings.onlySinglePeer()) {
+		return PeerId(0);
+	}
+	return settings.singlePeer.match([](
+			const MTPDinputPeerUser &data) {
+		return peerFromUser(data.vuser_id().v);
+	}, [](
+			const MTPDinputPeerUserFromMessage &data) {
+		return peerFromUser(data.vuser_id().v);
+	}, [](
+			const MTPDinputPeerChat &data) {
+		return peerFromChat(data.vchat_id().v);
+	}, [](
+			const MTPDinputPeerChannel &data) {
+		return peerFromChannel(data.vchannel_id().v);
+	}, [](
+			const MTPDinputPeerChannelFromMessage &data) {
+		return peerFromChannel(data.vchannel_id().v);
+	}, [&](
+			const MTPDinputPeerSelf &data) {
+		return session->userPeerId();
+	}, [](
+			const MTPDinputPeerEmpty &data) {
+		return PeerId(0);
+	});
 }
 
 Environment PrepareEnvironment(not_null<Main::Session*> session) {	auto result = Environment();
@@ -236,6 +266,47 @@ PanelController::PanelController(
 	) | rpl::on_next([=](State &&state) {
 		updateState(std::move(state));
 	}, _lifetime);
+
+	// The takeout session is the shared session one: export binds
+	// its id before every start and re-ensures it through the
+	// session when the server invalidates it mid-run. Export never
+	// inits or finishes its own session (two live sessions
+	// invalidate each other server-side).
+	_process->setTakeoutRefreshHook([=] {
+		crl::on_main([=] {
+			// Mid-run refresh: no new size opinion, keep pending.
+			ensureSharedTakeout([=](uint64 id) {
+				_process->takeoutRefreshDone(id);
+			}, 0);
+		});
+	});
+}
+
+void PanelController::ensureSharedTakeout(
+		FnMut<void(uint64)> done,
+		int64 fileMaxSize) {
+	// FnMut is move-only, Fn needs copyable: share ownership.
+	const auto sharedDone = std::make_shared<FnMut<void(uint64)>>(
+		std::move(done));
+	_session->api().ensureTakeout(
+		not_null<PeerData*>(static_cast<PeerData*>(_session->user().get())),
+		[=](bool ok) {
+			const auto id = ok
+				? _session->api().takeoutId().value_or(uint64(0))
+				: uint64(0);
+			(*sharedDone)(id);
+		},
+		fileMaxSize);
+}
+
+void PanelController::finishExportTakeout() {
+	// End-of-run rule: clear the borrow, then finish unless a
+	// restricted view is open (the user is inside it and still
+	// needs the session). A finished-away run leaves nothing.
+	_session->api().setTakeoutBorrowed(false);
+	if (_session->api().takeoutMayFinish()) {
+		_session->api().finishTakeout();
+	}
 }
 
 PanelController::~PanelController() {
@@ -274,11 +345,63 @@ void PanelController::createPanel() {
 	showSettings();
 }
 
+void PanelController::refreshResumeRow() {
+	_resumeRow = std::nullopt;
+	const auto peerId = SinglePeerId(_session, *_settings);
+	if (!peerId) {
+		return;
+	}
+	auto db = Data::DedupDb(
+		Core::App().downloadManager().dedupDbPath(),
+		false);
+	if (!db.isOpen()) {
+		return;
+	}
+	const auto sessionId = _session->uniqueId();
+	for (auto &row : db.loadExResume(sessionId)) {
+		if (row.peerId == peerId) {
+			_resumeRow = std::move(row);
+			return;
+		}
+	}
+}
+
+void PanelController::applyRowSettings(
+		Settings &settings,
+		const Data::ExResumeRecord &row) {
+	settings.media.types = MediaSettings::Types::from_raw(
+		int(row.media));
+	settings.media.sizeLimit = row.size;
+	settings.format = static_cast<Output::Format>(row.exportFormat);
+	settings.singlePeerFrom = row.fromDate
+		? std::make_optional(TimeId(row.fromDate))
+		: std::nullopt;
+	settings.singlePeerTill = row.tillDate
+		? std::make_optional(TimeId(row.tillDate))
+		: std::nullopt;
+	settings.path = row.exportFolder;
+}
+
 void PanelController::showSettings() {
+	refreshResumeRow();
+	_paused = false;
+	_pausePending = false;
+	const auto pausedRow = _resumeRow.has_value()
+		&& _resumeRow->state != u"done"_q;
+	const auto doneRow = _resumeRow.has_value()
+		&& _resumeRow->state == u"done"_q;
+	if (pausedRow) {
+		applyRowSettings(*_settings, *_resumeRow);
+	}
 	auto settings = base::make_unique_q<SettingsWidget>(
 		_panel,
 		_session,
 		*_settings);
+	settings->setResumeUpdateEnabled(
+		pausedRow && _settings->onlySinglePeer(),
+		doneRow && _settings->onlySinglePeer());
+	settings->setStartEnabled(!pausedRow);
+	settings->setOptionsEnabled(!pausedRow);
 	settings->setShowBoxCallback([=](object_ptr<Ui::BoxContent> box) {
 		_panel->showBox(
 			std::move(box),
@@ -288,32 +411,170 @@ void PanelController::showSettings() {
 
 	settings->startClicks(
 	) | rpl::on_next([=]() {
-		showProgress();
-		_process->setSessionId(_session->uniqueId());
-		_process->setDedupDb(
-			Core::App().downloadManager().dedupDbPath());
-		_process->startExport(
-			*_settings,
-			PrepareEnvironment(_session),
-			SinglePeerFolder(_session, *_settings));
+		if (_settings->onlySinglePeer()
+			&& _settings->media.types == MediaSettings::Types(0)) {
+			Ui::Toast::Show(tr::lng_export_nothing_selected(tr::now));
+			return;
+		}
+		const auto gen = _startGen;
+		const auto folder = SinglePeerFolder(_session, *_settings);
+		const auto sizeLimit = _settings->media.sizeLimit;
+		ensureSharedTakeout([=](uint64 id) {
+			if (gen != _startGen) {
+				return;
+			}
+			showProgress();
+			_session->api().setTakeoutBorrowed(true);
+			_process->setSessionId(_session->uniqueId());
+			_process->setDedupDb(
+				Core::App().downloadManager().dedupDbPath());
+			_process->setSharedTakeoutId(id);
+			_process->startExport(
+				*_settings,
+				PrepareEnvironment(_session),
+				folder);
+		}, sizeLimit);
 	}, settings->lifetime());
 
 	settings->scanClicks(
 	) | rpl::on_next([=]() {
-		showProgress(true);
-		_process->setSessionId(_session->uniqueId());
-		_process->setDedupDb(
-			Core::App().downloadManager().dedupDbPath());
-		_process->startScan(
-			*_settings,
-			PrepareEnvironment(_session),
-			SinglePeerFolder(_session, *_settings));
+		using Type = MediaSettings::Type;
+		const auto fileTypes = Type::Photo | Type::Video
+			| Type::VoiceMessage | Type::VideoMessage | Type::Sticker
+			| Type::GIF | Type::File | Type::Audio;
+		// Text has no server filter and nothing to hash: it walks
+		// history and counts into stats.txt only (text messages when
+		// ticked, plus whatever else is ticked), no HTML/JSON, and
+		// file-less messages skip hashing and dedup entirely.
+		const auto hasFiles = ((_settings->media.types & fileTypes)
+			!= MediaSettings::Types(0));
+		// Links and polls have server filters and counting but
+		// nothing to hash: like text they walk into stats.txt only.
+		const auto hasCountables = ((_settings->media.types
+			& (Type::Text | Type::Link | Type::Poll))
+			!= MediaSettings::Types(0));
+		if (!hasFiles && !hasCountables) {
+			Ui::Toast::Show(tr::lng_export_nothing_selected(tr::now));
+			return;
+		}
+		const auto gen = _startGen;
+		const auto folder = SinglePeerFolder(_session, *_settings);
+		const auto sizeLimit = _settings->media.sizeLimit;
+		ensureSharedTakeout([=](uint64 id) {
+			if (gen != _startGen) {
+				return;
+			}
+			showProgress(true);
+			_session->api().setTakeoutBorrowed(true);
+			_process->setSessionId(_session->uniqueId());
+			_process->setDedupDb(
+				Core::App().downloadManager().dedupDbPath());
+			_process->setSharedTakeoutId(id);
+			_process->startScan(
+				*_settings,
+				PrepareEnvironment(_session),
+				folder);
+		}, sizeLimit);
 	}, settings->lifetime());
 
 	settings->cancelClicks(
 	) | rpl::on_next([=] {
 		LOG(("Export Info: Panel Hide By Cancel."));
 		_panel->hideGetDuration();
+	}, settings->lifetime());
+
+	settings->resumeClicks(
+	) | rpl::on_next([=]() {
+		if (!_resumeRow || _resumeRow->state == u"done"_q) {
+			return;
+		}
+		auto resumeSettings = *_settings;
+		applyRowSettings(resumeSettings, *_resumeRow);
+		const auto row = *_resumeRow;
+		const auto gen = _startGen;
+		const auto sizeLimit = resumeSettings.media.sizeLimit;
+		ensureSharedTakeout([=](uint64 id) {
+			if (gen != _startGen) {
+				return;
+			}
+			showProgress();
+			_session->api().setTakeoutBorrowed(true);
+			_process->setSessionId(_session->uniqueId());
+			_process->setDedupDb(
+				Core::App().downloadManager().dedupDbPath());
+			_process->setSharedTakeoutId(id);
+			_process->startResumeExport(
+				resumeSettings,
+				PrepareEnvironment(_session),
+				row);
+		}, sizeLimit);
+	}, settings->lifetime());
+
+	_process->setUpdateConfirmHandler([=](
+			int newCount,
+			FnMut<void(bool)> proceed) mutable {
+		if (newCount <= 0) {
+			Ui::Toast::Show(tr::lng_export_up_to_date(tr::now));
+			proceed(false);
+			showSettings();
+			return;
+		}
+		const auto sharedProceed = std::make_shared<FnMut<void(bool)>>(
+			std::move(proceed));
+		_panel->showBox(
+			Ui::MakeConfirmBox({
+				.text = tr::lng_export_update_confirm(
+					tr::now,
+					lt_amount,
+					QString::number(newCount)),
+				.confirmed = [=](Fn<void()> close) {
+					close();
+					(*sharedProceed)(true);
+				},
+				.cancelled = [=](Fn<void()> close) {
+					close();
+					(*sharedProceed)(false);
+					showSettings();
+				},
+			}),
+			Ui::LayerOption::KeepOther,
+			anim::type::normal);
+	});
+
+	settings->updateClicks(
+	) | rpl::on_next([=]() {
+		if (!_resumeRow || _resumeRow->state != u"done"_q) {
+			return;
+		}
+		auto updateSettings = *_settings;
+		const auto &row = *_resumeRow;
+		updateSettings.media.types = _settings->media.types;
+		updateSettings.media.sizeLimit = _settings->media.sizeLimit;
+		updateSettings.format = _settings->format;
+		updateSettings.singlePeerFrom = row.fromDate
+			? std::make_optional(TimeId(row.fromDate))
+			: std::nullopt;
+		updateSettings.singlePeerTill = row.tillDate
+			? std::make_optional(TimeId(row.tillDate))
+			: std::nullopt;
+		updateSettings.path = row.exportFolder;
+		const auto gen = _startGen;
+		const auto sizeLimit = updateSettings.media.sizeLimit;
+		ensureSharedTakeout([=](uint64 id) {
+			if (gen != _startGen) {
+				return;
+			}
+			showProgress();
+			_session->api().setTakeoutBorrowed(true);
+			_process->setSessionId(_session->uniqueId());
+			_process->setDedupDb(
+				Core::App().downloadManager().dedupDbPath());
+			_process->setSharedTakeoutId(id);
+			_process->startUpdateExport(
+				updateSettings,
+				PrepareEnvironment(_session),
+				row);
+		}, sizeLimit);
 	}, settings->lifetime());
 
 	settings->changes(
@@ -433,9 +694,45 @@ void PanelController::showError(const QString &text) {
 	_panel->setHideOnDeactivate(false);
 }
 
+bool PanelController::isExportRunning() const {
+	// A requested pause counts immediately: the park lands
+	// asynchronously on the export queue, and treating it as
+	// running until then reopens the quit box (double-click).
+	return _running && !_scanning && !_paused && !_pausePending;
+}
+
+void PanelController::pauseRunningExport() {
+	if (isExportRunning()) {
+		_pausePending = true;
+		_process->requestPause();
+	}
+}
+
+void PanelController::cancelRunningExport() {
+	++_startGen;
+	finishExportTakeout();
+	refreshResumeRow();
+	const auto folder = _resumeRow
+		? _resumeRow->exportFolder
+		: QString();
+	_resumeRow = std::nullopt;
+	_paused = false;
+	_pausePending = false;
+	_running = false;
+	_process->cancelExportFast();
+	_process->closeDialogFiles();
+	if (!folder.isEmpty()) {
+		QDir(folder).removeRecursively();
+	}
+}
+
 void PanelController::showProgress(bool scanning) {
 	_settings->availableAt = 0;
 	ClearSuggestStart(_session);
+	_paused = false;
+	_pausePending = false;
+	_running = true;
+	_scanning = scanning;
 
 	_panel->setTitle(scanning
 		? tr::lng_export_scanning()
@@ -455,6 +752,29 @@ void PanelController::showProgress(bool scanning) {
 	progress->cancelClicks(
 	) | rpl::on_next([=] {
 		stopWithConfirmation();
+	}, progress->lifetime());
+
+	progress->setPauseEnabled(!scanning);
+	progress->pauseToggleClicks(
+	) | rpl::on_next([=] {
+		if (_paused) {
+			_pausePending = false;
+			_process->resumeExport();
+		} else {
+			_pausePending = true;
+			_process->requestPause();
+		}
+	}, progress->lifetime());
+
+	_process->pauseChanges(
+	) | rpl::on_next([=](bool paused) {
+		_paused = paused;
+		if (!paused) {
+			_pausePending = false;
+		}
+		if (const auto widget = _progress.data()) {
+			widget->setPaused(paused);
+		}
 	}, progress->lifetime());
 
 	progress->doneClicks(
@@ -486,16 +806,24 @@ void PanelController::stopWithConfirmation(Fn<void()> callback) {
 			LOG(("Export Info: Stop Panel With Confirmation."));
 			stopExport();
 			saved();
-		} else {
-			_process->cancelExportFast();
+			return;
 		}
+		cancelRunningExport();
 	};
 	const auto hidden = _panel->isHidden();
 	const auto old = _confirmStopBox;
+	refreshResumeRow();
+	const auto deleteFolder = _resumeRow.has_value()
+		&& !_resumeRow->exportFolder.isEmpty();
 	auto box = Ui::MakeConfirmBox({
-		.text = tr::lng_export_sure_stop(),
+		.text = deleteFolder
+			? tr::lng_export_cancel_delete()
+			: _scanning
+			? tr::lng_export_sure_stop_scan()
+			: tr::lng_export_sure_stop(),
 		.confirmed = std::move(stop),
-		.confirmText = tr::lng_export_stop(),
+		.confirmText = tr::lng_box_yes(tr::now),
+		.cancelText = tr::lng_box_no(tr::now),
 		.confirmStyle = &st::attentionBoxButton,
 	});
 	_confirmStopBox = box.data();
@@ -539,10 +867,16 @@ void PanelController::updateState(State &&state) {
 	}
 	_state = std::move(state);
 	if (const auto apiError = std::get_if<ApiErrorState>(&_state)) {
+		finishExportTakeout();
 		showError(*apiError);
 	} else if (const auto error = std::get_if<OutputErrorState>(&_state)) {
+		finishExportTakeout();
 		showError(*error);
 	} else if (const auto finished = std::get_if<FinishedState>(&_state)) {
+		_running = false;
+		_paused = false;
+		_pausePending = false;
+		finishExportTakeout();
 		_panel->setTitle(tr::lng_export_title());
 		_panel->setHideOnDeactivate(false);
 		// Keep total-row space: exact sizing overlaps the button
@@ -610,6 +944,9 @@ void PanelController::updateState(State &&state) {
 		}
 	} else if (v::is<CancelledState>(_state)) {
 		LOG(("Export Info: Stop Panel After Cancel."));
+		_running = false;
+		_paused = false;
+		_pausePending = false;
 		stopExport();
 	}
 }

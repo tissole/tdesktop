@@ -3568,7 +3568,27 @@ void HistoryWidget::setHistory(History *history) {
 			_preview = nullptr;
 		}
 	}
+	updateTakeoutViewer();
 	refreshAttachBotsMenu();
+}
+
+void HistoryWidget::updateTakeoutViewer() {
+	// One widget counts at most once: leaving a restricted chat
+	// finishes the shared takeout unless an export borrows it;
+	// entering one only registers (ensuring stays at the existing
+	// takeout call sites).
+	const auto restricted = (_history && _history->peer->isRestricted())
+		|| (_migrated && _migrated->peer->isRestricted());
+	if (restricted && !_takeoutViewer) {
+		_takeoutViewer = true;
+		session().api().addTakeoutViewer();
+	} else if (!restricted && _takeoutViewer) {
+		_takeoutViewer = false;
+		session().api().removeTakeoutViewer();
+		if (session().api().takeoutMayFinish()) {
+			session().api().finishTakeout();
+		}
+	}
 }
 
 void HistoryWidget::setupPreview() {
@@ -5089,6 +5109,8 @@ void HistoryWidget::sendTakeoutHistoryRequest(
 		});
 		return empty;
 	};
+	const auto refreshed = std::make_shared<bool>(false);
+	const auto weak = base::make_weak(this);
 	requestSlot = histories.sendRequest(history, type, [=](Fn<void()> finish) {
 		return session().api().request(
 			MTPInvokeWithTakeout<MTPmessages_GetHistory>(
@@ -5111,6 +5133,32 @@ void HistoryWidget::sendTakeoutHistoryRequest(
 			finish();
 		}).fail([=](const MTP::Error &error) {
 			const auto &type = error.type();
+			if (type == u"TAKEOUT_INVALID"_q && !*refreshed) {
+				*refreshed = true;
+				session().api().setTakeoutId(std::nullopt);
+				session().api().ensureTakeout(
+					history->peer,
+					[=](bool ready) {
+						if (!weak) {
+							finish();
+							return;
+						}
+						if (ready) {
+							sendTakeoutHistoryRequest(
+								history,
+								offsetId,
+								offset,
+								loadCount,
+								*requestSlotPtr,
+								maxId,
+								minId);
+						} else {
+							messagesFailed(error, *requestSlotPtr);
+						}
+						finish();
+					});
+				return;
+			}
 			if (type == u"PEER_ID_INVALID"_q
 				|| type == u"CHANNEL_PRIVATE"_q
 				|| type == u"CHANNEL_PUBLIC_GROUP_NA"_q
@@ -5125,7 +5173,7 @@ void HistoryWidget::sendTakeoutHistoryRequest(
 }
 
 void HistoryWidget::finishTakeoutIfNeeded() {
-	session().api().finishTakeout();
+	updateTakeoutViewer();
 }
 
 void HistoryWidget::loadMessages() {

@@ -177,6 +177,7 @@ public:
 		uint64 documentId) const;
 	void clearExTmpRun(uint64 sessionId, PeerId peerId);
 	void clearExTmpSession(uint64 sessionId);
+	void flushExPending();
 
 	void beginTransaction();
 	void commitTransaction();
@@ -208,7 +209,6 @@ private:
 		uint64 sessionId,
 		PeerId peerId) const;
 	void ensureExTmpLoaded(uint64 sessionId, PeerId peerId) const;
-	void flushExPending();
 
 	bool createTables();
 
@@ -372,6 +372,7 @@ bool DedupDb::Impl::createTables() {
 			"msg_id INTEGER NOT NULL, "
 			"path TEXT NOT NULL, "
 			"file_size INTEGER NOT NULL DEFAULT 0, "
+			"doc_id INTEGER NOT NULL DEFAULT 0, "
 			"PRIMARY KEY (peer_id, msg_id))"_q)
 		&& exec(u"CREATE TABLE IF NOT EXISTS ul_resume ("
 			"session_id INTEGER NOT NULL DEFAULT 0, "
@@ -429,15 +430,16 @@ bool DedupDb::Impl::createTables() {
 			"till_date INTEGER NOT NULL DEFAULT 0, "
 			"html_index INTEGER NOT NULL DEFAULT 0, "
 			"replied_index BLOB NOT NULL DEFAULT x'', "
-			"last_msg_id INTEGER NOT NULL DEFAULT 0, "
-			"last_msg_date INTEGER NOT NULL DEFAULT 0, "
-			"last_msg_from INTEGER NOT NULL DEFAULT 0, "
 			"date_index INTEGER NOT NULL DEFAULT 0, "
 			"json_state INTEGER NOT NULL DEFAULT 0, "
 			"stats BLOB NOT NULL DEFAULT x'', "
 			"doc_id INTEGER NOT NULL DEFAULT 0, "
 			"paused_file TEXT NOT NULL DEFAULT '', "
 			"paused_bytes INTEGER NOT NULL DEFAULT 0, "
+			"last_msg BLOB NOT NULL DEFAULT x'', "
+			"split_index INTEGER NOT NULL DEFAULT 0, "
+			"selected_done INTEGER NOT NULL DEFAULT 0, "
+			"filter_index INTEGER NOT NULL DEFAULT 0, "
 			"PRIMARY KEY (session_id, peer_id))"_q)
 		&& exec(u"CREATE TABLE IF NOT EXISTS ex_tmp ("
 			"session_id INTEGER NOT NULL DEFAULT 0, "
@@ -773,8 +775,9 @@ void DedupDb::Impl::insertDlResume(const DlResumeRecord &record) {
 	}
 	QSqlQuery q(_db);
 	q.prepare(u"INSERT OR REPLACE INTO dl_resume "
-		"(session_id, peer_id, msg_id, path, file_size) "
-		"VALUES (:session_id, :peer_id, :msg_id, :path, :file_size)"_q);
+		"(session_id, peer_id, msg_id, path, file_size, doc_id) "
+		"VALUES (:session_id, :peer_id, :msg_id, :path, :file_size, "
+		":doc_id)"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(record.sessionId)));
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
@@ -784,6 +787,8 @@ void DedupDb::Impl::insertDlResume(const DlResumeRecord &record) {
 	q.bindValue(u":path"_q, record.path);
 	q.bindValue(u":file_size"_q, QVariant::fromValue(
 		static_cast<qlonglong>(record.fileSize)));
+	q.bindValue(u":doc_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(record.docId)));
 	if (!q.exec()) {
 		LOG(("DedupDb: InsertDlResume failed: %1").arg(q.lastError().text()));
 	}
@@ -828,7 +833,7 @@ std::vector<DlResumeRecord> DedupDb::Impl::loadAllDlResume() const {
 	}
 	QSqlQuery q(_db);
 	if (!q.exec(u"SELECT session_id, peer_id, msg_id, "
-		"path, file_size FROM dl_resume"_q)) {
+		"path, file_size, doc_id FROM dl_resume"_q)) {
 		LOG(("DedupDb: LoadAllDlResume failed: %1").arg(
 			q.lastError().text()));
 		return result;
@@ -840,6 +845,7 @@ std::vector<DlResumeRecord> DedupDb::Impl::loadAllDlResume() const {
 		record.msgId = q.value(2).toLongLong();
 		record.path = q.value(3).toString();
 		record.fileSize = q.value(4).toLongLong();
+		record.docId = q.value(5).toULongLong();
 		result.push_back(std::move(record));
 	}
 	return result;
@@ -1408,15 +1414,17 @@ void DedupDb::Impl::insertExResume(const ExResumeRecord &record) {
 	q.prepare(u"INSERT OR REPLACE INTO ex_resume "
 		"(session_id, peer_id, last_id, total, msgs_done, skipped, "
 		"export_folder, state, media, size, export_format, from_date, "
-		"till_date, html_index, replied_index, last_msg_id, "
-		"last_msg_date, last_msg_from, date_index, json_state, stats, "
-		"doc_id, paused_file, paused_bytes) "
+		"till_date, html_index, replied_index, "
+		"date_index, json_state, stats, "
+		"doc_id, paused_file, paused_bytes, last_msg, split_index, "
+		"selected_done, filter_index) "
 		"VALUES (:session_id, :peer_id, :last_id, :total, :msgs_done, "
 		":skipped, :export_folder, :state, :media, :size, "
 		":export_format, :from_date, :till_date, :html_index, "
-		":replied_index, :last_msg_id, :last_msg_date, :last_msg_from, "
+		":replied_index, "
 		":date_index, :json_state, :stats, :doc_id, :paused_file, "
-		":paused_bytes)"_q);
+		":paused_bytes, :last_msg, :split_index, :selected_done, "
+		":filter_index)"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(record.sessionId)));
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
@@ -1437,10 +1445,6 @@ void DedupDb::Impl::insertExResume(const ExResumeRecord &record) {
 	q.bindValue(u":till_date"_q, record.tillDate);
 	q.bindValue(u":html_index"_q, record.htmlIndex);
 	q.bindValue(u":replied_index"_q, record.repliedIndex);
-	q.bindValue(u":last_msg_id"_q, record.lastMsgId);
-	q.bindValue(u":last_msg_date"_q, record.lastMsgDate);
-	q.bindValue(u":last_msg_from"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.lastMsgFrom)));
 	q.bindValue(u":date_index"_q, record.dateIndex);
 	q.bindValue(u":json_state"_q, record.jsonState);
 	q.bindValue(u":stats"_q, record.stats);
@@ -1449,6 +1453,10 @@ void DedupDb::Impl::insertExResume(const ExResumeRecord &record) {
 	q.bindValue(u":paused_file"_q, record.pausedFile);
 	q.bindValue(u":paused_bytes"_q, QVariant::fromValue(
 		static_cast<qlonglong>(record.pausedBytes)));
+	q.bindValue(u":last_msg"_q, record.lastMsg);
+	q.bindValue(u":split_index"_q, record.splitIndex);
+	q.bindValue(u":selected_done"_q, record.selectedDone);
+	q.bindValue(u":filter_index"_q, record.filterIndex);
 	if (!q.exec()) {
 		LOG(("DedupDb: InsertExResume failed: %1").arg(
 			q.lastError().text()));
@@ -1495,9 +1503,11 @@ std::vector<ExResumeRecord> DedupDb::Impl::loadExResume(
 	QSqlQuery q(_db);
 	q.prepare(u"SELECT peer_id, last_id, total, msgs_done, skipped, "
 		"export_folder, state, media, size, export_format, from_date, "
-		"till_date, html_index, replied_index, last_msg_id, "
-		"last_msg_date, last_msg_from, date_index, json_state, stats, "
-		"doc_id, paused_file, paused_bytes FROM ex_resume "
+		"till_date, html_index, replied_index, "
+		"date_index, json_state, stats, "
+		"doc_id, paused_file, paused_bytes, last_msg, split_index, "
+		"selected_done, filter_index "
+		"FROM ex_resume "
 		"WHERE session_id = :session_id"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(sessionId)));
@@ -1522,15 +1532,16 @@ std::vector<ExResumeRecord> DedupDb::Impl::loadExResume(
 		record.tillDate = q.value(11).toInt();
 		record.htmlIndex = q.value(12).toInt();
 		record.repliedIndex = q.value(13).toByteArray();
-		record.lastMsgId = q.value(14).toInt();
-		record.lastMsgDate = q.value(15).toInt();
-		record.lastMsgFrom = q.value(16).toULongLong();
-		record.dateIndex = q.value(17).toInt();
-		record.jsonState = q.value(18).toInt();
-		record.stats = q.value(19).toByteArray();
-		record.docId = q.value(20).toULongLong();
-		record.pausedFile = q.value(21).toString();
-		record.pausedBytes = q.value(22).toLongLong();
+		record.dateIndex = q.value(14).toInt();
+		record.jsonState = q.value(15).toInt();
+		record.stats = q.value(16).toByteArray();
+		record.docId = q.value(17).toULongLong();
+		record.pausedFile = q.value(18).toString();
+		record.pausedBytes = q.value(19).toLongLong();
+		record.lastMsg = q.value(20).toByteArray();
+		record.splitIndex = q.value(21).toInt();
+		record.selectedDone = q.value(22).toInt();
+		record.filterIndex = q.value(23).toInt();
 		result.push_back(std::move(record));
 	}
 	return result;
@@ -1753,10 +1764,14 @@ bool DedupDb::containsExTmpHash(
 	return _impl->containsExTmpHash(sessionId, peerId, hash);
 }
 
+void DedupDb::flushExTmp() {
+	_impl->flushExPending();
+}
+
 QByteArray DedupDb::hashForExTmpDocId(
-		uint64 sessionId,
-		PeerId peerId,
-		uint64 documentId) const {
+	uint64 sessionId,
+	PeerId peerId,
+	uint64 documentId) const {
 	return _impl->hashForExTmpDocId(sessionId, peerId, documentId);
 }
 

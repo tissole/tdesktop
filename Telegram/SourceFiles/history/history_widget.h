@@ -757,6 +757,7 @@ private:
 	void showRichEditorWithPaste(std::shared_ptr<QMimeData> data);
 
 	void setHistory(History *history);
+	void updateTakeoutViewer();
 	void setEditMsgId(MsgId msgId);
 
 	friend class HistoryInner;
@@ -902,6 +903,7 @@ private:
 	QPointer<HistoryInner> _list;
 	History *_migrated = nullptr;
 	History *_history = nullptr;
+	bool _takeoutViewer = false;
 	mutable Data::ForumTopic *_creatingBotTopic = nullptr;
 	rpl::lifetime _historySponsoredPreloading;
 
