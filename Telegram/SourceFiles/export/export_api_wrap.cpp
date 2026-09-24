@@ -2489,6 +2489,10 @@ void ApiWrap::decideScanMethod() {
 	const auto useSearch = !sticker
 		&& historyTotal > 0
 		&& searchTotal * 2 <= historyTotal;
+	LOG(("ExportDiag: TEMP scan history=%1 search=%2 useSearch=%3 "
+		"splits=%4 filters=%5").arg(historyTotal).arg(searchTotal)
+		.arg(useSearch).arg(int(_chatProcess->info.splits.size()))
+		.arg(int(_chatProcess->scanFilters.size())));
 	if (useSearch) {
 		_chatProcess->scanBySearch = true;
 		_chatProcess->scanFilterIndex = 0;
@@ -3272,6 +3276,11 @@ void ApiWrap::requestMessagesSlice() {
 	// written, and emitted at once. One counter climbs from zero.
 	const auto count = _chatProcess->info.messagesCountPerSplit[
 		_chatProcess->localSplitIndex];
+	LOG(("ExportDiag: TEMP walk split=%1 count=%2 bySearch=%3 floor=%4 "
+		"from=%5 till=%6 scan=%7").arg(_chatProcess->localSplitIndex)
+		.arg(count).arg(_chatProcess->scanBySearch)
+		.arg(_chatProcess->fromId).arg(_chatProcess->tillId)
+		.arg(_scanMode));
 	if (!count) {
 		startMessagesSlice({});
 		return;
@@ -4946,6 +4955,9 @@ void ApiWrap::commitExportProgress(
 	record.tillDate = _settings->singlePeerTill
 		? int(*_settings->singlePeerTill)
 		: 0;
+	record.useIdRange = _settings->useIdRange;
+	record.fromId = _settings->singlePeerFromId.value_or(uint64(0));
+	record.tillId = _settings->singlePeerTillId.value_or(uint64(0));
 	record.stats = _stats ? _stats->serialize() : QByteArray();
 	if (_fileProcess) {
 		record.pausedFile = _fileProcess->relativePath;

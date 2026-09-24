@@ -37,7 +37,6 @@ public:
 		not_null<Main::Session*> session,
 		Settings data);
 
-	[[nodiscard]] int sizeLimitExtraHeight() const;
 	[[nodiscard]] rpl::producer<int> contentHeightValue() const;
 
 	rpl::producer<Settings> value() const;
@@ -95,14 +94,16 @@ private:
 	void syncMediaBoxes();
 	void addExtensionFilter(not_null<Ui::VerticalLayout*> container);
 	void addSizeSlider(
-		not_null<Ui::VerticalLayout*> container,
-		not_null<Ui::Checkbox*> above);
+		not_null<Ui::VerticalLayout*> container);
 	void addLocationLabel(
 		not_null<Ui::VerticalLayout*> container);
 	void addFormatAndLocationLabel(
 		not_null<Ui::VerticalLayout*> container);
-	void addLimitsLabel(
+	not_null<Ui::Checkbox*> addLimitsLabel(
 		not_null<Ui::VerticalLayout*> container);
+	void addIdRangeOption(
+		not_null<Ui::VerticalLayout*> container,
+		not_null<Ui::Checkbox*> dateBox);
 	void chooseFolder();
 	void chooseFormat();
 	void refreshButtons(
@@ -129,8 +130,6 @@ private:
 
 	// Raw boxes die with the widget; synced after exclusivity edits.
 	std::vector<std::pair<Ui::Checkbox*, MediaType>> _mediaBoxes;
-
-	int _sizeLimitExtraHeight = 0;
 
 	Ui::RpWidget *_content = nullptr;
 	Ui::ScrollArea *_scroll = nullptr;

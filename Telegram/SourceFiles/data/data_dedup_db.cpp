@@ -440,6 +440,9 @@ bool DedupDb::Impl::createTables() {
 			"split_index INTEGER NOT NULL DEFAULT 0, "
 			"selected_done INTEGER NOT NULL DEFAULT 0, "
 			"filter_index INTEGER NOT NULL DEFAULT 0, "
+			"use_id_range INTEGER NOT NULL DEFAULT 0, "
+			"from_id INTEGER NOT NULL DEFAULT 0, "
+			"till_id INTEGER NOT NULL DEFAULT 0, "
 			"PRIMARY KEY (session_id, peer_id))"_q)
 		&& exec(u"CREATE TABLE IF NOT EXISTS ex_tmp ("
 			"session_id INTEGER NOT NULL DEFAULT 0, "
@@ -1417,14 +1420,14 @@ void DedupDb::Impl::insertExResume(const ExResumeRecord &record) {
 		"till_date, html_index, replied_index, "
 		"date_index, json_state, stats, "
 		"doc_id, paused_file, paused_bytes, last_msg, split_index, "
-		"selected_done, filter_index) "
+		"selected_done, filter_index, use_id_range, from_id, till_id) "
 		"VALUES (:session_id, :peer_id, :last_id, :total, :msgs_done, "
 		":skipped, :export_folder, :state, :media, :size, "
 		":export_format, :from_date, :till_date, :html_index, "
 		":replied_index, "
 		":date_index, :json_state, :stats, :doc_id, :paused_file, "
 		":paused_bytes, :last_msg, :split_index, :selected_done, "
-		":filter_index)"_q);
+		":filter_index, :use_id_range, :from_id, :till_id)"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(record.sessionId)));
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
@@ -1457,6 +1460,11 @@ void DedupDb::Impl::insertExResume(const ExResumeRecord &record) {
 	q.bindValue(u":split_index"_q, record.splitIndex);
 	q.bindValue(u":selected_done"_q, record.selectedDone);
 	q.bindValue(u":filter_index"_q, record.filterIndex);
+	q.bindValue(u":use_id_range"_q, record.useIdRange ? 1 : 0);
+	q.bindValue(u":from_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(record.fromId)));
+	q.bindValue(u":till_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(record.tillId)));
 	if (!q.exec()) {
 		LOG(("DedupDb: InsertExResume failed: %1").arg(
 			q.lastError().text()));
@@ -1506,7 +1514,7 @@ std::vector<ExResumeRecord> DedupDb::Impl::loadExResume(
 		"till_date, html_index, replied_index, "
 		"date_index, json_state, stats, "
 		"doc_id, paused_file, paused_bytes, last_msg, split_index, "
-		"selected_done, filter_index "
+		"selected_done, filter_index, use_id_range, from_id, till_id "
 		"FROM ex_resume "
 		"WHERE session_id = :session_id"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
@@ -1542,6 +1550,9 @@ std::vector<ExResumeRecord> DedupDb::Impl::loadExResume(
 		record.splitIndex = q.value(21).toInt();
 		record.selectedDone = q.value(22).toInt();
 		record.filterIndex = q.value(23).toInt();
+		record.useIdRange = q.value(24).toInt() != 0;
+		record.fromId = q.value(25).toULongLong();
+		record.tillId = q.value(26).toULongLong();
 		result.push_back(std::move(record));
 	}
 	return result;

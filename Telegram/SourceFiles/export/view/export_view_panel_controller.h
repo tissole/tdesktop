@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_dedup_db.h"
 #include "base/unique_qptr.h"
 #include "base/timer.h"
+#include "mtproto/sender.h"
 #include <optional>
 
 namespace Ui {
@@ -85,6 +86,7 @@ private:
 	void applyRowSettings(
 		Settings &settings,
 		const ::Data::ExResumeRecord &row);
+	void validateIdRange(FnMut<void()> proceed);
 	[[nodiscard]] const std::optional<::Data::ExResumeRecord> &resumeRow() const {
 		return _resumeRow;
 	}
@@ -93,6 +95,8 @@ private:
 	const not_null<Controller*> _process;
 	std::unique_ptr<Settings> _settings;
 	base::Timer _saveSettingsTimer;
+	MTP::Sender _mtp;
+	mtpRequestId _rangeRequestId = 0;
 
 	base::unique_qptr<Ui::SeparatePanel> _panel;
 	QPointer<ProgressWidget> _progress;

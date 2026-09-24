@@ -7455,6 +7455,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_export_limits" = "From: {from}, to: {till}";
 "lng_export_beginning" = "the oldest message";
 "lng_export_end" = "present";
+"lng_export_from_id" = "From ID:";
+"lng_export_to_id" = "To ID:";
+"lng_export_allowed_extensions" = "Allowed extensions";
+"lng_export_blocked_extensions" = "Blocked extensions";
+"lng_export_id_zero" = "Message IDs must be positive. Zero is not a valid message ID.";
+"lng_export_id_from_above_to" = "From ID must be lower than or equal to To ID.";
+"lng_export_id_from_past_end" = "From ID is past the last message in this chat ({last}).";
+"lng_export_id_to_past_end" = "To ID is past the last message in this chat ({last}).";
+"lng_export_id_from_before_start" = "From ID is below the first message in this chat ({first}).";
+"lng_export_id_to_before_start" = "To ID is below the first message in this chat ({first}).";
 "lng_export_from_beginning" = "Reset";
 "lng_export_till_end" = "Reset";
 "lng_export_start" = "Export";

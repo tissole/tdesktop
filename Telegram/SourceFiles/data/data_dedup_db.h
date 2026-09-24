@@ -96,6 +96,9 @@ struct ExResumeRecord {
 	int splitIndex = 0;
 	int selectedDone = 0;
 	int filterIndex = 0;
+	bool useIdRange = false;
+	uint64 fromId = 0;
+	uint64 tillId = 0;
 };
 
 class DedupDb {

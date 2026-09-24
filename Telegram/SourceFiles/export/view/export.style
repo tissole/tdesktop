@@ -33,6 +33,9 @@ exportLocationLabel: FlatLabel(boxLabel) {
 }
 exportLocationPadding: margins(22px, 8px, 22px, 8px);
 exportLimitsPadding: margins(22px, 0px, 22px, 0px);
+exportRangePadding: margins(22px, 2px, 22px, 2px);
+exportRangeLastPadding: margins(22px, 2px, 22px, 16px);
+exportSettingPaddingCompact: margins(22px, 5px, 22px, 5px);
 
 exportAboutOptionLabel: FlatLabel(defaultFlatLabel) {
 	textFg: windowSubTextFg;
@@ -67,9 +70,9 @@ exportProgressFg: mediaPlayerActiveFg;
 exportProgressBg: mediaPlayerInactiveFg;
 
 exportCancelButton: RoundButton(attentionBoxButton) {
-	width: 200px;
-	height: 44px;
-	textTop: 12px;
+	width: 150px;
+	height: 34px;
+	textTop: 8px;
 	style: TextStyle(semiboldTextStyle) {
 		font: font(semibold 15px);
 	}
@@ -115,4 +118,11 @@ exportExtInput: InputField(defaultInputField) {
 	textMargins: margins(7px, 3px, 7px, 3px);
 	heightMin: 24px;
 	placeholderFont: normalFont;
+}
+exportRangeLabel: FlatLabel(boxLabel) {
+	margin: margins(0px, 9px, 0px, 0px);
+}
+exportRangeInput: InputField(exportExtInput) {
+	textMargins: margins(7px, 2px, 7px, 0px);
+	heightMin: 24px;
 }

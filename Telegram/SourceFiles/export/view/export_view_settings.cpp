@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "export/view/export_view_settings.h"
 #include <QtCore/QRegularExpression>
+#include <QtCore/QPointer>
+#include <crl/crl_on_main.h>
 
 #include "export/output/export_output_abstract.h"
 #include "export/view/export_view_panel_controller.h"
@@ -57,16 +59,6 @@ constexpr auto kMegabyte = int64(1024) * 1024;
 	}, [](const MTPDinputPeerEmpty &data) {
 		return PeerId(0);
 	});
-}
-
-[[nodiscard]] bool SizeLimitFitsOptionLine(
-		int outerWidth,
-		int optionWidth,
-		int labelWidth) {
-	const auto available = outerWidth
-		- st::exportSettingPadding.left()
-		- st::exportFileSizePadding.right();
-	return (optionWidth + labelWidth <= available);
 }
 
 void ChooseFormatBox(
@@ -281,7 +273,7 @@ void SettingsWidget::setupPathAndFormat(
 		not_null<Ui::VerticalLayout*> container) {
 	if (_singlePeerId != 0) {
 		addFormatAndLocationLabel(container);
-		addLimitsLabel(container);
+		addIdRangeOption(container, addLimitsLabel(container));
 		return;
 	}
 	const auto formatGroup = std::make_shared<Ui::RadioenumGroup<Format>>(
@@ -407,7 +399,7 @@ void SettingsWidget::addFormatAndLocationLabel(
 #endif // OS_MAC_STORE
 }
 
-void SettingsWidget::addLimitsLabel(
+not_null<Ui::Checkbox*> SettingsWidget::addLimitsLabel(
 		not_null<Ui::VerticalLayout*> container) {
 	auto fromDateLink = value() | rpl::map([](const Settings &data) {
 		return data.singlePeerFrom;
@@ -480,13 +472,42 @@ void SettingsWidget::addLimitsLabel(
 		container->resizeToWidth(container->width());
 	});
 
-	const auto label = container->add(
-		object_ptr<Ui::FlatLabel>(
-			container,
-			std::move(datesText),
-			st::boxLabel),
-		st::exportLimitsPadding);
-
+	const auto dateRow = container->add(
+		object_ptr<Ui::FixedHeightWidget>(container),
+		st::exportRangePadding);
+	const auto dateBox = Ui::CreateChild<Ui::Checkbox>(
+		dateRow,
+		QString(),
+		!readData().useIdRange,
+		st::defaultBoxCheckbox);
+	// exportRangeLabel carries a top margin equal to the checkbox
+	// text line, so both texts land at the same y with no runtime
+	// offset math: the label just sits at the row top.
+	const auto label = Ui::CreateChild<Ui::FlatLabel>(
+		dateRow,
+		std::move(datesText),
+		st::exportRangeLabel);
+	const auto layoutDateRow = [=] {
+		const auto width = dateRow->width();
+		const auto gap = st::defaultBox.buttonPadding.left();
+		dateBox->resizeToWidth(dateBox->naturalWidth());
+		const auto labelX = dateBox->checkRect().right() + gap;
+		label->resizeToWidth(std::max(width - labelX, 0));
+		dateBox->moveToLeft(0, 0);
+		label->moveToLeft(labelX, 0);
+		dateRow->resize(width, std::max(
+			dateBox->height(),
+			label->height()));
+	};
+	dateRow->widthValue(
+	) | rpl::on_next([=](int) {
+		layoutDateRow();
+	}, dateRow->lifetime());
+	label->heightValue(
+	) | rpl::on_next([=](int) {
+		layoutDateRow();
+	}, dateRow->lifetime());
+	layoutDateRow();
 	const auto removeTime = [](TimeId dateTime) {
 		return base::unixtime::serialize(
 			QDateTime(
@@ -604,6 +625,150 @@ void SettingsWidget::addLimitsLabel(
 			Unexpected("Click handler URL in export limits edit.");
 		}
 	});
+	return dateBox;
+}
+
+void SettingsWidget::addIdRangeOption(
+		not_null<Ui::VerticalLayout*> container,
+		not_null<Ui::Checkbox*> dateBox) {
+	const auto row = container->add(
+		object_ptr<Ui::FixedHeightWidget>(container),
+		st::exportRangeLastPadding);
+	const auto idBox = Ui::CreateChild<Ui::Checkbox>(
+		row,
+		QString(),
+		readData().useIdRange,
+		st::defaultBoxCheckbox);
+	const auto fromLabel = Ui::CreateChild<Ui::FlatLabel>(
+		row,
+		tr::lng_export_from_id(tr::now),
+		st::exportRangeLabel);
+	const auto fromInput = Ui::CreateChild<Ui::InputField>(
+		row,
+		st::exportRangeInput);
+	const auto toLabel = Ui::CreateChild<Ui::FlatLabel>(
+		row,
+		tr::lng_export_to_id(tr::now),
+		st::exportRangeLabel);
+	const auto toInput = Ui::CreateChild<Ui::InputField>(
+		row,
+		st::exportRangeInput);
+	if (readData().singlePeerFromId) {
+		fromInput->setText(QString::number(*readData().singlePeerFromId));
+	}
+	if (readData().singlePeerTillId) {
+		toInput->setText(QString::number(*readData().singlePeerTillId));
+	}
+
+	const auto setDateMode = [=] {
+		changeData([&](Settings &data) {
+			data.useIdRange = false;
+		});
+		idBox->setChecked(false);
+	};
+	const auto setIdMode = [=] {
+		changeData([&](Settings &data) {
+			data.useIdRange = true;
+			data.singlePeerFrom = std::nullopt;
+			data.singlePeerTill = std::nullopt;
+		});
+		dateBox->setChecked(false);
+	};
+	const auto weakRow = QPointer<Ui::FixedHeightWidget>(row);
+	dateBox->checkedChanges(
+	) | rpl::on_next([=](bool checked) {
+		if (checked) {
+			setDateMode();
+		} else if (!idBox->checked()) {
+			dateBox->setChecked(true);
+		}
+	}, dateBox->lifetime());
+	idBox->checkedChanges(
+	) | rpl::on_next([=](bool checked) {
+		if (checked) {
+			setIdMode();
+		} else if (!dateBox->checked()) {
+			idBox->setChecked(true);
+		}
+	}, idBox->lifetime());
+
+	const auto readId = [=](not_null<Ui::InputField*> input) {
+		auto digits = QString();
+		for (const auto ch : input->getLastText()) {
+			if (ch.isDigit()) {
+				digits.append(ch);
+			}
+		}
+		digits = digits.left(10);
+		if (digits != input->getLastText()) {
+			input->setText(digits);
+			return std::optional<uint64>();
+		}
+		return digits.isEmpty()
+			? std::optional<uint64>()
+			: std::optional<uint64>(digits.toULongLong());
+	};
+	fromInput->changes(
+	) | rpl::on_next([=] {
+		const auto id = readId(fromInput);
+		if (id && !idBox->checked()) {
+			setIdMode();
+		}
+		changeData([&](Settings &data) {
+			data.singlePeerFromId = id;
+		});
+	}, fromInput->lifetime());
+	toInput->changes(
+	) | rpl::on_next([=] {
+		const auto id = readId(toInput);
+		if (id && !idBox->checked()) {
+			setIdMode();
+		}
+		changeData([&](Settings &data) {
+			data.singlePeerTillId = id;
+		});
+	}, toInput->lifetime());
+
+	const auto layoutIdRow = [=] {
+		const auto width = row->width();
+		const auto gap = st::defaultBox.buttonPadding.left();
+		idBox->resizeToWidth(idBox->naturalWidth());
+		const auto startX = idBox->checkRect().right() + gap;
+		const auto fromW = fromLabel->naturalWidth();
+		const auto toW = toLabel->naturalWidth();
+		fromLabel->resizeToWidth(fromW);
+		toLabel->resizeToWidth(toW);
+		auto inputW = (width - startX - fromW - toW - 3 * gap) / 2;
+		inputW = std::max(inputW, 0);
+		auto x = startX;
+		// The field keeps the row top like the labels above it, and
+		// its text margin lands the value on their text line.
+		const auto inputH = st::exportRangeInput.heightMin;
+		const auto place = [&](auto *widget, int w, int h, int y) {
+			widget->moveToLeft(x, y);
+			widget->resize(w, h);
+			x += w + gap;
+		};
+		idBox->moveToLeft(0, 0);
+		place(fromLabel, fromW, fromLabel->height(), 0);
+		place(fromInput, inputW, inputH, 0);
+		place(toLabel, toW, toLabel->height(), 0);
+		place(toInput, inputW, inputH, 0);
+		row->resize(row->width(), idBox->height());
+	};
+	row->widthValue(
+	) | rpl::on_next([=](int) {
+		layoutIdRow();
+	}, row->lifetime());
+	fromLabel->heightValue(
+	) | rpl::on_next([=](int) {
+		layoutIdRow();
+	}, row->lifetime());
+	toLabel->heightValue(
+	) | rpl::on_next([=](int) {
+		layoutIdRow();
+	}, row->lifetime());
+	layoutIdRow();
 }
 
 void SettingsWidget::editDateLimit(
@@ -660,8 +825,7 @@ not_null<Ui::RpWidget*> SettingsWidget::setupButtons(
 	using namespace rpl::mappers;
 
 	const auto buttonsPadding = st::defaultBox.buttonPadding;
-	const auto buttonsHeight = buttonsPadding.top()
-		+ st::defaultBoxButton.height
+	const auto buttonsHeight = st::defaultBoxButton.height
 		+ buttonsPadding.bottom();
 	const auto buttons = Ui::CreateChild<Ui::FixedHeightWidget>(
 		this,
@@ -837,7 +1001,7 @@ void SettingsWidget::addMediaOptions(
 		tr::lng_export_option_full_history(tr::now),
 		MediaType::FullHistory);
 	addExtensionFilter(container);
-	addSizeSlider(container, files);
+	addSizeSlider(container);
 }
 
 not_null<Ui::Checkbox*> SettingsWidget::addMediaOption(
@@ -850,7 +1014,9 @@ not_null<Ui::Checkbox*> SettingsWidget::addMediaOption(
 			text,
 			((readData().media.types & type) == type),
 			st::defaultBoxCheckbox),
-		st::exportSettingPadding);
+		(_singlePeerId != 0
+			? st::exportSettingPaddingCompact
+			: st::exportSettingPadding));
 	_mediaBoxes.emplace_back(checkbox, type);
 	checkbox->checkedChanges(
 	) | rpl::on_next([=](bool checked) {
@@ -900,17 +1066,21 @@ void SettingsWidget::addExtensionFilter(
 	const auto whitelist = container->add(
 		object_ptr<Ui::Checkbox>(
 			container,
-			QString(u"\u2713 whitelist"_q),
+			tr::lng_export_allowed_extensions(tr::now),
 			(readData().media.extensionFilterMode == ExtMode::Whitelist),
 			st::exportExtCheckboxGreen),
-		st::exportSettingPadding);
+		(_singlePeerId != 0
+			? st::exportSettingPaddingCompact
+			: st::exportSettingPadding));
 	const auto blacklist = container->add(
 		object_ptr<Ui::Checkbox>(
 			container,
-			QString(u"\u2715 blacklist"_q),
+			tr::lng_export_blocked_extensions(tr::now),
 			(readData().media.extensionFilterMode == ExtMode::Blacklist),
 			st::exportExtCheckboxRed),
-		st::exportSettingPadding);
+		(_singlePeerId != 0
+			? st::exportSettingPaddingCompact
+			: st::exportSettingPadding));
 
 	auto inputWrap = container->add(
 		object_ptr<Ui::SlideWrap<Ui::InputField>>(
@@ -918,8 +1088,10 @@ void SettingsWidget::addExtensionFilter(
 			object_ptr<Ui::InputField>(
 				container,
 				st::exportExtInput,
-				rpl::single(QString(u"pdf, docx, mp4..."_q)))),
-		st::exportSettingPadding);
+				rpl::single(QString()))),
+		(_singlePeerId != 0
+			? st::exportSettingPaddingCompact
+			: st::exportSettingPadding));
 	const auto input = inputWrap->entity();
 	input->setText(readData().media.extensionFilter.join(u" "_q));
 	inputWrap->toggle(
@@ -976,8 +1148,7 @@ void SettingsWidget::addExtensionFilter(
 }
 
 void SettingsWidget::addSizeSlider(
-		not_null<Ui::VerticalLayout*> container,
-		not_null<Ui::Checkbox*> above) {
+		not_null<Ui::VerticalLayout*> container) {
 	const auto wrap = container->add(
 		object_ptr<Ui::FixedHeightWidget>(container));
 	const auto slider = container->add(
@@ -994,6 +1165,9 @@ void SettingsWidget::addSizeSlider(
 			});
 		});
 
+	// The label keeps its own row above the slider: the line before it
+	// may hold the extension filter field. It stays right-aligned, so
+	// it ends where the slider ends.
 	const auto label = Ui::CreateChild<Ui::LabelSimple>(
 		container.get(),
 		st::exportFileSizeLabel);
@@ -1002,38 +1176,22 @@ void SettingsWidget::addSizeSlider(
 	}) | rpl::on_next([=](int64 sizeLimit) {
 		const auto limit = sizeLimit / kMegabyte;
 		const auto size = QString::number(limit) + " MB";
-		const auto text = tr::lng_export_option_size_limit(
+		label->setText(tr::lng_export_option_size_limit(
 			tr::now,
 			lt_size,
-			size);
-		label->setText(text);
-	}, slider->lifetime());
-
-	_sizeLimitExtraHeight = SizeLimitFitsOptionLine(
-		st::exportPanelSize.width(),
-		above->naturalWidth(),
-		label->width())
-		? 0
-		: label->height();
+			size));
+		wrap->resize(wrap->width(), label->height());
+	}, label->lifetime());
+	wrap->resize(wrap->width(), label->height());
 
 	rpl::combine(
 		container->widthValue(),
-		label->widthValue(),
-		slider->geometryValue()
-	) | rpl::on_next([=](int outerWidth, int labelWidth, QRect geometry) {
-		const auto sameLine = SizeLimitFitsOptionLine(
-			outerWidth,
-			above->naturalWidth(),
-			labelWidth);
-		wrap->resize(wrap->width(), sameLine ? 0 : label->height());
+		wrap->geometryValue()
+	) | rpl::on_next([=](int width, QRect geometry) {
 		label->moveToRight(
 			st::exportFileSizePadding.right(),
-			(sameLine
-				? (geometry.y()
-					- label->height()
-					- st::exportFileSizeLabelBottom)
-				: wrap->y()),
-			outerWidth);
+			geometry.y(),
+			width);
 	}, label->lifetime());
 }
 
@@ -1120,27 +1278,52 @@ void SettingsWidget::refreshButtons(
 
 	container->sizeValue(
 	) | rpl::on_next([=](QSize size) {
-		const auto right = st::defaultBox.buttonPadding.right();
-		const auto top = st::defaultBox.buttonPadding.top();
+		const auto margin = st::defaultBox.buttonPadding.right();
+		constexpr auto top = 0;
 		const auto gap = st::defaultBox.buttonPadding.left();
-		const auto fair = std::max(
-			(int(size.width()) - right - 4 * gap) / 5,
-			64);
-		start->setFullWidth(fair);
-		scan->setFullWidth(fair);
-		resume->setFullWidth(fair);
-		update->setFullWidth(fair);
-		cancel->setFullWidth(fair);
-		auto offset = right;
-		start->moveToRight(offset, top);
-		offset += fair + gap;
-		scan->moveToRight(offset, top);
-		offset += fair + gap;
-		resume->moveToRight(offset, top);
-		offset += fair + gap;
-		update->moveToRight(offset, top);
-		offset += fair + gap;
-		cancel->moveToRight(offset, top);
+		const auto &bst = st::defaultBoxButton;
+		const auto need = [&](const QString &text) {
+			return bst.style.font->width(text)
+				+ bst.height
+				- bst.style.font->height;
+		};
+		const auto widths = {
+			need(tr::lng_cancel(tr::now)),
+			need(tr::lng_export_update(tr::now)),
+			need(tr::lng_export_resume(tr::now)),
+			need(tr::lng_export_scan(tr::now)),
+			need(tr::lng_export_start(tr::now)),
+		};
+		const auto total = ranges::accumulate(widths, 4 * gap);
+		if (total + 2 * margin <= int(size.width())) {
+			auto offset = (int(size.width()) - total) / 2;
+			const auto place = [&](Ui::RoundButton *button, int w) {
+				button->setFullWidth(w);
+				button->moveToLeft(offset, top);
+				offset += w + gap;
+			};
+			auto i = widths.begin();
+			place(cancel, *i++);
+			place(update, *i++);
+			place(resume, *i++);
+			place(scan, *i++);
+			place(start, *i++);
+		} else {
+			const auto fair = std::max(
+				(int(size.width()) - 2 * margin - 4 * gap) / 5,
+				64);
+			auto offset = margin;
+			const auto place = [&](Ui::RoundButton *button) {
+				button->setFullWidth(fair);
+				button->moveToLeft(offset, top);
+				offset += fair + gap;
+			};
+			place(cancel);
+			place(update);
+			place(resume);
+			place(scan);
+			place(start);
+		}
 	}, cancel->lifetime());
 }
 
@@ -1162,18 +1345,9 @@ rpl::producer<Settings> SettingsWidget::changes() const {
 	return _changes.events();
 }
 
-int SettingsWidget::sizeLimitExtraHeight() const {
-	return _sizeLimitExtraHeight;
-}
-
 rpl::producer<int> SettingsWidget::contentHeightValue() const {
 	return _content->heightValue(
 	) | rpl::map([=](int height) {
-		LOG(("ExportDiag: measure widget=%1 hint=%2 viewport=%3 overflow=%4")
-			.arg(height)
-			.arg(_content->sizeHint().height())
-			.arg(_scroll ? _scroll->height() : -1)
-			.arg(_scroll ? _scroll->scrollTopMax() : -1));
 		return height + _buttonsHeight;
 	});
 }

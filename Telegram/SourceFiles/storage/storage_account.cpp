@@ -3009,7 +3009,8 @@ void Account::writeExportSettings(const Export::Settings &settings) {
 	}
 	quint32 size = sizeof(quint32) * 6
 		+ Serialize::stringSize(settings.path)
-		+ sizeof(qint32) * 2 + sizeof(quint64);
+		+ sizeof(qint32) * 2 + sizeof(quint64)
+		+ sizeof(quint8) + sizeof(quint64) * 2;
 	EncryptedDescriptor data(size);
 	data.stream
 		<< quint32(settings.types)
@@ -3042,6 +3043,9 @@ void Account::writeExportSettings(const Export::Settings &settings) {
 	});
 	data.stream << qint32(settings.singlePeerFrom.value_or(0));
 	data.stream << qint32(settings.singlePeerTill.value_or(0));
+	data.stream << quint8(settings.useIdRange ? 1 : 0);
+	data.stream << quint64(settings.singlePeerFromId.value_or(0));
+	data.stream << quint64(settings.singlePeerTillId.value_or(0));
 
 	FileWriteDescriptor file(_exportSettingsKey, _basePath);
 	file.writeEncrypted(data, _localKey);
@@ -3068,6 +3072,8 @@ Export::Settings Account::readExportSettings() {
 	quint64 singlePeerBareId = 0;
 	quint64 singlePeerAccessHash = 0;
 	qint32 singlePeerFrom = 0, singlePeerTill = 0;
+	quint8 useIdRange = 0;
+	quint64 singlePeerFromId = 0, singlePeerTillId = 0;
 	file.stream
 		>> types
 		>> fullChats
@@ -3097,6 +3103,12 @@ Export::Settings Account::readExportSettings() {
 	}
 	if (!file.stream.atEnd()) {
 		file.stream >> singlePeerFrom >> singlePeerTill;
+	}
+	if (!file.stream.atEnd()) {
+		file.stream
+			>> useIdRange
+			>> singlePeerFromId
+			>> singlePeerTillId;
 	}
 	auto result = Export::Settings();
 	result.types = Export::Settings::Types::from_raw(types);
@@ -3141,6 +3153,15 @@ Export::Settings Account::readExportSettings() {
 	}
 	if (singlePeerTill != 0) {
 		result.singlePeerTill = singlePeerTill;
+	}
+	if (useIdRange) {
+		result.useIdRange = true;
+		if (singlePeerFromId != 0) {
+			result.singlePeerFromId = singlePeerFromId;
+		}
+		if (singlePeerTillId != 0) {
+			result.singlePeerTillId = singlePeerTillId;
+		}
 	}
 	return (file.stream.status() == QDataStream::Ok && result.validate())
 		? result

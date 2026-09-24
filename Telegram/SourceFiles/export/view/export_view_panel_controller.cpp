@@ -249,6 +249,9 @@ void ResolveSettings(not_null<Main::Session*> session, Settings &settings) {
 	if (!settings.onlySinglePeer()) {
 		settings.singlePeerFrom = std::nullopt;
 		settings.singlePeerTill = std::nullopt;
+		settings.useIdRange = false;
+		settings.singlePeerFromId = std::nullopt;
+		settings.singlePeerTillId = std::nullopt;
 	}
 }
 
@@ -259,7 +262,8 @@ PanelController::PanelController(
 , _process(process)
 , _settings(
 	std::make_unique<Settings>(_session->local().readExportSettings()))
-, _saveSettingsTimer([=] { saveSettings(); }) {
+, _saveSettingsTimer([=] { saveSettings(); })
+, _mtp(&_session->mtp()) {
 	ResolveSettings(session, *_settings);
 
 	_process->state(
@@ -309,7 +313,201 @@ void PanelController::finishExportTakeout() {
 	}
 }
 
+void PanelController::validateIdRange(FnMut<void()> proceed) {
+	if (!_settings->onlySinglePeer() || !_settings->useIdRange) {
+		proceed();
+		return;
+	}
+	const auto fromOpt = _settings->singlePeerFromId;
+	const auto tillOpt = _settings->singlePeerTillId;
+	if ((fromOpt && !*fromOpt) || (tillOpt && !*tillOpt)) {
+		Ui::Toast::Show(tr::lng_export_id_zero(tr::now));
+		return;
+	}
+	const auto from = fromOpt.value_or(uint64(0));
+	const auto till = tillOpt.value_or(uint64(0));
+	if (from && till && from > till) {
+		Ui::Toast::Show(tr::lng_export_id_from_above_to(tr::now));
+		return;
+	}
+	const auto peerId = SinglePeerId(_session, *_settings);
+	const auto peer = peerId
+		? _session->data().peerLoaded(peerId)
+		: nullptr;
+	if (!peer) {
+		proceed();
+		return;
+	}
+	if (_rangeRequestId) {
+		_mtp.request(_rangeRequestId).cancel();
+		_rangeRequestId = 0;
+	}
+	struct Bounds {
+		int first = 0;
+		int last = 0;
+		int count = 0;
+	};
+	const auto parseHead = [](const MTPmessages_Messages &result) {
+		auto head = Bounds();
+		const auto readFirst = [&](const auto &data) {
+			const auto &list = data.vmessages().v;
+			if (!list.isEmpty()) {
+				head.first = list[0].match([](const auto &m) {
+					return int(m.vid().v);
+				});
+			}
+		};
+		result.match([&](const MTPDmessages_messages &data) {
+			readFirst(data);
+			head.count = int(data.vmessages().v.size());
+		}, [&](const MTPDmessages_messagesSlice &data) {
+			readFirst(data);
+			head.count = data.vcount().v;
+		}, [&](const MTPDmessages_channelMessages &data) {
+			readFirst(data);
+			head.count = data.vcount().v;
+		}, [&](const MTPDmessages_messagesNotModified &data) {
+		});
+		return head;
+	};
+	const auto sharedProceed = std::make_shared<FnMut<void()>>(
+		std::move(proceed));
+	const auto check = [=, this](int first, int last) {
+		_rangeRequestId = 0;
+		if (last <= 0) {
+			(*sharedProceed)();
+			return;
+		}
+		if (from && from > uint64(last)) {
+			Ui::Toast::Show(tr::lng_export_id_from_past_end(
+				tr::now,
+				lt_last,
+				QString::number(last)));
+		} else if (till && till > uint64(last)) {
+			Ui::Toast::Show(tr::lng_export_id_to_past_end(
+				tr::now,
+				lt_last,
+				QString::number(last)));
+		} else if (first > 0 && from && from < uint64(first)) {
+			Ui::Toast::Show(tr::lng_export_id_from_before_start(
+				tr::now,
+				lt_first,
+				QString::number(first)));
+		} else if (first > 0 && till && till < uint64(first)) {
+			Ui::Toast::Show(tr::lng_export_id_to_before_start(
+				tr::now,
+				lt_first,
+				QString::number(first)));
+		} else {
+			(*sharedProceed)();
+		}
+	};
+	const auto topic = _settings->onlySingleTopic();
+	const auto input = peer->input();
+	const auto rootId = _settings->singleTopicRootId;
+	const auto requestNewest = [=, this]() -> mtpRequestId {
+		if (topic) {
+			return _mtp.request(MTPmessages_GetReplies(
+				input,
+				MTP_int(rootId),
+				MTP_int(0),
+				MTP_int(0),
+				MTP_int(0),
+				MTP_int(1),
+				MTP_int(0),
+				MTP_int(0),
+				MTP_long(0)
+			)).done([=, this](const MTPmessages_Messages &result) {
+				const auto head = parseHead(result);
+				if (!head.first) {
+					_rangeRequestId = 0;
+					(*sharedProceed)();
+					return;
+				}
+				if (head.count <= 1) {
+					check(head.first, head.first);
+					return;
+				}
+				_rangeRequestId = _mtp.request(MTPmessages_GetReplies(
+					input,
+					MTP_int(rootId),
+					MTP_int(0),
+					MTP_int(0),
+					MTP_int(1 - head.count),
+					MTP_int(1),
+					MTP_int(0),
+					MTP_int(0),
+					MTP_long(0)
+				)).done([=, this](const MTPmessages_Messages &oldest) {
+					auto first = parseHead(oldest).first;
+					auto last = head.first;
+					if (first > last) {
+						std::swap(first, last);
+					}
+					check(first, last);
+				}).fail([=, this](const MTP::Error &error) {
+					check(0, head.first);
+					return true;
+				}).send();
+			}).fail([=, this](const MTP::Error &error) {
+				_rangeRequestId = 0;
+				(*sharedProceed)();
+				return true;
+			}).send();
+		}
+		return _mtp.request(MTPmessages_GetHistory(
+			input,
+			MTP_int(0),
+			MTP_int(0),
+			MTP_int(0),
+			MTP_int(1),
+			MTP_int(0),
+			MTP_int(0),
+			MTP_long(0)
+		)).done([=, this](const MTPmessages_Messages &result) {
+			const auto head = parseHead(result);
+			if (!head.first) {
+				_rangeRequestId = 0;
+				(*sharedProceed)();
+				return;
+			}
+			if (head.count <= 1) {
+				check(head.first, head.first);
+				return;
+			}
+			_rangeRequestId = _mtp.request(MTPmessages_GetHistory(
+				input,
+				MTP_int(0),
+				MTP_int(0),
+				MTP_int(1 - head.count),
+				MTP_int(1),
+				MTP_int(0),
+				MTP_int(0),
+				MTP_long(0)
+			)).done([=, this](const MTPmessages_Messages &oldest) {
+				auto first = parseHead(oldest).first;
+				auto last = head.first;
+				if (first > last) {
+					std::swap(first, last);
+				}
+				check(first, last);
+			}).fail([=, this](const MTP::Error &error) {
+				check(0, head.first);
+				return true;
+			}).send();
+		}).fail([=, this](const MTP::Error &error) {
+			_rangeRequestId = 0;
+			(*sharedProceed)();
+			return true;
+		}).send();
+	};
+	_rangeRequestId = requestNewest();
+}
+
 PanelController::~PanelController() {
+	if (_rangeRequestId) {
+		_mtp.request(_rangeRequestId).cancel();
+	}
 	if (_saveSettingsTimer.isActive()) {
 		saveSettings();
 	}
@@ -379,6 +577,13 @@ void PanelController::applyRowSettings(
 	settings.singlePeerTill = row.tillDate
 		? std::make_optional(TimeId(row.tillDate))
 		: std::nullopt;
+	settings.useIdRange = row.useIdRange;
+	settings.singlePeerFromId = row.fromId
+		? std::make_optional(uint64(row.fromId))
+		: std::nullopt;
+	settings.singlePeerTillId = row.tillId
+		? std::make_optional(uint64(row.tillId))
+		: std::nullopt;
 	settings.path = row.exportFolder;
 }
 
@@ -416,24 +621,26 @@ void PanelController::showSettings() {
 			Ui::Toast::Show(tr::lng_export_nothing_selected(tr::now));
 			return;
 		}
-		const auto gen = _startGen;
-		const auto folder = SinglePeerFolder(_session, *_settings);
-		const auto sizeLimit = _settings->media.sizeLimit;
-		ensureSharedTakeout([=](uint64 id) {
-			if (gen != _startGen) {
-				return;
-			}
-			showProgress();
-			_session->api().setTakeoutBorrowed(true);
-			_process->setSessionId(_session->uniqueId());
-			_process->setDedupDb(
-				Core::App().downloadManager().dedupDbPath());
-			_process->setSharedTakeoutId(id);
-			_process->startExport(
-				*_settings,
-				PrepareEnvironment(_session),
-				folder);
-		}, sizeLimit);
+		validateIdRange([=]() mutable {
+			const auto gen = _startGen;
+			const auto folder = SinglePeerFolder(_session, *_settings);
+			const auto sizeLimit = _settings->media.sizeLimit;
+			ensureSharedTakeout([=](uint64 id) {
+				if (gen != _startGen) {
+					return;
+				}
+				showProgress();
+				_session->api().setTakeoutBorrowed(true);
+				_process->setSessionId(_session->uniqueId());
+				_process->setDedupDb(
+					Core::App().downloadManager().dedupDbPath());
+				_process->setSharedTakeoutId(id);
+				_process->startExport(
+					*_settings,
+					PrepareEnvironment(_session),
+					folder);
+			}, sizeLimit);
+		});
 	}, settings->lifetime());
 
 	settings->scanClicks(
@@ -457,24 +664,26 @@ void PanelController::showSettings() {
 			Ui::Toast::Show(tr::lng_export_nothing_selected(tr::now));
 			return;
 		}
-		const auto gen = _startGen;
-		const auto folder = SinglePeerFolder(_session, *_settings);
-		const auto sizeLimit = _settings->media.sizeLimit;
-		ensureSharedTakeout([=](uint64 id) {
-			if (gen != _startGen) {
-				return;
-			}
-			showProgress(true);
-			_session->api().setTakeoutBorrowed(true);
-			_process->setSessionId(_session->uniqueId());
-			_process->setDedupDb(
-				Core::App().downloadManager().dedupDbPath());
-			_process->setSharedTakeoutId(id);
-			_process->startScan(
-				*_settings,
-				PrepareEnvironment(_session),
-				folder);
-		}, sizeLimit);
+		validateIdRange([=]() mutable {
+			const auto gen = _startGen;
+			const auto folder = SinglePeerFolder(_session, *_settings);
+			const auto sizeLimit = _settings->media.sizeLimit;
+			ensureSharedTakeout([=](uint64 id) {
+				if (gen != _startGen) {
+					return;
+				}
+				showProgress(true);
+				_session->api().setTakeoutBorrowed(true);
+				_process->setSessionId(_session->uniqueId());
+				_process->setDedupDb(
+					Core::App().downloadManager().dedupDbPath());
+				_process->setSharedTakeoutId(id);
+				_process->startScan(
+					*_settings,
+					PrepareEnvironment(_session),
+					folder);
+			}, sizeLimit);
+		});
 	}, settings->lifetime());
 
 	settings->cancelClicks(
@@ -557,6 +766,13 @@ void PanelController::showSettings() {
 		updateSettings.singlePeerTill = row.tillDate
 			? std::make_optional(TimeId(row.tillDate))
 			: std::nullopt;
+		updateSettings.useIdRange = row.useIdRange;
+		updateSettings.singlePeerFromId = row.fromId
+			? std::make_optional(uint64(row.fromId))
+			: std::nullopt;
+		updateSettings.singlePeerTillId = row.tillId
+			? std::make_optional(uint64(row.tillId))
+			: std::nullopt;
 		updateSettings.path = row.exportFolder;
 		const auto gen = _startGen;
 		const auto sizeLimit = updateSettings.media.sizeLimit;
@@ -584,34 +800,12 @@ void PanelController::showSettings() {
 
 	auto size = st::exportPanelSize;
 	const auto screen = QGuiApplication::primaryScreen();
-	const auto fixedHeight = _settings->onlySinglePeer() ? 820 : 1000;
+	const auto fixedHeight = _settings->onlySinglePeer() ? 780 : 1000;
 	size.setHeight(screen
 		? std::min(screen->availableGeometry().height() - 40, fixedHeight)
 		: fixedHeight);
 	settings->resize(size.width(), size.height());
 	_panel->setInnerSize(size);
-
-	const auto weakSettings = base::make_weak(settings.get());
-	settings->contentHeightValue(
-	) | rpl::on_next([=](int height) {
-		const auto strong = weakSettings.get();
-		if (!strong || !_panel) {
-			return;
-		}
-		const auto inner = _panel->inner();
-		if (!inner || height <= 0) {
-			return;
-		}
-		const auto screen = QGuiApplication::primaryScreen();
-		LOG(("ExportDiag: settings content=%1 cap=%2 screen=%3 inner=%4 panel=%5 dpr=%6")
-			.arg(height)
-			.arg(screen ? (screen->availableGeometry().height() - 40) : 800)
-			.arg(screen ? screen->availableGeometry().height() : -1)
-			.arg(inner->height())
-			.arg(_panel->size().height())
-			.arg(screen ? screen->devicePixelRatio() : -1.));
-	}, _lifetime);
-
 	_panel->showInner(std::move(settings));
 }
 
