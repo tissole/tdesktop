@@ -72,6 +72,9 @@ constexpr auto kProfileMusicSliceLimit = 100;
 			return filter.type() == mtpc_inputMessagesFilterVoice;
 		});
 	auto total = 0;
+	if (counts.size() != filters.size()) {
+		return total;
+	}
 	for (auto i = 0; i != int(filters.size()); ++i) {
 		const auto type = filters[i].type();
 		if (hasVoice
@@ -666,6 +669,17 @@ struct ApiWrap::ChatProcess : AbstractMessagesProcess {
 	int localSplitIndex = 0;
 	int32 fromId = 0; // First message id of the id range (0 = from start).
 	int32 tillId = 0; // Last message id of the id range (0 = until now).
+
+	// Wire bounds are per split: a migrated split numbers its messages
+	// in a different sequence, so each bound is resolved against the
+	// peer that owns it. migratedAt is the old group's newest message
+	// date, i.e. the conversion point.
+	std::vector<int32> splitFrom;
+	std::vector<int32> splitTill;
+	std::vector<int> splitSkip;
+	int32 migratedFromId = 0;
+	int32 migratedTillId = 0;
+	TimeId migratedAt = 0;
 
 	// Single-pass oldest-first walk: cursor climbs by maximum raw
 	// page id, output skips repeats, one counter climbs from zero.
@@ -1948,6 +1962,32 @@ void ApiWrap::requestMessages(
 	resolveDates();
 }
 
+ApiWrap::Range ApiWrap::currentRange() const {
+	Expects(_chatProcess != nullptr);
+
+	auto result = Range();
+	result.active = _settings->useIdRange
+		? (_chatProcess->fromId > 0 || _chatProcess->tillId > 0)
+		: (_settings->singlePeerFrom || _settings->singlePeerTill);
+	result.from = _chatProcess->fromId;
+	result.till = _chatProcess->tillId;
+	return result;
+}
+
+ApiWrap::Range ApiWrap::currentRange(int splitPosition) const {
+	Expects(_chatProcess != nullptr);
+	Expects(splitPosition >= 0);
+	Expects(splitPosition < int(_chatProcess->splitFrom.size()));
+
+	auto result = currentRange();
+	if (_chatProcess->splitSkip[splitPosition]) {
+		return result;
+	}
+	result.from = _chatProcess->splitFrom[splitPosition];
+	result.till = _chatProcess->splitTill[splitPosition];
+	return result;
+}
+
 void ApiWrap::resolveDates() {
 	Expects(_chatProcess != nullptr);
 
@@ -1969,108 +2009,274 @@ void ApiWrap::resolveDates() {
 		_chatProcess->tillId = 0;
 	}
 
-	// Without a date range there is nothing to resolve in either
-	// mode: date bounds resolve to id floors below, and the walk
-	// trims the rest client-side.
-	if (!_settings->singlePeerFrom && !_settings->singlePeerTill) {
-		if (!_scanMode) {
-			_chatProcess->localSplitIndex = 0;
-		}
-		requestMessagesCount(0);
-		return;
-	}
-	if (!_scanMode) {
-		_chatProcess->localSplitIndex = 0;
-	}
+	_chatProcess->migratedFromId = 0;
+	_chatProcess->migratedTillId = 0;
+	_chatProcess->migratedAt = 0;
 
-	const auto resolveTill = [=] {
-		if (!_chatProcess) {
+	const auto hasMigrated = [=] {
+		return ranges::any_of(_chatProcess->info.splits,
+			[](const auto split) { return split < 0; });
+	};
+	// A date at or before the conversion can only exist in the old
+	// group; anything later can only exist in the current chat.
+	const auto boundIsMigrated = [=](TimeId date) {
+		return _chatProcess->migratedAt > 0
+			&& date > 0
+			&& date <= _chatProcess->migratedAt;
+	};
+
+	// Wire bounds are rebuilt from the resolved ids at the single point
+	// where every path funnels into the count request.
+	const auto applyBounds = [=] {
+		const auto splits = int(_chatProcess->info.splits.size());
+		_chatProcess->splitFrom.assign(splits, 0);
+		_chatProcess->splitTill.assign(splits, 0);
+		_chatProcess->splitSkip.assign(splits, 0);
+		for (auto i = 0; i != splits; ++i) {
+			if (_chatProcess->info.splits[i] < 0) {
+				_chatProcess->splitFrom[i] = _chatProcess->migratedFromId;
+				_chatProcess->splitTill[i] = _chatProcess->migratedTillId;
+			} else {
+				_chatProcess->splitFrom[i] = _chatProcess->fromId;
+				_chatProcess->splitTill[i] = _chatProcess->tillId;
+			}
+		}
+		// An id range is the current chat's numbering, so the old
+		// group is not part of this run. An empty id range is no
+		// range at all and must leave the old group alone.
+		if (_settings->useIdRange && currentRange().active) {
+			for (auto i = 0; i != splits; ++i) {
+				_chatProcess->splitSkip[i]
+					= (_chatProcess->info.splits[i] < 0) ? 1 : 0;
+			}
 			return;
 		}
-		if (!_settings->singlePeerTill) {
+		// A split can hold nothing in range when the whole range sits
+		// on the far side of the conversion: at or before it, nothing
+		// reaches the current chat; after it, nothing reaches the old
+		// group. A missing bound runs to that chat's own edge, so an
+		// unset upper bound always reaches the current chat.
+		if (_chatProcess->migratedAt > 0) {
+			const auto from = _settings->singlePeerFrom.value_or(0);
+			const auto till = _settings->singlePeerTill.value_or(0);
+			for (auto i = 0; i != splits; ++i) {
+				const auto old = (_chatProcess->info.splits[i] < 0);
+				const auto inRange = old
+					? (from <= _chatProcess->migratedAt)
+					: (!till || till > _chatProcess->migratedAt);
+				_chatProcess->splitSkip[i] = inRange ? 0 : 1;
+			}
+		}
+	};
+	const auto countThen = [=] {
+		if (_chatProcess) {
+			applyBounds();
 			requestMessagesCount(0);
+		}
+	};
+	// The old group's newest message is the conversion point, so its
+	// date decides which peer owns each bound. An unset upper bound
+	// ("present") is that same message.
+	const auto resolveBoundary = [=](Fn<void()> then) {
+		if (!_chatProcess || !hasMigrated()) {
+			then();
 			return;
 		}
-		const auto peer = _chatProcess->info.input;
 		mainRequest(MTPmessages_GetHistory(
-			peer,
-			MTP_int(0),                           // offset_id
-			MTP_int(*_settings->singlePeerTill),   // offset_date
-			MTP_int(0),                           // add_offset
-			MTP_int(1),                           // limit
-			MTP_int(0),                           // max_id
-			MTP_int(0),                           // min_id
-			MTP_long(0)                           // hash
+			_chatProcess->info.migratedFromInput,
+			MTP_int(0), // offset_id
+			MTP_int(0), // offset_date
+			MTP_int(0), // add_offset
+			MTP_int(1), // limit
+			MTP_int(0), // max_id
+			MTP_int(0), // min_id
+			MTP_long(0) // hash
 		)).done([=](const MTPmessages_Messages &result) {
 			if (!_chatProcess) {
 				return;
 			}
 			result.match([&](const MTPDmessages_messagesNotModified &data) {
 			}, [&](const auto &data) {
-				if (!data.vmessages().v.isEmpty()) {
-					_chatProcess->tillId = data.vmessages().v[0].match(
+				if (data.vmessages().v.isEmpty()) {
+					return;
+				}
+				const auto msg = data.vmessages().v[0];
+				_chatProcess->migratedAt = msg.match(
+					[](const MTPDmessageEmpty &data) {
+						return TimeId(0);
+					}, [](const auto &m) {
+						return TimeId(m.vdate().v);
+					});
+				if (!_settings->singlePeerTill) {
+					_chatProcess->migratedTillId = msg.match(
 						[](const auto &m) { return int32(m.vid().v); });
 				}
 			});
-			requestMessagesCount(0);
+			then();
 		}).fail([=](const MTP::Error &error) {
-			requestMessagesCount(0);
+			then();
 			return true;
 		}).send();
 	};
-
-	if (!_settings->singlePeerFrom) {
-		resolveTill();
-		return;
-	}
-	const auto peer = _chatProcess->info.input;
-	mainRequest(MTPmessages_GetHistory(
-		peer,
-		MTP_int(0),                             // offset_id
-		MTP_int(*_settings->singlePeerFrom),     // offset_date
-		MTP_int(0),                             // add_offset
-		MTP_int(1),                             // limit
-		MTP_int(0),                             // max_id
-		MTP_int(0),                             // min_id
-		MTP_long(0)                             // hash
-	)).done([=](const MTPmessages_Messages &result) {
-		if (!_chatProcess) {
+	// One request per bound, against the peer that owns that date.
+	const auto resolveBound = [=](
+			TimeId date,
+			bool isFrom,
+			Fn<void()> then) {
+		if (!_chatProcess || !date) {
+			then();
 			return;
 		}
-		result.match([&](const MTPDmessages_messagesNotModified &data) {
-		}, [&](const auto &data) {
-			if (!data.vmessages().v.isEmpty()) {
+		const auto migrated = boundIsMigrated(date);
+		const auto peer = migrated
+			? _chatProcess->info.migratedFromInput
+			: _chatProcess->info.input;
+		mainRequest(MTPmessages_GetHistory(
+			peer,
+			MTP_int(0), // offset_id
+			MTP_int(date), // offset_date
+			MTP_int(0), // add_offset
+			MTP_int(1), // limit
+			MTP_int(0), // max_id
+			MTP_int(0), // min_id
+			MTP_long(0) // hash
+		)).done([=](const MTPmessages_Messages &result) {
+			if (!_chatProcess) {
+				return;
+			}
+			result.match([&](const MTPDmessages_messagesNotModified &data) {
+			}, [&](const auto &data) {
+				if (data.vmessages().v.isEmpty()) {
+					return;
+				}
 				const auto msg = data.vmessages().v[0];
 				const auto id = msg.match([](const auto &m) {
 					return int32(m.vid().v);
 				});
-				const auto date = msg.match([](const MTPDmessageEmpty &data) {
-					return TimeId(0);
-				}, [](const auto &m) {
-					return TimeId(m.vdate().v);
-				});
-				// Exclude the boundary message only when it predates the range.
-				_chatProcess->fromId = (date > 0 && date < *_settings->singlePeerFrom)
-					? (id + 1)
-					: id;
+				if (isFrom) {
+					const auto msgDate = msg.match(
+						[](const MTPDmessageEmpty &data) {
+							return TimeId(0);
+						}, [](const auto &m) {
+							return TimeId(m.vdate().v);
+						});
+					// Exclude the boundary message only when it
+					// predates the range.
+					const auto value
+						= (msgDate > 0 && msgDate < date)
+						? (id + 1)
+						: id;
+					if (migrated) {
+						_chatProcess->migratedFromId = value;
+					} else {
+						_chatProcess->fromId = value;
+					}
+				} else if (migrated) {
+					_chatProcess->migratedTillId = id;
+				} else {
+					_chatProcess->tillId = id;
+				}
+			});
+			then();
+		}).fail([=](const MTP::Error &error) {
+			then();
+			return true;
+		}).send();
+	};
+	// "Present" is stored as no bound, but it still means the newest
+	// message of the current chat, and a range without an end cannot
+	// be measured.
+	const auto resolveLatest = [=](Fn<void()> then) {
+		if (!_chatProcess
+			|| _chatProcess->tillId > 0
+			|| !currentRange().active) {
+			then();
+			return;
+		}
+		mainRequest(MTPmessages_GetHistory(
+			_chatProcess->info.input,
+			MTP_int(0), // offset_id
+			MTP_int(0), // offset_date
+			MTP_int(0), // add_offset
+			MTP_int(1), // limit
+			MTP_int(0), // max_id
+			MTP_int(0), // min_id
+			MTP_long(0) // hash
+		)).done([=](const MTPmessages_Messages &result) {
+			if (!_chatProcess) {
+				return;
 			}
+			result.match([&](const MTPDmessages_messagesNotModified &data) {
+			}, [&](const auto &data) {
+				if (!data.vmessages().v.isEmpty()
+					&& _chatProcess->tillId == 0) {
+					_chatProcess->tillId = data.vmessages().v[0].match(
+						[](const auto &m) { return int32(m.vid().v); });
+				}
+			});
+			then();
+		}).fail([=](const MTP::Error &error) {
+			then();
+			return true;
+		}).send();
+	};
+
+	const auto resolveTill = [=](Fn<void()> then) {
+		if (!_chatProcess) {
+			return;
+		}
+		if (!_settings->singlePeerTill) {
+			resolveLatest(then);
+			return;
+		}
+		resolveBound(*_settings->singlePeerTill, false, then);
+	};
+	const auto resolveFrom = [=](Fn<void()> then) {
+		if (!_chatProcess) {
+			return;
+		}
+		if (!_settings->singlePeerFrom) {
+			then();
+			return;
+		}
+		resolveBound(*_settings->singlePeerFrom, true, then);
+	};
+
+	if (!_scanMode) {
+		_chatProcess->localSplitIndex = 0;
+	}
+	// Without a date range there is nothing to resolve in either
+	// mode: date bounds resolve to id floors below, and the walk
+	// trims the rest client-side.
+	if (!_settings->singlePeerFrom && !_settings->singlePeerTill) {
+		resolveLatest(countThen);
+		return;
+	}
+
+	const auto chain = [=] {
+		resolveFrom([=] {
+			resolveTill(countThen);
 		});
-		resolveTill();
-	}).fail([=](const MTP::Error &error) {
-		resolveTill();
-		return true;
-	}).send();
+	};
+	if (!hasMigrated()) {
+		chain();
+		return;
+	}
+	resolveBoundary(chain);
 }
 
 void ApiWrap::requestMessagesCount(int localSplitIndex) {
 	Expects(_chatProcess != nullptr);
 	Expects(localSplitIndex < _chatProcess->info.splits.size());
 
+	// Whole-chat question: bounds would empty the list beside a correct
+	// count, and only the count is read here.
 	requestChatMessages(
-		_chatProcess->info.splits[localSplitIndex],
+		localSplitIndex,
 		0, // offset_id
 		0, // add_offset
 		1, // limit
+		false, // withRange
 		[=](const MTPmessages_Messages &result) {
 		Expects(_chatProcess != nullptr);
 
@@ -2088,40 +2294,7 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 			error("Unexpected messagesNotModified received.");
 			return;
 		}
-		const auto skipSplit = !Data::SingleMessageAfter(
-			result,
-			_settings->singlePeerFrom.value_or(0));
-		if (skipSplit) {
-			// No messages from the requested range, skip this split.
-			messagesCountLoaded(localSplitIndex, 0);
-			return;
-		}
-		checkFirstMessageDate(localSplitIndex, count);
-	});
-}
-
-void ApiWrap::checkFirstMessageDate(int localSplitIndex, int count) {
-	Expects(_chatProcess != nullptr);
-	Expects(localSplitIndex < _chatProcess->info.splits.size());
-
-	if (!_settings->singlePeerTill) {
 		messagesCountLoaded(localSplitIndex, count);
-		return;
-	}
-
-	// Request first message in this split to check if its' date < till.
-	requestChatMessages(
-		_chatProcess->info.splits[localSplitIndex],
-		1, // offset_id
-		-1, // add_offset
-		1, // limit
-		[=](const MTPmessages_Messages &result) {
-		Expects(_chatProcess != nullptr);
-
-		const auto skipSplit = !Data::SingleMessageBefore(
-			result,
-			_settings->singlePeerTill.value_or(0));
-		messagesCountLoaded(localSplitIndex, skipSplit ? 0 : count);
 	});
 }
 
@@ -2129,7 +2302,12 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 	Expects(_chatProcess != nullptr);
 	Expects(localSplitIndex < _chatProcess->info.splits.size());
 
-	_chatProcess->info.messagesCountPerSplit[localSplitIndex] = count;
+	// A split left out of the run gets a zero count, which is how the
+	// walk already skips a split.
+	const auto excluded = _chatProcess->splitSkip[localSplitIndex];
+	_chatProcess->info.messagesCountPerSplit[localSplitIndex] = excluded
+		? 0
+		: count;
 	if (localSplitIndex + 1 < _chatProcess->info.splits.size()) {
 		requestMessagesCount(localSplitIndex + 1);
 	} else if (_updateMode) {
@@ -2148,26 +2326,34 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 		&& !_chatProcess->scanFilters.empty()
 		&& _chatProcess->scanCounts.empty()
 		&& !_chatProcess->info.onlyMyMessages) {
-		requestScanCount();
+		// A range decides search against its own span and the chat
+		// total, both already known, so the probes are not fired.
+		if (currentRange().active) {
+			decideScanMethod();
+		} else {
+			requestScanCount();
+		}
 	} else if (!_scanMode
 		&& _chatProcess->scanCounts.empty()
 		&& !_chatProcess->info.onlyMyMessages
-		&& startExportFilterCounts()) {
-		return;
+		&& setupExportSearch()) {
+		if (currentRange().active) {
+			decideExportSearch();
+		} else {
+			requestExportCounts();
+		}
 	} else if (_chatProcess->start(_chatProcess->info)) {
 		requestMessagesSlice();
 	}
 }
 
 // Fully indexed file-filtered exports (no text, no stickers:
-// neither has a usable server index) ask the server for each
-// filter's totals first: the sums are the exact selected-message
-// denominator. Single indexed kinds walk search, several walk
-// sequential per-filter search. Anything else walks history with
-// walked/full-messages counters. Probes carry the date/id range
-// so the totals match the filtered walk.
-// Returns true when probes were fired (walk starts at join).
-bool ApiWrap::startExportFilterCounts() {
+// neither has a usable server index) walk search, one pass per
+// filter. Anything else walks history. The per-filter totals are
+// only needed for the progress denominator, so a range skips them:
+// the server counts a filter over the whole chat regardless of the
+// range, and the denominator is the id span then.
+bool ApiWrap::setupExportSearch() {
 	Expects(_chatProcess != nullptr);
 
 	using Type = MediaSettings::Type;
@@ -2185,15 +2371,22 @@ bool ApiWrap::startExportFilterCounts() {
 	if (filters.empty()) {
 		return false;
 	}
-	const auto filterCount = int(filters.size());
-	const auto splits = int(_chatProcess->info.splits.size());
 	_chatProcess->scanFilters = filters;
+	return true;
+}
+
+void ApiWrap::requestExportCounts() {
+	Expects(_chatProcess != nullptr);
+
+	const auto filterCount = int(_chatProcess->scanFilters.size());
+	const auto splits = int(_chatProcess->info.splits.size());
 	_chatProcess->scanCounts.assign(
 		filterCount,
 		std::vector<int>(splits, 0));
 	_chatProcess->scanCountPending = filterCount * splits;
 	if (!_chatProcess->scanCountPending) {
-		return false;
+		decideExportSearch();
+		return;
 	}
 	// Fan out staggered like the scan probes: same method family
 	// as the paced walk pages, completion order irrelevant.
@@ -2224,7 +2417,6 @@ bool ApiWrap::startExportFilterCounts() {
 		}
 	};
 	(*fire)();
-	return true;
 }
 
 void ApiWrap::fireExportCountSlot(int filterIndex, int splitPosition) {
@@ -2308,6 +2500,7 @@ void ApiWrap::fireExportCountSlot(int filterIndex, int splitPosition) {
 void ApiWrap::decideExportSearch() {
 	Expects(_chatProcess != nullptr);
 
+	const auto range = currentRange();
 	const auto searchTotal = SearchTotalSkippingUnions(
 		_chatProcess->scanFilters,
 		_chatProcess->scanCounts);
@@ -2320,17 +2513,24 @@ void ApiWrap::decideExportSearch() {
 	// selections stay on history. Text and media-free likewise.
 	// Scan (no media) keeps its own sparse rule in
 	// decideScanMethod.
+	// Probe sums are chat-wide; under a range the span replaces them.
 	_chatProcess->hasSelectedTotal = true;
-	_chatProcess->selectedTotal = searchTotal;
+	_chatProcess->selectedTotal = (range.span() > 0)
+		? range.span()
+		: searchTotal;
 	using Type = MediaSettings::Type;
 	const auto sticker = ((_settings->media.types & Type::Sticker)
 		== Type::Sticker);
 	if (!sticker) {
 		_chatProcess->scanBySearch = true;
 		_chatProcess->scanFilterIndex = 0;
-		for (auto i = 0; i != _chatProcess->info.splits.size(); ++i) {
-			_chatProcess->info.messagesCountPerSplit[i]
-				= _chatProcess->scanCounts[0][i];
+		// Without probes the chat totals stay in place; the range
+		// keeps the walk alive on its own.
+		if (!_chatProcess->scanCounts.empty()) {
+			for (auto i = 0; i != _chatProcess->info.splits.size(); ++i) {
+				_chatProcess->info.messagesCountPerSplit[i]
+					= _chatProcess->scanCounts[0][i];
+			}
 		}
 	}
 	if (_chatProcess->start(_chatProcess->info)) {
@@ -2344,6 +2544,10 @@ bool ApiWrap::hasSelectedTotal() const {
 
 int ApiWrap::selectedTotal() const {
 	return _chatProcess ? _chatProcess->selectedTotal : 0;
+}
+
+int ApiWrap::rangeDenominator() const {
+	return _chatProcess ? currentRange().span() : 0;
 }
 
 int ApiWrap::chatSelectedDone() const {
@@ -2486,13 +2690,15 @@ void ApiWrap::decideScanMethod() {
 	using Type = MediaSettings::Type;
 	const auto sticker = ((_settings->media.types & Type::Sticker)
 		== Type::Sticker);
+	// Probe sums are chat-wide, so under a range weigh the span against
+	// the chat total; no span means history, which is slower but right.
+	const auto range = currentRange();
+	const auto covered = range.active ? range.span() : searchTotal;
+	const auto weighable = !range.active || (covered > 0);
 	const auto useSearch = !sticker
 		&& historyTotal > 0
-		&& searchTotal * 2 <= historyTotal;
-	LOG(("ExportDiag: TEMP scan history=%1 search=%2 useSearch=%3 "
-		"splits=%4 filters=%5").arg(historyTotal).arg(searchTotal)
-		.arg(useSearch).arg(int(_chatProcess->info.splits.size()))
-		.arg(int(_chatProcess->scanFilters.size())));
+		&& weighable
+		&& covered * 2 <= historyTotal;
 	if (useSearch) {
 		_chatProcess->scanBySearch = true;
 		_chatProcess->scanFilterIndex = 0;
@@ -2501,26 +2707,31 @@ void ApiWrap::decideScanMethod() {
 			[](const auto &filter) {
 				return filter.type() == mtpc_inputMessagesFilterVoice;
 			});
-		for (auto i = 0; i != _chatProcess->info.splits.size(); ++i) {
-			auto total = 0;
-			for (auto f = 0;
-				f != int(_chatProcess->scanFilters.size());
-				++f) {
-				const auto type = _chatProcess->scanFilters[f].type();
-				if (hasVoice
-					&& type == mtpc_inputMessagesFilterRoundVoice) {
-					continue;
+		// Without probes there is nothing to distribute per split.
+		if (!_chatProcess->scanCounts.empty()) {
+			for (auto i = 0; i != _chatProcess->info.splits.size(); ++i) {
+				auto total = 0;
+				for (auto f = 0;
+					f != int(_chatProcess->scanFilters.size());
+					++f) {
+					const auto type = _chatProcess->scanFilters[f].type();
+					if (hasVoice
+						&& type == mtpc_inputMessagesFilterRoundVoice) {
+						continue;
+					}
+					total += _chatProcess->scanCounts[f][i];
 				}
-				total += _chatProcess->scanCounts[f][i];
+				_chatProcess->info.messagesCountPerSplit[i] = total;
 			}
-			_chatProcess->info.messagesCountPerSplit[i] = total;
 		}
 		if (!_chatProcess->start(_chatProcess->info)) {
 			return;
 		}
-		for (auto i = 0; i != _chatProcess->info.splits.size(); ++i) {
-			_chatProcess->info.messagesCountPerSplit[i]
-				= _chatProcess->scanCounts[0][i];
+		if (!_chatProcess->scanCounts.empty()) {
+			for (auto i = 0; i != _chatProcess->info.splits.size(); ++i) {
+				_chatProcess->info.messagesCountPerSplit[i]
+					= _chatProcess->scanCounts[0][i];
+			}
 		}
 		requestMessagesSlice();
 		return;
@@ -2565,9 +2776,11 @@ bool ApiWrap::scanAdvanceFilter() {
 	_chatProcess->committedMax = 0;
 	_chatProcess->pagePrefetch.reset();
 	_chatProcess->lastSlice = false;
-	for (auto i = 0; i != _chatProcess->info.splits.size(); ++i) {
-		_chatProcess->info.messagesCountPerSplit[i]
-			= _chatProcess->scanCounts[next][i];
+	if (!_chatProcess->scanCounts.empty()) {
+		for (auto i = 0; i != _chatProcess->info.splits.size(); ++i) {
+			_chatProcess->info.messagesCountPerSplit[i]
+				= _chatProcess->scanCounts[next][i];
+		}
 	}
 	requestMessagesSlice();
 	return true;
@@ -3059,10 +3272,11 @@ void ApiWrap::appendChatsSlice(
 void ApiWrap::consumeChatPage(MTPmessages_Messages result) {
 	Expects(_chatProcess != nullptr);
 
+	const auto range = currentRange(_chatProcess->localSplitIndex);
 	const auto cursor = _chatProcess->walkStarted
 		? _chatProcess->walkCursor
-		: ((_settings->useIdRange && _chatProcess->fromId > 0)
-			? _chatProcess->fromId
+		: ((_settings->useIdRange && range.from > 0)
+			? range.from
 			: int32(1));
 	auto last = false;
 	auto raw = 0;
@@ -3115,12 +3329,12 @@ void ApiWrap::consumeChatPage(MTPmessages_Messages result) {
 				return true;
 			}
 			if (_settings->useIdRange) {
-				if (_chatProcess->fromId > 0
-					&& message.id < _chatProcess->fromId) {
+				if (range.from > 0
+					&& message.id < range.from) {
 					return true;
 				}
-				if (_chatProcess->tillId > 0
-					&& message.id > _chatProcess->tillId) {
+				if (range.till > 0
+					&& message.id > range.till) {
 					return true;
 				}
 			}
@@ -3172,10 +3386,11 @@ void ApiWrap::firePagePrefetch() {
 	_chatProcess->pagePrefetchSplit = split;
 	_chatProcess->pagePrefetchFilter = filter;
 	requestChatMessages(
-		_chatProcess->info.splits[split],
+		split,
 		cursor,
 		-kMessagesSliceLimit,
 		kMessagesSliceLimit,
+		true, // withRange
 		[=](MTPmessages_Messages &&result) mutable {
 		if (!_chatProcess || gen != _dedupGen) {
 			return;
@@ -3231,12 +3446,14 @@ void ApiWrap::requestMessagesSlice() {
 			_chatProcess->walkStarted = true;
 			_chatProcess->walkCursor = 1;
 			_chatProcess->writtenMax = 0;
-			for (auto i = 0;
-				i != _chatProcess->info.splits.size();
-				++i) {
-				_chatProcess->info.messagesCountPerSplit[i]
-					= _chatProcess->scanCounts[
-						_chatProcess->scanFilterIndex][i];
+			if (!_chatProcess->scanCounts.empty()) {
+				for (auto i = 0;
+					i != _chatProcess->info.splits.size();
+					++i) {
+					_chatProcess->info.messagesCountPerSplit[i]
+						= _chatProcess->scanCounts[
+							_chatProcess->scanFilterIndex][i];
+				}
 			}
 		} else {
 			if (_resumeSplitIndex > 0
@@ -3276,25 +3493,23 @@ void ApiWrap::requestMessagesSlice() {
 	// written, and emitted at once. One counter climbs from zero.
 	const auto count = _chatProcess->info.messagesCountPerSplit[
 		_chatProcess->localSplitIndex];
-	LOG(("ExportDiag: TEMP walk split=%1 count=%2 bySearch=%3 floor=%4 "
-		"from=%5 till=%6 scan=%7").arg(_chatProcess->localSplitIndex)
-		.arg(count).arg(_chatProcess->scanBySearch)
-		.arg(_chatProcess->fromId).arg(_chatProcess->tillId)
-		.arg(_scanMode));
-	if (!count) {
+	const auto range = currentRange(_chatProcess->localSplitIndex);
+	// A resolved lower bound is an existing id, so the range is not empty.
+	if (!count && !range.nonEmpty()) {
 		startMessagesSlice({});
 		return;
 	}
 	const auto cursor = _chatProcess->walkStarted
 		? _chatProcess->walkCursor
-		: ((_settings->useIdRange && _chatProcess->fromId > 0)
-			? _chatProcess->fromId
+		: ((_settings->useIdRange && range.from > 0)
+			? range.from
 			: int32(1));
 	requestChatMessages(
-		_chatProcess->info.splits[_chatProcess->localSplitIndex],
+		_chatProcess->localSplitIndex,
 		cursor,
 		-kMessagesSliceLimit,
 		kMessagesSliceLimit,
+		true, // withRange
 		[=](MTPmessages_Messages &&result) mutable {
 		Expects(_chatProcess != nullptr);
 
@@ -3303,10 +3518,11 @@ void ApiWrap::requestMessagesSlice() {
 }
 
 void ApiWrap::requestChatMessages(
-		int splitIndex,
+		int splitPosition,
 		int offsetId,
 		int addOffset,
 		int limit,
+		bool withRange,
 		FnMut<void(MTPmessages_Messages&&)> done) {
 	Expects(_chatProcess != nullptr);
 
@@ -3333,15 +3549,17 @@ void ApiWrap::requestChatMessages(
 				return;
 			}
 			requestChatMessages(
-				splitIndex,
+				splitPosition,
 				offsetId,
 				addOffset,
 				limit,
+				withRange,
 				base::take(_chatProcess->requestDone));
 		});
 		return true;
 	};
 	const auto splitsCount = int(_splits.size());
+	const auto splitIndex = _chatProcess->info.splits[splitPosition];
 	const auto realPeerInput = (splitIndex >= 0)
 		? _chatProcess->info.input
 		: _chatProcess->info.migratedFromInput;
@@ -3351,17 +3569,19 @@ void ApiWrap::requestChatMessages(
 	const auto realSplitIndex = (splitIndex >= 0)
 		? splitIndex
 		: (splitsCount + splitIndex);
-	const auto minId = (_chatProcess->fromId > 0)
-		? int32(_chatProcess->fromId - 1)
+	const auto from = _chatProcess->splitFrom[splitPosition];
+	const auto till = _chatProcess->splitTill[splitPosition];
+	const auto minId = (withRange && from > 0)
+		? int32(from - 1)
 		: int32(0);
-	const auto maxId = (_chatProcess->tillId > 0)
-		? int32(_chatProcess->tillId + 1)
+	const auto maxId = (withRange && till > 0)
+		? int32(till + 1)
 		: int32(0);
 	// A first page with backward paging under any bound (id floor
 	// or date range) returns an empty page with the count intact:
 	// page forward instead. Later pages keep backward paging.
-	const auto dateBounded = (_settings->singlePeerFrom
-		|| _settings->singlePeerTill);
+	const auto dateBounded = (withRange
+		&& (_settings->singlePeerFrom || _settings->singlePeerTill));
 	const auto floored = ((minId > 0 && offsetId <= minId)
 		|| (dateBounded && offsetId <= 1));
 	const auto pageOffsetId = floored ? 0 : offsetId;
@@ -3446,10 +3666,11 @@ void ApiWrap::requestChatMessages(
 					// Just switch to only my messages.
 					_chatProcess->info.onlyMyMessages = true;
 					requestChatMessages(
-						splitIndex,
+						splitPosition,
 						offsetId,
 						addOffset,
 						limit,
+						withRange,
 						base::take(_chatProcess->requestDone));
 					return true;
 				}

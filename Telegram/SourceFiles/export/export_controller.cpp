@@ -879,13 +879,17 @@ void ControllerObject::exportNextDialog() {
 		// File-filtered exports count selected messages, not
 		// walked ones: the ApiWrap probes carry the exact total.
 		_selectedCounting = _api.hasSelectedTotal();
-		_messagesCount = _selectedCounting
-			? _api.selectedTotal()
-			: ranges::accumulate(
-				info.messagesCountPerSplit,
-				0);
+		const auto rangeTotal = _api.rangeDenominator();
+		_messagesCount = rangeTotal
+			? rangeTotal
+			: (_selectedCounting
+				? _api.selectedTotal()
+				: ranges::accumulate(
+					info.messagesCountPerSplit,
+					0));
 		setState(stateDialogs(selectedProgress()));
-		if (_settings.singlePeerFrom || _settings.singlePeerTill) {
+		if (!rangeTotal
+			&& (_settings.singlePeerFrom || _settings.singlePeerTill)) {
 			_api.requestRangeTotal([=](int count) {
 				_messagesCount = count;
 				setState(stateDialogs(selectedProgress()));

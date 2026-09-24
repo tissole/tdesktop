@@ -743,8 +743,7 @@ void SettingsWidget::addIdRangeOption(
 		auto inputW = (width - startX - fromW - toW - 3 * gap) / 2;
 		inputW = std::max(inputW, 0);
 		auto x = startX;
-		// The field keeps the row top like the labels above it, and
-		// its text margin lands the value on their text line.
+		// The field's text margin lands the value on the labels' line.
 		const auto inputH = st::exportRangeInput.heightMin;
 		const auto place = [&](auto *widget, int w, int h, int y) {
 			widget->moveToLeft(x, y);

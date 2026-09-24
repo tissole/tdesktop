@@ -119,6 +119,7 @@ public:
 	void requestRangeTotal(Fn<void(int)> done);
 	[[nodiscard]] bool hasSelectedTotal() const;
 	[[nodiscard]] int selectedTotal() const;
+	[[nodiscard]] int rangeDenominator() const;
 	[[nodiscard]] int chatSelectedDone() const;
 
 	void requestTopicMessages(
@@ -172,6 +173,26 @@ private:
 	struct AbstractMessagesProcess;
 	struct ChatProcess;
 	struct TopicProcess;
+
+	struct Range {
+		bool active = false;
+		int32 from = 0;
+		int32 till = 0;
+
+		// Upper bound only, and it cannot describe the selected kinds.
+		// 0 when a bound is unset.
+		[[nodiscard]] int span() const {
+			return (from > 0 && till >= from) ? int(till - from + 1) : 0;
+		}
+
+		// A lower bound is an existing id, so the range cannot be empty.
+		[[nodiscard]] bool nonEmpty() const {
+			return active && from > 0;
+		}
+	};
+
+	[[nodiscard]] Range currentRange() const;
+	[[nodiscard]] Range currentRange(int splitPosition) const;
 
 	void requestScanCount();
 	void decideScanMethod();
@@ -243,13 +264,13 @@ private:
 		int splitIndex);
 
 	void requestMessagesCount(int localSplitIndex);
-	void checkFirstMessageDate(int localSplitIndex, int count);
 	void messagesCountLoaded(int localSplitIndex, int count);
 	void resolveDates();
 	void requestMessagesSlice();
 	void consumeChatPage(MTPmessages_Messages result);
 	void firePagePrefetch();
-	bool startExportFilterCounts();
+	bool setupExportSearch();
+	void requestExportCounts();
 	void fireExportCountSlot(int filterIndex, int splitPosition);
 	void decideExportSearch();
 	void fireScanCountSlot(int filterIndex, int splitPosition);
@@ -258,6 +279,7 @@ private:
 		int offsetId,
 		int addOffset,
 		int limit,
+		bool withRange,
 		FnMut<void(MTPmessages_Messages&&)> done);
 	void startMessagesSlice(Data::MessagesSlice &&slice);
 	void resumeMessagesSlice();
