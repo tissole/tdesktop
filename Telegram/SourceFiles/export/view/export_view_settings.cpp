@@ -557,6 +557,7 @@ not_null<Ui::Checkbox*> SettingsWidget::addLimitsLabel(
 				readData().singlePeerFrom.value_or(0),
 				0,
 				readData().singlePeerTill.value_or(0),
+				QTime(0, 0),
 				tr::lng_export_from_beginning(),
 				done);
 		} else if (url == u"internal:edit_from_time"_q) {
@@ -597,6 +598,7 @@ not_null<Ui::Checkbox*> SettingsWidget::addLimitsLabel(
 				readData().singlePeerTill.value_or(0),
 				readData().singlePeerFrom.value_or(0),
 				0,
+				QTime(23, 59, 59),
 				tr::lng_export_till_end(),
 				done);
 		} else if (url == u"internal:edit_till_time"_q) {
@@ -775,6 +777,7 @@ void SettingsWidget::editDateLimit(
 		TimeId current,
 		TimeId min,
 		TimeId max,
+		QTime timeOfDay,
 		rpl::producer<QString> resetLabel,
 		Fn<void(TimeId)> done) {
 	Expects(_showBoxCallback != nullptr);
@@ -799,7 +802,7 @@ void SettingsWidget::editDateLimit(
 	const auto callback = crl::guard(this, [=](
 			const QDate &date,
 			Fn<void()> close) {
-		done(base::unixtime::serialize(date.startOfDay()));
+		done(base::unixtime::serialize(QDateTime(date, timeOfDay)));
 		close();
 	});
 	auto box = Box<Ui::CalendarBox>(Ui::CalendarBoxArgs{

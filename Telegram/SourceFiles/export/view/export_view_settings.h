@@ -13,6 +13,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <vector>
 
+class QTime;
+
 namespace Ui {
 class VerticalLayout;
 class Checkbox;
@@ -114,6 +116,7 @@ private:
 		TimeId current,
 		TimeId min,
 		TimeId max,
+		QTime timeOfDay,
 		rpl::producer<QString> resetLabel,
 		Fn<void(TimeId)> done);
 
