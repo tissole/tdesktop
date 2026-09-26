@@ -49,6 +49,20 @@ constexpr auto kWalkHashAttempts = 20;
 constexpr auto kMaxEmojiPerRequest = 100;
 constexpr auto kStoriesSliceLimit = 100;
 constexpr auto kProfileMusicSliceLimit = 100;
+constexpr auto kUpdateProbeLimit = 100;
+
+template <typename Messages>
+[[nodiscard]] std::vector<int32> CollectMessageIds(const Messages &messages) {
+	auto result = std::vector<int32>();
+	result.reserve(messages.size());
+	for (const auto &message : messages) {
+		message.match([&](const MTPDmessageEmpty &) {
+		}, [&](const auto &data) {
+			result.push_back(int32(data.vid().v));
+		});
+	}
+	return result;
+}
 
 [[nodiscard]] MediaSettings::Types scanFileTypes() {
 	using Type = MediaSettings::Type;
@@ -687,6 +701,7 @@ struct ApiWrap::ChatProcess : AbstractMessagesProcess {
 	int32 walkCursor = 1;
 	int32 writtenMax = 0;
 	int32 committedMax = 0;
+	int32 updateAnchor = 0;
 
 	// Next-page prefetch: fired while the current page's hash batch
 	// drains, consumed in walk order. At most one outstanding list
@@ -1991,6 +2006,9 @@ ApiWrap::Range ApiWrap::currentRange(int splitPosition) const {
 void ApiWrap::resolveDates() {
 	Expects(_chatProcess != nullptr);
 
+	_noteNewestId = 0;
+	_noteNewestDate = 0;
+
 	// Id bounds come from the id-range setting; dates additionally
 	// resolve to id floors below. The walk trims the rest per
 	// message client-side; walk pages carry no date bounds (server
@@ -2294,8 +2312,187 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 			error("Unexpected messagesNotModified received.");
 			return;
 		}
+		recordNewestId(localSplitIndex, result);
 		messagesCountLoaded(localSplitIndex, count);
 	});
+}
+
+void ApiWrap::recordNewestId(
+		int localSplitIndex,
+		const MTPmessages_Messages &result) {
+	Expects(_chatProcess != nullptr);
+
+    // A migrated part numbers its messages independently, so it must
+    // compare like with like: only the split owning the id space in
+    // play contributes. An update always compares the current chat's
+    // newest id: new messages arrive only there, never in the old group.
+    const auto isMigrated
+        = _chatProcess->info.splits[localSplitIndex] < 0;
+    const auto wantedMigrated = !_updateMode
+        && !_chatProcess->info.migratedFromInput.match(
+            [](const MTPDinputPeerEmpty &) { return true; },
+            [](const auto &) { return false; }); // fresh run's own part
+    if (isMigrated != wantedMigrated) {
+        return;
+    }
+	result.match([&](const auto &data) {
+		if constexpr (MTPDmessages_messagesNotModified::Is<
+				decltype(data)>()) {
+			return;
+		} else if (data.vmessages().v.isEmpty()) {
+			return;
+		} else {
+			const auto id = int32(data.vmessages().v[0].match(
+				[](const auto &message) {
+					return int32(message.vid().v);
+				}));
+			const auto date = TimeId(data.vmessages().v[0].match(
+				[](const MTPDmessageEmpty &) { return 0; },
+				[](const auto &message) {
+					return int(message.vdate().v);
+				}));
+			if (_updateMode) {
+				if (id > _updateNewestId) {
+					_updateNewestId = id;
+				}
+			} else if (id > _noteNewestId) {
+				_noteNewestId = id;
+				_noteNewestDate = date;
+			}
+		}
+	});
+}
+
+void ApiWrap::requestUpdateSelectedCount(int32 known, int anyNew) {
+	Expects(_chatProcess != nullptr);
+
+	const auto filters = ScanSearchFilters(_settings->media.types);
+	if (filters.empty()) {
+		reportUpdateCheck(anyNew, anyNew);
+		return;
+	}
+	const auto process = _chatProcess.get();
+	const auto splitsCount = int(_splits.size());
+	// New messages only land in the current chat. After the splits are
+	// sorted ascending (the old group's negative entries first), the
+	// current chat's own non-negative split sorts last.
+	const auto splitIndex = process->info.splits[
+		int(process->info.splits.size()) - 1];
+	const auto realPeerInput = (splitIndex >= 0)
+		? process->info.input
+		: process->info.migratedFromInput;
+	const auto realSplitIndex = (splitIndex >= 0)
+		? splitIndex
+		: (splitsCount + splitIndex);
+	// RoundVoice results are a subset of the Voice walk (measured), so
+	// probing both counts the same messages twice; the walk visits only
+	// Voice when both filters are present.
+	const auto hasVoice = ranges::any_of(
+		filters,
+		[](const auto &filter) {
+			return filter.type() == mtpc_inputMessagesFilterVoice;
+		});
+	_updateSelectedTotal = 0;
+	_updateSelectedPending = 0;
+	_updateSelectedGen = _dedupGen;
+	for (const auto &filter : filters) {
+		if (hasVoice
+			&& filter.type() == mtpc_inputMessagesFilterRoundVoice) {
+			continue;
+		}
+		++_updateSelectedPending;
+		requestSelectedFilterPage(
+			realSplitIndex,
+			realPeerInput,
+			filter,
+			known,
+			0,
+			anyNew);
+	}
+}
+
+void ApiWrap::requestSelectedFilterPage(
+		int realSplitIndex,
+		const MTPInputPeer &peer,
+		const MTPMessagesFilter &filter,
+		int32 minId,
+		int32 maxId,
+		int anyNew) {
+	Expects(_chatProcess != nullptr);
+
+	const auto gen = _updateSelectedGen;
+	splitRequest(realSplitIndex, MTPmessages_Search(
+		MTP_flags(0),
+		peer,
+		MTP_string(),
+		MTPInputPeer(),
+		MTPInputPeer(),
+		MTPVector<MTPReaction>(),
+		MTPint(),
+		filter,
+		MTP_int(0),
+		MTP_int(0),
+		MTP_int(0),
+		MTP_int(0),
+		MTP_int(kUpdateProbeLimit),
+		MTP_int(maxId),
+		MTP_int(minId),
+		MTP_long(0)
+	)).done([=](const MTPmessages_Messages &result) {
+		if (gen != _dedupGen || !_chatProcess) {
+			return;
+		}
+		const auto ids = result.match(
+			[](const MTPDmessages_messages &data) {
+				return CollectMessageIds(data.vmessages().v);
+			}, [](const MTPDmessages_channelMessages &data) {
+				return CollectMessageIds(data.vmessages().v);
+			}, [](const MTPDmessages_messagesSlice &data) {
+				return CollectMessageIds(data.vmessages().v);
+			}, [](const MTPDmessages_messagesNotModified &data) {
+				return std::vector<int32>();
+			});
+		_updateSelectedTotal += int(ids.size());
+		if (int(ids.size()) < kUpdateProbeLimit) {
+			updateSelectedCountDone(anyNew);
+			return;
+		}
+		// A full page means there may be more below it. Ask again for
+		// what sits strictly older than the lowest id just seen.
+		requestSelectedFilterPage(
+			realSplitIndex,
+			peer,
+			filter,
+			minId,
+			*ranges::min_element(ids) - 1,
+			anyNew);
+	}).fail([=](const MTP::Error &error) {
+		if (gen != _dedupGen || !_chatProcess) {
+			return true;
+		}
+		updateSelectedCountDone(anyNew);
+		return true;
+	}).send();
+}
+
+void ApiWrap::updateSelectedCountDone(int anyNew) {
+	if (--_updateSelectedPending > 0) {
+		return;
+	}
+	const auto selected = std::max(_updateSelectedTotal, 0);
+	reportUpdateCheck(anyNew, selected);
+}
+
+void ApiWrap::reportUpdateCheck(int anyNew, int selectedNew) {
+	// Reachable more than once per check (one answer per split, one per
+	// filter), so only the first answer is reported.
+	if (_updateCheckReported) {
+		return;
+	}
+	_updateCheckReported = true;
+	if (_updateCheckHandler) {
+		base::take(_updateCheckHandler)(anyNew, selectedNew);
+	}
 }
 
 void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
@@ -2312,15 +2509,17 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 		requestMessagesCount(localSplitIndex + 1);
 	} else if (_updateMode) {
 		_updateMode = false;
-		auto total = 0;
-		for (const auto splitCount :
-				_chatProcess->info.messagesCountPerSplit) {
-			total += splitCount;
+		// Compare ids, not counts: the anchor and the fresh newest id
+		// are the only comparable pair. lastId would undercount, since
+		// a filtered-out tail never gets written.
+		const auto newest = _updateNewestId;
+		const auto known = int32(_updateKnownLastId.bare);
+		const auto anyNew = (newest > known) ? int(newest - known) : 0;
+		if (anyNew <= 0) {
+			reportUpdateCheck(0, 0);
+			return;
 		}
-		if (_updateCheckHandler) {
-			base::take(_updateCheckHandler)(
-				total - _updateKnownTotal);
-		}
+		requestUpdateSelectedCount(known, anyNew);
 		return;
 	} else if (_scanMode
 		&& !_chatProcess->scanFilters.empty()
@@ -3455,12 +3654,12 @@ void ApiWrap::requestMessagesSlice() {
 							_chatProcess->scanFilterIndex][i];
 				}
 			}
-		} else {
-			if (_resumeSplitIndex > 0
-				&& _resumeSplitIndex
-					< _chatProcess->info.splits.size()) {
-				_chatProcess->localSplitIndex = _resumeSplitIndex;
-			}
+	} else {
+		if (_resumeSplitIndex > 0
+			&& _resumeSplitIndex
+				< _chatProcess->info.splits.size()) {
+			_chatProcess->localSplitIndex = _resumeSplitIndex;
+		}
 			_chatProcess->walkStarted = true;
 			_chatProcess->walkCursor = _resumeLastId + 1;
 			_chatProcess->writtenMax = _resumeLastId;
@@ -4212,6 +4411,14 @@ void ApiWrap::loadNextMessageFile() {
 	while (process.fileIndex < list.size()) {
 		const auto index = process.fileIndex;
 		auto &message = list[index];
+		// The update anchor must stay in the current chat's own id
+		// sequence. Migrated splits number their messages independently,
+		// so old-group ids (a different, possibly larger space) must not
+		// feed it. Only the current chat's split (non-negative) counts.
+		if (process.info.splits[process.localSplitIndex] >= 0
+			&& message.id > process.updateAnchor) {
+			process.updateAnchor = message.id;
+		}
 		if (Data::SkipMessageByDate(message, *_settings)) {
 			Expects(process.messageFileWork.empty());
 			Expects(process.messageFileWorkMessageIndex < 0);
@@ -4339,6 +4546,9 @@ void ApiWrap::finishMessagesSlice() {
 		_chatProcess->walkCursor = 1;
 		_chatProcess->writtenMax = 0;
 		_chatProcess->committedMax = 0;
+		// updateAnchor tracks only the current chat's split, so it is a
+		// same-sequence high-water mark that must not be cleared when the
+		// walk advances through the chat's own session ranges.
 		_chatProcess->pagePrefetch.reset();
 	}
 	if (!_chatProcess->lastSlice) {
@@ -5047,7 +5257,9 @@ void ApiWrap::clearExTmpOnly() {
 
 void ApiWrap::setResumeCheckpoint(const ::Data::ExResumeRecord &record) {
 	_resumeArmed = true;
-	_resumeLastId = int32(record.lastId.bare);
+	_resumeLastId = int32(_updateMode
+		? (record.updateAnchor ? record.updateAnchor : record.lastId).bare
+		: record.lastId.bare);
 	_resumeSplitIndex = record.splitIndex;
 	_resumeSelectedDone = record.selectedDone;
 	_resumeFilterIndex = record.filterIndex;
@@ -5102,18 +5314,40 @@ void ApiWrap::takeoutRefreshDone(uint64 id) {
 	}
 }
 
-void ApiWrap::setUpdateCheck(int knownTotal, Fn<void(int newCount)> handler) {
+void ApiWrap::setUpdateCheck(MsgId knownLastId, Fn<void(int anyNew, int selectedNew)> handler) {
 	_updateMode = true;
-	_updateKnownTotal = knownTotal;
+	_updateKnownLastId = knownLastId;
+	_updateNewestId = 0;
+	_updateCheckReported = false;
 	_updateCheckHandler = std::move(handler);
 }
 
 void ApiWrap::proceedUpdate() {
 	_updateMode = false;
 	_updateCheckHandler = nullptr;
-	if (_chatProcess) {
-		requestMessagesSlice();
+	if (!_chatProcess) {
+		return;
 	}
+	// The stored range bounded the previous run; the update appends
+	// everything after the anchor up to now, so that upper bound must not
+	// clamp this walk to the old end (max_id on list pages, SkipMessageByDate
+	// on the date range). Lift it and record the new run as reaching present,
+	// so Update stays offered for the next batch.
+	_chatProcess->tillId = 0;
+	for (auto &till : _chatProcess->splitTill) {
+		till = 0;
+	}
+	_settings->singlePeerTill = std::nullopt;
+	_settings->singlePeerTillId = std::nullopt;
+	// The parked update pre-check leaves messagesCountLoaded through the
+	// _updateMode branch, before the start() call every other path makes.
+	// Without it the writer's dialog is never opened (resumeDialogStart),
+	// and the walk's first write hits Expects(_chat != nullptr). Open it
+	// now that the user confirmed, then walk as a fresh run does.
+	if (!_chatProcess->start(_chatProcess->info)) {
+		return;
+	}
+	requestMessagesSlice();
 }
 
 void ApiWrap::abortUpdate() {
@@ -5157,6 +5391,12 @@ void ApiWrap::commitExportProgress(
 	record.sessionId = _sessionId;
 	record.peerId = peer;
 	record.splitIndex = _chatProcess->localSplitIndex;
+	// Remember whether this chat is the old part of an upgraded
+	// supergroup; an empty input peer means it was never migrated.
+	const auto neverMigrated = _chatProcess->info.migratedFromInput.match(
+		[](const MTPDinputPeerEmpty &) { return true; },
+		[](const auto &) { return false; });
+	record.migrated = !neverMigrated;
 	record.total = total;
 	record.msgsDone = _stats ? int(_stats->messagesTotal()) : 0;
 	record.skipped = int(skipped);
@@ -5179,6 +5419,14 @@ void ApiWrap::commitExportProgress(
 	record.useIdRange = _settings->useIdRange;
 	record.fromId = _settings->singlePeerFromId.value_or(uint64(0));
 	record.tillId = _settings->singlePeerTillId.value_or(uint64(0));
+	auto anchor = int64(_chatProcess->updateAnchor);
+	if (_settings->useIdRange && _settings->singlePeerTillId) {
+		anchor = std::max(anchor, int64(*_settings->singlePeerTillId));
+	}
+	record.updateAnchor = MsgId(std::max(int64(committedMax), anchor));
+	record.coveredTill = MsgId(std::max(_noteNewestId, int32(
+		std::max(int64(committedMax), anchor))));
+	record.coveredTillDate = _noteNewestDate;
 	record.stats = _stats ? _stats->serialize() : QByteArray();
 	if (_fileProcess) {
 		record.pausedFile = _fileProcess->relativePath;
@@ -5454,10 +5702,39 @@ Data::File *ApiWrap::walkParkedFile(const Data::File *file) const {
 	return process->messageFileWork[process->messageFileWorkIndex].file;
 }
 
-bool ApiWrap::decideFileScan(
+bool ApiWrap::dedupTypeAccepted(
+		const Data::File &file,
+		const FilePolicy &policy) {
+	if (!policy.mainFile || !policy.message) {
+		return false;
+	}
+	if (_scanMode) {
+		const auto fullHistory = bool(
+			_settings->media.types & MediaSettings::Type::FullHistory);
+		const auto fileTypes = scanFileTypes();
+		return ((policy.type & _settings->media.types) == policy.type)
+			|| (fullHistory && (policy.type & fileTypes) == policy.type);
+	}
+	return bool(
+		_settings->media.types & MediaSettings::Type::FullHistory);
+}
+
+bool ApiWrap::dedupIdDuplicate(
+		const ::Data::DedupDb &db,
+		uint64 docId,
+		PeerId peer,
+		bool global) const {
+	return (global && db.containsDocId(
+			::Data::DedupDb::Table::Downloads,
+			docId))
+		|| db.containsExTmpDocId(_sessionId, peer, docId);
+}
+
+bool ApiWrap::decideFileDedup(
 		Data::File &file,
 		const FilePolicy &policy,
-		FnMut<void(QString)> done) {
+		FnMut<void(QString)> done,
+		HashMode mode) {
 	using SkipReason = Data::File::SkipReason;
 	if (file.skipReason != SkipReason::None) {
 		return true;
@@ -5466,30 +5743,24 @@ bool ApiWrap::decideFileScan(
 		return false;
 	}
 	Data::File *const filePtr = &file;
+	const auto eraseFile = [this, filePtr] {
+		_decidingFiles.erase(filePtr);
+	};
+
 	const auto markType = [](Data::File &file) {
 		file.skipReason = SkipReason::FileType;
 	};
-	if (!policy.mainFile || !policy.message) {
+	if (!dedupTypeAccepted(file, policy)) {
 		markType(file);
-		_decidingFiles.erase(filePtr);
+		eraseFile();
 		return true;
 	}
-	const auto fullHistory = bool(
-		_settings->media.types & MediaSettings::Type::FullHistory);
-	const auto fileTypes = scanFileTypes();
-	const auto accepted = ((policy.type & _settings->media.types)
-		== policy.type)
-		|| (fullHistory && (policy.type & fileTypes) == policy.type);
-	if (!accepted) {
-		markType(file);
-		_decidingFiles.erase(filePtr);
-		return true;
-	}
-	if (policy.controllingSize > _settings->media.sizeLimit) {
+	if (_scanMode && (policy.controllingSize > _settings->media.sizeLimit)) {
 		file.skipReason = SkipReason::FileSize;
-		_decidingFiles.erase(filePtr);
+		eraseFile();
 		return true;
 	}
+
 	const auto type = policy.type;
 	const auto controllingSize = policy.controllingSize;
 	auto docId = uint64(0);
@@ -5500,36 +5771,30 @@ bool ApiWrap::decideFileScan(
 			_stats->incrementType(type, controllingSize);
 		}
 	};
-	if (!MainMediaId(*policy.message, docId, isPhoto) || !docId) {
-		markNew(file);
-		_decidingFiles.erase(filePtr);
-		return true;
-	}
-	const auto db = dedupDb();
-	if (!db) {
-		markNew(file);
-		_decidingFiles.erase(filePtr);
-		return true;
-	}
-	const auto peer = currentPeer();
-	_dedupPeers.emplace(peer);
-	const auto global = GetEnhancedBool("prevent_export_duplicates");
 	const auto markDup = [this, type](Data::File &file) {
 		file.skipReason = SkipReason::Duplicate;
 		if (_stats) {
 			_stats->incrementSkipped(type, file.size);
 		}
 	};
-	if (global && db->containsDocId(
-		::Data::DedupDb::Table::Downloads,
-		docId)) {
-		markDup(file);
-		_decidingFiles.erase(filePtr);
+
+	if (!MainMediaId(*policy.message, docId, isPhoto) || !docId) {
+		markNew(file);
+		eraseFile();
 		return true;
 	}
-	if (db->containsExTmpDocId(_sessionId, peer, docId)) {
+	const auto db = dedupDb();
+	if (!db) {
+		markNew(file);
+		eraseFile();
+		return true;
+	}
+	const auto peer = currentPeer();
+	_dedupPeers.emplace(peer);
+	const auto global = GetEnhancedBool("prevent_export_duplicates");
+	if (dedupIdDuplicate(*db, docId, peer, global)) {
 		markDup(file);
-		_decidingFiles.erase(filePtr);
+		eraseFile();
 		return true;
 	}
 	const auto decide = [=, this](Data::File &file, const QByteArray &hash) {
@@ -5551,16 +5816,17 @@ bool ApiWrap::decideFileScan(
 			markNew(file);
 		}
 	};
+
 	if (const auto i = _knownFileHash.find(docId);
 		i != end(_knownFileHash) && !i->second.isEmpty()) {
 		decide(file, i->second);
-		_decidingFiles.erase(filePtr);
+		eraseFile();
 		return true;
 	}
 	if (const auto i = _knownFileContent.find(docId);
 		i != end(_knownFileContent) && !i->second.isEmpty()) {
 		decide(file, ::Data::ContentFingerprint(i->second));
-		_decidingFiles.erase(filePtr);
+		eraseFile();
 		return true;
 	}
 	if (!file.content.isEmpty()) {
@@ -5569,12 +5835,12 @@ bool ApiWrap::decideFileScan(
 			_knownFileHash[docId] = hash;
 		}
 		decide(file, hash);
-		_decidingFiles.erase(filePtr);
+		eraseFile();
 		return true;
 	}
 	if (_hashFailedDocs.contains(docId)) {
 		decide(file, QByteArray());
-		_decidingFiles.erase(filePtr);
+		eraseFile();
 		return true;
 	}
 	if (!file.location
@@ -5582,13 +5848,23 @@ bool ApiWrap::decideFileScan(
 			&& file.location.data.type() != mtpc_inputTakeoutFileLocation)
 		|| !_takeoutId) {
 		markNew(file);
-		_decidingFiles.erase(filePtr);
+		eraseFile();
 		return true;
 	}
+
+	if (mode == HashMode::MemoryOnly) {
+		markNew(file);
+		eraseFile();
+		return true;
+	}
+
 	const auto sharedDone = std::make_shared<FnMut<void(QString)>>(
 		std::move(done));
 	const auto gen = _dedupGen;
 	const auto sliceGen = _sliceGen;
+	const auto alive = [this] {
+		return (_chatProcess != nullptr) || (_topicProcess != nullptr);
+	};
 	if (file.size >= ::Data::kDedupMinPartialHashSize) {
 		Export::FetchHash(
 			_mtp,
@@ -5596,15 +5872,12 @@ bool ApiWrap::decideFileScan(
 			*_takeoutId,
 			file.location,
 			file.size,
-			[=, this] {
-				return (_chatProcess != nullptr)
-					|| (_topicProcess != nullptr);
-			},
+			alive,
 			[=, this](QByteArray hash) mutable {
-				_decidingFiles.erase(filePtr);
+				eraseFile();
 				if (gen != _dedupGen
 					|| sliceGen != _sliceGen
-					|| (!_chatProcess && !_topicProcess)) {
+					|| !alive()) {
 					return;
 				}
 				const auto live = walkParkedFile(filePtr);
@@ -5620,7 +5893,12 @@ bool ApiWrap::decideFileScan(
 				(*sharedDone)(QString());
 			},
 			kWalkHashAttempts,
-			u"scan:%1:%2:%3:%4"_q.arg(int(type)).arg(file.size).arg(docId).arg(file.location.dcId),
+			u"%1:%2:%3:%4:%5"_q
+				.arg(_scanMode ? u"scan"_q : u"walk"_q)
+				.arg(int(type))
+				.arg(file.size)
+				.arg(docId)
+				.arg(file.location.dcId),
 			[=, this](FnMut<void(uint64)> done) {
 				refreshTakeoutSession(std::move(done));
 			});
@@ -5632,15 +5910,12 @@ bool ApiWrap::decideFileScan(
 		*_takeoutId,
 		file.location,
 		file.size,
-		[=, this] {
-			return (_chatProcess != nullptr)
-				|| (_topicProcess != nullptr);
-		},
+		alive,
 		[=, this](QByteArray content) mutable {
-			_decidingFiles.erase(filePtr);
+			eraseFile();
 			if (gen != _dedupGen
 				|| sliceGen != _sliceGen
-				|| (!_chatProcess && !_topicProcess)) {
+				|| !alive()) {
 				return;
 			}
 			const auto live = walkParkedFile(filePtr);
@@ -5660,205 +5935,38 @@ bool ApiWrap::decideFileScan(
 			(*sharedDone)(QString());
 		},
 		kWalkHashAttempts,
-		u"scan:%1:%2:%3:%4"_q.arg(int(type)).arg(file.size).arg(docId).arg(file.location.dcId),
+		u"%1:%2:%3:%4:%5"_q
+			.arg(_scanMode ? u"scan"_q : u"walk"_q)
+			.arg(int(type))
+			.arg(file.size)
+			.arg(docId)
+			.arg(file.location.dcId),
 		[=, this](FnMut<void(uint64)> done) {
 			refreshTakeoutSession(std::move(done));
 		});
 	return false;
 }
 
+bool ApiWrap::decideFileScan(
+		Data::File &file,
+		const FilePolicy &policy,
+		FnMut<void(QString)> done) {
+	return decideFileDedup(
+		file,
+		policy,
+		std::move(done),
+		HashMode::MemoryOnly);
+}
+
 bool ApiWrap::decideFileWithoutMedia(
 		Data::File &file,
 		const FilePolicy &policy,
 		FnMut<void(QString)> done) {
-	using SkipReason = Data::File::SkipReason;
-	if (file.skipReason != SkipReason::None) {
-		return true;
-	}
-	if (!_decidingFiles.emplace(&file).second) {
-		return false;
-	}
-	Data::File *const filePtr = &file;
-	const auto markType = [](Data::File &file) {
-		file.skipReason = SkipReason::FileType;
-	};
-	if (!policy.mainFile
-		|| !policy.message
-		|| !(_settings->media.types & MediaSettings::Type::FullHistory)) {
-		markType(file);
-		_decidingFiles.erase(filePtr);
-		return true;
-	}
-	const auto type = policy.type;
-	const auto controllingSize = policy.controllingSize;
-	auto docId = uint64(0);
-	auto isPhoto = false;
-	const auto markNew = [this, type, controllingSize](Data::File &file) {
-		file.skipReason = SkipReason::FileType;
-		if (_stats) {
-			_stats->incrementType(type, controllingSize);
-		}
-	};
-	if (!MainMediaId(*policy.message, docId, isPhoto) || !docId) {
-		markNew(file);
-		_decidingFiles.erase(filePtr);
-		return true;
-	}
-	const auto db = dedupDb();
-	if (!db) {
-		markNew(file);
-		_decidingFiles.erase(filePtr);
-		return true;
-	}
-	const auto peer = currentPeer();
-	_dedupPeers.emplace(peer);
-	const auto global = GetEnhancedBool("prevent_export_duplicates");
-	const auto markDup = [this, type](Data::File &file) {
-		file.skipReason = SkipReason::Duplicate;
-		if (_stats) {
-			_stats->incrementSkipped(type, file.size);
-		}
-	};
-	if (global && db->containsDocId(
-		::Data::DedupDb::Table::Downloads,
-		docId)) {
-		markDup(file);
-		_decidingFiles.erase(filePtr);
-		return true;
-	}
-	const auto decide = [=, this](Data::File &file, const QByteArray &hash) {
-		if (!hash.isEmpty()) {
-			const auto seen = db->containsExTmpHash(
-				_sessionId,
-				peer,
-				hash);
-			const auto known = seen || (global && db->containsHash(
-				::Data::DedupDb::Table::Downloads,
-				hash));
-			if (!known) {
-				db->insertExTmp(_sessionId, peer, docId, hash);
-				markNew(file);
-			} else {
-				markDup(file);
-			}
-		} else {
-			markNew(file);
-		}
-	};
-	if (const auto i = _knownFileHash.find(docId);
-		i != end(_knownFileHash) && !i->second.isEmpty()) {
-		decide(file, i->second);
-		_decidingFiles.erase(filePtr);
-		return true;
-	}
-	if (const auto i = _knownFileContent.find(docId);
-		i != end(_knownFileContent) && !i->second.isEmpty()) {
-		decide(file, ::Data::ContentFingerprint(i->second));
-		_decidingFiles.erase(filePtr);
-		return true;
-	}
-	if (!file.content.isEmpty()) {
-		const auto hash = ::Data::ContentFingerprint(file.content);
-		if (!hash.isEmpty()) {
-			_knownFileHash[docId] = hash;
-		}
-		decide(file, hash);
-		_decidingFiles.erase(filePtr);
-		return true;
-	}
-	if (_hashFailedDocs.contains(docId)) {
-		decide(file, QByteArray());
-		_decidingFiles.erase(filePtr);
-		return true;
-	}
-	if (!file.location
-		|| (file.location.dcId == 0
-			&& file.location.data.type() != mtpc_inputTakeoutFileLocation)
-		|| !_takeoutId) {
-		markNew(file);
-		_decidingFiles.erase(filePtr);
-		return true;
-	}
-	const auto sharedDone = std::make_shared<FnMut<void(QString)>>(
-		std::move(done));
-	const auto gen = _dedupGen;
-	const auto sliceGen = _sliceGen;
-	if (file.size >= ::Data::kDedupMinPartialHashSize) {
-		Export::FetchHash(
-			_mtp,
-			_runner,
-			*_takeoutId,
-			file.location,
-			file.size,
-			[=, this] {
-				return (_chatProcess != nullptr)
-					|| (_topicProcess != nullptr);
-			},
-			[=, this](QByteArray hash) mutable {
-				_decidingFiles.erase(filePtr);
-				if (gen != _dedupGen
-					|| sliceGen != _sliceGen
-					|| (!_chatProcess && !_topicProcess)) {
-					return;
-				}
-				const auto live = walkParkedFile(filePtr);
-				if (!live) {
-					return;
-				}
-				if (!hash.isEmpty()) {
-					_knownFileHash[docId] = hash;
-				} else {
-					_hashFailedDocs.emplace(docId);
-				}
-				decide(*live, hash);
-				(*sharedDone)(QString());
-			},
-			kWalkHashAttempts,
-			u"walk:%1:%2:%3:%4"_q.arg(int(type)).arg(file.size).arg(docId).arg(file.location.dcId),
-			[=, this](FnMut<void(uint64)> done) {
-				refreshTakeoutSession(std::move(done));
-			});
-		return false;
-	}
-	Export::FetchFullFile(
-		_mtp,
-		_runner,
-		*_takeoutId,
-		file.location,
-		file.size,
-		[=, this] {
-			return (_chatProcess != nullptr)
-				|| (_topicProcess != nullptr);
-		},
-		[=, this](QByteArray content) mutable {
-			_decidingFiles.erase(filePtr);
-			if (gen != _dedupGen
-				|| sliceGen != _sliceGen
-				|| (!_chatProcess && !_topicProcess)) {
-				return;
-			}
-			const auto live = walkParkedFile(filePtr);
-			if (!live) {
-				return;
-			}
-			if (!content.isEmpty()) {
-				_knownFileContent[docId] = content;
-			} else {
-				_hashFailedDocs.emplace(docId);
-			}
-			const auto hash = ::Data::ContentFingerprint(content);
-			if (!hash.isEmpty()) {
-				_knownFileHash[docId] = hash;
-			}
-			decide(*live, hash);
-			(*sharedDone)(QString());
-		},
-		kWalkHashAttempts,
-		u"walk:%1:%2:%3:%4"_q.arg(int(type)).arg(file.size).arg(docId).arg(file.location.dcId),
-		[=, this](FnMut<void(uint64)> done) {
-			refreshTakeoutSession(std::move(done));
-		});
-	return false;
+	return decideFileDedup(
+		file,
+		policy,
+		std::move(done),
+		HashMode::OwnFetch);
 }
 
 bool ApiWrap::decideFileWithMedia(
@@ -5904,6 +6012,14 @@ bool ApiWrap::decideFileWithMedia(
 	}
 	_dedupPeers.emplace(peer);
 	const auto fileType = policy.type;
+	if (dedupIdDuplicate(*db, docId, peer, global)) {
+		file.skipReason = SkipReason::Duplicate;
+		if (_stats) {
+			_stats->incrementSkipped(fileType, file.size);
+		}
+		_decidingFiles.erase(&file);
+		return true;
+	}
 	if (const auto i = _knownFileHash.find(docId);
 		i != end(_knownFileHash) && !i->second.isEmpty()) {
 		const auto cached = Export::CheckHash(

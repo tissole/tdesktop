@@ -431,7 +431,6 @@ bool DedupDb::Impl::createTables() {
 			"html_index INTEGER NOT NULL DEFAULT 0, "
 			"replied_index BLOB NOT NULL DEFAULT x'', "
 			"date_index INTEGER NOT NULL DEFAULT 0, "
-			"json_state INTEGER NOT NULL DEFAULT 0, "
 			"stats BLOB NOT NULL DEFAULT x'', "
 			"doc_id INTEGER NOT NULL DEFAULT 0, "
 			"paused_file TEXT NOT NULL DEFAULT '', "
@@ -443,6 +442,10 @@ bool DedupDb::Impl::createTables() {
 			"use_id_range INTEGER NOT NULL DEFAULT 0, "
 			"from_id INTEGER NOT NULL DEFAULT 0, "
 			"till_id INTEGER NOT NULL DEFAULT 0, "
+			"update_anchor INTEGER NOT NULL DEFAULT 0, "
+			"covered_till INTEGER NOT NULL DEFAULT 0, "
+			"covered_till_date INTEGER NOT NULL DEFAULT 0, "
+			"migrated INTEGER NOT NULL DEFAULT 0, "
 			"PRIMARY KEY (session_id, peer_id))"_q)
 		&& exec(u"CREATE TABLE IF NOT EXISTS ex_tmp ("
 			"session_id INTEGER NOT NULL DEFAULT 0, "
@@ -1418,16 +1421,18 @@ void DedupDb::Impl::insertExResume(const ExResumeRecord &record) {
 		"(session_id, peer_id, last_id, total, msgs_done, skipped, "
 		"export_folder, state, media, size, export_format, from_date, "
 		"till_date, html_index, replied_index, "
-		"date_index, json_state, stats, "
+		"date_index, stats, "
 		"doc_id, paused_file, paused_bytes, last_msg, split_index, "
-		"selected_done, filter_index, use_id_range, from_id, till_id) "
+		"selected_done, filter_index, use_id_range, from_id, till_id, "
+		"update_anchor, covered_till, covered_till_date, migrated) "
 		"VALUES (:session_id, :peer_id, :last_id, :total, :msgs_done, "
 		":skipped, :export_folder, :state, :media, :size, "
 		":export_format, :from_date, :till_date, :html_index, "
 		":replied_index, "
-		":date_index, :json_state, :stats, :doc_id, :paused_file, "
+		":date_index, :stats, :doc_id, :paused_file, "
 		":paused_bytes, :last_msg, :split_index, :selected_done, "
-		":filter_index, :use_id_range, :from_id, :till_id)"_q);
+		":filter_index, :use_id_range, :from_id, :till_id, "
+		":update_anchor, :covered_till, :covered_till_date, :migrated)"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(record.sessionId)));
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
@@ -1449,7 +1454,6 @@ void DedupDb::Impl::insertExResume(const ExResumeRecord &record) {
 	q.bindValue(u":html_index"_q, record.htmlIndex);
 	q.bindValue(u":replied_index"_q, record.repliedIndex);
 	q.bindValue(u":date_index"_q, record.dateIndex);
-	q.bindValue(u":json_state"_q, record.jsonState);
 	q.bindValue(u":stats"_q, record.stats);
 	q.bindValue(u":doc_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(record.docId)));
@@ -1465,6 +1469,12 @@ void DedupDb::Impl::insertExResume(const ExResumeRecord &record) {
 		static_cast<qulonglong>(record.fromId)));
 	q.bindValue(u":till_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(record.tillId)));
+	q.bindValue(u":update_anchor"_q, QVariant::fromValue(
+		static_cast<qlonglong>(record.updateAnchor.bare)));
+	q.bindValue(u":covered_till"_q, QVariant::fromValue(
+		static_cast<qlonglong>(record.coveredTill.bare)));
+	q.bindValue(u":covered_till_date"_q, record.coveredTillDate);
+	q.bindValue(u":migrated"_q, record.migrated ? 1 : 0);
 	if (!q.exec()) {
 		LOG(("DedupDb: InsertExResume failed: %1").arg(
 			q.lastError().text()));
@@ -1512,9 +1522,10 @@ std::vector<ExResumeRecord> DedupDb::Impl::loadExResume(
 	q.prepare(u"SELECT peer_id, last_id, total, msgs_done, skipped, "
 		"export_folder, state, media, size, export_format, from_date, "
 		"till_date, html_index, replied_index, "
-		"date_index, json_state, stats, "
+		"date_index, stats, "
 		"doc_id, paused_file, paused_bytes, last_msg, split_index, "
-		"selected_done, filter_index, use_id_range, from_id, till_id "
+		"selected_done, filter_index, use_id_range, from_id, till_id, "
+		"update_anchor, covered_till, covered_till_date, migrated "
 		"FROM ex_resume "
 		"WHERE session_id = :session_id"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
@@ -1541,18 +1552,21 @@ std::vector<ExResumeRecord> DedupDb::Impl::loadExResume(
 		record.htmlIndex = q.value(12).toInt();
 		record.repliedIndex = q.value(13).toByteArray();
 		record.dateIndex = q.value(14).toInt();
-		record.jsonState = q.value(15).toInt();
-		record.stats = q.value(16).toByteArray();
-		record.docId = q.value(17).toULongLong();
-		record.pausedFile = q.value(18).toString();
-		record.pausedBytes = q.value(19).toLongLong();
-		record.lastMsg = q.value(20).toByteArray();
-		record.splitIndex = q.value(21).toInt();
-		record.selectedDone = q.value(22).toInt();
-		record.filterIndex = q.value(23).toInt();
-		record.useIdRange = q.value(24).toInt() != 0;
-		record.fromId = q.value(25).toULongLong();
-		record.tillId = q.value(26).toULongLong();
+		record.stats = q.value(15).toByteArray();
+		record.docId = q.value(16).toULongLong();
+		record.pausedFile = q.value(17).toString();
+		record.pausedBytes = q.value(18).toLongLong();
+		record.lastMsg = q.value(19).toByteArray();
+		record.splitIndex = q.value(20).toInt();
+		record.selectedDone = q.value(21).toInt();
+		record.filterIndex = q.value(22).toInt();
+		record.useIdRange = q.value(23).toInt() != 0;
+		record.fromId = q.value(24).toULongLong();
+		record.tillId = q.value(25).toULongLong();
+		record.updateAnchor = MsgId(q.value(26).toLongLong());
+		record.coveredTill = MsgId(q.value(27).toLongLong());
+		record.coveredTillDate = q.value(28).toInt();
+		record.migrated = q.value(29).toInt() != 0;
 		result.push_back(std::move(record));
 	}
 	return result;

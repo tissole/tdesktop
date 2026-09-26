@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_peer.h"
 #include "data/data_user.h"
 #include "data/data_peer_id.h"
+#include "history/history.h"
 #include "base/base_file_utilities.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/separate_panel.h"
@@ -587,6 +588,41 @@ void PanelController::applyRowSettings(
 	settings.path = row.exportFolder;
 }
 
+bool PanelController::updateSettingsChanged(
+		const Data::ExResumeRecord &row) const {
+	return (_settings->media.types
+			!= MediaSettings::Types::from_raw(int(row.media)))
+		|| (_settings->media.sizeLimit != row.size)
+		|| (static_cast<int>(_settings->format) != row.exportFormat);
+}
+
+// Update is offered only when the run already covered the chat up to
+// the newest message as it stood at export time. A run cut short by a
+// date or id range must not offer it, since updating would pull in the
+// excluded messages. Compared against coveredTill/coveredTillDate (a
+// fact stored then), never against the chat's newest id now, which
+// grows the moment anything is added.
+bool PanelController::updateCoversWholeChat(
+		const Data::ExResumeRecord &row) const {
+	const auto anchor = row.updateAnchor ? row.updateAnchor : row.lastId;
+	if (!anchor) {
+		return false;
+	}
+	if (row.useIdRange) {
+		if (!row.tillId) {
+			return true;
+		}
+		return row.coveredTill && row.tillId == row.coveredTill.bare;
+	}
+	if (!row.tillDate) {
+		return true;
+	}
+	if (!row.coveredTillDate) {
+		return false;
+	}
+	return uint64(row.coveredTillDate) <= uint64(row.tillDate);
+}
+
 void PanelController::showSettings() {
 	refreshResumeRow();
 	_paused = false;
@@ -595,6 +631,7 @@ void PanelController::showSettings() {
 		&& _resumeRow->state != u"done"_q;
 	const auto doneRow = _resumeRow.has_value()
 		&& _resumeRow->state == u"done"_q;
+	const auto updateRow = doneRow && updateCoversWholeChat(*_resumeRow);
 	if (pausedRow) {
 		applyRowSettings(*_settings, *_resumeRow);
 	}
@@ -604,7 +641,7 @@ void PanelController::showSettings() {
 		*_settings);
 	settings->setResumeUpdateEnabled(
 		pausedRow && _settings->onlySinglePeer(),
-		doneRow && _settings->onlySinglePeer());
+		updateRow && _settings->onlySinglePeer());
 	settings->setStartEnabled(!pausedRow);
 	settings->setOptionsEnabled(!pausedRow);
 	settings->setShowBoxCallback([=](object_ptr<Ui::BoxContent> box) {
@@ -720,30 +757,39 @@ void PanelController::showSettings() {
 	}, settings->lifetime());
 
 	_process->setUpdateConfirmHandler([=](
-			int newCount,
+			int anyNew,
+			int selectedNew,
 			FnMut<void(bool)> proceed) mutable {
-		if (newCount <= 0) {
-			Ui::Toast::Show(tr::lng_export_up_to_date(tr::now));
+		if (selectedNew <= 0) {
+			Ui::Toast::Show(anyNew > 0
+				? tr::lng_export_update_none_selected(tr::now)
+				: tr::lng_export_up_to_date(tr::now));
 			proceed(false);
-			showSettings();
 			return;
 		}
 		const auto sharedProceed = std::make_shared<FnMut<void(bool)>>(
 			std::move(proceed));
+		if (_updateSettingsChanged) {
+			Ui::Toast::Show({
+				.text = { tr::lng_export_update_settings_changed(
+					tr::now) },
+				.duration = 4 * crl::time(1000),
+			});
+		}
 		_panel->showBox(
 			Ui::MakeConfirmBox({
 				.text = tr::lng_export_update_confirm(
 					tr::now,
 					lt_amount,
-					QString::number(newCount)),
+					QString::number(selectedNew)),
 				.confirmed = [=](Fn<void()> close) {
 					close();
+					showProgress();
 					(*sharedProceed)(true);
 				},
 				.cancelled = [=](Fn<void()> close) {
 					close();
 					(*sharedProceed)(false);
-					showSettings();
 				},
 			}),
 			Ui::LayerOption::KeepOther,
@@ -755,42 +801,58 @@ void PanelController::showSettings() {
 		if (!_resumeRow || _resumeRow->state != u"done"_q) {
 			return;
 		}
-		auto updateSettings = *_settings;
 		const auto &row = *_resumeRow;
-		updateSettings.media.types = _settings->media.types;
-		updateSettings.media.sizeLimit = _settings->media.sizeLimit;
-		updateSettings.format = _settings->format;
-		updateSettings.singlePeerFrom = row.fromDate
-			? std::make_optional(TimeId(row.fromDate))
-			: std::nullopt;
-		updateSettings.singlePeerTill = row.tillDate
-			? std::make_optional(TimeId(row.tillDate))
-			: std::nullopt;
-		updateSettings.useIdRange = row.useIdRange;
-		updateSettings.singlePeerFromId = row.fromId
-			? std::make_optional(uint64(row.fromId))
-			: std::nullopt;
-		updateSettings.singlePeerTillId = row.tillId
-			? std::make_optional(uint64(row.tillId))
-			: std::nullopt;
-		updateSettings.path = row.exportFolder;
-		const auto gen = _startGen;
-		const auto sizeLimit = updateSettings.media.sizeLimit;
-		ensureSharedTakeout([=](uint64 id) {
-			if (gen != _startGen) {
-				return;
-			}
-			showProgress();
-			_session->api().setTakeoutBorrowed(true);
-			_process->setSessionId(_session->uniqueId());
-			_process->setDedupDb(
-				Core::App().downloadManager().dedupDbPath());
-			_process->setSharedTakeoutId(id);
-			_process->startUpdateExport(
-				updateSettings,
-				PrepareEnvironment(_session),
-				row);
-		}, sizeLimit);
+		if (!updateCoversWholeChat(row)) {
+			return;
+		}
+		const auto folderMissing = !QDir(row.exportFolder).exists();
+		_updateSettingsChanged = updateSettingsChanged(row);
+		auto updateSettings = *_settings;
+		applyRowSettings(updateSettings, row);
+		auto newFolderName = QString();
+		if (folderMissing) {
+			const auto rowDir = QDir(row.exportFolder);
+			newFolderName = rowDir.dirName();
+			auto parentPath = rowDir.absolutePath();
+			parentPath.chop(newFolderName.length());
+			updateSettings.path = parentPath;
+			updateSettings.forceSubPath = false;
+		}
+		auto run = [=]() mutable {
+			const auto gen = _startGen;
+			const auto sizeLimit = updateSettings.media.sizeLimit;
+			ensureSharedTakeout([=](uint64 id) {
+				if (gen != _startGen) {
+					return;
+				}
+				_process->setSessionId(_session->uniqueId());
+				_process->setDedupDb(
+					Core::App().downloadManager().dedupDbPath());
+				_process->setSharedTakeoutId(id);
+				_session->api().setTakeoutBorrowed(true);
+				_process->startUpdateExport(
+					updateSettings,
+					PrepareEnvironment(_session),
+					row,
+					newFolderName);
+			}, sizeLimit);
+		};
+		if (!folderMissing) {
+			run();
+			return;
+		}
+		const auto sharedRun = std::make_shared<FnMut<void()>>(
+			std::move(run));
+		_panel->showBox(
+			Ui::MakeConfirmBox({
+				.text = tr::lng_export_update_missing(tr::now),
+				.confirmed = [=](Fn<void()> close) {
+					close();
+					(*sharedRun)();
+				},
+			}),
+			Ui::LayerOption::KeepOther,
+			anim::type::normal);
 	}, settings->lifetime());
 
 	settings->changes(
@@ -1060,6 +1122,11 @@ void PanelController::updateState(State &&state) {
 		createPanel();
 	}
 	_state = std::move(state);
+	if (v::is<ProcessingState>(_state)
+		&& !_running
+		&& !v::is<PasswordCheckState>(_state)) {
+		return;
+	}
 	if (const auto apiError = std::get_if<ApiErrorState>(&_state)) {
 		finishExportTakeout();
 		showError(*apiError);

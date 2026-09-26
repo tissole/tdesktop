@@ -81,11 +81,12 @@ public:
 	void startUpdateExport(
 		const Settings &settings,
 		const Environment &environment,
-		const ::Data::ExResumeRecord &record);
+		const ::Data::ExResumeRecord &record,
+		const QString &newFolderName = QString());
 	void setUpdateConfirmHandler(
-		Fn<void(int newCount, FnMut<void(bool)> proceed)> handler);
+		Fn<void(int anyNew, int selectedNew, FnMut<void(bool)> proceed)> handler);
 	void closeDialogFiles();
-	void onUpdateChecked(int newCount);
+	void onUpdateChecked(int anyNew, int selectedNew);
 	void startScan(
 		const Settings &settings,
 		const Environment &environment,
@@ -164,7 +165,10 @@ private:
 	Environment _environment;
 	std::optional<::Data::ExResumeRecord> _resumeRecord;
 	bool _dialogOpen = false;
-	Fn<void(int newCount, FnMut<void(bool)> proceed)> _updateConfirm;
+	bool _dialogOpened = false;
+	bool _freshFolder = false;
+	bool _updateCounting = false;
+	Fn<void(int anyNew, int selectedNew, FnMut<void(bool)> proceed)> _updateConfirm;
 
 	Data::DialogsInfo _dialogsInfo;
 	int _dialogIndex = -1;
@@ -352,6 +356,7 @@ void ControllerObject::startExport(
 	if (!_settings.path.isEmpty()) {
 		return;
 	}
+	_updateCounting = false;
 	_settings = NormalizeSettings(settings);
 	_environment = environment;
 	_settings.singleTopicRootId = _topicRootId;
@@ -359,6 +364,7 @@ void ControllerObject::startExport(
 
 	_settings.path = Output::NormalizePath(_settings, singlePeerFolder);
 	_singlePeerFolder = singlePeerFolder;
+	_freshFolder = false;
 	_scanMode = false;
 	_api.setScanMode(false);
 	_writer = Output::CreateWriter(_settings.format);
@@ -366,21 +372,28 @@ void ControllerObject::startExport(
 	exportNext();
 }
 
-void ControllerObject::onUpdateChecked(int newCount) {
+void ControllerObject::onUpdateChecked(int anyNew, int selectedNew) {
 	// The walk is parked: all count responses are in, nothing runs.
 	// Hop to main for UI, proceed/abort back here is safe.
 	crl::on_main([=, handler = _updateConfirm]() mutable {
+		_updateCounting = false;
 		if (handler) {
-			handler(newCount, [=](bool proceed) mutable {
+			handler(anyNew, selectedNew, [=](bool proceed) mutable {
 				if (proceed) {
 					_api.proceedUpdate();
-				} else {
-					_api.abortUpdate();
+					return;
 				}
+				_api.abortUpdate();
+				cancelExportFast();
 			});
 			return;
 		}
-		_api.proceedUpdate();
+		if (selectedNew > 0) {
+			_api.proceedUpdate();
+		} else {
+			_api.abortUpdate();
+			cancelExportFast();
+		}
 	});
 }
 
@@ -393,6 +406,7 @@ void ControllerObject::startResumeExport(
 	}
 	// Caller passes the stored folder in settings.path: same-chat
 	// resume/update never renumbers, it reuses the exact path.
+	_updateCounting = false;
 	_settings = NormalizeSettings(settings);
 	_environment = environment;
 	_settings.singleTopicRootId = _topicRootId;
@@ -401,6 +415,7 @@ void ControllerObject::startResumeExport(
 		_settings.path += '/';
 	}
 	_singlePeerFolder = QString();
+	_freshFolder = false;
 	_resumeRecord = record;
 	_scanMode = false;
 	_api.setScanMode(false);
@@ -412,25 +427,62 @@ void ControllerObject::startResumeExport(
 void ControllerObject::startUpdateExport(
 		const Settings &settings,
 		const Environment &environment,
-		const ::Data::ExResumeRecord &record) {
-	if (!_settings.path.isEmpty()) {
+		const ::Data::ExResumeRecord &record,
+		const QString &newFolderName) {
+	if (v::is<CancelledState>(_state)) {
 		return;
 	}
+	closeDialogFiles();
+	_api.setUpdateCheck(0, nullptr);
+	_settings = Settings();
+	_environment = Environment();
+	_state = ProcessingState();
+	_steps.clear();
+	_stepIndex = -1;
+	_substepsInStep.clear();
+	_substepsTotal = 0;
+	_substepsPassed = 0;
+	_lastProcessingStep = Step::Initializing;
+	_dialogIndex = -1;
+	_dialogOpen = false;
+	_dialogOpened = false;
+	_messagesWritten = 0;
+	_messagesCount = 0;
+	_selectedCounting = false;
+	_pendingSlice = Data::MessagesSlice();
+	_userpicsWritten = 0;
+	_userpicsCount = 0;
+	_storiesWritten = 0;
+	_storiesCount = 0;
+	_profileMusicWritten = 0;
+	_profileMusicCount = 0;
+	_stats.reset();
 	_settings = NormalizeSettings(settings);
 	_environment = environment;
 	_settings.singleTopicRootId = _topicRootId;
 	_settings.singleTopicPeerId = _topicPeerId;
+	if (!newFolderName.isEmpty()) {
+		_singlePeerFolder = newFolderName;
+		_settings.path = Output::NormalizePath(
+			_settings,
+			newFolderName);
+	} else {
+		_singlePeerFolder = QString();
+	}
+	_freshFolder = !newFolderName.isEmpty();
+	_resumeRecord = record;
 	if (!_settings.path.endsWith('/')) {
 		_settings.path += '/';
 	}
-	_singlePeerFolder = QString();
-	_resumeRecord = record;
 	_scanMode = false;
 	_api.setScanMode(false);
+	_updateCounting = true;
 	_writer = Output::CreateWriter(_settings.format);
-	_api.setUpdateCheck(record.total, [=](int newCount) {
-		onUpdateChecked(newCount);
-	});
+	_api.setUpdateCheck(
+		record.updateAnchor ? record.updateAnchor : record.lastId,
+		[=](int anyNew, int selectedNew) {
+			onUpdateChecked(anyNew, selectedNew);
+		});
 	fillExportSteps();
 	exportNext();
 }
@@ -442,6 +494,7 @@ void ControllerObject::startScan(
 	if (!_settings.path.isEmpty()) {
 		return;
 	}
+	_updateCounting = false;
 	_settings = NormalizeSettings(settings);
 	_environment = environment;
 	_settings.singleTopicRootId = _topicRootId;
@@ -476,12 +529,13 @@ void ControllerObject::closeDialogFiles() {
 		return;
 	}
 	_dialogOpen = false;
+	_dialogOpened = false;
 	// Closes the open messages file; folder gets deleted right after.
 	ioCatchError(_writer->writeDialogEnd());
 }
 
 void ControllerObject::setUpdateConfirmHandler(
-		Fn<void(int newCount, FnMut<void(bool)> proceed)> handler) {
+		Fn<void(int anyNew, int selectedNew, FnMut<void(bool)> proceed)> handler) {
 	_updateConfirm = std::move(handler);
 }
 
@@ -577,6 +631,7 @@ void ControllerObject::fillSubstepsInSteps(const ApiWrap::StartInfo &info) {
 }
 
 void ControllerObject::cancelExportFast() {
+	_updateCounting = false;
 	_api.cancelExportFast();
 	setState(CancelledState());
 }
@@ -636,7 +691,9 @@ void ControllerObject::exportNext() {
 }
 
 void ControllerObject::initialize() {
-	setState(stateInitializing());
+	if (!_updateCounting) {
+		setState(stateInitializing());
+	}
 	_api.startExport(_settings, &_stats, [=](ApiWrap::StartInfo info) {
 		initialized(info);
 	});
@@ -842,6 +899,10 @@ bool ControllerObject::flushPendingSlice() {
 	if (_pendingSlice.list.empty()) {
 		return true;
 	}
+	if (!_dialogOpened) {
+		_pendingSlice = Data::MessagesSlice();
+		return true;
+	}
 	auto slice = std::move(_pendingSlice);
 	_pendingSlice = Data::MessagesSlice();
 	if (ioCatchError(_writer->writeDialogSlice(slice))) {
@@ -855,27 +916,34 @@ void ControllerObject::exportNextDialog() {
 	const auto info = _dialogsInfo.item(index);
 	if (info) {
 		_api.requestMessages(*info, [=](const Data::DialogInfo &info) {
-			_dialogOpen = true;
-			if (!_scanMode && _resumeRecord && _settings.onlySinglePeer()) {
-				auto state = Output::DialogState();
-				state.messagesCount = _resumeRecord->htmlIndex;
-				state.dateMessageId = _resumeRecord->dateIndex;
-				state.lastIds = _resumeRecord->repliedIndex;
-				state.lastMessage = _resumeRecord->lastMsg;
-				if (ioCatchError(
-					_writer->resumeDialogStart(info, state)
-				)) {
-					return false;
-				}
-				_messagesWritten = _resumeRecord->msgsDone;
-				_resumeRecord = std::nullopt;
-			} else {
-				if (!_scanMode
-					&& ioCatchError(_writer->writeDialogStart(info))) {
-					return false;
-				}
-				_messagesWritten = 0;
+		_dialogOpen = true;
+		if (!_scanMode && _dialogOpened) {
+			_messagesWritten = 0;
+		} else if (!_scanMode
+			&& _resumeRecord
+			&& !_freshFolder
+			&& _settings.onlySinglePeer()) {
+			auto state = Output::DialogState();
+			state.messagesCount = _resumeRecord->htmlIndex;
+			state.dateMessageId = _resumeRecord->dateIndex;
+			state.lastIds = _resumeRecord->repliedIndex;
+			state.lastMessage = _resumeRecord->lastMsg;
+			if (ioCatchError(
+				_writer->resumeDialogStart(info, state)
+			)) {
+				return false;
 			}
+			_messagesWritten = _resumeRecord->msgsDone;
+			_resumeRecord = std::nullopt;
+			_dialogOpened = true;
+		} else {
+			if (!_scanMode
+				&& ioCatchError(_writer->writeDialogStart(info))) {
+				return false;
+			}
+			_messagesWritten = 0;
+			_dialogOpened = true;
+		}
 		// File-filtered exports count selected messages, not
 		// walked ones: the ApiWrap probes carry the exact total.
 		_selectedCounting = _api.hasSelectedTotal();
@@ -936,6 +1004,7 @@ void ControllerObject::exportNextDialog() {
 				return;
 			}
 			_dialogOpen = false;
+			_dialogOpened = false;
 			exportNextDialog();
 		});
 		return;
@@ -1454,16 +1523,21 @@ void Controller::startResumeExport(
 void Controller::startUpdateExport(
 		const Settings &settings,
 		const Environment &environment,
-		const ::Data::ExResumeRecord &record) {
+		const ::Data::ExResumeRecord &record,
+		const QString &newFolderName) {
 	LOG(("Export Info: Update export to '%1'.").arg(settings.path));
 
 	_wrapped.with([=](Implementation &unwrapped) {
-		unwrapped.startUpdateExport(settings, environment, record);
+		unwrapped.startUpdateExport(
+			settings,
+			environment,
+			record,
+			newFolderName);
 	});
 }
 
 void Controller::setUpdateConfirmHandler(
-		Fn<void(int newCount, FnMut<void(bool)> proceed)> handler) {
+		Fn<void(int anyNew, int selectedNew, FnMut<void(bool)> proceed)> handler) {
 	_wrapped.with([=, handler = std::move(handler)](
 			Implementation &unwrapped) mutable {
 		unwrapped.setUpdateConfirmHandler(std::move(handler));

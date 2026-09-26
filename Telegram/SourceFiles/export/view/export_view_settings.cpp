@@ -655,12 +655,6 @@ void SettingsWidget::addIdRangeOption(
 	const auto toInput = Ui::CreateChild<Ui::InputField>(
 		row,
 		st::exportRangeInput);
-	if (readData().singlePeerFromId) {
-		fromInput->setText(QString::number(*readData().singlePeerFromId));
-	}
-	if (readData().singlePeerTillId) {
-		toInput->setText(QString::number(*readData().singlePeerTillId));
-	}
 
 	const auto setDateMode = [=] {
 		changeData([&](Settings &data) {
@@ -713,9 +707,6 @@ void SettingsWidget::addIdRangeOption(
 	fromInput->changes(
 	) | rpl::on_next([=] {
 		const auto id = readId(fromInput);
-		if (id && !idBox->checked()) {
-			setIdMode();
-		}
 		changeData([&](Settings &data) {
 			data.singlePeerFromId = id;
 		});
@@ -723,13 +714,36 @@ void SettingsWidget::addIdRangeOption(
 	toInput->changes(
 	) | rpl::on_next([=] {
 		const auto id = readId(toInput);
-		if (id && !idBox->checked()) {
-			setIdMode();
-		}
 		changeData([&](Settings &data) {
 			data.singlePeerTillId = id;
 		});
 	}, toInput->lifetime());
+	const auto refreshIdFields = [=] {
+		const auto checked = idBox->checked();
+		const auto from = checked
+			? readData().singlePeerFromId
+			: std::optional<uint64>();
+		const auto till = checked
+			? readData().singlePeerTillId
+			: std::optional<uint64>();
+		const auto fromText = from ? QString::number(*from) : QString();
+		const auto tillText = till ? QString::number(*till) : QString();
+		if (fromInput->getLastText() != fromText) {
+			fromInput->setText(fromText);
+		}
+		if (toInput->getLastText() != tillText) {
+			toInput->setText(tillText);
+		}
+	};
+	idBox->checkedChanges(
+	) | rpl::on_next([=](bool checked) {
+		fromInput->setEnabled(checked);
+		toInput->setEnabled(checked);
+		refreshIdFields();
+	}, idBox->lifetime());
+	fromInput->setEnabled(idBox->checked());
+	toInput->setEnabled(idBox->checked());
+	refreshIdFields();
 
 	const auto layoutIdRow = [=] {
 		const auto width = row->width();

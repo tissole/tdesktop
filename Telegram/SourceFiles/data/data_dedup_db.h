@@ -87,7 +87,6 @@ struct ExResumeRecord {
 	int htmlIndex = 0;
 	QByteArray repliedIndex;
 	int dateIndex = 0;
-	int jsonState = 0;
 	QByteArray stats;
 	uint64 docId = 0;
 	QString pausedFile;
@@ -99,6 +98,10 @@ struct ExResumeRecord {
 	bool useIdRange = false;
 	uint64 fromId = 0;
 	uint64 tillId = 0;
+	MsgId updateAnchor = 0;
+	MsgId coveredTill = 0;
+	int coveredTillDate = 0;
+	bool migrated = false;
 };
 
 class DedupDb {

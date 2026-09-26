@@ -7497,7 +7497,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_export_resume" = "Resume";
 "lng_export_update" = "Update";
 "lng_export_up_to_date" = "Export is up to date.";
-"lng_export_update_confirm" = "Download {amount} new messages?";
+"lng_export_update_none_selected" = "New messages found, but none of the selected types.";
+"lng_export_update_confirm" = "Export {amount} new messages?";
+"lng_export_update_missing" = "The exported folder is missing.\nUpdate into a new folder?";
+"lng_export_update_settings_changed" = "Changed settings ignored; update continues with the original ones.";
 "lng_export_cancel_delete" = "Cancel and delete export folder?";
 "lng_export_scan" = "Scan";
 "lng_export_scanning" = "Scanning...";

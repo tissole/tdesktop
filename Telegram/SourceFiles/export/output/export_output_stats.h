@@ -22,6 +22,8 @@ public:
 	Stats() = default;
 	Stats(const Stats &other);
 
+	void reset();
+
 	void incrementFiles();
 	void incrementBytes(int count);
 

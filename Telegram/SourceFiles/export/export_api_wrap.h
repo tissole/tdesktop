@@ -149,7 +149,7 @@ public:
 	void setSharedTakeoutId(uint64 id);
 	void setTakeoutRefreshHook(Fn<void()> hook);
 	void takeoutRefreshDone(uint64 id);
-	void setUpdateCheck(int knownTotal, Fn<void(int newCount)> handler);
+	void setUpdateCheck(MsgId knownLastId, Fn<void(int anyNew, int selectedNew)> handler);
 	void proceedUpdate();
 	void abortUpdate();
 	[[nodiscard]] std::vector<QString> linkUrls() const;
@@ -264,6 +264,19 @@ private:
 		int splitIndex);
 
 	void requestMessagesCount(int localSplitIndex);
+	void recordNewestId(
+		int localSplitIndex,
+		const MTPmessages_Messages &result);
+	void requestUpdateSelectedCount(int32 known, int anyNew);
+	void requestSelectedFilterPage(
+		int realSplitIndex,
+		const MTPInputPeer &peer,
+		const MTPMessagesFilter &filter,
+		int32 minId,
+		int32 maxId,
+		int anyNew);
+	void updateSelectedCountDone(int anyNew);
+	void reportUpdateCheck(int anyNew, int selectedNew);
 	void messagesCountLoaded(int localSplitIndex, int count);
 	void resolveDates();
 	void requestMessagesSlice();
@@ -350,6 +363,21 @@ private:
 		const FilePolicy &policy,
 		Fn<bool(FileProgress)> progress,
 		FnMut<void(QString)> done);
+	enum class HashMode {
+		MemoryOnly,
+		OwnFetch,
+	};
+	[[nodiscard]] bool dedupIdDuplicate(
+		const ::Data::DedupDb &db,
+		uint64 docId,
+		PeerId peer,
+		bool global) const;
+	bool decideFileDedup(
+		Data::File &file,
+		const FilePolicy &policy,
+		FnMut<void(QString)> done,
+		HashMode mode);
+	bool dedupTypeAccepted(const Data::File &file, const FilePolicy &policy);
 	bool skipDuplicateById(Data::File &file, const FilePolicy &policy);
 	void recordFinishedContent(Data::File &file, const FilePolicy &policy);
 	void finishFileRecord(Data::File *file);
@@ -445,8 +473,15 @@ private:
 	QString _resumeFolder;
 	base::flat_map<QString, uint64> _preparedFileIds;
 	bool _updateMode = false;
-	int _updateKnownTotal = 0;
-	Fn<void(int newCount)> _updateCheckHandler;
+	MsgId _updateKnownLastId = 0;
+	int32 _updateNewestId = 0;
+	int32 _noteNewestId = 0;
+	TimeId _noteNewestDate = 0;
+	int _updateSelectedTotal = 0;
+	int _updateSelectedPending = 0;
+	int _updateSelectedGen = 0;
+	bool _updateCheckReported = false;
+	Fn<void(int anyNew, int selectedNew)> _updateCheckHandler;
 	Fn<Output::DialogState()> _writerStateGetter;
 
 	std::unique_ptr<Settings> _settings;

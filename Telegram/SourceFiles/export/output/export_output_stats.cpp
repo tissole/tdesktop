@@ -30,6 +30,24 @@ Stats::Stats(const Stats &other)
 	_messagesTotal = other._messagesTotal.load();
 }
 
+void Stats::reset() {
+	_files = 0;
+	_bytes = 0;
+	for (auto i = 0; i != kGroups; ++i) {
+		_groupFiles[i] = 0;
+		_groupBytes[i] = 0;
+		_groupSkipped[i] = 0;
+		_groupSkippedBytes[i] = 0;
+	}
+	_mediaWrittenFiles = 0;
+	_mediaWrittenBytes = 0;
+	_textMessages = 0;
+	_linkMessages = 0;
+	_linkTotal = 0;
+	_linkDuplicates = 0;
+	_messagesTotal = 0;
+}
+
 void Stats::incrementFiles() {
 	++_files;
 }

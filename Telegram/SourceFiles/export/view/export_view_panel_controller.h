@@ -86,6 +86,10 @@ private:
 	void applyRowSettings(
 		Settings &settings,
 		const ::Data::ExResumeRecord &row);
+	[[nodiscard]] bool updateSettingsChanged(
+		const ::Data::ExResumeRecord &row) const;
+	[[nodiscard]] bool updateCoversWholeChat(
+		const ::Data::ExResumeRecord &row) const;
 	void validateIdRange(FnMut<void()> proceed);
 	[[nodiscard]] const std::optional<::Data::ExResumeRecord> &resumeRow() const {
 		return _resumeRow;
@@ -111,6 +115,7 @@ private:
 	base::weak_qptr<Ui::BoxContent> _confirmStopBox;
 	rpl::event_stream<rpl::producer<>> _panelCloseEvents;
 	bool _stopRequested = false;
+	bool _updateSettingsChanged = false;
 	rpl::lifetime _lifetime;
 
 };

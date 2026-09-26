@@ -159,9 +159,10 @@ public:
 	void startUpdateExport(
 		const Settings &settings,
 		const Environment &environment,
-		const ::Data::ExResumeRecord &record);
+		const ::Data::ExResumeRecord &record,
+		const QString &newFolderName = QString());
 	void setUpdateConfirmHandler(
-		Fn<void(int newCount, FnMut<void(bool)> proceed)> handler);
+		Fn<void(int anyNew, int selectedNew, FnMut<void(bool)> proceed)> handler);
 	void closeDialogFiles();
 	void startScan(
 		const Settings &settings,
