@@ -281,6 +281,7 @@ private:
 	void resolveDates();
 	void requestMessagesSlice();
 	void consumeChatPage(MTPmessages_Messages result);
+	void buildUpdateReplay();
 	void firePagePrefetch();
 	bool setupExportSearch();
 	void requestExportCounts();
@@ -478,9 +479,21 @@ private:
 	int32 _noteNewestId = 0;
 	TimeId _noteNewestDate = 0;
 	int _updateSelectedTotal = 0;
+	int _updateSelectedCount = 0;
 	int _updateSelectedPending = 0;
 	int _updateSelectedGen = 0;
 	bool _updateCheckReported = false;
+	// Update only: whole pages the pre-check already fetched, replayed into
+	// the walk so the download asks for nothing twice.
+	std::vector<MTPmessages_Messages> _updateCache;
+	bool _updateCacheable = false;
+	bool _updateCacheOverflow = false;
+	bool _updateReplay = false;
+	// The cache merged into one date-ordered run, built on first use.
+	Data::MessagesSlice _updateReplaySlice;
+	bool _updateReplayBuilt = false;
+	// Highest id handed out of the run; the walk resumes just above it.
+	int32 _updateReplayCursor = 0;
 	Fn<void(int anyNew, int selectedNew)> _updateCheckHandler;
 	Fn<Output::DialogState()> _writerStateGetter;
 

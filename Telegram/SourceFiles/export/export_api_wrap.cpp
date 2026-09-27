@@ -50,6 +50,8 @@ constexpr auto kMaxEmojiPerRequest = 100;
 constexpr auto kStoriesSliceLimit = 100;
 constexpr auto kProfileMusicSliceLimit = 100;
 constexpr auto kUpdateProbeLimit = 100;
+// Past this many pages the pre-check stops caching and the walk re-fetches.
+constexpr auto kUpdateCacheMaxPages = 200;
 
 template <typename Messages>
 [[nodiscard]] std::vector<int32> CollectMessageIds(const Messages &messages) {
@@ -122,9 +124,10 @@ template <typename Messages>
 			result.push_back(MTP_inputMessagesFilterVideo());
 		}
 	}
+	// RoundVoice is the union of Voice and RoundVideo, so it would count
+	// every voice note and video note twice. The two cover both already.
 	if (has(Type::VoiceMessage)) {
 		result.push_back(MTP_inputMessagesFilterVoice());
-		result.push_back(MTP_inputMessagesFilterRoundVoice());
 	}
 	if (has(Type::VideoMessage)) {
 		result.push_back(MTP_inputMessagesFilterRoundVideo());
@@ -132,7 +135,9 @@ template <typename Messages>
 	if (has(Type::GIF)) {
 		result.push_back(MTP_inputMessagesFilterGif());
 	}
-	if (has(Type::File) || has(Type::Sticker)) {
+	// The server excludes stickers from Document results, so pairing them
+	// here only bought a filter that counts other people's files.
+	if (has(Type::File)) {
 		result.push_back(MTP_inputMessagesFilterDocument());
 	}
 	if (has(Type::Audio)) {
@@ -145,6 +150,13 @@ template <typename Messages>
 		result.push_back(MTP_inputMessagesFilterPoll());
 	}
 	return result;
+}
+
+// Neither has a usable server index: search cannot count or list them.
+[[nodiscard]] bool SelectionHasUnindexedTypes(MediaSettings::Types types) {
+	using Type = MediaSettings::Type;
+	return ((types & Type::Text) == Type::Text)
+		|| ((types & Type::Sticker) == Type::Sticker);
 }
 
 Settings::Type SettingsFromDialogsType(Data::DialogInfo::Type type) {
@@ -960,6 +972,12 @@ void ApiWrap::startExport(
 
 	_settings = std::make_unique<Settings>(settings);
 	_stats = stats;
+	_updateReplay = false;
+	_updateReplayBuilt = false;
+	_updateReplaySlice.list.clear();
+	_updateReplaySlice.peers.clear();
+	_updateReplayCursor = 0;
+	_updateCache.clear();
 	_startProcess = std::make_unique<StartProcess>();
 	_startProcess->done = std::move(done);
 
@@ -2366,6 +2384,11 @@ void ApiWrap::recordNewestId(
 void ApiWrap::requestUpdateSelectedCount(int32 known, int anyNew) {
 	Expects(_chatProcess != nullptr);
 
+	// Search cannot count these, so use the id difference.
+	if (SelectionHasUnindexedTypes(_settings->media.types)) {
+		reportUpdateCheck(anyNew, anyNew);
+		return;
+	}
 	const auto filters = ScanSearchFilters(_settings->media.types);
 	if (filters.empty()) {
 		reportUpdateCheck(anyNew, anyNew);
@@ -2384,29 +2407,22 @@ void ApiWrap::requestUpdateSelectedCount(int32 known, int anyNew) {
 	const auto realSplitIndex = (splitIndex >= 0)
 		? splitIndex
 		: (splitsCount + splitIndex);
-	// RoundVoice results are a subset of the Voice walk (measured), so
-	// probing both counts the same messages twice; the walk visits only
-	// Voice when both filters are present.
-	const auto hasVoice = ranges::any_of(
-		filters,
-		[](const auto &filter) {
-			return filter.type() == mtpc_inputMessagesFilterVoice;
-		});
 	_updateSelectedTotal = 0;
 	_updateSelectedPending = 0;
 	_updateSelectedGen = _dedupGen;
+	// Every filter's pages are cached; buildUpdateReplay merges them.
+	_updateCacheable = (!SelectionHasUnindexedTypes(_settings->media.types)
+		&& !skipMedia());
+	_updateCacheOverflow = false;
+	_updateCache.clear();
 	for (const auto &filter : filters) {
-		if (hasVoice
-			&& filter.type() == mtpc_inputMessagesFilterRoundVoice) {
-			continue;
-		}
 		++_updateSelectedPending;
 		requestSelectedFilterPage(
 			realSplitIndex,
 			realPeerInput,
 			filter,
 			known,
-			0,
+			known + 1,
 			anyNew);
 	}
 }
@@ -2416,7 +2432,7 @@ void ApiWrap::requestSelectedFilterPage(
 		const MTPInputPeer &peer,
 		const MTPMessagesFilter &filter,
 		int32 minId,
-		int32 maxId,
+		int32 cursor,
 		int anyNew) {
 	Expects(_chatProcess != nullptr);
 
@@ -2432,10 +2448,10 @@ void ApiWrap::requestSelectedFilterPage(
 		filter,
 		MTP_int(0),
 		MTP_int(0),
-		MTP_int(0),
-		MTP_int(0),
+		MTP_int(cursor),
+		MTP_int(-kUpdateProbeLimit),
 		MTP_int(kUpdateProbeLimit),
-		MTP_int(maxId),
+		MTP_int(0),
 		MTP_int(minId),
 		MTP_long(0)
 	)).done([=](const MTPmessages_Messages &result) {
@@ -2453,18 +2469,30 @@ void ApiWrap::requestSelectedFilterPage(
 				return std::vector<int32>();
 			});
 		_updateSelectedTotal += int(ids.size());
+		// Past the cap, keep what is held: the walk replays it and then
+		// carries on past the last message in it.
+		if (_updateCacheable && !_updateCacheOverflow) {
+			if (int(_updateCache.size()) >= kUpdateCacheMaxPages) {
+				_updateCacheOverflow = true;
+			} else {
+				_updateCache.push_back(result);
+			}
+		}
 		if (int(ids.size()) < kUpdateProbeLimit) {
 			updateSelectedCountDone(anyNew);
 			return;
 		}
-		// A full page means there may be more below it. Ask again for
-		// what sits strictly older than the lowest id just seen.
+		// A full page may have more above it: resume just past the highest
+		// id seen, so pages arrive oldest-first. The top id cannot step.
+		const auto highest = *ranges::max_element(ids);
 		requestSelectedFilterPage(
 			realSplitIndex,
 			peer,
 			filter,
 			minId,
-			*ranges::min_element(ids) - 1,
+			(highest >= std::numeric_limits<int32>::max() - 1)
+				? highest
+				: (highest + 1),
 			anyNew);
 	}).fail([=](const MTP::Error &error) {
 		if (gen != _dedupGen || !_chatProcess) {
@@ -2490,6 +2518,7 @@ void ApiWrap::reportUpdateCheck(int anyNew, int selectedNew) {
 		return;
 	}
 	_updateCheckReported = true;
+	_updateSelectedCount = std::max(selectedNew, 0);
 	if (_updateCheckHandler) {
 		base::take(_updateCheckHandler)(anyNew, selectedNew);
 	}
@@ -2555,15 +2584,12 @@ void ApiWrap::messagesCountLoaded(int localSplitIndex, int count) {
 bool ApiWrap::setupExportSearch() {
 	Expects(_chatProcess != nullptr);
 
-	using Type = MediaSettings::Type;
 	const auto types = _settings->media.types;
 	// Text and stickers have no usable server index: selections
 	// containing either walk history with walked/full-messages
 	// counters. Server counts plus downloaded-selected counters
 	// apply only when every selected kind is indexed.
-	if (((types & Type::Text) == Type::Text)
-		|| ((types & Type::Sticker) == Type::Sticker)
-		|| skipMedia()) {
+	if (SelectionHasUnindexedTypes(types) || skipMedia()) {
 		return false;
 	}
 	const auto filters = ScanSearchFilters(types);
@@ -2916,6 +2942,7 @@ void ApiWrap::decideScanMethod() {
 					const auto type = _chatProcess->scanFilters[f].type();
 					if (hasVoice
 						&& type == mtpc_inputMessagesFilterRoundVoice) {
+						// Unreachable: RoundVoice is never produced.
 						continue;
 					}
 					total += _chatProcess->scanCounts[f][i];
@@ -2946,22 +2973,9 @@ bool ApiWrap::scanAdvanceFilter() {
 	if (!_chatProcess->scanBySearch) {
 		return false;
 	}
-	// RoundVoice results are a subset of the Voice walk: visiting
-	// the filter re-fetches already-seen messages (id-deduped, finds
-	// nothing) but its raw count lands in the finished denominator
-	// (34 voice + 78 round = 112). Skip it when Voice is present.
-	const auto hasVoice = ranges::any_of(
-		_chatProcess->scanFilters,
-		[](const auto &filter) {
-			return filter.type() == mtpc_inputMessagesFilterVoice;
-		});
-	auto next = _chatProcess->scanFilterIndex + 1;
-	while (next < int(_chatProcess->scanFilters.size())
-		&& hasVoice
-		&& _chatProcess->scanFilters[next].type()
-			== mtpc_inputMessagesFilterRoundVoice) {
-		++next;
-	}
+	// One filter at a time, each restarting from the id floor. RoundVoice
+	// needs no skip: ScanSearchFilters does not produce it.
+	const auto next = _chatProcess->scanFilterIndex + 1;
 	if (next >= int(_chatProcess->scanFilters.size())) {
 		return false;
 	}
@@ -3562,6 +3576,48 @@ void ApiWrap::consumeChatPage(MTPmessages_Messages result) {
 	startMessagesSlice({});
 }
 
+void ApiWrap::buildUpdateReplay() {
+	Expects(_chatProcess != nullptr);
+
+	// Several filters arrive as separate oldest-first streams and a
+	// chronological HTML cannot take them in turn, so merge them here.
+	// Each raw page is released once parsed, halving the peak.
+	_updateReplaySlice.list.clear();
+	_updateReplaySlice.peers.clear();
+	for (auto i = size_t(0); i != _updateCache.size(); ++i) {
+		auto parsed = _updateCache[i].match(
+			[](const MTPDmessages_messagesNotModified &) {
+				return Data::MessagesSlice();
+			}, [&](const auto &data) {
+				return Data::ParseMessagesSlice(
+					_chatProcess->context,
+					data.vmessages(),
+					data.vusers(),
+					data.vchats(),
+					_chatProcess->info.relativePath);
+			});
+		_updateCache[i] = MTPmessages_Messages();
+		for (const auto &peer : parsed.peers) {
+			_updateReplaySlice.peers.emplace(peer.first, peer.second);
+		}
+		// Append only: Message has no copy assignment.
+		for (auto &message : parsed.list) {
+			_updateReplaySlice.list.push_back(std::move(message));
+		}
+	}
+	_updateCache.clear();
+	// Sort in place: move assignment works here, copy does not.
+	ranges::sort(
+		_updateReplaySlice.list,
+		ranges::less(),
+		[](const Data::Message &message) { return message.id; });
+	_updateReplaySlice.list.erase(ranges::unique(
+		_updateReplaySlice.list,
+		ranges::equal_to(),
+		[](const Data::Message &message) { return message.id; }
+	), _updateReplaySlice.list.end());
+}
+
 void ApiWrap::firePagePrefetch() {
 	Expects(_chatProcess != nullptr);
 
@@ -3686,6 +3742,50 @@ void ApiWrap::requestMessagesSlice() {
 			});
 			return;
 		}
+	}
+	// Replay what the pre-check already read, merged into date order. An
+	// exhausted run ends the split unless the cap cut it short, in which
+	// case the walk carries on past the last message replayed.
+	if (_updateReplay) {
+		if (!_updateReplayBuilt) {
+			_updateReplayBuilt = true;
+			buildUpdateReplay();
+		}
+		if (!_updateReplaySlice.list.empty()) {
+			const auto count = std::min(
+				int(_updateReplaySlice.list.size()),
+				kMessagesSliceLimit);
+			auto chunk = Data::MessagesSlice();
+			chunk.peers.insert(
+				_updateReplaySlice.peers.begin(),
+				_updateReplaySlice.peers.end());
+			chunk.list.reserve(count);
+			for (auto i = 0; i != count; ++i) {
+				chunk.list.push_back(std::move(
+					_updateReplaySlice.list[i]));
+			}
+			// Erase as we hand them over, so memory falls as we write.
+			_updateReplaySlice.list.erase(
+				_updateReplaySlice.list.begin(),
+				_updateReplaySlice.list.begin() + count);
+			// Id order, so the chunk's last is the highest so far.
+			_updateReplayCursor = chunk.list.back().id;
+			startMessagesSlice(std::move(chunk));
+			return;
+		}
+		_updateReplay = false;
+		if (!_updateCacheOverflow || !_updateReplayCursor) {
+			startMessagesSlice({});
+			return;
+		}
+		// The cap cut the run short, so more may sit above it. Continue
+		// from just past the last replayed id: both halves are ascending.
+		_chatProcess->walkStarted = true;
+		_chatProcess->writtenMax = _updateReplayCursor;
+		_chatProcess->walkCursor = (_updateReplayCursor
+			>= std::numeric_limits<int32>::max() - 1)
+			? _updateReplayCursor
+			: (_updateReplayCursor + 1);
 	}
 	// Single-pass oldest-first walk for every list type: every page
 	// is parsed, sorted ascending, deduped against everything
@@ -5319,6 +5419,15 @@ void ApiWrap::setUpdateCheck(MsgId knownLastId, Fn<void(int anyNew, int selected
 	_updateKnownLastId = knownLastId;
 	_updateNewestId = 0;
 	_updateCheckReported = false;
+	_updateSelectedCount = 0;
+	_updateCache.clear();
+	_updateCacheable = false;
+	_updateCacheOverflow = false;
+	_updateReplay = false;
+	_updateReplayBuilt = false;
+	_updateReplaySlice.list.clear();
+	_updateReplaySlice.peers.clear();
+	_updateReplayCursor = 0;
 	_updateCheckHandler = std::move(handler);
 }
 
@@ -5339,6 +5448,24 @@ void ApiWrap::proceedUpdate() {
 	}
 	_settings->singlePeerTill = std::nullopt;
 	_settings->singlePeerTillId = std::nullopt;
+	// Totals are this update's alone: the walk starts above the anchor.
+	_chatProcess->hasSelectedTotal = true;
+	_chatProcess->selectedTotal = _updateSelectedCount;
+	_chatProcess->selectedDone = 0;
+	// Indexed selections reuse the pre-check's pages, so the download asks
+	// for nothing already read. Only one filter can continue by search:
+	// a second would restart from the id floor and land its whole block
+	// after the first, so several continue by history. Unindexed
+	// selections always use history.
+	if (!skipMedia() && !SelectionHasUnindexedTypes(_settings->media.types)) {
+		const auto filters = ScanSearchFilters(_settings->media.types);
+		_updateReplay = (_updateCacheable && !_updateCache.empty());
+		if (int(filters.size()) == 1) {
+			_chatProcess->scanFilters = filters;
+			_chatProcess->scanBySearch = true;
+			_chatProcess->scanFilterIndex = 0;
+		}
+	}
 	// The parked update pre-check leaves messagesCountLoaded through the
 	// _updateMode branch, before the start() call every other path makes.
 	// Without it the writer's dialog is never opened (resumeDialogStart),
@@ -5422,6 +5549,17 @@ void ApiWrap::commitExportProgress(
 	auto anchor = int64(_chatProcess->updateAnchor);
 	if (_settings->useIdRange && _settings->singlePeerTillId) {
 		anchor = std::max(anchor, int64(*_settings->singlePeerTillId));
+	}
+	if (state == u"done"_q) {
+		// A search walk stops at the last wanted file, yet the run really
+		// did reach the chat's end. This is only ever read behind
+		// updateCoversWholeChat, so a finished run may record that as its
+		// anchor; a paused one keeps the work position for its resume.
+		anchor = std::max({
+			anchor,
+			int64(_noteNewestId),
+			int64(_updateNewestId),
+		});
 	}
 	record.updateAnchor = MsgId(std::max(int64(committedMax), anchor));
 	record.coveredTill = MsgId(std::max(_noteNewestId, int32(

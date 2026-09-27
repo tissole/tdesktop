@@ -192,6 +192,10 @@ private:
 	rpl::event_stream<State> _stateChanges;
 
 	Output::Stats _stats;
+	// Update only: the counters this run started from, so the window can
+	// show this session's files. stats.txt keeps the total.
+	QByteArray _statsSessionBase;
+	bool _updateSession = false;
 
 	std::vector<int> _substepsInStep;
 	int _substepsTotal = 0;
@@ -366,6 +370,8 @@ void ControllerObject::startExport(
 	_singlePeerFolder = singlePeerFolder;
 	_freshFolder = false;
 	_scanMode = false;
+	_updateSession = false;
+	_statsSessionBase.clear();
 	_api.setScanMode(false);
 	_writer = Output::CreateWriter(_settings.format);
 	fillExportSteps();
@@ -418,6 +424,8 @@ void ControllerObject::startResumeExport(
 	_freshFolder = false;
 	_resumeRecord = record;
 	_scanMode = false;
+	_updateSession = false;
+	_statsSessionBase.clear();
 	_api.setScanMode(false);
 	_writer = Output::CreateWriter(_settings.format);
 	fillExportSteps();
@@ -475,6 +483,8 @@ void ControllerObject::startUpdateExport(
 		_settings.path += '/';
 	}
 	_scanMode = false;
+	_updateSession = true;
+	_statsSessionBase.clear();
 	_api.setScanMode(false);
 	_updateCounting = true;
 	_writer = Output::CreateWriter(_settings.format);
@@ -503,6 +513,8 @@ void ControllerObject::startScan(
 	_settings.path = Output::NormalizePath(_settings, singlePeerFolder);
 	_singlePeerFolder = singlePeerFolder;
 	_scanMode = true;
+	_updateSession = false;
+	_statsSessionBase.clear();
 	_api.setScanMode(true);
 	_writer = nullptr;
 	QDir().mkpath(_settings.path);
@@ -699,6 +711,10 @@ void ControllerObject::initialize() {
 	});
 	if (_resumeRecord) {
 		_api.setResumeCheckpoint(*_resumeRecord);
+	}
+	// After the restore, so this is the total before this update.
+	if (_updateSession) {
+		_statsSessionBase = _stats.serialize();
 	}
 	_api.setWriterStateGetter([=] {
 		return _writer
@@ -1267,12 +1283,29 @@ void ControllerObject::setFinishedState() {
 	state.path = _scanMode
 		? (_settings.path + QString::fromLatin1("stats.txt"))
 		: _writer->mainFilePath();
+	// An update shows this session's files, a main export the whole thing.
+	// A blob that fails to restore leaves the base at zero.
+	auto base = Output::Stats();
+	if (_updateSession) {
+		base.restore(_statsSessionBase);
+	}
+	const auto shown = [&](auto value, auto was) {
+		return std::max(value - was, int64(0));
+	};
 	for (auto i = 0; i != Output::Stats::kGroups; ++i) {
 		const auto type = Output::Stats::kGroupStats[i].type;
-		state.groupFiles[i] = _stats.typeFiles(type);
-		state.groupBytes[i] = _stats.typeBytes(type);
-		state.groupSkipped[i] = _stats.typeSkipped(type);
-		state.groupSkippedBytes[i] = _stats.typeSkippedBytes(type);
+		state.groupFiles[i] = shown(
+			_stats.typeFiles(type),
+			base.typeFiles(type));
+		state.groupBytes[i] = shown(
+			_stats.typeBytes(type),
+			base.typeBytes(type));
+		state.groupSkipped[i] = shown(
+			_stats.typeSkipped(type),
+			base.typeSkipped(type));
+		state.groupSkippedBytes[i] = shown(
+			_stats.typeSkippedBytes(type),
+			base.typeSkippedBytes(type));
 		if (type == MediaSettings::Type::Poll) {
 			continue;
 		}
@@ -1281,11 +1314,15 @@ void ControllerObject::setFinishedState() {
 		state.skippedFiles += state.groupSkipped[i];
 		state.skippedBytes += state.groupSkippedBytes[i];
 	}
-	state.textMessages = _stats.textMessages();
-	state.linkMessages = _stats.linkMessages();
-	state.linkTotal = _stats.linkTotal();
-	state.linkDuplicates = _stats.linkDuplicates();
-	state.messagesTotal = _stats.messagesTotal();
+	state.textMessages = shown(_stats.textMessages(), base.textMessages());
+	state.linkMessages = shown(_stats.linkMessages(), base.linkMessages());
+	state.linkTotal = shown(_stats.linkTotal(), base.linkTotal());
+	state.linkDuplicates = shown(
+		_stats.linkDuplicates(),
+		base.linkDuplicates());
+	state.messagesTotal = shown(
+		_stats.messagesTotal(),
+		base.messagesTotal());
 	setState(std::move(state));
 }
 
