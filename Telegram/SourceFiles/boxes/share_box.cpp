@@ -2172,10 +2172,16 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 		const auto split = EnhancedForward::classifyItems(items);
 		{
 			if (!split.restricted.empty()) {
+				if (show) {
+					show->hideLayer();
+				}
+				if (state->submitCallback) {
+					state->submitCallback();
+				}
 				auto &api = history->session().api();
-			const auto remaining = std::make_shared<int>(
-				int(result.size()));
-			for (const auto &thread : result) {
+				const auto remaining = std::make_shared<int>(
+					int(result.size()));
+				for (const auto &thread : result) {
 				const auto effectiveThread = [&]()
 					-> not_null<Data::Thread*> {
 					const auto peer = thread->peer();
@@ -2208,12 +2214,7 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 					Api::SendAction(effectiveThread, options),
 					[=] {
 						if (--*remaining == 0) {
-							if (show) {
-								show->hideLayer();
-							}
-							if (state->submitCallback) {
-								state->submitCallback();
-							}
+							EnhancedForward::notifyTransfersUpdated();
 						}
 					});
 			}
@@ -2226,6 +2227,9 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 
 		if (needsRegrouping) {
 			auto &api = history->session().api();
+			if (show) {
+				show->hideLayer();
+			}
 			const auto remaining = std::make_shared<int>(
 				int(result.size()));
 			for (const auto &thread : result) {
@@ -2261,9 +2265,6 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 					Api::SendAction(effectiveThread, options),
 					[=] {
 						if (--*remaining == 0) {
-							if (show) {
-								show->hideLayer();
-							}
 							if (state->submitCallback) {
 								state->submitCallback();
 							}
@@ -2274,6 +2275,9 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 		}
 
 		auto &api = history->session().api();
+		if (show) {
+			show->hideLayer();
+		}
 		const auto remaining = std::make_shared<int>(int(result.size()));
 		for (const auto &thread : result) {
 			const auto effectiveThread = [&]()
@@ -2308,9 +2312,6 @@ ShareBox::SubmitCallback ShareBox::DefaultForwardCallback(
 				Api::SendAction(effectiveThread, options),
 				[=] {
 					if (--*remaining == 0) {
-						if (show && show->valid()) {
-							show->hideLayer();
-						}
 						if (state->submitCallback) {
 							state->submitCallback();
 						}

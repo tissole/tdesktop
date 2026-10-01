@@ -484,8 +484,6 @@ QString HelperBinaryPath(const QString &name) {
 	}
 	if (resolved.isEmpty()) {
 		LOG(("App Warning: external helper '%1' is unavailable.").arg(name));
-	} else {
-		LOG(("App Info: external helper '%1' at '%2'.").arg(name, resolved));
 	}
 	HelperBinaryCache[name] = resolved;
 	return resolved;

@@ -32,6 +32,7 @@ struct DownloadBarProgress {
 struct DownloadBarContent {
 	TextWithEntities singleName;
 	QImage singleThumbnail;
+	bool keepVisible = false;
 	int count = 0;
 	int done = 0;
 	int uploadCount = 0;
@@ -39,9 +40,11 @@ struct DownloadBarContent {
 	TextWithEntities singleUploadName;
 	int efCount = 0;
 	int efDone = 0;
+	int efSkipped = 0;
 	QString nfLastName;
 	int nfCount = 0;
 	int nfDone = 0;
+	int nfFloodSeconds = 0;
 	int64 uploadReady = 0;
 	int64 uploadTotal = 0;
 	int64 uploadSingleReady = 0;

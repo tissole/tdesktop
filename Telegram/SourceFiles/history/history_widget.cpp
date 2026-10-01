@@ -178,6 +178,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_file_hash.h"
 #include "settings.h"
 #include "apiwrap.h"
+#include "enhanced_forward.h"
 #include "base/options.h"
 #include "base/qthelp_regex.h"
 #include "ui/boxes/report_box_graphics.h"
@@ -3569,6 +3570,7 @@ void HistoryWidget::setHistory(History *history) {
 		}
 	}
 	updateTakeoutViewer();
+	revealProtectedMediaInView();
 	refreshAttachBotsMenu();
 }
 
@@ -8800,10 +8802,29 @@ void HistoryWidget::updateSendRestriction() {
 	updateHistoryGeometry();
 }
 
+void HistoryWidget::revealProtectedMediaInView() {
+	const auto scan = [=](History *history) {
+		if (!history) {
+			return;
+		}
+		auto &session = history->session();
+		for (const auto &block : history->blocks) {
+			for (const auto &message : block->messages) {
+				EnhancedForward::RevealProtectedMediaItem(
+					&session,
+					message->data());
+			}
+		}
+	};
+	scan(_history);
+	scan(_migrated);
+}
+
 void HistoryWidget::updateHistoryGeometry(
 		bool initial,
 		bool loadedDown,
 		const ScrollChange &change) {
+	revealProtectedMediaInView();
 	const auto guard = gsl::finally([&] {
 		_itemRevealPending.clear();
 	});

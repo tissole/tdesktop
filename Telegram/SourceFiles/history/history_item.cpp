@@ -3189,6 +3189,15 @@ void HistoryItem::setRealId(MsgId newId) {
 	}
 	if (isRegular()) {
 		_history->unregisterClientSideMessage(this);
+		// The messages index still holds the client-side id, so the loaded
+		// slice keeps this message where it was appended (at the end) until
+		// the whole history is reloaded. Move it to its server id so it lands
+		// in id order right away. addNew() notifies the viewers, removeOne()
+		// does not, so the order here matters.
+		if (const auto messages = _history->maybeMessages()) {
+			messages->removeOne(oldId);
+			messages->addNew(id);
+		}
 	}
 	_history->owner().notifyItemIdChange({ fullId(), oldId });
 
@@ -5467,6 +5476,32 @@ void HistoryItem::refreshSentMedia(const MTPMessageMedia *media) {
 	} else {
 		history()->owner().requestItemViewRefresh(this);
 	}
+}
+
+void HistoryItem::applyRevealedMedia(const MTPDmessage &data) {
+	if (isService()) {
+		return;
+	}
+	if (_media) {
+		// Already revealed. The reveal check looks at the media being in
+		// place, not at the noforwards flag, so there is nothing to refresh.
+		return;
+	}
+	const auto media = data.vmedia();
+	if (!media || CheckMessageMedia(*media) != MediaCheckResult::Good) {
+		return;
+	}
+	refreshSentMedia(media);
+	setText(TextWithEntities{
+		qs(data.vmessage()),
+		Api::EntitiesFromMTP(
+			&_history->session(),
+			data.ventities().value_or_empty()) });
+	if (groupId()) {
+		history()->owner().groups().refreshMessage(this);
+	}
+	addToSharedMediaIndex();
+	finishEdition(-1);
 }
 
 PreparedServiceText HistoryItem::prepareServiceTextForMessage(

@@ -229,6 +229,13 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				forwardsFinished = true;
 			}
 		}
+		const auto nf = NormalForward::CountersFor(session);
+		if (nf.active) {
+			forwardsActive = true;
+			if (nf.paused) {
+				forwardsPaused = true;
+			}
+		}
 	}
 
 	const auto finishedDownloadIds = [] {
@@ -265,6 +272,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 									session);
 							}
 						}
+						NormalForward::ResumeAll(session);
 					});
 				},
 				&st::menuIconDownload);
@@ -279,6 +287,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 								EnhancedForward::pauseForward(job.peer, session);
 							}
 						}
+						NormalForward::PauseAll(session);
 					});
 				},
 				&st::menuIconSchedule);
@@ -293,6 +302,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 							close();
 							Ui::PostponeCall(this, [=] {
 								EnhancedForward::CancelAll(&window->session());
+								NormalForward::CancelAll(&window->session());
 							});
 						},
 						.confirmText = tr::lng_box_yes(tr::now),
@@ -348,6 +358,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 								EnhancedForward::pauseForward(job.peer, session);
 							}
 						}
+						NormalForward::PauseAll(session);
 					});
 				},
 				&st::menuIconSchedule);
@@ -372,6 +383,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 									session);
 							}
 						}
+						NormalForward::ResumeAll(session);
 					});
 				},
 				&st::menuIconDownload);
@@ -388,6 +400,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 								Core::App().downloadManager().cancelAll();
 								Core::App().uploaderCancelAll();
 								EnhancedForward::CancelAll(&window->session());
+								NormalForward::CancelAll(&window->session());
 							});
 						},
 						.confirmText = tr::lng_box_yes(tr::now),

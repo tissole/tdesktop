@@ -3662,6 +3662,11 @@ HistoryItem *Session::addNewMessage(
 		data,
 		localFlags,
 		type);
+	if (result && data.type() == mtpc_message) {
+		EnhancedForward::RevealProtectedMediaItem(
+			not_null<Main::Session*>(&session()),
+			result);
+	}
 	if (type == NewMessageType::Unread) {
 		CheckForSwitchInlineButton(result);
 	}

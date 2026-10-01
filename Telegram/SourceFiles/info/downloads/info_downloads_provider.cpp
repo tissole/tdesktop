@@ -135,6 +135,7 @@ void Provider::updateCounter() {
 		}
 	};
 	auto accounts = 0;
+	auto fwFlood = 0;
 	auto fwDone = 0;
 	auto fwTotal = 0;
 	auto fwJobs = 0;
@@ -143,12 +144,24 @@ void Provider::updateCounter() {
 		// by peer and reported by every session that has that peer loaded, so
 		// deduplicate by peer to avoid counting one forward per account.
 		auto seen = base::flat_set<PeerId>();
+		auto seenBatches = base::flat_set<PeerId>();
 		eachSession([&](not_null<Main::Session*> session) {
 			accounts++;
+			for (const auto &batch : EnhancedForward::ForwardBatches(session)) {
+				if (!seenBatches.emplace(batch.dst).second) {
+					continue;
+				}
+				fwJobs++;
+				fwTotal += batch.total;
+				fwDone += batch.sent;
+			}
 			for (const auto &job : EnhancedForward::MemoryJobs(session)) {
 				if (job.finished
 					|| job.progress.state
 						== EnhancedForward::State::Cancelled) {
+					continue;
+				}
+				if (seenBatches.contains(job.peer)) {
 					continue;
 				}
 				if (!seen.emplace(job.peer).second) {
@@ -158,6 +171,18 @@ void Provider::updateCounter() {
 				fwTotal += job.progress.total;
 				fwDone += job.progress.sent;
 			}
+		});
+		eachSession([&](not_null<Main::Session*> session) {
+			const auto nf = NormalForward::CountersFor(session);
+			if (!nf.active) {
+				return;
+			}
+			fwFlood = std::max(fwFlood, nf.floodSeconds);
+			if (seenBatches.contains(nf.dst)) {
+				return;
+			}
+			fwTotal += nf.total;
+			fwDone += nf.done;
 		});
 		total += fwTotal;
 		done += fwDone;
@@ -183,14 +208,17 @@ void Provider::updateCounter() {
 		total += ulTotal;
 		done += ulDone;
 	}
+	const auto floodText = (fwFlood > 0)
+		? u"  FLOOD_WAIT %1s"_q.arg(fwFlood)
+		: QString();
 	if (total == 0) {
-		_counterText = QString();
+		_counterText = floodText;
 		return;
 	}
 	_counterText = tr::lng_tm_counter(
 		tr::now,
 		lt_done, QString::number(done),
-		lt_total, QString::number(total));
+		lt_total, QString::number(total)) + floodText;
 }
 
 bool Provider::isPossiblyMyItem(not_null<const HistoryItem*> item) {
@@ -601,6 +629,9 @@ void Provider::refreshViewer() {
 		// Mirror the download/upload jobCounterChanged signals: refresh the
 		// counter text only when the forward counts actually changed.
 		EnhancedForward::counterChanges() | rpl::on_next([=] {
+			updateCounter();
+		}, _lifetime);
+		NormalForward::countersChanged() | rpl::on_next([=] {
 			updateCounter();
 		}, _lifetime);
 

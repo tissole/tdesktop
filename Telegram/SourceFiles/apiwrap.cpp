@@ -4208,6 +4208,15 @@ void ApiWrap::forwardMessages(
 	std::sort(enhancedItems.begin(), enhancedItems.end(), byId);
 	std::sort(normalItems.begin(), normalItems.end(), byId);
 	const auto enhancedNeeded = !enhancedItems.empty();
+	const auto enhancedCount = int(enhancedItems.size());
+	const auto forwardDst = action.history->peer->id;
+	const auto splitForward = enhancedNeeded && !normalItems.empty();
+	if (splitForward) {
+		EnhancedForward::BeginForwardBatch(
+			_session,
+			forwardDst,
+			enhancedCount + int(normalItems.size()));
+	}
 
 	struct SharedCallback {
 		int requestsLeft = 0;
@@ -4219,7 +4228,6 @@ void ApiWrap::forwardMessages(
 	if (successCallback) {
 		shared->callback = std::move(successCallback);
 	}
-
     if (enhancedNeeded) {
     		EnhancedForward::Pipeline::Start(
     			this,
@@ -4262,7 +4270,8 @@ void ApiWrap::forwardMessages(
 			draft.options,
 			draft.groupOptions,
 			std::move(completion),
-			videoTimestamp);
+			videoTimestamp,
+			split.gate);
 		return;
 	}
 
@@ -4274,23 +4283,36 @@ void ApiWrap::forwardMessages(
 		auto copyAction = action;
 		auto copyShared = shared;
 		auto alreadyFiltered = std::make_shared<bool>(false);
-		auto totalBefore = std::make_shared<int>(0);
+		auto totalBefore = std::make_shared<int>(int(draft.items.size()));
 		auto skippedCount = std::make_shared<int>(0);
 		auto refreshAndSend = std::make_shared<Fn<void()>>();
 		*refreshAndSend = [=]() mutable {
 			std::sort(copyItems->begin(), copyItems->end(), [](auto a, auto b) {
 				return a->id < b->id;
 			});
-			*totalBefore = int(copyItems->size());
 			if (GetEnhancedBool("prevent_forward_duplicates") && !*alreadyFiltered) {
 				*alreadyFiltered = true;
-				const auto totalBeforeVal = int(copyItems->size());
 				Data::FilterCopyAlbumDuplicates(_session, *copyItems, [=](std::vector<not_null<HistoryItem*>> filtered) mutable {
-					*totalBefore = totalBeforeVal;
-					*skippedCount = totalBeforeVal - int(filtered.size());
+					*skippedCount = *totalBefore - int(filtered.size());
 					*copyItems = std::move(filtered);
 					if (copyItems->empty()) {
-						EnhancedForward::ShowForwardDoneToast(0, *totalBefore, *skippedCount);
+						EnhancedForward::ReportForwardBatchItem(
+							_session,
+							forwardDst,
+							0,
+							*skippedCount);
+						EnhancedForward::FinishForwardBatchWorker(
+							_session,
+							forwardDst,
+							1);
+						if (!EnhancedForward::ForwardBatchOwns(
+								_session,
+								forwardDst)) {
+							EnhancedForward::ShowForwardDoneToast(
+								0,
+								*totalBefore,
+								*skippedCount);
+						}
 						Data::SetCopyAlbumProgress(0, 0);
 						if (copyShared && !--copyShared->requestsLeft) copyShared->callback();
 						return;
@@ -4404,8 +4426,23 @@ void ApiWrap::forwardMessages(
 					if (*sharedIndex >= sharedBatches->size()) {
 						if (*totalBefore > 0) {
 							const auto sent = *totalBefore - *skippedCount;
-							EnhancedForward::ShowForwardDoneToast(sent, *totalBefore, *skippedCount);
-							LOG(("Forward done: sent %1 of %2, skipped %3").arg(sent).arg(*totalBefore).arg(*skippedCount));
+							EnhancedForward::ReportForwardBatchItem(
+								_session,
+								forwardDst,
+								sent,
+								*skippedCount);
+							EnhancedForward::FinishForwardBatchWorker(
+								_session,
+								forwardDst,
+								1);
+							if (!EnhancedForward::ForwardBatchOwns(
+									_session,
+									forwardDst)) {
+								EnhancedForward::ShowForwardDoneToast(
+									sent,
+									*totalBefore,
+									*skippedCount);
+							}
 						}
 						Data::SetCopyAlbumProgress(0, 0);
 						if (shared && !--shared->requestsLeft) {
@@ -4575,6 +4612,10 @@ void ApiWrap::forwardMessages(
 		};
 		(*refreshAndSend)();
 		return;
+	}
+
+	if (splitForward) {
+		EnhancedForward::DropForwardBatch(_session, forwardDst);
 	}
 
 	auto &histories = _session->data().histories();

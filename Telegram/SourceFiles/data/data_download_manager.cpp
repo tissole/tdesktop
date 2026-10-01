@@ -2497,6 +2497,7 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 			Fn<void()> push;
 			int efTotal = 0;
 			int efDone = 0;
+			int efSkipped = 0;
 		};
 
 		const auto state = lifetime.make_state<State>();
@@ -2505,6 +2506,7 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 		const auto computeEfPending = [=] {
 			auto totalF = 0;
 			auto doneF = 0;
+			auto skippedF = 0;
 			for (const auto &account :
 					Core::App().domain().orderedAccounts()) {
 				if (const auto session = account->maybeSession()) {
@@ -2513,10 +2515,14 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 						totalF += job.total;
 						doneF += job.sent;
 					}
+					for (const auto &job : EnhancedForward::AllJobs(session)) {
+						skippedF += job.progress.skipped;
+					}
 				}
 			}
 			state->efTotal = totalF;
 			state->efDone = doneF;
+			state->efSkipped = skippedF;
 		};
 		computeEfPending();
 		EnhancedForward::counterChanges(
@@ -2608,6 +2614,7 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 			}
 			content.efCount = state->efTotal;
 			content.efDone = state->efDone;
+			content.efSkipped = state->efSkipped;
 			for (const auto &account : Core::App().domain().orderedAccounts()) {
 				if (const auto session = account->maybeSession()) {
 					const auto nf = NormalForward::CountersFor(session);
@@ -2615,6 +2622,7 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 						content.nfCount = nf.total;
 						content.nfDone = nf.done;
 						content.nfLastName = nf.lastFileName;
+						content.efSkipped += nf.skipped;
 					}
 				}
 			}

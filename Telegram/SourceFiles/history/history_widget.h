@@ -708,6 +708,7 @@ private:
 
 	void updateSendRestriction();
 	[[nodiscard]] Data::SendError computeSendRestriction() const;
+	void revealProtectedMediaInView();
 	void updateHistoryGeometry(bool initial = false, bool loadedDown = false, const ScrollChange &change = { ScrollChangeNone, 0 });
 	void updateListSize();
 	void startItemRevealAnimations();

@@ -82,6 +82,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/unixtime.h"
 #include "base/qt/qt_common_adapters.h"
 #include "styles/style_dialogs.h"
+#include "enhanced_forward.h"
 
 namespace {
 
@@ -595,6 +596,10 @@ not_null<HistoryItem*> History::createItem(
 	const auto result = message.match([&](const auto &data) {
 		return makeMessage(id, data, localFlags);
 	});
+	// Every item is built here, both from updates and from loaded history
+	// slices. Restricted media must be requested from this point on, not only
+	// when the view scans what it has loaded.
+	EnhancedForward::RevealProtectedMediaItem(&session(), result);
 	if (newMessage && result->out() && result->isRegular()) {
 		session().topPeers().increment(peer, result->date());
 		if (result->starsPaid()) {
@@ -1842,11 +1847,39 @@ void History::viewReplaced(not_null<const Element*> was, Element *now) {
 void History::addItemToBlock(not_null<HistoryItem*> item) {
 	Expects(!item->mainView());
 
-	auto block = prepareBlockForAddingItem();
-
-	block->messages.push_back(item->createView(_delegateMixin->delegate()));
-	const auto view = block->messages.back().get();
-	view->attachToBlock(block, block->messages.size() - 1);
+	// A loaded slice is added oldest-first, so appending keeps a front block
+	// ordered. A new message at the bottom is normally the newest one, but a
+	// batch forward can deliver them out of order - and the chat paints them
+	// in the order of the block, not of the slice - so put such a message into
+	// the block and the slot its id belongs to.
+	const auto view = [&]() -> HistoryView::Element* {
+		if (!isBuildingFrontBlock()) {
+			for (auto i = int(blocks.size()); i > 0;) {
+				const auto index = --i;
+				const auto &messages = blocks[index]->messages;
+				auto at = int(messages.size());
+				while (at > 0 && messages[at - 1]->data()->id > item->id) {
+					--at;
+				}
+				if (at == int(messages.size())) {
+					// Newest in this block: let the normal path below handle
+					// it, it starts a new block when this one is full.
+					break;
+				}
+				if (at > 0 || index == 0) {
+					addNewInTheMiddle(item, index, at);
+					return item->mainView();
+				}
+				// Older than everything in this block: try the one before it.
+			}
+		}
+		auto block = prepareBlockForAddingItem();
+		block->messages.push_back(
+			item->createView(_delegateMixin->delegate()));
+		const auto result = block->messages.back().get();
+		result->attachToBlock(block, block->messages.size() - 1);
+		return result;
+	}();
 
 	if (item->Has<HistoryServiceNoForwardsToggle>()) {
 		if (const auto prev = view->previousInBlocks()) {

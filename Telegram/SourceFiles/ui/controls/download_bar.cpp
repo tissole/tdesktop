@@ -31,6 +31,15 @@ namespace {
 	return result;
 }
 
+// Duplicates are reported beside "sent / selected", never by shrinking it.
+[[nodiscard]] QString DuplicatesSuffix(int skipped) {
+	if (skipped <= 0) {
+		return QString();
+	}
+	return u" (+%1)"_q.arg(
+		tr::lng_tm_fw_duplicates_skipped(tr::now, lt_count, skipped));
+}
+
 } // namespace
 
 DownloadBar::DownloadBar(
@@ -67,7 +76,8 @@ DownloadBar::DownloadBar(
 DownloadBar::~DownloadBar() = default;
 
 void DownloadBar::show(DownloadBarContent &&content) {
-	const auto allFinished = (content.done >= content.count)
+	const auto allFinished = !content.keepVisible
+		&& (content.done >= content.count)
 		&& (content.uploadDone >= content.uploadCount)
 		&& (content.efDone >= content.efCount)
 		&& (content.nfCount == 0 || content.nfDone >= content.nfCount);
@@ -94,8 +104,9 @@ void DownloadBar::show(DownloadBarContent &&content) {
 	refreshThumbnail();
 	const auto dlPrefix = u"DL "_q;
 	const auto ulPrefix = u"UL "_q;
-	const auto efPrefix = u"EF "_q;
-	const auto nfPrefix = u"FWD "_q;
+	const auto nfPrefix = u"FW "_q;
+	const auto fwdDone = content.efDone + content.nfDone;
+	const auto fwdCount = content.efCount + content.nfCount;
 	_title.setMarkedText(
 		st::defaultTextStyle,
 		(content.count > 1
@@ -106,28 +117,24 @@ void DownloadBar::show(DownloadBarContent &&content) {
 			? tr::bold(tr::lng_tm_dl_prefix(
 				tr::now,
 				lt_name, content.singleName.text))
-			: (content.efCount > 1
-				? tr::bold(efPrefix + tr::lng_tm_files_progress(
+			: (fwdCount > 1
+				? tr::bold(nfPrefix + tr::lng_tm_files_progress(
 					tr::now,
-					lt_done, QString::number(content.efDone),
-					lt_total, QString::number(content.efCount)))
-				: content.efCount == 1
+					lt_done, QString::number(fwdDone),
+					lt_total, QString::number(fwdCount))
+					+ DuplicatesSuffix(content.efSkipped))
+				: fwdCount == 1
 				? tr::bold(tr::lng_tm_fw_prefix(
 					tr::now,
 					lt_name, content.singleName.text))
-				: (content.nfCount > 0
-					? tr::bold(nfPrefix + tr::lng_tm_files_progress(
+				: (content.uploadCount > 1
+					? tr::bold(ulPrefix + tr::lng_tm_files_progress(
 						tr::now,
-						lt_done, QString::number(content.nfDone),
-						lt_total, QString::number(content.nfCount)))
-					: (content.uploadCount > 1
-						? tr::bold(ulPrefix + tr::lng_tm_files_progress(
-							tr::now,
-							lt_done, QString::number(content.uploadDone),
-							lt_total, QString::number(content.uploadCount)))
-						: tr::bold(tr::lng_tm_ul_prefix(
-							tr::now,
-							lt_name, content.singleUploadName.text)))))));
+						lt_done, QString::number(content.uploadDone),
+						lt_total, QString::number(content.uploadCount)))
+					: tr::bold(tr::lng_tm_ul_prefix(
+						tr::now,
+						lt_name, content.singleUploadName.text))))));
 	refreshInfo(_progress.current());
 }
 
@@ -192,9 +199,9 @@ void DownloadBar::refreshInfo(const DownloadBarProgress &progress) {
 	const auto efTotal = progress.efTotal;
 	if (_content.nfCount > 0
 		&& _content.nfDone < _content.nfCount
-		&& progress.nfFloodSeconds > 0) {
+		&& _content.nfFloodSeconds > 0) {
 		text = tr::marked(
-			u"FLOOD_WAIT %1s"_q.arg(progress.nfFloodSeconds));
+			u"FLOOD_WAIT %1s"_q.arg(_content.nfFloodSeconds));
 	} else if (efReady < efTotal && efTotal > 0) {
 		text = tr::marked(
 			FormatDownloadText(efReady, efTotal));

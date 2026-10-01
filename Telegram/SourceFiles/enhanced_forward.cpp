@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "rpl/rpl.h"
 #include "base/debug_log.h"
+#include "base/call_delayed.h"
 #include "base/flat_map.h"
 #include "base/flat_set.h"
 #include "base/timer.h"
@@ -239,6 +240,220 @@ void ShowForwardDoneToast(int sent, int, int skipped) {
 	}
 }
 
+struct ForwardBatch {
+	Main::Session *session = nullptr;
+	int total = 0;
+	int sent = 0;
+	int skipped = 0;
+	bool enhancedDone = false;
+	bool normalDone = false;
+	bool finished = false;
+};
+
+constexpr auto kForwardHoldMs = crl::time(1500);
+
+base::flat_map<PeerId, ForwardBatch> &ForwardBatchMap() {
+	static auto result = base::flat_map<PeerId, ForwardBatch>();
+	return result;
+}
+
+ForwardBatch *LookupForwardBatch(
+		not_null<Main::Session*> session,
+		const PeerId &dst) {
+	const auto it = ForwardBatchMap().find(dst);
+	if (it == end(ForwardBatchMap()) || it->second.session != session.get()) {
+		return nullptr;
+	}
+	return &it->second;
+}
+
+void BeginForwardBatch(
+		not_null<Main::Session*> session,
+		const PeerId &dst,
+		int total) {
+	if (total <= 0) {
+		return;
+	}
+	auto &batch = ForwardBatchMap()[dst];
+	if (batch.session != session.get() || batch.finished) {
+		batch = ForwardBatch();
+		batch.session = session.get();
+	}
+	batch.total += total;
+	NotifyCounterChanged();
+}
+
+void ReportForwardBatchItem(
+		not_null<Main::Session*> session,
+		const PeerId &dst,
+		int sentDelta,
+		int skippedDelta) {
+	const auto batch = LookupForwardBatch(session, dst);
+	if (!batch || batch->finished) {
+		return;
+	}
+	batch->sent += sentDelta;
+	batch->skipped += skippedDelta;
+	NotifyCounterChanged();
+}
+
+bool ForwardBatchOwns(
+		not_null<Main::Session*> session,
+		const PeerId &dst) {
+	return LookupForwardBatch(session, dst) != nullptr;
+}
+
+void FinishForwardBatchWorker(
+		not_null<Main::Session*> session,
+		const PeerId &dst,
+		int worker) {
+	const auto batch = LookupForwardBatch(session, dst);
+	if (!batch || batch->finished) {
+		return;
+	}
+	if (worker == 0) {
+		batch->enhancedDone = true;
+	} else {
+		batch->normalDone = true;
+	}
+	if (!batch->enhancedDone || !batch->normalDone) {
+		NotifyCounterChanged();
+		return;
+	}
+	batch->finished = true;
+	const auto sent = batch->sent;
+	const auto total = batch->total;
+	const auto skipped = batch->skipped;
+	NotifyCounterChanged();
+	ShowForwardDoneToast(sent, total, skipped);
+	// The record stays for a moment: it holds the final count on the bar and
+	// keeps the workers' own toast sites silenced, then it is dropped.
+	base::call_delayed(kForwardHoldMs, [dst] {
+		const auto it = ForwardBatchMap().find(dst);
+		if (it == end(ForwardBatchMap()) || !it->second.finished) {
+			return;
+		}
+		ForwardBatchMap().erase(it);
+		NotifyCounterChanged();
+	});
+}
+
+void DropForwardBatch(
+		not_null<Main::Session*> session,
+		const PeerId &dst) {
+	const auto it = ForwardBatchMap().find(dst);
+	if (it == end(ForwardBatchMap()) || it->second.session != session.get()) {
+		return;
+	}
+	ForwardBatchMap().erase(it);
+	NotifyCounterChanged();
+}
+
+std::vector<ForwardBatchSnapshot> ForwardBatches(
+		not_null<Main::Session*> session) {
+	auto result = std::vector<ForwardBatchSnapshot>();
+	for (const auto &[dst, batch] : ForwardBatchMap()) {
+		if (batch.session != session.get()) {
+			continue;
+		}
+		result.push_back({
+			.dst = dst,
+			.total = batch.total,
+			.sent = batch.sent,
+			.skipped = batch.skipped,
+		});
+	}
+	return result;
+}
+
+constexpr auto kOrderConfirmGraceMs = crl::time(800);
+
+// A re-uploaded file only gets its id once the server processes the send,
+// which is a moment after the client finished uploading it. The order gate of
+// the standard half may not move past such an item before that, or the items
+// released behind it are created first and land before it. So each sent item
+// without a server id registers the value the gate should take once the id
+// appears, with a delayed fallback in case the confirmation never arrives.
+struct OrderWait {
+	Main::Session *session = nullptr;
+	ApiWrap *api = nullptr;
+	PeerId peer;
+	MsgId next = MsgId();
+	bool fallback = false;
+};
+
+base::flat_map<FullMsgId, OrderWait> &OrderWaits() {
+	static auto result = base::flat_map<FullMsgId, OrderWait>();
+	return result;
+}
+
+void ApplyOrderWait(const FullMsgId &local) {
+	const auto it = OrderWaits().find(local);
+	if (it == end(OrderWaits())) {
+		return;
+	}
+	const auto wait = it->second;
+	OrderWaits().erase(it);
+	NormalForward::AdvanceGate(wait.api, wait.peer, wait.next);
+}
+
+void RegisterOrderWait(
+		not_null<Main::Session*> session,
+		not_null<ApiWrap*> api,
+		const PeerId &peer,
+		const FullMsgId &local,
+		MsgId next) {
+	auto &wait = OrderWaits()[local];
+	wait.session = session.get();
+	wait.api = api;
+	wait.peer = peer;
+	wait.next = next;
+	if (wait.fallback) {
+		return;
+	}
+	wait.fallback = true;
+	base::call_delayed(kOrderConfirmGraceMs, [local] {
+		ApplyOrderWait(local);
+	});
+}
+
+void EnsureOrderGateWatch(not_null<Main::Session*> session) {
+	static base::flat_set<not_null<Main::Session*>> tracked;
+	if (!tracked.emplace(session).second) {
+		return;
+	}
+	session->lifetime().add([session] {
+		tracked.remove(session);
+		auto &waits = OrderWaits();
+		for (auto it = begin(waits); it != end(waits);) {
+			if (it->second.session == session.get()) {
+				it = waits.erase(it);
+			} else {
+				++it;
+			}
+		}
+	});
+	session->data().itemIdChanged(
+	) | rpl::on_next([](const Data::Session::IdChange &change) {
+		ApplyOrderWait(FullMsgId(change.newId.peer, change.oldId));
+	}, session->lifetime());
+}
+
+[[nodiscard]] std::shared_ptr<Pipeline> LivePipeline(const PeerId &peerId) {
+	const auto &active = Pipeline::Active();
+	const auto it = active.find(peerId);
+	return (it != end(active)) ? it->second.lock() : nullptr;
+}
+
+// Settled means the item cannot hold the order gate any more: it was skipped,
+// or its message already exists on the server.
+[[nodiscard]] bool OrderSettled(const ItemTask &item) {
+	return item.cancelled
+		|| item.dedupSkipped
+		|| (item.textOnly && item.confirmed)
+		|| (item.sentItem && IsServerMsgId(item.sentItem->id));
+}
+
 StateMap &ActiveStates() {
 	static StateMap map;
 	return map;
@@ -284,11 +499,30 @@ void WriteForwardedDonePostponed();
 	const QByteArray &blob);
 
 void finishJob(not_null<Main::Session*> session, const PeerId &peerId) {
+	// The gate may only move once the re-uploaded files have their server ids.
+	if (const auto pipeline = LivePipeline(peerId)) {
+		pipeline->advanceOrderGate();
+	} else {
+		NormalForward::AdvanceGate(&session->api(), peerId, MsgId(0));
+	}
 	auto &states = ActiveStates();
 	const auto it = states.find(peerId);
 	if (it == states.end()) return;
 	auto &state = it->second;
 	state.finished = true;
+	// A completed batch must leave no resume rows: they are only meant to
+	// survive a pause or a crash, and GetUnfinishedJobs counts every row for
+	// the session, so leftovers would keep inflating the FW counter.
+	const auto anyCancelled = ranges::any_of(
+		state.items,
+		[](const TrackedItem &tracked) { return tracked.cancelled; });
+	if (!anyCancelled) {
+		auto &db = Core::App().downloadManager().ensureDedupDb();
+		if (db.isOpen()) {
+			db.clearEfResumeJob(u"ef_%1_%2"_q.arg(
+				state.srcPeer.value).arg(peerId.value));
+		}
+	}
 	// Release the pipeline references so finished jobs don't keep the
 	// whole Pipeline (and its per-item tasks) alive in FinishedStates.
 	state.cancelCallback = nullptr;
@@ -308,6 +542,7 @@ void finishJob(not_null<Main::Session*> session, const PeerId &peerId) {
 		session->changes().peerUpdated(
 			session->data().peer(peerId),
 			Data::PeerUpdate::Flag::Slowmode);
+		FinishForwardBatchWorker(session, peerId, 0);
 		processStartQueue(peerId);
 		return;
 	}
@@ -321,6 +556,7 @@ void finishJob(not_null<Main::Session*> session, const PeerId &peerId) {
 	session->changes().peerUpdated(
 		session->data().peer(peerId),
 		Data::PeerUpdate::Flag::Slowmode);
+	FinishForwardBatchWorker(session, peerId, 0);
 	processStartQueue(peerId);
 }
 
@@ -400,8 +636,12 @@ bool PeerNeedsEnhancedForward(not_null<PeerData*> peer) {
 Split classifyItems(const std::vector<not_null<HistoryItem*>> &items) {
 	auto result = Split();
 	for (const auto &item : items) {
-		if (PeerNeedsEnhancedForward(item->history()->peer)) {
+		if (PeerNeedsEnhancedForward(item->history()->peer)
+			|| (item->flags() & MessageFlag::NoForwards)) {
 			result.restricted.push_back(item);
+			result.gate = result.gate
+				? std::min(result.gate, item->id)
+				: item->id;
 		} else {
 			result.normal.push_back(item);
 		}
@@ -438,6 +678,12 @@ void startForwardSession(
 	NotifyCounterChanged();
 }
 
+void AdvanceOrderGateFor(const PeerId &peerId) {
+	if (const auto pipeline = LivePipeline(peerId)) {
+		pipeline->advanceOrderGate();
+	}
+}
+
 void markItemSent(
 		not_null<Main::Session*> session,
 		const PeerId &peerId) {
@@ -449,13 +695,15 @@ void markItemSent(
 	if (state.cancelled || state.finished) return;
 
 	state.sent++;
+	ReportForwardBatchItem(session, peerId, 1, 0);
+	AdvanceOrderGateFor(peerId);
 	fireUpdate(session, peerId);
 	NotifyCounterChanged();
 	if (state.saveCallback) {
 		state.saveCallback();
 	}
 
-	if (state.sent >= state.total) {
+	if (state.sent + state.skipped >= state.total) {
 		finishJob(session, peerId);
 	}
 }
@@ -470,15 +718,18 @@ void markItemSkipped(
 	auto &state = it->second;
 	if (state.cancelled || state.finished) return;
 
-	if (state.total > 0) state.total--;
+	// "sent / selected" reports duplicates next to the counter, so the
+	// denominator must not shrink while the batch runs.
 	state.skipped++;
+	ReportForwardBatchItem(session, peerId, 0, 1);
+	AdvanceOrderGateFor(peerId);
 	fireUpdate(session, peerId);
 	NotifyCounterChanged();
 	if (state.saveCallback) {
 		state.saveCallback();
 	}
 
-	if (state.sent >= state.total) {
+	if (state.sent + state.skipped >= state.total) {
 		finishJob(session, peerId);
 	}
 }
@@ -486,6 +737,7 @@ void markItemSkipped(
 void cancelForward(
 		const PeerId &id,
 		not_null<Main::Session*> session) {
+	DropForwardBatch(session, id);
 	auto &states = ActiveStates();
 	const auto it = states.find(id);
 	if (it == states.end()) return;
@@ -566,6 +818,7 @@ void setResumeCallback(
 void pauseForward(
 		const PeerId &id,
 		not_null<Main::Session*> session) {
+	DropForwardBatch(session, id);
 	auto &states = ActiveStates();
 	const auto it = states.find(id);
 	if (it == states.end()) return;
@@ -962,6 +1215,29 @@ std::optional<SavedJob> GetUnfinishedJobByDst(
 	return std::nullopt;
 }
 
+void ApplyRevealedMessagesTo(
+		not_null<Main::Session*> session,
+		PeerId peer,
+		const MTPmessages_Messages &result) {
+	const auto apply = [&](const MTPVector<MTPMessage> &messages) {
+		for (const auto &message : messages.v) {
+			if (message.type() != mtpc_message) {
+				continue;
+			}
+			const auto existing = session->data().message(
+				FullMsgId{ peer, MsgId(message.c_message().vid().v) });
+			if (existing) {
+				existing->applyRevealedMedia(message.c_message());
+			}
+		}
+	};
+	if (result.type() == mtpc_messages_messages) {
+		apply(result.c_messages_messages().vmessages());
+	} else if (result.type() == mtpc_messages_channelMessages) {
+		apply(result.c_messages_channelMessages().vmessages());
+	}
+}
+
 void EnsureForwardSourceMessages(
 		not_null<Main::Session*> session,
 		const std::vector<FullMsgId> &sourceIds,
@@ -969,12 +1245,20 @@ void EnsureForwardSourceMessages(
 	struct Pending {
 		uint64 peerAccessHash = 0;
 		QVector<MTPInputMessage> ids;
+		bool takeout = false;
 	};
-	static base::flat_set<PeerId> inFlight;
+	static base::flat_map<PeerId, std::vector<Fn<void(bool)>>> inFlight;
 	auto &owner = session->data();
 	auto prepared = base::flat_map<PeerId, Pending>();
 	for (const auto &sourceId : sourceIds) {
-		if (owner.message(sourceId) || !IsServerMsgId(sourceId.msg)) {
+		const auto existing = owner.message(sourceId);
+		const auto refetch = existing
+			&& !existing->media()
+			&& (existing->flags() & MessageFlag::NoForwards);
+		if (existing && !refetch) {
+			continue;
+		}
+		if (!IsServerMsgId(sourceId.msg)) {
 			continue;
 		}
 		const auto groupPeer = peerIsChannel(sourceId.peer)
@@ -991,60 +1275,104 @@ void EnsureForwardSourceMessages(
 				perPeer.peerAccessHash = channel->accessHash();
 			}
 		}
+		if (refetch) {
+			perPeer.takeout = true;
+		}
 		perPeer.ids.push_back(MTP_inputMessageID(MTP_int(sourceId.msg.bare)));
 	}
 	if (prepared.empty()) {
+		if (done) {
+			done(true);
+		}
 		return;
 	}
 	const auto weakSession = base::make_weak(session);
 	const auto remaining = std::make_shared<int>(0);
 	const auto anyFailed = std::make_shared<bool>(false);
 	const auto finishOne = [=](const PeerId &groupPeer, bool ok) {
-		inFlight.remove(groupPeer);
+		const auto waiting = inFlight.find(groupPeer);
+		if (waiting == end(inFlight)) {
+			return;
+		}
+		const auto callbacks = base::take(waiting->second);
+		inFlight.erase(waiting);
 		if (!ok) {
 			*anyFailed = true;
 		}
-		if (--*remaining <= 0 && weakSession && done) {
-			done(!*anyFailed);
+		const auto after = --*remaining;
+		if (after <= 0 && weakSession) {
+			for (const auto &callback : callbacks) {
+				if (callback) {
+					callback(!*anyFailed);
+				}
+			}
 		}
 	};
 	for (auto &[groupPeer, perPeer] : prepared) {
-		if (inFlight.contains(groupPeer)) {
+		const auto busy = inFlight.contains(groupPeer);
+		if (done) {
+			inFlight[groupPeer].push_back(done);
+		}
+		if (busy) {
 			continue;
 		}
-		inFlight.emplace(groupPeer);
 		++*remaining;
 		if (const auto channelId = peerToChannel(groupPeer)) {
-			session->api().request(MTPchannels_GetMessages(
+			auto inner = MTPchannels_GetMessages(
 				MTP_inputChannel(
 					MTP_long(channelId.bare),
 					MTP_long(perPeer.peerAccessHash)),
-				MTP_vector<MTPInputMessage>(perPeer.ids)
-			)).done([=](const MTPmessages_Messages &result) {
+				MTP_vector<MTPInputMessage>(perPeer.ids));
+			const auto onDone = [=](const MTPmessages_Messages &result) {
 				if (weakSession) {
 					session->data().processExistingMessages(
 						session->data().channelLoaded(channelId),
 						result);
+					ApplyRevealedMessagesTo(session, groupPeer, result);
 				}
 				finishOne(groupPeer, true);
-			}).fail([=](const MTP::Error &) {
+			};
+			const auto onFail = [=](const MTP::Error &) {
 				finishOne(groupPeer, false);
-			}).send();
+			};
+			if (const auto id = perPeer.takeout
+				? session->api().takeoutId()
+				: std::optional<uint64>()) {
+				session->api().request(
+					MTPInvokeWithTakeout<MTPchannels_GetMessages>(
+						MTP_long(*id),
+						std::move(inner))
+				).done(onDone).fail(onFail).send();
+			} else {
+				session->api().request(std::move(inner)
+				).done(onDone).fail(onFail).send();
+			}
 		} else {
-			session->api().request(MTPmessages_GetMessages(
-				MTP_vector<MTPInputMessage>(perPeer.ids)
-			)).done([=](const MTPmessages_Messages &result) {
+			auto inner = MTPmessages_GetMessages(
+				MTP_vector<MTPInputMessage>(perPeer.ids));
+			const auto onDone = [=](const MTPmessages_Messages &result) {
 				if (weakSession) {
 					session->data().processExistingMessages(nullptr, result);
+					ApplyRevealedMessagesTo(session, groupPeer, result);
 				}
 				finishOne(groupPeer, true);
-			}).fail([=](const MTP::Error &) {
+			};
+			const auto onFail = [=](const MTP::Error &) {
 				finishOne(groupPeer, false);
-			}).send();
+			};
+			if (const auto id = perPeer.takeout
+				? session->api().takeoutId()
+				: std::optional<uint64>()) {
+				session->api().request(
+					MTPInvokeWithTakeout<MTPmessages_GetMessages>(
+						MTP_long(*id),
+						std::move(inner))
+				).done(onDone).fail(onFail).send();
+			} else {
+				session->api().request(std::move(inner)
+				).done(onDone).fail(onFail).send();
+			}
 		}
-	}
-	if (*remaining <= 0) {
-		return;
 	}
 }
 
@@ -1118,9 +1446,6 @@ std::vector<JobSnapshot> MemoryJobs(not_null<Main::Session*> session) {
 			.resumable = state.resumable,
 		});
 	}
-	// Requests queued behind an active forward to the same peer are pending
-	// batches: expose them so the Forwards tab and the counters reflect every
-	// file the user queued, not only the currently running job.
 	for (const auto &[peer, requests] : StartQueue()) {
 		if (!belongsToSession(peer)) {
 			continue;
@@ -1844,6 +2169,16 @@ Pipeline::~Pipeline() {
 	if (it != active.end() && it->second.lock().get() == this) {
 		active.erase(it);
 	}
+	// Last resort: never leave the standard half held by a gate nobody will
+	// open any more. Delayed, and only if the gate did not move meanwhile, so
+	// a pending confirmation or a new forward is never clobbered.
+	if (const auto gate = NormalForward::CurrentGate(_peerId)) {
+		base::call_delayed(kOrderConfirmGraceMs, [api = _api, peer = _peerId, gate] {
+			if (NormalForward::CurrentGate(peer) == gate) {
+				NormalForward::AdvanceGate(api, peer, MsgId(0));
+			}
+		});
+	}
 	for (const auto &item : _items) {
 		if (const auto srcItem = _session.data().message(item.sourceId)) {
 			ClearShadowUpload(&_session, srcItem);
@@ -1853,9 +2188,35 @@ Pipeline::~Pipeline() {
 
 void Pipeline::run() {
 	const auto self = shared_from_this();
+	if (!_takeoutRefetchTried) {
+		_takeoutRefetchTried = true;
+		auto restricted = std::vector<FullMsgId>();
+		for (auto i = 0; i < _n; i++) {
+			const auto srcItem = _session.data().message(_items[i].sourceId);
+			if (srcItem
+				&& !srcItem->media()
+				&& (srcItem->flags() & MessageFlag::NoForwards)) {
+				restricted.push_back(_items[i].sourceId);
+			}
+		}
+		if (!restricted.empty()) {
+			const auto session = &_session;
+			// Active() holds only a weak_ptr, so this must be the last strong
+			// reference or the pipeline dies with this call stack.
+			_api->ensureTakeout(
+				_session.data().peer(restricted.front().peer),
+				[self, session, restricted](bool) {
+					EnsureForwardSourceMessages(
+						session,
+						restricted,
+						[self](bool succeeded) {
+							self->run();
+						});
+				});
+			return;
+		}
+	}
 	{
-		// A restarted job takes over its persisted rows unpaused; the next
-		// progress save keeps them that way.
 		auto &db = Core::App().downloadManager().ensureDedupDb();
 		if (db.isOpen()) {
 			db.setEfResumePaused(_session.uniqueId(), _peerId, false);
@@ -1890,21 +2251,13 @@ void Pipeline::run() {
 
 	const auto regroupAll = (_groupOptions == Data::GroupingOptions::RegroupAll);
 	const auto separate = (_groupOptions == Data::GroupingOptions::Separate);
-	// "Group as is" only makes sense when the source messages are an album.
-	// Forwarding several loose files should still produce a grouped album,
-	// so treat the default as "regroup all" unless the user explicitly chose
-	// to send them separately.
-	const auto forceRegroup = (_groupOptions == Data::GroupingOptions::GroupAsIs)
-		&& (albumItemCounts.empty() || albumItemCounts.size() == 1)
-		&& (_n > 1);
 	MessageGroupId regroupAllId;
-	if (regroupAll || forceRegroup) {
+	if (regroupAll) {
 		regroupAllId = MessageGroupId::FromRaw(
 			_action.history->peer->id,
 			base::RandomValue<uint64>(),
 			false);
 	}
-	const auto doRegroup = (regroupAll || forceRegroup);
 
 	for (auto i = 0; i < _n; i++) {
 		if (_items[i].textOnly) continue;
@@ -1914,7 +2267,7 @@ void Pipeline::run() {
 		MessageGroupId sg;
 		if (separate) {
 			sg = MessageGroupId();
-		} else if (doRegroup) {
+		} else if (regroupAll) {
 			sg = regroupAllId;
 		} else {
 			sg = srcItem->groupId();
@@ -1926,7 +2279,7 @@ void Pipeline::run() {
 				auto album = std::make_shared<SendingAlbum>();
 				album->options = _action.options;
 				album->expectedCount = [&] {
-					if (doRegroup) {
+					if (regroupAll) {
 						int count = 0;
 						for (auto j = 0; j < _n; j++) {
 							if (!_items[j].textOnly) count++;
@@ -2089,6 +2442,8 @@ void Pipeline::run() {
 			}
 		}
 	}, *_dlLifetime);
+
+	EnsureOrderGateWatch(&_session);
 
 	if (GetEnhancedBool("prevent_forward_duplicates")) {
 		for (auto i = 0; i < _n; i++) {
@@ -2411,6 +2766,7 @@ void Pipeline::sendNext() {
 						ItemState::Done,
 						{ _items[i].path, 0 },
 						1.0);
+					_items[i].confirmed = true;
 					EnhancedForward::markItemSent(&_session, _peerId);
 				};
 				const auto fail = [this, i, randomId](const MTP::Error &error, const MTP::Response &) {
@@ -2420,6 +2776,7 @@ void Pipeline::sendNext() {
 						ItemState::Done,
 						{ _items[i].path, 0 },
 						1.0);
+					_items[i].confirmed = true;
 					EnhancedForward::markItemSent(&_session, _peerId);
 				};
 				_session.data().histories().sendPreparedMessage(
@@ -2445,6 +2802,7 @@ void Pipeline::sendNext() {
 					done,
 					fail);
 			} else {
+				_items[i].confirmed = true;
 				EnhancedForward::markItemSent(&_session, _peerId);
 			}
 			_items[i].sent = true;
@@ -2467,7 +2825,8 @@ void Pipeline::sendNext() {
 			done++;
 		}
 	}
-	if (done > 0 || _skippedCount > 0) {
+	if (!EnhancedForward::ForwardBatchOwns(&_session, _peerId)
+		&& (done > 0 || _skippedCount > 0)) {
 		EnhancedForward::ShowForwardDoneToast(
 			done,
 			done + _skippedCount,
@@ -3078,6 +3437,17 @@ void Pipeline::checkItem(int i) {
 				}
 				return;
 			}
+			// The file is full size, but the downloader may still hold it open
+			// for writing: preparing it now runs the cover extraction, whose 7z
+			// opens the file read-only and fails with a sharing violation.
+			if (doc->loading() && doc->loadingFilePath() == item.path) {
+				item.downloadedBytes = fi.size();
+				EnhancedForward::updateDownloadProgress(
+					&_session, _peerId, i,
+					{ doc->filename(), doc->size },
+					1.0);
+				return;
+			}
 		}
 		item.downloadDone = true;
 		item.downloadedBytes = fi.size();
@@ -3584,11 +3954,12 @@ void Pipeline::runNextPrecheck() {
 	// ID fast path: the exact same source document was already forwarded (or
 	// is currently being forwarded), so skip it without computing a hash.
 	auto &dedupDb = Core::App().downloadManager().ensureDedupDb();
-	if (dedupDb.isOpen()
+	const auto knownById = dedupDb.isOpen()
 		&& (dedupDb.containsDocId(Data::DedupDb::Table::Uploads, item.mediaId)
 			|| dedupDb.containsDocIdInDb(
 				Data::DedupDb::Table::Uploads,
-				item.mediaId))) {
+				item.mediaId));
+	if (knownById) {
 		premarkDuplicate(i);
 		runNextPrecheck();
 		return;
@@ -3698,6 +4069,48 @@ void Pipeline::adjustAlbumCount(int idx) {
 	}
 }
 
+void Pipeline::advanceOrderGate() {
+	auto first = MsgId(0);
+	auto second = MsgId(0);
+	for (const auto &item : _items) {
+		if (OrderSettled(item)) {
+			continue;
+		}
+		const auto id = item.sourceId.msg;
+		if (!first || id < first) {
+			second = first;
+			first = id;
+		} else if (!second || id < second) {
+			second = id;
+		}
+	}
+	if (!first) {
+		NormalForward::AdvanceGate(_api, _peerId, MsgId(0));
+		return;
+	}
+	auto waiting = false;
+	for (const auto &item : _items) {
+		if (OrderSettled(item) || !item.sent || !item.sentItem) {
+			continue;
+		}
+		const auto holds = (item.sourceId.msg == first);
+		if (holds) {
+			waiting = true;
+		}
+		RegisterOrderWait(
+			&_session,
+			_api,
+			_peerId,
+			item.sentItem->fullId(),
+			holds ? second : first);
+	}
+	if (!waiting) {
+		// Nothing at the cut is still waiting for its server id, so the gate
+		// can move on to the next unsettled item right away.
+		NormalForward::AdvanceGate(_api, _peerId, first);
+	}
+}
+
 void Pipeline::cancelItem(int idx) {
 	const auto self = shared_from_this();
 	if (idx < 0 || idx >= _n) return;
@@ -3772,6 +4185,215 @@ void Pipeline::cancelItem(int idx) {
 	sendNext();
 	pumpUploads();
 	pumpDownloads();
+}
+
+namespace {
+
+struct ProtectedMediaState {
+	base::flat_set<MsgId> requested;
+	std::vector<MsgId> pending;
+	int retries = 0;
+	bool inFlight = false;
+};
+
+auto ProtectedMediaStates()
+-> base::flat_map<
+	not_null<Main::Session*>,
+	base::flat_map<PeerId, ProtectedMediaState>> & {
+	static auto result = base::flat_map<
+		not_null<Main::Session*>,
+		base::flat_map<PeerId, ProtectedMediaState>>();
+	return result;
+}
+
+void ForgetProtectedMediaSession(not_null<Main::Session*> session) {
+	static base::flat_set<not_null<Main::Session*>> tracked;
+	if (!tracked.emplace(session).second) {
+		return;
+	}
+	session->lifetime().add([session] {
+		tracked.remove(session);
+		ProtectedMediaStates().erase(session);
+	});
+}
+
+bool IsProtectedMediaCandidate(not_null<HistoryItem*> item) {
+	// The media being in place is what says the message was already revealed.
+	// The noforwards flag never goes away for these messages, so without this
+	// check every view update re-requests every visible restricted message
+	// again - hundreds of requests a minute, which is what makes the server
+	// start failing unrelated requests such as forwards.
+	return IsServerMsgId(item->id)
+		&& !item->out()
+		&& !item->isService()
+		&& !item->media()
+		&& ((item->flags() & MessageFlag::NoForwards) != MessageFlags());
+}
+
+constexpr auto kMaxProtectedMediaRetries = 3;
+constexpr auto kProtectedMediaRetryDelay = 3000;
+constexpr auto kMaxProtectedMediaBatch = 10;
+
+void SendProtectedMediaRequest(
+		not_null<Main::Session*> session,
+		not_null<PeerData*> peer,
+		const QVector<MTPInputMessage> &ids);
+
+void PumpProtectedMediaRequests(
+		not_null<Main::Session*> session,
+		not_null<PeerData*> peer);
+
+void ReleaseProtectedMediaIds(
+		not_null<Main::Session*> session,
+		not_null<PeerData*> peer,
+		const QVector<MTPInputMessage> &ids,
+		bool failed) {
+	auto &sessions = ProtectedMediaStates();
+	const auto sessionIt = sessions.find(session);
+	if (sessionIt == end(sessions)) {
+		return;
+	}
+	auto &states = sessionIt->second;
+	const auto state = states.find(peer->id);
+	if (state == end(states)) {
+		return;
+	}
+	state->second.inFlight = false;
+	if (failed && state->second.retries < kMaxProtectedMediaRetries) {
+		++state->second.retries;
+		const auto retry = [=] {
+			auto &retrying = ProtectedMediaStates();
+			const auto sessionState = retrying.find(session);
+			if (sessionState == end(retrying)) {
+				return;
+			}
+			const auto peerState = sessionState->second.find(peer->id);
+			if (peerState == end(sessionState->second)) {
+				return;
+			}
+			if (peerState->second.inFlight) {
+				// Another request is running: queue these again instead of
+				// dropping them, they are retried once it finishes.
+				for (const auto &id : ids) {
+					const auto msgId = MsgId(id.c_inputMessageID().vid().v);
+					if (!peerState->second.requested.contains(msgId)) {
+						peerState->second.pending.push_back(msgId);
+					}
+				}
+				return;
+			}
+			peerState->second.inFlight = true;
+			for (const auto &id : ids) {
+				peerState->second.requested.emplace(
+					MsgId(id.c_inputMessageID().vid().v));
+			}
+			SendProtectedMediaRequest(session, peer, ids);
+		};
+		QTimer::singleShot(kProtectedMediaRetryDelay, retry);
+		return;
+	}
+	if (!failed) {
+		state->second.retries = 0;
+	}
+	for (const auto &id : ids) {
+		state->second.requested.remove(
+			MsgId(id.c_inputMessageID().vid().v));
+	}
+	PumpProtectedMediaRequests(session, peer);
+}
+
+void ApplyRevealedMessages(
+		not_null<Main::Session*> session,
+		not_null<PeerData*> peer,
+		const MTPmessages_Messages &result,
+		const QVector<MTPInputMessage> &ids) {
+	session->data().processExistingMessages(
+		peer->isChannel() ? peer->asChannel() : nullptr,
+		result);
+	ApplyRevealedMessagesTo(session, peer->id, result);
+	ReleaseProtectedMediaIds(session, peer, ids, false);
+}
+
+void SendProtectedMediaRequest(
+		not_null<Main::Session*> session,
+		not_null<PeerData*> peer,
+		const QVector<MTPInputMessage> &ids) {
+	session->api().ensureTakeout(peer, [=](bool ready) {
+		const auto id = session->api().takeoutId();
+		if (!ready || !id) {
+			ReleaseProtectedMediaIds(session, peer, ids, true);
+			return;
+		}
+		session->api().request(
+			MTPInvokeWithTakeout<MTPchannels_GetMessages>(
+				MTP_long(*id),
+				MTPchannels_GetMessages(
+					MTP_inputChannel(
+						MTP_long(peerToChannel(peer->id).bare),
+						MTP_long(peer->asChannel()->accessHash())),
+					MTP_vector<MTPInputMessage>(ids)))
+		).done([=](const MTPmessages_Messages &result) {
+			ApplyRevealedMessages(session, peer, result, ids);
+		}).fail([=](const MTP::Error &) {
+			ReleaseProtectedMediaIds(session, peer, ids, true);
+		}).send();
+	});
+}
+
+void PumpProtectedMediaRequests(
+		not_null<Main::Session*> session,
+		not_null<PeerData*> peer) {
+	auto &sessions = ProtectedMediaStates();
+	const auto sessionIt = sessions.find(session);
+	if (sessionIt == end(sessions)) {
+		return;
+	}
+	auto &states = sessionIt->second;
+	const auto state = states.find(peer->id);
+	if (state == end(states) || state->second.inFlight) {
+		return;
+	}
+	auto &pending = state->second.pending;
+	if (pending.empty()) {
+		return;
+	}
+	const auto count = std::min(int(pending.size()), kMaxProtectedMediaBatch);
+	auto batch = QVector<MTPInputMessage>();
+	batch.reserve(count);
+	for (auto i = 0; i != count; ++i) {
+		const auto id = pending.front();
+		pending.erase(pending.begin());
+		state->second.requested.emplace(id);
+		batch.push_back(MTP_inputMessageID(MTP_int(id.bare)));
+	}
+	state->second.inFlight = true;
+	SendProtectedMediaRequest(session, peer, batch);
+}
+
+} // namespace
+
+void RevealProtectedMediaItem(
+		not_null<Main::Session*> session,
+		not_null<HistoryItem*> item) {
+	if (!IsProtectedMediaCandidate(item)) {
+		return;
+	}
+	const auto peer = item->history()->peer;
+	if (!peerIsChannel(peer->id)) {
+		return;
+	}
+	ForgetProtectedMediaSession(session);
+	auto &state = ProtectedMediaStates()[session][peer->id];
+	if (state.requested.contains(item->id)
+		|| std::find(state.pending.begin(), state.pending.end(), item->id)
+			!= state.pending.end()) {
+		return;
+	}
+	// Queue it instead of dropping it: several restricted messages become
+	// visible at once while the first request is still in flight, and a
+	// dropped candidate is only retried on the next geometry update.
+	state.pending.push_back(item->id);
+	PumpProtectedMediaRequests(session, peer);
 }
 
 } // namespace EnhancedForward
@@ -3886,6 +4508,18 @@ public:
 
 	Fn<void()> completion;
 
+	// The smallest restricted item that has not been sent yet: normal items at
+	// or after it wait, so each restricted item keeps its place in the source
+	// order. Album ids are contiguous, so cutting here never splits an album
+	// unless the protected item is itself a member of one.
+	MsgId gate = MsgId();
+
+	[[nodiscard]] bool gateBlocksScan() const {
+		return gate
+			&& scanned < remaining.size()
+			&& remaining[scanned] >= gate;
+	}
+
 	[[nodiscard]] int maxBatch() const {
 		if (groupOptions == Data::GroupingOptions::Separate) {
 			return 1;
@@ -3941,6 +4575,8 @@ void SaveSnapshot(not_null<Job*> j) {
 	case Job::State::Paused: record.state = u"paused"_q; break;
 	default: record.state = u"running"_q; break;
 	}
+	record.forwardOptions = static_cast<int>(j->forwardOptions);
+	record.groupOptions = static_cast<int>(j->groupOptions);
 	record.remaining = j->remaining;
 	db.insertNfResume(record);
 }
@@ -3966,7 +4602,12 @@ void Finish(not_null<Job*> j) {
 	}
 	j->regs.clear();
 	db.removeNfResume(j->session->uniqueId(), j->dst);
-	if (j->done > 0 || j->skipped > 0) {
+	EnhancedForward::FinishForwardBatchWorker(
+		not_null{ j->session },
+		j->dst,
+		1);
+	if (!EnhancedForward::ForwardBatchOwns(not_null{ j->session }, j->dst)
+		&& (j->done > 0 || j->skipped > 0)) {
 		EnhancedForward::ShowForwardDoneToast(j->done, j->total, j->skipped);
 	}
 	FireCompletion(j);
@@ -3979,6 +4620,7 @@ void PauseJob(not_null<Job*> j) {
 		return;
 	}
 	j->state = Job::State::Paused;
+	EnhancedForward::DropForwardBatch(not_null{ j->session }, j->dst);
 	SaveSnapshot(j);
 	FireCompletion(j);
 	Notify();
@@ -3986,6 +4628,7 @@ void PauseJob(not_null<Job*> j) {
 
 void CancelJob(not_null<Job*> j) {
 	j->state = Job::State::Cancelled;
+	EnhancedForward::DropForwardBatch(not_null{ j->session }, j->dst);
 	for (const auto requestId : base::take(j->requests)) {
 		j->api->request(requestId).cancel();
 	}
@@ -4022,6 +4665,11 @@ void EnqueueResolved(
 		&& db.seekDocumentId(Data::DedupDb::Table::Uploads, hash) != 0;
 	if (duplicate) {
 		j->skipped++;
+		EnhancedForward::ReportForwardBatchItem(
+			not_null{ j->session },
+			j->dst,
+			0,
+			1);
 		return;
 	}
 	const auto mediaIt = j->mediaIds.find(msgId);
@@ -4250,6 +4898,11 @@ void FlushForwardBatch(
 		auto job = not_null{ strong.get() };
 		job->api->applyUpdates(result);
 		job->done += int(chunk.size());
+		EnhancedForward::ReportForwardBatchItem(
+			not_null{ job->session },
+			job->dst,
+			int(chunk.size()),
+			0);
 		job->lastMsgId = std::max(job->lastMsgId, maxSourceId);
 		for (const auto msgId : chunk) {
 			const auto item = job->session->data().message(
@@ -4365,6 +5018,10 @@ void Pump(not_null<Job*> j) {
 		&& j->scanned < j->remaining.size()) {
 		const auto msgId = j->remaining[j->scanned];
 
+		if (j->gate && msgId >= j->gate) {
+			break;
+		}
+
 		if (!dedupOn) {
 			j->scanned++;
 			EnqueueNatural(j, msgId);
@@ -4400,6 +5057,11 @@ void Pump(not_null<Job*> j) {
 		if (db.containsDocId(Data::DedupDb::Table::Uploads, mediaId)) {
 			j->scanned++;
 			j->skipped++;
+			EnhancedForward::ReportForwardBatchItem(
+				not_null{ j->session },
+				j->dst,
+				0,
+				1);
 			continue;
 		}
 
@@ -4443,6 +5105,7 @@ void Pump(not_null<Job*> j) {
 			j->queueGroups[i] = paired[i].second;
 		}
 		const auto readyToFlush = int(j->queue.size()) >= windowSize
+			|| j->gateBlocksScan()
 			|| (j->scanned >= j->remaining.size()
 				&& j->inflightFetches == 0
 				&& j->awaitingHash.empty());
@@ -4559,7 +5222,8 @@ void Start(
 		Data::ForwardOptions forwardOptions,
 		Data::GroupingOptions groupOptions,
 		Fn<void()> completion,
-		std::optional<TimeId> videoTimestamp) {
+		std::optional<TimeId> videoTimestamp,
+	MsgId gate) {
 	if (items.empty()) {
 		if (completion) {
 			completion();
@@ -4581,6 +5245,9 @@ void Start(
 	if (const auto it = jobs.find(dst); it != end(jobs)) {
 		const auto job = not_null{ it->second.get() };
 		job->total += int(remaining.size());
+		if (gate) {
+			job->gate = job->gate ? std::min(job->gate, gate) : gate;
+		}
 		job->remaining.insert(
 			end(job->remaining),
 			std::make_move_iterator(begin(remaining)),
@@ -4609,12 +5276,37 @@ void Start(
 	}
 	job->total = int(remaining.size());
 	job->remaining = std::move(remaining);
+	job->gate = gate;
 	job->videoTimestamp = videoTimestamp;
 	jobs.emplace(dst, std::move(job));
 	auto &stored = jobs.find(dst)->second;
 	SaveSnapshot(stored.get());
 	Notify();
 	Pump(stored.get());
+}
+
+void AdvanceGate(not_null<ApiWrap*> api, const PeerId &dst, MsgId next) {
+	const auto it = Jobs().find(dst);
+	if (it == end(Jobs())) {
+		return;
+	}
+	const auto job = not_null{ it->second.get() };
+	if (job->gate == next || !job->gate) {
+		return;
+	}
+	// The gate only ever moves forward, so a late confirmation or fallback for
+	// an earlier item cannot pull it back over items that were released since.
+	if (next && next < job->gate) {
+		return;
+	}
+	job->gate = next;
+	Notify();
+	Pump(job);
+}
+
+MsgId CurrentGate(const PeerId &dst) {
+	const auto it = Jobs().find(dst);
+	return (it == end(Jobs())) ? MsgId(0) : it->second->gate;
 }
 
 void PauseAll(not_null<Main::Session*> session) {
@@ -4626,6 +5318,7 @@ void PauseAll(not_null<Main::Session*> session) {
 				job->api->request(requestId).cancel();
 			}
 			StopTimers(job);
+			EnhancedForward::DropForwardBatch(session, job->dst);
 			job->batchInFlight = false;
 			job->state = Job::State::Paused;
 			SaveSnapshot(job);
@@ -4655,6 +5348,20 @@ void CancelAll(not_null<Main::Session*> session) {
 }
 
 void ResumeAll(not_null<Main::Session*> session) {
+	auto candidates = std::vector<std::shared_ptr<Job>>();
+	for (const auto &[dst, job] : Jobs()) {
+		if (BelongsTo(*job, session) && job->state == Job::State::Paused) {
+			candidates.push_back(job);
+		}
+	}
+	for (const auto &job : candidates) {
+		if (job->state != Job::State::Paused) {
+			continue;
+		}
+		job->state = Job::State::Running;
+		SaveSnapshot(job.get());
+		Pump(job.get());
+	}
 	auto &db = Core::App().downloadManager().ensureDedupDb();
 	for (const auto &record : db.loadNfResume(session->uniqueId())) {
 		if (record.remaining.empty()
@@ -4663,26 +5370,33 @@ void ResumeAll(not_null<Main::Session*> session) {
 		}
 		auto action = Api::SendAction(
 			session->data().history(record.destPeerId));
+		const auto forwardOptions = (record.forwardOptions >= 0
+			&& record.forwardOptions
+				<= int(Data::ForwardOptions::NoNamesAndCaptions))
+			? Data::ForwardOptions(record.forwardOptions)
+			: Data::ForwardOptions::PreserveInfo;
+		const auto groupOptions = (record.groupOptions >= 0
+			&& record.groupOptions
+				<= int(Data::GroupingOptions::Separate))
+			? Data::GroupingOptions(record.groupOptions)
+			: Data::GroupingOptions::GroupAsIs;
 		auto job = std::make_shared<Job>(
 			session,
 			&session->api(),
 			record.destPeerId,
 			record.srcPeerId,
 			std::move(action),
-			Data::ForwardOptions(),
-			Data::GroupingOptions());
+			forwardOptions,
+			groupOptions);
 		job->total = record.total;
 		job->done = record.done;
 		job->skipped = record.skipped;
 		job->lastMsgId = record.lastMsgId;
 		job->remaining = record.remaining;
-		job->state = (record.state == u"running"_q)
-			? Job::State::Running
-			: Job::State::Paused;
+		job->state = Job::State::Running;
 		Jobs().emplace(record.destPeerId, job);
-		if (job->state == Job::State::Running) {
-			Pump(job.get());
-		}
+		SaveSnapshot(job.get());
+		Pump(job.get());
 	}
 	Notify();
 }
@@ -4702,6 +5416,7 @@ Counters CountersFor(not_null<Main::Session*> session) {
 	auto result = Counters();
 	for (const auto &[dst, job] : Jobs()) {
 		if (BelongsTo(*job, session)) {
+			result.dst = dst;
 			result.done = job->done;
 			result.total = job->total;
 			result.skipped = job->skipped;
@@ -4709,8 +5424,17 @@ Counters CountersFor(not_null<Main::Session*> session) {
 			result.floodSeconds = (job->state == Job::State::FloodWait)
 				? job->floodSeconds
 				: 0;
+			result.paused = (job->state == Job::State::Paused);
 			result.active = job->alive() || !job->remaining.empty();
 			break;
+		}
+	}
+	if (!result.active) {
+		auto &db = Core::App().downloadManager().ensureDedupDb();
+		if (db.isOpen()
+			&& !db.loadNfResume(session->uniqueId()).empty()) {
+			result.active = true;
+			result.paused = true;
 		}
 	}
 	return result;

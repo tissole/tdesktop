@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 #include "base/unique_function.h"
 #include "data/data_peer_id.h"
+#include "data/data_msg_id.h"
 #include "rpl/producer.h"
 #include "api/api_common.h"
 
@@ -44,17 +45,19 @@ namespace EnhancedForward {
 struct Split {
 	std::vector<not_null<HistoryItem*>> restricted;
 	std::vector<not_null<HistoryItem*>> normal;
+	MsgId gate;
 };
 
-// Fail-driven restriction handling: peers are never probed. The registry is
-// synced from raw noforwards flags on every peer update and from definite
-// forward refusals; unknown peers always take the plain path.
 [[nodiscard]] Split classifyItems(
 	const std::vector<not_null<HistoryItem*>> &items);
 
 void NotePeerNoforwardsFlag(not_null<PeerData*> peer, bool value);
 void MarkPeerProtectedByError(not_null<PeerData*> peer);
 [[nodiscard]] bool PeerNeedsEnhancedForward(not_null<PeerData*> peer);
+
+void RevealProtectedMediaItem(
+	not_null<Main::Session*> session,
+	not_null<HistoryItem*> item);
 
 enum class State : uint8_t {
 	Idle,
@@ -335,6 +338,7 @@ struct ItemTask {
 	bool uploadStarted = false;
 	bool uploadDone = false;
 	bool sent = false;
+	bool confirmed = false;
 	FullMsgId localMsgId;
 	HistoryItem *sentItem = nullptr;
 	FullMsgId uploadId;
@@ -372,6 +376,10 @@ public:
 
 	void cancelItem(int idx);
 	void adjustAlbumCount(int idx);
+
+	// Reports the smallest restricted item that is still unsent as the new
+	// gate, so the standard path can release the normal items that precede it.
+	void advanceOrderGate();
 
 	[[nodiscard]] bool containsUpload(const FullMsgId &uploadId) const {
 		return _uploadIndex && _uploadIndex->find(uploadId) != end(*_uploadIndex);
@@ -439,21 +447,58 @@ private:
 	int _downloadCursor = 0;
 	int _uploadCursor = 0;
 	std::deque<int> _dedupPrecheckQueue;
+	bool _takeoutRefetchTried = false;
 };
 
 void ShowForwardDoneToast(int sent, int total, int skipped);
+
+struct ForwardBatchSnapshot {
+	PeerId dst;
+	int total = 0;
+	int sent = 0;
+	int skipped = 0;
+};
+
+void BeginForwardBatch(
+	not_null<Main::Session*> session,
+	const PeerId &dst,
+	int total);
+
+void ReportForwardBatchItem(
+	not_null<Main::Session*> session,
+	const PeerId &dst,
+	int sentDelta,
+	int skippedDelta);
+
+[[nodiscard]] bool ForwardBatchOwns(
+	not_null<Main::Session*> session,
+	const PeerId &dst);
+
+void FinishForwardBatchWorker(
+	not_null<Main::Session*> session,
+	const PeerId &dst,
+	int worker);
+
+void DropForwardBatch(
+	not_null<Main::Session*> session,
+	const PeerId &dst);
+
+[[nodiscard]] std::vector<ForwardBatchSnapshot> ForwardBatches(
+	not_null<Main::Session*> session);
 
 } // namespace EnhancedForward
 
 namespace NormalForward {
 
 struct Counters {
+	PeerId dst;
 	int done = 0;
 	int total = 0;
 	int skipped = 0;
 	QString lastFileName;
 	int floodSeconds = 0; // > 0 while the job waits out a FLOOD_WAIT
 	bool active = false;
+	bool paused = false;
 };
 
 // Takes over the plain part of a forward after the enhanced split:
@@ -468,7 +513,13 @@ void Start(
 	Data::ForwardOptions forwardOptions,
 	Data::GroupingOptions groupOptions,
 	Fn<void()> completion = nullptr,
-	std::optional<TimeId> videoTimestamp = std::nullopt);
+	std::optional<TimeId> videoTimestamp = std::nullopt,
+	MsgId gate = MsgId());
+
+void AdvanceGate(not_null<ApiWrap*> api, const PeerId &dst, MsgId next);
+
+// The smallest restricted item still holding the standard half back.
+[[nodiscard]] MsgId CurrentGate(const PeerId &dst);
 
 // Stops live jobs for this session: pending requests are cancelled and the
 // state is persisted as 'paused' (resumable via ResumeAll).

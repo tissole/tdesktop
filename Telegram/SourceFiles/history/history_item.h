@@ -414,6 +414,7 @@ public:
 		bool wasAlready);
 	void updateReactions(const MTPMessageReactions *reactions);
 	void overrideMedia(std::unique_ptr<Data::Media> media);
+	void applyRevealedMedia(const MTPDmessage &data);
 
 	void applyEditionToHistoryCleared();
 	void updateReplyMarkup(

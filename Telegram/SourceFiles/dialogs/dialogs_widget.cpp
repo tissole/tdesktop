@@ -1566,11 +1566,14 @@ void Widget::setupDownloadBar() {
 
 		Data::MakeDownloadBarContent(
 		) | rpl::on_next(crl::guard(this, [=](Ui::DownloadBarContent &&content) {
-			const auto nfActive = content.nfCount > 0
-				&& content.nfDone < content.nfCount;
-			const auto create = ((content.count
-				&& content.done < content.count)
-				|| nfActive
+			// Forward counters belong to the single forwards bar below.
+			content.efCount = 0;
+			content.efDone = 0;
+			content.efSkipped = 0;
+			content.nfCount = 0;
+			content.nfDone = 0;
+			const auto create = (content.count
+				&& content.done < content.count
 				) && !_downloadBar;
 		if (create) {
 			_downloadBar = std::make_unique<Ui::DownloadBar>(
@@ -1736,14 +1739,42 @@ void Widget::setupForwardsBar() {
 
 	const auto updateForwardsBar = crl::guard(this, [=](
 			std::vector<EnhancedForward::JobSnapshot> jobs) {
+		const auto session = &controller()->session();
+		const auto batches = EnhancedForward::ForwardBatches(session);
+		const auto inBatch = [&](const PeerId &dst) {
+			for (const auto &batch : batches) {
+				if (batch.dst == dst) {
+					return true;
+				}
+			}
+			return false;
+		};
 		auto efCount = 0;
 		auto efDone = 0;
 		QString firstName;
-		for (const auto &job :
-				EnhancedForward::GetUnfinishedJobs(
-					&controller()->session())) {
+		for (const auto &job : EnhancedForward::GetUnfinishedJobs(session)) {
+			if (inBatch(job.dstId)) {
+				continue;
+			}
 			efCount += job.total;
 			efDone += job.sent;
+		}
+		const auto nf = NormalForward::CountersFor(session);
+		const auto nfInBatch = inBatch(nf.dst);
+		if (firstName.isEmpty()) {
+			firstName = nf.lastFileName;
+		}
+		auto skipped = nfInBatch ? 0 : nf.skipped;
+		for (const auto &job : EnhancedForward::AllJobs(session)) {
+			if (inBatch(job.peer)) {
+				continue;
+			}
+			skipped += job.progress.skipped;
+		}
+		for (const auto &batch : batches) {
+			efCount += batch.total;
+			efDone += batch.sent;
+			skipped += batch.skipped;
 		}
 		for (const auto &job : jobs) {
 			if (job.finished
@@ -1774,12 +1805,14 @@ void Widget::setupForwardsBar() {
 				}
 			}
 		}
-		if (!efCount) {
+		if (!efCount && !nf.total) {
 			_forwardsBar = nullptr;
 			updateControlsGeometry();
 			return;
 		}
-		const auto create = !_forwardsBar && (efDone < efCount);
+		const auto create = !_forwardsBar
+			&& ((efDone + (nfInBatch ? 0 : nf.done))
+				< (efCount + (nfInBatch ? 0 : nf.total)));
 		if (create) {
 			_forwardsBar = std::make_unique<Ui::DownloadBar>(
 				this,
@@ -1789,7 +1822,12 @@ void Widget::setupForwardsBar() {
 			Ui::DownloadBarContent content;
 			content.efCount = efCount;
 			content.efDone = efDone;
+			content.nfCount = nfInBatch ? 0 : nf.total;
+			content.nfDone = nfInBatch ? 0 : nf.done;
+			content.nfFloodSeconds = nf.floodSeconds;
+			content.efSkipped = skipped;
 			content.singleName.text = firstName;
+			content.keepVisible = !batches.empty();
 			_forwardsBar->show(std::move(content));
 		}
 		if (create) {
@@ -1823,6 +1861,11 @@ void Widget::setupForwardsBar() {
 		&controller()->session()
 	) | rpl::on_next(std::move(updateForwardsBar), lifetime());
 	EnhancedForward::counterChanges(
+	) | rpl::on_next([=] {
+		updateForwardsBar(
+			std::vector<EnhancedForward::JobSnapshot>{});
+	}, lifetime());
+	NormalForward::countersChanged(
 	) | rpl::on_next([=] {
 		updateForwardsBar(
 			std::vector<EnhancedForward::JobSnapshot>{});
