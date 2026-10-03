@@ -23,6 +23,8 @@ struct DownloadBarProgress;
 struct DownloadBarContent;
 } // namespace Ui
 
+struct DownloadBatch;
+
 namespace Main {
 class Session;
 } // namespace Main
@@ -196,11 +198,6 @@ public:
 	void cancelAllResumeDownloads();
 	void clearFingerprintCache();
 
-	// Decides whether downloading the given remote document should be skipped
-	// because an identical file was already downloaded. Calls done(true) to
-	// skip, done(false) to proceed. The content-hash check (for documents with
-	// a different id but identical bytes) requires fetching two sampled chunks
-	// from the server, so the result is delivered asynchronously.
 	void checkDuplicate(
 		not_null<Main::Session*> session,
 		not_null<DocumentData*> document,
@@ -217,11 +214,10 @@ public:
 	[[nodiscard]] DedupDb &dedupDb() const;
 	DedupDb &ensureDedupDb() const;
 	[[nodiscard]] QString dedupDbPath() const;
-	// Counts a duplicate that was skipped in a flow and shows one aggregated
-	// toast for the whole batch (e.g. "12 duplicate downloads"). A short
-	// debounce merges consecutive skips so a multi-file selection produces a
-	// single toast with the total count.
 	void reportDuplicateSkipped(DedupDb::Table table, int count = 1);
+	void addBatch(std::weak_ptr<DownloadBatch> batch);
+	void pokeDownloadBar();
+	[[nodiscard]] std::tuple<int, int, int> batchTotals();
 
 private:
 	void notifyDuplicateSkips();
@@ -335,6 +331,8 @@ private:
 
 	base::Timer _duplicatesToastTimer;
 	int _duplicatesSkipped[2] = { 0, 0 };
+
+	std::vector<std::weak_ptr<DownloadBatch>> _batches;
 
 };
 

@@ -40,6 +40,14 @@ namespace {
 		tr::lng_tm_fw_duplicates_skipped(tr::now, lt_count, skipped));
 }
 
+[[nodiscard]] QString DuplicatesSuffixDl(int skipped) {
+	if (skipped <= 0) {
+		return QString();
+	}
+	return u" (+%1)"_q.arg(
+		tr::lng_tm_dl_duplicates_skipped(tr::now, lt_count, skipped));
+}
+
 } // namespace
 
 DownloadBar::DownloadBar(
@@ -110,9 +118,15 @@ void DownloadBar::show(DownloadBarContent &&content) {
 	_title.setMarkedText(
 		st::defaultTextStyle,
 		(content.count > 1
-			? tr::bold(dlPrefix + tr::lng_profile_files(
-				tr::now,
-				lt_count, content.count))
+			? tr::bold(dlPrefix + (content.dlTotal > 1
+				? tr::lng_tm_files_progress(
+					tr::now,
+					lt_done, QString::number(content.done),
+					lt_total, QString::number(content.count))
+					+ DuplicatesSuffixDl(content.dlSkipped)
+				: tr::lng_profile_files(
+					tr::now,
+					lt_count, content.count)))
 			: content.count == 1
 			? tr::bold(tr::lng_tm_dl_prefix(
 				tr::now,

@@ -107,6 +107,10 @@ std::shared_ptr<DownloadBatch> MakeDownloadBatch(int total) {
 	batch->onDone = [](int downloaded, int duplicates) {
 		ShowDownloadBatchDone(downloaded, duplicates);
 	};
+	Core::App().downloadManager().addBatch(batch);
+	batch->onChange = [] {
+		Core::App().downloadManager().pokeDownloadBar();
+	};
 	return batch;
 }
 

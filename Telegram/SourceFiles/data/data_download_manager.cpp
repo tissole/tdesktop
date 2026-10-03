@@ -306,6 +306,32 @@ void DownloadManager::reportDuplicateSkipped(
 	_duplicatesToastTimer.callOnce(600);
 }
 
+void DownloadManager::addBatch(std::weak_ptr<DownloadBatch> batch) {
+	_batches.push_back(std::move(batch));
+	_loadingListChanges.fire({});
+}
+
+void DownloadManager::pokeDownloadBar() {
+	_loadingListChanges.fire({});
+}
+
+std::tuple<int, int, int> DownloadManager::batchTotals() {
+	auto total = 0;
+	auto done = 0;
+	auto skipped = 0;
+	for (auto i = 0; i != int(_batches.size());) {
+		if (const auto batch = _batches[i].lock()) {
+			total += batch->total;
+			done += batch->downloaded + batch->failed;
+			skipped += batch->duplicates;
+			++i;
+		} else {
+			_batches.erase(_batches.begin() + i);
+		}
+	}
+	return { total, done, skipped };
+}
+
 void DownloadManager::notifyDuplicateSkips() {
 	const auto downloads = _duplicatesSkipped[int(DedupDb::Table::Downloads)];
 	const auto uploads = _duplicatesSkipped[int(DedupDb::Table::Uploads)];
@@ -2607,11 +2633,19 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 						}
 					}
 				}
-				if (pausedCount > 0) {
-					content.count = pausedCount;
-					content.done = 0;
-				}
+			if (pausedCount > 0) {
+				content.count = pausedCount;
+				content.done = 0;
 			}
+		}
+		const auto [batchTotal, batchDone, batchSkipped]
+			= manager.batchTotals();
+		if (batchTotal > 1) {
+			content.count = batchTotal;
+			content.done = batchDone;
+			content.dlTotal = batchTotal;
+			content.dlSkipped = batchSkipped;
+		}
 			content.efCount = state->efTotal;
 			content.efDone = state->efDone;
 			content.efSkipped = state->efSkipped;

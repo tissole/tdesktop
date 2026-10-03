@@ -52,17 +52,27 @@ struct DownloadBatch {
 	int failed = 0;
 	bool done = false;
 	std::function<void(int downloaded, int duplicates)> onDone;
+	std::function<void()> onChange;
 
 	void addDownloaded() {
 		++downloaded;
+		if (onChange) {
+			onChange();
+		}
 		checkDone();
 	}
 	void addDuplicate() {
 		++duplicates;
+		if (onChange) {
+			onChange();
+		}
 		checkDone();
 	}
 	void addFailed() {
 		++failed;
+		if (onChange) {
+			onChange();
+		}
 		checkDone();
 	}
 	void checkDone() {
