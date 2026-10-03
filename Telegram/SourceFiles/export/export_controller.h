@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/variant.h"
 #include "mtproto/mtproto_response.h"
 #include "export/output/export_output_stats.h"
+#include "export/data/export_data_types.h"
 #include "data/data_dedup_db.h"
 
 #include <QtCore/QPointer>
@@ -104,6 +105,7 @@ struct FinishedState {
 	int64 linkTotal = 0;
 	int64 linkDuplicates = 0;
 	int64 messagesTotal = 0;
+	Data::FailedChats failedChats;
 };
 
 using State = std::variant<
@@ -156,6 +158,16 @@ public:
 		const Settings &settings,
 		const Environment &environment,
 		const ::Data::ExResumeRecord &record);
+	void startResumeExportGlobal(
+		const Settings &settings,
+		const Environment &environment,
+		const ::Data::ExResumeRecord &marker,
+		std::vector<::Data::ExResumeRecord> rows);
+	void startUpdateExportGlobal(
+		const Settings &settings,
+		const Environment &environment,
+		const ::Data::ExResumeRecord &marker,
+		std::vector<::Data::ExResumeRecord> rows);
 	void startUpdateExport(
 		const Settings &settings,
 		const Environment &environment,
@@ -175,9 +187,14 @@ public:
 	void setSharedTakeoutId(uint64 id);
 	void setTakeoutRefreshHook(Fn<void()> hook);
 	void takeoutRefreshDone(uint64 id);
+	void requestChatList(
+		Settings settings,
+		FnMut<void(Data::DialogsInfo&&)> done);
+	void setCachedDialogs(Data::DialogsInfo info);
 	void requestPause();
 	void resumeExport();
 	rpl::producer<bool> pauseChanges() const;
+	rpl::producer<bool> canPauseChanges() const;
 
 	rpl::lifetime &lifetime();
 
@@ -189,5 +206,16 @@ private:
 	rpl::lifetime _lifetime;
 
 };
+
+// Finds the account's global root under location (creating it), renaming a
+// stale-named tree to accountName (sanitised, cosmetic). Match key is the
+// bare accountId only. Reports the rename: oldRoot is set to the previous
+// absolute path (with trailing slash) when a rename happened, left empty
+// otherwise. The returned path always ends with '/'.
+[[nodiscard]] QString ResolveGlobalRoot(
+	const QString &location,
+	uint64 accountId,
+	const QString &accountName,
+	QString *oldRoot = nullptr);
 
 } // namespace Export

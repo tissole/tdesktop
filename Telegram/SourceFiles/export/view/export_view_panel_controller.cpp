@@ -35,6 +35,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/qt/qt_common_adapters.h"
 #include "boxes/abstract_box.h" // Ui::show().
 #include <ui/toast/toast.h>
+#include "ui/widgets/checkbox.h"
+#include "ui/wrap/vertical_layout.h"
 #include "styles/style_export.h"
 #include "styles/style_layers.h"
 
@@ -92,6 +94,111 @@ void SuggestBox::prepare() {
 	) | rpl::on_next([=](int height) {
 		setDimensions(st::boxWidth, height + st::boxPadding.bottom());
 	}, content->lifetime());
+}
+
+// One chat may own several export folders (fresh exports with different
+// scopes fork numbered copies). This box lists them with checkboxes: All
+// checks everything, Clear unchecks, Save runs the checked ones each in
+// its own folder, Cancel backs out.
+class FolderPickerBox : public Ui::BoxContent {
+public:
+	FolderPickerBox(
+		QWidget*,
+		QString title,
+		QStringList folders,
+		FnMut<void(std::vector<int> &&indices)> save);
+
+protected:
+	void prepare() override;
+
+private:
+	QString _title;
+	QStringList _folders;
+	FnMut<void(std::vector<int> &&indices)> _save;
+	std::vector<QPointer<Ui::Checkbox>> _checks;
+
+};
+
+FolderPickerBox::FolderPickerBox(
+		QWidget*,
+		QString title,
+		QStringList folders,
+		FnMut<void(std::vector<int> &&indices)> save)
+: _title(std::move(title))
+, _folders(std::move(folders))
+, _save(std::move(save)) {
+}
+
+void FolderPickerBox::prepare() {
+	setTitle(rpl::single(_title));
+	const auto inner = setInnerWidget(
+		object_ptr<Ui::VerticalLayout>(this));
+	for (const auto &folder : _folders) {
+		_checks.push_back(inner->add(
+			object_ptr<Ui::Checkbox>(inner, folder, true),
+			st::boxPadding));
+	}
+	addButton(tr::lng_export_select_all(), [=] {
+		for (const auto check : _checks) {
+			if (check) {
+				check->setChecked(true);
+			}
+		}
+	});
+	addButton(tr::lng_export_clear_selection(), [=] {
+		for (const auto check : _checks) {
+			if (check) {
+				check->setChecked(false);
+			}
+		}
+	});
+	addButton(tr::lng_settings_save(), [=] {
+		auto indices = std::vector<int>();
+		for (auto i = 0; i != int(_checks.size()); ++i) {
+			if (_checks[i] && _checks[i]->checked()) {
+				indices.push_back(i);
+			}
+		}
+		closeBox();
+		_save(std::move(indices));
+	});
+	addButton(tr::lng_cancel(), [=] { closeBox(); });
+}
+
+// A user-pointed folder is accepted as the moved tree when it holds the
+// expected content: chat files for a single folder, lists/ for a root.
+[[nodiscard]] bool LooksLikeExportFolder(
+		const QString &path,
+		bool isGlobal) {
+	const auto dir = QDir(path);
+	if (!dir.exists()) {
+		return false;
+	}
+	if (isGlobal) {
+		return QDir(dir.absoluteFilePath(u"lists"_q)).exists();
+	}
+	return !dir.entryList({ u"messages.*"_q }, QDir::Files).isEmpty()
+		|| !dir.entryList({ u"result.json"_q }, QDir::Files).isEmpty()
+		|| QDir(dir.absoluteFilePath(u"media"_q)).exists();
+}
+
+// Points every stored absolute row path under the old folder at the new
+// one (both normalised with trailing slash), after the user located the
+// moved tree on disk.
+void RebaseStoredFolder(
+		not_null<Main::Session*> session,
+		int mode,
+		const QString &from,
+		const QString &to) {
+	auto db = ::Data::DedupDb(
+		Core::App().downloadManager().dedupDbPath(),
+		false);
+	if (!db.isOpen()) {
+		return;
+	}
+	const auto oldPrefix = from.endsWith('/') ? from : (from + '/');
+	const auto newPrefix = to.endsWith('/') ? to : (to + '/');
+	db.rebaseExResumeFolder(session->uniqueId(), mode, oldPrefix, newPrefix);
 }
 
 } // namespace
@@ -199,6 +306,8 @@ void CenterPanel(not_null<Ui::SeparatePanel*> panel) {
 }
 
 Environment PrepareEnvironment(not_null<Main::Session*> session) {	auto result = Environment();
+	result.accountId = session->userId().bare;
+	result.accountName = base::FileNameFromUserString(session->user()->name());
 	result.internalLinksDomain = session->serverConfig().internalLinksDomain;
 	result.aboutTelegram = tr::lng_export_about_telegram(tr::now).toUtf8();
 	result.aboutContacts = tr::lng_export_about_contacts(tr::now).toUtf8();
@@ -208,6 +317,293 @@ Environment PrepareEnvironment(not_null<Main::Session*> session) {	auto result =
 	result.aboutChats = tr::lng_export_about_chats(tr::now).toUtf8();
 	result.aboutLeftChats = tr::lng_export_about_left_chats(tr::now).toUtf8();
 	return result;
+}
+
+// Scope fields only: identity (peer, path, selection) never counts.
+[[nodiscard]] bool ScopesEqual(const Settings &a, const Settings &b) {
+	return a.media.types == b.media.types
+		&& a.media.sizeLimit == b.media.sizeLimit
+		&& a.format == b.format
+		&& a.singlePeerFrom == b.singlePeerFrom
+		&& a.singlePeerTill == b.singlePeerTill
+		&& a.useIdRange == b.useIdRange
+		&& a.singlePeerFromId == b.singlePeerFromId
+		&& a.singlePeerTillId == b.singlePeerTillId
+		&& a.types == b.types
+		&& a.fullChats == b.fullChats
+		&& a.media.extensionFilterMode == b.media.extensionFilterMode
+		&& a.media.extensionFilter == b.media.extensionFilter;
+}
+
+// Renames a stale single-chat folder (EX_<id>_<name>) to the current title
+// and rebases its stored row path, so resume/update continue into the
+// renamed folder. Dated fallback folders are never touched. Returns the
+// folder to run into.
+[[nodiscard]] QString RebaseSingleFolderForContinue(
+		not_null<Main::Session*> session,
+		const QString &storedFolder,
+		const QString &freshFolder) {
+	if (storedFolder.isEmpty() || freshFolder.isEmpty()) {
+		return storedFolder;
+	}
+	auto parent = QDir(storedFolder);
+	const auto current = parent.dirName();
+	if (current == freshFolder) {
+		return storedFolder;
+	}
+	if (!freshFolder.startsWith(u"EX_"_q)) {
+		return storedFolder;
+	}
+	const auto tail = freshFolder.mid(3);
+	const auto cut = tail.indexOf('_');
+	const auto stem = u"EX_"_q + (cut >= 0 ? tail.left(cut) : tail);
+	if (current != stem && !current.startsWith(stem + '_')) {
+		return storedFolder;
+	}
+	parent.cdUp();
+	const auto from = parent.absoluteFilePath(current);
+	const auto to = parent.absoluteFilePath(freshFolder);
+	if (QDir(to).exists() || !QDir().rename(from, to)) {
+		return storedFolder;
+	}
+	auto db = ::Data::DedupDb(
+		Core::App().downloadManager().dedupDbPath(),
+		false);
+	if (db.isOpen()) {
+		db.rebaseExResumeFolder(
+			session->uniqueId(),
+			0,
+			from + '/',
+			to + '/');
+	}
+	return to;
+}
+
+// Renames a stale per-account global root to the current display name and
+// rebases the stored absolute row paths, so resume/update continue into the
+// renamed tree with the marker still done. Returns the root to run into.
+[[nodiscard]] QString RebaseGlobalRootForContinue(
+		not_null<Main::Session*> session,
+		const QString &storedRoot) {
+	auto db = ::Data::DedupDb(
+		Core::App().downloadManager().dedupDbPath(),
+		false);
+	if (!db.isOpen()) {
+		return storedRoot;
+	}
+	const auto env = PrepareEnvironment(session);
+	// Legacy or foreign tree (no id stem): reuse byte-for-byte, never touch.
+	const auto stem = u"EX_Global_"_q
+		+ QString::number(env.accountId);
+	const auto dirName = QDir(storedRoot).dirName();
+	if (dirName != stem && !dirName.startsWith(stem + '_')) {
+		return storedRoot;
+	}
+	auto parent = QDir(storedRoot);
+	parent.cdUp();
+	auto oldRoot = QString();
+	const auto root = ResolveGlobalRoot(
+		parent.absolutePath(),
+		env.accountId,
+		env.accountName,
+		&oldRoot);
+	if (!oldRoot.isEmpty()) {
+		db.rebaseExResumeFolder(session->uniqueId(), 1, oldRoot, root);
+	}
+	return root;
+}
+
+void PanelController::resolveMissingFolder(
+		QString missingPath,
+		bool isGlobal,
+		FnMut<void(QString &&folder)> proceed) {
+	auto sharedProceed = std::make_shared<FnMut<void(QString &&folder)>>(
+		std::move(proceed));
+	_panel->showBox(
+		Ui::MakeConfirmBox({
+			.text = tr::lng_export_folder_missing(
+				tr::now,
+				lt_path,
+				missingPath),
+			.confirmed = [=](Fn<void()> close) {
+				close();
+			FileDialog::GetFolder(
+				_panel.get(),
+				tr::lng_export_folder(tr::now),
+					QString(),
+					[=](QString &&result) mutable {
+						if (result.isEmpty()) {
+							return;
+						}
+						if (!LooksLikeExportFolder(result, isGlobal)) {
+							Ui::Toast::Show(
+								tr::lng_export_folder_invalid(tr::now));
+							resolveMissingFolder(
+								missingPath,
+								isGlobal,
+								std::move(*sharedProceed));
+							return;
+						}
+						(*sharedProceed)(std::move(result));
+					});
+			},
+			// New folder: recreate from the stored path and continue.
+			.cancelled = [=](Fn<void()> close) {
+				close();
+				(*sharedProceed)(QString());
+			},
+			.confirmText = tr::lng_export_folder_locate(tr::now),
+			.cancelText = tr::lng_export_folder_new(tr::now),
+		}),
+		Ui::LayerOption::KeepOther,
+		anim::type::normal);
+}
+
+void PanelController::showFolderPicker(
+		std::vector<::Data::ExResumeRecord> rows,
+		bool update,
+		FnMut<void(std::vector<int> &&indices)> done) {
+	auto names = QStringList();
+	for (const auto &row : rows) {
+		names.push_back(QDir(row.exportFolder).dirName());
+	}
+	const auto title = update
+		? tr::lng_export_choose_update_folder(tr::now)
+		: tr::lng_export_choose_resume_folder(tr::now);
+	_panel->showBox(
+		Box<FolderPickerBox>(title, names, std::move(done)),
+		Ui::LayerOption::KeepOther,
+		anim::type::normal);
+}
+
+void PanelController::startSingleResume(
+		Settings settings,
+		::Data::ExResumeRecord row) {
+	auto resumeSettings = std::move(settings);
+	// A renamed chat resumes into the renamed folder: the stored row
+	// path is rebased first.
+	const auto folder = RebaseSingleFolderForContinue(
+		_session,
+		row.exportFolder,
+		SinglePeerFolder(_session, resumeSettings));
+	row.exportFolder = folder;
+	resumeSettings.path = folder;
+	const auto missing = !QDir(row.exportFolder).exists();
+	auto start = [=](QString located) mutable {
+		if (!located.isEmpty()) {
+			// The user pointed at the moved tree: rebase the stored
+			// path and resume there instead of recreating.
+			const auto root = located.endsWith('/')
+				? located
+				: (located + '/');
+			RebaseStoredFolder(_session, 0, row.exportFolder, root);
+			row.exportFolder = root;
+			resumeSettings.path = root;
+		}
+		const auto gen = _startGen;
+		const auto sizeLimit = resumeSettings.media.sizeLimit;
+		ensureSharedTakeout([=](uint64 id) {
+			if (gen != _startGen) {
+				return;
+			}
+			showProgress();
+			_session->api().setTakeoutBorrowed(true);
+			_process->setSessionId(_session->uniqueId());
+			_process->setDedupDb(
+				Core::App().downloadManager().dedupDbPath());
+			_process->setSharedTakeoutId(id);
+			_process->startResumeExport(
+				resumeSettings,
+				PrepareEnvironment(_session),
+				row);
+		}, sizeLimit);
+	};
+	if (!missing) {
+		start(QString());
+		return;
+	}
+	resolveMissingFolder(row.exportFolder, false, std::move(start));
+}
+
+void PanelController::startSingleUpdate(
+		Settings settings,
+		::Data::ExResumeRecord row) {
+	if (!updateCoversWholeChat(row)) {
+		return;
+	}
+	// A renamed chat updates into the renamed folder: the stored row
+	// path is rebased first.
+	const auto folder = RebaseSingleFolderForContinue(
+		_session,
+		row.exportFolder,
+		SinglePeerFolder(_session, settings));
+	row.exportFolder = folder;
+	const auto folderMissing = !QDir(row.exportFolder).exists();
+	auto updateSettings = std::move(settings);
+	applyRowSettings(updateSettings, row);
+	auto newFolderName = QString();
+	if (folderMissing) {
+		const auto rowDir = QDir(row.exportFolder);
+		newFolderName = rowDir.dirName();
+		auto parentPath = rowDir.absolutePath();
+		parentPath.chop(newFolderName.length());
+		updateSettings.path = parentPath;
+		updateSettings.forceSubPath = false;
+	}
+	auto run = [=](
+			Settings runSettings,
+			::Data::ExResumeRecord runRow,
+			QString runFolder) mutable {
+		const auto gen = _startGen;
+		const auto sizeLimit = runSettings.media.sizeLimit;
+		ensureSharedTakeout([=](uint64 id) {
+			if (gen != _startGen) {
+				return;
+			}
+			_process->setSessionId(_session->uniqueId());
+			_process->setDedupDb(
+				Core::App().downloadManager().dedupDbPath());
+			_process->setSharedTakeoutId(id);
+			_session->api().setTakeoutBorrowed(true);
+			_process->startUpdateExport(
+				runSettings,
+				PrepareEnvironment(_session),
+				runRow,
+				runFolder);
+		}, sizeLimit);
+	};
+	if (!folderMissing) {
+		run(updateSettings, row, newFolderName);
+		return;
+	}
+	auto start = [=](QString located) mutable {
+		if (!located.isEmpty()) {
+			// The user pointed at the moved folder: rebase the stored
+			// path and update there instead of recreating.
+			const auto root = located.endsWith('/')
+				? located
+				: (located + '/');
+			RebaseStoredFolder(_session, 0, row.exportFolder, root);
+			row.exportFolder = root;
+			updateSettings.path = root;
+			newFolderName = QString();
+		}
+		run(updateSettings, row, newFolderName);
+	};
+	resolveMissingFolder(row.exportFolder, false, std::move(start));
+}
+
+void PanelController::startNextSingleRun() {
+	if (_pendingRuns.empty()) {
+		return;
+	}
+	auto next = std::move(_pendingRuns.front());
+	_pendingRuns.erase(_pendingRuns.begin());
+	if (next.update) {
+		startSingleUpdate(std::move(next.settings), std::move(next.row));
+	} else {
+		startSingleResume(std::move(next.settings), std::move(next.row));
+	}
 }
 
 base::weak_qptr<Ui::BoxContent> SuggestStart(not_null<Main::Session*> session) {
@@ -246,13 +642,6 @@ void ResolveSettings(not_null<Main::Session*> session, Settings &settings) {
 		settings.forceSubPath = true;
 	} else {
 		settings.forceSubPath = IsDefaultPath(session, settings.path);
-	}
-	if (!settings.onlySinglePeer()) {
-		settings.singlePeerFrom = std::nullopt;
-		settings.singlePeerTill = std::nullopt;
-		settings.useIdRange = false;
-		settings.singlePeerFromId = std::nullopt;
-		settings.singlePeerTillId = std::nullopt;
 	}
 }
 
@@ -315,7 +704,7 @@ void PanelController::finishExportTakeout() {
 }
 
 void PanelController::validateIdRange(FnMut<void()> proceed) {
-	if (!_settings->onlySinglePeer() || !_settings->useIdRange) {
+	if (!_settings->useIdRange) {
 		proceed();
 		return;
 	}
@@ -329,6 +718,10 @@ void PanelController::validateIdRange(FnMut<void()> proceed) {
 	const auto till = tillOpt.value_or(uint64(0));
 	if (from && till && from > till) {
 		Ui::Toast::Show(tr::lng_export_id_from_above_to(tr::now));
+		return;
+	}
+	if (!_settings->onlySinglePeer()) {
+		proceed();
 		return;
 	}
 	const auto peerId = SinglePeerId(_session, *_settings);
@@ -545,29 +938,117 @@ void PanelController::createPanel() {
 }
 
 void PanelController::refreshResumeRow() {
-	_resumeRow = std::nullopt;
+	_resumeRows.clear();
 	const auto peerId = SinglePeerId(_session, *_settings);
 	if (!peerId) {
 		return;
 	}
-	auto db = Data::DedupDb(
+	auto db = ::Data::DedupDb(
 		Core::App().downloadManager().dedupDbPath(),
 		false);
 	if (!db.isOpen()) {
 		return;
 	}
 	const auto sessionId = _session->uniqueId();
-	for (auto &row : db.loadExResume(sessionId)) {
-		if (row.peerId == peerId) {
-			_resumeRow = std::move(row);
-			return;
+	for (auto &row : db.loadExResume(sessionId, 0)) {
+		if (row.mode == 0 && row.peerId == peerId) {
+			_resumeRows.push_back(std::move(row));
 		}
 	}
+	// Stable order: the picker lists folders alphabetically.
+	std::sort(
+		begin(_resumeRows),
+		end(_resumeRows),
+		[](const auto &a, const auto &b) {
+			return a.exportFolder < b.exportFolder;
+		});
+}
+
+void PanelController::requestChatList(
+		Settings snapshot,
+		FnMut<void(Data::DialogsInfo&&)> done) {
+	if (_chatListCache) {
+		if (done) {
+			done(Data::DialogsInfo(*_chatListCache));
+		}
+		return;
+	}
+	if (done) {
+		_chatListWaiters.push_back(std::move(done));
+	}
+	if (_chatListLoading) {
+		return;
+	}
+	_chatListLoading = true;
+	const auto gen = _startGen;
+	const auto sizeLimit = snapshot.media.sizeLimit;
+	ensureSharedTakeout([=](uint64 id) mutable {
+		if (gen != _startGen) {
+			return;
+		}
+		_session->api().setTakeoutBorrowed(true);
+		_process->setSessionId(_session->uniqueId());
+		_process->setDedupDb(
+			Core::App().downloadManager().dedupDbPath());
+		_process->setSharedTakeoutId(id);
+		_process->requestChatList(
+			std::move(snapshot),
+			[=](Data::DialogsInfo &&info) mutable {
+				crl::on_main([=, info = std::move(info)]() mutable {
+					_session->api().setTakeoutBorrowed(false);
+					_chatListLoading = false;
+					if (info.chats.empty() && info.left.empty()) {
+						Ui::Toast::Show(
+							tr::lng_export_chat_list_failed(tr::now));
+					} else {
+						_chatListCache = info;
+					}
+					for (auto &waiter : base::take(_chatListWaiters)) {
+						waiter(Data::DialogsInfo(info));
+					}
+				});
+			});
+	}, sizeLimit);
+}
+
+void PanelController::refreshGlobalRow() {
+	_globalRow = std::nullopt;
+	_globalHasUnfinished = false;
+	if (_settings->onlySinglePeer()) {
+		return;
+	}
+	auto db = ::Data::DedupDb(
+		Core::App().downloadManager().dedupDbPath(),
+		false);
+	if (!db.isOpen()) {
+		return;
+	}
+	const auto sessionId = _session->uniqueId();
+	auto unfinished = false;
+	for (auto &row : db.loadExResume(sessionId, 1)) {
+		// No disk check here (same as single): a missing folder is handled
+		// at click time by the Locate / New folder choice.
+		if (row.mode == 1 && !row.peerId) {
+			_globalRow = std::move(row);
+		} else if (row.mode == 1 && row.state != u"done"_q) {
+			unfinished = true;
+		}
+	}
+	// A done marker with unfinished rows (interrupted update or crash
+	// between runs) still offers resume for the stranded chats.
+	_globalHasUnfinished = unfinished
+		&& (!_globalRow || _globalRow->state == u"done"_q);
+}
+
+void PanelController::applyMarkerSettings(
+		Settings &settings,
+		const ::Data::ExResumeRecord &row) {
+	applyRowSettings(settings, row);
 }
 
 void PanelController::applyRowSettings(
 		Settings &settings,
-		const Data::ExResumeRecord &row) {
+		const ::Data::ExResumeRecord &row) {
 	settings.media.types = MediaSettings::Types::from_raw(
 		int(row.media));
 	settings.media.sizeLimit = row.size;
@@ -585,74 +1066,96 @@ void PanelController::applyRowSettings(
 	settings.singlePeerTillId = row.tillId
 		? std::make_optional(uint64(row.tillId))
 		: std::nullopt;
+	settings.types = Settings::Types::from_raw(row.chatTypes);
+	settings.fullChats = Settings::Types::from_raw(row.fullChats);
+	const auto extMode = row.extFilterMode;
+	settings.media.extensionFilterMode = (extMode >= 0 && extMode <= 2)
+		? static_cast<MediaSettings::ExtFilterMode>(extMode)
+		: MediaSettings::ExtFilterMode::None;
+	settings.media.extensionFilter = row.extFilter.isEmpty()
+		? QStringList()
+		: row.extFilter.split(u',', Qt::SkipEmptyParts);
 	settings.path = row.exportFolder;
 }
 
-bool PanelController::updateSettingsChanged(
-		const Data::ExResumeRecord &row) const {
-	return (_settings->media.types
-			!= MediaSettings::Types::from_raw(int(row.media)))
-		|| (_settings->media.sizeLimit != row.size)
-		|| (static_cast<int>(_settings->format) != row.exportFormat);
-}
-
-// Update is offered only when the run already covered the chat up to
-// the newest message as it stood at export time. A run cut short by a
-// date or id range must not offer it, since updating would pull in the
-// excluded messages. Compared against coveredTill/coveredTillDate (a
-// fact stored then), never against the chat's newest id now, which
-// grows the moment anything is added.
 bool PanelController::updateCoversWholeChat(
-		const Data::ExResumeRecord &row) const {
-	const auto anchor = row.updateAnchor ? row.updateAnchor : row.lastId;
-	if (!anchor) {
-		return false;
-	}
-	if (row.useIdRange) {
-		if (!row.tillId) {
-			return true;
-		}
-		return row.coveredTill && row.tillId == row.coveredTill.bare;
-	}
-	if (!row.tillDate) {
-		return true;
-	}
-	if (!row.coveredTillDate) {
-		return false;
-	}
-	return uint64(row.coveredTillDate) <= uint64(row.tillDate);
+		const ::Data::ExResumeRecord &row) const {
+	return row.coversWholeChat();
 }
 
 void PanelController::showSettings() {
 	refreshResumeRow();
+	refreshGlobalRow();
 	_paused = false;
 	_pausePending = false;
-	const auto pausedRow = _resumeRow.has_value()
-		&& _resumeRow->state != u"done"_q;
-	const auto doneRow = _resumeRow.has_value()
-		&& _resumeRow->state == u"done"_q;
-	const auto updateRow = doneRow && updateCoversWholeChat(*_resumeRow);
-	if (pausedRow) {
-		applyRowSettings(*_settings, *_resumeRow);
-	}
+	// One chat may own several folders now: buttons follow ANY row.
+	const auto anySinglePaused = [&] {
+		for (const auto &row : _resumeRows) {
+			if (row.state != u"done"_q) {
+				return true;
+			}
+		}
+		return false;
+	}();
+	const auto anySingleUpdatable = [&] {
+		for (const auto &row : _resumeRows) {
+			if (row.state == u"done"_q && updateCoversWholeChat(row)) {
+				return true;
+			}
+		}
+		return false;
+	}();
+	const auto globalPausedRow = (_globalRow.has_value()
+		&& _globalRow->state != u"done"_q)
+		|| _globalHasUnfinished;
+	const auto globalDoneRow = _globalRow.has_value()
+		&& _globalRow->state == u"done"_q;
+	// The panel never implies scope: every scope checkbox opens unchecked,
+	// so the user consciously ticks what each export contains. Resume and
+	// Update visibly read nothing from the panel (they restore row
+	// snapshots); any ticked option belongs to a fresh Export.
+	// NOTE: fullChats is intentionally kept: its sub-checkboxes hide while
+	// their main type is off, and they are inverted (checked means only-my),
+	// so zeroing it would flip their opt-in defaults.
+	_settings->types = Settings::Types(0);
+	_settings->media.types = MediaSettings::Types(0);
+	_settings->media.extensionFilterMode
+		= MediaSettings::ExtFilterMode::None;
+	_settings->media.extensionFilter.clear();
+	_scopeShown = *_settings;
 	auto settings = base::make_unique_q<SettingsWidget>(
 		_panel,
 		_session,
 		*_settings);
 	settings->setResumeUpdateEnabled(
-		pausedRow && _settings->onlySinglePeer(),
-		updateRow && _settings->onlySinglePeer());
-	settings->setStartEnabled(!pausedRow);
-	settings->setOptionsEnabled(!pausedRow);
+		anySinglePaused || globalPausedRow,
+		(anySingleUpdatable && _settings->onlySinglePeer()) || globalDoneRow);
+	settings->setStartEnabled(!globalPausedRow);
+	settings->setOptionsEnabled(!globalPausedRow);
 	settings->setShowBoxCallback([=](object_ptr<Ui::BoxContent> box) {
 		_panel->showBox(
 			std::move(box),
 			Ui::LayerOption::KeepOther,
 			anim::type::normal);
 	});
+	settings->setChatListRequestCallback([=](
+			Settings snapshot,
+			FnMut<void(Data::DialogsInfo&&)> done) mutable {
+		requestChatList(std::move(snapshot), std::move(done));
+	});
+	if (!_settings->onlySinglePeer()
+		&& !_chatListCache
+		&& !_chatListLoading
+		&& _session->api().takeoutId().has_value()) {
+		requestChatList(*_settings, [](Data::DialogsInfo&&) {});
+	}
 
 	settings->startClicks(
 	) | rpl::on_next([=]() {
+		if (_chatListLoading) {
+			Ui::Toast::Show(tr::lng_export_loading_chats(tr::now));
+			return;
+		}
 		if (_settings->onlySinglePeer()
 			&& _settings->media.types == MediaSettings::Types(0)) {
 			Ui::Toast::Show(tr::lng_export_nothing_selected(tr::now));
@@ -672,6 +1175,9 @@ void PanelController::showSettings() {
 				_process->setDedupDb(
 					Core::App().downloadManager().dedupDbPath());
 				_process->setSharedTakeoutId(id);
+				if (_settings->chatSelectionActive && _chatListCache) {
+					_process->setCachedDialogs(*_chatListCache);
+				}
 				_process->startExport(
 					*_settings,
 					PrepareEnvironment(_session),
@@ -682,6 +1188,10 @@ void PanelController::showSettings() {
 
 	settings->scanClicks(
 	) | rpl::on_next([=]() {
+		if (_chatListLoading) {
+			Ui::Toast::Show(tr::lng_export_loading_chats(tr::now));
+			return;
+		}
 		using Type = MediaSettings::Type;
 		const auto fileTypes = Type::Photo | Type::Video
 			| Type::VoiceMessage | Type::VideoMessage | Type::Sticker
@@ -715,6 +1225,9 @@ void PanelController::showSettings() {
 				_process->setDedupDb(
 					Core::App().downloadManager().dedupDbPath());
 				_process->setSharedTakeoutId(id);
+				if (_settings->chatSelectionActive && _chatListCache) {
+					_process->setCachedDialogs(*_chatListCache);
+				}
 				_process->startScan(
 					*_settings,
 					PrepareEnvironment(_session),
@@ -731,35 +1244,150 @@ void PanelController::showSettings() {
 
 	settings->resumeClicks(
 	) | rpl::on_next([=]() {
-		if (!_resumeRow || _resumeRow->state == u"done"_q) {
-			return;
-		}
-		auto resumeSettings = *_settings;
-		applyRowSettings(resumeSettings, *_resumeRow);
-		const auto row = *_resumeRow;
-		const auto gen = _startGen;
-		const auto sizeLimit = resumeSettings.media.sizeLimit;
-		ensureSharedTakeout([=](uint64 id) {
-			if (gen != _startGen) {
+		if (!_settings->onlySinglePeer()
+			&& _globalRow
+			&& _globalRow->state != u"done"_q) {
+			auto resumeSettings = *_settings;
+			applyMarkerSettings(resumeSettings, *_globalRow);
+			auto marker = *_globalRow;
+			if (!ScopesEqual(*_settings, _scopeShown)) {
+				Ui::Toast::Show(tr::lng_export_resume_blocked(tr::now));
 				return;
 			}
-			showProgress();
-			_session->api().setTakeoutBorrowed(true);
-			_process->setSessionId(_session->uniqueId());
-			_process->setDedupDb(
-				Core::App().downloadManager().dedupDbPath());
-			_process->setSharedTakeoutId(id);
-			_process->startResumeExport(
-				resumeSettings,
-				PrepareEnvironment(_session),
-				row);
-		}, sizeLimit);
+			// A renamed account resumes into the renamed tree, marker
+			// still valid: the stored absolute paths are rebased first.
+			const auto root = RebaseGlobalRootForContinue(
+				_session,
+				marker.exportFolder);
+			marker.exportFolder = root;
+			resumeSettings.path = root;
+			const auto missing = !QDir(marker.exportFolder).exists();
+			auto start = [=](QString located) mutable {
+				if (!located.isEmpty()) {
+					// The user pointed at the moved tree: rebase the
+					// stored paths and resume there instead of recreating.
+					const auto moved = located.endsWith('/')
+						? located
+						: (located + '/');
+					RebaseStoredFolder(
+						_session,
+						1,
+						marker.exportFolder,
+						moved);
+					marker.exportFolder = moved;
+					resumeSettings.path = moved;
+				}
+				const auto gen = _startGen;
+				const auto sizeLimit = resumeSettings.media.sizeLimit;
+				ensureSharedTakeout([=](uint64 id) {
+					if (gen != _startGen) {
+						return;
+					}
+					auto db = ::Data::DedupDb(
+						Core::App().downloadManager().dedupDbPath(),
+						false);
+					const auto rows = db.isOpen()
+						? db.loadExResume(_session->uniqueId(), 1)
+						: std::vector<::Data::ExResumeRecord>();
+					showProgress();
+					_session->api().setTakeoutBorrowed(true);
+					_process->setSessionId(_session->uniqueId());
+					_process->setDedupDb(
+						Core::App().downloadManager().dedupDbPath());
+					_process->setSharedTakeoutId(id);
+					_process->startResumeExportGlobal(
+						resumeSettings,
+						PrepareEnvironment(_session),
+						marker,
+						rows);
+				}, sizeLimit);
+			};
+			if (!missing) {
+				start(QString());
+				return;
+			}
+			resolveMissingFolder(marker.exportFolder, true, std::move(start));
+			return;
+		}
+		auto candidates = std::vector<::Data::ExResumeRecord>();
+		for (const auto &row : _resumeRows) {
+			if (row.state != u"done"_q) {
+				candidates.push_back(row);
+			}
+		}
+		if (candidates.empty()) {
+			return;
+		}
+		if (!ScopesEqual(*_settings, _scopeShown)) {
+			Ui::Toast::Show(tr::lng_export_resume_blocked(tr::now));
+			return;
+		}
+		if (candidates.size() == 1) {
+			auto snapshot = *_settings;
+			applyRowSettings(snapshot, candidates.front());
+			startSingleResume(std::move(snapshot), candidates.front());
+			return;
+		}
+		const auto live = *_settings;
+		showFolderPicker(candidates, false, [=](
+				std::vector<int> &&indices) mutable {
+			_pendingRuns.clear();
+			for (const auto i : indices) {
+				if (i >= 0 && i < int(candidates.size())) {
+					auto snapshot = live;
+					applyRowSettings(snapshot, candidates[i]);
+					_pendingRuns.push_back(SingleRun{
+						std::move(snapshot),
+						candidates[i],
+						false,
+					});
+				}
+			}
+			startNextSingleRun();
+		});
+		return;
 	}, settings->lifetime());
 
 	_process->setUpdateConfirmHandler([=](
 			int anyNew,
 			int selectedNew,
 			FnMut<void(bool)> proceed) mutable {
+		if (!_settings->onlySinglePeer()) {
+			if (selectedNew <= 0) {
+				Ui::Toast::Show(tr::lng_export_up_to_date(tr::now));
+				proceed(false);
+				return;
+			}
+			const auto sharedProceed = std::make_shared<FnMut<void(bool)>>(
+				std::move(proceed));
+			const auto snapshotChats = _globalRow
+				? int(_globalRow->dialogIds.size())
+				: 0;
+			_panel->showBox(
+				Ui::MakeConfirmBox({
+					.text = tr::lng_export_update_confirm_global(
+						tr::now,
+						lt_amount,
+						QString::number(anyNew),
+						lt_chats,
+						QString::number(selectedNew),
+						lt_skipped,
+						QString::number(
+							std::max(snapshotChats - selectedNew, 0))),
+					.confirmed = [=](Fn<void()> close) {
+						close();
+						showProgress();
+						(*sharedProceed)(true);
+					},
+					.cancelled = [=](Fn<void()> close) {
+						close();
+						(*sharedProceed)(false);
+					},
+				}),
+				Ui::LayerOption::KeepOther,
+				anim::type::normal);
+			return;
+		}
 		if (selectedNew <= 0) {
 			Ui::Toast::Show(anyNew > 0
 				? tr::lng_export_update_none_selected(tr::now)
@@ -769,13 +1397,6 @@ void PanelController::showSettings() {
 		}
 		const auto sharedProceed = std::make_shared<FnMut<void(bool)>>(
 			std::move(proceed));
-		if (_updateSettingsChanged) {
-			Ui::Toast::Show({
-				.text = { tr::lng_export_update_settings_changed(
-					tr::now) },
-				.duration = 4 * crl::time(1000),
-			});
-		}
 		_panel->showBox(
 			Ui::MakeConfirmBox({
 				.text = tr::lng_export_update_confirm(
@@ -798,61 +1419,104 @@ void PanelController::showSettings() {
 
 	settings->updateClicks(
 	) | rpl::on_next([=]() {
-		if (!_resumeRow || _resumeRow->state != u"done"_q) {
-			return;
-		}
-		const auto &row = *_resumeRow;
-		if (!updateCoversWholeChat(row)) {
-			return;
-		}
-		const auto folderMissing = !QDir(row.exportFolder).exists();
-		_updateSettingsChanged = updateSettingsChanged(row);
-		auto updateSettings = *_settings;
-		applyRowSettings(updateSettings, row);
-		auto newFolderName = QString();
-		if (folderMissing) {
-			const auto rowDir = QDir(row.exportFolder);
-			newFolderName = rowDir.dirName();
-			auto parentPath = rowDir.absolutePath();
-			parentPath.chop(newFolderName.length());
-			updateSettings.path = parentPath;
-			updateSettings.forceSubPath = false;
-		}
-		auto run = [=]() mutable {
-			const auto gen = _startGen;
-			const auto sizeLimit = updateSettings.media.sizeLimit;
-			ensureSharedTakeout([=](uint64 id) {
-				if (gen != _startGen) {
-					return;
+		if (!_settings->onlySinglePeer()) {
+			if (!_globalRow || _globalRow->state != u"done"_q) {
+				return;
+			}
+			auto updateSettings = *_settings;
+			applyMarkerSettings(updateSettings, *_globalRow);
+			auto marker = *_globalRow;
+			if (!ScopesEqual(*_settings, _scopeShown)) {
+				Ui::Toast::Show(tr::lng_export_update_blocked(tr::now));
+				return;
+			}
+			// A renamed account updates into the renamed tree, marker
+			// still done: the stored absolute paths are rebased first.
+			const auto root = RebaseGlobalRootForContinue(
+				_session,
+				marker.exportFolder);
+			marker.exportFolder = root;
+			updateSettings.path = root;
+			const auto missing = !QDir(marker.exportFolder).exists();
+			auto start = [=](QString located) mutable {
+				if (!located.isEmpty()) {
+					// The user pointed at the moved tree: rebase the
+					// stored paths and update there instead of recreating.
+					const auto moved = located.endsWith('/')
+						? located
+						: (located + '/');
+					RebaseStoredFolder(
+						_session,
+						1,
+						marker.exportFolder,
+						moved);
+					marker.exportFolder = moved;
+					updateSettings.path = moved;
 				}
-				_process->setSessionId(_session->uniqueId());
-				_process->setDedupDb(
-					Core::App().downloadManager().dedupDbPath());
-				_process->setSharedTakeoutId(id);
-				_session->api().setTakeoutBorrowed(true);
-				_process->startUpdateExport(
-					updateSettings,
-					PrepareEnvironment(_session),
-					row,
-					newFolderName);
-			}, sizeLimit);
-		};
-		if (!folderMissing) {
-			run();
+				const auto gen = _startGen;
+				const auto sizeLimit = updateSettings.media.sizeLimit;
+				ensureSharedTakeout([=](uint64 id) {
+					if (gen != _startGen) {
+						return;
+					}
+					auto db = ::Data::DedupDb(
+						Core::App().downloadManager().dedupDbPath(),
+						false);
+					const auto rows = db.isOpen()
+						? db.loadExResume(_session->uniqueId(), 1)
+						: std::vector<::Data::ExResumeRecord>();
+					_process->setSessionId(_session->uniqueId());
+					_process->setDedupDb(
+						Core::App().downloadManager().dedupDbPath());
+					_process->setSharedTakeoutId(id);
+					_session->api().setTakeoutBorrowed(true);
+					_process->startUpdateExportGlobal(
+						updateSettings,
+						PrepareEnvironment(_session),
+						marker,
+						rows);
+				}, sizeLimit);
+			};
+			if (!missing) {
+				start(QString());
+				return;
+			}
+			resolveMissingFolder(marker.exportFolder, true, std::move(start));
 			return;
 		}
-		const auto sharedRun = std::make_shared<FnMut<void()>>(
-			std::move(run));
-		_panel->showBox(
-			Ui::MakeConfirmBox({
-				.text = tr::lng_export_update_missing(tr::now),
-				.confirmed = [=](Fn<void()> close) {
-					close();
-					(*sharedRun)();
-				},
-			}),
-			Ui::LayerOption::KeepOther,
-			anim::type::normal);
+		auto candidates = std::vector<::Data::ExResumeRecord>();
+		for (const auto &row : _resumeRows) {
+			if (row.state == u"done"_q && updateCoversWholeChat(row)) {
+				candidates.push_back(row);
+			}
+		}
+		if (candidates.empty()) {
+			return;
+		}
+		if (!ScopesEqual(*_settings, _scopeShown)) {
+			Ui::Toast::Show(tr::lng_export_update_blocked(tr::now));
+			return;
+		}
+		if (candidates.size() == 1) {
+			startSingleUpdate(*_settings, candidates.front());
+			return;
+		}
+		const auto live = *_settings;
+		showFolderPicker(candidates, true, [=](
+				std::vector<int> &&indices) mutable {
+			_pendingRuns.clear();
+			for (const auto i : indices) {
+				if (i >= 0 && i < int(candidates.size())) {
+					_pendingRuns.push_back(SingleRun{
+						live,
+						candidates[i],
+						true,
+					});
+				}
+			}
+			startNextSingleRun();
+		});
+		return;
 	}, settings->lifetime());
 
 	settings->changes(
@@ -966,20 +1630,40 @@ void PanelController::pauseRunningExport() {
 
 void PanelController::cancelRunningExport() {
 	++_startGen;
+	_pendingRuns.clear();
 	finishExportTakeout();
 	refreshResumeRow();
-	const auto folder = _resumeRow
-		? _resumeRow->exportFolder
-		: QString();
-	_resumeRow = std::nullopt;
+	refreshGlobalRow();
 	_paused = false;
 	_pausePending = false;
 	_running = false;
 	_process->cancelExportFast();
 	_process->closeDialogFiles();
-	if (!folder.isEmpty()) {
-		QDir(folder).removeRecursively();
+	// Cancel abandons unfinished work: drop every non-done single row with
+	// its folder (done folders are never touched). The api side already
+	// removed the active run's own row above.
+	if (_settings->onlySinglePeer()) {
+		auto db = ::Data::DedupDb(
+			Core::App().downloadManager().dedupDbPath(),
+			false);
+		const auto sessionId = _session->uniqueId();
+		for (const auto &row : _resumeRows) {
+			if (row.state == u"done"_q || row.exportFolder.isEmpty()) {
+				continue;
+			}
+			if (db.isOpen()) {
+				db.removeExResumeFolder(
+					sessionId,
+					row.peerId,
+					0,
+					row.exportFolder);
+			}
+			QDir(row.exportFolder).removeRecursively();
+		}
 	}
+	_resumeRows.clear();
+	// A global cancel clears checkpoints but keeps the account tree:
+	// its folders belong to finished chats.
 }
 
 void PanelController::showProgress(bool scanning) {
@@ -1010,7 +1694,6 @@ void PanelController::showProgress(bool scanning) {
 		stopWithConfirmation();
 	}, progress->lifetime());
 
-	progress->setPauseEnabled(!scanning);
 	progress->pauseToggleClicks(
 	) | rpl::on_next([=] {
 		if (_paused) {
@@ -1019,6 +1702,16 @@ void PanelController::showProgress(bool scanning) {
 		} else {
 			_pausePending = true;
 			_process->requestPause();
+		}
+	}, progress->lifetime());
+
+	// The button is only offered while a park point is reachable: from
+	// the first chat until the run ends. A press while hidden is
+	// impossible by construction, so a pending pause is never lost.
+	_process->canPauseChanges(
+	) | rpl::on_next([=](bool can) {
+		if (const auto widget = _progress.data()) {
+			widget->setPauseEnabled(can);
 		}
 	}, progress->lifetime());
 
@@ -1069,8 +1762,14 @@ void PanelController::stopWithConfirmation(Fn<void()> callback) {
 	const auto hidden = _panel->isHidden();
 	const auto old = _confirmStopBox;
 	refreshResumeRow();
-	const auto deleteFolder = _resumeRow.has_value()
-		&& !_resumeRow->exportFolder.isEmpty();
+	const auto deleteFolder = [&] {
+		for (const auto &row : _resumeRows) {
+			if (row.state != u"done"_q && !row.exportFolder.isEmpty()) {
+				return true;
+			}
+		}
+		return false;
+	}();
 	auto box = Ui::MakeConfirmBox({
 		.text = deleteFolder
 			? tr::lng_export_cancel_delete()
@@ -1128,9 +1827,17 @@ void PanelController::updateState(State &&state) {
 		return;
 	}
 	if (const auto apiError = std::get_if<ApiErrorState>(&_state)) {
+		if (!_running) {
+			_session->api().setTakeoutBorrowed(false);
+			_chatListLoading = false;
+			Ui::Toast::Show(apiError->data.type());
+			return;
+		}
+		_pendingRuns.clear();
 		finishExportTakeout();
 		showError(*apiError);
 	} else if (const auto error = std::get_if<OutputErrorState>(&_state)) {
+		_pendingRuns.clear();
 		finishExportTakeout();
 		showError(*error);
 	} else if (const auto finished = std::get_if<FinishedState>(&_state)) {
@@ -1138,6 +1845,12 @@ void PanelController::updateState(State &&state) {
 		_paused = false;
 		_pausePending = false;
 		finishExportTakeout();
+		// Multi-folder chain: next queued single run instead of the finish
+		// screen; the last run falls through to it normally.
+		if (!_pendingRuns.empty()) {
+			startNextSingleRun();
+			return;
+		}
 		_panel->setTitle(tr::lng_export_title());
 		_panel->setHideOnDeactivate(false);
 		// Keep total-row space: exact sizing overlaps the button
@@ -1162,6 +1875,9 @@ void PanelController::updateState(State &&state) {
 			}
 		}
 		if (finished->textMessages > 0) {
+			++rows;
+		}
+		if (!finished->failedChats.empty()) {
 			++rows;
 		}
 		const auto unit = st::exportProgressRowHeight
@@ -1205,6 +1921,7 @@ void PanelController::updateState(State &&state) {
 		}
 	} else if (v::is<CancelledState>(_state)) {
 		LOG(("Export Info: Stop Panel After Cancel."));
+		_pendingRuns.clear();
 		_running = false;
 		_paused = false;
 		_pausePending = false;

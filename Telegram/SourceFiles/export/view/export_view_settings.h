@@ -27,6 +27,9 @@ class Session;
 } // namespace Main
 
 namespace Export {
+namespace Data {
+struct DialogsInfo;
+} // namespace Data
 namespace View {
 
 constexpr auto kSizeValueCount = 100;
@@ -54,6 +57,10 @@ public:
 
 	void setShowBoxCallback(Fn<void(object_ptr<Ui::BoxContent>)> callback) {
 		_showBoxCallback = std::move(callback);
+	}
+	void setChatListRequestCallback(
+			Fn<void(Settings, FnMut<void(Data::DialogsInfo&&)>)> callback) {
+		_requestChatList = std::move(callback);
 	}
 
 private:
@@ -84,6 +91,9 @@ private:
 		const QString &text,
 		Types types,
 		const QString &about);
+	void addChatSelectionRow(
+		not_null<Ui::VerticalLayout*> container);
+	void openChatPicker();
 	void addChatOption(
 		not_null<Ui::VerticalLayout*> container,
 		const QString &text,
@@ -127,6 +137,7 @@ private:
 	const not_null<Main::Session*> _session;
 	PeerId _singlePeerId = 0;
 	Fn<void(object_ptr<Ui::BoxContent>)> _showBoxCallback;
+	Fn<void(Settings, FnMut<void(Data::DialogsInfo&&)>)> _requestChatList;
 
 	// Use through readData / changeData wrappers.
 	Settings _internal_data;

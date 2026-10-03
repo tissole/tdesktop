@@ -1,0 +1,504 @@
+(61d0.3988): Unknown exception - code 000006d9 (first chance)
+(61d0.3988): Unknown exception - code 000006d9 (first chance)
+ModLoad: 00007ffa`e1d50000 00007ffa`e1e7a000   C:\windows\SYSTEM32\WINHTTP.dll
+ModLoad: 00007ffa`7d4e0000 00007ffa`7d630000   C:\Windows\System32\MsSpellCheckingFacility.dll
+ModLoad: 00007ffa`e2160000 00007ffa`e217e000   C:\windows\SYSTEM32\dhcpcsvc6.DLL
+ModLoad: 00007ffa`e2af0000 00007ffa`e2b15000   C:\windows\SYSTEM32\dhcpcsvc.DLL
+ModLoad: 00007ffa`e9b60000 00007ffa`e9be1000   C:\windows\System32\WS2_32.dll
+ModLoad: 00007ffa`e7340000 00007ffa`e73ac000   C:\windows\system32\mswsock.dll
+ModLoad: 00007ffa`d4860000 00007ffa`d48be000   C:\Windows\System32\Bcp47Langs.dll
+(61d0.3988): Access violation - code c0000005 (first chance)
+First chance exceptions are reported before any exception handling.
+This exception may be expected and handled.
+Telegram!Data::MakeUploadBarContent+0x160c6:
+00007ff7`7b5d50d6 488b4008        mov     rax,qword ptr [rax+8] ds:00000000`00000008=????????????????
+0:000> .ecxr
+Unable to get exception context, HRESULT 0x8000FFFF
+0:000> k
+ # Child-SP          RetAddr               Call Site
+00 00000060`ca2f2d10 00007ff7`7b5f423e     Telegram!Data::MakeUploadBarContent+0x160c6
+01 00000060`ca2f3240 00007ff7`7b5efc98     Telegram!`rpl::details::take_helper::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >'::`2'::<lambda_28_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >+0x6be
+02 00000060`ca2f3690 00007ff7`7b614a40     Telegram!rpl::details::mutable_lambda_wrap<`rpl::details::take_helper::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >'::`2'::<lambda_28_> >::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>+0xa8
+03 00000060`ca2f36f0 00007ff7`7b5df527     Telegram!std::invoke<rpl::details::mutable_lambda_wrap<`rpl::single<Data::DownloadProgress const & __ptr64,rpl::no_error>'::`2'::<lambda_1> > & __ptr64,rpl::consumer<Data::DownloadProgress,rpl::no_error,rpl::details::type_erased_handlers<Data::DownloadProgress,rpl::no_error> > const & __ptr64>+0x80
+04 00000060`ca2f3730 00007ff7`7c26a266     Telegram!Data::MakeUploadBarContent+0x20517
+05 00000060`ca2f3770 00007ff7`7c1fbc8e     Telegram!std::_Func_class<rpl::lifetime,rpl::consumer<Ui::DownloadBarContent,rpl::no_error,rpl::details::type_erased_handlers<Ui::DownloadBarContent,rpl::no_error> > const & __ptr64>::operator()+0x66
+06 00000060`ca2f37c0 00007ff7`7c2474ca     Telegram!rpl::details::type_erased_generator<Ui::DownloadBarContent,rpl::no_error>::operator()<rpl::details::type_erased_handlers<Ui::DownloadBarContent,rpl::no_error> >+0x4e
+07 00000060`ca2f3810 00007ff7`7c246a05     Telegram!rpl::details::producer_base<Ui::DownloadBarContent,rpl::no_error,rpl::details::type_erased_generator<Ui::DownloadBarContent,rpl::no_error> >::start_existing<rpl::details::type_erased_handlers<Ui::DownloadBarContent,rpl::no_error> >+0x7a
+08 00000060`ca2f38a0 00007ff7`7c1fd5cc     Telegram!rpl::details::producer_base<int,rpl::no_error,rpl::details::type_erased_generator<int,rpl::no_error> >::start<`rpl::start_to_stream<int,rpl::no_error>'::`3'::<lambda_46_>,`rpl::details::operator|<int,rpl::no_error,rpl::details::type_erased_generator<int,rpl::no_error>,`rpl::start_to_stream<int,rpl::no_error>'::`3'::<lambda_46_>,void>'::`2'::<lambda_1>,`rpl::details::operator|<int,rpl::no_error,rpl::details::type_erased_generator<int,rpl::no_error>,`rpl::start_to_stream<int,rpl::no_error>'::`3'::<lambda_46_>,void>'::`2'::<lambda_2>,void>+0xe55
+09 00000060`ca2f38f0 00007ff7`7c188f23     Telegram!rpl::operator|<Data::Forum * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Data::Forum * __ptr64,rpl::no_error>,rpl::details::filter_helper<rpl::details::unary_operator_mapper<rpl::details::argument_mapper<0> const & __ptr64,std::logical_not<void> > >,rpl::producer<Data::Forum * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Data::Forum * __ptr64,rpl::no_error> > >+0x12c
+0a 00000060`ca2f3940 00007ff7`7c17c8f0     Telegram!Dialogs::Widget::setupDownloadBar+0x143
+0b 00000060`ca2f3a60 00007ff7`810ff38b     Telegram!Dialogs::Widget::Widget+0x4710
+0c 00000060`ca2f6340 00007ff7`8111bab6     Telegram!base::unique_qptr<Dialogs::Widget>::unique_qptr<Dialogs::Widget><MainWidget * __ptr64,gsl::not_null<Window::SessionController * __ptr64> const & __ptr64,enum Dialogs::Widget::Layout>+0x5b
+0d 00000060`ca2f6390 00007ff7`810dab1d     Telegram!base::make_unique_q<Dialogs::Widget,MainWidget * __ptr64,gsl::not_null<Window::SessionController * __ptr64> const & __ptr64,enum Dialogs::Widget::Layout>+0x46
+0e 00000060`ca2f63e0 00007ff7`8114170d     Telegram!MainWidget::MainWidget+0x1cd
+0f 00000060`ca2f7310 00007ff7`8113a7b3     Telegram!object_ptr<MainWidget>::object_ptr<MainWidget><Ui::RpWidget * __ptr64,Window::SessionController * __ptr64>+0x8d
+10 00000060`ca2f7390 00007ff7`80a0fd6c     Telegram!MainWindow::setupMain+0x2b3
+11 00000060`ca2f7550 00007ff7`80a11978     Telegram!Window::Controller::setupMain+0xbc
+12 00000060`ca2f75d0 00007ff7`80a23881     Telegram!Window::Controller::showTermsDelete+0x938
+13 00000060`ca2f7990 00007ff7`80a20a5e     Telegram!std::invoke<```rpl::details::then_helper<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error> >::operator()<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error>,Window::SessionController * __ptr64,rpl::no_error>'::`2'::<lambda_16_>::operator()<rpl::consumer<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Window::SessionController * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,rpl::no_error>+0x81
+14 00000060`ca2f79c0 00007ff7`80a324ac     Telegram!rpl::details::callable_invoke<```rpl::details::then_helper<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error> >::operator()<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error>,Window::SessionController * __ptr64,rpl::no_error>'::`2'::<lambda_16_>::operator()<rpl::consumer<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Window::SessionController * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,rpl::no_error>+0x9e
+15 00000060`ca2f79f0 00007ff7`7b644f9f     Telegram!rpl::details::consumer_handlers<Media::Player::FloatDelegate * __ptr64,rpl::no_error,```rpl::details::then_helper<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error> >::operator()<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error>,Media::Player::FloatDelegate * __ptr64,rpl::no_error>'::`2'::<lambda_17_>::operator()<rpl::consumer<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Media::Player::FloatDelegate * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_1>,```rpl::details::then_helper<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error> >::operator()<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error>,Media::Player::FloatDelegate * __ptr64,rpl::no_error>'::`2'::<lambda_17_>::operator()<rpl::consumer<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Media::Player::FloatDelegate * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,```rpl::details::then_helper<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error> >::operator()<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error>,Media::Player::FloatDelegate * __ptr64,rpl::no_error>'::`2'::<lambda_17_>::operator()<rpl::consumer<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Media::Player::FloatDelegate * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_3> >::put_next+0x15c
+16 00000060`ca2f7a60 00007ff7`7b648ea2     Telegram!rpl::details::consumer_base<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >::handlers_put_next+0x3f
+17 00000060`ca2f7aa0 00007ff7`7b64ac9e     Telegram!rpl::details::consumer_base<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >::put_next+0x32
+18 00000060`ca2f7ae0 00007ff7`7ec6af38     Telegram!rpl::details::consumer_base<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >::put_next_forward+0x1e
+19 00000060`ca2f7b10 00007ff7`7ec781fe     Telegram!``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_1>::operator()<Main::Session * __ptr64>+0x28
+1a 00000060`ca2f7b50 00007ff7`7ec73d4e     Telegram!std::invoke<``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_1>,Main::Session * __ptr64>+0x1e
+1b 00000060`ca2f7b80 00007ff7`7ec9074c     Telegram!rpl::details::callable_invoke<``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_1>,Main::Session * __ptr64>+0x1e
+1c 00000060`ca2f7bb0 00007ff7`7b644f9f     Telegram!rpl::details::consumer_handlers<Main::Session * __ptr64,rpl::no_error,``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_1>,``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_2>,``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_3> >::put_next+0x5c
+1d 00000060`ca2f7c10 00007ff7`7b648ea2     Telegram!rpl::details::consumer_base<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >::handlers_put_next+0x3f
+1e 00000060`ca2f7c50 00007ff7`7ec6ba8e     Telegram!rpl::details::consumer_base<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >::put_next+0x32
+1f 00000060`ca2f7c90 00007ff7`7ec6a86a     Telegram!`rpl::single<Main::Session * __ptr64 const & __ptr64,rpl::no_error>'::`2'::<lambda_1>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >+0x2e
+20 00000060`ca2f7cd0 00007ff7`7ec77e20     Telegram!rpl::details::mutable_lambda_wrap<`rpl::single<Main::Session * __ptr64 const & __ptr64,rpl::no_error>'::`2'::<lambda_1> >::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>+0x3a
+21 00000060`ca2f7d10 00007ff7`7ec8a3b7     Telegram!std::invoke<rpl::details::mutable_lambda_wrap<`rpl::single<Main::Session * __ptr64 const & __ptr64,rpl::no_error>'::`2'::<lambda_1> > & __ptr64,rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>+0x30
+22 00000060`ca2f7d50 00007ff7`7991f3f6     Telegram!std::_Func_impl_no_alloc<rpl::details::mutable_lambda_wrap<`rpl::single<Main::Session * __ptr64 const & __ptr64,rpl::no_error>'::`2'::<lambda_1> >,rpl::lifetime,rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>::_Do_call+0x37
+23 00000060`ca2f7d90 00007ff7`7990921e     Telegram!std::_Func_class<rpl::lifetime,rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>::operator()+0x66
+24 00000060`ca2f7de0 00007ff7`79917a3a     Telegram!rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>::operator()<rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >+0x4e
+25 00000060`ca2f7e30 00007ff7`7ec7b2cc     Telegram!rpl::details::producer_base<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::start_existing<rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >+0x7a
+26 00000060`ca2f7ec0 00007ff7`7ec6b9a9     Telegram!rpl::details::producer_base<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::start<``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_1>,``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_2>,``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>,void>+0xbc
+27 00000060`ca2f7f60 00007ff7`7ec6a81a     Telegram!`rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >+0x139
+28 00000060`ca2f8080 00007ff7`7ec77bf0     Telegram!rpl::details::mutable_lambda_wrap<`rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_> >::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>+0x3a
+29 00000060`ca2f80c0 00007ff7`7ec8a227     Telegram!std::invoke<rpl::details::mutable_lambda_wrap<`rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_> > & __ptr64,rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>+0x30
+2a 00000060`ca2f8100 00007ff7`7991f3f6     Telegram!std::_Func_impl_no_alloc<rpl::details::mutable_lambda_wrap<`rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_> >,rpl::lifetime,rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>::_Do_call+0x37
+2b 00000060`ca2f8140 00007ff7`7990921e     Telegram!std::_Func_class<rpl::lifetime,rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>::operator()+0x66
+2c 00000060`ca2f8190 00007ff7`79917a3a     Telegram!rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>::operator()<rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >+0x4e
+2d 00000060`ca2f81e0 00007ff7`80a263c5     Telegram!rpl::details::producer_base<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::start_existing<rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >+0x7a
+2e 00000060`ca2f8270 00007ff7`80a1bf5c     Telegram!rpl::details::producer_base<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error> >::start<```rpl::details::then_helper<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error> >::operator()<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error>,Window::SessionController * __ptr64,rpl::no_error>'::`2'::<lambda_16_>::operator()<rpl::consumer<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Window::SessionController * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_1>,```rpl::details::then_helper<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error> >::operator()<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error>,Window::SessionController * __ptr64,rpl::no_error>'::`2'::<lambda_16_>::operator()<rpl::consumer<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Window::SessionController * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,```rpl::details::then_helper<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error> >::operator()<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error>,Window::SessionController * __ptr64,rpl::no_error>'::`2'::<lambda_16_>::operator()<rpl::consumer<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Window::SessionController * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_3>,void>+0x375
+2f 00000060`ca2f82c0 00007ff7`80a101cb     Telegram!rpl::operator|<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error>,rpl::details::then_helper<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error> >,rpl::producer<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error> > >+0xdc
+30 00000060`ca2f8310 00007ff7`80a0e010     Telegram!Window::Controller::showAccount+0x3eb
+31 00000060`ca2f8550 00007ff7`7adeda4b     Telegram!Window::Controller::showAccount+0x50
+32 00000060`ca2f85a0 00007ff7`7adef58c     Telegram!Core::Application::showAccount+0xdb
+33 00000060`ca2f8650 00007ff7`7ae39ae5     Telegram!Core::QuitAttempt+0xc7c
+34 00000060`ca2f86a0 00007ff7`7ae2f94e     Telegram!std::invoke<```rpl::details::then_helper<enum Qt::ApplicationState,rpl::no_error,rpl::details::type_erased_generator<enum Qt::ApplicationState,rpl::no_error> >::operator()<enum Qt::ApplicationState,rpl::no_error,rpl::details::type_erased_generator<enum Qt::ApplicationState,rpl::no_error>,enum Qt::ApplicationState,rpl::no_error>'::`2'::<lambda_33_>::operator()<rpl::consumer<enum Qt::ApplicationState,rpl::no_error,rpl::details::type_erased_handlers<enum Qt::ApplicationState,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,rpl::no_error>+0x1c5
+35 00000060`ca2f86e0 00007ff7`7ae6fd73     Telegram!rpl::details::callable_invoke<```rpl::details::then_helper<enum Qt::ApplicationState,rpl::no_error,rpl::details::type_erased_generator<enum Qt::ApplicationState,rpl::no_error> >::operator()<enum Qt::ApplicationState,rpl::no_error,rpl::details::type_erased_generator<enum Qt::ApplicationState,rpl::no_error>,enum Qt::ApplicationState,rpl::no_error>'::`2'::<lambda_33_>::operator()<rpl::consumer<enum Qt::ApplicationState,rpl::no_error,rpl::details::type_erased_handlers<enum Qt::ApplicationState,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,rpl::no_error>+0x21e
+36 00000060`ca2f8710 00007ff7`7ae6b4af     Telegram!rpl::details::consumer_handlers<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,```rpl::details::flatten_latest_helper::operator()<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_generator<gsl::not_null<Main::Account * __ptr64>,rpl::no_error>,rpl::details::type_erased_generator<rpl::producer<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_generator<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> >,rpl::no_error> >'::`2'::<lambda_30_>::operator()<rpl::consumer<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_handlers<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> > >'::`2'::<lambda_1>::operator()'::`2'::<lambda_1>,```rpl::details::flatten_latest_helper::operator()<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_generator<gsl::not_null<Main::Account * __ptr64>,rpl::no_error>,rpl::details::type_erased_generator<rpl::producer<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_generator<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> >,rpl::no_error> >'::`2'::<lambda_30_>::operator()<rpl::consumer<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_handlers<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> > >'::`2'::<lambda_1>::operator()'::`2'::<lambda_2>,```rpl::details::flatten_latest_helper::operator()<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_generator<gsl::not_null<Main::Account * __ptr64>,rpl::no_error>,rpl::details::type_erased_generator<rpl::producer<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_generator<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> >,rpl::no_error> >'::`2'::<lambda_30_>::operator()<rpl::consumer<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_handlers<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> > >'::`2'::<lambda_1>::opera+0xe3
+37 00000060`ca2f8760 00007ff7`7ae6f3a2     Telegram!rpl::details::consumer_base<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_handlers<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> >::handlers_put_next+0x3f
+38 00000060`ca2f87a0 00007ff7`7ae7168e     Telegram!rpl::details::consumer_base<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_handlers<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> >::put_next+0x32
+39 00000060`ca2f87e0 00007ff7`7ecc3771     Telegram!rpl::details::consumer_base<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_handlers<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> >::put_next_forward+0x1e
+3a 00000060`ca2f8810 00007ff7`7ecd772e     Telegram!rpl::details::then_helper<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Account * __ptr64,rpl::no_error> >::operator()<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Account * __ptr64,rpl::no_error>,Main::Account * __ptr64,rpl::no_error>+0x281
+3b 00000060`ca2f8850 00007ff7`7ecd1e3e     Telegram!std::invoke<```rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_22_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,rpl::no_error>+0x10e
+3c 00000060`ca2f8880 00007ff7`7ecd2aee     Telegram!rpl::details::callable_invoke<```rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_22_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,rpl::no_error>+0x12e
+3d 00000060`ca2f88b0 00007ff7`7ecf21dc     Telegram!rpl::details::const_ref_call_invoke<```rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_22_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,rpl::no_error>+0x10e
+3e 00000060`ca2f88e0 00007ff7`7b10cc10     Telegram!rpl::details::consumer_handlers<Main::Account * __ptr64,rpl::no_error,```rpl::details::then_helper<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Account * __ptr64,rpl::no_error> >::operator()<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Account * __ptr64,rpl::no_error>,Main::Account * __ptr64,rpl::no_error>'::`2'::<lambda_20_>::operator()<rpl::consumer<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_1>,```rpl::details::then_helper<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Account * __ptr64,rpl::no_error> >::operator()<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Account * __ptr64,rpl::no_error>,Main::Account * __ptr64,rpl::no_error>'::`2'::<lambda_20_>::operator()<rpl::consumer<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,```rpl::details::then_helper<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Account * __ptr64,rpl::no_error> >::operator()<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Account * __ptr64,rpl::no_error>,Main::Account * __ptr64,rpl::no_error>'::`2'::<lambda_20_>::operator()<rpl::consumer<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_3> >::put_next_copy+0xec
+3f 00000060`ca2f8940 00007ff7`7b10d352     Telegram!rpl::details::consumer_base<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> >::handlers_put_next_copy+0x40
+40 00000060`ca2f8980 00007ff7`7ecca291     Telegram!rpl::details::consumer_base<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> >::put_next_copy+0x32
+41 00000060`ca2f89c0 00007ff7`7ecd3d76     Telegram!`rpl::event_stream<Main::Account * __ptr64,rpl::no_error>::fire_forward<Main::Account * __ptr64 const & __ptr64>'::`2'::<lambda_1>::operator()<rpl::consumer<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> > >+0x21
+42 00000060`ca2f8a00 00007ff7`7ecdc41c     Telegram!std::find_if<base::index_based_iterator<std::vector<rpl::consumer<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> >,std::allocator<rpl::consumer<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> > > > >,`rpl::event_stream<Main::Account * __ptr64,rpl::no_error>::fire_forward<Main::Account * __ptr64 const & __ptr64>'::`2'::<lambda_1> >+0xc6
+43 00000060`ca2f8aa0 00007ff7`7ecd40cd     Telegram!std::remove_if<base::index_based_iterator<std::vector<rpl::consumer<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> >,std::allocator<rpl::consumer<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> > > > >,`rpl::event_stream<Main::Account * __ptr64,rpl::no_error>::fire_forward<Main::Account * __ptr64 const & __ptr64>'::`2'::<lambda_1> >+0x14c
+44 00000060`ca2f8be0 00007ff7`7ecef5ce     Telegram!rpl::event_stream<Main::Account * __ptr64,rpl::no_error>::fire_forward<Main::Account * __ptr64 const & __ptr64>+0x1bd
+45 00000060`ca2f8ef0 00007ff7`7ecd0a31     Telegram!rpl::event_stream<Main::Account * __ptr64,rpl::no_error>::fire_copy+0x1e
+46 00000060`ca2f8f20 00007ff7`7ecc123f     Telegram!rpl::variable<Main::Account * __ptr64,rpl::no_error>::assign<Main::Account * __ptr64>+0x51
+47 00000060`ca2f8f60 00007ff7`7ecb2dc7     Telegram!rpl::variable<Main::Account * __ptr64,rpl::no_error>::operator=<Main::Account * __ptr64,void>+0x2f
+48 00000060`ca2f8f90 00007ff7`7ecb383a     Telegram!Main::Domain::activate+0x327
+49 00000060`ca2f9190 00007ff7`7ecb18c8     Telegram!Main::Domain::activateAfterStarting+0x16a
+4a 00000060`ca2f9210 00007ff7`7adec9fa     Telegram!Main::Domain::start+0x98
+4b 00000060`ca2f9280 00007ff7`7ade36d5     Telegram!Core::Application::startDomain+0x5a
+4c 00000060`ca2f9330 00007ff7`7b05da30     Telegram!Core::Application::run+0xe15
+4d 00000060`ca2f9e20 00007ff7`7b0610f7     Telegram!Core::Sandbox::removeClients+0xae0
+4e 00000060`ca2fa020 00007ff7`7b063909     Telegram!Core::Sandbox::removeClients+0x41a7
+4f 00000060`ca2fa050 00007ff7`7b060a4b     Telegram!std::begin<QArrayDataPointer<std::pair<QLocalSocket * __ptr64,QByteArray> > >+0x2d9
+50 00000060`ca2fa080 00007ff7`7b063673     Telegram!Core::Sandbox::removeClients+0x3afb
+51 00000060`ca2fa0c0 00007ff7`7b0601b0     Telegram!std::begin<QArrayDataPointer<std::pair<QLocalSocket * __ptr64,QByteArray> > >+0x43
+52 00000060`ca2fa0f0 00007ff7`84ee7bb3     Telegram!Core::Sandbox::removeClients+0x3260
+53 00000060`ca2fa140 00007ff7`860bd32f     Telegram!QtPrivate::QSlotObjectBase::call+0x43 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qobjectdefs_impl.h @ 462] 
+54 00000060`ca2fa190 00007ff7`860b3f1d     Telegram!QMetaCallEvent::placeMetaCall+0x5f [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qobject.cpp @ 547] 
+55 00000060`ca2fa1f0 00007ff7`860e2b98     Telegram!QObject::event+0x24d [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qobject.cpp @ 1479] 
+56 00000060`ca2fa380 00007ff7`8575804e     Telegram!QCoreApplication::event+0x38 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qcoreapplication.cpp @ 2047] 
+57 00000060`ca2fa3b0 00007ff7`85022a41     Telegram!QGuiApplication::event+0x4be [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\gui\kernel\qguiapplication.cpp @ 2130] 
+58 00000060`ca2fa620 00007ff7`7b058a2d     Telegram!QApplication::event+0x621 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\widgets\kernel\qapplication.cpp @ 1767] 
+59 00000060`ca2fa810 00007ff7`8502496a     Telegram!Core::Sandbox::event+0x16d
+5a 00000060`ca2fa8a0 00007ff7`85021e94     Telegram!QApplicationPrivate::notify_helper+0x1ca [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\widgets\kernel\qapplication.cpp @ 3276] 
+5b 00000060`ca2fa910 00007ff7`7b0585cf     Telegram!QApplication::notify+0x3244 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\widgets\kernel\qapplication.cpp @ 3226] 
+5c 00000060`ca2fb7b0 00007ff7`860e2e75     Telegram!Core::Sandbox::notify+0x12f
+5d 00000060`ca2fb840 00007ff7`860e098d     Telegram!QCoreApplication::notifyInternal2+0x175 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qcoreapplication.cpp @ 1114] 
+5e 00000060`ca2fb920 00007ff7`860e54d0     Telegram!QCoreApplication::sendEvent+0x7d [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qcoreapplication.cpp @ 1560] 
+5f 00000060`ca2fb950 00007ff7`864f3180     Telegram!QCoreApplicationPrivate::sendPostedEvents+0x5d0 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qcoreapplication.cpp @ 1914] 
+60 00000060`ca2fbb20 00007ff7`86d36dd4     Telegram!QEventDispatcherWin32::sendPostedEvents+0x90 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qeventdispatcher_win.cpp @ 969] 
+61 00000060`ca2fbb60 00007ff7`864f11bf     Telegram!QWindowsGuiEventDispatcher::sendPostedEvents+0x14 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\gui\platform\windows\qwindowsguieventdispatcher.cpp @ 44] 
+62 00000060`ca2fbb90 00007ff7`86d36d8a     Telegram!QEventDispatcherWin32::processEvents+0xbf [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qeventdispatcher_win.cpp @ 525] 
+63 00000060`ca2fedf0 00007ff7`862422ec     Telegram!QWindowsGuiEventDispatcher::processEvents+0x4a [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\gui\platform\windows\qwindowsguieventdispatcher.cpp @ 36] 
+64 00000060`ca2fee40 00007ff7`862425f6     Telegram!QEventLoop::processEvents+0x7c [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qeventloop.cpp @ 110] 
+65 00000060`ca2fee90 00007ff7`860e0716     Telegram!QEventLoop::exec+0x1f6 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qeventloop.cpp @ 198] 
+66 00000060`ca2fef80 00007ff7`85757198     Telegram!QCoreApplication::exec+0x196 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qcoreapplication.cpp @ 1457] 
+67 00000060`ca2ff060 00007ff7`8501ec3b     Telegram!QGuiApplication::exec+0x18 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\gui\kernel\qguiapplication.cpp @ 2005] 
+68 00000060`ca2ff090 00007ff7`7b057cee     Telegram!QApplication::exec+0xb [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\widgets\kernel\qapplication.cpp @ 2547] 
+69 00000060`ca2ff0c0 00007ff7`7afde813     Telegram!Core::Sandbox::start+0xc3e
+6a 00000060`ca2ff6a0 00007ff7`7afdc69c     Telegram!Core::Launcher::executeApplication+0xb3
+6b 00000060`ca2ff9e0 00007ff7`810da7b2     Telegram!Core::Launcher::exec+0x24c
+6c 00000060`ca2ffcb0 00007ff7`86e32b08     Telegram!main+0x72
+6d 00000060`ca2ffd10 00007ff7`86e329be     Telegram!qtEntryPoint+0x48 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\entrypoint\qtentrypoint_win.cpp @ 45] 
+6e 00000060`ca2ffda0 00007ff7`86bac1c2     Telegram!WinMain+0x1e [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\entrypoint\qtentrypoint_win.cpp @ 64] 
+6f 00000060`ca2ffdd0 00007ff7`86bac112     Telegram!invoke_main+0x32 [D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl @ 107] 
+70 00000060`ca2ffe10 00007ff7`86babfce     Telegram!__scrt_common_main_seh+0x132 [D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl @ 288] 
+71 00000060`ca2ffe80 00007ff7`86bac23e     Telegram!__scrt_common_main+0xe [D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl @ 331] 
+72 00000060`ca2ffeb0 00007ffa`e99acdf7     Telegram!WinMainCRTStartup+0xe [D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_winmain.cpp @ 17] 
+73 00000060`ca2ffee0 00007ffa`eafbee4c     KERNEL32!BaseThreadInitThunk+0x17
+74 00000060`ca2fff10 00000000`00000000     ntdll!RtlUserThreadStart+0x2c
+0:000> .frame 0
+00 00000060`ca2f2d10 00007ff7`7b5f423e     Telegram!Data::MakeUploadBarContent+0x160c6
+0:000> dv
+Unable to enumerate locals, Win32 error 0n87
+Private symbols (symbols.pri) are required for locals.
+Type ".hh dbgerr005" for details.
+0:000> lmvm Telegram
+Browse full module list
+start             end                 module name
+00007ff7`75460000 00007ff7`9410e000   Telegram C (private pdb symbols)  d:\portables\x64-fork\Telegram.pdb
+    Loaded symbol image file: D:\Portables\x64-fork\Telegram.exe
+    Image path: Telegram.exe
+    Image name: Telegram.exe
+    Browse all global symbols  functions  data  Symbol Reload
+    Timestamp:        Sat Oct  3 13:56:44 2026 (6AC0DF6C)
+    CheckSum:         00000000
+    ImageSize:        1ECAE000
+    Mapping Form:     Loaded
+    File version:     1.2.8.0
+    Product version:  1.2.8.0
+    File flags:       1 (Mask 3F) Debug
+    File OS:          40004 NT Win32
+    File type:        0.0 Unknown
+    File date:        00000000.00000000
+    Translations:     0409.04b0
+    Information from resource tables:
+        CompanyName:      64Gram
+        ProductName:      64Gram Desktop
+        ProductVersion:   1.2.8.0
+        FileVersion:      1.2.8.0
+        FileDescription:  64Gram Desktop
+        LegalCopyright:   Copyright (C) 2014-2022
+0:000> kn
+ # Child-SP          RetAddr               Call Site
+00 00000060`ca2f2d10 00007ff7`7b5f423e     Telegram!Data::MakeUploadBarContent+0x160c6
+01 00000060`ca2f3240 00007ff7`7b5efc98     Telegram!`rpl::details::take_helper::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >'::`2'::<lambda_28_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >+0x6be
+02 00000060`ca2f3690 00007ff7`7b614a40     Telegram!rpl::details::mutable_lambda_wrap<`rpl::details::take_helper::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >'::`2'::<lambda_28_> >::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>+0xa8
+03 00000060`ca2f36f0 00007ff7`7b5df527     Telegram!std::invoke<rpl::details::mutable_lambda_wrap<`rpl::single<Data::DownloadProgress const & __ptr64,rpl::no_error>'::`2'::<lambda_1> > & __ptr64,rpl::consumer<Data::DownloadProgress,rpl::no_error,rpl::details::type_erased_handlers<Data::DownloadProgress,rpl::no_error> > const & __ptr64>+0x80
+04 00000060`ca2f3730 00007ff7`7c26a266     Telegram!Data::MakeUploadBarContent+0x20517
+05 00000060`ca2f3770 00007ff7`7c1fbc8e     Telegram!std::_Func_class<rpl::lifetime,rpl::consumer<Ui::DownloadBarContent,rpl::no_error,rpl::details::type_erased_handlers<Ui::DownloadBarContent,rpl::no_error> > const & __ptr64>::operator()+0x66
+06 00000060`ca2f37c0 00007ff7`7c2474ca     Telegram!rpl::details::type_erased_generator<Ui::DownloadBarContent,rpl::no_error>::operator()<rpl::details::type_erased_handlers<Ui::DownloadBarContent,rpl::no_error> >+0x4e
+07 00000060`ca2f3810 00007ff7`7c246a05     Telegram!rpl::details::producer_base<Ui::DownloadBarContent,rpl::no_error,rpl::details::type_erased_generator<Ui::DownloadBarContent,rpl::no_error> >::start_existing<rpl::details::type_erased_handlers<Ui::DownloadBarContent,rpl::no_error> >+0x7a
+08 00000060`ca2f38a0 00007ff7`7c1fd5cc     Telegram!rpl::details::producer_base<int,rpl::no_error,rpl::details::type_erased_generator<int,rpl::no_error> >::start<`rpl::start_to_stream<int,rpl::no_error>'::`3'::<lambda_46_>,`rpl::details::operator|<int,rpl::no_error,rpl::details::type_erased_generator<int,rpl::no_error>,`rpl::start_to_stream<int,rpl::no_error>'::`3'::<lambda_46_>,void>'::`2'::<lambda_1>,`rpl::details::operator|<int,rpl::no_error,rpl::details::type_erased_generator<int,rpl::no_error>,`rpl::start_to_stream<int,rpl::no_error>'::`3'::<lambda_46_>,void>'::`2'::<lambda_2>,void>+0xe55
+09 00000060`ca2f38f0 00007ff7`7c188f23     Telegram!rpl::operator|<Data::Forum * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Data::Forum * __ptr64,rpl::no_error>,rpl::details::filter_helper<rpl::details::unary_operator_mapper<rpl::details::argument_mapper<0> const & __ptr64,std::logical_not<void> > >,rpl::producer<Data::Forum * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Data::Forum * __ptr64,rpl::no_error> > >+0x12c
+0a 00000060`ca2f3940 00007ff7`7c17c8f0     Telegram!Dialogs::Widget::setupDownloadBar+0x143
+0b 00000060`ca2f3a60 00007ff7`810ff38b     Telegram!Dialogs::Widget::Widget+0x4710
+0c 00000060`ca2f6340 00007ff7`8111bab6     Telegram!base::unique_qptr<Dialogs::Widget>::unique_qptr<Dialogs::Widget><MainWidget * __ptr64,gsl::not_null<Window::SessionController * __ptr64> const & __ptr64,enum Dialogs::Widget::Layout>+0x5b
+0d 00000060`ca2f6390 00007ff7`810dab1d     Telegram!base::make_unique_q<Dialogs::Widget,MainWidget * __ptr64,gsl::not_null<Window::SessionController * __ptr64> const & __ptr64,enum Dialogs::Widget::Layout>+0x46
+0e 00000060`ca2f63e0 00007ff7`8114170d     Telegram!MainWidget::MainWidget+0x1cd
+0f 00000060`ca2f7310 00007ff7`8113a7b3     Telegram!object_ptr<MainWidget>::object_ptr<MainWidget><Ui::RpWidget * __ptr64,Window::SessionController * __ptr64>+0x8d
+10 00000060`ca2f7390 00007ff7`80a0fd6c     Telegram!MainWindow::setupMain+0x2b3
+11 00000060`ca2f7550 00007ff7`80a11978     Telegram!Window::Controller::setupMain+0xbc
+12 00000060`ca2f75d0 00007ff7`80a23881     Telegram!Window::Controller::showTermsDelete+0x938
+13 00000060`ca2f7990 00007ff7`80a20a5e     Telegram!std::invoke<```rpl::details::then_helper<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error> >::operator()<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error>,Window::SessionController * __ptr64,rpl::no_error>'::`2'::<lambda_16_>::operator()<rpl::consumer<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Window::SessionController * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,rpl::no_error>+0x81
+14 00000060`ca2f79c0 00007ff7`80a324ac     Telegram!rpl::details::callable_invoke<```rpl::details::then_helper<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error> >::operator()<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error>,Window::SessionController * __ptr64,rpl::no_error>'::`2'::<lambda_16_>::operator()<rpl::consumer<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Window::SessionController * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,rpl::no_error>+0x9e
+15 00000060`ca2f79f0 00007ff7`7b644f9f     Telegram!rpl::details::consumer_handlers<Media::Player::FloatDelegate * __ptr64,rpl::no_error,```rpl::details::then_helper<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error> >::operator()<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error>,Media::Player::FloatDelegate * __ptr64,rpl::no_error>'::`2'::<lambda_17_>::operator()<rpl::consumer<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Media::Player::FloatDelegate * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_1>,```rpl::details::then_helper<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error> >::operator()<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error>,Media::Player::FloatDelegate * __ptr64,rpl::no_error>'::`2'::<lambda_17_>::operator()<rpl::consumer<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Media::Player::FloatDelegate * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,```rpl::details::then_helper<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error> >::operator()<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error>,Media::Player::FloatDelegate * __ptr64,rpl::no_error>'::`2'::<lambda_17_>::operator()<rpl::consumer<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Media::Player::FloatDelegate * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_3> >::put_next+0x15c
+16 00000060`ca2f7a60 00007ff7`7b648ea2     Telegram!rpl::details::consumer_base<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >::handlers_put_next+0x3f
+17 00000060`ca2f7aa0 00007ff7`7b64ac9e     Telegram!rpl::details::consumer_base<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >::put_next+0x32
+18 00000060`ca2f7ae0 00007ff7`7ec6af38     Telegram!rpl::details::consumer_base<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >::put_next_forward+0x1e
+19 00000060`ca2f7b10 00007ff7`7ec781fe     Telegram!``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_1>::operator()<Main::Session * __ptr64>+0x28
+1a 00000060`ca2f7b50 00007ff7`7ec73d4e     Telegram!std::invoke<``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_1>,Main::Session * __ptr64>+0x1e
+1b 00000060`ca2f7b80 00007ff7`7ec9074c     Telegram!rpl::details::callable_invoke<``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_1>,Main::Session * __ptr64>+0x1e
+1c 00000060`ca2f7bb0 00007ff7`7b644f9f     Telegram!rpl::details::consumer_handlers<Main::Session * __ptr64,rpl::no_error,``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_1>,``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_2>,``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_3> >::put_next+0x5c
+1d 00000060`ca2f7c10 00007ff7`7b648ea2     Telegram!rpl::details::consumer_base<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >::handlers_put_next+0x3f
+1e 00000060`ca2f7c50 00007ff7`7ec6ba8e     Telegram!rpl::details::consumer_base<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >::put_next+0x32
+1f 00000060`ca2f7c90 00007ff7`7ec6a86a     Telegram!`rpl::single<Main::Session * __ptr64 const & __ptr64,rpl::no_error>'::`2'::<lambda_1>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >+0x2e
+20 00000060`ca2f7cd0 00007ff7`7ec77e20     Telegram!rpl::details::mutable_lambda_wrap<`rpl::single<Main::Session * __ptr64 const & __ptr64,rpl::no_error>'::`2'::<lambda_1> >::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>+0x3a
+21 00000060`ca2f7d10 00007ff7`7ec8a3b7     Telegram!std::invoke<rpl::details::mutable_lambda_wrap<`rpl::single<Main::Session * __ptr64 const & __ptr64,rpl::no_error>'::`2'::<lambda_1> > & __ptr64,rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>+0x30
+22 00000060`ca2f7d50 00007ff7`7991f3f6     Telegram!std::_Func_impl_no_alloc<rpl::details::mutable_lambda_wrap<`rpl::single<Main::Session * __ptr64 const & __ptr64,rpl::no_error>'::`2'::<lambda_1> >,rpl::lifetime,rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>::_Do_call+0x37
+23 00000060`ca2f7d90 00007ff7`7990921e     Telegram!std::_Func_class<rpl::lifetime,rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>::operator()+0x66
+24 00000060`ca2f7de0 00007ff7`79917a3a     Telegram!rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>::operator()<rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >+0x4e
+25 00000060`ca2f7e30 00007ff7`7ec7b2cc     Telegram!rpl::details::producer_base<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::start_existing<rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >+0x7a
+26 00000060`ca2f7ec0 00007ff7`7ec6b9a9     Telegram!rpl::details::producer_base<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::start<``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_1>,``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_2>,``rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>,void>+0xbc
+27 00000060`ca2f7f60 00007ff7`7ec6a81a     Telegram!`rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >+0x139
+28 00000060`ca2f8080 00007ff7`7ec77bf0     Telegram!rpl::details::mutable_lambda_wrap<`rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_> >::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>+0x3a
+29 00000060`ca2f80c0 00007ff7`7ec8a227     Telegram!std::invoke<rpl::details::mutable_lambda_wrap<`rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_> > & __ptr64,rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>+0x30
+2a 00000060`ca2f8100 00007ff7`7991f3f6     Telegram!std::_Func_impl_no_alloc<rpl::details::mutable_lambda_wrap<`rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_14_> >,rpl::lifetime,rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>::_Do_call+0x37
+2b 00000060`ca2f8140 00007ff7`7990921e     Telegram!std::_Func_class<rpl::lifetime,rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > const & __ptr64>::operator()+0x66
+2c 00000060`ca2f8190 00007ff7`79917a3a     Telegram!rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>::operator()<rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >+0x4e
+2d 00000060`ca2f81e0 00007ff7`80a263c5     Telegram!rpl::details::producer_base<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::start_existing<rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> >+0x7a
+2e 00000060`ca2f8270 00007ff7`80a1bf5c     Telegram!rpl::details::producer_base<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error> >::start<```rpl::details::then_helper<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error> >::operator()<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error>,Window::SessionController * __ptr64,rpl::no_error>'::`2'::<lambda_16_>::operator()<rpl::consumer<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Window::SessionController * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_1>,```rpl::details::then_helper<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error> >::operator()<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error>,Window::SessionController * __ptr64,rpl::no_error>'::`2'::<lambda_16_>::operator()<rpl::consumer<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Window::SessionController * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,```rpl::details::then_helper<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error> >::operator()<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Window::SessionController * __ptr64,rpl::no_error>,Window::SessionController * __ptr64,rpl::no_error>'::`2'::<lambda_16_>::operator()<rpl::consumer<Window::SessionController * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Window::SessionController * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_3>,void>+0x375
+2f 00000060`ca2f82c0 00007ff7`80a101cb     Telegram!rpl::operator|<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error>,rpl::details::then_helper<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error> >,rpl::producer<Media::Player::FloatDelegate * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Media::Player::FloatDelegate * __ptr64,rpl::no_error> > >+0xdc
+30 00000060`ca2f8310 00007ff7`80a0e010     Telegram!Window::Controller::showAccount+0x3eb
+31 00000060`ca2f8550 00007ff7`7adeda4b     Telegram!Window::Controller::showAccount+0x50
+32 00000060`ca2f85a0 00007ff7`7adef58c     Telegram!Core::Application::showAccount+0xdb
+33 00000060`ca2f8650 00007ff7`7ae39ae5     Telegram!Core::QuitAttempt+0xc7c
+34 00000060`ca2f86a0 00007ff7`7ae2f94e     Telegram!std::invoke<```rpl::details::then_helper<enum Qt::ApplicationState,rpl::no_error,rpl::details::type_erased_generator<enum Qt::ApplicationState,rpl::no_error> >::operator()<enum Qt::ApplicationState,rpl::no_error,rpl::details::type_erased_generator<enum Qt::ApplicationState,rpl::no_error>,enum Qt::ApplicationState,rpl::no_error>'::`2'::<lambda_33_>::operator()<rpl::consumer<enum Qt::ApplicationState,rpl::no_error,rpl::details::type_erased_handlers<enum Qt::ApplicationState,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,rpl::no_error>+0x1c5
+35 00000060`ca2f86e0 00007ff7`7ae6fd73     Telegram!rpl::details::callable_invoke<```rpl::details::then_helper<enum Qt::ApplicationState,rpl::no_error,rpl::details::type_erased_generator<enum Qt::ApplicationState,rpl::no_error> >::operator()<enum Qt::ApplicationState,rpl::no_error,rpl::details::type_erased_generator<enum Qt::ApplicationState,rpl::no_error>,enum Qt::ApplicationState,rpl::no_error>'::`2'::<lambda_33_>::operator()<rpl::consumer<enum Qt::ApplicationState,rpl::no_error,rpl::details::type_erased_handlers<enum Qt::ApplicationState,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,rpl::no_error>+0x21e
+36 00000060`ca2f8710 00007ff7`7ae6b4af     Telegram!rpl::details::consumer_handlers<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,```rpl::details::flatten_latest_helper::operator()<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_generator<gsl::not_null<Main::Account * __ptr64>,rpl::no_error>,rpl::details::type_erased_generator<rpl::producer<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_generator<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> >,rpl::no_error> >'::`2'::<lambda_30_>::operator()<rpl::consumer<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_handlers<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> > >'::`2'::<lambda_1>::operator()'::`2'::<lambda_1>,```rpl::details::flatten_latest_helper::operator()<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_generator<gsl::not_null<Main::Account * __ptr64>,rpl::no_error>,rpl::details::type_erased_generator<rpl::producer<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_generator<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> >,rpl::no_error> >'::`2'::<lambda_30_>::operator()<rpl::consumer<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_handlers<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> > >'::`2'::<lambda_1>::operator()'::`2'::<lambda_2>,```rpl::details::flatten_latest_helper::operator()<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_generator<gsl::not_null<Main::Account * __ptr64>,rpl::no_error>,rpl::details::type_erased_generator<rpl::producer<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_generator<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> >,rpl::no_error> >'::`2'::<lambda_30_>::operator()<rpl::consumer<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_handlers<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> > >'::`2'::<lambda_1>::opera+0xe3
+37 00000060`ca2f8760 00007ff7`7ae6f3a2     Telegram!rpl::details::consumer_base<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_handlers<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> >::handlers_put_next+0x3f
+38 00000060`ca2f87a0 00007ff7`7ae7168e     Telegram!rpl::details::consumer_base<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_handlers<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> >::put_next+0x32
+39 00000060`ca2f87e0 00007ff7`7ecc3771     Telegram!rpl::details::consumer_base<gsl::not_null<Main::Account * __ptr64>,rpl::no_error,rpl::details::type_erased_handlers<gsl::not_null<Main::Account * __ptr64>,rpl::no_error> >::put_next_forward+0x1e
+3a 00000060`ca2f8810 00007ff7`7ecd772e     Telegram!rpl::details::then_helper<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Account * __ptr64,rpl::no_error> >::operator()<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Account * __ptr64,rpl::no_error>,Main::Account * __ptr64,rpl::no_error>+0x281
+3b 00000060`ca2f8850 00007ff7`7ecd1e3e     Telegram!std::invoke<```rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_22_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,rpl::no_error>+0x10e
+3c 00000060`ca2f8880 00007ff7`7ecd2aee     Telegram!rpl::details::callable_invoke<```rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_22_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,rpl::no_error>+0x12e
+3d 00000060`ca2f88b0 00007ff7`7ecf21dc     Telegram!rpl::details::const_ref_call_invoke<```rpl::details::then_helper<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error>,Main::Session * __ptr64,rpl::no_error>'::`2'::<lambda_22_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,rpl::no_error>+0x10e
+3e 00000060`ca2f88e0 00007ff7`7b10cc10     Telegram!rpl::details::consumer_handlers<Main::Account * __ptr64,rpl::no_error,```rpl::details::then_helper<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Account * __ptr64,rpl::no_error> >::operator()<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Account * __ptr64,rpl::no_error>,Main::Account * __ptr64,rpl::no_error>'::`2'::<lambda_20_>::operator()<rpl::consumer<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_1>,```rpl::details::then_helper<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Account * __ptr64,rpl::no_error> >::operator()<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Account * __ptr64,rpl::no_error>,Main::Account * __ptr64,rpl::no_error>'::`2'::<lambda_20_>::operator()<rpl::consumer<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_2>,```rpl::details::then_helper<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Account * __ptr64,rpl::no_error> >::operator()<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Account * __ptr64,rpl::no_error>,Main::Account * __ptr64,rpl::no_error>'::`2'::<lambda_20_>::operator()<rpl::consumer<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> > >'::`2'::<lambda_3>::operator()'::`2'::<lambda_3> >::put_next_copy+0xec
+3f 00000060`ca2f8940 00007ff7`7b10d352     Telegram!rpl::details::consumer_base<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> >::handlers_put_next_copy+0x40
+40 00000060`ca2f8980 00007ff7`7ecca291     Telegram!rpl::details::consumer_base<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> >::put_next_copy+0x32
+41 00000060`ca2f89c0 00007ff7`7ecd3d76     Telegram!`rpl::event_stream<Main::Account * __ptr64,rpl::no_error>::fire_forward<Main::Account * __ptr64 const & __ptr64>'::`2'::<lambda_1>::operator()<rpl::consumer<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> > >+0x21
+42 00000060`ca2f8a00 00007ff7`7ecdc41c     Telegram!std::find_if<base::index_based_iterator<std::vector<rpl::consumer<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> >,std::allocator<rpl::consumer<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> > > > >,`rpl::event_stream<Main::Account * __ptr64,rpl::no_error>::fire_forward<Main::Account * __ptr64 const & __ptr64>'::`2'::<lambda_1> >+0xc6
+43 00000060`ca2f8aa0 00007ff7`7ecd40cd     Telegram!std::remove_if<base::index_based_iterator<std::vector<rpl::consumer<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> >,std::allocator<rpl::consumer<Main::Account * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Account * __ptr64,rpl::no_error> > > > >,`rpl::event_stream<Main::Account * __ptr64,rpl::no_error>::fire_forward<Main::Account * __ptr64 const & __ptr64>'::`2'::<lambda_1> >+0x14c
+44 00000060`ca2f8be0 00007ff7`7ecef5ce     Telegram!rpl::event_stream<Main::Account * __ptr64,rpl::no_error>::fire_forward<Main::Account * __ptr64 const & __ptr64>+0x1bd
+45 00000060`ca2f8ef0 00007ff7`7ecd0a31     Telegram!rpl::event_stream<Main::Account * __ptr64,rpl::no_error>::fire_copy+0x1e
+46 00000060`ca2f8f20 00007ff7`7ecc123f     Telegram!rpl::variable<Main::Account * __ptr64,rpl::no_error>::assign<Main::Account * __ptr64>+0x51
+47 00000060`ca2f8f60 00007ff7`7ecb2dc7     Telegram!rpl::variable<Main::Account * __ptr64,rpl::no_error>::operator=<Main::Account * __ptr64,void>+0x2f
+48 00000060`ca2f8f90 00007ff7`7ecb383a     Telegram!Main::Domain::activate+0x327
+49 00000060`ca2f9190 00007ff7`7ecb18c8     Telegram!Main::Domain::activateAfterStarting+0x16a
+4a 00000060`ca2f9210 00007ff7`7adec9fa     Telegram!Main::Domain::start+0x98
+4b 00000060`ca2f9280 00007ff7`7ade36d5     Telegram!Core::Application::startDomain+0x5a
+4c 00000060`ca2f9330 00007ff7`7b05da30     Telegram!Core::Application::run+0xe15
+4d 00000060`ca2f9e20 00007ff7`7b0610f7     Telegram!Core::Sandbox::removeClients+0xae0
+4e 00000060`ca2fa020 00007ff7`7b063909     Telegram!Core::Sandbox::removeClients+0x41a7
+4f 00000060`ca2fa050 00007ff7`7b060a4b     Telegram!std::begin<QArrayDataPointer<std::pair<QLocalSocket * __ptr64,QByteArray> > >+0x2d9
+50 00000060`ca2fa080 00007ff7`7b063673     Telegram!Core::Sandbox::removeClients+0x3afb
+51 00000060`ca2fa0c0 00007ff7`7b0601b0     Telegram!std::begin<QArrayDataPointer<std::pair<QLocalSocket * __ptr64,QByteArray> > >+0x43
+52 00000060`ca2fa0f0 00007ff7`84ee7bb3     Telegram!Core::Sandbox::removeClients+0x3260
+53 00000060`ca2fa140 00007ff7`860bd32f     Telegram!QtPrivate::QSlotObjectBase::call+0x43 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qobjectdefs_impl.h @ 462] 
+54 00000060`ca2fa190 00007ff7`860b3f1d     Telegram!QMetaCallEvent::placeMetaCall+0x5f [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qobject.cpp @ 547] 
+55 00000060`ca2fa1f0 00007ff7`860e2b98     Telegram!QObject::event+0x24d [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qobject.cpp @ 1479] 
+56 00000060`ca2fa380 00007ff7`8575804e     Telegram!QCoreApplication::event+0x38 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qcoreapplication.cpp @ 2047] 
+57 00000060`ca2fa3b0 00007ff7`85022a41     Telegram!QGuiApplication::event+0x4be [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\gui\kernel\qguiapplication.cpp @ 2130] 
+58 00000060`ca2fa620 00007ff7`7b058a2d     Telegram!QApplication::event+0x621 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\widgets\kernel\qapplication.cpp @ 1767] 
+59 00000060`ca2fa810 00007ff7`8502496a     Telegram!Core::Sandbox::event+0x16d
+5a 00000060`ca2fa8a0 00007ff7`85021e94     Telegram!QApplicationPrivate::notify_helper+0x1ca [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\widgets\kernel\qapplication.cpp @ 3276] 
+5b 00000060`ca2fa910 00007ff7`7b0585cf     Telegram!QApplication::notify+0x3244 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\widgets\kernel\qapplication.cpp @ 3226] 
+5c 00000060`ca2fb7b0 00007ff7`860e2e75     Telegram!Core::Sandbox::notify+0x12f
+5d 00000060`ca2fb840 00007ff7`860e098d     Telegram!QCoreApplication::notifyInternal2+0x175 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qcoreapplication.cpp @ 1114] 
+5e 00000060`ca2fb920 00007ff7`860e54d0     Telegram!QCoreApplication::sendEvent+0x7d [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qcoreapplication.cpp @ 1560] 
+5f 00000060`ca2fb950 00007ff7`864f3180     Telegram!QCoreApplicationPrivate::sendPostedEvents+0x5d0 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qcoreapplication.cpp @ 1914] 
+60 00000060`ca2fbb20 00007ff7`86d36dd4     Telegram!QEventDispatcherWin32::sendPostedEvents+0x90 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qeventdispatcher_win.cpp @ 969] 
+61 00000060`ca2fbb60 00007ff7`864f11bf     Telegram!QWindowsGuiEventDispatcher::sendPostedEvents+0x14 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\gui\platform\windows\qwindowsguieventdispatcher.cpp @ 44] 
+62 00000060`ca2fbb90 00007ff7`86d36d8a     Telegram!QEventDispatcherWin32::processEvents+0xbf [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qeventdispatcher_win.cpp @ 525] 
+63 00000060`ca2fedf0 00007ff7`862422ec     Telegram!QWindowsGuiEventDispatcher::processEvents+0x4a [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\gui\platform\windows\qwindowsguieventdispatcher.cpp @ 36] 
+64 00000060`ca2fee40 00007ff7`862425f6     Telegram!QEventLoop::processEvents+0x7c [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qeventloop.cpp @ 110] 
+65 00000060`ca2fee90 00007ff7`860e0716     Telegram!QEventLoop::exec+0x1f6 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qeventloop.cpp @ 198] 
+66 00000060`ca2fef80 00007ff7`85757198     Telegram!QCoreApplication::exec+0x196 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\corelib\kernel\qcoreapplication.cpp @ 1457] 
+67 00000060`ca2ff060 00007ff7`8501ec3b     Telegram!QGuiApplication::exec+0x18 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\gui\kernel\qguiapplication.cpp @ 2005] 
+68 00000060`ca2ff090 00007ff7`7b057cee     Telegram!QApplication::exec+0xb [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\widgets\kernel\qapplication.cpp @ 2547] 
+69 00000060`ca2ff0c0 00007ff7`7afde813     Telegram!Core::Sandbox::start+0xc3e
+6a 00000060`ca2ff6a0 00007ff7`7afdc69c     Telegram!Core::Launcher::executeApplication+0xb3
+6b 00000060`ca2ff9e0 00007ff7`810da7b2     Telegram!Core::Launcher::exec+0x24c
+6c 00000060`ca2ffcb0 00007ff7`86e32b08     Telegram!main+0x72
+6d 00000060`ca2ffd10 00007ff7`86e329be     Telegram!qtEntryPoint+0x48 [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\entrypoint\qtentrypoint_win.cpp @ 45] 
+6e 00000060`ca2ffda0 00007ff7`86bac1c2     Telegram!WinMain+0x1e [D:\TBuild\Libraries\win64\qt_6.11.1\qtbase\src\entrypoint\qtentrypoint_win.cpp @ 64] 
+6f 00000060`ca2ffdd0 00007ff7`86bac112     Telegram!invoke_main+0x32 [D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl @ 107] 
+70 00000060`ca2ffe10 00007ff7`86babfce     Telegram!__scrt_common_main_seh+0x132 [D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl @ 288] 
+71 00000060`ca2ffe80 00007ff7`86bac23e     Telegram!__scrt_common_main+0xe [D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_common.inl @ 331] 
+72 00000060`ca2ffeb0 00007ffa`e99acdf7     Telegram!WinMainCRTStartup+0xe [D:\a\_work\1\s\src\vctools\crt\vcstartup\src\startup\exe_winmain.cpp @ 17] 
+73 00000060`ca2ffee0 00007ffa`eafbee4c     KERNEL32!BaseThreadInitThunk+0x17
+74 00000060`ca2fff10 00000000`00000000     ntdll!RtlUserThreadStart+0x2c
+0:000> .frame 1
+01 00000060`ca2f3240 00007ff7`7b5efc98     Telegram!`rpl::details::take_helper::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >'::`2'::<lambda_28_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >+0x6be
+0:000> dv
+Unable to enumerate locals, Win32 error 0n87
+Private symbols (symbols.pri) are required for locals.
+Type ".hh dbgerr005" for details.
+0:000> ln @rip
+Browse module
+Set bu breakpoint
+
+(00007ff7`7b5bf010)   Telegram!Data::MakeUploadBarContent+0x160c6   |  (00007ff7`7b5e2c80)   Telegram!<move><rpl::details::binary_operator_mapper<rpl::details::argument_mapper<0> const & __ptr64,gsl::not_null<Main::Session * __ptr64> & __ptr64,std::not_equal_to<void> > & __ptr64>
+0:000> u @rip L10
+Telegram!Data::MakeUploadBarContent+0x160c6:
+00007ff7`7b5d50d6 488b4008        mov     rax,qword ptr [rax+8]
+00007ff7`7b5d50da 4889842458030000 mov     qword ptr [rsp+358h],rax
+00007ff7`7b5d50e2 488b842428010000 mov     rax,qword ptr [rsp+128h]
+00007ff7`7b5d50ea 488bc8          mov     rcx,rax
+00007ff7`7b5d50ed e82eca0bfb      call    Telegram!gsl::not_null<HistoryItem * __ptr64>::operator HistoryItem * __ptr64 (00007ff7`76691b20)
+00007ff7`7b5d50f2 4885c0          test    rax,rax
+00007ff7`7b5d50f5 740a            je      Telegram!Data::MakeUploadBarContent+0x160f1 (00007ff7`7b5d5101)
+00007ff7`7b5d50f7 c68424b004000001 mov     byte ptr [rsp+4B0h],1
+00007ff7`7b5d50ff eb08            jmp     Telegram!Data::MakeUploadBarContent+0x160f9 (00007ff7`7b5d5109)
+00007ff7`7b5d5101 c68424b004000000 mov     byte ptr [rsp+4B0h],0
+00007ff7`7b5d5109 0fb68424b0040000 movzx   eax,byte ptr [rsp+4B0h]
+00007ff7`7b5d5111 85c0            test    eax,eax
+00007ff7`7b5d5113 7426            je      Telegram!Data::MakeUploadBarContent+0x1612b (00007ff7`7b5d513b)
+00007ff7`7b5d5115 488b8c2458030000 mov     rcx,qword ptr [rsp+358h]
+00007ff7`7b5d511d e8eedcf7ff      call    Telegram!DocumentData::hasThumbnail (00007ff7`7b552e10)
+00007ff7`7b5d5122 0fb6c0          movzx   eax,al
+0:000> u @rip-20 L15
+Telegram!Data::MakeUploadBarContent+0x160a6:
+00007ff7`7b5d50b6 842448          test    byte ptr [rax+rcx*2],ah
+00007ff7`7b5d50b9 0300            add     eax,dword ptr [rax]
+00007ff7`7b5d50bb 00898424ec00    add     byte ptr [rcx+0EC2484h],cl
+00007ff7`7b5d50c1 0000            add     byte ptr [rax],al
+00007ff7`7b5d50c3 837c247c01      cmp     dword ptr [rsp+7Ch],1
+00007ff7`7b5d50c8 0f854f030000    jne     Telegram!Data::MakeUploadBarContent+0x1640d (00007ff7`7b5d541d)
+00007ff7`7b5d50ce 488b842428010000 mov     rax,qword ptr [rsp+128h]
+00007ff7`7b5d50d6 488b4008        mov     rax,qword ptr [rax+8]
+00007ff7`7b5d50da 4889842458030000 mov     qword ptr [rsp+358h],rax
+00007ff7`7b5d50e2 488b842428010000 mov     rax,qword ptr [rsp+128h]
+00007ff7`7b5d50ea 488bc8          mov     rcx,rax
+00007ff7`7b5d50ed e82eca0bfb      call    Telegram!gsl::not_null<HistoryItem * __ptr64>::operator HistoryItem * __ptr64 (00007ff7`76691b20)
+00007ff7`7b5d50f2 4885c0          test    rax,rax
+00007ff7`7b5d50f5 740a            je      Telegram!Data::MakeUploadBarContent+0x160f1 (00007ff7`7b5d5101)
+00007ff7`7b5d50f7 c68424b004000001 mov     byte ptr [rsp+4B0h],1
+00007ff7`7b5d50ff eb08            jmp     Telegram!Data::MakeUploadBarContent+0x160f9 (00007ff7`7b5d5109)
+00007ff7`7b5d5101 c68424b004000000 mov     byte ptr [rsp+4B0h],0
+00007ff7`7b5d5109 0fb68424b0040000 movzx   eax,byte ptr [rsp+4B0h]
+00007ff7`7b5d5111 85c0            test    eax,eax
+00007ff7`7b5d5113 7426            je      Telegram!Data::MakeUploadBarContent+0x1612b (00007ff7`7b5d513b)
+00007ff7`7b5d5115 488b8c2458030000 mov     rcx,qword ptr [rsp+358h]
+0:000> u 00007ff7`7b5f423e-20 L15
+Telegram!`rpl::details::take_helper::operator()<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_generator<Main::Session * __ptr64,rpl::no_error> >'::`2'::<lambda_28_>::operator()<rpl::consumer<Main::Session * __ptr64,rpl::no_error,rpl::details::type_erased_handlers<Main::Session * __ptr64,rpl::no_error> > >+0x69e:
+00007ff7`7b5f421e fe              ???
+00007ff7`7b5f421f 2800            sub     byte ptr [rax],al
+00007ff7`7b5f4221 0090488d8c24    add     byte ptr [rax+248C8D48h],dl
+00007ff7`7b5f4227 800200          add     byte ptr [rdx],0
+00007ff7`7b5f422a 00e8            add     al,ch
+00007ff7`7b5f422c 80fdc2          cmp     ch,0C2h
+00007ff7`7b5f422f fa              cli
+00007ff7`7b5f4230 90              nop
+00007ff7`7b5f4231 488d8c2438010000 lea     rcx,[rsp+138h]
+00007ff7`7b5f4239 e84208feff      call    Telegram!Data::MakeUploadBarContent+0x15a70 (00007ff7`7b5d4a80)
+00007ff7`7b5f423e 90              nop
+00007ff7`7b5f423f 488d8c2438010000 lea     rcx,[rsp+138h]
+00007ff7`7b5f4247 e82413feff      call    Telegram!Data::MakeUploadBarContent+0x16560 (00007ff7`7b5d5570)
+00007ff7`7b5f424c 90              nop
+00007ff7`7b5f424d 488b8c2460040000 mov     rcx,qword ptr [rsp+460h]
+00007ff7`7b5f4255 e8762b0300      call    Telegram!rpl::consumer<Ui::DownloadBarContent,rpl::no_error,rpl::details::type_erased_handlers<Ui::DownloadBarContent,rpl::no_error> >::~consumer<Ui::DownloadBarContent,rpl::no_error,rpl::details::type_erased_handlers<Ui::DownloadBarContent,rpl::no_error> > (00007ff7`7b626dd0)
+00007ff7`7b5f425a 488b842458040000 mov     rax,qword ptr [rsp+458h]
+00007ff7`7b5f4262 488bf8          mov     rdi,rax
+00007ff7`7b5f4265 488bcc          mov     rcx,rsp
+00007ff7`7b5f4268 488d1501ca8a0d  lea     rdx,[Telegram!`string'+0x8ff8 (00007ff7`88ea0c70)]
+00007ff7`7b5f426f e80c645b0b      call    Telegram!_RTC_CheckStackVars (00007ff7`86baa680)
+0:000> r
+rax=0000000000000000 rbx=0000000000000000 rcx=0000000000000000
+rdx=00007ff791887700 rsi=00000060ca2f53f8 rdi=00000060ca2f2e28
+rip=00007ff77b5d50d6 rsp=00000060ca2f2d10 rbp=0000000000000000
+ r8=00007ff791887704  r9=0000000000000040 r10=0000020e86910000
+r11=00007ff786e33b7d r12=0000000000000000 r13=0000000000000000
+r14=0000000000000000 r15=0000000000000000
+iopl=0         nv up ei pl zr na pe nc
+cs=0033  ss=002b  ds=002b  es=002b  fs=0053  gs=002b             efl=00010246
+Telegram!Data::MakeUploadBarContent+0x160c6:
+00007ff7`7b5d50d6 488b4008        mov     rax,qword ptr [rax+8] ds:00000000`00000008=????????????????
+0:000> dps @rsp L30
+00000060`ca2f2d10  00000060`ca2f3058
+00000060`ca2f2d18  0000020e`c44f2b30
+00000060`ca2f2d20  0000020e`869e0000
+00000060`ca2f2d28  00000000`00000000
+00000060`ca2f2d30  cccccccc`cccccccc
+00000060`ca2f2d38  cccccccc`cccccccc
+00000060`ca2f2d40  00000000`00000000
+00000060`ca2f2d48  00000000`00000000
+00000060`ca2f2d50  00000000`00000000
+00000060`ca2f2d58  00000000`00000000
+00000060`ca2f2d60  00000000`00000000
+00000060`ca2f2d68  00000000`00000000
+00000060`ca2f2d70  00007ff7`880e3d20 Telegram!QImage::`vftable'
+00000060`ca2f2d78  00000000`00000000
+00000060`ca2f2d80  00000000`00000000
+00000060`ca2f2d88  00000001`00000000
+00000060`ca2f2d90  00000000`00000000
+00000060`ca2f2d98  00000000`00000000
+00000060`ca2f2da0  00000000`00000000
+00000060`ca2f2da8  00000000`00000000
+00000060`ca2f2db0  00000000`00000000
+00000060`ca2f2db8  00000000`00000000
+00000060`ca2f2dc0  00000000`00000000
+00000060`ca2f2dc8  00000000`00000000
+00000060`ca2f2dd0  00000000`00000000
+00000060`ca2f2dd8  00000000`00000000
+00000060`ca2f2de0  00000000`00000000
+00000060`ca2f2de8  00000000`00000000
+00000060`ca2f2df0  00000000`00000000
+00000060`ca2f2df8  00000000`00000000
+00000060`ca2f2e00  00000000`00000000
+00000060`ca2f2e08  00000000`00000000
+00000060`ca2f2e10  00000000`00000000
+00000060`ca2f2e18  00000000`00000000
+00000060`ca2f2e20  00000000`00000000
+00000060`ca2f2e28  cccccccc`cccccccc
+00000060`ca2f2e30  cccccccc`cccccccc
+00000060`ca2f2e38  00000000`00000000
+00000060`ca2f2e40  00000060`ca2f2e58
+00000060`ca2f2e48  cccccccc`cccccccc
+00000060`ca2f2e50  cccccccc`cccccccc
+00000060`ca2f2e58  0000020e`c4529df0
+00000060`ca2f2e60  0000020e`c4529de0
+00000060`ca2f2e68  cccccccc`cccccccc
+00000060`ca2f2e70  cccccccc`cccccccc
+00000060`ca2f2e78  cccccccc`cccccccc
+00000060`ca2f2e80  cccccccc`cccccccc
+00000060`ca2f2e88  0000020e`c4529df0
+0:000> dps @rsp L30
+00000060`ca2f2d10  00000060`ca2f3058
+00000060`ca2f2d18  0000020e`c44f2b30
+00000060`ca2f2d20  0000020e`869e0000
+00000060`ca2f2d28  00000000`00000000
+00000060`ca2f2d30  cccccccc`cccccccc
+00000060`ca2f2d38  cccccccc`cccccccc
+00000060`ca2f2d40  00000000`00000000
+00000060`ca2f2d48  00000000`00000000
+00000060`ca2f2d50  00000000`00000000
+00000060`ca2f2d58  00000000`00000000
+00000060`ca2f2d60  00000000`00000000
+00000060`ca2f2d68  00000000`00000000
+00000060`ca2f2d70  00007ff7`880e3d20 Telegram!QImage::`vftable'
+00000060`ca2f2d78  00000000`00000000
+00000060`ca2f2d80  00000000`00000000
+00000060`ca2f2d88  00000001`00000000
+00000060`ca2f2d90  00000000`00000000
+00000060`ca2f2d98  00000000`00000000
+00000060`ca2f2da0  00000000`00000000
+00000060`ca2f2da8  00000000`00000000
+00000060`ca2f2db0  00000000`00000000
+00000060`ca2f2db8  00000000`00000000
+00000060`ca2f2dc0  00000000`00000000
+00000060`ca2f2dc8  00000000`00000000
+00000060`ca2f2dd0  00000000`00000000
+00000060`ca2f2dd8  00000000`00000000
+00000060`ca2f2de0  00000000`00000000
+00000060`ca2f2de8  00000000`00000000
+00000060`ca2f2df0  00000000`00000000
+00000060`ca2f2df8  00000000`00000000
+00000060`ca2f2e00  00000000`00000000
+00000060`ca2f2e08  00000000`00000000
+00000060`ca2f2e10  00000000`00000000
+00000060`ca2f2e18  00000000`00000000
+00000060`ca2f2e20  00000000`00000000
+00000060`ca2f2e28  cccccccc`cccccccc
+00000060`ca2f2e30  cccccccc`cccccccc
+00000060`ca2f2e38  00000000`00000000
+00000060`ca2f2e40  00000060`ca2f2e58
+00000060`ca2f2e48  cccccccc`cccccccc
+00000060`ca2f2e50  cccccccc`cccccccc
+00000060`ca2f2e58  0000020e`c4529df0
+00000060`ca2f2e60  0000020e`c4529de0
+00000060`ca2f2e68  cccccccc`cccccccc
+00000060`ca2f2e70  cccccccc`cccccccc
+00000060`ca2f2e78  cccccccc`cccccccc
+00000060`ca2f2e80  cccccccc`cccccccc
+00000060`ca2f2e88  0000020e`c4529df0
+0:000> u @rip-30 L20
+Telegram!Data::MakeUploadBarContent+0x16096:
+00007ff7`7b5d50a6 1c8b            sbb     al,8Bh
+00007ff7`7b5d50a8 84244c          test    byte ptr [rsp+rcx*2],ah
+00007ff7`7b5d50ab 0300            add     eax,dword ptr [rax]
+00007ff7`7b5d50ad 00898424e800    add     byte ptr [rcx+0E82484h],cl
+00007ff7`7b5d50b3 0000            add     byte ptr [rax],al
+00007ff7`7b5d50b5 8b842448030000  mov     eax,dword ptr [rsp+348h]
+00007ff7`7b5d50bc 898424ec000000  mov     dword ptr [rsp+0ECh],eax
+00007ff7`7b5d50c3 837c247c01      cmp     dword ptr [rsp+7Ch],1
+00007ff7`7b5d50c8 0f854f030000    jne     Telegram!Data::MakeUploadBarContent+0x1640d (00007ff7`7b5d541d)
+00007ff7`7b5d50ce 488b842428010000 mov     rax,qword ptr [rsp+128h]
+00007ff7`7b5d50d6 488b4008        mov     rax,qword ptr [rax+8]
+00007ff7`7b5d50da 4889842458030000 mov     qword ptr [rsp+358h],rax
+00007ff7`7b5d50e2 488b842428010000 mov     rax,qword ptr [rsp+128h]
+00007ff7`7b5d50ea 488bc8          mov     rcx,rax
+00007ff7`7b5d50ed e82eca0bfb      call    Telegram!gsl::not_null<HistoryItem * __ptr64>::operator HistoryItem * __ptr64 (00007ff7`76691b20)
+00007ff7`7b5d50f2 4885c0          test    rax,rax
+00007ff7`7b5d50f5 740a            je      Telegram!Data::MakeUploadBarContent+0x160f1 (00007ff7`7b5d5101)
+00007ff7`7b5d50f7 c68424b004000001 mov     byte ptr [rsp+4B0h],1
+00007ff7`7b5d50ff eb08            jmp     Telegram!Data::MakeUploadBarContent+0x160f9 (00007ff7`7b5d5109)
+00007ff7`7b5d5101 c68424b004000000 mov     byte ptr [rsp+4B0h],0
+00007ff7`7b5d5109 0fb68424b0040000 movzx   eax,byte ptr [rsp+4B0h]
+00007ff7`7b5d5111 85c0            test    eax,eax
+00007ff7`7b5d5113 7426            je      Telegram!Data::MakeUploadBarContent+0x1612b (00007ff7`7b5d513b)
+00007ff7`7b5d5115 488b8c2458030000 mov     rcx,qword ptr [rsp+358h]
+00007ff7`7b5d511d e8eedcf7ff      call    Telegram!DocumentData::hasThumbnail (00007ff7`7b552e10)
+00007ff7`7b5d5122 0fb6c0          movzx   eax,al
+00007ff7`7b5d5125 85c0            test    eax,eax
+00007ff7`7b5d5127 7412            je      Telegram!Data::MakeUploadBarContent+0x1612b (00007ff7`7b5d513b)
+00007ff7`7b5d5129 488b842458030000 mov     rax,qword ptr [rsp+358h]
+00007ff7`7b5d5131 48898424b8040000 mov     qword ptr [rsp+4B8h],rax
+00007ff7`7b5d5139 eb0c            jmp     Telegram!Data::MakeUploadBarContent+0x16137 (00007ff7`7b5d5147)
+00007ff7`7b5d513b 48c78424b804000000000000 mov qword ptr [rsp+4B8h],0

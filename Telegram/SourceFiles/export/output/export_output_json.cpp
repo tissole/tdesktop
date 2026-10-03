@@ -2956,18 +2956,29 @@ DialogState JsonWriter::dialogState() const {
 }
 
 Result JsonWriter::resumeDialogStart(
-		const Data::DialogInfo &,
+		const Data::DialogInfo &data,
 		const DialogState &state) {
 	Expects(_output == nullptr);
 
-	if (!_settings.onlySinglePeer()) {
-		return Result(Result::Type::Error, QString());
-	}
 	_output = fileWithRelativePath(mainFileRelativePath());
-	_context.nesting.push_back(Context::kObject);
-	_context.nesting.push_back(Context::kArray);
 	_messagesWritten = state.messagesCount;
 	_currentNestingHadItem = (state.messagesCount > 0);
+	if (_settings.onlySinglePeer()) {
+		_context.nesting.push_back(Context::kObject);
+		_context.nesting.push_back(Context::kArray);
+		return Result::Success();
+	}
+	// Global resume: the shared file already holds the root object, the
+	// open chats list and this chat's open object with its messages
+	// array. Rebuild that exact stack without writing; commas re-derive:
+	// the messages array had items iff messages were written, and the
+	// enclosing arrays hold this chat, so later items comma correctly.
+	_context.nesting.push_back(Context::kObject);
+	_context.nesting.push_back(Context::kObject);
+	_context.nesting.push_back(Context::kArray);
+	_context.nesting.push_back(Context::kObject);
+	_context.nesting.push_back(Context::kArray);
+	_dialogsMode = data.isLeftChannel ? DialogsMode::Left : DialogsMode::Chats;
 	return Result::Success();
 }
 
@@ -3060,6 +3071,22 @@ Result JsonWriter::writeDialogEnd() {
 
 	auto block = popNesting();
 	return _output->writeBlock(block + popNesting());
+}
+
+Result JsonWriter::writeDialogSkipped(
+		const Data::DialogInfo &,
+		int) {
+	// Done chats already have their entries in the shared file from the
+	// previous session: emitting again would duplicate them.
+	return Result::Success();
+}
+
+Result JsonWriter::writeDialogUpdateStart(
+		const Data::DialogInfo &data,
+		const DialogState &) {
+	// A finished chat has a closed object in the shared file: appending
+	// into it is impossible, so the new messages get a fresh object.
+	return writeDialogStart(data);
 }
 
 Result JsonWriter::writeDialogsEnd() {

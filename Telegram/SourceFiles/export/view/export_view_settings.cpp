@@ -12,6 +12,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "export/output/export_output_abstract.h"
 #include "export/view/export_view_panel_controller.h"
+#include "export/data/export_data_types.h"
+#include "export/export_api_wrap.h"
+#include "boxes/peer_list_box.h"
+#include "data/data_session.h"
+#include "data/data_peer.h"
 #include "lang/lang_keys.h"
 #include "ui/widgets/checkbox.h"
 #include "ui/widgets/buttons.h"
@@ -195,11 +200,11 @@ void SettingsWidget::setupFullExportOptions(
 		Type::ProfileMusic,
 		tr::lng_export_option_profile_music_about(tr::now));
 	addHeader(container, tr::lng_export_header_chats(tr::now));
-	addOption(
+	addChatOption(
 		container,
 		tr::lng_export_option_personal_chats(tr::now),
 		Type::PersonalChats);
-	addOption(
+	addChatOption(
 		container,
 		tr::lng_export_option_bot_chats(tr::now),
 		Type::BotChats);
@@ -219,6 +224,7 @@ void SettingsWidget::setupFullExportOptions(
 		container,
 		tr::lng_export_option_public_channels(tr::now),
 		Type::PublicChannels);
+	addChatSelectionRow(container);
 }
 
 void SettingsWidget::setupMediaOptions(
@@ -298,6 +304,13 @@ void SettingsWidget::setupPathAndFormat(
 	addFormatOption(tr::lng_export_option_html(tr::now), Format::Html);
 	addFormatOption(tr::lng_export_option_json(tr::now), Format::Json);
 	addFormatOption(tr::lng_export_option_html_and_json(tr::now), Format::HtmlAndJson);
+	addIdRangeOption(container, addLimitsLabel(container));
+	container->add(
+		object_ptr<Ui::FlatLabel>(
+			container,
+			tr::lng_export_range_hint_global(tr::now),
+			st::exportAboutOptionLabel),
+		st::exportAboutOptionPadding);
 }
 
 void SettingsWidget::addLocationLabel(
@@ -958,11 +971,6 @@ void SettingsWidget::addChatOption(
 	}, onlyMy->lifetime());
 
 	onlyMy->toggleOn(checkbox->checkedValue());
-
-	if (types & (Type::PublicGroups | Type::PublicChannels)) {
-		onlyMy->entity()->setChecked(true);
-		onlyMy->entity()->setDisabled(true);
-	}
 }
 
 void SettingsWidget::addMediaOptions(
@@ -1405,6 +1413,374 @@ rpl::producer<> SettingsWidget::updateClicks() const {
 	) | rpl::map([](Wrap &&wrap) {
 		return std::move(wrap.value);
 	}) | rpl::flatten_latest();
+}
+
+namespace {
+
+PeerData *HydratePeerData(
+		not_null<Main::Session*> session,
+		const Data::DialogInfo &info) {
+	if (const auto peer = session->data().peerLoaded(info.peerId)) {
+		return peer;
+	}
+	using DialogType = Data::DialogInfo::Type;
+	const auto isUser = (info.type == DialogType::Self)
+		|| (info.type == DialogType::Personal)
+		|| (info.type == DialogType::Bot)
+		|| (info.type == DialogType::Replies)
+		|| (info.type == DialogType::VerifyCodes);
+	const auto name = QString::fromUtf8(info.name);
+	const auto lastName = QString::fromUtf8(info.lastName);
+	const auto username = QString::fromUtf8(info.username);
+	if (isUser) {
+		auto hash = int64(0);
+		info.input.match([&](const MTPDinputPeerUser &data) {
+			hash = data.vaccess_hash().v;
+		}, [](const auto &) {
+		});
+		auto flags = MTPDuser::Flag::f_min
+			| MTPDuser::Flag::f_first_name
+			| MTPDuser::Flag::f_last_name
+			| MTPDuser::Flag::f_username
+			| MTPDuser::Flag::f_access_hash;
+		if (info.type == DialogType::Bot) {
+			flags |= MTPDuser::Flag::f_bot;
+		}
+		session->data().processUser(MTP_user(
+			MTP_flags(flags),
+			MTP_long(static_cast<int64>(Data::PeerToBareId(info.peerId))),
+			MTP_long(hash),
+			MTP_string(name),
+			MTP_string(lastName),
+			MTP_string(username),
+			MTPstring(),
+			MTPUserProfilePhoto(),
+			MTPUserStatus(),
+			MTPint(),
+			MTPVector<MTPRestrictionReason>(),
+			MTPstring(),
+			MTPstring(),
+			MTPEmojiStatus(),
+			MTPVector<MTPUsername>(),
+			MTPRecentStory(),
+			MTPPeerColor(),
+			MTPPeerColor(),
+			MTPint(),
+			MTPlong(),
+			MTPlong(),
+			MTPlong()));
+		return session->data().peer(info.peerId).get();
+	}
+	if (info.type == DialogType::Unknown) {
+		return nullptr;
+	}
+	const auto hash = [&] {
+		auto result = int64(0);
+		info.input.match([&](const MTPDinputPeerChannel &data) {
+			result = data.vaccess_hash().v;
+		}, [](const auto &) {
+		});
+		return result;
+	}();
+	if (info.type == DialogType::PrivateGroup) {
+		return session->data().processChat(MTP_chat(
+			MTP_flags(MTPDchat::Flags()),
+			MTP_long(static_cast<int64>(Data::PeerToBareId(info.peerId))),
+			MTP_string(name),
+			MTP_chatPhotoEmpty(),
+			MTPint(),
+			MTPint(),
+			MTPint(),
+			MTP_inputChannelEmpty(),
+			MTP_chatAdminRights(MTP_flags(0)),
+			MTP_chatBannedRights(MTP_flags(0), MTP_int(0)))).get();
+	}
+	const auto isBroadcast = (info.type == DialogType::PrivateChannel)
+		|| (info.type == DialogType::PublicChannel);
+	const auto isMegagroup = !isBroadcast;
+	auto flags = MTPDchannel::Flag::f_min
+		| MTPDchannel::Flag::f_access_hash
+		| MTPDchannel::Flag::f_username;
+	if (isBroadcast) {
+		flags |= MTPDchannel::Flag::f_broadcast;
+	}
+	if (isMegagroup) {
+		flags |= MTPDchannel::Flag::f_megagroup;
+	}
+	return session->data().processChat(MTP_channel(
+		MTP_flags(flags),
+		MTP_long(static_cast<int64>(Data::PeerToBareId(info.peerId))),
+		MTP_long(hash),
+		MTP_string(name),
+		MTP_string(username),
+		MTP_chatPhotoEmpty(),
+		MTPint(),
+		MTPVector<MTPRestrictionReason>(),
+		MTP_chatAdminRights(MTP_flags(0)),
+		MTP_chatBannedRights(MTP_flags(0), MTP_int(0)),
+		MTP_chatBannedRights(MTP_flags(0), MTP_int(0)),
+		MTPint(),
+		MTPVector<MTPUsername>(),
+		MTPRecentStory(),
+		MTPPeerColor(),
+		MTPPeerColor(),
+		MTPEmojiStatus(),
+		MTPint(),
+		MTPint(),
+		MTPlong(),
+		MTPlong(),
+		MTPlong(),
+		MTPlong())).get();
+}
+
+class ChatIdSearchController final : public PeerListSearchController {
+public:
+	explicit ChatIdSearchController(not_null<Main::Session*> session)
+	: _session(session) {
+	}
+	void setPeers(std::vector<PeerId> peers) {
+		_peers = std::move(peers);
+	}
+	void searchQuery(const QString &query) override {
+		auto digits = QString();
+		for (const auto ch : query) {
+			if (ch.isDigit()) {
+				digits.append(ch);
+			}
+		}
+		if (!digits.isEmpty()) {
+			for (const auto peerId : _peers) {
+				if (QString::number(Data::PeerToBareId(peerId)
+						).contains(digits)) {
+					if (const auto peer = _session->data().peerLoaded(
+							peerId)) {
+						delegate()->peerListSearchAddRow(peer);
+					}
+				}
+			}
+		}
+		delegate()->peerListSearchRefreshRows();
+	}
+	bool isLoading() override {
+		return false;
+	}
+	bool loadMoreRows() override {
+		return false;
+	}
+
+private:
+	const not_null<Main::Session*> _session;
+	std::vector<PeerId> _peers;
+
+};
+
+class ChatPickerController final : public PeerListController {
+public:
+	ChatPickerController(
+		not_null<Main::Session*> session,
+		Settings::Types types,
+		base::flat_set<PeerId> selected)
+	: PeerListController(std::make_unique<ChatIdSearchController>(session))
+	, _session(session)
+	, _types(types)
+	, _checked(std::move(selected)) {
+	}
+	bool trackSelectedList() override {
+		return false;
+	}
+	int checkedCount() const {
+		return int(_checked.size());
+	}
+	base::flat_set<PeerId> checkedPeers() const {
+		return _checked;
+	}
+	Main::Session &session() const override {
+		return *_session;
+	}
+	void prepare() override {
+		delegate()->peerListSetSearchMode(PeerListSearchMode::Enabled);
+		setDescriptionText(tr::lng_export_loading_chats(tr::now));
+	}
+	void setChats(Data::DialogsInfo info) {
+		setDescriptionText(QString());
+		auto peers = std::vector<PeerId>();
+		peers.reserve(info.chats.size() + info.left.size());
+		for (const auto &dialog : info.chats) {
+			addChatRow(dialog, peers);
+		}
+		for (const auto &dialog : info.left) {
+			addChatRow(dialog, peers);
+		}
+		idSearch()->setPeers(std::move(peers));
+		delegate()->peerListRefreshRows();
+		notifyToggled();
+	}
+	void setToggleCallback(Fn<void()> callback) {
+		_toggle = std::move(callback);
+	}
+	void selectAllRows() {
+		const auto count = delegate()->peerListFullRowsCount();
+		for (auto i = 0; i != count; ++i) {
+			const auto row = delegate()->peerListRowAt(i);
+			_checked.emplace(row->peer()->id);
+			delegate()->peerListSetRowChecked(row, true);
+		}
+		delegate()->peerListRefreshRows();
+		notifyToggled();
+	}
+	void clearAllRows() {
+		const auto count = delegate()->peerListFullRowsCount();
+		for (auto i = 0; i != count; ++i) {
+			const auto row = delegate()->peerListRowAt(i);
+			_checked.remove(row->peer()->id);
+			delegate()->peerListSetRowChecked(row, false);
+		}
+		delegate()->peerListRefreshRows();
+		notifyToggled();
+	}
+	void rowClicked(not_null<PeerListRow*> row) override {
+		const auto peerId = row->peer()->id;
+		if (_checked.contains(peerId)) {
+			_checked.remove(peerId);
+			delegate()->peerListSetRowChecked(row, false);
+		} else {
+			_checked.emplace(peerId);
+			delegate()->peerListSetRowChecked(row, true);
+		}
+		notifyToggled();
+	}
+	std::unique_ptr<PeerListRow> createSearchRow(
+			not_null<PeerData*> peer) override {
+		if (!rowVisible(peer->id)) {
+			return nullptr;
+		}
+		return std::make_unique<PeerListRow>(peer);
+	}
+
+private:
+	ChatIdSearchController *idSearch() const {
+		return static_cast<ChatIdSearchController*>(searchController());
+	}
+	bool rowVisible(PeerId peerId) const {
+		const auto i = _typesByPeer.find(peerId);
+		if (i == end(_typesByPeer)) {
+			return true;
+		}
+		return ((_types
+			& Export::SettingsFromDialogsType(i->second)) != 0);
+	}
+	void addChatRow(
+			const Data::DialogInfo &info,
+			std::vector<PeerId> &peers) {
+		// Category filtering happens here, at build time: hidden rows
+		// would force the list into search mode (and hide the top
+		// actions), so non-matching chats are never added instead.
+		_typesByPeer.emplace(info.peerId, info.type);
+		if (!rowVisible(info.peerId)) {
+			return;
+		}
+		const auto peer = HydratePeerData(_session, info);
+		if (!peer) {
+			return;
+		}
+		peers.push_back(info.peerId);
+		delegate()->peerListAppendRow(std::make_unique<PeerListRow>(peer));
+		if (_checked.contains(info.peerId)) {
+			if (const auto row = delegate()->peerListFindRow(
+					info.peerId.value)) {
+				delegate()->peerListSetRowChecked(row, true);
+			}
+		}
+	}
+
+	const not_null<Main::Session*> _session;
+	Settings::Types _types;
+	base::flat_set<PeerId> _checked;
+	base::flat_map<PeerId, Data::DialogInfo::Type> _typesByPeer;
+	Fn<void()> _toggle;
+	void notifyToggled() {
+		if (_toggle) {
+			_toggle();
+		}
+	}
+
+};
+
+} // namespace
+
+void SettingsWidget::addChatSelectionRow(
+		not_null<Ui::VerticalLayout*> container) {
+	auto selectedLink = value() | rpl::map([=](const Settings &data) {
+		const auto text = !data.chatSelectionActive
+			? tr::lng_export_all_chats(tr::now)
+			: tr::lng_export_selected_chats(
+				tr::now,
+				lt_count,
+				int(data.selectedChats.size()));
+		return tr::link(text, u"internal:select_chats"_q);
+	});
+	const auto label = container->add(
+		object_ptr<Ui::FlatLabel>(
+			container,
+			tr::lng_export_select_chats(
+				lt_selected,
+				std::move(selectedLink),
+				tr::marked),
+			st::exportLocationLabel),
+		st::exportLocationPadding);
+	label->overrideLinkClickHandler([=] {
+		openChatPicker();
+	});
+}
+
+void SettingsWidget::openChatPicker() {
+	if (!_requestChatList) {
+		return;
+	}
+	auto controller = std::make_unique<ChatPickerController>(
+		_session,
+		readData().types,
+		readData().chatSelectionActive
+			? readData().selectedChats
+			: base::flat_set<PeerId>());
+	const auto rawController = controller.get();
+	const auto initBox = [=](not_null<PeerListBox*> box) {
+		box->peerListSetTitle(
+			rpl::single(tr::lng_export_header_chats(tr::now)));
+		const auto refreshCounter = [=] {
+			box->setAdditionalTitle(rpl::single(
+				tr::lng_export_selected_chats(
+					tr::now,
+					lt_count,
+					rawController->checkedCount())));
+		};
+		rawController->setToggleCallback(refreshCounter);
+		refreshCounter();
+		box->addButton(tr::lng_export_select_all(), [=] {
+			rawController->selectAllRows();
+		});
+		box->addButton(tr::lng_export_clear_selection(), [=] {
+			rawController->clearAllRows();
+		});
+		box->addButton(tr::lng_settings_save(), [=] {
+			changeData([&](Settings &data) {
+				data.chatSelectionActive = true;
+				data.selectedChats = rawController->checkedPeers();
+			});
+			box->closeBox();
+		});
+		box->addButton(tr::lng_cancel(), [=] {
+			box->closeBox();
+		});
+	};
+	auto box = Box<PeerListBox>(std::move(controller), std::move(initBox));
+	const auto weakBox = base::make_weak(box.data());
+	_showBoxCallback(std::move(box));
+	_requestChatList(readData(), [=](Data::DialogsInfo &&info) mutable {
+		if (weakBox) {
+			rawController->setChats(std::move(info));
+		}
+	});
 }
 
 } // namespace View

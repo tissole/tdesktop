@@ -2995,6 +2995,8 @@ void Account::writeExportSettings(const Export::Settings &settings) {
 		&& settings.path == check.path
 		&& settings.format == check.format
 		&& settings.availableAt == check.availableAt
+		&& settings.chatSelectionActive == check.chatSelectionActive
+		&& settings.selectedChats == check.selectedChats
 		&& !settings.onlySinglePeer()) {
 		if (_exportSettingsKey) {
 			ClearKey(_exportSettingsKey, _basePath);
@@ -3010,7 +3012,9 @@ void Account::writeExportSettings(const Export::Settings &settings) {
 	quint32 size = sizeof(quint32) * 6
 		+ Serialize::stringSize(settings.path)
 		+ sizeof(qint32) * 2 + sizeof(quint64)
-		+ sizeof(quint8) + sizeof(quint64) * 2;
+		+ sizeof(quint8) + sizeof(quint64) * 2
+		+ sizeof(quint8) + sizeof(quint32)
+		+ sizeof(quint64) * settings.selectedChats.size();
 	EncryptedDescriptor data(size);
 	data.stream
 		<< quint32(settings.types)
@@ -3046,6 +3050,11 @@ void Account::writeExportSettings(const Export::Settings &settings) {
 	data.stream << quint8(settings.useIdRange ? 1 : 0);
 	data.stream << quint64(settings.singlePeerFromId.value_or(0));
 	data.stream << quint64(settings.singlePeerTillId.value_or(0));
+	data.stream << quint8(settings.chatSelectionActive ? 1 : 0);
+	data.stream << quint32(settings.selectedChats.size());
+	for (const auto peerId : settings.selectedChats) {
+		data.stream << quint64(peerId.value);
+	}
 
 	FileWriteDescriptor file(_exportSettingsKey, _basePath);
 	file.writeEncrypted(data, _localKey);
@@ -3110,6 +3119,20 @@ Export::Settings Account::readExportSettings() {
 			>> singlePeerFromId
 			>> singlePeerTillId;
 	}
+	quint8 chatSelectionActive = 0;
+	quint32 selectedChatsCount = 0;
+	auto selectedChats = base::flat_set<PeerId>();
+	if (!file.stream.atEnd()) {
+		file.stream >> chatSelectionActive >> selectedChatsCount;
+		for (auto i = quint32(0); i != selectedChatsCount; ++i) {
+			auto peerId = quint64(0);
+			file.stream >> peerId;
+			if (file.stream.status() != QDataStream::Ok) {
+				return Export::Settings();
+			}
+			selectedChats.emplace(PeerId(peerId));
+		}
+	}
 	auto result = Export::Settings();
 	result.types = Export::Settings::Types::from_raw(types);
 	result.fullChats = Export::Settings::Types::from_raw(fullChats);
@@ -3162,6 +3185,10 @@ Export::Settings Account::readExportSettings() {
 		if (singlePeerTillId != 0) {
 			result.singlePeerTillId = singlePeerTillId;
 		}
+	}
+	if (chatSelectionActive) {
+		result.chatSelectionActive = true;
+		result.selectedChats = std::move(selectedChats);
 	}
 	return (file.stream.status() == QDataStream::Ok && result.validate())
 		? result

@@ -129,6 +129,14 @@ Result HtmlAndJsonWriter::resumeDialogStart(
 	});
 }
 
+Result HtmlAndJsonWriter::writeDialogUpdateStart(
+		const Data::DialogInfo &data,
+		const DialogState &state) {
+	return invoke([&](WriterPtr w) {
+		return w->writeDialogUpdateStart(data, state);
+	});
+}
+
 DialogState HtmlAndJsonWriter::dialogState() const {
 	auto result = DialogState();
 	for (const auto &writer : _writers) {
@@ -149,6 +157,14 @@ Result HtmlAndJsonWriter::writeDialogSlice(const Data::MessagesSlice &data) {
 Result HtmlAndJsonWriter::writeDialogEnd() {
 	return invoke([&](WriterPtr w) {
 		return w->writeDialogEnd();
+	});
+}
+
+Result HtmlAndJsonWriter::writeDialogSkipped(
+		const Data::DialogInfo &data,
+		int count) {
+	return invoke([&](WriterPtr w) {
+		return w->writeDialogSkipped(data, count);
 	});
 }
 

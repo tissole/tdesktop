@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "export/export_controller.h"
+#include "export/export_settings.h"
 #include "export/view/export_view_content.h"
 #include "data/data_dedup_db.h"
 #include "base/unique_qptr.h"
@@ -83,17 +84,40 @@ private:
 		int64 fileMaxSize);
 	void finishExportTakeout();
 	void refreshResumeRow();
+	void refreshGlobalRow();
+	void requestChatList(
+		Settings snapshot,
+		FnMut<void(Data::DialogsInfo&&)> done);
 	void applyRowSettings(
 		Settings &settings,
 		const ::Data::ExResumeRecord &row);
-	[[nodiscard]] bool updateSettingsChanged(
-		const ::Data::ExResumeRecord &row) const;
+	void applyMarkerSettings(
+		Settings &settings,
+		const ::Data::ExResumeRecord &row);
 	[[nodiscard]] bool updateCoversWholeChat(
 		const ::Data::ExResumeRecord &row) const;
 	void validateIdRange(FnMut<void()> proceed);
-	[[nodiscard]] const std::optional<::Data::ExResumeRecord> &resumeRow() const {
-		return _resumeRow;
-	}
+	// Stored folder is gone (moved drive, deleted): offer Locate (point at
+	// the moved tree, paths rebased, run continues) or New folder
+	// (recreate, run continues). Calls proceed with the folder to run into,
+	// or an empty string for recreate; calls nothing if the user backs out.
+	void resolveMissingFolder(
+		QString missingPath,
+		bool isGlobal,
+		FnMut<void(QString &&folder)> proceed);
+	// One queued single-chat run (own folder, own scope snapshot).
+	struct SingleRun {
+		Settings settings;
+		::Data::ExResumeRecord row;
+		bool update = false;
+	};
+	void startSingleResume(Settings settings, ::Data::ExResumeRecord row);
+	void startSingleUpdate(Settings settings, ::Data::ExResumeRecord row);
+	void startNextSingleRun();
+	void showFolderPicker(
+		std::vector<::Data::ExResumeRecord> rows,
+		bool update,
+		FnMut<void(std::vector<int> &&indices)> done);
 
 	const not_null<Main::Session*> _session;
 	const not_null<Controller*> _process;
@@ -106,7 +130,16 @@ private:
 	QPointer<ProgressWidget> _progress;
 
 	State _state;
-	std::optional<::Data::ExResumeRecord> _resumeRow;
+	std::vector<::Data::ExResumeRecord> _resumeRows;
+	std::vector<SingleRun> _pendingRuns;
+	// Scope as shown at panel open (neutralised when continue-state
+	// exists): Resume/Update proceed only while live scope still equals it.
+	Settings _scopeShown;
+	std::optional<::Data::ExResumeRecord> _globalRow;
+	bool _globalHasUnfinished = false;
+	std::optional<Data::DialogsInfo> _chatListCache;
+	bool _chatListLoading = false;
+	std::vector<FnMut<void(Data::DialogsInfo&&)>> _chatListWaiters;
 	int _startGen = 0;
 	bool _paused = false;
 	bool _pausePending = false;
@@ -115,7 +148,6 @@ private:
 	base::weak_qptr<Ui::BoxContent> _confirmStopBox;
 	rpl::event_stream<rpl::producer<>> _panelCloseEvents;
 	bool _stopRequested = false;
-	bool _updateSettingsChanged = false;
 	rpl::lifetime _lifetime;
 
 };

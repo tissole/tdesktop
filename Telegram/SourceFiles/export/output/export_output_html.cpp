@@ -6453,6 +6453,12 @@ Result HtmlWriter::resumeDialogStart(
 	return Result::Success();
 }
 
+Result HtmlWriter::writeDialogUpdateStart(
+		const Data::DialogInfo &data,
+		const DialogState &state) {
+	return resumeDialogStart(data, state);
+}
+
 Result HtmlWriter::writeDialogStart(const Data::DialogInfo &data) {
 	Expects(_chat == nullptr);
 
@@ -6649,6 +6655,97 @@ Result HtmlWriter::writeDialogEnd() {
 		TypeString(_dialog.type),
 		(_messagesCount > 0
 			? (_dialog.relativePath + "messages.html")
+			: QString())));
+}
+
+Result HtmlWriter::writeDialogSkipped(
+		const Data::DialogInfo &data,
+		int count) {
+	Expects(_chats != nullptr);
+
+	using Type = Data::DialogInfo::Type;
+	const auto TypeString = [](Type type) {
+		switch (type) {
+		case Type::Unknown: return "unknown";
+		case Type::Self:
+		case Type::Replies:
+		case Type::VerifyCodes:
+		case Type::Personal: return "private";
+		case Type::Bot: return "bot";
+		case Type::PrivateGroup:
+		case Type::PrivateSupergroup:
+		case Type::PublicSupergroup: return "group";
+		case Type::PrivateChannel:
+		case Type::PublicChannel: return "channel";
+		}
+		Unexpected("Dialog type in TypeString.");
+	};
+	const auto DeletedString = [](Type type) {
+		switch (type) {
+		case Type::Unknown:
+		case Type::Self:
+		case Type::Replies:
+		case Type::VerifyCodes:
+		case Type::Personal:
+		case Type::Bot: return "Deleted Account";
+		case Type::PrivateGroup:
+		case Type::PrivateSupergroup:
+		case Type::PublicSupergroup: return "Deleted Group";
+		case Type::PrivateChannel:
+		case Type::PublicChannel: return "Deleted Channel";
+		}
+		Unexpected("Dialog type in TypeString.");
+	};
+	const auto NameString = [](
+			const Data::DialogInfo &dialog) -> QByteArray {
+		if (dialog.type == Type::Self) {
+			return "Saved messages";
+		} else if (dialog.type == Type::Replies) {
+			return "Replies";
+		} else if (dialog.type == Type::VerifyCodes) {
+			return "Verification Codes";
+		}
+		return dialog.name;
+	};
+	const auto LastNameString = [](
+			const Data::DialogInfo &dialog) -> QByteArray {
+		if (dialog.type != Type::Personal && dialog.type != Type::Bot) {
+			return {};
+		}
+		return dialog.lastName;
+	};
+	const auto CountString = [](int count, bool outgoing) -> QByteArray {
+		if (count == 1) {
+			return outgoing ? "1 outgoing message" : "1 message";
+		} else if (!count) {
+			return outgoing ? "No outgoing messages" : "No messages";
+		}
+		return Data::NumberToString(count)
+			+ (outgoing ? " outgoing messages" : " messages");
+	};
+	auto userpic = UserpicData{
+		((data.type == Type::Self
+			|| data.type == Type::Replies
+			|| data.type == Type::VerifyCodes)
+			? kSavedMessagesColorIndex
+			: Data::PeerColorIndex(data.peerId)),
+		kEntryUserpicSize
+	};
+	userpic.firstName = NameString(data);
+	userpic.lastName = LastNameString(data);
+
+	const auto result = validateDialogsMode(data.isLeftChannel);
+	if (!result) {
+		return result;
+	}
+
+	return _chats->writeBlock(_chats->pushListEntry(
+		userpic,
+		ComposeName(userpic, DeletedString(data.type)),
+		CountString(count, data.onlyMyMessages),
+		TypeString(data.type),
+		(count > 0
+			? (data.relativePath + "messages.html")
 			: QString())));
 }
 

@@ -48,9 +48,12 @@ struct Result;
 class Stats;
 } // namespace Output
 
-struct Settings;
+	struct Settings;
 
-class ApiWrap {
+	[[nodiscard]] Settings::Type SettingsFromDialogsType(
+		Data::DialogInfo::Type type);
+
+	class ApiWrap {
 public:
 	ApiWrap(
 		base::weak_qptr<MTP::Instance> weak,
@@ -138,13 +141,28 @@ public:
 	void resumeExport();
 	[[nodiscard]] bool exportPaused() const;
 	rpl::producer<bool> pauseChanges() const;
+	rpl::producer<bool> canPauseChanges() const;
 	void setPauseFlushHandler(
 		Fn<Data::MessagesSlice(Data::MessagesSlice)> handler);
 	void setSessionId(uint64 sessionId);
 	void setDedupDb(const QString &path);
 	void setScanMode(bool scan);
-	void setResumeCheckpoint(const ::Data::ExResumeRecord &record);
+	void setResumeCheckpoint(
+		const ::Data::ExResumeRecord &record,
+		bool restoreStats = true);
 	void setWriterStateGetter(Fn<Output::DialogState()> getter);
+	void setChatFailHandler(Fn<void(MTP::Error)> handler);
+	void failCurrentChat(const MTP::Error &error);
+	void failCurrentChat(const QString &text);
+	void setGlobalDialogIds(std::vector<PeerId> ids);
+	void commitGlobalMarker(
+		const QString &state,
+		int failedCount,
+		PeerId resumePeerId = PeerId());
+	// Parks a global run at the next chat boundary when a pause was
+	// requested outside a chat. Returns true if parked.
+	bool parkGlobalAtBoundary(PeerId nextPeer, int failedCount);
+	[[nodiscard]] bool pausedAtChatBoundary() const;
 	void refreshTakeoutSession(FnMut<void(uint64)> done);
 	void setSharedTakeoutId(uint64 id);
 	void setTakeoutRefreshHook(Fn<void()> hook);
@@ -152,8 +170,15 @@ public:
 	void setUpdateCheck(MsgId knownLastId, Fn<void(int anyNew, int selectedNew)> handler);
 	void proceedUpdate();
 	void abortUpdate();
+	// Drops a stored range's upper bound so an update walk extends to
+	// present. Called before the walk resolves its bounds.
+	void liftUpdateCeiling();
+	void requestChatList(
+		Settings settings,
+		FnMut<void(Data::DialogsInfo&&)> done);
+	void ensureChatListSplits(FnMut<void()> done);
+	void resetChatListState();
 	[[nodiscard]] std::vector<QString> linkUrls() const;
-
 	~ApiWrap();
 
 private:
@@ -399,6 +424,9 @@ private:
 	void commitExportProgress(int32 committedMax, const QString &state);
 	::Data::DedupDb *dedupDb() const;
 	PeerId currentPeer() const;
+	// ex_tmp namespace key: non-scan global runs with dedup off share
+	// one synthetic namespace (peer 0), everything else is per chat.
+	PeerId dedupPeerId() const;
 	Data::File *walkParkedFile(const Data::File *file) const;
 	std::unique_ptr<FileProcess> prepareFileProcess(
 		const Data::File &file,
@@ -538,6 +566,7 @@ private:
 	rpl::event_stream<MTP::Error> _errors;
 	rpl::event_stream<Output::Result> _ioErrors;
 	rpl::event_stream<bool> _pauseChanges;
+	rpl::event_stream<bool> _canPauseChanges;
 	bool _pauseRequested = false;
 	bool _paused = false;
 	bool _takeoutRefreshing = false;
@@ -547,6 +576,21 @@ private:
 	bool _takeoutInvalidPending = false;
 	Fn<Data::MessagesSlice(Data::MessagesSlice)> _pauseFlushHandler;
 	int _pauseFlushedPrefix = 0;
+	// Global runs only, installed per chat by the controller: a failing
+	// chat is reported here instead of aborting the whole run.
+	Fn<void(MTP::Error)> _chatFailHandler;
+	// Ordered snapshot of the global run's chat list, stored in the
+	// marker row so a resume can reconstruct the scope.
+	std::vector<PeerId> _globalDialogIds;
+	bool _globalRunActive = false;
+	// Picker enumeration owns the shared dialogs processes while set:
+	// stale state from a failed attempt resets instead of asserting.
+	bool _chatListActive = false;
+	bool _chatListSingleSplit = false;
+	// True from the first chat walk until the run ends: the only window
+	// with a reachable park point. Drives the pause button visibility.
+	bool _canPause = false;
+	void setCanPause(bool can);
 
 };
 

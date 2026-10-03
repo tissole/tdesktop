@@ -301,6 +301,14 @@ Content ContentFromState(const FinishedState &state) {
 			QString(),
 			1. });
 	}
+	if (!state.failedChats.empty()) {
+		result.rows.push_back({
+			Content::kDoneId,
+			QString("Failed chats: %1 (see lists/failed.json)").arg(
+				state.failedChats.size()),
+			QString(),
+			1. });
+	}
 	return result;
 }
 

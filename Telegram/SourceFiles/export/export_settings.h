@@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/flags.h"
 #include "base/flat_map.h"
+#include "base/flat_set.h"
+#include "data/data_peer_id.h"
 #include <QtCore/QStringList>
 
 namespace Export {
@@ -104,6 +106,11 @@ struct Settings {
 	std::optional<TimeId> singlePeerFrom;  // nullopt = from beginning
 	std::optional<TimeId> singlePeerTill;  // nullopt = until now
 
+	// Bulk-export chat selection: inactive means every matching chat.
+	// An active empty set means none.
+	bool chatSelectionActive = false;
+	base::flat_set<PeerId> selectedChats;
+
 	// Range mode flags (mutually exclusive, exactly one is used).
 	bool useDateRange = true;
 	bool useIdRange = false;
@@ -152,6 +159,11 @@ struct Environment {
 	QByteArray aboutWebSessions;
 	QByteArray aboutChats;
 	QByteArray aboutLeftChats;
+	// Per-account global-export root identity. accountId (bare user id) is
+	// the match key; accountName (sanitised self display name) is cosmetic
+	// only, so a renamed account still finds its tree.
+	uint64 accountId = 0;
+	QString accountName;
 };
 
 } // namespace Export

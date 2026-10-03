@@ -75,6 +75,18 @@ struct SharedDownloads {
 // at most unflushed temp rows, which the next startup purges anyway.
 constexpr auto kExWriteBatchLimit = 100;
 
+[[nodiscard]] QByteArray EncodePeerIds(const std::vector<PeerId> &ids) {
+	auto result = QByteArray();
+	result.reserve(int(ids.size()) * 8);
+	for (const auto peerId : ids) {
+		const auto value = quint64(peerId.value);
+		char buffer[8] = {};
+		memcpy(buffer, &value, 8);
+		result.append(buffer, 8);
+	}
+	return result;
+}
+
 } // namespace
 
 class DedupDb::Impl {
@@ -153,10 +165,20 @@ public:
 		uint64 sessionId) const;
 
 	void insertExResume(const ExResumeRecord &record);
-	void removeExResume(uint64 sessionId, PeerId peerId);
-	void clearExResume(uint64 sessionId);
+	void removeExResumeFolder(
+		uint64 sessionId,
+		PeerId peerId,
+		int mode,
+		const QString &folder);
+	void clearExResume(uint64 sessionId, int mode);
 	[[nodiscard]] std::vector<ExResumeRecord> loadExResume(
-		uint64 sessionId) const;
+		uint64 sessionId,
+		int mode) const;
+	void rebaseExResumeFolder(
+		uint64 sessionId,
+		int mode,
+		const QString &oldPrefix,
+		const QString &newPrefix);
 
 	void insertExTmp(
 		uint64 sessionId,
@@ -412,11 +434,14 @@ bool DedupDb::Impl::createTables() {
 			"skipped INTEGER NOT NULL DEFAULT 0, "
 			"last_msg_id INTEGER NOT NULL DEFAULT 0, "
 			"state TEXT NOT NULL DEFAULT 'running', "
+			"forward_options INTEGER NOT NULL DEFAULT 0, "
+			"group_options INTEGER NOT NULL DEFAULT 0, "
 			"remaining BLOB NOT NULL DEFAULT x'', "
 			"PRIMARY KEY (session_id, dest_peer_id))"_q)
 		&& exec(u"CREATE TABLE IF NOT EXISTS ex_resume ("
 			"session_id INTEGER NOT NULL DEFAULT 0, "
 			"peer_id INTEGER NOT NULL, "
+			"mode INTEGER NOT NULL DEFAULT 0, "
 			"last_id INTEGER NOT NULL DEFAULT 0, "
 			"total INTEGER NOT NULL DEFAULT 0, "
 			"msgs_done INTEGER NOT NULL DEFAULT 0, "
@@ -446,7 +471,14 @@ bool DedupDb::Impl::createTables() {
 			"covered_till INTEGER NOT NULL DEFAULT 0, "
 			"covered_till_date INTEGER NOT NULL DEFAULT 0, "
 			"migrated INTEGER NOT NULL DEFAULT 0, "
-			"PRIMARY KEY (session_id, peer_id))"_q)
+			"failed_count INTEGER NOT NULL DEFAULT 0, "
+			"resume_peer_id INTEGER NOT NULL DEFAULT 0, "
+			"dialog_ids BLOB NOT NULL DEFAULT x'', "
+			"chat_types INTEGER NOT NULL DEFAULT 0, "
+			"full_chats INTEGER NOT NULL DEFAULT 0, "
+			"ext_filter_mode INTEGER NOT NULL DEFAULT 0, "
+			"ext_filter TEXT NOT NULL DEFAULT '', "
+			"PRIMARY KEY (session_id, peer_id, mode, export_folder))"_q)
 		&& exec(u"CREATE TABLE IF NOT EXISTS ex_tmp ("
 			"session_id INTEGER NOT NULL DEFAULT 0, "
 			"peer_id INTEGER NOT NULL, "
@@ -1322,9 +1354,10 @@ void DedupDb::Impl::insertNfResume(const NfResumeRecord &record) {
 	QSqlQuery q(_db);
 	q.prepare(u"INSERT OR REPLACE INTO nf_resume "
 		"(session_id, dest_peer_id, src_peer_id, total, done, skipped, "
-		"last_msg_id, state, remaining) "
+		"last_msg_id, state, forward_options, group_options, remaining) "
 		"VALUES (:session_id, :dest_peer_id, :src_peer_id, :total, :done, "
-		":skipped, :last_msg_id, :state, :remaining)"_q);
+		":skipped, :last_msg_id, :state, :forward_options, :group_options, "
+		":remaining)"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(record.sessionId)));
 	q.bindValue(u":dest_peer_id"_q, QVariant::fromValue(
@@ -1337,6 +1370,8 @@ void DedupDb::Impl::insertNfResume(const NfResumeRecord &record) {
 	q.bindValue(u":last_msg_id"_q, QVariant::fromValue(
 		static_cast<qlonglong>(record.lastMsgId.bare)));
 	q.bindValue(u":state"_q, record.state);
+	q.bindValue(u":forward_options"_q, record.forwardOptions);
+	q.bindValue(u":group_options"_q, record.groupOptions);
 	q.bindValue(u":remaining"_q, remaining);
 	if (!q.exec()) {
 		LOG(("DedupDb: InsertNfResume failed: %1").arg(
@@ -1383,8 +1418,8 @@ std::vector<NfResumeRecord> DedupDb::Impl::loadNfResume(
 	}
 	QSqlQuery q(_db);
 	q.prepare(u"SELECT dest_peer_id, src_peer_id, total, done, skipped, "
-		"last_msg_id, state, remaining FROM nf_resume "
-		"WHERE session_id = :session_id"_q);
+		"last_msg_id, state, forward_options, group_options, remaining "
+		"FROM nf_resume WHERE session_id = :session_id"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(sessionId)));
 	if (!q.exec()) {
@@ -1401,7 +1436,9 @@ std::vector<NfResumeRecord> DedupDb::Impl::loadNfResume(
 		record.skipped = q.value(4).toInt();
 		record.lastMsgId = MsgId(q.value(5).toLongLong());
 		record.state = q.value(6).toString();
-		const auto raw = q.value(7).toByteArray();
+		record.forwardOptions = q.value(7).toInt();
+		record.groupOptions = q.value(8).toInt();
+		const auto raw = q.value(9).toByteArray();
 		for (int i = 0; i + 4 <= raw.size(); i += 4) {
 			auto value = qint32();
 			memcpy(&value, raw.constData() + i, 4);
@@ -1418,25 +1455,30 @@ void DedupDb::Impl::insertExResume(const ExResumeRecord &record) {
 	}
 	QSqlQuery q(_db);
 	q.prepare(u"INSERT OR REPLACE INTO ex_resume "
-		"(session_id, peer_id, last_id, total, msgs_done, skipped, "
+		"(session_id, peer_id, mode, last_id, total, msgs_done, skipped, "
 		"export_folder, state, media, size, export_format, from_date, "
 		"till_date, html_index, replied_index, "
 		"date_index, stats, "
 		"doc_id, paused_file, paused_bytes, last_msg, split_index, "
 		"selected_done, filter_index, use_id_range, from_id, till_id, "
-		"update_anchor, covered_till, covered_till_date, migrated) "
-		"VALUES (:session_id, :peer_id, :last_id, :total, :msgs_done, "
+		"update_anchor, covered_till, covered_till_date, migrated, "
+		"failed_count, resume_peer_id, dialog_ids, chat_types, full_chats, "
+		"ext_filter_mode, ext_filter) "
+		"VALUES (:session_id, :peer_id, :mode, :last_id, :total, :msgs_done, "
 		":skipped, :export_folder, :state, :media, :size, "
 		":export_format, :from_date, :till_date, :html_index, "
 		":replied_index, "
 		":date_index, :stats, :doc_id, :paused_file, "
 		":paused_bytes, :last_msg, :split_index, :selected_done, "
 		":filter_index, :use_id_range, :from_id, :till_id, "
-		":update_anchor, :covered_till, :covered_till_date, :migrated)"_q);
+		":update_anchor, :covered_till, :covered_till_date, :migrated, "
+		":failed_count, :resume_peer_id, :dialog_ids, :chat_types, "
+		":full_chats, :ext_filter_mode, :ext_filter)"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(record.sessionId)));
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(record.peerId.value)));
+	q.bindValue(u":mode"_q, record.mode);
 	q.bindValue(u":last_id"_q, QVariant::fromValue(
 		static_cast<qlonglong>(record.lastId.bare)));
 	q.bindValue(u":total"_q, record.total);
@@ -1475,37 +1517,54 @@ void DedupDb::Impl::insertExResume(const ExResumeRecord &record) {
 		static_cast<qlonglong>(record.coveredTill.bare)));
 	q.bindValue(u":covered_till_date"_q, record.coveredTillDate);
 	q.bindValue(u":migrated"_q, record.migrated ? 1 : 0);
+	q.bindValue(u":failed_count"_q, record.failedCount);
+	q.bindValue(u":resume_peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(record.resumePeerId.value)));
+	q.bindValue(u":dialog_ids"_q, EncodePeerIds(record.dialogIds));
+	q.bindValue(u":chat_types"_q, record.chatTypes);
+	q.bindValue(u":full_chats"_q, record.fullChats);
+	q.bindValue(u":ext_filter_mode"_q, record.extFilterMode);
+	q.bindValue(u":ext_filter"_q, record.extFilter);
 	if (!q.exec()) {
 		LOG(("DedupDb: InsertExResume failed: %1").arg(
 			q.lastError().text()));
 	}
 }
 
-void DedupDb::Impl::removeExResume(uint64 sessionId, PeerId peerId) {
+void DedupDb::Impl::removeExResumeFolder(
+		uint64 sessionId,
+		PeerId peerId,
+		int mode,
+		const QString &folder) {
 	if (!_open) {
 		return;
 	}
 	QSqlQuery q(_db);
 	q.prepare(u"DELETE FROM ex_resume "
-		"WHERE session_id = :session_id AND peer_id = :peer_id"_q);
+		"WHERE session_id = :session_id AND peer_id = :peer_id "
+		"AND mode = :mode AND export_folder = :folder"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(sessionId)));
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":mode"_q, mode);
+	q.bindValue(u":folder"_q, folder);
 	if (!q.exec()) {
-		LOG(("DedupDb: RemoveExResume failed: %1").arg(
+		LOG(("DedupDb: RemoveExResumeFolder failed: %1").arg(
 			q.lastError().text()));
 	}
 }
 
-void DedupDb::Impl::clearExResume(uint64 sessionId) {
+void DedupDb::Impl::clearExResume(uint64 sessionId, int mode) {
 	if (!_open) {
 		return;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM ex_resume WHERE session_id = :session_id"_q);
+	q.prepare(u"DELETE FROM ex_resume "
+		"WHERE session_id = :session_id AND mode = :mode"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(sessionId)));
+	q.bindValue(u":mode"_q, mode);
 	if (!q.exec()) {
 		LOG(("DedupDb: ClearExResume failed: %1").arg(
 			q.lastError().text()));
@@ -1513,23 +1572,27 @@ void DedupDb::Impl::clearExResume(uint64 sessionId) {
 }
 
 std::vector<ExResumeRecord> DedupDb::Impl::loadExResume(
-		uint64 sessionId) const {
+		uint64 sessionId,
+		int mode) const {
 	auto result = std::vector<ExResumeRecord>();
 	if (!_open) {
 		return result;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT peer_id, last_id, total, msgs_done, skipped, "
+	q.prepare(u"SELECT peer_id, mode, last_id, total, msgs_done, skipped, "
 		"export_folder, state, media, size, export_format, from_date, "
 		"till_date, html_index, replied_index, "
 		"date_index, stats, "
 		"doc_id, paused_file, paused_bytes, last_msg, split_index, "
 		"selected_done, filter_index, use_id_range, from_id, till_id, "
-		"update_anchor, covered_till, covered_till_date, migrated "
+		"update_anchor, covered_till, covered_till_date, migrated, "
+		"failed_count, resume_peer_id, dialog_ids, chat_types, full_chats, "
+		"ext_filter_mode, ext_filter "
 		"FROM ex_resume "
-		"WHERE session_id = :session_id"_q);
+		"WHERE session_id = :session_id AND mode = :mode"_q);
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(sessionId)));
+	q.bindValue(u":mode"_q, mode);
 	if (!q.exec()) {
 		LOG(("DedupDb: LoadExResume failed: %1").arg(q.lastError().text()));
 		return result;
@@ -1538,38 +1601,77 @@ std::vector<ExResumeRecord> DedupDb::Impl::loadExResume(
 		auto record = ExResumeRecord();
 		record.sessionId = sessionId;
 		record.peerId = PeerId(q.value(0).toULongLong());
-		record.lastId = MsgId(q.value(1).toLongLong());
-		record.total = q.value(2).toInt();
-		record.msgsDone = q.value(3).toInt();
-		record.skipped = q.value(4).toInt();
-		record.exportFolder = q.value(5).toString();
-		record.state = q.value(6).toString();
-		record.media = uint32(q.value(7).toULongLong());
-		record.size = q.value(8).toLongLong();
-		record.exportFormat = q.value(9).toInt();
-		record.fromDate = q.value(10).toInt();
-		record.tillDate = q.value(11).toInt();
-		record.htmlIndex = q.value(12).toInt();
-		record.repliedIndex = q.value(13).toByteArray();
-		record.dateIndex = q.value(14).toInt();
-		record.stats = q.value(15).toByteArray();
-		record.docId = q.value(16).toULongLong();
-		record.pausedFile = q.value(17).toString();
-		record.pausedBytes = q.value(18).toLongLong();
-		record.lastMsg = q.value(19).toByteArray();
-		record.splitIndex = q.value(20).toInt();
-		record.selectedDone = q.value(21).toInt();
-		record.filterIndex = q.value(22).toInt();
-		record.useIdRange = q.value(23).toInt() != 0;
-		record.fromId = q.value(24).toULongLong();
-		record.tillId = q.value(25).toULongLong();
-		record.updateAnchor = MsgId(q.value(26).toLongLong());
-		record.coveredTill = MsgId(q.value(27).toLongLong());
-		record.coveredTillDate = q.value(28).toInt();
-		record.migrated = q.value(29).toInt() != 0;
+		record.mode = q.value(1).toInt();
+		record.lastId = MsgId(q.value(2).toLongLong());
+		record.total = q.value(3).toInt();
+		record.msgsDone = q.value(4).toInt();
+		record.skipped = q.value(5).toInt();
+		record.exportFolder = q.value(6).toString();
+		record.state = q.value(7).toString();
+		record.media = uint32(q.value(8).toULongLong());
+		record.size = q.value(9).toLongLong();
+		record.exportFormat = q.value(10).toInt();
+		record.fromDate = q.value(11).toInt();
+		record.tillDate = q.value(12).toInt();
+		record.htmlIndex = q.value(13).toInt();
+		record.repliedIndex = q.value(14).toByteArray();
+		record.dateIndex = q.value(15).toInt();
+		record.stats = q.value(16).toByteArray();
+		record.docId = q.value(17).toULongLong();
+		record.pausedFile = q.value(18).toString();
+		record.pausedBytes = q.value(19).toLongLong();
+		record.lastMsg = q.value(20).toByteArray();
+		record.splitIndex = q.value(21).toInt();
+		record.selectedDone = q.value(22).toInt();
+		record.filterIndex = q.value(23).toInt();
+		record.useIdRange = q.value(24).toInt() != 0;
+		record.fromId = q.value(25).toULongLong();
+		record.tillId = q.value(26).toULongLong();
+		record.updateAnchor = MsgId(q.value(27).toLongLong());
+		record.coveredTill = MsgId(q.value(28).toLongLong());
+		record.coveredTillDate = q.value(29).toInt();
+		record.migrated = q.value(30).toInt() != 0;
+		record.failedCount = q.value(31).toInt();
+		record.resumePeerId = PeerId(q.value(32).toULongLong());
+		const auto idsRaw = q.value(33).toByteArray();
+		for (auto i = 0; i + 8 <= idsRaw.size(); i += 8) {
+			auto value = quint64(0);
+			memcpy(&value, idsRaw.constData() + i, 8);
+			record.dialogIds.push_back(PeerId(value));
+		}
+		record.chatTypes = q.value(34).toInt();
+		record.fullChats = q.value(35).toInt();
+		record.extFilterMode = q.value(36).toInt();
+		record.extFilter = q.value(37).toString();
 		result.push_back(std::move(record));
 	}
 	return result;
+}
+
+void DedupDb::Impl::rebaseExResumeFolder(
+		uint64 sessionId,
+		int mode,
+		const QString &oldPrefix,
+		const QString &newPrefix) {
+	if (!_open || oldPrefix.isEmpty() || newPrefix.isEmpty()) {
+		return;
+	}
+	QSqlQuery q(_db);
+	// substr() prefix match, not LIKE: folder paths contain '_' wildcards.
+	q.prepare(u"UPDATE ex_resume SET export_folder = :new_prefix "
+		"|| substr(export_folder, :old_len + 1) "
+		"WHERE session_id = :session_id AND mode = :mode "
+		"AND substr(export_folder, 1, :old_len) = :old_prefix"_q);
+	q.bindValue(u":new_prefix"_q, newPrefix);
+	q.bindValue(u":old_len"_q, oldPrefix.size());
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	q.bindValue(u":mode"_q, mode);
+	q.bindValue(u":old_prefix"_q, oldPrefix);
+	if (!q.exec()) {
+		LOG(("DedupDb: RebaseExResumeFolder failed: %1").arg(
+			q.lastError().text()));
+	}
 }
 
 void DedupDb::Impl::insertExTmp(
@@ -1755,16 +1857,30 @@ void DedupDb::insertExResume(const ExResumeRecord &record) {
 	_impl->insertExResume(record);
 }
 
-void DedupDb::removeExResume(uint64 sessionId, PeerId peerId) {
-	_impl->removeExResume(sessionId, peerId);
+void DedupDb::removeExResumeFolder(
+		uint64 sessionId,
+		PeerId peerId,
+		int mode,
+		const QString &folder) {
+	_impl->removeExResumeFolder(sessionId, peerId, mode, folder);
 }
 
-void DedupDb::clearExResume(uint64 sessionId) {
-	_impl->clearExResume(sessionId);
+void DedupDb::clearExResume(uint64 sessionId, int mode) {
+	_impl->clearExResume(sessionId, mode);
 }
 
-std::vector<ExResumeRecord> DedupDb::loadExResume(uint64 sessionId) const {
-	return _impl->loadExResume(sessionId);
+std::vector<ExResumeRecord> DedupDb::loadExResume(
+		uint64 sessionId,
+		int mode) const {
+	return _impl->loadExResume(sessionId, mode);
+}
+
+void DedupDb::rebaseExResumeFolder(
+		uint64 sessionId,
+		int mode,
+		const QString &oldPrefix,
+		const QString &newPrefix) {
+	_impl->rebaseExResumeFolder(sessionId, mode, oldPrefix, newPrefix);
 }
 
 void DedupDb::insertExTmp(

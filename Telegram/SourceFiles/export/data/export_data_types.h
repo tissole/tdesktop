@@ -1361,6 +1361,7 @@ struct DialogInfo {
 	Type type = Type::Unknown;
 	Utf8String name;
 	Utf8String lastName;
+	Utf8String username;
 
 	MTPInputPeer input = MTP_inputPeerEmpty();
 	int32 topMessageId = 0;
@@ -1393,6 +1394,13 @@ struct DialogsInfo {
 	std::vector<DialogInfo> chats;
 	std::vector<DialogInfo> left;
 };
+
+struct FailedChat {
+	PeerId peerId = PeerId();
+	QString name;
+	QString error;
+};
+using FailedChats = std::vector<FailedChat>;
 
 DialogInfo::Type DialogTypeFromChat(const Chat &chat);
 

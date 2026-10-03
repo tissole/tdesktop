@@ -2633,7 +2633,7 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 					content.nfDone = copy.first;
 				}
 			}
-			if (content.count == 1) {
+			if (content.count == 1 && single) {
 				const auto document = single->document;
 				const auto thumbnailed = (single->item
 					&& document->hasThumbnail())

@@ -99,9 +99,19 @@ public:
 	[[nodiscard]] virtual Result writeDialogSlice(
 		const Data::MessagesSlice &data) = 0;
 	[[nodiscard]] virtual Result writeDialogEnd() = 0;
+	// Records an already-exported chat in the chats index without
+	// touching its files. Used when a resume skips finished chats.
+	[[nodiscard]] virtual Result writeDialogSkipped(
+		const Data::DialogInfo &data,
+		int count) = 0;
 	[[nodiscard]] virtual Result writeDialogsEnd() = 0;
 	[[nodiscard]] virtual DialogState dialogState() const = 0;
 	[[nodiscard]] virtual Result resumeDialogStart(
+		const Data::DialogInfo &data,
+		const DialogState &state) = 0;
+	// Starts an update append: per-chat files continue like a resume,
+	// while a shared file opens a fresh object for the new messages.
+	[[nodiscard]] virtual Result writeDialogUpdateStart(
 		const Data::DialogInfo &data,
 		const DialogState &state) = 0;
 

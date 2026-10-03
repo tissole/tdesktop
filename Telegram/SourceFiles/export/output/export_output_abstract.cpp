@@ -41,6 +41,32 @@ QString NormalizePath(
 	const auto base = (settings.onlySinglePeer() && !singlePeerFolder.isEmpty())
 		? singlePeerFolder
 		: fallback;
+	if (settings.onlySinglePeer()
+		&& singlePeerFolder.startsWith(u"EX_"_q)
+		&& !QDir(result + base).exists()) {
+		// Fresh export after a chat rename: the folder is matched by the
+		// bare id only and its stale name part follows the current title.
+		// An existing exact-name folder keeps the old numbered-copy
+		// behaviour below; only a stale name is ever renamed.
+		const auto tail = singlePeerFolder.mid(3);
+		const auto cut = tail.indexOf('_');
+		const auto stem = u"EX_"_q + (cut >= 0 ? tail.left(cut) : tail);
+		const auto existing = QDir(result).entryList(
+			{ stem, stem + u"_*"_q },
+			QDir::Dirs | QDir::NoDotAndDotDot);
+		const auto pick = [&] {
+			for (const auto &name : existing) {
+				if (!name.contains(u" ("_q)) {
+					return name;
+				}
+			}
+			return existing.isEmpty() ? QString() : existing.front();
+		}();
+		if (!pick.isEmpty()
+			&& QDir().rename(result + pick, result + base)) {
+			return result + base + '/';
+		}
+	}
 	const auto add = [&](int i) {
 		return base + (i ? " (" + QString::number(i) + ')' : QString());
 	};

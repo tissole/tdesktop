@@ -63,9 +63,15 @@ public:
 	Result resumeDialogStart(
 		const Data::DialogInfo &data,
 		const DialogState &state) override;
+	Result writeDialogUpdateStart(
+		const Data::DialogInfo &data,
+		const DialogState &state) override;
 	DialogState dialogState() const override;
 	Result writeDialogSlice(const Data::MessagesSlice &data) override;
 	Result writeDialogEnd() override;
+	Result writeDialogSkipped(
+		const Data::DialogInfo &data,
+		int count) override;
 	Result writeDialogsEnd() override;
 
 	Result finish() override;

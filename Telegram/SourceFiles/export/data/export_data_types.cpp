@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/export_settings.h"
 #include "export/output/export_output_file.h"
 #include "base/base_file_utilities.h"
+#include "ui/text/text_entity.h"
 #include "ui/text/format_values.h"
 #include "core/mime_type.h"
 #include "core/utils.h"
@@ -3388,15 +3389,20 @@ DialogsInfo ParseDialogsInfo(const MTPmessages_Dialogs &data) {
 			const auto peerIt = peers.find(info.peerId);
 			if (peerIt != end(peers)) {
 				const auto &peer = peerIt->second;
-				info.type = peer.user()
-					? DialogTypeFromUser(*peer.user())
-					: DialogTypeFromChat(*peer.chat());
-				info.name = peer.user()
-					? peer.user()->info.firstName
-					: peer.name();
-				info.lastName = peer.user()
-					? peer.user()->info.lastName
-					: Utf8String();
+			info.type = peer.user()
+				? DialogTypeFromUser(*peer.user())
+				: DialogTypeFromChat(*peer.chat());
+			info.name = peer.user()
+				? peer.user()->info.firstName
+				: peer.name();
+			info.lastName = peer.user()
+				? peer.user()->info.lastName
+				: Utf8String();
+			info.username = peer.user()
+				? peer.user()->username
+				: peer.chat()
+				? peer.chat()->username
+				: Utf8String();
 				info.colorIndex = peer.colorIndex();
 				info.input = peer.input();
 				info.migratedToChannelId = peer.chat()
@@ -3428,6 +3434,7 @@ DialogInfo DialogInfoFromUser(const User &data) {
 	result.input = (Peer{ data }).input();
 	result.name = data.info.firstName;
 	result.lastName = data.info.lastName;
+	result.username = data.username;
 	result.peerId = data.id();
 	result.topMessageDate = 0;
 	result.topMessageId = 0;
@@ -3440,6 +3447,7 @@ DialogInfo DialogInfoFromChat(const Chat &data) {
 	auto result = DialogInfo();
 	result.input = data.input;
 	result.name = data.title;
+	result.username = data.username;
 	result.peerId = data.id();
 	result.topMessageDate = 0;
 	result.topMessageId = 0;
@@ -3563,17 +3571,26 @@ bool AddMigrateFromSlice(
 void FinalizeDialogsInfo(DialogsInfo &info, const Settings &settings) {
 	auto &chats = info.chats;
 	auto &left = info.left;
-	const auto fullCount = chats.size() + left.size();
-	const auto digits = Data::NumberToString(fullCount - 1).size();
-	auto index = 0;
+	using DialogType = DialogInfo::Type;
+	using Type = Settings::Type;
+	const auto assignPath = [&](DialogInfo &dialog) {
+		if (settings.onlySinglePeer()) {
+			dialog.relativePath = QString();
+			return;
+		}
+		// Id-stable folder, spelled exactly like a single-chat export:
+		// the id leads, so a renamed chat keeps its folder.
+		const auto full = dialog.lastName.isEmpty()
+			? QString::fromUtf8(dialog.name)
+			: (QString::fromUtf8(dialog.name)
+				+ ' '
+				+ QString::fromUtf8(dialog.lastName));
+		const auto name = base::FileNameFromUserString(full);
+		const auto id = u"EX_"_q + QString::number(PeerToBareId(dialog.peerId));
+		dialog.relativePath = (name.isEmpty() ? id : (id + '_' + name)) + '/';
+	};
 	for (auto &dialog : chats) {
-		const auto number = Data::NumberToString(++index, digits, '0');
-		dialog.relativePath = settings.onlySinglePeer()
-			? QString()
-			: "chats/chat_" + QString::fromUtf8(number) + '/';
-
-		using DialogType = DialogInfo::Type;
-		using Type = Settings::Type;
+		assignPath(dialog);
 		const auto setting = [&] {
 			switch (dialog.type) {
 			case DialogType::Self:
@@ -3587,17 +3604,30 @@ void FinalizeDialogsInfo(DialogsInfo &info, const Settings &settings) {
 			}
 			Unexpected("Type in ApiWrap::onlyMyMessages.");
 		}();
-		dialog.onlyMyMessages = (dialog.type != DialogType::Personal)
-			&& ((settings.fullChats & setting) != setting);
+		dialog.onlyMyMessages = ((settings.fullChats & setting) != setting);
 
 		ranges::sort(dialog.splits);
 	}
 	for (auto &dialog : left) {
 		Assert(!settings.onlySinglePeer());
 
-		const auto number = Data::NumberToString(++index, digits, '0');
-		dialog.relativePath = "chats/chat_" + number + '/';
+		assignPath(dialog);
 		dialog.onlyMyMessages = true;
+	}
+	if (!settings.onlySinglePeer()) {
+		// Alphabetical walk order with left channels as a sorted tail.
+		// Deterministic across runs, so resume and update agree on it.
+		const auto byName = [](const DialogInfo &a, const DialogInfo &b) {
+			const auto keyA = TextUtilities::NameSortKey(
+				QString::fromUtf8(a.name));
+			const auto keyB = TextUtilities::NameSortKey(
+				QString::fromUtf8(b.name));
+			return (keyA != keyB)
+				? (keyA < keyB)
+				: (a.peerId.value < b.peerId.value);
+		};
+		ranges::sort(chats, byName);
+		ranges::sort(left, byName);
 	}
 }
 

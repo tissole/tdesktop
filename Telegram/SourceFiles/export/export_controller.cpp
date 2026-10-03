@@ -41,10 +41,141 @@ Settings NormalizeSettings(const Settings &settings) {
 	}
 	auto result = base::duplicate(settings);
 	result.types = result.fullChats = Settings::Type::AnyChatsMask;
+	result.chatSelectionActive = false;
+	result.selectedChats.clear();
 	return result;
 }
 
 } // namespace
+
+// A global run is incremental: its root persists and is found, not
+// made. The root is per account - EX_Global_<id>_<name> - matched by the
+// bare account id only; the name part is cosmetic, so a renamed account
+// still finds its tree (renaming the stale name part when found).
+QString ResolveGlobalRoot(
+		const QString &location,
+		uint64 accountId,
+		const QString &accountName,
+		QString *oldRoot) {
+	const auto stem = u"EX_Global_"_q
+		+ QString::number(accountId);
+	const auto wanted = accountName.isEmpty()
+		? stem
+		: (stem + '_' + accountName);
+	const auto parent = QDir(location);
+	const auto existing = parent.entryList(
+		{ stem, stem + u"_*"_q },
+		QDir::Dirs | QDir::NoDotAndDotDot);
+	const auto finish = [&](const QString &name) {
+		const auto root = parent.absoluteFilePath(name) + '/';
+		QDir().mkpath(root);
+		return root;
+	};
+	if (existing.contains(wanted)) {
+		return finish(wanted);
+	}
+	if (!existing.isEmpty()) {
+		const auto from = parent.absoluteFilePath(existing.front());
+		if (QDir().rename(from, parent.absoluteFilePath(wanted))) {
+			if (oldRoot) {
+				*oldRoot = from + '/';
+			}
+			return finish(wanted);
+		}
+		return finish(existing.front());
+	}
+	return finish(wanted);
+}
+
+namespace {
+
+QString GlobalRootPath(
+		const QString &location,
+		const Environment &environment) {
+	return ResolveGlobalRoot(
+		location,
+		environment.accountId,
+		environment.accountName);
+}
+
+} // namespace
+
+QString ChatBlockHeader(const Data::DialogInfo &info) {
+	const auto display = info.lastName.isEmpty()
+		? QString::fromUtf8(info.name)
+		: (QString::fromUtf8(info.name)
+			+ ' '
+			+ QString::fromUtf8(info.lastName));
+	auto folder = info.relativePath;
+	if (folder.endsWith('/')) {
+		folder.chop(1);
+	}
+	return u"Chat: "_q
+		+ QString::number(Data::PeerToBareId(info.peerId))
+		+ u". "_q
+		+ display
+		+ u" ("_q
+		+ folder
+		+ u')';
+}
+
+void WriteStatsGroups(QTextStream &stream, const FinishedState &state) {
+	auto dataGroups = 0;
+	for (const auto i : Output::Stats::kDisplayOrder) {
+		if (state.groupFiles[i] || state.groupSkipped[i]) {
+			++dataGroups;
+		}
+	}
+	// Single-category runs skip totals: the total is the category itself.
+	if (dataGroups > 1) {
+		stream << "Total unique files: " << state.filesCount << " ("
+			<< Ui::FormatSizeText(state.bytesCount) << "), Total duplicates: "
+			<< state.skippedFiles << " ("
+			<< Ui::FormatSizeText(state.skippedBytes) << ")\n\n";
+	}
+	for (const auto i : Output::Stats::kDisplayOrder) {
+		const auto &group = Output::Stats::kGroupStats[i];
+		const auto files = state.groupFiles[i];
+		const auto skipped = state.groupSkipped[i];
+		if (!files && !skipped) {
+			continue;
+		}
+		stream << group.name << ": " << files
+			<< " ("
+			<< Ui::FormatSizeText(state.groupBytes[i]) << ')';
+		if (skipped > 0) {
+			stream << ", Dups: " << skipped << ", ("
+				<< Ui::FormatSizeText(state.groupSkippedBytes[i])
+				<< ')';
+		}
+		stream << '\n';
+	}
+	if (state.linkMessages) {
+		stream << "Links: " << state.linkTotal << " ("
+			<< (state.linkTotal - state.linkDuplicates) << ')';
+		if (const auto dup = state.linkDuplicates) {
+			stream << ", Duplicates: " << dup;
+		}
+		stream << '\n';
+	}
+	for (auto i = 0; i != Output::Stats::kGroups; ++i) {
+		if (Output::Stats::kGroupStats[i].type
+			!= MediaSettings::Type::Poll) {
+			continue;
+		}
+		if (const auto polls = state.groupFiles[i]) {
+			stream << Output::Stats::kGroupStats[i].name << ": "
+				<< polls << '\n';
+		}
+	}
+	if (state.textMessages) {
+		stream << "Text messages: " << state.textMessages << '\n';
+	}
+}
+
+[[nodiscard]] FinishedState StatsDifference(
+	const Output::Stats &current,
+	const Output::Stats &base);
 
 class ControllerObject {
 public:
@@ -78,6 +209,21 @@ public:
 		const Settings &settings,
 		const Environment &environment,
 		const ::Data::ExResumeRecord &record);
+	void requestChatList(
+		Settings settings,
+		FnMut<void(Data::DialogsInfo&&)> done);
+	void setCachedDialogs(Data::DialogsInfo info);
+	void refreshOnlyMyMessages();
+	void startResumeExportGlobal(
+		const Settings &settings,
+		const Environment &environment,
+		const ::Data::ExResumeRecord &marker,
+		std::vector<::Data::ExResumeRecord> rows);
+	void startUpdateExportGlobal(
+		const Settings &settings,
+		const Environment &environment,
+		const ::Data::ExResumeRecord &marker,
+		std::vector<::Data::ExResumeRecord> rows);
 	void startUpdateExport(
 		const Settings &settings,
 		const Environment &environment,
@@ -101,6 +247,7 @@ public:
 	void requestPause();
 	void resumeExport();
 	rpl::producer<bool> pauseChanges() const;
+	rpl::producer<bool> canPauseChanges() const;
 
 private:
 	using Step = ProcessingState::Step;
@@ -111,8 +258,16 @@ private:
 	void ioError(const QString &path);
 	bool ioCatchError(Output::Result result);
 	void setFinishedState();
+	FinishedState statsShown(const Output::Stats &base) const;
+	void recordChatStats();
+	void applyGlobalResumeScope();
 	Output::Result writeStatsFile() const;
+	Output::Result writeFailedJson() const;
 	Output::Result writeLinksFile() const;
+	void failCurrentDialog(
+		PeerId peerId,
+		const QString &name,
+		const QString &error);
 
 	//void requestPasswordState();
 	//void passwordStateDone(const MTPaccount_Password &password);
@@ -172,6 +327,32 @@ private:
 
 	Data::DialogsInfo _dialogsInfo;
 	int _dialogIndex = -1;
+	std::optional<Data::DialogsInfo> _cachedDialogs;
+	Data::FailedChats _failedChats;
+	uint64 _sessionId = 0;
+	bool _globalResume = false;
+	bool _globalUpdate = false;
+	std::optional<::Data::ExResumeRecord> _globalMarker;
+	std::vector<::Data::ExResumeRecord> _resumeRows;
+	PeerId _resumePeerId = PeerId();
+	int _resumedFailedCount = 0;
+	[[nodiscard]] int totalFailedCount() const {
+		return _resumedFailedCount + int(_failedChats.size());
+	}
+	[[nodiscard]] const ::Data::ExResumeRecord *findResumeRow(
+		PeerId peerId) const;
+	[[nodiscard]] const Data::DialogInfo *findFreshDialog(
+		PeerId peerId) const;
+	[[nodiscard]] bool chatIncludedInRun(
+		const Data::DialogInfo &info) const;
+	void filterRunDialogs();
+	struct ChatStatBlock {
+		QString header;
+		FinishedState state;
+	};
+	std::vector<ChatStatBlock> _chatStats;
+	QByteArray _statsChatBase;
+	QString _chatBlockHeader;
 
 	int _messagesWritten = 0;
 	int _messagesCount = 0;
@@ -366,12 +547,95 @@ void ControllerObject::startExport(
 	_settings.singleTopicRootId = _topicRootId;
 	_settings.singleTopicPeerId = _topicPeerId;
 
-	_settings.path = Output::NormalizePath(_settings, singlePeerFolder);
+	_settings.path = _settings.onlySinglePeer()
+		? Output::NormalizePath(_settings, singlePeerFolder)
+		: GlobalRootPath(_settings.path, _environment);
 	_singlePeerFolder = singlePeerFolder;
 	_freshFolder = false;
 	_scanMode = false;
 	_updateSession = false;
+	_failedChats.clear();
+	_chatStats.clear();
+	_globalResume = false;
+	_globalUpdate = false;
+	_globalMarker = std::nullopt;
+	_resumeRows.clear();
+	_resumePeerId = PeerId();
+	_resumedFailedCount = 0;
+	_cachedDialogs = std::nullopt;
 	_statsSessionBase.clear();
+	_api.setScanMode(false);
+	_writer = Output::CreateWriter(_settings.format);
+	fillExportSteps();
+	exportNext();
+}
+
+void ControllerObject::startResumeExportGlobal(
+		const Settings &settings,
+		const Environment &environment,
+		const ::Data::ExResumeRecord &marker,
+		std::vector<::Data::ExResumeRecord> rows) {
+	if (!_settings.path.isEmpty()) {
+		return;
+	}
+	_updateCounting = false;
+	_settings = NormalizeSettings(settings);
+	_environment = environment;
+	_settings.singleTopicRootId = _topicRootId;
+	_settings.singleTopicPeerId = _topicPeerId;
+	if (!_settings.path.endsWith('/')) {
+		_settings.path += '/';
+	}
+	_singlePeerFolder = QString();
+	_freshFolder = false;
+	_resumeRecord = std::nullopt;
+	_scanMode = false;
+	_updateSession = false;
+	_statsSessionBase.clear();
+	_globalResume = true;
+	_globalUpdate = false;
+	_globalMarker = marker;
+	_resumeRows = std::move(rows);
+	_resumedFailedCount = marker.failedCount;
+	_resumePeerId = PeerId();
+	_failedChats.clear();
+	_chatStats.clear();
+	_api.setScanMode(false);
+	_writer = Output::CreateWriter(_settings.format);
+	fillExportSteps();
+	exportNext();
+}
+
+void ControllerObject::startUpdateExportGlobal(
+		const Settings &settings,
+		const Environment &environment,
+		const ::Data::ExResumeRecord &marker,
+		std::vector<::Data::ExResumeRecord> rows) {
+	if (!_settings.path.isEmpty()) {
+		return;
+	}
+	_updateCounting = false;
+	_settings = NormalizeSettings(settings);
+	_environment = environment;
+	_settings.singleTopicRootId = _topicRootId;
+	_settings.singleTopicPeerId = _topicPeerId;
+	if (!_settings.path.endsWith('/')) {
+		_settings.path += '/';
+	}
+	_singlePeerFolder = QString();
+	_freshFolder = false;
+	_resumeRecord = std::nullopt;
+	_scanMode = false;
+	_updateSession = true;
+	_statsSessionBase.clear();
+	_globalResume = false;
+	_globalUpdate = true;
+	_globalMarker = marker;
+	_resumeRows = std::move(rows);
+	_resumedFailedCount = 0;
+	_resumePeerId = PeerId();
+	_failedChats.clear();
+	_chatStats.clear();
 	_api.setScanMode(false);
 	_writer = Output::CreateWriter(_settings.format);
 	fillExportSteps();
@@ -426,6 +690,8 @@ void ControllerObject::startResumeExport(
 	_scanMode = false;
 	_updateSession = false;
 	_statsSessionBase.clear();
+	_globalResume = false;
+	_globalUpdate = false;
 	_api.setScanMode(false);
 	_writer = Output::CreateWriter(_settings.format);
 	fillExportSteps();
@@ -485,6 +751,8 @@ void ControllerObject::startUpdateExport(
 	_scanMode = false;
 	_updateSession = true;
 	_statsSessionBase.clear();
+	_globalResume = false;
+	_globalUpdate = false;
 	_api.setScanMode(false);
 	_updateCounting = true;
 	_writer = Output::CreateWriter(_settings.format);
@@ -510,10 +778,21 @@ void ControllerObject::startScan(
 	_settings.singleTopicRootId = _topicRootId;
 	_settings.singleTopicPeerId = _topicPeerId;
 
-	_settings.path = Output::NormalizePath(_settings, singlePeerFolder);
+	_settings.path = _settings.onlySinglePeer()
+		? Output::NormalizePath(_settings, singlePeerFolder)
+		: GlobalRootPath(_settings.path, _environment);
 	_singlePeerFolder = singlePeerFolder;
 	_scanMode = true;
 	_updateSession = false;
+	_failedChats.clear();
+	_chatStats.clear();
+	_globalResume = false;
+	_globalUpdate = false;
+	_globalMarker = std::nullopt;
+	_resumeRows.clear();
+	_resumePeerId = PeerId();
+	_resumedFailedCount = 0;
+	_cachedDialogs = std::nullopt;
 	_statsSessionBase.clear();
 	_api.setScanMode(true);
 	_writer = nullptr;
@@ -555,11 +834,23 @@ void ControllerObject::resumeExport() {
 	if (stopped()) {
 		return;
 	}
+	// A boundary-parked run has no live walk: restart the loop at the
+	// parked chat. An in-chat pause resumes inside ApiWrap instead.
+	const auto restart = !_settings.onlySinglePeer()
+		&& !_scanMode
+		&& _api.pausedAtChatBoundary();
 	_api.resumeExport();
+	if (restart) {
+		exportNextDialog();
+	}
 }
 
 rpl::producer<bool> ControllerObject::pauseChanges() const {
 	return _api.pauseChanges();
+}
+
+rpl::producer<bool> ControllerObject::canPauseChanges() const {
+	return _api.canPauseChanges();
 }
 
 void ControllerObject::fillExportSteps() {
@@ -649,6 +940,7 @@ void ControllerObject::cancelExportFast() {
 }
 
 void ControllerObject::setSessionId(uint64 sessionId) {
+	_sessionId = sessionId;
 	_api.setSessionId(sessionId);
 }
 
@@ -668,12 +960,35 @@ void ControllerObject::takeoutRefreshDone(uint64 id) {
 	_api.takeoutRefreshDone(id);
 }
 
+void ControllerObject::requestChatList(
+		Settings settings,
+		FnMut<void(Data::DialogsInfo&&)> done) {
+	_api.requestChatList(std::move(settings), std::move(done));
+}
+
+void ControllerObject::setCachedDialogs(Data::DialogsInfo info) {
+	_cachedDialogs = std::move(info);
+}
+
+void ControllerObject::refreshOnlyMyMessages() {
+	for (auto &info : _dialogsInfo.chats) {
+		const auto setting = SettingsFromDialogsType(info.type);
+		info.onlyMyMessages = ((_settings.fullChats & setting) != setting);
+	}
+	for (auto &info : _dialogsInfo.left) {
+		info.onlyMyMessages = true;
+	}
+}
+
 void ControllerObject::exportNext() {
 	if (++_stepIndex >= _steps.size()) {
 		if (!_scanMode && ioCatchError(_writer->finish())) {
 			return;
 		}
 		if (ioCatchError(writeStatsFile())) {
+			return;
+		}
+		if (ioCatchError(writeFailedJson())) {
 			return;
 		}
 		if (ioCatchError(writeLinksFile())) {
@@ -721,6 +1036,12 @@ void ControllerObject::initialize() {
 			? _writer->dialogState()
 			: Output::DialogState();
 	});
+	_api.pauseChanges(
+	) | rpl::on_next([=](bool paused) {
+		if (paused && !_settings.onlySinglePeer() && !_scanMode) {
+			ioCatchError(writeStatsFile());
+		}
+	}, _lifetime);
 	if (_writer) {
 		_api.setPauseFlushHandler([=](Data::MessagesSlice prefix) {
 			if (prefix.list.empty()) {
@@ -757,6 +1078,14 @@ void ControllerObject::initialized(const ApiWrap::StartInfo &info) {
 }
 
 void ControllerObject::collectDialogsList() {
+	if (_cachedDialogs && _settings.chatSelectionActive) {
+		_dialogsInfo = std::move(*_cachedDialogs);
+		_cachedDialogs = std::nullopt;
+		refreshOnlyMyMessages();
+		exportNext();
+		return;
+	}
+	_cachedDialogs = std::nullopt;
 	setState(stateDialogsList(0));
 	_api.requestDialogsList([=](int count) {
 		if (count > 0) {
@@ -889,11 +1218,209 @@ void ControllerObject::exportOtherData() {
 }
 
 void ControllerObject::exportDialogs() {
+	if (!_settings.onlySinglePeer() && !_scanMode) {
+		if (_globalUpdate && _globalMarker) {
+			auto ordered = Data::DialogsInfo();
+			auto estimate = int64(0);
+			auto eligible = 0;
+			for (const auto peerId : _globalMarker->dialogIds) {
+				const auto fresh = findFreshDialog(peerId);
+				if (!fresh || !chatIncludedInRun(*fresh)) {
+					continue;
+				}
+				(fresh->isLeftChannel ? ordered.left : ordered.chats
+					).push_back(*fresh);
+				const auto row = findResumeRow(peerId);
+				if (!row
+					|| row->state != u"done"_q
+					|| !row->coversWholeChat()) {
+					continue;
+				}
+				const auto anchor = row->updateAnchor
+					? row->updateAnchor
+					: row->lastId;
+				estimate += std::max(
+					int64(0),
+					int64(fresh->topMessageId) - int64(anchor.bare));
+				++eligible;
+			}
+			_dialogsInfo = std::move(ordered);
+			const auto confirm = _updateConfirm;
+			crl::on_main([=, confirm = std::move(confirm)]() mutable {
+				if (confirm) {
+					confirm(
+						int(estimate),
+						eligible,
+						[=](bool go) mutable {
+							if (!go) {
+								cancelExportFast();
+								return;
+							}
+							if (!_scanMode
+								&& ioCatchError(_writer->writeDialogsStart(
+									_dialogsInfo))) {
+								return;
+							}
+							exportNextDialog();
+						});
+				} else if (estimate > 0) {
+					if (!_scanMode
+						&& ioCatchError(_writer->writeDialogsStart(
+							_dialogsInfo))) {
+						return;
+					}
+					exportNextDialog();
+				} else {
+					cancelExportFast();
+				}
+			});
+			return;
+		}
+		if (_globalResume && _globalMarker) {
+			applyGlobalResumeScope();
+			_api.setGlobalDialogIds(_globalMarker->dialogIds);
+		} else {
+			filterRunDialogs();
+			auto ids = std::vector<PeerId>();
+			ids.reserve(_dialogsInfo.chats.size() + _dialogsInfo.left.size());
+			for (const auto &info : _dialogsInfo.chats) {
+				ids.push_back(info.peerId);
+			}
+			for (const auto &info : _dialogsInfo.left) {
+				ids.push_back(info.peerId);
+			}
+			_api.setGlobalDialogIds(std::move(ids));
+		}
+		_api.commitGlobalMarker(u"run"_q, totalFailedCount());
+	}
+	if (!_settings.onlySinglePeer()) {
+		filterRunDialogs();
+	}
 	if (!_scanMode && ioCatchError(_writer->writeDialogsStart(_dialogsInfo))) {
 		return;
 	}
 
 	exportNextDialog();
+}
+
+bool ControllerObject::chatIncludedInRun(
+		const Data::DialogInfo &info) const {
+	const auto setting = SettingsFromDialogsType(info.type);
+	if (((_settings.types & setting) != 0)
+		|| (info.migratedToChannelId
+			&& (((_settings.types & Settings::Type::PublicGroups) != 0)
+				|| ((_settings.types & Settings::Type::PrivateGroups)
+					!= 0)))) {
+		return !_settings.chatSelectionActive
+			|| _settings.selectedChats.contains(info.peerId);
+	}
+	return false;
+}
+
+void ControllerObject::filterRunDialogs() {
+	auto &chats = _dialogsInfo.chats;
+	auto &left = _dialogsInfo.left;
+	chats.erase(
+		ranges::remove_if(
+			chats,
+			[&](const Data::DialogInfo &info) {
+				return !chatIncludedInRun(info);
+			}),
+		end(chats));
+	left.erase(
+		ranges::remove_if(
+			left,
+			[&](const Data::DialogInfo &info) {
+				return !chatIncludedInRun(info);
+			}),
+		end(left));
+}
+
+const ::Data::ExResumeRecord *ControllerObject::findResumeRow(
+		PeerId peerId) const {
+	for (const auto &row : _resumeRows) {
+		if (row.peerId == peerId) {
+			return &row;
+		}
+	}
+	return nullptr;
+}
+
+const Data::DialogInfo *ControllerObject::findFreshDialog(
+		PeerId peerId) const {
+	for (const auto &info : _dialogsInfo.chats) {
+		if (info.peerId == peerId) {
+			return &info;
+		}
+	}
+	for (const auto &info : _dialogsInfo.left) {
+		if (info.peerId == peerId) {
+			return &info;
+		}
+	}
+	return nullptr;
+}
+
+void ControllerObject::applyGlobalResumeScope() {
+	Expects(_globalMarker.has_value());
+	// Keep the snapshot order; chats created while paused are not in
+	// the stored list and wait for the next Export.
+	auto ordered = Data::DialogsInfo();
+	auto previousBlob = QByteArray();
+	auto lastStats = QByteArray();
+	for (const auto peerId : _globalMarker->dialogIds) {
+		const auto fresh = findFreshDialog(peerId);
+		if (!fresh) {
+			auto failed = Data::FailedChat();
+			failed.peerId = peerId;
+			failed.error = u"CHAT_NOT_FOUND"_q;
+			_failedChats.push_back(std::move(failed));
+			continue;
+		}
+		(fresh->isLeftChannel ? ordered.left : ordered.chats
+			).push_back(*fresh);
+		if (const auto row = findResumeRow(peerId)) {
+			if (!row->stats.isEmpty()) {
+				if (row->state == u"done"_q) {
+					auto current = Output::Stats();
+					current.restore(row->stats);
+					auto base = Output::Stats();
+					base.restore(previousBlob);
+					auto block = ChatStatBlock();
+					block.header = ChatBlockHeader(*fresh);
+					block.state = StatsDifference(current, base);
+					_chatStats.push_back(std::move(block));
+				}
+				previousBlob = row->stats;
+				lastStats = row->stats;
+			}
+		}
+	}
+	_dialogsInfo = std::move(ordered);
+	// Only the interrupted chat keeps an open writer object (HTML file
+	// or JSON nesting): failed chats were closed and re-walk fresh.
+	// A boundary park names a chat with no row yet; an in-walk pause or
+	// crash leaves the last unfinished row, found by reverse scan.
+	_resumePeerId = _globalMarker->resumePeerId;
+	if (!_resumePeerId) {
+		for (auto i = _globalMarker->dialogIds.size(); i != 0;) {
+			const auto peerId = _globalMarker->dialogIds[--i];
+			const auto row = findResumeRow(peerId);
+			if (row
+				&& row->state != u"done"_q
+				&& (row->lastId
+					|| row->msgsDone != 0
+					|| !row->stats.isEmpty())) {
+				_resumePeerId = peerId;
+				break;
+			}
+		}
+	}
+	// Seed the accumulator with the last finished chat's totals so the
+	// TOTAL line and later checkpoints stay cumulative across sessions.
+	if (!lastStats.isEmpty()) {
+		_stats.restore(lastStats);
+	}
 }
 
 bool ControllerObject::batchDialogSlices() const {
@@ -928,9 +1455,80 @@ bool ControllerObject::flushPendingSlice() {
 }
 
 void ControllerObject::exportNextDialog() {
-	const auto index = ++_dialogIndex;
-	const auto info = _dialogsInfo.item(index);
+	auto index = _dialogIndex + 1;
+	auto info = _dialogsInfo.item(index);
+	const auto global = !_settings.onlySinglePeer() && !_scanMode;
+	if (global && (_globalResume || _globalUpdate)) {
+		if (_globalResume) {
+			while (info) {
+				const auto row = findResumeRow(info->peerId);
+				if (!row || row->state != u"done"_q) {
+					break;
+				}
+				if (ioCatchError(_writer->writeDialogSkipped(
+						*info,
+						row->total))) {
+					return;
+				}
+				_dialogIndex = index;
+				info = _dialogsInfo.item(++index);
+			}
+		}
+		if (_globalUpdate) {
+			while (info) {
+				const auto row = findResumeRow(info->peerId);
+				if (row
+					&& row->state == u"done"_q
+					&& row->coversWholeChat()) {
+					break;
+				}
+				if (row
+					&& ioCatchError(_writer->writeDialogSkipped(
+						*info,
+						row->total))) {
+					return;
+				}
+				_dialogIndex = index;
+				info = _dialogsInfo.item(++index);
+			}
+		}
+		if (info) {
+			if (_globalUpdate) {
+				if (const auto row = findResumeRow(info->peerId)) {
+					_resumeRecord = *row;
+					_api.setResumeCheckpoint(*row, false);
+					_api.liftUpdateCeiling();
+				}
+			} else if (const auto row = findResumeRow(info->peerId);
+				row
+				&& row->state != u"done"_q
+				&& info->peerId == _resumePeerId) {
+				// The interrupted chat: continue where it stopped. The
+				// accumulator keeps its seeded totals; only the walk
+				// position is restored from the row. Failed chats
+				// re-walk from scratch instead: their writer objects
+				// were already closed.
+				_resumeRecord = *row;
+				_api.setResumeCheckpoint(*row, false);
+			}
+		}
+	}
 	if (info) {
+		if (global
+			&& !_globalUpdate
+			&& _api.parkGlobalAtBoundary(
+				info->peerId,
+				totalFailedCount())) {
+			return;
+		}
+		_dialogIndex = index;
+		if (global) {
+			const auto peerId = info->peerId;
+			const auto name = QString::fromUtf8(info->name);
+			_api.setChatFailHandler([=](const MTP::Error &e) {
+				failCurrentDialog(peerId, name, e.type());
+			});
+		}
 		_api.requestMessages(*info, [=](const Data::DialogInfo &info) {
 		_dialogOpen = true;
 		if (!_scanMode && _dialogOpened) {
@@ -938,14 +1536,18 @@ void ControllerObject::exportNextDialog() {
 		} else if (!_scanMode
 			&& _resumeRecord
 			&& !_freshFolder
-			&& _settings.onlySinglePeer()) {
+			&& (_settings.onlySinglePeer()
+				|| _globalResume
+				|| _globalUpdate)) {
 			auto state = Output::DialogState();
 			state.messagesCount = _resumeRecord->htmlIndex;
 			state.dateMessageId = _resumeRecord->dateIndex;
 			state.lastIds = _resumeRecord->repliedIndex;
 			state.lastMessage = _resumeRecord->lastMsg;
 			if (ioCatchError(
-				_writer->resumeDialogStart(info, state)
+				_updateSession
+				? _writer->writeDialogUpdateStart(info, state)
+				: _writer->resumeDialogStart(info, state)
 			)) {
 				return false;
 			}
@@ -959,6 +1561,10 @@ void ControllerObject::exportNextDialog() {
 			}
 			_messagesWritten = 0;
 			_dialogOpened = true;
+		}
+		if (!_settings.onlySinglePeer() && !_scanMode) {
+			_statsChatBase = _stats.serialize();
+			_chatBlockHeader = ChatBlockHeader(info);
 		}
 		// File-filtered exports count selected messages, not
 		// walked ones: the ApiWrap probes carry the exact total.
@@ -1013,6 +1619,7 @@ void ControllerObject::exportNextDialog() {
 		setState(stateDialogs(selectedProgress()));
 		return true;
 		}, [=] {
+			_api.setChatFailHandler(nullptr);
 			if (!flushPendingSlice()) {
 				return;
 			}
@@ -1021,14 +1628,104 @@ void ControllerObject::exportNextDialog() {
 			}
 			_dialogOpen = false;
 			_dialogOpened = false;
+			if (!_settings.onlySinglePeer() && !_scanMode) {
+				recordChatStats();
+				if (ioCatchError(writeStatsFile())) {
+					return;
+				}
+			}
 			exportNextDialog();
 		});
 		return;
+	}
+	_api.setChatFailHandler(nullptr);
+	if (!_settings.onlySinglePeer() && !_scanMode && !_globalUpdate) {
+		_api.commitGlobalMarker(u"done"_q, totalFailedCount());
 	}
 	if (!_scanMode && ioCatchError(_writer->writeDialogsEnd())) {
 		return;
 	}
 	exportNext();
+}
+
+void ControllerObject::failCurrentDialog(
+		PeerId peerId,
+		const QString &name,
+		const QString &error) {
+	// Global runs only: one bad chat is recorded and the loop continues.
+	// The handler is consumed, so a second stale failure cannot re-enter.
+	_api.setChatFailHandler(nullptr);
+	if (stopped()) {
+		return;
+	}
+	auto failed = Data::FailedChat();
+	failed.peerId = peerId;
+	failed.name = name;
+	failed.error = error;
+	_failedChats.push_back(std::move(failed));
+	if (!_globalUpdate) {
+		_api.commitGlobalMarker(u"run"_q, totalFailedCount());
+	}
+	// Close the half-open writer dialog cleanly so the next chat starts
+	// from a closed state; the partial folder is kept as-is.
+	closeDialogFiles();
+	_messagesWritten = 0;
+	_pendingSlice = Data::MessagesSlice();
+	_resumeRecord = std::nullopt;
+	exportNextDialog();
+}
+
+Output::Result ControllerObject::writeFailedJson() const {
+	if (_failedChats.empty()) {
+		return Output::Result::Success();
+	}
+	const auto dir = _settings.path + QString::fromLatin1("lists/");
+	if (!QDir().mkpath(dir)) {
+		return Output::Result(Output::Result::Type::Error, dir);
+	}
+	auto file = QFile(dir + QString::fromLatin1("failed.json"));
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+		return Output::Result(
+			Output::Result::Type::Error,
+			file.fileName());
+	}
+	auto stream = QTextStream(&file);
+	const auto escape = [](const QString &value) {
+		auto result = QString();
+		result.reserve(value.size());
+		for (const auto c : value) {
+			if (c == u'"') {
+				result += u"\\\""_q;
+			} else if (c == u'\\') {
+				result += u"\\\\"_q;
+			} else if (c.unicode() < 0x20) {
+				result += u" "_q;
+			} else {
+				result += c;
+			}
+		}
+		return result;
+	};
+	stream << u"[\n"_q;
+	auto first = true;
+	for (const auto &failed : _failedChats) {
+		if (!first) {
+			stream << u",\n"_q;
+		}
+		first = false;
+		stream << u"  { \"peer_id\": "_q << qint64(failed.peerId.value)
+			<< u", \"name\": \""_q << escape(failed.name)
+			<< u"\", \"error\": \""_q << escape(failed.error)
+			<< u"\" }"_q;
+	}
+	stream << u"\n]\n"_q;
+	stream.flush();
+	if (stream.status() != QTextStream::Ok) {
+		return Output::Result(
+			Output::Result::Type::Error,
+			file.fileName());
+	}
+	return Output::Result::Success();
 }
 
 template <typename Callback>
@@ -1279,32 +1976,44 @@ ProcessingState ControllerObject::stateTopic(
 }
 
 void ControllerObject::setFinishedState() {
-	auto state = FinishedState();
-	state.path = _scanMode
-		? (_settings.path + QString::fromLatin1("stats.txt"))
-		: _writer->mainFilePath();
 	// An update shows this session's files, a main export the whole thing.
 	// A blob that fails to restore leaves the base at zero.
 	auto base = Output::Stats();
 	if (_updateSession) {
 		base.restore(_statsSessionBase);
 	}
+	auto state = statsShown(base);
+	state.path = _scanMode
+		? (_settings.path + QString::fromLatin1("stats.txt"))
+		: _writer->mainFilePath();
+	state.failedChats = _failedChats;
+	setState(std::move(state));
+}
+
+FinishedState ControllerObject::statsShown(const Output::Stats &base) const {
+	return StatsDifference(_stats, base);
+}
+
+FinishedState StatsDifference(
+		const Output::Stats &current,
+		const Output::Stats &base) {
+	auto state = FinishedState();
 	const auto shown = [&](auto value, auto was) {
 		return std::max(value - was, int64(0));
 	};
 	for (auto i = 0; i != Output::Stats::kGroups; ++i) {
 		const auto type = Output::Stats::kGroupStats[i].type;
 		state.groupFiles[i] = shown(
-			_stats.typeFiles(type),
+			current.typeFiles(type),
 			base.typeFiles(type));
 		state.groupBytes[i] = shown(
-			_stats.typeBytes(type),
+			current.typeBytes(type),
 			base.typeBytes(type));
 		state.groupSkipped[i] = shown(
-			_stats.typeSkipped(type),
+			current.typeSkipped(type),
 			base.typeSkipped(type));
 		state.groupSkippedBytes[i] = shown(
-			_stats.typeSkippedBytes(type),
+			current.typeSkippedBytes(type),
 			base.typeSkippedBytes(type));
 		if (type == MediaSettings::Type::Poll) {
 			continue;
@@ -1314,16 +2023,25 @@ void ControllerObject::setFinishedState() {
 		state.skippedFiles += state.groupSkipped[i];
 		state.skippedBytes += state.groupSkippedBytes[i];
 	}
-	state.textMessages = shown(_stats.textMessages(), base.textMessages());
-	state.linkMessages = shown(_stats.linkMessages(), base.linkMessages());
-	state.linkTotal = shown(_stats.linkTotal(), base.linkTotal());
+	state.textMessages = shown(current.textMessages(), base.textMessages());
+	state.linkMessages = shown(current.linkMessages(), base.linkMessages());
+	state.linkTotal = shown(current.linkTotal(), base.linkTotal());
 	state.linkDuplicates = shown(
-		_stats.linkDuplicates(),
+		current.linkDuplicates(),
 		base.linkDuplicates());
 	state.messagesTotal = shown(
-		_stats.messagesTotal(),
+		current.messagesTotal(),
 		base.messagesTotal());
-	setState(std::move(state));
+	return state;
+}
+
+void ControllerObject::recordChatStats() {
+	auto base = Output::Stats();
+	base.restore(_statsChatBase);
+	auto block = ChatStatBlock();
+	block.header = _chatBlockHeader;
+	block.state = statsShown(base);
+	_chatStats.push_back(std::move(block));
 }
 
 constexpr auto kDiagBuild = 17;
@@ -1358,83 +2076,55 @@ Output::Result ControllerObject::writeStatsFile() const {
 	if (!done) {
 		stream << QDir(_settings.path).dirName() << ", " << date << "\n\n";
 	}
-	auto totalFiles = int64(0);
-	auto totalBytes = int64(0);
-	auto skippedFiles = int64(0);
-	auto skippedBytes = int64(0);
-	for (auto i = 0; i != Output::Stats::kGroups; ++i) {
-		const auto type = Output::Stats::kGroupStats[i].type;
-		if (type == MediaSettings::Type::Poll) {
-			continue;
+	if (!_settings.onlySinglePeer() && !_scanMode && !_chatStats.empty()) {
+		stream << "Run by account " << _sessionId << "\n\n";
+		for (const auto &block : _chatStats) {
+			stream << block.header << '\n';
+			WriteStatsGroups(stream, block.state);
+			stream << '\n';
 		}
-		totalFiles += _stats.typeFiles(type);
-		totalBytes += _stats.typeBytes(type);
-		skippedFiles += _stats.typeSkipped(type);
-		skippedBytes += _stats.typeSkippedBytes(type);
+		stream << "TOTAL ("
+			<< int(_chatStats.size())
+			<< ((_chatStats.size() == 1) ? " chat)\n" : " chats)\n");
+		WriteStatsGroups(stream, statsShown(Output::Stats()));
+	} else {
+		auto totalFiles = int64(0);
+		auto totalBytes = int64(0);
+		auto skippedFiles = int64(0);
+		auto skippedBytes = int64(0);
+		for (auto i = 0; i != Output::Stats::kGroups; ++i) {
+			const auto type = Output::Stats::kGroupStats[i].type;
+			if (type == MediaSettings::Type::Poll) {
+				continue;
+			}
+			totalFiles += _stats.typeFiles(type);
+			totalBytes += _stats.typeBytes(type);
+			skippedFiles += _stats.typeSkipped(type);
+			skippedBytes += _stats.typeSkippedBytes(type);
+		}
+		LOG(("ExportDiag: summary messages=%1 unique=%2 dupes=%3 build=%4")
+			.arg(_stats.messagesTotal())
+			.arg(totalFiles)
+			.arg(skippedFiles)
+			.arg(kDiagBuild));
+		for (const auto i : Output::Stats::kDisplayOrder) {
+			const auto &group = Output::Stats::kGroupStats[i];
+			const auto files = _stats.typeFiles(group.type);
+			const auto skipped = _stats.typeSkipped(group.type);
+			if (!files && !skipped) {
+				continue;
+			}
+			LOG(("ExportDiag: group %1 unique=%2 uniquebytes=%3 dupes=%4 dupebytes=%5")
+				.arg(group.key)
+				.arg(files)
+				.arg(_stats.typeBytes(group.type))
+				.arg(skipped)
+				.arg(_stats.typeSkippedBytes(group.type)));
+		}
+		WriteStatsGroups(stream, statsShown(Output::Stats()));
 	}
-	auto dataGroups = 0;
-	for (const auto i : Output::Stats::kDisplayOrder) {
-		const auto &group = Output::Stats::kGroupStats[i];
-		if (_stats.typeFiles(group.type) || _stats.typeSkipped(group.type)) {
-			++dataGroups;
-		}
-	}
-	// Single-category runs skip totals: the total is the category itself.
-	if (dataGroups > 1) {
-		stream << "Total unique files: " << totalFiles << " ("
-			<< Ui::FormatSizeText(totalBytes) << "), Total duplicates: "
-			<< skippedFiles << " ("
-			<< Ui::FormatSizeText(skippedBytes) << ")\n\n";
-	}
-	LOG(("ExportDiag: summary messages=%1 unique=%2 dupes=%3 build=%4")
-		.arg(_stats.messagesTotal())
-		.arg(totalFiles)
-		.arg(skippedFiles)
-		.arg(kDiagBuild));
-	for (const auto i : Output::Stats::kDisplayOrder) {
-		const auto &group = Output::Stats::kGroupStats[i];
-		const auto files = _stats.typeFiles(group.type);
-		const auto skipped = _stats.typeSkipped(group.type);
-		if (!files && !skipped) {
-			continue;
-		}
-		LOG(("ExportDiag: group %1 unique=%2 uniquebytes=%3 dupes=%4 dupebytes=%5")
-			.arg(group.key)
-			.arg(files)
-			.arg(_stats.typeBytes(group.type))
-			.arg(skipped)
-			.arg(_stats.typeSkippedBytes(group.type)));
-		stream << group.name << ": " << files
-			<< " ("
-			<< Ui::FormatSizeText(_stats.typeBytes(group.type)) << ')';
-		if (skipped > 0) {
-			stream << ", Dups: " << skipped << ", ("
-				<< Ui::FormatSizeText(_stats.typeSkippedBytes(group.type))
-				<< ')';
-		}
-		stream << '\n';
-	}
-	if (_stats.linkMessages()) {
-		stream << "Links: " << _stats.linkTotal() << " ("
-			<< (_stats.linkTotal() - _stats.linkDuplicates()) << ')';
-		if (const auto dup = _stats.linkDuplicates()) {
-			stream << ", Duplicates: " << dup;
-		}
-		stream << '\n';
-	}
-	for (auto i = 0; i != Output::Stats::kGroups; ++i) {
-		if (Output::Stats::kGroupStats[i].type
-			!= MediaSettings::Type::Poll) {
-			continue;
-		}
-		if (const auto polls = _stats.typeFiles(
-				Output::Stats::kGroupStats[i].type)) {
-			stream << Output::Stats::kGroupStats[i].name << ": "
-				<< polls << '\n';
-		}
-	}
-	if (const auto text = _stats.textMessages()) {
-		stream << "Text messages: " << text << '\n';
+	if (!_failedChats.empty()) {
+		stream << "Failed chats: " << _failedChats.size() << '\n';
 	}
 	stream.flush();
 	if (stream.status() != QTextStream::Ok) {
@@ -1557,6 +2247,40 @@ void Controller::startResumeExport(
 	});
 }
 
+void Controller::startResumeExportGlobal(
+		const Settings &settings,
+		const Environment &environment,
+		const ::Data::ExResumeRecord &marker,
+		std::vector<::Data::ExResumeRecord> rows) {
+	LOG(("Export Info: Resumed global export to '%1'.").arg(settings.path));
+
+	_wrapped.with([=, rows = std::move(rows)](
+			Implementation &unwrapped) mutable {
+		unwrapped.startResumeExportGlobal(
+			settings,
+			environment,
+			marker,
+			std::move(rows));
+	});
+}
+
+void Controller::startUpdateExportGlobal(
+		const Settings &settings,
+		const Environment &environment,
+		const ::Data::ExResumeRecord &marker,
+		std::vector<::Data::ExResumeRecord> rows) {
+	LOG(("Export Info: Global update export to '%1'.").arg(settings.path));
+
+	_wrapped.with([=, rows = std::move(rows)](
+			Implementation &unwrapped) mutable {
+		unwrapped.startUpdateExportGlobal(
+			settings,
+			environment,
+			marker,
+			std::move(rows));
+	});
+}
+
 void Controller::startUpdateExport(
 		const Settings &settings,
 		const Environment &environment,
@@ -1611,6 +2335,12 @@ rpl::producer<bool> Controller::pauseChanges() const {
 	});
 }
 
+rpl::producer<bool> Controller::canPauseChanges() const {
+	return _wrapped.producer_on_main([=](const Implementation &unwrapped) {
+		return unwrapped.canPauseChanges();
+	});
+}
+
 void Controller::cancelExportFast() {
 	LOG(("Export Info: Cancelled export."));
 
@@ -1646,6 +2376,22 @@ void Controller::setTakeoutRefreshHook(Fn<void()> hook) {
 void Controller::takeoutRefreshDone(uint64 id) {
 	_wrapped.with([=](Implementation &unwrapped) {
 		unwrapped.takeoutRefreshDone(id);
+	});
+}
+
+void Controller::requestChatList(
+		Settings settings,
+		FnMut<void(Data::DialogsInfo&&)> done) {
+	_wrapped.with([=, done = std::move(done)](
+			Implementation &unwrapped) mutable {
+		unwrapped.requestChatList(std::move(settings), std::move(done));
+	});
+}
+
+void Controller::setCachedDialogs(Data::DialogsInfo info) {
+	_wrapped.with([=, info = std::move(info)](
+			Implementation &unwrapped) mutable {
+		unwrapped.setCachedDialogs(std::move(info));
 	});
 }
 

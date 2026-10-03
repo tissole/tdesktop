@@ -67,12 +67,20 @@ struct NfResumeRecord {
 	int skipped = 0;
 	MsgId lastMsgId = 0;
 	QString state;
+	// int-typed on purpose (like ExResumeRecord::exportFormat): a resumed
+	// job has to rebuild the same copy and grouping behaviour, otherwise a
+	// RegroupAll forward would silently continue as GroupAsIs.
+	int forwardOptions = 0;
+	int groupOptions = 0;
 	std::vector<MsgId> remaining;
 };
 
 struct ExResumeRecord {
 	uint64 sessionId = 0;
 	PeerId peerId = PeerId();
+	// 0 = single chat, 1 = global run. Part of the primary key, so the
+	// two workflows' rows for the same chat coexist.
+	int mode = 0;
 	int total = 0;
 	int msgsDone = 0;
 	int skipped = 0;
@@ -102,6 +110,41 @@ struct ExResumeRecord {
 	MsgId coveredTill = 0;
 	int coveredTillDate = 0;
 	bool migrated = false;
+	// Global-run marker (peerId == 0, mode == 1) and scope snapshot.
+	int failedCount = 0;
+	PeerId resumePeerId = PeerId();
+	// Ordered snapshot of the run's chat list (marker only).
+	std::vector<PeerId> dialogIds;
+	int chatTypes = 0;
+	int fullChats = 0;
+	int extFilterMode = 0;
+	QString extFilter;
+
+	// Update is offered only when the run already covered the chat up to
+	// the newest message as it stood at export time. A run cut short by a
+	// date or id range must not offer it, since updating would pull in the
+	// excluded messages. Compared against coveredTill/coveredTillDate (a
+	// fact stored then), never against the chat's newest id now, which
+	// grows the moment anything is added.
+	[[nodiscard]] bool coversWholeChat() const {
+		const auto anchor = updateAnchor ? updateAnchor : lastId;
+		if (!anchor) {
+			return false;
+		}
+		if (useIdRange) {
+			if (!tillId) {
+				return true;
+			}
+			return coveredTill && tillId == coveredTill.bare;
+		}
+		if (!tillDate) {
+			return true;
+		}
+		if (!coveredTillDate) {
+			return false;
+		}
+		return uint64(coveredTillDate) <= uint64(tillDate);
+	}
 };
 
 class DedupDb {
@@ -200,10 +243,23 @@ public:
 		uint64 sessionId) const;
 
 	void insertExResume(const ExResumeRecord &record);
-	void removeExResume(uint64 sessionId, PeerId peerId);
-	void clearExResume(uint64 sessionId);
+	void removeExResumeFolder(
+		uint64 sessionId,
+		PeerId peerId,
+		int mode,
+		const QString &folder);
+	void clearExResume(uint64 sessionId, int mode);
 	[[nodiscard]] std::vector<ExResumeRecord> loadExResume(
-		uint64 sessionId) const;
+		uint64 sessionId,
+		int mode) const;
+	// Root rename support: moves every stored absolute folder under
+	// oldPrefix to newPrefix (both with trailing slash) for one
+	// session/mode, after the tree itself was renamed on disk.
+	void rebaseExResumeFolder(
+		uint64 sessionId,
+		int mode,
+		const QString &oldPrefix,
+		const QString &newPrefix);
 
 	// Same-run export dedup: temp per-chat rows, deleted on finish/cancel.
 	void insertExTmp(

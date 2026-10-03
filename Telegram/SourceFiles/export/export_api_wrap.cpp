@@ -159,6 +159,8 @@ template <typename Messages>
 		|| ((types & Type::Sticker) == Type::Sticker);
 }
 
+} // namespace
+
 Settings::Type SettingsFromDialogsType(Data::DialogInfo::Type type) {
 	using DialogType = Data::DialogInfo::Type;
 	switch (type) {
@@ -179,6 +181,8 @@ Settings::Type SettingsFromDialogsType(Data::DialogInfo::Type type) {
 	}
 	return Settings::Type(0);
 }
+
+namespace {
 
 [[nodiscard]] uint64 LocationFileId(const Data::FileLocation &location) {
 	return location.data.match(
@@ -967,6 +971,7 @@ void ApiWrap::startExport(
 		const Settings &settings,
 		Output::Stats *stats,
 		FnMut<void(StartInfo)> done) {
+	resetChatListState();
 	Expects(_settings == nullptr);
 	Expects(_startProcess == nullptr);
 
@@ -1226,11 +1231,78 @@ void ApiWrap::requestDialogsList(
 	Expects(_dialogsProcess == nullptr);
 
 	_dialogsProcess = std::make_unique<DialogsProcess>();
-	_dialogsProcess->splitIndexPlusOne = _splits.size();
+	_dialogsProcess->splitIndexPlusOne = _chatListSingleSplit
+		? 1
+		: _splits.size();
 	_dialogsProcess->progress = std::move(progress);
 	_dialogsProcess->done = std::move(done);
 
 	requestDialogsSlice();
+}
+
+void ApiWrap::requestChatList(
+		Settings settings,
+		FnMut<void(Data::DialogsInfo&&)> done) {
+	resetChatListState();
+	Expects(_dialogsProcess == nullptr);
+	Expects(_leftChannelsProcess == nullptr);
+
+	_chatListActive = true;
+	// The picker needs names only: one split lists every dialog, the
+	// remaining splits only add per-split message counts for walks.
+	_chatListSingleSplit = true;
+	// The picker needs the complete list: force every chat category on
+	// for the enumeration, the picker and the run filter live later.
+	settings.types |= Settings::Type::AnyChatsMask;
+	_settings = std::make_unique<Settings>(std::move(settings));
+	_leftChannelsProcess = std::make_unique<LeftChannelsProcess>();
+	ensureChatListSplits([=, done = std::move(done)]() mutable {
+		requestDialogsList(
+			[](int) { return true; },
+			[=, done = std::move(done)](Data::DialogsInfo &&info) mutable {
+				// A run's startExport expects fresh settings.
+				resetChatListState();
+				done(std::move(info));
+			});
+	});
+}
+
+void ApiWrap::resetChatListState() {
+	if (!_chatListActive) {
+		return;
+	}
+	_chatListActive = false;
+	_chatListSingleSplit = false;
+	base::take(_dialogsProcess);
+	base::take(_leftChannelsProcess);
+	_settings = nullptr;
+}
+
+void ApiWrap::ensureChatListSplits(FnMut<void()> done) {
+	if (!_splits.empty()) {
+		done();
+		return;
+	}
+	const auto sharedDone = std::make_shared<FnMut<void()>>(
+		std::move(done));
+	const auto fallback = [=] {
+		_splits.push_back(MTP_messageRange(
+			MTP_int(1),
+			MTP_int(std::numeric_limits<int>::max())));
+		(*sharedDone)();
+	};
+	mainRequest(MTPmessages_GetSplitRanges(
+	)).done([=](const MTPVector<MTPMessageRange> &result) {
+		_splits = result.v;
+		if (_splits.empty()) {
+			fallback();
+		} else {
+			(*sharedDone)();
+		}
+	}).fail([=](const MTP::Error &) {
+		fallback();
+		return true;
+	}).send();
 }
 
 void ApiWrap::startMainSession(FnMut<void()> done) {
@@ -1983,6 +2055,9 @@ void ApiWrap::requestMessages(
 	// Kill stale async callbacks from previous chats: their file
 	// references die with their slices while this process is alive.
 	_dedupGen++;
+	if (!_scanMode) {
+		setCanPause(true);
+	}
 	if (_scanMode) {
 		_chatProcess->scanFilters = ScanSearchFilters(
 			_settings->media.types);
@@ -2327,7 +2402,7 @@ void ApiWrap::requestMessagesCount(int localSplitIndex) {
 			return -1;
 		});
 		if (count < 0) {
-			error("Unexpected messagesNotModified received.");
+			failCurrentChat("Unexpected messagesNotModified received.");
 			return;
 		}
 		recordNewestId(localSplitIndex, result);
@@ -3072,6 +3147,10 @@ void ApiWrap::finishExport(FnMut<void()> done) {
 	// Shared session takeout outlives the export: never finish it
 	// here, just drop the local handle.
 	_takeoutId = std::nullopt;
+	_pauseRequested = false;
+	_paused = false;
+	_globalRunActive = false;
+	setCanPause(false);
 	clearExTmpOnly();
 	done();
 }
@@ -3089,7 +3168,13 @@ void ApiWrap::skipFile(uint64 randomId) {
 }
 
 bool ApiWrap::requestPause() {
-	if (_scanMode || !_chatProcess || _paused) {
+	if (_scanMode || _paused) {
+		return false;
+	}
+	// Outside a chat the flag arms only while a global run is active:
+	// its next chat boundary is the park point. Single-chat and topic
+	// walks keep the old behavior (pause inside the chat only).
+	if (!_chatProcess && !_globalRunActive) {
 		return false;
 	}
 	_pauseRequested = true;
@@ -3102,6 +3187,38 @@ bool ApiWrap::exportPaused() const {
 
 rpl::producer<bool> ApiWrap::pauseChanges() const {
 	return _pauseChanges.events();
+}
+
+rpl::producer<bool> ApiWrap::canPauseChanges() const {
+	return rpl::single(_canPause) | rpl::then(_canPauseChanges.events());
+}
+
+void ApiWrap::setCanPause(bool can) {
+	if (_canPause == can) {
+		return;
+	}
+	_canPause = can;
+	_canPauseChanges.fire(std::move(can));
+}
+
+bool ApiWrap::parkGlobalAtBoundary(PeerId nextPeer, int failedCount) {
+	if (_paused
+		|| !_pauseRequested
+		|| _scanMode
+		|| !_settings
+		|| _settings->onlySinglePeer()
+		|| _chatProcess) {
+		return false;
+	}
+	_pauseRequested = false;
+	_paused = true;
+	commitGlobalMarker(u"paused"_q, failedCount, nextPeer);
+	_pauseChanges.fire(true);
+	return true;
+}
+
+bool ApiWrap::pausedAtChatBoundary() const {
+	return _paused && !_chatProcess && !_fileProcess;
 }
 
 void ApiWrap::setPauseFlushHandler(
@@ -3162,6 +3279,8 @@ void ApiWrap::cancelExportFast() {
 	_decidingFiles.clear();
 	_pauseRequested = false;
 	_paused = false;
+	_globalRunActive = false;
+	setCanPause(false);
 	_updateMode = false;
 	_updateCheckHandler = nullptr;
 	_takeoutInvalidPending = false;
@@ -3496,7 +3615,7 @@ void ApiWrap::consumeChatPage(MTPmessages_Messages result) {
 	auto pageMax = int32(0);
 	auto slice = Data::MessagesSlice();
 	result.match([&](const MTPDmessages_messagesNotModified &data) {
-		error("Unexpected messagesNotModified received.");
+		failCurrentChat("Unexpected messagesNotModified received.");
 	}, [&](const auto &data) {
 		if constexpr (MTPDmessages_messages::Is<decltype(data)>()) {
 			last = true;
@@ -3857,6 +3976,21 @@ void ApiWrap::requestChatMessages(
 		});
 		return true;
 	};
+	const auto chatFail = [=](const MTP::Error &result) {
+		// A stale failure landing after the chat was already skipped
+		// must not abort the run that moved on.
+		if (!_chatProcess) {
+			return true;
+		}
+		if (takeoutFail(result)) {
+			return true;
+		}
+		if (_chatFailHandler) {
+			failCurrentChat(result);
+			return true;
+		}
+		return false;
+	};
 	const auto splitsCount = int(_splits.size());
 	const auto splitIndex = _chatProcess->info.splits[splitPosition];
 	const auto realPeerInput = (splitIndex >= 0)
@@ -3903,7 +4037,7 @@ void ApiWrap::requestChatMessages(
 			MTP_int(maxId), // max_id
 			MTP_int(minId), // min_id
 			MTP_long(0) // hash
-		)).fail(takeoutFail).done(doneHandler).send();
+		)).fail(chatFail).done(doneHandler).send();
 	} else if (_chatProcess->scanBySearch
 		&& _chatProcess->scanFilterIndex >= 0
 		&& _chatProcess->scanFilterIndex
@@ -3940,7 +4074,7 @@ void ApiWrap::requestChatMessages(
 			}, [](const auto &) {});
 			}
 			doneHandler(std::move(result));
-		}).fail(takeoutFail).send();
+		}).fail(chatFail).send();
 	} else {
 		splitRequest(realSplitIndex, MTPmessages_GetHistory(
 			realPeerInput,
@@ -3973,6 +4107,10 @@ void ApiWrap::requestChatMessages(
 						base::take(_chatProcess->requestDone));
 					return true;
 				}
+			}
+			if (_chatFailHandler) {
+				failCurrentChat(error);
+				return true;
 			}
 			return false;
 		}).done(doneHandler).send();
@@ -5195,6 +5333,16 @@ PeerId ApiWrap::currentPeer() const {
 	return PeerId(0);
 }
 
+PeerId ApiWrap::dedupPeerId() const {
+	if (!_scanMode
+		&& _settings
+		&& !_settings->onlySinglePeer()
+		&& !GetEnhancedBool("prevent_export_duplicates")) {
+		return PeerId(0);
+	}
+	return currentPeer();
+}
+
 bool MainMediaId(
 		const Data::Message &message,
 		uint64 &docId,
@@ -5228,7 +5376,7 @@ bool ApiWrap::skipDuplicateById(Data::File &file, const FilePolicy &policy) {
 	if (!db) {
 		return false;
 	}
-	const auto peer = currentPeer();
+	const auto peer = dedupPeerId();
 	_dedupPeers.emplace(peer);
 	const auto known = GetEnhancedBool("prevent_export_duplicates")
 		? db->containsDocId(::Data::DedupDb::Table::Downloads, docId)
@@ -5257,11 +5405,12 @@ void ApiWrap::recordFinishedContent(
 	}
 	const auto global = GetEnhancedBool("prevent_export_duplicates");
 	const auto fullPath = _settings->path + file.relativePath;
-	_dedupPeers.emplace(currentPeer());
+	const auto peer = dedupPeerId();
+	_dedupPeers.emplace(peer);
 	if (Export::FinishFile(
 			*db,
 			_sessionId,
-			currentPeer(),
+			peer,
 			docId,
 			file.content,
 			fullPath,
@@ -5338,9 +5487,24 @@ void ApiWrap::clearDedupRun() {
 	if (!db) {
 		return;
 	}
+	const auto mode = (_settings && !_settings->onlySinglePeer()) ? 1 : 0;
 	for (const auto peer : peers) {
 		db->clearExTmpRun(_sessionId, peer);
-		db->removeExResume(_sessionId, peer);
+	}
+	if (mode == 1) {
+		// The shared namespace collapses every chat into peer 0, so
+		// per-peer removes would miss the mode-1 per-chat rows and the
+		// marker alike: clear the whole mode instead.
+		db->clearExResume(_sessionId, 1);
+	} else if (_settings && !_settings->path.isEmpty()) {
+		// Folder-scoped: sibling exports of the same chats keep their rows.
+		for (const auto peer : peers) {
+			db->removeExResumeFolder(
+				_sessionId,
+				peer,
+				0,
+				_settings->path);
+		}
 	}
 }
 
@@ -5355,7 +5519,9 @@ void ApiWrap::clearExTmpOnly() {
 	}
 }
 
-void ApiWrap::setResumeCheckpoint(const ::Data::ExResumeRecord &record) {
+void ApiWrap::setResumeCheckpoint(
+		const ::Data::ExResumeRecord &record,
+		bool restoreStats) {
 	_resumeArmed = true;
 	_resumeLastId = int32(_updateMode
 		? (record.updateAnchor ? record.updateAnchor : record.lastId).bare
@@ -5370,7 +5536,10 @@ void ApiWrap::setResumeCheckpoint(const ::Data::ExResumeRecord &record) {
 	_resumeDocId = record.docId;
 	_resumePausedFile = record.pausedFile;
 	_resumeFolder = _settings ? _settings->path : QString();
-	if (_stats && !record.stats.isEmpty()) {
+	// A resumed global run seeds its accumulator from the finished
+	// chats instead, so restoring the row's totals here would move it
+	// backward past chats finished after this row was written.
+	if (restoreStats && _stats && !record.stats.isEmpty()) {
 		_stats->restore(record.stats);
 	}
 }
@@ -5482,10 +5651,17 @@ void ApiWrap::abortUpdate() {
 	_updateCheckHandler = nullptr;
 }
 
+void ApiWrap::liftUpdateCeiling() {
+	Expects(_settings != nullptr);
+
+	_settings->singlePeerTill = std::nullopt;
+	_settings->singlePeerTillId = std::nullopt;
+}
+
 void ApiWrap::commitExportProgress(
 		int32 committedMax,
 		const QString &state) {
-	// Resume scope: single-chat file exports. Scan and media-free
+	// Resume scope: file exports with media. Scan and media-free
 	// exports rebuild cheaply and never offer resume.
 	if (_scanMode || !_chatProcess || !_settings || skipMedia()) {
 		return;
@@ -5517,6 +5693,7 @@ void ApiWrap::commitExportProgress(
 	auto record = ::Data::ExResumeRecord();
 	record.sessionId = _sessionId;
 	record.peerId = peer;
+	record.mode = (_settings && !_settings->onlySinglePeer()) ? 1 : 0;
 	record.splitIndex = _chatProcess->localSplitIndex;
 	// Remember whether this chat is the old part of an upgraded
 	// supergroup; an empty input peer means it was never migrated.
@@ -5530,7 +5707,9 @@ void ApiWrap::commitExportProgress(
 	record.selectedDone = _chatProcess->selectedDone;
 	record.filterIndex = std::max(0, _chatProcess->scanFilterIndex);
 	record.lastId = MsgId(committedMax);
-	record.exportFolder = _settings->path;
+	record.exportFolder = (record.mode == 1)
+		? (_settings->path + _chatProcess->info.relativePath)
+		: _settings->path;
 	record.state = state;
 	record.media = static_cast<uint32>(
 		static_cast<std::underlying_type_t<MediaSettings::Type>>(
@@ -5546,6 +5725,15 @@ void ApiWrap::commitExportProgress(
 	record.useIdRange = _settings->useIdRange;
 	record.fromId = _settings->singlePeerFromId.value_or(uint64(0));
 	record.tillId = _settings->singlePeerTillId.value_or(uint64(0));
+	record.chatTypes = static_cast<int>(
+		static_cast<std::underlying_type_t<Settings::Type>>(
+			_settings->types.value()));
+	record.fullChats = static_cast<int>(
+		static_cast<std::underlying_type_t<Settings::Type>>(
+			_settings->fullChats.value()));
+	record.extFilterMode = static_cast<int>(
+		_settings->media.extensionFilterMode);
+	record.extFilter = _settings->media.extensionFilter.join(u',');
 	auto anchor = int64(_chatProcess->updateAnchor);
 	if (_settings->useIdRange && _settings->singlePeerTillId) {
 		anchor = std::max(anchor, int64(*_settings->singlePeerTillId));
@@ -5578,6 +5766,59 @@ void ApiWrap::commitExportProgress(
 		record.repliedIndex = state.lastIds;
 		record.lastMsg = state.lastMessage;
 	}
+	db->insertExResume(record);
+}
+
+void ApiWrap::setGlobalDialogIds(std::vector<PeerId> ids) {
+	_globalDialogIds = std::move(ids);
+	_globalRunActive = true;
+}
+
+void ApiWrap::commitGlobalMarker(
+		const QString &state,
+		int failedCount,
+		PeerId resumePeerId) {
+	// One marker row per global run (peer_id 0, mode 1). Text-only runs
+	// write no checkpoints at all, exactly like the per-chat rows above.
+	if (_scanMode || !_settings || _settings->onlySinglePeer() || skipMedia()) {
+		return;
+	}
+	const auto db = dedupDb();
+	if (!db) {
+		return;
+	}
+	auto record = ::Data::ExResumeRecord();
+	record.sessionId = _sessionId;
+	record.peerId = PeerId(0);
+	record.mode = 1;
+	record.exportFolder = _settings->path;
+	record.state = state;
+	record.failedCount = failedCount;
+	record.resumePeerId = resumePeerId;
+	record.dialogIds = _globalDialogIds;
+	record.media = static_cast<uint32>(
+		static_cast<std::underlying_type_t<MediaSettings::Type>>(
+			_settings->media.types.value()));
+	record.size = _settings->media.sizeLimit;
+	record.exportFormat = static_cast<int>(_settings->format);
+	record.fromDate = _settings->singlePeerFrom
+		? int(*_settings->singlePeerFrom)
+		: 0;
+	record.tillDate = _settings->singlePeerTill
+		? int(*_settings->singlePeerTill)
+		: 0;
+	record.useIdRange = _settings->useIdRange;
+	record.fromId = _settings->singlePeerFromId.value_or(uint64(0));
+	record.tillId = _settings->singlePeerTillId.value_or(uint64(0));
+	record.chatTypes = static_cast<int>(
+		static_cast<std::underlying_type_t<Settings::Type>>(
+			_settings->types.value()));
+	record.fullChats = static_cast<int>(
+		static_cast<std::underlying_type_t<Settings::Type>>(
+			_settings->fullChats.value()));
+	record.extFilterMode = static_cast<int>(
+		_settings->media.extensionFilterMode);
+	record.extFilter = _settings->media.extensionFilter.join(u',');
 	db->insertExResume(record);
 }
 
@@ -5927,7 +6168,7 @@ bool ApiWrap::decideFileDedup(
 		eraseFile();
 		return true;
 	}
-	const auto peer = currentPeer();
+	const auto peer = dedupPeerId();
 	_dedupPeers.emplace(peer);
 	const auto global = GetEnhancedBool("prevent_export_duplicates");
 	if (dedupIdDuplicate(*db, docId, peer, global)) {
@@ -6140,7 +6381,7 @@ bool ApiWrap::decideFileWithMedia(
 		startLoad();
 		return false;
 	}
-	const auto peer = currentPeer();
+	const auto peer = dedupPeerId();
 	const auto global = GetEnhancedBool("prevent_export_duplicates");
 	const auto db = dedupDb();
 	if (!db) {
@@ -6826,7 +7067,9 @@ void ApiWrap::filePartExtractReference(
 
 	const auto folder = filePartMediaFolder();
 	result.match([&](const MTPDmessages_messagesNotModified &data) {
-		error("Unexpected messagesNotModified received.");
+		// No refreshed reference: treat like "reference not found"
+		// below and skip this file instead of aborting the run.
+		filePartUnavailable();
 	}, [&](const auto &data) {
 		Expects(_selfId.has_value());
 
@@ -6893,6 +7136,35 @@ void ApiWrap::filePartUnavailable() {
 	LOG(("Export Error: File unavailable."));
 
 	base::take(_fileProcess)->done(QString());
+}
+
+void ApiWrap::setChatFailHandler(Fn<void(MTP::Error)> handler) {
+	_chatFailHandler = std::move(handler);
+}
+
+void ApiWrap::failCurrentChat(const MTP::Error &e) {
+	if (!_chatFailHandler) {
+		error(e);
+		return;
+	}
+	base::take(_chatProcess);
+	// Drop the dead chat's in-flight file state: entries are keyed by
+	// slice-owned pointers that die with the process above.
+	_decidingFiles.clear();
+	_pendingHash.clear();
+	if (_fileProcess) {
+		_fileProcess->file.close();
+		base::take(_fileProcess);
+	}
+	_pauseRequested = false;
+	_paused = false;
+	_dedupGen++;
+	base::take(_chatFailHandler)(e);
+}
+
+void ApiWrap::failCurrentChat(const QString &text) {
+	failCurrentChat(MTP::Error(
+		MTP_rpc_error(MTP_int(0), MTP_string("API_ERROR: " + text))));
 }
 
 void ApiWrap::error(const MTP::Error &error) {
