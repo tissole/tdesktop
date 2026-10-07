@@ -48,6 +48,7 @@ public:
 	void setScrollHeightValue(rpl::producer<int> value);
 
 	void setFilter(Tab tab);
+	void refreshForwards();
 	[[nodiscard]] rpl::producer<bool> hasDownloadsValue() const;
 	[[nodiscard]] rpl::producer<bool> hasUploadsValue() const;
 

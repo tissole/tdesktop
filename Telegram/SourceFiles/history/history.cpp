@@ -1851,9 +1851,10 @@ void History::addItemToBlock(not_null<HistoryItem*> item) {
 	// ordered. A new message at the bottom is normally the newest one, but a
 	// batch forward can deliver them out of order - and the chat paints them
 	// in the order of the block, not of the slice - so put such a message into
-	// the block and the slot its id belongs to.
+	// the block and the slot its id belongs to. Local echoes use client ids
+	// that sort below every server id: they are always the newest, append.
 	const auto view = [&]() -> HistoryView::Element* {
-		if (!isBuildingFrontBlock()) {
+		if (!isBuildingFrontBlock() && !IsClientMsgId(item->id)) {
 			for (auto i = int(blocks.size()); i > 0;) {
 				const auto index = --i;
 				const auto &messages = blocks[index]->messages;

@@ -201,6 +201,37 @@ public:
 	void clearExTmpSession(uint64 sessionId);
 	void flushExPending();
 
+	enum class TmpTable {
+		Dl,
+		Ul,
+		Fw,
+	};
+	[[nodiscard]] static QString TmpTableName(TmpTable table);
+
+	void insertTmp(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId,
+		uint64 documentId,
+		const QByteArray &hash);
+	[[nodiscard]] bool containsTmpDocId(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId,
+		uint64 documentId) const;
+	[[nodiscard]] bool containsTmpHash(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId,
+		const QByteArray &hash) const;
+	[[nodiscard]] QByteArray hashForTmpDocId(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId,
+		uint64 documentId) const;
+	void clearTmpRun(TmpTable table, uint64 sessionId, uint64 scopeId);
+	void flushTmpPending();
+
 	void beginTransaction();
 	void commitTransaction();
 
@@ -240,6 +271,43 @@ private:
 	std::shared_ptr<SharedDownloads> _shared;
 	mutable std::map<ExTmpKey, ExTmpState> _exTmpStates;
 	int _exPendingWrites = 0;
+
+	struct TmpKey {
+		TmpTable table = TmpTable::Dl;
+		uint64 sessionId = 0;
+		uint64 scopeId = 0;
+		inline bool operator<(const TmpKey &other) const {
+			return std::tie(table, sessionId, scopeId)
+				< std::tie(other.table, other.sessionId, other.scopeId);
+		}
+	};
+
+	struct TmpState {
+		QHash<uint64, QByteArray> docToHash;
+		QHash<QByteArray, QSet<uint64>> hashToDoc;
+		struct Pending {
+			uint64 docId = 0;
+			QByteArray hash;
+		};
+		std::vector<Pending> pending;
+		bool loaded = false;
+	};
+
+	[[nodiscard]] TmpState &tmpState(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId);
+	[[nodiscard]] const TmpState &tmpState(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId) const;
+	void ensureTmpLoaded(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId) const;
+
+	mutable std::map<TmpKey, TmpState> _tmpStates;
+	int _tmpPendingWrites = 0;
 };
 
 DedupDb::Impl::Impl(const QString &path, bool purgePending)
@@ -265,7 +333,9 @@ DedupDb::Impl::Impl(const QString &path, bool purgePending)
 		QSqlQuery cleanup(_db);
 		if (!cleanup.exec(u"DELETE FROM dedup_dl WHERE status = 'u'"_q)
 			|| !cleanup.exec(u"DELETE FROM dedup_ul WHERE status = 'u'"_q)
-			|| !cleanup.exec(u"DELETE FROM ex_tmp WHERE NOT EXISTS ("
+		|| !cleanup.exec(u"DELETE FROM dl_tmp"_q)
+		|| !cleanup.exec(u"DELETE FROM ul_tmp"_q)
+		|| !cleanup.exec(u"DELETE FROM ex_tmp WHERE NOT EXISTS ("
 				"SELECT 1 FROM ex_resume "
 				"WHERE ex_resume.session_id = ex_tmp.session_id "
 				"AND ex_resume.peer_id = ex_tmp.peer_id)"_q)) {
@@ -487,7 +557,34 @@ bool DedupDb::Impl::createTables() {
 			"status TEXT NOT NULL DEFAULT 'f', "
 			"PRIMARY KEY (session_id, peer_id, doc_id))"_q)
 		&& exec(u"CREATE INDEX IF NOT EXISTS idx_ex_tmp_hash "
-			"ON ex_tmp(session_id, peer_id, hash)"_q);
+			"ON ex_tmp(session_id, peer_id, hash)"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS dl_tmp ("
+			"session_id INTEGER NOT NULL DEFAULT 0, "
+			"scope_id INTEGER NOT NULL, "
+			"doc_id INTEGER NOT NULL, "
+			"hash BLOB NOT NULL, "
+			"status TEXT NOT NULL DEFAULT 'f', "
+			"PRIMARY KEY (session_id, scope_id, doc_id))"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_dl_tmp_hash "
+			"ON dl_tmp(session_id, scope_id, hash)"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS ul_tmp ("
+			"session_id INTEGER NOT NULL DEFAULT 0, "
+			"scope_id INTEGER NOT NULL, "
+			"doc_id INTEGER NOT NULL, "
+			"hash BLOB NOT NULL, "
+			"status TEXT NOT NULL DEFAULT 'f', "
+			"PRIMARY KEY (session_id, scope_id, doc_id))"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_ul_tmp_hash "
+			"ON ul_tmp(session_id, scope_id, hash)"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS fw_tmp ("
+			"session_id INTEGER NOT NULL DEFAULT 0, "
+			"scope_id INTEGER NOT NULL, "
+			"doc_id INTEGER NOT NULL, "
+			"hash BLOB NOT NULL, "
+			"status TEXT NOT NULL DEFAULT 'f', "
+			"PRIMARY KEY (session_id, scope_id, doc_id))"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_fw_tmp_hash "
+			"ON fw_tmp(session_id, scope_id, hash)"_q);
 	return created;
 }
 
@@ -1796,6 +1893,178 @@ void DedupDb::Impl::clearExTmpSession(uint64 sessionId) {
 	}
 }
 
+QString DedupDb::Impl::TmpTableName(TmpTable table) {
+	switch (table) {
+	case TmpTable::Dl: return u"dl_tmp"_q;
+	case TmpTable::Ul: return u"ul_tmp"_q;
+	case TmpTable::Fw: return u"fw_tmp"_q;
+	}
+	Unexpected("Tmp table.");
+}
+
+DedupDb::Impl::TmpState &DedupDb::Impl::tmpState(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId) {
+	ensureTmpLoaded(table, sessionId, scopeId);
+	return _tmpStates[{ table, sessionId, scopeId }];
+}
+
+const DedupDb::Impl::TmpState &DedupDb::Impl::tmpState(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId) const {
+	ensureTmpLoaded(table, sessionId, scopeId);
+	return _tmpStates[{ table, sessionId, scopeId }];
+}
+
+void DedupDb::Impl::ensureTmpLoaded(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId) const {
+	auto &s = _tmpStates[{ table, sessionId, scopeId }];
+	if (s.loaded || !_open) {
+		return;
+	}
+	s.loaded = true;
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT doc_id, hash FROM %1 "
+		"WHERE session_id = :session_id AND scope_id = :scope_id"_q.arg(
+			TmpTableName(table)));
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	q.bindValue(u":scope_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(scopeId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: LoadTmp failed: %1").arg(q.lastError().text()));
+		return;
+	}
+	while (q.next()) {
+		const auto docId = q.value(0).toULongLong();
+		const auto hash = q.value(1).toByteArray();
+		if (!docId || hash.isEmpty()) {
+			continue;
+		}
+		s.docToHash[docId] = hash;
+		s.hashToDoc[hash].insert(docId);
+	}
+}
+
+void DedupDb::Impl::insertTmp(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId,
+		uint64 documentId,
+		const QByteArray &hash) {
+	if (!_open || !documentId || hash.isEmpty()) {
+		return;
+	}
+	auto &s = tmpState(table, sessionId, scopeId);
+	s.docToHash[documentId] = hash;
+	s.hashToDoc[hash].insert(documentId);
+	s.pending.push_back({ documentId, hash });
+	if (++_tmpPendingWrites >= kExWriteBatchLimit) {
+		flushTmpPending();
+	}
+}
+
+void DedupDb::Impl::flushTmpPending() {
+	if (_tmpPendingWrites == 0 || !_open) {
+		return;
+	}
+	_tmpPendingWrites = 0;
+	beginTransaction();
+	for (const auto table : { TmpTable::Dl, TmpTable::Ul, TmpTable::Fw }) {
+		QSqlQuery tmp(_db);
+		tmp.prepare(u"INSERT OR REPLACE INTO %1 "
+			"(session_id, scope_id, doc_id, hash, status) "
+			"VALUES (:session_id, :scope_id, :doc_id, :hash, 'f')"_q.arg(
+				TmpTableName(table)));
+		for (auto &[key, s] : _tmpStates) {
+			if (key.table != table) {
+				continue;
+			}
+			for (const auto &row : s.pending) {
+				tmp.bindValue(u":session_id"_q, QVariant::fromValue(
+					static_cast<qulonglong>(key.sessionId)));
+				tmp.bindValue(u":scope_id"_q, QVariant::fromValue(
+					static_cast<qulonglong>(key.scopeId)));
+				tmp.bindValue(u":doc_id"_q, QVariant::fromValue(
+					static_cast<qulonglong>(row.docId)));
+				tmp.bindValue(u":hash"_q, row.hash);
+				if (!tmp.exec()) {
+					LOG(("DedupDb: InsertTmp failed: %1").arg(
+						tmp.lastError().text()));
+				}
+			}
+			s.pending.clear();
+		}
+	}
+	commitTransaction();
+}
+
+bool DedupDb::Impl::containsTmpDocId(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId,
+		uint64 documentId) const {
+	if (!documentId) {
+		return false;
+	}
+	return tmpState(table, sessionId, scopeId).docToHash.contains(
+		documentId);
+}
+
+bool DedupDb::Impl::containsTmpHash(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId,
+		const QByteArray &hash) const {
+	if (hash.isEmpty()) {
+		return false;
+	}
+	const auto &s = tmpState(table, sessionId, scopeId);
+	const auto i = s.hashToDoc.find(hash);
+	return (i != s.hashToDoc.end()) && !i->isEmpty();
+}
+
+QByteArray DedupDb::Impl::hashForTmpDocId(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId,
+		uint64 documentId) const {
+	if (!documentId) {
+		return {};
+	}
+	return tmpState(table, sessionId, scopeId).docToHash.value(documentId);
+}
+
+void DedupDb::Impl::clearTmpRun(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId) {
+	if (const auto i = _tmpStates.find({ table, sessionId, scopeId });
+		i != _tmpStates.end()) {
+		_tmpPendingWrites -= int(i->second.pending.size());
+		_tmpStates.erase(i);
+	}
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM %1 "
+		"WHERE session_id = :session_id AND scope_id = :scope_id"_q.arg(
+			TmpTableName(table)));
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	q.bindValue(u":scope_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(scopeId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ClearTmpRun failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
 void DedupDb::insertEfResumeItem(const EfResumeItem &item) {
 	_impl->insertEfResumeItem(item);
 }
@@ -1922,6 +2191,146 @@ void DedupDb::clearExTmpRun(uint64 sessionId, PeerId peerId) {
 
 void DedupDb::clearExTmpSession(uint64 sessionId) {
 	_impl->clearExTmpSession(sessionId);
+}
+
+void DedupDb::insertDlTmp(
+		uint64 sessionId,
+		uint64 batchId,
+		uint64 documentId,
+		const QByteArray &hash) {
+	_impl->insertTmp(Impl::TmpTable::Dl, sessionId, batchId, documentId, hash);
+}
+
+bool DedupDb::containsDlTmpDocId(
+		uint64 sessionId,
+		uint64 batchId,
+		uint64 documentId) const {
+	return _impl->containsTmpDocId(
+		Impl::TmpTable::Dl,
+		sessionId,
+		batchId,
+		documentId);
+}
+
+bool DedupDb::containsDlTmpHash(
+		uint64 sessionId,
+		uint64 batchId,
+		const QByteArray &hash) const {
+	return _impl->containsTmpHash(
+		Impl::TmpTable::Dl,
+		sessionId,
+		batchId,
+		hash);
+}
+
+QByteArray DedupDb::hashForDlTmpDocId(
+		uint64 sessionId,
+		uint64 batchId,
+		uint64 documentId) const {
+	return _impl->hashForTmpDocId(
+		Impl::TmpTable::Dl,
+		sessionId,
+		batchId,
+		documentId);
+}
+
+void DedupDb::clearDlTmpRun(uint64 sessionId, uint64 batchId) {
+	_impl->clearTmpRun(Impl::TmpTable::Dl, sessionId, batchId);
+}
+
+void DedupDb::insertUlTmp(
+		uint64 sessionId,
+		uint64 batchId,
+		uint64 documentId,
+		const QByteArray &hash) {
+	_impl->insertTmp(Impl::TmpTable::Ul, sessionId, batchId, documentId, hash);
+}
+
+bool DedupDb::containsUlTmpDocId(
+		uint64 sessionId,
+		uint64 batchId,
+		uint64 documentId) const {
+	return _impl->containsTmpDocId(
+		Impl::TmpTable::Ul,
+		sessionId,
+		batchId,
+		documentId);
+}
+
+bool DedupDb::containsUlTmpHash(
+		uint64 sessionId,
+		uint64 batchId,
+		const QByteArray &hash) const {
+	return _impl->containsTmpHash(
+		Impl::TmpTable::Ul,
+		sessionId,
+		batchId,
+		hash);
+}
+
+QByteArray DedupDb::hashForUlTmpDocId(
+		uint64 sessionId,
+		uint64 batchId,
+		uint64 documentId) const {
+	return _impl->hashForTmpDocId(
+		Impl::TmpTable::Ul,
+		sessionId,
+		batchId,
+		documentId);
+}
+
+void DedupDb::clearUlTmpRun(uint64 sessionId, uint64 batchId) {
+	_impl->clearTmpRun(Impl::TmpTable::Ul, sessionId, batchId);
+}
+
+void DedupDb::insertFwTmp(
+		uint64 sessionId,
+		PeerId dstPeer,
+		uint64 itemId,
+		const QByteArray &hash) {
+	_impl->insertTmp(
+		Impl::TmpTable::Fw,
+		sessionId,
+		dstPeer.value,
+		itemId,
+		hash);
+}
+
+bool DedupDb::containsFwTmpItem(
+		uint64 sessionId,
+		PeerId dstPeer,
+		uint64 itemId) const {
+	return _impl->containsTmpDocId(
+		Impl::TmpTable::Fw,
+		sessionId,
+		dstPeer.value,
+		itemId);
+}
+
+bool DedupDb::containsFwTmpHash(
+		uint64 sessionId,
+		PeerId dstPeer,
+		const QByteArray &hash) const {
+	return _impl->containsTmpHash(
+		Impl::TmpTable::Fw,
+		sessionId,
+		dstPeer.value,
+		hash);
+}
+
+QByteArray DedupDb::hashForFwTmpItem(
+		uint64 sessionId,
+		PeerId dstPeer,
+		uint64 itemId) const {
+	return _impl->hashForTmpDocId(
+		Impl::TmpTable::Fw,
+		sessionId,
+		dstPeer.value,
+		itemId);
+}
+
+void DedupDb::clearFwTmpRun(uint64 sessionId, PeerId dstPeer) {
+	_impl->clearTmpRun(Impl::TmpTable::Fw, sessionId, dstPeer.value);
 }
 
 void DedupDb::beginTransaction() {

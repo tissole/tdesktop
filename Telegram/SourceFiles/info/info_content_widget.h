@@ -209,6 +209,11 @@ protected:
 
 	void setScrollTopSkip(int scrollTopSkip);
 	void setScrollBottomSkip(int scrollBottomSkip);
+	// Top offset, in pixels, reserved by section chrome (tabs, etc.) above
+	// the scroll content. The content search field is placed below it so it
+	// never covers section controls. Defaults to 0 (field at the very top).
+	void setSearchFieldTop(int top);
+	void updateSearchFieldGeometry();
 	void setInnerTopReserve(int reserve);
 	void setupFlexibleRegularScroll(
 		not_null<Ui::RpWidget*> inner,
@@ -250,6 +255,7 @@ private:
 	Ui::PaddingWrap<Ui::RpWidget> *_innerWrap = nullptr;
 	base::unique_qptr<Ui::RpWidget> _searchWrap = nullptr;
 	QPointer<Ui::InputField> _searchField;
+	int _searchFieldTop = 0;
 	int _innerDesiredHeight = 0;
 	int _innerTopReserve = 0;
 	int _additionalScroll = 0;

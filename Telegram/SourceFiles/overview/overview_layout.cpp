@@ -1391,6 +1391,9 @@ Document::Document(
 			this,
 			[cancel = std::move(cancel)] { cancel(); }));
 	}
+	if (auto override = std::move(fields.cancellOverride)) {
+		_cancell = std::move(override);
+	}
 
 	_status.update(
 		Ui::FileStatusSizeReady,
@@ -2049,6 +2052,232 @@ bool Document::updateStatusText() {
 			realDuration);
 	}
 	return showPause;
+}
+
+ForwardSummary::ForwardSummary(
+	not_null<Delegate*> delegate,
+	not_null<HistoryItem*> parent,
+	ForwardSummaryFields fields,
+	const style::OverviewFileLayout &st)
+: RadialProgressItem(delegate, parent)
+, _snapshot(std::move(fields.snapshot))
+, _noThumb(fields.noThumb)
+, _st(st) {
+	AddComponents(Info::Bit());
+	setLinks(nullptr, nullptr, std::move(fields.action));
+	update();
+}
+
+void ForwardSummary::update() {
+	_data = _snapshot ? _snapshot() : ForwardSummaryData();
+	_statusText.setText(st::defaultTextStyle, _data.status);
+	_statusDateText.setText(st::defaultTextStyle, _data.statusDate);
+}
+
+void ForwardSummary::initDimensions() {
+	_maxw = _st.maxWidth;
+	if (_noThumb) {
+		_minh = st::linksBorder
+			+ _st.fileStatusTop
+			+ st::normalFont->height
+			+ (_data.statusDate.isEmpty() ? 0 : st::normalFont->height)
+			+ _st.filePadding.bottom();
+		return;
+	}
+	_minh = _st.filePadding.top()
+		+ _st.fileThumbSize
+		+ _st.filePadding.bottom()
+		+ st::lineWidth
+		+ (_data.statusDate.isEmpty() ? 0 : st::normalFont->height);
+}
+
+bool ForwardSummary::elementsAnimating() const {
+	return RadialProgressItem::elementsAnimating()
+		|| _statusText.hasPersistentAnimation()
+		|| _statusDateText.hasPersistentAnimation();
+}
+
+QRect ForwardSummary::buttonRect() const {
+	if (_noThumb) {
+		return QRect();
+	}
+	const auto side = _st.songThumbSize;
+	const auto x = (_st.fileThumbSize - side) / 2;
+	const auto y = st::linksBorder + _st.filePadding.top()
+		+ (_st.fileThumbSize - side) / 2;
+	return style::rtlrect(x, y, side, side, _width);
+}
+
+void ForwardSummary::paint(
+		Painter &p,
+		const QRect &clip,
+		TextSelection selection,
+		const PaintContext *context) {
+	const auto selected = (selection == FullSelection);
+	const auto nameleft = _noThumb
+		? _st.filePadding.left()
+		: (_st.fileThumbSize + _st.filePadding.right());
+	const auto nametop = st::linksBorder + _st.fileNameTop;
+	const auto statustop = st::linksBorder + _st.fileStatusTop;
+
+	QRect border(style::rtlrect(nameleft, 0, _width - nameleft, st::linksBorder, _width));
+	if (!context->skipBorder && clip.intersects(border)) {
+		p.fillRect(clip.intersected(border), st::linksBorderFg);
+	}
+
+	const auto button = buttonRect();
+	if (!_noThumb && clip.intersects(button)) {
+		p.setPen(Qt::NoPen);
+		const auto doc = [&]() -> DocumentData* {
+			if (const auto media = getItem()->media()) {
+				return media->document();
+			}
+			return nullptr;
+		}();
+		if (doc) {
+			const auto generic
+				= ::Layout::DocumentGenericPreview::Create(doc);
+			p.setBrush(selected ? generic.selected : generic.color);
+		} else {
+			switch (getItem()->history()->peer->id.value % 4) {
+			case 0:
+				p.setBrush(selected
+					? st::msgFile1BgSelected
+					: st::msgFile1Bg);
+				break;
+			case 1:
+				p.setBrush(selected
+					? st::msgFile2BgSelected
+					: st::msgFile2Bg);
+				break;
+			case 2:
+				p.setBrush(selected
+					? st::msgFile3BgSelected
+					: st::msgFile3Bg);
+				break;
+			default:
+				p.setBrush(selected
+					? st::msgFile4BgSelected
+					: st::msgFile4Bg);
+				break;
+			}
+		}
+		{
+			PainterHighQualityEnabler hq(p);
+			p.drawEllipse(button);
+		}
+		if (_data.finished) {
+			(selected
+				? st::forwardSummaryCheckSelected
+				: st::forwardSummaryCheck).paintInCenter(p, button);
+		} else if (_data.paused) {
+			(selected
+				? st::overviewSongPlaySelected
+				: st::overviewSongPlay).paintInCenter(p, button);
+		} else {
+			(selected
+				? st::overviewSongPauseSelected
+				: st::overviewSongPause).paintInCenter(p, button);
+		}
+		if (!_data.finished && _data.progress > 0) {
+			PainterHighQualityEnabler hq(p);
+			auto pen = QPen(
+				selected
+					? st::historyFileThumbRadialFgSelected
+					: st::historyFileThumbRadialFg);
+			pen.setWidth(st::msgFileRadialLine);
+			p.setPen(pen);
+			p.setBrush(Qt::NoBrush);
+			const auto line = st::msgFileRadialLine;
+			p.drawArc(
+				button.marginsRemoved(QMargins(line, line, line, line)),
+				90 * 16,
+				-qint32(std::clamp(_data.progress, 0., 1.) * 360 * 16));
+		}
+	}
+
+	const auto availwidth = _width - nameleft;
+	auto title = _data.title;
+	if (!_data.srcName.isEmpty() && !_data.dstName.isEmpty()) {
+		const auto arrow = u" → "_q;
+		const auto full = _data.srcName + arrow + _data.dstName;
+		if (st::normalFont->width(full) > availwidth) {
+			const auto dstNeed = st::normalFont->width(_data.dstName);
+			const auto dstW = std::min(dstNeed, availwidth / 2);
+			const auto srcW = std::max(
+				0,
+				availwidth
+					- st::normalFont->width(arrow)
+					- dstW);
+			title = st::normalFont->elided(_data.srcName, srcW)
+				+ arrow
+				+ st::normalFont->elided(_data.dstName, dstW);
+		} else {
+			title = full;
+		}
+	}
+	if (clip.intersects(style::rtlrect(nameleft, nametop, availwidth, st::semiboldFont->height, _width))) {
+		p.setFont(st::normalFont);
+		p.setPen(st::historyFileNameInFg);
+		p.save();
+		p.setClipRect(style::rtlrect(nameleft, nametop, availwidth, st::semiboldFont->height, _width));
+		p.drawTextLeft(nameleft, nametop, _width, title);
+		p.restore();
+	}
+	const auto statuswidth = std::min(availwidth, _statusText.maxWidth());
+	if (clip.intersects(style::rtlrect(nameleft, statustop, statuswidth, st::normalFont->height, _width))) {
+		_statusText.drawLeftElided(p, nameleft, statustop, statuswidth, _width);
+	}
+	if (!_data.statusDate.isEmpty()) {
+		const auto datetop = statustop + st::normalFont->height;
+		const auto datewidth = std::min(availwidth, _statusDateText.maxWidth());
+		if (clip.intersects(style::rtlrect(nameleft, datetop, datewidth, st::normalFont->height, _width))) {
+			_statusDateText.drawLeftElided(p, nameleft, datetop, datewidth, _width);
+		}
+	}
+
+	const auto checkDelta = _st.fileThumbSize
+		- st::overviewCheckSkip
+		- st::overviewSmallCheck.size;
+	paintCheckbox(
+		p,
+		{ checkDelta, int(st::linksBorder + _st.filePadding.top()) + checkDelta },
+		selected,
+		context);
+}
+
+TextState ForwardSummary::getState(
+		QPoint point,
+		StateRequest) const {
+	if (_data.finished) {
+		return {};
+	}
+	if (buttonRect().contains(point)) {
+		return { parent(), _cancell };
+	}
+	return {};
+}
+
+bool ForwardSummary::selectionConsumesClick(QPoint) const {
+	return true;
+}
+
+void ForwardSummary::itemDataChanged() {
+	update();
+	initDimensions();
+	delegate()->repaintItem(this);
+}
+
+float64 ForwardSummary::dataProgress() const {
+	return std::clamp(_data.progress, 0., 1.);
+}
+
+bool ForwardSummary::dataFinished() const {
+	return _data.finished;
+}
+
+bool ForwardSummary::dataLoaded() const {
+	return _data.finished;
 }
 
 Link::Link(

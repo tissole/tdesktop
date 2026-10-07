@@ -117,6 +117,12 @@ constexpr auto kResumeSaveInterval = 10 * crl::time(1000);
 	return Core::IsMimeSticker(mime) ? "WEBP" : "JPG";
 }
 
+[[nodiscard]] uint64 UploadBatchId(
+		const std::shared_ptr<FilePrepareResult> &file) {
+	const auto batch = file ? file->batch : nullptr;
+	return (batch && batch->total > 1) ? batch->id : uint64(0);
+}
+
 } // namespace
 
 struct Uploader::Entry {
@@ -415,10 +421,16 @@ FullMsgId Uploader::currentUploadId() const {
 bool Uploader::checkUploadDuplicate(
 		FullMsgId itemId,
 		const std::shared_ptr<FilePrepareResult> &file) {
-	if (!GetEnhancedBool("prevent_upload_duplicates")
-		|| (file->type != SendMediaType::File
-			&& file->type != SendMediaType::ThemeFile
-			&& file->type != SendMediaType::Photo)) {
+	const auto typeOk = (file->type == SendMediaType::File
+		|| file->type == SendMediaType::ThemeFile
+		|| file->type == SendMediaType::Photo);
+	if (!typeOk) {
+		return false;
+	}
+	const auto batch = file->batch;
+	const auto batchId = (batch && batch->total > 1) ? batch->id : 0;
+	const auto dedupOff = !GetEnhancedBool("prevent_upload_duplicates");
+	if (dedupOff && !batchId) {
 		return false;
 	}
 	auto hash = QByteArray();
@@ -439,6 +451,17 @@ bool Uploader::checkUploadDuplicate(
 		return false;
 	}
 	auto &dedupDb = Core::App().downloadManager().dedupDb();
+	if (dedupOff) {
+		const auto sessionId = session().uniqueId();
+		if (dedupDb.isOpen()
+			&& dedupDb.containsUlTmpHash(sessionId, batchId, hash)) {
+			return true;
+		}
+		if (dedupDb.isOpen() && file->id) {
+			dedupDb.insertUlTmp(sessionId, batchId, file->id, hash);
+		}
+		return false;
+	}
 	if (dedupDb.containsHash(Data::DedupDb::Table::Uploads, hash)
 		|| _uploadPendingHashes.contains(hash)) {
 		return true;
@@ -1366,6 +1389,7 @@ void Uploader::finishEntry(std::vector<Entry>::iterator i) {
 			.filename = entry.file->filepath,
 			.started = started,
 			.jobIndex = entry.jobIndex,
+			.batchId = UploadBatchId(entry.file),
 		};
 		if (IsServerMsgId(entry.itemId.msg)) {
 			commitFinishedUpload(std::move(info));
@@ -1618,7 +1642,8 @@ Fn<std::optional<QByteArray>()> Uploader::serializeFinishedUploads() {
 		const auto constant = sizeof(quint64) // itemId.peer
 			+ sizeof(qint64) // itemId.msg
 			+ sizeof(qint64) // started
-			+ sizeof(qint32); // jobIndex
+			+ sizeof(qint32) // jobIndex
+			+ sizeof(quint64); // batchId
 		auto size = sizeof(qint32) // version
 			+ sizeof(qint32) // count
 			+ count * constant
@@ -1630,14 +1655,15 @@ Fn<std::optional<QByteArray>()> Uploader::serializeFinishedUploads() {
 
 		auto stream = QDataStream(&result, QIODevice::WriteOnly);
 		stream.setVersion(QDataStream::Qt_5_1);
-		stream << qint32(-1) << qint32(int(count));
+		stream << qint32(-2) << qint32(int(count));
 		for (const auto &upload : _finishedUploadsList) {
 			stream
 				<< quint64(upload.itemId.peer.value)
 				<< qint64(upload.itemId.msg.bare)
 				<< qint64(upload.started)
 				<< upload.filename
-				<< qint32(upload.jobIndex);
+				<< qint32(upload.jobIndex)
+				<< quint64(upload.batchId);
 		}
 		stream << qint32(_jobId);
 		stream.device()->close();
@@ -1661,7 +1687,13 @@ void Uploader::loadFinishedUploadsFromAccount() {
 		return;
 	}
 	const auto legacy = (count >= 0);
+	auto v2 = false;
 	if (!legacy) {
+		if (count == -2) {
+			v2 = true;
+		} else if (count != -1) {
+			return;
+		}
 		stream >> count;
 	}
 	if (stream.status() != QDataStream::Ok
@@ -1680,8 +1712,12 @@ void Uploader::loadFinishedUploadsFromAccount() {
 			>> started
 			>> filename;
 		auto jobIndex = qint32(0);
+		auto batchId = quint64(0);
 		if (!legacy) {
 			stream >> jobIndex;
+			if (v2) {
+				stream >> batchId;
+			}
 		}
 		if (stream.status() != QDataStream::Ok) {
 			return;
@@ -1698,6 +1734,7 @@ void Uploader::loadFinishedUploadsFromAccount() {
 			.filename = filename,
 			.started = started,
 			.jobIndex = legacy ? 0 : int(jobIndex),
+			.batchId = v2 ? batchId : uint64(0),
 		});
 	}
 	if (legacy) {
@@ -1935,6 +1972,7 @@ std::vector<Uploader::UiUploadInfo> Uploader::activeUploads() const {
 			info.filename = entry.file->filepath;
 			info.total = entry.file->filesize;
 			info.offset = entry.docSentSize + entry.sentSize;
+			info.batchId = UploadBatchId(entry.file);
 		}
 		info.paused = entry.paused;
 		result.push_back(std::move(info));

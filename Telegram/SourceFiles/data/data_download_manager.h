@@ -24,6 +24,7 @@ struct DownloadBarContent;
 } // namespace Ui
 
 struct DownloadBatch;
+struct UploadBatch;
 
 namespace Main {
 class Session;
@@ -52,6 +53,19 @@ using DownloadDate = int64;
 [[nodiscard]] inline TimeId DateFromDownloadDate(DownloadDate date) {
 	return date / 1000;
 }
+
+struct FinishedDlRun {
+	uint64 batchId = 0;
+	uint64 sessionId = 0;
+	QString srcName;
+	QString destDir;
+	int total = 0;
+	int done = 0;
+	int skipped = 0;
+	TimeId startedAt = 0;
+	TimeId finishedAt = 0;
+};
+using FinishedUlRun = FinishedDlRun;
 
 struct DownloadId {
 	uint64 objectId = 0;
@@ -82,6 +96,7 @@ struct DownloadedId {
 	FullMsgId itemId;
 	uint64 peerAccessHash = 0;
 	int jobIndex = 0;
+	uint64 batchId = 0;
 
 	std::unique_ptr<DownloadObject> object;
 };
@@ -98,6 +113,7 @@ struct DownloadingId {
 	bool paused = false;
 	bool enhancedForward = false;
 	int jobIndex = 0;
+	uint64 batchId = 0;
 };
 
 class DownloadManager final {
@@ -119,11 +135,15 @@ public:
 
 	[[nodiscard]] DownloadDate computeNextStartDate();
 
-	void addLoading(DownloadObject object, bool enhancedForward = false);
+	void addLoading(
+		DownloadObject object,
+		bool enhancedForward = false,
+		uint64 batchId = 0);
 	void addLoaded(
 		DownloadObject object,
 		const QString &path,
-		DownloadDate started);
+		DownloadDate started,
+		uint64 batchId = 0);
 	void removeLoading(not_null<const HistoryItem*> item);
 
 	struct ExternalLoadingState {
@@ -201,7 +221,13 @@ public:
 	void checkDuplicate(
 		not_null<Main::Session*> session,
 		not_null<DocumentData*> document,
-		Fn<void(bool)> done);
+		Fn<void(bool)> done,
+		uint64 batchId = 0);
+	void commitDlTmpFile(
+		uint64 sessionId,
+		uint64 batchId,
+		uint64 documentId,
+		const QString &path);
 	void fetchFingerprint(
 		not_null<Main::Session*> session,
 		not_null<DocumentData*> document,
@@ -216,8 +242,39 @@ public:
 	[[nodiscard]] QString dedupDbPath() const;
 	void reportDuplicateSkipped(DedupDb::Table table, int count = 1);
 	void addBatch(std::weak_ptr<DownloadBatch> batch);
+	void holdFinishedDlBatch(std::shared_ptr<DownloadBatch> batch);
+	void dropHeldDlBatches();
+	[[nodiscard]] bool hasHeldDlBatches() const;
+	void noteDlBatchFinished(std::shared_ptr<DownloadBatch> batch);
+	void dropDlBatch(uint64 batchId);
+	void dropFinishedDlRuns();
+	void dropDlRun(uint64 batchId);
+	struct DlRunSnapshot {
+		uint64 batchId = 0;
+		uint64 sessionId = 0;
+		QString srcName;
+		QString destDir;
+		int total = 0;
+		int done = 0;
+		int skipped = 0;
+		TimeId startedAt = 0;
+		TimeId finishedAt = 0;
+		bool finished = false;
+	};
+	[[nodiscard]] std::vector<DlRunSnapshot> dlRuns();
+	using UlRunSnapshot = DlRunSnapshot;
+	void noteUlBatchFinished(std::shared_ptr<UploadBatch> batch);
+	void dropUlBatch(uint64 batchId);
+	void dropFinishedUlRuns();
+	void dropUlRun(uint64 batchId);
+	[[nodiscard]] std::vector<UlRunSnapshot> ulRuns();
 	void pokeDownloadBar();
 	[[nodiscard]] std::tuple<int, int, int> batchTotals();
+	void addUploadBatch(std::weak_ptr<UploadBatch> batch);
+	void holdFinishedUlBatch(std::shared_ptr<UploadBatch> batch);
+	void dropHeldUlBatches();
+	[[nodiscard]] bool hasHeldUlBatches() const;
+	[[nodiscard]] std::tuple<int, int, int> uploadBatchTotals();
 
 private:
 	void notifyDuplicateSkips();
@@ -288,7 +345,9 @@ private:
 		not_null<Main::Session*> session) const;
 	[[nodiscard]] std::vector<DownloadedId> deserialize(
 		not_null<Main::Session*> session,
-		int *jobId = nullptr) const;
+		int *jobId = nullptr,
+		std::vector<FinishedDlRun> *runs = nullptr,
+		std::vector<FinishedUlRun> *ulRuns = nullptr) const;
 
 	void saveToDisk();
 	void saveIfIdle();
@@ -333,6 +392,20 @@ private:
 	int _duplicatesSkipped[2] = { 0, 0 };
 
 	std::vector<std::weak_ptr<DownloadBatch>> _batches;
+	std::vector<std::weak_ptr<UploadBatch>> _uploadBatches;
+	std::vector<FinishedDlRun> _finishedDlRuns;
+	std::vector<FinishedUlRun> _finishedUlRuns;
+	std::vector<uint64> _droppedDlBatches;
+	std::vector<uint64> _droppedUlBatches;
+	struct HeldCounts {
+		int total = 0;
+		int done = 0;
+		int skipped = 0;
+		crl::time until = 0;
+	};
+	std::vector<HeldCounts> _heldDlBatches;
+	std::vector<HeldCounts> _heldUlBatches;
+	base::Timer _holdExpiryTimer;
 
 };
 

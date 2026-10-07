@@ -860,12 +860,33 @@ void ListWidget::removeLayoutFromSections(not_null<BaseLayout*> layout) {
 	// sometimes with only a postponed refresh scheduled (downloads), so
 	// the sections must forget the layout right away, otherwise a paint
 	// before that refresh would use the destroyed layout.
-	const auto item = layout->getItem();
-	for (auto i = begin(_sections); i != end(_sections); ++i) {
-		if (removeItemFromSection(item, i)) {
-			refreshHeightAfterRemoval();
-			return;
+	// Remove by layout pointer, not by item: several rows can share one
+	// carrier item (transfer manager forward aggregates), and removing
+	// by item would drop a live sibling while leaking the destroyed
+	// layout into the section.
+	auto removed = false;
+	for (auto i = begin(_sections); i != end(_sections);) {
+		const auto wasReorder = (_reorderState.section == &*i);
+		const auto before = i->items().size();
+		i->removeLayout(layout);
+		if (i->items().size() != before) {
+			removed = true;
+			if (wasReorder) {
+				dropReorderState();
+			}
 		}
+		if (i->empty()) {
+			if (_reorderState.section) {
+				// Erasing shifts the sections the pointer points into.
+				dropReorderState();
+			}
+			i = _sections.erase(i);
+		} else {
+			++i;
+		}
+	}
+	if (removed) {
+		refreshHeightAfterRemoval();
 	}
 }
 
@@ -1701,6 +1722,12 @@ void ListWidget::showContextMenu(
 		: nullptr;
 	const auto isEfItem = (downloadsProvider != nullptr)
 		&& downloadsProvider->isEnhancedForward(item);
+	const auto isFwAggregate = (downloadsProvider != nullptr)
+		&& downloadsProvider->isForwardAggregate(item);
+	const auto isDlAggregate = (downloadsProvider != nullptr)
+		&& downloadsProvider->isDownloadAggregate(item);
+	const auto isUlAggregate = (downloadsProvider != nullptr)
+		&& downloadsProvider->isUploadAggregate(item);
 
 	enum class SelectionState {
 		NoSelectedItems,
@@ -1769,7 +1796,67 @@ void ListWidget::showContextMenu(
 			&st::menuIconShowInChat);
 	}
 
-	if (isEfItem && overSelected == SelectionState::NoSelectedItems) {
+	if (isFwAggregate && overSelected == SelectionState::NoSelectedItems) {
+		if (downloadsProvider->isForwardAggregateFinished(item)) {
+			_contextMenu->addAction(
+				tr::lng_tm_item_clear_forward(tr::now),
+				crl::guard(this, [=] {
+					downloadsProvider->clearForwardRun(item);
+				}),
+				&st::menuIconClear);
+		} else {
+			const auto paused = downloadsProvider->isForwardAggregatePaused(
+				item);
+			_contextMenu->addAction(
+				(paused
+					? tr::lng_tm_fw_resume(tr::now)
+					: tr::lng_tm_fw_pause(tr::now)),
+				crl::guard(this, [=] {
+					downloadsProvider->toggleForwardRun(item);
+				}),
+				(paused ? &st::menuIconDownload : &st::menuIconSchedule));
+			_contextMenu->addAction(
+				tr::lng_tm_fw_cancel(tr::now),
+				crl::guard(this, [=] {
+					const auto window = _controller->parentController();
+					setActionBoxWeak(window->show(Ui::MakeConfirmBox({
+						.text = tr::lng_tm_fw_cancel_confirm(tr::now),
+						.confirmed = [=](Fn<void()> close) {
+							close();
+							downloadsProvider->cancelForwardRun(item);
+						},
+						.confirmText = tr::lng_box_yes(tr::now),
+						.cancelText = tr::lng_box_no(tr::now),
+						.confirmStyle = &st::attentionBoxButton,
+					})));
+				}),
+						&st::menuIconCancel);
+		}
+	}
+
+	if (isDlAggregate && overSelected == SelectionState::NoSelectedItems) {
+		_contextMenu->addAction(
+			tr::lng_tm_dl_clear_batch(tr::now),
+			crl::guard(this, [=] {
+				downloadsProvider->clearDownloadRun(
+					downloadsProvider->downloadAggregateBatchId(item));
+			}),
+			&st::menuIconClear);
+	}
+
+	if (isUlAggregate && overSelected == SelectionState::NoSelectedItems) {
+		_contextMenu->addAction(
+			tr::lng_tm_ul_clear_batch(tr::now),
+			crl::guard(this, [=] {
+				downloadsProvider->clearUploadRun(
+					downloadsProvider->uploadAggregateBatchId(item));
+			}),
+			&st::menuIconClear);
+	}
+
+	if (isEfItem
+		&& !isFwAggregate
+		&& overSelected == SelectionState::NoSelectedItems) {
 		const auto session = &_controller->session();
 		const auto ef = TmFindEf(TmBuildEfLookup(session), item);
 		if (ef.valid && (ef.active || ef.resumable)) {
@@ -2056,6 +2143,8 @@ void ListWidget::showContextMenu(
 			}
 			if (selectionData.canDelete
 				&& !isEfItem
+				&& !isDlAggregate
+				&& !isUlAggregate
 				&& !isUpload
 				&& !(downloadsProvider
 					&& downloadsProvider->isDownloading(item))) {
@@ -2101,7 +2190,10 @@ void ListWidget::showContextMenu(
 						[=] { _contextMenu = nullptr; }));
 				}
 			}
-			if (_controller->isDownloads() && downloadsProvider) {
+			if (_controller->isDownloads()
+				&& downloadsProvider
+				&& !isDlAggregate
+				&& !isUlAggregate) {
 				if (downloadsProvider->isDownloaded(item)) {
 					_contextMenu->addAction(
 						tr::lng_tm_item_clear_download(tr::now),
@@ -2117,6 +2209,22 @@ void ListWidget::showContextMenu(
 								.removeFinishedUpload(item->fullId());
 						}),
 						&st::menuIconClear);
+				} else if (!isEfItem) {
+					auto busy = false;
+					if (const auto media = item->media()) {
+						if (const auto document = media->document()) {
+							busy = document->loading()
+								|| document->uploading();
+						}
+					}
+					if (!busy) {
+						_contextMenu->addAction(
+							tr::lng_tm_item_clear_download(tr::now),
+							crl::guard(this, [=] {
+								downloadsProvider->clearTransferRow(item);
+							}),
+							&st::menuIconClear);
+					}
 				}
 			}
 		}

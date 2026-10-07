@@ -124,18 +124,32 @@ struct UploadBatch {
 	int duplicates = 0;
 	int failed = 0;
 	bool done = false;
+	uint64 id = 0;
+	uint64 sessionId = 0;
+	TimeId startedAt = 0;
+	TimeId finishedAt = 0;
 	std::function<void(int uploaded, int duplicates)> onDone;
+	std::function<void()> onChange;
 
 	void addUploaded() {
 		++uploaded;
+		if (onChange) {
+			onChange();
+		}
 		checkDone();
 	}
 	void addDuplicate() {
 		++duplicates;
+		if (onChange) {
+			onChange();
+		}
 		checkDone();
 	}
 	void addFailed() {
 		++failed;
+		if (onChange) {
+			onChange();
+		}
 		checkDone();
 	}
 	void checkDone() {

@@ -28,6 +28,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
 #include "mainwindow.h"
+#include "rpl/rpl.h"
+#include "settings.h"
 #include "storage/storage_account.h"
 #include "ui/text/text_utilities.h"
 #include "ui/toast/toast.h"
@@ -176,6 +178,29 @@ void AddAction(
 			return result;
 		}();
 		const auto saveToFiles = [=] {
+			const auto batch = (views.size() > 1)
+				? MakeDownloadBatch(int(views.size()))
+				: nullptr;
+			const auto batchId = batch ? batch->id : 0;
+			if (batch) {
+				batch->sessionId = session->uniqueId();
+				batch->destDir = basePath;
+				if (const auto item = session->data().message(
+						photos.front().second)) {
+					if (const auto peer = item->history()->peer.get()) {
+						batch->srcName = peer->name();
+					}
+				}
+				batch->onDone = [=](int, int) {
+					Core::App().downloadManager().ensureDedupDb(
+						).clearDlTmpRun(session->uniqueId(), batchId);
+					Core::App().downloadManager().noteDlBatchFinished(batch);
+				};
+			}
+			auto &manager = Core::App().downloadManager();
+			const auto sessionId = session->uniqueId();
+			const auto dedupOff = !GetEnhancedBool(
+				"prevent_download_duplicates");
 			const auto fullPath = [&](int i) {
 				auto dir = basePath;
 				if (folderPath.isEmpty()) {
@@ -200,17 +225,26 @@ void AddAction(
 			auto lastPath = QString();
 			auto skippedCount = 0;
 			for (auto i = 0; i < views.size(); i++) {
+				const auto &photo = photos[i].first;
+				if (batch
+					&& dedupOff
+					&& manager.ensureDedupDb().containsDlTmpDocId(
+						sessionId,
+						batchId,
+						photo->id)) {
+					batch->addDuplicate();
+					skippedCount++;
+					continue;
+				}
 				lastPath = fullPath(i);
 				views[i]->saveToFile(lastPath);
-				const auto &photo = photos[i].first;
 				const auto fullId = photos[i].second;
 				const auto item = session->data().message(fullId);
 				if (item) {
-					auto &manager = Core::App().downloadManager();
 					manager.addLoaded({
 						.item = item,
 						.photo = photo,
-					}, lastPath, manager.computeNextStartDate());
+					}, lastPath, manager.computeNextStartDate(), batchId);
 				}
 				if (dates[i] > 0) {
 					auto f = QFile(lastPath);
@@ -226,6 +260,11 @@ void AddAction(
 				}
 				if (!QFile::exists(lastPath)) {
 					skippedCount++;
+					if (batch) {
+						batch->addDuplicate();
+					}
+				} else if (batch) {
+					batch->addDownloaded();
 				}
 			}
 			if (showToast) {
@@ -255,22 +294,75 @@ void AddAction(
 		}
 	};
 	const auto saveDocuments = [=](const QString &folderPath) {
-		const auto batch = folderPath.isEmpty() && !documents.empty()
-			? MakeDownloadBatch(int(documents.size()))
-			: nullptr;
-		for (const auto &[document, origin] : documents) {
-			if (!folderPath.isEmpty()) {
-				const auto name =
-					base::FileNameFromUserString(document->filename());
-				document->save(
-					origin,
-					folderPath + name,
-					LoadFromCloudOrLocal,
-					false,
-					true);
-			} else {
-				DocumentSaveClickHandler::SaveAndTrack(origin, document, DocumentSaveClickHandler::Mode::ToCacheOrFile, nullptr, batch);
+		const auto batch = documents.empty()
+			? nullptr
+			: MakeDownloadBatch(int(documents.size()));
+		if (batch && batch->total > 1) {
+			auto &session = documents.front().first->session();
+			batch->sessionId = session.uniqueId();
+			const auto downloadPath = Core::App().settings().downloadPath();
+			batch->destDir = folderPath.isEmpty()
+				? (downloadPath.isEmpty()
+					? File::DefaultDownloadPath(&session)
+					: downloadPath)
+				: folderPath;
+			if (const auto item = session.data().message(
+					documents.front().second)) {
+				if (const auto peer = item->history()->peer.get()) {
+					batch->srcName = peer->name();
+				}
 			}
+		}
+		const auto batchId = (batch && batch->total > 1) ? batch->id : 0;
+		for (const auto &[document, origin] : documents) {
+			if (folderPath.isEmpty()) {
+				DocumentSaveClickHandler::SaveAndTrack(origin, document, DocumentSaveClickHandler::Mode::ToCacheOrFile, nullptr, batch);
+				continue;
+			}
+			if (batch) {
+				batch->sessionId = document->session().uniqueId();
+			}
+			auto &manager = Core::App().downloadManager();
+			manager.checkDuplicate(
+				&document->session(),
+				document,
+				[=](bool skip) {
+					if (skip) {
+						batch->addDuplicate();
+						return;
+					}
+					const auto name = base::FileNameFromUserString(
+						document->filename());
+					document->save(
+						origin,
+						folderPath + name,
+						LoadFromCloudOrLocal,
+						false,
+						true);
+					auto lifetime = std::make_shared<rpl::lifetime>();
+					document->session().data().documentLoadProgress(
+					) | rpl::filter([=](not_null<DocumentData*> doc) {
+						return (doc == document);
+					}) | rpl::on_next([=](not_null<DocumentData*> doc) {
+						if (doc->loading()) {
+							return;
+						}
+						if (!doc->filepath(true).isEmpty()) {
+							batch->addDownloaded();
+							if (batchId) {
+								Core::App().downloadManager().commitDlTmpFile(
+									document->session().uniqueId(),
+									batchId,
+									doc->id,
+									doc->filepath(true));
+							}
+						} else {
+							batch->addFailed();
+						}
+						lifetime->destroy();
+					}, *lifetime);
+				},
+				batchId);
 		}
 	};
 

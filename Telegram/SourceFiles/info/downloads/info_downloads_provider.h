@@ -10,12 +10,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/media/info_media_common.h"
 #include "base/weak_ptr.h"
 
+#include <map>
+#include <optional>
+#include <tuple>
+
 namespace Data {
 struct DownloadedId;
 } // namespace Data
 
 namespace EnhancedForward {
 struct JobSnapshot;
+struct FinishedFwRun;
 } // namespace EnhancedForward
 
 namespace Info {
@@ -39,6 +44,7 @@ public:
 	explicit Provider(not_null<AbstractController*> controller);
 
 	void setFilter(Filter filter);
+	void refreshForwards();
 	[[nodiscard]] rpl::producer<bool> hasDownloadsValue() const;
 	[[nodiscard]] rpl::producer<bool> hasUploadsValue() const;
 
@@ -91,6 +97,31 @@ public:
 	bool isUploading(not_null<const HistoryItem*> item) const;
 	bool isUploaded(not_null<const HistoryItem*> item) const;
 	bool isEnhancedForwardFinished(not_null<const HistoryItem*> item) const;
+	bool isForwardAggregate(not_null<const HistoryItem*> item) const;
+	[[nodiscard]] std::optional<PeerId> forwardAggregateDst(
+		not_null<const HistoryItem*> item) const;
+	[[nodiscard]] uint64 forwardAggregateGroupId(
+		not_null<const HistoryItem*> item) const;
+	[[nodiscard]] bool isForwardAggregatePaused(
+		not_null<const HistoryItem*> item) const;
+	[[nodiscard]] bool isForwardAggregateFinished(
+		not_null<const HistoryItem*> item) const;
+	void toggleForwardRun(not_null<const HistoryItem*> item);
+	void cancelForwardRun(not_null<const HistoryItem*> item);
+	void clearForwardRun(not_null<const HistoryItem*> item);
+	bool isDownloadAggregate(not_null<const HistoryItem*> item) const;
+	[[nodiscard]] uint64 downloadAggregateBatchId(
+		not_null<const HistoryItem*> item) const;
+	[[nodiscard]] bool isDownloadAggregateFinished(
+		not_null<const HistoryItem*> item) const;
+	void clearDownloadRun(uint64 batchId);
+	bool isUploadAggregate(not_null<const HistoryItem*> item) const;
+	[[nodiscard]] uint64 uploadAggregateBatchId(
+		not_null<const HistoryItem*> item) const;
+	[[nodiscard]] bool isUploadAggregateFinished(
+		not_null<const HistoryItem*> item) const;
+	void clearUploadRun(uint64 batchId);
+	void clearTransferRow(not_null<const HistoryItem*> item);
 	QString showInFolderPath(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) override;
@@ -114,6 +145,17 @@ private:
 		int64 started = 0; // unixtime * 1000
 		QString path;
 		int order = 0;     // insertion order (source order for forwards)
+		// Forward rows (live aggregate + one row per finished action)
+		// reuse their first source message as the carrier item.
+		PeerId fwDst;
+		int fwRow = 0; // 0 = normal row, 1 = forward row
+		uint64 fwGroup = 0; // 0 = live aggregate, else finished action id
+		// Download batch headers reuse their first file as the carrier item.
+		uint64 dlBatch = 0; // 0 = ungrouped, else grouped batch id
+		int dlRow = 0; // 0 = normal row, 1 = batch header
+		// Upload batch headers reuse their first file as the carrier item.
+		uint64 ulBatch = 0; // 0 = ungrouped, else grouped batch id
+		int ulRow = 0; // 0 = normal row, 1 = batch header
 
 		QStringList words;
 		base::flat_set<QChar> letters;
@@ -124,6 +166,7 @@ private:
 		not_null<Main::Session*> session;
 		int64 started = 0;
 		QString path;
+		uint64 batchId = 0;
 	};
 
 	bool sectionHasFloatingHeader() override;
@@ -149,6 +192,31 @@ private:
 	void refreshEF(
 		not_null<Main::Session*> session,
 		const std::vector<EnhancedForward::JobSnapshot> &jobs);
+	bool ensureFwAggregate(
+		not_null<Main::Session*> session,
+		const PeerId &dst,
+		not_null<HistoryItem*> carrier);
+	bool ensureFwFinishedGroup(
+		not_null<Main::Session*> session,
+		const PeerId &dst,
+		uint64 actionId,
+		not_null<HistoryItem*> carrier);
+	void removeFwAggregate(
+		not_null<Main::Session*> session,
+		const PeerId &dst);
+	void removeFwFinishedGroup(
+		not_null<Main::Session*> session,
+		uint64 actionId);
+	void syncDlRuns();
+	void touchDlHeaders();
+	[[nodiscard]] bool isDlHeaderLayout(
+		not_null<const Media::BaseLayout*> layout) const;
+	void removeDlHeader(uint64 batchId);
+	void syncUlRuns();
+	void touchUlHeaders();
+	[[nodiscard]] bool isUlHeaderLayout(
+		not_null<const Media::BaseLayout*> layout) const;
+	void removeUlHeader(uint64 batchId);
 	void remove(not_null<const HistoryItem*> item);
 	void trackItemSession(not_null<const HistoryItem*> item);
 	void updateCounter();
@@ -164,6 +232,16 @@ private:
 	[[nodiscard]] std::unique_ptr<Media::BaseLayout> createLayout(
 		Element element,
 		not_null<Overview::Layout::Delegate*> delegate);
+	void appendGroupedDownloads(
+		Media::ListSection &section,
+		not_null<Overview::Layout::Delegate*> delegate,
+		bool search,
+		Fn<bool(const Element&)> accept);
+	void appendGroupedUploads(
+		Media::ListSection &section,
+		not_null<Overview::Layout::Delegate*> delegate,
+		bool search,
+		Fn<bool(const Element&)> accept);
 
 	const not_null<AbstractController*> _controller;
 
@@ -190,6 +268,19 @@ private:
 	std::unordered_map<
 		not_null<const HistoryItem*>,
 		Media::CachedItem> _layouts;
+	// Live aggregate rows keyed by session and destination (group 0),
+	// finished-action rows keyed by session, destination and action id.
+	std::map<
+		std::tuple<Main::Session*, PeerId, uint64>,
+		Media::CachedItem> _fwLayouts;
+	// Download batch headers keyed by session and batch id.
+	std::map<
+		std::tuple<Main::Session*, uint64>,
+		Media::CachedItem> _dlLayouts;
+	// Upload batch headers keyed by session and batch id.
+	std::map<
+		std::tuple<Main::Session*, uint64>,
+		Media::CachedItem> _ulLayouts;
 	rpl::event_stream<not_null<Media::BaseLayout*>> _layoutRemoved;
 	rpl::event_stream<> _refreshed;
 
@@ -198,6 +289,7 @@ private:
 	int _foundCount = 0;
 
 	base::flat_map<not_null<Main::Session*>, rpl::lifetime> _trackedSessions;
+	base::flat_map<not_null<Main::Session*>, uint64> _fwTickDigest;
 	int _nextElementOrder = 0;
 	base::flat_set<FullMsgId> _failedEFResolve;
 	base::flat_set<FullMsgId> _fetchingEFResolve;

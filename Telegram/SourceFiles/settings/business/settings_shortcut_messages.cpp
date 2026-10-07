@@ -1446,15 +1446,12 @@ void ShortcutMessages::chooseAttach(
 				uploadFile(result.remoteContent, SendMediaType::File);
 			}
 		} else {
-			const auto premium = _controller->session().user()->isPremium();
-			auto paths = Data::FilterUploadDuplicates(
-				result.paths,
-				overrideSendImagesAsPhotos);
-			if (paths.isEmpty()) {
+			if (result.paths.isEmpty()) {
 				return;
 			}
+			const auto premium = _controller->session().user()->isPremium();
 			auto list = Storage::PrepareMediaList(
-				paths,
+				result.paths,
 				st::sendMediaPreviewSize,
 				premium);
 			list.overrideSendImagesAsPhotos = overrideSendImagesAsPhotos;

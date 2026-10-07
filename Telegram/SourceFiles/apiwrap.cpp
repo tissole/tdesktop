@@ -4285,12 +4285,18 @@ void ApiWrap::forwardMessages(
 		auto alreadyFiltered = std::make_shared<bool>(false);
 		auto totalBefore = std::make_shared<int>(int(draft.items.size()));
 		auto skippedCount = std::make_shared<int>(0);
+		if (*totalBefore > 0) {
+			EnhancedForward::EnsureForwardBatch(
+				_session,
+				forwardDst,
+				*totalBefore);
+		}
 		auto refreshAndSend = std::make_shared<Fn<void()>>();
 		*refreshAndSend = [=]() mutable {
 			std::sort(copyItems->begin(), copyItems->end(), [](auto a, auto b) {
 				return a->id < b->id;
 			});
-			if (GetEnhancedBool("prevent_forward_duplicates") && !*alreadyFiltered) {
+			if (!*alreadyFiltered) {
 				*alreadyFiltered = true;
 				Data::FilterCopyAlbumDuplicates(_session, *copyItems, [=](std::vector<not_null<HistoryItem*>> filtered) mutable {
 					*skippedCount = *totalBefore - int(filtered.size());

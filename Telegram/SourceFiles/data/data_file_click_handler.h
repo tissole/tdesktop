@@ -51,6 +51,12 @@ struct DownloadBatch {
 	int duplicates = 0;
 	int failed = 0;
 	bool done = false;
+	uint64 id = 0;
+	uint64 sessionId = 0;
+	QString srcName;
+	QString destDir;
+	TimeId startedAt = 0;
+	TimeId finishedAt = 0;
 	std::function<void(int downloaded, int duplicates)> onDone;
 	std::function<void()> onChange;
 

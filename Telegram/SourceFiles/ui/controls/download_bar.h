@@ -39,6 +39,8 @@ struct DownloadBarContent {
 	int dlSkipped = 0;
 	int uploadCount = 0;
 	int uploadDone = 0;
+	int ulTotal = 0;
+	int ulSkipped = 0;
 	TextWithEntities singleUploadName;
 	int efCount = 0;
 	int efDone = 0;

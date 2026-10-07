@@ -5343,10 +5343,6 @@ void HistoryWidget::loadMessagesDown() {
 		).arg(Logs::b(_history->loadedAtBottom())
 		).arg(offsetId.bare));
 
-	LOG(("DBG_LOAD_NORMAL: loadMessagesDown sending NORMAL getHistory "
-		"peer=%1 offsetId=%2 loadCount=%3").arg(from->peer->id.value)
-		.arg((offsetId + 1).bare).arg(loadCount));
-
 	const auto history = from;
 	const auto type = Data::Histories::RequestType::History;
 	auto &histories = history->owner().histories();
@@ -6658,14 +6654,11 @@ void HistoryWidget::chooseAttach(
 			}
 		} else {
 			const auto premium = controller()->session().user()->isPremium();
-			auto paths = Data::FilterUploadDuplicates(
-				result.paths,
-				overrideSendImagesAsPhotos);
-			if (paths.isEmpty()) {
+			if (result.paths.isEmpty()) {
 				return;
 			}
 			auto list = Storage::PrepareMediaList(
-				paths,
+				result.paths,
 				st::sendMediaPreviewSize,
 				premium);
 			list.overrideSendImagesAsPhotos = overrideSendImagesAsPhotos;
@@ -8179,13 +8172,8 @@ bool HistoryWidget::confirmSendingFiles(
 		const QStringList &files,
 		const QString &insertTextOnCancel) {
 	const auto premium = controller()->session().user()->isPremium();
-	const auto list = Data::FilterUploadDuplicates(files);
-	if (list.isEmpty() && !files.isEmpty()) {
-		// Everything was a duplicate: nothing to show, don't open the panel.
-		return true;
-	}
 	return confirmSendingFiles(
-		Storage::PrepareMediaList(list, st::sendMediaPreviewSize, premium),
+		Storage::PrepareMediaList(files, st::sendMediaPreviewSize, premium),
 		insertTextOnCancel);
 }
 
@@ -8359,14 +8347,8 @@ bool HistoryWidget::confirmSendingFiles(
 		});
 		auto filtered = QList<QUrl>();
 		if (localPaths.size() == urls.size()) {
-			const auto kept = Data::FilterUploadDuplicates(
-				localPaths,
-				overrideSendImagesAsPhotos);
-			if (kept.isEmpty() && !urls.empty()) {
-				return true;
-			}
-			filtered.reserve(kept.size());
-			for (const auto &path : kept) {
+			filtered.reserve(localPaths.size());
+			for (const auto &path : localPaths) {
 				filtered.push_back(QUrl::fromLocalFile(path));
 			}
 		} else {

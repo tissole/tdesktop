@@ -48,6 +48,14 @@ namespace {
 		tr::lng_tm_dl_duplicates_skipped(tr::now, lt_count, skipped));
 }
 
+[[nodiscard]] QString DuplicatesSuffixUl(int skipped) {
+	if (skipped <= 0) {
+		return QString();
+	}
+	return u" (+%1)"_q.arg(
+		tr::lng_tm_ul_duplicates_skipped(tr::now, lt_count, skipped));
+}
+
 } // namespace
 
 DownloadBar::DownloadBar(
@@ -131,21 +139,22 @@ void DownloadBar::show(DownloadBarContent &&content) {
 			? tr::bold(tr::lng_tm_dl_prefix(
 				tr::now,
 				lt_name, content.singleName.text))
-			: (fwdCount > 1
+			: (fwdCount >= 1
 				? tr::bold(nfPrefix + tr::lng_tm_files_progress(
 					tr::now,
 					lt_done, QString::number(fwdDone),
 					lt_total, QString::number(fwdCount))
 					+ DuplicatesSuffix(content.efSkipped))
-				: fwdCount == 1
-				? tr::bold(tr::lng_tm_fw_prefix(
-					tr::now,
-					lt_name, content.singleName.text))
 				: (content.uploadCount > 1
-					? tr::bold(ulPrefix + tr::lng_tm_files_progress(
-						tr::now,
-						lt_done, QString::number(content.uploadDone),
-						lt_total, QString::number(content.uploadCount)))
+					? tr::bold(ulPrefix + (content.ulTotal > 1
+						? tr::lng_tm_files_progress(
+							tr::now,
+							lt_done, QString::number(content.uploadDone),
+							lt_total, QString::number(content.uploadCount))
+							+ DuplicatesSuffixUl(content.ulSkipped)
+						: tr::lng_profile_files(
+							tr::now,
+							lt_count, content.uploadCount)))
 					: tr::bold(tr::lng_tm_ul_prefix(
 						tr::now,
 						lt_name, content.singleUploadName.text))))));

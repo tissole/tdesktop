@@ -457,9 +457,15 @@ struct ForwardBatchSnapshot {
 	int total = 0;
 	int sent = 0;
 	int skipped = 0;
+	bool finished = false;
 };
 
 void BeginForwardBatch(
+	not_null<Main::Session*> session,
+	const PeerId &dst,
+	int total);
+
+bool EnsureForwardBatch(
 	not_null<Main::Session*> session,
 	const PeerId &dst,
 	int total);
@@ -483,8 +489,40 @@ void DropForwardBatch(
 	not_null<Main::Session*> session,
 	const PeerId &dst);
 
+[[nodiscard]] bool EfWorkPendingFor(
+	not_null<Main::Session*> session,
+	const PeerId &dst);
+
 [[nodiscard]] std::vector<ForwardBatchSnapshot> ForwardBatches(
 	not_null<Main::Session*> session);
+
+// Identifies the user action a live batch tracks; halves of one split
+// forward share it, so their finished records can merge into one row.
+[[nodiscard]] uint64 CurrentForwardActionId(
+	not_null<Main::Session*> session,
+	const PeerId &dst);
+
+// A finished run kept for the transfers list until cleared: counters,
+// source and finish date survive restarts via account storage.
+struct FinishedFwRun {
+	uint64 runId = 0;
+	uint64 actionId = 0;
+	PeerId dst;
+	PeerId src;
+	FullMsgId firstSource;
+	int total = 0;
+	int done = 0;
+	int skipped = 0;
+	int64 finishedAt = 0;
+};
+
+[[nodiscard]] std::vector<FinishedFwRun> FinishedFwRuns(
+	not_null<Main::Session*> session);
+void ClearFinishedFwRuns(not_null<Main::Session*> session);
+void DropFinishedFwRunGroup(
+	not_null<Main::Session*> session,
+	uint64 actionId);
+void EnsureFinishedFwRunsSeeded(not_null<Main::Session*> session);
 
 } // namespace EnhancedForward
 
@@ -499,6 +537,7 @@ struct Counters {
 	int floodSeconds = 0; // > 0 while the job waits out a FLOOD_WAIT
 	bool active = false;
 	bool paused = false;
+	FullMsgId firstSource;
 };
 
 // Takes over the plain part of a forward after the enhanced split:
@@ -521,6 +560,16 @@ void AdvanceGate(not_null<ApiWrap*> api, const PeerId &dst, MsgId next);
 // The smallest restricted item still holding the standard half back.
 [[nodiscard]] MsgId CurrentGate(const PeerId &dst);
 
+// Stops the live job for this peer: pending requests are cancelled and the
+// state is persisted as 'paused' (resumable via ResumeDst/ResumeAll).
+void PauseDst(not_null<Main::Session*> session, const PeerId &dst);
+
+// Resumes a paused job or rebuilds it from its persisted snapshot.
+void ResumeDst(not_null<Main::Session*> session, const PeerId &dst);
+
+// Drops the live job and its persisted state for this peer.
+void CancelDst(not_null<Main::Session*> session, const PeerId &dst);
+
 // Stops live jobs for this session: pending requests are cancelled and the
 // state is persisted as 'paused' (resumable via ResumeAll).
 void PauseAll(not_null<Main::Session*> session);
@@ -533,6 +582,15 @@ void ResumeAll(not_null<Main::Session*> session);
 
 [[nodiscard]] int UnfinishedCount(not_null<Main::Session*> session);
 [[nodiscard]] Counters CountersFor(not_null<Main::Session*> session);
+
+// Every live job plus every persisted-but-not-live snapshot for this
+// session (muted live jobs win on dst conflict). Drives per-run rows.
+[[nodiscard]] std::vector<Counters> AllCounters(
+	not_null<Main::Session*> session);
+
+[[nodiscard]] bool NfWorkPendingFor(
+	not_null<Main::Session*> session,
+	const PeerId &dst);
 
 [[nodiscard]] rpl::producer<> countersChanged();
 

@@ -871,10 +871,16 @@ void Account::writeLocations() {
 			_forwardedDoneSerialized = std::move(*serialized);
 		}
 	}
+	if (_finishedFwRunsSerialize) {
+		if (auto serialized = _finishedFwRunsSerialize()) {
+			_finishedFwRunsSerialized = std::move(*serialized);
+		}
+	}
 	if (_fileLocations.isEmpty()
 		&& _downloadsSerialized.isEmpty()
 		&& _uploadsSerialized.isEmpty()
-		&& _forwardedDoneSerialized.isEmpty()) {
+		&& _forwardedDoneSerialized.isEmpty()
+		&& _finishedFwRunsSerialized.isEmpty()) {
 		if (_locationsKey) {
 			ClearKey(_locationsKey, _basePath);
 			_locationsKey = 0;
@@ -914,6 +920,7 @@ void Account::writeLocations() {
 		size += Serialize::bytearraySize(_downloadsSerialized);
 		size += Serialize::bytearraySize(_uploadsSerialized);
 		size += Serialize::bytearraySize(_forwardedDoneSerialized);
+		size += Serialize::bytearraySize(_finishedFwRunsSerialized);
 
 		EncryptedDescriptor data(size);
 		auto legacyTypeField = 0;
@@ -937,7 +944,7 @@ void Account::writeLocations() {
 		}
 
 		data.stream << quint32(0) << _downloadsSerialized << _uploadsSerialized
-			<< _forwardedDoneSerialized;
+			<< _forwardedDoneSerialized << _finishedFwRunsSerialized;
 
 		FileWriteDescriptor file(_locationsKey, _basePath);
 		file.writeEncrypted(data, _localKey);
@@ -1022,6 +1029,9 @@ void Account::readLocations() {
 			if (!locations.stream.atEnd()) {
 				locations.stream >> _forwardedDoneSerialized;
 			}
+			if (!locations.stream.atEnd()) {
+				locations.stream >> _finishedFwRunsSerialized;
+			}
 		}
 	}
 }
@@ -1053,6 +1063,16 @@ void Account::updateForwardedDone(
 
 QByteArray Account::forwardedDoneSerialized() const {
 	return _forwardedDoneSerialized;
+}
+
+void Account::updateFinishedFwRuns(
+		Fn<std::optional<QByteArray>()> finishedFwRunsSerialize) {
+	_finishedFwRunsSerialize = std::move(finishedFwRunsSerialize);
+	writeLocationsDelayed();
+}
+
+QByteArray Account::finishedFwRunsSerialized() const {
+	return _finishedFwRunsSerialized;
 }
 
 void Account::writeSessionSettings() {

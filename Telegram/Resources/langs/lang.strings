@@ -9010,6 +9010,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_tm_dl_delete_sure#one" = "Delete {count} download from disk? File will remain accessible in the cloud";
 "lng_tm_dl_delete_sure#other" = "Delete {count} downloads from disk? Files will remain accessible in the cloud";
 "lng_tm_dl_clear_list" = "Clear downloads from UI";
+"lng_tm_dl_clear_batch" = "Clear batch from list";
 "lng_tm_dl_duplicates_skipped#one" = "{count} duplicate skipped";
 "lng_tm_dl_duplicates_skipped#other" = "{count} duplicates skipped";
 "lng_tm_dl_done#one" = "Downloaded {count} file";
@@ -9028,6 +9029,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_tm_ul_delete_sure#one" = "Delete {count} upload from disk? File will remain accessible in the cloud";
 "lng_tm_ul_delete_sure#other" = "Delete {count} uploads from disk? Files will remain accessible in the cloud";
 "lng_tm_ul_clear_list" = "Clear uploads from UI";
+"lng_tm_ul_clear_batch" = "Clear batch from list";
 "lng_tm_ul_duplicates_skipped#one" = "{count} duplicate skipped";
 "lng_tm_ul_duplicates_skipped#other" = "{count} duplicates skipped";
 "lng_tm_ul_done#one" = "Uploaded {count} file";
@@ -9041,6 +9043,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_tm_fw_cancel_confirm" = "Cancel forward?";
 "lng_tm_fw_pause_all" = "Pause forwards";
 "lng_tm_fw_resume_all" = "Resume forwards";
+"lng_tm_fw_pause" = "Pause forward";
+"lng_tm_fw_resume" = "Resume forward";
+"lng_tm_fw_cancel" = "Cancel forward";
 "lng_tm_fw_clear" = "Clear forwards from UI";
 "lng_tm_fw_duplicates_skipped#one" = "{count} duplicate skipped";
 "lng_tm_fw_duplicates_skipped#other" = "{count} duplicates skipped";
@@ -9081,9 +9086,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_tm_sel_mixed_confirm" = "Cancel running items and delete finished files from disk?";
 
 // Transfer manager - item context menu
-"lng_tm_item_clear_download" = "Clear download";
-"lng_tm_item_clear_upload" = "Clear upload";
-"lng_tm_item_clear_forward" = "Clear forward";
+"lng_tm_item_clear_download" = "Clear download from UI";
+"lng_tm_item_clear_upload" = "Clear upload from UI";
+"lng_tm_item_clear_forward" = "Clear forward from UI";
 "lng_tm_item_cancel_forward" = "Cancel forward";
 "lng_tm_item_cancel_download" = "Cancel download";
 "lng_tm_item_cancel_upload" = "Cancel upload";

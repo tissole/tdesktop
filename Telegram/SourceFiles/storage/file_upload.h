@@ -185,6 +185,7 @@ public:
 		int64 total = 0;
 		int64 offset = 0;
 		bool paused = false;
+		uint64 batchId = 0;
 	};
 	[[nodiscard]] std::vector<UiUploadInfo> activeUploads() const;
 
@@ -202,6 +203,7 @@ public:
 		QString filename;
 		int64 started = 0;
 		int jobIndex = 0;
+		uint64 batchId = 0;
 	};
 	[[nodiscard]] const std::vector<FinishedUpload> &finishedUploadList() const;
 

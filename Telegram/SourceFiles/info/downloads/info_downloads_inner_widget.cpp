@@ -115,12 +115,16 @@ InnerWidget::InnerWidget(
 	) | rpl::on_next(
 		[this] { refreshHeight(); },
 		_counter->lifetime());
-	// Re-lay-out when items arrive: the provider issues _refreshed after
-	// adding Forwards documents, which must also update the list/empty
-	// widgets even if the list's own height signal was already settled.
+	// If rows arrive while the empty placeholder is visible (first open
+	// with async fills), the list height signals don't always follow and
+	// the placeholder would keep painting over the real rows. Refreshing
+	// only in that inconsistent state cannot loop: once consistent, the
+	// guard below stays false until rows actually change again.
 	provider()->refreshed(
 	) | rpl::on_next([this] {
-		refreshHeight();
+		if (!_empty->isHidden()) {
+			refreshHeight();
+		}
 	}, _counter->lifetime());
 	provider()->counterValue(
 	) | rpl::on_next([=](const QString &text) {
@@ -171,6 +175,10 @@ void InnerWidget::setFilter(Tab tab) {
 	provider()->setFilter(filter);
 	_selectedLists.fire(_list->selectedListValue());
 	refreshHeight();
+}
+
+void InnerWidget::refreshForwards() {
+	provider()->refreshForwards();
 }
 
 rpl::producer<bool> InnerWidget::hasDownloadsValue() const {

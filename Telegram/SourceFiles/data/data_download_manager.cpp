@@ -86,10 +86,7 @@ void FilterCopyAlbumDuplicates(
 		not_null<Main::Session*> session,
 		std::vector<not_null<HistoryItem*>> items,
 		Fn<void(std::vector<not_null<HistoryItem*>>)> done) {
-	if (!GetEnhancedBool("prevent_forward_duplicates")) {
-		done(std::move(items));
-		return;
-	}
+	const auto dedupOff = !GetEnhancedBool("prevent_forward_duplicates");
 	auto &db = Core::App().downloadManager().ensureDedupDb();
 	QSet<uint64> seenIds;
 	auto filteredIds = std::vector<not_null<HistoryItem*>>();
@@ -103,7 +100,9 @@ void FilterCopyAlbumDuplicates(
 		if (doc) mediaId = uint64(doc->id);
 		else if (photo) mediaId = uint64(photo->id);
 		else { filteredIds.push_back(item); continue; }
-		if (seenIds.contains(mediaId) || db.containsDocId(Data::DedupDb::Table::Uploads, mediaId)) {
+		if (seenIds.contains(mediaId)
+			|| (!dedupOff
+				&& db.containsDocId(Data::DedupDb::Table::Uploads, mediaId))) {
 			skippedIds++;
 			continue;
 		}
@@ -137,10 +136,18 @@ void FilterCopyAlbumDuplicates(
 		auto &db2 = Core::App().downloadManager().ensureDedupDb();
 		for (const auto item : hashCandidates) {
 			const auto h = hashes->value(item->id);
-			bool isDup = !h.isEmpty() && (seenHashesPtr->contains(h) || db2.containsFinishedHash(Data::DedupDb::Table::Uploads, h));
+			bool isDup = !h.isEmpty() && (seenHashesPtr->contains(h)
+				|| (!dedupOff
+					&& db2.containsFinishedHash(
+						Data::DedupDb::Table::Uploads,
+						h)));
 			if (isDup) {
 				(*skippedHashesPtr)++;
-				if (!h.isEmpty() && !db2.containsFinishedHash(Data::DedupDb::Table::Uploads, h)) {
+				if (!dedupOff
+					&& !h.isEmpty()
+					&& !db2.containsFinishedHash(
+						Data::DedupDb::Table::Uploads,
+						h)) {
 					uint64 mid = 0;
 					if (const auto doc = item->media()->document()) mid = uint64(doc->id);
 					else if (const auto photo = item->media()->photo()) mid = uint64(photo->id);
@@ -288,7 +295,8 @@ struct DownloadManager::DeleteFilesDescriptor {
 
 DownloadManager::DownloadManager()
 : _clearLoadingTimer([=] { clearLoading(); })
-, _duplicatesToastTimer([=] { notifyDuplicateSkips(); }) {
+, _duplicatesToastTimer([=] { notifyDuplicateSkips(); })
+, _holdExpiryTimer([=] { _loadingListChanges.fire({}); }) {
 }
 
 DownloadManager::~DownloadManager() {
@@ -308,7 +316,35 @@ void DownloadManager::reportDuplicateSkipped(
 
 void DownloadManager::addBatch(std::weak_ptr<DownloadBatch> batch) {
 	_batches.push_back(std::move(batch));
+	_heldDlBatches.clear();
 	_loadingListChanges.fire({});
+}
+
+void DownloadManager::holdFinishedDlBatch(
+		std::shared_ptr<DownloadBatch> batch) {
+	if (!batch || !batch->done) {
+		return;
+	}
+	_heldDlBatches.push_back({
+		batch->total,
+		batch->downloaded + batch->failed,
+		batch->duplicates,
+		crl::now() + crl::time(2000),
+	});
+	_holdExpiryTimer.callOnce(crl::time(2000));
+	_loadingListChanges.fire({});
+}
+
+void DownloadManager::dropHeldDlBatches() {
+	if (_heldDlBatches.empty()) {
+		return;
+	}
+	_heldDlBatches.clear();
+	_loadingListChanges.fire({});
+}
+
+bool DownloadManager::hasHeldDlBatches() const {
+	return !_heldDlBatches.empty();
 }
 
 void DownloadManager::pokeDownloadBar() {
@@ -319,17 +355,404 @@ std::tuple<int, int, int> DownloadManager::batchTotals() {
 	auto total = 0;
 	auto done = 0;
 	auto skipped = 0;
+	const auto now = crl::now();
+	for (auto i = 0; i != int(_heldDlBatches.size());) {
+		if (_heldDlBatches[i].until <= now) {
+			_heldDlBatches.erase(_heldDlBatches.begin() + i);
+		} else {
+			const auto &held = _heldDlBatches[i];
+			total += held.total;
+			done += held.done;
+			skipped += held.skipped;
+			++i;
+		}
+	}
 	for (auto i = 0; i != int(_batches.size());) {
-		if (const auto batch = _batches[i].lock()) {
+		const auto batch = _batches[i].lock();
+		if (!batch || batch->done) {
+			_batches.erase(_batches.begin() + i);
+		} else if (batch->id
+			&& ranges::contains(_droppedDlBatches, batch->id)) {
+			_batches.erase(_batches.begin() + i);
+		} else {
 			total += batch->total;
 			done += batch->downloaded + batch->failed;
 			skipped += batch->duplicates;
 			++i;
-		} else {
-			_batches.erase(_batches.begin() + i);
 		}
 	}
 	return { total, done, skipped };
+}
+
+void DownloadManager::noteDlBatchFinished(
+		std::shared_ptr<DownloadBatch> batch) {
+	if (!batch
+		|| !batch->done
+		|| batch->total <= 1
+		|| !batch->id) {
+		return;
+	}
+	const auto dropped = ranges::contains(_droppedDlBatches, batch->id);
+	_droppedDlBatches.erase(
+		ranges::remove(_droppedDlBatches, batch->id),
+		end(_droppedDlBatches));
+	if (dropped) {
+		return;
+	}
+	for (const auto &run : _finishedDlRuns) {
+		if (run.batchId == batch->id) {
+			return;
+		}
+	}
+	if (!batch->finishedAt) {
+		batch->finishedAt = base::unixtime::now();
+	}
+	_finishedDlRuns.push_back({
+		.batchId = batch->id,
+		.sessionId = batch->sessionId,
+		.srcName = batch->srcName,
+		.destDir = batch->destDir,
+		.total = batch->total,
+		.done = batch->downloaded + batch->failed,
+		.skipped = batch->duplicates,
+		.startedAt = batch->startedAt,
+		.finishedAt = batch->finishedAt,
+	});
+	while (_finishedDlRuns.size() > 200) {
+		_finishedDlRuns.erase(_finishedDlRuns.begin());
+	}
+	for (const auto &account : Core::App().domain().orderedAccounts()) {
+		if (const auto session = account->maybeSession()) {
+			if (session->uniqueId() == batch->sessionId) {
+				writePostponed(not_null<Main::Session*>(session));
+				break;
+			}
+		}
+	}
+	_loadingListChanges.fire({});
+}
+
+void DownloadManager::dropDlBatch(uint64 batchId) {
+	if (!batchId) {
+		return;
+	}
+	if (!ranges::contains(_droppedDlBatches, batchId)) {
+		_droppedDlBatches.push_back(batchId);
+		while (_droppedDlBatches.size() > 512) {
+			_droppedDlBatches.erase(_droppedDlBatches.begin());
+		}
+	}
+	_batches.erase(
+		ranges::remove_if(
+			_batches,
+			[&](const std::weak_ptr<DownloadBatch> &weak) {
+				const auto batch = weak.lock();
+				return !batch || batch->id == batchId;
+			}),
+		end(_batches));
+	dropDlRun(batchId);
+	_loadingListChanges.fire({});
+}
+
+void DownloadManager::dropFinishedDlRuns() {
+	if (_finishedDlRuns.empty()) {
+		return;
+	}
+	_finishedDlRuns.clear();
+	_loadingListChanges.fire({});
+}
+
+void DownloadManager::dropDlRun(uint64 batchId) {
+	if (!batchId) {
+		return;
+	}
+	auto sessionId = uint64(0);
+	_finishedDlRuns.erase(
+		ranges::remove_if(
+			_finishedDlRuns,
+			[&](const FinishedDlRun &run) {
+				if (run.batchId != batchId) {
+					return false;
+				}
+				sessionId = run.sessionId;
+				return true;
+			}),
+		end(_finishedDlRuns));
+	if (sessionId) {
+		for (const auto &account
+			: Core::App().domain().orderedAccounts()) {
+			if (const auto session = account->maybeSession()) {
+				if (session->uniqueId() == sessionId) {
+					writePostponed(not_null<Main::Session*>(session));
+					break;
+				}
+			}
+		}
+	}
+	_loadingListChanges.fire({});
+}
+
+std::vector<DownloadManager::DlRunSnapshot> DownloadManager::dlRuns() {
+	auto result = std::vector<DlRunSnapshot>();
+	for (auto i = 0; i != int(_batches.size());) {
+		const auto batch = _batches[i].lock();
+		if (!batch || batch->done) {
+			_batches.erase(_batches.begin() + i);
+		} else if (batch->total <= 1
+			|| !batch->id
+			|| ranges::contains(_droppedDlBatches, batch->id)) {
+			++i;
+		} else {
+			result.push_back({
+				.batchId = batch->id,
+				.sessionId = batch->sessionId,
+				.srcName = batch->srcName,
+				.destDir = batch->destDir,
+				.total = batch->total,
+				.done = batch->downloaded + batch->failed,
+				.skipped = batch->duplicates,
+				.startedAt = batch->startedAt,
+				.finished = false,
+			});
+			++i;
+		}
+	}
+	for (const auto &run : _finishedDlRuns) {
+		result.push_back({
+			.batchId = run.batchId,
+			.sessionId = run.sessionId,
+			.srcName = run.srcName,
+			.destDir = run.destDir,
+			.total = run.total,
+			.done = run.done,
+			.skipped = run.skipped,
+			.startedAt = run.startedAt,
+			.finishedAt = run.finishedAt,
+			.finished = true,
+		});
+	}
+	ranges::stable_sort(
+		result,
+		ranges::less(),
+		[](const DlRunSnapshot &run) { return run.startedAt; });
+	return result;
+}
+
+void DownloadManager::addUploadBatch(std::weak_ptr<UploadBatch> batch) {
+	_uploadBatches.push_back(std::move(batch));
+	_heldUlBatches.clear();
+	_loadingListChanges.fire({});
+}
+
+void DownloadManager::holdFinishedUlBatch(
+		std::shared_ptr<UploadBatch> batch) {
+	if (!batch || !batch->done) {
+		return;
+	}
+	_heldUlBatches.push_back({
+		batch->total,
+		batch->uploaded + batch->failed,
+		batch->duplicates,
+		crl::now() + crl::time(2000),
+	});
+	_holdExpiryTimer.callOnce(crl::time(2000));
+	_loadingListChanges.fire({});
+}
+
+void DownloadManager::dropHeldUlBatches() {
+	if (_heldUlBatches.empty()) {
+		return;
+	}
+	_heldUlBatches.clear();
+	_loadingListChanges.fire({});
+}
+
+bool DownloadManager::hasHeldUlBatches() const {
+	return !_heldUlBatches.empty();
+}
+
+std::tuple<int, int, int> DownloadManager::uploadBatchTotals() {
+	auto total = 0;
+	auto done = 0;
+	auto skipped = 0;
+	const auto now = crl::now();
+	for (auto i = 0; i != int(_heldUlBatches.size());) {
+		if (_heldUlBatches[i].until <= now) {
+			_heldUlBatches.erase(_heldUlBatches.begin() + i);
+		} else {
+			const auto &held = _heldUlBatches[i];
+			total += held.total;
+			done += held.done;
+			skipped += held.skipped;
+			++i;
+		}
+	}
+	for (auto i = 0; i != int(_uploadBatches.size());) {
+		const auto batch = _uploadBatches[i].lock();
+		if (!batch || batch->done) {
+			_uploadBatches.erase(_uploadBatches.begin() + i);
+		} else if (batch->id
+			&& ranges::contains(_droppedUlBatches, batch->id)) {
+			_uploadBatches.erase(_uploadBatches.begin() + i);
+		} else {
+			total += batch->total;
+			done += batch->uploaded + batch->failed;
+			skipped += batch->duplicates;
+			++i;
+		}
+	}
+	return { total, done, skipped };
+}
+
+void DownloadManager::noteUlBatchFinished(
+		std::shared_ptr<UploadBatch> batch) {
+	if (!batch
+		|| !batch->done
+		|| batch->total <= 1
+		|| !batch->id) {
+		return;
+	}
+	const auto dropped = ranges::contains(_droppedUlBatches, batch->id);
+	_droppedUlBatches.erase(
+		ranges::remove(_droppedUlBatches, batch->id),
+		end(_droppedUlBatches));
+	if (dropped) {
+		return;
+	}
+	for (const auto &run : _finishedUlRuns) {
+		if (run.batchId == batch->id) {
+			return;
+		}
+	}
+	if (!batch->finishedAt) {
+		batch->finishedAt = base::unixtime::now();
+	}
+	_finishedUlRuns.push_back({
+		.batchId = batch->id,
+		.sessionId = batch->sessionId,
+		.total = batch->total,
+		.done = batch->uploaded + batch->failed,
+		.skipped = batch->duplicates,
+		.startedAt = batch->startedAt,
+		.finishedAt = batch->finishedAt,
+	});
+	while (_finishedUlRuns.size() > 200) {
+		_finishedUlRuns.erase(_finishedUlRuns.begin());
+	}
+	for (const auto &account : Core::App().domain().orderedAccounts()) {
+		if (const auto session = account->maybeSession()) {
+			if (session->uniqueId() == batch->sessionId) {
+				writePostponed(not_null<Main::Session*>(session));
+				break;
+			}
+		}
+	}
+	_loadingListChanges.fire({});
+}
+
+void DownloadManager::dropUlBatch(uint64 batchId) {
+	if (!batchId) {
+		return;
+	}
+	if (!ranges::contains(_droppedUlBatches, batchId)) {
+		_droppedUlBatches.push_back(batchId);
+		while (_droppedUlBatches.size() > 512) {
+			_droppedUlBatches.erase(_droppedUlBatches.begin());
+		}
+	}
+	_uploadBatches.erase(
+		ranges::remove_if(
+			_uploadBatches,
+			[&](const std::weak_ptr<UploadBatch> &weak) {
+				const auto batch = weak.lock();
+				return !batch || batch->id == batchId;
+			}),
+		end(_uploadBatches));
+	dropUlRun(batchId);
+	_loadingListChanges.fire({});
+}
+
+void DownloadManager::dropFinishedUlRuns() {
+	if (_finishedUlRuns.empty()) {
+		return;
+	}
+	_finishedUlRuns.clear();
+	for (auto &[session, data] : _sessions) {
+		writePostponed(session);
+	}
+	_loadingListChanges.fire({});
+}
+
+void DownloadManager::dropUlRun(uint64 batchId) {
+	if (!batchId) {
+		return;
+	}
+	auto sessionId = uint64(0);
+	_finishedUlRuns.erase(
+		ranges::remove_if(
+			_finishedUlRuns,
+			[&](const FinishedUlRun &run) {
+				if (run.batchId != batchId) {
+					return false;
+				}
+				sessionId = run.sessionId;
+				return true;
+			}),
+		end(_finishedUlRuns));
+	if (sessionId) {
+		for (const auto &account
+			: Core::App().domain().orderedAccounts()) {
+			if (const auto session = account->maybeSession()) {
+				if (session->uniqueId() == sessionId) {
+					writePostponed(not_null<Main::Session*>(session));
+					break;
+				}
+			}
+		}
+	}
+	_loadingListChanges.fire({});
+}
+
+std::vector<DownloadManager::UlRunSnapshot> DownloadManager::ulRuns() {
+	auto result = std::vector<UlRunSnapshot>();
+	for (auto i = 0; i != int(_uploadBatches.size());) {
+		const auto batch = _uploadBatches[i].lock();
+		if (!batch || batch->done) {
+			_uploadBatches.erase(_uploadBatches.begin() + i);
+		} else if (batch->total <= 1
+			|| !batch->id
+			|| ranges::contains(_droppedUlBatches, batch->id)) {
+			++i;
+		} else {
+			result.push_back({
+				.batchId = batch->id,
+				.sessionId = batch->sessionId,
+				.total = batch->total,
+				.done = batch->uploaded + batch->failed,
+				.skipped = batch->duplicates,
+				.startedAt = batch->startedAt,
+				.finished = false,
+			});
+			++i;
+		}
+	}
+	for (const auto &run : _finishedUlRuns) {
+		result.push_back({
+			.batchId = run.batchId,
+			.sessionId = run.sessionId,
+			.total = run.total,
+			.done = run.done,
+			.skipped = run.skipped,
+			.startedAt = run.startedAt,
+			.finishedAt = run.finishedAt,
+			.finished = true,
+		});
+	}
+	ranges::stable_sort(
+		result,
+		ranges::less(),
+		[](const UlRunSnapshot &run) { return run.startedAt; });
+	return result;
 }
 
 void DownloadManager::notifyDuplicateSkips() {
@@ -362,8 +785,39 @@ bool DownloadManager::empty() const {
 
 void DownloadManager::trackSession(not_null<Main::Session*> session) {
 	auto &data = _sessions.emplace(session, SessionData()).first->second;
-	data.downloaded = deserialize(session, &data.jobId);
+	auto runs = std::vector<FinishedDlRun>();
+	auto ulRuns = std::vector<FinishedUlRun>();
+	data.downloaded = deserialize(session, &data.jobId, &runs, &ulRuns);
 	data.resolveNeeded = data.downloaded.size();
+	for (const auto &run : runs) {
+		if (run.sessionId != session->uniqueId()
+			|| ranges::any_of(
+				_finishedDlRuns,
+				[&](const FinishedDlRun &existing) {
+					return existing.batchId == run.batchId;
+				})) {
+			continue;
+		}
+		const auto hasMembers = ranges::any_of(
+			data.downloaded,
+			[&](const DownloadedId &id) {
+				return id.batchId == run.batchId;
+			});
+		if (hasMembers) {
+			_finishedDlRuns.push_back(run);
+		}
+	}
+	for (const auto &run : ulRuns) {
+		if (run.sessionId != session->uniqueId()
+			|| ranges::any_of(
+				_finishedUlRuns,
+				[&](const FinishedUlRun &existing) {
+					return existing.batchId == run.batchId;
+				})) {
+			continue;
+		}
+		_finishedUlRuns.push_back(run);
+	}
 
 	session->data().documentLoadProgress(
 	) | rpl::filter([=](not_null<DocumentData*> document) {
@@ -430,8 +884,9 @@ int64 DownloadManager::computeNextStartDate() {
 }
 
 void DownloadManager::addLoading(
-		DownloadObject object,
-		bool enhancedForward) {
+	DownloadObject object,
+	bool enhancedForward,
+	uint64 batchId) {
 	Expects(object.item != nullptr);
 	Expects(object.document != nullptr);
 
@@ -483,6 +938,7 @@ void DownloadManager::addLoading(
 			.hiddenByView = false,
 			.enhancedForward = enhancedForward,
 			.jobIndex = data.jobId,
+			.batchId = enhancedForward ? uint64(0) : batchId,
 		});
 		_loading.emplace(item);
 		_loadingDocuments.emplace(object.document);
@@ -703,7 +1159,7 @@ void DownloadManager::check(
 				_loadingListChanges.fire({});
 			}
 		} else if (_loading.contains(entry.object.item)) {
-			addLoaded(entry.object, path, entry.started);
+			addLoaded(entry.object, path, entry.started, entry.batchId);
 		}
 	} else if (!document->loading()) {
 		remove(data, i);
@@ -729,9 +1185,10 @@ void DownloadManager::check(
 }
 
 void DownloadManager::addLoaded(
-		DownloadObject object,
-		const QString &path,
-		DownloadDate started) {
+	DownloadObject object,
+	const QString &path,
+	DownloadDate started,
+	uint64 batchId) {
 	Expects(object.item != nullptr);
 	Expects(object.document || object.photo);
 
@@ -753,7 +1210,8 @@ void DownloadManager::addLoaded(
 		? object.document->id
 		: (object.photo ? object.photo->id : 0);
 	auto &dedupDb = ensureDedupDb();
-	if (GetEnhancedBool("prevent_download_duplicates") && dedupDb.isOpen()) {
+	const auto dedupOff = !GetEnhancedBool("prevent_download_duplicates");
+	if ((!dedupOff || batchId) && dedupDb.isOpen()) {
 		if (docId) {
 			// saveFileHash() may have stored the remote fingerprint for this
 			// doc id when the download started. Re-reading the same 2 sample
@@ -795,7 +1253,16 @@ void DownloadManager::addLoaded(
 		// unfinished), so the content is already known to be downloaded.
 		return dedupDb.containsDocId(DedupDb::Table::Downloads, docId);
 	}();
-	if ((isDuplicateByHash || isDuplicatePhotoById) && !isBigFile) {
+	const auto sessionId = item->history()->session().uniqueId();
+	const auto isDuplicateTmp = batchId
+		&& dedupOff
+		&& docId
+		&& dedupDb.isOpen()
+		&& (dedupDb.containsDlTmpDocId(sessionId, batchId, docId)
+			|| (!dedupHash.isEmpty()
+				&& dedupDb.containsDlTmpHash(sessionId, batchId, dedupHash)));
+	if ((isDuplicateByHash || isDuplicatePhotoById || isDuplicateTmp)
+		&& !isBigFile) {
 		// A 2-chunk remote hash (big files only) means the duplicate decision
 		// was already made in checkDuplicate - the duplicate was skipped and
 		// never written to disk, so re-checking here would delete the real
@@ -805,11 +1272,21 @@ void DownloadManager::addLoaded(
 		if (!dedupHash.isEmpty() && docId && dedupDb.isOpen()) {
 			// Remember this doc id -> same content so future dedup of this
 			// exact id is O(1) without re-fetching a fingerprint.
-			dedupDb.insert(DedupDb::Table::Downloads, {
-				.hash = dedupHash,
-				.documentId = docId,
-				.status = u"f"_q,
-			});
+			if (dedupOff) {
+				if (batchId) {
+					dedupDb.insertDlTmp(
+						sessionId,
+						batchId,
+						docId,
+						dedupHash);
+				}
+			} else {
+				dedupDb.insert(DedupDb::Table::Downloads, {
+					.hash = dedupHash,
+					.documentId = docId,
+					.status = u"f"_q,
+				});
+			}
 		}
 		if (const auto document = object.document) {
 			_fingerprintCache.remove(document->id);
@@ -870,12 +1347,13 @@ void DownloadManager::addLoaded(
 		.itemId = item->fullId(),
 		.peerAccessHash = PeerAccessHash(item->history()->peer),
 		.jobIndex = completedJobIndex,
+		.batchId = batchId,
 		.object = std::make_unique<DownloadObject>(object),
 	});
 	_loaded.emplace(item);
 	_loadedAdded.fire(&data.downloaded.back());
 
-	if (!dedupHash.isEmpty() && docId && dedupDb.isOpen()) {
+	if (!dedupOff && !dedupHash.isEmpty() && docId && dedupDb.isOpen()) {
 		dedupDb.insert(DedupDb::Table::Downloads, {
 			.hash = dedupHash,
 			.documentId = docId,
@@ -884,6 +1362,13 @@ void DownloadManager::addLoaded(
 		if (const auto document = object.document) {
 			_fingerprintCache.remove(document->id);
 		}
+	}
+	if (batchId
+		&& dedupOff
+		&& !dedupHash.isEmpty()
+		&& docId
+		&& dedupDb.isOpen()) {
+		dedupDb.insertDlTmp(sessionId, batchId, docId, dedupHash);
 	}
 
 	writePostponed(&item->history()->session());
@@ -1136,6 +1621,7 @@ void DownloadManager::clearLoading() {
 
 void DownloadManager::clearFinishedLoading() {
 	auto sessions = base::flat_set<not_null<Main::Session*>>();
+	dropFinishedDlRuns();
 	for (auto &[session, data] : _sessions) {
 		if (_clearLoadingTimer.isActive()) {
 			_clearLoadingTimer.cancel();
@@ -1161,6 +1647,14 @@ void DownloadManager::clearFinishedLoading() {
 	for (const auto &session : sessions) {
 		writePostponed(session);
 	}
+	// Finished runs are dropped for every session, so persist the wipe
+	// even for sessions that had no downloaded files to clear.
+	for (auto &[session, data] : _sessions) {
+		if (!sessions.contains(session)) {
+			writePostponed(session);
+		}
+	}
+	dropHeldDlBatches();
 }
 
 void DownloadManager::clearFinishedItem(not_null<const HistoryItem*> item) {
@@ -1813,6 +2307,19 @@ Fn<std::optional<QByteArray>()> DownloadManager::serializator(
 		}
 		auto result = QByteArray();
 		const auto &data = sessionData(strong);
+		const auto sessionId = strong->uniqueId();
+		auto runs = std::vector<const FinishedDlRun*>();
+		for (const auto &run : _finishedDlRuns) {
+			if (run.sessionId == sessionId && run.total > 1) {
+				runs.push_back(&run);
+			}
+		}
+		auto ulRuns = std::vector<const FinishedUlRun*>();
+		for (const auto &run : _finishedUlRuns) {
+			if (run.sessionId == sessionId && run.total > 1) {
+				ulRuns.push_back(&run);
+			}
+		}
 		const auto count = data.downloaded.size();
 		const auto constant = sizeof(quint64) // download.objectId
 			+ sizeof(qint32) // download.type
@@ -1821,19 +2328,35 @@ Fn<std::optional<QByteArray>()> DownloadManager::serializator(
 			+ sizeof(quint64) // itemId.peer
 			+ sizeof(qint64) // itemId.msg
 			+ sizeof(quint64) // peerAccessHash
-			+ sizeof(qint32); // jobIndex
+			+ sizeof(qint32) // jobIndex
+			+ sizeof(quint64); // batchId
+		const auto runConstant = sizeof(quint64) // batchId
+			+ sizeof(quint64) // sessionId
+			+ sizeof(qint32) // total
+			+ sizeof(qint32) // done
+			+ sizeof(qint32) // skipped
+			+ sizeof(qint64) // startedAt
+			+ sizeof(qint64); // finishedAt
 		auto size = sizeof(qint32) // version
 			+ sizeof(qint32) // count
 			+ count * constant
-			+ sizeof(qint32); // jobId
+			+ sizeof(qint32) // jobId
+			+ sizeof(qint32) // run count
+			+ runs.size() * runConstant
+			+ sizeof(qint32) // upload run count
+			+ ulRuns.size() * runConstant;
 		for (const auto &id : data.downloaded) {
 			size += Serialize::stringSize(id.path);
+		}
+		for (const auto run : runs) {
+			size += Serialize::stringSize(run->srcName);
+			size += Serialize::stringSize(run->destDir);
 		}
 		result.reserve(size);
 
 		auto stream = QDataStream(&result, QIODevice::WriteOnly);
 		stream.setVersion(QDataStream::Qt_5_1);
-		stream << qint32(-1) << qint32(int(count));
+		stream << qint32(-3) << qint32(int(count));
 		for (const auto &id : data.downloaded) {
 			stream
 				<< quint64(id.download.objectId)
@@ -1845,9 +2368,36 @@ Fn<std::optional<QByteArray>()> DownloadManager::serializator(
 				<< qint64(id.itemId.msg.bare)
 				<< quint64(id.peerAccessHash)
 				<< id.path
-				<< qint32(id.jobIndex);
+				<< qint32(id.jobIndex)
+				<< quint64(id.batchId);
 		}
 		stream << qint32(data.jobId);
+		stream << qint32(int(runs.size()));
+		for (const auto run : runs) {
+			stream
+				<< quint64(run->batchId)
+				<< quint64(run->sessionId)
+				<< run->srcName
+				<< run->destDir
+				<< qint32(run->total)
+				<< qint32(run->done)
+				<< qint32(run->skipped)
+				<< qint64(run->startedAt)
+				<< qint64(run->finishedAt);
+		}
+		stream << qint32(int(ulRuns.size()));
+		for (const auto run : ulRuns) {
+			stream
+				<< quint64(run->batchId)
+				<< quint64(run->sessionId)
+				<< run->srcName
+				<< run->destDir
+				<< qint32(run->total)
+				<< qint32(run->done)
+				<< qint32(run->skipped)
+				<< qint64(run->startedAt)
+				<< qint64(run->finishedAt);
+		}
 		stream.device()->close();
 
 		return result;
@@ -1856,7 +2406,9 @@ Fn<std::optional<QByteArray>()> DownloadManager::serializator(
 
 std::vector<DownloadedId> DownloadManager::deserialize(
 		not_null<Main::Session*> session,
-		int *jobId) const {
+		int *jobId,
+		std::vector<FinishedDlRun> *runs,
+		std::vector<FinishedUlRun> *ulRuns) const {
 	const auto serialized = session->account().local().downloadsSerialized();
 	if (serialized.isEmpty()) {
 		return {};
@@ -1871,7 +2423,17 @@ std::vector<DownloadedId> DownloadManager::deserialize(
 		return {};
 	}
 	const auto legacy = (count >= 0);
+	auto v2 = false;
+	auto v3 = false;
 	if (!legacy) {
+		if (count == -3) {
+			v2 = true;
+			v3 = true;
+		} else if (count == -2) {
+			v2 = true;
+		} else if (count != -1) {
+			return {};
+		}
 		stream >> count;
 	}
 	if (stream.status() != QDataStream::Ok
@@ -1901,8 +2463,12 @@ std::vector<DownloadedId> DownloadManager::deserialize(
 			>> peerAccessHash
 			>> path;
 		auto jobIndex = qint32(0);
+		auto batchId = quint64(0);
 		if (!legacy) {
 			stream >> jobIndex;
+			if (v2) {
+				stream >> batchId;
+			}
 		}
 		const auto downloadType = DownloadType(uncheckedDownloadType);
 		if (stream.status() != QDataStream::Ok
@@ -1924,16 +2490,115 @@ std::vector<DownloadedId> DownloadManager::deserialize(
 			.itemId = { PeerId(itemIdPeer), MsgId(itemIdMsg) },
 			.peerAccessHash = peerAccessHash,
 			.jobIndex = legacy ? 0 : int(jobIndex),
+			.batchId = v2 ? batchId : uint64(0),
 		});
 	}
 	if (legacy) {
 		if (jobId) {
 			*jobId = 1;
 		}
-	} else if (jobId && !stream.atEnd()) {
-		auto value = qint32();
-		stream >> value;
-		*jobId = value;
+	} else {
+		if (jobId && !stream.atEnd()) {
+			auto value = qint32();
+			stream >> value;
+			*jobId = value;
+		}
+		if (v2 && runs && !stream.atEnd()) {
+			auto runCount = qint32(0);
+			stream >> runCount;
+			if (stream.status() == QDataStream::Ok
+				&& runCount >= 0
+				&& runCount <= 999) {
+				for (auto i = 0; i != runCount; ++i) {
+					auto run = FinishedDlRun();
+					auto runBatchId = quint64(0);
+					auto runSessionId = quint64(0);
+					auto total = qint32(0);
+					auto done = qint32(0);
+					auto skipped = qint32(0);
+					auto startedAt = qint64(0);
+					auto finishedAt = qint64(0);
+					stream
+						>> runBatchId
+						>> runSessionId
+						>> run.srcName
+						>> run.destDir
+						>> total
+						>> done
+						>> skipped
+						>> startedAt
+						>> finishedAt;
+					if (stream.status() != QDataStream::Ok
+						|| !runBatchId
+						|| total <= 0
+						|| total > 99'999
+						|| done < 0
+						|| done > total
+						|| skipped < 0
+						|| skipped > total
+						|| startedAt < 0
+						|| finishedAt < 0) {
+						break;
+					}
+					run.batchId = runBatchId;
+					run.sessionId = runSessionId;
+					run.total = int(total);
+					run.done = int(done);
+					run.skipped = int(skipped);
+					run.startedAt = TimeId(startedAt);
+					run.finishedAt = TimeId(finishedAt);
+					runs->push_back(std::move(run));
+				}
+			}
+		}
+		if (v3 && ulRuns && !stream.atEnd()) {
+			auto runCount = qint32(0);
+			stream >> runCount;
+			if (stream.status() == QDataStream::Ok
+				&& runCount >= 0
+				&& runCount <= 999) {
+				for (auto i = 0; i != runCount; ++i) {
+					auto run = FinishedUlRun();
+					auto runBatchId = quint64(0);
+					auto runSessionId = quint64(0);
+					auto total = qint32(0);
+					auto done = qint32(0);
+					auto skipped = qint32(0);
+					auto startedAt = qint64(0);
+					auto finishedAt = qint64(0);
+					stream
+						>> runBatchId
+						>> runSessionId
+						>> run.srcName
+						>> run.destDir
+						>> total
+						>> done
+						>> skipped
+						>> startedAt
+						>> finishedAt;
+					if (stream.status() != QDataStream::Ok
+						|| !runBatchId
+						|| total <= 0
+						|| total > 99'999
+						|| done < 0
+						|| done > total
+						|| skipped < 0
+						|| skipped > total
+						|| startedAt < 0
+						|| finishedAt < 0) {
+						break;
+					}
+					run.batchId = runBatchId;
+					run.sessionId = runSessionId;
+					run.total = int(total);
+					run.done = int(done);
+					run.skipped = int(skipped);
+					run.startedAt = TimeId(startedAt);
+					run.finishedAt = TimeId(finishedAt);
+					ulRuns->push_back(std::move(run));
+				}
+			}
+		}
 	}
 	return result;
 }
@@ -2089,9 +2754,47 @@ void DownloadManager::removeFileHash(uint64 documentId, int64 size) {
 void DownloadManager::checkDuplicate(
 		not_null<Main::Session*> session,
 		not_null<DocumentData*> document,
-		Fn<void(bool)> done) {
+		Fn<void(bool)> done,
+		uint64 batchId) {
 	if (!GetEnhancedBool("prevent_download_duplicates")) {
-		done(false);
+		if (!batchId) {
+			done(false);
+			return;
+		}
+		const auto sessionId = session->uniqueId();
+		auto &tmpDb = ensureDedupDb();
+		if (tmpDb.isOpen()
+			&& tmpDb.containsDlTmpDocId(
+				sessionId,
+				batchId,
+				document->id)) {
+			done(true);
+			return;
+		}
+		if (document->size < Data::kDedupMinPartialHashSize) {
+			done(false);
+			return;
+		}
+		_checksInProgress++;
+		fetchFingerprint(session, document, [=, this](QByteArray hash) {
+			_checksInProgress--;
+			if (hash.isEmpty()) {
+				done(false);
+			} else {
+				auto &db = ensureDedupDb();
+				const auto skip = db.isOpen()
+					&& db.containsDlTmpHash(sessionId, batchId, hash);
+				if (db.isOpen()) {
+					db.insertDlTmp(
+						sessionId,
+						batchId,
+						document->id,
+						hash);
+				}
+				done(skip);
+			}
+			saveIfIdle();
+		});
 		return;
 	}
 	_checksInProgress++;
@@ -2148,6 +2851,30 @@ void DownloadManager::checkDuplicate(
 			wrappedDone(true);
 			return;
 		});
+}
+
+void DownloadManager::commitDlTmpFile(
+		uint64 sessionId,
+		uint64 batchId,
+		uint64 documentId,
+		const QString &path) {
+	if (!batchId
+		|| !documentId
+		|| GetEnhancedBool("prevent_download_duplicates")) {
+		return;
+	}
+	const auto size = QFileInfo(path).size();
+	if (size <= 0 || size >= Data::kDedupMinPartialHashSize) {
+		return;
+	}
+	const auto hash = Data::FileFingerprint(path, size);
+	if (hash.isEmpty()) {
+		return;
+	}
+	auto &db = ensureDedupDb();
+	if (db.isOpen()) {
+		db.insertDlTmp(sessionId, batchId, documentId, hash);
+	}
 }
 
 void DownloadManager::startAllResumeDownloads(bool startPaused) {
@@ -2448,13 +3175,18 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 			for (const auto &account :
 					Core::App().domain().orderedAccounts()) {
 				if (const auto session = account->maybeSession()) {
-					const auto nf = NormalForward::CountersFor(session);
-					nfDone = std::max(nfDone, nf.done);
-					nfTotal = std::max(nfTotal, nf.total);
-					nfSkipped = std::max(nfSkipped, nf.skipped);
-					nfFloodSeconds = std::max(
-						nfFloodSeconds,
-						nf.floodSeconds);
+					for (const auto &counters
+						: NormalForward::AllCounters(session)) {
+						if (!counters.active) {
+							continue;
+						}
+						nfDone += counters.done;
+						nfTotal += counters.total;
+						nfSkipped += counters.skipped;
+						nfFloodSeconds = std::max(
+							nfFloodSeconds,
+							counters.floodSeconds);
+					}
 				}
 			}
 			{
@@ -2640,23 +3372,30 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 		}
 		const auto [batchTotal, batchDone, batchSkipped]
 			= manager.batchTotals();
-		if (batchTotal > 1) {
+		if (batchTotal > 0) {
 			content.count = batchTotal;
 			content.done = batchDone;
 			content.dlTotal = batchTotal;
 			content.dlSkipped = batchSkipped;
 		}
+		content.keepVisible = manager.hasHeldDlBatches();
 			content.efCount = state->efTotal;
 			content.efDone = state->efDone;
 			content.efSkipped = state->efSkipped;
 			for (const auto &account : Core::App().domain().orderedAccounts()) {
 				if (const auto session = account->maybeSession()) {
-					const auto nf = NormalForward::CountersFor(session);
-					if (nf.total > content.nfCount) {
-						content.nfCount = nf.total;
-						content.nfDone = nf.done;
-						content.nfLastName = nf.lastFileName;
-						content.efSkipped += nf.skipped;
+					for (const auto &counters
+						: NormalForward::AllCounters(session)) {
+						if (!counters.active) {
+							continue;
+						}
+						content.nfCount += counters.total;
+						content.nfDone += counters.done;
+						if (content.nfLastName.isEmpty()
+							&& !counters.lastFileName.isEmpty()) {
+							content.nfLastName = counters.lastFileName;
+						}
+						content.efSkipped += counters.skipped;
 					}
 				}
 			}
@@ -2886,18 +3625,21 @@ rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent() {
 			if (!content.uploadCount) {
 				content.uploadCount = totalPending;
 			}
-			auto jobTotal = 0;
-			auto jobDone = 0;
-			for (const auto &account : Core::App().domain().orderedAccounts()) {
-				const auto session = account->maybeSession();
-				if (!session) continue;
-				jobTotal += session->uploader().jobTotal();
-				jobDone += session->uploader().jobDone();
-			}
-			if (jobTotal > 0) {
-				content.uploadCount = jobTotal;
-				content.uploadDone = jobDone;
-			}
+		auto jobTotal = 0;
+		auto jobDone = 0;
+		for (const auto &account : Core::App().domain().orderedAccounts()) {
+			const auto session = account->maybeSession();
+			if (!session) continue;
+			jobTotal += session->uploader().jobTotal();
+			jobDone += session->uploader().jobDone();
+		}
+		const auto [ulBatchTotal, ulBatchDone, ulBatchSkipped]
+			= Core::App().downloadManager().uploadBatchTotals();
+		if (jobTotal > 0
+			&& (totalQueue > 0 || totalPending > 0 || ulBatchTotal > 0)) {
+			content.uploadCount = jobTotal;
+			content.uploadDone = jobDone;
+		}
 			if (content.uploadCount == 1) {
 				const auto name = totalQueue
 					? firstActiveName
@@ -2906,8 +3648,16 @@ rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent() {
 					? TextWithEntities()
 					: tr::marked(name);
 			}
-			content.uploadReady = totalReady;
-			content.uploadTotal = totalSize;
+		content.uploadReady = totalReady;
+		content.uploadTotal = totalSize;
+		if (ulBatchTotal > 0) {
+				content.uploadCount = ulBatchTotal;
+				content.uploadDone = ulBatchDone;
+				content.ulTotal = ulBatchTotal;
+				content.ulSkipped = ulBatchSkipped;
+			}
+			content.keepVisible
+				= Core::App().downloadManager().hasHeldUlBatches();
 			if (totalQueue == 0 && totalPending == 1) {
 				content.uploadSingleReady = firstPendingReady;
 				content.uploadSingleTotal = firstPendingTotal;
@@ -2948,6 +3698,8 @@ rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent() {
 				}, state->uploadSubscriptions);
 			}
 		}, lifetime);
+		Core::App().downloadManager().loadingListChanges(
+		) | rpl::on_next(state->push, lifetime);
 
 		notify();
 		return lifetime;
@@ -2957,16 +3709,14 @@ rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent() {
 QStringList FilterUploadDuplicates(
 		QStringList paths,
 		std::optional<bool> sendImagesAsPhotos) {
-	if (!GetEnhancedBool(u"prevent_upload_duplicates"_q)) {
-		return paths;
-	}
+	const auto dedupOff = !GetEnhancedBool(u"prevent_upload_duplicates"_q);
 	static const auto imageSuffixes = {
 		u"jpg"_q, u"jpeg"_q, u"png"_q, u"gif"_q, u"webp"_q,
 		u"bmp"_q, u"tif"_q, u"tiff"_q, u"heic"_q, u"heif"_q, u"jxl"_q,
 		u"avif"_q,
 	};
 	auto &db = Core::App().downloadManager().dedupDb();
-	if (!db.isOpen()) {
+	if (!dedupOff && !db.isOpen()) {
 		return paths;
 	}
 	const auto sendLargePhotos = Core::App().settings()
@@ -2978,7 +3728,8 @@ QStringList FilterUploadDuplicates(
 	const auto inSeenOrDb = [&](const QByteArray &hash) {
 		return !hash.isEmpty()
 			&& (seen.contains(hash)
-				|| db.containsHash(Data::DedupDb::Table::Uploads, hash));
+				|| (!dedupOff
+					&& db.containsHash(Data::DedupDb::Table::Uploads, hash)));
 	};
 	for (const auto &path : paths) {
 		const auto size = QFileInfo(path).size();
@@ -3028,7 +3779,8 @@ QStringList FilterUploadDuplicates(
 		}
 		const auto seenBefore = seen.contains(hash);
 		seen.emplace(hash);
-		if (db.containsHash(Data::DedupDb::Table::Uploads, hash)
+		if ((!dedupOff
+			&& db.containsHash(Data::DedupDb::Table::Uploads, hash))
 			|| seenBefore) {
 			duplicates++;
 		} else {

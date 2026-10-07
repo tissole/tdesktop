@@ -444,6 +444,7 @@ struct DocumentFields {
 	bool forceFileLayout = false;
 	bool forceCancel = false;
 	std::function<bool()> forceCancelCheck;
+	ClickHandlerPtr cancellOverride;
 	// Paused-download override: fills (ready, total) for the status line.
 	std::function<bool(qint64 *, qint64 *)> savedProgress;
 	Fn<std::optional<DocumentExternalLoading>()> externalLoading;
@@ -521,6 +522,59 @@ private:
 
 	bool withThumb() const;
 	bool updateStatusText();
+
+};
+
+struct ForwardSummaryData {
+	QString title;
+	QString srcName;
+	QString dstName;
+	QString status;
+	QString statusDate;
+	float64 progress = 0.;
+	bool paused = false;
+	bool finished = false;
+};
+
+struct ForwardSummaryFields {
+	Fn<ForwardSummaryData()> snapshot;
+	ClickHandlerPtr action;
+	bool noThumb = false;
+};
+
+class ForwardSummary final : public RadialProgressItem {
+public:
+	ForwardSummary(
+		not_null<Delegate*> delegate,
+		not_null<HistoryItem*> parent,
+		ForwardSummaryFields fields,
+		const style::OverviewFileLayout &st);
+
+	void initDimensions() override;
+	void paint(Painter &p, const QRect &clip, TextSelection selection, const PaintContext *context) override;
+	[[nodiscard]] bool elementsAnimating() const override;
+	TextState getState(
+		QPoint point,
+		StateRequest) const override;
+	[[nodiscard]] bool selectionConsumesClick(QPoint) const override;
+
+	void itemDataChanged() override;
+
+protected:
+	float64 dataProgress() const override;
+	bool dataFinished() const override;
+	bool dataLoaded() const override;
+
+private:
+	void update();
+	[[nodiscard]] QRect buttonRect() const;
+
+	Ui::Text::String _statusText;
+	Ui::Text::String _statusDateText;
+	ForwardSummaryData _data;
+	Fn<ForwardSummaryData()> _snapshot;
+	const bool _noThumb = false;
+	const style::OverviewFileLayout &_st;
 
 };
 

@@ -1759,12 +1759,23 @@ void Widget::setupForwardsBar() {
 			efCount += job.total;
 			efDone += job.sent;
 		}
-		const auto nf = NormalForward::CountersFor(session);
-		const auto nfInBatch = inBatch(nf.dst);
-		if (firstName.isEmpty()) {
-			firstName = nf.lastFileName;
+		auto nfTotal = 0;
+		auto nfDone = 0;
+		auto nfSkipped = 0;
+		auto nfFlood = 0;
+		for (const auto &counters : NormalForward::AllCounters(session)) {
+			if (!counters.active || inBatch(counters.dst)) {
+				continue;
+			}
+			nfTotal += counters.total;
+			nfDone += counters.done;
+			nfSkipped += counters.skipped;
+			nfFlood = std::max(nfFlood, counters.floodSeconds);
+			if (firstName.isEmpty() && !counters.lastFileName.isEmpty()) {
+				firstName = counters.lastFileName;
+			}
 		}
-		auto skipped = nfInBatch ? 0 : nf.skipped;
+		auto skipped = nfSkipped;
 		for (const auto &job : EnhancedForward::AllJobs(session)) {
 			if (inBatch(job.peer)) {
 				continue;
@@ -1805,14 +1816,13 @@ void Widget::setupForwardsBar() {
 				}
 			}
 		}
-		if (!efCount && !nf.total) {
+		if (!efCount && !nfTotal) {
 			_forwardsBar = nullptr;
 			updateControlsGeometry();
 			return;
 		}
 		const auto create = !_forwardsBar
-			&& ((efDone + (nfInBatch ? 0 : nf.done))
-				< (efCount + (nfInBatch ? 0 : nf.total)));
+			&& ((efDone + nfDone) < (efCount + nfTotal));
 		if (create) {
 			_forwardsBar = std::make_unique<Ui::DownloadBar>(
 				this,
@@ -1822,9 +1832,9 @@ void Widget::setupForwardsBar() {
 			Ui::DownloadBarContent content;
 			content.efCount = efCount;
 			content.efDone = efDone;
-			content.nfCount = nfInBatch ? 0 : nf.total;
-			content.nfDone = nfInBatch ? 0 : nf.done;
-			content.nfFloodSeconds = nf.floodSeconds;
+			content.nfCount = nfTotal;
+			content.nfDone = nfDone;
+			content.nfFloodSeconds = nfFlood;
 			content.efSkipped = skipped;
 			content.singleName.text = firstName;
 			content.keepVisible = !batches.empty();

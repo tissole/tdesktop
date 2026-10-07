@@ -1354,8 +1354,28 @@ static void ShowUploadBatchDone(int uploaded, int duplicates) {
 std::shared_ptr<UploadBatch> MakeUploadBatch(int total) {
 	auto batch = std::make_shared<UploadBatch>();
 	batch->total = total;
-	batch->onDone = [](int uploaded, int duplicates) {
+	batch->id = base::RandomValue<uint64>();
+	if (!batch->id) {
+		batch->id = 1;
+	}
+	batch->startedAt = base::unixtime::now();
+	batch->onDone = [weak = std::weak_ptr<UploadBatch>(batch)](
+			int uploaded,
+			int duplicates) {
 		ShowUploadBatchDone(uploaded, duplicates);
+		if (const auto strong = weak.lock()) {
+			if (strong->sessionId && strong->id) {
+				Core::App().downloadManager().ensureDedupDb().clearUlTmpRun(
+					strong->sessionId,
+					strong->id);
+			}
+			Core::App().downloadManager().holdFinishedUlBatch(strong);
+			Core::App().downloadManager().noteUlBatchFinished(strong);
+		}
+	};
+	Core::App().downloadManager().addUploadBatch(batch);
+	batch->onChange = [] {
+		Core::App().downloadManager().pokeDownloadBar();
 	};
 	return batch;
 }
@@ -1379,6 +1399,9 @@ static void TrackSingleUploadDoneToast(
 void SendConfirmedFile(
 		not_null<Main::Session*> session,
 		const std::shared_ptr<FilePrepareResult> &file) {
+	if (file->batch && !file->batch->sessionId) {
+		file->batch->sessionId = session->uniqueId();
+	}
 	const auto welcomeTemplate = file->to.options.welcomeTemplate;
 	if (welcomeTemplate && file->to.replaceMediaOf) {
 		if (file->batch) {

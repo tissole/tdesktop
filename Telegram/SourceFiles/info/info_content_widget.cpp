@@ -474,18 +474,36 @@ void ContentWidget::refreshSearchField(bool shown) {
 		widthValue(
 		) | rpl::on_next([=](int newWidth) {
 			view->resizeToWidth(newWidth);
-			view->moveToLeft(0, 0);
+			view->moveToLeft(0, _searchFieldTop);
 		}, view->lifetime());
 		view->show();
 		_searchField->setFocus();
-		setScrollTopSkip(view->heightNoMargins() - st::lineWidth);
+		updateSearchFieldGeometry();
 	} else if (_searchWrap) {
 		if (Ui::InFocusChain(this)) {
 			setFocus();
 		}
 		_searchWrap = nullptr;
-		setScrollTopSkip(0);
+		setScrollTopSkip(_searchFieldTop
+			? (_searchFieldTop + st::lineWidth)
+			: 0);
 	}
+}
+
+void ContentWidget::setSearchFieldTop(int top) {
+	_searchFieldTop = top;
+}
+
+void ContentWidget::updateSearchFieldGeometry() {
+	if (!_searchWrap) {
+		return;
+	}
+	_searchWrap->resizeToWidth(width());
+	_searchWrap->moveToLeft(0, _searchFieldTop);
+	setScrollTopSkip(
+		_searchFieldTop
+		+ _searchWrap->heightNoMargins()
+		- st::lineWidth);
 }
 
 int ContentWidget::scrollBottomSkip() const {

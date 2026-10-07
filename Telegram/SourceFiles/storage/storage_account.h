@@ -116,6 +116,10 @@ public:
 		Fn<std::optional<QByteArray>()> forwardedDoneSerialize);
 	[[nodiscard]] QByteArray forwardedDoneSerialized() const;
 
+	void updateFinishedFwRuns(
+		Fn<std::optional<QByteArray>()> finishedFwRunsSerialize);
+	[[nodiscard]] QByteArray finishedFwRunsSerialized() const;
+
 	[[nodiscard]] EncryptionKey cacheKey() const;
 	[[nodiscard]] QString cachePath() const;
 	[[nodiscard]] Cache::Database::Settings cacheSettings() const;
@@ -346,6 +350,9 @@ private:
 
 	QByteArray _forwardedDoneSerialized;
 	Fn<std::optional<QByteArray>()> _forwardedDoneSerialize;
+
+	QByteArray _finishedFwRunsSerialized;
+	Fn<std::optional<QByteArray>()> _finishedFwRunsSerialize;
 
 	FileKey _prefsKey = 0;
 	FileKey _locationsKey = 0;

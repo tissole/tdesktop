@@ -101,6 +101,11 @@ void Widget::setupTabs() {
 	_tabsShown = true;
 	setScrollTopSkip(_tabs->st().height + st::lineWidth);
 	applyTab(_currentTab, true);
+	// The content search field may have been shown before the tab strip
+	// existed (restored search state): move it below the tabs so it can
+	// never cover them and eat their clicks.
+	setSearchFieldTop(_tabs->st().height);
+	updateSearchFieldGeometry();
 
 	rpl::combine(
 		_inner->hasDownloadsValue(),
@@ -229,12 +234,29 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				forwardsFinished = true;
 			}
 		}
-		const auto nf = NormalForward::CountersFor(session);
-		if (nf.active) {
+		auto nfActive = false;
+		auto nfPaused = false;
+		for (const auto &counters : NormalForward::AllCounters(session)) {
+			if (counters.active) {
+				nfActive = true;
+				if (counters.paused) {
+					nfPaused = true;
+				}
+			}
+		}
+		if (nfActive) {
 			forwardsActive = true;
-			if (nf.paused) {
+			if (nfPaused) {
 				forwardsPaused = true;
 			}
+		}
+		for (const auto &batch : EnhancedForward::ForwardBatches(session)) {
+			if (batch.finished) {
+				forwardsFinished = true;
+			}
+		}
+		if (!EnhancedForward::FinishedFwRuns(session).empty()) {
+			forwardsFinished = true;
 		}
 	}
 
@@ -323,6 +345,16 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 								EnhancedForward::ClearFinished(session, job.peer);
 							}
 						}
+						for (const auto &batch :
+								EnhancedForward::ForwardBatches(session)) {
+							if (batch.finished) {
+								EnhancedForward::DropForwardBatch(
+									session,
+									batch.dst);
+							}
+						}
+						EnhancedForward::ClearFinishedFwRuns(session);
+						_inner->refreshForwards();
 					});
 				},
 				&st::menuIconClear);
@@ -447,6 +479,16 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 								EnhancedForward::ClearFinished(session, job.peer);
 							}
 						}
+						for (const auto &batch :
+								EnhancedForward::ForwardBatches(session)) {
+							if (batch.finished) {
+								EnhancedForward::DropForwardBatch(
+									session,
+									batch.dst);
+							}
+						}
+						EnhancedForward::ClearFinishedFwRuns(session);
+						_inner->refreshForwards();
 					});
 				},
 				&st::menuIconClear);
@@ -617,7 +659,18 @@ std::shared_ptr<Info::Memento> Make(not_null<UserData*> self, Tab tab) {
 			EnhancedForward::AllJobs(&self->session()),
 			[](const EnhancedForward::JobSnapshot &job) {
 				return job.active || job.finished || job.resumable;
-			});
+			})
+			|| ranges::any_of(
+				NormalForward::AllCounters(&self->session()),
+				[](const NormalForward::Counters &counters) {
+					return counters.active;
+				})
+			|| ranges::any_of(
+				EnhancedForward::ForwardBatches(&self->session()),
+				[](const EnhancedForward::ForwardBatchSnapshot &batch) {
+					return batch.finished;
+				})
+			|| !EnhancedForward::FinishedFwRuns(&self->session()).empty();
 		if (!hasForwards) {
 			tab = Tab::Downloads;
 		}

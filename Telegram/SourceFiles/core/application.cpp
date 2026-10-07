@@ -1270,6 +1270,8 @@ void Application::uploaderClearFinished() {
 			}
 		}
 	}
+	downloadManager().dropHeldUlBatches();
+	downloadManager().dropFinishedUlRuns();
 }
 
 void Application::uploaderDeleteAllFinished() {

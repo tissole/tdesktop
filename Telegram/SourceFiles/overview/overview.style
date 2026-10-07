@@ -84,6 +84,8 @@ overviewSongCancel: icon {{ "player/playlist_cancel", historyFileThumbIconFg }};
 overviewSongCancelSelected: icon {{ "player/playlist_cancel", historyFileThumbIconFgSelected }};
 overviewSongDownload: icon {{ "player/playlist_download", historyFileThumbIconFg }};
 overviewSongDownloadSelected: icon {{ "player/playlist_download", historyFileThumbIconFgSelected }};
+forwardSummaryCheck: icon {{ "player/player_check", historyFileThumbIconFg }};
+forwardSummaryCheckSelected: icon {{ "player/player_check", historyFileThumbIconFgSelected }};
 overviewSmallCancel: icon {{ "history_audio_cancel", historyFileInIconFg }};
 overviewSmallCancelSelected: icon {{ "history_audio_cancel", historyFileInIconFgSelected }};
 overviewSmallDownload: icon {{ "history_audio_download", historyFileInIconFg }};

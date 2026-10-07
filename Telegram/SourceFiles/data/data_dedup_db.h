@@ -283,6 +283,63 @@ public:
 	void clearExTmpSession(uint64 sessionId);
 	void flushExTmp();
 
+	void insertDlTmp(
+		uint64 sessionId,
+		uint64 batchId,
+		uint64 documentId,
+		const QByteArray &hash);
+	[[nodiscard]] bool containsDlTmpDocId(
+		uint64 sessionId,
+		uint64 batchId,
+		uint64 documentId) const;
+	[[nodiscard]] bool containsDlTmpHash(
+		uint64 sessionId,
+		uint64 batchId,
+		const QByteArray &hash) const;
+	[[nodiscard]] QByteArray hashForDlTmpDocId(
+		uint64 sessionId,
+		uint64 batchId,
+		uint64 documentId) const;
+	void clearDlTmpRun(uint64 sessionId, uint64 batchId);
+
+	void insertUlTmp(
+		uint64 sessionId,
+		uint64 batchId,
+		uint64 documentId,
+		const QByteArray &hash);
+	[[nodiscard]] bool containsUlTmpDocId(
+		uint64 sessionId,
+		uint64 batchId,
+		uint64 documentId) const;
+	[[nodiscard]] bool containsUlTmpHash(
+		uint64 sessionId,
+		uint64 batchId,
+		const QByteArray &hash) const;
+	[[nodiscard]] QByteArray hashForUlTmpDocId(
+		uint64 sessionId,
+		uint64 batchId,
+		uint64 documentId) const;
+	void clearUlTmpRun(uint64 sessionId, uint64 batchId);
+
+	void insertFwTmp(
+		uint64 sessionId,
+		PeerId dstPeer,
+		uint64 itemId,
+		const QByteArray &hash);
+	[[nodiscard]] bool containsFwTmpItem(
+		uint64 sessionId,
+		PeerId dstPeer,
+		uint64 itemId) const;
+	[[nodiscard]] bool containsFwTmpHash(
+		uint64 sessionId,
+		PeerId dstPeer,
+		const QByteArray &hash) const;
+	[[nodiscard]] QByteArray hashForFwTmpItem(
+		uint64 sessionId,
+		PeerId dstPeer,
+		uint64 itemId) const;
+	void clearFwTmpRun(uint64 sessionId, PeerId dstPeer);
+
 	void beginTransaction();
 	void commitTransaction();
 

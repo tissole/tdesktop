@@ -25,6 +25,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "main/main_account.h"
 #include "base/weak_ptr.h"
+#include "base/random.h"
+#include "base/unixtime.h"
 #include "ui/layers/generic_box.h"
 #include "ui/widgets/labels.h"
 #include "window/window_controller.h"
@@ -104,8 +106,24 @@ static void ShowDownloadBatchDone(int downloaded, int duplicates) {
 std::shared_ptr<DownloadBatch> MakeDownloadBatch(int total) {
 	auto batch = std::make_shared<DownloadBatch>();
 	batch->total = total;
-	batch->onDone = [](int downloaded, int duplicates) {
+	batch->id = base::RandomValue<uint64>();
+	if (!batch->id) {
+		batch->id = 1;
+	}
+	batch->startedAt = base::unixtime::now();
+	batch->onDone = [weak = std::weak_ptr<DownloadBatch>(batch)](
+			int downloaded,
+			int duplicates) {
 		ShowDownloadBatchDone(downloaded, duplicates);
+		if (const auto strong = weak.lock()) {
+			if (strong->sessionId && strong->id) {
+				Core::App().downloadManager().ensureDedupDb().clearDlTmpRun(
+					strong->sessionId,
+					strong->id);
+			}
+			Core::App().downloadManager().holdFinishedDlBatch(strong);
+			Core::App().downloadManager().noteDlBatchFinished(strong);
+		}
 	};
 	Core::App().downloadManager().addBatch(batch);
 	batch->onChange = [] {
@@ -139,6 +157,10 @@ void DocumentSaveClickHandler::Save(
 	if (!batch) {
 		batch = MakeDownloadBatch(1);
 	}
+	if (!batch->sessionId) {
+		batch->sessionId = data->session().uniqueId();
+	}
+	const auto batchId = (batch->total > 1) ? batch->id : 0;
 	InvokeQueued(qApp, crl::guard(&data->session(), [=] {
 		// If we call file dialog synchronously, it will stop
 		// background thread timers from working which would
@@ -185,13 +207,21 @@ void DocumentSaveClickHandler::Save(
 			data->session().data().documentLoadProgress(
 			) | rpl::filter([=](not_null<DocumentData*> doc) {
 				return (doc == data);
-			}) | rpl::on_next([=](not_null<DocumentData*> doc) {
+			}
+			) | rpl::on_next([=](not_null<DocumentData*> doc) {
 				if (doc->loading()) {
 					return;
 				}
 				if (!doc->filepath(true).isEmpty()) {
 					if (batch) {
 						batch->addDownloaded();
+					}
+					if (batchId) {
+						Core::App().downloadManager().commitDlTmpFile(
+							data->session().uniqueId(),
+							batchId,
+							doc->id,
+							doc->filepath(true));
 					}
 				} else if (batch) {
 					batch->addFailed();
@@ -213,7 +243,8 @@ void DocumentSaveClickHandler::Save(
 					return;
 				}
 				proceed();
-			});
+			},
+			batchId);
 	}));
 }
 
@@ -241,7 +272,7 @@ void DocumentSaveClickHandler::SaveAndTrack(
 				Core::App().downloadManager().addLoading({
 					.item = item,
 					.document = document,
-				});
+				}, false, (batch && batch->total > 1) ? batch->id : 0);
 			}
 		}
 		if (started) {
