@@ -22,6 +22,7 @@ class BoxContent;
 } // namespace Ui
 
 namespace Main {
+class Account;
 class Session;
 } // namespace Main
 
@@ -120,6 +121,11 @@ private:
 		FnMut<void(std::vector<int> &&indices)> done);
 
 	const not_null<Main::Session*> _session;
+	const not_null<Main::Account*> _account;
+	// Deferred takeout callbacks (queued in ApiWrap, fired on late
+	// responses) must never touch a destroyed panel or session:
+	// every one of them checks this flag first.
+	const std::shared_ptr<bool> _alive = std::make_shared<bool>(true);
 	const not_null<Controller*> _process;
 	std::unique_ptr<Settings> _settings;
 	base::Timer _saveSettingsTimer;

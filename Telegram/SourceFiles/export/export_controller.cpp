@@ -562,7 +562,6 @@ void ControllerObject::startExport(
 	_resumeRows.clear();
 	_resumePeerId = PeerId();
 	_resumedFailedCount = 0;
-	_cachedDialogs = std::nullopt;
 	_statsSessionBase.clear();
 	_api.setScanMode(false);
 	_writer = Output::CreateWriter(_settings.format);
@@ -792,7 +791,6 @@ void ControllerObject::startScan(
 	_resumeRows.clear();
 	_resumePeerId = PeerId();
 	_resumedFailedCount = 0;
-	_cachedDialogs = std::nullopt;
 	_statsSessionBase.clear();
 	_api.setScanMode(true);
 	_writer = nullptr;

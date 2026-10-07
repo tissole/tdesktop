@@ -26,6 +26,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/file_utilities.h"
 #include "main/main_session.h"
+#include "main/main_account.h"
 #include "apiwrap.h"
 #include <crl/crl_on_main.h>
 #include "data/data_session.h"
@@ -190,6 +191,9 @@ void RebaseStoredFolder(
 		int mode,
 		const QString &from,
 		const QString &to) {
+	if (session->account().maybeSession() != session) {
+		return;
+	}
 	auto db = ::Data::DedupDb(
 		Core::App().downloadManager().dedupDbPath(),
 		false);
@@ -343,6 +347,9 @@ Environment PrepareEnvironment(not_null<Main::Session*> session) {	auto result =
 		not_null<Main::Session*> session,
 		const QString &storedFolder,
 		const QString &freshFolder) {
+	if (session->account().maybeSession() != session) {
+		return storedFolder;
+	}
 	if (storedFolder.isEmpty() || freshFolder.isEmpty()) {
 		return storedFolder;
 	}
@@ -385,6 +392,9 @@ Environment PrepareEnvironment(not_null<Main::Session*> session) {	auto result =
 [[nodiscard]] QString RebaseGlobalRootForContinue(
 		not_null<Main::Session*> session,
 		const QString &storedRoot) {
+	if (session->account().maybeSession() != session) {
+		return storedRoot;
+	}
 	auto db = ::Data::DedupDb(
 		Core::App().downloadManager().dedupDbPath(),
 		false);
@@ -649,6 +659,7 @@ PanelController::PanelController(
 	not_null<Main::Session*> session,
 	not_null<Controller*> process)
 : _session(session)
+, _account(&session->account())
 , _process(process)
 , _settings(
 	std::make_unique<Settings>(_session->local().readExportSettings()))
@@ -667,8 +678,14 @@ PanelController::PanelController(
 	// inits or finishes its own session (two live sessions
 	// invalidate each other server-side).
 	_process->setTakeoutRefreshHook([=] {
+		const auto alive = _alive;
+		const auto account = _account;
+		const auto session = _session.get();
 		crl::on_main([=] {
 			// Mid-run refresh: no new size opinion, keep pending.
+			if (!*alive || account->maybeSession() != session) {
+				return;
+			}
 			ensureSharedTakeout([=](uint64 id) {
 				_process->takeoutRefreshDone(id);
 			}, 0);
@@ -682,9 +699,17 @@ void PanelController::ensureSharedTakeout(
 	// FnMut is move-only, Fn needs copyable: share ownership.
 	const auto sharedDone = std::make_shared<FnMut<void(uint64)>>(
 		std::move(done));
+	// This continuation is queued in ApiWrap and can fire on a late
+	// response after teardown: never touch a dead panel or session.
+	const auto alive = _alive;
+	const auto account = _account;
+	const auto session = _session.get();
 	_session->api().ensureTakeout(
 		not_null<PeerData*>(static_cast<PeerData*>(_session->user().get())),
 		[=](bool ok) {
+			if (!*alive || account->maybeSession() != session) {
+				return;
+			}
 			const auto id = ok
 				? _session->api().takeoutId().value_or(uint64(0))
 				: uint64(0);
@@ -899,6 +924,7 @@ void PanelController::validateIdRange(FnMut<void()> proceed) {
 }
 
 PanelController::~PanelController() {
+	*_alive = false;
 	if (_rangeRequestId) {
 		_mtp.request(_rangeRequestId).cancel();
 	}

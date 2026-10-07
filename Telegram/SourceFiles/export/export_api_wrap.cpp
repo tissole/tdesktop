@@ -3595,9 +3595,17 @@ void ApiWrap::appendChatsSlice(
 			nextIndex);
 		if (ok) {
 			to.push_back(std::move(info));
+			to.back().splits.push_back(splitIndex);
+			to.back().messagesCountPerSplit.push_back(0);
+		} else if (!ranges::contains(
+				to[i->second].splits,
+				splitIndex)) {
+			// Duplicate sighting (page overlap, original and retry
+			// both landing): the split is already recorded, recording
+			// it again would double every per-split sum downstream.
+			to[i->second].splits.push_back(splitIndex);
+			to[i->second].messagesCountPerSplit.push_back(0);
 		}
-		to[i->second].splits.push_back(splitIndex);
-		to[i->second].messagesCountPerSplit.push_back(0);
 	}
 }
 
@@ -3945,15 +3953,19 @@ void ApiWrap::requestChatMessages(
 	Expects(_chatProcess != nullptr);
 
 	_chatProcess->requestDone = std::move(done);
+	const auto gen = _dedupGen;
 	const auto doneHandler = [=](MTPmessages_Messages &&result) {
 		// A fired prefetch can land after the walk took the process
-		// at finish: drop it, the run is already complete.
-		if (!_chatProcess) {
+		// at finish: drop it, the run is already complete. A response
+		// from a previous chat, or a duplicate (original and retry
+		// both landing), must never touch an emptied continuation.
+		if (!_chatProcess || gen != _dedupGen) {
 			return;
 		}
-		base::take(_chatProcess->requestDone)(std::move(result));
+		if (auto taken = base::take(_chatProcess->requestDone)) {
+			taken(std::move(result));
+		}
 	};
-	const auto gen = _dedupGen;
 	const auto takeoutFail = [=](const MTP::Error &result) {
 		if (result.type() != u"TAKEOUT_INVALID"_q) {
 			return false;
@@ -3966,13 +3978,18 @@ void ApiWrap::requestChatMessages(
 				error(result);
 				return;
 			}
-			requestChatMessages(
-				splitPosition,
-				offsetId,
-				addOffset,
-				limit,
-				withRange,
-				base::take(_chatProcess->requestDone));
+			// A sibling refresh (or the original answer) may already
+			// own the continuation: re-issuing with an emptied one
+			// would crash on answer, so only a live one retries.
+			if (auto taken = base::take(_chatProcess->requestDone)) {
+				requestChatMessages(
+					splitPosition,
+					offsetId,
+					addOffset,
+					limit,
+					withRange,
+					std::move(taken));
+			}
 		});
 		return true;
 	};
@@ -4098,13 +4115,16 @@ void ApiWrap::requestChatMessages(
 					// Perhaps we just left / were kicked from channel.
 					// Just switch to only my messages.
 					_chatProcess->info.onlyMyMessages = true;
-					requestChatMessages(
-						splitPosition,
-						offsetId,
-						addOffset,
-						limit,
-						withRange,
-						base::take(_chatProcess->requestDone));
+					if (auto taken = base::take(
+							_chatProcess->requestDone)) {
+						requestChatMessages(
+							splitPosition,
+							offsetId,
+							addOffset,
+							limit,
+							withRange,
+							std::move(taken));
+					}
 					return true;
 				}
 			}
