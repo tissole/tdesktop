@@ -5354,8 +5354,10 @@ PeerId ApiWrap::currentPeer() const {
 }
 
 PeerId ApiWrap::dedupPeerId() const {
-	if (!_scanMode
-		&& _settings
+	if (_scanMode) {
+		return PeerId(0);
+	}
+	if (_settings
 		&& !_settings->onlySinglePeer()
 		&& !GetEnhancedBool("prevent_export_duplicates")) {
 		return PeerId(0);
