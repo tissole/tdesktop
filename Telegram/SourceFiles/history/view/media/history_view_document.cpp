@@ -945,26 +945,34 @@ void Document::draw(
 						}
 					}
 				}
-			} else if (!_data->hasThumbnail() && GetEnhancedBool("custom_file_thumbs")) {
-				auto hq = PainterHighQualityEnabler(p);
-				auto thumb = QImage();
-				const auto path = GetEnhancedString("custom_thumb_path");
-				if (!path.isEmpty()) {
-					thumb = QImage(path);
-				}
-				if (!thumb.isNull()) {
-					const auto scaledSize = thumb.size()
-						.scaled(inner.size(), Qt::KeepAspectRatioByExpanding);
-					auto scaled = Images::Prepare(
-						thumb,
-						scaledSize * style::DevicePixelRatio(),
-						{ .options = Images::Option::RoundCircle, .outer = inner.size() });
-					p.drawImage(inner.topLeft(), scaled);
-				} else {
-					p.setBrush(stm->msgFileBg);
-					p.drawEllipse(inner);
-				}
+		} else if (!_data->hasThumbnail() && GetEnhancedBool("custom_file_thumbs")) {
+			auto hq = PainterHighQualityEnabler(p);
+			const auto ratio = style::DevicePixelRatio();
+			const auto thumb = PrepareCustomThumb(
+				u"doc:%1x%2@%3"_q
+					.arg(inner.width())
+					.arg(inner.height())
+					.arg(ratio),
+				[inner, ratio](const QImage &source) {
+					const auto target = inner.size();
+					const auto scaledSize = source.size().scaled(
+						target,
+						Qt::KeepAspectRatioByExpanding);
+					return Images::Prepare(
+						source,
+						scaledSize * ratio,
+						{
+							.options = Images::Option::RoundCircle,
+							.outer = target,
+						});
+				});
+			if (!thumb.isNull()) {
+				p.drawImage(inner.topLeft(), thumb);
 			} else {
+				p.setBrush(stm->msgFileBg);
+				p.drawEllipse(inner);
+			}
+		} else {
 				auto hq = PainterHighQualityEnabler(p);
 				p.setBrush(stm->msgFileBg);
 				p.drawEllipse(inner);

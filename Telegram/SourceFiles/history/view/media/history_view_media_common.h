@@ -103,6 +103,12 @@ void PaintTtlSingleViewBadge(
 	QImage large,
 	QImage blurred);
 
+[[nodiscard]] QImage PrepareCustomThumb(
+	const QString &key,
+	Fn<QImage(const QImage &source)> bake);
+
+[[nodiscard]] uint64 CustomThumbFingerprint();
+
 [[nodiscard]] QSize CountDesiredMediaSize(QSize original);
 [[nodiscard]] QSize CountMediaSize(QSize desired, int newWidth);
 [[nodiscard]] QSize CountPhotoMediaSize(

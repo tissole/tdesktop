@@ -25,6 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/rect.h"
 #include "core/application.h"
 #include "core/click_handler_types.h"
+#include "core/enhanced_settings.h"
 #include "data/data_document.h"
 #include "data/data_session.h"
 #include "data/data_wall_paper.h"
@@ -54,6 +55,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat.h"
 #include "styles/style_layers.h"
 #include "styles/style_settings.h"
+
+#include <QFileInfo>
+#include <map>
 
 namespace HistoryView {
 namespace {
@@ -321,6 +325,67 @@ QImage PrepareWithBlurredBackground(
 	}
 	p.end();
 	return background;
+}
+
+QImage PrepareCustomThumb(
+		const QString &key,
+		Fn<QImage(const QImage &source)> bake) {
+	struct Cache {
+		QString path;
+		qint64 size = -1;
+		QDateTime modified;
+		QImage source;
+		std::map<QString, QImage> finals;
+	};
+	static auto cache = Cache();
+
+	const auto path = GetEnhancedString("custom_thumb_path");
+	const auto info = QFileInfo(path);
+	if (cache.path != path
+		|| cache.size != info.size()
+		|| cache.modified != info.lastModified()) {
+		cache.path = path;
+		cache.size = info.size();
+		cache.modified = info.lastModified();
+		cache.source = QImage(path);
+		cache.finals.clear();
+	}
+	if (cache.source.isNull()) {
+		return QImage();
+	}
+	if (const auto i = cache.finals.find(key); i != cache.finals.end()) {
+		return i->second;
+	}
+	constexpr auto kMaxFinals = 12;
+	if (int(cache.finals.size()) >= kMaxFinals) {
+		cache.finals.erase(cache.finals.begin());
+	}
+	return cache.finals.emplace(key, bake(cache.source)).first->second;
+}
+
+uint64 CustomThumbFingerprint() {
+	if (!GetEnhancedBool("custom_file_thumbs")) {
+		return 0;
+	}
+	const auto path = GetEnhancedString("custom_thumb_path");
+	if (path.isEmpty()) {
+		return 0;
+	}
+	const auto info = QFileInfo(path);
+	auto result = uint64(1469598103934665603ULL);
+	for (const auto c : path) {
+		result ^= uint64(c.unicode());
+		result *= uint64(1099511628211ULL);
+	}
+	const auto mix = [&](uint64 value) {
+		result ^= value
+			+ uint64(0x9E3779B97F4A7C15ULL)
+			+ (result << 6)
+			+ (result >> 2);
+	};
+	mix(uint64(info.size()));
+	mix(uint64(info.exists() ? info.lastModified().toMSecsSinceEpoch() : 0));
+	return result;
 }
 
 QSize CountDesiredMediaSize(QSize original) {

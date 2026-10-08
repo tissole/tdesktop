@@ -9,6 +9,7 @@ https://github.com/TDesktop-x64/tdesktop/blob/dev/LEGAL
 #include <mainwindow.h>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QtWidgets/QApplication>
 #include "settings/settings_enhanced.h"
 
 #include "settings/settings_common.h"
@@ -421,6 +422,7 @@ namespace Settings {
 		});
 
 		AddDivider(inner);
+		AddSubsectionTitle(inner, rpl::single(u"Deduplication"_q));
 
 		AddButtonWithIcon(
 				inner,
@@ -685,11 +687,11 @@ namespace Settings {
 			EnhancedSettings::Write();
 		}, container->lifetime());
 
-		AddButtonWithIcon(
+		auto customThumbsBtn = AddButtonWithIcon(
 				container,
 				tr::lng_settings_custom_file_thumbs(),
-				st::settingsButtonNoIcon
-		)->toggleOn(
+				st::settingsButtonNoIcon);
+		customThumbsBtn->toggleOn(
 				rpl::single(GetEnhancedBool("custom_file_thumbs"))
 		)->toggledValue(
 		) | rpl::filter([](bool enabled) {
@@ -697,13 +699,21 @@ namespace Settings {
 		}) | rpl::on_next([=](bool enabled) {
 			SetEnhancedValue("custom_file_thumbs", enabled);
 			EnhancedSettings::Write();
+			for (const auto widget : QApplication::topLevelWidgets()) {
+				widget->update();
+			}
 		}, container->lifetime());
 
-		AddButtonWithIcon(
+		auto chooseThumbBtn = AddButtonWithIcon(
 				container,
 				tr::lng_settings_choose_thumb_image(),
-				st::settingsButtonNoIcon
-		)->addClickHandler([=] {
+				st::settingsButtonNoIcon);
+		chooseThumbBtn->setEnabled(GetEnhancedBool("custom_file_thumbs"));
+		customThumbsBtn->toggledValue(
+		) | rpl::on_next([=](bool enabled) {
+			chooseThumbBtn->setEnabled(enabled);
+		}, container->lifetime());
+		chooseThumbBtn->addClickHandler([=] {
 			FileDialog::GetOpenPath(
 				Core::App().getFileDialogParent(),
 				tr::lng_settings_choose_thumb_image(tr::now),
@@ -714,6 +724,9 @@ namespace Settings {
 							"custom_thumb_path",
 							result.paths.first());
 						EnhancedSettings::Write();
+						for (const auto widget : QApplication::topLevelWidgets()) {
+							widget->update();
+						}
 					}
 				});
 		});

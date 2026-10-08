@@ -1405,9 +1405,11 @@ void Gif::validateThumbCache(
 	const auto scaled = ScaledInstantViewMediaSize(
 		outer,
 		HostedInstantViewMediaPixelScale(_parent));
+	const auto custom = CustomThumbFingerprint();
 	if (_thumbCache.size() == (scaled * ratio)
 		&& _thumbCacheRounding == rounding
 		&& _thumbCacheBlurred == blurred
+		&& _thumbCacheCustom == custom
 		&& _thumbIsEllipse == isEllipse) {
 		return;
 	}
@@ -1417,6 +1419,7 @@ void Gif::validateThumbCache(
 		: Images::Round(std::move(cache), MediaRoundingMask(rounding));
 	_thumbCacheRounding = rounding;
 	_thumbCacheBlurred = blurred;
+	_thumbCacheCustom = custom;
 }
 
 QImage Gif::prepareThumbCache(QSize outer) const {
@@ -1450,19 +1453,22 @@ QImage Gif::prepareThumbCache(QSize outer) const {
 	}
 	if (!large && !blurred && !_data->hasThumbnail() && _data->isVideoFile()) {
 		if (GetEnhancedBool("custom_file_thumbs")) {
-			auto thumb = QImage();
-			const auto path = GetEnhancedString("custom_thumb_path");
-			if (!path.isEmpty()) {
-				thumb = QImage(path);
-			}
-			if (!thumb.isNull()) {
-				return PrepareWithBlurredBackground(
-					outer,
-					::Media::Streaming::DecideVideoFrameResize(
+			const auto cover = PrepareCustomThumb(
+				u"cover:%1x%2@%3"_q
+					.arg(outer.width())
+					.arg(outer.height())
+					.arg(style::DevicePixelRatio()),
+				[outer](const QImage &source) {
+					return PrepareWithBlurredBackground(
 						outer,
-						thumb.size()),
-					thumb,
-					QImage());
+						::Media::Streaming::DecideVideoFrameResize(
+							outer,
+							source.size()),
+						source,
+						source);
+				});
+			if (!cover.isNull()) {
+				return cover;
 			}
 		}
 	}
@@ -2707,35 +2713,41 @@ void Gif::validateGroupedCache(
 	const auto width = scaled.width();
 	const auto height = scaled.height();
 	const auto options = (blur ? Option::Blur : Option(0));
-	const auto key = (uint64(width) << 48)
+	const auto key = ((uint64(width) << 48)
 		| (uint64(height) << 32)
 		| (uint64(options) << 16)
 		| (uint64(rounding.key()) << 8)
-		| (uint64(loadLevel));
+		| (uint64(loadLevel)))
+		^ (CustomThumbFingerprint() * 0x9E3779B97F4A7C15ULL);
 	if (*cacheKey == key) {
 		return;
 	}
 
 	if (!image && !_data->hasThumbnail() && _data->isVideoFile()) {
 		if (GetEnhancedBool("custom_file_thumbs")) {
-			auto thumb = QImage();
-			const auto path = GetEnhancedString("custom_thumb_path");
-			if (!path.isEmpty()) {
-				thumb = QImage(path);
-			}
+			const auto ratio = style::DevicePixelRatio();
+			auto thumb = PrepareCustomThumb(
+				u"frame:%1x%2:%3:%4@%5"_q
+					.arg(width)
+					.arg(height)
+					.arg(int(options))
+					.arg(rounding.key())
+					.arg(ratio),
+				[geometry, options, rounding, ratio](const QImage &source) {
+					const auto pixSize = source.size().scaled(
+						geometry.size(),
+						Qt::KeepAspectRatio);
+					auto scaled = Images::Prepare(
+						source,
+						pixSize * ratio,
+						{ .options = options, .outer = geometry.size() });
+					return Images::Round(
+						std::move(scaled),
+						MediaRoundingMask(rounding));
+				});
 			if (!thumb.isNull()) {
 				*cacheKey = key;
-				const auto pixSize = thumb.size()
-					.scaled(geometry.size(), Qt::KeepAspectRatio);
-				const auto ratio = style::DevicePixelRatio();
-				auto scaled = Images::Prepare(
-					thumb,
-					pixSize * ratio,
-					{ .options = options, .outer = geometry.size() });
-				auto rounded = Images::Round(
-					std::move(scaled),
-					MediaRoundingMask(rounding));
-				*cache = Ui::PixmapFromImage(std::move(rounded));
+				*cache = Ui::PixmapFromImage(std::move(thumb));
 				return;
 			}
 		}
