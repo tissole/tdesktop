@@ -188,7 +188,8 @@ int ProgressWidget::Row::resizeGetHeight(int newWidth) {
 }
 
 void ProgressWidget::Row::paintEvent(QPaintEvent *e) {
-	if (_data.hideProgress) {
+	if (_data.hideProgress
+		|| (_data.id.isEmpty() && _old.empty())) {
 		return;
 	}
 	auto p = QPainter(this);
