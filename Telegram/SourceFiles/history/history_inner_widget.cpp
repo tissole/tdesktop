@@ -4740,6 +4740,69 @@ void HistoryInner::checkActivation() {
 	session().data().histories().readInboxTill(view->data());
 }
 
+void HistoryInner::notifyHistoriesChanged() {
+	auto displayed = std::vector<not_null<Element*>>();
+	enumerateItems<EnumItemsDirection::TopToBottom>([&](not_null<Element*> view, int, int) {
+		displayed.push_back(view);
+		return true;
+	});
+	constexpr auto kMargin = 5;
+	const auto flagMargin = [&](not_null<Element*> edge, bool forward) {
+		auto block = edge->block();
+		auto index = edge->indexInBlock();
+		if (!block || index < 0) {
+			return;
+		}
+		const auto history = edge->data()->history();
+		for (auto n = 0; n != kMargin; ++n) {
+			if (forward) {
+				if (index + 1 < int(block->messages.size())) {
+					++index;
+				} else {
+					const auto &blocks = history->blocks;
+					auto b = 0;
+					while (b != int(blocks.size()) && blocks[b].get() != block) {
+						++b;
+					}
+					if (b + 1 >= int(blocks.size())
+						|| blocks[b + 1]->messages.empty()) {
+						return;
+					}
+					block = blocks[b + 1].get();
+					index = 0;
+				}
+			} else if (index > 0) {
+				--index;
+			} else {
+				const auto &blocks = history->blocks;
+				auto b = int(blocks.size()) - 1;
+				while (b >= 0 && blocks[b].get() != block) {
+					--b;
+				}
+				if (b < 1 || blocks[b - 1]->messages.empty()) {
+					return;
+				}
+				block = blocks[b - 1].get();
+				index = int(block->messages.size()) - 1;
+			}
+			block->messages[index]->setPendingResize();
+		}
+	};
+	for (const auto view : displayed) {
+		view->setPendingResize();
+	}
+	if (!displayed.empty()) {
+		flagMargin(displayed.front(), false);
+		flagMargin(displayed.back(), true);
+	}
+	auto &data = _controller->session().data();
+	data.notifyHistoryChangeDelayed(_history);
+	if (_migrated) {
+		data.notifyHistoryChangeDelayed(_migrated);
+	}
+	data.sendHistoryChangeNotifications();
+}
+
 void HistoryInner::recountHistoryGeometry(bool initial) {
 	_contentWidth = _scroll->width();
 

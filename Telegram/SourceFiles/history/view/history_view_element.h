@@ -780,6 +780,9 @@ protected:
 	virtual void refreshDataIdHook();
 
 	[[nodiscard]] const Ui::Text::String &text() const;
+	[[nodiscard]] bool hasSyntheticText() const {
+		return _hasSyntheticText;
+	}
 	[[nodiscard]] HistoryMessageRichPage *richpage();
 	[[nodiscard]] const HistoryMessageRichPage *richpage() const;
 	[[nodiscard]] int richPageWidthFor(int textWidth) const;
@@ -850,6 +853,7 @@ private:
 	mutable uint32 _textWidth : 16 = 0;
 	mutable uint32 _textRealWidth : 16 = 0;
 	mutable int _textHeight = 0;
+	mutable bool _hasSyntheticText = false;
 
 	int _y = 0;
 	int _indexInBlock = -1;

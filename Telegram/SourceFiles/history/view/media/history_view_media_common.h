@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/runtime_composer.h"
 #include "ui/controls/ttl_media.h"
+#include "ui/text/text_entity.h"
 
 class DocumentData;
 class PhotoData;
@@ -108,6 +109,12 @@ void PaintTtlSingleViewBadge(
 	Fn<QImage(const QImage &source)> bake);
 
 [[nodiscard]] uint64 CustomThumbFingerprint();
+
+[[nodiscard]] TextWithEntities EffectiveMediaCaption(
+	const TextWithEntities &realText,
+	DocumentData *document);
+
+[[nodiscard]] bool QualifiesForFilenameCaption(DocumentData *document);
 
 [[nodiscard]] QSize CountDesiredMediaSize(QSize original);
 [[nodiscard]] QSize CountMediaSize(QSize desired, int newWidth);

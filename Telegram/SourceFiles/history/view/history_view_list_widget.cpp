@@ -2728,6 +2728,14 @@ void ListWidget::updateSize() {
 	_resizePending = false;
 }
 
+void ListWidget::refreshAllVisibleItems() {
+	enumerateItems<EnumItemsDirection::TopToBottom>([&](not_null<Element*> view, int, int) {
+		view->setPendingResize();
+		return true;
+	});
+	updateSize();
+}
+
 void ListWidget::resizeToWidth(int newWidth, int minHeight) {
 	if (width() != newWidth && _overlayHost) {
 		_overlayHost->hide();

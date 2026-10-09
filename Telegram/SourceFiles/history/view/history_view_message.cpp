@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_cursor_state.h"
 #include "history/history_item_components.h"
 #include "history/history_item_helpers.h"
+#include "history/view/media/history_view_media_common.h"
 #include "history/view/media/history_view_media_generic.h"
 #include "history/view/media/history_view_media_grouped.h"
 #include "history/view/media/history_view_web_page.h"
@@ -3184,7 +3185,27 @@ void Message::paintText(
 		QRect &trect,
 		const PaintContext &context) const {
 	if (!hasVisibleText()) {
+		if (hasSyntheticText()) {
+			const auto item = textItem();
+			const auto textMedia = item ? item->media() : nullptr;
+			const auto document = textMedia ? textMedia->document() : nullptr;
+			if (!QualifiesForFilenameCaption(document)) {
+				const auto self = const_cast<Message*>(this);
+				self->validateText();
+				self->setPendingResize();
+				history()->owner().requestViewResize(self);
+			}
+		}
 		return;
+	}
+	if (text().isEmpty()) {
+		const auto self = const_cast<Message*>(this);
+		self->validateText();
+		if (!self->text().isEmpty()) {
+			self->setPendingResize();
+			history()->owner().requestViewResize(self);
+			return;
+		}
 	}
 	const auto stm = context.messageStyle();
 	p.setPen(stm->historyTextFg);
@@ -7540,7 +7561,10 @@ bool Message::hasVisibleText() const {
 		return !media || !media->hideMessageText();
 	} else if (textItem->emptyText()) {
 		if (const auto media = textItem->media()) {
-			return media->storyExpired() || media->storyUnsupported();
+			if (media->storyExpired() || media->storyUnsupported()) {
+				return true;
+			}
+			return QualifiesForFilenameCaption(media->document());
 		}
 		return false;
 	}
@@ -7559,6 +7583,7 @@ int Message::visibleMediaTextLength() const {
 }
 
 QSize Message::performCountCurrentSize(int newWidth) {
+	validateText();
 	const auto newHeight = resizeContentGetHeight(newWidth);
 
 	return { newWidth, newHeight };

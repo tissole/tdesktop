@@ -137,6 +137,8 @@ private:
 		mutable Ui::Text::String _captionText;
 	};
 
+	[[nodiscard]] static TextWithEntities PartCaptionText(const Part &part);
+
 	[[nodiscard]] static Mode DetectMode(not_null<Data::Media*> media);
 
 	void setCaptionSelection(int partIndex, TextSelection selection);
@@ -166,6 +168,8 @@ private:
 	[[nodiscard]] QImage generateSpoilerTagBackground(QRect full) const;
 
 	mutable std::optional<HistoryItem*> _captionItem;
+	mutable bool _captionSettingState = false;
+	mutable bool _captionBuiltWithSetting = false;
 	std::vector<Part> _parts;
 
 	Mode _mode = Mode::Grid;

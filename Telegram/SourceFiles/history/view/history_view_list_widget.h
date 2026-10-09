@@ -551,6 +551,7 @@ public:
 	void setAboutView(AboutView *view);
 	void aboutViewReplaced(const Element *was);
 	void updateSize();
+	void refreshAllVisibleItems();
 	void overrideChatMode(std::optional<ElementChatMode> mode);
 
 	// Accessibility.

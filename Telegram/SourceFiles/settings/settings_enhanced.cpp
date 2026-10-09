@@ -12,6 +12,9 @@ https://github.com/TDesktop-x64/tdesktop/blob/dev/LEGAL
 #include <QtWidgets/QApplication>
 #include "settings/settings_enhanced.h"
 
+#include "history/history_inner_widget.h"
+#include "history/view/history_view_list_widget.h"
+
 #include "settings/settings_common.h"
 #include <ui/vertical_list.h>
 #include "ui/wrap/vertical_layout.h"
@@ -395,6 +398,30 @@ namespace Settings {
 		}) | rpl::on_next([=](bool toggled) {
 			SetEnhancedValue("caption_from_file_name", toggled);
 			EnhancedSettings::Write();
+		}, container->lifetime());
+
+		AddButtonWithIcon(
+				inner,
+				tr::lng_settings_filename_as_caption(),
+				st::settingsButtonNoIcon
+		)->toggleOn(
+				rpl::single(GetEnhancedBool("filename_as_caption"))
+		)->toggledChanges(
+		) | rpl::filter([=](bool toggled) {
+			return (toggled != GetEnhancedBool("filename_as_caption"));
+		}) | rpl::on_next([=](bool toggled) {
+			SetEnhancedValue("filename_as_caption", toggled);
+			EnhancedSettings::Write();
+			for (const auto widget : QApplication::topLevelWidgets()) {
+				for (const auto child : widget->findChildren<Ui::RpWidget*>()) {
+					if (const auto inner = dynamic_cast<HistoryInner*>(child)) {
+						inner->notifyHistoriesChanged();
+					} else if (const auto list = dynamic_cast<HistoryView::ListWidget*>(child)) {
+						list->refreshAllVisibleItems();
+					}
+				}
+				widget->update();
+			}
 		}, container->lifetime());
 
 		AddDivider(inner);

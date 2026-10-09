@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/media/history_view_media_grouped.h"
+#include "history/view/media/history_view_media_common.h"
 
 #include <set>
 #include "history/history_item_components.h"
@@ -72,6 +73,13 @@ std::vector<Ui::GroupMediaLayout> LayoutPlaylist(
 }
 
 } // namespace
+
+TextWithEntities GroupedMedia::PartCaptionText(const Part &part) {
+	const auto document = part.content
+		? part.content->getDocument()
+		: nullptr;
+	return EffectiveMediaCaption(part.item->originalText(), document);
+}
 
 GroupedMedia::Part::Part(
 	not_null<Element*> parent,
@@ -199,12 +207,15 @@ GroupedMedia::~GroupedMedia() {
 HistoryItem *GroupedMedia::itemForText() const {
 	if (_mode == Mode::Column) {
 		return Media::itemForText();
-	} else if (!_captionItem) {
+	}
+	const auto setting = GetEnhancedBool("filename_as_caption");
+	if (!_captionItem || _captionSettingState != setting) {
+		_captionSettingState = setting;
 		_captionItem = [&]() -> HistoryItem* {
 			auto result = (HistoryItem*)nullptr;
 			auto count = 0;
 			for (const auto &part : _parts) {
-				if (!part.item->originalText().empty()) {
+				if (!PartCaptionText(part).empty()) {
 					if (result && result != part.item) {
 						// Multiple items have text
 						count = 2; 
@@ -237,6 +248,7 @@ GroupedMedia::Mode GroupedMedia::DetectMode(not_null<Data::Media*> media) {
 }
 
 QSize GroupedMedia::countOptimalSize() {
+	_captionBuiltWithSetting = GetEnhancedBool("filename_as_caption");
 	_purchasedPriceTag = hasPurchasedTag();
 
 	std::vector<QSize> sizes;
@@ -317,7 +329,7 @@ QSize GroupedMedia::countOptimalSize() {
 
 		int captionsCount = 0;
 		for (const auto &part : _parts) {
-			if (!part.item->originalText().empty()) {
+			if (!PartCaptionText(part).empty()) {
 				captionsCount++;
 			}
 		}
@@ -328,7 +340,7 @@ QSize GroupedMedia::countOptimalSize() {
 			bool rowHasCaption = false;
 			if (usePerItemCaptions) {
 				for (const auto i : indices) {
-					if (!_parts[i].item->originalText().empty()) {
+					if (!PartCaptionText(_parts[i]).empty()) {
 						rowHasCaption = true;
 						break;
 					}
@@ -340,11 +352,11 @@ QSize GroupedMedia::countOptimalSize() {
 				const auto isLastRow = (rowY == rows.rbegin()->first);
 				for (const auto i : indices) {
 					auto &part = _parts[i];
-					if (!part.item->originalText().empty()) {
+					if (!PartCaptionText(part).empty()) {
 						part._captionHeight = uniformCaptionHeight;
 						part._captionText = Ui::Text::String(
 							st::messageTextStyle,
-							part.item->originalText(),
+							PartCaptionText(part),
 							Ui::ItemTextDefaultOptions(),
 							st::msgMinWidth,
 							Core::TextContext({
@@ -381,7 +393,9 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 	if (_mode == Mode::Grid && newWidth < st::historyGroupWidthMin) {
 		return { newWidth, newHeight };
-	} else if (_mode == Mode::Column) {
+	}
+	_captionBuiltWithSetting = GetEnhancedBool("filename_as_caption");
+	if (_mode == Mode::Column) {
 		auto top = 0;
 		const auto skip = st::historyGroupSkip;
 		for (auto i = 0; i != _parts.size(); ++i) {
@@ -438,7 +452,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 		int captionsCount = 0;
 		for (const auto &part : _parts) {
-			if (!part.item->originalText().empty()) {
+			if (!PartCaptionText(part).empty()) {
 				captionsCount++;
 			}
 		}
@@ -460,7 +474,7 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 
 			if (usePerItemCaptions) {
 				for (const auto i : indices) {
-					if (!_parts[i].item->originalText().empty()) {
+					if (!PartCaptionText(_parts[i]).empty()) {
 						rowHasCaption = true;
 						break;
 					}
@@ -470,11 +484,11 @@ QSize GroupedMedia::countCurrentSize(int newWidth) {
 			if (rowHasCaption) {
 				for (const auto i : indices) {
 					auto &part = _parts[i];
-					if (!part.item->originalText().empty()) {
+					if (!PartCaptionText(part).empty()) {
 						part._captionHeight = uniformCaptionHeight;
 						part._captionText = Ui::Text::String(
 							st::messageTextStyle,
-							part.item->originalText(),
+							PartCaptionText(part),
 							Ui::ItemTextDefaultOptions(),
 							st::msgMinWidth,
 							Core::TextContext({
@@ -628,7 +642,7 @@ void GroupedMedia::drawHighlight(
 
 		// Calculate length based on mode
 		const auto length = (_mode == Mode::Grid)
-			? part.item->originalText().text.size()
+			? PartCaptionText(part).text.size()
 			: part.content->fullSelectionLength();
 
 		// Check if the global selection intersects with this part's local range [0, length)
@@ -738,14 +752,11 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 	const bool showInfo = _parent->isUnderCursor() || context.selected();
 
-	// Calculate if we have a single caption for the whole grid
-	bool singleCaptionAnywhere = false;
-	if (_mode == Mode::Grid) {
-		int count = 0;
-		for (const auto &part : _parts) {
-			if (!part.item->originalText().empty()) count++;
-		}
-		singleCaptionAnywhere = (count == 1);
+	const auto captionSetting = GetEnhancedBool("filename_as_caption");
+	if (_mode == Mode::Grid && _captionBuiltWithSetting != captionSetting) {
+		_captionBuiltWithSetting = captionSetting;
+		_parent->setPendingResize();
+		_parent->history()->owner().requestViewResize(_parent);
 	}
 
 	// For Grid mode text selection offset calculation
@@ -771,7 +782,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 			}
 		} else {
 			// Grid Mode Selection Logic
-			const auto textLen = part.item->originalText().text.size();
+			const auto textLen = PartCaptionText(part).text.size();
 			if (textLen > 0) {
 				if (selection == FullSelection) {
 					partSelection = FullSelection;
@@ -806,7 +817,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 		if (_mode == Mode::Grid
 			&& !highlight.empty()
 			&& !IsGroupItemSelection(highlight, i)) {
-			const auto len = part.item->originalText().text.size();
+			const auto len = PartCaptionText(part).text.size();
 			if (len > 0) {
 				const int localFrom = std::max((int)highlight.from, textOffset);
 				const int localTo = std::min((int)highlight.to, textOffset + (int)len);
@@ -1148,7 +1159,7 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 			auto highlightRequest = context.computeHighlightCache();
 			if (highlightRequest) {
-				const auto len = part.item->originalText().text.size();
+				const auto len = PartCaptionText(part).text.size();
 				const auto range = highlightRequest->range;
 				
 				// Map Global Range to Local Part Range
@@ -1222,8 +1233,9 @@ void GroupedMedia::draw(Painter &p, const PaintContext &context) const {
 
 		// Update offset for next part in Grid mode
 		if (_mode == Mode::Grid) {
-			if (!part.item->originalText().empty()) {
-				textOffset += part.item->originalText().text.size();
+			const auto caption = PartCaptionText(part);
+			if (!caption.empty()) {
+				textOffset += caption.text.size();
 			}
 		} else {
 			// Column mode
@@ -1268,8 +1280,8 @@ TextState GroupedMedia::getPartState(
 				&& !captionGeo.isEmpty()
 				&& captionGeo.contains(point)) {
 				
-				const auto originalText = part.item->originalText();
-				if (!originalText.empty()) {
+				const auto caption = PartCaptionText(part);
+				if (!caption.empty()) {
 					auto result = TextState(part.item);
 					const auto padding = QMargins(8, 0, 8, 0);
 					const auto captionWidth = captionGeo.width() - padding.left() - padding.right();
@@ -1291,7 +1303,7 @@ TextState GroupedMedia::getPartState(
 					// Only show tooltip if we are NOT looking for text selection/symbol (which is used for copying).
 					if (part._captionText.maxWidth() > captionWidth && !(request.flags & Ui::Text::StateRequest::Flag::LookupSymbol)) {
 						result.customTooltip = true;
-						result.customTooltipText = originalText.text;
+						result.customTooltipText = caption.text;
 					}
 					
 					return result;
@@ -1516,9 +1528,9 @@ TextState GroupedMedia::getPartState(
 			return result;
 		}
 		if (_mode == Mode::Grid) {
-			const auto originalText = part.item->originalText();
-			if (!originalText.text.isEmpty()) {
-				shift += originalText.text.size();
+			const auto caption = PartCaptionText(part);
+			if (!caption.text.isEmpty()) {
+				shift += caption.text.size();
 			}
 		} else {
 			shift += part.content->fullSelectionLength();
@@ -1748,7 +1760,7 @@ TextSelection GroupedMedia::adjustSelection(
 		auto found = false;
 		for (auto i = 0; i < _parts.size(); ++i) {
 			const auto &part = _parts[i];
-			const auto textLen = part.item->originalText().text.size();
+			const auto textLen = PartCaptionText(part).text.size();
 			
 			if (textLen > 0) {
 				const auto partFrom = std::max((int)selection.from, offset);
@@ -1805,9 +1817,9 @@ uint16 GroupedMedia::fullSelectionLength() const {
 		// This enables text selection for Grid captions
 		auto result = 0;
 		for (const auto &part : _parts) {
-			const auto originalText = part.item->originalText();
-			if (!originalText.text.isEmpty()) {
-				result += originalText.text.size();
+			const auto caption = PartCaptionText(part);
+			if (!caption.text.isEmpty()) {
+				result += caption.text.size();
 			}
 		}
 		return result;
@@ -1825,7 +1837,7 @@ bool GroupedMedia::hasTextForCopy() const {
 		if (_mode == Mode::Column) {
 			if (part.content->hasTextForCopy()) return true;
 		} else {
-			if (!part.item->originalText().empty()) return true;
+			if (!PartCaptionText(part).empty()) return true;
 		}
 	}
 	return false;
@@ -1862,12 +1874,12 @@ TextForMimeData GroupedMedia::selectedText(
 		auto result = TextForMimeData();
 		int offset = 0;
 		for (const auto &part : _parts) {
-			const auto originalText = part.item->originalText();
-			const int textLen = originalText.text.size();
+			const auto caption = PartCaptionText(part);
+			const int textLen = caption.text.size();
 			
 			// Always process FullSelection if requested, even if textLen is 0 (though loop prevents that)
-			// But check originalText emptiness explicitly
-			if (!originalText.text.isEmpty()) {
+			// But check caption emptiness explicitly
+			if (!caption.text.isEmpty()) {
 				if (!selection.empty()) {
 					// Map global selection to local part
 					const int localFrom = std::max((int)selection.from, offset);
@@ -1877,7 +1889,7 @@ TextForMimeData GroupedMedia::selectedText(
 						int start = localFrom - offset;
 						int length = localTo - localFrom;
 						
-						auto partText = originalText.text.mid(start, length);
+						auto partText = caption.text.mid(start, length);
 						
 						if (result.empty()) {
 							result = TextForMimeData::Simple(partText);
@@ -1911,8 +1923,8 @@ SelectedQuote GroupedMedia::selectedQuote(TextSelection selection) const {
 	} else if (_mode == Mode::Grid) {
 		auto offset = 0;
 		for (const auto &part : _parts) {
-			const auto &text = part.item->originalText();
-			const auto length = text.text.size();
+			const auto caption = PartCaptionText(part);
+			const auto length = caption.text.size();
 			if (length > 0) {
 				const auto localFrom = std::max(static_cast<int>(selection.from), offset);
 				const auto localTo = std::min(static_cast<int>(selection.to), static_cast<int>(offset + length));
@@ -1965,7 +1977,7 @@ TextSelection GroupedMedia::selectionFromQuote(
 			i->_captionText,
 			quote);
 			
-		const auto len = i->item->originalText().text.size();
+		const auto len = PartCaptionText(*i).text.size();
 		if (localResult.empty()) {
 			// Fallback: If exact text match fails but we know the item,
 			// select the entire item to ensure the row is highlighted.
@@ -1980,7 +1992,7 @@ TextSelection GroupedMedia::selectionFromQuote(
 		auto result = localResult;
 		for (auto j = i; j != begin(_parts);) {
 			--j;
-			const auto prevLen = j->item->originalText().text.size();
+			const auto prevLen = PartCaptionText(*j).text.size();
 			if (prevLen > 0) {
 				result = ShiftItemSelection(result, prevLen);
 			}

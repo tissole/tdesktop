@@ -388,6 +388,28 @@ uint64 CustomThumbFingerprint() {
 	return result;
 }
 
+TextWithEntities EffectiveMediaCaption(
+		const TextWithEntities &realText,
+		DocumentData *document) {
+	if (!realText.empty()) {
+		return realText;
+	}
+	if (!QualifiesForFilenameCaption(document)) {
+		return {};
+	}
+	const auto name = document->filename();
+	if (name.isEmpty()) {
+		return {};
+	}
+	return { name, {} };
+}
+
+bool QualifiesForFilenameCaption(DocumentData *document) {
+	return document
+		&& document->isVideoFile()
+		&& GetEnhancedBool("filename_as_caption");
+}
+
 QSize CountDesiredMediaSize(QSize original) {
 	return DownscaledSize(
 		style::ConvertScale(original),

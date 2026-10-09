@@ -2145,8 +2145,12 @@ void Element::validateText() {
 		return;
 	}
 	const auto &text = _textItem->_text;
+	const auto textMedia = _textItem->media();
+	const auto document = textMedia ? textMedia->document() : nullptr;
+	const auto synthetic = text.empty()
+		&& QualifiesForFilenameCaption(document);
 	auto richPage = std::shared_ptr<const Iv::RichPage>();
-	if (!summaryShownChanged && _text.isEmpty() == text.empty()) {
+	if (!summaryShownChanged && !synthetic && _text.isEmpty() == text.empty()) {
 	} else if (_flags & Flag::ServiceMessage) {
 		const auto contextDependentText = contextDependentServiceText();
 		const auto &markedText = contextDependentText.text.empty()
@@ -2180,7 +2184,17 @@ void Element::validateText() {
 		if (!unavailable.isEmpty()) {
 			setTextWithLinks(tr::italic(unavailable));
 		} else {
-			setTextWithLinks(_textItem->translatedTextWithLocalEntities());
+			const auto wasEmpty = _text.isEmpty();
+			setTextWithLinks(EffectiveMediaCaption(
+				_textItem->translatedTextWithLocalEntities(),
+				document));
+			_hasSyntheticText = text.empty()
+				&& !_text.isEmpty()
+				&& QualifiesForFilenameCaption(document);
+			if (wasEmpty != _text.isEmpty()) {
+				setPendingResize();
+				history()->owner().requestViewResize(this);
+			}
 			richPage = _textItem->translatedRichPage();
 		}
 	}
