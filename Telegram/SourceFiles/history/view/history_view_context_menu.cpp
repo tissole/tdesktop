@@ -34,6 +34,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item_components.h"
 #include "history/view/history_view_schedule_box.h"
 #include "history/view/media/history_view_media.h"
+#include "history/view/media/history_view_media_common.h"
 #include "history/view/media/menu/history_view_poll_menu.h"
 #include "history/view/media/history_view_save_document_action.h"
 #include "history/view/media/history_view_web_page.h"
@@ -2242,14 +2243,21 @@ void FillContextMenuItems(
 									textToCopy = request.selectedText.rich;
 								} else {
 									// Direct copy from the resolved item
-									textToCopy = safeItem->originalText();
+									// (synthetic filename caption included).
+									const auto partMedia = safeItem->media();
+									textToCopy = HistoryView::EffectiveMediaCaption(
+										safeItem->originalText(),
+										partMedia ? partMedia->document() : nullptr);
 								}
 								
 								if (textToCopy.empty() && safeItem != owner->message(itemId)) { 
 									// If part has no text (e.g. only media), fallback to main item text
 									// ONLY if the user didn't explicitly select empty text (which isn't possible here)
 									if (auto mainItem = owner->message(itemId)) {
-										textToCopy = mainItem->originalText();
+										const auto mainMedia = mainItem->media();
+										textToCopy = HistoryView::EffectiveMediaCaption(
+											mainItem->originalText(),
+											mainMedia ? mainMedia->document() : nullptr);
 									}
 								}
 								

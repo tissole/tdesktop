@@ -4064,9 +4064,25 @@ bool HistoryItem::hasHiddenLinks() const {
 }
 
 TextForMimeData HistoryItem::clipboardText() const {
-	return isService()
-		? TextForMimeData()
-		: TextForMimeData::WithExpandedLinks(translatedText());
+	if (isService()) {
+		return {};
+	}
+	const auto result = TextForMimeData::WithExpandedLinks(translatedText());
+	if (!result.empty()) {
+		return result;
+	}
+	const auto m = media();
+	const auto document = m ? m->document() : nullptr;
+	if (document
+		&& document->isVideoFile()
+		&& !document->filename().isEmpty()
+		&& GetEnhancedBool("filename_as_caption")) {
+		return TextForMimeData::WithExpandedLinks({
+			document->filename(),
+			{},
+		});
+	}
+	return {};
 }
 
 bool HistoryItem::changeViewsCount(int count) {

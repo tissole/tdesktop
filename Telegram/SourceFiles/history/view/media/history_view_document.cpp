@@ -1919,6 +1919,8 @@ uint16 Document::fullSelectionLength() const {
 	}
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		result += captioned->caption.length();
+	} else if (QualifiesForFilenameCaption(_data)) {
+		result += _data->filename().length();
 	}
 	return result;
 }
@@ -1929,7 +1931,8 @@ bool Document::hasTextForCopy() const {
 			return true;
 		}
 	}
-	return Has<HistoryDocumentCaptioned>();
+	return Has<HistoryDocumentCaptioned>()
+		|| QualifiesForFilenameCaption(_data);
 }
 
 TextForMimeData Document::selectedText(TextSelection selection) const {
@@ -1952,6 +1955,14 @@ TextForMimeData Document::selectedText(TextSelection selection) const {
 			result.append("\n\n");
 		}
 		result.append(captioned->caption.toTextForMimeData(selection));
+	} else if (QualifiesForFilenameCaption(_data)) {
+		if (!result.empty()) {
+			result.append("\n\n");
+		}
+		const auto name = _data->filename();
+		result.append(name.mid(
+			selection.from,
+			selection.to - selection.from));
 	}
 	return result;
 }
