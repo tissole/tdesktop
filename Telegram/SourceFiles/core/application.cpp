@@ -78,6 +78,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/notifications_manager.h"
 #include "window/themes/window_theme.h"
 #include "ui/widgets/tooltip.h"
+#include "ui/widgets/popup_menu.h"
 #include "ui/gl/gl_detection.h"
 #include "ui/text/text_options.h"
 #include "ui/effects/spoiler_mess.h"
@@ -114,6 +115,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QMimeDatabase>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QScreen>
+#include <QtGui/QWindow>
+#include <QtWidgets/QApplication>
 
 #include <ksandbox.h>
 
@@ -728,6 +731,32 @@ bool Application::hideMediaView() {
 }
 
 bool Application::eventFilter(QObject *object, QEvent *e) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+	if (e->type() == QEvent::MouseButtonPress && !object->isWidgetType()) {
+		const auto nativeWindow = qobject_cast<QWindow*>(object);
+		const auto activePopup = dynamic_cast<Ui::PopupMenu*>(
+			QApplication::activePopupWidget());
+		const auto mouse = static_cast<QMouseEvent*>(e);
+		if (nativeWindow && activePopup) {
+			const auto globalPosition = mouse->globalPos();
+			const auto hit = QApplication::widgetAt(globalPosition);
+			const auto submenu = hit
+				? dynamic_cast<Ui::PopupMenu*>(hit->window())
+				: nullptr;
+			if (submenu
+				&& submenu != activePopup
+				&& nativeWindow != submenu->windowHandle()
+				&& !activePopup->rect().contains(
+					activePopup->mapFromGlobal(globalPosition))
+				&& submenu->rect().contains(
+					submenu->mapFromGlobal(globalPosition))) {
+				updateNonIdle();
+				QApplication::sendEvent(submenu, e);
+				return true;
+			}
+		}
+	}
+#endif
 	switch (e->type()) {
 	case QEvent::KeyPress: {
 		updateNonIdle();
