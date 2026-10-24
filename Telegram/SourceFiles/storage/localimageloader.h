@@ -128,6 +128,7 @@ struct UploadBatch {
 	uint64 sessionId = 0;
 	TimeId startedAt = 0;
 	TimeId finishedAt = 0;
+	QString displayName;
 	std::function<void(int uploaded, int duplicates)> onDone;
 	std::function<void()> onChange;
 
@@ -231,6 +232,7 @@ struct FilePrepareDescriptor {
 	bool spoiler = false;
 	std::shared_ptr<SendingAlbum> album;
 	std::shared_ptr<UploadBatch> batch;
+	std::optional<MTPInputPhoto> coverInput;
 };
 struct FilePrepareResult {
 	explicit FilePrepareResult(FilePrepareDescriptor &&descriptor);
@@ -277,6 +279,7 @@ struct FilePrepareResult {
 
 	std::vector<MTPInputDocument> attachedStickers;
 	std::shared_ptr<FilePrepareResult> videoCover;
+	std::optional<MTPInputPhoto> coverInput;
 	void setFileData(const QByteArray &filedata);
 	void setThumbData(const QByteArray &thumbdata);
 
@@ -310,6 +313,7 @@ public:
 		QByteArray content;
 		std::unique_ptr<Ui::PreparedFileInformation> information;
 		std::unique_ptr<FileLoadTask> videoCover;
+		std::optional<MTPInputPhoto> coverInput;
 		SendMediaType type;
 		FileLoadTo to;
 		TextWithTags caption;
@@ -388,6 +392,7 @@ private:
 	QString _displayName;
 	QByteArray _content;
 	std::unique_ptr<FileLoadTask> _videoCover;
+	std::optional<MTPInputPhoto> _coverInput;
 	std::unique_ptr<Ui::PreparedFileInformation> _information;
 	crl::time _duration = 0;
 	VoiceWaveform _waveform;

@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/storage_shared_media.h"
 #include "window/window_separate_id.h"
 
+#include <vector>
+
 namespace Ui {
 class AbstractButton;
 class MultiSlideTracker;
@@ -32,6 +34,8 @@ using Type = Storage::SharedMediaType;
 
 [[nodiscard]] Fn<QString(int)> MediaText(Type type);
 
+[[nodiscard]] std::vector<int> ScanCategories(Type type);
+
 [[nodiscard]] Window::SeparateId SeparateId(
 	not_null<PeerData*> peer,
 	MsgId topicRootId,
@@ -51,6 +55,11 @@ using Type = Storage::SharedMediaType;
 	PeerId monoforumPeerId,
 	PeerData *migrated,
 	Type type,
+	Ui::MultiSlideTracker &tracker);
+
+[[nodiscard]] not_null<Ui::SettingsButton*> AddScanTotalButton(
+	Ui::VerticalLayout *parent,
+	PeerId peerId,
 	Ui::MultiSlideTracker &tracker);
 
 } // namespace Info::Media

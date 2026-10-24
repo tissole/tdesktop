@@ -36,7 +36,7 @@ namespace {
 	if (skipped <= 0) {
 		return QString();
 	}
-	return u" (+%1)"_q.arg(
+	return u" (%1)"_q.arg(
 		tr::lng_tm_fw_duplicates_skipped(tr::now, lt_count, skipped));
 }
 
@@ -44,7 +44,7 @@ namespace {
 	if (skipped <= 0) {
 		return QString();
 	}
-	return u" (+%1)"_q.arg(
+	return u" (%1)"_q.arg(
 		tr::lng_tm_dl_duplicates_skipped(tr::now, lt_count, skipped));
 }
 
@@ -52,7 +52,7 @@ namespace {
 	if (skipped <= 0) {
 		return QString();
 	}
-	return u" (+%1)"_q.arg(
+	return u" (%1)"_q.arg(
 		tr::lng_tm_ul_duplicates_skipped(tr::now, lt_count, skipped));
 }
 
@@ -118,46 +118,54 @@ void DownloadBar::show(DownloadBarContent &&content) {
 			st::widgetFadeDuration);
 	}
 	refreshThumbnail();
-	const auto dlPrefix = u"DL "_q;
-	const auto ulPrefix = u"UL "_q;
-	const auto nfPrefix = u"FW "_q;
 	const auto fwdDone = content.efDone + content.nfDone;
 	const auto fwdCount = content.efCount + content.nfCount;
+	const auto dlTitle = (content.count >= 1)
+		? tr::lng_tm_dl_prefix(
+			tr::now,
+			lt_name,
+			(content.singleName.text.isEmpty()
+				? QString()
+				: content.singleName.text + u" "_q)
+			+ tr::lng_tm_counter(
+				tr::now,
+				lt_done, QString::number(content.done),
+				lt_total, QString::number(content.count))
+			+ DuplicatesSuffixDl(content.dlSkipped))
+		: QString();
+	const auto fwTitle = (fwdCount >= 1)
+		? tr::lng_tm_fw_prefix(
+			tr::now,
+			lt_name,
+			(content.singleName.text.isEmpty()
+				? QString()
+				: content.singleName.text + u" "_q)
+			+ tr::lng_tm_counter(
+				tr::now,
+				lt_done, QString::number(fwdDone),
+				lt_total, QString::number(fwdCount))
+			+ DuplicatesSuffix(content.efSkipped))
+		: QString();
+	const auto ulTitle = (content.uploadCount >= 1)
+		? tr::lng_tm_ul_prefix(
+			tr::now,
+			lt_name,
+			(content.singleUploadName.text.isEmpty()
+				? QString()
+				: content.singleUploadName.text + u" "_q)
+			+ tr::lng_tm_counter(
+				tr::now,
+				lt_done, QString::number(content.uploadDone),
+				lt_total, QString::number(content.uploadCount))
+			+ DuplicatesSuffixUl(content.ulSkipped))
+		: QString();
 	_title.setMarkedText(
 		st::defaultTextStyle,
-		(content.count > 1
-			? tr::bold(dlPrefix + (content.dlTotal > 1
-				? tr::lng_tm_files_progress(
-					tr::now,
-					lt_done, QString::number(content.done),
-					lt_total, QString::number(content.count))
-					+ DuplicatesSuffixDl(content.dlSkipped)
-				: tr::lng_profile_files(
-					tr::now,
-					lt_count, content.count)))
-			: content.count == 1
-			? tr::bold(tr::lng_tm_dl_prefix(
-				tr::now,
-				lt_name, content.singleName.text))
-			: (fwdCount >= 1
-				? tr::bold(nfPrefix + tr::lng_tm_files_progress(
-					tr::now,
-					lt_done, QString::number(fwdDone),
-					lt_total, QString::number(fwdCount))
-					+ DuplicatesSuffix(content.efSkipped))
-				: (content.uploadCount > 1
-					? tr::bold(ulPrefix + (content.ulTotal > 1
-						? tr::lng_tm_files_progress(
-							tr::now,
-							lt_done, QString::number(content.uploadDone),
-							lt_total, QString::number(content.uploadCount))
-							+ DuplicatesSuffixUl(content.ulSkipped)
-						: tr::lng_profile_files(
-							tr::now,
-							lt_count, content.uploadCount)))
-					: tr::bold(tr::lng_tm_ul_prefix(
-						tr::now,
-						lt_name, content.singleUploadName.text))))));
+		tr::bold(!dlTitle.isEmpty()
+			? dlTitle
+			: !fwTitle.isEmpty()
+			? fwTitle
+			: ulTitle));
 	refreshInfo(_progress.current());
 }
 

@@ -284,6 +284,10 @@ struct TmSelKinds {
 	}
 	for (const auto &entry : list) {
 		if (const auto item = MessageByGlobalId(entry.globalId)) {
+			if (provider->isForwardAggregate(item)
+				&& provider->isForwardAggregateFinished(item)) {
+				++result.clearable;
+			}
 			const auto kind = TmClassify(
 				item,
 				provider,
@@ -989,6 +993,8 @@ bool ListWidget::isSelectedItem(
 void ListWidget::removeItemSelection(
 		const SelectedMap::const_iterator &i) {
 	Expects(i != _selected.cend());
+	qDebug() << "[TM] tm row deselected, item:"
+		<< i->first->fullId().msg.bare;
 	_selected.erase(i);
 	if (_selected.empty()) {
 		update();
@@ -1340,7 +1346,7 @@ auto ListWidget::findItemByItem(const HistoryItem *item)
 }
 
 auto ListWidget::findItemDetails(not_null<BaseLayout*> item)
- -> FoundItem {
+-> FoundItem {
 	const auto sectionIt = findSectionByItem(item->getItem());
 	Assert(sectionIt != _sections.end());
 	return foundItemInSection(sectionIt->findItemDetails(item), *sectionIt);
@@ -2029,6 +2035,10 @@ void ListWidget::showContextMenu(
 					|| kind == TmItemKind::EnhancedForwardFinished) {
 					++clearable;
 				}
+				if (downloadsProvider->isForwardAggregate(item)
+					&& downloadsProvider->isForwardAggregateFinished(item)) {
+					++clearable;
+				}
 			}
 			if (running > 0) {
 				_contextMenu->addAction(
@@ -2463,6 +2473,14 @@ void ListWidget::clearSelectedItems() {
 	if (kinds.clearable <= 0) {
 		return;
 	}
+	for (const auto &entry : items.list) {
+		if (const auto item = MessageByGlobalId(entry.globalId)) {
+			if (provider->isForwardAggregate(item)
+				&& provider->isForwardAggregateFinished(item)) {
+				provider->clearForwardRun(item);
+			}
+		}
+	}
 	TmClearFinishedItems(session, items.list, provider, efLookup);
 	clearSelected();
 }
@@ -2733,6 +2751,8 @@ void ListWidget::applyItemSelection(
 			item,
 			_provider->computeSelectionData(item, selection),
 			_selectedLimit)) {
+		qDebug() << "[TM] tm row selected, item:"
+			<< item->fullId().msg.bare;
 		repaintItem(item);
 		pushSelectedItems();
 	}
@@ -2745,6 +2765,10 @@ void ListWidget::toggleItemSelection(not_null<HistoryItem*> item) {
 	} else {
 		removeItemSelection(it);
 	}
+	qDebug() << "[TM] tm row selection toggled, item:"
+		<< item->fullId().msg.bare
+		<< "selected:"
+		<< (_selected.find(item) != _selected.cend());
 }
 
 bool ListWidget::isItemUnderPressSelected() const {
@@ -2791,6 +2815,7 @@ void ListWidget::clearSelected() {
 	if (_selected.empty()) {
 		return;
 	}
+	qDebug() << "[TM] tm selection cleared, count:" << _selected.size();
 	if (hasSelectedText()) {
 		repaintItem(_selected.begin()->first);
 		_selected.clear();

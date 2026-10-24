@@ -53,19 +53,21 @@ void FetchHash(
 		int maxAttempts,
 		const QString &tag,
 		Fn<void(FnMut<void(uint64 freshId)>)> refreshTakeout) {
-	int64 headOffset = 0;
+	int64 middleOffset = 0;
 	int64 tailOffset = 0;
-	::Data::DedupSampleOffsets(size, headOffset, tailOffset);
+	::Data::DedupSampleOffsets(size, middleOffset, tailOffset);
 	const auto currentTakeout = std::make_shared<uint64>(takeoutId);
-	const auto head = std::make_shared<QByteArray>();
+	const auto middle = std::make_shared<QByteArray>();
 	const auto tail = std::make_shared<QByteArray>();
 	const auto pending = std::make_shared<int>(2);
 	const auto failed = std::make_shared<bool>(false);
-	const auto doneHash = [head, tail, pending, failed, done] {
+	const auto doneHash = [size, middle, tail, pending, failed, done] {
 		if (--*pending != 0) {
 			return;
 		}
-		done(*failed ? QByteArray() : ::Data::HashChunks(*head, *tail));
+		done(*failed
+			? QByteArray()
+			: ::Data::HashChunks(size, *middle, *tail));
 	};
 	const auto fetch = [&](int64 offset, std::shared_ptr<QByteArray> target) {
 		const auto gen = std::make_shared<int>(0);
@@ -136,7 +138,12 @@ void FetchHash(
 				if (result.type() != mtpc_upload_file) {
 					*failed = true;
 				} else {
-					*target = result.c_upload_file().vbytes().v;
+					const auto &bytes = result.c_upload_file().vbytes().v;
+					if (bytes.size() != ::Data::kDedupChunk) {
+						*failed = true;
+					} else {
+						*target = bytes;
+					}
 				}
 				doneHash();
 			}).fail([=](const MTP::Error &error) {
@@ -182,7 +189,7 @@ void FetchHash(
 		};
 		(*sendChunk)();
 	};
-	fetch(headOffset, head);
+	fetch(middleOffset, middle);
 	fetch(tailOffset, tail);
 }
 
@@ -351,7 +358,7 @@ void CheckDuplicate(
 		done(CheckResult{ .skip = true });
 		return;
 	}
-	if (isPhoto || size < ::Data::kDedupMinPartialHashSize || !location) {
+	if (isPhoto || size <= ::Data::kDedupMinPartialHashSize || !location) {
 		done(CheckResult());
 		return;
 	}

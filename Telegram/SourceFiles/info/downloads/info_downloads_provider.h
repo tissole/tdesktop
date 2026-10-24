@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "info/media/info_media_common.h"
+#include "overview/overview_layout.h"
 #include "base/weak_ptr.h"
 
 #include <map>
@@ -217,6 +218,11 @@ private:
 	[[nodiscard]] bool isUlHeaderLayout(
 		not_null<const Media::BaseLayout*> layout) const;
 	void removeUlHeader(uint64 batchId);
+	void syncSingleHeaders();
+	[[nodiscard]] bool isSingleDlBatch(uint64 batchId) const;
+	[[nodiscard]] bool isSingleUlBatch(uint64 batchId) const;
+	[[nodiscard]] Overview::Layout::ForwardSummaryData singleDlRunData(uint64 batchId);
+	[[nodiscard]] Overview::Layout::ForwardSummaryData singleUlRunData(uint64 batchId);
 	void remove(not_null<const HistoryItem*> item);
 	void trackItemSession(not_null<const HistoryItem*> item);
 	void updateCounter();
@@ -256,6 +262,8 @@ private:
 	base::flat_set<FullMsgId> _efTransferring;
 	base::flat_map<FullMsgId, PendingFinishedUpload> _pendingFinishedUploads;
 	base::flat_set<FullMsgId> _pendingFinishedUploadsFetching;
+	base::flat_map<FullMsgId, uint64> _singleDlBatches;
+	base::flat_map<FullMsgId, uint64> _singleUlBatches;
 	int _storiesAddToAlbumId = 0;
 
 	Filter _filter = Filter::All;

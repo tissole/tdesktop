@@ -65,6 +65,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QDebug>
 
 namespace Data {
 namespace {
@@ -296,7 +297,8 @@ struct DownloadManager::DeleteFilesDescriptor {
 DownloadManager::DownloadManager()
 : _clearLoadingTimer([=] { clearLoading(); })
 , _duplicatesToastTimer([=] { notifyDuplicateSkips(); })
-, _holdExpiryTimer([=] { _loadingListChanges.fire({}); }) {
+	, _holdExpiryTimer([=] { checkHoldExpiry(); }) {
+	qDebug() << "[TM] build " << __DATE__ << ' ' << __TIME__;
 }
 
 DownloadManager::~DownloadManager() {
@@ -318,6 +320,7 @@ void DownloadManager::addBatch(std::weak_ptr<DownloadBatch> batch) {
 	_batches.push_back(std::move(batch));
 	_heldDlBatches.clear();
 	_loadingListChanges.fire({});
+	Info::Downloads::SetLastActivityTab(Info::Downloads::Tab::Downloads);
 }
 
 void DownloadManager::holdFinishedDlBatch(
@@ -329,10 +332,12 @@ void DownloadManager::holdFinishedDlBatch(
 		batch->total,
 		batch->downloaded + batch->failed,
 		batch->duplicates,
-		crl::now() + crl::time(2000),
+		crl::now() + crl::time(5000),
+		batch->displayName,
 	});
-	_holdExpiryTimer.callOnce(crl::time(2000));
+	_holdExpiryTimer.callOnce(crl::time(5000));
 	_loadingListChanges.fire({});
+	Info::Downloads::SetLastActivityTab(Info::Downloads::Tab::Downloads);
 }
 
 void DownloadManager::dropHeldDlBatches() {
@@ -349,6 +354,10 @@ bool DownloadManager::hasHeldDlBatches() const {
 
 void DownloadManager::pokeDownloadBar() {
 	_loadingListChanges.fire({});
+}
+
+void DownloadManager::noteUploadActivity() {
+	Info::Downloads::SetLastActivityTab(Info::Downloads::Tab::Uploads);
 }
 
 std::tuple<int, int, int> DownloadManager::batchTotals() {
@@ -542,6 +551,7 @@ void DownloadManager::addUploadBatch(std::weak_ptr<UploadBatch> batch) {
 	_uploadBatches.push_back(std::move(batch));
 	_heldUlBatches.clear();
 	_loadingListChanges.fire({});
+	Info::Downloads::SetLastActivityTab(Info::Downloads::Tab::Uploads);
 }
 
 void DownloadManager::holdFinishedUlBatch(
@@ -553,10 +563,32 @@ void DownloadManager::holdFinishedUlBatch(
 		batch->total,
 		batch->uploaded + batch->failed,
 		batch->duplicates,
-		crl::now() + crl::time(2000),
+		crl::now() + crl::time(5000),
+		batch->displayName,
 	});
-	_holdExpiryTimer.callOnce(crl::time(2000));
+	_holdExpiryTimer.callOnce(crl::time(5000));
 	_loadingListChanges.fire({});
+	Info::Downloads::SetLastActivityTab(Info::Downloads::Tab::Uploads);
+}
+
+void DownloadManager::checkHoldExpiry() {
+	_loadingListChanges.fire({});
+	auto nearest = crl::time(0);
+	for (const auto &held : _heldDlBatches) {
+		const auto left = held.until - crl::now();
+		if (left > 0 && (!nearest || left < nearest)) {
+			nearest = left;
+		}
+	}
+	for (const auto &held : _heldUlBatches) {
+		const auto left = held.until - crl::now();
+		if (left > 0 && (!nearest || left < nearest)) {
+			nearest = left;
+		}
+	}
+	if (nearest > 0) {
+		_holdExpiryTimer.callOnce(nearest + crl::time(50));
+	}
 }
 
 void DownloadManager::dropHeldUlBatches() {
@@ -602,6 +634,103 @@ std::tuple<int, int, int> DownloadManager::uploadBatchTotals() {
 		}
 	}
 	return { total, done, skipped };
+}
+
+QString DownloadManager::singleUlBatchName() const {
+	auto result = QString();
+	auto found = 0;
+	const auto consider = [&](const QString &name) {
+		if (name.isEmpty()) {
+			return;
+		}
+		++found;
+		result = name;
+	};
+	for (const auto &weak : _uploadBatches) {
+		if (const auto batch = weak.lock()) {
+			if (!batch->done) {
+				consider(batch->displayName);
+			}
+		}
+	}
+	const auto now = crl::now();
+	for (const auto &held : _heldUlBatches) {
+		if (held.until > now) {
+			consider(held.name);
+		}
+	}
+	return (found == 1) ? result : QString();
+}
+
+QString DownloadManager::lastUlBatchName() const {
+	auto result = QString();
+	for (const auto &weak : _uploadBatches) {
+		if (const auto batch = weak.lock()) {
+			if (!batch->done && !batch->displayName.isEmpty()) {
+				result = batch->displayName;
+			}
+		}
+	}
+	if (!result.isEmpty()) {
+		return result;
+	}
+	const auto now = crl::now();
+	auto fallbackUntil = crl::time(0);
+	for (const auto &held : _heldUlBatches) {
+		if (held.until > now
+			&& !held.name.isEmpty()
+			&& held.until >= fallbackUntil) {
+			fallbackUntil = held.until;
+			result = held.name;
+		}
+	}
+	return result;
+}
+
+QString DownloadManager::activeDlBatchName() const {
+	for (const auto &weak : _batches) {
+		if (const auto batch = weak.lock()) {
+			if (!batch->done && !batch->displayName.isEmpty()) {
+				return batch->displayName;
+			}
+		}
+	}
+	return QString();
+}
+
+QString DownloadManager::singleDlBatchName() const {
+	const auto active = activeDlBatchName();
+	if (!active.isEmpty()) {
+		return active;
+	}
+	const auto now = crl::now();
+	auto fallback = QString();
+	auto fallbackUntil = crl::time(0);
+	for (const auto &held : _heldDlBatches) {
+		if (held.until > now
+			&& !held.name.isEmpty()
+			&& held.until >= fallbackUntil) {
+			fallbackUntil = held.until;
+			fallback = held.name;
+		}
+	}
+	return fallback;
+}
+
+void DownloadManager::holdFinishedSingleDownload(const QString &name) {
+	if (name.isEmpty()) {
+		return;
+	}
+	_heldDlBatches.clear();
+	_heldDlBatches.push_back({
+		1,
+		1,
+		0,
+		crl::now() + crl::time(5000),
+		name,
+	});
+	_holdExpiryTimer.callOnce(crl::time(5000));
+	_loadingListChanges.fire({});
 }
 
 void DownloadManager::noteUlBatchFinished(
@@ -893,6 +1022,12 @@ void DownloadManager::addLoading(
 	Info::Downloads::SetLastActivityTab(enhancedForward
 		? Info::Downloads::Tab::Forwards
 		: Info::Downloads::Tab::Downloads);
+	qDebug() << "[TM] loading started, item:"
+		<< object.item->fullId().msg.bare
+		<< "doc:"
+		<< uint64(object.document->id)
+		<< "batch:"
+		<< batchId;
 
 	const auto item = object.item;
 	auto &data = sessionData(item);
@@ -911,13 +1046,15 @@ void DownloadManager::addLoading(
 	const auto size = object.document->size;
 	const auto path = object.document->loadingFilePath();
 	if (path.isEmpty()) {
+		qDebug() << "[TM] loading skipped no path, item:"
+			<< object.item->fullId().msg.bare;
 		return;
 	}
 
 	const auto start = [=, &data] {
-	    const auto ready = QFileInfo(path).exists()
-		    ? QFileInfo(path).size()
-		    : 0;
+		const auto ready = QFileInfo(path).exists()
+			? QFileInfo(path).size()
+			: 0;
 		if (!enhancedForward) {
 			const auto active = ranges::any_of(
 				data.downloading,
@@ -1158,9 +1295,14 @@ void DownloadManager::check(
 				};
 				_loadingListChanges.fire({});
 			}
-		} else if (_loading.contains(entry.object.item)) {
-			addLoaded(entry.object, path, entry.started, entry.batchId);
-		}
+	} else if (_loading.contains(entry.object.item)) {
+		addLoaded(entry.object, path, entry.started, entry.batchId);
+	} else if (!entry.enhancedForward) {
+		qDebug() << "[TM] loaded skipped untracked, item:"
+			<< entry.object.item->id.bare
+			<< "batch:"
+			<< entry.batchId;
+	}
 	} else if (!document->loading()) {
 		remove(data, i);
 	} else {
@@ -1168,7 +1310,7 @@ void DownloadManager::check(
 		const auto pausedChanged = (entry.paused != nowPaused);
 		entry.paused = nowPaused;
 		const auto totalChange = document->size - entry.total;
-        const auto readyChange = document->loadOffset() - entry.ready;
+		const auto readyChange = document->loadOffset() - entry.ready;
 		if (!readyChange && !totalChange) {
 			if (pausedChanged) {
 				_loadingListChanges.fire({});
@@ -1194,10 +1336,24 @@ void DownloadManager::addLoaded(
 
 	const auto size = QFileInfo(path).size();
 	if (size <= 0 || size > kMaxFileSize) {
+		qDebug() << "[TM] loaded rejected, item:"
+			<< object.item->id.bare
+			<< "size:"
+			<< size
+			<< "batch:"
+			<< batchId;
 		return;
 	}
 
 	const auto item = object.item;
+	qDebug() << "[TM] loaded finished, item:"
+		<< item->id.bare
+		<< "size:"
+		<< size
+		<< "batch:"
+		<< batchId
+		<< "path:"
+		<< path;
 	auto &data = sessionData(item);
 
 	const auto id = object.document
@@ -1218,10 +1374,13 @@ void DownloadManager::addLoaded(
 			// chunks off the just-finished file would recompute it, so reuse.
 			dedupHash = dedupDb.hashForDocId(DedupDb::Table::Downloads, docId);
 		}
-		// Only big files get a 2-chunk remote hash at download start, which
-		// means their duplicate decision was already made before download, in
-		// checkDuplicate. So isBigFile here really means "decided earlier".
-		isBigFile = !dedupHash.isEmpty();
+	// Only big files get a 2-chunk remote hash at download start, which
+	// means their duplicate decision was already made before download, in
+	// checkDuplicate. A big file without one (remote sampling failed or was
+	// still in flight) only has a 2-chunk local sample here, which must
+	// never delete user data, so size alone also marks big files.
+	isBigFile = !dedupHash.isEmpty()
+		|| (size > Data::kDedupMinPartialHashSize);
 		if (dedupHash.isEmpty()) {
 			// No start-time record: dedup was off when this started, the
 			// remote fetch failed, or the file was too small to sample
@@ -1236,14 +1395,16 @@ void DownloadManager::addLoaded(
 	// just this download recognizing itself. Excluding it here is required,
 	// otherwise every dedup-tracked download would delete the file it just
 	// finished the moment it completed.
+	auto matchedDocId = uint64(0);
 	const auto isDuplicateByHash = [&] {
 		if (dedupHash.isEmpty() || !dedupDb.isOpen()) {
 			return false;
 		}
-		return (dedupDb.seekDocumentId(
+		matchedDocId = dedupDb.seekDocumentId(
 			DedupDb::Table::Downloads,
 			dedupHash,
-			docId) != 0);
+			docId);
+		return (matchedDocId != 0);
 	}();
 	const auto isDuplicatePhotoById = [&] {
 		if (!object.photo || !docId) {
@@ -1254,14 +1415,25 @@ void DownloadManager::addLoaded(
 		return dedupDb.containsDocId(DedupDb::Table::Downloads, docId);
 	}();
 	const auto sessionId = item->history()->session().uniqueId();
-	const auto isDuplicateTmp = batchId
+	if (batchId && dedupOff && docId && dedupDb.isOpen()) {
+		// The start-time check already inserted this file's own row, which
+		// would match itself below. Only other files in the batch count.
+		dedupDb.removeDlTmpDoc(sessionId, batchId, docId);
+	}
+	const auto isDuplicateTmpDoc = batchId
 		&& dedupOff
 		&& docId
 		&& dedupDb.isOpen()
-		&& (dedupDb.containsDlTmpDocId(sessionId, batchId, docId)
-			|| (!dedupHash.isEmpty()
-				&& dedupDb.containsDlTmpHash(sessionId, batchId, dedupHash)));
-	if ((isDuplicateByHash || isDuplicatePhotoById || isDuplicateTmp)
+		&& dedupDb.containsDlTmpDocId(sessionId, batchId, docId);
+	const auto isDuplicateTmpHash = batchId
+		&& dedupOff
+		&& docId
+		&& dedupDb.isOpen()
+		&& !dedupHash.isEmpty()
+		&& dedupDb.containsDlTmpHash(sessionId, batchId, dedupHash);
+	const auto isDuplicateTmp = (isDuplicateTmpDoc || isDuplicateTmpHash);
+	if ((((isDuplicateByHash || isDuplicatePhotoById) && !dedupOff)
+		|| isDuplicateTmp)
 		&& !isBigFile) {
 		// A 2-chunk remote hash (big files only) means the duplicate decision
 		// was already made in checkDuplicate - the duplicate was skipped and
@@ -1269,6 +1441,38 @@ void DownloadManager::addLoaded(
 		// download. Only files without one (small files, photos, failed
 		// remote samples) are decided here.
 		QFile::remove(path);
+		qDebug() << "[TM] loaded dropped as duplicate, item:"
+			<< item->id.bare
+			<< "doc:"
+			<< docId
+			<< "batch:"
+			<< batchId
+			<< "size:"
+			<< size
+			<< "off:"
+			<< dedupOff
+			<< "big:"
+			<< isBigFile
+			<< "match:"
+			<< matchedDocId
+			<< "tmpdoc:"
+			<< isDuplicateTmpDoc
+			<< "tmphash:"
+			<< isDuplicateTmpHash
+			<< "hash:"
+			<< dedupHash.toHex().left(16);
+		if (batchId) {
+			for (const auto &weak : _batches) {
+				if (const auto strong = weak.lock()) {
+					if (strong->id == batchId) {
+						strong->addDuplicate();
+						break;
+					}
+				}
+			}
+		} else {
+			reportDuplicateSkipped(Data::DedupDb::Table::Downloads, 1);
+		}
 		if (!dedupHash.isEmpty() && docId && dedupDb.isOpen()) {
 			// Remember this doc id -> same content so future dedup of this
 			// exact id is O(1) without re-fetching a fingerprint.
@@ -1352,6 +1556,15 @@ void DownloadManager::addLoaded(
 	});
 	_loaded.emplace(item);
 	_loadedAdded.fire(&data.downloaded.back());
+	Info::Downloads::SetLastActivityTab(Info::Downloads::Tab::Downloads);
+	qDebug() << "[TM] loaded recorded, item:"
+		<< item->id.bare
+		<< "doc:"
+		<< (object.document ? uint64(object.document->id) : uint64(0))
+		<< "photo:"
+		<< (object.photo ? uint64(object.photo->id) : uint64(0))
+		<< "batch:"
+		<< batchId;
 
 	if (!dedupOff && !dedupHash.isEmpty() && docId && dedupDb.isOpen()) {
 		dedupDb.insert(DedupDb::Table::Downloads, {
@@ -2017,9 +2230,9 @@ void DownloadManager::cancelWithConfirmation(not_null<const HistoryItem*> item) 
 					// via addLoading()) - cancel() only acts on tracked
 					// entries, so fall back to cancelling the document's own
 					// loader directly for the untracked case.
-				    auto &data = sessionData(item);
-				    const auto itemId = not_null<HistoryItem*>(item);
-				    const auto i = ranges::find(data.downloading, itemId, ByItem);
+					auto &data = sessionData(item);
+					const auto itemId = not_null<HistoryItem*>(item);
+					const auto i = ranges::find(data.downloading, itemId, ByItem);
 					if (i != end(data.downloading)) {
 						cancel(item);
 					} else if (const auto media = item->media()) {
@@ -2771,7 +2984,7 @@ void DownloadManager::checkDuplicate(
 			done(true);
 			return;
 		}
-		if (document->size < Data::kDedupMinPartialHashSize) {
+		if (document->size <= Data::kDedupMinPartialHashSize) {
 			done(false);
 			return;
 		}
@@ -2815,7 +3028,7 @@ void DownloadManager::checkDuplicate(
 	// Step 2: Small files / photos can't be sampled remotely: they are
 	// downloaded first and deduplicated by full local hash after download
 	// (in addLoaded). Just proceed.
-	if (size < Data::kDedupMinPartialHashSize) {
+	if (size <= Data::kDedupMinPartialHashSize) {
 		wrappedDone(false);
 		return;
 	}
@@ -2853,6 +3066,44 @@ void DownloadManager::checkDuplicate(
 		});
 }
 
+void DownloadManager::noteUntrackedSave(
+		not_null<HistoryItem*> item,
+		not_null<DocumentData*> document,
+		const QString &path,
+		DownloadDate started,
+		uint64 batchId) {
+	if (path.isEmpty()) {
+		return;
+	}
+	for (const auto id : loadingList()) {
+		if (id->object.item == item && id->object.document == document.get()) {
+			qDebug() << "[TM] untracked save already loading, item:"
+				<< item->fullId().msg.bare;
+			return;
+		}
+	}
+	if (isDone(item)) {
+		// Re-saving an already recorded file, or re-listing after the tab
+		// was cleared: refresh the record so every save path shows a row.
+		// The original start time is kept so rows never jump around.
+		auto &data = sessionData(item);
+		for (auto &id : data.downloaded) {
+			if (id.object && id.object->item == item
+				&& id.object->document == document.get()) {
+				id.path = path;
+				id.batchId = batchId;
+				saveIfIdle();
+				_loadedAdded.fire(&id);
+				return;
+			}
+		}
+	}
+	addLoaded({
+		.item = item,
+		.document = document,
+	}, path, started, batchId);
+}
+
 void DownloadManager::commitDlTmpFile(
 		uint64 sessionId,
 		uint64 batchId,
@@ -2864,7 +3115,7 @@ void DownloadManager::commitDlTmpFile(
 		return;
 	}
 	const auto size = QFileInfo(path).size();
-	if (size <= 0 || size >= Data::kDedupMinPartialHashSize) {
+	if (size <= 0 || size > Data::kDedupMinPartialHashSize) {
 		return;
 	}
 	const auto hash = Data::FileFingerprint(path, size);
@@ -3240,6 +3491,17 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 	};
 }
 
+[[nodiscard]] TextWithEntities DownloadEntryName(DocumentData *document) {
+	if (document
+		&& document->isVideoFile()
+		&& !document->filename().isEmpty()) {
+		return tr::marked(document->filename());
+	}
+	return document
+		? Ui::Text::FormatDownloadsName(document)
+		: TextWithEntities();
+}
+
 rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 	return [](auto consumer) {
 		auto lifetime = rpl::lifetime();
@@ -3330,6 +3592,9 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 		const auto notify = [=, &manager] {
 			auto content = Ui::DownloadBarContent();
 			auto single = (const Data::DownloadObject*) nullptr;
+			auto singleDone = false;
+			auto lastSeen = (const Data::DownloadObject*) nullptr;
+			auto lastSeenDone = false;
 			for (const auto id : manager.loadingList()) {
 				if (id->hiddenByView) {
 					break;
@@ -3341,13 +3606,19 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 					&id->object.item->history()->session())) {
 					continue;
 				}
-				if (!single) {
+				lastSeen = &id->object;
+				lastSeenDone = id->done;
+				if (!single && !id->done) {
 					single = &id->object;
 				}
 				++content.count;
 				if (id->done) {
 					++content.done;
 				}
+			}
+			if (!single) {
+				single = lastSeen;
+				singleDone = lastSeenDone;
 			}
 			if (content.count == 0) {
 				int pausedCount = 0;
@@ -3406,6 +3677,24 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 					content.nfDone = copy.first;
 				}
 			}
+			if (content.count >= 1) {
+				const Data::DownloadingId *current = nullptr;
+				for (const auto id : manager.loadingList()) {
+					if (id->hiddenByView) {
+						break;
+					}
+					if (id->enhancedForward) {
+						continue;
+					}
+					if (id->jobIndex != manager.jobId(
+						&id->object.item->history()->session())) {
+						continue;
+					}
+					if (!id->done) {
+						current = id;
+						break;
+					}
+				}
 			if (content.count == 1 && single) {
 				const auto document = single->document;
 				const auto thumbnailed = (single->item
@@ -3423,9 +3712,56 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 					state->thumbnail = QImage();
 					resolveThumbnail();
 				}
-				content.singleName = Ui::Text::FormatDownloadsName(
-					document);
+				const auto batchName = singleDone
+					? manager.singleDlBatchName()
+					: manager.activeDlBatchName();
+				content.singleName = !batchName.isEmpty()
+					? tr::marked(batchName)
+					: DownloadEntryName(document);
 				content.singleThumbnail = state->thumbnail;
+			} else if (current) {
+					const auto document = current->object.document;
+					const auto batchName = manager.activeDlBatchName();
+					if (!batchName.isEmpty()) {
+						content.singleName = tr::marked(batchName);
+					} else if (document) {
+						content.singleName = DownloadEntryName(document);
+					} else {
+						content.singleName = tr::marked(
+							QFileInfo(current->path).fileName());
+					}
+				} else {
+					const auto name = manager.singleDlBatchName();
+					if (!name.isEmpty()) {
+						content.singleName = tr::marked(name);
+					}
+				}
+			}
+			if (content.count > 0
+				&& (content.done < content.count || content.keepVisible)
+				&& Info::Downloads::LastActivityTab()
+					!= Info::Downloads::Tab::Downloads) {
+				Info::Downloads::SetLastActivityTab(
+					Info::Downloads::Tab::Downloads);
+			}
+			static auto loggedName = QString();
+			static auto loggedCount = -1;
+			static auto loggedDone = -1;
+			if (content.count > 0
+				&& (content.singleName.text != loggedName
+					|| content.count != loggedCount
+					|| content.done != loggedDone)) {
+				loggedName = content.singleName.text;
+				loggedCount = content.count;
+				loggedDone = content.done;
+				qDebug() << "[TM] bar count:"
+					<< content.count
+					<< "done:"
+					<< content.done
+					<< "keep:"
+					<< content.keepVisible
+					<< "name:"
+					<< content.singleName.text;
 			}
 			consumer.put_next(std::move(content));
 		};
@@ -3640,14 +3976,46 @@ rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent() {
 			content.uploadCount = jobTotal;
 			content.uploadDone = jobDone;
 		}
-			if (content.uploadCount == 1) {
-				const auto name = totalQueue
-					? firstActiveName
-					: firstPendingName;
-				content.singleUploadName = name.isEmpty()
-					? TextWithEntities()
-					: tr::marked(name);
+		if (content.uploadCount == 1) {
+			auto name = totalQueue
+				? firstActiveName
+				: firstPendingName;
+			if (name.isEmpty()) {
+				name = Core::App().downloadManager().singleUlBatchName();
 			}
+			content.singleUploadName = name.isEmpty()
+				? TextWithEntities()
+				: tr::marked(name);
+		} else if (content.uploadCount > 1) {
+			auto name = totalQueue
+				? firstActiveName
+				: firstPendingName;
+			if (name.isEmpty()) {
+				name = Core::App().downloadManager().lastUlBatchName();
+			}
+			if (!name.isEmpty()) {
+				content.singleUploadName = tr::marked(name);
+			}
+		}
+		{
+			static auto loggedCount = -1;
+			static auto loggedDone = -1;
+			static auto loggedName = QString();
+			const auto name = content.singleUploadName.text;
+			if (content.uploadCount != loggedCount
+				|| content.uploadDone != loggedDone
+				|| name != loggedName) {
+				loggedCount = content.uploadCount;
+				loggedDone = content.uploadDone;
+				loggedName = name;
+				qDebug() << "[TM] ul bar count:"
+					<< content.uploadCount
+					<< "done:"
+					<< content.uploadDone
+					<< "name:"
+					<< ('"' + name + '"');
+			}
+		}
 		content.uploadReady = totalReady;
 		content.uploadTotal = totalSize;
 		if (ulBatchTotal > 0) {
@@ -3664,6 +4032,14 @@ rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent() {
 			} else if (totalQueue == 1 && totalPending == 0) {
 				content.uploadSingleReady = firstActiveReady;
 				content.uploadSingleTotal = firstActiveTotal;
+			}
+			if (content.uploadCount > 0
+				&& (content.uploadDone < content.uploadCount
+					|| content.keepVisible)
+				&& Info::Downloads::LastActivityTab()
+					!= Info::Downloads::Tab::Uploads) {
+				Info::Downloads::SetLastActivityTab(
+					Info::Downloads::Tab::Uploads);
 			}
 			consumer.put_next(std::move(content));
 		};

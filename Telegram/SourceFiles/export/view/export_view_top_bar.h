@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/rp_widget.h"
 #include "base/object_ptr.h"
+#include "ui/text/text_entity.h"
 
 namespace Ui {
 class FlatLabel;
@@ -28,7 +29,7 @@ public:
 
 	rpl::producer<Qt::MouseButton> clicks() const;
 
-	void updateData(Content &&content);
+	virtual void updateData(Content &&content);
 
 	void setShadowGeometryToLeft(int x, int y, int w, int h);
 	void showShadow();
@@ -37,6 +38,8 @@ public:
 	~TopBar();
 
 protected:
+	[[nodiscard]] virtual TextWithEntities leftTitle() const;
+
 	void resizeEvent(QResizeEvent *e) override;
 	void paintEvent(QPaintEvent *e) override;
 

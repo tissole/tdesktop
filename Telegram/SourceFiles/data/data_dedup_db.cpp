@@ -11,13 +11,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QSqlQuery>
 #include <QSqlError>
 #include <QSet>
+#include <QStringList>
 #include <QVariant>
 #include <QUuid>
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <tuple>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "logs.h"
@@ -201,6 +205,107 @@ public:
 	void clearExTmpSession(uint64 sessionId);
 	void flushExPending();
 
+	void writeChatScanRow(const ChatScanRow &row);
+	[[nodiscard]] std::vector<ChatScanRow> readChatScan(
+		PeerId peerId) const;
+	[[nodiscard]] bool isChatScanned(PeerId peerId) const;
+	void markChatDeleteFinished(PeerId peerId);
+	void writeChatScanDup(const ChatScanDup &dup);
+	[[nodiscard]] std::vector<ChatScanDup> readChatScanDups(
+		PeerId peerId,
+		int category,
+		int limit,
+		int offset) const;
+	[[nodiscard]] std::vector<ChatScanDup> readChatScanDupsBefore(
+		PeerId peerId,
+		int category,
+		int limit,
+		MsgId before) const;
+	[[nodiscard]] int chatScanDupCount(PeerId peerId, int category) const;
+	[[nodiscard]] int64 chatScanDupBytes(PeerId peerId) const;
+	[[nodiscard]] std::vector<ChatScanCategoryTotals> chatScanCategoryTotals(
+		PeerId peerId) const;
+	[[nodiscard]] qint64 chatScanItemCount(PeerId peerId) const;
+	[[nodiscard]] MsgId chatScanMaxMsgId(PeerId peerId) const;
+	[[nodiscard]] bool chatScanContainsHash(
+		PeerId peerId,
+		const QByteArray &hash) const;
+	[[nodiscard]] std::vector<ChatScanItem> chatScanUnresolvedItems(
+		PeerId peerId) const;
+	[[nodiscard]] std::vector<ChatScanItem> chatScanPendingItemsWindow(
+		PeerId peerId,
+		MsgId above,
+		int limit) const;
+	[[nodiscard]] std::vector<ChatScanItem> chatScanItemsWindow(
+		PeerId peerId,
+		MsgId above,
+		int limit) const;
+	[[nodiscard]] std::vector<ChatScanItem> chatScanHashedItemsWindow(
+		PeerId peerId,
+		MsgId above,
+		int limit) const;
+	[[nodiscard]] int chatScanPendingCount(PeerId peerId) const;
+	[[nodiscard]] int chatScanHashedCount(PeerId peerId) const;
+	void chatScanResetLeases(PeerId peerId);
+	[[nodiscard]] std::vector<ChatScanItem> chatScanLeaseItems(
+		PeerId peerId,
+		int limit,
+		qint64 now,
+		qint64 leaseUntil);
+	void chatScanReleaseItem(
+		PeerId peerId,
+		uint64 mediaId,
+		qint64 retryAt);
+	[[nodiscard]] int chatScanCommitHashes(
+		PeerId peerId,
+		const std::vector<std::pair<uint64, QByteArray>> &hashes);
+	void chatScanFailItem(PeerId peerId, uint64 mediaId);
+	[[nodiscard]] int chatScanRetryFailed(PeerId peerId);
+	[[nodiscard]] int chatScanLeasedCount(PeerId peerId) const;
+	[[nodiscard]] int chatScanFailedCount(PeerId peerId) const;
+	[[nodiscard]] QByteArray chatScanHashForMedia(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto) const;
+	[[nodiscard]] std::vector<ChatScanProgressRow> readChatScanProgress(
+		PeerId peerId) const;
+	void updateChatScanProgress(
+		PeerId peerId,
+		int category,
+		int64 itemCount,
+		int64 uniqueCount,
+		int64 uniqueBytes,
+		int64 dupCount,
+		int64 dupBytes);
+	[[nodiscard]] std::vector<ChatScanProgressRow> recomputeChatScanProgress(
+		PeerId peerId);
+	[[nodiscard]] std::vector<ChatScanItem> chatScanDistinctItems(
+		PeerId peerId) const;
+	void writeGlobal(const QString &key, const QString &value);
+	[[nodiscard]] QString readGlobal(const QString &key) const;
+	void removeChatScanDup(PeerId peerId, MsgId msgId);
+	void clearChatScan(PeerId peerId);
+	void writeScanCursor(const ChatScanState &state);
+	[[nodiscard]] std::optional<ChatScanState> readScanCursor(
+		PeerId peerId) const;
+	void writeChatScanItems(const std::vector<ChatScanItem> &items);
+	[[nodiscard]] std::vector<ChatScanItem> readChatScanItems(
+		PeerId peerId) const;
+	int updateChatScanItemHash(
+		PeerId peerId,
+		uint64 mediaId,
+		const QByteArray &hash);
+	[[nodiscard]] std::vector<PeerId> scannedPeerIds() const;
+	[[nodiscard]] std::optional<ChatScanDup> takeChatScanDup(
+		PeerId peerId,
+		MsgId msgId);
+	void removeChatScanItem(PeerId peerId, MsgId msgId);
+	[[nodiscard]] bool hasChatScanItem(PeerId peerId, MsgId msgId) const;
+	[[nodiscard]] std::optional<ChatScanItem> chatScanItem(
+		PeerId peerId,
+		MsgId msgId) const;
+	void clearChatScanDups(PeerId peerId);
+
 	enum class TmpTable {
 		Dl,
 		Ul,
@@ -229,6 +334,11 @@ public:
 		uint64 sessionId,
 		uint64 scopeId,
 		uint64 documentId) const;
+	void removeTmpDoc(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId,
+		uint64 documentId);
 	void clearTmpRun(TmpTable table, uint64 sessionId, uint64 scopeId);
 	void flushTmpPending();
 
@@ -584,7 +694,64 @@ bool DedupDb::Impl::createTables() {
 			"status TEXT NOT NULL DEFAULT 'f', "
 			"PRIMARY KEY (session_id, scope_id, doc_id))"_q)
 		&& exec(u"CREATE INDEX IF NOT EXISTS idx_fw_tmp_hash "
-			"ON fw_tmp(session_id, scope_id, hash)"_q);
+			"ON fw_tmp(session_id, scope_id, hash)"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS chat_scan ("
+			"peer_id INTEGER NOT NULL, "
+			"category INTEGER NOT NULL, "
+			"unique_count INTEGER NOT NULL DEFAULT 0, "
+			"unique_bytes INTEGER NOT NULL DEFAULT 0, "
+			"dup_count INTEGER NOT NULL DEFAULT 0, "
+			"dup_bytes INTEGER NOT NULL DEFAULT 0, "
+			"scanned_upto INTEGER NOT NULL DEFAULT 0, "
+			"scan_finished INTEGER NOT NULL DEFAULT 0, "
+			"delete_finished INTEGER NOT NULL DEFAULT 0, "
+			"PRIMARY KEY (peer_id, category))"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS chat_scan_dups ("
+			"peer_id INTEGER NOT NULL, "
+			"msg_id INTEGER NOT NULL, "
+			"category INTEGER NOT NULL DEFAULT 0, "
+			"size INTEGER NOT NULL DEFAULT 0, "
+			"flags INTEGER NOT NULL DEFAULT 0, "
+			"filename TEXT NOT NULL DEFAULT '', "
+			"PRIMARY KEY (peer_id, msg_id))"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_dups_cat "
+			"ON chat_scan_dups(peer_id, category)"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS chat_scan_state ("
+			"peer_id INTEGER NOT NULL, "
+			"cursor_msg_id INTEGER NOT NULL DEFAULT 0, "
+			"phase INTEGER NOT NULL DEFAULT 0, "
+			"PRIMARY KEY (peer_id))"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS chat_scan_items ("
+			"peer_id INTEGER NOT NULL, "
+			"msg_id INTEGER NOT NULL, "
+			"category INTEGER NOT NULL DEFAULT 0, "
+			"size INTEGER NOT NULL DEFAULT 0, "
+			"media_id INTEGER NOT NULL DEFAULT 0, "
+			"is_photo INTEGER NOT NULL DEFAULT 0, "
+			"hash BLOB, "
+			"filename TEXT NOT NULL DEFAULT '', "
+			"state INTEGER NOT NULL DEFAULT 0, "
+			"attempts INTEGER NOT NULL DEFAULT 0, "
+			"lease_until INTEGER NOT NULL DEFAULT 0, "
+			"PRIMARY KEY (peer_id, msg_id))"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_items_media "
+			"ON chat_scan_items(peer_id, media_id)"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_items_hash "
+			"ON chat_scan_items(peer_id, hash)"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_items_state "
+			"ON chat_scan_items(peer_id, state, media_id)"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS chat_scan_progress ("
+			"peer_id INTEGER NOT NULL, "
+			"category INTEGER NOT NULL, "
+			"item_count INTEGER NOT NULL DEFAULT 0, "
+			"unique_count INTEGER NOT NULL DEFAULT 0, "
+			"unique_bytes INTEGER NOT NULL DEFAULT 0, "
+			"dup_count INTEGER NOT NULL DEFAULT 0, "
+			"dup_bytes INTEGER NOT NULL DEFAULT 0, "
+			"PRIMARY KEY (peer_id, category))"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS client_globals ("
+			"key TEXT PRIMARY KEY, "
+			"value TEXT NOT NULL DEFAULT '')"_q);
 	return created;
 }
 
@@ -1893,6 +2060,1353 @@ void DedupDb::Impl::clearExTmpSession(uint64 sessionId) {
 	}
 }
 
+void DedupDb::Impl::writeChatScanRow(const ChatScanRow &row) {
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"INSERT OR REPLACE INTO chat_scan "
+		"(peer_id, category, unique_count, unique_bytes, "
+		"dup_count, dup_bytes, scanned_upto, scan_finished, "
+		"delete_finished) "
+		"VALUES (:peer_id, :category, :unique_count, "
+		":unique_bytes, :dup_count, :dup_bytes, :scanned_upto, "
+		":scan_finished, :delete_finished)"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(row.peerId.value)));
+	q.bindValue(u":category"_q, row.category);
+	q.bindValue(u":unique_count"_q, row.uniqueCount);
+	q.bindValue(u":unique_bytes"_q, QVariant::fromValue(
+		static_cast<qlonglong>(row.uniqueBytes)));
+	q.bindValue(u":dup_count"_q, row.dupCount);
+	q.bindValue(u":dup_bytes"_q, QVariant::fromValue(
+		static_cast<qlonglong>(row.dupBytes)));
+	q.bindValue(u":scanned_upto"_q, QVariant::fromValue(
+		static_cast<qlonglong>(row.scannedUpto.bare)));
+	q.bindValue(u":scan_finished"_q, row.scanFinished ? 1 : 0);
+	q.bindValue(u":delete_finished"_q, row.deleteFinished ? 1 : 0);
+	if (!q.exec()) {
+		LOG(("DedupDb: WriteChatScanRow failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+std::vector<ChatScanRow> DedupDb::Impl::readChatScan(
+		PeerId peerId) const {
+	auto result = std::vector<ChatScanRow>();
+	if (!_open) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT category, unique_count, unique_bytes, dup_count, "
+		"dup_bytes, scanned_upto, scan_finished, delete_finished "
+		"FROM chat_scan "
+		"WHERE peer_id = :peer_id "
+		"ORDER BY category"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ReadChatScan failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto row = ChatScanRow();
+		row.peerId = peerId;
+		row.category = q.value(0).toInt();
+		row.uniqueCount = q.value(1).toInt();
+		row.uniqueBytes = q.value(2).toLongLong();
+		row.dupCount = q.value(3).toInt();
+		row.dupBytes = q.value(4).toLongLong();
+		row.scannedUpto = MsgId(q.value(5).toLongLong());
+		row.scanFinished = (q.value(6).toInt() != 0);
+		row.deleteFinished = (q.value(7).toInt() != 0);
+		result.push_back(row);
+	}
+	return result;
+}
+
+bool DedupDb::Impl::isChatScanned(PeerId peerId) const {
+	if (!_open) {
+		return false;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT 1 FROM chat_scan "
+		"WHERE peer_id = :peer_id "
+		"AND scan_finished != 0 LIMIT 1"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: IsChatScanned failed: %1").arg(
+			q.lastError().text()));
+		return false;
+	}
+	return q.next();
+}
+
+void DedupDb::Impl::markChatDeleteFinished(PeerId peerId) {
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE chat_scan SET delete_finished = 1, "
+		"dup_count = 0, dup_bytes = 0 "
+		"WHERE peer_id = :peer_id"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: MarkChatDeleteFinished failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::writeChatScanDup(const ChatScanDup &dup) {
+	if (!_open || !dup.msgId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"INSERT OR REPLACE INTO chat_scan_dups "
+		"(peer_id, msg_id, category, size, flags, filename) "
+		"VALUES (:peer_id, :msg_id, :category, :size, "
+		":flags, :filename)"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(dup.peerId.value)));
+	q.bindValue(u":msg_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(dup.msgId.bare)));
+	q.bindValue(u":category"_q, dup.category);
+	q.bindValue(u":size"_q, QVariant::fromValue(
+		static_cast<qlonglong>(dup.size)));
+	q.bindValue(u":flags"_q, dup.flags);
+	q.bindValue(u":filename"_q, dup.filename);
+	if (!q.exec()) {
+		LOG(("DedupDb: WriteChatScanDup failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+std::vector<ChatScanDup> DedupDb::Impl::readChatScanDups(
+		PeerId peerId,
+		int category,
+		int limit,
+		int offset) const {
+	auto result = std::vector<ChatScanDup>();
+	if (!_open) {
+		return result;
+	}
+	auto sql = u"SELECT msg_id, category, size, flags, filename "
+		"FROM chat_scan_dups "
+		"WHERE peer_id = :peer_id"_q;
+	if (category >= 0) {
+		sql += u" AND category = :category"_q;
+	}
+	sql += u" ORDER BY msg_id DESC LIMIT :limit OFFSET :offset"_q;
+	QSqlQuery q(_db);
+	q.prepare(sql);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (category >= 0) {
+		q.bindValue(u":category"_q, category);
+	}
+	q.bindValue(u":limit"_q, limit);
+	q.bindValue(u":offset"_q, offset);
+	if (!q.exec()) {
+		LOG(("DedupDb: ReadChatScanDups failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto dup = ChatScanDup();
+		dup.peerId = peerId;
+		dup.msgId = MsgId(q.value(0).toLongLong());
+		dup.category = q.value(1).toInt();
+		dup.size = q.value(2).toLongLong();
+		dup.flags = q.value(3).toInt();
+		dup.filename = q.value(4).toString();
+		result.push_back(dup);
+	}
+	return result;
+}
+
+std::vector<ChatScanDup> DedupDb::Impl::readChatScanDupsBefore(
+		PeerId peerId,
+		int category,
+		int limit,
+		MsgId before) const {
+	auto result = std::vector<ChatScanDup>();
+	if (!_open || limit <= 0) {
+		return result;
+	}
+	auto sql = u"SELECT msg_id, category, size, flags, filename "
+		"FROM chat_scan_dups "
+		"WHERE peer_id = :peer_id"_q;
+	if (category >= 0) {
+		sql += u" AND category = :category"_q;
+	}
+	if (before.bare > 0) {
+		sql += u" AND msg_id < :before"_q;
+	}
+	sql += u" ORDER BY msg_id DESC LIMIT :limit"_q;
+	QSqlQuery q(_db);
+	q.prepare(sql);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (category >= 0) {
+		q.bindValue(u":category"_q, category);
+	}
+	if (before.bare > 0) {
+		q.bindValue(u":before"_q, before.bare);
+	}
+	q.bindValue(u":limit"_q, limit);
+	if (!q.exec()) {
+		LOG(("DedupDb: ReadChatScanDupsBefore failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto dup = ChatScanDup();
+		dup.peerId = peerId;
+		dup.msgId = MsgId(q.value(0).toLongLong());
+		dup.category = q.value(1).toInt();
+		dup.size = q.value(2).toLongLong();
+		dup.flags = q.value(3).toInt();
+		dup.filename = q.value(4).toString();
+		result.push_back(dup);
+	}
+	return result;
+}
+
+int DedupDb::Impl::chatScanDupCount(PeerId peerId, int category) const {
+	if (!_open) {
+		return 0;
+	}
+	auto sql = u"SELECT COUNT(*) FROM chat_scan_dups "
+		"WHERE peer_id = :peer_id"_q;
+	if (category >= 0) {
+		sql += u" AND category = :category"_q;
+	}
+	QSqlQuery q(_db);
+	q.prepare(sql);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (category >= 0) {
+		q.bindValue(u":category"_q, category);
+	}
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanDupCount failed: %1").arg(
+			q.lastError().text()));
+		return 0;
+	}
+	return q.next() ? q.value(0).toInt() : 0;
+}
+
+int64 DedupDb::Impl::chatScanDupBytes(PeerId peerId) const {
+	if (!_open) {
+		return 0;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT SUM(size) FROM chat_scan_dups "
+		"WHERE peer_id = :peer_id"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanDupBytes failed: %1").arg(
+			q.lastError().text()));
+		return 0;
+	}
+	return q.next() ? int64(q.value(0).toLongLong()) : 0;
+}
+
+std::vector<ChatScanCategoryTotals> DedupDb::Impl::chatScanCategoryTotals(
+		PeerId peerId) const {
+	auto result = std::vector<ChatScanCategoryTotals>();
+	if (!_open) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT i.category, "
+		"SUM(CASE WHEN d.msg_id IS NULL THEN 1 ELSE 0 END), "
+		"SUM(CASE WHEN d.msg_id IS NULL THEN i.size ELSE 0 END), "
+		"SUM(CASE WHEN d.msg_id IS NULL THEN 0 ELSE 1 END), "
+		"SUM(CASE WHEN d.msg_id IS NULL THEN 0 ELSE i.size END) "
+		"FROM chat_scan_items i "
+		"LEFT JOIN chat_scan_dups d "
+		"ON d.peer_id = i.peer_id AND d.msg_id = i.msg_id "
+		"WHERE i.peer_id = :peer_id "
+		"GROUP BY i.category"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanCategoryTotals failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto row = ChatScanCategoryTotals();
+		row.category = q.value(0).toInt();
+		row.uniqueCount = q.value(1).toLongLong();
+		row.uniqueBytes = q.value(2).toLongLong();
+		row.dupCount = q.value(3).toLongLong();
+		row.dupBytes = q.value(4).toLongLong();
+		result.push_back(row);
+	}
+	return result;
+}
+
+qint64 DedupDb::Impl::chatScanItemCount(PeerId peerId) const {
+	if (!_open) {
+		return 0;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT COUNT(*) FROM chat_scan_items "
+		"WHERE peer_id = :peer_id"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanItemCount failed: %1").arg(
+			q.lastError().text()));
+		return 0;
+	}
+	return q.next() ? qint64(q.value(0).toLongLong()) : 0;
+}
+
+MsgId DedupDb::Impl::chatScanMaxMsgId(PeerId peerId) const {
+	if (!_open) {
+		return MsgId(0);
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT MAX(msg_id) FROM chat_scan_items "
+		"WHERE peer_id = :peer_id"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanMaxMsgId failed: %1").arg(
+			q.lastError().text()));
+		return MsgId(0);
+	}
+	return q.next() ? MsgId(q.value(0).toLongLong()) : MsgId(0);
+}
+
+bool DedupDb::Impl::chatScanContainsHash(
+		PeerId peerId,
+		const QByteArray &hash) const {
+	if (!_open || hash.isEmpty()) {
+		return false;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT 1 FROM chat_scan_items "
+		"WHERE peer_id = :peer_id "
+		"AND hash = :hash LIMIT 1"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":hash"_q, hash);
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanContainsHash failed: %1").arg(
+			q.lastError().text()));
+		return false;
+	}
+	return q.next();
+}
+
+QByteArray DedupDb::Impl::chatScanHashForMedia(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto) const {
+	if (!_open || !mediaId) {
+		return QByteArray();
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT hash FROM chat_scan_items "
+		"WHERE peer_id = :peer_id AND media_id = :media_id "
+		"AND is_photo = :is_photo "
+		"AND hash IS NOT NULL AND length(hash) > 0 LIMIT 1"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":media_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(mediaId)));
+	q.bindValue(u":is_photo"_q, isPhoto ? 1 : 0);
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanHashForMedia failed: %1").arg(
+			q.lastError().text()));
+		return QByteArray();
+	}
+	return q.next() ? q.value(0).toByteArray() : QByteArray();
+}
+
+std::vector<ChatScanItem> DedupDb::Impl::chatScanUnresolvedItems(
+		PeerId peerId) const {
+	auto result = std::vector<ChatScanItem>();
+	if (!_open) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT msg_id, category, size, media_id, "
+		"is_photo, filename FROM chat_scan_items "
+		"WHERE peer_id = :peer_id "
+		"AND (hash IS NULL OR length(hash) = 0) "
+		"ORDER BY msg_id ASC"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanUnresolvedItems failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto item = ChatScanItem();
+		item.peerId = peerId;
+		item.msgId = MsgId(q.value(0).toLongLong());
+		item.category = q.value(1).toInt();
+		item.size = q.value(2).toLongLong();
+		item.mediaId = q.value(3).toULongLong();
+		item.isPhoto = (q.value(4).toInt() != 0);
+		item.filename = q.value(5).toString();
+		result.push_back(item);
+	}
+	return result;
+}
+
+std::vector<ChatScanItem> DedupDb::Impl::chatScanPendingItemsWindow(
+		PeerId peerId,
+		MsgId above,
+		int limit) const {
+	auto result = std::vector<ChatScanItem>();
+	if (!_open || limit <= 0 || above.bare <= 0) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT msg_id, category, size, media_id, "
+		"is_photo, filename, hash, attempts FROM chat_scan_items "
+		"WHERE peer_id = :peer_id "
+		"AND hash IS NULL "
+		"AND state IN (0, 1) "
+		"AND msg_id < :above "
+		"ORDER BY msg_id DESC LIMIT :limit"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":above"_q, above.bare);
+	q.bindValue(u":limit"_q, limit);
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanPendingItemsWindow failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto item = ChatScanItem();
+		item.peerId = peerId;
+		item.msgId = MsgId(q.value(0).toLongLong());
+		item.category = q.value(1).toInt();
+		item.size = q.value(2).toLongLong();
+		item.mediaId = q.value(3).toULongLong();
+		item.isPhoto = (q.value(4).toInt() != 0);
+		item.filename = q.value(5).toString();
+		item.hash = q.value(6).toByteArray();
+		item.attempts = q.value(7).toInt();
+		result.push_back(item);
+	}
+	return result;
+}
+
+std::vector<ChatScanItem> DedupDb::Impl::chatScanItemsWindow(
+		PeerId peerId,
+		MsgId above,
+		int limit) const {
+	auto result = std::vector<ChatScanItem>();
+	if (!_open || limit <= 0) {
+		return result;
+	}
+	auto sql = u"SELECT msg_id, category, size, media_id, "
+		"is_photo, filename, hash FROM chat_scan_items "
+		"WHERE peer_id = :peer_id"_q;
+	if (above.bare > 0) {
+		sql += u" AND msg_id < :above"_q;
+	}
+	sql += u" ORDER BY msg_id DESC LIMIT :limit"_q;
+	QSqlQuery q(_db);
+	q.prepare(sql);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (above.bare > 0) {
+		q.bindValue(u":above"_q, above.bare);
+	}
+	q.bindValue(u":limit"_q, limit);
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanItemsWindow failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto item = ChatScanItem();
+		item.peerId = peerId;
+		item.msgId = MsgId(q.value(0).toLongLong());
+		item.category = q.value(1).toInt();
+		item.size = q.value(2).toLongLong();
+		item.mediaId = q.value(3).toULongLong();
+		item.isPhoto = (q.value(4).toInt() != 0);
+		item.filename = q.value(5).toString();
+		item.hash = q.value(6).toByteArray();
+		result.push_back(item);
+	}
+	return result;
+}
+
+std::vector<ChatScanItem> DedupDb::Impl::chatScanHashedItemsWindow(
+		PeerId peerId,
+		MsgId above,
+		int limit) const {
+	auto result = std::vector<ChatScanItem>();
+	if (!_open || limit <= 0) {
+		return result;
+	}
+	auto sql = u"SELECT msg_id, category, size, media_id, "
+		"is_photo, filename, hash FROM chat_scan_items "
+		"WHERE peer_id = :peer_id "
+		"AND hash IS NOT NULL AND length(hash) != 0"_q;
+	if (above.bare > 0) {
+		sql += u" AND msg_id < :above"_q;
+	}
+	sql += u" ORDER BY msg_id DESC LIMIT :limit"_q;
+	QSqlQuery q(_db);
+	q.prepare(sql);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (above.bare > 0) {
+		q.bindValue(u":above"_q, above.bare);
+	}
+	q.bindValue(u":limit"_q, limit);
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanHashedItemsWindow failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto item = ChatScanItem();
+		item.peerId = peerId;
+		item.msgId = MsgId(q.value(0).toLongLong());
+		item.category = q.value(1).toInt();
+		item.size = q.value(2).toLongLong();
+		item.mediaId = q.value(3).toULongLong();
+		item.isPhoto = (q.value(4).toInt() != 0);
+		item.filename = q.value(5).toString();
+		item.hash = q.value(6).toByteArray();
+		result.push_back(item);
+	}
+	return result;
+}
+
+int DedupDb::Impl::chatScanPendingCount(PeerId peerId) const {
+	if (!_open) {
+		return 0;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT COUNT(DISTINCT media_id) FROM chat_scan_items "
+		"WHERE peer_id = :peer_id "
+		"AND state = 0 "
+		"AND media_id != 0"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanPendingCount failed: %1").arg(
+			q.lastError().text()));
+		return 0;
+	}
+	return q.next() ? int(q.value(0).toLongLong()) : 0;
+}
+
+int DedupDb::Impl::chatScanHashedCount(PeerId peerId) const {
+	if (!_open) {
+		return 0;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT COUNT(*) FROM chat_scan_items "
+		"WHERE peer_id = :peer_id "
+		"AND hash IS NOT NULL "
+		"AND length(hash) > 0"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanHashedCount failed: %1").arg(
+			q.lastError().text()));
+		return 0;
+	}
+	return q.next() ? int(q.value(0).toLongLong()) : 0;
+}
+
+void DedupDb::Impl::chatScanResetLeases(PeerId peerId) {
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE chat_scan_items "
+		"SET state = 0, lease_until = 0, attempts = 0 "
+		"WHERE peer_id = :peer_id AND state IN (0, 1)"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanResetLeases failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+std::vector<ChatScanItem> DedupDb::Impl::chatScanLeaseItems(
+		PeerId peerId,
+		int limit,
+		qint64 now,
+		qint64 leaseUntil) {
+	auto result = std::vector<ChatScanItem>();
+	if (!_open || limit <= 0) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT i.msg_id, i.media_id, i.category, i.size, "
+		"i.is_photo, i.filename, i.attempts "
+		"FROM chat_scan_items AS i "
+		"JOIN ("
+			"SELECT media_id, MAX(msg_id) AS rep_id "
+			"FROM chat_scan_items "
+			"WHERE peer_id = :rep_peer_id AND state = 0 "
+			"AND media_id != 0 AND lease_until <= :now "
+			"GROUP BY media_id "
+			"ORDER BY MAX(msg_id) DESC LIMIT :limit"
+		") AS rep ON rep.rep_id = i.msg_id "
+		"AND rep.media_id = i.media_id "
+		"WHERE i.peer_id = :peer_id "
+		"ORDER BY i.msg_id DESC"_q);
+	q.bindValue(u":rep_peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":now"_q, now);
+	q.bindValue(u":limit"_q, limit);
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanLeaseItems failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto item = ChatScanItem();
+		item.peerId = peerId;
+		item.msgId = MsgId(q.value(0).toLongLong());
+		item.mediaId = q.value(1).toULongLong();
+		item.category = q.value(2).toInt();
+		item.size = q.value(3).toLongLong();
+		item.isPhoto = (q.value(4).toInt() != 0);
+		item.filename = q.value(5).toString();
+		item.attempts = q.value(6).toInt() + 1;
+		item.state = 1;
+		result.push_back(item);
+	}
+	if (result.empty()) {
+		return result;
+	}
+	auto placeholders = QStringList();
+	for (auto i = 0; i != int(result.size()); ++i) {
+		placeholders.push_back(u":m%1"_q.arg(i));
+	}
+	QSqlQuery mark(_db);
+	mark.prepare(u"UPDATE chat_scan_items "
+		"SET state = 1, lease_until = :lease_until, "
+		"attempts = attempts + 1 "
+		"WHERE peer_id = :peer_id AND state = 0 "
+		"AND media_id IN (" + placeholders.join(u", "_q) + u")"_q);
+	mark.bindValue(u":lease_until"_q, leaseUntil);
+	mark.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	for (auto i = 0; i != int(result.size()); ++i) {
+		mark.bindValue(u":m%1"_q.arg(i), QVariant::fromValue(
+			static_cast<qulonglong>(result[i].mediaId)));
+	}
+	if (!mark.exec()) {
+		LOG(("DedupDb: ChatScanLeaseMark failed: %1").arg(
+			mark.lastError().text()));
+		return {};
+	}
+	return result;
+}
+
+void DedupDb::Impl::chatScanReleaseItem(
+		PeerId peerId,
+		uint64 mediaId,
+		qint64 retryAt) {
+	if (!_open || !mediaId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE chat_scan_items "
+		"SET state = 0, lease_until = :retry_at "
+		"WHERE peer_id = :peer_id AND media_id = :media_id "
+		"AND state = 1"_q);
+	q.bindValue(u":retry_at"_q, retryAt);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":media_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(mediaId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanReleaseItem failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+int DedupDb::Impl::chatScanCommitHashes(
+		PeerId peerId,
+		const std::vector<std::pair<uint64, QByteArray>> &hashes) {
+	if (!_open || hashes.empty()) {
+		return 0;
+	}
+	auto resolved = 0;
+	beginTransaction();
+	for (const auto &[mediaId, hash] : hashes) {
+		if (!mediaId || hash.isEmpty()) {
+			continue;
+		}
+		QSqlQuery count(_db);
+		count.prepare(u"SELECT COUNT(*) FROM chat_scan_items "
+			"WHERE peer_id = :peer_id AND media_id = :media_id "
+			"AND (hash IS NULL OR length(hash) = 0)"_q);
+		count.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		count.bindValue(u":media_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(mediaId)));
+		if (count.exec() && count.next()) {
+			resolved += count.value(0).toInt();
+		}
+		QSqlQuery q(_db);
+		q.prepare(u"UPDATE chat_scan_items "
+			"SET hash = :hash, state = 2, lease_until = 0 "
+			"WHERE peer_id = :peer_id AND media_id = :media_id"_q);
+		q.bindValue(u":hash"_q, hash);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		q.bindValue(u":media_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(mediaId)));
+		if (!q.exec()) {
+			LOG(("DedupDb: ChatScanCommitHash failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+	commitTransaction();
+	return resolved;
+}
+
+void DedupDb::Impl::chatScanFailItem(PeerId peerId, uint64 mediaId) {
+	if (!_open || !mediaId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE chat_scan_items "
+		"SET state = 3, lease_until = 0 "
+		"WHERE peer_id = :peer_id AND media_id = :media_id "
+		"AND state = 1"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":media_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(mediaId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanFailItem failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+int DedupDb::Impl::chatScanRetryFailed(PeerId peerId) {
+	if (!_open) {
+		return 0;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE chat_scan_items "
+		"SET state = 0, lease_until = 0, attempts = 0 "
+		"WHERE peer_id = :peer_id AND state = 3"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanRetryFailed failed: %1").arg(
+			q.lastError().text()));
+		return 0;
+	}
+	return q.numRowsAffected();
+}
+
+int DedupDb::Impl::chatScanLeasedCount(PeerId peerId) const {
+	if (!_open) {
+		return 0;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT COUNT(DISTINCT media_id) FROM chat_scan_items "
+		"WHERE peer_id = :peer_id AND state = 1"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanLeasedCount failed: %1").arg(
+			q.lastError().text()));
+		return 0;
+	}
+	return q.next() ? int(q.value(0).toLongLong()) : 0;
+}
+
+int DedupDb::Impl::chatScanFailedCount(PeerId peerId) const {
+	if (!_open) {
+		return 0;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT COUNT(DISTINCT media_id) FROM chat_scan_items "
+		"WHERE peer_id = :peer_id AND state = 3"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanFailedCount failed: %1").arg(
+			q.lastError().text()));
+		return 0;
+	}
+	return q.next() ? int(q.value(0).toLongLong()) : 0;
+}
+
+std::vector<ChatScanProgressRow> DedupDb::Impl::readChatScanProgress(
+		PeerId peerId) const {
+	auto result = std::vector<ChatScanProgressRow>();
+	if (!_open) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT category, item_count, unique_count, "
+		"unique_bytes, dup_count, dup_bytes FROM chat_scan_progress "
+		"WHERE peer_id = :peer_id"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ReadChatScanProgress failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto row = ChatScanProgressRow();
+		row.peerId = peerId;
+		row.category = q.value(0).toInt();
+		row.itemCount = q.value(1).toLongLong();
+		row.uniqueCount = q.value(2).toLongLong();
+		row.uniqueBytes = q.value(3).toLongLong();
+		row.dupCount = q.value(4).toLongLong();
+		row.dupBytes = q.value(5).toLongLong();
+		result.push_back(row);
+	}
+	return result;
+}
+
+void DedupDb::Impl::updateChatScanProgress(
+		PeerId peerId,
+		int category,
+		int64 itemCount,
+		int64 uniqueCount,
+		int64 uniqueBytes,
+		int64 dupCount,
+		int64 dupBytes) {
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"INSERT INTO chat_scan_progress "
+		"(peer_id, category, item_count, unique_count, "
+		"unique_bytes, dup_count, dup_bytes) "
+		"VALUES (:peer_id, :category, :item_count, :unique_count, "
+		":unique_bytes, :dup_count, :dup_bytes) "
+		"ON CONFLICT(peer_id, category) DO UPDATE SET "
+		"item_count = item_count + excluded.item_count, "
+		"unique_count = unique_count + excluded.unique_count, "
+		"unique_bytes = unique_bytes + excluded.unique_bytes, "
+		"dup_count = dup_count + excluded.dup_count, "
+		"dup_bytes = dup_bytes + excluded.dup_bytes"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":category"_q, category);
+	q.bindValue(u":item_count"_q, QVariant::fromValue(
+		static_cast<qlonglong>(itemCount)));
+	q.bindValue(u":unique_count"_q, QVariant::fromValue(
+		static_cast<qlonglong>(uniqueCount)));
+	q.bindValue(u":unique_bytes"_q, QVariant::fromValue(
+		static_cast<qlonglong>(uniqueBytes)));
+	q.bindValue(u":dup_count"_q, QVariant::fromValue(
+		static_cast<qlonglong>(dupCount)));
+	q.bindValue(u":dup_bytes"_q, QVariant::fromValue(
+		static_cast<qlonglong>(dupBytes)));
+	if (!q.exec()) {
+		LOG(("DedupDb: UpdateChatScanProgress failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+std::vector<ChatScanProgressRow> DedupDb::Impl::recomputeChatScanProgress(
+		PeerId peerId) {
+	auto result = std::vector<ChatScanProgressRow>();
+	if (!_open) {
+		return result;
+	}
+	auto itemAgg = std::unordered_map<int, std::pair<int64, int64>>();
+	auto dupAgg = std::unordered_map<int, std::pair<int64, int64>>();
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT category, COUNT(*), SUM(size) "
+			"FROM chat_scan_items WHERE peer_id = :peer_id "
+			"GROUP BY category"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		if (q.exec()) {
+			while (q.next()) {
+				itemAgg[int(q.value(0).toInt())] = std::make_pair(
+					q.value(1).toLongLong(),
+					q.value(2).toLongLong());
+			}
+		}
+	}
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT category, COUNT(*), SUM(size) "
+			"FROM chat_scan_dups WHERE peer_id = :peer_id "
+			"GROUP BY category"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		if (q.exec()) {
+			while (q.next()) {
+				dupAgg[int(q.value(0).toInt())] = std::make_pair(
+					q.value(1).toLongLong(),
+					q.value(2).toLongLong());
+			}
+		}
+	}
+	for (const auto &[category, itemPair] : itemAgg) {
+		auto row = ChatScanProgressRow();
+		row.peerId = peerId;
+		row.category = category;
+		row.itemCount = itemPair.first;
+		auto dupIt = dupAgg.find(category);
+		if (dupIt != dupAgg.end()) {
+			row.dupCount = dupIt->second.first;
+			row.dupBytes = dupIt->second.second;
+		}
+		row.uniqueCount = std::max(int64(0), row.itemCount - row.dupCount);
+		row.uniqueBytes = std::max(int64(0), itemPair.second - row.dupBytes);
+		result.push_back(row);
+	}
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM chat_scan_progress "
+			"WHERE peer_id = :peer_id"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		q.exec();
+	}
+	beginTransaction();
+	for (const auto &row : result) {
+		QSqlQuery q(_db);
+		q.prepare(u"INSERT OR REPLACE INTO chat_scan_progress "
+			"(peer_id, category, item_count, unique_count, "
+			"unique_bytes, dup_count, dup_bytes) VALUES "
+			"(:peer_id, :category, :item_count, :unique_count, "
+			":unique_bytes, :dup_count, :dup_bytes)"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(row.peerId.value)));
+		q.bindValue(u":category"_q, row.category);
+		q.bindValue(u":item_count"_q, QVariant::fromValue(
+			static_cast<qlonglong>(row.itemCount)));
+		q.bindValue(u":unique_count"_q, QVariant::fromValue(
+			static_cast<qlonglong>(row.uniqueCount)));
+		q.bindValue(u":unique_bytes"_q, QVariant::fromValue(
+			static_cast<qlonglong>(row.uniqueBytes)));
+		q.bindValue(u":dup_count"_q, QVariant::fromValue(
+			static_cast<qlonglong>(row.dupCount)));
+		q.bindValue(u":dup_bytes"_q, QVariant::fromValue(
+			static_cast<qlonglong>(row.dupBytes)));
+		q.exec();
+	}
+	commitTransaction();
+	return result;
+}
+
+std::vector<ChatScanItem> DedupDb::Impl::chatScanDistinctItems(
+		PeerId peerId) const {
+	auto result = std::vector<ChatScanItem>();
+	if (!_open) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT MIN(msg_id) AS msg_id, MIN(category) AS category, "
+		"MIN(size) AS size, media_id, MIN(is_photo) AS is_photo, "
+		"MIN(hash) AS hash, MIN(filename) AS filename "
+		"FROM chat_scan_items "
+		"WHERE peer_id = :peer_id "
+		"AND hash IS NOT NULL AND length(hash) != 0 "
+		"AND media_id != 0 "
+		"GROUP BY media_id "
+		"ORDER BY msg_id ASC"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanDistinctItems failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto item = ChatScanItem();
+		item.peerId = peerId;
+		item.msgId = MsgId(q.value(0).toLongLong());
+		item.category = q.value(1).toInt();
+		item.size = q.value(2).toLongLong();
+		item.mediaId = q.value(3).toULongLong();
+		item.isPhoto = (q.value(4).toInt() != 0);
+		item.hash = q.value(5).toByteArray();
+		item.filename = q.value(6).toString();
+		result.push_back(item);
+	}
+	return result;
+}
+
+void DedupDb::Impl::writeGlobal(const QString &key, const QString &value) {
+	if (!_open || key.isEmpty()) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"INSERT OR REPLACE INTO client_globals (key, value) "
+		"VALUES (:key, :value)"_q);
+	q.bindValue(u":key"_q, key);
+	q.bindValue(u":value"_q, value);
+	if (!q.exec()) {
+		LOG(("DedupDb: Global Write failed: %1").arg(q.lastError().text()));
+	}
+}
+
+QString DedupDb::Impl::readGlobal(const QString &key) const {
+	if (!_open || key.isEmpty()) {
+		return QString();
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT value FROM client_globals WHERE key = :key"_q);
+	q.bindValue(u":key"_q, key);
+	if (!q.exec()) {
+		LOG(("DedupDb: Global Read failed: %1").arg(q.lastError().text()));
+		return QString();
+	}
+	return q.next() ? q.value(0).toString() : QString();
+}
+
+void DedupDb::Impl::removeChatScanDup(PeerId peerId, MsgId msgId) {
+	if (!_open || !msgId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM chat_scan_dups "
+		"WHERE peer_id = :peer_id "
+		"AND msg_id = :msg_id"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":msg_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(msgId.bare)));
+	if (!q.exec()) {
+		LOG(("DedupDb: RemoveChatScanDup failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::clearChatScan(PeerId peerId) {
+	if (!_open) {
+		return;
+	}
+	for (const auto &table : {
+			u"chat_scan"_q,
+			u"chat_scan_dups"_q,
+			u"chat_scan_state"_q,
+			u"chat_scan_progress"_q,
+			u"chat_scan_items"_q }) {
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM %1 "
+			"WHERE peer_id = :peer_id"_q.arg(
+				table));
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		if (!q.exec()) {
+			LOG(("DedupDb: ClearChatScan failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+}
+
+void DedupDb::Impl::writeScanCursor(const ChatScanState &state) {
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"INSERT OR REPLACE INTO chat_scan_state "
+		"(peer_id, cursor_msg_id, phase) "
+		"VALUES (:peer_id, :cursor_msg_id, :phase)"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(state.peerId.value)));
+	q.bindValue(u":cursor_msg_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(state.cursor.bare)));
+	q.bindValue(u":phase"_q, state.phase);
+	if (!q.exec()) {
+		LOG(("DedupDb: WriteScanCursor failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+std::optional<ChatScanState> DedupDb::Impl::readScanCursor(
+		PeerId peerId) const {
+	if (!_open) {
+		return std::nullopt;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT cursor_msg_id, phase FROM chat_scan_state "
+		"WHERE peer_id = :peer_id"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ReadScanCursor failed: %1").arg(
+			q.lastError().text()));
+		return std::nullopt;
+	}
+	if (!q.next()) {
+		return std::nullopt;
+	}
+	auto state = ChatScanState();
+	state.peerId = peerId;
+	state.cursor = MsgId(q.value(0).toLongLong());
+	state.phase = q.value(1).toInt();
+	return state;
+}
+
+void DedupDb::Impl::writeChatScanItems(
+		const std::vector<ChatScanItem> &items) {
+	if (!_open || items.empty()) {
+		return;
+	}
+	beginTransaction();
+	QSqlQuery q(_db);
+	q.prepare(u"INSERT OR REPLACE INTO chat_scan_items "
+		"(peer_id, msg_id, category, size, media_id, "
+		"is_photo, filename, state, attempts, lease_until) "
+		"VALUES (:peer_id, :msg_id, :category, :size, "
+		":media_id, :is_photo, :filename, "
+		":state, :attempts, :lease_until)"_q);
+	for (const auto &item : items) {
+		if (!item.msgId) {
+			continue;
+		}
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(item.peerId.value)));
+		q.bindValue(u":msg_id"_q, QVariant::fromValue(
+			static_cast<qlonglong>(item.msgId.bare)));
+		q.bindValue(u":category"_q, item.category);
+		q.bindValue(u":size"_q, QVariant::fromValue(
+			static_cast<qlonglong>(item.size)));
+		q.bindValue(u":media_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(item.mediaId)));
+		q.bindValue(u":is_photo"_q, item.isPhoto ? 1 : 0);
+		q.bindValue(u":filename"_q, item.filename);
+		q.bindValue(u":state"_q, item.state);
+		q.bindValue(u":attempts"_q, item.attempts);
+		q.bindValue(u":lease_until"_q, item.leaseUntil);
+		if (!q.exec()) {
+			LOG(("DedupDb: WriteChatScanItems failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+	commitTransaction();
+}
+
+std::vector<ChatScanItem> DedupDb::Impl::readChatScanItems(
+		PeerId peerId) const {
+	auto result = std::vector<ChatScanItem>();
+	if (!_open) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT msg_id, category, size, media_id, "
+		"is_photo, hash, filename FROM chat_scan_items "
+		"WHERE peer_id = :peer_id "
+		"ORDER BY msg_id DESC"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ReadChatScanItems failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto item = ChatScanItem();
+		item.peerId = peerId;
+		item.msgId = MsgId(q.value(0).toLongLong());
+		item.category = q.value(1).toInt();
+		item.size = q.value(2).toLongLong();
+		item.mediaId = q.value(3).toULongLong();
+		item.isPhoto = (q.value(4).toInt() != 0);
+		item.hash = q.value(5).toByteArray();
+		item.filename = q.value(6).toString();
+		result.push_back(item);
+	}
+	return result;
+}
+
+int DedupDb::Impl::updateChatScanItemHash(
+		PeerId peerId,
+		uint64 mediaId,
+		const QByteArray &hash) {
+	if (!_open || !mediaId || hash.isEmpty()) {
+		return 0;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE chat_scan_items SET hash = :hash "
+		"WHERE peer_id = :peer_id "
+		"AND media_id = :media_id "
+		"AND (hash IS NULL OR length(hash) = 0)"_q);
+	q.bindValue(u":hash"_q, hash);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":media_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(mediaId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: UpdateChatScanItemHash failed: %1").arg(
+			q.lastError().text()));
+		return 0;
+	}
+	return q.numRowsAffected();
+}
+
+std::vector<PeerId> DedupDb::Impl::scannedPeerIds() const {
+	auto result = std::vector<PeerId>();
+	if (!_open) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT DISTINCT peer_id FROM chat_scan "
+		"WHERE scan_finished != 0"_q);
+	if (!q.exec()) {
+		LOG(("DedupDb: ScannedPeerIds failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		result.push_back(PeerId(q.value(0).toULongLong()));
+	}
+	return result;
+}
+
+std::optional<ChatScanDup> DedupDb::Impl::takeChatScanDup(
+		PeerId peerId,
+		MsgId msgId) {
+	if (!_open || !msgId) {
+		return std::nullopt;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT category, size, flags, filename "
+		"FROM chat_scan_dups "
+		"WHERE peer_id = :peer_id "
+		"AND msg_id = :msg_id"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":msg_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(msgId.bare)));
+	if (!q.exec()) {
+		LOG(("DedupDb: TakeChatScanDup failed: %1").arg(
+			q.lastError().text()));
+		return std::nullopt;
+	}
+	if (!q.next()) {
+		return std::nullopt;
+	}
+	auto dup = ChatScanDup();
+	dup.peerId = peerId;
+	dup.msgId = msgId;
+	dup.category = q.value(0).toInt();
+	dup.size = q.value(1).toLongLong();
+	dup.flags = q.value(2).toInt();
+	dup.filename = q.value(3).toString();
+	removeChatScanDup(peerId, msgId);
+	return dup;
+}
+
+void DedupDb::Impl::removeChatScanItem(PeerId peerId, MsgId msgId) {
+	if (!_open || !msgId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM chat_scan_items "
+		"WHERE peer_id = :peer_id "
+		"AND msg_id = :msg_id"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":msg_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(msgId.bare)));
+	if (!q.exec()) {
+		LOG(("DedupDb: RemoveChatScanItem failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+bool DedupDb::Impl::hasChatScanItem(PeerId peerId, MsgId msgId) const {
+	if (!_open || !msgId) {
+		return false;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT 1 FROM chat_scan_items "
+		"WHERE peer_id = :peer_id "
+		"AND msg_id = :msg_id LIMIT 1"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":msg_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(msgId.bare)));
+	if (!q.exec()) {
+		LOG(("DedupDb: HasChatScanItem failed: %1").arg(
+			q.lastError().text()));
+		return false;
+	}
+	return q.next();
+}
+
+std::optional<ChatScanItem> DedupDb::Impl::chatScanItem(
+		PeerId peerId,
+		MsgId msgId) const {
+	if (!_open || !msgId) {
+		return std::nullopt;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT category, size, media_id, is_photo, "
+		"hash, filename FROM chat_scan_items "
+		"WHERE peer_id = :peer_id "
+		"AND msg_id = :msg_id"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":msg_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(msgId.bare)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanItem failed: %1").arg(
+			q.lastError().text()));
+		return std::nullopt;
+	}
+	if (!q.next()) {
+		return std::nullopt;
+	}
+	auto item = ChatScanItem();
+	item.peerId = peerId;
+	item.msgId = msgId;
+	item.category = q.value(0).toInt();
+	item.size = q.value(1).toLongLong();
+	item.mediaId = q.value(2).toULongLong();
+	item.isPhoto = (q.value(3).toInt() != 0);
+	item.hash = q.value(4).toByteArray();
+	item.filename = q.value(5).toString();
+	return item;
+}
+
+void DedupDb::Impl::clearChatScanDups(PeerId peerId) {
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM chat_scan_dups "
+		"WHERE peer_id = :peer_id"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ClearChatScanDups failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
 QString DedupDb::Impl::TmpTableName(TmpTable table) {
 	switch (table) {
 	case TmpTable::Dl: return u"dl_tmp"_q;
@@ -1965,6 +3479,62 @@ void DedupDb::Impl::insertTmp(
 	s.pending.push_back({ documentId, hash });
 	if (++_tmpPendingWrites >= kExWriteBatchLimit) {
 		flushTmpPending();
+	}
+}
+
+void DedupDb::Impl::removeTmpDoc(
+		TmpTable table,
+		uint64 sessionId,
+		uint64 scopeId,
+		uint64 documentId) {
+	if (!documentId) {
+		return;
+	}
+	if (const auto i = _tmpStates.find({ table, sessionId, scopeId });
+		i != _tmpStates.end()) {
+		auto &s = i->second;
+		if (const auto j = s.docToHash.find(documentId);
+			j != s.docToHash.end()) {
+			const auto hash = j.value();
+			s.docToHash.erase(j);
+			if (const auto k = s.hashToDoc.find(hash);
+				k != s.hashToDoc.end()) {
+				k.value().remove(documentId);
+				if (k.value().isEmpty()) {
+					s.hashToDoc.erase(k);
+				}
+			}
+		}
+		auto &pending = s.pending;
+		auto w = pending.begin();
+		for (auto r = pending.begin(); r != pending.end(); ++r) {
+			if (r->docId != documentId) {
+				if (w != r) {
+					*w = std::move(*r);
+				}
+				++w;
+			} else {
+				--_tmpPendingWrites;
+			}
+		}
+		pending.erase(w, pending.end());
+	}
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM %1 "
+		"WHERE session_id = :session_id AND scope_id = :scope_id "
+		"AND doc_id = :doc_id"_q.arg(TmpTableName(table)));
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	q.bindValue(u":scope_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(scopeId)));
+	q.bindValue(u":doc_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(documentId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: RemoveTmpDoc failed: %1").arg(
+			q.lastError().text()));
 	}
 }
 
@@ -2238,6 +3808,13 @@ void DedupDb::clearDlTmpRun(uint64 sessionId, uint64 batchId) {
 	_impl->clearTmpRun(Impl::TmpTable::Dl, sessionId, batchId);
 }
 
+void DedupDb::removeDlTmpDoc(
+		uint64 sessionId,
+		uint64 batchId,
+		uint64 documentId) {
+	_impl->removeTmpDoc(Impl::TmpTable::Dl, sessionId, batchId, documentId);
+}
+
 void DedupDb::insertUlTmp(
 		uint64 sessionId,
 		uint64 batchId,
@@ -2331,6 +3908,251 @@ QByteArray DedupDb::hashForFwTmpItem(
 
 void DedupDb::clearFwTmpRun(uint64 sessionId, PeerId dstPeer) {
 	_impl->clearTmpRun(Impl::TmpTable::Fw, sessionId, dstPeer.value);
+}
+
+void DedupDb::writeChatScanRow(const ChatScanRow &row) {
+	_impl->writeChatScanRow(row);
+}
+
+std::vector<ChatScanRow> DedupDb::readChatScan(PeerId peerId) const {
+	return _impl->readChatScan(peerId);
+}
+
+bool DedupDb::isChatScanned(PeerId peerId) const {
+	return _impl->isChatScanned(peerId);
+}
+
+void DedupDb::markChatDeleteFinished(PeerId peerId) {
+	_impl->markChatDeleteFinished(peerId);
+}
+
+int64 DedupDb::chatScanDupBytes(PeerId peerId) const {
+	return _impl->chatScanDupBytes(peerId);
+}
+
+std::vector<ChatScanCategoryTotals> DedupDb::chatScanCategoryTotals(
+		PeerId peerId) const {
+	return _impl->chatScanCategoryTotals(peerId);
+}
+
+qint64 DedupDb::chatScanItemCount(PeerId peerId) const {
+	return _impl->chatScanItemCount(peerId);
+}
+
+MsgId DedupDb::chatScanMaxMsgId(PeerId peerId) const {
+	return _impl->chatScanMaxMsgId(peerId);
+}
+
+bool DedupDb::chatScanContainsHash(
+		PeerId peerId,
+		const QByteArray &hash) const {
+	return _impl->chatScanContainsHash(peerId, hash);
+}
+
+QByteArray DedupDb::chatScanHashForMedia(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto) const {
+	return _impl->chatScanHashForMedia(peerId, mediaId, isPhoto);
+}
+
+std::vector<ChatScanItem> DedupDb::chatScanUnresolvedItems(
+		PeerId peerId) const {
+	return _impl->chatScanUnresolvedItems(peerId);
+}
+
+std::vector<ChatScanItem> DedupDb::chatScanPendingItemsWindow(
+		PeerId peerId,
+		MsgId above,
+		int limit) const {
+	return _impl->chatScanPendingItemsWindow(peerId, above, limit);
+}
+
+std::vector<ChatScanItem> DedupDb::chatScanItemsWindow(
+		PeerId peerId,
+		MsgId above,
+		int limit) const {
+	return _impl->chatScanItemsWindow(peerId, above, limit);
+}
+
+std::vector<ChatScanItem> DedupDb::chatScanHashedItemsWindow(
+		PeerId peerId,
+		MsgId above,
+		int limit) const {
+	return _impl->chatScanHashedItemsWindow(peerId, above, limit);
+}
+
+int DedupDb::chatScanPendingCount(PeerId peerId) const {
+	return _impl->chatScanPendingCount(peerId);
+}
+
+int DedupDb::chatScanHashedCount(PeerId peerId) const {
+	return _impl->chatScanHashedCount(peerId);
+}
+
+void DedupDb::chatScanResetLeases(PeerId peerId) {
+	_impl->chatScanResetLeases(peerId);
+}
+
+std::vector<ChatScanItem> DedupDb::chatScanLeaseItems(
+		PeerId peerId,
+		int limit,
+		qint64 now,
+		qint64 leaseUntil) {
+	return _impl->chatScanLeaseItems(peerId, limit, now, leaseUntil);
+}
+
+void DedupDb::chatScanReleaseItem(
+		PeerId peerId,
+		uint64 mediaId,
+		qint64 retryAt) {
+	_impl->chatScanReleaseItem(peerId, mediaId, retryAt);
+}
+
+int DedupDb::chatScanCommitHashes(
+		PeerId peerId,
+		const std::vector<std::pair<uint64, QByteArray>> &hashes) {
+	return _impl->chatScanCommitHashes(peerId, hashes);
+}
+
+void DedupDb::chatScanFailItem(PeerId peerId, uint64 mediaId) {
+	_impl->chatScanFailItem(peerId, mediaId);
+}
+
+int DedupDb::chatScanRetryFailed(PeerId peerId) {
+	return _impl->chatScanRetryFailed(peerId);
+}
+
+int DedupDb::chatScanLeasedCount(PeerId peerId) const {
+	return _impl->chatScanLeasedCount(peerId);
+}
+
+int DedupDb::chatScanFailedCount(PeerId peerId) const {
+	return _impl->chatScanFailedCount(peerId);
+}
+
+std::vector<ChatScanProgressRow> DedupDb::readChatScanProgress(
+		PeerId peerId) const {
+	return _impl->readChatScanProgress(peerId);
+}
+
+void DedupDb::updateChatScanProgress(
+		PeerId peerId,
+		int category,
+		int64 itemCount,
+		int64 uniqueCount,
+		int64 uniqueBytes,
+		int64 dupCount,
+		int64 dupBytes) {
+	_impl->updateChatScanProgress(
+		peerId,
+		category,
+		itemCount,
+		uniqueCount,
+		uniqueBytes,
+		dupCount,
+		dupBytes);
+}
+
+std::vector<ChatScanProgressRow> DedupDb::recomputeChatScanProgress(
+		PeerId peerId) {
+	return _impl->recomputeChatScanProgress(peerId);
+}
+
+std::vector<ChatScanItem> DedupDb::chatScanDistinctItems(
+		PeerId peerId) const {
+	return _impl->chatScanDistinctItems(peerId);
+}
+
+void DedupDb::writeGlobal(const QString &key, const QString &value) {
+	_impl->writeGlobal(key, value);
+}
+
+QString DedupDb::readGlobal(const QString &key) const {
+	return _impl->readGlobal(key);
+}
+
+void DedupDb::writeChatScanDup(const ChatScanDup &dup) {
+	_impl->writeChatScanDup(dup);
+}
+
+std::vector<ChatScanDup> DedupDb::readChatScanDups(
+		PeerId peerId,
+		int category,
+		int limit,
+		int offset) const {
+	return _impl->readChatScanDups(peerId, category, limit, offset);
+}
+
+std::vector<ChatScanDup> DedupDb::readChatScanDupsBefore(
+		PeerId peerId,
+		int category,
+		int limit,
+		MsgId before) const {
+	return _impl->readChatScanDupsBefore(peerId, category, limit, before);
+}
+
+int DedupDb::chatScanDupCount(PeerId peerId, int category) const {
+	return _impl->chatScanDupCount(peerId, category);
+}
+
+void DedupDb::removeChatScanDup(PeerId peerId, MsgId msgId) {
+	_impl->removeChatScanDup(peerId, msgId);
+}
+
+void DedupDb::clearChatScan(PeerId peerId) {
+	_impl->clearChatScan(peerId);
+}
+
+void DedupDb::writeScanCursor(const ChatScanState &state) {
+	_impl->writeScanCursor(state);
+}
+
+std::optional<ChatScanState> DedupDb::readScanCursor(PeerId peerId) const {
+	return _impl->readScanCursor(peerId);
+}
+
+void DedupDb::writeChatScanItems(const std::vector<ChatScanItem> &items) {
+	_impl->writeChatScanItems(items);
+}
+
+std::vector<ChatScanItem> DedupDb::readChatScanItems(PeerId peerId) const {
+	return _impl->readChatScanItems(peerId);
+}
+
+int DedupDb::updateChatScanItemHash(
+		PeerId peerId,
+		uint64 mediaId,
+		const QByteArray &hash) {
+	return _impl->updateChatScanItemHash(peerId, mediaId, hash);
+}
+
+std::vector<PeerId> DedupDb::scannedPeerIds() const {
+	return _impl->scannedPeerIds();
+}
+
+std::optional<ChatScanDup> DedupDb::takeChatScanDup(
+		PeerId peerId,
+		MsgId msgId) {
+	return _impl->takeChatScanDup(peerId, msgId);
+}
+
+void DedupDb::removeChatScanItem(PeerId peerId, MsgId msgId) {
+	_impl->removeChatScanItem(peerId, msgId);
+}
+
+bool DedupDb::hasChatScanItem(PeerId peerId, MsgId msgId) const {
+	return _impl->hasChatScanItem(peerId, msgId);
+}
+
+std::optional<ChatScanItem> DedupDb::chatScanItem(
+		PeerId peerId,
+		MsgId msgId) const {
+	return _impl->chatScanItem(peerId, msgId);
+}
+
+void DedupDb::clearChatScanDups(PeerId peerId) {
+	_impl->clearChatScanDups(peerId);
 }
 
 void DedupDb::beginTransaction() {

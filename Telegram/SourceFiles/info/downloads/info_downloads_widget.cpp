@@ -35,6 +35,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_layers.h"
 #include "styles/style_menu_icons.h"
 
+#include <QtCore/QDebug>
+
 namespace Info::Downloads {
 
 Memento::Memento(not_null<Controller*> controller)
@@ -188,6 +190,7 @@ void Widget::saveState(not_null<Memento*> memento) {
 
 void Widget::restoreState(not_null<Memento*> memento) {
 	_currentTab = memento->tab();
+	qDebug() << "[TM] manager opened on tab:" << int(_currentTab);
 	_inner->restoreState(memento);
 	scrollTopRestore(memento->scrollTop());
 	refreshTabs();
@@ -641,10 +644,7 @@ rpl::producer<QString> Widget::title() {
 }
 
 std::shared_ptr<Info::Memento> Make(not_null<UserData*> self, Tab tab) {
-	if (tab == Tab::Downloads) {
-		tab = LastActivityTab();
-	}
-	// Only keep the last-used tab when its items are still visible:
+	// Only keep the requested tab when its items are still visible:
 	// persisted uploads/forwards that were cancelled or cleared should not
 	// pin the manager to an empty section.
 	if (tab == Tab::Uploads) {
@@ -697,6 +697,7 @@ Tab &LastActivityTabRef() {
 void SetLastActivityTab(Tab tab) {
 	LastActivityTabRef() = tab;
 	Core::App().settings().writePref<int>(kLastActivityTabKey, int(tab));
+	qDebug() << "[TM] last tab set:" << int(tab);
 }
 
 Tab LastActivityTab() {

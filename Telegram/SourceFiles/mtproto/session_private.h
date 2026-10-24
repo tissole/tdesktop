@@ -203,6 +203,9 @@ private:
 	int _retryTimeout = 1;
 	qint64 _retryWillFinish = 0;
 
+	base::Timer _resendAllTimer;
+	bool _deferResendAfterCut = false;
+
 	base::Timer _oldConnectionTimer;
 	bool _oldConnection = true;
 

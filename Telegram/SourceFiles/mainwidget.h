@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/weak_ptr.h"
+#include "chat_scan/chat_scan_top_bar.h"
 #include "media/player/media_player_float.h"
 #include "mtproto/sender.h"
 
@@ -268,6 +269,12 @@ private:
 	void destroyExportTopBar();
 	void exportTopBarHeightUpdated();
 
+	void setCurrentChatScanView(ChatScan::ScanTopBarEvent event);
+	void refreshScanTopBar();
+	void destroyScanTopBar();
+	void scanTopBarHeightUpdated();
+	void updateScanTopBar(const ChatScan::State &state);
+
 	Window::SectionSlideParams prepareShowAnimation(
 		bool willHaveTopBarShadow,
 		bool fromBottom);
@@ -369,6 +376,11 @@ private:
 		= { nullptr };
 	rpl::lifetime _exportViewLifetime;
 
+	ChatScan::ScanTopBarEvent _scanViewEvent;
+	rpl::lifetime _scanViewLifetime;
+	object_ptr<Window::TopBarWrapWidget<ChatScan::ScanTopBar>> _scanTopBar
+		= { nullptr };
+
 	object_ptr<Window::TopBarWrapWidget<Media::Player::Widget>> _player
 		= { nullptr };
 	object_ptr<Media::Player::Panel> _playerPlaylist;
@@ -379,6 +391,7 @@ private:
 	int _playerHeight = 0;
 	int _callTopBarHeight = 0;
 	int _exportTopBarHeight = 0;
+	int _scanTopBarHeight = 0;
 	int _contentScrollAddToY = 0;
 
 	struct SettingBackground;

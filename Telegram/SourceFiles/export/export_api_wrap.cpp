@@ -5935,7 +5935,7 @@ void ApiWrap::beginSliceWalk(bool topic) {
 				docId))) {
 			continue;
 		}
-		((size >= ::Data::kDedupMinPartialHashSize)
+		((size > ::Data::kDedupMinPartialHashSize)
 			? bigTargets
 			: smallTargets).push_back({ docId, location, size });
 	}
@@ -6266,7 +6266,7 @@ bool ApiWrap::decideFileDedup(
 	const auto alive = [this] {
 		return (_chatProcess != nullptr) || (_topicProcess != nullptr);
 	};
-	if (file.size >= ::Data::kDedupMinPartialHashSize) {
+	if (file.size > ::Data::kDedupMinPartialHashSize) {
 		Export::FetchHash(
 			_mtp,
 			_runner,

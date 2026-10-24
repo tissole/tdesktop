@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_channel.h"
 #include "data/data_chat.h"
 #include "data/data_document.h"
+#include "data/data_file_hash.h"
 #include "data/data_folder.h"
 #include "data/data_forum.h"
 #include "data/data_forum_topic.h"
@@ -39,6 +40,16 @@ namespace {
 
 constexpr auto kReadRequestTimeout = 3 * crl::time(1000);
 constexpr auto kReportDeliveriesPerRequest = 50;
+// Coalesce missing peers into batches of at most 100, keep only one batch in
+// flight and stop all getPeerDialogs traffic for the whole server flood window
+// instead of letting single-peer retries slip through and extend it. Dialog
+// list requests (getDialogs/getPinnedDialogs/getDialogFilters) are separate
+// requests, not part of the peer batch; peer traffic waits until they finish
+// and then for a 3s gap, so startup requests do not pile onto the same
+// method/account budget.
+constexpr auto kDialogRequestPause = crl::time(3000);
+constexpr auto kDialogFloodPause = crl::time(3000);
+constexpr auto kDialogRequestMaxPeers = 100;
 
 } // namespace
 
@@ -134,7 +145,9 @@ MTPInputMedia WebPageForMTP(
 
 Histories::Histories(not_null<Session*> owner)
 : _owner(owner)
-, _readRequestsTimer([=] { sendReadRequests(); }) {
+, _readRequestsTimer([=] { sendReadRequests(); })
+, _dialogRequestsTimer([=] { sendDialogRequests(); }) {
+	_dialogRequestsNextAt = crl::now() + kDialogRequestPause;
 }
 
 Session &Histories::owner() const {
@@ -170,6 +183,16 @@ void Histories::unloadAll() {
 
 void Histories::clearAll() {
 	_map.clear();
+	_dialogFolderRequests.clear();
+	_dialogFolderRequestsPending.clear();
+	_dialogRequests.clear();
+	_dialogRequestsPending.clear();
+	_externalDialogRequests.clear();
+	_dialogRequestsTimer.cancel();
+	_dialogRequestsNextAt = 0;
+	_dialogListRequestsInFlight = 0;
+	_dialogRequestInFlight = false;
+	_dialogRequestsScheduled = false;
 }
 
 void Histories::editHistoriesMessages(PeerData* peer, bool isHide) {
@@ -369,18 +392,8 @@ void Histories::requestDialogEntry(not_null<Data::Folder*> folder) {
 		return;
 	}
 	_dialogFolderRequests.emplace(folder);
-
-	auto peers = QVector<MTPInputDialogPeer>(
-		1,
-		MTP_inputDialogPeerFolder(MTP_int(folder->id())));
-	session().api().request(MTPmessages_GetPeerDialogs(
-		MTP_vector(std::move(peers))
-	)).done([=](const MTPmessages_PeerDialogs &result) {
-		applyPeerDialogs(result);
-		_dialogFolderRequests.remove(folder);
-	}).fail([=] {
-		_dialogFolderRequests.remove(folder);
-	}).send();
+	_dialogFolderRequestsPending.emplace(folder);
+	postponeRequestDialogEntries();
 }
 
 void Histories::requestDialogEntry(
@@ -410,16 +423,44 @@ void Histories::requestDialogEntry(
 }
 
 void Histories::postponeRequestDialogEntries() {
-	if (_dialogRequestsPending.size() > 1) {
+	if (_dialogListRequestsInFlight > 0
+		|| _dialogRequestInFlight
+		|| (_dialogRequestsPending.empty()
+			&& _dialogFolderRequestsPending.empty()
+			&& _externalDialogRequests.empty())) {
 		return;
 	}
+	const auto now = crl::now();
+	if (now < _dialogRequestsNextAt) {
+		_dialogRequestsTimer.callOnce(_dialogRequestsNextAt - now);
+		return;
+	}
+	if (_dialogRequestsScheduled) {
+		return;
+	}
+	_dialogRequestsScheduled = true;
 	Core::App().postponeCall(crl::guard(&session(), [=] {
+		_dialogRequestsScheduled = false;
 		sendDialogRequests();
 	}));
 }
 
 void Histories::sendDialogRequests() {
-	if (_dialogRequestsPending.empty()) {
+	if (_dialogListRequestsInFlight > 0 || _dialogRequestInFlight) {
+		return;
+	}
+	const auto now = crl::now();
+	if (now < _dialogRequestsNextAt) {
+		_dialogRequestsTimer.callOnce(_dialogRequestsNextAt - now);
+		return;
+	}
+	if (_dialogRequestsPending.empty()
+		&& _dialogFolderRequestsPending.empty()
+		&& _externalDialogRequests.empty()) {
+		return;
+	}
+	if (!_externalDialogRequests.empty()) {
+		sendExternalDialogRequest();
 		return;
 	}
 	const auto histories = ranges::views::all(
@@ -437,34 +478,153 @@ void Histories::sendDialogRequests() {
 		return false;
 	}) | ranges::to_vector;
 
+	auto sentHistories = std::vector<not_null<History*>>();
+	auto sentFolders = std::vector<not_null<Data::Folder*>>();
 	auto peers = QVector<MTPInputDialogPeer>();
-	const auto dialogPeer = [](not_null<History*> history) {
-		return MTP_inputDialogPeer(history->peer->input());
+	for (auto history : histories) {
+		if (peers.size() >= kDialogRequestMaxPeers) {
+			break;
+		}
+		peers.push_back(MTP_inputDialogPeer(history->peer->input()));
+		sentHistories.push_back(history);
+	}
+	for (auto folder : base::take(_dialogFolderRequestsPending)) {
+		if (peers.size() >= kDialogRequestMaxPeers) {
+			_dialogFolderRequestsPending.emplace(folder);
+			continue;
+		}
+		peers.push_back(MTP_inputDialogPeerFolder(MTP_int(folder->id())));
+		sentFolders.push_back(folder);
+	}
+	const auto moveToInFlight = [&](not_null<History*> history) {
+		const auto i = _dialogRequestsPending.find(history);
+		if (i == end(_dialogRequestsPending)) {
+			return;
+		}
+		const auto j = _dialogRequests.find(history);
+		if (j == end(_dialogRequests)) {
+			_dialogRequests.emplace(history, std::move(i->second));
+		} else {
+			for (auto &callback : i->second) {
+				j->second.push_back(std::move(callback));
+			}
+		}
+		_dialogRequestsPending.erase(i);
 	};
-	ranges::transform(
-		histories,
-		ranges::back_inserter(peers),
-		dialogPeer);
-	for (auto &[history, callbacks] : base::take(_dialogRequestsPending)) {
-		_dialogRequests.emplace(history, std::move(callbacks));
+	for (auto history : sentHistories) {
+		moveToInFlight(history);
+	}
+	auto postponed = std::vector<not_null<History*>>();
+	for (const auto &entry : _dialogRequestsPending) {
+		const auto state = lookup(entry.first);
+		if (state && state->postponedRequestEntry) {
+			postponed.push_back(entry.first);
+		}
+	}
+	for (auto history : postponed) {
+		moveToInFlight(history);
+	}
+
+	if (peers.empty()) {
+		return;
 	}
 
 	const auto finalize = [=] {
-		for (const auto &history : histories) {
+		for (auto history : sentHistories) {
 			const auto state = lookup(history);
 			if (!state || !state->postponedRequestEntry) {
 				dialogEntryApplied(history);
 				history->updateChatListExistence();
 			}
 		}
+		for (auto folder : sentFolders) {
+			_dialogFolderRequests.erase(folder);
+		}
 	};
+	const auto requeue = [=] {
+		for (auto history : sentHistories) {
+			const auto i = _dialogRequests.find(history);
+			if (i != end(_dialogRequests)) {
+				auto &pending = _dialogRequestsPending[history];
+				for (auto &callback : i->second) {
+					pending.push_back(std::move(callback));
+				}
+				_dialogRequests.erase(i);
+			}
+		}
+		for (auto folder : sentFolders) {
+			_dialogFolderRequestsPending.emplace(folder);
+		}
+	};
+
+	_dialogRequestInFlight = true;
 	session().api().request(MTPmessages_GetPeerDialogs(
 		MTP_vector(std::move(peers))
 	)).done([=](const MTPmessages_PeerDialogs &result) {
+		_dialogRequestInFlight = false;
+		_dialogRequestsNextAt = crl::now() + kDialogRequestPause;
 		applyPeerDialogs(result);
 		finalize();
-	}).fail([=] {
-		finalize();
+		postponeRequestDialogEntries();
+	}).fail([=](const MTP::Error &error) {
+		_dialogRequestInFlight = false;
+		const auto wait = FloodWaitSeconds(error.type());
+		if (wait > 0) {
+			_dialogRequestsNextAt = crl::now()
+				+ crl::time(wait) * 1000
+				+ kDialogFloodPause;
+			requeue();
+		} else {
+			_dialogRequestsNextAt = crl::now() + kDialogRequestPause;
+			finalize();
+		}
+		postponeRequestDialogEntries();
+	}).send();
+}
+
+void Histories::sendExternalDialogRequest() {
+	if (_dialogListRequestsInFlight > 0
+		|| _externalDialogRequests.empty()
+		|| _dialogRequestInFlight) {
+		return;
+	}
+	const auto &request = _externalDialogRequests.front();
+	_dialogRequestInFlight = true;
+	session().api().request(MTPmessages_GetPeerDialogs(
+		MTP_vector<MTPInputDialogPeer>(
+			1,
+			MTP_inputDialogPeer(request.peer->input()))
+	)).done([=](const MTPmessages_PeerDialogs &result) {
+		_dialogRequestInFlight = false;
+		_dialogRequestsNextAt = crl::now() + kDialogRequestPause;
+		if (_externalDialogRequests.empty()) {
+			return;
+		}
+		auto request = std::move(_externalDialogRequests.front());
+		_externalDialogRequests.pop_front();
+		if (request.done) {
+			request.done(result);
+		}
+		postponeRequestDialogEntries();
+	}).fail([=](const MTP::Error &error) {
+		_dialogRequestInFlight = false;
+		const auto wait = FloodWaitSeconds(error.type());
+		if (wait > 0) {
+			_dialogRequestsNextAt = crl::now()
+				+ crl::time(wait) * 1000
+				+ kDialogFloodPause;
+		} else {
+			_dialogRequestsNextAt = crl::now() + kDialogRequestPause;
+			if (_externalDialogRequests.empty()) {
+				return;
+			}
+			auto request = std::move(_externalDialogRequests.front());
+			_externalDialogRequests.pop_front();
+			if (request.fail) {
+				request.fail();
+			}
+		}
+		postponeRequestDialogEntries();
 	}).send();
 }
 
@@ -517,6 +677,38 @@ void Histories::applyPeerDialogs(const MTPmessages_PeerDialogs &dialogs) {
 		});
 	}
 	_owner->sendHistoryChangeNotifications();
+}
+
+// External callers join the same single-flight and flood gate as dialog
+// entry requests.
+void Histories::requestPeerDialog(
+		not_null<PeerData*> peer,
+		Fn<void(const MTPmessages_PeerDialogs&)> done,
+		Fn<void()> fail) {
+	_externalDialogRequests.push_back(ExternalDialogRequest{
+		peer,
+		std::move(done),
+		std::move(fail),
+	});
+	postponeRequestDialogEntries();
+}
+
+void Histories::noteDialogListRequestStarted() {
+	++_dialogListRequestsInFlight;
+}
+
+void Histories::noteDialogListRequestFinished() {
+	if (_dialogListRequestsInFlight > 0) {
+		--_dialogListRequestsInFlight;
+	}
+	if (_dialogListRequestsInFlight > 0) {
+		return;
+	}
+	const auto nextAt = crl::now() + kDialogRequestPause;
+	if (_dialogRequestsNextAt < nextAt) {
+		_dialogRequestsNextAt = nextAt;
+	}
+	postponeRequestDialogEntries();
 }
 
 void Histories::changeDialogUnreadMark(

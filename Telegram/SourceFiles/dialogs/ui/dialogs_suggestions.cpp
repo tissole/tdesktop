@@ -2186,7 +2186,7 @@ void Suggestions::ensureContent(Key key) {
 	}
 	const auto self = _controller->session().user();
 	const auto memento = (key.tab == Tab::Downloads)
-		? Info::Downloads::Make(self)
+		? Info::Downloads::Make(self, Info::Downloads::LastActivityTab())
 		: std::make_shared<Info::Memento>(
 			self,
 			Info::Section(key.mediaType, Info::Section::Type::GlobalMedia));

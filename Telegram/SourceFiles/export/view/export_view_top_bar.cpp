@@ -80,15 +80,17 @@ void TopBar::resizeToWidthInfo(int w) {
 	}
 }
 
+TextWithEntities TopBar::leftTitle() const {
+	return tr::lng_export_progress_title(tr::now, tr::bold);
+}
+
 void TopBar::updateData(Content &&content) {
 	if (content.rows.empty()) {
 		return;
 	}
 	const auto &row = content.rows[0];
 	_infoLeft->setMarkedText(
-		tr::lng_export_progress_title(tr::now, tr::bold)
-			.append(' ')
-			.append(QChar(0x2013)));
+		leftTitle().append(' ').append(QChar(0x2013)));
 	_infoMiddle->setText(row.label);
 	_infoRight->setMarkedText(Ui::Text::Colorized(row.info));
 	resizeToWidthInfo(width());

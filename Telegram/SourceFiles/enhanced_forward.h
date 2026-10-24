@@ -457,6 +457,7 @@ struct ForwardBatchSnapshot {
 	int total = 0;
 	int sent = 0;
 	int skipped = 0;
+	QString lastFileName;
 	bool finished = false;
 };
 
@@ -475,6 +476,13 @@ void ReportForwardBatchItem(
 	const PeerId &dst,
 	int sentDelta,
 	int skippedDelta);
+
+// Remembers the first file name for the batch (first one wins) so the
+// bar can name a finished single-item forward after its job is gone.
+void NoteForwardBatchFile(
+	not_null<Main::Session*> session,
+	const PeerId &dst,
+	const QString &name);
 
 [[nodiscard]] bool ForwardBatchOwns(
 	not_null<Main::Session*> session,
@@ -523,6 +531,16 @@ void DropFinishedFwRunGroup(
 	not_null<Main::Session*> session,
 	uint64 actionId);
 void EnsureFinishedFwRunsSeeded(not_null<Main::Session*> session);
+
+void RecordFinishedFwRun(
+	not_null<Main::Session*> session,
+	const PeerId &dst,
+	const PeerId &src,
+	FullMsgId firstSource,
+	int total,
+	int done,
+	int skipped,
+	uint64 actionId);
 
 } // namespace EnhancedForward
 

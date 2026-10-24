@@ -67,6 +67,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/controls/feature_list.h"
 #include "ui/ui_utility.h"
 #include "core/application.h"
+#include "chat_scan/view/chat_scan_box.h"
+#include "data/data_dedup_db.h"
+#include "data/data_download_manager.h"
 #include "main/main_app_config.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
@@ -343,6 +346,7 @@ private:
 	void addDirectMessages();
 	void addToggleTopicClosed();
 	void addExportChat();
+	void addScanChat();
 	void addTranslate();
 	void addReport();
 	void addNewContact();
@@ -1093,6 +1097,18 @@ void Filler::addExportChat() {
 		tr::lng_profile_export_chat(tr::now),
 		[=] { PeerMenuExportChat(navigation, peer); },
 		&st::menuIconExport);
+}
+
+void Filler::addScanChat() {
+	if (!_peer) {
+		return;
+	}
+	const auto peer = _peer;
+	const auto navigation = _controller;
+	_addAction(
+		tr::lng_chat_scan_menu(tr::now),
+		[=] { PeerMenuScanChat(navigation, peer); },
+		&st::menuIconSearch);
 }
 
 void Filler::addTranslate() {
@@ -2009,6 +2025,7 @@ void Filler::fillHistoryActions() {
 	addToggleNoForwards();
 	addDirectMessages();
 	addExportChat();
+	addScanChat();
 	addTranslate();
 	addReport();
 	addClearHistory();
@@ -2266,6 +2283,14 @@ void PeerMenuExportChat(
 		not_null<PeerData*> peer) {
 	base::call_delayed(st::defaultPopupMenu.showDuration, [=] {
 		Core::App().exportManager().start(peer);
+	});
+}
+
+void PeerMenuScanChat(
+		not_null<Window::SessionController*> controller,
+		not_null<PeerData*> peer) {
+	base::call_delayed(st::defaultPopupMenu.showDuration, [=] {
+		controller->show(Box<ChatScanBox>(peer, false, false));
 	});
 }
 

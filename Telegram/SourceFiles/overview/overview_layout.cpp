@@ -56,6 +56,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat_style.h"
 #include "styles/style_overview.h"
 
+#include <QtCore/QDebug>
+
 namespace Overview::Layout {
 namespace {
 
@@ -389,6 +391,7 @@ Photo::Photo(
 	MediaOptions options)
 : ItemBase(delegate, parent)
 , _data(photo)
+, _sideRow(options.sideRow)
 , _spoiler((options.spoiler || parent->isMediaSensitive())
 	? std::make_unique<Ui::SpoilerAnimation>([=] {
 		delegate->repaintItem(this);
@@ -417,6 +420,11 @@ Photo::Photo(
 			|| _data->hasExact(Data::PhotoSize::Thumbnail))) {
 		_data->load(Data::PhotoSize::Small, parent->fullId());
 	}
+	if (!options.footerName.isEmpty() || !options.footerDetails.isEmpty()) {
+		_hasFooter = true;
+		_footerName.setText(st::semiboldTextStyle, options.footerName);
+		_footerDetails.setText(st::defaultTextStyle, options.footerDetails);
+	}
 }
 
 Photo::~Photo() = default;
@@ -432,21 +440,48 @@ ClickHandlerPtr Photo::makeOpenPhotoHandler() {
 }
 
 void Photo::initDimensions() {
+	if (_sideRow) {
+		_maxw = st::overviewFileLayout.maxWidth;
+		_minh = st::overviewFileLayout.filePadding.top()
+			+ st::overviewFileLayout.fileThumbSize
+			+ st::overviewFileLayout.filePadding.bottom()
+			+ st::lineWidth;
+		return;
+	}
 	_maxw = 2 * st::overviewPhotoMinSize;
-	_minh = _story ? qRound(_maxw * kStoryRatio) : _maxw;
+	_minh = (_story ? qRound(_maxw * kStoryRatio) : _maxw)
+		+ (_hasFooter
+			? (st::overviewFileLayout.filePadding.top()
+				+ 2 * st::normalFont->height
+				+ st::overviewFileLayout.filePadding.bottom())
+			: 0);
 }
 
 int32 Photo::resizeGetHeight(int32 width) {
+	if (_sideRow) {
+		_width = qMin(width, _maxw);
+		_height = _minh;
+		return _height;
+	}
 	width = qMin(width, _maxw);
 	if (_width != width) {
 		_width = width;
-		_height = _story ? qRound(_width * kStoryRatio) : _width;
+		_height = (_story ? qRound(_width * kStoryRatio) : _width)
+			+ (_hasFooter
+				? (st::overviewFileLayout.filePadding.top()
+					+ 2 * st::normalFont->height
+					+ st::overviewFileLayout.filePadding.bottom())
+				: 0);
 	}
 	return _height;
 }
 
 void Photo::paint(Painter &p, const QRect &clip, TextSelection selection, const PaintContext *context) {
 	const auto selected = (selection == FullSelection);
+	if (_sideRow) {
+		paintSideRow(p, clip, selection, context);
+		return;
+	}
 	const auto widthChanged = (_pix.width()
 		!= (_width * style::DevicePixelRatio()));
 	if (!_goodLoaded || widthChanged) {
@@ -476,22 +511,31 @@ void Photo::paint(Painter &p, const QRect &clip, TextSelection selection, const 
 		}
 	}
 
+	const auto side = _hasFooter
+		? _height
+			- st::overviewFileLayout.filePadding.top()
+			- 2 * st::normalFont->height
+			- st::overviewFileLayout.filePadding.bottom()
+		: _height;
 	if (_pix.isNull()) {
-		p.fillRect(0, 0, _width, _height, st::overviewPhotoBg);
+		p.fillRect(0, 0, _width, side, st::overviewPhotoBg);
 	} else {
 		p.drawImage(0, 0, _pix);
+	}
+	if (_hasFooter) {
+		p.fillRect(0, side, _width, _height - side, st::windowBg);
 	}
 
 	if (_spoiler) {
 		const auto paused = context->paused || On(PowerSaving::kChatSpoiler);
 		Ui::FillSpoilerRect(
 			p,
-			QRect(0, 0, _width, _height),
+			QRect(0, 0, _width, side),
 			Ui::DefaultImageSpoiler().frame(
 				_spoiler->index(context->ms, paused)));
 
 		if (_sensitiveSpoiler) {
-			PaintSensitiveTag(p, QRect(0, 0, _width, _height));
+			PaintSensitiveTag(p, QRect(0, 0, _width, side));
 		}
 	}
 
@@ -501,7 +545,7 @@ void Photo::paint(Painter &p, const QRect &clip, TextSelection selection, const 
 			_pix,
 			_hiddenBgCache,
 			QPoint(),
-			QSize(_width, _height),
+			QSize(_width, side),
 			_width);
 	}
 
@@ -518,12 +562,142 @@ void Photo::paint(Painter &p, const QRect &clip, TextSelection selection, const 
 
 	const auto checkDelta = st::overviewCheckSkip + st::overviewCheck.size;
 	const auto checkLeft = _width - checkDelta;
-	const auto checkTop = _height - checkDelta;
+	const auto checkTop = side - checkDelta;
 	paintCheckbox(p, { checkLeft, checkTop }, selected, context);
+	if (_hasFooter) {
+		const auto &padding = st::overviewFileLayout.filePadding;
+		const auto left = padding.left();
+		const auto avail = _width - left - padding.right();
+		const auto nameTop = side + padding.top();
+		p.setPen(st::windowBoldFg);
+		_footerName.drawLeftElided(p, left, nameTop, avail, _width);
+		p.setPen(st::windowSubTextFg);
+		p.setTextPalette(st::defaultTextPalette);
+		_footerDetails.drawLeftElided(
+			p,
+			left,
+			nameTop + st::normalFont->height,
+			avail,
+			_width);
+	}
 }
 
 bool Photo::elementsAnimating() const {
 	return (_spoiler != nullptr);
+}
+
+void Photo::paintSideRow(
+		Painter &p,
+		const QRect &clip,
+		TextSelection selection,
+		const PaintContext *context) {
+	ensureDataMediaCreated();
+	const auto selected = (selection == FullSelection);
+	const auto &layout = st::overviewFileLayout;
+	const auto thumb = layout.fileThumbSize;
+	const auto rthumb = style::rtlrect(
+		0,
+		st::linksBorder + layout.filePadding.top(),
+		thumb,
+		thumb,
+		_width);
+	const auto small = _spoiler
+		? nullptr
+		: _dataMedia->image(Data::PhotoSize::Small);
+	const auto inlineThumb = (!small && !_spoiler)
+		? _dataMedia->thumbnailInline()
+		: nullptr;
+	if (small || inlineThumb) {
+		if (_sideThumb.isNull() || (small && !_sideThumbLoaded)) {
+			_sideThumbLoaded = (small != nullptr);
+			const auto options = Images::Option::RoundSmall
+				| (_sideThumbLoaded
+					? Images::Option()
+					: Images::Option::Blur);
+			const auto image = small ? small : inlineThumb;
+			_sideThumb = image->pixNoCache(
+				thumb * style::DevicePixelRatio(),
+				{
+					.options = options,
+					.outer = QSize(thumb, thumb),
+				});
+		}
+		if (clip.intersects(rthumb)) {
+			p.drawPixmap(rthumb.topLeft(), _sideThumb);
+		}
+	} else if (clip.intersects(rthumb)) {
+		p.setPen(Qt::NoPen);
+		p.setBrush(st::overviewFileThumbBg);
+		p.drawRoundedRect(
+			rthumb,
+			st::roundRadiusSmall,
+			st::roundRadiusSmall);
+	}
+	if (selected && clip.intersects(rthumb)) {
+		p.setPen(Qt::NoPen);
+		p.setBrush(st::defaultTextPalette.selectOverlay);
+		p.drawRoundedRect(
+			rthumb,
+			st::roundRadiusSmall,
+			st::roundRadiusSmall);
+	}
+	if (_spoiler) {
+		const auto paused = context->paused || On(PowerSaving::kChatSpoiler);
+		Ui::FillSpoilerRect(
+			p,
+			rthumb,
+			Ui::DefaultImageSpoiler().frame(
+				_spoiler->index(context->ms, paused)));
+	}
+
+	QRect border(style::rtlrect(
+		thumb + layout.filePadding.right(),
+		0,
+		_width - thumb - layout.filePadding.right(),
+		st::linksBorder,
+		_width));
+	if (clip.intersects(border)) {
+		p.fillRect(clip.intersected(border), st::linksBorderFg);
+	}
+
+	const auto nameleft = thumb + layout.filePadding.right();
+	const auto nametop = st::linksBorder + layout.fileNameTop;
+	const auto statustop = st::linksBorder + layout.fileStatusTop;
+	const auto availwidth = _width - nameleft;
+	const auto namewidth = std::min(availwidth, _footerName.maxWidth());
+	if (clip.intersects(style::rtlrect(
+		nameleft,
+		nametop,
+		namewidth,
+		st::semiboldFont->height,
+		_width))) {
+		p.setPen(st::historyFileNameInFg);
+		_footerName.drawLeftElided(p, nameleft, nametop, namewidth, _width);
+	}
+	if (clip.intersects(style::rtlrect(
+		nameleft,
+		statustop,
+		availwidth,
+		st::normalFont->height,
+		_width))) {
+		p.setFont(st::normalFont);
+		p.setPen(st::mediaInFg);
+		_footerDetails.drawLeftElided(
+			p,
+			nameleft,
+			statustop,
+			availwidth,
+			_width);
+	}
+
+	const auto checkDelta = thumb
+		- st::overviewCheckSkip
+		- st::overviewSmallCheck.size;
+	paintCheckbox(
+		p,
+		{ checkDelta, int(st::linksBorder + layout.filePadding.top()) + checkDelta },
+		selected,
+		context);
 }
 
 void Photo::requestGoodPix() {
@@ -628,8 +802,8 @@ void Photo::itemDataChanged() {
 	if (_storyPinned != pinned || _storyHidden != hidden) {
 		_storyPinned = pinned;
 		_storyHidden = hidden;
-		delegate()->repaintItem(this);
 	}
+	delegate()->repaintItem(this);
 }
 
 void Photo::clearHeavyPart() {
@@ -1355,6 +1529,7 @@ Document::Document(
 	const style::OverviewFileLayout &st)
 : RadialProgressItem(delegate, parent)
 , _data(fields.document)
+, _nameOverride(fields.nameOverride)
 , _msgl(parent->isHistoryEntry()
 	? JumpToMessageClickHandler(parent)
 	: nullptr)
@@ -1375,14 +1550,19 @@ Document::Document(
 	? fields.dateOverride
 	: parent->date())))
 , _ext(_generic.ext)
-, _datew(st::normalFont->width(_date)) {
+, _datew(st::normalFont->width(_date))
+, _hideDate(fields.hideDate)
+, _cover(LookupVideoCover(fields.document, parent))
+, _statusSuffix(fields.statusSuffix)
+, _boldName(fields.boldName) {
 	_name.setMarkedText(
-		st::defaultTextStyle,
-		(!_forceFileLayout
+		(_boldName ? st::semiboldTextStyle : st::defaultTextStyle),
+		(!_nameOverride.isEmpty()
+			? tr::marked(_nameOverride)
+			: !_forceFileLayout
 			? Ui::Text::FormatSongNameFor(_data).textWithEntities()
 			: Ui::Text::FormatDownloadsName(_data)),
 		_documentNameOptions);
-
 	AddComponents(Info::Bit());
 
 	setDocumentLinks(_data);
@@ -1429,8 +1609,10 @@ Document::Document(
 
 void Document::itemDataChanged() {
 	_name.setMarkedText(
-		st::defaultTextStyle,
-		(!_forceFileLayout
+		(_boldName ? st::semiboldTextStyle : st::defaultTextStyle),
+		(!_nameOverride.isEmpty()
+			? tr::marked(_nameOverride)
+			: !_forceFileLayout
 			? Ui::Text::FormatSongNameFor(_data).textWithEntities()
 			: Ui::Text::FormatDownloadsName(_data)),
 		_documentNameOptions);
@@ -1462,6 +1644,14 @@ void Document::paint(Painter &p, const QRect &clip, TextSelection selection, con
 	ensureDataMediaCreated();
 
 	const auto selected = (selection == FullSelection);
+	if (p.opacity() != 1. || selected) {
+		qDebug() << "[TM] tm doc paint anomaly, file:"
+			<< _data->filename()
+			<< "opacity:"
+			<< p.opacity()
+			<< "selected:"
+			<< selected;
+	}
 
 	const auto cornerDownload = downloadInCorner();
 
@@ -1640,9 +1830,12 @@ void Document::paint(Painter &p, const QRect &clip, TextSelection selection, con
 	if (clip.intersects(style::rtlrect(nameleft, statustop, availwidth, st::normalFont->height, _width))) {
 		p.setFont(st::normalFont);
 		p.setPen((isSong && selected) ? st::mediaInFgSelected : st::mediaInFg);
-		p.drawTextLeft(nameleft, statustop, _width, _status.text());
+		const auto status = _statusSuffix.isEmpty()
+			? _status.text()
+			: u"%1 · %2"_q.arg(_status.text(), _statusSuffix);
+		p.drawTextLeft(nameleft, statustop, _width, status);
 	}
-	if (datetop >= 0 && clip.intersects(style::rtlrect(nameleft, datetop, _datew, st::normalFont->height, _width))) {
+	if (datetop >= 0 && !_hideDate && clip.intersects(style::rtlrect(nameleft, datetop, _datew, st::normalFont->height, _width))) {
 		p.setFont((_msgl && ClickHandler::showAsActive(_msgl))
 			? st::normalFont->underline()
 			: st::normalFont);
@@ -1659,6 +1852,9 @@ void Document::paint(Painter &p, const QRect &clip, TextSelection selection, con
 	const auto checkTop = (isSong
 		? _st.songPadding.top()
 		: (st::linksBorder + _st.filePadding.top())) + checkDelta;
+	if (selected) {
+		p.fillRect(0, 0, _width, _height, st::overviewPhotoSelectOverlay);
+	}
 	paintCheckbox(p, { checkLeft, checkTop }, selected, context);
 }
 
@@ -1681,18 +1877,32 @@ void Document::paintThumbnail(
 		const auto good = _data->isSvgImage()
 			? _dataMedia->goodThumbnail()
 			: nullptr;
+		const auto coverImage = _coverMedia
+			? _coverMedia->image(Data::PhotoSize::Small)
+			: nullptr;
+		const auto coverBlurred = (!coverImage && _coverMedia)
+			? _coverMedia->thumbnailInline()
+			: nullptr;
 		const auto thumbnail = good
 			? good
-			: _dataMedia->thumbnail();
-		const auto blurred = _dataMedia->thumbnailInline();
-		if (thumbnail || blurred) {
-			if (_thumb.isNull() || (thumbnail && !_thumbLoaded)) {
-				_thumbLoaded = (thumbnail != nullptr);
+			: (coverImage ? coverImage : _dataMedia->thumbnail());
+		const auto blurred = coverBlurred
+			? coverBlurred
+			: _dataMedia->thumbnailInline();
+		const auto best = thumbnail;
+		const auto bestInline = blurred;
+		if (best || bestInline) {
+			const auto fromCover = (best && best == coverImage);
+			if (_thumb.isNull()
+				|| (best && !_thumbLoaded)
+				|| (best && fromCover != _thumbFromCover)) {
+				_thumbFromCover = fromCover;
+				_thumbLoaded = (best != nullptr);
 				const auto options = Images::Option::RoundSmall
 					| (_thumbLoaded
 						? Images::Option()
 						: Images::Option::Blur);
-				const auto image = thumbnail ? thumbnail : blurred;
+				const auto image = best ? best : bestInline;
 				_thumb = image->pixNoCache(
 					_thumbw * style::DevicePixelRatio(),
 					{
@@ -1701,9 +1911,27 @@ void Document::paintThumbnail(
 							_st.fileThumbSize,
 							_st.fileThumbSize),
 					});
+				auto source = "media";
+				if (!best) {
+					source = "inline";
+				} else if (coverImage && best == coverImage) {
+					source = "cover";
+				}
+				qDebug() << "[TM] video thumb"
+					<< _data->filename()
+					<< "source:"
+					<< source;
 			}
 			p.drawPixmap(rthumb.topLeft(), _thumb);
 		} else {
+			if (_cover || _data->hasThumbnail()) {
+				qDebug() << "[TM] video thumb"
+					<< _data->filename()
+					<< "no image yet, cover:"
+					<< (_cover != nullptr)
+					<< "hasThumb:"
+					<< _data->hasThumbnail();
+			}
 			p.setPen(Qt::NoPen);
 			p.setBrush(st::overviewFileThumbBg);
 			p.drawRoundedRect(
@@ -1949,11 +2177,16 @@ void Document::ensureDataMediaCreated() const {
 		_dataMedia->goodThumbnailWanted();
 		Data::DocumentMedia::CheckGoodThumbnail(_data);
 	}
+	if (_cover && !_coverMedia) {
+		_coverMedia = _cover->createMediaView();
+		_cover->load(Data::PhotoSize::Small, parent()->fullId());
+	}
 	delegate()->registerHeavyItem(this);
 }
 
 void Document::clearHeavyPart() {
 	_dataMedia = nullptr;
+	_coverMedia = nullptr;
 }
 
 auto Document::externalLoading() const
@@ -1998,7 +2231,7 @@ bool Document::iconAnimated() const {
 
 bool Document::withThumb() const {
 	return !songLayout()
-		&& (_data->hasThumbnail() || _data->isSvgImage());
+		&& (_data->hasThumbnail() || _data->isSvgImage() || _cover);
 }
 
 bool Document::updateStatusText() {
@@ -2062,6 +2295,7 @@ ForwardSummary::ForwardSummary(
 : RadialProgressItem(delegate, parent)
 , _snapshot(std::move(fields.snapshot))
 , _noThumb(fields.noThumb)
+, _threeLineStatus(fields.threeLineStatus)
 , _st(st) {
 	AddComponents(Info::Bit());
 	setLinks(nullptr, nullptr, std::move(fields.action));
@@ -2070,31 +2304,51 @@ ForwardSummary::ForwardSummary(
 
 void ForwardSummary::update() {
 	_data = _snapshot ? _snapshot() : ForwardSummaryData();
-	_statusText.setText(st::defaultTextStyle, _data.status);
-	_statusDateText.setText(st::defaultTextStyle, _data.statusDate);
+	_titleText.setText(
+		st::semiboldTextStyle,
+		_data.title,
+		Ui::NameTextOptions());
+	auto status = _data.status;
+	if (!_threeLineStatus && !_data.statusDate.isEmpty()) {
+		status += u" · "_q + _data.statusDate;
+	}
+	_statusText.setText(st::defaultTextStyle, status);
+	_dateText.setText(
+		st::defaultTextStyle,
+		_threeLineStatus ? _data.statusDate : QString());
+	if (_data.title.isEmpty() && _data.status.isEmpty()) {
+		qDebug() << "[TM] empty fw header, parent:"
+			<< parent()->fullId().msg.bare;
+	}
 }
 
 void ForwardSummary::initDimensions() {
 	_maxw = _st.maxWidth;
+	const auto textHeight = (_threeLineStatus ? 3 : 2)
+		* st::normalFont->height;
 	if (_noThumb) {
 		_minh = st::linksBorder
-			+ _st.fileStatusTop
-			+ st::normalFont->height
-			+ (_data.statusDate.isEmpty() ? 0 : st::normalFont->height)
+			+ _st.fileNameTop
+			+ textHeight
 			+ _st.filePadding.bottom();
 		return;
 	}
-	_minh = _st.filePadding.top()
-		+ _st.fileThumbSize
-		+ _st.filePadding.bottom()
-		+ st::lineWidth
-		+ (_data.statusDate.isEmpty() ? 0 : st::normalFont->height);
+	_minh = std::max(
+		_st.filePadding.top()
+			+ _st.fileThumbSize
+			+ _st.filePadding.bottom()
+			+ st::lineWidth,
+		st::linksBorder
+			+ _st.fileNameTop
+			+ textHeight
+			+ _st.filePadding.bottom());
 }
 
 bool ForwardSummary::elementsAnimating() const {
 	return RadialProgressItem::elementsAnimating()
+		|| _titleText.hasPersistentAnimation()
 		|| _statusText.hasPersistentAnimation()
-		|| _statusDateText.hasPersistentAnimation();
+		|| _dateText.hasPersistentAnimation();
 }
 
 QRect ForwardSummary::buttonRect() const {
@@ -2114,11 +2368,18 @@ void ForwardSummary::paint(
 		TextSelection selection,
 		const PaintContext *context) {
 	const auto selected = (selection == FullSelection);
+	if (p.opacity() != 1. || selected) {
+		qDebug() << "[TM] tm fw paint anomaly, title:"
+			<< _data.title
+			<< "opacity:"
+			<< p.opacity()
+			<< "selected:"
+			<< selected;
+	}
 	const auto nameleft = _noThumb
 		? _st.filePadding.left()
 		: (_st.fileThumbSize + _st.filePadding.right());
 	const auto nametop = st::linksBorder + _st.fileNameTop;
-	const auto statustop = st::linksBorder + _st.fileStatusTop;
 
 	QRect border(style::rtlrect(nameleft, 0, _width - nameleft, st::linksBorder, _width));
 	if (!context->skipBorder && clip.intersects(border)) {
@@ -2197,48 +2458,61 @@ void ForwardSummary::paint(
 	}
 
 	const auto availwidth = _width - nameleft;
-	auto title = _data.title;
-	if (!_data.srcName.isEmpty() && !_data.dstName.isEmpty()) {
-		const auto arrow = u" → "_q;
-		const auto full = _data.srcName + arrow + _data.dstName;
-		if (st::normalFont->width(full) > availwidth) {
-			const auto dstNeed = st::normalFont->width(_data.dstName);
-			const auto dstW = std::min(dstNeed, availwidth / 2);
-			const auto srcW = std::max(
-				0,
-				availwidth
-					- st::normalFont->width(arrow)
-					- dstW);
-			title = st::normalFont->elided(_data.srcName, srcW)
-				+ arrow
-				+ st::normalFont->elided(_data.dstName, dstW);
-		} else {
-			title = full;
-		}
+	const auto lineHeight = st::normalFont->height;
+	const auto lineCount = _threeLineStatus ? 3 : 2;
+	auto top = nametop;
+	if (!_noThumb) {
+		const auto thumbTop = st::linksBorder + _st.filePadding.top();
+		const auto centered = thumbTop
+			+ (_st.fileThumbSize - lineCount * lineHeight) / 2;
+		top = std::max(centered, nametop);
 	}
-	if (clip.intersects(style::rtlrect(nameleft, nametop, availwidth, st::semiboldFont->height, _width))) {
-		p.setFont(st::normalFont);
-		p.setPen(st::historyFileNameInFg);
-		p.save();
-		p.setClipRect(style::rtlrect(nameleft, nametop, availwidth, st::semiboldFont->height, _width));
-		p.drawTextLeft(nameleft, nametop, _width, title);
-		p.restore();
+	const auto titlewidth = std::min(availwidth, _titleText.maxWidth());
+	if (clip.intersects(style::rtlrect(
+		nameleft,
+		top,
+		titlewidth,
+		lineHeight,
+		_width))) {
+		p.setPen(st::windowBoldFg);
+		_titleText.drawLeftElided(p, nameleft, top, titlewidth, _width);
 	}
+	const auto statustop = top + lineHeight;
 	const auto statuswidth = std::min(availwidth, _statusText.maxWidth());
-	if (clip.intersects(style::rtlrect(nameleft, statustop, statuswidth, st::normalFont->height, _width))) {
+	if (clip.intersects(style::rtlrect(
+		nameleft,
+		statustop,
+		statuswidth,
+		lineHeight,
+		_width))) {
+		p.setPen(st::mediaInFg);
 		_statusText.drawLeftElided(p, nameleft, statustop, statuswidth, _width);
 	}
-	if (!_data.statusDate.isEmpty()) {
-		const auto datetop = statustop + st::normalFont->height;
-		const auto datewidth = std::min(availwidth, _statusDateText.maxWidth());
-		if (clip.intersects(style::rtlrect(nameleft, datetop, datewidth, st::normalFont->height, _width))) {
-			_statusDateText.drawLeftElided(p, nameleft, datetop, datewidth, _width);
+	if (_threeLineStatus) {
+		const auto datetop = top + 2 * lineHeight;
+		const auto datewidth = std::min(availwidth, _dateText.maxWidth());
+		if (clip.intersects(style::rtlrect(
+			nameleft,
+			datetop,
+			datewidth,
+			lineHeight,
+			_width))) {
+			p.setPen(st::mediaInFg);
+			_dateText.drawLeftElided(
+				p,
+				nameleft,
+				datetop,
+				datewidth,
+				_width);
 		}
 	}
 
 	const auto checkDelta = _st.fileThumbSize
 		- st::overviewCheckSkip
 		- st::overviewSmallCheck.size;
+	if (selected) {
+		p.fillRect(0, 0, _width, _height, st::overviewPhotoSelectOverlay);
+	}
 	paintCheckbox(
 		p,
 		{ checkDelta, int(st::linksBorder + _st.filePadding.top()) + checkDelta },

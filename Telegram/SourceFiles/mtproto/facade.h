@@ -18,6 +18,20 @@ void pause();
 void unpause();
 [[nodiscard]] rpl::producer<> unpaused();
 
+// A -429 transport error is the server killing the connection of one DC and
+// saying nothing about how long the client should stay away. The moment is
+// remembered per shifted DC id, so the file piece pacing can keep that DC
+// silent while its connection is coming back and pace it slower afterwards.
+struct TransportFlood {
+	crl::time silenceUntil = 0;
+	bool flooded = false;
+	uint64 cuts = 0;
+};
+
+void NoteTransportFlood(ShiftedDcId shiftedDcId);
+void NoteTransportFloodRecovered(ShiftedDcId shiftedDcId);
+[[nodiscard]] TransportFlood TransportFloodState(ShiftedDcId shiftedDcId);
+
 } // namespace details
 
 // send(MTPhelp_GetConfig(), MTP::configDcId(dc)) - for dc enumeration

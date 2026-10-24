@@ -210,6 +210,9 @@ struct MediaOptions {
 	bool storyShowPinned = false;
 	bool storyHidden = false;
 	bool storyShowHidden = false;
+	QString footerName;
+	QString footerDetails;
+	bool sideRow = false;
 };
 
 class Photo final : public ItemBase {
@@ -238,17 +241,27 @@ private:
 	void ensureDataMediaCreated() const;
 	void setPixFrom(not_null<Image*> image);
 	void requestGoodPix();
+	void paintSideRow(
+		Painter &p,
+		const QRect &clip,
+		TextSelection selection,
+		const PaintContext *context);
 	void goodPixReady(QImage image, uint32 id);
 	[[nodiscard]] ClickHandlerPtr makeOpenPhotoHandler();
 	void clearSpoiler();
 
 	const not_null<PhotoData*> _data;
+	Ui::Text::String _footerName, _footerDetails;
+	bool _hasFooter = false;
+	const bool _sideRow = false;
 	mutable std::shared_ptr<Data::PhotoMedia> _dataMedia;
 	std::unique_ptr<Ui::SpoilerAnimation> _spoiler;
 
 	uint32 _goodRequestId = 0;
 	QImage _pix;
 	QImage _hiddenBgCache;
+	QPixmap _sideThumb;
+	bool _sideThumbLoaded = false;
 	bool _goodLoaded : 1 = false;
 	bool _goodRequested : 1 = false;
 	bool _sensitiveSpoiler : 1 = false;
@@ -441,6 +454,7 @@ struct DocumentExternalLoading {
 struct DocumentFields {
 	not_null<DocumentData*> document;
 	TimeId dateOverride = 0;
+	QString nameOverride;
 	bool forceFileLayout = false;
 	bool forceCancel = false;
 	std::function<bool()> forceCancelCheck;
@@ -449,6 +463,9 @@ struct DocumentFields {
 	std::function<bool(qint64 *, qint64 *)> savedProgress;
 	Fn<std::optional<DocumentExternalLoading>()> externalLoading;
 	Fn<void()> externalCancel;
+	bool boldName = false;
+	bool hideDate = false;
+	QString statusSuffix;
 };
 
 class Document final : public RadialProgressItem {
@@ -499,6 +516,7 @@ private:
 	[[nodiscard]] bool activeLoading() const;
 
 	not_null<DocumentData*> _data;
+	QString _nameOverride;
 	mutable std::shared_ptr<Data::DocumentMedia> _dataMedia;
 	StatusText _status;
 	ClickHandlerPtr _msgl, _namel;
@@ -508,6 +526,7 @@ private:
 	const Fn<std::optional<DocumentExternalLoading>()> _externalLoading;
 
 	bool _thumbLoaded = false;
+	bool _thumbFromCover = false;
 	bool _forceFileLayout = false;
 	bool _forceCancel = false;
 	std::function<bool()> _forceCancelCheck;
@@ -519,6 +538,11 @@ private:
 	int _datew = 0;
 	int _extw = 0;
 	int _thumbw = 0;
+	bool _hideDate = false;
+	PhotoData *_cover = nullptr;
+	mutable std::shared_ptr<Data::PhotoMedia> _coverMedia;
+	QString _statusSuffix;
+	bool _boldName = false;
 
 	bool withThumb() const;
 	bool updateStatusText();
@@ -540,6 +564,7 @@ struct ForwardSummaryFields {
 	Fn<ForwardSummaryData()> snapshot;
 	ClickHandlerPtr action;
 	bool noThumb = false;
+	bool threeLineStatus = false;
 };
 
 class ForwardSummary final : public RadialProgressItem {
@@ -559,6 +584,9 @@ public:
 	[[nodiscard]] bool selectionConsumesClick(QPoint) const override;
 
 	void itemDataChanged() override;
+	[[nodiscard]] bool hasContent() const {
+		return !_data.title.isEmpty() || !_data.status.isEmpty();
+	}
 
 protected:
 	float64 dataProgress() const override;
@@ -569,11 +597,13 @@ private:
 	void update();
 	[[nodiscard]] QRect buttonRect() const;
 
+	Ui::Text::String _titleText;
 	Ui::Text::String _statusText;
-	Ui::Text::String _statusDateText;
+	Ui::Text::String _dateText;
 	ForwardSummaryData _data;
 	Fn<ForwardSummaryData()> _snapshot;
 	const bool _noThumb = false;
+	const bool _threeLineStatus = false;
 	const style::OverviewFileLayout &_st;
 
 };

@@ -336,6 +336,8 @@ public:
 		SliceType slice);
 	void setTakeoutId(std::optional<uint64> id);
 	[[nodiscard]] std::optional<uint64> takeoutId() const;
+	[[nodiscard]] std::optional<uint64> takeoutIdFor(
+		not_null<const PeerData*> peer) const;
 	void ensureTakeout(
 		not_null<PeerData*> peer,
 		Fn<void(bool)> done,
@@ -692,6 +694,14 @@ private:
 		Data::FileOrigin origin,
 		FileReferencesHandler &&handler,
 		Request &&data);
+	void requestPeerDialogsReference(
+		Data::FileOrigin origin,
+		FileReferencesHandler &&handler,
+		not_null<PeerData*> peer);
+	void finishFileReference(
+		Data::FileOrigin origin,
+		UpdatedFileReferences &&parsed);
+	void failFileReference(Data::FileOrigin origin);
 
 	void migrateDone(
 		not_null<PeerData*> peer,
@@ -709,6 +719,7 @@ private:
 		not_null<ChannelData*>,
 		MessageDataRequests> _channelMessageDataRequests;
 	SingleQueuedInvokation _messageDataResolveDelayed;
+	base::Timer _messageDataResolveStaggerTimer;
 
 	using PeerRequests = base::flat_map<PeerData*, mtpRequestId>;
 	PeerRequests _fullPeerRequests;
@@ -907,9 +918,13 @@ private:
 	base::flat_map<FullStoryId, QString> _unlikelyStoryLinks;
 
 	std::optional<uint64> _takeoutId;
+	// Peers whose content was explicitly asked to go through the session;
+	// the session bucket is far stricter than the normal one, so background
+	// resolves of other restricted peers must not ride along.
+	std::vector<PeerId> _takeoutPeers;
 	int64 _takeoutFileMaxSize = 0;
 	int _takeoutViewers = 0;
-	bool _takeoutBorrowed = false;
+	int _takeoutBorrowCount = 0;
 	bool _takeoutInitializing = false;
 	bool _takeoutFinishing = false;
 	int _takeoutInitRetries = 0;
@@ -924,5 +939,6 @@ private:
 	void processTakeoutRequests();
 	void initTakeoutSession();
 	void failTakeoutRequests();
+	[[nodiscard]] bool containsTakeoutPeer(PeerId peerId) const;
 
 };

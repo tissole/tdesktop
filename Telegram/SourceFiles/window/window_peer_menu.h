@@ -1,4 +1,4 @@
-﻿/*
+/*
 This file is part of Telegram Desktop,
 the official desktop application for the Telegram messaging service.
 
@@ -95,6 +95,9 @@ void AddSenderUserpicModerateAction(
 void PeerMenuHidePinnedMessage(not_null<PeerData*> peer);
 void PeerMenuUnhidePinnedMessage(not_null<PeerData*> peer);
 void PeerMenuExportChat(
+	not_null<Window::SessionController*> controller,
+	not_null<PeerData*> peer);
+void PeerMenuScanChat(
 	not_null<Window::SessionController*> controller,
 	not_null<PeerData*> peer);
 void PeerMenuExportTopic(

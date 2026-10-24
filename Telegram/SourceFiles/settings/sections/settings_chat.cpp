@@ -1942,7 +1942,9 @@ void SetupDataStorage(
 		{ &st::menuIconTransfer }
 	)->setClickedCallback([=] {
 		controller->showSection(
-			Info::Downloads::Make(controller->session().user()));
+			Info::Downloads::Make(
+				controller->session().user(),
+				Info::Downloads::LastActivityTab()));
 	});
 
 	const auto ask = container->add(object_ptr<Ui::SettingsButton>(
@@ -2181,16 +2183,16 @@ void SetupChatListQuickAction(
 				actionWidth,
 				height);
 
-	        auto path = QPainterPath();
-	        path.addRoundedRect(
-	        	QRect(
-	        		-actionWidth,
-	        		0,
-	        		rect::right(rect) + actionWidth,
-	        		height),
-	        	st::roundRadiusLarge,
-	        	st::roundRadiusLarge);
-	        p.setClipPath(path);
+			auto path = QPainterPath();
+			path.addRoundedRect(
+				QRect(
+					-actionWidth,
+					0,
+					rect::right(rect) + actionWidth,
+					height),
+				st::roundRadiusLarge,
+				st::roundRadiusLarge);
+			p.setClipPath(path);
 
 			const auto label = actionToLabel(group->current());
 			const auto isDisabled = (label == LabelType::Disabled);

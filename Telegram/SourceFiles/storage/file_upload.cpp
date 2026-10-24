@@ -530,6 +530,7 @@ void Uploader::upload(
 		FullMsgId itemId,
 		const std::shared_ptr<FilePrepareResult> &file,
 		int resumeFromParts) {
+	Core::App().downloadManager().noteUploadActivity();
 	auto preparing = false;
 	if (file->type == SendMediaType::Photo) {
 		const auto photo = session().data().processPhoto(
@@ -616,6 +617,14 @@ void Uploader::upload(
 		++_jobId;
 	}
 	_queue.back().jobIndex = _jobId;
+	if (file->batch) {
+		const auto name = !file->filename.isEmpty()
+			? file->filename
+			: QFileInfo(file->filepath).fileName();
+		if (!name.isEmpty()) {
+			file->batch->displayName = name;
+		}
+	}
 	if (!EnhancedForward::isEnhancedUpload(itemId)) {
 		_jobCounterChanged.fire({});
 	}
@@ -1509,7 +1518,10 @@ void Uploader::finishEntry(std::vector<Entry>::iterator i) {
 			.options = options,
 			.edit = edit,
 		};
-		if (entry.file->videoCover) {
+		if (entry.file->coverInput) {
+			ready.info.videoCover = entry.file->coverInput;
+			_documentReady.fire(std::move(ready));
+		} else if (entry.file->videoCover) {
 			uploadVideoCover(std::move(ready), entry.file->videoCover);
 		} else {
 			_documentReady.fire(std::move(ready));
@@ -2001,14 +2013,26 @@ std::vector<Uploader::UiPendingUpload> Uploader::pendingUploads() const {
 }
 
 QString Uploader::firstUploadName() const {
-	if (_queue.empty()) {
-		return QString();
+	auto fallback = QString();
+	for (const auto &entry : _queue) {
+		const auto &file = entry.file;
+		if (!file) {
+			continue;
+		}
+		const auto name = !file->filename.isEmpty()
+			? file->filename
+			: QFileInfo(file->filepath).fileName();
+		if (name.isEmpty()) {
+			continue;
+		}
+		if (fallback.isEmpty()) {
+			fallback = name;
+		}
+		if ((entry.docSentSize + entry.sentSize) > 0) {
+			return name;
+		}
 	}
-	const auto &file = _queue.front().file;
-	if (!file) {
-		return QString();
-	}
-	return QFileInfo(file->filepath).fileName();
+	return fallback;
 }
 
 QString Uploader::firstPendingUploadName() const {

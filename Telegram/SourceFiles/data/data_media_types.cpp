@@ -1090,6 +1090,9 @@ MediaFile::MediaFile(
 , _hasQualitiesList(args.hasQualitiesList)
 , _spoiler(args.spoiler) {
 	parent->history()->owner().registerDocumentItem(_document, parent);
+	if (_videoCover) {
+		parent->history()->owner().registerPhotoItem(_videoCover, parent);
+	}
 
 	if (!_emoji.isEmpty()) {
 		if (const auto emoji = Ui::Emoji::Find(_emoji)) {
@@ -1109,6 +1112,11 @@ MediaFile::~MediaFile() {
 	parent()->history()->owner().unregisterDocumentItem(
 		_document,
 		parent());
+	if (_videoCover) {
+		parent()->history()->owner().unregisterPhotoItem(
+			_videoCover,
+			parent());
+	}
 }
 
 std::unique_ptr<Media> MediaFile::clone(not_null<HistoryItem*> parent) {
@@ -1463,7 +1471,10 @@ bool MediaFile::updateSentMedia(const MTPMessageMedia &media) {
 	}
 	const auto owner = &parent()->history()->owner();
 	owner->documentConvert(_document, *content);
-	if (const auto cover = _videoCover ? data.vvideo_cover() : nullptr) {
+	if (const auto cover = data.vvideo_cover()) {
+		if (!_videoCover) {
+			return false;
+		}
 		owner->photoConvert(_videoCover, *cover);
 	}
 	return true;

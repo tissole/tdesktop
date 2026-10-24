@@ -339,6 +339,16 @@ object_ptr<Ui::SlideWrap<Ui::RpWidget>> SetupSharedMediaClassic(
 			icon,
 			st::infoSharedMediaButtonIconPosition);
 	};
+	const auto addScanTotalButton = [&] {
+		auto result = Media::AddScanTotalButton(
+			content,
+			peer->id,
+			tracker);
+		object_ptr<FloatingIcon>(
+			result,
+			st::infoIconMediaFile,
+			st::infoSharedMediaButtonIconPosition);
+	};
 
 	if (!topic) {
 		addStoriesButton(peer, st::infoIconMediaStories);
@@ -354,6 +364,7 @@ object_ptr<Ui::SlideWrap<Ui::RpWidget>> SetupSharedMediaClassic(
 	addMediaButton(MediaType::Poll, st::infoIconMediaPoll);
 	addMediaButton(MediaType::Link, st::infoIconMediaLink);
 	addMediaButton(MediaType::GIF, st::infoIconMediaGif);
+	addScanTotalButton();
 	if (const auto bot = peer->asBot()) {
 		addCommonGroupsButton(bot, st::infoIconMediaGroup);
 		addSimilarPeersButton(bot, st::infoIconMediaBot);

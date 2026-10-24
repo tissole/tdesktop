@@ -272,7 +272,7 @@ private:
 	rpl::variable<bool> _tagsEnabled = false;
 
 	std::deque<FilterId> _exceptionsToLoad;
-	mtpRequestId _exceptionsLoadRequestId = 0;
+	bool _exceptionsLoadInFlight = false;
 
 	base::flat_map<FilterId, std::vector<ChatFilterLink>> _chatlistLinks;
 	rpl::event_stream<FilterId> _chatlistLinksUpdated;

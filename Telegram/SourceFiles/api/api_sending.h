@@ -39,7 +39,8 @@ struct MusicSelectionItem {
 void SendExistingDocument(
 	MessageToSend &&message,
 	not_null<DocumentData*> document,
-	std::optional<MsgId> localMessageId = std::nullopt);
+	std::optional<MsgId> localMessageId = std::nullopt,
+	PhotoData *videoCover = nullptr);
 
 void SendMusicSelection(
 	MessageToSend &&message,

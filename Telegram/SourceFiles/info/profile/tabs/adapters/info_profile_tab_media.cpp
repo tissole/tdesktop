@@ -8,7 +8,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/profile/tabs/adapters/info_profile_tab_media.h"
 
 #include "base/options.h"
+#include "chat_scan/chat_scan_index.h"
 #include "data/data_forum_topic.h"
+#include "main/main_session.h"
 #include "data/data_peer.h"
 #include "data/data_saved_sublist.h"
 #include "data/data_session.h"
@@ -22,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/profile/tabs/adapters/info_profile_tab_sub_controller.h"
 #include "info/profile/tabs/info_profile_tab_skeleton.h"
 #include "lang/lang_keys.h"
+#include "ui/text/format_values.h"
 #include "ui/text/text_utilities.h"
 #include "ui/effects/animations.h"
 #include "ui/painter.h"
@@ -160,17 +163,42 @@ public:
 			.title = MediaTabTitle(_type) | rpl::map([](const QString &text) {
 				return TextWithEntities{ text };
 			}),
-			.subtitle = SharedMediaCountValue(
-				_countPeer,
-				_topicRootId,
-				_monoforumPeerId,
-				_context.migrated,
-				_type
-			) | rpl::map([phrase = Media::MediaTextPhrase(_type)](int count) {
-				return TextWithEntities{ (count > 0)
-					? phrase(tr::now, lt_count, count)
-					: QString() };
-			}),
+			.subtitle = [&] {
+				const auto peerId = _countPeer->id;
+				const auto categories = Media::ScanCategories(_type);
+				auto sizes = ChatScan::ScanSizeVersion(
+				) | rpl::map([=] {
+					auto bytes = int64(0);
+					for (const auto category : categories) {
+						bytes += ChatScan::ScanSizeBytes(
+							peerId,
+							category);
+					}
+					return bytes;
+				});
+				return rpl::combine(
+					SharedMediaCountValue(
+						_countPeer,
+						_topicRootId,
+						_monoforumPeerId,
+						_context.migrated,
+						_type),
+					std::move(sizes)
+				) | rpl::map([phrase = Media::MediaTextPhrase(_type)](
+						int count,
+						int64 bytes) {
+					if (count <= 0) {
+						return TextWithEntities{};
+					}
+					auto text = phrase(tr::now, lt_count, count);
+					if (bytes > 0) {
+						text += u" ("_q
+							+ Ui::FormatSizeText(bytes)
+							+ u")"_q;
+					}
+					return TextWithEntities{ text };
+				});
+			}(),
 			.fillMenu = (MediaTabGrid(_type)
 				? Fn<void(const Ui::Menu::MenuCallback&)>(crl::guard(
 					base::make_weak(_list),

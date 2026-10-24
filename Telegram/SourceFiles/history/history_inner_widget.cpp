@@ -132,6 +132,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_messages.h"
 #include "data/data_poll.h"
 #include "data/data_file_click_handler.h"
+#include "data/data_file_hash.h"
 #include "data/data_histories.h"
 #include "data/data_changes.h"
 #include "dialogs/ui/dialogs_video_userpic.h"
@@ -142,6 +143,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtWidgets/QApplication>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtCore/QMimeData>
 #include <api/api_sending.h>
 
@@ -3573,7 +3575,11 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 									if (const auto sublist = item->savedSublist()) {
 										message.action.replyTo.monoforumPeerId = item->history()->peer->isSelf() ? nullptr : sublist->monoforumPeerId();
 									}
-									Api::SendExistingDocument(std::move(message), document);
+									Api::SendExistingDocument(
+										std::move(message),
+										document,
+										std::nullopt,
+										item->media()->videoCover());
 								}, & st::menuIconDiscussion);
 							}
 						}
@@ -4016,7 +4022,11 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 									if (const auto sublist = item->savedSublist()) {
 										message.action.replyTo.monoforumPeerId = item->history()->peer->isSelf() ? nullptr : sublist->monoforumPeerId();
 									}
-									Api::SendExistingDocument(std::move(message), document);
+									Api::SendExistingDocument(
+										std::move(message),
+										document,
+										std::nullopt,
+										item->media()->videoCover());
 								}, & st::menuIconDiscussion);
 							}
 						}
@@ -4281,16 +4291,55 @@ void HistoryInner::savePhotoToFile(not_null<PhotoData*> photo, HistoryItem *item
 		filter,
 		filedialogDefaultName(u"photo"_q, u".jpg"_q),
 		crl::guard(this, [=](const QString &result) {
-			if (!result.isEmpty()) {
-				media->saveToFile(result);
-				if (item) {
-					auto &manager = Core::App().downloadManager();
-					manager.addLoaded({
-						.item = item,
-						.photo = photo,
-					}, result, manager.computeNextStartDate());
+			if (result.isEmpty()) {
+				return;
+			}
+			auto batch = MakeDownloadBatch(1);
+			batch->sessionId = photo->session().uniqueId();
+			batch->displayName = QFileInfo(result).fileName();
+			auto &manager = Core::App().downloadManager();
+			auto &db = manager.ensureDedupDb();
+			const auto dedupOn = GetEnhancedBool(
+				"prevent_download_duplicates");
+			auto hash = QByteArray();
+			if (dedupOn && db.isOpen()) {
+				if (db.containsDocId(
+					Data::DedupDb::Table::Downloads,
+					uint64(photo->id))) {
+					batch->addDuplicate();
+					return;
+				}
+				if (const auto bytes = media->imageBytes(
+					Data::PhotoSize::Large);
+					!bytes.isEmpty()) {
+					hash = Data::ContentFingerprint(bytes);
+					if (!hash.isEmpty()
+						&& db.containsHash(
+							Data::DedupDb::Table::Downloads,
+							hash)) {
+						batch->addDuplicate();
+						return;
+					}
 				}
 			}
+			if (!media->saveToFile(result)) {
+				batch->addFailed();
+				return;
+			}
+			if (item) {
+				manager.addLoaded({
+					.item = item,
+					.photo = photo,
+				}, result, manager.computeNextStartDate());
+			}
+			if (db.isOpen()) {
+				db.insert(Data::DedupDb::Table::Downloads, {
+					.hash = hash,
+					.documentId = uint64(photo->id),
+					.status = u"f"_q,
+				});
+			}
+			batch->addDownloaded();
 		}));
 }
 

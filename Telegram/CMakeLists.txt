@@ -561,6 +561,18 @@ PRIVATE
     chat_helpers/tabbed_selector.h
     chat_helpers/ttl_media_layer_widget.cpp
     chat_helpers/ttl_media_layer_widget.h
+    chat_scan/chat_scan_api.cpp
+    chat_scan/chat_scan_api.h
+    chat_scan/chat_scan_index.cpp
+    chat_scan/chat_scan_index.h
+    chat_scan/chat_scan_top_bar.cpp
+    chat_scan/chat_scan_top_bar.h
+    chat_scan/hash/chunk_scheduler.cpp
+    chat_scan/hash/chunk_scheduler.h
+    chat_scan/hash/scan_queue.cpp
+    chat_scan/hash/scan_queue.h
+    chat_scan/view/chat_scan_box.cpp
+    chat_scan/view/chat_scan_box.h
     core/application.cpp
     core/application.h
     core/proxy_rotation_manager.cpp
@@ -637,6 +649,8 @@ PRIVATE
     data/business/data_business_info.h
     data/business/data_shortcut_messages.cpp
     data/business/data_shortcut_messages.h
+    data/chunk_limiter.cpp
+    data/chunk_limiter.h
     data/components/credits.cpp
     data/components/credits.h
     data/components/ephemeral_messages.cpp
@@ -719,6 +733,7 @@ PRIVATE
     data/data_download_manager.h
     data/data_file_hash.cpp
     data/data_file_hash.h
+    data/data_media_category.h
     data/data_drafts.cpp
     data/data_drafts.h
     data/data_emoji_statuses.cpp
@@ -835,6 +850,8 @@ PRIVATE
     data/data_wall_paper.h
     data/data_web_page.cpp
     data/data_web_page.h
+    data/file_chunk_fetcher.cpp
+    data/file_chunk_fetcher.h
     dialogs/ui/dialogs_layout.cpp
     dialogs/ui/dialogs_layout.h
     dialogs/ui/dialogs_message_view.cpp

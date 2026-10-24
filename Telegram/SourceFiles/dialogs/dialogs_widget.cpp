@@ -1573,7 +1573,7 @@ void Widget::setupDownloadBar() {
 			content.nfCount = 0;
 			content.nfDone = 0;
 			const auto create = (content.count
-				&& content.done < content.count
+				&& (content.done < content.count || content.keepVisible)
 				) && !_downloadBar;
 		if (create) {
 			_downloadBar = std::make_unique<Ui::DownloadBar>(
@@ -1619,9 +1619,10 @@ void Widget::setupUploadBar() {
 
 	Data::MakeUploadBarContent(
 	) | rpl::on_next(crl::guard(this, [=](Ui::DownloadBarContent &&content) {
-		const auto create = (content.uploadCount
-			&& content.uploadDone < content.uploadCount
-			&& !_uploadBar);
+			const auto create = (content.uploadCount
+				&& (content.uploadDone < content.uploadCount
+				|| content.keepVisible)
+				&& !_uploadBar);
 		if (create) {
 			_uploadBar = std::make_unique<Ui::DownloadBar>(
 				this,
@@ -1786,6 +1787,9 @@ void Widget::setupForwardsBar() {
 			efCount += batch.total;
 			efDone += batch.sent;
 			skipped += batch.skipped;
+			if (firstName.isEmpty() && !batch.lastFileName.isEmpty()) {
+				firstName = batch.lastFileName;
+			}
 		}
 		for (const auto &job : jobs) {
 			if (job.finished
@@ -1793,7 +1797,18 @@ void Widget::setupForwardsBar() {
 				continue;
 			}
 			for (const auto &item : job.progress.items) {
-				if (firstName.isEmpty() && !item.info.name.isEmpty()) {
+				if (item.cancelled || item.info.name.isEmpty()) {
+					continue;
+				}
+				if (item.state == EnhancedForward::ItemState::Downloading
+					|| item.state == EnhancedForward::ItemState::Uploading) {
+					firstName = item.info.name;
+					break;
+				}
+				if (firstName.isEmpty()
+					&& !item.sent
+					&& !item.dedupSkipped
+					&& item.state != EnhancedForward::ItemState::Done) {
 					firstName = item.info.name;
 				}
 			}
@@ -1821,8 +1836,17 @@ void Widget::setupForwardsBar() {
 			updateControlsGeometry();
 			return;
 		}
+		if (((efDone + nfDone) < (efCount + nfTotal))
+			|| !batches.empty()) {
+			if (Info::Downloads::LastActivityTab()
+				!= Info::Downloads::Tab::Forwards) {
+				Info::Downloads::SetLastActivityTab(
+					Info::Downloads::Tab::Forwards);
+			}
+		}
 		const auto create = !_forwardsBar
-			&& ((efDone + nfDone) < (efCount + nfTotal));
+			&& (((efDone + nfDone) < (efCount + nfTotal))
+				|| !batches.empty());
 		if (create) {
 			_forwardsBar = std::make_unique<Ui::DownloadBar>(
 				this,

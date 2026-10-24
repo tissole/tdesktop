@@ -1,4 +1,4 @@
-﻿/*
+/*
 This file is part of Telegram Desktop,
 the official desktop application for the Telegram messaging service.
 
@@ -1554,7 +1554,8 @@ FilePrepareResult::FilePrepareResult(FilePrepareDescriptor &&descriptor)
 , batch(std::move(descriptor.batch))
 , type(descriptor.type)
 , caption(std::move(descriptor.caption))
-, spoiler(descriptor.spoiler) {
+, spoiler(descriptor.spoiler)
+, coverInput(std::move(descriptor.coverInput)) {
 }
 
 void FilePrepareResult::setFileData(const QByteArray &filedata) {
@@ -1602,6 +1603,7 @@ FileLoadTask::FileLoadTask(Args &&args)
 , _displayName(std::move(args.displayName))
 , _content(std::move(args.content))
 , _videoCover(std::move(args.videoCover))
+, _coverInput(std::move(args.coverInput))
 , _information(std::move(args.information))
 , _type(args.type)
 , _caption(std::move(args.caption))
@@ -1613,6 +1615,11 @@ FileLoadTask::FileLoadTask(Args &&args)
 		|| _to.options.shortcutId
 		|| !_to.replaceMediaOf
 		|| IsServerMsgId(_to.replaceMediaOf));
+	if (_batch && _batch->displayName.isEmpty()) {
+		_batch->displayName = !_displayName.isEmpty()
+			? _displayName
+			: QFileInfo(_filepath).fileName();
+	}
 }
 
 FileLoadTask::FileLoadTask(VoiceArgs &&args)
@@ -2374,6 +2381,7 @@ void FileLoadTask::process(ProcessArgs &&args) {
 		.spoiler = _spoiler,
 		.album = _album,
 		.batch = _batch,
+		.coverInput = std::move(_coverInput),
 	});
 	if (const auto cover = _videoCover.get()) {
 		cover->process();

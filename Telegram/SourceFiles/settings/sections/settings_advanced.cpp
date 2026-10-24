@@ -184,7 +184,9 @@ void BuildDataStorageSection(SectionBuilder &builder) {
 		.onClick = [=] {
 			if (controller) {
 				controller->showSection(
-					Info::Downloads::Make(controller->session().user()));
+					Info::Downloads::Make(
+						controller->session().user(),
+						Info::Downloads::LastActivityTab()));
 			}
 		},
 		.keywords = { u"transfer manager"_q, u"downloads"_q, u"files"_q, u"uploads"_q },

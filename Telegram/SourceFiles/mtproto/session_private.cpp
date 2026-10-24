@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/details/mtproto_dump_to_text.h"
 #include "mtproto/details/mtproto_rsa_public_key.h"
 #include "mtproto/session.h"
+#include "mtproto/facade.h"
 #include "mtproto/mtproto_response.h"
 #include "mtproto/mtproto_dc_options.h"
 #include "mtproto/connection_abstract.h"
@@ -25,6 +26,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <ksandbox.h>
 #include <zlib.h>
+
+#include <algorithm>
 
 namespace MTP {
 namespace details {
@@ -48,6 +51,16 @@ constexpr auto kFastRequestDuration = crl::time(500);
 
 // If we can't connect for this time we will ask _instance to update config.
 constexpr auto kRequestConfigTimeout = 8 * crl::time(1000);
+
+// The DC keeps rejecting reconnects for a couple of seconds after a -429
+// kill; retrying within milliseconds only collects more -429s.
+constexpr auto kFloodReconnectDelay = 3 * crl::time(1000);
+
+// After a -429 the chunk fetcher observes the cut, cancels its outstanding
+// requests and re-admits them through the limiter. Give it a full poll cycle
+// before the transport resends whatever is still in haveSent, so the new
+// connection does not emit the old in-flight wave immediately.
+constexpr auto kDeferredResendDelay = 1 * crl::time(1000);
 
 // Don't try to handle messages larger than this size.
 constexpr auto kMaxMessageLength = 16 * 1024 * 1024;
@@ -165,6 +178,7 @@ SessionPrivate::SessionPrivate(
 , _currentDcType(_realDcType)
 , _state(DisconnectedState)
 , _retryTimer(thread, [=] { retryByTimer(); })
+, _resendAllTimer(thread, [=] { resendAll(); })
 , _oldConnectionTimer(thread, [=] { markConnectionOld(); })
 , _waitForConnectedTimer(thread, [=] { waitConnectedFailed(); })
 , _waitForReceivedTimer(thread, [=] { waitReceivedFailed(); })
@@ -186,6 +200,7 @@ SessionPrivate::SessionPrivate(
 }
 
 SessionPrivate::~SessionPrivate() {
+	_resendAllTimer.cancel();
 	releaseKeyCreationOnFail();
 	doDisconnect();
 
@@ -408,6 +423,8 @@ bool SessionPrivate::setState(int state, int ifState) {
 void SessionPrivate::resetSession() {
 	MTP_LOG(_shiftedDcId, ("Resetting session!"));
 	_needSessionReset = false;
+	_resendAllTimer.cancel();
+	_deferResendAfterCut = false;
 
 	DEBUG_LOG(("MTP Info: creating new session in resetSession."));
 	changeSessionId();
@@ -1120,6 +1137,7 @@ void SessionPrivate::connectToServer(bool afterConfig) {
 void SessionPrivate::restart() {
 	DEBUG_LOG(("MTP Info: restarting Connection"));
 
+	_resendAllTimer.cancel();
 	_waitForReceivedTimer.cancel();
 	_waitForConnectedTimer.cancel();
 
@@ -2656,8 +2674,14 @@ void SessionPrivate::authKeyChecked() {
 	});
 
 	if (_sessionSalt && setState(ConnectedState)) {
-		resendAll();
+		if (_deferResendAfterCut) {
+			_deferResendAfterCut = false;
+			_resendAllTimer.callOnce(kDeferredResendDelay);
+		} else {
+			resendAll();
+		}
 	} // else receive salt in bad_server_salt first, then try to send all the requests
+	NoteTransportFloodRecovered(_shiftedDcId);
 
 	_pingIdToSend = base::RandomValue<uint64>(); // get server_salt
 	_sessionData->queueNeedToResumeAndSend();
@@ -2668,6 +2692,7 @@ void SessionPrivate::onError(
 		qint32 errorCode) {
 	if (errorCode == -429) {
 		LOG(("Protocol Error: -429 flood code returned!"));
+		NoteTransportFlood(_shiftedDcId);
 	} else if (errorCode == -444) {
 		LOG(("Protocol Error: -444 bad dc_id code returned!"));
 		InvokeQueued(_instance, [instance = _instance] {
@@ -2691,6 +2716,12 @@ void SessionPrivate::handleError(int errorCode) {
 		destroyTemporaryKey();
 	} else {
 		MTP_LOG(_shiftedDcId, ("Restarting after error in connection, error code: %1...").arg(errorCode));
+		if (errorCode == -429) {
+			_deferResendAfterCut = true;
+			_retryTimeout = std::max(
+				_retryTimeout,
+				int(kFloodReconnectDelay));
+		}
 		return restart();
 	}
 }

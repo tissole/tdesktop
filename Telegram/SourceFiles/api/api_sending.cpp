@@ -43,6 +43,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "rpl/rpl.h"
 
+#include <QtCore/QFileInfo>
+
 namespace Api {
 namespace {
 
@@ -707,14 +709,17 @@ void SendMusicSelectionBatch(
 void SendExistingDocument(
 		MessageToSend &&message,
 		not_null<DocumentData*> document,
-		std::optional<MsgId> localMessageId) {
+		std::optional<MsgId> localMessageId,
+		PhotoData *videoCover) {
 	const auto inputMedia = [=] {
+		using Flag = MTPDinputMediaDocument::Flag;
 		return MTP_inputMediaDocument(
-			MTP_flags(message.action.options.mediaSpoiler
-				? MTPDinputMediaDocument::Flag::f_spoiler
-				: MTPDinputMediaDocument::Flags(0)),
+			MTP_flags((message.action.options.mediaSpoiler
+				? Flag::f_spoiler
+				: Flag(0))
+				| (videoCover ? Flag::f_video_cover : Flag(0))),
 			document->mtpInput(),
-			MTPInputPhoto(), // video_cover
+			videoCover ? videoCover->mtpInput() : MTPInputPhoto(),
 			MTPint(), // ttl_seconds
 			MTPint(), // video_timestamp
 			MTPstring()); // query
@@ -1369,7 +1374,9 @@ std::shared_ptr<UploadBatch> MakeUploadBatch(int total) {
 					strong->sessionId,
 					strong->id);
 			}
-			Core::App().downloadManager().holdFinishedUlBatch(strong);
+			if (uploaded > 0 || duplicates > 0) {
+				Core::App().downloadManager().holdFinishedUlBatch(strong);
+			}
 			Core::App().downloadManager().noteUlBatchFinished(strong);
 		}
 	};
@@ -1432,6 +1439,12 @@ void SendConfirmedFile(
 			file->to.options.starsApproved));
 	if (session->uploader().checkUploadDuplicate(local.newId, file)) {
 		if (file->batch) {
+			const auto name = !file->filename.isEmpty()
+				? file->filename
+				: QFileInfo(file->filepath).fileName();
+			if (!name.isEmpty()) {
+				file->batch->displayName = name;
+			}
 			file->batch->addDuplicate();
 		} else {
 			Core::App().downloadManager().reportDuplicateSkipped(

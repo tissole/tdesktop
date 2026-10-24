@@ -77,6 +77,7 @@ class SavedMusic;
 class SavedMessages;
 class Chatbots;
 class BusinessInfo;
+class FileChunkFetcher;
 struct ReactionId;
 struct UnavailableReason;
 struct CreditsStatusSlice;
@@ -210,6 +211,9 @@ public:
 	}
 	[[nodiscard]] Histories &histories() const {
 		return *_histories;
+	}
+	[[nodiscard]] FileChunkFetcher &chunkFetcher() const {
+		return *_chunkFetcher;
 	}
 	[[nodiscard]] Stickers &stickers() const {
 		return *_stickers;
@@ -1434,6 +1438,7 @@ private:
 	const std::unique_ptr<Streaming> _streaming;
 	const std::unique_ptr<MediaRotation> _mediaRotation;
 	const std::unique_ptr<Histories> _histories;
+	const std::unique_ptr<FileChunkFetcher> _chunkFetcher;
 	const std::unique_ptr<Stickers> _stickers;
 	const std::unique_ptr<Reactions> _reactions;
 	const std::unique_ptr<EmojiStatuses> _emojiStatuses;

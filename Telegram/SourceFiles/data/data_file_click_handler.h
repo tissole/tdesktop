@@ -55,6 +55,7 @@ struct DownloadBatch {
 	uint64 sessionId = 0;
 	QString srcName;
 	QString destDir;
+	QString displayName;
 	TimeId startedAt = 0;
 	TimeId finishedAt = 0;
 	std::function<void(int downloaded, int duplicates)> onDone;
@@ -96,6 +97,11 @@ struct DownloadBatch {
 };
 
 [[nodiscard]] std::shared_ptr<DownloadBatch> MakeDownloadBatch(int total);
+
+void TrackSaveDownload(
+	FullMsgId itemId,
+	not_null<DocumentData*> document,
+	uint64 batchId);
 
 class DocumentSaveClickHandler : public DocumentClickHandler {
 public:

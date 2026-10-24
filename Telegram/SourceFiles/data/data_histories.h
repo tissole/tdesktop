@@ -9,8 +9,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/timer.h"
 
+#include <deque>
+
 class History;
 class HistoryItem;
+class PeerData;
 
 namespace Main {
 class Session;
@@ -54,6 +57,12 @@ public:
 	[[nodiscard]] not_null<History*> findOrCreate(PeerId peerId);
 
 	void applyPeerDialogs(const MTPmessages_PeerDialogs &dialogs);
+	void requestPeerDialog(
+		not_null<PeerData*> peer,
+		Fn<void(const MTPmessages_PeerDialogs&)> done = nullptr,
+		Fn<void()> fail = nullptr);
+	void noteDialogListRequestStarted();
+	void noteDialogListRequestFinished();
 
 	void unloadAll();
 	void clearAll();
@@ -151,6 +160,11 @@ private:
 		mtpRequestId id = 0;
 		RequestType type = RequestType::None;
 	};
+	struct ExternalDialogRequest {
+		not_null<PeerData*> peer;
+		Fn<void(const MTPmessages_PeerDialogs&)> done;
+		Fn<void()> fail;
+	};
 	struct State {
 		base::flat_map<int, PostponedHistoryRequest> postponed;
 		base::flat_map<int, SentRequest> sent;
@@ -208,6 +222,7 @@ private:
 	void postponeRequestDialogEntries();
 
 	void sendDialogRequests();
+	void sendExternalDialogRequest();
 	void reportPendingDeliveries();
 
 	[[nodiscard]] bool isCreatingTopic(
@@ -223,14 +238,21 @@ private:
 	base::flat_map<int, not_null<History*>> _historyByRequest;
 	int _requestAutoincrement = 0;
 	base::Timer _readRequestsTimer;
+	base::Timer _dialogRequestsTimer;
 
 	base::flat_set<not_null<Data::Folder*>> _dialogFolderRequests;
+	base::flat_set<not_null<Data::Folder*>> _dialogFolderRequestsPending;
 	base::flat_map<
 		not_null<History*>,
 		std::vector<Fn<void()>>> _dialogRequests;
 	base::flat_map<
 		not_null<History*>,
 		std::vector<Fn<void()>>> _dialogRequestsPending;
+	std::deque<ExternalDialogRequest> _externalDialogRequests;
+	crl::time _dialogRequestsNextAt = 0;
+	int _dialogListRequestsInFlight = 0;
+	bool _dialogRequestInFlight = false;
+	bool _dialogRequestsScheduled = false;
 
 	base::flat_set<not_null<History*>> _fakeChatListRequests;
 

@@ -41,6 +41,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
+#include "settings.h"
 #include "ui/chat/chat_theme.h"
 #include "ui/chat/chat_style.h"
 #include "ui/widgets/checkbox.h"
@@ -69,6 +70,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_download_manager.h"
 #include "data/data_media_types.h"
 #include "data/data_file_click_handler.h"
+#include "data/data_file_hash.h"
 #include "data/data_file_origin.h"
 #include "data/data_cloud_file.h"
 #include "data/data_channel.h"
@@ -80,6 +82,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtWidgets/QApplication>
 #include <QtGui/QClipboard>
 #include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 
 #include "boxes/abstract_box.h"
 
@@ -2337,16 +2340,55 @@ void InnerWidget::savePhotoToFile(not_null<PhotoData*> photo, HistoryItem *item)
 		filter,
 		filedialogDefaultName(u"photo"_q, u".jpg"_q),
 		crl::guard(this, [=](const QString &result) {
-			if (!result.isEmpty()) {
-				media->saveToFile(result);
-				if (item) {
-					auto &manager = Core::App().downloadManager();
-					manager.addLoaded({
-						.item = item,
-						.photo = photo,
-					}, result, manager.computeNextStartDate());
+			if (result.isEmpty()) {
+				return;
+			}
+			auto batch = MakeDownloadBatch(1);
+			batch->sessionId = photo->session().uniqueId();
+			batch->displayName = QFileInfo(result).fileName();
+			auto &manager = Core::App().downloadManager();
+			auto &db = manager.ensureDedupDb();
+			const auto dedupOn = GetEnhancedBool(
+				"prevent_download_duplicates");
+			auto hash = QByteArray();
+			if (dedupOn && db.isOpen()) {
+				if (db.containsDocId(
+					Data::DedupDb::Table::Downloads,
+					uint64(photo->id))) {
+					batch->addDuplicate();
+					return;
+				}
+				if (const auto bytes = media->imageBytes(
+					Data::PhotoSize::Large);
+					!bytes.isEmpty()) {
+					hash = Data::ContentFingerprint(bytes);
+					if (!hash.isEmpty()
+						&& db.containsHash(
+							Data::DedupDb::Table::Downloads,
+							hash)) {
+						batch->addDuplicate();
+						return;
+					}
 				}
 			}
+			if (!media->saveToFile(result)) {
+				batch->addFailed();
+				return;
+			}
+			if (item) {
+				manager.addLoaded({
+					.item = item,
+					.photo = photo,
+				}, result, manager.computeNextStartDate());
+			}
+			if (db.isOpen()) {
+				db.insert(Data::DedupDb::Table::Downloads, {
+					.hash = hash,
+					.documentId = uint64(photo->id),
+					.status = u"f"_q,
+				});
+			}
+			batch->addDownloaded();
 		}));
 }
 

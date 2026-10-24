@@ -223,6 +223,16 @@ public:
 		not_null<DocumentData*> document,
 		Fn<void(bool)> done,
 		uint64 batchId = 0);
+	// Records a finished save that bypassed the manager loaders (e.g.
+	// a streamed video kept on disk): no-ops when a loading or loaded
+	// record already exists for the item, so it is safe against races
+	// with the normal completion path.
+	void noteUntrackedSave(
+		not_null<HistoryItem*> item,
+		not_null<DocumentData*> document,
+		const QString &path,
+		DownloadDate started,
+		uint64 batchId = 0);
 	void commitDlTmpFile(
 		uint64 sessionId,
 		uint64 batchId,
@@ -270,11 +280,18 @@ public:
 	[[nodiscard]] std::vector<UlRunSnapshot> ulRuns();
 	void pokeDownloadBar();
 	[[nodiscard]] std::tuple<int, int, int> batchTotals();
+	void noteUploadActivity();
 	void addUploadBatch(std::weak_ptr<UploadBatch> batch);
 	void holdFinishedUlBatch(std::shared_ptr<UploadBatch> batch);
 	void dropHeldUlBatches();
 	[[nodiscard]] bool hasHeldUlBatches() const;
 	[[nodiscard]] std::tuple<int, int, int> uploadBatchTotals();
+	[[nodiscard]] QString singleUlBatchName() const;
+	[[nodiscard]] QString lastUlBatchName() const;
+	[[nodiscard]] QString singleDlBatchName() const;
+	[[nodiscard]] QString activeDlBatchName() const;
+	void holdFinishedSingleDownload(const QString &name);
+	void checkHoldExpiry();
 
 private:
 	void notifyDuplicateSkips();
@@ -402,6 +419,7 @@ private:
 		int done = 0;
 		int skipped = 0;
 		crl::time until = 0;
+		QString name;
 	};
 	std::vector<HeldCounts> _heldDlBatches;
 	std::vector<HeldCounts> _heldUlBatches;

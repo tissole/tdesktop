@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/history_item.h"
 
+#include "chat_scan/chat_scan_index.h"
+
 #include "api/api_premium.h"
 #include "api/api_sensitive_content.h"
 #include "api/api_transcribes.h"
@@ -2749,6 +2751,7 @@ void HistoryItem::applySentMessage(const MTPDmessage &data) {
 	_history->owner().notifyItemDataChange(this);
 	_history->owner().requestItemTextRefresh(this);
 	_history->owner().updateDependentMessages(this);
+	ChatScan::NoteItemMediaUpdated(this);
 }
 
 void HistoryItem::updateSentContent(const MTPDmessage &data) {
@@ -2787,6 +2790,7 @@ void HistoryItem::applySentMessage(
 	} else {
 		applyTTL(0);
 	}
+	ChatScan::NoteItemMediaUpdated(this);
 }
 
 void HistoryItem::updateSentContent(

@@ -35,7 +35,6 @@ namespace {
 
 constexpr auto kRefreshSuggestedTimeout = 7200 * crl::time(1000);
 constexpr auto kLoadExceptionsAfter = 100;
-constexpr auto kLoadExceptionsPerRequest = 100;
 
 [[nodiscard]] crl::time RequestUpdatesEach(not_null<Session*> owner) {
 	const auto appConfig = &owner->session().appConfig();
@@ -544,13 +543,20 @@ void ChatFilters::load(bool force) {
 		return;
 	}
 	auto &api = _owner->session().api();
-	api.request(_loadRequestId).cancel();
+	auto &histories = _owner->session().data().histories();
+	if (_loadRequestId > 0) {
+		api.request(_loadRequestId).cancel();
+		histories.noteDialogListRequestFinished();
+	}
+	histories.noteDialogListRequestStarted();
 	_loadRequestId = api.request(MTPmessages_GetDialogFilters(
 	)).done([=](const MTPmessages_DialogFilters &result) {
+		_owner->session().data().histories().noteDialogListRequestFinished();
 		_tagsEnabled = result.data().is_tags_enabled();
 		received(result.data().vfilters().v);
 		_loadRequestId = 0;
 	}).fail([=] {
+		_owner->session().data().histories().noteDialogListRequestFinished();
 		_loadRequestId = 0;
 		if (_reloading) {
 			_reloading = false;
@@ -1096,52 +1102,47 @@ rpl::producer<TagColorChanged> ChatFilters::tagColorChanged() const {
 }
 
 bool ChatFilters::loadNextExceptions(bool chatsListLoaded) {
-	if (_exceptionsLoadRequestId) {
+	if (_exceptionsLoadInFlight) {
 		return true;
 	} else if (!chatsListLoaded
 		&& (_owner->chatsList()->fullSize().current()
 			< kLoadExceptionsAfter)) {
 		return false;
 	}
-	auto inputs = QVector<MTPInputDialogPeer>();
-	const auto collectExceptions = [&](FilterId id) {
-		auto result = QVector<MTPInputDialogPeer>();
-		const auto i = ranges::find(_list, id, &ChatFilter::id);
-		if (i != end(_list)) {
-			result.reserve(i->always().size());
-			for (const auto &history : i->always()) {
-				if (!history->folderKnown()) {
-					inputs.push_back(
-						MTP_inputDialogPeer(history->peer->input()));
-				}
-			}
-		}
-		return result;
-	};
+	auto histories = std::vector<not_null<History*>>();
 	while (!_exceptionsToLoad.empty()) {
 		const auto id = _exceptionsToLoad.front();
-		const auto exceptions = collectExceptions(id);
-		if (inputs.size() + exceptions.size() > kLoadExceptionsPerRequest) {
-			Assert(!inputs.isEmpty());
-			break;
-		}
 		_exceptionsToLoad.pop_front();
-		inputs.append(exceptions);
+		const auto i = ranges::find(_list, id, &ChatFilter::id);
+		if (i == end(_list)) {
+			continue;
+		}
+		for (const auto &history : i->always()) {
+			if (history->folderKnown()) {
+				continue;
+			}
+			if (const auto channel = history->peer->asChannel();
+				channel && channel->isCommunity()) {
+				continue;
+			}
+			histories.push_back(history);
+		}
 	}
-	if (inputs.isEmpty()) {
+	if (histories.empty()) {
 		return false;
 	}
-	const auto api = &_owner->session().api();
-	_exceptionsLoadRequestId = api->request(MTPmessages_GetPeerDialogs(
-		MTP_vector(inputs)
-	)).done([=](const MTPmessages_PeerDialogs &result) {
-		_exceptionsLoadRequestId = 0;
-		_owner->session().data().histories().applyPeerDialogs(result);
-		_owner->session().api().requestMoreDialogsIfNeeded();
-	}).fail([=] {
-		_exceptionsLoadRequestId = 0;
-		_owner->session().api().requestMoreDialogsIfNeeded();
-	}).send();
+	_exceptionsLoadInFlight = true;
+	const auto remaining = std::make_shared<int>(int(histories.size()));
+	for (const auto &history : histories) {
+		_owner->session().data().histories().requestDialogEntry(
+			history,
+			[=] {
+				if (--*remaining == 0) {
+					_exceptionsLoadInFlight = false;
+					_owner->session().api().requestMoreDialogsIfNeeded();
+				}
+			});
+	}
 	return true;
 }
 

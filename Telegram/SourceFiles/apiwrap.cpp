@@ -38,6 +38,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_user_privacy.h"
 #include "api/api_read_metrics.h"
 #include "api/api_views.h"
+#include "data/data_dedup_db.h"
+#include "data/data_download_manager.h"
+#include "data/data_file_hash.h"
 #include "api/api_confirm_phone.h"
 #include "api/api_unread_things.h"
 #include "api/api_ringtones.h"
@@ -53,6 +56,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/components/welcome_messages.h"
 #include "data/notify/data_notify_settings.h"
 #include "data/data_changes.h"
+#include "data/data_document.h"
 #include "data/data_drafts.h"
 #include "data/data_media_types.h"
 #include "data/data_web_page.h"
@@ -123,13 +127,140 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/file_upload.h"
 #include "storage/storage_account.h"
 
+#include <set>
+
 namespace {
+
+// Server-side forwards move no bytes, so transfer dedup works on document
+// ids plus lazily resolved remote hashes. Text and id-less items always go.
+struct ForwardDedupMedia {
+	uint64 mediaId = 0;
+	DocumentData *doc = nullptr;
+	PhotoData *photo = nullptr;
+};
+
+ForwardDedupMedia ForwardDedupMediaOf(HistoryItem *item) {
+	const auto media = item ? item->media() : nullptr;
+	const auto doc = media ? media->document() : nullptr;
+	const auto photo = media ? media->photo() : nullptr;
+	if (!doc && !photo) {
+		return {};
+	}
+	return {
+		.mediaId = doc ? uint64(doc->id) : uint64(photo->id),
+		.doc = doc,
+		.photo = photo,
+	};
+}
+bool ForwardDedupSkip(
+		HistoryItem *item,
+		std::set<uint64> &seenInBatch) {
+	const auto media = ForwardDedupMediaOf(item);
+	if (!media.mediaId) {
+		return false;
+	}
+	const auto mediaId = media.mediaId;
+	if (!seenInBatch.insert(mediaId).second) {
+		return true;
+	}
+	if (!GetEnhancedBool("prevent_forward_duplicates")) {
+		return false;
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (!db.isOpen()) {
+		return false;
+	}
+	using Table = Data::DedupDb::Table;
+	if (db.containsDocId(Table::Uploads, mediaId)
+		|| db.containsDocIdInDb(Table::Uploads, mediaId)) {
+		return true;
+	}
+	db.addPending(Table::Uploads, mediaId, QByteArray());
+	return false;
+}
+
+void ForwardDedupRecordHash(
+		uint64 mediaId,
+		const QByteArray &hash) {
+	if (hash.isEmpty()) {
+		return;
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (!db.isOpen()) {
+		return;
+	}
+	using Table = Data::DedupDb::Table;
+	if (db.containsDocId(Table::Uploads, mediaId)) {
+		return;
+	}
+	if (db.containsHash(Table::Uploads, hash)) {
+		if (db.containsFinishedHash(Table::Uploads, hash)) {
+			db.insert(Table::Uploads, { hash, mediaId, u"f"_q });
+		}
+		return;
+	}
+	db.insert(Table::Uploads, { hash, mediaId, u"f"_q });
+}
+
+void ForwardDedupResolveHash(
+		Main::Session *session,
+		uint64 mediaId,
+		DocumentData *doc) {
+	if (!doc) {
+		return;
+	}
+	Data::RemoteFileFingerprint(
+		not_null<Main::Session*>(session),
+		not_null<DocumentData*>(doc),
+		[=](QByteArray hash) {
+			ForwardDedupRecordHash(mediaId, hash);
+		});
+}
+
+void ForwardDedupResolvePhotoHash(
+		Main::Session *session,
+		uint64 mediaId,
+		PhotoData *photo) {
+	if (!photo) {
+		return;
+	}
+	Data::RemotePhotoFingerprint(
+		not_null<Main::Session*>(session),
+		not_null<PhotoData*>(photo),
+		[=](QByteArray hash) {
+			ForwardDedupRecordHash(mediaId, hash);
+		});
+}
+
+void ForwardDedupDone(
+		Main::Session *session,
+		uint64 mediaId,
+		DocumentData *doc,
+		PhotoData *photo) {
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (db.isOpen()) {
+		db.removePending(Data::DedupDb::Table::Uploads, mediaId);
+	}
+	ForwardDedupResolveHash(session, mediaId, doc);
+	ForwardDedupResolvePhotoHash(session, mediaId, photo);
+}
+
+void ForwardDedupFail(uint64 mediaId) {
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (db.isOpen()) {
+		db.removePending(Data::DedupDb::Table::Uploads, mediaId);
+	}
+}
 
 // Save draft to the cloud with 1 sec extra delay.
 constexpr auto kSaveCloudDraftTimeout = 1000;
 
 constexpr auto kSmallDelayMs = 5;
 constexpr auto kDeleteHistoryRetryLimit = 8;
+// Pending per-channel message-data lookups are drained in small windows
+// so a startup batch cannot enter the server as one instant burst.
+constexpr auto kMessageDataResolvePerPass = 3;
+constexpr auto kMessageDataResolveStaggerMs = crl::time(150);
 constexpr auto kReadFeaturedSetsTimeout = crl::time(1000);
 constexpr auto kFileLoaderQueueStopTimeout = crl::time(5000);
 
@@ -729,48 +860,64 @@ void ApiWrap::resolveMessageDatas() {
 			request.requestId = requestId;
 		}
 	}
+	auto budget = kMessageDataResolvePerPass;
+	auto remaining = false;
 	for (auto j = _channelMessageDataRequests.begin(); j != _channelMessageDataRequests.cend();) {
 		if (j->second.empty()) {
 			j = _channelMessageDataRequests.erase(j);
 			continue;
 		}
 		const auto ids = collectMessageIds(j->second);
-		if (!ids.isEmpty()) {
-			const auto channel = j->first;
-			const auto requestId = (_takeoutId && channel->isRestricted())
-				? request(MTPInvokeWithTakeout<MTPchannels_GetMessages>(
-					MTP_long(*_takeoutId),
-					MTPchannels_GetMessages(
-						channel->inputChannel(),
-						MTP_vector<MTPInputMessage>(ids))
-				)).done([=](
-						const MTPmessages_Messages &result,
-						mtpRequestId requestId) {
-					_session->data().processExistingMessages(channel, result);
-					finalizeMessageDataRequest(channel, requestId);
-				}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
-					finalizeMessageDataRequest(channel, requestId);
-				}).afterDelay(kSmallDelayMs).send()
-				: request(MTPchannels_GetMessages(
+		if (ids.isEmpty()) {
+			++j;
+			continue;
+		} else if (!budget) {
+			remaining = true;
+			break;
+		}
+		--budget;
+		const auto channel = j->first;
+		const auto takeout = takeoutIdFor(channel);
+		const auto requestId = takeout
+			? request(MTPInvokeWithTakeout<MTPchannels_GetMessages>(
+				MTP_long(*takeout),
+				MTPchannels_GetMessages(
 					channel->inputChannel(),
-					MTP_vector<MTPInputMessage>(ids)
-				)).done([=](
-						const MTPmessages_Messages &result,
-						mtpRequestId requestId) {
-					_session->data().processExistingMessages(channel, result);
-					finalizeMessageDataRequest(channel, requestId);
-				}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
-					finalizeMessageDataRequest(channel, requestId);
-				}).afterDelay(kSmallDelayMs).send();
+					MTP_vector<MTPInputMessage>(ids))
+			)).done([=](
+					const MTPmessages_Messages &result,
+					mtpRequestId requestId) {
+				_session->data().processExistingMessages(channel, result);
+				finalizeMessageDataRequest(channel, requestId);
+			}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
+				finalizeMessageDataRequest(channel, requestId);
+			}).afterDelay(kSmallDelayMs).send()
+			: request(MTPchannels_GetMessages(
+				channel->inputChannel(),
+				MTP_vector<MTPInputMessage>(ids)
+			)).done([=](
+					const MTPmessages_Messages &result,
+					mtpRequestId requestId) {
+				_session->data().processExistingMessages(channel, result);
+				finalizeMessageDataRequest(channel, requestId);
+			}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
+				finalizeMessageDataRequest(channel, requestId);
+			}).afterDelay(kSmallDelayMs).send();
 
-			for (auto &[msgId, request] : j->second) {
-				if (request.requestId > 0) {
-					continue;
-				}
-				request.requestId = requestId;
+		for (auto &[msgId, request] : j->second) {
+			if (request.requestId > 0) {
+				continue;
 			}
+			request.requestId = requestId;
 		}
 		++j;
+	}
+	if (remaining) {
+		_messageDataResolveStaggerTimer.setCallback([=] {
+			resolveMessageDatas();
+		});
+		_messageDataResolveStaggerTimer.callOnce(
+			kMessageDataResolveStaggerMs);
 	}
 }
 
@@ -996,6 +1143,7 @@ void ApiWrap::requestMoreDialogs(Data::Folder *folder) {
 	const auto flags = MTPmessages_GetDialogs::Flag::f_exclude_pinned
 		| MTPmessages_GetDialogs::Flag::f_folder_id;
 	const auto hash = uint64(0);
+	_session->data().histories().noteDialogListRequestStarted();
 	state->requestId = request(MTPmessages_GetDialogs(
 		MTP_flags(flags),
 		MTP_int(folder ? folder->id() : 0),
@@ -1007,6 +1155,7 @@ void ApiWrap::requestMoreDialogs(Data::Folder *folder) {
 		MTP_int(loadCount),
 		MTP_long(hash)
 	)).done([=](const MTPmessages_Dialogs &result) {
+		_session->data().histories().noteDialogListRequestFinished();
 		const auto state = dialogsLoadState(folder);
 		const auto count = result.match([](
 				const MTPDmessages_dialogsNotModified &) {
@@ -1044,6 +1193,7 @@ void ApiWrap::requestMoreDialogs(Data::Folder *folder) {
 		requestMoreDialogsIfNeeded();
 		_session->data().chatsListChanged(folder);
 	}).fail([=] {
+		_session->data().histories().noteDialogListRequestFinished();
 		dialogsLoadState(folder)->requestId = 0;
 	}).send();
 
@@ -1190,9 +1340,11 @@ void ApiWrap::reloadPinnedDialogs(Data::Folder *folder) {
 mtpRequestId ApiWrap::sendPinnedDialogsRequest(
 		Data::Folder *folder,
 		Fn<void()> finish) {
+	_session->data().histories().noteDialogListRequestStarted();
 	return request(MTPmessages_GetPinnedDialogs(
 		MTP_int(folder ? folder->id() : 0)
 	)).done([=](const MTPmessages_PeerDialogs &result) {
+		_session->data().histories().noteDialogListRequestFinished();
 		finish();
 		result.match([&](const MTPDmessages_peerDialogs &data) {
 			_session->data().processUsers(data.vusers());
@@ -1206,6 +1358,7 @@ mtpRequestId ApiWrap::sendPinnedDialogsRequest(
 			_session->data().notifyPinnedDialogsOrderUpdated();
 		});
 	}).fail([=] {
+		_session->data().histories().noteDialogListRequestFinished();
 		finish();
 	}).send();
 }
@@ -2843,42 +2996,74 @@ void ApiWrap::requestFileReference(
 	_fileReferenceHandlers.emplace(origin, std::move(handlers));
 
 	request(std::move(data)).done([=](const auto &result) {
-		const auto parsed = Data::GetFileReferences(result);
-		for (const auto &p : parsed.data) {
-			// Unpack here the parsed pair by hand to workaround a GCC bug.
-			// See https://gcc.gnu.org/bugzilla/show_bug.cgi?id=87122
-			const auto &origin = p.first;
-			const auto &reference = p.second;
-			const auto documentId = std::get_if<DocumentFileLocationId>(
-				&origin);
-			if (documentId) {
-				_session->data().document(
-					documentId->id
-				)->refreshFileReference(reference);
-			}
-			const auto photoId = std::get_if<PhotoFileLocationId>(&origin);
-			if (photoId) {
-				_session->data().photo(
-					photoId->id
-				)->refreshFileReference(reference);
-			}
-		}
-		const auto i = _fileReferenceHandlers.find(origin);
-		Assert(i != end(_fileReferenceHandlers));
-		auto handlers = std::move(i->second);
-		_fileReferenceHandlers.erase(i);
-		for (auto &handler : handlers) {
-			handler(parsed);
-		}
+		finishFileReference(origin, Data::GetFileReferences(result));
 	}).fail([=] {
-		const auto i = _fileReferenceHandlers.find(origin);
-		Assert(i != end(_fileReferenceHandlers));
-		auto handlers = std::move(i->second);
-		_fileReferenceHandlers.erase(i);
-		for (auto &handler : handlers) {
-			handler(UpdatedFileReferences());
-		}
+		failFileReference(origin);
 	}).send();
+}
+
+void ApiWrap::requestPeerDialogsReference(
+		Data::FileOrigin origin,
+		FileReferencesHandler &&handler,
+		not_null<PeerData*> peer) {
+	const auto i = _fileReferenceHandlers.find(origin);
+	if (i != end(_fileReferenceHandlers)) {
+		i->second.push_back(std::move(handler));
+		return;
+	}
+	auto handlers = std::vector<FileReferencesHandler>();
+	handlers.push_back(std::move(handler));
+	_fileReferenceHandlers.emplace(origin, std::move(handlers));
+
+	_session->data().histories().requestPeerDialog(
+		peer,
+		[=](const MTPmessages_PeerDialogs &result) {
+			finishFileReference(origin, Data::GetFileReferences(result));
+		},
+		[=] {
+			failFileReference(origin);
+		});
+}
+
+void ApiWrap::finishFileReference(
+		Data::FileOrigin origin,
+		UpdatedFileReferences &&parsed) {
+	for (const auto &p : parsed.data) {
+		// Unpack here the parsed pair by hand to workaround a GCC bug.
+		// See https://gcc.gnu.org/bugzilla/show_bug.cgi?id=87122
+		const auto &fileOrigin = p.first;
+		const auto &reference = p.second;
+		const auto documentId = std::get_if<DocumentFileLocationId>(
+			&fileOrigin);
+		if (documentId) {
+			_session->data().document(
+				documentId->id
+			)->refreshFileReference(reference);
+		}
+		const auto photoId = std::get_if<PhotoFileLocationId>(&fileOrigin);
+		if (photoId) {
+			_session->data().photo(
+				photoId->id
+			)->refreshFileReference(reference);
+		}
+	}
+	const auto i = _fileReferenceHandlers.find(origin);
+	Assert(i != end(_fileReferenceHandlers));
+	auto handlers = std::move(i->second);
+	_fileReferenceHandlers.erase(i);
+	for (auto &handler : handlers) {
+		handler(parsed);
+	}
+}
+
+void ApiWrap::failFileReference(Data::FileOrigin origin) {
+	const auto i = _fileReferenceHandlers.find(origin);
+	Assert(i != end(_fileReferenceHandlers));
+	auto handlers = std::move(i->second);
+	_fileReferenceHandlers.erase(i);
+	for (auto &handler : handlers) {
+		handler(UpdatedFileReferences());
+	}
 }
 
 void ApiWrap::refreshFileReference(
@@ -3029,10 +3214,10 @@ void ApiWrap::refreshFileReference(
 				hasParent ? peer->input() : MTPInputPeer(),
 				MTP_vector<MTPInputPeer>(1, sublistPeer->input())));
 		} else {
-			request(MTPmessages_GetPeerDialogs(
-				MTP_vector<MTPInputDialogPeer>(
-					1,
-					MTP_inputDialogPeer(peer->input()))));
+			requestPeerDialogsReference(
+				origin,
+				std::move(handler),
+				peer);
 		}
 	}, [&](Data::FileOriginStickerSet data) {
 		const auto isRecentAttached
@@ -3605,9 +3790,7 @@ void ApiWrap::requestMessageAfterDate(
 	};
 	const auto sendTakeoutWrapped = [&](auto &&serialized) {
 		using Type = std::decay_t<decltype(serialized)>;
-		const auto takeout = (_takeoutId && peer->isRestricted())
-			? _takeoutId
-			: std::nullopt;
+		const auto takeout = takeoutIdFor(peer);
 		if (takeout) {
 			send(MTPInvokeWithTakeout<Type>(
 				MTP_long(*takeout),
@@ -3639,8 +3822,7 @@ void ApiWrap::requestMessageAfterDate(
 			MTP_int(minId),
 			MTP_long(historyHash));
 	};
-	const auto takeoutActive = _takeoutId.has_value()
-		&& peer->isRestricted()
+	const auto takeoutActive = takeoutIdFor(peer).has_value()
 		&& (topicRootId || !monoforumPeerId);
 	const auto needsTakeout = peer->isRestricted()
 		&& (topicRootId || !monoforumPeerId);
@@ -3764,7 +3946,7 @@ void ApiWrap::requestHistory(
 	if (_historyRequests.contains(key)) {
 		return;
 	}
-	if (peer->isRestricted() && !_takeoutId) {
+	if (peer->isRestricted() && !takeoutIdFor(peer)) {
 		ensureTakeout(peer, [=](bool) {
 			requestHistory(history, messageId, slice);
 		});
@@ -3775,9 +3957,7 @@ void ApiWrap::requestHistory(
 	auto &histories = history->owner().histories();
 	const auto requestType = Data::Histories::RequestType::History;
 	histories.sendRequest(history, requestType, [=](Fn<void()> finish) {
-		const auto takeout = (_takeoutId && peer->isRestricted())
-			? _takeoutId
-			: std::nullopt;
+		const auto takeout = takeoutIdFor(peer);
 		const auto done = [=](const Api::HistoryRequestResult &result) {
 			_historyRequests.remove(key);
 			auto parsed = Api::ParseHistoryResult(
@@ -3833,7 +4013,7 @@ void ApiWrap::requestSharedMedia(
 	if (_sharedMediaRequests.contains(key)) {
 		return;
 	}
-	if (peer->isRestricted() && !_takeoutId) {
+	if (peer->isRestricted() && !takeoutIdFor(peer)) {
 		ensureTakeout(peer, [=](bool) {
 			requestSharedMedia(
 				peer,
@@ -3861,8 +4041,7 @@ void ApiWrap::requestSharedMedia(
 	const auto history = _session->data().history(peer);
 	auto &histories = history->owner().histories();
 	const auto requestType = Data::Histories::RequestType::History;
-	const auto takeout = (_takeoutId && peer->isRestricted())
-		? _takeoutId : std::nullopt;
+	const auto takeout = takeoutIdFor(peer);
 	histories.sendRequest(history, requestType, [=](Fn<void()> finish) {
 		const auto sharedDone = [=](const Api::SearchRequestResult &result) {
 			_sharedMediaRequests.remove(key);
@@ -3900,15 +4079,37 @@ void ApiWrap::requestSharedMedia(
 
 void ApiWrap::setTakeoutId(std::optional<uint64> id) {
 	_takeoutId = id;
+	if (!_takeoutId) {
+		_takeoutPeers.clear();
+	}
 }
 std::optional<uint64> ApiWrap::takeoutId() const {
 	return _takeoutId;
 }
+bool ApiWrap::containsTakeoutPeer(PeerId peerId) const {
+	for (const auto existing : _takeoutPeers) {
+		if (existing == peerId) {
+			return true;
+		}
+	}
+	return false;
+}
+
+std::optional<uint64> ApiWrap::takeoutIdFor(
+		not_null<const PeerData*> peer) const {
+	if (!_takeoutId || !peer->isRestricted()) {
+		return std::nullopt;
+	}
+	return containsTakeoutPeer(peer->id) ? _takeoutId : std::nullopt;
+}
 
 void ApiWrap::ensureTakeout(
-		not_null<PeerData*> /*peer*/,
+		not_null<PeerData*> peer,
 		Fn<void(bool)> done,
 		int64 fileMaxSize) {
+	if (!containsTakeoutPeer(peer->id)) {
+		_takeoutPeers.push_back(peer->id);
+	}
 	if (_takeoutId) {
 		done(true);
 		return;
@@ -3932,11 +4133,15 @@ void ApiWrap::removeTakeoutViewer() {
 }
 
 void ApiWrap::setTakeoutBorrowed(bool borrowed) {
-	_takeoutBorrowed = borrowed;
+	if (borrowed) {
+		++_takeoutBorrowCount;
+	} else if (_takeoutBorrowCount > 0) {
+		--_takeoutBorrowCount;
+	}
 }
 
 bool ApiWrap::takeoutMayFinish() const {
-	return !_takeoutBorrowed && (_takeoutViewers == 0);
+	return !_takeoutBorrowCount && (_takeoutViewers == 0);
 }
 
 void ApiWrap::finishTakeout(Fn<void()> done) {
@@ -3954,6 +4159,7 @@ void ApiWrap::finishTakeout(Fn<void()> done) {
 		return;
 	}
 	const auto id = base::take(_takeoutId);
+	_takeoutPeers.clear();
 	_takeoutFinishing = true;
 	request(MTPInvokeWithTakeout<MTPaccount_FinishTakeoutSession>(
 		MTP_long(*id),
@@ -4228,23 +4434,23 @@ void ApiWrap::forwardMessages(
 	if (successCallback) {
 		shared->callback = std::move(successCallback);
 	}
-    if (enhancedNeeded) {
-    		EnhancedForward::Pipeline::Start(
-    			this,
-    			std::move(enhancedItems),
-    			action,
-    			draft.options,
-    			draft.groupOptions,
-    			resumeJob);
+	if (enhancedNeeded) {
+			EnhancedForward::Pipeline::Start(
+				this,
+				std::move(enhancedItems),
+				action,
+				draft.options,
+				draft.groupOptions,
+				resumeJob);
 
-    		if (normalItems.empty()) {
-    			if (shared) {
-    				shared->callback();
-    			}
-    			return;
-    		}
-    		draft.items = std::move(normalItems);
-    	}
+			if (normalItems.empty()) {
+				if (shared) {
+					shared->callback();
+				}
+				return;
+			}
+			draft.items = std::move(normalItems);
+		}
 
 	const auto isCopyAlbum = (draft.options != Data::ForwardOptions::PreserveInfo
 		&& draft.groupOptions == Data::GroupingOptions::RegroupAll
@@ -4290,7 +4496,32 @@ void ApiWrap::forwardMessages(
 				_session,
 				forwardDst,
 				*totalBefore);
+			if (!draft.items.empty()) {
+				if (const auto firstMedia = draft.items.front()->media()) {
+					if (const auto doc = firstMedia->document()) {
+						EnhancedForward::NoteForwardBatchFile(
+							_session,
+							forwardDst,
+							doc->filename());
+					} else if (firstMedia->photo()) {
+						EnhancedForward::NoteForwardBatchFile(
+							_session,
+							forwardDst,
+							u"photo_%1.jpg"_q.arg(
+								draft.items.front()->id.bare));
+					}
+				}
+			}
 		}
+		const auto copySrc = draft.items.empty()
+			? PeerId()
+			: draft.items.front()->history()->peer->id;
+		const auto copyFirst = draft.items.empty()
+			? FullMsgId()
+			: draft.items.front()->fullId();
+		const auto copyActionId = EnhancedForward::CurrentForwardActionId(
+			_session,
+			forwardDst);
 		auto refreshAndSend = std::make_shared<Fn<void()>>();
 		*refreshAndSend = [=]() mutable {
 			std::sort(copyItems->begin(), copyItems->end(), [](auto a, auto b) {
@@ -4311,6 +4542,17 @@ void ApiWrap::forwardMessages(
 							_session,
 							forwardDst,
 							1);
+						if (*skippedCount > 0) {
+							EnhancedForward::RecordFinishedFwRun(
+								_session,
+								forwardDst,
+								copySrc,
+								copyFirst,
+								*totalBefore,
+								0,
+								*skippedCount,
+								copyActionId);
+						}
 						if (!EnhancedForward::ForwardBatchOwns(
 								_session,
 								forwardDst)) {
@@ -4437,13 +4679,22 @@ void ApiWrap::forwardMessages(
 								forwardDst,
 								sent,
 								*skippedCount);
+							EnhancedForward::RecordFinishedFwRun(
+								_session,
+								forwardDst,
+								copySrc,
+								copyFirst,
+								*totalBefore,
+								*totalBefore - *skippedCount,
+								*skippedCount,
+								copyActionId);
 							EnhancedForward::FinishForwardBatchWorker(
 								_session,
 								forwardDst,
 								1);
 							if (!EnhancedForward::ForwardBatchOwns(
-									_session,
-									forwardDst)) {
+								_session,
+								forwardDst)) {
 								EnhancedForward::ShowForwardDoneToast(
 									sent,
 									*totalBefore,
@@ -4458,19 +4709,65 @@ void ApiWrap::forwardMessages(
 					}
 					auto &pair = (*sharedBatches)[*sharedIndex];
 					++(*sharedIndex);
+					if (!pair.second.empty()) {
+						const auto firstMedia = pair.second.front()->media();
+						if (firstMedia) {
+							if (const auto doc = firstMedia->document()) {
+								EnhancedForward::NoteForwardBatchFile(
+									_session,
+									forwardDst,
+									doc->filename());
+							} else if (firstMedia->photo()) {
+								EnhancedForward::NoteForwardBatchFile(
+									_session,
+									forwardDst,
+									u"photo_%1.jpg"_q.arg(
+										pair.second.front()->id.bare));
+							}
+						}
+					}
 					if (pair.first == 1) {
 						auto &items = pair.second;
+						auto filtered = items;
+						filtered.clear();
+						auto batchSeen = std::set<uint64>();
+						auto sentMedia = std::vector<ForwardDedupMedia>();
+						for (const auto item : items) {
+							if (ForwardDedupSkip(item, batchSeen)) {
+								continue;
+							}
+							filtered.push_back(item);
+							sentMedia.push_back(ForwardDedupMediaOf(item));
+						}
+						if (filtered.empty()) {
+							*copyDone += int(items.size());
+							Data::SetCopyAlbumProgress(*copyDone, totalItems);
+							if (*copyDone >= totalItems) {
+								Data::SetCopyAlbumProgress(0, 0);
+							}
+							(*sendNext)();
+							return;
+						}
 						auto inputs = std::make_shared<QVector<MTPInputSingleMedia>>();
 						auto meds = std::make_shared<QVector<const Data::Media*>>();
-						inputs->reserve(items.size());
-						meds->reserve(items.size());
-						for (const auto item : items) {
+						inputs->reserve(filtered.size());
+						meds->reserve(filtered.size());
+						for (const auto item : filtered) {
 							auto media = item->media();
 							meds->push_back(media);
 							const bool isPhoto = media && media->photo() != nullptr;
+							const auto cover = media ? media->videoCover() : nullptr;
 							const MTPInputMedia inputMedia = isPhoto
 								? MTP_inputMediaPhoto(MTP_flags(0), media->photo()->mtpInput(), MTPint(), MTPInputDocument())
-								: MTP_inputMediaDocument(MTP_flags(0), media->document()->mtpInput(), MTPInputPhoto(), MTPint(), MTPint(), MTPstring());
+								: MTP_inputMediaDocument(
+									MTP_flags(cover
+										? MTPDinputMediaDocument::Flag::f_video_cover
+										: MTPDinputMediaDocument::Flag(0)),
+									media->document()->mtpInput(),
+									cover ? cover->mtpInput() : MTPInputPhoto(),
+									MTPint(),
+									MTPint(),
+									MTPstring());
 							const auto caption = (draft.options == Data::ForwardOptions::NoNamesAndCaptions) ? TextWithEntities() : item->originalText();
 							const auto entities = Api::EntitiesToMTP(_session, caption.entities, Api::ConvertOption::SkipLocal);
 							const auto flags = !entities.v.isEmpty() ? MTPDinputSingleMedia::Flag::f_entities : MTPDinputSingleMedia::Flag(0);
@@ -4507,6 +4804,13 @@ void ApiWrap::forwardMessages(
 								).done([=](const MTPUpdates &result) {
 									applyUpdates(result);
 									_session->data().sendHistoryChangeNotifications();
+									for (const auto &sent : sentMedia) {
+										ForwardDedupDone(
+											_session,
+											sent.mediaId,
+											sent.doc,
+											sent.photo);
+									}
 									*copyDone += int(items.size());
 									Data::SetCopyAlbumProgress(*copyDone, totalItems);
 									if (*copyDone >= totalItems) {
@@ -4517,6 +4821,9 @@ void ApiWrap::forwardMessages(
 								}).fail([=](const MTP::Error &error) {
 									_session->data().sendHistoryChangeNotifications();
 									sendMessageFail(error, peer);
+									for (const auto &sent : sentMedia) {
+										ForwardDedupFail(sent.mediaId);
+									}
 									*copyDone += int(items.size());
 									Data::SetCopyAlbumProgress(*copyDone, totalItems);
 									if (*copyDone >= totalItems) {
@@ -4529,11 +4836,31 @@ void ApiWrap::forwardMessages(
 							});
 					} else {
 						auto &items = pair.second;
-						auto ids = QVector<MTPint>();
-						ids.reserve(items.size());
-						auto randomIds = QVector<MTPlong>();
-						randomIds.reserve(items.size());
+						auto filtered = items;
+						filtered.clear();
+						auto batchSeen = std::set<uint64>();
+						auto sentMedia = std::vector<ForwardDedupMedia>();
 						for (const auto item : items) {
+							if (ForwardDedupSkip(item, batchSeen)) {
+								continue;
+							}
+							filtered.push_back(item);
+							sentMedia.push_back(ForwardDedupMediaOf(item));
+						}
+						if (filtered.empty()) {
+							*copyDone += int(items.size());
+							Data::SetCopyAlbumProgress(*copyDone, totalItems);
+							if (*copyDone >= totalItems) {
+								Data::SetCopyAlbumProgress(0, 0);
+							}
+							(*sendNext)();
+							return;
+						}
+						auto ids = QVector<MTPint>();
+						ids.reserve(filtered.size());
+						auto randomIds = QVector<MTPlong>();
+						randomIds.reserve(filtered.size());
+						for (const auto item : filtered) {
 							ids.push_back(MTP_int(item->id.bare));
 							randomIds.push_back(MTP_long(base::RandomValue<uint64>()));
 						}
@@ -4555,7 +4882,7 @@ void ApiWrap::forwardMessages(
 						if (orderedAction.options.scheduled) {
 							flags |= MTPmessages_ForwardMessages::Flag::f_schedule_date;
 						}
-						auto fromPeer = items.front()->history()->peer;
+						auto fromPeer = filtered.front()->history()->peer;
 						auto peer = orderedAction.history->peer;
 						auto history = orderedAction.history;
 						_session->data().histories().sendRequest(
@@ -4582,6 +4909,13 @@ void ApiWrap::forwardMessages(
 								).done([=](const MTPUpdates &result) {
 									applyUpdates(result);
 									_session->data().sendHistoryChangeNotifications();
+									for (const auto &sent : sentMedia) {
+										ForwardDedupDone(
+											_session,
+											sent.mediaId,
+											sent.doc,
+											sent.photo);
+									}
 									*copyDone += int(items.size());
 									Data::SetCopyAlbumProgress(*copyDone, totalItems);
 									if (*copyDone >= totalItems) {
@@ -4592,6 +4926,9 @@ void ApiWrap::forwardMessages(
 								}).fail([=](const MTP::Error &error) {
 									_session->data().sendHistoryChangeNotifications();
 									sendMessageFail(error, peer);
+									for (const auto &sent : sentMedia) {
+										ForwardDedupFail(sent.mediaId);
+									}
 									*copyDone += int(items.size());
 									Data::SetCopyAlbumProgress(*copyDone, totalItems);
 									if (*copyDone >= totalItems) {
@@ -4625,7 +4962,7 @@ void ApiWrap::forwardMessages(
 	}
 
 	auto &histories = _session->data().histories();
-    
+
 	const auto count = int(draft.items.size());
 	const auto genClientSideMessage = action.generateLocal
 		&& (count == 1)
@@ -4633,13 +4970,13 @@ void ApiWrap::forwardMessages(
 		&& (draft.options == Data::ForwardOptions::PreserveInfo);
 	const auto history = action.history;
 	const auto peer = history->peer;
-    
+
 	if (!action.options.scheduled && !action.options.shortcutId) {
 		histories.readInbox(history);
 	}
 	const auto sendAs = action.options.sendAs;
 	const auto silentPost = ShouldSendSilent(peer, action.options);
-    
+
 	using SendFlag = MTPmessages_ForwardMessages::Flag;
 	auto flags = MessageFlags();
 	auto sendFlags = SendFlag() | SendFlag();
@@ -4812,7 +5149,7 @@ void ApiWrap::forwardMessages(
 		localIds = nullptr;
 		chunkItems = std::make_shared<std::vector<not_null<HistoryItem*>>>();
 	};
-    
+
 	ids.reserve(count);
 	randomIds.reserve(count);
 	for (const auto &item : draft.items) {
@@ -5109,7 +5446,7 @@ void ApiWrap::editMedia(
 				.spoiler = false,
 				.album = nullptr,
 				.forceFile = false,
-				.sendLargePhotos = false,
+				.sendLargePhotos = true,
 				.idOverride = 0,
 			})
 			: nullptr),
@@ -5191,7 +5528,7 @@ void ApiWrap::sendFiles(
 					.spoiler = false,
 					.album = nullptr,
 					.forceFile = false,
-					.sendLargePhotos = false,
+					.sendLargePhotos = true,
 					.idOverride = 0,
 				})
 				: nullptr),

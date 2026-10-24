@@ -324,6 +324,17 @@ MainWidget::MainWidget(
 		_exportTopBar->finishAnimating();
 	}
 
+	ChatScan::TopBarEvents().events(
+	) | rpl::on_next([=](ChatScan::ScanTopBarEvent event) {
+		setCurrentChatScanView(std::move(event));
+	}, lifetime());
+	if (const auto event = ChatScan::CurrentScanTopBarEvent()) {
+		setCurrentChatScanView(std::move(*event));
+	}
+	if (_scanTopBar) {
+		_scanTopBar->finishAnimating();
+	}
+
 	Media::Player::instance()->closePlayerRequests(
 	) | rpl::on_next([=] {
 		closeBothPlayers();
@@ -1186,6 +1197,91 @@ void MainWidget::exportTopBarHeightUpdated() {
 	}
 	if (!_exportTopBarHeight && _exportTopBar->isHidden()) {
 		_exportTopBar.destroyDelayed();
+	}
+}
+
+void MainWidget::setCurrentChatScanView(ChatScan::ScanTopBarEvent event) {
+	_scanViewLifetime.destroy();
+	_scanViewEvent = std::move(event);
+	refreshScanTopBar();
+	_scanViewEvent.api->state(
+	) | rpl::on_next([=](const ChatScan::State &state) {
+		if (state.phase == ChatScan::State::Phase::Finished
+			|| state.phase == ChatScan::State::Phase::Cancelled
+			|| state.phase == ChatScan::State::Phase::Failed) {
+			ChatScan::ClearScanTopBarEvent();
+			destroyScanTopBar();
+			return;
+		}
+		updateScanTopBar(state);
+	}, _scanViewLifetime);
+}
+
+void MainWidget::refreshScanTopBar() {
+	if (!_scanViewEvent.peer || !_scanViewEvent.api) {
+		return;
+	}
+	if (_scanTopBar) {
+		_scanTopBar.destroy();
+		_scanTopBarHeight = _contentScrollAddToY = 0;
+	}
+	_scanTopBar.create(
+		this,
+		object_ptr<ChatScan::ScanTopBar>(
+			this,
+			ChatScan::TopBarContent(
+				_scanViewEvent.api->currentState(),
+				_scanViewEvent.peer->name())),
+		_controller->adaptive().oneColumnValue());
+	_scanTopBar->entity()->clicks(
+	) | rpl::on_next([=] {
+		ChatScan::ActivateScanTopBar(_controller, _scanViewEvent);
+	}, _scanTopBar->lifetime());
+	orderWidgets();
+	if (_showAnimation) {
+		_scanTopBar->show(anim::type::instant);
+		_scanTopBar->setVisible(false);
+	} else {
+		_scanTopBar->hide(anim::type::instant);
+		_scanTopBar->show(anim::type::normal);
+		_scanTopBarHeight = _contentScrollAddToY = _scanTopBar->contentHeight();
+		updateControlsGeometry();
+	}
+	rpl::merge(
+		_scanTopBar->heightValue() | rpl::map_to(true),
+		_scanTopBar->shownValue()
+	) | rpl::on_next([=] {
+		scanTopBarHeightUpdated();
+	}, _scanTopBar->lifetime());
+}
+
+void MainWidget::updateScanTopBar(const ChatScan::State &state) {
+	if (!_scanTopBar) {
+		return;
+	}
+	_scanTopBar->entity()->updateData(
+		ChatScan::TopBarContent(state, _scanViewEvent.peer->name()));
+}
+
+void MainWidget::destroyScanTopBar() {
+	if (_scanTopBar) {
+		_scanTopBar->hide(anim::type::normal);
+	}
+}
+
+void MainWidget::scanTopBarHeightUpdated() {
+	if (!_scanTopBar) {
+		// The bar could be already "destroyDelayed", but still handle events.
+		return;
+	}
+	const auto scanTopBarHeight = _scanTopBar->contentHeight();
+	if (scanTopBarHeight != _scanTopBarHeight) {
+		_contentScrollAddToY += scanTopBarHeight - _scanTopBarHeight;
+		_scanTopBarHeight = scanTopBarHeight;
+		updateControlsGeometry();
+	}
+	if (!_scanTopBarHeight && _scanTopBar->isHidden()) {
+		_scanTopBar.destroyDelayed();
 	}
 }
 
@@ -2429,6 +2525,9 @@ void MainWidget::orderWidgets() {
 	if (_exportTopBar) {
 		_exportTopBar->raise();
 	}
+	if (_scanTopBar) {
+		_scanTopBar->raise();
+	}
 	if (_callTopBar) {
 		_callTopBar->raise();
 	}
@@ -2565,7 +2664,10 @@ void MainWidget::paintEvent(QPaintEvent *e) {
 }
 
 int MainWidget::getMainSectionTop() const {
-	return _callTopBarHeight + _exportTopBarHeight + _playerHeight;
+	return _callTopBarHeight
+		+ _exportTopBarHeight
+		+ _scanTopBarHeight
+		+ _playerHeight;
 }
 
 int MainWidget::getThirdSectionTop() const {
@@ -2741,9 +2843,19 @@ void MainWidget::updateControlsGeometry() {
 			_exportTopBar->resizeToWidth(dialogsWidth);
 			_exportTopBar->moveToLeft(0, _callTopBarHeight);
 		}
+		if (_scanTopBar) {
+			_scanTopBar->resizeToWidth(dialogsWidth);
+			_scanTopBar->moveToLeft(
+				0,
+				_callTopBarHeight + _exportTopBarHeight);
+		}
 		if (_player) {
 			_player->resizeToWidth(dialogsWidth);
-			_player->moveToLeft(0, _callTopBarHeight + _exportTopBarHeight);
+			_player->moveToLeft(
+				0,
+				_callTopBarHeight
+					+ _exportTopBarHeight
+					+ _scanTopBarHeight);
 		}
 		const auto mainSectionGeometry = QRect(
 			0,
@@ -2802,11 +2914,19 @@ void MainWidget::updateControlsGeometry() {
 			_exportTopBar->resizeToWidth(mainSectionWidth);
 			_exportTopBar->moveToLeft(dialogsWidth, _callTopBarHeight);
 		}
+		if (_scanTopBar) {
+			_scanTopBar->resizeToWidth(mainSectionWidth);
+			_scanTopBar->moveToLeft(
+				dialogsWidth,
+				_callTopBarHeight + _exportTopBarHeight);
+		}
 		if (_player) {
 			_player->resizeToWidth(mainSectionWidth);
 			_player->moveToLeft(
 				dialogsWidth,
-				_callTopBarHeight + _exportTopBarHeight);
+				_callTopBarHeight
+					+ _exportTopBarHeight
+					+ _scanTopBarHeight);
 		}
 		_history->setGeometryWithTopMoved(QRect(
 			dialogsWidth,

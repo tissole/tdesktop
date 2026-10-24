@@ -7,10 +7,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "info/downloads/info_downloads_provider.h"
 
+#include "base/random.h"
+
 #include "info/media/info_media_widget.h"
 #include "info/media/info_media_list_section.h"
 #include "info/info_controller.h"
 #include "ui/text/format_song_document_name.h"
+#include "ui/text/format_values.h"
 #include "ui/ui_utility.h"
 #include "data/data_download_manager.h"
 #include "data/data_document.h"
@@ -39,6 +42,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_msg_id.h"
 #include <tuple>
 
+#include <QtCore/QDebug>
+
 namespace Info::Downloads {
 namespace {
 
@@ -56,6 +61,21 @@ using namespace Media;
 	auto anyPaused = false;
 	auto haveLive = false;
 	auto srcPeer = PeerId();
+	auto idLo = 0;
+	auto idHi = 0;
+	const auto mergeIds = [&](int first, int count) {
+		if (first <= 0 || count <= 0) {
+			return;
+		}
+		const auto last = first + count - 1;
+		if (!idLo) {
+			idLo = first;
+			idHi = last;
+		} else {
+			idLo = std::min(idLo, first);
+			idHi = std::max(idHi, last);
+		}
+	};
 	for (const auto &job : EnhancedForward::AllJobs(session)) {
 		if (job.peer != dst
 			|| job.progress.state == EnhancedForward::State::Cancelled) {
@@ -76,6 +96,16 @@ using namespace Media;
 		sent += job.progress.sent;
 		total += job.progress.total;
 		skipped += job.progress.skipped;
+		if (!job.progress.sourceIds.empty()) {
+			auto lo = 0;
+			auto hi = 0;
+			for (const auto &id : job.progress.sourceIds) {
+				const auto bare = int(id.msg.bare);
+				lo = !lo ? bare : std::min(lo, bare);
+				hi = std::max(hi, bare);
+			}
+			mergeIds(lo, hi - lo + 1);
+		}
 		if (job.resumable) {
 			anyPaused = true;
 		} else if (job.progress.state == EnhancedForward::State::Paused) {
@@ -93,6 +123,11 @@ using namespace Media;
 		total += counters.total;
 		skipped += counters.skipped;
 		flood = std::max(flood, counters.floodSeconds);
+		if (counters.firstSource) {
+			mergeIds(
+				int(counters.firstSource.msg.bare),
+				counters.total);
+		}
 		if (srcPeer == PeerId() && counters.firstSource) {
 			srcPeer = counters.firstSource.peer;
 		}
@@ -124,8 +159,15 @@ using namespace Media;
 				sent += record.done;
 				total += record.total;
 				skipped += record.skipped;
-				if (srcPeer == PeerId() && record.src != PeerId()) {
-					srcPeer = record.src;
+				if (record.src != PeerId()) {
+					if (srcPeer == PeerId()) {
+						srcPeer = record.src;
+					}
+					if (record.firstSource) {
+						mergeIds(
+							int(record.firstSource.msg.bare),
+							record.total);
+					}
 				}
 			}
 		}
@@ -144,8 +186,13 @@ using namespace Media;
 		tr::now,
 		lt_done, QString::number(sent),
 		lt_total, QString::number(total));
+	if (idLo) {
+		result.status += (idHi <= idLo)
+			? u" · ID: %1"_q.arg(idLo)
+			: u" · IDs: %1-%2"_q.arg(idLo).arg(idHi);
+	}
 	if (skipped > 0) {
-		result.status += u" (+%1)"_q.arg(
+		result.status += u" (%1)"_q.arg(
 			tr::lng_tm_fw_duplicates_skipped(tr::now, lt_count, skipped));
 	}
 	if (flood > 0) {
@@ -170,6 +217,8 @@ using namespace Media;
 	auto finishedAt = int64(0);
 	auto srcPeer = PeerId();
 	auto dstPeer = PeerId();
+	auto idLo = 0;
+	auto idHi = 0;
 	for (const auto &run : runs) {
 		sent += run.done;
 		total += run.total;
@@ -178,6 +227,19 @@ using namespace Media;
 		dstPeer = run.dst;
 		if (srcPeer == PeerId() && run.src != PeerId()) {
 			srcPeer = run.src;
+		}
+		if (run.firstSource && run.total > 0) {
+			const auto first = int(run.firstSource.msg.bare);
+			const auto last = first + run.total - 1;
+			if (first > 0) {
+				if (!idLo) {
+					idLo = first;
+					idHi = last;
+				} else {
+					idLo = std::min(idLo, first);
+					idHi = std::max(idHi, last);
+				}
+			}
 		}
 	}
 	const auto peer = session->data().peer(dstPeer);
@@ -194,8 +256,13 @@ using namespace Media;
 		tr::now,
 		lt_done, QString::number(sent),
 		lt_total, QString::number(total));
+	if (idLo) {
+		result.status += (idHi <= idLo)
+			? u" · ID: %1"_q.arg(idLo)
+			: u" · IDs: %1-%2"_q.arg(idLo).arg(idHi);
+	}
 	if (skipped > 0) {
-		result.status += u" (+%1)"_q.arg(
+		result.status += u" (%1)"_q.arg(
 			tr::lng_tm_fw_duplicates_skipped(tr::now, lt_count, skipped));
 	}
 	if (finishedAt > 0) {
@@ -221,15 +288,15 @@ using namespace Media;
 		lt_done, QString::number(done),
 		lt_total, QString::number(run.total));
 	if (run.skipped > 0) {
-		result.status += u" (+%1)"_q.arg(
+		result.status += u" (%1)"_q.arg(
 			tr::lng_tm_dl_duplicates_skipped(
 				tr::now,
 				lt_count,
 				run.skipped));
 	}
-	if (run.finished && run.finishedAt > 0) {
+	if (run.finished && run.startedAt > 0) {
 		result.status += u" · %1"_q.arg(
-			langDateTime(QDateTime::fromSecsSinceEpoch(run.finishedAt)));
+			langDateTime(QDateTime::fromSecsSinceEpoch(run.startedAt)));
 	}
 	result.progress = run.total ? (float64(done) / run.total) : 0.;
 	result.finished = run.finished;
@@ -249,15 +316,15 @@ using namespace Media;
 		lt_done, QString::number(done),
 		lt_total, QString::number(run.total));
 	if (run.skipped > 0) {
-		result.status += u" (+%1)"_q.arg(
+		result.status += u" (%1)"_q.arg(
 			tr::lng_tm_ul_duplicates_skipped(
 				tr::now,
 				lt_count,
 				run.skipped));
 	}
-	if (run.finished && run.finishedAt > 0) {
+	if (run.finished && run.startedAt > 0) {
 		result.status += u" · %1"_q.arg(
-			langDateTime(QDateTime::fromSecsSinceEpoch(run.finishedAt)));
+			langDateTime(QDateTime::fromSecsSinceEpoch(run.startedAt)));
 	}
 	result.progress = run.total ? (float64(done) / run.total) : 0.;
 	result.finished = run.finished;
@@ -323,6 +390,11 @@ void ClearFwRun(
 	for (const auto &batch : EnhancedForward::ForwardBatches(session)) {
 		if (batch.dst == dst && batch.finished) {
 			EnhancedForward::DropForwardBatch(session, dst);
+		}
+	}
+	for (const auto &record : EnhancedForward::FinishedFwRuns(session)) {
+		if (record.dst == dst) {
+			EnhancedForward::DropFinishedFwRunGroup(session, record.actionId);
 		}
 	}
 }
@@ -437,6 +509,7 @@ void ClearFwRun(
 Provider::Provider(not_null<AbstractController*> controller)
 : _controller(controller)
 , _storiesAddToAlbumId(_controller->storiesAddToAlbumId()) {
+	qDebug() << "[TM] tm provider created";
 	style::PaletteChanged(
 	) | rpl::on_next([=] {
 		for (auto &layout : _layouts) {
@@ -574,6 +647,9 @@ void Provider::updateCounter() {
 		eachSession([&](not_null<Main::Session*> session) {
 			accounts++;
 			for (const auto &batch : EnhancedForward::ForwardBatches(session)) {
+				if (batch.finished) {
+					continue;
+				}
 				if (!seenBatches.emplace(batch.dst).second) {
 					continue;
 				}
@@ -1077,6 +1153,20 @@ void Provider::refreshViewer() {
 			updateCounter();
 			refreshForwards();
 		}, _lifetime);
+			// Thumbnails and covers often arrive after the transfer itself
+			// finished, when nothing repaints the rows anymore. Refresh the
+			// cached layouts on every finished downloader task so late images
+			// appear without scrolling.
+			session->downloaderTaskFinished() | rpl::on_next([=] {
+			for (auto &pair : _layouts) {
+				pair.second.item->itemDataChanged();
+			}
+			touchDlHeaders();
+			touchUlHeaders();
+			for (auto &pair : _fwLayouts) {
+				pair.second.item->itemDataChanged();
+			}
+		}, _lifetime);
 
 		Core::App().downloadManager().jobCounterChanged(
 		) | rpl::on_next([=] {
@@ -1239,6 +1329,14 @@ void Provider::refreshEF(
 	} else {
 		_fwTickDigest.emplace(session, digest);
 	}
+	qDebug() << "[TM] fw tick jobs:"
+		<< ordered.size()
+		<< "live:"
+		<< liveCarriers.size()
+		<< "kept:"
+		<< keptRuns.size()
+		<< "elements:"
+		<< _elements.size();
 	auto absorbingDsts = base::flat_set<PeerId>();
 	for (const auto &batch : EnhancedForward::ForwardBatches(session)) {
 		if (!batch.finished) {
@@ -1348,9 +1446,15 @@ void Provider::refreshEF(
 		}
 		const auto dst = std::get<1>(key);
 		const auto group = std::get<2>(key);
+		const auto runStillExists = (group != 0)
+			&& ranges::any_of(
+				EnhancedForward::FinishedFwRuns(session),
+				[&](const auto &record) {
+					return record.actionId == group;
+				});
 		const auto wanted = (group == 0)
 			? wantedDsts.contains(dst)
-			: wantedGroups.contains(group);
+			: (wantedGroups.contains(group) || runStillExists);
 		if (!wanted) {
 			toPrune.emplace_back(dst, group);
 		}
@@ -1423,6 +1527,8 @@ bool Provider::ensureFwAggregate(
 			1,
 			uint64(0),
 		});
+		qDebug() << "[TM] fw aggregate added, carrier:"
+			<< carrier->id.bare;
 		trackItemSession(carrier);
 		if (const auto it = _fwLayouts.find({ session.get(), dst, uint64(0) });
 			it != end(_fwLayouts)) {
@@ -1458,6 +1564,10 @@ bool Provider::ensureFwFinishedGroup(
 			1,
 			actionId,
 		});
+		qDebug() << "[TM] fw finished group added, action:"
+			<< actionId
+			<< "carrier:"
+			<< carrier->id.bare;
 		trackItemSession(carrier);
 		if (const auto it = _fwLayouts.find(
 			{ session.get(), dst, actionId });
@@ -1477,6 +1587,7 @@ bool Provider::ensureFwFinishedGroup(
 void Provider::removeFwAggregate(
 		not_null<Main::Session*> session,
 		const PeerId &dst) {
+	qDebug() << "[TM] fw aggregate element removed";
 	if (const auto it = _fwLayouts.find({ session.get(), dst, uint64(0) });
 		it != end(_fwLayouts)) {
 		_layoutRemoved.fire(it->second.item.get());
@@ -1511,6 +1622,7 @@ void Provider::removeFwAggregate(
 void Provider::removeFwFinishedGroup(
 		not_null<Main::Session*> session,
 		uint64 actionId) {
+	qDebug() << "[TM] fw finished group removed";
 	for (auto i = _fwLayouts.begin(); i != end(_fwLayouts);) {
 		if (std::get<0>(i->first) == session.get()
 			&& std::get<2>(i->first) == actionId) {
@@ -1733,6 +1845,8 @@ void Provider::remove(not_null<const HistoryItem*> item) {
 	_downloading.remove(item);
 	_enhancedForward.remove(item);
 	_downloaded.remove(item);
+	_singleDlBatches.erase(item->fullId());
+	_singleUlBatches.erase(item->fullId());
 	_efPending.remove(item->fullId());
 	const auto proj = [&](const Element &element) {
 		if (element.item != item) {
@@ -1742,7 +1856,19 @@ void Provider::remove(not_null<const HistoryItem*> item) {
 		}
 		return true;
 	};
+	auto fwRemoved = 0;
+	for (const auto &element : _elements) {
+		if (element.item == item && element.fwRow == 1) {
+			++fwRemoved;
+		}
+	}
 	_elements.erase(ranges::remove_if(_elements, proj), end(_elements));
+	if (fwRemoved) {
+		qDebug() << "[TM] fw element removed, item:"
+			<< item->fullId().msg.bare
+			<< "count:"
+			<< fwRemoved;
+	}
 	if (const auto i = _layouts.find(item); i != end(_layouts)) {
 		_layoutRemoved.fire(i->second.item.get());
 		// The list widget handles layoutRemoved() synchronously and may
@@ -1800,18 +1926,18 @@ void Provider::performRefresh() {
 	if (!_elements.empty() || _fullCount.has_value()) {
 		_fullCount = _elements.size();
 	}
-	if (base::take(_postponedRefreshSort)) {
-		// Forwards keep the job's source order; Downloads/Uploads sort by
-		// their start time so a rebuilt provider (reopened tab) still shows
-		// source-chat order instead of completion order.
-		if (_filter == Filter::Forwards) {
-			ranges::stable_sort(_elements, ranges::less(), &Element::order);
-		} else {
-			ranges::stable_sort(_elements, ranges::less(), &Element::started);
-		}
+	if (base::take(_postponedRefreshSort)
+		&& _filter == Filter::Forwards) {
+		// Forwards keep the job's source order; Downloads/Uploads are
+		// always chronological (oldest on top, newest at the bottom).
+		ranges::stable_sort(_elements, ranges::less(), &Element::order);
+	} else if (_filter != Filter::Forwards) {
+		ranges::stable_sort(_elements, ranges::less(), &Element::started);
+		_postponedRefreshSort = false;
 	}
 	syncDlRuns();
 	syncUlRuns();
+	syncSingleHeaders();
 	_refreshed.fire({});
 	updateAvailability();
 	updateCounter();
@@ -1899,7 +2025,7 @@ void Provider::syncDlRuns() {
 					&& element.dlBatch == batchId
 					&& sessionOf(element) == sessionId;
 			});
-		if (runIt != end(runs) && hasMembers) {
+		if ((runIt != end(runs) || isSingleDlBatch(batchId)) && hasMembers) {
 			++i;
 			continue;
 		}
@@ -1918,7 +2044,7 @@ void Provider::syncDlRuns() {
 			_layoutRemoved.fire(lit->second.item.get());
 			_dlLayouts.erase(lit);
 		}
-		if (runIt == end(runs) && batchId) {
+		if (runIt == end(runs) && batchId && !isSingleDlBatch(batchId)) {
 			for (auto &element : _elements) {
 				if (element.dlRow == 0 && element.dlBatch == batchId) {
 					element.dlBatch = 0;
@@ -2041,7 +2167,7 @@ void Provider::syncUlRuns() {
 					&& element.ulBatch == batchId
 					&& sessionOf(element) == sessionId;
 			});
-		if (runIt != end(runs) && hasMembers) {
+		if ((runIt != end(runs) || isSingleUlBatch(batchId)) && hasMembers) {
 			++i;
 			continue;
 		}
@@ -2060,7 +2186,7 @@ void Provider::syncUlRuns() {
 			_layoutRemoved.fire(lit->second.item.get());
 			_ulLayouts.erase(lit);
 		}
-		if (runIt == end(runs) && batchId) {
+		if (runIt == end(runs) && batchId && !isSingleUlBatch(batchId)) {
 			for (auto &element : _elements) {
 				if (element.ulRow == 0 && element.ulBatch == batchId) {
 					element.ulBatch = 0;
@@ -2073,6 +2199,284 @@ void Provider::syncUlRuns() {
 	// provider pull that can mutate _elements, so it runs after the loops.
 	for (const auto batchId : runsToDrop) {
 		manager.dropUlRun(batchId);
+	}
+	if (changed) {
+		_postponedRefreshSort = true;
+		refreshPostponed(true);
+	}
+}
+
+bool Provider::isSingleDlBatch(uint64 batchId) const {
+	if (!batchId) {
+		return false;
+	}
+	for (const auto &[key, value] : _singleDlBatches) {
+		if (value == batchId) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool Provider::isSingleUlBatch(uint64 batchId) const {
+	if (!batchId) {
+		return false;
+	}
+	for (const auto &[key, value] : _singleUlBatches) {
+		if (value == batchId) {
+			return true;
+		}
+	}
+	return false;
+}
+
+Overview::Layout::ForwardSummaryData Provider::singleDlRunData(uint64 batchId) {
+	auto result = Overview::Layout::ForwardSummaryData();
+	if (!isSingleDlBatch(batchId)) {
+		return result;
+	}
+	for (const auto &element : _elements) {
+		if (element.dlRow != 0 || element.dlBatch != batchId) {
+			continue;
+		}
+		const auto peer = element.item->history()->peer.get();
+		result.title = peer ? peer->name() : QString();
+		const auto finished = _downloaded.contains(element.item);
+		result.status = tr::lng_tm_files_progress(
+			tr::now,
+			lt_done, QString::number(finished ? 1 : 0),
+			lt_total, QString::number(1));
+		result.statusDate = langDateTime(
+			QDateTime::fromMSecsSinceEpoch(element.started));
+		result.progress = finished ? 1. : 0.;
+		result.finished = finished;
+		return result;
+	}
+	return result;
+}
+
+Overview::Layout::ForwardSummaryData Provider::singleUlRunData(uint64 batchId) {
+	auto result = Overview::Layout::ForwardSummaryData();
+	if (!isSingleUlBatch(batchId)) {
+		return result;
+	}
+	for (const auto &element : _elements) {
+		if (element.ulRow != 0 || element.ulBatch != batchId) {
+			continue;
+		}
+		const auto peer = element.item->history()->peer.get();
+		result.title = peer ? peer->name() : QString();
+		const auto finished = _uploaded.contains(element.item->fullId());
+		result.status = tr::lng_tm_files_progress(
+			tr::now,
+			lt_done, QString::number(finished ? 1 : 0),
+			lt_total, QString::number(1));
+		result.statusDate = langDateTime(
+			QDateTime::fromMSecsSinceEpoch(element.started));
+		result.progress = finished ? 1. : 0.;
+		result.finished = finished;
+		return result;
+	}
+	return result;
+}
+
+void Provider::syncSingleHeaders() {
+	auto &manager = Core::App().downloadManager();
+	const auto sessionOf = [](const Element &element) {
+		return element.item->history()->session().uniqueId();
+	};
+	const auto dlRuns = manager.dlRuns();
+	const auto ulRuns = manager.ulRuns();
+	const auto batchHealthy = [&](uint64 id, bool dl) {
+		if (!id) {
+			return false;
+		}
+		const auto &runs = dl ? dlRuns : ulRuns;
+		for (const auto &run : runs) {
+			if (run.batchId == id) {
+				return true;
+			}
+		}
+		for (const auto &other : _elements) {
+			const auto header = dl
+				? (other.dlRow == 1 && other.dlBatch == id)
+				: (other.ulRow == 1 && other.ulBatch == id);
+			if (header) {
+				return true;
+			}
+		}
+		return false;
+	};
+	const auto allocId = [&](bool dl) {
+		for (;;) {
+			const auto id = base::RandomValue<uint64>();
+			if (!id) {
+				continue;
+			}
+			auto used = false;
+			const auto &runs = dl ? dlRuns : ulRuns;
+			for (const auto &run : runs) {
+				if (run.batchId == id) {
+					used = true;
+					break;
+				}
+			}
+			if (!used) {
+				const auto &map = dl ? _singleDlBatches : _singleUlBatches;
+				for (const auto &[key, value] : map) {
+					if (value == id) {
+						used = true;
+						break;
+					}
+				}
+			}
+			if (!used) {
+				return id;
+			}
+		}
+	};
+	auto changed = false;
+	{
+		auto dead = std::vector<FullMsgId>();
+		for (const auto &[key, value] : _singleDlBatches) {
+			const auto alive = ranges::any_of(
+				_elements,
+				[&](const Element &element) {
+					return element.item->fullId() == key;
+				});
+			if (!alive) {
+				dead.push_back(key);
+			}
+		}
+		for (const auto &key : dead) {
+			_singleDlBatches.remove(key);
+			changed = true;
+		}
+	}
+	{
+		auto dead = std::vector<FullMsgId>();
+		for (const auto &[key, value] : _singleUlBatches) {
+			const auto alive = ranges::any_of(
+				_elements,
+				[&](const Element &element) {
+					return element.item->fullId() == key;
+				});
+			if (!alive) {
+				dead.push_back(key);
+			}
+		}
+		for (const auto &key : dead) {
+			_singleUlBatches.remove(key);
+			changed = true;
+		}
+	}
+	for (auto &element : _elements) {
+		if (element.dlRow != 0
+			|| element.fwRow != 0
+			|| isEnhancedForward(element.item)) {
+			continue;
+		}
+		if (!_downloading.contains(element.item)
+			&& !_downloaded.contains(element.item)) {
+			continue;
+		}
+		if (element.dlBatch == 0 || !batchHealthy(element.dlBatch, true)) {
+			const auto id = element.item->fullId();
+			auto it = _singleDlBatches.find(id);
+			if (it == end(_singleDlBatches)) {
+				_singleDlBatches.emplace(id, allocId(true));
+				it = _singleDlBatches.find(id);
+				changed = true;
+			}
+			if (element.dlBatch != it->second) {
+				element.dlBatch = it->second;
+				changed = true;
+			}
+		}
+	}
+	for (auto &element : _elements) {
+		if (element.ulRow != 0
+			|| element.fwRow != 0
+			|| isEnhancedForward(element.item)) {
+			continue;
+		}
+		if (!_uploading.contains(element.item->fullId())
+			&& !_uploaded.contains(element.item->fullId())) {
+			continue;
+		}
+		if (element.ulBatch == 0 || !batchHealthy(element.ulBatch, false)) {
+			const auto id = element.item->fullId();
+			auto it = _singleUlBatches.find(id);
+			if (it == end(_singleUlBatches)) {
+				_singleUlBatches.emplace(id, allocId(false));
+				it = _singleUlBatches.find(id);
+				changed = true;
+			}
+			if (element.ulBatch != it->second) {
+				element.ulBatch = it->second;
+				changed = true;
+			}
+		}
+	}
+	auto missingDl = std::vector<uint64>();
+	for (const auto &element : _elements) {
+		if (element.dlRow != 0 || !isSingleDlBatch(element.dlBatch)) {
+			continue;
+		}
+		const auto hasHeader = ranges::any_of(
+			_elements,
+			[&](const Element &other) {
+				return other.dlRow == 1
+					&& other.dlBatch == element.dlBatch
+					&& sessionOf(other) == sessionOf(element);
+			});
+		if (!hasHeader && !ranges::contains(missingDl, element.dlBatch)) {
+			missingDl.push_back(element.dlBatch);
+		}
+	}
+	for (const auto batchId : missingDl) {
+		for (const auto &element : _elements) {
+			if (element.dlRow == 0 && element.dlBatch == batchId) {
+				addElementNow(Element{
+					.item = element.item,
+					.started = element.started,
+					.dlBatch = batchId,
+					.dlRow = 1,
+				});
+				changed = true;
+				break;
+			}
+		}
+	}
+	auto missingUl = std::vector<uint64>();
+	for (const auto &element : _elements) {
+		if (element.ulRow != 0 || !isSingleUlBatch(element.ulBatch)) {
+			continue;
+		}
+		const auto hasHeader = ranges::any_of(
+			_elements,
+			[&](const Element &other) {
+				return other.ulRow == 1
+					&& other.ulBatch == element.ulBatch
+					&& sessionOf(other) == sessionOf(element);
+			});
+		if (!hasHeader && !ranges::contains(missingUl, element.ulBatch)) {
+			missingUl.push_back(element.ulBatch);
+		}
+	}
+	for (const auto batchId : missingUl) {
+		for (const auto &element : _elements) {
+			if (element.ulRow == 0 && element.ulBatch == batchId) {
+				addElementNow(Element{
+					.item = element.item,
+					.started = element.started,
+					.ulBatch = batchId,
+					.ulRow = 1,
+				});
+				changed = true;
+				break;
+			}
+		}
 	}
 	if (changed) {
 		_postponedRefreshSort = true;
@@ -2135,6 +2539,14 @@ void Provider::appendGroupedUploads(
 		return element.item->history()->session().uniqueId();
 	};
 	auto emitted = base::flat_set<uint64>();
+	struct Entry {
+		int64 date = 0;
+		bool grouped = false;
+		const Element *header = nullptr;
+		std::vector<const Element*> members;
+		const Element *single = nullptr;
+	};
+	auto entries = std::vector<Entry>();
 	for (const auto &run : runs) {
 		auto header = (const Element*)nullptr;
 		for (const auto &element : _elements) {
@@ -2149,45 +2561,41 @@ void Provider::appendGroupedUploads(
 		if (!header) {
 			continue;
 		}
-		auto members = std::vector<const Element*>();
+		emitted.emplace(run.batchId);
+		auto entry = Entry();
+		entry.date = int64(run.startedAt) * 1000;
+		entry.grouped = true;
+		entry.header = header;
 		for (const auto &element : _elements) {
 			if (element.ulRow == 0
 				&& element.ulBatch == run.batchId
 				&& sessionOf(element) == run.sessionId
 				&& accept(element)) {
-				members.push_back(&element);
+				entry.members.push_back(&element);
 			}
 		}
-		const auto headerShown = !search
-			|| header->found
-			|| ranges::any_of(members, [](const Element *member) {
-				return member->found;
-			});
-		if (!headerShown) {
-			for (const auto member : members) {
-				if (member->found) {
-					if (auto layout = getLayout(*member, delegate)) {
-						section.addItem(layout);
-					}
-				}
-			}
-			emitted.emplace(run.batchId);
-			continue;
-		}
-		if (auto layout = getLayout(*header, delegate)) {
-			section.addItem(layout);
-		}
-		for (const auto member : members) {
-			if (search && !member->found && !header->found) {
+		entries.push_back(std::move(entry));
+	}
+	for (const auto &element : _elements) {
+		if (element.ulRow == 1 && isSingleUlBatch(element.ulBatch)) {
+			if (!accept(element)) {
 				continue;
 			}
-			if (auto layout = getLayout(*member, delegate)) {
-				section.addItem(layout);
+			emitted.emplace(element.ulBatch);
+			auto entry = Entry();
+			entry.date = element.started;
+			entry.grouped = true;
+			entry.header = &element;
+			for (const auto &member : _elements) {
+				if (member.ulRow == 0
+					&& member.ulBatch == element.ulBatch
+					&& accept(member)) {
+					entry.members.push_back(&member);
+				}
 			}
+			entries.push_back(std::move(entry));
 		}
-		emitted.emplace(run.batchId);
 	}
-	auto rest = std::vector<const Element*>();
 	for (const auto &element : _elements) {
 		if (element.ulRow == 1) {
 			continue;
@@ -2199,12 +2607,44 @@ void Provider::appendGroupedUploads(
 		} else if (search && !element.found) {
 			continue;
 		}
-		rest.push_back(&element);
+		auto entry = Entry();
+		entry.date = element.started;
+		entry.single = &element;
+		entries.push_back(std::move(entry));
 	}
-	ranges::stable_sort(rest, ranges::less(), &Element::started);
-	for (const auto element : rest) {
-		if (auto layout = getLayout(*element, delegate)) {
+	ranges::stable_sort(entries, ranges::less(), &Entry::date);
+	for (const auto &entry : entries) {
+		if (!entry.grouped) {
+			if (auto layout = getLayout(*entry.single, delegate)) {
+				section.addItem(layout);
+			}
+			continue;
+		}
+		const auto headerShown = !search
+			|| entry.header->found
+			|| ranges::any_of(entry.members, [](const Element *member) {
+				return member->found;
+			});
+		if (!headerShown) {
+			for (const auto member : entry.members) {
+				if (member->found) {
+					if (auto layout = getLayout(*member, delegate)) {
+						section.addItem(layout);
+					}
+				}
+			}
+			continue;
+		}
+		if (auto layout = getLayout(*entry.header, delegate)) {
 			section.addItem(layout);
+		}
+		for (const auto member : entry.members) {
+			if (search && !member->found && !entry.header->found) {
+				continue;
+			}
+			if (auto layout = getLayout(*member, delegate)) {
+				section.addItem(layout);
+			}
 		}
 	}
 }
@@ -2277,6 +2717,14 @@ void Provider::appendGroupedDownloads(
 		return element.item->history()->session().uniqueId();
 	};
 	auto emitted = base::flat_set<uint64>();
+	struct Entry {
+		int64 date = 0;
+		bool grouped = false;
+		const Element *header = nullptr;
+		std::vector<const Element*> members;
+		const Element *single = nullptr;
+	};
+	auto entries = std::vector<Entry>();
 	for (const auto &run : runs) {
 		auto header = (const Element*)nullptr;
 		for (const auto &element : _elements) {
@@ -2291,45 +2739,41 @@ void Provider::appendGroupedDownloads(
 		if (!header) {
 			continue;
 		}
-		auto members = std::vector<const Element*>();
+		emitted.emplace(run.batchId);
+		auto entry = Entry();
+		entry.date = int64(run.startedAt) * 1000;
+		entry.grouped = true;
+		entry.header = header;
 		for (const auto &element : _elements) {
 			if (element.dlRow == 0
 				&& element.dlBatch == run.batchId
 				&& sessionOf(element) == run.sessionId
 				&& accept(element)) {
-				members.push_back(&element);
+				entry.members.push_back(&element);
 			}
 		}
-		const auto headerShown = !search
-			|| header->found
-			|| ranges::any_of(members, [](const Element *member) {
-				return member->found;
-			});
-		if (!headerShown) {
-			for (const auto member : members) {
-				if (member->found) {
-					if (auto layout = getLayout(*member, delegate)) {
-						section.addItem(layout);
-					}
-				}
-			}
-			emitted.emplace(run.batchId);
-			continue;
-		}
-		if (auto layout = getLayout(*header, delegate)) {
-			section.addItem(layout);
-		}
-		for (const auto member : members) {
-			if (search && !member->found && !header->found) {
+		entries.push_back(std::move(entry));
+	}
+	for (const auto &element : _elements) {
+		if (element.dlRow == 1 && isSingleDlBatch(element.dlBatch)) {
+			if (!accept(element)) {
 				continue;
 			}
-			if (auto layout = getLayout(*member, delegate)) {
-				section.addItem(layout);
+			emitted.emplace(element.dlBatch);
+			auto entry = Entry();
+			entry.date = element.started;
+			entry.grouped = true;
+			entry.header = &element;
+			for (const auto &member : _elements) {
+				if (member.dlRow == 0
+					&& member.dlBatch == element.dlBatch
+					&& accept(member)) {
+					entry.members.push_back(&member);
+				}
 			}
+			entries.push_back(std::move(entry));
 		}
-		emitted.emplace(run.batchId);
 	}
-	auto rest = std::vector<const Element*>();
 	for (const auto &element : _elements) {
 		if (element.dlRow == 1) {
 			continue;
@@ -2341,12 +2785,44 @@ void Provider::appendGroupedDownloads(
 		} else if (search && !element.found) {
 			continue;
 		}
-		rest.push_back(&element);
+		auto entry = Entry();
+		entry.date = element.started;
+		entry.single = &element;
+		entries.push_back(std::move(entry));
 	}
-	ranges::stable_sort(rest, ranges::less(), &Element::started);
-	for (const auto element : rest) {
-		if (auto layout = getLayout(*element, delegate)) {
+	ranges::stable_sort(entries, ranges::less(), &Entry::date);
+	for (const auto &entry : entries) {
+		if (!entry.grouped) {
+			if (auto layout = getLayout(*entry.single, delegate)) {
+				section.addItem(layout);
+			}
+			continue;
+		}
+		const auto headerShown = !search
+			|| entry.header->found
+			|| ranges::any_of(entry.members, [](const Element *member) {
+				return member->found;
+			});
+		if (!headerShown) {
+			for (const auto member : entry.members) {
+				if (member->found) {
+					if (auto layout = getLayout(*member, delegate)) {
+						section.addItem(layout);
+					}
+				}
+			}
+			continue;
+		}
+		if (auto layout = getLayout(*entry.header, delegate)) {
 			section.addItem(layout);
+		}
+		for (const auto member : entry.members) {
+			if (search && !member->found && !entry.header->found) {
+				continue;
+			}
+			if (auto layout = getLayout(*member, delegate)) {
+				section.addItem(layout);
+			}
 		}
 	}
 }
@@ -2507,6 +2983,31 @@ std::vector<ListSection> Provider::fillSections(
 			// completion order and is not stable).
 			std::vector<const Element*> eligible;
 			eligible.reserve(_elements.size());
+			if (_filter == Filter::Forwards) {
+				auto sessions = std::vector<not_null<Main::Session*>>();
+				sessions.push_back(&_controller->session());
+				for (const auto &[tracked, lifetime] : _trackedSessions) {
+					if (tracked != &_controller->session()) {
+						sessions.push_back(tracked);
+					}
+				}
+				for (const auto session : sessions) {
+					for (const auto &record
+						: EnhancedForward::FinishedFwRuns(session)) {
+						if (!record.firstSource) {
+							continue;
+						}
+						if (const auto message = session->data().message(
+								record.firstSource)) {
+							ensureFwFinishedGroup(
+								session,
+								record.dst,
+								record.actionId,
+								not_null<HistoryItem*>(message));
+						}
+					}
+				}
+			}
 			for (const auto &element : _elements) {
 				if (!search || element.found) {
 					eligible.push_back(&element);
@@ -2517,6 +3018,10 @@ std::vector<ListSection> Provider::fillSections(
 					eligible,
 					ranges::less(),
 					[](const Element *element) { return element->order; });
+				qDebug() << "[TM] fw fill eligible:"
+					<< eligible.size()
+					<< "elements:"
+					<< _elements.size();
 			} else {
 				ranges::stable_sort(
 					eligible,
@@ -2540,6 +3045,12 @@ std::vector<ListSection> Provider::fillSections(
 						return matches(element);
 					});
 			} else for (const auto *element : eligible) {
+				if (element->fwRow == 1) {
+					qDebug() << "[TM] fw fill row group:"
+						<< element->fwGroup
+						<< "carrier:"
+						<< element->item->fullId().msg.bare;
+				}
 				if (!matches(*element)) {
 					continue;
 				} else if (auto layout = getLayout(*element, delegate)) {
@@ -2547,8 +3058,7 @@ std::vector<ListSection> Provider::fillSections(
 				}
 			}
 		} else {
-			for (auto i = 0; i != int(_elements.size()); ++i) {
-				const auto &element = _elements[_elements.size() - 1 - i];
+			for (const auto &element : _elements) {
 				if (search && !element.found) {
 					continue;
 				} else if (!matches(element)) {
@@ -2694,6 +3204,17 @@ void Provider::cancelForwardRun(not_null<const HistoryItem*> item) {
 	const auto session = &item->history()->session();
 	EnhancedForward::cancelForward(*dst, session);
 	NormalForward::CancelDst(session, *dst);
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (db.isOpen()) {
+		db.removeNfResume(session->uniqueId(), *dst);
+		for (const auto &record
+			: db.loadUnfinishedEfResumeItems(session->uniqueId())) {
+			if (record.peerId == *dst) {
+				db.clearEfResumeJob(record.jobId);
+			}
+		}
+	}
+	refreshForwards();
 }
 
 void Provider::clearForwardRun(not_null<const HistoryItem*> item) {
@@ -2708,6 +3229,7 @@ void Provider::clearForwardRun(not_null<const HistoryItem*> item) {
 		return;
 	}
 	ClearFwRun(session, *dst);
+	refreshForwards();
 }
 
 bool Provider::isDownloadAggregate(
@@ -2817,6 +3339,9 @@ void Provider::fillSearchIndex(Element &element) {
 				break;
 			}
 		}
+		if (strings.isEmpty()) {
+			strings.append(element.item->history()->peer->name());
+		}
 		element.words = TextUtilities::PrepareSearchWords(
 			strings.join(' '));
 		element.letters.clear();
@@ -2911,18 +3436,37 @@ BaseLayout *Provider::getLayout(
 		return it->second.item.get();
 	}
 	if (element.fwRow == 1) {
+		qDebug() << "[TM] fw getlayout group:"
+			<< element.fwGroup
+			<< "layouts:"
+			<< _fwLayouts.size();
 		const auto key = std::make_tuple(
 			&element.item->history()->session(),
 			element.fwDst,
 			element.fwGroup);
 		auto it = _fwLayouts.find(key);
+		auto created = false;
 		if (it == _fwLayouts.end()) {
 			if (auto layout = createLayout(element, delegate)) {
 				layout->initDimensions();
 				it = _fwLayouts.emplace(key, std::move(layout)).first;
+				created = true;
 			} else {
 				return nullptr;
 			}
+		}
+		const auto summary = static_cast<Overview::Layout::ForwardSummary*>(
+			it->second.item.get());
+		if (!summary->hasContent()) {
+			if (created) {
+				qDebug() << "[TM] fw layout created empty, group:"
+					<< element.fwGroup;
+			}
+			return nullptr;
+		}
+		if (created) {
+			qDebug() << "[TM] fw layout created ok, group:"
+				<< element.fwGroup;
 		}
 		it->second.stale = false;
 		return it->second.item.get();
@@ -2955,13 +3499,18 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 						return DlRunData(run);
 					}
 				}
-				return Overview::Layout::ForwardSummaryData();
+				return singleDlRunData(batchId);
 			},
 			.action = std::make_shared<LambdaClickHandler>(
 				crl::guard(this, [=] {
 				})),
 			.noThumb = true,
 		};
+		const auto dlProbe = fields.snapshot();
+		if (dlProbe.title.isEmpty() && dlProbe.status.isEmpty()) {
+			qDebug() << "[TM] header skipped empty, dl batch:" << batchId;
+			return nullptr;
+		}
 		return std::make_unique<Overview::Layout::ForwardSummary>(
 			delegate,
 			element.item,
@@ -2983,13 +3532,18 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 							carrier->history()->peer->name());
 					}
 				}
-				return Overview::Layout::ForwardSummaryData();
+				return singleUlRunData(batchId);
 			},
 			.action = std::make_shared<LambdaClickHandler>(
 				crl::guard(this, [=] {
 				})),
 			.noThumb = true,
 		};
+		const auto ulProbe = fields.snapshot();
+		if (ulProbe.title.isEmpty() && ulProbe.status.isEmpty()) {
+			qDebug() << "[TM] header skipped empty, ul batch:" << batchId;
+			return nullptr;
+		}
 		return std::make_unique<Overview::Layout::ForwardSummary>(
 			delegate,
 			element.item,
@@ -3006,6 +3560,10 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 				if (record.actionId == element.fwGroup) {
 					runs.push_back(record);
 				}
+			}
+			if (runs.empty()) {
+				qDebug() << "[TM] fw group runs empty at create, group:"
+					<< element.fwGroup;
 			}
 			if (!runs.empty()) {
 				const auto groupId = element.fwGroup;
@@ -3024,7 +3582,15 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 					.action = std::make_shared<LambdaClickHandler>(
 						crl::guard(this, [=] {
 						})),
+					.threeLineStatus = true,
 				};
+				const auto groupProbe = fields.snapshot();
+				if (groupProbe.title.isEmpty()
+					&& groupProbe.status.isEmpty()) {
+					qDebug() << "[TM] header skipped empty fw group:"
+						<< groupId;
+					return nullptr;
+				}
 				return std::make_unique<Overview::Layout::ForwardSummary>(
 					delegate,
 					element.item,
@@ -3045,7 +3611,14 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 						ToggleFwRunPause(session, dst);
 					}
 				})),
+			.threeLineStatus = true,
 		};
+		const auto aggregateProbe = fields.snapshot();
+		if (aggregateProbe.title.isEmpty()
+			&& aggregateProbe.status.isEmpty()) {
+			qDebug() << "[TM] header skipped empty fw aggregate";
+			return nullptr;
+		}
 		return std::make_unique<Overview::Layout::ForwardSummary>(
 			delegate,
 			element.item,
@@ -3062,19 +3635,59 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 	using namespace Overview::Layout;
 	const auto media = element.item->media();
 	if (const auto photo = media ? media->photo() : nullptr) {
+		auto options = MediaOptions{
+			.spoiler = media && media->hasSpoiler(),
+			.sideRow = true,
+		};
+		auto name = QFileInfo(element.path).fileName();
+		if (name.isEmpty()) {
+			name = u"photo_%1.jpg"_q.arg(element.item->fullId().msg.bare);
+		}
+		auto size = int64(0);
+		for (const auto id : Core::App().downloadManager().loadingList()) {
+			if (id->object.item.get() == element.item.get() && id->total > 0) {
+				size = id->total;
+				break;
+			}
+		}
+		if (!size && !element.path.isEmpty()) {
+			size = QFileInfo(element.path).size();
+		}
+		options.footerName = name;
+		const auto msgBare = element.item->fullId().msg.bare;
+		const auto msgId = msgBare
+			? u"ID: %1"_q.arg(msgBare)
+			: QString();
+		options.footerDetails = (size > 0)
+			? (msgId.isEmpty()
+				? Ui::FormatSizeText(size)
+				: u"%1 · %2"_q.arg(Ui::FormatSizeText(size), msgId))
+			: msgId;
 		return std::make_unique<Photo>(
 			delegate,
 			element.item,
 			photo,
-			MediaOptions{ .spoiler = media && media->hasSpoiler() });
+			std::move(options));
 	}
 	const auto &songSt = st::overviewFileLayout;
 	if (const auto file = getFile()) {
+		auto nameOverride = QString();
+		if (file->isVideoFile() && !element.path.isEmpty()) {
+			const auto upload = isUploadItem(element.item);
+			if (!upload || !file->isVideoMessage()) {
+				nameOverride = QFileInfo(element.path).fileName();
+			}
+		}
 		const auto srcId = element.item->fullId();
+		const auto docBare = srcId.msg.bare;
+		const auto docIdSuffix = docBare
+			? u"ID: %1"_q.arg(docBare)
+			: QString();
 		const auto session = &_controller->session();
 		auto fields = DocumentFields{
 			.document = file,
 			.dateOverride = Data::DateFromDownloadDate(element.started),
+			.nameOverride = std::move(nameOverride),
 			.forceFileLayout = true,
 			.forceCancelCheck = [this, id = srcId] {
 				if (_efPending.contains(id)
@@ -3103,6 +3716,9 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 				*t = *total;
 				return true;
 			},
+			.boldName = true,
+			.hideDate = true,
+			.statusSuffix = docIdSuffix,
 		};
 		const auto item = element.item;
 		auto &manager = Core::App().downloadManager();

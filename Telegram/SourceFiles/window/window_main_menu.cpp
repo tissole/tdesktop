@@ -763,7 +763,9 @@ void MainMenu::setupMenu() {
 		{ &st::menuIconTransfer }
 	)->setClickedCallback([=] {
 		controller->showSection(
-			Info::Downloads::Make(controller->session().user()));
+			Info::Downloads::Make(
+				controller->session().user(),
+				Info::Downloads::LastActivityTab()));
 	});
 
 	_nightThemeToggle = addAction(

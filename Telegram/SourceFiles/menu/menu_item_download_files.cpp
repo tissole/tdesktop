@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document_media.h"
 #include "data/data_download_manager.h"
 #include "data/data_file_click_handler.h"
+#include "data/data_file_hash.h"
 #include "data/data_photo.h"
 #include "data/data_photo_media.h"
 #include "data/data_session.h"
@@ -41,6 +42,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_widgets.h"
 
 #include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 
 namespace Menu {
 namespace {
@@ -194,6 +196,7 @@ void AddAction(
 				batch->onDone = [=](int, int) {
 					Core::App().downloadManager().ensureDedupDb(
 						).clearDlTmpRun(session->uniqueId(), batchId);
+					Core::App().downloadManager().holdFinishedDlBatch(batch);
 					Core::App().downloadManager().noteDlBatchFinished(batch);
 				};
 			}
@@ -227,11 +230,43 @@ void AddAction(
 			for (auto i = 0; i < views.size(); i++) {
 				const auto &photo = photos[i].first;
 				if (batch
+					&& !dedupOff
+					&& manager.ensureDedupDb().containsDocId(
+						Data::DedupDb::Table::Downloads,
+						uint64(photo->id))) {
+					batch->displayName = QFileInfo(fullPath(i)).fileName();
+					batch->addDuplicate();
+					skippedCount++;
+					continue;
+				}
+				auto hash = QByteArray();
+				if (!dedupOff) {
+					if (const auto video = views[i]->videoContent(Data::PhotoSize::Large);
+						!video.isEmpty()) {
+						hash = Data::ContentFingerprint(video);
+					} else if (const auto image = views[i]->imageBytes(Data::PhotoSize::Large);
+						!image.isEmpty()) {
+						hash = Data::ContentFingerprint(image);
+					}
+					if (!hash.isEmpty()
+						&& manager.ensureDedupDb().containsHash(
+							Data::DedupDb::Table::Downloads,
+							hash)) {
+						if (batch) {
+							batch->displayName = QFileInfo(fullPath(i)).fileName();
+							batch->addDuplicate();
+						}
+						skippedCount++;
+						continue;
+					}
+				}
+				if (batch
 					&& dedupOff
 					&& manager.ensureDedupDb().containsDlTmpDocId(
 						sessionId,
 						batchId,
 						photo->id)) {
+					batch->displayName = QFileInfo(fullPath(i)).fileName();
 					batch->addDuplicate();
 					skippedCount++;
 					continue;
@@ -261,9 +296,17 @@ void AddAction(
 				if (!QFile::exists(lastPath)) {
 					skippedCount++;
 					if (batch) {
+						batch->displayName = QFileInfo(lastPath).fileName();
 						batch->addDuplicate();
 					}
 				} else if (batch) {
+					batch->displayName = QFileInfo(lastPath).fileName();
+					manager.ensureDedupDb().insert(
+						Data::DedupDb::Table::Downloads, {
+							.hash = hash,
+							.documentId = uint64(photo->id),
+							.status = u"f"_q,
+						});
 					batch->addDownloaded();
 				}
 			}
@@ -297,6 +340,10 @@ void AddAction(
 		const auto batch = documents.empty()
 			? nullptr
 			: MakeDownloadBatch(int(documents.size()));
+		if (batch && !documents.empty()
+			&& batch->displayName.isEmpty()) {
+			batch->displayName = documents.front().first->filename();
+		}
 		if (batch && batch->total > 1) {
 			auto &session = documents.front().first->session();
 			batch->sessionId = session.uniqueId();
@@ -328,17 +375,33 @@ void AddAction(
 				document,
 				[=](bool skip) {
 					if (skip) {
+						batch->displayName = document->filename();
 						batch->addDuplicate();
 						return;
 					}
 					const auto name = base::FileNameFromUserString(
 						document->filename());
+					if (batchId
+						&& Core::App().downloadManager().ensureDedupDb().containsDlTmpDocId(
+							document->session().uniqueId(),
+							batchId,
+							document->id)) {
+						batch->displayName = QFileInfo(folderPath + name).fileName();
+						batch->addDuplicate();
+						return;
+					}
 					document->save(
 						origin,
 						folderPath + name,
 						LoadFromCloudOrLocal,
 						false,
 						true);
+					auto &manager = Core::App().downloadManager();
+					const auto saveStarted = manager.computeNextStartDate();
+					TrackSaveDownload(
+						origin,
+						document,
+						batchId);
 					auto lifetime = std::make_shared<rpl::lifetime>();
 					document->session().data().documentLoadProgress(
 					) | rpl::filter([=](not_null<DocumentData*> doc) {
@@ -348,6 +411,17 @@ void AddAction(
 							return;
 						}
 						if (!doc->filepath(true).isEmpty()) {
+							if (batch) {
+								batch->displayName = QFileInfo(folderPath + name).fileName();
+							}
+							if (const auto item = doc->owner().message(origin)) {
+								Core::App().downloadManager().noteUntrackedSave(
+									item,
+									doc,
+									doc->filepath(true),
+									saveStarted,
+									batchId);
+							}
 							batch->addDownloaded();
 							if (batchId) {
 								Core::App().downloadManager().commitDlTmpFile(

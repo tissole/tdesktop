@@ -232,6 +232,10 @@ int InnerWidget::recountHeight() {
 		top += _list->heightNoMargins();
 		_empty->hide();
 	} else {
+		if (provider()->fullCount().value_or(0) > 0) {
+			qDebug() << "[TM] tm list empty but provider has rows, count:"
+				<< *provider()->fullCount();
+		}
 		_empty->show();
 		_empty->moveToLeft(0, top);
 		top += _empty->heightNoMargins();

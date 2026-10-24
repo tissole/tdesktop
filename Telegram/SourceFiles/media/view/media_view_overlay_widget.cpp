@@ -89,6 +89,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document_resolver.h"
 #include "data/data_file_click_handler.h"
 #include "data/data_download_manager.h"
+#include "data/data_file_hash.h"
 #include "data/data_poll.h"
 #include "window/themes/window_theme_preview.h"
 #include "window/window_peer_menu.h"
@@ -3333,32 +3334,57 @@ void OverlayWidget::saveAs() {
 				true,
 				alreadyDir);
 			if (!file.isEmpty() && file != location.name()) {
-				if (bytes.isEmpty()) {
-					QFile(file).remove();
-					QFile(location.name()).copy(file);
-				} else {
-					QFile f(file);
-					if (f.open(QIODevice::WriteOnly)) {
-						f.write(bytes);
-					}
-				}
-				if (_message) {
-					auto &manager = Core::App().downloadManager();
-					manager.addLoaded({
-						.item = _message,
-						.document = _document,
-					}, file, manager.computeNextStartDate());
-				}
-			}
-
-			if (bytes.isEmpty()) {
+				auto batch = MakeDownloadBatch(1);
+				batch->sessionId = _session->uniqueId();
+				batch->displayName = QFileInfo(file).fileName();
+				const auto messageId = _message
+					? _message->fullId()
+					: FullMsgId();
+				Core::App().downloadManager().checkDuplicate(
+					_session,
+					_document,
+					crl::guard(_session, [=](bool skip) {
+						auto &manager = Core::App().downloadManager();
+						if (skip) {
+							batch->addDuplicate();
+							if (bytes.isEmpty()) {
+								location.accessDisable();
+							}
+							return;
+						}
+						if (bytes.isEmpty()) {
+							QFile(file).remove();
+							QFile(location.name()).copy(file);
+						} else {
+							QFile f(file);
+							if (f.open(QIODevice::WriteOnly)) {
+								f.write(bytes);
+							}
+						}
+						if (const auto message = _session->data().message(messageId)) {
+							manager.addLoaded({
+								.item = message,
+								.document = _document,
+							}, file, manager.computeNextStartDate());
+						}
+						batch->addDownloaded();
+						if (bytes.isEmpty()) {
+							location.accessDisable();
+						}
+					}),
+					0);
+			} else if (bytes.isEmpty()) {
 				location.accessDisable();
 			}
 		} else {
+			auto batch = MakeDownloadBatch(1);
+			batch->sessionId = _session->uniqueId();
 			DocumentSaveClickHandler::SaveAndTrack(
 				_message ? _message->fullId() : FullMsgId(),
 				_document,
-				DocumentSaveClickHandler::Mode::ToNewFile);
+				DocumentSaveClickHandler::Mode::ToNewFile,
+				nullptr,
+				batch);
 			updateControls();
 			updateOver(_lastMouseMovePos);
 		}
@@ -3382,7 +3408,52 @@ void OverlayWidget::saveAs() {
 					if (!result.isEmpty()
 						&& _photo == photo
 						&& f.open(QIODevice::WriteOnly)) {
-						f.write(bytes);
+						auto batch = MakeDownloadBatch(1);
+						batch->sessionId = _session
+							? _session->uniqueId()
+							: 0;
+						batch->displayName = QFileInfo(result).fileName();
+						auto &manager = Core::App().downloadManager();
+						auto &db = manager.ensureDedupDb();
+						const auto dedupOn = GetEnhancedBool(
+							"prevent_download_duplicates");
+						auto hash = QByteArray();
+						if (dedupOn && db.isOpen()) {
+							if (db.containsDocId(
+								Data::DedupDb::Table::Downloads,
+								uint64(photo->id))) {
+								batch->addDuplicate();
+								return;
+							}
+							hash = Data::ContentFingerprint(bytes);
+							if (!hash.isEmpty()
+								&& db.containsHash(
+									Data::DedupDb::Table::Downloads,
+									hash)) {
+								batch->addDuplicate();
+								return;
+							}
+						}
+					if (f.write(bytes) != bytes.size()) {
+						batch->addFailed();
+						return;
+					}
+					// addLoaded first: it treats our own just-written doc-id
+					// record as a duplicate and deletes the file.
+					if (_message) {
+						manager.addLoaded({
+							.item = _message,
+							.photo = photo,
+						}, result, manager.computeNextStartDate());
+					}
+					if (db.isOpen()) {
+						db.insert(Data::DedupDb::Table::Downloads, {
+							.hash = hash,
+							.documentId = uint64(photo->id),
+							.status = u"f"_q,
+						});
+					}
+					batch->addDownloaded();
 					}
 				}));
 		} else {
@@ -3410,14 +3481,56 @@ void OverlayWidget::saveAs() {
 				_photo->date()),
 			crl::guard(_window, [=](const QString &result) {
 				if (!result.isEmpty() && _photo == photo) {
-					media->saveToFile(result);
+					auto batch = MakeDownloadBatch(1);
+					batch->sessionId = _session
+						? _session->uniqueId()
+						: 0;
+					batch->displayName = QFileInfo(result).fileName();
+					auto &manager = Core::App().downloadManager();
+					auto &db = manager.ensureDedupDb();
+					const auto dedupOn = GetEnhancedBool(
+						"prevent_download_duplicates");
+					auto hash = QByteArray();
+					if (dedupOn && db.isOpen()) {
+						if (db.containsDocId(
+							Data::DedupDb::Table::Downloads,
+							uint64(photo->id))) {
+							batch->addDuplicate();
+							return;
+						}
+						if (const auto bytes = media->imageBytes(
+							Data::PhotoSize::Large);
+							!bytes.isEmpty()) {
+							hash = Data::ContentFingerprint(bytes);
+							if (!hash.isEmpty()
+								&& db.containsHash(
+									Data::DedupDb::Table::Downloads,
+									hash)) {
+								batch->addDuplicate();
+								return;
+							}
+						}
+					}
+					if (!media->saveToFile(result)) {
+						batch->addFailed();
+						return;
+					}
+					// addLoaded first: it treats our own just-written doc-id
+					// record as a duplicate and deletes the file.
 					if (_message) {
-						auto &manager = Core::App().downloadManager();
 						manager.addLoaded({
 							.item = _message,
 							.photo = photo,
 						}, result, manager.computeNextStartDate());
 					}
+					if (db.isOpen()) {
+						db.insert(Data::DedupDb::Table::Downloads, {
+							.hash = hash,
+							.documentId = uint64(photo->id),
+							.status = u"f"_q,
+						});
+					}
+					batch->addDownloaded();
 				}
 			}));
 	}
@@ -3533,6 +3646,8 @@ void OverlayWidget::downloadMedia() {
 						.item = _message,
 						.document = _document,
 					}, toName, manager.computeNextStartDate());
+					manager.holdFinishedSingleDownload(
+						QFileInfo(toName).fileName());
 				}
 			}
 			if (_stories && !toName.isEmpty()) {
@@ -3557,11 +3672,14 @@ void OverlayWidget::downloadMedia() {
 						}
 					}
 				};
+				auto quickBatch = MakeDownloadBatch(1);
+				quickBatch->sessionId = _session->uniqueId();
 				DocumentSaveClickHandler::SaveAndTrack(
 					_message ? _message->fullId() : FullMsgId(),
 					_document,
 					DocumentSaveClickHandler::Mode::ToFile,
-					crl::guard(_widget, checkSaveStarted));
+					crl::guard(_widget, checkSaveStarted),
+					quickBatch);
 			} else {
 				_saveVisible = computeSaveButtonVisible();
 				update(_saveNavOver);
@@ -3569,13 +3687,38 @@ void OverlayWidget::downloadMedia() {
 			updateOver(_lastMouseMovePos);
 		}
 	} else if (_photo && _photo->hasVideo()) {
-		if (!_photoMedia->videoContent(Data::PhotoSize::Large).isEmpty()) {
+		if (const auto bytes = _photoMedia->videoContent(Data::PhotoSize::Large);
+			!bytes.isEmpty()) {
 			if (!QDir().exists(path)) {
 				QDir().mkpath(path);
 			}
 			toName = filedialogDefaultName(u"photo"_q, u".mp4"_q, path);
+			const auto photo = _photo;
+			auto batch = MakeDownloadBatch(1);
+			batch->sessionId = _session
+				? _session->uniqueId()
+				: 0;
+			batch->displayName = QFileInfo(toName).fileName();
+			auto &manager = Core::App().downloadManager();
 			if (!_photoMedia->saveToFile(toName)) {
 				toName = QString();
+				batch->addFailed();
+			} else {
+				if (_message) {
+						manager.addLoaded({
+							.item = _message,
+							.photo = photo,
+						}, toName, manager.computeNextStartDate(), 0);
+				}
+				auto &db = manager.ensureDedupDb();
+				if (db.isOpen()) {
+					db.insert(Data::DedupDb::Table::Downloads, {
+						.hash = Data::ContentFingerprint(bytes),
+						.documentId = uint64(photo->id),
+						.status = u"f"_q,
+					});
+				}
+				batch->addDownloaded();
 			}
 		} else {
 			_photo->loadVideo(Data::PhotoSize::Large, fileOrigin());
@@ -3595,10 +3738,12 @@ void OverlayWidget::downloadMedia() {
 				toName = QString();
 			} else if (_message) {
 				auto &manager = Core::App().downloadManager();
-				manager.addLoaded({
-					.item = _message,
-					.photo = _photo,
-				}, toName, manager.computeNextStartDate());
+					manager.addLoaded({
+						.item = _message,
+						.photo = _photo,
+					}, toName, manager.computeNextStartDate(), 0);
+				manager.holdFinishedSingleDownload(
+					QFileInfo(toName).fileName());
 			}
 		}
 	}

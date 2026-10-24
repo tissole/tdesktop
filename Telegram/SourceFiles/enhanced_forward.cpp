@@ -247,6 +247,7 @@ struct ForwardBatch {
 	int total = 0;
 	int sent = 0;
 	int skipped = 0;
+	QString lastFileName;
 	uint64 actionId = 0;
 	crl::time lastTouchAt = 0;
 	bool enhancedDone = false;
@@ -315,6 +316,7 @@ void BeginForwardBatch(
 	}
 	batch.total += total;
 	batch.lastTouchAt = crl::now();
+	Info::Downloads::SetLastActivityTab(Info::Downloads::Tab::Forwards);
 	NotifyCounterChanged();
 }
 
@@ -330,6 +332,37 @@ void ReportForwardBatchItem(
 	batch->sent += sentDelta;
 	batch->skipped += skippedDelta;
 	batch->lastTouchAt = crl::now();
+	NotifyCounterChanged();
+}
+
+QString ForwardBatchFirstName(
+		const std::vector<not_null<HistoryItem*>> &items) {
+	if (items.empty()) {
+		return QString();
+	}
+	const auto item = items.front();
+	if (const auto media = item->media()) {
+		if (const auto doc = media->document()) {
+			return doc->filename();
+		} else if (media->photo()) {
+			return u"photo_%1.jpg"_q.arg(item->fullId().msg.bare);
+		}
+	}
+	return QString();
+}
+
+void NoteForwardBatchFile(
+		not_null<Main::Session*> session,
+		const PeerId &dst,
+		const QString &name) {
+	if (name.isEmpty()) {
+		return;
+	}
+	const auto batch = LookupForwardBatch(session, dst);
+	if (!batch) {
+		return;
+	}
+	batch->lastFileName = name;
 	NotifyCounterChanged();
 }
 
@@ -370,7 +403,7 @@ void FinishForwardBatchWorker(
 	// The record stays briefly so the bar and the counters show the final
 	// count, then it is dropped. Kept rows for the transfers list live in
 	// the finished-runs registry instead.
-	base::call_delayed(crl::time(2000), [dst] {
+	base::call_delayed(crl::time(5000), [dst] {
 		const auto it = ForwardBatchMap().find(dst);
 		if (it == end(ForwardBatchMap()) || !it->second.finished) {
 			return;
@@ -423,6 +456,7 @@ std::vector<ForwardBatchSnapshot> ForwardBatches(
 		.total = batch.total,
 		.sent = batch.sent,
 		.skipped = batch.skipped,
+		.lastFileName = batch.lastFileName,
 		.finished = batch.finished,
 	});
 	}
@@ -560,6 +594,7 @@ void RecordFinishedFwRun(
 		std::make_tuple(session.get(), dst, run.runId),
 		std::move(run));
 	WriteFinishedFwRuns(session);
+	Info::Downloads::SetLastActivityTab(Info::Downloads::Tab::Forwards);
 }
 
 void DropFinishedFwRunGroup(
@@ -744,6 +779,12 @@ void finishJob(not_null<Main::Session*> session, const PeerId &peerId) {
 	if (it == states.end()) return;
 	auto &state = it->second;
 	state.finished = true;
+	for (auto i = state.items.rbegin(); i != state.items.rend(); ++i) {
+		if ((i->sent || i->dedupSkipped) && !i->cancelled && !i->info.name.isEmpty()) {
+			NoteForwardBatchFile(session, peerId, i->info.name);
+			break;
+		}
+	}
 	// A completed batch must leave no resume rows: they are only meant to
 	// survive a pause or a crash, and GetUnfinishedJobs counts every row for
 	// the session, so leftovers would keep inflating the FW counter.
@@ -2345,6 +2386,10 @@ void Pipeline::Start(
 					not_null{ &api->session() },
 					dstId,
 					int(items.size()));
+				NoteForwardBatchFile(
+					not_null{ &api->session() },
+					dstId,
+					ForwardBatchFirstName(items));
 				pipeline->appendItems(std::move(items));
 				NotifyStateChanged(dstId);
 				NotifyCounterChanged();
@@ -2356,6 +2401,10 @@ void Pipeline::Start(
 				not_null{ &api->session() },
 				dstId,
 				int(items.size()));
+			NoteForwardBatchFile(
+				not_null{ &api->session() },
+				dstId,
+				ForwardBatchFirstName(items));
 		}
 		StartQueue()[dstId].push_back(StartRequest{
 			api,
@@ -2370,6 +2419,7 @@ void Pipeline::Start(
 		return;
 	}
 	const auto freshTotal = int(items.size());
+	const auto firstName = ForwardBatchFirstName(items);
 	auto pipeline = std::make_shared<Pipeline>(
 		api,
 		std::move(items),
@@ -2383,6 +2433,10 @@ void Pipeline::Start(
 			not_null{ &api->session() },
 			dstId,
 			freshTotal);
+		NoteForwardBatchFile(
+			not_null{ &api->session() },
+			dstId,
+			firstName);
 	}
 	pipeline->run();
 }
@@ -2818,7 +2872,7 @@ void Pipeline::run() {
 			if (!item.mediaId) {
 				item.mediaId = uint64(doc->id);
 			}
-			if (qint64(doc->size) < Data::kDedupMinPartialHashSize) {
+			if (qint64(doc->size) <= Data::kDedupMinPartialHashSize) {
 				continue;
 			}
 			_dedupPrecheckQueue.push_back(i);
@@ -3214,12 +3268,16 @@ void Pipeline::startUploadForItem(int i) {
 		_action.replaceMediaOf);
 	const auto media = srcItem->media();
 	const auto doc = media ? media->document() : nullptr;
+	const auto cover = media ? media->videoCover() : nullptr;
 	auto args = FileLoadTask::Args{
 		.session = &_session,
 		.filepath = item.path,
 		.content = QByteArray(),
 		.information = nullptr,
 		.videoCover = nullptr,
+		.coverInput = cover
+			? std::make_optional(cover->mtpInput())
+			: std::nullopt,
 		.type = item.isPhoto ? SendMediaType::Photo : SendMediaType::File,
 		.to = to,
 		.caption = (_forwardOptions
@@ -3872,7 +3930,7 @@ void Pipeline::pumpDownloads() {
 		}
 		const auto size = doc ? qint64(doc->size) : qint64(0);
 		const auto remotePrecheck = doc
-			&& size >= Data::kDedupMinPartialHashSize
+			&& size > Data::kDedupMinPartialHashSize
 			&& dedupDb.isOpen();
 		if (dedupOn && dedupDb.isOpen()) {
 			// In-flight upload registration; the hash fills in once the
@@ -4370,6 +4428,9 @@ void Pipeline::skipAsDuplicate(int i) {
 	_downloadInFlight = false;
 	_uploadInFlight = false;
 	_skippedCount++;
+	Core::App().downloadManager().reportDuplicateSkipped(
+		Data::DedupDb::Table::Uploads,
+		1);
 	adjustAlbumCount(i);
 	if (const auto srcItem = _session.data().message(item.sourceId)) {
 		Core::App().downloadManager().removeLoading(srcItem);
@@ -5291,6 +5352,10 @@ void FlushForwardBatch(
 				job->lastFileName = u"photo_%1.jpg"_q.arg(msgId.bare);
 			}
 		}
+		EnhancedForward::NoteForwardBatchFile(
+			not_null{ job->session },
+			job->dst,
+			job->lastFileName);
 		auto &db = Core::App().downloadManager().ensureDedupDb();
 		const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
 		const auto sessionId = job->session->uniqueId();
@@ -5679,6 +5744,10 @@ void Start(
 		const auto job = not_null{ it->second.get() };
 		job->total += int(remaining.size());
 		EnhancedForward::BeginForwardBatch(session, dst, int(remaining.size()));
+		EnhancedForward::NoteForwardBatchFile(
+			session,
+			dst,
+			EnhancedForward::ForwardBatchFirstName(items));
 		if (gate) {
 			job->gate = job->gate ? std::min(job->gate, gate) : gate;
 		}
@@ -5715,6 +5784,10 @@ void Start(
 	jobs.emplace(dst, std::move(job));
 	auto &stored = jobs.find(dst)->second;
 	EnhancedForward::EnsureForwardBatch(session, dst, stored->total);
+	EnhancedForward::NoteForwardBatchFile(
+		session,
+		dst,
+		EnhancedForward::ForwardBatchFirstName(items));
 	SaveSnapshot(stored.get());
 	Notify();
 	Pump(stored.get());

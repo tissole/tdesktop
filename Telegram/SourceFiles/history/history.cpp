@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/history.h"
 
+#include "chat_scan/chat_scan_index.h"
+
 #include "history/view/history_view_element.h"
 #include "history/view/history_view_item_preview.h"
 #include "history/view/history_view_translate_tracker.h"
@@ -698,6 +700,7 @@ void History::destroyMessage(not_null<HistoryItem*> item) {
 			item->removeFromSharedMediaIndex();
 		}
 		itemRemoved(item);
+		ChatScan::NoteItemRemoved(item);
 	}
 	if (item->isSending()) {
 		session().api().cancelLocalItem(item);
@@ -906,6 +909,8 @@ not_null<HistoryItem*> History::addNewItem(
 	if (const auto sublist = item->savedSublist()) {
 		sublist->applyMaybeLast(item);
 	}
+
+	ChatScan::NoteItemAdded(item);
 
 	return item;
 }

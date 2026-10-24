@@ -121,7 +121,9 @@ std::shared_ptr<DownloadBatch> MakeDownloadBatch(int total) {
 					strong->sessionId,
 					strong->id);
 			}
-			Core::App().downloadManager().holdFinishedDlBatch(strong);
+			if (downloaded > 0 || duplicates > 0) {
+				Core::App().downloadManager().holdFinishedDlBatch(strong);
+			}
 			Core::App().downloadManager().noteDlBatchFinished(strong);
 		}
 	};
@@ -130,6 +132,55 @@ std::shared_ptr<DownloadBatch> MakeDownloadBatch(int total) {
 		Core::App().downloadManager().pokeDownloadBar();
 	};
 	return batch;
+}
+
+void TrackSaveDownload(
+		FullMsgId itemId,
+		not_null<DocumentData*> document,
+		uint64 batchId) {
+	if (document->loading() && !document->loadingFilePath().isEmpty()) {
+		if (const auto item = document->owner().message(itemId)) {
+			Core::App().downloadManager().addLoading({
+				.item = item,
+				.document = document,
+			}, false, batchId);
+			return;
+		}
+	}
+	if (!document->loading()) {
+		return;
+	}
+	auto lifetime = std::make_shared<rpl::lifetime>();
+	document->session().data().documentLoadProgress(
+	) | rpl::filter([=](not_null<DocumentData*> doc) {
+		return (doc == document);
+	}) | rpl::on_next([=](not_null<DocumentData*> doc) {
+		if (doc->loading()) {
+			if (!doc->loadingFilePath().isEmpty()) {
+				if (const auto item = document->owner().message(itemId)) {
+					auto &manager = Core::App().downloadManager();
+					auto tracked = false;
+					for (const auto id : manager.loadingList()) {
+						if (id->object.item == item
+							&& id->object.document == document.get()) {
+							tracked = true;
+							break;
+						}
+					}
+					if (!tracked) {
+						manager.addLoading({
+							.item = item,
+							.document = document,
+						}, false, batchId);
+					} else {
+						lifetime->destroy();
+					}
+				}
+			}
+			return;
+		}
+		lifetime->destroy();
+	}, *lifetime);
 }
 
 void DocumentSaveClickHandler::Save(
@@ -157,9 +208,35 @@ void DocumentSaveClickHandler::Save(
 	if (!batch) {
 		batch = MakeDownloadBatch(1);
 	}
+	if (batch->displayName.isEmpty()) {
+		batch->displayName = data->filename();
+	}
 	if (!batch->sessionId) {
 		batch->sessionId = data->session().uniqueId();
 	}
+	auto originMessage = FullMsgId();
+	auto hasOriginMessage = false;
+	if (const auto message = std::get_if<Data::FileOriginMessage>(
+			&origin.data)) {
+		originMessage = *message;
+		hasOriginMessage = true;
+	}
+	const auto saveStarted
+		= Core::App().downloadManager().computeNextStartDate();
+	const auto retouch = [=] {
+		if (!hasOriginMessage) {
+			return;
+		}
+		if (const auto item = data->owner().message(originMessage)) {
+			auto &manager = Core::App().downloadManager();
+			manager.noteUntrackedSave(
+				item,
+				data,
+				data->filepath(true),
+				saveStarted,
+				0);
+		}
+	};
 	const auto batchId = (batch->total > 1) ? batch->id : 0;
 	InvokeQueued(qApp, crl::guard(&data->session(), [=] {
 		// If we call file dialog synchronously, it will stop
@@ -170,8 +247,10 @@ void DocumentSaveClickHandler::Save(
 				started();
 			}
 			if (batch) {
+				batch->displayName = data->filename();
 				batch->addDownloaded();
 			}
+			retouch();
 			return;
 		}
 		const auto filepath = data->filepath(true);
@@ -195,8 +274,11 @@ void DocumentSaveClickHandler::Save(
 			}
 			return;
 		}
-		const auto proceed = [=] {
-			// Force the plain file loader: saves to disk must resume reliably
+	const auto proceed = [=] {
+		if (batch && batch->displayName.isEmpty() && !savename.isEmpty()) {
+			batch->displayName = QFileInfo(savename).fileName();
+		}
+		// Force the plain file loader: saves to disk must resume reliably
 			// after a pause. The streaming-reader downloader is only required
 			// for feeding in-progress playback, which uses its own loaders.
 			data->save(origin, savename, LoadFromCloudOrLocal, false, true);
@@ -214,6 +296,7 @@ void DocumentSaveClickHandler::Save(
 				}
 				if (!doc->filepath(true).isEmpty()) {
 					if (batch) {
+						batch->displayName = QFileInfo(savename).fileName();
 						batch->addDownloaded();
 					}
 					if (batchId) {
@@ -235,11 +318,17 @@ void DocumentSaveClickHandler::Save(
 			[=](bool skip) {
 				if (skip) {
 					if (batch) {
+						if (batch->displayName.isEmpty()
+							&& !savename.isEmpty()) {
+							batch->displayName = QFileInfo(
+								savename).fileName();
+						}
 						batch->addDuplicate();
 					} else {
 						Core::App().downloadManager().reportDuplicateSkipped(
 							Data::DedupDb::Table::Downloads);
 					}
+					retouch();
 					return;
 				}
 				proceed();
@@ -266,7 +355,33 @@ void DocumentSaveClickHandler::SaveAndTrack(
 			}
 		}
 	}
+	const auto saveStarted
+		= Core::App().downloadManager().computeNextStartDate();
 	Save(itemId ? itemId : Data::FileOrigin(), document, mode, [=] {
+		const auto watchFinish = [=] {
+			auto lifetime = std::make_shared<rpl::lifetime>();
+			document->session().data().documentLoadProgress(
+			) | rpl::filter([=](not_null<DocumentData*> doc) {
+				return (doc == document);
+			}
+			) | rpl::on_next([=](not_null<DocumentData*> doc) {
+				if (doc->loading()) {
+					return;
+				}
+				if (!doc->filepath(true).isEmpty()) {
+					if (const auto item = document->owner().message(itemId)) {
+						auto &manager = Core::App().downloadManager();
+						manager.noteUntrackedSave(
+							item,
+							document,
+							doc->filepath(true),
+							saveStarted,
+							(batch && batch->total > 1) ? batch->id : 0);
+					}
+				}
+				lifetime->destroy();
+			}, *lifetime);
+		};
 		if (document->loading() && !document->loadingFilePath().isEmpty()) {
 			if (const auto item = document->owner().message(itemId)) {
 				Core::App().downloadManager().addLoading({
@@ -274,6 +389,32 @@ void DocumentSaveClickHandler::SaveAndTrack(
 					.document = document,
 				}, false, (batch && batch->total > 1) ? batch->id : 0);
 			}
+			watchFinish();
+		} else if (document->loading()) {
+			TrackSaveDownload(
+				itemId,
+				document,
+				(batch && batch->total > 1) ? batch->id : 0);
+			watchFinish();
+		} else if (!document->filepath(true).isEmpty()) {
+			if (const auto item = document->owner().message(itemId)) {
+				auto &manager = Core::App().downloadManager();
+				manager.noteUntrackedSave(
+					item,
+					document,
+					document->filepath(true),
+					saveStarted,
+					(batch && batch->total > 1) ? batch->id : 0);
+			}
+			if (batch) {
+				if (batch->displayName.isEmpty()) {
+					batch->displayName = QFileInfo(
+						document->filepath(true)).fileName();
+				}
+				batch->addDownloaded();
+			}
+		} else if (batch) {
+			batch->addFailed();
 		}
 		if (started) {
 			started();
