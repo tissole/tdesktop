@@ -46,6 +46,11 @@ QMutex *_logsMutex(LogDataType type, bool clear = false) {
 	} else if (!LogsMutexes) {
 		LogsMutexes = new QMutex[LogDataCount];
 	}
+	// Debug and MTP logs share one mutex: rotation closes and reopens both
+	// files, so they cannot be written on different threads at the same time.
+	if (type == LogDataMtp) {
+		type = LogDataDebug;
+	}
 	return &LogsMutexes[type];
 }
 
