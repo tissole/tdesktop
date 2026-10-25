@@ -48,7 +48,7 @@ constexpr auto kThirdCutInterval = crl::time(240000);
 constexpr auto kStrikeInterval = crl::time(5000);
 constexpr auto kMaxStrikes = 6;
 constexpr auto kStrikeDecay = crl::time(60000);
-// 16-lane experiment: all DCs are capped at 115/s and fall back to 110/s
+// Current lane experiment: all DCs are capped at 115/s and fall back to 110/s
 // after a cut. All lanes share one limiter/window per bare DC; repeated cuts
 // keep the fallback instead of halving it.
 constexpr auto kCutCeilingFactor = 1.;

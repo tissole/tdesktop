@@ -494,6 +494,9 @@ public:
 		PeerId peerId,
 		uint64 mediaId,
 		qint64 retryAt);
+	// Releases every active lease for the peer in one statement; pause uses
+	// this instead of one update per media id.
+	void chatScanReleaseLeases(PeerId peerId);
 	// Marks every row of each media id hashed and returns how many rows
 	// received the hash (duplicate occurrences included).
 	[[nodiscard]] int chatScanCommitHashes(

@@ -55,6 +55,7 @@ public:
 	void flush();
 
 	[[nodiscard]] int active() const;
+	[[nodiscard]] int target() const;
 	// Items the walker may keep pending or leased; follows the shared
 	// limiter's achieved rate so the walker never outruns the scheduler.
 	[[nodiscard]] int credit() const;

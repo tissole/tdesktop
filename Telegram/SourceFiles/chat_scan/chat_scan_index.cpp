@@ -166,11 +166,9 @@ ScanTotalMedia TotalScannedMedia(PeerId peerId) {
 		return result;
 	}
 	for (const auto &row : db.readChatScan(peerId)) {
-		result.files += row.uniqueCount;
-		result.bytes += row.uniqueBytes;
+		result.files += row.uniqueCount + row.dupCount;
+		result.bytes += row.uniqueBytes + row.dupBytes;
 	}
-	result.files += db.chatScanDupCount(peerId, -1);
-	result.bytes += db.chatScanDupBytes(peerId);
 	return result;
 }
 

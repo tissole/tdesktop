@@ -3137,14 +3137,19 @@ void Session::updateEditedMessage(const MTPMessage &data) {
 
 void Session::processMessages(
 		const QVector<MTPMessage> &data,
-		NewMessageType type) {
+		NewMessageType type,
+		bool refreshExisting) {
 	auto indices = base::flat_map<uint64, int>();
 	for (int i = 0, l = data.size(); i != l; ++i) {
 		const auto &message = data[i];
 		if (message.type() == mtpc_message) {
 			const auto &data = message.c_message();
 			// new message, index my forwarded messages to links overview
-			if ((type == NewMessageType::Unread)
+			if (type == NewMessageType::Unread && updateExistingMessage(data)) {
+				continue;
+			}
+			if (type == NewMessageType::Existing
+				&& refreshExisting
 				&& updateExistingMessage(data)) {
 				continue;
 			}
@@ -3162,19 +3167,24 @@ void Session::processMessages(
 
 void Session::processMessages(
 		const MTPVector<MTPMessage> &data,
-		NewMessageType type) {
-	processMessages(data.v, type);
+		NewMessageType type,
+		bool refreshExisting) {
+	processMessages(data.v, type, refreshExisting);
 }
 
 void Session::processExistingMessages(
 		ChannelData *channel,
-		const MTPmessages_Messages &data) {
+		const MTPmessages_Messages &data,
+		bool refreshExisting) {
 	data.match([&](const MTPDmessages_messagesNotModified&) {
 		LOG(("API Error: received messages.messagesNotModified!"));
 	}, [&](const auto &data) {
 		processUsers(data.vusers());
 		processChats(data.vchats());
-		processMessages(data.vmessages(), NewMessageType::Existing);
+		processMessages(
+			data.vmessages(),
+			NewMessageType::Existing,
+			refreshExisting);
 	});
 	data.match([&](const MTPDmessages_channelMessages &data) {
 		if (channel) {

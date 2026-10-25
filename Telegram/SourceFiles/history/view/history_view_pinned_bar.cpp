@@ -116,13 +116,19 @@ namespace {
 		not_null<Main::Session*> session,
 		FullMsgId id,
 		Fn<void()> repaint,
-		bool alreadyLoaded = false) {
+		bool alreadyLoaded = false,
+		bool refreshExisting = false) {
 	if (!id) {
 		return rpl::single(Ui::MessageBarContent());
-	} else if (const auto item = session->data().message(id)) {
-		return ContentByItem(item, repaint);
 	} else if (alreadyLoaded) {
+		if (const auto item = session->data().message(id)) {
+			return ContentByItem(item, repaint);
+		}
 		return rpl::single(Ui::MessageBarContent()); // Deleted message?..
+	} else if (!refreshExisting) {
+		if (const auto item = session->data().message(id)) {
+			return ContentByItem(item, repaint);
+		}
 	}
 	auto load = rpl::make_producer<Ui::MessageBarContent>([=](auto consumer) {
 		consumer.put_next(Ui::MessageBarContent{
@@ -217,7 +223,9 @@ rpl::producer<Ui::MessageBarContent> PinnedBarContent(
 		return ContentByItemId(
 			session,
 			id.message,
-			repaint
+			repaint,
+			false,
+			true
 		) | rpl::map(WithPinnedTitle(session, id));
 	}) | rpl::flatten_latest();
 }

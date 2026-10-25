@@ -132,6 +132,7 @@ private:
 	void finish();
 	void fail(const QString &error);
 	void schedulerUpdate();
+	void logSchedulerStarvation();
 	void maybeFinalize();
 	void onHashed(const Data::ChatScanItem &item, const QByteArray &hash);
 	void onHashFailed(const Data::ChatScanItem &item);
@@ -212,6 +213,8 @@ private:
 	int _failedHashes = 0;
 	int _queueOutstanding = 0;
 	bool _walkerCreditBlocked = false;
+	crl::time _starvationSince = 0;
+	crl::time _lastStarvationLogMs = 0;
 	int64 _floodWaitUntilMs = 0;
 	int64 _lastPublishMs = 0;
 	State::Phase _lastPhase = State::Phase::Scanning;

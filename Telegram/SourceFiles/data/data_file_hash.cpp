@@ -28,6 +28,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Data {
 
+int DedupChunkLaneIndex(int shiftedDcId) {
+	const auto lane = MTP::GetDcIdShift(shiftedDcId) - kDedupChunkDcShift;
+	return (lane >= 0 && lane < kDedupChunkLaneCount) ? lane : -1;
+}
+
 namespace {
 
 [[nodiscard]] QByteArray HashState(XXH3_state_t *state) {

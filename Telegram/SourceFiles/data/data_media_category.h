@@ -23,9 +23,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 		return Type::VoiceMessage;
 	} else if (document->isAnimation()) {
 		return Type::GIF;
-	} else if (document->isVideoFile()) {
+	} else if (document->isVideo()) {
 		return Type::Video;
-	} else if (document->isAudioFile()) {
+	} else if (document->isSong()) {
 		return Type::Audio;
 	}
 	return Type::File;

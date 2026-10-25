@@ -597,13 +597,16 @@ public:
 	void updateEditedMessage(const MTPMessage &data);
 	void processMessages(
 		const QVector<MTPMessage> &data,
-		NewMessageType type);
+		NewMessageType type,
+		bool refreshExisting = false);
 	void processMessages(
 		const MTPVector<MTPMessage> &data,
-		NewMessageType type);
+		NewMessageType type,
+		bool refreshExisting = false);
 	void processExistingMessages(
 		ChannelData *channel,
-		const MTPmessages_Messages &data);
+		const MTPmessages_Messages &data,
+		bool refreshExisting = false);
 	void processNonChannelMessagesDeleted(const QVector<MTPint> &data);
 	void processMessagesDeleted(
 		PeerId peerId,

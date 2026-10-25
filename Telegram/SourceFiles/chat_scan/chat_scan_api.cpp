@@ -44,6 +44,8 @@ constexpr auto kRecoverySpacingMs = 250;
 // never wait on this. The walk ahead is bounded by the scheduler's credit.
 constexpr auto kPageSpacingMs = 250;
 constexpr auto kPageJitterMs = 260;
+constexpr auto kStarvationDelayMs = crl::time(5000);
+constexpr auto kStarvationLogMs = crl::time(10000);
 constexpr auto kRecoveryBatchErrorCeil = 3;
 constexpr auto kScanTakeoutMaxFileBytes = 4000LL * 1024 * 1024;
 [[nodiscard]] crl::time RecoveryDelay(int32 above, int pos) {
@@ -55,16 +57,10 @@ constexpr auto kScanTakeoutMaxFileBytes = 4000LL * 1024 * 1024;
 		not_null<DocumentData*> document,
 		bool wrapperVideo) {
 	using Type = Export::MediaSettings::Type;
-	switch (document->type) {
-	case StickerDocument: return int(Type::Sticker);
-	case VoiceDocument: return int(Type::VoiceMessage);
-	case RoundVideoDocument: return int(Type::VideoMessage);
-	case AnimatedDocument: return int(Type::GIF);
-	case VideoDocument: return int(Type::Video);
-	case SongDocument: return int(Type::Audio);
-	default:
-		return wrapperVideo ? int(Type::Video) : int(Type::File);
-	}
+	const auto category = DocumentMediaCategory(document);
+	return (category == Type::File && wrapperVideo)
+		? int(Type::Video)
+		: int(category);
 }
 
 } // namespace
@@ -121,11 +117,13 @@ void Api::startScheduler() {
 		return;
 	}
 	_schedulerStarted = true;
+	_starvationSince = 0;
 	_scheduler->start();
 }
 
 void Api::stopScheduler() {
 	_schedulerStarted = false;
+	_starvationSince = 0;
 	_scheduler->stop();
 }
 
@@ -195,6 +193,7 @@ void Api::pause() {
 	if (_finished || _cancelled) {
 		return;
 	}
+	const auto started = crl::now();
 	finishBorrowedTakeout();
 	_paused = true;
 	++_resumeGen;
@@ -214,6 +213,10 @@ void Api::pause() {
 	auto state = _state.current();
 	state.phase = State::Phase::Paused;
 	_state = std::move(state);
+	const auto elapsed = crl::now() - started;
+	if (elapsed > 50) {
+		LOG(("ChatScan: pause took %1 ms.").arg(elapsed));
+	}
 }
 
 void Api::resume() {
@@ -226,8 +229,13 @@ void Api::resume() {
 		if (_finished || _cancelled || gen != _resumeGen) {
 			return;
 		}
+		const auto started = crl::now();
 		_failed = false;
 		_paused = false;
+		const auto retried = _queue->retryFailed();
+		if (retried > 0) {
+			LOG(("ChatScan: retrying %1 failed items.").arg(retried));
+		}
 		auto state = _state.current();
 		state.phase = _walkDone
 			? State::Phase::Resolving
@@ -242,6 +250,10 @@ void Api::resume() {
 		_queueOutstanding = _queue->pending() + _queue->leased();
 		_failedHashes = _queue->failed();
 		dispatchResumed(gen);
+		const auto elapsed = crl::now() - started;
+		if (elapsed > 50) {
+			LOG(("ChatScan: resume begin took %1 ms.").arg(elapsed));
+		}
 	};
 	if (needsTakeout()) {
 		ensureScanTakeout(begin);
@@ -268,6 +280,7 @@ void Api::cancel() {
 	if (_finished) {
 		return;
 	}
+	const auto started = crl::now();
 	finishBorrowedTakeout();
 	_cancelled = true;
 	stopScheduler();
@@ -294,6 +307,10 @@ void Api::cancel() {
 	auto state = _state.current();
 	state.phase = State::Phase::Cancelled;
 	_state = std::move(state);
+	const auto elapsed = crl::now() - started;
+	if (elapsed > 50) {
+		LOG(("ChatScan: cancel took %1 ms.").arg(elapsed));
+	}
 }
 
 void Api::requestMediaCount(
@@ -439,7 +456,8 @@ void Api::maybeRequestNext() {
 		return;
 	}
 	const auto credit = _scheduler->credit();
-	if (_queueOutstanding >= credit) {
+	const auto pageLimit = std::max(0, credit - kPageLimit);
+	if (_queueOutstanding > pageLimit) {
 		_walkerCreditBlocked = true;
 	} else if (_queueOutstanding * 2 <= credit) {
 		_walkerCreditBlocked = false;
@@ -1253,7 +1271,47 @@ void Api::schedulerUpdate() {
 		maybeRequestNext();
 	}
 	maybeRequestRecovery();
+	logSchedulerStarvation();
 	maybeFinalize();
+}
+
+void Api::logSchedulerStarvation() {
+	if (_paused
+		|| _finished
+		|| _cancelled
+		|| _failed
+		|| _walkDone
+		|| _recovering
+		|| _recoveryInFlight
+		|| _pageInFlight) {
+		_starvationSince = 0;
+		return;
+	}
+	const auto active = _scheduler->active();
+	if (active >= _scheduler->target()
+		|| _queueOutstanding >= _scheduler->credit()) {
+		_starvationSince = 0;
+		return;
+	}
+	const auto now = crl::now();
+	if (!_starvationSince) {
+		_starvationSince = now;
+		return;
+	}
+	if (now - _starvationSince < kStarvationDelayMs
+		|| now - _lastStarvationLogMs < kStarvationLogMs) {
+		return;
+	}
+	_lastStarvationLogMs = now;
+	const auto rate = _session->data().chunkFetcher().achievedRate();
+	LOG(("ChatScan: scheduler starved, active %1/%2, pending %3, "
+		"leased %4, outstanding %5, rate %6/s")
+		.arg(active)
+		.arg(_scheduler->target())
+		.arg(_queue->pending())
+		.arg(_queue->leased())
+		.arg(_queueOutstanding)
+		.arg(rate, 0, 'f', 1));
 }
 
 void Api::maybeFinalize() {

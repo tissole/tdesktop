@@ -18,12 +18,20 @@ class Session;
 
 namespace Data {
 
-// All 16 download shifts 16..31 are used for dedup fingerprints. Chunks are
+// Dedup fingerprints use download shifts 16..27 (12 lanes). Chunks are
 // round-robin across the lanes, but every lane of one bare DC shares a single
-// limiter and window (128 total, cwnd 96). That is the proven 16-slot layout:
-// 143/s at 400-500 ms p95 before the server cut, 123-127/s at the 130 target.
+// limiter and window (128 total, cwnd 96). The lower lane count keeps the
+// transport connection count below the previous 16-lane layout.
 constexpr auto kDedupChunkDcShift = 16;
-constexpr auto kDedupChunkLaneCount = 16;
+constexpr auto kDedupChunkLaneCount = 12;
+constexpr auto kDedupChunkLaneGroup = 4;
+constexpr auto kDedupChunkLaneStartupStep = 1000;
+constexpr auto kDedupChunkLaneReconnectStep = 1000;
+constexpr auto kDedupChunkLaneJitter = 500;
+
+// Lanes become ready in groups of four and reconnect in the same groups,
+// so the twelve transport connections do not open or restart together.
+[[nodiscard]] int DedupChunkLaneIndex(int shiftedDcId);
 
 // Content fingerprint of a file, used for duplicate detection across
 // downloads, uploads and forwards.

@@ -1911,27 +1911,9 @@ void Document::paintThumbnail(
 							_st.fileThumbSize,
 							_st.fileThumbSize),
 					});
-				auto source = "media";
-				if (!best) {
-					source = "inline";
-				} else if (coverImage && best == coverImage) {
-					source = "cover";
-				}
-				qDebug() << "[TM] video thumb"
-					<< _data->filename()
-					<< "source:"
-					<< source;
 			}
 			p.drawPixmap(rthumb.topLeft(), _thumb);
 		} else {
-			if (_cover || _data->hasThumbnail()) {
-				qDebug() << "[TM] video thumb"
-					<< _data->filename()
-					<< "no image yet, cover:"
-					<< (_cover != nullptr)
-					<< "hasThumb:"
-					<< _data->hasThumbnail();
-			}
 			p.setPen(Qt::NoPen);
 			p.setBrush(st::overviewFileThumbBg);
 			p.drawRoundedRect(

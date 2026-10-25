@@ -30,7 +30,8 @@ constexpr auto kUnresolvedRetryMs = int64(2 * 1000);
 constexpr auto kReferenceRetryMs = int64(5 * 1000);
 constexpr auto kCreditRateFactor = 4.;
 constexpr auto kMinCredit = 128;
-constexpr auto kMaxCredit = 2048;
+// 192 active plus about 192 pending; raise only if logs show starvation.
+constexpr auto kMaxQueuedItems = 384;
 
 } // namespace
 
@@ -45,9 +46,7 @@ ChunkScheduler::ChunkScheduler(
 
 void ChunkScheduler::start() {
 	flush();
-	for (const auto mediaId : _activeMedia) {
-		_queue->release(mediaId, 0);
-	}
+	_queue->releaseLeases();
 	_activeMedia.clear();
 	_active = 0;
 	++_generation;
@@ -74,9 +73,7 @@ void ChunkScheduler::stop() {
 	++_generation;
 	_tickTimer.cancel();
 	flush();
-	for (const auto mediaId : _activeMedia) {
-		_queue->release(mediaId, 0);
-	}
+	_queue->releaseLeases();
 	_activeMedia.clear();
 	_active = 0;
 }
@@ -224,12 +221,16 @@ int ChunkScheduler::active() const {
 	return _active;
 }
 
+int ChunkScheduler::target() const {
+	return kSchedulerItems;
+}
+
 int ChunkScheduler::credit() const {
 	const auto rate = _session->data().chunkFetcher().achievedRate();
 	return std::clamp(
 		int(rate * kCreditRateFactor),
 		kMinCredit,
-		kMaxCredit);
+		kMaxQueuedItems);
 }
 
 bool ChunkScheduler::pumping() const {

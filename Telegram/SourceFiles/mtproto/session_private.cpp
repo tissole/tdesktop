@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/session_private.h"
 
 #include "core/version.h"
+#include "data/data_file_hash.h"
 #include "mtproto/details/mtproto_bound_key_creator.h"
 #include "mtproto/details/mtproto_dcenter.h"
 #include "mtproto/details/mtproto_dump_to_text.h"
@@ -2718,9 +2719,17 @@ void SessionPrivate::handleError(int errorCode) {
 		MTP_LOG(_shiftedDcId, ("Restarting after error in connection, error code: %1...").arg(errorCode));
 		if (errorCode == -429) {
 			_deferResendAfterCut = true;
+			auto extra = crl::time(0);
+			if (const auto lane = Data::DedupChunkLaneIndex(_shiftedDcId);
+				lane >= 0) {
+				extra = crl::time((lane / Data::kDedupChunkLaneGroup)
+					* Data::kDedupChunkLaneReconnectStep)
+					+ crl::time(base::RandomIndex(
+						Data::kDedupChunkLaneJitter + 1));
+			}
 			_retryTimeout = std::max(
 				_retryTimeout,
-				int(kFloodReconnectDelay));
+				int(kFloodReconnectDelay + extra));
 		}
 		return restart();
 	}

@@ -847,7 +847,7 @@ void ApiWrap::resolveMessageDatas() {
 		)).done([=](
 				const MTPmessages_Messages &result,
 				mtpRequestId requestId) {
-			_session->data().processExistingMessages(nullptr, result);
+			_session->data().processExistingMessages(nullptr, result, true);
 			finalizeMessageDataRequest(nullptr, requestId);
 		}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
 			finalizeMessageDataRequest(nullptr, requestId);
@@ -887,7 +887,7 @@ void ApiWrap::resolveMessageDatas() {
 			)).done([=](
 					const MTPmessages_Messages &result,
 					mtpRequestId requestId) {
-				_session->data().processExistingMessages(channel, result);
+				_session->data().processExistingMessages(channel, result, true);
 				finalizeMessageDataRequest(channel, requestId);
 			}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
 				finalizeMessageDataRequest(channel, requestId);
@@ -898,7 +898,7 @@ void ApiWrap::resolveMessageDatas() {
 			)).done([=](
 					const MTPmessages_Messages &result,
 					mtpRequestId requestId) {
-				_session->data().processExistingMessages(channel, result);
+				_session->data().processExistingMessages(channel, result, true);
 				finalizeMessageDataRequest(channel, requestId);
 			}).fail([=](const MTP::Error &error, mtpRequestId requestId) {
 				finalizeMessageDataRequest(channel, requestId);

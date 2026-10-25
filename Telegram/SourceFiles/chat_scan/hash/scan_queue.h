@@ -30,6 +30,7 @@ public:
 		qint64 now,
 		qint64 leaseUntil);
 	void release(uint64 mediaId, qint64 retryAt);
+	void releaseLeases();
 	void fail(uint64 mediaId);
 	[[nodiscard]] int retryFailed();
 	[[nodiscard]] int commitHashes(

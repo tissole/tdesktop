@@ -117,10 +117,12 @@ private:
 		std::unique_ptr<ChunkLimiter>> _limiters;
 	base::flat_map<MTP::ShiftedDcId, uint64> _seenCuts;
 	base::flat_map<MTP::ShiftedDcId, Load> _loads;
+	base::flat_map<MTP::ShiftedDcId, crl::time> _laneReadyAt;
 	std::map<ChunkRequestId, Job> _jobs;
 	base::Timer _timer;
 	base::Timer _idleTimer;
 	ChunkRequestId _nextId = 1;
+	crl::time _startupAt = 0;
 	crl::time _lastStatus = 0;
 	bool _pumping = false;
 

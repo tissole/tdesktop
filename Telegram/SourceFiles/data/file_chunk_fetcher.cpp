@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/file_chunk_fetcher.h"
 
 #include "base/flat_set.h"
+#include "base/random.h"
 #include "data/data_file_hash.h"
 #include "logs.h"
 #include "main/main_account.h"
@@ -37,6 +38,12 @@ constexpr auto kIdleCheckInterval = crl::time(5000);
 	const auto shift = MTP::GetDcIdShift(dcId);
 	return shift >= kDedupChunkDcShift
 		&& shift < kDedupChunkDcShift + kDedupChunkLaneCount;
+}
+
+[[nodiscard]] crl::time DedupLaneStartupDelay(int lane) {
+	const auto group = lane / kDedupChunkLaneGroup;
+	return crl::time(group * kDedupChunkLaneStartupStep)
+		+ crl::time(base::RandomIndex(kDedupChunkLaneJitter + 1));
 }
 
 [[nodiscard]] crl::time FloodJitter(ChunkRequestId id, int64 offset) {
@@ -89,6 +96,18 @@ ChunkRequestId FileChunkFetcher::fetch(
 	job.request = std::move(request);
 	job.done = std::move(done);
 	job.limiter = &limiterFor(job.request.dcId);
+
+	const auto lane = DedupChunkLaneIndex(job.request.dcId);
+	if (lane >= 0
+		&& _laneReadyAt.find(job.request.dcId) == _laneReadyAt.end()) {
+		const auto now = crl::now();
+		if (!_startupAt) {
+			_startupAt = now;
+		}
+		_laneReadyAt.emplace(
+			job.request.dcId,
+			_startupAt + DedupLaneStartupDelay(lane));
+	}
 	pump();
 	return id;
 }
@@ -127,6 +146,8 @@ void FileChunkFetcher::pump() {
 		return;
 	}
 	if (_jobs.empty()) {
+		_laneReadyAt.clear();
+		_startupAt = 0;
 		_timer.cancel();
 		return;
 	}
@@ -149,12 +170,17 @@ void FileChunkFetcher::pump() {
 		} else if (job.retryAt > now) {
 			wait = std::min(wait, job.retryAt - now);
 		} else {
-			const auto admission = job.limiter->acquire(now);
-			if (!admission.wait) {
-				job.generation = admission.generation;
-				ready.push_back(id);
+			const auto readyAt = _laneReadyAt.find(job.request.dcId);
+			if (readyAt != _laneReadyAt.end() && now < readyAt->second) {
+				wait = std::min(wait, readyAt->second - now);
 			} else {
-				wait = std::min(wait, admission.wait);
+				const auto admission = job.limiter->acquire(now);
+				if (!admission.wait) {
+					job.generation = admission.generation;
+					ready.push_back(id);
+				} else {
+					wait = std::min(wait, admission.wait);
+				}
 			}
 		}
 	}

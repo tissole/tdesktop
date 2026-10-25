@@ -29,6 +29,10 @@ void ScanQueue::release(uint64 mediaId, qint64 retryAt) {
 	_db->chatScanReleaseItem(_peerId, mediaId, retryAt);
 }
 
+void ScanQueue::releaseLeases() {
+	_db->chatScanReleaseLeases(_peerId);
+}
+
 void ScanQueue::fail(uint64 mediaId) {
 	_db->chatScanFailItem(_peerId, mediaId);
 }
