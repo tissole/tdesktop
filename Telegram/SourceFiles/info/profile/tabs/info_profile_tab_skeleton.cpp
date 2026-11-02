@@ -100,6 +100,7 @@ object_ptr<Ui::RpWidget> CreateTabSkeleton(
 			PaintGridSkeleton(p, width, height);
 			break;
 		case Type::File:
+		case Type::Sticker:
 			PaintRowsSkeleton(
 				p,
 				width,

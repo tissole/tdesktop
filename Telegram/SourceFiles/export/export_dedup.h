@@ -68,7 +68,8 @@ CheckResult CheckHash(
 	PeerId peerId,
 	uint64 docId,
 	const QByteArray &hash,
-	bool global);
+	bool global,
+	bool isPhoto);
 
 void CheckDuplicate(
 	MTP::ConcurrentSender &mtp,
@@ -103,6 +104,7 @@ void CheckDuplicate(
 // Drops the in-progress mark of a canceled file (global mode only).
 void CancelFile(
 	::Data::DedupDb &db,
-	uint64 docId);
+	uint64 docId,
+	bool isPhoto);
 
 } // namespace Export

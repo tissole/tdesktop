@@ -68,8 +68,10 @@ base::options::toggle MediaTabsExpandedOption({
 	case SharedMediaType::File: return tr::lng_media_type_files();
 	case SharedMediaType::MusicFile: return tr::lng_all_music();
 	case SharedMediaType::Link: return tr::lng_all_links();
-	case SharedMediaType::RoundVoiceFile: return tr::lng_all_voice();
+	case SharedMediaType::VoiceFile: return tr::lng_media_type_audios();
+	case SharedMediaType::RoundFile: return tr::lng_media_type_rounds();
 	case SharedMediaType::GIF: return tr::lng_media_type_gifs();
+	case SharedMediaType::Sticker: return tr::lng_media_type_stickers();
 	case SharedMediaType::Poll: return tr::lng_media_type_polls();
 	default: Unexpected("type in MediaTabTitle");
 	}
@@ -85,9 +87,11 @@ base::options::toggle MediaTabsExpandedOption({
 	case SharedMediaType::Photo: return Data::ProfileTab::Media;
 	case SharedMediaType::File: return Data::ProfileTab::Files;
 	case SharedMediaType::MusicFile: return Data::ProfileTab::Music;
-	case SharedMediaType::RoundVoiceFile: return Data::ProfileTab::Voice;
+	case SharedMediaType::VoiceFile: return Data::ProfileTab::Voice;
+	case SharedMediaType::RoundFile: return Data::ProfileTab::None;
 	case SharedMediaType::Link: return Data::ProfileTab::Links;
 	case SharedMediaType::GIF: return Data::ProfileTab::Gifs;
+	case SharedMediaType::Sticker: return Data::ProfileTab::None;
 	default: return Data::ProfileTab::None;
 	}
 }

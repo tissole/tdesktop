@@ -167,7 +167,7 @@ Instance::Data::~Data() = default;
 
 Instance::Instance()
 : _songData(AudioMsgId::Type::Song, SharedMediaType::MusicFile)
-, _voiceData(AudioMsgId::Type::Voice, SharedMediaType::RoundVoiceFile) {
+, _voiceData(AudioMsgId::Type::Voice, SharedMediaType::VoiceFile) {
 	Media::Player::Updated(
 	) | rpl::on_next([=](const AudioMsgId &audioId) {
 		handleSongUpdate(audioId);

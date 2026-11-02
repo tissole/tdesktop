@@ -163,6 +163,7 @@ bool Provider::sectionHasFloatingHeader() {
 	case Type::MusicFile:
 		return false;
 	case Type::File:
+	case Type::Sticker:
 	case Type::Link:
 		return true;
 	}
@@ -681,6 +682,7 @@ std::unique_ptr<Media::BaseLayout> Provider::createLayout(
 		}
 		return nullptr;
 	case Type::File:
+	case Type::Sticker:
 		if (const auto file = getFile()) {
 			return std::make_unique<Document>(
 				delegate,

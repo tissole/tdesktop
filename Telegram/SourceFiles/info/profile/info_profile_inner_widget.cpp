@@ -42,6 +42,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_saved_sublist.h"
 #include "info/saved/info_saved_music_common.h"
 #include "info_profile_actions.h"
+#include "chat_scan/chat_scan_index.h"
 #include "main/main_session.h"
 #include "apiwrap.h"
 #include "api/api_peer_photo.h"
@@ -341,8 +342,11 @@ object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 			monoforumPeerId,
 			_migrated,
 			Storage::SharedMediaType::Poll) | rpl::map(_1 > 0)));
-		addTab(Storage::SharedMediaType::RoundVoiceFile);
+		addTab(Storage::SharedMediaType::VoiceFile);
+		addTab(Storage::SharedMediaType::RoundFile);
 		addTab(Storage::SharedMediaType::GIF);
+		ChatScan::LoadStickerIndex(&tabsPeer->session(), tabsPeer->id);
+		addTab(Storage::SharedMediaType::Sticker);
 		if (!_topic && !_sublist && !_savedMessages) {
 			if (const auto user = _peer->asUser()) {
 				tabs.push_back(MakeCommonGroupsTabDescriptor(user));

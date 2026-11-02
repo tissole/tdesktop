@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/crash_reports.h"
 #include "data/components/scheduled_messages.h"
 #include "data/data_document.h"
+#include "data/data_media_category.h"
 #include "data/data_media_types.h"
 #include "data/data_photo.h"
 #include "data/data_saved_music.h"
@@ -30,9 +31,7 @@ bool IsItemGoodForType(const not_null<HistoryItem*> item, Type type) {
 		return false;
 	}
 	const auto photo = media->photo();
-	const auto photoType = (type == Type::Photo);
-	const auto photoVideoType = (type == Type::PhotoVideo);
-	if ((photoType || photoVideoType) && photo) {
+	if ((type == Type::Photo || type == Type::PhotoVideo) && photo) {
 		return true;
 	}
 
@@ -40,39 +39,36 @@ bool IsItemGoodForType(const not_null<HistoryItem*> item, Type type) {
 	if (!document) {
 		return false;
 	}
-	const auto voiceType = (type == Type::VoiceFile);
-	const auto voiceDoc = document->isVoiceMessage();
-
-	const auto roundType = (type == Type::RoundFile);
-	const auto roundDoc = document->isVideoMessage();
-
-	const auto audioType = (type == Type::MusicFile);
-	const auto audioDoc = document->isSong();
-
-	const auto gifType = (type == Type::GIF);
-	const auto gifDoc = document->isGifv();
-
-	const auto videoType = (type == Type::Video);
-	const auto videoDoc = document->isVideoFile();
-
-	const auto voiceRoundType = (type == Type::RoundVoiceFile);
-	const auto fileType = (type == Type::File);
-
-	if (voiceType) {
-		return voiceDoc;
-	} else if (roundType) {
-		return roundDoc;
+	const auto kind = CategorizeDocument(document);
+	switch (type) {
+	case Type::Photo:
+		return false;
+	case Type::Video:
+		return (kind == DocumentMediaKind::Video);
+	case Type::MusicFile:
+		return (kind == DocumentMediaKind::Music);
+	case Type::File:
+		return (kind == DocumentMediaKind::File);
+	case Type::VoiceFile:
+		return (kind == DocumentMediaKind::Voice);
+	case Type::RoundVoiceFile:
+		return false;
+	case Type::GIF:
+		return (kind == DocumentMediaKind::GIF);
+	case Type::PhotoVideo:
+		return (kind == DocumentMediaKind::Video);
+	case Type::RoundFile:
+		return (kind == DocumentMediaKind::RoundVideo);
+	case Type::Sticker:
+		return (kind == DocumentMediaKind::Sticker);
+	case Type::Link:
+	case Type::ChatPhoto:
+	case Type::Pinned:
+	case Type::Poll:
+	case Type::kCount:
+		return false;
 	}
-
-	return (audioType && audioDoc)
-		|| (voiceRoundType && (roundDoc || voiceDoc))
-		|| (gifType && gifDoc)
-		|| ((videoType || photoVideoType) && videoDoc)
-		|| (fileType && (document->isTheme()
-			|| document->isImage()
-			|| !document->canBeStreamed()
-			|| (document->isVideoFile() && !document->hasDuration())
-			|| (document->isAudioFile() && !document->isSong())));
+	return false;
 }
 
 } // namespace
@@ -86,7 +82,6 @@ std::optional<Storage::SharedMediaType> SharedMediaOverviewType(
 	case Type::File:
 	case Type::VoiceFile:
 	case Type::RoundFile:
-	case Type::RoundVoiceFile:
 	case Type::Link:
 	case Type::Poll: return type;
 	}

@@ -73,15 +73,27 @@ Export::View::Content TopBarContent(
 			case Phase::Paused:
 				return tr::lng_chat_scan_paused(tr::now);
 			case Phase::Resolving:
-				return tr::lng_chat_scan_resolving(tr::now);
+				return (state.hashPending > 0)
+					? tr::lng_chat_scan_resolving(tr::now)
+					: tr::lng_chat_scan_saving(tr::now);
 			case Phase::Failed:
 				return tr::lng_chat_scan_failed(tr::now);
+			case Phase::Cancelling:
+				return tr::lng_chat_scan_cancelling(tr::now);
 			default:
 				return QString();
 			}
 		}();
-	const auto done = state.hashDone;
-	const auto total = std::max(state.hashTotal, state.mediaTotal);
+	if (state.phase == Phase::Cancelling) {
+		return content;
+	}
+	auto done = 0;
+	for (const auto &entry : state.categories) {
+		done += entry.second.uniqueCount + entry.second.dupCount;
+	}
+	const auto total = std::max(
+		std::max(state.hashTotal, state.mediaTotal),
+		done);
 	if (total > 0) {
 		row.info = QString::number(done)
 			+ u" / "_q

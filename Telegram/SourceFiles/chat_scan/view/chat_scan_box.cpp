@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "chat_scan/chat_scan_index.h"
 #include "chat_scan/chat_scan_top_bar.h"
 #include "base/algorithm.h"
+#include "base/debug_log.h"
 #include "ui/qt_object_factory.h"
 
 #include "core/application.h"
@@ -18,12 +19,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_channel.h"
 #include "data/data_chat.h"
 #include "data/data_dedup_db.h"
+#include "data/data_document.h"
 #include "data/data_download_manager.h"
 #include "data/data_peer.h"
+#include "data/data_session.h"
 #include "export/export_settings.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
 #include "mtproto/mtproto_response.h"
+#include "storage/storage_facade.h"
+#include "storage/storage_shared_media.h"
 #include "styles/style_boxes.h"
 #include "styles/style_layers.h"
 #include "data/data_peer_id.h"
@@ -40,10 +45,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QDate>
 #include <QDir>
 #include <QFile>
+#include <QPointer>
 #include <QtCore/QTextStream>
+#include <QtCore/QUuid>
+#include <QtSql/QSqlDatabase>
+#include <QtSql/QSqlError>
+#include <QtSql/QSqlQuery>
+#include <crl/crl.h>
 
 #include <algorithm>
 #include <map>
+#include <mutex>
 
 namespace {
 
@@ -51,7 +63,11 @@ using Type = Export::MediaSettings::Type;
 
 // Hashing pace assumed until measured, so the ETA shows from the first render.
 constexpr auto kNominalHashPerMs = 20.0 / 1000.;
-constexpr auto kEtaMeasureMs = int64(15000);
+// Never let a stalled measurement turn the ETA into days.
+constexpr auto kMinHashPerMs = 0.5 / 1000.;
+constexpr auto kEtaMeasureMs = int64(5000);
+constexpr auto kEtaStaleMs = int64(10000);
+constexpr auto kEtaMinSamples = 3;
 constexpr auto kPinAfterMessages = 2000;
 constexpr auto kPinSampleCeil = 20000;
 
@@ -68,11 +84,38 @@ int64 RoundToFewDigits(int64 value) {
 	return state.hashDone;
 }
 
+[[nodiscard]] int ScanWalkedCount(const ChatScan::State &state) {
+	auto result = 0;
+	for (const auto &entry : state.categories) {
+		result += entry.second.uniqueCount + entry.second.dupCount;
+	}
+	return result;
+}
+
+[[nodiscard]] int ScanEtaRemaining(const ChatScan::State &state) {
+	const auto walked = int64(ScanWalkedCount(state));
+	const auto seen = int64(state.hashTotal);
+	if (walked <= 0 || seen <= 0 || state.mediaTotal <= 0) {
+		return state.hashPending;
+	}
+	const auto projected = std::max(
+		seen,
+		int64(state.mediaTotal) * seen / walked);
+	return int(std::max<int64>(
+		0,
+		projected - state.hashDone - state.failedHashes));
+}
+
 [[nodiscard]] QString FormatSizeWithBytes(int64 size) {
 	return Ui::FormatSizeText(size)
 		+ u" / "_q
 		+ QString::number(size)
 		+ u" bytes"_q;
+}
+
+std::mutex &ReportWriteMutex() {
+	static auto mutex = std::mutex();
+	return mutex;
 }
 
 QString FormatEtaTime(int seconds) {
@@ -92,6 +135,20 @@ QString FormatEtaTime(int seconds) {
 		return u"%1m"_q.arg(mins);
 	}
 	return u"%1s"_q.arg(seconds);
+}
+
+[[nodiscard]] QString FormatElapsedTime(int64 ms) {
+	const auto seconds = int(ms / 1000);
+	const auto hours = seconds / 3600;
+	const auto mins = (seconds % 3600) / 60;
+	const auto secs = seconds % 60;
+	if (hours > 0) {
+		return u"%1h %2m %3s"_q.arg(hours).arg(mins).arg(secs);
+	}
+	if (mins > 0) {
+		return u"%1m %2s"_q.arg(mins).arg(secs);
+	}
+	return u"%1s"_q.arg(secs);
 }
 
 using ScanKey = uint64;
@@ -292,16 +349,14 @@ void ChatScanBox::prepare() {
 		std::pair{ int(Type::Sticker), tr::lng_chat_scan_cat_sticker(tr::now) },
 	};
 	const auto grid = content->add(object_ptr<ScanGrid>(content));
-	grid->addRow(
+	const auto headerRow = grid->addRow(
 		object_ptr<Ui::FlatLabel>(grid, st::boxLabel),
-		object_ptr<Ui::FlatLabel>(
-			grid,
-			tr::lng_chat_scan_unique_files(tr::now),
-			st::boxLabel),
-		object_ptr<Ui::FlatLabel>(
-			grid,
-			tr::lng_chat_scan_duplicate_files(tr::now),
-			st::boxLabel));
+		object_ptr<Ui::FlatLabel>(grid, st::boxLabel),
+		object_ptr<Ui::FlatLabel>(grid, st::boxLabel));
+	grid->uniqueAt(headerRow)->setMarkedText(
+		Ui::Text::Bold(tr::lng_chat_scan_unique_files(tr::now)));
+	grid->dupsAt(headerRow)->setMarkedText(
+		Ui::Text::Bold(tr::lng_chat_scan_duplicate_files(tr::now)));
 	for (const auto &[category, name] : rows) {
 		auto row = Row();
 		row.category = category;
@@ -359,7 +414,9 @@ void ChatScanBox::prepare() {
 	auto &db = Core::App().downloadManager().ensureDedupDb();
 	if (!_rescan && db.isOpen()) {
 		if (db.isChatScanned(_peer->id)) {
-			_reportAppend = true;
+			if (const auto cursor = db.readScanCursor(_peer->id)) {
+				_finishedElapsedMs = cursor->elapsedMs;
+			}
 			renderResults(db.readChatScan(_peer->id));
 			return;
 		}
@@ -372,7 +429,6 @@ void ChatScanBox::prepare() {
 			ChatScan::FireScanTopBarEvent({ _peer, _api });
 			subscribeApi();
 			if (_api->loadPaused(*cursor)) {
-				_reportAppend = true;
 				render(_api->currentState());
 				return;
 			}
@@ -407,6 +463,11 @@ void ChatScanBox::resizeEvent(QResizeEvent *e) {
 void ChatScanBox::attachApi() {
 	auto &slot = RunningScans()[scanKey()];
 	if (slot) {
+		if (slot->clearing()) {
+			_api = slot;
+			_closeOnCancelled = true;
+			return;
+		}
 		const auto phase = slot->currentState().phase;
 		if (phase != ChatScan::State::Phase::Finished
 			&& phase != ChatScan::State::Phase::Cancelled) {
@@ -427,6 +488,14 @@ void ChatScanBox::subscribeApi() {
 
 void ChatScanBox::setupApi(bool incremental) {
 	if (const auto slot = RunningScans()[scanKey()]) {
+		if (slot->clearing()) {
+			if (slot != _api) {
+				_api = slot;
+				subscribeApi();
+			}
+			_closeOnCancelled = true;
+			return;
+		}
 		if (slot != _api) {
 			const auto phase = slot->currentState().phase;
 			if (phase != ChatScan::State::Phase::Finished
@@ -444,6 +513,10 @@ void ChatScanBox::setupApi(bool incremental) {
 	_showingResults = false;
 	_projectedFiles = 0;
 	_pinnedFiles = 0;
+	_finishedElapsedMs = 0;
+	_finishedUnhashed = 0;
+	_closeOnCancelled = false;
+	_deleteAfterReport = false;
 	updateBar(
 		tr::lng_chat_scan_pause(tr::now),
 		true,
@@ -453,7 +526,7 @@ void ChatScanBox::setupApi(bool incremental) {
 	RunningScans()[scanKey()] = _api;
 	ChatScan::FireScanTopBarEvent({ _peer, _api });
 	subscribeApi();
-	_reportAppend = false;
+	_reportWriteOnResults = false;
 	if (incremental) {
 		_api->rescan();
 	} else {
@@ -492,13 +565,15 @@ void ChatScanBox::actionPressed() {
 	if (_api) {
 		using Phase = ChatScan::State::Phase;
 		const auto phase = _api->currentState().phase;
+		if (phase == Phase::Cancelling) {
+			return;
+		}
 		if (phase == Phase::Scanning || phase == Phase::Resolving) {
 			_api->pause();
-			writePausedReport();
+			writePauseReport();
 			return;
 		}
 		if (phase == Phase::Paused || phase == Phase::Failed) {
-			_reportAppend = true;
 			_api->resume();
 			return;
 		}
@@ -557,8 +632,21 @@ void ChatScanBox::updateBar(
 
 void ChatScanBox::askCancel() {
 	askQuestion(tr::lng_chat_scan_cancel_confirm(tr::now), [=] {
+		hideQuestion();
+		_deleteAfterReport = false;
+		QFile::remove(scanReportPath());
+		if (_reportJob) {
+			_reportJob->removeAfterWrite = true;
+			_removeReportAfterWrite = true;
+			_reportQueuedStatus.clear();
+			_reportStatusQueued.clear();
+		}
 		if (_api) {
 			_api->cancel();
+			if (_api->clearing()) {
+				_closeOnCancelled = true;
+				return;
+			}
 		}
 		clearStats();
 		closeBox();
@@ -665,9 +753,42 @@ void ChatScanBox::askRescan() {
 	askQuestion(tr::lng_chat_scan_rescan_confirm(tr::now), [=] {
 		hideQuestion();
 		auto &db = Core::App().downloadManager().ensureDedupDb();
-		db.clearChatScan(_peer->id);
-		ChatScan::ForgetScannedPeer(_peer->id);
-		setupApi(false);
+		_statusText = tr::lng_chat_scan_saving(tr::now);
+		updateBar(std::nullopt, false, std::nullopt, false);
+		const auto peerId = _peer->id;
+		_peer->session().storage().remove(Storage::SharedMediaRemoveAll(
+			peerId,
+			Storage::SharedMediaTypesMask{}.added(
+				Storage::SharedMediaType::Sticker)));
+		ChatScan::ForgetScannedPeer(peerId);
+		auto weak = QPointer<ChatScanBox>(this);
+		db.clearChatScanAsync(
+			peerId,
+			[weak, peerId](
+					bool success,
+					std::vector<Data::ChatScanOwnerChange> changed) {
+				if (!weak) {
+					return;
+				}
+				if (!success) {
+					weak->_statusText = tr::lng_chat_scan_failed(tr::now);
+					Ui::Toast::Show(tr::lng_chat_scan_failed(tr::now));
+					weak->updateBar(
+						tr::lng_chat_scan_rescan(tr::now),
+						true,
+						std::nullopt,
+						false);
+					return;
+				}
+				auto &database = Core::App().downloadManager().ensureDedupDb();
+				database.invalidateChatTable(peerId);
+				for (const auto &[changedPeer, hash] : changed) {
+					ChatScan::MarkUniqueHashDirty(changedPeer, hash);
+					database.invalidateChatTable(changedPeer);
+				}
+				database.invalidateAllPeersChatTable();
+				weak->setupApi(false);
+			});
 	});
 }
 
@@ -675,21 +796,26 @@ void ChatScanBox::runScanNew() {
 	setupApi(true);
 }
 
-QString ChatScanBox::etaSuffix(int done, int total) {
+QString ChatScanBox::etaSuffix(int done, int remaining) {
 	const auto now = int64(crl::now());
 	if (_etaSeedTime == 0) {
 		_etaSeedTime = now;
 		_etaSeedDone = done;
 		_etaPerMs = kNominalHashPerMs;
-	} else {
+	} else if (done > _etaSeedDone) {
 		const auto elapsed = now - _etaSeedTime;
-		if (elapsed >= kEtaMeasureMs && done > _etaSeedDone) {
-			_etaPerMs = double(done - _etaSeedDone) / elapsed;
+		if (elapsed >= kEtaMeasureMs
+			&& done - _etaSeedDone >= kEtaMinSamples) {
+			_etaPerMs = std::max(
+				double(done - _etaSeedDone) / elapsed,
+				kMinHashPerMs);
 			_etaSeedTime = now;
 			_etaSeedDone = done;
 		}
+	} else if (now - _etaSeedTime >= kEtaStaleMs) {
+		_etaSeedTime = now;
+		_etaSeedDone = done;
 	}
-	const auto remaining = std::max(int(0), total - done);
 	if (remaining <= 0 || _etaPerMs <= 0.) {
 		return QString();
 	}
@@ -702,6 +828,14 @@ QString ChatScanBox::etaSuffix(int done, int total) {
 			tr::now,
 			lt_time,
 			FormatEtaTime(int(seconds)));
+}
+
+QString ChatScanBox::elapsedSuffix(int64 ms) const {
+	return u" · "_q
+		+ tr::lng_chat_scan_elapsed(
+			tr::now,
+			lt_time,
+			FormatElapsedTime(ms));
 }
 
 QString ChatScanBox::unhashedSuffix(const ChatScan::State &state) const {
@@ -744,6 +878,8 @@ void ChatScanBox::render(const ChatScan::State &state) {
 	}
 	if (state.phase == Phase::Finished) {
 		_finishedUnhashed = std::max(0, state.hashTotal - state.hashDone);
+		_finishedElapsedMs = state.elapsedMs;
+		_reportWriteOnResults = true;
 		auto &db = Core::App().downloadManager().ensureDedupDb();
 		renderResults(db.readChatScan(_peer->id));
 		return;
@@ -753,8 +889,9 @@ void ChatScanBox::render(const ChatScan::State &state) {
 	if (state.phase == Phase::Scanning) {
 		_statusText = tr::lng_chat_scan_scanning(tr::now) + floodSuffix(state);
 		const auto known = int64(state.hashTotal);
+		const auto walked = int64(ScanWalkedCount(state));
 		if (const auto server = int64(state.mediaTotal)) {
-			_projectedFiles = std::max(server, known);
+			_projectedFiles = std::max(std::max(server, walked), known);
 		} else {
 			const auto sampleGoal = std::clamp<int64>(
 				state.totalCount / 10,
@@ -764,21 +901,22 @@ void ChatScanBox::render(const ChatScan::State &state) {
 				|| (state.scannedCount >= state.totalCount / 20);
 			if (!_pinnedFiles
 				&& sampleEnough
-				&& known > 0
+				&& walked > 0
 				&& state.totalCount > state.scannedCount) {
 				_pinnedFiles = RoundToFewDigits(
-					int64(state.totalCount) * known / state.scannedCount);
+					int64(state.totalCount) * walked / state.scannedCount);
 			}
 			_projectedFiles = std::max(
 				std::max(_projectedFiles, _pinnedFiles),
-				known);
+				std::max(walked, known));
 		}
 		const auto resolved = ScanResolvedCount(state);
-		_progressText = QString::number(resolved)
+		_progressText = QString::number(walked)
 			+ u" / "_q
 			+ QString::number(_projectedFiles)
+			+ elapsedSuffix(state.elapsedMs)
 			+ unhashedSuffix(state)
-			+ etaSuffix(resolved, int(_projectedFiles));
+			+ etaSuffix(resolved, ScanEtaRemaining(state));
 		updateBar(
 			tr::lng_chat_scan_pause(tr::now),
 			true,
@@ -786,22 +924,38 @@ void ChatScanBox::render(const ChatScan::State &state) {
 			false);
 	} else if (state.phase == Phase::Paused) {
 		_statusText = tr::lng_chat_scan_paused(tr::now);
+		if (_progressText.current().isEmpty()) {
+			const auto walked = int64(ScanWalkedCount(state));
+			const auto total = std::max(int64(state.mediaTotal), walked);
+			_progressText = QString::number(walked)
+				+ u" / "_q
+				+ QString::number(total)
+				+ elapsedSuffix(state.elapsedMs);
+		}
 		updateBar(
 			tr::lng_chat_scan_resume(tr::now),
 			true,
 			tr::lng_cancel(tr::now),
 			false);
 	} else if (state.phase == Phase::Resolving) {
-		_statusText = tr::lng_chat_scan_resolving(tr::now) + floodSuffix(state);
+		_statusText = (state.hashPending > 0
+			? tr::lng_chat_scan_resolving(tr::now)
+			: tr::lng_chat_scan_saving(tr::now)) + floodSuffix(state);
+		const auto walked = int64(ScanWalkedCount(state));
 		_projectedFiles = state.mediaTotal
-			? std::max(int64(state.mediaTotal), int64(state.hashTotal))
-			: std::max(_projectedFiles, int64(state.hashTotal));
+			? std::max(
+				std::max(int64(state.mediaTotal), walked),
+				int64(state.hashTotal))
+			: std::max(
+				std::max(_projectedFiles, walked),
+				int64(state.hashTotal));
 		const auto resolved = ScanResolvedCount(state);
-		_progressText = QString::number(resolved)
+		_progressText = QString::number(walked)
 			+ u" / "_q
 			+ QString::number(_projectedFiles)
+			+ elapsedSuffix(state.elapsedMs)
 			+ unhashedSuffix(state)
-			+ etaSuffix(resolved, int(_projectedFiles));
+			+ etaSuffix(resolved, ScanEtaRemaining(state));
 		updateBar(
 			tr::lng_chat_scan_pause(tr::now),
 			true,
@@ -816,7 +970,24 @@ void ChatScanBox::render(const ChatScan::State &state) {
 			true,
 			std::nullopt,
 			false);
+	} else if (state.phase == Phase::Cancelling) {
+		_statusText = tr::lng_chat_scan_cancelling(tr::now);
+		_progressText = QString();
+		_progressLabel->hide();
+		clearStats();
+		updateBar(std::nullopt, true, std::nullopt, false);
+		return;
 	} else if (state.phase == Phase::Cancelled) {
+		if (_closeOnCancelled) {
+			_closeOnCancelled = false;
+			const auto weak = QPointer<ChatScanBox>(this);
+			crl::on_main([weak] {
+				if (weak) {
+					weak->closeBox();
+				}
+			});
+			return;
+		}
 		_statusText = tr::lng_cancel(tr::now);
 		_progressLabel->hide();
 		clearStats();
@@ -872,7 +1043,9 @@ void ChatScanBox::render(const ChatScan::State &state) {
 			+ u")"_q
 			: u"—"_q);
 	}
-	if (state.phase == Phase::Failed || state.phase == Phase::Cancelled) {
+	if (state.phase == Phase::Failed
+		|| state.phase == Phase::Cancelled
+		|| state.phase == Phase::Cancelling) {
 		_progressText = QString();
 	}
 	const auto flooding = _api
@@ -919,6 +1092,7 @@ void ChatScanBox::showResults(
 		int64 dupBytes) {
 	hideQuestion();
 	_statusText = tr::lng_chat_scan_results(tr::now)
+		+ elapsedSuffix(_finishedElapsedMs)
 		+ ((_finishedUnhashed > 0)
 			? (u" — "_q + tr::lng_chat_scan_unhashed(
 				tr::now,
@@ -982,8 +1156,11 @@ void ChatScanBox::showResults(
 	_confirming = false;
 	_confirmLabel->hide();
 	_revoke->hide();
-	if (dupTotal > 0 && !_deleteFinished) {
-		writeDupReport(false);
+	if (_reportWriteOnResults) {
+		_reportWriteOnResults = false;
+		if (dupTotal > 0 && !_deleteFinished) {
+			writeDupReport(false);
+		}
 	}
 }
 
@@ -997,6 +1174,10 @@ bool ChatScanBox::canDeleteMessages() const {
 }
 
 void ChatScanBox::startDelete() {
+	if (_reportJob) {
+		_deleteAfterReport = true;
+		return;
+	}
 	if (!canDeleteMessages()) {
 		Ui::Toast::Show(tr::lng_chat_scan_no_delete_rights(tr::now));
 		return;
@@ -1112,7 +1293,6 @@ void ChatScanBox::sendNextDeleteBatch() {
 		db.beginTransaction();
 		for (auto i = size_t(0); i < count; ++i) {
 			const auto msgId = MsgId(_deleteIds[_deletePos + i]);
-			db.removeChatScanDup(_peer->id, msgId);
 			db.removeChatScanItem(_peer->id, msgId);
 		}
 		db.commitTransaction();
@@ -1233,135 +1413,45 @@ QString ChatScanBox::scanReportPath() {
 		+ u"_duplicates.txt"_q;
 }
 
-void ChatScanBox::upsertScanReport(
-		const QString &status,
-		const std::map<int, std::pair<int, int64>> &uniques,
-		bool append) {
+void ChatScanBox::upsertScanReport(const QString &status) {
+	if (_removeReportAfterWrite) {
+		return;
+	}
 	if (_reportJob) {
 		_reportQueuedStatus = status;
-		_reportQueuedUniques = uniques;
-		_reportQueuedAppend = append;
 		return;
 	}
 	auto &db = Core::App().downloadManager().ensureDedupDb();
 	if (!db.isOpen()) {
 		return;
 	}
-	auto job = std::make_unique<ReportJob>();
+	auto job = std::make_shared<ReportJob>();
 	job->status = status;
 	job->path = scanReportPath();
-	job->uniques = uniques;
-	job->parsing = append;
 	for (const auto &row : _rows) {
 		job->names[row.category] = row.name;
-		job->categories.push_back(row.category);
 	}
-	_reportJob = std::move(job);
-	reportStep();
+	_reportJob = job;
+	const auto weak = QPointer<ChatScanBox>(this);
+	db.readChatScanAsync(
+		_peer->id,
+		[weak, job](
+				std::vector<Data::ChatScanRow> rows,
+				bool success) {
+			if (!weak || weak->_reportJob != job) {
+				return;
+			}
+			if (!success) {
+				weak->_reportJob.reset();
+				return;
+			}
+			job->rows = std::move(rows);
+			job->header = weak->buildReportHeader(*job);
+			weak->writeReportOnWorker();
+		});
 }
 
-void ChatScanBox::reportStep() {
-	constexpr auto kParseLines = 20000;
-	constexpr auto kDupBatch = 5000;
-	if (!_reportJob) {
-		return;
-	}
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (!db.isOpen()) {
-		_reportJob.reset();
-		return;
-	}
-	auto &job = *_reportJob;
-	if (job.parsing) {
-		if (!job.file) {
-			job.file = std::make_unique<QFile>(job.path);
-			if (job.file->open(QIODevice::ReadOnly | QIODevice::Text)) {
-				job.stream = std::make_unique<QTextStream>(job.file.get());
-			}
-		}
-		auto read = 0;
-		while (job.stream && !job.stream->atEnd() && read < kParseLines) {
-			const auto raw = job.stream->readLine();
-			++read;
-			if (raw.startsWith(u"Date: "_q)) {
-				job.dateLine = raw;
-				continue;
-			}
-			for (const auto &entry : job.names) {
-				if (!entry.second.isEmpty()
-					&& raw.startsWith(entry.second + u" — "_q)) {
-					job.currentCategory = entry.first;
-					break;
-				}
-			}
-			const auto msgPos = raw.lastIndexOf(u"msg "_q);
-			if (job.currentCategory < 0 || msgPos < 0) {
-				continue;
-			}
-			auto ok = false;
-			const auto id = raw.mid(msgPos + 4).simplified().toLongLong(&ok);
-			auto &known = job.listed[job.currentCategory];
-			if (!ok || id <= 0 || known.contains(id)) {
-				continue;
-			}
-			known[id] = {
-				raw.startsWith(u"[x] "_q) ? raw.mid(4) : raw,
-				int64(0),
-				false };
-		}
-		if (job.stream && !job.stream->atEnd()) {
-			_reportTimer.setCallback([=] {
-				reportStep();
-			});
-			_reportTimer.callOnce(0);
-			return;
-		}
-		job.stream.reset();
-		job.file.reset();
-		job.parsing = false;
-	}
-	while (job.categoryPos < job.categories.size()) {
-		const auto category = job.categories[job.categoryPos];
-		const auto chunk = db.readChatScanDupsBefore(
-			_peer->id,
-			category,
-			kDupBatch,
-			MsgId(job.pageAbove));
-		for (const auto &dup : chunk) {
-			job.pageAbove = int64(dup.msgId.bare);
-			job.listed[category][int64(dup.msgId.bare)] = {
-				(dup.filename.isEmpty()
-					? job.names.at(category)
-					: dup.filename)
-				+ u" | "_q
-				+ FormatSizeWithBytes(dup.size)
-				+ u" | msg "_q
-				+ QString::number(dup.msgId.bare),
-				dup.size,
-				true };
-		}
-		if (int(chunk.size()) == kDupBatch) {
-			_reportTimer.setCallback([=] {
-				reportStep();
-			});
-			_reportTimer.callOnce(0);
-			return;
-		}
-		++job.categoryPos;
-		job.pageAbove = 0;
-	}
-	renderReport();
-}
-
-void ChatScanBox::renderReport() {
-	auto &job = *_reportJob;
-	const auto status = job.status;
-	const auto uniques = job.uniques;
-	const auto deletedText = [](int deleted) {
-		return deleted > 0
-			? u" + %1 deleted"_q.arg(deleted)
-			: QString();
-	};
+QString ChatScanBox::buildReportHeader(const ReportJob &job) const {
 	const auto chatId = _peer->isChannel()
 		? int64(peerToChannel(_peer->id).bare)
 		: _peer->isChat()
@@ -1369,21 +1459,16 @@ void ChatScanBox::renderReport() {
 		: _peer->isUser()
 		? int64(peerToUser(_peer->id).bare)
 		: int64(_peer->id.value);
-	QFile file(job.path);
-	if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-		return;
-	}
-	auto stream = QTextStream(&file);
-	stream << u"Status: "_q << status << u"\n"_q;
+	auto result = QString();
+	QTextStream stream(&result);
+	stream << u"Status: "_q << job.status << u"\n"_q;
 	stream << u"Chat: "_q
 		<< _peer->name()
 		<< u" ("_q
 		<< chatId
 		<< u")\n"_q;
 	stream << u"Date: "_q
-		<< (job.dateLine.isEmpty()
-			? QDate::currentDate().toString(Qt::ISODate)
-			: job.dateLine.mid(6))
+		<< QDate::currentDate().toString(Qt::ISODate)
 		<< u"\n"_q;
 	struct ReportRow {
 		QString name;
@@ -1395,44 +1480,28 @@ void ChatScanBox::renderReport() {
 	auto uniqueTotalBytes = int64(0);
 	auto dupTotal = 0;
 	auto dupBytes = int64(0);
-	for (const auto &row : _rows) {
-		const auto found = job.listed.find(row.category);
-		if (found == job.listed.end() || found->second.empty()) {
+	for (const auto &row : job.rows) {
+		if (row.dupCount <= 0) {
 			continue;
 		}
-		auto dups = 0;
-		auto bytes = int64(0);
-		auto deletedCount = 0;
-		for (const auto &[id, item] : found->second) {
-			if (item.inDb) {
-				++dups;
-				bytes += item.size;
-			} else {
-				++deletedCount;
-			}
+		const auto name = job.names.find(row.category);
+		if (name == job.names.end()) {
+			continue;
 		}
-		const auto unique = uniques.find(row.category);
-		const auto uniqueCount = (unique != uniques.end())
-			? unique->second.first
-			: 0;
-		const auto uniqueBytes = (unique != uniques.end())
-			? unique->second.second
-			: int64(0);
-		uniqueTotal += uniqueCount;
-		uniqueTotalBytes += uniqueBytes;
-		dupTotal += dups;
-		dupBytes += bytes;
+		uniqueTotal += row.uniqueCount;
+		uniqueTotalBytes += row.uniqueBytes;
+		dupTotal += row.dupCount;
+		dupBytes += row.dupBytes;
 		auto entry = ReportRow();
-		entry.name = job.names.at(row.category);
-		entry.unique = QString::number(uniqueCount)
+		entry.name = name->second;
+		entry.unique = QString::number(row.uniqueCount)
 			+ u" ("_q
-			+ FormatSizeWithBytes(uniqueBytes)
+			+ FormatSizeWithBytes(row.uniqueBytes)
 			+ u")"_q;
-		entry.dups = QString::number(dups)
+		entry.dups = QString::number(row.dupCount)
 			+ u" ("_q
-			+ FormatSizeWithBytes(bytes)
-			+ u")"_q
-			+ deletedText(deletedCount);
+			+ FormatSizeWithBytes(row.dupBytes)
+			+ u")"_q;
 		table.push_back(std::move(entry));
 	}
 	const auto totalUnique = QString::number(uniqueTotal)
@@ -1472,81 +1541,194 @@ void ChatScanBox::renderReport() {
 		<< u"  "_q
 		<< totalDups
 		<< u"\n"_q;
-	for (const auto &row : _rows) {
-		const auto found = job.listed.find(row.category);
-		if (found == job.listed.end() || found->second.empty()) {
-			continue;
-		}
-		auto dups = 0;
-		auto bytes = int64(0);
-		auto deletedCount = 0;
-		for (const auto &[id, item] : found->second) {
-			if (item.inDb) {
-				++dups;
-				bytes += item.size;
-			} else {
-				++deletedCount;
-			}
-		}
-		stream << u"\n"_q
-			<< job.names.at(row.category)
-			<< u" — "_q
-			<< dups
-			<< u" dups ("_q
-			<< FormatSizeWithBytes(bytes)
-			<< u")"_q
-			<< deletedText(deletedCount)
-			<< u":\n"_q;
-		for (const auto &[id, item] : found->second) {
-			stream << (item.inDb ? QString() : u"[x] "_q)
-				<< item.line
-				<< u"\n"_q;
-		}
-	}
 	stream.flush();
-	_reportJob.reset();
-	if (!_reportQueuedStatus.isEmpty()) {
-		const auto next = _reportQueuedStatus;
-		const auto nextUniques = _reportQueuedUniques;
-		const auto nextAppend = _reportQueuedAppend;
-		_reportQueuedStatus.clear();
-		_reportQueuedUniques.clear();
-		_reportQueuedAppend = false;
-		upsertScanReport(next, nextUniques, nextAppend);
+	return result;
+}
+
+void ChatScanBox::writeReportOnWorker() {
+	if (!_reportJob) {
+		return;
 	}
+	const auto shared = _reportJob;
+	const auto weak = QPointer<ChatScanBox>(this);
+	const auto dbPath = Core::App().downloadManager().dedupDbPath();
+	const auto peerId = _peer->id;
+	crl::async([shared, weak, dbPath, peerId] {
+		std::lock_guard<std::mutex> lock(ReportWriteMutex());
+		const auto connectionName = u"dedup-report-%1"_q.arg(
+			QUuid::createUuid().toString());
+		auto db = QSqlDatabase::addDatabase(u"QSQLITE"_q, connectionName);
+		db.setDatabaseName(dbPath);
+		auto success = false;
+		if (db.open()) {
+			{
+				QSqlQuery q(db);
+				q.exec(u"PRAGMA busy_timeout=5000"_q);
+			}
+			QFile file(shared->path);
+			if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+				{
+					QTextStream stream(&file);
+					stream << shared->header;
+					QSqlQuery q(db);
+					q.prepare(u"SELECT category, msg_id, size, filename, is_photo "
+						"FROM chat_scan_items "
+						"WHERE peer_id = :peer_id AND is_dup = 1 "
+						"ORDER BY category, msg_id"_q);
+					q.bindValue(u":peer_id"_q, QVariant::fromValue(
+						static_cast<qulonglong>(peerId.value)));
+					if (q.exec()) {
+						auto currentCategory = -1;
+						auto currentName = QString();
+						auto currentRow = (const Data::ChatScanRow*)(nullptr);
+						while (q.next()) {
+							const auto category = q.value(0).toInt();
+							if (category != currentCategory) {
+								currentCategory = category;
+								currentRow = nullptr;
+								for (const auto &row : shared->rows) {
+									if (row.category == category) {
+										currentRow = &row;
+										break;
+									}
+								}
+								const auto name = shared->names.find(category);
+								currentName = (name != shared->names.end())
+									? name->second
+									: QString();
+								stream << u"\n"_q
+									<< currentName
+									<< u" — "_q
+									<< (currentRow ? currentRow->dupCount : 0)
+									<< u" dups ("_q
+									<< FormatSizeWithBytes(
+										currentRow ? currentRow->dupBytes : 0)
+									<< u"):\n"_q;
+							}
+							const auto isPhoto = (q.value(4).toInt() != 0);
+							auto prefix = QString();
+							if (!isPhoto) {
+								prefix = q.value(3).toString();
+								if (prefix.isEmpty()) {
+									prefix = currentName;
+								}
+							}
+							stream << (prefix.isEmpty()
+								? QString()
+								: prefix + u" | "_q)
+								<< FormatSizeWithBytes(q.value(2).toLongLong())
+								<< u" | msg "_q
+								<< QString::number(q.value(1).toLongLong())
+								<< u"\n"_q;
+						}
+						success = true;
+					} else {
+						LOG(("ChatScan: report query failed: %1").arg(
+							q.lastError().text()));
+					}
+					stream.flush();
+				}
+				file.close();
+			} else {
+				LOG(("ChatScan: report write failed: %1").arg(
+					file.errorString()));
+			}
+			db.close();
+		} else {
+			LOG(("ChatScan: report DB open failed: %1").arg(
+				db.lastError().text()));
+		}
+		db = QSqlDatabase();
+		QSqlDatabase::removeDatabase(connectionName);
+		if (shared->removeAfterWrite.load()) {
+			QFile::remove(shared->path);
+		}
+		if (!success) {
+			LOG(("ChatScan: report write failed."));
+		}
+		crl::on_main([shared, weak] {
+			if (!weak) {
+				return;
+			}
+			weak->_reportJob.reset();
+			if (weak->_removeReportAfterWrite) {
+				weak->_removeReportAfterWrite = false;
+				QFile::remove(weak->scanReportPath());
+				return;
+			}
+			if (weak->_deleteAfterReport) {
+				weak->_deleteAfterReport = false;
+				weak->startDelete();
+			}
+			if (!weak->_reportQueuedStatus.isEmpty()) {
+				const auto next = weak->_reportQueuedStatus;
+				weak->_reportQueuedStatus.clear();
+				weak->upsertScanReport(next);
+			}
+			if (!weak->_reportJob && !weak->_reportStatusQueued.isEmpty()) {
+				const auto status = weak->_reportStatusQueued;
+				weak->_reportStatusQueued.clear();
+				weak->updateScanReportStatus(status);
+			}
+		});
+	});
+}
+
+void ChatScanBox::updateScanReportStatus(const QString &status) {
+	QFile file(scanReportPath());
+	if (!file.open(QIODevice::ReadWrite | QIODevice::Text)) {
+		return;
+	}
+	const auto first = file.readLine();
+	const auto prefix = u"Status: "_q;
+	if (!first.startsWith(prefix.toUtf8())) {
+		return;
+	}
+	auto line = prefix + status;
+	auto length = int(first.size());
+	if (length > 0 && first.endsWith('\n')) {
+		--length;
+	}
+	const auto lineLength = int(line.size());
+	if (lineLength > length) {
+		return;
+	}
+	line += QString(length - lineLength, QChar(u' '));
+	file.seek(0);
+	file.write(line.toUtf8());
+	file.write("\n", 1);
+}
+
+void ChatScanBox::writePauseReport() {
+	if (!_api || _removeReportAfterWrite) {
+		return;
+	}
+	const auto state = _api->currentState();
+	auto dupTotal = 0;
+	for (const auto &entry : state.categories) {
+		dupTotal += entry.second.dupCount;
+	}
+	if (dupTotal <= 0) {
+		auto &db = Core::App().downloadManager().ensureDedupDb();
+		if (!db.isOpen()) {
+			return;
+		}
+		dupTotal = db.chatScanDupCount(_peer->id, -1);
+	}
+	if (dupTotal <= 0) {
+		return;
+	}
+	upsertScanReport(u"Paused"_q);
 }
 
 void ChatScanBox::writeDupReport(bool deleted) {
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (!db.isOpen()) {
+	if (deleted) {
+		if (_reportJob) {
+			_reportStatusQueued = u"Deleted"_q;
+			return;
+		}
+		updateScanReportStatus(u"Deleted"_q);
 		return;
 	}
-	auto uniques = std::map<int, std::pair<int, int64>>();
-	for (const auto &row : db.readChatScan(_peer->id)) {
-		uniques[row.category] = {
-			row.uniqueCount,
-			row.uniqueBytes };
-	}
-	upsertScanReport(
-		deleted ? u"Deleted"_q : u"Not deleted"_q,
-		uniques,
-		deleted || _reportAppend);
-}
-
-void ChatScanBox::writePausedReport() {
-	if (!_api) {
-		return;
-	}
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (!db.isOpen()) {
-		return;
-	}
-	auto uniques = std::map<int, std::pair<int, int64>>();
-	const auto state = _api->currentState();
-	for (const auto &entry : state.categories) {
-		uniques[entry.first] = {
-			entry.second.uniqueCount,
-			entry.second.uniqueBytes };
-	}
-	upsertScanReport(u"Paused"_q, uniques, _reportAppend);
+	upsertScanReport(u"Not deleted"_q);
 }

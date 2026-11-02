@@ -8,6 +8,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 
 #include <algorithm>
+#include <set>
+#include <utility>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -35,6 +37,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_global_privacy.h"
 #include "api/api_reactions_notify_settings.h"
 #include "api/api_updates.h"
+#include "chat_scan/chat_scan_index.h"
 #include "api/api_user_privacy.h"
 #include "api/api_read_metrics.h"
 #include "api/api_views.h"
@@ -137,6 +140,8 @@ struct ForwardDedupMedia {
 	uint64 mediaId = 0;
 	DocumentData *doc = nullptr;
 	PhotoData *photo = nullptr;
+	MsgId sentId;
+	bool pending = false;
 };
 
 ForwardDedupMedia ForwardDedupMediaOf(HistoryItem *item) {
@@ -152,36 +157,105 @@ ForwardDedupMedia ForwardDedupMediaOf(HistoryItem *item) {
 		.photo = photo,
 	};
 }
+
+void ForwardDedupFillSentIds(
+		const MTPUpdates &result,
+		std::vector<ForwardDedupMedia> &sentMedia) {
+	const auto assign = [&](uint64 mediaId, bool isPhoto, MsgId msgId) {
+		for (auto &sent : sentMedia) {
+			if (sent.mediaId == mediaId
+				&& (sent.photo != nullptr) == isPhoto) {
+				sent.sentId = msgId;
+				return;
+			}
+		}
+	};
+	const auto addMessage = [&](const MTPMessage &message) {
+		message.match([&](const MTPDmessage &data) {
+			const auto id = MsgId(data.vid().v);
+			const auto media = data.vmedia();
+			if (!media) {
+				return;
+			}
+			media->match([&](const MTPDmessageMediaDocument &mediaData) {
+				if (const auto document = mediaData.vdocument()) {
+					document->match([&](const MTPDdocument &doc) {
+						assign(uint64(doc.vid().v), false, id);
+					}, [&](const MTPDdocumentEmpty &) {
+					});
+				}
+			}, [&](const MTPDmessageMediaPhoto &mediaData) {
+				if (const auto photo = mediaData.vphoto()) {
+					photo->match([&](const MTPDphoto &photoData) {
+						assign(uint64(photoData.vid().v), true, id);
+					}, [&](const MTPDphotoEmpty &) {
+					});
+				}
+			}, [&](const auto &) {
+			});
+		}, [&](const auto &) {
+		});
+	};
+	const auto addUpdates = [&](const auto &data) {
+		for (const auto &update : data.vupdates().v) {
+			update.match([&](const MTPDupdateNewMessage &d) {
+				addMessage(d.vmessage());
+			}, [&](const MTPDupdateNewChannelMessage &d) {
+				addMessage(d.vmessage());
+			}, [&](const auto &) {
+			});
+		}
+	};
+	result.match([&](const MTPDupdates &data) {
+		addUpdates(data);
+	}, [&](const MTPDupdatesCombined &data) {
+		addUpdates(data);
+	}, [&](const auto &) {
+	});
+}
 bool ForwardDedupSkip(
 		HistoryItem *item,
-		std::set<uint64> &seenInBatch) {
+		PeerId dstPeer,
+		std::set<std::pair<uint64, bool>> &seenInBatch,
+		bool &pendingAdded) {
+	pendingAdded = false;
 	const auto media = ForwardDedupMediaOf(item);
 	if (!media.mediaId) {
 		return false;
 	}
 	const auto mediaId = media.mediaId;
-	if (!seenInBatch.insert(mediaId).second) {
+	const auto isPhoto = (media.photo != nullptr);
+	if (!seenInBatch.insert({ mediaId, isPhoto }).second) {
 		return true;
-	}
-	if (!GetEnhancedBool("prevent_forward_duplicates")) {
-		return false;
 	}
 	auto &db = Core::App().downloadManager().ensureDedupDb();
 	if (!db.isOpen()) {
 		return false;
 	}
-	using Table = Data::DedupDb::Table;
-	if (db.containsDocId(Table::Uploads, mediaId)
-		|| db.containsDocIdInDb(Table::Uploads, mediaId)) {
+	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
+	[[maybe_unused]] auto chatUse = db.useChatTable(dstPeer, dedupOn);
+	if (db.chatTableContainsDocId(dstPeer, mediaId, isPhoto, dedupOn)) {
 		return true;
 	}
-	db.addPending(Table::Uploads, mediaId, QByteArray());
+	using Table = Data::DedupDb::Table;
+	if (dedupOn
+		&& (db.containsDocId(Table::Uploads, mediaId, isPhoto)
+			|| db.containsDocIdInDb(Table::Uploads, mediaId, isPhoto))) {
+		return true;
+	}
+	if (dedupOn) {
+		db.addPending(Table::Uploads, mediaId, QByteArray(), isPhoto);
+		pendingAdded = true;
+	}
 	return false;
 }
 
 void ForwardDedupRecordHash(
 		uint64 mediaId,
-		const QByteArray &hash) {
+		bool isPhoto,
+		const QByteArray &hash,
+		PeerId dstPeer,
+		MsgId sentId) {
 	if (hash.isEmpty()) {
 		return;
 	}
@@ -189,23 +263,60 @@ void ForwardDedupRecordHash(
 	if (!db.isOpen()) {
 		return;
 	}
+	auto isDup = false;
+	if (sentId && IsServerMsgId(sentId)) {
+		isDup = db.recordUploadDestination(
+			hash,
+			mediaId,
+			isPhoto,
+			dstPeer,
+			sentId,
+			db.isChatScanned(dstPeer));
+	} else {
+		db.insert(Data::DedupDb::Table::Uploads, {
+			.hash = hash,
+			.documentId = mediaId,
+			.isPhoto = isPhoto,
+			.status = u"f"_q,
+		});
+	}
+	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
+	if (!dedupOn || isDup) {
+		return;
+	}
+	[[maybe_unused]] auto chatUse = db.useChatTable(dstPeer, dedupOn);
+	if (db.chatTableContainsHash(dstPeer, hash, dedupOn)) {
+		return;
+	}
 	using Table = Data::DedupDb::Table;
-	if (db.containsDocId(Table::Uploads, mediaId)) {
+	if (db.containsDocId(Table::Uploads, mediaId, isPhoto)) {
 		return;
 	}
 	if (db.containsHash(Table::Uploads, hash)) {
 		if (db.containsFinishedHash(Table::Uploads, hash)) {
-			db.insert(Table::Uploads, { hash, mediaId, u"f"_q });
+			db.insert(Table::Uploads, {
+				.hash = hash,
+				.documentId = mediaId,
+				.isPhoto = isPhoto,
+				.status = u"f"_q,
+			});
 		}
 		return;
 	}
-	db.insert(Table::Uploads, { hash, mediaId, u"f"_q });
+	db.insert(Table::Uploads, {
+		.hash = hash,
+		.documentId = mediaId,
+		.isPhoto = isPhoto,
+		.status = u"f"_q,
+	});
 }
 
 void ForwardDedupResolveHash(
 		Main::Session *session,
 		uint64 mediaId,
-		DocumentData *doc) {
+		DocumentData *doc,
+		PeerId dstPeer,
+		MsgId sentId) {
 	if (!doc) {
 		return;
 	}
@@ -213,14 +324,16 @@ void ForwardDedupResolveHash(
 		not_null<Main::Session*>(session),
 		not_null<DocumentData*>(doc),
 		[=](QByteArray hash) {
-			ForwardDedupRecordHash(mediaId, hash);
+			ForwardDedupRecordHash(mediaId, false, hash, dstPeer, sentId);
 		});
 }
 
 void ForwardDedupResolvePhotoHash(
 		Main::Session *session,
 		uint64 mediaId,
-		PhotoData *photo) {
+		PhotoData *photo,
+		PeerId dstPeer,
+		MsgId sentId) {
 	if (!photo) {
 		return;
 	}
@@ -228,7 +341,7 @@ void ForwardDedupResolvePhotoHash(
 		not_null<Main::Session*>(session),
 		not_null<PhotoData*>(photo),
 		[=](QByteArray hash) {
-			ForwardDedupRecordHash(mediaId, hash);
+			ForwardDedupRecordHash(mediaId, true, hash, dstPeer, sentId);
 		});
 }
 
@@ -236,19 +349,25 @@ void ForwardDedupDone(
 		Main::Session *session,
 		uint64 mediaId,
 		DocumentData *doc,
-		PhotoData *photo) {
+		PhotoData *photo,
+		PeerId dstPeer,
+		MsgId sentId,
+		bool pending) {
 	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (db.isOpen()) {
-		db.removePending(Data::DedupDb::Table::Uploads, mediaId);
+	if (pending && db.isOpen()) {
+		db.removePending(
+			Data::DedupDb::Table::Uploads,
+			mediaId,
+			(photo != nullptr));
 	}
-	ForwardDedupResolveHash(session, mediaId, doc);
-	ForwardDedupResolvePhotoHash(session, mediaId, photo);
+	ForwardDedupResolveHash(session, mediaId, doc, dstPeer, sentId);
+	ForwardDedupResolvePhotoHash(session, mediaId, photo, dstPeer, sentId);
 }
 
-void ForwardDedupFail(uint64 mediaId) {
+void ForwardDedupFail(uint64 mediaId, bool isPhoto, bool pending) {
 	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (db.isOpen()) {
-		db.removePending(Data::DedupDb::Table::Uploads, mediaId);
+	if (pending && db.isOpen()) {
+		db.removePending(Data::DedupDb::Table::Uploads, mediaId, isPhoto);
 	}
 }
 
@@ -2491,8 +2610,11 @@ void ApiWrap::deleteHistory(
 	}
 	if (!justClear) {
 		_session->data().deleteConversationLocally(peer);
-	} else if (history) {
-		history->clear(History::ClearType::ClearHistory);
+	} else {
+		if (history) {
+			history->clear(History::ClearType::ClearHistory);
+		}
+		ChatScan::NoteChatDeleted(peer->id);
 	}
 }
 
@@ -4002,6 +4124,9 @@ void ApiWrap::requestSharedMedia(
 		SharedMediaType type,
 		MsgId messageId,
 		SliceType slice) {
+	if (type == SharedMediaType::Sticker) {
+		return;
+	}
 	const auto key = SharedMediaRequest{
 		peer,
 		topicRootId,
@@ -4529,7 +4654,7 @@ void ApiWrap::forwardMessages(
 			});
 			if (!*alreadyFiltered) {
 				*alreadyFiltered = true;
-				Data::FilterCopyAlbumDuplicates(_session, *copyItems, [=](std::vector<not_null<HistoryItem*>> filtered) mutable {
+				Data::FilterCopyAlbumDuplicates(_session, forwardDst, *copyItems, [=](std::vector<not_null<HistoryItem*>> filtered) mutable {
 					*skippedCount = *totalBefore - int(filtered.size());
 					*copyItems = std::move(filtered);
 					if (copyItems->empty()) {
@@ -4669,6 +4794,7 @@ void ApiWrap::forwardMessages(
 				auto orderedAction = action;
 				auto sharedBatches = std::make_shared<std::vector<std::pair<int, std::vector<not_null<HistoryItem*>>>>>(std::move(batches));
 				auto sharedIndex = std::make_shared<size_t>(0);
+				auto copySeen = std::make_shared<std::set<std::pair<uint64, bool>>>();
 				auto sendNext = std::make_shared<Fn<void()>>();
 				*sendNext = [=]() mutable {
 					if (*sharedIndex >= sharedBatches->size()) {
@@ -4730,14 +4856,31 @@ void ApiWrap::forwardMessages(
 						auto &items = pair.second;
 						auto filtered = items;
 						filtered.clear();
-						auto batchSeen = std::set<uint64>();
+						auto &dedupDb = Core::App().downloadManager().ensureDedupDb();
+						const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
+						auto forwardChatUse = std::make_shared<
+							Data::DedupDb::ChatTableUse>();
+						if (dedupDb.isOpen()) {
+							*forwardChatUse = dedupDb.useChatTable(
+								forwardDst,
+								dedupOn);
+						}
+
 						auto sentMedia = std::vector<ForwardDedupMedia>();
 						for (const auto item : items) {
-							if (ForwardDedupSkip(item, batchSeen)) {
+							auto pending = false;
+							if (ForwardDedupSkip(
+									item,
+									forwardDst,
+									*copySeen,
+									pending)) {
+								++(*skippedCount);
 								continue;
 							}
 							filtered.push_back(item);
-							sentMedia.push_back(ForwardDedupMediaOf(item));
+							auto media = ForwardDedupMediaOf(item);
+							media.pending = pending;
+							sentMedia.push_back(std::move(media));
 						}
 						if (filtered.empty()) {
 							*copyDone += int(items.size());
@@ -4801,15 +4944,19 @@ void ApiWrap::forwardMessages(
 										Data::ShortcutIdToMTP(_session, orderedAction.options.shortcutId),
 										MTP_long(orderedAction.options.effectId),
 										MTP_long(stars))
-								).done([=](const MTPUpdates &result) {
+								).done([=](const MTPUpdates &result) mutable {
 									applyUpdates(result);
+									ForwardDedupFillSentIds(result, sentMedia);
 									_session->data().sendHistoryChangeNotifications();
 									for (const auto &sent : sentMedia) {
 										ForwardDedupDone(
 											_session,
 											sent.mediaId,
 											sent.doc,
-											sent.photo);
+											sent.photo,
+											forwardDst,
+											sent.sentId,
+											sent.pending);
 									}
 									*copyDone += int(items.size());
 									Data::SetCopyAlbumProgress(*copyDone, totalItems);
@@ -4822,7 +4969,14 @@ void ApiWrap::forwardMessages(
 									_session->data().sendHistoryChangeNotifications();
 									sendMessageFail(error, peer);
 									for (const auto &sent : sentMedia) {
-										ForwardDedupFail(sent.mediaId);
+										copySeen->erase({
+											sent.mediaId,
+											(sent.photo != nullptr),
+										});
+										ForwardDedupFail(
+											sent.mediaId,
+											(sent.photo != nullptr),
+											sent.pending);
 									}
 									*copyDone += int(items.size());
 									Data::SetCopyAlbumProgress(*copyDone, totalItems);
@@ -4838,14 +4992,31 @@ void ApiWrap::forwardMessages(
 						auto &items = pair.second;
 						auto filtered = items;
 						filtered.clear();
-						auto batchSeen = std::set<uint64>();
+						auto &dedupDb = Core::App().downloadManager().ensureDedupDb();
+						const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
+						auto forwardChatUse = std::make_shared<
+							Data::DedupDb::ChatTableUse>();
+						if (dedupDb.isOpen()) {
+							*forwardChatUse = dedupDb.useChatTable(
+								forwardDst,
+								dedupOn);
+						}
+
 						auto sentMedia = std::vector<ForwardDedupMedia>();
 						for (const auto item : items) {
-							if (ForwardDedupSkip(item, batchSeen)) {
+							auto pending = false;
+							if (ForwardDedupSkip(
+									item,
+									forwardDst,
+									*copySeen,
+									pending)) {
+								++(*skippedCount);
 								continue;
 							}
 							filtered.push_back(item);
-							sentMedia.push_back(ForwardDedupMediaOf(item));
+							auto media = ForwardDedupMediaOf(item);
+							media.pending = pending;
+							sentMedia.push_back(std::move(media));
 						}
 						if (filtered.empty()) {
 							*copyDone += int(items.size());
@@ -4906,15 +5077,19 @@ void ApiWrap::forwardMessages(
 										MTP_int(0),
 										MTP_long(0),
 										Api::SuggestToMTP(orderedAction.options.suggest))
-								).done([=](const MTPUpdates &result) {
+								).done([=](const MTPUpdates &result) mutable {
 									applyUpdates(result);
+									ForwardDedupFillSentIds(result, sentMedia);
 									_session->data().sendHistoryChangeNotifications();
 									for (const auto &sent : sentMedia) {
 										ForwardDedupDone(
 											_session,
 											sent.mediaId,
 											sent.doc,
-											sent.photo);
+											sent.photo,
+											forwardDst,
+											sent.sentId,
+											sent.pending);
 									}
 									*copyDone += int(items.size());
 									Data::SetCopyAlbumProgress(*copyDone, totalItems);
@@ -4927,7 +5102,14 @@ void ApiWrap::forwardMessages(
 									_session->data().sendHistoryChangeNotifications();
 									sendMessageFail(error, peer);
 									for (const auto &sent : sentMedia) {
-										ForwardDedupFail(sent.mediaId);
+										copySeen->erase({
+											sent.mediaId,
+											(sent.photo != nullptr),
+										});
+										ForwardDedupFail(
+											sent.mediaId,
+											(sent.photo != nullptr),
+											sent.pending);
 									}
 									*copyDone += int(items.size());
 									Data::SetCopyAlbumProgress(*copyDone, totalItems);

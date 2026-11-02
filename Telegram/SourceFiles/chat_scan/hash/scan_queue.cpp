@@ -25,16 +25,16 @@ std::vector<Data::ChatScanItem> ScanQueue::lease(
 	return _db->chatScanLeaseItems(_peerId, limit, now, leaseUntil);
 }
 
-void ScanQueue::release(uint64 mediaId, qint64 retryAt) {
-	_db->chatScanReleaseItem(_peerId, mediaId, retryAt);
+void ScanQueue::release(uint64 mediaId, bool isPhoto, qint64 retryAt) {
+	_db->chatScanReleaseItem(_peerId, mediaId, isPhoto, retryAt);
 }
 
 void ScanQueue::releaseLeases() {
 	_db->chatScanReleaseLeases(_peerId);
 }
 
-void ScanQueue::fail(uint64 mediaId) {
-	_db->chatScanFailItem(_peerId, mediaId);
+void ScanQueue::fail(uint64 mediaId, bool isPhoto) {
+	_db->chatScanFailItem(_peerId, mediaId, isPhoto);
 }
 
 int ScanQueue::retryFailed() {
@@ -42,7 +42,7 @@ int ScanQueue::retryFailed() {
 }
 
 int ScanQueue::commitHashes(
-		const std::vector<std::pair<uint64, QByteArray>> &hashes) {
+		const std::vector<Data::ChatScanHash> &hashes) {
 	return _db->chatScanCommitHashes(_peerId, hashes);
 }
 
@@ -50,12 +50,87 @@ void ScanQueue::resetLeases() {
 	_db->chatScanResetLeases(_peerId);
 }
 
-QByteArray ScanQueue::knownHash(uint64 mediaId, bool isPhoto) const {
-	auto known = _db->hashForDocId(Data::DedupDb::Table::Uploads, mediaId);
-	if (known.isEmpty()) {
-		known = _db->chatScanHashForMedia(_peerId, mediaId, isPhoto);
+void ScanQueue::setKnownHashes(
+		std::vector<Data::ChatScanMediaHash> hashes,
+		bool loaded,
+		bool otherLoaded) {
+	_hashesLoaded = loaded;
+	_otherHashesLoaded = otherLoaded;
+	for (auto &row : hashes) {
+		if (!row.mediaId || row.hash.isEmpty()) {
+			continue;
+		}
+		const auto current = (row.peerId == _peerId);
+		auto &map = row.isPhoto
+			? (current ? _photoHashes : _otherPhotoHashes)
+			: (current ? _mediaHashes : _otherMediaHashes);
+		if (map.find(row.mediaId) == map.end()) {
+			map.emplace(row.mediaId, std::move(row.hash));
+		}
 	}
-	return known;
+}
+
+void ScanQueue::rememberHash(
+		uint64 mediaId,
+		bool isPhoto,
+		const QByteArray &hash) {
+	if (!mediaId || hash.isEmpty()) {
+		return;
+	}
+	(isPhoto ? _photoHashes : _mediaHashes)[mediaId] = hash;
+}
+
+void ScanQueue::clearKnownHashes() {
+	_mediaHashes.clear();
+	_photoHashes.clear();
+	_otherMediaHashes.clear();
+	_otherPhotoHashes.clear();
+	_hashesLoaded = false;
+	_otherHashesLoaded = false;
+}
+
+QByteArray ScanQueue::knownHash(
+		uint64 mediaId,
+		bool isPhoto,
+		bool dedupOn) const {
+	if (!mediaId) {
+		return QByteArray();
+	}
+	const auto &hashes = isPhoto ? _photoHashes : _mediaHashes;
+	if (const auto i = hashes.find(mediaId); i != hashes.end()) {
+		return i->second;
+	}
+	auto known = dedupOn
+		? _db->hashForDocId(
+			Data::DedupDb::Table::Uploads,
+			mediaId,
+			isPhoto)
+		: QByteArray();
+	if (!known.isEmpty()) {
+		return known;
+	}
+	if (dedupOn) {
+		if (_otherHashesLoaded) {
+			const auto &other = isPhoto
+				? _otherPhotoHashes
+				: _otherMediaHashes;
+			if (const auto i = other.find(mediaId); i != other.end()) {
+				return i->second;
+			}
+		} else {
+			known = _db->chatScanHashForMediaOther(
+				_peerId,
+				mediaId,
+				isPhoto);
+			if (!known.isEmpty()) {
+				return known;
+			}
+		}
+	}
+	if (_hashesLoaded) {
+		return QByteArray();
+	}
+	return _db->chatScanHashForMedia(_peerId, mediaId, isPhoto);
 }
 
 int ScanQueue::pending() const {

@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_dedup_db.h"
 
 #include <QByteArray>
+#include <set>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -74,8 +75,9 @@ private:
 	const not_null<ScanQueue*> _queue;
 	Hooks _hooks;
 	base::Timer _tickTimer;
-	std::vector<std::pair<uint64, QByteArray>> _commits;
-	std::unordered_set<uint64> _activeMedia;
+	base::Timer _commitTimer;
+	std::vector<Data::ChatScanHash> _commits;
+	std::set<std::pair<uint64, bool>> _activeMedia;
 	int _active = 0;
 	uint64 _generation = 0;
 	bool _stopped = true;

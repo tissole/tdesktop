@@ -3421,7 +3421,8 @@ void OverlayWidget::saveAs() {
 						if (dedupOn && db.isOpen()) {
 							if (db.containsDocId(
 								Data::DedupDb::Table::Downloads,
-								uint64(photo->id))) {
+								uint64(photo->id),
+								true)) {
 								batch->addDuplicate();
 								return;
 							}
@@ -3450,6 +3451,7 @@ void OverlayWidget::saveAs() {
 						db.insert(Data::DedupDb::Table::Downloads, {
 							.hash = hash,
 							.documentId = uint64(photo->id),
+							.isPhoto = true,
 							.status = u"f"_q,
 						});
 					}
@@ -3494,7 +3496,8 @@ void OverlayWidget::saveAs() {
 					if (dedupOn && db.isOpen()) {
 						if (db.containsDocId(
 							Data::DedupDb::Table::Downloads,
-							uint64(photo->id))) {
+							uint64(photo->id),
+							true)) {
 							batch->addDuplicate();
 							return;
 						}
@@ -3527,6 +3530,7 @@ void OverlayWidget::saveAs() {
 						db.insert(Data::DedupDb::Table::Downloads, {
 							.hash = hash,
 							.documentId = uint64(photo->id),
+							.isPhoto = true,
 							.status = u"f"_q,
 						});
 					}
@@ -3715,6 +3719,7 @@ void OverlayWidget::downloadMedia() {
 					db.insert(Data::DedupDb::Table::Downloads, {
 						.hash = Data::ContentFingerprint(bytes),
 						.documentId = uint64(photo->id),
+						.isPhoto = true,
 						.status = u"f"_q,
 					});
 				}

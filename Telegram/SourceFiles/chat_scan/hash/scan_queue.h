@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_dedup_db.h"
 
 #include <QByteArray>
+
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -29,15 +31,28 @@ public:
 		int limit,
 		qint64 now,
 		qint64 leaseUntil);
-	void release(uint64 mediaId, qint64 retryAt);
+	void release(uint64 mediaId, bool isPhoto, qint64 retryAt);
 	void releaseLeases();
-	void fail(uint64 mediaId);
+	void fail(uint64 mediaId, bool isPhoto);
 	[[nodiscard]] int retryFailed();
 	[[nodiscard]] int commitHashes(
-		const std::vector<std::pair<uint64, QByteArray>> &hashes);
+		const std::vector<Data::ChatScanHash> &hashes);
 	void resetLeases();
 
-	[[nodiscard]] QByteArray knownHash(uint64 mediaId, bool isPhoto) const;
+	void setKnownHashes(
+		std::vector<Data::ChatScanMediaHash> hashes,
+		bool loaded,
+		bool otherLoaded);
+	void rememberHash(
+		uint64 mediaId,
+		bool isPhoto,
+		const QByteArray &hash);
+	void clearKnownHashes();
+
+	[[nodiscard]] QByteArray knownHash(
+		uint64 mediaId,
+		bool isPhoto,
+		bool dedupOn) const;
 	[[nodiscard]] int pending() const;
 	[[nodiscard]] int leased() const;
 	[[nodiscard]] int failed() const;
@@ -46,6 +61,12 @@ public:
 private:
 	const not_null<Data::DedupDb*> _db;
 	const PeerId _peerId;
+	std::unordered_map<uint64, QByteArray> _mediaHashes;
+	std::unordered_map<uint64, QByteArray> _photoHashes;
+	std::unordered_map<uint64, QByteArray> _otherMediaHashes;
+	std::unordered_map<uint64, QByteArray> _otherPhotoHashes;
+	bool _hashesLoaded = false;
+	bool _otherHashesLoaded = false;
 
 };
 

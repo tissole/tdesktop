@@ -368,6 +368,7 @@ private:
 
 	void saveToDisk();
 	void saveIfIdle();
+	void releaseDownloadTableIfIdle();
 	void clearFingerprintCache(uint64 documentId);
 	void saveFileHash(
 		not_null<Main::Session*> session,
@@ -397,6 +398,7 @@ private:
 	base::Timer _clearLoadingTimer;
 
 	mutable std::unique_ptr<DedupDb> _dedupDb;
+	std::optional<DedupDb::TableUse> _downloadTableUse;
 	int _checksInProgress = 0;
 
 	// Caches the partial remote fingerprint per documentId so the 2 sample
@@ -431,6 +433,7 @@ void SetCopyAlbumProgress(int done, int total);
 [[nodiscard]] std::pair<int,int> CopyAlbumProgress();
 void FilterCopyAlbumDuplicates(
 	not_null<Main::Session*> session,
+	PeerId dstPeer,
 	std::vector<not_null<HistoryItem*>> items,
 	Fn<void(std::vector<not_null<HistoryItem*>>)> done);
 

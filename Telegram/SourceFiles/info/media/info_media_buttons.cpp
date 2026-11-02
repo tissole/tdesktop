@@ -57,6 +57,7 @@ namespace {
 		|| (type == Type::VoiceFile)
 		|| (type == Type::RoundFile)
 		|| (type == Type::GIF)
+		|| (type == Type::Sticker)
 		|| (type == Type::Poll);
 }
 
@@ -100,6 +101,8 @@ tr::phrase<lngtag_count> MediaTextPhrase(Type type) {
 	case Type::Link: return tr::lng_profile_shared_links;
 	case Type::VoiceFile: return tr::lng_profile_audios;
 	case Type::RoundFile: return tr::lng_profile_video_messages;
+	case Type::RoundVoiceFile: return tr::lng_profile_audios;
+	case Type::Sticker: return tr::lng_profile_stickers;
 	case Type::Poll: return tr::lng_profile_polls;
 	}
 	Unexpected("Type in MediaTextPhrase()");
@@ -125,12 +128,13 @@ std::vector<int> ScanCategories(Type type) {
 	case Type::File:
 		return { int(ScanType::File) };
 	case Type::VoiceFile:
-	case Type::RoundVoiceFile:
 		return { int(ScanType::VoiceMessage) };
 	case Type::RoundFile:
 		return { int(ScanType::VideoMessage) };
 	case Type::GIF:
 		return { int(ScanType::GIF) };
+	case Type::Sticker:
+		return { int(ScanType::Sticker) };
 	default:
 		return {};
 	}

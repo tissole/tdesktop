@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "base/flat_map.h"
 #include "base/timer.h"
+#include "base/weak_ptr.h"
 #include "data/data_dedup_db.h"
 #include "data/data_msg_id.h"
 #include "mtproto/sender.h"
@@ -16,14 +17,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "scheme.h"
 
 #include <QByteArray>
+#include <QHash>
 #include <QString>
 #include <memory>
-#include <set>
+#include <optional>
 #include <vector>
 #include <unordered_map>
 #include <utility>
 #include <unordered_set>
-#include <vector>
 
 namespace Data {
 class DedupDb;
@@ -57,6 +58,7 @@ struct State {
 		Finished,
 		Cancelled,
 		Failed,
+		Cancelling,
 	};
 	Phase phase = Phase::Scanning;
 	int scannedCount = 0;
@@ -65,20 +67,23 @@ struct State {
 	int dupTotal = 0;
 	int64 dupBytes = 0;
 	int hashDone = 0;
+	int hashPending = 0;
 	int hashTotal = 0;
 	int mediaTotal = 0;
 	int failedHashes = 0;
+	int64 elapsedMs = 0;
 	int64 floodUntilMs = 0;
 	QString error;
 };
 
-class Api final {
+class Api final : public base::has_weak_ptr {
 public:
 	Api(not_null<Main::Session*> session, not_null<PeerData*> peer);
 	~Api();
 
 	[[nodiscard]] rpl::producer<State> state() const;
 	[[nodiscard]] State currentState() const;
+	[[nodiscard]] bool clearing() const;
 
 	void start();
 	void rescan();
@@ -100,34 +105,40 @@ private:
 	void ensureScanTakeout(Fn<void()> ready);
 	void finishBorrowedTakeout();
 	void rescanAfterTakeout();
+	void beginFreshScan();
+	void startFullRescan();
 	void dispatchResumed(int gen);
 	void handlePage(const MTPmessages_Messages &result);
 	void handlePageMessages(const QVector<MTPMessage> &messages);
 	void handleRegularMessage(const MTPDmessage &message);
 	void addDocOccurrence(
 		not_null<DocumentData*> document,
-		MsgId msgId,
-		bool wrapperVideo);
+		MsgId msgId);
 	void addPhotoOccurrence(
 		not_null<PhotoData*> photo,
 		MsgId msgId);
-	void flushHashUpdates();
 	void commitPage();
 	void maybeRequestNext();
 	void rebuildStep();
 	void continueRebuildStep();
+	void applyRebuildProgress(
+		std::vector<Data::ChatScanProgressRow> progress,
+		bool success);
 	void restoreRebuiltItem(const Data::ChatScanItem &item);
-	[[nodiscard]] bool seedFromDbAggregates();
 	[[nodiscard]] bool seedFromProgress(
 		const std::vector<Data::ChatScanProgressRow> &progress);
 	void rememberRestoredMedia(const Data::ChatScanItem &item);
 	void recoverFromCursor(const Data::ChatScanState &cursor);
+	void requestRecoveryProgress();
+	void applyRecoveredProgress(
+		std::vector<Data::ChatScanProgressRow> progress,
+		bool success);
 	void maybeRequestRecovery();
 	void refillRecoveryWindow();
 	void requestRecoveryBatch();
 	void handleRecoveryMessages(const QVector<MTPMessage> &messages);
 	void handleRecoveryMessage(const MTPDmessage &message);
-	void publish();
+	void publish(bool force = false);
 	void noteFloodWait(int seconds);
 	void finish();
 	void fail(const QString &error);
@@ -135,25 +146,33 @@ private:
 	void logSchedulerStarvation();
 	void maybeFinalize();
 	void onHashed(const Data::ChatScanItem &item, const QByteArray &hash);
+	void applyOwnerDecision(
+		const Data::ChatScanItem &item,
+		const QByteArray &hash,
+		const Data::ChatScanOwnerDecision &decision);
 	void onHashFailed(const Data::ChatScanItem &item);
+	void demoteToDuplicate(const Data::ChatScanItem &item);
+	[[nodiscard]] QString filenameForMedia(
+		uint64 mediaId,
+		bool isPhoto) const;
+	void loadKnownHashes(Fn<void()> done);
+	void loadResumeSets(Fn<void()> done);
+	void loadStickerIndexAsync();
+	void uniqueHashesLoaded(
+		std::vector<std::pair<QByteArray, MsgId>> rows,
+		bool success);
+	void stickerIndexLoaded(std::vector<MsgId> ids, bool success);
+	void applyStickerIndex(std::vector<MsgId> ids);
+	void resumeSetLoaded();
+	void finishResumeSets(bool seeded);
 	bool onHashReferenceExpired(const Data::ChatScanItem &item);
 	void onHashCommitted(int resolved);
 	void finalizeAndWrite();
 	void writeAggregateRows();
-	void aggregateStep();
-	void pushDupRow(
-		MsgId msgId,
-		int category,
-		int64 size,
-		const QString &filename);
-	void bumpProgressDelta(
-		int category,
-		int64 dItemCount,
-		int64 dUniqueCount,
-		int64 dUniqueBytes,
-		int64 dDupCount,
-		int64 dDupBytes);
 	[[nodiscard]] Data::DedupDb &db() const;
+	[[nodiscard]] int64 elapsedMs() const;
+	void startElapsed();
+	void freezeElapsed();
 
 	const not_null<Main::Session*> _session;
 	const not_null<PeerData*> _peer;
@@ -166,6 +185,7 @@ private:
 	bool _mediaTotalsRequested = false;
 	base::flat_map<int, CategoryTotals> _totals;
 	std::unique_ptr<ScanQueue> _queue;
+	std::optional<Data::DedupDb::TableUse> _uploadTableUse;
 	std::unique_ptr<ChunkScheduler> _scheduler;
 	bool _schedulerStarted = false;
 	std::unordered_map<uint64, DocumentData*> _documents;
@@ -173,11 +193,16 @@ private:
 	std::unordered_set<uint64> _seenDocs;
 	std::unordered_set<uint64> _seenPhotos;
 	std::unordered_set<uint64> _staleMedia;
+	struct UniqueHash {
+		MsgId msgId = MsgId(0);
+		int category = 0;
+		int64 size = 0;
+	};
 	std::unordered_set<int64> _storedIds;
-	std::set<QByteArray> _seenHashes;
-	std::vector<Data::ChatScanDup> _pageDups;
-	std::vector<Data::ChatScanDup> _pendingDupRows;
+	QHash<QByteArray, UniqueHash> _uniqueHashes;
 	std::vector<Data::ChatScanItem> _pageItems;
+	std::vector<MsgId> _pageStickers;
+	int _stickerTotal = 0;
 	std::vector<int32> _recoveryIds;
 	int _recoveryPos = 0;
 	int32 _recoveryAbove = 0;
@@ -186,23 +211,15 @@ private:
 	bool _recoveryInFlight = false;
 	int _recoveryErrorStreak = 0;
 	base::Timer _recoveryTimer;
-	base::Timer _aggregateTimer;
-	MsgId _aggregateAbove;
 	bool _aggregating = false;
 	base::Timer _rebuildTimer;
-	std::unordered_set<int64> _rebuildDupIds;
-	int _rebuildStage = 0;
 	int64 _rebuildAboveBare = 0;
 	bool _rebuilding = false;
+	bool _recomputingProgress = false;
+	bool _loadingResumeSets = false;
+	int _resumeSetsPending = 0;
+	Fn<void()> _resumeSetsDone;
 
-	struct ProgressDelta {
-		int64 itemCount = 0;
-		int64 uniqueCount = 0;
-		int64 uniqueBytes = 0;
-		int64 dupCount = 0;
-		int64 dupBytes = 0;
-	};
-	std::unordered_map<int, ProgressDelta> _progressDeltas;
 	int32 _offsetId = 0;
 	bool _pageInFlight = false;
 	int32 _highMark = 0;
@@ -212,6 +229,10 @@ private:
 	int _hashDone = 0;
 	int _failedHashes = 0;
 	int _queueOutstanding = 0;
+	uint64 _sessionId = 0;
+	bool _incremental = false;
+	int64 _elapsedMs = 0;
+	crl::time _elapsedStartedAt = 0;
 	bool _walkerCreditBlocked = false;
 	crl::time _starvationSince = 0;
 	crl::time _lastStarvationLogMs = 0;
@@ -220,12 +241,14 @@ private:
 	State::Phase _lastPhase = State::Phase::Scanning;
 	bool _paused = false;
 	int _resumeGen = 0;
+	bool _clearing = false;
 	bool _cancelled = false;
 	bool _failed = false;
 	bool _recovering = false;
 	bool _rescan = false;
 	bool _walkDone = false;
 	bool _finished = false;
+	bool _postFinishRetryUsed = false;
 };
 
 } // namespace ChatScan

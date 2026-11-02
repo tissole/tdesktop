@@ -8,10 +8,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "chat_scan/hash/chunk_scheduler.h"
 
 #include "chat_scan/hash/scan_queue.h"
+#include "data/data_document.h"
 #include "data/data_file_hash.h"
 #include "data/data_session.h"
 #include "data/file_chunk_fetcher.h"
 #include "main/main_session.h"
+#include "settings.h"
 
 #include "base/timer.h"
 
@@ -24,7 +26,8 @@ namespace {
 // samples, and FileChunkFetcher owns the chunk pacing. This pool only keeps
 // enough leased work queued that the limiter always has a next request.
 constexpr auto kSchedulerItems = 192;
-constexpr auto kCommitBatch = 16;
+constexpr auto kCommitBatch = 128;
+constexpr auto kCommitTimeoutMs = 2 * 1000;
 constexpr auto kLeaseMs = int64(30 * 1000);
 constexpr auto kUnresolvedRetryMs = int64(2 * 1000);
 constexpr auto kReferenceRetryMs = int64(5 * 1000);
@@ -42,6 +45,7 @@ ChunkScheduler::ChunkScheduler(
 : _session(session)
 , _queue(queue)
 , _hooks(std::move(hooks)) {
+	_commitTimer.setCallback([=] { flushCommits(); });
 }
 
 void ChunkScheduler::start() {
@@ -53,8 +57,8 @@ void ChunkScheduler::start() {
 	_stopped = false;
 	_queue->resetLeases();
 	// Retries are time based, and a retry can be the only thing left to do,
-	// so a periodic tick both wakes the pump and lets the owner flush its
-	// final partially filled commit batch.
+	// so a periodic tick wakes the pump. Partial commit batches are flushed
+	// by the commit timer, not by this tick.
 	_tickTimer.setCallback([=] {
 		pump();
 		if (_hooks.update) {
@@ -72,6 +76,7 @@ void ChunkScheduler::stop() {
 	_stopped = true;
 	++_generation;
 	_tickTimer.cancel();
+	_commitTimer.cancel();
 	flush();
 	_queue->releaseLeases();
 	_activeMedia.clear();
@@ -84,13 +89,14 @@ void ChunkScheduler::pump() {
 	}
 	_pumping = true;
 	const auto generation = _generation;
+	const auto dedupOn = GetEnhancedBool("prevent_upload_duplicates");
 	const auto free = kSchedulerItems - _active;
 	if (free > 0) {
 		const auto now = int64(crl::now());
 		auto items = _queue->lease(free, now, now + kLeaseMs);
 		for (auto &item : items) {
 			if (_stopped) {
-				_queue->release(item.mediaId, 0);
+				_queue->release(item.mediaId, item.isPhoto, 0);
 				continue;
 			}
 			const auto document = _hooks.document
@@ -103,17 +109,23 @@ void ChunkScheduler::pump() {
 				if (item.attempts >= 4) {
 					complete(item, QByteArray(), generation);
 				} else {
-					_queue->release(item.mediaId, now + kUnresolvedRetryMs);
+					_queue->release(item.mediaId, item.isPhoto, now + kUnresolvedRetryMs);
 				}
 				continue;
 			}
-			const auto known = _queue->knownHash(item.mediaId, item.isPhoto);
+			if (document) {
+				item.filename = document->filename();
+			}
+			const auto known = _queue->knownHash(
+				item.mediaId,
+				item.isPhoto,
+				dedupOn);
 			if (!known.isEmpty()) {
 				complete(item, known, generation);
 				continue;
 			}
 			++_active;
-			_activeMedia.insert(item.mediaId);
+			_activeMedia.insert({ item.mediaId, item.isPhoto });
 			const auto weak = base::weak_ptr<ChunkScheduler>(this);
 			const auto done = [weak, item, generation](QByteArray hash) mutable {
 				if (const auto strong = weak.get()) {
@@ -157,24 +169,38 @@ void ChunkScheduler::complete(
 	if (generation != _generation) {
 		return;
 	}
-	const auto wasActive = _activeMedia.erase(item.mediaId) != 0;
+	const auto wasActive = _activeMedia.erase(std::pair<uint64, bool>(item.mediaId, item.isPhoto)) != 0;
 	if (wasActive && _active > 0) {
 		--_active;
 	}
 	if (_stopped) {
-		_queue->release(item.mediaId, 0);
+		_queue->release(item.mediaId, item.isPhoto, 0);
 		return;
 	}
 	if (hash.isEmpty()) {
-		_queue->fail(item.mediaId);
-		if (_hooks.failed) {
-			_hooks.failed(item);
+		if (item.attempts < 2) {
+			_queue->release(item.mediaId, item.isPhoto, 0);
+		} else {
+			_queue->fail(item.mediaId, item.isPhoto);
+			if (_hooks.failed) {
+				_hooks.failed(item);
+			}
 		}
 	} else {
 		if (_hooks.hashed) {
 			_hooks.hashed(item, hash);
 		}
-		_commits.emplace_back(item.mediaId, std::move(hash));
+		const auto first = _commits.empty();
+		_commits.push_back({
+			.msgId = item.msgId,
+			.mediaId = item.mediaId,
+			.isPhoto = item.isPhoto,
+			.hash = std::move(hash),
+			.filename = item.filename,
+		});
+		if (first) {
+			_commitTimer.callOnce(kCommitTimeoutMs);
+		}
 	}
 	if (_commits.size() >= kCommitBatch) {
 		flushCommits();
@@ -194,11 +220,11 @@ bool ChunkScheduler::expired(
 	if (!_hooks.referenceExpired(item)) {
 		return false;
 	}
-	const auto wasActive = _activeMedia.erase(item.mediaId) != 0;
+	const auto wasActive = _activeMedia.erase(std::pair<uint64, bool>(item.mediaId, item.isPhoto)) != 0;
 	if (wasActive && _active > 0) {
 		--_active;
 	}
-	_queue->release(item.mediaId, int64(crl::now()) + kReferenceRetryMs);
+	_queue->release(item.mediaId, item.isPhoto, int64(crl::now()) + kReferenceRetryMs);
 	if (_hooks.update) {
 		_hooks.update();
 	}
@@ -207,6 +233,7 @@ bool ChunkScheduler::expired(
 }
 
 void ChunkScheduler::flushCommits() {
+	_commitTimer.cancel();
 	if (_commits.empty()) {
 		return;
 	}

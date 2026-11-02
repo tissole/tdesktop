@@ -37,6 +37,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QDir>
 #include <QFile>
+#include <set>
+#include <utility>
 #include <QFileInfo>
 
 #include "iv/iv_rich_page.h"
@@ -85,14 +87,18 @@ std::pair<int,int> CopyAlbumProgress() {
 
 void FilterCopyAlbumDuplicates(
 		not_null<Main::Session*> session,
+		PeerId dstPeer,
 		std::vector<not_null<HistoryItem*>> items,
 		Fn<void(std::vector<not_null<HistoryItem*>>)> done) {
 	const auto dedupOff = !GetEnhancedBool("prevent_forward_duplicates");
 	auto &db = Core::App().downloadManager().ensureDedupDb();
-	QSet<uint64> seenIds;
+	auto chatUse = std::make_shared<Data::DedupDb::ChatTableUse>();
+	if (db.isOpen()) {
+		*chatUse = db.useChatTable(dstPeer, !dedupOff);
+	}
+	auto seenIds = std::set<std::pair<uint64, bool>>();
 	auto filteredIds = std::vector<not_null<HistoryItem*>>();
 	filteredIds.reserve(items.size());
-	int skippedIds = 0;
 	for (const auto item : items) {
 		const auto media = item->media();
 		const auto doc = media ? media->document() : nullptr;
@@ -101,13 +107,22 @@ void FilterCopyAlbumDuplicates(
 		if (doc) mediaId = uint64(doc->id);
 		else if (photo) mediaId = uint64(photo->id);
 		else { filteredIds.push_back(item); continue; }
-		if (seenIds.contains(mediaId)
+		const auto isPhoto = (photo != nullptr);
+		const auto key = std::pair<uint64, bool>(mediaId, isPhoto);
+		if (seenIds.contains(key)
+			|| db.chatTableContainsDocId(
+				dstPeer,
+				mediaId,
+				isPhoto,
+				!dedupOff)
 			|| (!dedupOff
-				&& db.containsDocId(Data::DedupDb::Table::Uploads, mediaId))) {
-			skippedIds++;
+				&& db.containsDocId(
+					Data::DedupDb::Table::Uploads,
+					mediaId,
+					isPhoto))) {
 			continue;
 		}
-		seenIds.insert(mediaId);
+		seenIds.insert(key);
 		filteredIds.push_back(item);
 	}
 	QSet<QByteArray> seenHashes;
@@ -130,30 +145,20 @@ void FilterCopyAlbumDuplicates(
 	auto hashes = std::make_shared<QMap<MsgId, QByteArray>>();
 	auto seenHashesPtr = std::make_shared<QSet<QByteArray>>(std::move(seenHashes));
 	auto finalFilteredPtr = std::make_shared<std::vector<not_null<HistoryItem*>>>(std::move(finalFiltered));
-	auto skippedHashesPtr = std::make_shared<int>(0);
 	auto allDone = std::make_shared<Fn<void()>>();
-	*allDone = [=]() mutable {
+	*allDone = [=, chatUse = std::move(chatUse)]() mutable {
+		Q_UNUSED(chatUse);
 		if (--(*remaining) > 0) return;
 		auto &db2 = Core::App().downloadManager().ensureDedupDb();
 		for (const auto item : hashCandidates) {
 			const auto h = hashes->value(item->id);
 			bool isDup = !h.isEmpty() && (seenHashesPtr->contains(h)
+				|| db2.chatTableContainsHash(dstPeer, h, !dedupOff)
 				|| (!dedupOff
-					&& db2.containsFinishedHash(
+					&& db2.containsHash(
 						Data::DedupDb::Table::Uploads,
 						h)));
 			if (isDup) {
-				(*skippedHashesPtr)++;
-				if (!dedupOff
-					&& !h.isEmpty()
-					&& !db2.containsFinishedHash(
-						Data::DedupDb::Table::Uploads,
-						h)) {
-					uint64 mid = 0;
-					if (const auto doc = item->media()->document()) mid = uint64(doc->id);
-					else if (const auto photo = item->media()->photo()) mid = uint64(photo->id);
-					db2.insert(Data::DedupDb::Table::Uploads, { .hash = h, .documentId = mid, .status = u"f"_q });
-				}
 				continue;
 			}
 			if (!h.isEmpty()) seenHashesPtr->insert(h);
@@ -258,6 +263,7 @@ struct DocumentDescriptor {
 	uint64 sessionUniqueId = 0;
 	DocumentId documentId = 0;
 	FullMsgId itemId;
+	bool isPhoto = false;
 };
 
 [[nodiscard]] QString RichExportFolderToRemove(const QString &filePath) {
@@ -1367,12 +1373,21 @@ void DownloadManager::addLoaded(
 		: (object.photo ? object.photo->id : 0);
 	auto &dedupDb = ensureDedupDb();
 	const auto dedupOff = !GetEnhancedBool("prevent_download_duplicates");
+	if (!dedupOff && dedupDb.isOpen()) {
+		if (!_downloadTableUse) {
+			_downloadTableUse = dedupDb.useTable(
+				DedupDb::Table::Downloads);
+		}
+	}
 	if ((!dedupOff || batchId) && dedupDb.isOpen()) {
-		if (docId) {
+		if (!dedupOff && docId) {
 			// saveFileHash() may have stored the remote fingerprint for this
 			// doc id when the download started. Re-reading the same 2 sample
 			// chunks off the just-finished file would recompute it, so reuse.
-			dedupHash = dedupDb.hashForDocId(DedupDb::Table::Downloads, docId);
+			dedupHash = dedupDb.hashForDocId(
+				DedupDb::Table::Downloads,
+				docId,
+				(object.photo != nullptr));
 		}
 	// Only big files get a 2-chunk remote hash at download start, which
 	// means their duplicate decision was already made before download, in
@@ -1397,34 +1412,46 @@ void DownloadManager::addLoaded(
 	// finished the moment it completed.
 	auto matchedDocId = uint64(0);
 	const auto isDuplicateByHash = [&] {
-		if (dedupHash.isEmpty() || !dedupDb.isOpen()) {
+		if (dedupOff || dedupHash.isEmpty() || !dedupDb.isOpen()) {
 			return false;
 		}
 		matchedDocId = dedupDb.seekDocumentId(
 			DedupDb::Table::Downloads,
 			dedupHash,
-			docId);
+			docId,
+			(object.photo != nullptr));
 		return (matchedDocId != 0);
 	}();
 	const auto isDuplicatePhotoById = [&] {
-		if (!object.photo || !docId) {
+		if (dedupOff || !object.photo || !docId) {
 			return false;
 		}
 		// The same photo id already has a dedup record (finished or still
 		// unfinished), so the content is already known to be downloaded.
-		return dedupDb.containsDocId(DedupDb::Table::Downloads, docId);
+		return dedupDb.containsDocId(
+			DedupDb::Table::Downloads,
+			docId,
+			(object.photo != nullptr));
 	}();
 	const auto sessionId = item->history()->session().uniqueId();
 	if (batchId && dedupOff && docId && dedupDb.isOpen()) {
 		// The start-time check already inserted this file's own row, which
 		// would match itself below. Only other files in the batch count.
-		dedupDb.removeDlTmpDoc(sessionId, batchId, docId);
+		dedupDb.removeDlTmpDoc(
+			sessionId,
+			batchId,
+			docId,
+			(object.photo != nullptr));
 	}
 	const auto isDuplicateTmpDoc = batchId
 		&& dedupOff
 		&& docId
 		&& dedupDb.isOpen()
-		&& dedupDb.containsDlTmpDocId(sessionId, batchId, docId);
+		&& dedupDb.containsDlTmpDocId(
+			sessionId,
+			batchId,
+			docId,
+			(object.photo != nullptr));
 	const auto isDuplicateTmpHash = batchId
 		&& dedupOff
 		&& docId
@@ -1482,12 +1509,14 @@ void DownloadManager::addLoaded(
 						sessionId,
 						batchId,
 						docId,
+						(object.photo != nullptr),
 						dedupHash);
 				}
 			} else {
 				dedupDb.insert(DedupDb::Table::Downloads, {
 					.hash = dedupHash,
 					.documentId = docId,
+					.isPhoto = (object.photo != nullptr),
 					.status = u"f"_q,
 				});
 			}
@@ -1570,6 +1599,7 @@ void DownloadManager::addLoaded(
 		dedupDb.insert(DedupDb::Table::Downloads, {
 			.hash = dedupHash,
 			.documentId = docId,
+			.isPhoto = (object.photo != nullptr),
 			.status = u"f"_q,
 		});
 		if (const auto document = object.document) {
@@ -1581,7 +1611,12 @@ void DownloadManager::addLoaded(
 		&& !dedupHash.isEmpty()
 		&& docId
 		&& dedupDb.isOpen()) {
-		dedupDb.insertDlTmp(sessionId, batchId, docId, dedupHash);
+		dedupDb.insertDlTmp(
+			sessionId,
+			batchId,
+			docId,
+			(object.photo != nullptr),
+			dedupHash);
 	}
 
 	writePostponed(&item->history()->session());
@@ -1661,10 +1696,16 @@ void DownloadManager::deleteFiles(const std::vector<GlobalMsgId> &ids) {
 				}
 				const auto &entry = data.downloaded[k];
 				const auto document = entry.object->document;
+				const auto mediaId = document
+					? document->id
+					: (entry.object->photo
+						? entry.object->photo->id
+						: DocumentId());
 				descriptor.files.emplace(entry.path, DocumentDescriptor{
 					.sessionUniqueId = id.sessionUniqueId,
-					.documentId = document ? document->id : DocumentId(),
+					.documentId = mediaId,
 					.itemId = id.itemId,
+					.isPhoto = (entry.object->photo != nullptr),
 				});
 				if (document) {
 					_generatedDocuments.remove(document);
@@ -1700,12 +1741,16 @@ void DownloadManager::deleteAll() {
 		for (auto &id : base::take(data.downloaded)) {
 			const auto object = id.object.get();
 			const auto document = object ? object->document : nullptr;
-			// Same as deleteFiles(): completed dedup records are kept even
-			// when the downloaded file itself is deleted here.
+			const auto mediaId = document
+				? document->id
+				: (object && object->photo
+					? object->photo->id
+					: DocumentId());
 			descriptor.files.emplace(id.path, DocumentDescriptor{
 				.sessionUniqueId = sessionUniqueId,
-				.documentId = document ? document->id : DocumentId(),
+				.documentId = mediaId,
 				.itemId = id.itemId,
+				.isPhoto = (object && object->photo),
 			});
 			if (document) {
 				_generatedDocuments.remove(document);
@@ -1740,7 +1785,8 @@ void DownloadManager::finishFilesDelete(DeleteFilesDescriptor &&descriptor) {
 				if (const auto session = SessionByUniqueId(
 						descriptor.sessionUniqueId)) {
 					PruneEmptyDownloadFolders(session, path);
-					if (const auto id = descriptor.documentId) {
+					if (const auto id = descriptor.documentId;
+						id && !descriptor.isPhoto) {
 						[[maybe_unused]] const auto location
 							= session->data().document(id)->location(true);
 					}
@@ -2099,10 +2145,10 @@ void DownloadManager::remove(
 		_loadingDocuments.remove(document);
 		if (GetEnhancedBool("prevent_download_duplicates")) {
 			_fingerprintCache.remove(document->id);
-			ensureDedupDb().removeByDocumentId(
+			ensureDedupDb().removePending(
 				DedupDb::Table::Downloads,
 				document->id,
-				u"u"_q);
+				false);
 		}
 		if (i->externalCancel && !_loaded.contains(i->object.item)) {
 			_generated.remove(i->object.item);
@@ -2894,6 +2940,15 @@ void DownloadManager::saveToDisk() {
 }
 
 void DownloadManager::saveIfIdle() {
+	releaseDownloadTableIfIdle();
+}
+
+void DownloadManager::releaseDownloadTableIfIdle() {
+	if (_loading.empty()
+		&& _loadingDocuments.empty()
+		&& _checksInProgress <= 0) {
+		_downloadTableUse.reset();
+	}
 }
 
 void DownloadManager::fetchFingerprint(
@@ -2933,7 +2988,8 @@ void DownloadManager::saveFileHash(
 		int64 size) {
 	const auto docId = document->id;
 	auto &db = ensureDedupDb();
-	if (!db.isOpen() || db.containsDocId(DedupDb::Table::Downloads, docId)) {
+	if (!db.isOpen()
+		|| db.containsDocId(DedupDb::Table::Downloads, docId, false)) {
 		return;
 	}
 	fetchFingerprint(session, document, [=, &db](QByteArray hash) {
@@ -2948,6 +3004,7 @@ void DownloadManager::saveFileHash(
 		ensureDedupDb().insert(DedupDb::Table::Downloads, {
 			.hash = hash,
 			.documentId = docId,
+			.isPhoto = false,
 			.status = u"u"_q,
 		});
 	});
@@ -2958,10 +3015,10 @@ void DownloadManager::removeFileHash(uint64 documentId, int64 size) {
 		return;
 	}
 	_fingerprintCache.remove(documentId);
-	ensureDedupDb().removeByDocumentId(
+	ensureDedupDb().removePending(
 		DedupDb::Table::Downloads,
 		documentId,
-		u"u"_q);
+		false);
 }
 
 void DownloadManager::checkDuplicate(
@@ -2980,7 +3037,8 @@ void DownloadManager::checkDuplicate(
 			&& tmpDb.containsDlTmpDocId(
 				sessionId,
 				batchId,
-				document->id)) {
+				document->id,
+				false)) {
 			done(true);
 			return;
 		}
@@ -3002,6 +3060,7 @@ void DownloadManager::checkDuplicate(
 						sessionId,
 						batchId,
 						document->id,
+						false,
 						hash);
 				}
 				done(skip);
@@ -3018,9 +3077,15 @@ void DownloadManager::checkDuplicate(
 		saveIfIdle();
 	};
 	auto &db = ensureDedupDb();
+	if (db.isOpen()) {
+		_downloadTableUse = db.useTable(DedupDb::Table::Downloads);
+	}
 
 	// Step 1: Check doc ID (O(1), catches same doc re-download).
-	if (db.containsDocId(DedupDb::Table::Downloads, document->id)) {
+	if (db.containsDocId(
+			DedupDb::Table::Downloads,
+			document->id,
+			false)) {
 		wrappedDone(true);
 		return;
 	}
@@ -3058,6 +3123,7 @@ void DownloadManager::checkDuplicate(
 				ensureDedupDb().insert(DedupDb::Table::Downloads, {
 					.hash = hash,
 					.documentId = document->id,
+					.isPhoto = false,
 					.status = u"f"_q,
 				});
 			}
@@ -3124,7 +3190,7 @@ void DownloadManager::commitDlTmpFile(
 	}
 	auto &db = ensureDedupDb();
 	if (db.isOpen()) {
-		db.insertDlTmp(sessionId, batchId, documentId, hash);
+		db.insertDlTmp(sessionId, batchId, documentId, false, hash);
 	}
 }
 

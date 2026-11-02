@@ -3289,8 +3289,8 @@ void ApiWrap::cancelExportFast() {
 	}
 	clearDedupRun();
 	if (const auto db = dedupDb()) {
-		for (const auto docId : base::take(_inflightDocs)) {
-			Export::CancelFile(*db, docId);
+		for (const auto &[docId, isPhoto] : base::take(_inflightDocs)) {
+			Export::CancelFile(*db, docId, isPhoto);
 		}
 	} else {
 		_inflightDocs.clear();
@@ -5323,6 +5323,7 @@ void ApiWrap::setSessionId(uint64 sessionId) {
 }
 
 void ApiWrap::setDedupDb(const QString &path) {
+	_downloadTableUse.reset();
 	_dedupDb = std::make_unique<::Data::DedupDb>(path, false);
 }
 
@@ -5400,9 +5401,16 @@ bool ApiWrap::skipDuplicateById(Data::File &file, const FilePolicy &policy) {
 	}
 	const auto peer = dedupPeerId();
 	_dedupPeers.emplace(peer);
-	const auto known = GetEnhancedBool("prevent_export_duplicates")
-		? db->containsDocId(::Data::DedupDb::Table::Downloads, docId)
-		: db->containsExTmpDocId(_sessionId, peer, docId);
+	const auto global = GetEnhancedBool("prevent_export_duplicates");
+	if (global) {
+		_downloadTableUse = db->useTable(::Data::DedupDb::Table::Downloads);
+	}
+	const auto known = global
+		? db->containsDocId(
+			::Data::DedupDb::Table::Downloads,
+			docId,
+			isPhoto)
+		: db->containsExTmpDocId(_sessionId, peer, docId, isPhoto);
 	if (!known) {
 		return false;
 	}
@@ -5465,7 +5473,7 @@ void ApiWrap::finishFileRecord(Data::File *file) {
 	}
 	const auto pending = i->second;
 	_pendingHash.erase(i);
-	_inflightDocs.remove(pending.docId);
+	_inflightDocs.erase(DedupKey(pending.docId, pending.photo));
 	if (pending.docId == 0) {
 		return;
 	}
@@ -5476,7 +5484,7 @@ void ApiWrap::finishFileRecord(Data::File *file) {
 	const auto global = GetEnhancedBool("prevent_export_duplicates");
 	if (file->relativePath.isEmpty()) {
 		if (!pending.hash.isEmpty()) {
-			Export::CancelFile(*db, pending.docId);
+			Export::CancelFile(*db, pending.docId, pending.photo);
 		}
 		return;
 	}
@@ -5878,6 +5886,7 @@ void ApiWrap::beginSliceWalk(bool topic) {
 	}
 	struct Target {
 		uint64 docId = 0;
+		bool isPhoto = false;
 		Data::FileLocation location;
 		int64 size = 0;
 	};
@@ -5885,7 +5894,7 @@ void ApiWrap::beginSliceWalk(bool topic) {
 	const auto global = GetEnhancedBool("prevent_export_duplicates");
 	auto bigTargets = std::vector<Target>();
 	auto smallTargets = std::vector<Target>();
-	auto queuedDocs = base::flat_set<uint64>();
+	auto queuedDocs = base::flat_set<std::pair<uint64, bool>>();
 	for (const auto &message : process->slice->list) {
 		if (int(bigTargets.size() + smallTargets.size())
 			>= kMessagesSliceLimit) {
@@ -5895,18 +5904,21 @@ void ApiWrap::beginSliceWalk(bool topic) {
 			continue;
 		}
 		auto docId = uint64(0);
+		auto isPhoto = false;
 		auto location = Data::FileLocation();
 		auto size = int64(0);
 		auto fileType = MediaSettings::Type();
 		v::match(message.media.content,
 			[&](const Data::Photo &photo) {
 				docId = photo.id;
+				isPhoto = true;
 				location = photo.image.file.location;
 				size = photo.image.file.size;
 				fileType = MediaSettings::Type::Photo;
 			},
 			[&](const Data::Document &document) {
 				docId = document.id;
+				isPhoto = false;
 				location = document.file.location;
 				size = document.file.size;
 				fileType = DocumentMediaType(document);
@@ -5926,18 +5938,20 @@ void ApiWrap::beginSliceWalk(bool topic) {
 				continue;
 			}
 		}
-		if (_knownFileHash.contains(docId)
-			|| _knownFileContent.contains(docId)
-			|| _hashFailedDocs.contains(docId)
-			|| !queuedDocs.emplace(docId).second
+		const auto key = DedupKey(docId, isPhoto);
+		if (_knownFileHash.contains(key)
+			|| _knownFileContent.contains(key)
+			|| _hashFailedDocs.contains(key)
+			|| !queuedDocs.emplace(docId, isPhoto).second
 			|| (global && db->containsDocId(
 				::Data::DedupDb::Table::Downloads,
-				docId))) {
+				docId,
+				isPhoto))) {
 			continue;
 		}
 		((size > ::Data::kDedupMinPartialHashSize)
 			? bigTargets
-			: smallTargets).push_back({ docId, location, size });
+			: smallTargets).push_back({ docId, isPhoto, location, size });
 	}
 	if (bigTargets.empty() && smallTargets.empty()) {
 		walk();
@@ -5970,10 +5984,13 @@ void ApiWrap::beginSliceWalk(bool topic) {
 				},
 			[=, this](QByteArray hash) {
 				if (gen == _dedupGen) {
+					const auto key = DedupKey(
+						target.docId,
+						target.isPhoto);
 					if (!hash.isEmpty()) {
-						_knownFileHash[target.docId] = hash;
+						_knownFileHash[key] = hash;
 					} else if (target.docId != 0) {
-						_hashFailedDocs.emplace(target.docId);
+						_hashFailedDocs.emplace(key);
 					}
 				}
 				maybeWalk();
@@ -6032,10 +6049,13 @@ void ApiWrap::beginSliceWalk(bool topic) {
 				[=, this](QByteArray content) {
 					--*smallActive;
 					if (gen == _dedupGen) {
+						const auto key = DedupKey(
+							target.docId,
+							target.isPhoto);
 						if (!content.isEmpty()) {
-							_knownFileContent[target.docId] = content;
+							_knownFileContent[key] = content;
 						} else if (target.docId != 0) {
-							_hashFailedDocs.emplace(target.docId);
+							_hashFailedDocs.emplace(key);
 						}
 					}
 						if (*smallIndex < sharedSmall->size()) {
@@ -6123,12 +6143,14 @@ bool ApiWrap::dedupTypeAccepted(
 bool ApiWrap::dedupIdDuplicate(
 		const ::Data::DedupDb &db,
 		uint64 docId,
+		bool isPhoto,
 		PeerId peer,
 		bool global) const {
 	return (global && db.containsDocId(
 			::Data::DedupDb::Table::Downloads,
-			docId))
-		|| db.containsExTmpDocId(_sessionId, peer, docId);
+			docId,
+			isPhoto))
+		|| db.containsExTmpDocId(_sessionId, peer, docId, isPhoto);
 }
 
 bool ApiWrap::decideFileDedup(
@@ -6193,7 +6215,10 @@ bool ApiWrap::decideFileDedup(
 	const auto peer = dedupPeerId();
 	_dedupPeers.emplace(peer);
 	const auto global = GetEnhancedBool("prevent_export_duplicates");
-	if (dedupIdDuplicate(*db, docId, peer, global)) {
+	if (global) {
+		_downloadTableUse = db->useTable(::Data::DedupDb::Table::Downloads);
+	}
+	if (dedupIdDuplicate(*db, docId, isPhoto, peer, global)) {
 		markDup(file);
 		eraseFile();
 		return true;
@@ -6208,7 +6233,7 @@ bool ApiWrap::decideFileDedup(
 				::Data::DedupDb::Table::Downloads,
 				hash));
 			if (!known) {
-				db->insertExTmp(_sessionId, peer, docId, hash);
+				db->insertExTmp(_sessionId, peer, docId, isPhoto, hash);
 				markNew(file);
 			} else {
 				markDup(file);
@@ -6218,13 +6243,14 @@ bool ApiWrap::decideFileDedup(
 		}
 	};
 
-	if (const auto i = _knownFileHash.find(docId);
+	const auto key = DedupKey(docId, isPhoto);
+	if (const auto i = _knownFileHash.find(key);
 		i != end(_knownFileHash) && !i->second.isEmpty()) {
 		decide(file, i->second);
 		eraseFile();
 		return true;
 	}
-	if (const auto i = _knownFileContent.find(docId);
+	if (const auto i = _knownFileContent.find(key);
 		i != end(_knownFileContent) && !i->second.isEmpty()) {
 		decide(file, ::Data::ContentFingerprint(i->second));
 		eraseFile();
@@ -6233,13 +6259,13 @@ bool ApiWrap::decideFileDedup(
 	if (!file.content.isEmpty()) {
 		const auto hash = ::Data::ContentFingerprint(file.content);
 		if (!hash.isEmpty()) {
-			_knownFileHash[docId] = hash;
+			_knownFileHash[key] = hash;
 		}
 		decide(file, hash);
 		eraseFile();
 		return true;
 	}
-	if (_hashFailedDocs.contains(docId)) {
+	if (_hashFailedDocs.contains(key)) {
 		decide(file, QByteArray());
 		eraseFile();
 		return true;
@@ -6286,9 +6312,9 @@ bool ApiWrap::decideFileDedup(
 					return;
 				}
 				if (!hash.isEmpty()) {
-					_knownFileHash[docId] = hash;
+					_knownFileHash[key] = hash;
 				} else {
-					_hashFailedDocs.emplace(docId);
+					_hashFailedDocs.emplace(key);
 				}
 				decide(*live, hash);
 				(*sharedDone)(QString());
@@ -6324,13 +6350,13 @@ bool ApiWrap::decideFileDedup(
 				return;
 			}
 			if (!content.isEmpty()) {
-				_knownFileContent[docId] = content;
+				_knownFileContent[key] = content;
 			} else {
-				_hashFailedDocs.emplace(docId);
+				_hashFailedDocs.emplace(key);
 			}
 			const auto hash = ::Data::ContentFingerprint(content);
 			if (!hash.isEmpty()) {
-				_knownFileHash[docId] = hash;
+				_knownFileHash[key] = hash;
 			}
 			decide(*live, hash);
 			(*sharedDone)(QString());
@@ -6412,8 +6438,11 @@ bool ApiWrap::decideFileWithMedia(
 		return false;
 	}
 	_dedupPeers.emplace(peer);
+	if (global) {
+		_downloadTableUse = db->useTable(::Data::DedupDb::Table::Downloads);
+	}
 	const auto fileType = policy.type;
-	if (dedupIdDuplicate(*db, docId, peer, global)) {
+	if (dedupIdDuplicate(*db, docId, isPhoto, peer, global)) {
 		file.skipReason = SkipReason::Duplicate;
 		if (_stats) {
 			_stats->incrementSkipped(fileType, file.size);
@@ -6421,7 +6450,8 @@ bool ApiWrap::decideFileWithMedia(
 		_decidingFiles.erase(&file);
 		return true;
 	}
-	if (const auto i = _knownFileHash.find(docId);
+	const auto key = DedupKey(docId, isPhoto);
+	if (const auto i = _knownFileHash.find(key);
 		i != end(_knownFileHash) && !i->second.isEmpty()) {
 		const auto cached = Export::CheckHash(
 			*db,
@@ -6429,7 +6459,8 @@ bool ApiWrap::decideFileWithMedia(
 			peer,
 			docId,
 			i->second,
-			global);
+			global,
+			isPhoto);
 		if (cached.skip) {
 			file.skipReason = SkipReason::Duplicate;
 			if (_stats) {
@@ -6440,7 +6471,7 @@ bool ApiWrap::decideFileWithMedia(
 		}
 		_pendingHash[&file] = { docId, cached.hash, isPhoto, peer, fileType };
 		if (global) {
-			_inflightDocs.emplace(docId);
+			_inflightDocs.emplace(docId, isPhoto);
 		}
 		startLoad();
 		return false;
@@ -6472,7 +6503,7 @@ bool ApiWrap::decideFileWithMedia(
 				return;
 			}
 			if (!result.hash.isEmpty()) {
-				_knownFileHash[docId] = result.hash;
+				_knownFileHash[key] = result.hash;
 			}
 			if (gen != _dedupGen
 				|| sliceGen != _sliceGen
@@ -6493,7 +6524,7 @@ bool ApiWrap::decideFileWithMedia(
 			}
 			_pendingHash[live] = { docId, result.hash, isPhoto, peer, fileType };
 			if (!result.hash.isEmpty() && global) {
-				_inflightDocs.emplace(docId);
+				_inflightDocs.emplace(docId, isPhoto);
 			}
 			startLoad();
 		});
@@ -6502,7 +6533,7 @@ bool ApiWrap::decideFileWithMedia(
 		return false;
 	}
 	if (!(*syncResult)->hash.isEmpty()) {
-		_knownFileHash[docId] = (*syncResult)->hash;
+		_knownFileHash[key] = (*syncResult)->hash;
 	}
 	if ((*syncResult)->skip) {
 		file.skipReason = SkipReason::Duplicate;
@@ -6513,7 +6544,7 @@ bool ApiWrap::decideFileWithMedia(
 	}
 	_pendingHash[&file] = { docId, (*syncResult)->hash, isPhoto, peer, policy.type };
 	if (!(*syncResult)->hash.isEmpty() && global) {
-		_inflightDocs.emplace(docId);
+		_inflightDocs.emplace(docId, isPhoto);
 	}
 	startLoad();
 	return false;

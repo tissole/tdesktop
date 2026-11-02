@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include <QByteArray>
+#include <utility>
 
 #include "export/export_settings.h"
 #include "export/data/export_data_types.h"
@@ -396,6 +397,7 @@ private:
 	[[nodiscard]] bool dedupIdDuplicate(
 		const ::Data::DedupDb &db,
 		uint64 docId,
+		bool isPhoto,
 		PeerId peer,
 		bool global) const;
 	bool decideFileDedup(
@@ -424,8 +426,8 @@ private:
 	void commitExportProgress(int32 committedMax, const QString &state);
 	::Data::DedupDb *dedupDb() const;
 	PeerId currentPeer() const;
-	// ex_tmp namespace key: non-scan global runs with dedup off share
-	// one synthetic namespace (peer 0), everything else is per chat.
+	// Export batch job namespace key: non-scan global runs with dedup off
+	// share one synthetic namespace (peer 0), everything else is per chat.
 	PeerId dedupPeerId() const;
 	Data::File *walkParkedFile(const Data::File *file) const;
 	std::unique_ptr<FileProcess> prepareFileProcess(
@@ -490,6 +492,7 @@ private:
 	Output::Stats *_stats = nullptr;
 	uint64 _sessionId = 0;
 	std::unique_ptr<::Data::DedupDb> _dedupDb;
+	std::optional<::Data::DedupDb::TableUse> _downloadTableUse;
 	bool _resumeArmed = false;
 	int32 _resumeLastId = 0;
 	int _resumeSplitIndex = 0;
@@ -550,12 +553,13 @@ private:
 		MediaSettings::Type type = MediaSettings::Type();
 	};
 	base::flat_map<Data::File*, DedupPending> _pendingHash;
-	base::flat_map<uint64, QByteArray> _knownFileHash;
-	base::flat_map<uint64, QByteArray> _knownFileContent;
-	base::flat_set<uint64> _hashFailedDocs;
+	using DedupKey = std::pair<uint64, bool>;
+	base::flat_map<DedupKey, QByteArray> _knownFileHash;
+	base::flat_map<DedupKey, QByteArray> _knownFileContent;
+	base::flat_set<DedupKey> _hashFailedDocs;
 	base::flat_set<QByteArray> _knownLinks;
 	base::flat_set<QByteArray> _linkUrls;
-	base::flat_set<uint64> _inflightDocs;
+	base::flat_set<DedupKey> _inflightDocs;
 	base::flat_set<const Data::File*> _decidingFiles;
 	base::flat_set<PeerId> _dedupPeers;
 	base::flat_set<uint64> _scanSeenMessages;

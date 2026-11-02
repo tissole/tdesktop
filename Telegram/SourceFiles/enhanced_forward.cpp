@@ -26,6 +26,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QDir>
 #include <QFile>
 #include <QDataStream>
+#include <algorithm>
 #include <deque>
 #include <tuple>
 #include <unordered_set>
@@ -2022,7 +2023,7 @@ void EnsureResumeStatesSeeded(not_null<Main::Session*> session) {
 		NotifyCounterChanged();
 	}
 	// Interrupted batches are resumed on demand; their resume data lives in
-	// the ef_resume rows grouped by (src, dst).
+	// the EnhancedForward jobs grouped by (src, dst).
 	const auto seedResumable = [&](const SavedJob &job) {
 		if (active.find(job.dstId) != active.end()) {
 			return;
@@ -2505,18 +2506,17 @@ Pipeline::~Pipeline() {
 	if (db.isOpen()) {
 		db.clearFwTmpRun(_session.uniqueId(), _peerId);
 	}
-	if (GetEnhancedBool("prevent_forward_duplicates")) {
-		if (db.isOpen()) {
-			for (const auto &item : _items) {
-				// Release only the in-flight dedup registrations. Items that
-				// were actually sent keep their finished ('f') content record
-				// so a later forward of the same item is detected as a
-				// duplicate; wiping them here broke dedup for the next run.
-				if (item.mediaId && !item.sent) {
-					db.removePending(
-						Data::DedupDb::Table::Uploads,
-						item.mediaId);
-				}
+	if (db.isOpen()) {
+		for (const auto &item : _items) {
+			// Release only the in-flight dedup registrations. Items that
+			// were actually sent keep their finished ('f') content record
+			// so a later forward of the same item is detected as a
+			// duplicate; wiping them here broke dedup for the next run.
+			if (item.mediaId && !item.sent) {
+				db.removePending(
+					Data::DedupDb::Table::Uploads,
+					item.mediaId,
+					item.isPhoto);
 			}
 		}
 	}
@@ -2835,10 +2835,10 @@ void Pipeline::run() {
 		if (dedupOn && dedupDb.isOpen()) {
 			for (auto i = 0; i < _n; i++) {
 				if (_items[i].mediaId && !_items[i].dedupSkipped) {
-					dedupDb.removeByDocumentId(
+					dedupDb.removePending(
 						Data::DedupDb::Table::Uploads,
 						_items[i].mediaId,
-						u"u"_q);
+						_items[i].isPhoto);
 				}
 			}
 		}
@@ -2976,15 +2976,10 @@ void Pipeline::setupCallbacks() {
 				if (!self->_items[i].uploadDone
 					&& self->_items[i].mediaId
 					&& dedupDb.isOpen()) {
-					dedupDb.removeByDocumentId(
+					dedupDb.removePending(
 						Data::DedupDb::Table::Uploads,
 						self->_items[i].mediaId,
-						u"u"_q);
-					if (!self->_items[i].fileHash.isEmpty()) {
-						dedupDb.removeUnfinishedByHash(
-							Data::DedupDb::Table::Uploads,
-							self->_items[i].fileHash);
-					}
+						self->_items[i].isPhoto);
 				}
 			}
 			EnhancedForward::CleanupPartialFilesForPeer(&self->_session, self->_peerId);
@@ -3191,6 +3186,8 @@ void Pipeline::sendNext() {
 	}
 
 	// Cleanup
+	_uploadTableUse.reset();
+	_chatTableUse.reset();
 	_session.data().sendHistoryChangeNotifications();
 	_session.changes().historyUpdated(
 		_action.history,
@@ -3532,18 +3529,18 @@ void Pipeline::onUploadDone(const Storage::UploadedMedia &data) {
 	if (!item.fileHash.isEmpty() && item.mediaId) {
 		auto &db = Core::App().downloadManager().ensureDedupDb();
 		if (db.isOpen()) {
-			if (GetEnhancedBool("prevent_forward_duplicates")) {
-				db.updateDedupStatus(
-					Data::DedupDb::Table::Uploads,
-					item.fileHash,
-					u"f"_q);
-			} else {
-				db.insertFwTmp(
-					_session.uniqueId(),
-					_peerId,
-					item.mediaId,
-					item.fileHash);
-			}
+			db.insert(Data::DedupDb::Table::Uploads, {
+				.hash = item.fileHash,
+				.documentId = item.mediaId,
+				.isPhoto = item.isPhoto,
+				.status = u"f"_q,
+			});
+			db.insertFwTmp(
+				_session.uniqueId(),
+				_peerId,
+				item.mediaId,
+				item.isPhoto,
+				item.fileHash);
 		}
 	}
 	EnhancedForward::updateUploadProgress(
@@ -3653,16 +3650,10 @@ void Pipeline::onUploadFail(const FullMsgId &fullId) {
 	if (!item.fileHash.isEmpty() && item.mediaId) {
 		auto &db = Core::App().downloadManager().ensureDedupDb();
 		if (db.isOpen()) {
-			db.removeByDocumentId(
-				Data::DedupDb::Table::Uploads,
-				item.mediaId,
-				u"u"_q);
 			db.removePending(
 				Data::DedupDb::Table::Uploads,
-				item.mediaId);
-			db.removeUnfinishedByHash(
-				Data::DedupDb::Table::Uploads,
-				item.fileHash);
+				item.mediaId,
+				item.isPhoto);
 		}
 	}
 	const auto history = _session.data().history(_peerId);
@@ -3701,13 +3692,10 @@ void Pipeline::downloadFailed(int idx) {
 	if (item.mediaId) {
 		auto &db = Core::App().downloadManager().ensureDedupDb();
 		if (db.isOpen()) {
-			db.removeByDocumentId(
-				Data::DedupDb::Table::Uploads,
-				item.mediaId,
-				u"u"_q);
 			db.removePending(
 				Data::DedupDb::Table::Uploads,
-				item.mediaId);
+				item.mediaId,
+				item.isPhoto);
 		}
 	}
 	const auto srcItem = _session.data().message(item.sourceId);
@@ -3915,15 +3903,32 @@ void Pipeline::pumpDownloads() {
 		const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
 		const auto sessionId = _session.uniqueId();
 		auto &dedupDb = Core::App().downloadManager().ensureDedupDb();
+		if (dedupDb.isOpen()) {
+			ensureChatTableUse(dedupOn);
+		}
+		if (dedupOn) {
+			ensureUploadTableUse();
+		}
 		const auto knownById = dedupDb.isOpen()
-			&& (dedupOn
-				? (dedupDb.containsDocId(
-					Data::DedupDb::Table::Uploads,
-					mediaId)
-					|| dedupDb.containsDocIdInDb(
-						Data::DedupDb::Table::Uploads,
-						mediaId))
-				: dedupDb.containsFwTmpItem(sessionId, _peerId, mediaId));
+			&& (dedupDb.chatTableContainsDocId(
+					_peerId,
+					mediaId,
+					item.isPhoto,
+					dedupOn)
+				|| dedupDb.containsFwTmpItem(
+					sessionId,
+					_peerId,
+					mediaId,
+					item.isPhoto)
+				|| (dedupOn
+					&& (dedupDb.containsDocId(
+							Data::DedupDb::Table::Uploads,
+							mediaId,
+							item.isPhoto)
+						|| dedupDb.containsDocIdInDb(
+							Data::DedupDb::Table::Uploads,
+							mediaId,
+							item.isPhoto))));
 		if (knownById) {
 			skipAsDuplicate(i);
 			return;
@@ -3938,7 +3943,8 @@ void Pipeline::pumpDownloads() {
 			dedupDb.addPending(
 				Data::DedupDb::Table::Uploads,
 				mediaId,
-				QByteArray());
+				QByteArray(),
+				item.isPhoto);
 		}
 		if (remotePrecheck && !item.dedupPrechecked) {
 			const auto origin = Data::FileOrigin(
@@ -3963,6 +3969,15 @@ void Pipeline::pumpDownloads() {
 				// This doc passed the id check above, so any content-hash match
 				// means the same content was forwarded before: skip it and
 				// attach this id to the existing hash for future id-only dedup.
+				if (db.chatTableContainsHash(_peerId, hash, dedupOn)) {
+					skipAsDuplicate(i);
+					return;
+				}
+				if (db.isOpen()
+					&& db.containsFwTmpHash(sessionId, _peerId, hash)) {
+					skipAsDuplicate(i);
+					return;
+				}
 				if (dedupOn) {
 					const auto duplicateId = db.seekDocumentId(
 						Data::DedupDb::Table::Uploads,
@@ -3975,11 +3990,8 @@ void Pipeline::pumpDownloads() {
 					db.addPending(
 						Data::DedupDb::Table::Uploads,
 						mediaId,
-						hash);
-				} else if (db.isOpen()
-					&& db.containsFwTmpHash(sessionId, _peerId, hash)) {
-					skipAsDuplicate(i);
-					return;
+						hash,
+						item.isPhoto);
 				}
 				doc->save(origin, it.path, LoadFromCloudOrLocal, false, true);
 				Core::App().downloadManager().addLoading(
@@ -4108,22 +4120,36 @@ void Pipeline::dedupHashed(
 		pumpUploads();
 		return;
 	}
+	if (GetEnhancedBool("prevent_forward_duplicates")) {
+		ensureUploadTableUse();
+	}
 	// The seek runs before this id is registered, so it can never match
 	// itself: any hit is a genuinely different source doc with the same
 	// content. A previous 'f' row of this exact id is caught by selfDone.
 	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
 	const auto sessionId = _session.uniqueId();
-	const auto selfDone = dedupOn
-		? (dedupDb.hashForDocId(
-			Data::DedupDb::Table::Uploads,
-			mediaId) == hash)
-		: (dedupDb.hashForFwTmpItem(sessionId, _peerId, mediaId) == hash);
-	const auto duplicate = dedupOn
-		? (dedupDb.seekDocumentId(
-			Data::DedupDb::Table::Uploads,
+	ensureChatTableUse(dedupOn);
+	const auto selfDone = (dedupOn
+			&& dedupDb.hashForDocId(
+				Data::DedupDb::Table::Uploads,
+				mediaId,
+				item.isPhoto) == hash)
+		|| (dedupDb.hashForFwTmpItem(
+			sessionId,
+			_peerId,
+			mediaId,
+			item.isPhoto) == hash);
+	const auto duplicate = dedupDb.chatTableContainsHash(
+			_peerId,
 			hash,
-			0) != 0)
-		: dedupDb.containsFwTmpHash(sessionId, _peerId, hash);
+			dedupOn)
+		|| (dedupDb.isOpen()
+			&& dedupDb.containsFwTmpHash(sessionId, _peerId, hash))
+		|| (dedupOn
+			&& dedupDb.seekDocumentId(
+				Data::DedupDb::Table::Uploads,
+				hash,
+				0) != 0);
 	if (duplicate || selfDone) {
 		if (needsDelete) {
 			QFile::remove(item.path);
@@ -4131,12 +4157,11 @@ void Pipeline::dedupHashed(
 		skipAsDuplicate(i);
 		return;
 	}
-	if (dedupOn) {
-		dedupDb.addPending(
-			Data::DedupDb::Table::Uploads,
-			mediaId,
-			hash);
-	}
+	dedupDb.addPending(
+		Data::DedupDb::Table::Uploads,
+		mediaId,
+		hash,
+		item.isPhoto);
 	pumpUploads();
 }
 
@@ -4176,16 +4201,17 @@ void Pipeline::premarkDuplicate(int i) {
 					db.insert(Data::DedupDb::Table::Uploads, {
 						.hash = item.fileHash,
 						.documentId = item.mediaId,
+						.isPhoto = item.isPhoto,
 						.status = u"f"_q,
 					});
 				}
-			} else {
-				db.insertFwTmp(
-					_session.uniqueId(),
-					_peerId,
-					item.mediaId,
-					item.fileHash);
 			}
+			db.insertFwTmp(
+				_session.uniqueId(),
+				_peerId,
+				item.mediaId,
+				item.isPhoto,
+				item.fileHash);
 		}
 	}
 	saveProgress();
@@ -4331,6 +4357,29 @@ void Pipeline::appendItems(
 	}
 }
 
+void Pipeline::ensureUploadTableUse() {
+	if (_uploadTableUse) {
+		return;
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (db.isOpen()) {
+		_uploadTableUse = db.useTable(Data::DedupDb::Table::Uploads);
+	}
+}
+
+void Pipeline::ensureChatTableUse(bool allPeers) {
+	if (_chatTableUse && _chatTableAllPeers == allPeers) {
+		return;
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (!db.isOpen()) {
+		_chatTableUse.reset();
+		return;
+	}
+	_chatTableUse = db.useChatTable(_peerId, allPeers);
+	_chatTableAllPeers = allPeers;
+}
+
 void Pipeline::runNextPrecheck() {
 	if (_dedupPrecheckQueue.empty()) {
 		startSession();
@@ -4347,16 +4396,32 @@ void Pipeline::runNextPrecheck() {
 	// is currently being forwarded), so skip it without computing a hash.
 	auto &dedupDb = Core::App().downloadManager().ensureDedupDb();
 	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
+	if (dedupDb.isOpen()) {
+		ensureChatTableUse(dedupOn);
+	}
+	if (dedupOn) {
+		ensureUploadTableUse();
+	}
 	const auto knownById = dedupDb.isOpen()
-		&& (dedupOn
-			? (dedupDb.containsDocId(Data::DedupDb::Table::Uploads, item.mediaId)
-				|| dedupDb.containsDocIdInDb(
-					Data::DedupDb::Table::Uploads,
-					item.mediaId))
-			: dedupDb.containsFwTmpItem(
+		&& (dedupDb.chatTableContainsDocId(
+				_peerId,
+				item.mediaId,
+				item.isPhoto,
+				dedupOn)
+			|| dedupDb.containsFwTmpItem(
 				_session.uniqueId(),
 				_peerId,
-				item.mediaId));
+				item.mediaId,
+				item.isPhoto)
+			|| (dedupOn
+				&& (dedupDb.containsDocId(
+						Data::DedupDb::Table::Uploads,
+						item.mediaId,
+						item.isPhoto)
+					|| dedupDb.containsDocIdInDb(
+						Data::DedupDb::Table::Uploads,
+						item.mediaId,
+						item.isPhoto))));
 	if (knownById) {
 		premarkDuplicate(i);
 		runNextPrecheck();
@@ -4402,17 +4467,23 @@ void Pipeline::remotePrechecked(int i, QByteArray &&hash, qint64 size) {
 	// and attach this id to the existing hash for future id-only dedup.
 	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
 	const auto sessionId = _session.uniqueId();
-	const auto duplicate = dedupOn
-		? (db.seekDocumentId(
-			Data::DedupDb::Table::Uploads,
-			hash,
-			0) != 0)
-		: (db.isOpen()
-			&& db.containsFwTmpHash(sessionId, _peerId, hash));
+	ensureChatTableUse(dedupOn);
+	const auto duplicate = db.chatTableContainsHash(_peerId, hash, dedupOn)
+		|| (db.isOpen()
+			&& db.containsFwTmpHash(sessionId, _peerId, hash))
+		|| (dedupOn
+			&& db.seekDocumentId(
+				Data::DedupDb::Table::Uploads,
+				hash,
+				0) != 0);
 	if (duplicate) {
 		premarkDuplicate(i);
-	} else if (dedupOn) {
-		db.addPending(Data::DedupDb::Table::Uploads, item.mediaId, hash);
+	} else if (item.mediaId) {
+		db.addPending(
+			Data::DedupDb::Table::Uploads,
+			item.mediaId,
+			hash,
+			item.isPhoto);
 		item.dedupNeedsHash = false;
 	}
 	runNextPrecheck();
@@ -4449,16 +4520,17 @@ void Pipeline::skipAsDuplicate(int i) {
 					db.insert(Data::DedupDb::Table::Uploads, {
 						.hash = item.fileHash,
 						.documentId = item.mediaId,
+						.isPhoto = item.isPhoto,
 						.status = u"f"_q,
 					});
 				}
-			} else {
-				db.insertFwTmp(
-					_session.uniqueId(),
-					_peerId,
-					item.mediaId,
-					item.fileHash);
 			}
+			db.insertFwTmp(
+				_session.uniqueId(),
+				_peerId,
+				item.mediaId,
+				item.isPhoto,
+				item.fileHash);
 		}
 	}
 	auto &states = ActiveStates();
@@ -4548,12 +4620,13 @@ void Pipeline::cancelItem(int idx) {
 	if (const auto srcItem = _session.data().message(item.sourceId)) {
 		ClearShadowUpload(&_session, srcItem);
 	}
-	if (GetEnhancedBool("prevent_forward_duplicates")
-		&& !item.uploadDone
-		&& item.mediaId) {
+	if (!item.uploadDone && item.mediaId) {
 		auto &db = Core::App().downloadManager().ensureDedupDb();
 		if (db.isOpen()) {
-			db.removePending(Data::DedupDb::Table::Uploads, item.mediaId);
+			db.removePending(
+				Data::DedupDb::Table::Uploads,
+				item.mediaId,
+				item.isPhoto);
 		}
 	}
 	{
@@ -4850,6 +4923,7 @@ void Notify() {
 
 struct Registration {
 	uint64 mediaId = 0;
+	bool isPhoto = false;
 	QByteArray hash;
 };
 
@@ -4906,6 +4980,9 @@ public:
 	base::flat_set<MsgId> awaitingHash;
 	base::flat_map<MsgId, QByteArray> hashes;
 	base::flat_map<MsgId, uint64> mediaIds;
+	base::flat_map<MsgId, bool> mediaPhotos;
+	base::flat_set<std::pair<uint64, bool>> batchMedia;
+	base::flat_set<QByteArray> batchHashes;
 	size_t scanned = 0;             // prepare cursor over remaining
 	int inflightFetches = 0;
 	int soloInFlight = 0;
@@ -4917,6 +4994,8 @@ public:
 	std::vector<MsgId> hashRetries;
 
 	std::vector<mtpRequestId> requests;
+	std::optional<Data::DedupDb::ChatTableUse> chatTableUse;
+	bool chatTableAllPeers = false;
 	base::Timer floodTimer;
 	base::Timer tickTimer;
 	std::optional<TimeId> videoTimestamp;
@@ -4957,6 +5036,26 @@ JobsMap &Jobs() {
 	return result;
 }
 
+[[nodiscard]] std::shared_ptr<Job> HoldJob(not_null<Job*> j) {
+	const auto it = Jobs().find(j->dst);
+	return (it != end(Jobs()) && it->second.get() == j.get())
+		? it->second
+		: std::shared_ptr<Job>();
+}
+
+void EnsureJobChatTableUse(not_null<Job*> j, bool allPeers) {
+	if (j->chatTableUse && j->chatTableAllPeers == allPeers) {
+		return;
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (!db.isOpen()) {
+		j->chatTableUse.reset();
+		return;
+	}
+	j->chatTableUse = db.useChatTable(j->dst, allPeers);
+	j->chatTableAllPeers = allPeers;
+}
+
 [[nodiscard]] bool BelongsTo(
 		const Job &job,
 		not_null<Main::Session*> session) {
@@ -4970,6 +5069,39 @@ void FireCompletion(not_null<Job*> j) {
 			j->completion();
 		}
 	}
+}
+
+[[nodiscard]] std::vector<MsgId> RemainingForResume(const Job &j) {
+	auto result = std::vector<MsgId>();
+	result.reserve(
+		j.queue.size()
+		+ j.soloQueue.size()
+		+ j.regs.size()
+		+ j.awaitingHash.size()
+		+ j.hashRetries.size()
+		+ (j.remaining.size() - std::min(j.scanned, j.remaining.size())));
+	result.insert(end(result), begin(j.queue), end(j.queue));
+	result.insert(end(result), begin(j.soloQueue), end(j.soloQueue));
+	for (const auto &entry : j.regs) {
+		result.push_back(entry.first);
+	}
+	result.insert(
+		end(result),
+		begin(j.awaitingHash),
+		end(j.awaitingHash));
+	result.insert(
+		end(result),
+		begin(j.hashRetries),
+		end(j.hashRetries));
+	if (j.scanned < j.remaining.size()) {
+		result.insert(
+			end(result),
+			begin(j.remaining) + j.scanned,
+			end(j.remaining));
+	}
+	std::sort(begin(result), end(result));
+	result.erase(std::unique(begin(result), end(result)), end(result));
+	return result;
 }
 
 void SaveSnapshot(not_null<Job*> j) {
@@ -4992,7 +5124,7 @@ void SaveSnapshot(not_null<Job*> j) {
 	}
 	record.forwardOptions = static_cast<int>(j->forwardOptions);
 	record.groupOptions = static_cast<int>(j->groupOptions);
-	record.remaining = j->remaining;
+	record.remaining = RemainingForResume(*j);
 	db.insertNfResume(record);
 }
 
@@ -5004,6 +5136,7 @@ void StopTimers(not_null<Job*> j) {
 }
 
 void Finish(not_null<Job*> j) {
+	[[maybe_unused]] const auto held = HoldJob(j);
 	j->state = Job::State::Done;
 	for (const auto requestId : base::take(j->requests)) {
 		j->api->request(requestId).cancel();
@@ -5013,9 +5146,11 @@ void Finish(not_null<Job*> j) {
 	for (const auto &[msgId, registration] : j->regs) {
 		db.removePending(
 			Data::DedupDb::Table::Uploads,
-			registration.mediaId);
+			registration.mediaId,
+			registration.isPhoto);
 	}
 	j->regs.clear();
+	j->chatTableUse.reset();
 	db.removeNfResume(j->session->uniqueId(), j->dst);
 	db.clearFwTmpRun(j->session->uniqueId(), j->dst);
 	EnhancedForward::RecordFinishedFwRun(
@@ -5055,6 +5190,7 @@ void PauseJob(not_null<Job*> j) {
 }
 
 void CancelJob(not_null<Job*> j) {
+	[[maybe_unused]] const auto held = HoldJob(j);
 	j->state = Job::State::Cancelled;
 	EnhancedForward::DropForwardBatch(not_null{ j->session }, j->dst);
 	for (const auto requestId : base::take(j->requests)) {
@@ -5065,9 +5201,11 @@ void CancelJob(not_null<Job*> j) {
 	for (const auto &[msgId, registration] : j->regs) {
 		db.removePending(
 			Data::DedupDb::Table::Uploads,
-			registration.mediaId);
+			registration.mediaId,
+			registration.isPhoto);
 	}
 	j->regs.clear();
+	j->chatTableUse.reset();
 	db.removeNfResume(j->session->uniqueId(), j->dst);
 	db.clearFwTmpRun(j->session->uniqueId(), j->dst);
 	Jobs().remove(j->dst);
@@ -5092,11 +5230,29 @@ void EnqueueResolved(
 	auto &db = Core::App().downloadManager().ensureDedupDb();
 	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
 	const auto sessionId = j->session->uniqueId();
-	const auto duplicate = !hash.isEmpty()
-		&& (dedupOn
-			? (db.seekDocumentId(Data::DedupDb::Table::Uploads, hash) != 0)
-			: (db.isOpen()
-				&& db.containsFwTmpHash(sessionId, j->dst, hash)));
+	EnsureJobChatTableUse(j, dedupOn);
+	const auto mediaIt = j->mediaIds.find(msgId);
+	const auto mediaId = (mediaIt != end(j->mediaIds))
+		? mediaIt->second
+		: uint64(0);
+	const auto photoIt = j->mediaPhotos.find(msgId);
+	const auto isPhoto = (photoIt != end(j->mediaPhotos))
+		&& photoIt->second;
+	const auto batchDuplicate = mediaId
+		&& (j->batchMedia.contains({ mediaId, isPhoto })
+			|| (!hash.isEmpty() && j->batchHashes.contains(hash)));
+	const auto duplicate = batchDuplicate
+		|| (!hash.isEmpty()
+			&& (db.chatTableContainsHash(j->dst, hash, dedupOn)
+				|| (db.isOpen()
+					&& db.containsFwTmpHash(
+						sessionId,
+						j->dst,
+						hash))
+				|| (dedupOn
+					&& db.seekDocumentId(
+						Data::DedupDb::Table::Uploads,
+						hash) != 0)));
 	if (duplicate) {
 		j->skipped++;
 		EnhancedForward::ReportForwardBatchItem(
@@ -5106,15 +5262,21 @@ void EnqueueResolved(
 			1);
 		return;
 	}
-	const auto mediaIt = j->mediaIds.find(msgId);
-	const auto mediaId = (mediaIt != end(j->mediaIds))
-		? mediaIt->second
-		: uint64(0);
-	if (mediaId && !hash.isEmpty()) {
-		if (dedupOn) {
-			db.addPending(Data::DedupDb::Table::Uploads, mediaId, hash);
+	if (mediaId) {
+		j->batchMedia.insert({ mediaId, isPhoto });
+		if (!hash.isEmpty()) {
+			j->batchHashes.insert(hash);
 		}
-		j->regs.emplace_or_assign(msgId, Registration{ mediaId, hash });
+	}
+	if (mediaId && !hash.isEmpty()) {
+		db.addPending(
+			Data::DedupDb::Table::Uploads,
+			mediaId,
+			hash,
+			isPhoto);
+		j->regs.emplace_or_assign(
+			msgId,
+			Registration{ mediaId, isPhoto, hash });
 	}
 	const auto item = j->session->data().message(
 		FullMsgId(j->src, msgId));
@@ -5332,6 +5494,31 @@ void FlushForwardBatch(
 			return;
 		}
 		auto job = not_null{ strong.get() };
+		auto &db = Core::App().downloadManager().ensureDedupDb();
+		const auto sessionId = job->session->uniqueId();
+		for (const auto msgId : chunk) {
+			if (const auto it = job->regs.find(msgId); it != end(job->regs)) {
+				if (db.isOpen() && !it->second.hash.isEmpty()) {
+					db.insert(Data::DedupDb::Table::Uploads, {
+						.hash = it->second.hash,
+						.documentId = it->second.mediaId,
+						.isPhoto = it->second.isPhoto,
+						.status = u"f"_q,
+					});
+					db.removePending(
+						Data::DedupDb::Table::Uploads,
+						it->second.mediaId,
+						it->second.isPhoto);
+					db.insertFwTmp(
+						sessionId,
+						job->dst,
+						it->second.mediaId,
+						it->second.isPhoto,
+						it->second.hash);
+				}
+				job->regs.erase(it);
+			}
+		}
 		job->api->applyUpdates(result);
 		job->done += int(chunk.size());
 		EnhancedForward::ReportForwardBatchItem(
@@ -5356,30 +5543,6 @@ void FlushForwardBatch(
 			not_null{ job->session },
 			job->dst,
 			job->lastFileName);
-		auto &db = Core::App().downloadManager().ensureDedupDb();
-		const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
-		const auto sessionId = job->session->uniqueId();
-		for (const auto msgId : chunk) {
-			if (const auto it = job->regs.find(msgId); it != end(job->regs)) {
-				if (dedupOn) {
-					db.insert(Data::DedupDb::Table::Uploads, {
-						.hash = it->second.hash,
-						.documentId = it->second.mediaId,
-						.status = u"f"_q,
-					});
-					db.removePending(
-						Data::DedupDb::Table::Uploads,
-						it->second.mediaId);
-				} else if (db.isOpen() && !it->second.hash.isEmpty()) {
-					db.insertFwTmp(
-						sessionId,
-						job->dst,
-						it->second.mediaId,
-						it->second.hash);
-				}
-				job->regs.erase(it);
-			}
-		}
 		job->batchInFlight = false;
 		if (job->soloInFlight > 0) {
 			job->soloInFlight--;
@@ -5472,33 +5635,32 @@ void Pump(not_null<Job*> j) {
 			break;
 		}
 
-		if (!dedupOn) {
-			const auto tmpItem = j->session->data().message(
-				FullMsgId(j->src, msgId));
-			const auto tmpMedia = tmpItem ? tmpItem->media() : nullptr;
-			const auto tmpDoc = tmpMedia ? tmpMedia->document() : nullptr;
-			const auto tmpPhoto = tmpMedia ? tmpMedia->photo() : nullptr;
-			const auto tmpMediaId = tmpDoc
-				? uint64(tmpDoc->id)
-				: tmpPhoto
-				? uint64(tmpPhoto->id)
-				: uint64(0);
-			auto &tmpDb = Core::App().downloadManager().ensureDedupDb();
-			if (tmpMediaId
-				&& tmpDb.isOpen()
-				&& tmpDb.containsFwTmpItem(
-					j->session->uniqueId(),
-					j->dst,
-					tmpMediaId)) {
-				j->scanned++;
-				j->skipped++;
-				EnhancedForward::ReportForwardBatchItem(
-					not_null{ j->session },
-					j->dst,
-					0,
-					1);
-				continue;
-			}
+		const auto tmpItem = j->session->data().message(
+			FullMsgId(j->src, msgId));
+		const auto tmpMedia = tmpItem ? tmpItem->media() : nullptr;
+		const auto tmpDoc = tmpMedia ? tmpMedia->document() : nullptr;
+		const auto tmpPhoto = tmpMedia ? tmpMedia->photo() : nullptr;
+		const auto tmpMediaId = tmpDoc
+			? uint64(tmpDoc->id)
+			: tmpPhoto
+			? uint64(tmpPhoto->id)
+			: uint64(0);
+		auto &tmpDb = Core::App().downloadManager().ensureDedupDb();
+		if (tmpMediaId
+			&& tmpDb.isOpen()
+			&& tmpDb.containsFwTmpItem(
+				j->session->uniqueId(),
+				j->dst,
+				tmpMediaId,
+				(tmpPhoto != nullptr))) {
+			j->scanned++;
+			j->skipped++;
+			EnhancedForward::ReportForwardBatchItem(
+				not_null{ j->session },
+				j->dst,
+				0,
+				1);
+			continue;
 		}
 
 		if (const auto it = j->hashes.find(msgId); it != end(j->hashes)) {
@@ -5527,8 +5689,19 @@ void Pump(not_null<Job*> j) {
 		const auto mediaId = document
 			? uint64(document->id)
 			: uint64(photo->id);
-		if (dedupOn
-			&& db.containsDocId(Data::DedupDb::Table::Uploads, mediaId)) {
+		if (db.isOpen()) {
+			EnsureJobChatTableUse(j, dedupOn);
+		}
+		if (db.chatTableContainsDocId(
+				j->dst,
+				mediaId,
+				(photo != nullptr),
+				dedupOn)
+			|| (dedupOn
+				&& db.containsDocId(
+					Data::DedupDb::Table::Uploads,
+					mediaId,
+					(photo != nullptr)))) {
 			j->scanned++;
 			j->skipped++;
 			EnhancedForward::ReportForwardBatchItem(
@@ -5544,6 +5717,7 @@ void Pump(not_null<Job*> j) {
 		}
 
 		j->mediaIds.emplace(msgId, mediaId);
+		j->mediaPhotos.emplace(msgId, (photo != nullptr));
 		j->awaitingHash.insert(msgId);
 		if (document) {
 			StartFingerprint(j, msgId, document);
@@ -5755,7 +5929,9 @@ void Start(
 			end(job->remaining),
 			std::make_move_iterator(begin(remaining)),
 			std::make_move_iterator(end(remaining)));
-		std::sort(job->remaining.begin(), job->remaining.end());
+		std::sort(
+			begin(job->remaining) + job->scanned,
+			end(job->remaining));
 		if (job->state == Job::State::Paused) {
 			job->state = Job::State::Running;
 		}
@@ -5818,36 +5994,53 @@ MsgId CurrentGate(const PeerId &dst) {
 }
 
 void PauseAll(not_null<Main::Session*> session) {
-	auto &jobs = Jobs();
-	for (auto it = begin(jobs); it != end(jobs);) {
-		const auto job = it->second.get();
-		if (BelongsTo(*job, session) && job->alive()) {
-			for (const auto requestId : base::take(job->requests)) {
-				job->api->request(requestId).cancel();
-			}
-			StopTimers(job);
-			EnhancedForward::DropForwardBatch(session, job->dst);
-			job->batchInFlight = false;
-			job->state = Job::State::Paused;
-			SaveSnapshot(job);
-			FireCompletion(job);
-			it = jobs.erase(it);
-		} else {
-			++it;
+	auto candidates = std::vector<std::shared_ptr<Job>>();
+	for (const auto &entry : Jobs()) {
+		if (BelongsTo(*entry.second, session) && entry.second->alive()) {
+			candidates.push_back(entry.second);
 		}
+	}
+	for (const auto &held : candidates) {
+		const auto job = held.get();
+		if (!job->alive()) {
+			continue;
+		}
+		for (const auto requestId : base::take(job->requests)) {
+			job->api->request(requestId).cancel();
+		}
+		StopTimers(job);
+		EnhancedForward::DropForwardBatch(session, job->dst);
+		job->batchInFlight = false;
+		job->state = Job::State::Paused;
+		auto &db = Core::App().downloadManager().ensureDedupDb();
+		SaveSnapshot(job);
+		for (const auto &[msgId, registration] : job->regs) {
+			db.removePending(
+				Data::DedupDb::Table::Uploads,
+				registration.mediaId,
+				registration.isPhoto);
+		}
+		job->regs.clear();
+		job->chatTableUse.reset();
+		if (const auto it = Jobs().find(job->dst);
+			it != end(Jobs()) && it->second.get() == job) {
+			Jobs().remove(job->dst);
+		}
+		FireCompletion(job);
 	}
 	Notify();
 }
 
 void CancelAll(not_null<Main::Session*> session) {
-	auto &jobs = Jobs();
-	for (auto it = begin(jobs); it != end(jobs);) {
-		const auto job = it->second.get();
-		if (BelongsTo(*job, session)) {
-			CancelJob(job);
-			it = jobs.erase(it);
-		} else {
-			++it;
+	auto candidates = std::vector<std::shared_ptr<Job>>();
+	for (const auto &entry : Jobs()) {
+		if (BelongsTo(*entry.second, session)) {
+			candidates.push_back(entry.second);
+		}
+	}
+	for (const auto &job : candidates) {
+		if (job->state != Job::State::Cancelled) {
+			CancelJob(job.get());
 		}
 	}
 	auto &db = Core::App().downloadManager().ensureDedupDb();
@@ -5935,7 +6128,8 @@ void PauseDst(not_null<Main::Session*> session, const PeerId &dst) {
 	if (it == end(jobs) || !BelongsTo(*it->second, session)) {
 		return;
 	}
-	const auto job = it->second.get();
+	const auto held = it->second;
+	const auto job = held.get();
 	if (!job->alive()) {
 		return;
 	}
@@ -5946,9 +6140,18 @@ void PauseDst(not_null<Main::Session*> session, const PeerId &dst) {
 	EnhancedForward::DropForwardBatch(session, job->dst);
 	job->batchInFlight = false;
 	job->state = Job::State::Paused;
+	auto &db = Core::App().downloadManager().ensureDedupDb();
 	SaveSnapshot(job);
-	FireCompletion(job);
+	for (const auto &[msgId, registration] : job->regs) {
+		db.removePending(
+			Data::DedupDb::Table::Uploads,
+			registration.mediaId,
+			registration.isPhoto);
+	}
+	job->regs.clear();
+	job->chatTableUse.reset();
 	jobs.erase(it);
+	FireCompletion(job);
 	Notify();
 }
 

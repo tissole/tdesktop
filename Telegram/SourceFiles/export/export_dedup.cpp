@@ -28,15 +28,17 @@ void MarkDone(
 		PeerId peerId,
 		uint64 docId,
 		const QByteArray &hash,
-		bool global) {
+		bool global,
+		bool isPhoto) {
 	if (global) {
 		db.insert(Table::Downloads, {
 			.hash = hash,
 			.documentId = docId,
+			.isPhoto = isPhoto,
 			.status = u"f"_q,
 		});
 	} else {
-		db.insertExTmp(sessionId, peerId, docId, hash);
+		db.insertExTmp(sessionId, peerId, docId, isPhoto, hash);
 	}
 }
 
@@ -352,9 +354,12 @@ void CheckDuplicate(
 		done(CheckResult());
 		return;
 	}
+	if (global) {
+		db.ensureTableLoaded(Table::Downloads);
+	}
 	if (global
-		? db.containsDocId(Table::Downloads, docId)
-		: db.containsExTmpDocId(sessionId, peerId, docId)) {
+		? db.containsDocId(Table::Downloads, docId, isPhoto)
+		: db.containsExTmpDocId(sessionId, peerId, docId, isPhoto)) {
 		done(CheckResult{ .skip = true });
 		return;
 	}
@@ -367,7 +372,14 @@ void CheckDuplicate(
 			done(CheckResult());
 			return;
 		}
-		done(CheckHash(*dbPtr, sessionId, peerId, docId, hash, global));
+		done(CheckHash(
+			*dbPtr,
+			sessionId,
+			peerId,
+			docId,
+			hash,
+			global,
+			isPhoto));
 	});
 }
 
@@ -377,7 +389,11 @@ CheckResult CheckHash(
 		PeerId peerId,
 		uint64 docId,
 		const QByteArray &hash,
-		bool global) {
+		bool global,
+		bool isPhoto) {
+	if (global) {
+		db.ensureTableLoaded(Table::Downloads);
+	}
 	const auto known = global
 		? db.containsHash(Table::Downloads, hash)
 		: db.containsExTmpHash(sessionId, peerId, hash);
@@ -386,6 +402,7 @@ CheckResult CheckHash(
 			db.insert(Table::Downloads, {
 				.hash = hash,
 				.documentId = docId,
+				.isPhoto = isPhoto,
 				.status = u"u"_q,
 			});
 		}
@@ -396,7 +413,7 @@ CheckResult CheckHash(
 	if (global
 		? db.containsFinishedHash(Table::Downloads, hash)
 		: true) {
-		MarkDone(db, sessionId, peerId, docId, hash, global);
+		MarkDone(db, sessionId, peerId, docId, hash, global, isPhoto);
 	}
 	return CheckResult{ .skip = true, .hash = hash, .decided = true };
 }
@@ -415,12 +432,15 @@ bool FinishFile(
 	if (!db.isOpen() || !docId) {
 		return false;
 	}
+	if (global) {
+		db.ensureTableLoaded(Table::Downloads);
+	}
 	if (!preHash.isEmpty()) {
 		// Big file: the decision was made before download.
 		if (global) {
 			db.updateDedupStatus(Table::Downloads, preHash, u"f"_q);
 		} else {
-			db.insertExTmp(sessionId, peerId, docId, preHash);
+			db.insertExTmp(sessionId, peerId, docId, isPhoto, preHash);
 		}
 		return false;
 	}
@@ -433,29 +453,35 @@ bool FinishFile(
 	if (global) {
 		// A match against our own in-progress row is this file
 		// recognizing itself, not a duplicate: exclude it like downloads.
-		const auto other = db.seekDocumentId(Table::Downloads, hash, docId);
+		const auto other = db.seekDocumentId(
+			Table::Downloads,
+			hash,
+			docId,
+			isPhoto);
 		const auto photoDup = isPhoto
-			&& db.containsDocId(Table::Downloads, docId);
+			&& db.containsDocId(Table::Downloads, docId, true);
 		if (other == 0 && !photoDup) {
-			MarkDone(db, sessionId, peerId, docId, hash, global);
+			MarkDone(db, sessionId, peerId, docId, hash, global, isPhoto);
 			return false;
 		}
 	} else if (!db.containsExTmpHash(sessionId, peerId, hash)
-		&& !(isPhoto && db.containsExTmpDocId(sessionId, peerId, docId))) {
-		MarkDone(db, sessionId, peerId, docId, hash, global);
+		&& !(isPhoto
+			&& db.containsExTmpDocId(sessionId, peerId, docId, true))) {
+		MarkDone(db, sessionId, peerId, docId, hash, global, isPhoto);
 		return false;
 	}
-	MarkDone(db, sessionId, peerId, docId, hash, global);
+	MarkDone(db, sessionId, peerId, docId, hash, global, isPhoto);
 	return true;
 }
 
 void CancelFile(
 		::Data::DedupDb &db,
-		uint64 docId) {
+		uint64 docId,
+		bool isPhoto) {
 	if (!db.isOpen() || !docId) {
 		return;
 	}
-	db.removeByDocumentId(Table::Downloads, docId, u"u"_q);
+	db.removePending(Table::Downloads, docId, isPhoto);
 }
 
 } // namespace Export

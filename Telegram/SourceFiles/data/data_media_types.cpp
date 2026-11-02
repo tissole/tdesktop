@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_media_types.h"
 
 #include "base/random.h"
+#include "data/data_media_category.h"
 #include "boxes/send_credits_box.h" // CreditsEmoji.
 #include "history/history.h"
 #include "history/history_item.h" // CreateMedia.
@@ -1152,21 +1153,26 @@ bool MediaFile::uploading() const {
 
 Storage::SharedMediaTypesMask MediaFile::sharedMediaTypes() const {
 	using Type = Storage::SharedMediaType;
-	if (_document->sticker() || ttlSeconds()) {
+	if (ttlSeconds()) {
 		return {};
-	} else if (_document->isVideoMessage()) {
+	}
+	switch (CategorizeDocument(_document)) {
+	case DocumentMediaKind::Sticker:
+		return Type::Sticker;
+	case DocumentMediaKind::RoundVideo:
 		return Type::RoundFile;
-	} else if (_document->isGifv()) {
+	case DocumentMediaKind::Voice:
+		return Type::VoiceFile;
+	case DocumentMediaKind::GIF:
 		return Type::GIF;
-	//} else if (_document->isVideoFile()) {
-    } else if (_document->isVideo()) {
+	case DocumentMediaKind::Video:
 		return Storage::SharedMediaTypesMask{}
 			.added(Type::Video)
 			.added(Type::PhotoVideo);
-	} else if (_document->isVoiceMessage()) {
-		return Type::VoiceFile;
-	} else if (_document->isSong()) {
+	case DocumentMediaKind::Music:
 		return Type::MusicFile;
+	case DocumentMediaKind::File:
+		return Type::File;
 	}
 	return Type::File;
 }

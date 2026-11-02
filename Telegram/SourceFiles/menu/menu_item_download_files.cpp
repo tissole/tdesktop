@@ -233,7 +233,8 @@ void AddAction(
 					&& !dedupOff
 					&& manager.ensureDedupDb().containsDocId(
 						Data::DedupDb::Table::Downloads,
-						uint64(photo->id))) {
+						uint64(photo->id),
+						true)) {
 					batch->displayName = QFileInfo(fullPath(i)).fileName();
 					batch->addDuplicate();
 					skippedCount++;
@@ -265,7 +266,8 @@ void AddAction(
 					&& manager.ensureDedupDb().containsDlTmpDocId(
 						sessionId,
 						batchId,
-						photo->id)) {
+						photo->id,
+						true)) {
 					batch->displayName = QFileInfo(fullPath(i)).fileName();
 					batch->addDuplicate();
 					skippedCount++;
@@ -305,6 +307,7 @@ void AddAction(
 						Data::DedupDb::Table::Downloads, {
 							.hash = hash,
 							.documentId = uint64(photo->id),
+							.isPhoto = true,
 							.status = u"f"_q,
 						});
 					batch->addDownloaded();
@@ -385,7 +388,8 @@ void AddAction(
 						&& Core::App().downloadManager().ensureDedupDb().containsDlTmpDocId(
 							document->session().uniqueId(),
 							batchId,
-							document->id)) {
+							document->id,
+							false)) {
 						batch->displayName = QFileInfo(folderPath + name).fileName();
 						batch->addDuplicate();
 						return;

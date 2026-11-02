@@ -75,12 +75,12 @@ int MinItemHeight(Type type, int width) {
 	} break;
 
 	case Type::VoiceFile:
-	case Type::RoundVoiceFile:
 		return songSt.songPadding.top()
 			+ songSt.songThumbSize
 			+ songSt.songPadding.bottom()
 			+ st::lineWidth;
 	case Type::File:
+	case Type::Sticker:
 		return songSt.filePadding.top()
 			+ songSt.fileThumbSize
 			+ songSt.filePadding.bottom()

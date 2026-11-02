@@ -10,28 +10,37 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QSqlError>
+#include <QDataStream>
+#include <QIODevice>
 #include <QSet>
 #include <QStringList>
 #include <QVariant>
 #include <QUuid>
 
 #include <algorithm>
+#include <atomic>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "logs.h"
+#include "base/unixtime.h"
 #include <crl/crl.h>
-
-#include <algorithm>
 
 namespace Data {
 
 namespace {
+
+constexpr auto kVacuumChunk = 1000;
+constexpr auto kVacuumMinFree = 1000;
+constexpr auto kVacuumFraction = 10;
+
+std::atomic_bool gVacuuming = false;
 
 [[nodiscard]] QString TableName(DedupDb::Table table) {
 	switch (table) {
@@ -41,10 +50,120 @@ namespace {
 	Unexpected("DedupDb::Table");
 }
 
+[[nodiscard]] int64 PragmaInt(QSqlDatabase &db, const QString &sql) {
+	QSqlQuery q(db);
+	return (q.exec(sql) && q.next()) ? q.value(0).toLongLong() : -1;
+}
+
+[[nodiscard]] bool ScanIsActive(QSqlDatabase &db) {
+	QSqlQuery q(db);
+	return q.exec(u"SELECT 1 FROM jobs WHERE kind = 'scan' "
+		"AND state != 2 LIMIT 1"_q) && q.next();
+}
+
+void VacuumOpenedDatabase(
+		QSqlDatabase &db,
+		const std::atomic_bool &cancel) {
+	{
+		QSqlQuery q(db);
+		if (!q.exec(u"PRAGMA busy_timeout=5000"_q)) {
+			return;
+		}
+	}
+	if (PragmaInt(db, u"PRAGMA auto_vacuum"_q) != 1) {
+		return;
+	}
+	if (ScanIsActive(db)) {
+		return;
+	}
+	const auto free = PragmaInt(db, u"PRAGMA freelist_count"_q);
+	const auto pages = PragmaInt(db, u"PRAGMA page_count"_q);
+	if (free < kVacuumMinFree
+		|| pages <= 0
+		|| free * kVacuumFraction < pages) {
+		return;
+	}
+	LOG(("DedupDb: Vacuum start, %1 free of %2 pages.").arg(
+		free,
+		pages));
+	auto remaining = free;
+	auto reclaimed = int64(0);
+	while (remaining > 0 && !cancel.load()) {
+		{
+			QSqlQuery vacuum(db);
+			if (!vacuum.exec(u"PRAGMA incremental_vacuum(%1)"_q.arg(
+					kVacuumChunk))) {
+				LOG(("DedupDb: Incremental vacuum failed: %1").arg(
+					vacuum.lastError().text()));
+				break;
+			}
+		}
+		const auto next = PragmaInt(db, u"PRAGMA freelist_count"_q);
+		if (next < 0 || next >= remaining) {
+			break;
+		}
+		reclaimed += remaining - next;
+		remaining = next;
+	}
+	LOG(("DedupDb: Vacuum reclaimed %1 pages, %2 free left.").arg(
+		reclaimed,
+		remaining));
+}
+
+void OptimizeDatabase(const QString &path) {
+	const auto connectionName = u"dedup-optimize-%1"_q.arg(
+		QUuid::createUuid().toString());
+	auto db = QSqlDatabase::addDatabase(u"QSQLITE"_q, connectionName);
+	db.setDatabaseName(path);
+	if (db.open()) {
+		{
+			QSqlQuery q(db);
+			if (!q.exec(u"PRAGMA busy_timeout=5000"_q)
+				|| !q.exec(u"PRAGMA optimize"_q)) {
+				LOG(("DedupDb: Startup optimize failed: %1").arg(
+					q.lastError().text()));
+			}
+		}
+		db.close();
+	} else {
+		LOG(("DedupDb: Startup optimize open failed: %1").arg(
+			db.lastError().text()));
+	}
+	db = QSqlDatabase();
+	QSqlDatabase::removeDatabase(connectionName);
+}
+
+void VacuumDatabase(
+		const QString &path,
+		const std::atomic_bool &cancel) {
+	if (cancel.load()) {
+		return;
+	}
+	const auto connectionName = u"dedup-vacuum-%1"_q.arg(
+		QUuid::createUuid().toString());
+	auto db = QSqlDatabase::addDatabase(u"QSQLITE"_q, connectionName);
+	db.setDatabaseName(path);
+	if (db.open()) {
+		VacuumOpenedDatabase(db, cancel);
+		db.close();
+	} else {
+		LOG(("DedupDb: Vacuum open failed: %1").arg(
+			db.lastError().text()));
+	}
+	db = QSqlDatabase();
+	QSqlDatabase::removeDatabase(connectionName);
+}
+
+struct VacuumFlagGuard {
+	~VacuumFlagGuard() {
+		gVacuuming = false;
+	}
+};
+
 struct TableState {
-	QHash<uint64, QByteArray> docToHash;
-	QHash<QByteArray, QSet<uint64>> hashToDoc;
-	QSet<uint64> unfinishedDocs;
+	QHash<uint64, QByteArray> docToHash[2];
+	QHash<QByteArray, QSet<uint64>> hashToDoc[2];
+	QSet<uint64> unfinishedDocs[2];
 	bool loaded = false;
 };
 
@@ -57,6 +176,7 @@ struct TableState {
 struct SharedDownloads {
 	std::mutex mutex;
 	TableState state[2];
+	int tableUsers[2] = {};
 };
 
 [[nodiscard]] std::shared_ptr<SharedDownloads> SharedDownloadsForPath(
@@ -72,6 +192,694 @@ struct SharedDownloads {
 	auto fresh = std::make_shared<SharedDownloads>();
 	stores[path] = fresh;
 	return fresh;
+}
+
+void RecomputeAllChatScanRefsIn(QSqlDatabase &db) {
+	const auto exec = [&](const QString &sql) {
+		auto q = QSqlQuery(db);
+		if (!q.exec(sql)) {
+			LOG(("DedupDb: Recompute refs failed: %1: %2").arg(
+				sql,
+				q.lastError().text()));
+		}
+	};
+	exec(u"DELETE FROM media_refs"_q);
+	exec(u"INSERT INTO media_refs "
+		"(media_id, is_photo, hash_id, id_refs) "
+		"SELECT media_id, is_photo, COALESCE(MAX(hash_id), 0), COUNT(*) "
+		"FROM chat_scan_items WHERE media_id != 0 "
+		"GROUP BY media_id, is_photo"_q);
+	exec(u"UPDATE hashes SET hash_refs = "
+		"(SELECT COUNT(*) FROM chat_scan_items "
+		"WHERE chat_scan_items.hash_id = hashes.hash_id)"_q);
+}
+
+[[nodiscard]] std::optional<HashOwner> FindHashOwnerReplacementIn(
+		const QSqlDatabase &db,
+		uint64 hashId,
+		PeerId excludePeer,
+		MsgId excludeMsg) {
+	if (!hashId) {
+		return std::nullopt;
+	}
+	auto sql = u"SELECT i.peer_id, i.msg_id, i.tracked "
+		"FROM chat_scan_items i "
+		"WHERE i.hash_id = :hash_id "_q;
+	if (excludeMsg.bare > 0) {
+		sql += u"AND NOT (i.peer_id = :exclude_peer "
+			"AND i.msg_id = :exclude_msg) "_q;
+	} else {
+		sql += u"AND i.peer_id != :exclude_peer "_q;
+	}
+	sql += u"ORDER BY i.tracked DESC, "
+		"(i.peer_id = :old_peer) DESC, "
+		"i.peer_id ASC, i.msg_id DESC LIMIT 1"_q;
+	QSqlQuery q(db);
+	q.prepare(sql);
+	q.bindValue(u":hash_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(hashId)));
+	q.bindValue(u":exclude_peer"_q, QVariant::fromValue(
+		static_cast<qulonglong>(excludePeer.value)));
+	q.bindValue(u":old_peer"_q, QVariant::fromValue(
+		static_cast<qulonglong>(excludePeer.value)));
+	if (excludeMsg.bare > 0) {
+		q.bindValue(u":exclude_msg"_q, QVariant::fromValue(
+			static_cast<qlonglong>(excludeMsg.bare)));
+	}
+	if (!q.exec()) {
+		LOG(("DedupDb: HashOwner replacement failed: %1").arg(
+			q.lastError().text()));
+		return std::nullopt;
+	}
+	if (!q.next()) {
+		return std::nullopt;
+	}
+	auto result = HashOwner();
+	result.peerId = PeerId(q.value(0).toULongLong());
+	result.msgId = MsgId(q.value(1).toLongLong());
+	result.tracked = (q.value(2).toInt() != 0);
+	result.exists = bool(result.peerId && result.msgId);
+	return result.exists ? std::optional<HashOwner>(result) : std::nullopt;
+}
+
+[[nodiscard]] std::vector<ChatScanOwnerChange> CleanupOwnersForPeerIn(
+		QSqlDatabase &db,
+		PeerId peerId) {
+	auto result = std::vector<ChatScanOwnerChange>();
+	if (!peerId) {
+		return result;
+	}
+	struct OwnedHash {
+		uint64 hashId = 0;
+		QByteArray hash;
+		MsgId msgId;
+	};
+	auto owned = std::vector<OwnedHash>();
+	{
+		QSqlQuery q(db);
+		q.prepare(u"SELECT hash_id, hash, owner_msg_id FROM hashes "
+			"WHERE owner_peer_id = :peer_id"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		if (!q.exec()) {
+			LOG(("DedupDb: Owner cleanup read failed: %1").arg(
+				q.lastError().text()));
+			return result;
+		}
+		while (q.next()) {
+			owned.push_back({
+				.hashId = q.value(0).toULongLong(),
+				.hash = q.value(1).toByteArray(),
+				.msgId = MsgId(q.value(2).toLongLong()),
+			});
+		}
+	}
+	for (const auto &entry : owned) {
+		const auto replacement = FindHashOwnerReplacementIn(
+			db,
+			entry.hashId,
+			peerId,
+			MsgId(0));
+		if (replacement) {
+			{
+				QSqlQuery q(db);
+				q.prepare(u"UPDATE hashes SET owner_peer_id = :peer_id, "
+					"owner_msg_id = :msg_id WHERE hash_id = :hash_id"_q);
+				q.bindValue(u":peer_id"_q, QVariant::fromValue(
+					static_cast<qulonglong>(replacement->peerId.value)));
+				q.bindValue(u":msg_id"_q, QVariant::fromValue(
+					static_cast<qlonglong>(replacement->msgId.bare)));
+				q.bindValue(u":hash_id"_q, QVariant::fromValue(
+					static_cast<qulonglong>(entry.hashId)));
+				if (!q.exec()) {
+					LOG(("DedupDb: Owner cleanup promote failed: %1").arg(
+						q.lastError().text()));
+				}
+			}
+			{
+				QSqlQuery q(db);
+				q.prepare(u"UPDATE chat_scan_items SET is_dup = 0, "
+					"filename = NULL WHERE peer_id = :peer_id "
+					"AND msg_id = :msg_id"_q);
+				q.bindValue(u":peer_id"_q, QVariant::fromValue(
+					static_cast<qulonglong>(replacement->peerId.value)));
+				q.bindValue(u":msg_id"_q, QVariant::fromValue(
+					static_cast<qlonglong>(replacement->msgId.bare)));
+				if (!q.exec()) {
+					LOG(("DedupDb: Owner cleanup row promote failed: %1")
+						.arg(q.lastError().text()));
+				}
+			}
+			result.emplace_back(replacement->peerId, entry.hash);
+		} else {
+			QSqlQuery q(db);
+			q.prepare(u"UPDATE hashes SET owner_peer_id = 0, "
+				"owner_msg_id = 0 WHERE hash_id = :hash_id"_q);
+			q.bindValue(u":hash_id"_q, QVariant::fromValue(
+				static_cast<qulonglong>(entry.hashId)));
+			if (!q.exec()) {
+				LOG(("DedupDb: Owner cleanup clear failed: %1").arg(
+					q.lastError().text()));
+			}
+		}
+		{
+			QSqlQuery q(db);
+			q.prepare(u"UPDATE chat_scan_items SET is_dup = 1 "
+				"WHERE peer_id = :peer_id AND msg_id = :msg_id"_q);
+			q.bindValue(u":peer_id"_q, QVariant::fromValue(
+				static_cast<qulonglong>(peerId.value)));
+			q.bindValue(u":msg_id"_q, QVariant::fromValue(
+				static_cast<qlonglong>(entry.msgId.bare)));
+			if (!q.exec()) {
+				LOG(("DedupDb: Owner cleanup demote failed: %1").arg(
+					q.lastError().text()));
+			}
+		}
+	}
+	return result;
+}
+
+constexpr auto kScanJobSerializationVersion = quint32(1);
+
+// Mirrors ChatScan::State::Phase; the data layer only needs the terminal
+// value to persist a completed scan.
+constexpr auto kScanPhaseFinished = 3;
+
+struct ScanJobOptions {
+	int dedupMode = -1;
+	MsgId cursor;
+	int phase = 0;
+	int64 elapsedMs = 0;
+	MsgId scannedUpto;
+	bool scanFinished = false;
+	bool deleteFinished = false;
+	uint64 sessionId = 0;
+	MsgId baseMark;
+	bool oldStateExists = false;
+	MsgId oldCursor;
+	int oldPhase = 0;
+	int64 oldElapsedMs = 0;
+	int oldDedupMode = 0;
+};
+
+[[nodiscard]] QByteArray SerializeScanJob(const ScanJobOptions &options) {
+	auto result = QByteArray();
+	auto stream = QDataStream(&result, QIODevice::WriteOnly);
+	stream << kScanJobSerializationVersion;
+	stream << qint32(options.dedupMode);
+	stream << qint64(options.cursor.bare);
+	stream << qint32(options.phase);
+	stream << qint64(options.elapsedMs);
+	stream << qint64(options.scannedUpto.bare);
+	stream << quint8(options.scanFinished ? 1 : 0);
+	stream << quint8(options.deleteFinished ? 1 : 0);
+	stream << quint64(options.sessionId);
+	stream << qint64(options.baseMark.bare);
+	stream << quint8(options.oldStateExists ? 1 : 0);
+	stream << qint64(options.oldCursor.bare);
+	stream << qint32(options.oldPhase);
+	stream << qint64(options.oldElapsedMs);
+	stream << qint32(options.oldDedupMode);
+	return result;
+}
+
+[[nodiscard]] std::optional<ScanJobOptions> DeserializeScanJob(
+		const QByteArray &data) {
+	auto stream = QDataStream(data);
+	auto version = quint32();
+	stream >> version;
+	if (version != kScanJobSerializationVersion) {
+		return std::nullopt;
+	}
+	auto result = ScanJobOptions();
+	auto dedupMode = qint32();
+	auto cursor = qint64();
+	auto phase = qint32();
+	auto elapsedMs = qint64();
+	auto scannedUpto = qint64();
+	auto scanFinished = quint8();
+	auto deleteFinished = quint8();
+	auto sessionId = quint64();
+	auto baseMark = qint64();
+	auto oldStateExists = quint8();
+	auto oldCursor = qint64();
+	auto oldPhase = qint32();
+	auto oldElapsedMs = qint64();
+	auto oldDedupMode = qint32();
+	stream >> dedupMode >> cursor >> phase >> elapsedMs
+		>> scannedUpto >> scanFinished >> deleteFinished
+		>> sessionId >> baseMark >> oldStateExists
+		>> oldCursor >> oldPhase >> oldElapsedMs >> oldDedupMode;
+	if (stream.status() != QDataStream::Ok) {
+		return std::nullopt;
+	}
+	result.dedupMode = dedupMode;
+	result.cursor = MsgId(cursor);
+	result.phase = phase;
+	result.elapsedMs = elapsedMs;
+	result.scannedUpto = MsgId(scannedUpto);
+	result.scanFinished = (scanFinished != 0);
+	result.deleteFinished = (deleteFinished != 0);
+	result.sessionId = sessionId;
+	result.baseMark = MsgId(baseMark);
+	result.oldStateExists = (oldStateExists != 0);
+	result.oldCursor = MsgId(oldCursor);
+	result.oldPhase = oldPhase;
+	result.oldElapsedMs = oldElapsedMs;
+	result.oldDedupMode = oldDedupMode;
+	return result;
+}
+
+[[nodiscard]] QByteArray SerializeScanUndo(
+		bool isDup,
+		const QString &filename) {
+	auto result = QByteArray();
+	auto stream = QDataStream(&result, QIODevice::WriteOnly);
+	stream << quint8(isDup ? 1 : 0);
+	stream << filename;
+	return result;
+}
+
+[[nodiscard]] std::optional<std::pair<bool, QString>> DeserializeScanUndo(
+		const QByteArray &data) {
+	auto stream = QDataStream(data);
+	auto isDup = quint8();
+	auto filename = QString();
+	stream >> isDup >> filename;
+	if (stream.status() != QDataStream::Ok) {
+		return std::nullopt;
+	}
+	return std::make_pair(isDup != 0, filename);
+}
+
+[[nodiscard]] std::optional<ScanJobOptions> ReadScanJobOptionsIn(
+		const QSqlDatabase &db,
+		PeerId peerId) {
+	QSqlQuery q(db);
+	q.prepare(u"SELECT options FROM jobs WHERE kind = 'scan' "
+		"AND scope_id = :scope_id ORDER BY job_id DESC LIMIT 1"_q);
+	q.bindValue(u":scope_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ReadScanJobOptions failed: %1").arg(
+			q.lastError().text()));
+		return std::nullopt;
+	}
+	if (!q.next()) {
+		return std::nullopt;
+	}
+	return DeserializeScanJob(q.value(0).toByteArray());
+}
+
+void DeleteScanJobIn(QSqlDatabase &db, PeerId peerId) {
+	{
+		QSqlQuery q(db);
+		q.prepare(u"DELETE FROM job_items WHERE job_id IN ("
+			"SELECT job_id FROM jobs WHERE kind = 'scan' "
+			"AND scope_id = :scope_id)"_q);
+		q.bindValue(u":scope_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		if (!q.exec()) {
+			LOG(("DedupDb: DeleteScanJob items failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+	{
+		QSqlQuery q(db);
+		q.prepare(u"DELETE FROM jobs WHERE kind = 'scan' "
+			"AND scope_id = :scope_id"_q);
+		q.bindValue(u":scope_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		if (!q.exec()) {
+			LOG(("DedupDb: DeleteScanJob failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+}
+
+[[nodiscard]] JobState ScanJobState(const ScanJobOptions &options) {
+	return (options.scanFinished && options.phase == kScanPhaseFinished)
+		? JobState::Done
+		: JobState::InFlight;
+}
+
+std::vector<ChatScanOwnerChange> ClearChatScanIn(
+		QSqlDatabase &db,
+		PeerId peerId) {
+	const auto started = crl::now();
+	const auto peer = QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value));
+	const auto begin = [&] {
+		QSqlQuery q(db);
+		if (!q.exec(u"BEGIN IMMEDIATE"_q)) {
+			LOG(("DedupDb: ClearChatScan begin failed: %1").arg(
+				q.lastError().text()));
+		}
+	};
+	const auto commit = [&] {
+		QSqlQuery q(db);
+		if (!q.exec(u"COMMIT"_q)) {
+			LOG(("DedupDb: ClearChatScan commit failed: %1").arg(
+				q.lastError().text()));
+		}
+	};
+	const auto hasOtherPeers = [&](const QString &table) {
+		auto q = QSqlQuery(db);
+		q.prepare(u"SELECT 1 FROM %1 "
+			"WHERE peer_id != :peer_id LIMIT 1"_q.arg(table));
+		q.bindValue(u":peer_id"_q, peer);
+		if (!q.exec()) {
+			LOG(("DedupDb: ClearChatScan check failed: %1").arg(
+				q.lastError().text()));
+			return true;
+		}
+		return q.next();
+	};
+	const auto peerRows = [&](const QString &table) {
+		auto q = QSqlQuery(db);
+		q.prepare(u"SELECT COUNT(*) FROM %1 "
+			"WHERE peer_id = :peer_id"_q.arg(table));
+		q.bindValue(u":peer_id"_q, peer);
+		return (q.exec() && q.next())
+			? q.value(0).toInt()
+			: 0;
+	};
+	const auto deletePeer = [&](const QString &table) {
+		auto q = QSqlQuery(db);
+		q.prepare(u"DELETE FROM %1 "
+			"WHERE peer_id = :peer_id"_q.arg(table));
+		q.bindValue(u":peer_id"_q, peer);
+		if (!q.exec()) {
+			LOG(("DedupDb: ClearChatScan failed: %1").arg(
+				q.lastError().text()));
+		}
+	};
+	const auto deleteAll = [&](const QString &table) {
+		auto q = QSqlQuery(db);
+		if (!q.exec(u"DELETE FROM %1"_q.arg(table))) {
+			LOG(("DedupDb: ClearChatScan failed: %1").arg(
+				q.lastError().text()));
+		}
+	};
+	const auto dropIndex = [&](const QString &index) {
+		auto q = QSqlQuery(db);
+		if (!q.exec(u"DROP INDEX IF EXISTS %1"_q.arg(index))) {
+			LOG(("DedupDb: ClearChatScan drop index failed: %1").arg(
+				q.lastError().text()));
+		}
+	};
+	const auto createIndex = [&](
+			const QString &index,
+			const QString &table,
+			const QString &columns) {
+		auto q = QSqlQuery(db);
+		if (!q.exec(u"CREATE INDEX IF NOT EXISTS %1 "
+				"ON %2 %3"_q.arg(index, table, columns))) {
+			LOG(("DedupDb: ClearChatScan create index failed: %1").arg(
+				q.lastError().text()));
+		}
+	};
+	struct ClearTable {
+		QString name;
+		std::vector<std::pair<QString, QString>> indexes;
+	};
+	const auto tables = std::vector<ClearTable>{
+		{ u"chat_scan_items"_q, {
+			{
+				u"idx_chat_scan_items_media"_q,
+				u"(peer_id, media_id, is_photo)"_q,
+			},
+			{
+				u"idx_chat_scan_items_media_global"_q,
+				u"(media_id, is_photo, peer_id, is_dup, msg_id)"_q,
+			},
+			{
+				u"idx_chat_scan_items_hash_id"_q,
+				u"(peer_id, hash_id)"_q,
+			},
+			{
+				u"idx_chat_scan_items_hash_tracked"_q,
+				u"(hash_id, tracked, msg_id)"_q,
+			},
+			{
+				u"idx_chat_scan_items_hash_id_unique_msg"_q,
+				u"(hash_id, peer_id, msg_id) WHERE is_dup = 0"_q,
+			},
+			{
+				u"idx_chat_scan_items_dup"_q,
+				u"(peer_id, is_dup, msg_id)"_q,
+			},
+			{
+				u"idx_chat_scan_items_dup_category"_q,
+				u"(peer_id, is_dup, category, msg_id)"_q,
+			},
+			{
+				u"idx_chat_scan_items_state"_q,
+				u"(peer_id, state, media_id)"_q,
+			},
+			{
+				u"idx_chat_scan_items_category"_q,
+				u"(peer_id, category)"_q,
+			},
+			{
+				u"idx_chat_scan_items_session"_q,
+				u"(peer_id, session_id)"_q,
+			},
+		} },
+	};
+	constexpr auto kIndexedClearThreshold = 4096;
+	begin();
+	auto changed = CleanupOwnersForPeerIn(db, peerId);
+	for (const auto &table : tables) {
+		if (!hasOtherPeers(table.name)) {
+			deleteAll(table.name);
+		} else if (peerRows(table.name) > kIndexedClearThreshold) {
+			for (const auto &index : table.indexes) {
+				dropIndex(index.first);
+			}
+			deletePeer(table.name);
+			for (const auto &[index, definition] : table.indexes) {
+				createIndex(index, table.name, definition);
+			}
+		} else {
+			deletePeer(table.name);
+		}
+	}
+	DeleteScanJobIn(db, peerId);
+	RecomputeAllChatScanRefsIn(db);
+	commit();
+	LOG(("DedupDb: ChatScan clear took %1 ms.").arg(
+		crl::now() - started));
+	return changed;
+}
+
+std::optional<std::vector<ChatScanProgressRow>> RecomputeChatScanProgressIn(
+		QSqlDatabase &db,
+		PeerId peerId) {
+	auto result = std::vector<ChatScanProgressRow>();
+	{
+		QSqlQuery q(db);
+		q.prepare(u"SELECT category, COUNT(*), SUM(size), "
+			"SUM(CASE WHEN is_dup = 1 THEN 1 ELSE 0 END), "
+			"SUM(CASE WHEN is_dup = 1 THEN size ELSE 0 END) "
+			"FROM chat_scan_items WHERE peer_id = :peer_id "
+			"AND tracked = 1 "
+			"GROUP BY category"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		if (!q.exec()) {
+			return std::nullopt;
+		}
+		while (q.next()) {
+			auto row = ChatScanProgressRow();
+			row.peerId = peerId;
+			row.category = q.value(0).toInt();
+			row.itemCount = q.value(1).toLongLong();
+			const auto totalBytes = q.value(2).toLongLong();
+			row.dupCount = q.value(3).toLongLong();
+			row.dupBytes = q.value(4).toLongLong();
+			row.uniqueCount = std::max(
+				int64(0),
+				row.itemCount - row.dupCount);
+			row.uniqueBytes = std::max(
+				int64(0),
+				totalBytes - row.dupBytes);
+			result.push_back(row);
+		}
+	}
+	return result;
+}
+
+std::optional<std::vector<std::pair<QByteArray, MsgId>>>
+ReadChatScanUniqueHashesIn(QSqlDatabase &db, PeerId peerId) {
+	auto result = std::vector<std::pair<QByteArray, MsgId>>();
+	QSqlQuery q(db);
+	q.prepare(u"SELECT h.hash, MAX(i.msg_id) "
+		"FROM chat_scan_items i "
+		"JOIN hashes h ON h.hash_id = i.hash_id "
+		"WHERE i.peer_id = :peer_id "
+		"AND i.hash_id != 0 "
+		"AND i.is_dup = 0 "
+		"AND i.tracked = 1 "
+		"GROUP BY i.hash_id"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		return std::nullopt;
+	}
+	while (q.next()) {
+		result.emplace_back(
+			q.value(0).toByteArray(),
+			MsgId(q.value(1).toLongLong()));
+	}
+	return result;
+}
+
+std::optional<std::vector<ChatScanMediaHash>>
+ReadChatScanMediaHashesIn(
+		QSqlDatabase &db,
+		PeerId peerId,
+		bool includeOther) {
+	auto result = std::vector<ChatScanMediaHash>();
+	QSqlQuery q(db);
+	auto sql = u"SELECT i.peer_id, i.media_id, i.is_photo, i.is_dup, h.hash "
+		"FROM chat_scan_items i "
+		"JOIN hashes h ON h.hash_id = i.hash_id "
+		"WHERE i.media_id != 0 "
+		"AND i.tracked = 1 "
+		"AND i.hash_id != 0"_q;
+	if (!includeOther) {
+		sql += u" AND i.peer_id = :peer_id"_q;
+	}
+	q.prepare(sql);
+	if (!includeOther) {
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+	}
+	if (!q.exec()) {
+		return std::nullopt;
+	}
+	while (q.next()) {
+		auto row = ChatScanMediaHash();
+		row.peerId = PeerId(q.value(0).toULongLong());
+		row.mediaId = q.value(1).toULongLong();
+		row.isPhoto = (q.value(2).toInt() != 0);
+		row.isDup = (q.value(3).toInt() != 0);
+		row.hash = q.value(4).toByteArray();
+		if (row.peerId && row.mediaId && !row.hash.isEmpty()) {
+			result.push_back(std::move(row));
+		}
+	}
+	return result;
+}
+
+std::optional<std::vector<MsgId>> ReadChatScanItemIdsIn(
+		QSqlDatabase &db,
+		PeerId peerId,
+		int category) {
+	auto result = std::vector<MsgId>();
+	QSqlQuery q(db);
+	q.prepare(u"SELECT msg_id FROM chat_scan_items "
+		"WHERE peer_id = :peer_id AND category = :category "
+		"AND tracked = 1 "
+		"ORDER BY msg_id DESC"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":category"_q, category);
+	if (!q.exec()) {
+		return std::nullopt;
+	}
+	while (q.next()) {
+		result.push_back(MsgId(q.value(0).toLongLong()));
+	}
+	return result;
+}
+
+std::optional<std::vector<ChatScanRow>> ReadChatScanIn(
+		const QSqlDatabase &db,
+		PeerId peerId) {
+	auto result = std::vector<ChatScanRow>();
+	auto options = ReadScanJobOptionsIn(db, peerId).value_or(ScanJobOptions());
+	QSqlQuery q(db);
+	q.prepare(u"SELECT category, "
+		"SUM(CASE WHEN is_dup = 0 THEN 1 ELSE 0 END), "
+		"SUM(CASE WHEN is_dup = 0 THEN size ELSE 0 END), "
+		"SUM(CASE WHEN is_dup = 1 THEN 1 ELSE 0 END), "
+		"SUM(CASE WHEN is_dup = 1 THEN size ELSE 0 END) "
+		"FROM chat_scan_items WHERE peer_id = :peer_id "
+		"AND tracked = 1 "
+		"GROUP BY category ORDER BY category"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ReadChatScan failed: %1").arg(
+			q.lastError().text()));
+		return std::nullopt;
+	}
+	while (q.next()) {
+		auto row = ChatScanRow();
+		row.peerId = peerId;
+		row.category = q.value(0).toInt();
+		row.uniqueCount = int(q.value(1).toLongLong());
+		row.uniqueBytes = q.value(2).toLongLong();
+		row.dupCount = int(q.value(3).toLongLong());
+		row.dupBytes = q.value(4).toLongLong();
+		row.scannedUpto = options.scannedUpto;
+		row.scanFinished = options.scanFinished;
+		row.deleteFinished = options.deleteFinished;
+		result.push_back(row);
+	}
+	return result;
+}
+
+std::optional<std::vector<ChatScanDup>> ReadChatScanDupsBeforeIn(
+		const QSqlDatabase &db,
+		PeerId peerId,
+		int category,
+		int limit,
+		MsgId before) {
+	if (limit <= 0) {
+		return std::vector<ChatScanDup>();
+	}
+	auto result = std::vector<ChatScanDup>();
+	auto sql = u"SELECT msg_id, category, size, media_id, is_photo "
+		"FROM chat_scan_items "
+		"WHERE peer_id = :peer_id AND is_dup = 1 "
+		"AND tracked = 1"_q;
+	if (category >= 0) {
+		sql += u" AND category = :category"_q;
+	}
+	if (before.bare > 0) {
+		sql += u" AND msg_id < :before"_q;
+	}
+	sql += u" ORDER BY msg_id DESC LIMIT :limit"_q;
+	QSqlQuery q(db);
+	q.prepare(sql);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (category >= 0) {
+		q.bindValue(u":category"_q, category);
+	}
+	if (before.bare > 0) {
+		q.bindValue(u":before"_q, before.bare);
+	}
+	q.bindValue(u":limit"_q, limit);
+	if (!q.exec()) {
+		LOG(("DedupDb: ReadChatScanDupsBefore failed: %1").arg(
+			q.lastError().text()));
+		return std::nullopt;
+	}
+	while (q.next()) {
+		auto dup = ChatScanDup();
+		dup.peerId = peerId;
+		dup.msgId = MsgId(q.value(0).toLongLong());
+		dup.category = q.value(1).toInt();
+		dup.size = q.value(2).toLongLong();
+		dup.mediaId = q.value(3).toULongLong();
+		dup.isPhoto = (q.value(4).toInt() != 0);
+		result.push_back(dup);
+	}
+	return result;
 }
 
 // Temp export rows are write-buffered: checks read memory, so disk writes
@@ -91,6 +899,518 @@ constexpr auto kExWriteBatchLimit = 100;
 	return result;
 }
 
+[[nodiscard]] QString JobKindName(JobKind kind) {
+	switch (kind) {
+	case JobKind::Download: return u"download"_q;
+	case JobKind::DownloadBatch: return u"download_batch"_q;
+	case JobKind::Upload: return u"upload"_q;
+	case JobKind::UploadBatch: return u"upload_batch"_q;
+	case JobKind::Forward: return u"forward"_q;
+	case JobKind::ForwardBatch: return u"forward_batch"_q;
+	case JobKind::Export: return u"export"_q;
+	case JobKind::ExportBatch: return u"export_batch"_q;
+	case JobKind::EnhancedForward: return u"enhanced_forward"_q;
+	case JobKind::Scan: return u"scan"_q;
+	}
+	Unexpected("JobKind");
+}
+
+[[nodiscard]] std::optional<JobKind> JobKindFromName(const QString &name) {
+	if (name == u"download"_q) {
+		return JobKind::Download;
+	} else if (name == u"download_batch"_q) {
+		return JobKind::DownloadBatch;
+	} else if (name == u"upload"_q) {
+		return JobKind::Upload;
+	} else if (name == u"upload_batch"_q) {
+		return JobKind::UploadBatch;
+	} else if (name == u"forward"_q) {
+		return JobKind::Forward;
+	} else if (name == u"forward_batch"_q) {
+		return JobKind::ForwardBatch;
+	} else if (name == u"export"_q) {
+		return JobKind::Export;
+	} else if (name == u"export_batch"_q) {
+		return JobKind::ExportBatch;
+	} else if (name == u"enhanced_forward"_q) {
+		return JobKind::EnhancedForward;
+	} else if (name == u"scan"_q) {
+		return JobKind::Scan;
+	}
+	return std::nullopt;
+}
+
+[[nodiscard]] std::optional<JobRecord> ReadJob(const QSqlQuery &q) {
+	const auto kind = JobKindFromName(q.value(1).toString());
+	if (!kind) {
+		return std::nullopt;
+	}
+	auto result = JobRecord();
+	result.jobId = q.value(0).toULongLong();
+	result.kind = *kind;
+	result.sessionId = q.value(2).toULongLong();
+	result.scopeId = q.value(3).toULongLong();
+	result.options = q.value(4).toByteArray();
+	result.state = JobState(q.value(5).toInt());
+	result.total = q.value(6).toInt();
+	result.done = q.value(7).toInt();
+	result.skipped = q.value(8).toInt();
+	result.createdAt = q.value(9).toLongLong();
+	result.updatedAt = q.value(10).toLongLong();
+	return result;
+}
+
+void BindJobItem(QSqlQuery &q, const JobItemRecord &item) {
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(item.jobId)));
+	q.bindValue(u":item_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(item.itemId)));
+	q.bindValue(u":media_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(item.mediaId)));
+	q.bindValue(u":is_photo"_q, item.isPhoto ? 1 : 0);
+	q.bindValue(u":hash_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(item.hashId)));
+	q.bindValue(u":state"_q, int(item.state));
+	q.bindValue(u":payload"_q, item.payload);
+	q.bindValue(u":error"_q, item.error);
+	q.bindValue(u":retry"_q, item.retry);
+}
+
+[[nodiscard]] JobItemRecord ReadJobItem(const QSqlQuery &q) {
+	auto result = JobItemRecord();
+	result.jobId = q.value(0).toULongLong();
+	result.itemId = q.value(1).toULongLong();
+	result.mediaId = q.value(2).toULongLong();
+	result.isPhoto = (q.value(3).toInt() != 0);
+	result.hashId = q.value(4).toULongLong();
+	result.state = JobState(q.value(5).toInt());
+	result.payload = q.value(6).toByteArray();
+	result.error = q.value(7).toString();
+	result.retry = q.value(8).toInt();
+	return result;
+}
+
+constexpr auto kExResumeSerializationVersion = quint32(1);
+
+[[nodiscard]] uint64 ExResumeScope(
+		PeerId peerId,
+		int mode,
+		const QString &folder) {
+	auto result = uint64(14695981039346656037ULL);
+	const auto mix = [&](uint64 value) {
+		for (auto i = 0; i != 8; ++i) {
+			result ^= (value >> (i * 8)) & 0xFF;
+			result *= 1099511628211ULL;
+		}
+	};
+	mix(peerId.value);
+	mix(uint64(mode));
+	const auto bytes = folder.toUtf8();
+	mix(uint64(bytes.size()));
+	for (const auto byte : bytes) {
+		result ^= quint8(byte);
+		result *= 1099511628211ULL;
+	}
+	return result & 0x7FFFFFFFFFFFFFFFULL;
+}
+
+[[nodiscard]] JobState ExportJobState(const QString &state) {
+	if (state == u"done"_q) {
+		return JobState::Done;
+	} else if (state == u"run"_q) {
+		return JobState::InFlight;
+	}
+	return JobState::Pending;
+}
+
+[[nodiscard]] QByteArray SerializeDlResumePayload(
+		const DlResumeRecord &record) {
+	auto result = QByteArray();
+	auto stream = QDataStream(&result, QIODevice::WriteOnly);
+	stream << record.path << qint64(record.fileSize);
+	return result;
+}
+
+[[nodiscard]] bool ReadDlResumePayload(
+		const QByteArray &data,
+		DlResumeRecord &record) {
+	auto stream = QDataStream(data);
+	auto fileSize = qint64();
+	stream >> record.path >> fileSize;
+	record.fileSize = fileSize;
+	return stream.status() == QDataStream::Ok;
+}
+
+[[nodiscard]] QByteArray SerializeExResume(const ExResumeRecord &record) {
+	auto result = QByteArray();
+	auto stream = QDataStream(&result, QIODevice::WriteOnly);
+	stream << kExResumeSerializationVersion;
+	stream << quint64(record.sessionId);
+	stream << quint64(record.peerId.value);
+	stream << qint32(record.mode);
+	stream << qint32(record.total);
+	stream << qint32(record.msgsDone);
+	stream << qint32(record.skipped);
+	stream << qint64(record.lastId.bare);
+	stream << record.exportFolder;
+	stream << record.state;
+	stream << quint32(record.media);
+	stream << qint64(record.size);
+	stream << qint32(record.exportFormat);
+	stream << qint32(record.fromDate);
+	stream << qint32(record.tillDate);
+	stream << qint32(record.htmlIndex);
+	stream << record.repliedIndex;
+	stream << qint32(record.dateIndex);
+	stream << record.stats;
+	stream << quint64(record.docId);
+	stream << record.pausedFile;
+	stream << qint64(record.pausedBytes);
+	stream << record.lastMsg;
+	stream << qint32(record.splitIndex);
+	stream << qint32(record.selectedDone);
+	stream << qint32(record.filterIndex);
+	stream << quint8(record.useIdRange ? 1 : 0);
+	stream << quint64(record.fromId);
+	stream << quint64(record.tillId);
+	stream << qint64(record.updateAnchor.bare);
+	stream << qint64(record.coveredTill.bare);
+	stream << qint32(record.coveredTillDate);
+	stream << quint8(record.migrated ? 1 : 0);
+	stream << qint32(record.failedCount);
+	stream << quint64(record.resumePeerId.value);
+	stream << quint32(record.dialogIds.size());
+	for (const auto peerId : record.dialogIds) {
+		stream << quint64(peerId.value);
+	}
+	stream << qint32(record.chatTypes);
+	stream << qint32(record.fullChats);
+	stream << qint32(record.extFilterMode);
+	stream << record.extFilter;
+	return result;
+}
+
+[[nodiscard]] std::optional<ExResumeRecord> DeserializeExResume(
+		const QByteArray &data) {
+	auto stream = QDataStream(data);
+	auto version = quint32();
+	stream >> version;
+	if (version != kExResumeSerializationVersion) {
+		return std::nullopt;
+	}
+	auto result = ExResumeRecord();
+	const auto readUInt64 = [&](uint64 &value) {
+		auto temp = quint64();
+		stream >> temp;
+		value = temp;
+	};
+	const auto readInt64 = [&](int64 &value) {
+		auto temp = qint64();
+		stream >> temp;
+		value = temp;
+	};
+	const auto readInt = [&](int &value) {
+		auto temp = qint32();
+		stream >> temp;
+		value = temp;
+	};
+	const auto readBool = [&](bool &value) {
+		auto temp = quint8();
+		stream >> temp;
+		value = (temp != 0);
+	};
+	readUInt64(result.sessionId);
+	auto peerId = quint64();
+	stream >> peerId;
+	result.peerId = PeerId(peerId);
+	readInt(result.mode);
+	readInt(result.total);
+	readInt(result.msgsDone);
+	readInt(result.skipped);
+	readInt64(result.lastId.bare);
+	stream >> result.exportFolder;
+	stream >> result.state;
+	auto media = quint32();
+	stream >> media;
+	result.media = media;
+	readInt64(result.size);
+	readInt(result.exportFormat);
+	readInt(result.fromDate);
+	readInt(result.tillDate);
+	readInt(result.htmlIndex);
+	stream >> result.repliedIndex;
+	readInt(result.dateIndex);
+	stream >> result.stats;
+	readUInt64(result.docId);
+	stream >> result.pausedFile;
+	readInt64(result.pausedBytes);
+	stream >> result.lastMsg;
+	readInt(result.splitIndex);
+	readInt(result.selectedDone);
+	readInt(result.filterIndex);
+	readBool(result.useIdRange);
+	readUInt64(result.fromId);
+	readUInt64(result.tillId);
+	readInt64(result.updateAnchor.bare);
+	readInt64(result.coveredTill.bare);
+	readInt(result.coveredTillDate);
+	readBool(result.migrated);
+	readInt(result.failedCount);
+	readUInt64(result.resumePeerId.value);
+	auto dialogCount = quint32();
+	stream >> dialogCount;
+	result.dialogIds.reserve(dialogCount);
+	for (auto i = quint32(0); i != dialogCount; ++i) {
+		auto value = quint64();
+		stream >> value;
+		result.dialogIds.push_back(PeerId(value));
+	}
+	readInt(result.chatTypes);
+	readInt(result.fullChats);
+	readInt(result.extFilterMode);
+	stream >> result.extFilter;
+	if (stream.status() != QDataStream::Ok) {
+		return std::nullopt;
+	}
+	return result;
+}
+
+struct EfJobOptions {
+	QString jobId;
+	PeerId destPeerId;
+	PeerId srcPeerId;
+	bool paused = false;
+};
+
+constexpr auto kUlResumeSerializationVersion = quint32(1);
+constexpr auto kNfResumeSerializationVersion = quint32(1);
+constexpr auto kEfJobSerializationVersion = quint32(1);
+constexpr auto kEfItemSerializationVersion = quint32(1);
+
+[[nodiscard]] uint64 StableStringHash(const QString &value) {
+	auto result = uint64(14695981039346656037ULL);
+	const auto bytes = value.toUtf8();
+	for (const auto byte : bytes) {
+		result ^= quint8(byte);
+		result *= 1099511628211ULL;
+	}
+	return result;
+}
+
+[[nodiscard]] uint64 UlResumeItemId(const QString &path) {
+	return StableStringHash(path) & 0x7FFFFFFFFFFFFFFFULL;
+}
+
+[[nodiscard]] QByteArray SerializeUlResume(const UlResumeRecord &record) {
+	auto result = QByteArray();
+	auto stream = QDataStream(&result, QIODevice::WriteOnly);
+	stream << kUlResumeSerializationVersion;
+	stream << quint64(record.sessionId);
+	stream << quint64(record.peerId);
+	stream << record.path;
+	stream << qint32(record.partsSent);
+	stream << qint64(record.sentSize);
+	stream << quint64(record.fileId);
+	stream << qint64(record.topicRootId);
+	return result;
+}
+
+[[nodiscard]] std::optional<UlResumeRecord> DeserializeUlResume(
+		const QByteArray &data) {
+	auto stream = QDataStream(data);
+	auto version = quint32();
+	stream >> version;
+	if (version != kUlResumeSerializationVersion) {
+		return std::nullopt;
+	}
+	auto result = UlResumeRecord();
+	auto sessionId = quint64();
+	auto peerId = quint64();
+	auto partsSent = qint32();
+	auto sentSize = qint64();
+	auto fileId = quint64();
+	auto topicRootId = qint64();
+	stream >> sessionId >> peerId >> result.path >> partsSent
+		>> sentSize >> fileId >> topicRootId;
+	if (stream.status() != QDataStream::Ok) {
+		return std::nullopt;
+	}
+	result.sessionId = sessionId;
+	result.peerId = peerId;
+	result.partsSent = partsSent;
+	result.sentSize = sentSize;
+	result.fileId = fileId;
+	result.topicRootId = topicRootId;
+	return result;
+}
+
+[[nodiscard]] QByteArray SerializeNfResume(const NfResumeRecord &record) {
+	auto result = QByteArray();
+	auto stream = QDataStream(&result, QIODevice::WriteOnly);
+	stream << kNfResumeSerializationVersion;
+	stream << quint64(record.sessionId);
+	stream << quint64(record.destPeerId.value);
+	stream << quint64(record.srcPeerId.value);
+	stream << qint32(record.total);
+	stream << qint32(record.done);
+	stream << qint32(record.skipped);
+	stream << qint64(record.lastMsgId.bare);
+	stream << record.state;
+	stream << qint32(record.forwardOptions);
+	stream << qint32(record.groupOptions);
+	stream << quint32(record.remaining.size());
+	for (const auto msgId : record.remaining) {
+		stream << qint64(msgId.bare);
+	}
+	return result;
+}
+
+[[nodiscard]] std::optional<NfResumeRecord> DeserializeNfResume(
+		const QByteArray &data) {
+	auto stream = QDataStream(data);
+	auto version = quint32();
+	stream >> version;
+	if (version != kNfResumeSerializationVersion) {
+		return std::nullopt;
+	}
+	auto result = NfResumeRecord();
+	auto sessionId = quint64();
+	auto destPeerId = quint64();
+	auto srcPeerId = quint64();
+	auto total = qint32();
+	auto done = qint32();
+	auto skipped = qint32();
+	auto lastMsgId = qint64();
+	auto forwardOptions = qint32();
+	auto groupOptions = qint32();
+	auto count = quint32();
+	stream >> sessionId >> destPeerId >> srcPeerId
+		>> total >> done >> skipped >> lastMsgId
+		>> result.state >> forwardOptions >> groupOptions >> count;
+	if (stream.status() != QDataStream::Ok) {
+		return std::nullopt;
+	}
+	result.sessionId = sessionId;
+	result.destPeerId = PeerId(destPeerId);
+	result.srcPeerId = PeerId(srcPeerId);
+	result.total = total;
+	result.done = done;
+	result.skipped = skipped;
+	result.lastMsgId = MsgId(lastMsgId);
+	result.forwardOptions = forwardOptions;
+	result.groupOptions = groupOptions;
+	result.remaining.reserve(count);
+	for (auto i = quint32(0); i != count; ++i) {
+		auto value = qint64();
+		stream >> value;
+		if (stream.status() != QDataStream::Ok) {
+			return std::nullopt;
+		}
+		result.remaining.push_back(MsgId(value));
+	}
+	return result;
+}
+
+[[nodiscard]] QByteArray SerializeEfJobOptions(const EfJobOptions &options) {
+	auto result = QByteArray();
+	auto stream = QDataStream(&result, QIODevice::WriteOnly);
+	stream << kEfJobSerializationVersion;
+	stream << options.jobId;
+	stream << quint64(options.destPeerId.value);
+	stream << quint64(options.srcPeerId.value);
+	stream << quint8(options.paused ? 1 : 0);
+	return result;
+}
+
+[[nodiscard]] std::optional<EfJobOptions> DeserializeEfJobOptions(
+		const QByteArray &data) {
+	auto stream = QDataStream(data);
+	auto version = quint32();
+	stream >> version;
+	if (version != kEfJobSerializationVersion) {
+		return std::nullopt;
+	}
+	auto result = EfJobOptions();
+	auto destPeerId = quint64();
+	auto srcPeerId = quint64();
+	auto paused = quint8();
+	stream >> result.jobId >> destPeerId >> srcPeerId >> paused;
+	if (stream.status() != QDataStream::Ok) {
+		return std::nullopt;
+	}
+	result.destPeerId = PeerId(destPeerId);
+	result.srcPeerId = PeerId(srcPeerId);
+	result.paused = (paused != 0);
+	return result;
+}
+
+[[nodiscard]] QByteArray SerializeEfResumeItem(const EfResumeItem &item) {
+	auto result = QByteArray();
+	auto stream = QDataStream(&result, QIODevice::WriteOnly);
+	stream << kEfItemSerializationVersion;
+	stream << quint64(item.sessionId);
+	stream << item.jobId;
+	stream << qint32(item.itemIndex);
+	stream << quint64(item.peerId.value);
+	stream << quint64(item.sourceId.peer.value);
+	stream << qint64(item.sourceId.msg.bare);
+	stream << item.state;
+	stream << item.localPath;
+	stream << quint64(item.fileId);
+	stream << qint32(item.uploadedParts);
+	stream << item.fileHash;
+	stream << quint64(item.mediaId);
+	stream << qint64(item.fileSize);
+	stream << quint8(item.paused ? 1 : 0);
+	return result;
+}
+
+[[nodiscard]] std::optional<EfResumeItem> DeserializeEfResumeItem(
+		const QByteArray &data) {
+	auto stream = QDataStream(data);
+	auto version = quint32();
+	stream >> version;
+	if (version != kEfItemSerializationVersion) {
+		return std::nullopt;
+	}
+	auto result = EfResumeItem();
+	auto sessionId = quint64();
+	auto itemIndex = qint32();
+	auto peerId = quint64();
+	auto sourcePeerId = quint64();
+	auto sourceMsgId = qint64();
+	auto fileId = quint64();
+	auto uploadedParts = qint32();
+	auto mediaId = quint64();
+	auto fileSize = qint64();
+	auto paused = quint8();
+	stream >> sessionId >> result.jobId >> itemIndex
+		>> peerId >> sourcePeerId >> sourceMsgId
+		>> result.state >> result.localPath
+		>> fileId >> uploadedParts >> result.fileHash
+		>> mediaId >> fileSize >> paused;
+	if (stream.status() != QDataStream::Ok) {
+		return std::nullopt;
+	}
+	result.sessionId = sessionId;
+	result.itemIndex = itemIndex;
+	result.peerId = PeerId(peerId);
+	result.sourceId = FullMsgId(PeerId(sourcePeerId), MsgId(sourceMsgId));
+	result.fileId = fileId;
+	result.uploadedParts = uploadedParts;
+	result.mediaId = mediaId;
+	result.fileSize = fileSize;
+	result.paused = (paused != 0);
+	return result;
+}
+
+[[nodiscard]] JobState ForwardJobState(const QString &state) {
+	return (state == u"paused"_q)
+		? JobState::Pending
+		: JobState::InFlight;
+}
+
+
 } // namespace
 
 class DedupDb::Impl {
@@ -99,24 +1419,143 @@ public:
 	~Impl();
 
 	[[nodiscard]] bool isOpen() const;
+	void ensureTableLoaded(Table table) const;
+	void acquireTable(Table table);
+	void releaseTable(Table table);
+	void invalidateTable(Table table);
+	void acquireChatTable(PeerId peerId, bool allPeers);
+	void releaseChatTable(PeerId peerId, bool allPeers);
+	void loadChatTable(PeerId peerId, bool allPeers);
+	[[nodiscard]] bool chatTableContainsDocId(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto,
+		bool allPeers) const;
+	[[nodiscard]] bool chatTableContainsHash(
+		PeerId peerId,
+		const QByteArray &hash,
+		bool allPeers) const;
+	void clearChatTable();
+	void addChatTableUnique(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto,
+		const QByteArray &hash);
+	void removeChatTableUnique(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto,
+		const QByteArray &hash);
+	void invalidateChatTable(PeerId peerId);
+	void invalidateAllPeersChatTable();
+	[[nodiscard]] uint64 resolveHashId(const QByteArray &hash);
+	[[nodiscard]] uint64 findHashId(const QByteArray &hash) const;
+	[[nodiscard]] QByteArray hashForHashId(uint64 hashId) const;
+	[[nodiscard]] std::optional<HashOwner> hashOwner(uint64 hashId) const;
+	void setHashOwner(uint64 hashId, PeerId peerId, MsgId msgId);
+	void clearHashOwner(uint64 hashId);
+	[[nodiscard]] std::optional<HashOwner> findHashOwnerReplacement(
+		uint64 hashId,
+		PeerId excludePeer,
+		MsgId excludeMsg) const;
+	[[nodiscard]] bool claimOwner(
+		uint64 hashId,
+		PeerId peerId,
+		MsgId msgId);
+	void setOwner(uint64 hashId, PeerId peerId, MsgId msgId);
+	void clearOwner(uint64 hashId);
+	[[nodiscard]] std::optional<HashOwner> findReplacementOwner(
+		uint64 hashId,
+		PeerId excludePeer,
+		MsgId excludeMsg) const;
+	[[nodiscard]] bool promoteOwner(
+		uint64 hashId,
+		PeerId peerId,
+		MsgId msgId);
+	[[nodiscard]] std::optional<HashOwner> refreshOwner(
+		uint64 hashId,
+		PeerId excludePeer,
+		MsgId excludeMsg);
+	[[nodiscard]] bool promoteOwnerLocked(
+		uint64 hashId,
+		PeerId peerId,
+		MsgId msgId);
+	[[nodiscard]] std::optional<ChatScanOwnerDecision>
+	chatScanApplyHashOwner(
+		PeerId peerId,
+		MsgId msgId,
+		uint64 mediaId,
+		bool isPhoto,
+		const QByteArray &hash,
+		bool mediaDuplicate,
+		const QString &filename);
+	[[nodiscard]] bool recordUploadDestination(
+		const QByteArray &hash,
+		uint64 mediaId,
+		bool isPhoto,
+		PeerId peerId,
+		MsgId msgId,
+		bool tracked);
+	[[nodiscard]] std::vector<ChatScanOwnerChange> removeChatScan(
+		PeerId peerId);
+	[[nodiscard]] uint64 createJob(const JobRecord &job);
+	[[nodiscard]] std::optional<JobRecord> job(uint64 jobId) const;
+	[[nodiscard]] std::optional<JobRecord> findJob(
+		JobKind kind,
+		uint64 scopeId,
+		bool activeOnly) const;
+	void setJobState(uint64 jobId, JobState state);
+	void setJobProgress(
+		uint64 jobId,
+		int total,
+		int done,
+		int skipped);
+	void pauseJob(uint64 jobId);
+	void finishJob(uint64 jobId);
+	void cancelJob(uint64 jobId);
+	void finishScanJob(uint64 jobId);
+	void removeJobItems(uint64 jobId);
+	void writeJobItems(const std::vector<JobItemRecord> &items);
+	void writeJobItem(const JobItemRecord &item);
+	[[nodiscard]] std::vector<JobItemRecord> jobItems(uint64 jobId) const;
+	[[nodiscard]] std::vector<JobItemRecord> jobResumeItems(
+		uint64 jobId) const;
+	void setJobItemState(
+		uint64 jobId,
+		uint64 itemId,
+		JobState state,
+		const QString &error,
+		int retry);
+	[[nodiscard]] bool jobContainsMedia(
+		uint64 jobId,
+		uint64 mediaId,
+		bool isPhoto) const;
+	[[nodiscard]] bool jobContainsHash(
+		uint64 jobId,
+		uint64 hashId) const;
 	void insert(Table table, const DedupRecord &record);
-	void removeByDocumentId(
-		Table table,
-		uint64 documentId,
-		const QString &status);
+	void insertLoaded(Table table, const DedupRecord &record);
+	void insertDeferred(Table table, const DedupRecord &record);
+	void forgetLoadedDoc(Table table, uint64 documentId, bool isPhoto);
 	[[nodiscard]] bool containsDocId(
 		Table table,
-		uint64 documentId) const;
+		uint64 documentId,
+		bool isPhoto) const;
 	[[nodiscard]] bool containsDocIdInDb(
 		Table table,
-		uint64 documentId) const;
+		uint64 documentId,
+		bool isPhoto) const;
 	[[nodiscard]] bool containsHash(
 		Table table,
 		const QByteArray &hash) const;
 	[[nodiscard]] bool containsFinishedHash(
 		Table table,
 		const QByteArray &hash) const;
-	void rekey(Table table, uint64 oldDocumentId, uint64 newDocumentId);
+	void rekey(
+		Table table,
+		uint64 oldDocumentId,
+		uint64 newDocumentId,
+		bool isPhoto);
 	void updateDedupStatus(
 		Table table,
 		const QByteArray &hash,
@@ -124,18 +1563,30 @@ public:
 	void removeUnfinishedByHash(Table table, const QByteArray &hash);
 	[[nodiscard]] QByteArray hashForDocId(
 		Table table,
-		uint64 documentId) const;
+		uint64 documentId,
+		bool isPhoto) const;
 	[[nodiscard]] uint64 seekDocumentId(
 		Table table,
 		const QByteArray &hash,
-		uint64 excludeDocumentId) const;
-	void addPending(Table table, uint64 documentId, const QByteArray &hash);
-	void removePending(Table table, uint64 documentId);
+		uint64 excludeDocumentId,
+		bool excludeIsPhoto) const;
+	void addPending(
+		Table table,
+		uint64 documentId,
+		const QByteArray &hash,
+		bool isPhoto);
+	void removePending(Table table, uint64 documentId, bool isPhoto);
 	[[nodiscard]] std::vector<DedupRecord> loadAll(Table table) const;
+	void refreshHashRefs(uint64 hashId);
+	void refreshMediaRefs(uint64 mediaId, bool isPhoto);
+	void cleanupMediaRefs(uint64 mediaId, bool isPhoto);
+	void cleanupHashRefs(uint64 hashId);
+	void refreshChatScanRefs(
+		const std::set<uint64> &hashIds,
+		const std::set<std::pair<uint64, bool>> &media);
 
 	void insertDlResume(const DlResumeRecord &record);
 	void removeDlResume(uint64 sessionId, uint64 peerId, int64 msgId);
-	void clearDlResume();
 	[[nodiscard]] std::vector<DlResumeRecord> loadAllDlResume() const;
 
 	void insertUlResume(const UlResumeRecord &record);
@@ -188,34 +1639,28 @@ public:
 		uint64 sessionId,
 		PeerId peerId,
 		uint64 documentId,
+		bool isPhoto,
 		const QByteArray &hash);
 	[[nodiscard]] bool containsExTmpDocId(
 		uint64 sessionId,
 		PeerId peerId,
-		uint64 documentId) const;
+		uint64 documentId,
+		bool isPhoto) const;
 	[[nodiscard]] bool containsExTmpHash(
 		uint64 sessionId,
 		PeerId peerId,
 		const QByteArray &hash) const;
-	[[nodiscard]] QByteArray hashForExTmpDocId(
-		uint64 sessionId,
-		PeerId peerId,
-		uint64 documentId) const;
 	void clearExTmpRun(uint64 sessionId, PeerId peerId);
-	void clearExTmpSession(uint64 sessionId);
 	void flushExPending();
 
-	void writeChatScanRow(const ChatScanRow &row);
 	[[nodiscard]] std::vector<ChatScanRow> readChatScan(
 		PeerId peerId) const;
+	void readChatScanAsync(
+		PeerId peerId,
+		Fn<void(std::vector<ChatScanRow>, bool)> done);
 	[[nodiscard]] bool isChatScanned(PeerId peerId) const;
 	void markChatDeleteFinished(PeerId peerId);
-	void writeChatScanDup(const ChatScanDup &dup);
-	[[nodiscard]] std::vector<ChatScanDup> readChatScanDups(
-		PeerId peerId,
-		int category,
-		int limit,
-		int offset) const;
+	void requestIncrementalVacuum();
 	[[nodiscard]] std::vector<ChatScanDup> readChatScanDupsBefore(
 		PeerId peerId,
 		int category,
@@ -226,8 +1671,14 @@ public:
 	[[nodiscard]] std::vector<ChatScanCategoryTotals> chatScanCategoryTotals(
 		PeerId peerId) const;
 	[[nodiscard]] qint64 chatScanItemCount(PeerId peerId) const;
+	[[nodiscard]] bool chatScanCategoryHasItems(
+		PeerId peerId,
+		int category) const;
 	[[nodiscard]] MsgId chatScanMaxMsgId(PeerId peerId) const;
 	[[nodiscard]] bool chatScanContainsHash(
+		PeerId peerId,
+		const QByteArray &hash) const;
+	[[nodiscard]] MsgId chatScanUniqueHash(
 		PeerId peerId,
 		const QByteArray &hash) const;
 	[[nodiscard]] std::vector<ChatScanItem> chatScanUnresolvedItems(
@@ -237,10 +1688,6 @@ public:
 		MsgId above,
 		int limit) const;
 	[[nodiscard]] std::vector<ChatScanItem> chatScanItemsWindow(
-		PeerId peerId,
-		MsgId above,
-		int limit) const;
-	[[nodiscard]] std::vector<ChatScanItem> chatScanHashedItemsWindow(
 		PeerId peerId,
 		MsgId above,
 		int limit) const;
@@ -255,12 +1702,13 @@ public:
 	void chatScanReleaseItem(
 		PeerId peerId,
 		uint64 mediaId,
+		bool isPhoto,
 		qint64 retryAt);
 	void chatScanReleaseLeases(PeerId peerId);
 	[[nodiscard]] int chatScanCommitHashes(
 		PeerId peerId,
-		const std::vector<std::pair<uint64, QByteArray>> &hashes);
-	void chatScanFailItem(PeerId peerId, uint64 mediaId);
+		const std::vector<ChatScanHash> &hashes);
+	void chatScanFailItem(PeerId peerId, uint64 mediaId, bool isPhoto);
 	[[nodiscard]] int chatScanRetryFailed(PeerId peerId);
 	[[nodiscard]] int chatScanLeasedCount(PeerId peerId) const;
 	[[nodiscard]] int chatScanFailedCount(PeerId peerId) const;
@@ -268,63 +1716,104 @@ public:
 		PeerId peerId,
 		uint64 mediaId,
 		bool isPhoto) const;
-	[[nodiscard]] std::vector<ChatScanProgressRow> readChatScanProgress(
-		PeerId peerId) const;
-	void updateChatScanProgress(
+	[[nodiscard]] QByteArray chatScanHashForMediaOther(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto) const;
+	void recomputeChatScanProgressAsync(
+		PeerId peerId,
+		Fn<void(std::vector<ChatScanProgressRow>, bool)> done);
+	void chatScanUniqueHashesAsync(
+		PeerId peerId,
+		Fn<void(std::vector<std::pair<QByteArray, MsgId>>, bool)> done);
+	void chatScanItemIdsAsync(
 		PeerId peerId,
 		int category,
-		int64 itemCount,
-		int64 uniqueCount,
-		int64 uniqueBytes,
-		int64 dupCount,
-		int64 dupBytes);
-	[[nodiscard]] std::vector<ChatScanProgressRow> recomputeChatScanProgress(
-		PeerId peerId);
+		Fn<void(std::vector<MsgId>, bool)> done);
+	void chatScanMediaHashesAsync(
+		PeerId peerId,
+		bool includeOther,
+		Fn<void(std::vector<ChatScanMediaHash>, bool)> done);
 	[[nodiscard]] std::vector<ChatScanItem> chatScanDistinctItems(
 		PeerId peerId) const;
-	void writeGlobal(const QString &key, const QString &value);
-	[[nodiscard]] QString readGlobal(const QString &key) const;
-	void removeChatScanDup(PeerId peerId, MsgId msgId);
 	void clearChatScan(PeerId peerId);
+	void clearChatScanAsync(
+		PeerId peerId,
+		Fn<void(bool, std::vector<ChatScanOwnerChange>)> done);
 	void writeScanCursor(const ChatScanState &state);
 	[[nodiscard]] std::optional<ChatScanState> readScanCursor(
 		PeerId peerId) const;
+	void finishChatScan(
+		PeerId peerId,
+		MsgId scannedUpto,
+		int mode,
+		bool deleteFinished,
+		int64 elapsedMs);
+	[[nodiscard]] MsgId chatScanScannedUpto(PeerId peerId) const;
+	[[nodiscard]] int chatScanMode(PeerId peerId) const;
+	void writeChatScanMode(PeerId peerId, int mode);
+	[[nodiscard]] std::optional<uint64> findScanJobId(PeerId peerId) const;
+	[[nodiscard]] ScanJobOptions readScanOptions(PeerId peerId) const;
+	void writeScanOptions(PeerId peerId, const ScanJobOptions &options);
 	void writeChatScanItems(const std::vector<ChatScanItem> &items);
 	[[nodiscard]] std::vector<ChatScanItem> readChatScanItems(
 		PeerId peerId) const;
 	int updateChatScanItemHash(
 		PeerId peerId,
+		MsgId msgId,
 		uint64 mediaId,
+		bool isPhoto,
 		const QByteArray &hash);
 	[[nodiscard]] std::vector<PeerId> scannedPeerIds() const;
-	[[nodiscard]] std::optional<ChatScanDup> takeChatScanDup(
-		PeerId peerId,
-		MsgId msgId);
 	void removeChatScanItem(PeerId peerId, MsgId msgId);
+	void markChatScanItemDup(
+		PeerId peerId,
+		MsgId msgId,
+		bool isDup,
+		const QString &filename);
+	void saveChatScanUndo(PeerId peerId, MsgId msgId);
+	[[nodiscard]] bool beginChatScanSession(
+		PeerId peerId,
+		uint64 sessionId,
+		MsgId baseMark);
+	[[nodiscard]] bool cancelChatScanSession(PeerId peerId);
+	void finishChatScanSession(PeerId peerId);
+	[[nodiscard]] std::optional<std::pair<uint64, MsgId>> chatScanSession(
+		PeerId peerId) const;
+	[[nodiscard]] std::vector<MsgId> chatScanSessionItemIds(
+		PeerId peerId,
+		int category) const;
 	[[nodiscard]] bool hasChatScanItem(PeerId peerId, MsgId msgId) const;
 	[[nodiscard]] std::optional<ChatScanItem> chatScanItem(
 		PeerId peerId,
 		MsgId msgId) const;
-	void clearChatScanDups(PeerId peerId);
+	[[nodiscard]] std::optional<ChatScanItem> chatScanDuplicateSuccessor(
+		PeerId peerId,
+		MsgId deletedId,
+		uint64 mediaId,
+		bool isPhoto,
+		const QByteArray &hash) const;
 
 	enum class TmpTable {
 		Dl,
 		Ul,
 		Fw,
 	};
-	[[nodiscard]] static QString TmpTableName(TmpTable table);
+	[[nodiscard]] static JobKind TmpJobKind(TmpTable table);
 
 	void insertTmp(
 		TmpTable table,
 		uint64 sessionId,
 		uint64 scopeId,
 		uint64 documentId,
+		bool isPhoto,
 		const QByteArray &hash);
 	[[nodiscard]] bool containsTmpDocId(
 		TmpTable table,
 		uint64 sessionId,
 		uint64 scopeId,
-		uint64 documentId) const;
+		uint64 documentId,
+		bool isPhoto) const;
 	[[nodiscard]] bool containsTmpHash(
 		TmpTable table,
 		uint64 sessionId,
@@ -334,12 +1823,14 @@ public:
 		TmpTable table,
 		uint64 sessionId,
 		uint64 scopeId,
-		uint64 documentId) const;
+		uint64 documentId,
+		bool isPhoto) const;
 	void removeTmpDoc(
 		TmpTable table,
 		uint64 sessionId,
 		uint64 scopeId,
-		uint64 documentId);
+		uint64 documentId,
+		bool isPhoto);
 	void clearTmpRun(TmpTable table, uint64 sessionId, uint64 scopeId);
 	void flushTmpPending();
 
@@ -357,13 +1848,16 @@ private:
 	};
 
 	struct ExTmpState {
-		QHash<uint64, QByteArray> docToHash;
-		QHash<QByteArray, QSet<uint64>> hashToDoc;
+		QHash<uint64, QByteArray> docToHash[2];
+		QHash<QByteArray, QSet<uint64>> hashToDoc[2];
 		struct Pending {
 			uint64 docId = 0;
+			bool isPhoto = false;
 			QByteArray hash;
 		};
 		std::vector<Pending> pending;
+		uint64 jobId = 0;
+		uint64 nextItemId = 1;
 		bool loaded = false;
 	};
 
@@ -373,13 +1867,66 @@ private:
 		uint64 sessionId,
 		PeerId peerId) const;
 	void ensureExTmpLoaded(uint64 sessionId, PeerId peerId) const;
+	void flushExTmpState(const ExTmpKey &key, ExTmpState &state);
 
 	bool createTables();
 
+	struct ChatCacheKey {
+		PeerId peerId;
+		bool allPeers = false;
+		inline bool operator<(const ChatCacheKey &other) const {
+			return std::tie(peerId.value, allPeers)
+				< std::tie(other.peerId.value, other.allPeers);
+		}
+	};
+
+	struct ChatCacheState {
+		QHash<uint64, QByteArray> photoHashes;
+		QHash<uint64, QByteArray> docHashes;
+		QSet<QByteArray> hashes;
+		int users = 0;
+		bool loaded = false;
+	};
+
+	void removeJob(uint64 jobId);
+	[[nodiscard]] std::vector<JobItemRecord> readJobItems(
+		uint64 jobId,
+		bool resumeOnly) const;
+	[[nodiscard]] uint64 findJobId(
+		JobKind kind,
+		uint64 sessionId,
+		uint64 scopeId) const;
+	[[nodiscard]] std::vector<std::pair<uint64, ExResumeRecord>>
+	loadExportJobs(uint64 sessionId) const;
+	[[nodiscard]] uint64 findExportJob(
+		uint64 sessionId,
+		const ExResumeRecord &record) const;
+	void updateExportJob(uint64 jobId, const ExResumeRecord &record);
+	void purgeOrphanExportBatchJobs();
+	void purgeOrphanBatchJobs(
+		JobKind batchKind,
+		const std::vector<JobKind> &ownerKinds);
+
+	[[nodiscard]] std::optional<std::pair<uint64, EfJobOptions>> findEfJob(
+		uint64 sessionId,
+		PeerId destPeerId,
+		const QString &jobId) const;
+	[[nodiscard]] std::vector<uint64> findEfJobIds(
+		const QString &jobId) const;
+	[[nodiscard]] std::vector<EfResumeItem> readEfResumeItems(
+		uint64 jobId,
+		const EfJobOptions &options) const;
+	void updateEfJobOptions(uint64 jobId, const EfJobOptions &options);
+	void removeEfJobIfEmpty(uint64 jobId);
+
 	QString _connectionName;
+	QString _path;
+	std::shared_ptr<std::atomic_bool> _vacuumCancel;
 	QSqlDatabase _db;
 	bool _open = false;
+	int _transactionDepth = 0;
 	std::shared_ptr<SharedDownloads> _shared;
+	std::map<ChatCacheKey, ChatCacheState> _chatCaches;
 	mutable std::map<ExTmpKey, ExTmpState> _exTmpStates;
 	int _exPendingWrites = 0;
 
@@ -394,13 +1941,16 @@ private:
 	};
 
 	struct TmpState {
-		QHash<uint64, QByteArray> docToHash;
-		QHash<QByteArray, QSet<uint64>> hashToDoc;
+		QHash<uint64, QByteArray> docToHash[2];
+		QHash<QByteArray, QSet<uint64>> hashToDoc[2];
 		struct Pending {
 			uint64 docId = 0;
+			bool isPhoto = false;
 			QByteArray hash;
 		};
 		std::vector<Pending> pending;
+		uint64 jobId = 0;
+		uint64 nextItemId = 1;
 		bool loaded = false;
 	};
 
@@ -416,6 +1966,7 @@ private:
 		TmpTable table,
 		uint64 sessionId,
 		uint64 scopeId) const;
+	void flushTmpState(const TmpKey &key, TmpState &state);
 
 	mutable std::map<TmpKey, TmpState> _tmpStates;
 	int _tmpPendingWrites = 0;
@@ -423,6 +1974,7 @@ private:
 
 DedupDb::Impl::Impl(const QString &path, bool purgePending)
 : _connectionName(QUuid::createUuid().toString())
+, _path(path)
 , _shared(SharedDownloadsForPath(path)) {
 	_db = QSqlDatabase::addDatabase(u"QSQLITE"_q, _connectionName);
 	_db.setDatabaseName(path);
@@ -434,6 +1986,7 @@ DedupDb::Impl::Impl(const QString &path, bool purgePending)
 		return;
 	}
 	QSqlQuery pragma(_db);
+	pragma.exec(u"PRAGMA auto_vacuum=INCREMENTAL"_q);
 	pragma.exec(u"PRAGMA journal_mode=WAL"_q);
 	pragma.exec(u"PRAGMA synchronous=NORMAL"_q);
 	pragma.exec(u"PRAGMA busy_timeout=5000"_q);
@@ -441,15 +1994,43 @@ DedupDb::Impl::Impl(const QString &path, bool purgePending)
 	if (_open && purgePending) {
 		// 'u' rows can only survive a crash; at startup nothing is in flight.
 		// Second connections must not purge another thread's rows.
+		purgeOrphanExportBatchJobs();
+		purgeOrphanBatchJobs(
+			JobKind::ForwardBatch,
+			{ JobKind::Forward, JobKind::EnhancedForward });
 		QSqlQuery cleanup(_db);
 		if (!cleanup.exec(u"DELETE FROM dedup_dl WHERE status = 'u'"_q)
 			|| !cleanup.exec(u"DELETE FROM dedup_ul WHERE status = 'u'"_q)
-		|| !cleanup.exec(u"DELETE FROM dl_tmp"_q)
-		|| !cleanup.exec(u"DELETE FROM ul_tmp"_q)
-		|| !cleanup.exec(u"DELETE FROM ex_tmp WHERE NOT EXISTS ("
-				"SELECT 1 FROM ex_resume "
-				"WHERE ex_resume.session_id = ex_tmp.session_id "
-				"AND ex_resume.peer_id = ex_tmp.peer_id)"_q)) {
+			|| !cleanup.exec(u"DELETE FROM job_items WHERE job_id IN ("
+				"SELECT job_id FROM jobs "
+				"WHERE kind = 'download_batch')"_q)
+			|| !cleanup.exec(u"DELETE FROM jobs "
+				"WHERE kind = 'download_batch'"_q)
+			|| !cleanup.exec(u"DELETE FROM job_items WHERE job_id IN ("
+				"SELECT job_id FROM jobs "
+				"WHERE kind = 'upload_batch')"_q)
+			|| !cleanup.exec(u"DELETE FROM jobs "
+				"WHERE kind = 'upload_batch'"_q)
+			|| !cleanup.exec(u"DELETE FROM media_refs WHERE id_refs = 0 "
+				"AND NOT EXISTS (SELECT 1 FROM dedup_ul "
+					"WHERE dedup_ul.doc_id = media_refs.media_id "
+					"AND dedup_ul.is_photo = media_refs.is_photo "
+					"AND dedup_ul.status = 'u') "
+				"AND NOT EXISTS (SELECT 1 FROM dedup_ul "
+					"WHERE dedup_ul.doc_id = media_refs.media_id "
+					"AND dedup_ul.is_photo = media_refs.is_photo "
+					"AND dedup_ul.status = 'f')"_q)
+			|| !cleanup.exec(u"DELETE FROM hashes WHERE "
+				"NOT EXISTS (SELECT 1 FROM chat_scan_items "
+					"WHERE chat_scan_items.hash_id = hashes.hash_id) "
+				"AND NOT EXISTS (SELECT 1 FROM dedup_ul "
+					"WHERE dedup_ul.hash_id = hashes.hash_id) "
+				"AND NOT EXISTS (SELECT 1 FROM dedup_dl "
+					"WHERE dedup_dl.hash_id = hashes.hash_id) "
+				"AND NOT EXISTS (SELECT 1 FROM media_refs "
+					"WHERE media_refs.hash_id = hashes.hash_id) "
+				"AND NOT EXISTS (SELECT 1 FROM job_items "
+					"WHERE job_items.hash_id = hashes.hash_id)"_q)) {
 			LOG(("DedupDb: Failed to purge stale pending rows: %1").arg(
 				cleanup.lastError().text()));
 		}
@@ -460,10 +2041,29 @@ DedupDb::Impl::Impl(const QString &path, bool purgePending)
 		_shared->state[0] = TableState();
 		_shared->state[1] = TableState();
 	}
+	if (_open) {
+		crl::async([path = _path] {
+			OptimizeDatabase(path);
+		});
+	}
 }
 
 DedupDb::Impl::~Impl() {
+	if (_vacuumCancel) {
+		_vacuumCancel->store(true);
+	}
 	if (_db.isOpen()) {
+		if (!gVacuuming.load()) {
+			QSqlQuery q(_db);
+			if (!q.exec(u"PRAGMA optimize"_q)) {
+				LOG(("DedupDb: Close optimize failed: %1").arg(
+					q.lastError().text()));
+			}
+			if (!q.exec(u"PRAGMA wal_checkpoint(TRUNCATE)"_q)) {
+				LOG(("DedupDb: Close checkpoint failed: %1").arg(
+					q.lastError().text()));
+			}
+		}
 		_db.close();
 	}
 	QSqlDatabase::removeDatabase(_connectionName);
@@ -491,25 +2091,33 @@ void DedupDb::Impl::ensureExTmpLoaded(
 		return;
 	}
 	s.loaded = true;
+	s.jobId = findJobId(
+		JobKind::ExportBatch,
+		sessionId,
+		peerId.value);
+	if (!s.jobId) {
+		return;
+	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT doc_id, hash FROM ex_tmp "
-		"WHERE session_id = :session_id AND peer_id = :peer_id"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
+	q.prepare(u"SELECT item_id, media_id, is_photo, hash_id "
+		"FROM job_items WHERE job_id = :job_id ORDER BY item_id"_q);
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(s.jobId)));
 	if (!q.exec()) {
 		LOG(("DedupDb: LoadExTmp failed: %1").arg(q.lastError().text()));
 		return;
 	}
 	while (q.next()) {
-		const auto docId = q.value(0).toULongLong();
-		const auto hash = q.value(1).toByteArray();
+		const auto itemId = q.value(0).toULongLong();
+		const auto docId = q.value(1).toULongLong();
+		const auto type = (q.value(2).toInt() != 0) ? 1 : 0;
+		const auto hash = hashForHashId(q.value(3).toULongLong());
+		s.nextItemId = std::max(s.nextItemId, itemId + 1);
 		if (!docId || hash.isEmpty()) {
 			continue;
 		}
-		s.docToHash[docId] = hash;
-		s.hashToDoc[hash].insert(docId);
+		s.docToHash[type][docId] = hash;
+		s.hashToDoc[type][hash].insert(docId);
 	}
 }
 
@@ -521,26 +2129,255 @@ void DedupDb::Impl::ensureLoaded(Table table) const {
 	}
 	s.loaded = true;
 	QSqlQuery q(_db);
-	if (!q.exec(u"SELECT hash, doc_id, status FROM " + TableName(table))) {
+	if (!q.exec(u"SELECT h.hash, d.doc_id, d.is_photo, d.status FROM "
+			+ TableName(table)
+			+ u" d JOIN hashes h ON h.hash_id = d.hash_id"_q)) {
 		LOG(("DedupDb: Load failed: %1").arg(q.lastError().text()));
 		return;
 	}
 	while (q.next()) {
 		const auto hash = q.value(0).toByteArray();
 		const auto docId = q.value(1).toULongLong();
+		const auto type = (q.value(2).toInt() != 0) ? 1 : 0;
 		if (hash.isEmpty() || !docId) {
 			continue;
 		}
-		s.docToHash[docId] = hash;
-		s.hashToDoc[hash].insert(docId);
-		if (q.value(2).toString() == u"u") {
-			s.unfinishedDocs.insert(docId);
+		s.docToHash[type][docId] = hash;
+		s.hashToDoc[type][hash].insert(docId);
+		if (q.value(3).toString() == u"u") {
+			s.unfinishedDocs[type].insert(docId);
 		}
 	}
 }
 
 bool DedupDb::Impl::isOpen() const {
 	return _open;
+}
+
+void DedupDb::Impl::ensureTableLoaded(Table table) const {
+	ensureLoaded(table);
+}
+
+void DedupDb::Impl::acquireTable(Table table) {
+	{
+		std::lock_guard<std::mutex> lock(_shared->mutex);
+		++_shared->tableUsers[int(table)];
+	}
+	ensureLoaded(table);
+}
+
+void DedupDb::Impl::releaseTable(Table table) {
+	std::lock_guard<std::mutex> lock(_shared->mutex);
+	auto &users = _shared->tableUsers[int(table)];
+	if (users > 0 && --users == 0) {
+		_shared->state[int(table)] = TableState();
+	}
+}
+
+void DedupDb::Impl::invalidateTable(Table table) {
+	std::lock_guard<std::mutex> lock(_shared->mutex);
+	_shared->state[int(table)] = TableState();
+}
+
+void DedupDb::Impl::acquireChatTable(PeerId peerId, bool allPeers) {
+	const auto key = ChatCacheKey{
+		allPeers ? PeerId() : peerId,
+		allPeers,
+	};
+	auto &cache = _chatCaches[key];
+	++cache.users;
+	loadChatTable(peerId, allPeers);
+}
+
+void DedupDb::Impl::releaseChatTable(PeerId peerId, bool allPeers) {
+	const auto key = ChatCacheKey{
+		allPeers ? PeerId() : peerId,
+		allPeers,
+	};
+	const auto i = _chatCaches.find(key);
+	if (i == _chatCaches.end()) {
+		return;
+	}
+	if (i->second.users > 0 && --i->second.users == 0) {
+		_chatCaches.erase(i);
+	}
+}
+
+void DedupDb::Impl::loadChatTable(PeerId peerId, bool allPeers) {
+	if (!_open) {
+		return;
+	}
+	const auto key = ChatCacheKey{
+		allPeers ? PeerId() : peerId,
+		allPeers,
+	};
+	auto &cache = _chatCaches[key];
+	if (cache.loaded) {
+		return;
+	}
+	auto query = u"SELECT i.media_id, i.is_photo, h.hash "
+		"FROM chat_scan_items i "
+		"JOIN hashes h ON h.hash_id = i.hash_id "
+		"WHERE i.is_dup = 0 AND i.hash_id != 0"_q;
+	if (!allPeers) {
+		query += u" AND i.peer_id = :peer_id"_q;
+	}
+	QSqlQuery q(_db);
+	q.prepare(query);
+	if (!allPeers) {
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+	}
+	if (!q.exec()) {
+		LOG(("DedupDb: LoadChatTable failed: %1").arg(
+			q.lastError().text()));
+		return;
+	}
+	cache.photoHashes.clear();
+	cache.docHashes.clear();
+	cache.hashes.clear();
+	while (q.next()) {
+		const auto mediaId = q.value(0).toULongLong();
+		const auto isPhoto = (q.value(1).toInt() != 0);
+		const auto hash = q.value(2).toByteArray();
+		if (!mediaId || hash.isEmpty()) {
+			continue;
+		}
+		(isPhoto ? cache.photoHashes : cache.docHashes)[mediaId] = hash;
+		cache.hashes.insert(hash);
+	}
+	cache.loaded = true;
+}
+
+bool DedupDb::Impl::chatTableContainsDocId(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto,
+		bool allPeers) const {
+	if (!mediaId) {
+		return false;
+	}
+	const auto key = ChatCacheKey{
+		allPeers ? PeerId() : peerId,
+		allPeers,
+	};
+	const auto i = _chatCaches.find(key);
+	if (i == _chatCaches.end() || !i->second.loaded) {
+		return false;
+	}
+	const auto &hashes = isPhoto
+		? i->second.photoHashes
+		: i->second.docHashes;
+	return hashes.contains(mediaId);
+}
+
+bool DedupDb::Impl::chatTableContainsHash(
+		PeerId peerId,
+		const QByteArray &hash,
+		bool allPeers) const {
+	if (hash.isEmpty()) {
+		return false;
+	}
+	const auto key = ChatCacheKey{
+		allPeers ? PeerId() : peerId,
+		allPeers,
+	};
+	const auto i = _chatCaches.find(key);
+	return (i != _chatCaches.end())
+		&& i->second.loaded
+		&& i->second.hashes.contains(hash);
+}
+
+void DedupDb::Impl::clearChatTable() {
+	for (auto i = _chatCaches.begin(); i != _chatCaches.end();) {
+		if (i->second.users == 0) {
+			i = _chatCaches.erase(i);
+		} else {
+			++i;
+		}
+	}
+}
+
+void DedupDb::Impl::addChatTableUnique(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto,
+		const QByteArray &hash) {
+	if (!_open || !peerId || !mediaId || hash.isEmpty()) {
+		return;
+	}
+	const auto add = [&](PeerId keyPeer, bool allPeers) {
+		const auto key = ChatCacheKey{
+			allPeers ? PeerId() : keyPeer,
+			allPeers,
+		};
+		const auto i = _chatCaches.find(key);
+		if (i == _chatCaches.end() || !i->second.loaded) {
+			return;
+		}
+		auto &hashes = isPhoto
+			? i->second.photoHashes
+			: i->second.docHashes;
+		hashes[mediaId] = hash;
+		i->second.hashes.insert(hash);
+	};
+	add(peerId, false);
+	add(PeerId(), true);
+}
+
+void DedupDb::Impl::removeChatTableUnique(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto,
+		const QByteArray &hash) {
+	if (!_open || !peerId || !mediaId || hash.isEmpty()) {
+		return;
+	}
+	const auto remove = [&](PeerId keyPeer, bool allPeers) {
+		const auto key = ChatCacheKey{
+			allPeers ? PeerId() : keyPeer,
+			allPeers,
+		};
+		const auto i = _chatCaches.find(key);
+		if (i == _chatCaches.end() || !i->second.loaded) {
+			return;
+		}
+		auto &hashes = isPhoto
+			? i->second.photoHashes
+			: i->second.docHashes;
+		if (hashes.value(mediaId) == hash) {
+			hashes.remove(mediaId);
+		}
+		i->second.hashes.remove(hash);
+	};
+	remove(peerId, false);
+	remove(PeerId(), true);
+}
+
+void DedupDb::Impl::invalidateChatTable(PeerId peerId) {
+	if (!_open || !peerId) {
+		return;
+	}
+	const auto key = ChatCacheKey{ peerId, false };
+	const auto i = _chatCaches.find(key);
+	if (i == _chatCaches.end()) {
+		return;
+	}
+	i->second.loaded = false;
+	loadChatTable(peerId, false);
+}
+
+void DedupDb::Impl::invalidateAllPeersChatTable() {
+	if (!_open) {
+		return;
+	}
+	const auto key = ChatCacheKey{ PeerId(), true };
+	const auto i = _chatCaches.find(key);
+	if (i == _chatCaches.end()) {
+		return;
+	}
+	i->second.loaded = false;
+	loadChatTable(PeerId(), true);
 }
 
 bool DedupDb::Impl::createTables() {
@@ -556,172 +2393,70 @@ bool DedupDb::Impl::createTables() {
 	};
 	// Compact single-row-per-content layout: one row per doc/media id,
 	// identical content with a different id is an extra row with the same
-	// hash. No size column: size is never used as a dedup criterion.
-	const auto created = exec(u"CREATE TABLE IF NOT EXISTS dedup_dl ("
-		"doc_id INTEGER PRIMARY KEY, "
-		"hash BLOB NOT NULL, "
-		"status TEXT NOT NULL DEFAULT 'f')"_q)
+	// hash_id. No size column: size is never used as a dedup criterion.
+	const auto created = exec(u"CREATE TABLE IF NOT EXISTS hashes ("
+		"hash_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+		"hash BLOB NOT NULL UNIQUE, "
+		"hash_refs INTEGER NOT NULL DEFAULT 0, "
+		"owner_peer_id INTEGER NOT NULL DEFAULT 0, "
+		"owner_msg_id INTEGER NOT NULL DEFAULT 0)"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_hashes_owner "
+			"ON hashes(owner_peer_id, owner_msg_id)"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS media_refs ("
+			"media_id INTEGER NOT NULL, "
+			"is_photo INTEGER NOT NULL DEFAULT 0, "
+			"hash_id INTEGER NOT NULL DEFAULT 0, "
+			"id_refs INTEGER NOT NULL DEFAULT 0, "
+			"PRIMARY KEY (media_id, is_photo))"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_media_refs_hash_id "
+			"ON media_refs(hash_id)"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS dedup_dl ("
+			"doc_id INTEGER NOT NULL, "
+			"is_photo INTEGER NOT NULL DEFAULT 0, "
+			"hash_id INTEGER NOT NULL DEFAULT 0, "
+			"status TEXT NOT NULL DEFAULT 'f', "
+			"PRIMARY KEY (doc_id, is_photo))"_q)
 		&& exec(u"CREATE TABLE IF NOT EXISTS dedup_ul ("
-			"doc_id INTEGER PRIMARY KEY, "
-			"hash BLOB NOT NULL, "
-			"status TEXT NOT NULL DEFAULT 'f')"_q)
-		&& exec(u"CREATE INDEX IF NOT EXISTS idx_dedup_dl_hash "
-			"ON dedup_dl(hash)"_q)
-		&& exec(u"CREATE INDEX IF NOT EXISTS idx_dedup_ul_hash "
-			"ON dedup_ul(hash)"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS dl_resume ("
+			"doc_id INTEGER NOT NULL, "
+			"is_photo INTEGER NOT NULL DEFAULT 0, "
+			"hash_id INTEGER NOT NULL DEFAULT 0, "
+			"status TEXT NOT NULL DEFAULT 'f', "
+			"PRIMARY KEY (doc_id, is_photo))"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_dedup_dl_hash_id "
+			"ON dedup_dl(hash_id)"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_dedup_ul_hash_id "
+			"ON dedup_ul(hash_id)"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS jobs ("
+			"job_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+			"kind TEXT NOT NULL, "
 			"session_id INTEGER NOT NULL DEFAULT 0, "
-			"peer_id INTEGER NOT NULL, "
-			"msg_id INTEGER NOT NULL, "
-			"path TEXT NOT NULL, "
-			"file_size INTEGER NOT NULL DEFAULT 0, "
-			"doc_id INTEGER NOT NULL DEFAULT 0, "
-			"PRIMARY KEY (peer_id, msg_id))"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS ul_resume ("
-			"session_id INTEGER NOT NULL DEFAULT 0, "
-			"peer_id INTEGER NOT NULL, "
-			"path TEXT NOT NULL, "
-			"parts_sent INTEGER NOT NULL DEFAULT 0, "
-			"sent_size INTEGER NOT NULL DEFAULT 0, "
-			"file_id INTEGER NOT NULL DEFAULT 0, "
-			"topic_root_id INTEGER NOT NULL DEFAULT 0, "
-			"PRIMARY KEY (session_id, peer_id, path))"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS ef_resume ("
-			"session_id INTEGER NOT NULL DEFAULT 0, "
-			"job_id TEXT NOT NULL, "
-			"item_index INTEGER NOT NULL, "
-			"dest_peer_id INTEGER NOT NULL, "
-			"source_peer_id INTEGER NOT NULL, "
-			"source_msg_id INTEGER NOT NULL, "
-			"state TEXT NOT NULL, "
-			"local_path TEXT NOT NULL DEFAULT '', "
-			"file_id INTEGER NOT NULL DEFAULT 0, "
-			"uploaded_parts INTEGER NOT NULL DEFAULT 0, "
-			"file_hash BLOB, "
-			"media_id INTEGER NOT NULL DEFAULT 0, "
-			"file_size INTEGER NOT NULL DEFAULT 0, "
-			"paused INTEGER NOT NULL DEFAULT 0, "
-			"PRIMARY KEY (job_id, item_index))"_q)
-		&& exec(u"CREATE INDEX IF NOT EXISTS idx_ef_resume_peer "
-			"ON ef_resume(dest_peer_id, state)"_q)
-		&& exec(u"CREATE INDEX IF NOT EXISTS idx_ef_resume_hash "
-			"ON ef_resume(file_hash)"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS nf_resume ("
-			"session_id INTEGER NOT NULL DEFAULT 0, "
-			"dest_peer_id INTEGER NOT NULL, "
-			"src_peer_id INTEGER NOT NULL, "
+			"scope_id INTEGER NOT NULL DEFAULT 0, "
+			"options BLOB, "
+			"state INTEGER NOT NULL DEFAULT 0, "
 			"total INTEGER NOT NULL DEFAULT 0, "
 			"done INTEGER NOT NULL DEFAULT 0, "
 			"skipped INTEGER NOT NULL DEFAULT 0, "
-			"last_msg_id INTEGER NOT NULL DEFAULT 0, "
-			"state TEXT NOT NULL DEFAULT 'running', "
-			"forward_options INTEGER NOT NULL DEFAULT 0, "
-			"group_options INTEGER NOT NULL DEFAULT 0, "
-			"remaining BLOB NOT NULL DEFAULT x'', "
-			"PRIMARY KEY (session_id, dest_peer_id))"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS ex_resume ("
-			"session_id INTEGER NOT NULL DEFAULT 0, "
-			"peer_id INTEGER NOT NULL, "
-			"mode INTEGER NOT NULL DEFAULT 0, "
-			"last_id INTEGER NOT NULL DEFAULT 0, "
-			"total INTEGER NOT NULL DEFAULT 0, "
-			"msgs_done INTEGER NOT NULL DEFAULT 0, "
-			"skipped INTEGER NOT NULL DEFAULT 0, "
-			"export_folder TEXT NOT NULL DEFAULT '', "
-			"state TEXT NOT NULL DEFAULT 'running', "
-			"media INTEGER NOT NULL DEFAULT 0, "
-			"size INTEGER NOT NULL DEFAULT 0, "
-			"export_format INTEGER NOT NULL DEFAULT 0, "
-			"from_date INTEGER NOT NULL DEFAULT 0, "
-			"till_date INTEGER NOT NULL DEFAULT 0, "
-			"html_index INTEGER NOT NULL DEFAULT 0, "
-			"replied_index BLOB NOT NULL DEFAULT x'', "
-			"date_index INTEGER NOT NULL DEFAULT 0, "
-			"stats BLOB NOT NULL DEFAULT x'', "
-			"doc_id INTEGER NOT NULL DEFAULT 0, "
-			"paused_file TEXT NOT NULL DEFAULT '', "
-			"paused_bytes INTEGER NOT NULL DEFAULT 0, "
-			"last_msg BLOB NOT NULL DEFAULT x'', "
-			"split_index INTEGER NOT NULL DEFAULT 0, "
-			"selected_done INTEGER NOT NULL DEFAULT 0, "
-			"filter_index INTEGER NOT NULL DEFAULT 0, "
-			"use_id_range INTEGER NOT NULL DEFAULT 0, "
-			"from_id INTEGER NOT NULL DEFAULT 0, "
-			"till_id INTEGER NOT NULL DEFAULT 0, "
-			"update_anchor INTEGER NOT NULL DEFAULT 0, "
-			"covered_till INTEGER NOT NULL DEFAULT 0, "
-			"covered_till_date INTEGER NOT NULL DEFAULT 0, "
-			"migrated INTEGER NOT NULL DEFAULT 0, "
-			"failed_count INTEGER NOT NULL DEFAULT 0, "
-			"resume_peer_id INTEGER NOT NULL DEFAULT 0, "
-			"dialog_ids BLOB NOT NULL DEFAULT x'', "
-			"chat_types INTEGER NOT NULL DEFAULT 0, "
-			"full_chats INTEGER NOT NULL DEFAULT 0, "
-			"ext_filter_mode INTEGER NOT NULL DEFAULT 0, "
-			"ext_filter TEXT NOT NULL DEFAULT '', "
-			"PRIMARY KEY (session_id, peer_id, mode, export_folder))"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS ex_tmp ("
-			"session_id INTEGER NOT NULL DEFAULT 0, "
-			"peer_id INTEGER NOT NULL, "
-			"doc_id INTEGER NOT NULL, "
-			"hash BLOB NOT NULL, "
-			"status TEXT NOT NULL DEFAULT 'f', "
-			"PRIMARY KEY (session_id, peer_id, doc_id))"_q)
-		&& exec(u"CREATE INDEX IF NOT EXISTS idx_ex_tmp_hash "
-			"ON ex_tmp(session_id, peer_id, hash)"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS dl_tmp ("
-			"session_id INTEGER NOT NULL DEFAULT 0, "
-			"scope_id INTEGER NOT NULL, "
-			"doc_id INTEGER NOT NULL, "
-			"hash BLOB NOT NULL, "
-			"status TEXT NOT NULL DEFAULT 'f', "
-			"PRIMARY KEY (session_id, scope_id, doc_id))"_q)
-		&& exec(u"CREATE INDEX IF NOT EXISTS idx_dl_tmp_hash "
-			"ON dl_tmp(session_id, scope_id, hash)"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS ul_tmp ("
-			"session_id INTEGER NOT NULL DEFAULT 0, "
-			"scope_id INTEGER NOT NULL, "
-			"doc_id INTEGER NOT NULL, "
-			"hash BLOB NOT NULL, "
-			"status TEXT NOT NULL DEFAULT 'f', "
-			"PRIMARY KEY (session_id, scope_id, doc_id))"_q)
-		&& exec(u"CREATE INDEX IF NOT EXISTS idx_ul_tmp_hash "
-			"ON ul_tmp(session_id, scope_id, hash)"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS fw_tmp ("
-			"session_id INTEGER NOT NULL DEFAULT 0, "
-			"scope_id INTEGER NOT NULL, "
-			"doc_id INTEGER NOT NULL, "
-			"hash BLOB NOT NULL, "
-			"status TEXT NOT NULL DEFAULT 'f', "
-			"PRIMARY KEY (session_id, scope_id, doc_id))"_q)
-		&& exec(u"CREATE INDEX IF NOT EXISTS idx_fw_tmp_hash "
-			"ON fw_tmp(session_id, scope_id, hash)"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS chat_scan ("
-			"peer_id INTEGER NOT NULL, "
-			"category INTEGER NOT NULL, "
-			"unique_count INTEGER NOT NULL DEFAULT 0, "
-			"unique_bytes INTEGER NOT NULL DEFAULT 0, "
-			"dup_count INTEGER NOT NULL DEFAULT 0, "
-			"dup_bytes INTEGER NOT NULL DEFAULT 0, "
-			"scanned_upto INTEGER NOT NULL DEFAULT 0, "
-			"scan_finished INTEGER NOT NULL DEFAULT 0, "
-			"delete_finished INTEGER NOT NULL DEFAULT 0, "
-			"PRIMARY KEY (peer_id, category))"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS chat_scan_dups ("
-			"peer_id INTEGER NOT NULL, "
-			"msg_id INTEGER NOT NULL, "
-			"category INTEGER NOT NULL DEFAULT 0, "
-			"size INTEGER NOT NULL DEFAULT 0, "
-			"flags INTEGER NOT NULL DEFAULT 0, "
-			"filename TEXT NOT NULL DEFAULT '', "
-			"PRIMARY KEY (peer_id, msg_id))"_q)
-		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_dups_cat "
-			"ON chat_scan_dups(peer_id, category)"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS chat_scan_state ("
-			"peer_id INTEGER NOT NULL, "
-			"cursor_msg_id INTEGER NOT NULL DEFAULT 0, "
-			"phase INTEGER NOT NULL DEFAULT 0, "
-			"PRIMARY KEY (peer_id))"_q)
+			"created_at INTEGER NOT NULL DEFAULT 0, "
+			"updated_at INTEGER NOT NULL DEFAULT 0)"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_jobs_kind_scope "
+			"ON jobs(kind, scope_id, state)"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS job_items ("
+			"job_id INTEGER NOT NULL, "
+			"item_id INTEGER NOT NULL, "
+			"media_id INTEGER NOT NULL DEFAULT 0, "
+			"is_photo INTEGER NOT NULL DEFAULT 0, "
+			"hash_id INTEGER NOT NULL DEFAULT 0, "
+			"state INTEGER NOT NULL DEFAULT 0, "
+			"payload BLOB, "
+			"error TEXT, "
+			"retry INTEGER NOT NULL DEFAULT 0, "
+			"PRIMARY KEY (job_id, item_id))"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_job_items_state "
+			"ON job_items(job_id, state)"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_job_items_media "
+			"ON job_items(job_id, media_id, is_photo)"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_job_items_hash "
+			"ON job_items(job_id, hash_id)"_q)
 		&& exec(u"CREATE TABLE IF NOT EXISTS chat_scan_items ("
 			"peer_id INTEGER NOT NULL, "
 			"msg_id INTEGER NOT NULL, "
@@ -729,44 +2464,1099 @@ bool DedupDb::Impl::createTables() {
 			"size INTEGER NOT NULL DEFAULT 0, "
 			"media_id INTEGER NOT NULL DEFAULT 0, "
 			"is_photo INTEGER NOT NULL DEFAULT 0, "
-			"hash BLOB, "
-			"filename TEXT NOT NULL DEFAULT '', "
+			"hash_id INTEGER NOT NULL DEFAULT 0, "
+			"filename TEXT, "
+			"is_dup INTEGER NOT NULL DEFAULT 0 CHECK (is_dup IN (0, 1)), "
+			"session_id INTEGER NOT NULL DEFAULT 0, "
 			"state INTEGER NOT NULL DEFAULT 0, "
 			"attempts INTEGER NOT NULL DEFAULT 0, "
 			"lease_until INTEGER NOT NULL DEFAULT 0, "
+			"tracked INTEGER NOT NULL DEFAULT 1 CHECK (tracked IN (0, 1)), "
 			"PRIMARY KEY (peer_id, msg_id))"_q)
 		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_items_media "
-			"ON chat_scan_items(peer_id, media_id)"_q)
-		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_items_hash "
-			"ON chat_scan_items(peer_id, hash)"_q)
+			"ON chat_scan_items(peer_id, media_id, is_photo)"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_items_media_global "
+			"ON chat_scan_items(media_id, is_photo, peer_id, is_dup, msg_id)"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_items_hash_id "
+			"ON chat_scan_items(peer_id, hash_id)"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_items_hash_tracked "
+			"ON chat_scan_items(hash_id, tracked, msg_id)"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_items_hash_id_unique_msg "
+			"ON chat_scan_items(hash_id, peer_id, msg_id) WHERE is_dup = 0"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_items_dup "
+			"ON chat_scan_items(peer_id, is_dup, msg_id)"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_items_dup_category "
+			"ON chat_scan_items(peer_id, is_dup, category, msg_id)"_q)
 		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_items_state "
 			"ON chat_scan_items(peer_id, state, media_id)"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS chat_scan_progress ("
-			"peer_id INTEGER NOT NULL, "
-			"category INTEGER NOT NULL, "
-			"item_count INTEGER NOT NULL DEFAULT 0, "
-			"unique_count INTEGER NOT NULL DEFAULT 0, "
-			"unique_bytes INTEGER NOT NULL DEFAULT 0, "
-			"dup_count INTEGER NOT NULL DEFAULT 0, "
-			"dup_bytes INTEGER NOT NULL DEFAULT 0, "
-			"PRIMARY KEY (peer_id, category))"_q)
-		&& exec(u"CREATE TABLE IF NOT EXISTS client_globals ("
-			"key TEXT PRIMARY KEY, "
-			"value TEXT NOT NULL DEFAULT '')"_q);
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_items_category "
+			"ON chat_scan_items(peer_id, category)"_q)
+		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_items_session "
+			"ON chat_scan_items(peer_id, session_id)"_q);
 	return created;
 }
 
+uint64 DedupDb::Impl::resolveHashId(const QByteArray &hash) {
+	if (!_open || hash.isEmpty()) {
+		return 0;
+	}
+	QSqlQuery insert(_db);
+	insert.prepare(u"INSERT OR IGNORE INTO hashes(hash) VALUES(:hash)"_q);
+	insert.bindValue(u":hash"_q, hash);
+	if (!insert.exec()) {
+		LOG(("DedupDb: ResolveHashId insert failed: %1").arg(
+			insert.lastError().text()));
+		return 0;
+	}
+	QSqlQuery select(_db);
+	select.prepare(u"SELECT hash_id FROM hashes WHERE hash = :hash"_q);
+	select.bindValue(u":hash"_q, hash);
+	if (!select.exec() || !select.next()) {
+		LOG(("DedupDb: ResolveHashId select failed: %1").arg(
+			select.lastError().text()));
+		return 0;
+	}
+	return select.value(0).toULongLong();
+}
+
+uint64 DedupDb::Impl::findHashId(const QByteArray &hash) const {
+	if (!_open || hash.isEmpty()) {
+		return 0;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT hash_id FROM hashes WHERE hash = :hash"_q);
+	q.bindValue(u":hash"_q, hash);
+	if (!q.exec() || !q.next()) {
+		return 0;
+	}
+	return q.value(0).toULongLong();
+}
+
+QByteArray DedupDb::Impl::hashForHashId(uint64 hashId) const {
+	if (!_open || !hashId) {
+		return {};
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT hash FROM hashes WHERE hash_id = :hash_id"_q);
+	q.bindValue(u":hash_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(hashId)));
+	if (!q.exec() || !q.next()) {
+		return {};
+	}
+	return q.value(0).toByteArray();
+}
+
+std::optional<HashOwner> DedupDb::Impl::hashOwner(uint64 hashId) const {
+	if (!_open || !hashId) {
+		return std::nullopt;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT h.owner_peer_id, h.owner_msg_id, "
+		"COALESCE(i.tracked, 0), (i.peer_id IS NOT NULL) "
+		"FROM hashes h "
+		"LEFT JOIN chat_scan_items i "
+		"ON i.peer_id = h.owner_peer_id AND i.msg_id = h.owner_msg_id "
+		"WHERE h.hash_id = :hash_id"_q);
+	q.bindValue(u":hash_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(hashId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: HashOwner read failed: %1").arg(
+			q.lastError().text()));
+		return std::nullopt;
+	}
+	if (!q.next()) {
+		return std::nullopt;
+	}
+	auto result = HashOwner();
+	result.peerId = PeerId(q.value(0).toULongLong());
+	result.msgId = MsgId(q.value(1).toLongLong());
+	if (!result.peerId || !result.msgId) {
+		return std::nullopt;
+	}
+	result.tracked = (q.value(2).toInt() != 0);
+	result.exists = (q.value(3).toInt() != 0);
+	return result;
+}
+
+void DedupDb::Impl::setHashOwner(
+		uint64 hashId,
+		PeerId peerId,
+		MsgId msgId) {
+	if (!_open || !hashId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE hashes SET owner_peer_id = :peer_id, "
+		"owner_msg_id = :msg_id WHERE hash_id = :hash_id"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":msg_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(msgId.bare)));
+	q.bindValue(u":hash_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(hashId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: HashOwner write failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::clearHashOwner(uint64 hashId) {
+	setHashOwner(hashId, PeerId(0), MsgId(0));
+}
+
+std::optional<HashOwner> DedupDb::Impl::findHashOwnerReplacement(
+		uint64 hashId,
+		PeerId excludePeer,
+		MsgId excludeMsg) const {
+	if (!_open) {
+		return std::nullopt;
+	}
+	return FindHashOwnerReplacementIn(
+		_db,
+		hashId,
+		excludePeer,
+		excludeMsg);
+}
+
+bool DedupDb::Impl::claimOwner(
+		uint64 hashId,
+		PeerId peerId,
+		MsgId msgId) {
+	if (!_open || !hashId || !peerId || !msgId) {
+		return false;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE hashes SET owner_peer_id = :peer_id, "
+		"owner_msg_id = :msg_id "
+		"WHERE hash_id = :hash_id "
+		"AND owner_peer_id = 0 AND owner_msg_id = 0"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":msg_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(msgId.bare)));
+	q.bindValue(u":hash_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(hashId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ClaimOwner failed: %1").arg(q.lastError().text()));
+		return false;
+	}
+	return q.numRowsAffected() > 0;
+}
+
+void DedupDb::Impl::setOwner(uint64 hashId, PeerId peerId, MsgId msgId) {
+	setHashOwner(hashId, peerId, msgId);
+}
+
+void DedupDb::Impl::clearOwner(uint64 hashId) {
+	clearHashOwner(hashId);
+}
+
+std::optional<HashOwner> DedupDb::Impl::findReplacementOwner(
+		uint64 hashId,
+		PeerId excludePeer,
+		MsgId excludeMsg) const {
+	return findHashOwnerReplacement(hashId, excludePeer, excludeMsg);
+}
+
+bool DedupDb::Impl::promoteOwnerLocked(
+		uint64 hashId,
+		PeerId peerId,
+		MsgId msgId) {
+	const auto old = hashOwner(hashId);
+	QSqlQuery promote(_db);
+	promote.prepare(u"UPDATE chat_scan_items SET is_dup = 0, "
+		"filename = NULL WHERE peer_id = :peer_id "
+		"AND msg_id = :msg_id"_q);
+	promote.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	promote.bindValue(u":msg_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(msgId.bare)));
+	if (!promote.exec()) {
+		LOG(("DedupDb: PromoteOwner row failed: %1").arg(
+			promote.lastError().text()));
+		return false;
+	}
+	if (promote.numRowsAffected() <= 0) {
+		return false;
+	}
+	setHashOwner(hashId, peerId, msgId);
+	if (old && old->exists
+		&& (old->peerId != peerId || old->msgId != msgId)) {
+		QSqlQuery demote(_db);
+		demote.prepare(u"UPDATE chat_scan_items SET is_dup = 1 "
+			"WHERE peer_id = :peer_id AND msg_id = :msg_id"_q);
+		demote.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(old->peerId.value)));
+		demote.bindValue(u":msg_id"_q, QVariant::fromValue(
+			static_cast<qlonglong>(old->msgId.bare)));
+		if (!demote.exec()) {
+			LOG(("DedupDb: PromoteOwner demote failed: %1").arg(
+				demote.lastError().text()));
+		}
+	}
+	return true;
+}
+
+bool DedupDb::Impl::promoteOwner(
+		uint64 hashId,
+		PeerId peerId,
+		MsgId msgId) {
+	if (!_open || !hashId || !peerId || !msgId) {
+		return false;
+	}
+	beginTransaction();
+	const auto result = promoteOwnerLocked(hashId, peerId, msgId);
+	commitTransaction();
+	return result;
+}
+
+std::optional<HashOwner> DedupDb::Impl::refreshOwner(
+		uint64 hashId,
+		PeerId excludePeer,
+		MsgId excludeMsg) {
+	if (!_open || !hashId) {
+		return std::nullopt;
+	}
+	beginTransaction();
+	auto replacement = findHashOwnerReplacement(
+		hashId,
+		excludePeer,
+		excludeMsg);
+	if (replacement) {
+		const auto promoted = promoteOwnerLocked(
+			hashId,
+			replacement->peerId,
+			replacement->msgId);
+		if (!promoted) {
+			clearHashOwner(hashId);
+			replacement = std::nullopt;
+		}
+	} else {
+		clearHashOwner(hashId);
+	}
+	commitTransaction();
+	return replacement;
+}
+
+std::optional<ChatScanOwnerDecision>
+DedupDb::Impl::chatScanApplyHashOwner(
+		PeerId peerId,
+		MsgId msgId,
+		uint64 mediaId,
+		bool isPhoto,
+		const QByteArray &hash,
+		bool mediaDuplicate,
+		const QString &filename) {
+	if (!_open || !peerId || !msgId || hash.isEmpty()) {
+		return std::nullopt;
+	}
+	const auto hashId = resolveHashId(hash);
+	if (!hashId) {
+		return std::nullopt;
+	}
+	beginTransaction();
+	auto decision = ChatScanOwnerDecision();
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT is_dup FROM chat_scan_items "
+			"WHERE peer_id = :peer_id AND msg_id = :msg_id"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		q.bindValue(u":msg_id"_q, QVariant::fromValue(
+			static_cast<qlonglong>(msgId.bare)));
+		if (!q.exec()) {
+			LOG(("DedupDb: ScanOwner current read failed: %1").arg(
+				q.lastError().text()));
+			commitTransaction();
+			return std::nullopt;
+		}
+		if (!q.next()) {
+			commitTransaction();
+			return std::nullopt;
+		}
+		decision.wasDup = (q.value(0).toInt() != 0);
+	}
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"UPDATE chat_scan_items SET hash_id = :hash_id, "
+			"tracked = 1 WHERE peer_id = :peer_id "
+			"AND msg_id = :msg_id"_q);
+		q.bindValue(u":hash_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(hashId)));
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		q.bindValue(u":msg_id"_q, QVariant::fromValue(
+			static_cast<qlonglong>(msgId.bare)));
+		if (!q.exec() || q.numRowsAffected() <= 0) {
+			if (q.lastError().isValid()) {
+				LOG(("DedupDb: ScanOwner row update failed: %1").arg(
+					q.lastError().text()));
+			}
+			commitTransaction();
+			return std::nullopt;
+		}
+	}
+	if (mediaId) {
+		insert(Table::Uploads, DedupRecord{
+			.hash = hash,
+			.documentId = mediaId,
+			.isPhoto = isPhoto,
+			.status = u"f"_q,
+		});
+	}
+	const auto setCurrent = [&](bool isDup) {
+		markChatScanItemDup(
+			peerId,
+			msgId,
+			isDup,
+			isDup ? filename : QString());
+		decision.isDup = isDup;
+	};
+	if (mediaDuplicate) {
+		setCurrent(true);
+	} else {
+		const auto owner = hashOwner(hashId);
+		if (!owner || !owner->exists) {
+			if (owner) {
+				clearOwner(hashId);
+			}
+			if (!claimOwner(hashId, peerId, msgId)) {
+				setOwner(hashId, peerId, msgId);
+			}
+			setCurrent(false);
+		} else if (owner->peerId == peerId
+			&& owner->msgId == msgId) {
+			setCurrent(false);
+		} else {
+			const auto promoteCurrent = [&] {
+				const auto old = chatScanItem(
+					owner->peerId,
+					owner->msgId);
+				if (old) {
+					decision.demoted = *old;
+				}
+				saveChatScanUndo(peerId, msgId);
+				if (old) {
+					saveChatScanUndo(owner->peerId, owner->msgId);
+				}
+				if (promoteOwnerLocked(hashId, peerId, msgId)) {
+					decision.isDup = false;
+				} else {
+					decision.demoted.reset();
+					setCurrent(true);
+				}
+			};
+			if (!owner->tracked
+				|| (owner->peerId == peerId
+					&& msgId.bare > owner->msgId.bare)) {
+				promoteCurrent();
+			} else {
+				setCurrent(true);
+			}
+		}
+	}
+	decision.owner = hashOwner(hashId);
+	commitTransaction();
+	if (decision.demoted) {
+		removeChatTableUnique(
+			decision.demoted->peerId,
+			decision.demoted->mediaId,
+			decision.demoted->isPhoto,
+			hash);
+	}
+	if (!decision.isDup) {
+		addChatTableUnique(peerId, mediaId, isPhoto, hash);
+	} else if (decision.wasDup != decision.isDup) {
+		invalidateChatTable(peerId);
+		invalidateAllPeersChatTable();
+	}
+	return decision;
+}
+
+bool DedupDb::Impl::recordUploadDestination(
+		const QByteArray &hash,
+		uint64 mediaId,
+		bool isPhoto,
+		PeerId peerId,
+		MsgId msgId,
+		bool tracked) {
+	if (!_open || hash.isEmpty() || !mediaId || !peerId || !msgId) {
+		return false;
+	}
+	const auto hashId = resolveHashId(hash);
+	if (!hashId) {
+		return false;
+	}
+	beginTransaction();
+	insert(Table::Uploads, DedupRecord{
+		.hash = hash,
+		.documentId = mediaId,
+		.isPhoto = isPhoto,
+		.status = u"f"_q,
+	});
+	auto isDup = false;
+	auto demoted = std::optional<HashOwner>();
+	const auto owner = hashOwner(hashId);
+	if (!owner || !owner->exists) {
+		setOwner(hashId, peerId, msgId);
+	} else if (owner->peerId == peerId && owner->msgId == msgId) {
+		isDup = false;
+	} else if (owner->peerId == peerId) {
+		if (owner->msgId.bare < msgId.bare) {
+			demoted = owner;
+			setOwner(hashId, peerId, msgId);
+		} else {
+			isDup = true;
+		}
+	} else if (!owner->tracked && tracked) {
+		demoted = owner;
+		setOwner(hashId, peerId, msgId);
+	} else {
+		isDup = true;
+	}
+	if (demoted) {
+		QSqlQuery q(_db);
+		q.prepare(u"UPDATE chat_scan_items SET is_dup = 1 "
+			"WHERE peer_id = :peer_id AND msg_id = :msg_id"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(demoted->peerId.value)));
+		q.bindValue(u":msg_id"_q, QVariant::fromValue(
+			static_cast<qlonglong>(demoted->msgId.bare)));
+		if (!q.exec()) {
+			LOG(("DedupDb: UploadDestination demote failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+	if (tracked || !isDup) {
+		QSqlQuery q(_db);
+		q.prepare(u"INSERT INTO chat_scan_items "
+			"(peer_id, msg_id, category, size, media_id, is_photo, "
+			"hash_id, is_dup, tracked, state) "
+			"VALUES (:peer_id, :msg_id, 0, 0, :media_id, :is_photo, "
+			":hash_id, :is_dup, :tracked, 4) "
+			"ON CONFLICT(peer_id, msg_id) DO UPDATE SET "
+			"hash_id = excluded.hash_id, "
+			"media_id = excluded.media_id, "
+			"is_photo = excluded.is_photo, "
+			"is_dup = excluded.is_dup, "
+			"filename = CASE WHEN excluded.is_dup = 0 "
+			"THEN NULL ELSE chat_scan_items.filename END, "
+			"tracked = MAX(chat_scan_items.tracked, excluded.tracked)"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		q.bindValue(u":msg_id"_q, QVariant::fromValue(
+			static_cast<qlonglong>(msgId.bare)));
+		q.bindValue(u":media_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(mediaId)));
+		q.bindValue(u":is_photo"_q, isPhoto ? 1 : 0);
+		q.bindValue(u":hash_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(hashId)));
+		q.bindValue(u":is_dup"_q, isDup ? 1 : 0);
+		q.bindValue(u":tracked"_q, tracked ? 1 : 0);
+		if (!q.exec()) {
+			LOG(("DedupDb: UploadDestination row failed: %1").arg(
+				q.lastError().text()));
+		} else {
+			refreshChatScanRefs(
+				{ hashId },
+				{ { mediaId, isPhoto } });
+		}
+	}
+	commitTransaction();
+	if (demoted) {
+		if (const auto old = chatScanItem(
+				demoted->peerId,
+				demoted->msgId)) {
+			removeChatTableUnique(
+				demoted->peerId,
+				old->mediaId,
+				old->isPhoto,
+				hash);
+		}
+	}
+	if (!isDup) {
+		addChatTableUnique(peerId, mediaId, isPhoto, hash);
+	}
+	return isDup;
+}
+
+uint64 DedupDb::Impl::createJob(const JobRecord &job) {
+	if (!_open) {
+		return 0;
+	}
+	const auto now = base::unixtime::now();
+	const auto created = job.createdAt ? job.createdAt : int64(now);
+	const auto updated = job.updatedAt ? job.updatedAt : created;
+	QSqlQuery q(_db);
+	q.prepare(u"INSERT INTO jobs(kind, session_id, scope_id, options, "
+		"state, total, done, skipped, created_at, updated_at) "
+		"VALUES(:kind, :session_id, :scope_id, :options, :state, "
+		":total, :done, :skipped, :created_at, :updated_at)"_q);
+	q.bindValue(u":kind"_q, JobKindName(job.kind));
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(job.sessionId)));
+	q.bindValue(u":scope_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(job.scopeId)));
+	q.bindValue(u":options"_q, job.options);
+	q.bindValue(u":state"_q, int(job.state));
+	q.bindValue(u":total"_q, job.total);
+	q.bindValue(u":done"_q, job.done);
+	q.bindValue(u":skipped"_q, job.skipped);
+	q.bindValue(u":created_at"_q, QVariant::fromValue(
+		static_cast<qlonglong>(created)));
+	q.bindValue(u":updated_at"_q, QVariant::fromValue(
+		static_cast<qlonglong>(updated)));
+	if (!q.exec()) {
+		LOG(("DedupDb: CreateJob failed: %1").arg(q.lastError().text()));
+		return 0;
+	}
+	const auto id = q.lastInsertId();
+	return id.isValid() ? id.toULongLong() : 0;
+}
+
+std::optional<JobRecord> DedupDb::Impl::job(uint64 jobId) const {
+	if (!_open || !jobId) {
+		return std::nullopt;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT job_id, kind, session_id, scope_id, options, state, "
+		"total, done, skipped, created_at, updated_at "
+		"FROM jobs WHERE job_id = :job_id"_q);
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: LoadJob failed: %1").arg(q.lastError().text()));
+		return std::nullopt;
+	}
+	return q.next() ? ReadJob(q) : std::nullopt;
+}
+
+std::optional<JobRecord> DedupDb::Impl::findJob(
+		JobKind kind,
+		uint64 scopeId,
+		bool activeOnly) const {
+	if (!_open) {
+		return std::nullopt;
+	}
+	auto sql = u"SELECT job_id, kind, session_id, scope_id, options, state, "
+		"total, done, skipped, created_at, updated_at "
+		"FROM jobs WHERE kind = :kind AND scope_id = :scope_id"_q;
+	if (activeOnly) {
+		sql += u" AND state IN (0, 1)"_q;
+	}
+	sql += u" ORDER BY updated_at DESC, job_id DESC LIMIT 1"_q;
+	QSqlQuery q(_db);
+	q.prepare(sql);
+	q.bindValue(u":kind"_q, JobKindName(kind));
+	q.bindValue(u":scope_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(scopeId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: FindJob failed: %1").arg(q.lastError().text()));
+		return std::nullopt;
+	}
+	return q.next() ? ReadJob(q) : std::nullopt;
+}
+
+void DedupDb::Impl::setJobState(uint64 jobId, JobState state) {
+	if (!_open || !jobId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE jobs SET state = :state, updated_at = :updated_at "
+		"WHERE job_id = :job_id"_q);
+	q.bindValue(u":state"_q, int(state));
+	q.bindValue(u":updated_at"_q, QVariant::fromValue(
+		static_cast<qlonglong>(base::unixtime::now())));
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: SetJobState failed: %1").arg(q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::setJobProgress(
+		uint64 jobId,
+		int total,
+		int done,
+		int skipped) {
+	if (!_open || !jobId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE jobs SET total = :total, done = :done, "
+		"skipped = :skipped, updated_at = :updated_at "
+		"WHERE job_id = :job_id"_q);
+	q.bindValue(u":total"_q, total);
+	q.bindValue(u":done"_q, done);
+	q.bindValue(u":skipped"_q, skipped);
+	q.bindValue(u":updated_at"_q, QVariant::fromValue(
+		static_cast<qlonglong>(base::unixtime::now())));
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: SetJobProgress failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::pauseJob(uint64 jobId) {
+	setJobState(jobId, JobState::Pending);
+}
+
+void DedupDb::Impl::finishJob(uint64 jobId) {
+	removeJob(jobId);
+}
+
+void DedupDb::Impl::cancelJob(uint64 jobId) {
+	removeJob(jobId);
+}
+
+void DedupDb::Impl::finishScanJob(uint64 jobId) {
+	setJobState(jobId, JobState::Done);
+	removeJobItems(jobId);
+}
+
+void DedupDb::Impl::removeJobItems(uint64 jobId) {
+	if (!_open || !jobId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM job_items WHERE job_id = :job_id"_q);
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: RemoveJobItems failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::removeJob(uint64 jobId) {
+	if (!_open || !jobId) {
+		return;
+	}
+	beginTransaction();
+	removeJobItems(jobId);
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM jobs WHERE job_id = :job_id"_q);
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: RemoveJob failed: %1").arg(q.lastError().text()));
+	}
+	commitTransaction();
+}
+
+void DedupDb::Impl::writeJobItems(
+		const std::vector<JobItemRecord> &items) {
+	if (!_open || items.empty()) {
+		return;
+	}
+	beginTransaction();
+	QSqlQuery q(_db);
+	q.prepare(u"INSERT OR REPLACE INTO job_items "
+		"(job_id, item_id, media_id, is_photo, hash_id, state, "
+		"payload, error, retry) "
+		"VALUES (:job_id, :item_id, :media_id, :is_photo, :hash_id, "
+		":state, :payload, :error, :retry)"_q);
+	for (const auto &item : items) {
+		if (!item.jobId || !item.itemId) {
+			continue;
+		}
+		BindJobItem(q, item);
+		if (!q.exec()) {
+			LOG(("DedupDb: WriteJobItem failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+	commitTransaction();
+}
+
+void DedupDb::Impl::writeJobItem(const JobItemRecord &item) {
+	if (!_open || !item.jobId || !item.itemId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"INSERT OR REPLACE INTO job_items "
+		"(job_id, item_id, media_id, is_photo, hash_id, state, "
+		"payload, error, retry) "
+		"VALUES (:job_id, :item_id, :media_id, :is_photo, :hash_id, "
+		":state, :payload, :error, :retry)"_q);
+	BindJobItem(q, item);
+	if (!q.exec()) {
+		LOG(("DedupDb: WriteJobItem failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+std::vector<JobItemRecord> DedupDb::Impl::jobItems(uint64 jobId) const {
+	return readJobItems(jobId, false);
+}
+
+std::vector<JobItemRecord> DedupDb::Impl::jobResumeItems(
+		uint64 jobId) const {
+	return readJobItems(jobId, true);
+}
+
+std::vector<JobItemRecord> DedupDb::Impl::readJobItems(
+		uint64 jobId,
+		bool resumeOnly) const {
+	auto result = std::vector<JobItemRecord>();
+	if (!_open || !jobId) {
+		return result;
+	}
+	auto sql = u"SELECT job_id, item_id, media_id, is_photo, hash_id, "
+		"state, payload, error, retry FROM job_items "
+		"WHERE job_id = :job_id"_q;
+	if (resumeOnly) {
+		sql += u" AND state IN (0, 1)"_q;
+	}
+	sql += u" ORDER BY item_id"_q;
+	QSqlQuery q(_db);
+	q.prepare(sql);
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ReadJobItems failed: %1").arg(q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		result.push_back(ReadJobItem(q));
+	}
+	return result;
+}
+
+void DedupDb::Impl::setJobItemState(
+		uint64 jobId,
+		uint64 itemId,
+		JobState state,
+		const QString &error,
+		int retry) {
+	if (!_open || !jobId || !itemId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE job_items SET state = :state, error = :error, "
+		"retry = :retry WHERE job_id = :job_id AND item_id = :item_id"_q);
+	q.bindValue(u":state"_q, int(state));
+	q.bindValue(u":error"_q, error);
+	q.bindValue(u":retry"_q, retry);
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	q.bindValue(u":item_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(itemId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: SetJobItemState failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+bool DedupDb::Impl::jobContainsMedia(
+		uint64 jobId,
+		uint64 mediaId,
+		bool isPhoto) const {
+	if (!_open || !jobId || !mediaId) {
+		return false;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT 1 FROM job_items WHERE job_id = :job_id "
+		"AND media_id = :media_id AND is_photo = :is_photo "
+		"AND state IN (2, 3) LIMIT 1"_q);
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	q.bindValue(u":media_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(mediaId)));
+	q.bindValue(u":is_photo"_q, isPhoto ? 1 : 0);
+	return q.exec() && q.next();
+}
+
+bool DedupDb::Impl::jobContainsHash(
+		uint64 jobId,
+		uint64 hashId) const {
+	if (!_open || !jobId || !hashId) {
+		return false;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT 1 FROM job_items WHERE job_id = :job_id "
+		"AND hash_id = :hash_id AND state IN (2, 3) LIMIT 1"_q);
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	q.bindValue(u":hash_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(hashId)));
+	return q.exec() && q.next();
+}
+
+uint64 DedupDb::Impl::findJobId(
+		JobKind kind,
+		uint64 sessionId,
+		uint64 scopeId) const {
+	if (!_open) {
+		return 0;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT job_id FROM jobs WHERE kind = :kind "
+		"AND session_id = :session_id AND scope_id = :scope_id "
+		"ORDER BY job_id DESC LIMIT 1"_q);
+	q.bindValue(u":kind"_q, JobKindName(kind));
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	q.bindValue(u":scope_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(scopeId)));
+	if (!q.exec() || !q.next()) {
+		return 0;
+	}
+	return q.value(0).toULongLong();
+}
+
+std::vector<std::pair<uint64, ExResumeRecord>>
+DedupDb::Impl::loadExportJobs(uint64 sessionId) const {
+	auto result = std::vector<std::pair<uint64, ExResumeRecord>>();
+	if (!_open) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT job_id, options FROM jobs "
+		"WHERE kind = :kind AND session_id = :session_id "
+		"ORDER BY job_id"_q);
+	q.bindValue(u":kind"_q, JobKindName(JobKind::Export));
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: LoadExportJobs failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		if (auto record = DeserializeExResume(q.value(1).toByteArray())) {
+			result.emplace_back(
+				q.value(0).toULongLong(),
+				std::move(*record));
+		}
+	}
+	return result;
+}
+
+uint64 DedupDb::Impl::findExportJob(
+		uint64 sessionId,
+		const ExResumeRecord &record) const {
+	if (!_open) {
+		return 0;
+	}
+	const auto scope = ExResumeScope(
+		record.peerId,
+		record.mode,
+		record.exportFolder);
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT job_id, options FROM jobs "
+		"WHERE kind = :kind AND session_id = :session_id "
+		"AND scope_id = :scope_id ORDER BY job_id"_q);
+	q.bindValue(u":kind"_q, JobKindName(JobKind::Export));
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	q.bindValue(u":scope_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(scope)));
+	if (!q.exec()) {
+		LOG(("DedupDb: FindExportJob failed: %1").arg(
+			q.lastError().text()));
+		return 0;
+	}
+	while (q.next()) {
+		const auto candidate = DeserializeExResume(q.value(1).toByteArray());
+		if (candidate
+			&& candidate->peerId == record.peerId
+			&& candidate->mode == record.mode
+			&& candidate->exportFolder == record.exportFolder) {
+			return q.value(0).toULongLong();
+		}
+	}
+	return 0;
+}
+
+void DedupDb::Impl::updateExportJob(
+		uint64 jobId,
+		const ExResumeRecord &record) {
+	if (!_open || !jobId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE jobs SET scope_id = :scope_id, "
+		"options = :options, state = :state, total = :total, "
+		"done = :done, skipped = :skipped, updated_at = :updated_at "
+		"WHERE job_id = :job_id"_q);
+	q.bindValue(u":scope_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(ExResumeScope(
+			record.peerId,
+			record.mode,
+			record.exportFolder))));
+	q.bindValue(u":options"_q, SerializeExResume(record));
+	q.bindValue(u":state"_q, int(ExportJobState(record.state)));
+	q.bindValue(u":total"_q, record.total);
+	q.bindValue(u":done"_q, record.msgsDone);
+	q.bindValue(u":skipped"_q, record.skipped);
+	q.bindValue(u":updated_at"_q, QVariant::fromValue(
+		static_cast<qlonglong>(base::unixtime::now())));
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: UpdateExportJob failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::purgeOrphanExportBatchJobs() {
+	if (!_open) {
+		return;
+	}
+	auto recordsBySession = std::map<uint64, std::vector<ExResumeRecord>>();
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT session_id, options FROM jobs "
+			"WHERE kind = :kind"_q);
+		q.bindValue(u":kind"_q, JobKindName(JobKind::Export));
+		if (!q.exec()) {
+			LOG(("DedupDb: PurgeExportBatch read failed: %1").arg(
+				q.lastError().text()));
+			return;
+		}
+		while (q.next()) {
+			if (auto record = DeserializeExResume(q.value(1).toByteArray())) {
+				recordsBySession[q.value(0).toULongLong()].push_back(
+					std::move(*record));
+			}
+		}
+	}
+	auto orphaned = std::vector<uint64>();
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT job_id, session_id, scope_id FROM jobs "
+			"WHERE kind = :kind"_q);
+		q.bindValue(u":kind"_q, JobKindName(JobKind::ExportBatch));
+		if (!q.exec()) {
+			LOG(("DedupDb: PurgeExportBatch list failed: %1").arg(
+				q.lastError().text()));
+			return;
+		}
+		while (q.next()) {
+			const auto jobId = q.value(0).toULongLong();
+			const auto sessionId = q.value(1).toULongLong();
+			const auto peerId = PeerId(q.value(2).toULongLong());
+			const auto i = recordsBySession.find(sessionId);
+			auto found = false;
+			if (i != recordsBySession.end()) {
+				for (const auto &record : i->second) {
+					if (record.peerId == peerId) {
+						found = true;
+						break;
+					}
+				}
+			}
+			if (!found) {
+				orphaned.push_back(jobId);
+			}
+		}
+	}
+	for (const auto jobId : orphaned) {
+		removeJob(jobId);
+	}
+}
+
+void DedupDb::Impl::purgeOrphanBatchJobs(
+		JobKind batchKind,
+		const std::vector<JobKind> &ownerKinds) {
+	if (!_open) {
+		return;
+	}
+	auto owners = std::set<std::pair<uint64, uint64>>();
+	for (const auto kind : ownerKinds) {
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT session_id, scope_id FROM jobs "
+			"WHERE kind = :kind"_q);
+		q.bindValue(u":kind"_q, JobKindName(kind));
+		if (!q.exec()) {
+			LOG(("DedupDb: PurgeBatch owners failed: %1").arg(
+				q.lastError().text()));
+			return;
+		}
+		while (q.next()) {
+			owners.emplace(
+				q.value(0).toULongLong(),
+				q.value(1).toULongLong());
+		}
+	}
+	auto orphaned = std::vector<uint64>();
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT job_id, session_id, scope_id FROM jobs "
+			"WHERE kind = :kind"_q);
+		q.bindValue(u":kind"_q, JobKindName(batchKind));
+		if (!q.exec()) {
+			LOG(("DedupDb: PurgeBatch list failed: %1").arg(
+				q.lastError().text()));
+			return;
+		}
+		while (q.next()) {
+			const auto key = std::make_pair(
+				q.value(1).toULongLong(),
+				q.value(2).toULongLong());
+			if (!owners.contains(key)) {
+				orphaned.push_back(q.value(0).toULongLong());
+			}
+		}
+	}
+	for (const auto jobId : orphaned) {
+		removeJob(jobId);
+	}
+}
+
 void DedupDb::Impl::insert(Table table, const DedupRecord &record) {
-	ensureLoaded(table);
-	if (record.documentId && !record.hash.isEmpty()) {
+	auto loaded = false;
+	{
+		std::lock_guard<std::mutex> lock(_shared->mutex);
+		loaded = _shared->state[int(table)].loaded;
+	}
+	if (loaded) {
+		insertLoaded(table, record);
+	} else {
+		insertDeferred(table, record);
+	}
+}
+
+void DedupDb::Impl::insertLoaded(
+		Table table,
+		const DedupRecord &record) {
+	const auto type = record.isPhoto ? 1 : 0;
+	auto exists = false;
+	auto oldHash = QByteArray();
+	auto oldStatus = QString();
+	if (record.documentId) {
 		std::lock_guard<std::mutex> lock(_shared->mutex);
 		auto &s = _shared->state[int(table)];
-		s.docToHash[record.documentId] = record.hash;
-		s.hashToDoc[record.hash].insert(record.documentId);
+		const auto i = s.docToHash[type].constFind(record.documentId);
+		exists = (i != s.docToHash[type].constEnd());
+		if (exists) {
+			oldHash = i.value();
+			oldStatus = s.unfinishedDocs[type].contains(record.documentId)
+				? u"u"_q
+				: u"f"_q;
+		}
+		if (!record.hash.isEmpty()) {
+			if (exists && oldHash != record.hash && !oldHash.isEmpty()) {
+				const auto hashes = s.hashToDoc[type].find(oldHash);
+				if (hashes != s.hashToDoc[type].end()) {
+					hashes.value().remove(record.documentId);
+					if (hashes.value().isEmpty()) {
+						s.hashToDoc[type].erase(hashes);
+					}
+				}
+			}
+			s.docToHash[type][record.documentId] = record.hash;
+			s.hashToDoc[type][record.hash].insert(record.documentId);
+		} else if (!exists) {
+			s.docToHash[type].insert(record.documentId, QByteArray());
+		}
 		if (record.status == u"u") {
-			s.unfinishedDocs.insert(record.documentId);
+			s.unfinishedDocs[type].insert(record.documentId);
 		} else {
-			s.unfinishedDocs.remove(record.documentId);
+			s.unfinishedDocs[type].remove(record.documentId);
 		}
 	}
 	if (!_open) {
@@ -778,79 +3568,133 @@ void DedupDb::Impl::insert(Table table, const DedupRecord &record) {
 		// still tracks the doc id for containsDocId().
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"INSERT OR REPLACE INTO " + TableName(table)
-		+ u" (doc_id, hash, status) "
-		"VALUES (:doc_id, :hash, :status)"_q);
-	q.bindValue(u":doc_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(record.documentId)));
-	q.bindValue(u":hash"_q, record.hash);
-	q.bindValue(u":status"_q, record.status);
-	if (!q.exec()) {
-		LOG(("DedupDb: Insert failed: %1").arg(q.lastError().text()));
+	const auto hasRow = exists && !oldHash.isEmpty();
+	if (hasRow && oldHash == record.hash && oldStatus == record.status) {
+		return;
 	}
-}
-
-void DedupDb::Impl::removeByDocumentId(
-		Table table,
-		uint64 documentId,
-		const QString &status) {
-	ensureLoaded(table);
-	{
-		std::lock_guard<std::mutex> lock(_shared->mutex);
-		auto &s = _shared->state[int(table)];
-		const auto it = s.docToHash.constFind(documentId);
-		if (it != s.docToHash.constEnd()) {
-			const auto hash = it.value();
-			if (status.isEmpty() || s.unfinishedDocs.contains(documentId)) {
-				s.docToHash.remove(documentId);
-				s.unfinishedDocs.remove(documentId);
-				const auto hashes = s.hashToDoc.find(hash);
-				if (hashes != s.hashToDoc.end()) {
-					hashes.value().remove(documentId);
-					if (hashes.value().isEmpty()) {
-						s.hashToDoc.erase(hashes);
-					}
-				}
-			}
-		}
-	}
-	if (!_open || !documentId) {
+	const auto hashId = resolveHashId(record.hash);
+	if (!hashId) {
 		return;
 	}
 	QSqlQuery q(_db);
-	if (status.isEmpty()) {
-		q.prepare(u"DELETE FROM " + TableName(table)
-			+ u" WHERE doc_id = :doc_id"_q);
+	if (hasRow) {
+		q.prepare(u"UPDATE " + TableName(table)
+			+ u" SET hash_id = :hash_id, status = :status "
+			"WHERE doc_id = :doc_id AND is_photo = :is_photo"_q);
 	} else {
-		q.prepare(u"DELETE FROM " + TableName(table)
-			+ u" WHERE doc_id = :doc_id AND status = :status"_q);
-		q.bindValue(u":status"_q, status);
+		q.prepare(u"INSERT INTO " + TableName(table)
+			+ u" (doc_id, is_photo, hash_id, status) "
+			"VALUES (:doc_id, :is_photo, :hash_id, :status)"_q);
 	}
 	q.bindValue(u":doc_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(documentId)));
+		static_cast<qlonglong>(record.documentId)));
+	q.bindValue(u":is_photo"_q, type);
+	q.bindValue(u":hash_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(hashId)));
+	q.bindValue(u":status"_q, record.status);
 	if (!q.exec()) {
-		LOG(("DedupDb: Remove failed: %1").arg(q.lastError().text()));
+		LOG(("DedupDb: Insert failed: %1").arg(q.lastError().text()));
+	} else if (hasRow && oldHash != record.hash) {
+		QSqlQuery select(_db);
+		select.prepare(u"SELECT hash_id FROM hashes WHERE hash = :hash"_q);
+		select.bindValue(u":hash"_q, oldHash);
+		if (select.exec() && select.next()) {
+			cleanupHashRefs(select.value(0).toULongLong());
+		}
 	}
 }
 
-bool DedupDb::Impl::containsDocId(Table table, uint64 documentId) const {
+void DedupDb::Impl::insertDeferred(
+		Table table,
+		const DedupRecord &record) {
+	if (!_open || record.hash.isEmpty()) {
+		return;
+	}
+	const auto hashId = resolveHashId(record.hash);
+	if (!hashId) {
+		return;
+	}
+	auto oldHashId = uint64(0);
+	{
+		QSqlQuery select(_db);
+		select.prepare(u"SELECT hash_id FROM " + TableName(table)
+			+ u" WHERE doc_id = :doc_id AND is_photo = :is_photo"_q);
+		select.bindValue(u":doc_id"_q, QVariant::fromValue(
+			static_cast<qlonglong>(record.documentId)));
+		select.bindValue(u":is_photo"_q, record.isPhoto ? 1 : 0);
+		if (select.exec() && select.next()) {
+			oldHashId = select.value(0).toULongLong();
+		}
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"INSERT INTO " + TableName(table)
+		+ u" (doc_id, is_photo, hash_id, status) "
+		"VALUES (:doc_id, :is_photo, :hash_id, :status) "
+		"ON CONFLICT(doc_id, is_photo) DO UPDATE SET "
+		"hash_id = excluded.hash_id, status = excluded.status"_q);
+	q.bindValue(u":doc_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(record.documentId)));
+	q.bindValue(u":is_photo"_q, record.isPhoto ? 1 : 0);
+	q.bindValue(u":hash_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(hashId)));
+	q.bindValue(u":status"_q, record.status);
+	if (!q.exec()) {
+		LOG(("DedupDb: Deferred insert failed: %1").arg(
+			q.lastError().text()));
+	} else if (oldHashId && oldHashId != hashId) {
+		cleanupHashRefs(oldHashId);
+	}
+}
+
+void DedupDb::Impl::forgetLoadedDoc(
+		Table table,
+		uint64 documentId,
+		bool isPhoto) {
+	std::lock_guard<std::mutex> lock(_shared->mutex);
+	auto &s = _shared->state[int(table)];
+	if (!s.loaded) {
+		return;
+	}
+	const auto type = isPhoto ? 1 : 0;
+	const auto it = s.docToHash[type].find(documentId);
+	if (it == s.docToHash[type].end()) {
+		return;
+	}
+	const auto hash = it.value();
+	s.docToHash[type].erase(it);
+	s.unfinishedDocs[type].remove(documentId);
+	const auto hashes = s.hashToDoc[type].find(hash);
+	if (hashes != s.hashToDoc[type].end()) {
+		hashes.value().remove(documentId);
+		if (hashes.value().isEmpty()) {
+			s.hashToDoc[type].erase(hashes);
+		}
+	}
+}
+
+bool DedupDb::Impl::containsDocId(
+		Table table,
+		uint64 documentId,
+		bool isPhoto) const {
 	ensureLoaded(table);
 	std::lock_guard<std::mutex> lock(_shared->mutex);
-	return _shared->state[int(table)].docToHash.contains(documentId);
+	const auto type = isPhoto ? 1 : 0;
+	return _shared->state[int(table)].docToHash[type].contains(documentId);
 }
 
 bool DedupDb::Impl::containsDocIdInDb(
 		Table table,
-		uint64 documentId) const {
+		uint64 documentId,
+		bool isPhoto) const {
 	if (!_open || !documentId) {
 		return false;
 	}
 	QSqlQuery q(_db);
 	q.prepare(u"SELECT EXISTS(SELECT 1 FROM " + TableName(table)
-		+ u" WHERE doc_id = :doc_id)"_q);
+		+ u" WHERE doc_id = :doc_id AND is_photo = :is_photo)"_q);
 	q.bindValue(u":doc_id"_q, QVariant::fromValue(
 		static_cast<qlonglong>(documentId)));
+	q.bindValue(u":is_photo"_q, isPhoto ? 1 : 0);
 	if (!q.exec() || !q.next()) {
 		return false;
 	}
@@ -860,7 +3704,8 @@ bool DedupDb::Impl::containsDocIdInDb(
 bool DedupDb::Impl::containsHash(Table table, const QByteArray &hash) const {
 	ensureLoaded(table);
 	std::lock_guard<std::mutex> lock(_shared->mutex);
-	return _shared->state[int(table)].hashToDoc.contains(hash);
+	const auto &s = _shared->state[int(table)];
+	return s.hashToDoc[0].contains(hash) || s.hashToDoc[1].contains(hash);
 }
 
 bool DedupDb::Impl::containsFinishedHash(
@@ -872,13 +3717,15 @@ bool DedupDb::Impl::containsFinishedHash(
 	ensureLoaded(table);
 	std::lock_guard<std::mutex> lock(_shared->mutex);
 	const auto &s = _shared->state[int(table)];
-	const auto it = s.hashToDoc.find(hash);
-	if (it == s.hashToDoc.end()) {
-		return false;
-	}
-	for (const auto docId : it.value()) {
-		if (!s.unfinishedDocs.contains(docId)) {
-			return true;
+	for (auto type = 0; type != 2; ++type) {
+		const auto it = s.hashToDoc[type].find(hash);
+		if (it == s.hashToDoc[type].end()) {
+			continue;
+		}
+		for (const auto docId : it.value()) {
+			if (!s.unfinishedDocs[type].contains(docId)) {
+				return true;
+			}
 		}
 	}
 	return false;
@@ -887,23 +3734,30 @@ bool DedupDb::Impl::containsFinishedHash(
 void DedupDb::Impl::rekey(
 		Table table,
 		uint64 oldDocumentId,
-		uint64 newDocumentId) {
+		uint64 newDocumentId,
+		bool isPhoto) {
 	if (!oldDocumentId || !newDocumentId || oldDocumentId == newDocumentId) {
 		return;
 	}
-	ensureLoaded(table);
+	const auto type = isPhoto ? 1 : 0;
 	{
 		std::lock_guard<std::mutex> lock(_shared->mutex);
 		auto &s = _shared->state[int(table)];
-		const auto hash = s.docToHash.take(oldDocumentId);
-		const auto wasUnfinished = s.unfinishedDocs.remove(oldDocumentId);
+		const auto hadOld = s.docToHash[type].contains(oldDocumentId);
+		const auto hash = s.docToHash[type].take(oldDocumentId);
+		const auto wasUnfinished = s.unfinishedDocs[type].remove(
+			oldDocumentId);
+		if (hadOld) {
+			s.docToHash[type].insert(
+				newDocumentId,
+				hash.isEmpty() ? QByteArray() : hash);
+		}
+		if (wasUnfinished) {
+			s.unfinishedDocs[type].insert(newDocumentId);
+		}
 		if (!hash.isEmpty()) {
-			s.docToHash[newDocumentId] = hash;
-			if (wasUnfinished) {
-				s.unfinishedDocs.insert(newDocumentId);
-			}
-			const auto hashes = s.hashToDoc.find(hash);
-			if (hashes != s.hashToDoc.end()) {
+			const auto hashes = s.hashToDoc[type].find(hash);
+			if (hashes != s.hashToDoc[type].end()) {
 				hashes.value().remove(oldDocumentId);
 				hashes.value().insert(newDocumentId);
 			}
@@ -915,11 +3769,12 @@ void DedupDb::Impl::rekey(
 	QSqlQuery q(_db);
 	q.prepare(u"UPDATE " + TableName(table)
 		+ u" SET doc_id = :new_doc_id "
-		"WHERE doc_id = :old_doc_id"_q);
+		"WHERE doc_id = :old_doc_id AND is_photo = :is_photo"_q);
 	q.bindValue(u":new_doc_id"_q, QVariant::fromValue(
 		static_cast<qlonglong>(newDocumentId)));
 	q.bindValue(u":old_doc_id"_q, QVariant::fromValue(
 		static_cast<qlonglong>(oldDocumentId)));
+	q.bindValue(u":is_photo"_q, type);
 	if (!q.exec()) {
 		LOG(("DedupDb: Rekey failed: %1").arg(q.lastError().text()));
 	}
@@ -936,13 +3791,16 @@ void DedupDb::Impl::updateDedupStatus(
 	{
 		std::lock_guard<std::mutex> lock(_shared->mutex);
 		auto &s = _shared->state[int(table)];
-		const auto hashes = s.hashToDoc.find(hash);
-		if (hashes != s.hashToDoc.end()) {
+		for (auto type = 0; type != 2; ++type) {
+			const auto hashes = s.hashToDoc[type].find(hash);
+			if (hashes == s.hashToDoc[type].end()) {
+				continue;
+			}
 			for (const auto docId : hashes.value()) {
 				if (status == u"u") {
-					s.unfinishedDocs.insert(docId);
+					s.unfinishedDocs[type].insert(docId);
 				} else {
-					s.unfinishedDocs.remove(docId);
+					s.unfinishedDocs[type].remove(docId);
 				}
 			}
 		}
@@ -950,7 +3808,7 @@ void DedupDb::Impl::updateDedupStatus(
 	QSqlQuery q(_db);
 	q.prepare(u"UPDATE " + TableName(table)
 		+ u" SET status = :status "
-		"WHERE hash = :hash"_q);
+		"WHERE hash_id = (SELECT hash_id FROM hashes WHERE hash = :hash)"_q);
 	q.bindValue(u":status"_q, status);
 	q.bindValue(u":hash"_q, hash);
 	if (!q.exec()) {
@@ -965,19 +3823,22 @@ void DedupDb::Impl::removeUnfinishedByHash(
 	{
 		std::lock_guard<std::mutex> lock(_shared->mutex);
 		auto &s = _shared->state[int(table)];
-		const auto hashes = s.hashToDoc.find(hash);
-		if (hashes != s.hashToDoc.end()) {
-			auto ids = hashes.value();
+		for (auto type = 0; type != 2; ++type) {
+			const auto hashes = s.hashToDoc[type].find(hash);
+			if (hashes == s.hashToDoc[type].end()) {
+				continue;
+			}
+			const auto ids = hashes.value();
 			for (const auto docId : ids) {
-				if (!s.unfinishedDocs.contains(docId)) {
+				if (!s.unfinishedDocs[type].contains(docId)) {
 					continue;
 				}
-				s.docToHash.remove(docId);
-				s.unfinishedDocs.remove(docId);
+				s.docToHash[type].remove(docId);
+				s.unfinishedDocs[type].remove(docId);
 				hashes.value().remove(docId);
 			}
 			if (hashes.value().isEmpty()) {
-				s.hashToDoc.erase(hashes);
+				s.hashToDoc[type].erase(hashes);
 			}
 		}
 	}
@@ -986,36 +3847,50 @@ void DedupDb::Impl::removeUnfinishedByHash(
 	}
 	QSqlQuery q(_db);
 	q.prepare(u"DELETE FROM " + TableName(table)
-		+ u" WHERE hash = :hash AND status = 'u'"_q);
+		+ u" WHERE hash_id = (SELECT hash_id FROM hashes WHERE hash = :hash) "
+		"AND status = 'u'"_q);
 	q.bindValue(u":hash"_q, hash);
 	if (!q.exec()) {
 		LOG(("DedupDb: RemoveUnfinishedByHash failed: %1").arg(
 			q.lastError().text()));
+	} else if (table == Table::Uploads && q.numRowsAffected() > 0) {
+		QSqlQuery select(_db);
+		select.prepare(u"SELECT hash_id FROM hashes WHERE hash = :hash"_q);
+		select.bindValue(u":hash"_q, hash);
+		if (select.exec() && select.next()) {
+			cleanupHashRefs(select.value(0).toULongLong());
+		}
 	}
 }
 
 QByteArray DedupDb::Impl::hashForDocId(
 		Table table,
-		uint64 documentId) const {
+		uint64 documentId,
+		bool isPhoto) const {
 	ensureLoaded(table);
 	std::lock_guard<std::mutex> lock(_shared->mutex);
-	return _shared->state[int(table)].docToHash.value(documentId);
+	const auto type = isPhoto ? 1 : 0;
+	return _shared->state[int(table)].docToHash[type].value(documentId);
 }
 
 uint64 DedupDb::Impl::seekDocumentId(
 		Table table,
 		const QByteArray &hash,
-		uint64 excludeDocumentId) const {
+		uint64 excludeDocumentId,
+		bool excludeIsPhoto) const {
 	ensureLoaded(table);
 	std::lock_guard<std::mutex> lock(_shared->mutex);
-	const auto &docs = _shared->state[int(table)].hashToDoc;
-	const auto it = docs.find(hash);
-	if (it == docs.end()) {
-		return 0;
-	}
-	for (const auto docId : it.value()) {
-		if (docId != excludeDocumentId) {
-			return docId;
+	const auto &s = _shared->state[int(table)];
+	for (auto type = 0; type != 2; ++type) {
+		const auto it = s.hashToDoc[type].find(hash);
+		if (it == s.hashToDoc[type].end()) {
+			continue;
+		}
+		for (const auto docId : it.value()) {
+			if (docId != excludeDocumentId
+				|| type != (excludeIsPhoto ? 1 : 0)) {
+				return docId;
+			}
 		}
 	}
 	return 0;
@@ -1024,16 +3899,72 @@ uint64 DedupDb::Impl::seekDocumentId(
 void DedupDb::Impl::addPending(
 		Table table,
 		uint64 documentId,
-		const QByteArray &hash) {
+		const QByteArray &hash,
+		bool isPhoto) {
 	insert(table, {
 		.hash = hash,
 		.documentId = documentId,
+		.isPhoto = isPhoto,
 		.status = u"u"_q,
 	});
 }
 
-void DedupDb::Impl::removePending(Table table, uint64 documentId) {
-	removeByDocumentId(table, documentId, u"u"_q);
+void DedupDb::Impl::removePending(
+		Table table,
+		uint64 documentId,
+		bool isPhoto) {
+	const auto type = isPhoto ? 1 : 0;
+	{
+		std::lock_guard<std::mutex> lock(_shared->mutex);
+		auto &s = _shared->state[int(table)];
+		if (s.loaded) {
+			const auto it = s.docToHash[type].constFind(documentId);
+			if (it != s.docToHash[type].constEnd()
+				&& s.unfinishedDocs[type].contains(documentId)) {
+				const auto hash = it.value();
+				s.docToHash[type].remove(documentId);
+				s.unfinishedDocs[type].remove(documentId);
+				const auto hashes = s.hashToDoc[type].find(hash);
+				if (hashes != s.hashToDoc[type].end()) {
+					hashes.value().remove(documentId);
+					if (hashes.value().isEmpty()) {
+						s.hashToDoc[type].erase(hashes);
+					}
+				}
+			}
+		}
+	}
+	if (!_open || !documentId) {
+		return;
+	}
+	auto hashId = uint64(0);
+	{
+		QSqlQuery select(_db);
+		select.prepare(u"SELECT hash_id FROM " + TableName(table)
+			+ u" WHERE doc_id = :doc_id AND is_photo = :is_photo "
+			"AND status = 'u'"_q);
+		select.bindValue(u":doc_id"_q, QVariant::fromValue(
+			static_cast<qlonglong>(documentId)));
+		select.bindValue(u":is_photo"_q, type);
+		if (select.exec() && select.next()) {
+			hashId = select.value(0).toULongLong();
+		}
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM " + TableName(table)
+		+ u" WHERE doc_id = :doc_id AND is_photo = :is_photo "
+		"AND status = 'u'"_q);
+	q.bindValue(u":doc_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(documentId)));
+	q.bindValue(u":is_photo"_q, type);
+	if (!q.exec()) {
+		LOG(("DedupDb: Remove pending failed: %1").arg(
+			q.lastError().text()));
+	} else if (table == Table::Uploads
+		&& q.numRowsAffected() > 0
+		&& hashId) {
+		cleanupHashRefs(hashId);
+	}
 }
 
 std::vector<DedupRecord> DedupDb::Impl::loadAll(Table table) const {
@@ -1043,12 +3974,21 @@ std::vector<DedupRecord> DedupDb::Impl::loadAll(Table table) const {
 		const auto &s = _shared->state[int(table)];
 		if (s.loaded) {
 			auto result = std::vector<DedupRecord>();
-			result.reserve(s.docToHash.size());
-			for (auto i = s.docToHash.constBegin(); i != s.docToHash.constEnd(); ++i) {
-				result.push_back({
-					.hash = i.value(),
-					.documentId = i.key(),
-				});
+			auto total = 0;
+			for (auto type = 0; type != 2; ++type) {
+				total += s.docToHash[type].size();
+			}
+			result.reserve(total);
+			for (auto type = 0; type != 2; ++type) {
+				for (auto i = s.docToHash[type].constBegin();
+					i != s.docToHash[type].constEnd();
+					++i) {
+					result.push_back({
+						.hash = i.value(),
+						.documentId = i.key(),
+						.isPhoto = (type == 1),
+					});
+				}
 			}
 			return result;
 		}
@@ -1058,7 +3998,9 @@ std::vector<DedupRecord> DedupDb::Impl::loadAll(Table table) const {
 		return result;
 	}
 	QSqlQuery q(_db);
-	if (!q.exec(u"SELECT hash, doc_id, status FROM " + TableName(table))) {
+	if (!q.exec(u"SELECT h.hash, d.doc_id, d.is_photo, d.status FROM "
+			+ TableName(table)
+			+ u" d JOIN hashes h ON h.hash_id = d.hash_id"_q)) {
 		LOG(("DedupDb: LoadAll failed: %1").arg(q.lastError().text()));
 		return result;
 	}
@@ -1066,34 +4008,304 @@ std::vector<DedupRecord> DedupDb::Impl::loadAll(Table table) const {
 		auto record = DedupRecord();
 		record.hash = q.value(0).toByteArray();
 		record.documentId = q.value(1).toULongLong();
-		record.status = q.value(2).toString();
+		record.isPhoto = (q.value(2).toInt() != 0);
+		record.status = q.value(3).toString();
 		result.push_back(std::move(record));
 	}
 	return result;
+}
+
+void DedupDb::Impl::refreshHashRefs(uint64 hashId) {
+	if (!_open || !hashId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE hashes SET hash_refs = "
+		"(SELECT COUNT(*) FROM chat_scan_items WHERE hash_id = :hash_id) "
+		"WHERE hash_id = :hash_id"_q);
+	q.bindValue(u":hash_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(hashId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: RefreshHashRefs failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::refreshMediaRefs(uint64 mediaId, bool isPhoto) {
+	if (!_open || !mediaId) {
+		return;
+	}
+	const auto type = isPhoto ? 1 : 0;
+	QSqlQuery count(_db);
+	count.prepare(u"SELECT COUNT(*), COALESCE(MAX(NULLIF(hash_id, 0)), 0) "
+		"FROM chat_scan_items "
+		"WHERE media_id = :media_id AND is_photo = :is_photo"_q);
+	count.bindValue(u":media_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(mediaId)));
+	count.bindValue(u":is_photo"_q, type);
+	if (!count.exec() || !count.next()) {
+		LOG(("DedupDb: RefreshMediaRefs count failed: %1").arg(
+			count.lastError().text()));
+		return;
+	}
+	const auto refs = count.value(0).toLongLong();
+	const auto hashId = count.value(1).toULongLong();
+	if (refs > 0) {
+		QSqlQuery q(_db);
+		q.prepare(u"INSERT OR REPLACE INTO media_refs "
+			"(media_id, is_photo, hash_id, id_refs) "
+			"VALUES (:media_id, :is_photo, :hash_id, :id_refs)"_q);
+		q.bindValue(u":media_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(mediaId)));
+		q.bindValue(u":is_photo"_q, type);
+		q.bindValue(u":hash_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(hashId)));
+		q.bindValue(u":id_refs"_q, QVariant::fromValue(refs));
+		if (!q.exec()) {
+			LOG(("DedupDb: RefreshMediaRefs failed: %1").arg(
+				q.lastError().text()));
+		}
+	} else {
+		QSqlQuery q(_db);
+		q.prepare(u"UPDATE media_refs SET hash_id = 0, id_refs = 0 "
+			"WHERE media_id = :media_id AND is_photo = :is_photo"_q);
+		q.bindValue(u":media_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(mediaId)));
+		q.bindValue(u":is_photo"_q, type);
+		if (!q.exec()) {
+			LOG(("DedupDb: RefreshMediaRefs clear failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+}
+
+void DedupDb::Impl::cleanupMediaRefs(uint64 mediaId, bool isPhoto) {
+	if (!_open || !mediaId) {
+		return;
+	}
+	const auto type = isPhoto ? 1 : 0;
+	{
+		QSqlQuery check(_db);
+		check.prepare(u"SELECT id_refs FROM media_refs "
+			"WHERE media_id = :media_id AND is_photo = :is_photo"_q);
+		check.bindValue(u":media_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(mediaId)));
+		check.bindValue(u":is_photo"_q, type);
+		if (!check.exec() || !check.next()) {
+			return;
+		} else if (check.value(0).toLongLong() > 0) {
+			return;
+		}
+	}
+	auto hashIds = std::set<uint64>();
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT hash_id FROM dedup_ul "
+			"WHERE doc_id = :media_id AND is_photo = :is_photo "
+			"AND status = 'f'"_q);
+		q.bindValue(u":media_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(mediaId)));
+		q.bindValue(u":is_photo"_q, type);
+		if (q.exec()) {
+			while (q.next()) {
+				const auto hashId = q.value(0).toULongLong();
+				if (hashId) {
+					hashIds.insert(hashId);
+				}
+			}
+		} else {
+			LOG(("DedupDb: CleanupMediaRefs select failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM dedup_ul "
+			"WHERE doc_id = :media_id AND is_photo = :is_photo "
+			"AND status = 'f' "
+			"AND NOT EXISTS (SELECT 1 FROM chat_scan_items "
+				"WHERE media_id = :media_id AND is_photo = :is_photo)"_q);
+		q.bindValue(u":media_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(mediaId)));
+		q.bindValue(u":is_photo"_q, type);
+		if (!q.exec()) {
+			LOG(("DedupDb: CleanupMediaRefs delete failed: %1").arg(
+				q.lastError().text()));
+		} else if (q.numRowsAffected() > 0) {
+			forgetLoadedDoc(Table::Uploads, mediaId, isPhoto);
+		}
+	}
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM media_refs "
+			"WHERE media_id = :media_id AND is_photo = :is_photo "
+			"AND id_refs = 0 "
+			"AND NOT EXISTS (SELECT 1 FROM dedup_ul "
+				"WHERE doc_id = :media_id AND is_photo = :is_photo "
+				"AND status = 'u')"_q);
+		q.bindValue(u":media_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(mediaId)));
+		q.bindValue(u":is_photo"_q, type);
+		if (!q.exec()) {
+			LOG(("DedupDb: CleanupMediaRefs row failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+	for (const auto hashId : hashIds) {
+		cleanupHashRefs(hashId);
+	}
+}
+
+void DedupDb::Impl::cleanupHashRefs(uint64 hashId) {
+	if (!_open || !hashId) {
+		return;
+	}
+	refreshHashRefs(hashId);
+	auto removed = std::vector<std::pair<uint64, bool>>();
+	auto selectionFailed = false;
+	{
+		QSqlQuery select(_db);
+		select.prepare(u"SELECT doc_id, is_photo FROM dedup_ul "
+			"WHERE hash_id = :hash_id AND status = 'f' "
+			"AND NOT EXISTS (SELECT 1 FROM chat_scan_items c "
+				"WHERE c.media_id = dedup_ul.doc_id "
+				"AND c.is_photo = dedup_ul.is_photo) "
+			"AND NOT EXISTS (SELECT 1 FROM media_refs m "
+				"WHERE m.media_id = dedup_ul.doc_id "
+				"AND m.is_photo = dedup_ul.is_photo "
+				"AND m.id_refs > 0)"_q);
+		select.bindValue(u":hash_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(hashId)));
+		if (select.exec()) {
+			while (select.next()) {
+				removed.emplace_back(
+					select.value(0).toULongLong(),
+					select.value(1).toInt() != 0);
+			}
+		} else {
+			selectionFailed = true;
+			LOG(("DedupDb: CleanupHashRefs select failed: %1").arg(
+				select.lastError().text()));
+		}
+	}
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM dedup_ul "
+			"WHERE hash_id = :hash_id AND status = 'f' "
+			"AND NOT EXISTS (SELECT 1 FROM chat_scan_items c "
+				"WHERE c.media_id = dedup_ul.doc_id "
+				"AND c.is_photo = dedup_ul.is_photo) "
+			"AND NOT EXISTS (SELECT 1 FROM media_refs m "
+				"WHERE m.media_id = dedup_ul.doc_id "
+				"AND m.is_photo = dedup_ul.is_photo "
+				"AND m.id_refs > 0)"_q);
+		q.bindValue(u":hash_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(hashId)));
+		if (!q.exec()) {
+			LOG(("DedupDb: CleanupHashRefs uploads failed: %1").arg(
+				q.lastError().text()));
+		} else if (q.numRowsAffected() > 0) {
+			if (selectionFailed) {
+				invalidateTable(Table::Uploads);
+			} else {
+				for (const auto &[docId, isPhoto] : removed) {
+					forgetLoadedDoc(Table::Uploads, docId, isPhoto);
+				}
+			}
+		}
+	}
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM media_refs "
+			"WHERE hash_id = :hash_id AND id_refs = 0 "
+			"AND NOT EXISTS (SELECT 1 FROM dedup_ul "
+				"WHERE doc_id = media_refs.media_id "
+				"AND is_photo = media_refs.is_photo "
+				"AND status = 'u')"_q);
+		q.bindValue(u":hash_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(hashId)));
+		if (!q.exec()) {
+			LOG(("DedupDb: CleanupHashRefs media failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM hashes "
+			"WHERE hash_id = :hash_id AND hash_refs = 0 "
+			"AND NOT EXISTS (SELECT 1 FROM chat_scan_items "
+				"WHERE hash_id = :hash_id) "
+			"AND NOT EXISTS (SELECT 1 FROM dedup_ul "
+				"WHERE hash_id = :hash_id) "
+			"AND NOT EXISTS (SELECT 1 FROM dedup_dl "
+				"WHERE hash_id = :hash_id) "
+			"AND NOT EXISTS (SELECT 1 FROM media_refs "
+				"WHERE hash_id = :hash_id AND id_refs > 0) "
+			"AND NOT EXISTS (SELECT 1 FROM job_items "
+				"WHERE hash_id = :hash_id)"_q);
+		q.bindValue(u":hash_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(hashId)));
+		if (!q.exec()) {
+			LOG(("DedupDb: CleanupHashRefs hash failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+}
+
+void DedupDb::Impl::refreshChatScanRefs(
+		const std::set<uint64> &hashIds,
+		const std::set<std::pair<uint64, bool>> &media) {
+	if (!_open) {
+		return;
+	}
+	for (const auto hashId : hashIds) {
+		refreshHashRefs(hashId);
+	}
+	for (const auto &[mediaId, isPhoto] : media) {
+		refreshMediaRefs(mediaId, isPhoto);
+	}
+	for (const auto &[mediaId, isPhoto] : media) {
+		cleanupMediaRefs(mediaId, isPhoto);
+	}
+	for (const auto hashId : hashIds) {
+		cleanupHashRefs(hashId);
+	}
 }
 
 void DedupDb::Impl::insertDlResume(const DlResumeRecord &record) {
 	if (!_open) {
 		return;
 	}
+	auto jobId = findJobId(
+		JobKind::Download,
+		record.sessionId,
+		record.peerId);
+	if (!jobId) {
+		auto job = JobRecord();
+		job.kind = JobKind::Download;
+		job.sessionId = record.sessionId;
+		job.scopeId = record.peerId;
+		job.state = JobState::Pending;
+		jobId = createJob(job);
+		if (!jobId) {
+			return;
+		}
+	}
 	QSqlQuery q(_db);
-	q.prepare(u"INSERT OR REPLACE INTO dl_resume "
-		"(session_id, peer_id, msg_id, path, file_size, doc_id) "
-		"VALUES (:session_id, :peer_id, :msg_id, :path, :file_size, "
-		":doc_id)"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.sessionId)));
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.peerId)));
-	q.bindValue(u":msg_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(record.msgId)));
-	q.bindValue(u":path"_q, record.path);
-	q.bindValue(u":file_size"_q, QVariant::fromValue(
-		static_cast<qlonglong>(record.fileSize)));
-	q.bindValue(u":doc_id"_q, QVariant::fromValue(
+	q.prepare(u"INSERT OR REPLACE INTO job_items "
+		"(job_id, item_id, media_id, is_photo, hash_id, state, payload) "
+		"VALUES (:job_id, :item_id, :media_id, 0, 0, :state, :payload)"_q);
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	q.bindValue(u":item_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(record.msgId)));
+	q.bindValue(u":media_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(record.docId)));
+	q.bindValue(u":state"_q, int(JobState::Pending));
+	q.bindValue(u":payload"_q, SerializeDlResumePayload(record));
 	if (!q.exec()) {
 		LOG(("DedupDb: InsertDlResume failed: %1").arg(q.lastError().text()));
+		return;
 	}
 }
 
@@ -1104,28 +4316,34 @@ void DedupDb::Impl::removeDlResume(
 	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM dl_resume "
-		"WHERE peer_id = :peer_id AND msg_id = :msg_id "
-		"AND session_id = :session_id"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId)));
-	q.bindValue(u":msg_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(msgId)));
-	if (!q.exec()) {
-		LOG(("DedupDb: RemoveDlResume failed: %1").arg(q.lastError().text()));
-	}
-}
-
-void DedupDb::Impl::clearDlResume() {
-	if (!_open) {
+	const auto jobId = findJobId(JobKind::Download, sessionId, peerId);
+	if (!jobId) {
 		return;
 	}
-	QSqlQuery q(_db);
-	if (!q.exec(u"DELETE FROM dl_resume"_q)) {
-		LOG(("DedupDb: ClearDlResume failed: %1").arg(q.lastError().text()));
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM job_items "
+			"WHERE job_id = :job_id AND item_id = :item_id"_q);
+		q.bindValue(u":job_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(jobId)));
+		q.bindValue(u":item_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(msgId)));
+		if (!q.exec()) {
+			LOG(("DedupDb: RemoveDlResume failed: %1").arg(
+				q.lastError().text()));
+			return;
+		}
+	}
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT 1 FROM job_items "
+			"WHERE job_id = :job_id LIMIT 1"_q);
+		q.bindValue(u":job_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(jobId)));
+		if (q.exec() && !q.next()) {
+			removeJob(jobId);
+			return;
+		}
 	}
 }
 
@@ -1135,8 +4353,12 @@ std::vector<DlResumeRecord> DedupDb::Impl::loadAllDlResume() const {
 		return result;
 	}
 	QSqlQuery q(_db);
-	if (!q.exec(u"SELECT session_id, peer_id, msg_id, "
-		"path, file_size, doc_id FROM dl_resume"_q)) {
+	q.prepare(u"SELECT j.session_id, j.scope_id, i.item_id, "
+		"i.media_id, i.payload FROM jobs j "
+		"JOIN job_items i ON i.job_id = j.job_id "
+		"WHERE j.kind = :kind ORDER BY j.job_id, i.item_id"_q);
+	q.bindValue(u":kind"_q, JobKindName(JobKind::Download));
+	if (!q.exec()) {
 		LOG(("DedupDb: LoadAllDlResume failed: %1").arg(
 			q.lastError().text()));
 		return result;
@@ -1146,9 +4368,10 @@ std::vector<DlResumeRecord> DedupDb::Impl::loadAllDlResume() const {
 		record.sessionId = q.value(0).toULongLong();
 		record.peerId = q.value(1).toULongLong();
 		record.msgId = q.value(2).toLongLong();
-		record.path = q.value(3).toString();
-		record.fileSize = q.value(4).toLongLong();
-		record.docId = q.value(5).toULongLong();
+		record.docId = q.value(3).toULongLong();
+		if (!ReadDlResumePayload(q.value(4).toByteArray(), record)) {
+			continue;
+		}
 		result.push_back(std::move(record));
 	}
 	return result;
@@ -1158,23 +4381,33 @@ void DedupDb::Impl::insertUlResume(const UlResumeRecord &record) {
 	if (!_open) {
 		return;
 	}
+	auto jobId = findJobId(
+		JobKind::Upload,
+		record.sessionId,
+		record.peerId);
+	if (!jobId) {
+		auto job = JobRecord();
+		job.kind = JobKind::Upload;
+		job.sessionId = record.sessionId;
+		job.scopeId = record.peerId;
+		job.state = JobState::Pending;
+		jobId = createJob(job);
+		if (!jobId) {
+			return;
+		}
+	}
 	QSqlQuery q(_db);
-	q.prepare(u"INSERT OR REPLACE INTO ul_resume "
-		"(session_id, peer_id, path, parts_sent, sent_size, file_id, "
-		"topic_root_id) "
-		"VALUES (:session_id, :peer_id, :path, :parts_sent, :sent_size, "
-		":file_id, :topic_root_id)"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.sessionId)));
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.peerId)));
-	q.bindValue(u":path"_q, record.path);
-	q.bindValue(u":parts_sent"_q, record.partsSent);
-	q.bindValue(u":sent_size"_q, QVariant::fromValue(record.sentSize));
-	q.bindValue(u":file_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(record.fileId)));
-	q.bindValue(u":topic_root_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(record.topicRootId)));
+	q.prepare(u"INSERT OR REPLACE INTO job_items "
+		"(job_id, item_id, media_id, is_photo, hash_id, state, payload) "
+		"VALUES (:job_id, :item_id, :media_id, 0, 0, :state, :payload)"_q);
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	q.bindValue(u":item_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(UlResumeItemId(record.path))));
+	q.bindValue(u":media_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(record.fileId)));
+	q.bindValue(u":state"_q, int(JobState::Pending));
+	q.bindValue(u":payload"_q, SerializeUlResume(record));
 	if (!q.exec()) {
 		LOG(("DedupDb: InsertUlResume failed: %1").arg(q.lastError().text()));
 	}
@@ -1187,17 +4420,33 @@ void DedupDb::Impl::removeUlResume(
 	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM ul_resume "
-		"WHERE peer_id = :peer_id AND path = :path "
-		"AND session_id = :session_id"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId)));
-	q.bindValue(u":path"_q, path);
-	if (!q.exec()) {
-		LOG(("DedupDb: RemoveUlResume failed: %1").arg(q.lastError().text()));
+	const auto jobId = findJobId(JobKind::Upload, sessionId, peerId);
+	if (!jobId) {
+		return;
+	}
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM job_items "
+			"WHERE job_id = :job_id AND item_id = :item_id"_q);
+		q.bindValue(u":job_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(jobId)));
+		q.bindValue(u":item_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(UlResumeItemId(path))));
+		if (!q.exec()) {
+			LOG(("DedupDb: RemoveUlResume failed: %1").arg(
+				q.lastError().text()));
+			return;
+		}
+	}
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT 1 FROM job_items "
+			"WHERE job_id = :job_id LIMIT 1"_q);
+		q.bindValue(u":job_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(jobId)));
+		if (q.exec() && !q.next()) {
+			removeJob(jobId);
+		}
 	}
 }
 
@@ -1205,13 +4454,33 @@ void DedupDb::Impl::clearUlResume(uint64 sessionId) {
 	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM ul_resume WHERE session_id = :session_id"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	if (!q.exec()) {
-		LOG(("DedupDb: ClearUlResume failed: %1").arg(q.lastError().text()));
+	beginTransaction();
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM job_items WHERE job_id IN ("
+			"SELECT job_id FROM jobs WHERE kind = :kind "
+			"AND session_id = :session_id)"_q);
+		q.bindValue(u":kind"_q, JobKindName(JobKind::Upload));
+		q.bindValue(u":session_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(sessionId)));
+		if (!q.exec()) {
+			LOG(("DedupDb: ClearUlResume items failed: %1").arg(
+				q.lastError().text()));
+		}
 	}
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM jobs WHERE kind = :kind "
+			"AND session_id = :session_id"_q);
+		q.bindValue(u":kind"_q, JobKindName(JobKind::Upload));
+		q.bindValue(u":session_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(sessionId)));
+		if (!q.exec()) {
+			LOG(("DedupDb: ClearUlResume failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+	commitTransaction();
 }
 
 std::vector<UlResumeRecord> DedupDb::Impl::loadAllUlResume(
@@ -1221,9 +4490,11 @@ std::vector<UlResumeRecord> DedupDb::Impl::loadAllUlResume(
 		return result;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT session_id, peer_id, path, parts_sent, sent_size, "
-		"file_id, topic_root_id FROM ul_resume "
-		"WHERE session_id = :session_id"_q);
+	q.prepare(u"SELECT j.scope_id, i.payload FROM jobs j "
+		"JOIN job_items i ON i.job_id = j.job_id "
+		"WHERE j.kind = :kind AND j.session_id = :session_id "
+		"ORDER BY j.job_id, i.item_id"_q);
+	q.bindValue(u":kind"_q, JobKindName(JobKind::Upload));
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(sessionId)));
 	if (!q.exec()) {
@@ -1232,52 +4503,180 @@ std::vector<UlResumeRecord> DedupDb::Impl::loadAllUlResume(
 		return result;
 	}
 	while (q.next()) {
-		auto record = UlResumeRecord();
-		record.sessionId = q.value(0).toULongLong();
-		record.peerId = q.value(1).toULongLong();
-		record.path = q.value(2).toString();
-		record.partsSent = q.value(3).toInt();
-		record.sentSize = q.value(4).toLongLong();
-		record.fileId = static_cast<uint64>(q.value(5).toLongLong());
-		record.topicRootId = q.value(6).toLongLong();
-		result.push_back(std::move(record));
+		if (auto record = DeserializeUlResume(q.value(1).toByteArray())) {
+			record->sessionId = sessionId;
+			if (!record->peerId) {
+				record->peerId = q.value(0).toULongLong();
+			}
+			result.push_back(std::move(*record));
+		}
 	}
 	return result;
+}
+
+std::optional<std::pair<uint64, EfJobOptions>> DedupDb::Impl::findEfJob(
+		uint64 sessionId,
+		PeerId destPeerId,
+		const QString &jobId) const {
+	if (!_open) {
+		return std::nullopt;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT job_id, options FROM jobs "
+		"WHERE kind = :kind AND session_id = :session_id "
+		"AND scope_id = :scope_id ORDER BY job_id DESC"_q);
+	q.bindValue(u":kind"_q, JobKindName(JobKind::EnhancedForward));
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	q.bindValue(u":scope_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(destPeerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: FindEfJob failed: %1").arg(q.lastError().text()));
+		return std::nullopt;
+	}
+	while (q.next()) {
+		if (auto options = DeserializeEfJobOptions(
+				q.value(1).toByteArray())) {
+			if (options->jobId == jobId) {
+				return std::make_pair(
+					q.value(0).toULongLong(),
+					std::move(*options));
+			}
+		}
+	}
+	return std::nullopt;
+}
+
+std::vector<uint64> DedupDb::Impl::findEfJobIds(
+		const QString &jobId) const {
+	auto result = std::vector<uint64>();
+	if (!_open) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT job_id, options FROM jobs "
+		"WHERE kind = :kind"_q);
+	q.bindValue(u":kind"_q, JobKindName(JobKind::EnhancedForward));
+	if (!q.exec()) {
+		LOG(("DedupDb: FindEfJobIds failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		if (const auto options = DeserializeEfJobOptions(
+				q.value(1).toByteArray())) {
+			if (options->jobId == jobId) {
+				result.push_back(q.value(0).toULongLong());
+			}
+		}
+	}
+	return result;
+}
+
+std::vector<EfResumeItem> DedupDb::Impl::readEfResumeItems(
+		uint64 jobId,
+		const EfJobOptions &options) const {
+	auto result = std::vector<EfResumeItem>();
+	if (!_open || !jobId) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT item_id, payload FROM job_items "
+		"WHERE job_id = :job_id ORDER BY item_id"_q);
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ReadEfResumeItems failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		if (auto item = DeserializeEfResumeItem(
+				q.value(1).toByteArray())) {
+			item->jobId = options.jobId;
+			item->peerId = options.destPeerId;
+			item->paused = options.paused;
+			result.push_back(std::move(*item));
+		}
+	}
+	return result;
+}
+
+void DedupDb::Impl::updateEfJobOptions(
+		uint64 jobId,
+		const EfJobOptions &options) {
+	if (!_open || !jobId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE jobs SET options = :options, "
+		"updated_at = :updated_at WHERE job_id = :job_id"_q);
+	q.bindValue(u":options"_q, SerializeEfJobOptions(options));
+	q.bindValue(u":updated_at"_q, QVariant::fromValue(
+		static_cast<qlonglong>(base::unixtime::now())));
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: UpdateEfJobOptions failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::removeEfJobIfEmpty(uint64 jobId) {
+	if (!_open || !jobId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT 1 FROM job_items WHERE job_id = :job_id LIMIT 1"_q);
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	if (q.exec() && !q.next()) {
+		removeJob(jobId);
+	}
 }
 
 void DedupDb::Impl::insertEfResumeItem(const EfResumeItem &item) {
 	if (!_open) {
 		return;
 	}
+	auto found = findEfJob(item.sessionId, item.peerId, item.jobId);
+	auto jobId = found ? found->first : uint64(0);
+	if (!jobId) {
+		auto options = EfJobOptions{
+			.jobId = item.jobId,
+			.destPeerId = item.peerId,
+			.srcPeerId = item.sourceId.peer,
+			.paused = item.paused,
+		};
+		auto job = JobRecord();
+		job.kind = JobKind::EnhancedForward;
+		job.sessionId = item.sessionId;
+		job.scopeId = item.peerId.value;
+		job.options = SerializeEfJobOptions(options);
+		job.state = JobState::Pending;
+		jobId = createJob(job);
+		if (!jobId) {
+			return;
+		}
+	} else if (found->second.paused != item.paused) {
+		found->second.paused = item.paused;
+		updateEfJobOptions(jobId, found->second);
+	}
 	QSqlQuery q(_db);
-	q.prepare(u"INSERT OR REPLACE INTO ef_resume "
-		"(session_id, job_id, item_index, dest_peer_id, source_peer_id, "
-		"source_msg_id, state, local_path, file_id, uploaded_parts, "
-		"file_hash, media_id, file_size, paused) "
-		"VALUES (:session_id, :job_id, :item_index, :dest_peer_id, :source_peer_id, "
-		":source_msg_id, :state, :local_path, :file_id, :uploaded_parts, "
-		":file_hash, :media_id, :file_size, :paused)"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(item.sessionId)));
-	q.bindValue(u":job_id"_q, item.jobId);
-	q.bindValue(u":item_index"_q, item.itemIndex);
-	q.bindValue(u":dest_peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(item.peerId.value)));
-	q.bindValue(u":source_peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(item.sourceId.peer.value)));
-	q.bindValue(u":source_msg_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(item.sourceId.msg.bare)));
-	q.bindValue(u":state"_q, item.state);
-	q.bindValue(u":local_path"_q, item.localPath);
-	q.bindValue(u":file_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(item.fileId)));
-	q.bindValue(u":uploaded_parts"_q, item.uploadedParts);
-	q.bindValue(u":file_hash"_q, item.fileHash);
+	q.prepare(u"INSERT OR REPLACE INTO job_items "
+		"(job_id, item_id, media_id, is_photo, hash_id, state, payload) "
+		"VALUES (:job_id, :item_id, :media_id, 0, :hash_id, :state, "
+		":payload)"_q);
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	q.bindValue(u":item_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(item.itemIndex)));
 	q.bindValue(u":media_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(item.mediaId)));
-	q.bindValue(u":file_size"_q, QVariant::fromValue(
-		static_cast<qlonglong>(item.fileSize)));
-	q.bindValue(u":paused"_q, item.paused ? 1 : 0);
+		static_cast<qulonglong>(item.mediaId)));
+	q.bindValue(u":hash_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(resolveHashId(item.fileHash))));
+	q.bindValue(u":state"_q, int(JobState::Pending));
+	q.bindValue(u":payload"_q, SerializeEfResumeItem(item));
 	if (!q.exec()) {
 		LOG(("DedupDb: InsertEfResumeItem failed: %1").arg(
 			q.lastError().text()));
@@ -1290,14 +4689,20 @@ void DedupDb::Impl::removeEfResumeItem(
 	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM ef_resume "
-		"WHERE job_id = :job_id AND item_index = :item_index"_q);
-	q.bindValue(u":job_id"_q, jobId);
-	q.bindValue(u":item_index"_q, itemIndex);
-	if (!q.exec()) {
-		LOG(("DedupDb: RemoveEfResumeItem failed: %1").arg(
-			q.lastError().text()));
+	for (const auto dbJobId : findEfJobIds(jobId)) {
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM job_items "
+			"WHERE job_id = :job_id AND item_id = :item_id"_q);
+		q.bindValue(u":job_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(dbJobId)));
+		q.bindValue(u":item_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(itemIndex)));
+		if (!q.exec()) {
+			LOG(("DedupDb: RemoveEfResumeItem failed: %1").arg(
+				q.lastError().text()));
+			continue;
+		}
+		removeEfJobIfEmpty(dbJobId);
 	}
 }
 
@@ -1308,19 +4713,61 @@ void DedupDb::Impl::removeEfResumeBySource(
 	if (!_open || !sourceMsgId) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM ef_resume "
-		"WHERE session_id = :session_id AND dest_peer_id = :dest_peer_id "
-		"AND source_msg_id = :source_msg_id"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	q.bindValue(u":dest_peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(destPeerId.value)));
-	q.bindValue(u":source_msg_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(sourceMsgId.bare)));
-	if (!q.exec()) {
-		LOG(("DedupDb: RemoveEfResumeBySource failed: %1").arg(
-			q.lastError().text()));
+	auto jobIds = std::vector<uint64>();
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT job_id FROM jobs WHERE kind = :kind "
+			"AND session_id = :session_id AND scope_id = :scope_id"_q);
+		q.bindValue(u":kind"_q, JobKindName(JobKind::EnhancedForward));
+		q.bindValue(u":session_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(sessionId)));
+		q.bindValue(u":scope_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(destPeerId.value)));
+		if (!q.exec()) {
+			LOG(("DedupDb: RemoveEfResumeBySource jobs failed: %1").arg(
+				q.lastError().text()));
+			return;
+		}
+		while (q.next()) {
+			jobIds.push_back(q.value(0).toULongLong());
+		}
+	}
+	for (const auto jobId : jobIds) {
+		auto itemIds = std::vector<uint64>();
+		{
+			QSqlQuery q(_db);
+			q.prepare(u"SELECT item_id, payload FROM job_items "
+				"WHERE job_id = :job_id"_q);
+			q.bindValue(u":job_id"_q, QVariant::fromValue(
+				static_cast<qulonglong>(jobId)));
+			if (!q.exec()) {
+				LOG(("DedupDb: RemoveEfResumeBySource items failed: %1").arg(
+					q.lastError().text()));
+				continue;
+			}
+			while (q.next()) {
+				if (const auto item = DeserializeEfResumeItem(
+						q.value(1).toByteArray())) {
+					if (item->sourceId.msg == sourceMsgId) {
+						itemIds.push_back(q.value(0).toULongLong());
+					}
+				}
+			}
+		}
+		for (const auto itemId : itemIds) {
+			QSqlQuery q(_db);
+			q.prepare(u"DELETE FROM job_items "
+				"WHERE job_id = :job_id AND item_id = :item_id"_q);
+			q.bindValue(u":job_id"_q, QVariant::fromValue(
+				static_cast<qulonglong>(jobId)));
+			q.bindValue(u":item_id"_q, QVariant::fromValue(
+				static_cast<qulonglong>(itemId)));
+			if (!q.exec()) {
+				LOG(("DedupDb: RemoveEfResumeBySource delete failed: %1").arg(
+					q.lastError().text()));
+			}
+		}
+		removeEfJobIfEmpty(jobId);
 	}
 }
 
@@ -1328,13 +4775,25 @@ void DedupDb::Impl::clearEfResumeForPeer(PeerId peerId) {
 	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM ef_resume WHERE dest_peer_id = :dest_peer_id"_q);
-	q.bindValue(u":dest_peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	if (!q.exec()) {
-		LOG(("DedupDb: ClearEfResumeForPeer failed: %1").arg(
-			q.lastError().text()));
+	auto jobIds = std::vector<uint64>();
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT job_id FROM jobs WHERE kind = :kind "
+			"AND scope_id = :scope_id"_q);
+		q.bindValue(u":kind"_q, JobKindName(JobKind::EnhancedForward));
+		q.bindValue(u":scope_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		if (!q.exec()) {
+			LOG(("DedupDb: ClearEfResumeForPeer failed: %1").arg(
+				q.lastError().text()));
+			return;
+		}
+		while (q.next()) {
+			jobIds.push_back(q.value(0).toULongLong());
+		}
+	}
+	for (const auto jobId : jobIds) {
+		removeJob(jobId);
 	}
 }
 
@@ -1342,12 +4801,8 @@ void DedupDb::Impl::clearEfResumeJob(const QString &jobId) {
 	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM ef_resume WHERE job_id = :job_id"_q);
-	q.bindValue(u":job_id"_q, jobId);
-	if (!q.exec()) {
-		LOG(("DedupDb: ClearEfResumeJob failed: %1").arg(
-			q.lastError().text()));
+	for (const auto dbJobId : findEfJobIds(jobId)) {
+		removeJob(dbJobId);
 	}
 }
 
@@ -1359,37 +4814,29 @@ std::vector<EfResumeItem> DedupDb::Impl::loadEfResumeItemsForPeer(
 		return result;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT job_id, item_index, source_peer_id, source_msg_id, "
-		"state, local_path, file_id, uploaded_parts, file_hash, "
-		"media_id, file_size, paused FROM ef_resume "
-		"WHERE dest_peer_id = :dest_peer_id AND session_id = :session_id "
-		"ORDER BY item_index"_q);
-	q.bindValue(u":dest_peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
+	q.prepare(u"SELECT job_id, options FROM jobs "
+		"WHERE kind = :kind AND session_id = :session_id "
+		"AND scope_id = :scope_id ORDER BY job_id"_q);
+	q.bindValue(u":kind"_q, JobKindName(JobKind::EnhancedForward));
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(sessionId)));
+	q.bindValue(u":scope_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
 	if (!q.exec()) {
 		LOG(("DedupDb: LoadEfResumeItemsForPeer failed: %1").arg(
 			q.lastError().text()));
 		return result;
 	}
 	while (q.next()) {
-		auto item = EfResumeItem();
-		item.jobId = q.value(0).toString();
-		item.itemIndex = q.value(1).toInt();
-		item.peerId = peerId;
-		item.sourceId = FullMsgId(
-			PeerId(q.value(2).toULongLong()),
-			MsgId(q.value(3).toLongLong()));
-		item.state = q.value(4).toString();
-		item.localPath = q.value(5).toString();
-		item.fileId = static_cast<uint64>(q.value(6).toLongLong());
-		item.uploadedParts = q.value(7).toInt();
-		item.fileHash = q.value(8).toByteArray();
-		item.mediaId = static_cast<uint64>(q.value(9).toLongLong());
-		item.fileSize = q.value(10).toLongLong();
-		item.paused = (q.value(11).toInt() != 0);
-		result.push_back(std::move(item));
+		if (auto options = DeserializeEfJobOptions(
+				q.value(1).toByteArray())) {
+			for (auto &item : readEfResumeItems(
+					q.value(0).toULongLong(),
+					*options)) {
+				item.peerId = peerId;
+				result.push_back(std::move(item));
+			}
+		}
 	}
 	return result;
 }
@@ -1401,10 +4848,10 @@ std::vector<EfResumeItem> DedupDb::Impl::loadUnfinishedEfResumeItems(
 		return result;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT job_id, item_index, dest_peer_id, source_peer_id, "
-		"source_msg_id, state, local_path, file_id, uploaded_parts, "
-		"file_hash, media_id, file_size, paused FROM ef_resume "
-		"WHERE state <> 'done' AND session_id = :session_id ORDER BY item_index"_q);
+	q.prepare(u"SELECT job_id, options FROM jobs "
+		"WHERE kind = :kind AND session_id = :session_id "
+		"ORDER BY job_id"_q);
+	q.bindValue(u":kind"_q, JobKindName(JobKind::EnhancedForward));
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(sessionId)));
 	if (!q.exec()) {
@@ -1413,22 +4860,16 @@ std::vector<EfResumeItem> DedupDb::Impl::loadUnfinishedEfResumeItems(
 		return result;
 	}
 	while (q.next()) {
-		auto item = EfResumeItem();
-		item.jobId = q.value(0).toString();
-		item.itemIndex = q.value(1).toInt();
-		item.peerId = PeerId(q.value(2).toULongLong());
-		item.sourceId = FullMsgId(
-			PeerId(q.value(3).toULongLong()),
-			MsgId(q.value(4).toLongLong()));
-		item.state = q.value(5).toString();
-		item.localPath = q.value(6).toString();
-		item.fileId = static_cast<uint64>(q.value(7).toLongLong());
-		item.uploadedParts = q.value(8).toInt();
-		item.fileHash = q.value(9).toByteArray();
-		item.mediaId = static_cast<uint64>(q.value(10).toLongLong());
-		item.fileSize = q.value(11).toLongLong();
-		item.paused = (q.value(12).toInt() != 0);
-		result.push_back(std::move(item));
+		if (auto options = DeserializeEfJobOptions(
+				q.value(1).toByteArray())) {
+			for (auto &item : readEfResumeItems(
+					q.value(0).toULongLong(),
+					*options)) {
+				if (item.state != u"done"_q) {
+					result.push_back(std::move(item));
+				}
+			}
+		}
 	}
 	return result;
 }
@@ -1440,22 +4881,39 @@ void DedupDb::Impl::setEfResumePaused(
 	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	if (peerId) {
-		q.prepare(u"UPDATE ef_resume SET paused = :paused "
-			"WHERE session_id = :session_id AND dest_peer_id = :peer_id"_q);
-		q.bindValue(u":peer_id"_q, QVariant::fromValue(
-			static_cast<qulonglong>(peerId.value)));
-	} else {
-		q.prepare(u"UPDATE ef_resume SET paused = :paused "
-			"WHERE session_id = :session_id"_q);
+	auto jobs = std::vector<std::pair<uint64, EfJobOptions>>();
+	{
+		auto sql = u"SELECT job_id, options FROM jobs "
+			"WHERE kind = :kind AND session_id = :session_id"_q;
+		if (peerId) {
+			sql += u" AND scope_id = :scope_id"_q;
+		}
+		QSqlQuery q(_db);
+		q.prepare(sql);
+		q.bindValue(u":kind"_q, JobKindName(JobKind::EnhancedForward));
+		q.bindValue(u":session_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(sessionId)));
+		if (peerId) {
+			q.bindValue(u":scope_id"_q, QVariant::fromValue(
+				static_cast<qulonglong>(peerId.value)));
+		}
+		if (!q.exec()) {
+			LOG(("DedupDb: SetEfResumePaused select failed: %1").arg(
+				q.lastError().text()));
+			return;
+		}
+		while (q.next()) {
+			if (auto options = DeserializeEfJobOptions(
+					q.value(1).toByteArray())) {
+				options->paused = paused;
+				jobs.emplace_back(
+					q.value(0).toULongLong(),
+					std::move(*options));
+			}
+		}
 	}
-	q.bindValue(u":paused"_q, paused ? 1 : 0);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	if (!q.exec()) {
-		LOG(("DedupDb: SetEfResumePaused failed: %1").arg(
-			q.lastError().text()));
+	for (const auto &[jobId, options] : jobs) {
+		updateEfJobOptions(jobId, options);
 	}
 }
 
@@ -1463,17 +4921,28 @@ void DedupDb::Impl::beginTransaction() {
 	if (!_open) {
 		return;
 	}
+	if (_transactionDepth > 0) {
+		++_transactionDepth;
+		return;
+	}
 	QSqlQuery q(_db);
 	if (!q.exec(u"BEGIN IMMEDIATE"_q)) {
 		LOG(("DedupDb: Begin transaction failed: %1").arg(
 			q.lastError().text()));
+		return;
 	}
+	_transactionDepth = 1;
 }
 
 void DedupDb::Impl::commitTransaction() {
-	if (!_open) {
+	if (!_open || _transactionDepth <= 0) {
 		return;
 	}
+	if (_transactionDepth > 1) {
+		--_transactionDepth;
+		return;
+	}
+	_transactionDepth = 0;
 	QSqlQuery q(_db);
 	if (!q.exec(u"COMMIT"_q)) {
 		LOG(("DedupDb: Commit transaction failed: %1").arg(
@@ -1487,31 +4956,261 @@ DedupDb::DedupDb(const QString &path, bool purgePending)
 
 DedupDb::~DedupDb() = default;
 
+DedupDb::TableUse::TableUse(DedupDb *db, Table table)
+: _db(db)
+, _table(table) {
+}
+
+DedupDb::TableUse::TableUse(TableUse &&other) noexcept
+: _db(std::exchange(other._db, nullptr))
+, _table(other._table) {
+}
+
+DedupDb::TableUse &DedupDb::TableUse::operator=(TableUse &&other) noexcept {
+	if (this != &other) {
+		if (_db) {
+			_db->releaseTable(_table);
+		}
+		_db = std::exchange(other._db, nullptr);
+		_table = other._table;
+	}
+	return *this;
+}
+
+DedupDb::TableUse::~TableUse() {
+	if (_db) {
+		_db->releaseTable(_table);
+	}
+}
+
+DedupDb::ChatTableUse::ChatTableUse(
+	DedupDb *db,
+	PeerId peerId,
+	bool allPeers)
+: _db(db)
+, _peerId(peerId)
+, _allPeers(allPeers) {
+}
+
+DedupDb::ChatTableUse::ChatTableUse(ChatTableUse &&other) noexcept
+: _db(std::exchange(other._db, nullptr))
+, _peerId(other._peerId)
+, _allPeers(other._allPeers) {
+}
+
+DedupDb::ChatTableUse &DedupDb::ChatTableUse::operator=(
+		ChatTableUse &&other) noexcept {
+	if (this != &other) {
+		if (_db) {
+			_db->releaseChatTable(_peerId, _allPeers);
+		}
+		_db = std::exchange(other._db, nullptr);
+		_peerId = other._peerId;
+		_allPeers = other._allPeers;
+	}
+	return *this;
+}
+
+DedupDb::ChatTableUse::~ChatTableUse() {
+	if (_db) {
+		_db->releaseChatTable(_peerId, _allPeers);
+	}
+}
+
 bool DedupDb::isOpen() const {
 	return _impl->isOpen();
+}
+
+DedupDb::TableUse DedupDb::useTable(Table table) {
+	_impl->acquireTable(table);
+	return TableUse(this, table);
+}
+
+DedupDb::ChatTableUse DedupDb::useChatTable(
+		PeerId peerId,
+		bool allPeers) {
+	_impl->acquireChatTable(peerId, allPeers);
+	return ChatTableUse(this, peerId, allPeers);
+}
+
+void DedupDb::releaseTable(Table table) {
+	_impl->releaseTable(table);
+}
+
+void DedupDb::releaseChatTable(PeerId peerId, bool allPeers) {
+	_impl->releaseChatTable(peerId, allPeers);
+}
+
+void DedupDb::ensureTableLoaded(Table table) {
+	_impl->ensureTableLoaded(table);
+}
+
+bool DedupDb::chatTableContainsDocId(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto,
+		bool allPeers) const {
+	return _impl->chatTableContainsDocId(
+		peerId,
+		mediaId,
+		isPhoto,
+		allPeers);
+}
+
+bool DedupDb::chatTableContainsHash(
+		PeerId peerId,
+		const QByteArray &hash,
+		bool allPeers) const {
+	return _impl->chatTableContainsHash(peerId, hash, allPeers);
+}
+
+void DedupDb::clearChatTable() {
+	_impl->clearChatTable();
+}
+
+void DedupDb::addChatTableUnique(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto,
+		const QByteArray &hash) {
+	_impl->addChatTableUnique(peerId, mediaId, isPhoto, hash);
+}
+
+void DedupDb::removeChatTableUnique(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto,
+		const QByteArray &hash) {
+	_impl->removeChatTableUnique(peerId, mediaId, isPhoto, hash);
+}
+
+void DedupDb::invalidateChatTable(PeerId peerId) {
+	_impl->invalidateChatTable(peerId);
+}
+
+void DedupDb::invalidateAllPeersChatTable() {
+	_impl->invalidateAllPeersChatTable();
 }
 
 void DedupDb::insert(Table table, const DedupRecord &record) {
 	_impl->insert(table, record);
 }
 
-void DedupDb::removeByDocumentId(
+bool DedupDb::containsDocId(
 		Table table,
 		uint64 documentId,
-		const QString &status) {
-	_impl->removeByDocumentId(table, documentId, status);
+		bool isPhoto) const {
+	return _impl->containsDocId(table, documentId, isPhoto);
 }
 
-bool DedupDb::containsDocId(Table table, uint64 documentId) const {
-	return _impl->containsDocId(table, documentId);
-}
-
-bool DedupDb::containsDocIdInDb(Table table, uint64 documentId) const {
-	return _impl->containsDocIdInDb(table, documentId);
+bool DedupDb::containsDocIdInDb(
+		Table table,
+		uint64 documentId,
+		bool isPhoto) const {
+	return _impl->containsDocIdInDb(table, documentId, isPhoto);
 }
 
 bool DedupDb::containsHash(Table table, const QByteArray &hash) const {
 	return _impl->containsHash(table, hash);
+}
+
+uint64 DedupDb::hashIdForHash(const QByteArray &hash) {
+	return _impl->resolveHashId(hash);
+}
+
+uint64 DedupDb::findHashId(const QByteArray &hash) const {
+	return _impl->findHashId(hash);
+}
+
+QByteArray DedupDb::hashForHashId(uint64 hashId) const {
+	return _impl->hashForHashId(hashId);
+}
+
+std::optional<HashOwner> DedupDb::hashOwner(uint64 hashId) const {
+	return _impl->hashOwner(hashId);
+}
+
+void DedupDb::setHashOwner(uint64 hashId, PeerId peerId, MsgId msgId) {
+	_impl->setHashOwner(hashId, peerId, msgId);
+}
+
+void DedupDb::clearHashOwner(uint64 hashId) {
+	_impl->clearHashOwner(hashId);
+}
+
+std::optional<HashOwner> DedupDb::findHashOwnerReplacement(
+		uint64 hashId,
+		PeerId excludePeer,
+		MsgId excludeMsg) const {
+	return _impl->findHashOwnerReplacement(hashId, excludePeer, excludeMsg);
+}
+
+bool DedupDb::claimOwner(uint64 hashId, PeerId peerId, MsgId msgId) {
+	return _impl->claimOwner(hashId, peerId, msgId);
+}
+
+void DedupDb::setOwner(uint64 hashId, PeerId peerId, MsgId msgId) {
+	_impl->setOwner(hashId, peerId, msgId);
+}
+
+void DedupDb::clearOwner(uint64 hashId) {
+	_impl->clearOwner(hashId);
+}
+
+std::optional<HashOwner> DedupDb::findReplacementOwner(
+		uint64 hashId,
+		PeerId excludePeer,
+		MsgId excludeMsg) const {
+	return _impl->findReplacementOwner(hashId, excludePeer, excludeMsg);
+}
+
+bool DedupDb::promoteOwner(uint64 hashId, PeerId peerId, MsgId msgId) {
+	return _impl->promoteOwner(hashId, peerId, msgId);
+}
+
+std::optional<HashOwner> DedupDb::refreshOwner(
+		uint64 hashId,
+		PeerId excludePeer,
+		MsgId excludeMsg) {
+	return _impl->refreshOwner(hashId, excludePeer, excludeMsg);
+}
+
+std::optional<ChatScanOwnerDecision> DedupDb::chatScanApplyHashOwner(
+		PeerId peerId,
+		MsgId msgId,
+		uint64 mediaId,
+		bool isPhoto,
+		const QByteArray &hash,
+		bool mediaDuplicate,
+		const QString &filename) {
+	return _impl->chatScanApplyHashOwner(
+		peerId,
+		msgId,
+		mediaId,
+		isPhoto,
+		hash,
+		mediaDuplicate,
+		filename);
+}
+
+bool DedupDb::recordUploadDestination(
+		const QByteArray &hash,
+		uint64 mediaId,
+		bool isPhoto,
+		PeerId peerId,
+		MsgId msgId,
+		bool tracked) {
+	return _impl->recordUploadDestination(
+		hash,
+		mediaId,
+		isPhoto,
+		peerId,
+		msgId,
+		tracked);
+}
+
+std::vector<ChatScanOwnerChange> DedupDb::removeChatScan(PeerId peerId) {
+	return _impl->removeChatScan(peerId);
 }
 
 bool DedupDb::containsFinishedHash(
@@ -1523,8 +5222,9 @@ bool DedupDb::containsFinishedHash(
 void DedupDb::rekey(
 		Table table,
 		uint64 oldDocumentId,
-		uint64 newDocumentId) {
-	_impl->rekey(table, oldDocumentId, newDocumentId);
+		uint64 newDocumentId,
+		bool isPhoto) {
+	_impl->rekey(table, oldDocumentId, newDocumentId, isPhoto);
 }
 
 void DedupDb::updateDedupStatus(
@@ -1542,23 +5242,36 @@ void DedupDb::removeUnfinishedByHash(
 
 QByteArray DedupDb::hashForDocId(
 		Table table,
-		uint64 documentId) const {
-	return _impl->hashForDocId(table, documentId);
+		uint64 documentId,
+		bool isPhoto) const {
+	return _impl->hashForDocId(table, documentId, isPhoto);
 }
 
 uint64 DedupDb::seekDocumentId(
 		Table table,
 		const QByteArray &hash,
-		uint64 excludeDocumentId) const {
-	return _impl->seekDocumentId(table, hash, excludeDocumentId);
+		uint64 excludeDocumentId,
+		bool excludeIsPhoto) const {
+	return _impl->seekDocumentId(
+		table,
+		hash,
+		excludeDocumentId,
+		excludeIsPhoto);
 }
 
-void DedupDb::addPending(Table table, uint64 documentId, const QByteArray &hash) {
-	_impl->addPending(table, documentId, hash);
+void DedupDb::addPending(
+		Table table,
+		uint64 documentId,
+		const QByteArray &hash,
+		bool isPhoto) {
+	_impl->addPending(table, documentId, hash, isPhoto);
 }
 
-void DedupDb::removePending(Table table, uint64 documentId) {
-	_impl->removePending(table, documentId);
+void DedupDb::removePending(
+		Table table,
+		uint64 documentId,
+		bool isPhoto) {
+	_impl->removePending(table, documentId, isPhoto);
 }
 
 std::vector<DedupRecord> DedupDb::loadAll(Table table) const {
@@ -1574,10 +5287,6 @@ void DedupDb::removeDlResume(
 		uint64 peerId,
 		int64 msgId) {
 	_impl->removeDlResume(sessionId, peerId, msgId);
-}
-
-void DedupDb::clearDlResume() {
-	_impl->clearDlResume();
 }
 
 std::vector<DlResumeRecord> DedupDb::loadAllDlResume() const {
@@ -1608,36 +5317,38 @@ void DedupDb::Impl::insertNfResume(const NfResumeRecord &record) {
 	if (!_open) {
 		return;
 	}
-	auto remaining = QByteArray();
-	remaining.reserve(int(record.remaining.size()) * 4);
-	for (const auto &msgId : record.remaining) {
-		const auto value = qint32(msgId.bare);
-		char buffer[4] = {};
-		memcpy(buffer, &value, 4);
-		remaining.append(buffer, 4);
+	const auto jobId = findJobId(
+		JobKind::Forward,
+		record.sessionId,
+		record.destPeerId.value);
+	if (!jobId) {
+		auto job = JobRecord();
+		job.kind = JobKind::Forward;
+		job.sessionId = record.sessionId;
+		job.scopeId = record.destPeerId.value;
+		job.options = SerializeNfResume(record);
+		job.state = ForwardJobState(record.state);
+		job.total = record.total;
+		job.done = record.done;
+		job.skipped = record.skipped;
+		if (!createJob(job)) {
+			LOG(("DedupDb: InsertNfResume job failed."));
+		}
+		return;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"INSERT OR REPLACE INTO nf_resume "
-		"(session_id, dest_peer_id, src_peer_id, total, done, skipped, "
-		"last_msg_id, state, forward_options, group_options, remaining) "
-		"VALUES (:session_id, :dest_peer_id, :src_peer_id, :total, :done, "
-		":skipped, :last_msg_id, :state, :forward_options, :group_options, "
-		":remaining)"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.sessionId)));
-	q.bindValue(u":dest_peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.destPeerId.value)));
-	q.bindValue(u":src_peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.srcPeerId.value)));
+	q.prepare(u"UPDATE jobs SET options = :options, state = :state, "
+		"total = :total, done = :done, skipped = :skipped, "
+		"updated_at = :updated_at WHERE job_id = :job_id"_q);
+	q.bindValue(u":options"_q, SerializeNfResume(record));
+	q.bindValue(u":state"_q, int(ForwardJobState(record.state)));
 	q.bindValue(u":total"_q, record.total);
 	q.bindValue(u":done"_q, record.done);
 	q.bindValue(u":skipped"_q, record.skipped);
-	q.bindValue(u":last_msg_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(record.lastMsgId.bare)));
-	q.bindValue(u":state"_q, record.state);
-	q.bindValue(u":forward_options"_q, record.forwardOptions);
-	q.bindValue(u":group_options"_q, record.groupOptions);
-	q.bindValue(u":remaining"_q, remaining);
+	q.bindValue(u":updated_at"_q, QVariant::fromValue(
+		static_cast<qlonglong>(base::unixtime::now())));
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
 	if (!q.exec()) {
 		LOG(("DedupDb: InsertNfResume failed: %1").arg(
 			q.lastError().text()));
@@ -1648,16 +5359,12 @@ void DedupDb::Impl::removeNfResume(uint64 sessionId, PeerId destPeerId) {
 	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM nf_resume "
-		"WHERE session_id = :session_id AND dest_peer_id = :dest_peer_id"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	q.bindValue(u":dest_peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(destPeerId.value)));
-	if (!q.exec()) {
-		LOG(("DedupDb: RemoveNfResume failed: %1").arg(
-			q.lastError().text()));
+	const auto jobId = findJobId(
+		JobKind::Forward,
+		sessionId,
+		destPeerId.value);
+	if (jobId) {
+		removeJob(jobId);
 	}
 }
 
@@ -1665,14 +5372,33 @@ void DedupDb::Impl::clearNfResume(uint64 sessionId) {
 	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM nf_resume WHERE session_id = :session_id"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	if (!q.exec()) {
-		LOG(("DedupDb: ClearNfResume failed: %1").arg(
-			q.lastError().text()));
+	beginTransaction();
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM job_items WHERE job_id IN ("
+			"SELECT job_id FROM jobs WHERE kind = :kind "
+			"AND session_id = :session_id)"_q);
+		q.bindValue(u":kind"_q, JobKindName(JobKind::Forward));
+		q.bindValue(u":session_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(sessionId)));
+		if (!q.exec()) {
+			LOG(("DedupDb: ClearNfResume items failed: %1").arg(
+				q.lastError().text()));
+		}
 	}
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM jobs WHERE kind = :kind "
+			"AND session_id = :session_id"_q);
+		q.bindValue(u":kind"_q, JobKindName(JobKind::Forward));
+		q.bindValue(u":session_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(sessionId)));
+		if (!q.exec()) {
+			LOG(("DedupDb: ClearNfResume failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+	commitTransaction();
 }
 
 std::vector<NfResumeRecord> DedupDb::Impl::loadNfResume(
@@ -1682,9 +5408,9 @@ std::vector<NfResumeRecord> DedupDb::Impl::loadNfResume(
 		return result;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT dest_peer_id, src_peer_id, total, done, skipped, "
-		"last_msg_id, state, forward_options, group_options, remaining "
-		"FROM nf_resume WHERE session_id = :session_id"_q);
+	q.prepare(u"SELECT options FROM jobs WHERE kind = :kind "
+		"AND session_id = :session_id ORDER BY job_id"_q);
+	q.bindValue(u":kind"_q, JobKindName(JobKind::Forward));
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(sessionId)));
 	if (!q.exec()) {
@@ -1692,24 +5418,10 @@ std::vector<NfResumeRecord> DedupDb::Impl::loadNfResume(
 		return result;
 	}
 	while (q.next()) {
-		auto record = NfResumeRecord();
-		record.sessionId = sessionId;
-		record.destPeerId = PeerId(q.value(0).toULongLong());
-		record.srcPeerId = PeerId(q.value(1).toULongLong());
-		record.total = q.value(2).toInt();
-		record.done = q.value(3).toInt();
-		record.skipped = q.value(4).toInt();
-		record.lastMsgId = MsgId(q.value(5).toLongLong());
-		record.state = q.value(6).toString();
-		record.forwardOptions = q.value(7).toInt();
-		record.groupOptions = q.value(8).toInt();
-		const auto raw = q.value(9).toByteArray();
-		for (int i = 0; i + 4 <= raw.size(); i += 4) {
-			auto value = qint32();
-			memcpy(&value, raw.constData() + i, 4);
-			record.remaining.push_back(MsgId(value));
+		if (auto record = DeserializeNfResume(q.value(0).toByteArray())) {
+			record->sessionId = sessionId;
+			result.push_back(std::move(*record));
 		}
-		result.push_back(std::move(record));
 	}
 	return result;
 }
@@ -1718,81 +5430,25 @@ void DedupDb::Impl::insertExResume(const ExResumeRecord &record) {
 	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"INSERT OR REPLACE INTO ex_resume "
-		"(session_id, peer_id, mode, last_id, total, msgs_done, skipped, "
-		"export_folder, state, media, size, export_format, from_date, "
-		"till_date, html_index, replied_index, "
-		"date_index, stats, "
-		"doc_id, paused_file, paused_bytes, last_msg, split_index, "
-		"selected_done, filter_index, use_id_range, from_id, till_id, "
-		"update_anchor, covered_till, covered_till_date, migrated, "
-		"failed_count, resume_peer_id, dialog_ids, chat_types, full_chats, "
-		"ext_filter_mode, ext_filter) "
-		"VALUES (:session_id, :peer_id, :mode, :last_id, :total, :msgs_done, "
-		":skipped, :export_folder, :state, :media, :size, "
-		":export_format, :from_date, :till_date, :html_index, "
-		":replied_index, "
-		":date_index, :stats, :doc_id, :paused_file, "
-		":paused_bytes, :last_msg, :split_index, :selected_done, "
-		":filter_index, :use_id_range, :from_id, :till_id, "
-		":update_anchor, :covered_till, :covered_till_date, :migrated, "
-		":failed_count, :resume_peer_id, :dialog_ids, :chat_types, "
-		":full_chats, :ext_filter_mode, :ext_filter)"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.sessionId)));
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.peerId.value)));
-	q.bindValue(u":mode"_q, record.mode);
-	q.bindValue(u":last_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(record.lastId.bare)));
-	q.bindValue(u":total"_q, record.total);
-	q.bindValue(u":msgs_done"_q, record.msgsDone);
-	q.bindValue(u":skipped"_q, record.skipped);
-	q.bindValue(u":export_folder"_q, record.exportFolder);
-	q.bindValue(u":state"_q, record.state);
-	q.bindValue(u":media"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.media)));
-	q.bindValue(u":size"_q, QVariant::fromValue(
-		static_cast<qlonglong>(record.size)));
-	q.bindValue(u":export_format"_q, record.exportFormat);
-	q.bindValue(u":from_date"_q, record.fromDate);
-	q.bindValue(u":till_date"_q, record.tillDate);
-	q.bindValue(u":html_index"_q, record.htmlIndex);
-	q.bindValue(u":replied_index"_q, record.repliedIndex);
-	q.bindValue(u":date_index"_q, record.dateIndex);
-	q.bindValue(u":stats"_q, record.stats);
-	q.bindValue(u":doc_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.docId)));
-	q.bindValue(u":paused_file"_q, record.pausedFile);
-	q.bindValue(u":paused_bytes"_q, QVariant::fromValue(
-		static_cast<qlonglong>(record.pausedBytes)));
-	q.bindValue(u":last_msg"_q, record.lastMsg);
-	q.bindValue(u":split_index"_q, record.splitIndex);
-	q.bindValue(u":selected_done"_q, record.selectedDone);
-	q.bindValue(u":filter_index"_q, record.filterIndex);
-	q.bindValue(u":use_id_range"_q, record.useIdRange ? 1 : 0);
-	q.bindValue(u":from_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.fromId)));
-	q.bindValue(u":till_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.tillId)));
-	q.bindValue(u":update_anchor"_q, QVariant::fromValue(
-		static_cast<qlonglong>(record.updateAnchor.bare)));
-	q.bindValue(u":covered_till"_q, QVariant::fromValue(
-		static_cast<qlonglong>(record.coveredTill.bare)));
-	q.bindValue(u":covered_till_date"_q, record.coveredTillDate);
-	q.bindValue(u":migrated"_q, record.migrated ? 1 : 0);
-	q.bindValue(u":failed_count"_q, record.failedCount);
-	q.bindValue(u":resume_peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(record.resumePeerId.value)));
-	q.bindValue(u":dialog_ids"_q, EncodePeerIds(record.dialogIds));
-	q.bindValue(u":chat_types"_q, record.chatTypes);
-	q.bindValue(u":full_chats"_q, record.fullChats);
-	q.bindValue(u":ext_filter_mode"_q, record.extFilterMode);
-	q.bindValue(u":ext_filter"_q, record.extFilter);
-	if (!q.exec()) {
-		LOG(("DedupDb: InsertExResume failed: %1").arg(
-			q.lastError().text()));
+	const auto jobId = findExportJob(record.sessionId, record);
+	if (jobId) {
+		updateExportJob(jobId, record);
+		return;
+	}
+	auto job = JobRecord();
+	job.kind = JobKind::Export;
+	job.sessionId = record.sessionId;
+	job.scopeId = ExResumeScope(
+		record.peerId,
+		record.mode,
+		record.exportFolder);
+	job.options = SerializeExResume(record);
+	job.state = ExportJobState(record.state);
+	job.total = record.total;
+	job.done = record.msgsDone;
+	job.skipped = record.skipped;
+	if (!createJob(job)) {
+		LOG(("DedupDb: InsertExResume job failed."));
 	}
 }
 
@@ -1804,19 +5460,36 @@ void DedupDb::Impl::removeExResumeFolder(
 	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM ex_resume "
-		"WHERE session_id = :session_id AND peer_id = :peer_id "
-		"AND mode = :mode AND export_folder = :folder"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	q.bindValue(u":mode"_q, mode);
-	q.bindValue(u":folder"_q, folder);
-	if (!q.exec()) {
-		LOG(("DedupDb: RemoveExResumeFolder failed: %1").arg(
-			q.lastError().text()));
+	const auto scope = ExResumeScope(peerId, mode, folder);
+	auto jobIds = std::vector<uint64>();
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT job_id, options FROM jobs "
+			"WHERE kind = :kind AND session_id = :session_id "
+			"AND scope_id = :scope_id"_q);
+		q.bindValue(u":kind"_q, JobKindName(JobKind::Export));
+		q.bindValue(u":session_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(sessionId)));
+		q.bindValue(u":scope_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(scope)));
+		if (!q.exec()) {
+			LOG(("DedupDb: RemoveExResumeFolder read failed: %1").arg(
+				q.lastError().text()));
+			return;
+		}
+		while (q.next()) {
+			const auto candidate = DeserializeExResume(
+				q.value(1).toByteArray());
+			if (candidate
+				&& candidate->peerId == peerId
+				&& candidate->mode == mode
+				&& candidate->exportFolder == folder) {
+				jobIds.push_back(q.value(0).toULongLong());
+			}
+		}
+	}
+	for (const auto jobId : jobIds) {
+		removeJob(jobId);
 	}
 }
 
@@ -1824,15 +5497,14 @@ void DedupDb::Impl::clearExResume(uint64 sessionId, int mode) {
 	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM ex_resume "
-		"WHERE session_id = :session_id AND mode = :mode"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	q.bindValue(u":mode"_q, mode);
-	if (!q.exec()) {
-		LOG(("DedupDb: ClearExResume failed: %1").arg(
-			q.lastError().text()));
+	auto jobIds = std::vector<uint64>();
+	for (const auto &[jobId, record] : loadExportJobs(sessionId)) {
+		if (record.mode == mode) {
+			jobIds.push_back(jobId);
+		}
+	}
+	for (const auto jobId : jobIds) {
+		removeJob(jobId);
 	}
 }
 
@@ -1840,75 +5512,10 @@ std::vector<ExResumeRecord> DedupDb::Impl::loadExResume(
 		uint64 sessionId,
 		int mode) const {
 	auto result = std::vector<ExResumeRecord>();
-	if (!_open) {
-		return result;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"SELECT peer_id, mode, last_id, total, msgs_done, skipped, "
-		"export_folder, state, media, size, export_format, from_date, "
-		"till_date, html_index, replied_index, "
-		"date_index, stats, "
-		"doc_id, paused_file, paused_bytes, last_msg, split_index, "
-		"selected_done, filter_index, use_id_range, from_id, till_id, "
-		"update_anchor, covered_till, covered_till_date, migrated, "
-		"failed_count, resume_peer_id, dialog_ids, chat_types, full_chats, "
-		"ext_filter_mode, ext_filter "
-		"FROM ex_resume "
-		"WHERE session_id = :session_id AND mode = :mode"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	q.bindValue(u":mode"_q, mode);
-	if (!q.exec()) {
-		LOG(("DedupDb: LoadExResume failed: %1").arg(q.lastError().text()));
-		return result;
-	}
-	while (q.next()) {
-		auto record = ExResumeRecord();
-		record.sessionId = sessionId;
-		record.peerId = PeerId(q.value(0).toULongLong());
-		record.mode = q.value(1).toInt();
-		record.lastId = MsgId(q.value(2).toLongLong());
-		record.total = q.value(3).toInt();
-		record.msgsDone = q.value(4).toInt();
-		record.skipped = q.value(5).toInt();
-		record.exportFolder = q.value(6).toString();
-		record.state = q.value(7).toString();
-		record.media = uint32(q.value(8).toULongLong());
-		record.size = q.value(9).toLongLong();
-		record.exportFormat = q.value(10).toInt();
-		record.fromDate = q.value(11).toInt();
-		record.tillDate = q.value(12).toInt();
-		record.htmlIndex = q.value(13).toInt();
-		record.repliedIndex = q.value(14).toByteArray();
-		record.dateIndex = q.value(15).toInt();
-		record.stats = q.value(16).toByteArray();
-		record.docId = q.value(17).toULongLong();
-		record.pausedFile = q.value(18).toString();
-		record.pausedBytes = q.value(19).toLongLong();
-		record.lastMsg = q.value(20).toByteArray();
-		record.splitIndex = q.value(21).toInt();
-		record.selectedDone = q.value(22).toInt();
-		record.filterIndex = q.value(23).toInt();
-		record.useIdRange = q.value(24).toInt() != 0;
-		record.fromId = q.value(25).toULongLong();
-		record.tillId = q.value(26).toULongLong();
-		record.updateAnchor = MsgId(q.value(27).toLongLong());
-		record.coveredTill = MsgId(q.value(28).toLongLong());
-		record.coveredTillDate = q.value(29).toInt();
-		record.migrated = q.value(30).toInt() != 0;
-		record.failedCount = q.value(31).toInt();
-		record.resumePeerId = PeerId(q.value(32).toULongLong());
-		const auto idsRaw = q.value(33).toByteArray();
-		for (auto i = 0; i + 8 <= idsRaw.size(); i += 8) {
-			auto value = quint64(0);
-			memcpy(&value, idsRaw.constData() + i, 8);
-			record.dialogIds.push_back(PeerId(value));
+	for (auto &entry : loadExportJobs(sessionId)) {
+		if (entry.second.mode == mode) {
+			result.push_back(std::move(entry.second));
 		}
-		record.chatTypes = q.value(34).toInt();
-		record.fullChats = q.value(35).toInt();
-		record.extFilterMode = q.value(36).toInt();
-		record.extFilter = q.value(37).toString();
-		result.push_back(std::move(record));
 	}
 	return result;
 }
@@ -1918,24 +5525,17 @@ void DedupDb::Impl::rebaseExResumeFolder(
 		int mode,
 		const QString &oldPrefix,
 		const QString &newPrefix) {
-	if (!_open || oldPrefix.isEmpty() || newPrefix.isEmpty()) {
+	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	// substr() prefix match, not LIKE: folder paths contain '_' wildcards.
-	q.prepare(u"UPDATE ex_resume SET export_folder = :new_prefix "
-		"|| substr(export_folder, :old_len + 1) "
-		"WHERE session_id = :session_id AND mode = :mode "
-		"AND substr(export_folder, 1, :old_len) = :old_prefix"_q);
-	q.bindValue(u":new_prefix"_q, newPrefix);
-	q.bindValue(u":old_len"_q, oldPrefix.size());
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	q.bindValue(u":mode"_q, mode);
-	q.bindValue(u":old_prefix"_q, oldPrefix);
-	if (!q.exec()) {
-		LOG(("DedupDb: RebaseExResumeFolder failed: %1").arg(
-			q.lastError().text()));
+	for (auto &[jobId, record] : loadExportJobs(sessionId)) {
+		if (record.mode != mode
+			|| !record.exportFolder.startsWith(oldPrefix)) {
+			continue;
+		}
+		record.exportFolder = newPrefix
+			+ record.exportFolder.mid(oldPrefix.size());
+		updateExportJob(jobId, record);
 	}
 }
 
@@ -1943,17 +5543,79 @@ void DedupDb::Impl::insertExTmp(
 		uint64 sessionId,
 		PeerId peerId,
 		uint64 documentId,
+		bool isPhoto,
 		const QByteArray &hash) {
 	if (!_open || !documentId || hash.isEmpty()) {
 		return;
 	}
+	const auto type = isPhoto ? 1 : 0;
 	auto &s = exTmpState(sessionId, peerId);
-	s.docToHash[documentId] = hash;
-	s.hashToDoc[hash].insert(documentId);
-	s.pending.push_back({ documentId, hash });
+	s.docToHash[type][documentId] = hash;
+	s.hashToDoc[type][hash].insert(documentId);
+	s.pending.push_back({ documentId, isPhoto, hash });
 	if (++_exPendingWrites >= kExWriteBatchLimit) {
 		flushExPending();
 	}
+}
+
+void DedupDb::Impl::flushExTmpState(
+		const ExTmpKey &key,
+		ExTmpState &state) {
+	if (state.pending.empty()) {
+		return;
+	}
+	if (!state.jobId) {
+		state.jobId = findJobId(
+			JobKind::ExportBatch,
+			key.sessionId,
+			key.peerId);
+	}
+	if (!state.jobId) {
+		auto job = JobRecord();
+		job.kind = JobKind::ExportBatch;
+		job.sessionId = key.sessionId;
+		job.scopeId = key.peerId;
+		job.state = JobState::Pending;
+		state.jobId = createJob(job);
+		if (!state.jobId) {
+			return;
+		}
+	}
+	QSqlQuery del(_db);
+	del.prepare(u"DELETE FROM job_items WHERE job_id = :job_id "
+		"AND media_id = :media_id AND is_photo = :is_photo"_q);
+	QSqlQuery ins(_db);
+	ins.prepare(u"INSERT OR REPLACE INTO job_items "
+		"(job_id, item_id, media_id, is_photo, hash_id, state) "
+		"VALUES (:job_id, :item_id, :media_id, :is_photo, "
+		":hash_id, :state)"_q);
+	for (const auto &row : state.pending) {
+		const auto hashId = resolveHashId(row.hash);
+		del.bindValue(u":job_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(state.jobId)));
+		del.bindValue(u":media_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(row.docId)));
+		del.bindValue(u":is_photo"_q, row.isPhoto ? 1 : 0);
+		if (!del.exec()) {
+			LOG(("DedupDb: RemoveExTmpDoc failed: %1").arg(
+				del.lastError().text()));
+		}
+		ins.bindValue(u":job_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(state.jobId)));
+		ins.bindValue(u":item_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(state.nextItemId++)));
+		ins.bindValue(u":media_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(row.docId)));
+		ins.bindValue(u":is_photo"_q, row.isPhoto ? 1 : 0);
+		ins.bindValue(u":hash_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(hashId)));
+		ins.bindValue(u":state"_q, int(JobState::Done));
+		if (!ins.exec()) {
+			LOG(("DedupDb: InsertExTmp failed: %1").arg(
+				ins.lastError().text()));
+		}
+	}
+	state.pending.clear();
 }
 
 void DedupDb::Impl::flushExPending() {
@@ -1962,25 +5624,8 @@ void DedupDb::Impl::flushExPending() {
 	}
 	_exPendingWrites = 0;
 	beginTransaction();
-	QSqlQuery tmp(_db);
-	tmp.prepare(u"INSERT OR REPLACE INTO ex_tmp "
-		"(session_id, peer_id, doc_id, hash, status) "
-		"VALUES (:session_id, :peer_id, :doc_id, :hash, 'f')"_q);
-	for (auto &[key, s] : _exTmpStates) {
-		for (const auto &row : s.pending) {
-			tmp.bindValue(u":session_id"_q, QVariant::fromValue(
-				static_cast<qulonglong>(key.sessionId)));
-			tmp.bindValue(u":peer_id"_q, QVariant::fromValue(
-				static_cast<qulonglong>(key.peerId)));
-			tmp.bindValue(u":doc_id"_q, QVariant::fromValue(
-				static_cast<qulonglong>(row.docId)));
-			tmp.bindValue(u":hash"_q, row.hash);
-			if (!tmp.exec()) {
-				LOG(("DedupDb: InsertExTmp failed: %1").arg(
-					tmp.lastError().text()));
-			}
-		}
-		s.pending.clear();
+	for (auto &[key, state] : _exTmpStates) {
+		flushExTmpState(key, state);
 	}
 	commitTransaction();
 }
@@ -1988,11 +5633,13 @@ void DedupDb::Impl::flushExPending() {
 bool DedupDb::Impl::containsExTmpDocId(
 		uint64 sessionId,
 		PeerId peerId,
-		uint64 documentId) const {
+		uint64 documentId,
+		bool isPhoto) const {
 	if (!documentId) {
 		return false;
 	}
-	return exTmpState(sessionId, peerId).docToHash.contains(documentId);
+	const auto type = isPhoto ? 1 : 0;
+	return exTmpState(sessionId, peerId).docToHash[type].contains(documentId);
 }
 
 bool DedupDb::Impl::containsExTmpHash(
@@ -2003,229 +5650,70 @@ bool DedupDb::Impl::containsExTmpHash(
 		return false;
 	}
 	const auto &s = exTmpState(sessionId, peerId);
-	const auto i = s.hashToDoc.find(hash);
-	return (i != s.hashToDoc.end()) && !i->isEmpty();
-}
-
-QByteArray DedupDb::Impl::hashForExTmpDocId(
-		uint64 sessionId,
-		PeerId peerId,
-		uint64 documentId) const {
-	if (!documentId) {
-		return {};
+	for (auto type = 0; type != 2; ++type) {
+		const auto i = s.hashToDoc[type].find(hash);
+		if (i != s.hashToDoc[type].end() && !i->isEmpty()) {
+			return true;
+		}
 	}
-	return exTmpState(sessionId, peerId).docToHash.value(documentId);
+	return false;
 }
 
 void DedupDb::Impl::clearExTmpRun(uint64 sessionId, PeerId peerId) {
+	auto jobId = uint64(0);
 	if (const auto i = _exTmpStates.find({ sessionId, peerId.value });
 		i != _exTmpStates.end()) {
+		jobId = i->second.jobId;
 		_exPendingWrites -= int(i->second.pending.size());
 		_exTmpStates.erase(i);
 	}
 	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM ex_tmp "
-		"WHERE session_id = :session_id AND peer_id = :peer_id"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	if (!q.exec()) {
-		LOG(("DedupDb: ClearExTmpRun failed: %1").arg(
-			q.lastError().text()));
+	if (!jobId) {
+		jobId = findJobId(
+			JobKind::ExportBatch,
+			sessionId,
+			peerId.value);
 	}
-}
-
-void DedupDb::Impl::clearExTmpSession(uint64 sessionId) {
-	for (auto i = _exTmpStates.begin(); i != _exTmpStates.end();) {
-		if (i->first.sessionId == sessionId) {
-			_exPendingWrites -= int(i->second.pending.size());
-			i = _exTmpStates.erase(i);
-		} else {
-			++i;
-		}
-	}
-	if (!_open) {
-		return;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM ex_tmp WHERE session_id = :session_id"_q);
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	if (!q.exec()) {
-		LOG(("DedupDb: ClearExTmpSession failed: %1").arg(
-			q.lastError().text()));
-	}
-}
-
-void DedupDb::Impl::writeChatScanRow(const ChatScanRow &row) {
-	if (!_open) {
-		return;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"INSERT OR REPLACE INTO chat_scan "
-		"(peer_id, category, unique_count, unique_bytes, "
-		"dup_count, dup_bytes, scanned_upto, scan_finished, "
-		"delete_finished) "
-		"VALUES (:peer_id, :category, :unique_count, "
-		":unique_bytes, :dup_count, :dup_bytes, :scanned_upto, "
-		":scan_finished, :delete_finished)"_q);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(row.peerId.value)));
-	q.bindValue(u":category"_q, row.category);
-	q.bindValue(u":unique_count"_q, row.uniqueCount);
-	q.bindValue(u":unique_bytes"_q, QVariant::fromValue(
-		static_cast<qlonglong>(row.uniqueBytes)));
-	q.bindValue(u":dup_count"_q, row.dupCount);
-	q.bindValue(u":dup_bytes"_q, QVariant::fromValue(
-		static_cast<qlonglong>(row.dupBytes)));
-	q.bindValue(u":scanned_upto"_q, QVariant::fromValue(
-		static_cast<qlonglong>(row.scannedUpto.bare)));
-	q.bindValue(u":scan_finished"_q, row.scanFinished ? 1 : 0);
-	q.bindValue(u":delete_finished"_q, row.deleteFinished ? 1 : 0);
-	if (!q.exec()) {
-		LOG(("DedupDb: WriteChatScanRow failed: %1").arg(
-			q.lastError().text()));
+	if (jobId) {
+		removeJob(jobId);
 	}
 }
 
 std::vector<ChatScanRow> DedupDb::Impl::readChatScan(
 		PeerId peerId) const {
-	auto result = std::vector<ChatScanRow>();
 	if (!_open) {
-		return result;
+		return {};
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"SELECT category, unique_count, unique_bytes, dup_count, "
-		"dup_bytes, scanned_upto, scan_finished, delete_finished "
-		"FROM chat_scan "
-		"WHERE peer_id = :peer_id "
-		"ORDER BY category"_q);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	if (!q.exec()) {
-		LOG(("DedupDb: ReadChatScan failed: %1").arg(
-			q.lastError().text()));
-		return result;
-	}
-	while (q.next()) {
-		auto row = ChatScanRow();
-		row.peerId = peerId;
-		row.category = q.value(0).toInt();
-		row.uniqueCount = q.value(1).toInt();
-		row.uniqueBytes = q.value(2).toLongLong();
-		row.dupCount = q.value(3).toInt();
-		row.dupBytes = q.value(4).toLongLong();
-		row.scannedUpto = MsgId(q.value(5).toLongLong());
-		row.scanFinished = (q.value(6).toInt() != 0);
-		row.deleteFinished = (q.value(7).toInt() != 0);
-		result.push_back(row);
-	}
-	return result;
+	return ReadChatScanIn(_db, peerId).value_or(std::vector<ChatScanRow>());
 }
 
 bool DedupDb::Impl::isChatScanned(PeerId peerId) const {
-	if (!_open) {
-		return false;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"SELECT 1 FROM chat_scan "
-		"WHERE peer_id = :peer_id "
-		"AND scan_finished != 0 LIMIT 1"_q);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	if (!q.exec()) {
-		LOG(("DedupDb: IsChatScanned failed: %1").arg(
-			q.lastError().text()));
-		return false;
-	}
-	return q.next();
+	return _open && readScanOptions(peerId).scanFinished;
 }
 
 void DedupDb::Impl::markChatDeleteFinished(PeerId peerId) {
 	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"UPDATE chat_scan SET delete_finished = 1, "
-		"dup_count = 0, dup_bytes = 0 "
-		"WHERE peer_id = :peer_id"_q);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	if (!q.exec()) {
-		LOG(("DedupDb: MarkChatDeleteFinished failed: %1").arg(
-			q.lastError().text()));
-	}
+	auto options = readScanOptions(peerId);
+	options.deleteFinished = true;
+	writeScanOptions(peerId, options);
+	requestIncrementalVacuum();
 }
 
-void DedupDb::Impl::writeChatScanDup(const ChatScanDup &dup) {
-	if (!_open || !dup.msgId) {
+void DedupDb::Impl::requestIncrementalVacuum() {
+	if (!_open || _path.isEmpty() || gVacuuming.exchange(true)) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"INSERT OR REPLACE INTO chat_scan_dups "
-		"(peer_id, msg_id, category, size, flags, filename) "
-		"VALUES (:peer_id, :msg_id, :category, :size, "
-		":flags, :filename)"_q);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(dup.peerId.value)));
-	q.bindValue(u":msg_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(dup.msgId.bare)));
-	q.bindValue(u":category"_q, dup.category);
-	q.bindValue(u":size"_q, QVariant::fromValue(
-		static_cast<qlonglong>(dup.size)));
-	q.bindValue(u":flags"_q, dup.flags);
-	q.bindValue(u":filename"_q, dup.filename);
-	if (!q.exec()) {
-		LOG(("DedupDb: WriteChatScanDup failed: %1").arg(
-			q.lastError().text()));
-	}
-}
-
-std::vector<ChatScanDup> DedupDb::Impl::readChatScanDups(
-		PeerId peerId,
-		int category,
-		int limit,
-		int offset) const {
-	auto result = std::vector<ChatScanDup>();
-	if (!_open) {
-		return result;
-	}
-	auto sql = u"SELECT msg_id, category, size, flags, filename "
-		"FROM chat_scan_dups "
-		"WHERE peer_id = :peer_id"_q;
-	if (category >= 0) {
-		sql += u" AND category = :category"_q;
-	}
-	sql += u" ORDER BY msg_id DESC LIMIT :limit OFFSET :offset"_q;
-	QSqlQuery q(_db);
-	q.prepare(sql);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	if (category >= 0) {
-		q.bindValue(u":category"_q, category);
-	}
-	q.bindValue(u":limit"_q, limit);
-	q.bindValue(u":offset"_q, offset);
-	if (!q.exec()) {
-		LOG(("DedupDb: ReadChatScanDups failed: %1").arg(
-			q.lastError().text()));
-		return result;
-	}
-	while (q.next()) {
-		auto dup = ChatScanDup();
-		dup.peerId = peerId;
-		dup.msgId = MsgId(q.value(0).toLongLong());
-		dup.category = q.value(1).toInt();
-		dup.size = q.value(2).toLongLong();
-		dup.flags = q.value(3).toInt();
-		dup.filename = q.value(4).toString();
-		result.push_back(dup);
-	}
-	return result;
+	auto cancel = std::make_shared<std::atomic_bool>(false);
+	_vacuumCancel = cancel;
+	const auto path = _path;
+	crl::async([path, cancel] {
+		auto guard = VacuumFlagGuard();
+		VacuumDatabase(path, *cancel);
+	});
 }
 
 std::vector<ChatScanDup> DedupDb::Impl::readChatScanDupsBefore(
@@ -2233,55 +5721,24 @@ std::vector<ChatScanDup> DedupDb::Impl::readChatScanDupsBefore(
 		int category,
 		int limit,
 		MsgId before) const {
-	auto result = std::vector<ChatScanDup>();
-	if (!_open || limit <= 0) {
-		return result;
+	if (!_open) {
+		return {};
 	}
-	auto sql = u"SELECT msg_id, category, size, flags, filename "
-		"FROM chat_scan_dups "
-		"WHERE peer_id = :peer_id"_q;
-	if (category >= 0) {
-		sql += u" AND category = :category"_q;
-	}
-	if (before.bare > 0) {
-		sql += u" AND msg_id < :before"_q;
-	}
-	sql += u" ORDER BY msg_id DESC LIMIT :limit"_q;
-	QSqlQuery q(_db);
-	q.prepare(sql);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	if (category >= 0) {
-		q.bindValue(u":category"_q, category);
-	}
-	if (before.bare > 0) {
-		q.bindValue(u":before"_q, before.bare);
-	}
-	q.bindValue(u":limit"_q, limit);
-	if (!q.exec()) {
-		LOG(("DedupDb: ReadChatScanDupsBefore failed: %1").arg(
-			q.lastError().text()));
-		return result;
-	}
-	while (q.next()) {
-		auto dup = ChatScanDup();
-		dup.peerId = peerId;
-		dup.msgId = MsgId(q.value(0).toLongLong());
-		dup.category = q.value(1).toInt();
-		dup.size = q.value(2).toLongLong();
-		dup.flags = q.value(3).toInt();
-		dup.filename = q.value(4).toString();
-		result.push_back(dup);
-	}
-	return result;
+	return ReadChatScanDupsBeforeIn(
+		_db,
+		peerId,
+		category,
+		limit,
+		before).value_or(std::vector<ChatScanDup>());
 }
 
 int DedupDb::Impl::chatScanDupCount(PeerId peerId, int category) const {
 	if (!_open) {
 		return 0;
 	}
-	auto sql = u"SELECT COUNT(*) FROM chat_scan_dups "
-		"WHERE peer_id = :peer_id"_q;
+	auto sql = u"SELECT COUNT(*) FROM chat_scan_items "
+		"WHERE peer_id = :peer_id AND is_dup = 1 "
+		"AND tracked = 1"_q;
 	if (category >= 0) {
 		sql += u" AND category = :category"_q;
 	}
@@ -2305,8 +5762,9 @@ int64 DedupDb::Impl::chatScanDupBytes(PeerId peerId) const {
 		return 0;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT SUM(size) FROM chat_scan_dups "
-		"WHERE peer_id = :peer_id"_q);
+	q.prepare(u"SELECT SUM(size) FROM chat_scan_items "
+		"WHERE peer_id = :peer_id AND is_dup = 1 "
+		"AND tracked = 1"_q);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
 	if (!q.exec()) {
@@ -2324,16 +5782,15 @@ std::vector<ChatScanCategoryTotals> DedupDb::Impl::chatScanCategoryTotals(
 		return result;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT i.category, "
-		"SUM(CASE WHEN d.msg_id IS NULL THEN 1 ELSE 0 END), "
-		"SUM(CASE WHEN d.msg_id IS NULL THEN i.size ELSE 0 END), "
-		"SUM(CASE WHEN d.msg_id IS NULL THEN 0 ELSE 1 END), "
-		"SUM(CASE WHEN d.msg_id IS NULL THEN 0 ELSE i.size END) "
-		"FROM chat_scan_items i "
-		"LEFT JOIN chat_scan_dups d "
-		"ON d.peer_id = i.peer_id AND d.msg_id = i.msg_id "
-		"WHERE i.peer_id = :peer_id "
-		"GROUP BY i.category"_q);
+	q.prepare(u"SELECT category, "
+		"SUM(CASE WHEN is_dup = 0 THEN 1 ELSE 0 END), "
+		"SUM(CASE WHEN is_dup = 0 THEN size ELSE 0 END), "
+		"SUM(CASE WHEN is_dup = 1 THEN 1 ELSE 0 END), "
+		"SUM(CASE WHEN is_dup = 1 THEN size ELSE 0 END) "
+		"FROM chat_scan_items "
+		"WHERE peer_id = :peer_id "
+		"AND tracked = 1 "
+		"GROUP BY category"_q);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
 	if (!q.exec()) {
@@ -2359,7 +5816,8 @@ qint64 DedupDb::Impl::chatScanItemCount(PeerId peerId) const {
 	}
 	QSqlQuery q(_db);
 	q.prepare(u"SELECT COUNT(*) FROM chat_scan_items "
-		"WHERE peer_id = :peer_id"_q);
+		"WHERE peer_id = :peer_id "
+		"AND tracked = 1"_q);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
 	if (!q.exec()) {
@@ -2370,13 +5828,35 @@ qint64 DedupDb::Impl::chatScanItemCount(PeerId peerId) const {
 	return q.next() ? qint64(q.value(0).toLongLong()) : 0;
 }
 
+bool DedupDb::Impl::chatScanCategoryHasItems(
+		PeerId peerId,
+		int category) const {
+	if (!_open) {
+		return false;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT 1 FROM chat_scan_items "
+		"WHERE peer_id = :peer_id AND category = :category "
+		"AND tracked = 1 LIMIT 1"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":category"_q, category);
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanCategoryHasItems failed: %1").arg(
+			q.lastError().text()));
+		return false;
+	}
+	return q.next();
+}
+
 MsgId DedupDb::Impl::chatScanMaxMsgId(PeerId peerId) const {
 	if (!_open) {
 		return MsgId(0);
 	}
 	QSqlQuery q(_db);
 	q.prepare(u"SELECT MAX(msg_id) FROM chat_scan_items "
-		"WHERE peer_id = :peer_id"_q);
+		"WHERE peer_id = :peer_id "
+		"AND tracked = 1"_q);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
 	if (!q.exec()) {
@@ -2396,7 +5876,8 @@ bool DedupDb::Impl::chatScanContainsHash(
 	QSqlQuery q(_db);
 	q.prepare(u"SELECT 1 FROM chat_scan_items "
 		"WHERE peer_id = :peer_id "
-		"AND hash = :hash LIMIT 1"_q);
+		"AND hash_id = (SELECT hash_id FROM hashes WHERE hash = :hash) "
+		"AND is_dup = 0 AND tracked = 1 LIMIT 1"_q);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
 	q.bindValue(u":hash"_q, hash);
@@ -2408,6 +5889,28 @@ bool DedupDb::Impl::chatScanContainsHash(
 	return q.next();
 }
 
+MsgId DedupDb::Impl::chatScanUniqueHash(
+		PeerId peerId,
+		const QByteArray &hash) const {
+	if (!_open || hash.isEmpty()) {
+		return MsgId(0);
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT MAX(msg_id) FROM chat_scan_items "
+		"WHERE peer_id = :peer_id "
+		"AND hash_id = (SELECT hash_id FROM hashes WHERE hash = :hash) "
+		"AND is_dup = 0 AND tracked = 1"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":hash"_q, hash);
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanUniqueHash failed: %1").arg(
+			q.lastError().text()));
+		return MsgId(0);
+	}
+	return q.next() ? MsgId(q.value(0).toLongLong()) : MsgId(0);
+}
+
 QByteArray DedupDb::Impl::chatScanHashForMedia(
 		PeerId peerId,
 		uint64 mediaId,
@@ -2416,10 +5919,12 @@ QByteArray DedupDb::Impl::chatScanHashForMedia(
 		return QByteArray();
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT hash FROM chat_scan_items "
-		"WHERE peer_id = :peer_id AND media_id = :media_id "
-		"AND is_photo = :is_photo "
-		"AND hash IS NOT NULL AND length(hash) > 0 LIMIT 1"_q);
+	q.prepare(u"SELECT h.hash FROM chat_scan_items i "
+		"JOIN hashes h ON h.hash_id = i.hash_id "
+		"WHERE i.peer_id = :peer_id AND i.media_id = :media_id "
+		"AND i.is_photo = :is_photo "
+		"AND i.tracked = 1 "
+		"AND i.hash_id != 0 LIMIT 1"_q);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
 	q.bindValue(u":media_id"_q, QVariant::fromValue(
@@ -2427,6 +5932,34 @@ QByteArray DedupDb::Impl::chatScanHashForMedia(
 	q.bindValue(u":is_photo"_q, isPhoto ? 1 : 0);
 	if (!q.exec()) {
 		LOG(("DedupDb: ChatScanHashForMedia failed: %1").arg(
+			q.lastError().text()));
+		return QByteArray();
+	}
+	return q.next() ? q.value(0).toByteArray() : QByteArray();
+}
+
+QByteArray DedupDb::Impl::chatScanHashForMediaOther(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto) const {
+	if (!_open || !mediaId) {
+		return QByteArray();
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT h.hash FROM chat_scan_items i "
+		"JOIN hashes h ON h.hash_id = i.hash_id "
+		"WHERE i.peer_id != :peer_id AND i.media_id = :media_id "
+		"AND i.is_photo = :is_photo "
+		"AND i.tracked = 1 "
+		"AND i.hash_id != 0 "
+		"ORDER BY i.is_dup ASC, i.msg_id DESC LIMIT 1"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":media_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(mediaId)));
+	q.bindValue(u":is_photo"_q, isPhoto ? 1 : 0);
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanHashForMediaOther failed: %1").arg(
 			q.lastError().text()));
 		return QByteArray();
 	}
@@ -2441,9 +5974,10 @@ std::vector<ChatScanItem> DedupDb::Impl::chatScanUnresolvedItems(
 	}
 	QSqlQuery q(_db);
 	q.prepare(u"SELECT msg_id, category, size, media_id, "
-		"is_photo, filename FROM chat_scan_items "
+		"is_photo, is_dup FROM chat_scan_items "
 		"WHERE peer_id = :peer_id "
-		"AND (hash IS NULL OR length(hash) = 0) "
+		"AND hash_id = 0 "
+		"AND tracked = 1 "
 		"ORDER BY msg_id ASC"_q);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
@@ -2460,7 +5994,7 @@ std::vector<ChatScanItem> DedupDb::Impl::chatScanUnresolvedItems(
 		item.size = q.value(2).toLongLong();
 		item.mediaId = q.value(3).toULongLong();
 		item.isPhoto = (q.value(4).toInt() != 0);
-		item.filename = q.value(5).toString();
+		item.isDup = (q.value(5).toInt() != 0);
 		result.push_back(item);
 	}
 	return result;
@@ -2475,13 +6009,15 @@ std::vector<ChatScanItem> DedupDb::Impl::chatScanPendingItemsWindow(
 		return result;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT msg_id, category, size, media_id, "
-		"is_photo, filename, hash, attempts FROM chat_scan_items "
-		"WHERE peer_id = :peer_id "
-		"AND hash IS NULL "
-		"AND state IN (0, 1) "
-		"AND msg_id < :above "
-		"ORDER BY msg_id DESC LIMIT :limit"_q);
+	q.prepare(u"SELECT i.msg_id, i.category, i.size, i.media_id, "
+		"i.is_photo, NULL AS hash, i.attempts, i.is_dup "
+		"FROM chat_scan_items i "
+		"WHERE i.peer_id = :peer_id "
+		"AND i.hash_id = 0 "
+		"AND i.tracked = 1 "
+		"AND i.state IN (0, 1) "
+		"AND i.msg_id < :above "
+		"ORDER BY i.msg_id DESC LIMIT :limit"_q);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
 	q.bindValue(u":above"_q, above.bare);
@@ -2499,9 +6035,9 @@ std::vector<ChatScanItem> DedupDb::Impl::chatScanPendingItemsWindow(
 		item.size = q.value(2).toLongLong();
 		item.mediaId = q.value(3).toULongLong();
 		item.isPhoto = (q.value(4).toInt() != 0);
-		item.filename = q.value(5).toString();
-		item.hash = q.value(6).toByteArray();
-		item.attempts = q.value(7).toInt();
+		item.hash = q.value(5).toByteArray();
+		item.attempts = q.value(6).toInt();
+		item.isDup = (q.value(7).toInt() != 0);
 		result.push_back(item);
 	}
 	return result;
@@ -2515,13 +6051,16 @@ std::vector<ChatScanItem> DedupDb::Impl::chatScanItemsWindow(
 	if (!_open || limit <= 0) {
 		return result;
 	}
-	auto sql = u"SELECT msg_id, category, size, media_id, "
-		"is_photo, filename, hash FROM chat_scan_items "
-		"WHERE peer_id = :peer_id"_q;
+	auto sql = u"SELECT i.msg_id, i.category, i.size, i.media_id, "
+		"i.is_photo, h.hash, i.is_dup "
+		"FROM chat_scan_items i "
+		"LEFT JOIN hashes h ON h.hash_id = i.hash_id "
+		"WHERE i.peer_id = :peer_id "
+		"AND i.tracked = 1"_q;
 	if (above.bare > 0) {
-		sql += u" AND msg_id < :above"_q;
+		sql += u" AND i.msg_id < :above"_q;
 	}
-	sql += u" ORDER BY msg_id DESC LIMIT :limit"_q;
+	sql += u" ORDER BY i.msg_id DESC LIMIT :limit"_q;
 	QSqlQuery q(_db);
 	q.prepare(sql);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
@@ -2543,52 +6082,8 @@ std::vector<ChatScanItem> DedupDb::Impl::chatScanItemsWindow(
 		item.size = q.value(2).toLongLong();
 		item.mediaId = q.value(3).toULongLong();
 		item.isPhoto = (q.value(4).toInt() != 0);
-		item.filename = q.value(5).toString();
-		item.hash = q.value(6).toByteArray();
-		result.push_back(item);
-	}
-	return result;
-}
-
-std::vector<ChatScanItem> DedupDb::Impl::chatScanHashedItemsWindow(
-		PeerId peerId,
-		MsgId above,
-		int limit) const {
-	auto result = std::vector<ChatScanItem>();
-	if (!_open || limit <= 0) {
-		return result;
-	}
-	auto sql = u"SELECT msg_id, category, size, media_id, "
-		"is_photo, filename, hash FROM chat_scan_items "
-		"WHERE peer_id = :peer_id "
-		"AND hash IS NOT NULL AND length(hash) != 0"_q;
-	if (above.bare > 0) {
-		sql += u" AND msg_id < :above"_q;
-	}
-	sql += u" ORDER BY msg_id DESC LIMIT :limit"_q;
-	QSqlQuery q(_db);
-	q.prepare(sql);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	if (above.bare > 0) {
-		q.bindValue(u":above"_q, above.bare);
-	}
-	q.bindValue(u":limit"_q, limit);
-	if (!q.exec()) {
-		LOG(("DedupDb: ChatScanHashedItemsWindow failed: %1").arg(
-			q.lastError().text()));
-		return result;
-	}
-	while (q.next()) {
-		auto item = ChatScanItem();
-		item.peerId = peerId;
-		item.msgId = MsgId(q.value(0).toLongLong());
-		item.category = q.value(1).toInt();
-		item.size = q.value(2).toLongLong();
-		item.mediaId = q.value(3).toULongLong();
-		item.isPhoto = (q.value(4).toInt() != 0);
-		item.filename = q.value(5).toString();
-		item.hash = q.value(6).toByteArray();
+		item.hash = q.value(5).toByteArray();
+		item.isDup = (q.value(6).toInt() != 0);
 		result.push_back(item);
 	}
 	return result;
@@ -2602,6 +6097,7 @@ int DedupDb::Impl::chatScanPendingCount(PeerId peerId) const {
 	q.prepare(u"SELECT COUNT(DISTINCT media_id) FROM chat_scan_items "
 		"WHERE peer_id = :peer_id "
 		"AND state = 0 "
+		"AND tracked = 1 "
 		"AND media_id != 0"_q);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
@@ -2618,10 +6114,10 @@ int DedupDb::Impl::chatScanHashedCount(PeerId peerId) const {
 		return 0;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT COUNT(*) FROM chat_scan_items "
+	q.prepare(u"SELECT COUNT(DISTINCT media_id) FROM chat_scan_items "
 		"WHERE peer_id = :peer_id "
-		"AND hash IS NOT NULL "
-		"AND length(hash) > 0"_q);
+		"AND tracked = 1 "
+		"AND hash_id != 0"_q);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
 	if (!q.exec()) {
@@ -2639,7 +6135,8 @@ void DedupDb::Impl::chatScanResetLeases(PeerId peerId) {
 	QSqlQuery q(_db);
 	q.prepare(u"UPDATE chat_scan_items "
 		"SET state = 0, lease_until = 0, attempts = 0 "
-		"WHERE peer_id = :peer_id AND state IN (0, 1)"_q);
+		"WHERE peer_id = :peer_id AND tracked = 1 "
+		"AND state IN (0, 1)"_q);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
 	if (!q.exec()) {
@@ -2659,13 +6156,15 @@ std::vector<ChatScanItem> DedupDb::Impl::chatScanLeaseItems(
 	}
 	QSqlQuery q(_db);
 	q.prepare(u"SELECT i.msg_id, i.media_id, i.category, i.size, "
-		"i.is_photo, i.filename, i.attempts "
+		"i.is_photo, i.attempts "
 		"FROM chat_scan_items AS i "
 		"WHERE i.peer_id = :peer_id AND i.state = 0 "
+		"AND i.tracked = 1 "
 		"AND i.msg_id IN ("
 			"SELECT MAX(msg_id) "
 			"FROM chat_scan_items "
 			"WHERE peer_id = :rep_peer_id AND state = 0 "
+			"AND tracked = 1 "
 			"AND media_id != 0 AND lease_until <= :now "
 			"GROUP BY media_id "
 			"ORDER BY MAX(msg_id) DESC LIMIT :limit"
@@ -2690,8 +6189,7 @@ std::vector<ChatScanItem> DedupDb::Impl::chatScanLeaseItems(
 		item.category = q.value(2).toInt();
 		item.size = q.value(3).toLongLong();
 		item.isPhoto = (q.value(4).toInt() != 0);
-		item.filename = q.value(5).toString();
-		item.attempts = q.value(6).toInt() + 1;
+		item.attempts = q.value(5).toInt() + 1;
 		item.state = 1;
 		result.push_back(item);
 	}
@@ -2726,6 +6224,7 @@ std::vector<ChatScanItem> DedupDb::Impl::chatScanLeaseItems(
 void DedupDb::Impl::chatScanReleaseItem(
 		PeerId peerId,
 		uint64 mediaId,
+		bool isPhoto,
 		qint64 retryAt) {
 	if (!_open || !mediaId) {
 		return;
@@ -2734,12 +6233,13 @@ void DedupDb::Impl::chatScanReleaseItem(
 	q.prepare(u"UPDATE chat_scan_items "
 		"SET state = 0, lease_until = :retry_at "
 		"WHERE peer_id = :peer_id AND media_id = :media_id "
-		"AND state = 1"_q);
+		"AND is_photo = :is_photo AND state = 1"_q);
 	q.bindValue(u":retry_at"_q, retryAt);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
 	q.bindValue(u":media_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(mediaId)));
+	q.bindValue(u":is_photo"_q, isPhoto ? 1 : 0);
 	if (!q.exec()) {
 		LOG(("DedupDb: ChatScanReleaseItem failed: %1").arg(
 			q.lastError().text()));
@@ -2764,46 +6264,84 @@ void DedupDb::Impl::chatScanReleaseLeases(PeerId peerId) {
 
 int DedupDb::Impl::chatScanCommitHashes(
 		PeerId peerId,
-		const std::vector<std::pair<uint64, QByteArray>> &hashes) {
+		const std::vector<ChatScanHash> &hashes) {
 	if (!_open || hashes.empty()) {
 		return 0;
 	}
 	auto resolved = 0;
+	auto hashIds = std::set<uint64>();
+	auto media = std::set<std::pair<uint64, bool>>();
 	beginTransaction();
-	for (const auto &[mediaId, hash] : hashes) {
-		if (!mediaId || hash.isEmpty()) {
+	for (const auto &entry : hashes) {
+		if (!entry.msgId || !entry.mediaId || entry.hash.isEmpty()) {
 			continue;
 		}
-		QSqlQuery count(_db);
-		count.prepare(u"SELECT COUNT(*) FROM chat_scan_items "
-			"WHERE peer_id = :peer_id AND media_id = :media_id "
-			"AND (hash IS NULL OR length(hash) = 0)"_q);
-		count.bindValue(u":peer_id"_q, QVariant::fromValue(
-			static_cast<qulonglong>(peerId.value)));
-		count.bindValue(u":media_id"_q, QVariant::fromValue(
-			static_cast<qulonglong>(mediaId)));
-		if (count.exec() && count.next()) {
-			resolved += count.value(0).toInt();
+		media.insert({ entry.mediaId, entry.isPhoto });
+		{
+			QSqlQuery old(_db);
+			old.prepare(u"SELECT DISTINCT hash_id FROM chat_scan_items "
+				"WHERE peer_id = :peer_id AND media_id = :media_id "
+				"AND is_photo = :is_photo AND hash_id != 0"_q);
+			old.bindValue(u":peer_id"_q, QVariant::fromValue(
+				static_cast<qulonglong>(peerId.value)));
+			old.bindValue(u":media_id"_q, QVariant::fromValue(
+				static_cast<qulonglong>(entry.mediaId)));
+			old.bindValue(u":is_photo"_q, entry.isPhoto ? 1 : 0);
+			if (old.exec()) {
+				while (old.next()) {
+					const auto oldHashId = old.value(0).toULongLong();
+					if (oldHashId) {
+						hashIds.insert(oldHashId);
+					}
+				}
+			} else {
+				LOG(("DedupDb: ChatScanCommitHash old failed: %1").arg(
+					old.lastError().text()));
+			}
 		}
+		const auto hashId = resolveHashId(entry.hash);
+		if (!hashId) {
+			continue;
+		}
+		hashIds.insert(hashId);
 		QSqlQuery q(_db);
-		q.prepare(u"UPDATE chat_scan_items "
-			"SET hash = :hash, state = 2, lease_until = 0 "
-			"WHERE peer_id = :peer_id AND media_id = :media_id"_q);
-		q.bindValue(u":hash"_q, hash);
+		q.prepare(u"UPDATE chat_scan_items SET "
+			"hash_id = :hash_id, "
+			"filename = CASE "
+				"WHEN msg_id = :msg_id AND is_dup = 1 THEN :filename "
+				"WHEN msg_id = :msg_id THEN NULL "
+				"ELSE filename END, "
+			"state = 2, lease_until = 0 "
+			"WHERE peer_id = :peer_id AND media_id = :media_id "
+			"AND is_photo = :is_photo"_q);
+		q.bindValue(u":hash_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(hashId)));
+		q.bindValue(u":filename"_q, entry.filename.isEmpty()
+			? QVariant()
+			: QVariant(entry.filename));
+		q.bindValue(u":msg_id"_q, QVariant::fromValue(
+			static_cast<qlonglong>(entry.msgId.bare)));
 		q.bindValue(u":peer_id"_q, QVariant::fromValue(
 			static_cast<qulonglong>(peerId.value)));
 		q.bindValue(u":media_id"_q, QVariant::fromValue(
-			static_cast<qulonglong>(mediaId)));
+			static_cast<qulonglong>(entry.mediaId)));
+		q.bindValue(u":is_photo"_q, entry.isPhoto ? 1 : 0);
 		if (!q.exec()) {
 			LOG(("DedupDb: ChatScanCommitHash failed: %1").arg(
 				q.lastError().text()));
+		} else if (q.numRowsAffected() > 0) {
+			++resolved;
 		}
 	}
+	refreshChatScanRefs(hashIds, media);
 	commitTransaction();
 	return resolved;
 }
 
-void DedupDb::Impl::chatScanFailItem(PeerId peerId, uint64 mediaId) {
+void DedupDb::Impl::chatScanFailItem(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto) {
 	if (!_open || !mediaId) {
 		return;
 	}
@@ -2811,11 +6349,12 @@ void DedupDb::Impl::chatScanFailItem(PeerId peerId, uint64 mediaId) {
 	q.prepare(u"UPDATE chat_scan_items "
 		"SET state = 3, lease_until = 0 "
 		"WHERE peer_id = :peer_id AND media_id = :media_id "
-		"AND state = 1"_q);
+		"AND is_photo = :is_photo AND state = 1"_q);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
 	q.bindValue(u":media_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(mediaId)));
+	q.bindValue(u":is_photo"_q, isPhoto ? 1 : 0);
 	if (!q.exec()) {
 		LOG(("DedupDb: ChatScanFailItem failed: %1").arg(
 			q.lastError().text()));
@@ -2874,164 +6413,249 @@ int DedupDb::Impl::chatScanFailedCount(PeerId peerId) const {
 	return q.next() ? int(q.value(0).toLongLong()) : 0;
 }
 
-std::vector<ChatScanProgressRow> DedupDb::Impl::readChatScanProgress(
-		PeerId peerId) const {
-	auto result = std::vector<ChatScanProgressRow>();
-	if (!_open) {
-		return result;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"SELECT category, item_count, unique_count, "
-		"unique_bytes, dup_count, dup_bytes FROM chat_scan_progress "
-		"WHERE peer_id = :peer_id"_q);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	if (!q.exec()) {
-		LOG(("DedupDb: ReadChatScanProgress failed: %1").arg(
-			q.lastError().text()));
-		return result;
-	}
-	while (q.next()) {
-		auto row = ChatScanProgressRow();
-		row.peerId = peerId;
-		row.category = q.value(0).toInt();
-		row.itemCount = q.value(1).toLongLong();
-		row.uniqueCount = q.value(2).toLongLong();
-		row.uniqueBytes = q.value(3).toLongLong();
-		row.dupCount = q.value(4).toLongLong();
-		row.dupBytes = q.value(5).toLongLong();
-		result.push_back(row);
-	}
-	return result;
-}
-
-void DedupDb::Impl::updateChatScanProgress(
+void DedupDb::Impl::recomputeChatScanProgressAsync(
 		PeerId peerId,
-		int category,
-		int64 itemCount,
-		int64 uniqueCount,
-		int64 uniqueBytes,
-		int64 dupCount,
-		int64 dupBytes) {
+		Fn<void(std::vector<ChatScanProgressRow>, bool)> done) {
 	if (!_open) {
+		if (done) {
+			crl::on_main([done = std::move(done)]() mutable {
+				done({}, false);
+			});
+		}
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"INSERT INTO chat_scan_progress "
-		"(peer_id, category, item_count, unique_count, "
-		"unique_bytes, dup_count, dup_bytes) "
-		"VALUES (:peer_id, :category, :item_count, :unique_count, "
-		":unique_bytes, :dup_count, :dup_bytes) "
-		"ON CONFLICT(peer_id, category) DO UPDATE SET "
-		"item_count = item_count + excluded.item_count, "
-		"unique_count = unique_count + excluded.unique_count, "
-		"unique_bytes = unique_bytes + excluded.unique_bytes, "
-		"dup_count = dup_count + excluded.dup_count, "
-		"dup_bytes = dup_bytes + excluded.dup_bytes"_q);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	q.bindValue(u":category"_q, category);
-	q.bindValue(u":item_count"_q, QVariant::fromValue(
-		static_cast<qlonglong>(itemCount)));
-	q.bindValue(u":unique_count"_q, QVariant::fromValue(
-		static_cast<qlonglong>(uniqueCount)));
-	q.bindValue(u":unique_bytes"_q, QVariant::fromValue(
-		static_cast<qlonglong>(uniqueBytes)));
-	q.bindValue(u":dup_count"_q, QVariant::fromValue(
-		static_cast<qlonglong>(dupCount)));
-	q.bindValue(u":dup_bytes"_q, QVariant::fromValue(
-		static_cast<qlonglong>(dupBytes)));
-	if (!q.exec()) {
-		LOG(("DedupDb: UpdateChatScanProgress failed: %1").arg(
-			q.lastError().text()));
-	}
+	const auto path = _path;
+	crl::async([path, peerId, done = std::move(done)]() mutable {
+		const auto connectionName = u"dedup-progress-%1"_q.arg(
+			QUuid::createUuid().toString());
+		auto db = QSqlDatabase::addDatabase(u"QSQLITE"_q, connectionName);
+		db.setDatabaseName(path);
+		auto result = std::vector<ChatScanProgressRow>();
+		auto success = false;
+		if (db.open()) {
+			{
+				QSqlQuery q(db);
+				q.exec(u"PRAGMA busy_timeout=5000"_q);
+			}
+			if (auto computed = RecomputeChatScanProgressIn(db, peerId)) {
+				result = std::move(*computed);
+				success = true;
+			}
+			db.close();
+		} else {
+			LOG(("DedupDb: RecomputeChatScanProgress open failed: %1").arg(
+				db.lastError().text()));
+		}
+		db = QSqlDatabase();
+		QSqlDatabase::removeDatabase(connectionName);
+		if (done) {
+			crl::on_main([
+				done = std::move(done),
+				result = std::move(result),
+				success
+			]() mutable {
+				done(std::move(result), success);
+			});
+		}
+	});
 }
 
-std::vector<ChatScanProgressRow> DedupDb::Impl::recomputeChatScanProgress(
-		PeerId peerId) {
-	auto result = std::vector<ChatScanProgressRow>();
+void DedupDb::Impl::chatScanUniqueHashesAsync(
+		PeerId peerId,
+		Fn<void(std::vector<std::pair<QByteArray, MsgId>>, bool)> done) {
 	if (!_open) {
-		return result;
+		if (done) {
+			crl::on_main([done = std::move(done)]() mutable {
+				done({}, false);
+			});
+		}
+		return;
 	}
-	auto itemAgg = std::unordered_map<int, std::pair<int64, int64>>();
-	auto dupAgg = std::unordered_map<int, std::pair<int64, int64>>();
-	{
-		QSqlQuery q(_db);
-		q.prepare(u"SELECT category, COUNT(*), SUM(size) "
-			"FROM chat_scan_items WHERE peer_id = :peer_id "
-			"GROUP BY category"_q);
-		q.bindValue(u":peer_id"_q, QVariant::fromValue(
-			static_cast<qulonglong>(peerId.value)));
-		if (q.exec()) {
-			while (q.next()) {
-				itemAgg[int(q.value(0).toInt())] = std::make_pair(
-					q.value(1).toLongLong(),
-					q.value(2).toLongLong());
+	const auto path = _path;
+	crl::async([path, peerId, done = std::move(done)]() mutable {
+		const auto connectionName = u"dedup-unique-hashes-%1"_q.arg(
+			QUuid::createUuid().toString());
+		auto db = QSqlDatabase::addDatabase(u"QSQLITE"_q, connectionName);
+		db.setDatabaseName(path);
+		auto result = std::vector<std::pair<QByteArray, MsgId>>();
+		auto success = false;
+		if (db.open()) {
+			{
+				QSqlQuery q(db);
+				q.exec(u"PRAGMA busy_timeout=5000"_q);
 			}
-		}
-	}
-	{
-		QSqlQuery q(_db);
-		q.prepare(u"SELECT category, COUNT(*), SUM(size) "
-			"FROM chat_scan_dups WHERE peer_id = :peer_id "
-			"GROUP BY category"_q);
-		q.bindValue(u":peer_id"_q, QVariant::fromValue(
-			static_cast<qulonglong>(peerId.value)));
-		if (q.exec()) {
-			while (q.next()) {
-				dupAgg[int(q.value(0).toInt())] = std::make_pair(
-					q.value(1).toLongLong(),
-					q.value(2).toLongLong());
+			if (auto read = ReadChatScanUniqueHashesIn(db, peerId)) {
+				result = std::move(*read);
+				success = true;
 			}
+			db.close();
+		} else {
+			LOG(("DedupDb: ChatScanUniqueHashes open failed: %1").arg(
+				db.lastError().text()));
 		}
-	}
-	for (const auto &[category, itemPair] : itemAgg) {
-		auto row = ChatScanProgressRow();
-		row.peerId = peerId;
-		row.category = category;
-		row.itemCount = itemPair.first;
-		auto dupIt = dupAgg.find(category);
-		if (dupIt != dupAgg.end()) {
-			row.dupCount = dupIt->second.first;
-			row.dupBytes = dupIt->second.second;
+		db = QSqlDatabase();
+		QSqlDatabase::removeDatabase(connectionName);
+		if (done) {
+			crl::on_main([
+				done = std::move(done),
+				result = std::move(result),
+				success
+			]() mutable {
+				done(std::move(result), success);
+			});
 		}
-		row.uniqueCount = std::max(int64(0), row.itemCount - row.dupCount);
-		row.uniqueBytes = std::max(int64(0), itemPair.second - row.dupBytes);
-		result.push_back(row);
+	});
+}
+
+void DedupDb::Impl::chatScanMediaHashesAsync(
+		PeerId peerId,
+		bool includeOther,
+		Fn<void(std::vector<ChatScanMediaHash>, bool)> done) {
+	if (!_open) {
+		if (done) {
+			crl::on_main([done = std::move(done)]() mutable {
+				done({}, false);
+			});
+		}
+		return;
 	}
-	{
-		QSqlQuery q(_db);
-		q.prepare(u"DELETE FROM chat_scan_progress "
-			"WHERE peer_id = :peer_id"_q);
-		q.bindValue(u":peer_id"_q, QVariant::fromValue(
-			static_cast<qulonglong>(peerId.value)));
-		q.exec();
+	const auto path = _path;
+	crl::async([path, peerId, includeOther, done = std::move(done)]() mutable {
+		const auto connectionName = u"dedup-media-hashes-%1"_q.arg(
+			QUuid::createUuid().toString());
+		auto db = QSqlDatabase::addDatabase(u"QSQLITE"_q, connectionName);
+		db.setDatabaseName(path);
+		auto result = std::vector<ChatScanMediaHash>();
+		auto success = false;
+		if (db.open()) {
+			{
+				QSqlQuery q(db);
+				q.exec(u"PRAGMA busy_timeout=5000"_q);
+			}
+			if (auto read = ReadChatScanMediaHashesIn(
+					db,
+					peerId,
+					includeOther)) {
+				result = std::move(*read);
+				success = true;
+			}
+			db.close();
+		} else {
+			LOG(("DedupDb: ChatScanMediaHashes open failed: %1").arg(
+				db.lastError().text()));
+		}
+		db = QSqlDatabase();
+		QSqlDatabase::removeDatabase(connectionName);
+		if (done) {
+			crl::on_main([
+				done = std::move(done),
+				result = std::move(result),
+				success
+			]() mutable {
+				done(std::move(result), success);
+			});
+		}
+	});
+}
+
+void DedupDb::Impl::chatScanItemIdsAsync(
+		PeerId peerId,
+		int category,
+		Fn<void(std::vector<MsgId>, bool)> done) {
+	if (!_open) {
+		if (done) {
+			crl::on_main([done = std::move(done)]() mutable {
+				done({}, false);
+			});
+		}
+		return;
 	}
-	beginTransaction();
-	for (const auto &row : result) {
-		QSqlQuery q(_db);
-		q.prepare(u"INSERT OR REPLACE INTO chat_scan_progress "
-			"(peer_id, category, item_count, unique_count, "
-			"unique_bytes, dup_count, dup_bytes) VALUES "
-			"(:peer_id, :category, :item_count, :unique_count, "
-			":unique_bytes, :dup_count, :dup_bytes)"_q);
-		q.bindValue(u":peer_id"_q, QVariant::fromValue(
-			static_cast<qulonglong>(row.peerId.value)));
-		q.bindValue(u":category"_q, row.category);
-		q.bindValue(u":item_count"_q, QVariant::fromValue(
-			static_cast<qlonglong>(row.itemCount)));
-		q.bindValue(u":unique_count"_q, QVariant::fromValue(
-			static_cast<qlonglong>(row.uniqueCount)));
-		q.bindValue(u":unique_bytes"_q, QVariant::fromValue(
-			static_cast<qlonglong>(row.uniqueBytes)));
-		q.bindValue(u":dup_count"_q, QVariant::fromValue(
-			static_cast<qlonglong>(row.dupCount)));
-		q.bindValue(u":dup_bytes"_q, QVariant::fromValue(
-			static_cast<qlonglong>(row.dupBytes)));
-		q.exec();
+	const auto path = _path;
+	crl::async([
+		path,
+		peerId,
+		category,
+		done = std::move(done)
+	]() mutable {
+		const auto connectionName = u"dedup-item-ids-%1"_q.arg(
+			QUuid::createUuid().toString());
+		auto db = QSqlDatabase::addDatabase(u"QSQLITE"_q, connectionName);
+		db.setDatabaseName(path);
+		auto result = std::vector<MsgId>();
+		auto success = false;
+		if (db.open()) {
+			{
+				QSqlQuery q(db);
+				q.exec(u"PRAGMA busy_timeout=5000"_q);
+			}
+			if (auto read = ReadChatScanItemIdsIn(db, peerId, category)) {
+				result = std::move(*read);
+				success = true;
+			}
+			db.close();
+		} else {
+			LOG(("DedupDb: ChatScanItemIds open failed: %1").arg(
+				db.lastError().text()));
+		}
+		db = QSqlDatabase();
+		QSqlDatabase::removeDatabase(connectionName);
+		if (done) {
+			crl::on_main([
+				done = std::move(done),
+				result = std::move(result),
+				success
+			]() mutable {
+				done(std::move(result), success);
+			});
+		}
+	});
+}
+
+void DedupDb::Impl::readChatScanAsync(
+		PeerId peerId,
+		Fn<void(std::vector<ChatScanRow>, bool)> done) {
+	if (!_open) {
+		if (done) {
+			crl::on_main([done = std::move(done)]() mutable {
+				done({}, false);
+			});
+		}
+		return;
 	}
-	commitTransaction();
-	return result;
+	const auto path = _path;
+	crl::async([path, peerId, done = std::move(done)]() mutable {
+		const auto connectionName = u"dedup-scan-rows-%1"_q.arg(
+			QUuid::createUuid().toString());
+		auto db = QSqlDatabase::addDatabase(u"QSQLITE"_q, connectionName);
+		db.setDatabaseName(path);
+		auto result = std::vector<ChatScanRow>();
+		auto success = false;
+		if (db.open()) {
+			{
+				QSqlQuery q(db);
+				q.exec(u"PRAGMA busy_timeout=5000"_q);
+			}
+			if (auto read = ReadChatScanIn(db, peerId)) {
+				result = std::move(*read);
+				success = true;
+			}
+			db.close();
+		} else {
+			LOG(("DedupDb: ReadChatScan open failed: %1").arg(
+				db.lastError().text()));
+		}
+		db = QSqlDatabase();
+		QSqlDatabase::removeDatabase(connectionName);
+		if (done) {
+			crl::on_main([
+				done = std::move(done),
+				result = std::move(result),
+				success
+			]() mutable {
+				done(std::move(result), success);
+			});
+		}
+	});
 }
 
 std::vector<ChatScanItem> DedupDb::Impl::chatScanDistinctItems(
@@ -3041,14 +6665,16 @@ std::vector<ChatScanItem> DedupDb::Impl::chatScanDistinctItems(
 		return result;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT MIN(msg_id) AS msg_id, MIN(category) AS category, "
-		"MIN(size) AS size, media_id, MIN(is_photo) AS is_photo, "
-		"MIN(hash) AS hash, MIN(filename) AS filename "
-		"FROM chat_scan_items "
-		"WHERE peer_id = :peer_id "
-		"AND hash IS NOT NULL AND length(hash) != 0 "
-		"AND media_id != 0 "
-		"GROUP BY media_id "
+	q.prepare(u"SELECT MIN(i.msg_id) AS msg_id, MIN(i.category) AS category, "
+		"MIN(i.size) AS size, i.media_id, MIN(i.is_photo) AS is_photo, "
+		"MIN(h.hash) AS hash "
+		"FROM chat_scan_items i "
+		"JOIN hashes h ON h.hash_id = i.hash_id "
+		"WHERE i.peer_id = :peer_id "
+		"AND i.hash_id != 0 "
+		"AND i.tracked = 1 "
+		"AND i.media_id != 0 "
+		"GROUP BY i.media_id "
 		"ORDER BY msg_id ASC"_q);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
@@ -3066,215 +6692,182 @@ std::vector<ChatScanItem> DedupDb::Impl::chatScanDistinctItems(
 		item.mediaId = q.value(3).toULongLong();
 		item.isPhoto = (q.value(4).toInt() != 0);
 		item.hash = q.value(5).toByteArray();
-		item.filename = q.value(6).toString();
 		result.push_back(item);
 	}
 	return result;
-}
-
-void DedupDb::Impl::writeGlobal(const QString &key, const QString &value) {
-	if (!_open || key.isEmpty()) {
-		return;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"INSERT OR REPLACE INTO client_globals (key, value) "
-		"VALUES (:key, :value)"_q);
-	q.bindValue(u":key"_q, key);
-	q.bindValue(u":value"_q, value);
-	if (!q.exec()) {
-		LOG(("DedupDb: Global Write failed: %1").arg(q.lastError().text()));
-	}
-}
-
-QString DedupDb::Impl::readGlobal(const QString &key) const {
-	if (!_open || key.isEmpty()) {
-		return QString();
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"SELECT value FROM client_globals WHERE key = :key"_q);
-	q.bindValue(u":key"_q, key);
-	if (!q.exec()) {
-		LOG(("DedupDb: Global Read failed: %1").arg(q.lastError().text()));
-		return QString();
-	}
-	return q.next() ? q.value(0).toString() : QString();
-}
-
-void DedupDb::Impl::removeChatScanDup(PeerId peerId, MsgId msgId) {
-	if (!_open || !msgId) {
-		return;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM chat_scan_dups "
-		"WHERE peer_id = :peer_id "
-		"AND msg_id = :msg_id"_q);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	q.bindValue(u":msg_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(msgId.bare)));
-	if (!q.exec()) {
-		LOG(("DedupDb: RemoveChatScanDup failed: %1").arg(
-			q.lastError().text()));
-	}
 }
 
 void DedupDb::Impl::clearChatScan(PeerId peerId) {
 	if (!_open) {
 		return;
 	}
-	const auto started = crl::now();
-	const auto peer = QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value));
-	const auto hasOtherPeers = [&](const QString &table) {
-		auto q = QSqlQuery(_db);
-		q.prepare(u"SELECT 1 FROM %1 "
-			"WHERE peer_id != :peer_id LIMIT 1"_q.arg(table));
-		q.bindValue(u":peer_id"_q, peer);
-		if (!q.exec()) {
-			LOG(("DedupDb: ClearChatScan check failed: %1").arg(
-				q.lastError().text()));
-			return true;
+	ClearChatScanIn(_db, peerId);
+}
+
+void DedupDb::Impl::clearChatScanAsync(
+		PeerId peerId,
+		Fn<void(bool, std::vector<ChatScanOwnerChange>)> done) {
+	if (!_open) {
+		if (done) {
+			crl::on_main([done = std::move(done)]() mutable {
+				done(false, std::vector<ChatScanOwnerChange>());
+			});
 		}
-		return q.next();
-	};
-	const auto peerRows = [&](const QString &table) {
-		auto q = QSqlQuery(_db);
-		q.prepare(u"SELECT COUNT(*) FROM %1 "
-			"WHERE peer_id = :peer_id"_q.arg(table));
-		q.bindValue(u":peer_id"_q, peer);
-		return (q.exec() && q.next())
-			? q.value(0).toInt()
-			: 0;
-	};
-	const auto deletePeer = [&](const QString &table) {
-		auto q = QSqlQuery(_db);
-		q.prepare(u"DELETE FROM %1 "
-			"WHERE peer_id = :peer_id"_q.arg(table));
-		q.bindValue(u":peer_id"_q, peer);
-		if (!q.exec()) {
-			LOG(("DedupDb: ClearChatScan failed: %1").arg(
-				q.lastError().text()));
-		}
-	};
-	const auto deleteAll = [&](const QString &table) {
-		auto q = QSqlQuery(_db);
-		if (!q.exec(u"DELETE FROM %1"_q.arg(table))) {
-			LOG(("DedupDb: ClearChatScan failed: %1").arg(
-				q.lastError().text()));
-		}
-	};
-	const auto dropIndex = [&](const QString &index) {
-		auto q = QSqlQuery(_db);
-		if (!q.exec(u"DROP INDEX IF EXISTS %1"_q.arg(index))) {
-			LOG(("DedupDb: ClearChatScan drop index failed: %1").arg(
-				q.lastError().text()));
-		}
-	};
-	const auto createIndex = [&](
-			const QString &index,
-			const QString &table,
-			const QString &columns) {
-		auto q = QSqlQuery(_db);
-		if (!q.exec(u"CREATE INDEX IF NOT EXISTS %1 "
-				"ON %2 %3"_q.arg(index, table, columns))) {
-			LOG(("DedupDb: ClearChatScan create index failed: %1").arg(
-				q.lastError().text()));
-		}
-	};
-	struct ClearTable {
-		QString name;
-		std::vector<std::pair<QString, QString>> indexes;
-	};
-	const auto tables = std::vector<ClearTable>{
-		{ u"chat_scan_dups"_q, { {
-			u"idx_chat_scan_dups_cat"_q,
-			u"(peer_id, category)"_q,
-		} } },
-		{ u"chat_scan_items"_q, {
+		return;
+	}
+	const auto path = _path;
+	crl::async([path, peerId, done = std::move(done)]() mutable {
+		const auto connectionName = u"dedup-clear-%1"_q.arg(
+			QUuid::createUuid().toString());
+		auto db = QSqlDatabase::addDatabase(u"QSQLITE"_q, connectionName);
+		db.setDatabaseName(path);
+		auto success = false;
+		auto changed = std::vector<ChatScanOwnerChange>();
+		if (db.open()) {
 			{
-				u"idx_chat_scan_items_media"_q,
-				u"(peer_id, media_id)"_q,
-			},
-			{
-				u"idx_chat_scan_items_hash"_q,
-				u"(peer_id, hash)"_q,
-			},
-			{
-				u"idx_chat_scan_items_state"_q,
-				u"(peer_id, state, media_id)"_q,
-			},
-		} },
-	};
-	constexpr auto kIndexedClearThreshold = 4096;
-	beginTransaction();
-	for (const auto &table : tables) {
-		if (!hasOtherPeers(table.name)) {
-			deleteAll(table.name);
-		} else if (peerRows(table.name) > kIndexedClearThreshold) {
-			for (const auto &index : table.indexes) {
-				dropIndex(index.first);
+				QSqlQuery q(db);
+				q.exec(u"PRAGMA busy_timeout=5000"_q);
 			}
-			deletePeer(table.name);
-			for (const auto &[index, definition] : table.indexes) {
-				createIndex(index, table.name, definition);
-			}
+			changed = ClearChatScanIn(db, peerId);
+			success = true;
+			db.close();
 		} else {
-			deletePeer(table.name);
+			LOG(("DedupDb: ClearChatScan open failed: %1").arg(
+				db.lastError().text()));
 		}
+		db = QSqlDatabase();
+		QSqlDatabase::removeDatabase(connectionName);
+		if (done) {
+			crl::on_main([
+				done = std::move(done),
+				success,
+				changed = std::move(changed)
+			]() mutable {
+				done(success, std::move(changed));
+			});
+		}
+	});
+}
+
+std::optional<uint64> DedupDb::Impl::findScanJobId(PeerId peerId) const {
+	if (!_open) {
+		return std::nullopt;
 	}
-	for (const auto &table : {
-			u"chat_scan"_q,
-			u"chat_scan_state"_q,
-			u"chat_scan_progress"_q }) {
-		deletePeer(table);
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT job_id FROM jobs WHERE kind = 'scan' "
+		"AND scope_id = :scope_id ORDER BY job_id DESC LIMIT 1"_q);
+	q.bindValue(u":scope_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (!q.exec()) {
+		LOG(("DedupDb: FindScanJob failed: %1").arg(q.lastError().text()));
+		return std::nullopt;
 	}
-	commitTransaction();
-	LOG(("DedupDb: ChatScan clear took %1 ms.").arg(
-		crl::now() - started));
+	return q.next()
+		? std::optional<uint64>(q.value(0).toULongLong())
+		: std::nullopt;
+}
+
+ScanJobOptions DedupDb::Impl::readScanOptions(PeerId peerId) const {
+	if (!_open) {
+		return ScanJobOptions();
+	}
+	return ReadScanJobOptionsIn(_db, peerId).value_or(ScanJobOptions());
+}
+
+void DedupDb::Impl::writeScanOptions(
+		PeerId peerId,
+		const ScanJobOptions &options) {
+	if (!_open || !peerId) {
+		return;
+	}
+	auto jobId = findScanJobId(peerId).value_or(0);
+	if (!jobId) {
+		auto job = JobRecord();
+		job.kind = JobKind::Scan;
+		job.scopeId = peerId.value;
+		job.state = ScanJobState(options);
+		job.options = SerializeScanJob(options);
+		jobId = createJob(job);
+		if (!jobId) {
+			return;
+		}
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE jobs SET options = :options, state = :state, "
+		"updated_at = :updated_at WHERE job_id = :job_id"_q);
+	q.bindValue(u":options"_q, SerializeScanJob(options));
+	q.bindValue(u":state"_q, int(ScanJobState(options)));
+	q.bindValue(u":updated_at"_q, QVariant::fromValue(
+		static_cast<qlonglong>(base::unixtime::now())));
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: WriteScanOptions failed: %1").arg(
+			q.lastError().text()));
+	}
 }
 
 void DedupDb::Impl::writeScanCursor(const ChatScanState &state) {
 	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"INSERT OR REPLACE INTO chat_scan_state "
-		"(peer_id, cursor_msg_id, phase) "
-		"VALUES (:peer_id, :cursor_msg_id, :phase)"_q);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(state.peerId.value)));
-	q.bindValue(u":cursor_msg_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(state.cursor.bare)));
-	q.bindValue(u":phase"_q, state.phase);
-	if (!q.exec()) {
-		LOG(("DedupDb: WriteScanCursor failed: %1").arg(
-			q.lastError().text()));
+	auto options = readScanOptions(state.peerId);
+	options.cursor = state.cursor;
+	options.phase = state.phase;
+	options.elapsedMs = state.elapsedMs;
+	writeScanOptions(state.peerId, options);
+}
+
+int DedupDb::Impl::chatScanMode(PeerId peerId) const {
+	return _open ? readScanOptions(peerId).dedupMode : -1;
+}
+
+void DedupDb::Impl::writeChatScanMode(PeerId peerId, int mode) {
+	if (!_open) {
+		return;
 	}
+	auto options = readScanOptions(peerId);
+	options.dedupMode = mode;
+	writeScanOptions(peerId, options);
 }
 
 std::optional<ChatScanState> DedupDb::Impl::readScanCursor(
 		PeerId peerId) const {
-	if (!_open) {
+	if (!_open || !findScanJobId(peerId)) {
 		return std::nullopt;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"SELECT cursor_msg_id, phase FROM chat_scan_state "
-		"WHERE peer_id = :peer_id"_q);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	if (!q.exec()) {
-		LOG(("DedupDb: ReadScanCursor failed: %1").arg(
-			q.lastError().text()));
-		return std::nullopt;
-	}
-	if (!q.next()) {
-		return std::nullopt;
-	}
+	const auto options = readScanOptions(peerId);
 	auto state = ChatScanState();
 	state.peerId = peerId;
-	state.cursor = MsgId(q.value(0).toLongLong());
-	state.phase = q.value(1).toInt();
+	state.cursor = options.cursor;
+	state.phase = options.phase;
+	state.elapsedMs = options.elapsedMs;
 	return state;
+}
+
+void DedupDb::Impl::finishChatScan(
+		PeerId peerId,
+		MsgId scannedUpto,
+		int mode,
+		bool deleteFinished,
+		int64 elapsedMs) {
+	if (!_open) {
+		return;
+	}
+	auto options = readScanOptions(peerId);
+	options.cursor = scannedUpto;
+	options.scannedUpto = scannedUpto;
+	options.phase = kScanPhaseFinished;
+	options.elapsedMs = elapsedMs;
+	options.dedupMode = mode;
+	options.scanFinished = true;
+	options.deleteFinished = deleteFinished;
+	writeScanOptions(peerId, options);
+}
+
+MsgId DedupDb::Impl::chatScanScannedUpto(PeerId peerId) const {
+	return _open ? readScanOptions(peerId).scannedUpto : MsgId(0);
 }
 
 void DedupDb::Impl::writeChatScanItems(
@@ -3282,17 +6875,63 @@ void DedupDb::Impl::writeChatScanItems(
 	if (!_open || items.empty()) {
 		return;
 	}
+	auto hashIds = std::set<uint64>();
+	auto media = std::set<std::pair<uint64, bool>>();
 	beginTransaction();
 	QSqlQuery q(_db);
 	q.prepare(u"INSERT OR REPLACE INTO chat_scan_items "
 		"(peer_id, msg_id, category, size, media_id, "
-		"is_photo, filename, state, attempts, lease_until) "
+		"is_photo, hash_id, state, attempts, lease_until, is_dup, "
+		"session_id, filename, tracked) "
 		"VALUES (:peer_id, :msg_id, :category, :size, "
-		":media_id, :is_photo, :filename, "
-		":state, :attempts, :lease_until)"_q);
+		":media_id, :is_photo, :hash_id, "
+		":state, :attempts, :lease_until, :is_dup, :session_id, "
+		":filename, :tracked)"_q);
 	for (const auto &item : items) {
 		if (!item.msgId) {
 			continue;
+		}
+		auto oldHashId = uint64(0);
+		auto oldMediaId = uint64(0);
+		auto oldIsPhoto = false;
+		{
+			QSqlQuery old(_db);
+			old.prepare(u"SELECT hash_id, media_id, is_photo "
+				"FROM chat_scan_items "
+				"WHERE peer_id = :peer_id AND msg_id = :msg_id"_q);
+			old.bindValue(u":peer_id"_q, QVariant::fromValue(
+				static_cast<qulonglong>(item.peerId.value)));
+			old.bindValue(u":msg_id"_q, QVariant::fromValue(
+				static_cast<qlonglong>(item.msgId.bare)));
+			if (old.exec() && old.next()) {
+				oldHashId = old.value(0).toULongLong();
+				oldMediaId = old.value(1).toULongLong();
+				oldIsPhoto = (old.value(2).toInt() != 0);
+			} else if (old.lastError().isValid()) {
+				LOG(("DedupDb: WriteChatScanItems old failed: %1").arg(
+					old.lastError().text()));
+			}
+		}
+		const auto sameMedia = (oldMediaId == item.mediaId)
+			&& (oldIsPhoto == item.isPhoto);
+		auto hashId = sameMedia ? oldHashId : uint64(0);
+		if (!item.hash.isEmpty() && (sameMedia || !oldMediaId)) {
+			hashId = resolveHashId(item.hash);
+			if (!hashId) {
+				continue;
+			}
+		}
+		if (oldHashId) {
+			hashIds.insert(oldHashId);
+		}
+		if (hashId) {
+			hashIds.insert(hashId);
+		}
+		if (oldMediaId) {
+			media.insert({ oldMediaId, oldIsPhoto });
+		}
+		if (item.mediaId) {
+			media.insert({ item.mediaId, item.isPhoto });
 		}
 		q.bindValue(u":peer_id"_q, QVariant::fromValue(
 			static_cast<qulonglong>(item.peerId.value)));
@@ -3304,15 +6943,26 @@ void DedupDb::Impl::writeChatScanItems(
 		q.bindValue(u":media_id"_q, QVariant::fromValue(
 			static_cast<qulonglong>(item.mediaId)));
 		q.bindValue(u":is_photo"_q, item.isPhoto ? 1 : 0);
-		q.bindValue(u":filename"_q, item.filename);
+		q.bindValue(u":hash_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(hashId)));
 		q.bindValue(u":state"_q, item.state);
 		q.bindValue(u":attempts"_q, item.attempts);
 		q.bindValue(u":lease_until"_q, item.leaseUntil);
+		q.bindValue(u":is_dup"_q, item.isDup ? 1 : 0);
+		q.bindValue(u":session_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(item.sessionId)));
+		q.bindValue(u":filename"_q, (item.isDup
+			&& !item.isPhoto
+			&& !item.filename.isEmpty())
+			? QVariant(item.filename)
+			: QVariant());
+		q.bindValue(u":tracked"_q, item.tracked ? 1 : 0);
 		if (!q.exec()) {
 			LOG(("DedupDb: WriteChatScanItems failed: %1").arg(
 				q.lastError().text()));
 		}
 	}
+	refreshChatScanRefs(hashIds, media);
 	commitTransaction();
 }
 
@@ -3323,10 +6973,13 @@ std::vector<ChatScanItem> DedupDb::Impl::readChatScanItems(
 		return result;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT msg_id, category, size, media_id, "
-		"is_photo, hash, filename FROM chat_scan_items "
-		"WHERE peer_id = :peer_id "
-		"ORDER BY msg_id DESC"_q);
+	q.prepare(u"SELECT i.msg_id, i.category, i.size, i.media_id, "
+		"i.is_photo, h.hash, i.is_dup, i.session_id "
+		"FROM chat_scan_items i "
+		"LEFT JOIN hashes h ON h.hash_id = i.hash_id "
+		"WHERE i.peer_id = :peer_id "
+		"AND i.tracked = 1 "
+		"ORDER BY i.msg_id DESC"_q);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
 	if (!q.exec()) {
@@ -3343,7 +6996,8 @@ std::vector<ChatScanItem> DedupDb::Impl::readChatScanItems(
 		item.mediaId = q.value(3).toULongLong();
 		item.isPhoto = (q.value(4).toInt() != 0);
 		item.hash = q.value(5).toByteArray();
-		item.filename = q.value(6).toString();
+		item.isDup = (q.value(6).toInt() != 0);
+		item.sessionId = q.value(7).toULongLong();
 		result.push_back(item);
 	}
 	return result;
@@ -3351,27 +7005,67 @@ std::vector<ChatScanItem> DedupDb::Impl::readChatScanItems(
 
 int DedupDb::Impl::updateChatScanItemHash(
 		PeerId peerId,
+		MsgId msgId,
 		uint64 mediaId,
+		bool isPhoto,
 		const QByteArray &hash) {
-	if (!_open || !mediaId || hash.isEmpty()) {
+	if (!_open || !msgId || !mediaId || hash.isEmpty()) {
 		return 0;
 	}
+	const auto hashId = resolveHashId(hash);
+	if (!hashId) {
+		return 0;
+	}
+	auto hashIds = std::set<uint64> { hashId };
+	auto media = std::set<std::pair<uint64, bool>> {
+		{ mediaId, isPhoto },
+	};
+	beginTransaction();
+	{
+		QSqlQuery old(_db);
+		old.prepare(u"SELECT DISTINCT hash_id FROM chat_scan_items "
+			"WHERE peer_id = :peer_id AND media_id = :media_id "
+			"AND is_photo = :is_photo AND hash_id != 0"_q);
+		old.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		old.bindValue(u":media_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(mediaId)));
+		old.bindValue(u":is_photo"_q, isPhoto ? 1 : 0);
+		if (old.exec()) {
+			while (old.next()) {
+				const auto oldHashId = old.value(0).toULongLong();
+				if (oldHashId) {
+					hashIds.insert(oldHashId);
+				}
+			}
+		} else {
+			LOG(("DedupDb: UpdateChatScanItemHash old failed: %1").arg(
+				old.lastError().text()));
+		}
+	}
 	QSqlQuery q(_db);
-	q.prepare(u"UPDATE chat_scan_items SET hash = :hash "
-		"WHERE peer_id = :peer_id "
-		"AND media_id = :media_id "
-		"AND (hash IS NULL OR length(hash) = 0)"_q);
-	q.bindValue(u":hash"_q, hash);
+	q.prepare(u"UPDATE chat_scan_items SET "
+		"hash_id = :hash_id, "
+		"state = 2, lease_until = 0 "
+		"WHERE peer_id = :peer_id AND media_id = :media_id "
+		"AND is_photo = :is_photo"_q);
+	q.bindValue(u":hash_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(hashId)));
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
 	q.bindValue(u":media_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(mediaId)));
+	q.bindValue(u":is_photo"_q, isPhoto ? 1 : 0);
+	auto updated = 0;
 	if (!q.exec()) {
 		LOG(("DedupDb: UpdateChatScanItemHash failed: %1").arg(
 			q.lastError().text()));
-		return 0;
+	} else {
+		updated = q.numRowsAffected();
 	}
-	return q.numRowsAffected();
+	refreshChatScanRefs(hashIds, media);
+	commitTransaction();
+	return updated;
 }
 
 std::vector<PeerId> DedupDb::Impl::scannedPeerIds() const {
@@ -3380,69 +7074,445 @@ std::vector<PeerId> DedupDb::Impl::scannedPeerIds() const {
 		return result;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT DISTINCT peer_id FROM chat_scan "
-		"WHERE scan_finished != 0"_q);
+	q.prepare(u"SELECT scope_id, options FROM jobs WHERE kind = 'scan'"_q);
 	if (!q.exec()) {
 		LOG(("DedupDb: ScannedPeerIds failed: %1").arg(
 			q.lastError().text()));
 		return result;
 	}
 	while (q.next()) {
-		result.push_back(PeerId(q.value(0).toULongLong()));
+		if (const auto options = DeserializeScanJob(q.value(1).toByteArray())) {
+			if (options->scanFinished) {
+				result.push_back(PeerId(q.value(0).toULongLong()));
+			}
+		}
 	}
 	return result;
 }
 
-std::optional<ChatScanDup> DedupDb::Impl::takeChatScanDup(
-		PeerId peerId,
-		MsgId msgId) {
-	if (!_open || !msgId) {
-		return std::nullopt;
+std::vector<ChatScanOwnerChange> DedupDb::Impl::removeChatScan(
+		PeerId peerId) {
+	auto result = std::vector<ChatScanOwnerChange>();
+	if (!_open || !peerId) {
+		return result;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"SELECT category, size, flags, filename "
-		"FROM chat_scan_dups "
-		"WHERE peer_id = :peer_id "
-		"AND msg_id = :msg_id"_q);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	q.bindValue(u":msg_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(msgId.bare)));
-	if (!q.exec()) {
-		LOG(("DedupDb: TakeChatScanDup failed: %1").arg(
-			q.lastError().text()));
-		return std::nullopt;
+	auto hashIds = std::set<uint64>();
+	auto media = std::set<std::pair<uint64, bool>>();
+	beginTransaction();
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT hash_id FROM hashes "
+			"WHERE owner_peer_id = :peer_id"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		if (q.exec()) {
+			while (q.next()) {
+				const auto hashId = q.value(0).toULongLong();
+				if (hashId) {
+					hashIds.insert(hashId);
+				}
+			}
+		} else {
+			LOG(("DedupDb: RemoveChatScan owners failed: %1").arg(
+				q.lastError().text()));
+		}
 	}
-	if (!q.next()) {
-		return std::nullopt;
+	result = CleanupOwnersForPeerIn(_db, peerId);
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT hash_id, media_id, is_photo "
+			"FROM chat_scan_items WHERE peer_id = :peer_id"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		if (q.exec()) {
+			while (q.next()) {
+				const auto hashId = q.value(0).toULongLong();
+				const auto mediaId = q.value(1).toULongLong();
+				if (hashId) {
+					hashIds.insert(hashId);
+				}
+				if (mediaId) {
+					media.insert({ mediaId, q.value(2).toInt() != 0 });
+				}
+			}
+		} else {
+			LOG(("DedupDb: RemoveChatScan refs failed: %1").arg(
+				q.lastError().text()));
+		}
 	}
-	auto dup = ChatScanDup();
-	dup.peerId = peerId;
-	dup.msgId = msgId;
-	dup.category = q.value(0).toInt();
-	dup.size = q.value(1).toLongLong();
-	dup.flags = q.value(2).toInt();
-	dup.filename = q.value(3).toString();
-	removeChatScanDup(peerId, msgId);
-	return dup;
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM chat_scan_items "
+			"WHERE peer_id = :peer_id"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		if (!q.exec()) {
+			LOG(("DedupDb: RemoveChatScan items failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+	DeleteScanJobIn(_db, peerId);
+	for (const auto hashId : hashIds) {
+		refreshHashRefs(hashId);
+	}
+	for (const auto &[mediaId, isPhoto] : media) {
+		refreshMediaRefs(mediaId, isPhoto);
+	}
+	for (const auto &[mediaId, isPhoto] : media) {
+		cleanupMediaRefs(mediaId, isPhoto);
+	}
+	for (const auto hashId : hashIds) {
+		cleanupHashRefs(hashId);
+	}
+	commitTransaction();
+	return result;
 }
 
 void DedupDb::Impl::removeChatScanItem(PeerId peerId, MsgId msgId) {
 	if (!_open || !msgId) {
 		return;
 	}
+	auto hashIds = std::set<uint64>();
+	auto media = std::set<std::pair<uint64, bool>>();
+	const auto savepoint = u"dedup_chat_scan_remove"_q;
+	{
+		QSqlQuery q(_db);
+		if (!q.exec(u"SAVEPOINT "_q + savepoint)) {
+			LOG(("DedupDb: RemoveChatScanItem savepoint failed: %1").arg(
+				q.lastError().text()));
+			return;
+		}
+	}
+	const auto release = [&] {
+		QSqlQuery q(_db);
+		if (!q.exec(u"RELEASE "_q + savepoint)) {
+			LOG(("DedupDb: RemoveChatScanItem release failed: %1").arg(
+				q.lastError().text()));
+		}
+	};
+	{
+		QSqlQuery old(_db);
+		old.prepare(u"SELECT hash_id, media_id, is_photo "
+			"FROM chat_scan_items "
+			"WHERE peer_id = :peer_id AND msg_id = :msg_id"_q);
+		old.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		old.bindValue(u":msg_id"_q, QVariant::fromValue(
+			static_cast<qlonglong>(msgId.bare)));
+		if (!old.exec() || !old.next()) {
+			release();
+			return;
+		}
+		const auto hashId = old.value(0).toULongLong();
+		const auto mediaId = old.value(1).toULongLong();
+		const auto isPhoto = (old.value(2).toInt() != 0);
+		if (hashId) {
+			hashIds.insert(hashId);
+		}
+		if (mediaId) {
+			media.insert({ mediaId, isPhoto });
+		}
+	}
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM chat_scan_items "
+			"WHERE peer_id = :peer_id "
+			"AND msg_id = :msg_id"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		q.bindValue(u":msg_id"_q, QVariant::fromValue(
+			static_cast<qlonglong>(msgId.bare)));
+		if (!q.exec()) {
+			LOG(("DedupDb: RemoveChatScanItem failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+	refreshChatScanRefs(hashIds, media);
+	release();
+}
+
+void DedupDb::Impl::saveChatScanUndo(PeerId peerId, MsgId msgId) {
+	if (!_open || !msgId) {
+		return;
+	}
+	const auto jobId = findScanJobId(peerId).value_or(0);
+	if (!jobId) {
+		return;
+	}
+	const auto options = readScanOptions(peerId);
+	if (!options.sessionId) {
+		return;
+	}
+	auto isDup = false;
+	auto filename = QString();
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT is_dup, filename FROM chat_scan_items "
+			"WHERE peer_id = :peer_id AND msg_id = :msg_id "
+			"AND session_id != :session_id"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		q.bindValue(u":msg_id"_q, QVariant::fromValue(
+			static_cast<qlonglong>(msgId.bare)));
+		q.bindValue(u":session_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(options.sessionId)));
+		if (!q.exec()) {
+			LOG(("DedupDb: SaveChatScanUndo read failed: %1").arg(
+				q.lastError().text()));
+			return;
+		}
+		if (!q.next()) {
+			return;
+		}
+		isDup = (q.value(0).toInt() != 0);
+		filename = q.value(1).toString();
+	}
 	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM chat_scan_items "
-		"WHERE peer_id = :peer_id "
-		"AND msg_id = :msg_id"_q);
+	q.prepare(u"INSERT OR IGNORE INTO job_items "
+		"(job_id, item_id, state, payload) "
+		"VALUES (:job_id, :item_id, :state, :payload)"_q);
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	q.bindValue(u":item_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(msgId.bare)));
+	q.bindValue(u":state"_q, int(JobState::Done));
+	q.bindValue(u":payload"_q, SerializeScanUndo(isDup, filename));
+	if (!q.exec()) {
+		LOG(("DedupDb: SaveChatScanUndo failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::markChatScanItemDup(
+		PeerId peerId,
+		MsgId msgId,
+		bool isDup,
+		const QString &filename) {
+	if (!_open || !msgId) {
+		return;
+	}
+	saveChatScanUndo(peerId, msgId);
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE chat_scan_items SET "
+		"is_dup = :is_dup, "
+		"filename = CASE WHEN :is_dup = 1 THEN :filename ELSE NULL END "
+		"WHERE peer_id = :peer_id AND msg_id = :msg_id"_q);
+	q.bindValue(u":is_dup"_q, isDup ? 1 : 0);
+	q.bindValue(u":filename"_q, (isDup && !filename.isEmpty())
+		? QVariant(filename)
+		: QVariant());
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
 	q.bindValue(u":msg_id"_q, QVariant::fromValue(
 		static_cast<qlonglong>(msgId.bare)));
 	if (!q.exec()) {
-		LOG(("DedupDb: RemoveChatScanItem failed: %1").arg(
+		LOG(("DedupDb: MarkChatScanItemDup failed: %1").arg(
 			q.lastError().text()));
 	}
+}
+
+bool DedupDb::Impl::beginChatScanSession(
+		PeerId peerId,
+		uint64 sessionId,
+		MsgId baseMark) {
+	if (!_open || !sessionId) {
+		return false;
+	}
+	beginTransaction();
+	auto options = readScanOptions(peerId);
+	options.oldStateExists = findScanJobId(peerId).has_value();
+	options.oldCursor = options.cursor;
+	options.oldPhase = options.phase;
+	options.oldElapsedMs = options.elapsedMs;
+	options.oldDedupMode = options.dedupMode;
+	options.sessionId = sessionId;
+	options.baseMark = baseMark;
+	writeScanOptions(peerId, options);
+	if (const auto jobId = findScanJobId(peerId).value_or(0)) {
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM job_items WHERE job_id = :job_id"_q);
+		q.bindValue(u":job_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(jobId)));
+		if (!q.exec()) {
+			LOG(("DedupDb: BeginChatScanSession cleanup failed: %1").arg(
+				q.lastError().text()));
+			commitTransaction();
+			return false;
+		}
+	}
+	commitTransaction();
+	return true;
+}
+
+bool DedupDb::Impl::cancelChatScanSession(PeerId peerId) {
+	if (!_open) {
+		return false;
+	}
+	const auto jobId = findScanJobId(peerId).value_or(0);
+	if (!jobId) {
+		return false;
+	}
+	auto options = readScanOptions(peerId);
+	if (!options.sessionId) {
+		return false;
+	}
+	const auto sessionId = options.sessionId;
+	beginTransaction();
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM chat_scan_items "
+			"WHERE peer_id = :peer_id AND session_id = :session_id"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		q.bindValue(u":session_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(sessionId)));
+		if (!q.exec()) {
+			LOG(("DedupDb: CancelChatScanSession delete failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+	{
+		auto undoEntries = std::vector<std::pair<qint64, std::pair<bool, QString>>>();
+		{
+			QSqlQuery q(_db);
+			q.prepare(u"SELECT item_id, payload FROM job_items "
+				"WHERE job_id = :job_id"_q);
+			q.bindValue(u":job_id"_q, QVariant::fromValue(
+				static_cast<qulonglong>(jobId)));
+			if (!q.exec()) {
+				LOG(("DedupDb: CancelChatScanSession undo read failed: %1")
+					.arg(q.lastError().text()));
+			} else {
+				while (q.next()) {
+					const auto undo = DeserializeScanUndo(
+						q.value(1).toByteArray());
+					if (undo) {
+						undoEntries.emplace_back(
+							q.value(0).toLongLong(),
+							*undo);
+					}
+				}
+			}
+		}
+		for (const auto &[msgId, undo] : undoEntries) {
+			QSqlQuery update(_db);
+			update.prepare(u"UPDATE chat_scan_items SET "
+				"is_dup = :is_dup, filename = :filename "
+				"WHERE peer_id = :peer_id AND msg_id = :msg_id"_q);
+			update.bindValue(u":is_dup"_q, undo.first ? 1 : 0);
+			update.bindValue(u":filename"_q,
+				undo.second.isEmpty()
+					? QVariant()
+					: QVariant(undo.second));
+			update.bindValue(u":peer_id"_q, QVariant::fromValue(
+				static_cast<qulonglong>(peerId.value)));
+			update.bindValue(u":msg_id"_q, QVariant::fromValue(msgId));
+			if (!update.exec()) {
+				LOG(("DedupDb: CancelChatScanSession undo failed: %1")
+					.arg(update.lastError().text()));
+			}
+		}
+	}
+	if (options.oldStateExists) {
+		options.cursor = options.oldCursor;
+		options.phase = options.oldPhase;
+		options.elapsedMs = options.oldElapsedMs;
+		options.dedupMode = options.oldDedupMode;
+		options.sessionId = 0;
+		options.baseMark = MsgId(0);
+		options.oldStateExists = false;
+		options.oldCursor = MsgId(0);
+		options.oldPhase = 0;
+		options.oldElapsedMs = 0;
+		options.oldDedupMode = 0;
+		writeScanOptions(peerId, options);
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM job_items WHERE job_id = :job_id"_q);
+		q.bindValue(u":job_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(jobId)));
+		if (!q.exec()) {
+			LOG(("DedupDb: CancelChatScanSession undo cleanup failed: %1")
+				.arg(q.lastError().text()));
+		}
+	} else {
+		DeleteScanJobIn(_db, peerId);
+	}
+	RecomputeAllChatScanRefsIn(_db);
+	commitTransaction();
+	LOG(("DedupDb: canceled chat scan session."));
+	return true;
+}
+
+void DedupDb::Impl::finishChatScanSession(PeerId peerId) {
+	if (!_open) {
+		return;
+	}
+	const auto jobId = findScanJobId(peerId).value_or(0);
+	if (!jobId) {
+		return;
+	}
+	auto options = readScanOptions(peerId);
+	beginTransaction();
+	{
+		QSqlQuery q(_db);
+		q.prepare(u"DELETE FROM job_items WHERE job_id = :job_id"_q);
+		q.bindValue(u":job_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(jobId)));
+		q.exec();
+	}
+	options.sessionId = 0;
+	options.baseMark = MsgId(0);
+	options.oldStateExists = false;
+	options.oldCursor = MsgId(0);
+	options.oldPhase = 0;
+	options.oldElapsedMs = 0;
+	options.oldDedupMode = 0;
+	writeScanOptions(peerId, options);
+	commitTransaction();
+}
+
+std::optional<std::pair<uint64, MsgId>> DedupDb::Impl::chatScanSession(
+		PeerId peerId) const {
+	if (!_open) {
+		return std::nullopt;
+	}
+	const auto options = readScanOptions(peerId);
+	if (!options.sessionId) {
+		return std::nullopt;
+	}
+	return std::make_pair(options.sessionId, options.baseMark);
+}
+
+std::vector<MsgId> DedupDb::Impl::chatScanSessionItemIds(
+		PeerId peerId,
+		int category) const {
+	auto result = std::vector<MsgId>();
+	if (!_open) {
+		return result;
+	}
+	const auto options = readScanOptions(peerId);
+	if (!options.sessionId) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT msg_id FROM chat_scan_items "
+		"WHERE peer_id = :peer_id AND category = :category "
+		"AND tracked = 1 AND session_id = :session_id "
+		"ORDER BY msg_id DESC"_q);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	q.bindValue(u":category"_q, category);
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(options.sessionId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanSessionItemIds failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		result.push_back(MsgId(q.value(0).toLongLong()));
+	}
+	return result;
 }
 
 bool DedupDb::Impl::hasChatScanItem(PeerId peerId, MsgId msgId) const {
@@ -3472,10 +7542,12 @@ std::optional<ChatScanItem> DedupDb::Impl::chatScanItem(
 		return std::nullopt;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT category, size, media_id, is_photo, "
-		"hash, filename FROM chat_scan_items "
-		"WHERE peer_id = :peer_id "
-		"AND msg_id = :msg_id"_q);
+	q.prepare(u"SELECT i.category, i.size, i.media_id, i.is_photo, "
+		"h.hash, i.is_dup, i.session_id, i.filename, i.tracked "
+		"FROM chat_scan_items i "
+		"LEFT JOIN hashes h ON h.hash_id = i.hash_id "
+		"WHERE i.peer_id = :peer_id "
+		"AND i.msg_id = :msg_id"_q);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
 	q.bindValue(u":msg_id"_q, QVariant::fromValue(
@@ -3496,30 +7568,77 @@ std::optional<ChatScanItem> DedupDb::Impl::chatScanItem(
 	item.mediaId = q.value(2).toULongLong();
 	item.isPhoto = (q.value(3).toInt() != 0);
 	item.hash = q.value(4).toByteArray();
-	item.filename = q.value(5).toString();
+	item.isDup = (q.value(5).toInt() != 0);
+	item.sessionId = q.value(6).toULongLong();
+	item.filename = q.value(7).toString();
+	item.tracked = (q.value(8).toInt() != 0);
 	return item;
 }
 
-void DedupDb::Impl::clearChatScanDups(PeerId peerId) {
-	if (!_open) {
-		return;
+std::optional<ChatScanItem> DedupDb::Impl::chatScanDuplicateSuccessor(
+		PeerId peerId,
+		MsgId deletedId,
+		uint64 mediaId,
+		bool isPhoto,
+		const QByteArray &hash) const {
+	if (!_open || !deletedId || (!mediaId && hash.isEmpty())) {
+		return std::nullopt;
 	}
+	auto conditions = QStringList();
+	if (mediaId) {
+		conditions.push_back(
+			u"(i.media_id = :media_id AND i.is_photo = :is_photo)"_q);
+	}
+	if (!hash.isEmpty()) {
+		conditions.push_back(
+			u"i.hash_id = (SELECT hash_id FROM hashes WHERE hash = :hash)"_q);
+	}
+	auto sql = u"SELECT i.msg_id, i.category, i.size, i.media_id, i.is_photo, "
+		"h.hash, i.is_dup FROM chat_scan_items i "
+		"LEFT JOIN hashes h ON h.hash_id = i.hash_id "
+		"WHERE i.peer_id = :peer_id AND i.is_dup = 1 "
+		"AND i.tracked = 1 "
+		"AND i.msg_id != :deleted_id AND (%1) "
+		"ORDER BY i.msg_id DESC LIMIT 1"_q.arg(conditions.join(u" OR "_q));
 	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM chat_scan_dups "
-		"WHERE peer_id = :peer_id"_q);
+	q.prepare(sql);
 	q.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
-	if (!q.exec()) {
-		LOG(("DedupDb: ClearChatScanDups failed: %1").arg(
-			q.lastError().text()));
+	q.bindValue(u":deleted_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(deletedId.bare)));
+	if (mediaId) {
+		q.bindValue(u":media_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(mediaId)));
+		q.bindValue(u":is_photo"_q, isPhoto ? 1 : 0);
 	}
+	if (!hash.isEmpty()) {
+		q.bindValue(u":hash"_q, hash);
+	}
+	if (!q.exec()) {
+		LOG(("DedupDb: ChatScanDuplicateSuccessor failed: %1").arg(
+			q.lastError().text()));
+		return std::nullopt;
+	}
+	if (!q.next()) {
+		return std::nullopt;
+	}
+	auto item = ChatScanItem();
+	item.peerId = peerId;
+	item.msgId = MsgId(q.value(0).toLongLong());
+	item.category = q.value(1).toInt();
+	item.size = q.value(2).toLongLong();
+	item.mediaId = q.value(3).toULongLong();
+	item.isPhoto = (q.value(4).toInt() != 0);
+	item.hash = q.value(5).toByteArray();
+	item.isDup = (q.value(6).toInt() != 0);
+	return item;
 }
 
-QString DedupDb::Impl::TmpTableName(TmpTable table) {
+JobKind DedupDb::Impl::TmpJobKind(TmpTable table) {
 	switch (table) {
-	case TmpTable::Dl: return u"dl_tmp"_q;
-	case TmpTable::Ul: return u"ul_tmp"_q;
-	case TmpTable::Fw: return u"fw_tmp"_q;
+	case TmpTable::Dl: return JobKind::DownloadBatch;
+	case TmpTable::Ul: return JobKind::UploadBatch;
+	case TmpTable::Fw: return JobKind::ForwardBatch;
 	}
 	Unexpected("Tmp table.");
 }
@@ -3549,26 +7668,31 @@ void DedupDb::Impl::ensureTmpLoaded(
 		return;
 	}
 	s.loaded = true;
+	s.jobId = findJobId(TmpJobKind(table), sessionId, scopeId);
+	if (!s.jobId) {
+		return;
+	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT doc_id, hash FROM %1 "
-		"WHERE session_id = :session_id AND scope_id = :scope_id"_q.arg(
-			TmpTableName(table)));
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	q.bindValue(u":scope_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(scopeId)));
+	q.prepare(u"SELECT item_id, media_id, is_photo, hash_id "
+		"FROM job_items WHERE job_id = :job_id "
+		"ORDER BY item_id"_q);
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(s.jobId)));
 	if (!q.exec()) {
 		LOG(("DedupDb: LoadTmp failed: %1").arg(q.lastError().text()));
 		return;
 	}
 	while (q.next()) {
-		const auto docId = q.value(0).toULongLong();
-		const auto hash = q.value(1).toByteArray();
+		const auto itemId = q.value(0).toULongLong();
+		const auto docId = q.value(1).toULongLong();
+		const auto type = (q.value(2).toInt() != 0) ? 1 : 0;
+		const auto hash = hashForHashId(q.value(3).toULongLong());
+		s.nextItemId = std::max(s.nextItemId, itemId + 1);
 		if (!docId || hash.isEmpty()) {
 			continue;
 		}
-		s.docToHash[docId] = hash;
-		s.hashToDoc[hash].insert(docId);
+		s.docToHash[type][docId] = hash;
+		s.hashToDoc[type][hash].insert(docId);
 	}
 }
 
@@ -3577,14 +7701,16 @@ void DedupDb::Impl::insertTmp(
 		uint64 sessionId,
 		uint64 scopeId,
 		uint64 documentId,
+		bool isPhoto,
 		const QByteArray &hash) {
 	if (!_open || !documentId || hash.isEmpty()) {
 		return;
 	}
+	const auto type = isPhoto ? 1 : 0;
 	auto &s = tmpState(table, sessionId, scopeId);
-	s.docToHash[documentId] = hash;
-	s.hashToDoc[hash].insert(documentId);
-	s.pending.push_back({ documentId, hash });
+	s.docToHash[type][documentId] = hash;
+	s.hashToDoc[type][hash].insert(documentId);
+	s.pending.push_back({ documentId, isPhoto, hash });
 	if (++_tmpPendingWrites >= kExWriteBatchLimit) {
 		flushTmpPending();
 	}
@@ -3594,29 +7720,33 @@ void DedupDb::Impl::removeTmpDoc(
 		TmpTable table,
 		uint64 sessionId,
 		uint64 scopeId,
-		uint64 documentId) {
+		uint64 documentId,
+		bool isPhoto) {
 	if (!documentId) {
 		return;
 	}
+	const auto type = isPhoto ? 1 : 0;
+	auto jobId = uint64(0);
 	if (const auto i = _tmpStates.find({ table, sessionId, scopeId });
 		i != _tmpStates.end()) {
 		auto &s = i->second;
-		if (const auto j = s.docToHash.find(documentId);
-			j != s.docToHash.end()) {
+		jobId = s.jobId;
+		if (const auto j = s.docToHash[type].find(documentId);
+			j != s.docToHash[type].end()) {
 			const auto hash = j.value();
-			s.docToHash.erase(j);
-			if (const auto k = s.hashToDoc.find(hash);
-				k != s.hashToDoc.end()) {
+			s.docToHash[type].erase(j);
+			if (const auto k = s.hashToDoc[type].find(hash);
+				k != s.hashToDoc[type].end()) {
 				k.value().remove(documentId);
 				if (k.value().isEmpty()) {
-					s.hashToDoc.erase(k);
+					s.hashToDoc[type].erase(k);
 				}
 			}
 		}
 		auto &pending = s.pending;
 		auto w = pending.begin();
 		for (auto r = pending.begin(); r != pending.end(); ++r) {
-			if (r->docId != documentId) {
+			if (r->docId != documentId || r->isPhoto != isPhoto) {
 				if (w != r) {
 					*w = std::move(*r);
 				}
@@ -3630,20 +7760,82 @@ void DedupDb::Impl::removeTmpDoc(
 	if (!_open) {
 		return;
 	}
+	if (!jobId) {
+		jobId = findJobId(TmpJobKind(table), sessionId, scopeId);
+	}
+	if (!jobId) {
+		return;
+	}
 	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM %1 "
-		"WHERE session_id = :session_id AND scope_id = :scope_id "
-		"AND doc_id = :doc_id"_q.arg(TmpTableName(table)));
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	q.bindValue(u":scope_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(scopeId)));
-	q.bindValue(u":doc_id"_q, QVariant::fromValue(
+	q.prepare(u"DELETE FROM job_items WHERE job_id = :job_id "
+		"AND media_id = :media_id AND is_photo = :is_photo"_q);
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	q.bindValue(u":media_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(documentId)));
+	q.bindValue(u":is_photo"_q, type);
 	if (!q.exec()) {
 		LOG(("DedupDb: RemoveTmpDoc failed: %1").arg(
 			q.lastError().text()));
 	}
+}
+
+void DedupDb::Impl::flushTmpState(
+		const TmpKey &key,
+		TmpState &state) {
+	if (state.pending.empty()) {
+		return;
+	}
+	const auto kind = TmpJobKind(key.table);
+	if (!state.jobId) {
+		state.jobId = findJobId(kind, key.sessionId, key.scopeId);
+	}
+	if (!state.jobId) {
+		auto job = JobRecord();
+		job.kind = kind;
+		job.sessionId = key.sessionId;
+		job.scopeId = key.scopeId;
+		job.state = JobState::Pending;
+		state.jobId = createJob(job);
+		if (!state.jobId) {
+			return;
+		}
+	}
+	QSqlQuery del(_db);
+	del.prepare(u"DELETE FROM job_items WHERE job_id = :job_id "
+		"AND media_id = :media_id AND is_photo = :is_photo"_q);
+	QSqlQuery ins(_db);
+	ins.prepare(u"INSERT OR REPLACE INTO job_items "
+		"(job_id, item_id, media_id, is_photo, hash_id, state) "
+		"VALUES (:job_id, :item_id, :media_id, :is_photo, "
+		":hash_id, :state)"_q);
+	for (const auto &row : state.pending) {
+		const auto hashId = resolveHashId(row.hash);
+		del.bindValue(u":job_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(state.jobId)));
+		del.bindValue(u":media_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(row.docId)));
+		del.bindValue(u":is_photo"_q, row.isPhoto ? 1 : 0);
+		if (!del.exec()) {
+			LOG(("DedupDb: RemoveTmpDoc failed: %1").arg(
+				del.lastError().text()));
+		}
+		ins.bindValue(u":job_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(state.jobId)));
+		ins.bindValue(u":item_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(state.nextItemId++)));
+		ins.bindValue(u":media_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(row.docId)));
+		ins.bindValue(u":is_photo"_q, row.isPhoto ? 1 : 0);
+		ins.bindValue(u":hash_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(hashId)));
+		ins.bindValue(u":state"_q, int(JobState::Done));
+		if (!ins.exec()) {
+			LOG(("DedupDb: InsertTmp failed: %1").arg(
+				ins.lastError().text()));
+		}
+	}
+	state.pending.clear();
 }
 
 void DedupDb::Impl::flushTmpPending() {
@@ -3652,31 +7844,8 @@ void DedupDb::Impl::flushTmpPending() {
 	}
 	_tmpPendingWrites = 0;
 	beginTransaction();
-	for (const auto table : { TmpTable::Dl, TmpTable::Ul, TmpTable::Fw }) {
-		QSqlQuery tmp(_db);
-		tmp.prepare(u"INSERT OR REPLACE INTO %1 "
-			"(session_id, scope_id, doc_id, hash, status) "
-			"VALUES (:session_id, :scope_id, :doc_id, :hash, 'f')"_q.arg(
-				TmpTableName(table)));
-		for (auto &[key, s] : _tmpStates) {
-			if (key.table != table) {
-				continue;
-			}
-			for (const auto &row : s.pending) {
-				tmp.bindValue(u":session_id"_q, QVariant::fromValue(
-					static_cast<qulonglong>(key.sessionId)));
-				tmp.bindValue(u":scope_id"_q, QVariant::fromValue(
-					static_cast<qulonglong>(key.scopeId)));
-				tmp.bindValue(u":doc_id"_q, QVariant::fromValue(
-					static_cast<qulonglong>(row.docId)));
-				tmp.bindValue(u":hash"_q, row.hash);
-				if (!tmp.exec()) {
-					LOG(("DedupDb: InsertTmp failed: %1").arg(
-						tmp.lastError().text()));
-				}
-			}
-			s.pending.clear();
-		}
+	for (auto &[key, state] : _tmpStates) {
+		flushTmpState(key, state);
 	}
 	commitTransaction();
 }
@@ -3685,11 +7854,13 @@ bool DedupDb::Impl::containsTmpDocId(
 		TmpTable table,
 		uint64 sessionId,
 		uint64 scopeId,
-		uint64 documentId) const {
+		uint64 documentId,
+		bool isPhoto) const {
 	if (!documentId) {
 		return false;
 	}
-	return tmpState(table, sessionId, scopeId).docToHash.contains(
+	const auto type = isPhoto ? 1 : 0;
+	return tmpState(table, sessionId, scopeId).docToHash[type].contains(
 		documentId);
 }
 
@@ -3702,44 +7873,48 @@ bool DedupDb::Impl::containsTmpHash(
 		return false;
 	}
 	const auto &s = tmpState(table, sessionId, scopeId);
-	const auto i = s.hashToDoc.find(hash);
-	return (i != s.hashToDoc.end()) && !i->isEmpty();
+	for (auto type = 0; type != 2; ++type) {
+		const auto i = s.hashToDoc[type].find(hash);
+		if (i != s.hashToDoc[type].end() && !i->isEmpty()) {
+			return true;
+		}
+	}
+	return false;
 }
 
 QByteArray DedupDb::Impl::hashForTmpDocId(
 		TmpTable table,
 		uint64 sessionId,
 		uint64 scopeId,
-		uint64 documentId) const {
+		uint64 documentId,
+		bool isPhoto) const {
 	if (!documentId) {
 		return {};
 	}
-	return tmpState(table, sessionId, scopeId).docToHash.value(documentId);
+	const auto type = isPhoto ? 1 : 0;
+	return tmpState(table, sessionId, scopeId).docToHash[type].value(
+		documentId);
 }
 
 void DedupDb::Impl::clearTmpRun(
 		TmpTable table,
 		uint64 sessionId,
 		uint64 scopeId) {
+	auto jobId = uint64(0);
 	if (const auto i = _tmpStates.find({ table, sessionId, scopeId });
 		i != _tmpStates.end()) {
+		jobId = i->second.jobId;
 		_tmpPendingWrites -= int(i->second.pending.size());
 		_tmpStates.erase(i);
 	}
 	if (!_open) {
 		return;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM %1 "
-		"WHERE session_id = :session_id AND scope_id = :scope_id"_q.arg(
-			TmpTableName(table)));
-	q.bindValue(u":session_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(sessionId)));
-	q.bindValue(u":scope_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(scopeId)));
-	if (!q.exec()) {
-		LOG(("DedupDb: ClearTmpRun failed: %1").arg(
-			q.lastError().text()));
+	if (!jobId) {
+		jobId = findJobId(TmpJobKind(table), sessionId, scopeId);
+	}
+	if (jobId) {
+		removeJob(jobId);
 	}
 }
 
@@ -3834,15 +8009,21 @@ void DedupDb::insertExTmp(
 		uint64 sessionId,
 		PeerId peerId,
 		uint64 documentId,
+		bool isPhoto,
 		const QByteArray &hash) {
-	_impl->insertExTmp(sessionId, peerId, documentId, hash);
+	_impl->insertExTmp(sessionId, peerId, documentId, isPhoto, hash);
 }
 
 bool DedupDb::containsExTmpDocId(
 		uint64 sessionId,
 		PeerId peerId,
-		uint64 documentId) const {
-	return _impl->containsExTmpDocId(sessionId, peerId, documentId);
+		uint64 documentId,
+		bool isPhoto) const {
+	return _impl->containsExTmpDocId(
+		sessionId,
+		peerId,
+		documentId,
+		isPhoto);
 }
 
 bool DedupDb::containsExTmpHash(
@@ -3856,38 +8037,36 @@ void DedupDb::flushExTmp() {
 	_impl->flushExPending();
 }
 
-QByteArray DedupDb::hashForExTmpDocId(
-	uint64 sessionId,
-	PeerId peerId,
-	uint64 documentId) const {
-	return _impl->hashForExTmpDocId(sessionId, peerId, documentId);
-}
-
 void DedupDb::clearExTmpRun(uint64 sessionId, PeerId peerId) {
 	_impl->clearExTmpRun(sessionId, peerId);
-}
-
-void DedupDb::clearExTmpSession(uint64 sessionId) {
-	_impl->clearExTmpSession(sessionId);
 }
 
 void DedupDb::insertDlTmp(
 		uint64 sessionId,
 		uint64 batchId,
 		uint64 documentId,
+		bool isPhoto,
 		const QByteArray &hash) {
-	_impl->insertTmp(Impl::TmpTable::Dl, sessionId, batchId, documentId, hash);
+	_impl->insertTmp(
+		Impl::TmpTable::Dl,
+		sessionId,
+		batchId,
+		documentId,
+		isPhoto,
+		hash);
 }
 
 bool DedupDb::containsDlTmpDocId(
 		uint64 sessionId,
 		uint64 batchId,
-		uint64 documentId) const {
+		uint64 documentId,
+		bool isPhoto) const {
 	return _impl->containsTmpDocId(
 		Impl::TmpTable::Dl,
 		sessionId,
 		batchId,
-		documentId);
+		documentId,
+		isPhoto);
 }
 
 bool DedupDb::containsDlTmpHash(
@@ -3901,17 +8080,6 @@ bool DedupDb::containsDlTmpHash(
 		hash);
 }
 
-QByteArray DedupDb::hashForDlTmpDocId(
-		uint64 sessionId,
-		uint64 batchId,
-		uint64 documentId) const {
-	return _impl->hashForTmpDocId(
-		Impl::TmpTable::Dl,
-		sessionId,
-		batchId,
-		documentId);
-}
-
 void DedupDb::clearDlTmpRun(uint64 sessionId, uint64 batchId) {
 	_impl->clearTmpRun(Impl::TmpTable::Dl, sessionId, batchId);
 }
@@ -3919,27 +8087,42 @@ void DedupDb::clearDlTmpRun(uint64 sessionId, uint64 batchId) {
 void DedupDb::removeDlTmpDoc(
 		uint64 sessionId,
 		uint64 batchId,
-		uint64 documentId) {
-	_impl->removeTmpDoc(Impl::TmpTable::Dl, sessionId, batchId, documentId);
+		uint64 documentId,
+		bool isPhoto) {
+	_impl->removeTmpDoc(
+		Impl::TmpTable::Dl,
+		sessionId,
+		batchId,
+		documentId,
+		isPhoto);
 }
 
 void DedupDb::insertUlTmp(
 		uint64 sessionId,
 		uint64 batchId,
 		uint64 documentId,
+		bool isPhoto,
 		const QByteArray &hash) {
-	_impl->insertTmp(Impl::TmpTable::Ul, sessionId, batchId, documentId, hash);
+	_impl->insertTmp(
+		Impl::TmpTable::Ul,
+		sessionId,
+		batchId,
+		documentId,
+		isPhoto,
+		hash);
 }
 
 bool DedupDb::containsUlTmpDocId(
 		uint64 sessionId,
 		uint64 batchId,
-		uint64 documentId) const {
+		uint64 documentId,
+		bool isPhoto) const {
 	return _impl->containsTmpDocId(
 		Impl::TmpTable::Ul,
 		sessionId,
 		batchId,
-		documentId);
+		documentId,
+		isPhoto);
 }
 
 bool DedupDb::containsUlTmpHash(
@@ -3953,17 +8136,6 @@ bool DedupDb::containsUlTmpHash(
 		hash);
 }
 
-QByteArray DedupDb::hashForUlTmpDocId(
-		uint64 sessionId,
-		uint64 batchId,
-		uint64 documentId) const {
-	return _impl->hashForTmpDocId(
-		Impl::TmpTable::Ul,
-		sessionId,
-		batchId,
-		documentId);
-}
-
 void DedupDb::clearUlTmpRun(uint64 sessionId, uint64 batchId) {
 	_impl->clearTmpRun(Impl::TmpTable::Ul, sessionId, batchId);
 }
@@ -3972,24 +8144,28 @@ void DedupDb::insertFwTmp(
 		uint64 sessionId,
 		PeerId dstPeer,
 		uint64 itemId,
+		bool isPhoto,
 		const QByteArray &hash) {
 	_impl->insertTmp(
 		Impl::TmpTable::Fw,
 		sessionId,
 		dstPeer.value,
 		itemId,
+		isPhoto,
 		hash);
 }
 
 bool DedupDb::containsFwTmpItem(
 		uint64 sessionId,
 		PeerId dstPeer,
-		uint64 itemId) const {
+		uint64 itemId,
+		bool isPhoto) const {
 	return _impl->containsTmpDocId(
 		Impl::TmpTable::Fw,
 		sessionId,
 		dstPeer.value,
-		itemId);
+		itemId,
+		isPhoto);
 }
 
 bool DedupDb::containsFwTmpHash(
@@ -4006,24 +8182,28 @@ bool DedupDb::containsFwTmpHash(
 QByteArray DedupDb::hashForFwTmpItem(
 		uint64 sessionId,
 		PeerId dstPeer,
-		uint64 itemId) const {
+		uint64 itemId,
+		bool isPhoto) const {
 	return _impl->hashForTmpDocId(
 		Impl::TmpTable::Fw,
 		sessionId,
 		dstPeer.value,
-		itemId);
+		itemId,
+		isPhoto);
 }
 
 void DedupDb::clearFwTmpRun(uint64 sessionId, PeerId dstPeer) {
 	_impl->clearTmpRun(Impl::TmpTable::Fw, sessionId, dstPeer.value);
 }
 
-void DedupDb::writeChatScanRow(const ChatScanRow &row) {
-	_impl->writeChatScanRow(row);
-}
-
 std::vector<ChatScanRow> DedupDb::readChatScan(PeerId peerId) const {
 	return _impl->readChatScan(peerId);
+}
+
+void DedupDb::readChatScanAsync(
+		PeerId peerId,
+		Fn<void(std::vector<ChatScanRow>, bool)> done) {
+	_impl->readChatScanAsync(peerId, std::move(done));
 }
 
 bool DedupDb::isChatScanned(PeerId peerId) const {
@@ -4032,6 +8212,10 @@ bool DedupDb::isChatScanned(PeerId peerId) const {
 
 void DedupDb::markChatDeleteFinished(PeerId peerId) {
 	_impl->markChatDeleteFinished(peerId);
+}
+
+void DedupDb::requestIncrementalVacuum() {
+	_impl->requestIncrementalVacuum();
 }
 
 int64 DedupDb::chatScanDupBytes(PeerId peerId) const {
@@ -4047,6 +8231,12 @@ qint64 DedupDb::chatScanItemCount(PeerId peerId) const {
 	return _impl->chatScanItemCount(peerId);
 }
 
+bool DedupDb::chatScanCategoryHasItems(
+		PeerId peerId,
+		int category) const {
+	return _impl->chatScanCategoryHasItems(peerId, category);
+}
+
 MsgId DedupDb::chatScanMaxMsgId(PeerId peerId) const {
 	return _impl->chatScanMaxMsgId(peerId);
 }
@@ -4057,11 +8247,24 @@ bool DedupDb::chatScanContainsHash(
 	return _impl->chatScanContainsHash(peerId, hash);
 }
 
+MsgId DedupDb::chatScanUniqueHash(
+		PeerId peerId,
+		const QByteArray &hash) const {
+	return _impl->chatScanUniqueHash(peerId, hash);
+}
+
 QByteArray DedupDb::chatScanHashForMedia(
 		PeerId peerId,
 		uint64 mediaId,
 		bool isPhoto) const {
 	return _impl->chatScanHashForMedia(peerId, mediaId, isPhoto);
+}
+
+QByteArray DedupDb::chatScanHashForMediaOther(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto) const {
+	return _impl->chatScanHashForMediaOther(peerId, mediaId, isPhoto);
 }
 
 std::vector<ChatScanItem> DedupDb::chatScanUnresolvedItems(
@@ -4081,13 +8284,6 @@ std::vector<ChatScanItem> DedupDb::chatScanItemsWindow(
 		MsgId above,
 		int limit) const {
 	return _impl->chatScanItemsWindow(peerId, above, limit);
-}
-
-std::vector<ChatScanItem> DedupDb::chatScanHashedItemsWindow(
-		PeerId peerId,
-		MsgId above,
-		int limit) const {
-	return _impl->chatScanHashedItemsWindow(peerId, above, limit);
 }
 
 int DedupDb::chatScanPendingCount(PeerId peerId) const {
@@ -4113,8 +8309,9 @@ std::vector<ChatScanItem> DedupDb::chatScanLeaseItems(
 void DedupDb::chatScanReleaseItem(
 		PeerId peerId,
 		uint64 mediaId,
+		bool isPhoto,
 		qint64 retryAt) {
-	_impl->chatScanReleaseItem(peerId, mediaId, retryAt);
+	_impl->chatScanReleaseItem(peerId, mediaId, isPhoto, retryAt);
 }
 
 void DedupDb::chatScanReleaseLeases(PeerId peerId) {
@@ -4123,12 +8320,15 @@ void DedupDb::chatScanReleaseLeases(PeerId peerId) {
 
 int DedupDb::chatScanCommitHashes(
 		PeerId peerId,
-		const std::vector<std::pair<uint64, QByteArray>> &hashes) {
+		const std::vector<ChatScanHash> &hashes) {
 	return _impl->chatScanCommitHashes(peerId, hashes);
 }
 
-void DedupDb::chatScanFailItem(PeerId peerId, uint64 mediaId) {
-	_impl->chatScanFailItem(peerId, mediaId);
+void DedupDb::chatScanFailItem(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto) {
+	_impl->chatScanFailItem(peerId, mediaId, isPhoto);
 }
 
 int DedupDb::chatScanRetryFailed(PeerId peerId) {
@@ -4143,57 +8343,38 @@ int DedupDb::chatScanFailedCount(PeerId peerId) const {
 	return _impl->chatScanFailedCount(peerId);
 }
 
-std::vector<ChatScanProgressRow> DedupDb::readChatScanProgress(
-		PeerId peerId) const {
-	return _impl->readChatScanProgress(peerId);
+void DedupDb::recomputeChatScanProgressAsync(
+		PeerId peerId,
+		Fn<void(std::vector<ChatScanProgressRow>, bool)> done) {
+	_impl->recomputeChatScanProgressAsync(peerId, std::move(done));
 }
 
-void DedupDb::updateChatScanProgress(
+void DedupDb::chatScanUniqueHashesAsync(
+		PeerId peerId,
+		Fn<void(std::vector<std::pair<QByteArray, MsgId>>, bool)> done) {
+	_impl->chatScanUniqueHashesAsync(peerId, std::move(done));
+}
+
+void DedupDb::chatScanItemIdsAsync(
 		PeerId peerId,
 		int category,
-		int64 itemCount,
-		int64 uniqueCount,
-		int64 uniqueBytes,
-		int64 dupCount,
-		int64 dupBytes) {
-	_impl->updateChatScanProgress(
-		peerId,
-		category,
-		itemCount,
-		uniqueCount,
-		uniqueBytes,
-		dupCount,
-		dupBytes);
+		Fn<void(std::vector<MsgId>, bool)> done) {
+	_impl->chatScanItemIdsAsync(peerId, category, std::move(done));
 }
 
-std::vector<ChatScanProgressRow> DedupDb::recomputeChatScanProgress(
-		PeerId peerId) {
-	return _impl->recomputeChatScanProgress(peerId);
+void DedupDb::chatScanMediaHashesAsync(
+		PeerId peerId,
+		bool includeOther,
+		Fn<void(std::vector<ChatScanMediaHash>, bool)> done) {
+	_impl->chatScanMediaHashesAsync(
+		peerId,
+		includeOther,
+		std::move(done));
 }
 
 std::vector<ChatScanItem> DedupDb::chatScanDistinctItems(
 		PeerId peerId) const {
 	return _impl->chatScanDistinctItems(peerId);
-}
-
-void DedupDb::writeGlobal(const QString &key, const QString &value) {
-	_impl->writeGlobal(key, value);
-}
-
-QString DedupDb::readGlobal(const QString &key) const {
-	return _impl->readGlobal(key);
-}
-
-void DedupDb::writeChatScanDup(const ChatScanDup &dup) {
-	_impl->writeChatScanDup(dup);
-}
-
-std::vector<ChatScanDup> DedupDb::readChatScanDups(
-		PeerId peerId,
-		int category,
-		int limit,
-		int offset) const {
-	return _impl->readChatScanDups(peerId, category, limit, offset);
 }
 
 std::vector<ChatScanDup> DedupDb::readChatScanDupsBefore(
@@ -4208,12 +8389,14 @@ int DedupDb::chatScanDupCount(PeerId peerId, int category) const {
 	return _impl->chatScanDupCount(peerId, category);
 }
 
-void DedupDb::removeChatScanDup(PeerId peerId, MsgId msgId) {
-	_impl->removeChatScanDup(peerId, msgId);
-}
-
 void DedupDb::clearChatScan(PeerId peerId) {
 	_impl->clearChatScan(peerId);
+}
+
+void DedupDb::clearChatScanAsync(
+		PeerId peerId,
+		Fn<void(bool, std::vector<ChatScanOwnerChange>)> done) {
+	_impl->clearChatScanAsync(peerId, std::move(done));
 }
 
 void DedupDb::writeScanCursor(const ChatScanState &state) {
@@ -4222,6 +8405,27 @@ void DedupDb::writeScanCursor(const ChatScanState &state) {
 
 std::optional<ChatScanState> DedupDb::readScanCursor(PeerId peerId) const {
 	return _impl->readScanCursor(peerId);
+}
+
+void DedupDb::finishChatScan(
+		PeerId peerId,
+		MsgId scannedUpto,
+		int mode,
+		bool deleteFinished,
+		int64 elapsedMs) {
+	_impl->finishChatScan(peerId, scannedUpto, mode, deleteFinished, elapsedMs);
+}
+
+MsgId DedupDb::chatScanScannedUpto(PeerId peerId) const {
+	return _impl->chatScanScannedUpto(peerId);
+}
+
+int DedupDb::chatScanMode(PeerId peerId) const {
+	return _impl->chatScanMode(peerId);
+}
+
+void DedupDb::writeChatScanMode(PeerId peerId, int mode) {
+	_impl->writeChatScanMode(peerId, mode);
 }
 
 void DedupDb::writeChatScanItems(const std::vector<ChatScanItem> &items) {
@@ -4234,23 +8438,58 @@ std::vector<ChatScanItem> DedupDb::readChatScanItems(PeerId peerId) const {
 
 int DedupDb::updateChatScanItemHash(
 		PeerId peerId,
+		MsgId msgId,
 		uint64 mediaId,
+		bool isPhoto,
 		const QByteArray &hash) {
-	return _impl->updateChatScanItemHash(peerId, mediaId, hash);
+	return _impl->updateChatScanItemHash(
+		peerId,
+		msgId,
+		mediaId,
+		isPhoto,
+		hash);
 }
 
 std::vector<PeerId> DedupDb::scannedPeerIds() const {
 	return _impl->scannedPeerIds();
 }
 
-std::optional<ChatScanDup> DedupDb::takeChatScanDup(
-		PeerId peerId,
-		MsgId msgId) {
-	return _impl->takeChatScanDup(peerId, msgId);
-}
-
 void DedupDb::removeChatScanItem(PeerId peerId, MsgId msgId) {
 	_impl->removeChatScanItem(peerId, msgId);
+}
+
+void DedupDb::markChatScanItemDup(
+		PeerId peerId,
+		MsgId msgId,
+		bool isDup,
+		const QString &filename) {
+	_impl->markChatScanItemDup(peerId, msgId, isDup, filename);
+}
+
+bool DedupDb::beginChatScanSession(
+		PeerId peerId,
+		uint64 sessionId,
+		MsgId baseMark) {
+	return _impl->beginChatScanSession(peerId, sessionId, baseMark);
+}
+
+bool DedupDb::cancelChatScanSession(PeerId peerId) {
+	return _impl->cancelChatScanSession(peerId);
+}
+
+void DedupDb::finishChatScanSession(PeerId peerId) {
+	_impl->finishChatScanSession(peerId);
+}
+
+std::optional<std::pair<uint64, MsgId>> DedupDb::chatScanSession(
+		PeerId peerId) const {
+	return _impl->chatScanSession(peerId);
+}
+
+std::vector<MsgId> DedupDb::chatScanSessionItemIds(
+		PeerId peerId,
+		int category) const {
+	return _impl->chatScanSessionItemIds(peerId, category);
 }
 
 bool DedupDb::hasChatScanItem(PeerId peerId, MsgId msgId) const {
@@ -4263,8 +8502,108 @@ std::optional<ChatScanItem> DedupDb::chatScanItem(
 	return _impl->chatScanItem(peerId, msgId);
 }
 
-void DedupDb::clearChatScanDups(PeerId peerId) {
-	_impl->clearChatScanDups(peerId);
+std::optional<ChatScanItem> DedupDb::chatScanDuplicateSuccessor(
+		PeerId peerId,
+		MsgId deletedId,
+		uint64 mediaId,
+		bool isPhoto,
+		const QByteArray &hash) const {
+	return _impl->chatScanDuplicateSuccessor(
+		peerId,
+		deletedId,
+		mediaId,
+		isPhoto,
+		hash);
+}
+
+uint64 DedupDb::createJob(const JobRecord &job) {
+	return _impl->createJob(job);
+}
+
+std::optional<JobRecord> DedupDb::job(uint64 jobId) const {
+	return _impl->job(jobId);
+}
+
+std::optional<JobRecord> DedupDb::findJob(
+		JobKind kind,
+		uint64 scopeId) const {
+	return _impl->findJob(kind, scopeId, false);
+}
+
+std::optional<JobRecord> DedupDb::findActiveJob(
+		JobKind kind,
+		uint64 scopeId) const {
+	return _impl->findJob(kind, scopeId, true);
+}
+
+void DedupDb::setJobState(uint64 jobId, JobState state) {
+	_impl->setJobState(jobId, state);
+}
+
+void DedupDb::setJobProgress(
+		uint64 jobId,
+		int total,
+		int done,
+		int skipped) {
+	_impl->setJobProgress(jobId, total, done, skipped);
+}
+
+void DedupDb::pauseJob(uint64 jobId) {
+	_impl->pauseJob(jobId);
+}
+
+void DedupDb::finishJob(uint64 jobId) {
+	_impl->finishJob(jobId);
+}
+
+void DedupDb::cancelJob(uint64 jobId) {
+	_impl->cancelJob(jobId);
+}
+
+void DedupDb::finishScanJob(uint64 jobId) {
+	_impl->finishScanJob(jobId);
+}
+
+void DedupDb::removeJobItems(uint64 jobId) {
+	_impl->removeJobItems(jobId);
+}
+
+void DedupDb::writeJobItems(const std::vector<JobItemRecord> &items) {
+	_impl->writeJobItems(items);
+}
+
+void DedupDb::writeJobItem(const JobItemRecord &item) {
+	_impl->writeJobItem(item);
+}
+
+std::vector<JobItemRecord> DedupDb::jobItems(uint64 jobId) const {
+	return _impl->jobItems(jobId);
+}
+
+std::vector<JobItemRecord> DedupDb::jobResumeItems(uint64 jobId) const {
+	return _impl->jobResumeItems(jobId);
+}
+
+void DedupDb::setJobItemState(
+		uint64 jobId,
+		uint64 itemId,
+		JobState state,
+		const QString &error,
+		int retry) {
+	_impl->setJobItemState(jobId, itemId, state, error, retry);
+}
+
+bool DedupDb::jobContainsMedia(
+		uint64 jobId,
+		uint64 mediaId,
+		bool isPhoto) const {
+	return _impl->jobContainsMedia(jobId, mediaId, isPhoto);
+}
+
+bool DedupDb::jobContainsHash(
+		uint64 jobId,
+		uint64 hashId) const {
+	return _impl->jobContainsHash(jobId, hashId);
 }
 
 void DedupDb::beginTransaction() {

@@ -1756,6 +1756,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_profile_files#other" = "{count} files";
 "lng_profile_audios#one" = "{count} voice message";
 "lng_profile_audios#other" = "{count} voice messages";
+"lng_profile_stickers#one" = "{count} sticker";
+"lng_profile_stickers#other" = "{count} stickers";
 "lng_profile_shared_links#one" = "{count} shared link";
 "lng_profile_shared_links#other" = "{count} shared links";
 "lng_profile_copy_phone" = "Copy Phone Number";
@@ -1922,6 +1924,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_media_type_songs" = "Audio files";
 "lng_media_type_files" = "Files";
 "lng_media_type_audios" = "Voice messages";
+"lng_media_type_stickers" = "Stickers";
 "lng_media_type_links" = "Shared links";
 "lng_media_type_polls" = "Polls";
 "lng_media_type_stories" = "Stories";
@@ -9144,15 +9147,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_chat_scan_resume" = "Resume";
 "lng_chat_scan_scanning" = "Scanning messages...";
 "lng_chat_scan_resolving" = "Resolving duplicates...";
+"lng_chat_scan_saving" = "Saving results...";
+"lng_chat_scan_elapsed" = "{time} elapsed";
 "lng_chat_scan_left" = "~{time} left";
 "lng_chat_scan_paused" = "Paused";
+"lng_chat_scan_cancelling" = "Canceling...";
 "lng_chat_scan_failed" = "Scan failed";
 "lng_chat_scan_deleting" = "Deleting duplicates...";
 "lng_chat_scan_waiting#one" = "Waiting {count} second, resumes automatically";
 "lng_chat_scan_waiting#other" = "Waiting {count} seconds, resumes automatically";
 "lng_chat_scan_done" = "Done";
-"lng_chat_scan_unhashed#one" = "{count} file left unhashed";
-"lng_chat_scan_unhashed#other" = "{count} files left unhashed";
+"lng_chat_scan_unhashed#one" = "{count} file could not be hashed";
+"lng_chat_scan_unhashed#other" = "{count} files could not be hashed";
 "lng_chat_scan_rescan" = "Rescan";
 "lng_chat_scan_scan" = "Scan";
 "lng_chat_scan_new" = "Scan new";

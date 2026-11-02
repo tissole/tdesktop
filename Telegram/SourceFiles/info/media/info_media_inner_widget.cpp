@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <rpl/flatten_latest.h>
 #include "boxes/abstract_box.h"
+#include "chat_scan/chat_scan_index.h"
 #include "info/media/info_media_list_widget.h"
 #include "info/media/info_media_buttons.h"
 #include "info/media/info_media_empty_widget.h"
@@ -114,6 +115,8 @@ void InnerWidget::createTypeButtons() {
 	addMediaButton(Type::VoiceFile, st::infoIconMediaVoice);
 	addMediaButton(Type::File, st::infoIconMediaFile);
 	addMediaButton(Type::GIF, st::infoIconMediaGif);
+	ChatScan::LoadStickerIndex(&peer->session(), peer->id);
+	addMediaButton(Type::Sticker, st::infoIconMediaSticker);
 	addMediaButton(Type::Link, st::infoIconMediaLink);
 
 	content->add(object_ptr<Ui::FixedHeightWidget>(

@@ -10,10 +10,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_common.h"
 #include "base/timer.h"
 #include "base/weak_ptr.h"
+#include "data/data_dedup_db.h"
 #include "mtproto/facade.h"
 
 #include <QString>
 #include <QVector>
+#include <optional>
 
 class ApiWrap;
 struct FilePrepareResult;
@@ -227,6 +229,7 @@ private:
 	};
 
 	void maybeSend();
+	void releaseUploadTableIfIdle();
 	void startTranscode(FullMsgId itemId);
 	void maybeStartTranscode();
 	void runTranscode(FullMsgId itemId);
@@ -288,9 +291,15 @@ private:
 	void loadFinishedUploadsFromAccount();
 	void commitFinishedUpload(FinishedUpload &&upload);
 
+	struct PendingUpload {
+		QByteArray hash;
+		uint64 documentId = 0;
+		bool isPhoto = false;
+	};
+
 	// Upload dedup tracking (in-progress uploads)
 	QHash<QByteArray, int64> _uploadPendingHashes;
-	QHash<FullMsgId, QByteArray> _uploadPendingByItem;
+	QHash<FullMsgId, PendingUpload> _uploadPendingByItem;
 
 	// Maps the local document id of a finished upload to its content hash,
 	// so the real server document id can be written back once the sent
@@ -300,6 +309,10 @@ private:
 	const not_null<ApiWrap*> _api;
 
 	std::vector<Entry> _queue;
+	std::optional<Data::DedupDb::TableUse> _uploadTableUse;
+	std::optional<Data::DedupDb::ChatTableUse> _chatTableUse;
+	PeerId _chatTablePeer;
+	bool _chatTableAllPeers = false;
 	base::flat_set<FullMsgId> _finishedUploads;
 	std::vector<FinishedUpload> _finishedUploadsList;
 	base::flat_map<FullMsgId, FinishedUpload> _awaitingFinishedUploads;

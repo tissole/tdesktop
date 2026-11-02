@@ -42,7 +42,7 @@ MTPMessagesFilter PrepareSearchFilter(Storage::SharedMediaType type) {
 	case Type::VoiceFile:
 		return MTP_inputMessagesFilterVoice();
 	case Type::RoundVoiceFile:
-		return MTP_inputMessagesFilterRoundVoice();
+		return MTP_inputMessagesFilterEmpty();
 	case Type::RoundFile:
 		return MTP_inputMessagesFilterRoundVideo();
 	case Type::GIF:
@@ -55,6 +55,8 @@ MTPMessagesFilter PrepareSearchFilter(Storage::SharedMediaType type) {
 		return MTP_inputMessagesFilterPinned();
 	case Type::Poll:
 		return MTP_inputMessagesFilterPoll();
+	case Type::Sticker:
+		return MTP_inputMessagesFilterEmpty();
 	}
 	return MTP_inputMessagesFilterEmpty();
 }

@@ -364,7 +364,8 @@ void SavePhotoToFile(not_null<PhotoData*> photo, HistoryItem *item) {
 			if (dedupOn && db.isOpen()) {
 				if (db.containsDocId(
 					Data::DedupDb::Table::Downloads,
-					uint64(photo->id))) {
+					uint64(photo->id),
+					true)) {
 					batch->addDuplicate();
 					return;
 				}
@@ -395,6 +396,7 @@ void SavePhotoToFile(not_null<PhotoData*> photo, HistoryItem *item) {
 				db.insert(Data::DedupDb::Table::Downloads, {
 					.hash = hash,
 					.documentId = uint64(photo->id),
+					.isPhoto = true,
 					.status = u"f"_q,
 				});
 			}

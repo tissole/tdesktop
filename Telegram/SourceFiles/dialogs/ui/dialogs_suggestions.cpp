@@ -1475,8 +1475,12 @@ void Suggestions::setupTabs() {
 			tr::lng_all_music(tr::now),
 		},
 		{
-			Key{ Tab::Media, MediaType::RoundVoiceFile },
+			Key{ Tab::Media, MediaType::VoiceFile },
 			tr::lng_all_voice(tr::now),
+		},
+		{
+			Key{ Tab::Media, MediaType::RoundFile },
+			tr::lng_media_type_rounds(tr::now),
 		},
 	};
 
@@ -2318,7 +2322,8 @@ std::vector<Suggestions::Key> Suggestions::TabKeysFor(
 		{ Tab::Media, MediaType::Link },
 		{ Tab::Media, MediaType::File },
 		{ Tab::Media, MediaType::MusicFile },
-		{ Tab::Media, MediaType::RoundVoiceFile },
+		{ Tab::Media, MediaType::VoiceFile },
+		{ Tab::Media, MediaType::RoundFile },
 	};
 	if (Core::App().downloadManager().empty()) {
 		result.erase(ranges::find(result, Key{ Tab::Downloads }));

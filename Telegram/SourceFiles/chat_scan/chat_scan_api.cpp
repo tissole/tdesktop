@@ -29,6 +29,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/export_settings.h"
 #include "main/main_session.h"
 #include "mtproto/mtproto_response.h"
+#include "storage/storage_facade.h"
+#include "storage/storage_shared_media.h"
+
+#include <QDateTime>
 
 #include <algorithm>
 #include <limits>
@@ -54,13 +58,8 @@ constexpr auto kScanTakeoutMaxFileBytes = 4000LL * 1024 * 1024;
 }
 
 [[nodiscard]] int ScanMediaCategory(
-		not_null<DocumentData*> document,
-		bool wrapperVideo) {
-	using Type = Export::MediaSettings::Type;
-	const auto category = DocumentMediaCategory(document);
-	return (category == Type::File && wrapperVideo)
-		? int(Type::Video)
-		: int(category);
+		not_null<DocumentData*> document) {
+	return int(DocumentMediaCategory(document));
 }
 
 } // namespace
@@ -112,6 +111,10 @@ State Api::currentState() const {
 	return _state.current();
 }
 
+bool Api::clearing() const {
+	return _clearing;
+}
+
 void Api::startScheduler() {
 	if (_schedulerStarted) {
 		return;
@@ -131,27 +134,120 @@ void Api::start() {
 	if (_finished || _cancelled || _walkDone || _recovering) {
 		return;
 	}
+	const auto mode = db().chatScanMode(_peer->id);
+	const auto current = GetEnhancedBool("prevent_upload_duplicates") ? 1 : 0;
+	const auto cursor = db().readScanCursor(_peer->id);
+	if (cursor) {
+		const auto finished = (cursor->phase == int(State::Phase::Finished));
+		const auto cancelled = (cursor->phase
+			== int(State::Phase::Cancelled));
+		if (!finished && !cancelled && (mode == -1 || mode == current)) {
+			requestMediaTotals();
+			recoverFromCursor(*cursor);
+			return;
+		}
+		if (finished && mode == current) {
+			return;
+		}
+	}
+	if (mode != current) {
+		if (mode == -1 && !cursor) {
+			requestMediaTotals();
+			beginFreshScan();
+		} else {
+			startFullRescan();
+		}
+		return;
+	}
 	requestMediaTotals();
+	beginFreshScan();
+}
+
+void Api::beginFreshScan() {
+	if (_finished || _cancelled || _paused || _walkDone || _recovering) {
+		return;
+	}
 	const auto begin = [=] {
 		if (_finished || _cancelled || _paused || _walkDone || _recovering) {
 			return;
 		}
-		if (const auto cursor = db().readScanCursor(
-				_peer->id)) {
-			if (cursor->phase == int(State::Phase::Finished)) {
+		db().writeChatScanMode(_peer->id, -1);
+		_elapsedMs = 0;
+		startElapsed();
+		loadKnownHashes([=] {
+			if (_finished
+				|| _cancelled
+				|| _paused
+				|| _walkDone
+				|| _recovering) {
 				return;
 			}
-			recoverFromCursor(*cursor);
-			return;
-		}
-		startScheduler();
-		requestPage();
+			startScheduler();
+			requestPage();
+		});
 	};
 	if (needsTakeout()) {
 		ensureScanTakeout(begin);
 	} else {
 		begin();
 	}
+}
+
+void Api::startFullRescan() {
+	if (_clearing || _finished || _cancelled) {
+		return;
+	}
+	_clearing = true;
+	_incremental = false;
+	finishBorrowedTakeout();
+	stopScheduler();
+	auto state = _state.current();
+	state.phase = State::Phase::Cancelling;
+	state.elapsedMs = 0;
+	_state = std::move(state);
+	const auto weak = base::weak_ptr<Api>(this);
+	db().clearChatScanAsync(
+		_peer->id,
+		[weak](
+				bool success,
+				std::vector<Data::ChatScanOwnerChange> changed) {
+			const auto strong = weak.get();
+			if (!strong) {
+				return;
+			}
+			strong->_clearing = false;
+			if (!success) {
+				LOG(("ChatScan: failed to clear before full rescan."));
+				auto state = strong->_state.current();
+				state.phase = State::Phase::Failed;
+				strong->_state = std::move(state);
+				return;
+			}
+			const auto stickerTypes = Storage::SharedMediaTypesMask{}.added(
+				Storage::SharedMediaType::Sticker);
+			strong->_session->storage().remove(Storage::SharedMediaRemoveAll(
+				strong->_peer->id,
+				stickerTypes));
+			ChatScan::ForgetScannedPeer(strong->_peer->id);
+			for (const auto &[peerId, hash] : changed) {
+				ChatScan::MarkUniqueHashDirty(peerId, hash);
+				strong->db().invalidateChatTable(peerId);
+			}
+			strong->db().invalidateChatTable(strong->_peer->id);
+			strong->db().invalidateAllPeersChatTable();
+			if (strong->_cancelled) {
+				auto state = strong->_state.current();
+				state.phase = State::Phase::Cancelled;
+				state.elapsedMs = 0;
+				strong->_state = std::move(state);
+				return;
+			}
+			auto state = strong->_state.current();
+			state.phase = State::Phase::Scanning;
+			strong->_state = std::move(state);
+			strong->requestMediaTotals();
+			strong->beginFreshScan();
+		});
 }
 
 bool Api::needsTakeout() const {
@@ -202,16 +298,17 @@ void Api::pause() {
 	_floodTimer.cancel();
 	_recoveryTimer.cancel();
 	_pageTimer.cancel();
-	_aggregateTimer.cancel();
 	_aggregating = false;
-	flushHashUpdates();
+	freezeElapsed();
 	db().writeScanCursor({
 		.peerId = _peer->id,
 		.cursor = MsgId(_offsetId),
 		.phase = int(State::Phase::Paused),
+		.elapsedMs = _elapsedMs,
 	});
 	auto state = _state.current();
 	state.phase = State::Phase::Paused;
+	state.elapsedMs = _elapsedMs;
 	_state = std::move(state);
 	const auto elapsed = crl::now() - started;
 	if (elapsed > 50) {
@@ -232,6 +329,8 @@ void Api::resume() {
 		const auto started = crl::now();
 		_failed = false;
 		_paused = false;
+		startElapsed();
+		_postFinishRetryUsed = false;
 		const auto retried = _queue->retryFailed();
 		if (retried > 0) {
 			LOG(("ChatScan: retrying %1 failed items.").arg(retried));
@@ -241,10 +340,12 @@ void Api::resume() {
 			? State::Phase::Resolving
 			: State::Phase::Scanning;
 		state.error = QString();
+		state.elapsedMs = elapsedMs();
 		db().writeScanCursor({
 			.peerId = _peer->id,
 			.cursor = MsgId(_offsetId),
 			.phase = int(state.phase),
+			.elapsedMs = state.elapsedMs,
 		});
 		_state = std::move(state);
 		_queueOutstanding = _queue->pending() + _queue->leased();
@@ -263,7 +364,12 @@ void Api::resume() {
 }
 
 void Api::dispatchResumed(int gen) {
-	if (_finished || _cancelled || gen != _resumeGen) {
+	if (_finished
+		|| _cancelled
+		|| _rebuilding
+		|| _recomputingProgress
+		|| _loadingResumeSets
+		|| gen != _resumeGen) {
 		return;
 	}
 	if (!_walkDone) {
@@ -277,7 +383,7 @@ void Api::dispatchResumed(int gen) {
 }
 
 void Api::cancel() {
-	if (_finished) {
+	if (_finished || _cancelled) {
 		return;
 	}
 	const auto started = crl::now();
@@ -288,24 +394,104 @@ void Api::cancel() {
 	_floodTimer.cancel();
 	_recoveryTimer.cancel();
 	_pageTimer.cancel();
-	_aggregateTimer.cancel();
 	_aggregating = false;
 	_rebuildTimer.cancel();
 	_rebuilding = false;
+	_recomputingProgress = false;
+	_loadingResumeSets = false;
+	_resumeSetsPending = 0;
+	_resumeSetsDone = nullptr;
 	_documents.clear();
 	_photos.clear();
 	_seenDocs.clear();
 	_seenPhotos.clear();
+	_uniqueHashes.clear();
+	_queue->clearKnownHashes();
+	db().clearChatTable();
+	db().invalidateChatTable(_peer->id);
+	db().invalidateAllPeersChatTable();
+	_uploadTableUse.reset();
+	_pageStickers.clear();
+	_stickerTotal = 0;
 	_staleMedia.clear();
 	_recoveryIds.clear();
 	_recovering = false;
 	_recoveryDone = true;
 	_recoveryWindowDone = true;
 	_queueOutstanding = 0;
-	db().clearChatScan(_peer->id);
-	ChatScan::ForgetScannedPeer(_peer->id);
+	_elapsedMs = 0;
+	_elapsedStartedAt = 0;
+	const auto stickerTypes = Storage::SharedMediaTypesMask{}.added(
+		Storage::SharedMediaType::Sticker);
+	const auto session = db().chatScanSession(_peer->id);
+	if (session) {
+		const auto stickerIds = db().chatScanSessionItemIds(
+			_peer->id,
+			int(Export::MediaSettings::Type::Sticker));
+		for (const auto id : stickerIds) {
+			_session->storage().remove(Storage::SharedMediaRemoveOne(
+				_peer->id,
+				MsgId(0),
+				PeerId(0),
+				stickerTypes,
+				id));
+		}
+		if (db().cancelChatScanSession(_peer->id)) {
+			ChatScan::ForgetScannedPeer(_peer->id);
+			ChatScan::RememberScannedPeer(_peer->id);
+		} else {
+			LOG(("ChatScan: failed to cancel incremental session."));
+		}
+	} else if (_incremental) {
+		LOG(("ChatScan: canceled before incremental session started."));
+	} else if (_clearing) {
+		LOG(("ChatScan: canceled while a full rescan clear is running."));
+	} else {
+		_clearing = true;
+		const auto weak = base::weak_ptr<Api>(this);
+		db().clearChatScanAsync(
+			_peer->id,
+			[weak](
+					bool success,
+					std::vector<Data::ChatScanOwnerChange> changed) {
+				const auto strong = weak.get();
+				if (!strong) {
+					return;
+				}
+				if (!success) {
+					LOG(("ChatScan: failed to clear full scan."));
+				} else {
+					const auto stickerTypes =
+						Storage::SharedMediaTypesMask{}.added(
+							Storage::SharedMediaType::Sticker);
+					strong->_session->storage().remove(
+						Storage::SharedMediaRemoveAll(
+							strong->_peer->id,
+							stickerTypes));
+					ChatScan::ForgetScannedPeer(strong->_peer->id);
+					for (const auto &[peerId, hash] : changed) {
+						ChatScan::MarkUniqueHashDirty(peerId, hash);
+						strong->db().invalidateChatTable(peerId);
+					}
+					strong->db().invalidateChatTable(
+						strong->_peer->id);
+					strong->db().invalidateAllPeersChatTable();
+				}
+				strong->_clearing = false;
+				strong->db().clearChatTable();
+				auto state = strong->_state.current();
+				state.phase = State::Phase::Cancelled;
+				state.elapsedMs = 0;
+				strong->_state = std::move(state);
+			});
+	}
+	_sessionId = 0;
+	_incremental = false;
 	auto state = _state.current();
-	state.phase = State::Phase::Cancelled;
+	state.phase = _clearing
+		? State::Phase::Cancelling
+		: State::Phase::Cancelled;
+	state.elapsedMs = 0;
 	_state = std::move(state);
 	const auto elapsed = crl::now() - started;
 	if (elapsed > 50) {
@@ -491,11 +677,13 @@ void Api::handlePage(const MTPmessages_Messages &result) {
 }
 
 void Api::handlePageMessages(const QVector<MTPMessage> &messages) {
+	_pageStickers.clear();
 	if (messages.isEmpty()) {
 		finish();
 		return;
 	}
 	auto minId = std::numeric_limits<int32>::max();
+	auto maxId = int32(0);
 	auto stopped = false;
 	for (const auto &message : messages) {
 		const auto id = message.match([](const MTPDmessage &data) {
@@ -511,6 +699,7 @@ void Api::handlePageMessages(const QVector<MTPMessage> &messages) {
 			continue;
 		}
 		minId = std::min(minId, id);
+		maxId = std::max(maxId, id);
 		if (_rescan) {
 			if (id <= _stopMark) {
 				stopped = true;
@@ -534,6 +723,14 @@ void Api::handlePageMessages(const QVector<MTPMessage> &messages) {
 		finish();
 		return;
 	}
+	_session->storage().add(Storage::SharedMediaAddSlice(
+		_peer->id,
+		MsgId(0),
+		PeerId(0),
+		Storage::SharedMediaType::Sticker,
+		std::move(_pageStickers),
+		MsgRange(MsgId(minId), MsgId(maxId)),
+		_stickerTotal));
 	_offsetId = minId;
 	commitPage();
 	publish();
@@ -561,8 +758,7 @@ void Api::handleRegularMessage(const MTPDmessage &message) {
 		if (const auto document = data.vdocument()) {
 			addDocOccurrence(
 				_session->data().processDocument(*document),
-				id,
-				data.is_video());
+				id);
 		}
 	}, [&](const MTPDmessageMediaPhoto &data) {
 		if (const auto photo = data.vphoto()) {
@@ -576,42 +772,45 @@ void Api::handleRegularMessage(const MTPDmessage &message) {
 
 void Api::addDocOccurrence(
 		not_null<DocumentData*> document,
-		MsgId msgId,
-		bool wrapperVideo) {
-	const auto type = ScanMediaCategory(document, wrapperVideo);
+		MsgId msgId) {
+	const auto type = ScanMediaCategory(document);
+	if (type == int(Export::MediaSettings::Type::Sticker)) {
+		_pageStickers.push_back(msgId);
+		++_stickerTotal;
+	}
+	const auto size = std::max(document->size, int64(0));
+	const auto skipped = (size <= 0);
 	auto item = Data::ChatScanItem();
 	item.peerId = _peer->id;
 	item.msgId = msgId;
 	item.category = type;
-	item.size = document->size;
+	item.size = size;
 	item.mediaId = document->id;
 	item.isPhoto = false;
 	item.filename = document->filename();
+	item.sessionId = _sessionId;
 	_documents[document->id] = document.get();
 	if (!_seenDocs.insert(document->id).second) {
-		// A second occurrence needs no hash of its own: the representative
-		// row's commit fills this row too. Keeping it out of the queue is
+		// A second occurrence needs no hash of its own: the media
+		// representative's commit fills this row too. Keeping it out of the queue is
 		// what makes the walker's outstanding counter match one lease per
 		// media id.
-		item.state = 2;
+		item.state = skipped ? 4 : 2;
+		item.isDup = true;
 		_pageItems.push_back(item);
 		auto &totals = _totals[type];
 		totals.dupCount++;
-		totals.dupBytes += document->size;
-		pushDupRow(
-			msgId,
-			type,
-			document->size,
-			document->filename());
-		bumpProgressDelta(type, 1, 0, 0, 1, document->size);
+		totals.dupBytes += size;
 		return;
 	}
+	item.state = skipped ? 4 : 0;
 	_pageItems.push_back(item);
 	auto &totals = _totals[type];
 	totals.uniqueCount++;
-	totals.uniqueBytes += document->size;
-	bumpProgressDelta(type, 1, 1, document->size, 0, 0);
-	++_queueOutstanding;
+	totals.uniqueBytes += size;
+	if (!skipped) {
+		++_queueOutstanding;
+	}
 }
 
 void Api::addPhotoOccurrence(
@@ -622,6 +821,8 @@ void Api::addPhotoOccurrence(
 	if (!size) {
 		size = photo->videoByteSize(Data::PhotoSize::Large);
 	}
+	size = std::max(size, int64(0));
+	const auto skipped = (size <= 0);
 	auto item = Data::ChatScanItem();
 	item.peerId = _peer->id;
 	item.msgId = msgId;
@@ -629,102 +830,53 @@ void Api::addPhotoOccurrence(
 	item.size = size;
 	item.mediaId = photo->id;
 	item.isPhoto = true;
+	item.sessionId = _sessionId;
 	_photos[photo->id] = photo.get();
 	if (!_seenPhotos.insert(photo->id).second) {
-		item.state = 2;
+		item.state = skipped ? 4 : 2;
+		item.isDup = true;
 		_pageItems.push_back(item);
 		auto &totals = _totals[int(Type::Photo)];
 		totals.dupCount++;
 		totals.dupBytes += size;
-		pushDupRow(msgId, int(Type::Photo), size, QString());
-		bumpProgressDelta(int(Type::Photo), 1, 0, 0, 1, size);
 		return;
 	}
+	item.state = skipped ? 4 : 0;
 	_pageItems.push_back(item);
 	auto &totals = _totals[int(Type::Photo)];
 	totals.uniqueCount++;
 	totals.uniqueBytes += size;
-	bumpProgressDelta(int(Type::Photo), 1, 1, size, 0, 0);
-	++_queueOutstanding;
-}
-
-void Api::pushDupRow(
-		MsgId msgId,
-		int category,
-		int64 size,
-		const QString &filename) {
-	auto dup = Data::ChatScanDup();
-	dup.peerId = _peer->id;
-	dup.msgId = msgId;
-	dup.category = category;
-	dup.size = size;
-	dup.flags = 0;
-	dup.filename = filename;
-	_pendingDupRows.push_back(dup);
+	if (!skipped) {
+		++_queueOutstanding;
+	}
 }
 
 void Api::commitPage() {
-	_scheduler->flush();
-	flushHashUpdates();
 	auto &database = db();
 	_queue->insert(_pageItems);
 	_pageItems.clear();
 	database.beginTransaction();
-	for (const auto &dup : _pageDups) {
-		database.writeChatScanDup(dup);
-	}
-	_pageDups.clear();
 	database.writeScanCursor({
 		.peerId = _peer->id,
 		.cursor = MsgId(_offsetId),
 		.phase = int(State::Phase::Scanning),
+		.elapsedMs = elapsedMs(),
 	});
 	database.commitTransaction();
-}
-
-void Api::flushHashUpdates() {
-	if (_pendingDupRows.empty() && _progressDeltas.empty()) {
-		return;
-	}
-	auto &database = db();
-	database.beginTransaction();
-	for (const auto &dup : _pendingDupRows) {
-		database.writeChatScanDup(dup);
-	}
-	_pendingDupRows.clear();
-	for (const auto &[category, delta] : _progressDeltas) {
-		database.updateChatScanProgress(
-			_peer->id,
-			category,
-			delta.itemCount,
-			delta.uniqueCount,
-			delta.uniqueBytes,
-			delta.dupCount,
-			delta.dupBytes);
-	}
-	_progressDeltas.clear();
-	database.commitTransaction();
-}
-
-void Api::bumpProgressDelta(
-		int category,
-		int64 dItemCount,
-		int64 dUniqueCount,
-		int64 dUniqueBytes,
-		int64 dDupCount,
-		int64 dDupBytes) {
-	auto &delta = _progressDeltas[category];
-	delta.itemCount += dItemCount;
-	delta.uniqueCount += dUniqueCount;
-	delta.uniqueBytes += dUniqueBytes;
-	delta.dupCount += dDupCount;
-	delta.dupBytes += dDupBytes;
 }
 
 void Api::rescan() {
 	if (_finished || _cancelled || _walkDone || _recovering || _rescan) {
 		return;
 	}
+	const auto mode = db().chatScanMode(_peer->id);
+	const auto current = GetEnhancedBool("prevent_upload_duplicates") ? 1 : 0;
+	if (mode != current) {
+		_incremental = false;
+		start();
+		return;
+	}
+	_incremental = true;
 	requestMediaTotals();
 	const auto begin = [=] {
 		if (_finished || _cancelled || _walkDone || _recovering || _rescan) {
@@ -741,21 +893,30 @@ void Api::rescan() {
 
 void Api::rescanAfterTakeout() {
 	const auto peerId = _peer->id;
-	auto mark = int64(0);
-	for (const auto &row : db().readChatScan(peerId)) {
-		mark = std::max(mark, row.scannedUpto.bare);
-	}
+	const auto mark = db().chatScanScannedUpto(peerId).bare;
 	if (!mark) {
 		return;
 	}
+	const auto sessionId = uint64(
+		QDateTime::currentMSecsSinceEpoch()) | 1;
+	if (!db().beginChatScanSession(peerId, sessionId, MsgId(mark))) {
+		LOG(("ChatScan: failed to begin incremental session."));
+		finishBorrowedTakeout();
+		return;
+	}
+	_sessionId = sessionId;
 	_rescan = true;
 	_stopMark = mark;
+	_elapsedMs = 0;
+	_elapsedStartedAt = 0;
+	startElapsed();
+	_postFinishRetryUsed = false;
 	_queueOutstanding = _queue->pending() + _queue->leased();
 	_failedHashes = _queue->failed();
-	_progressDeltas.clear();
-	_rebuildDupIds.clear();
+	loadStickerIndexAsync();
+	loadKnownHashes(nullptr);
+	_uniqueHashes.clear();
 	_rebuildAboveBare = 0;
-	_rebuildStage = 0;
 	_rebuilding = true;
 	rebuildStep();
 }
@@ -768,48 +929,75 @@ void Api::rebuildStep() {
 		_rebuilding = false;
 		return;
 	}
-	if (_rebuildStage == 0) {
-		const auto batch = database.readChatScanDupsBefore(
-			peerId,
-			-1,
-			kBatch,
-			MsgId(_rebuildAboveBare));
-		for (const auto &dup : batch) {
-			_rebuildAboveBare = int64(dup.msgId.bare);
-			_rebuildDupIds.insert(_rebuildAboveBare);
-		}
-		if (int(batch.size()) == kBatch) {
-			continueRebuildStep();
-			return;
-		}
-		_rebuildStage = 1;
-		_rebuildAboveBare = 0;
-	}
 	const auto batch = database.chatScanItemsWindow(
 		peerId,
 		MsgId(_rebuildAboveBare),
 		kBatch);
 	for (const auto &item : batch) {
+		_rebuildAboveBare = int64(item.msgId.bare);
 		restoreRebuiltItem(item);
 	}
 	if (int(batch.size()) == kBatch) {
 		continueRebuildStep();
 		return;
 	}
-	_rebuilding = false;
 	_highMark = 0;
-	for (const auto &row : database.recomputeChatScanProgress(peerId)) {
+	const auto weak = base::weak_ptr<Api>(this);
+	_recomputingProgress = true;
+	database.recomputeChatScanProgressAsync(
+		peerId,
+		[weak](
+				std::vector<Data::ChatScanProgressRow> progress,
+				bool success) {
+			if (const auto strong = weak.get()) {
+				strong->applyRebuildProgress(
+					std::move(progress),
+					success);
+			}
+		});
+}
+
+void Api::applyRebuildProgress(
+		std::vector<Data::ChatScanProgressRow> progress,
+		bool success) {
+	_rebuilding = false;
+	_recomputingProgress = false;
+	if (_cancelled || _finished) {
+		return;
+	}
+	if (!success) {
+		if (_paused) {
+			publish(true);
+			return;
+		}
+		if (_failed) {
+			return;
+		}
+		requestPage();
+		maybeRequestRecovery();
+		if (_recoveryDone && _recoveryWindowDone) {
+			startScheduler();
+		}
+		return;
+	}
+	for (const auto &row : progress) {
 		auto &totals = _totals[row.category];
 		totals.uniqueCount = int(row.uniqueCount);
 		totals.uniqueBytes = row.uniqueBytes;
 		totals.dupCount = int(row.dupCount);
 		totals.dupBytes = row.dupBytes;
 	}
+	if (_paused) {
+		publish(true);
+		return;
+	}
+	if (_failed) {
+		return;
+	}
 	if (_queueOutstanding > 0) {
 		_recoveryWindowDone = true;
 		_recoveryDone = false;
-		_recoveryAbove = int32(
-			database.chatScanMaxMsgId(peerId).bare) + 1;
+		_recoveryAbove = int32(db().chatScanMaxMsgId(_peer->id).bare) + 1;
 	}
 	publish();
 	maybeRequestRecovery();
@@ -829,11 +1017,28 @@ void Api::continueRebuildStep() {
 void Api::restoreRebuiltItem(const Data::ChatScanItem &item) {
 	++_scanned;
 	_storedIds.insert(int64(item.msgId.bare));
+	const auto isDup = item.isDup;
 	if (!item.hash.isEmpty()) {
-		_seenHashes.insert(item.hash);
+		auto i = _uniqueHashes.find(item.hash);
+		if (i == _uniqueHashes.end()) {
+			_uniqueHashes.insert(
+				item.hash,
+				isDup
+					? UniqueHash{ MsgId(0), 0, 0 }
+					: UniqueHash{
+						item.msgId,
+						item.category,
+						item.size });
+		} else if (!isDup && i.value().msgId < item.msgId) {
+			i.value() = UniqueHash{
+				item.msgId,
+				item.category,
+				item.size,
+			};
+		}
 	}
 	auto &totals = _totals[item.category];
-	if (_rebuildDupIds.find(int64(item.msgId.bare)) != _rebuildDupIds.end()) {
+	if (isDup) {
 		totals.dupCount++;
 		totals.dupBytes += item.size;
 	} else {
@@ -843,6 +1048,7 @@ void Api::restoreRebuiltItem(const Data::ChatScanItem &item) {
 	if (!item.mediaId) {
 		return;
 	}
+	_queue->rememberHash(item.mediaId, item.isPhoto, item.hash);
 	if (item.isPhoto) {
 		_seenPhotos.insert(item.mediaId);
 	} else {
@@ -854,7 +1060,20 @@ bool Api::loadPaused(const Data::ChatScanState &cursor) {
 	if (_finished || _cancelled || _walkDone) {
 		return false;
 	}
+	const auto mode = db().chatScanMode(_peer->id);
+	const auto current = GetEnhancedBool("prevent_upload_duplicates") ? 1 : 0;
+	if (mode != -1 && mode != current) {
+		return false;
+	}
 	_paused = true;
+	if (const auto session = db().chatScanSession(_peer->id)) {
+		_sessionId = session->first;
+		_stopMark = session->second.bare;
+		_incremental = true;
+		_rescan = true;
+	}
+	_elapsedMs = cursor.elapsedMs;
+	_elapsedStartedAt = 0;
 	++_resumeGen;
 	const auto retried = _queue->retryFailed();
 	if (retried > 0) {
@@ -864,28 +1083,31 @@ bool Api::loadPaused(const Data::ChatScanState &cursor) {
 	_floodTimer.cancel();
 	_offsetId = int32(cursor.cursor.bare);
 	_totals.clear();
+	_stickerTotal = 0;
 	_scanned = 0;
 	_highMark = 0;
-	if (!seedFromDbAggregates()) {
-		return false;
-	}
-	publish();
-	auto state = _state.current();
-	state.phase = State::Phase::Paused;
-	_state = std::move(state);
-	return true;
-}
-
-bool Api::seedFromDbAggregates() {
 	auto &database = db();
 	if (!database.isOpen()) {
 		return false;
 	}
-	auto progress = database.readChatScanProgress(_peer->id);
-	if (progress.empty()) {
-		progress = database.recomputeChatScanProgress(_peer->id);
-	}
-	return seedFromProgress(progress);
+	const auto weak = base::weak_ptr<Api>(this);
+	_recomputingProgress = true;
+	database.recomputeChatScanProgressAsync(
+		_peer->id,
+		[weak](
+				std::vector<Data::ChatScanProgressRow> progress,
+				bool success) {
+			if (const auto strong = weak.get()) {
+				strong->applyRecoveredProgress(
+					std::move(progress),
+					success);
+			}
+		});
+	auto state = _state.current();
+	state.phase = State::Phase::Paused;
+	_state = std::move(state);
+	publish(true);
+	return true;
 }
 
 bool Api::seedFromProgress(
@@ -902,6 +1124,11 @@ bool Api::seedFromProgress(
 		totals.dupCount = int(row.dupCount);
 		totals.dupBytes = row.dupBytes;
 	}
+	const auto sticker = _totals.find(
+		int(Export::MediaSettings::Type::Sticker));
+	_stickerTotal = (sticker != _totals.end())
+		? (sticker->second.uniqueCount + sticker->second.dupCount)
+		: 0;
 	_scanned = int(itemCount);
 	_highMark = int32(db().chatScanMaxMsgId(_peer->id).bare);
 	_hashDone = db().chatScanHashedCount(_peer->id);
@@ -917,57 +1144,192 @@ bool Api::seedFromProgress(
 	return true;
 }
 
-void Api::rememberRestoredMedia(const Data::ChatScanItem &item) {
-	if (!item.mediaId) {
+void Api::loadKnownHashes(Fn<void()> done) {
+	const auto dedupOn = GetEnhancedBool("prevent_upload_duplicates");
+	if (dedupOn) {
+		_uploadTableUse = db().useTable(Data::DedupDb::Table::Uploads);
+	} else {
+		_uploadTableUse.reset();
+	}
+	const auto weak = base::weak_ptr<Api>(this);
+	db().chatScanMediaHashesAsync(
+		_peer->id,
+		dedupOn,
+		[
+			weak,
+			dedupOn,
+			done = std::move(done)
+		](std::vector<Data::ChatScanMediaHash> rows, bool success) mutable {
+			const auto strong = weak.get();
+			if (!strong || strong->_cancelled || strong->_finished) {
+				return;
+			}
+			strong->_queue->setKnownHashes(
+				std::move(rows),
+				success,
+				dedupOn && success);
+			if (strong->_paused
+				|| strong->_walkDone
+				|| strong->_recovering) {
+				return;
+			}
+			if (done) {
+				done();
+			}
+		});
+}
+
+void Api::loadResumeSets(Fn<void()> done) {
+	if (_cancelled || _finished || _loadingResumeSets) {
 		return;
 	}
-	if (item.isPhoto) {
-		_seenPhotos.insert(item.mediaId);
+	_loadingResumeSets = true;
+	_resumeSetsPending = 3;
+	_resumeSetsDone = std::move(done);
+	_uniqueHashes.clear();
+	_queue->clearKnownHashes();
+	const auto dedupOn = GetEnhancedBool("prevent_upload_duplicates");
+	if (dedupOn) {
+		_uploadTableUse = db().useTable(Data::DedupDb::Table::Uploads);
 	} else {
-		_seenDocs.insert(item.mediaId);
+		_uploadTableUse.reset();
+	}
+	const auto weak = base::weak_ptr<Api>(this);
+	db().chatScanUniqueHashesAsync(
+		_peer->id,
+		[weak](
+				std::vector<std::pair<QByteArray, MsgId>> rows,
+				bool success) {
+			if (const auto strong = weak.get()) {
+				strong->uniqueHashesLoaded(std::move(rows), success);
+			}
+		});
+	db().chatScanMediaHashesAsync(
+		_peer->id,
+		dedupOn,
+		[weak, dedupOn](
+				std::vector<Data::ChatScanMediaHash> rows,
+				bool success) {
+			if (const auto strong = weak.get()) {
+				if (strong->_cancelled || strong->_finished) {
+					return;
+				}
+				strong->_queue->setKnownHashes(
+					std::move(rows),
+					success,
+					dedupOn && success);
+				strong->resumeSetLoaded();
+			}
+		});
+	db().chatScanItemIdsAsync(
+		_peer->id,
+		int(Export::MediaSettings::Type::Sticker),
+		[weak](std::vector<MsgId> ids, bool success) {
+			if (const auto strong = weak.get()) {
+				strong->stickerIndexLoaded(std::move(ids), success);
+			}
+		});
+}
+
+void Api::loadStickerIndexAsync() {
+	const auto weak = base::weak_ptr<Api>(this);
+	db().chatScanItemIdsAsync(
+		_peer->id,
+		int(Export::MediaSettings::Type::Sticker),
+		[weak](std::vector<MsgId> ids, bool success) {
+			if (const auto strong = weak.get()) {
+				if (!strong->_cancelled
+					&& !strong->_finished
+					&& success) {
+					strong->applyStickerIndex(std::move(ids));
+				}
+			}
+		});
+}
+
+void Api::uniqueHashesLoaded(
+		std::vector<std::pair<QByteArray, MsgId>> rows,
+		bool success) {
+	if (_cancelled || _finished) {
+		return;
+	}
+	if (success) {
+		_uniqueHashes.clear();
+		for (const auto &[hash, msgId] : rows) {
+			_uniqueHashes.insert(
+				hash,
+				UniqueHash{ msgId, 0, 0 });
+		}
+	} else {
+		LOG(("ChatScan: failed to load unique hashes."));
+	}
+	resumeSetLoaded();
+}
+
+void Api::stickerIndexLoaded(
+		std::vector<MsgId> ids,
+		bool success) {
+	if (_cancelled || _finished) {
+		return;
+	}
+	if (success) {
+		applyStickerIndex(std::move(ids));
+	}
+	resumeSetLoaded();
+}
+
+void Api::applyStickerIndex(std::vector<MsgId> ids) {
+	_stickerTotal = int(ids.size());
+	if (ids.empty()) {
+		return;
+	}
+	auto minId = ids.front();
+	auto maxId = ids.front();
+	for (const auto id : ids) {
+		minId = std::min(minId, id);
+		maxId = std::max(maxId, id);
+	}
+	const auto count = int(ids.size());
+	_session->storage().add(Storage::SharedMediaAddSlice(
+		_peer->id,
+		MsgId(0),
+		PeerId(0),
+		Storage::SharedMediaType::Sticker,
+		std::move(ids),
+		MsgRange(minId, maxId),
+		count));
+}
+
+void Api::resumeSetLoaded() {
+	if (_resumeSetsPending <= 0) {
+		return;
+	}
+	if (--_resumeSetsPending > 0) {
+		return;
+	}
+	_loadingResumeSets = false;
+	auto done = std::move(_resumeSetsDone);
+	_resumeSetsDone = nullptr;
+	if (done) {
+		done();
 	}
 }
 
-void Api::recoverFromCursor(const Data::ChatScanState &cursor) {
-	stopScheduler();
-	const auto retried = _queue->retryFailed();
-	if (retried > 0) {
-		LOG(("ChatScan: retrying %1 failed items.").arg(retried));
+void Api::finishResumeSets(bool seeded) {
+	if (_cancelled || _finished) {
+		return;
 	}
-	_documents.clear();
-	_photos.clear();
-	_seenDocs.clear();
-	_seenPhotos.clear();
-	_seenHashes.clear();
-	_staleMedia.clear();
-	_pageDups.clear();
-	_pendingDupRows.clear();
-	_totals.clear();
-	_pageItems.clear();
-	_recoveryIds.clear();
-	_recoveryPos = 0;
-	_recoveryErrorStreak = 0;
-	_storedIds.clear();
-	_scanned = 0;
-	_highMark = 0;
-	_hashDone = 0;
-	_failedHashes = 0;
-	_queueOutstanding = 0;
-	_pageInFlight = false;
-	_offsetId = int32(cursor.cursor.bare);
-	auto progress = std::vector<Data::ChatScanProgressRow>();
-	if (cursor.phase != int(State::Phase::Paused)) {
-		// An unclean stop leaves the cursor and the incremental progress
-		// snapshot at slightly different points; the item rows are the
-		// source of truth, so rebuild the snapshot once before resuming.
-		progress = db().recomputeChatScanProgress(_peer->id);
-	} else {
-		progress = db().readChatScanProgress(_peer->id);
-		if (progress.empty()) {
-			progress = db().recomputeChatScanProgress(_peer->id);
-		}
+	if (_paused) {
+		auto state = _state.current();
+		state.phase = State::Phase::Paused;
+		_state = std::move(state);
+		publish(true);
+		return;
 	}
-	if (!seedFromProgress(progress)) {
+	if (_failed) {
+		return;
+	}
+	if (!seeded) {
 		requestPage();
 		maybeRequestRecovery();
 		if (_recoveryDone && _recoveryWindowDone) {
@@ -985,6 +1347,117 @@ void Api::recoverFromCursor(const Data::ChatScanState &cursor) {
 	maybeRequestRecovery();
 	if (_recoveryDone && _recoveryWindowDone) {
 		startScheduler();
+	}
+}
+
+void Api::rememberRestoredMedia(const Data::ChatScanItem &item) {
+	if (!item.mediaId) {
+		return;
+	}
+	_queue->rememberHash(item.mediaId, item.isPhoto, item.hash);
+	if (item.isPhoto) {
+		_seenPhotos.insert(item.mediaId);
+	} else {
+		_seenDocs.insert(item.mediaId);
+	}
+}
+
+void Api::recoverFromCursor(const Data::ChatScanState &cursor) {
+	stopScheduler();
+	if (const auto session = db().chatScanSession(_peer->id)) {
+		_sessionId = session->first;
+		_stopMark = session->second.bare;
+		_incremental = true;
+		_rescan = true;
+	}
+	_elapsedMs = cursor.elapsedMs;
+	_elapsedStartedAt = 0;
+	startElapsed();
+	_postFinishRetryUsed = false;
+	const auto retried = _queue->retryFailed();
+	if (retried > 0) {
+		LOG(("ChatScan: retrying %1 failed items.").arg(retried));
+	}
+	_documents.clear();
+	_photos.clear();
+	_seenDocs.clear();
+	_seenPhotos.clear();
+	_uniqueHashes.clear();
+	_stickerTotal = 0;
+	_staleMedia.clear();
+	_totals.clear();
+	_pageItems.clear();
+	_recoveryIds.clear();
+	_recoveryPos = 0;
+	_recoveryErrorStreak = 0;
+	_storedIds.clear();
+	_scanned = 0;
+	_highMark = 0;
+	_hashDone = 0;
+	_failedHashes = 0;
+	_queueOutstanding = 0;
+	_pageInFlight = false;
+	_offsetId = int32(cursor.cursor.bare);
+	requestRecoveryProgress();
+}
+
+void Api::requestRecoveryProgress() {
+	const auto weak = base::weak_ptr<Api>(this);
+	_recomputingProgress = true;
+	db().recomputeChatScanProgressAsync(
+		_peer->id,
+		[weak](
+				std::vector<Data::ChatScanProgressRow> progress,
+				bool success) {
+			if (const auto strong = weak.get()) {
+				strong->applyRecoveredProgress(
+					std::move(progress),
+					success);
+			}
+		});
+}
+
+void Api::applyRecoveredProgress(
+		std::vector<Data::ChatScanProgressRow> progress,
+		bool success) {
+	_recomputingProgress = false;
+	if (_cancelled || _finished) {
+		return;
+	}
+	if (!success) {
+		if (_paused) {
+			publish(true);
+			return;
+		}
+		if (_failed) {
+			return;
+		}
+		requestPage();
+		maybeRequestRecovery();
+		if (_recoveryDone && _recoveryWindowDone) {
+			startScheduler();
+		}
+		return;
+	}
+	const auto seeded = seedFromProgress(progress);
+	if (_failed) {
+		return;
+	}
+	if (!seeded) {
+		finishResumeSets(false);
+		return;
+	}
+	const auto weak = base::weak_ptr<Api>(this);
+	loadResumeSets([weak] {
+		if (const auto strong = weak.get()) {
+			strong->finishResumeSets(true);
+		}
+	});
+	if (_paused) {
+		auto state = _state.current();
+		state.phase = State::Phase::Paused;
+		_state = std::move(state);
+		publish(true);
 	}
 }
 
@@ -1212,10 +1685,29 @@ void Api::noteFloodWait(int seconds) {
 	publish();
 }
 
-void Api::publish() {
+int64 Api::elapsedMs() const {
+	return _elapsedMs + (_elapsedStartedAt
+		? (crl::now() - _elapsedStartedAt)
+		: 0);
+}
+
+void Api::startElapsed() {
+	if (!_elapsedStartedAt) {
+		_elapsedStartedAt = crl::now();
+	}
+}
+
+void Api::freezeElapsed() {
+	if (_elapsedStartedAt) {
+		_elapsedMs += crl::now() - _elapsedStartedAt;
+		_elapsedStartedAt = 0;
+	}
+}
+
+void Api::publish(bool force) {
 	const auto now = crl::now();
 	auto state = _state.current();
-	if (state.phase == _lastPhase && now - _lastPublishMs < 250) {
+	if (!force && state.phase == _lastPhase && now - _lastPublishMs < 250) {
 		return;
 	}
 	_lastPhase = state.phase;
@@ -1225,7 +1717,9 @@ void Api::publish() {
 	state.scannedCount = _scanned;
 	state.categories = _totals;
 	state.hashDone = _hashDone;
+	state.hashPending = _queueOutstanding;
 	state.mediaTotal = _mediaTotal;
+	state.elapsedMs = elapsedMs();
 	state.hashTotal = _hashDone
 		+ _queueOutstanding
 		+ _failedHashes;
@@ -1330,7 +1824,110 @@ void Api::maybeFinalize() {
 	if (!_scheduler->idle() || _queueOutstanding) {
 		return;
 	}
+	if (!_postFinishRetryUsed && _queue->failed() > 0) {
+		_postFinishRetryUsed = true;
+		if (_queue->retryFailed() > 0) {
+			_failedHashes = 0;
+			_queueOutstanding = _queue->pending() + _queue->leased();
+			_scheduler->pump();
+			publish();
+			if (_queueOutstanding > 0) {
+				return;
+			}
+		}
+	}
 	finalizeAndWrite();
+}
+
+void Api::demoteToDuplicate(const Data::ChatScanItem &item) {
+	auto &totals = _totals[item.category];
+	if (totals.uniqueCount > 0) {
+		--totals.uniqueCount;
+	}
+	totals.uniqueBytes = std::max(int64(0), totals.uniqueBytes - item.size);
+	++totals.dupCount;
+	totals.dupBytes += item.size;
+	db().markChatScanItemDup(
+		_peer->id,
+		item.msgId,
+		true,
+		item.filename);
+}
+
+QString Api::filenameForMedia(uint64 mediaId, bool isPhoto) const {
+	if (isPhoto || !mediaId) {
+		return QString();
+	}
+	const auto i = _documents.find(mediaId);
+	if (i != _documents.end() && i->second) {
+		return i->second->filename();
+	}
+	return _session->data().document(mediaId)->filename();
+}
+
+void Api::applyOwnerDecision(
+		const Data::ChatScanItem &item,
+		const QByteArray &hash,
+		const Data::ChatScanOwnerDecision &decision) {
+	const auto demote = [&](const Data::ChatScanItem &row) {
+		auto &totals = _totals[row.category];
+		if (totals.uniqueCount > 0) {
+			--totals.uniqueCount;
+		}
+		totals.uniqueBytes = std::max(
+			int64(0),
+			totals.uniqueBytes - row.size);
+		++totals.dupCount;
+		totals.dupBytes += row.size;
+	};
+	const auto promote = [&](const Data::ChatScanItem &row) {
+		auto &totals = _totals[row.category];
+		if (totals.dupCount > 0) {
+			--totals.dupCount;
+		}
+		totals.dupBytes = std::max(
+			int64(0),
+			totals.dupBytes - row.size);
+		++totals.uniqueCount;
+		totals.uniqueBytes += row.size;
+	};
+	if (decision.demoted
+		&& decision.demoted->peerId == _peer->id
+		&& decision.demoted->msgId != item.msgId
+		&& decision.demoted->tracked
+		&& !decision.demoted->isDup) {
+		demote(*decision.demoted);
+	} else if (decision.demoted) {
+		MarkUniqueHashDirty(decision.demoted->peerId, hash);
+	}
+	if (decision.wasDup != decision.isDup) {
+		if (decision.isDup) {
+			demote(item);
+		} else {
+			promote(item);
+		}
+	}
+	if (decision.owner && decision.owner->peerId == _peer->id) {
+		if (decision.owner->msgId == item.msgId) {
+			_uniqueHashes[hash] = UniqueHash{
+				item.msgId,
+				item.category,
+				item.size,
+			};
+		} else if (const auto owner = db().chatScanItem(
+				_peer->id,
+				decision.owner->msgId)) {
+			_uniqueHashes[hash] = UniqueHash{
+				owner->msgId,
+				owner->category,
+				owner->size,
+			};
+		} else {
+			_uniqueHashes.remove(hash);
+		}
+	} else {
+		_uniqueHashes.remove(hash);
+	}
 }
 
 void Api::onHashed(
@@ -1340,31 +1937,73 @@ void Api::onHashed(
 		return;
 	}
 	_queueOutstanding = std::max(0, _queueOutstanding - 1);
-	using Table = Data::DedupDb::Table;
+	_queue->rememberHash(item.mediaId, item.isPhoto, hash);
 	const auto tierOn = GetEnhancedBool("prevent_upload_duplicates");
-	const auto fresh = _seenHashes.insert(hash).second;
-	if ((tierOn
-			&& db().containsHash(Table::Uploads, hash)
-			&& db().containsFinishedHash(Table::Uploads, hash))
-		|| !fresh
-		|| db().chatScanContainsHash(_peer->id, hash)) {
-		auto &totals = _totals[item.category];
-		totals.uniqueCount--;
-		totals.uniqueBytes -= item.size;
-		totals.dupCount++;
-		totals.dupBytes += item.size;
-		bumpProgressDelta(
-			item.category,
-			0,
-			-1,
-			-item.size,
-			1,
-			item.size);
-		pushDupRow(
+	auto i = _uniqueHashes.find(hash);
+	const auto uniqueMsgId = (i != _uniqueHashes.end())
+		? i.value().msgId
+		: MsgId(0);
+	if (TakeUniqueHashDirty(_peer->id, hash)
+		|| (uniqueMsgId
+			&& TakeUniqueHashDeleted(_peer->id, uniqueMsgId))) {
+		const auto actual = db().chatScanUniqueHash(_peer->id, hash);
+		if (!actual) {
+			if (i != _uniqueHashes.end()) {
+				_uniqueHashes.erase(i);
+			}
+			i = _uniqueHashes.end();
+		} else if (i == _uniqueHashes.end()) {
+			i = _uniqueHashes.insert(
+				hash,
+				UniqueHash{ actual, 0, 0 });
+		} else {
+			i.value() = UniqueHash{ actual, 0, 0 };
+		}
+	}
+	if (!tierOn && item.mediaId) {
+		db().insert(Data::DedupDb::Table::Uploads, {
+			.hash = hash,
+			.documentId = item.mediaId,
+			.isPhoto = item.isPhoto,
+			.status = u"f"_q,
+		});
+	}
+	if (tierOn) {
+		const auto decision = db().chatScanApplyHashOwner(
+			_peer->id,
+			item.msgId,
+			item.mediaId,
+			item.isPhoto,
+			hash,
+			item.isDup,
+			filenameForMedia(item.mediaId, item.isPhoto));
+		if (decision) {
+			applyOwnerDecision(item, hash, *decision);
+		} else {
+			LOG(("ChatScan: failed to apply hash owner for message %1.")
+				.arg(item.msgId.bare));
+		}
+	} else if (i == _uniqueHashes.end()) {
+		_uniqueHashes.insert(
+			hash,
+			UniqueHash{ item.msgId, item.category, item.size });
+	} else if (item.msgId == i.value().msgId) {
+		// Already the stored unique hash owner.
+	} else if (!i.value().msgId || item.msgId < i.value().msgId) {
+		demoteToDuplicate(item);
+	} else {
+		auto previous = db().chatScanItem(_peer->id, i.value().msgId);
+		if (previous && !previous->isDup) {
+			previous->filename = filenameForMedia(
+				previous->mediaId,
+				previous->isPhoto);
+			demoteToDuplicate(*previous);
+		}
+		i.value() = UniqueHash{
 			item.msgId,
 			item.category,
 			item.size,
-			item.filename);
+		};
 	}
 	publish();
 }
@@ -1380,7 +2019,6 @@ void Api::onHashFailed(const Data::ChatScanItem &) {
 
 void Api::onHashCommitted(int resolved) {
 	_hashDone += resolved;
-	flushHashUpdates();
 	publish();
 }
 
@@ -1406,10 +2044,22 @@ void Api::finalizeAndWrite() {
 		return;
 	}
 	_aggregating = true;
+	freezeElapsed();
+	{
+		auto state = _state.current();
+		state.hashPending = 0;
+		state.elapsedMs = _elapsedMs;
+		_state = std::move(state);
+	}
 	if (_rescan && !_walkedNew) {
 		_aggregating = false;
 		stopScheduler();
 		finishBorrowedTakeout();
+		db().writeChatScanMode(
+			_peer->id,
+			GetEnhancedBool("prevent_upload_duplicates") ? 1 : 0);
+		db().finishChatScanSession(_peer->id);
+		_sessionId = 0;
 		_finished = true;
 		auto state = _state.current();
 		state.phase = State::Phase::Finished;
@@ -1418,7 +2068,6 @@ void Api::finalizeAndWrite() {
 	}
 	stopScheduler();
 	_scheduler->flush();
-	flushHashUpdates();
 	finishBorrowedTakeout();
 	writeAggregateRows();
 }
@@ -1427,7 +2076,6 @@ void Api::writeAggregateRows() {
 	auto &database = db();
 	const auto peerId = _peer->id;
 
-	flushHashUpdates();
 	auto dupTotal = 0;
 	auto dupBytes = int64(0);
 	for (const auto &[category, t] : _totals) {
@@ -1435,89 +2083,29 @@ void Api::writeAggregateRows() {
 		dupBytes += t.dupBytes;
 	}
 	database.beginTransaction();
-	for (auto &[category, t] : _totals) {
-		auto row = Data::ChatScanRow();
-		row.peerId = peerId;
-		row.category = category;
-		row.uniqueCount = t.uniqueCount;
-		row.uniqueBytes = t.uniqueBytes;
-		row.dupCount = t.dupCount;
-		row.dupBytes = t.dupBytes;
-		row.scannedUpto = MsgId(_highMark);
-		row.scanFinished = true;
-		row.deleteFinished = (dupTotal == 0);
-		database.writeChatScanRow(row);
-	}
-	database.commitTransaction();
-	_aggregateAbove = MsgId(std::numeric_limits<int64>::max());
-	aggregateStep();
-}
-
-void Api::aggregateStep() {
-	constexpr auto kBatch = 2000;
-	using Table = Data::DedupDb::Table;
-	auto &database = db();
-	const auto peerId = _peer->id;
-	if (_cancelled) {
-		_aggregating = false;
-		return;
-	}
-	if (_aggregateAbove.bare > 1) {
-		const auto batch = database.chatScanHashedItemsWindow(
-			peerId,
-			_aggregateAbove,
-			kBatch);
-		for (const auto &item : batch) {
-			_aggregateAbove = item.msgId;
-		}
-		if (!batch.empty()) {
-			database.beginTransaction();
-			for (const auto &item : batch) {
-				if (!item.mediaId || item.hash.isEmpty()) {
-					continue;
-				}
-				if (database.containsDocId(Table::Uploads, item.mediaId)) {
-					continue;
-				}
-				if (database.containsHash(Table::Uploads, item.hash)
-					&& !database.containsFinishedHash(
-						Table::Uploads,
-						item.hash)) {
-					continue;
-				}
-				database.insert(
-					Table::Uploads,
-					{ item.hash, item.mediaId, u"f"_q });
-			}
-			database.commitTransaction();
-			if (int(batch.size()) == kBatch) {
-				_aggregateTimer.setCallback([=] {
-					aggregateStep();
-				});
-				_aggregateTimer.callOnce(0);
-				return;
-			}
-		}
-	}
-	database.beginTransaction();
-	database.writeScanCursor({
+	database.finishChatScan(
 		peerId,
 		MsgId(_highMark),
-		int(State::Phase::Finished),
-	});
+		GetEnhancedBool("prevent_upload_duplicates") ? 1 : 0,
+		(dupTotal == 0),
+		_elapsedMs);
 	database.commitTransaction();
+	database.finishChatScanSession(peerId);
+	_sessionId = 0;
 
 	stopScheduler();
 	_documents.clear();
 	_photos.clear();
 	_seenDocs.clear();
 	_seenPhotos.clear();
-	_seenHashes.clear();
+	_uniqueHashes.clear();
+	_queue->clearKnownHashes();
+	db().clearChatTable();
+	db().invalidateChatTable(_peer->id);
+	db().invalidateAllPeersChatTable();
+	_uploadTableUse.reset();
+	_stickerTotal = 0;
 	_staleMedia.clear();
-	_pageDups.clear();
-	_pageDups.shrink_to_fit();
-	_pendingDupRows.clear();
-	_pendingDupRows.shrink_to_fit();
 	_pageItems.clear();
 	_pageItems.shrink_to_fit();
 	_recoveryIds.clear();
@@ -1531,19 +2119,15 @@ void Api::aggregateStep() {
 
 	_aggregating = false;
 	_finished = true;
-	auto dupTotal = 0;
-	auto dupBytes = int64(0);
-	for (const auto &[category, t] : _totals) {
-		dupTotal += t.dupCount;
-		dupBytes += t.dupBytes;
-	}
 	auto state = _state.current();
 	state.phase = State::Phase::Finished;
 	state.categories = _totals;
 	state.dupTotal = dupTotal;
 	state.dupBytes = dupBytes;
 	state.hashDone = _hashDone;
+	state.hashPending = 0;
 	state.hashTotal = _hashDone + _failedHashes;
+	state.elapsedMs = _elapsedMs;
 	_state = std::move(state);
 	ChatScan::ForgetScannedPeer(peerId);
 	ChatScan::RememberScannedPeer(peerId);

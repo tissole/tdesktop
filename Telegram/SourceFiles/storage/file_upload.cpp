@@ -430,9 +430,8 @@ bool Uploader::checkUploadDuplicate(
 	const auto batch = file->batch;
 	const auto batchId = (batch && batch->total > 1) ? batch->id : 0;
 	const auto dedupOff = !GetEnhancedBool("prevent_upload_duplicates");
-	if (dedupOff && !batchId) {
-		return false;
-	}
+	const auto allPeers = !dedupOff;
+	const auto isPhoto = (file->type == SendMediaType::Photo);
 	auto hash = QByteArray();
 	if (file->type == SendMediaType::Photo) {
 		// Photos are re-encoded locally before upload, so dedup must hash the
@@ -451,23 +450,89 @@ bool Uploader::checkUploadDuplicate(
 		return false;
 	}
 	auto &dedupDb = Core::App().downloadManager().dedupDb();
-	if (dedupOff) {
-		const auto sessionId = session().uniqueId();
-		if (dedupDb.isOpen()
-			&& dedupDb.containsUlTmpHash(sessionId, batchId, hash)) {
+	const auto sessionId = session().uniqueId();
+	if (dedupDb.isOpen()) {
+		if (!_chatTableUse
+			|| _chatTablePeer != itemId.peer
+			|| _chatTableAllPeers != allPeers) {
+			_chatTableUse = dedupDb.useChatTable(itemId.peer, allPeers);
+			_chatTablePeer = itemId.peer;
+			_chatTableAllPeers = allPeers;
+		}
+		if (dedupDb.chatTableContainsHash(itemId.peer, hash, allPeers)) {
+			releaseUploadTableIfIdle();
 			return true;
 		}
+	}
+	if (dedupOff) {
+		if (dedupDb.isOpen()
+			&& (dedupDb.containsUlTmpHash(sessionId, batchId, hash)
+				|| (file->id
+					&& dedupDb.containsUlTmpDocId(
+						sessionId,
+						batchId,
+						file->id,
+						isPhoto)))) {
+			return true;
+		}
+		if (dedupDb.isOpen() && batchId && file->id) {
+			dedupDb.insertUlTmp(
+				sessionId,
+				batchId,
+				file->id,
+				isPhoto,
+				hash);
+		}
+		_uploadPendingHashes.insert(hash, file->filesize);
+		_uploadPendingByItem.emplace(itemId, PendingUpload{
+			.hash = hash,
+			.documentId = file->id,
+			.isPhoto = isPhoto,
+		});
 		if (dedupDb.isOpen() && file->id) {
-			dedupDb.insertUlTmp(sessionId, batchId, file->id, hash);
+			dedupDb.insert(Data::DedupDb::Table::Uploads, {
+				.hash = hash,
+				.documentId = file->id,
+				.isPhoto = isPhoto,
+				.status = u"u"_q,
+			});
 		}
 		return false;
 	}
+	if (batchId
+		&& dedupDb.isOpen()
+		&& ((file->id
+				&& dedupDb.containsUlTmpDocId(
+					sessionId,
+					batchId,
+					file->id,
+					isPhoto))
+			|| dedupDb.containsUlTmpHash(sessionId, batchId, hash))) {
+		releaseUploadTableIfIdle();
+		return true;
+	}
+	if (dedupDb.isOpen()) {
+		_uploadTableUse = dedupDb.useTable(Data::DedupDb::Table::Uploads);
+	}
 	if (dedupDb.containsHash(Data::DedupDb::Table::Uploads, hash)
 		|| _uploadPendingHashes.contains(hash)) {
+		releaseUploadTableIfIdle();
 		return true;
 	}
 	_uploadPendingHashes.insert(hash, file->filesize);
-	_uploadPendingByItem.emplace(itemId, hash);
+	_uploadPendingByItem.emplace(itemId, PendingUpload{
+		.hash = hash,
+		.documentId = file->id,
+		.isPhoto = isPhoto,
+	});
+	if (dedupDb.isOpen() && batchId && file->id) {
+		dedupDb.insertUlTmp(
+			sessionId,
+			batchId,
+			file->id,
+			isPhoto,
+			hash);
+	}
 	// Register the content as an in-progress upload ('u') immediately, so a
 	// second batch of files (or an EF job running in parallel) dedups against
 	// it while we are uploading. The row is re-keyed to the real server id
@@ -476,6 +541,7 @@ bool Uploader::checkUploadDuplicate(
 		dedupDb.insert(Data::DedupDb::Table::Uploads, {
 			.hash = hash,
 			.documentId = file->id,
+			.isPhoto = isPhoto,
 			.status = u"u"_q,
 		});
 	}
@@ -492,14 +558,18 @@ void Uploader::documentIdWriteback(uint64 localId, uint64 realId) {
 	}
 	auto &dedup = Core::App().downloadManager().dedupDb();
 	if (dedup.isOpen()) {
+		const auto hash = hashIt.value();
 		dedup.rekey(
 			Data::DedupDb::Table::Uploads,
 			localId,
-			realId);
-		dedup.updateDedupStatus(
-			Data::DedupDb::Table::Uploads,
-			hashIt.value(),
-			u"f"_q);
+			realId,
+			false);
+		dedup.insert(Data::DedupDb::Table::Uploads, {
+			.hash = hash,
+			.documentId = realId,
+			.isPhoto = false,
+			.status = u"f"_q,
+		});
 	}
 	_uploadPendingDocIds.erase(hashIt);
 }
@@ -514,14 +584,18 @@ void Uploader::photoIdWriteback(uint64 localId, uint64 realId) {
 	}
 	auto &dedup = Core::App().downloadManager().dedupDb();
 	if (dedup.isOpen()) {
+		const auto hash = hashIt.value();
 		dedup.rekey(
 			Data::DedupDb::Table::Uploads,
 			localId,
-			realId);
-		dedup.updateDedupStatus(
-			Data::DedupDb::Table::Uploads,
-			hashIt.value(),
-			u"f"_q);
+			realId,
+			true);
+		dedup.insert(Data::DedupDb::Table::Uploads, {
+			.hash = hash,
+			.documentId = realId,
+			.isPhoto = true,
+			.status = u"f"_q,
+		});
 	}
 	_uploadPendingDocIds.erase(hashIt);
 }
@@ -829,14 +903,18 @@ void Uploader::failed(FullMsgId itemId) {
 
 	const auto it = _uploadPendingByItem.find(itemId);
 	if (it != _uploadPendingByItem.end()) {
-		const auto hash = it.value();
-		if (!hash.isEmpty()) {
-			_uploadPendingHashes.remove(hash);
-			// Upload cancelled/failed: drop the 'u' record so a later retry
-			// is not treated as a duplicate of a file that never uploaded.
-			Core::App().downloadManager().dedupDb().removeUnfinishedByHash(
-				Data::DedupDb::Table::Uploads,
-				hash);
+		const auto pending = it.value();
+		if (!pending.hash.isEmpty()) {
+			_uploadPendingHashes.remove(pending.hash);
+			// Upload cancelled/failed: drop the exact 'u' record so a later
+			// retry is not treated as a duplicate of a file that never
+			// uploaded, without touching other in-flight copies.
+			if (pending.documentId) {
+				Core::App().downloadManager().dedupDb().removePending(
+					Data::DedupDb::Table::Uploads,
+					pending.documentId,
+					pending.isPhoto);
+			}
 		}
 		_uploadPendingByItem.erase(it);
 	}
@@ -1101,9 +1179,17 @@ auto Uploader::sendSlicedPart(not_null<Entry*> entry, uchar dcIndex)
 	return SendResult::Success;
 }
 
+void Uploader::releaseUploadTableIfIdle() {
+	if (_queue.empty() && _transcodeQueue.empty()) {
+		_uploadTableUse.reset();
+		_chatTableUse.reset();
+	}
+}
+
 void Uploader::maybeSend() {
 	const auto stopping = _stopSessionsTimer.isActive();
 	if (_queue.empty()) {
+		releaseUploadTableIfIdle();
 		if (!stopping) {
 			_stopSessionsTimer.callOnce(kKillSessionTimeout);
 		}
@@ -1206,6 +1292,8 @@ void Uploader::clear() {
 	}
 	_transcodeQueue.clear();
 	_queue.clear();
+	_uploadTableUse.reset();
+	_chatTableUse.reset();
 	cancelAllRequests();
 	stopSessions();
 	_stopSessionsTimer.cancel();
@@ -1541,23 +1629,31 @@ void Uploader::finishEntry(std::vector<Entry>::iterator i) {
 		});
 	}
 
-	if (GetEnhancedBool("prevent_upload_duplicates")
-		&& (entry.file->type == SendMediaType::File
-			|| entry.file->type == SendMediaType::ThemeFile
-			|| entry.file->type == SendMediaType::Photo)) {
+	if (entry.file->type == SendMediaType::File
+		|| entry.file->type == SendMediaType::ThemeFile
+		|| entry.file->type == SendMediaType::Photo) {
 		const auto it = _uploadPendingByItem.find(entry.itemId);
 		if (it != _uploadPendingByItem.end()) {
-			const auto hash = it.value();
-			if (!hash.isEmpty()) {
+			const auto pending = it.value();
+			if (!pending.hash.isEmpty()) {
 				// The row was registered with status 'u' when the upload
 				// started. Mark it finished and keep the local id for the
 				// writeback that will replace it with the real server id.
-				Core::App().downloadManager().dedupDb().updateDedupStatus(
-					Data::DedupDb::Table::Uploads,
-					hash,
-					u"f"_q);
-				_uploadPendingDocIds[entry.file->id] = hash;
-				_uploadPendingHashes.remove(hash);
+				const auto documentId = pending.documentId
+					? pending.documentId
+					: entry.file->id;
+				if (documentId) {
+					Core::App().downloadManager().dedupDb().insert(
+						Data::DedupDb::Table::Uploads,
+						{
+							.hash = pending.hash,
+							.documentId = documentId,
+							.isPhoto = pending.isPhoto,
+							.status = u"f"_q,
+						});
+					_uploadPendingDocIds[documentId] = pending.hash;
+				}
+				_uploadPendingHashes.remove(pending.hash);
 			}
 			_uploadPendingByItem.erase(it);
 		}

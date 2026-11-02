@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_text_entities.h"
 #include "api/api_user_names.h"
 #include "chat_helpers/stickers_lottie.h"
+#include "chat_scan/chat_scan_index.h"
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "core/mime_type.h" // Core::IsMimeSticker
@@ -1761,6 +1762,7 @@ void Session::deleteConversationLocally(not_null<PeerData*> peer) {
 	} else {
 		markLeft();
 	}
+	ChatScan::NoteChatDeleted(peer->id);
 }
 
 bool Session::chatsListLoaded(Data::Folder *folder) {

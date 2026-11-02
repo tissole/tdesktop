@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <utility>
 #include "base/timer.h"
 #include "base/unique_function.h"
+#include "data/data_dedup_db.h"
 #include "data/data_peer_id.h"
 #include "data/data_msg_id.h"
 #include "rpl/producer.h"
@@ -409,6 +410,8 @@ private:
 	void skipAsDuplicate(int idx);
 	void premarkDuplicate(int idx);
 	void startSession();
+	void ensureUploadTableUse();
+	void ensureChatTableUse(bool allPeers);
 	void runNextPrecheck();
 	void remotePrechecked(int idx, QByteArray &&hash, qint64 size);
 	void refreshSourceItemState(int idx);
@@ -423,6 +426,9 @@ private:
 	int _n = 0;
 	std::vector<ItemTask> _items;
 	std::shared_ptr<base::flat_map<FullMsgId, int>> _uploadIndex;
+	std::optional<Data::DedupDb::TableUse> _uploadTableUse;
+	std::optional<Data::DedupDb::ChatTableUse> _chatTableUse;
+	bool _chatTableAllPeers = false;
 	base::flat_map<
 		MessageGroupId,
 		std::shared_ptr<SendingAlbum>> _albums;

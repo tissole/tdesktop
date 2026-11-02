@@ -469,6 +469,7 @@ void ListSection::resizeToWidth(int newWidth) {
 		resizeOneColumn(0, newWidth);
 		break;
 	case Type::File:
+	case Type::Sticker:
 	case Type::Link: {
 		const auto itemsLeft = st::infoMediaHeaderPosition.x();
 		const auto itemWidth = newWidth - 2 * itemsLeft;
@@ -512,6 +513,7 @@ int ListSection::recountHeight() {
 	case Type::VoiceFile:
 	case Type::RoundVoiceFile:
 	case Type::File:
+	case Type::Sticker:
 	case Type::MusicFile:
 	case Type::Link:
 		for (auto &item : _items) {

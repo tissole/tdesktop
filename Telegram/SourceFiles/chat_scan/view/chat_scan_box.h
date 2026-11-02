@@ -14,10 +14,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/sender.h"
 #include "ui/layers/box_content.h"
 
-#include <QFile>
 #include <QString>
-#include <QTextStream>
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <optional>
@@ -70,39 +69,24 @@ private:
 	void finishDelete(const QString &error);
 	void settleDelete(int attempt);
 	void writeDupReport(bool deleted);
-	void writePausedReport();
+	void writePauseReport();
+	void updateScanReportStatus(const QString &status);
 	[[nodiscard]] bool canDeleteMessages() const;
 	[[nodiscard]] QString scanReportPath();
-	// The report lists every duplicate of the chat, so building it is split
-	// into bounded slices - file parse, keyed reads and the final write -
-	// with an event loop turn between them: rebuilding it in one pass takes
-	// minutes on a large chat and used to freeze the whole interface.
+	// The report is written only when the scan finishes. A worker connection
+	// reads the duplicate rows and writes the TXT, so a large chat never
+	// blocks the interface.
 	struct ReportJob {
-		struct Listed {
-			QString line;
-			int64 size = 0;
-			bool inDb = false;
-		};
 		QString status;
 		QString path;
+		QString header;
 		std::map<int, QString> names;
-		std::map<int, std::pair<int, int64>> uniques;
-		std::map<int, std::map<int64, Listed>> listed;
-		QString dateLine;
-		std::vector<int> categories;
-		size_t categoryPos = 0;
-		int currentCategory = -1;
-		int64 pageAbove = 0;
-		std::unique_ptr<QFile> file;
-		std::unique_ptr<QTextStream> stream;
-		bool parsing = false;
+		std::vector<Data::ChatScanRow> rows;
+		std::atomic_bool removeAfterWrite = false;
 	};
-	void upsertScanReport(
-		const QString &status,
-		const std::map<int, std::pair<int, int64>> &uniques,
-		bool append);
-	void reportStep();
-	void renderReport();
+	void upsertScanReport(const QString &status);
+	void writeReportOnWorker();
+	[[nodiscard]] QString buildReportHeader(const ReportJob &job) const;
 	void setupApi(bool incremental);
 	void askRescan();
 	void askCancel();
@@ -124,7 +108,8 @@ private:
 	// Rate window over the hashed files. Seeded with a nominal pace so the
 	// estimate is shown from the first render and then replaced by the
 	// measured one.
-	[[nodiscard]] QString etaSuffix(int done, int total);
+	[[nodiscard]] QString etaSuffix(int done, int remaining);
+	[[nodiscard]] QString elapsedSuffix(int64 ms) const;
 	[[nodiscard]] QString unhashedSuffix(const ChatScan::State &state) const;
 	[[nodiscard]] QString floodSuffix(const ChatScan::State &state) const;
 	void refreshFloodSuffix();
@@ -133,23 +118,22 @@ private:
 	const not_null<Main::Session*> _session;
 	const bool _rescan = false;
 	const bool _autostart = true;
-	bool _reportAppend = false;
+	bool _reportWriteOnResults = false;
 
 	std::shared_ptr<ChatScan::Api> _api;
 	MTP::Sender _deleteApi;
 	base::Timer _floodTimer;
 	base::Timer _settleTimer;
 	base::Timer _floodSuffixTimer;
-	base::Timer _reportTimer;
 	base::Timer _deleteCollectTimer;
-	std::unique_ptr<ReportJob> _reportJob;
+	std::shared_ptr<ReportJob> _reportJob;
 	QString _reportQueuedStatus;
-	std::map<int, std::pair<int, int64>> _reportQueuedUniques;
-	bool _reportQueuedAppend = false;
+	QString _reportStatusQueued;
 	std::vector<int32> _deleteCollectIds;
 	int64 _deleteCollectAbove = 0;
 	bool _deleteCollecting = false;
 	int _finishedUnhashed = 0;
+	int64 _finishedElapsedMs = 0;
 	// Largest total-files estimate shown this session: the projection is
 	// only an estimate of a number the scan does not know yet, and it may
 	// wobble while the walk measures the chat, so the panel never walks the
@@ -197,4 +181,7 @@ private:
 	bool _confirming = false;
 	bool _deleting = false;
 	bool _showingResults = false;
+	bool _closeOnCancelled = false;
+	bool _deleteAfterReport = false;
+	bool _removeReportAfterWrite = false;
 };

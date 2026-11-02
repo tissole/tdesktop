@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/profile/info_profile_shared_media_classic.h"
 
 #include "core/ui_integration.h"
+#include "chat_scan/chat_scan_index.h"
 #include "data/components/recent_shared_media_gifts.h"
 #include "data/data_channel.h"
 #include "data/data_document.h"
@@ -364,6 +365,8 @@ object_ptr<Ui::SlideWrap<Ui::RpWidget>> SetupSharedMediaClassic(
 	addMediaButton(MediaType::Poll, st::infoIconMediaPoll);
 	addMediaButton(MediaType::Link, st::infoIconMediaLink);
 	addMediaButton(MediaType::GIF, st::infoIconMediaGif);
+	ChatScan::LoadStickerIndex(&peer->session(), peer->id);
+	addMediaButton(MediaType::Sticker, st::infoIconMediaSticker);
 	addScanTotalButton();
 	if (const auto bot = peer->asBot()) {
 		addCommonGroupsButton(bot, st::infoIconMediaGroup);

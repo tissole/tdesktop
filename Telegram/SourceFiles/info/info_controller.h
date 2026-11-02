@@ -192,7 +192,9 @@ public:
 	}
 	Section(MediaType mediaType, Type type = Type::Media)
 	: _type(type)
-	, _mediaType(mediaType) {
+	, _mediaType(mediaType == MediaType::RoundVoiceFile
+		? MediaType::VoiceFile
+		: mediaType) {
 	}
 	Section(SettingsType settingsType)
 	: _type(Type::Settings)

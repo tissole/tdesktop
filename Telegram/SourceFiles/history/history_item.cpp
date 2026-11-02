@@ -3204,6 +3204,7 @@ void HistoryItem::setRealId(MsgId newId) {
 		}
 	}
 	_history->owner().notifyItemIdChange({ fullId(), oldId });
+	ChatScan::NoteItemAdded(this);
 
 	// We don't fire MessageUpdate::Flag::ReplyMarkup and update keyboard
 	// in history widget, because it can't exist for an outgoing message.
