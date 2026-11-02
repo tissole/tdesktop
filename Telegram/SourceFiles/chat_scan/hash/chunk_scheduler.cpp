@@ -22,8 +22,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace ChatScan {
 namespace {
 
-// Items, not chunks: each item may need one whole-file read or two 16 KB
-// samples, and FileChunkFetcher owns the chunk pacing. This pool only keeps
+// Items, not chunks: each item may need one whole-file read or one 32 KB
+// sample, and FileChunkFetcher owns the chunk pacing. This pool only keeps
 // enough leased work queued that the limiter always has a next request.
 constexpr auto kSchedulerItems = 192;
 constexpr auto kCommitBatch = 128;

@@ -30,7 +30,7 @@ struct CheckResult {
 	bool decided = false;
 };
 
-// Fetches the same 2-chunk hash downloads use, over takeout.
+// Fetches the same one-sample hash downloads use, over takeout.
 void FetchHash(
 	MTP::ConcurrentSender &mtp,
 	Fn<void(FnMut<void()>)> runner,
@@ -57,7 +57,7 @@ void FetchFullFile(
 	const QString &tag = QString(),
 	Fn<void(FnMut<void(uint64 freshId)>)> refreshTakeout = nullptr);
 // Same decision tree as download dedup: document id first, then the
-// 2-chunk remote hash for big files. Small files and photos are decided
+// one-sample remote hash for big files. Small files and photos are decided
 // after download (decided == false). With global set the downloads table
 // is used, otherwise the run temp table. Always calls done exactly once.
 // Decides by an already known hash, no network. Lets callers reuse one

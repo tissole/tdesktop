@@ -22,8 +22,7 @@ enum class ChunkState {
 };
 
 // One shared window per bare DC. All download lanes share it, so the total
-// in-flight stays bounded while each lane carries only a few requests. The
-// 16-slot layout with 128/96/1000 is the proven high-rate configuration.
+// in-flight stays bounded while each lane carries only a few requests.
 constexpr auto kChunkWindowLimit = 128;
 
 struct ChunkWindow {
@@ -94,18 +93,27 @@ public:
 	[[nodiscard]] double latencyAvg() const {
 		return _latencyAvg;
 	}
+	// Grows every time a latency spike cuts the window. The fetcher uses it to
+	// cancel and re-queue the requests admitted under the old window.
+	[[nodiscard]] int collapses() const {
+		return _collapses;
+	}
 
 private:
 	[[nodiscard]] double effectiveCeiling() const;
+	[[nodiscard]] bool delayOkay() const;
 	[[nodiscard]] crl::time msUntilToken() const;
 	crl::time jitter();
 	void refill(crl::time now);
 	void release();
+	void collapse(crl::time now);
+	void resetLatency();
 	void pushLatency(crl::time took);
 
 	const int _dcId;
 	const ChunkLimits _limits;
 	ChunkWindow *const _window = nullptr;
+	const int _fixedCwnd = 0;
 
 	double _rate = 0.;
 	double _tokens = 1.;
@@ -128,6 +136,8 @@ private:
 
 	double _latencyAvg = 0.;
 	double _latencyP95 = 0.;
+	double _minRtt = 0.;
+	int _collapses = 0;
 	static constexpr auto kLatencyWindow = 64;
 	std::array<crl::time, kLatencyWindow> _latencies = {};
 	int _latencyCount = 0;

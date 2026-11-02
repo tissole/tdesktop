@@ -1382,17 +1382,17 @@ void DownloadManager::addLoaded(
 	if ((!dedupOff || batchId) && dedupDb.isOpen()) {
 		if (!dedupOff && docId) {
 			// saveFileHash() may have stored the remote fingerprint for this
-			// doc id when the download started. Re-reading the same 2 sample
+			// doc id when the download started. Re-reading the same sample
 			// chunks off the just-finished file would recompute it, so reuse.
 			dedupHash = dedupDb.hashForDocId(
 				DedupDb::Table::Downloads,
 				docId,
 				(object.photo != nullptr));
 		}
-	// Only big files get a 2-chunk remote hash at download start, which
+	// Only big files get a one sample remote hash at download start, which
 	// means their duplicate decision was already made before download, in
 	// checkDuplicate. A big file without one (remote sampling failed or was
-	// still in flight) only has a 2-chunk local sample here, which must
+	// still in flight) only has a one sample local sample here, which must
 	// never delete user data, so size alone also marks big files.
 	isBigFile = !dedupHash.isEmpty()
 		|| (size > Data::kDedupMinPartialHashSize);
@@ -1462,7 +1462,7 @@ void DownloadManager::addLoaded(
 	if ((((isDuplicateByHash || isDuplicatePhotoById) && !dedupOff)
 		|| isDuplicateTmp)
 		&& !isBigFile) {
-		// A 2-chunk remote hash (big files only) means the duplicate decision
+		// A one-sample remote hash (big files only) means the duplicate decision
 		// was already made in checkDuplicate - the duplicate was skipped and
 		// never written to disk, so re-checking here would delete the real
 		// download. Only files without one (small files, photos, failed
@@ -3098,7 +3098,7 @@ void DownloadManager::checkDuplicate(
 		return;
 	}
 
-	// Step 3: Fetch 2 sample chunks, compute the hash, compare with known
+	// Step 3: Fetch one sample chunk, compute the hash, compare with known
 	// content (both finished and in-flight 'u' rows).
 	fetchFingerprint(
 		session,

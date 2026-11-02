@@ -92,6 +92,7 @@ private:
 		crl::time started = 0;
 		crl::time lastActivity = 0;
 		int requests = 0;
+		bool warm = false;
 	};
 
 	void pump();
@@ -100,7 +101,11 @@ private:
 	void handleResponse(ChunkRequestId id, const MTP::Response &response);
 	void handleError(ChunkRequestId id, const MTP::Error &error);
 	void checkTransport(crl::time now);
-	void reissueAfterCut(MTP::DcId bareDc, crl::time now);
+	void reissueOutstanding(
+		MTP::DcId bareDc,
+		crl::time now,
+		bool resetLoads,
+		bool countAttempt);
 	void finish(ChunkRequestId id, ChunkResult result);
 	void schedule(crl::time wait);
 	void noteActivity(MTP::ShiftedDcId dcId);
@@ -116,6 +121,7 @@ private:
 		MTP::DcId,
 		std::unique_ptr<ChunkLimiter>> _limiters;
 	base::flat_map<MTP::ShiftedDcId, uint64> _seenCuts;
+	base::flat_map<MTP::DcId, int> _seenCollapses;
 	base::flat_map<MTP::ShiftedDcId, Load> _loads;
 	base::flat_map<MTP::ShiftedDcId, crl::time> _laneReadyAt;
 	std::map<ChunkRequestId, Job> _jobs;

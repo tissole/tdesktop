@@ -37,22 +37,21 @@ constexpr auto kDedupChunkLaneJitter = 500;
 // downloads, uploads and forwards.
 //
 // Files at most kDedupMinPartialHashSize bytes long are fingerprinted from
-// their whole contents. Larger files are fingerprinted from two 16 KB samples,
-// one at the middle and one from the last 16 KB, never from the file header. The
-// file size is the first input of every fingerprint, so equal hashes imply
-// equal size and equal sampled content. In all cases the result is exactly
-// one hash.
-constexpr auto kDedupChunk = 16 * 1024;
+// their whole contents. Larger files are fingerprinted from one 32 KB sample
+// at the middle, starting after the first 64 KB so common container headers
+// are not sampled. The file size is the first input of every fingerprint, so
+// equal hashes imply equal size and equal sampled content. In all cases the
+// result is exactly one hash.
+constexpr auto kDedupChunk = 32 * 1024;
 constexpr auto kDedupHeadGap = 64 * 1024;
-constexpr auto kDedupSampleGap = 32 * 1024;
 constexpr auto kDedupMinPartialHashSize = 2 * kDedupHeadGap;
 constexpr auto kDedupBlock = 1024 * 1024;
 constexpr auto kDedupAlignment = 1 * 1024;
 
-// Two sample offsets (middle, tail) for the partial fingerprint. Defined for
-// sizes above kDedupMinPartialHashSize. Shared by local, remote and export
-// fingerprinting so hashes match.
-void DedupSampleOffsets(int64 size, int64 &middleOffset, int64 &tailOffset);
+// Middle sample offset for the partial fingerprint. Defined for sizes above
+// kDedupMinPartialHashSize. Shared by local, remote and export fingerprinting
+// so hashes match.
+[[nodiscard]] int64 DedupMiddleOffset(int64 size);
 
 // Returns the 16-byte XXH3_128bits hash of a local file's fingerprint.
 // Empty array if the file cannot be read or is empty.
@@ -62,15 +61,13 @@ void DedupSampleOffsets(int64 size, int64 &middleOffset, int64 &tailOffset);
 // whole-file or sampled plan as files of that size.
 [[nodiscard]] QByteArray ContentFingerprint(const QByteArray &content);
 
-// Combines the file size and two sampled byte chunks (middle and tail) into
-// the same 128-bit fingerprint used for files. Shared by local and remote
-// fingerprinting.
-[[nodiscard]] QByteArray HashChunks(
+// Combines the file size and one sampled byte chunk into the same 128-bit
+// fingerprint used for files. Shared by local and remote fingerprinting.
+[[nodiscard]] QByteArray HashChunk(
 	int64 size,
-	const QByteArray &middle,
-	const QByteArray &tail);
+	const QByteArray &middle);
 
-// Fetches the parts of a remote document that its fingerprint needs and
+// Fetches the part of a remote document that its fingerprint needs and
 // computes the same 128-bit fingerprint used for local files. Reused by
 // download dedup and forward dedup so both operate on identical content
 // fingerprints. The result is passed to the callback (empty on failure).

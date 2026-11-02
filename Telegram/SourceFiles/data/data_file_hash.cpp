@@ -96,41 +96,30 @@ int FloodWaitSeconds(const QString &type) {
 	return std::max(type.mid(type.lastIndexOf(u"_"_q) + 1).toInt(), 0);
 }
 
-// Two sample offsets (middle and tail) used for the partial fingerprint.
-// Both local and remote fingerprinting must use identical offsets so the
-// resulting hash matches. Both offsets are aligned down to 1 KB, which
-// upload.getFile requires even with the `precise` flag, and each sample is
-// kept inside a single 1 MB block. The tail is aligned down from
-// size - kDedupChunk, so at most 1 KB at EOF normally stays outside the
-// sample (a block adjustment can move it up to 16 KB earlier).
-void DedupSampleOffsets(
-		int64 size,
-		int64 &middleOffset,
-		int64 &tailOffset) {
-	middleOffset = (size / 2 / kDedupAlignment) * kDedupAlignment;
-	middleOffset = std::max<int64>(middleOffset, kDedupHeadGap);
-	tailOffset = std::max<int64>(0, size - kDedupChunk);
-	tailOffset = (tailOffset / kDedupAlignment) * kDedupAlignment;
-	const auto ensureWithinBlock = [](int64 &offset) {
-		const auto blockOffset = offset % kDedupBlock;
-		if (blockOffset + kDedupChunk > kDedupBlock) {
-			offset -= kDedupAlignment;
-			offset = (offset / kDedupAlignment) * kDedupAlignment;
-			const auto newBlockOffset = offset % kDedupBlock;
-			if (newBlockOffset + kDedupChunk > kDedupBlock) {
-				offset = (offset / kDedupBlock) * kDedupBlock
-					+ kDedupBlock - kDedupChunk;
-			}
+// Middle sample offset used for the partial fingerprint. Local and remote
+// fingerprinting must use the identical offset so the resulting hash matches.
+// The offset is aligned down to 1 KB, which upload.getFile requires even with
+// the `precise` flag, and the sample is kept inside a single 1 MB block. The
+// kDedupHeadGap clamp keeps the sample out of the common container header.
+int64 DedupMiddleOffset(int64 size) {
+	auto offset = (size / 2 / kDedupAlignment) * kDedupAlignment;
+	offset = std::max<int64>(offset, kDedupHeadGap);
+	const auto blockOffset = offset % kDedupBlock;
+	if (blockOffset + kDedupChunk > kDedupBlock) {
+		offset -= kDedupAlignment;
+		offset = (offset / kDedupAlignment) * kDedupAlignment;
+		const auto newBlockOffset = offset % kDedupBlock;
+		if (newBlockOffset + kDedupChunk > kDedupBlock) {
+			offset = (offset / kDedupBlock) * kDedupBlock
+				+ kDedupBlock - kDedupChunk;
 		}
-	};
-	ensureWithinBlock(middleOffset);
-	ensureWithinBlock(tailOffset);
+	}
+	return offset;
 }
 
-QByteArray HashChunks(
+QByteArray HashChunk(
 		int64 size,
-		const QByteArray &middle,
-		const QByteArray &tail) {
+		const QByteArray &middle) {
 	auto state = XXH3_state_t();
 	XXH3_128bits_reset(&state);
 	auto sizeBytes = std::array<uchar, 8>();
@@ -144,12 +133,6 @@ QByteArray HashChunks(
 			&state,
 			middle.constData(),
 			static_cast<size_t>(middle.size()));
-	}
-	if (!tail.isEmpty()) {
-		XXH3_128bits_update(
-			&state,
-			tail.constData(),
-			static_cast<size_t>(tail.size()));
 	}
 	return HashState(&state);
 }
@@ -165,15 +148,12 @@ QByteArray FileFingerprint(const QString &path, int64 size) {
 		}
 		return ContentFingerprint(content);
 	}
-	int64 middleOffset = 0;
-	int64 tailOffset = 0;
-	DedupSampleOffsets(size, middleOffset, tailOffset);
-	const auto middle = ReadHash(path, middleOffset, kDedupChunk);
-	const auto tail = ReadHash(path, tailOffset, kDedupChunk);
-	if (middle.isEmpty() || tail.isEmpty()) {
+	const auto offset = DedupMiddleOffset(size);
+	const auto middle = ReadHash(path, offset, kDedupChunk);
+	if (middle.isEmpty()) {
 		return QByteArray();
 	}
-	return HashChunks(size, middle, tail);
+	return HashChunk(size, middle);
 }
 
 QByteArray ContentFingerprint(const QByteArray &content) {
@@ -182,15 +162,10 @@ QByteArray ContentFingerprint(const QByteArray &content) {
 	}
 	const auto size = int64(content.size());
 	if (size <= kDedupMinPartialHashSize) {
-		return HashChunks(size, content, QByteArray());
+		return HashChunk(size, content);
 	}
-	int64 middleOffset = 0;
-	int64 tailOffset = 0;
-	DedupSampleOffsets(size, middleOffset, tailOffset);
-	return HashChunks(
-		size,
-		content.mid(int(middleOffset), kDedupChunk),
-		content.mid(int(tailOffset), kDedupChunk));
+	const auto offset = DedupMiddleOffset(size);
+	return HashChunk(size, content.mid(int(offset), kDedupChunk));
 }
 
 namespace {
@@ -230,8 +205,8 @@ void RemoteFingerprint(
 		}
 	};
 	// Only the first dead file reference of an attempt reaches the owner:
-	// it re-queues the item once, and the remaining chunks of this attempt
-	// are then silently dropped instead of releasing its slot twice.
+	// it re-queues the item once, and the result of this attempt is then
+	// silently dropped instead of releasing its slot twice.
 	const auto expired = [onReferenceExpired, abandoned] {
 		if (*abandoned) {
 			return true;
@@ -261,55 +236,19 @@ void RemoteFingerprint(
 		return;
 	}
 
-	int64 middleOffset = 0;
-	int64 tailOffset = 0;
-	DedupSampleOffsets(size, middleOffset, tailOffset);
+	const auto offset = DedupMiddleOffset(size);
 	const auto chunk = int64(kDedupChunk);
-	const auto middle = std::make_shared<QByteArray>();
-	const auto tail = std::make_shared<QByteArray>();
-	const auto pending = std::make_shared<int>(2);
-	// 'failed' makes sure 'done' fires exactly once no matter which of the
-	// two requests fails: every completion path funnels through doneHash(),
-	// and doneHash() reports only when both requests have settled.
-	const auto failed = std::make_shared<bool>(false);
-	const auto doneHash = [size, middle, tail, pending, failed, report] {
-		if (--*pending != 0) {
-			return;
-		}
-		report(*failed
-			? QByteArray()
-			: HashChunks(size, *middle, *tail));
-	};
 	SendChunk(
 		session,
 		location,
 		NextFingerprintLane(dcId),
 		takeoutId,
-		middleOffset,
+		offset,
 		int(chunk),
-		[middle, failed, doneHash, chunk](QByteArray bytes) {
-			if (bytes.size() != chunk) {
-				*failed = true;
-			} else {
-				*middle = std::move(bytes);
-			}
-			doneHash();
-		},
-		expired);
-	SendChunk(
-		session,
-		location,
-		NextFingerprintLane(dcId),
-		takeoutId,
-		tailOffset,
-		int(chunk),
-		[tail, failed, doneHash, chunk](QByteArray bytes) {
-			if (bytes.size() != chunk) {
-				*failed = true;
-			} else {
-				*tail = std::move(bytes);
-			}
-			doneHash();
+		[report, size, chunk](QByteArray bytes) {
+			report((bytes.size() != chunk)
+				? QByteArray()
+				: HashChunk(size, bytes));
 		},
 		expired);
 }

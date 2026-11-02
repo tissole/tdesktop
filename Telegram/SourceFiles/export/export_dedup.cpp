@@ -55,21 +55,14 @@ void FetchHash(
 		int maxAttempts,
 		const QString &tag,
 		Fn<void(FnMut<void(uint64 freshId)>)> refreshTakeout) {
-	int64 middleOffset = 0;
-	int64 tailOffset = 0;
-	::Data::DedupSampleOffsets(size, middleOffset, tailOffset);
+	const auto middleOffset = ::Data::DedupMiddleOffset(size);
 	const auto currentTakeout = std::make_shared<uint64>(takeoutId);
 	const auto middle = std::make_shared<QByteArray>();
-	const auto tail = std::make_shared<QByteArray>();
-	const auto pending = std::make_shared<int>(2);
 	const auto failed = std::make_shared<bool>(false);
-	const auto doneHash = [size, middle, tail, pending, failed, done] {
-		if (--*pending != 0) {
-			return;
-		}
+	const auto doneHash = [size, middle, failed, done] {
 		done(*failed
 			? QByteArray()
-			: ::Data::HashChunks(size, *middle, *tail));
+			: ::Data::HashChunk(size, *middle));
 	};
 	const auto fetch = [&](int64 offset, std::shared_ptr<QByteArray> target) {
 		const auto gen = std::make_shared<int>(0);
@@ -192,7 +185,6 @@ void FetchHash(
 		(*sendChunk)();
 	};
 	fetch(middleOffset, middle);
-	fetch(tailOffset, tail);
 }
 
 void FetchFullFile(
