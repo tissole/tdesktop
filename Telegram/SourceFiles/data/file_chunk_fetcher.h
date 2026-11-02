@@ -99,7 +99,10 @@ private:
 	void send(ChunkRequestId id);
 	void timeout(ChunkRequestId id, crl::time now);
 	void handleResponse(ChunkRequestId id, const MTP::Response &response);
-	void handleError(ChunkRequestId id, const MTP::Error &error);
+	void handleError(
+		ChunkRequestId id,
+		const MTP::Error &error,
+		const MTP::Response &response);
 	void checkTransport(crl::time now);
 	void reissueOutstanding(
 		MTP::DcId bareDc,

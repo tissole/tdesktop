@@ -239,8 +239,8 @@ void FileChunkFetcher::send(ChunkRequestId id) {
 		handleResponse(id, response);
 		return true;
 	};
-	auto onFail = [=](const MTP::Error &error, const MTP::Response &) {
-		handleError(id, error);
+	auto onFail = [=](const MTP::Error &error, const MTP::Response &response) {
+		handleError(id, error, response);
 		return true;
 	};
 	auto &mtp = _session->account().mtp();
@@ -314,8 +314,13 @@ void FileChunkFetcher::handleResponse(
 			load->second.warm = true;
 		}
 	}
+	// The callback runs on the main thread, so its own delay must not be read
+	// as server congestion: take the time the response actually arrived.
+	const auto arrived = response.receivedAt
+		? response.receivedAt
+		: crl::now();
 	job.limiter->done(
-		crl::now() - job.sentAt,
+		std::max<crl::time>(arrived - job.sentAt, 0),
 		int(bytes.size()),
 		job.generation,
 		job.sampleLatency);
@@ -329,7 +334,8 @@ void FileChunkFetcher::handleResponse(
 
 void FileChunkFetcher::handleError(
 		ChunkRequestId id,
-		const MTP::Error &error) {
+		const MTP::Error &error,
+		const MTP::Response &response) {
 	const auto i = _jobs.find(id);
 	if (i == _jobs.end()) {
 		return;
@@ -339,7 +345,8 @@ void FileChunkFetcher::handleError(
 		return;
 	}
 	const auto now = crl::now();
-	const auto took = now - job.sentAt;
+	const auto arrived = response.receivedAt ? response.receivedAt : now;
+	const auto took = std::max<crl::time>(arrived - job.sentAt, 0);
 	job.sent = false;
 	job.requestId = 0;
 	noteActivity(job.request.dcId);
