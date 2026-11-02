@@ -155,6 +155,9 @@ private:
 	[[nodiscard]] QString filenameForMedia(
 		uint64 mediaId,
 		bool isPhoto) const;
+	[[nodiscard]] QByteArray knownHashForMedia(
+		uint64 mediaId,
+		bool isPhoto) const;
 	void loadKnownHashes(Fn<void()> done);
 	void loadResumeSets(Fn<void()> done);
 	void loadStickerIndexAsync();

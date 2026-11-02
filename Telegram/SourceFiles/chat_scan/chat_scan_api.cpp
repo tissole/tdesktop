@@ -791,12 +791,18 @@ void Api::addDocOccurrence(
 	item.sessionId = _sessionId;
 	_documents[document->id] = document.get();
 	if (!_seenDocs.insert(document->id).second) {
-		// A second occurrence needs no hash of its own: the media
-		// representative's commit fills this row too. Keeping it out of the queue is
-		// what makes the walker's outstanding counter match one lease per
-		// media id.
+		// A second occurrence is never hashed on its own: one hash per media
+		// id is enough, and staying out of the queue is what makes the
+		// walker's outstanding counter match one lease per media id. The
+		// representative's commit fills the rows that exist at that moment,
+		// but the walk goes newest to oldest, so an older occurrence is
+		// usually inserted long after that commit has run. Carrying the
+		// already known hash over keeps this row resolvable on its own.
 		item.state = skipped ? 4 : 2;
 		item.isDup = true;
+		if (!skipped) {
+			item.hash = knownHashForMedia(item.mediaId, item.isPhoto);
+		}
 		_pageItems.push_back(item);
 		auto &totals = _totals[type];
 		totals.dupCount++;
@@ -835,6 +841,9 @@ void Api::addPhotoOccurrence(
 	if (!_seenPhotos.insert(photo->id).second) {
 		item.state = skipped ? 4 : 2;
 		item.isDup = true;
+		if (!skipped) {
+			item.hash = knownHashForMedia(item.mediaId, item.isPhoto);
+		}
 		_pageItems.push_back(item);
 		auto &totals = _totals[int(Type::Photo)];
 		totals.dupCount++;
@@ -1863,6 +1872,13 @@ QString Api::filenameForMedia(uint64 mediaId, bool isPhoto) const {
 		return i->second->filename();
 	}
 	return _session->data().document(mediaId)->filename();
+}
+
+QByteArray Api::knownHashForMedia(uint64 mediaId, bool isPhoto) const {
+	return _queue->knownHash(
+		mediaId,
+		isPhoto,
+		GetEnhancedBool("prevent_upload_duplicates"));
 }
 
 void Api::applyOwnerDecision(
