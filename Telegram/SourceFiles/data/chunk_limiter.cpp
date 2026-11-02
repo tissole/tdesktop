@@ -7,24 +7,40 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/chunk_limiter.h"
 
+#include "logs.h"
+
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace Data {
 namespace {
 
-constexpr auto kCwndMin = 8;
-constexpr auto kCwndStart = 16;
+constexpr auto kCwndMin = 24;
 constexpr auto kCwndMax = 96;
 constexpr auto kCwndSteady = 80;
 // Only small sampled reads feed the congestion signal. Whole-file reads are
 // throughput work, not RTT, and used to keep p95 high long enough to collapse
-// the window. The 1600 ms/240 experiment let the server queue up to 37 s.
-// The proven 16-slot layout uses 128/96/1000; a 3000 ms hard cut halves the
-// window before queueing can run away.
-constexpr auto kLatencyTargetMs = 1000.;
+// the window. The 1600 ms/240 experiment let the server queue up to 37 s, so
+// a 3000 ms hard cut now reacts before queueing can run away.
+//
+// Growth is gated by the distance between the smoothed latency and the
+// smallest latency seen in the current epoch, not by an absolute target: a
+// link whose healthy RTT is already close to a fixed target could never grow
+// the window back after a single spike.
+constexpr auto kQueueBudgetMs = 1000.;
+constexpr auto kQueueCollapseMs = 3000.;
 constexpr auto kLatencyHardLimitMs = 3000.;
 constexpr auto kLatencySampleMaxBytes = 32 * 1024;
+// A shorter latency window is not trusted for growth or collapse decisions:
+// its samples may still describe the regime that was just corrected.
+constexpr auto kLatencySamplesForTrust = 8;
+// Per-completion growth stops here; above it the once-a-second tick decides,
+// so the ramp cannot fill the server queue in a few seconds the way the old
+// 17 -> 85 in 30 s did.
+constexpr auto kSlowStartCeiling = 32;
+constexpr auto kCwndGrowthPerTick = 2;
+constexpr auto kCollapseCooldown = crl::time(2000);
 
 constexpr auto kStartRateFactor = 0.4;
 constexpr auto kWarmGrowth = 1.15;
@@ -55,6 +71,24 @@ constexpr auto kCutCeilingFactor = 1.;
 
 constexpr auto kMaxJitter = 1000;
 
+// The scan comparison needs both chunk plans to run with the same window, so
+// the limiter's own controller must not be the variable. Setting this pins the
+// window and keeps only the rate ceiling and the flood/cut handling active.
+[[nodiscard]] int FixedWindowFromEnvironment() {
+	static const auto result = []() -> int {
+		const auto value = std::getenv("TDESKTOP_DEDUP_CWND");
+		const auto parsed = value ? std::atoi(value) : 0;
+		if (parsed <= 0) {
+			return 0;
+		}
+		const auto window = std::clamp(parsed, kCwndMin, kChunkWindowLimit);
+		LOG(("ChunkLimiter: pinned window %1 by TDESKTOP_DEDUP_CWND."
+			).arg(window));
+		return window;
+	}();
+	return result;
+}
+
 } // namespace
 
 ChunkLimits chunkLimitsForDc(int) {
@@ -68,9 +102,10 @@ ChunkLimiter::ChunkLimiter(
 : _dcId(dcId)
 , _limits(chunkLimitsForDc(dcId))
 , _window(window)
+, _fixedCwnd(FixedWindowFromEnvironment())
 , _rate(_limits.ceiling * kStartRateFactor)
 , _tokens(kTokenBurst)
-, _cwnd(kCwndStart)
+, _cwnd(_fixedCwnd ? _fixedCwnd : kCwndMin)
 , _seed(0x9E3779B97F4A7C15ULL + uint64(dcId)) {
 }
 
@@ -109,15 +144,16 @@ void ChunkLimiter::done(
 	}
 	release();
 	if (sampleLatency && bytes > 0 && bytes <= kLatencySampleMaxBytes) {
-		_latencyAvg = _latencyAvg * 0.9 + double(took) * 0.1;
 		pushLatency(took);
 	}
-	// Slow start: after a cut or a latency shrink the window climbs back
-	// through completions instead of waiting a full second per step.
-	if (_state != ChunkState::Steady
-		&& _state != ChunkState::Backoff
-		&& _cwnd < kCwndSteady
-		&& _latencyP95 <= kLatencyTargetMs) {
+	if (_fixedCwnd) {
+		return;
+	}
+	// Slow start: after a collapse the window climbs back through completions
+	// instead of waiting a full second per step.
+	if (_state != ChunkState::Backoff
+		&& _cwnd < kSlowStartCeiling
+		&& delayOkay()) {
 		++_cwnd;
 	}
 }
@@ -134,7 +170,9 @@ void ChunkLimiter::flood(crl::time now, int seconds, uint64 generation) {
 	_healthySince = now;
 	_slowTicks = 0;
 	_rate = std::max(double(_limits.floor), _rate * kFloodRateFactor);
-	_cwnd = std::max(kCwndMin, _cwnd / 2);
+	if (!_fixedCwnd) {
+		_cwnd = std::max(kCwndMin, _cwnd / 2);
+	}
 	_quietUntil = now + value * 1000 + jitter();
 	// Recover five seconds after the flood wait ends; multiplying the wait
 	// kept the limiter slow for minutes after a long FLOOD_WAIT.
@@ -176,10 +214,13 @@ void ChunkLimiter::cut(crl::time now) {
 		return;
 	}
 
+	if (!_fixedCwnd) {
+		_cwnd = kCwndMin;
+	}
+	resetLatency();
 	_state = ChunkState::Backoff;
 	_strikes = std::min(_strikes + 1, kMaxStrikes);
 	_lastStrike = now;
-	_cwnd = kCwndMin;
 	_nextGrow = now
 		+ kCutProofWindow
 		+ crl::time(_strikes - 1) * kStrikeInterval;
@@ -210,15 +251,21 @@ void ChunkLimiter::tick(crl::time now) {
 		return;
 	}
 	_nextGrow = now + kGrowInterval;
-	if (_latencyP95 > kLatencyHardLimitMs) {
+	if (_fixedCwnd) {
+		// The comparison run keeps the window pinned, but the rate still has
+		// to open up to the ceiling or the pin would never be reached.
 		_slowTicks = 0;
-		_cwnd = std::max<int>(kCwndMin, _cwnd / 2);
-		if (_state == ChunkState::Steady) {
-			_state = ChunkState::Warm;
-		}
+		_rate = std::min(_rate + kSteadyGrowthPerSecond, effectiveCeiling());
+		_state = ChunkState::Steady;
 		return;
 	}
-	if (_latencyP95 > kLatencyTargetMs) {
+	if ((_latencyP95 > kLatencyHardLimitMs
+			|| _latencyAvg > (_minRtt + kQueueCollapseMs))
+		&& _latencyCount >= kLatencySamplesForTrust) {
+		collapse(now);
+		return;
+	}
+	if (!delayOkay()) {
 		if (++_slowTicks >= 2) {
 			_slowTicks = 0;
 			_cwnd = std::max<int>(kCwndMin, int(_cwnd * 0.95));
@@ -235,10 +282,49 @@ void ChunkLimiter::tick(crl::time now) {
 	} else {
 		_rate = std::min(_rate + kSteadyGrowthPerSecond, ceiling);
 	}
-	_cwnd = std::min(_cwnd + 1, kCwndMax);
+	_cwnd = std::min(_cwnd + kCwndGrowthPerTick, kCwndMax);
 	if (_rate >= ceiling && _cwnd >= kCwndSteady) {
 		_state = ChunkState::Steady;
 	}
+}
+
+bool ChunkLimiter::delayOkay() const {
+	if (_fixedCwnd || _latencyCount < kLatencySamplesForTrust) {
+		return true;
+	}
+	const auto floor = (_minRtt > 0.) ? _minRtt : _latencyAvg;
+	return (_latencyAvg <= floor + kQueueBudgetMs);
+}
+
+void ChunkLimiter::collapse(crl::time now) {
+	// The requests admitted under the old window are still outstanding; the
+	// fetcher cancels and re-queues them by watching this counter. Dropping
+	// the in-flight count here keeps the window and the real concurrency equal
+	// instead of letting the old batch drain for a minute.
+	++_generation;
+	++_collapses;
+	if (_window) {
+		_window->used = std::max(0, _window->used - _inFlight);
+	}
+	_inFlight = 0;
+	if (!_fixedCwnd) {
+		_cwnd = kCwndMin;
+	}
+	_state = ChunkState::Warm;
+	_slowTicks = 0;
+	_nextGrow = now + kCollapseCooldown;
+	// The samples that caused the collapse describe the old window; keeping
+	// them would hold p95 high and block the recovery for minutes.
+	resetLatency();
+}
+
+void ChunkLimiter::resetLatency() {
+	_latencies = {};
+	_latencyCount = 0;
+	_latencyNext = 0;
+	_latencyAvg = 0.;
+	_latencyP95 = 0.;
+	_minRtt = 0.;
 }
 
 double ChunkLimiter::effectiveCeiling() const {
@@ -282,7 +368,16 @@ void ChunkLimiter::release() {
 void ChunkLimiter::pushLatency(crl::time took) {
 	_latencies[_latencyNext] = took;
 	_latencyNext = (_latencyNext + 1) % kLatencyWindow;
+	// The first sample after a reset seeds the average; starting from zero
+	// would make the queue estimate read low for the next twenty samples.
+	_latencyAvg = (_latencyCount > 0)
+		? (_latencyAvg * 0.9 + double(took) * 0.1)
+		: double(took);
 	_latencyCount = std::min(_latencyCount + 1, kLatencyWindow);
+	const auto value = double(took);
+	if (_minRtt <= 0. || value < _minRtt) {
+		_minRtt = value;
+	}
 	auto sorted = _latencies;
 	std::sort(sorted.begin(), sorted.begin() + _latencyCount);
 	const auto index = std::min(

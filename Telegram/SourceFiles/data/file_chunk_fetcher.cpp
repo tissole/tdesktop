@@ -154,10 +154,19 @@ void FileChunkFetcher::pump() {
 	_pumping = true;
 	const auto now = crl::now();
 	checkTransport(now);
+	auto collapsed = std::vector<MTP::DcId>();
 	for (auto &entry : _limiters) {
 		entry.second->tick(now);
+		auto &seen = _seenCollapses[entry.first];
+		if (seen != entry.second->collapses()) {
+			seen = entry.second->collapses();
+			collapsed.push_back(entry.first);
+		}
 	}
 	logStatus(now);
+	for (const auto bareDc : collapsed) {
+		reissueOutstanding(bareDc, crl::now(), false, false);
+	}
 
 	auto expired = std::vector<ChunkRequestId>();
 	auto ready = std::vector<ChunkRequestId>();
@@ -213,9 +222,10 @@ void FileChunkFetcher::send(ChunkRequestId id) {
 		_seenCuts[request.dcId] =
 			MTP::details::TransportFloodState(request.dcId).cuts;
 	}
-	// The first request on a lane pays for the session initConnection and is
-	// not a server queueing signal; every later request is sampled normally.
-	job.sampleLatency = (load.requests > 0);
+	// Requests admitted before the lane has answered once are usually queued
+	// behind its session creation, so their measured time is not a server
+	// queueing signal; only warm lanes are sampled.
+	job.sampleLatency = load.warm;
 	load.lastActivity = job.sentAt;
 	++load.requests;
 	scheduleIdleCheck();
@@ -298,6 +308,12 @@ void FileChunkFetcher::handleResponse(
 	job.requestId = 0;
 	noteActivity(job.request.dcId);
 	const auto bytes = BytesFromResponse(response);
+	if (!bytes.isEmpty()) {
+		const auto load = _loads.find(job.request.dcId);
+		if (load != end(_loads)) {
+			load->second.warm = true;
+		}
+	}
 	job.limiter->done(
 		crl::now() - job.sentAt,
 		int(bytes.size()),
@@ -381,16 +397,22 @@ void FileChunkFetcher::checkTransport(crl::time now) {
 		if (i->second->generation() == generation) {
 			continue;
 		}
-		reissueAfterCut(bareDc, now);
+		reissueOutstanding(bareDc, now, true, true);
 	}
 }
 
-void FileChunkFetcher::reissueAfterCut(MTP::DcId bareDc, crl::time now) {
-	for (auto &[shiftedDcId, load] : _loads) {
-		if (MTP::BareDcId(shiftedDcId) == bareDc) {
-			load = Load();
-			load.started = now;
-			load.lastActivity = now;
+void FileChunkFetcher::reissueOutstanding(
+		MTP::DcId bareDc,
+		crl::time now,
+		bool resetLoads,
+		bool countAttempt) {
+	if (resetLoads) {
+		for (auto &[shiftedDcId, load] : _loads) {
+			if (MTP::BareDcId(shiftedDcId) == bareDc) {
+				load = Load();
+				load.started = now;
+				load.lastActivity = now;
+			}
 		}
 	}
 	auto ids = std::vector<ChunkRequestId>();
@@ -409,7 +431,7 @@ void FileChunkFetcher::reissueAfterCut(MTP::DcId bareDc, crl::time now) {
 		job.sent = false;
 		job.requestId = 0;
 		job.retryAt = now;
-		if (++job.attempts > kMaxAttempts) {
+		if (countAttempt && ++job.attempts > kMaxAttempts) {
 			const auto done = std::move(job.done);
 			_jobs.erase(i);
 			if (done) {
