@@ -1938,6 +1938,7 @@ SessionPrivate::HandleResult SessionPrivate::handleOneReceived(
 				.reply = std::move(response),
 				.outerMsgId = info.outerMsgId,
 				.requestId = requestId,
+				.receivedAt = crl::now(),
 			});
 		} else {
 			DEBUG_LOG(("RPC Info: requestId not found for msgId %1").arg(requestMsgId));

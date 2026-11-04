@@ -46,11 +46,6 @@ QMutex *_logsMutex(LogDataType type, bool clear = false) {
 	} else if (!LogsMutexes) {
 		LogsMutexes = new QMutex[LogDataCount];
 	}
-	// Debug and MTP logs share one mutex: rotation closes and reopens both
-	// files, so they cannot be written on different threads at the same time.
-	if (type == LogDataMtp) {
-		type = LogDataDebug;
-	}
 	return &LogsMutexes[type];
 }
 
@@ -119,20 +114,24 @@ public:
 		WritingEntryScope scope;
 
 		if (type != LogDataMain) {
-			reopenDebug();
+			reopenTimed(type);
 		}
 		const auto file = files[type].get();
 		if (!file || !file->isOpen()) {
 			return;
 		}
 		file->write(msg.toUtf8());
-		file->flush();
+		// No flush per line: a written line is already in the operating
+		// system's cache, so it stays readable and survives a process crash,
+		// while an explicit flush is a disk barrier that can stall for long
+		// under the scan's own write load while the caller holds the log mutex
+		// that every other thread needs.
 	}
 
 private:
 	std::unique_ptr<QFile> files[LogDataCount];
 
-	int32 part = -1;
+	int32 parts[LogDataCount] = { -1, -1, -1 };
 
 	bool reopen(LogDataType type, int32 dayIndex, const QString &postfix) {
 		if (files[type] && files[type]->isOpen()) {
@@ -246,22 +245,21 @@ NEW LOGGING INSTANCE STARTED!!!\n\
 		return false;
 	}
 
-	void reopenDebug() {
+	void reopenTimed(LogDataType type) {
 		time_t t = time(NULL);
 		struct tm tm;
 		mylocaltime(&tm, &t);
 
 		static const int switchEach = 15; // minutes
 		int32 newPart = (tm.tm_min + tm.tm_hour * 60) / switchEach;
-		if (newPart == part) return;
+		if (newPart == parts[type]) return;
 
-		part = newPart;
+		parts[type] = newPart;
 
 		int32 dayIndex = (tm.tm_year + 1900) * 10000 + (tm.tm_mon + 1) * 100 + tm.tm_mday;
-		QString postfix = QString("_%4_%5").arg((part * switchEach) / 60, 2, 10, QChar('0')).arg((part * switchEach) % 60, 2, 10, QChar('0'));
+		QString postfix = QString("_%4_%5").arg((newPart * switchEach) / 60, 2, 10, QChar('0')).arg((newPart * switchEach) % 60, 2, 10, QChar('0'));
 
-		reopen(LogDataDebug, dayIndex, postfix);
-		reopen(LogDataMtp, dayIndex, postfix);
+		reopen(type, dayIndex, postfix);
 	}
 
 };

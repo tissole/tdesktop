@@ -239,8 +239,8 @@ void FileChunkFetcher::send(ChunkRequestId id) {
 		handleResponse(id, response);
 		return true;
 	};
-	auto onFail = [=](const MTP::Error &error, const MTP::Response &) {
-		handleError(id, error);
+	auto onFail = [=](const MTP::Error &error, const MTP::Response &response) {
+		handleError(id, error, response);
 		return true;
 	};
 	auto &mtp = _session->account().mtp();
@@ -314,8 +314,13 @@ void FileChunkFetcher::handleResponse(
 			load->second.warm = true;
 		}
 	}
+	// The callback runs on the main thread, so its own delay must not be read
+	// as server congestion: take the time the response actually arrived.
+	const auto arrived = response.receivedAt
+		? response.receivedAt
+		: crl::now();
 	job.limiter->done(
-		crl::now() - job.sentAt,
+		std::max<crl::time>(arrived - job.sentAt, 0),
 		int(bytes.size()),
 		job.generation,
 		job.sampleLatency);
@@ -329,7 +334,8 @@ void FileChunkFetcher::handleResponse(
 
 void FileChunkFetcher::handleError(
 		ChunkRequestId id,
-		const MTP::Error &error) {
+		const MTP::Error &error,
+		const MTP::Response &response) {
 	const auto i = _jobs.find(id);
 	if (i == _jobs.end()) {
 		return;
@@ -339,7 +345,8 @@ void FileChunkFetcher::handleError(
 		return;
 	}
 	const auto now = crl::now();
-	const auto took = now - job.sentAt;
+	const auto arrived = response.receivedAt ? response.receivedAt : now;
+	const auto took = std::max<crl::time>(arrived - job.sentAt, 0);
 	job.sent = false;
 	job.requestId = 0;
 	noteActivity(job.request.dcId);
@@ -517,6 +524,9 @@ void FileChunkFetcher::logStatus(crl::time now) {
 	if (now - _lastStatus < kStatusInterval) {
 		return;
 	}
+	const auto elapsed = std::max<int64>(
+		1,
+		_lastStatus ? (now - _lastStatus) : int64(kStatusInterval));
 	_lastStatus = now;
 	auto loads = base::flat_map<MTP::DcId, Load>();
 	for (const auto &[shiftedDcId, load] : _loads) {
@@ -530,10 +540,18 @@ void FileChunkFetcher::logStatus(crl::time now) {
 	for (const auto &entry : _limiters) {
 		const auto &limiter = *entry.second;
 		auto &load = loads[entry.first];
-		LOG(("Chunk dc:%1 state:%2 rate:%3 cwnd:%4 inflight:%5 p95:%6ms avg:%7ms age:%8s req:%9"
+		// What actually left the app over this interval, next to the rate the
+		// throttle allows: the two differ exactly by the time the main thread
+		// was busy, which is what the scan has to keep small.
+		auto &previous = _loggedRequests[entry.first];
+		const auto delta = std::max(0, load.requests - previous);
+		previous = load.requests;
+		const auto actual = int(int64(delta) * 1000 / elapsed);
+		LOG(("Chunk dc:%1 state:%2 rate:%3 actual:%4/s cwnd:%5 inflight:%6 p95:%7ms avg:%8ms age:%9s req:%10"
 			).arg(entry.first
 			).arg(int(limiter.currentState())
 			).arg(int(limiter.rate())
+			).arg(actual
 			).arg(limiter.window()
 			).arg(limiter.inFlight()
 			).arg(int(limiter.latencyP95())

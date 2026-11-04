@@ -99,7 +99,10 @@ private:
 	void send(ChunkRequestId id);
 	void timeout(ChunkRequestId id, crl::time now);
 	void handleResponse(ChunkRequestId id, const MTP::Response &response);
-	void handleError(ChunkRequestId id, const MTP::Error &error);
+	void handleError(
+		ChunkRequestId id,
+		const MTP::Error &error,
+		const MTP::Response &response);
 	void checkTransport(crl::time now);
 	void reissueOutstanding(
 		MTP::DcId bareDc,
@@ -123,6 +126,7 @@ private:
 	base::flat_map<MTP::ShiftedDcId, uint64> _seenCuts;
 	base::flat_map<MTP::DcId, int> _seenCollapses;
 	base::flat_map<MTP::ShiftedDcId, Load> _loads;
+	base::flat_map<MTP::DcId, int> _loggedRequests;
 	base::flat_map<MTP::ShiftedDcId, crl::time> _laneReadyAt;
 	std::map<ChunkRequestId, Job> _jobs;
 	base::Timer _timer;

@@ -38,6 +38,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <limits>
 #include <optional>
 
+#include <crl/crl.h>
+
 namespace ChatScan {
 namespace {
 
@@ -52,6 +54,10 @@ constexpr auto kStarvationDelayMs = crl::time(5000);
 constexpr auto kStarvationLogMs = crl::time(10000);
 constexpr auto kRecoveryBatchErrorCeil = 3;
 constexpr auto kScanTakeoutMaxFileBytes = 4000LL * 1024 * 1024;
+// How long one loop turn may spend applying finished hashes before the rest
+// goes to the next turn. The throttle covers about 35 ms of silence with its
+// burst, so a turn has to stay well under that on any machine.
+constexpr auto kApplyTurnBudgetMs = 20;
 [[nodiscard]] crl::time RecoveryDelay(int32 above, int pos) {
 	return crl::time(kRecoverySpacingMs)
 		+ crl::time((uint64(above) * 13 + uint64(pos) * 7) % kPageJitterMs);
@@ -290,6 +296,11 @@ void Api::pause() {
 		return;
 	}
 	const auto started = crl::now();
+	// The paused cursor has to describe stored rows, so everything already
+	// finished is applied before the cursor is written.
+	if (!_pendingHashed.empty()) {
+		drainHashed(std::numeric_limits<int>::max());
+	}
 	finishBorrowedTakeout();
 	_paused = true;
 	++_resumeGen;
@@ -405,6 +416,7 @@ void Api::cancel() {
 	_photos.clear();
 	_seenDocs.clear();
 	_seenPhotos.clear();
+	clearHashedBatch();
 	_uniqueHashes.clear();
 	_queue->clearKnownHashes();
 	db().clearChatTable();
@@ -791,12 +803,18 @@ void Api::addDocOccurrence(
 	item.sessionId = _sessionId;
 	_documents[document->id] = document.get();
 	if (!_seenDocs.insert(document->id).second) {
-		// A second occurrence needs no hash of its own: the media
-		// representative's commit fills this row too. Keeping it out of the queue is
-		// what makes the walker's outstanding counter match one lease per
-		// media id.
+		// A second occurrence is never hashed on its own: one hash per media
+		// id is enough, and staying out of the queue is what makes the
+		// walker's outstanding counter match one lease per media id. The
+		// representative's commit fills the rows that exist at that moment,
+		// but the walk goes newest to oldest, so an older occurrence is
+		// usually inserted long after that commit has run. Carrying the
+		// already known hash over keeps this row resolvable on its own.
 		item.state = skipped ? 4 : 2;
 		item.isDup = true;
+		if (!skipped) {
+			item.hash = knownHashForMedia(item.mediaId, item.isPhoto);
+		}
 		_pageItems.push_back(item);
 		auto &totals = _totals[type];
 		totals.dupCount++;
@@ -835,6 +853,9 @@ void Api::addPhotoOccurrence(
 	if (!_seenPhotos.insert(photo->id).second) {
 		item.state = skipped ? 4 : 2;
 		item.isDup = true;
+		if (!skipped) {
+			item.hash = knownHashForMedia(item.mediaId, item.isPhoto);
+		}
 		_pageItems.push_back(item);
 		auto &totals = _totals[int(Type::Photo)];
 		totals.dupCount++;
@@ -915,6 +936,9 @@ void Api::rescanAfterTakeout() {
 	_failedHashes = _queue->failed();
 	loadStickerIndexAsync();
 	loadKnownHashes(nullptr);
+	// Results that finished under the previous session still describe the same
+	// rows, so they are stored before the unique-hash map is rebuilt.
+	drainHashed(std::numeric_limits<int>::max());
 	_uniqueHashes.clear();
 	_rebuildAboveBare = 0;
 	_rebuilding = true;
@@ -1382,6 +1406,7 @@ void Api::recoverFromCursor(const Data::ChatScanState &cursor) {
 	_photos.clear();
 	_seenDocs.clear();
 	_seenPhotos.clear();
+	clearHashedBatch();
 	_uniqueHashes.clear();
 	_stickerTotal = 0;
 	_staleMedia.clear();
@@ -1865,6 +1890,13 @@ QString Api::filenameForMedia(uint64 mediaId, bool isPhoto) const {
 	return _session->data().document(mediaId)->filename();
 }
 
+QByteArray Api::knownHashForMedia(uint64 mediaId, bool isPhoto) const {
+	return _queue->knownHash(
+		mediaId,
+		isPhoto,
+		GetEnhancedBool("prevent_upload_duplicates"));
+}
+
 void Api::applyOwnerDecision(
 		const Data::ChatScanItem &item,
 		const QByteArray &hash,
@@ -1938,6 +1970,14 @@ void Api::onHashed(
 	}
 	_queueOutstanding = std::max(0, _queueOutstanding - 1);
 	_queue->rememberHash(item.mediaId, item.isPhoto, hash);
+	// Owner election is a database session per finished file; it is deferred
+	// to the commit batch so a response callback only appends here.
+	_pendingHashed.push_back({ item, hash });
+}
+
+void Api::applyHashed(const PendingHash &entry) {
+	const auto &item = entry.item;
+	const auto &hash = entry.hash;
 	const auto tierOn = GetEnhancedBool("prevent_upload_duplicates");
 	auto i = _uniqueHashes.find(hash);
 	const auto uniqueMsgId = (i != _uniqueHashes.end())
@@ -2005,7 +2045,69 @@ void Api::onHashed(
 			item.size,
 		};
 	}
+}
+
+void Api::applyHashedBatch() {
+	if (_pendingHashedPos >= int(_pendingHashed.size())) {
+		return;
+	}
+	if (_cancelled || _failed) {
+		clearHashedBatch();
+		return;
+	}
+	if (_drainScheduled) {
+		return;
+	}
+	_drainScheduled = true;
+	drainHashed(kApplyTurnBudgetMs);
+}
+
+void Api::drainHashed(int budgetMs) {
+	if (_cancelled || _failed) {
+		clearHashedBatch();
+		return;
+	}
+	if (_pendingHashedPos >= int(_pendingHashed.size())) {
+		clearHashedBatch();
+		return;
+	}
+	const auto started = crl::now();
+	const auto appliedFrom = _pendingHashedPos;
+	// One transaction per turn: every applyHashed() session nests into it
+	// instead of committing on its own, so the write-ahead log does not grow
+	// once per file and its checkpoints stay small and rare.
+	db().beginTransaction();
+	while (_pendingHashedPos < int(_pendingHashed.size())) {
+		applyHashed(_pendingHashed[_pendingHashedPos++]);
+		if (crl::now() - started >= budgetMs) {
+			break;
+		}
+	}
+	db().commitTransaction();
+	const auto elapsed = crl::now() - started;
+	if (elapsed > 40) {
+		LOG(("ChatScan: applying %1 hashes took %2 ms."
+			).arg(_pendingHashedPos - appliedFrom).arg(elapsed));
+	}
 	publish();
+	if (_pendingHashedPos < int(_pendingHashed.size())) {
+		// The rest waits for the next loop turn: a turn longer than the
+		// throttle's burst costs the rate the whole scan is tuned for.
+		const auto weak = base::weak_ptr<Api>(this);
+		crl::on_main([weak] {
+			if (const auto strong = weak.get()) {
+				strong->drainHashed(kApplyTurnBudgetMs);
+			}
+		});
+		return;
+	}
+	clearHashedBatch();
+}
+
+void Api::clearHashedBatch() {
+	_drainScheduled = false;
+	_pendingHashed.clear();
+	_pendingHashedPos = 0;
 }
 
 void Api::onHashFailed(const Data::ChatScanItem &) {
@@ -2019,6 +2121,7 @@ void Api::onHashFailed(const Data::ChatScanItem &) {
 
 void Api::onHashCommitted(int resolved) {
 	_hashDone += resolved;
+	applyHashedBatch();
 	publish();
 }
 
@@ -2068,6 +2171,11 @@ void Api::finalizeAndWrite() {
 	}
 	stopScheduler();
 	_scheduler->flush();
+	// Everything finished must be applied before the aggregates are written,
+	// so this turn ignores the budget the normal drain uses.
+	if (!_pendingHashed.empty()) {
+		drainHashed(std::numeric_limits<int>::max());
+	}
 	finishBorrowedTakeout();
 	writeAggregateRows();
 }

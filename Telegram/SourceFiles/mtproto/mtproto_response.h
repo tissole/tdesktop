@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include <crl/crl_time.h>
+
 #include "base/flat_set.h"
 
 class QDebug;
@@ -72,6 +74,10 @@ struct Response {
 	mtpBuffer reply;
 	mtpMsgId outerMsgId = 0;
 	mtpRequestId requestId = 0;
+	// Arrival time on the network thread, so a caller can tell how much of a
+	// request's wall time was the network and how much was the main thread
+	// picking the result up.
+	crl::time receivedAt = 0;
 };
 
 using DoneHandler = FnMut<bool(const Response&)>;

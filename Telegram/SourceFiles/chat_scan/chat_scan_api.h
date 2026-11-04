@@ -94,6 +94,11 @@ public:
 	void finishTakeout();
 
 private:
+	struct PendingHash {
+		Data::ChatScanItem item;
+		QByteArray hash;
+	};
+
 	void requestPage();
 	void schedulePage();
 	void startScheduler();
@@ -146,6 +151,10 @@ private:
 	void logSchedulerStarvation();
 	void maybeFinalize();
 	void onHashed(const Data::ChatScanItem &item, const QByteArray &hash);
+	void applyHashed(const PendingHash &entry);
+	void applyHashedBatch();
+	void drainHashed(int budgetMs);
+	void clearHashedBatch();
 	void applyOwnerDecision(
 		const Data::ChatScanItem &item,
 		const QByteArray &hash,
@@ -153,6 +162,9 @@ private:
 	void onHashFailed(const Data::ChatScanItem &item);
 	void demoteToDuplicate(const Data::ChatScanItem &item);
 	[[nodiscard]] QString filenameForMedia(
+		uint64 mediaId,
+		bool isPhoto) const;
+	[[nodiscard]] QByteArray knownHashForMedia(
 		uint64 mediaId,
 		bool isPhoto) const;
 	void loadKnownHashes(Fn<void()> done);
@@ -202,6 +214,9 @@ private:
 	QHash<QByteArray, UniqueHash> _uniqueHashes;
 	std::vector<Data::ChatScanItem> _pageItems;
 	std::vector<MsgId> _pageStickers;
+	std::vector<PendingHash> _pendingHashed;
+	int _pendingHashedPos = 0;
+	bool _drainScheduled = false;
 	int _stickerTotal = 0;
 	std::vector<int32> _recoveryIds;
 	int _recoveryPos = 0;

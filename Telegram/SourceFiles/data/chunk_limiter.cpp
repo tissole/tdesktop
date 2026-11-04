@@ -50,7 +50,15 @@ constexpr auto kRefillClamp = crl::time(1000);
 // The pump runs on every response and the bucket refills between pumps. A cap
 // of one token clipped that credit and the rate settled at ~80% of the ceiling;
 // a few tokens of credit let the next pump spend the difference.
-constexpr auto kTokenBurst = 4.;
+//
+// The bucket is refilled only when the pump runs, so every turn that keeps the
+// main thread busy silently discards the rate credit of that turn: with a cap
+// of 4 anything longer than ~35 ms at 115/s was lost and the scan never reached
+// its own ceiling, even though nothing was actually late. A scan turn can take
+// a few hundred milliseconds (a database commit at its end), so the cap has to
+// cover one such turn: 32 tokens is ~280 ms of credit at the current ceiling,
+// which still bounds the catch-up burst the server sees.
+constexpr auto kTokenBurst = 32.;
 constexpr auto kRetryIn = crl::time(20);
 
 constexpr auto kFloodRateFactor = 0.6;
