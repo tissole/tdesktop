@@ -126,6 +126,7 @@ private:
 	base::flat_map<MTP::ShiftedDcId, uint64> _seenCuts;
 	base::flat_map<MTP::DcId, int> _seenCollapses;
 	base::flat_map<MTP::ShiftedDcId, Load> _loads;
+	base::flat_map<MTP::DcId, int> _loggedRequests;
 	base::flat_map<MTP::ShiftedDcId, crl::time> _laneReadyAt;
 	std::map<ChunkRequestId, Job> _jobs;
 	base::Timer _timer;

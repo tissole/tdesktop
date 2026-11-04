@@ -380,6 +380,7 @@ struct ScanJobOptions {
 	int oldPhase = 0;
 	int64 oldElapsedMs = 0;
 	int oldDedupMode = 0;
+	std::vector<ChatScanCategoryTotals> totals;
 };
 
 [[nodiscard]] QByteArray SerializeScanJob(const ScanJobOptions &options) {
@@ -400,6 +401,14 @@ struct ScanJobOptions {
 	stream << qint32(options.oldPhase);
 	stream << qint64(options.oldElapsedMs);
 	stream << qint32(options.oldDedupMode);
+	stream << qint32(int(options.totals.size()));
+	for (const auto &row : options.totals) {
+		stream << qint32(row.category);
+		stream << qint64(row.uniqueCount);
+		stream << qint64(row.uniqueBytes);
+		stream << qint64(row.dupCount);
+		stream << qint64(row.dupBytes);
+	}
 	return result;
 }
 
@@ -447,6 +456,33 @@ struct ScanJobOptions {
 	result.oldPhase = oldPhase;
 	result.oldElapsedMs = oldElapsedMs;
 	result.oldDedupMode = oldDedupMode;
+	if (!stream.atEnd()) {
+		auto count = qint32();
+		stream >> count;
+		if (stream.status() != QDataStream::Ok || count < 0 || count > 64) {
+			return std::nullopt;
+		}
+		result.totals.reserve(size_t(count));
+		for (auto i = 0; i != count; ++i) {
+			auto row = ChatScanCategoryTotals();
+			auto category = qint32();
+			auto uniqueCount = qint64();
+			auto uniqueBytes = qint64();
+			auto dupCount = qint64();
+			auto dupBytes = qint64();
+			stream >> category >> uniqueCount >> uniqueBytes
+				>> dupCount >> dupBytes;
+			if (stream.status() != QDataStream::Ok) {
+				return std::nullopt;
+			}
+			row.category = category;
+			row.uniqueCount = uniqueCount;
+			row.uniqueBytes = uniqueBytes;
+			row.dupCount = dupCount;
+			row.dupBytes = dupBytes;
+			result.totals.push_back(row);
+		}
+	}
 	return result;
 }
 
@@ -800,30 +836,14 @@ std::optional<std::vector<ChatScanRow>> ReadChatScanIn(
 		PeerId peerId) {
 	auto result = std::vector<ChatScanRow>();
 	auto options = ReadScanJobOptionsIn(db, peerId).value_or(ScanJobOptions());
-	QSqlQuery q(db);
-	q.prepare(u"SELECT category, "
-		"SUM(CASE WHEN is_dup = 0 THEN 1 ELSE 0 END), "
-		"SUM(CASE WHEN is_dup = 0 THEN size ELSE 0 END), "
-		"SUM(CASE WHEN is_dup = 1 THEN 1 ELSE 0 END), "
-		"SUM(CASE WHEN is_dup = 1 THEN size ELSE 0 END) "
-		"FROM chat_scan_items WHERE peer_id = :peer_id "
-		"AND tracked = 1 "
-		"GROUP BY category ORDER BY category"_q);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	if (!q.exec()) {
-		LOG(("DedupDb: ReadChatScan failed: %1").arg(
-			q.lastError().text()));
-		return std::nullopt;
-	}
-	while (q.next()) {
+	for (const auto &totals : options.totals) {
 		auto row = ChatScanRow();
 		row.peerId = peerId;
-		row.category = q.value(0).toInt();
-		row.uniqueCount = int(q.value(1).toLongLong());
-		row.uniqueBytes = q.value(2).toLongLong();
-		row.dupCount = int(q.value(3).toLongLong());
-		row.dupBytes = q.value(4).toLongLong();
+		row.category = totals.category;
+		row.uniqueCount = int(totals.uniqueCount);
+		row.uniqueBytes = totals.uniqueBytes;
+		row.dupCount = int(totals.dupCount);
+		row.dupBytes = totals.dupBytes;
 		row.scannedUpto = options.scannedUpto;
 		row.scanFinished = options.scanFinished;
 		row.deleteFinished = options.deleteFinished;
@@ -1479,7 +1499,8 @@ public:
 	[[nodiscard]] bool promoteOwnerLocked(
 		uint64 hashId,
 		PeerId peerId,
-		MsgId msgId);
+		MsgId msgId,
+		bool markHashed = false);
 	[[nodiscard]] std::optional<ChatScanOwnerDecision>
 	chatScanApplyHashOwner(
 		PeerId peerId,
@@ -1488,6 +1509,13 @@ public:
 		bool isPhoto,
 		const QByteArray &hash,
 		bool mediaDuplicate,
+		const QString &filename,
+		uint64 scanSessionId);
+	void chatScanMarkHashed(
+		PeerId peerId,
+		MsgId msgId,
+		const QByteArray &hash,
+		bool isDup,
 		const QString &filename);
 	[[nodiscard]] bool recordUploadDestination(
 		const QByteArray &hash,
@@ -1533,9 +1561,18 @@ public:
 	[[nodiscard]] bool jobContainsHash(
 		uint64 jobId,
 		uint64 hashId) const;
-	void insert(Table table, const DedupRecord &record);
-	void insertLoaded(Table table, const DedupRecord &record);
-	void insertDeferred(Table table, const DedupRecord &record);
+	void insert(
+		Table table,
+		const DedupRecord &record,
+		uint64 knownHashId = 0);
+	void insertLoaded(
+		Table table,
+		const DedupRecord &record,
+		uint64 knownHashId);
+	void insertDeferred(
+		Table table,
+		const DedupRecord &record,
+		uint64 knownHashId);
 	void forgetLoadedDoc(Table table, uint64 documentId, bool isPhoto);
 	[[nodiscard]] bool containsDocId(
 		Table table,
@@ -1748,7 +1785,20 @@ public:
 		MsgId scannedUpto,
 		int mode,
 		bool deleteFinished,
-		int64 elapsedMs);
+		int64 elapsedMs,
+		const std::vector<ChatScanCategoryTotals> &totals);
+	void adjustChatScanTotals(
+		PeerId peerId,
+		int category,
+		int64 uniqueCount,
+		int64 uniqueBytes,
+		int64 dupCount,
+		int64 dupBytes);
+	[[nodiscard]] std::vector<ChatScanCategoryTotals> chatScanTotals(
+		PeerId peerId) const;
+	void writeChatScanTotals(
+		PeerId peerId,
+		const std::vector<ChatScanCategoryTotals> &totals);
 	[[nodiscard]] MsgId chatScanScannedUpto(PeerId peerId) const;
 	[[nodiscard]] int chatScanMode(PeerId peerId) const;
 	void writeChatScanMode(PeerId peerId, int mode);
@@ -1770,7 +1820,9 @@ public:
 		PeerId peerId,
 		MsgId msgId,
 		bool isDup,
-		const QString &filename);
+		const QString &filename,
+		bool saveUndo = true,
+		uint64 hashId = 0);
 	void saveChatScanUndo(PeerId peerId, MsgId msgId);
 	[[nodiscard]] bool beginChatScanSession(
 		PeerId peerId,
@@ -2500,6 +2552,8 @@ uint64 DedupDb::Impl::resolveHashId(const QByteArray &hash) {
 	if (!_open || hash.isEmpty()) {
 		return 0;
 	}
+	// A new content is the common case in a scan, and there the id is the one
+	// the insert just created, so the lookup statement is skipped entirely.
 	QSqlQuery insert(_db);
 	insert.prepare(u"INSERT OR IGNORE INTO hashes(hash) VALUES(:hash)"_q);
 	insert.bindValue(u":hash"_q, hash);
@@ -2507,6 +2561,11 @@ uint64 DedupDb::Impl::resolveHashId(const QByteArray &hash) {
 		LOG(("DedupDb: ResolveHashId insert failed: %1").arg(
 			insert.lastError().text()));
 		return 0;
+	}
+	if (insert.numRowsAffected() > 0) {
+		if (const auto id = insert.lastInsertId().toULongLong()) {
+			return id;
+		}
 	}
 	QSqlQuery select(_db);
 	select.prepare(u"SELECT hash_id FROM hashes WHERE hash = :hash"_q);
@@ -2661,12 +2720,24 @@ std::optional<HashOwner> DedupDb::Impl::findReplacementOwner(
 bool DedupDb::Impl::promoteOwnerLocked(
 		uint64 hashId,
 		PeerId peerId,
-		MsgId msgId) {
+		MsgId msgId,
+		bool markHashed) {
 	const auto old = hashOwner(hashId);
 	QSqlQuery promote(_db);
-	promote.prepare(u"UPDATE chat_scan_items SET is_dup = 0, "
-		"filename = NULL WHERE peer_id = :peer_id "
-		"AND msg_id = :msg_id"_q);
+	if (markHashed) {
+		// The same statement that gives this message the kept copy also
+		// records its content id and marks the file hashed.
+		promote.prepare(u"UPDATE chat_scan_items SET is_dup = 0, "
+			"filename = NULL, hash_id = :hash_id, state = 2, "
+			"lease_until = 0, tracked = 1 WHERE peer_id = :peer_id "
+			"AND msg_id = :msg_id"_q);
+		promote.bindValue(u":hash_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(hashId)));
+	} else {
+		promote.prepare(u"UPDATE chat_scan_items SET is_dup = 0, "
+			"filename = NULL WHERE peer_id = :peer_id "
+			"AND msg_id = :msg_id"_q);
+	}
 	promote.bindValue(u":peer_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(peerId.value)));
 	promote.bindValue(u":msg_id"_q, QVariant::fromValue(
@@ -2746,20 +2817,37 @@ DedupDb::Impl::chatScanApplyHashOwner(
 		bool isPhoto,
 		const QByteArray &hash,
 		bool mediaDuplicate,
-		const QString &filename) {
+		const QString &filename,
+		uint64 scanSessionId) {
 	if (!_open || !peerId || !msgId || hash.isEmpty()) {
-		return std::nullopt;
-	}
-	const auto hashId = resolveHashId(hash);
-	if (!hashId) {
 		return std::nullopt;
 	}
 	beginTransaction();
 	auto decision = ChatScanOwnerDecision();
+	auto needsUndo = true;
+	auto owner = std::optional<HashOwner>();
+	// Register the content first: this statement creates the row the decision
+	// below refers to, and for content seen before it is the only lookup.
+	const auto hashId = resolveHashId(hash);
+	if (!hashId) {
+		commitTransaction();
+		return std::nullopt;
+	}
 	{
 		QSqlQuery q(_db);
-		q.prepare(u"SELECT is_dup FROM chat_scan_items "
-			"WHERE peer_id = :peer_id AND msg_id = :msg_id"_q);
+		// One read for the row and the current kept copy: the owner used to be
+		// a second statement, and the row's hash id is no longer needed here
+		// because the decision writes it.
+		q.prepare(u"SELECT i.is_dup, i.session_id, "
+			"h.owner_peer_id, h.owner_msg_id, "
+			"COALESCE(o.tracked, 0), (o.peer_id IS NOT NULL) "
+			"FROM chat_scan_items i "
+			"LEFT JOIN hashes h ON h.hash_id = :hash_id "
+			"LEFT JOIN chat_scan_items o ON o.peer_id = h.owner_peer_id "
+			"AND o.msg_id = h.owner_msg_id "
+			"WHERE i.peer_id = :peer_id AND i.msg_id = :msg_id"_q);
+		q.bindValue(u":hash_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(hashId)));
 		q.bindValue(u":peer_id"_q, QVariant::fromValue(
 			static_cast<qulonglong>(peerId.value)));
 		q.bindValue(u":msg_id"_q, QVariant::fromValue(
@@ -2775,25 +2863,18 @@ DedupDb::Impl::chatScanApplyHashOwner(
 			return std::nullopt;
 		}
 		decision.wasDup = (q.value(0).toInt() != 0);
-	}
-	{
-		QSqlQuery q(_db);
-		q.prepare(u"UPDATE chat_scan_items SET hash_id = :hash_id, "
-			"tracked = 1 WHERE peer_id = :peer_id "
-			"AND msg_id = :msg_id"_q);
-		q.bindValue(u":hash_id"_q, QVariant::fromValue(
-			static_cast<qulonglong>(hashId)));
-		q.bindValue(u":peer_id"_q, QVariant::fromValue(
-			static_cast<qulonglong>(peerId.value)));
-		q.bindValue(u":msg_id"_q, QVariant::fromValue(
-			static_cast<qlonglong>(msgId.bare)));
-		if (!q.exec() || q.numRowsAffected() <= 0) {
-			if (q.lastError().isValid()) {
-				LOG(("DedupDb: ScanOwner row update failed: %1").arg(
-					q.lastError().text()));
-			}
-			commitTransaction();
-			return std::nullopt;
+		// A row this same scan session wrote has no older verdict to undo.
+		needsUndo = !scanSessionId
+			|| (q.value(1).toULongLong() != scanSessionId);
+		const auto ownerPeer = PeerId(q.value(2).toULongLong());
+		const auto ownerMsg = MsgId(q.value(3).toLongLong());
+		if (ownerPeer && ownerMsg) {
+			owner = HashOwner{
+				ownerPeer,
+				ownerMsg,
+				(q.value(4).toInt() != 0),
+				(q.value(5).toInt() != 0),
+			};
 		}
 	}
 	if (mediaId) {
@@ -2802,20 +2883,22 @@ DedupDb::Impl::chatScanApplyHashOwner(
 			.documentId = mediaId,
 			.isPhoto = isPhoto,
 			.status = u"f"_q,
-		});
+		}, hashId);
 	}
 	const auto setCurrent = [&](bool isDup) {
 		markChatScanItemDup(
 			peerId,
 			msgId,
 			isDup,
-			isDup ? filename : QString());
+			isDup ? filename : QString(),
+			needsUndo,
+			hashId);
 		decision.isDup = isDup;
 	};
 	if (mediaDuplicate) {
 		setCurrent(true);
+		decision.owner = std::move(owner);
 	} else {
-		const auto owner = hashOwner(hashId);
 		if (!owner || !owner->exists) {
 			if (owner) {
 				clearOwner(hashId);
@@ -2824,9 +2907,11 @@ DedupDb::Impl::chatScanApplyHashOwner(
 				setOwner(hashId, peerId, msgId);
 			}
 			setCurrent(false);
+			decision.owner = HashOwner{ peerId, msgId, true, true };
 		} else if (owner->peerId == peerId
 			&& owner->msgId == msgId) {
 			setCurrent(false);
+			decision.owner = std::move(owner);
 		} else {
 			const auto promoteCurrent = [&] {
 				const auto old = chatScanItem(
@@ -2835,11 +2920,13 @@ DedupDb::Impl::chatScanApplyHashOwner(
 				if (old) {
 					decision.demoted = *old;
 				}
-				saveChatScanUndo(peerId, msgId);
+				if (needsUndo) {
+					saveChatScanUndo(peerId, msgId);
+				}
 				if (old) {
 					saveChatScanUndo(owner->peerId, owner->msgId);
 				}
-				if (promoteOwnerLocked(hashId, peerId, msgId)) {
+				if (promoteOwnerLocked(hashId, peerId, msgId, true)) {
 					decision.isDup = false;
 				} else {
 					decision.demoted.reset();
@@ -2853,9 +2940,12 @@ DedupDb::Impl::chatScanApplyHashOwner(
 			} else {
 				setCurrent(true);
 			}
+			decision.owner = decision.isDup
+				? std::move(owner)
+				: std::optional<HashOwner>(HashOwner{
+					peerId, msgId, true, true });
 		}
 	}
-	decision.owner = hashOwner(hashId);
 	commitTransaction();
 	if (decision.demoted) {
 		removeChatTableUnique(
@@ -2871,6 +2961,30 @@ DedupDb::Impl::chatScanApplyHashOwner(
 		invalidateAllPeersChatTable();
 	}
 	return decision;
+}
+
+void DedupDb::Impl::chatScanMarkHashed(
+		PeerId peerId,
+		MsgId msgId,
+		const QByteArray &hash,
+		bool isDup,
+		const QString &filename) {
+	if (!_open || !peerId || !msgId || hash.isEmpty()) {
+		return;
+	}
+	const auto hashId = resolveHashId(hash);
+	if (!hashId) {
+		return;
+	}
+	// No undo record: the row was written by the scan session that is running
+	// now, so there is no older verdict to restore.
+	markChatScanItemDup(
+		peerId,
+		msgId,
+		isDup,
+		isDup ? filename : QString(),
+		false,
+		hashId);
 }
 
 bool DedupDb::Impl::recordUploadDestination(
@@ -2901,17 +3015,13 @@ bool DedupDb::Impl::recordUploadDestination(
 		setOwner(hashId, peerId, msgId);
 	} else if (owner->peerId == peerId && owner->msgId == msgId) {
 		isDup = false;
-	} else if (owner->peerId == peerId) {
-		if (owner->msgId.bare < msgId.bare) {
-			demoted = owner;
-			setOwner(hashId, peerId, msgId);
-		} else {
-			isDup = true;
-		}
 	} else if (!owner->tracked && tracked) {
 		demoted = owner;
 		setOwner(hashId, peerId, msgId);
 	} else {
+		// A new message never takes the kept copy away from an existing one
+		// here: outside a scan the newest-copy rule does not apply, the new
+		// message is simply a duplicate.
 		isDup = true;
 	}
 	if (demoted) {
@@ -3507,22 +3617,26 @@ void DedupDb::Impl::purgeOrphanBatchJobs(
 	}
 }
 
-void DedupDb::Impl::insert(Table table, const DedupRecord &record) {
+void DedupDb::Impl::insert(
+		Table table,
+		const DedupRecord &record,
+		uint64 knownHashId) {
 	auto loaded = false;
 	{
 		std::lock_guard<std::mutex> lock(_shared->mutex);
 		loaded = _shared->state[int(table)].loaded;
 	}
 	if (loaded) {
-		insertLoaded(table, record);
+		insertLoaded(table, record, knownHashId);
 	} else {
-		insertDeferred(table, record);
+		insertDeferred(table, record, knownHashId);
 	}
 }
 
 void DedupDb::Impl::insertLoaded(
 		Table table,
-		const DedupRecord &record) {
+		const DedupRecord &record,
+		uint64 knownHashId) {
 	const auto type = record.isPhoto ? 1 : 0;
 	auto exists = false;
 	auto oldHash = QByteArray();
@@ -3572,7 +3686,9 @@ void DedupDb::Impl::insertLoaded(
 	if (hasRow && oldHash == record.hash && oldStatus == record.status) {
 		return;
 	}
-	const auto hashId = resolveHashId(record.hash);
+	const auto hashId = knownHashId
+		? knownHashId
+		: resolveHashId(record.hash);
 	if (!hashId) {
 		return;
 	}
@@ -3606,16 +3722,19 @@ void DedupDb::Impl::insertLoaded(
 
 void DedupDb::Impl::insertDeferred(
 		Table table,
-		const DedupRecord &record) {
+		const DedupRecord &record,
+		uint64 knownHashId) {
 	if (!_open || record.hash.isEmpty()) {
 		return;
 	}
-	const auto hashId = resolveHashId(record.hash);
+	const auto hashId = knownHashId
+		? knownHashId
+		: resolveHashId(record.hash);
 	if (!hashId) {
 		return;
 	}
 	auto oldHashId = uint64(0);
-	{
+	if (!knownHashId) {
 		QSqlQuery select(_db);
 		select.prepare(u"SELECT hash_id FROM " + TableName(table)
 			+ u" WHERE doc_id = :doc_id AND is_photo = :is_photo"_q);
@@ -5182,7 +5301,8 @@ std::optional<ChatScanOwnerDecision> DedupDb::chatScanApplyHashOwner(
 		bool isPhoto,
 		const QByteArray &hash,
 		bool mediaDuplicate,
-		const QString &filename) {
+		const QString &filename,
+		uint64 scanSessionId) {
 	return _impl->chatScanApplyHashOwner(
 		peerId,
 		msgId,
@@ -5190,7 +5310,17 @@ std::optional<ChatScanOwnerDecision> DedupDb::chatScanApplyHashOwner(
 		isPhoto,
 		hash,
 		mediaDuplicate,
-		filename);
+		filename,
+		scanSessionId);
+}
+
+void DedupDb::chatScanMarkHashed(
+		PeerId peerId,
+		MsgId msgId,
+		const QByteArray &hash,
+		bool isDup,
+		const QString &filename) {
+	_impl->chatScanMarkHashed(peerId, msgId, hash, isDup, filename);
 }
 
 bool DedupDb::recordUploadDestination(
@@ -5736,43 +5866,24 @@ int DedupDb::Impl::chatScanDupCount(PeerId peerId, int category) const {
 	if (!_open) {
 		return 0;
 	}
-	auto sql = u"SELECT COUNT(*) FROM chat_scan_items "
-		"WHERE peer_id = :peer_id AND is_dup = 1 "
-		"AND tracked = 1"_q;
-	if (category >= 0) {
-		sql += u" AND category = :category"_q;
+	auto result = int64(0);
+	for (const auto &row : chatScanTotals(peerId)) {
+		if (category < 0 || row.category == category) {
+			result += row.dupCount;
+		}
 	}
-	QSqlQuery q(_db);
-	q.prepare(sql);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	if (category >= 0) {
-		q.bindValue(u":category"_q, category);
-	}
-	if (!q.exec()) {
-		LOG(("DedupDb: ChatScanDupCount failed: %1").arg(
-			q.lastError().text()));
-		return 0;
-	}
-	return q.next() ? q.value(0).toInt() : 0;
+	return int(result);
 }
 
 int64 DedupDb::Impl::chatScanDupBytes(PeerId peerId) const {
 	if (!_open) {
 		return 0;
 	}
-	QSqlQuery q(_db);
-	q.prepare(u"SELECT SUM(size) FROM chat_scan_items "
-		"WHERE peer_id = :peer_id AND is_dup = 1 "
-		"AND tracked = 1"_q);
-	q.bindValue(u":peer_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(peerId.value)));
-	if (!q.exec()) {
-		LOG(("DedupDb: ChatScanDupBytes failed: %1").arg(
-			q.lastError().text()));
-		return 0;
+	auto result = int64(0);
+	for (const auto &row : chatScanTotals(peerId)) {
+		result += row.dupBytes;
 	}
-	return q.next() ? int64(q.value(0).toLongLong()) : 0;
+	return result;
 }
 
 std::vector<ChatScanCategoryTotals> DedupDb::Impl::chatScanCategoryTotals(
@@ -6263,78 +6374,20 @@ void DedupDb::Impl::chatScanReleaseLeases(PeerId peerId) {
 }
 
 int DedupDb::Impl::chatScanCommitHashes(
-		PeerId peerId,
+		PeerId,
 		const std::vector<ChatScanHash> &hashes) {
 	if (!_open || hashes.empty()) {
 		return 0;
 	}
+	// The message row is written once, by the decision that follows this
+	// batch: it carries the hash id, the "hashed" mark and the verdict in the
+	// same statement. Registration of the content itself happens there too.
 	auto resolved = 0;
-	auto hashIds = std::set<uint64>();
-	auto media = std::set<std::pair<uint64, bool>>();
-	beginTransaction();
 	for (const auto &entry : hashes) {
-		if (!entry.msgId || !entry.mediaId || entry.hash.isEmpty()) {
-			continue;
-		}
-		media.insert({ entry.mediaId, entry.isPhoto });
-		{
-			QSqlQuery old(_db);
-			old.prepare(u"SELECT DISTINCT hash_id FROM chat_scan_items "
-				"WHERE peer_id = :peer_id AND media_id = :media_id "
-				"AND is_photo = :is_photo AND hash_id != 0"_q);
-			old.bindValue(u":peer_id"_q, QVariant::fromValue(
-				static_cast<qulonglong>(peerId.value)));
-			old.bindValue(u":media_id"_q, QVariant::fromValue(
-				static_cast<qulonglong>(entry.mediaId)));
-			old.bindValue(u":is_photo"_q, entry.isPhoto ? 1 : 0);
-			if (old.exec()) {
-				while (old.next()) {
-					const auto oldHashId = old.value(0).toULongLong();
-					if (oldHashId) {
-						hashIds.insert(oldHashId);
-					}
-				}
-			} else {
-				LOG(("DedupDb: ChatScanCommitHash old failed: %1").arg(
-					old.lastError().text()));
-			}
-		}
-		const auto hashId = resolveHashId(entry.hash);
-		if (!hashId) {
-			continue;
-		}
-		hashIds.insert(hashId);
-		QSqlQuery q(_db);
-		q.prepare(u"UPDATE chat_scan_items SET "
-			"hash_id = :hash_id, "
-			"filename = CASE "
-				"WHEN msg_id = :msg_id AND is_dup = 1 THEN :filename "
-				"WHEN msg_id = :msg_id THEN NULL "
-				"ELSE filename END, "
-			"state = 2, lease_until = 0 "
-			"WHERE peer_id = :peer_id AND media_id = :media_id "
-			"AND is_photo = :is_photo"_q);
-		q.bindValue(u":hash_id"_q, QVariant::fromValue(
-			static_cast<qulonglong>(hashId)));
-		q.bindValue(u":filename"_q, entry.filename.isEmpty()
-			? QVariant()
-			: QVariant(entry.filename));
-		q.bindValue(u":msg_id"_q, QVariant::fromValue(
-			static_cast<qlonglong>(entry.msgId.bare)));
-		q.bindValue(u":peer_id"_q, QVariant::fromValue(
-			static_cast<qulonglong>(peerId.value)));
-		q.bindValue(u":media_id"_q, QVariant::fromValue(
-			static_cast<qulonglong>(entry.mediaId)));
-		q.bindValue(u":is_photo"_q, entry.isPhoto ? 1 : 0);
-		if (!q.exec()) {
-			LOG(("DedupDb: ChatScanCommitHash failed: %1").arg(
-				q.lastError().text()));
-		} else if (q.numRowsAffected() > 0) {
+		if (entry.msgId && entry.mediaId && !entry.hash.isEmpty()) {
 			++resolved;
 		}
 	}
-	refreshChatScanRefs(hashIds, media);
-	commitTransaction();
 	return resolved;
 }
 
@@ -6816,7 +6869,62 @@ void DedupDb::Impl::writeScanCursor(const ChatScanState &state) {
 	options.cursor = state.cursor;
 	options.phase = state.phase;
 	options.elapsedMs = state.elapsedMs;
+	options.totals = state.totals;
 	writeScanOptions(state.peerId, options);
+}
+
+void DedupDb::Impl::adjustChatScanTotals(
+		PeerId peerId,
+		int category,
+		int64 uniqueCount,
+		int64 uniqueBytes,
+		int64 dupCount,
+		int64 dupBytes) {
+	if (!_open || !peerId || !category) {
+		return;
+	}
+	auto options = readScanOptions(peerId);
+	if (!options.scanFinished || options.totals.empty()) {
+		// A running scan writes its own totals in full, and a scan that
+		// never stored any has to be rebuilt from the item rows first.
+		return;
+	}
+	auto i = std::find_if(
+		options.totals.begin(),
+		options.totals.end(),
+		[&](const ChatScanCategoryTotals &row) {
+			return (row.category == category);
+		});
+	if (i == options.totals.end()) {
+		if (uniqueCount <= 0 && uniqueBytes <= 0
+			&& dupCount <= 0 && dupBytes <= 0) {
+			return;
+		}
+		options.totals.push_back(ChatScanCategoryTotals{ .category = category });
+		i = options.totals.end() - 1;
+	}
+	i->uniqueCount = std::max(int64(0), i->uniqueCount + uniqueCount);
+	i->uniqueBytes = std::max(int64(0), i->uniqueBytes + uniqueBytes);
+	i->dupCount = std::max(int64(0), i->dupCount + dupCount);
+	i->dupBytes = std::max(int64(0), i->dupBytes + dupBytes);
+	writeScanOptions(peerId, options);
+}
+
+std::vector<ChatScanCategoryTotals> DedupDb::Impl::chatScanTotals(
+		PeerId peerId) const {
+	return _open ? readScanOptions(peerId).totals
+		: std::vector<ChatScanCategoryTotals>();
+}
+
+void DedupDb::Impl::writeChatScanTotals(
+		PeerId peerId,
+		const std::vector<ChatScanCategoryTotals> &totals) {
+	if (!_open || !peerId) {
+		return;
+	}
+	auto options = readScanOptions(peerId);
+	options.totals = totals;
+	writeScanOptions(peerId, options);
 }
 
 int DedupDb::Impl::chatScanMode(PeerId peerId) const {
@@ -6851,7 +6959,8 @@ void DedupDb::Impl::finishChatScan(
 		MsgId scannedUpto,
 		int mode,
 		bool deleteFinished,
-		int64 elapsedMs) {
+		int64 elapsedMs,
+		const std::vector<ChatScanCategoryTotals> &totals) {
 	if (!_open) {
 		return;
 	}
@@ -6863,6 +6972,7 @@ void DedupDb::Impl::finishChatScan(
 	options.dedupMode = mode;
 	options.scanFinished = true;
 	options.deleteFinished = deleteFinished;
+	options.totals = totals;
 	writeScanOptions(peerId, options);
 }
 
@@ -6875,63 +6985,46 @@ void DedupDb::Impl::writeChatScanItems(
 	if (!_open || items.empty()) {
 		return;
 	}
-	auto hashIds = std::set<uint64>();
-	auto media = std::set<std::pair<uint64, bool>>();
 	beginTransaction();
 	QSqlQuery q(_db);
-	q.prepare(u"INSERT OR REPLACE INTO chat_scan_items "
+	// The upsert keeps the stored hash in SQL, so a page write costs one
+	// statement per item instead of a SELECT plus a write.
+	q.prepare(u"INSERT INTO chat_scan_items "
 		"(peer_id, msg_id, category, size, media_id, "
 		"is_photo, hash_id, state, attempts, lease_until, is_dup, "
 		"session_id, filename, tracked) "
 		"VALUES (:peer_id, :msg_id, :category, :size, "
 		":media_id, :is_photo, :hash_id, "
 		":state, :attempts, :lease_until, :is_dup, :session_id, "
-		":filename, :tracked)"_q);
+		":filename, :tracked) "
+		"ON CONFLICT(peer_id, msg_id) DO UPDATE SET "
+		"category = excluded.category, "
+		"size = excluded.size, "
+		"hash_id = CASE "
+			"WHEN excluded.media_id = chat_scan_items.media_id "
+				"AND excluded.is_photo = chat_scan_items.is_photo "
+			"THEN (CASE WHEN excluded.hash_id != 0 "
+				"THEN excluded.hash_id ELSE chat_scan_items.hash_id END) "
+			"ELSE 0 END, "
+		"media_id = excluded.media_id, "
+		"is_photo = excluded.is_photo, "
+		"filename = excluded.filename, "
+		"is_dup = excluded.is_dup, "
+		"session_id = excluded.session_id, "
+		"state = excluded.state, "
+		"attempts = excluded.attempts, "
+		"lease_until = excluded.lease_until, "
+		"tracked = excluded.tracked"_q);
 	for (const auto &item : items) {
 		if (!item.msgId) {
 			continue;
 		}
-		auto oldHashId = uint64(0);
-		auto oldMediaId = uint64(0);
-		auto oldIsPhoto = false;
-		{
-			QSqlQuery old(_db);
-			old.prepare(u"SELECT hash_id, media_id, is_photo "
-				"FROM chat_scan_items "
-				"WHERE peer_id = :peer_id AND msg_id = :msg_id"_q);
-			old.bindValue(u":peer_id"_q, QVariant::fromValue(
-				static_cast<qulonglong>(item.peerId.value)));
-			old.bindValue(u":msg_id"_q, QVariant::fromValue(
-				static_cast<qlonglong>(item.msgId.bare)));
-			if (old.exec() && old.next()) {
-				oldHashId = old.value(0).toULongLong();
-				oldMediaId = old.value(1).toULongLong();
-				oldIsPhoto = (old.value(2).toInt() != 0);
-			} else if (old.lastError().isValid()) {
-				LOG(("DedupDb: WriteChatScanItems old failed: %1").arg(
-					old.lastError().text()));
-			}
-		}
-		const auto sameMedia = (oldMediaId == item.mediaId)
-			&& (oldIsPhoto == item.isPhoto);
-		auto hashId = sameMedia ? oldHashId : uint64(0);
-		if (!item.hash.isEmpty() && (sameMedia || !oldMediaId)) {
+		auto hashId = uint64(0);
+		if (!item.hash.isEmpty()) {
 			hashId = resolveHashId(item.hash);
 			if (!hashId) {
 				continue;
 			}
-		}
-		if (oldHashId) {
-			hashIds.insert(oldHashId);
-		}
-		if (hashId) {
-			hashIds.insert(hashId);
-		}
-		if (oldMediaId) {
-			media.insert({ oldMediaId, oldIsPhoto });
-		}
-		if (item.mediaId) {
-			media.insert({ item.mediaId, item.isPhoto });
 		}
 		q.bindValue(u":peer_id"_q, QVariant::fromValue(
 			static_cast<qulonglong>(item.peerId.value)));
@@ -6962,7 +7055,6 @@ void DedupDb::Impl::writeChatScanItems(
 				q.lastError().text()));
 		}
 	}
-	refreshChatScanRefs(hashIds, media);
 	commitTransaction();
 }
 
@@ -7287,16 +7379,32 @@ void DedupDb::Impl::markChatScanItemDup(
 		PeerId peerId,
 		MsgId msgId,
 		bool isDup,
-		const QString &filename) {
+		const QString &filename,
+		bool saveUndo,
+		uint64 hashId) {
 	if (!_open || !msgId) {
 		return;
 	}
-	saveChatScanUndo(peerId, msgId);
+	if (saveUndo) {
+		saveChatScanUndo(peerId, msgId);
+	}
 	QSqlQuery q(_db);
-	q.prepare(u"UPDATE chat_scan_items SET "
-		"is_dup = :is_dup, "
-		"filename = CASE WHEN :is_dup = 1 THEN :filename ELSE NULL END "
-		"WHERE peer_id = :peer_id AND msg_id = :msg_id"_q);
+	if (hashId) {
+		// The scan writes the row once: the verdict, the content id and the
+		// "hashed" mark all land in this statement instead of two.
+		q.prepare(u"UPDATE chat_scan_items SET "
+			"is_dup = :is_dup, "
+			"filename = CASE WHEN :is_dup = 1 THEN :filename ELSE NULL END, "
+			"hash_id = :hash_id, state = 2, lease_until = 0, tracked = 1 "
+			"WHERE peer_id = :peer_id AND msg_id = :msg_id"_q);
+		q.bindValue(u":hash_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(hashId)));
+	} else {
+		q.prepare(u"UPDATE chat_scan_items SET "
+			"is_dup = :is_dup, "
+			"filename = CASE WHEN :is_dup = 1 THEN :filename ELSE NULL END "
+			"WHERE peer_id = :peer_id AND msg_id = :msg_id"_q);
+	}
 	q.bindValue(u":is_dup"_q, isDup ? 1 : 0);
 	q.bindValue(u":filename"_q, (isDup && !filename.isEmpty())
 		? QVariant(filename)
@@ -8412,8 +8520,42 @@ void DedupDb::finishChatScan(
 		MsgId scannedUpto,
 		int mode,
 		bool deleteFinished,
-		int64 elapsedMs) {
-	_impl->finishChatScan(peerId, scannedUpto, mode, deleteFinished, elapsedMs);
+		int64 elapsedMs,
+		const std::vector<ChatScanCategoryTotals> &totals) {
+	_impl->finishChatScan(
+		peerId,
+		scannedUpto,
+		mode,
+		deleteFinished,
+		elapsedMs,
+		totals);
+}
+
+void DedupDb::adjustChatScanTotals(
+		PeerId peerId,
+		int category,
+		int64 uniqueCount,
+		int64 uniqueBytes,
+		int64 dupCount,
+		int64 dupBytes) {
+	_impl->adjustChatScanTotals(
+		peerId,
+		category,
+		uniqueCount,
+		uniqueBytes,
+		dupCount,
+		dupBytes);
+}
+
+std::vector<ChatScanCategoryTotals> DedupDb::chatScanTotals(
+		PeerId peerId) const {
+	return _impl->chatScanTotals(peerId);
+}
+
+void DedupDb::writeChatScanTotals(
+		PeerId peerId,
+		const std::vector<ChatScanCategoryTotals> &totals) {
+	_impl->writeChatScanTotals(peerId, totals);
 }
 
 MsgId DedupDb::chatScanScannedUpto(PeerId peerId) const {

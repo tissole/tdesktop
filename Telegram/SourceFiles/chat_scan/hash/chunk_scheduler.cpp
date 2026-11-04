@@ -26,6 +26,11 @@ namespace {
 // sample, and FileChunkFetcher owns the chunk pacing. This pool only keeps
 // enough leased work queued that the limiter always has a next request.
 constexpr auto kSchedulerItems = 192;
+// One commit per this many finished files, or after the timeout below when a
+// chat produces them slower than that. The limit is the main-thread turn: the
+// limiter's burst of 4 requests covers about 35 ms at 115/s, a finished file
+// costs about 0.16 ms of row and index work, so a batch must stay well under
+// two hundred files. 128 leaves room for a slower machine.
 constexpr auto kCommitBatch = 128;
 constexpr auto kCommitTimeoutMs = 2 * 1000;
 constexpr auto kLeaseMs = int64(30 * 1000);

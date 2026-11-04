@@ -33,6 +33,33 @@ namespace {
 
 using Type = Export::MediaSettings::Type;
 
+// The stored per-category totals are adjusted here, where the row before and
+// after a change is already known, so the scan never has to recount and the
+// live paths never have to read anything extra.
+void AdjustTotals(
+		Data::DedupDb &db,
+		PeerId peerId,
+		int category,
+		int64 size,
+		bool isDup,
+		int sign) {
+	db.adjustChatScanTotals(
+		peerId,
+		category,
+		isDup ? 0 : sign,
+		isDup ? 0 : sign * size,
+		isDup ? sign : 0,
+		isDup ? sign * size : 0);
+}
+
+void AdjustTotals(
+		Data::DedupDb &db,
+		const Data::ChatScanItem &row,
+		bool isDup,
+		int sign) {
+	AdjustTotals(db, row.peerId, row.category, row.size, isDup, sign);
+}
+
 std::set<uint64> &ScannedPeers() {
 	static auto peers = std::set<uint64>();
 	return peers;
@@ -295,6 +322,8 @@ void PromoteSuccessor(
 		return;
 	}
 	db.markChatScanItemDup(peerId, survivor->msgId, false);
+	AdjustTotals(db, *survivor, false, +1);
+	AdjustTotals(db, *survivor, true, -1);
 	if (!stored->hash.isEmpty() && survivor->hash.isEmpty()) {
 		db.updateChatScanItemHash(
 			peerId,
@@ -351,6 +380,7 @@ void NoteItemAdded(not_null<HistoryItem*> item) {
 		return;
 	}
 	WriteLiveItem(item, sized, isDup, hash);
+	AdjustTotals(db, peerId, sized.category, sized.size, isDup, +1);
 	BumpScanVersion();
 }
 
@@ -439,6 +469,11 @@ void NoteItemRemoved(not_null<HistoryItem*> item) {
 	if (replacement) {
 		MarkUniqueHashDirty(replacement->peerId, stored->hash);
 	}
+	if (replacement && replacementRow) {
+		AdjustTotals(db, *replacementRow, false, +1);
+		AdjustTotals(db, *replacementRow, true, -1);
+	}
+	AdjustTotals(db, *stored, replacement ? true : stored->isDup, -1);
 	db.removeChatScanItem(peerId, item->id);
 	if (tracked) {
 		BumpScanVersion();
@@ -453,6 +488,16 @@ void NoteChatDeleted(PeerId peerId) {
 		for (const auto &[replacementPeer, hash] : changed) {
 			MarkUniqueHashDirty(replacementPeer, hash);
 			db.invalidateChatTable(replacementPeer);
+			if (const auto promoted = db.chatScanUniqueHash(
+					replacementPeer,
+					hash)) {
+				if (const auto row = db.chatScanItem(
+						replacementPeer,
+						promoted)) {
+					AdjustTotals(db, *row, false, +1);
+					AdjustTotals(db, *row, true, -1);
+				}
+			}
 		}
 		db.invalidateAllPeersChatTable();
 	}
@@ -485,6 +530,7 @@ void NoteItemMediaUpdated(not_null<HistoryItem*> item) {
 			mediaId,
 			isPhoto);
 		WriteLiveItem(item, sized, false, hash);
+		AdjustTotals(db, peerId, sized.category, sized.size, false, +1);
 		BumpScanVersion();
 		return;
 	}
@@ -507,6 +553,8 @@ void NoteItemMediaUpdated(not_null<HistoryItem*> item) {
 		fresh.state = 4;
 	}
 	db.writeChatScanItems({ fresh });
+	AdjustTotals(db, *stored, stored->isDup, -1);
+	AdjustTotals(db, fresh, fresh.isDup, +1);
 	if (mediaChanged && !fresh.hash.isEmpty()) {
 		db.updateChatScanItemHash(
 			peerId,

@@ -1293,7 +1293,18 @@ void ChatScanBox::sendNextDeleteBatch() {
 		db.beginTransaction();
 		for (auto i = size_t(0); i < count; ++i) {
 			const auto msgId = MsgId(_deleteIds[_deletePos + i]);
+			const auto row = db.chatScanItem(_peer->id, msgId);
+			if (!row) {
+				continue;
+			}
 			db.removeChatScanItem(_peer->id, msgId);
+			db.adjustChatScanTotals(
+				row->peerId,
+				row->category,
+				row->isDup ? 0 : -1,
+				row->isDup ? 0 : -row->size,
+				row->isDup ? -1 : 0,
+				row->isDup ? -row->size : 0);
 		}
 		db.commitTransaction();
 		_deletePos += count;

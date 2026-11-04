@@ -524,6 +524,9 @@ void FileChunkFetcher::logStatus(crl::time now) {
 	if (now - _lastStatus < kStatusInterval) {
 		return;
 	}
+	const auto elapsed = std::max<int64>(
+		1,
+		_lastStatus ? (now - _lastStatus) : int64(kStatusInterval));
 	_lastStatus = now;
 	auto loads = base::flat_map<MTP::DcId, Load>();
 	for (const auto &[shiftedDcId, load] : _loads) {
@@ -537,10 +540,18 @@ void FileChunkFetcher::logStatus(crl::time now) {
 	for (const auto &entry : _limiters) {
 		const auto &limiter = *entry.second;
 		auto &load = loads[entry.first];
-		LOG(("Chunk dc:%1 state:%2 rate:%3 cwnd:%4 inflight:%5 p95:%6ms avg:%7ms age:%8s req:%9"
+		// What actually left the app over this interval, next to the rate the
+		// throttle allows: the two differ exactly by the time the main thread
+		// was busy, which is what the scan has to keep small.
+		auto &previous = _loggedRequests[entry.first];
+		const auto delta = std::max(0, load.requests - previous);
+		previous = load.requests;
+		const auto actual = int(int64(delta) * 1000 / elapsed);
+		LOG(("Chunk dc:%1 state:%2 rate:%3 actual:%4/s cwnd:%5 inflight:%6 p95:%7ms avg:%8ms age:%9s req:%10"
 			).arg(entry.first
 			).arg(int(limiter.currentState())
 			).arg(int(limiter.rate())
+			).arg(actual
 			).arg(limiter.window()
 			).arg(limiter.inFlight()
 			).arg(int(limiter.latencyP95())

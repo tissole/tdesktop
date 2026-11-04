@@ -94,6 +94,11 @@ public:
 	void finishTakeout();
 
 private:
+	struct PendingHash {
+		Data::ChatScanItem item;
+		QByteArray hash;
+	};
+
 	void requestPage();
 	void schedulePage();
 	void startScheduler();
@@ -127,12 +132,13 @@ private:
 	void restoreRebuiltItem(const Data::ChatScanItem &item);
 	[[nodiscard]] bool seedFromProgress(
 		const std::vector<Data::ChatScanProgressRow> &progress);
+	[[nodiscard]] std::vector<Data::ChatScanProgressRow> storedProgress()
+		const;
 	void rememberRestoredMedia(const Data::ChatScanItem &item);
 	void recoverFromCursor(const Data::ChatScanState &cursor);
 	void requestRecoveryProgress();
 	void applyRecoveredProgress(
-		std::vector<Data::ChatScanProgressRow> progress,
-		bool success);
+		std::vector<Data::ChatScanProgressRow> progress);
 	void maybeRequestRecovery();
 	void refillRecoveryWindow();
 	void requestRecoveryBatch();
@@ -146,6 +152,10 @@ private:
 	void logSchedulerStarvation();
 	void maybeFinalize();
 	void onHashed(const Data::ChatScanItem &item, const QByteArray &hash);
+	void applyHashed(const PendingHash &entry);
+	void applyHashedBatch();
+	void drainHashed(int budgetMs);
+	void clearHashedBatch();
 	void applyOwnerDecision(
 		const Data::ChatScanItem &item,
 		const QByteArray &hash,
@@ -158,6 +168,8 @@ private:
 	[[nodiscard]] QByteArray knownHashForMedia(
 		uint64 mediaId,
 		bool isPhoto) const;
+	[[nodiscard]] std::vector<Data::ChatScanCategoryTotals> totalsVector()
+		const;
 	void loadKnownHashes(Fn<void()> done);
 	void loadResumeSets(Fn<void()> done);
 	void loadStickerIndexAsync();
@@ -205,6 +217,9 @@ private:
 	QHash<QByteArray, UniqueHash> _uniqueHashes;
 	std::vector<Data::ChatScanItem> _pageItems;
 	std::vector<MsgId> _pageStickers;
+	std::vector<PendingHash> _pendingHashed;
+	int _pendingHashedPos = 0;
+	bool _drainScheduled = false;
 	int _stickerTotal = 0;
 	std::vector<int32> _recoveryIds;
 	int _recoveryPos = 0;

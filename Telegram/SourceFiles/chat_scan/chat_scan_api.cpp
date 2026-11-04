@@ -38,6 +38,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <limits>
 #include <optional>
 
+#include <crl/crl.h>
+
 namespace ChatScan {
 namespace {
 
@@ -52,6 +54,10 @@ constexpr auto kStarvationDelayMs = crl::time(5000);
 constexpr auto kStarvationLogMs = crl::time(10000);
 constexpr auto kRecoveryBatchErrorCeil = 3;
 constexpr auto kScanTakeoutMaxFileBytes = 4000LL * 1024 * 1024;
+// How long one loop turn may spend applying finished hashes before the rest
+// goes to the next turn. The throttle covers about 35 ms of silence with its
+// burst, so a turn has to stay well under that on any machine.
+constexpr auto kApplyTurnBudgetMs = 20;
 [[nodiscard]] crl::time RecoveryDelay(int32 above, int pos) {
 	return crl::time(kRecoverySpacingMs)
 		+ crl::time((uint64(above) * 13 + uint64(pos) * 7) % kPageJitterMs);
@@ -305,6 +311,7 @@ void Api::pause() {
 		.cursor = MsgId(_offsetId),
 		.phase = int(State::Phase::Paused),
 		.elapsedMs = _elapsedMs,
+		.totals = totalsVector(),
 	});
 	auto state = _state.current();
 	state.phase = State::Phase::Paused;
@@ -346,6 +353,7 @@ void Api::resume() {
 			.cursor = MsgId(_offsetId),
 			.phase = int(state.phase),
 			.elapsedMs = state.elapsedMs,
+			.totals = totalsVector(),
 		});
 		_state = std::move(state);
 		_queueOutstanding = _queue->pending() + _queue->leased();
@@ -406,6 +414,7 @@ void Api::cancel() {
 	_seenDocs.clear();
 	_seenPhotos.clear();
 	_uniqueHashes.clear();
+	clearHashedBatch();
 	_queue->clearKnownHashes();
 	db().clearChatTable();
 	db().invalidateChatTable(_peer->id);
@@ -862,14 +871,17 @@ void Api::addPhotoOccurrence(
 
 void Api::commitPage() {
 	auto &database = db();
+	// One transaction for the page rows and their totals: a crash can then
+	// never leave stored rows that the stored totals do not cover.
+	database.beginTransaction();
 	_queue->insert(_pageItems);
 	_pageItems.clear();
-	database.beginTransaction();
 	database.writeScanCursor({
 		.peerId = _peer->id,
 		.cursor = MsgId(_offsetId),
 		.phase = int(State::Phase::Scanning),
 		.elapsedMs = elapsedMs(),
+		.totals = totalsVector(),
 	});
 	database.commitTransaction();
 }
@@ -925,6 +937,7 @@ void Api::rescanAfterTakeout() {
 	loadStickerIndexAsync();
 	loadKnownHashes(nullptr);
 	_uniqueHashes.clear();
+	clearHashedBatch();
 	_rebuildAboveBare = 0;
 	_rebuilding = true;
 	rebuildStep();
@@ -1095,23 +1108,10 @@ bool Api::loadPaused(const Data::ChatScanState &cursor) {
 	_stickerTotal = 0;
 	_scanned = 0;
 	_highMark = 0;
-	auto &database = db();
-	if (!database.isOpen()) {
+	if (!db().isOpen()) {
 		return false;
 	}
-	const auto weak = base::weak_ptr<Api>(this);
-	_recomputingProgress = true;
-	database.recomputeChatScanProgressAsync(
-		_peer->id,
-		[weak](
-				std::vector<Data::ChatScanProgressRow> progress,
-				bool success) {
-			if (const auto strong = weak.get()) {
-				strong->applyRecoveredProgress(
-					std::move(progress),
-					success);
-			}
-		});
+	applyRecoveredProgress(storedProgress());
 	auto state = _state.current();
 	state.phase = State::Phase::Paused;
 	_state = std::move(state);
@@ -1151,6 +1151,22 @@ bool Api::seedFromProgress(
 	_recoveryAbove = _highMark + 1;
 	_recoveryErrorStreak = 0;
 	return true;
+}
+
+std::vector<Data::ChatScanProgressRow> Api::storedProgress() const {
+	auto result = std::vector<Data::ChatScanProgressRow>();
+	for (const auto &row : db().chatScanTotals(_peer->id)) {
+		result.push_back(Data::ChatScanProgressRow{
+			.peerId = _peer->id,
+			.category = row.category,
+			.itemCount = row.uniqueCount + row.dupCount,
+			.uniqueCount = row.uniqueCount,
+			.uniqueBytes = row.uniqueBytes,
+			.dupCount = row.dupCount,
+			.dupBytes = row.dupBytes,
+		});
+	}
+	return result;
 }
 
 void Api::loadKnownHashes(Fn<void()> done) {
@@ -1196,6 +1212,7 @@ void Api::loadResumeSets(Fn<void()> done) {
 	_resumeSetsPending = 3;
 	_resumeSetsDone = std::move(done);
 	_uniqueHashes.clear();
+	clearHashedBatch();
 	_queue->clearKnownHashes();
 	const auto dedupOn = GetEnhancedBool("prevent_upload_duplicates");
 	if (dedupOn) {
@@ -1392,6 +1409,7 @@ void Api::recoverFromCursor(const Data::ChatScanState &cursor) {
 	_seenDocs.clear();
 	_seenPhotos.clear();
 	_uniqueHashes.clear();
+	clearHashedBatch();
 	_stickerTotal = 0;
 	_staleMedia.clear();
 	_totals.clear();
@@ -1411,41 +1429,13 @@ void Api::recoverFromCursor(const Data::ChatScanState &cursor) {
 }
 
 void Api::requestRecoveryProgress() {
-	const auto weak = base::weak_ptr<Api>(this);
-	_recomputingProgress = true;
-	db().recomputeChatScanProgressAsync(
-		_peer->id,
-		[weak](
-				std::vector<Data::ChatScanProgressRow> progress,
-				bool success) {
-			if (const auto strong = weak.get()) {
-				strong->applyRecoveredProgress(
-					std::move(progress),
-					success);
-			}
-		});
+	applyRecoveredProgress(storedProgress());
 }
 
 void Api::applyRecoveredProgress(
-		std::vector<Data::ChatScanProgressRow> progress,
-		bool success) {
+		std::vector<Data::ChatScanProgressRow> progress) {
 	_recomputingProgress = false;
 	if (_cancelled || _finished) {
-		return;
-	}
-	if (!success) {
-		if (_paused) {
-			publish(true);
-			return;
-		}
-		if (_failed) {
-			return;
-		}
-		requestPage();
-		maybeRequestRecovery();
-		if (_recoveryDone && _recoveryWindowDone) {
-			startScheduler();
-		}
 		return;
 	}
 	const auto seeded = seedFromProgress(progress);
@@ -1881,6 +1871,21 @@ QByteArray Api::knownHashForMedia(uint64 mediaId, bool isPhoto) const {
 		GetEnhancedBool("prevent_upload_duplicates"));
 }
 
+std::vector<Data::ChatScanCategoryTotals> Api::totalsVector() const {
+	auto result = std::vector<Data::ChatScanCategoryTotals>();
+	result.reserve(_totals.size());
+	for (const auto &[category, totals] : _totals) {
+		result.push_back(Data::ChatScanCategoryTotals{
+			.category = category,
+			.uniqueCount = totals.uniqueCount,
+			.uniqueBytes = totals.uniqueBytes,
+			.dupCount = totals.dupCount,
+			.dupBytes = totals.dupBytes,
+		});
+	}
+	return result;
+}
+
 void Api::applyOwnerDecision(
 		const Data::ChatScanItem &item,
 		const QByteArray &hash,
@@ -1915,6 +1920,17 @@ void Api::applyOwnerDecision(
 		demote(*decision.demoted);
 	} else if (decision.demoted) {
 		MarkUniqueHashDirty(decision.demoted->peerId, hash);
+		if (decision.demoted->tracked && !decision.demoted->isDup) {
+			// Another chat's finished scan owns this content and just lost
+			// the kept copy; its stored totals have to follow.
+			db().adjustChatScanTotals(
+				decision.demoted->peerId,
+				decision.demoted->category,
+				-1,
+				-decision.demoted->size,
+				1,
+				decision.demoted->size);
+		}
 	}
 	if (decision.wasDup != decision.isDup) {
 		if (decision.isDup) {
@@ -1930,6 +1946,10 @@ void Api::applyOwnerDecision(
 				item.category,
 				item.size,
 			};
+		} else if (const auto i = _uniqueHashes.find(hash);
+			i != _uniqueHashes.end()
+			&& i.value().msgId == decision.owner->msgId) {
+			// The owner did not change, so its row is already recorded.
 		} else if (const auto owner = db().chatScanItem(
 				_peer->id,
 				decision.owner->msgId)) {
@@ -1954,6 +1974,14 @@ void Api::onHashed(
 	}
 	_queueOutstanding = std::max(0, _queueOutstanding - 1);
 	_queue->rememberHash(item.mediaId, item.isPhoto, hash);
+	// Owner election is a database session per finished file; it is deferred
+	// to the commit batch so a response callback only appends here.
+	_pendingHashed.push_back({ item, hash });
+}
+
+void Api::applyHashed(const PendingHash &entry) {
+	const auto &item = entry.item;
+	const auto &hash = entry.hash;
 	const auto tierOn = GetEnhancedBool("prevent_upload_duplicates");
 	auto i = _uniqueHashes.find(hash);
 	const auto uniqueMsgId = (i != _uniqueHashes.end())
@@ -1992,36 +2020,112 @@ void Api::onHashed(
 			item.isPhoto,
 			hash,
 			item.isDup,
-			filenameForMedia(item.mediaId, item.isPhoto));
+			filenameForMedia(item.mediaId, item.isPhoto),
+			_sessionId);
 		if (decision) {
 			applyOwnerDecision(item, hash, *decision);
 		} else {
 			LOG(("ChatScan: failed to apply hash owner for message %1.")
 				.arg(item.msgId.bare));
 		}
-	} else if (i == _uniqueHashes.end()) {
-		_uniqueHashes.insert(
-			hash,
-			UniqueHash{ item.msgId, item.category, item.size });
-	} else if (item.msgId == i.value().msgId) {
-		// Already the stored unique hash owner.
-	} else if (!i.value().msgId || item.msgId < i.value().msgId) {
-		demoteToDuplicate(item);
 	} else {
-		auto previous = db().chatScanItem(_peer->id, i.value().msgId);
-		if (previous && !previous->isDup) {
-			previous->filename = filenameForMedia(
-				previous->mediaId,
-				previous->isPhoto);
-			demoteToDuplicate(*previous);
-		}
-		i.value() = UniqueHash{
+		// Without the global owner rule the row still has to record its
+		// content id and that the file was hashed.
+		db().chatScanMarkHashed(
+			_peer->id,
 			item.msgId,
-			item.category,
-			item.size,
-		};
+			hash,
+			item.isDup,
+			filenameForMedia(item.mediaId, item.isPhoto));
+		if (i == _uniqueHashes.end()) {
+			_uniqueHashes.insert(
+				hash,
+				UniqueHash{ item.msgId, item.category, item.size });
+		} else if (item.msgId == i.value().msgId) {
+			// Already the stored unique hash owner.
+		} else if (!i.value().msgId || item.msgId < i.value().msgId) {
+			demoteToDuplicate(item);
+		} else {
+			auto previous = db().chatScanItem(_peer->id, i.value().msgId);
+			if (previous && !previous->isDup) {
+				previous->filename = filenameForMedia(
+					previous->mediaId,
+					previous->isPhoto);
+				demoteToDuplicate(*previous);
+			}
+			i.value() = UniqueHash{
+				item.msgId,
+				item.category,
+				item.size,
+			};
+		}
+	}
+}
+
+void Api::applyHashedBatch() {
+	if (_pendingHashedPos >= int(_pendingHashed.size())) {
+		return;
+	}
+	if (_cancelled || _failed) {
+		clearHashedBatch();
+		return;
+	}
+	if (_drainScheduled) {
+		return;
+	}
+	_drainScheduled = true;
+	drainHashed(kApplyTurnBudgetMs);
+}
+
+void Api::drainHashed(int budgetMs) {
+	if (_cancelled || _failed) {
+		clearHashedBatch();
+		return;
+	}
+	if (_pendingHashedPos >= int(_pendingHashed.size())) {
+		clearHashedBatch();
+		return;
+	}
+	const auto started = crl::now();
+	const auto appliedFrom = _pendingHashedPos;
+	// One transaction per turn: every applyHashed() session nests into it
+	// instead of committing on its own, and the stored totals are written
+	// here too, so they always cover the stored flags even if the app dies
+	// right after.
+	db().beginTransaction();
+	while (_pendingHashedPos < int(_pendingHashed.size())) {
+		applyHashed(_pendingHashed[_pendingHashedPos++]);
+		if (crl::now() - started >= budgetMs) {
+			break;
+		}
+	}
+	db().writeChatScanTotals(_peer->id, totalsVector());
+	db().commitTransaction();
+	const auto elapsed = crl::now() - started;
+	if (elapsed > 40) {
+		LOG(("ChatScan: applying %1 hashes took %2 ms."
+			).arg(_pendingHashedPos - appliedFrom).arg(elapsed));
 	}
 	publish();
+	if (_pendingHashedPos < int(_pendingHashed.size())) {
+		// The rest of the batch waits for the next loop turn: the throttle
+		// needs the loop to send requests, and one turn longer than its burst
+		// costs the rate that the whole scan is tuned for.
+		const auto weak = base::weak_ptr<Api>(this);
+		crl::on_main([weak] {
+			if (const auto strong = weak.get()) {
+				strong->drainHashed(kApplyTurnBudgetMs);
+			}
+		});
+		return;
+	}
+	clearHashedBatch();
+}
+
+void Api::clearHashedBatch() {
+	_drainScheduled = false;
+	_pendingHashed.clear();
+	_pendingHashedPos = 0;
 }
 
 void Api::onHashFailed(const Data::ChatScanItem &) {
@@ -2035,6 +2139,7 @@ void Api::onHashFailed(const Data::ChatScanItem &) {
 
 void Api::onHashCommitted(int resolved) {
 	_hashDone += resolved;
+	applyHashedBatch();
 	publish();
 }
 
@@ -2084,6 +2189,11 @@ void Api::finalizeAndWrite() {
 	}
 	stopScheduler();
 	_scheduler->flush();
+	// Everything finished must be applied before the aggregates are written,
+	// so this turn ignores the budget the normal drain uses.
+	if (!_pendingHashed.empty()) {
+		drainHashed(std::numeric_limits<int>::max());
+	}
 	finishBorrowedTakeout();
 	writeAggregateRows();
 }
@@ -2104,7 +2214,8 @@ void Api::writeAggregateRows() {
 		MsgId(_highMark),
 		GetEnhancedBool("prevent_upload_duplicates") ? 1 : 0,
 		(dupTotal == 0),
-		_elapsedMs);
+		_elapsedMs,
+		totalsVector());
 	database.commitTransaction();
 	database.finishChatScanSession(peerId);
 	_sessionId = 0;
@@ -2115,6 +2226,7 @@ void Api::writeAggregateRows() {
 	_seenDocs.clear();
 	_seenPhotos.clear();
 	_uniqueHashes.clear();
+	clearHashedBatch();
 	_queue->clearKnownHashes();
 	db().clearChatTable();
 	db().invalidateChatTable(_peer->id);

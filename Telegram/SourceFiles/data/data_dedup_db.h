@@ -220,22 +220,23 @@ struct ChatScanDup {
 	bool isPhoto = false;
 };
 
-struct ChatScanState {
-	PeerId peerId;
-	MsgId cursor;
-	int phase = 0;
-	int64 elapsedMs = 0;
-};
-
 // Precomputed per-category totals for one peer's stored items, split by
-// the is_dup flag. Backs a lightweight paused restore that must not
-// materialize up to a million item rows.
+// the is_dup flag. Kept in the peer's scan row, so showing the results never
+// has to walk the item rows.
 struct ChatScanCategoryTotals {
 	int category = 0;
 	int64 uniqueCount = 0;
 	int64 uniqueBytes = 0;
 	int64 dupCount = 0;
 	int64 dupBytes = 0;
+};
+
+struct ChatScanState {
+	PeerId peerId;
+	MsgId cursor;
+	int phase = 0;
+	int64 elapsedMs = 0;
+	std::vector<ChatScanCategoryTotals> totals;
 };
 
 struct ChatScanProgressRow {
@@ -433,6 +434,15 @@ public:
 		bool isPhoto,
 		const QByteArray &hash,
 		bool mediaDuplicate,
+		const QString &filename,
+		uint64 scanSessionId);
+	// Records a finished scan file without the global owner rule: the content
+	// id, the "hashed" mark and the verdict in one row write.
+	void chatScanMarkHashed(
+		PeerId peerId,
+		MsgId msgId,
+		const QByteArray &hash,
+		bool isDup,
 		const QString &filename);
 	// Records a successfully sent upload/forward destination: ensures the
 	// finished dedup_ul row, applies the global owner rule and returns whether
@@ -773,7 +783,24 @@ public:
 		MsgId scannedUpto,
 		int mode,
 		bool deleteFinished,
-		int64 elapsedMs);
+		int64 elapsedMs,
+		const std::vector<ChatScanCategoryTotals> &totals);
+	// Adjusts the stored per-category totals of a finished scan. Called by
+	// the live paths that add, remove or re-flag one message; a scan in
+	// progress writes its totals wholesale instead, so this does nothing
+	// for it.
+	void adjustChatScanTotals(
+		PeerId peerId,
+		int category,
+		int64 uniqueCount,
+		int64 uniqueBytes,
+		int64 dupCount,
+		int64 dupBytes);
+	[[nodiscard]] std::vector<ChatScanCategoryTotals> chatScanTotals(
+		PeerId peerId) const;
+	void writeChatScanTotals(
+		PeerId peerId,
+		const std::vector<ChatScanCategoryTotals> &totals);
 	// -1 = full scan/rescan pending or incomplete, 0 = OFF, 1 = ON.
 	[[nodiscard]] int chatScanMode(PeerId peerId) const;
 	void writeChatScanMode(PeerId peerId, int mode);
