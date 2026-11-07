@@ -203,7 +203,11 @@ void ChunkScheduler::complete(
 		}
 	}
 	if (_commits.size() >= kCommitBatch) {
-		flushCommits();
+		// A commit is a database session; a zero-timeout timer hands it to the
+		// next loop turn instead of running it inside the response callback
+		// that completed this chunk. A slow statement there stops the whole
+		// update loop, and the deadlock detector kills the app after 30 s.
+		_commitTimer.callOnce(0);
 	}
 	if (_hooks.update) {
 		_hooks.update();
