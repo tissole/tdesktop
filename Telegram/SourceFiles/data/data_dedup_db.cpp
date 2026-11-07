@@ -2042,6 +2042,14 @@ DedupDb::Impl::Impl(const QString &path, bool purgePending)
 	pragma.exec(u"PRAGMA journal_mode=WAL"_q);
 	pragma.exec(u"PRAGMA synchronous=NORMAL"_q);
 	pragma.exec(u"PRAGMA busy_timeout=5000"_q);
+	// The database grows to hundreds of megabytes, far past the two megabyte
+	// page cache SQLite keeps by default, so every scan statement that walks a
+	// few dozen rows ends up reading pages back from the file. A crash dump
+	// caught the main thread inside exactly that read, called from the chunk
+	// commit. Keep the hot pages in memory and let reads be mapped instead of
+	// issued as file reads.
+	pragma.exec(u"PRAGMA cache_size=-65536"_q);
+	pragma.exec(u"PRAGMA mmap_size=268435456"_q);
 	_open = createTables();
 	if (_open && purgePending) {
 		// 'u' rows can only survive a crash; at startup nothing is in flight.
