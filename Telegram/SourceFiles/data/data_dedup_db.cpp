@@ -133,6 +133,70 @@ void OptimizeDatabase(const QString &path) {
 	QSqlDatabase::removeDatabase(connectionName);
 }
 
+// The orphan scan walks the whole hashes table, which on a database of
+// hundreds of megabytes takes seconds. It only reclaims space, so it runs on
+// its own connection instead of blocking the main thread during startup.
+void PurgeOrphanHashes(const QString &path) {
+	const auto connectionName = u"dedup-purge-%1"_q.arg(
+		QUuid::createUuid().toString());
+	auto db = QSqlDatabase::addDatabase(u"QSQLITE"_q, connectionName);
+	db.setDatabaseName(path);
+	if (db.open()) {
+		auto maxId = uint64(0);
+		{
+			QSqlQuery q(db);
+			q.exec(u"PRAGMA busy_timeout=5000"_q);
+			if (q.exec(u"SELECT COALESCE(MAX(hash_id), 0) FROM hashes"_q)
+				&& q.next()) {
+				maxId = q.value(0).toULongLong();
+			}
+		}
+		{
+			QSqlQuery q(db);
+			if (!q.exec(u"DELETE FROM media_refs WHERE id_refs = 0 "
+				"AND NOT EXISTS (SELECT 1 FROM dedup_ul "
+					"WHERE dedup_ul.doc_id = media_refs.media_id "
+					"AND dedup_ul.is_photo = media_refs.is_photo "
+					"AND dedup_ul.status = 'u') "
+				"AND NOT EXISTS (SELECT 1 FROM dedup_ul "
+					"WHERE dedup_ul.doc_id = media_refs.media_id "
+					"AND dedup_ul.is_photo = media_refs.is_photo "
+					"AND dedup_ul.status = 'f')"_q)) {
+				LOG(("DedupDb: Orphan media purge failed: %1").arg(
+					q.lastError().text()));
+			}
+		}
+		{
+			// The id cap keeps hashes inserted by a scan that starts while
+			// this runs out of the purge.
+			QSqlQuery q(db);
+			q.prepare(u"DELETE FROM hashes WHERE hash_id <= :max_id AND "
+				"NOT EXISTS (SELECT 1 FROM chat_scan_items "
+					"WHERE chat_scan_items.hash_id = hashes.hash_id) "
+				"AND NOT EXISTS (SELECT 1 FROM dedup_ul "
+					"WHERE dedup_ul.hash_id = hashes.hash_id) "
+				"AND NOT EXISTS (SELECT 1 FROM dedup_dl "
+					"WHERE dedup_dl.hash_id = hashes.hash_id) "
+				"AND NOT EXISTS (SELECT 1 FROM media_refs "
+					"WHERE media_refs.hash_id = hashes.hash_id) "
+				"AND NOT EXISTS (SELECT 1 FROM job_items "
+					"WHERE job_items.hash_id = hashes.hash_id)"_q);
+			q.bindValue(u":max_id"_q, QVariant::fromValue(
+				static_cast<qulonglong>(maxId)));
+			if (!q.exec()) {
+				LOG(("DedupDb: Orphan hash purge failed: %1").arg(
+					q.lastError().text()));
+			}
+		}
+		db.close();
+	} else {
+		LOG(("DedupDb: Orphan hash purge open failed: %1").arg(
+			db.lastError().text()));
+	}
+	db = QSqlDatabase();
+	QSqlDatabase::removeDatabase(connectionName);
+}
+
 void VacuumDatabase(
 		const QString &path,
 		const std::atomic_bool &cancel) {
@@ -1582,6 +1646,10 @@ public:
 		Table table,
 		uint64 documentId,
 		bool isPhoto) const;
+	[[nodiscard]] bool containsHashInDb(
+		Table table,
+		const QByteArray &hash,
+		bool finishedOnly) const;
 	[[nodiscard]] bool containsHash(
 		Table table,
 		const QByteArray &hash) const;
@@ -2051,7 +2119,12 @@ DedupDb::Impl::Impl(const QString &path, bool purgePending)
 	pragma.exec(u"PRAGMA cache_size=-65536"_q);
 	pragma.exec(u"PRAGMA mmap_size=268435456"_q);
 	_open = createTables();
-	if (_open && purgePending) {
+	// A clean shutdown clears user_version, so the expensive crash recovery
+	// runs only after a kill instead of on every start.
+	const auto dirty = _open
+		? PragmaInt(_db, u"PRAGMA user_version"_q)
+		: int64(0);
+	if (_open && purgePending && dirty) {
 		// 'u' rows can only survive a crash; at startup nothing is in flight.
 		// Second connections must not purge another thread's rows.
 		purgeOrphanExportBatchJobs();
@@ -2070,27 +2143,7 @@ DedupDb::Impl::Impl(const QString &path, bool purgePending)
 				"SELECT job_id FROM jobs "
 				"WHERE kind = 'upload_batch')"_q)
 			|| !cleanup.exec(u"DELETE FROM jobs "
-				"WHERE kind = 'upload_batch'"_q)
-			|| !cleanup.exec(u"DELETE FROM media_refs WHERE id_refs = 0 "
-				"AND NOT EXISTS (SELECT 1 FROM dedup_ul "
-					"WHERE dedup_ul.doc_id = media_refs.media_id "
-					"AND dedup_ul.is_photo = media_refs.is_photo "
-					"AND dedup_ul.status = 'u') "
-				"AND NOT EXISTS (SELECT 1 FROM dedup_ul "
-					"WHERE dedup_ul.doc_id = media_refs.media_id "
-					"AND dedup_ul.is_photo = media_refs.is_photo "
-					"AND dedup_ul.status = 'f')"_q)
-			|| !cleanup.exec(u"DELETE FROM hashes WHERE "
-				"NOT EXISTS (SELECT 1 FROM chat_scan_items "
-					"WHERE chat_scan_items.hash_id = hashes.hash_id) "
-				"AND NOT EXISTS (SELECT 1 FROM dedup_ul "
-					"WHERE dedup_ul.hash_id = hashes.hash_id) "
-				"AND NOT EXISTS (SELECT 1 FROM dedup_dl "
-					"WHERE dedup_dl.hash_id = hashes.hash_id) "
-				"AND NOT EXISTS (SELECT 1 FROM media_refs "
-					"WHERE media_refs.hash_id = hashes.hash_id) "
-				"AND NOT EXISTS (SELECT 1 FROM job_items "
-					"WHERE job_items.hash_id = hashes.hash_id)"_q)) {
+				"WHERE kind = 'upload_batch'"_q)) {
 			LOG(("DedupDb: Failed to purge stale pending rows: %1").arg(
 				cleanup.lastError().text()));
 		}
@@ -2102,7 +2155,15 @@ DedupDb::Impl::Impl(const QString &path, bool purgePending)
 		_shared->state[1] = TableState();
 	}
 	if (_open) {
-		crl::async([path = _path] {
+		{
+			QSqlQuery mark(_db);
+			mark.exec(u"PRAGMA user_version = 1"_q);
+		}
+		const auto purge = purgePending && dirty;
+		crl::async([path = _path, purge] {
+			if (purge) {
+				PurgeOrphanHashes(path);
+			}
 			OptimizeDatabase(path);
 		});
 	}
@@ -2123,6 +2184,10 @@ DedupDb::Impl::~Impl() {
 				LOG(("DedupDb: Close checkpoint failed: %1").arg(
 					q.lastError().text()));
 			}
+		}
+		{
+			QSqlQuery q(_db);
+			q.exec(u"PRAGMA user_version = 0"_q);
 		}
 		_db.close();
 	}
@@ -3803,10 +3868,18 @@ bool DedupDb::Impl::containsDocId(
 		Table table,
 		uint64 documentId,
 		bool isPhoto) const {
-	ensureLoaded(table);
-	std::lock_guard<std::mutex> lock(_shared->mutex);
+	if (!_open || !documentId) {
+		return false;
+	}
 	const auto type = isPhoto ? 1 : 0;
-	return _shared->state[int(table)].docToHash[type].contains(documentId);
+	{
+		std::lock_guard<std::mutex> lock(_shared->mutex);
+		const auto &s = _shared->state[int(table)];
+		if (s.loaded) {
+			return s.docToHash[type].contains(documentId);
+		}
+	}
+	return containsDocIdInDb(table, documentId, isPhoto);
 }
 
 bool DedupDb::Impl::containsDocIdInDb(
@@ -3828,11 +3901,42 @@ bool DedupDb::Impl::containsDocIdInDb(
 	return q.value(0).toBool();
 }
 
+bool DedupDb::Impl::containsHashInDb(
+		Table table,
+		const QByteArray &hash,
+		bool finishedOnly) const {
+	if (!_open || hash.isEmpty()) {
+		return false;
+	}
+	QSqlQuery q(_db);
+	auto sql = u"SELECT EXISTS(SELECT 1 FROM " + TableName(table)
+		+ u" d JOIN hashes h ON h.hash_id = d.hash_id "
+		"WHERE h.hash = :hash"_q;
+	if (finishedOnly) {
+		sql += u" AND d.status = 'f'"_q;
+	}
+	sql += u")"_q;
+	q.prepare(sql);
+	q.bindValue(u":hash"_q, hash);
+	if (!q.exec() || !q.next()) {
+		return false;
+	}
+	return q.value(0).toBool();
+}
+
 bool DedupDb::Impl::containsHash(Table table, const QByteArray &hash) const {
-	ensureLoaded(table);
-	std::lock_guard<std::mutex> lock(_shared->mutex);
-	const auto &s = _shared->state[int(table)];
-	return s.hashToDoc[0].contains(hash) || s.hashToDoc[1].contains(hash);
+	if (!_open || hash.isEmpty()) {
+		return false;
+	}
+	{
+		std::lock_guard<std::mutex> lock(_shared->mutex);
+		const auto &s = _shared->state[int(table)];
+		if (s.loaded) {
+			return s.hashToDoc[0].contains(hash)
+				|| s.hashToDoc[1].contains(hash);
+		}
+	}
+	return containsHashInDb(table, hash, false);
 }
 
 bool DedupDb::Impl::containsFinishedHash(
@@ -3841,21 +3945,25 @@ bool DedupDb::Impl::containsFinishedHash(
 	if (!_open || hash.isEmpty()) {
 		return false;
 	}
-	ensureLoaded(table);
-	std::lock_guard<std::mutex> lock(_shared->mutex);
-	const auto &s = _shared->state[int(table)];
-	for (auto type = 0; type != 2; ++type) {
-		const auto it = s.hashToDoc[type].find(hash);
-		if (it == s.hashToDoc[type].end()) {
-			continue;
-		}
-		for (const auto docId : it.value()) {
-			if (!s.unfinishedDocs[type].contains(docId)) {
-				return true;
+	{
+		std::lock_guard<std::mutex> lock(_shared->mutex);
+		const auto &s = _shared->state[int(table)];
+		if (s.loaded) {
+			for (auto type = 0; type != 2; ++type) {
+				const auto it = s.hashToDoc[type].find(hash);
+				if (it == s.hashToDoc[type].end()) {
+					continue;
+				}
+				for (const auto docId : it.value()) {
+					if (!s.unfinishedDocs[type].contains(docId)) {
+						return true;
+					}
+				}
 			}
+			return false;
 		}
 	}
-	return false;
+	return containsHashInDb(table, hash, true);
 }
 
 void DedupDb::Impl::rekey(
@@ -3994,10 +4102,22 @@ QByteArray DedupDb::Impl::hashForDocId(
 		Table table,
 		uint64 documentId,
 		bool isPhoto) const {
-	ensureLoaded(table);
-	std::lock_guard<std::mutex> lock(_shared->mutex);
-	const auto type = isPhoto ? 1 : 0;
-	return _shared->state[int(table)].docToHash[type].value(documentId);
+	if (!_open || !documentId) {
+		return {};
+	}
+	// A single lookup must not load the whole table: on a database with
+	// millions of rows that cache is what keeps the process at gigabytes.
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT h.hash FROM " + TableName(table)
+		+ u" d JOIN hashes h ON h.hash_id = d.hash_id "
+		"WHERE d.doc_id = :doc_id AND d.is_photo = :is_photo"_q);
+	q.bindValue(u":doc_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(documentId)));
+	q.bindValue(u":is_photo"_q, isPhoto ? 1 : 0);
+	if (q.exec() && q.next()) {
+		return q.value(0).toByteArray();
+	}
+	return {};
 }
 
 uint64 DedupDb::Impl::seekDocumentId(
@@ -4005,20 +4125,41 @@ uint64 DedupDb::Impl::seekDocumentId(
 		const QByteArray &hash,
 		uint64 excludeDocumentId,
 		bool excludeIsPhoto) const {
-	ensureLoaded(table);
-	std::lock_guard<std::mutex> lock(_shared->mutex);
-	const auto &s = _shared->state[int(table)];
-	for (auto type = 0; type != 2; ++type) {
-		const auto it = s.hashToDoc[type].find(hash);
-		if (it == s.hashToDoc[type].end()) {
-			continue;
-		}
-		for (const auto docId : it.value()) {
-			if (docId != excludeDocumentId
-				|| type != (excludeIsPhoto ? 1 : 0)) {
-				return docId;
+	if (!_open || hash.isEmpty()) {
+		return 0;
+	}
+	{
+		std::lock_guard<std::mutex> lock(_shared->mutex);
+		const auto &s = _shared->state[int(table)];
+		if (s.loaded) {
+			for (auto type = 0; type != 2; ++type) {
+				const auto it = s.hashToDoc[type].find(hash);
+				if (it == s.hashToDoc[type].end()) {
+					continue;
+				}
+				for (const auto docId : it.value()) {
+					if (docId != excludeDocumentId
+						|| type != (excludeIsPhoto ? 1 : 0)) {
+						return docId;
+					}
+				}
 			}
+			return 0;
 		}
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT d.doc_id FROM " + TableName(table)
+		+ u" d JOIN hashes h ON h.hash_id = d.hash_id "
+		"WHERE h.hash = :hash "
+		"AND NOT (d.doc_id = :exclude_doc_id "
+		"AND d.is_photo = :exclude_is_photo) "
+		"LIMIT 1"_q);
+	q.bindValue(u":hash"_q, hash);
+	q.bindValue(u":exclude_doc_id"_q, QVariant::fromValue(
+		static_cast<qlonglong>(excludeDocumentId)));
+	q.bindValue(u":exclude_is_photo"_q, excludeIsPhoto ? 1 : 0);
+	if (q.exec() && q.next()) {
+		return q.value(0).toULongLong();
 	}
 	return 0;
 }
