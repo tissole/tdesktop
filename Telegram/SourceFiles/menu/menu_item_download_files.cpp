@@ -414,7 +414,15 @@ void AddAction(
 						if (doc->loading()) {
 							return;
 						}
-						if (!doc->filepath(true).isEmpty()) {
+						if (doc->downloadPaused()
+							&& !IsDocumentFileComplete(doc)) {
+							return;
+						}
+						auto path = doc->filepath(true);
+						if (path.isEmpty()) {
+							path = doc->downloadTargetPath();
+						}
+						if (!path.isEmpty()) {
 							if (batch) {
 								batch->displayName = QFileInfo(folderPath + name).fileName();
 							}
@@ -422,7 +430,7 @@ void AddAction(
 								Core::App().downloadManager().noteUntrackedSave(
 									item,
 									doc,
-									doc->filepath(true),
+									path,
 									saveStarted,
 									batchId);
 							}
@@ -432,9 +440,9 @@ void AddAction(
 									document->session().uniqueId(),
 									batchId,
 									doc->id,
-									doc->filepath(true));
+									path);
 							}
-						} else {
+						} else if (!batch->paused) {
 							batch->addFailed();
 						}
 						lifetime->destroy();

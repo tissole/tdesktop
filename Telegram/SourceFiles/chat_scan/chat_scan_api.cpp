@@ -419,7 +419,6 @@ void Api::cancel() {
 	db().clearChatTable();
 	db().invalidateChatTable(_peer->id);
 	db().invalidateAllPeersChatTable();
-	_uploadTableUse.reset();
 	_pageStickers.clear();
 	_stickerTotal = 0;
 	_staleMedia.clear();
@@ -1171,11 +1170,6 @@ std::vector<Data::ChatScanProgressRow> Api::storedProgress() const {
 
 void Api::loadKnownHashes(Fn<void()> done) {
 	const auto dedupOn = GetEnhancedBool("prevent_upload_duplicates");
-	if (dedupOn) {
-		_uploadTableUse = db().useTable(Data::DedupDb::Table::Uploads);
-	} else {
-		_uploadTableUse.reset();
-	}
 	const auto weak = base::weak_ptr<Api>(this);
 	db().chatScanMediaHashesAsync(
 		_peer->id,
@@ -1215,11 +1209,6 @@ void Api::loadResumeSets(Fn<void()> done) {
 	clearHashedBatch();
 	_queue->clearKnownHashes();
 	const auto dedupOn = GetEnhancedBool("prevent_upload_duplicates");
-	if (dedupOn) {
-		_uploadTableUse = db().useTable(Data::DedupDb::Table::Uploads);
-	} else {
-		_uploadTableUse.reset();
-	}
 	const auto weak = base::weak_ptr<Api>(this);
 	db().chatScanUniqueHashesAsync(
 		_peer->id,
@@ -2231,7 +2220,6 @@ void Api::writeAggregateRows() {
 	db().clearChatTable();
 	db().invalidateChatTable(_peer->id);
 	db().invalidateAllPeersChatTable();
-	_uploadTableUse.reset();
 	_stickerTotal = 0;
 	_staleMedia.clear();
 	_pageItems.clear();

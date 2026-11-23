@@ -465,6 +465,7 @@ struct DocumentFields {
 	Fn<void()> externalCancel;
 	bool boldName = false;
 	bool hideDate = false;
+	bool noThumb = false;
 	QString statusSuffix;
 };
 
@@ -543,6 +544,7 @@ private:
 	mutable std::shared_ptr<Data::PhotoMedia> _coverMedia;
 	QString _statusSuffix;
 	bool _boldName = false;
+	bool _noThumb = false;
 
 	bool withThumb() const;
 	bool updateStatusText();

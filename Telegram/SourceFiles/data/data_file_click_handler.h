@@ -51,6 +51,7 @@ struct DownloadBatch {
 	int duplicates = 0;
 	int failed = 0;
 	bool done = false;
+	bool paused = false;
 	uint64 id = 0;
 	uint64 sessionId = 0;
 	QString srcName;
@@ -97,6 +98,8 @@ struct DownloadBatch {
 };
 
 [[nodiscard]] std::shared_ptr<DownloadBatch> MakeDownloadBatch(int total);
+
+[[nodiscard]] bool IsDocumentFileComplete(not_null<DocumentData*> document);
 
 void TrackSaveDownload(
 	FullMsgId itemId,

@@ -21,6 +21,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_document_media.h"
 #include "data/data_file_click_handler.h"
 #include "data/data_peer.h"
+#include "data/data_types.h"
 #include "data/data_web_page.h"
 #include "data/data_changes.h"
 #include "data/data_user.h"
@@ -37,9 +38,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QDir>
 #include <QFile>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <map>
+#include <mutex>
 #include <set>
+#include <thread>
 #include <utility>
 #include <QFileInfo>
+#include <QTimer>
 
 #include "iv/iv_rich_page.h"
 
@@ -67,7 +76,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
-#include <QtCore/QDebug>
 
 namespace Data {
 namespace {
@@ -92,10 +100,6 @@ void FilterCopyAlbumDuplicates(
 		Fn<void(std::vector<not_null<HistoryItem*>>)> done) {
 	const auto dedupOff = !GetEnhancedBool("prevent_forward_duplicates");
 	auto &db = Core::App().downloadManager().ensureDedupDb();
-	auto chatUse = std::make_shared<Data::DedupDb::ChatTableUse>();
-	if (db.isOpen()) {
-		*chatUse = db.useChatTable(dstPeer, !dedupOff);
-	}
 	auto seenIds = std::set<std::pair<uint64, bool>>();
 	auto filteredIds = std::vector<not_null<HistoryItem*>>();
 	filteredIds.reserve(items.size());
@@ -146,8 +150,7 @@ void FilterCopyAlbumDuplicates(
 	auto seenHashesPtr = std::make_shared<QSet<QByteArray>>(std::move(seenHashes));
 	auto finalFilteredPtr = std::make_shared<std::vector<not_null<HistoryItem*>>>(std::move(finalFiltered));
 	auto allDone = std::make_shared<Fn<void()>>();
-	*allDone = [=, chatUse = std::move(chatUse)]() mutable {
-		Q_UNUSED(chatUse);
+	*allDone = [=]() mutable {
 		if (--(*remaining) > 0) return;
 		auto &db2 = Core::App().downloadManager().ensureDedupDb();
 		for (const auto item : hashCandidates) {
@@ -204,15 +207,6 @@ constexpr auto ByDocument = [](const auto &entry) {
 	return entry.object.document;
 };
 
-[[nodiscard]] uint64 PeerAccessHash(not_null<PeerData*> peer) {
-	if (const auto user = peer->asUser()) {
-		return user->accessHash();
-	} else if (const auto channel = peer->asChannel()) {
-		return channel->accessHash();
-	}
-	return 0;
-}
-
 [[nodiscard]] bool ItemContainsMedia(const DownloadObject &object) {
 	if (const auto iv = object.item->Get<HistoryMessageMediaForInstantView>()) {
 		if (object.document && iv->documents.contains(object.document)) {
@@ -263,15 +257,25 @@ struct DocumentDescriptor {
 	uint64 sessionUniqueId = 0;
 	DocumentId documentId = 0;
 	FullMsgId itemId;
+	QString root;
+	QString stopRoot;
 	bool isPhoto = false;
 };
 
-[[nodiscard]] QString RichExportFolderToRemove(const QString &filePath) {
+[[nodiscard]] QString RichExportFolderToRemove(
+		const QString &filePath,
+		const QString &rootPath = QString(),
+		const QString &stopRoot = QString()) {
 	if (!filePath.endsWith(u".html"_q, Qt::CaseInsensitive)) {
 		return QString();
 	}
 	const auto info = QFileInfo(filePath);
-	const auto folder = info.absolutePath();
+	const auto folder = QDir::cleanPath(info.absolutePath());
+	const auto root = QDir::cleanPath(rootPath);
+	const auto stop = QDir::cleanPath(stopRoot);
+	if (folder == root || folder == stop) {
+		return QString();
+	}
 	if (QDir(folder).dirName() != info.completeBaseName()) {
 		return QString();
 	}
@@ -293,6 +297,68 @@ struct DocumentDescriptor {
 	return folder;
 }
 
+[[nodiscard]] bool IsDlResumeComplete(const DlResumeRecord &record) {
+	if (record.path.isEmpty() || record.fileSize <= 0) {
+		return false;
+	}
+	const auto info = QFileInfo(record.path);
+	return info.exists() && info.size() >= record.fileSize;
+}
+
+struct PartialFileRemove {
+	QString path;
+	QString root;
+	QString stopRoot;
+	qint64 fullSize = 0;
+};
+
+void RemovePartialFiles(std::vector<PartialFileRemove> files) {
+	if (files.empty()) {
+		return;
+	}
+	const auto shared = std::make_shared<std::vector<PartialFileRemove>>(
+		std::move(files));
+	const auto next = std::make_shared<std::atomic<int>>(0);
+	const auto workers = std::min(4, int(shared->size()));
+	const auto worker = [=] {
+		for (auto index = next->fetch_add(1);
+			index < int(shared->size());
+			index = next->fetch_add(1)) {
+			const auto &file = (*shared)[index];
+			const auto size = QFileInfo(file.path).size();
+			const auto skip = (file.fullSize > 0) && (size >= file.fullSize);
+			if (!skip) {
+				QFile::remove(file.path);
+			}
+			const auto still = QFileInfo::exists(file.path);
+			if (!still) {
+				crl::on_main([=] {
+					PruneEmptyDownloadFolders(
+						file.root,
+						file.path,
+						file.stopRoot);
+				});
+			}
+		}
+	};
+	for (auto i = 0; i != workers; ++i) {
+		std::thread(worker).detach();
+	}
+}
+
+[[nodiscard]] base::flat_set<uint64> ResumeDlBatchIds(
+		not_null<Main::Session*> session,
+		not_null<DedupDb*> db) {
+	auto result = base::flat_set<uint64>();
+	const auto sessionId = session->uniqueId();
+	for (const auto &row : db->loadAllDlResume()) {
+		if (row.sessionId == sessionId && row.batchId) {
+			result.emplace(row.batchId);
+		}
+	}
+	return result;
+}
+
 } // namespace
 
 struct DownloadManager::DeleteFilesDescriptor {
@@ -304,10 +370,10 @@ DownloadManager::DownloadManager()
 : _clearLoadingTimer([=] { clearLoading(); })
 , _duplicatesToastTimer([=] { notifyDuplicateSkips(); })
 	, _holdExpiryTimer([=] { checkHoldExpiry(); }) {
-	qDebug() << "[TM] build " << __DATE__ << ' ' << __TIME__;
 }
 
 DownloadManager::~DownloadManager() {
+	*_pendingDeletesAlive = false;
 	_sessions.clear();
 }
 
@@ -325,8 +391,401 @@ void DownloadManager::reportDuplicateSkipped(
 void DownloadManager::addBatch(std::weak_ptr<DownloadBatch> batch) {
 	_batches.push_back(std::move(batch));
 	_heldDlBatches.clear();
+	persistDlBatches();
 	_loadingListChanges.fire({});
 	Info::Downloads::SetLastActivityTab(Info::Downloads::Tab::Downloads);
+}
+
+void DownloadManager::persistDlBatches() {
+	auto &db = ensureDedupDb();
+	if (!db.isOpen()) {
+		return;
+	}
+	const auto stored = [&] {
+		auto result = std::map<uint64, Data::DlBatchRecord>();
+		for (const auto &record : db.loadDlBatches()) {
+			result.emplace(record.batchId, record);
+		}
+		return result;
+	}();
+	const auto resumeRows = db.loadAllDlResume();
+	// A file that reached its final size but never got its completion
+	// callback is still downloaded: its bytes are already in the checkpoint.
+	auto completeByBatch = base::flat_map<uint64, int>();
+	for (const auto &record : resumeRows) {
+		if (record.batchId && IsDlResumeComplete(record)) {
+			++completeByBatch[record.batchId];
+		}
+	}
+	auto doneByBatch = base::flat_map<uint64, int>();
+	auto completedBytesByBatch = base::flat_map<uint64, int64>();
+	for (const auto &[session, data] : _sessions) {
+		for (const auto &entry : data.downloaded) {
+			if (entry.batchId) {
+				++doneByBatch[entry.batchId];
+				completedBytesByBatch[entry.batchId] += entry.size;
+			}
+		}
+	}
+	struct LiveBatchProgress {
+		int64 ready = 0;
+		int64 total = 0;
+	};
+	auto liveByBatch = base::flat_map<uint64, LiveBatchProgress>();
+	for (const auto &[session, data] : _sessions) {
+		for (const auto &entry : data.downloading) {
+			if (!entry.batchId || entry.enhancedForward || entry.done) {
+				continue;
+			}
+			auto &live = liveByBatch[entry.batchId];
+			live.ready += entry.ready;
+			live.total += entry.total;
+		}
+	}
+	for (const auto &weak : _batches) {
+		const auto batch = weak.lock();
+		if (!batch
+			|| batch->done
+			|| !batch->id
+			|| !batch->sessionId
+			|| batch->total <= 1) {
+			continue;
+		}
+		const auto live = liveByBatch.find(batch->id);
+		const auto liveTotal = (live != end(liveByBatch))
+			? live->second.total
+			: int64(0);
+		const auto liveReady = (live != end(liveByBatch))
+			? live->second.ready
+			: int64(0);
+		const auto completedReady = completedBytesByBatch[batch->id];
+		const auto it = stored.find(batch->id);
+		auto total = completedReady + liveTotal;
+		auto ready = completedReady + liveReady;
+		if (it != end(stored)) {
+			// The stored checkpoint already covers files that were deleted
+			// from the list, so it must not be rebuilt from the remaining
+			// entries only.
+			total = std::max(total, it->second.totalBytes);
+			ready = std::max(ready, it->second.readyBytes);
+		}
+		ready = std::clamp(ready, int64(0), total);
+		auto counted = doneByBatch[batch->id] + batch->failed;
+		if (const auto complete = completeByBatch.find(batch->id);
+			complete != end(completeByBatch)) {
+			counted += complete->second;
+		}
+		const auto done = std::clamp(
+			std::max(counted, (it != end(stored)) ? it->second.done : 0),
+			0,
+			batch->total);
+		db.upsertDlBatch({
+			.sessionId = batch->sessionId,
+			.batchId = batch->id,
+			.total = batch->total,
+			.done = done,
+			.skipped = batch->duplicates,
+			.startedAt = batch->startedAt,
+			.srcName = batch->srcName,
+			.destDir = batch->destDir,
+			.displayName = batch->displayName,
+			.readyBytes = ready,
+			.totalBytes = total,
+		});
+	}
+	// After a restart the batch object itself is gone, only the stored
+	// checkpoint and the resume rows remain. Keep that checkpoint current on
+	// pause and as restored files complete.
+	struct RestoredPending {
+		int count = 0;
+		QString firstName;
+		qint64 firstStarted = 0;
+		bool hasFirst = false;
+	};
+	auto restored = base::flat_map<uint64, RestoredPending>();
+	for (const auto &record : resumeRows) {
+		if (!record.batchId || record.path.isEmpty()) {
+			continue;
+		}
+		const auto info = QFileInfo(record.path);
+		if (info.exists()
+			&& record.fileSize > 0
+			&& info.size() >= record.fileSize) {
+			continue;
+		}
+		auto &state = restored[record.batchId];
+		++state.count;
+		if (!state.hasFirst || record.started < state.firstStarted) {
+			state.hasFirst = true;
+			state.firstStarted = record.started;
+			state.firstName = info.fileName();
+		}
+	}
+	for (const auto &[batchId, state] : restored) {
+		if (ranges::any_of(
+				_batches,
+				[&](const std::weak_ptr<DownloadBatch> &weak) {
+					const auto batch = weak.lock();
+					return batch && !batch->done && batch->id == batchId;
+				})) {
+			continue;
+		}
+		const auto it = stored.find(batchId);
+		if (it == end(stored)) {
+			continue;
+		}
+		const auto &record = it->second;
+		const auto done = std::clamp(
+			std::max(
+				record.done,
+				doneByBatch[batchId] + completeByBatch[batchId]),
+			0,
+			record.total);
+		auto total = record.totalBytes;
+		auto ready = record.readyBytes;
+		if (const auto live = liveByBatch.find(batchId);
+			live != end(liveByBatch)) {
+			const auto completedReady = completedBytesByBatch[batchId];
+			total = std::max(total, completedReady + live->second.total);
+			ready = std::clamp(
+				std::max(ready, completedReady + live->second.ready),
+				int64(0),
+				total);
+		}
+		db.upsertDlBatch({
+			.sessionId = record.sessionId,
+			.batchId = record.batchId,
+			.total = record.total,
+			.done = done,
+			.skipped = record.skipped,
+			.startedAt = record.startedAt,
+			.srcName = record.srcName,
+			.destDir = record.destDir,
+			.displayName = state.hasFirst
+				? state.firstName
+				: record.displayName,
+			.readyBytes = ready,
+			.totalBytes = total,
+		});
+	}
+}
+
+void DownloadManager::dropDlBatchDownloads(uint64 batchId, int count) {
+	if (!batchId || count <= 0) {
+		return;
+	}
+	for (const auto &weak : _batches) {
+		if (const auto batch = weak.lock();
+			batch && batch->id == batchId) {
+			const auto files = std::clamp(count, 0, batch->total);
+			batch->total -= files;
+			batch->downloaded = std::clamp(
+				batch->downloaded - files,
+				0,
+				batch->total);
+			// The caller persists the checkpoint and fires the list
+			// changes after the matching saved counters are updated too;
+			// persisting here would briefly save the old done count against
+			// the already shrunken total.
+			break;
+		}
+	}
+}
+
+void DownloadManager::dropDlBatchSaved(
+		const base::flat_map<uint64, int> &counts,
+		const base::flat_map<uint64, int64> &bytes) {
+	auto &db = ensureDedupDb();
+	if (!db.isOpen()) {
+		return;
+	}
+	for (const auto &record : db.loadDlBatches()) {
+		const auto count = counts.find(record.batchId);
+		if (count == end(counts)) {
+			continue;
+		}
+		auto updated = record;
+		const auto files = std::clamp(count->second, 0, updated.total);
+		updated.total -= files;
+		updated.done = std::clamp(updated.done - files, 0, updated.total);
+		if (const auto size = bytes.find(record.batchId);
+			size != end(bytes)) {
+			const auto deletedBytes = std::max(int64(0), size->second);
+			updated.totalBytes = std::max(
+				int64(0),
+				updated.totalBytes - deletedBytes);
+			updated.readyBytes = std::clamp(
+				updated.readyBytes - deletedBytes,
+				int64(0),
+				updated.totalBytes);
+		}
+		db.upsertDlBatch(updated);
+	}
+}
+
+void DownloadManager::noteRestoredDlBatchSkipped(uint64 batchId) {
+	if (!batchId) {
+		return;
+	}
+	if (ranges::any_of(
+			_batches,
+			[&](const std::weak_ptr<DownloadBatch> &weak) {
+				const auto batch = weak.lock();
+				return batch && !batch->done && batch->id == batchId;
+			})) {
+		return;
+	}
+	auto &db = ensureDedupDb();
+	if (!db.isOpen()) {
+		return;
+	}
+	for (const auto &record : db.loadDlBatches()) {
+		if (record.batchId != batchId) {
+			continue;
+		}
+		auto updated = record;
+		updated.skipped = std::min(updated.total, updated.skipped + 1);
+		db.upsertDlBatch(updated);
+		break;
+	}
+}
+
+void DownloadManager::refreshDlBatchPaused(uint64 batchId) {
+	for (const auto &weak : _batches) {
+		const auto batch = weak.lock();
+		if (!batch || batch->done) {
+			continue;
+		}
+		const auto id = batch->id;
+		if (batchId && id != batchId) {
+			continue;
+		}
+		auto paused = false;
+		for (const auto &[session, data] : _sessions) {
+			for (const auto &entry : data.downloading) {
+				if (entry.batchId != id) {
+					continue;
+				}
+				const auto document = entry.object.document;
+				if (entry.paused
+					|| (document && document->downloadPaused())) {
+					paused = true;
+					break;
+				}
+			}
+			if (paused) {
+				break;
+			}
+		}
+		batch->paused = paused;
+		if (batchId) {
+			return;
+		}
+	}
+}
+
+std::vector<DownloadManager::DlRunSnapshot> DownloadManager::persistedDlRuns() {
+	auto result = std::vector<DlRunSnapshot>();
+	auto &db = ensureDedupDb();
+	if (!db.isOpen()) {
+		return result;
+	}
+	// Pending resume rows are the live source of truth for how many batch
+	// items are still unfinished; the stored done count only grows.
+	auto pending = base::flat_map<uint64, int>();
+	for (const auto &record : db.loadAllDlResume()) {
+		if (record.batchId
+			&& !record.path.isEmpty()
+			&& !IsDlResumeComplete(record)) {
+			++pending[record.batchId];
+		}
+	}
+	for (const auto &record : db.loadDlBatches()) {
+		if (!record.batchId || !record.sessionId || record.total <= 1) {
+			continue;
+		}
+		const auto live = ranges::any_of(
+			_batches,
+			[&](const std::weak_ptr<DownloadBatch> &weak) {
+				const auto batch = weak.lock();
+				return batch && batch->id == record.batchId;
+			});
+		const auto it = pending.find(record.batchId);
+		const auto left = (it != end(pending)) ? it->second : 0;
+		if (left > 0) {
+			if (live) {
+				continue;
+			}
+			// Skipped duplicates have no resume row, so they must not be
+			// counted as completed files here; they are reported separately.
+			// The stored count is authoritative: it is decremented when
+			// finished files are deleted and must not be re-derived from
+			// the total minus the remaining rows.
+			const auto done = std::clamp(record.done, 0, record.total);
+			result.push_back({
+				.batchId = record.batchId,
+				.sessionId = record.sessionId,
+				.srcName = record.srcName,
+				.destDir = record.destDir,
+				.total = record.total,
+				.done = done,
+				.skipped = record.skipped,
+				.startedAt = TimeId(record.startedAt),
+				.finished = false,
+			});
+			continue;
+		}
+		if (live
+			|| ranges::any_of(_finishedDlRuns, [&](const FinishedDlRun &run) {
+				return run.batchId == record.batchId;
+			})) {
+			continue;
+		}
+		{
+			db.removeDlBatch(record.sessionId, record.batchId);
+			const auto finishedAt = base::unixtime::now();
+			const auto done = std::clamp(
+				record.total - record.skipped,
+				0,
+				record.total);
+			_finishedDlRuns.push_back({
+				.batchId = record.batchId,
+				.sessionId = record.sessionId,
+				.srcName = record.srcName,
+				.destDir = record.destDir,
+				.total = record.total,
+				.done = done,
+				.skipped = record.skipped,
+				.startedAt = TimeId(record.startedAt),
+				.finishedAt = finishedAt,
+			});
+			// The batch is adopted on this very refresh, so it has to be
+			// reported here too: the bar is computed from this result before
+			// the finished list is read again.
+			result.push_back({
+				.batchId = record.batchId,
+				.sessionId = record.sessionId,
+				.srcName = record.srcName,
+				.destDir = record.destDir,
+				.total = record.total,
+				.done = done,
+				.skipped = record.skipped,
+				.startedAt = TimeId(record.startedAt),
+				.finishedAt = finishedAt,
+				.finished = true,
+			});
+			for (const auto &account
+				: Core::App().domain().orderedAccounts()) {
+				if (const auto session = account->maybeSession()) {
+					if (session->uniqueId() == record.sessionId) {
+						writePostponed(not_null<Main::Session*>(session));
+						break;
+					}
+				}
+			}
+		}
+	}
+	return result;
 }
 
 void DownloadManager::holdFinishedDlBatch(
@@ -359,6 +818,7 @@ bool DownloadManager::hasHeldDlBatches() const {
 }
 
 void DownloadManager::pokeDownloadBar() {
+	persistDlBatches();
 	_loadingListChanges.fire({});
 }
 
@@ -382,6 +842,14 @@ std::tuple<int, int, int> DownloadManager::batchTotals() {
 			++i;
 		}
 	}
+	auto storedDone = base::flat_map<uint64, int>();
+	if (!_batches.empty()) {
+		if (auto &db = ensureDedupDb(); db.isOpen()) {
+			for (const auto &record : db.loadDlBatches()) {
+				storedDone[record.batchId] = record.done;
+			}
+		}
+	}
 	for (auto i = 0; i != int(_batches.size());) {
 		const auto batch = _batches[i].lock();
 		if (!batch || batch->done) {
@@ -390,11 +858,21 @@ std::tuple<int, int, int> DownloadManager::batchTotals() {
 			&& ranges::contains(_droppedDlBatches, batch->id)) {
 			_batches.erase(_batches.begin() + i);
 		} else {
+			const auto stored = storedDone.find(batch->id);
 			total += batch->total;
-			done += batch->downloaded + batch->failed;
+			done += std::min(
+				batch->total,
+				std::max(
+					batch->downloaded + batch->failed,
+					(stored != end(storedDone)) ? stored->second : 0));
 			skipped += batch->duplicates;
 			++i;
 		}
+	}
+	for (const auto &run : persistedDlRuns()) {
+		total += run.total;
+		done += run.done;
+		skipped += run.skipped;
 	}
 	return { total, done, skipped };
 }
@@ -422,6 +900,7 @@ void DownloadManager::noteDlBatchFinished(
 	if (!batch->finishedAt) {
 		batch->finishedAt = base::unixtime::now();
 	}
+	ensureDedupDb().removeDlBatch(batch->sessionId, batch->id);
 	_finishedDlRuns.push_back({
 		.batchId = batch->id,
 		.sessionId = batch->sessionId,
@@ -447,6 +926,100 @@ void DownloadManager::noteDlBatchFinished(
 	_loadingListChanges.fire({});
 }
 
+void DownloadManager::noteDlBatchCancelled(
+		not_null<Main::Session*> session,
+		uint64 batchId) {
+	if (!batchId) {
+		return;
+	}
+	auto record = std::optional<Data::DlBatchRecord>();
+	for (const auto &row : ensureDedupDb().loadDlBatches()) {
+		if (row.batchId == batchId) {
+			record = row;
+			break;
+		}
+	}
+	for (const auto &weak : _batches) {
+		const auto batch = weak.lock();
+		if (!batch || batch->id != batchId) {
+			continue;
+		}
+		batch->done = true;
+		if (!record) {
+			record = Data::DlBatchRecord{
+				.sessionId = batch->sessionId,
+				.batchId = batch->id,
+				.total = batch->total,
+				.done = batch->downloaded + batch->failed,
+				.skipped = batch->duplicates,
+				.startedAt = batch->startedAt,
+				.srcName = batch->srcName,
+				.destDir = batch->destDir,
+				.displayName = batch->displayName,
+			};
+		}
+	}
+	if (!record || record->total <= 1) {
+		return;
+	}
+	auto ids = base::flat_set<FullMsgId>();
+	for (const auto &entry : sessionData(session).downloaded) {
+		if (entry.batchId == batchId) {
+			ids.emplace(entry.itemId);
+		}
+	}
+	ensureDedupDb().removeDlBatch(record->sessionId, batchId);
+	if (!ranges::any_of(_finishedDlRuns, [&](const FinishedDlRun &run) {
+			return run.batchId == batchId;
+		})) {
+		_finishedDlRuns.push_back({
+			.batchId = batchId,
+			.sessionId = record->sessionId,
+			.srcName = record->srcName,
+			.destDir = record->destDir,
+			.total = record->total,
+			.done = std::clamp(
+				std::max(record->done, int(ids.size())),
+				0,
+				record->total),
+			.skipped = record->skipped,
+			.startedAt = TimeId(record->startedAt),
+			.finishedAt = base::unixtime::now(),
+		});
+		while (_finishedDlRuns.size() > 200) {
+			_finishedDlRuns.erase(_finishedDlRuns.begin());
+		}
+	}
+	writePostponed(session);
+	_loadingListChanges.fire({});
+}
+
+QString DownloadManager::dlBatchDestination(uint64 batchId) const {
+	if (!batchId) {
+		return {};
+	}
+	for (const auto &weak : _batches) {
+		const auto batch = weak.lock();
+		if (batch && batch->id == batchId && !batch->destDir.isEmpty()) {
+			return batch->destDir;
+		}
+	}
+	for (const auto &run : _finishedDlRuns) {
+		if (run.batchId == batchId && !run.destDir.isEmpty()) {
+			return run.destDir;
+		}
+	}
+	auto &db = ensureDedupDb();
+	if (db.isOpen()) {
+		for (const auto &record : db.loadDlBatches()) {
+			if (record.batchId == batchId) {
+				return record.destDir;
+			}
+		}
+	}
+	return {};
+}
+
 void DownloadManager::dropDlBatch(uint64 batchId) {
 	if (!batchId) {
 		return;
@@ -465,6 +1038,11 @@ void DownloadManager::dropDlBatch(uint64 batchId) {
 				return !batch || batch->id == batchId;
 			}),
 		end(_batches));
+	for (const auto &record : ensureDedupDb().loadDlBatches()) {
+		if (record.batchId == batchId) {
+			ensureDedupDb().removeDlBatch(record.sessionId, batchId);
+		}
+	}
 	dropDlRun(batchId);
 	_loadingListChanges.fire({});
 }
@@ -509,6 +1087,17 @@ void DownloadManager::dropDlRun(uint64 batchId) {
 
 std::vector<DownloadManager::DlRunSnapshot> DownloadManager::dlRuns() {
 	auto result = std::vector<DlRunSnapshot>();
+	// Adoption of a finished restored run happens here, before the finished
+	// list is read, so its header stays visible on this very refresh.
+	auto persisted = persistedDlRuns();
+	auto storedDone = base::flat_map<uint64, int>();
+	if (!_batches.empty()) {
+		if (auto &db = ensureDedupDb(); db.isOpen()) {
+			for (const auto &record : db.loadDlBatches()) {
+				storedDone[record.batchId] = record.done;
+			}
+		}
+	}
 	for (auto i = 0; i != int(_batches.size());) {
 		const auto batch = _batches[i].lock();
 		if (!batch || batch->done) {
@@ -518,13 +1107,18 @@ std::vector<DownloadManager::DlRunSnapshot> DownloadManager::dlRuns() {
 			|| ranges::contains(_droppedDlBatches, batch->id)) {
 			++i;
 		} else {
+			const auto stored = storedDone.find(batch->id);
 			result.push_back({
 				.batchId = batch->id,
 				.sessionId = batch->sessionId,
 				.srcName = batch->srcName,
 				.destDir = batch->destDir,
 				.total = batch->total,
-				.done = batch->downloaded + batch->failed,
+				.done = std::min(
+					batch->total,
+					std::max(
+						batch->downloaded + batch->failed,
+						(stored != end(storedDone)) ? stored->second : 0)),
 				.skipped = batch->duplicates,
 				.startedAt = batch->startedAt,
 				.finished = false,
@@ -545,6 +1139,18 @@ std::vector<DownloadManager::DlRunSnapshot> DownloadManager::dlRuns() {
 			.finishedAt = run.finishedAt,
 			.finished = true,
 		});
+	}
+	auto seen = base::flat_set<uint64>();
+	for (const auto &run : result) {
+		if (run.batchId) {
+			seen.emplace(run.batchId);
+		}
+	}
+	for (const auto &run : persisted) {
+		if (run.batchId && !seen.emplace(run.batchId).second) {
+			continue;
+		}
+		result.push_back(run);
 	}
 	ranges::stable_sort(
 		result,
@@ -702,6 +1308,59 @@ QString DownloadManager::activeDlBatchName() const {
 		}
 	}
 	return QString();
+}
+
+bool DownloadManager::isLiveDlBatch(uint64 batchId) const {
+	for (const auto &weak : _batches) {
+		if (const auto batch = weak.lock()) {
+			if (batch->id == batchId) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+QString DownloadManager::persistedDlBatchName() const {
+	auto &db = ensureDedupDb();
+	if (!db.isOpen()) {
+		return QString();
+	}
+	auto result = QString();
+	for (const auto &record : db.loadDlBatches()) {
+		if (!record.displayName.isEmpty()) {
+			result = record.displayName;
+		}
+	}
+	return result;
+}
+
+QString DownloadManager::persistedDlCheckpointName(uint64 batchId) const {
+	auto &db = ensureDedupDb();
+	if (!db.isOpen()) {
+		return QString();
+	}
+	auto name = QString();
+	auto earliest = qint64(0);
+	auto found = false;
+	for (const auto &record : db.loadAllDlResume()) {
+		if (batchId && record.batchId != batchId) {
+			continue;
+		}
+		const auto info = QFileInfo(record.path);
+		if (!info.exists() || IsDlResumeComplete(record)) {
+			continue;
+		}
+		// The bar names the first item of the batch that is still waiting,
+		// matching the first non-done row, not whichever file happened to
+		// finish or pause last.
+		if (!found || record.started < earliest) {
+			found = true;
+			earliest = record.started;
+			name = info.fileName();
+		}
+	}
+	return name;
 }
 
 QString DownloadManager::singleDlBatchName() const {
@@ -923,9 +1582,36 @@ void DownloadManager::trackSession(not_null<Main::Session*> session) {
 	auto runs = std::vector<FinishedDlRun>();
 	auto ulRuns = std::vector<FinishedUlRun>();
 	data.downloaded = deserialize(session, &data.jobId, &runs, &ulRuns);
+	for (auto &entry : data.downloaded) {
+		ensureDownloadedObject(session, entry);
+		if (entry.object) {
+			_loadedAdded.fire(&entry);
+		}
+	}
+	auto unfinished = base::flat_set<uint64>();
+	if (auto &db = ensureDedupDb(); db.isOpen()) {
+		unfinished = ResumeDlBatchIds(session, &db);
+	}
+	if (!unfinished.empty()) {
+		_finishedDlRuns.erase(
+			std::remove_if(
+				begin(_finishedDlRuns),
+				end(_finishedDlRuns),
+				[&](const FinishedDlRun &run) {
+					return unfinished.contains(run.batchId);
+				}),
+			end(_finishedDlRuns));
+	}
+	auto storeBatches = -1;
+	auto resumeRows = -1;
+	if (auto &db = ensureDedupDb(); db.isOpen()) {
+		storeBatches = int(db.loadDlBatches().size());
+		resumeRows = int(db.loadAllDlResume().size());
+	}
 	data.resolveNeeded = data.downloaded.size();
 	for (const auto &run : runs) {
 		if (run.sessionId != session->uniqueId()
+			|| unfinished.contains(run.batchId)
 			|| ranges::any_of(
 				_finishedDlRuns,
 				[&](const FinishedDlRun &existing) {
@@ -942,6 +1628,9 @@ void DownloadManager::trackSession(not_null<Main::Session*> session) {
 			_finishedDlRuns.push_back(run);
 		}
 	}
+	while (_finishedDlRuns.size() > 200) {
+		_finishedDlRuns.erase(_finishedDlRuns.begin());
+	}
 	for (const auto &run : ulRuns) {
 		if (run.sessionId != session->uniqueId()
 			|| ranges::any_of(
@@ -953,6 +1642,17 @@ void DownloadManager::trackSession(not_null<Main::Session*> session) {
 		}
 		_finishedUlRuns.push_back(run);
 	}
+	if (!unfinished.empty()) {
+		writePostponed(session);
+	}
+	// Files that reached their final size before the app quit may still
+	// have only a resume row. Turn them into finished rows right here, so
+	// the downloads list and its counters agree no matter which of
+	// Resume / Later / Cancel is chosen, or even if no box is shown.
+	materializeCompleteResumeRows();
+	persistDlBatches();
+	_loadingListChanges.fire({});
+	retryPendingDlDeletes();
 
 	session->data().documentLoadProgress(
 	) | rpl::filter([=](not_null<DocumentData*> document) {
@@ -1021,19 +1721,14 @@ int64 DownloadManager::computeNextStartDate() {
 void DownloadManager::addLoading(
 	DownloadObject object,
 	bool enhancedForward,
-	uint64 batchId) {
+	uint64 batchId,
+	DownloadDate started) {
 	Expects(object.item != nullptr);
 	Expects(object.document != nullptr);
 
 	Info::Downloads::SetLastActivityTab(enhancedForward
 		? Info::Downloads::Tab::Forwards
 		: Info::Downloads::Tab::Downloads);
-	qDebug() << "[TM] loading started, item:"
-		<< object.item->fullId().msg.bare
-		<< "doc:"
-		<< uint64(object.document->id)
-		<< "batch:"
-		<< batchId;
 
 	const auto item = object.item;
 	auto &data = sessionData(item);
@@ -1043,6 +1738,27 @@ void DownloadManager::addLoading(
 		const auto document = already->object.document;
 		const auto photo = already->object.photo;
 		if (document == object.document && photo == object.photo) {
+			if (batchId && !already->batchId && !enhancedForward) {
+				already->batchId = batchId;
+				if (document && !already->done && IsServerMsgId(item->id)) {
+					const auto path = document->loadingFilePath();
+					// The entry was already loading when the batch became
+					// known; its resume row must learn the batch id too, or
+					// a restart would treat it as an unrelated download.
+					ensureDedupDb().insertDlResume({
+						.sessionId = item->history()->session().uniqueId(),
+						.peerId = item->history()->peer->id.value,
+						.msgId = item->id.bare,
+						.path = path.isEmpty() ? already->path : path,
+						.fileSize = document->size,
+						.docId = uint64(document->id),
+						.batchId = batchId,
+						.started = already->started,
+					});
+				}
+				_loadingListChanges.fire({});
+				persistDlBatches();
+			}
 			check(item);
 			return;
 		}
@@ -1052,10 +1768,10 @@ void DownloadManager::addLoading(
 	const auto size = object.document->size;
 	const auto path = object.document->loadingFilePath();
 	if (path.isEmpty()) {
-		qDebug() << "[TM] loading skipped no path, item:"
-			<< object.item->fullId().msg.bare;
 		return;
 	}
+	const auto entryStarted = started ? started : computeNextStartDate();
+	const auto entryBatch = enhancedForward ? uint64(0) : batchId;
 
 	const auto start = [=, &data] {
 		const auto ready = QFileInfo(path).exists()
@@ -1074,14 +1790,14 @@ void DownloadManager::addLoading(
 		}
 		data.downloading.push_back({
 			.object = object,
-			.started = computeNextStartDate(),
+			.started = entryStarted,
 			.path = path,
 			.ready = ready,
 			.total = size,
 			.hiddenByView = false,
 			.enhancedForward = enhancedForward,
 			.jobIndex = data.jobId,
-			.batchId = enhancedForward ? uint64(0) : batchId,
+			.batchId = entryBatch,
 		});
 		_loading.emplace(item);
 		_loadingDocuments.emplace(object.document);
@@ -1102,8 +1818,13 @@ void DownloadManager::addLoading(
 					.path = path,
 					.fileSize = size,
 					.docId = uint64(document->id),
+					.batchId = entryBatch,
+					.started = entryStarted,
 				});
 			}
+		}
+		if (entryBatch) {
+			persistDlBatches();
 		}
 
 		if (GetEnhancedBool("prevent_download_duplicates") && !enhancedForward) {
@@ -1283,7 +2004,9 @@ void DownloadManager::check(
 	Assert(document != nullptr);
 
 	const auto path = document->filepath(true);
-	if (!path.isEmpty()) {
+	const auto fileSize = path.isEmpty() ? int64(-1) : QFileInfo(path).size();
+	const auto complete = !path.isEmpty() && fileSize >= document->size;
+	if (complete) {
 		if (entry.enhancedForward) {
 			if (_loading.contains(entry.object.item)) {
 				const auto totalChange = document->size - entry.total;
@@ -1294,42 +2017,55 @@ void DownloadManager::check(
 				_loadingDocuments.remove(document);
 				_loading.remove(entry.object.item);
 				_loadingDone.emplace(entry.object.item);
-				saveIfIdle();
 				_loadingProgress = DownloadProgress{
 					.ready = _loadingProgress.current().ready + readyChange,
 					.total = _loadingProgress.current().total + totalChange,
 				};
 				_loadingListChanges.fire({});
 			}
-	} else if (_loading.contains(entry.object.item)) {
-		addLoaded(entry.object, path, entry.started, entry.batchId);
-	} else if (!entry.enhancedForward) {
-		qDebug() << "[TM] loaded skipped untracked, item:"
-			<< entry.object.item->id.bare
-			<< "batch:"
-			<< entry.batchId;
+		} else if (_loading.contains(entry.object.item)) {
+			addLoaded(entry.object, path, entry.started, entry.batchId);
+		} else if (!entry.enhancedForward) {
+		}
+		return;
 	}
-	} else if (!document->loading()) {
-		remove(data, i);
-	} else {
-		const auto nowPaused = document->downloadPaused();
-		const auto pausedChanged = (entry.paused != nowPaused);
-		entry.paused = nowPaused;
-		const auto totalChange = document->size - entry.total;
-		const auto readyChange = document->loadOffset() - entry.ready;
-		if (!readyChange && !totalChange) {
-			if (pausedChanged) {
-				_loadingListChanges.fire({});
-			}
+	if (!document->loading()) {
+		if (!path.isEmpty()) {
+			document->save(
+				entry.object.item->fullId(),
+				path,
+				LoadFromCloudOrLocal,
+				false,
+				true,
+				true);
+		}
+		if (!document->loading()) {
+			const auto item = entry.object.item;
+			ensureDedupDb().removeDlResume(
+				item->history()->session().uniqueId(),
+				item->history()->peer->id.value,
+				item->id.bare);
+			remove(data, i);
 			return;
 		}
-		entry.ready += readyChange;
-		entry.total += totalChange;
-		_loadingProgress = DownloadProgress{
-			.ready = _loadingProgress.current().ready + readyChange,
-			.total = _loadingProgress.current().total + totalChange,
-		};
 	}
+	const auto nowPaused = document->downloadPaused();
+	const auto pausedChanged = (entry.paused != nowPaused);
+	entry.paused = nowPaused;
+	const auto totalChange = document->size - entry.total;
+	const auto readyChange = document->loadOffset() - entry.ready;
+	if (!readyChange && !totalChange) {
+		if (pausedChanged) {
+			_loadingListChanges.fire({});
+		}
+		return;
+	}
+	entry.ready += readyChange;
+	entry.total += totalChange;
+	_loadingProgress = DownloadProgress{
+		.ready = _loadingProgress.current().ready + readyChange,
+		.total = _loadingProgress.current().total + totalChange,
+	};
 }
 
 void DownloadManager::addLoaded(
@@ -1341,25 +2077,13 @@ void DownloadManager::addLoaded(
 	Expects(object.document || object.photo);
 
 	const auto size = QFileInfo(path).size();
-	if (size <= 0 || size > kMaxFileSize) {
-		qDebug() << "[TM] loaded rejected, item:"
-			<< object.item->id.bare
-			<< "size:"
-			<< size
-			<< "batch:"
-			<< batchId;
+	if (size <= 0
+		|| size > kMaxFileSize
+		|| (object.document && size < object.document->size)) {
 		return;
 	}
 
 	const auto item = object.item;
-	qDebug() << "[TM] loaded finished, item:"
-		<< item->id.bare
-		<< "size:"
-		<< size
-		<< "batch:"
-		<< batchId
-		<< "path:"
-		<< path;
 	auto &data = sessionData(item);
 
 	const auto id = object.document
@@ -1373,12 +2097,6 @@ void DownloadManager::addLoaded(
 		: (object.photo ? object.photo->id : 0);
 	auto &dedupDb = ensureDedupDb();
 	const auto dedupOff = !GetEnhancedBool("prevent_download_duplicates");
-	if (!dedupOff && dedupDb.isOpen()) {
-		if (!_downloadTableUse) {
-			_downloadTableUse = dedupDb.useTable(
-				DedupDb::Table::Downloads);
-		}
-	}
 	if ((!dedupOff || batchId) && dedupDb.isOpen()) {
 		if (!dedupOff && docId) {
 			// saveFileHash() may have stored the remote fingerprint for this
@@ -1468,31 +2186,13 @@ void DownloadManager::addLoaded(
 		// download. Only files without one (small files, photos, failed
 		// remote samples) are decided here.
 		QFile::remove(path);
-		qDebug() << "[TM] loaded dropped as duplicate, item:"
-			<< item->id.bare
-			<< "doc:"
-			<< docId
-			<< "batch:"
-			<< batchId
-			<< "size:"
-			<< size
-			<< "off:"
-			<< dedupOff
-			<< "big:"
-			<< isBigFile
-			<< "match:"
-			<< matchedDocId
-			<< "tmpdoc:"
-			<< isDuplicateTmpDoc
-			<< "tmphash:"
-			<< isDuplicateTmpHash
-			<< "hash:"
-			<< dedupHash.toHex().left(16);
+		auto liveMatched = false;
 		if (batchId) {
 			for (const auto &weak : _batches) {
 				if (const auto strong = weak.lock()) {
 					if (strong->id == batchId) {
 						strong->addDuplicate();
+						liveMatched = true;
 						break;
 					}
 				}
@@ -1547,7 +2247,6 @@ void DownloadManager::addLoaded(
 			if (j != end(_loading)) {
 				_loading.erase(j);
 			}
-			saveIfIdle();
 			_loadingProgress = DownloadProgress{
 				.ready = std::max(
 					int64(0),
@@ -1564,6 +2263,12 @@ void DownloadManager::addLoaded(
 			};
 			_loadingListChanges.fire({});
 		}
+		if (batchId) {
+			if (!liveMatched) {
+				noteRestoredDlBatchSkipped(batchId);
+			}
+			persistDlBatches();
+		}
 		return;
 	}
 
@@ -1578,7 +2283,6 @@ void DownloadManager::addLoaded(
 		.path = path,
 		.size = size,
 		.itemId = item->fullId(),
-		.peerAccessHash = PeerAccessHash(item->history()->peer),
 		.jobIndex = completedJobIndex,
 		.batchId = batchId,
 		.object = std::make_unique<DownloadObject>(object),
@@ -1586,14 +2290,6 @@ void DownloadManager::addLoaded(
 	_loaded.emplace(item);
 	_loadedAdded.fire(&data.downloaded.back());
 	Info::Downloads::SetLastActivityTab(Info::Downloads::Tab::Downloads);
-	qDebug() << "[TM] loaded recorded, item:"
-		<< item->id.bare
-		<< "doc:"
-		<< (object.document ? uint64(object.document->id) : uint64(0))
-		<< "photo:"
-		<< (object.photo ? uint64(object.photo->id) : uint64(0))
-		<< "batch:"
-		<< batchId;
 
 	if (!dedupOff && !dedupHash.isEmpty() && docId && dedupDb.isOpen()) {
 		dedupDb.insert(DedupDb::Table::Downloads, {
@@ -1630,6 +2326,9 @@ void DownloadManager::addLoaded(
 		}
 		const auto j = _loading.find(entry.object.item);
 		if (j == end(_loading)) {
+			if (batchId) {
+				persistDlBatches();
+			}
 			return;
 		}
 		const auto totalChange = document->size - entry.total;
@@ -1640,7 +2339,6 @@ void DownloadManager::addLoaded(
 		_loading.erase(j);
 		_loadingDone.emplace(entry.object.item);
 		_jobCounterChanged.fire({});
-		saveIfIdle();
 		if (const auto document = entry.object.document) {
 			ensureDedupDb().removeDlResume(
 				entry.object.item->history()->session().uniqueId(),
@@ -1658,6 +2356,9 @@ void DownloadManager::addLoaded(
 		// Finished downloads must stay listed until the user explicitly
 		// cancels them or clears the list (see clearIfFinished()).
 	}
+	if (batchId) {
+		persistDlBatches();
+	}
 }
 
 void DownloadManager::clearIfFinished() {
@@ -1667,67 +2368,130 @@ void DownloadManager::clearIfFinished() {
 	}
 }
 
-void DownloadManager::deleteFiles(const std::vector<GlobalMsgId> &ids) {
-	auto descriptor = DeleteFilesDescriptor();
-	for (const auto &id : ids) {
-		if (const auto item = MessageByGlobalId(id)) {
-			const auto session = &item->history()->session();
-			const auto i = _sessions.find(session);
-			if (i == end(_sessions)) {
-				continue;
-			}
-			auto &data = i->second;
-			const auto j = ranges::find(
-				data.downloading,
-				not_null{ item },
-				ByItem);
-			if (j != end(data.downloading)) {
-				cancel(data, j);
-			}
-
-			// Addressed by item, and one item may own several downloaded
-			// files, so every one of them goes. Removing just the first left
-			// the rest on disk while loadedRemoved already hid the row.
-			auto erased = false;
-			for (auto k = 0; k != int(data.downloaded.size());) {
-				if (ByItem(data.downloaded[k]) != item) {
-					++k;
-					continue;
-				}
-				const auto &entry = data.downloaded[k];
-				const auto document = entry.object->document;
-				const auto mediaId = document
-					? document->id
-					: (entry.object->photo
-						? entry.object->photo->id
-						: DocumentId());
-				descriptor.files.emplace(entry.path, DocumentDescriptor{
-					.sessionUniqueId = id.sessionUniqueId,
-					.documentId = mediaId,
-					.itemId = id.itemId,
-					.isPhoto = (entry.object->photo != nullptr),
-				});
-				if (document) {
-					_generatedDocuments.remove(document);
-				}
-				data.downloaded.erase(begin(data.downloaded) + k);
-				erased = true;
-			}
-			if (erased) {
-				_generated.remove(item);
-				_loaded.remove(item);
-				_loadedRemoved.fire_copy(item);
-				_jobCounterChanged.fire({});
-
-				descriptor.sessions.emplace(session);
+std::vector<GlobalMsgId> DownloadManager::finishedDownloadIds() const {
+	auto result = std::vector<GlobalMsgId>();
+	auto seen = base::flat_set<GlobalMsgId>();
+	for (const auto &[session, data] : _sessions) {
+		const auto sessionId = session->uniqueId();
+		for (const auto &entry : data.downloaded) {
+			const auto id = GlobalMsgId{
+				.itemId = entry.itemId,
+				.sessionUniqueId = sessionId,
+			};
+			if (seen.emplace(id).second) {
+				result.push_back(id);
 			}
 		}
+	}
+	return result;
+}
+
+void DownloadManager::deleteFiles(const std::vector<GlobalMsgId> &ids) {
+	auto descriptor = DeleteFilesDescriptor();
+	auto deletedByBatch = base::flat_map<uint64, int>();
+	auto deletedBytesByBatch = base::flat_map<uint64, int64>();
+	for (const auto &id : ids) {
+		const auto session = SessionByUniqueId(id.sessionUniqueId);
+		if (!session) {
+			continue;
+		}
+		const auto i = _sessions.find(session);
+		if (i == end(_sessions)) {
+			continue;
+		}
+		auto &data = i->second;
+		for (auto j = 0; j != int(data.downloading.size());) {
+			const auto &entry = data.downloading[j];
+			if (entry.object.item->fullId() != id.itemId
+				&& entry.object.item->globalId() != id) {
+				++j;
+				continue;
+			}
+			if (entry.done) {
+				// A finished download must not be cancelled: its file is
+				// already queued for deletion below, so only the leftover
+				// loading entry is dropped, without touching the document
+				// or the batch state.
+				remove(data, data.downloading.begin() + j);
+				continue;
+			}
+			cancel(data, data.downloading.begin() + j);
+		}
+
+		// Addressed by item id, not by a resolved message: after a restart
+		// the row can be a locally generated placeholder, and looking the
+		// message up again would silently drop the file from this delete.
+		// Placeholder rows are addressed by their synthetic item id as well,
+		// because that is the id the downloads list shows and passes back.
+		auto erased = false;
+		auto removed = base::flat_set<not_null<HistoryItem*>>();
+		for (auto k = 0; k != int(data.downloaded.size());) {
+			const auto &entry = data.downloaded[k];
+			if (entry.itemId != id.itemId
+				&& (!entry.object
+					|| entry.object->item->globalId() != id)) {
+				++k;
+				continue;
+			}
+			if (const auto object = entry.object.get()) {
+				removed.emplace(object->item);
+				if (const auto document = object->document) {
+					_generatedDocuments.remove(document);
+				}
+			}
+			descriptor.files.emplace(entry.path, DocumentDescriptor{
+				.sessionUniqueId = id.sessionUniqueId,
+				.documentId = entry.download.objectId,
+				.itemId = id.itemId,
+				.stopRoot = dlBatchDestination(entry.batchId),
+				.isPhoto = (entry.download.type == DownloadType::Photo),
+			});
+			if (entry.batchId) {
+				++deletedByBatch[entry.batchId];
+				deletedBytesByBatch[entry.batchId] += entry.size;
+			}
+			data.downloaded.erase(begin(data.downloaded) + k);
+			erased = true;
+		}
+		for (const auto item : removed) {
+			if (ranges::any_of(
+					data.downloaded,
+					[&](const DownloadedId &entry) {
+						return entry.object
+							&& entry.object->item == item;
+					})) {
+				continue;
+			}
+			_generated.remove(item);
+			_loaded.remove(item);
+			_loadedRemoved.fire_copy(item);
+		}
+		if (erased) {
+			data.resolveNeeded = std::min(
+				data.resolveNeeded,
+				int(data.downloaded.size()));
+			data.resolveSentTotal = std::min(
+				data.resolveSentTotal,
+				data.resolveNeeded);
+			_jobCounterChanged.fire({});
+
+			descriptor.sessions.emplace(session);
+		}
+	}
+	for (const auto &[batchId, count] : deletedByBatch) {
+		dropDlBatchDownloads(batchId, count);
+	}
+	if (!deletedByBatch.empty()) {
+		dropDlBatchSaved(deletedByBatch, deletedBytesByBatch);
+		persistDlBatches();
 	}
 	finishFilesDelete(std::move(descriptor));
 }
 
 void DownloadManager::deleteAll() {
 	auto descriptor = DeleteFilesDescriptor();
+	auto deletedByBatch = base::flat_map<uint64, int>();
+	auto deletedBytesByBatch = base::flat_map<uint64, int64>();
 	for (auto &[session, data] : _sessions) {
 		if (!data.downloaded.empty()) {
 			descriptor.sessions.emplace(session);
@@ -1736,7 +2500,12 @@ void DownloadManager::deleteAll() {
 		}
 		const auto sessionUniqueId = session->uniqueId();
 		while (!data.downloading.empty()) {
-			cancel(data, data.downloading.end() - 1);
+			const auto i = data.downloading.end() - 1;
+			if (i->done) {
+				remove(data, i);
+			} else {
+				cancel(data, i);
+			}
 		}
 		for (auto &id : base::take(data.downloaded)) {
 			const auto object = id.object.get();
@@ -1746,10 +2515,15 @@ void DownloadManager::deleteAll() {
 				: (object && object->photo
 					? object->photo->id
 					: DocumentId());
+			if (id.batchId) {
+				++deletedByBatch[id.batchId];
+				deletedBytesByBatch[id.batchId] += id.size;
+			}
 			descriptor.files.emplace(id.path, DocumentDescriptor{
 				.sessionUniqueId = sessionUniqueId,
 				.documentId = mediaId,
 				.itemId = id.itemId,
+				.stopRoot = dlBatchDestination(id.batchId),
 				.isPhoto = (object && object->photo),
 			});
 			if (document) {
@@ -1761,43 +2535,241 @@ void DownloadManager::deleteAll() {
 				_loadedRemoved.fire_copy(item);
 			}
 		}
+		data.resolveNeeded = std::min(
+			data.resolveNeeded,
+			int(data.downloaded.size()));
+		data.resolveSentTotal = std::min(
+			data.resolveSentTotal,
+			data.resolveNeeded);
 		_jobCounterChanged.fire({});
 	}
 	for (const auto &session : descriptor.sessions) {
 		writePostponed(session);
 	}
+	for (const auto &[batchId, count] : deletedByBatch) {
+		dropDlBatchDownloads(batchId, count);
+	}
+	if (!deletedByBatch.empty()) {
+		dropDlBatchSaved(deletedByBatch, deletedBytesByBatch);
+		persistDlBatches();
+	}
 	finishFilesDelete(std::move(descriptor));
 }
 
 void DownloadManager::finishFilesDelete(DeleteFilesDescriptor &&descriptor) {
+	auto files = std::make_shared<decltype(descriptor.files)>(
+		std::move(descriptor.files));
+	const auto total = int(files->size());
+	auto &dedup = ensureDedupDb();
+	for (auto &[path, info] : *files) {
+		if (const auto session = SessionByUniqueId(
+				info.sessionUniqueId)) {
+			info.root = DownloadRootPath(session);
+		}
+		if (dedup.isOpen()) {
+			dedup.addDlPendingDelete({ path, info.root, info.stopRoot });
+		}
+	}
+	const auto dedupPtr = dedup.isOpen() ? &dedup : nullptr;
+	const auto alive = _pendingDeletesAlive;
 	for (const auto &session : descriptor.sessions) {
 		writePostponed(session);
 	}
-	crl::async([files = std::move(descriptor.files)]{
-		for (const auto &file : files) {
-			const auto folder = RichExportFolderToRemove(file.first);
-			if (folder.isEmpty()) {
-				Platform::File::MoveToTrash(file.first);
-			} else if (!Platform::File::MoveToTrash(folder)) {
-				QDir(folder).removeRecursively();
+	_loadingListChanges.fire({});
+	if (!total) {
+		return;
+	}
+
+	struct FailedFile {
+		QString path;
+		DocumentDescriptor info;
+	};
+	struct DeleteState {
+		std::mutex mutex;
+		std::vector<FailedFile> failed;
+	};
+	const auto state = std::make_shared<DeleteState>();
+	const auto next = std::make_shared<std::atomic<int>>(0);
+	const auto remaining = std::make_shared<std::atomic<int>>(total);
+
+	const auto refreshOnMain = [=](
+			const QString &path,
+			const DocumentDescriptor &info) {
+		if (const auto session = SessionByUniqueId(info.sessionUniqueId)) {
+			PruneEmptyDownloadFolders(session, path, info.stopRoot);
+			QTimer::singleShot(6000, crl::guard(session, [=] {
+				PruneEmptyDownloadFolders(session, path, info.stopRoot);
+			}));
+			if (const auto id = info.documentId; id && !info.isPhoto) {
+				[[maybe_unused]] const auto location
+					= session->data().document(id)->location(true);
 			}
-			crl::on_main([descriptor = file.second, path = file.first] {
-				if (const auto session = SessionByUniqueId(
-						descriptor.sessionUniqueId)) {
-					PruneEmptyDownloadFolders(session, path);
-					if (const auto id = descriptor.documentId;
-						id && !descriptor.isPhoto) {
-						[[maybe_unused]] const auto location
-							= session->data().document(id)->location(true);
-					}
-					const auto itemId = descriptor.itemId;
-					if (const auto item = session->data().message(itemId)) {
-						session->data().requestItemRepaint(item);
-					}
+			if (const auto item = session->data().message(info.itemId)) {
+				session->data().requestItemRepaint(item);
+			}
+		}
+	};
+
+	// A shell move can fail transiently while an antivirus or an indexer
+	// still holds the file open, so failed paths are retried off the UI
+	// thread long after the quick pass has finished.
+	const auto retryFailed = [=] {
+		auto pending = std::vector<FailedFile>();
+		{
+			const auto lock = std::lock_guard(state->mutex);
+			pending = state->failed;
+		}
+		if (pending.empty()) {
+			return;
+		}
+		constexpr auto kDelays = std::array<int, 7>{
+			1000,
+			2000,
+			4000,
+			8000,
+			16000,
+			30000,
+			60000,
+		};
+		for (const auto delay : kDelays) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+			auto still = std::vector<FailedFile>();
+			for (auto &file : pending) {
+				const auto folder = RichExportFolderToRemove(
+					file.path,
+					file.info.root,
+					file.info.stopRoot);
+				const auto target = folder.isEmpty()
+					? file.path
+					: folder;
+				Platform::File::MoveToTrash(target);
+				const auto exists = QFileInfo::exists(file.path);
+				if (exists) {
+					still.push_back(std::move(file));
+				} else {
+					crl::on_main([=] {
+						if (dedupPtr && *alive) {
+							dedupPtr->removeDlPendingDelete(file.path);
+						}
+						refreshOnMain(file.path, file.info);
+					});
+				}
+			}
+			pending = std::move(still);
+			if (pending.empty()) {
+				break;
+			}
+		}
+	};
+
+	constexpr auto kWorkers = 4;
+	const auto worker = [=] {
+		for (auto index = next->fetch_add(1);
+			index < total;
+			index = next->fetch_add(1)) {
+			const auto &file = *(files->begin() + index);
+			const auto path = file.first;
+			const auto info = file.second;
+			const auto folder = RichExportFolderToRemove(
+				path,
+				info.root,
+				info.stopRoot);
+			const auto target = folder.isEmpty() ? path : folder;
+			auto removed = false;
+			for (auto attempt = 0; attempt != 2; ++attempt) {
+				removed = Platform::File::MoveToTrash(target);
+				if (removed) {
+					break;
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(200));
+			}
+			const auto still = QFileInfo::exists(path);
+			if (still) {
+				const auto lock = std::lock_guard(state->mutex);
+				state->failed.push_back({ path, info });
+			}
+			crl::on_main([=] {
+				if (!still && dedupPtr && *alive) {
+					dedupPtr->removeDlPendingDelete(path);
+				}
+				refreshOnMain(path, info);
+				if (remaining->fetch_sub(1) == 1) {
+					std::thread(retryFailed).detach();
 				}
 			});
 		}
-	});
+	};
+	for (auto i = 0; i != kWorkers; ++i) {
+		std::thread(worker).detach();
+	}
+}
+
+void DownloadManager::retryPendingDlDeletes() {
+	if (_pendingDeletesRetryStarted) {
+		return;
+	}
+	auto &db = ensureDedupDb();
+	if (!db.isOpen()) {
+		return;
+	}
+	auto pending = db.loadAllDlPendingDeletes();
+	if (pending.empty()) {
+		return;
+	}
+	_pendingDeletesRetryStarted = true;
+	const auto files = std::make_shared<std::vector<DlPendingDelete>>(
+		std::move(pending));
+	const auto dbPtr = &db;
+	const auto alive = _pendingDeletesAlive;
+	const auto next = std::make_shared<std::atomic<int>>(0);
+	const auto worker = [=] {
+		for (auto index = next->fetch_add(1);
+			index < int(files->size());
+			index = next->fetch_add(1)) {
+			const auto &file = (*files)[index];
+			const auto folder = RichExportFolderToRemove(
+				file.path,
+				file.root,
+				file.stopRoot);
+			const auto target = folder.isEmpty() ? file.path : folder;
+			auto removed = false;
+			for (auto attempt = 0; attempt != 2; ++attempt) {
+				removed = Platform::File::MoveToTrash(target);
+				if (removed && !QFileInfo::exists(file.path)) {
+					break;
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(300));
+			}
+			const auto still = QFileInfo::exists(file.path);
+			if (still) {
+				continue;
+			}
+			crl::on_main([=] {
+				if (!*alive) {
+					return;
+				}
+				if (dbPtr->isOpen()) {
+					dbPtr->removeDlPendingDelete(file.path);
+				}
+				const auto prune = [=] {
+					PruneEmptyDownloadFolders(
+						file.root,
+						file.path,
+						file.stopRoot);
+				};
+				prune();
+				QTimer::singleShot(6000, [=] {
+					if (*alive) {
+						prune();
+					}
+				});
+			});
+		}
+	};
+	constexpr auto kWorkers = 3;
+	for (auto i = 0; i != kWorkers; ++i) {
+		std::thread(worker).detach();
+	}
 }
 
 auto DownloadManager::loadingList() const
@@ -1966,22 +2938,139 @@ rpl::producer<> DownloadManager::loadedResolveDone() const {
 	return _loadedResolveDone.value() | rpl::filter(_1) | rpl::to_empty;
 }
 
+static void EnsureChannelLoaded(
+		not_null<Main::Session*> session,
+		ChannelId channelId,
+		Fn<void(not_null<Main::Session*>)> done,
+		Fn<void()> fail) {
+	const auto sessionId = session->uniqueId();
+	const auto findSession = [](uint64 id) -> Main::Session* {
+		for (const auto &account : Core::App().domain().orderedAccounts()) {
+			const auto session = account->maybeSession();
+			if (session && session->uniqueId() == id) {
+				return session;
+			}
+		}
+		return nullptr;
+	};
+	if (const auto channel = session->data().channelLoaded(channelId)) {
+		if (channel->accessHash()) {
+			done(session);
+			return;
+		}
+	}
+	constexpr auto kMaxDialogPages = 10;
+	constexpr auto kDialogsPerPage = 100;
+	auto scan = std::make_shared<Fn<void(int, int, int, MTPInputPeer)>>();
+	*scan = [=](int page, int offsetDate, int offsetId,
+			MTPInputPeer offsetPeer) {
+		const auto strong = findSession(sessionId);
+		if (!strong) {
+			return;
+		}
+		if (page >= kMaxDialogPages) {
+			fail();
+			return;
+		}
+		strong->api().request(MTPmessages_GetDialogs(
+			MTP_flags(0),
+			MTP_int(0),
+			MTP_int(offsetDate),
+			MTP_int(offsetId),
+			offsetPeer,
+			MTP_int(kDialogsPerPage),
+			MTP_long(0))
+		).done([=](const MTPmessages_Dialogs &result) {
+			const auto strong = findSession(sessionId);
+			if (!strong) {
+				return;
+			}
+			result.match([&](const MTPDmessages_dialogsNotModified &) {
+				fail();
+			}, [&](const auto &data) {
+				strong->data().processUsers(data.vusers());
+				strong->data().processChats(data.vchats());
+				const auto channel = strong->data().channelLoaded(channelId);
+				if (channel && channel->accessHash()) {
+					done(strong);
+					return;
+				}
+				const auto &dialogs = data.vdialogs().v;
+				const auto &messages = data.vmessages().v;
+				auto nextDate = 0;
+				auto nextId = 0;
+				auto nextPeer = PeerId(0);
+				for (const auto &dialog : ranges::views::reverse(dialogs)) {
+					dialog.match([&](const MTPDdialog &d) {
+						const auto peer = peerFromMTP(d.vpeer());
+						const auto messageId = d.vtop_message().v;
+						if (!peer || !messageId) {
+							return;
+						}
+						if (!nextPeer) {
+							nextPeer = peer;
+						}
+						if (!nextId) {
+							nextId = messageId;
+						}
+						for (const auto &message
+								: ranges::views::reverse(messages)) {
+							if (IdFromMessage(message) == messageId
+								&& PeerFromMessage(message) == peer) {
+								if (const auto date = DateFromMessage(message)) {
+									nextDate = date;
+								}
+								return;
+							}
+						}
+					}, [](const MTPDdialogFolder &) {
+					}, [](const MTPDdialogCommunity &) {
+					});
+					if (nextDate) {
+						break;
+					}
+				}
+				if (!nextDate) {
+					fail();
+					return;
+				}
+				const auto peer = strong->data().peerLoaded(nextPeer);
+				if (!peer) {
+					fail();
+					return;
+				}
+				(*scan)(page + 1, nextDate, nextId, peer->input());
+			});
+		}).fail([=](const MTP::Error &error) {
+			fail();
+		}).send();
+	};
+	(*scan)(0, 0, 0, MTP_inputPeerEmpty());
+}
+
 void DownloadManager::resolve(
 		not_null<Main::Session*> session,
 		SessionData &data) {
 	const auto guard = gsl::finally([&] {
 		checkFullResolveDone();
 	});
+	const auto downloadedCount = int(data.downloaded.size());
+	if (data.resolveNeeded > downloadedCount) {
+		data.resolveNeeded = downloadedCount;
+	}
+	if (data.resolveSentTotal > data.resolveNeeded) {
+		data.resolveSentTotal = data.resolveNeeded;
+	}
 	if (data.resolveSentTotal >= data.resolveNeeded
 		|| data.resolveSentTotal >= kMaxResolvePerAttempt) {
 		return;
 	}
 	struct Prepared {
-		uint64 peerAccessHash = 0;
-		QVector<MTPInputMessage> ids;
+		QVector<MsgId> ids;
 	};
 	const auto &owner = session->data();
 	auto prepared = base::flat_map<PeerId, Prepared>();
+	auto totalIds = 0;
 	auto last = begin(data.downloaded);
 	auto from = last + (data.resolveNeeded - data.resolveSentTotal);
 	for (auto i = from; i != last;) {
@@ -1996,10 +3085,8 @@ void DownloadManager::resolve(
 				? id.itemId.peer
 				: session->userPeerId();
 			auto &perPeer = prepared[groupByPeer];
-			if (peerIsChannel(id.itemId.peer) && !perPeer.peerAccessHash) {
-				perPeer.peerAccessHash = id.peerAccessHash;
-			}
-			perPeer.ids.push_back(MTP_inputMessageID(MTP_int(msgId.bare)));
+			perPeer.ids.push_back(msgId);
+			++totalIds;
 		}
 		if (++data.resolveSentTotal >= kMaxResolvePerAttempt) {
 			break;
@@ -2016,35 +3103,49 @@ void DownloadManager::resolve(
 		check();
 	};
 	for (auto &[peer, perPeer] : prepared) {
+		const auto ids = perPeer.ids;
 		if (const auto channelId = peerToChannel(peer)) {
-			session->api().request(MTPchannels_GetMessages(
-				MTP_inputChannel(
-					MTP_long(channelId.bare),
-					MTP_long(perPeer.peerAccessHash)),
-				MTP_vector<MTPInputMessage>(perPeer.ids)
-			)).done([=](const MTPmessages_Messages &result) {
-				session->data().processExistingMessages(
-					session->data().channelLoaded(channelId),
-					result);
-				requestFinished();
-			}).fail(requestFinished).send();
+			EnsureChannelLoaded(
+				session,
+				channelId,
+				[=](not_null<Main::Session*> strong) {
+					const auto channel = strong->data().channel(channelId);
+					for (const auto msgId : ids) {
+						strong->api().requestMessageData(
+							channel,
+							msgId,
+							requestFinished);
+					}
+				},
+				[=, count = ids.size()] {
+					for (int i = 0; i < count; ++i) {
+						requestFinished();
+					}
+				});
 		} else {
-			session->api().request(MTPmessages_GetMessages(
-				MTP_vector<MTPInputMessage>(perPeer.ids)
-			)).done([=](const MTPmessages_Messages &result) {
-				session->data().processExistingMessages(nullptr, result);
-				requestFinished();
-			}).fail(requestFinished).send();
+			for (const auto msgId : ids) {
+				session->api().requestMessageData(
+					nullptr,
+					msgId,
+					requestFinished);
+			}
 		}
 	}
-	data.resolveSentRequests += prepared.size();
+	data.resolveSentRequests += totalIds;
 	check();
 }
 
 void DownloadManager::resolveRequestsFinished(
 		not_null<Main::Session*> session,
 		SessionData &data) {
-	const auto &owner = session->data();
+	auto &owner = session->data();
+	const auto downloadedCount = int(data.downloaded.size());
+	if (data.resolveNeeded > downloadedCount) {
+		data.resolveNeeded = downloadedCount;
+	}
+	if (data.resolveSentTotal > data.resolveNeeded) {
+		data.resolveSentTotal = data.resolveNeeded;
+	}
 	for (; data.resolveSentTotal > 0; --data.resolveSentTotal) {
 		const auto i = begin(data.downloaded) + (--data.resolveNeeded);
 		if (i->path.isEmpty()) {
@@ -2056,21 +3157,25 @@ void DownloadManager::resolveRequestsFinished(
 		const auto media = item ? item->media() : nullptr;
 		const auto document = media ? media->document() : nullptr;
 		const auto photo = media ? media->photo() : nullptr;
-		if (i->download.type == DownloadType::Document
-			&& (!document || document->id != i->download.objectId)) {
-			generateEntry(session, *i);
-		} else if (i->download.type == DownloadType::Photo
-			&& (!photo || photo->id != i->download.objectId)) {
-			generateEntry(session, *i);
+		const auto previous = i->object ? i->object->item.get() : nullptr;
+		if (!item || (!document && !photo)) {
+			ensureDownloadedObject(session, *i);
 		} else {
 			i->object = std::make_unique<DownloadObject>(DownloadObject{
 				.item = item,
 				.document = document,
 				.photo = photo,
 			});
-			_loaded.emplace(item);
 		}
-		_loadedAdded.fire(&*i);
+		if (previous && (!i->object || previous != i->object->item.get())) {
+			_loaded.remove(previous);
+			_generated.remove(previous);
+			_loadedRemoved.fire_copy(not_null<HistoryItem*>(previous));
+		}
+		if (i->object) {
+			_loaded.emplace(i->object->item);
+			_loadedAdded.fire(&*i);
+		}
 	}
 	crl::on_main(session, [=] {
 		resolve(session, sessionData(session));
@@ -2120,6 +3225,28 @@ void DownloadManager::generateEntry(
 		.document = document,
 	});
 	_loaded.emplace(id.object->item);
+}
+
+void DownloadManager::ensureDownloadedObject(
+		not_null<Main::Session*> session,
+		DownloadedId &id) {
+	if (id.object) {
+		return;
+	}
+	const auto stored = (id.download.type == DownloadType::Document
+			&& id.download.objectId)
+		? session->data().document(id.download.objectId).get()
+		: nullptr;
+	if (stored && !stored->filename().isEmpty()) {
+		stored->setLocation(Core::FileLocation(QFileInfo(id.path)));
+		id.object = std::make_unique<DownloadObject>(DownloadObject{
+			.item = generateFakeItem(stored),
+			.document = stored,
+		});
+		_loaded.emplace(id.object->item);
+	} else {
+		generateEntry(session, id);
+	}
 }
 
 auto DownloadManager::loadedAdded() const
@@ -2174,6 +3301,7 @@ void DownloadManager::cancel(
 	const auto session = &item->history()->session();
 	const auto document = object.document;
 	const auto total = i->total;
+	const auto batchId = i->batchId;
 
 	if (document && GetEnhancedBool("prevent_download_duplicates")) {
 		removeFileHash(document->id, total);
@@ -2194,13 +3322,46 @@ void DownloadManager::cancel(
 			photo->cancel();
 		}
 	}
+	// Saving downloads writes straight to the final path, so cancelling an
+	// unfinished one leaves an orphaned prefix there. The removal itself can
+	// block while another process holds the file, so it runs off the UI thread
+	// and re-checks the size there: a file that reached its final size stays.
+	if (!path.isEmpty() && total > 0) {
+		RemovePartialFiles({ PartialFileRemove{
+			.path = path,
+			.root = DownloadRootPath(session),
+			.stopRoot = dlBatchDestination(batchId),
+			.fullSize = total,
+		} });
+	}
 	if (document) {
 		ensureDedupDb().removeDlResume(
 			item->history()->session().uniqueId(),
 			item->history()->peer->id.value,
 			item->id.bare);
 	}
-	PruneEmptyDownloadFolders(session, path);
+	PruneEmptyDownloadFolders(session, path, dlBatchDestination(batchId));
+	if (batchId) {
+		const auto pending = ranges::any_of(
+			data.downloading,
+			[&](const DownloadingId &entry) {
+				return entry.batchId == batchId && !entry.done;
+			});
+		auto resumed = false;
+		if (!pending) {
+			for (const auto &record : ensureDedupDb().loadAllDlResume()) {
+				if (record.batchId == batchId) {
+					resumed = true;
+					break;
+				}
+			}
+		}
+		if (!pending && !resumed) {
+			noteDlBatchCancelled(
+				not_null<Main::Session*>(session),
+				batchId);
+		}
+	}
 }
 
 void DownloadManager::pause(not_null<const HistoryItem*> item) {
@@ -2213,6 +3374,8 @@ void DownloadManager::pause(not_null<const HistoryItem*> item) {
 	if (document && document->loading() && !document->downloadPaused()) {
 		document->pause();
 		i->paused = true;
+		refreshDlBatchPaused(i->batchId);
+		persistDlBatches();
 		_loadingListChanges.fire({});
 	}
 }
@@ -2227,6 +3390,7 @@ void DownloadManager::resume(not_null<const HistoryItem*> item) {
 	if (document && document->downloadPaused()) {
 		document->resume();
 		i->paused = false;
+		refreshDlBatchPaused(i->batchId);
 		_loadingListChanges.fire({});
 	}
 }
@@ -2313,6 +3477,8 @@ void DownloadManager::pauseAll() {
 		}
 	}
 	if (changed) {
+		refreshDlBatchPaused(0);
+		persistDlBatches();
 		_loadingListChanges.fire({});
 		clearFingerprintCache();
 	}
@@ -2335,6 +3501,8 @@ void DownloadManager::pauseAll(not_null<Main::Session*> session) {
 		}
 	}
 	if (changed) {
+		refreshDlBatchPaused(0);
+		persistDlBatches();
 		_loadingListChanges.fire({});
 		clearFingerprintCache();
 	}
@@ -2353,8 +3521,12 @@ void DownloadManager::resumeAll() {
 		}
 	}
 	if (changed) {
+		refreshDlBatchPaused(0);
 		_loadingListChanges.fire({});
 	}
+	// Deferred batches have no live entry at all, so their rows are started
+	// here as well; live entries are skipped by startAllResumeDownloads.
+	startAllResumeDownloads();
 }
 
 void DownloadManager::cancelAll() {
@@ -2372,6 +3544,12 @@ void DownloadManager::cancelAll() {
 			}
 		}
 	}
+	// Paused downloads restored after a restart exist only as resume rows
+	// and a stored batch checkpoint until their first part request starts;
+	// cancelling just the live entries would leave them and the bottom bar
+	// active.
+	cancelAllResumeDownloads();
+	_loadingListChanges.fire({});
 }
 
 bool DownloadManager::anyFinishedLoading() const {
@@ -2586,7 +3764,6 @@ Fn<std::optional<QByteArray>()> DownloadManager::serializator(
 			+ sizeof(quint32) // size
 			+ sizeof(quint64) // itemId.peer
 			+ sizeof(qint64) // itemId.msg
-			+ sizeof(quint64) // peerAccessHash
 			+ sizeof(qint32) // jobIndex
 			+ sizeof(quint64); // batchId
 		const auto runConstant = sizeof(quint64) // batchId
@@ -2615,7 +3792,7 @@ Fn<std::optional<QByteArray>()> DownloadManager::serializator(
 
 		auto stream = QDataStream(&result, QIODevice::WriteOnly);
 		stream.setVersion(QDataStream::Qt_5_1);
-		stream << qint32(-3) << qint32(int(count));
+		stream << qint32(-4) << qint32(int(count));
 		for (const auto &id : data.downloaded) {
 			stream
 				<< quint64(id.download.objectId)
@@ -2625,7 +3802,6 @@ Fn<std::optional<QByteArray>()> DownloadManager::serializator(
 				<< quint32(id.size)
 				<< quint64(id.itemId.peer.value)
 				<< qint64(id.itemId.msg.bare)
-				<< quint64(id.peerAccessHash)
 				<< id.path
 				<< qint32(id.jobIndex)
 				<< quint64(id.batchId);
@@ -2684,8 +3860,13 @@ std::vector<DownloadedId> DownloadManager::deserialize(
 	const auto legacy = (count >= 0);
 	auto v2 = false;
 	auto v3 = false;
+	auto v4 = false;
 	if (!legacy) {
-		if (count == -3) {
+		if (count == -4) {
+			v2 = true;
+			v3 = true;
+			v4 = true;
+		} else if (count == -3) {
 			v2 = true;
 			v3 = true;
 		} else if (count == -2) {
@@ -2710,7 +3891,6 @@ std::vector<DownloadedId> DownloadManager::deserialize(
 		auto size = quint32();
 		auto itemIdPeer = quint64();
 		auto itemIdMsg = qint64();
-		auto peerAccessHash = quint64();
 		auto path = QString();
 		stream
 			>> downloadObjectId
@@ -2718,9 +3898,11 @@ std::vector<DownloadedId> DownloadManager::deserialize(
 			>> started
 			>> size
 			>> itemIdPeer
-			>> itemIdMsg
-			>> peerAccessHash
-			>> path;
+			>> itemIdMsg;
+		if (!v4) {
+			stream.skipRawData(sizeof(quint64));
+		}
+		stream >> path;
 		auto jobIndex = qint32(0);
 		auto batchId = quint64(0);
 		if (!legacy) {
@@ -2747,7 +3929,6 @@ std::vector<DownloadedId> DownloadManager::deserialize(
 			.path = path,
 			.size = int64(size),
 			.itemId = { PeerId(itemIdPeer), MsgId(itemIdMsg) },
-			.peerAccessHash = peerAccessHash,
 			.jobIndex = legacy ? 0 : int(jobIndex),
 			.batchId = v2 ? batchId : uint64(0),
 		});
@@ -2913,9 +4094,17 @@ rpl::producer<> DownloadManager::jobCounterChanged() const {
 }
 
 int DownloadManager::dlResumeCount() const {
-	return ensureDedupDb().isOpen()
-		? int(ensureDedupDb().loadAllDlResume().size())
-		: 0;
+	auto &db = ensureDedupDb();
+	if (!db.isOpen()) {
+		return 0;
+	}
+	auto count = 0;
+	for (const auto &record : db.loadAllDlResume()) {
+		if (!record.path.isEmpty() && !IsDlResumeComplete(record)) {
+			++count;
+		}
+	}
+	return count;
 }
 
 QString DownloadManager::dedupDbPath() const {
@@ -2937,18 +4126,6 @@ DedupDb &DownloadManager::ensureDedupDb() const {
 }
 
 void DownloadManager::saveToDisk() {
-}
-
-void DownloadManager::saveIfIdle() {
-	releaseDownloadTableIfIdle();
-}
-
-void DownloadManager::releaseDownloadTableIfIdle() {
-	if (_loading.empty()
-		&& _loadingDocuments.empty()
-		&& _checksInProgress <= 0) {
-		_downloadTableUse.reset();
-	}
 }
 
 void DownloadManager::fetchFingerprint(
@@ -3065,7 +4242,6 @@ void DownloadManager::checkDuplicate(
 				}
 				done(skip);
 			}
-			saveIfIdle();
 		});
 		return;
 	}
@@ -3074,12 +4250,8 @@ void DownloadManager::checkDuplicate(
 	auto wrappedDone = [=, this](bool skip) {
 		_checksInProgress--;
 		done(skip);
-		saveIfIdle();
 	};
 	auto &db = ensureDedupDb();
-	if (db.isOpen()) {
-		_downloadTableUse = db.useTable(DedupDb::Table::Downloads);
-	}
 
 	// Step 1: Check doc ID (O(1), catches same doc re-download).
 	if (db.containsDocId(
@@ -3143,8 +4315,6 @@ void DownloadManager::noteUntrackedSave(
 	}
 	for (const auto id : loadingList()) {
 		if (id->object.item == item && id->object.document == document.get()) {
-			qDebug() << "[TM] untracked save already loading, item:"
-				<< item->fullId().msg.bare;
 			return;
 		}
 	}
@@ -3158,7 +4328,6 @@ void DownloadManager::noteUntrackedSave(
 				&& id.object->document == document.get()) {
 				id.path = path;
 				id.batchId = batchId;
-				saveIfIdle();
 				_loadedAdded.fire(&id);
 				return;
 			}
@@ -3194,11 +4363,155 @@ void DownloadManager::commitDlTmpFile(
 	}
 }
 
-void DownloadManager::startAllResumeDownloads(bool startPaused) {
+bool DownloadManager::materializeCompleteResumeRows() {
+	auto &db = ensureDedupDb();
+	if (!db.isOpen()) {
+		return false;
+	}
+	const auto records = db.loadAllDlResume();
+	if (records.empty()) {
+		return false;
+	}
+	auto live = base::flat_set<FullMsgId>();
+	for (const auto &[session, data] : _sessions) {
+		for (const auto &entry : data.downloading) {
+			live.emplace(entry.object.item->fullId());
+		}
+	}
+	auto changed = false;
+	auto byId = base::flat_map<uint64, not_null<Main::Session*>>();
+	for (const auto &[session, data] : _sessions) {
+		byId.emplace(session->uniqueId(), session);
+	}
+	auto sessions = base::flat_set<not_null<Main::Session*>>();
+	for (const auto &record : records) {
+		if (!record.batchId
+			|| record.path.isEmpty()
+			|| !IsDlResumeComplete(record)
+			|| !record.sessionId
+			|| !record.peerId
+			|| !record.msgId) {
+			continue;
+		}
+		const auto sessionIt = byId.find(record.sessionId);
+		if (sessionIt == end(byId)) {
+			continue;
+		}
+		const auto session = sessionIt->second;
+		const auto itemId = FullMsgId(
+			PeerId(record.peerId),
+			MsgId(record.msgId));
+		if (live.contains(itemId)) {
+			continue;
+		}
+		auto &data = sessionData(session);
+		const auto exists = ranges::any_of(
+			data.downloaded,
+			[&](const DownloadedId &id) {
+				return id.itemId == itemId && id.batchId == record.batchId;
+			});
+		if (!exists) {
+			const auto info = QFileInfo(record.path);
+			const auto size = info.size();
+			if (size <= 0 || size > kMaxFileSize) {
+				continue;
+			}
+			const auto item = session->data().message(itemId);
+			const auto media = item ? item->media() : nullptr;
+			const auto document = media ? media->document() : nullptr;
+			if (item
+				&& document
+				&& (!record.docId
+					|| uint64(document->id) == record.docId)) {
+				data.downloaded.push_back({
+					.download = { document->id, DownloadType::Document },
+					.started = record.started,
+					.path = record.path,
+					.size = size,
+					.itemId = itemId,
+					.jobIndex = data.jobId,
+					.batchId = record.batchId,
+					.object = std::make_unique<DownloadObject>(DownloadObject{
+						.item = item,
+						.document = document,
+					}),
+				});
+				_loaded.emplace(item);
+				_loadedAdded.fire(&data.downloaded.back());
+			} else {
+				auto id = DownloadedId{
+					.download = { record.docId, DownloadType::Document },
+					.started = record.started,
+					.path = record.path,
+					.size = size,
+					.itemId = itemId,
+					.jobIndex = data.jobId,
+					.batchId = record.batchId,
+				};
+				generateEntry(session, id);
+				if (id.object && id.object->document) {
+					id.download = {
+						id.object->document->id,
+						DownloadType::Document,
+					};
+				}
+				data.downloaded.push_back(std::move(id));
+				_loadedAdded.fire(&data.downloaded.back());
+			}
+			changed = true;
+		}
+		db.removeDlResume(
+			record.sessionId,
+			record.peerId,
+			record.msgId);
+		sessions.emplace(session);
+		changed = true;
+	}
+	for (const auto session : sessions) {
+		writePostponed(session);
+	}
+	if (!sessions.empty()) {
+		_jobCounterChanged.fire({});
+	}
+	return changed;
+}
+
+void DownloadManager::deferAllResumeDownloads() {
+	auto &db = ensureDedupDb();
+	if (!db.isOpen()) {
+		return;
+	}
+	const auto complete = materializeCompleteResumeRows();
+	const auto pending = ranges::any_of(
+		db.loadAllDlResume(),
+		[](const DlResumeRecord &record) {
+			return !record.path.isEmpty() && !IsDlResumeComplete(record);
+		});
+	if (!pending && !complete) {
+		return;
+	}
+	// Later keeps the unfinished rows and their partial files untouched and
+	// fetches nothing: the batch is shown from the stored checkpoint until
+	// the user actually resumes it. Completed files are listed from their
+	// local paths, without a message fetch.
+	_loadingListChanges.fire({});
+}
+
+void DownloadManager::startAllResumeDownloads() {
+	const auto materialized = materializeCompleteResumeRows();
 	auto &db = ensureDedupDb();
 	const auto records = db.loadAllDlResume();
 	if (records.empty()) {
+		if (materialized) {
+			_loadingListChanges.fire({});
+		}
 		return;
+	}
+	auto live = base::flat_set<FullMsgId>();
+	for (const auto &[session, data] : _sessions) {
+		for (const auto &entry : data.downloading) {
+			live.emplace(entry.object.item->fullId());
+		}
 	}
 	struct FileJob {
 		uint64 sessionId = 0;
@@ -3211,6 +4524,10 @@ void DownloadManager::startAllResumeDownloads(bool startPaused) {
 			continue;
 		}
 		const auto peerId = PeerId(record.peerId);
+		const auto msgId = MsgId(record.msgId);
+		if (live.contains(FullMsgId(peerId, msgId))) {
+			continue;
+		}
 		auto jobIt = ranges::find_if(*jobs, [&](const FileJob &job) {
 			return job.sessionId == record.sessionId && job.peerId == peerId;
 		});
@@ -3222,9 +4539,11 @@ void DownloadManager::startAllResumeDownloads(bool startPaused) {
 			jobIt = end(*jobs) - 1;
 		}
 		jobIt->entries.push_back({
-			.msgId = MsgId(record.msgId),
+			.msgId = msgId,
 			.path = record.path,
 			.docId = record.docId,
+			.batchId = record.batchId,
+			.started = record.started,
 		});
 	}
 	const auto findSession = [](uint64 sessionId) -> Main::Session* {
@@ -3241,119 +4560,165 @@ void DownloadManager::startAllResumeDownloads(bool startPaused) {
 		if (!strong) {
 			continue;
 		}
-		auto ids = QVector<MTPInputMessage>();
+		auto ids = QVector<MsgId>();
 		for (const auto &entry : job.entries) {
-			ids.push_back(
-				MTP_inputMessageID(MTP_int(entry.msgId.bare)));
+			ids.push_back(entry.msgId);
 		}
 		const auto startDownloads = [=](
 				not_null<Main::Session*> strong) {
+			// The message fetch is asynchronous, so a cancel or a completed
+			// download may have dropped this row while it was in flight.
+			// Starting it back would resurrect a cancelled transfer.
+			const auto pendingRows = ensureDedupDb().loadAllDlResume();
+			const auto stillPending = [&](MsgId msgId) {
+				return ranges::any_of(
+					pendingRows,
+					[&](const DlResumeRecord &row) {
+						return row.sessionId == job.sessionId
+							&& row.peerId == uint64(job.peerId.value)
+							&& row.msgId == msgId.bare;
+					});
+			};
 			for (const auto &entry : job.entries) {
+				if (!stillPending(entry.msgId)) {
+					continue;
+				}
 				const auto item = strong->data().message(
 					job.peerId,
 					entry.msgId);
-				if (!item) {
+				if (!item || _loading.contains(item)) {
 					continue;
 				}
-			const auto media = item->media();
-			const auto document = media
-				? media->document()
-				: nullptr;
-			if (!document) {
-				continue;
-			}
-			auto path = entry.path;
-			if (entry.docId && entry.docId != uint64(document->id)) {
-				// Message edited to a different file: never
-				// resume into the stale prefix, renumber fresh.
-				// Legacy rows (docId 0) keep the old trust.
-				const auto slash = path.lastIndexOf('/');
-				const auto dot = path.lastIndexOf('.');
-				const auto base = (dot > slash) ? path.mid(0, dot) : path;
-				const auto ext = (dot > slash) ? path.mid(dot) : QString();
-				for (int i = 0; QFileInfo::exists(path); ++i) {
-					path = base + u" (%1)"_q.arg(i + 2) + ext;
+				const auto media = item->media();
+				const auto document = media
+					? media->document()
+					: nullptr;
+				if (!document) {
+					continue;
 				}
-				ensureDedupDb().insertDlResume({
-					.sessionId = uint64(job.sessionId),
-					.peerId = uint64(job.peerId.value),
-					.msgId = entry.msgId.bare,
-					.path = path,
-					.fileSize = document->size,
-					.docId = uint64(document->id),
-				});
-			}
-			// Use a plain file loader so a paused-then-resumed
-			// download restarts reliably - the streaming-reader
-			// downloader can't be resumed after being paused before
-			// its first part request.
-			document->save(
-				item->fullId(),
-				path,
-				LoadFromCloudOrLocal,
+				auto path = entry.path;
+				if (entry.docId && entry.docId != uint64(document->id)) {
+					// Message edited to a different file: never
+					// resume into the stale prefix, renumber fresh.
+					// Legacy rows (docId 0) keep the old trust.
+					const auto slash = path.lastIndexOf('/');
+					const auto dot = path.lastIndexOf('.');
+					const auto base = (dot > slash) ? path.mid(0, dot) : path;
+					const auto ext = (dot > slash) ? path.mid(dot) : QString();
+					for (int i = 0; QFileInfo::exists(path); ++i) {
+						path = base + u" (%1)"_q.arg(i + 2) + ext;
+					}
+					ensureDedupDb().insertDlResume({
+						.sessionId = uint64(job.sessionId),
+						.peerId = uint64(job.peerId.value),
+						.msgId = entry.msgId.bare,
+						.path = path,
+						.fileSize = document->size,
+						.docId = uint64(document->id),
+						.batchId = entry.batchId,
+						.started = entry.started,
+					});
+				}
+				const auto info = QFileInfo(path);
+				if (document->size > 0
+					&& info.exists()
+					&& info.size() >= document->size) {
+					// The file finished writing before the app quit, but no
+					// completion event recorded it. List it with the batch
+					// instead of counting it only in the header total.
+					noteUntrackedSave(
+						item,
+						document,
+						path,
+						entry.started,
+						entry.batchId);
+					ensureDedupDb().removeDlResume(
+						uint64(job.sessionId),
+						uint64(job.peerId.value),
+						entry.msgId.bare);
+					continue;
+				}
+				// Use a plain file loader so a paused-then-resumed
+				// download restarts reliably - the streaming-reader
+				// downloader can't be resumed after being paused before
+				// its first part request.
+				document->save(
+					item->fullId(),
+					path,
+					LoadFromCloudOrLocal,
 					false,
+					true,
 					true);
 				if (document->loading()
 					&& !document->loadingFilePath().isEmpty()) {
 					addLoading({
 						.item = item,
 						.document = document,
-					});
-					if (startPaused) {
-						pause(item);
-					}
+					}, false, entry.batchId, entry.started);
+				} else {
 				}
 			}
 		};
-		if (peerIsChannel(job.peerId)) {
-			const auto channelId = peerToChannel(job.peerId);
-			const auto live = strong->data().channelLoaded(channelId);
-			const auto primaryHash = (live && live->accessHash() != 0)
-				? uint64(live->accessHash())
-				: 0;
-			auto attempt = std::make_shared<Fn<void(uint64)>>();
-			*attempt = [=](uint64 hash) {
-				strong->api().request(MTPchannels_GetMessages(
-					MTP_inputChannel(
-						MTP_long(channelId.bare),
-						MTP_long(hash)),
-					MTP_vector<MTPInputMessage>(ids))
-				).done([=](const MTPmessages_Messages &result) {
-					if (const auto session = findSession(job.sessionId)) {
-						const auto strong =
-							not_null<Main::Session*>(session);
-						strong->data().processExistingMessages(
-							strong->data().channelLoaded(channelId),
-							result);
-						startDownloads(strong);
-					}
-				}).fail([=](const MTP::Error &error) {
-					if (hash != 0
-						&& error.type() == u"CHANNEL_INVALID"_q) {
-						(*attempt)(0);
-					}
-				}).send();
-			};
-			(*attempt)(primaryHash);
-		} else {
-			strong->api().request(MTPmessages_GetMessages(
-				MTP_vector<MTPInputMessage>(ids))
-			).done([=](const MTPmessages_Messages &result) {
-				if (const auto session = findSession(job.sessionId)) {
-					const auto strong = not_null<Main::Session*>(session);
-					strong->data().processExistingMessages(
-						nullptr,
-						result);
-					startDownloads(strong);
+		const auto registerMessageRequests = [=](
+				not_null<Main::Session*> strong,
+				not_null<PeerData*> peer,
+				bool releaseTakeout) {
+			const auto remaining = std::make_shared<int>(ids.size());
+			const auto messageDone = [=] {
+				if (--*remaining > 0) {
+					return;
 				}
-			}).send();
+				if (releaseTakeout) {
+					strong->api().removeTakeoutViewer();
+				}
+				startDownloads(strong);
+			};
+			for (const auto msgId : ids) {
+				strong->api().requestMessageData(peer, msgId, messageDone);
+			}
+		};
+		const auto registerRequests = [=](not_null<Main::Session*> strong) {
+			if (ids.empty()) {
+				startDownloads(strong);
+				return;
+			}
+			const auto peer = strong->data().peer(job.peerId);
+			if (peer->isRestricted()) {
+				strong->api().addTakeoutViewer();
+				strong->api().ensureTakeout(peer, [=](bool) {
+					registerMessageRequests(strong, peer, true);
+				});
+			} else {
+				registerMessageRequests(strong, peer, false);
+			}
+		};
+		if (peerIsChannel(job.peerId)) {
+			EnsureChannelLoaded(
+				strong,
+				peerToChannel(job.peerId),
+				[=](not_null<Main::Session*> strong) {
+					registerRequests(strong);
+				},
+				[] {
+				});
+		} else {
+			registerRequests(strong);
 		}
 	}
+	_loadingListChanges.fire({});
 }
 
 void DownloadManager::cancelAllResumeDownloads() {
 	auto &db = ensureDedupDb();
+	const auto storedBatches = db.loadDlBatches();
+	const auto materialized = materializeCompleteResumeRows();
 	const auto records = db.loadAllDlResume();
+	if (records.empty() && storedBatches.empty()) {
+		if (materialized) {
+			_loadingListChanges.fire({});
+		}
+		return;
+	}
 	const auto findSession = [](uint64 sessionId) -> Main::Session* {
 		for (const auto &account : Core::App().domain().orderedAccounts()) {
 			const auto session = account->maybeSession();
@@ -3363,23 +4728,89 @@ void DownloadManager::cancelAllResumeDownloads() {
 		}
 		return nullptr;
 	};
+	// Files with an incomplete resume row are the ones this cancel drops.
+	// Completed files were materialized into the downloaded list above, so
+	// the counter after cancelling stays what the bar showed.
+	auto pendingByBatch = base::flat_map<uint64, int>();
+	auto sessions = base::flat_set<not_null<Main::Session*>>();
+	auto partials = std::vector<PartialFileRemove>();
 	for (const auto &record : records) {
 		if (!record.sessionId || !record.peerId || !record.msgId) {
 			continue;
 		}
 		const auto session = findSession(record.sessionId);
-		if (!record.path.isEmpty()) {
-			QFile(record.path).remove();
-			if (session) {
-				PruneEmptyDownloadFolders(session, record.path);
-			}
+		if (session && _sessions.contains(session)) {
+			sessions.emplace(session);
 		}
-		ensureDedupDb().removeDlResume(
+		if (IsDlResumeComplete(record)) {
+			// Cancelling only stops unfinished transfers. A complete file is
+			// left alone, and a complete row that could not be listed this
+			// run keeps its row too, so the file stays tracked (and listed on
+			// the next pass) instead of being orphaned on disk.
+			continue;
+		}
+		if (record.batchId) {
+			++pendingByBatch[record.batchId];
+		}
+		if (!record.path.isEmpty()) {
+			partials.push_back({
+				.path = record.path,
+				.root = session ? DownloadRootPath(session) : QString(),
+				.stopRoot = dlBatchDestination(record.batchId),
+				.fullSize = record.fileSize,
+			});
+		}
+		db.removeDlResume(
 			record.sessionId,
 			record.peerId,
 			record.msgId);
 	}
+	for (const auto &record : storedBatches) {
+		for (const auto &weak : _batches) {
+			const auto batch = weak.lock();
+			if (batch && batch->id == record.batchId) {
+				batch->done = true;
+			}
+		}
+		db.removeDlBatch(record.sessionId, record.batchId);
+		if (!record.total
+			|| !sessions.contains(findSession(record.sessionId))) {
+			continue;
+		}
+		const auto already = ranges::any_of(
+			_finishedDlRuns,
+			[&](const FinishedDlRun &run) {
+				return run.batchId == record.batchId;
+			});
+		if (already) {
+			continue;
+		}
+		const auto pending = pendingByBatch.contains(record.batchId)
+			? pendingByBatch[record.batchId]
+			: 0;
+		_finishedDlRuns.push_back({
+			.batchId = record.batchId,
+			.sessionId = record.sessionId,
+			.srcName = record.srcName,
+			.destDir = record.destDir,
+			.total = record.total,
+			.done = std::clamp(
+				std::max(record.done, record.total - pending - record.skipped),
+				0,
+				record.total),
+			.skipped = record.skipped,
+			.startedAt = TimeId(record.startedAt),
+			.finishedAt = base::unixtime::now(),
+		});
+		while (_finishedDlRuns.size() > 200) {
+			_finishedDlRuns.erase(_finishedDlRuns.begin());
+		}
+	}
+	for (const auto session : sessions) {
+		writePostponed(session);
+	}
 	_loadingListChanges.fire({});
+	RemovePartialFiles(std::move(partials));
 }
 
 void DownloadManager::untrack(not_null<Main::Session*> session) {
@@ -3417,6 +4848,53 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 			DownloadProgress dlProgress;
 			auto efProgress = DownloadProgress();
 			auto &manager = Core::App().downloadManager();
+			const auto batchIds = [&] {
+				auto result = base::flat_set<uint64>();
+				for (const auto id : manager.loadingList()) {
+					if (id->batchId && !id->enhancedForward) {
+						result.emplace(id->batchId);
+					}
+				}
+				return result;
+			}();
+			auto pendingIds = base::flat_set<uint64>();
+			auto stored = std::map<uint64, Data::DlBatchRecord>();
+			{
+				auto &db = manager.ensureDedupDb();
+				if (db.isOpen()) {
+					if (batchIds.empty()) {
+						// No resumed entry has reached the loading list yet
+						// (the restart offers Resume/Later first): use the
+						// resume rows to find the stored pause checkpoints.
+						for (const auto &record : db.loadAllDlResume()) {
+							if (!record.batchId || record.path.isEmpty()) {
+								continue;
+							} else if (IsDlResumeComplete(record)) {
+								continue;
+							}
+							pendingIds.emplace(record.batchId);
+						}
+					}
+					for (const auto &record : db.loadDlBatches()) {
+						if (record.totalBytes > 0
+							&& (batchIds.contains(record.batchId)
+								|| pendingIds.contains(record.batchId))
+							&& !manager.isLiveDlBatch(record.batchId)) {
+							stored.emplace(record.batchId, record);
+						}
+					}
+				}
+			}
+			struct LiveBatchBytes {
+				int64 ready = 0;
+			};
+			auto loadedBytes = base::flat_map<uint64, int64>();
+			for (const auto id : manager.loadedList()) {
+				if (id->batchId) {
+					loadedBytes[id->batchId] += id->size;
+				}
+			}
+			auto liveBatches = base::flat_map<uint64, LiveBatchBytes>();
 			for (const auto id : manager.loadingList()) {
 				if (id->jobIndex != manager.jobId(
 					&id->object.item->history()->session())) {
@@ -3427,8 +4905,36 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 					efProgress.total += id->total;
 					continue;
 				}
+				if (stored.contains(id->batchId)) {
+					if (id->done) {
+						// Finished files are counted from the loaded list,
+						// where they stay after their loading entry is gone.
+						continue;
+					}
+					liveBatches[id->batchId].ready += id->ready;
+					continue;
+				}
 				dlProgress.ready += id->ready;
 				dlProgress.total += id->total;
+			}
+			for (const auto &[batchId, record] : stored) {
+				const auto i = liveBatches.find(batchId);
+				if (i != end(liveBatches)) {
+					// A restored batch tracks only its unfinished part, so
+					// the finished files come from the loaded list and the
+					// stored checkpoint keeps the already counted bytes.
+					dlProgress.ready += std::clamp(
+						std::max(
+							record.readyBytes,
+							loadedBytes[batchId] + i->second.ready),
+						int64(0),
+						record.totalBytes);
+				} else {
+					// A stored pause checkpoint is the full batch progress;
+					// it is already reduced by deleted finished files.
+					dlProgress.ready += record.readyBytes;
+				}
+				dlProgress.total += record.totalBytes;
 			}
 			if (dlProgress.total == 0) {
 				for (const auto &account : Core::App().domain().orderedAccounts()) {
@@ -3459,6 +4965,9 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 							const auto ready = QFileInfo::exists(record.path)
 								? qint64(QFileInfo(record.path).size())
 								: qint64(0);
+							if (total > 0 && ready >= total) {
+								continue;
+							}
 							dlProgress.total += total;
 							dlProgress.ready += std::min(ready, total);
 						}
@@ -3466,6 +4975,17 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 				}
 			}
 			qint64 persistedReady = 0, persistedTotal = 0;
+			{
+				static auto loggedStored = std::vector<uint64>();
+				auto storedIds = std::vector<uint64>();
+				storedIds.reserve(stored.size());
+				for (const auto &entry : stored) {
+					storedIds.push_back(entry.first);
+				}
+				if (storedIds != loggedStored) {
+					loggedStored = std::move(storedIds);
+				}
+			}
 			for (const auto &account :
 					Core::App().domain().orderedAccounts()) {
 				if (const auto session = account->maybeSession()) {
@@ -3498,7 +5018,9 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 							continue;
 						}
 						nfDone += counters.done;
-						nfTotal += counters.total;
+						nfTotal += std::max(
+							0,
+							counters.total - counters.skipped);
 						nfSkipped += counters.skipped;
 						nfFloodSeconds = std::max(
 							nfFloodSeconds,
@@ -3534,6 +5056,11 @@ rpl::producer<Ui::DownloadBarProgress> MakeDownloadBarProgress() {
 
 		Core::App().downloadManager().loadingProgressValue(
 		) | rpl::on_next([=](const DownloadProgress &) {
+			state->push();
+		}, lifetime);
+
+		Core::App().downloadManager().loadingListChanges(
+		) | rpl::on_next([=] {
 			state->push();
 		}, lifetime);
 
@@ -3657,6 +5184,7 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 
 		const auto notify = [=, &manager] {
 			auto content = Ui::DownloadBarContent();
+			auto pausedName = QString();
 			auto single = (const Data::DownloadObject*) nullptr;
 			auto singleDone = false;
 			auto lastSeen = (const Data::DownloadObject*) nullptr;
@@ -3686,7 +5214,7 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 				single = lastSeen;
 				singleDone = lastSeenDone;
 			}
-			if (content.count == 0) {
+			if (content.done >= content.count) {
 				int pausedCount = 0;
 				for (const auto &account : Core::App().domain().orderedAccounts()) {
 					if (const auto session = account->maybeSession()) {
@@ -3695,27 +5223,30 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 							continue;
 						}
 						for (const auto &record : db.loadAllDlResume()) {
-							if (record.sessionId != session->uniqueId()) {
+							if (record.sessionId != session->uniqueId()
+								|| IsDlResumeComplete(record)) {
 								continue;
 							}
 							++pausedCount;
+							if (pausedName.isEmpty()) {
+								pausedName = QFileInfo(record.path).fileName();
+							}
 						}
 					}
 				}
-			if (pausedCount > 0) {
-				content.count = pausedCount;
-				content.done = 0;
+				if (pausedCount > 0) {
+					content.count += pausedCount;
+				}
 			}
-		}
-		const auto [batchTotal, batchDone, batchSkipped]
-			= manager.batchTotals();
-		if (batchTotal > 0) {
-			content.count = batchTotal;
-			content.done = batchDone;
-			content.dlTotal = batchTotal;
-			content.dlSkipped = batchSkipped;
-		}
-		content.keepVisible = manager.hasHeldDlBatches();
+			const auto [batchTotal, batchDone, batchSkipped]
+				= manager.batchTotals();
+			if (batchTotal > 0) {
+				content.count = batchTotal;
+				content.done = batchDone;
+				content.dlTotal = batchTotal;
+				content.dlSkipped = batchSkipped;
+			}
+			content.keepVisible = manager.hasHeldDlBatches();
 			content.efCount = state->efTotal;
 			content.efDone = state->efDone;
 			content.efSkipped = state->efSkipped;
@@ -3726,7 +5257,9 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 						if (!counters.active) {
 							continue;
 						}
-						content.nfCount += counters.total;
+						content.nfCount += std::max(
+							0,
+							counters.total - counters.skipped);
 						content.nfDone += counters.done;
 						if (content.nfLastName.isEmpty()
 							&& !counters.lastFileName.isEmpty()) {
@@ -3761,47 +5294,55 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 						break;
 					}
 				}
-			if (content.count == 1 && single) {
-				const auto document = single->document;
-				const auto thumbnailed = (single->item
-					&& document->hasThumbnail())
-					? document
-					: nullptr;
-				if (state->document != thumbnailed) {
-					state->document = thumbnailed;
-					state->media = thumbnailed
-						? thumbnailed->createMediaView()
+				if (content.count == 1 && single) {
+					const auto document = single->document;
+					const auto thumbnailed = (single->item
+						&& document->hasThumbnail())
+						? document
 						: nullptr;
-					if (const auto raw = state->media.get()) {
-						raw->thumbnailWanted(single->item->fullId());
+					if (state->document != thumbnailed) {
+						state->document = thumbnailed;
+						state->media = thumbnailed
+							? thumbnailed->createMediaView()
+							: nullptr;
+						if (const auto raw = state->media.get()) {
+							raw->thumbnailWanted(single->item->fullId());
+						}
+						state->thumbnail = QImage();
+						resolveThumbnail();
 					}
-					state->thumbnail = QImage();
-					resolveThumbnail();
-				}
-				const auto batchName = singleDone
-					? manager.singleDlBatchName()
-					: manager.activeDlBatchName();
-				content.singleName = !batchName.isEmpty()
-					? tr::marked(batchName)
-					: DownloadEntryName(document);
-				content.singleThumbnail = state->thumbnail;
-			} else if (current) {
+					const auto batchName = singleDone
+						? manager.singleDlBatchName()
+						: manager.activeDlBatchName();
+					content.singleName = !batchName.isEmpty()
+						? tr::marked(batchName)
+						: DownloadEntryName(document);
+					content.singleThumbnail = state->thumbnail;
+				} else if (current) {
 					const auto document = current->object.document;
-					const auto batchName = manager.activeDlBatchName();
-					if (!batchName.isEmpty()) {
-						content.singleName = tr::marked(batchName);
-					} else if (document) {
-						content.singleName = DownloadEntryName(document);
-					} else {
-						content.singleName = tr::marked(
-							QFileInfo(current->path).fileName());
-					}
+					const auto checkpoint = current->paused
+						? manager.persistedDlCheckpointName(current->batchId)
+						: QString();
+					content.singleName = !checkpoint.isEmpty()
+						? tr::marked(checkpoint)
+						: document
+						? DownloadEntryName(document)
+						: tr::marked(QFileInfo(current->path).fileName());
 				} else {
-					const auto name = manager.singleDlBatchName();
+					auto name = manager.singleDlBatchName();
+					if (name.isEmpty()) {
+						name = manager.persistedDlCheckpointName();
+					}
+					if (name.isEmpty()) {
+						name = manager.persistedDlBatchName();
+					}
 					if (!name.isEmpty()) {
 						content.singleName = tr::marked(name);
 					}
 				}
+			}
+			if (content.singleName.text.isEmpty() && !pausedName.isEmpty()) {
+				content.singleName = tr::marked(pausedName);
 			}
 			if (content.count > 0
 				&& (content.done < content.count || content.keepVisible)
@@ -3820,14 +5361,6 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 				loggedName = content.singleName.text;
 				loggedCount = content.count;
 				loggedDone = content.done;
-				qDebug() << "[TM] bar count:"
-					<< content.count
-					<< "done:"
-					<< content.done
-					<< "keep:"
-					<< content.keepVisible
-					<< "name:"
-					<< content.singleName.text;
 			}
 			consumer.put_next(std::move(content));
 		};
@@ -4074,12 +5607,6 @@ rpl::producer<Ui::DownloadBarContent> MakeUploadBarContent() {
 				loggedCount = content.uploadCount;
 				loggedDone = content.uploadDone;
 				loggedName = name;
-				qDebug() << "[TM] ul bar count:"
-					<< content.uploadCount
-					<< "done:"
-					<< content.uploadDone
-					<< "name:"
-					<< ('"' + name + '"');
 			}
 		}
 		content.uploadReady = totalReady;

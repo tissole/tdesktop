@@ -49,6 +49,7 @@ public:
 
 	void setFilter(Tab tab);
 	void refreshForwards();
+	void clearFinishedForwards();
 	[[nodiscard]] rpl::producer<bool> hasDownloadsValue() const;
 	[[nodiscard]] rpl::producer<bool> hasUploadsValue() const;
 

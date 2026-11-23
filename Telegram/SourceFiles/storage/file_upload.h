@@ -18,6 +18,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <optional>
 
 class ApiWrap;
+class HistoryItem;
+class DocumentData;
 struct FilePrepareResult;
 
 namespace Api {
@@ -75,7 +77,11 @@ public:
 	void upload(
 		FullMsgId itemId,
 		const std::shared_ptr<FilePrepareResult> &file,
-		int resumeFromParts = 0);
+		int resumeFromParts = 0,
+		bool startPaused = false);
+	bool restartUpload(
+		not_null<HistoryItem*> item,
+		not_null<DocumentData*> document);
 
 	// Returns true if this file would be a duplicate (by hash in dedup DB
 	// or currently in-progress uploads), so the caller can skip sending.
@@ -229,7 +235,6 @@ private:
 	};
 
 	void maybeSend();
-	void releaseUploadTableIfIdle();
 	void startTranscode(FullMsgId itemId);
 	void maybeStartTranscode();
 	void runTranscode(FullMsgId itemId);
@@ -309,10 +314,6 @@ private:
 	const not_null<ApiWrap*> _api;
 
 	std::vector<Entry> _queue;
-	std::optional<Data::DedupDb::TableUse> _uploadTableUse;
-	std::optional<Data::DedupDb::ChatTableUse> _chatTableUse;
-	PeerId _chatTablePeer;
-	bool _chatTableAllPeers = false;
 	base::flat_set<FullMsgId> _finishedUploads;
 	std::vector<FinishedUpload> _finishedUploadsList;
 	base::flat_map<FullMsgId, FinishedUpload> _awaitingFinishedUploads;

@@ -170,6 +170,15 @@ struct TmEfInfo {
 	return TmItemKind::Other;
 }
 
+[[nodiscard]] HistoryItem *TmResolveItem(
+		GlobalMsgId globalId,
+		const Info::Downloads::Provider *provider) {
+	if (const auto item = MessageByGlobalId(globalId)) {
+		return item;
+	}
+	return provider ? provider->listedItem(globalId) : nullptr;
+}
+
 void TmCancelItems(
 		not_null<Main::Session*> session,
 		const std::vector<SelectedItem> &list,
@@ -179,7 +188,7 @@ void TmCancelItems(
 		return;
 	}
 	for (const auto &entry : list) {
-		if (const auto item = MessageByGlobalId(entry.globalId)) {
+		if (const auto item = TmResolveItem(entry.globalId, provider)) {
 			const auto kind = TmClassify(
 				item,
 				provider,
@@ -212,7 +221,7 @@ void TmDeleteFinishedItems(
 	}
 	auto downloadIds = std::vector<GlobalMsgId>();
 	for (const auto &entry : list) {
-		if (const auto item = MessageByGlobalId(entry.globalId)) {
+		if (const auto item = TmResolveItem(entry.globalId, provider)) {
 			const auto kind = TmClassify(
 				item,
 				provider,
@@ -243,7 +252,7 @@ void TmClearFinishedItems(
 		return;
 	}
 	for (const auto &entry : list) {
-		if (const auto item = MessageByGlobalId(entry.globalId)) {
+		if (const auto item = TmResolveItem(entry.globalId, provider)) {
 			const auto ef = TmFindEf(efLookup, item);
 			const auto kind = TmClassify(item, provider, ef);
 			switch (kind) {
@@ -283,7 +292,7 @@ struct TmSelKinds {
 		return result;
 	}
 	for (const auto &entry : list) {
-		if (const auto item = MessageByGlobalId(entry.globalId)) {
+		if (const auto item = TmResolveItem(entry.globalId, provider)) {
 			if (provider->isForwardAggregate(item)
 				&& provider->isForwardAggregateFinished(item)) {
 				++result.clearable;
@@ -993,8 +1002,6 @@ bool ListWidget::isSelectedItem(
 void ListWidget::removeItemSelection(
 		const SelectedMap::const_iterator &i) {
 	Expects(i != _selected.cend());
-	qDebug() << "[TM] tm row deselected, item:"
-		<< i->first->fullId().msg.bare;
 	_selected.erase(i);
 	if (_selected.empty()) {
 		update();
@@ -2474,7 +2481,7 @@ void ListWidget::clearSelectedItems() {
 		return;
 	}
 	for (const auto &entry : items.list) {
-		if (const auto item = MessageByGlobalId(entry.globalId)) {
+		if (const auto item = TmResolveItem(entry.globalId, provider)) {
 			if (provider->isForwardAggregate(item)
 				&& provider->isForwardAggregateFinished(item)) {
 				provider->clearForwardRun(item);
@@ -2585,15 +2592,22 @@ void ListWidget::toggleStoryPin(
 }
 
 void ListWidget::deleteItem(GlobalMsgId globalId) {
+	auto items = SelectedItems(_provider->type());
 	if (const auto item = MessageByGlobalId(globalId)) {
-		auto items = SelectedItems(_provider->type());
 		items.list.push_back(SelectedItem(item->globalId()));
 		const auto selectionData = _provider->computeSelectionData(
 			item,
 			FullSelection);
 		items.list.back().canDelete = selectionData.canDelete;
-		deleteItems(std::move(items));
+	} else if (_controller->isDownloads()) {
+		// Restored rows can be local placeholders without a live message;
+		// the downloads manager still owns their file paths.
+		items.list.push_back(SelectedItem(globalId));
+		items.list.back().canDelete = true;
+	} else {
+		return;
 	}
+	deleteItems(std::move(items));
 }
 
 void ListWidget::deleteItems(SelectedItems &&items, Fn<void()> confirmed) {
@@ -2751,8 +2765,6 @@ void ListWidget::applyItemSelection(
 			item,
 			_provider->computeSelectionData(item, selection),
 			_selectedLimit)) {
-		qDebug() << "[TM] tm row selected, item:"
-			<< item->fullId().msg.bare;
 		repaintItem(item);
 		pushSelectedItems();
 	}
@@ -2765,10 +2777,6 @@ void ListWidget::toggleItemSelection(not_null<HistoryItem*> item) {
 	} else {
 		removeItemSelection(it);
 	}
-	qDebug() << "[TM] tm row selection toggled, item:"
-		<< item->fullId().msg.bare
-		<< "selected:"
-		<< (_selected.find(item) != _selected.cend());
 }
 
 bool ListWidget::isItemUnderPressSelected() const {
@@ -2815,7 +2823,6 @@ void ListWidget::clearSelected() {
 	if (_selected.empty()) {
 		return;
 	}
-	qDebug() << "[TM] tm selection cleared, count:" << _selected.size();
 	if (hasSelectedText()) {
 		repaintItem(_selected.begin()->first);
 		_selected.clear();

@@ -56,7 +56,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat_style.h"
 #include "styles/style_overview.h"
 
-#include <QtCore/QDebug>
 
 namespace Overview::Layout {
 namespace {
@@ -1554,7 +1553,8 @@ Document::Document(
 , _hideDate(fields.hideDate)
 , _cover(LookupVideoCover(fields.document, parent))
 , _statusSuffix(fields.statusSuffix)
-, _boldName(fields.boldName) {
+, _boldName(fields.boldName)
+, _noThumb(fields.noThumb) {
 	_name.setMarkedText(
 		(_boldName ? st::semiboldTextStyle : st::defaultTextStyle),
 		(!_nameOverride.isEmpty()
@@ -1645,12 +1645,6 @@ void Document::paint(Painter &p, const QRect &clip, TextSelection selection, con
 
 	const auto selected = (selection == FullSelection);
 	if (p.opacity() != 1. || selected) {
-		qDebug() << "[TM] tm doc paint anomaly, file:"
-			<< _data->filename()
-			<< "opacity:"
-			<< p.opacity()
-			<< "selected:"
-			<< selected;
 	}
 
 	const auto cornerDownload = downloadInCorner();
@@ -2212,7 +2206,8 @@ bool Document::iconAnimated() const {
 }
 
 bool Document::withThumb() const {
-	return !songLayout()
+	return !_noThumb
+		&& !songLayout()
 		&& (_data->hasThumbnail() || _data->isSvgImage() || _cover);
 }
 
@@ -2299,8 +2294,6 @@ void ForwardSummary::update() {
 		st::defaultTextStyle,
 		_threeLineStatus ? _data.statusDate : QString());
 	if (_data.title.isEmpty() && _data.status.isEmpty()) {
-		qDebug() << "[TM] empty fw header, parent:"
-			<< parent()->fullId().msg.bare;
 	}
 }
 
@@ -2351,12 +2344,6 @@ void ForwardSummary::paint(
 		const PaintContext *context) {
 	const auto selected = (selection == FullSelection);
 	if (p.opacity() != 1. || selected) {
-		qDebug() << "[TM] tm fw paint anomaly, title:"
-			<< _data.title
-			<< "opacity:"
-			<< p.opacity()
-			<< "selected:"
-			<< selected;
 	}
 	const auto nameleft = _noThumb
 		? _st.filePadding.left()

@@ -20,6 +20,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_download_manager.h"
 #include "data/data_user.h"
 #include "enhanced_forward.h"
+#include "bulk_forward/bulk_forward_counters.h"
+#include "bulk_forward/bulk_forward_entry.h"
 #include "apiwrap.h"
 #include "logs.h"
 #include "history/history.h"
@@ -35,7 +37,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_layers.h"
 #include "styles/style_menu_icons.h"
 
-#include <QtCore/QDebug>
 
 namespace Info::Downloads {
 
@@ -190,7 +191,6 @@ void Widget::saveState(not_null<Memento*> memento) {
 
 void Widget::restoreState(not_null<Memento*> memento) {
 	_currentTab = memento->tab();
-	qDebug() << "[TM] manager opened on tab:" << int(_currentTab);
 	_inner->restoreState(memento);
 	scrollTopRestore(memento->scrollTop());
 	refreshTabs();
@@ -207,11 +207,13 @@ void Widget::selectionAction(SelectionAction action) {
 void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 	const auto window = controller()->parentController();
 	auto &loadingManager = Core::App().downloadManager();
-	const auto showDownloads = (_currentTab == Tab::Downloads) && _hasDownloads;
+	const auto showDownloads = (_currentTab == Tab::Downloads)
+		&& (_hasDownloads || loadingManager.dlResumeCount() > 0);
 	const auto showUploads = (_currentTab == Tab::Uploads) && _hasUploads;
 
 	const auto downloadsRunning = loadingManager.anyResumable();
-	const auto downloadsPaused = loadingManager.anyPaused();
+	const auto downloadsPaused = loadingManager.anyPaused()
+		|| (loadingManager.dlResumeCount() > 0);
 	const auto downloadsFinished = loadingManager.anyFinishedLoading();
 	const auto uploadsActive = Core::App().uploaderAny();
 	const auto uploadsRunning = Core::App().uploaderAnyActive();
@@ -253,6 +255,15 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				forwardsPaused = true;
 			}
 		}
+		for (const auto &counters : BulkForward::AllCounters(session)) {
+			if (!counters.active) {
+				continue;
+			}
+			forwardsActive = true;
+			if (counters.paused) {
+				forwardsPaused = true;
+			}
+		}
 		for (const auto &batch : EnhancedForward::ForwardBatches(session)) {
 			if (batch.finished) {
 				forwardsFinished = true;
@@ -264,18 +275,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 	}
 
 	const auto finishedDownloadIds = [] {
-		auto result = std::vector<GlobalMsgId>();
-		auto &manager = Core::App().downloadManager();
-		for (const auto &id : manager.loadedList()) {
-			if (id->object) {
-				result.push_back({
-					.itemId = id->itemId,
-					.sessionUniqueId = id->object->item->history()
-						->session().uniqueId(),
-				});
-			}
-		}
-		return result;
+		return Core::App().downloadManager().finishedDownloadIds();
 	};
 
 	if (_currentTab == Tab::Forwards) {
@@ -292,12 +292,12 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 								EnhancedForward::resumeForward(job.peer, session);
 							} else if (!job.active && job.resumable) {
 								session->api().startResumeForward(
-									job.srcPeer,
 									job.peer,
 									session);
 							}
 						}
 						NormalForward::ResumeAll(session);
+						BulkForward::ResumeActive(session);
 					});
 				},
 				&st::menuIconDownload);
@@ -313,6 +313,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 							}
 						}
 						NormalForward::PauseAll(session);
+						BulkForward::PauseActive(session);
 					});
 				},
 				&st::menuIconSchedule);
@@ -328,6 +329,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 							Ui::PostponeCall(this, [=] {
 								EnhancedForward::CancelAll(&window->session());
 								NormalForward::CancelAll(&window->session());
+								BulkForward::CancelActive(&window->session());
 							});
 						},
 						.confirmText = tr::lng_box_yes(tr::now),
@@ -342,22 +344,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 				tr::lng_tm_fw_clear(tr::now),
 				[=] {
 					Ui::PostponeCall(this, [=] {
-						const auto session = &window->session();
-						for (const auto &job : EnhancedForward::AllJobs(session)) {
-							if (job.finished) {
-								EnhancedForward::ClearFinished(session, job.peer);
-							}
-						}
-						for (const auto &batch :
-								EnhancedForward::ForwardBatches(session)) {
-							if (batch.finished) {
-								EnhancedForward::DropForwardBatch(
-									session,
-									batch.dst);
-							}
-						}
-						EnhancedForward::ClearFinishedFwRuns(session);
-						_inner->refreshForwards();
+						_inner->clearFinishedForwards();
 					});
 				},
 				&st::menuIconClear);
@@ -367,6 +354,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 
 	if (_currentTab == Tab::Both) {
 		if (!_hasDownloads && !_hasUploads
+			&& !downloadsPaused
 			&& !forwardsActive && !forwardsPaused && !forwardsFinished) {
 			return;
 		}
@@ -394,6 +382,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 							}
 						}
 						NormalForward::PauseAll(session);
+						BulkForward::PauseActive(session);
 					});
 				},
 				&st::menuIconSchedule);
@@ -413,12 +402,12 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 								EnhancedForward::resumeForward(job.peer, session);
 							} else if (!job.active && job.resumable) {
 								session->api().startResumeForward(
-									job.srcPeer,
 									job.peer,
 									session);
 							}
 						}
 						NormalForward::ResumeAll(session);
+						BulkForward::ResumeActive(session);
 					});
 				},
 				&st::menuIconDownload);
@@ -436,6 +425,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 								Core::App().uploaderCancelAll();
 								EnhancedForward::CancelAll(&window->session());
 								NormalForward::CancelAll(&window->session());
+								BulkForward::CancelActive(&window->session());
 							});
 						},
 						.confirmText = tr::lng_box_yes(tr::now),
@@ -476,22 +466,7 @@ void Widget::fillTopBarMenu(const Ui::Menu::MenuCallback &addAction) {
 					Ui::PostponeCall(this, [=] {
 						Core::App().downloadManager().clearFinishedLoading();
 						Core::App().uploaderClearFinished();
-						const auto session = &window->session();
-						for (const auto &job : EnhancedForward::AllJobs(session)) {
-							if (job.finished) {
-								EnhancedForward::ClearFinished(session, job.peer);
-							}
-						}
-						for (const auto &batch :
-								EnhancedForward::ForwardBatches(session)) {
-							if (batch.finished) {
-								EnhancedForward::DropForwardBatch(
-									session,
-									batch.dst);
-							}
-						}
-						EnhancedForward::ClearFinishedFwRuns(session);
-						_inner->refreshForwards();
+						_inner->clearFinishedForwards();
 					});
 				},
 				&st::menuIconClear);
@@ -666,6 +641,11 @@ std::shared_ptr<Info::Memento> Make(not_null<UserData*> self, Tab tab) {
 					return counters.active;
 				})
 			|| ranges::any_of(
+				BulkForward::AllCounters(&self->session()),
+				[](const BulkForward::Counters &counters) {
+					return counters.active;
+				})
+			|| ranges::any_of(
 				EnhancedForward::ForwardBatches(&self->session()),
 				[](const EnhancedForward::ForwardBatchSnapshot &batch) {
 					return batch.finished;
@@ -697,7 +677,6 @@ Tab &LastActivityTabRef() {
 void SetLastActivityTab(Tab tab) {
 	LastActivityTabRef() = tab;
 	Core::App().settings().writePref<int>(kLastActivityTabKey, int(tab));
-	qDebug() << "[TM] last tab set:" << int(tab);
 }
 
 Tab LastActivityTab() {

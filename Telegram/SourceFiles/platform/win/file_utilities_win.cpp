@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtWidgets/QFileDialog>
 #include <QtGui/QDesktopServices>
+#include <QtCore/QFile>
 #include <QtCore/QSettings>
 #include <QtCore/QStandardPaths>
 
@@ -326,30 +327,16 @@ void PostprocessDownloaded(const QString &filepath) {
 }
 
 bool MoveToTrash(const QString &filepath) {
-	if (filepath.isEmpty() || !QFileInfo::exists(filepath)) {
-		return false;
+	// Deletes run on worker threads, and the shell file operation behind
+	// QFile::moveToTrash needs COM to be initialized on the calling thread.
+	const auto initialized = SUCCEEDED(CoInitializeEx(
+		nullptr,
+		COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE));
+	const auto result = QFile::moveToTrash(filepath);
+	if (initialized) {
+		CoUninitialize();
 	}
-	auto nativePath = QDir::toNativeSeparators(filepath).toStdWString();
-	// SHFileOperation requires double-null-terminated path buffer.
-	WCHAR pathBuffer[4096];
-	memset(pathBuffer, 0, sizeof(pathBuffer));
-	wcsncpy_s(pathBuffer, nativePath.c_str(), _TRUNCATE);
-	pathBuffer[nativePath.size()] = 0;
-	pathBuffer[nativePath.size() + 1] = 0;
-	SHFILEOPSTRUCT fileOp = {};
-	fileOp.hwnd = 0;
-	fileOp.wFunc = FO_DELETE;
-	fileOp.pFrom = pathBuffer;
-	fileOp.pTo = nullptr;
-	fileOp.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT;
-	fileOp.fAnyOperationsAborted = FALSE;
-	fileOp.hNameMappings = nullptr;
-	fileOp.lpszProgressTitle = nullptr;
-	const auto result = SHFileOperation(&fileOp);
-	if (result != 0 || fileOp.fAnyOperationsAborted) {
-		return QFile::remove(filepath);
-	}
-	return true;
+	return result;
 }
 
 } // namespace File

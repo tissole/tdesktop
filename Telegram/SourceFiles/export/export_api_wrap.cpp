@@ -5323,7 +5323,6 @@ void ApiWrap::setSessionId(uint64 sessionId) {
 }
 
 void ApiWrap::setDedupDb(const QString &path) {
-	_downloadTableUse.reset();
 	_dedupDb = std::make_unique<::Data::DedupDb>(path, false);
 }
 
@@ -5402,9 +5401,6 @@ bool ApiWrap::skipDuplicateById(Data::File &file, const FilePolicy &policy) {
 	const auto peer = dedupPeerId();
 	_dedupPeers.emplace(peer);
 	const auto global = GetEnhancedBool("prevent_export_duplicates");
-	if (global) {
-		_downloadTableUse = db->useTable(::Data::DedupDb::Table::Downloads);
-	}
 	const auto known = global
 		? db->containsDocId(
 			::Data::DedupDb::Table::Downloads,
@@ -6215,9 +6211,6 @@ bool ApiWrap::decideFileDedup(
 	const auto peer = dedupPeerId();
 	_dedupPeers.emplace(peer);
 	const auto global = GetEnhancedBool("prevent_export_duplicates");
-	if (global) {
-		_downloadTableUse = db->useTable(::Data::DedupDb::Table::Downloads);
-	}
 	if (dedupIdDuplicate(*db, docId, isPhoto, peer, global)) {
 		markDup(file);
 		eraseFile();
@@ -6438,9 +6431,6 @@ bool ApiWrap::decideFileWithMedia(
 		return false;
 	}
 	_dedupPeers.emplace(peer);
-	if (global) {
-		_downloadTableUse = db->useTable(::Data::DedupDb::Table::Downloads);
-	}
 	const auto fileType = policy.type;
 	if (dedupIdDuplicate(*db, docId, isPhoto, peer, global)) {
 		file.skipReason = SkipReason::Duplicate;

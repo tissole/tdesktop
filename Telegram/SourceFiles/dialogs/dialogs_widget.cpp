@@ -99,6 +99,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/info_memento.h"
 #include "info/downloads/info_downloads_widget.h"
 #include "enhanced_forward.h"
+#include "bulk_forward/bulk_forward_counters.h"
 
 #include <algorithm>
 #include "inline_bots/bot_attach_web_view.h"
@@ -151,6 +152,31 @@ public:
 		}
 	}
 	return false;
+}
+
+// Enhanced forward temp files are named "<runId>_<index>_<name>" on disk so
+// equal names do not collide. The bar shows the original name only.
+[[nodiscard]] QString BarFileName(const QString &name) {
+	const auto file = QFileInfo(name).fileName();
+	if (!name.contains(u"ForwardTemp"_q)) {
+		return file;
+	}
+	const auto digitsEnd = [&](int from) {
+		auto result = from;
+		while (result < file.size() && file[result].isDigit()) {
+			++result;
+		}
+		return result;
+	};
+	const auto first = digitsEnd(0);
+	if (first == 0 || first >= file.size() || file[first] != u'_') {
+		return file;
+	}
+	const auto second = digitsEnd(first + 1);
+	if (second == first + 1 || second >= file.size() || file[second] != u'_') {
+		return file;
+	}
+	return file.mid(second + 1);
 }
 
 [[nodiscard]] QImage UpdateIcon() {
@@ -1570,6 +1596,7 @@ void Widget::setupDownloadBar() {
 			content.efCount = 0;
 			content.efDone = 0;
 			content.efSkipped = 0;
+			content.efSkippedBytes = 0;
 			content.nfCount = 0;
 			content.nfDone = 0;
 			const auto create = (content.count
@@ -1673,11 +1700,37 @@ void Widget::setupForwardsBar() {
 				const std::vector<EnhancedForward::JobSnapshot> &jobs) {
 				Ui::DownloadBarProgress result;
 				auto activeHasItems = false;
+				auto bulkTotal = qint64(0);
+				auto bulkReady = qint64(0);
+				auto usedBulk = false;
+				const auto bulk = BulkForward::AllCounters(session);
+				const auto paired = [&](const PeerId &peer) {
+					for (const auto &counters : bulk) {
+						if (counters.active && counters.destination == peer) {
+							return true;
+						}
+					}
+					return false;
+				};
+				for (const auto &counters : bulk) {
+					if (!counters.active) {
+						continue;
+					}
+					bulkTotal = std::max(
+						bulkTotal,
+						std::max<qint64>(
+							counters.knownBytes - counters.skippedBytes,
+							0));
+					bulkReady = std::max(bulkReady, counters.doneBytes);
+					usedBulk = true;
+				}
+				bulkReady = std::min(bulkReady, bulkTotal);
 				for (const auto &job : jobs) {
 					if (!job.active) {
 						continue;
 					}
 					activeHasItems = true;
+					const auto inBulk = paired(job.peer);
 					for (auto i = 0; i < int(job.progress.items.size()); i++) {
 						const auto &item = job.progress.items[i];
 						if (item.cancelled
@@ -1707,17 +1760,40 @@ void Widget::setupForwardsBar() {
 							== EnhancedForward::ItemState::Uploading);
 						const auto isDone = item.sent
 							|| (item.state == EnhancedForward::ItemState::Done);
-						const auto phase = uploading
-							? item.uploadProgress
-							: item.downloadProgress;
+						if (inBulk && isDone) {
+							// The run already counts this upload in its
+							// uploaded bytes, so only the live part is
+							// added here.
+							continue;
+						}
+						// The byte line measures uploaded bytes. A downloading
+						// item has not transferred anything to the destination
+						// yet, and switching from the download phase to the
+						// upload phase must not drop its bytes backwards.
 						const auto ready = isDone
 							? size
-							: qint64(size * std::clamp(phase, 0., 1.));
-						result.efTotal += size;
+							: (uploading
+								? qint64(size * std::clamp(
+									item.uploadProgress,
+									0.,
+									1.))
+								: qint64(0));
+						if (!inBulk) {
+							result.efTotal += size;
+						}
 						result.efReady += ready;
 					}
 				}
-				if (!result.efTotal) {
+				if (usedBulk) {
+					// A bulk run knows the size of the matched set from its
+					// scan and the uploaded bytes from its own counters, so
+					// the bar shows the whole run, not the current batch. The
+					// persisted copy rows describe only the unfinished part of
+					// that same run, so they must not replace its byte line
+					// with on-disk download progress.
+					result.efTotal += bulkTotal;
+					result.efReady += bulkReady;
+				} else if (!result.efTotal) {
 					qint64 total = 0;
 					result.efReady += EnhancedForward::PersistedForwardBytes(
 						session,
@@ -1733,6 +1809,9 @@ void Widget::setupForwardsBar() {
 						result.efTotal = persistedTotal;
 						result.efReady = std::max(result.efReady, persistedReady);
 					}
+				}
+				if (result.efTotal > 0) {
+					result.efReady = std::min(result.efReady, result.efTotal);
 				}
 				return result;
 			});
@@ -1752,13 +1831,32 @@ void Widget::setupForwardsBar() {
 		};
 		auto efCount = 0;
 		auto efDone = 0;
-		QString firstName;
+		auto efFloor = 0;
+		auto nfName = QString();
+		const auto bulk = BulkForward::AllCounters(session);
+		const auto bulkCovering = [&](const PeerId &dst) {
+			for (const auto &counters : bulk) {
+				if (counters.active && counters.destination == dst) {
+					return &counters;
+				}
+			}
+			return (const BulkForward::Counters*)nullptr;
+		};
 		for (const auto &job : EnhancedForward::GetUnfinishedJobs(session)) {
 			if (inBatch(job.dstId)) {
 				continue;
 			}
-			efCount += job.total;
-			efDone += job.sent;
+			// The resumed copy rows are a subset of the bulk run's matching
+			// set, so they only keep the bar visible until the bulk counter
+			// reports the whole set. Their sent count is already part of the
+			// run's checkpoint, and the live pipeline's own count comes from
+			// the batch loop above, so nothing is added here.
+			if (const auto covering = bulkCovering(job.dstId)) {
+				efFloor = std::max(efFloor, job.total);
+			} else {
+				efCount += job.total;
+				efDone += job.sent;
+			}
 		}
 		auto nfTotal = 0;
 		auto nfDone = 0;
@@ -1768,69 +1866,128 @@ void Widget::setupForwardsBar() {
 			if (!counters.active || inBatch(counters.dst)) {
 				continue;
 			}
-			nfTotal += counters.total;
+			nfTotal += std::max(0, counters.total - counters.skipped);
 			nfDone += counters.done;
 			nfSkipped += counters.skipped;
 			nfFlood = std::max(nfFlood, counters.floodSeconds);
-			if (firstName.isEmpty() && !counters.lastFileName.isEmpty()) {
-				firstName = counters.lastFileName;
+			if (nfName.isEmpty() && !counters.lastFileName.isEmpty()) {
+				nfName = counters.lastFileName;
 			}
 		}
 		auto skipped = nfSkipped;
+		auto skippedBytes = qint64(0);
 		for (const auto &job : EnhancedForward::AllJobs(session)) {
 			if (inBatch(job.peer)) {
 				continue;
 			}
 			skipped += job.progress.skipped;
 		}
+		auto bulkUsed = std::vector<bool>(bulk.size(), false);
+		auto batchName = QString();
 		for (const auto &batch : batches) {
-			efCount += batch.total;
-			efDone += batch.sent;
-			skipped += batch.skipped;
-			if (firstName.isEmpty() && !batch.lastFileName.isEmpty()) {
-				firstName = batch.lastFileName;
+			auto matched = -1;
+			for (auto i = 0; i != int(bulk.size()); ++i) {
+				if (bulk[i].active && bulk[i].destination == batch.dst) {
+					matched = i;
+					break;
+				}
+			}
+			if (matched >= 0) {
+				// A bulk run knows the whole matching set up front, while
+				// its copy pipeline reports uploads one by one. Settled
+				// copies are already in `sent`, so subtract them before
+				// adding the pipeline counter: no double count, no jump
+				// backwards when a batch settles.
+				bulkUsed[matched] = true;
+				const auto &counters = bulk[matched];
+				efCount += std::max(
+					0,
+					counters.matched - counters.skipped);
+				efDone += counters.sent
+					+ std::max(0, batch.sent - counters.copied);
+				skipped += counters.skipped;
+				skippedBytes += counters.skippedBytes;
+			} else {
+				efCount += std::max(0, batch.total - batch.skipped);
+				efDone += batch.sent;
+				skipped += batch.skipped;
+			}
+			if (batchName.isEmpty() && !batch.lastFileName.isEmpty()) {
+				batchName = batch.lastFileName;
 			}
 		}
+		for (auto i = 0; i != int(bulk.size()); ++i) {
+			const auto &counters = bulk[i];
+			if (!counters.active || bulkUsed[i]) {
+				continue;
+			}
+			// The bar follows the messages actually handled, not the scan,
+			// so its numbers never run ahead of the transfers.
+			efCount += std::max(0, counters.matched - counters.skipped);
+			efDone += counters.sent;
+			skipped += counters.skipped;
+			skippedBytes += counters.skippedBytes;
+		}
+		auto uploadingName = QString();
+		auto downloadingName = QString();
+		efCount = std::max({ efCount, efDone, efFloor });
 		for (const auto &job : jobs) {
 			if (job.finished
 				|| job.progress.state == EnhancedForward::State::Cancelled) {
 				continue;
 			}
 			for (const auto &item : job.progress.items) {
-				if (item.cancelled || item.info.name.isEmpty()) {
+				if (item.cancelled
+					|| item.sent
+					|| item.dedupSkipped
+					|| item.info.name.isEmpty()) {
 					continue;
 				}
-				if (item.state == EnhancedForward::ItemState::Downloading
-					|| item.state == EnhancedForward::ItemState::Uploading) {
-					firstName = item.info.name;
+				if (item.state == EnhancedForward::ItemState::Uploading) {
+					uploadingName = item.info.name;
 					break;
-				}
-				if (firstName.isEmpty()
-					&& !item.sent
-					&& !item.dedupSkipped
-					&& item.state != EnhancedForward::ItemState::Done) {
-					firstName = item.info.name;
+				} else if (item.state == EnhancedForward::ItemState::Downloading
+					&& downloadingName.isEmpty()) {
+					downloadingName = item.info.name;
 				}
 			}
 		}
-		if (firstName.isEmpty() && efCount) {
-			// No live pipeline (e.g. right after a restart): fall back to
-			// the persisted temp file name so the bar still names a file.
+		if (!uploadingName.isEmpty()) {
+			_forwardsBarName = uploadingName;
+		} else if (!downloadingName.isEmpty()) {
+			_forwardsBarName = downloadingName;
+		} else if (!efCount) {
+			_forwardsBarName.clear();
+		}
+		if (_forwardsBarName.isEmpty() && efCount) {
+			// Right after a restart no live pipeline names a file: prefer the
+			// persisted row the run stopped at over the batch's first file.
+			auto persisted = QString();
 			auto &db = Core::App().downloadManager().ensureDedupDb();
 			if (db.isOpen()) {
 				const auto records = db.loadUnfinishedEfResumeItems(
 					controller()->session().uniqueId());
 				for (const auto &record : records) {
+					// Sent rows are history; the bar names the next
+					// unfinished file, the one the run stopped at.
+					if (record.state.toInt() >= 3) {
+						continue;
+					}
 					if (!record.localPath.isEmpty()) {
-						firstName = QFileInfo(
-							record.localPath).fileName();
-						if (!firstName.isEmpty()) {
+						persisted = BarFileName(record.localPath);
+						if (!persisted.isEmpty()) {
 							break;
 						}
 					}
 				}
 			}
+			_forwardsBarName = !persisted.isEmpty() ? persisted : batchName;
 		}
+		const auto firstName = !uploadingName.isEmpty()
+			? uploadingName
+			: (!downloadingName.isEmpty()
+				? downloadingName
+				: (!nfName.isEmpty() ? nfName : _forwardsBarName));
 		if (!efCount && !nfTotal) {
 			_forwardsBar = nullptr;
 			updateControlsGeometry();
@@ -1860,6 +2017,7 @@ void Widget::setupForwardsBar() {
 			content.nfDone = nfDone;
 			content.nfFloodSeconds = nfFlood;
 			content.efSkipped = skipped;
+			content.efSkippedBytes = skippedBytes;
 			content.singleName.text = firstName;
 			content.keepVisible = !batches.empty();
 			_forwardsBar->show(std::move(content));
@@ -1900,6 +2058,11 @@ void Widget::setupForwardsBar() {
 			std::vector<EnhancedForward::JobSnapshot>{});
 	}, lifetime());
 	NormalForward::countersChanged(
+	) | rpl::on_next([=] {
+		updateForwardsBar(
+			std::vector<EnhancedForward::JobSnapshot>{});
+	}, lifetime());
+	BulkForward::countersChanged(
 	) | rpl::on_next([=] {
 		updateForwardsBar(
 			std::vector<EnhancedForward::JobSnapshot>{});

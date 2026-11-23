@@ -17,6 +17,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_dialogs.h"
 #include <rpl/never.h>
 
+#include <algorithm>
+
 namespace Ui {
 namespace {
 
@@ -29,31 +31,6 @@ namespace {
 		Qt::SmoothTransformation);
 	result.setDevicePixelRatio(style::DevicePixelRatio());
 	return result;
-}
-
-// Duplicates are reported beside "sent / selected", never by shrinking it.
-[[nodiscard]] QString DuplicatesSuffix(int skipped) {
-	if (skipped <= 0) {
-		return QString();
-	}
-	return u" (%1)"_q.arg(
-		tr::lng_tm_fw_duplicates_skipped(tr::now, lt_count, skipped));
-}
-
-[[nodiscard]] QString DuplicatesSuffixDl(int skipped) {
-	if (skipped <= 0) {
-		return QString();
-	}
-	return u" (%1)"_q.arg(
-		tr::lng_tm_dl_duplicates_skipped(tr::now, lt_count, skipped));
-}
-
-[[nodiscard]] QString DuplicatesSuffixUl(int skipped) {
-	if (skipped <= 0) {
-		return QString();
-	}
-	return u" (%1)"_q.arg(
-		tr::lng_tm_ul_duplicates_skipped(tr::now, lt_count, skipped));
 }
 
 } // namespace
@@ -120,44 +97,44 @@ void DownloadBar::show(DownloadBarContent &&content) {
 	refreshThumbnail();
 	const auto fwdDone = content.efDone + content.nfDone;
 	const auto fwdCount = content.efCount + content.nfCount;
+	const auto named = [](QString counters, const QString &name) {
+		if (!name.isEmpty()) {
+			counters += u" "_q + name;
+		}
+		return counters;
+	};
 	const auto dlTitle = (content.count >= 1)
 		? tr::lng_tm_dl_prefix(
 			tr::now,
 			lt_name,
-			(content.singleName.text.isEmpty()
-				? QString()
-				: content.singleName.text + u" "_q)
-			+ tr::lng_tm_counter(
-				tr::now,
-				lt_done, QString::number(content.done),
-				lt_total, QString::number(content.count))
-			+ DuplicatesSuffixDl(content.dlSkipped))
+			named(
+				tr::lng_tm_counter(
+					tr::now,
+					lt_done, QString::number(content.done),
+					lt_total, QString::number(content.count)),
+				content.singleName.text))
 		: QString();
 	const auto fwTitle = (fwdCount >= 1)
 		? tr::lng_tm_fw_prefix(
 			tr::now,
 			lt_name,
-			(content.singleName.text.isEmpty()
-				? QString()
-				: content.singleName.text + u" "_q)
-			+ tr::lng_tm_counter(
-				tr::now,
-				lt_done, QString::number(fwdDone),
-				lt_total, QString::number(fwdCount))
-			+ DuplicatesSuffix(content.efSkipped))
+			named(
+				tr::lng_tm_counter(
+					tr::now,
+					lt_done, QString::number(fwdDone),
+					lt_total, QString::number(fwdCount)),
+				content.singleName.text))
 		: QString();
 	const auto ulTitle = (content.uploadCount >= 1)
 		? tr::lng_tm_ul_prefix(
 			tr::now,
 			lt_name,
-			(content.singleUploadName.text.isEmpty()
-				? QString()
-				: content.singleUploadName.text + u" "_q)
-			+ tr::lng_tm_counter(
-				tr::now,
-				lt_done, QString::number(content.uploadDone),
-				lt_total, QString::number(content.uploadCount))
-			+ DuplicatesSuffixUl(content.ulSkipped))
+			named(
+				tr::lng_tm_counter(
+					tr::now,
+					lt_done, QString::number(content.uploadDone),
+					lt_total, QString::number(content.uploadCount)),
+				content.singleUploadName.text))
 		: QString();
 	_title.setMarkedText(
 		st::defaultTextStyle,
@@ -213,7 +190,7 @@ void DownloadBar::refreshIcon() {
 }
 
 void DownloadBar::refreshInfo(const DownloadBarProgress &progress) {
-	auto text = TextWithEntities();
+	auto text = QString();
 	const auto effectiveUploadReady = progress.uploadReady
 		? progress.uploadReady
 		: (_content.uploadCount > 1
@@ -231,30 +208,64 @@ void DownloadBar::refreshInfo(const DownloadBarProgress &progress) {
 	if (_content.nfCount > 0
 		&& _content.nfDone < _content.nfCount
 		&& _content.nfFloodSeconds > 0) {
-		text = tr::marked(
-			u"FLOOD_WAIT %1s"_q.arg(_content.nfFloodSeconds));
+		text = u"FLOOD_WAIT %1s"_q.arg(_content.nfFloodSeconds);
 	} else if (efReady < efTotal && efTotal > 0) {
-		text = tr::marked(
-			FormatDownloadText(efReady, efTotal));
+		text = FormatDownloadText(efReady, efTotal);
 	} else if (_content.efCount > 0 && efReady > 0) {
 		// Persisted-only state: total is unknown offline, show ready bytes.
-		text = tr::marked(
-			FormatDownloadText(efReady, efReady));
+		text = FormatDownloadText(efReady, efReady);
 	} else if (effectiveReady < effectiveTotal) {
-		text = tr::marked(
-			FormatDownloadText(effectiveReady, effectiveTotal));
+		text = FormatDownloadText(effectiveReady, effectiveTotal);
 	} else if (effectiveUploadReady < effectiveUploadTotal) {
-		text = tr::marked(
-			FormatDownloadText(effectiveUploadReady, effectiveUploadTotal));
+		text = FormatDownloadText(effectiveUploadReady, effectiveUploadTotal);
 	} else if (_content.uploadCount == 1 && _content.uploadReady < _content.uploadTotal) {
-		text = tr::marked(
-			FormatDownloadText(_content.uploadReady, _content.uploadTotal));
-	} else {
-		text = TextWithEntities();
+		text = FormatDownloadText(_content.uploadReady, _content.uploadTotal);
+	}
+	// Duplicates belong on the second row: the first row can ellide a long
+	// file name and hide them. They follow the byte progress when there is
+	// one, and take its place for a server-side forward.
+	auto duplicates = QString();
+	auto skipped = 0;
+	if (_content.count >= 1) {
+		skipped = _content.dlSkipped;
+		if (skipped > 0) {
+			duplicates = tr::lng_tm_dl_duplicates_skipped(
+				tr::now,
+				lt_count,
+				skipped);
+		}
+	} else if (_content.efCount + _content.nfCount >= 1) {
+		skipped = _content.efSkipped;
+		if (skipped > 0) {
+			duplicates = tr::lng_tm_fw_duplicates_skipped(
+				tr::now,
+				lt_count,
+				skipped);
+			if (_content.efSkippedBytes > 0) {
+				duplicates += u" ("_q
+					+ FormatDownloadText(
+						_content.efSkippedBytes,
+						_content.efSkippedBytes)
+					+ u")"_q;
+			}
+		}
+	} else if (_content.uploadCount >= 1) {
+		skipped = _content.ulSkipped;
+		if (skipped > 0) {
+			duplicates = tr::lng_tm_ul_duplicates_skipped(
+				tr::now,
+				lt_count,
+				skipped);
+		}
+	}
+	if (!duplicates.isEmpty()) {
+		text = text.isEmpty()
+			? duplicates
+			: (text + u"  "_q + duplicates);
 	}
 	_info.setMarkedText(
 		st::downloadInfoStyle,
-		std::move(text));
+		tr::marked(text));
 	if (!_button.entity()->isHidden()) {
 		crl::on_main(_button.entity(), [=] { _button.entity()->update(); });
 	}
@@ -416,6 +427,11 @@ float64 DownloadBar::computeProgress() const {
 	} else if (_content.uploadReady < _content.uploadTotal
 		&& _content.uploadTotal > 0) {
 		return _content.uploadReady / float64(_content.uploadTotal);
+	} else if (const auto count = std::max(
+			0,
+			_content.efCount + _content.nfCount)) {
+		const auto done = _content.efDone + _content.nfDone;
+		return std::clamp(done / float64(count), 0., 1.);
 	}
 	return 0.;
 }

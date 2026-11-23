@@ -55,6 +55,17 @@ std::atomic_bool gVacuuming = false;
 	return (q.exec(sql) && q.next()) ? q.value(0).toLongLong() : -1;
 }
 
+// SQLite has no unsigned 64-bit integer: a bound qulonglong above INT64_MAX
+// is stored as REAL and comes back rounded. Bind and read the signed bit
+// pattern instead, so batch ids round-trip exactly.
+[[nodiscard]] qint64 StoreBatchId(uint64 value) {
+	return static_cast<qint64>(value);
+}
+
+[[nodiscard]] uint64 LoadBatchId(qint64 value) {
+	return static_cast<uint64>(value);
+}
+
 [[nodiscard]] bool ScanIsActive(QSqlDatabase &db) {
 	QSqlQuery q(db);
 	return q.exec(u"SELECT 1 FROM jobs WHERE kind = 'scan' "
@@ -994,6 +1005,7 @@ constexpr auto kExWriteBatchLimit = 100;
 	case JobKind::Export: return u"export"_q;
 	case JobKind::ExportBatch: return u"export_batch"_q;
 	case JobKind::EnhancedForward: return u"enhanced_forward"_q;
+	case JobKind::BulkForward: return u"bulk_forward"_q;
 	case JobKind::Scan: return u"scan"_q;
 	}
 	Unexpected("JobKind");
@@ -1018,6 +1030,8 @@ constexpr auto kExWriteBatchLimit = 100;
 		return JobKind::ExportBatch;
 	} else if (name == u"enhanced_forward"_q) {
 		return JobKind::EnhancedForward;
+	} else if (name == u"bulk_forward"_q) {
+		return JobKind::BulkForward;
 	} else if (name == u"scan"_q) {
 		return JobKind::Scan;
 	}
@@ -1112,6 +1126,7 @@ constexpr auto kExResumeSerializationVersion = quint32(1);
 	auto result = QByteArray();
 	auto stream = QDataStream(&result, QIODevice::WriteOnly);
 	stream << record.path << qint64(record.fileSize);
+	stream << quint64(record.batchId) << qint64(record.started);
 	return result;
 }
 
@@ -1122,6 +1137,13 @@ constexpr auto kExResumeSerializationVersion = quint32(1);
 	auto fileSize = qint64();
 	stream >> record.path >> fileSize;
 	record.fileSize = fileSize;
+	if (!stream.atEnd()) {
+		auto batchId = quint64();
+		auto started = qint64();
+		stream >> batchId >> started;
+		record.batchId = batchId;
+		record.started = started;
+	}
 	return stream.status() == QDataStream::Ok;
 }
 
@@ -1515,6 +1537,15 @@ public:
 		uint64 mediaId,
 		bool isPhoto,
 		bool allPeers) const;
+	[[nodiscard]] bool chatScanContainsDocIdInDb(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto,
+		bool allPeers) const;
+	[[nodiscard]] bool chatScanContainsHashInDb(
+		PeerId peerId,
+		const QByteArray &hash,
+		bool allPeers) const;
 	[[nodiscard]] bool chatTableContainsHash(
 		PeerId peerId,
 		const QByteArray &hash,
@@ -1596,12 +1627,16 @@ public:
 		JobKind kind,
 		uint64 scopeId,
 		bool activeOnly) const;
+	[[nodiscard]] std::vector<JobRecord> findActiveJobs(
+		JobKind kind,
+		uint64 sessionId) const;
 	void setJobState(uint64 jobId, JobState state);
 	void setJobProgress(
 		uint64 jobId,
 		int total,
 		int done,
 		int skipped);
+	void updateJobOptions(uint64 jobId, const QByteArray &options);
 	void pauseJob(uint64 jobId);
 	void finishJob(uint64 jobId);
 	void cancelJob(uint64 jobId);
@@ -1693,6 +1728,14 @@ public:
 	void insertDlResume(const DlResumeRecord &record);
 	void removeDlResume(uint64 sessionId, uint64 peerId, int64 msgId);
 	[[nodiscard]] std::vector<DlResumeRecord> loadAllDlResume() const;
+
+	void upsertDlBatch(const DlBatchRecord &record);
+	void removeDlBatch(uint64 sessionId, uint64 batchId);
+	[[nodiscard]] std::vector<DlBatchRecord> loadDlBatches() const;
+
+	void addDlPendingDelete(const DlPendingDelete &record);
+	void removeDlPendingDelete(const QString &path);
+	[[nodiscard]] std::vector<DlPendingDelete> loadAllDlPendingDeletes() const;
 
 	void insertUlResume(const UlResumeRecord &record);
 	void removeUlResume(
@@ -2374,6 +2417,61 @@ void DedupDb::Impl::loadChatTable(PeerId peerId, bool allPeers) {
 	cache.loaded = true;
 }
 
+bool DedupDb::Impl::chatScanContainsDocIdInDb(
+		PeerId peerId,
+		uint64 mediaId,
+		bool isPhoto,
+		bool allPeers) const {
+	if (!_open || !mediaId) {
+		return false;
+	}
+	auto sql = u"SELECT EXISTS(SELECT 1 FROM chat_scan_items "
+		"WHERE media_id = :media_id AND is_photo = :is_photo "
+		"AND is_dup = 0 AND hash_id != 0"_q;
+	if (!allPeers) {
+		sql += u" AND peer_id = :peer_id"_q;
+	}
+	QSqlQuery q(_db);
+	q.prepare(sql + u")"_q);
+	q.bindValue(u":media_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(mediaId)));
+	q.bindValue(u":is_photo"_q, isPhoto ? 1 : 0);
+	if (!allPeers) {
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+	}
+	if (!q.exec() || !q.next()) {
+		return false;
+	}
+	return q.value(0).toBool();
+}
+
+bool DedupDb::Impl::chatScanContainsHashInDb(
+		PeerId peerId,
+		const QByteArray &hash,
+		bool allPeers) const {
+	if (!_open || hash.isEmpty()) {
+		return false;
+	}
+	auto sql = u"SELECT EXISTS(SELECT 1 FROM chat_scan_items i "
+		"JOIN hashes h ON h.hash_id = i.hash_id "
+		"WHERE h.hash = :hash AND i.is_dup = 0"_q;
+	if (!allPeers) {
+		sql += u" AND i.peer_id = :peer_id"_q;
+	}
+	QSqlQuery q(_db);
+	q.prepare(sql + u")"_q);
+	q.bindValue(u":hash"_q, hash);
+	if (!allPeers) {
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+	}
+	if (!q.exec() || !q.next()) {
+		return false;
+	}
+	return q.value(0).toBool();
+}
+
 bool DedupDb::Impl::chatTableContainsDocId(
 		PeerId peerId,
 		uint64 mediaId,
@@ -2388,7 +2486,7 @@ bool DedupDb::Impl::chatTableContainsDocId(
 	};
 	const auto i = _chatCaches.find(key);
 	if (i == _chatCaches.end() || !i->second.loaded) {
-		return false;
+		return chatScanContainsDocIdInDb(peerId, mediaId, isPhoto, allPeers);
 	}
 	const auto &hashes = isPhoto
 		? i->second.photoHashes
@@ -2408,9 +2506,10 @@ bool DedupDb::Impl::chatTableContainsHash(
 		allPeers,
 	};
 	const auto i = _chatCaches.find(key);
-	return (i != _chatCaches.end())
-		&& i->second.loaded
-		&& i->second.hashes.contains(hash);
+	if (i == _chatCaches.end() || !i->second.loaded) {
+		return chatScanContainsHashInDb(peerId, hash, allPeers);
+	}
+	return i->second.hashes.contains(hash);
 }
 
 void DedupDb::Impl::clearChatTable() {
@@ -2617,7 +2716,24 @@ bool DedupDb::Impl::createTables() {
 		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_items_category "
 			"ON chat_scan_items(peer_id, category)"_q)
 		&& exec(u"CREATE INDEX IF NOT EXISTS idx_chat_scan_items_session "
-			"ON chat_scan_items(peer_id, session_id)"_q);
+			"ON chat_scan_items(peer_id, session_id)"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS dl_batches ("
+			"session_id INTEGER NOT NULL, "
+			"batch_id INTEGER NOT NULL, "
+			"total INTEGER NOT NULL DEFAULT 0, "
+			"done INTEGER NOT NULL DEFAULT 0, "
+			"skipped INTEGER NOT NULL DEFAULT 0, "
+			"started_at INTEGER NOT NULL DEFAULT 0, "
+			"src_name TEXT, "
+			"dest_dir TEXT, "
+			"display_name TEXT, "
+			"ready_bytes INTEGER NOT NULL DEFAULT 0, "
+			"total_bytes INTEGER NOT NULL DEFAULT 0, "
+			"PRIMARY KEY (session_id, batch_id))"_q)
+		&& exec(u"CREATE TABLE IF NOT EXISTS dl_pending_deletes ("
+			"path TEXT PRIMARY KEY, "
+			"root TEXT, "
+			"stop_root TEXT)"_q);
 	return created;
 }
 
@@ -3240,6 +3356,34 @@ std::optional<JobRecord> DedupDb::Impl::findJob(
 	return q.next() ? ReadJob(q) : std::nullopt;
 }
 
+std::vector<JobRecord> DedupDb::Impl::findActiveJobs(
+		JobKind kind,
+		uint64 sessionId) const {
+	auto result = std::vector<JobRecord>();
+	if (!_open) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT job_id, kind, session_id, scope_id, options, state, "
+		"total, done, skipped, created_at, updated_at "
+		"FROM jobs WHERE kind = :kind AND session_id = :session_id "
+		"AND state IN (0, 1) ORDER BY updated_at DESC, job_id DESC"_q);
+	q.bindValue(u":kind"_q, JobKindName(kind));
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: FindActiveJobs failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		if (auto job = ReadJob(q)) {
+			result.push_back(std::move(*job));
+		}
+	}
+	return result;
+}
+
 void DedupDb::Impl::setJobState(uint64 jobId, JobState state) {
 	if (!_open || !jobId) {
 		return;
@@ -3278,6 +3422,26 @@ void DedupDb::Impl::setJobProgress(
 		static_cast<qulonglong>(jobId)));
 	if (!q.exec()) {
 		LOG(("DedupDb: SetJobProgress failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::updateJobOptions(
+		uint64 jobId,
+		const QByteArray &options) {
+	if (!_open || !jobId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"UPDATE jobs SET options = :options, updated_at = :updated_at "
+		"WHERE job_id = :job_id"_q);
+	q.bindValue(u":options"_q, options);
+	q.bindValue(u":updated_at"_q, QVariant::fromValue(
+		static_cast<qlonglong>(base::unixtime::now())));
+	q.bindValue(u":job_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(jobId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: UpdateJobOptions failed: %1").arg(
 			q.lastError().text()));
 	}
 }
@@ -4645,6 +4809,134 @@ std::vector<DlResumeRecord> DedupDb::Impl::loadAllDlResume() const {
 	return result;
 }
 
+void DedupDb::Impl::upsertDlBatch(const DlBatchRecord &record) {
+	if (!_open || !record.sessionId || !record.batchId) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"INSERT OR REPLACE INTO dl_batches "
+		"(session_id, batch_id, total, done, skipped, started_at, "
+		"src_name, dest_dir, display_name, ready_bytes, total_bytes) VALUES "
+		"(:session_id, :batch_id, :total, :done, :skipped, :started_at, "
+		":src_name, :dest_dir, :display_name, :ready_bytes, :total_bytes)"_q);
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(record.sessionId)));
+	q.bindValue(u":batch_id"_q, QVariant::fromValue(
+		StoreBatchId(record.batchId)));
+	q.bindValue(u":total"_q, record.total);
+	q.bindValue(u":done"_q, record.done);
+	q.bindValue(u":skipped"_q, record.skipped);
+	q.bindValue(u":started_at"_q, qint64(record.startedAt));
+	q.bindValue(u":src_name"_q, record.srcName);
+	q.bindValue(u":dest_dir"_q, record.destDir);
+	q.bindValue(u":display_name"_q, record.displayName);
+	q.bindValue(u":ready_bytes"_q, record.readyBytes);
+	q.bindValue(u":total_bytes"_q, record.totalBytes);
+	if (!q.exec()) {
+		LOG(("DedupDb: UpsertDlBatch failed: %1").arg(q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::removeDlBatch(uint64 sessionId, uint64 batchId) {
+	if (!_open) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM dl_batches "
+		"WHERE session_id = :session_id AND batch_id = :batch_id"_q);
+	q.bindValue(u":session_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(sessionId)));
+	q.bindValue(u":batch_id"_q, QVariant::fromValue(
+		StoreBatchId(batchId)));
+	if (!q.exec()) {
+		LOG(("DedupDb: RemoveDlBatch failed: %1").arg(q.lastError().text()));
+	}
+}
+
+std::vector<DlBatchRecord> DedupDb::Impl::loadDlBatches() const {
+	auto result = std::vector<DlBatchRecord>();
+	if (!_open) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT session_id, batch_id, total, done, skipped, "
+		"started_at, src_name, dest_dir, display_name, ready_bytes, "
+		"total_bytes FROM dl_batches ORDER BY started_at"_q);
+	if (!q.exec()) {
+		LOG(("DedupDb: LoadDlBatches failed: %1").arg(q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto record = DlBatchRecord();
+		record.sessionId = q.value(0).toULongLong();
+		record.batchId = LoadBatchId(q.value(1).toLongLong());
+		record.total = q.value(2).toInt();
+		record.done = q.value(3).toInt();
+		record.skipped = q.value(4).toInt();
+		record.startedAt = q.value(5).toLongLong();
+		record.srcName = q.value(6).toString();
+		record.destDir = q.value(7).toString();
+		record.displayName = q.value(8).toString();
+		record.readyBytes = q.value(9).toLongLong();
+		record.totalBytes = q.value(10).toLongLong();
+		result.push_back(std::move(record));
+	}
+	return result;
+}
+
+void DedupDb::Impl::addDlPendingDelete(const DlPendingDelete &record) {
+	if (!_open || record.path.isEmpty()) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"INSERT OR REPLACE INTO dl_pending_deletes "
+		"(path, root, stop_root) VALUES (:path, :root, :stop_root)"_q);
+	q.bindValue(u":path"_q, record.path);
+	q.bindValue(u":root"_q, record.root);
+	q.bindValue(u":stop_root"_q, record.stopRoot);
+	if (!q.exec()) {
+		LOG(("DedupDb: AddDlPendingDelete failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+void DedupDb::Impl::removeDlPendingDelete(const QString &path) {
+	if (!_open || path.isEmpty()) {
+		return;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"DELETE FROM dl_pending_deletes WHERE path = :path"_q);
+	q.bindValue(u":path"_q, path);
+	if (!q.exec()) {
+		LOG(("DedupDb: RemoveDlPendingDelete failed: %1").arg(
+			q.lastError().text()));
+	}
+}
+
+std::vector<DlPendingDelete> DedupDb::Impl::loadAllDlPendingDeletes() const {
+	auto result = std::vector<DlPendingDelete>();
+	if (!_open) {
+		return result;
+	}
+	QSqlQuery q(_db);
+	q.prepare(u"SELECT path, root, stop_root FROM dl_pending_deletes"_q);
+	if (!q.exec()) {
+		LOG(("DedupDb: LoadAllDlPendingDeletes failed: %1").arg(
+			q.lastError().text()));
+		return result;
+	}
+	while (q.next()) {
+		auto record = DlPendingDelete();
+		record.path = q.value(0).toString();
+		record.root = q.value(1).toString();
+		record.stopRoot = q.value(2).toString();
+		if (!record.path.isEmpty()) {
+			result.push_back(std::move(record));
+		}
+	}
+	return result;
+}
+
 void DedupDb::Impl::insertUlResume(const UlResumeRecord &record) {
 	if (!_open) {
 		return;
@@ -5570,6 +5862,30 @@ void DedupDb::removeDlResume(
 
 std::vector<DlResumeRecord> DedupDb::loadAllDlResume() const {
 	return _impl->loadAllDlResume();
+}
+
+void DedupDb::upsertDlBatch(const DlBatchRecord &record) {
+	_impl->upsertDlBatch(record);
+}
+
+void DedupDb::removeDlBatch(uint64 sessionId, uint64 batchId) {
+	_impl->removeDlBatch(sessionId, batchId);
+}
+
+std::vector<DlBatchRecord> DedupDb::loadDlBatches() const {
+	return _impl->loadDlBatches();
+}
+
+void DedupDb::addDlPendingDelete(const DlPendingDelete &record) {
+	_impl->addDlPendingDelete(record);
+}
+
+void DedupDb::removeDlPendingDelete(const QString &path) {
+	_impl->removeDlPendingDelete(path);
+}
+
+std::vector<DlPendingDelete> DedupDb::loadAllDlPendingDeletes() const {
+	return _impl->loadAllDlPendingDeletes();
 }
 
 void DedupDb::insertUlResume(const UlResumeRecord &record) {
@@ -8827,6 +9143,12 @@ std::optional<JobRecord> DedupDb::findActiveJob(
 	return _impl->findJob(kind, scopeId, true);
 }
 
+std::vector<JobRecord> DedupDb::findActiveJobs(
+		JobKind kind,
+		uint64 sessionId) const {
+	return _impl->findActiveJobs(kind, sessionId);
+}
+
 void DedupDb::setJobState(uint64 jobId, JobState state) {
 	_impl->setJobState(jobId, state);
 }
@@ -8837,6 +9159,10 @@ void DedupDb::setJobProgress(
 		int done,
 		int skipped) {
 	_impl->setJobProgress(jobId, total, done, skipped);
+}
+
+void DedupDb::updateJobOptions(uint64 jobId, const QByteArray &options) {
+	_impl->updateJobOptions(jobId, options);
 }
 
 void DedupDb::pauseJob(uint64 jobId) {

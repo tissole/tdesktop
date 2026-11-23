@@ -138,13 +138,15 @@ public:
 	[[nodiscard]] bool loading() const;
 	void permitLoadFromCloud();
 	[[nodiscard]] QString loadingFilePath() const;
+	[[nodiscard]] QString downloadTargetPath() const;
 	[[nodiscard]] bool displayLoading() const;
 	void save(
 		Data::FileOrigin origin,
 		const QString &toFile,
 		LoadFromCloudSetting fromCloud = LoadFromCloudOrLocal,
 		bool autoLoading = false,
-		bool forceFileLoader = false);
+		bool forceFileLoader = false,
+		bool forceReload = false);
 	void cancel();
 	void pause();
 	void resume();
@@ -446,8 +448,13 @@ QByteArray documentWaveformEncode5bit(const VoiceWaveform &waveform);
 
 [[nodiscard]] QString DownloadRootPath(not_null<Main::Session*> session);
 void PruneEmptyDownloadFolders(
+	const QString &rootPath,
+	const QString &removedFilePath,
+	const QString &stopRoot);
+void PruneEmptyDownloadFolders(
 	not_null<Main::Session*> session,
-	const QString &removedFilePath);
+	const QString &removedFilePath,
+	const QString &stopRoot = QString());
 
 QString FileNameForSave(
 	not_null<Main::Session*> session,

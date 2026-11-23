@@ -377,6 +377,7 @@ private:
 	std::unique_ptr<Ui::DownloadBar> _downloadBar;
 	std::unique_ptr<Ui::DownloadBar> _uploadBar;
 	std::unique_ptr<Ui::DownloadBar> _forwardsBar;
+	QString _forwardsBarName;
 	std::unique_ptr<Window::ConnectionState> _connecting;
 
 	Ui::Animations::Simple _scrollToAnimation;

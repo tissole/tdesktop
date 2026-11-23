@@ -325,6 +325,7 @@ public:
 
 	void oldForwardSelected();
 	void forwardSelected();
+	void bulkForwardSelected();
 	void forwardNoQuoteSelected();
 	void forwardSelectedToSavedMessages();
 	void confirmDeleteSelected();

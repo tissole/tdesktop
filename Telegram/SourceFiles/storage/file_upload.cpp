@@ -451,18 +451,9 @@ bool Uploader::checkUploadDuplicate(
 	}
 	auto &dedupDb = Core::App().downloadManager().dedupDb();
 	const auto sessionId = session().uniqueId();
-	if (dedupDb.isOpen()) {
-		if (!_chatTableUse
-			|| _chatTablePeer != itemId.peer
-			|| _chatTableAllPeers != allPeers) {
-			_chatTableUse = dedupDb.useChatTable(itemId.peer, allPeers);
-			_chatTablePeer = itemId.peer;
-			_chatTableAllPeers = allPeers;
-		}
-		if (dedupDb.chatTableContainsHash(itemId.peer, hash, allPeers)) {
-			releaseUploadTableIfIdle();
-			return true;
-		}
+	if (dedupDb.isOpen()
+		&& dedupDb.chatTableContainsHash(itemId.peer, hash, allPeers)) {
+		return true;
 	}
 	if (dedupOff) {
 		if (dedupDb.isOpen()
@@ -508,15 +499,10 @@ bool Uploader::checkUploadDuplicate(
 					file->id,
 					isPhoto))
 			|| dedupDb.containsUlTmpHash(sessionId, batchId, hash))) {
-		releaseUploadTableIfIdle();
 		return true;
-	}
-	if (dedupDb.isOpen()) {
-		_uploadTableUse = dedupDb.useTable(Data::DedupDb::Table::Uploads);
 	}
 	if (dedupDb.containsHash(Data::DedupDb::Table::Uploads, hash)
 		|| _uploadPendingHashes.contains(hash)) {
-		releaseUploadTableIfIdle();
 		return true;
 	}
 	_uploadPendingHashes.insert(hash, file->filesize);
@@ -603,7 +589,8 @@ void Uploader::photoIdWriteback(uint64 localId, uint64 realId) {
 void Uploader::upload(
 		FullMsgId itemId,
 		const std::shared_ptr<FilePrepareResult> &file,
-		int resumeFromParts) {
+		int resumeFromParts,
+		bool startPaused) {
 	Core::App().downloadManager().noteUploadActivity();
 	auto preparing = false;
 	if (file->type == SendMediaType::Photo) {
@@ -682,9 +669,7 @@ void Uploader::upload(
 	}
 	const auto newJob = _queue.empty();
 	_queue.push_back(Entry(itemId, file, resumeFromParts));
-	if (_paused && resumeFromParts > 0) {
-		// Entries queued by "Resume later" stay paused: a fresh user upload
-		// (resumeFromParts == 0) must upload right away instead.
+	if (startPaused) {
 		_queue.back().paused = true;
 	}
 	if (newJob) {
@@ -705,11 +690,50 @@ void Uploader::upload(
 	if (preparing) {
 		_queue.back().preparing = true;
 		startTranscode(itemId);
-	} else if (!_nextTimer.isActive()) {
-		maybeSend();
+	} else {
+		maybeFinishFront();
+		if (!_nextTimer.isActive()) {
+			maybeSend();
+		}
 	}
 	saveResumeState(true);
 	_uploadListChanges.fire(rpl::empty_value{});
+}
+
+bool Uploader::restartUpload(
+		not_null<HistoryItem*> item,
+		not_null<DocumentData*> document) {
+	const auto itemId = item->fullId();
+	if (ranges::find(_queue, itemId, &Entry::itemId) != end(_queue)) {
+		return false;
+	}
+	const auto path = document->filepath(true);
+	if (path.isEmpty() || !QFileInfo::exists(path)) {
+		return false;
+	}
+	const auto size = document->size;
+	if (size <= 0 || QFileInfo(path).size() < size) {
+		return false;
+	}
+	auto file = MakePreparedFile(FilePrepareDescriptor{
+		kEmptyTaskId,
+		document->id,
+		SendMediaType::File,
+		FileLoadTo(
+			item->history()->peer->id,
+			Api::SendOptions{ .silent = item->isSilent() },
+			FullReplyTo{ .topicRootId = item->topicRootId() },
+			MsgId()),
+	});
+	file->filepath = path;
+	file->filesize = size;
+	file->filename = document->filename().isEmpty()
+		? QFileInfo(path).fileName()
+		: document->filename();
+	file->filemime = document->mimeString();
+	file->document = MTP_documentEmpty(MTP_long(document->id));
+	upload(itemId, file, 0, false);
+	return true;
 }
 
 void Uploader::startTranscode(FullMsgId itemId) {
@@ -1179,17 +1203,9 @@ auto Uploader::sendSlicedPart(not_null<Entry*> entry, uchar dcIndex)
 	return SendResult::Success;
 }
 
-void Uploader::releaseUploadTableIfIdle() {
-	if (_queue.empty() && _transcodeQueue.empty()) {
-		_uploadTableUse.reset();
-		_chatTableUse.reset();
-	}
-}
-
 void Uploader::maybeSend() {
 	const auto stopping = _stopSessionsTimer.isActive();
 	if (_queue.empty()) {
-		releaseUploadTableIfIdle();
 		if (!stopping) {
 			_stopSessionsTimer.callOnce(kKillSessionTimeout);
 		}
@@ -1256,6 +1272,7 @@ void Uploader::unpause() {
 	for (auto &entry : _queue) {
 		entry.paused = false;
 	}
+	maybeFinishFront();
 	maybeSend();
 }
 
@@ -1292,8 +1309,6 @@ void Uploader::clear() {
 	}
 	_transcodeQueue.clear();
 	_queue.clear();
-	_uploadTableUse.reset();
-	_chatTableUse.reset();
 	cancelAllRequests();
 	stopSessions();
 	_stopSessionsTimer.cancel();
@@ -1544,9 +1559,7 @@ void Uploader::finishEntry(std::vector<Entry>::iterator i) {
 		}
 		if (entry.file->filepath.contains("ForwardTemp")
 			&& !entry.file->filepath.isEmpty()) {
-			if (QFileInfo(entry.file->filepath).exists()) {
-				QFile(entry.file->filepath).remove();
-			}
+			EnhancedForward::RemoveEfTempFile(entry.file->filepath);
 		}
 	} else if (entry.file->type == SendMediaType::SecondaryFile) {
 		_secondaryFileReady.fire({
@@ -1616,9 +1629,7 @@ void Uploader::finishEntry(std::vector<Entry>::iterator i) {
 			if (entry.file->filepath.contains("ForwardTemp")
 				&& !entry.file->filepath.isEmpty()) {
 				entry.docFile.reset();
-				if (QFileInfo(entry.file->filepath).exists()) {
-					QFile(entry.file->filepath).remove();
-				}
+				EnhancedForward::RemoveEfTempFile(entry.file->filepath);
 			}
 		}
 	} else if (entry.file->type == SendMediaType::Secure) {
@@ -2112,7 +2123,7 @@ QString Uploader::firstUploadName() const {
 	auto fallback = QString();
 	for (const auto &entry : _queue) {
 		const auto &file = entry.file;
-		if (!file) {
+		if (!file || EnhancedForward::isEnhancedUpload(entry.itemId)) {
 			continue;
 		}
 		const auto name = !file->filename.isEmpty()
@@ -2168,7 +2179,9 @@ void Uploader::queueResumeForLater() {
 	for (auto &entry : _queue) {
 		entry.paused = true;
 	}
+	saveResumeState(true);
 	resumeEntriesFromDb();
+	notifyListChanged();
 }
 
 void Uploader::resumeEntriesFromDb() {
@@ -2285,7 +2298,7 @@ void Uploader::resumeEntriesFromDb() {
 			history,
 			Data::HistoryUpdate::Flag::MessageSent);
 		}
-		upload(newId, file, entry.partsSent);
+		upload(newId, file, entry.partsSent, _paused);
 		if (!_queue.empty() && entry.sentSize > 0) {
 			_queue.back().docSentSize = entry.sentSize;
 		}

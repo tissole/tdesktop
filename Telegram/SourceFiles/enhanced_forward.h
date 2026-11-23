@@ -10,9 +10,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <optional>
 #include <deque>
 #include <utility>
+#include "base/flat_set.h"
 #include "base/timer.h"
 #include "base/unique_function.h"
 #include "data/data_dedup_db.h"
+#include "data/data_forward_seen.h"
 #include "data/data_peer_id.h"
 #include "data/data_msg_id.h"
 #include "rpl/producer.h"
@@ -137,7 +139,8 @@ void markItemSkipped(
 
 void cancelForward(
 	const PeerId &id,
-	not_null<Main::Session*> session);
+	not_null<Main::Session*> session,
+	bool bulkOwned = false);
 
 void pauseForward(
 	const PeerId &id,
@@ -207,6 +210,7 @@ void ClearProgressForPeer(const PeerId &peerId);
 void CleanupPartialFilesForPeer(
 	not_null<Main::Session*> session,
 	const PeerId &peerId);
+void RemoveEfTempFile(const QString &path);
 
 struct SavedJob {
 	PeerId srcId = PeerId();
@@ -306,6 +310,11 @@ void notifyTransfersUpdated();
 void ClearFinished(
 	not_null<Main::Session*> session,
 	const PeerId &peer);
+// Removes every finished forward to that peer from the transfers list, the
+// same way clearing one finished row from its context menu does.
+void ClearForwardRun(
+	not_null<Main::Session*> session,
+	const PeerId &dst);
 // Removes a single finished forwarded item (by its source message) from the
 // Forwards history and from the persisted done list.
 void ClearFinishedItems(
@@ -326,6 +335,10 @@ struct ItemTask {
 	bool needsDownload = false;
 	bool downloadStarted = false;
 	bool downloadDone = false;
+	// Restored from an earlier session without being recorded as downloaded:
+	// a full-size file may still be full of holes, because the old loader
+	// could have written later parts past missing ones.
+	bool restoredNotDownloaded = false;
 	qint64 downloadedBytes = 0;
 	std::shared_ptr<Data::PhotoMedia> photoView;
 	uint64 mediaId = 0;
@@ -348,9 +361,43 @@ struct ItemTask {
 	uint64 fileId = 0;
 	int uploadedParts = 0;
 	int retries = 0;
+	int stallRestarts = 0;
 	int lastSavedPct = -10;
 	qint64 partSize = 0;
 };
+
+// What happened to one source item handed to the copy pipeline. `Created`
+// carries the message that now exists in the destination chat; every other
+// result carries no destination id.
+enum class SettleResult {
+	Created,
+	DestinationDuplicate,
+	GlobalDuplicate,
+	CoveredByRun,
+	Cancelled,
+};
+
+struct SettledItem {
+	FullMsgId source;
+	FullMsgId destination;
+	uint64 mediaId = 0;
+	bool isPhoto = false;
+	QByteArray hash;
+	// Size of the uploaded file, so the run can report transferred bytes.
+	qint64 size = 0;
+	SettleResult result = SettleResult::Cancelled;
+};
+
+// Fired once for a batch when every item of that batch is settled: its
+// destination message id is known, it was skipped as a duplicate, or it was
+// cancelled. Items are reported in source order.
+using SettledCallback = Fn<void(std::vector<SettledItem> &&items)>;
+
+// Fired as soon as one item settles, before the batch report. A run that
+// measures transferred bytes needs this per-item signal: the batch report
+// only arrives when every item of the batch is done, which can be minutes
+// after the first uploads.
+using ItemSettledCallback = Fn<void(const SettledItem &item)>;
 
 class Pipeline final : public std::enable_shared_from_this<Pipeline> {
 public:
@@ -363,7 +410,13 @@ public:
 		const Api::SendAction &action,
 		Data::ForwardOptions forwardOptions,
 		Data::GroupingOptions groupOptions,
-		std::shared_ptr<SavedJob> resumeJob);
+		std::shared_ptr<SavedJob> resumeJob,
+		std::shared_ptr<Data::ForwardRunSeen> runSeen = nullptr,
+		SettledCallback settled = nullptr,
+		bool destinationOnlyDedup = false,
+		ItemSettledCallback itemSettled = nullptr,
+		bool restoreProgress = false,
+		bool bulkOwned = false);
 
 	Pipeline(
 		not_null<ApiWrap*> api,
@@ -371,7 +424,12 @@ public:
 		const Api::SendAction &action,
 		Data::ForwardOptions forwardOptions,
 		Data::GroupingOptions groupOptions,
-		std::shared_ptr<SavedJob> resumeJob);
+		std::shared_ptr<SavedJob> resumeJob,
+		std::shared_ptr<Data::ForwardRunSeen> runSeen = nullptr,
+		SettledCallback settled = nullptr,
+		bool destinationOnlyDedup = false,
+		ItemSettledCallback itemSettled = nullptr,
+		bool restoreProgress = false);
 
 	~Pipeline();
 
@@ -390,6 +448,7 @@ private:
 	void run();
 	void saveProgress();
 	bool loadProgress();
+	void restoreProgressFromDb();
 	void setupCallbacks();
 	void sendNext();
 	void pumpUploads();
@@ -398,8 +457,14 @@ private:
 	void onUploadFail(const FullMsgId &fullId);
 	void onUploadProgress(const Storage::UploadFileProgress &data);
 	void checkItem(int idx);
+	void checkStalledDownloads();
+	void restartStalledDownload(int idx);
 	void pumpDownloads();
-	void downloadFailed(int idx);
+	[[nodiscard]] bool startDocumentDownload(
+		int idx,
+		not_null<HistoryItem*> srcItem,
+		not_null<DocumentData*> doc);
+	void downloadFailed(int idx, bool force = false);
 	void dedupCheckItem(int idx);
 	void dedupHashed(
 		int idx,
@@ -410,12 +475,47 @@ private:
 	void skipAsDuplicate(int idx);
 	void premarkDuplicate(int idx);
 	void startSession();
-	void ensureUploadTableUse();
-	void ensureChatTableUse(bool allPeers);
 	void runNextPrecheck();
 	void remotePrechecked(int idx, QByteArray &&hash, qint64 size);
 	void refreshSourceItemState(int idx);
-	void appendItems(std::vector<not_null<HistoryItem*>> &&items);
+	void appendItems(
+		std::vector<not_null<HistoryItem*>> &&items,
+		std::shared_ptr<Data::ForwardRunSeen> runSeen,
+		SettledCallback settled,
+		bool destinationOnlyDedup,
+		ItemSettledCallback itemSettled);
+
+	// Settles copies that were appended while the pipeline already owned the
+	// same source message. Deferred, because the report callbacks may append
+	// more items to this same pipeline.
+	void settleAppendedDuplicates(std::vector<int> indexes, bool hasReport);
+
+	// Adds a completion report for the given item indexes; `done` fires once
+	// every one of them is settled and receives them in source order.
+	void addReport(
+		std::vector<int> indexes,
+		SettledCallback done,
+		ItemSettledCallback itemSettled = nullptr);
+	void settleItem(
+		int idx,
+		SettleResult result,
+		FullMsgId destination = {});
+	[[nodiscard]] SettleResult classifySkip(const ItemTask &item) const;
+	void settleServerId(MsgId oldId, const FullMsgId &newId);
+	void settleAllCancelled();
+	void dropSettling();
+	void armSettleWatchdog();
+
+	// True when this pipeline already accepted that media / content for its
+	// own destination, so a repeat inside one batch still counts as a
+	// duplicate even when the same content goes to other destinations.
+	[[nodiscard]] bool seenInBatch(uint64 mediaId, bool isPhoto) const;
+	[[nodiscard]] bool seenInBatch(const QByteArray &hash) const;
+	// True when another destination of the same run already accepted it.
+	[[nodiscard]] bool seenInRun(uint64 mediaId, bool isPhoto) const;
+	[[nodiscard]] bool seenInRun(const QByteArray &hash) const;
+	void markSeen(uint64 mediaId, bool isPhoto);
+	void markSeen(const QByteArray &hash);
 
 	not_null<ApiWrap*> _api;
 	Main::Session &_session;
@@ -426,9 +526,6 @@ private:
 	int _n = 0;
 	std::vector<ItemTask> _items;
 	std::shared_ptr<base::flat_map<FullMsgId, int>> _uploadIndex;
-	std::optional<Data::DedupDb::TableUse> _uploadTableUse;
-	std::optional<Data::DedupDb::ChatTableUse> _chatTableUse;
-	bool _chatTableAllPeers = false;
 	base::flat_map<
 		MessageGroupId,
 		std::shared_ptr<SendingAlbum>> _albums;
@@ -439,11 +536,15 @@ private:
 	
 	std::shared_ptr<rpl::lifetime> _uploadLifetime;
 	std::shared_ptr<rpl::lifetime> _dlLifetime;
+	base::Timer _downloadWatchdog;
 
 	QString _downloadPath;
 	uint64 _runId = 0;
 	crl::time _lastDlProgressMs = 0;
 	crl::time _lastShadowRepaintMs = 0;
+	int _watchdogIndex = -1;
+	qint64 _watchdogOffset = -1;
+	crl::time _watchdogStamp = 0;
 
 	PeerId _peerId;
 	PeerId _srcPeer;
@@ -453,7 +554,27 @@ private:
 	int _downloadCursor = 0;
 	int _uploadCursor = 0;
 	std::deque<int> _dedupPrecheckQueue;
+	base::flat_set<std::pair<uint64, bool>> _seenMedia;
+	base::flat_set<QByteArray> _seenHashes;
+	std::shared_ptr<Data::ForwardRunSeen> _runSeen;
+	struct BatchReport {
+		std::vector<int> pending;
+		std::vector<SettledItem> results;
+		SettledCallback done;
+		ItemSettledCallback itemSettled;
+	};
+	std::vector<std::unique_ptr<BatchReport>> _reports;
+	base::flat_map<int, BatchReport*> _itemReport;
+	std::shared_ptr<rpl::lifetime> _settleLifetime;
+	rpl::lifetime _itemRemovedLifetime;
+	SettledCallback _initialSettled;
+	ItemSettledCallback _itemSettled;
+	bool _destinationOnly = false;
+	bool _bulkOwned = false;
 	bool _takeoutRefetchTried = false;
+	bool _sessionStarted = false;
+	int _sessionItemCount = 0;
+	uint64 _stateGeneration = 0;
 };
 
 void ShowForwardDoneToast(int sent, int total, int skipped);
@@ -464,6 +585,7 @@ struct ForwardBatchSnapshot {
 	int sent = 0;
 	int skipped = 0;
 	QString lastFileName;
+	int64 startedAt = 0;
 	bool finished = false;
 };
 
@@ -524,10 +646,12 @@ struct FinishedFwRun {
 	PeerId dst;
 	PeerId src;
 	FullMsgId firstSource;
+	FullMsgId lastSource;
 	int total = 0;
 	int done = 0;
 	int skipped = 0;
 	int64 finishedAt = 0;
+	bool cancelled = false;
 };
 
 [[nodiscard]] std::vector<FinishedFwRun> FinishedFwRuns(
@@ -543,10 +667,12 @@ void RecordFinishedFwRun(
 	const PeerId &dst,
 	const PeerId &src,
 	FullMsgId firstSource,
+	FullMsgId lastSource,
 	int total,
 	int done,
 	int skipped,
-	uint64 actionId);
+	uint64 actionId,
+	bool cancelled = false);
 
 } // namespace EnhancedForward
 
@@ -558,6 +684,7 @@ struct Counters {
 	int total = 0;
 	int skipped = 0;
 	QString lastFileName;
+	int64 startedAt = 0;
 	int floodSeconds = 0; // > 0 while the job waits out a FLOOD_WAIT
 	bool active = false;
 	bool paused = false;

@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/downloads/info_downloads_provider.h"
 
 #include "base/random.h"
+#include "base/call_delayed.h"
 
 #include "info/media/info_media_widget.h"
 #include "info/media/info_media_list_section.h"
@@ -31,6 +32,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item_helpers.h"
 #include "history/history.h"
 #include "enhanced_forward.h"
+#include "bulk_forward/bulk_forward_counters.h"
+#include "bulk_forward/bulk_forward_entry.h"
 #include "logs.h"
 #include "core/application.h"
 #include "lang/lang_keys.h"
@@ -42,12 +45,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_msg_id.h"
 #include <tuple>
 
-#include <QtCore/QDebug>
+#include <QtCore/QFileInfo>
 
 namespace Info::Downloads {
 namespace {
 
 using namespace Media;
+
+constexpr auto kEfResolveRetryDelay = crl::time(20000);
+// A source peer that is unreachable right after startup usually appears once
+// the dialogs list finishes loading. Retry a few times for that window, then
+// stop polling a peer that is gone for good.
+constexpr auto kEfResolveRetryMax = 3;
 
 [[nodiscard]] Overview::Layout::ForwardSummaryData FwAggregateFor(
 		not_null<Main::Session*> session,
@@ -56,10 +65,17 @@ using namespace Media;
 	auto sent = 0;
 	auto total = 0;
 	auto skipped = 0;
+	auto skippedBytes = qint64(0);
 	auto flood = 0;
 	auto anyActive = false;
 	auto anyPaused = false;
 	auto haveLive = false;
+	auto startedAt = int64(0);
+	const auto mergeStarted = [&](int64 value) {
+		if (value > 0 && (!startedAt || value < startedAt)) {
+			startedAt = value;
+		}
+	};
 	auto srcPeer = PeerId();
 	auto idLo = 0;
 	auto idHi = 0;
@@ -76,6 +92,16 @@ using namespace Media;
 			idHi = std::max(idHi, last);
 		}
 	};
+	const auto bulk = BulkForward::AllCounters(session);
+	const BulkForward::Counters *bulkCounter = nullptr;
+	for (const auto &counters : bulk) {
+		if (counters.destination == dst && counters.active) {
+			bulkCounter = &counters;
+			break;
+		}
+	}
+	auto pipelineSent = 0;
+	auto pipelineTotal = 0;
 	for (const auto &job : EnhancedForward::AllJobs(session)) {
 		if (job.peer != dst
 			|| job.progress.state == EnhancedForward::State::Cancelled) {
@@ -93,8 +119,22 @@ using namespace Media;
 		if (srcPeer == PeerId()) {
 			srcPeer = job.srcPeer;
 		}
+		if (bulkCounter) {
+			// The bulk run counts both its direct forwards and the copies
+			// it hands to this pipeline, so the pipeline only adds the
+			// uploads that have not settled into the run counters yet. A
+			// restored snapshot keeps its total for the denominator but its
+			// old sent count is already in the run's checkpoint.
+			if (live) {
+				pipelineSent = std::max(pipelineSent, job.progress.sent);
+			}
+			pipelineTotal = std::max(
+				pipelineTotal,
+				std::max(0, job.progress.total - job.progress.skipped));
+			continue;
+		}
 		sent += job.progress.sent;
-		total += job.progress.total;
+		total += std::max(0, job.progress.total - job.progress.skipped);
 		skipped += job.progress.skipped;
 		if (!job.progress.sourceIds.empty()) {
 			auto lo = 0;
@@ -120,8 +160,9 @@ using namespace Media;
 		}
 		haveLive = true;
 		sent += counters.done;
-		total += counters.total;
+		total += std::max(0, counters.total - counters.skipped);
 		skipped += counters.skipped;
+		mergeStarted(counters.startedAt);
 		flood = std::max(flood, counters.floodSeconds);
 		if (counters.firstSource) {
 			mergeIds(
@@ -137,8 +178,42 @@ using namespace Media;
 			anyActive = true;
 		}
 	}
+	if (bulkCounter) {
+		haveLive = true;
+		sent += bulkCounter->sent
+			+ std::max(0, pipelineSent - bulkCounter->copied);
+		// A restored checkpoint knows how many copies it already made but
+		// not how many messages the resumed scan will match, so the copy
+		// rows keep the row from showing a zero denominator.
+		total += std::max(
+			std::max(0, bulkCounter->matched - bulkCounter->skipped),
+			pipelineTotal);
+		skipped += bulkCounter->skipped;
+		skippedBytes += bulkCounter->skippedBytes;
+		mergeStarted(bulkCounter->startedAt);
+		if (srcPeer == PeerId()) {
+			srcPeer = bulkCounter->source;
+		}
+		if (bulkCounter->firstSource && bulkCounter->lastSource) {
+			const auto lo = int(bulkCounter->firstSource.msg.bare);
+			const auto hi = int(bulkCounter->lastSource.msg.bare);
+			if (lo > 0 && hi >= lo) {
+				mergeIds(lo, hi - lo + 1);
+			}
+		}
+		if (bulkCounter->paused) {
+			anyPaused = true;
+		} else {
+			anyActive = true;
+		}
+	}
 	if (!haveLive) {
 		return result;
+	}
+	for (const auto &batch : EnhancedForward::ForwardBatches(session)) {
+		if (batch.dst == dst && !batch.finished) {
+			mergeStarted(batch.startedAt);
+		}
 	}
 	if (const auto action = EnhancedForward::CurrentForwardActionId(
 		session,
@@ -157,7 +232,7 @@ using namespace Media;
 					continue;
 				}
 				sent += record.done;
-				total += record.total;
+				total += std::max(0, record.total - record.skipped);
 				skipped += record.skipped;
 				if (record.src != PeerId()) {
 					if (srcPeer == PeerId()) {
@@ -173,6 +248,9 @@ using namespace Media;
 		}
 	}
 	const auto peer = session->data().peer(dst);
+	if (total < sent) {
+		total = sent;
+	}
 	result.title = (srcPeer != PeerId() && srcPeer != dst)
 		? u"%1 → %2"_q.arg(
 			session->data().peer(srcPeer)->name(),
@@ -192,8 +270,15 @@ using namespace Media;
 			: u" · IDs: %1-%2"_q.arg(idLo).arg(idHi);
 	}
 	if (skipped > 0) {
-		result.status += u" (%1)"_q.arg(
-			tr::lng_tm_fw_duplicates_skipped(tr::now, lt_count, skipped));
+		auto duplicates = tr::lng_tm_fw_duplicates_skipped(
+			tr::now,
+			lt_count,
+			skipped);
+		if (skippedBytes > 0) {
+			duplicates += u", "_q
+				+ Ui::FormatDownloadText(skippedBytes, skippedBytes);
+		}
+		result.status += u" (%1)"_q.arg(duplicates);
 	}
 	if (flood > 0) {
 		result.status += u"  FLOOD_WAIT %1s"_q.arg(flood);
@@ -201,6 +286,10 @@ using namespace Media;
 	result.progress = total ? (float64(sent) / total) : 0.;
 	result.paused = !anyActive && anyPaused;
 	result.finished = !anyActive && !anyPaused;
+	if (startedAt > 0) {
+		result.statusDate = langDateTime(
+			QDateTime::fromSecsSinceEpoch(startedAt));
+	}
 	return result;
 }
 
@@ -219,10 +308,12 @@ using namespace Media;
 	auto dstPeer = PeerId();
 	auto idLo = 0;
 	auto idHi = 0;
+	auto cancelled = false;
 	for (const auto &run : runs) {
 		sent += run.done;
-		total += run.total;
+		total += std::max(0, run.total - run.skipped);
 		skipped += run.skipped;
+		cancelled = cancelled || run.cancelled;
 		finishedAt = std::max(finishedAt, run.finishedAt);
 		dstPeer = run.dst;
 		if (srcPeer == PeerId() && run.src != PeerId()) {
@@ -230,7 +321,12 @@ using namespace Media;
 		}
 		if (run.firstSource && run.total > 0) {
 			const auto first = int(run.firstSource.msg.bare);
-			const auto last = first + run.total - 1;
+			// Older records have no last id: the best they can do is
+			// assume consecutive messages. Newer ones report the real
+			// last matched id, which matters for filtered runs.
+			const auto last = run.lastSource
+				? int(run.lastSource.msg.bare)
+				: (first + run.total - 1);
 			if (first > 0) {
 				if (!idLo) {
 					idLo = first;
@@ -243,6 +339,9 @@ using namespace Media;
 		}
 	}
 	const auto peer = session->data().peer(dstPeer);
+	if (total < sent) {
+		total = sent;
+	}
 	result.title = (srcPeer != PeerId() && srcPeer != dstPeer)
 		? u"%1 → %2"_q.arg(
 			session->data().peer(srcPeer)->name(),
@@ -256,6 +355,9 @@ using namespace Media;
 		tr::now,
 		lt_done, QString::number(sent),
 		lt_total, QString::number(total));
+	if (cancelled) {
+		result.status += u" · %1"_q.arg(tr::lng_tm_fw_cancelled(tr::now));
+	}
 	if (idLo) {
 		result.status += (idHi <= idLo)
 			? u" · ID: %1"_q.arg(idLo)
@@ -294,7 +396,7 @@ using namespace Media;
 				lt_count,
 				run.skipped));
 	}
-	if (run.finished && run.startedAt > 0) {
+	if (run.startedAt > 0) {
 		result.status += u" · %1"_q.arg(
 			langDateTime(QDateTime::fromSecsSinceEpoch(run.startedAt)));
 	}
@@ -322,7 +424,7 @@ using namespace Media;
 				lt_count,
 				run.skipped));
 	}
-	if (run.finished && run.startedAt > 0) {
+	if (run.startedAt > 0) {
 		result.status += u" · %1"_q.arg(
 			langDateTime(QDateTime::fromSecsSinceEpoch(run.startedAt)));
 	}
@@ -349,6 +451,19 @@ void ToggleFwRunPause(
 			anyActive = true;
 		}
 	}
+	auto bulkHere = false;
+	auto bulkActive = false;
+	for (const auto &counters : BulkForward::AllCounters(session)) {
+		if (counters.destination != dst || !counters.active) {
+			continue;
+		}
+		bulkHere = true;
+		if (counters.paused) {
+			continue;
+		}
+		bulkActive = true;
+		anyActive = true;
+	}
 	if (anyActive) {
 		for (const auto &job : EnhancedForward::AllJobs(session)) {
 			if (job.peer == dst
@@ -360,6 +475,9 @@ void ToggleFwRunPause(
 			}
 		}
 		NormalForward::PauseDst(session, dst);
+		if (bulkActive) {
+			BulkForward::PauseActive(session);
+		}
 		return;
 	}
 	for (const auto &job : EnhancedForward::AllJobs(session)) {
@@ -371,32 +489,19 @@ void ToggleFwRunPause(
 			&& job.progress.state == EnhancedForward::State::Paused) {
 			EnhancedForward::resumeForward(job.peer, session);
 		} else if (job.resumable) {
-			session->api().startResumeForward(job.srcPeer, job.peer, session);
+			session->api().startResumeForward(job.peer, session);
 		}
 	}
 	NormalForward::ResumeDst(session, dst);
+	if (bulkHere) {
+		BulkForward::ResumeActive(session);
+	}
 }
 
 void ClearFwRun(
 		not_null<Main::Session*> session,
 		const PeerId &dst) {
-	for (const auto &job : EnhancedForward::AllJobs(session)) {
-		if (job.peer == dst && job.finished && !job.resumable) {
-			for (const auto &srcId : job.progress.sourceIds) {
-				EnhancedForward::ClearFinishedItems(session, srcId);
-			}
-		}
-	}
-	for (const auto &batch : EnhancedForward::ForwardBatches(session)) {
-		if (batch.dst == dst && batch.finished) {
-			EnhancedForward::DropForwardBatch(session, dst);
-		}
-	}
-	for (const auto &record : EnhancedForward::FinishedFwRuns(session)) {
-		if (record.dst == dst) {
-			EnhancedForward::DropFinishedFwRunGroup(session, record.actionId);
-		}
-	}
+	EnhancedForward::ClearForwardRun(session, dst);
 }
 
 [[nodiscard]] std::optional<PeerId> FwCurrentDst(
@@ -474,6 +579,21 @@ void ClearFwRun(
 		unitFeed(uint64(counters.firstSource.msg.bare));
 		unitEnd();
 	}
+	for (const auto &counters : BulkForward::AllCounters(session)) {
+		unitBegin(uint64(6));
+		unitFeed(uint64(counters.source.value));
+		unitFeed(uint64(counters.destination.value));
+		unitFeed(counters.active);
+		unitFeed(counters.paused);
+		unitFeed(uint64(counters.scanned));
+		unitFeed(uint64(counters.total));
+		unitFeed(uint64(counters.matched));
+		unitFeed(uint64(counters.sent));
+		unitFeed(uint64(counters.skipped));
+		unitFeed(uint64(counters.copied));
+		unitFeed(counters.scanDone);
+		unitEnd();
+	}
 	for (const auto &batch : EnhancedForward::ForwardBatches(session)) {
 		unitBegin(uint64(3));
 		unitFeed(uint64(batch.dst.value));
@@ -499,9 +619,34 @@ void ClearFwRun(
 	for (const auto &entry : liveCarriers) {
 		unitBegin(uint64(5));
 		unitFeed(uint64(entry.first.value));
+		unitFeed(uint64(entry.second->fullId().peer.value));
+		unitFeed(uint64(entry.second->fullId().msg.bare));
 		unitEnd();
 	}
 	return result;
+}
+
+// A resumable job whose source messages are not cached yet still needs a
+// carrier to render its row. Any message of the destination or the source
+// history keeps the row visible until the real source item resolves.
+[[nodiscard]] HistoryItem *FwFallbackCarrier(
+		not_null<Main::Session*> session,
+		const EnhancedForward::JobSnapshot &job) {
+	const auto lastOf = [](History *history) -> HistoryItem* {
+		if (!history) {
+			return nullptr;
+		}
+		if (const auto last = history->lastMessage()) {
+			return last;
+		}
+		return history->lastServerMessage();
+	};
+	if (const auto destination = session->data().historyLoaded(job.peer)) {
+		if (const auto carrier = lastOf(destination)) {
+			return carrier;
+		}
+	}
+	return lastOf(session->data().historyLoaded(job.srcPeer));
 }
 
 } // namespace
@@ -509,7 +654,6 @@ void ClearFwRun(
 Provider::Provider(not_null<AbstractController*> controller)
 : _controller(controller)
 , _storiesAddToAlbumId(_controller->storiesAddToAlbumId()) {
-	qDebug() << "[TM] tm provider created";
 	style::PaletteChanged(
 	) | rpl::on_next([=] {
 		for (auto &layout : _layouts) {
@@ -654,7 +798,7 @@ void Provider::updateCounter() {
 					continue;
 				}
 				fwJobs++;
-				fwTotal += batch.total;
+				fwTotal += std::max(0, batch.total - batch.skipped);
 				fwDone += batch.sent;
 			}
 			for (const auto &job : EnhancedForward::MemoryJobs(session)) {
@@ -670,7 +814,9 @@ void Provider::updateCounter() {
 					continue;
 				}
 				fwJobs++;
-				fwTotal += job.progress.total;
+				fwTotal += std::max(
+					0,
+					job.progress.total - job.progress.skipped);
 				fwDone += job.progress.sent;
 			}
 		});
@@ -683,8 +829,15 @@ void Provider::updateCounter() {
 				if (seenBatches.contains(counters.dst)) {
 					continue;
 				}
-				fwTotal += counters.total;
+				fwTotal += std::max(0, counters.total - counters.skipped);
 				fwDone += counters.done;
+			}
+			for (const auto &counters : BulkForward::AllCounters(session)) {
+				if (!counters.active) {
+					continue;
+				}
+				fwTotal += std::max(0, counters.matched - counters.skipped);
+				fwDone += counters.sent;
 			}
 		});
 		total += fwTotal;
@@ -795,6 +948,7 @@ void Provider::refreshViewer() {
 								.item = item,
 								.started = int64(item->date()) * 1000,
 								.path = id->path,
+								.sourceId = item->fullId(),
 							});
 						}
 						trackItemSession(item);
@@ -810,6 +964,7 @@ void Provider::refreshViewer() {
 							.started = id->started,
 							.path = id->path,
 							.dlBatch = id->batchId,
+							.sourceId = item->fullId(),
 						});
 					}
 					trackItemSession(item);
@@ -877,7 +1032,9 @@ void Provider::refreshViewer() {
 		touchDlHeaders();
 	}, _lifetime);
 
+	auto initialLoaded = 0;
 	for (const auto id : manager.loadedList()) {
+		++initialLoaded;
 		addPostponed(id);
 	}
 
@@ -950,6 +1107,7 @@ void Provider::refreshViewer() {
 						.started = int64(item->date()) * 1000,
 						.path = info.filename,
 						.ulBatch = info.batchId,
+						.sourceId = info.itemId,
 					});
 					refreshPostponed(true);
 				}
@@ -1049,6 +1207,7 @@ void Provider::refreshViewer() {
 					.started = int64(item->date()) * 1000,
 					.path = QString(),
 					.ulBatch = batchId,
+					.sourceId = itemId,
 				});
 				refreshPostponed(true);
 				touchUlHeaders();
@@ -1150,6 +1309,10 @@ void Provider::refreshViewer() {
 			updateCounter();
 		}, _lifetime);
 		NormalForward::countersChanged() | rpl::on_next([=] {
+			updateCounter();
+			refreshForwards();
+		}, _lifetime);
+		BulkForward::countersChanged() | rpl::on_next([=] {
 			updateCounter();
 			refreshForwards();
 		}, _lifetime);
@@ -1283,6 +1446,9 @@ void Provider::refreshEF(
 			}
 		}
 		if (!carrier) {
+			carrier = FwFallbackCarrier(session, job);
+		}
+		if (!carrier) {
 			continue;
 		}
 		wantedDsts.emplace(job.peer);
@@ -1300,6 +1466,20 @@ void Provider::refreshEF(
 		}
 		wantedDsts.emplace(counters.dst);
 		liveCarriers.emplace_back(counters.dst, message);
+	}
+	for (const auto &counters : BulkForward::AllCounters(session)) {
+		if (!counters.active
+			|| !counters.source
+			|| wantedDsts.contains(counters.destination)) {
+			continue;
+		}
+		const auto history = session->data().historyLoaded(counters.source);
+		const auto carrier = history ? history->lastMessage() : nullptr;
+		if (!carrier) {
+			continue;
+		}
+		wantedDsts.emplace(counters.destination);
+		liveCarriers.emplace_back(counters.destination, carrier);
 	}
 	auto keptRuns = std::vector<
 		std::pair<EnhancedForward::FinishedFwRun, HistoryItem*>>();
@@ -1320,7 +1500,9 @@ void Provider::refreshEF(
 		[](const auto &entry) { return entry.first.finishedAt; });
 	const auto digest = FwTickDigest(session, ordered, liveCarriers, keptRuns);
 	const auto digestIt = _fwTickDigest.find(session);
-	if (digestIt != end(_fwTickDigest) && digestIt->second == digest) {
+	if (digestIt != end(_fwTickDigest)
+		&& digestIt->second == digest
+		&& unresolved.empty()) {
 		updateAvailability();
 		return;
 	}
@@ -1329,14 +1511,6 @@ void Provider::refreshEF(
 	} else {
 		_fwTickDigest.emplace(session, digest);
 	}
-	qDebug() << "[TM] fw tick jobs:"
-		<< ordered.size()
-		<< "live:"
-		<< liveCarriers.size()
-		<< "kept:"
-		<< keptRuns.size()
-		<< "elements:"
-		<< _elements.size();
 	auto absorbingDsts = base::flat_set<PeerId>();
 	for (const auto &batch : EnhancedForward::ForwardBatches(session)) {
 		if (!batch.finished) {
@@ -1474,22 +1648,53 @@ void Provider::refreshEF(
 			}
 			_fetchingEFResolve.emplace(id);
 			toFetch.push_back(id);
-		}		if (!toFetch.empty()) {
+		}
+		if (!toFetch.empty()) {
 			const auto weak = base::make_weak(this);
+			const auto weakSession = base::make_weak(session);
 			EnhancedForward::EnsureForwardSourceMessages(
 				session,
 				toFetch,
-				[weak, session, toFetch](bool ok) {
+				[weak, weakSession, session, toFetch](bool ok) {
 					if (!weak) {
 						return;
 					}
+					auto retryIds = std::vector<FullMsgId>();
 					for (const auto &id : toFetch) {
 						weak->_fetchingEFResolve.remove(id);
-						if (ok) {
+						if (session->data().message(id)) {
 							weak->_failedEFResolve.remove(id);
+							weak->_efResolveRetries.remove(id);
 						} else {
+							// A successful request that returns no message
+							// means the source is gone; a failed one may be
+							// transient. Both must stay out of the automatic
+							// retry until the retry below (or a state change)
+							// clears them, or refresh would fetch forever.
 							weak->_failedEFResolve.emplace(id);
+							if (!ok
+								&& ++weak->_efResolveRetries[id]
+									<= kEfResolveRetryMax) {
+								retryIds.push_back(id);
+							}
 						}
+					}
+					if (!ok && !retryIds.empty()) {
+						base::call_delayed(
+							kEfResolveRetryDelay,
+							weak,
+							[weak, weakSession, session, ids = retryIds] {
+								if (!weak || !weakSession) {
+									return;
+								}
+								for (const auto &id : ids) {
+									weak->_failedEFResolve.remove(id);
+								}
+								weak->refreshEF(
+									session,
+									EnhancedForward::MemoryJobs(session));
+								EnhancedForward::notifyTransfersUpdated();
+							});
 					}
 					weak->refreshEF(
 						session,
@@ -1527,8 +1732,6 @@ bool Provider::ensureFwAggregate(
 			1,
 			uint64(0),
 		});
-		qDebug() << "[TM] fw aggregate added, carrier:"
-			<< carrier->id.bare;
 		trackItemSession(carrier);
 		if (const auto it = _fwLayouts.find({ session.get(), dst, uint64(0) });
 			it != end(_fwLayouts)) {
@@ -1564,10 +1767,6 @@ bool Provider::ensureFwFinishedGroup(
 			1,
 			actionId,
 		});
-		qDebug() << "[TM] fw finished group added, action:"
-			<< actionId
-			<< "carrier:"
-			<< carrier->id.bare;
 		trackItemSession(carrier);
 		if (const auto it = _fwLayouts.find(
 			{ session.get(), dst, actionId });
@@ -1587,7 +1786,6 @@ bool Provider::ensureFwFinishedGroup(
 void Provider::removeFwAggregate(
 		not_null<Main::Session*> session,
 		const PeerId &dst) {
-	qDebug() << "[TM] fw aggregate element removed";
 	if (const auto it = _fwLayouts.find({ session.get(), dst, uint64(0) });
 		it != end(_fwLayouts)) {
 		_layoutRemoved.fire(it->second.item.get());
@@ -1622,7 +1820,6 @@ void Provider::removeFwAggregate(
 void Provider::removeFwFinishedGroup(
 		not_null<Main::Session*> session,
 		uint64 actionId) {
-	qDebug() << "[TM] fw finished group removed";
 	for (auto i = _fwLayouts.begin(); i != end(_fwLayouts);) {
 		if (std::get<0>(i->first) == session.get()
 			&& std::get<2>(i->first) == actionId) {
@@ -1716,10 +1913,11 @@ void Provider::resolvePendingFinishedUploads(
 	}
 	if (!unresolved.empty()) {
 		const auto weak = base::make_weak(this);
+		const auto weakSession = base::make_weak(session);
 		EnhancedForward::EnsureForwardSourceMessages(
 			session,
 			unresolved,
-			[this, weak, session, unresolved](bool ok) {
+			[this, weak, weakSession, session, unresolved](bool ok) {
 				if (!weak) {
 					return;
 				}
@@ -1734,8 +1932,20 @@ void Provider::resolvePendingFinishedUploads(
 						_pendingFinishedUploads.erase(itemId);
 						session->uploader().removeFinishedUpload(itemId);
 					}
+					resolvePendingFinishedUploads(session);
+				} else {
+					// A failed resolve is retried later instead of right
+					// away, or a flaky connection would spin requests.
+					base::call_delayed(
+						kEfResolveRetryDelay,
+						weak,
+						[weak, weakSession, session] {
+							if (!weak || !weakSession) {
+								return;
+							}
+							weak->resolvePendingFinishedUploads(session);
+						});
 				}
-				resolvePendingFinishedUploads(session);
 			});
 	}
 }
@@ -1765,6 +1975,7 @@ void Provider::addPostponed(not_null<const Data::DownloadedId*> entry) {
 			.started = entry->started,
 			.path = entry->path,
 			.dlBatch = entry->batchId,
+			.sourceId = entry->itemId,
 		});
 		if (_addPostponed.size() == 1) {
 			Ui::PostponeCall(this, [=] {
@@ -1864,10 +2075,6 @@ void Provider::remove(not_null<const HistoryItem*> item) {
 	}
 	_elements.erase(ranges::remove_if(_elements, proj), end(_elements));
 	if (fwRemoved) {
-		qDebug() << "[TM] fw element removed, item:"
-			<< item->fullId().msg.bare
-			<< "count:"
-			<< fwRemoved;
 	}
 	if (const auto i = _layouts.find(item); i != end(_layouts)) {
 		_layoutRemoved.fire(i->second.item.get());
@@ -2003,6 +2210,22 @@ void Provider::syncDlRuns() {
 				.dlRow = 1,
 			});
 			changed = true;
+		}
+		// A batch picked at once is listed under one shared date/time: the
+		// run start, not each item's own download start.
+		for (auto &element : _elements) {
+			if (element.dlRow == 0
+				&& element.dlBatch == run.batchId
+				&& sessionOf(element) == run.sessionId
+				&& element.started != int64(run.startedAt) * 1000) {
+				element.started = int64(run.startedAt) * 1000;
+				if (const auto lit = _layouts.find(element.item);
+					lit != end(_layouts)) {
+					_layoutRemoved.fire(lit->second.item.get());
+					_layouts.erase(lit);
+				}
+				changed = true;
+			}
 		}
 	}
 	for (auto i = _elements.begin(); i != _elements.end();) {
@@ -3018,10 +3241,6 @@ std::vector<ListSection> Provider::fillSections(
 					eligible,
 					ranges::less(),
 					[](const Element *element) { return element->order; });
-				qDebug() << "[TM] fw fill eligible:"
-					<< eligible.size()
-					<< "elements:"
-					<< _elements.size();
 			} else {
 				ranges::stable_sort(
 					eligible,
@@ -3046,10 +3265,6 @@ std::vector<ListSection> Provider::fillSections(
 					});
 			} else for (const auto *element : eligible) {
 				if (element->fwRow == 1) {
-					qDebug() << "[TM] fw fill row group:"
-						<< element->fwGroup
-						<< "carrier:"
-						<< element->item->fullId().msg.bare;
 				}
 				if (!matches(*element)) {
 					continue;
@@ -3202,7 +3417,15 @@ void Provider::cancelForwardRun(not_null<const HistoryItem*> item) {
 		return;
 	}
 	const auto session = &item->history()->session();
-	EnhancedForward::cancelForward(*dst, session);
+	auto bulkOwned = false;
+	for (const auto &counters : BulkForward::AllCounters(session)) {
+		if (counters.destination == *dst && counters.active) {
+			bulkOwned = true;
+			BulkForward::CancelActive(session);
+			break;
+		}
+	}
+	EnhancedForward::cancelForward(*dst, session, bulkOwned);
 	NormalForward::CancelDst(session, *dst);
 	auto &db = Core::App().downloadManager().ensureDedupDb();
 	if (db.isOpen()) {
@@ -3229,6 +3452,46 @@ void Provider::clearForwardRun(not_null<const HistoryItem*> item) {
 		return;
 	}
 	ClearFwRun(session, *dst);
+	refreshForwards();
+}
+
+void Provider::clearFinishedForwards() {
+	const auto session = &_controller->session();
+	auto dsts = base::flat_set<PeerId>();
+	auto groups = base::flat_set<uint64>();
+	for (const auto &element : _elements) {
+		if (element.fwRow != 1
+			|| &element.item->history()->session() != session) {
+			continue;
+		}
+		if (element.fwGroup) {
+			groups.emplace(element.fwGroup);
+		} else if (element.fwDst) {
+			dsts.emplace(element.fwDst);
+		}
+	}
+	for (const auto &job : EnhancedForward::AllJobs(session)) {
+		if (job.finished) {
+			dsts.emplace(job.peer);
+		}
+	}
+	for (const auto &batch : EnhancedForward::ForwardBatches(session)) {
+		if (batch.finished) {
+			dsts.emplace(batch.dst);
+		}
+	}
+	for (const auto &record : EnhancedForward::FinishedFwRuns(session)) {
+		groups.emplace(record.actionId);
+	}
+	for (const auto dst : dsts) {
+		ClearFwRun(session, dst);
+		EnhancedForward::ClearFinished(session, dst);
+	}
+	for (const auto group : groups) {
+		EnhancedForward::DropFinishedFwRunGroup(session, group);
+		removeFwFinishedGroup(session, group);
+	}
+	EnhancedForward::ClearFinishedFwRuns(session);
 	refreshForwards();
 }
 
@@ -3436,10 +3699,6 @@ BaseLayout *Provider::getLayout(
 		return it->second.item.get();
 	}
 	if (element.fwRow == 1) {
-		qDebug() << "[TM] fw getlayout group:"
-			<< element.fwGroup
-			<< "layouts:"
-			<< _fwLayouts.size();
 		const auto key = std::make_tuple(
 			&element.item->history()->session(),
 			element.fwDst,
@@ -3459,14 +3718,10 @@ BaseLayout *Provider::getLayout(
 			it->second.item.get());
 		if (!summary->hasContent()) {
 			if (created) {
-				qDebug() << "[TM] fw layout created empty, group:"
-					<< element.fwGroup;
 			}
 			return nullptr;
 		}
 		if (created) {
-			qDebug() << "[TM] fw layout created ok, group:"
-				<< element.fwGroup;
 		}
 		it->second.stale = false;
 		return it->second.item.get();
@@ -3508,7 +3763,6 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 		};
 		const auto dlProbe = fields.snapshot();
 		if (dlProbe.title.isEmpty() && dlProbe.status.isEmpty()) {
-			qDebug() << "[TM] header skipped empty, dl batch:" << batchId;
 			return nullptr;
 		}
 		return std::make_unique<Overview::Layout::ForwardSummary>(
@@ -3541,7 +3795,6 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 		};
 		const auto ulProbe = fields.snapshot();
 		if (ulProbe.title.isEmpty() && ulProbe.status.isEmpty()) {
-			qDebug() << "[TM] header skipped empty, ul batch:" << batchId;
 			return nullptr;
 		}
 		return std::make_unique<Overview::Layout::ForwardSummary>(
@@ -3562,8 +3815,6 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 				}
 			}
 			if (runs.empty()) {
-				qDebug() << "[TM] fw group runs empty at create, group:"
-					<< element.fwGroup;
 			}
 			if (!runs.empty()) {
 				const auto groupId = element.fwGroup;
@@ -3587,8 +3838,6 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 				const auto groupProbe = fields.snapshot();
 				if (groupProbe.title.isEmpty()
 					&& groupProbe.status.isEmpty()) {
-					qDebug() << "[TM] header skipped empty fw group:"
-						<< groupId;
 					return nullptr;
 				}
 				return std::make_unique<Overview::Layout::ForwardSummary>(
@@ -3616,7 +3865,6 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 		const auto aggregateProbe = fields.snapshot();
 		if (aggregateProbe.title.isEmpty()
 			&& aggregateProbe.status.isEmpty()) {
-			qDebug() << "[TM] header skipped empty fw aggregate";
 			return nullptr;
 		}
 		return std::make_unique<Overview::Layout::ForwardSummary>(
@@ -3654,7 +3902,10 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 			size = QFileInfo(element.path).size();
 		}
 		options.footerName = name;
-		const auto msgBare = element.item->fullId().msg.bare;
+		const auto displayId = element.sourceId
+			? element.sourceId
+			: element.item->fullId();
+		const auto msgBare = displayId.msg.bare;
 		const auto msgId = msgBare
 			? u"ID: %1"_q.arg(msgBare)
 			: QString();
@@ -3679,7 +3930,8 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 			}
 		}
 		const auto srcId = element.item->fullId();
-		const auto docBare = srcId.msg.bare;
+		const auto displayId = element.sourceId ? element.sourceId : srcId;
+		const auto docBare = displayId.msg.bare;
 		const auto docIdSuffix = docBare
 			? u"ID: %1"_q.arg(docBare)
 			: QString();
@@ -3718,6 +3970,7 @@ std::unique_ptr<BaseLayout> Provider::createLayout(
 			},
 			.boldName = true,
 			.hideDate = true,
+			.noThumb = true,
 			.statusSuffix = docIdSuffix,
 		};
 		const auto item = element.item;
@@ -3842,6 +4095,15 @@ bool Provider::isDownloading(not_null<const HistoryItem*> item) const {
 
 bool Provider::isDownloaded(not_null<const HistoryItem*> item) const {
 	return _downloaded.contains(item);
+}
+
+HistoryItem *Provider::listedItem(GlobalMsgId id) const {
+	for (const auto &element : _elements) {
+		if (element.item->globalId() == id) {
+			return element.item;
+		}
+	}
+	return nullptr;
 }
 
 bool Provider::isUploading(not_null<const HistoryItem*> item) const {

@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_chat_participant_status.h"
 #include "data/data_download_manager.h"
 #include "history/history_item_helpers.h"
+#include "history/history_range_selection.h"
 #include "history/view/controls/history_view_forward_panel.h"
 #include "history/view/controls/history_view_draft_options.h"
 #include "history/view/controls/history_view_suggest_options.h"
@@ -3274,19 +3275,26 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 				}
 				const auto start = (topToBottom ? nearestItem : toItem);
 				const auto end = (topToBottom ? toItem : nearestItem);
+				const auto startId = start->fullId();
+				const auto endId = end->fullId();
+				if (startId == endId) {
+					return;
+				}
 				const auto left = MaxSelectedItems
 					- selectedState.count
 					+ (topToBottom ? 0 : 1);
-				if (collectBetween(start, end, left).empty()) {
+				if (left <= 0) {
 					return;
 				}
-				const auto startId = start->fullId();
-				const auto endId = end->fullId();
 				const auto callback = [=] {
 					const auto from = session->data().message(startId);
 					const auto to = session->data().message(endId);
-					if (from && to) {
-						for (const auto &i : collectBetween(from, to, left)) {
+					if (!from || !to) {
+						return;
+					}
+					const auto list = collectBetween(from, to, left);
+					if (!list.empty()) {
+						for (const auto &i : list) {
 							changeSelectionAsGroup(
 								&_selected,
 								i,
@@ -3295,7 +3303,9 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 						_accessibilitySelectionAnchor = nullptr;
 						update();
 						_widget->updateTopBarSelection();
+						return;
 					}
+					startRangeSelection(startId, endId, left);
 				};
 				_menu->addAction(
 					tr::lng_context_select_msg_bulk(tr::now),
@@ -3451,6 +3461,9 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 				}, &st::menuIconForward);
 				_menu->addAction(tr::lng_context_forward_selected_no_quote(tr::now), [=] {
 					_widget->forwardNoQuoteSelected();
+				}, &st::menuIconForward);
+				_menu->addAction(tr::lng_bulk_forward_selected(tr::now), [=] {
+					_widget->bulkForwardSelected();
 				}, &st::menuIconForward);
 				_menu->addAction(tr::lng_forward_to_saved_message(tr::now), [=] {
 					_widget->forwardSelectedToSavedMessages();
@@ -3902,6 +3915,9 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 				}, &st::menuIconForward);
 				_menu->addAction(tr::lng_context_forward_selected_no_quote(tr::now), [=] {
 					_widget->forwardNoQuoteSelected();
+				}, &st::menuIconForward);
+				_menu->addAction(tr::lng_bulk_forward_selected(tr::now), [=] {
+					_widget->bulkForwardSelected();
 				}, &st::menuIconForward);
 				_menu->addAction(tr::lng_forward_to_saved_message(tr::now), [=] {
 					_widget->forwardSelectedToSavedMessages();
@@ -5293,6 +5309,7 @@ void HistoryInner::setupThanosEffect() {
 }
 
 HistoryInner::~HistoryInner() {
+	hideRangeSelectionToast();
 	if (_overlayHost) {
 		_overlayHost->hide();
 	}
@@ -5660,10 +5677,17 @@ auto HistoryInner::getSelectionState() const
 
 void HistoryInner::clearSelected(bool onlyTextSelection) {
 	auto changed = false;
-	if (!onlyTextSelection && !_selected.empty()) {
-		_selected.clear();
-		_accessibilitySelectionAnchor = nullptr;
-		changed = true;
+	if (!onlyTextSelection) {
+		if (_rangeLoader) {
+			_rangeLoader = nullptr;
+			_rangePending.clear();
+			hideRangeSelectionToast();
+		}
+		if (!_selected.empty()) {
+			_selected.clear();
+			_accessibilitySelectionAnchor = nullptr;
+			changed = true;
+		}
 	}
 	if (_selectedTextItem) {
 		clearTextSelection();
@@ -6452,6 +6476,135 @@ void HistoryInner::changeSelectionAsGroup(
 			removeFromSelection(toItems, other);
 		}
 	}
+}
+
+void HistoryInner::startRangeSelection(
+		FullMsgId fromId,
+		FullMsgId tillId,
+		int limit) {
+	const auto from = session().data().message(fromId);
+	const auto till = session().data().message(tillId);
+	if (!from || !till || from->history() != till->history()) {
+		return;
+	}
+	hideRangeSelectionToast();
+	_rangePending.clear();
+	auto loader = std::make_unique<HistoryView::RangeSelectionLoader>(
+		&session(),
+		from->history(),
+		fromId.msg,
+		tillId.msg,
+		limit,
+		[](not_null<HistoryItem*> item) {
+			return item->canBeSelected();
+		},
+		[=] {
+			return _selected.empty();
+		});
+	const auto raw = loader.get();
+	_rangeLoader = std::move(loader);
+
+	const auto showToastWithTitle = [=](QString title) {
+		if (const auto toast = _rangeToast.get()) {
+			toast->hide();
+		}
+		_rangeToast = Ui::Toast::Show(Ui::Toast::Config{
+			.title = std::move(title),
+			.infinite = true,
+		});
+	};
+	const auto showProgress = [=] {
+		_rangeWaitTimer.cancel();
+		_rangeWaitLeft = 0;
+		showToastWithTitle(tr::lng_range_selection_progress(tr::now));
+	};
+	const auto showWait = [=] {
+		showToastWithTitle(tr::lng_range_selection_waiting(
+			tr::now,
+			lt_count,
+			_rangeWaitLeft));
+	};
+	const auto onPage = [=](
+			HistoryView::RangeSelectionLoader::Page items) {
+		if (_rangeLoader.get() != raw) {
+			return;
+		}
+		applyRangeItems(items);
+		applyRangeItems(_rangePending);
+		_rangePending = std::move(items);
+	};
+	const auto onWait = [=](int seconds) {
+		if (_rangeLoader.get() != raw) {
+			return;
+		} else if (seconds <= 0) {
+			showProgress();
+			return;
+		}
+		_rangeWaitLeft = seconds;
+		showWait();
+		_rangeWaitTimer.setCallback([=] {
+			if (_rangeLoader.get() != raw || _rangeWaitLeft <= 0) {
+				_rangeWaitTimer.cancel();
+			} else if (--_rangeWaitLeft <= 0) {
+				showProgress();
+			} else {
+				showWait();
+			}
+		});
+		_rangeWaitTimer.callEach(crl::time(1000));
+	};
+	showProgress();
+	raw->start(onPage, onWait, [=](
+			HistoryView::RangeSelectionLoader::Result result) {
+		if (_rangeLoader.get() != raw) {
+			return;
+		}
+		applyRangeItems(_rangePending);
+		_rangePending.clear();
+		hideRangeSelectionToast();
+		if (_selected.empty()) {
+			return;
+		} else if (result.failed) {
+			Ui::Toast::Show(tr::lng_range_selection_failed(tr::now));
+		} else if (result.truncated && result.accepted > 0) {
+			Ui::Toast::Show(Ui::Toast::Config{
+				.title = tr::lng_range_selection_truncated(
+					tr::now,
+					lt_count,
+					result.accepted),
+			});
+		}
+		crl::on_main(this, [=] {
+			if (_rangeLoader.get() == raw) {
+				_rangeLoader = nullptr;
+			}
+		});
+	});
+}
+
+void HistoryInner::applyRangeItems(
+		const std::vector<not_null<HistoryItem*>> &items) {
+	if (items.empty() || _selected.empty()) {
+		return;
+	}
+	for (const auto &item : items) {
+		changeSelectionAsGroup(
+			&_selected,
+			item,
+			SelectAction::Select);
+	}
+	_accessibilitySelectionAnchor = nullptr;
+	update();
+	_widget->updateTopBarSelection();
+}
+
+void HistoryInner::hideRangeSelectionToast() {
+	_rangeWaitTimer.cancel();
+	_rangeWaitLeft = 0;
+	if (const auto toast = _rangeToast.get()) {
+		toast->hideAnimated();
+	}
+	_rangeToast = nullptr;
 }
 
 void HistoryInner::setAccessibilityFocusedItem(

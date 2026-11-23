@@ -440,6 +440,34 @@ PRIVATE
     boxes/url_auth_box.h
     boxes/username_box.cpp
     boxes/username_box.h
+    bulk_forward/bulk_forward_batcher.cpp
+    bulk_forward/bulk_forward_batcher.h
+    bulk_forward/bulk_forward_carrier.cpp
+    bulk_forward/bulk_forward_carrier.h
+    bulk_forward/bulk_forward_classifier.cpp
+    bulk_forward/bulk_forward_classifier.h
+    bulk_forward/bulk_forward_count.cpp
+    bulk_forward/bulk_forward_count.h
+    bulk_forward/bulk_forward_counters.cpp
+    bulk_forward/bulk_forward_counters.h
+    bulk_forward/bulk_forward_entry.cpp
+    bulk_forward/bulk_forward_entry.h
+    bulk_forward/bulk_forward_filter.cpp
+    bulk_forward/bulk_forward_filter.h
+    bulk_forward/bulk_forward_filter_box.cpp
+    bulk_forward/bulk_forward_filter_box.h
+    bulk_forward/bulk_forward_forwarder.cpp
+    bulk_forward/bulk_forward_forwarder.h
+    bulk_forward/bulk_forward_job.cpp
+    bulk_forward/bulk_forward_job.h
+    bulk_forward/bulk_forward_resume.cpp
+    bulk_forward/bulk_forward_resume.h
+    bulk_forward/bulk_forward_scanner.cpp
+    bulk_forward/bulk_forward_scanner.h
+    bulk_forward/bulk_forward_selection.cpp
+    bulk_forward/bulk_forward_selection.h
+    bulk_forward/bulk_forward_settings.cpp
+    bulk_forward/bulk_forward_settings.h
     calls/group/calls_choose_join_as.cpp
     calls/group/calls_choose_join_as.h
     calls/group/calls_cover_item.cpp
@@ -733,6 +761,10 @@ PRIVATE
     data/data_download_manager.h
     data/data_file_hash.cpp
     data/data_file_hash.h
+    data/data_forward_batching.cpp
+    data/data_forward_batching.h
+    data/data_forward_dedup.cpp
+    data/data_forward_dedup.h
     data/data_media_category.h
     data/data_drafts.cpp
     data/data_drafts.h
@@ -751,6 +783,7 @@ PRIVATE
     data/data_file_origin.cpp
     data/data_file_origin.h
     data/data_flags.h
+    data/data_forward_seen.h
     data/data_game.cpp
     data/data_game.h
     data/data_group_call.cpp
@@ -1212,6 +1245,8 @@ PRIVATE
     history/history_inner_widget_accessibility.h
     history/history_location_manager.cpp
     history/history_location_manager.h
+    history/history_range_selection.cpp
+    history/history_range_selection.h
     history/history_streamed_drafts.cpp
     history/history_streamed_drafts.h
     history/history_translation.cpp
@@ -2003,6 +2038,8 @@ PRIVATE
     tde2e/tde2e_integration.h
     test/test_agent.cpp
     test/test_agent.h
+    test/test_bulk_forward.cpp
+    test/test_bulk_forward.h
     test/test_capture.cpp
     test/test_capture.h
     test/test_custom_emoji.cpp
@@ -2029,6 +2066,7 @@ PRIVATE
     test/test_panel.h
     test/test_probe.cpp
     test/test_probe.h
+    test/test_repository_checks.cpp
     test/test_runner.cpp
     test/test_runner.h
     test/test_scenario.cpp

@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_peer_menu.h"
 
 #include "base/call_delayed.h"
+#include "bulk_forward/bulk_forward_entry.h"
 #include "menu/menu_check_item.h"
 #include "menu/menu_mark_as_read.h"
 #include "boxes/about_box.h"
@@ -347,6 +348,7 @@ private:
 	void addToggleTopicClosed();
 	void addExportChat();
 	void addScanChat();
+	void addBulkForward();
 	void addTranslate();
 	void addReport();
 	void addNewContact();
@@ -1109,6 +1111,21 @@ void Filler::addScanChat() {
 		tr::lng_chat_scan_menu(tr::now),
 		[=] { PeerMenuScanChat(navigation, peer); },
 		&st::menuIconSearch);
+}
+
+void Filler::addBulkForward() {
+	if (!_peer) {
+		return;
+	}
+	const auto peer = _peer;
+	const auto navigation = _controller;
+	const auto topicRootId = (_topic && !_topic->isGeneral())
+		? _topic->rootId()
+		: MsgId(0);
+	_addAction(
+		tr::lng_bulk_forward_title(tr::now),
+		[=] { BulkForward::ShowBox(navigation, peer, topicRootId, {}); },
+		&st::menuIconForward);
 }
 
 void Filler::addTranslate() {
@@ -2026,6 +2043,7 @@ void Filler::fillHistoryActions() {
 	addDirectMessages();
 	addExportChat();
 	addScanChat();
+	addBulkForward();
 	addTranslate();
 	addReport();
 	addClearHistory();
@@ -3199,6 +3217,22 @@ base::weak_qptr<Ui::BoxContent> ShowChooseRecipientBox(
 		std::move(titleOverride),
 		std::move(successCallback),
 		typesRestriction));
+}
+
+base::weak_qptr<Ui::BoxContent> ShowChooseRecipientsBox(
+		not_null<Window::SessionNavigation*> navigation,
+		FnMut<bool(not_null<Data::Thread*>)> &&chosen,
+		Fn<void(
+			std::vector<not_null<Data::Thread*>>,
+			Api::SendOptions)> &&sendMany,
+		rpl::producer<QString> titleOverride) {
+	return navigation->parentController()->show(PrepareChooseRecipientBox(
+		&navigation->session(),
+		std::move(chosen),
+		std::move(titleOverride),
+		nullptr,
+		0,
+		std::move(sendMany)));
 }
 
 Api::SendAction prepareSendAction(

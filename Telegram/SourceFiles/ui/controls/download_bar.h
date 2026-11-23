@@ -45,6 +45,7 @@ struct DownloadBarContent {
 	int efCount = 0;
 	int efDone = 0;
 	int efSkipped = 0;
+	qint64 efSkippedBytes = 0;
 	QString nfLastName;
 	int nfCount = 0;
 	int nfDone = 0;

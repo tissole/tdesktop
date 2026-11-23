@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_unread_things.h"
 #include "base/random.h"
 #include "boxes/compose_ai_box.h"
+#include "bulk_forward/bulk_forward_entry.h"
 #include "ui/boxes/confirm_box.h"
 #include "boxes/delete_messages_box.h"
 #include "boxes/send_credits_box.h"
@@ -11346,6 +11347,26 @@ void HistoryWidget::forwardSelected() {
 			strong->clearSelected();
 		}
 	});
+}
+
+void HistoryWidget::bulkForwardSelected() {
+	if (!_list) {
+		return;
+	}
+	const auto selection = getSelectedItems();
+	const auto history = this->history();
+	if (selection.empty() || !history) {
+		return;
+	}
+	const auto topic = controller()->activeChatCurrent().topic();
+	const auto topicRootId = (topic && !topic->isGeneral())
+		? topic->rootId()
+		: MsgId(0);
+	BulkForward::ShowBox(
+		controller(),
+		history->peer,
+		topicRootId,
+		selection);
 }
 
 void HistoryWidget::forwardNoQuoteSelected() {

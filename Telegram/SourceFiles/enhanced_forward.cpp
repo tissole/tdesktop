@@ -8,6 +8,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "enhanced_forward.h"
 
 #include "apiwrap.h"
+#include "bulk_forward/bulk_forward_counters.h"
+#include "bulk_forward/bulk_forward_resume.h"
 #include "rpl/rpl.h"
 #include "base/debug_log.h"
 #include "base/call_delayed.h"
@@ -27,9 +29,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QFile>
 #include <QDataStream>
 #include <algorithm>
+#include <atomic>
 #include <deque>
+#include <iterator>
+#include <memory>
+#include <mutex>
 #include <tuple>
 #include <unordered_set>
+#include <utility>
 #include "data/data_user.h"
 #include "history/history.h"
 #include "history/history_item.h"
@@ -61,6 +68,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // ADDITIONAL INTERNAL DATA TYPES REQUIRED FOR THE STAGE PIPELINE:
 #include "data/data_document.h"
 #include "data/data_document_media.h"
+#include "data/data_forward_batching.h"
 #include "data/data_photo.h"
 #include "data/data_photo_media.h"
 #include "data/data_file_origin.h"
@@ -86,6 +94,10 @@ namespace EnhancedForward {
 namespace {
 
 struct SharedState {
+	// Identifies the batch that owns this state. A finished batch is moved out
+	// of ActiveStates and the next batch to the same peer gets a new value, so
+	// a late callback can tell whether the state still belongs to it.
+	uint64 generation = 0;
 	int total = 0;
 	int sent = 0;
 	int skipped = 0;
@@ -93,6 +105,7 @@ struct SharedState {
 	bool paused = false;
 	bool finished = false;
 	bool resumable = false; // seeded from a persisted unfinished DB row
+	bool bulkOwned = false; // cancelled rows are recorded by the bulk run
 	PeerId destPeer;
 	PeerId srcPeer;
 	Fn<void()> cancelCallback;
@@ -226,6 +239,150 @@ void ClearShadowUpload(
 	session->data().requestItemRepaint(item);
 }
 
+// The server id a send request created for `randomId`, if the response
+// carried it. Text-only items get no local echo, so the response is the only
+// place their destination id can be learned from.
+[[nodiscard]] MsgId MessageIdFromUpdates(
+		const MTPUpdates &updates,
+		uint64 randomId) {
+	auto result = MsgId(0);
+	const auto scan = [&](const MTPVector<MTPUpdate> &list) {
+		for (const auto &update : list.v) {
+			update.match([&](const MTPDupdateMessageID &data) {
+				if (data.vrandom_id().v == randomId) {
+					result = MsgId(data.vid().v);
+				}
+			}, [](const auto &) {});
+		}
+	};
+	updates.match([&](const MTPDupdates &data) {
+		scan(data.vupdates());
+	}, [&](const MTPDupdatesCombined &data) {
+		scan(data.vupdates());
+	}, [](const auto &) {});
+	return result;
+}
+
+// Byte size of the photo variant the content fingerprint is computed from.
+// Photos use the same sample plan as documents: the whole file up to
+// kDedupMinPartialHashSize and one middle chunk above it.
+[[nodiscard]] int64 PhotoFingerprintSize(not_null<PhotoData*> photo) {
+	auto size = int64(photo->imageByteSize(Data::PhotoSize::Large));
+	if (!size) {
+		size = photo->videoByteSize(Data::PhotoSize::Large);
+	}
+	return size;
+}
+
+// Deleting a ForwardTemp file may block for a long time: an antivirus filter
+// scans a just-written large file before it allows the delete, and a busy
+// volume adds to that. Doing it per item on the main thread froze the UI for
+// longer than the deadlock detector tolerates, so removals are queued and
+// drained by a small pool of worker threads instead. The pool size follows the
+// number of queued files, not the number of transfer stages: one item has one
+// temp file, while a live cancel can have one file downloading and another
+// uploading at the same time.
+//
+// Removing a file must not remove the ForwardTemp directory: a running job
+// still has items waiting for their download, and deleting the now-empty
+// directory makes the next item fail to create its file. The directory is
+// removed only by the explicit cleanup that runs after the whole job is over.
+class TempFileRemover final {
+public:
+	void add(const QString &path) {
+		if (path.isEmpty()) {
+			return;
+		}
+		add(std::vector<QString>{ path }, QString());
+	}
+
+	void add(
+		std::vector<QString> paths,
+		const QString &removeEmptyDir = QString()) {
+		if (paths.empty() && removeEmptyDir.isEmpty()) {
+			return;
+		}
+		auto schedule = false;
+		{
+			std::lock_guard<std::mutex> lock(_mutex);
+			if (!removeEmptyDir.isEmpty()) {
+				_pendingDirs.push_back(removeEmptyDir);
+			}
+			_pending.insert(
+				_pending.end(),
+				std::make_move_iterator(paths.begin()),
+				std::make_move_iterator(paths.end()));
+			schedule = !_scheduled;
+			_scheduled = true;
+		}
+		if (schedule) {
+			crl::on_main([this] {
+				crl::async([this] { drain(); });
+			});
+		}
+	}
+
+private:
+	void drain() {
+		auto batch = std::vector<QString>();
+		{
+			std::lock_guard<std::mutex> lock(_mutex);
+			batch = std::exchange(_pending, std::vector<QString>());
+		}
+		if (batch.empty()) {
+			finishDrain();
+			return;
+		}
+		const auto shared = std::make_shared<std::vector<QString>>(
+			std::move(batch));
+		const auto next = std::make_shared<std::atomic<int>>(0);
+		const auto workers = std::min(4, int(shared->size()));
+		const auto remaining = std::make_shared<std::atomic<int>>(workers);
+		const auto worker = [=] {
+			for (auto index = next->fetch_add(1);
+				index < int(shared->size());
+				index = next->fetch_add(1)) {
+				QFile::remove((*shared)[index]);
+			}
+			if (remaining->fetch_sub(1) == 1) {
+				finishDrain();
+			}
+		};
+		for (auto i = 0; i != workers; ++i) {
+			crl::async(worker);
+		}
+	}
+
+	void finishDrain() {
+		auto again = false;
+		auto dirs = std::vector<QString>();
+		{
+			std::lock_guard<std::mutex> lock(_mutex);
+			again = !_pending.empty();
+			if (!again) {
+				dirs = std::exchange(_pendingDirs, std::vector<QString>());
+			}
+			_scheduled = again;
+		}
+		for (const auto &dir : dirs) {
+			QDir(dir).rmdir(dir);
+		}
+		if (again) {
+			crl::async([this] { drain(); });
+		}
+	}
+
+	std::mutex _mutex;
+	std::vector<QString> _pending;
+	std::vector<QString> _pendingDirs;
+	bool _scheduled = false;
+};
+
+TempFileRemover &TempFilesToRemove() {
+	static const auto result = new TempFileRemover();
+	return *result;
+}
+
 } // namespace
 
 void ShowForwardDoneToast(int sent, int, int skipped) {
@@ -250,6 +407,7 @@ struct ForwardBatch {
 	int skipped = 0;
 	QString lastFileName;
 	uint64 actionId = 0;
+	int64 startedAt = 0;
 	crl::time lastTouchAt = 0;
 	bool enhancedDone = false;
 	bool normalDone = false;
@@ -310,6 +468,7 @@ void BeginForwardBatch(
 	if (batch.session != session.get() || batch.finished) {
 		batch = ForwardBatch();
 		batch.session = session.get();
+		batch.startedAt = base::unixtime::now();
 		batch.actionId = base::RandomValue<uint64>();
 		if (!batch.actionId) {
 			batch.actionId = 1;
@@ -334,6 +493,35 @@ void ReportForwardBatchItem(
 	batch->skipped += skippedDelta;
 	batch->lastTouchAt = crl::now();
 	NotifyCounterChanged();
+}
+
+// Enhanced forward stores its temp file as "<runId>_<index>_<name>", so
+// equal names from different messages do not collide on disk. The bar names
+// the item by its original name only. A file that was already downloaded
+// keeps its real name, because it does not live in the temp folder.
+[[nodiscard]] QString ItemDisplayName(
+		const QString &name,
+		const QString &path,
+		const QString &downloadPath) {
+	if (!path.startsWith(downloadPath)) {
+		return name;
+	}
+	const auto digitsEnd = [&](int from) {
+		auto result = from;
+		while (result < name.size() && name[result].isDigit()) {
+			++result;
+		}
+		return result;
+	};
+	const auto first = digitsEnd(0);
+	if (first == 0 || first >= name.size() || name[first] != u'_') {
+		return name;
+	}
+	const auto second = digitsEnd(first + 1);
+	if (second == first + 1 || second >= name.size() || name[second] != u'_') {
+		return name;
+	}
+	return name.mid(second + 1);
 }
 
 QString ForwardBatchFirstName(
@@ -401,6 +589,18 @@ void FinishForwardBatchWorker(
 	const auto skipped = batch->skipped;
 	NotifyCounterChanged();
 	ShowForwardDoneToast(sent, total, skipped);
+	if (sent <= 0) {
+		// Nothing was transferred, so there is no progress left to show.
+		// Dropping the record at once keeps the bottom-left bar from sitting
+		// there for the usual five seconds after an all-duplicates batch.
+		if (const auto it = ForwardBatchMap().find(dst);
+			it != end(ForwardBatchMap())
+			&& it->second.session == session.get()) {
+			ForwardBatchMap().erase(it);
+		}
+		NotifyCounterChanged();
+		return;
+	}
 	// The record stays briefly so the bar and the counters show the final
 	// count, then it is dropped. Kept rows for the transfers list live in
 	// the finished-runs registry instead.
@@ -458,6 +658,7 @@ std::vector<ForwardBatchSnapshot> ForwardBatches(
 		.sent = batch.sent,
 		.skipped = batch.skipped,
 		.lastFileName = batch.lastFileName,
+		.startedAt = batch.startedAt,
 		.finished = batch.finished,
 	});
 	}
@@ -484,7 +685,7 @@ Fn<std::optional<QByteArray>()> FinishedFwRunsSerializer(
 				++count;
 			}
 		}
-		stream << qint32(4) << count;
+		stream << qint32(6) << count;
 		for (const auto &[key, run] : FinishedFwRunsMap()) {
 			if (std::get<0>(key) != session.get()) {
 				continue;
@@ -498,7 +699,10 @@ Fn<std::optional<QByteArray>()> FinishedFwRunsSerializer(
 				<< qint32(run.skipped)
 				<< qint64(run.finishedAt)
 				<< quint64(run.runId)
-				<< quint64(run.actionId);
+				<< quint64(run.actionId)
+				<< quint64(run.lastSource.peer.value)
+				<< qint64(run.lastSource.msg.bare)
+				<< quint8(run.cancelled ? 1 : 0);
 		}
 		return result;
 	};
@@ -527,7 +731,7 @@ void EnsureFinishedFwRunsSeeded(not_null<Main::Session*> session) {
 	auto count = qint32(0);
 	stream >> version >> count;
 	if (stream.status() != QDataStream::Ok
-		|| (version < 1 || version > 4)
+		|| (version < 1 || version > 6)
 		|| count < 0
 		|| count > blob.size() / 32) {
 		return;
@@ -543,12 +747,21 @@ void EnsureFinishedFwRunsSeeded(not_null<Main::Session*> session) {
 		auto finishedAt = qint64(0);
 		auto runId = quint64(0);
 		auto actionId = quint64(0);
+		auto lastPeer = quint64(0);
+		auto lastId = qint64(0);
 		stream >> dst >> src >> msgPeer >> msgId
 			>> total >> done >> skipped >> finishedAt;
 		if (version == 2) {
 			stream >> runId;
 		} else if (version >= 3) {
 			stream >> runId >> actionId;
+		}
+		if (version >= 5) {
+			stream >> lastPeer >> lastId;
+		}
+		auto cancelled = quint8(0);
+		if (version >= 6) {
+			stream >> cancelled;
 		}
 		if (stream.status() != QDataStream::Ok || !dst) {
 			break;
@@ -557,12 +770,14 @@ void EnsureFinishedFwRunsSeeded(not_null<Main::Session*> session) {
 		run.dst = PeerId(dst);
 		run.src = PeerId(src);
 		run.firstSource = FullMsgId(PeerId(msgPeer), MsgId(msgId));
+		run.lastSource = FullMsgId(PeerId(lastPeer), MsgId(lastId));
 		run.total = total;
 		run.done = done;
 		run.skipped = skipped;
 		run.finishedAt = finishedAt;
+		run.cancelled = (cancelled != 0);
 		run.runId = runId ? runId : base::RandomValue<uint64>();
-		run.actionId = (version == 4 && actionId) ? actionId : run.runId;
+		run.actionId = (version >= 4 && actionId) ? actionId : run.runId;
 		FinishedFwRunsMap().emplace(
 			std::make_tuple(session.get(), run.dst, run.runId),
 			std::move(run));
@@ -574,10 +789,12 @@ void RecordFinishedFwRun(
 		const PeerId &dst,
 		const PeerId &src,
 		FullMsgId firstSource,
+		FullMsgId lastSource,
 		int total,
 		int done,
 		int skipped,
-		uint64 actionId) {
+		uint64 actionId,
+		bool cancelled) {
 	auto run = FinishedFwRun();
 	run.runId = base::RandomValue<uint64>();
 	if (!run.runId) {
@@ -587,10 +804,12 @@ void RecordFinishedFwRun(
 	run.dst = dst;
 	run.src = src;
 	run.firstSource = firstSource;
+	run.lastSource = lastSource;
 	run.total = total;
 	run.done = done;
 	run.skipped = skipped;
 	run.finishedAt = base::unixtime::now();
+	run.cancelled = cancelled;
 	FinishedFwRunsMap().emplace(
 		std::make_tuple(session.get(), dst, run.runId),
 		std::move(run));
@@ -637,6 +856,10 @@ std::vector<FinishedFwRun> FinishedFwRuns(
 }
 
 constexpr auto kOrderConfirmGraceMs = crl::time(800);
+// Upper bound for waiting on server ids of a settled copy batch. The id
+// normally arrives within a second; this only exists so a lost confirmation
+// cannot keep the pipeline (and its report) alive forever.
+constexpr auto kSettleWaitMax = crl::time(60000);
 
 // A re-uploaded file only gets its id once the server processes the send,
 // which is a moment after the client finished uploading it. The order gate of
@@ -768,6 +991,16 @@ void WriteForwardedDonePostponed();
 [[nodiscard]] std::vector<FullMsgId> DeserializeForwardedDone(
 	const QByteArray &blob);
 
+[[nodiscard]] FullMsgId LastSourceId(const std::vector<FullMsgId> &ids) {
+	auto result = FullMsgId();
+	for (const auto &id : ids) {
+		if (!result || id.msg > result.msg) {
+			result = id;
+		}
+	}
+	return result;
+}
+
 void finishJob(not_null<Main::Session*> session, const PeerId &peerId) {
 	// The gate may only move once the re-uploaded files have their server ids.
 	if (const auto pipeline = LivePipeline(peerId)) {
@@ -811,7 +1044,7 @@ void finishJob(not_null<Main::Session*> session, const PeerId &peerId) {
 			return tracked.cancelled || tracked.dedupSkipped;
 		});
 	if (allDead) {
-		if (state.skipped > 0) {
+		if (!state.cancelled && state.skipped > 0) {
 			auto &db = Core::App().downloadManager().ensureDedupDb();
 			if (db.isOpen()) {
 				RecordFinishedFwRun(
@@ -821,6 +1054,7 @@ void finishJob(not_null<Main::Session*> session, const PeerId &peerId) {
 					state.sourceIds.empty()
 						? FullMsgId()
 						: state.sourceIds.front(),
+					LastSourceId(state.sourceIds),
 					state.total,
 					state.sent,
 					state.skipped,
@@ -845,17 +1079,21 @@ void finishJob(not_null<Main::Session*> session, const PeerId &peerId) {
 	auto &db = Core::App().downloadManager().ensureDedupDb();
 	if (db.isOpen()) {
 		const auto &done = finished.back();
-		RecordFinishedFwRun(
-			session,
-			peerId,
-			done.srcPeer,
-			done.sourceIds.empty()
-				? FullMsgId()
-				: done.sourceIds.front(),
-			done.total,
-			done.sent,
-			done.skipped,
-			CurrentForwardActionId(session, peerId));
+		if (!done.cancelled || !done.bulkOwned) {
+			RecordFinishedFwRun(
+				session,
+				peerId,
+				done.srcPeer,
+				done.sourceIds.empty()
+					? FullMsgId()
+					: done.sourceIds.front(),
+				LastSourceId(done.sourceIds),
+				done.total,
+				done.sent,
+				done.skipped,
+				CurrentForwardActionId(session, peerId),
+				done.cancelled);
+		}
 	}
 	WriteForwardedDonePostponed();
 	NotifyStateChanged(peerId);
@@ -874,6 +1112,12 @@ struct StartRequest {
 	Data::ForwardOptions forwardOptions;
 	Data::GroupingOptions groupOptions;
 	std::shared_ptr<SavedJob> resumeJob;
+	std::shared_ptr<Data::ForwardRunSeen> runSeen;
+	SettledCallback settled;
+	bool destinationOnlyDedup = false;
+	ItemSettledCallback itemSettled;
+	bool restoreProgress = false;
+	bool bulkOwned = false;
 };
 
 using StartQueueMap = std::unordered_map<PeerId, std::deque<StartRequest>>;
@@ -903,7 +1147,13 @@ void processStartQueue(const PeerId &peerId) {
 		request.action,
 		request.forwardOptions,
 		request.groupOptions,
-		std::move(request.resumeJob));
+		std::move(request.resumeJob),
+		std::move(request.runSeen),
+		std::move(request.settled),
+		request.destinationOnlyDedup,
+		std::move(request.itemSettled),
+		request.restoreProgress,
+		request.bulkOwned);
 }
 
 void fireUpdate(not_null<Main::Session*> session, const PeerId &peer) {
@@ -969,12 +1219,15 @@ void startForwardSession(
 	EraseResumableBatchesForPeer(peerId);
 
 	auto &state = states[peerId];
+	static auto generationCounter = uint64(0);
+	state.generation = ++generationCounter;
 	state.total = int(sourceIds.size());
 	state.sent = 0;
 	state.skipped = 0;
 	state.cancelled = false;
 	state.paused = false;
 	state.finished = false;
+	state.bulkOwned = false;
 	state.destPeer = peerId;
 	state.srcPeer = srcPeer;
 	state.sourceIds = sourceIds;
@@ -1025,8 +1278,8 @@ void markItemSkipped(
 	auto &state = it->second;
 	if (state.cancelled || state.finished) return;
 
-	// "sent / selected" reports duplicates next to the counter, so the
-	// denominator must not shrink while the batch runs.
+	// The bar reports the duplicates on their own line and removes them
+	// from the displayed total, so `total` stays the gross batch size here.
 	state.skipped++;
 	ReportForwardBatchItem(session, peerId, 0, 1);
 	AdvanceOrderGateFor(peerId);
@@ -1043,13 +1296,88 @@ void markItemSkipped(
 
 void cancelForward(
 		const PeerId &id,
-		not_null<Main::Session*> session) {
+		not_null<Main::Session*> session,
+		bool bulkOwned) {
+	if (const auto queued = StartQueue().find(id); queued != StartQueue().end()) {
+		StartQueue().erase(queued);
+		NotifyStateChanged(id);
+	}
 	DropForwardBatch(session, id);
 	auto &states = ActiveStates();
 	const auto it = states.find(id);
-	if (it == states.end()) return;
+	if (it == states.end()) {
+		auto &finished = FinishedStates();
+		auto handled = false;
+		for (auto i = finished.begin(); i != finished.end();) {
+			if (!i->resumable || i->destPeer != id) {
+				++i;
+				continue;
+			}
+			handled = true;
+			if (i->sent > 0 && !bulkOwned) {
+				RecordFinishedFwRun(
+					session,
+					id,
+					i->srcPeer,
+					i->sourceIds.empty()
+						? FullMsgId()
+						: i->sourceIds.front(),
+					LastSourceId(i->sourceIds),
+					i->total,
+					i->sent,
+					i->skipped,
+					0,
+					true);
+			}
+			i = finished.erase(i);
+		}
+		if (!handled) {
+			return;
+		}
+		CleanupPartialFilesForPeer(session, id);
+		auto &db = Core::App().downloadManager().ensureDedupDb();
+		if (db.isOpen()) {
+			db.clearFwTmpRun(session->uniqueId(), id);
+		}
+		NotifyStateChanged(id);
+		NotifyCounterChanged();
+		return;
+	}
 	auto &state = it->second;
 	if (state.cancelled || state.finished) return;
+
+	if (!LivePipeline(id) && !state.cancelCallback) {
+		// Restored from disk after a restart: no pipeline owns the files or
+		// the item states, so the whole batch is dropped instead of being
+		// kept as a finished history. The persisted rows are the only record
+		// of its temp files, so they are removed here while the rows still
+		// exist.
+		const auto ownedByBulk = state.bulkOwned || bulkOwned;
+		if (state.sent > 0 && !ownedByBulk) {
+			RecordFinishedFwRun(
+				session,
+				id,
+				state.srcPeer,
+				state.sourceIds.empty()
+					? FullMsgId()
+					: state.sourceIds.front(),
+				LastSourceId(state.sourceIds),
+				state.total,
+				state.sent,
+				state.skipped,
+				0,
+				true);
+		}
+		states.erase(it);
+		CleanupPartialFilesForPeer(session, id);
+		auto &db = Core::App().downloadManager().ensureDedupDb();
+		if (db.isOpen()) {
+			db.clearFwTmpRun(session->uniqueId(), id);
+		}
+		fireUpdate(session, id);
+		NotifyCounterChanged();
+		return;
+	}
 
 	if (state.sent == 0) {
 		state.cancelled = true;
@@ -1061,31 +1389,52 @@ void cancelForward(
 	}
 	// Partial cancel: items that were already forwarded stay visible as a
 	// finished batch; only the remaining items are cancelled and dropped.
+	// Cancelling the last remaining item settles its report synchronously,
+	// which can finish and erase this state, so no reference to it may
+	// outlive the loop.
 	const auto pipeline = Pipeline::Active().find(id);
 	const auto live = (pipeline != Pipeline::Active().end())
 		? pipeline->second.lock()
 		: nullptr;
+	auto indexes = std::vector<int>();
+	indexes.reserve(state.items.size());
+	for (auto i = 0; i != int(state.items.size()); ++i) {
+		if (!state.items[i].sent && !state.items[i].cancelled) {
+			indexes.push_back(i);
+		}
+	}
+	state.cancelled = true;
 	if (live) {
-		for (auto i = 0; i < int(state.items.size()); i++) {
-			if (!state.items[i].sent && !state.items[i].cancelled) {
-				live->cancelItem(i);
-			}
+		for (const auto i : indexes) {
+			live->cancelItem(i);
 		}
 	} else if (state.cancelCallback) {
 		state.cancelCallback();
 	}
+	auto &statesNow = ActiveStates();
+	const auto now = statesNow.find(id);
+	if (now == statesNow.end()) {
+		return;
+	}
+	auto &stateNow = now->second;
 	auto sent = 0;
-	for (auto &item : state.items) {
-		if (item.sent || item.state == ItemState::Done) {
+	for (auto &item : stateNow.items) {
+		if (item.cancelled) {
+			continue;
+		} else if (item.sent || item.state == ItemState::Done) {
 			sent++;
 		} else {
 			item.cancelled = true;
 		}
 	}
-	state.skipped = 0;
-	state.sent = sent;
-	state.total = sent;
-	state.cancelled = false;
+	stateNow.sent = sent;
+	{
+		auto &db = Core::App().downloadManager().ensureDedupDb();
+		if (db.isOpen()) {
+			db.clearEfResumeJob(u"ef_%1_%2"_q.arg(
+				stateNow.srcPeer.value).arg(id.value));
+		}
+	}
 	finishJob(session, id);
 }
 
@@ -1247,12 +1596,21 @@ void updateItemState(
 
 	auto &state = it->second;
 	if (itemIndex >= 0 && itemIndex < int(state.items.size())) {
-		state.items[itemIndex].state = newState;
-		state.items[itemIndex].info = info;
-		state.items[itemIndex].progress = progress;
+		auto &tracked = state.items[itemIndex];
+		tracked.state = newState;
+		// A settled item reports no name of its own: keep the display name
+		// the download or upload phase already published, so the bar and the
+		// batch record never fall back to the temporary file path.
+		if (!info.name.isEmpty()) {
+			tracked.info.name = info.name;
+		}
+		if (info.size > 0) {
+			tracked.info.size = info.size;
+		}
+		tracked.progress = progress;
 		if (newState == ItemState::Done || newState == ItemState::Failed) {
-			state.items[itemIndex].downloadProgress = 1.0;
-			state.items[itemIndex].uploadProgress = 1.0;
+			tracked.downloadProgress = 1.0;
+			tracked.uploadProgress = 1.0;
 		}
 	}
 	fireUpdate(session, peerId);
@@ -1292,6 +1650,12 @@ bool isPaused(const PeerId &id) {
 	const auto it = states.find(id);
 	if (it == states.end()) return false;
 	return it->second.paused && !it->second.cancelled && !it->second.finished;
+}
+
+bool isCancelled(const PeerId &id) {
+	const auto &states = ActiveStates();
+	const auto it = states.find(id);
+	return (it != states.end()) && it->second.cancelled;
 }
 
 ForwardProgress currentProgress(const PeerId &id) {
@@ -1349,19 +1713,21 @@ void CleanupPartialFilesForPeer(
 	const auto records = db.loadEfResumeItemsForPeer(
 		session->uniqueId(),
 		peerId);
+	auto paths = std::vector<QString>();
 	for (const auto &record : records) {
 		if (!record.localPath.isEmpty()
-				&& record.localPath.startsWith(tempDir)
-				&& QFileInfo(record.localPath).exists()) {
-			QFile(record.localPath).remove();
+				&& record.localPath.startsWith(tempDir)) {
+			paths.push_back(record.localPath);
 		}
 	}
 	db.clearEfResumeForPeer(peerId);
+	TempFilesToRemove().add(std::move(paths));
 }
 
 void CleanupLeftoverForwardFiles(
 		not_null<Main::Session*> session,
-		const QString &tempDir) {
+		const QString &tempDir,
+		bool removeEmptyDir = false) {
 	auto &db = Core::App().downloadManager().ensureDedupDb();
 	auto keep = base::flat_set<QString>();
 	if (db.isOpen()) {
@@ -1376,15 +1742,16 @@ void CleanupLeftoverForwardFiles(
 		return;
 	}
 	const auto entries = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
+	auto paths = std::vector<QString>();
 	for (const auto &entry : entries) {
-		const auto path = dir.absoluteFilePath(entry);
-		if (keep.contains(path)) {
-			continue;
+		auto path = dir.absoluteFilePath(entry);
+		if (!keep.contains(path)) {
+			paths.push_back(std::move(path));
 		}
-		QFile::remove(path);
 	}
-	const auto cleaned = QDir::cleanPath(tempDir);
-	QDir().rmdir(cleaned);
+	TempFilesToRemove().add(
+		std::move(paths),
+		removeEmptyDir ? dir.absolutePath() : QString());
 }
 
 std::vector<SavedJob> GetUnfinishedJobs(
@@ -1550,13 +1917,17 @@ void EnsureForwardSourceMessages(
 		const std::vector<FullMsgId> &sourceIds,
 		Fn<void(bool succeeded)> done) {
 	struct Pending {
-		uint64 peerAccessHash = 0;
-		QVector<MTPInputMessage> ids;
+		std::vector<FullMsgId> ids;
 		bool takeout = false;
 	};
-	static base::flat_map<PeerId, std::vector<Fn<void(bool)>>> inFlight;
+	// Keyed by session as well: two accounts may resolve the same peer id,
+	// and one account's request must never block the other's.
+	using InFlightKey = std::pair<Main::Session*, PeerId>;
+	static base::flat_map<InFlightKey, std::vector<Fn<void(bool)>>> inFlight;
 	auto &owner = session->data();
 	auto prepared = base::flat_map<PeerId, Pending>();
+	auto unresolved = base::flat_map<PeerId, std::vector<FullMsgId>>();
+	auto unresolvedTakeout = base::flat_set<PeerId>();
 	for (const auto &sourceId : sourceIds) {
 		const auto existing = owner.message(sourceId);
 		const auto refetch = existing
@@ -1571,23 +1942,28 @@ void EnsureForwardSourceMessages(
 		const auto groupPeer = peerIsChannel(sourceId.peer)
 			? sourceId.peer
 			: session->userPeerId();
-		auto &perPeer = prepared[groupPeer];
 		if (peerIsChannel(sourceId.peer)) {
+			// An unloaded channel has no access hash yet, and a request for a
+			// bare channel id without one is rejected as CHANNEL_INVALID.
+			// Resolve the channel first instead of sending an invalid
+			// request or silently dropping the ids.
 			const auto channel = owner.channelLoaded(
 				peerToChannel(sourceId.peer));
-			if (!channel) {
+			if (!channel || !channel->accessHash()) {
+				unresolved[groupPeer].push_back(sourceId);
+				if (refetch) {
+					unresolvedTakeout.emplace(groupPeer);
+				}
 				continue;
 			}
-			if (!perPeer.peerAccessHash) {
-				perPeer.peerAccessHash = channel->accessHash();
-			}
 		}
+		auto &perPeer = prepared[groupPeer];
 		if (refetch) {
 			perPeer.takeout = true;
 		}
-		perPeer.ids.push_back(MTP_inputMessageID(MTP_int(sourceId.msg.bare)));
+		perPeer.ids.push_back(sourceId);
 	}
-	if (prepared.empty()) {
+	if (prepared.empty() && unresolved.empty()) {
 		if (done) {
 			done(true);
 		}
@@ -1596,91 +1972,181 @@ void EnsureForwardSourceMessages(
 	const auto weakSession = base::make_weak(session);
 	const auto remaining = std::make_shared<int>(0);
 	const auto anyFailed = std::make_shared<bool>(false);
+	const auto completion = std::make_shared<Fn<void(bool)>>(std::move(done));
+	const auto complete = [=](bool ok) {
+		if (!ok) {
+			*anyFailed = true;
+		}
+		if (--*remaining > 0) {
+			return;
+		}
+		if (const auto callback = std::move(*completion)) {
+			if (weakSession) {
+				callback(!*anyFailed);
+			}
+		}
+	};
 	const auto finishOne = [=](const PeerId &groupPeer, bool ok) {
-		const auto waiting = inFlight.find(groupPeer);
+		const auto waiting = inFlight.find(InFlightKey{ session.get(), groupPeer });
 		if (waiting == end(inFlight)) {
 			return;
 		}
 		const auto callbacks = base::take(waiting->second);
 		inFlight.erase(waiting);
-		if (!ok) {
-			*anyFailed = true;
+		for (const auto &callback : callbacks) {
+			if (callback) {
+				callback(ok);
+			}
 		}
-		const auto after = --*remaining;
-		if (after <= 0 && weakSession) {
-			for (const auto &callback : callbacks) {
-				if (callback) {
-					callback(!*anyFailed);
+	};
+	const auto sendPrepared = [=](
+			base::flat_map<PeerId, Pending> requests) {
+		auto count = 0;
+		for (const auto &[groupPeer, perPeer] : requests) {
+			if (!perPeer.ids.empty()) {
+				++count;
+			}
+		}
+		*remaining += count;
+		for (auto &[groupPeer, perPeer] : requests) {
+			if (perPeer.ids.empty()) {
+				continue;
+			}
+			auto &waiting = inFlight[InFlightKey{ session.get(), groupPeer }];
+			if (!waiting.empty()) {
+				// The same peer is already being fetched. Fetch the ids of
+				// this call once that request finishes, so they are never
+				// silently left unresolved.
+				const auto ids = perPeer.ids;
+				waiting.push_back([=](bool) {
+					EnsureForwardSourceMessages(
+						session,
+						ids,
+						[=](bool ok) { complete(ok); });
+				});
+				continue;
+			}
+			waiting.push_back(complete);
+			auto input = QVector<MTPInputMessage>();
+			input.reserve(int(perPeer.ids.size()));
+			for (const auto &id : perPeer.ids) {
+				input.push_back(MTP_inputMessageID(MTP_int(id.msg.bare)));
+			}
+			if (const auto channelId = peerToChannel(groupPeer)) {
+				const auto channel = session->data().channelLoaded(channelId);
+				if (!channel || !channel->accessHash()) {
+					finishOne(groupPeer, false);
+					continue;
+				}
+				auto inner = MTPchannels_GetMessages(
+					channel->inputChannel(),
+					MTP_vector<MTPInputMessage>(input));
+				const auto onDone = [=](const MTPmessages_Messages &result) {
+					if (weakSession) {
+						session->data().processExistingMessages(
+							session->data().channelLoaded(channelId),
+							result);
+						ApplyRevealedMessagesTo(session, groupPeer, result);
+					}
+					finishOne(groupPeer, true);
+				};
+				const auto onFail = [=](const MTP::Error &) {
+					finishOne(groupPeer, false);
+				};
+				if (const auto id = perPeer.takeout
+					? session->api().takeoutId()
+					: std::optional<uint64>()) {
+					session->api().request(
+						MTPInvokeWithTakeout<MTPchannels_GetMessages>(
+							MTP_long(*id),
+							std::move(inner))
+					).done(onDone).fail(onFail).send();
+				} else {
+					session->api().request(std::move(inner)
+					).done(onDone).fail(onFail).send();
+				}
+			} else {
+				auto inner = MTPmessages_GetMessages(
+					MTP_vector<MTPInputMessage>(input));
+				const auto onDone = [=](const MTPmessages_Messages &result) {
+					if (weakSession) {
+						session->data().processExistingMessages(
+							nullptr,
+							result);
+						ApplyRevealedMessagesTo(session, groupPeer, result);
+					}
+					finishOne(groupPeer, true);
+				};
+				const auto onFail = [=](const MTP::Error &) {
+					finishOne(groupPeer, false);
+				};
+				if (const auto id = perPeer.takeout
+					? session->api().takeoutId()
+					: std::optional<uint64>()) {
+					session->api().request(
+						MTPInvokeWithTakeout<MTPmessages_GetMessages>(
+							MTP_long(*id),
+							std::move(inner))
+					).done(onDone).fail(onFail).send();
+				} else {
+					session->api().request(std::move(inner)
+					).done(onDone).fail(onFail).send();
 				}
 			}
 		}
 	};
-	for (auto &[groupPeer, perPeer] : prepared) {
-		const auto busy = inFlight.contains(groupPeer);
-		if (done) {
-			inFlight[groupPeer].push_back(done);
-		}
-		if (busy) {
-			continue;
-		}
-		++*remaining;
-		if (const auto channelId = peerToChannel(groupPeer)) {
-			auto inner = MTPchannels_GetMessages(
-				MTP_inputChannel(
-					MTP_long(channelId.bare),
-					MTP_long(perPeer.peerAccessHash)),
-				MTP_vector<MTPInputMessage>(perPeer.ids));
-			const auto onDone = [=](const MTPmessages_Messages &result) {
-				if (weakSession) {
-					session->data().processExistingMessages(
-						session->data().channelLoaded(channelId),
-						result);
-					ApplyRevealedMessagesTo(session, groupPeer, result);
-				}
-				finishOne(groupPeer, true);
-			};
-			const auto onFail = [=](const MTP::Error &) {
-				finishOne(groupPeer, false);
-			};
-			if (const auto id = perPeer.takeout
-				? session->api().takeoutId()
-				: std::optional<uint64>()) {
-				session->api().request(
-					MTPInvokeWithTakeout<MTPchannels_GetMessages>(
-						MTP_long(*id),
-						std::move(inner))
-				).done(onDone).fail(onFail).send();
-			} else {
-				session->api().request(std::move(inner)
-				).done(onDone).fail(onFail).send();
-			}
-		} else {
-			auto inner = MTPmessages_GetMessages(
-				MTP_vector<MTPInputMessage>(perPeer.ids));
-			const auto onDone = [=](const MTPmessages_Messages &result) {
-				if (weakSession) {
-					session->data().processExistingMessages(nullptr, result);
-					ApplyRevealedMessagesTo(session, groupPeer, result);
-				}
-				finishOne(groupPeer, true);
-			};
-			const auto onFail = [=](const MTP::Error &) {
-				finishOne(groupPeer, false);
-			};
-			if (const auto id = perPeer.takeout
-				? session->api().takeoutId()
-				: std::optional<uint64>()) {
-				session->api().request(
-					MTPInvokeWithTakeout<MTPmessages_GetMessages>(
-						MTP_long(*id),
-						std::move(inner))
-				).done(onDone).fail(onFail).send();
-			} else {
-				session->api().request(std::move(inner)
-				).done(onDone).fail(onFail).send();
-			}
-		}
+	if (unresolved.empty()) {
+		sendPrepared(std::move(prepared));
+		return;
 	}
+	auto channels = QVector<MTPInputChannel>();
+	for (const auto &[groupPeer, ids] : unresolved) {
+		channels.push_back(MTP_inputChannel(
+			MTP_long(peerToChannel(groupPeer).bare),
+			MTP_long(0)));
+	}
+	session->api().request(MTPchannels_GetChannels(
+		MTP_vector<MTPInputChannel>(channels)
+	)).done([=](const MTPmessages_Chats &result) mutable {
+		if (!weakSession) {
+			return;
+		}
+		result.match([&](const auto &data) {
+			session->data().processChats(data.vchats());
+		});
+		auto requests = std::move(prepared);
+		auto failed = 0;
+		for (const auto &[groupPeer, ids] : unresolved) {
+			const auto channel = session->data().channelLoaded(
+				peerToChannel(groupPeer));
+			if (!channel || !channel->accessHash()) {
+				++failed;
+				continue;
+			}
+			auto &perPeer = requests[groupPeer];
+			perPeer.takeout = perPeer.takeout
+				|| unresolvedTakeout.contains(groupPeer);
+			perPeer.ids.insert(
+				end(perPeer.ids),
+				begin(ids),
+				end(ids));
+		}
+		*remaining += failed;
+		sendPrepared(std::move(requests));
+		for (auto i = 0; i != failed; ++i) {
+			complete(false);
+		}
+	}).fail([=](const MTP::Error &) mutable {
+		if (!weakSession) {
+			return;
+		}
+		const auto failed = int(unresolved.size());
+		*remaining += failed;
+		sendPrepared(std::move(prepared));
+		for (auto i = 0; i != failed; ++i) {
+			complete(false);
+		}
+	}).send();
 }
 
 bool isEnhancedUpload(const FullMsgId &uploadId) {
@@ -2138,14 +2604,7 @@ void cancelQueuedItem(
 }
 
 void RemoveEfTempFile(const QString &path) {
-	if (path.isEmpty() || !QFile::exists(path)) {
-		return;
-	}
-	QFile::remove(path);
-	const auto dir = QFileInfo(path).absolutePath();
-	if (path.contains(u"ForwardTemp"_q)) {
-		QDir(dir).rmdir(dir);
-	}
+	TempFilesToRemove().add(path);
 }
 
 void dropPersistedEfItem(
@@ -2250,6 +2709,7 @@ void cancelItemByMessage(
 }
 
 void CancelAll(not_null<Main::Session*> session) {
+	BulkForward::EnsureResumeSeeded(session);
 	const auto peers = [&] {
 		auto result = std::vector<PeerId>();
 		for (const auto &[peer, state] : ActiveStates()) {
@@ -2261,7 +2721,10 @@ void CancelAll(not_null<Main::Session*> session) {
 		return result;
 	}();
 	for (const auto &peer : peers) {
-		cancelForward(peer, session);
+		cancelForward(
+			peer,
+			session,
+			BulkForward::HasCounters(session, peer));
 	}
 	auto purgedPersisted = false;
 	auto &db = Core::App().downloadManager().ensureDedupDb();
@@ -2269,6 +2732,29 @@ void CancelAll(not_null<Main::Session*> session) {
 		for (const auto &job : GetUnfinishedJobs(session)) {
 			if (session->data().peerLoaded(job.dstId)
 				&& &session->data().peer(job.dstId)->session() == session) {
+				if (job.sent > 0
+					&& !BulkForward::HasCounters(session, job.dstId)) {
+					auto skipped = 0;
+					for (const auto &state : FinishedStates()) {
+						if (state.resumable && state.destPeer == job.dstId) {
+							skipped = state.skipped;
+							break;
+						}
+					}
+					RecordFinishedFwRun(
+						session,
+						job.dstId,
+						job.srcId,
+						job.sourceMsgs.empty()
+							? FullMsgId()
+							: job.sourceMsgs.front(),
+						LastSourceId(job.sourceMsgs),
+						std::max(job.sent, job.total - skipped),
+						job.sent,
+						skipped,
+						CurrentForwardActionId(session, job.dstId),
+						true);
+				}
 				CleanupPartialFilesForPeer(session, job.dstId);
 				purgedPersisted = true;
 				auto &finished = FinishedStates();
@@ -2283,7 +2769,10 @@ void CancelAll(not_null<Main::Session*> session) {
 			}
 		}
 	}
-	CleanupLeftoverForwardFiles(session, File::DefaultDownloadPath(session) + "ForwardTemp/");
+	CleanupLeftoverForwardFiles(
+		session,
+		File::DefaultDownloadPath(session) + "ForwardTemp/",
+		true);
 	// Queued batches are not running yet, but the user asked to cancel all
 	// forwards: drop them too so they don't silently start afterwards.
 	auto &queue = StartQueue();
@@ -2361,6 +2850,28 @@ void ClearFinishedItems(
 	NotifyCounterChanged();
 }
 
+void ClearForwardRun(
+		not_null<Main::Session*> session,
+		const PeerId &dst) {
+	for (const auto &job : AllJobs(session)) {
+		if (job.peer == dst && job.finished && !job.resumable) {
+			for (const auto &srcId : job.progress.sourceIds) {
+				ClearFinishedItems(session, srcId);
+			}
+		}
+	}
+	for (const auto &batch : ForwardBatches(session)) {
+		if (batch.dst == dst && batch.finished) {
+			DropForwardBatch(session, dst);
+		}
+	}
+	for (const auto &record : FinishedFwRuns(session)) {
+		if (record.dst == dst) {
+			DropFinishedFwRunGroup(session, record.actionId);
+		}
+	}
+}
+
 auto Pipeline::Active()
 -> std::unordered_map<PeerId, std::weak_ptr<Pipeline>> & {
 	static auto map = std::unordered_map<PeerId, std::weak_ptr<Pipeline>>();
@@ -2373,7 +2884,13 @@ void Pipeline::Start(
 		const Api::SendAction &action,
 		Data::ForwardOptions forwardOptions,
 		Data::GroupingOptions groupOptions,
-		std::shared_ptr<SavedJob> resumeJob) {
+		std::shared_ptr<SavedJob> resumeJob,
+		std::shared_ptr<Data::ForwardRunSeen> runSeen,
+		SettledCallback settled,
+		bool destinationOnlyDedup,
+		ItemSettledCallback itemSettled,
+		bool restoreProgress,
+		bool bulkOwned) {
 	const auto dstId = action.history->peer->id;
 	if (ActiveStates().find(dstId) != ActiveStates().end()) {
 		// A forward already runs to this peer: merge the new files into the
@@ -2383,6 +2900,10 @@ void Pipeline::Start(
 		const auto live = Active().find(dstId);
 		if (!resumeJob && live != Active().end()) {
 			if (const auto pipeline = live->second.lock()) {
+				pipeline->_bulkOwned = pipeline->_bulkOwned || bulkOwned;
+				if (auto it = ActiveStates().find(dstId); it != end(ActiveStates())) {
+					it->second.bulkOwned = it->second.bulkOwned || bulkOwned;
+				}
 				BeginForwardBatch(
 					not_null{ &api->session() },
 					dstId,
@@ -2391,7 +2912,12 @@ void Pipeline::Start(
 					not_null{ &api->session() },
 					dstId,
 					ForwardBatchFirstName(items));
-				pipeline->appendItems(std::move(items));
+				pipeline->appendItems(
+					std::move(items),
+					std::move(runSeen),
+					std::move(settled),
+					destinationOnlyDedup,
+					std::move(itemSettled));
 				NotifyStateChanged(dstId);
 				NotifyCounterChanged();
 				return;
@@ -2413,7 +2939,13 @@ void Pipeline::Start(
 			action,
 			forwardOptions,
 			groupOptions,
-			std::move(resumeJob) });
+			std::move(resumeJob),
+			std::move(runSeen),
+			std::move(settled),
+			destinationOnlyDedup,
+			std::move(itemSettled),
+			restoreProgress,
+			bulkOwned });
 		// Let the Forwards tab and the counters pick up the queued batch.
 		NotifyStateChanged(dstId);
 		NotifyCounterChanged();
@@ -2427,8 +2959,14 @@ void Pipeline::Start(
 		action,
 		forwardOptions,
 		groupOptions,
-		resumeJob);
+		resumeJob,
+		std::move(runSeen),
+		std::move(settled),
+		destinationOnlyDedup,
+		std::move(itemSettled),
+		restoreProgress);
 	Active()[dstId] = pipeline;
+	pipeline->_bulkOwned = bulkOwned;
 	if (!resumeJob) {
 		EnsureForwardBatch(
 			not_null{ &api->session() },
@@ -2448,13 +2986,22 @@ Pipeline::Pipeline(
 		const Api::SendAction &action,
 		Data::ForwardOptions forwardOptions,
 		Data::GroupingOptions groupOptions,
-		std::shared_ptr<SavedJob> resumeJob)
+		std::shared_ptr<SavedJob> resumeJob,
+		std::shared_ptr<Data::ForwardRunSeen> runSeen,
+		SettledCallback settled,
+		bool destinationOnlyDedup,
+		ItemSettledCallback itemSettled,
+		bool restoreProgress)
 : _api(api)
 , _session(api->session())
 , _action(action)
 , _forwardOptions(forwardOptions)
 , _groupOptions(groupOptions)
-, _runId(base::RandomValue<uint64>()) {
+, _runId(base::RandomValue<uint64>())
+, _runSeen(std::move(runSeen))
+, _initialSettled(std::move(settled))
+, _itemSettled(std::move(itemSettled))
+, _destinationOnly(destinationOnlyDedup) {
 	_downloadPath = File::DefaultDownloadPath(&_session) + "ForwardTemp/";
 	_peerId = action.history->peer->id;
 	_srcPeer = !items.empty()
@@ -2486,6 +3033,7 @@ Pipeline::Pipeline(
 				} else {
 					_items[i].downloadDone = false;
 					_items[i].needsDownload = true;
+					_items[i].restoredNotDownloaded = true;
 					_items[i].uploadDone = false;
 				}
 			}
@@ -2496,9 +3044,25 @@ Pipeline::Pipeline(
 		for (auto i = 0; i < _n; i++) {
 			_items[i].sourceId = items[i]->fullId();
 		}
+		if (restoreProgress) {
+			restoreProgressFromDb();
+		}
 	}
 
 	EnsureEFUploadIdSync(&_session);
+
+	// The transfer tab destroys a local upload message when its upload
+	// fails, including a programmatic cancel from this pipeline. Never keep
+	// a raw pointer to a message that may be gone; every later use checks
+	// for a null and skips the repaint.
+	_session.data().itemRemoved() | rpl::on_next([this](
+			not_null<const HistoryItem*> item) {
+		for (auto &task : _items) {
+			if (task.sentItem == item.get()) {
+				task.sentItem = nullptr;
+			}
+		}
+	}, _itemRemovedLifetime);
 }
 
 Pipeline::~Pipeline() {
@@ -2544,6 +3108,31 @@ Pipeline::~Pipeline() {
 
 void Pipeline::run() {
 	const auto self = shared_from_this();
+	if (_initialSettled) {
+		auto indexes = std::vector<int>();
+		indexes.reserve(_n);
+		for (auto i = 0; i != _n; ++i) {
+			indexes.push_back(i);
+		}
+		addReport(
+			std::move(indexes),
+			std::move(_initialSettled),
+			std::move(_itemSettled));
+	}
+	for (auto i = 0; i != _n; ++i) {
+		const auto &item = _items[i];
+		if (item.cancelled) {
+			settleItem(i, SettleResult::Cancelled);
+		} else if (item.dedupSkipped) {
+			settleItem(i, classifySkip(item));
+		} else if (item.sentItem && IsServerMsgId(item.sentItem->id)) {
+			settleItem(i, SettleResult::Created, item.sentItem->fullId());
+		} else if (item.sent) {
+			// Restored from a checkpoint: the message was created in an
+			// earlier session and its id is no longer known.
+			settleItem(i, SettleResult::Cancelled);
+		}
+	}
 	if (!_takeoutRefetchTried) {
 		_takeoutRefetchTried = true;
 		auto restricted = std::vector<FullMsgId>();
@@ -2712,6 +3301,9 @@ void Pipeline::run() {
 				if (const auto media = srcItem->media()) {
 					if (const auto doc = media->document()) {
 						_items[i].fileSize = doc->size;
+					} else if (const auto photo = media->photo()) {
+						_items[i].fileSize = PhotoFingerprintSize(
+							not_null{ photo });
 					}
 				}
 			}
@@ -2850,11 +3442,13 @@ void Pipeline::run() {
 	}
 
 	if (GetEnhancedBool("prevent_forward_duplicates")) {
-		// Pre-check all documents in order: the duplicate files in this batch
+		// Pre-check all media in order: the duplicate files in this batch
 		// share content hashes but NOT docIds, so the same-docId premarking
 		// above can't catch them. Querying the remote fingerprints up-front
 		// (before the download queue starts) lets us mark them all before the
 		// Forwards tab renders, so only the unique files are shown up-front.
+		// Documents and photos follow the same rule: files above the partial
+		// hash size are sampled, smaller ones are hashed after the download.
 		for (auto i = 0; i < _n; i++) {
 			auto &item = _items[i];
 			if (item.dedupSkipped || item.textOnly || item.downloadDone) {
@@ -2866,13 +3460,17 @@ void Pipeline::run() {
 			const auto srcItem = _session.data().message(item.sourceId);
 			const auto media = srcItem ? srcItem->media() : nullptr;
 			const auto doc = media ? media->document() : nullptr;
-			if (!doc) {
+			const auto photo = media ? media->photo() : nullptr;
+			if (!doc && !photo) {
 				continue;
 			}
+			const auto size = doc
+				? qint64(doc->size)
+				: PhotoFingerprintSize(not_null{ photo });
 			if (!item.mediaId) {
-				item.mediaId = uint64(doc->id);
+				item.mediaId = doc ? uint64(doc->id) : uint64(photo->id);
 			}
-			if (qint64(doc->size) <= Data::kDedupMinPartialHashSize) {
+			if (size <= Data::kDedupMinPartialHashSize) {
 				continue;
 			}
 			_dedupPrecheckQueue.push_back(i);
@@ -2953,6 +3551,47 @@ bool Pipeline::loadProgress() {
 	return true;
 }
 
+void Pipeline::restoreProgressFromDb() {
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (!db.isOpen()) {
+		return;
+	}
+	const auto records = db.loadEfResumeItemsForPeer(
+		_session.uniqueId(),
+		_peerId);
+	for (const auto &record : records) {
+		const auto state = record.state.toInt();
+		if (state >= 3) {
+			// A resumed scan page repeats the message that was delivered
+			// last; its destination record marks it as a duplicate, so it
+			// has to start fresh instead of settling as a cancellation.
+			continue;
+		}
+		for (auto &item : _items) {
+			if (item.sourceId != record.sourceId) {
+				continue;
+			}
+			item.path = record.localPath;
+			item.downloadDone = (state >= 1);
+			// A finished upload may still have lost its send response, so it
+			// is uploaded again from the saved part count and then sent.
+			item.uploadDone = false;
+			item.fileId = record.fileId;
+			item.uploadedParts = record.uploadedParts;
+			item.fileHash = record.fileHash;
+			if (record.mediaId) {
+				item.mediaId = record.mediaId;
+			}
+			item.fileSize = record.fileSize;
+			if (!item.downloadDone) {
+				item.needsDownload = true;
+				item.restoredNotDownloaded = true;
+			}
+			break;
+		}
+	}
+}
+
 void Pipeline::setupCallbacks() {
 	const auto self = shared_from_this();
 	EnhancedForward::setCancelCallback(
@@ -2983,6 +3622,7 @@ void Pipeline::setupCallbacks() {
 				}
 			}
 			EnhancedForward::CleanupPartialFilesForPeer(&self->_session, self->_peerId);
+			self->settleAllCancelled();
 		});
 
 	EnhancedForward::setPauseCallback(
@@ -3031,11 +3671,32 @@ void Pipeline::setupCallbacks() {
 				if (!media || (!media->document() && !media->photo())) {
 					continue;
 				}
-				// Restart an in-flight download that was paused: the loader
-				// stays paused after FileLoader::pause() and a later save()
-				// call alone does not resume it.
+				const auto local = QFileInfo(self->_items[i].path);
+				if (self->_items[i].downloadDone
+					&& (!local.exists() || local.size() <= 0)) {
+					self->_items[i].downloadDone = false;
+				}
 				if (const auto doc = media->document()) {
-					if (doc->loading() && doc->downloadPaused()) {
+					const auto path = self->_items[i].path;
+					const auto attached = doc->loading()
+						&& doc->loadingFilePath() == path;
+					const auto complete = (doc->size > 0
+						&& local.exists()
+						&& local.size() >= doc->size);
+					if (complete && !self->_items[i].downloadDone) {
+						// Every byte is already on disk: release the loader,
+						// which can only wait on a file it sees as finished,
+						// and let the upload start.
+						self->_items[i].downloadDone = true;
+						self->_items[i].downloadedBytes = local.size();
+						self->_items[i].dedupNeedsHash = true;
+						if (attached) {
+							doc->pause();
+							doc->cancel();
+						}
+					} else if (!complete
+						&& attached
+						&& doc->downloadPaused()) {
 						doc->resume();
 					}
 				}
@@ -3057,15 +3718,152 @@ void Pipeline::setupCallbacks() {
 			self->_uploadCursor = 0;
 			self->_downloadInFlight = false;
 			self->_uploadInFlight = false;
+			for (auto i = 0; i < self->_n; i++) {
+				if (self->_items[i].dedupNeedsHash) {
+					self->dedupCheckItem(i);
+				}
+			}
 			self->pumpDownloads();
 			self->pumpUploads();
 			self->sendNext();
 		});
+
+	// A loader can stop reporting progress while its last requests stay
+	// unanswered, leaving a complete file on disk that never reaches
+	// downloadDone and therefore never uploads. Poll the in-flight items so
+	// that a full-size file is finalized even without another progress event.
+	const auto weak = std::weak_ptr<Pipeline>(self);
+	if (!_downloadWatchdog.isActive()) {
+		_downloadWatchdog.setCallback([weak] {
+			if (const auto strong = weak.lock()) {
+				strong->checkStalledDownloads();
+			}
+		});
+		_downloadWatchdog.callEach(2000);
+	}
+}
+
+void Pipeline::checkStalledDownloads() {
+	if (EnhancedForward::isPaused(_peerId)) {
+		return;
+	}
+	if (EnhancedForward::currentProgress(_peerId).state
+		== EnhancedForward::State::Cancelled) {
+		return;
+	}
+	constexpr auto kStallTimeout = 30000;
+	constexpr auto kMaxStallRestarts = 2;
+	const auto now = crl::now();
+	for (auto i = 0; i != _n; ++i) {
+		auto &item = _items[i];
+		if (!item.downloadStarted
+			|| item.downloadDone
+			|| item.cancelled
+			|| item.dedupSkipped) {
+			continue;
+		}
+		checkItem(i);
+		if (item.downloadDone || item.cancelled) {
+			continue;
+		}
+		const auto srcItem = _session.data().message(item.sourceId);
+		const auto media = srcItem ? srcItem->media() : nullptr;
+		const auto doc = media ? media->document() : nullptr;
+		if (!doc || !doc->loading() || doc->loadingFilePath() != item.path) {
+			continue;
+		}
+		if (doc->downloadPaused()) {
+			continue;
+		}
+		const auto offset = qint64(doc->loadOffset());
+		if (_watchdogIndex != i) {
+			_watchdogIndex = i;
+			_watchdogOffset = offset;
+			_watchdogStamp = now;
+			continue;
+		}
+		if (offset != _watchdogOffset) {
+			_watchdogOffset = offset;
+			_watchdogStamp = now;
+			continue;
+		}
+		if (now - _watchdogStamp < kStallTimeout) {
+			continue;
+		}
+		_watchdogIndex = -1;
+		_watchdogStamp = now;
+		if (item.stallRestarts >= kMaxStallRestarts) {
+			doc->cancel();
+			item.downloadedBytes = 0;
+			item.downloadDone = false;
+			_downloadInFlight = false;
+			downloadFailed(i, true);
+			continue;
+		}
+		++item.stallRestarts;
+		restartStalledDownload(i);
+	}
+}
+
+bool Pipeline::startDocumentDownload(
+		int idx,
+		not_null<HistoryItem*> srcItem,
+		not_null<DocumentData*> doc) {
+	auto &item = _items[idx];
+	if (item.path.isEmpty()) {
+		return false;
+	}
+	const auto folder = QFileInfo(item.path).absolutePath();
+	if (!folder.isEmpty()) {
+		QDir().mkpath(folder);
+	}
+	doc->save(
+		Data::FileOrigin(FullMsgId(srcItem->history()->peer->id, srcItem->id)),
+		item.path,
+		LoadFromCloudOrLocal,
+		false,
+		true);
+	const auto loading = doc->loading()
+		&& doc->loadingFilePath() == item.path;
+	const auto info = QFileInfo(item.path);
+	const auto complete = info.exists() && info.size() >= doc->size;
+	if (!loading && !complete) {
+		return false;
+	}
+	if (loading) {
+		Core::App().downloadManager().addLoading(
+			{ .item = srcItem, .document = doc },
+			true);
+	}
+	return true;
+}
+
+void Pipeline::restartStalledDownload(int i) {
+	auto &item = _items[i];
+	const auto srcItem = _session.data().message(item.sourceId);
+	const auto media = srcItem ? srcItem->media() : nullptr;
+	const auto doc = media ? media->document() : nullptr;
+	if (!doc || !doc->loading()) {
+		return;
+	}
+	// The loader holds requests that will never be answered and the file on
+	// disk may already be full size because a later part was written past a
+	// hole. Cancelling drops the file so the retry starts clean instead of
+	// resuming at the file size and never asking for the missing parts.
+	item.downloadedBytes = 0;
+	item.downloadDone = false;
+	doc->cancel();
+	if (!startDocumentDownload(i, srcItem, doc)) {
+		downloadFailed(i);
+		return;
+	}
+	checkItem(i);
 }
 
 void Pipeline::sendNext() {
 	const auto self = shared_from_this();
 	if (EnhancedForward::currentProgress(_peerId).state == EnhancedForward::State::Cancelled) {
+		_downloadWatchdog.cancel();
 		if (_uploadLifetime) _uploadLifetime->destroy();
 		if (_dlLifetime) _dlLifetime->destroy();
 		_session.data().sendHistoryChangeNotifications();
@@ -3112,13 +3910,20 @@ void Pipeline::sendNext() {
 				if (_action.options.effectId) {
 					sendFlags |= SendFlag::f_effect;
 				}
-				const auto done = [this, i](const MTPUpdates &, const MTP::Response &) {
+				const auto done = [this, i, randomId](
+						const MTPUpdates &updates,
+						const MTP::Response &) {
+					const auto newId = MessageIdFromUpdates(updates, randomId);
 					EnhancedForward::updateItemState(
 						&_session, _peerId, i,
 						ItemState::Done,
-						{ _items[i].path, 0 },
+						ItemInfo(),
 						1.0);
 					_items[i].confirmed = true;
+					settleItem(
+						i,
+						newId ? SettleResult::Created : SettleResult::Cancelled,
+						newId ? FullMsgId(_peerId, newId) : FullMsgId());
 					EnhancedForward::markItemSent(&_session, _peerId);
 				};
 				const auto fail = [this, i, randomId](const MTP::Error &error, const MTP::Response &) {
@@ -3126,9 +3931,10 @@ void Pipeline::sendNext() {
 					EnhancedForward::updateItemState(
 						&_session, _peerId, i,
 						ItemState::Done,
-						{ _items[i].path, 0 },
+						ItemInfo(),
 						1.0);
 					_items[i].confirmed = true;
+					settleItem(i, SettleResult::Cancelled);
 					EnhancedForward::markItemSent(&_session, _peerId);
 				};
 				_session.data().histories().sendPreparedMessage(
@@ -3155,6 +3961,7 @@ void Pipeline::sendNext() {
 					fail);
 			} else {
 				_items[i].confirmed = true;
+				settleItem(i, SettleResult::Cancelled);
 				EnhancedForward::markItemSent(&_session, _peerId);
 			}
 			_items[i].sent = true;
@@ -3186,8 +3993,6 @@ void Pipeline::sendNext() {
 	}
 
 	// Cleanup
-	_uploadTableUse.reset();
-	_chatTableUse.reset();
 	_session.data().sendHistoryChangeNotifications();
 	_session.changes().historyUpdated(
 		_action.history,
@@ -3196,17 +4001,18 @@ void Pipeline::sendNext() {
 			: Data::HistoryUpdate::Flag::MessageSent));
 	for (auto i = 0; i < _n; i++) {
 		if (!_items[i].path.isEmpty() && _items[i].path.startsWith(_downloadPath)) {
-			QFile::remove(_items[i].path);
+			RemoveEfTempFile(_items[i].path);
 		}
 	}
 	const auto session = &_session;
 	const auto path = _downloadPath;
 	crl::on_main([=] {
-		CleanupLeftoverForwardFiles(session, path);
+		CleanupLeftoverForwardFiles(session, path, true);
 	});
 	for (auto i = 0; i < _n; i++) {
 		refreshSourceItemState(i);
 	}
+	_downloadWatchdog.cancel();
 	if (_uploadLifetime) _uploadLifetime->destroy();
 	if (_dlLifetime) _dlLifetime->destroy();
 }
@@ -3511,7 +4317,13 @@ void Pipeline::startUploadForItem(int i) {
 				: 0.0;
 			EnhancedForward::updateUploadProgress(
 				&_session, _peerId, i,
-				{ prepared ? prepared->filename : QString(), fileSize },
+				{ prepared
+					? ItemDisplayName(
+						prepared->filename,
+						item.path,
+						_downloadPath)
+					: QString(),
+				  fileSize },
 				initialProgress);
 		}));
 	_api->_fileLoader->addTasks(std::move(tasks));
@@ -3545,7 +4357,12 @@ void Pipeline::onUploadDone(const Storage::UploadedMedia &data) {
 	}
 	EnhancedForward::updateUploadProgress(
 		&_session, _peerId, idx,
-		{ item.prepared ? item.prepared->filename : QString(),
+		{ item.prepared
+			? ItemDisplayName(
+				item.prepared->filename,
+				item.path,
+				_downloadPath)
+			: QString(),
 		  item.prepared ? qint64(item.prepared->filesize) : qint64(0) },
 		1.0);
 	saveProgress();
@@ -3568,10 +4385,10 @@ void Pipeline::onUploadDone(const Storage::UploadedMedia &data) {
 		Core::App().downloadManager().removeLoading(srcItem);
 	}
 
-	// The uploader deletes the ForwardTemp file synchronously after this
-	// callback, so defer the document state refresh to run once the local
-	// file no longer exists. Otherwise the document would still report a
-	// stale downloaded state and hide the download arrow.
+	// The uploader queues the ForwardTemp removal on a worker after this
+	// callback. Refresh on the next main-loop turn so the cached local
+	// location is cleared after the uploader has finished its completion
+	// path, without waiting for the asynchronous file removal.
 	const auto self = shared_from_this();
 	crl::on_main([self, idx] {
 		self->refreshSourceItemState(idx);
@@ -3657,7 +4474,9 @@ void Pipeline::onUploadFail(const FullMsgId &fullId) {
 		}
 	}
 	const auto history = _session.data().history(_peerId);
-	const auto fileName = item.prepared ? item.prepared->filename : u"file"_q;
+	const auto fileName = item.prepared
+		? ItemDisplayName(item.prepared->filename, item.path, _downloadPath)
+		: u"file"_q;
 	const auto text = tr::lng_tm_fw_upload_failed(
 		tr::now,
 		lt_file_name,
@@ -3675,10 +4494,10 @@ void Pipeline::onUploadFail(const FullMsgId &fullId) {
 	EnhancedForward::pauseForward(_peerId, &_session);
 }
 
-void Pipeline::downloadFailed(int idx) {
+void Pipeline::downloadFailed(int idx, bool force) {
 	auto &item = _items[idx];
 	constexpr auto kMaxDownloadRetries = 3;
-	if (item.retries < kMaxDownloadRetries) {
+	if (!force && item.retries < kMaxDownloadRetries) {
 		item.retries++;
 		item.downloadedBytes = 0;
 		item.downloadDone = false;
@@ -3706,7 +4525,10 @@ void Pipeline::downloadFailed(int idx) {
 		? doc->filename()
 		: (photo ? QString::number(photo->id) + u".jpg"_q : QString());
 	if (name.isEmpty()) {
-		name = QFileInfo(item.path).fileName();
+		name = ItemDisplayName(
+			QFileInfo(item.path).fileName(),
+			item.path,
+			_downloadPath);
 	}
 	if (name.isEmpty()) {
 		name = u"file"_q;
@@ -3737,7 +4559,9 @@ void Pipeline::onUploadProgress(const Storage::UploadFileProgress &data) {
 	auto &item = _items[idx];
 	if (item.uploadDone) return;
 	const auto prepared = item.prepared;
-	const auto filename = prepared ? prepared->filename : QString();
+	const auto filename = prepared
+		? ItemDisplayName(prepared->filename, item.path, _downloadPath)
+		: QString();
 	const auto filesize = prepared ? qint64(prepared->filesize) : qint64(0);
 	const auto size = (filesize > 0) ? filesize : data.size;
 	const auto p = (size > 0) ? std::clamp(float64(data.offset) / float64(size), 0., 1.) : 0.;
@@ -3796,21 +4620,39 @@ void Pipeline::checkItem(int i) {
 			// for writing: preparing it now runs the cover extraction, whose 7z
 			// opens the file read-only and fails with a sharing violation.
 			if (doc->loading() && doc->loadingFilePath() == item.path) {
+				if (doc->loadOffset() < doc->size) {
+					// The file has grown to full size while some parts are
+					// still missing; wait for them.
+					item.downloadedBytes = fi.size();
+					EnhancedForward::updateDownloadProgress(
+						&_session, _peerId, i,
+						{ doc->filename(), doc->size },
+						1.0);
+					return;
+				}
+				// Every byte is on disk, but a loader whose remaining
+				// requests were cancelled after the last part was written
+				// never finalizes and would wait here forever. Mark the item
+				// first, so the progress notification from pause() cannot
+				// re-enter this function, then close the idle loader without
+				// deleting the file.
+				item.downloadDone = true;
 				item.downloadedBytes = fi.size();
-				EnhancedForward::updateDownloadProgress(
-					&_session, _peerId, i,
-					{ doc->filename(), doc->size },
-					1.0);
-				return;
+				item.retries = 0;
+				_downloadInFlight = false;
+				doc->pause();
+				doc->cancel();
 			}
 		}
 		item.downloadDone = true;
 		item.downloadedBytes = fi.size();
 		item.retries = 0;
+		item.restoredNotDownloaded = false;
 		_downloadInFlight = false;
 		EnhancedForward::updateDownloadProgress(
 			&_session, _peerId, i,
-			{ fi.fileName(), fi.size() },
+			{ ItemDisplayName(fi.fileName(), item.path, _downloadPath),
+				fi.size() },
 			1.0);
 		dedupCheckItem(i);
 		pumpUploads();
@@ -3897,18 +4739,55 @@ void Pipeline::pumpDownloads() {
 	const auto doc = media ? media->document() : nullptr;
 	const auto photo = media ? media->photo() : nullptr;
 
+	if (doc && doc->size > 0) {
+		const auto local = QFileInfo(item.path);
+		const auto fullSize = local.exists() && local.size() >= doc->size;
+		if (fullSize && item.restoredNotDownloaded) {
+			// The previous session never recorded this file as downloaded,
+			// so its full size proves nothing: the old loader could have
+			// written later parts past missing ones, and a fresh loader
+			// cannot see the holes. Keep only files recorded as complete.
+			if (!QFile::remove(item.path)) {
+				item.downloadedBytes = 0;
+				_downloadInFlight = false;
+				downloadFailed(i, true);
+				return;
+			}
+			item.downloadedBytes = 0;
+		} else if (fullSize) {
+			item.downloadDone = true;
+			item.downloadedBytes = local.size();
+			_downloadInFlight = false;
+			if (doc->loading() && doc->loadingFilePath() == item.path) {
+				// A loader that finds the file already complete never
+				// requests another part and so never finishes: close it and
+				// keep the file, so the upload can start right away.
+				doc->pause();
+				doc->cancel();
+			}
+			EnhancedForward::updateDownloadProgress(
+				&_session, _peerId, i,
+				{ ItemDisplayName(
+					local.fileName(),
+					item.path,
+					_downloadPath),
+				  local.size() },
+				1.0);
+			dedupCheckItem(i);
+			pumpUploads();
+			pumpDownloads();
+			return;
+		}
+	}
+
 	if (!item.dedupPrechecked && (doc || photo)) {
 		const auto mediaId = doc ? uint64(doc->id) : uint64(photo->id);
 		item.mediaId = mediaId;
-		const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
+		const auto dedupSetting = GetEnhancedBool(
+			"prevent_forward_duplicates");
+		const auto dedupOn = !_destinationOnly && dedupSetting;
 		const auto sessionId = _session.uniqueId();
 		auto &dedupDb = Core::App().downloadManager().ensureDedupDb();
-		if (dedupDb.isOpen()) {
-			ensureChatTableUse(dedupOn);
-		}
-		if (dedupOn) {
-			ensureUploadTableUse();
-		}
 		const auto knownById = dedupDb.isOpen()
 			&& (dedupDb.chatTableContainsDocId(
 					_peerId,
@@ -3920,22 +4799,22 @@ void Pipeline::pumpDownloads() {
 					_peerId,
 					mediaId,
 					item.isPhoto)
+				|| (dedupSetting && seenInBatch(mediaId, item.isPhoto))
 				|| (dedupOn
-					&& (dedupDb.containsDocId(
-							Data::DedupDb::Table::Uploads,
-							mediaId,
-							item.isPhoto)
-						|| dedupDb.containsDocIdInDb(
-							Data::DedupDb::Table::Uploads,
-							mediaId,
-							item.isPhoto))));
+					&& !seenInRun(mediaId, item.isPhoto)
+					&& dedupDb.containsDocId(
+						Data::DedupDb::Table::Uploads,
+						mediaId,
+						item.isPhoto)));
 		if (knownById) {
 			skipAsDuplicate(i);
 			return;
 		}
-		const auto size = doc ? qint64(doc->size) : qint64(0);
-		const auto remotePrecheck = doc
-			&& size > Data::kDedupMinPartialHashSize
+		markSeen(mediaId, item.isPhoto);
+		const auto size = doc
+			? qint64(doc->size)
+			: PhotoFingerprintSize(not_null{ photo });
+		const auto remotePrecheck = (size > Data::kDedupMinPartialHashSize)
 			&& dedupDb.isOpen();
 		if (dedupOn && dedupDb.isOpen()) {
 			// In-flight upload registration; the hash fills in once the
@@ -3949,74 +4828,107 @@ void Pipeline::pumpDownloads() {
 		if (remotePrecheck && !item.dedupPrechecked) {
 			const auto origin = Data::FileOrigin(
 				FullMsgId(srcItem->history()->peer->id, srcItem->id));
-			Data::RemoteFileFingerprint(&_session, doc, [=](QByteArray hash) {
-				auto &it = _items[i];
+			const auto isPhoto = item.isPhoto;
+			// The chunk request can outlive this pipeline: the run may finish
+			// or be cancelled while its fingerprint is still in flight. Never
+			// touch the item list through a raw pointer captured here.
+			const auto weak = std::weak_ptr<Pipeline>(self);
+			const auto startDownload = [=] {
+				const auto strong = weak.lock();
+				if (!strong) {
+					return;
+				}
+				auto &it = strong->_items[i];
+				if (doc) {
+					if (!strong->startDocumentDownload(i, srcItem, doc)) {
+						strong->downloadFailed(i);
+						return;
+					}
+				} else {
+					it.photoView = photo->createMediaView();
+					photo->load(Data::PhotoSize::Large, origin);
+				}
+				strong->checkItem(i);
+				if (it.downloadDone) {
+					strong->pumpDownloads();
+				}
+			};
+			auto done = [=](QByteArray hash) {
+				const auto strong = weak.lock();
+				if (!strong) {
+					return;
+				}
+				auto &it = strong->_items[i];
 				if (hash.isEmpty()) {
 					it.dedupNeedsHash = true;
-					doc->save(origin, it.path, LoadFromCloudOrLocal, false, true);
-					Core::App().downloadManager().addLoading(
-						{ .item = srcItem, .document = doc },
-						true);
-					checkItem(i);
-					if (it.downloadDone) {
-						pumpDownloads();
-					}
+					startDownload();
 					return;
 				}
 				it.fileHash = hash;
 				it.fileSize = size;
 				auto &db = Core::App().downloadManager().ensureDedupDb();
-				// This doc passed the id check above, so any content-hash match
-				// means the same content was forwarded before: skip it and
-				// attach this id to the existing hash for future id-only dedup.
-				if (db.chatTableContainsHash(_peerId, hash, dedupOn)) {
-					skipAsDuplicate(i);
+				// This media passed the id check above, so any content-hash
+				// match means the same content was forwarded before: skip it
+				// and attach this id to the hash for future id-only dedup.
+				if (db.chatTableContainsHash(strong->_peerId, hash, dedupOn)) {
+					strong->skipAsDuplicate(i);
 					return;
 				}
 				if (db.isOpen()
-					&& db.containsFwTmpHash(sessionId, _peerId, hash)) {
-					skipAsDuplicate(i);
+					&& db.containsFwTmpHash(
+						sessionId,
+						strong->_peerId,
+						hash)) {
+					strong->skipAsDuplicate(i);
 					return;
 				}
 				if (dedupOn) {
-					const auto duplicateId = db.seekDocumentId(
-						Data::DedupDb::Table::Uploads,
-						hash,
-						0);
-					if (duplicateId) {
-						skipAsDuplicate(i);
+					const auto duplicate = strong->seenInBatch(hash)
+						|| (!strong->seenInRun(hash)
+							&& db.seekDocumentId(
+								Data::DedupDb::Table::Uploads,
+								hash,
+								0) != 0);
+					if (duplicate) {
+						strong->skipAsDuplicate(i);
 						return;
 					}
+					strong->markSeen(hash);
 					db.addPending(
 						Data::DedupDb::Table::Uploads,
 						mediaId,
 						hash,
-						item.isPhoto);
+						isPhoto);
 				}
-				doc->save(origin, it.path, LoadFromCloudOrLocal, false, true);
-				Core::App().downloadManager().addLoading(
-					{ .item = srcItem, .document = doc },
-					true);
-				checkItem(i);
-				if (it.downloadDone) {
-					pumpDownloads();
-				}
-			});
+				// The remote fingerprint is the same value the local file
+				// would produce, so there is nothing left to hash after the
+				// download: skip the post-download pass like the up-front
+				// precheck queue does.
+				it.dedupPrechecked = true;
+				it.dedupNeedsHash = false;
+				startDownload();
+			};
+			if (doc) {
+				Data::RemoteFileFingerprint(
+					&_session,
+					doc,
+					std::move(done));
+			} else {
+				Data::RemotePhotoFingerprint(
+					&_session,
+					not_null{ photo },
+					std::move(done));
+			}
 			return;
 		}
 		item.dedupNeedsHash = true;
 	}
 
 	if (doc) {
-		doc->save(
-			Data::FileOrigin(FullMsgId(srcItem->history()->peer->id, srcItem->id)),
-			item.path,
-			LoadFromCloudOrLocal,
-			false,
-			true);
-		Core::App().downloadManager().addLoading(
-			{ .item = srcItem, .document = doc },
-			true);
+		if (!startDocumentDownload(i, srcItem, doc)) {
+			downloadFailed(i);
+			return;
+		}
 		saveProgress();
 	} else if (photo) {
 		item.photoView = photo->createMediaView();
@@ -4038,6 +4950,260 @@ void Pipeline::pumpDownloads() {
 	}
 }
 
+bool Pipeline::seenInBatch(uint64 mediaId, bool isPhoto) const {
+	return mediaId && _seenMedia.contains({ mediaId, isPhoto });
+}
+
+bool Pipeline::seenInBatch(const QByteArray &hash) const {
+	return !hash.isEmpty() && _seenHashes.contains(hash);
+}
+
+bool Pipeline::seenInRun(uint64 mediaId, bool isPhoto) const {
+	return _runSeen
+		&& mediaId
+		&& _runSeen->media.contains({ mediaId, isPhoto });
+}
+
+bool Pipeline::seenInRun(const QByteArray &hash) const {
+	return _runSeen && !hash.isEmpty() && _runSeen->hashes.contains(hash);
+}
+
+void Pipeline::markSeen(uint64 mediaId, bool isPhoto) {
+	if (!mediaId) {
+		return;
+	}
+	const auto key = std::pair<uint64, bool>(mediaId, isPhoto);
+	_seenMedia.insert(key);
+	if (_runSeen) {
+		_runSeen->media.insert(key);
+	}
+}
+
+void Pipeline::markSeen(const QByteArray &hash) {
+	if (hash.isEmpty()) {
+		return;
+	}
+	_seenHashes.insert(hash);
+	if (_runSeen) {
+		_runSeen->hashes.insert(hash);
+	}
+}
+
+void Pipeline::addReport(
+		std::vector<int> indexes,
+		SettledCallback done,
+		ItemSettledCallback itemSettled) {
+	if (!done) {
+		return;
+	}
+	if (indexes.empty()) {
+		done(std::vector<SettledItem>());
+		return;
+	}
+	auto report = std::make_unique<BatchReport>();
+	report->pending = std::move(indexes);
+	report->done = std::move(done);
+	report->itemSettled = std::move(itemSettled);
+	for (const auto i : report->pending) {
+		_itemReport.emplace_or_assign(i, report.get());
+	}
+	_reports.push_back(std::move(report));
+	if (!_settleLifetime) {
+		// A settled report can arrive after the pipeline's own cleanup, when
+		// the last server id is confirmed. The subscription holds the
+		// pipeline until every report is delivered; the watchdog bounds that
+		// wait and dropSettling() releases it afterwards.
+		_settleLifetime = std::make_shared<rpl::lifetime>();
+		const auto self = shared_from_this();
+		_session.data().itemIdChanged() | rpl::on_next([self](
+				const Data::Session::IdChange &change) {
+			if (IsServerMsgId(change.newId.msg)) {
+				self->settleServerId(change.oldId, change.newId);
+			}
+		}, *_settleLifetime);
+		armSettleWatchdog();
+	}
+}
+
+void Pipeline::settleItem(
+		int idx,
+		SettleResult result,
+		FullMsgId destination) {
+	if (idx < 0 || idx >= _n) {
+		return;
+	}
+	const auto it = _itemReport.find(idx);
+	if (it == end(_itemReport)) {
+		return;
+	}
+	auto *report = it->second;
+	_itemReport.erase(it);
+	report->pending.erase(
+		std::remove(report->pending.begin(), report->pending.end(), idx),
+		report->pending.end());
+	auto settled = SettledItem{
+		.source = _items[idx].sourceId,
+		.destination = destination,
+		.mediaId = _items[idx].mediaId,
+		.isPhoto = _items[idx].isPhoto,
+		.hash = _items[idx].fileHash,
+		.size = _items[idx].fileSize,
+		.result = result,
+	};
+	if (report->itemSettled) {
+		report->itemSettled(settled);
+	}
+	report->results.push_back(std::move(settled));
+	if (!report->pending.empty()) {
+		return;
+	}
+	auto results = std::move(report->results);
+	std::sort(
+		results.begin(),
+		results.end(),
+		[](const SettledItem &a, const SettledItem &b) {
+			return (a.source.peer != b.source.peer)
+				? (a.source.peer < b.source.peer)
+				: (a.source.msg < b.source.msg);
+		});
+	auto done = std::move(report->done);
+	for (auto i = _reports.begin(); i != _reports.end(); ++i) {
+		if (i->get() == report) {
+			_reports.erase(i);
+			break;
+		}
+	}
+	if (_reports.empty()) {
+		// The subscription may be the one currently delivering this very
+		// result, so release it outside the emission.
+		const auto weak = std::weak_ptr<Pipeline>(shared_from_this());
+		crl::on_main([weak] {
+			if (const auto strong = weak.lock()) {
+				if (strong->_reports.empty()) {
+					strong->dropSettling();
+				}
+			}
+		});
+	}
+	if (done) {
+		done(std::move(results));
+	}
+}
+
+SettleResult Pipeline::classifySkip(const ItemTask &item) const {
+	const auto mediaId = item.mediaId;
+	const auto isPhoto = item.isPhoto;
+	const auto &hash = item.fileHash;
+	// Content already accepted by this batch or this run is handled by
+	// another item's message, so the fan-out must not resend it anywhere.
+	if ((mediaId && seenInBatch(mediaId, isPhoto))
+		|| (!hash.isEmpty() && seenInBatch(hash))) {
+		return SettleResult::CoveredByRun;
+	}
+	if ((mediaId && seenInRun(mediaId, isPhoto))
+		|| (!hash.isEmpty() && seenInRun(hash))) {
+		return SettleResult::CoveredByRun;
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (!db.isOpen()) {
+		return SettleResult::DestinationDuplicate;
+	}
+	const auto sessionId = _session.uniqueId();
+	const auto destination = (mediaId
+			&& (db.chatTableContainsDocId(_peerId, mediaId, isPhoto, false)
+				|| db.containsFwTmpItem(
+					sessionId,
+					_peerId,
+					mediaId,
+					isPhoto)))
+		|| (!hash.isEmpty()
+			&& (db.chatTableContainsHash(_peerId, hash, false)
+				|| db.containsFwTmpHash(sessionId, _peerId, hash)));
+	if (destination) {
+		return SettleResult::DestinationDuplicate;
+	}
+	if (_destinationOnly
+		|| !GetEnhancedBool("prevent_forward_duplicates")) {
+		return SettleResult::CoveredByRun;
+	}
+	const auto global = (mediaId
+			&& (db.chatTableContainsDocId(_peerId, mediaId, isPhoto, true)
+				|| db.containsDocId(
+					Data::DedupDb::Table::Uploads,
+					mediaId,
+					isPhoto)))
+		|| (!hash.isEmpty()
+			&& (db.chatTableContainsHash(_peerId, hash, true)
+				|| db.seekDocumentId(
+					Data::DedupDb::Table::Uploads,
+					hash,
+					0) != 0));
+	return global ? SettleResult::GlobalDuplicate : SettleResult::CoveredByRun;
+}
+
+void Pipeline::settleServerId(MsgId oldId, const FullMsgId &newId) {
+	for (auto i = 0; i != _n; ++i) {
+		const auto &item = _items[i];
+		if (item.localMsgId.msg == oldId
+			&& item.localMsgId.peer == newId.peer) {
+			settleItem(i, SettleResult::Created, newId);
+		}
+	}
+}
+
+void Pipeline::settleAllCancelled() {
+	auto indexes = std::vector<int>();
+	for (auto i = 0; i != _n; ++i) {
+		if (_itemReport.contains(i)) {
+			indexes.push_back(i);
+		}
+	}
+	for (const auto i : indexes) {
+		settleItem(
+			i,
+			_items[i].dedupSkipped
+				? SettleResult::CoveredByRun
+				: SettleResult::Cancelled);
+	}
+}
+
+void Pipeline::dropSettling() {
+	if (_settleLifetime) {
+		_settleLifetime->destroy();
+		_settleLifetime = nullptr;
+	}
+}
+
+void Pipeline::armSettleWatchdog() {
+	const auto weak = std::weak_ptr<Pipeline>(shared_from_this());
+	base::call_delayed(kSettleWaitMax, [weak] {
+		const auto strong = weak.lock();
+		if (!strong) {
+			return;
+		}
+		auto pending = false;
+		auto working = false;
+		for (auto i = 0; i != strong->_n; ++i) {
+			if (!strong->_itemReport.contains(i)) {
+				continue;
+			}
+			pending = true;
+			if (!strong->_items[i].sent) {
+				working = true;
+				break;
+			}
+		}
+		if (!pending) {
+			return;
+		}
+		if (working || isPaused(strong->_peerId)) {
+			strong->armSettleWatchdog();
+			return;
+		}
+		strong->settleAllCancelled();
+	});
+}
+
 void Pipeline::dedupCheckItem(int i) {
 	const auto self = shared_from_this();
 	auto &item = _items[i];
@@ -4049,6 +5215,29 @@ void Pipeline::dedupCheckItem(int i) {
 		return;
 	}
 	if (!item.downloadDone || item.path.isEmpty()) {
+		return;
+	}
+	if (!item.fileHash.isEmpty() && item.fileSize > 0 && item.mediaId) {
+		// The content hash is already known: taken from the server before
+		// the download, or restored with the resume record. Nothing has to be
+		// read from the file, only the duplicate decision has to run.
+		item.dedupNeedsHash = false;
+		item.dedupHashPending = true;
+		const auto size = item.fileSize;
+		const auto mediaId = item.mediaId;
+		const auto needsDelete = item.path.startsWith(_downloadPath);
+		auto hash = item.fileHash;
+		const auto weak = std::weak_ptr<Pipeline>(self);
+		crl::on_main([weak, i, hash, size, mediaId, needsDelete]() mutable {
+			if (const auto alive = weak.lock()) {
+				alive->dedupHashed(
+					i,
+					std::move(hash),
+					size,
+					mediaId,
+					needsDelete);
+			}
+		});
 		return;
 	}
 	item.dedupNeedsHash = false;
@@ -4120,16 +5309,16 @@ void Pipeline::dedupHashed(
 		pumpUploads();
 		return;
 	}
-	if (GetEnhancedBool("prevent_forward_duplicates")) {
-		ensureUploadTableUse();
-	}
 	// The seek runs before this id is registered, so it can never match
 	// itself: any hit is a genuinely different source doc with the same
-	// content. A previous 'f' row of this exact id is caught by selfDone.
-	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
+	// content. A previous 'f' row of this exact id is caught by selfDone,
+	// unless this very run put it there for another destination: a fan-out
+	// copy of that content is expected, not a duplicate.
+	const auto dedupSetting = GetEnhancedBool("prevent_forward_duplicates");
+	const auto dedupOn = !_destinationOnly && dedupSetting;
 	const auto sessionId = _session.uniqueId();
-	ensureChatTableUse(dedupOn);
-	const auto selfDone = (dedupOn
+	const auto selfDone = (!seenInRun(mediaId, item.isPhoto)
+			&& dedupOn
 			&& dedupDb.hashForDocId(
 				Data::DedupDb::Table::Uploads,
 				mediaId,
@@ -4139,24 +5328,28 @@ void Pipeline::dedupHashed(
 			_peerId,
 			mediaId,
 			item.isPhoto) == hash);
-	const auto duplicate = dedupDb.chatTableContainsHash(
+	const auto duplicate = (dedupSetting && seenInBatch(hash))
+		|| dedupDb.chatTableContainsHash(
 			_peerId,
 			hash,
 			dedupOn)
 		|| (dedupDb.isOpen()
 			&& dedupDb.containsFwTmpHash(sessionId, _peerId, hash))
 		|| (dedupOn
+			&& !seenInRun(hash)
 			&& dedupDb.seekDocumentId(
 				Data::DedupDb::Table::Uploads,
 				hash,
 				0) != 0);
 	if (duplicate || selfDone) {
 		if (needsDelete) {
-			QFile::remove(item.path);
+			RemoveEfTempFile(item.path);
 		}
 		skipAsDuplicate(i);
 		return;
 	}
+	markSeen(mediaId, item.isPhoto);
+	markSeen(hash);
 	dedupDb.addPending(
 		Data::DedupDb::Table::Uploads,
 		mediaId,
@@ -4169,6 +5362,17 @@ void Pipeline::premarkDuplicate(int i) {
 	auto &item = _items[i];
 	if (item.dedupSkipped) {
 		return;
+	}
+	if (item.fileSize <= 0) {
+		if (const auto srcItem = _session.data().message(item.sourceId)) {
+			if (const auto media = srcItem->media()) {
+				if (const auto doc = media->document()) {
+					item.fileSize = doc->size;
+				} else if (const auto photo = media->photo()) {
+					item.fileSize = PhotoFingerprintSize(not_null{ photo });
+				}
+			}
+		}
 	}
 	item.dedupSkipped = true;
 	item.downloadDone = true;
@@ -4194,7 +5398,8 @@ void Pipeline::premarkDuplicate(int i) {
 	if (item.mediaId && !item.fileHash.isEmpty()) {
 		auto &db = Core::App().downloadManager().ensureDedupDb();
 		if (db.isOpen()) {
-			if (GetEnhancedBool("prevent_forward_duplicates")) {
+			if (!_destinationOnly
+				&& GetEnhancedBool("prevent_forward_duplicates")) {
 				if (db.containsFinishedHash(
 					Data::DedupDb::Table::Uploads,
 					item.fileHash)) {
@@ -4214,10 +5419,13 @@ void Pipeline::premarkDuplicate(int i) {
 				item.fileHash);
 		}
 	}
+	settleItem(i, classifySkip(item));
 	saveProgress();
 }
 
 void Pipeline::startSession() {
+	_sessionStarted = true;
+	_sessionItemCount = _n;
 	const auto self = shared_from_this();
 	std::vector<FullMsgId> sourceIds;
 	sourceIds.reserve(_n);
@@ -4234,21 +5442,43 @@ void Pipeline::startSession() {
 	const auto sit = states.find(_peerId);
 	if (sit != states.end()) {
 		auto &state = sit->second;
+		_stateGeneration = state.generation;
+		state.bulkOwned = _bulkOwned;
+		auto restoredSent = 0;
 		for (auto i = 0; i < _n; i++) {
-			if (_items[i].dedupSkipped && i < int(state.items.size())) {
+			const auto tracked = (i < int(state.items.size()));
+			if (tracked && _items[i].sent && !_items[i].dedupSkipped) {
+				++restoredSent;
+				state.items[i].sent = true;
+				state.items[i].state = ItemState::Done;
+				state.items[i].downloadProgress = 1.0;
+				state.items[i].uploadProgress = 1.0;
+				state.items[i].progress = 1.0;
+			}
+			if (tracked && _items[i].dedupSkipped) {
 				state.items[i].dedupSkipped = true;
 				state.items[i].sent = true;
 			}
 		}
 		state.total = 0;
 		state.skipped = 0;
-		state.sent = 0;
+		state.sent = restoredSent;
 		for (auto i = 0; i < _n; i++) {
 			if (_items[i].dedupSkipped || _items[i].cancelled) {
 				state.skipped++;
 			} else {
 				state.total++;
 			}
+		}
+		if (state.skipped > 0) {
+			// Duplicates found before the session existed could not report
+			// themselves: the shared batch counters drive the bar and the
+			// final toast, so pass them the whole pre-session amount once.
+			EnhancedForward::ReportForwardBatchItem(
+				&_session,
+				_peerId,
+				0,
+				state.skipped);
 		}
 		EnhancedForward::NotifyStateChanged(_peerId);
 		EnhancedForward::NotifyCounterChanged();
@@ -4264,7 +5494,7 @@ void Pipeline::startSession() {
 			const auto session = &_session;
 			const auto path = _downloadPath;
 			crl::on_main([=] {
-				CleanupLeftoverForwardFiles(session, path);
+				CleanupLeftoverForwardFiles(session, path, true);
 			});
 			return;
 		}
@@ -4279,17 +5509,63 @@ void Pipeline::startSession() {
 }
 
 void Pipeline::appendItems(
-		std::vector<not_null<HistoryItem*>> &&items) {
+		std::vector<not_null<HistoryItem*>> &&items,
+		std::shared_ptr<Data::ForwardRunSeen> runSeen,
+		SettledCallback settled,
+		bool destinationOnlyDedup,
+		ItemSettledCallback itemSettled) {
 	if (items.empty()) {
+		if (settled) {
+			settled(std::vector<SettledItem>());
+		}
 		return;
 	}
+	if (runSeen) {
+		_runSeen = std::move(runSeen);
+	}
+	_destinationOnly = _destinationOnly || destinationOnlyDedup;
+	auto knownSources = base::flat_set<FullMsgId>();
+	knownSources.reserve(_items.size() + items.size());
+	for (const auto &existing : _items) {
+		knownSources.emplace(existing.sourceId);
+	}
+	auto duplicates = std::vector<int>();
 	for (const auto &srcItem : items) {
-		if (_session.data().message(srcItem->fullId()) != srcItem) {
+		const auto sourceId = srcItem->fullId();
+		if (_session.data().message(sourceId) != srcItem) {
 			continue;
 		}
-		ItemTask it;
-		it.sourceId = srcItem->fullId();
 		const auto media = srcItem->media();
+		const auto duplicate = !knownSources.emplace(sourceId).second
+			&& media
+			&& (media->document() || media->photo());
+		ItemTask it;
+		it.sourceId = sourceId;
+		if (duplicate) {
+			// This pipeline already owns the source media for the same
+			// destination, so the repeat is an in-flight duplicate in both
+			// dedup modes. Settle it without another download or upload.
+			if (!media) {
+				it.textOnly = true;
+			} else if (const auto doc = media->document()) {
+				it.mediaId = uint64(doc->id);
+				it.fileSize = doc->size;
+			} else if (const auto photo = media->photo()) {
+				it.isPhoto = true;
+				it.mediaId = uint64(photo->id);
+				it.fileSize = PhotoFingerprintSize(not_null{ photo });
+			} else {
+				it.textOnly = true;
+			}
+			it.dedupSkipped = true;
+			it.downloadDone = true;
+			it.uploadDone = true;
+			it.sent = true;
+			++_skippedCount;
+			duplicates.push_back(int(_items.size()));
+			_items.push_back(std::move(it));
+			continue;
+		}
 		if (!media) {
 			it.textOnly = true;
 		} else if (auto doc = media->document()) {
@@ -4326,6 +5602,18 @@ void Pipeline::appendItems(
 	}
 	const auto oldN = _n;
 	_n = int(_items.size());
+	const auto hasReport = (settled != nullptr);
+	if (settled) {
+		auto indexes = std::vector<int>();
+		indexes.reserve(_n - oldN);
+		for (auto i = oldN; i != _n; ++i) {
+			indexes.push_back(i);
+		}
+		addReport(
+			std::move(indexes),
+			std::move(settled),
+			std::move(itemSettled));
+	}
 	// Extend the visible job state so the Forwards tab and the counters see
 	// the newly added items right away and keep them after the current item.
 	if (const auto j = ActiveStates().find(_peerId); j != end(ActiveStates())) {
@@ -4333,6 +5621,10 @@ void Pipeline::appendItems(
 		for (auto i = oldN; i < _n; i++) {
 			state.sourceIds.push_back(_items[i].sourceId);
 			auto tracked = TrackedItem();
+			if (_items[i].dedupSkipped) {
+				tracked.dedupSkipped = true;
+				tracked.sent = true;
+			}
 			if (const auto srcItem = _session.data().message(_items[i].sourceId)) {
 				if (const auto media = srcItem->media()) {
 					if (const auto doc = media->document()) {
@@ -4348,6 +5640,25 @@ void Pipeline::appendItems(
 			state.total++;
 		}
 	}
+	// Files that were already on disk when the batch was appended did not go
+	// through the constructor precheck, so hash them before the upload starts.
+	for (auto i = oldN; i < _n; i++) {
+		if (_items[i].downloadDone && !_items[i].path.isEmpty()) {
+			dedupCheckItem(i);
+		}
+	}
+	if (!duplicates.empty()) {
+		// The batch report callbacks may append more items to this very
+		// pipeline, so settle the duplicates on the next event loop turn
+		// instead of re-entering appendItems from inside this call. The
+		// pipeline is kept alive for that single turn: the bulk report it
+		// carries must fire even if the last owning reference is dropped
+		// before the deferred call runs.
+		const auto self = shared_from_this();
+		crl::on_main([self, indexes = std::move(duplicates), hasReport]() mutable {
+			self->settleAppendedDuplicates(std::move(indexes), hasReport);
+		});
+	}
 	NotifyStateChanged(_peerId);
 	NotifyCounterChanged();
 	if (!EnhancedForward::isPaused(_peerId)) {
@@ -4357,27 +5668,31 @@ void Pipeline::appendItems(
 	}
 }
 
-void Pipeline::ensureUploadTableUse() {
-	if (_uploadTableUse) {
-		return;
+void Pipeline::settleAppendedDuplicates(
+		std::vector<int> indexes,
+		bool hasReport) {
+	for (const auto i : indexes) {
+		if (i < 0 || i >= _n || !_items[i].dedupSkipped) {
+			continue;
+		}
+		if (hasReport && !_itemReport.contains(i)) {
+			// A cancel settled this copy before the deferred turn.
+			continue;
+		}
+		if (_sessionStarted && i >= _sessionItemCount) {
+			// Copies appended before the session started were already counted
+			// by startSession(), which reports the whole pre-session skipped
+			// amount once. The generation check keeps a late callback from
+			// touching the state of a newer batch to the same peer after this
+			// pipeline has already finished.
+			const auto it = ActiveStates().find(_peerId);
+			if (it != end(ActiveStates())
+				&& it->second.generation == _stateGeneration) {
+				markItemSkipped(&_session, _peerId);
+			}
+		}
+		settleItem(i, SettleResult::CoveredByRun);
 	}
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (db.isOpen()) {
-		_uploadTableUse = db.useTable(Data::DedupDb::Table::Uploads);
-	}
-}
-
-void Pipeline::ensureChatTableUse(bool allPeers) {
-	if (_chatTableUse && _chatTableAllPeers == allPeers) {
-		return;
-	}
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (!db.isOpen()) {
-		_chatTableUse.reset();
-		return;
-	}
-	_chatTableUse = db.useChatTable(_peerId, allPeers);
-	_chatTableAllPeers = allPeers;
 }
 
 void Pipeline::runNextPrecheck() {
@@ -4392,16 +5707,11 @@ void Pipeline::runNextPrecheck() {
 		runNextPrecheck();
 		return;
 	}
-	// ID fast path: the exact same source document was already forwarded (or
-	// is currently being forwarded), so skip it without computing a hash.
+	// ID fast path: the exact same source media was already forwarded (or is
+	// currently being forwarded), so skip it without computing a hash.
 	auto &dedupDb = Core::App().downloadManager().ensureDedupDb();
-	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
-	if (dedupDb.isOpen()) {
-		ensureChatTableUse(dedupOn);
-	}
-	if (dedupOn) {
-		ensureUploadTableUse();
-	}
+	const auto dedupSetting = GetEnhancedBool("prevent_forward_duplicates");
+	const auto dedupOn = !_destinationOnly && dedupSetting;
 	const auto knownById = dedupDb.isOpen()
 		&& (dedupDb.chatTableContainsDocId(
 				_peerId,
@@ -4413,15 +5723,13 @@ void Pipeline::runNextPrecheck() {
 				_peerId,
 				item.mediaId,
 				item.isPhoto)
+			|| (dedupSetting && seenInBatch(item.mediaId, item.isPhoto))
 			|| (dedupOn
-				&& (dedupDb.containsDocId(
-						Data::DedupDb::Table::Uploads,
-						item.mediaId,
-						item.isPhoto)
-					|| dedupDb.containsDocIdInDb(
-						Data::DedupDb::Table::Uploads,
-						item.mediaId,
-						item.isPhoto))));
+				&& !seenInRun(item.mediaId, item.isPhoto)
+				&& dedupDb.containsDocId(
+					Data::DedupDb::Table::Uploads,
+					item.mediaId,
+					item.isPhoto)));
 	if (knownById) {
 		premarkDuplicate(i);
 		runNextPrecheck();
@@ -4430,17 +5738,28 @@ void Pipeline::runNextPrecheck() {
 	const auto srcItem = _session.data().message(item.sourceId);
 	const auto media = srcItem ? srcItem->media() : nullptr;
 	const auto doc = media ? media->document() : nullptr;
-	if (!doc) {
+	const auto photo = media ? media->photo() : nullptr;
+	if (!doc && !photo) {
 		runNextPrecheck();
 		return;
 	}
-	const auto size = qint64(doc->size);
+	const auto size = doc
+		? qint64(doc->size)
+		: PhotoFingerprintSize(not_null{ photo });
 	const auto self = shared_from_this();
-	Data::RemoteFileFingerprint(&_session, doc, [self, i, size](QByteArray hash) {
+	auto done = [self, i, size](QByteArray hash) {
 		if (const auto alive = self.get()) {
 			alive->remotePrechecked(i, std::move(hash), size);
 		}
-	});
+	};
+	if (doc) {
+		Data::RemoteFileFingerprint(&_session, doc, std::move(done));
+	} else {
+		Data::RemotePhotoFingerprint(
+			&_session,
+			not_null{ photo },
+			std::move(done));
+	}
 }
 
 void Pipeline::remotePrechecked(int i, QByteArray &&hash, qint64 size) {
@@ -4450,7 +5769,15 @@ void Pipeline::remotePrechecked(int i, QByteArray &&hash, qint64 size) {
 	}
 	auto &item = _items[i];
 	if (hash.isEmpty() || item.dedupSkipped || item.downloadDone) {
-		runNextPrecheck();
+		// A photo can fail its fingerprint synchronously (a missing or
+		// invalid size location), so continue on the event loop instead of
+		// recursing once for every such item in the queue.
+		const auto weak = std::weak_ptr<Pipeline>(shared_from_this());
+		crl::on_main([weak] {
+			if (const auto strong = weak.lock()) {
+				strong->runNextPrecheck();
+			}
+		});
 		return;
 	}
 	item.fileHash = hash;
@@ -4461,17 +5788,19 @@ void Pipeline::remotePrechecked(int i, QByteArray &&hash, qint64 size) {
 		runNextPrecheck();
 		return;
 	}
-	// This doc reached here only if its own id was NOT registered (the id fast
-	// path above already skips it otherwise), so a content-hash match means a
+	// It reached here only if its own id was NOT registered (the id fast path
+	// above already skips it otherwise), so a content-hash match means a
 	// different source doc with the same content was forwarded before: skip it
 	// and attach this id to the existing hash for future id-only dedup.
-	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
+	const auto dedupSetting = GetEnhancedBool("prevent_forward_duplicates");
+	const auto dedupOn = !_destinationOnly && dedupSetting;
 	const auto sessionId = _session.uniqueId();
-	ensureChatTableUse(dedupOn);
-	const auto duplicate = db.chatTableContainsHash(_peerId, hash, dedupOn)
+	const auto duplicate = (dedupSetting && seenInBatch(hash))
+		|| db.chatTableContainsHash(_peerId, hash, dedupOn)
 		|| (db.isOpen()
 			&& db.containsFwTmpHash(sessionId, _peerId, hash))
 		|| (dedupOn
+			&& !seenInRun(hash)
 			&& db.seekDocumentId(
 				Data::DedupDb::Table::Uploads,
 				hash,
@@ -4479,6 +5808,8 @@ void Pipeline::remotePrechecked(int i, QByteArray &&hash, qint64 size) {
 	if (duplicate) {
 		premarkDuplicate(i);
 	} else if (item.mediaId) {
+		markSeen(item.mediaId, item.isPhoto);
+		markSeen(hash);
 		db.addPending(
 			Data::DedupDb::Table::Uploads,
 			item.mediaId,
@@ -4510,7 +5841,8 @@ void Pipeline::skipAsDuplicate(int i) {
 	if (item.mediaId && !item.fileHash.isEmpty()) {
 		auto &db = Core::App().downloadManager().ensureDedupDb();
 		if (db.isOpen()) {
-			if (GetEnhancedBool("prevent_forward_duplicates")) {
+			if (!_destinationOnly
+				&& GetEnhancedBool("prevent_forward_duplicates")) {
 				if (db.containsFinishedHash(
 					Data::DedupDb::Table::Uploads,
 					item.fileHash)) {
@@ -4540,6 +5872,7 @@ void Pipeline::skipAsDuplicate(int i) {
 		sit->second.items[i].sent = true;
 	}
 	EnhancedForward::markItemSkipped(&_session, _peerId);
+	settleItem(i, classifySkip(item));
 	saveProgress();
 	sendNext();
 	pumpUploads();
@@ -4669,7 +6002,12 @@ void Pipeline::cancelItem(int idx) {
 	}
 
 	EnhancedForward::markItemSkipped(&_session, _peerId);
-	saveProgress();
+	settleItem(idx, SettleResult::Cancelled);
+	if (!isCancelled(_peerId)) {
+		// A whole-batch cancel clears the single resume row once instead of
+		// rewriting the remaining plan for every cancelled item.
+		saveProgress();
+	}
 	sendNext();
 	pumpUploads();
 	pumpDownloads();
@@ -4889,31 +6227,10 @@ void RevealProtectedMediaItem(
 namespace NormalForward {
 namespace {
 
-constexpr auto kMaxBatchIds = 100;
-constexpr auto kMaxAlbumIds = 10;
 constexpr auto kFingerprintConcurrencyBase = 50;
 constexpr auto kFingerprintConcurrencyMax = 100;
 constexpr auto kMaxFingerprintRetries = 3;
 constexpr auto kGeneralId = Data::ForumTopic::kGeneralId;
-
-enum class AlbumKind : uint8 {
-	NotGroupable,
-	AlbumsPhoto,
-	AlbumsVideo,
-	AlbumsMusic,
-	AlbumsDocuments,
-};
-
-[[nodiscard]] AlbumKind KindOf(const Data::Media *m) {
-	if (!m) return AlbumKind::NotGroupable;
-	if (m->photo()) return AlbumKind::AlbumsPhoto;
-	if (const auto d = m->document()) {
-		if (d->isVideoFile()) return AlbumKind::AlbumsVideo;
-		if (d->isSong()) return AlbumKind::AlbumsMusic;
-		if (m->canBeGrouped()) return AlbumKind::AlbumsDocuments;
-	}
-	return AlbumKind::NotGroupable;
-}
 
 rpl::event_stream<> CountersChanged;
 
@@ -4970,6 +6287,7 @@ public:
 	int skipped = 0;
 	MsgId lastMsgId = 0;
 	QString lastFileName;
+	int64 startedAt = base::unixtime::now();
 	int floodSeconds = 0;
 
 	std::vector<MsgId> remaining;   // source ids not yet acked
@@ -4994,8 +6312,6 @@ public:
 	std::vector<MsgId> hashRetries;
 
 	std::vector<mtpRequestId> requests;
-	std::optional<Data::DedupDb::ChatTableUse> chatTableUse;
-	bool chatTableAllPeers = false;
 	base::Timer floodTimer;
 	base::Timer tickTimer;
 	std::optional<TimeId> videoTimestamp;
@@ -5015,13 +6331,7 @@ public:
 	}
 
 	[[nodiscard]] int maxBatch() const {
-		if (groupOptions == Data::GroupingOptions::Separate) {
-			return 1;
-		}
-		if (groupOptions == Data::GroupingOptions::RegroupAll) {
-			return kMaxAlbumIds;
-		}
-		return kMaxBatchIds;
+		return Data::ForwardBatching::MaxBatchSize(groupOptions);
 	}
 
 	[[nodiscard]] bool alive() const {
@@ -5041,19 +6351,6 @@ JobsMap &Jobs() {
 	return (it != end(Jobs()) && it->second.get() == j.get())
 		? it->second
 		: std::shared_ptr<Job>();
-}
-
-void EnsureJobChatTableUse(not_null<Job*> j, bool allPeers) {
-	if (j->chatTableUse && j->chatTableAllPeers == allPeers) {
-		return;
-	}
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (!db.isOpen()) {
-		j->chatTableUse.reset();
-		return;
-	}
-	j->chatTableUse = db.useChatTable(j->dst, allPeers);
-	j->chatTableAllPeers = allPeers;
 }
 
 [[nodiscard]] bool BelongsTo(
@@ -5150,7 +6447,6 @@ void Finish(not_null<Job*> j) {
 			registration.isPhoto);
 	}
 	j->regs.clear();
-	j->chatTableUse.reset();
 	db.removeNfResume(j->session->uniqueId(), j->dst);
 	db.clearFwTmpRun(j->session->uniqueId(), j->dst);
 	EnhancedForward::RecordFinishedFwRun(
@@ -5160,6 +6456,9 @@ void Finish(not_null<Job*> j) {
 		j->remaining.empty()
 			? FullMsgId()
 			: FullMsgId(j->src, j->remaining.front()),
+		j->lastMsgId
+			? FullMsgId(j->src, j->lastMsgId)
+			: FullMsgId(),
 		j->total,
 		j->done,
 		j->skipped,
@@ -5205,7 +6504,6 @@ void CancelJob(not_null<Job*> j) {
 			registration.isPhoto);
 	}
 	j->regs.clear();
-	j->chatTableUse.reset();
 	db.removeNfResume(j->session->uniqueId(), j->dst);
 	db.clearFwTmpRun(j->session->uniqueId(), j->dst);
 	Jobs().remove(j->dst);
@@ -5230,7 +6528,6 @@ void EnqueueResolved(
 	auto &db = Core::App().downloadManager().ensureDedupDb();
 	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
 	const auto sessionId = j->session->uniqueId();
-	EnsureJobChatTableUse(j, dedupOn);
 	const auto mediaIt = j->mediaIds.find(msgId);
 	const auto mediaId = (mediaIt != end(j->mediaIds))
 		? mediaIt->second
@@ -5689,9 +6986,6 @@ void Pump(not_null<Job*> j) {
 		const auto mediaId = document
 			? uint64(document->id)
 			: uint64(photo->id);
-		if (db.isOpen()) {
-			EnsureJobChatTableUse(j, dedupOn);
-		}
 		if (db.chatTableContainsDocId(
 				j->dst,
 				mediaId,
@@ -5761,71 +7055,25 @@ void Pump(not_null<Job*> j) {
 			return;
 		}
 		auto count = std::min(j->queue.size(), size_t(windowSize));
+		const auto mediaAt = [&](size_t index) {
+			const auto item = j->session->data().message(
+				FullMsgId(j->src, j->queue[index]));
+			return item ? item->media() : nullptr;
+		};
 		for (auto i = size_t(0); i < count; ++i) {
 			if (i > 0
-				&& j->groupOptions == Data::GroupingOptions::GroupAsIs) {
-				// Preserve source grouping: only members of the same
-				// album travel in one request, anything else (including
-				// two singles) goes separately. Batched media would
-				// otherwise arrive grouped as a new album.
-				const auto prev = j->queueGroups[i - 1];
-				const auto cur = j->queueGroups[i];
-				if (prev == MessageGroupId()
-					|| cur == MessageGroupId()
-					|| prev != cur) {
-					count = i;
-					break;
-				}
-			}
-			if (i > 0
-				&& j->groupOptions == Data::GroupingOptions::RegroupAll) {
-				const auto prev = j->queueGroups[i - 1];
-				const auto cur = j->queueGroups[i];
-				const auto isSameAlbum = prev != MessageGroupId()
-					&& cur != MessageGroupId()
-					&& prev == cur;
-				if (isSameAlbum) {
-					if (i >= kMaxAlbumIds) {
-						count = i;
-						break;
-					}
-					continue;
-				}
-				const auto boundary = (prev != MessageGroupId())
-					? (cur != prev)
-					: (cur != MessageGroupId());
-				if (boundary) {
-					count = i;
-					break;
-				}
-				const auto prevItem = j->session->data().message(
-					FullMsgId(j->src, j->queue[i - 1]));
-				const auto curItem = j->session->data().message(
-					FullMsgId(j->src, j->queue[i]));
-				const auto prevMedia = prevItem ? prevItem->media() : nullptr;
-				const auto curMedia = curItem ? curItem->media() : nullptr;
-				const auto prevKind = KindOf(prevMedia);
-				const auto curKind = KindOf(curMedia);
-				auto isGrouped = [&](AlbumKind k) {
-					if (k == AlbumKind::NotGroupable) return false;
-					if (j->groupOptions == Data::GroupingOptions::RegroupAll
-						&& j->forwardOptions != Data::ForwardOptions::PreserveInfo) {
-						return k == AlbumKind::AlbumsPhoto
-							|| k == AlbumKind::AlbumsVideo
-							|| k == AlbumKind::AlbumsMusic
-							|| k == AlbumKind::AlbumsDocuments;
-					}
-					if (k == AlbumKind::AlbumsPhoto
-						|| k == AlbumKind::AlbumsVideo) return false;
-					return k == AlbumKind::AlbumsMusic
-						|| k == AlbumKind::AlbumsDocuments;
-				};
-				if (!isGrouped(prevKind)
-					|| !isGrouped(curKind)
-					|| prevKind != curKind) {
-					count = i;
-					break;
-				}
+				&& !Data::ForwardBatching::ContinuesBatch(
+					j->groupOptions,
+					j->forwardOptions,
+					i,
+					j->queueGroups[i - 1],
+					j->queueGroups[i],
+					[&](size_t index) {
+						return Data::ForwardBatching::KindOf(
+							mediaAt(index));
+					})) {
+				count = i;
+				break;
 			}
 		}
 		auto chunk = std::vector<MsgId>(
@@ -6021,7 +7269,6 @@ void PauseAll(not_null<Main::Session*> session) {
 				registration.isPhoto);
 		}
 		job->regs.clear();
-		job->chatTableUse.reset();
 		if (const auto it = Jobs().find(job->dst);
 			it != end(Jobs()) && it->second.get() == job) {
 			Jobs().remove(job->dst);
@@ -6149,7 +7396,6 @@ void PauseDst(not_null<Main::Session*> session, const PeerId &dst) {
 			registration.isPhoto);
 	}
 	job->regs.clear();
-	job->chatTableUse.reset();
 	jobs.erase(it);
 	FireCompletion(job);
 	Notify();
@@ -6205,6 +7451,7 @@ Counters CountersFor(not_null<Main::Session*> session) {
 			result.total = job->total;
 			result.skipped = job->skipped;
 			result.lastFileName = job->lastFileName;
+			result.startedAt = job->startedAt;
 			result.floodSeconds = (job->state == Job::State::FloodWait)
 				? job->floodSeconds
 				: 0;
@@ -6241,6 +7488,7 @@ std::vector<Counters> AllCounters(not_null<Main::Session*> session) {
 		counters.total = job->total;
 		counters.skipped = job->skipped;
 		counters.lastFileName = job->lastFileName;
+		counters.startedAt = job->startedAt;
 		counters.floodSeconds = (job->state == Job::State::FloodWait)
 			? job->floodSeconds
 			: 0;

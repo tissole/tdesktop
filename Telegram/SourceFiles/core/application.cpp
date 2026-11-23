@@ -63,6 +63,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_account.h"
 #include "main/main_domain.h"
 #include "main/main_session.h"
+#include "bulk_forward/bulk_forward_counters.h"
+#include "bulk_forward/bulk_forward_entry.h"
+#include "bulk_forward/bulk_forward_resume.h"
 #include "enhanced_forward.h"
 #include "media/view/media_view_overlay_widget.h"
 #include "media/view/media_view_open_common.h"
@@ -1497,6 +1500,7 @@ bool Application::transferPreventsQuit() {
 						EnhancedForward::pauseForward(job.peer, session);
 					}
 				}
+				BulkForward::PauseActive(session);
 			}
 		}
 	};
@@ -1515,6 +1519,7 @@ bool Application::transferPreventsQuit() {
 						break;
 					}
 				}
+				BulkForward::CancelActive(session);
 			}
 		}
 	};
@@ -1572,6 +1577,7 @@ void Application::showUnfinishedOperations() {
 	EnhancedForward::notifyTransfersUpdated();
 	for (const auto &[index, account] : _domain->accounts()) {
 		if (const auto session = account->maybeSession()) {
+			BulkForward::EnsureResumeSeeded(session);
 			EnhancedForward::EnsureResumeStatesSeeded(session);
 		}
 	}
@@ -1594,7 +1600,7 @@ void Application::showUnfinishedOperations() {
 		return;
 	}
 	const auto resumeAll = [=] {
-		_downloadManager->startAllResumeDownloads(false);
+		_downloadManager->startAllResumeDownloads();
 		for (const auto &[index, account] : _domain->accounts()) {
 			if (const auto session = account->maybeSession()) {
 				session->uploader().resumeAllUploads();
@@ -1602,15 +1608,23 @@ void Application::showUnfinishedOperations() {
 			}
 		}
 		for (const auto &[session, job] : fwJobs) {
+			// A bulk run that also covers this destination may re-read the
+			// same items later; the copy pipeline deduplicates source ids it
+			// already owns, so starting the resume now is safe and does not
+			// wait for the bulk scan to reach them.
 			session->api().startResumeForward(
-				job.srcId,
 				job.dstId,
 				session);
+		}
+		for (const auto &[index, account] : _domain->accounts()) {
+			if (const auto session = account->maybeSession()) {
+				BulkForward::ResumeActive(session);
+			}
 		}
 		EnhancedForward::notifyTransfersUpdated();
 	};
 	const auto laterAll = [=] {
-		_downloadManager->startAllResumeDownloads(true);
+		_downloadManager->deferAllResumeDownloads();
 		for (const auto &[index, account] : _domain->accounts()) {
 			if (const auto session = account->maybeSession()) {
 				session->uploader().queueResumeForLater();
@@ -1627,7 +1641,9 @@ void Application::showUnfinishedOperations() {
 				session->uploader().cancelAll();
 				_downloadManager->dedupDb().clearUlResume(
 					session->uniqueId());
+				EnhancedForward::CancelAll(session);
 				NormalForward::CancelAll(session);
+				BulkForward::CancelActive(session);
 			}
 		}
 		for (const auto &[session, job] : fwJobs) {

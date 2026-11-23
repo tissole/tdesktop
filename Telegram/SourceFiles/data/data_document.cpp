@@ -48,6 +48,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QDir>
 #include <QtCore/QMimeType>
 #include <QtCore/QMimeDatabase>
+#include <QtCore/QStandardPaths>
 
 namespace {
 
@@ -334,20 +335,60 @@ QString DownloadRootPath(not_null<Main::Session*> session) {
 	return path;
 }
 
+[[nodiscard]] bool IsPrunableDownloadFolderName(const QString &name) {
+	return name.startsWith(u"DL_"_q)
+		|| name == u"animations"_q
+		|| name == u"stickers"_q
+		|| name == u"voice_messages"_q
+		|| name == u"round_video_messages"_q
+		|| name == u"video_files"_q
+		|| name == u"music"_q
+		|| name == u"photos"_q
+		|| name == u"files"_q;
+}
+
 void PruneEmptyDownloadFolders(
-		not_null<Main::Session*> session,
-		const QString &removedFilePath) {
+		const QString &rootPath,
+		const QString &removedFilePath,
+		const QString &stopRoot) {
 	if (removedFilePath.isEmpty()) {
 		return;
 	}
-	auto root = QDir::cleanPath(DownloadRootPath(session));
-	if (root.isEmpty()) {
+	const auto root = QDir::cleanPath(rootPath);
+	auto extra = QDir::cleanPath(stopRoot);
+	if (extra.isEmpty() || QDir(extra).isRoot()) {
+		extra.clear();
+	}
+	if (root.isEmpty() && extra.isEmpty()) {
 		return;
 	}
+	const auto standardPath = [](QStandardPaths::StandardLocation location) {
+		return QDir::cleanPath(
+			QStandardPaths::writableLocation(location));
+	};
+	const auto home = standardPath(QStandardPaths::HomeLocation);
+	const auto desktop = standardPath(QStandardPaths::DesktopLocation);
+	const auto documents = standardPath(QStandardPaths::DocumentsLocation);
+	const auto downloads = standardPath(QStandardPaths::DownloadLocation);
 	auto current = QFileInfo(removedFilePath).absolutePath();
 	while (!current.isEmpty()) {
 		const auto cleaned = QDir::cleanPath(current);
-		if (cleaned == root || !cleaned.startsWith(root + '/')) {
+		if (cleaned == root || cleaned == extra) {
+			break;
+		} else if (cleaned == home
+			|| cleaned == desktop
+			|| cleaned == documents
+			|| cleaned == downloads) {
+			break;
+		}
+		const auto insideRoot = !root.isEmpty()
+			&& cleaned.startsWith(root + '/');
+		const auto insideExtra = !extra.isEmpty()
+			&& cleaned.startsWith(extra + '/');
+		if (!insideRoot && !insideExtra) {
+			break;
+		}
+		if (!IsPrunableDownloadFolderName(QFileInfo(cleaned).fileName())) {
 			break;
 		}
 		auto dir = QDir(cleaned);
@@ -360,6 +401,16 @@ void PruneEmptyDownloadFolders(
 		}
 		current = parent;
 	}
+}
+
+void PruneEmptyDownloadFolders(
+		not_null<Main::Session*> session,
+		const QString &removedFilePath,
+		const QString &stopRoot) {
+	PruneEmptyDownloadFolders(
+		DownloadRootPath(session),
+		removedFilePath,
+		stopRoot);
 }
 
 QString DocumentFileNameForSave(
@@ -1250,6 +1301,10 @@ QString DocumentData::loadingFilePath() const {
 	return loading() ? _loader->fileName() : QString();
 }
 
+QString DocumentData::downloadTargetPath() const {
+	return _loader ? _loader->fileName() : QString();
+}
+
 bool DocumentData::displayLoading() const {
 	return loading()
 		? !_loader->loadingLocal()
@@ -1399,9 +1454,29 @@ void DocumentData::save(
 		const QString &toFile,
 		LoadFromCloudSetting fromCloud,
 		bool autoLoading,
-		bool forceFileLoader) {
+		bool forceFileLoader,
+		bool forceReload) {
 	Test::NotifyDocumentSave(this, toFile, autoLoading);
-	if (const auto media = activeMediaView(); media && media->loaded(true)) {
+	const auto media = activeMediaView();
+	const auto loaded = [&] {
+		if (!media || !media->loaded(true)) {
+			return false;
+		}
+		if (!forceReload) {
+			return true;
+		}
+		if (!toFile.isEmpty()) {
+			// A forced reload into a specific file (e.g. resuming a paused
+			// download) must judge the target file, not the cached location:
+			// a complete cache copy must not mask a partial target file.
+			const auto info = QFileInfo(toFile);
+			return info.exists() && info.size() >= size;
+		}
+		const auto existing = location(true).name();
+		return existing.isEmpty()
+			|| QFileInfo(existing).size() >= size;
+	}();
+	if (loaded) {
 		const auto &l = location(true);
 		if (!toFile.isEmpty()) {
 			if (!media->bytes().isEmpty()) {

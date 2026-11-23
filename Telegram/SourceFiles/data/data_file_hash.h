@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/basic_types.h"
+
 #include <QByteArray>
 
 class DocumentData;
@@ -93,6 +95,30 @@ void RemotePhotoFingerprint(
 	Fn<void(QByteArray)> done,
 	uint64 takeoutId = 0,
 	Fn<bool()> onReferenceExpired = nullptr,
+	int dcShift = -1);
+
+// Everything a fingerprint needs, taken straight from a raw message media.
+//
+// Scans and forwards walk message pages without registering every document or
+// photo in the session, so the sample is described by the file location fields
+// themselves. `sizeType` is set for photos and empty for documents.
+struct RemoteSample {
+	uint64 id = 0;
+	uint64 accessHash = 0;
+	QByteArray fileReference;
+	QByteArray sizeType;
+	int32 dcId = 0;
+	int64 size = 0;
+	bool isPhoto = false;
+};
+
+// Fetches the fingerprint sample of a raw media without creating a
+// DocumentData or a PhotoData first, so a walk over a large chat does not grow
+// the session document map. Empty hash on failure or on truncated reads.
+void RemoteSampleFingerprint(
+	not_null<Main::Session*> session,
+	const RemoteSample &sample,
+	Fn<void(QByteArray)> done,
 	int dcShift = -1);
 
 // Parses a server flood error ("FLOOD_WAIT_X", "FLOOD_PREMIUM_WAIT_X")

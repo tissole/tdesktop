@@ -181,6 +181,10 @@ void InnerWidget::refreshForwards() {
 	provider()->refreshForwards();
 }
 
+void InnerWidget::clearFinishedForwards() {
+	provider()->clearFinishedForwards();
+}
+
 rpl::producer<bool> InnerWidget::hasDownloadsValue() const {
 	return provider()->hasDownloadsValue();
 }
@@ -233,8 +237,6 @@ int InnerWidget::recountHeight() {
 		_empty->hide();
 	} else {
 		if (provider()->fullCount().value_or(0) > 0) {
-			qDebug() << "[TM] tm list empty but provider has rows, count:"
-				<< *provider()->fullCount();
 		}
 		_empty->show();
 		_empty->moveToLeft(0, top);

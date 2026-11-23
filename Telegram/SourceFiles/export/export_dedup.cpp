@@ -346,9 +346,6 @@ void CheckDuplicate(
 		done(CheckResult());
 		return;
 	}
-	if (global) {
-		db.ensureTableLoaded(Table::Downloads);
-	}
 	if (global
 		? db.containsDocId(Table::Downloads, docId, isPhoto)
 		: db.containsExTmpDocId(sessionId, peerId, docId, isPhoto)) {
@@ -383,9 +380,6 @@ CheckResult CheckHash(
 		const QByteArray &hash,
 		bool global,
 		bool isPhoto) {
-	if (global) {
-		db.ensureTableLoaded(Table::Downloads);
-	}
 	const auto known = global
 		? db.containsHash(Table::Downloads, hash)
 		: db.containsExTmpHash(sessionId, peerId, hash);
@@ -423,9 +417,6 @@ bool FinishFile(
 		bool isPhoto) {
 	if (!db.isOpen() || !docId) {
 		return false;
-	}
-	if (global) {
-		db.ensureTableLoaded(Table::Downloads);
 	}
 	if (!preHash.isEmpty()) {
 		// Big file: the decision was made before download.

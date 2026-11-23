@@ -95,6 +95,10 @@ public:
 	bool isEnhancedForward(not_null<const HistoryItem*> item) const;
 	bool isDownloading(not_null<const HistoryItem*> item) const;
 	bool isDownloaded(not_null<const HistoryItem*> item) const;
+	// Restored rows can be local placeholders that MessageByGlobalId can't
+	// resolve; the tab still lists them, so selection actions look them up
+	// here by the id their layout carries.
+	[[nodiscard]] HistoryItem *listedItem(GlobalMsgId id) const;
 	bool isUploading(not_null<const HistoryItem*> item) const;
 	bool isUploaded(not_null<const HistoryItem*> item) const;
 	bool isEnhancedForwardFinished(not_null<const HistoryItem*> item) const;
@@ -110,6 +114,10 @@ public:
 	void toggleForwardRun(not_null<const HistoryItem*> item);
 	void cancelForwardRun(not_null<const HistoryItem*> item);
 	void clearForwardRun(not_null<const HistoryItem*> item);
+	// Removes every finished forward row, the same way clearing one finished
+	// row from its context menu does, so a bulk clear cannot leave a row the
+	// single-row action would have removed.
+	void clearFinishedForwards();
 	bool isDownloadAggregate(not_null<const HistoryItem*> item) const;
 	[[nodiscard]] uint64 downloadAggregateBatchId(
 		not_null<const HistoryItem*> item) const;
@@ -157,6 +165,7 @@ private:
 		// Upload batch headers reuse their first file as the carrier item.
 		uint64 ulBatch = 0; // 0 = ungrouped, else grouped batch id
 		int ulRow = 0; // 0 = normal row, 1 = batch header
+		FullMsgId sourceId;
 
 		QStringList words;
 		base::flat_set<QChar> letters;
@@ -300,6 +309,7 @@ private:
 	base::flat_map<not_null<Main::Session*>, uint64> _fwTickDigest;
 	int _nextElementOrder = 0;
 	base::flat_set<FullMsgId> _failedEFResolve;
+	base::flat_map<FullMsgId, int> _efResolveRetries;
 	base::flat_set<FullMsgId> _fetchingEFResolve;
 	bool _postponedRefreshSort = false;
 	bool _postponedRefresh = false;

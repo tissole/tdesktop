@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/flat_map.h"
 #include "base/flat_set.h"
 #include "base/timer.h"
 #include "data/data_dedup_db.h"
@@ -17,6 +18,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QVector>
 
 #include <optional>
+#include <atomic>
+#include <memory>
 
 namespace Ui {
 struct DownloadBarProgress;
@@ -94,7 +97,6 @@ struct DownloadedId {
 	QString path;
 	int64 size = 0;
 	FullMsgId itemId;
-	uint64 peerAccessHash = 0;
 	int jobIndex = 0;
 	uint64 batchId = 0;
 
@@ -138,7 +140,8 @@ public:
 	void addLoading(
 		DownloadObject object,
 		bool enhancedForward = false,
-		uint64 batchId = 0);
+		uint64 batchId = 0,
+		DownloadDate started = 0);
 	void addLoaded(
 		DownloadObject object,
 		const QString &path,
@@ -174,6 +177,7 @@ public:
 	void clearIfFinished();
 	void deleteFiles(const std::vector<GlobalMsgId> &ids);
 	void deleteAll();
+	[[nodiscard]] std::vector<GlobalMsgId> finishedDownloadIds() const;
 
 	[[nodiscard]] auto loadingList() const
 		-> ranges::any_view<const DownloadingId*, ranges::category::input>;
@@ -214,9 +218,11 @@ public:
 	[[nodiscard]] rpl::producer<> loadedResolveDone() const;
 
 	[[nodiscard]] int dlResumeCount() const;
-	void startAllResumeDownloads(bool startPaused);
+	void startAllResumeDownloads();
+	void deferAllResumeDownloads();
 	void cancelAllResumeDownloads();
 	void clearFingerprintCache();
+	bool materializeCompleteResumeRows();
 
 	void checkDuplicate(
 		not_null<Main::Session*> session,
@@ -256,9 +262,13 @@ public:
 	void dropHeldDlBatches();
 	[[nodiscard]] bool hasHeldDlBatches() const;
 	void noteDlBatchFinished(std::shared_ptr<DownloadBatch> batch);
+	void noteDlBatchCancelled(
+		not_null<Main::Session*> session,
+		uint64 batchId);
 	void dropDlBatch(uint64 batchId);
 	void dropFinishedDlRuns();
 	void dropDlRun(uint64 batchId);
+	[[nodiscard]] QString dlBatchDestination(uint64 batchId) const;
 	struct DlRunSnapshot {
 		uint64 batchId = 0;
 		uint64 sessionId = 0;
@@ -290,6 +300,9 @@ public:
 	[[nodiscard]] QString lastUlBatchName() const;
 	[[nodiscard]] QString singleDlBatchName() const;
 	[[nodiscard]] QString activeDlBatchName() const;
+	[[nodiscard]] bool isLiveDlBatch(uint64 batchId) const;
+	[[nodiscard]] QString persistedDlBatchName() const;
+	[[nodiscard]] QString persistedDlCheckpointName(uint64 batchId = 0) const;
 	void holdFinishedSingleDownload(const QString &name);
 	void checkHoldExpiry();
 
@@ -299,6 +312,8 @@ private:
 		MsgId msgId = 0;
 		QString path;
 		uint64 docId = 0;
+		uint64 batchId = 0;
+		DownloadDate started = 0;
 	};
 	struct DeleteFilesDescriptor;
 	struct SessionData {
@@ -352,11 +367,15 @@ private:
 		DocumentData *document,
 		PhotoData *photo);
 	void generateEntry(not_null<Main::Session*> session, DownloadedId &id);
+	void ensureDownloadedObject(
+		not_null<Main::Session*> session,
+		DownloadedId &id);
 
 	[[nodiscard]] HistoryItem *lookupLoadingItem(
 		Main::Session *onlyInSession) const;
 
 	void finishFilesDelete(DeleteFilesDescriptor &&descriptor);
+	void retryPendingDlDeletes();
 	void writePostponed(not_null<Main::Session*> session);
 	[[nodiscard]] Fn<std::optional<QByteArray>()> serializator(
 		not_null<Main::Session*> session) const;
@@ -367,14 +386,21 @@ private:
 		std::vector<FinishedUlRun> *ulRuns = nullptr) const;
 
 	void saveToDisk();
-	void saveIfIdle();
-	void releaseDownloadTableIfIdle();
 	void clearFingerprintCache(uint64 documentId);
 	void saveFileHash(
 		not_null<Main::Session*> session,
 		not_null<DocumentData*> document,
 		int64 size);
 	void removeFileHash(uint64 documentId, int64 size);
+
+	void persistDlBatches();
+	void refreshDlBatchPaused(uint64 batchId);
+	void dropDlBatchDownloads(uint64 batchId, int count);
+	void dropDlBatchSaved(
+		const base::flat_map<uint64, int> &counts,
+		const base::flat_map<uint64, int64> &bytes);
+	void noteRestoredDlBatchSkipped(uint64 batchId);
+	[[nodiscard]] std::vector<DlRunSnapshot> persistedDlRuns();
 
 	base::flat_map<not_null<Main::Session*>, SessionData> _sessions;
 	base::flat_set<not_null<const HistoryItem*>> _loading;
@@ -398,8 +424,10 @@ private:
 	base::Timer _clearLoadingTimer;
 
 	mutable std::unique_ptr<DedupDb> _dedupDb;
-	std::optional<DedupDb::TableUse> _downloadTableUse;
 	int _checksInProgress = 0;
+	bool _pendingDeletesRetryStarted = false;
+	std::shared_ptr<std::atomic<bool>> _pendingDeletesAlive
+		= std::make_shared<std::atomic<bool>>(true);
 
 	// Caches the partial remote fingerprint per documentId so the 2 sample
 	// chunks are requested from the server only once per download attempt,

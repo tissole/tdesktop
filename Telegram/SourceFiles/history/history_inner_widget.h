@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <apiwrap.h>
 #include "base/timer.h"
+#include "base/weak_ptr.h"
 #include "data/data_report.h"
 #include "ui/rp_widget.h"
 #include "ui/controls/swipe_handler_data.h"
@@ -46,6 +47,7 @@ enum class ElementChatMode : char;
 class ElementOverlayHost;
 class EmptyPainter;
 class Element;
+class RangeSelectionLoader;
 class TranslateTracker;
 class ReadMetricsTracker;
 struct PinnedId;
@@ -77,6 +79,10 @@ struct ChatPaintContext;
 class PathShiftGradient;
 struct PeerUserpicView;
 } // namespace Ui
+
+namespace Ui::Toast {
+class Instance;
+} // namespace Ui::Toast
 
 namespace Dialogs::Ui {
 using namespace ::Ui;
@@ -528,6 +534,13 @@ private:
 		not_null<SelectedItems*> toItems,
 		not_null<HistoryItem*> item,
 		SelectAction action) const;
+	void startRangeSelection(
+		FullMsgId fromId,
+		FullMsgId tillId,
+		int limit);
+	void applyRangeItems(
+		const std::vector<not_null<HistoryItem*>> &items);
+	void hideRangeSelectionToast();
 	void changeAccessibilitySelection(int index, SelectAction action);
 	void extendAccessibilitySelection(int oldIndex, int newIndex);
 	void oldForwardItem(FullMsgId itemId);
@@ -629,6 +642,11 @@ private:
 
 	style::cursor _cursor = style::cur_default;
 	SelectedItems _selected;
+	std::unique_ptr<HistoryView::RangeSelectionLoader> _rangeLoader;
+	std::vector<not_null<HistoryItem*>> _rangePending;
+	base::weak_ptr<Ui::Toast::Instance> _rangeToast;
+	base::Timer _rangeWaitTimer;
+	int _rangeWaitLeft = 0;
 	HistoryItem *_selectedTextItem = nullptr;
 	MessageSelection _selectedTextSelection;
 	TextForMimeData _selectedText;

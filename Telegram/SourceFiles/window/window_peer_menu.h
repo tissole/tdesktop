@@ -210,6 +210,16 @@ base::weak_qptr<Ui::BoxContent> ShowChooseRecipientBox(
 	rpl::producer<QString> titleOverride = nullptr,
 	FnMut<void()> &&successCallback = nullptr,
 	InlineBots::PeerTypes typesRestriction = 0);
+// Same chooser in multi-select mode: `sendMany` gets every checked chat when
+// the user confirms, while `chosen` keeps handling forum and community rows
+// that must be opened as a single thread.
+base::weak_qptr<Ui::BoxContent> ShowChooseRecipientsBox(
+	not_null<Window::SessionNavigation*> navigation,
+	FnMut<bool(not_null<Data::Thread*>)> &&chosen,
+	Fn<void(
+		std::vector<not_null<Data::Thread*>>,
+		Api::SendOptions)> &&sendMany,
+	rpl::producer<QString> titleOverride = nullptr);
 base::weak_qptr<Ui::BoxContent> ShowForwardMessagesBox(
 	std::shared_ptr<ChatHelpers::Show> show,
 	Data::ForwardDraft &&draft,

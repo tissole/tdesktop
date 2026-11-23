@@ -369,11 +369,9 @@ public:
 		std::shared_ptr<EnhancedForward::SavedJob> resumeJob = nullptr,
 		std::optional<TimeId> videoTimestamp = std::nullopt);
 	void startResumeForward(
-		const PeerId &srcId,
 		const PeerId &dstId,
 		not_null<Main::Session*> session);
 	void startResumeEnhancedForward(
-		const PeerId &srcId,
 		const PeerId &dstId,
 		not_null<Main::Session*> session);
 	void shareContact(
@@ -757,6 +755,10 @@ private:
 		mtpRequestId> _draftsSaveRequestIds;
 	base::Timer _draftsSaveTimer;
 
+	// Destinations with an enhanced-forward resume that is still resolving
+	// its sources, so a second click cannot start the same saved job twice.
+	base::flat_set<PeerId> _efResumePending;
+
 	base::flat_set<mtpRequestId> _stickerSetDisenableRequests;
 	base::flat_set<mtpRequestId> _maskSetDisenableRequests;
 	base::flat_set<mtpRequestId> _customEmojiSetDisenableRequests;
@@ -916,6 +918,7 @@ private:
 
 	base::flat_map<FullMsgId, QString> _unlikelyMessageLinks;
 	base::flat_map<FullStoryId, QString> _unlikelyStoryLinks;
+	base::flat_map<FullMsgId, int> _filePartRestarts;
 
 	std::optional<uint64> _takeoutId;
 	// Peers whose content was explicitly asked to go through the session;

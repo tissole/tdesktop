@@ -44,6 +44,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_dedup_db.h"
 #include "data/data_download_manager.h"
 #include "data/data_file_hash.h"
+#include "data/data_forward_dedup.h"
 #include "api/api_confirm_phone.h"
 #include "api/api_unread_things.h"
 #include "api/api_ringtones.h"
@@ -134,33 +135,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace {
 
-// Server-side forwards move no bytes, so transfer dedup works on document
-// ids plus lazily resolved remote hashes. Text and id-less items always go.
-struct ForwardDedupMedia {
-	uint64 mediaId = 0;
-	DocumentData *doc = nullptr;
-	PhotoData *photo = nullptr;
-	MsgId sentId;
-	bool pending = false;
-};
-
-ForwardDedupMedia ForwardDedupMediaOf(HistoryItem *item) {
-	const auto media = item ? item->media() : nullptr;
-	const auto doc = media ? media->document() : nullptr;
-	const auto photo = media ? media->photo() : nullptr;
-	if (!doc && !photo) {
-		return {};
-	}
-	return {
-		.mediaId = doc ? uint64(doc->id) : uint64(photo->id),
-		.doc = doc,
-		.photo = photo,
-	};
-}
-
 void ForwardDedupFillSentIds(
 		const MTPUpdates &result,
-		std::vector<ForwardDedupMedia> &sentMedia) {
+		std::vector<Data::ForwardDedup::Media> &sentMedia) {
 	const auto assign = [&](uint64 mediaId, bool isPhoto, MsgId msgId) {
 		for (auto &sent : sentMedia) {
 			if (sent.mediaId == mediaId
@@ -213,163 +190,6 @@ void ForwardDedupFillSentIds(
 	}, [&](const auto &) {
 	});
 }
-bool ForwardDedupSkip(
-		HistoryItem *item,
-		PeerId dstPeer,
-		std::set<std::pair<uint64, bool>> &seenInBatch,
-		bool &pendingAdded) {
-	pendingAdded = false;
-	const auto media = ForwardDedupMediaOf(item);
-	if (!media.mediaId) {
-		return false;
-	}
-	const auto mediaId = media.mediaId;
-	const auto isPhoto = (media.photo != nullptr);
-	if (!seenInBatch.insert({ mediaId, isPhoto }).second) {
-		return true;
-	}
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (!db.isOpen()) {
-		return false;
-	}
-	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
-	[[maybe_unused]] auto chatUse = db.useChatTable(dstPeer, dedupOn);
-	if (db.chatTableContainsDocId(dstPeer, mediaId, isPhoto, dedupOn)) {
-		return true;
-	}
-	using Table = Data::DedupDb::Table;
-	if (dedupOn
-		&& (db.containsDocId(Table::Uploads, mediaId, isPhoto)
-			|| db.containsDocIdInDb(Table::Uploads, mediaId, isPhoto))) {
-		return true;
-	}
-	if (dedupOn) {
-		db.addPending(Table::Uploads, mediaId, QByteArray(), isPhoto);
-		pendingAdded = true;
-	}
-	return false;
-}
-
-void ForwardDedupRecordHash(
-		uint64 mediaId,
-		bool isPhoto,
-		const QByteArray &hash,
-		PeerId dstPeer,
-		MsgId sentId) {
-	if (hash.isEmpty()) {
-		return;
-	}
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (!db.isOpen()) {
-		return;
-	}
-	auto isDup = false;
-	if (sentId && IsServerMsgId(sentId)) {
-		isDup = db.recordUploadDestination(
-			hash,
-			mediaId,
-			isPhoto,
-			dstPeer,
-			sentId,
-			db.isChatScanned(dstPeer));
-	} else {
-		db.insert(Data::DedupDb::Table::Uploads, {
-			.hash = hash,
-			.documentId = mediaId,
-			.isPhoto = isPhoto,
-			.status = u"f"_q,
-		});
-	}
-	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
-	if (!dedupOn || isDup) {
-		return;
-	}
-	[[maybe_unused]] auto chatUse = db.useChatTable(dstPeer, dedupOn);
-	if (db.chatTableContainsHash(dstPeer, hash, dedupOn)) {
-		return;
-	}
-	using Table = Data::DedupDb::Table;
-	if (db.containsDocId(Table::Uploads, mediaId, isPhoto)) {
-		return;
-	}
-	if (db.containsHash(Table::Uploads, hash)) {
-		if (db.containsFinishedHash(Table::Uploads, hash)) {
-			db.insert(Table::Uploads, {
-				.hash = hash,
-				.documentId = mediaId,
-				.isPhoto = isPhoto,
-				.status = u"f"_q,
-			});
-		}
-		return;
-	}
-	db.insert(Table::Uploads, {
-		.hash = hash,
-		.documentId = mediaId,
-		.isPhoto = isPhoto,
-		.status = u"f"_q,
-	});
-}
-
-void ForwardDedupResolveHash(
-		Main::Session *session,
-		uint64 mediaId,
-		DocumentData *doc,
-		PeerId dstPeer,
-		MsgId sentId) {
-	if (!doc) {
-		return;
-	}
-	Data::RemoteFileFingerprint(
-		not_null<Main::Session*>(session),
-		not_null<DocumentData*>(doc),
-		[=](QByteArray hash) {
-			ForwardDedupRecordHash(mediaId, false, hash, dstPeer, sentId);
-		});
-}
-
-void ForwardDedupResolvePhotoHash(
-		Main::Session *session,
-		uint64 mediaId,
-		PhotoData *photo,
-		PeerId dstPeer,
-		MsgId sentId) {
-	if (!photo) {
-		return;
-	}
-	Data::RemotePhotoFingerprint(
-		not_null<Main::Session*>(session),
-		not_null<PhotoData*>(photo),
-		[=](QByteArray hash) {
-			ForwardDedupRecordHash(mediaId, true, hash, dstPeer, sentId);
-		});
-}
-
-void ForwardDedupDone(
-		Main::Session *session,
-		uint64 mediaId,
-		DocumentData *doc,
-		PhotoData *photo,
-		PeerId dstPeer,
-		MsgId sentId,
-		bool pending) {
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (pending && db.isOpen()) {
-		db.removePending(
-			Data::DedupDb::Table::Uploads,
-			mediaId,
-			(photo != nullptr));
-	}
-	ForwardDedupResolveHash(session, mediaId, doc, dstPeer, sentId);
-	ForwardDedupResolvePhotoHash(session, mediaId, photo, dstPeer, sentId);
-}
-
-void ForwardDedupFail(uint64 mediaId, bool isPhoto, bool pending) {
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (pending && db.isOpen()) {
-		db.removePending(Data::DedupDb::Table::Uploads, mediaId, isPhoto);
-	}
-}
 
 // Save draft to the cloud with 1 sec extra delay.
 constexpr auto kSaveCloudDraftTimeout = 1000;
@@ -390,6 +210,11 @@ constexpr auto kDialogsPerPage = 500;
 constexpr auto kStatsSessionKillTimeout = 10 * crl::time(1000);
 constexpr auto kTakeoutInitMaxRetries = 3;
 constexpr auto kTakeoutInitRetryTimeout = crl::time(1000);
+// A restored forward may point to a source channel that only becomes
+// available once the dialogs list loads after a restart. Retry the resolve
+// for that startup window instead of dropping the user's resume request.
+constexpr auto kEfResumeRetryDelay = crl::time(5000);
+constexpr auto kEfResumeRetryMax = 6;
 
 using PhotoFileLocationId = Data::PhotoFileLocationId;
 using DocumentFileLocationId = Data::DocumentFileLocationId;
@@ -805,6 +630,42 @@ void ApiWrap::sendMessageFail(
 		uint64 randomId,
 		FullMsgId itemId) {
 	const auto show = ShowForPeer(peer);
+	const auto restartFilePartUpload = [&] {
+		if (!error.startsWith(u"FILE_PART_"_q)
+			|| !error.endsWith(u"_MISSING"_q)) {
+			return false;
+		}
+		const auto item = _session->data().message(itemId);
+		const auto media = item ? item->media() : nullptr;
+		const auto document = media ? media->document() : nullptr;
+		if (!item
+			|| !item->isSending()
+			|| item->groupId()
+			|| item->isScheduled()
+			|| item->shortcutId()
+			|| !document
+			|| media->invoice()
+			|| document->filepath(true).isEmpty()) {
+			return false;
+		}
+		const auto i = _filePartRestarts.find(itemId);
+		if (i != end(_filePartRestarts) && i->second >= 1) {
+			return false;
+		}
+		if (!_session->uploader().restartUpload(item, document)) {
+			return false;
+		}
+		_filePartRestarts[itemId] = (i != end(_filePartRestarts))
+			? (i->second + 1)
+			: 1;
+		if (randomId) {
+			_session->data().unregisterMessageRandomId(randomId);
+		}
+		return true;
+	}();
+	if (restartFilePartUpload) {
+		return;
+	}
 	const auto paidStarsPrefix = u"ALLOW_PAYMENT_REQUIRED_"_q;
 	if (show && error == u"PEER_FLOOD"_q) {
 		show->showBox(
@@ -4526,6 +4387,15 @@ void ApiWrap::forwardMessages(
 	}
 
 	auto split = EnhancedForward::classifyItems(draft.items);
+	if (resumeJob) {
+		// A restored job must go through the enhanced pipeline even when the
+		// in-memory protected-peer marks were lost on restart.
+		split.restricted.insert(
+			end(split.restricted),
+			begin(split.normal),
+			end(split.normal));
+		split.normal.clear();
+	}
 	{
 	auto enhancedItems = std::move(split.restricted);
 	auto normalItems = std::move(split.normal);
@@ -4641,9 +4511,17 @@ void ApiWrap::forwardMessages(
 		const auto copySrc = draft.items.empty()
 			? PeerId()
 			: draft.items.front()->history()->peer->id;
-		const auto copyFirst = draft.items.empty()
-			? FullMsgId()
-			: draft.items.front()->fullId();
+		auto copyFirst = FullMsgId();
+		auto copyLast = FullMsgId();
+		for (const auto &item : draft.items) {
+			const auto id = item->fullId();
+			if (!copyFirst || id.msg < copyFirst.msg) {
+				copyFirst = id;
+			}
+			if (!copyLast || id.msg > copyLast.msg) {
+				copyLast = id;
+			}
+		}
 		const auto copyActionId = EnhancedForward::CurrentForwardActionId(
 			_session,
 			forwardDst);
@@ -4673,6 +4551,7 @@ void ApiWrap::forwardMessages(
 								forwardDst,
 								copySrc,
 								copyFirst,
+								copyLast,
 								*totalBefore,
 								0,
 								*skippedCount,
@@ -4795,8 +4674,38 @@ void ApiWrap::forwardMessages(
 				auto sharedBatches = std::make_shared<std::vector<std::pair<int, std::vector<not_null<HistoryItem*>>>>>(std::move(batches));
 				auto sharedIndex = std::make_shared<size_t>(0);
 				auto copySeen = std::make_shared<std::set<std::pair<uint64, bool>>>();
+				auto copySeenHashes = std::make_shared<std::set<QByteArray>>();
+				auto copyHashes = std::make_shared<
+					std::map<const HistoryItem*, QByteArray>>();
+				auto copyResolving = std::make_shared<bool>(false);
 				auto sendNext = std::make_shared<Fn<void()>>();
 				*sendNext = [=]() mutable {
+					if (*sharedIndex < sharedBatches->size()) {
+						const auto &nextItems
+							= (*sharedBatches)[*sharedIndex].second;
+						auto missing = false;
+						for (const auto &item : nextItems) {
+							if (copyHashes->find(item.get())
+								== copyHashes->end()) {
+								missing = true;
+								break;
+							}
+						}
+						if (missing) {
+							if (!std::exchange(*copyResolving, true)) {
+								Data::ForwardDedup::ResolveHashes(
+									forwardDst,
+									*copySeen,
+									nextItems,
+									copyHashes,
+									[=] {
+										*copyResolving = false;
+										(*sendNext)();
+									});
+							}
+							return;
+						}
+					}
 					if (*sharedIndex >= sharedBatches->size()) {
 						if (*totalBefore > 0) {
 							const auto sent = *totalBefore - *skippedCount;
@@ -4810,6 +4719,7 @@ void ApiWrap::forwardMessages(
 								forwardDst,
 								copySrc,
 								copyFirst,
+								copyLast,
 								*totalBefore,
 								*totalBefore - *skippedCount,
 								*skippedCount,
@@ -4856,29 +4766,26 @@ void ApiWrap::forwardMessages(
 						auto &items = pair.second;
 						auto filtered = items;
 						filtered.clear();
-						auto &dedupDb = Core::App().downloadManager().ensureDedupDb();
-						const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
-						auto forwardChatUse = std::make_shared<
-							Data::DedupDb::ChatTableUse>();
-						if (dedupDb.isOpen()) {
-							*forwardChatUse = dedupDb.useChatTable(
-								forwardDst,
-								dedupOn);
-						}
-
-						auto sentMedia = std::vector<ForwardDedupMedia>();
+						auto sentMedia = std::vector<Data::ForwardDedup::Media>();
 						for (const auto item : items) {
 							auto pending = false;
-							if (ForwardDedupSkip(
+							const auto hashIt = copyHashes->find(item.get());
+							const auto hash = (hashIt != copyHashes->end())
+								? hashIt->second
+								: QByteArray();
+							if (Data::ForwardDedup::Skip(
 									item,
 									forwardDst,
 									*copySeen,
+									*copySeenHashes,
+									hash,
 									pending)) {
 								++(*skippedCount);
 								continue;
 							}
 							filtered.push_back(item);
-							auto media = ForwardDedupMediaOf(item);
+							auto media = Data::ForwardDedup::MediaOf(item);
+							media.hash = hash;
 							media.pending = pending;
 							sentMedia.push_back(std::move(media));
 						}
@@ -4949,11 +4856,12 @@ void ApiWrap::forwardMessages(
 									ForwardDedupFillSentIds(result, sentMedia);
 									_session->data().sendHistoryChangeNotifications();
 									for (const auto &sent : sentMedia) {
-										ForwardDedupDone(
+										Data::ForwardDedup::Done(
 											_session,
 											sent.mediaId,
 											sent.doc,
 											sent.photo,
+											sent.hash,
 											forwardDst,
 											sent.sentId,
 											sent.pending);
@@ -4973,7 +4881,10 @@ void ApiWrap::forwardMessages(
 											sent.mediaId,
 											(sent.photo != nullptr),
 										});
-										ForwardDedupFail(
+										if (!sent.hash.isEmpty()) {
+											copySeenHashes->erase(sent.hash);
+										}
+										Data::ForwardDedup::Fail(
 											sent.mediaId,
 											(sent.photo != nullptr),
 											sent.pending);
@@ -4992,29 +4903,26 @@ void ApiWrap::forwardMessages(
 						auto &items = pair.second;
 						auto filtered = items;
 						filtered.clear();
-						auto &dedupDb = Core::App().downloadManager().ensureDedupDb();
-						const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
-						auto forwardChatUse = std::make_shared<
-							Data::DedupDb::ChatTableUse>();
-						if (dedupDb.isOpen()) {
-							*forwardChatUse = dedupDb.useChatTable(
-								forwardDst,
-								dedupOn);
-						}
-
-						auto sentMedia = std::vector<ForwardDedupMedia>();
+						auto sentMedia = std::vector<Data::ForwardDedup::Media>();
 						for (const auto item : items) {
 							auto pending = false;
-							if (ForwardDedupSkip(
+							const auto hashIt = copyHashes->find(item.get());
+							const auto hash = (hashIt != copyHashes->end())
+								? hashIt->second
+								: QByteArray();
+							if (Data::ForwardDedup::Skip(
 									item,
 									forwardDst,
 									*copySeen,
+									*copySeenHashes,
+									hash,
 									pending)) {
 								++(*skippedCount);
 								continue;
 							}
 							filtered.push_back(item);
-							auto media = ForwardDedupMediaOf(item);
+							auto media = Data::ForwardDedup::MediaOf(item);
+							media.hash = hash;
 							media.pending = pending;
 							sentMedia.push_back(std::move(media));
 						}
@@ -5082,11 +4990,12 @@ void ApiWrap::forwardMessages(
 									ForwardDedupFillSentIds(result, sentMedia);
 									_session->data().sendHistoryChangeNotifications();
 									for (const auto &sent : sentMedia) {
-										ForwardDedupDone(
+										Data::ForwardDedup::Done(
 											_session,
 											sent.mediaId,
 											sent.doc,
 											sent.photo,
+											sent.hash,
 											forwardDst,
 											sent.sentId,
 											sent.pending);
@@ -5106,7 +5015,10 @@ void ApiWrap::forwardMessages(
 											sent.mediaId,
 											(sent.photo != nullptr),
 										});
-										ForwardDedupFail(
+										if (!sent.hash.isEmpty()) {
+											copySeenHashes->erase(sent.hash);
+										}
+										Data::ForwardDedup::Fail(
 											sent.mediaId,
 											(sent.photo != nullptr),
 											sent.pending);
@@ -5375,38 +5287,47 @@ void ApiWrap::forwardMessages(
 }
 
 void ApiWrap::startResumeForward(
-		const PeerId &srcId,
 		const PeerId &dstId,
 		not_null<Main::Session*> session) {
-	startResumeEnhancedForward(srcId, dstId, session);
+	startResumeEnhancedForward(dstId, session);
 }
 
 void ApiWrap::startResumeEnhancedForward(
-		const PeerId &srcId,
 		const PeerId &dstId,
 		not_null<Main::Session*> session) {
+	if (_efResumePending.contains(dstId)) {
+		return;
+	}
 	const auto job = EnhancedForward::GetUnfinishedJobByDst(dstId, session);
 	if (!job) {
 		return;
 	}
 
 	auto jobPtr = std::make_shared<EnhancedForward::SavedJob>(*job);
-	const auto resumeFn = std::make_shared<std::function<bool()>>();
-
+	const auto stillSameJob = [=] {
+		const auto current = EnhancedForward::GetUnfinishedJobByDst(
+			dstId,
+			session);
+		return current
+			&& current->srcId == jobPtr->srcId
+			&& current->sourceMsgs == jobPtr->sourceMsgs;
+	};
 	const auto resume = [=] {
 		auto resolved = std::vector<not_null<HistoryItem*>>();
 		resolved.reserve(jobPtr->sourceMsgs.size());
-		auto ok = true;
 		for (const auto &full : jobPtr->sourceMsgs) {
 			const auto item = session->data().message(full);
-			if (item) {
-				resolved.push_back(item);
-			} else {
-				ok = false;
-				break;
+			if (!item) {
+				// The pipeline restores every row of the saved job by index;
+				// starting with a partial list would silently drop the files
+				// that are still unresolved.
+				return false;
 			}
+			resolved.push_back(item);
 		}
-		if (!ok || resolved.empty()) return false;
+		if (resolved.empty()) {
+			return false;
+		}
 		Data::ResolvedForwardDraft draft;
 		draft.items = std::move(resolved);
 		SendAction action(session->data().history(dstId));
@@ -5417,58 +5338,43 @@ void ApiWrap::startResumeEnhancedForward(
 			jobPtr);
 		return true;
 	};
-	*resumeFn = resume;
-
 	if (resume()) {
 		return;
 	}
 
-	const auto fetchAndResume = [=] {
-		auto ids = QVector<MTPInputMessage>();
-		ids.reserve(job->sourceMsgs.size());
-		for (const auto &full : job->sourceMsgs) {
-			ids.push_back(MTP_inputMessageID(MTP_int(full.msg.bare)));
-		}
-		const auto srcPeer = session->data().peer(srcId);
-		const auto channel = srcPeer
-			? srcPeer->asChannel()
-			: nullptr;
-		auto afterFetch = [=] {
-			struct RetryState {
-				int attempts = 0;
-			};
-			const auto state = std::make_shared<RetryState>();
-			const auto timer = std::make_shared<base::Timer>();
-			timer->setCallback([=] {
-				state->attempts++;
-				if ((*resumeFn)() || state->attempts > 20) {
-					timer->cancel();
+	_efResumePending.emplace(dstId);
+	const auto resolve = [=](auto &&self, int retriesLeft) -> void {
+		EnhancedForward::EnsureForwardSourceMessages(
+			session,
+			jobPtr->sourceMsgs,
+			[=](bool ok) {
+				if (!stillSameJob()) {
+					// Cancelled or replaced while the sources were being
+					// resolved; resuming the stale snapshot would revive it.
+					_efResumePending.remove(dstId);
+					return;
 				}
+				if (resume()) {
+					_efResumePending.remove(dstId);
+					return;
+				}
+				if (ok || retriesLeft <= 0) {
+					_efResumePending.remove(dstId);
+					return;
+				}
+				base::call_delayed(
+					kEfResumeRetryDelay,
+					session,
+					[=] {
+						if (!stillSameJob()) {
+							_efResumePending.remove(dstId);
+							return;
+						}
+						self(self, retriesLeft - 1);
+					});
 			});
-			timer->callEach(crl::time(250));
-		};
-		if (channel) {
-			request(MTPchannels_GetMessages(
-				channel->inputChannel(),
-				MTP_vector<MTPInputMessage>(ids)
-			)).done([=](const MTPmessages_Messages &result) {
-				session->data().processExistingMessages(channel, result);
-				afterFetch();
-			}).fail([=](const MTP::Error &) {
-				afterFetch();
-			}).send();
-		} else {
-			request(MTPmessages_GetMessages(
-				MTP_vector<MTPInputMessage>(ids)
-			)).done([=](const MTPmessages_Messages &result) {
-				session->data().processExistingMessages(nullptr, result);
-				afterFetch();
-			}).fail([=](const MTP::Error &) {
-				afterFetch();
-			}).send();
-		}
 	};
-	fetchAndResume();
+	resolve(resolve, kEfResumeRetryMax);
 }
 
 void ApiWrap::shareContact(

@@ -38,6 +38,7 @@ enum class JobKind {
 	Export,
 	ExportBatch,
 	EnhancedForward,
+	BulkForward,
 	Scan,
 };
 
@@ -82,6 +83,28 @@ struct DlResumeRecord {
 	QString path;
 	qint64 fileSize = 0;
 	uint64 docId = 0;
+	uint64 batchId = 0;
+	qint64 started = 0;
+};
+
+struct DlBatchRecord {
+	uint64 sessionId = 0;
+	uint64 batchId = 0;
+	int total = 0;
+	int done = 0;
+	int skipped = 0;
+	qint64 startedAt = 0;
+	QString srcName;
+	QString destDir;
+	QString displayName;
+	qint64 readyBytes = 0;
+	qint64 totalBytes = 0;
+};
+
+struct DlPendingDelete {
+	QString path;
+	QString root;
+	QString stopRoot;
 };
 
 struct UlResumeRecord {
@@ -504,6 +527,14 @@ public:
 	void removeDlResume(uint64 sessionId, uint64 peerId, int64 msgId);
 	[[nodiscard]] std::vector<DlResumeRecord> loadAllDlResume() const;
 
+	void upsertDlBatch(const DlBatchRecord &record);
+	void removeDlBatch(uint64 sessionId, uint64 batchId);
+	[[nodiscard]] std::vector<DlBatchRecord> loadDlBatches() const;
+
+	void addDlPendingDelete(const DlPendingDelete &record);
+	void removeDlPendingDelete(const QString &path);
+	[[nodiscard]] std::vector<DlPendingDelete> loadAllDlPendingDeletes() const;
+
 	void insertUlResume(const UlResumeRecord &record);
 	void removeUlResume(
 		uint64 sessionId,
@@ -865,12 +896,19 @@ public:
 	[[nodiscard]] std::optional<JobRecord> findActiveJob(
 		JobKind kind,
 		uint64 scopeId) const;
+	// Unfinished jobs of one kind for a session, newest first.
+	[[nodiscard]] std::vector<JobRecord> findActiveJobs(
+		JobKind kind,
+		uint64 sessionId) const;
 	void setJobState(uint64 jobId, JobState state);
 	void setJobProgress(
 		uint64 jobId,
 		int total,
 		int done,
 		int skipped);
+	// Replaces the opaque job payload, used by jobs that keep their whole
+	// state in options instead of item rows.
+	void updateJobOptions(uint64 jobId, const QByteArray &options);
 	// Pause keeps the job and its items for a later resume.
 	void pauseJob(uint64 jobId);
 	// Finish and cancel both remove the job and its items.

@@ -33,6 +33,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_layers.h"
 #include "rpl/rpl.h"
 
+#include <QtCore/QFileInfo>
+
 FileClickHandler::FileClickHandler(FullMsgId context)
 : _context(context) {
 }
@@ -134,6 +136,16 @@ std::shared_ptr<DownloadBatch> MakeDownloadBatch(int total) {
 	return batch;
 }
 
+bool IsDocumentFileComplete(not_null<DocumentData*> document) {
+	auto path = document->filepath(true);
+	if (path.isEmpty()) {
+		path = document->downloadTargetPath();
+	}
+	return !path.isEmpty()
+		&& document->size > 0
+		&& QFileInfo(path).size() >= document->size;
+}
+
 void TrackSaveDownload(
 		FullMsgId itemId,
 		not_null<DocumentData*> document,
@@ -158,23 +170,11 @@ void TrackSaveDownload(
 		if (doc->loading()) {
 			if (!doc->loadingFilePath().isEmpty()) {
 				if (const auto item = document->owner().message(itemId)) {
-					auto &manager = Core::App().downloadManager();
-					auto tracked = false;
-					for (const auto id : manager.loadingList()) {
-						if (id->object.item == item
-							&& id->object.document == document.get()) {
-							tracked = true;
-							break;
-						}
-					}
-					if (!tracked) {
-						manager.addLoading({
-							.item = item,
-							.document = document,
-						}, false, batchId);
-					} else {
-						lifetime->destroy();
-					}
+					Core::App().downloadManager().addLoading({
+						.item = item,
+						.document = document,
+					}, false, batchId);
+					lifetime->destroy();
 				}
 			}
 			return;
@@ -294,7 +294,15 @@ void DocumentSaveClickHandler::Save(
 				if (doc->loading()) {
 					return;
 				}
-				if (!doc->filepath(true).isEmpty()) {
+				if (doc->downloadPaused()
+					&& !IsDocumentFileComplete(doc)) {
+					return;
+				}
+				auto path = doc->filepath(true);
+				if (path.isEmpty()) {
+					path = doc->downloadTargetPath();
+				}
+				if (!path.isEmpty()) {
 					if (batch) {
 						batch->displayName = QFileInfo(savename).fileName();
 						batch->addDownloaded();
@@ -304,9 +312,9 @@ void DocumentSaveClickHandler::Save(
 							data->session().uniqueId(),
 							batchId,
 							doc->id,
-							doc->filepath(true));
+							path);
 					}
-				} else if (batch) {
+				} else if (batch && !batch->paused) {
 					batch->addFailed();
 				}
 				lifetime->destroy();
@@ -368,13 +376,21 @@ void DocumentSaveClickHandler::SaveAndTrack(
 				if (doc->loading()) {
 					return;
 				}
-				if (!doc->filepath(true).isEmpty()) {
+				if (doc->downloadPaused()
+					&& !IsDocumentFileComplete(doc)) {
+					return;
+				}
+				auto path = doc->filepath(true);
+				if (path.isEmpty()) {
+					path = doc->downloadTargetPath();
+				}
+				if (!path.isEmpty()) {
 					if (const auto item = document->owner().message(itemId)) {
 						auto &manager = Core::App().downloadManager();
 						manager.noteUntrackedSave(
 							item,
 							document,
-							doc->filepath(true),
+							path,
 							saveStarted,
 							(batch && batch->total > 1) ? batch->id : 0);
 					}

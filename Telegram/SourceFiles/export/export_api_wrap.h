@@ -492,7 +492,6 @@ private:
 	Output::Stats *_stats = nullptr;
 	uint64 _sessionId = 0;
 	std::unique_ptr<::Data::DedupDb> _dedupDb;
-	std::optional<::Data::DedupDb::TableUse> _downloadTableUse;
 	bool _resumeArmed = false;
 	int32 _resumeLastId = 0;
 	int _resumeSplitIndex = 0;

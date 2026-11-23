@@ -317,4 +317,36 @@ void RemotePhotoFingerprint(
 		std::move(onReferenceExpired));
 }
 
+void RemoteSampleFingerprint(
+		not_null<Main::Session*> session,
+		const RemoteSample &sample,
+		Fn<void(QByteArray)> done,
+		int dcShift) {
+	if (!sample.id || sample.size <= 0) {
+		done(QByteArray());
+		return;
+	}
+	const auto id = MTP_long(sample.id);
+	const auto accessHash = MTP_long(sample.accessHash);
+	const auto location = sample.isPhoto
+		? MTP_inputPhotoFileLocation(
+			id,
+			accessHash,
+			MTP_bytes(sample.fileReference),
+			MTP_string(QString::fromUtf8(sample.sizeType)))
+		: MTP_inputDocumentFileLocation(
+			id,
+			accessHash,
+			MTP_bytes(sample.fileReference),
+			MTP_string());
+	RemoteFingerprint(
+		session,
+		location,
+		FingerprintDcId(sample.dcId, dcShift),
+		sample.size,
+		std::move(done),
+		0,
+		nullptr);
+}
+
 } // namespace Data

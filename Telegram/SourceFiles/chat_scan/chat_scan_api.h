@@ -200,7 +200,6 @@ private:
 	bool _mediaTotalsRequested = false;
 	base::flat_map<int, CategoryTotals> _totals;
 	std::unique_ptr<ScanQueue> _queue;
-	std::optional<Data::DedupDb::TableUse> _uploadTableUse;
 	std::unique_ptr<ChunkScheduler> _scheduler;
 	bool _schedulerStarted = false;
 	std::unordered_map<uint64, DocumentData*> _documents;
