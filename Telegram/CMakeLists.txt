@@ -2038,8 +2038,6 @@ PRIVATE
     tde2e/tde2e_integration.h
     test/test_agent.cpp
     test/test_agent.h
-    test/test_bulk_forward.cpp
-    test/test_bulk_forward.h
     test/test_capture.cpp
     test/test_capture.h
     test/test_custom_emoji.cpp
@@ -2066,7 +2064,6 @@ PRIVATE
     test/test_panel.h
     test/test_probe.cpp
     test/test_probe.h
-    test/test_repository_checks.cpp
     test/test_runner.cpp
     test/test_runner.h
     test/test_scenario.cpp

@@ -3430,6 +3430,7 @@ void Provider::cancelForwardRun(not_null<const HistoryItem*> item) {
 	auto &db = Core::App().downloadManager().ensureDedupDb();
 	if (db.isOpen()) {
 		db.removeNfResume(session->uniqueId(), *dst);
+		db.removeNfResume(session->uniqueId(), *dst, true);
 		for (const auto &record
 			: db.loadUnfinishedEfResumeItems(session->uniqueId())) {
 			if (record.peerId == *dst) {

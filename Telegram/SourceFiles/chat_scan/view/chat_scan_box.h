@@ -180,6 +180,7 @@ private:
 	bool _deleteFinished = false;
 	bool _confirming = false;
 	bool _deleting = false;
+	bool _deleteRemoved = false;
 	bool _showingResults = false;
 	bool _closeOnCancelled = false;
 	bool _deleteAfterReport = false;

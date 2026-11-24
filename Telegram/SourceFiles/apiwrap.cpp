@@ -279,6 +279,541 @@ void ShowChannelsLimitBox(not_null<PeerData*> peer) {
 
 } // namespace
 
+namespace CopyAlbum {
+namespace {
+
+struct Job {
+	Main::Session *session = nullptr;
+	PeerId dst;
+	PeerId src;
+	std::vector<MsgId> remaining;
+	int total = 0;
+	int done = 0;
+	int skipped = 0;
+	int64 startedAt = 0;
+	int forwardOptions = 0;
+	int groupOptions = 0;
+	bool paused = false;
+	bool cancelled = false;
+	bool finished = false;
+	uint64 nextWakeId = 1;
+	std::vector<std::pair<uint64, Fn<void()>>> wakes;
+	std::vector<Fn<void()>> onCancels;
+};
+
+struct Resume {
+	int total = 0;
+	int done = 0;
+	int skipped = 0;
+};
+
+using PendingKey = std::pair<uint64, PeerId>;
+
+base::flat_map<PeerId, std::shared_ptr<Job>> &Jobs() {
+	static auto result = base::flat_map<PeerId, std::shared_ptr<Job>>();
+	return result;
+}
+
+base::flat_map<PendingKey, Resume> &Pending() {
+	static auto result = base::flat_map<PendingKey, Resume>();
+	return result;
+}
+
+base::flat_set<PendingKey> &Resolving() {
+	static auto result = base::flat_set<PendingKey>();
+	return result;
+}
+
+void Save(const std::shared_ptr<Job> &job) {
+	if (!job || job->cancelled || job->finished) {
+		return;
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (!db.isOpen()) {
+		return;
+	}
+	auto record = Data::NfResumeRecord();
+	record.sessionId = job->session->uniqueId();
+	record.destPeerId = job->dst;
+	record.srcPeerId = job->src;
+	record.total = job->total;
+	record.done = job->done;
+	record.skipped = job->skipped;
+	record.state = job->paused ? u"paused"_q : u"running"_q;
+	record.forwardOptions = job->forwardOptions;
+	record.groupOptions = job->groupOptions;
+	record.remaining = job->remaining;
+	record.copyAlbum = true;
+	db.insertNfResume(record);
+}
+
+void RemovePersisted(const std::shared_ptr<Job> &job) {
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (db.isOpen()) {
+		db.removeNfResume(job->session->uniqueId(), job->dst, true);
+	}
+}
+
+std::shared_ptr<Job> Begin(
+		not_null<Main::Session*> session,
+		const PeerId &dst,
+		const PeerId &src,
+		int total,
+		int done,
+		int skipped,
+		int forwardOptions,
+		int groupOptions,
+		std::vector<MsgId> remaining) {
+	auto &jobs = Jobs();
+	if (const auto it = jobs.find(dst);
+		it != end(jobs) && it->second->session == session.get()) {
+		const auto job = it->second;
+		job->total = std::max(job->total, total);
+		job->done = std::max(job->done, done);
+		job->skipped = std::max(job->skipped, skipped);
+		for (const auto msgId : remaining) {
+			if (std::find(job->remaining.begin(), job->remaining.end(), msgId)
+				== end(job->remaining)) {
+				job->remaining.push_back(msgId);
+			}
+		}
+		job->paused = false;
+		job->cancelled = false;
+		job->finished = false;
+		Save(job);
+		NotifyChanged();
+		return job;
+	}
+	auto job = std::make_shared<Job>();
+	job->session = session;
+	job->dst = dst;
+	job->src = src;
+	job->remaining = std::move(remaining);
+	job->total = total;
+	job->done = done;
+	job->skipped = skipped;
+	job->startedAt = crl::now();
+	job->forwardOptions = forwardOptions;
+	job->groupOptions = groupOptions;
+	jobs.emplace(dst, job);
+	Save(job);
+	NotifyChanged();
+	return job;
+}
+
+uint64 SetWake(const std::shared_ptr<Job> &job, Fn<void()> wake) {
+	if (!job) {
+		return 0;
+	}
+	const auto id = job->nextWakeId++;
+	job->wakes.emplace_back(id, std::move(wake));
+	return id;
+}
+
+void RemoveWake(const std::shared_ptr<Job> &job, uint64 id) {
+	if (!job || !id) {
+		return;
+	}
+	for (auto i = begin(job->wakes); i != end(job->wakes); ++i) {
+		if (i->first == id) {
+			job->wakes.erase(i);
+			return;
+		}
+	}
+}
+
+void Completed(
+		const std::shared_ptr<Job> &job,
+		const std::vector<MsgId> &ids,
+		int done,
+		int skipped) {
+	if (!job) {
+		return;
+	}
+	for (const auto msgId : ids) {
+		const auto it = std::find(
+			job->remaining.begin(),
+			job->remaining.end(),
+			msgId);
+		if (it != end(job->remaining)) {
+			job->remaining.erase(it);
+		}
+	}
+	job->done += done;
+	job->skipped += skipped;
+	Save(job);
+	NotifyChanged();
+}
+
+bool Stopped(const std::shared_ptr<Job> &job) {
+	return !job || job->paused || job->cancelled || job->finished;
+}
+
+void Finish(const std::shared_ptr<Job> &job, uint64 wakeId) {
+	RemoveWake(job, wakeId);
+	if (!job || job->cancelled) {
+		return;
+	}
+	if (!job->remaining.empty()) {
+		Save(job);
+		return;
+	}
+	job->finished = true;
+	job->wakes.clear();
+	const auto key = PendingKey{ job->session->uniqueId(), job->dst };
+	Pending().erase(key);
+	Resolving().erase(key);
+	auto &jobs = Jobs();
+	if (const auto it = jobs.find(job->dst);
+		it != end(jobs) && it->second == job) {
+		jobs.erase(it);
+	}
+	RemovePersisted(job);
+	Data::SetCopyAlbumProgress(0, 0);
+	NotifyChanged();
+}
+
+void Pause(const std::shared_ptr<Job> &job) {
+	if (!job || job->paused || job->cancelled || job->finished) {
+		return;
+	}
+	job->paused = true;
+	Save(job);
+	NotifyChanged();
+}
+
+void Cancel(const std::shared_ptr<Job> &job) {
+	if (!job || job->cancelled) {
+		return;
+	}
+	job->cancelled = true;
+	job->wakes.clear();
+	const auto onCancels = base::take(job->onCancels);
+	const auto key = PendingKey{ job->session->uniqueId(), job->dst };
+	Pending().erase(key);
+	Resolving().erase(key);
+	auto &jobs = Jobs();
+	if (const auto it = jobs.find(job->dst);
+		it != end(jobs) && it->second == job) {
+		jobs.erase(it);
+	}
+	RemovePersisted(job);
+	Data::SetCopyAlbumProgress(0, 0);
+	EnhancedForward::DropForwardBatch(job->session, job->dst);
+	NotifyChanged();
+	for (const auto &onCancel : onCancels) {
+		if (onCancel) {
+			onCancel();
+		}
+	}
+}
+
+std::optional<Resume> TakeResume(
+		not_null<Main::Session*> session,
+		const PeerId &dst) {
+	const auto key = PendingKey{ session->uniqueId(), dst };
+	const auto it = Pending().find(key);
+	if (it == end(Pending())) {
+		return std::nullopt;
+	}
+	auto result = it->second;
+	Pending().erase(it);
+	return result;
+}
+
+void ApplyResume(
+		not_null<Main::Session*> session,
+		const Data::NfResumeRecord &record) {
+	const auto key = PendingKey{ session->uniqueId(), record.destPeerId };
+	if (Resolving().contains(key)) {
+		return;
+	}
+	Resolving().insert(key);
+	Pending()[key] = Resume{
+		.total = record.total,
+		.done = record.done,
+		.skipped = record.skipped,
+	};
+	auto ids = std::vector<FullMsgId>();
+	ids.reserve(record.remaining.size());
+	for (const auto msgId : record.remaining) {
+		ids.push_back(FullMsgId(record.srcPeerId, msgId));
+	}
+	EnhancedForward::EnsureForwardSourceMessages(
+		session,
+		ids,
+		[=](bool ok) {
+			Resolving().erase(key);
+			if (!Pending().contains(key)) {
+				// Cancelled while the source messages were being resolved.
+				return;
+			}
+			if (!ok) {
+				// Keep the persisted row: it stays paused and can be resumed
+				// again once the source messages become reachable.
+				Pending().erase(key);
+				return;
+			}
+			auto items = std::vector<not_null<HistoryItem*>>();
+			items.reserve(ids.size());
+			for (const auto &fullId : ids) {
+				const auto item = session->data().message(fullId);
+				if (!item) {
+					Pending().erase(key);
+					return;
+				}
+				items.push_back(item);
+			}
+			std::sort(items.begin(), items.end(), [](auto a, auto b) {
+				return a->id < b->id;
+			});
+			Data::ResolvedForwardDraft draft;
+			draft.items = std::move(items);
+			draft.options = (record.forwardOptions >= 0
+				&& record.forwardOptions
+					<= int(Data::ForwardOptions::NoNamesAndCaptions))
+				? Data::ForwardOptions(record.forwardOptions)
+				: Data::ForwardOptions::PreserveInfo;
+			draft.groupOptions = Data::GroupingOptions::RegroupAll;
+			auto action = Api::SendAction(
+				session->data().history(record.destPeerId));
+			session->api().forwardMessages(std::move(draft), std::move(action));
+			Pending().erase(key);
+		});
+}
+
+void ResumeLive(const std::shared_ptr<Job> &job) {
+	if (!job || !job->paused) {
+		return;
+	}
+	job->paused = false;
+	Save(job);
+	const auto wakes = job->wakes;
+	NotifyChanged();
+	for (const auto &[id, wake] : wakes) {
+		if (wake) {
+			wake();
+		}
+	}
+}
+
+} // namespace
+
+void PauseDst(not_null<Main::Session*> session, const PeerId &dst) {
+	const auto it = Jobs().find(dst);
+	if (it == end(Jobs()) || it->second->session != session.get()) {
+		return;
+	}
+	Pause(it->second);
+}
+
+void ResumeDst(not_null<Main::Session*> session, const PeerId &dst) {
+	if (const auto it = Jobs().find(dst);
+		it != end(Jobs()) && it->second->session == session.get()) {
+		ResumeLive(it->second);
+		return;
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (!db.isOpen()) {
+		return;
+	}
+	for (const auto &record : db.loadNfResume(session->uniqueId())) {
+		if (record.destPeerId == dst && record.copyAlbum) {
+			ResumeRecord(session, record);
+			return;
+		}
+	}
+}
+
+void CancelDst(not_null<Main::Session*> session, const PeerId &dst) {
+	const auto it = Jobs().find(dst);
+	if (it != end(Jobs()) && it->second->session == session.get()) {
+		Cancel(it->second);
+		return;
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (!db.isOpen()) {
+		return;
+	}
+	for (const auto &record : db.loadNfResume(session->uniqueId())) {
+		if (record.destPeerId == dst && record.copyAlbum) {
+			db.removeNfResume(session->uniqueId(), dst, true);
+			const auto key = PendingKey{ session->uniqueId(), dst };
+			Pending().erase(key);
+			Resolving().erase(key);
+			NotifyChanged();
+			return;
+		}
+	}
+}
+
+void PauseAll(not_null<Main::Session*> session) {
+	auto candidates = std::vector<std::shared_ptr<Job>>();
+	for (const auto &[dst, job] : Jobs()) {
+		if (job->session == session.get()) {
+			candidates.push_back(job);
+		}
+	}
+	for (const auto &job : candidates) {
+		Pause(job);
+	}
+}
+
+void CancelAll(not_null<Main::Session*> session) {
+	auto candidates = std::vector<std::shared_ptr<Job>>();
+	for (const auto &[dst, job] : Jobs()) {
+		if (job->session == session.get()) {
+			candidates.push_back(job);
+		}
+	}
+	for (const auto &job : candidates) {
+		Cancel(job);
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (db.isOpen()) {
+		for (const auto &record : db.loadNfResume(session->uniqueId())) {
+			if (record.copyAlbum) {
+				db.removeNfResume(session->uniqueId(), record.destPeerId, true);
+				const auto key = PendingKey{
+					session->uniqueId(),
+					record.destPeerId,
+				};
+				Pending().erase(key);
+				Resolving().erase(key);
+			}
+		}
+	}
+	NotifyChanged();
+}
+
+void ResumeAll(not_null<Main::Session*> session) {
+	auto candidates = std::vector<std::shared_ptr<Job>>();
+	for (const auto &[dst, job] : Jobs()) {
+		if (job->session == session.get() && job->paused) {
+			candidates.push_back(job);
+		}
+	}
+	for (const auto &job : candidates) {
+		ResumeLive(job);
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (!db.isOpen()) {
+		return;
+	}
+	for (const auto &record : db.loadNfResume(session->uniqueId())) {
+		if (record.copyAlbum
+			&& !record.remaining.empty()
+			&& !Jobs().contains(record.destPeerId)) {
+			ResumeRecord(session, record);
+		}
+	}
+}
+
+void ResumeRecord(
+		not_null<Main::Session*> session,
+		const Data::NfResumeRecord &record) {
+	if (!record.copyAlbum
+		|| record.sessionId != session->uniqueId()
+		|| record.remaining.empty()) {
+		return;
+	}
+	if (const auto it = Jobs().find(record.destPeerId);
+		it != end(Jobs()) && it->second->session == session.get()) {
+		ResumeLive(it->second);
+		return;
+	}
+	ApplyResume(session, record);
+}
+
+bool ActiveFor(not_null<Main::Session*> session, const PeerId &dst) {
+	const auto it = Jobs().find(dst);
+	if (it != end(Jobs()) && it->second->session == session.get()) {
+		return !it->second->remaining.empty();
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (!db.isOpen()) {
+		return false;
+	}
+	for (const auto &record : db.loadNfResume(session->uniqueId())) {
+		if (record.destPeerId == dst
+			&& record.copyAlbum
+			&& !record.remaining.empty()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+int UnfinishedCount(not_null<Main::Session*> session) {
+	auto result = 0;
+	for (const auto &[dst, job] : Jobs()) {
+		if (job->session == session.get() && !job->remaining.empty()) {
+			++result;
+		}
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (db.isOpen()) {
+		for (const auto &record : db.loadNfResume(session->uniqueId())) {
+			if (record.copyAlbum
+				&& !record.remaining.empty()
+				&& !Jobs().contains(record.destPeerId)) {
+				++result;
+			}
+		}
+	}
+	return result;
+}
+
+std::vector<NormalForward::Counters> AllCounters(
+		not_null<Main::Session*> session) {
+	auto result = std::vector<NormalForward::Counters>();
+	for (const auto &[dst, job] : Jobs()) {
+		if (job->session != session.get()
+			|| job->cancelled
+			|| job->finished) {
+			continue;
+		}
+		auto counters = NormalForward::Counters();
+		counters.dst = dst;
+		counters.done = job->done;
+		counters.total = job->total;
+		counters.skipped = job->skipped;
+		counters.startedAt = job->startedAt;
+		counters.paused = job->paused;
+		counters.active = !job->remaining.empty();
+		if (!job->remaining.empty()) {
+			counters.firstSource = FullMsgId(
+				job->src,
+				job->remaining.front());
+		}
+		result.push_back(std::move(counters));
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (db.isOpen()) {
+		for (const auto &record : db.loadNfResume(session->uniqueId())) {
+			if (!record.copyAlbum
+				|| record.remaining.empty()
+				|| Jobs().contains(record.destPeerId)) {
+				continue;
+			}
+			auto counters = NormalForward::Counters();
+			counters.dst = record.destPeerId;
+			counters.done = record.done;
+			counters.total = record.total;
+			counters.skipped = record.skipped;
+			counters.paused = true;
+			counters.active = true;
+			counters.firstSource = FullMsgId(
+				record.srcPeerId,
+				record.remaining.front());
+			result.push_back(std::move(counters));
+		}
+	}
+	return result;
+}
+
+} // namespace CopyAlbum
+
 namespace Api {
 
 TimeId UnixtimeFromMsgId(mtpMsgId msgId) {
@@ -4483,9 +5018,28 @@ void ApiWrap::forwardMessages(
 		auto copyItems = std::make_shared<std::vector<not_null<HistoryItem*>>>(draft.items);
 		auto copyAction = action;
 		auto copyShared = shared;
+		auto copyRegistered = std::make_shared<bool>(false);
+		auto copyCompleted = std::make_shared<bool>(false);
+		const auto copyComplete = [=] {
+			if (copyShared && *copyRegistered && !*copyCompleted) {
+				*copyCompleted = true;
+				if (!--copyShared->requestsLeft) {
+					copyShared->callback();
+				}
+			}
+		};
+		if (shared) {
+			++shared->requestsLeft;
+			*copyRegistered = true;
+		}
 		auto alreadyFiltered = std::make_shared<bool>(false);
-		auto totalBefore = std::make_shared<int>(int(draft.items.size()));
-		auto skippedCount = std::make_shared<int>(0);
+		const auto copyResume = CopyAlbum::TakeResume(_session, forwardDst);
+		auto totalBefore = std::make_shared<int>(copyResume
+			? copyResume->total
+			: int(draft.items.size()));
+		auto skippedCount = std::make_shared<int>(copyResume
+			? copyResume->skipped
+			: 0);
 		if (*totalBefore > 0) {
 			EnhancedForward::EnsureForwardBatch(
 				_session,
@@ -4511,6 +5065,24 @@ void ApiWrap::forwardMessages(
 		const auto copySrc = draft.items.empty()
 			? PeerId()
 			: draft.items.front()->history()->peer->id;
+		auto copyRemaining = std::vector<MsgId>();
+		copyRemaining.reserve(draft.items.size());
+		for (const auto &item : draft.items) {
+			copyRemaining.push_back(item->id);
+		}
+		const auto copyJob = CopyAlbum::Begin(
+			_session,
+			forwardDst,
+			copySrc,
+			*totalBefore,
+			copyResume ? copyResume->done : 0,
+			*skippedCount,
+			int(draft.options),
+			int(draft.groupOptions),
+			std::move(copyRemaining));
+		copyJob->onCancels.push_back([=] {
+			copyComplete();
+		});
 		auto copyFirst = FullMsgId();
 		auto copyLast = FullMsgId();
 		for (const auto &item : draft.items) {
@@ -4533,7 +5105,23 @@ void ApiWrap::forwardMessages(
 			if (!*alreadyFiltered) {
 				*alreadyFiltered = true;
 				Data::FilterCopyAlbumDuplicates(_session, forwardDst, *copyItems, [=](std::vector<not_null<HistoryItem*>> filtered) mutable {
-					*skippedCount = *totalBefore - int(filtered.size());
+					auto survivors = std::set<const HistoryItem*>();
+					for (const auto &item : filtered) {
+						survivors.emplace(item.get());
+					}
+					auto skippedIds = std::vector<MsgId>();
+					skippedIds.reserve(copyItems->size());
+					for (const auto &item : *copyItems) {
+						if (!survivors.contains(item.get())) {
+							skippedIds.push_back(item->id);
+						}
+					}
+					*skippedCount += int(skippedIds.size());
+					CopyAlbum::Completed(
+						copyJob,
+						skippedIds,
+						0,
+						int(skippedIds.size()));
 					*copyItems = std::move(filtered);
 					if (copyItems->empty()) {
 						EnhancedForward::ReportForwardBatchItem(
@@ -4566,14 +5154,21 @@ void ApiWrap::forwardMessages(
 								*skippedCount);
 						}
 						Data::SetCopyAlbumProgress(0, 0);
-						if (copyShared && !--copyShared->requestsLeft) copyShared->callback();
+						CopyAlbum::Finish(copyJob, 0);
+						copyComplete();
 						return;
 					}
 					(*refreshAndSend)();
 				});
 				return;
 			}
-			std::vector<std::pair<int, std::vector<not_null<HistoryItem*>>>> batches;
+			if (copyJob->cancelled || copyJob->finished) {
+				// A cancel during the prefilter already cleared the job; do not
+				// leave the progress bar or a wake behind for it.
+				Data::SetCopyAlbumProgress(0, 0);
+				return;
+			}
+		std::vector<std::pair<int, std::vector<not_null<HistoryItem*>>>> batches;
 		std::vector<not_null<HistoryItem*>> remaining;
 		remaining.reserve(draft.items.size());
 		{
@@ -4663,9 +5258,6 @@ void ApiWrap::forwardMessages(
 		}
 		if (!batches.empty() || !remaining.empty()) {
 			if (!batches.empty()) {
-				if (shared) {
-					++shared->requestsLeft;
-				}
 				auto totalItems = 0;
 				for (const auto &p : batches) totalItems += int(p.second.size());
 				auto copyDone = std::make_shared<int>(0);
@@ -4678,8 +5270,12 @@ void ApiWrap::forwardMessages(
 				auto copyHashes = std::make_shared<
 					std::map<const HistoryItem*, QByteArray>>();
 				auto copyResolving = std::make_shared<bool>(false);
+				auto copyWakeId = std::make_shared<uint64>(0);
 				auto sendNext = std::make_shared<Fn<void()>>();
 				*sendNext = [=]() mutable {
+					if (CopyAlbum::Stopped(copyJob)) {
+						return;
+					}
 					if (*sharedIndex < sharedBatches->size()) {
 						const auto &nextItems
 							= (*sharedBatches)[*sharedIndex].second;
@@ -4738,13 +5334,17 @@ void ApiWrap::forwardMessages(
 							}
 						}
 						Data::SetCopyAlbumProgress(0, 0);
-						if (shared && !--shared->requestsLeft) {
-							shared->callback();
-						}
+						CopyAlbum::Finish(copyJob, *copyWakeId);
+						copyComplete();
 						return;
 					}
 					auto &pair = (*sharedBatches)[*sharedIndex];
 					++(*sharedIndex);
+					auto batchIds = std::vector<MsgId>();
+					batchIds.reserve(pair.second.size());
+					for (const auto &item : pair.second) {
+						batchIds.push_back(item->id);
+					}
 					if (!pair.second.empty()) {
 						const auto firstMedia = pair.second.front()->media();
 						if (firstMedia) {
@@ -4767,6 +5367,7 @@ void ApiWrap::forwardMessages(
 						auto filtered = items;
 						filtered.clear();
 						auto sentMedia = std::vector<Data::ForwardDedup::Media>();
+						auto batchSkipped = 0;
 						for (const auto item : items) {
 							auto pending = false;
 							const auto hashIt = copyHashes->find(item.get());
@@ -4781,6 +5382,7 @@ void ApiWrap::forwardMessages(
 									hash,
 									pending)) {
 								++(*skippedCount);
+								++batchSkipped;
 								continue;
 							}
 							filtered.push_back(item);
@@ -4790,6 +5392,11 @@ void ApiWrap::forwardMessages(
 							sentMedia.push_back(std::move(media));
 						}
 						if (filtered.empty()) {
+							CopyAlbum::Completed(
+								copyJob,
+								batchIds,
+								0,
+								batchSkipped);
 							*copyDone += int(items.size());
 							Data::SetCopyAlbumProgress(*copyDone, totalItems);
 							if (*copyDone >= totalItems) {
@@ -4866,6 +5473,11 @@ void ApiWrap::forwardMessages(
 											sent.sentId,
 											sent.pending);
 									}
+									CopyAlbum::Completed(
+										copyJob,
+										batchIds,
+										int(filtered.size()),
+										batchSkipped);
 									*copyDone += int(items.size());
 									Data::SetCopyAlbumProgress(*copyDone, totalItems);
 									if (*copyDone >= totalItems) {
@@ -4889,6 +5501,11 @@ void ApiWrap::forwardMessages(
 											(sent.photo != nullptr),
 											sent.pending);
 									}
+									CopyAlbum::Completed(
+										copyJob,
+										batchIds,
+										int(filtered.size()),
+										batchSkipped);
 									*copyDone += int(items.size());
 									Data::SetCopyAlbumProgress(*copyDone, totalItems);
 									if (*copyDone >= totalItems) {
@@ -4904,6 +5521,7 @@ void ApiWrap::forwardMessages(
 						auto filtered = items;
 						filtered.clear();
 						auto sentMedia = std::vector<Data::ForwardDedup::Media>();
+						auto batchSkipped = 0;
 						for (const auto item : items) {
 							auto pending = false;
 							const auto hashIt = copyHashes->find(item.get());
@@ -4918,6 +5536,7 @@ void ApiWrap::forwardMessages(
 									hash,
 									pending)) {
 								++(*skippedCount);
+								++batchSkipped;
 								continue;
 							}
 							filtered.push_back(item);
@@ -4927,6 +5546,11 @@ void ApiWrap::forwardMessages(
 							sentMedia.push_back(std::move(media));
 						}
 						if (filtered.empty()) {
+							CopyAlbum::Completed(
+								copyJob,
+								batchIds,
+								0,
+								batchSkipped);
 							*copyDone += int(items.size());
 							Data::SetCopyAlbumProgress(*copyDone, totalItems);
 							if (*copyDone >= totalItems) {
@@ -5000,6 +5624,11 @@ void ApiWrap::forwardMessages(
 											sent.sentId,
 											sent.pending);
 									}
+									CopyAlbum::Completed(
+										copyJob,
+										batchIds,
+										int(filtered.size()),
+										batchSkipped);
 									*copyDone += int(items.size());
 									Data::SetCopyAlbumProgress(*copyDone, totalItems);
 									if (*copyDone >= totalItems) {
@@ -5023,6 +5652,11 @@ void ApiWrap::forwardMessages(
 											(sent.photo != nullptr),
 											sent.pending);
 									}
+									CopyAlbum::Completed(
+										copyJob,
+										batchIds,
+										int(filtered.size()),
+										batchSkipped);
 									*copyDone += int(items.size());
 									Data::SetCopyAlbumProgress(*copyDone, totalItems);
 									if (*copyDone >= totalItems) {
@@ -5035,6 +5669,9 @@ void ApiWrap::forwardMessages(
 							});
 					}
 				};
+				*copyWakeId = CopyAlbum::SetWake(copyJob, [=] {
+					(*sendNext)();
+				});
 				(*sendNext)();
 				if (!remaining.empty()) {
 					draft.items = std::move(remaining);

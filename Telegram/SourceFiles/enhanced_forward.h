@@ -746,3 +746,34 @@ void ResumeAll(not_null<Main::Session*> session);
 [[nodiscard]] rpl::producer<> countersChanged();
 
 } // namespace NormalForward
+
+namespace CopyAlbum {
+
+// Copy+album runs (non-preserve RegroupAll forwards) use the copy pipeline
+// instead of NormalForward. These helpers give them the same pause/resume/
+// cancel surface and let the transfers list report them as forward rows.
+void PauseDst(not_null<Main::Session*> session, const PeerId &dst);
+void ResumeDst(not_null<Main::Session*> session, const PeerId &dst);
+void CancelDst(not_null<Main::Session*> session, const PeerId &dst);
+
+void PauseAll(not_null<Main::Session*> session);
+void CancelAll(not_null<Main::Session*> session);
+void ResumeAll(not_null<Main::Session*> session);
+
+// Restores one persisted copy run; ignores records of other kinds.
+void ResumeRecord(
+	not_null<Main::Session*> session,
+	const Data::NfResumeRecord &record);
+
+[[nodiscard]] bool ActiveFor(
+	not_null<Main::Session*> session,
+	const PeerId &dst);
+
+[[nodiscard]] int UnfinishedCount(not_null<Main::Session*> session);
+
+[[nodiscard]] std::vector<NormalForward::Counters> AllCounters(
+	not_null<Main::Session*> session);
+
+void NotifyChanged();
+
+} // namespace CopyAlbum

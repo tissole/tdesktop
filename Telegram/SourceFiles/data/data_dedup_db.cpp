@@ -21,7 +21,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <atomic>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <set>
 #include <tuple>
 #include <unordered_map>
@@ -234,40 +233,6 @@ struct VacuumFlagGuard {
 		gVacuuming = false;
 	}
 };
-
-struct TableState {
-	QHash<uint64, QByteArray> docToHash[2];
-	QHash<QByteArray, QSet<uint64>> hashToDoc[2];
-	QSet<uint64> unfinishedDocs[2];
-	bool loaded = false;
-};
-
-// Single process-wide memory copy of the downloads/uploads tables per
-// database file. Downloads run on the main thread, exports on the export
-// thread, and a SQLite connection cannot cross threads, so each side opens
-// its own connection but they share these maps under a mutex. Reads stay
-// O(1) memory lookups, writes update memory under lock and then the
-// caller's own connection. Whoever touches a table first loads it once.
-struct SharedDownloads {
-	std::mutex mutex;
-	TableState state[2];
-	int tableUsers[2] = {};
-};
-
-[[nodiscard]] std::shared_ptr<SharedDownloads> SharedDownloadsForPath(
-		const QString &path) {
-	static std::mutex mutex;
-	static std::map<QString, std::weak_ptr<SharedDownloads>> stores;
-	std::lock_guard<std::mutex> lock(mutex);
-	if (const auto i = stores.find(path); i != stores.end()) {
-		if (auto alive = i->second.lock()) {
-			return alive;
-		}
-	}
-	auto fresh = std::make_shared<SharedDownloads>();
-	stores[path] = fresh;
-	return fresh;
-}
 
 void RecomputeAllChatScanRefsIn(QSqlDatabase &db) {
 	const auto exec = [&](const QString &sql) {
@@ -634,6 +599,104 @@ void DeleteScanJobIn(QSqlDatabase &db, PeerId peerId) {
 		: JobState::InFlight;
 }
 
+// Scan results share the upload inventory with real uploads, so a rescan
+// cannot simply drop every row it wrote: another chat may still reference
+// the same content. Collect the media ids of the rows that are about to
+// disappear first, then delete only the inventory rows nothing points to
+// any more after the delete.
+[[nodiscard]] bool CollectClearedScanMediaIn(
+		QSqlDatabase &db,
+		PeerId peerId,
+		uint64 sessionId) {
+	{
+		QSqlQuery q(db);
+		if (!q.exec(u"CREATE TEMP TABLE IF NOT EXISTS cleared_scan_media ("
+				"media_id INTEGER NOT NULL, "
+				"is_photo INTEGER NOT NULL, "
+				"PRIMARY KEY (media_id, is_photo))"_q)) {
+			LOG(("DedupDb: ClearChatScan temp table failed: %1").arg(
+				q.lastError().text()));
+			return false;
+		}
+	}
+	{
+		QSqlQuery q(db);
+		if (!q.exec(u"DELETE FROM cleared_scan_media"_q)) {
+			LOG(("DedupDb: ClearChatScan temp clear failed: %1").arg(
+				q.lastError().text()));
+			return false;
+		}
+	}
+	auto sql = u"INSERT OR IGNORE INTO cleared_scan_media "
+		"(media_id, is_photo) "
+		"SELECT media_id, is_photo FROM chat_scan_items "
+		"WHERE peer_id = :peer_id AND media_id != 0"_q;
+	if (sessionId) {
+		sql += u" AND session_id = :session_id"_q;
+	}
+	QSqlQuery q(db);
+	q.prepare(sql);
+	q.bindValue(u":peer_id"_q, QVariant::fromValue(
+		static_cast<qulonglong>(peerId.value)));
+	if (sessionId) {
+		q.bindValue(u":session_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(sessionId)));
+	}
+	if (!q.exec()) {
+		LOG(("DedupDb: ClearChatScan media collect failed: %1").arg(
+			q.lastError().text()));
+		return false;
+	}
+	return true;
+}
+
+void CleanupClearedScanInventoryIn(QSqlDatabase &db) {
+	{
+		QSqlQuery q(db);
+		if (!q.exec(u"DELETE FROM dedup_ul "
+				"WHERE status = 'f' "
+				"AND EXISTS (SELECT 1 FROM cleared_scan_media m "
+					"WHERE m.media_id = dedup_ul.doc_id "
+					"AND m.is_photo = dedup_ul.is_photo) "
+				"AND NOT EXISTS (SELECT 1 FROM chat_scan_items c "
+					"WHERE c.media_id = dedup_ul.doc_id "
+					"AND c.is_photo = dedup_ul.is_photo)"_q)) {
+			LOG(("DedupDb: ClearChatScan uploads cleanup failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+	{
+		QSqlQuery q(db);
+		if (!q.exec(u"DELETE FROM media_refs "
+				"WHERE id_refs = 0 "
+				"AND NOT EXISTS (SELECT 1 FROM dedup_ul "
+					"WHERE dedup_ul.doc_id = media_refs.media_id "
+					"AND dedup_ul.is_photo = media_refs.is_photo "
+					"AND dedup_ul.status = 'u')"_q)) {
+			LOG(("DedupDb: ClearChatScan media cleanup failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+	{
+		QSqlQuery q(db);
+		if (!q.exec(u"DELETE FROM hashes "
+				"WHERE hash_refs = 0 "
+				"AND NOT EXISTS (SELECT 1 FROM chat_scan_items "
+					"WHERE chat_scan_items.hash_id = hashes.hash_id) "
+				"AND NOT EXISTS (SELECT 1 FROM dedup_ul "
+					"WHERE dedup_ul.hash_id = hashes.hash_id) "
+				"AND NOT EXISTS (SELECT 1 FROM dedup_dl "
+					"WHERE dedup_dl.hash_id = hashes.hash_id) "
+				"AND NOT EXISTS (SELECT 1 FROM media_refs "
+					"WHERE media_refs.hash_id = hashes.hash_id) "
+				"AND NOT EXISTS (SELECT 1 FROM job_items "
+					"WHERE job_items.hash_id = hashes.hash_id)"_q)) {
+			LOG(("DedupDb: ClearChatScan hash cleanup failed: %1").arg(
+				q.lastError().text()));
+		}
+	}
+}
+
 std::vector<ChatScanOwnerChange> ClearChatScanIn(
 		QSqlDatabase &db,
 		PeerId peerId) {
@@ -760,6 +823,7 @@ std::vector<ChatScanOwnerChange> ClearChatScanIn(
 	};
 	constexpr auto kIndexedClearThreshold = 4096;
 	begin();
+	const auto collected = CollectClearedScanMediaIn(db, peerId, 0);
 	auto changed = CleanupOwnersForPeerIn(db, peerId);
 	for (const auto &table : tables) {
 		if (!hasOtherPeers(table.name)) {
@@ -778,6 +842,9 @@ std::vector<ChatScanOwnerChange> ClearChatScanIn(
 	}
 	DeleteScanJobIn(db, peerId);
 	RecomputeAllChatScanRefsIn(db);
+	if (collected) {
+		CleanupClearedScanInventoryIn(db);
+	}
 	commit();
 	LOG(("DedupDb: ChatScan clear took %1 ms.").arg(
 		crl::now() - started));
@@ -1007,6 +1074,7 @@ constexpr auto kExWriteBatchLimit = 100;
 	case JobKind::EnhancedForward: return u"enhanced_forward"_q;
 	case JobKind::BulkForward: return u"bulk_forward"_q;
 	case JobKind::Scan: return u"scan"_q;
+	case JobKind::CopyAlbum: return u"copy_album"_q;
 	}
 	Unexpected("JobKind");
 }
@@ -1034,6 +1102,8 @@ constexpr auto kExWriteBatchLimit = 100;
 		return JobKind::BulkForward;
 	} else if (name == u"scan"_q) {
 		return JobKind::Scan;
+	} else if (name == u"copy_album"_q) {
+		return JobKind::CopyAlbum;
 	}
 	return std::nullopt;
 }
@@ -1368,6 +1438,7 @@ constexpr auto kEfItemSerializationVersion = quint32(1);
 	for (const auto msgId : record.remaining) {
 		stream << qint64(msgId.bare);
 	}
+	stream << quint8(record.copyAlbum ? 1 : 0);
 	return result;
 }
 
@@ -1413,6 +1484,13 @@ constexpr auto kEfItemSerializationVersion = quint32(1);
 			return std::nullopt;
 		}
 		result.remaining.push_back(MsgId(value));
+	}
+	if (!stream.atEnd()) {
+		auto copyAlbum = quint8();
+		stream >> copyAlbum;
+		if (stream.status() == QDataStream::Ok) {
+			result.copyAlbum = (copyAlbum != 0);
+		}
 	}
 	return result;
 }
@@ -1525,13 +1603,6 @@ public:
 	~Impl();
 
 	[[nodiscard]] bool isOpen() const;
-	void ensureTableLoaded(Table table) const;
-	void acquireTable(Table table);
-	void releaseTable(Table table);
-	void invalidateTable(Table table);
-	void acquireChatTable(PeerId peerId, bool allPeers);
-	void releaseChatTable(PeerId peerId, bool allPeers);
-	void loadChatTable(PeerId peerId, bool allPeers);
 	[[nodiscard]] bool chatTableContainsDocId(
 		PeerId peerId,
 		uint64 mediaId,
@@ -1550,19 +1621,6 @@ public:
 		PeerId peerId,
 		const QByteArray &hash,
 		bool allPeers) const;
-	void clearChatTable();
-	void addChatTableUnique(
-		PeerId peerId,
-		uint64 mediaId,
-		bool isPhoto,
-		const QByteArray &hash);
-	void removeChatTableUnique(
-		PeerId peerId,
-		uint64 mediaId,
-		bool isPhoto,
-		const QByteArray &hash);
-	void invalidateChatTable(PeerId peerId);
-	void invalidateAllPeersChatTable();
 	[[nodiscard]] uint64 resolveHashId(const QByteArray &hash);
 	[[nodiscard]] uint64 findHashId(const QByteArray &hash) const;
 	[[nodiscard]] QByteArray hashForHashId(uint64 hashId) const;
@@ -1664,15 +1722,6 @@ public:
 		Table table,
 		const DedupRecord &record,
 		uint64 knownHashId = 0);
-	void insertLoaded(
-		Table table,
-		const DedupRecord &record,
-		uint64 knownHashId);
-	void insertDeferred(
-		Table table,
-		const DedupRecord &record,
-		uint64 knownHashId);
-	void forgetLoadedDoc(Table table, uint64 documentId, bool isPhoto);
 	[[nodiscard]] bool containsDocId(
 		Table table,
 		uint64 documentId,
@@ -1700,7 +1749,6 @@ public:
 		Table table,
 		const QByteArray &hash,
 		const QString &status);
-	void removeUnfinishedByHash(Table table, const QByteArray &hash);
 	[[nodiscard]] QByteArray hashForDocId(
 		Table table,
 		uint64 documentId,
@@ -1716,7 +1764,6 @@ public:
 		const QByteArray &hash,
 		bool isPhoto);
 	void removePending(Table table, uint64 documentId, bool isPhoto);
-	[[nodiscard]] std::vector<DedupRecord> loadAll(Table table) const;
 	void refreshHashRefs(uint64 hashId);
 	void refreshMediaRefs(uint64 mediaId, bool isPhoto);
 	void cleanupMediaRefs(uint64 mediaId, bool isPhoto);
@@ -1762,7 +1809,10 @@ public:
 		uint64 sessionId) const;
 
 	void insertNfResume(const NfResumeRecord &record);
-	void removeNfResume(uint64 sessionId, PeerId destPeerId);
+	void removeNfResume(
+		uint64 sessionId,
+		PeerId destPeerId,
+		bool copyAlbum = false);
 	void clearNfResume(uint64 sessionId);
 	[[nodiscard]] std::vector<NfResumeRecord> loadNfResume(
 		uint64 sessionId) const;
@@ -2024,7 +2074,6 @@ private:
 		bool loaded = false;
 	};
 
-	void ensureLoaded(Table table) const;
 	[[nodiscard]] ExTmpState &exTmpState(uint64 sessionId, PeerId peerId);
 	[[nodiscard]] const ExTmpState &exTmpState(
 		uint64 sessionId,
@@ -2033,23 +2082,6 @@ private:
 	void flushExTmpState(const ExTmpKey &key, ExTmpState &state);
 
 	bool createTables();
-
-	struct ChatCacheKey {
-		PeerId peerId;
-		bool allPeers = false;
-		inline bool operator<(const ChatCacheKey &other) const {
-			return std::tie(peerId.value, allPeers)
-				< std::tie(other.peerId.value, other.allPeers);
-		}
-	};
-
-	struct ChatCacheState {
-		QHash<uint64, QByteArray> photoHashes;
-		QHash<uint64, QByteArray> docHashes;
-		QSet<QByteArray> hashes;
-		int users = 0;
-		bool loaded = false;
-	};
 
 	void removeJob(uint64 jobId);
 	[[nodiscard]] std::vector<JobItemRecord> readJobItems(
@@ -2088,8 +2120,6 @@ private:
 	QSqlDatabase _db;
 	bool _open = false;
 	int _transactionDepth = 0;
-	std::shared_ptr<SharedDownloads> _shared;
-	std::map<ChatCacheKey, ChatCacheState> _chatCaches;
 	mutable std::map<ExTmpKey, ExTmpState> _exTmpStates;
 	int _exPendingWrites = 0;
 
@@ -2137,8 +2167,7 @@ private:
 
 DedupDb::Impl::Impl(const QString &path, bool purgePending)
 : _connectionName(QUuid::createUuid().toString())
-, _path(path)
-, _shared(SharedDownloadsForPath(path)) {
+, _path(path) {
 	_db = QSqlDatabase::addDatabase(u"QSQLITE"_q, _connectionName);
 	_db.setDatabaseName(path);
 	_open = _db.open();
@@ -2190,12 +2219,6 @@ DedupDb::Impl::Impl(const QString &path, bool purgePending)
 			LOG(("DedupDb: Failed to purge stale pending rows: %1").arg(
 				cleanup.lastError().text()));
 		}
-		// The purge deleted rows straight in the database, so a memory
-		// copy filled before it would be stale. Drop it, the next check
-		// reloads from disk.
-		std::lock_guard<std::mutex> lock(_shared->mutex);
-		_shared->state[0] = TableState();
-		_shared->state[1] = TableState();
 	}
 	if (_open) {
 		{
@@ -2289,132 +2312,8 @@ void DedupDb::Impl::ensureExTmpLoaded(
 	}
 }
 
-void DedupDb::Impl::ensureLoaded(Table table) const {
-	std::lock_guard<std::mutex> lock(_shared->mutex);
-	auto &s = _shared->state[int(table)];
-	if (s.loaded || !_open) {
-		return;
-	}
-	s.loaded = true;
-	QSqlQuery q(_db);
-	if (!q.exec(u"SELECT h.hash, d.doc_id, d.is_photo, d.status FROM "
-			+ TableName(table)
-			+ u" d JOIN hashes h ON h.hash_id = d.hash_id"_q)) {
-		LOG(("DedupDb: Load failed: %1").arg(q.lastError().text()));
-		return;
-	}
-	while (q.next()) {
-		const auto hash = q.value(0).toByteArray();
-		const auto docId = q.value(1).toULongLong();
-		const auto type = (q.value(2).toInt() != 0) ? 1 : 0;
-		if (hash.isEmpty() || !docId) {
-			continue;
-		}
-		s.docToHash[type][docId] = hash;
-		s.hashToDoc[type][hash].insert(docId);
-		if (q.value(3).toString() == u"u") {
-			s.unfinishedDocs[type].insert(docId);
-		}
-	}
-}
-
 bool DedupDb::Impl::isOpen() const {
 	return _open;
-}
-
-void DedupDb::Impl::ensureTableLoaded(Table table) const {
-	ensureLoaded(table);
-}
-
-void DedupDb::Impl::acquireTable(Table table) {
-	{
-		std::lock_guard<std::mutex> lock(_shared->mutex);
-		++_shared->tableUsers[int(table)];
-	}
-	ensureLoaded(table);
-}
-
-void DedupDb::Impl::releaseTable(Table table) {
-	std::lock_guard<std::mutex> lock(_shared->mutex);
-	auto &users = _shared->tableUsers[int(table)];
-	if (users > 0 && --users == 0) {
-		_shared->state[int(table)] = TableState();
-	}
-}
-
-void DedupDb::Impl::invalidateTable(Table table) {
-	std::lock_guard<std::mutex> lock(_shared->mutex);
-	_shared->state[int(table)] = TableState();
-}
-
-void DedupDb::Impl::acquireChatTable(PeerId peerId, bool allPeers) {
-	const auto key = ChatCacheKey{
-		allPeers ? PeerId() : peerId,
-		allPeers,
-	};
-	auto &cache = _chatCaches[key];
-	++cache.users;
-	loadChatTable(peerId, allPeers);
-}
-
-void DedupDb::Impl::releaseChatTable(PeerId peerId, bool allPeers) {
-	const auto key = ChatCacheKey{
-		allPeers ? PeerId() : peerId,
-		allPeers,
-	};
-	const auto i = _chatCaches.find(key);
-	if (i == _chatCaches.end()) {
-		return;
-	}
-	if (i->second.users > 0 && --i->second.users == 0) {
-		_chatCaches.erase(i);
-	}
-}
-
-void DedupDb::Impl::loadChatTable(PeerId peerId, bool allPeers) {
-	if (!_open) {
-		return;
-	}
-	const auto key = ChatCacheKey{
-		allPeers ? PeerId() : peerId,
-		allPeers,
-	};
-	auto &cache = _chatCaches[key];
-	if (cache.loaded) {
-		return;
-	}
-	auto query = u"SELECT i.media_id, i.is_photo, h.hash "
-		"FROM chat_scan_items i "
-		"JOIN hashes h ON h.hash_id = i.hash_id "
-		"WHERE i.is_dup = 0 AND i.hash_id != 0"_q;
-	if (!allPeers) {
-		query += u" AND i.peer_id = :peer_id"_q;
-	}
-	QSqlQuery q(_db);
-	q.prepare(query);
-	if (!allPeers) {
-		q.bindValue(u":peer_id"_q, QVariant::fromValue(
-			static_cast<qulonglong>(peerId.value)));
-	}
-	if (!q.exec()) {
-		LOG(("DedupDb: LoadChatTable failed: %1").arg(
-			q.lastError().text()));
-		return;
-	}
-	cache.photoHashes.clear();
-	cache.docHashes.clear();
-	cache.hashes.clear();
-	while (q.next()) {
-		const auto mediaId = q.value(0).toULongLong();
-		const auto isPhoto = (q.value(1).toInt() != 0);
-		const auto hash = q.value(2).toByteArray();
-		if (!mediaId || hash.isEmpty()) {
-			continue;
-		}
-		(isPhoto ? cache.photoHashes : cache.docHashes)[mediaId] = hash;
-		cache.hashes.insert(hash);
-	}
-	cache.loaded = true;
 }
 
 bool DedupDb::Impl::chatScanContainsDocIdInDb(
@@ -2477,131 +2376,14 @@ bool DedupDb::Impl::chatTableContainsDocId(
 		uint64 mediaId,
 		bool isPhoto,
 		bool allPeers) const {
-	if (!mediaId) {
-		return false;
-	}
-	const auto key = ChatCacheKey{
-		allPeers ? PeerId() : peerId,
-		allPeers,
-	};
-	const auto i = _chatCaches.find(key);
-	if (i == _chatCaches.end() || !i->second.loaded) {
-		return chatScanContainsDocIdInDb(peerId, mediaId, isPhoto, allPeers);
-	}
-	const auto &hashes = isPhoto
-		? i->second.photoHashes
-		: i->second.docHashes;
-	return hashes.contains(mediaId);
+	return chatScanContainsDocIdInDb(peerId, mediaId, isPhoto, allPeers);
 }
 
 bool DedupDb::Impl::chatTableContainsHash(
 		PeerId peerId,
 		const QByteArray &hash,
 		bool allPeers) const {
-	if (hash.isEmpty()) {
-		return false;
-	}
-	const auto key = ChatCacheKey{
-		allPeers ? PeerId() : peerId,
-		allPeers,
-	};
-	const auto i = _chatCaches.find(key);
-	if (i == _chatCaches.end() || !i->second.loaded) {
-		return chatScanContainsHashInDb(peerId, hash, allPeers);
-	}
-	return i->second.hashes.contains(hash);
-}
-
-void DedupDb::Impl::clearChatTable() {
-	for (auto i = _chatCaches.begin(); i != _chatCaches.end();) {
-		if (i->second.users == 0) {
-			i = _chatCaches.erase(i);
-		} else {
-			++i;
-		}
-	}
-}
-
-void DedupDb::Impl::addChatTableUnique(
-		PeerId peerId,
-		uint64 mediaId,
-		bool isPhoto,
-		const QByteArray &hash) {
-	if (!_open || !peerId || !mediaId || hash.isEmpty()) {
-		return;
-	}
-	const auto add = [&](PeerId keyPeer, bool allPeers) {
-		const auto key = ChatCacheKey{
-			allPeers ? PeerId() : keyPeer,
-			allPeers,
-		};
-		const auto i = _chatCaches.find(key);
-		if (i == _chatCaches.end() || !i->second.loaded) {
-			return;
-		}
-		auto &hashes = isPhoto
-			? i->second.photoHashes
-			: i->second.docHashes;
-		hashes[mediaId] = hash;
-		i->second.hashes.insert(hash);
-	};
-	add(peerId, false);
-	add(PeerId(), true);
-}
-
-void DedupDb::Impl::removeChatTableUnique(
-		PeerId peerId,
-		uint64 mediaId,
-		bool isPhoto,
-		const QByteArray &hash) {
-	if (!_open || !peerId || !mediaId || hash.isEmpty()) {
-		return;
-	}
-	const auto remove = [&](PeerId keyPeer, bool allPeers) {
-		const auto key = ChatCacheKey{
-			allPeers ? PeerId() : keyPeer,
-			allPeers,
-		};
-		const auto i = _chatCaches.find(key);
-		if (i == _chatCaches.end() || !i->second.loaded) {
-			return;
-		}
-		auto &hashes = isPhoto
-			? i->second.photoHashes
-			: i->second.docHashes;
-		if (hashes.value(mediaId) == hash) {
-			hashes.remove(mediaId);
-		}
-		i->second.hashes.remove(hash);
-	};
-	remove(peerId, false);
-	remove(PeerId(), true);
-}
-
-void DedupDb::Impl::invalidateChatTable(PeerId peerId) {
-	if (!_open || !peerId) {
-		return;
-	}
-	const auto key = ChatCacheKey{ peerId, false };
-	const auto i = _chatCaches.find(key);
-	if (i == _chatCaches.end()) {
-		return;
-	}
-	i->second.loaded = false;
-	loadChatTable(peerId, false);
-}
-
-void DedupDb::Impl::invalidateAllPeersChatTable() {
-	if (!_open) {
-		return;
-	}
-	const auto key = ChatCacheKey{ PeerId(), true };
-	const auto i = _chatCaches.find(key);
-	if (i == _chatCaches.end()) {
-		return;
-	}
-	i->second.loaded = false;
-	loadChatTable(PeerId(), true);
+	return chatScanContainsHashInDb(peerId, hash, allPeers);
 }
 
 bool DedupDb::Impl::createTables() {
@@ -3066,7 +2848,18 @@ DedupDb::Impl::chatScanApplyHashOwner(
 			};
 		}
 	}
+	// The upload inventory only decides the row when nothing live owns the
+	// hash: a live owner already makes a different message a duplicate and
+	// keeps itself unique.
+	const auto ownerLive = (owner && owner->exists);
+	const auto uploadKnown = !mediaDuplicate
+		&& !ownerLive
+		&& (containsDocId(Table::Uploads, mediaId, isPhoto)
+			|| containsFinishedHash(Table::Uploads, hash));
 	if (mediaId) {
+		// The scan records hashed content in the upload inventory, but only
+		// after this message's own check: the row written here must not make
+		// the message a duplicate of itself.
 		insert(Table::Uploads, DedupRecord{
 			.hash = hash,
 			.documentId = mediaId,
@@ -3084,9 +2877,13 @@ DedupDb::Impl::chatScanApplyHashOwner(
 			hashId);
 		decision.isDup = isDup;
 	};
-	if (mediaDuplicate) {
+	if (mediaDuplicate || uploadKnown) {
 		setCurrent(true);
 		decision.owner = std::move(owner);
+		if (decision.owner && !decision.owner->exists) {
+			clearOwner(hashId);
+			decision.owner.reset();
+		}
 	} else {
 		if (!owner || !owner->exists) {
 			if (owner) {
@@ -3102,53 +2899,13 @@ DedupDb::Impl::chatScanApplyHashOwner(
 			setCurrent(false);
 			decision.owner = std::move(owner);
 		} else {
-			const auto promoteCurrent = [&] {
-				const auto old = chatScanItem(
-					owner->peerId,
-					owner->msgId);
-				if (old) {
-					decision.demoted = *old;
-				}
-				if (needsUndo) {
-					saveChatScanUndo(peerId, msgId);
-				}
-				if (old) {
-					saveChatScanUndo(owner->peerId, owner->msgId);
-				}
-				if (promoteOwnerLocked(hashId, peerId, msgId, true)) {
-					decision.isDup = false;
-				} else {
-					decision.demoted.reset();
-					setCurrent(true);
-				}
-			};
-			if (!owner->tracked
-				|| (owner->peerId == peerId
-					&& msgId.bare > owner->msgId.bare)) {
-				promoteCurrent();
-			} else {
-				setCurrent(true);
-			}
-			decision.owner = decision.isDup
-				? std::move(owner)
-				: std::optional<HashOwner>(HashOwner{
-					peerId, msgId, true, true });
+			// The first message that claimed the hash stays the owner; a later
+			// copy is a duplicate even when it is newer or tracked.
+			setCurrent(true);
+			decision.owner = std::move(owner);
 		}
 	}
 	commitTransaction();
-	if (decision.demoted) {
-		removeChatTableUnique(
-			decision.demoted->peerId,
-			decision.demoted->mediaId,
-			decision.demoted->isPhoto,
-			hash);
-	}
-	if (!decision.isDup) {
-		addChatTableUnique(peerId, mediaId, isPhoto, hash);
-	} else if (decision.wasDup != decision.isDup) {
-		invalidateChatTable(peerId);
-		invalidateAllPeersChatTable();
-	}
 	return decision;
 }
 
@@ -3198,33 +2955,15 @@ bool DedupDb::Impl::recordUploadDestination(
 		.status = u"f"_q,
 	});
 	auto isDup = false;
-	auto demoted = std::optional<HashOwner>();
 	const auto owner = hashOwner(hashId);
 	if (!owner || !owner->exists) {
 		setOwner(hashId, peerId, msgId);
 	} else if (owner->peerId == peerId && owner->msgId == msgId) {
 		isDup = false;
-	} else if (!owner->tracked && tracked) {
-		demoted = owner;
-		setOwner(hashId, peerId, msgId);
 	} else {
-		// A new message never takes the kept copy away from an existing one
-		// here: outside a scan the newest-copy rule does not apply, the new
-		// message is simply a duplicate.
+		// The first message that claimed the hash stays the owner; a new
+		// destination is a duplicate even when it is tracked.
 		isDup = true;
-	}
-	if (demoted) {
-		QSqlQuery q(_db);
-		q.prepare(u"UPDATE chat_scan_items SET is_dup = 1 "
-			"WHERE peer_id = :peer_id AND msg_id = :msg_id"_q);
-		q.bindValue(u":peer_id"_q, QVariant::fromValue(
-			static_cast<qulonglong>(demoted->peerId.value)));
-		q.bindValue(u":msg_id"_q, QVariant::fromValue(
-			static_cast<qlonglong>(demoted->msgId.bare)));
-		if (!q.exec()) {
-			LOG(("DedupDb: UploadDestination demote failed: %1").arg(
-				q.lastError().text()));
-		}
 	}
 	if (tracked || !isDup) {
 		QSqlQuery q(_db);
@@ -3262,20 +3001,6 @@ bool DedupDb::Impl::recordUploadDestination(
 		}
 	}
 	commitTransaction();
-	if (demoted) {
-		if (const auto old = chatScanItem(
-				demoted->peerId,
-				demoted->msgId)) {
-			removeChatTableUnique(
-				demoted->peerId,
-				old->mediaId,
-				old->isPhoto,
-				hash);
-		}
-	}
-	if (!isDup) {
-		addChatTableUnique(peerId, mediaId, isPhoto, hash);
-	}
 	return isDup;
 }
 
@@ -3858,109 +3583,6 @@ void DedupDb::Impl::insert(
 		Table table,
 		const DedupRecord &record,
 		uint64 knownHashId) {
-	auto loaded = false;
-	{
-		std::lock_guard<std::mutex> lock(_shared->mutex);
-		loaded = _shared->state[int(table)].loaded;
-	}
-	if (loaded) {
-		insertLoaded(table, record, knownHashId);
-	} else {
-		insertDeferred(table, record, knownHashId);
-	}
-}
-
-void DedupDb::Impl::insertLoaded(
-		Table table,
-		const DedupRecord &record,
-		uint64 knownHashId) {
-	const auto type = record.isPhoto ? 1 : 0;
-	auto exists = false;
-	auto oldHash = QByteArray();
-	auto oldStatus = QString();
-	if (record.documentId) {
-		std::lock_guard<std::mutex> lock(_shared->mutex);
-		auto &s = _shared->state[int(table)];
-		const auto i = s.docToHash[type].constFind(record.documentId);
-		exists = (i != s.docToHash[type].constEnd());
-		if (exists) {
-			oldHash = i.value();
-			oldStatus = s.unfinishedDocs[type].contains(record.documentId)
-				? u"u"_q
-				: u"f"_q;
-		}
-		if (!record.hash.isEmpty()) {
-			if (exists && oldHash != record.hash && !oldHash.isEmpty()) {
-				const auto hashes = s.hashToDoc[type].find(oldHash);
-				if (hashes != s.hashToDoc[type].end()) {
-					hashes.value().remove(record.documentId);
-					if (hashes.value().isEmpty()) {
-						s.hashToDoc[type].erase(hashes);
-					}
-				}
-			}
-			s.docToHash[type][record.documentId] = record.hash;
-			s.hashToDoc[type][record.hash].insert(record.documentId);
-		} else if (!exists) {
-			s.docToHash[type].insert(record.documentId, QByteArray());
-		}
-		if (record.status == u"u") {
-			s.unfinishedDocs[type].insert(record.documentId);
-		} else {
-			s.unfinishedDocs[type].remove(record.documentId);
-		}
-	}
-	if (!_open) {
-		return;
-	}
-	if (record.hash.isEmpty()) {
-		// An empty hash (in-flight 'u' row) can't be used for dedup and the
-		// column is NOT NULL, so skip the DB write. The in-memory state above
-		// still tracks the doc id for containsDocId().
-		return;
-	}
-	const auto hasRow = exists && !oldHash.isEmpty();
-	if (hasRow && oldHash == record.hash && oldStatus == record.status) {
-		return;
-	}
-	const auto hashId = knownHashId
-		? knownHashId
-		: resolveHashId(record.hash);
-	if (!hashId) {
-		return;
-	}
-	QSqlQuery q(_db);
-	if (hasRow) {
-		q.prepare(u"UPDATE " + TableName(table)
-			+ u" SET hash_id = :hash_id, status = :status "
-			"WHERE doc_id = :doc_id AND is_photo = :is_photo"_q);
-	} else {
-		q.prepare(u"INSERT INTO " + TableName(table)
-			+ u" (doc_id, is_photo, hash_id, status) "
-			"VALUES (:doc_id, :is_photo, :hash_id, :status)"_q);
-	}
-	q.bindValue(u":doc_id"_q, QVariant::fromValue(
-		static_cast<qlonglong>(record.documentId)));
-	q.bindValue(u":is_photo"_q, type);
-	q.bindValue(u":hash_id"_q, QVariant::fromValue(
-		static_cast<qulonglong>(hashId)));
-	q.bindValue(u":status"_q, record.status);
-	if (!q.exec()) {
-		LOG(("DedupDb: Insert failed: %1").arg(q.lastError().text()));
-	} else if (hasRow && oldHash != record.hash) {
-		QSqlQuery select(_db);
-		select.prepare(u"SELECT hash_id FROM hashes WHERE hash = :hash"_q);
-		select.bindValue(u":hash"_q, oldHash);
-		if (select.exec() && select.next()) {
-			cleanupHashRefs(select.value(0).toULongLong());
-		}
-	}
-}
-
-void DedupDb::Impl::insertDeferred(
-		Table table,
-		const DedupRecord &record,
-		uint64 knownHashId) {
 	if (!_open || record.hash.isEmpty()) {
 		return;
 	}
@@ -3995,36 +3617,10 @@ void DedupDb::Impl::insertDeferred(
 		static_cast<qulonglong>(hashId)));
 	q.bindValue(u":status"_q, record.status);
 	if (!q.exec()) {
-		LOG(("DedupDb: Deferred insert failed: %1").arg(
+		LOG(("DedupDb: Insert failed: %1").arg(
 			q.lastError().text()));
 	} else if (oldHashId && oldHashId != hashId) {
 		cleanupHashRefs(oldHashId);
-	}
-}
-
-void DedupDb::Impl::forgetLoadedDoc(
-		Table table,
-		uint64 documentId,
-		bool isPhoto) {
-	std::lock_guard<std::mutex> lock(_shared->mutex);
-	auto &s = _shared->state[int(table)];
-	if (!s.loaded) {
-		return;
-	}
-	const auto type = isPhoto ? 1 : 0;
-	const auto it = s.docToHash[type].find(documentId);
-	if (it == s.docToHash[type].end()) {
-		return;
-	}
-	const auto hash = it.value();
-	s.docToHash[type].erase(it);
-	s.unfinishedDocs[type].remove(documentId);
-	const auto hashes = s.hashToDoc[type].find(hash);
-	if (hashes != s.hashToDoc[type].end()) {
-		hashes.value().remove(documentId);
-		if (hashes.value().isEmpty()) {
-			s.hashToDoc[type].erase(hashes);
-		}
 	}
 }
 
@@ -4032,17 +3628,6 @@ bool DedupDb::Impl::containsDocId(
 		Table table,
 		uint64 documentId,
 		bool isPhoto) const {
-	if (!_open || !documentId) {
-		return false;
-	}
-	const auto type = isPhoto ? 1 : 0;
-	{
-		std::lock_guard<std::mutex> lock(_shared->mutex);
-		const auto &s = _shared->state[int(table)];
-		if (s.loaded) {
-			return s.docToHash[type].contains(documentId);
-		}
-	}
 	return containsDocIdInDb(table, documentId, isPhoto);
 }
 
@@ -4089,44 +3674,12 @@ bool DedupDb::Impl::containsHashInDb(
 }
 
 bool DedupDb::Impl::containsHash(Table table, const QByteArray &hash) const {
-	if (!_open || hash.isEmpty()) {
-		return false;
-	}
-	{
-		std::lock_guard<std::mutex> lock(_shared->mutex);
-		const auto &s = _shared->state[int(table)];
-		if (s.loaded) {
-			return s.hashToDoc[0].contains(hash)
-				|| s.hashToDoc[1].contains(hash);
-		}
-	}
 	return containsHashInDb(table, hash, false);
 }
 
 bool DedupDb::Impl::containsFinishedHash(
 		Table table,
 		const QByteArray &hash) const {
-	if (!_open || hash.isEmpty()) {
-		return false;
-	}
-	{
-		std::lock_guard<std::mutex> lock(_shared->mutex);
-		const auto &s = _shared->state[int(table)];
-		if (s.loaded) {
-			for (auto type = 0; type != 2; ++type) {
-				const auto it = s.hashToDoc[type].find(hash);
-				if (it == s.hashToDoc[type].end()) {
-					continue;
-				}
-				for (const auto docId : it.value()) {
-					if (!s.unfinishedDocs[type].contains(docId)) {
-						return true;
-					}
-				}
-			}
-			return false;
-		}
-	}
 	return containsHashInDb(table, hash, true);
 }
 
@@ -4139,29 +3692,6 @@ void DedupDb::Impl::rekey(
 		return;
 	}
 	const auto type = isPhoto ? 1 : 0;
-	{
-		std::lock_guard<std::mutex> lock(_shared->mutex);
-		auto &s = _shared->state[int(table)];
-		const auto hadOld = s.docToHash[type].contains(oldDocumentId);
-		const auto hash = s.docToHash[type].take(oldDocumentId);
-		const auto wasUnfinished = s.unfinishedDocs[type].remove(
-			oldDocumentId);
-		if (hadOld) {
-			s.docToHash[type].insert(
-				newDocumentId,
-				hash.isEmpty() ? QByteArray() : hash);
-		}
-		if (wasUnfinished) {
-			s.unfinishedDocs[type].insert(newDocumentId);
-		}
-		if (!hash.isEmpty()) {
-			const auto hashes = s.hashToDoc[type].find(hash);
-			if (hashes != s.hashToDoc[type].end()) {
-				hashes.value().remove(oldDocumentId);
-				hashes.value().insert(newDocumentId);
-			}
-		}
-	}
 	if (!_open) {
 		return;
 	}
@@ -4183,26 +3713,8 @@ void DedupDb::Impl::updateDedupStatus(
 		Table table,
 		const QByteArray &hash,
 		const QString &status) {
-	ensureLoaded(table);
 	if (!_open || hash.isEmpty()) {
 		return;
-	}
-	{
-		std::lock_guard<std::mutex> lock(_shared->mutex);
-		auto &s = _shared->state[int(table)];
-		for (auto type = 0; type != 2; ++type) {
-			const auto hashes = s.hashToDoc[type].find(hash);
-			if (hashes == s.hashToDoc[type].end()) {
-				continue;
-			}
-			for (const auto docId : hashes.value()) {
-				if (status == u"u") {
-					s.unfinishedDocs[type].insert(docId);
-				} else {
-					s.unfinishedDocs[type].remove(docId);
-				}
-			}
-		}
 	}
 	QSqlQuery q(_db);
 	q.prepare(u"UPDATE " + TableName(table)
@@ -4215,53 +3727,6 @@ void DedupDb::Impl::updateDedupStatus(
 	}
 }
 
-void DedupDb::Impl::removeUnfinishedByHash(
-		Table table,
-		const QByteArray &hash) {
-	ensureLoaded(table);
-	{
-		std::lock_guard<std::mutex> lock(_shared->mutex);
-		auto &s = _shared->state[int(table)];
-		for (auto type = 0; type != 2; ++type) {
-			const auto hashes = s.hashToDoc[type].find(hash);
-			if (hashes == s.hashToDoc[type].end()) {
-				continue;
-			}
-			const auto ids = hashes.value();
-			for (const auto docId : ids) {
-				if (!s.unfinishedDocs[type].contains(docId)) {
-					continue;
-				}
-				s.docToHash[type].remove(docId);
-				s.unfinishedDocs[type].remove(docId);
-				hashes.value().remove(docId);
-			}
-			if (hashes.value().isEmpty()) {
-				s.hashToDoc[type].erase(hashes);
-			}
-		}
-	}
-	if (!_open) {
-		return;
-	}
-	QSqlQuery q(_db);
-	q.prepare(u"DELETE FROM " + TableName(table)
-		+ u" WHERE hash_id = (SELECT hash_id FROM hashes WHERE hash = :hash) "
-		"AND status = 'u'"_q);
-	q.bindValue(u":hash"_q, hash);
-	if (!q.exec()) {
-		LOG(("DedupDb: RemoveUnfinishedByHash failed: %1").arg(
-			q.lastError().text()));
-	} else if (table == Table::Uploads && q.numRowsAffected() > 0) {
-		QSqlQuery select(_db);
-		select.prepare(u"SELECT hash_id FROM hashes WHERE hash = :hash"_q);
-		select.bindValue(u":hash"_q, hash);
-		if (select.exec() && select.next()) {
-			cleanupHashRefs(select.value(0).toULongLong());
-		}
-	}
-}
-
 QByteArray DedupDb::Impl::hashForDocId(
 		Table table,
 		uint64 documentId,
@@ -4269,8 +3734,6 @@ QByteArray DedupDb::Impl::hashForDocId(
 	if (!_open || !documentId) {
 		return {};
 	}
-	// A single lookup must not load the whole table: on a database with
-	// millions of rows that cache is what keeps the process at gigabytes.
 	QSqlQuery q(_db);
 	q.prepare(u"SELECT h.hash FROM " + TableName(table)
 		+ u" d JOIN hashes h ON h.hash_id = d.hash_id "
@@ -4291,25 +3754,6 @@ uint64 DedupDb::Impl::seekDocumentId(
 		bool excludeIsPhoto) const {
 	if (!_open || hash.isEmpty()) {
 		return 0;
-	}
-	{
-		std::lock_guard<std::mutex> lock(_shared->mutex);
-		const auto &s = _shared->state[int(table)];
-		if (s.loaded) {
-			for (auto type = 0; type != 2; ++type) {
-				const auto it = s.hashToDoc[type].find(hash);
-				if (it == s.hashToDoc[type].end()) {
-					continue;
-				}
-				for (const auto docId : it.value()) {
-					if (docId != excludeDocumentId
-						|| type != (excludeIsPhoto ? 1 : 0)) {
-						return docId;
-					}
-				}
-			}
-			return 0;
-		}
 	}
 	QSqlQuery q(_db);
 	q.prepare(u"SELECT d.doc_id FROM " + TableName(table)
@@ -4346,26 +3790,6 @@ void DedupDb::Impl::removePending(
 		uint64 documentId,
 		bool isPhoto) {
 	const auto type = isPhoto ? 1 : 0;
-	{
-		std::lock_guard<std::mutex> lock(_shared->mutex);
-		auto &s = _shared->state[int(table)];
-		if (s.loaded) {
-			const auto it = s.docToHash[type].constFind(documentId);
-			if (it != s.docToHash[type].constEnd()
-				&& s.unfinishedDocs[type].contains(documentId)) {
-				const auto hash = it.value();
-				s.docToHash[type].remove(documentId);
-				s.unfinishedDocs[type].remove(documentId);
-				const auto hashes = s.hashToDoc[type].find(hash);
-				if (hashes != s.hashToDoc[type].end()) {
-					hashes.value().remove(documentId);
-					if (hashes.value().isEmpty()) {
-						s.hashToDoc[type].erase(hashes);
-					}
-				}
-			}
-		}
-	}
 	if (!_open || !documentId) {
 		return;
 	}
@@ -4397,54 +3821,6 @@ void DedupDb::Impl::removePending(
 		&& hashId) {
 		cleanupHashRefs(hashId);
 	}
-}
-
-std::vector<DedupRecord> DedupDb::Impl::loadAll(Table table) const {
-	ensureLoaded(table);
-	{
-		std::lock_guard<std::mutex> lock(_shared->mutex);
-		const auto &s = _shared->state[int(table)];
-		if (s.loaded) {
-			auto result = std::vector<DedupRecord>();
-			auto total = 0;
-			for (auto type = 0; type != 2; ++type) {
-				total += s.docToHash[type].size();
-			}
-			result.reserve(total);
-			for (auto type = 0; type != 2; ++type) {
-				for (auto i = s.docToHash[type].constBegin();
-					i != s.docToHash[type].constEnd();
-					++i) {
-					result.push_back({
-						.hash = i.value(),
-						.documentId = i.key(),
-						.isPhoto = (type == 1),
-					});
-				}
-			}
-			return result;
-		}
-	}
-	auto result = std::vector<DedupRecord>();
-	if (!_open) {
-		return result;
-	}
-	QSqlQuery q(_db);
-	if (!q.exec(u"SELECT h.hash, d.doc_id, d.is_photo, d.status FROM "
-			+ TableName(table)
-			+ u" d JOIN hashes h ON h.hash_id = d.hash_id"_q)) {
-		LOG(("DedupDb: LoadAll failed: %1").arg(q.lastError().text()));
-		return result;
-	}
-	while (q.next()) {
-		auto record = DedupRecord();
-		record.hash = q.value(0).toByteArray();
-		record.documentId = q.value(1).toULongLong();
-		record.isPhoto = (q.value(2).toInt() != 0);
-		record.status = q.value(3).toString();
-		result.push_back(std::move(record));
-	}
-	return result;
 }
 
 void DedupDb::Impl::refreshHashRefs(uint64 hashId) {
@@ -4563,8 +3939,6 @@ void DedupDb::Impl::cleanupMediaRefs(uint64 mediaId, bool isPhoto) {
 		if (!q.exec()) {
 			LOG(("DedupDb: CleanupMediaRefs delete failed: %1").arg(
 				q.lastError().text()));
-		} else if (q.numRowsAffected() > 0) {
-			forgetLoadedDoc(Table::Uploads, mediaId, isPhoto);
 		}
 	}
 	{
@@ -4593,33 +3967,6 @@ void DedupDb::Impl::cleanupHashRefs(uint64 hashId) {
 		return;
 	}
 	refreshHashRefs(hashId);
-	auto removed = std::vector<std::pair<uint64, bool>>();
-	auto selectionFailed = false;
-	{
-		QSqlQuery select(_db);
-		select.prepare(u"SELECT doc_id, is_photo FROM dedup_ul "
-			"WHERE hash_id = :hash_id AND status = 'f' "
-			"AND NOT EXISTS (SELECT 1 FROM chat_scan_items c "
-				"WHERE c.media_id = dedup_ul.doc_id "
-				"AND c.is_photo = dedup_ul.is_photo) "
-			"AND NOT EXISTS (SELECT 1 FROM media_refs m "
-				"WHERE m.media_id = dedup_ul.doc_id "
-				"AND m.is_photo = dedup_ul.is_photo "
-				"AND m.id_refs > 0)"_q);
-		select.bindValue(u":hash_id"_q, QVariant::fromValue(
-			static_cast<qulonglong>(hashId)));
-		if (select.exec()) {
-			while (select.next()) {
-				removed.emplace_back(
-					select.value(0).toULongLong(),
-					select.value(1).toInt() != 0);
-			}
-		} else {
-			selectionFailed = true;
-			LOG(("DedupDb: CleanupHashRefs select failed: %1").arg(
-				select.lastError().text()));
-		}
-	}
 	{
 		QSqlQuery q(_db);
 		q.prepare(u"DELETE FROM dedup_ul "
@@ -4636,14 +3983,6 @@ void DedupDb::Impl::cleanupHashRefs(uint64 hashId) {
 		if (!q.exec()) {
 			LOG(("DedupDb: CleanupHashRefs uploads failed: %1").arg(
 				q.lastError().text()));
-		} else if (q.numRowsAffected() > 0) {
-			if (selectionFailed) {
-				invalidateTable(Table::Uploads);
-			} else {
-				for (const auto &[docId, isPhoto] : removed) {
-					forgetLoadedDoc(Table::Uploads, docId, isPhoto);
-				}
-			}
 		}
 	}
 	{
@@ -5516,93 +4855,8 @@ DedupDb::DedupDb(const QString &path, bool purgePending)
 
 DedupDb::~DedupDb() = default;
 
-DedupDb::TableUse::TableUse(DedupDb *db, Table table)
-: _db(db)
-, _table(table) {
-}
-
-DedupDb::TableUse::TableUse(TableUse &&other) noexcept
-: _db(std::exchange(other._db, nullptr))
-, _table(other._table) {
-}
-
-DedupDb::TableUse &DedupDb::TableUse::operator=(TableUse &&other) noexcept {
-	if (this != &other) {
-		if (_db) {
-			_db->releaseTable(_table);
-		}
-		_db = std::exchange(other._db, nullptr);
-		_table = other._table;
-	}
-	return *this;
-}
-
-DedupDb::TableUse::~TableUse() {
-	if (_db) {
-		_db->releaseTable(_table);
-	}
-}
-
-DedupDb::ChatTableUse::ChatTableUse(
-	DedupDb *db,
-	PeerId peerId,
-	bool allPeers)
-: _db(db)
-, _peerId(peerId)
-, _allPeers(allPeers) {
-}
-
-DedupDb::ChatTableUse::ChatTableUse(ChatTableUse &&other) noexcept
-: _db(std::exchange(other._db, nullptr))
-, _peerId(other._peerId)
-, _allPeers(other._allPeers) {
-}
-
-DedupDb::ChatTableUse &DedupDb::ChatTableUse::operator=(
-		ChatTableUse &&other) noexcept {
-	if (this != &other) {
-		if (_db) {
-			_db->releaseChatTable(_peerId, _allPeers);
-		}
-		_db = std::exchange(other._db, nullptr);
-		_peerId = other._peerId;
-		_allPeers = other._allPeers;
-	}
-	return *this;
-}
-
-DedupDb::ChatTableUse::~ChatTableUse() {
-	if (_db) {
-		_db->releaseChatTable(_peerId, _allPeers);
-	}
-}
-
 bool DedupDb::isOpen() const {
 	return _impl->isOpen();
-}
-
-DedupDb::TableUse DedupDb::useTable(Table table) {
-	_impl->acquireTable(table);
-	return TableUse(this, table);
-}
-
-DedupDb::ChatTableUse DedupDb::useChatTable(
-		PeerId peerId,
-		bool allPeers) {
-	_impl->acquireChatTable(peerId, allPeers);
-	return ChatTableUse(this, peerId, allPeers);
-}
-
-void DedupDb::releaseTable(Table table) {
-	_impl->releaseTable(table);
-}
-
-void DedupDb::releaseChatTable(PeerId peerId, bool allPeers) {
-	_impl->releaseChatTable(peerId, allPeers);
-}
-
-void DedupDb::ensureTableLoaded(Table table) {
-	_impl->ensureTableLoaded(table);
 }
 
 bool DedupDb::chatTableContainsDocId(
@@ -5622,34 +4876,6 @@ bool DedupDb::chatTableContainsHash(
 		const QByteArray &hash,
 		bool allPeers) const {
 	return _impl->chatTableContainsHash(peerId, hash, allPeers);
-}
-
-void DedupDb::clearChatTable() {
-	_impl->clearChatTable();
-}
-
-void DedupDb::addChatTableUnique(
-		PeerId peerId,
-		uint64 mediaId,
-		bool isPhoto,
-		const QByteArray &hash) {
-	_impl->addChatTableUnique(peerId, mediaId, isPhoto, hash);
-}
-
-void DedupDb::removeChatTableUnique(
-		PeerId peerId,
-		uint64 mediaId,
-		bool isPhoto,
-		const QByteArray &hash) {
-	_impl->removeChatTableUnique(peerId, mediaId, isPhoto, hash);
-}
-
-void DedupDb::invalidateChatTable(PeerId peerId) {
-	_impl->invalidateChatTable(peerId);
-}
-
-void DedupDb::invalidateAllPeersChatTable() {
-	_impl->invalidateAllPeersChatTable();
 }
 
 void DedupDb::insert(Table table, const DedupRecord &record) {
@@ -5805,12 +5031,6 @@ void DedupDb::updateDedupStatus(
 	_impl->updateDedupStatus(table, hash, status);
 }
 
-void DedupDb::removeUnfinishedByHash(
-		Table table,
-		const QByteArray &hash) {
-	_impl->removeUnfinishedByHash(table, hash);
-}
-
 QByteArray DedupDb::hashForDocId(
 		Table table,
 		uint64 documentId,
@@ -5843,10 +5063,6 @@ void DedupDb::removePending(
 		uint64 documentId,
 		bool isPhoto) {
 	_impl->removePending(table, documentId, isPhoto);
-}
-
-std::vector<DedupRecord> DedupDb::loadAll(Table table) const {
-	return _impl->loadAll(table);
 }
 
 void DedupDb::insertDlResume(const DlResumeRecord &record) {
@@ -5912,13 +5128,18 @@ void DedupDb::Impl::insertNfResume(const NfResumeRecord &record) {
 	if (!_open) {
 		return;
 	}
+	// Copy-album runs persist a record of the same shape but must not share the
+	// row of a normal forward to the same destination.
+	const auto kind = record.copyAlbum
+		? JobKind::CopyAlbum
+		: JobKind::Forward;
 	const auto jobId = findJobId(
-		JobKind::Forward,
+		kind,
 		record.sessionId,
 		record.destPeerId.value);
 	if (!jobId) {
 		auto job = JobRecord();
-		job.kind = JobKind::Forward;
+		job.kind = kind;
 		job.sessionId = record.sessionId;
 		job.scopeId = record.destPeerId.value;
 		job.options = SerializeNfResume(record);
@@ -5950,12 +5171,15 @@ void DedupDb::Impl::insertNfResume(const NfResumeRecord &record) {
 	}
 }
 
-void DedupDb::Impl::removeNfResume(uint64 sessionId, PeerId destPeerId) {
+void DedupDb::Impl::removeNfResume(
+		uint64 sessionId,
+		PeerId destPeerId,
+		bool copyAlbum) {
 	if (!_open) {
 		return;
 	}
 	const auto jobId = findJobId(
-		JobKind::Forward,
+		copyAlbum ? JobKind::CopyAlbum : JobKind::Forward,
 		sessionId,
 		destPeerId.value);
 	if (jobId) {
@@ -5971,9 +5195,10 @@ void DedupDb::Impl::clearNfResume(uint64 sessionId) {
 	{
 		QSqlQuery q(_db);
 		q.prepare(u"DELETE FROM job_items WHERE job_id IN ("
-			"SELECT job_id FROM jobs WHERE kind = :kind "
+			"SELECT job_id FROM jobs WHERE kind IN (:kind, :copy_kind) "
 			"AND session_id = :session_id)"_q);
 		q.bindValue(u":kind"_q, JobKindName(JobKind::Forward));
+		q.bindValue(u":copy_kind"_q, JobKindName(JobKind::CopyAlbum));
 		q.bindValue(u":session_id"_q, QVariant::fromValue(
 			static_cast<qulonglong>(sessionId)));
 		if (!q.exec()) {
@@ -5983,9 +5208,10 @@ void DedupDb::Impl::clearNfResume(uint64 sessionId) {
 	}
 	{
 		QSqlQuery q(_db);
-		q.prepare(u"DELETE FROM jobs WHERE kind = :kind "
+		q.prepare(u"DELETE FROM jobs WHERE kind IN (:kind, :copy_kind) "
 			"AND session_id = :session_id"_q);
 		q.bindValue(u":kind"_q, JobKindName(JobKind::Forward));
+		q.bindValue(u":copy_kind"_q, JobKindName(JobKind::CopyAlbum));
 		q.bindValue(u":session_id"_q, QVariant::fromValue(
 			static_cast<qulonglong>(sessionId)));
 		if (!q.exec()) {
@@ -6003,9 +5229,11 @@ std::vector<NfResumeRecord> DedupDb::Impl::loadNfResume(
 		return result;
 	}
 	QSqlQuery q(_db);
-	q.prepare(u"SELECT options FROM jobs WHERE kind = :kind "
+	q.prepare(u"SELECT options FROM jobs "
+		"WHERE kind IN (:kind, :copy_kind) "
 		"AND session_id = :session_id ORDER BY job_id"_q);
 	q.bindValue(u":kind"_q, JobKindName(JobKind::Forward));
+	q.bindValue(u":copy_kind"_q, JobKindName(JobKind::CopyAlbum));
 	q.bindValue(u":session_id"_q, QVariant::fromValue(
 		static_cast<qulonglong>(sessionId)));
 	if (!q.exec()) {
@@ -7931,6 +7159,35 @@ bool DedupDb::Impl::cancelChatScanSession(PeerId peerId) {
 	}
 	const auto sessionId = options.sessionId;
 	beginTransaction();
+	const auto collected = CollectClearedScanMediaIn(
+		_db,
+		peerId,
+		sessionId);
+	auto sessionOwnedHashes = std::vector<uint64>();
+	{
+		// The rows this session created are about to disappear. Their hashes
+		// are collected first, because after the delete the owner lookup can
+		// no longer find the row that is being removed.
+		QSqlQuery q(_db);
+		q.prepare(u"SELECT h.hash_id FROM hashes h "
+			"JOIN chat_scan_items i "
+			"ON i.peer_id = h.owner_peer_id "
+			"AND i.msg_id = h.owner_msg_id "
+			"WHERE i.peer_id = :peer_id "
+			"AND i.session_id = :session_id"_q);
+		q.bindValue(u":peer_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(peerId.value)));
+		q.bindValue(u":session_id"_q, QVariant::fromValue(
+			static_cast<qulonglong>(sessionId)));
+		if (!q.exec()) {
+			LOG(("DedupDb: CancelChatScanSession owner read failed: %1")
+				.arg(q.lastError().text()));
+		} else {
+			while (q.next()) {
+				sessionOwnedHashes.push_back(q.value(0).toULongLong());
+			}
+		}
+	}
 	{
 		QSqlQuery q(_db);
 		q.prepare(u"DELETE FROM chat_scan_items "
@@ -8010,9 +7267,23 @@ bool DedupDb::Impl::cancelChatScanSession(PeerId peerId) {
 	} else {
 		DeleteScanJobIn(_db, peerId);
 	}
+	auto promoted = 0;
+	for (const auto hashId : sessionOwnedHashes) {
+		const auto owner = hashOwner(hashId);
+		if (owner && owner->exists) {
+			continue;
+		}
+		if (refreshOwner(hashId, PeerId(0), MsgId(0))) {
+			++promoted;
+		}
+	}
 	RecomputeAllChatScanRefsIn(_db);
+	if (collected) {
+		CleanupClearedScanInventoryIn(_db);
+	}
 	commitTransaction();
-	LOG(("DedupDb: canceled chat scan session."));
+	LOG(("DedupDb: canceled chat scan session, %1 owned hashes, %2 promoted."
+		).arg(sessionOwnedHashes.size()).arg(promoted));
 	return true;
 }
 
@@ -8536,8 +7807,11 @@ void DedupDb::insertNfResume(const NfResumeRecord &record) {
 	_impl->insertNfResume(record);
 }
 
-void DedupDb::removeNfResume(uint64 sessionId, PeerId destPeerId) {
-	_impl->removeNfResume(sessionId, destPeerId);
+void DedupDb::removeNfResume(
+		uint64 sessionId,
+		PeerId destPeerId,
+		bool copyAlbum) {
+	_impl->removeNfResume(sessionId, destPeerId, copyAlbum);
 }
 
 void DedupDb::clearNfResume(uint64 sessionId) {

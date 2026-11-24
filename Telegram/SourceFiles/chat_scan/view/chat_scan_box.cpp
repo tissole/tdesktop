@@ -542,6 +542,10 @@ void ChatScanBox::cancelPressed() {
 		_confirmLabel->hide();
 		_revoke->hide();
 		auto &db = Core::App().downloadManager().ensureDedupDb();
+		if (_deleteRemoved) {
+			_deleteRemoved = false;
+			db.requestIncrementalVacuum();
+		}
 		renderResults(db.readChatScan(_peer->id));
 	} else if (_api) {
 		askCancel();
@@ -764,7 +768,7 @@ void ChatScanBox::askRescan() {
 		auto weak = QPointer<ChatScanBox>(this);
 		db.clearChatScanAsync(
 			peerId,
-			[weak, peerId](
+			[weak](
 					bool success,
 					std::vector<Data::ChatScanOwnerChange> changed) {
 				if (!weak) {
@@ -780,13 +784,9 @@ void ChatScanBox::askRescan() {
 						false);
 					return;
 				}
-				auto &database = Core::App().downloadManager().ensureDedupDb();
-				database.invalidateChatTable(peerId);
 				for (const auto &[changedPeer, hash] : changed) {
 					ChatScan::MarkUniqueHashDirty(changedPeer, hash);
-					database.invalidateChatTable(changedPeer);
 				}
-				database.invalidateAllPeersChatTable();
 				weak->setupApi(false);
 			});
 	});
@@ -1262,6 +1262,7 @@ void ChatScanBox::confirmDelete() {
 	_revoke->hide();
 	_deleting = true;
 	_deletePos = 0;
+	_deleteRemoved = false;
 	_deleteTotal = int(_deleteIds.size());
 	_statusText = tr::lng_chat_scan_deleting(tr::now);
 	_progressLabel->show();
@@ -1298,6 +1299,7 @@ void ChatScanBox::sendNextDeleteBatch() {
 				continue;
 			}
 			db.removeChatScanItem(_peer->id, msgId);
+			_deleteRemoved = true;
 			db.adjustChatScanTotals(
 				row->peerId,
 				row->category,
@@ -1348,15 +1350,19 @@ void ChatScanBox::sendNextDeleteBatch() {
 void ChatScanBox::finishDelete(const QString &error) {
 	_deleting = false;
 	_floodTimer.cancel();
+	auto &db = Core::App().downloadManager().ensureDedupDb();
 	if (!error.isEmpty()) {
 		if (error == u"CHAT_ADMIN_REQUIRED"_q
 			|| error == u"CHAT_WRITE_FORBIDDEN"_q
 			|| error == u"MESSAGE_DELETE_FORBIDDEN"_q) {
 			Ui::Toast::Show(tr::lng_chat_scan_no_delete_rights(tr::now));
 		}
-		auto &db = Core::App().downloadManager().ensureDedupDb();
 		_statusText = error;
 		renderResults(db.readChatScan(_peer->id));
+		if (_deleteRemoved) {
+			_deleteRemoved = false;
+			db.requestIncrementalVacuum();
+		}
 		return;
 	}
 	settleDelete(0);
@@ -1368,6 +1374,7 @@ void ChatScanBox::settleDelete(int attempt) {
 	if (db.chatScanDupCount(peerId, -1) == 0) {
 		writeDupReport(true);
 		db.markChatDeleteFinished(peerId);
+		_deleteRemoved = false;
 		ChatScan::ForgetScannedPeer(peerId);
 		ChatScan::RememberScannedPeer(peerId);
 		_statusText = tr::lng_chat_scan_done(tr::now);
@@ -1376,6 +1383,10 @@ void ChatScanBox::settleDelete(int attempt) {
 	}
 	if (attempt >= 10) {
 		renderResults(db.readChatScan(peerId));
+		if (_deleteRemoved) {
+			_deleteRemoved = false;
+			db.requestIncrementalVacuum();
+		}
 		return;
 	}
 	_settleTimer.setCallback([=] {

@@ -449,23 +449,6 @@ void NoteItemRemoved(not_null<HistoryItem*> item) {
 				replacement->msgId);
 		}
 	}
-	if (wasOwner && !stored->hash.isEmpty()) {
-		db.removeChatTableUnique(
-			peerId,
-			stored->mediaId,
-			stored->isPhoto,
-			stored->hash);
-		if (replacement && replacementRow) {
-			db.addChatTableUnique(
-				replacement->peerId,
-				replacementRow->mediaId,
-				replacementRow->isPhoto,
-				stored->hash);
-		}
-	} else if (!stored->isDup && !stored->hash.isEmpty()) {
-		db.invalidateChatTable(peerId);
-		db.invalidateAllPeersChatTable();
-	}
 	if (replacement) {
 		MarkUniqueHashDirty(replacement->peerId, stored->hash);
 	}
@@ -484,10 +467,8 @@ void NoteChatDeleted(PeerId peerId) {
 	auto &db = Core::App().downloadManager().ensureDedupDb();
 	if (db.isOpen()) {
 		const auto changed = db.removeChatScan(peerId);
-		db.invalidateChatTable(peerId);
 		for (const auto &[replacementPeer, hash] : changed) {
 			MarkUniqueHashDirty(replacementPeer, hash);
-			db.invalidateChatTable(replacementPeer);
 			if (const auto promoted = db.chatScanUniqueHash(
 					replacementPeer,
 					hash)) {
@@ -499,7 +480,6 @@ void NoteChatDeleted(PeerId peerId) {
 				}
 			}
 		}
-		db.invalidateAllPeersChatTable();
 	}
 	ForgetScannedPeer(peerId);
 }
@@ -562,10 +542,6 @@ void NoteItemMediaUpdated(not_null<HistoryItem*> item) {
 			fresh.mediaId,
 			fresh.isPhoto,
 			fresh.hash);
-	}
-	if (mediaChanged) {
-		db.invalidateChatTable(peerId);
-		db.invalidateAllPeersChatTable();
 	}
 	BumpScanVersion();
 }

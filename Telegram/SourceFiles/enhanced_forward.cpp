@@ -7242,6 +7242,7 @@ MsgId CurrentGate(const PeerId &dst) {
 }
 
 void PauseAll(not_null<Main::Session*> session) {
+	CopyAlbum::PauseAll(session);
 	auto candidates = std::vector<std::shared_ptr<Job>>();
 	for (const auto &entry : Jobs()) {
 		if (BelongsTo(*entry.second, session) && entry.second->alive()) {
@@ -7279,6 +7280,7 @@ void PauseAll(not_null<Main::Session*> session) {
 }
 
 void CancelAll(not_null<Main::Session*> session) {
+	CopyAlbum::CancelAll(session);
 	auto candidates = std::vector<std::shared_ptr<Job>>();
 	for (const auto &entry : Jobs()) {
 		if (BelongsTo(*entry.second, session)) {
@@ -7348,6 +7350,7 @@ void ResumeRecord(
 }
 
 void ResumeAll(not_null<Main::Session*> session) {
+	CopyAlbum::ResumeAll(session);
 	auto candidates = std::vector<std::shared_ptr<Job>>();
 	for (const auto &[dst, job] : Jobs()) {
 		if (BelongsTo(*job, session) && job->state == Job::State::Paused) {
@@ -7364,12 +7367,15 @@ void ResumeAll(not_null<Main::Session*> session) {
 	}
 	auto &db = Core::App().downloadManager().ensureDedupDb();
 	for (const auto &record : db.loadNfResume(session->uniqueId())) {
-		ResumeRecord(session, record);
+		if (!record.copyAlbum) {
+			ResumeRecord(session, record);
+		}
 	}
 	Notify();
 }
 
 void PauseDst(not_null<Main::Session*> session, const PeerId &dst) {
+	CopyAlbum::PauseDst(session, dst);
 	auto &jobs = Jobs();
 	const auto it = jobs.find(dst);
 	if (it == end(jobs) || !BelongsTo(*it->second, session)) {
@@ -7402,6 +7408,7 @@ void PauseDst(not_null<Main::Session*> session, const PeerId &dst) {
 }
 
 void ResumeDst(not_null<Main::Session*> session, const PeerId &dst) {
+	CopyAlbum::ResumeDst(session, dst);
 	if (const auto it = Jobs().find(dst);
 		it != end(Jobs()) && BelongsTo(*it->second, session)) {
 		const auto job = it->second.get();
@@ -7415,7 +7422,7 @@ void ResumeDst(not_null<Main::Session*> session, const PeerId &dst) {
 	}
 	auto &db = Core::App().downloadManager().ensureDedupDb();
 	for (const auto &record : db.loadNfResume(session->uniqueId())) {
-		if (record.destPeerId == dst) {
+		if (record.destPeerId == dst && !record.copyAlbum) {
 			ResumeRecord(session, record);
 			Notify();
 			return;
@@ -7424,6 +7431,7 @@ void ResumeDst(not_null<Main::Session*> session, const PeerId &dst) {
 }
 
 void CancelDst(not_null<Main::Session*> session, const PeerId &dst) {
+	CopyAlbum::CancelDst(session, dst);
 	const auto it = Jobs().find(dst);
 	if (it == end(Jobs()) || !BelongsTo(*it->second, session)) {
 		return;
@@ -7439,7 +7447,16 @@ int UnfinishedCount(not_null<Main::Session*> session) {
 		}
 	}
 	auto &db = Core::App().downloadManager().ensureDedupDb();
-	return std::max(result, int(db.loadNfResume(session->uniqueId()).size()));
+	if (db.isOpen()) {
+		auto persisted = 0;
+		for (const auto &record : db.loadNfResume(session->uniqueId())) {
+			if (!record.copyAlbum) {
+				persisted++;
+			}
+		}
+		result = std::max(result, persisted);
+	}
+	return result + CopyAlbum::UnfinishedCount(session);
 }
 
 Counters CountersFor(not_null<Main::Session*> session) {
@@ -7504,7 +7521,8 @@ std::vector<Counters> AllCounters(not_null<Main::Session*> session) {
 	auto &db = Core::App().downloadManager().ensureDedupDb();
 	if (db.isOpen()) {
 		for (const auto &record : db.loadNfResume(session->uniqueId())) {
-			if (record.remaining.empty()
+			if (record.copyAlbum
+				|| record.remaining.empty()
 				|| Jobs().contains(record.destPeerId)) {
 				continue;
 			}
@@ -7521,6 +7539,11 @@ std::vector<Counters> AllCounters(not_null<Main::Session*> session) {
 			result.push_back(std::move(counters));
 		}
 	}
+	auto copy = CopyAlbum::AllCounters(session);
+	result.insert(
+		end(result),
+		std::make_move_iterator(begin(copy)),
+		std::make_move_iterator(end(copy)));
 	return result;
 }
 
@@ -7529,3 +7552,11 @@ rpl::producer<> countersChanged() {
 }
 
 } // namespace NormalForward
+
+namespace CopyAlbum {
+
+void NotifyChanged() {
+	NormalForward::Notify();
+}
+
+} // namespace CopyAlbum

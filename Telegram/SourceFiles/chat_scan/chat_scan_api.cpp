@@ -237,10 +237,7 @@ void Api::startFullRescan() {
 			ChatScan::ForgetScannedPeer(strong->_peer->id);
 			for (const auto &[peerId, hash] : changed) {
 				ChatScan::MarkUniqueHashDirty(peerId, hash);
-				strong->db().invalidateChatTable(peerId);
 			}
-			strong->db().invalidateChatTable(strong->_peer->id);
-			strong->db().invalidateAllPeersChatTable();
 			if (strong->_cancelled) {
 				auto state = strong->_state.current();
 				state.phase = State::Phase::Cancelled;
@@ -416,9 +413,6 @@ void Api::cancel() {
 	_uniqueHashes.clear();
 	clearHashedBatch();
 	_queue->clearKnownHashes();
-	db().clearChatTable();
-	db().invalidateChatTable(_peer->id);
-	db().invalidateAllPeersChatTable();
 	_pageStickers.clear();
 	_stickerTotal = 0;
 	_staleMedia.clear();
@@ -479,14 +473,9 @@ void Api::cancel() {
 					ChatScan::ForgetScannedPeer(strong->_peer->id);
 					for (const auto &[peerId, hash] : changed) {
 						ChatScan::MarkUniqueHashDirty(peerId, hash);
-						strong->db().invalidateChatTable(peerId);
 					}
-					strong->db().invalidateChatTable(
-						strong->_peer->id);
-					strong->db().invalidateAllPeersChatTable();
 				}
 				strong->_clearing = false;
-				strong->db().clearChatTable();
 				auto state = strong->_state.current();
 				state.phase = State::Phase::Cancelled;
 				state.elapsedMs = 0;
@@ -1050,7 +1039,7 @@ void Api::restoreRebuiltItem(const Data::ChatScanItem &item) {
 						item.msgId,
 						item.category,
 						item.size });
-		} else if (!isDup && i.value().msgId < item.msgId) {
+		} else if (!isDup && !i.value().msgId) {
 			i.value() = UniqueHash{
 				item.msgId,
 				item.category,
@@ -1901,26 +1890,6 @@ void Api::applyOwnerDecision(
 		++totals.uniqueCount;
 		totals.uniqueBytes += row.size;
 	};
-	if (decision.demoted
-		&& decision.demoted->peerId == _peer->id
-		&& decision.demoted->msgId != item.msgId
-		&& decision.demoted->tracked
-		&& !decision.demoted->isDup) {
-		demote(*decision.demoted);
-	} else if (decision.demoted) {
-		MarkUniqueHashDirty(decision.demoted->peerId, hash);
-		if (decision.demoted->tracked && !decision.demoted->isDup) {
-			// Another chat's finished scan owns this content and just lost
-			// the kept copy; its stored totals have to follow.
-			db().adjustChatScanTotals(
-				decision.demoted->peerId,
-				decision.demoted->category,
-				-1,
-				-decision.demoted->size,
-				1,
-				decision.demoted->size);
-		}
-	}
 	if (decision.wasDup != decision.isDup) {
 		if (decision.isDup) {
 			demote(item);
@@ -1993,14 +1962,6 @@ void Api::applyHashed(const PendingHash &entry) {
 			i.value() = UniqueHash{ actual, 0, 0 };
 		}
 	}
-	if (!tierOn && item.mediaId) {
-		db().insert(Data::DedupDb::Table::Uploads, {
-			.hash = hash,
-			.documentId = item.mediaId,
-			.isPhoto = item.isPhoto,
-			.status = u"f"_q,
-		});
-	}
 	if (tierOn) {
 		const auto decision = db().chatScanApplyHashOwner(
 			_peer->id,
@@ -2026,27 +1987,27 @@ void Api::applyHashed(const PendingHash &entry) {
 			hash,
 			item.isDup,
 			filenameForMedia(item.mediaId, item.isPhoto));
-		if (i == _uniqueHashes.end()) {
-			_uniqueHashes.insert(
-				hash,
-				UniqueHash{ item.msgId, item.category, item.size });
-		} else if (item.msgId == i.value().msgId) {
-			// Already the stored unique hash owner.
-		} else if (!i.value().msgId || item.msgId < i.value().msgId) {
-			demoteToDuplicate(item);
-		} else {
-			auto previous = db().chatScanItem(_peer->id, i.value().msgId);
-			if (previous && !previous->isDup) {
-				previous->filename = filenameForMedia(
-					previous->mediaId,
-					previous->isPhoto);
-				demoteToDuplicate(*previous);
-			}
-			i.value() = UniqueHash{
+		if (item.mediaId) {
+			// The scan records the content it hashed in the upload inventory
+			// in both modes. Without this a later upload in another chat
+			// would not see the content that exists in the scanned chat.
+			db().insert(Data::DedupDb::Table::Uploads, {
+				.hash = hash,
+				.documentId = item.mediaId,
+				.isPhoto = item.isPhoto,
+				.status = u"f"_q,
+			});
+		}
+		if (i == _uniqueHashes.end() || !i.value().msgId) {
+			_uniqueHashes[hash] = UniqueHash{
 				item.msgId,
 				item.category,
 				item.size,
 			};
+		} else if (item.msgId != i.value().msgId) {
+			// The first message that claimed the hash stays the owner in
+			// this chat; a later copy is a duplicate even when it is newer.
+			demoteToDuplicate(item);
 		}
 	}
 }
@@ -2217,9 +2178,6 @@ void Api::writeAggregateRows() {
 	_uniqueHashes.clear();
 	clearHashedBatch();
 	_queue->clearKnownHashes();
-	db().clearChatTable();
-	db().invalidateChatTable(_peer->id);
-	db().invalidateAllPeersChatTable();
 	_stickerTotal = 0;
 	_staleMedia.clear();
 	_pageItems.clear();

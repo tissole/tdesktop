@@ -40,6 +40,7 @@ enum class JobKind {
 	EnhancedForward,
 	BulkForward,
 	Scan,
+	CopyAlbum,
 };
 
 enum class JobState : int {
@@ -148,6 +149,9 @@ struct NfResumeRecord {
 	int forwardOptions = 0;
 	int groupOptions = 0;
 	std::vector<MsgId> remaining;
+	// Copy+album shares the forward resume row but restarts through the
+	// sendMultiMedia copy pipeline, not the plain forward one.
+	bool copyAlbum = false;
 };
 
 struct ExResumeRecord {
@@ -302,7 +306,6 @@ using ChatScanOwnerChange = std::pair<PeerId, QByteArray>;
 struct ChatScanOwnerDecision {
 	bool wasDup = false;
 	bool isDup = false;
-	std::optional<ChatScanItem> demoted;
 	std::optional<HashOwner> owner;
 };
 
@@ -329,47 +332,10 @@ public:
 		Uploads,
 	};
 
-	class TableUse {
-	public:
-		TableUse() = default;
-		TableUse(TableUse &&other) noexcept;
-		TableUse &operator=(TableUse &&other) noexcept;
-		~TableUse();
-
-	private:
-		friend class DedupDb;
-		TableUse(DedupDb *db, Table table);
-
-		DedupDb *_db = nullptr;
-		Table _table = Table::Downloads;
-	};
-
-	class ChatTableUse {
-	public:
-		ChatTableUse() = default;
-		ChatTableUse(ChatTableUse &&other) noexcept;
-		ChatTableUse &operator=(ChatTableUse &&other) noexcept;
-		~ChatTableUse();
-
-	private:
-		friend class DedupDb;
-		ChatTableUse(DedupDb *db, PeerId peerId, bool allPeers);
-
-		DedupDb *_db = nullptr;
-		PeerId _peerId;
-		bool _allPeers = false;
-	};
-
 	explicit DedupDb(const QString &path, bool purgePending = true);
 	~DedupDb();
 
-	[[nodiscard]] TableUse useTable(Table table);
-	[[nodiscard]] ChatTableUse useChatTable(PeerId peerId, bool allPeers);
-
 	[[nodiscard]] bool isOpen() const;
-	void ensureTableLoaded(Table table);
-	// Upload/forward chat dedup: load the unique hashed rows of one peer or
-	// of every peer once, then use the in-memory maps for each file.
 	[[nodiscard]] bool chatTableContainsDocId(
 		PeerId peerId,
 		uint64 mediaId,
@@ -379,23 +345,6 @@ public:
 		PeerId peerId,
 		const QByteArray &hash,
 		bool allPeers) const;
-	void clearChatTable();
-	// Adds/removes one unique media/hash mapping in the live chat caches
-	// without reloading them. Used when an owner moves between peers.
-	void addChatTableUnique(
-		PeerId peerId,
-		uint64 mediaId,
-		bool isPhoto,
-		const QByteArray &hash);
-	void removeChatTableUnique(
-		PeerId peerId,
-		uint64 mediaId,
-		bool isPhoto,
-		const QByteArray &hash);
-	// Reloads one peer's chat cache in place, keeping active handles valid.
-	void invalidateChatTable(PeerId peerId);
-	// Same for the all-peers cache.
-	void invalidateAllPeersChatTable();
 
 	void insert(Table table, const DedupRecord &record);
 
@@ -403,8 +352,6 @@ public:
 		Table table,
 		uint64 documentId,
 		bool isPhoto = false) const;
-	// Direct on-disk existence check (memory maps may lag right after the
-	// load window); used by one-shot prechecks, not per-tick paths.
 	[[nodiscard]] bool containsDocIdInDb(
 		Table table,
 		uint64 documentId,
@@ -498,7 +445,6 @@ public:
 		Table table,
 		const QByteArray &hash,
 		const QString &status);
-	void removeUnfinishedByHash(Table table, const QByteArray &hash);
 	[[nodiscard]] QByteArray hashForDocId(
 		Table table,
 		uint64 documentId,
@@ -520,8 +466,6 @@ public:
 		Table table,
 		uint64 documentId,
 		bool isPhoto = false);
-
-	[[nodiscard]] std::vector<DedupRecord> loadAll(Table table) const;
 
 	void insertDlResume(const DlResumeRecord &record);
 	void removeDlResume(uint64 sessionId, uint64 peerId, int64 msgId);
@@ -562,7 +506,10 @@ public:
 	void setEfResumePaused(uint64 sessionId, PeerId peerId, bool paused);
 
 	void insertNfResume(const NfResumeRecord &record);
-	void removeNfResume(uint64 sessionId, PeerId destPeerId);
+	void removeNfResume(
+		uint64 sessionId,
+		PeerId destPeerId,
+		bool copyAlbum = false);
 	void clearNfResume(uint64 sessionId);
 	[[nodiscard]] std::vector<NfResumeRecord> loadNfResume(
 		uint64 sessionId) const;
@@ -800,7 +747,7 @@ public:
 	void clearChatScan(PeerId peerId);
 	// Runs the full-chat cleanup on a worker connection; done is called on
 	// the main thread with whether the database connection was opened and
-	// the promoted owner hashes whose caches need invalidation.
+	// the promoted owner hashes.
 	void clearChatScanAsync(
 		PeerId peerId,
 		Fn<void(bool, std::vector<ChatScanOwnerChange>)> done);
@@ -943,9 +890,6 @@ public:
 	void commitTransaction();
 
 private:
-	void releaseTable(Table table);
-	void releaseChatTable(PeerId peerId, bool allPeers);
-
 	class Impl;
 	std::unique_ptr<Impl> _impl;
 };
