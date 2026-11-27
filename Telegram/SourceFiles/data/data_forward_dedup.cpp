@@ -85,18 +85,6 @@ void HashPump(const std::shared_ptr<HashResolveState> &state) {
 	}
 }
 
-[[nodiscard]] bool IdDuplicate(
-		DedupDb &db,
-		PeerId dstPeer,
-		const Media &media,
-		bool dedupOn) {
-	using Table = DedupDb::Table;
-	const auto isPhoto = (media.photo != nullptr);
-	return db.chatTableContainsDocId(dstPeer, media.mediaId, isPhoto, dedupOn)
-		|| (dedupOn
-			&& db.containsDocId(Table::Uploads, media.mediaId, isPhoto));
-}
-
 void ResolveHash(
 		Main::Session *session,
 		uint64 mediaId,
@@ -147,6 +135,110 @@ Media MediaOf(HistoryItem *item) {
 	};
 }
 
+bool IsGlobalOn(const Context &context) {
+	return context.globalOn && !context.destinationOnly;
+}
+
+Verdict CheckMedia(
+		const Context &context,
+		uint64 mediaId,
+		bool isPhoto,
+		bool seenInBatch) {
+	if (!mediaId) {
+		return Verdict::Allowed;
+	}
+	if (seenInBatch) {
+		return Verdict::InBatch;
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (!db.isOpen()) {
+		return Verdict::Allowed;
+	}
+	if (db.chatTableContainsDocId(
+			context.destination,
+			mediaId,
+			isPhoto,
+			false)) {
+		return Verdict::DestinationDuplicate;
+	}
+	if (context.checkFwTmp
+		&& db.containsFwTmpItem(
+			context.sessionId,
+			context.destination,
+			mediaId,
+			isPhoto)) {
+		return Verdict::DestinationDuplicate;
+	}
+	if (!IsGlobalOn(context)) {
+		return Verdict::Allowed;
+	}
+	if (db.chatTableContainsDocId(
+			context.destination,
+			mediaId,
+			isPhoto,
+			true)) {
+		return Verdict::GlobalDuplicate;
+	}
+	if (context.run
+		&& context.run->media.contains({ mediaId, isPhoto })) {
+		return Verdict::Allowed;
+	}
+	if (db.containsDocId(DedupDb::Table::Uploads, mediaId, isPhoto)) {
+		return Verdict::GlobalDuplicate;
+	}
+	return Verdict::Allowed;
+}
+
+Verdict CheckHash(
+		const Context &context,
+		const QByteArray &hash,
+		bool seenInBatch) {
+	if (hash.isEmpty()) {
+		return Verdict::Allowed;
+	}
+	if (seenInBatch) {
+		return Verdict::InBatch;
+	}
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (!db.isOpen()) {
+		return Verdict::Allowed;
+	}
+	if (db.chatTableContainsHash(context.destination, hash, false)) {
+		return Verdict::DestinationDuplicate;
+	}
+	if (context.checkFwTmp
+		&& db.containsFwTmpHash(context.sessionId, context.destination, hash)) {
+		return Verdict::DestinationDuplicate;
+	}
+	if (!IsGlobalOn(context)) {
+		return Verdict::Allowed;
+	}
+	if (db.chatTableContainsHash(context.destination, hash, true)) {
+		return Verdict::GlobalDuplicate;
+	}
+	if (context.run && context.run->hashes.contains(hash)) {
+		return Verdict::Allowed;
+	}
+	if (db.seekDocumentId(DedupDb::Table::Uploads, hash, 0) != 0) {
+		return Verdict::GlobalDuplicate;
+	}
+	return Verdict::Allowed;
+}
+
+void AddPending(uint64 mediaId, bool isPhoto, const QByteArray &hash) {
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (db.isOpen()) {
+		db.addPending(DedupDb::Table::Uploads, mediaId, hash, isPhoto);
+	}
+}
+
+void RemovePending(uint64 mediaId, bool isPhoto) {
+	auto &db = Core::App().downloadManager().ensureDedupDb();
+	if (db.isOpen()) {
+		db.removePending(DedupDb::Table::Uploads, mediaId, isPhoto);
+	}
+}
+
 void ResolveHashes(
 		PeerId dstPeer,
 		const std::set<std::pair<uint64, bool>> &seen,
@@ -154,7 +246,10 @@ void ResolveHashes(
 		std::shared_ptr<std::map<const HistoryItem*, QByteArray>> known,
 		Fn<void()> done) {
 	auto &db = Core::App().downloadManager().ensureDedupDb();
-	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
+	const auto context = Context{
+		.destination = dstPeer,
+		.globalOn = GetEnhancedBool("prevent_forward_duplicates"),
+	};
 	auto missing = std::vector<not_null<HistoryItem*>>();
 	for (const auto &item : items) {
 		if (known->find(item.get()) != known->end()) {
@@ -164,7 +259,11 @@ void ResolveHashes(
 		if (!media.mediaId
 			|| seen.contains({ media.mediaId, media.photo != nullptr })
 			|| (db.isOpen()
-				&& IdDuplicate(db, dstPeer, media, dedupOn))) {
+				&& CheckMedia(
+					context,
+					media.mediaId,
+					media.photo != nullptr,
+					false) != Verdict::Allowed)) {
 			known->emplace(item.get(), QByteArray());
 			continue;
 		}
@@ -202,23 +301,23 @@ bool Skip(
 	if (!db.isOpen()) {
 		return false;
 	}
-	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
-	using Table = DedupDb::Table;
-	if (IdDuplicate(db, dstPeer, media, dedupOn)) {
+	const auto context = Context{
+		.destination = dstPeer,
+		.globalOn = GetEnhancedBool("prevent_forward_duplicates"),
+	};
+	if (CheckMedia(context, mediaId, isPhoto, false) != Verdict::Allowed) {
 		return true;
 	}
 	if (!hash.isEmpty()) {
 		if (!seenHashes.insert(hash).second) {
 			return true;
 		}
-		if (db.chatTableContainsHash(dstPeer, hash, dedupOn)
-			|| (dedupOn
-				&& db.seekDocumentId(Table::Uploads, hash) != 0)) {
+		if (CheckHash(context, hash, false) != Verdict::Allowed) {
 			return true;
 		}
 	}
-	if (dedupOn) {
-		db.addPending(Table::Uploads, mediaId, hash, isPhoto);
+	if (IsGlobalOn(context)) {
+		AddPending(mediaId, isPhoto, hash);
 		pendingAdded = true;
 	}
 	return false;
@@ -293,12 +392,8 @@ void Done(
 		PeerId dstPeer,
 		MsgId sentId,
 		bool pending) {
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (pending && db.isOpen()) {
-		db.removePending(
-			DedupDb::Table::Uploads,
-			mediaId,
-			(photo != nullptr));
+	if (pending) {
+		RemovePending(mediaId, (photo != nullptr));
 	}
 	if (!hash.isEmpty()) {
 		RecordHash(
@@ -314,9 +409,8 @@ void Done(
 }
 
 void Fail(uint64 mediaId, bool isPhoto, bool pending) {
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	if (pending && db.isOpen()) {
-		db.removePending(DedupDb::Table::Uploads, mediaId, isPhoto);
+	if (pending) {
+		RemovePending(mediaId, isPhoto);
 	}
 }
 

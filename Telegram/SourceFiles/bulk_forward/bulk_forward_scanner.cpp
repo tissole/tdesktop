@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "base/algorithm.h"
 #include "base/debug_log.h"
+#include "bulk_forward/bulk_forward_search.h"
 #include "data/data_chat.h"
 #include "data/data_peer.h"
 #include "enhanced_forward.h"
@@ -96,6 +97,24 @@ void HistoryScanner::start(ScanRequest &&request) {
 	_topicRootId = request.topicRootId;
 	_filter = std::move(request.filter);
 	_callbacks = std::move(request.callbacks);
+	_method = request.method;
+	_searchFilter.reset();
+	if (_method == ScanMethod::Search) {
+		if (const auto piece = SingleSearchPiece(_filter.types)) {
+			if (_filter.scope != Scope::DateRange
+				&& !request.peer->migrateFrom()) {
+				_searchFilter = SearchFilterFor(*piece);
+			} else {
+				_method = ScanMethod::History;
+			}
+		} else {
+			LOG(("BulkForward: search scan needs one media index, "
+				"falling back to history."));
+			_method = ScanMethod::History;
+		}
+	}
+	LOG(("BulkForward: scan method is %1."
+		).arg((_method == ScanMethod::Search) ? u"search"_q : u"history"_q));
 	_sources.clear();
 
 	const auto push = [&](PeerData *peer) {
@@ -178,13 +197,17 @@ void HistoryScanner::cancel() {
 	releaseTakeout();
 }
 
-std::vector<std::pair<PeerId, MsgId>> HistoryScanner::resumeCursors() const {
+	std::vector<std::pair<PeerId, MsgId>> HistoryScanner::resumeCursors() const {
 	auto result = std::vector<std::pair<PeerId, MsgId>>();
 	result.reserve(_sources.size());
 	for (const auto &source : _sources) {
 		result.push_back({ source.peer->id, source.cursor });
 	}
 	return result;
+}
+
+ScanMethod HistoryScanner::method() const {
+	return _method;
 }
 
 void HistoryScanner::requestNextPage() {
@@ -232,7 +255,7 @@ void HistoryScanner::requestNextPage() {
 		weak->_waiting = false;
 		if (weak->_takeoutId && !weak->_takeoutFallbackTried) {
 			weak->_takeoutFallbackTried = true;
-			LOG(("BulkForward: takeout history read failed (%1), retrying."
+			LOG(("BulkForward: takeout scan read failed (%1), retrying."
 				).arg(error.type()));
 			weak->releaseTakeout();
 			weak->requestNextPage();
@@ -258,7 +281,30 @@ void HistoryScanner::requestNextPage() {
 	};
 	_waiting = true;
 	_resumeAt = 0;
-	if (_topicRootId) {
+	if (_method == ScanMethod::Search) {
+		// No min_id/max_id bounds and no date bounds: they change what the
+		// offset is counted over and break the ascending walk. The cursor
+		// starts at fromId - 1 for an id range and the walk stops locally.
+		using Flag = MTPmessages_Search::Flag;
+		send(MTPmessages_Search(
+			MTP_flags(_topicRootId ? Flag::f_top_msg_id : Flag()),
+			source.peer->input(),
+			MTP_string(),
+			MTPInputPeer(),
+			MTPInputPeer(),
+			MTPVector<MTPReaction>(),
+			MTP_int(MtpId(_topicRootId.bare)),
+			*_searchFilter,
+			MTP_int(0),
+			MTP_int(0),
+			MTP_int(offsetId),
+			MTP_int(addOffset),
+			MTP_int(limit),
+			MTP_int(0),
+			MTP_int(0),
+			MTP_long(0)
+		));
+	} else if (_topicRootId) {
 		send(MTPmessages_GetReplies(
 			source.peer->input(),
 			MTP_int(MtpId(_topicRootId.bare)),
@@ -317,7 +363,7 @@ void HistoryScanner::handlePage(
 		nextRate = 0;
 	} else {
 		if (count > 0
-			&& _filter.scope == Scope::All
+			&& (_filter.scope == Scope::All || _method == ScanMethod::Search)
 			&& source.total != count) {
 			source.total = count;
 			updateTotal();
@@ -410,10 +456,12 @@ void HistoryScanner::handleWalkPage(
 	const auto idDone = (_filter.scope == Scope::IdRange)
 		&& (_filter.tillId > 0)
 		&& (MsgId(highest) > _filter.tillId);
-	if (size < kPageSize
-		|| (source.total > 0 && source.scanned >= source.total)
-		|| dateDone
-		|| idDone) {
+	// A search count may be capped, so only an exhausted page ends it; the
+	// history total is exact and saves the page after the last one.
+	const auto totalDone = (_method != ScanMethod::Search)
+		&& (source.total > 0)
+		&& (source.scanned >= source.total);
+	if (size < kPageSize || totalDone || dateDone || idDone) {
 		finishSource(source);
 	}
 }

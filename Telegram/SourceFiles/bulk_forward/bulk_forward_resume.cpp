@@ -24,7 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace BulkForward {
 namespace {
 
-constexpr auto kSerializationVersion = quint32(6);
+constexpr auto kSerializationVersion = quint32(7);
 constexpr auto kMaxDestinations = quint32(1000);
 constexpr auto kMaxCursors = quint32(1000);
 constexpr auto kMaxCarriers = quint32(1000);
@@ -84,6 +84,7 @@ base::flat_map<uint64, Tracked> &Registry() {
 		}
 	}
 	stream << qint32(state.previewTotal);
+	stream << quint8(state.method);
 	return data;
 }
 
@@ -265,6 +266,14 @@ base::flat_map<uint64, Tracked> &Registry() {
 			return std::nullopt;
 		}
 		result.previewTotal = previewTotal;
+	}
+	if (version >= 7) {
+		auto method = quint8(0);
+		stream >> method;
+		if (method > quint8(ScanMethod::Search)) {
+			return std::nullopt;
+		}
+		result.method = ScanMethod(method);
 	}
 	if (stream.status() != QDataStream::Ok) {
 		return std::nullopt;

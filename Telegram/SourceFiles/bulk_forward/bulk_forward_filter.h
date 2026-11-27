@@ -27,6 +27,12 @@ enum class Scope : uchar {
 	Selection,
 };
 
+enum class ScanMethod : uchar {
+	Unknown,
+	History,
+	Search,
+};
+
 enum class MediaType : uint32 {
 	Photo = (1U << 0),
 	Video = (1U << 1),

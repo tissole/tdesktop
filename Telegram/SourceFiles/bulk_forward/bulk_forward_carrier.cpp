@@ -10,9 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "base/algorithm.h"
 #include "base/random.h"
-#include "core/application.h"
-#include "data/data_dedup_db.h"
-#include "data/data_download_manager.h"
+#include "data/data_forward_dedup.h"
 #include "data/data_forum_topic.h"
 #include "data/data_peer.h"
 #include "main/main_session.h"
@@ -62,28 +60,27 @@ void CarrierForwarder::send(
 		finish(Result());
 		return;
 	}
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	const auto sessionId = _session->uniqueId();
-	const auto dst = _destination->id;
+	const auto context = Data::ForwardDedup::Context{
+		.destination = _destination->id,
+		.checkFwTmp = true,
+		.sessionId = _session->uniqueId(),
+	};
 	auto kept = std::vector<CarrierItem>();
 	kept.reserve(items.size());
 	for (auto &item : items) {
 		auto duplicate = false;
-		if (item.mediaId && db.isOpen()) {
-			duplicate = db.chatTableContainsDocId(
-					dst,
-					item.mediaId,
-					item.isPhoto,
-					false)
-				|| db.containsFwTmpItem(
-					sessionId,
-					dst,
-					item.mediaId,
-					item.isPhoto);
+		if (item.mediaId) {
+			duplicate = Data::ForwardDedup::CheckMedia(
+				context,
+				item.mediaId,
+				item.isPhoto,
+				false) != Data::ForwardDedup::Verdict::Allowed;
 		}
-		if (!duplicate && !item.hash.isEmpty() && db.isOpen()) {
-			duplicate = db.chatTableContainsHash(dst, item.hash, false)
-				|| db.containsFwTmpHash(sessionId, dst, item.hash);
+		if (!duplicate && !item.hash.isEmpty()) {
+			duplicate = Data::ForwardDedup::CheckHash(
+				context,
+				item.hash,
+				false) != Data::ForwardDedup::Verdict::Allowed;
 		}
 		if (duplicate) {
 			++_skipped;

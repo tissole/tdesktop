@@ -41,6 +41,10 @@ public:
 	[[nodiscard]] rpl::producer<int> countValue() const;
 	// The newest matching message id, or zero while it is still unknown.
 	[[nodiscard]] rpl::producer<MsgId> lastId() const;
+	// How the scan should read the matches. Stays Unknown until the indexed
+	// count and the history total are known; falls back to History whenever
+	// the selection cannot be walked with one search filter.
+	[[nodiscard]] rpl::producer<ScanMethod> method() const;
 
 	// Subscriptions made by the owner live as long as the probe.
 	[[nodiscard]] rpl::lifetime &lifetime() {
@@ -61,6 +65,7 @@ private:
 	void requestTotal(int generation);
 	void arrived(int generation, int piece, int count, MsgId newestId);
 	void failed(int generation, int piece);
+	void publishMethod();
 	void tryPublish(int generation);
 
 	[[nodiscard]] bool boundsChanged(const Filter &filter) const;
@@ -77,6 +82,7 @@ private:
 	rpl::variable<QString> _text;
 	rpl::variable<int> _countValue;
 	rpl::variable<MsgId> _lastId;
+	rpl::variable<ScanMethod> _method;
 	Filter _filter;
 	Scope _boundsScope = Scope::All;
 	TimeId _boundsFromDate = 0;

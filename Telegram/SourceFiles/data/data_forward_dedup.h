@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/basic_types.h"
+#include "data/data_forward_seen.h"
 #include "data/data_msg_id.h"
 #include "data/data_peer_id.h"
 
@@ -42,6 +43,46 @@ struct Media {
 };
 
 [[nodiscard]] Media MediaOf(HistoryItem *item);
+
+// One duplicate decision for every forward path. The caller owns its own
+// accepted set for the current batch and passes only whether that set already
+// has the media; every check that talks to the dedup database goes through
+// this decision.
+enum class Verdict : uchar {
+	Allowed,
+	InBatch,
+	DestinationDuplicate,
+	GlobalDuplicate,
+};
+
+// `run` is the content this multi-destination run already accepted for
+// another destination: its uploads row must not make this destination skip
+// the same content. `checkFwTmp` adds the per-run rows the copy pipeline
+// writes before it sends; the manual copy path has none.
+struct Context {
+	PeerId destination;
+	bool globalOn = false;
+	bool destinationOnly = false;
+	const ForwardRunSeen *run = nullptr;
+	bool checkFwTmp = false;
+	uint64 sessionId = 0;
+};
+
+[[nodiscard]] bool IsGlobalOn(const Context &context);
+
+[[nodiscard]] Verdict CheckMedia(
+	const Context &context,
+	uint64 mediaId,
+	bool isPhoto,
+	bool seenInBatch);
+
+[[nodiscard]] Verdict CheckHash(
+	const Context &context,
+	const QByteArray &hash,
+	bool seenInBatch);
+
+void AddPending(uint64 mediaId, bool isPhoto, const QByteArray &hash);
+void RemovePending(uint64 mediaId, bool isPhoto);
 
 // Samples are only fetched for items that no id check can rule out, so a
 // repeat copy of files already sent does not touch the network at all. The

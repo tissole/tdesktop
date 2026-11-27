@@ -103,6 +103,8 @@ private:
 	void scanProgress(int scanned, int total, int matched);
 	void scanFinished();
 	void scanFailed(const QString &error);
+	void applyScanMethod(ScanMethod method);
+	void startScan(ScanMethod method);
 	void destinationFailed(const PeerId &destination, QString error);
 	void enqueueProtected(Batch batch);
 	void processProtected();
@@ -154,6 +156,8 @@ private:
 	int _previewTotal = 0;
 	MsgId _previewLastId;
 	Filter _filter;
+	ScanMethod _scanMethod = ScanMethod::Unknown;
+	base::flat_map<PeerId, MsgId> _scanCursors;
 	PeerId _source;
 	MsgId _sourceTopicRootId;
 	int _scanned = 0;
@@ -169,6 +173,7 @@ private:
 	base::flat_set<FullMsgId> _byteCounted;
 	int64 _startedAt = 0;
 	crl::time _lastCheckpoint = 0;
+	bool _scanStarted = false;
 	bool _scanDone = false;
 	bool _scanHeld = false;
 	bool _finished = false;

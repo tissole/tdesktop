@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "bulk_forward/bulk_forward_count.h"
 
 #include "apiwrap.h"
+#include "bulk_forward/bulk_forward_search.h"
 #include "data/data_peer.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
@@ -25,110 +26,11 @@ namespace {
 constexpr auto kCountDelay = crl::time(400);
 constexpr auto kPeerWaitInterval = crl::time(500);
 
-enum class Piece : int {
-	PhotoVideo,
-	Photo,
-	Video,
-	Voice,
-	Round,
-	Gif,
-	Document,
-	Music,
-	Url,
-	Poll,
-	Contacts,
-	Geo,
-};
-
 [[nodiscard]] int MtpId(int64 value) {
 	return int(std::clamp<int64>(
 		value,
 		int64(0),
 		int64(std::numeric_limits<int>::max())));
-}
-
-[[nodiscard]] std::vector<Piece> AllPieces() {
-	return {
-		Piece::PhotoVideo,
-		Piece::Voice,
-		Piece::Round,
-		Piece::Gif,
-		Piece::Document,
-		Piece::Music,
-		Piece::Url,
-		Piece::Poll,
-		Piece::Contacts,
-		Piece::Geo,
-	};
-}
-
-[[nodiscard]] std::vector<Piece> SelectedPieces(MediaTypes types) {
-	auto result = std::vector<Piece>();
-	const auto photo = (types & MediaType::Photo).value() != 0;
-	const auto video = (types & MediaType::Video).value() != 0;
-	if (photo && video) {
-		result.push_back(Piece::PhotoVideo);
-	} else if (photo) {
-		result.push_back(Piece::Photo);
-	} else if (video) {
-		result.push_back(Piece::Video);
-	}
-	if ((types & MediaType::Voice).value()) {
-		result.push_back(Piece::Voice);
-	}
-	if ((types & MediaType::RoundVideo).value()) {
-		result.push_back(Piece::Round);
-	}
-	if ((types & MediaType::Gif).value()) {
-		result.push_back(Piece::Gif);
-	}
-	if ((types & MediaType::File).value()) {
-		result.push_back(Piece::Document);
-	}
-	if ((types & MediaType::Audio).value()) {
-		result.push_back(Piece::Music);
-	}
-	if ((types & MediaType::Link).value()) {
-		result.push_back(Piece::Url);
-	}
-	if ((types & MediaType::Poll).value()) {
-		result.push_back(Piece::Poll);
-	}
-	if ((types & MediaType::Other).value()) {
-		result.push_back(Piece::Contacts);
-		result.push_back(Piece::Geo);
-	}
-	return result;
-}
-
-[[nodiscard]] MTPMessagesFilter FilterFor(Piece piece) {
-	switch (piece) {
-	case Piece::PhotoVideo:
-		return MTPMessagesFilter(MTP_inputMessagesFilterPhotoVideo());
-	case Piece::Photo:
-		return MTPMessagesFilter(MTP_inputMessagesFilterPhotos());
-	case Piece::Video:
-		return MTPMessagesFilter(MTP_inputMessagesFilterVideo());
-	case Piece::Voice:
-		return MTPMessagesFilter(MTP_inputMessagesFilterVoice());
-	case Piece::Round:
-		return MTPMessagesFilter(MTP_inputMessagesFilterRoundVideo());
-	case Piece::Gif:
-		return MTPMessagesFilter(MTP_inputMessagesFilterGif());
-	case Piece::Document:
-		return MTPMessagesFilter(MTP_inputMessagesFilterDocument());
-	case Piece::Music:
-		return MTPMessagesFilter(MTP_inputMessagesFilterMusic());
-	case Piece::Url:
-		return MTPMessagesFilter(MTP_inputMessagesFilterUrl());
-	case Piece::Poll:
-		return MTPMessagesFilter(MTP_inputMessagesFilterPoll());
-	case Piece::Contacts:
-		return MTPMessagesFilter(MTP_inputMessagesFilterContacts());
-	case Piece::Geo:
-		return MTPMessagesFilter(MTP_inputMessagesFilterGeo());
-	}
-	return MTPMessagesFilter(MTP_inputMessagesFilterEmpty());
 }
 
 struct CountResult {
@@ -279,17 +181,28 @@ rpl::producer<MsgId> CountProbe::lastId() const {
 	return _lastId.value();
 }
 
+rpl::producer<ScanMethod> CountProbe::method() const {
+	return _method.value();
+}
+
 void CountProbe::request(Filter filter) {
 	_filter = std::move(filter);
 	_timer.cancel();
 	_lastId = 0;
+	_method = ScanMethod::Unknown;
 	if (_filter.scope == Scope::Selection || !IsValid(_filter)) {
 		_text = QString();
 		_countValue = 0;
 		_lastId = 0;
+		_method = ScanMethod::History;
 		return;
 	}
 	_timer.callOnce(kCountDelay);
+	if (!boundsChanged(_filter)) {
+		// Cached counts are valid for the same bounds, so a filter that can
+		// never use search need not wait for the debounced round-trips.
+		publishMethod();
+	}
 }
 
 bool CountProbe::boundsChanged(const Filter &filter) const {
@@ -335,6 +248,7 @@ void CountProbe::start() {
 		_text = QString();
 		_countValue = 0;
 		_lastId = 0;
+		_method = ScanMethod::History;
 		return;
 	}
 	const auto needsAccessHash = _peer->isUser() || _peer->isChannel();
@@ -354,30 +268,27 @@ void CountProbe::start() {
 		_totalFailed = false;
 		_countValue = 0;
 		_lastId = 0;
+		_method = ScanMethod::Unknown;
 	}
 	const auto generation = ++_generation;
 	const auto needsText = (_filter.types & MediaType::Text).value() != 0;
+	// The history total is always read: the preview needs it for text and the
+	// scan method needs it to weigh the indexed matches against the chat.
+	if (_total < 0 && !_totalFailed) {
+		requestTotal(generation);
+	}
+	auto pieces = SelectedSearchPieces(_filter.types);
 	if (needsText) {
-		if (_total < 0 && !_totalFailed) {
-			requestTotal(generation);
-		}
-		auto pieces = AllPieces();
-		for (const auto piece : SelectedPieces(_filter.types)) {
+		for (const auto piece : AllSearchPieces()) {
 			if (std::find(pieces.begin(), pieces.end(), piece)
 				== pieces.end()) {
 				pieces.push_back(piece);
 			}
 		}
-		for (const auto piece : pieces) {
-			if (!_counts.contains(int(piece))) {
-				requestPiece(generation, int(piece));
-			}
-		}
-	} else {
-		for (const auto piece : SelectedPieces(_filter.types)) {
-			if (!_counts.contains(int(piece))) {
-				requestPiece(generation, int(piece));
-			}
+	}
+	for (const auto piece : pieces) {
+		if (!_counts.contains(int(piece))) {
+			requestPiece(generation, int(piece));
 		}
 	}
 	tryPublish(generation);
@@ -393,7 +304,7 @@ void CountProbe::requestPiece(int generation, int piece) {
 		maxDate(),
 		minId(),
 		maxId(),
-		FilterFor(Piece(piece)),
+		SearchFilterFor(SearchPiece(piece)),
 		[=](CountResult result) {
 			if (const auto strong = weak.get()) {
 				if (result.count < 0) {
@@ -479,15 +390,46 @@ void CountProbe::failed(int generation, int piece) {
 	tryPublish(generation);
 }
 
+void CountProbe::publishMethod() {
+	if (_method.current() != ScanMethod::Unknown) {
+		return;
+	}
+	const auto piece = SingleSearchPiece(_filter.types);
+	if (!piece
+		|| _filter.scope == Scope::DateRange
+		|| _peer->migrateFrom()) {
+		_method = ScanMethod::History;
+		return;
+	}
+	const auto i = _counts.find(int(*piece));
+	if (i == end(_counts)) {
+		return;
+	} else if (i->second.failed) {
+		_method = ScanMethod::History;
+		return;
+	}
+	if (_total < 0) {
+		if (_totalFailed) {
+			_method = ScanMethod::History;
+		}
+		return;
+	}
+	const auto covered = i->second.count;
+	_method = (_total > 0 && covered * 2 <= _total)
+		? ScanMethod::Search
+		: ScanMethod::History;
+}
+
 void CountProbe::tryPublish(int generation) {
 	if (generation != _generation
 		|| _filter.scope == Scope::Selection
 		|| !IsValid(_filter)) {
 		return;
 	}
+	publishMethod();
 	const auto types = _filter.types;
 	auto count = 0;
-	for (const auto piece : SelectedPieces(types)) {
+	for (const auto piece : SelectedSearchPieces(types)) {
 		const auto i = _counts.find(int(piece));
 		if (i == end(_counts)) {
 			return;
@@ -512,7 +454,7 @@ void CountProbe::tryPublish(int generation) {
 			return;
 		}
 		auto all = 0;
-		for (const auto piece : AllPieces()) {
+		for (const auto piece : AllSearchPieces()) {
 			const auto i = _counts.find(int(piece));
 			if (i == end(_counts)) {
 				return;
@@ -527,7 +469,7 @@ void CountProbe::tryPublish(int generation) {
 		count += std::max(0, _total - all);
 	}
 	auto lastId = MsgId(0);
-	for (const auto piece : SelectedPieces(types)) {
+	for (const auto piece : SelectedSearchPieces(types)) {
 		const auto i = _counts.find(int(piece));
 		if (i != end(_counts) && i->second.newestId > lastId) {
 			lastId = i->second.newestId;

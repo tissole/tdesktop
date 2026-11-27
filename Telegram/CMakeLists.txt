@@ -464,6 +464,8 @@ PRIVATE
     bulk_forward/bulk_forward_resume.h
     bulk_forward/bulk_forward_scanner.cpp
     bulk_forward/bulk_forward_scanner.h
+    bulk_forward/bulk_forward_search.cpp
+    bulk_forward/bulk_forward_search.h
     bulk_forward/bulk_forward_selection.cpp
     bulk_forward/bulk_forward_selection.h
     bulk_forward/bulk_forward_settings.cpp

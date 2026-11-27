@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_changes.h"
 #include "data/data_channel.h"
 #include "data/data_chat.h"
+#include "data/data_forward_dedup.h"
 #include "data/data_peer.h"
 #include "data/data_session.h"
 #include "data/data_types.h"
@@ -4788,24 +4789,21 @@ void Pipeline::pumpDownloads() {
 		const auto dedupOn = !_destinationOnly && dedupSetting;
 		const auto sessionId = _session.uniqueId();
 		auto &dedupDb = Core::App().downloadManager().ensureDedupDb();
+		const auto context = Data::ForwardDedup::Context{
+			.destination = _peerId,
+			.globalOn = dedupSetting,
+			.destinationOnly = _destinationOnly,
+			.run = _runSeen.get(),
+			.checkFwTmp = true,
+			.sessionId = sessionId,
+		};
 		const auto knownById = dedupDb.isOpen()
-			&& (dedupDb.chatTableContainsDocId(
-					_peerId,
-					mediaId,
-					item.isPhoto,
-					dedupOn)
-				|| dedupDb.containsFwTmpItem(
-					sessionId,
-					_peerId,
-					mediaId,
-					item.isPhoto)
-				|| (dedupSetting && seenInBatch(mediaId, item.isPhoto))
-				|| (dedupOn
-					&& !seenInRun(mediaId, item.isPhoto)
-					&& dedupDb.containsDocId(
-						Data::DedupDb::Table::Uploads,
-						mediaId,
-						item.isPhoto)));
+			&& (Data::ForwardDedup::CheckMedia(
+				context,
+				mediaId,
+				item.isPhoto,
+				dedupSetting && seenInBatch(mediaId, item.isPhoto))
+				!= Data::ForwardDedup::Verdict::Allowed);
 		if (knownById) {
 			skipAsDuplicate(i);
 			return;
@@ -4866,39 +4864,28 @@ void Pipeline::pumpDownloads() {
 				}
 				it.fileHash = hash;
 				it.fileSize = size;
-				auto &db = Core::App().downloadManager().ensureDedupDb();
+				const auto hashContext = Data::ForwardDedup::Context{
+					.destination = strong->_peerId,
+					.globalOn = dedupSetting,
+					.destinationOnly = strong->_destinationOnly,
+					.run = strong->_runSeen.get(),
+					.checkFwTmp = true,
+					.sessionId = sessionId,
+				};
 				// This media passed the id check above, so any content-hash
 				// match means the same content was forwarded before: skip it
 				// and attach this id to the hash for future id-only dedup.
-				if (db.chatTableContainsHash(strong->_peerId, hash, dedupOn)) {
-					strong->skipAsDuplicate(i);
-					return;
-				}
-				if (db.isOpen()
-					&& db.containsFwTmpHash(
-						sessionId,
-						strong->_peerId,
-						hash)) {
+				if (Data::ForwardDedup::CheckHash(
+						hashContext,
+						hash,
+						dedupOn && strong->seenInBatch(hash))
+					!= Data::ForwardDedup::Verdict::Allowed) {
 					strong->skipAsDuplicate(i);
 					return;
 				}
 				if (dedupOn) {
-					const auto duplicate = strong->seenInBatch(hash)
-						|| (!strong->seenInRun(hash)
-							&& db.seekDocumentId(
-								Data::DedupDb::Table::Uploads,
-								hash,
-								0) != 0);
-					if (duplicate) {
-						strong->skipAsDuplicate(i);
-						return;
-					}
 					strong->markSeen(hash);
-					db.addPending(
-						Data::DedupDb::Table::Uploads,
-						mediaId,
-						hash,
-						isPhoto);
+					Data::ForwardDedup::AddPending(mediaId, isPhoto, hash);
 				}
 				// The remote fingerprint is the same value the local file
 				// would produce, so there is nothing left to hash after the
@@ -5109,36 +5096,48 @@ SettleResult Pipeline::classifySkip(const ItemTask &item) const {
 		return SettleResult::DestinationDuplicate;
 	}
 	const auto sessionId = _session.uniqueId();
-	const auto destination = (mediaId
-			&& (db.chatTableContainsDocId(_peerId, mediaId, isPhoto, false)
-				|| db.containsFwTmpItem(
-					sessionId,
-					_peerId,
-					mediaId,
-					isPhoto)))
+	const auto destination = Data::ForwardDedup::Context{
+		.destination = _peerId,
+		.checkFwTmp = true,
+		.sessionId = sessionId,
+	};
+	const auto destinationHit = (mediaId
+			&& Data::ForwardDedup::CheckMedia(
+				destination,
+				mediaId,
+				isPhoto,
+				false) != Data::ForwardDedup::Verdict::Allowed)
 		|| (!hash.isEmpty()
-			&& (db.chatTableContainsHash(_peerId, hash, false)
-				|| db.containsFwTmpHash(sessionId, _peerId, hash)));
-	if (destination) {
+			&& Data::ForwardDedup::CheckHash(
+				destination,
+				hash,
+				false) != Data::ForwardDedup::Verdict::Allowed);
+	if (destinationHit) {
 		return SettleResult::DestinationDuplicate;
 	}
 	if (_destinationOnly
 		|| !GetEnhancedBool("prevent_forward_duplicates")) {
 		return SettleResult::CoveredByRun;
 	}
-	const auto global = (mediaId
-			&& (db.chatTableContainsDocId(_peerId, mediaId, isPhoto, true)
-				|| db.containsDocId(
-					Data::DedupDb::Table::Uploads,
-					mediaId,
-					isPhoto)))
+	const auto global = Data::ForwardDedup::Context{
+		.destination = _peerId,
+		.globalOn = true,
+		.sessionId = sessionId,
+	};
+	const auto globalHit = (mediaId
+			&& Data::ForwardDedup::CheckMedia(
+				global,
+				mediaId,
+				isPhoto,
+				false) != Data::ForwardDedup::Verdict::Allowed)
 		|| (!hash.isEmpty()
-			&& (db.chatTableContainsHash(_peerId, hash, true)
-				|| db.seekDocumentId(
-					Data::DedupDb::Table::Uploads,
-					hash,
-					0) != 0));
-	return global ? SettleResult::GlobalDuplicate : SettleResult::CoveredByRun;
+			&& Data::ForwardDedup::CheckHash(
+				global,
+				hash,
+				false) != Data::ForwardDedup::Verdict::Allowed);
+	return globalHit
+		? SettleResult::GlobalDuplicate
+		: SettleResult::CoveredByRun;
 }
 
 void Pipeline::settleServerId(MsgId oldId, const FullMsgId &newId) {
@@ -5317,6 +5316,14 @@ void Pipeline::dedupHashed(
 	const auto dedupSetting = GetEnhancedBool("prevent_forward_duplicates");
 	const auto dedupOn = !_destinationOnly && dedupSetting;
 	const auto sessionId = _session.uniqueId();
+	const auto context = Data::ForwardDedup::Context{
+		.destination = _peerId,
+		.globalOn = dedupSetting,
+		.destinationOnly = _destinationOnly,
+		.run = _runSeen.get(),
+		.checkFwTmp = true,
+		.sessionId = sessionId,
+	};
 	const auto selfDone = (!seenInRun(mediaId, item.isPhoto)
 			&& dedupOn
 			&& dedupDb.hashForDocId(
@@ -5328,19 +5335,11 @@ void Pipeline::dedupHashed(
 			_peerId,
 			mediaId,
 			item.isPhoto) == hash);
-	const auto duplicate = (dedupSetting && seenInBatch(hash))
-		|| dedupDb.chatTableContainsHash(
-			_peerId,
-			hash,
-			dedupOn)
-		|| (dedupDb.isOpen()
-			&& dedupDb.containsFwTmpHash(sessionId, _peerId, hash))
-		|| (dedupOn
-			&& !seenInRun(hash)
-			&& dedupDb.seekDocumentId(
-				Data::DedupDb::Table::Uploads,
-				hash,
-				0) != 0);
+	const auto duplicate = (Data::ForwardDedup::CheckHash(
+		context,
+		hash,
+		dedupSetting && seenInBatch(hash))
+		!= Data::ForwardDedup::Verdict::Allowed);
 	if (duplicate || selfDone) {
 		if (needsDelete) {
 			RemoveEfTempFile(item.path);
@@ -5350,11 +5349,7 @@ void Pipeline::dedupHashed(
 	}
 	markSeen(mediaId, item.isPhoto);
 	markSeen(hash);
-	dedupDb.addPending(
-		Data::DedupDb::Table::Uploads,
-		mediaId,
-		hash,
-		item.isPhoto);
+	Data::ForwardDedup::AddPending(mediaId, item.isPhoto, hash);
 	pumpUploads();
 }
 
@@ -5711,25 +5706,21 @@ void Pipeline::runNextPrecheck() {
 	// currently being forwarded), so skip it without computing a hash.
 	auto &dedupDb = Core::App().downloadManager().ensureDedupDb();
 	const auto dedupSetting = GetEnhancedBool("prevent_forward_duplicates");
-	const auto dedupOn = !_destinationOnly && dedupSetting;
+	const auto context = Data::ForwardDedup::Context{
+		.destination = _peerId,
+		.globalOn = dedupSetting,
+		.destinationOnly = _destinationOnly,
+		.run = _runSeen.get(),
+		.checkFwTmp = true,
+		.sessionId = _session.uniqueId(),
+	};
 	const auto knownById = dedupDb.isOpen()
-		&& (dedupDb.chatTableContainsDocId(
-				_peerId,
-				item.mediaId,
-				item.isPhoto,
-				dedupOn)
-			|| dedupDb.containsFwTmpItem(
-				_session.uniqueId(),
-				_peerId,
-				item.mediaId,
-				item.isPhoto)
-			|| (dedupSetting && seenInBatch(item.mediaId, item.isPhoto))
-			|| (dedupOn
-				&& !seenInRun(item.mediaId, item.isPhoto)
-				&& dedupDb.containsDocId(
-					Data::DedupDb::Table::Uploads,
-					item.mediaId,
-					item.isPhoto)));
+		&& (Data::ForwardDedup::CheckMedia(
+			context,
+			item.mediaId,
+			item.isPhoto,
+			dedupSetting && seenInBatch(item.mediaId, item.isPhoto))
+			!= Data::ForwardDedup::Verdict::Allowed);
 	if (knownById) {
 		premarkDuplicate(i);
 		runNextPrecheck();
@@ -5793,28 +5784,25 @@ void Pipeline::remotePrechecked(int i, QByteArray &&hash, qint64 size) {
 	// different source doc with the same content was forwarded before: skip it
 	// and attach this id to the existing hash for future id-only dedup.
 	const auto dedupSetting = GetEnhancedBool("prevent_forward_duplicates");
-	const auto dedupOn = !_destinationOnly && dedupSetting;
-	const auto sessionId = _session.uniqueId();
-	const auto duplicate = (dedupSetting && seenInBatch(hash))
-		|| db.chatTableContainsHash(_peerId, hash, dedupOn)
-		|| (db.isOpen()
-			&& db.containsFwTmpHash(sessionId, _peerId, hash))
-		|| (dedupOn
-			&& !seenInRun(hash)
-			&& db.seekDocumentId(
-				Data::DedupDb::Table::Uploads,
-				hash,
-				0) != 0);
+	const auto context = Data::ForwardDedup::Context{
+		.destination = _peerId,
+		.globalOn = dedupSetting,
+		.destinationOnly = _destinationOnly,
+		.run = _runSeen.get(),
+		.checkFwTmp = true,
+		.sessionId = _session.uniqueId(),
+	};
+	const auto duplicate = (Data::ForwardDedup::CheckHash(
+		context,
+		hash,
+		dedupSetting && seenInBatch(hash))
+		!= Data::ForwardDedup::Verdict::Allowed);
 	if (duplicate) {
 		premarkDuplicate(i);
 	} else if (item.mediaId) {
 		markSeen(item.mediaId, item.isPhoto);
 		markSeen(hash);
-		db.addPending(
-			Data::DedupDb::Table::Uploads,
-			item.mediaId,
-			hash,
-			item.isPhoto);
+		Data::ForwardDedup::AddPending(item.mediaId, item.isPhoto, hash);
 		item.dedupNeedsHash = false;
 	}
 	runNextPrecheck();
@@ -6525,9 +6513,6 @@ void EnqueueResolved(
 		MsgId msgId,
 		const QByteArray &hash) {
 	j->awaitingHash.remove(msgId);
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
-	const auto sessionId = j->session->uniqueId();
 	const auto mediaIt = j->mediaIds.find(msgId);
 	const auto mediaId = (mediaIt != end(j->mediaIds))
 		? mediaIt->second
@@ -6538,18 +6523,16 @@ void EnqueueResolved(
 	const auto batchDuplicate = mediaId
 		&& (j->batchMedia.contains({ mediaId, isPhoto })
 			|| (!hash.isEmpty() && j->batchHashes.contains(hash)));
+	const auto context = Data::ForwardDedup::Context{
+		.destination = j->dst,
+		.globalOn = GetEnhancedBool("prevent_forward_duplicates"),
+		.checkFwTmp = true,
+		.sessionId = j->session->uniqueId(),
+	};
 	const auto duplicate = batchDuplicate
 		|| (!hash.isEmpty()
-			&& (db.chatTableContainsHash(j->dst, hash, dedupOn)
-				|| (db.isOpen()
-					&& db.containsFwTmpHash(
-						sessionId,
-						j->dst,
-						hash))
-				|| (dedupOn
-					&& db.seekDocumentId(
-						Data::DedupDb::Table::Uploads,
-						hash) != 0)));
+			&& Data::ForwardDedup::CheckHash(context, hash, false)
+				!= Data::ForwardDedup::Verdict::Allowed);
 	if (duplicate) {
 		j->skipped++;
 		EnhancedForward::ReportForwardBatchItem(
@@ -6566,11 +6549,7 @@ void EnqueueResolved(
 		}
 	}
 	if (mediaId && !hash.isEmpty()) {
-		db.addPending(
-			Data::DedupDb::Table::Uploads,
-			mediaId,
-			hash,
-			isPhoto);
+		Data::ForwardDedup::AddPending(mediaId, isPhoto, hash);
 		j->regs.emplace_or_assign(
 			msgId,
 			Registration{ mediaId, isPhoto, hash });
@@ -6912,8 +6891,11 @@ void Pump(not_null<Job*> j) {
 	j->pumping = true;
 	const auto guard = gsl::finally([&] { j->pumping = false; });
 
-	auto &db = Core::App().downloadManager().ensureDedupDb();
 	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
+	const auto context = Data::ForwardDedup::Context{
+		.destination = j->dst,
+		.globalOn = dedupOn,
+	};
 	const auto windowSize = j->maxBatch();
 	// Adaptive concurrency: when both send queues are empty the pipeline
 	// is starved, so allow more fingerprint fetches to catch up.
@@ -6986,16 +6968,11 @@ void Pump(not_null<Job*> j) {
 		const auto mediaId = document
 			? uint64(document->id)
 			: uint64(photo->id);
-		if (db.chatTableContainsDocId(
-				j->dst,
+		if (Data::ForwardDedup::CheckMedia(
+				context,
 				mediaId,
 				(photo != nullptr),
-				dedupOn)
-			|| (dedupOn
-				&& db.containsDocId(
-					Data::DedupDb::Table::Uploads,
-					mediaId,
-					(photo != nullptr)))) {
+				false) != Data::ForwardDedup::Verdict::Allowed) {
 			j->scanned++;
 			j->skipped++;
 			EnhancedForward::ReportForwardBatchItem(

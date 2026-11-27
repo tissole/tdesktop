@@ -55,6 +55,7 @@ struct ResumeState {
 	PeerId source;
 	MsgId sourceTopicRootId;
 	Filter filter;
+	ScanMethod method = ScanMethod::Unknown;
 	std::vector<ResumeDestination> destinations;
 	std::vector<ResumeCarrierItem> carriers;
 	base::flat_map<PeerId, MsgId> cursors;

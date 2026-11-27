@@ -207,10 +207,13 @@ void Forwarder::beginPrepare() {
 }
 
 bool Forwarder::scanPrepared() {
-	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	const auto sessionId = _session->uniqueId();
-	const auto dst = _destination->id;
+	const auto context = Data::ForwardDedup::Context{
+		.destination = _destination->id,
+		.globalOn = GetEnhancedBool("prevent_forward_duplicates"),
+		.run = _runSeen.get(),
+		.checkFwTmp = true,
+		.sessionId = _session->uniqueId(),
+	};
 	const auto count = int(_current.items.size());
 	while (_scanIndex < count) {
 		const auto index = _scanIndex;
@@ -223,20 +226,13 @@ bool Forwarder::scanPrepared() {
 			continue;
 		}
 		const auto key = std::pair<uint64, bool>(mediaId, isPhoto);
-		if (_seenMedia.contains(key)) {
-			skip(index);
-			++_scanIndex;
-			continue;
-		}
-		if (db.isOpen()
-			&& (db.chatTableContainsDocId(dst, mediaId, isPhoto, dedupOn)
-				|| db.containsFwTmpItem(sessionId, dst, mediaId, isPhoto)
-				|| (dedupOn
-					&& (!_runSeen || !_runSeen->media.contains(key))
-					&& db.containsDocId(
-						Data::DedupDb::Table::Uploads,
-						mediaId,
-						isPhoto)))) {
+		const auto duplicate = _seenMedia.contains(key)
+			|| (Data::ForwardDedup::CheckMedia(
+				context,
+				mediaId,
+				isPhoto,
+				false) != Data::ForwardDedup::Verdict::Allowed);
+		if (duplicate) {
 			skip(index);
 			++_scanIndex;
 			continue;
@@ -278,19 +274,19 @@ void Forwarder::sampleResolved(int index, QByteArray hash) {
 	if (_cancelled || !_preparing || index >= int(_current.items.size())) {
 		return;
 	}
-	const auto dedupOn = GetEnhancedBool("prevent_forward_duplicates");
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	const auto sessionId = _session->uniqueId();
-	const auto dst = _destination->id;
+	const auto context = Data::ForwardDedup::Context{
+		.destination = _destination->id,
+		.globalOn = GetEnhancedBool("prevent_forward_duplicates"),
+		.run = _runSeen.get(),
+		.checkFwTmp = true,
+		.sessionId = _session->uniqueId(),
+	};
 	const auto duplicate = !hash.isEmpty()
-		&& (_seenHashes.contains(hash)
-			|| db.chatTableContainsHash(dst, hash, dedupOn)
-			|| db.containsFwTmpHash(sessionId, dst, hash)
-			|| (dedupOn
-				&& (!_runSeen || !_runSeen->hashes.contains(hash))
-				&& db.seekDocumentId(
-					Data::DedupDb::Table::Uploads,
-					hash) != 0));
+		&& (Data::ForwardDedup::CheckHash(
+			context,
+			hash,
+			_seenHashes.contains(hash))
+			!= Data::ForwardDedup::Verdict::Allowed);
 	if (duplicate) {
 		skip(index);
 	} else {
@@ -317,12 +313,7 @@ void Forwarder::approve(int index, QByteArray hash) {
 	if (_runSeen) {
 		_runSeen->hashes.insert(stored);
 	}
-	auto &db = Core::App().downloadManager().ensureDedupDb();
-	db.addPending(
-		Data::DedupDb::Table::Uploads,
-		item.mediaId,
-		stored,
-		item.isPhoto);
+	Data::ForwardDedup::AddPending(item.mediaId, item.isPhoto, stored);
 	_pendingKeys.emplace_back(item.mediaId, item.isPhoto);
 }
 

@@ -118,8 +118,11 @@ void Job::start(JobRequest &&request) {
 
 	_finished = false;
 	_failed = false;
+	_scanStarted = false;
 	_scanDone = false;
 	_scanHeld = false;
+	_scanMethod = ScanMethod::Unknown;
+	_scanCursors.clear();
 	_paused = false;
 	_scanned = 0;
 	_total = 0;
@@ -164,6 +167,9 @@ void Job::start(JobRequest &&request) {
 	auto resume = request.resume ? &*request.resume : nullptr;
 	if (resume && resume->startedAt > 0) {
 		_startedAt = resume->startedAt;
+	}
+	if (resume && !UsesSelection(_filter)) {
+		_scanMethod = resume->method;
 	}
 	auto resumeRows = ResumeRowsInfo();
 	auto resumeSent = 0;
@@ -366,28 +372,17 @@ void Job::start(JobRequest &&request) {
 		return;
 	}
 
-	auto callbacks = ScanCallbacks();
-	callbacks.batch = [=](std::vector<SourceMessage> items) {
-		scanBatch(std::move(items));
-	};
-	callbacks.progress = [=](int scanned, int total, int matched) {
-		scanProgress(scanned, total, matched);
-	};
-	callbacks.done = [=] {
-		scanFinished();
-	};
-	callbacks.fail = [=](QString error) {
-		scanFailed(error);
-	};
-	_scanner.start(ScanRequest{
-		.peer = request.source,
-		.topicRootId = request.sourceTopicRootId,
-		.filter = _filter,
-		.cursors = resume
-			? resume->cursors
-			: base::flat_map<PeerId, MsgId>(),
-		.callbacks = std::move(callbacks),
-	});
+	_scanCursors = resume
+		? resume->cursors
+		: base::flat_map<PeerId, MsgId>();
+	if (_scanMethod != ScanMethod::Unknown) {
+		startScan(_scanMethod);
+	} else {
+		_previewProbe->method(
+		) | rpl::on_next([=](ScanMethod method) {
+			applyScanMethod(method);
+		}, _previewProbe->lifetime());
+	}
 	notifyUpdated();
 }
 
@@ -409,6 +404,7 @@ void Job::resume() {
 	}
 	_paused = false;
 	_lastCheckpoint = 0;
+	applyScanMethod(_scanMethod);
 	updateScanFlow();
 	for (const auto &forwarder : _forwarders) {
 		forwarder->resume();
@@ -447,8 +443,11 @@ void Job::cancel() {
 		forwarder->cancel();
 	}
 	_forwarders.clear();
+	_scanStarted = false;
 	_scanDone = false;
 	_scanHeld = false;
+	_scanMethod = ScanMethod::Unknown;
+	_scanCursors.clear();
 	_paused = false;
 }
 
@@ -532,6 +531,54 @@ void Job::scanFailed(const QString &error) {
 	}
 }
 
+void Job::applyScanMethod(ScanMethod method) {
+	if (method == ScanMethod::Unknown
+		|| _scanStarted
+		|| _scanDone
+		|| _finished
+		|| _failed) {
+		return;
+	}
+	_scanMethod = method;
+	if (!_paused) {
+		startScan(method);
+		notifyUpdated();
+	}
+}
+
+void Job::startScan(ScanMethod method) {
+	if (_scanStarted || !_source || _finished || _failed) {
+		return;
+	}
+	_scanStarted = true;
+	_scanMethod = method;
+	auto callbacks = ScanCallbacks();
+	callbacks.batch = [=](std::vector<SourceMessage> items) {
+		scanBatch(std::move(items));
+	};
+	callbacks.progress = [=](int scanned, int total, int matched) {
+		scanProgress(scanned, total, matched);
+	};
+	callbacks.done = [=] {
+		scanFinished();
+	};
+	callbacks.fail = [=](QString error) {
+		scanFailed(error);
+	};
+	_scanner.start(ScanRequest{
+		.peer = _session->data().peer(_source),
+		.topicRootId = _sourceTopicRootId,
+		.filter = _filter,
+		.method = method,
+		.cursors = _scanCursors,
+		.callbacks = std::move(callbacks),
+	});
+	_scanMethod = _scanner.method();
+	if (_scanHeld) {
+		_scanner.pause();
+	}
+}
+
 void Job::destinationFailed(const PeerId &destination, QString error) {
 	if (_finished || _failed) {
 		return;
@@ -598,6 +645,9 @@ void Job::holdScan(bool held) {
 		} else {
 			_selection.resume();
 		}
+	} else if (!_scanStarted) {
+		// Not running yet; startScan applies the held state after starting.
+		return;
 	} else if (held) {
 		_scanner.pause();
 	} else {
@@ -1453,6 +1503,7 @@ void Job::saveCheckpoint(bool paused) {
 	state.source = _source;
 	state.sourceTopicRootId = _sourceTopicRootId;
 	state.filter = _filter;
+	state.method = _scanMethod;
 	state.scanned = _scanned;
 	state.total = _total;
 	state.matched = _matched;
@@ -1494,8 +1545,12 @@ void Job::saveCheckpoint(bool paused) {
 			destination.failed = 0;
 		}
 	} else {
-		for (const auto &[peer, cursor] : _scanner.resumeCursors()) {
-			state.cursors[peer] = cursor;
+		if (_scanStarted) {
+			for (const auto &[peer, cursor] : _scanner.resumeCursors()) {
+				state.cursors[peer] = cursor;
+			}
+		} else {
+			state.cursors = _scanCursors;
 		}
 
 		// Everything that is queued but not settled will be read again after

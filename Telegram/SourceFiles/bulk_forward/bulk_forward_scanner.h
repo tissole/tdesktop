@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/core_types.h"
 #include "scheme.h"
 
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -32,8 +33,9 @@ namespace BulkForward {
 struct ScanCallbacks {
 	// Ascending ids, at most 100 per call.
 	Fn<void(std::vector<SourceMessage>)> batch;
-	// `total` is the chat size for the all-messages scope and zero when the
-	// size of a date or id range is not known up front.
+	// `total` is the chat size for the all-messages scope and the expected
+	// number of matches for a search walk; it is zero when a history walk of
+	// a date or id range has no size known up front.
 	Fn<void(int scanned, int total, int matched)> progress;
 	Fn<void()> done;
 	Fn<void(QString)> fail;
@@ -43,6 +45,7 @@ struct ScanRequest {
 	not_null<PeerData*> peer;
 	MsgId topicRootId;
 	Filter filter;
+	ScanMethod method = ScanMethod::History;
 	// Saved position per source peer, from resumeCursors(). A zero or missing
 	// cursor starts the peer from the beginning of its scope.
 	base::flat_map<PeerId, MsgId> cursors;
@@ -65,6 +68,11 @@ struct ScanRequest {
 // A migrated chat is walked in both of its peers, the old one first. Forum
 // topics are read through messages.getReplies, so only the selected topic is
 // scanned.
+//
+// When the filter maps onto one server media index and that index covers at
+// most half of the chat, the same cursor walk reads messages.search with that
+// filter instead of the whole history. Only the current peer is scanned then,
+// because migrated chats always use history.
 class HistoryScanner final : public base::has_weak_ptr {
 public:
 	explicit HistoryScanner(not_null<Main::Session*> session);
@@ -88,6 +96,7 @@ public:
 	// Positions of the sources, newest reported id per peer. Passing them back
 	// through ScanRequest::cursors continues the walk after the saved page.
 	[[nodiscard]] std::vector<std::pair<PeerId, MsgId>> resumeCursors() const;
+	[[nodiscard]] ScanMethod method() const;
 
 private:
 	struct Source {
@@ -126,6 +135,8 @@ private:
 	const not_null<Main::Session*> _session;
 	ScanCallbacks _callbacks;
 	Filter _filter;
+	ScanMethod _method = ScanMethod::History;
+	std::optional<MTPMessagesFilter> _searchFilter;
 	std::vector<Source> _sources;
 	base::Timer _timer;
 	// When the next page may be requested after a rate-limit countdown or the
